@@ -535,6 +535,54 @@ pub struct ShadowAggregateSnapshot {
     pub skipped_non_streaming_source_events: u64,
 }
 
+impl ShadowAggregateSnapshot {
+    /// Maps shadow comparison failures into the pure rollout signal set.
+    ///
+    /// The existing rollout signal set has no separate shadow-difference bit.
+    /// Treating a difference or converter failure as a silent-loss signal is
+    /// deliberately conservative: it pauses further canary expansion until a
+    /// caller has reviewed the body-free aggregate.
+    #[must_use]
+    pub fn rollback_signals(&self) -> crate::protocol_rollout::RollbackSignals {
+        crate::protocol_rollout::RollbackSignals {
+            silent_loss: self.differences > 0 || self.converter_failures > 0,
+            ..crate::protocol_rollout::RollbackSignals::default()
+        }
+    }
+
+    /// Records the aggregate counters using the bounded conversion observer.
+    ///
+    /// This snapshot is cumulative. Callers polling it must supply a delta (or
+    /// emit it only once per rollout generation) to avoid double-counting.
+    /// Canary and admission skips are unsupported shadow attempts, not unknown
+    /// provider events, so they remain in the normal event counter with an
+    /// `unsupported` result. Only actual comparison differences use the
+    /// unknown-event counter.
+    pub fn record_observability(
+        &self,
+        observer: &crate::conversion_observability::ConversionObserver,
+        labels: crate::conversion_observability::MetricLabels,
+    ) {
+        observer.record_events(labels, self.compared);
+        observer.record(
+            crate::conversion_observability::MetricKind::ConversionFailuresTotal,
+            labels
+                .with_result(crate::conversion_observability::ConversionResult::Failure)
+                .with_failure_reason(crate::conversion_observability::FailureReason::Unknown),
+            self.converter_failures,
+        );
+        observer.record_events(
+            labels.with_result(crate::conversion_observability::ConversionResult::Unsupported),
+            self.skipped,
+        );
+        observer.record(
+            crate::conversion_observability::MetricKind::ConversionUnknownEventsTotal,
+            labels.with_feature_class(crate::conversion_observability::FeatureClass::Stream),
+            self.differences,
+        );
+    }
+}
+
 #[derive(Default)]
 struct ShadowCounters {
     compared: AtomicU64,
@@ -999,6 +1047,54 @@ mod tests {
             losses: Vec::new(),
             synthetic: Vec::new(),
         }
+    }
+
+    #[test]
+    fn aggregate_projects_conservative_rollback_and_bounded_metrics() {
+        let aggregate = ShadowAggregateSnapshot {
+            compared: 3,
+            identical: 1,
+            differences: 1,
+            converter_failures: 1,
+            skipped: 2,
+            ..ShadowAggregateSnapshot::default()
+        };
+        let signals = aggregate.rollback_signals();
+        assert!(signals.silent_loss);
+
+        let observer = crate::conversion_observability::ConversionObserver::default();
+        let labels = crate::conversion_observability::MetricLabels::new(
+            Protocol::OpenAi,
+            Protocol::OpenAiResponses,
+            crate::conversion_observability::ConverterVersion::ProtocolStreamV1,
+            1,
+            false,
+            crate::conversion_observability::FeatureClass::Stream,
+            crate::conversion_observability::ConversionResult::Success,
+        );
+        aggregate.record_observability(&observer, labels);
+        let samples = observer.snapshot().samples;
+        assert!(samples.iter().any(|sample| {
+            sample.metric == crate::conversion_observability::MetricKind::ConversionEventsTotal
+                && sample.labels.result
+                    == crate::conversion_observability::ConversionResult::Success
+                && sample.value == 3
+        }));
+        assert!(samples.iter().any(|sample| {
+            sample.metric == crate::conversion_observability::MetricKind::ConversionEventsTotal
+                && sample.labels.result
+                    == crate::conversion_observability::ConversionResult::Unsupported
+                && sample.value == 2
+        }));
+        assert!(samples.iter().any(|sample| {
+            sample.metric == crate::conversion_observability::MetricKind::ConversionFailuresTotal
+                && sample.value == 1
+        }));
+        assert!(samples.iter().any(|sample| {
+            sample.metric
+                == crate::conversion_observability::MetricKind::ConversionUnknownEventsTotal
+                && sample.value == 1
+        }));
     }
 
     #[test]
