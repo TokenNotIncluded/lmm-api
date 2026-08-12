@@ -491,12 +491,198 @@ fn text_item(role: Role, text: String, source: Protocol, path: &str) -> Item {
     item
 }
 
+fn single_item_part<'a>(
+    item: &'a Item,
+    source: Protocol,
+    target: Protocol,
+    path: &str,
+    feature: &str,
+) -> Result<&'a Part, DirectIrError> {
+    if item.ordered_parts().len() != 1 {
+        return Err(DirectIrError::new(
+            source,
+            target,
+            feature,
+            path,
+            DirectIrReason::InvalidShape,
+        ));
+    }
+    item.ordered_parts()
+        .first()
+        .ok_or_else(|| DirectIrError::missing(source, target, feature, path))
+}
+
 fn attach_openai_name(item: &mut Item, name: Option<&str>) {
     if let Some(name) = name {
         item.provenance
             .extensions
             .insert("openai.name".to_owned(), JsonData::String(name.to_owned()));
     }
+}
+
+fn attach_anthropic_model(item: &mut Item, model: Option<&str>) {
+    if let Some(model) = model {
+        item.provenance.extensions.insert(
+            "anthropic.model".to_owned(),
+            JsonData::String(model.to_owned()),
+        );
+    }
+}
+
+fn validate_anthropic_block_shape(
+    block: &OpenAiAnthropicBlock,
+    source: Protocol,
+    target: Protocol,
+    path: &str,
+) -> Result<(), DirectIrError> {
+    let invalid_field = match block.kind.as_str() {
+        "text" => {
+            if block.thinking.is_some() {
+                Some("thinking")
+            } else if block.signature.is_some() {
+                Some("signature")
+            } else if block.synthetic.is_some() {
+                Some("synthetic")
+            } else if block.data.is_some() {
+                Some("data")
+            } else if block.id.is_some() {
+                Some("id")
+            } else if block.name.is_some() {
+                Some("name")
+            } else if block.input.is_some() {
+                Some("input")
+            } else if block.tool_use_id.is_some() {
+                Some("tool_use_id")
+            } else if block.content.is_some() {
+                Some("content")
+            } else if block.image_url.is_some() {
+                Some("image_url")
+            } else {
+                None
+            }
+        }
+        "thinking" => {
+            if block.text.is_some() {
+                Some("text")
+            } else if block.data.is_some() {
+                Some("data")
+            } else if block.id.is_some() {
+                Some("id")
+            } else if block.name.is_some() {
+                Some("name")
+            } else if block.input.is_some() {
+                Some("input")
+            } else if block.tool_use_id.is_some() {
+                Some("tool_use_id")
+            } else if block.content.is_some() {
+                Some("content")
+            } else if block.image_url.is_some() {
+                Some("image_url")
+            } else {
+                None
+            }
+        }
+        "redacted_thinking" => {
+            if block.text.is_some() {
+                Some("text")
+            } else if block.thinking.is_some() {
+                Some("thinking")
+            } else if block.signature.is_some() {
+                Some("signature")
+            } else if block.id.is_some() {
+                Some("id")
+            } else if block.name.is_some() {
+                Some("name")
+            } else if block.input.is_some() {
+                Some("input")
+            } else if block.tool_use_id.is_some() {
+                Some("tool_use_id")
+            } else if block.image_url.is_some() {
+                Some("image_url")
+            } else if block.data.is_some() && block.content.is_some() {
+                Some("content")
+            } else {
+                None
+            }
+        }
+        "tool_use" => {
+            if block.text.is_some() {
+                Some("text")
+            } else if block.thinking.is_some() {
+                Some("thinking")
+            } else if block.signature.is_some() {
+                Some("signature")
+            } else if block.synthetic.is_some() {
+                Some("synthetic")
+            } else if block.data.is_some() {
+                Some("data")
+            } else if block.tool_use_id.is_some() {
+                Some("tool_use_id")
+            } else if block.content.is_some() {
+                Some("content")
+            } else if block.image_url.is_some() {
+                Some("image_url")
+            } else {
+                None
+            }
+        }
+        "tool_result" => {
+            if block.text.is_some() {
+                Some("text")
+            } else if block.thinking.is_some() {
+                Some("thinking")
+            } else if block.signature.is_some() {
+                Some("signature")
+            } else if block.synthetic.is_some() {
+                Some("synthetic")
+            } else if block.data.is_some() {
+                Some("data")
+            } else if block.id.is_some() {
+                Some("id")
+            } else if block.input.is_some() {
+                Some("input")
+            } else if block.image_url.is_some() {
+                Some("image_url")
+            } else {
+                None
+            }
+        }
+        "image" => {
+            if block.text.is_some() {
+                Some("text")
+            } else if block.thinking.is_some() {
+                Some("thinking")
+            } else if block.signature.is_some() {
+                Some("signature")
+            } else if block.synthetic.is_some() {
+                Some("synthetic")
+            } else if block.data.is_some() {
+                Some("data")
+            } else if block.id.is_some() {
+                Some("id")
+            } else if block.name.is_some() {
+                Some("name")
+            } else if block.input.is_some() {
+                Some("input")
+            } else if block.tool_use_id.is_some() {
+                Some("tool_use_id")
+            } else if block.content.is_some() {
+                Some("content")
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+    if let Some(field) = invalid_field {
+        return Err(DirectIrError::unsupported(
+            source,
+            target,
+            "anthropic_block_field",
+            &format!("{path}.{field}"),
+        ));
+    }
+    Ok(())
 }
 
 fn opaque_item(role: Role, state: OpaqueProviderState, source: Protocol, path: &str) -> Item {
@@ -1331,6 +1517,39 @@ fn record_response_projection_losses(envelope: &mut Envelope, target: Protocol) 
     }
 }
 
+fn record_item_projection_losses(envelope: &mut Envelope, target: Protocol) {
+    if envelope.source == target {
+        return;
+    }
+    let metadata = envelope
+        .ordered_items()
+        .iter()
+        .enumerate()
+        .flat_map(|(index, item)| {
+            let mut paths = Vec::new();
+            if item.id.is_some() {
+                paths.push(format!("items[{index}].id"));
+            }
+            if item.raw.is_some() {
+                paths.push(format!("items[{index}].raw"));
+            }
+            if !item.extensions.is_empty() {
+                paths.push(format!("items[{index}].extensions"));
+            }
+            paths
+        })
+        .collect::<Vec<_>>();
+    for path in metadata {
+        record_loss(
+            envelope,
+            LossCode::LossUnknownEvent,
+            Some(Feature::UnknownEventPassthrough),
+            &path,
+            "item metadata is retained in IR but not expressible on target wire",
+        );
+    }
+}
+
 fn chat_extra_google_state(
     extra: Option<OpenAiExtraContent>,
     source: Protocol,
@@ -1385,6 +1604,7 @@ fn chat_anthropic_blocks_to_items(
 ) -> Result<(), DirectIrError> {
     for (index, block) in blocks.into_iter().enumerate() {
         let block_path = format!("{path}[{index}]");
+        validate_anthropic_block_shape(&block, source, target, &block_path)?;
         match block.kind.as_str() {
             "text" => {
                 let text = block
@@ -1396,6 +1616,7 @@ fn chat_anthropic_blocks_to_items(
                 item.provenance.source_path = Some(block_path.clone());
                 item.push_part(part);
                 attach_openai_name(&mut item, message_name);
+                attach_anthropic_model(&mut item, model);
                 push_item(envelope, item, source, target, &block_path)?;
             }
             "thinking" => {
@@ -1427,6 +1648,7 @@ fn chat_anthropic_blocks_to_items(
                 );
                 let mut item = opaque_item(role.clone(), state, source, &block_path);
                 attach_openai_name(&mut item, message_name);
+                attach_anthropic_model(&mut item, model);
                 push_item(envelope, item, source, target, &block_path)?;
             }
             "redacted_thinking" => {
@@ -1453,6 +1675,7 @@ fn chat_anthropic_blocks_to_items(
                 );
                 let mut item = opaque_item(role.clone(), state, source, &block_path);
                 attach_openai_name(&mut item, message_name);
+                attach_anthropic_model(&mut item, model);
                 push_item(envelope, item, source, target, &block_path)?;
             }
             "tool_use" => {
@@ -1484,6 +1707,7 @@ fn chat_anthropic_blocks_to_items(
                 );
                 item.provenance.source_path = Some(block_path.clone());
                 attach_openai_name(&mut item, message_name);
+                attach_anthropic_model(&mut item, model);
                 push_item(envelope, item, source, target, &block_path)?;
             }
             "tool_result" => {
@@ -1510,6 +1734,7 @@ fn chat_anthropic_blocks_to_items(
                 );
                 item.provenance.source_path = Some(block_path.clone());
                 attach_openai_name(&mut item, message_name);
+                attach_anthropic_model(&mut item, model);
                 push_item(envelope, item, source, target, &block_path)?;
             }
             "image" => {
@@ -1526,6 +1751,7 @@ fn chat_anthropic_blocks_to_items(
                 media.extensions = block.extra;
                 let mut item = media_item(role.clone(), media, source, &block_path);
                 attach_openai_name(&mut item, message_name);
+                attach_anthropic_model(&mut item, model);
                 push_item(envelope, item, source, target, &block_path)?;
             }
             _ => {
@@ -1550,6 +1776,15 @@ fn chat_message_to_envelope(
 ) -> Result<(), DirectIrError> {
     let path = format!("messages[{index}]");
     let role = role_from_wire(Some(&message.role), source, target, &format!("{path}.role"))?;
+    if message.tool_call_id.is_some() && !matches!(&role, Role::Tool) {
+        return Err(DirectIrError::new(
+            source,
+            target,
+            "tool_result.role",
+            &format!("{path}.role"),
+            DirectIrReason::Mismatch,
+        ));
+    }
     let is_tool_result = matches!(&role, Role::Tool) || message.tool_call_id.is_some();
     if is_tool_result {
         if !message.tool_calls.is_empty() {
@@ -1566,6 +1801,14 @@ fn chat_message_to_envelope(
                 target,
                 "tool_result.reasoning_content",
                 &format!("{path}.reasoning_content"),
+            ));
+        }
+        if message.content.is_none() {
+            return Err(DirectIrError::missing(
+                source,
+                target,
+                "tool_result.content",
+                &format!("{path}.content"),
             ));
         }
         if message
@@ -1613,6 +1856,25 @@ fn chat_message_to_envelope(
         target,
         &format!("{path}.extra_content.google.thought_signature"),
     )?;
+    let has_anthropic_extension = message
+        .extra_content
+        .as_ref()
+        .and_then(|extra| extra.anthropic.as_ref())
+        .is_some();
+    if has_anthropic_extension
+        && message
+            .extra_content
+            .as_ref()
+            .and_then(|extra| extra.anthropic.as_ref())
+            .is_some_and(|value| value.blocks.is_empty())
+    {
+        return Err(DirectIrError::unsupported(
+            source,
+            target,
+            "anthropic.blocks",
+            &format!("{path}.extra_content.anthropic.blocks"),
+        ));
+    }
     let has_anthropic_blocks = message
         .extra_content
         .as_ref()
@@ -1667,8 +1929,7 @@ fn chat_message_to_envelope(
         for part in parts {
             item.push_part(part);
         }
-        message_item_is_emitted =
-            !item.ordered_parts().is_empty() || message.tool_calls.is_empty();
+        message_item_is_emitted = !item.ordered_parts().is_empty() || message.tool_calls.is_empty();
         if message_item_is_emitted {
             push_item(envelope, item, source, target, &path)?;
         }
@@ -1737,13 +1998,7 @@ fn chat_message_to_envelope(
                     .insert("openai.name".to_owned(), JsonData::String(name));
             }
         }
-        push_item(
-            envelope,
-            call_item,
-            source,
-            target,
-            &call_path,
-        )?;
+        push_item(envelope, call_item, source, target, &call_path)?;
         let state = if call_index == 0 {
             match (message_google_state.take(), call_google_state) {
                 (Some(_), Some(_)) => {
@@ -2053,11 +2308,89 @@ fn openai_message_from_item(
                 target,
                 &format!("{path}.content"),
             )?;
+            let anthropic_model = item
+                .provenance
+                .extensions
+                .get("anthropic.model")
+                .and_then(json_string)
+                .map(str::to_owned);
+            let needs_anthropic_rebuild = anthropic_model.is_some()
+                || item
+                    .ordered_parts()
+                    .iter()
+                    .any(|part| !part.extensions.is_empty());
+            if needs_anthropic_rebuild {
+                let mut anthropic_blocks = Vec::new();
+                for (index, part) in item.ordered_parts().iter().enumerate() {
+                let part_path = format!("{path}.parts[{index}]");
+                match &part.kind {
+                    PartKind::Text => {
+                        let text = part.text.clone().ok_or_else(|| {
+                            DirectIrError::new(
+                                source,
+                                target,
+                                "text",
+                                &part_path,
+                                DirectIrReason::InvalidShape,
+                            )
+                        })?;
+                        let mut block = empty_anthropic_block("text");
+                        block.text = Some(text);
+                        block.extra = part.extensions.clone();
+                        anthropic_blocks.push(block);
+                    }
+                    PartKind::Media => {
+                        let media = part.media.as_ref().ok_or_else(|| {
+                            DirectIrError::new(
+                                source,
+                                target,
+                                "media",
+                                &part_path,
+                                DirectIrReason::InvalidShape,
+                            )
+                        })?;
+                        if !matches!(&media.kind, MediaKind::Image) {
+                            return Err(DirectIrError::unsupported(
+                                source,
+                                target,
+                                "anthropic_media",
+                                &part_path,
+                            ));
+                        }
+                        let image_url = media
+                            .uri
+                            .as_ref()
+                            .map(|value| JsonData::String(value.clone()))
+                            .or_else(|| media.data.clone())
+                            .ok_or_else(|| {
+                                DirectIrError::missing(source, target, "image_url", &part_path)
+                            })?;
+                        let mut block = empty_anthropic_block("image");
+                        block.image_url = Some(image_url);
+                        block.extra = part.extensions.clone();
+                        anthropic_blocks.push(block);
+                    }
+                    PartKind::Function | PartKind::Opaque | PartKind::Unknown(_) => {
+                        return Err(DirectIrError::unsupported(
+                            source,
+                            target,
+                            "anthropic_part_extensions",
+                            &part_path,
+                        ));
+                    }
+                }
+                }
+                message.extra_content = Some(OpenAiExtraContent {
+                    google: None,
+                    anthropic: Some(OpenAiAnthropicExtraContent {
+                        blocks: anthropic_blocks,
+                        model: anthropic_model,
+                    }),
+                });
+            }
         }
         ItemKind::Reasoning => {
-            let Some(part) = item.ordered_parts().first() else {
-                return Err(DirectIrError::missing(source, target, "reasoning", path));
-            };
+            let part = single_item_part(item, source, target, path, "reasoning")?;
             match &part.kind {
                 PartKind::Text => {
                     message.reasoning_content = part.text.clone();
@@ -2104,14 +2437,14 @@ fn openai_message_from_item(
             }
         }
         ItemKind::ToolCall => {
+            let part = single_item_part(item, source, target, path, "tool_call.parts")?;
             let call_id = item
                 .call_id
                 .as_ref()
                 .ok_or_else(|| DirectIrError::missing(source, target, "function_call_id", path))?;
-            let function = item
-                .ordered_parts()
-                .first()
-                .and_then(|part| part.function.as_ref())
+            let function = part
+                .function
+                .as_ref()
                 .ok_or_else(|| DirectIrError::missing(source, target, "function", path))?;
             let name = function
                 .name
@@ -2142,14 +2475,14 @@ fn openai_message_from_item(
             });
         }
         ItemKind::ToolResult => {
+            let part = single_item_part(item, source, target, path, "tool_result.parts")?;
             let call_id = item
                 .call_id
                 .as_ref()
                 .ok_or_else(|| DirectIrError::missing(source, target, "function_call_id", path))?;
-            let function = item
-                .ordered_parts()
-                .first()
-                .and_then(|part| part.function.as_ref())
+            let function = part
+                .function
+                .as_ref()
                 .ok_or_else(|| DirectIrError::missing(source, target, "function", path))?;
             message.tool_call_id = Some(id_value(call_id)?);
             message.name = function.name.clone();
@@ -2265,6 +2598,7 @@ pub fn envelope_to_openai_chat_request_v2(
     let source = envelope.source;
     let target = Protocol::OpenAi;
     record_request_projection_losses(&mut envelope, target);
+    record_item_projection_losses(&mut envelope, target);
     let mut output = OpenAiChatRequest {
         model: envelope.model.clone(),
         messages: Vec::new(),
@@ -2863,9 +3197,7 @@ fn gemini_part_for_item(
     target: Protocol,
     path: &str,
 ) -> Result<GeminiPart, DirectIrError> {
-    let Some(part) = item.ordered_parts().first() else {
-        return Err(DirectIrError::missing(source, target, "part", path));
-    };
+    let part = single_item_part(item, source, target, path, "part")?;
     match &part.kind {
         PartKind::Text => Ok(GeminiPart {
             text: Some(part.text.clone().unwrap_or_default()),
@@ -2986,9 +3318,7 @@ fn ordinary_reasoning_text(
     path: &str,
     envelope: &mut Envelope,
 ) -> Result<GeminiPart, DirectIrError> {
-    let Some(part) = item.ordered_parts().first() else {
-        return Err(DirectIrError::missing(source, target, "reasoning", path));
-    };
+    let part = single_item_part(item, source, target, path, "reasoning")?;
     match &part.kind {
         PartKind::Text => {
             record_loss(
@@ -3156,9 +3486,7 @@ fn append_gemini_opaque_item(
     envelope: &mut Envelope,
     pending_call: &mut Option<(String, bool)>,
 ) -> Result<(), DirectIrError> {
-    let Some(part) = item.ordered_parts().first() else {
-        return Err(DirectIrError::missing(source, target, "opaque_state", path));
-    };
+    let part = single_item_part(item, source, target, path, "opaque_state")?;
     let Some(state) = part.opaque.as_ref() else {
         return Err(DirectIrError::new(
             source,
@@ -3311,6 +3639,7 @@ pub fn envelope_to_gemini_request_v2_for_model(
     let source = envelope.source;
     let target = Protocol::Gemini;
     record_request_projection_losses(&mut envelope, target);
+    record_item_projection_losses(&mut envelope, target);
     let mut system_parts = Vec::new();
     let mut contents = Vec::new();
     let mut pending_call: Option<(String, bool)> = None;
@@ -3369,6 +3698,7 @@ pub fn envelope_to_gemini_request_v2_for_model(
             let has_signature = envelope
                 .ordered_items()
                 .get(index.saturating_add(1))
+                .filter(|next| next.ordered_parts().len() == 1)
                 .and_then(|next| next.ordered_parts().first())
                 .and_then(|part| part.opaque.as_ref())
                 .is_some_and(|state| {
@@ -3443,6 +3773,154 @@ pub fn envelope_to_gemini_request_v2_for_model(
     Ok(finish(output, envelope, source, target))
 }
 
+fn validate_claude_block_shape(
+    block: &ClaudeContentBlock,
+    source: Protocol,
+    target: Protocol,
+    path: &str,
+) -> Result<(), DirectIrError> {
+    let invalid_field = match block.kind.as_str() {
+        "text" => {
+            if block.thinking.is_some() {
+                Some("thinking")
+            } else if block.signature.is_some() {
+                Some("signature")
+            } else if block.data.is_some() {
+                Some("data")
+            } else if block.id.is_some() {
+                Some("id")
+            } else if block.name.is_some() {
+                Some("name")
+            } else if block.input.is_some() {
+                Some("input")
+            } else if block.tool_use_id.is_some() {
+                Some("tool_use_id")
+            } else if block.content.is_some() {
+                Some("content")
+            } else if block.source.is_some() {
+                Some("source")
+            } else {
+                None
+            }
+        }
+        "thinking" => {
+            if block.text.is_some() {
+                Some("text")
+            } else if block.data.is_some() {
+                Some("data")
+            } else if block.id.is_some() {
+                Some("id")
+            } else if block.name.is_some() {
+                Some("name")
+            } else if block.input.is_some() {
+                Some("input")
+            } else if block.tool_use_id.is_some() {
+                Some("tool_use_id")
+            } else if block.content.is_some() {
+                Some("content")
+            } else if block.source.is_some() {
+                Some("source")
+            } else {
+                None
+            }
+        }
+        "redacted_thinking" => {
+            if block.text.is_some() {
+                Some("text")
+            } else if block.thinking.is_some() {
+                Some("thinking")
+            } else if block.signature.is_some() {
+                Some("signature")
+            } else if block.id.is_some() {
+                Some("id")
+            } else if block.name.is_some() {
+                Some("name")
+            } else if block.input.is_some() {
+                Some("input")
+            } else if block.tool_use_id.is_some() {
+                Some("tool_use_id")
+            } else if block.source.is_some() {
+                Some("source")
+            } else if block.data.is_some() && block.content.is_some() {
+                Some("content")
+            } else {
+                None
+            }
+        }
+        "tool_use" => {
+            if block.text.is_some() {
+                Some("text")
+            } else if block.thinking.is_some() {
+                Some("thinking")
+            } else if block.signature.is_some() {
+                Some("signature")
+            } else if block.data.is_some() {
+                Some("data")
+            } else if block.tool_use_id.is_some() {
+                Some("tool_use_id")
+            } else if block.content.is_some() {
+                Some("content")
+            } else if block.source.is_some() {
+                Some("source")
+            } else {
+                None
+            }
+        }
+        "tool_result" => {
+            if block.text.is_some() {
+                Some("text")
+            } else if block.thinking.is_some() {
+                Some("thinking")
+            } else if block.signature.is_some() {
+                Some("signature")
+            } else if block.data.is_some() {
+                Some("data")
+            } else if block.id.is_some() {
+                Some("id")
+            } else if block.input.is_some() {
+                Some("input")
+            } else if block.source.is_some() {
+                Some("source")
+            } else {
+                None
+            }
+        }
+        "image" => {
+            if block.text.is_some() {
+                Some("text")
+            } else if block.thinking.is_some() {
+                Some("thinking")
+            } else if block.signature.is_some() {
+                Some("signature")
+            } else if block.data.is_some() {
+                Some("data")
+            } else if block.id.is_some() {
+                Some("id")
+            } else if block.name.is_some() {
+                Some("name")
+            } else if block.input.is_some() {
+                Some("input")
+            } else if block.tool_use_id.is_some() {
+                Some("tool_use_id")
+            } else if block.content.is_some() {
+                Some("content")
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+    if let Some(field) = invalid_field {
+        return Err(DirectIrError::unsupported(
+            source,
+            target,
+            "claude_block_field",
+            &format!("{path}.{field}"),
+        ));
+    }
+    Ok(())
+}
+
 fn claude_block_to_items(
     block: ClaudeContentBlock,
     role: Role,
@@ -3454,6 +3932,7 @@ fn claude_block_to_items(
     model: &str,
 ) -> Result<(), DirectIrError> {
     let path = format!("messages[{message_index}].content[{block_index}]");
+    validate_claude_block_shape(&block, source, target, &path)?;
     match block.kind.as_str() {
         "text" => {
             let text = block.text.ok_or_else(|| {
@@ -3820,9 +4299,7 @@ fn claude_block_from_item(
     path: &str,
     envelope: &mut Envelope,
 ) -> Result<ClaudeContentBlock, DirectIrError> {
-    let Some(part) = item.ordered_parts().first() else {
-        return Err(DirectIrError::missing(source, target, "part", path));
-    };
+    let part = single_item_part(item, source, target, path, "part")?;
     match &part.kind {
         PartKind::Text => Ok(ClaudeContentBlock {
             kind: "text".to_owned(),
@@ -3965,6 +4442,7 @@ pub fn envelope_to_claude_request_v2(
     let source = envelope.source;
     let target = Protocol::Claude;
     record_request_projection_losses(&mut envelope, target);
+    record_item_projection_losses(&mut envelope, target);
     let mut system = Vec::new();
     let mut messages = Vec::new();
     for (index, item) in envelope.ordered_items().to_vec().into_iter().enumerate() {
@@ -3991,9 +4469,7 @@ pub fn envelope_to_claude_request_v2(
                 .and_then(|part| part.opaque.as_ref())
                 .is_none()
         {
-            let Some(part) = item.ordered_parts().first() else {
-                return Err(DirectIrError::missing(source, target, "reasoning", &path));
-            };
+            let part = single_item_part(&item, source, target, &path, "reasoning")?;
             let text = part.text.clone().unwrap_or_default();
             record_loss(
                 &mut envelope,
@@ -4936,13 +5412,15 @@ fn openai_response_message_groups(
                     state.provider == "google" && state.kind == "thought_signature"
                 })
             && index > 0
-            && matches!(&items[index - 1].kind, ItemKind::ToolCall);
+            && matches!(&items[index - 1].kind, ItemKind::ToolCall)
+            && items[index - 1].ordered_parts().len() == 1;
         if is_bound_signature {
             continue;
         }
         let bound_google_state = if matches!(&item.kind, ItemKind::ToolCall) {
             items
                 .get(index.saturating_add(1))
+                .filter(|next| next.ordered_parts().len() == 1)
                 .and_then(|next| next.ordered_parts().first())
                 .and_then(|part| part.opaque.as_ref())
                 .filter(|state| state.provider == "google" && state.kind == "thought_signature")
@@ -5120,6 +5598,7 @@ pub fn envelope_to_openai_chat_response_v2(
     let source = envelope.source;
     let target = Protocol::OpenAi;
     record_response_projection_losses(&mut envelope, target);
+    record_item_projection_losses(&mut envelope, target);
     if extension_i64(&envelope, "gemini.candidate_count").is_some_and(|count| count > 1)
         || extension_i64(&envelope, "openai.choice_count").is_some_and(|count| count > 1)
     {
@@ -5213,9 +5692,7 @@ fn append_response_gemini_item(
     envelope: &mut Envelope,
 ) -> Result<(), DirectIrError> {
     if matches!(&item.kind, ItemKind::Reasoning) {
-        let Some(part) = item.ordered_parts().first() else {
-            return Err(DirectIrError::missing(source, target, "reasoning", path));
-        };
+        let part = single_item_part(item, source, target, path, "reasoning")?;
         match &part.kind {
             PartKind::Opaque => {
                 let Some(state) = part.opaque.as_ref() else {
@@ -5305,6 +5782,7 @@ pub fn envelope_to_gemini_response_v2(
     let source = envelope.source;
     let target = Protocol::Gemini;
     record_response_projection_losses(&mut envelope, target);
+    record_item_projection_losses(&mut envelope, target);
     if extension_i64(&envelope, "openai.choice_count").is_some_and(|count| count > 1)
         || extension_i64(&envelope, "gemini.candidate_count").is_some_and(|count| count > 1)
     {
@@ -5372,6 +5850,7 @@ pub fn envelope_to_claude_response_v2(
     let source = envelope.source;
     let target = Protocol::Claude;
     record_response_projection_losses(&mut envelope, target);
+    record_item_projection_losses(&mut envelope, target);
     if extension_i64(&envelope, "openai.choice_count").is_some_and(|count| count > 1)
         || extension_i64(&envelope, "gemini.candidate_count").is_some_and(|count| count > 1)
     {
@@ -5409,9 +5888,7 @@ pub fn envelope_to_claude_response_v2(
                 .and_then(|part| part.opaque.as_ref())
                 .is_none()
         {
-            let Some(part) = item.ordered_parts().first() else {
-                return Err(DirectIrError::missing(source, target, "reasoning", &path));
-            };
+            let part = single_item_part(&item, source, target, &path, "reasoning")?;
             record_loss(
                 &mut envelope,
                 LossCode::LossOpaqueReasoning,
@@ -6036,6 +6513,271 @@ mod direct_ir_tests {
             blocks[1].data,
             Some(JsonData::String("opaque-bytes".to_owned()))
         );
+    }
+
+    #[test]
+    fn openai_anthropic_outer_model_and_text_extensions_roundtrip() {
+        let request: OpenAiChatRequest = serde_json::from_str(
+            r#"{"model":"gpt-test","messages":[{"role":"assistant","extra_content":{"anthropic":{"model":"claude-source","blocks":[{"type":"text","text":"answer","vendor_marker":"keep"},{"type":"thinking","thinking":"plan","signature":"sig"}]}}}]}"#,
+        )
+        .expect("OpenAI Anthropic extension fixture");
+        let decoded = openai_chat_request_to_envelope_v2(request);
+        assert!(decoded.is_ok());
+        let Some(decoded) = decoded.ok() else { return };
+        let text_item = decoded
+            .envelope
+            .ordered_items()
+            .iter()
+            .find(|item| matches!(&item.kind, ItemKind::Message));
+        assert!(text_item.is_some());
+        let Some(text_item) = text_item else { return };
+        assert_eq!(
+            text_item
+                .ordered_parts()
+                .first()
+                .and_then(|part| part.extensions.get("vendor_marker"))
+                .and_then(json_string),
+            Some("keep")
+        );
+        assert_eq!(
+            text_item
+                .provenance
+                .extensions
+                .get("anthropic.model")
+                .and_then(json_string),
+            Some("claude-source")
+        );
+        let encoded = envelope_to_openai_chat_request_v2(decoded.envelope);
+        assert!(encoded.is_ok());
+        let Some(encoded) = encoded.ok() else { return };
+        let anthropic = encoded
+            .value
+            .messages
+            .iter()
+            .find_map(|message| message.extra_content.as_ref())
+            .and_then(|extra| extra.anthropic.as_ref());
+        assert!(anthropic.is_some());
+        let Some(anthropic) = anthropic else { return };
+        assert_eq!(anthropic.model.as_deref(), Some("claude-source"));
+        assert_eq!(
+            anthropic.blocks[0]
+                .extra
+                .get("vendor_marker")
+                .and_then(json_string),
+            Some("keep")
+        );
+    }
+
+    #[test]
+    fn openai_tool_call_kind_and_non_call_metadata_are_typed_rejections() {
+        let invalid_kind: OpenAiChatRequest = serde_json::from_str(
+            r#"{"model":"gpt-test","messages":[{"role":"assistant","tool_calls":[{"id":"call-1","type":"custom","function":{"name":"lookup","arguments":"{}"}}]}]}"#,
+        )
+        .expect("invalid tool call kind fixture");
+        let invalid_kind_error = openai_chat_request_to_envelope_v2(invalid_kind).err();
+        assert!(invalid_kind_error.is_some());
+        let Some(invalid_kind_error) = invalid_kind_error else {
+            return;
+        };
+        assert_eq!(invalid_kind_error.path, "messages[0].tool_calls[0].kind");
+        assert_eq!(invalid_kind_error.reason, DirectIrReason::Unsupported);
+
+        let description: OpenAiChatRequest = serde_json::from_str(
+            r#"{"model":"gpt-test","messages":[{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{}","description":"unexpected"}}]}]}"#,
+        )
+        .expect("tool call description fixture");
+        let description_error = openai_chat_request_to_envelope_v2(description).err();
+        assert!(description_error.is_some());
+        let Some(description_error) = description_error else {
+            return;
+        };
+        assert_eq!(
+            description_error.path,
+            "messages[0].tool_calls[0].function.description"
+        );
+
+        let parameters: OpenAiChatRequest = serde_json::from_str(
+            r#"{"model":"gpt-test","messages":[{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{}","parameters":{"type":"object"}}}]}]}"#,
+        )
+        .expect("tool call parameters fixture");
+        let parameters_error = openai_chat_request_to_envelope_v2(parameters).err();
+        assert!(parameters_error.is_some());
+        let Some(parameters_error) = parameters_error else {
+            return;
+        };
+        assert_eq!(
+            parameters_error.path,
+            "messages[0].tool_calls[0].function.parameters"
+        );
+
+        let strict: OpenAiChatRequest = serde_json::from_str(
+            r#"{"model":"gpt-test","messages":[{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{}","strict":true}}]}]}"#,
+        )
+        .expect("tool call strict fixture");
+        let strict_error = openai_chat_request_to_envelope_v2(strict).err();
+        assert!(strict_error.is_some());
+        let Some(strict_error) = strict_error else {
+            return;
+        };
+        assert_eq!(
+            strict_error.path,
+            "messages[0].tool_calls[0].function.strict"
+        );
+    }
+
+    #[test]
+    fn openai_tool_declaration_arguments_and_tool_reasoning_are_rejected() {
+        let declaration: OpenAiChatRequest = serde_json::from_str(
+            r#"{"model":"gpt-test","tools":[{"type":"function","function":{"name":"lookup","arguments":"{}"}}]}"#,
+        )
+        .expect("tool declaration arguments fixture");
+        let declaration_error = openai_chat_request_to_envelope_v2(declaration).err();
+        assert!(declaration_error.is_some());
+        let Some(declaration_error) = declaration_error else {
+            return;
+        };
+        assert_eq!(declaration_error.path, "tools[0].function.arguments");
+
+        let tool_result: OpenAiChatRequest = serde_json::from_str(
+            r#"{"model":"gpt-test","messages":[{"role":"tool","tool_call_id":"call-1","reasoning_content":"must-not-drop","content":"ok"}]}"#,
+        )
+        .expect("tool result reasoning fixture");
+        let tool_result_error = openai_chat_request_to_envelope_v2(tool_result).err();
+        assert!(tool_result_error.is_some());
+        let Some(tool_result_error) = tool_result_error else {
+            return;
+        };
+        assert_eq!(tool_result_error.path, "messages[0].reasoning_content");
+
+        let mismatched_role: OpenAiChatRequest = serde_json::from_str(
+            r#"{"model":"gpt-test","messages":[{"role":"assistant","tool_call_id":"call-1","content":"ok"}]}"#,
+        )
+        .expect("mismatched tool result role fixture");
+        let mismatched_role_error = openai_chat_request_to_envelope_v2(mismatched_role).err();
+        assert!(mismatched_role_error.is_some());
+        let Some(mismatched_role_error) = mismatched_role_error else {
+            return;
+        };
+        assert_eq!(mismatched_role_error.path, "messages[0].role");
+        assert_eq!(mismatched_role_error.reason, DirectIrReason::Mismatch);
+
+        let missing_content: OpenAiChatRequest = serde_json::from_str(
+            r#"{"model":"gpt-test","messages":[{"role":"tool","tool_call_id":"call-1"}]}"#,
+        )
+        .expect("missing tool result content fixture");
+        let missing_content_error = openai_chat_request_to_envelope_v2(missing_content).err();
+        assert!(missing_content_error.is_some());
+        let Some(missing_content_error) = missing_content_error else {
+            return;
+        };
+        assert_eq!(missing_content_error.path, "messages[0].content");
+    }
+
+    #[test]
+    fn openai_empty_assistant_content_binds_name_to_first_tool_call() {
+        let request: OpenAiChatRequest = serde_json::from_str(
+            r#"{"model":"gpt-test","messages":[{"role":"assistant","name":"worker","tool_calls":[{"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{}"}}]}]}"#,
+        )
+        .expect("empty assistant tool call fixture");
+        let decoded = openai_chat_request_to_envelope_v2(request);
+        assert!(decoded.is_ok());
+        let Some(decoded) = decoded.ok() else { return };
+        let call = decoded
+            .envelope
+            .ordered_items()
+            .iter()
+            .find(|item| matches!(&item.kind, ItemKind::ToolCall));
+        assert!(call.is_some());
+        let Some(call) = call else { return };
+        assert_eq!(
+            call.provenance
+                .extensions
+                .get("openai.name")
+                .and_then(json_string),
+            Some("worker")
+        );
+        let encoded = envelope_to_openai_chat_request_v2(decoded.envelope);
+        assert!(encoded.is_ok());
+        let Some(encoded) = encoded.ok() else { return };
+        assert_eq!(encoded.value.messages[0].name.as_deref(), Some("worker"));
+    }
+
+    #[test]
+    fn openai_content_shape_and_text_boundaries_are_explicit() {
+        let mixed_text: OpenAiChatRequest = serde_json::from_str(
+            r#"{"model":"gpt-test","messages":[{"role":"user","content":[{"type":"text","text":"hello","image_url":{"url":"unexpected"}}]}]}"#,
+        )
+        .expect("mixed text content fixture");
+        let mixed_error = openai_chat_request_to_envelope_v2(mixed_text).err();
+        assert!(mixed_error.is_some());
+        let Some(mixed_error) = mixed_error else {
+            return;
+        };
+        assert_eq!(mixed_error.path, "messages[0].content[0].image_url");
+
+        let missing_url: OpenAiChatRequest = serde_json::from_str(
+            r#"{"model":"gpt-test","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"detail":"high"}}]}]}"#,
+        )
+        .expect("missing image URL fixture");
+        let missing_url_error = openai_chat_request_to_envelope_v2(missing_url).err();
+        assert!(missing_url_error.is_some());
+        let Some(missing_url_error) = missing_url_error else {
+            return;
+        };
+        assert_eq!(
+            missing_url_error.path,
+            "messages[0].content[0].image_url.url"
+        );
+
+        let mut envelope = Envelope::new(Protocol::OpenAi, "gpt-test");
+        let mut item = Item::new(
+            ItemKind::Message,
+            Role::Assistant,
+            Provenance::new(Protocol::OpenAi),
+        );
+        item.push_part(Part::text("first"));
+        item.push_part(Part::text("second"));
+        assert!(envelope.push_item(item).is_ok());
+        let encoded = envelope_to_openai_chat_request_v2(envelope);
+        assert!(encoded.is_ok());
+        let Some(encoded) = encoded.ok() else { return };
+        let Some(StringOrParts::Parts(parts)) = encoded.value.messages[0].content.as_ref() else {
+            return;
+        };
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0].text.as_deref(), Some("first"));
+        assert_eq!(parts[1].text.as_deref(), Some("second"));
+    }
+
+    #[test]
+    fn cross_protocol_item_metadata_gets_projection_loss() {
+        let mut envelope = Envelope::new(Protocol::OpenAi, "gpt-test");
+        let mut item = Item::new(
+            ItemKind::Message,
+            Role::User,
+            Provenance::new(Protocol::OpenAi),
+        );
+        item.id = Some(OpaqueId::authentic("item-1", Protocol::OpenAi));
+        item.raw = Some(JsonData::String("raw-item".to_owned()));
+        item.extensions
+            .insert("vendor.item".to_owned(), JsonData::Bool(true));
+        item.push_part(Part::text("hello"));
+        assert!(envelope.push_item(item).is_ok());
+        let encoded = envelope_to_gemini_request_v2(envelope);
+        assert!(encoded.is_ok());
+        let Some(encoded) = encoded.ok() else { return };
+        assert!(encoded.losses.as_slice().iter().any(|loss| {
+            loss.path.as_deref() == Some("items[0].id")
+                && loss.code == LossCode::LossUnknownEvent
+        }));
+        assert!(encoded.losses.as_slice().iter().any(|loss| {
+            loss.path.as_deref() == Some("items[0].raw")
+                && loss.code == LossCode::LossUnknownEvent
+        }));
+        assert!(encoded.losses.as_slice().iter().any(|loss| {
+            loss.path.as_deref() == Some("items[0].extensions")
+                && loss.code == LossCode::LossUnknownEvent
+        }));
     }
 
     #[test]
