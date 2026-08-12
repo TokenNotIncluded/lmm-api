@@ -8335,6 +8335,18 @@ mod responses_direct_ir_tests {
     }
 
     #[test]
+    fn responses_incomplete_details_reject_unknown_nested_fields() {
+        let response: Result<ResponsesResponse, _> = serde_json::from_str(
+            r#"{
+              "id":"resp-1","object":"response","created_at":7,
+              "status":"incomplete","model":"gpt-responses","output":[],
+              "incomplete_details":{"reason":"max_output_tokens","future":true}
+            }"#,
+        );
+        assert!(response.is_err());
+    }
+
+    #[test]
     fn responses_direct_synthetic_id_enters_loss_ledger_and_reject_policy() {
         let mut envelope = Envelope::new(Protocol::OpenAi, "gpt-responses");
         let item = Item::tool_call(

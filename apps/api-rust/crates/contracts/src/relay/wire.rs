@@ -655,6 +655,7 @@ pub struct ResponsesResponse {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IncompleteDetails {
     pub reason: String,
 }
