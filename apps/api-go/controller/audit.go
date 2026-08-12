@@ -29,6 +29,8 @@ var auditContentTemplates = map[string]string{
 	"user.passkey_delete":   "Deleted a passkey",
 	"user.reset_passkey":    "Reset the user passkey",
 	"option.update":         "Updated system setting ${key}",
+	"assistant.admin_config_apply":  "Applied assistant administrator configuration (${keys})",
+	"assistant.admin_pricing_apply": "Applied assistant model pricing for ${model_id} (${mode})",
 
 	"channel.create":             "Created channel ${name} (type ${type}, count ${count})",
 	"channel.update":             "Updated channel ${name} (ID: ${id})",

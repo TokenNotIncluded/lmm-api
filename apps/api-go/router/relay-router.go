@@ -95,6 +95,7 @@ func SetRelayRouter(router *gin.Engine) {
 	assistantAdminRouter.Use(middleware.RouteTag("api"))
 	assistantAdminRouter.Use(middleware.AdminAuth())
 	{
+		assistantAdminRouter.POST("/apply", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.ApplyAssistantAdminChange)
 		assistantAdminRouter.GET("/handoffs", controller.AdminListAssistantHandoffs)
 		assistantAdminRouter.POST("/handoffs/:id/resolve", middleware.CriticalRateLimit(), controller.AdminResolveAssistantHandoff)
 		assistantAdminRouter.GET("/intents", controller.AdminGetAssistantIntentSummary)

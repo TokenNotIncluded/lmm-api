@@ -61,11 +61,28 @@ func GetAssistantPricing(c *gin.Context) {
 	if !requireAssistantBrowserSession(c) {
 		return
 	}
-	GetPricing(c)
+	if result, blocked := assistantDeveloperCapabilityRequired(c.GetInt("id"), "live model pricing"); blocked {
+		message := inputString(result, "error")
+		if message == "" {
+			message = "L1 access is required for live model pricing"
+		}
+		writeAssistantError(c, http.StatusForbidden, "ASSISTANT_L1_REQUIRED", errors.New(message))
+		return
+	}
+	status, response := buildPricingResponse(c, true)
+	c.JSON(status, response)
 }
 
 func GetAssistantPlanOffers(c *gin.Context) {
 	if !requireAssistantBrowserSession(c) {
+		return
+	}
+	if result, blocked := assistantDeveloperCapabilityRequired(c.GetInt("id"), "plan offers"); blocked {
+		message := inputString(result, "error")
+		if message == "" {
+			message = "L1 access is required for plan offers"
+		}
+		writeAssistantError(c, http.StatusForbidden, "ASSISTANT_L1_REQUIRED", errors.New(message))
 		return
 	}
 	common.ApiSuccess(c, executeAssistantPlanOffersTool(c.GetInt("id")))

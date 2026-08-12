@@ -271,6 +271,15 @@ func TestAssistantPromptKeepsAccountContextInternal(t *testing.T) {
 	assert.Contains(t, prompt, "de***r@example.com")
 	assert.Contains(t, prompt, "do not reveal this block")
 	assert.NotContains(t, prompt, "demo-user@example.com")
+	assert.Contains(t, prompt, "L1 users may use the developer setup")
+	assert.Contains(t, prompt, "Trust levels L1-L4 never grant server configuration")
+}
+
+func TestTrustLevelLabelSeparatesAdministratorRolesFromUserLevels(t *testing.T) {
+	assert.Equal(t, "L0", trustLevelLabel(model.TrustLevelMinUser))
+	assert.Equal(t, "L4", trustLevelLabel(model.TrustLevelMaxUser))
+	assert.Equal(t, "ADMIN", trustLevelLabel(model.TrustLevelAdmin))
+	assert.Equal(t, "ROOT", trustLevelLabel(model.TrustLevelRoot))
 }
 
 func TestAssistantCacheIsUserScopedAndNormalizesWhitespace(t *testing.T) {

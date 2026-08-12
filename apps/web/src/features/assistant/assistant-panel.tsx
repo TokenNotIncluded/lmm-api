@@ -20,6 +20,8 @@ import {
   Alert02Icon,
   ArrowRight01Icon,
   CleanIcon,
+  Maximize01Icon,
+  Minimize01Icon,
   ReloadIcon,
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
@@ -75,6 +77,7 @@ import {
   type AssistantConversationHistoryItem,
   type AssistantChatMessage,
   type AssistantAccountDisableAction,
+  type AssistantAdminChangeAction,
   type AssistantL1RecommendationAction,
 } from './api'
 import {
@@ -83,6 +86,7 @@ import {
 } from './assistant-access'
 import { AssistantAccountActionTool } from './assistant-account-action-tool'
 import { AssistantActivationTool } from './assistant-activation-tool'
+import { AssistantAdminChangeTool } from './assistant-admin-change-tool'
 import { AssistantCostTool } from './assistant-cost-tool'
 import {
   subscribeToAssistantOpen,
@@ -143,6 +147,7 @@ type ConversationEntry = {
   role: 'user' | 'assistant'
   content: string
   action?: AssistantAction
+  adminChange?: AssistantAdminChangeAction
   error?: boolean
   retry?: {
     message: string
@@ -285,6 +290,8 @@ function AssistantPanelHeader(props: {
   onOpenHistory: () => void
   onCloseHistory: () => void
   onToggleCollapsed?: () => void
+  fullscreen?: boolean
+  onToggleFullscreen?: () => void
 }) {
   const { t } = useTranslation()
 
@@ -329,17 +336,38 @@ function AssistantPanelHeader(props: {
       >
         {props.historyVisible ? t('Back') : t('Conversation history')}
       </Button>
+      {!props.fullscreen ? (
+        <Button
+          type='button'
+          variant='ghost'
+          size='icon-sm'
+          aria-label={t('Collapse')}
+          title={t('Collapse')}
+          data-testid='assistant-collapse'
+          onClick={props.onToggleCollapsed}
+        >
+          <HugeiconsIcon
+            icon={ArrowRight01Icon}
+            strokeWidth={2}
+            aria-hidden='true'
+          />
+        </Button>
+      ) : null}
       <Button
         type='button'
         variant='ghost'
         size='icon-sm'
-        aria-label={t('Collapse')}
-        title={t('Collapse')}
-        data-testid='assistant-collapse'
-        onClick={props.onToggleCollapsed}
+        aria-label={
+          props.fullscreen ? t('Exit full screen') : t('Enter full screen')
+        }
+        title={
+          props.fullscreen ? t('Exit full screen') : t('Enter full screen')
+        }
+        data-testid='assistant-fullscreen'
+        onClick={props.onToggleFullscreen}
       >
         <HugeiconsIcon
-          icon={ArrowRight01Icon}
+          icon={props.fullscreen ? Minimize01Icon : Maximize01Icon}
           strokeWidth={2}
           aria-hidden='true'
         />
@@ -352,16 +380,19 @@ export function AssistantPanel(props: {
   open: boolean
   mode?: AssistantPanelMode
   collapsed?: boolean
+  fullscreen?: boolean
   initialPreset?: AssistantPresetId
   initialMessage?: string
   initialMessageRevision?: number
   onOpenChange: (open: boolean) => void
   onToggleCollapsed?: () => void
+  onToggleFullscreen?: () => void
 }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const mode = props.mode ?? 'mobile'
-  const panelVisible = mode === 'rail' ? !props.collapsed : props.open
+  const panelVisible =
+    mode === 'rail' ? !props.collapsed || props.fullscreen === true : props.open
   const baseUrl = getBaseUrl()
   const presets = useMemo<AssistantPreset[]>(
     () => [
@@ -588,6 +619,10 @@ export function AssistantPanel(props: {
   const accountAccessConfirmed =
     accountAccessState === 'granted' || accountAccessState === 'restricted'
   const developerAccessGranted = accountAccessState === 'granted'
+  const isAdministrator = statusQuery.data?.is_admin === true
+  const accessLevel = statusQuery.data?.access_level
+  const withAccessLevel = (message: string) =>
+    accessLevel ? `${accessLevel} · ${message}` : message
   const superAdministratorFunded =
     statusQuery.data?.funding?.mode === 'super_administrator'
   const connectionModelsQuery = useQuery({
@@ -603,7 +638,9 @@ export function AssistantPanel(props: {
   const accountToolActive = activeTool !== null
   const historyVisible = historyView !== null
   let visiblePresets: AssistantPreset[] = []
-  if (accountAccessState === 'restricted') {
+  if (isAdministrator) {
+    visiblePresets = presets
+  } else if (accountAccessState === 'restricted') {
     visiblePresets = presets.filter((preset) => preset.id === 'onboarding')
   } else if (developerAccessGranted) {
     visiblePresets = presets
@@ -612,18 +649,30 @@ export function AssistantPanel(props: {
   let assistantFooterStatus = t('Loading...')
   let assistantDescription = t('Loading...')
   let assistantPromptPlaceholder = t('Ask AI assistant')
-  if (developerAccessGranted) {
-    assistantFooterStatus = superAdministratorFunded
-      ? t('Funded by the super administrator')
-      : t('Loading...')
+  if (isAdministrator) {
+    assistantFooterStatus = withAccessLevel(t('Administrator mode'))
+    assistantDescription = t(
+      'Administrator mode can inspect safe server settings and prepare model pricing changes for your confirmation.'
+    )
+    assistantPromptPlaceholder = t(
+      'Ask about server configuration, model pricing, or operations...'
+    )
+  } else if (developerAccessGranted) {
+    assistantFooterStatus = withAccessLevel(
+      superAdministratorFunded
+        ? t('Funded by the super administrator')
+        : t('Loading...')
+    )
     assistantDescription = t(
       'Guidance for plans, setup, API keys, costs, and support.'
     )
     assistantPromptPlaceholder = t('Ask about plans, setup, keys, or costs...')
   } else if (accountAccessState === 'restricted') {
-    assistantFooterStatus = superAdministratorFunded
-      ? t('Funded by the super administrator')
-      : t('Loading...')
+    assistantFooterStatus = withAccessLevel(
+      superAdministratorFunded
+        ? t('Funded by the super administrator')
+        : t('Loading...')
+    )
     assistantDescription = t(
       'L0 accounts can browse challenges and ask the AI assistant to request L1 access.'
     )
@@ -631,7 +680,7 @@ export function AssistantPanel(props: {
       'Write a short explanation of what you want to build or why you need L1 access.'
     )
   } else if (accountAccessState === 'error') {
-    assistantFooterStatus = t('Unable to verify account access')
+    assistantFooterStatus = withAccessLevel(t('Unable to verify account access'))
     assistantDescription = t('Unable to verify account access')
   }
 
@@ -696,12 +745,22 @@ export function AssistantPanel(props: {
       const suggestedPreset = suggestedPresetId
         ? presets.find((preset) => preset.id === suggestedPresetId)
         : undefined
+      const adminChange =
+        reply.action?.type === 'admin_config_change' ||
+        reply.action?.type === 'admin_pricing_change'
+          ? reply.action
+          : undefined
       let suggestedAction = developerAccessGranted
         ? suggestedPreset?.action
         : suggestedPresetId === 'onboarding'
           ? suggestedPreset?.restricted?.action
           : undefined
-      if (reply.action?.type === 'l1_recommendation') {
+      if (adminChange) {
+        setRecommendationDraft(null)
+        setAccountDisableDraft(null)
+        setActiveTool(null)
+        suggestedAction = undefined
+      } else if (reply.action?.type === 'l1_recommendation') {
         setRecommendationDraft(reply.action)
         setAccountDisableDraft(null)
         setActiveTool('activation')
@@ -723,6 +782,7 @@ export function AssistantPanel(props: {
           role: 'assistant',
           content: safeReply.content,
           action: suggestedAction,
+          adminChange,
         },
       ])
       await queryClient.invalidateQueries({ queryKey: ['assistant-status'] })
@@ -797,6 +857,8 @@ export function AssistantPanel(props: {
         onOpenHistory={() => setHistoryView('list')}
         onCloseHistory={() => setHistoryView(null)}
         onToggleCollapsed={props.onToggleCollapsed}
+        fullscreen={props.fullscreen}
+        onToggleFullscreen={props.onToggleFullscreen}
       />
       <Alert className='m-3 mb-0' variant='default'>
         <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} aria-hidden='true' />
@@ -882,6 +944,14 @@ export function AssistantPanel(props: {
                     ) : (
                       <p className='whitespace-pre-wrap'>{entry.content}</p>
                     )}
+                    {entry.adminChange ? (
+                      <AssistantAdminChangeTool
+                        action={entry.adminChange}
+                        onApplied={() => {
+                          void statusQuery.refetch()
+                        }}
+                      />
+                    ) : null}
                     {entry.retry || entry.action ? (
                       <div className='flex flex-wrap gap-2'>
                         {entry.retry ? (
@@ -1077,6 +1147,19 @@ export function AssistantPanel(props: {
   )
 
   if (mode === 'rail') {
+    if (props.fullscreen) {
+      return (
+        <div
+          id='ai-assistant-panel'
+          role='dialog'
+          aria-modal='true'
+          aria-label={t('Service guide')}
+          className='bg-background fixed inset-0 z-50 flex min-h-0 flex-col'
+        >
+          {panelContent}
+        </div>
+      )
+    }
     if (props.collapsed) {
       return (
         <aside

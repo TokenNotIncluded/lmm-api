@@ -61,6 +61,7 @@ export function GeneralError({
       <ErrorPageFrame
         status={status ?? 500}
         showStatus={!minimal}
+        artSrc='/error-recovery-oat.png'
         title={title}
         description={
           <>
@@ -77,14 +78,14 @@ export function GeneralError({
             <>
               <Button
                 variant='outline'
-                className='rounded-sm'
+                className='error-editorial-action error-editorial-action-primary'
                 onClick={() => history.go(-1)}
               >
                 {t('Go Back')}
               </Button>
               <Button
                 variant='outline'
-                className='rounded-sm'
+                className='error-editorial-action error-editorial-action-secondary'
                 render={
                   <a
                     href={FEEDBACK_URL}
@@ -96,7 +97,8 @@ export function GeneralError({
                 {t('Report an issue')}
               </Button>
               <Button
-                className='rounded-sm'
+                variant='outline'
+                className='error-editorial-action error-editorial-action-secondary'
                 onClick={() => navigate({ to: '/' })}
               >
                 {t('Back to Home')}

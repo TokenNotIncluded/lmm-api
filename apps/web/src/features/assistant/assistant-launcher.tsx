@@ -48,6 +48,7 @@ export function AssistantLauncher() {
   const isMobile = useIsMobile()
   const [mobileOpen, setMobileOpen] = useState(false)
   const [desktopCollapsed, setDesktopCollapsed] = useState(false)
+  const [desktopFullscreen, setDesktopFullscreen] = useState(false)
   const [initialPreset, setInitialPreset] = useState<AssistantPresetId>()
   const [initialMessage, setInitialMessage] = useState<string>()
   const [initialMessageRevision, setInitialMessageRevision] = useState(0)
@@ -61,6 +62,7 @@ export function AssistantLauncher() {
         setInitialMessageRevision((revision) => revision + 1)
       }
       setDesktopCollapsed(false)
+      setDesktopFullscreen(false)
       setMobileOpen(true)
     },
     []
@@ -142,11 +144,13 @@ export function AssistantLauncher() {
           mode={isMobile ? 'mobile' : 'rail'}
           open={isMobile ? mobileOpen : true}
           collapsed={!isMobile && desktopCollapsed}
+          fullscreen={!isMobile && desktopFullscreen}
           initialPreset={initialPreset}
           initialMessage={initialMessage}
           initialMessageRevision={initialMessageRevision}
           onOpenChange={setMobileOpen}
           onToggleCollapsed={() => setDesktopCollapsed((value) => !value)}
+          onToggleFullscreen={() => setDesktopFullscreen((value) => !value)}
         />
       </Suspense>
     </div>

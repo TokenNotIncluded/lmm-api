@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -555,6 +556,14 @@ func TestAssistantPlanOffersHidePlansAndDiscountsFromL0(t *testing.T) {
 	assert.Empty(t, discounts)
 	assert.Contains(t, result["error"], "L1 access")
 	assert.Contains(t, result["next_step"], "L1 access request")
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Set("id", user.Id)
+	forgedToolCall := executeAssistantTool(c, assistantOpenAIToolCall{
+		Function: assistantOpenAIToolCallFunction{Name: "get_plan_offers", Arguments: `{}`},
+	})
+	assert.Equal(t, "l1_required", forgedToolCall["status"])
+	assert.Contains(t, forgedToolCall["error"], "L1 access")
 }
 
 func TestAssistantPlanOffersKeepLinuxDOPaymentHiddenForL1(t *testing.T) {
@@ -602,11 +611,12 @@ func TestAssistantModelPricingUsesAccountGroupsAndLiveRates(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}))
 	user := model.User{
-		Username: "assistant-pricing-user",
-		Password: "password",
-		Role:     common.RoleCommonUser,
-		Status:   common.UserStatusEnabled,
-		Group:    "default",
+		Username:           "assistant-pricing-user",
+		Password:           "password",
+		Role:               common.RoleCommonUser,
+		Status:             common.UserStatusEnabled,
+		Group:              "default",
+		ConsoleActivatedAt: 1,
 	}
 	require.NoError(t, db.Create(&user).Error)
 	originalGetPricing := getPricingCache
@@ -631,14 +641,121 @@ func TestAssistantModelPricingUsesAccountGroupsAndLiveRates(t *testing.T) {
 	assert.Equal(t, 3.0, prices[0]["input_usd_per_million"])
 	assert.Equal(t, 6.0, prices[0]["output_usd_per_million"])
 
+	levelTwo := model.TrustLevelMinUser + 2
+	discountedUser := model.User{
+		Username:           "assistant-pricing-level-two",
+		Password:           "password",
+		AffCode:            "assistant-level-two",
+		Role:               common.RoleCommonUser,
+		Status:             common.UserStatusEnabled,
+		Group:              "default",
+		TrustLevelOverride: &levelTwo,
+		ConsoleActivatedAt: 1,
+	}
+	require.NoError(t, db.Create(&discountedUser).Error)
+	discounted := executeAssistantModelPricingTool(discountedUser.Id, map[string]any{"model_id": "priced-model"})
+	assert.Equal(t, true, discounted["ok"])
+	assert.Equal(t, 2, discounted["trust_level"])
+	assert.InDelta(t, 0.97, discounted["trust_discount_ratio"], 0.000001)
+	discountedPrices, ok := discounted["prices"].([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, discountedPrices, 1)
+	assert.InDelta(t, 2.91, discountedPrices[0]["input_usd_per_million"], 0.000001)
+
+	l0User := model.User{
+		Username: "assistant-pricing-l0",
+		Password: "password",
+		AffCode:  "assistant-pricing-l0",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+		Group:    "default",
+	}
+	require.NoError(t, db.Create(&l0User).Error)
+	l0Pricing := executeAssistantModelPricingTool(l0User.Id, map[string]any{"model_id": "priced-model"})
+	assert.Equal(t, "l1_required", l0Pricing["status"])
+
 	missing := executeAssistantModelPricingTool(user.Id, map[string]any{})
 	assert.Equal(t, "model_required", missing["status"])
+}
+
+func TestAssistantPricingEndpointRejectsL0(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}))
+	user := model.User{
+		Username: "assistant-pricing-endpoint-l0",
+		Password: "password",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+		Group:    "default",
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/assistant/pricing", nil)
+	c.Set("id", user.Id)
+	GetAssistantPricing(c)
+
+	assert.Equal(t, http.StatusForbidden, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "ASSISTANT_L1_REQUIRED")
+}
+
+func TestAssistantPricingEndpointAppliesTrustDiscountToGroupRatios(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}))
+	levelTwo := model.TrustLevelMinUser + 2
+	user := model.User{
+		Username:           "assistant-pricing-endpoint-level-two",
+		Password:           "password",
+		Role:               common.RoleCommonUser,
+		Status:             common.UserStatusEnabled,
+		Group:              "default",
+		TrustLevelOverride: &levelTwo,
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	previousPricing := getPricingCache
+	getPricingCache = func() []model.Pricing {
+		return []model.Pricing{{
+			ModelName:   "assistant-endpoint-priced-model",
+			QuotaType:   0,
+			ModelRatio:  1,
+			EnableGroup: []string{"default"},
+		}}
+	}
+	previousGroupRatio := ratio_setting.GroupRatio2JSONString()
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1}`))
+	t.Cleanup(func() {
+		getPricingCache = previousPricing
+		_ = ratio_setting.UpdateGroupRatioByJSONString(previousGroupRatio)
+	})
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/assistant/pricing", nil)
+	c.Set("id", user.Id)
+	GetAssistantPricing(c)
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Success            bool               `json:"success"`
+		GroupRatio         map[string]float64 `json:"group_ratio"`
+		TrustLevel         int                `json:"trust_level"`
+		TrustDiscountRatio float64            `json:"trust_discount_ratio"`
+		PricingScope       string             `json:"pricing_scope"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.True(t, response.Success)
+	assert.Equal(t, 2, response.TrustLevel)
+	assert.InDelta(t, 0.97, response.TrustDiscountRatio, 0.000001)
+	assert.InDelta(t, 0.97, response.GroupRatio["default"], 0.000001)
+	assert.Equal(t, "assistant_account", response.PricingScope)
 }
 
 func TestAssistantAgentToolsExposeSafeAndConfirmationGatedActions(t *testing.T) {
 	c, _ := createAssistantKeyTestContext(t, "assistant-tool-user")
 	definitions := assistantToolDefinitions()
-	require.Len(t, definitions, 14)
+	require.Len(t, definitions, 19)
 	names := make(map[string]bool, len(definitions))
 	for _, definition := range definitions {
 		names[definition.Function.Name] = true
@@ -657,6 +774,11 @@ func TestAssistantAgentToolsExposeSafeAndConfirmationGatedActions(t *testing.T) 
 	assert.True(t, names["prepare_l1_recommendation"])
 	assert.True(t, names["request_create_key"])
 	assert.True(t, names["request_human_support"])
+	assert.True(t, names["get_admin_server_config"])
+	assert.True(t, names["prepare_admin_config_change"])
+	assert.True(t, names["get_admin_channels"])
+	assert.True(t, names["prepare_admin_channel_change"])
+	assert.True(t, names["prepare_admin_pricing_change"])
 
 	createKey := executeAssistantTool(c, assistantOpenAIToolCall{
 		Function: assistantOpenAIToolCallFunction{
@@ -695,6 +817,44 @@ func TestAssistantAgentToolsExposeSafeAndConfirmationGatedActions(t *testing.T) 
 	})
 	assert.Equal(t, "message_invalid", shortHandoff["status"])
 	assert.False(t, shortHandoff["ok"].(bool))
+}
+
+func TestAssistantAgentToolCatalogueMatchesAccessLevel(t *testing.T) {
+	l0 := assistantToolDefinitionsForContext(assistantUserContext{AccessLevel: "L0"})
+	l0Names := make(map[string]bool, len(l0))
+	for _, definition := range l0 {
+		l0Names[definition.Function.Name] = true
+	}
+	assert.True(t, l0Names["get_service_facts"])
+	assert.True(t, l0Names["prepare_l1_recommendation"])
+	assert.False(t, l0Names["get_model_pricing"])
+	assert.False(t, l0Names["get_plan_offers"])
+	assert.False(t, l0Names["get_admin_server_config"])
+
+	l1 := assistantToolDefinitionsForContext(assistantUserContext{
+		AccessLevel:            "L1",
+		DeveloperAccessGranted: true,
+	})
+	l1Names := make(map[string]bool, len(l1))
+	for _, definition := range l1 {
+		l1Names[definition.Function.Name] = true
+	}
+	assert.True(t, l1Names["get_model_pricing"])
+	assert.True(t, l1Names["get_usage_summary"])
+	assert.True(t, l1Names["get_plan_offers"])
+	assert.False(t, l1Names["prepare_admin_config_change"])
+
+	admin := assistantToolDefinitionsForContext(assistantUserContext{
+		AccessLevel:            "ADMIN",
+		AdministratorMode:      true,
+		DeveloperAccessGranted: true,
+	})
+	adminNames := make(map[string]bool, len(admin))
+	for _, definition := range admin {
+		adminNames[definition.Function.Name] = true
+	}
+	assert.Len(t, adminNames, len(assistantToolDefinitions()))
+	assert.True(t, adminNames["prepare_admin_pricing_change"])
 }
 
 func TestAssistantL1RecommendationActionUsesActorAndIsAttachedToResponse(t *testing.T) {

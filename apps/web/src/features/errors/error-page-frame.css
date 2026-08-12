@@ -16,15 +16,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 */
 
 .error-editorial {
-  --background: var(--forge-paper-light);
+  --background: var(--forge-secondary-light);
   --foreground: var(--forge-ink-light);
   --card: var(--forge-card-light);
   --card-foreground: var(--forge-ink-light);
   --primary: var(--forge-ink-light);
-  --primary-foreground: var(--forge-paper-light);
+  --primary-foreground: var(--forge-secondary-light);
   --border: color-mix(in oklch, var(--forge-ink-light) 20%, transparent);
   --input: color-mix(in oklch, var(--forge-ink-light) 28%, transparent);
-  --error-paper: var(--forge-paper-light);
+  --error-paper: var(--forge-secondary-light);
   --error-ink: var(--forge-ink-light);
   --error-muted: var(--forge-muted-ink-light);
   --error-clay: var(--forge-clay-light);
@@ -32,6 +32,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
   color-scheme: light;
   background: var(--error-paper);
   color: var(--error-ink);
+  font-family: var(--font-sans);
 }
 
 .dark .error-editorial {
@@ -56,12 +57,57 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
   outline-offset: 3px;
 }
 
-.error-editorial-kicker {
-  color: var(--error-muted);
-  font-size: 0.72rem;
+.error-editorial-shell {
+  min-height: 100svh;
+  padding: clamp(1.75rem, 5vw, 4.5rem) clamp(1.25rem, 6.5vw, 6rem)
+    clamp(2.25rem, 6vw, 5rem);
+}
+
+.error-editorial-layout {
+  display: grid;
+  width: min(100%, 1248px);
+  min-height: calc(100svh - 7.5rem);
+  grid-template-columns: minmax(340px, 0.9fr) minmax(0, 1.1fr);
+  align-items: center;
+  gap: clamp(2.25rem, 6vw, 6.25rem);
+  margin: 0 auto;
+}
+
+.error-editorial-copy {
+  min-width: 0;
+  padding-top: 1rem;
+}
+
+.error-editorial-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.625rem;
+  color: var(--error-ink);
+  font-size: 0.875rem;
   font-weight: 700;
-  letter-spacing: 0.18em;
+  letter-spacing: -0.01em;
+}
+
+.error-editorial-kicker {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: clamp(3.625rem, 8vh, 6rem) 0 1rem;
+  color: var(--error-muted);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.2em;
   text-transform: uppercase;
+}
+
+.error-editorial-kicker::before {
+  display: block;
+  width: 1.75rem;
+  height: 0.3125rem;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--error-clay);
+  content: '';
 }
 
 .error-editorial-muted {
@@ -69,18 +115,103 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 }
 
 .error-editorial-status {
+  margin: 0;
   color: var(--error-ink);
   font-family: var(--font-serif);
-  font-size: clamp(4.5rem, 14vw, 10rem);
+  font-size: clamp(5.2rem, 11vw, 9.8rem);
   font-weight: 400;
-  letter-spacing: -0.08em;
-  line-height: 0.82;
+  letter-spacing: -0.09em;
+  line-height: 0.78;
+}
+
+.error-editorial-title {
+  max-width: 33rem;
+  margin: 1.875rem 0 0;
+  color: var(--error-ink);
+  font-family: var(--font-serif);
+  font-size: clamp(2.35rem, 3.8vw, 3.9rem);
+  font-weight: 400;
+  letter-spacing: -0.055em;
+  line-height: 0.98;
+}
+
+.error-editorial-description {
+  max-width: 25.625rem;
+  margin: 1.5625rem 0 0;
+  color: var(--error-muted);
+  font-size: 1rem;
+  line-height: 1.65;
+}
+
+.error-editorial-note {
+  max-width: 26.25rem;
+  margin: 1.125rem 0 0;
+  color: var(--error-muted);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+
+.error-editorial-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.625rem;
+  margin-top: 1.875rem;
+}
+
+.error-editorial-action {
+  min-height: 2.5rem;
+  border: 1px solid var(--error-ink) !important;
+  border-radius: 999px !important;
+  padding: 0 1.0625rem;
+  font-size: 0.8125rem !important;
+  font-weight: 700 !important;
+}
+
+.error-editorial-action-primary {
+  background: var(--error-ink) !important;
+  color: var(--error-paper) !important;
+}
+
+.error-editorial-action-primary:hover {
+  background: color-mix(in oklch, var(--error-ink) 86%, white) !important;
+}
+
+.error-editorial-action-secondary {
+  background: transparent !important;
+  color: var(--error-ink) !important;
+}
+
+.error-editorial-action-secondary:hover {
+  background: var(--forge-paper-light) !important;
+}
+
+.error-editorial-art-column {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: flex-end;
+  padding-top: 3.375rem;
+}
+
+.error-editorial-image {
+  display: block;
+  width: min(100%, 46.25rem);
+  height: auto;
+  border-radius: 42% 58% 48% 52% / 46% 42% 58% 54%;
 }
 
 .error-editorial-art {
   display: block;
   width: 100%;
   height: auto;
+}
+
+.error-editorial-rule {
+  width: min(100%, 46.25rem);
+  height: 1px;
+  margin-top: 1.125rem;
+  background: color-mix(in oklch, var(--error-ink) 24%, transparent);
 }
 
 .error-art-carrier {
@@ -108,5 +239,63 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
   .error-editorial * {
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+@media (max-width: 820px) {
+  .error-editorial-layout {
+    display: block;
+    min-height: 0;
+  }
+
+  .error-editorial-copy {
+    padding-top: 0;
+  }
+
+  .error-editorial-art-column {
+    align-items: flex-end;
+    padding-top: 3.375rem;
+  }
+
+  .error-editorial-image,
+  .error-editorial-rule {
+    width: min(100%, 40.625rem);
+  }
+}
+
+@media (max-width: 480px) {
+  .error-editorial-shell {
+    padding: 1.5rem 1.25rem 2.25rem;
+  }
+
+  .error-editorial-kicker {
+    margin-top: 3rem;
+  }
+
+  .error-editorial-title {
+    margin-top: 1.5rem;
+    font-size: clamp(2.2rem, 11vw, 3.25rem);
+  }
+
+  .error-editorial-actions {
+    align-items: stretch;
+  }
+
+  .error-editorial-action {
+    flex: 1 1 auto;
+  }
+
+  .error-editorial-art-column {
+    padding-top: 2.375rem;
+  }
+
+  .error-editorial-image {
+    width: calc(100% + 1.5rem);
+    max-width: none;
+    margin-right: -0.75rem;
+  }
+
+  .error-editorial-rule {
+    margin-top: 0.75rem;
   }
 }
