@@ -1,13 +1,20 @@
 //! Pure rollout controls for the protocol-conversion migration.
 //!
 //! This module deliberately stops at decision boundaries. It does not own a
-//! route, an HTTP client, a provider response, or a deployment switch. A
+//! route, an HTTP client, a provider response, or traffic ownership. Its live
+//! control is limited to replacing an in-process configuration snapshot. A
 //! caller can therefore compile one decision before a request/stream starts,
 //! run two local conversion summaries for shadow comparison, and evaluate
 //! rollback telemetry without ever giving this API a way to repeat an
 //! upstream call.
 
-use std::{collections::BTreeMap, env, error::Error, fmt};
+use std::{
+    collections::BTreeMap,
+    env,
+    error::Error,
+    fmt,
+    sync::{Arc, Mutex},
+};
 
 use lmm_contracts::relay::{
     Feature as RelayFeature, LossCode, LossPolicy, Protocol, SyntheticField,
@@ -207,6 +214,22 @@ impl FlagConfig {
     pub fn push_override(&mut self, override_rule: FlagOverride) -> Result<(), RolloutConfigError> {
         override_rule.validate()?;
         self.overrides.push(override_rule);
+        Ok(())
+    }
+
+    /// Validates every basis point and dimension-specific override in this flag.
+    pub fn validate(&self) -> Result<(), RolloutConfigError> {
+        self.validate_named("rollout flag")
+    }
+
+    fn validate_named(&self, name: &'static str) -> Result<(), RolloutConfigError> {
+        validate_basis_points(self.canary_basis_points, name)?;
+        if !self.enabled && self.canary_basis_points != 0 {
+            return Err(RolloutConfigError::DisabledWithNonzeroCanary);
+        }
+        for override_rule in &self.overrides {
+            override_rule.validate()?;
+        }
         Ok(())
     }
 }
@@ -450,10 +473,31 @@ impl ProtocolRolloutConfig {
             sse_parser_v2: parse_flag_env("LMM_SSE_PARSER_V2", "LMM_SSE_PARSER_V2_CANARY_BPS")?,
             converter_pair_overrides: parse_pair_overrides()?,
         };
-        for override_rule in &config.converter_pair_overrides {
+        config.validate()?;
+        Ok(config)
+    }
+
+    /// Validates the complete configuration before it can become live.
+    ///
+    /// Public fields are intentionally still useful for deserialization and
+    /// test fixtures, so replacement must validate every base flag, nested
+    /// override, pair override, and basis-point value rather than trusting a
+    /// constructor that may have been bypassed.
+    pub fn validate(&self) -> Result<(), RolloutConfigError> {
+        self.conversion_engine_v2
+            .validate_named("LMM_CONVERSION_ENGINE_V2_CANARY_BPS")?;
+        self.gemini_function_id_v2
+            .validate_named("LMM_GEMINI_FUNCTION_ID_V2_CANARY_BPS")?;
+        self.gemini_thought_signature_v2
+            .validate_named("LMM_GEMINI_THOUGHT_SIGNATURE_V2_CANARY_BPS")?;
+        self.claude_opaque_thinking_v2
+            .validate_named("LMM_CLAUDE_OPAQUE_THINKING_V2_CANARY_BPS")?;
+        self.sse_parser_v2
+            .validate_named("LMM_SSE_PARSER_V2_CANARY_BPS")?;
+        for override_rule in &self.converter_pair_overrides {
             override_rule.validate()?;
         }
-        Ok(config)
+        Ok(())
     }
 
     /// Returns the boolean flag configuration for one switch.
@@ -614,6 +658,295 @@ impl ProtocolRolloutConfig {
     /// Returns whether one flag is active for a stable request context.
     pub fn is_enabled(&self, flag: RolloutFlag, context: &RolloutContext<'_>) -> bool {
         self.decide(flag, context).enabled
+    }
+}
+
+/// Why a live rollout snapshot is active or fail-closed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProtocolRolloutSnapshotStatus {
+    /// The snapshot was read from a healthy control state.
+    Active,
+    /// The snapshot contains the explicit rollback configuration.
+    Rollback,
+    /// The control mutex was poisoned, so the snapshot is a safe rollback.
+    LockPoisoned,
+}
+
+/// An owned, immutable rollout configuration for one request or stream.
+///
+/// The control lock is held only while this value is cloned. Callers can keep
+/// and use the snapshot for the whole request without retaining any lock.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ProtocolRolloutSnapshot {
+    /// Monotonically increasing replacement generation.
+    generation: u64,
+    /// Configuration copied out of the live control state.
+    config: ProtocolRolloutConfig,
+    /// Whether this snapshot is active or fail-closed.
+    status: ProtocolRolloutSnapshotStatus,
+}
+
+impl ProtocolRolloutSnapshot {
+    fn from_state(state: &RolloutControlState) -> Self {
+        Self {
+            generation: state.generation,
+            status: if state.config.rollback {
+                ProtocolRolloutSnapshotStatus::Rollback
+            } else {
+                ProtocolRolloutSnapshotStatus::Active
+            },
+            config: state.config.clone(),
+        }
+    }
+
+    fn lock_poisoned() -> Self {
+        let mut config = ProtocolRolloutConfig::default();
+        config.disable_v2_controls();
+        Self {
+            generation: 0,
+            config,
+            status: ProtocolRolloutSnapshotStatus::LockPoisoned,
+        }
+    }
+
+    /// Returns the replacement generation carried by this snapshot.
+    #[must_use]
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Returns the generation under a version-oriented name.
+    #[must_use]
+    pub const fn version(&self) -> u64 {
+        self.generation
+    }
+
+    /// Returns the snapshot health/rollback status.
+    #[must_use]
+    pub const fn status(&self) -> ProtocolRolloutSnapshotStatus {
+        self.status
+    }
+
+    /// Returns the validated configuration carried by this snapshot.
+    #[must_use]
+    pub const fn config(&self) -> &ProtocolRolloutConfig {
+        &self.config
+    }
+
+    /// Returns whether callers must treat this snapshot as fail-closed.
+    #[must_use]
+    pub const fn is_fail_closed(&self) -> bool {
+        self.config.rollback || !matches!(self.status, ProtocolRolloutSnapshotStatus::Active)
+    }
+
+    /// Evaluates one flag without accessing the live control lock.
+    pub fn decide(&self, flag: RolloutFlag, context: &RolloutContext<'_>) -> FlagDecision {
+        if self.is_fail_closed() {
+            return FlagDecision::disabled(
+                flag,
+                stable_bucket(context.request_key),
+                DecisionSource::ConfigRollback,
+            );
+        }
+        self.config.decide(flag, context)
+    }
+
+    /// Returns whether one flag is enabled without accessing the live control lock.
+    pub fn is_enabled(&self, flag: RolloutFlag, context: &RolloutContext<'_>) -> bool {
+        self.decide(flag, context).enabled
+    }
+
+    /// Creates a fail-closed rollback candidate without accessing live state.
+    #[must_use]
+    pub fn rolled_back(&self) -> Self {
+        let mut config = self.config.clone();
+        config.disable_v2_controls();
+        let status = if self.status == ProtocolRolloutSnapshotStatus::LockPoisoned {
+            ProtocolRolloutSnapshotStatus::LockPoisoned
+        } else {
+            ProtocolRolloutSnapshotStatus::Rollback
+        };
+        Self {
+            generation: self.generation,
+            config,
+            status,
+        }
+    }
+
+    /// Alias for [`Self::rolled_back`] for rollback call sites.
+    #[must_use]
+    pub fn rollback(&self) -> Self {
+        self.rolled_back()
+    }
+}
+
+struct RolloutControlState {
+    generation: u64,
+    config: ProtocolRolloutConfig,
+}
+
+/// Errors returned by live rollout snapshot operations.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ProtocolRolloutControlError {
+    /// The candidate failed complete configuration validation.
+    InvalidConfig(RolloutConfigError),
+    /// The control mutex was poisoned by a failed thread.
+    LockPoisoned,
+    /// The generation counter cannot be advanced safely.
+    GenerationExhausted,
+}
+
+impl fmt::Display for ProtocolRolloutControlError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidConfig(error) => write!(formatter, "invalid rollout config: {error}"),
+            Self::LockPoisoned => formatter.write_str("protocol rollout control lock poisoned"),
+            Self::GenerationExhausted => {
+                formatter.write_str("protocol rollout generation exhausted")
+            }
+        }
+    }
+}
+
+impl Error for ProtocolRolloutControlError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::InvalidConfig(error) => Some(error),
+            Self::LockPoisoned | Self::GenerationExhausted => None,
+        }
+    }
+}
+
+impl From<RolloutConfigError> for ProtocolRolloutControlError {
+    fn from(error: RolloutConfigError) -> Self {
+        Self::InvalidConfig(error)
+    }
+}
+
+/// Cloneable, thread-safe live holder for rollout configuration snapshots.
+///
+/// Reads clone the complete configuration while holding the mutex and return
+/// an owned snapshot. No request/stream decision needs to hold this mutex.
+/// Invalid replacements are rejected before locking; poisoned locks reject
+/// replacements and make reads return a rollback snapshot.
+#[derive(Clone)]
+pub struct ProtocolRolloutControl {
+    state: Arc<Mutex<RolloutControlState>>,
+}
+
+impl Default for ProtocolRolloutControl {
+    fn default() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(RolloutControlState {
+                generation: 0,
+                config: ProtocolRolloutConfig::default(),
+            })),
+        }
+    }
+}
+
+impl ProtocolRolloutControl {
+    /// Creates a control holder after validating the initial configuration.
+    pub fn new(config: ProtocolRolloutConfig) -> Result<Self, ProtocolRolloutControlError> {
+        config.validate()?;
+        Ok(Self {
+            state: Arc::new(Mutex::new(RolloutControlState {
+                generation: 0,
+                config,
+            })),
+        })
+    }
+
+    /// Reads an owned snapshot and never exposes a lock guard to callers.
+    #[must_use]
+    pub fn snapshot(&self) -> ProtocolRolloutSnapshot {
+        match self.try_snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(ProtocolRolloutControlError::LockPoisoned) => {
+                ProtocolRolloutSnapshot::lock_poisoned()
+            }
+            Err(_) => ProtocolRolloutSnapshot::lock_poisoned(),
+        }
+    }
+
+    /// Reads an owned snapshot while preserving a poison error for callers
+    /// that need to distinguish an emergency rollback from a healthy one.
+    pub fn try_snapshot(&self) -> Result<ProtocolRolloutSnapshot, ProtocolRolloutControlError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| ProtocolRolloutControlError::LockPoisoned)?;
+        Ok(ProtocolRolloutSnapshot::from_state(&state))
+    }
+
+    /// Returns the current generation, or a poison error if it is unknown.
+    pub fn generation(&self) -> Result<u64, ProtocolRolloutControlError> {
+        self.try_snapshot().map(|snapshot| snapshot.generation)
+    }
+
+    /// Returns the current generation under a version-oriented name.
+    pub fn version(&self) -> Result<u64, ProtocolRolloutControlError> {
+        self.generation()
+    }
+
+    /// Builds an owned rollback candidate ready for [`Self::replace_snapshot`].
+    ///
+    /// A poisoned control produces a poison-marked rollback candidate; the
+    /// subsequent replacement still fails closed rather than recovering a
+    /// poisoned mutex.
+    #[must_use]
+    pub fn rollback_snapshot(&self) -> ProtocolRolloutSnapshot {
+        self.snapshot().rolled_back()
+    }
+
+    /// Validates and immediately installs a new configuration snapshot.
+    ///
+    /// The candidate is fully validated before the lock is acquired. A
+    /// failure leaves the prior snapshot and generation unchanged.
+    pub fn replace(
+        &self,
+        config: ProtocolRolloutConfig,
+    ) -> Result<ProtocolRolloutSnapshot, ProtocolRolloutControlError> {
+        config.validate()?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ProtocolRolloutControlError::LockPoisoned)?;
+        Self::install_locked(&mut state, config)
+    }
+
+    /// Replaces the live value with an already-owned snapshot's configuration.
+    pub fn replace_snapshot(
+        &self,
+        snapshot: &ProtocolRolloutSnapshot,
+    ) -> Result<ProtocolRolloutSnapshot, ProtocolRolloutControlError> {
+        self.replace(snapshot.config.clone())
+    }
+
+    /// Atomically installs a rollback snapshot from the current live value.
+    pub fn replace_rollback(&self) -> Result<ProtocolRolloutSnapshot, ProtocolRolloutControlError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ProtocolRolloutControlError::LockPoisoned)?;
+        let mut rollback = state.config.clone();
+        rollback.disable_v2_controls();
+        rollback.validate()?;
+        Self::install_locked(&mut state, rollback)
+    }
+
+    fn install_locked(
+        state: &mut RolloutControlState,
+        config: ProtocolRolloutConfig,
+    ) -> Result<ProtocolRolloutSnapshot, ProtocolRolloutControlError> {
+        let generation = state
+            .generation
+            .checked_add(1)
+            .ok_or(ProtocolRolloutControlError::GenerationExhausted)?;
+        state.config = config;
+        state.generation = generation;
+        Ok(ProtocolRolloutSnapshot::from_state(state))
     }
 }
 
@@ -1377,7 +1710,14 @@ pub type RolloutFeature = RelayFeature;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::{
+        panic::AssertUnwindSafe,
+        sync::{
+            Arc as TestArc, Barrier as TestBarrier,
+            atomic::{AtomicUsize, Ordering},
+        },
+        thread,
+    };
 
     fn context<'a>(key: &'a str) -> RolloutContext<'a> {
         RolloutContext::new(
@@ -1387,6 +1727,12 @@ mod tests {
             "gpt",
             false,
         )
+    }
+
+    fn fully_enabled_configuration() -> ProtocolRolloutConfig {
+        let mut config = ProtocolRolloutConfig::default();
+        config.conversion_engine_v2 = FlagConfig::enabled(MAX_BASIS_POINTS).expect("valid");
+        config
     }
 
     #[test]
@@ -1509,6 +1855,160 @@ mod tests {
         assert!(validate_canary_stage(CanaryStage::TextImageFivePercent, 499).is_err());
         assert!(validate_canary_stage(CanaryStage::FullFeatureTwentyFivePercent, 2_500).is_ok());
         assert!(validate_canary_stage(CanaryStage::FullTraffic, MAX_BASIS_POINTS).is_ok());
+    }
+
+    #[test]
+    fn control_reads_owned_snapshots_while_replacements_advance_generations() {
+        let control = ProtocolRolloutControl::default();
+        let initial = control.snapshot();
+        let barrier = TestArc::new(TestBarrier::new(5));
+        let mut readers = Vec::new();
+
+        for _ in 0..3 {
+            let reader = control.clone();
+            let start = barrier.clone();
+            readers.push(thread::spawn(move || {
+                start.wait();
+                for _ in 0..128 {
+                    let snapshot = reader.snapshot();
+                    let _ = snapshot.decide(RolloutFlag::ConversionEngineV2, &context("reader"));
+                    assert!(snapshot.generation() <= 64);
+                    assert!(!snapshot.is_fail_closed());
+                }
+            }));
+        }
+
+        let writer = control.clone();
+        let writer_start = barrier.clone();
+        let replacement = thread::spawn(move || {
+            writer_start.wait();
+            for index in 0..64 {
+                let config = if index % 2 == 0 {
+                    fully_enabled_configuration()
+                } else {
+                    ProtocolRolloutConfig::default()
+                };
+                let snapshot = writer.replace(config).expect("valid replacement");
+                assert_eq!(snapshot.generation(), index as u64 + 1);
+            }
+        });
+
+        barrier.wait();
+        replacement.join().expect("replacement thread completes");
+        for reader in readers {
+            reader.join().expect("reader thread completes");
+        }
+
+        let current = control.snapshot();
+        assert_eq!(current.generation(), 64);
+        assert_eq!(initial.generation(), 0);
+        assert_eq!(initial.status(), ProtocolRolloutSnapshotStatus::Active);
+    }
+
+    #[test]
+    fn invalid_control_replacement_does_not_change_snapshot_or_generation() {
+        let control = ProtocolRolloutControl::default();
+        let before = control.snapshot();
+        let mut invalid = ProtocolRolloutConfig::default();
+        invalid.sse_parser_v2.canary_basis_points = MAX_BASIS_POINTS + 1;
+
+        let error = control
+            .replace(invalid)
+            .expect_err("invalid config rejected");
+        assert!(matches!(
+            error,
+            ProtocolRolloutControlError::InvalidConfig(
+                RolloutConfigError::InvalidBasisPoints { .. }
+            )
+        ));
+        let after = control.snapshot();
+        assert_eq!(after, before);
+
+        let mut invalid_override = ProtocolRolloutConfig::default();
+        invalid_override
+            .gemini_function_id_v2
+            .overrides
+            .push(FlagOverride {
+                selector: RolloutSelector::default(),
+                enabled: false,
+                canary_basis_points: 1,
+            });
+        assert!(matches!(
+            control.replace(invalid_override),
+            Err(ProtocolRolloutControlError::InvalidConfig(
+                RolloutConfigError::DisabledWithNonzeroCanary
+            ))
+        ));
+        assert_eq!(control.snapshot(), before);
+
+        let mut invalid_pair = ProtocolRolloutConfig::default();
+        invalid_pair
+            .converter_pair_overrides
+            .push(ConverterPairOverride {
+                flag: RolloutFlag::ConversionEngineV2,
+                source: Protocol::OpenAi,
+                target: Protocol::OpenAiResponses,
+                channel: None,
+                model_family: None,
+                stream: None,
+                enabled: true,
+                canary_basis_points: Some(MAX_BASIS_POINTS + 1),
+            });
+        assert!(matches!(
+            control.replace(invalid_pair),
+            Err(ProtocolRolloutControlError::InvalidConfig(
+                RolloutConfigError::InvalidBasisPoints { .. }
+            ))
+        ));
+        assert_eq!(control.snapshot(), before);
+    }
+
+    #[test]
+    fn rollback_snapshot_can_be_replaced_immediately_and_gets_new_generation() {
+        let control = ProtocolRolloutControl::new(fully_enabled_configuration()).expect("valid");
+        let rollback = control.rollback_snapshot();
+        assert_eq!(rollback.status(), ProtocolRolloutSnapshotStatus::Rollback);
+        assert!(rollback.config.rollback_enabled());
+        assert!(!rollback.is_enabled(RolloutFlag::ConversionEngineV2, &context("rollback")));
+
+        let installed = control
+            .replace_snapshot(&rollback)
+            .expect("rollback replacement succeeds");
+        assert_eq!(installed.generation(), 1);
+        assert_eq!(installed.status(), ProtocolRolloutSnapshotStatus::Rollback);
+        assert!(installed.is_fail_closed());
+
+        let atomically_installed = control
+            .replace_rollback()
+            .expect("second rollback replacement succeeds");
+        assert_eq!(atomically_installed.generation(), 2);
+        assert!(atomically_installed.config.rollback_enabled());
+    }
+
+    #[test]
+    fn poisoned_control_reads_and_replacements_fail_closed() {
+        let control = ProtocolRolloutControl::default();
+        let poison = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            let _guard = control.state.lock().expect("test lock acquired");
+            std::panic::panic_any("poison rollout control mutex");
+        }));
+        assert!(poison.is_err());
+
+        let snapshot = control.snapshot();
+        assert_eq!(
+            snapshot.status(),
+            ProtocolRolloutSnapshotStatus::LockPoisoned
+        );
+        assert!(snapshot.is_fail_closed());
+        assert!(snapshot.config.rollback_enabled());
+        assert!(matches!(
+            control.try_snapshot(),
+            Err(ProtocolRolloutControlError::LockPoisoned)
+        ));
+        assert!(matches!(
+            control.replace(fully_enabled_configuration()),
+            Err(ProtocolRolloutControlError::LockPoisoned)
+        ));
     }
 
     #[test]

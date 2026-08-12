@@ -59,6 +59,9 @@ pub mod conversion_observability;
 /// Deterministic protocol conversion rollout, shadow, and rollback decisions.
 pub mod protocol_rollout;
 
+/// Closed-by-default pure protocol-route admission decisions.
+pub mod protocol_route_gate;
+
 /// Closed-by-default route ownership evidence and review gate.
 pub mod route_ownership;
 
