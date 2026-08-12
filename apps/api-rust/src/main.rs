@@ -171,6 +171,8 @@ impl ControlTaskStatusProbe for ListenerControlTaskStatusProbe {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     lmm_observability::init()?;
+    lmm_api_rs::protocol_runtime_registry::validate_protocol_runtime()
+        .map_err(|error| io::Error::other(format!("protocol runtime registry invalid: {error}")))?;
     let config = Config::from_env()?;
     // Local acceptance is an explicit loopback-only development policy. It
     // must never alter the isolated frozen listener's historical contract.

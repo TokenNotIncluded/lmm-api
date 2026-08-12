@@ -53,6 +53,15 @@ pub mod models;
 /// Hardened shared construction for outbound control-plane HTTP calls.
 pub mod outbound_http;
 
+/// Bounded low-cardinality protocol-conversion observability.
+pub mod conversion_observability;
+
+/// Deterministic protocol conversion rollout, shadow, and rollback decisions.
+pub mod protocol_rollout;
+
+/// Runtime-owned protocol capability catalog and startup drift validation.
+pub mod protocol_runtime_registry;
+
 /// Candidate route slices compiled for migration testing but not mounted.
 pub mod migration_routes;
 

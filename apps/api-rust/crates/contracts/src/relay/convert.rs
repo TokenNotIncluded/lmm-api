@@ -6,19 +6,25 @@
 //! - `relaykit/relayconvert/{request_registry,response_registry}.go`
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     error::Error,
     fmt,
 };
 
 use super::{
     CanonicalContent, CanonicalMessage, CanonicalRequest, CanonicalResponse, CanonicalStreamEvent,
-    CanonicalTool, CanonicalToolChoice, ClaudeRequest, ClaudeResponse, ClaudeStreamSnapshot,
-    Converted, FinishReason, FixtureKind, GeminiRequest, GeminiResponse, GeminiStreamSnapshot,
-    JsonData, LossReport, OpenAiChatContentPart, OpenAiChatMessage, OpenAiChatRequest,
-    OpenAiChatResponse, OpenAiChatTool, OpenAiChoice, OpenAiFunction, OpenAiResponsesRequest,
-    OpenAiStreamChunk, OpenAiStreamDelta, OpenAiStreamSnapshot, OpenAiToolCall, Protocol,
-    ReasoningConfig, RequestOptions, ResponsesContentPart, ResponsesInput, ResponsesInputItem,
+    CanonicalTool, CanonicalToolChoice, ClaudeContentBlock, ClaudeMessage, ClaudeRequest,
+    ClaudeResponse, ClaudeStreamEvent, ClaudeStreamSnapshot, ClaudeTool, ClaudeToolChoice,
+    Converted, FinishReason, FixtureKind, GEMINI_SYNTHETIC_THOUGHT_SIGNATURE, GeminiCandidate,
+    GeminiContent, GeminiFunctionCall, GeminiFunctionCallingConfig, GeminiFunctionDeclaration,
+    GeminiFunctionResponse, GeminiGenerationConfig, GeminiPart, GeminiRequest, GeminiResponse,
+    GeminiStreamSnapshot, GeminiTool, GeminiToolConfig, GeminiUsage, JsonData, LossReport,
+    OpaqueProviderState, OpaqueStateProvenance, OpenAiChatContentPart, OpenAiChatMessage,
+    OpenAiAnthropicBlock, OpenAiAnthropicExtraContent, OpenAiChatRequest, OpenAiChatResponse,
+    OpenAiChatTool, OpenAiChoice, OpenAiExtraContent, OpenAiFunction, OpenAiGoogleExtraContent,
+    OpenAiResponsesRequest, OpenAiStreamChunk,
+    OpenAiStreamDelta, OpenAiStreamSnapshot, OpenAiToolCall, Protocol, ReasoningConfig,
+    RequestOptions, ResponsesContentPart, ResponsesInput, ResponsesInputItem,
     ResponsesOutputContent, ResponsesOutputItem, ResponsesResponse, ResponsesStreamEvent,
     ResponsesStreamSnapshot, ResponsesTool, Role, StreamContentKind, StringOrParts, TokenDetails,
     TokenUsage, WireError, WireUsage,
@@ -29,6 +35,37 @@ pub enum RelayConvertError {
     Json(serde_json::Error),
     Missing(&'static str),
     Unsupported(String),
+    /// A source field is known at the protocol boundary but cannot be
+    /// represented by the requested target protocol.  Unlike the legacy
+    /// string variant this carries stable machine-readable routing data.
+    UnsupportedFeature(ConversionUnsupportedFeature),
+}
+
+/// Structured cross-protocol rejection returned before an upstream request is
+/// sent.  `path` always points into the source envelope (for example,
+/// `tools[2]` or `input[1].content[0]`).  No request body or provider value is
+/// included in this type or its display implementation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConversionUnsupportedFeature {
+    /// Stable machine-readable error code.
+    pub code: &'static str,
+    /// Source wire format identifier.
+    pub source_format: String,
+    /// Target wire format identifier.
+    pub target_format: String,
+    /// Stable semantic feature name.
+    pub feature: String,
+    /// Source JSON path at which the feature was found.
+    pub path: String,
+    /// Optional PLAN loss code associated with the rejected feature.
+    pub loss_code: Option<String>,
+    /// These errors are not fixed by retrying the same request.
+    pub retryable: bool,
+}
+
+impl ConversionUnsupportedFeature {
+    /// The public error code used by relay HTTP adapters.
+    pub const CODE: &'static str = "conversion_unsupported_feature";
 }
 
 impl fmt::Display for RelayConvertError {
@@ -37,6 +74,11 @@ impl fmt::Display for RelayConvertError {
             Self::Json(error) => write!(formatter, "invalid relay JSON: {error}"),
             Self::Missing(field) => write!(formatter, "missing required relay field: {field}"),
             Self::Unsupported(message) => formatter.write_str(message),
+            Self::UnsupportedFeature(error) => write!(
+                formatter,
+                "{} at {} cannot be converted from {} to {}",
+                error.feature, error.path, error.source_format, error.target_format
+            ),
         }
     }
 }
@@ -45,7 +87,7 @@ impl Error for RelayConvertError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Json(error) => Some(error),
-            Self::Missing(_) | Self::Unsupported(_) => None,
+            Self::Missing(_) | Self::Unsupported(_) | Self::UnsupportedFeature(_) => None,
         }
     }
 }
@@ -72,60 +114,163 @@ pub fn openai_chat_request_to_canonical(
     let mut instructions = Vec::new();
     let mut messages = Vec::new();
     let mut loss = LossReport::default();
-    for message in request.messages {
+    let mut observed_call_ids = Vec::new();
+    let mut authoritative_tool_result_outputs = BTreeMap::new();
+    for (message_index, message) in request.messages.into_iter().enumerate() {
         if message.name.is_some() {
             record_dropped(&mut loss, "messages[].name");
         }
         let role = role_from_wire(&message.role)?;
+        let anthropic_parts = anthropic_content_from_extra(&message.extra_content)?;
+        let has_anthropic_parts = anthropic_parts.is_some();
         if matches!(role, Role::System | Role::Developer) {
-            for part in chat_content_to_canonical(message.content)? {
+            for part in anthropic_parts
+                .clone()
+                .unwrap_or(chat_content_to_canonical(message.content)?)
+            {
                 match part {
                     CanonicalContent::Text { text } => instructions.push(text),
                     _ => record_dropped(&mut loss, "system/developer message non-text content"),
                 }
             }
-            if message.reasoning_content.is_some() {
+            if anthropic_parts.is_none() && message.reasoning_content.is_some() {
                 record_dropped(&mut loss, "system/developer reasoning_content");
             }
-            if !message.tool_calls.is_empty() {
+            if anthropic_parts.is_none() && !message.tool_calls.is_empty() {
                 record_dropped(&mut loss, "system/developer tool_calls");
             }
             continue;
         }
 
         if role == Role::Tool {
-            let id = message.tool_call_id.unwrap_or_default();
-            let output = match message.content {
-                Some(StringOrParts::String(value)) => JsonData::String(value),
-                Some(StringOrParts::Parts(parts)) => JsonData::Array(
-                    parts
-                        .into_iter()
-                        .map(|part| JsonData::String(part.text.unwrap_or_default()))
-                        .collect(),
-                ),
-                None => JsonData::String(String::new()),
+            let authoritative_duplicate = message
+                .tool_call_id
+                .as_deref()
+                .filter(|id| !id.is_empty())
+                .and_then(|id| {
+                    authoritative_tool_result_outputs
+                        .get(id)
+                        .map(|expected| (id, expected))
+                });
+            if let Some((id, expected)) = authoritative_duplicate {
+                let actual = chat_tool_output_to_json(message.content.clone())?;
+                let equivalent = &actual == expected
+                    || expected
+                        .compact_string()
+                        .is_ok_and(|serialized| actual == JsonData::String(serialized));
+                if !equivalent {
+                    return Err(RelayConvertError::Unsupported(format!(
+                        "OpenAI tool result {id:?} conflicts with authoritative Anthropic extension"
+                    )));
+                }
+                loss.normalized_fields
+                    .push("duplicate native tool result omitted after Anthropic extension");
+                continue;
+            }
+            let id = match message.tool_call_id {
+                Some(id) if !id.is_empty() => {
+                    observed_call_ids.retain(|candidate| candidate != &id);
+                    id
+                }
+                _ => {
+                    if observed_call_ids.len() == 1 {
+                        observed_call_ids.remove(0)
+                    } else {
+                        record_synthetic(&mut loss, "SYNTHETIC_TOOL_CALL_ID");
+                        synthetic_tool_result_id(message_index)
+                    }
+                }
             };
-            messages.push(CanonicalMessage {
-                role,
-                parts: vec![CanonicalContent::ToolResult { id, output }],
-            });
+            if let Some(mut parts) = anthropic_parts.clone() {
+                let first_extension_result_id = parts.iter().find_map(|part| {
+                    if let CanonicalContent::ToolResult { id, .. } = part {
+                        Some(id.as_str())
+                    } else {
+                        None
+                    }
+                });
+                if let Some(extension_id) = first_extension_result_id {
+                    if message.tool_call_id.as_deref() != Some(extension_id) {
+                        return Err(RelayConvertError::Unsupported(
+                            "native tool_call_id disagrees with authoritative Anthropic tool result"
+                                .to_owned(),
+                        ));
+                    }
+                }
+                for part in &parts {
+                    if let CanonicalContent::ToolResult { id, output, .. } = part {
+                        if authoritative_tool_result_outputs
+                            .insert(id.clone(), output.clone())
+                            .is_some()
+                        {
+                            return Err(RelayConvertError::Unsupported(format!(
+                                "Anthropic extension repeats tool result id {id:?}"
+                            )));
+                        }
+                    }
+                }
+                if let Some(state) = provider_state_from_extra(message.extra_content.clone())? {
+                    parts.push(CanonicalContent::ProviderState { state });
+                }
+                messages.push(CanonicalMessage { role, parts });
+                continue;
+            }
+            let output = chat_tool_output_to_json(message.content)?;
+            let mut parts = vec![CanonicalContent::ToolResult {
+                id,
+                name: message.name,
+                output,
+            }];
+            if let Some(state) = provider_state_from_extra(message.extra_content)? {
+                parts.push(CanonicalContent::ProviderState { state });
+            }
+            messages.push(CanonicalMessage { role, parts });
             continue;
         }
 
-        let mut parts = chat_content_to_canonical(message.content)?;
-        if let Some(reasoning) = message.reasoning_content {
-            parts.push(CanonicalContent::Reasoning { text: reasoning });
+        if message
+            .extra_content
+            .as_ref()
+            .and_then(|extra| extra.google.as_ref())
+            .is_some()
+            && !message.tool_calls.is_empty()
+        {
+            return Err(RelayConvertError::Unsupported(
+                "message-level Google thought signature cannot be associated with tool calls"
+                    .to_owned(),
+            ));
         }
-        parts.extend(
-            message
-                .tool_calls
-                .into_iter()
-                .map(|call| CanonicalContent::ToolCall {
-                    id: call.id,
+        let mut parts = anthropic_parts.unwrap_or(chat_content_to_canonical(message.content)?);
+        if let Some(state) = provider_state_from_extra(message.extra_content.clone())? {
+            parts.push(CanonicalContent::ProviderState { state });
+        }
+        if !has_anthropic_parts {
+            if let Some(reasoning) = message.reasoning_content {
+                parts.push(CanonicalContent::Reasoning { text: reasoning });
+            }
+        }
+        if !has_anthropic_parts {
+            for (call_index, call) in message.tool_calls.into_iter().enumerate() {
+                let id = if call.id.is_empty() {
+                    record_synthetic(&mut loss, "SYNTHETIC_TOOL_CALL_ID");
+                    let id = synthetic_tool_call_id(message_index, call_index, &call.function.name);
+                    observed_call_ids.push(id.clone());
+                    id
+                } else {
+                    let id = call.id;
+                    observed_call_ids.push(id.clone());
+                    id
+                };
+                parts.push(CanonicalContent::ToolCall {
+                    id,
                     name: call.function.name,
                     arguments: call.function.arguments,
-                }),
-        );
+                });
+                if let Some(state) = provider_state_from_extra(call.extra_content)? {
+                    parts.push(CanonicalContent::ProviderState { state });
+                }
+            }
+        }
         messages.push(CanonicalMessage { role, parts });
     }
 
@@ -182,7 +327,7 @@ pub fn canonical_request_to_openai_chat(
 ) -> Result<Converted<OpenAiChatRequest>, RelayConvertError> {
     let options = request.options;
     let mut loss = LossReport::default();
-    let mut messages = request
+    let mut messages: Vec<OpenAiChatMessage> = request
         .instructions
         .into_iter()
         .map(|content| OpenAiChatMessage {
@@ -192,15 +337,25 @@ pub fn canonical_request_to_openai_chat(
             name: None,
             tool_call_id: None,
             tool_calls: Vec::new(),
+            extra_content: None,
         })
         .collect::<Vec<_>>();
 
     for message in request.messages {
+        let message_parts = message.parts;
+        let has_anthropic_extension = message_parts.iter().any(|part| {
+            matches!(
+                part,
+                CanonicalContent::ClaudeThinking { .. }
+                    | CanonicalContent::RedactedThinking { .. }
+            )
+        });
         if message.role == Role::Model {
-            loss.normalized_fields.push("messages[].role model -> user");
+            loss.normalized_fields
+                .push("messages[].role model -> assistant");
         }
         if message.role == Role::Tool {
-            for part in &message.parts {
+            for part in &message_parts {
                 match part {
                     CanonicalContent::Text { .. } => {
                         record_dropped(&mut loss, "messages[].tool.text")
@@ -214,65 +369,205 @@ pub fn canonical_request_to_openai_chat(
                     CanonicalContent::Reasoning { .. } => {
                         record_dropped(&mut loss, "messages[].tool.reasoning")
                     }
+                    CanonicalContent::ClaudeThinking { .. } => {
+                        // A Claude tool round is carried in the explicit
+                        // Anthropic extension below; do not silently erase it.
+                    }
+                    CanonicalContent::RedactedThinking { .. } => {
+                        // See the signed thinking arm above.
+                    }
+                    CanonicalContent::ProviderState { .. } => {
+                        record_dropped(&mut loss, "messages[].tool.provider_state")
+                    }
                     CanonicalContent::ToolResult { .. } => {}
                 }
             }
         }
         let mut text = Vec::new();
-        let mut tool_calls = Vec::new();
+        let mut tool_calls: Vec<OpenAiToolCall> = Vec::new();
         let mut reasoning = Vec::new();
-        for part in message.parts {
+        let mut message_extra_content: Option<OpenAiExtraContent> = None;
+        let mut previous_was_tool_call = false;
+        let mut previous_tool_result_message: Option<usize> = None;
+        let mut first_tool_result_message: Option<usize> = None;
+        for part in message_parts.iter().cloned() {
             match part {
-                CanonicalContent::Text { text: value } => text.push(OpenAiChatContentPart {
-                    kind: "text".to_owned(),
-                    text: Some(value),
-                    image_url: None,
-                }),
-                CanonicalContent::Image { url, detail } => text.push(OpenAiChatContentPart {
-                    kind: "image_url".to_owned(),
-                    text: None,
-                    image_url: Some(match detail {
-                        Some(detail) => JsonData::Object(
-                            [
-                                ("url".to_owned(), JsonData::String(url)),
-                                ("detail".to_owned(), JsonData::String(detail)),
-                            ]
-                            .into_iter()
-                            .collect(),
-                        ),
-                        None => JsonData::String(url),
-                    }),
-                }),
+                CanonicalContent::Text { text: value } => {
+                    text.push(OpenAiChatContentPart {
+                        kind: "text".to_owned(),
+                        text: Some(value),
+                        image_url: None,
+                    });
+                    previous_was_tool_call = false;
+                    previous_tool_result_message = None;
+                }
+                CanonicalContent::Image { url, detail } => {
+                    text.push(OpenAiChatContentPart {
+                        kind: "image_url".to_owned(),
+                        text: None,
+                        image_url: Some(match detail {
+                            Some(detail) => JsonData::Object(
+                                [
+                                    ("url".to_owned(), JsonData::String(url)),
+                                    ("detail".to_owned(), JsonData::String(detail)),
+                                ]
+                                .into_iter()
+                                .collect(),
+                            ),
+                            None => JsonData::String(url),
+                        }),
+                    });
+                    previous_was_tool_call = false;
+                    previous_tool_result_message = None;
+                }
+                CanonicalContent::ProviderState { state } => {
+                    let extra = provider_state_to_extra(&state)?;
+                    if previous_was_tool_call {
+                        let Some(tool_call) = tool_calls.last_mut() else {
+                            return Err(RelayConvertError::Unsupported(
+                                "provider state has no preceding tool call".to_owned(),
+                            ));
+                        };
+                        tool_call.extra_content = Some(merge_extra_content(
+                            tool_call.extra_content.take(),
+                            extra,
+                        ));
+                    } else if let Some(index) = previous_tool_result_message {
+                        messages[index].extra_content = Some(merge_extra_content(
+                            messages[index].extra_content.take(),
+                            extra,
+                        ));
+                    } else {
+                        message_extra_content = Some(merge_extra_content(
+                            message_extra_content.take(),
+                            extra,
+                        ));
+                    }
+                }
                 CanonicalContent::ToolCall {
                     id,
                     name,
                     arguments,
-                } => tool_calls.push(OpenAiToolCall {
-                    id,
-                    kind: "function".to_owned(),
-                    function: OpenAiFunction {
-                        name,
-                        arguments,
-                        description: None,
-                        parameters: None,
-                        strict: None,
-                    },
-                }),
-                CanonicalContent::ToolResult { id, output } => {
+                } => {
+                    tool_calls.push(OpenAiToolCall {
+                        id,
+                        kind: "function".to_owned(),
+                        function: OpenAiFunction {
+                            name,
+                            arguments,
+                            description: None,
+                            parameters: None,
+                            strict: None,
+                        },
+                        extra_content: None,
+                    });
+                    previous_was_tool_call = true;
+                    previous_tool_result_message = None;
+                }
+                CanonicalContent::ToolResult { id, name, output } => {
                     messages.push(OpenAiChatMessage {
                         role: "tool".to_owned(),
                         content: Some(StringOrParts::String(output.compact_string()?)),
                         reasoning_content: None,
-                        name: None,
+                        name,
                         tool_call_id: Some(id),
                         tool_calls: Vec::new(),
+                        extra_content: None,
                     });
+                    let message_index = messages.len() - 1;
+                    if first_tool_result_message.is_none() {
+                        first_tool_result_message = Some(message_index);
+                    }
+                    previous_tool_result_message = Some(message_index);
+                    previous_was_tool_call = false;
                 }
-                CanonicalContent::Reasoning { text } => reasoning.push(text),
+                CanonicalContent::Reasoning { text } => {
+                    reasoning.push(text);
+                    previous_was_tool_call = false;
+                    previous_tool_result_message = None;
+                }
+                CanonicalContent::ClaudeThinking {
+                    thinking,
+                    signature,
+                    model,
+                    provenance,
+                } => {
+                    let source_model = model.clone();
+                    let block = anthropic_thinking_block(thinking, signature, model, provenance);
+                    let extra = message_anthropic_extra(vec![block], source_model);
+                    if let Some(index) = previous_tool_result_message {
+                        messages[index].extra_content = Some(merge_extra_content(
+                            messages[index].extra_content.take(),
+                            extra,
+                        ));
+                    } else {
+                        message_extra_content = Some(merge_extra_content(
+                            message_extra_content.take(),
+                            extra,
+                        ));
+                    }
+                    previous_was_tool_call = false;
+                }
+                CanonicalContent::RedactedThinking {
+                    data,
+                    model,
+                    provenance,
+                } => {
+                    let block = anthropic_redacted_block(data, model, provenance);
+                    let extra = message_anthropic_extra(vec![block], None);
+                    if let Some(index) = previous_tool_result_message {
+                        messages[index].extra_content = Some(merge_extra_content(
+                            messages[index].extra_content.take(),
+                            extra,
+                        ));
+                    } else {
+                        message_extra_content = Some(merge_extra_content(
+                            message_extra_content.take(),
+                            extra,
+                        ));
+                    }
+                    previous_was_tool_call = false;
+                }
             }
         }
         if message.role == Role::Tool {
+            if has_anthropic_extension {
+                let Some(index) = first_tool_result_message.or(previous_tool_result_message) else {
+                    return Err(RelayConvertError::Unsupported(
+                        "tool message extension has no generated tool result".to_owned(),
+                    ));
+                };
+                set_anthropic_extra(
+                    &mut messages[index].extra_content,
+                    message_anthropic_extra(
+                        canonical_parts_to_anthropic_blocks(&message_parts)?,
+                        None,
+                    ),
+                );
+            }
+            if !has_anthropic_extension {
+                if let Some(extra) = message_extra_content {
+                    let Some(index) = first_tool_result_message.or(previous_tool_result_message) else {
+                        return Err(RelayConvertError::Unsupported(
+                            "tool message extension has no generated tool result".to_owned(),
+                        ));
+                    };
+                    messages[index].extra_content = Some(merge_extra_content(
+                        messages[index].extra_content.take(),
+                        extra,
+                    ));
+                }
+            }
             continue;
+        }
+        if has_anthropic_extension {
+            set_anthropic_extra(
+                &mut message_extra_content,
+                message_anthropic_extra(
+                    canonical_parts_to_anthropic_blocks(&message_parts)?,
+                    None,
+                ),
+            );
         }
         let content = if text.is_empty() {
             None
@@ -290,6 +585,7 @@ pub fn canonical_request_to_openai_chat(
             name: None,
             tool_call_id: None,
             tool_calls,
+            extra_content: message_extra_content,
         });
     }
 
@@ -392,6 +688,7 @@ pub fn openai_responses_request_to_canonical(
                     role: Role::Tool,
                     parts: vec![CanonicalContent::ToolResult {
                         id: item.call_id.unwrap_or_default(),
+                        name: None,
                         output: item.output.unwrap_or(JsonData::String(String::new())),
                     }],
                 });
@@ -530,7 +827,11 @@ pub fn canonical_request_to_openai_responses(
                     arguments: Some(arguments),
                     output: None,
                 }),
-                CanonicalContent::ToolResult { id, output } => {
+                CanonicalContent::ToolResult {
+                    id,
+                    name: _,
+                    output,
+                } => {
                     input.push(ResponsesInputItem {
                         kind: Some("function_call_output".to_owned()),
                         role: None,
@@ -543,6 +844,15 @@ pub fn canonical_request_to_openai_responses(
                 }
                 CanonicalContent::Reasoning { .. } => {
                     record_dropped(&mut loss, "messages[].reasoning_content");
+                }
+                CanonicalContent::ClaudeThinking { .. } => {
+                    record_dropped(&mut loss, "messages[].claude_thinking");
+                }
+                CanonicalContent::RedactedThinking { .. } => {
+                    record_dropped(&mut loss, "messages[].redacted_thinking");
+                }
+                CanonicalContent::ProviderState { .. } => {
+                    record_dropped(&mut loss, "messages[].provider_state");
                 }
             }
         }
@@ -637,21 +947,47 @@ pub fn openai_chat_response_to_canonical(
         .into_iter()
         .next()
         .ok_or(RelayConvertError::Missing("choices[0]"))?;
-    let mut output = chat_content_to_canonical(choice.message.content)?;
-    if let Some(reasoning) = choice.message.reasoning_content {
-        output.push(CanonicalContent::Reasoning { text: reasoning });
+    let message = choice.message;
+    if message
+        .extra_content
+        .as_ref()
+        .and_then(|extra| extra.google.as_ref())
+        .is_some()
+        && !message.tool_calls.is_empty()
+    {
+        return Err(RelayConvertError::Unsupported(
+            "message-level Google thought signature cannot be associated with tool calls"
+                .to_owned(),
+        ));
     }
-    output.extend(
-        choice
-            .message
-            .tool_calls
-            .into_iter()
-            .map(|call| CanonicalContent::ToolCall {
-                id: call.id,
-                name: call.function.name,
-                arguments: call.function.arguments,
-            }),
-    );
+    let has_anthropic_parts = message.extra_content.as_ref().is_some_and(|extra| {
+        extra
+            .anthropic
+            .as_ref()
+            .is_some_and(|anthropic| !anthropic.blocks.is_empty())
+    });
+    let mut output = anthropic_content_from_extra(&message.extra_content)?
+        .unwrap_or(chat_content_to_canonical(message.content)?);
+    if let Some(state) = provider_state_from_extra(message.extra_content.clone())? {
+        output.push(CanonicalContent::ProviderState { state });
+    }
+    if !has_anthropic_parts {
+        if let Some(reasoning) = message.reasoning_content {
+            output.push(CanonicalContent::Reasoning { text: reasoning });
+        }
+    }
+    if !has_anthropic_parts {
+        for call in message.tool_calls {
+        output.push(CanonicalContent::ToolCall {
+            id: call.id,
+            name: call.function.name,
+            arguments: call.function.arguments,
+        });
+            if let Some(state) = provider_state_from_extra(call.extra_content)? {
+                output.push(CanonicalContent::ProviderState { state });
+            }
+        }
+    }
     Ok(Converted {
         value: CanonicalResponse {
             id: response.id,
@@ -740,33 +1076,112 @@ pub fn canonical_response_to_openai_chat(
 ) -> Converted<OpenAiChatResponse> {
     let mut text = String::new();
     let mut reasoning = Vec::new();
-    let mut tool_calls = Vec::new();
+    let mut tool_calls: Vec<OpenAiToolCall> = Vec::new();
+    let mut message_extra_content = None;
+    let mut previous_was_tool_call = false;
     let mut loss = LossReport::default();
-    for part in response.output {
+    let output_parts = response.output;
+    let has_anthropic_extension = output_parts.iter().any(|part| {
+        matches!(
+            part,
+            CanonicalContent::ClaudeThinking { .. } | CanonicalContent::RedactedThinking { .. }
+        )
+    });
+    for part in output_parts.iter().cloned() {
         match part {
-            CanonicalContent::Text { text: part } => text.push_str(&part),
-            CanonicalContent::Reasoning { text } => reasoning.push(text),
+            CanonicalContent::Text { text: part } => {
+                text.push_str(&part);
+                previous_was_tool_call = false;
+            }
+            CanonicalContent::Reasoning { text } => {
+                reasoning.push(text);
+                previous_was_tool_call = false;
+            }
+            CanonicalContent::ClaudeThinking {
+                thinking,
+                signature,
+                model,
+                provenance,
+            } => {
+                let block = anthropic_thinking_block(thinking, signature, model, provenance);
+                message_extra_content = Some(merge_extra_content(
+                    message_extra_content.take(),
+                    message_anthropic_extra(vec![block], None),
+                ));
+                previous_was_tool_call = false;
+            }
+            CanonicalContent::RedactedThinking {
+                data,
+                model,
+                provenance,
+            } => {
+                let block = anthropic_redacted_block(data, model, provenance);
+                message_extra_content = Some(merge_extra_content(
+                    message_extra_content.take(),
+                    message_anthropic_extra(vec![block], None),
+                ));
+                previous_was_tool_call = false;
+            }
+            CanonicalContent::ProviderState { state } => {
+                let extra = match provider_state_to_extra(&state) {
+                    Ok(extra) => extra,
+                    Err(error) => {
+                        record_dropped(&mut loss, "output[].provider_state");
+                        let _ = error;
+                        continue;
+                    }
+                };
+                if previous_was_tool_call {
+                    let Some(tool_call) = tool_calls.last_mut() else {
+                        record_dropped(&mut loss, "output[].provider_state");
+                        continue;
+                    };
+                    tool_call.extra_content = Some(merge_extra_content(
+                        tool_call.extra_content.take(),
+                        extra,
+                    ));
+                } else {
+                    message_extra_content = Some(merge_extra_content(
+                        message_extra_content.take(),
+                        extra,
+                    ));
+                }
+            }
             CanonicalContent::ToolCall {
                 id,
                 name,
                 arguments,
-            } => tool_calls.push(OpenAiToolCall {
-                id,
-                kind: "function".to_owned(),
-                function: OpenAiFunction {
-                    name,
-                    arguments,
-                    description: None,
-                    parameters: None,
-                    strict: None,
-                },
-            }),
+            } => {
+                tool_calls.push(OpenAiToolCall {
+                    id,
+                    kind: "function".to_owned(),
+                    function: OpenAiFunction {
+                        name,
+                        arguments,
+                        description: None,
+                        parameters: None,
+                        strict: None,
+                    },
+                    extra_content: None,
+                });
+                previous_was_tool_call = true;
+            }
             CanonicalContent::Image { .. } => {
                 record_dropped(&mut loss, "output[].image");
             }
             CanonicalContent::ToolResult { .. } => {
                 record_dropped(&mut loss, "output[].tool_result");
+                previous_was_tool_call = false;
             }
+        }
+    }
+    if has_anthropic_extension {
+        match canonical_parts_to_anthropic_blocks(&output_parts) {
+            Ok(blocks) => set_anthropic_extra(
+                &mut message_extra_content,
+                message_anthropic_extra(blocks, None),
+            ),
+            Err(_) => record_dropped(&mut loss, "output[].anthropic_extension"),
         }
     }
     Converted {
@@ -784,6 +1199,7 @@ pub fn canonical_response_to_openai_chat(
                     name: None,
                     tool_call_id: None,
                     tool_calls,
+                    extra_content: message_extra_content,
                 },
                 finish_reason: response.finish_reason.map(finish_reason_to_chat),
             }],
@@ -851,6 +1267,12 @@ pub fn canonical_response_to_openai_responses(
                 });
                 reasoning_index += 1;
             }
+            CanonicalContent::ClaudeThinking { .. } => {
+                record_dropped(&mut loss, "output[].claude_thinking");
+            }
+            CanonicalContent::RedactedThinking { .. } => {
+                record_dropped(&mut loss, "output[].redacted_thinking");
+            }
             CanonicalContent::ToolCall {
                 id,
                 name,
@@ -873,6 +1295,9 @@ pub fn canonical_response_to_openai_responses(
             }
             CanonicalContent::ToolResult { .. } => {
                 record_dropped(&mut loss, "output[].tool_result");
+            }
+            CanonicalContent::ProviderState { .. } => {
+                record_dropped(&mut loss, "output[].provider_state");
             }
         }
     }
@@ -1197,6 +1622,773 @@ pub fn responses_stream_to_canonical(
     out
 }
 
+/// Gemini model families whose tool-loop signature requirements differ.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GeminiModelFamily {
+    /// Gemini 2.5 accepts the documented synthetic history signature.
+    Gemini25,
+    /// Gemini 3 requires an authentic or explicitly synthetic signature on
+    /// the first functionCall Part of each tool-loop step sent as history.
+    Gemini3,
+    /// A model that is not covered by the known Gemini signature policy.
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GeminiSignaturePolicy {
+    Request { synthetic_history: bool },
+    Response,
+}
+
+/// Classifies a Gemini model name for signature policy decisions.
+pub fn gemini_model_family(model: &str) -> GeminiModelFamily {
+    let model = model.to_ascii_lowercase();
+    if model.contains("gemini-3") {
+        GeminiModelFamily::Gemini3
+    } else if model.contains("gemini-2.5") || model.contains("gemini_2_5") {
+        GeminiModelFamily::Gemini25
+    } else {
+        GeminiModelFamily::Unknown
+    }
+}
+
+/// Converts a Gemini GenerateContent request into the provider-neutral model.
+///
+/// Gemini does not carry its model in the JSON body, so callers that know the
+/// route model should use [`gemini_request_to_canonical_for_model`].
+pub fn gemini_request_to_canonical(
+    request: GeminiRequest,
+) -> Result<Converted<CanonicalRequest>, RelayConvertError> {
+    gemini_request_to_canonical_for_model(request, "gemini")
+}
+
+/// Converts a Gemini request into canonical content while retaining IDs and
+/// thought signatures at their original Part positions.
+pub fn gemini_request_to_canonical_for_model(
+    request: GeminiRequest,
+    model: &str,
+) -> Result<Converted<CanonicalRequest>, RelayConvertError> {
+    let mut loss = LossReport::default();
+    let mut messages = Vec::new();
+    let mut ids = GeminiIdAllocator::default();
+    if let Some(system) = request.system_instruction {
+        let parts = gemini_parts_to_canonical(system.parts, model, &mut loss, &mut ids)?;
+        messages.push(CanonicalMessage {
+            role: Role::System,
+            parts,
+        });
+    }
+    for content in request.contents {
+        let parts = gemini_parts_to_canonical(content.parts, model, &mut loss, &mut ids)?;
+        let role = content
+            .role
+            .as_deref()
+            .map(role_from_wire)
+            .transpose()?
+            .unwrap_or(Role::User);
+        if parts
+            .iter()
+            .any(|part| matches!(part, CanonicalContent::ToolResult { .. }))
+        {
+            messages.push(CanonicalMessage {
+                role: Role::Tool,
+                parts,
+            });
+        } else {
+            if parts.is_empty() && content.role.is_some() {
+                loss.normalized_fields
+                    .push("contents[].empty_parts_preserved_as_empty_message");
+            }
+            messages.push(CanonicalMessage { role, parts });
+        }
+    }
+    let tools = request
+        .tools
+        .into_iter()
+        .flat_map(|tool| tool.function_declarations)
+        .map(|tool| CanonicalTool {
+            name: tool.name,
+            description: tool.description,
+            input_schema: tool.parameters,
+            strict: None,
+        })
+        .collect();
+    let tool_choice = request
+        .tool_config
+        .as_ref()
+        .map(
+            |config| match config.function_calling_config.mode.as_str() {
+                "AUTO" => Ok(CanonicalToolChoice::Auto),
+                "ANY" => Ok(CanonicalToolChoice::Required),
+                "NONE" => Ok(CanonicalToolChoice::None),
+                mode => Err(RelayConvertError::Unsupported(format!(
+                    "unsupported Gemini function calling mode {mode:?}"
+                ))),
+            },
+        )
+        .transpose()?;
+    if !request.safety_settings.is_empty() {
+        record_dropped(&mut loss, "safetySettings");
+    }
+    Ok(Converted {
+        value: CanonicalRequest {
+            model: model.to_owned(),
+            instructions: Vec::new(),
+            messages,
+            max_output_tokens: request
+                .generation_config
+                .as_ref()
+                .and_then(|config| config.max_output_tokens),
+            temperature: request
+                .generation_config
+                .as_ref()
+                .and_then(|config| config.temperature),
+            stream: false,
+            tools,
+            tool_choice,
+            options: RequestOptions::default(),
+        },
+        loss,
+    })
+}
+
+/// Converts a canonical request to Gemini using a conservative, no-synthetic
+/// default.  OpenAI history should use
+/// [`openai_chat_request_to_gemini_for_model`], which opts into the documented
+/// Gemini 2.5 compatibility dummy and Gemini 3 validation.
+pub fn canonical_request_to_gemini(
+    request: CanonicalRequest,
+) -> Result<Converted<GeminiRequest>, RelayConvertError> {
+    let model = request.model.clone();
+    canonical_request_to_gemini_for_model(request, &model, false)
+}
+
+/// Converts canonical content into a Gemini request and applies the model's
+/// tool-loop signature policy before the request can reach the upstream.
+pub fn canonical_request_to_gemini_for_model(
+    request: CanonicalRequest,
+    model: &str,
+    synthetic_history: bool,
+) -> Result<Converted<GeminiRequest>, RelayConvertError> {
+    let family = gemini_model_family(model);
+    let mut loss = LossReport::default();
+    let mut system_parts = request
+        .instructions
+        .into_iter()
+        .map(|text| GeminiPart {
+            text: Some(text),
+            inline_data: None,
+            function_call: None,
+            function_response: None,
+            thought_signature: None,
+        })
+        .collect::<Vec<_>>();
+    let mut contents = Vec::new();
+    let mut call_names = BTreeMap::new();
+    for message in request.messages {
+        if matches!(message.role, Role::System | Role::Developer) {
+            append_canonical_gemini_parts(
+                &mut system_parts,
+                &message.parts,
+                model,
+                family,
+                GeminiSignaturePolicy::Request { synthetic_history },
+                &mut loss,
+                &mut call_names,
+            )?;
+            continue;
+        }
+        let role = if message.role == Role::Tool {
+            "user"
+        } else if matches!(message.role, Role::Assistant | Role::Model) {
+            "model"
+        } else {
+            "user"
+        };
+        let mut parts = Vec::new();
+        append_canonical_gemini_parts(
+            &mut parts,
+            &message.parts,
+            model,
+            family,
+            GeminiSignaturePolicy::Request { synthetic_history },
+            &mut loss,
+            &mut call_names,
+        )?;
+        contents.push(GeminiContent {
+            role: Some(role.to_owned()),
+            parts,
+        });
+    }
+    let declarations = request
+        .tools
+        .into_iter()
+        .map(|tool| GeminiFunctionDeclaration {
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.input_schema,
+        })
+        .collect::<Vec<_>>();
+    let tools = if declarations.is_empty() {
+        Vec::new()
+    } else {
+        vec![GeminiTool {
+            function_declarations: declarations,
+        }]
+    };
+    let tool_config = request.tool_choice.map(|choice| GeminiToolConfig {
+        function_calling_config: GeminiFunctionCallingConfig {
+            mode: match choice {
+                CanonicalToolChoice::Auto => "AUTO",
+                CanonicalToolChoice::None => "NONE",
+                CanonicalToolChoice::Required | CanonicalToolChoice::Function { .. } => "ANY",
+            }
+            .to_owned(),
+        },
+    });
+    Ok(Converted {
+        value: GeminiRequest {
+            contents,
+            system_instruction: (!system_parts.is_empty()).then_some(GeminiContent {
+                role: None,
+                parts: system_parts,
+            }),
+            generation_config: (request.max_output_tokens.is_some()
+                || request.temperature.is_some())
+            .then_some(GeminiGenerationConfig {
+                max_output_tokens: request.max_output_tokens,
+                temperature: request.temperature,
+            }),
+            safety_settings: Vec::new(),
+            tools,
+            tool_config,
+        },
+        loss,
+    })
+}
+
+/// Converts an OpenAI Chat request to Gemini with explicit target model
+/// policy.  IDs remain exact; missing IDs receive deterministic synthetic IDs.
+pub fn openai_chat_request_to_gemini_for_model(
+    request: OpenAiChatRequest,
+    model: &str,
+) -> Result<Converted<GeminiRequest>, RelayConvertError> {
+    let source = openai_chat_request_to_canonical(request)?;
+    let target = canonical_request_to_gemini_for_model(source.value, model, true)?;
+    Ok(Converted {
+        value: target.value,
+        loss: merge_loss(source.loss, target.loss),
+    })
+}
+
+/// Converts an OpenAI Chat request to Gemini.  Use the `_for_model` variant
+/// when the upstream model differs from the request's source model.
+pub fn openai_chat_request_to_gemini(
+    request: OpenAiChatRequest,
+) -> Result<Converted<GeminiRequest>, RelayConvertError> {
+    let model = request.model.clone();
+    openai_chat_request_to_gemini_for_model(request, &model)
+}
+
+/// Converts a Gemini request to an OpenAI-compatible Chat request.
+pub fn gemini_request_to_openai_chat(
+    request: GeminiRequest,
+) -> Result<Converted<OpenAiChatRequest>, RelayConvertError> {
+    let source = gemini_request_to_canonical(request)?;
+    let target = canonical_request_to_openai_chat(source.value)?;
+    Ok(Converted {
+        value: target.value,
+        loss: merge_loss(source.loss, target.loss),
+    })
+}
+
+/// Alias using the protocol-first naming used by route adapters.
+pub fn gemini_to_openai_chat_request(
+    request: GeminiRequest,
+) -> Result<Converted<OpenAiChatRequest>, RelayConvertError> {
+    gemini_request_to_openai_chat(request)
+}
+
+/// Alias using the protocol-first naming used by route adapters.
+pub fn openai_chat_to_gemini_request(
+    request: OpenAiChatRequest,
+) -> Result<Converted<GeminiRequest>, RelayConvertError> {
+    openai_chat_request_to_gemini(request)
+}
+
+/// Converts a Gemini request to OpenAI Chat while retaining the route model
+/// in the generated request.
+pub fn gemini_request_to_openai_chat_for_model(
+    request: GeminiRequest,
+    model: &str,
+) -> Result<Converted<OpenAiChatRequest>, RelayConvertError> {
+    let source = gemini_request_to_canonical_for_model(request, model)?;
+    let target = canonical_request_to_openai_chat(source.value)?;
+    Ok(Converted {
+        value: target.value,
+        loss: merge_loss(source.loss, target.loss),
+    })
+}
+
+/// Converts a Gemini GenerateContent response into canonical output.
+pub fn gemini_response_to_canonical(
+    response: GeminiResponse,
+) -> Result<Converted<CanonicalResponse>, RelayConvertError> {
+    gemini_response_to_canonical_for_model(response, "gemini")
+}
+
+/// Converts a Gemini response while associating authentic signatures with
+/// their original Parts.
+pub fn gemini_response_to_canonical_for_model(
+    response: GeminiResponse,
+    model: &str,
+) -> Result<Converted<CanonicalResponse>, RelayConvertError> {
+    let candidate = response
+        .candidates
+        .into_iter()
+        .next()
+        .ok_or(RelayConvertError::Missing("candidates[0]"))?;
+    let mut loss = LossReport::default();
+    let mut ids = GeminiIdAllocator::default();
+    let output = gemini_parts_to_canonical(
+        candidate.content.parts,
+        model,
+        &mut loss,
+        &mut ids,
+    )?;
+    Ok(Converted {
+        value: CanonicalResponse {
+            id: "gemini-response".to_owned(),
+            model: model.to_owned(),
+            created_at: 0,
+            output,
+            finish_reason: candidate.finish_reason.as_deref().map(gemini_finish_reason),
+            usage: response.usage_metadata.as_ref().map(gemini_usage),
+        },
+        loss,
+    })
+}
+
+/// Aggregates incremental Gemini GenerateContent responses into one canonical
+/// response.  Each snapshot event is treated as a delta: Parts are consumed
+/// in arrival order and a candidate `finishReason` only finalizes the
+/// aggregate after all Parts from that event have been retained.  This keeps
+/// a late thought signature attached to its original Part instead of
+/// finalizing the response early.
+pub fn gemini_stream_to_canonical(
+    snapshot: &GeminiStreamSnapshot,
+    model: &str,
+) -> Result<Converted<CanonicalResponse>, RelayConvertError> {
+    let mut loss = LossReport::default();
+    let mut ids = GeminiIdAllocator::default();
+    let mut output = Vec::new();
+    let mut finish_reason = None;
+    let mut usage = None;
+    let mut finished = false;
+
+    for event in &snapshot.events {
+        for candidate in &event.candidates {
+            if finished && !candidate.content.parts.is_empty() {
+                return Err(RelayConvertError::Unsupported(
+                    "Gemini stream emitted content after finishReason".to_owned(),
+                ));
+            }
+            output.extend(gemini_parts_to_canonical(
+                candidate.content.parts.clone(),
+                model,
+                &mut loss,
+                &mut ids,
+            )?);
+            if let Some(reason) = candidate.finish_reason.as_deref() {
+                finish_reason = Some(gemini_finish_reason(reason));
+                finished = true;
+            }
+        }
+        if let Some(event_usage) = event.usage_metadata.as_ref() {
+            usage = Some(gemini_usage(event_usage));
+        }
+    }
+    if usage.is_none() && snapshot.usage != WireUsage::default() {
+        usage = Some(wire_usage(&snapshot.usage));
+    }
+
+    Ok(Converted {
+        value: CanonicalResponse {
+            id: "gemini-stream-response".to_owned(),
+            model: model.to_owned(),
+            created_at: 0,
+            output,
+            finish_reason,
+            usage,
+        },
+        loss,
+    })
+}
+
+/// Converts canonical response output to a Gemini response candidate.
+pub fn canonical_response_to_gemini(
+    response: CanonicalResponse,
+) -> Result<Converted<GeminiResponse>, RelayConvertError> {
+    let mut loss = LossReport::default();
+    let mut parts = Vec::new();
+    let mut call_names = BTreeMap::new();
+    append_canonical_gemini_parts(
+        &mut parts,
+        &response.output,
+        &response.model,
+        gemini_model_family(&response.model),
+        GeminiSignaturePolicy::Response,
+        &mut loss,
+        &mut call_names,
+    )?;
+    Ok(Converted {
+        value: GeminiResponse {
+            candidates: vec![GeminiCandidate {
+                index: Some(0),
+                finish_reason: response.finish_reason.map(gemini_finish_reason_to_wire),
+                content: GeminiContent {
+                    role: Some("model".to_owned()),
+                    parts,
+                },
+                safety_ratings: None,
+            }],
+            usage_metadata: response.usage.as_ref().map(token_usage_to_gemini),
+        },
+        loss,
+    })
+}
+
+/// Converts a Gemini response to OpenAI Chat, preserving call IDs and Google
+/// extensions.  Gemini's body has no response ID/model, so deterministic
+/// placeholders are used and recorded as normalized metadata.
+pub fn gemini_response_to_openai_chat(
+    response: GeminiResponse,
+) -> Result<Converted<OpenAiChatResponse>, RelayConvertError> {
+    let source = gemini_response_to_canonical(response)?;
+    let mut target = canonical_response_to_openai_chat(source.value);
+    target
+        .loss
+        .normalized_fields
+        .push("gemini.response_id.synthetic");
+    target
+        .loss
+        .normalized_fields
+        .push("gemini.model.from_route");
+    target.value.id = "gemini-response".to_owned();
+    target.value.model = "gemini".to_owned();
+    Ok(Converted {
+        value: target.value,
+        loss: merge_loss(source.loss, target.loss),
+    })
+}
+
+/// Alias using the protocol-first naming used by route adapters.
+pub fn gemini_to_openai_chat_response(
+    response: GeminiResponse,
+) -> Result<Converted<OpenAiChatResponse>, RelayConvertError> {
+    gemini_response_to_openai_chat(response)
+}
+
+/// Converts an OpenAI Chat response into a Gemini response.
+pub fn openai_chat_response_to_gemini(
+    response: OpenAiChatResponse,
+) -> Result<Converted<GeminiResponse>, RelayConvertError> {
+    let source = openai_chat_response_to_canonical(response)?;
+    let target = canonical_response_to_gemini(source.value)?;
+    Ok(Converted {
+        value: target.value,
+        loss: merge_loss(source.loss, target.loss),
+    })
+}
+
+/// Alias using the protocol-first naming used by route adapters.
+pub fn openai_chat_to_gemini_response(
+    response: OpenAiChatResponse,
+) -> Result<Converted<GeminiResponse>, RelayConvertError> {
+    openai_chat_response_to_gemini(response)
+}
+
+/// Converts an OpenAI Chat response to Gemini using a known target model.
+pub fn openai_chat_response_to_gemini_for_model(
+    response: OpenAiChatResponse,
+    model: &str,
+) -> Result<Converted<GeminiResponse>, RelayConvertError> {
+    let source = openai_chat_response_to_canonical(response)?;
+    let mut canonical = source.value;
+    canonical.model = model.to_owned();
+    let target = canonical_response_to_gemini(canonical)?;
+    Ok(Converted {
+        value: target.value,
+        loss: merge_loss(source.loss, target.loss),
+    })
+}
+
+/// Converts a Gemini response to OpenAI Chat using the supplied route model
+/// for the generated response metadata.
+pub fn gemini_response_to_openai_chat_for_model(
+    response: GeminiResponse,
+    model: &str,
+) -> Result<Converted<OpenAiChatResponse>, RelayConvertError> {
+    let source = gemini_response_to_canonical_for_model(response, model)?;
+    let mut target = canonical_response_to_openai_chat(source.value);
+    target.value.model = model.to_owned();
+    target
+        .loss
+        .normalized_fields
+        .push("gemini.response_id.synthetic");
+    Ok(Converted {
+        value: target.value,
+        loss: merge_loss(source.loss, target.loss),
+    })
+}
+
+/// Converts a Claude Messages request into the provider-neutral model while
+/// retaining every ordered content block, including signed and redacted
+/// thinking.
+pub fn claude_request_to_canonical(
+    request: ClaudeRequest,
+) -> Result<Converted<CanonicalRequest>, RelayConvertError> {
+    let mut instructions = Vec::new();
+    let mut messages = Vec::new();
+    if let Some(system) = request.system {
+        match system {
+            StringOrParts::String(text) => instructions.push(text),
+            StringOrParts::Parts(parts) => messages.push(CanonicalMessage {
+                role: Role::System,
+                parts: claude_blocks_to_canonical(parts, Some(&request.model))?,
+            }),
+        }
+    }
+    for message in request.messages {
+        let role = role_from_wire(&message.role)?;
+        let parts = match message.content {
+            StringOrParts::String(text) => vec![CanonicalContent::Text { text }],
+            StringOrParts::Parts(parts) => {
+                claude_blocks_to_canonical(parts, Some(&request.model))?
+            }
+        };
+        let role = if parts
+            .iter()
+            .any(|part| matches!(part, CanonicalContent::ToolResult { .. }))
+        {
+            Role::Tool
+        } else {
+            role
+        };
+        messages.push(CanonicalMessage {
+            role,
+            parts,
+        });
+    }
+    let tools = request
+        .tools
+        .into_iter()
+        .map(|tool| CanonicalTool {
+            name: tool.name,
+            description: tool.description,
+            input_schema: tool.input_schema,
+            strict: None,
+        })
+        .collect();
+    let tool_choice = request
+        .tool_choice
+        .as_ref()
+        .map(claude_tool_choice_to_canonical)
+        .transpose()?;
+    Ok(Converted {
+        value: CanonicalRequest {
+            model: request.model,
+            instructions,
+            messages,
+            max_output_tokens: Some(request.max_tokens),
+            temperature: request.temperature,
+            stream: request.stream,
+            tools,
+            tool_choice,
+            options: RequestOptions::default(),
+        },
+        loss: LossReport::default(),
+    })
+}
+
+/// Converts canonical request content to Claude's ordered Messages blocks.
+pub fn canonical_request_to_claude(
+    request: CanonicalRequest,
+) -> Result<Converted<ClaudeRequest>, RelayConvertError> {
+    let mut loss = LossReport::default();
+    let mut system_parts = Vec::new();
+    for text in request.instructions {
+        system_parts.push(claude_text_block(text));
+    }
+    let mut messages = Vec::new();
+    for message in request.messages {
+        if message.role == Role::System || message.role == Role::Developer {
+            system_parts.extend(canonical_parts_to_claude(
+                &message.parts,
+                &mut loss,
+                false,
+            )?);
+            continue;
+        }
+        let has_tool_call = message
+            .parts
+            .iter()
+            .any(|part| matches!(part, CanonicalContent::ToolCall { .. }));
+        let parts = canonical_parts_to_claude(&message.parts, &mut loss, has_tool_call)?;
+        messages.push(ClaudeMessage {
+            role: match message.role {
+                Role::Model => "assistant".to_owned(),
+                Role::Tool => "user".to_owned(),
+                role => role_to_chat(role).to_owned(),
+            },
+            content: StringOrParts::Parts(parts),
+        });
+    }
+    let options = request.options;
+    let tools = request
+        .tools
+        .into_iter()
+        .map(|tool| ClaudeTool {
+            name: tool.name,
+            description: tool.description,
+            input_schema: tool.input_schema,
+        })
+        .collect();
+    let tool_choice = request
+        .tool_choice
+        .map(canonical_tool_choice_to_claude);
+    Ok(Converted {
+        value: ClaudeRequest {
+            model: request.model,
+            max_tokens: request.max_output_tokens.unwrap_or(1),
+            stream: request.stream,
+            system: (!system_parts.is_empty()).then_some(StringOrParts::Parts(system_parts)),
+            messages,
+            temperature: request.temperature,
+            tools,
+            tool_choice,
+        },
+        loss,
+    })
+}
+
+/// Converts a Claude response into canonical ordered output.
+pub fn claude_response_to_canonical(
+    response: ClaudeResponse,
+) -> Result<Converted<CanonicalResponse>, RelayConvertError> {
+    let output = claude_blocks_to_canonical(response.content, Some(&response.model))?;
+    Ok(Converted {
+        value: CanonicalResponse {
+            id: response.id,
+            model: response.model,
+            created_at: 0,
+            output,
+            finish_reason: response.stop_reason.as_deref().map(finish_reason),
+            usage: response.usage.as_ref().map(claude_usage),
+        },
+        loss: LossReport::default(),
+    })
+}
+
+/// Converts canonical response output to Claude's typed response blocks.
+pub fn canonical_response_to_claude(
+    response: CanonicalResponse,
+) -> Result<Converted<ClaudeResponse>, RelayConvertError> {
+    let mut loss = LossReport::default();
+    let content = canonical_parts_to_claude(&response.output, &mut loss, false)?;
+    Ok(Converted {
+        value: ClaudeResponse {
+            id: response.id,
+            kind: "message".to_owned(),
+            role: "assistant".to_owned(),
+            model: response.model,
+            content,
+            stop_reason: response.finish_reason.map(claude_finish_reason),
+            usage: response.usage.as_ref().map(token_usage_to_claude),
+        },
+        loss,
+    })
+}
+
+/// Converts Claude request history to OpenAI Chat.  Claude-only blocks are
+/// carried in `extra_content.anthropic.blocks` in their exact source order.
+pub fn claude_request_to_openai_chat(
+    request: ClaudeRequest,
+) -> Result<Converted<OpenAiChatRequest>, RelayConvertError> {
+    let source = claude_request_to_canonical(request)?;
+    let mut target = canonical_request_to_openai_chat(source.value.clone())?;
+    attach_anthropic_request_extensions(&source.value, &mut target.value, &mut target.loss)?;
+    Ok(Converted {
+        value: target.value,
+        loss: merge_loss(source.loss, target.loss),
+    })
+}
+
+/// Converts OpenAI Chat request history to Claude.  An Anthropic extension is
+/// authoritative when present, so signed/redacted blocks are not flattened.
+pub fn openai_chat_request_to_claude(
+    request: OpenAiChatRequest,
+) -> Result<Converted<ClaudeRequest>, RelayConvertError> {
+    let source = openai_chat_request_to_canonical(request)?;
+    let target = canonical_request_to_claude(source.value)?;
+    Ok(Converted {
+        value: target.value,
+        loss: merge_loss(source.loss, target.loss),
+    })
+}
+
+/// Converts a Claude response to OpenAI Chat with an ordered Anthropic
+/// extension on the assistant message.
+pub fn claude_response_to_openai_chat(
+    response: ClaudeResponse,
+) -> Result<Converted<OpenAiChatResponse>, RelayConvertError> {
+    let source = claude_response_to_canonical(response)?;
+    let mut target = canonical_response_to_openai_chat(source.value.clone());
+    attach_anthropic_response_extension(&source.value, &mut target.value, &mut target.loss)?;
+    Ok(Converted {
+        value: target.value,
+        loss: merge_loss(source.loss, target.loss),
+    })
+}
+
+/// Converts an OpenAI Chat response to Claude while honoring the explicit
+/// Anthropic extension when clients return Claude history.
+pub fn openai_chat_response_to_claude(
+    response: OpenAiChatResponse,
+) -> Result<Converted<ClaudeResponse>, RelayConvertError> {
+    let source = openai_chat_response_to_canonical(response)?;
+    let target = canonical_response_to_claude(source.value)?;
+    Ok(Converted {
+        value: target.value,
+        loss: merge_loss(source.loss, target.loss),
+    })
+}
+
+/// Protocol-first aliases used by adapters that name the source protocol.
+pub fn claude_to_openai_chat_request(
+    request: ClaudeRequest,
+) -> Result<Converted<OpenAiChatRequest>, RelayConvertError> {
+    claude_request_to_openai_chat(request)
+}
+
+pub fn openai_chat_to_claude_request(
+    request: OpenAiChatRequest,
+) -> Result<Converted<ClaudeRequest>, RelayConvertError> {
+    openai_chat_request_to_claude(request)
+}
+
+pub fn claude_to_openai_chat_response(
+    response: ClaudeResponse,
+) -> Result<Converted<OpenAiChatResponse>, RelayConvertError> {
+    claude_response_to_openai_chat(response)
+}
+
+pub fn openai_chat_to_claude_response(
+    response: OpenAiChatResponse,
+) -> Result<Converted<ClaudeResponse>, RelayConvertError> {
+    openai_chat_response_to_claude(response)
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GoldenValidation {
     pub kind: FixtureKind,
@@ -1274,6 +2466,1470 @@ fn record_dropped(loss: &mut LossReport, field: &'static str) {
     }
 }
 
+fn record_synthetic(loss: &mut LossReport, field: &'static str) {
+    if !loss.synthetic_fields.contains(&field) {
+        loss.synthetic_fields.push(field);
+    }
+}
+
+fn synthetic_tool_call_id(message_index: usize, call_index: usize, name: &str) -> String {
+    format!("call_synthetic_{message_index}_{call_index}_{name}")
+}
+
+fn synthetic_tool_result_id(message_index: usize) -> String {
+    format!("call_result_synthetic_{message_index}")
+}
+
+fn provider_state_from_extra(
+    extra: Option<OpenAiExtraContent>,
+) -> Result<Option<OpaqueProviderState>, RelayConvertError> {
+    let Some(extra) = extra else {
+        return Ok(None);
+    };
+    let Some(google) = extra.google else {
+        return Ok(None);
+    };
+    let Some(signature) = google.thought_signature else {
+        return Err(RelayConvertError::Missing(
+            "extra_content.google.thought_signature",
+        ));
+    };
+    Ok(Some(OpaqueProviderState {
+        provider: "google".to_owned(),
+        kind: "thought_signature".to_owned(),
+        raw: JsonData::String(signature),
+        provenance: if google.synthetic.unwrap_or(false) {
+            OpaqueStateProvenance::Synthetic
+        } else {
+            OpaqueStateProvenance::Authentic
+        },
+        model: None,
+    }))
+}
+
+fn provider_state_to_extra(
+    state: &OpaqueProviderState,
+) -> Result<OpenAiExtraContent, RelayConvertError> {
+    if state.provider != "google" || state.kind != "thought_signature" {
+        return Err(RelayConvertError::Unsupported(format!(
+            "provider state {}:{} has no OpenAI-compatible extension",
+            state.provider, state.kind
+        )));
+    }
+    let JsonData::String(signature) = &state.raw else {
+        return Err(RelayConvertError::Unsupported(
+            "Google thought_signature must be a string".to_owned(),
+        ));
+    };
+    Ok(OpenAiExtraContent {
+        google: Some(OpenAiGoogleExtraContent {
+            thought_signature: Some(signature.clone()),
+            synthetic: match state.provenance {
+                OpaqueStateProvenance::Authentic => None,
+                OpaqueStateProvenance::Synthetic => Some(true),
+            },
+        }),
+        anthropic: None,
+    })
+}
+
+fn anthropic_content_from_extra(
+    extra: &Option<OpenAiExtraContent>,
+) -> Result<Option<Vec<CanonicalContent>>, RelayConvertError> {
+    let Some(anthropic) = extra.as_ref().and_then(|value| value.anthropic.as_ref()) else {
+        return Ok(None);
+    };
+    if anthropic.blocks.is_empty() {
+        return Ok(None);
+    }
+    anthropic
+        .blocks
+        .iter()
+        .map(|block| anthropic_block_to_canonical(block, anthropic.model.clone()))
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
+fn validate_anthropic_extension_block_shape(
+    block: &OpenAiAnthropicBlock,
+) -> Result<(), RelayConvertError> {
+    let reject = |field: &str| {
+        Err(RelayConvertError::Unsupported(format!(
+            "Anthropic extension {} block carries incompatible field {field:?}",
+            block.kind
+        )))
+    };
+    match block.kind.as_str() {
+        "text" | "reasoning" => {
+            if block.text.is_none() {
+                return Err(RelayConvertError::Missing(
+                    "extra_content.anthropic.blocks[].text",
+                ));
+            }
+            if block.thinking.is_some() {
+                return reject("thinking");
+            }
+            if block.signature.is_some() {
+                return reject("signature");
+            }
+            if block.synthetic.is_some() {
+                return reject("synthetic");
+            }
+            if block.data.is_some() {
+                return reject("data");
+            }
+            if block.id.is_some() {
+                return reject("id");
+            }
+            if block.name.is_some() {
+                return reject("name");
+            }
+            if block.input.is_some() {
+                return reject("input");
+            }
+            if block.tool_use_id.is_some() {
+                return reject("tool_use_id");
+            }
+            if block.content.is_some() {
+                return reject("content");
+            }
+            if block.image_url.is_some() {
+                return reject("image_url");
+            }
+        }
+        "thinking" => {
+            if block.text.is_some() {
+                return reject("text");
+            }
+            if block.thinking.is_none() {
+                return Err(RelayConvertError::Missing(
+                    "extra_content.anthropic.blocks[].thinking",
+                ));
+            }
+            if block.signature.is_none() && block.synthetic == Some(true) {
+                return reject("synthetic without signature");
+            }
+            if block.data.is_some() {
+                return reject("data");
+            }
+            if block.id.is_some() {
+                return reject("id");
+            }
+            if block.name.is_some() {
+                return reject("name");
+            }
+            if block.input.is_some() {
+                return reject("input");
+            }
+            if block.tool_use_id.is_some() {
+                return reject("tool_use_id");
+            }
+            if block.content.is_some() {
+                return reject("content");
+            }
+            if block.image_url.is_some() {
+                return reject("image_url");
+            }
+        }
+        "redacted_thinking" => {
+            if block.data.is_some() && block.content.is_some() {
+                return reject("content");
+            }
+            if block.data.is_none() && block.content.is_none() {
+                return Err(RelayConvertError::Missing(
+                    "extra_content.anthropic.blocks[].data",
+                ));
+            }
+            if block.text.is_some() {
+                return reject("text");
+            }
+            if block.thinking.is_some() {
+                return reject("thinking");
+            }
+            if block.signature.is_some() {
+                return reject("signature");
+            }
+            if block.id.is_some() {
+                return reject("id");
+            }
+            if block.name.is_some() {
+                return reject("name");
+            }
+            if block.input.is_some() {
+                return reject("input");
+            }
+            if block.tool_use_id.is_some() {
+                return reject("tool_use_id");
+            }
+            if block.image_url.is_some() {
+                return reject("image_url");
+            }
+        }
+        "tool_use" => {
+            if block.id.is_none() {
+                return Err(RelayConvertError::Missing(
+                    "extra_content.anthropic.blocks[].id",
+                ));
+            }
+            if block.name.is_none() {
+                return Err(RelayConvertError::Missing(
+                    "extra_content.anthropic.blocks[].name",
+                ));
+            }
+            if block.input.is_none() {
+                return Err(RelayConvertError::Missing(
+                    "extra_content.anthropic.blocks[].input",
+                ));
+            }
+            if block.text.is_some() {
+                return reject("text");
+            }
+            if block.thinking.is_some() {
+                return reject("thinking");
+            }
+            if block.signature.is_some() {
+                return reject("signature");
+            }
+            if block.synthetic.is_some() {
+                return reject("synthetic");
+            }
+            if block.data.is_some() {
+                return reject("data");
+            }
+            if block.tool_use_id.is_some() {
+                return reject("tool_use_id");
+            }
+            if block.content.is_some() {
+                return reject("content");
+            }
+            if block.image_url.is_some() {
+                return reject("image_url");
+            }
+        }
+        "tool_result" => {
+            if block.tool_use_id.is_none() {
+                return Err(RelayConvertError::Missing(
+                    "extra_content.anthropic.blocks[].tool_use_id",
+                ));
+            }
+            if block.text.is_some() {
+                return reject("text");
+            }
+            if block.thinking.is_some() {
+                return reject("thinking");
+            }
+            if block.signature.is_some() {
+                return reject("signature");
+            }
+            if block.synthetic.is_some() {
+                return reject("synthetic");
+            }
+            if block.data.is_some() {
+                return reject("data");
+            }
+            if block.id.is_some() {
+                return reject("id");
+            }
+            if block.input.is_some() {
+                return reject("input");
+            }
+            if block.image_url.is_some() {
+                return reject("image_url");
+            }
+        }
+        "image" => {
+            if block.image_url.is_none() {
+                return Err(RelayConvertError::Missing(
+                    "extra_content.anthropic.blocks[].image_url",
+                ));
+            }
+            if block.text.is_some() {
+                return reject("text");
+            }
+            if block.thinking.is_some() {
+                return reject("thinking");
+            }
+            if block.signature.is_some() {
+                return reject("signature");
+            }
+            if block.synthetic.is_some() {
+                return reject("synthetic");
+            }
+            if block.data.is_some() {
+                return reject("data");
+            }
+            if block.id.is_some() {
+                return reject("id");
+            }
+            if block.name.is_some() {
+                return reject("name");
+            }
+            if block.input.is_some() {
+                return reject("input");
+            }
+            if block.tool_use_id.is_some() {
+                return reject("tool_use_id");
+            }
+            if block.content.is_some() {
+                return reject("content");
+            }
+        }
+        kind => {
+            return Err(RelayConvertError::Unsupported(format!(
+                "unsupported Anthropic extension block type {kind:?}"
+            )))
+        }
+    }
+    Ok(())
+}
+
+fn anthropic_block_to_canonical(
+    block: &OpenAiAnthropicBlock,
+    model: Option<String>,
+) -> Result<CanonicalContent, RelayConvertError> {
+    if !block.extra.is_empty() {
+        return Err(RelayConvertError::Unsupported(
+            "unknown Anthropic extension block fields cannot cross the canonical boundary"
+            .to_owned(),
+        ));
+    }
+    validate_anthropic_extension_block_shape(block)?;
+    match block.kind.as_str() {
+        "text" => Ok(CanonicalContent::Text {
+            text: block.text.clone().unwrap_or_default(),
+        }),
+        "reasoning" => Ok(CanonicalContent::Reasoning {
+            text: block.text.clone().unwrap_or_default(),
+        }),
+        "thinking" => Ok(CanonicalContent::ClaudeThinking {
+            thinking: block
+                .thinking
+                .clone()
+                .or_else(|| block.text.clone())
+                .unwrap_or_default(),
+            signature: block.signature.clone(),
+            model,
+            provenance: if block.synthetic.unwrap_or(false) {
+                OpaqueStateProvenance::Synthetic
+            } else {
+                OpaqueStateProvenance::Authentic
+            },
+        }),
+        "redacted_thinking" => Ok(CanonicalContent::RedactedThinking {
+            data: block
+                .data
+                .clone()
+                .or_else(|| block.content.clone())
+                .ok_or(RelayConvertError::Missing(
+                    "extra_content.anthropic.blocks[].data",
+                ))?,
+            model,
+            provenance: if block.synthetic.unwrap_or(false) {
+                OpaqueStateProvenance::Synthetic
+            } else {
+                OpaqueStateProvenance::Authentic
+            },
+        }),
+        "tool_use" => Ok(CanonicalContent::ToolCall {
+            id: block
+                .id
+                .clone()
+                .ok_or(RelayConvertError::Missing("anthropic tool_use.id"))?,
+            name: block
+                .name
+                .clone()
+                .ok_or(RelayConvertError::Missing("anthropic tool_use.name"))?,
+            arguments: block
+                .input
+                .as_ref()
+                .ok_or(RelayConvertError::Missing("anthropic tool_use.input"))?
+                .compact_string()?,
+        }),
+        "tool_result" => Ok(CanonicalContent::ToolResult {
+            id: block
+                .tool_use_id
+                .clone()
+                .ok_or(RelayConvertError::Missing("anthropic tool_result.tool_use_id"))?,
+            name: block.name.clone(),
+            output: block.content.clone().unwrap_or(JsonData::Null),
+        }),
+        "image" => {
+            let image = block
+                .image_url
+                .clone()
+                .ok_or(RelayConvertError::Missing("anthropic image.image_url"))?;
+            let url = match image {
+                JsonData::String(url) => url,
+                JsonData::Object(mut object) => match object.remove("url") {
+                    Some(JsonData::String(url)) => url,
+                    _ => return Err(RelayConvertError::Missing("anthropic image.url")),
+                },
+                _ => return Err(RelayConvertError::Missing("anthropic image.url")),
+            };
+            Ok(CanonicalContent::Image { url, detail: None })
+        }
+        kind => Err(RelayConvertError::Unsupported(format!(
+            "unsupported Anthropic extension block type {kind:?}"
+        ))),
+    }
+}
+
+fn anthropic_thinking_block(
+    thinking: String,
+    signature: Option<String>,
+    _model: Option<String>,
+    provenance: OpaqueStateProvenance,
+) -> OpenAiAnthropicBlock {
+    OpenAiAnthropicBlock {
+        kind: "thinking".to_owned(),
+        text: None,
+        thinking: Some(thinking),
+        signature,
+        synthetic: match provenance {
+            OpaqueStateProvenance::Authentic => None,
+            OpaqueStateProvenance::Synthetic => Some(true),
+        },
+        data: None,
+        id: None,
+        name: None,
+        input: None,
+        tool_use_id: None,
+        content: None,
+        image_url: None,
+        extra: BTreeMap::new(),
+    }
+}
+
+fn anthropic_redacted_block(
+    data: JsonData,
+    _model: Option<String>,
+    provenance: OpaqueStateProvenance,
+) -> OpenAiAnthropicBlock {
+    OpenAiAnthropicBlock {
+        kind: "redacted_thinking".to_owned(),
+        text: None,
+        thinking: None,
+        signature: None,
+        synthetic: match provenance {
+            OpaqueStateProvenance::Authentic => None,
+            OpaqueStateProvenance::Synthetic => Some(true),
+        },
+        data: Some(data),
+        id: None,
+        name: None,
+        input: None,
+        tool_use_id: None,
+        content: None,
+        image_url: None,
+        extra: BTreeMap::new(),
+    }
+}
+
+fn message_anthropic_extra(
+    blocks: Vec<OpenAiAnthropicBlock>,
+    model: Option<String>,
+) -> OpenAiExtraContent {
+    OpenAiExtraContent {
+        google: None,
+        anthropic: Some(OpenAiAnthropicExtraContent { blocks, model }),
+    }
+}
+
+fn merge_extra_content(
+    existing: Option<OpenAiExtraContent>,
+    incoming: OpenAiExtraContent,
+) -> OpenAiExtraContent {
+    let mut merged = existing.unwrap_or(OpenAiExtraContent {
+        google: None,
+        anthropic: None,
+    });
+    if incoming.google.is_some() {
+        merged.google = incoming.google;
+    }
+    if let Some(incoming_anthropic) = incoming.anthropic {
+        if let Some(existing_anthropic) = merged.anthropic.as_mut() {
+            existing_anthropic.blocks.extend(incoming_anthropic.blocks);
+            if incoming_anthropic.model.is_some() {
+                existing_anthropic.model = incoming_anthropic.model;
+            }
+        } else {
+            merged.anthropic = Some(incoming_anthropic);
+        }
+    }
+    merged
+}
+
+fn canonical_part_to_anthropic_block(
+    part: &CanonicalContent,
+) -> Result<OpenAiAnthropicBlock, RelayConvertError> {
+    let empty = || OpenAiAnthropicBlock {
+        kind: String::new(),
+        text: None,
+        thinking: None,
+        signature: None,
+        synthetic: None,
+        data: None,
+        id: None,
+        name: None,
+        input: None,
+        tool_use_id: None,
+        content: None,
+        image_url: None,
+        extra: BTreeMap::new(),
+    };
+    let block = match part {
+        CanonicalContent::Text { text } => OpenAiAnthropicBlock {
+            kind: "text".to_owned(),
+            text: Some(text.clone()),
+            ..empty()
+        },
+        CanonicalContent::Image { url, detail } => OpenAiAnthropicBlock {
+            kind: "image".to_owned(),
+            image_url: Some(match detail {
+                Some(detail) => JsonData::Object(
+                    [("url".to_owned(), JsonData::String(url.clone())),
+                        ("detail".to_owned(), JsonData::String(detail.clone()))]
+                        .into_iter()
+                        .collect(),
+                ),
+                None => JsonData::String(url.clone()),
+            }),
+            ..empty()
+        },
+        CanonicalContent::ToolCall {
+            id,
+            name,
+            arguments,
+        } => OpenAiAnthropicBlock {
+            kind: "tool_use".to_owned(),
+            id: Some(id.clone()),
+            name: Some(name.clone()),
+            input: Some(parse_function_arguments(arguments)?),
+            ..empty()
+        },
+        CanonicalContent::ToolResult { id, name, output } => OpenAiAnthropicBlock {
+            kind: "tool_result".to_owned(),
+            name: name.clone(),
+            tool_use_id: Some(id.clone()),
+            content: Some(output.clone()),
+            ..empty()
+        },
+        CanonicalContent::Reasoning { text } => OpenAiAnthropicBlock {
+            kind: "reasoning".to_owned(),
+            text: Some(text.clone()),
+            ..empty()
+        },
+        CanonicalContent::ClaudeThinking {
+            thinking,
+            signature,
+            model,
+            provenance,
+        } => anthropic_thinking_block(
+            thinking.clone(),
+            signature.clone(),
+            model.clone(),
+            *provenance,
+        ),
+        CanonicalContent::RedactedThinking {
+            data,
+            model,
+            provenance,
+        } => anthropic_redacted_block(data.clone(), model.clone(), *provenance),
+        CanonicalContent::ProviderState { .. } => {
+            return Err(RelayConvertError::Unsupported(
+                "provider state has no Anthropic extension representation".to_owned(),
+            ));
+        }
+    };
+    Ok(block)
+}
+
+fn canonical_parts_to_anthropic_blocks(
+    parts: &[CanonicalContent],
+) -> Result<Vec<OpenAiAnthropicBlock>, RelayConvertError> {
+    parts
+        .iter()
+        .map(canonical_part_to_anthropic_block)
+        .collect()
+}
+
+fn attach_anthropic_request_extensions(
+    request: &CanonicalRequest,
+    target: &mut OpenAiChatRequest,
+    _loss: &mut LossReport,
+) -> Result<(), RelayConvertError> {
+    // `instructions` are emitted as leading system messages by the generic
+    // Chat converter; skip those before matching Claude's explicit system
+    // message blocks.
+    let mut target_index = request.instructions.len();
+    for message in &request.messages {
+        let expected_role = role_to_chat(message.role.clone());
+        let Some(index) = target.messages[target_index..]
+            .iter()
+            .position(|candidate| candidate.role == expected_role)
+            .map(|index| target_index + index)
+        else {
+            return Err(RelayConvertError::Unsupported(
+                "cannot locate generated Chat message for Claude history".to_owned(),
+            ));
+        };
+        target_index = index + 1;
+        let blocks = canonical_parts_to_anthropic_blocks(&message.parts)?;
+        let model = blocks
+            .iter()
+            .find(|block| block.kind == "thinking" || block.kind == "redacted_thinking")
+            .map(|_| request.model.clone());
+        set_anthropic_extra(
+            &mut target.messages[index].extra_content,
+            message_anthropic_extra(blocks, model),
+        );
+    }
+    Ok(())
+}
+
+fn attach_anthropic_response_extension(
+    response: &CanonicalResponse,
+    target: &mut OpenAiChatResponse,
+    _loss: &mut LossReport,
+) -> Result<(), RelayConvertError> {
+    let Some(choice) = target.choices.first_mut() else {
+        return Err(RelayConvertError::Missing("choices[0]"));
+    };
+    let blocks = canonical_parts_to_anthropic_blocks(&response.output)?;
+    set_anthropic_extra(
+        &mut choice.message.extra_content,
+        message_anthropic_extra(blocks, Some(response.model.clone())),
+    );
+    Ok(())
+}
+
+fn set_anthropic_extra(
+    target: &mut Option<OpenAiExtraContent>,
+    incoming: OpenAiExtraContent,
+) {
+    let mut merged = target.take().unwrap_or(OpenAiExtraContent {
+        google: None,
+        anthropic: None,
+    });
+    merged.anthropic = incoming.anthropic;
+    *target = Some(merged);
+}
+
+fn claude_blocks_to_canonical(
+    blocks: Vec<ClaudeContentBlock>,
+    model: Option<&str>,
+) -> Result<Vec<CanonicalContent>, RelayConvertError> {
+    blocks
+        .into_iter()
+        .map(|block| {
+            if !block.extra.is_empty() {
+                return Err(RelayConvertError::Unsupported(
+                    "unknown Claude block fields cannot cross the canonical boundary".to_owned(),
+                ));
+            }
+            validate_claude_block_shape(&block)?;
+            match block.kind.as_str() {
+            "text" => Ok(CanonicalContent::Text {
+                text: block.text.unwrap_or_default(),
+            }),
+            "thinking" => Ok(CanonicalContent::ClaudeThinking {
+                thinking: block
+                    .thinking
+                    .or(block.text)
+                    .unwrap_or_default(),
+                signature: block.signature,
+                model: model.map(str::to_owned),
+                provenance: OpaqueStateProvenance::Authentic,
+            }),
+            "redacted_thinking" => Ok(CanonicalContent::RedactedThinking {
+                data: block
+                    .data
+                    .or(block.content)
+                    .ok_or(RelayConvertError::Missing("redacted_thinking.data"))?,
+                model: model.map(str::to_owned),
+                provenance: OpaqueStateProvenance::Authentic,
+            }),
+            "tool_use" => Ok(CanonicalContent::ToolCall {
+                id: block
+                    .id
+                    .ok_or(RelayConvertError::Missing("tool_use.id"))?,
+                name: block
+                    .name
+                    .ok_or(RelayConvertError::Missing("tool_use.name"))?,
+                arguments: block
+                    .input
+                    .ok_or(RelayConvertError::Missing("tool_use.input"))?
+                    .compact_string()?,
+            }),
+            "tool_result" => Ok(CanonicalContent::ToolResult {
+                id: block
+                    .tool_use_id
+                    .ok_or(RelayConvertError::Missing("tool_result.tool_use_id"))?,
+                name: block.name,
+                output: block.content.unwrap_or(JsonData::Null),
+            }),
+            "image" => {
+                let image = block
+                    .source
+                    .ok_or(RelayConvertError::Missing("image.source"))?;
+                if image.kind != "url" {
+                    return Err(RelayConvertError::Unsupported(
+                        "Claude non-URL image source cannot be represented by canonical image URL"
+                            .to_owned(),
+                    ));
+                }
+                Ok(CanonicalContent::Image {
+                    url: image.data,
+                    detail: None,
+                })
+            }
+                kind => Err(RelayConvertError::Unsupported(format!(
+                    "unsupported Claude content block type {kind:?}"
+                ))),
+            }
+        })
+        .collect()
+}
+
+fn validate_claude_block_shape(
+    block: &ClaudeContentBlock,
+) -> Result<(), RelayConvertError> {
+    let reject = |field: &str| {
+        Err(RelayConvertError::Unsupported(format!(
+            "Claude {} block carries incompatible field {field:?}",
+            block.kind
+        )))
+    };
+    match block.kind.as_str() {
+        "text" => {
+            if block.text.is_none() {
+                return Err(RelayConvertError::Missing("text.text"));
+            }
+            if block.thinking.is_some() {
+                return reject("thinking");
+            }
+            if block.signature.is_some() {
+                return reject("signature");
+            }
+            if block.data.is_some() {
+                return reject("data");
+            }
+            if block.id.is_some() {
+                return reject("id");
+            }
+            if block.name.is_some() {
+                return reject("name");
+            }
+            if block.input.is_some() {
+                return reject("input");
+            }
+            if block.tool_use_id.is_some() {
+                return reject("tool_use_id");
+            }
+            if block.content.is_some() {
+                return reject("content");
+            }
+            if block.source.is_some() {
+                return reject("source");
+            }
+        }
+        "thinking" => {
+            if block.text.is_some() {
+                return reject("text");
+            }
+            if block.thinking.is_none() {
+                return Err(RelayConvertError::Missing("thinking.thinking"));
+            }
+            if block.data.is_some() {
+                return reject("data");
+            }
+            if block.id.is_some() {
+                return reject("id");
+            }
+            if block.name.is_some() {
+                return reject("name");
+            }
+            if block.input.is_some() {
+                return reject("input");
+            }
+            if block.tool_use_id.is_some() {
+                return reject("tool_use_id");
+            }
+            if block.content.is_some() {
+                return reject("content");
+            }
+            if block.source.is_some() {
+                return reject("source");
+            }
+        }
+        "redacted_thinking" => {
+            if block.data.is_some() && block.content.is_some() {
+                return reject("content");
+            }
+            if block.data.is_none() && block.content.is_none() {
+                return Err(RelayConvertError::Missing("redacted_thinking.data"));
+            }
+            if block.text.is_some() {
+                return reject("text");
+            }
+            if block.thinking.is_some() {
+                return reject("thinking");
+            }
+            if block.signature.is_some() {
+                return reject("signature");
+            }
+            if block.id.is_some() {
+                return reject("id");
+            }
+            if block.name.is_some() {
+                return reject("name");
+            }
+            if block.input.is_some() {
+                return reject("input");
+            }
+            if block.tool_use_id.is_some() {
+                return reject("tool_use_id");
+            }
+            if block.source.is_some() {
+                return reject("source");
+            }
+        }
+        "tool_use" => {
+            if block.id.is_none() {
+                return Err(RelayConvertError::Missing("tool_use.id"));
+            }
+            if block.name.is_none() {
+                return Err(RelayConvertError::Missing("tool_use.name"));
+            }
+            if block.input.is_none() {
+                return Err(RelayConvertError::Missing("tool_use.input"));
+            }
+            if block.text.is_some() {
+                return reject("text");
+            }
+            if block.thinking.is_some() {
+                return reject("thinking");
+            }
+            if block.signature.is_some() {
+                return reject("signature");
+            }
+            if block.data.is_some() {
+                return reject("data");
+            }
+            if block.tool_use_id.is_some() {
+                return reject("tool_use_id");
+            }
+            if block.content.is_some() {
+                return reject("content");
+            }
+            if block.source.is_some() {
+                return reject("source");
+            }
+        }
+        "tool_result" => {
+            if block.tool_use_id.is_none() {
+                return Err(RelayConvertError::Missing("tool_result.tool_use_id"));
+            }
+            if block.text.is_some() {
+                return reject("text");
+            }
+            if block.thinking.is_some() {
+                return reject("thinking");
+            }
+            if block.signature.is_some() {
+                return reject("signature");
+            }
+            if block.data.is_some() {
+                return reject("data");
+            }
+            if block.id.is_some() {
+                return reject("id");
+            }
+            if block.input.is_some() {
+                return reject("input");
+            }
+            if block.source.is_some() {
+                return reject("source");
+            }
+        }
+        "image" => {
+            if block.source.is_none() {
+                return Err(RelayConvertError::Missing("image.source"));
+            }
+            if block.text.is_some() {
+                return reject("text");
+            }
+            if block.thinking.is_some() {
+                return reject("thinking");
+            }
+            if block.signature.is_some() {
+                return reject("signature");
+            }
+            if block.data.is_some() {
+                return reject("data");
+            }
+            if block.id.is_some() {
+                return reject("id");
+            }
+            if block.name.is_some() {
+                return reject("name");
+            }
+            if block.input.is_some() {
+                return reject("input");
+            }
+            if block.tool_use_id.is_some() {
+                return reject("tool_use_id");
+            }
+            if block.content.is_some() {
+                return reject("content");
+            }
+        }
+        kind => {
+            return Err(RelayConvertError::Unsupported(format!(
+                "unsupported Claude content block type {kind:?}"
+            )))
+        }
+    }
+    Ok(())
+}
+
+fn claude_text_block(text: String) -> ClaudeContentBlock {
+    ClaudeContentBlock {
+        kind: "text".to_owned(),
+        text: Some(text),
+        thinking: None,
+        signature: None,
+        data: None,
+        id: None,
+        name: None,
+        input: None,
+        tool_use_id: None,
+        content: None,
+        source: None,
+        extra: BTreeMap::new(),
+    }
+}
+
+fn canonical_parts_to_claude(
+    parts: &[CanonicalContent],
+    loss: &mut LossReport,
+    has_tool_call: bool,
+) -> Result<Vec<ClaudeContentBlock>, RelayConvertError> {
+    let mut output = Vec::new();
+    for part in parts {
+        match part {
+            CanonicalContent::Text { text } => output.push(claude_text_block(text.clone())),
+            CanonicalContent::Image { .. } => {
+                return Err(RelayConvertError::Unsupported(
+                    "canonical image URL cannot be encoded as a Claude image source".to_owned(),
+                ));
+            }
+            CanonicalContent::Reasoning { text } => {
+                // OpenAI reasoning_content and canonical summaries are not
+                // legal Claude signed thinking.  Keep the text visible as a
+                // normal block rather than fabricating a signature.
+                record_dropped(loss, "ordinary_reasoning->claude_text");
+                output.push(claude_text_block(text.clone()));
+            }
+            CanonicalContent::ClaudeThinking {
+                thinking,
+                signature,
+                provenance,
+                ..
+            } => {
+                if *provenance == OpaqueStateProvenance::Synthetic {
+                    return Err(RelayConvertError::Unsupported(
+                        "synthetic Claude thinking cannot be sent upstream".to_owned(),
+                    ));
+                }
+                if has_tool_call && signature.is_none() {
+                    return Err(RelayConvertError::Unsupported(
+                        "Claude tool round is missing authentic thinking signature".to_owned(),
+                    ));
+                }
+                output.push(ClaudeContentBlock {
+                    kind: "thinking".to_owned(),
+                    text: None,
+                    thinking: Some(thinking.clone()),
+                    signature: signature.clone(),
+                    data: None,
+                    id: None,
+                    name: None,
+                    input: None,
+                    tool_use_id: None,
+                    content: None,
+                    source: None,
+                    extra: BTreeMap::new(),
+                });
+            }
+            CanonicalContent::RedactedThinking {
+                data,
+                provenance,
+                ..
+            } => {
+                if *provenance == OpaqueStateProvenance::Synthetic {
+                    return Err(RelayConvertError::Unsupported(
+                        "synthetic Claude redacted thinking cannot be sent upstream".to_owned(),
+                    ));
+                }
+                output.push(ClaudeContentBlock {
+                    kind: "redacted_thinking".to_owned(),
+                    text: None,
+                    thinking: None,
+                    signature: None,
+                    data: Some(data.clone()),
+                    id: None,
+                    name: None,
+                    input: None,
+                    tool_use_id: None,
+                    content: None,
+                    source: None,
+                    extra: BTreeMap::new(),
+                });
+            }
+            CanonicalContent::ToolCall {
+                id,
+                name,
+                arguments,
+            } => output.push(ClaudeContentBlock {
+                kind: "tool_use".to_owned(),
+                text: None,
+                thinking: None,
+                signature: None,
+                data: None,
+                id: Some(id.clone()),
+                name: Some(name.clone()),
+                input: Some(parse_function_arguments(arguments)?),
+                tool_use_id: None,
+                content: None,
+                source: None,
+                extra: BTreeMap::new(),
+            }),
+            CanonicalContent::ToolResult { id, name, output } => {
+                output.push(ClaudeContentBlock {
+                    kind: "tool_result".to_owned(),
+                    text: None,
+                    thinking: None,
+                    signature: None,
+                    data: None,
+                    id: None,
+                    name: name.clone(),
+                    input: None,
+                    tool_use_id: Some(id.clone()),
+                    content: Some(output.clone()),
+                    source: None,
+                    extra: BTreeMap::new(),
+                });
+            }
+            CanonicalContent::ProviderState { .. } => {
+                return Err(RelayConvertError::Unsupported(
+                    "opaque provider state has no Claude block representation".to_owned(),
+                ));
+            }
+        }
+    }
+    Ok(output)
+}
+
+fn claude_tool_choice_to_canonical(
+    choice: &ClaudeToolChoice,
+) -> Result<CanonicalToolChoice, RelayConvertError> {
+    match choice.kind.as_str() {
+        "auto" => Ok(CanonicalToolChoice::Auto),
+        "any" => Ok(CanonicalToolChoice::Required),
+        "tool" => Ok(CanonicalToolChoice::Function {
+            name: choice
+                .name
+                .clone()
+                .ok_or(RelayConvertError::Missing("tool_choice.name"))?,
+        }),
+        kind => Err(RelayConvertError::Unsupported(format!(
+            "unsupported Claude tool_choice type {kind:?}"
+        ))),
+    }
+}
+
+fn canonical_tool_choice_to_claude(choice: CanonicalToolChoice) -> ClaudeToolChoice {
+    match choice {
+        CanonicalToolChoice::Auto => ClaudeToolChoice {
+            kind: "auto".to_owned(),
+            name: None,
+        },
+        CanonicalToolChoice::Required => ClaudeToolChoice {
+            kind: "any".to_owned(),
+            name: None,
+        },
+        CanonicalToolChoice::Function { name } => ClaudeToolChoice {
+            kind: "tool".to_owned(),
+            name: Some(name),
+        },
+        CanonicalToolChoice::None => ClaudeToolChoice {
+            kind: "auto".to_owned(),
+            name: None,
+        },
+    }
+}
+
+fn claude_finish_reason(reason: FinishReason) -> String {
+    match reason {
+        FinishReason::Stop => "end_turn",
+        FinishReason::Length => "max_tokens",
+        FinishReason::ToolCalls => "tool_use",
+        FinishReason::ContentFilter => "refusal",
+        FinishReason::Cancelled => "cancelled",
+        FinishReason::Error => "error",
+        FinishReason::Other => "stop_sequence",
+    }
+    .to_owned()
+}
+
+fn token_usage_to_claude(usage: &TokenUsage) -> super::ClaudeUsage {
+    super::ClaudeUsage {
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        cache_read_input_tokens: usage.cached_input_tokens,
+        ..super::ClaudeUsage::default()
+    }
+}
+
+/// Lossless semantic representation of Claude SSE events.  In particular,
+/// `signature_delta` is a separate event and can never be mistaken for a
+/// newline/text delta.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ClaudeStreamSemanticEvent {
+    MessageStart { message: Option<ClaudeResponse> },
+    ContentBlockStart {
+        index: usize,
+        block: ClaudeContentBlock,
+    },
+    TextDelta { index: usize, delta: String },
+    ThinkingDelta { index: usize, delta: String },
+    SignatureDelta { index: usize, signature: String },
+    RedactedThinking { index: usize, data: JsonData },
+    ToolInputJsonDelta { index: usize, delta: String },
+    ContentBlockStop { index: usize },
+    MessageDelta {
+        stop_reason: Option<String>,
+        usage: Option<super::ClaudeUsage>,
+    },
+    MessageStop,
+    Ping,
+    Error { code: Option<String>, message: String },
+    Unknown { kind: String, fields: JsonData },
+    Cancelled,
+}
+
+/// Small state machine for Claude streaming.  It validates block ordering and
+/// exposes cancellation without pretending a cancellation is a provider
+/// text event.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ClaudeStreamState {
+    started: bool,
+    ended: bool,
+    cancelled: bool,
+    last_started_index: Option<usize>,
+    open_blocks: BTreeMap<usize, ClaudeStreamBlockKind>,
+    closed_blocks: BTreeSet<usize>,
+    signature_seen: BTreeSet<usize>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ClaudeStreamBlockKind {
+    Text,
+    Thinking,
+    RedactedThinking,
+    ToolUse,
+    Other(String),
+}
+
+impl ClaudeStreamState {
+    pub fn apply(
+        &mut self,
+        event: &ClaudeStreamSemanticEvent,
+    ) -> Result<(), RelayConvertError> {
+        match event {
+            ClaudeStreamSemanticEvent::MessageStart { .. } => {
+                if self.started || self.ended || self.cancelled {
+                    return Err(RelayConvertError::Unsupported(
+                        "Claude stream contains duplicate message_start".to_owned(),
+                    ));
+                }
+                self.started = true;
+            }
+            ClaudeStreamSemanticEvent::ContentBlockStart { index, block } => {
+                self.require_started()?;
+                if self.ended
+                    || self.cancelled
+                    || !self.open_blocks.is_empty()
+                    || self
+                        .last_started_index
+                        .is_some_and(|last_index| *index <= last_index)
+                    || self.closed_blocks.contains(index)
+                {
+                    return Err(RelayConvertError::Unsupported(
+                        "Claude stream content block started out of order".to_owned(),
+                    ));
+                }
+                self.last_started_index = Some(*index);
+                self.open_blocks
+                    .insert(*index, ClaudeStreamBlockKind::from_block(block));
+                if block.signature.is_some() {
+                    self.signature_seen.insert(*index);
+                }
+            }
+            ClaudeStreamSemanticEvent::TextDelta { index, .. } => {
+                self.require_started()?;
+                self.require_open_block(*index, ClaudeStreamBlockKind::Text)?;
+            }
+            ClaudeStreamSemanticEvent::ThinkingDelta { index, .. } => {
+                self.require_started()?;
+                self.require_open_block(*index, ClaudeStreamBlockKind::Thinking)?;
+            }
+            ClaudeStreamSemanticEvent::SignatureDelta { index, .. } => {
+                self.require_started()?;
+                self.require_open_block(*index, ClaudeStreamBlockKind::Thinking)?;
+                self.signature_seen.insert(*index);
+            }
+            ClaudeStreamSemanticEvent::RedactedThinking { index, .. } => {
+                self.require_started()?;
+                self.require_open_block(*index, ClaudeStreamBlockKind::RedactedThinking)?;
+            }
+            ClaudeStreamSemanticEvent::ToolInputJsonDelta { index, .. } => {
+                self.require_started()?;
+                self.require_open_block(*index, ClaudeStreamBlockKind::ToolUse)?;
+            }
+            ClaudeStreamSemanticEvent::ContentBlockStop { index } => {
+                self.require_started()?;
+                if self.ended || self.cancelled {
+                    return Err(RelayConvertError::Unsupported(
+                        "Claude stream content block stopped out of order".to_owned(),
+                    ));
+                }
+                let Some(kind) = self.open_blocks.remove(index) else {
+                    return Err(RelayConvertError::Unsupported(
+                        "Claude stream content block stopped out of order".to_owned(),
+                    ));
+                };
+                if kind == ClaudeStreamBlockKind::Thinking
+                    && !self.signature_seen.contains(index)
+                {
+                    return Err(RelayConvertError::Unsupported(
+                        "Claude thinking block stopped before signature_delta".to_owned(),
+                    ));
+                }
+                self.closed_blocks.insert(*index);
+            }
+            ClaudeStreamSemanticEvent::MessageDelta { .. } => {
+                self.require_started()?;
+                if self.ended || self.cancelled || !self.open_blocks.is_empty() {
+                    return Err(RelayConvertError::Unsupported(
+                        "Claude message_delta arrived out of order".to_owned(),
+                    ));
+                }
+            }
+            ClaudeStreamSemanticEvent::MessageStop => {
+                self.require_started()?;
+                if self.ended || self.cancelled || !self.open_blocks.is_empty() {
+                    return Err(RelayConvertError::Unsupported(
+                        "Claude message_stop arrived before content_block_stop".to_owned(),
+                    ));
+                }
+                self.ended = true;
+            }
+            ClaudeStreamSemanticEvent::Ping
+            | ClaudeStreamSemanticEvent::Error { .. }
+            | ClaudeStreamSemanticEvent::Unknown { .. } => {}
+            ClaudeStreamSemanticEvent::Cancelled => {
+                if !self.started || self.ended || self.cancelled {
+                    return Err(RelayConvertError::Unsupported(
+                        "Claude stream cancellation arrived out of order".to_owned(),
+                    ));
+                }
+                self.cancelled = true;
+                self.ended = true;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn cancel(&mut self) -> ClaudeStreamSemanticEvent {
+        self.cancelled = true;
+        self.ended = true;
+        ClaudeStreamSemanticEvent::Cancelled
+    }
+
+    fn require_started(&self) -> Result<(), RelayConvertError> {
+        if self.started {
+            Ok(())
+        } else {
+            Err(RelayConvertError::Unsupported(
+                "Claude stream event arrived before message_start".to_owned(),
+            ))
+        }
+    }
+
+    pub fn has_open_blocks(&self) -> bool {
+        !self.open_blocks.is_empty()
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled
+    }
+
+    fn require_open_block(
+        &self,
+        index: usize,
+        expected: ClaudeStreamBlockKind,
+    ) -> Result<(), RelayConvertError> {
+        if self.ended || self.cancelled {
+            return Err(RelayConvertError::Unsupported(
+                "Claude stream delta arrived after stream end".to_owned(),
+            ));
+        }
+        match self.open_blocks.get(&index) {
+            Some(kind) if kind == &expected => Ok(()),
+            Some(kind) => Err(RelayConvertError::Unsupported(format!(
+                "Claude stream delta does not match block kind {kind:?}"
+            ))),
+            None => Err(RelayConvertError::Unsupported(
+                "Claude stream delta has no open content block".to_owned(),
+            )),
+        }
+    }
+}
+
+impl ClaudeStreamBlockKind {
+    fn from_block(block: &ClaudeContentBlock) -> Self {
+        match block.kind.as_str() {
+            "text" => Self::Text,
+            "thinking" => Self::Thinking,
+            "redacted_thinking" => Self::RedactedThinking,
+            "tool_use" => Self::ToolUse,
+            kind => Self::Other(kind.to_owned()),
+        }
+    }
+}
+
+/// Decodes typed Claude stream DTOs into explicit semantic events.  Unknown
+/// provider events and pings are retained; malformed typed deltas fail rather
+/// than being silently converted into text.
+pub fn claude_stream_to_semantic_events(
+    snapshot: &ClaudeStreamSnapshot,
+) -> Result<Vec<ClaudeStreamSemanticEvent>, RelayConvertError> {
+    let mut events = Vec::new();
+    for event in &snapshot.events {
+        let semantic = match event.kind.as_str() {
+            "message_start" => ClaudeStreamSemanticEvent::MessageStart {
+                message: event.message.clone(),
+            },
+            "content_block_start" => ClaudeStreamSemanticEvent::ContentBlockStart {
+                index: event.index.ok_or(RelayConvertError::Missing(
+                    "content_block_start.index",
+                ))?,
+                block: event.content_block.clone().ok_or(RelayConvertError::Missing(
+                    "content_block_start.content_block",
+                ))?,
+            },
+            "content_block_delta" => {
+                let index = event
+                    .index
+                    .ok_or(RelayConvertError::Missing("content_block_delta.index"))?;
+                let delta = event
+                    .delta
+                    .as_ref()
+                    .ok_or(RelayConvertError::Missing("content_block_delta.delta"))?;
+                match delta.kind.as_deref() {
+                    Some("text_delta") => ClaudeStreamSemanticEvent::TextDelta {
+                        index,
+                        delta: delta
+                            .text
+                            .clone()
+                            .ok_or(RelayConvertError::Missing("text_delta.text"))?,
+                    },
+                    Some("thinking_delta") => ClaudeStreamSemanticEvent::ThinkingDelta {
+                        index,
+                        delta: delta
+                            .thinking
+                            .clone()
+                            .ok_or(RelayConvertError::Missing("thinking_delta.thinking"))?,
+                    },
+                    Some("signature_delta") => ClaudeStreamSemanticEvent::SignatureDelta {
+                        index,
+                        signature: delta.signature.clone().ok_or(
+                            RelayConvertError::Missing("signature_delta.signature"),
+                        )?,
+                    },
+                    Some("input_json_delta") => ClaudeStreamSemanticEvent::ToolInputJsonDelta {
+                        index,
+                        delta: delta.partial_json.clone().ok_or(
+                            RelayConvertError::Missing("input_json_delta.partial_json"),
+                        )?,
+                    },
+                    Some("redacted_thinking_delta") => {
+                        ClaudeStreamSemanticEvent::RedactedThinking {
+                            index,
+                            data: delta.data.clone().ok_or(RelayConvertError::Missing(
+                                "redacted_thinking_delta.data",
+                            ))?,
+                        }
+                    }
+                    Some(kind) => {
+                        return Err(RelayConvertError::Unsupported(format!(
+                            "unsupported Claude content delta type {kind:?}"
+                        )));
+                    }
+                    None => {
+                        return Err(RelayConvertError::Missing("content_block_delta.delta.type"));
+                    }
+                }
+            }
+            "content_block_stop" => ClaudeStreamSemanticEvent::ContentBlockStop {
+                index: event
+                    .index
+                    .ok_or(RelayConvertError::Missing("content_block_stop.index"))?,
+            },
+            "message_delta" => ClaudeStreamSemanticEvent::MessageDelta {
+                stop_reason: event
+                    .delta
+                    .as_ref()
+                    .and_then(|delta| delta.stop_reason.clone()),
+                usage: event
+                    .usage
+                    .clone()
+                    .or_else(|| event.delta.as_ref().and_then(|delta| delta.usage.clone())),
+            },
+            "message_stop" => ClaudeStreamSemanticEvent::MessageStop,
+            "ping" => ClaudeStreamSemanticEvent::Ping,
+            "error" => {
+                let error = event.error.as_ref().ok_or(RelayConvertError::Missing(
+                    "error.error",
+                ))?;
+                ClaudeStreamSemanticEvent::Error {
+                    code: error.code.clone(),
+                    message: error.message.clone(),
+                }
+            }
+            kind => ClaudeStreamSemanticEvent::Unknown {
+                kind: kind.to_owned(),
+                fields: claude_stream_event_fields(event)?,
+            },
+        };
+        events.push(semantic);
+    }
+    Ok(events)
+}
+
+fn claude_stream_event_fields(
+    event: &ClaudeStreamEvent,
+) -> Result<JsonData, RelayConvertError> {
+    let value = serde_json::to_value(event)?;
+    Ok(serde_json::from_value(value)?)
+}
+
+pub fn claude_stream_cancelled() -> ClaudeStreamSemanticEvent {
+    ClaudeStreamSemanticEvent::Cancelled
+}
+
 fn merge_loss(mut left: LossReport, right: LossReport) -> LossReport {
     for field in right.dropped_fields {
         record_dropped(&mut left, field);
@@ -1281,6 +3937,11 @@ fn merge_loss(mut left: LossReport, right: LossReport) -> LossReport {
     for field in right.normalized_fields {
         if !left.normalized_fields.contains(&field) {
             left.normalized_fields.push(field);
+        }
+    }
+    for field in right.synthetic_fields {
+        if !left.synthetic_fields.contains(&field) {
+            left.synthetic_fields.push(field);
         }
     }
     left
@@ -1332,6 +3993,21 @@ fn chat_content_to_canonical(
     }
 }
 
+fn chat_tool_output_to_json(
+    content: Option<StringOrParts<OpenAiChatContentPart>>,
+) -> Result<JsonData, RelayConvertError> {
+    match content {
+        Some(StringOrParts::String(value)) => Ok(JsonData::String(value)),
+        Some(StringOrParts::Parts(parts)) => Ok(JsonData::Array(
+            parts
+                .into_iter()
+                .map(|part| JsonData::String(part.text.unwrap_or_default()))
+                .collect(),
+        )),
+        None => Ok(JsonData::String(String::new())),
+    }
+}
+
 fn responses_content_to_canonical(
     content: Option<StringOrParts<ResponsesContentPart>>,
 ) -> Result<Vec<CanonicalContent>, RelayConvertError> {
@@ -1358,6 +4034,420 @@ fn responses_content_to_canonical(
     }
 }
 
+#[derive(Default)]
+struct GeminiIdAllocator {
+    next: usize,
+    pending_by_name: BTreeMap<String, VecDeque<String>>,
+    pending_by_id: BTreeMap<String, String>,
+}
+
+impl GeminiIdAllocator {
+    fn call_id(&mut self, name: &str) -> String {
+        let id = loop {
+            let candidate = format!("gemini_call_synthetic_{}_{}", self.next, name);
+            self.next += 1;
+            if !self.pending_by_id.contains_key(&candidate) {
+                break candidate;
+            }
+        };
+        self.pending_by_name
+            .entry(name.to_owned())
+            .or_default()
+            .push_back(id.clone());
+        self.pending_by_id.insert(id.clone(), name.to_owned());
+        id
+    }
+
+    fn remember_call(
+        &mut self,
+        name: &str,
+        id: &str,
+    ) -> Result<(), RelayConvertError> {
+        if self.pending_by_id.contains_key(id) {
+            return Err(RelayConvertError::Unsupported(format!(
+                "Gemini functionCall id {id:?} is duplicated before its result"
+            )));
+        }
+        self.pending_by_name
+            .entry(name.to_owned())
+            .or_default()
+            .push_back(id.to_owned());
+        self.pending_by_id.insert(id.to_owned(), name.to_owned());
+        Ok(())
+    }
+
+    fn result_id(
+        &mut self,
+        name: &str,
+        loss: &mut LossReport,
+    ) -> Result<String, RelayConvertError> {
+        let Some(pending) = self.pending_by_name.get_mut(name) else {
+            return Err(RelayConvertError::Unsupported(format!(
+                "Gemini functionResponse for {name:?} has no outstanding functionCall"
+            )));
+        };
+        if pending.len() > 1 {
+            record_synthetic(loss, "SYNTHETIC_TOOL_RESULT_ID_AMBIGUOUS");
+        }
+        let Some(id) = pending.pop_front() else {
+            return Err(RelayConvertError::Unsupported(format!(
+                "Gemini functionResponse for {name:?} has no outstanding functionCall"
+            )));
+        };
+        self.pending_by_id.remove(&id);
+        Ok(id)
+    }
+
+    fn remove_explicit_result(
+        &mut self,
+        name: &str,
+        id: &str,
+    ) -> Result<(), RelayConvertError> {
+        let Some(expected_name) = self.pending_by_id.get(id).cloned() else {
+            return Err(RelayConvertError::Unsupported(format!(
+                "Gemini functionResponse id {id:?} has no outstanding functionCall"
+            )));
+        };
+        if expected_name != name {
+            return Err(RelayConvertError::Unsupported(format!(
+                "Gemini functionResponse id {id:?} names {name:?}, expected {expected_name:?}"
+            )));
+        }
+        let Some(pending) = self.pending_by_name.get_mut(name) else {
+            return Err(RelayConvertError::Unsupported(format!(
+                "Gemini functionResponse id {id:?} has no name queue"
+            )));
+        };
+        let Some(index) = pending.iter().position(|candidate| candidate == id) else {
+            return Err(RelayConvertError::Unsupported(format!(
+                "Gemini functionResponse id {id:?} is not in its name queue"
+            )));
+        };
+        pending.remove(index);
+        self.pending_by_id.remove(id);
+        Ok(())
+    }
+
+}
+
+fn gemini_parts_to_canonical(
+    parts: Vec<GeminiPart>,
+    model: &str,
+    loss: &mut LossReport,
+    ids: &mut GeminiIdAllocator,
+) -> Result<Vec<CanonicalContent>, RelayConvertError> {
+    let mut output = Vec::new();
+    for part in parts {
+        let GeminiPart {
+            text,
+            inline_data,
+            function_call,
+            function_response,
+            thought_signature,
+        } = part;
+        let had_text = text.is_some();
+        let had_function_call = function_call.is_some();
+        let had_function_response = function_response.is_some();
+        if had_text && (had_function_call || had_function_response) {
+            return Err(RelayConvertError::Unsupported(
+                "Gemini Part contains multiple content payloads".to_owned(),
+            ));
+        }
+        if inline_data.is_some() {
+            return Err(RelayConvertError::Unsupported(
+                "Gemini inlineData cannot be represented by the current canonical image URL"
+                    .to_owned(),
+            ));
+        }
+        if function_call.is_some() && function_response.is_some() {
+            return Err(RelayConvertError::Unsupported(
+                "Gemini Part cannot contain both functionCall and functionResponse".to_owned(),
+            ));
+        }
+        if let Some(text) = text {
+            output.push(CanonicalContent::Text { text });
+        }
+        if let Some(call) = function_call {
+            let name = call.name;
+            let id = match call.id.filter(|id| !id.is_empty()) {
+                Some(id) => {
+                    ids.remember_call(&name, &id)?;
+                    id
+                }
+                None => {
+                    record_synthetic(loss, "SYNTHETIC_TOOL_CALL_ID");
+                    ids.call_id(&name)
+                }
+            };
+            output.push(CanonicalContent::ToolCall {
+                id,
+                name,
+                arguments: call
+                    .args
+                    .map(|args| args.compact_string())
+                    .transpose()?
+                    .unwrap_or_else(|| "{}".to_owned()),
+            });
+        }
+        if let Some(result) = function_response {
+            let name = result.name;
+            let id = match result.id.filter(|id| !id.is_empty()) {
+                Some(id) => {
+                    ids.remove_explicit_result(&name, &id)?;
+                    id
+                }
+                None => {
+                    record_synthetic(loss, "SYNTHETIC_TOOL_RESULT_ID");
+                    ids.result_id(&name, loss)?
+                }
+            };
+            output.push(CanonicalContent::ToolResult {
+                id,
+                name: Some(name),
+                output: result.response,
+            });
+        }
+        if let Some(signature) = thought_signature {
+            if !had_text && !had_function_call && !had_function_response {
+                // A signature-only Part is still anchored to its own empty
+                // text Part.  Append both in this order so a late signature
+                // cannot be moved before the preceding Part.
+                output.push(CanonicalContent::Text {
+                    text: String::new(),
+                });
+            }
+            output.push(CanonicalContent::ProviderState {
+                state: OpaqueProviderState {
+                    provider: "google".to_owned(),
+                    kind: "thought_signature".to_owned(),
+                    raw: JsonData::String(signature),
+                    provenance: OpaqueStateProvenance::Authentic,
+                    model: Some(model.to_owned()),
+                },
+            });
+        }
+    }
+    Ok(output)
+}
+
+fn append_canonical_gemini_parts(
+    destination: &mut Vec<GeminiPart>,
+    parts: &[CanonicalContent],
+    model: &str,
+    family: GeminiModelFamily,
+    policy: GeminiSignaturePolicy,
+    loss: &mut LossReport,
+    call_names: &mut BTreeMap<String, String>,
+) -> Result<(), RelayConvertError> {
+    let (synthetic_history, reject_gemini3_missing_signature) = match policy {
+        GeminiSignaturePolicy::Request { synthetic_history } => (synthetic_history, true),
+        GeminiSignaturePolicy::Response => (false, false),
+    };
+    let mut saw_tool_call = false;
+    for (index, part) in parts.iter().enumerate() {
+        match part {
+            CanonicalContent::Text { text } => destination.push(GeminiPart {
+                text: Some(text.clone()),
+                inline_data: None,
+                function_call: None,
+                function_response: None,
+                thought_signature: None,
+            }),
+            CanonicalContent::ToolCall {
+                id,
+                name,
+                arguments,
+            } => {
+                let first_tool_call = !saw_tool_call;
+                saw_tool_call = true;
+                if call_names.contains_key(id) {
+                    return Err(RelayConvertError::Unsupported(format!(
+                        "Gemini functionCall id {id:?} is duplicated before its result"
+                    )));
+                }
+                call_names.insert(id.clone(), name.clone());
+                let args = parse_function_arguments(arguments)?;
+                destination.push(GeminiPart {
+                    text: None,
+                    inline_data: None,
+                    function_call: Some(GeminiFunctionCall {
+                        id: Some(id.clone()),
+                        name: name.clone(),
+                        args: Some(args),
+                    }),
+                    function_response: None,
+                    thought_signature: None,
+                });
+                let next_state = parts.get(index + 1).and_then(|next| match next {
+                    CanonicalContent::ProviderState { state }
+                        if state.provider == "google" && state.kind == "thought_signature" =>
+                    {
+                        Some(state)
+                    }
+                    _ => None,
+                });
+                if next_state.is_some() && !first_tool_call {
+                    return Err(RelayConvertError::Unsupported(
+                        "Gemini parallel functionCall signature must remain on the first call Part"
+                            .to_owned(),
+                    ));
+                }
+                if next_state.is_none() && first_tool_call {
+                    if family == GeminiModelFamily::Gemini3
+                        && reject_gemini3_missing_signature
+                    {
+                        return Err(RelayConvertError::Unsupported(format!(
+                            "Gemini 3 tool call {id:?} is missing thoughtSignature"
+                        )));
+                    }
+                    if family == GeminiModelFamily::Gemini25 && synthetic_history {
+                        let Some(last) = destination.last_mut() else {
+                            return Err(RelayConvertError::Unsupported(
+                                "Gemini tool call Part was not emitted".to_owned(),
+                            ));
+                        };
+                        last.thought_signature =
+                            Some(GEMINI_SYNTHETIC_THOUGHT_SIGNATURE.to_owned());
+                        record_synthetic(loss, "SYNTHETIC_THOUGHT_SIGNATURE");
+                    }
+                }
+            }
+            CanonicalContent::ToolResult { id, name, output } => {
+                let Some(expected_name) = call_names.get(id).cloned() else {
+                    return Err(RelayConvertError::Unsupported(format!(
+                        "Gemini functionResponse id {id:?} has no outstanding functionCall"
+                    )));
+                };
+                if let Some(name) = name.as_deref() {
+                    if name != expected_name {
+                        return Err(RelayConvertError::Unsupported(format!(
+                            "Gemini functionResponse id {id:?} names {name:?}, expected {expected_name:?}"
+                        )));
+                    }
+                }
+                destination.push(GeminiPart {
+                    text: None,
+                    inline_data: None,
+                    function_call: None,
+                    function_response: Some(GeminiFunctionResponse {
+                        id: Some(id.clone()),
+                        name: name.clone().unwrap_or(expected_name),
+                        response: output.clone(),
+                    }),
+                    thought_signature: None,
+                });
+                call_names.remove(id);
+            }
+            CanonicalContent::Reasoning { .. } => {
+                return Err(RelayConvertError::Unsupported(
+                    "ordinary reasoning cannot be encoded as a Gemini thoughtSignature".to_owned(),
+                ));
+            }
+            CanonicalContent::ClaudeThinking { .. } => {
+                return Err(RelayConvertError::Unsupported(
+                    "Claude authentic thinking cannot be encoded as Gemini content".to_owned(),
+                ));
+            }
+            CanonicalContent::RedactedThinking { .. } => {
+                return Err(RelayConvertError::Unsupported(
+                    "Claude redacted thinking cannot be encoded as Gemini content".to_owned(),
+                ));
+            }
+            CanonicalContent::Image { .. } => {
+                return Err(RelayConvertError::Unsupported(
+                    "canonical image URL cannot be encoded as Gemini inlineData".to_owned(),
+                ));
+            }
+            CanonicalContent::ProviderState { state } => {
+                if state.provenance == OpaqueStateProvenance::Synthetic {
+                    if !synthetic_history {
+                        return Err(RelayConvertError::Unsupported(
+                            "synthetic Gemini thoughtSignature requires synthetic history mode"
+                                .to_owned(),
+                        ));
+                    }
+                    if state.raw
+                        != JsonData::String(GEMINI_SYNTHETIC_THOUGHT_SIGNATURE.to_owned())
+                    {
+                        return Err(RelayConvertError::Unsupported(
+                            "unsupported synthetic Gemini thoughtSignature value".to_owned(),
+                        ));
+                    }
+                    record_synthetic(loss, "SYNTHETIC_THOUGHT_SIGNATURE");
+                }
+                let signature = gemini_signature_from_state(state)?;
+                let Some(last) = destination.last_mut() else {
+                    return Err(RelayConvertError::Unsupported(
+                        "Gemini provider state has no preceding Part".to_owned(),
+                    ));
+                };
+                if last.thought_signature.is_some() {
+                    return Err(RelayConvertError::Unsupported(
+                        "Gemini Part has duplicate thoughtSignature provider state".to_owned(),
+                    ));
+                }
+                last.thought_signature = Some(signature);
+            }
+        }
+    }
+    let _ = model;
+    Ok(())
+}
+
+fn gemini_signature_from_state(state: &OpaqueProviderState) -> Result<String, RelayConvertError> {
+    if state.provider != "google" || state.kind != "thought_signature" {
+        return Err(RelayConvertError::Unsupported(format!(
+            "provider state {}:{} cannot be encoded for Gemini",
+            state.provider, state.kind
+        )));
+    }
+    match &state.raw {
+        JsonData::String(value) => Ok(value.clone()),
+        _ => Err(RelayConvertError::Unsupported(
+            "Gemini thoughtSignature must be a string".to_owned(),
+        )),
+    }
+}
+
+fn parse_function_arguments(arguments: &str) -> Result<JsonData, RelayConvertError> {
+    if arguments.trim().is_empty() {
+        return Ok(JsonData::Object(BTreeMap::new()));
+    }
+    Ok(serde_json::from_str(arguments)?)
+}
+
+fn gemini_finish_reason(reason: &str) -> FinishReason {
+    match reason {
+        "STOP" | "FINISH_REASON_STOP" => FinishReason::Stop,
+        "MAX_TOKENS" => FinishReason::Length,
+        "SAFETY" | "BLOCKLIST" | "PROHIBITED_CONTENT" => FinishReason::ContentFilter,
+        "MALFORMED_FUNCTION_CALL" => FinishReason::Error,
+        _ => FinishReason::Other,
+    }
+}
+
+fn gemini_finish_reason_to_wire(reason: FinishReason) -> String {
+    match reason {
+        FinishReason::Length => "MAX_TOKENS",
+        FinishReason::ContentFilter => "SAFETY",
+        FinishReason::Error => "MALFORMED_FUNCTION_CALL",
+        FinishReason::Cancelled => "OTHER",
+        FinishReason::Stop | FinishReason::ToolCalls | FinishReason::Other => "STOP",
+    }
+    .to_owned()
+}
+
+fn token_usage_to_gemini(usage: &TokenUsage) -> GeminiUsage {
+    GeminiUsage {
+        prompt_token_count: usage.input_tokens,
+        candidates_token_count: usage.output_tokens,
+        thoughts_token_count: usage.reasoning_tokens,
+        total_token_count: usage.total_tokens,
+        cached_content_token_count: usage.cached_input_tokens,
+        ..GeminiUsage::default()
+    }
+}
+
 fn role_from_wire(role: &str) -> Result<Role, RelayConvertError> {
     match role {
         "system" => Ok(Role::System),
@@ -1376,8 +4466,8 @@ fn role_to_chat(role: Role) -> &'static str {
     match role {
         Role::System => "system",
         Role::Developer => "developer",
-        Role::User | Role::Model => "user",
-        Role::Assistant => "assistant",
+        Role::User => "user",
+        Role::Assistant | Role::Model => "assistant",
         Role::Tool => "tool",
     }
 }

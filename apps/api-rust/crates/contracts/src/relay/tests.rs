@@ -890,6 +890,7 @@ fn canonical_response_target_losses_are_never_silent() {
             },
             CanonicalContent::ToolResult {
                 id: "call_1".to_owned(),
+                name: None,
                 output: JsonData::String("done".to_owned()),
             },
         ],
@@ -905,4 +906,1061 @@ fn canonical_response_target_losses_are_never_silent() {
             ["output[].image", "output[].tool_result"]
         );
     }
+}
+
+#[test]
+fn gemini_single_function_call_id_is_retained_in_openai_chat() {
+    let gemini: GeminiRequest = serde_json::from_str(
+        r#"{"contents":[{"role":"model","parts":[{"functionCall":{"id":"call-42","name":"lookup","args":{"q":"rust"}}}]}]}"#,
+    )
+    .expect("Gemini request");
+    let converted = gemini_request_to_openai_chat(gemini).expect("Gemini to Chat");
+    let id = converted.value.messages[0].tool_calls[0].id.clone();
+    assert_eq!(id, "call-42");
+}
+
+#[test]
+fn gemini_parallel_same_name_calls_keep_distinct_ids() {
+    let gemini: GeminiRequest = serde_json::from_str(
+        r#"{"contents":[{"role":"model","parts":[{"functionCall":{"id":"a","name":"lookup","args":{}}},{"functionCall":{"id":"b","name":"lookup","args":{}}}]}]}"#,
+    )
+    .expect("Gemini request");
+    let converted = gemini_request_to_openai_chat(gemini).expect("Gemini to Chat");
+    let ids = converted.value.messages[0]
+        .tool_calls
+        .iter()
+        .map(|call| call.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(ids, ["a", "b"]);
+}
+
+#[test]
+fn gemini_model_function_calls_become_assistant_and_results_become_tool() {
+    let gemini: GeminiRequest = serde_json::from_str(
+        r#"{"contents":[{"role":"model","parts":[{"functionCall":{"id":"call","name":"lookup","args":{}}}]},{"role":"user","parts":[{"functionResponse":{"id":"call","name":"lookup","response":{"ok":true}}}]}]}"#,
+    )
+    .expect("Gemini request");
+    let converted = gemini_request_to_openai_chat(gemini).expect("Gemini to Chat");
+    assert_eq!(converted.value.messages[0].role, "assistant");
+    assert_eq!(converted.value.messages[0].tool_calls[0].id, "call");
+    assert_eq!(converted.value.messages[1].role, "tool");
+    assert_eq!(
+        converted.value.messages[1].tool_call_id.as_deref(),
+        Some("call")
+    );
+}
+
+#[test]
+fn gemini_missing_ids_use_global_stable_queue_and_mark_same_name_ambiguity() {
+    let gemini: GeminiRequest = serde_json::from_str(
+        r#"{"contents":[{"role":"model","parts":[{"functionCall":{"name":"lookup","args":{}}},{"functionCall":{"name":"lookup","args":{}}}]},{"role":"user","parts":[{"functionResponse":{"name":"lookup","response":{"n":1}}},{"functionResponse":{"name":"lookup","response":{"n":2}}}]}]}"#,
+    )
+    .expect("Gemini request");
+    let converted = gemini_request_to_canonical_for_model(gemini, "gemini-2.5-pro")
+        .expect("Gemini to canonical");
+    assert_eq!(
+        converted.value.messages[0].parts[0],
+        CanonicalContent::ToolCall {
+            id: "gemini_call_synthetic_0_lookup".to_owned(),
+            name: "lookup".to_owned(),
+            arguments: "{}".to_owned(),
+        }
+    );
+    assert_eq!(
+        converted.value.messages[0].parts[1],
+        CanonicalContent::ToolCall {
+            id: "gemini_call_synthetic_1_lookup".to_owned(),
+            name: "lookup".to_owned(),
+            arguments: "{}".to_owned(),
+        }
+    );
+    assert_eq!(
+        converted.value.messages[1].parts[0],
+        CanonicalContent::ToolResult {
+            id: "gemini_call_synthetic_0_lookup".to_owned(),
+            name: Some("lookup".to_owned()),
+            output: JsonData::Object(
+                [("n".to_owned(), JsonData::Number(serde_json::Number::from(1)))]
+                    .into_iter()
+                    .collect(),
+            ),
+        }
+    );
+    assert!(converted
+        .loss
+        .synthetic_fields
+        .contains(&"SYNTHETIC_TOOL_RESULT_ID_AMBIGUOUS"));
+}
+
+#[test]
+fn gemini_part_with_text_and_function_call_is_rejected_instead_of_reordered() {
+    let gemini: GeminiRequest = serde_json::from_str(
+        r#"{"contents":[{"role":"model","parts":[{"text":"prefix","functionCall":{"id":"call","name":"lookup","args":{}}}]}]}"#,
+    )
+    .expect("Gemini request");
+    assert!(gemini_request_to_canonical(gemini).is_err());
+}
+
+#[test]
+fn gemini_unordered_function_results_match_by_id() {
+    let gemini: GeminiRequest = serde_json::from_str(
+        r#"{"contents":[{"role":"model","parts":[{"functionCall":{"id":"a","name":"lookup","args":{}}},{"functionCall":{"id":"b","name":"lookup","args":{}}}]},{"role":"user","parts":[{"functionResponse":{"id":"b","name":"lookup","response":{"value":2}}},{"functionResponse":{"id":"a","name":"lookup","response":{"value":1}}}]}]}"#,
+    )
+    .expect("Gemini request");
+    let converted = gemini_request_to_openai_chat(gemini).expect("Gemini to Chat");
+    let results = converted
+        .value
+        .messages
+        .iter()
+        .filter_map(|message| message.tool_call_id.as_deref())
+        .collect::<Vec<_>>();
+    assert_eq!(results, ["b", "a"]);
+}
+
+#[test]
+fn gemini_explicit_result_orphan_and_name_mismatch_are_rejected() {
+    let orphan: GeminiRequest = serde_json::from_str(
+        r#"{"contents":[{"role":"user","parts":[{"functionResponse":{"id":"missing","name":"lookup","response":{}}}]}]}"#,
+    )
+    .expect("Gemini orphan result");
+    assert!(gemini_request_to_canonical(orphan).is_err());
+
+    let mismatch: GeminiRequest = serde_json::from_str(
+        r#"{"contents":[{"role":"model","parts":[{"functionCall":{"id":"call","name":"lookup","args":{}}}]},{"role":"user","parts":[{"functionResponse":{"id":"call","name":"other","response":{}}}]}]}"#,
+    )
+    .expect("Gemini mismatched result");
+    assert!(gemini_request_to_canonical(mismatch).is_err());
+}
+
+#[test]
+fn gemini_sequential_tool_steps_keep_each_signature() {
+    let gemini: GeminiRequest = serde_json::from_str(
+        r#"{"contents":[{"role":"model","parts":[{"functionCall":{"id":"step-1","name":"one","args":{}},"thoughtSignature":"sig-1"}]},{"role":"user","parts":[{"functionResponse":{"id":"step-1","name":"one","response":{}}}]},{"role":"model","parts":[{"functionCall":{"id":"step-2","name":"two","args":{}},"thoughtSignature":"sig-2"}]}]}"#,
+    )
+    .expect("Gemini request");
+    let converted = gemini_request_to_openai_chat(gemini).expect("Gemini to Chat");
+    let signatures = converted
+        .value
+        .messages
+        .iter()
+        .flat_map(|message| message.tool_calls.iter())
+        .filter_map(|call| call.extra_content.as_ref())
+        .filter_map(|extra| extra.google.as_ref())
+        .filter_map(|google| google.thought_signature.as_deref())
+        .collect::<Vec<_>>();
+    assert_eq!(signatures, ["sig-1", "sig-2"]);
+}
+
+#[test]
+fn authentic_gemini_signature_round_trips_without_rewriting() {
+    let source: GeminiRequest = serde_json::from_str(
+        r#"{"contents":[{"role":"model","parts":[{"functionCall":{"id":"call","name":"lookup","args":{}},"thoughtSignature":"opaque+/=token"}]}]}"#,
+    )
+    .expect("Gemini request");
+    let chat = gemini_request_to_openai_chat(source).expect("Gemini to Chat");
+    let roundtrip = canonical_request_to_gemini(
+        openai_chat_request_to_canonical(chat.value)
+            .expect("Chat to canonical")
+            .value,
+    )
+    .expect("canonical to Gemini");
+    assert_eq!(
+        roundtrip.value.contents[0].parts[0]
+            .thought_signature
+            .as_deref(),
+        Some("opaque+/=token")
+    );
+}
+
+#[test]
+fn openai_synthetic_history_gets_documented_gemini_dummy_on_2_5() {
+    let request: OpenAiChatRequest = serde_json::from_str(
+        r#"{"model":"openai-source","messages":[{"role":"assistant","tool_calls":[{"id":"call","type":"function","function":{"name":"lookup","arguments":"{}"}}]}]}"#,
+    )
+    .expect("Chat request");
+    let converted = openai_chat_request_to_gemini_for_model(request, "gemini-2.5-pro")
+        .expect("OpenAI to Gemini");
+    assert_eq!(
+        converted.value.contents[0].parts[0]
+            .thought_signature
+            .as_deref(),
+        Some("context_engineering_is_the_way_to_go")
+    );
+    assert!(
+        converted
+            .loss
+            .synthetic_fields
+            .contains(&"SYNTHETIC_THOUGHT_SIGNATURE")
+    );
+}
+
+#[test]
+fn raw_gemini_dummy_literal_is_authentic_until_explicitly_marked_synthetic() {
+    let gemini: GeminiRequest = serde_json::from_str(
+        r#"{"contents":[{"role":"model","parts":[{"text":"","thoughtSignature":"context_engineering_is_the_way_to_go"}]}]}"#,
+    )
+    .expect("Gemini request");
+    let canonical = gemini_request_to_canonical(gemini).expect("Gemini conversion");
+    assert!(matches!(
+        canonical.value.messages[0].parts[1],
+        CanonicalContent::ProviderState {
+            state: OpaqueProviderState {
+                provenance: OpaqueStateProvenance::Authentic,
+                ..
+            }
+        }
+    ));
+}
+
+#[test]
+fn parallel_gemini_history_only_gets_one_first_call_dummy() {
+    let request: OpenAiChatRequest = serde_json::from_str(
+        r#"{"model":"openai-source","messages":[{"role":"assistant","tool_calls":[{"id":"a","type":"function","function":{"name":"lookup","arguments":"{}"}},{"id":"b","type":"function","function":{"name":"lookup","arguments":"{}"}}]}]}"#,
+    )
+    .expect("Chat request");
+    let converted = openai_chat_request_to_gemini_for_model(request, "gemini-2.5-pro")
+        .expect("OpenAI to Gemini");
+    assert_eq!(
+        converted.value.contents[0].parts[0]
+            .thought_signature
+            .as_deref(),
+        Some("context_engineering_is_the_way_to_go")
+    );
+    assert_eq!(converted.value.contents[0].parts[1].thought_signature, None);
+    assert_eq!(
+        converted
+            .loss
+            .synthetic_fields
+            .iter()
+            .filter(|field| **field == "SYNTHETIC_THOUGHT_SIGNATURE")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn canonical_gemini_rejects_duplicate_and_parallel_second_signatures() {
+    let duplicate_state = CanonicalRequest {
+        model: "gemini-2.5-pro".to_owned(),
+        instructions: Vec::new(),
+        messages: vec![CanonicalMessage {
+            role: Role::Assistant,
+            parts: vec![
+                CanonicalContent::ToolCall {
+                    id: "call".to_owned(),
+                    name: "lookup".to_owned(),
+                    arguments: "{}".to_owned(),
+                },
+                CanonicalContent::ProviderState {
+                    state: OpaqueProviderState::authentic_gemini_thought_signature(
+                        "first".to_owned(),
+                        Some("gemini-2.5-pro".to_owned()),
+                    ),
+                },
+                CanonicalContent::ProviderState {
+                    state: OpaqueProviderState::authentic_gemini_thought_signature(
+                        "second".to_owned(),
+                        Some("gemini-2.5-pro".to_owned()),
+                    ),
+                },
+            ],
+        }],
+        max_output_tokens: None,
+        temperature: None,
+        stream: false,
+        tools: Vec::new(),
+        tool_choice: None,
+        options: RequestOptions::default(),
+    };
+    assert!(canonical_request_to_gemini_for_model(
+        duplicate_state,
+        "gemini-2.5-pro",
+        false
+    )
+    .is_err());
+
+    let parallel_second_signature = CanonicalRequest {
+        model: "gemini-2.5-pro".to_owned(),
+        instructions: Vec::new(),
+        messages: vec![CanonicalMessage {
+            role: Role::Assistant,
+            parts: vec![
+                CanonicalContent::ToolCall {
+                    id: "first".to_owned(),
+                    name: "lookup".to_owned(),
+                    arguments: "{}".to_owned(),
+                },
+                CanonicalContent::ProviderState {
+                    state: OpaqueProviderState::authentic_gemini_thought_signature(
+                        "first-signature".to_owned(),
+                        Some("gemini-2.5-pro".to_owned()),
+                    ),
+                },
+                CanonicalContent::ToolCall {
+                    id: "second".to_owned(),
+                    name: "lookup".to_owned(),
+                    arguments: "{}".to_owned(),
+                },
+                CanonicalContent::ProviderState {
+                    state: OpaqueProviderState::authentic_gemini_thought_signature(
+                        "second-signature".to_owned(),
+                        Some("gemini-2.5-pro".to_owned()),
+                    ),
+                },
+            ],
+        }],
+        max_output_tokens: None,
+        temperature: None,
+        stream: false,
+        tools: Vec::new(),
+        tool_choice: None,
+        options: RequestOptions::default(),
+    };
+    assert!(canonical_request_to_gemini_for_model(
+        parallel_second_signature,
+        "gemini-2.5-pro",
+        false
+    )
+    .is_err());
+}
+
+#[test]
+fn authentic_signature_is_not_overwritten_by_2_5_dummy() {
+    let request: OpenAiChatRequest = serde_json::from_str(
+        r#"{"model":"openai-source","messages":[{"role":"assistant","tool_calls":[{"id":"call","type":"function","function":{"name":"lookup","arguments":"{}"},"extra_content":{"google":{"thought_signature":"authentic"}}}]}]}"#,
+    )
+    .expect("Chat request");
+    let converted = openai_chat_request_to_gemini_for_model(request, "gemini-2.5-pro")
+        .expect("OpenAI to Gemini");
+    assert_eq!(
+        converted.value.contents[0].parts[0]
+            .thought_signature
+            .as_deref(),
+        Some("authentic")
+    );
+}
+
+#[test]
+fn empty_text_part_keeps_its_gemini_signature() {
+    let gemini: GeminiRequest = serde_json::from_str(
+        r#"{"contents":[{"role":"model","parts":[{"text":"","thoughtSignature":"empty-part"}]}]}"#,
+    )
+    .expect("Gemini request");
+    let chat = gemini_request_to_openai_chat(gemini).expect("Gemini to Chat");
+    assert_eq!(
+        chat.value.messages[0]
+            .extra_content
+            .as_ref()
+            .and_then(|extra| extra.google.as_ref())
+            .and_then(|google| google.thought_signature.as_deref()),
+        Some("empty-part")
+    );
+}
+
+#[test]
+fn response_signature_received_before_finish_reason_is_preserved() {
+    let gemini: GeminiResponse = serde_json::from_str(
+        r#"{"candidates":[{"finishReason":"STOP","content":{"role":"model","parts":[{"text":"","thoughtSignature":"late"}]}}]}"#,
+    )
+    .expect("Gemini response");
+    let chat = gemini_response_to_openai_chat(gemini).expect("Gemini response to Chat");
+    assert_eq!(
+        chat.value.choices[0]
+            .message
+            .extra_content
+            .as_ref()
+            .and_then(|extra| extra.google.as_ref())
+            .and_then(|google| google.thought_signature.as_deref()),
+        Some("late")
+    );
+}
+
+#[test]
+fn gemini_stream_signature_is_retained_before_later_finish_reason() {
+    let snapshot: GeminiStreamSnapshot = serde_json::from_str(
+        r#"{
+          "events":[
+            {"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"id":"call","name":"lookup","args":{}},"thoughtSignature":"late"}]}}]},
+            {"candidates":[{"finishReason":"STOP","content":{"role":"model","parts":[]}}]}
+          ],
+          "usage":{}
+        }"#,
+    )
+    .expect("Gemini stream");
+    let converted = gemini_stream_to_canonical(&snapshot, "gemini-3-pro")
+        .expect("Gemini stream conversion");
+    assert_eq!(converted.value.finish_reason, Some(FinishReason::Stop));
+    assert!(matches!(
+        converted.value.output.as_slice(),
+        [
+            CanonicalContent::ToolCall { id, .. },
+            CanonicalContent::ProviderState {
+                state: OpaqueProviderState {
+                    raw: JsonData::String(signature),
+                    provenance: OpaqueStateProvenance::Authentic,
+                    ..
+                }
+            }
+        ] if id == "call" && signature == "late"
+    ));
+}
+
+#[test]
+fn gemini_2_5_legacy_call_without_signature_is_accepted() {
+    let request = CanonicalRequest {
+        model: "gemini-2.5-pro".to_owned(),
+        instructions: Vec::new(),
+        messages: vec![CanonicalMessage {
+            role: Role::Assistant,
+            parts: vec![CanonicalContent::ToolCall {
+                id: "call".to_owned(),
+                name: "lookup".to_owned(),
+                arguments: "{}".to_owned(),
+            }],
+        }],
+        max_output_tokens: None,
+        temperature: None,
+        stream: false,
+        tools: Vec::new(),
+        tool_choice: None,
+        options: RequestOptions::default(),
+    };
+    assert!(canonical_request_to_gemini_for_model(request, "gemini-2.5-pro", false).is_ok());
+}
+
+#[test]
+fn gemini_3_missing_signature_is_rejected_before_upstream() {
+    let request: OpenAiChatRequest = serde_json::from_str(
+        r#"{"model":"openai-source","messages":[{"role":"assistant","tool_calls":[{"id":"call","type":"function","function":{"name":"lookup","arguments":"{}"}}]}]}"#,
+    )
+    .expect("Chat request");
+    let error = openai_chat_request_to_gemini_for_model(request, "gemini-3-pro")
+        .expect_err("Gemini 3 must reject missing signature");
+    assert!(error.to_string().contains("missing thoughtSignature"));
+}
+
+#[test]
+fn openai_gemini_openai_round_trip_keeps_call_id() {
+    let request: OpenAiChatRequest = serde_json::from_str(
+        r#"{"model":"openai-source","messages":[{"role":"assistant","tool_calls":[{"id":"stable-id","type":"function","function":{"name":"lookup","arguments":"{}"}}]}]}"#,
+    )
+    .expect("Chat request");
+    let gemini = openai_chat_request_to_gemini_for_model(request, "gemini-2.5-pro")
+        .expect("OpenAI to Gemini");
+    let chat = gemini_request_to_openai_chat(gemini.value).expect("Gemini to Chat");
+    assert_eq!(chat.value.messages[0].tool_calls[0].id, "stable-id");
+}
+
+#[test]
+fn openai_google_extension_round_trips_authentic_and_synthetic_provenance() {
+    let request: OpenAiChatRequest = serde_json::from_str(
+        r#"{"model":"source","messages":[{"role":"assistant","tool_calls":[{"id":"call","type":"function","function":{"name":"lookup","arguments":"{}"},"extra_content":{"google":{"thought_signature":"synthetic-token","synthetic":true}}}]}]}"#,
+    )
+    .expect("Chat request");
+    let canonical = openai_chat_request_to_canonical(request)
+        .expect("Chat to canonical")
+        .value;
+    assert!(matches!(
+        canonical.messages[0].parts.get(1),
+        Some(CanonicalContent::ProviderState {
+            state: OpaqueProviderState {
+                provenance: OpaqueStateProvenance::Synthetic,
+                ..
+            }
+        })
+    ));
+    let chat = canonical_request_to_openai_chat(canonical)
+        .expect("canonical to Chat")
+        .value;
+    let google = chat.messages[0].tool_calls[0]
+        .extra_content
+        .as_ref()
+        .and_then(|extra| extra.google.as_ref())
+        .expect("Google extension");
+    assert_eq!(google.thought_signature.as_deref(), Some("synthetic-token"));
+    assert_eq!(google.synthetic, Some(true));
+}
+
+#[test]
+fn claude_thinking_and_redacted_blocks_typed_raw_round_trip_including_empty_thinking() {
+    let response: ClaudeResponse = serde_json::from_str(
+        r#"{
+          "id":"msg_cla",
+          "type":"message",
+          "role":"assistant",
+          "model":"claude-sonnet",
+          "content":[
+            {"type":"thinking","thinking":"","signature":"sig-empty"},
+            {"type":"redacted_thinking","data":"opaque-redacted"}
+          ],
+          "stop_reason":"end_turn"
+        }"#,
+    )
+    .expect("Claude response");
+    assert_eq!(response.content[0].thinking.as_deref(), Some(""));
+    let raw = serde_json::to_string(&response).expect("Claude response JSON");
+    let reparsed: ClaudeResponse = serde_json::from_str(&raw).expect("Claude response JSON");
+    assert_eq!(reparsed, response);
+
+    let canonical = claude_response_to_canonical(response)
+        .expect("Claude response conversion")
+        .value;
+    assert!(matches!(
+        canonical.output.as_slice(),
+        [
+            CanonicalContent::ClaudeThinking {
+                thinking,
+                signature: Some(signature),
+                provenance: OpaqueStateProvenance::Authentic,
+                ..
+            },
+            CanonicalContent::RedactedThinking {
+                data: JsonData::String(data),
+                provenance: OpaqueStateProvenance::Authentic,
+                ..
+            }
+        ] if thinking.is_empty() && signature == "sig-empty" && data == "opaque-redacted"
+    ));
+}
+
+#[test]
+fn claude_known_block_with_multiple_payloads_is_rejected() {
+    let response: ClaudeResponse = serde_json::from_str(
+        r#"{
+          "id":"msg-invalid",
+          "type":"message",
+          "role":"assistant",
+          "model":"claude-sonnet",
+          "content":[{"type":"thinking","thinking":"plan","signature":"sig","data":"wrong"}],
+          "stop_reason":"end_turn"
+        }"#,
+    )
+    .expect("Claude response");
+    assert!(claude_response_to_canonical(response).is_err());
+
+    let chat: OpenAiChatResponse = serde_json::from_str(
+        r#"{
+          "id":"chat-invalid",
+          "model":"claude-sonnet",
+          "object":"chat.completion",
+          "created":0,
+          "choices":[{"index":0,"message":{"role":"assistant","content":null,"extra_content":{"anthropic":{"blocks":[{"type":"thinking","thinking":"plan","signature":"sig","id":"wrong"}]}}},"finish_reason":"stop"}]
+        }"#,
+    )
+    .expect("OpenAI extension response");
+    assert!(openai_chat_response_to_canonical(chat).is_err());
+}
+
+#[test]
+fn claude_openai_extension_preserves_all_ordered_blocks_without_duplicates() {
+    let response: ClaudeResponse = serde_json::from_str(
+        r#"{
+          "id":"msg_order",
+          "type":"message",
+          "role":"assistant",
+          "model":"claude-sonnet",
+          "content":[
+            {"type":"text","text":"before"},
+            {"type":"thinking","thinking":"plan","signature":"sig"},
+            {"type":"text","text":"after"},
+            {"type":"tool_use","id":"same-name-a","name":"lookup","input":{"n":1}},
+            {"type":"tool_use","id":"same-name-b","name":"lookup","input":{"n":2}},
+            {"type":"redacted_thinking","data":{"cipher":"opaque"}}
+          ],
+          "stop_reason":"tool_use"
+        }"#,
+    )
+    .expect("Claude response");
+    let chat = claude_response_to_openai_chat(response).expect("Claude to Chat");
+    let blocks = chat.value.choices[0]
+        .message
+        .extra_content
+        .as_ref()
+        .and_then(|extra| extra.anthropic.as_ref())
+        .expect("Anthropic extension")
+        .blocks
+        .clone();
+    let kinds = blocks
+        .iter()
+        .map(|block| block.kind.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        kinds,
+        vec![
+            "text",
+            "thinking",
+            "text",
+            "tool_use",
+            "tool_use",
+            "redacted_thinking"
+        ]
+    );
+    assert_eq!(
+        blocks
+            .iter()
+            .filter(|block| block.kind == "thinking" || block.kind == "redacted_thinking")
+            .count(),
+        2
+    );
+    assert_eq!(blocks[3].id.as_deref(), Some("same-name-a"));
+    assert_eq!(blocks[4].id.as_deref(), Some("same-name-b"));
+
+    let round_trip = openai_chat_response_to_claude(chat.value)
+        .expect("Chat to Claude")
+        .value;
+    let round_trip_kinds = round_trip
+        .content
+        .iter()
+        .map(|block| block.kind.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(round_trip_kinds, kinds);
+    assert_eq!(round_trip.content[3].id.as_deref(), Some("same-name-a"));
+    assert_eq!(round_trip.content[4].id.as_deref(), Some("same-name-b"));
+}
+
+#[test]
+fn claude_request_tool_round_uses_ordered_extension_and_preserves_tool_result() {
+    let request: ClaudeRequest = serde_json::from_str(
+        r#"{
+          "model":"claude-sonnet",
+          "max_tokens":256,
+          "messages":[
+            {"role":"assistant","content":[
+              {"type":"thinking","thinking":"plan","signature":"sig"},
+              {"type":"tool_use","id":"call-a","name":"lookup","input":{}}
+            ]},
+            {"role":"user","content":[
+              {"type":"tool_result","tool_use_id":"call-a","content":"ok"}
+            ]}
+          ]
+        }"#,
+    )
+    .expect("Claude request");
+    let chat = claude_request_to_openai_chat(request).expect("Claude to Chat");
+    let assistant = chat
+        .value
+        .messages
+        .iter()
+        .find(|message| message.role == "assistant")
+        .expect("assistant message");
+    let blocks = assistant
+        .extra_content
+        .as_ref()
+        .and_then(|extra| extra.anthropic.as_ref())
+        .expect("Anthropic extension")
+        .blocks
+        .clone();
+    assert_eq!(blocks.len(), 2);
+    assert_eq!(blocks[0].kind, "thinking");
+    assert_eq!(blocks[1].kind, "tool_use");
+    assert_eq!(blocks[1].id.as_deref(), Some("call-a"));
+
+    let tool = chat
+        .value
+        .messages
+        .iter()
+        .find(|message| message.role == "tool")
+        .expect("tool message");
+    assert_eq!(tool.tool_call_id.as_deref(), Some("call-a"));
+    assert_eq!(
+        tool.extra_content
+            .as_ref()
+            .and_then(|extra| extra.anthropic.as_ref())
+            .map(|extra| extra.blocks[0].kind.as_str()),
+        Some("tool_result")
+    );
+}
+
+#[test]
+fn claude_request_multiple_tool_results_keep_native_order_without_extension_duplicates() {
+    let request: ClaudeRequest = serde_json::from_str(
+        r#"{
+          "model":"claude-sonnet",
+          "max_tokens":256,
+          "messages":[{"role":"user","content":[
+            {"type":"tool_result","tool_use_id":"call-a","content":"first"},
+            {"type":"tool_result","tool_use_id":"call-b","content":"second"}
+          ]}]
+        }"#,
+    )
+    .expect("Claude request");
+    let chat = claude_request_to_openai_chat(request).expect("Claude to Chat");
+    let tool_messages = chat
+        .value
+        .messages
+        .iter()
+        .filter(|message| message.role == "tool")
+        .collect::<Vec<_>>();
+    assert_eq!(tool_messages.len(), 2);
+    assert_eq!(
+        tool_messages
+            .iter()
+            .filter_map(|message| message.tool_call_id.as_deref())
+            .collect::<Vec<_>>(),
+        vec!["call-a", "call-b"]
+    );
+    let ordered_extension = tool_messages[0]
+        .extra_content
+        .as_ref()
+        .and_then(|extra| extra.anthropic.as_ref())
+        .expect("ordered Anthropic extension");
+    assert_eq!(
+        ordered_extension
+            .blocks
+            .iter()
+            .filter_map(|block| block.tool_use_id.as_deref())
+            .collect::<Vec<_>>(),
+        vec!["call-a", "call-b"]
+    );
+    assert!(tool_messages[1].extra_content.is_none());
+
+    let round_trip = openai_chat_request_to_claude(chat.value)
+        .expect("Chat to Claude")
+        .value;
+    let ids = round_trip
+        .messages
+        .into_iter()
+        .flat_map(|message| match message.content {
+            StringOrParts::Parts(parts) => parts,
+            StringOrParts::String(_) => Vec::new(),
+        })
+        .filter_map(|block| block.tool_use_id)
+        .collect::<Vec<_>>();
+    assert_eq!(ids, vec!["call-a".to_owned(), "call-b".to_owned()]);
+}
+
+#[test]
+fn claude_mixed_thinking_and_tool_result_stays_in_one_ordered_extension() {
+    let request: ClaudeRequest = serde_json::from_str(
+        r#"{
+          "model":"claude-sonnet",
+          "max_tokens":256,
+          "messages":[{"role":"user","content":[
+            {"type":"thinking","thinking":"context","signature":"sig"},
+            {"type":"tool_result","tool_use_id":"call-a","content":"done"}
+          ]}]
+        }"#,
+    )
+    .expect("Claude request");
+    let chat = claude_request_to_openai_chat(request).expect("Claude to Chat");
+    let tool = chat
+        .value
+        .messages
+        .iter()
+        .find(|message| message.role == "tool")
+        .expect("tool message");
+    let blocks = tool
+        .extra_content
+        .as_ref()
+        .and_then(|extra| extra.anthropic.as_ref())
+        .expect("ordered Anthropic extension")
+        .blocks
+        .iter()
+        .map(|block| block.kind.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(blocks, vec!["thinking", "tool_result"]);
+    let round_trip = openai_chat_request_to_claude(chat.value)
+        .expect("Chat to Claude")
+        .value;
+    let kinds = round_trip
+        .messages
+        .into_iter()
+        .flat_map(|message| match message.content {
+            StringOrParts::Parts(parts) => parts,
+            StringOrParts::String(_) => Vec::new(),
+        })
+        .map(|block| block.kind)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        kinds,
+        vec!["thinking".to_owned(), "tool_result".to_owned()]
+    );
+}
+
+#[test]
+fn ordinary_openai_reasoning_is_not_encoded_as_claude_thinking() {
+    let response: OpenAiChatResponse = serde_json::from_str(
+        r#"{
+          "id":"chat-reasoning",
+          "model":"openai-model",
+          "object":"chat.completion",
+          "created":1,
+          "choices":[{"index":0,"message":{"role":"assistant","content":"answer","reasoning_content":"summary"},"finish_reason":"stop"}]
+        }"#,
+    )
+    .expect("OpenAI response");
+    let canonical = openai_chat_response_to_canonical(response)
+        .expect("Chat conversion")
+        .value;
+    assert!(canonical
+        .output
+        .iter()
+        .any(|part| matches!(part, CanonicalContent::Reasoning { text } if text == "summary")));
+    assert!(!canonical
+        .output
+        .iter()
+        .any(|part| matches!(part, CanonicalContent::ClaudeThinking { .. })));
+    let claude = canonical_response_to_claude(canonical).expect("canonical to Claude");
+    assert!(claude.loss.dropped_fields.contains(&"ordinary_reasoning->claude_text"));
+    assert!(claude
+        .value
+        .content
+        .iter()
+        .all(|block| block.kind != "thinking"));
+}
+
+#[test]
+fn synthetic_claude_redacted_thinking_is_rejected_upstream() {
+    let response = CanonicalResponse {
+        id: "synthetic".to_owned(),
+        model: "claude-sonnet".to_owned(),
+        created_at: 0,
+        output: vec![CanonicalContent::RedactedThinking {
+            data: JsonData::String("opaque".to_owned()),
+            model: Some("claude-sonnet".to_owned()),
+            provenance: OpaqueStateProvenance::Synthetic,
+        }],
+        finish_reason: Some(FinishReason::Stop),
+        usage: None,
+    };
+    assert!(canonical_response_to_claude(response).is_err());
+}
+
+#[test]
+fn claude_stream_events_keep_signature_partial_json_ping_error_unknown_and_cancel() {
+    let snapshot: ClaudeStreamSnapshot = serde_json::from_str(
+        r#"{
+          "events":[
+            {"type":"message_start","message":{"id":"msg-stream","type":"message","role":"assistant","model":"claude-sonnet","content":[]}},
+            {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":"sig"}},
+            {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"plan"}},
+            {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig"}},
+            {"type":"content_block_stop","index":0},
+            {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"call","name":"lookup","input":{}}},
+            {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"a\":"}},
+            {"type":"content_block_stop","index":1},
+            {"type":"ping"},
+            {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"input_tokens":1,"output_tokens":2}},
+            {"type":"error","error":{"code":"rate","message":"retry"}},
+            {"type":"future_event","index":7,"delta":{"type":"text_delta","text":"future"},"provider_field":"kept"},
+            {"type":"fallback","reason":"provider-fallback"},
+            {"type":"message_stop"}
+          ],
+          "usage":{}
+        }"#,
+    )
+    .expect("Claude stream");
+    let events = claude_stream_to_semantic_events(&snapshot).expect("Claude semantic stream");
+    assert!(events.iter().any(|event| matches!(
+        event,
+        ClaudeStreamSemanticEvent::SignatureDelta { signature, .. } if signature == "sig"
+    )));
+    assert!(!events.iter().any(|event| matches!(
+        event,
+        ClaudeStreamSemanticEvent::TextDelta { delta, .. } if delta == "\n"
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        ClaudeStreamSemanticEvent::ToolInputJsonDelta { delta, .. } if delta == "{\"a\":"
+    )));
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, ClaudeStreamSemanticEvent::Ping)));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        ClaudeStreamSemanticEvent::Error { message, .. } if message == "retry"
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        ClaudeStreamSemanticEvent::Unknown { kind, .. } if kind == "future_event"
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        ClaudeStreamSemanticEvent::Unknown {
+            kind,
+            fields: JsonData::Object(fields)
+        } if kind == "future_event"
+            && fields.contains_key("index")
+            && fields.contains_key("delta")
+            && fields.contains_key("provider_field")
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        ClaudeStreamSemanticEvent::Unknown { kind, .. } if kind == "fallback"
+    )));
+
+    let mut state = ClaudeStreamState::default();
+    for event in &events {
+        state.apply(event).expect("valid Claude event sequence");
+    }
+    assert!(state.apply(&ClaudeStreamSemanticEvent::MessageStop).is_err());
+
+    let mut interrupted = ClaudeStreamState::default();
+    interrupted.apply(&events[0]).expect("stream start");
+    interrupted.apply(&events[1]).expect("open thinking block");
+    interrupted
+        .apply(&claude_stream_cancelled())
+        .expect("client cancellation");
+    assert!(interrupted.is_cancelled());
+    assert!(interrupted.has_open_blocks());
+}
+
+#[test]
+fn claude_stream_state_requires_typed_deltas_and_monotonic_non_concurrent_blocks() {
+    let snapshot: ClaudeStreamSnapshot = serde_json::from_str(
+        r#"{
+          "events":[
+            {"type":"message_start","message":{"id":"msg","type":"message","role":"assistant","model":"claude-sonnet","content":[]}},
+            {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"one","signature":"sig-one"}},
+            {"type":"content_block_stop","index":0},
+            {"type":"content_block_start","index":1,"content_block":{"type":"thinking","thinking":"two","signature":"sig-two"}},
+            {"type":"content_block_stop","index":1},
+            {"type":"message_stop"}
+          ],
+          "usage":{}
+        }"#,
+    )
+    .expect("two thinking blocks");
+    let events = claude_stream_to_semantic_events(&snapshot).expect("semantic events");
+    let mut state = ClaudeStreamState::default();
+    for event in &events {
+        state.apply(event).expect("sequential thinking blocks");
+    }
+
+    let wrong_delta: ClaudeStreamSnapshot = serde_json::from_str(
+        r#"{
+          "events":[
+            {"type":"message_start","message":{"id":"msg","type":"message","role":"assistant","model":"claude-sonnet","content":[]}},
+            {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"one","signature":"sig"}},
+            {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}
+          ],
+          "usage":{}
+        }"#,
+    )
+    .expect("wrong delta");
+    let wrong_events = claude_stream_to_semantic_events(&wrong_delta).expect("semantic events");
+    let mut wrong_state = ClaudeStreamState::default();
+    wrong_state.apply(&wrong_events[0]).expect("stream start");
+    wrong_state
+        .apply(&wrong_events[1])
+        .expect("open thinking block");
+    assert!(wrong_state.apply(&wrong_events[2]).is_err());
+
+    let mut text_signature_state = ClaudeStreamState::default();
+    text_signature_state
+        .apply(&ClaudeStreamSemanticEvent::MessageStart { message: None })
+        .expect("stream start");
+    text_signature_state
+        .apply(&ClaudeStreamSemanticEvent::ContentBlockStart {
+            index: 0,
+            block: ClaudeContentBlock {
+                kind: "text".to_owned(),
+                text: Some("text".to_owned()),
+                thinking: None,
+                signature: None,
+                data: None,
+                id: None,
+                name: None,
+                input: None,
+                tool_use_id: None,
+                content: None,
+                source: None,
+                extra: std::collections::BTreeMap::new(),
+            },
+        })
+        .expect("open text block");
+    assert!(text_signature_state
+        .apply(&ClaudeStreamSemanticEvent::SignatureDelta {
+            index: 0,
+            signature: "wrong-block".to_owned(),
+        })
+        .is_err());
+
+    let concurrent = ClaudeStreamSemanticEvent::ContentBlockStart {
+        index: 1,
+        block: ClaudeContentBlock {
+            kind: "text".to_owned(),
+            text: Some("second".to_owned()),
+            thinking: None,
+            signature: None,
+            data: None,
+            id: None,
+            name: None,
+            input: None,
+            tool_use_id: None,
+            content: None,
+            source: None,
+            extra: std::collections::BTreeMap::new(),
+        },
+    };
+    let mut concurrent_state = ClaudeStreamState::default();
+    concurrent_state
+        .apply(&ClaudeStreamSemanticEvent::MessageStart { message: None })
+        .expect("stream start");
+    concurrent_state
+        .apply(&ClaudeStreamSemanticEvent::ContentBlockStart {
+            index: 0,
+            block: ClaudeContentBlock {
+                kind: "text".to_owned(),
+                text: Some("first".to_owned()),
+                thinking: None,
+                signature: None,
+                data: None,
+                id: None,
+                name: None,
+                input: None,
+                tool_use_id: None,
+                content: None,
+                source: None,
+                extra: std::collections::BTreeMap::new(),
+            },
+        })
+        .expect("first block");
+    assert!(concurrent_state.apply(&concurrent).is_err());
+}
+
+#[test]
+fn claude_stream_state_rejects_duplicate_stop_and_events_after_end() {
+    let mut state = ClaudeStreamState::default();
+    state
+        .apply(&ClaudeStreamSemanticEvent::MessageStart { message: None })
+        .expect("start");
+    state
+        .apply(&ClaudeStreamSemanticEvent::ContentBlockStart {
+            index: 0,
+            block: ClaudeContentBlock {
+                kind: "text".to_owned(),
+                text: None,
+                thinking: None,
+                signature: None,
+                data: None,
+                id: None,
+                name: None,
+                input: None,
+                tool_use_id: None,
+                content: None,
+                source: None,
+                extra: std::collections::BTreeMap::new(),
+            },
+        })
+        .expect("block start");
+    state
+        .apply(&ClaudeStreamSemanticEvent::ContentBlockStop { index: 0 })
+        .expect("block stop");
+    state
+        .apply(&ClaudeStreamSemanticEvent::MessageStop)
+        .expect("message stop");
+    assert!(state.apply(&ClaudeStreamSemanticEvent::MessageStop).is_err());
+    assert!(state
+        .apply(&ClaudeStreamSemanticEvent::MessageDelta {
+            stop_reason: Some("stop".to_owned()),
+            usage: None,
+        })
+        .is_err());
+    assert!(state
+        .apply(&ClaudeStreamSemanticEvent::TextDelta {
+            index: 0,
+            delta: "late".to_owned(),
+        })
+        .is_err());
 }

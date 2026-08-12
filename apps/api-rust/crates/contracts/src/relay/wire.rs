@@ -4,6 +4,8 @@
 //! `relaykit/dto/openai_request.go`, `openai_response.go`, `claude.go`,
 //! `gemini.go`, plus the response stream DTOs used by `relayconvert`.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use super::JsonData;
@@ -81,6 +83,11 @@ pub struct OpenAiChatMessage {
     pub tool_call_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_calls: Vec<OpenAiToolCall>,
+    /// Provider extensions carried through an OpenAI-compatible envelope.
+    /// Google thought signatures live at message level when the source Part
+    /// was not a function call (including an empty text Part).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_content: Option<OpenAiExtraContent>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -102,6 +109,80 @@ pub struct OpenAiToolCall {
     #[serde(rename = "type", default = "function_kind")]
     pub kind: String,
     pub function: OpenAiFunction,
+    /// Provider extensions attached to this exact tool call Part.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_content: Option<OpenAiExtraContent>,
+}
+
+/// OpenAI-compatible provider extension envelope.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OpenAiExtraContent {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub google: Option<OpenAiGoogleExtraContent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anthropic: Option<OpenAiAnthropicExtraContent>,
+}
+
+/// Google extension fields used to preserve opaque Gemini state.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OpenAiGoogleExtraContent {
+    #[serde(
+        rename = "thought_signature",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub thought_signature: Option<String>,
+    /// Explicitly records that the value was generated for synthetic history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synthetic: Option<bool>,
+}
+
+/// Ordered Claude blocks carried through an OpenAI-compatible message.  Chat
+/// has no native representation for signed or redacted thinking, nor for
+/// interleaving those blocks with text and tool use, so Claude conversions
+/// use this explicit extension instead of silently flattening them.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OpenAiAnthropicExtraContent {
+    pub blocks: Vec<OpenAiAnthropicBlock>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+/// One ordered Claude content block in the OpenAI-compatible extension.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct OpenAiAnthropicBlock {
+    #[serde(rename = "type")]
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub synthetic: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<JsonData>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<JsonData>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_use_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<JsonData>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_url: Option<JsonData>,
+    /// Unknown fields are retained so a Claude extension can make a typed
+    /// round-trip even when a newer block carries provider metadata.
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 fn function_kind() -> String {
@@ -131,7 +212,6 @@ pub struct OpenAiChatTool {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct OpenAiResponsesRequest {
     pub model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -194,6 +274,12 @@ pub struct OpenAiResponsesRequest {
     pub max_tool_calls: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_metadata: Option<JsonData>,
+    /// Provider additions are retained by the typed boundary.  Cross-
+    /// protocol converters must inspect this map and reject fields they
+    /// cannot express; native OpenAI Responses relays forward the raw body.
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -201,10 +287,13 @@ pub struct OpenAiResponsesRequest {
 pub enum ResponsesInput {
     String(String),
     Items(Vec<ResponsesInputItem>),
+    /// A syntactically valid but unsupported input shape is retained so a
+    /// converter can return a path-aware feature error instead of exposing a
+    /// generic serde type error.
+    Json(JsonData),
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ReasoningConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
@@ -214,10 +303,12 @@ pub struct ReasoningConfig {
     pub mode: Option<JsonData>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<JsonData>,
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ResponsesInputItem {
     #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
@@ -233,10 +324,12 @@ pub struct ResponsesInputItem {
     pub arguments: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<JsonData>,
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ResponsesContentPart {
     #[serde(rename = "type")]
     pub kind: String,
@@ -244,10 +337,12 @@ pub struct ResponsesContentPart {
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_url: Option<String>,
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ResponsesTool {
     #[serde(rename = "type", default = "function_kind")]
     pub kind: String,
@@ -258,6 +353,9 @@ pub struct ResponsesTool {
     pub parameters: Option<JsonData>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strict: Option<bool>,
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -290,6 +388,16 @@ pub struct ClaudeContentBlock {
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    /// Present on Claude `thinking` blocks, including an empty thinking
+    /// string.  It is distinct from `text` so an empty signed block survives
+    /// typed and raw round-trips.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+    /// Opaque payload of a Claude `redacted_thinking` block.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<JsonData>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -302,6 +410,11 @@ pub struct ClaudeContentBlock {
     pub content: Option<JsonData>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<ClaudeMediaSource>,
+    /// Forward-compatible provider fields are kept verbatim rather than
+    /// discarded by serde when Claude adds a new block extension.
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -407,6 +520,11 @@ pub struct GeminiInlineData {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GeminiFunctionCall {
+    /// Gemini's opaque function-call identifier.  Official Gemini IDs are
+    /// strings and must be copied byte-for-byte across a tool loop.  The typed
+    /// boundary rejects non-string IDs rather than silently reformatting them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub args: Option<JsonData>,
@@ -414,6 +532,10 @@ pub struct GeminiFunctionCall {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GeminiFunctionResponse {
+    /// Exact identifier of the function call this result answers.  As with
+    /// [`GeminiFunctionCall::id`], only the official string form is accepted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     pub name: String,
     pub response: JsonData,
 }
@@ -523,6 +645,9 @@ pub struct ResponsesResponse {
     pub incomplete_details: Option<IncompleteDetails>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<WireError>,
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -554,6 +679,9 @@ pub struct ResponsesOutputItem {
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arguments: Option<String>,
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -563,6 +691,9 @@ pub struct ResponsesOutputContent {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotations: Option<Vec<JsonData>>,
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -810,6 +941,9 @@ pub struct ResponsesStreamEvent {
     pub kind: String,
     #[serde(rename = "Payload")]
     pub payload: ResponsesEventPayload,
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -838,6 +972,9 @@ pub struct ResponsesEventPayload {
     pub part: Option<ResponsesOutputContent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<WireError>,
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -867,6 +1004,11 @@ pub struct ClaudeStreamEvent {
     pub index: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<ClaudeUsage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<WireError>,
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -876,7 +1018,22 @@ pub struct ClaudeStreamDelta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
+    /// Claude `signature_delta` is opaque data.  It must never be converted
+    /// to a text/newline delta.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<JsonData>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partial_json: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<ClaudeUsage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop_reason: Option<String>,
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
