@@ -222,6 +222,7 @@ func runServer() {
 	server.Use(middleware.RequestId())
 	server.Use(middleware.Version())
 	server.Use(middleware.I18n())
+	server.Use(middleware.AntiRelayAccess())
 	middleware.SetUpLogger(server)
 	// 设置路由
 	if err := router.SetRouter(server); err != nil {
