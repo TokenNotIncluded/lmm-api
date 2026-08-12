@@ -38,7 +38,6 @@ import {
 } from '@/components/ai-elements/conversation'
 import { Loader } from '@/components/ai-elements/loader'
 import { Message, MessageContent } from '@/components/ai-elements/message'
-import { Response } from '@/components/ai-elements/response'
 import {
   PromptInput,
   PromptInputProvider,
@@ -48,6 +47,7 @@ import {
   PromptInputTextarea,
   usePromptInputController,
 } from '@/components/ai-elements/prompt-input'
+import { Response } from '@/components/ai-elements/response'
 import {
   sideDrawerContentClassName,
   sideDrawerHeaderClassName,
@@ -58,8 +58,15 @@ import {
   AlertDescription,
   AlertTitle,
 } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import {
   Sheet,
@@ -283,6 +290,106 @@ function AssistantPromptInputSync(props: {
   return null
 }
 
+const L0_MINIMUM_MESSAGE_CHARACTERS = 5
+
+export function getAssistantPromptValidation(
+  message: string,
+  restricted: boolean
+) {
+  const characterCount = Array.from(message.trim()).length
+  return {
+    characterCount,
+    invalid: restricted && characterCount < L0_MINIMUM_MESSAGE_CHARACTERS,
+  }
+}
+
+function AssistantPromptComposer(props: {
+  footerStatus: string
+  placeholder: string
+  privacyNoticeId: string
+  restricted: boolean
+  sending: boolean
+  onSubmit: (message: { text?: string }) => void | Promise<void>
+}) {
+  const { t } = useTranslation()
+  const {
+    textInput: { value },
+  } = usePromptInputController()
+  const validation = getAssistantPromptValidation(value, props.restricted)
+  const hasText = value.trim().length > 0
+  const showValidationError = props.restricted && hasText && validation.invalid
+  const hintId = 'assistant-l0-input-hint'
+  const describedBy = props.restricted
+    ? `${props.privacyNoticeId} ${hintId}`
+    : props.privacyNoticeId
+
+  return (
+    <>
+      <PromptInput
+        onSubmit={props.onSubmit}
+        groupClassName='rounded-xl'
+        aria-label={t('Ask AI assistant')}
+      >
+        <PromptInputBody>
+          <PromptInputTextarea
+            placeholder={props.placeholder}
+            maxLength={4000}
+            minLength={
+              props.restricted ? L0_MINIMUM_MESSAGE_CHARACTERS : undefined
+            }
+            required={props.restricted}
+            aria-describedby={describedBy}
+            aria-invalid={
+              props.restricted && hasText ? validation.invalid : undefined
+            }
+            disabled={props.sending}
+            className='max-h-32 min-h-12'
+          />
+        </PromptInputBody>
+        <PromptInputFooter>
+          <span className='text-muted-foreground min-w-0 flex-1 truncate text-xs'>
+            {props.footerStatus}
+          </span>
+          {props.restricted ? (
+            <span
+              className={
+                showValidationError
+                  ? 'text-destructive shrink-0 text-xs'
+                  : 'text-muted-foreground shrink-0 text-xs'
+              }
+              aria-label={t('L0 message character count')}
+            >
+              {validation.characterCount}/{L0_MINIMUM_MESSAGE_CHARACTERS}
+            </span>
+          ) : null}
+          <PromptInputSubmit
+            status={props.sending ? 'submitted' : 'ready'}
+            disabled={props.sending || validation.invalid}
+          />
+        </PromptInputFooter>
+      </PromptInput>
+      {props.restricted ? (
+        <p
+          id={hintId}
+          className={
+            showValidationError
+              ? 'text-destructive mt-2 px-1 text-xs leading-5'
+              : 'text-muted-foreground mt-2 px-1 text-xs leading-5'
+          }
+          role={showValidationError ? 'alert' : 'status'}
+          aria-live='polite'
+        >
+          {showValidationError
+            ? t('Support message must contain at least 5 characters.')
+            : t(
+                'Write a short explanation of what you want to build or why you need L1 access.'
+              )}
+        </p>
+      ) : null}
+    </>
+  )
+}
+
 function AssistantPanelHeader(props: {
   mode: AssistantPanelMode
   description: string
@@ -309,7 +416,9 @@ function AssistantPanelHeader(props: {
             props.historyVisible ? props.onCloseHistory : props.onOpenHistory
           }
         >
-          {props.historyVisible ? t('Back to conversation') : t('Conversation history')}
+          {props.historyVisible
+            ? t('Back to conversation')
+            : t('Conversation history')}
         </Button>
       </SheetHeader>
     )
@@ -671,7 +780,7 @@ export function AssistantPanel(props: {
     assistantFooterStatus = withAccessLevel(
       superAdministratorFunded
         ? t('Funded by the super administrator')
-        : t('Loading...')
+        : t('Read-only')
     )
     assistantDescription = t(
       'L0 accounts can browse challenges and ask the AI assistant to request L1 access.'
@@ -680,7 +789,9 @@ export function AssistantPanel(props: {
       'Write a short explanation of what you want to build or why you need L1 access.'
     )
   } else if (accountAccessState === 'error') {
-    assistantFooterStatus = withAccessLevel(t('Unable to verify account access'))
+    assistantFooterStatus = withAccessLevel(
+      t('Unable to verify account access')
+    )
     assistantDescription = t('Unable to verify account access')
   }
 
@@ -726,7 +837,6 @@ export function AssistantPanel(props: {
   )
 
   const handleOpenChange = (open: boolean) => {
-    if (!open) setActiveTool(null)
     props.onOpenChange(open)
   }
 
@@ -739,7 +849,9 @@ export function AssistantPanel(props: {
       const reply = await sendAssistantMessage(message, history)
       const safeReply = redactAssistantMessageForDisplay(
         reply.content,
-        t('Sensitive content is hidden and can only be accessed from a private card.')
+        t(
+          'Sensitive content is hidden and can only be accessed from a private card.'
+        )
       )
       const suggestedPresetId = getAssistantPresetForIntent(reply.intent)
       const suggestedPreset = suggestedPresetId
@@ -813,10 +925,27 @@ export function AssistantPanel(props: {
 
   const submitMessage = async ({ text }: { text?: string }) => {
     const message = text?.trim()
-    if (!message || sending) return
+    if (sending) return
+    if (!message) {
+      if (accountAccessState === 'restricted') {
+        throw new Error(
+          t('Support message must contain at least 5 characters.')
+        )
+      }
+      return
+    }
+    const validation = getAssistantPromptValidation(
+      message,
+      accountAccessState === 'restricted'
+    )
+    if (validation.invalid) {
+      throw new Error(t('Support message must contain at least 5 characters.'))
+    }
     const safeMessage = redactAssistantMessageForDisplay(
       message,
-      t('Sensitive content is hidden and can only be accessed from a private card.')
+      t(
+        'Sensitive content is hidden and can only be accessed from a private card.'
+      )
     )
     if (safeMessage.redacted) {
       setEntries((current) => [
@@ -860,7 +989,12 @@ export function AssistantPanel(props: {
         fullscreen={props.fullscreen}
         onToggleFullscreen={props.onToggleFullscreen}
       />
-      <Alert className='m-3 mb-0' variant='default'>
+      <Alert
+        id='assistant-privacy-notice'
+        className='m-3 mb-0'
+        data-testid='assistant-privacy-notice'
+        variant='default'
+      >
         <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} aria-hidden='true' />
         <AlertTitle>{t('Conversation privacy notice')}</AlertTitle>
         <AlertDescription>
@@ -887,259 +1021,294 @@ export function AssistantPanel(props: {
       ) : (
         <>
           <Conversation className='bg-muted/20'>
-        <ConversationContent className='flex min-h-full flex-col gap-5 px-4 py-5 sm:px-6'>
-          {entries.length === 0 ? (
-            <div className='flex flex-1 flex-col gap-5'>
-              <div>
-                <p className='text-base font-medium'>{t('How can I help?')}</p>
-                <p className='text-muted-foreground mt-1 text-sm leading-6'>
-                  {t(
-                    'Choose a common question or ask anything about using LMM.'
-                  )}
-                </p>
-              </div>
-              {accountAccessState === 'loading' ||
-              accountAccessState === 'error' ? (
-                <AssistantAccountStatusNotice
-                  state={accountAccessState === 'error' ? 'error' : 'loading'}
-                  onRetry={() => void statusQuery.refetch()}
-                />
-              ) : null}
-              <div className='grid gap-2'>
-                {visiblePresets.map((preset) => (
-                  <Button
-                    key={preset.id}
-                    type='button'
-                    variant='outline'
-                    className='h-auto min-h-11 justify-between gap-3 px-3 py-2.5 text-left whitespace-normal'
-                    onClick={() => appendPreset(preset)}
-                  >
-                    <span>{preset.question}</span>
-                    <HugeiconsIcon
-                      icon={ArrowRight01Icon}
-                      strokeWidth={2}
-                      className='shrink-0'
-                      aria-hidden='true'
+            <ConversationContent className='flex min-h-full flex-col gap-5 px-4 py-5 sm:px-6'>
+              {entries.length === 0 ? (
+                <div className='flex flex-1 flex-col gap-5'>
+                  {accountAccessState === 'loading' ||
+                  accountAccessState === 'error' ? (
+                    <AssistantAccountStatusNotice
+                      state={
+                        accountAccessState === 'error' ? 'error' : 'loading'
+                      }
+                      onRetry={() => void statusQuery.refetch()}
                     />
-                  </Button>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <>
-              {entries.map((entry) => (
-                <Message from={entry.role} key={entry.id}>
-                  <MessageContent
-                    variant='flat'
-                    className={
-                      entry.error
-                        ? 'text-destructive gap-3 text-sm leading-6'
-                        : 'gap-3 text-sm leading-6'
-                    }
-                  >
-                    {entry.role === 'assistant' ? (
-                      <Response className='leading-7' final>
-                        {entry.content}
-                      </Response>
-                    ) : (
-                      <p className='whitespace-pre-wrap'>{entry.content}</p>
-                    )}
-                    {entry.adminChange ? (
-                      <AssistantAdminChangeTool
-                        action={entry.adminChange}
-                        onApplied={() => {
-                          void statusQuery.refetch()
-                        }}
-                      />
-                    ) : null}
-                    {entry.retry || entry.action ? (
-                      <div className='flex flex-wrap gap-2'>
-                        {entry.retry ? (
+                  ) : null}
+                  {accountAccessState === 'restricted' ? (
+                    <Card
+                      size='sm'
+                      className='border-primary/30 bg-primary/5'
+                      data-testid='assistant-l0-welcome'
+                    >
+                      <CardHeader className='gap-2'>
+                        <Badge variant='secondary' className='w-fit'>
+                          {t('L0 tutorial required')}
+                        </Badge>
+                        <CardTitle className='text-lg'>
+                          {t('Tell the AI assistant what you want to do')}
+                        </CardTitle>
+                        <CardDescription>
+                          {t(
+                            'L0 accounts can browse challenges and ask the AI assistant to request L1 access.'
+                          )}
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className='grid gap-3'>
+                        <p className='text-muted-foreground text-sm leading-6'>
+                          {t(
+                            'Write a short explanation of what you want to build or why you need L1 access.'
+                          )}
+                        </p>
+                        <Button
+                          type='button'
+                          className='w-full sm:w-fit'
+                          onClick={() => appendPreset(presets[0]!)}
+                        >
+                          {t('Ask an administrator to raise my access level')}
+                          <HugeiconsIcon
+                            icon={ArrowRight01Icon}
+                            strokeWidth={2}
+                            data-icon='inline-end'
+                            aria-hidden='true'
+                          />
+                        </Button>
+                      </CardContent>
+                    </Card>
+                  ) : (
+                    <>
+                      <div>
+                        <p className='text-base font-medium'>
+                          {t('How can I help?')}
+                        </p>
+                        <p className='text-muted-foreground mt-1 text-sm leading-6'>
+                          {t(
+                            'Choose a common question or ask anything about using LMM.'
+                          )}
+                        </p>
+                      </div>
+                      <div className='grid gap-2'>
+                        {visiblePresets.map((preset) => (
                           <Button
+                            key={preset.id}
                             type='button'
                             variant='outline'
-                            onClick={() => void retryMessage(entry)}
-                            disabled={sending}
+                            className='h-auto min-h-11 justify-between gap-3 px-3 py-2.5 text-left whitespace-normal'
+                            onClick={() => appendPreset(preset)}
                           >
+                            <span>{preset.question}</span>
                             <HugeiconsIcon
-                              icon={ReloadIcon}
+                              icon={ArrowRight01Icon}
                               strokeWidth={2}
-                              data-icon='inline-start'
+                              className='shrink-0'
                               aria-hidden='true'
                             />
-                            {t('Retry')}
                           </Button>
-                        ) : null}
-                        {entry.action ? (
-                          <PresetAction
-                            action={entry.action}
-                            onToolOpen={setActiveTool}
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              ) : (
+                <>
+                  {entries.map((entry) => (
+                    <Message from={entry.role} key={entry.id}>
+                      <MessageContent
+                        variant='flat'
+                        className={
+                          entry.error
+                            ? 'text-destructive gap-3 text-sm leading-6'
+                            : 'gap-3 text-sm leading-6'
+                        }
+                      >
+                        {entry.role === 'assistant' ? (
+                          <Response className='leading-7' final>
+                            {entry.content}
+                          </Response>
+                        ) : (
+                          <p className='whitespace-pre-wrap'>{entry.content}</p>
+                        )}
+                        {entry.adminChange ? (
+                          <AssistantAdminChangeTool
+                            action={entry.adminChange}
+                            onApplied={() => {
+                              void statusQuery.refetch()
+                            }}
                           />
                         ) : null}
-                      </div>
-                    ) : null}
-                  </MessageContent>
-                </Message>
-              ))}
-              {sending ? (
-                <Message from='assistant'>
-                  <MessageContent
-                    variant='flat'
-                    className='text-muted-foreground flex-row items-center gap-2'
-                    aria-live='polite'
-                  >
-                    <Loader size={14} />
-                    <span>{t('Assistant is thinking...')}</span>
-                  </MessageContent>
-                </Message>
-              ) : null}
-              {accountToolActive && !accountAccessConfirmed ? (
-                <AssistantAccountStatusNotice
-                  state={accountAccessState === 'error' ? 'error' : 'loading'}
-                  onRetry={() => void statusQuery.refetch()}
-                />
-              ) : null}
-              {activeTool === 'key' && developerAccessGranted ? (
-                <AssistantKeyTool
-                  baseUrl={baseUrl}
-                  availableModels={connectionModelsQuery.data ?? []}
-                  modelsLoading={connectionModelsQuery.isLoading}
-                  developerAccessGranted={developerAccessGranted}
-                  onContinueSetup={() => setActiveTool('setup')}
-                />
-              ) : null}
-              {activeTool === 'activation' && accountAccessConfirmed ? (
-                <AssistantActivationTool
-                  recommendationDraft={recommendationDraft}
-                  onContinueSetup={() => setActiveTool('setup')}
-                  onSubmitted={() => {
-                    setRecommendationDraft(null)
-                    setEntries((current) => [
-                      ...current,
-                      {
-                        id: nanoid(),
-                        role: 'assistant',
-                        content: t(
-                          'Your AI recommendation was sent to an administrator. L1 remains locked until the administrator approves it.'
-                        ),
-                      },
-                    ])
-                  }}
-                />
-              ) : null}
-              {accountDisableDraft ? (
-                <AssistantAccountActionTool
-                  action={accountDisableDraft}
-                  onSubmitted={() => setAccountDisableDraft(null)}
-                />
-              ) : null}
-              {activeTool === 'cost' && accountAccessConfirmed ? (
-                <AssistantCostTool
-                  developerAccessGranted={developerAccessGranted}
-                />
-              ) : null}
-              {activeTool === 'handoff' && developerAccessGranted ? (
-                <AssistantHandoffTool />
-              ) : null}
-              {activeTool === 'models' && developerAccessGranted ? (
-                <AssistantModelsTool />
-              ) : null}
-              {activeTool === 'plan' && accountAccessConfirmed ? (
-                <AssistantPlanTool
-                  developerAccessGranted={developerAccessGranted}
-                  onRequestAccess={() => setActiveTool('activation')}
-                />
-              ) : null}
-              {activeTool === 'setup' && accountAccessConfirmed ? (
-                <AssistantSetupTool
-                  rootUrl={baseUrl.replace(/\/v1$/, '')}
-                  openAIBaseUrl={baseUrl}
-                  availableModels={connectionModelsQuery.data ?? []}
-                  modelsLoading={connectionModelsQuery.isLoading}
-                  developerAccessGranted={developerAccessGranted}
-                  onCreateKey={() => setActiveTool('key')}
-                  onRequestAccess={() => setActiveTool('activation')}
-                />
-              ) : null}
-              {activeTool === 'usage' && developerAccessGranted ? (
-                <AssistantUsageTool
-                  developerAccessGranted={developerAccessGranted}
-                />
-              ) : null}
-              <div className='grid gap-3 pt-1'>
-                <Separator />
-                <Button
-                  type='button'
-                  variant='ghost'
-                  size='sm'
-                  onClick={() => {
-                    setEntries([])
-                    setActiveTool(null)
-                    setRecommendationDraft(null)
-                    setAccountDisableDraft(null)
-                  }}
-                  disabled={sending}
-                >
-                  <HugeiconsIcon
-                    icon={CleanIcon}
-                    strokeWidth={2}
-                    data-icon='inline-start'
-                    aria-hidden='true'
-                  />
-                  {t('Clear conversation')}
-                </Button>
-              </div>
-            </>
-          )}
-        </ConversationContent>
-        <ConversationScrollButton />
+                        {entry.retry || entry.action ? (
+                          <div className='flex flex-wrap gap-2'>
+                            {entry.retry ? (
+                              <Button
+                                type='button'
+                                variant='outline'
+                                onClick={() => void retryMessage(entry)}
+                                disabled={sending}
+                              >
+                                <HugeiconsIcon
+                                  icon={ReloadIcon}
+                                  strokeWidth={2}
+                                  data-icon='inline-start'
+                                  aria-hidden='true'
+                                />
+                                {t('Retry')}
+                              </Button>
+                            ) : null}
+                            {entry.action ? (
+                              <PresetAction
+                                action={entry.action}
+                                onToolOpen={setActiveTool}
+                              />
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </MessageContent>
+                    </Message>
+                  ))}
+                  {sending ? (
+                    <Message from='assistant'>
+                      <MessageContent
+                        variant='flat'
+                        className='text-muted-foreground flex-row items-center gap-2'
+                        aria-live='polite'
+                      >
+                        <Loader size={14} />
+                        <span>{t('Assistant is thinking...')}</span>
+                      </MessageContent>
+                    </Message>
+                  ) : null}
+                  {accountToolActive && !accountAccessConfirmed ? (
+                    <AssistantAccountStatusNotice
+                      state={
+                        accountAccessState === 'error' ? 'error' : 'loading'
+                      }
+                      onRetry={() => void statusQuery.refetch()}
+                    />
+                  ) : null}
+                  {activeTool === 'key' && developerAccessGranted ? (
+                    <AssistantKeyTool
+                      baseUrl={baseUrl}
+                      availableModels={connectionModelsQuery.data ?? []}
+                      modelsLoading={connectionModelsQuery.isLoading}
+                      developerAccessGranted={developerAccessGranted}
+                      onContinueSetup={() => setActiveTool('setup')}
+                    />
+                  ) : null}
+                  {activeTool === 'activation' && accountAccessConfirmed ? (
+                    <AssistantActivationTool
+                      recommendationDraft={recommendationDraft}
+                      onContinueSetup={() => setActiveTool('setup')}
+                      onSubmitted={() => {
+                        setRecommendationDraft(null)
+                        setEntries((current) => [
+                          ...current,
+                          {
+                            id: nanoid(),
+                            role: 'assistant',
+                            content: t(
+                              'Your AI recommendation was sent to an administrator. L1 remains locked until the administrator approves it.'
+                            ),
+                          },
+                        ])
+                      }}
+                    />
+                  ) : null}
+                  {accountDisableDraft ? (
+                    <AssistantAccountActionTool
+                      action={accountDisableDraft}
+                      onSubmitted={() => setAccountDisableDraft(null)}
+                    />
+                  ) : null}
+                  {activeTool === 'cost' && accountAccessConfirmed ? (
+                    <AssistantCostTool
+                      developerAccessGranted={developerAccessGranted}
+                    />
+                  ) : null}
+                  {activeTool === 'handoff' && developerAccessGranted ? (
+                    <AssistantHandoffTool />
+                  ) : null}
+                  {activeTool === 'models' && developerAccessGranted ? (
+                    <AssistantModelsTool />
+                  ) : null}
+                  {activeTool === 'plan' && accountAccessConfirmed ? (
+                    <AssistantPlanTool
+                      developerAccessGranted={developerAccessGranted}
+                      onRequestAccess={() => setActiveTool('activation')}
+                    />
+                  ) : null}
+                  {activeTool === 'setup' && accountAccessConfirmed ? (
+                    <AssistantSetupTool
+                      rootUrl={baseUrl.replace(/\/v1$/, '')}
+                      openAIBaseUrl={baseUrl}
+                      availableModels={connectionModelsQuery.data ?? []}
+                      modelsLoading={connectionModelsQuery.isLoading}
+                      developerAccessGranted={developerAccessGranted}
+                      onCreateKey={() => setActiveTool('key')}
+                      onRequestAccess={() => setActiveTool('activation')}
+                    />
+                  ) : null}
+                  {activeTool === 'usage' && developerAccessGranted ? (
+                    <AssistantUsageTool
+                      developerAccessGranted={developerAccessGranted}
+                    />
+                  ) : null}
+                  <div className='grid gap-3 pt-1'>
+                    <Separator />
+                    <Button
+                      type='button'
+                      variant='ghost'
+                      size='sm'
+                      onClick={() => {
+                        setEntries([])
+                        setActiveTool(null)
+                        setRecommendationDraft(null)
+                        setAccountDisableDraft(null)
+                      }}
+                      disabled={sending}
+                    >
+                      <HugeiconsIcon
+                        icon={CleanIcon}
+                        strokeWidth={2}
+                        data-icon='inline-start'
+                        aria-hidden='true'
+                      />
+                      {t('Clear conversation')}
+                    </Button>
+                  </div>
+                </>
+              )}
+            </ConversationContent>
+            <ConversationScrollButton />
           </Conversation>
 
-          <div className='bg-background'>
-        <Separator className='bg-border/70' />
-        <div className='px-3 py-3 sm:px-4'>
-          <PromptInputProvider initialInput={props.initialMessage}>
-            <AssistantPromptInputSync
-              initialMessage={props.initialMessage}
-              initialMessageRevision={props.initialMessageRevision}
-            />
-            <PromptInput
-              onSubmit={submitMessage}
-              groupClassName='rounded-xl'
-              aria-label={t('Ask AI assistant')}
-            >
-              <PromptInputBody>
-                <PromptInputTextarea
+          <div className='bg-background pb-[max(0.75rem,env(safe-area-inset-bottom))]'>
+            <Separator className='bg-border/70' />
+            <div className='px-3 py-3 sm:px-4'>
+              <PromptInputProvider initialInput={props.initialMessage}>
+                <AssistantPromptInputSync
+                  initialMessage={props.initialMessage}
+                  initialMessageRevision={props.initialMessageRevision}
+                />
+                <AssistantPromptComposer
+                  footerStatus={assistantFooterStatus}
                   placeholder={assistantPromptPlaceholder}
-                  maxLength={4000}
-                  disabled={sending}
-                  className='min-h-14'
+                  privacyNoticeId='assistant-privacy-notice'
+                  restricted={accountAccessState === 'restricted'}
+                  sending={sending}
+                  onSubmit={submitMessage}
                 />
-              </PromptInputBody>
-              <PromptInputFooter>
-                <span className='text-muted-foreground truncate text-xs'>
-                  {assistantFooterStatus}
-                </span>
-                <PromptInputSubmit
-                  status={sending ? 'submitted' : 'ready'}
-                  disabled={sending}
-                />
-              </PromptInputFooter>
-            </PromptInput>
-          </PromptInputProvider>
-          {accountAccessConfirmed && superAdministratorFunded ? (
-            <p className='text-muted-foreground mt-2 px-1 text-[11px] leading-4'>
-              {t(
-                'AI customer-service token usage is charged to the super administrator account, not your wallet.'
-              )}
-            </p>
-          ) : null}
-          <p className='text-muted-foreground mt-1 px-1 text-[11px] leading-4'>
-            {t(
-              'Private details, passwords, API keys, and credentials are never safe to send in chat. Use a shielded private card when one is offered.'
-            )}
-          </p>
-        </div>
+              </PromptInputProvider>
+              {accountAccessConfirmed && superAdministratorFunded ? (
+                <p className='text-muted-foreground mt-2 px-1 text-[11px] leading-4'>
+                  {t(
+                    'AI customer-service token usage is charged to the super administrator account, not your wallet.'
+                  )}
+                </p>
+              ) : null}
+              <p className='text-muted-foreground mt-1 px-1 text-[11px] leading-4'>
+                {t(
+                  'Private details, passwords, API keys, and credentials are never safe to send in chat. Use a shielded private card when one is offered.'
+                )}
+              </p>
+            </div>
           </div>
         </>
       )}

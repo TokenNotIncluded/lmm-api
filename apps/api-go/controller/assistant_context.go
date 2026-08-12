@@ -1,16 +1,28 @@
 package controller
 
 import (
+	"encoding/json"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 )
 
 const assistantUserContextKey = "assistant_user_context"
+
+const assistantUsernameMaxRunes = 64
+
+var (
+	assistantUsernameEmailPattern  = regexp.MustCompile(`(?i)[a-z0-9][a-z0-9.*_%+\-]*@[a-z0-9.-]+\.[a-z]{2,}`)
+	assistantUsernameSecretPattern = regexp.MustCompile(`(?i)(password|passwd|api[ _-]?key|access[ _-]?token|refresh[ _-]?token|secret|credential|密码|密钥|令牌)\s*[:=：]\s*\S+`)
+	assistantUsernameAPIKeyPattern = regexp.MustCompile(`(?i)\b(?:sk|rk|pk)-[a-z0-9][a-z0-9._-]{5,}\b`)
+	assistantUsernameBearerPattern = regexp.MustCompile(`(?i)\bbearer\s+[a-z0-9._~+/-]{8,}=*`)
+)
 
 type assistantCustomerProfile string
 
@@ -33,23 +45,163 @@ const (
 // useful onboarding strategy. Passwords, API keys, access tokens, raw OAuth
 // subjects, balances, and raw chat messages never enter this structure.
 type assistantUserContext struct {
-	UserID                   int                      `json:"user_id,omitempty"`
-	Username                 string                   `json:"username,omitempty"`
-	Email                    string                   `json:"email,omitempty"`
-	EmailDomain              string                   `json:"email_domain,omitempty"`
-	EmailCategory            string                   `json:"email_category,omitempty"`
-	AccountAgeDays           int                      `json:"account_age_days,omitempty"`
-	AuthProviders            []string                 `json:"auth_providers,omitempty"`
-	AccessLevel              string                   `json:"access_level"`
-	AdministratorMode        bool                     `json:"administrator_mode"`
-	DeveloperAccessGranted   bool                     `json:"developer_access_granted"`
-	AccessReviewStatus       string                   `json:"access_review_status,omitempty"`
-	PaymentMethodsHidden     bool                     `json:"payment_methods_hidden"`
-	PaymentRestrictionCauses []string                 `json:"payment_restriction_causes,omitempty"`
+	// UserID is retained for request/cache scoping, but must never cross the
+	// model boundary. It is an internal identifier, not personalization data.
+	UserID                 int      `json:"-"`
+	Username               string   `json:"username,omitempty"`
+	Email                  string   `json:"email,omitempty"`
+	EmailDomain            string   `json:"email_domain,omitempty"`
+	EmailCategory          string   `json:"email_category,omitempty"`
+	AccountAgeDays         int      `json:"account_age_days,omitempty"`
+	AuthProviders          []string `json:"auth_providers,omitempty"`
+	AccessLevel            string   `json:"access_level"`
+	AdministratorMode      bool     `json:"administrator_mode"`
+	DeveloperAccessGranted bool     `json:"developer_access_granted"`
+	AccessReviewStatus     string   `json:"access_review_status,omitempty"`
+	PaymentMethodsHidden   bool     `json:"payment_methods_hidden"`
+	// These fields are useful to local policy/profile decisions and cache
+	// invalidation, but are internal risk signals and are never model input.
+	PaymentRestrictionCauses []string                 `json:"-"`
 	Intent                   string                   `json:"current_intent,omitempty"`
 	CustomerProfile          assistantCustomerProfile `json:"customer_profile"`
-	ProfileSignals           []string                 `json:"profile_signals,omitempty"`
+	ProfileSignals           []string                 `json:"-"`
 	WelcomeStrategy          string                   `json:"welcome_strategy"`
+}
+
+// MarshalJSON is the model boundary for this private context type. Keep
+// request/cache identity and local risk evidence in the Go value, but build an
+// explicit allowlist view for serialization so a future caller cannot
+// accidentally add a secret-bearing field to the assistant prompt.
+func (context assistantUserContext) MarshalJSON() ([]byte, error) {
+	maskedEmail, emailDomain := maskAssistantEmail(context.Email)
+	profile := assistantSafeCustomerProfile(context.CustomerProfile)
+	view := struct {
+		Username               string                   `json:"username,omitempty"`
+		Email                  string                   `json:"email,omitempty"`
+		EmailDomain            string                   `json:"email_domain,omitempty"`
+		EmailCategory          string                   `json:"email_category,omitempty"`
+		AccountAgeDays         int                      `json:"account_age_days,omitempty"`
+		AuthProviders          []string                 `json:"auth_providers,omitempty"`
+		AccessLevel            string                   `json:"access_level"`
+		AdministratorMode      bool                     `json:"administrator_mode"`
+		DeveloperAccessGranted bool                     `json:"developer_access_granted"`
+		AccessReviewStatus     string                   `json:"access_review_status,omitempty"`
+		PaymentMethodsHidden   bool                     `json:"payment_methods_hidden"`
+		Intent                 string                   `json:"current_intent,omitempty"`
+		CustomerProfile        assistantCustomerProfile `json:"customer_profile"`
+		WelcomeStrategy        string                   `json:"welcome_strategy"`
+	}{
+		Username:               assistantSafeUsername(context.Username),
+		Email:                  maskedEmail,
+		EmailDomain:            emailDomain,
+		EmailCategory:          assistantSafeEmailCategory(context.EmailCategory),
+		AccountAgeDays:         maxInt(context.AccountAgeDays, 0),
+		AuthProviders:          assistantSafeAuthProviders(context.AuthProviders),
+		AccessLevel:            assistantSafeAccessLevel(context.AccessLevel),
+		AdministratorMode:      context.AdministratorMode,
+		DeveloperAccessGranted: context.DeveloperAccessGranted,
+		AccessReviewStatus:     assistantAccessReviewStatus(context.AccessReviewStatus),
+		PaymentMethodsHidden:   context.PaymentMethodsHidden,
+		Intent:                 assistantSafeIntent(context.Intent),
+		CustomerProfile:        profile,
+		WelcomeStrategy:        assistantWelcomeStrategy(profile),
+	}
+	return json.Marshal(view)
+}
+
+func maxInt(value, minimum int) int {
+	if value < minimum {
+		return minimum
+	}
+	return value
+}
+
+func assistantSafeEmailCategory(category string) string {
+	switch strings.ToLower(strings.TrimSpace(category)) {
+	case "missing", "unknown", "linuxdo", "disposable", "privacy", "common", "custom":
+		return strings.ToLower(strings.TrimSpace(category))
+	default:
+		return "unknown"
+	}
+}
+
+func assistantSafeAccessLevel(level string) string {
+	level = strings.ToUpper(strings.TrimSpace(level))
+	switch level {
+	case "L0", "L1", "L2", "L3", "L4", "ADMIN", "ROOT":
+		return level
+	default:
+		return "L0"
+	}
+}
+
+func assistantSafeIntent(intent string) string {
+	intent = strings.ToLower(strings.TrimSpace(intent))
+	switch intent {
+	case model.AssistantIntentOnboarding,
+		model.AssistantIntentPlanPurchase,
+		model.AssistantIntentAPIKey,
+		model.AssistantIntentClientSetup,
+		model.AssistantIntentCost,
+		model.AssistantIntentBounty,
+		model.AssistantIntentUsage,
+		model.AssistantIntentModels,
+		model.AssistantIntentInvitation,
+		model.AssistantIntentHumanSupport,
+		model.AssistantIntentOther:
+		return intent
+	case "":
+		return ""
+	default:
+		return model.AssistantIntentOther
+	}
+}
+
+func assistantSafeCustomerProfile(profile assistantCustomerProfile) assistantCustomerProfile {
+	switch profile {
+	case assistantProfileUnknown,
+		assistantProfileTechnical,
+		assistantProfileGuided,
+		assistantProfilePromotion,
+		assistantProfileSecurityRisk,
+		assistantProfileOperator,
+		assistantProfilePrivacy,
+		assistantProfileAccessible,
+		assistantProfileNormal,
+		assistantProfileSupport,
+		assistantProfileL0Applicant:
+		return profile
+	default:
+		return assistantProfileUnknown
+	}
+}
+
+func assistantSafeAuthProviders(providers []string) []string {
+	allowed := map[string]struct{}{
+		"custom_oauth": {},
+		"discord":      {},
+		"github":       {},
+		"linuxdo":      {},
+		"oidc":         {},
+		"password":     {},
+		"telegram":     {},
+		"wechat":       {},
+	}
+	seen := make(map[string]struct{}, len(providers))
+	result := make([]string, 0, len(providers))
+	for _, provider := range providers {
+		provider = strings.ToLower(strings.TrimSpace(provider))
+		if _, ok := allowed[provider]; !ok {
+			continue
+		}
+		if _, ok := seen[provider]; ok {
+			continue
+		}
+		seen[provider] = struct{}{}
+		result = append(result, provider)
+	}
+	sort.Strings(result)
+	return result
 }
 
 func assistantUserContextForRequest(userID int, message string) assistantUserContext {
@@ -73,7 +225,7 @@ func assistantUserContextForRequest(userID int, message string) assistantUserCon
 		return context
 	}
 
-	context.Username = strings.TrimSpace(user.Username)
+	context.Username = assistantSafeUsername(user.Username)
 	context.AdministratorMode = user.Role >= common.RoleAdminUser
 	context.Email, context.EmailDomain = maskAssistantEmail(user.Email)
 	context.EmailCategory = classifyAssistantEmail(user.Email)
@@ -107,7 +259,7 @@ func assistantUserContextForRequest(userID int, message string) assistantUserCon
 		if request == nil {
 			context.AccessReviewStatus = "none"
 		} else {
-			context.AccessReviewStatus = request.Status
+			context.AccessReviewStatus = assistantAccessReviewStatus(request.Status)
 		}
 	}
 
@@ -168,15 +320,16 @@ func assistantAuthProviders(user *model.User) []string {
 }
 
 func classifyAssistantEmail(email string) string {
-	email = model.NormalizeEmail(email)
-	if email == "" {
-		return "missing"
-	}
-	at := strings.LastIndexByte(email, '@')
-	if at <= 0 || at == len(email)-1 {
+	_, domain, ok := assistantEmailParts(email)
+	if !ok {
+		if strings.TrimSpace(email) == "" {
+			return "missing"
+		}
 		return "unknown"
 	}
-	domain := email[at+1:]
+	if domain == "" {
+		return "missing"
+	}
 	if domain == "linux.do" {
 		return "linuxdo"
 	}
@@ -207,20 +360,80 @@ func assistantEmailDomainIn(domain string, domains []string) bool {
 	return false
 }
 
-func maskAssistantEmail(email string) (string, string) {
+func assistantEmailParts(email string) (string, string, bool) {
 	email = model.NormalizeEmail(email)
-	at := strings.LastIndexByte(email, '@')
+	if email == "" || strings.Count(email, "@") != 1 {
+		return "", "", false
+	}
+	for _, character := range email {
+		if unicode.IsControl(character) || unicode.In(character, unicode.Cf) || unicode.IsSpace(character) {
+			return "", "", false
+		}
+	}
+	at := strings.IndexByte(email, '@')
 	if at <= 0 || at == len(email)-1 {
+		return "", "", false
+	}
+	return email[:at], email[at+1:], true
+}
+
+func maskAssistantEmail(email string) (string, string) {
+	local, domain, ok := assistantEmailParts(email)
+	if !ok {
 		return "", ""
 	}
-	local, domain := email[:at], email[at+1:]
-	if len(local) == 1 {
+	localRunes := []rune(local)
+	switch len(localRunes) {
+	case 1:
 		return "*@" + domain, domain
+	case 2:
+		return string(localRunes[:1]) + "*@" + domain, domain
+	default:
+		return string(localRunes[:2]) + "***" + string(localRunes[len(localRunes)-1:]) + "@" + domain, domain
 	}
-	if len(local) == 2 {
-		return local[:1] + "*@" + domain, domain
+}
+
+// assistantSafeUsername preserves the useful display name while preventing a
+// user-controlled name from becoming a second secret or prompt-injection
+// channel in the model's system message.
+func assistantSafeUsername(username string) string {
+	username = strings.Map(func(character rune) rune {
+		if unicode.IsControl(character) || unicode.In(character, unicode.Cf) {
+			return -1
+		}
+		return character
+	}, username)
+	username = strings.Join(strings.Fields(username), " ")
+	if username == "" {
+		return ""
 	}
-	return local[:2] + "***" + local[len(local)-1:] + "@" + domain, domain
+	username = assistantUsernameEmailPattern.ReplaceAllStringFunc(username, func(candidate string) string {
+		if masked, _ := maskAssistantEmail(candidate); masked != "" {
+			return masked
+		}
+		return "[REDACTED_EMAIL]"
+	})
+	username = assistantUsernameSecretPattern.ReplaceAllString(username, "$1: [REDACTED]")
+	username = assistantUsernameAPIKeyPattern.ReplaceAllString(username, "[REDACTED_API_KEY]")
+	username = assistantUsernameBearerPattern.ReplaceAllString(username, "Bearer [REDACTED_TOKEN]")
+	usernameRunes := []rune(username)
+	if len(usernameRunes) > assistantUsernameMaxRunes {
+		username = string(usernameRunes[:assistantUsernameMaxRunes])
+	}
+	return username
+}
+
+func assistantAccessReviewStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "none":
+		return "none"
+	case model.DeveloperAccessRequestPending,
+		model.DeveloperAccessRequestApproved,
+		model.DeveloperAccessRequestRejected:
+		return strings.ToLower(strings.TrimSpace(status))
+	default:
+		return "unknown"
+	}
 }
 
 func classifyAssistantCustomerProfile(context assistantUserContext, message string) (assistantCustomerProfile, []string) {

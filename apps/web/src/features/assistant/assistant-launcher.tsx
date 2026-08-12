@@ -109,11 +109,14 @@ export function AssistantLauncher() {
 
   return (
     <div className='contents'>
-      <div className='border-border bg-background flex w-full shrink-0 items-center border-t px-3 py-1.5 md:hidden'>
+      <div
+        className='border-border bg-muted/20 flex min-h-14 w-full shrink-0 items-center border-t px-3 py-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))] md:hidden'
+        data-testid='assistant-mobile-launcher'
+      >
         <Button
           type='button'
-          variant='ghost'
-          className='h-10 w-full justify-start gap-2 px-2'
+          variant='secondary'
+          className='h-11 w-full justify-start gap-2 px-3 shadow-sm'
           aria-label={accessibleLabel}
           title={accessibleLabel}
           aria-haspopup='dialog'
