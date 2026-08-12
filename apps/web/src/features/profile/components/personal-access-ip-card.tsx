@@ -6,7 +6,7 @@ it under the terms of the GNU Affero General Public License as published by
 the Free Software Foundation, either version 3 of the License, or
 (at your option) any later version.
 */
-import { Globe2, Loader2, ShieldCheck, Trash2 } from 'lucide-react'
+import { Globe2, Info, Loader2, ShieldCheck, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -136,14 +136,48 @@ export function PersonalAccessIPCard({
     )
   } else {
     content = (
-      <div className='space-y-3'>
+      <div className='space-y-4'>
+        <div className='border-primary/20 bg-primary/5 rounded-lg border p-3'>
+          <div className='flex items-start gap-3'>
+            <Info className='text-primary mt-0.5 size-4 shrink-0' />
+            <div className='min-w-0 space-y-1'>
+              <p className='text-sm font-medium'>
+                {t('How this direct-access exception works')}
+              </p>
+              <p className='text-muted-foreground text-xs leading-5'>
+                {t(
+                  "The production edge checks the request's exit IP. A mainland-China exit IP must match your registered address; other regions continue normally."
+                )}
+              </p>
+              <p className='text-muted-foreground text-xs leading-5'>
+                {t(
+                  'This is not a proxy or relay block. It does not prevent model requests made through a proxy; only the proxy exit IP is evaluated.'
+                )}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className='bg-muted/20 rounded-lg border p-3'>
+          <div className='flex flex-wrap items-center justify-between gap-2'>
+            <span className='text-muted-foreground text-xs'>
+              {t('Detected public IP for this request')}
+            </span>
+            <code className='text-sm'>{currentIP || '—'}</code>
+          </div>
+          <p className='text-muted-foreground mt-1 text-xs leading-5'>
+            {t(
+              'Only you can see this address. It is used for access matching and is not shown to other users.'
+            )}
+          </p>
+        </div>
+
         <div className='flex flex-col gap-2 sm:flex-row'>
           <Input
             value={inputIP}
             onChange={(event) => setInputIP(event.target.value)}
-            placeholder={currentIP || t('Public IPv4 or IPv6 address')}
-            inputMode='decimal'
-            aria-label={t('Public IP address')}
+            placeholder={t('Public IP for direct access')}
+            aria-label={t('Public IP for direct access')}
             disabled={saving}
           />
           <Button
@@ -156,11 +190,19 @@ export function PersonalAccessIPCard({
             {t('Save')}
           </Button>
         </div>
+
+        {policyIP && (
+          <div className='flex flex-wrap items-center justify-between gap-2 text-xs'>
+            <span className='text-muted-foreground'>
+              {t('Registered direct-access address')}
+            </span>
+            <code>{policyIP}</code>
+          </div>
+        )}
+
         <div className='flex flex-wrap items-center justify-between gap-2 text-xs'>
           <span className='text-muted-foreground'>
-            {currentIP
-              ? t('Current address: {{ip}}', { ip: currentIP })
-              : t('Only one address can be registered')}
+            {t('Only one address can be registered')}
           </span>
           {policyIP && (
             <Button
@@ -178,7 +220,7 @@ export function PersonalAccessIPCard({
         </div>
         <p className='text-muted-foreground text-xs leading-5'>
           {t(
-            'This setting only affects the production restricted ingress rule; it does not expose your IP to other users.'
+            'If you use a VPN or proxy, enter its exit IP instead of your local address.'
           )}
         </p>
       </div>
@@ -187,9 +229,9 @@ export function PersonalAccessIPCard({
 
   return (
     <TitledCard
-      title={t('Personal IP allowlist')}
+      title={t('Direct access exception')}
       description={t(
-        'One address can bypass the production restricted ingress rule'
+        'Register one public IP for direct access to the site and API.'
       )}
       icon={<Globe2 className='h-4 w-4' />}
       iconTone={eligible ? 'success' : 'neutral'}

@@ -32,6 +32,7 @@ const (
 	minDeveloperAccessReasonRunes         = 5
 	minDeveloperAccessRecommendationRunes = 20
 	maxDeveloperAccessDraftRunes          = 2000
+	assistantInterlocutorAssessmentTool   = "assess_l0_interlocutor"
 )
 
 type assistantL1RecommendationDraft struct {
@@ -77,6 +78,41 @@ type assistantOpenAIResponseMessage struct {
 
 func assistantToolDefinitions() []assistantOpenAIToolDefinition {
 	return []assistantOpenAIToolDefinition{
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
+				Name:        assistantInterlocutorAssessmentTool,
+				Description: "For an L0 conversation only, inspect the complete user and assistant conversation supplied in the request and make a coarse internal assessment of whether the interaction is likely human, likely automated, or uncertain. Use coherence, contextual follow-up, goal continuity, and explicit automation or API-payload context. Do not rely on a bare self-report, writing style, response speed, browser data, network data, translation tools, or accessibility software. This is a soft signal, never an access-control verdict, and the result must not be disclosed to the user.",
+				Parameters: objectSchema(map[string]any{
+					"kind": map[string]any{
+						"type": "string",
+						"enum": []string{"likely_human", "likely_automated", "uncertain"},
+					},
+					"confidence": map[string]any{
+						"type": "string",
+						"enum": []string{"low", "medium", "high"},
+					},
+					"evidence": map[string]any{
+						"type":     "array",
+						"maxItems": 3,
+						"items": map[string]any{
+							"type": "string",
+							"enum": []string{
+								"coherent_contextual_follow_up",
+								"repeated_template_or_payload",
+								"explicit_automation_context",
+								"goal_continuity",
+								"unclear",
+							},
+						},
+					},
+					"reason": map[string]any{
+						"type":      "string",
+						"maxLength": 240,
+					},
+				}, []string{"kind", "confidence", "evidence"}),
+			},
+		},
 		{
 			Type: "function",
 			Function: assistantOpenAIToolFunction{
@@ -296,6 +332,12 @@ func assistantToolDefinitionsForContext(userContext assistantUserContext) []assi
 }
 
 func assistantToolAllowedForContext(name string, userContext assistantUserContext) bool {
+	if assistantL0InterlocutorAssessmentRequired(userContext) {
+		return name == assistantInterlocutorAssessmentTool
+	}
+	if name == assistantInterlocutorAssessmentTool {
+		return false
+	}
 	if userContext.AdministratorMode {
 		return true
 	}
@@ -324,6 +366,25 @@ func assistantToolAllowedForContext(name string, userContext assistantUserContex
 	default:
 		return false
 	}
+}
+
+func assistantL0InterlocutorAssessmentRequired(userContext assistantUserContext) bool {
+	return !userContext.AdministratorMode &&
+		!userContext.DeveloperAccessGranted &&
+		strings.EqualFold(strings.TrimSpace(userContext.AccessLevel), "L0") &&
+		!userContext.InterlocutorAssessed
+}
+
+func assistantToolChoiceForContext(userContext assistantUserContext) any {
+	if assistantL0InterlocutorAssessmentRequired(userContext) {
+		return map[string]any{
+			"type": "function",
+			"function": map[string]string{
+				"name": assistantInterlocutorAssessmentTool,
+			},
+		}
+	}
+	return "auto"
 }
 
 func emptyObjectSchema() map[string]any {
@@ -478,8 +539,14 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 	if maxSteps < 1 {
 		maxSteps = 1
 	}
+	forceL0Assessment := assistantL0InterlocutorAssessmentRequired(assistantUserContextFromGin(c))
+	if forceL0Assessment && maxSteps < 2 {
+		maxSteps = 2
+	}
 	if !settings.AgentLoopEnabled {
-		maxSteps = 1
+		if !forceL0Assessment {
+			maxSteps = 1
+		}
 	}
 	cacheKey := c.GetString("assistant_cache_key")
 	usedTool := false
@@ -494,9 +561,10 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 		}
 		// Reserve the last turn for a final natural-language answer. This
 		// makes MaxSteps a hard bound while ensuring a tool call can finish.
-		if settings.AgentLoopEnabled && step < maxSteps-1 {
-			request.Tools = assistantToolDefinitionsForContext(assistantUserContextFromGin(c))
-			request.ToolChoice = "auto"
+		if (settings.AgentLoopEnabled || assistantL0InterlocutorAssessmentRequired(assistantUserContextFromGin(c))) && step < maxSteps-1 {
+			userContext := assistantUserContextFromGin(c)
+			request.Tools = assistantToolDefinitionsForContext(userContext)
+			request.ToolChoice = assistantToolChoiceForContext(userContext)
 		}
 
 		status, body, err := relayAssistantTurn(c, request, rootRequestID, step)
@@ -656,6 +724,8 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 	}
 
 	switch name {
+	case assistantInterlocutorAssessmentTool:
+		return executeAssistantInterlocutorAssessmentTool(c, input)
 	case "get_service_facts":
 		rootURL := strings.TrimRight(system_setting.ServerAddress, "/")
 		baseURL := rootURL
@@ -789,6 +859,77 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 	default:
 		return map[string]any{"ok": false, "error": "unknown assistant tool"}
 	}
+}
+
+func executeAssistantInterlocutorAssessmentTool(c *gin.Context, input map[string]any) map[string]any {
+	if c == nil {
+		return map[string]any{"ok": false, "status": "context_unavailable", "error": "conversation context is unavailable"}
+	}
+	userContext := assistantUserContextFromGin(c)
+	if !assistantL0InterlocutorAssessmentRequired(userContext) {
+		return map[string]any{"ok": false, "status": "not_required", "error": "the L0 interlocutor assessment is not required"}
+	}
+
+	kind := strings.TrimSpace(inputString(input, "kind"))
+	confidence := strings.TrimSpace(inputString(input, "confidence"))
+	if kind != "likely_human" && kind != "likely_automated" && kind != "uncertain" {
+		return map[string]any{"ok": false, "status": "assessment_invalid", "error": "assessment kind is invalid"}
+	}
+	if confidence != "low" && confidence != "medium" && confidence != "high" {
+		return map[string]any{"ok": false, "status": "assessment_invalid", "error": "assessment confidence is invalid"}
+	}
+	evidence, ok := assistantAssessmentEvidence(input["evidence"])
+	if !ok {
+		return map[string]any{"ok": false, "status": "assessment_invalid", "error": "assessment evidence is invalid"}
+	}
+
+	userContext.InterlocutorAssessed = true
+	c.Set(assistantUserContextKey, userContext)
+	result := map[string]any{
+		"ok":         true,
+		"status":     "recorded",
+		"assessment": map[string]any{"kind": kind, "confidence": confidence},
+		"next_step":  "Continue the conversation using the normal L0 policy. Treat this as a soft signal, not an access decision.",
+	}
+	if len(evidence) == 0 {
+		result["assessment"].(map[string]any)["evidence"] = []string{"unclear"}
+	}
+	return result
+}
+
+func assistantAssessmentEvidence(value any) ([]string, bool) {
+	if value == nil {
+		return nil, false
+	}
+	values, ok := value.([]any)
+	if !ok || len(values) > 3 {
+		return nil, false
+	}
+	allowed := map[string]struct{}{
+		"coherent_contextual_follow_up": {},
+		"repeated_template_or_payload":  {},
+		"explicit_automation_context":   {},
+		"goal_continuity":               {},
+		"unclear":                       {},
+	}
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		item, ok := value.(string)
+		item = strings.TrimSpace(item)
+		if !ok || item == "" {
+			return nil, false
+		}
+		if _, exists := allowed[item]; !exists {
+			return nil, false
+		}
+		if _, exists := seen[item]; exists {
+			continue
+		}
+		seen[item] = struct{}{}
+		result = append(result, item)
+	}
+	return result, true
 }
 
 // executeAssistantAccountDisableRequestTool follows the existing assistant

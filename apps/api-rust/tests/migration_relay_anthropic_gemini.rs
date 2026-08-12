@@ -545,7 +545,11 @@ async fn native_sse_passthrough_preserves_unknown_frames_and_does_not_append_don
         .await
         .expect("response body");
     assert_eq!(body.as_ref(), expected);
-    assert!(!body.windows(b"[DONE]".len()).any(|window| window == b"[DONE]"));
+    assert!(
+        !body
+            .windows(b"[DONE]".len())
+            .any(|window| window == b"[DONE]")
+    );
 }
 
 #[tokio::test]
@@ -616,14 +620,8 @@ async fn native_sse_body_uses_a_bounded_stream_without_prefetch_queue() {
     .expect("body should release one bounded slot")
     .expect("bounded stream receiver");
     drop(sender);
-    let bytes = reader
-        .await
-        .expect("body reader task")
-        .expect("body bytes");
-    assert_eq!(
-        bytes.as_ref(),
-        b"data: first\n\ndata: second\n\n"
-    );
+    let bytes = reader.await.expect("body reader task").expect("body bytes");
+    assert_eq!(bytes.as_ref(), b"data: first\n\ndata: second\n\n");
 }
 
 #[tokio::test]

@@ -21,7 +21,10 @@ use super::sse::{
     parse_sse_frames_rejecting_unterminated,
 };
 use async_trait::async_trait;
-use axum::{body::{Body, to_bytes}, http::header};
+use axum::{
+    body::{Body, to_bytes},
+    http::header,
+};
 use reqwest::Url;
 use serde_json::Value;
 use sqlx::{PgPool, Row};
@@ -181,10 +184,7 @@ impl PgAnthropicGeminiRelayBackend {
                 .map_err(|_| RelayFailure::Upstream)?
                 .map_err(|_| RelayFailure::Upstream)?;
         let status = response.status();
-        let content_type_header = response
-            .headers()
-            .get(header::CONTENT_TYPE)
-            .cloned();
+        let content_type_header = response.headers().get(header::CONTENT_TYPE).cloned();
         let content_type = content_type_header
             .as_ref()
             .and_then(|value| value.to_str().ok())
@@ -207,7 +207,12 @@ impl PgAnthropicGeminiRelayBackend {
         // backpressure controls upstream polling. OpenAI is intentionally not
         // included: it still requires the typed cross-protocol conversion
         // below rather than receiving a native body by assumption.
-        if is_sse && matches!(request.protocol, RelayProtocol::Anthropic | RelayProtocol::Gemini) {
+        if is_sse
+            && matches!(
+                request.protocol,
+                RelayProtocol::Anthropic | RelayProtocol::Gemini
+            )
+        {
             return Ok(UpstreamReply::NativeSse(Box::new(NativeSseReply::new(
                 status,
                 Body::from_stream(response.bytes_stream()),
@@ -234,7 +239,10 @@ async fn collect_bounded_body(
 ) -> Result<axum::body::Bytes, RelayFailure> {
     tokio::time::timeout(
         timeout,
-        to_bytes(Body::from_stream(response.bytes_stream()), MAX_RESPONSE_BYTES),
+        to_bytes(
+            Body::from_stream(response.bytes_stream()),
+            MAX_RESPONSE_BYTES,
+        ),
     )
     .await
     .map_err(|_| RelayFailure::Upstream)?

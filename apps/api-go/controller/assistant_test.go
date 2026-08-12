@@ -799,7 +799,7 @@ func TestAssistantPricingEndpointAppliesTrustDiscountToGroupRatios(t *testing.T)
 func TestAssistantAgentToolsExposeSafeAndConfirmationGatedActions(t *testing.T) {
 	c, _ := createAssistantKeyTestContext(t, "assistant-tool-user")
 	definitions := assistantToolDefinitions()
-	require.Len(t, definitions, 19)
+	require.Len(t, definitions, 20)
 	names := make(map[string]bool, len(definitions))
 	for _, definition := range definitions {
 		names[definition.Function.Name] = true
@@ -869,20 +869,24 @@ func TestAssistantAgentToolCatalogueMatchesAccessLevel(t *testing.T) {
 	for _, definition := range l0 {
 		l0Names[definition.Function.Name] = true
 	}
-	assert.True(t, l0Names["get_service_facts"])
-	assert.True(t, l0Names["prepare_l1_recommendation"])
+	assert.True(t, l0Names[assistantInterlocutorAssessmentTool])
+	assert.False(t, l0Names["get_service_facts"])
+	assert.False(t, l0Names["prepare_l1_recommendation"])
 	assert.False(t, l0Names["get_model_pricing"])
 	assert.False(t, l0Names["get_plan_offers"])
 	assert.False(t, l0Names["get_admin_server_config"])
 
 	l0Ready := assistantToolDefinitionsForContext(assistantUserContext{
-		AccessLevel:       "L0",
-		PaymentOfferState: assistantPaymentOfferReady,
+		AccessLevel:          "L0",
+		InterlocutorAssessed: true,
+		PaymentOfferState:    assistantPaymentOfferReady,
 	})
 	l0ReadyNames := make(map[string]bool, len(l0Ready))
 	for _, definition := range l0Ready {
 		l0ReadyNames[definition.Function.Name] = true
 	}
+	assert.False(t, l0ReadyNames[assistantInterlocutorAssessmentTool])
+	assert.True(t, l0ReadyNames["get_service_facts"])
 	assert.True(t, l0ReadyNames["get_plan_offers"])
 
 	l1 := assistantToolDefinitionsForContext(assistantUserContext{
@@ -907,7 +911,7 @@ func TestAssistantAgentToolCatalogueMatchesAccessLevel(t *testing.T) {
 	for _, definition := range admin {
 		adminNames[definition.Function.Name] = true
 	}
-	assert.Len(t, adminNames, len(assistantToolDefinitions()))
+	assert.Len(t, adminNames, len(assistantToolDefinitions())-1)
 	assert.True(t, adminNames["prepare_admin_pricing_change"])
 }
 

@@ -100,7 +100,10 @@ pub fn current_support_matrix() -> Result<SupportMatrix, RegistryValidationError
 
 /// Returns whether a catalog direction is deliberately native raw passthrough.
 pub const fn is_native_raw_direction(direction: Direction) -> bool {
-    matches!(direction, Direction::Request | Direction::Response | Direction::Stream)
+    matches!(
+        direction,
+        Direction::Request | Direction::Response | Direction::Stream
+    )
 }
 
 #[cfg(test)]
@@ -144,7 +147,9 @@ mod tests {
             (Protocol::OpenAiResponses, Protocol::Claude),
             (Protocol::Gemini, Protocol::Claude),
         ] {
-            let route = registry.route(source, target).expect("complete matrix route");
+            let route = registry
+                .route(source, target)
+                .expect("complete matrix route");
             assert!(!route.supports_any_direction());
         }
     }

@@ -523,9 +523,7 @@ fn decode_utf8(value: &[u8], field: &'static str) -> Result<String, SseError> {
 }
 
 fn parse_retry_millis(value: &str) -> Option<u64> {
-    if value.is_empty()
-        || !value.bytes().all(|byte| byte.is_ascii_digit())
-    {
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
     }
     value.parse().ok()

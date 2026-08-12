@@ -616,27 +616,27 @@ pub struct ResponsesResponse {
     pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instructions: Option<JsonData>,
-    #[serde(default)]
-    pub max_output_tokens: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u64>,
     pub model: String,
     #[serde(default)]
     pub output: Vec<ResponsesOutputItem>,
-    #[serde(default)]
-    pub parallel_tool_calls: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallel_tool_calls: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_response_id: Option<JsonData>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<JsonData>,
-    #[serde(default)]
-    pub store: bool,
-    #[serde(default)]
-    pub temperature: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub store: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<JsonData>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools: Option<JsonData>,
-    #[serde(default)]
-    pub top_p: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub truncation: Option<JsonData>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -692,7 +692,8 @@ pub struct ResponsesOutputItem {
 pub struct ResponsesOutputContent {
     #[serde(rename = "type")]
     pub kind: String,
-    pub text: String,
+    #[serde(default)]
+    pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotations: Option<Vec<JsonData>>,
     #[serde(flatten)]

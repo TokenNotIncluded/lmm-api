@@ -5,24 +5,27 @@
 //! encode/map.  In particular, Gemini and Claude never use an OpenAI DTO as
 //! an intermediate representation here.
 
-use std::{collections::{BTreeMap, VecDeque}, error::Error, fmt};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    error::Error,
+    fmt,
+};
 
 use serde::{Deserialize, Serialize};
 
 use super::{
-    CacheUsage, ClaudeContentBlock, ClaudeMediaSource, ClaudeMessage, ClaudeRequest,
-    ClaudeResponse, ClaudeTool, ClaudeToolChoice, ClaudeUsage, ConversionPlan, Envelope,
-    Feature, Fidelity, FunctionData, FunctionKind, GenerationControls, GeminiCandidate,
-    GeminiContent, GeminiFunctionCall, GeminiFunctionDeclaration, GeminiFunctionResponse,
+    BillingUsage, CacheUsage, ClaudeContentBlock, ClaudeMediaSource, ClaudeMessage, ClaudeRequest,
+    ClaudeResponse, ClaudeTool, ClaudeToolChoice, ClaudeUsage, ConversionPlan, Envelope, Feature,
+    Fidelity, FunctionData, FunctionKind, GeminiCandidate, GeminiContent, GeminiFunctionCall,
+    GeminiFunctionCallingConfig, GeminiFunctionDeclaration, GeminiFunctionResponse,
     GeminiGenerationConfig, GeminiInlineData, GeminiPart, GeminiRequest, GeminiResponse,
-    GeminiTool, GeminiToolConfig, GeminiFunctionCallingConfig, GeminiUsage, Item, ItemKind,
-    JsonData, Loss, LossCode, LossLedger, LossSeverity, Media, MediaKind, OpaqueId,
-    OpaqueIdProvenance, OpaqueProviderState, OpaqueStateProvenance, OpenAiAnthropicBlock,
-    OpenAiAnthropicExtraContent, OpenAiChatContentPart, OpenAiChatMessage, OpenAiChatRequest,
-    OpenAiChatResponse, OpenAiChatTool, OpenAiChoice, OpenAiExtraContent, OpenAiFunction,
-    OpenAiGoogleExtraContent, OpenAiToolCall, Part, PartKind, Protocol, Provenance, Role,
-    SemanticBillingUsage, SemanticUsage, StateRefs, StringOrParts, Tool, ToolChoice, ToolKind,
-    WireUsage,
+    GeminiTool, GeminiToolConfig, GeminiUsage, GenerationControls, Item, ItemKind, JsonData, Loss,
+    LossCode, LossLedger, Media, MediaKind, OpaqueId, OpaqueIdProvenance, OpaqueProviderState,
+    OpaqueStateProvenance, OpenAiAnthropicBlock, OpenAiAnthropicExtraContent,
+    OpenAiChatContentPart, OpenAiChatMessage, OpenAiChatRequest, OpenAiChatResponse,
+    OpenAiChatTool, OpenAiChoice, OpenAiExtraContent, OpenAiFunction, OpenAiGoogleExtraContent,
+    OpenAiToolCall, Part, PartKind, Protocol, Provenance, Role, SemanticBillingUsage,
+    SemanticUsage, StringOrParts, TokenDetails, Tool, ToolChoice, ToolKind, WireUsage,
 };
 
 /// The default gate for candidate v2 direct routes.  The functions in this
@@ -55,18 +58,27 @@ pub struct DirectIrRouteDescriptor {
 
 /// Returns the disabled-by-default descriptor for a direct IR route.
 #[must_use]
-pub fn direct_ir_route_descriptor(
-    source: Protocol,
-    target: Protocol,
-) -> DirectIrRouteDescriptor {
+pub fn direct_ir_route_descriptor(source: Protocol, target: Protocol) -> DirectIrRouteDescriptor {
     DirectIrRouteDescriptor {
         source,
         target,
         enabled: DIRECT_IR_V2_DEFAULT_ENABLED,
-        request_converter_id: format!("{}-to-{}-ir-v2-request", protocol_name(source), protocol_name(target)),
-        response_converter_id: format!("{}-to-{}-ir-v2-response", protocol_name(source), protocol_name(target)),
+        request_converter_id: format!(
+            "{}-to-{}-ir-v2-request",
+            protocol_name(source),
+            protocol_name(target)
+        ),
+        response_converter_id: format!(
+            "{}-to-{}-ir-v2-response",
+            protocol_name(source),
+            protocol_name(target)
+        ),
         hop_count: if source == target { 0 } else { 1 },
-        fidelity: if source == target { Fidelity::Exact } else { Fidelity::Normalized },
+        fidelity: if source == target {
+            Fidelity::Exact
+        } else {
+            Fidelity::Normalized
+        },
     }
 }
 
@@ -118,7 +130,7 @@ impl<T> DirectIrConversion<T> {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct DirectIrError {
     /// Stable error code.
-    pub code: &'static str,
+    pub code: String,
     /// Source wire protocol.
     pub source: Protocol,
     /// Target wire protocol.
@@ -166,7 +178,7 @@ impl DirectIrError {
         reason: DirectIrReason,
     ) -> Self {
         Self {
-            code: "direct_ir_conversion_error",
+            code: "direct_ir_conversion_error".to_owned(),
             source,
             target,
             feature: feature.into(),
@@ -180,12 +192,7 @@ impl DirectIrError {
         Self::new(source, target, feature, path, DirectIrReason::MissingField)
     }
 
-    fn unsupported(
-        source: Protocol,
-        target: Protocol,
-        feature: &str,
-        path: &str,
-    ) -> Self {
+    fn unsupported(source: Protocol, target: Protocol, feature: &str, path: &str) -> Self {
         Self::new(source, target, feature, path, DirectIrReason::Unsupported)
     }
 }
@@ -218,11 +225,18 @@ fn plan_for(
     envelope: &Envelope,
 ) -> ConversionPlan {
     let descriptor = direct_ir_route_descriptor(source, target);
+    // A ConversionPlan describes this one direct source→target execution.  It
+    // intentionally contains one opaque pair ID rather than advertising both
+    // a request and response converter at the same time.
     let mut plan = ConversionPlan {
         source,
         target,
         model_family: model.to_owned(),
-        converter_ids: vec![descriptor.request_converter_id, descriptor.response_converter_id],
+        converter_ids: vec![format!(
+            "{}-to-{}-ir-v2",
+            protocol_name(source),
+            protocol_name(target)
+        )],
         hop_count: descriptor.hop_count,
         fidelity: descriptor.fidelity,
         unsupported: Vec::new(),
@@ -262,14 +276,32 @@ fn map_validation<T>(
     target: Protocol,
     path: &str,
 ) -> Result<T, DirectIrError> {
-    result.map_err(|_| {
-        DirectIrError::new(
-            source,
-            target,
-            "ordered_item",
-            path,
-            DirectIrReason::InvalidShape,
-        )
+    result.map_err(|error| {
+        let (feature, reason) = match error {
+            super::IrValidationError::MissingToolCallId { .. } => {
+                ("function_call_id", DirectIrReason::MissingField)
+            }
+            super::IrValidationError::OrphanToolResult { .. } => {
+                ("function_call_id", DirectIrReason::Orphan)
+            }
+            super::IrValidationError::DuplicateToolResult { .. }
+            | super::IrValidationError::DuplicateToolCallId { .. } => {
+                ("function_call_id", DirectIrReason::DuplicateId)
+            }
+            super::IrValidationError::EmptyOpaqueId { .. } => {
+                ("function_call_id", DirectIrReason::EmptyId)
+            }
+            super::IrValidationError::EmptyStateId { .. } => {
+                ("state_reference", DirectIrReason::EmptyId)
+            }
+            super::IrValidationError::InvalidPartShape { .. }
+            | super::IrValidationError::InvalidFunctionShape { .. }
+            | super::IrValidationError::InvalidItemShape { .. }
+            | super::IrValidationError::InvalidOpaqueState { .. } => {
+                ("ordered_item", DirectIrReason::InvalidShape)
+            }
+        };
+        DirectIrError::new(source, target, feature, path, reason)
     })
 }
 
@@ -290,26 +322,7 @@ fn record_loss(
     path: &str,
     message: &str,
 ) {
-    envelope.record_loss(
-        Loss::new(code, feature)
-            .at(path)
-            .with_message(message),
-    );
-}
-
-fn loss_for_unrepresented(
-    envelope: &mut Envelope,
-    feature: Feature,
-    path: &str,
-    message: &str,
-) {
-    record_loss(
-        envelope,
-        LossCode::LossUnknownEvent,
-        Some(feature),
-        path,
-        message,
-    );
+    envelope.record_loss(Loss::new(code, feature).at(path).with_message(message));
 }
 
 fn role_from_wire(
@@ -399,15 +412,15 @@ fn parse_json_field(
 }
 
 fn compact_json(value: &JsonData) -> Result<String, DirectIrError> {
-    value
-        .compact_string()
-        .map_err(|_| DirectIrError::new(
+    value.compact_string().map_err(|_| {
+        DirectIrError::new(
             Protocol::OpenAi,
             Protocol::OpenAi,
             "json_field",
             "envelope",
             DirectIrReason::InvalidJsonField,
-        ))
+        )
+    })
 }
 
 fn empty_extensions() -> BTreeMap<String, JsonData> {
@@ -451,10 +464,7 @@ fn id_value(id: &OpaqueId) -> Result<String, DirectIrError> {
     Ok(id.value.clone())
 }
 
-fn function_call_part(
-    name: String,
-    arguments: JsonData,
-) -> Part {
+fn function_call_part(name: String, arguments: JsonData) -> Part {
     Part::function(FunctionData {
         kind: FunctionKind::Call,
         name: Some(name),
@@ -464,10 +474,7 @@ fn function_call_part(
     })
 }
 
-fn function_result_part(
-    name: Option<String>,
-    output: JsonData,
-) -> Part {
+fn function_result_part(name: Option<String>, output: JsonData) -> Part {
     Part::function(FunctionData {
         kind: FunctionKind::Result,
         name,
@@ -484,12 +491,15 @@ fn text_item(role: Role, text: String, source: Protocol, path: &str) -> Item {
     item
 }
 
-fn opaque_item(
-    role: Role,
-    state: OpaqueProviderState,
-    source: Protocol,
-    path: &str,
-) -> Item {
+fn attach_openai_name(item: &mut Item, name: Option<&str>) {
+    if let Some(name) = name {
+        item.provenance
+            .extensions
+            .insert("openai.name".to_owned(), JsonData::String(name.to_owned()));
+    }
+}
+
+fn opaque_item(role: Role, state: OpaqueProviderState, source: Protocol, path: &str) -> Item {
     let mut item = Item::new(ItemKind::Reasoning, role, Provenance::new(source));
     item.provenance.source_path = Some(path.to_owned());
     item.push_part(Part::opaque(state));
@@ -553,15 +563,9 @@ fn chat_content_to_parts(
             .map(|(index, part)| {
                 let part_path = format!("{path}[{index}]");
                 match part.kind.as_str() {
-                    "text" => part
-                        .text
-                        .map(Part::text)
-                        .ok_or_else(|| DirectIrError::missing(
-                            source,
-                            target,
-                            "text",
-                            &format!("{part_path}.text"),
-                        )),
+                    "text" => part.text.map(Part::text).ok_or_else(|| {
+                        DirectIrError::missing(source, target, "text", &format!("{part_path}.text"))
+                    }),
                     "image_url" => {
                         let image = part.image_url.ok_or_else(|| {
                             DirectIrError::missing(
@@ -649,7 +653,10 @@ fn chat_parts_to_content(
     if parts.is_empty() {
         return Ok(None);
     }
-    if parts.iter().all(|part| matches!(part.kind, PartKind::Text)) {
+    if parts
+        .iter()
+        .all(|part| matches!(&part.kind, PartKind::Text))
+    {
         let mut text = String::new();
         for part in parts {
             let Some(value) = part.text.as_ref() else {
@@ -683,7 +690,7 @@ fn chat_parts_to_content(
                         DirectIrReason::InvalidShape,
                     ));
                 };
-                if !matches!(media.kind, MediaKind::Image) {
+                if !matches!(&media.kind, MediaKind::Image) {
                     return Err(DirectIrError::unsupported(
                         source,
                         target,
@@ -751,9 +758,10 @@ fn tool_choice_from_json(
         },
         JsonData::Object(object) => {
             let name = object.get("name").and_then(json_string).or_else(|| {
-                object.get("function").and_then(json_object).and_then(|value| {
-                    value.get("name").and_then(json_string)
-                })
+                object
+                    .get("function")
+                    .and_then(json_object)
+                    .and_then(|value| value.get("name").and_then(json_string))
             });
             name.map(|name| ToolChoice::Named {
                 name: name.to_owned(),
@@ -790,6 +798,7 @@ fn tool_to_ir(
     name: String,
     description: Option<String>,
     schema: Option<JsonData>,
+    strict: Option<bool>,
     source: Protocol,
     target: Protocol,
     path: &str,
@@ -808,19 +817,81 @@ fn tool_to_ir(
             ));
         }
     };
+    if name.is_empty() {
+        return Err(DirectIrError::new(
+            source,
+            target,
+            "tool.name",
+            &format!("{path}.name"),
+            DirectIrReason::EmptyId,
+        ));
+    }
+    let mut extensions = empty_extensions();
+    if let Some(strict) = strict {
+        extensions.insert("openai.strict".to_owned(), JsonData::Bool(strict));
+    }
     Ok(Tool {
         kind,
         name: Some(name),
         description,
         input_schema: schema,
-        extensions: empty_extensions(),
+        extensions,
     })
 }
 
-fn openai_request_controls(
-    request: &OpenAiChatRequest,
-    envelope: &mut Envelope,
-) {
+fn tool_name_for_target(
+    tool: &Tool,
+    index: usize,
+    source: Protocol,
+    target: Protocol,
+) -> Result<String, DirectIrError> {
+    let path = format!("tools[{index}]");
+    if !matches!(&tool.kind, ToolKind::Function) {
+        return Err(DirectIrError::unsupported(
+            source,
+            target,
+            "tool_type",
+            &path,
+        ));
+    }
+    let name = tool
+        .name
+        .clone()
+        .ok_or_else(|| DirectIrError::missing(source, target, "tool.name", &path))?;
+    if name.is_empty() {
+        return Err(DirectIrError::new(
+            source,
+            target,
+            "tool.name",
+            &format!("{path}.name"),
+            DirectIrReason::EmptyId,
+        ));
+    }
+    Ok(name)
+}
+
+fn openai_strict_for_tool(
+    tool: &Tool,
+    source: Protocol,
+    target: Protocol,
+    index: usize,
+) -> Result<Option<bool>, DirectIrError> {
+    let Some(value) = tool.extensions.get("openai.strict") else {
+        return Ok(None);
+    };
+    match value {
+        JsonData::Bool(value) => Ok(Some(*value)),
+        _ => Err(DirectIrError::new(
+            source,
+            target,
+            "tool.strict",
+            &format!("tools[{index}].strict"),
+            DirectIrReason::InvalidShape,
+        )),
+    }
+}
+
+fn openai_request_controls(request: &OpenAiChatRequest, envelope: &mut Envelope) {
     envelope.controls = GenerationControls {
         max_output_tokens: request.max_completion_tokens.or(request.max_tokens),
         temperature: request.temperature,
@@ -850,15 +921,20 @@ fn openai_request_controls(
         ("store", request.store.clone()),
         ("metadata", request.metadata.clone()),
         ("stream_options", request.stream_options.clone()),
-        ("top_logprobs", request.top_logprobs.map(|value| JsonData::Number(value.into()))),
+        (
+            "top_logprobs",
+            request
+                .top_logprobs
+                .map(|value| JsonData::Number(value.into())),
+        ),
         ("safety_identifier", request.safety_identifier.clone()),
-        ("prompt_cache_retention", request.prompt_cache_retention.clone()),
+        (
+            "prompt_cache_retention",
+            request.prompt_cache_retention.clone(),
+        ),
         (
             "prompt_cache_key",
-            request
-                .prompt_cache_key
-                .clone()
-                .map(JsonData::String),
+            request.prompt_cache_key.clone().map(JsonData::String),
         ),
         (
             "service_tier",
@@ -872,6 +948,211 @@ fn openai_request_controls(
         if let Some(value) = value {
             envelope.controls.extensions.insert(name.to_owned(), value);
         }
+    }
+}
+
+fn record_request_projection_losses(envelope: &mut Envelope, target: Protocol) {
+    if target != Protocol::OpenAi {
+        let conflicting_limits = match (
+            envelope.extensions.get("openai.max_tokens"),
+            envelope.extensions.get("openai.max_completion_tokens"),
+        ) {
+            (Some(max_tokens), Some(max_completion_tokens)) => max_tokens != max_completion_tokens,
+            _ => false,
+        };
+        if conflicting_limits {
+            record_loss(
+                envelope,
+                LossCode::LossUnknownEvent,
+                Some(Feature::UnknownEventPassthrough),
+                "openai.max_tokens",
+                "OpenAI max_tokens and max_completion_tokens conflict; one target limit is selected",
+            );
+        }
+    }
+    if target != Protocol::OpenAi {
+        let strict_tools = envelope
+            .tools
+            .iter()
+            .enumerate()
+            .filter(|(_, tool)| tool.extensions.contains_key("openai.strict"))
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        for index in strict_tools {
+            record_loss(
+                envelope,
+                LossCode::LossUnknownEvent,
+                Some(Feature::UnknownEventPassthrough),
+                format!("tools[{index}].strict").as_str(),
+                "OpenAI strict tool schema has no equivalent target field",
+            );
+        }
+    }
+    if matches!(target, Protocol::Claude | Protocol::Gemini) {
+        if envelope.controls.top_p.is_some() {
+            record_loss(
+                envelope,
+                LossCode::LossUnknownEvent,
+                Some(Feature::UnknownEventPassthrough),
+                "controls.top_p",
+                "target request has no top_p control; the source value remains in IR",
+            );
+        }
+        if envelope.controls.reasoning_effort.is_some() {
+            record_loss(
+                envelope,
+                LossCode::LossUnknownEvent,
+                Some(Feature::ReasoningSummary),
+                "controls.reasoning_effort",
+                "target request has no reasoning_effort control; the source value remains in IR",
+            );
+        }
+        if envelope.controls.response_format.is_some() {
+            record_loss(
+                envelope,
+                LossCode::LossUnknownEvent,
+                Some(Feature::UnknownEventPassthrough),
+                "controls.response_format",
+                "target request has no response_format control; the source value remains in IR",
+            );
+        }
+        if envelope.controls.parallel_tool_calls.is_some() {
+            record_loss(
+                envelope,
+                LossCode::LossUnknownEvent,
+                Some(Feature::ParallelFunctionCall),
+                "controls.parallel_tool_calls",
+                "target request has no parallel_tool_calls control; the source value remains in IR",
+            );
+        }
+    }
+    if target != Protocol::Gemini && envelope.extensions.contains_key("gemini.safety_settings") {
+        record_loss(
+            envelope,
+            LossCode::LossSafetyMetadata,
+            Some(Feature::SafetyMetadata),
+            "gemini.safety_settings",
+            "Gemini safety settings are retained in IR but not expressible on target request",
+        );
+    }
+    let unsupported_controls = envelope
+        .controls
+        .extensions
+        .keys()
+        .filter(|key| match target {
+            Protocol::OpenAi => false,
+            Protocol::Claude => matches!(
+                key.as_str(),
+                "user"
+                    | "store"
+                    | "metadata"
+                    | "stream_options"
+                    | "top_logprobs"
+                    | "safety_identifier"
+                    | "prompt_cache_retention"
+                    | "prompt_cache_key"
+                    | "service_tier"
+                    | "enable_thinking"
+                    | "thinking_budget"
+                    | "n"
+            ),
+            Protocol::Gemini => matches!(
+                key.as_str(),
+                "user"
+                    | "store"
+                    | "metadata"
+                    | "stream_options"
+                    | "top_logprobs"
+                    | "safety_identifier"
+                    | "prompt_cache_retention"
+                    | "prompt_cache_key"
+                    | "service_tier"
+                    | "enable_thinking"
+                    | "thinking_budget"
+                    | "n"
+            ),
+            Protocol::OpenAiResponses => true,
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    for key in unsupported_controls {
+        record_loss(
+            envelope,
+            LossCode::LossUnknownEvent,
+            Some(Feature::UnknownEventPassthrough),
+            format!("controls.extensions.{key}").as_str(),
+            "request control retained in IR but not expressible on target",
+        );
+    }
+}
+
+fn record_response_projection_losses(envelope: &mut Envelope, target: Protocol) {
+    if target != Protocol::Gemini
+        && envelope
+            .extensions
+            .keys()
+            .any(|key| key.starts_with("gemini.candidate[") && key.ends_with(".index"))
+    {
+        record_loss(
+            envelope,
+            LossCode::LossUnknownEvent,
+            Some(Feature::UnknownEventPassthrough),
+            "gemini.candidate[].index",
+            "Gemini candidate indexes are retained in IR but not expressible on target response",
+        );
+    }
+    if target != Protocol::OpenAi
+        && envelope
+            .extensions
+            .keys()
+            .any(|key| key.starts_with("openai.choice[") && key.ends_with(".index"))
+    {
+        record_loss(
+            envelope,
+            LossCode::LossUnknownEvent,
+            Some(Feature::UnknownEventPassthrough),
+            "openai.choice[].index",
+            "OpenAI choice indexes are retained in IR but not expressible on target response",
+        );
+    }
+    let has_unrepresented_gemini_safety = envelope.extensions.keys().any(|key| {
+        key.starts_with("gemini.candidate[")
+            && key.ends_with(".safety_ratings")
+            && (target != Protocol::Gemini || !key.starts_with("gemini.candidate[0]."))
+    });
+    if has_unrepresented_gemini_safety {
+        record_loss(
+            envelope,
+            LossCode::LossSafetyMetadata,
+            Some(Feature::SafetyMetadata),
+            "gemini.candidate[].safetyRatings",
+            "Gemini safety ratings are retained in IR but not expressible on target response",
+        );
+    }
+    if target != Protocol::Claude
+        && (envelope.extensions.contains_key("claude.response_id")
+            || envelope.extensions.contains_key("claude.response_type"))
+    {
+        record_loss(
+            envelope,
+            LossCode::LossUnknownEvent,
+            Some(Feature::UnknownEventPassthrough),
+            "claude.response_metadata",
+            "Claude response id/type are retained in IR but not expressible on target response",
+        );
+    }
+    if target != Protocol::OpenAi
+        && (envelope.extensions.contains_key("openai.response_id")
+            || envelope.extensions.contains_key("openai.response_object")
+            || envelope.extensions.contains_key("openai.response_created"))
+    {
+        record_loss(
+            envelope,
+            LossCode::LossUnknownEvent,
+            Some(Feature::UnknownEventPassthrough),
+            "openai.response_metadata",
+            "OpenAI response metadata is retained in IR but not fully expressible on target",
+        );
     }
 }
 
@@ -923,22 +1204,24 @@ fn chat_anthropic_blocks_to_items(
     source: Protocol,
     target: Protocol,
     path: &str,
+    message_name: Option<&str>,
+    model: Option<&str>,
     envelope: &mut Envelope,
 ) -> Result<(), DirectIrError> {
     for (index, block) in blocks.into_iter().enumerate() {
         let block_path = format!("{path}[{index}]");
         match block.kind.as_str() {
             "text" => {
-                let text = block.text.ok_or_else(|| {
-                    DirectIrError::missing(source, target, "text", &block_path)
-                })?;
-                push_item(
-                    envelope,
-                    text_item(role.clone(), text, source, &block_path),
-                    source,
-                    target,
-                    &block_path,
-                )?;
+                let text = block
+                    .text
+                    .ok_or_else(|| DirectIrError::missing(source, target, "text", &block_path))?;
+                let mut part = Part::text(text);
+                part.extensions = block.extra;
+                let mut item = Item::new(ItemKind::Message, role.clone(), Provenance::new(source));
+                item.provenance.source_path = Some(block_path.clone());
+                item.push_part(part);
+                attach_openai_name(&mut item, message_name);
+                push_item(envelope, item, source, target, &block_path)?;
             }
             "thinking" => {
                 let thinking = block.thinking.ok_or_else(|| {
@@ -954,10 +1237,7 @@ fn chat_anthropic_blocks_to_items(
                             .map(JsonData::String)
                             .unwrap_or(JsonData::Null),
                     ),
-                    (
-                        "extra".to_owned(),
-                        JsonData::Object(block.extra),
-                    ),
+                    ("extra".to_owned(), JsonData::Object(block.extra)),
                 ]);
                 let state = provider_state(
                     "anthropic",
@@ -968,15 +1248,11 @@ fn chat_anthropic_blocks_to_items(
                     } else {
                         OpaqueStateProvenance::Authentic
                     },
-                    block.model.clone(),
+                    model.map(str::to_owned),
                 );
-                push_item(
-                    envelope,
-                    opaque_item(role.clone(), state, source, &block_path),
-                    source,
-                    target,
-                    &block_path,
-                )?;
+                let mut item = opaque_item(role.clone(), state, source, &block_path);
+                attach_openai_name(&mut item, message_name);
+                push_item(envelope, item, source, target, &block_path)?;
             }
             "redacted_thinking" => {
                 let data = block.data.or(block.content).ok_or_else(|| {
@@ -991,25 +1267,18 @@ fn chat_anthropic_blocks_to_items(
                             JsonData::String("redacted_thinking".to_owned()),
                         ),
                         ("data".to_owned(), data),
-                        (
-                            "extra".to_owned(),
-                            JsonData::Object(block.extra),
-                        ),
+                        ("extra".to_owned(), JsonData::Object(block.extra)),
                     ]),
                     if block.synthetic.unwrap_or(false) {
                         OpaqueStateProvenance::Synthetic
                     } else {
                         OpaqueStateProvenance::Authentic
                     },
-                    block.model.clone(),
+                    model.map(str::to_owned),
                 );
-                push_item(
-                    envelope,
-                    opaque_item(role.clone(), state, source, &block_path),
-                    source,
-                    target,
-                    &block_path,
-                )?;
+                let mut item = opaque_item(role.clone(), state, source, &block_path);
+                attach_openai_name(&mut item, message_name);
+                push_item(envelope, item, source, target, &block_path)?;
             }
             "tool_use" => {
                 let id = block.id.ok_or_else(|| {
@@ -1022,20 +1291,25 @@ fn chat_anthropic_blocks_to_items(
                     "function_call_id",
                     &format!("{block_path}.id"),
                 )?
-                .ok_or_else(|| DirectIrError::missing(source, target, "tool_use.id", &block_path))?;
+                .ok_or_else(|| {
+                    DirectIrError::missing(source, target, "tool_use.id", &block_path)
+                })?;
                 let name = block.name.ok_or_else(|| {
                     DirectIrError::missing(source, target, "tool_use.name", &block_path)
                 })?;
                 let input = block.input.ok_or_else(|| {
                     DirectIrError::missing(source, target, "tool_use.input", &block_path)
                 })?;
-                push_item(
-                    envelope,
-                    tool_call_item(call_id, name, input, source, &block_path),
-                    source,
-                    target,
-                    &block_path,
-                )?;
+                let mut function = FunctionData::call(name, input);
+                function.extensions = block.extra;
+                let mut item = Item::tool_call(
+                    call_id,
+                    vec![Part::function(function)],
+                    Provenance::new(source),
+                );
+                item.provenance.source_path = Some(block_path.clone());
+                attach_openai_name(&mut item, message_name);
+                push_item(envelope, item, source, target, &block_path)?;
             }
             "tool_result" => {
                 let id = block.tool_use_id.ok_or_else(|| {
@@ -1048,20 +1322,20 @@ fn chat_anthropic_blocks_to_items(
                     "function_call_id",
                     &format!("{block_path}.tool_use_id"),
                 )?
-                .ok_or_else(|| DirectIrError::missing(source, target, "tool_result.tool_use_id", &block_path))?;
-                push_item(
-                    envelope,
-                    tool_result_item(
-                        call_id,
-                        block.name,
-                        block.content.unwrap_or(JsonData::Null),
-                        source,
-                        &block_path,
-                    ),
-                    source,
-                    target,
-                    &block_path,
-                )?;
+                .ok_or_else(|| {
+                    DirectIrError::missing(source, target, "tool_result.tool_use_id", &block_path)
+                })?;
+                let mut function =
+                    FunctionData::result(block.name, block.content.unwrap_or(JsonData::Null));
+                function.extensions = block.extra;
+                let mut item = Item::tool_result(
+                    call_id,
+                    vec![Part::function(function)],
+                    Provenance::new(source),
+                );
+                item.provenance.source_path = Some(block_path.clone());
+                attach_openai_name(&mut item, message_name);
+                push_item(envelope, item, source, target, &block_path)?;
             }
             "image" => {
                 let image = block.image_url.ok_or_else(|| {
@@ -1074,13 +1348,10 @@ fn chat_anthropic_blocks_to_items(
                 let mut media = Media::new(MediaKind::Image);
                 media.uri = uri;
                 media.data = data;
-                push_item(
-                    envelope,
-                    media_item(role.clone(), media, source, &block_path),
-                    source,
-                    target,
-                    &block_path,
-                )?;
+                media.extensions = block.extra;
+                let mut item = media_item(role.clone(), media, source, &block_path);
+                attach_openai_name(&mut item, message_name);
+                push_item(envelope, item, source, target, &block_path)?;
             }
             _ => {
                 return Err(DirectIrError::unsupported(
@@ -1104,11 +1375,74 @@ fn chat_message_to_envelope(
 ) -> Result<(), DirectIrError> {
     let path = format!("messages[{index}]");
     let role = role_from_wire(Some(&message.role), source, target, &format!("{path}.role"))?;
+    let is_tool_result = matches!(&role, Role::Tool) || message.tool_call_id.is_some();
+    if is_tool_result {
+        if !message.tool_calls.is_empty() {
+            return Err(DirectIrError::unsupported(
+                source,
+                target,
+                "tool_result.tool_calls",
+                &format!("{path}.tool_calls"),
+            ));
+        }
+        if message
+            .extra_content
+            .as_ref()
+            .is_some_and(|extra| extra.google.is_some() || extra.anthropic.is_some())
+        {
+            return Err(DirectIrError::unsupported(
+                source,
+                target,
+                "tool_result.extra_content",
+                &format!("{path}.extra_content"),
+            ));
+        }
+        let call_id = authentic_id(
+            message.tool_call_id,
+            source,
+            target,
+            "function_call_id",
+            &format!("{path}.tool_call_id"),
+        )?
+        .ok_or_else(|| {
+            DirectIrError::missing(
+                source,
+                target,
+                "function_call_id",
+                &format!("{path}.tool_call_id"),
+            )
+        })?;
+        let output =
+            chat_content_to_json(message.content, source, target, &format!("{path}.content"))?;
+        let function = FunctionData::result(message.name, output);
+        let mut item = Item::tool_result(
+            call_id,
+            vec![Part::function(function)],
+            Provenance::new(source),
+        );
+        item.provenance.source_path = Some(path.clone());
+        push_item(envelope, item, source, target, &path)?;
+        return Ok(());
+    }
+    let message_google_state = chat_extra_google_state(
+        message.extra_content.clone(),
+        source,
+        target,
+        &format!("{path}.extra_content.google.thought_signature"),
+    )?;
     let has_anthropic_blocks = message
         .extra_content
         .as_ref()
         .and_then(|extra| extra.anthropic.as_ref())
         .is_some_and(|value| !value.blocks.is_empty());
+    if has_anthropic_blocks && !message.tool_calls.is_empty() {
+        return Err(DirectIrError::unsupported(
+            source,
+            target,
+            "mixed_content",
+            &format!("{path}.tool_calls"),
+        ));
+    }
     if has_anthropic_blocks {
         let blocks = message
             .extra_content
@@ -1122,6 +1456,7 @@ fn chat_message_to_envelope(
             source,
             target,
             &format!("{path}.extra_content.anthropic.blocks"),
+            message.name.as_deref(),
             envelope,
         )?;
     } else {
@@ -1134,6 +1469,11 @@ fn chat_message_to_envelope(
         )?;
         let mut item = Item::new(ItemKind::Message, role.clone(), Provenance::new(source));
         item.provenance.source_path = Some(path.clone());
+        if let Some(name) = message.name.clone() {
+            item.provenance
+                .extensions
+                .insert("openai.name".to_owned(), JsonData::String(name));
+        }
         for part in parts {
             item.push_part(part);
         }
@@ -1144,7 +1484,8 @@ fn chat_message_to_envelope(
             push_item(
                 envelope,
                 {
-                    let mut item = Item::new(ItemKind::Reasoning, role.clone(), Provenance::new(source));
+                    let mut item =
+                        Item::new(ItemKind::Reasoning, role.clone(), Provenance::new(source));
                     item.provenance.source_path = Some(format!("{path}.reasoning_content"));
                     item.push_part(Part::text(reasoning));
                     item
@@ -1155,13 +1496,33 @@ fn chat_message_to_envelope(
             )?;
         }
     }
+    let mut message_google_state = message_google_state;
     for (call_index, call) in message.tool_calls.into_iter().enumerate() {
+        let call_path = format!("{path}.tool_calls[{call_index}]");
+        if call
+            .extra_content
+            .as_ref()
+            .is_some_and(|extra| extra.anthropic.is_some())
+        {
+            return Err(DirectIrError::unsupported(
+                source,
+                target,
+                "tool_call.extra_content.anthropic",
+                &format!("{call_path}.extra_content"),
+            ));
+        }
+        let call_google_state = chat_extra_google_state(
+            call.extra_content.clone(),
+            source,
+            target,
+            &format!("{call_path}.extra_content.google.thought_signature"),
+        )?;
         if call.id.is_empty() {
             return Err(DirectIrError::new(
                 source,
                 target,
                 "function_call_id",
-                &format!("{path}.tool_calls[{call_index}].id"),
+                &format!("{call_path}.id"),
                 DirectIrReason::EmptyId,
             ));
         }
@@ -1170,43 +1531,71 @@ fn chat_message_to_envelope(
             source,
             target,
             "function_arguments",
-            &format!("{path}.tool_calls[{call_index}].function.arguments"),
+            &format!("{call_path}.function.arguments"),
         )?;
+        let call_id = OpaqueId::authentic(call.id, source);
+        let call_name = call.function.name;
         push_item(
             envelope,
-            tool_call_item(
-                OpaqueId::authentic(call.id, source),
-                call.function.name,
-                arguments,
-                source,
-                &format!("{path}.tool_calls[{call_index}]"),
-            ),
+            tool_call_item(call_id, call_name, arguments, source, &call_path),
             source,
             target,
-            &format!("{path}.tool_calls[{call_index}]"),
+            &call_path,
         )?;
+        let state = if call_index == 0 {
+            match (message_google_state.take(), call_google_state) {
+                (Some(_), Some(_)) => {
+                    return Err(DirectIrError::new(
+                        source,
+                        target,
+                        "thought_signature",
+                        &call_path,
+                        DirectIrReason::Mismatch,
+                    ));
+                }
+                (Some(state), None) | (None, Some(state)) => Some(state),
+                (None, None) => None,
+            }
+        } else {
+            call_google_state
+        };
+        if let Some(state) = state {
+            let state_path = format!("{call_path}.extra_content.google.thought_signature");
+            if state.provenance == OpaqueStateProvenance::Synthetic {
+                record_loss(
+                    envelope,
+                    LossCode::SyntheticThoughtSignature,
+                    Some(Feature::OpaqueReasoningSignature),
+                    &state_path,
+                    "synthetic provider signature retained explicitly",
+                );
+            }
+            push_item(
+                envelope,
+                opaque_item(Role::Assistant, state, source, &state_path),
+                source,
+                target,
+                &state_path,
+            )?;
+        }
     }
-    if let Some(state) = chat_extra_google_state(
-        message.extra_content,
-        source,
-        target,
-        &format!("{path}.extra_content.google.thought_signature"),
-    )? {
+    if let Some(state) = message_google_state {
+        let state_path = format!("{path}.extra_content.google.thought_signature");
         if state.provenance == OpaqueStateProvenance::Synthetic {
             record_loss(
                 envelope,
                 LossCode::SyntheticThoughtSignature,
                 Some(Feature::OpaqueReasoningSignature),
-                &format!("{path}.extra_content.google.thought_signature"),
+                &state_path,
                 "synthetic provider signature retained explicitly",
             );
         }
         push_item(
             envelope,
-            opaque_item(role, state, source, &format!("{path}.extra_content.google")),
+            opaque_item(role, state, source, &state_path),
             source,
             target,
-            &format!("{path}.extra_content.google"),
+            &state_path,
         )?;
     }
     Ok(())
@@ -1221,18 +1610,15 @@ pub fn openai_chat_request_to_envelope_v2(
     let target = Protocol::OpenAi;
     let mut envelope = Envelope::new(source, model);
     openai_request_controls(&request, &mut envelope);
-    envelope.tool_choice = tool_choice_from_json(
-        request.tool_choice.clone(),
-        source,
-        target,
-        "tool_choice",
-    )?;
+    envelope.tool_choice =
+        tool_choice_from_json(request.tool_choice.clone(), source, target, "tool_choice")?;
     for (index, tool) in request.tools.iter().enumerate() {
         envelope.tools.push(tool_to_ir(
             tool.kind.clone(),
             tool.function.name.clone(),
             tool.function.description.clone(),
             tool.function.parameters.clone(),
+            tool.function.strict,
             source,
             target,
             &format!("tools[{index}]"),
@@ -1256,23 +1642,200 @@ fn number_u64(value: &JsonData) -> Option<u64> {
     }
 }
 
-fn openai_message_from_item(
+fn empty_anthropic_block(kind: &str) -> OpenAiAnthropicBlock {
+    OpenAiAnthropicBlock {
+        kind: kind.to_owned(),
+        text: None,
+        thinking: None,
+        signature: None,
+        synthetic: None,
+        data: None,
+        id: None,
+        name: None,
+        input: None,
+        tool_use_id: None,
+        content: None,
+        image_url: None,
+        extra: BTreeMap::new(),
+    }
+}
+
+fn claude_item_to_anthropic_blocks(
     item: &Item,
-    envelope: &Envelope,
     source: Protocol,
     target: Protocol,
     path: &str,
+) -> Result<Vec<OpenAiAnthropicBlock>, DirectIrError> {
+    let mut blocks = Vec::new();
+    for (index, part) in item.ordered_parts().iter().enumerate() {
+        let part_path = format!("{path}.parts[{index}]");
+        let block = match &part.kind {
+            PartKind::Text => {
+                let mut block = empty_anthropic_block("text");
+                block.text = part.text.clone();
+                block.extra = part.extensions.clone();
+                block
+            }
+            PartKind::Media => {
+                let media = part.media.as_ref().ok_or_else(|| {
+                    DirectIrError::new(
+                        source,
+                        target,
+                        "media",
+                        &part_path,
+                        DirectIrReason::InvalidShape,
+                    )
+                })?;
+                if !matches!(&media.kind, MediaKind::Image) {
+                    return Err(DirectIrError::unsupported(
+                        source,
+                        target,
+                        "claude_media",
+                        &part_path,
+                    ));
+                }
+                let mut block = empty_anthropic_block("image");
+                block.image_url = if let Some(uri) = media.uri.as_ref() {
+                    Some(JsonData::String(uri.clone()))
+                } else {
+                    media.data.clone()
+                };
+                block.extra = media.extensions.clone();
+                block
+            }
+            PartKind::Function => {
+                let function = part.function.as_ref().ok_or_else(|| {
+                    DirectIrError::new(
+                        source,
+                        target,
+                        "function",
+                        &part_path,
+                        DirectIrReason::InvalidShape,
+                    )
+                })?;
+                let call_id = item.call_id.as_ref().ok_or_else(|| {
+                    DirectIrError::missing(source, target, "function_call_id", &part_path)
+                })?;
+                match &function.kind {
+                    FunctionKind::Call => {
+                        let mut block = empty_anthropic_block("tool_use");
+                        block.id = Some(id_value(call_id)?);
+                        block.name = function.name.clone();
+                        block.input =
+                            Some(function.arguments.clone().unwrap_or_else(|| object([])));
+                        block.extra = function.extensions.clone();
+                        block
+                    }
+                    FunctionKind::Result => {
+                        let mut block = empty_anthropic_block("tool_result");
+                        block.tool_use_id = Some(id_value(call_id)?);
+                        block.name = function.name.clone();
+                        block.content = Some(function.output.clone().unwrap_or(JsonData::Null));
+                        block.extra = function.extensions.clone();
+                        block
+                    }
+                    FunctionKind::Unknown(_) => {
+                        return Err(DirectIrError::unsupported(
+                            source,
+                            target,
+                            "function_kind",
+                            &part_path,
+                        ));
+                    }
+                }
+            }
+            PartKind::Opaque => {
+                let state = part.opaque.as_ref().ok_or_else(|| {
+                    DirectIrError::new(
+                        source,
+                        target,
+                        "opaque_state",
+                        &part_path,
+                        DirectIrReason::InvalidOpaqueState,
+                    )
+                })?;
+                if state.provider != "anthropic" {
+                    continue;
+                }
+                opaque_state_to_anthropic_block(state, source, target, &part_path)?
+            }
+            PartKind::Unknown(_) => {
+                return Err(DirectIrError::unsupported(
+                    source,
+                    target,
+                    "part_kind",
+                    &part_path,
+                ));
+            }
+        };
+        blocks.push(block);
+    }
+    Ok(blocks)
+}
+
+fn google_state_to_extra_content(
+    state: &OpaqueProviderState,
+    source: Protocol,
+    target: Protocol,
+    path: &str,
+) -> Result<OpenAiExtraContent, DirectIrError> {
+    if state.provider != "google" || state.kind != "thought_signature" {
+        return Err(DirectIrError::unsupported(
+            source,
+            target,
+            "thought_signature",
+            path,
+        ));
+    }
+    let signature = json_string(&state.raw).ok_or_else(|| {
+        DirectIrError::new(
+            source,
+            target,
+            "thought_signature",
+            path,
+            DirectIrReason::InvalidOpaqueState,
+        )
+    })?;
+    if signature.is_empty() {
+        return Err(DirectIrError::new(
+            source,
+            target,
+            "thought_signature",
+            path,
+            DirectIrReason::EmptyId,
+        ));
+    }
+    Ok(OpenAiExtraContent {
+        google: Some(OpenAiGoogleExtraContent {
+            thought_signature: Some(signature.to_owned()),
+            synthetic: (state.provenance == OpaqueStateProvenance::Synthetic).then_some(true),
+        }),
+        anthropic: None,
+    })
+}
+
+fn openai_message_from_item(
+    item: &Item,
+    source: Protocol,
+    target: Protocol,
+    path: &str,
+    bound_google_state: Option<&OpaqueProviderState>,
 ) -> Result<OpenAiChatMessage, DirectIrError> {
     let mut message = OpenAiChatMessage {
         role: chat_role(item.role.clone()).to_owned(),
         content: None,
         reasoning_content: None,
-        name: None,
+        name: item
+            .provenance
+            .extensions
+            .get("openai.name")
+            .and_then(json_string)
+            .map(str::to_owned),
         tool_call_id: None,
         tool_calls: Vec::new(),
         extra_content: None,
     };
-    match item.kind {
+    match &item.kind {
         ItemKind::Message => {
             message.content = chat_parts_to_content(
                 item.ordered_parts(),
@@ -1300,24 +1863,8 @@ fn openai_message_from_item(
                         ));
                     };
                     if state.provider == "google" && state.kind == "thought_signature" {
-                        let signature = json_string(&state.raw).ok_or_else(|| {
-                            DirectIrError::new(
-                                source,
-                                target,
-                                "thought_signature",
-                                path,
-                                DirectIrReason::InvalidOpaqueState,
-                            )
-                        })?;
-                        let google = OpenAiGoogleExtraContent {
-                            thought_signature: Some(signature.to_owned()),
-                            synthetic: (state.provenance == OpaqueStateProvenance::Synthetic)
-                                .then_some(true),
-                        };
-                        message.extra_content = Some(OpenAiExtraContent {
-                            google: Some(google),
-                            anthropic: None,
-                        });
+                        message.extra_content =
+                            Some(google_state_to_extra_content(state, source, target, path)?);
                     } else if state.provider == "anthropic" {
                         let block = opaque_state_to_anthropic_block(state, source, target, path)?;
                         message.extra_content = Some(OpenAiExtraContent {
@@ -1347,17 +1894,19 @@ fn openai_message_from_item(
             }
         }
         ItemKind::ToolCall => {
-            let call_id = item.call_id.as_ref().ok_or_else(|| {
-                DirectIrError::missing(source, target, "function_call_id", path)
-            })?;
+            let call_id = item
+                .call_id
+                .as_ref()
+                .ok_or_else(|| DirectIrError::missing(source, target, "function_call_id", path))?;
             let function = item
                 .ordered_parts()
                 .first()
                 .and_then(|part| part.function.as_ref())
                 .ok_or_else(|| DirectIrError::missing(source, target, "function", path))?;
-            let name = function.name.clone().ok_or_else(|| {
-                DirectIrError::missing(source, target, "function.name", path)
-            })?;
+            let name = function
+                .name
+                .clone()
+                .ok_or_else(|| DirectIrError::missing(source, target, "function.name", path))?;
             let arguments = function.arguments.clone().unwrap_or(object([]));
             message.tool_calls.push(OpenAiToolCall {
                 id: id_value(call_id)?,
@@ -1377,25 +1926,53 @@ fn openai_message_from_item(
                     parameters: None,
                     strict: None,
                 },
-                extra_content: None,
+                extra_content: bound_google_state
+                    .map(|state| google_state_to_extra_content(state, source, target, path))
+                    .transpose()?,
             });
         }
         ItemKind::ToolResult => {
-            let call_id = item.call_id.as_ref().ok_or_else(|| {
-                DirectIrError::missing(source, target, "function_call_id", path)
-            })?;
+            let call_id = item
+                .call_id
+                .as_ref()
+                .ok_or_else(|| DirectIrError::missing(source, target, "function_call_id", path))?;
             let function = item
                 .ordered_parts()
                 .first()
                 .and_then(|part| part.function.as_ref())
                 .ok_or_else(|| DirectIrError::missing(source, target, "function", path))?;
             message.tool_call_id = Some(id_value(call_id)?);
-            message.content = Some(StringOrParts::String(compact_json(
-                &function.output.clone().unwrap_or(JsonData::Null),
-            )?));
+            message.name = function.name.clone();
+            let output = function.output.clone().unwrap_or(JsonData::Null);
+            let content = match output {
+                JsonData::String(value) => value,
+                value => compact_json(&value)?,
+            };
+            message.content = Some(StringOrParts::String(content));
         }
         ItemKind::Unknown(_) => {
-            return Err(DirectIrError::unsupported(source, target, "item_kind", path));
+            return Err(DirectIrError::unsupported(
+                source,
+                target,
+                "item_kind",
+                path,
+            ));
+        }
+    }
+    if item.provenance.source == Protocol::Claude {
+        let blocks = claude_item_to_anthropic_blocks(item, source, target, path)?;
+        if !blocks.is_empty() {
+            let model = item
+                .ordered_parts()
+                .iter()
+                .filter_map(|part| part.opaque.as_ref())
+                .find_map(|state| state.model.clone());
+            let mut extra = message.extra_content.take().unwrap_or(OpenAiExtraContent {
+                google: None,
+                anthropic: None,
+            });
+            extra.anthropic = Some(OpenAiAnthropicExtraContent { blocks, model });
+            message.extra_content = Some(extra);
         }
     }
     Ok(message)
@@ -1433,7 +2010,10 @@ fn opaque_state_to_anthropic_block(
                 .get("thinking")
                 .and_then(json_string)
                 .map(str::to_owned),
-            signature: object.get("signature").and_then(json_string).map(str::to_owned),
+            signature: object
+                .get("signature")
+                .and_then(json_string)
+                .map(str::to_owned),
             synthetic: (state.provenance == OpaqueStateProvenance::Synthetic).then_some(true),
             data: None,
             id: None,
@@ -1470,15 +2050,17 @@ fn opaque_state_to_anthropic_block(
 
 /// Encodes an ordered Envelope as an OpenAI Chat request.
 pub fn envelope_to_openai_chat_request_v2(
-    envelope: Envelope,
+    mut envelope: Envelope,
 ) -> Result<DirectIrConversion<OpenAiChatRequest>, DirectIrError> {
     let source = envelope.source;
     let target = Protocol::OpenAi;
+    record_request_projection_losses(&mut envelope, target);
     let mut output = OpenAiChatRequest {
         model: envelope.model.clone(),
         messages: Vec::new(),
         stream: envelope.controls.stream,
-        max_tokens: controls_extension(&envelope, "openai.max_tokens").and_then(|value| number_u64(&value)),
+        max_tokens: controls_extension(&envelope, "openai.max_tokens")
+            .and_then(|value| number_u64(&value)),
         max_completion_tokens: controls_extension(&envelope, "openai.max_completion_tokens")
             .and_then(|value| number_u64(&value)),
         temperature: envelope.controls.temperature,
@@ -1493,11 +2075,10 @@ pub fn envelope_to_openai_chat_request_v2(
         store: controls_extension(&envelope, "store"),
         metadata: controls_extension(&envelope, "metadata"),
         stream_options: controls_extension(&envelope, "stream_options"),
-        top_logprobs: controls_extension(&envelope, "top_logprobs")
-            .and_then(|value| match value {
-                JsonData::Number(number) => number.as_i64(),
-                _ => None,
-            }),
+        top_logprobs: controls_extension(&envelope, "top_logprobs").and_then(|value| match value {
+            JsonData::Number(number) => number.as_i64(),
+            _ => None,
+        }),
         safety_identifier: controls_extension(&envelope, "safety_identifier"),
         prompt_cache_retention: controls_extension(&envelope, "prompt_cache_retention"),
         prompt_cache_key: controls_extension(&envelope, "prompt_cache_key")
@@ -1512,13 +2093,8 @@ pub fn envelope_to_openai_chat_request_v2(
             output.max_completion_tokens = Some(max_output_tokens);
         }
     }
-    for tool in &envelope.tools {
-        let Some(name) = tool.name.clone() else {
-            return Err(DirectIrError::missing(source, target, "tool.name", "tools[]"));
-        };
-        if !matches!(tool.kind, ToolKind::Function) {
-            return Err(DirectIrError::unsupported(source, target, "tool_type", "tools[]"));
-        }
+    for (index, tool) in envelope.tools.iter().enumerate() {
+        let name = tool_name_for_target(tool, index, source, target)?;
         output.tools.push(OpenAiChatTool {
             kind: "function".to_owned(),
             function: OpenAiFunction {
@@ -1526,19 +2102,11 @@ pub fn envelope_to_openai_chat_request_v2(
                 arguments: String::new(),
                 description: tool.description.clone(),
                 parameters: tool.input_schema.clone(),
-                strict: None,
+                strict: openai_strict_for_tool(tool, source, target, index)?,
             },
         });
     }
-    for (index, item) in envelope.ordered_items().iter().enumerate() {
-        output.messages.push(openai_message_from_item(
-            item,
-            &envelope,
-            source,
-            target,
-            &format!("items[{index}]"),
-        )?);
-    }
+    output.messages = openai_response_message_groups(&mut envelope, source, target)?;
     Ok(finish(output, envelope, source, target))
 }
 
@@ -1547,4 +2115,4135 @@ pub fn envelope_to_openai_chat_request(
     envelope: Envelope,
 ) -> Result<DirectIrConversion<OpenAiChatRequest>, DirectIrError> {
     envelope_to_openai_chat_request_v2(envelope)
+}
+
+#[derive(Default)]
+struct GeminiCallLinks {
+    by_id: BTreeMap<String, String>,
+    by_name: BTreeMap<String, VecDeque<String>>,
+    next: usize,
+}
+
+impl GeminiCallLinks {
+    fn remember(
+        &mut self,
+        name: &str,
+        id: String,
+        source: Protocol,
+        target: Protocol,
+        path: &str,
+    ) -> Result<(), DirectIrError> {
+        if id.is_empty() {
+            return Err(DirectIrError::new(
+                source,
+                target,
+                "function_call_id",
+                path,
+                DirectIrReason::EmptyId,
+            ));
+        }
+        if self.by_id.contains_key(&id) {
+            return Err(DirectIrError::new(
+                source,
+                target,
+                "function_call_id",
+                path,
+                DirectIrReason::DuplicateId,
+            ));
+        }
+        self.by_name
+            .entry(name.to_owned())
+            .or_default()
+            .push(id.clone());
+        self.by_id.insert(id, name.to_owned());
+        Ok(())
+    }
+
+    fn synthetic_call_id(&mut self, index: usize, part_index: usize, name: &str) -> String {
+        loop {
+            let id = synthetic_gemini_id("call", index, part_index, name);
+            self.next = self.next.saturating_add(1);
+            if !self.by_id.contains_key(&id) {
+                return id;
+            }
+        }
+    }
+
+    fn take_result(
+        &mut self,
+        name: &str,
+        id: Option<String>,
+        source: Protocol,
+        target: Protocol,
+        path: &str,
+    ) -> Result<(String, bool), DirectIrError> {
+        if let Some(id) = id {
+            if id.is_empty() {
+                return Err(DirectIrError::new(
+                    source,
+                    target,
+                    "function_call_id",
+                    path,
+                    DirectIrReason::EmptyId,
+                ));
+            }
+            let Some(expected_name) = self.by_id.get(&id) else {
+                return Err(DirectIrError::new(
+                    source,
+                    target,
+                    "function_call_id",
+                    path,
+                    DirectIrReason::Orphan,
+                ));
+            };
+            if expected_name != name {
+                return Err(DirectIrError::new(
+                    source,
+                    target,
+                    "function_result_name",
+                    path,
+                    DirectIrReason::Mismatch,
+                ));
+            }
+            let Some(queue) = self.by_name.get_mut(name) else {
+                return Err(DirectIrError::new(
+                    source,
+                    target,
+                    "function_call_id",
+                    path,
+                    DirectIrReason::Orphan,
+                ));
+            };
+            let Some(position) = queue.iter().position(|candidate| candidate == &id) else {
+                return Err(DirectIrError::new(
+                    source,
+                    target,
+                    "function_call_id",
+                    path,
+                    DirectIrReason::Mismatch,
+                ));
+            };
+            queue.remove(position);
+            self.by_id.remove(&id);
+            Ok((id, false))
+        } else {
+            let Some(queue) = self.by_name.get_mut(name) else {
+                return Err(DirectIrError::new(
+                    source,
+                    target,
+                    "function_call_id",
+                    path,
+                    DirectIrReason::Orphan,
+                ));
+            };
+            let Some(id) = queue.first().cloned() else {
+                return Err(DirectIrError::new(
+                    source,
+                    target,
+                    "function_call_id",
+                    path,
+                    DirectIrReason::Orphan,
+                ));
+            };
+            queue.remove(0);
+            self.by_id.remove(&id);
+            Ok((id, true))
+        }
+    }
+}
+
+fn gemini_media_kind(mime_type: &str) -> MediaKind {
+    if mime_type.starts_with("image/") {
+        MediaKind::Image
+    } else if mime_type.starts_with("audio/") {
+        MediaKind::Audio
+    } else if mime_type.starts_with("video/") {
+        MediaKind::Video
+    } else {
+        MediaKind::File
+    }
+}
+
+fn gemini_part_to_items(
+    part: GeminiPart,
+    content_index: usize,
+    part_index: usize,
+    role: Role,
+    envelope: &mut Envelope,
+    links: &mut GeminiCallLinks,
+    source: Protocol,
+    target: Protocol,
+    model: &str,
+) -> Result<(), DirectIrError> {
+    let path = format!("contents[{content_index}].parts[{part_index}]");
+    let payload_count = usize::from(part.text.is_some())
+        + usize::from(part.inline_data.is_some())
+        + usize::from(part.function_call.is_some())
+        + usize::from(part.function_response.is_some());
+    if payload_count > 1 {
+        return Err(DirectIrError::new(
+            source,
+            target,
+            "gemini_part_shape",
+            &path,
+            DirectIrReason::InvalidShape,
+        ));
+    }
+    if let Some(text) = part.text {
+        push_item(
+            envelope,
+            text_item(role.clone(), text, source, &path),
+            source,
+            target,
+            &path,
+        )?;
+    }
+    if let Some(inline) = part.inline_data {
+        let mut media = Media::new(gemini_media_kind(&inline.mime_type));
+        media.mime_type = Some(inline.mime_type);
+        media.data = Some(JsonData::String(inline.data));
+        push_item(
+            envelope,
+            media_item(role.clone(), media, source, &path),
+            source,
+            target,
+            &path,
+        )?;
+    }
+    if let Some(call) = part.function_call {
+        let GeminiFunctionCall { id, name, args } = call;
+        let call_id = match id {
+            Some(id) if id.is_empty() => {
+                return Err(DirectIrError::new(
+                    source,
+                    target,
+                    "function_call_id",
+                    &format!("{path}.functionCall.id"),
+                    DirectIrReason::EmptyId,
+                ));
+            }
+            Some(id) => {
+                links.remember(
+                    &name,
+                    id.clone(),
+                    source,
+                    target,
+                    &format!("{path}.functionCall.id"),
+                )?;
+                OpaqueId::authentic(id, source)
+            }
+            None => {
+                let id = links.synthetic_call_id(content_index, part_index, &name);
+                links.remember(
+                    &name,
+                    id.clone(),
+                    source,
+                    target,
+                    &format!("{path}.functionCall.id"),
+                )?;
+                record_loss(
+                    envelope,
+                    LossCode::SyntheticToolCallId,
+                    Some(Feature::FunctionCallId),
+                    &format!("{path}.functionCall.id"),
+                    "Gemini omitted function call id; deterministic id retained",
+                );
+                OpaqueId::synthetic(id, source)
+            }
+        };
+        push_item(
+            envelope,
+            tool_call_item(
+                call_id,
+                name,
+                args.unwrap_or_else(|| object([])),
+                source,
+                &path,
+            ),
+            source,
+            target,
+            &path,
+        )?;
+    }
+    if let Some(result) = part.function_response {
+        let GeminiFunctionResponse { id, name, response } = result;
+        let (call_id, synthetic) = links.take_result(
+            &name,
+            id,
+            source,
+            target,
+            &format!("{path}.functionResponse.id"),
+        )?;
+        if synthetic {
+            record_loss(
+                envelope,
+                LossCode::SyntheticToolCallId,
+                Some(Feature::FunctionCallId),
+                &format!("{path}.functionResponse.id"),
+                "Gemini omitted function result id; FIFO name matching retained",
+            );
+        }
+        let id = OpaqueId {
+            value: call_id,
+            provenance: if synthetic {
+                OpaqueIdProvenance::Synthetic
+            } else {
+                OpaqueIdProvenance::Authentic
+            },
+            source,
+        };
+        push_item(
+            envelope,
+            tool_result_item(id, Some(name), response, source, &path),
+            source,
+            target,
+            &path,
+        )?;
+    }
+    if let Some(signature) = part.thought_signature {
+        if signature.is_empty() {
+            return Err(DirectIrError::new(
+                source,
+                target,
+                "thought_signature",
+                &format!("{path}.thoughtSignature"),
+                DirectIrReason::EmptyId,
+            ));
+        }
+        if payload_count == 0 {
+            push_item(
+                envelope,
+                text_item(role.clone(), String::new(), source, &format!("{path}.text")),
+                source,
+                target,
+                &path,
+            )?;
+        }
+        let state = provider_state(
+            "google",
+            "thought_signature",
+            JsonData::String(signature),
+            OpaqueStateProvenance::Authentic,
+            Some(model.to_owned()),
+        );
+        push_item(
+            envelope,
+            opaque_item(role, state, source, &format!("{path}.thoughtSignature")),
+            source,
+            target,
+            &path,
+        )?;
+    }
+    Ok(())
+}
+
+fn gemini_tools_to_ir(request: &GeminiRequest) -> Vec<Tool> {
+    request
+        .tools
+        .iter()
+        .flat_map(|tool| tool.function_declarations.iter())
+        .map(|tool| Tool {
+            kind: ToolKind::Function,
+            name: Some(tool.name.clone()),
+            description: tool.description.clone(),
+            input_schema: Some(tool.parameters.clone()),
+            extensions: empty_extensions(),
+        })
+        .collect()
+}
+
+fn gemini_tool_choice_to_ir(
+    config: Option<&GeminiToolConfig>,
+    source: Protocol,
+    target: Protocol,
+) -> Result<ToolChoice, DirectIrError> {
+    let Some(config) = config else {
+        return Ok(ToolChoice::Auto);
+    };
+    match config.function_calling_config.mode.as_str() {
+        "AUTO" => Ok(ToolChoice::Auto),
+        "ANY" => Ok(ToolChoice::Required),
+        "NONE" => Ok(ToolChoice::None),
+        _ => Err(DirectIrError::unsupported(
+            source,
+            target,
+            "tool_choice",
+            "toolConfig.functionCallingConfig.mode",
+        )),
+    }
+}
+
+/// Decodes a Gemini request.  Gemini does not put its model in the JSON body,
+/// so callers supply the route model explicitly.
+pub fn gemini_request_to_envelope_v2(
+    request: GeminiRequest,
+    model: impl Into<String>,
+) -> Result<DirectIrConversion<Envelope>, DirectIrError> {
+    let model = model.into();
+    let source = Protocol::Gemini;
+    let target = Protocol::Gemini;
+    let mut envelope = Envelope::new(source, model.clone());
+    let has_system_instruction = request.system_instruction.is_some();
+    if let Some(system) = request.system_instruction {
+        let role = Role::System;
+        let mut links = GeminiCallLinks::default();
+        for (part_index, part) in system.parts.into_iter().enumerate() {
+            gemini_part_to_items(
+                part,
+                0,
+                part_index,
+                role.clone(),
+                &mut envelope,
+                &mut links,
+                source,
+                target,
+                &model,
+            )?;
+        }
+    }
+    let mut links = GeminiCallLinks::default();
+    let system_offset = usize::from(has_system_instruction);
+    for (content_index, content) in request.contents.into_iter().enumerate() {
+        let role = if content
+            .parts
+            .iter()
+            .any(|part| part.function_response.is_some())
+        {
+            Role::Tool
+        } else {
+            role_from_wire(
+                content.role.as_deref(),
+                source,
+                target,
+                &format!("contents[{content_index}].role"),
+            )?
+        };
+        let content_is_empty = content.parts.is_empty();
+        for (part_index, part) in content.parts.into_iter().enumerate() {
+            gemini_part_to_items(
+                part,
+                content_index.saturating_add(system_offset),
+                part_index,
+                role.clone(),
+                &mut envelope,
+                &mut links,
+                source,
+                target,
+                &model,
+            )?;
+        }
+        if content_is_empty {
+            push_item(
+                &mut envelope,
+                Item::new(ItemKind::Message, role, Provenance::new(source)),
+                source,
+                target,
+                &format!("contents[{content_index}].parts"),
+            )?;
+        }
+    }
+    envelope.tools = gemini_tools_to_ir(&request);
+    envelope.tool_choice = gemini_tool_choice_to_ir(request.tool_config.as_ref(), source, target)?;
+    if let Some(config) = request.generation_config {
+        envelope.controls.max_output_tokens = config.max_output_tokens;
+        envelope.controls.temperature = config.temperature;
+    }
+    if !request.safety_settings.is_empty() {
+        let settings = request
+            .safety_settings
+            .into_iter()
+            .map(|setting| {
+                object([
+                    ("category".to_owned(), JsonData::String(setting.category)),
+                    ("threshold".to_owned(), JsonData::String(setting.threshold)),
+                ])
+            })
+            .collect();
+        envelope.extensions.insert(
+            "gemini.safety_settings".to_owned(),
+            JsonData::Array(settings),
+        );
+    }
+    map_validation(envelope.validate(), source, target, "envelope")?;
+    Ok(finish(envelope.clone(), envelope, source, target))
+}
+
+/// Explicitly named model variant for route adapters.
+pub fn gemini_request_to_envelope_v2_for_model(
+    request: GeminiRequest,
+    model: &str,
+) -> Result<DirectIrConversion<Envelope>, DirectIrError> {
+    gemini_request_to_envelope_v2(request, model)
+}
+
+fn gemini_signature_from_state(
+    state: &OpaqueProviderState,
+    source: Protocol,
+    target: Protocol,
+    path: &str,
+) -> Result<String, DirectIrError> {
+    if state.provider != "google" || state.kind != "thought_signature" {
+        return Err(DirectIrError::unsupported(
+            source,
+            target,
+            "thought_signature",
+            path,
+        ));
+    }
+    let Some(signature) = json_string(&state.raw) else {
+        return Err(DirectIrError::new(
+            source,
+            target,
+            "thought_signature",
+            path,
+            DirectIrReason::InvalidOpaqueState,
+        ));
+    };
+    if signature.is_empty() {
+        return Err(DirectIrError::new(
+            source,
+            target,
+            "thought_signature",
+            path,
+            DirectIrReason::EmptyId,
+        ));
+    }
+    Ok(signature.to_owned())
+}
+
+fn gemini_model_is_25(model: &str) -> bool {
+    let model = model.to_ascii_lowercase();
+    model.contains("gemini-2.5") || model.contains("gemini_2_5")
+}
+
+fn gemini_model_is_3(model: &str) -> bool {
+    model.to_ascii_lowercase().contains("gemini-3")
+}
+
+fn media_to_gemini_part(
+    media: &Media,
+    source: Protocol,
+    target: Protocol,
+    path: &str,
+) -> Result<GeminiPart, DirectIrError> {
+    let Some(data) = media.data.as_ref() else {
+        return Err(DirectIrError::unsupported(source, target, "media", path));
+    };
+    let Some(data) = json_string(data) else {
+        return Err(DirectIrError::unsupported(source, target, "media", path));
+    };
+    let Some(mime_type) = media.mime_type.as_ref() else {
+        return Err(DirectIrError::missing(source, target, "mime_type", path));
+    };
+    Ok(GeminiPart {
+        text: None,
+        inline_data: Some(GeminiInlineData {
+            mime_type: mime_type.clone(),
+            data: data.to_owned(),
+        }),
+        function_call: None,
+        function_response: None,
+        thought_signature: None,
+    })
+}
+
+fn gemini_part_for_item(
+    item: &Item,
+    source: Protocol,
+    target: Protocol,
+    path: &str,
+) -> Result<GeminiPart, DirectIrError> {
+    let Some(part) = item.ordered_parts().first() else {
+        return Err(DirectIrError::missing(source, target, "part", path));
+    };
+    match &part.kind {
+        PartKind::Text => Ok(GeminiPart {
+            text: Some(part.text.clone().unwrap_or_default()),
+            inline_data: None,
+            function_call: None,
+            function_response: None,
+            thought_signature: None,
+        }),
+        PartKind::Media => part
+            .media
+            .as_ref()
+            .ok_or_else(|| {
+                DirectIrError::new(source, target, "media", path, DirectIrReason::InvalidShape)
+            })
+            .and_then(|media| media_to_gemini_part(media, source, target, path)),
+        PartKind::Function => {
+            let function = part.function.as_ref().ok_or_else(|| {
+                DirectIrError::new(
+                    source,
+                    target,
+                    "function",
+                    path,
+                    DirectIrReason::InvalidShape,
+                )
+            })?;
+            let call_id = item
+                .call_id
+                .as_ref()
+                .ok_or_else(|| DirectIrError::missing(source, target, "function_call_id", path))?;
+            let id = id_value(call_id)?;
+            match &function.kind {
+                FunctionKind::Call => Ok(GeminiPart {
+                    text: None,
+                    inline_data: None,
+                    function_call: Some(GeminiFunctionCall {
+                        id: Some(id),
+                        name: function.name.clone().ok_or_else(|| {
+                            DirectIrError::missing(source, target, "function.name", path)
+                        })?,
+                        args: Some(function.arguments.clone().unwrap_or_else(|| object([]))),
+                    }),
+                    function_response: None,
+                    thought_signature: None,
+                }),
+                FunctionKind::Result => Ok(GeminiPart {
+                    text: None,
+                    inline_data: None,
+                    function_call: None,
+                    function_response: Some(GeminiFunctionResponse {
+                        id: Some(id),
+                        name: function.name.clone().unwrap_or_default(),
+                        response: function.output.clone().unwrap_or(JsonData::Null),
+                    }),
+                    thought_signature: None,
+                }),
+                FunctionKind::Unknown(_) => Err(DirectIrError::unsupported(
+                    source,
+                    target,
+                    "function_kind",
+                    path,
+                )),
+            }
+        }
+        PartKind::Opaque | PartKind::Unknown(_) => Err(DirectIrError::unsupported(
+            source,
+            target,
+            "opaque_part",
+            path,
+        )),
+    }
+}
+
+fn append_gemini_state_signature(
+    destination: &mut GeminiPart,
+    state: &OpaqueProviderState,
+    source: Protocol,
+    target: Protocol,
+    path: &str,
+    envelope: &mut Envelope,
+) -> Result<(), DirectIrError> {
+    if state.provenance == OpaqueStateProvenance::Synthetic
+        && state.raw != JsonData::String(super::GEMINI_SYNTHETIC_THOUGHT_SIGNATURE.to_owned())
+    {
+        return Err(DirectIrError::unsupported(
+            source,
+            target,
+            "synthetic_thought_signature",
+            path,
+        ));
+    }
+    if destination.thought_signature.is_some() {
+        return Err(DirectIrError::new(
+            source,
+            target,
+            "thought_signature",
+            path,
+            DirectIrReason::DuplicateId,
+        ));
+    }
+    let signature = gemini_signature_from_state(state, source, target, path)?;
+    destination.thought_signature = Some(signature);
+    if state.provenance == OpaqueStateProvenance::Synthetic {
+        record_loss(
+            envelope,
+            LossCode::SyntheticThoughtSignature,
+            Some(Feature::OpaqueReasoningSignature),
+            path,
+            "synthetic Gemini history signature emitted by explicit policy",
+        );
+    }
+    Ok(())
+}
+
+fn ordinary_reasoning_text(
+    item: &Item,
+    source: Protocol,
+    target: Protocol,
+    path: &str,
+    envelope: &mut Envelope,
+) -> Result<GeminiPart, DirectIrError> {
+    let Some(part) = item.ordered_parts().first() else {
+        return Err(DirectIrError::missing(source, target, "reasoning", path));
+    };
+    match &part.kind {
+        PartKind::Text => {
+            record_loss(
+                envelope,
+                LossCode::LossOpaqueReasoning,
+                Some(Feature::ReasoningSummary),
+                path,
+                "reasoning emitted as ordinary Gemini text",
+            );
+            Ok(GeminiPart {
+                text: Some(part.text.clone().unwrap_or_default()),
+                inline_data: None,
+                function_call: None,
+                function_response: None,
+                thought_signature: None,
+            })
+        }
+        PartKind::Opaque => {
+            let Some(state) = part.opaque.as_ref() else {
+                return Err(DirectIrError::new(
+                    source,
+                    target,
+                    "opaque_state",
+                    path,
+                    DirectIrReason::InvalidOpaqueState,
+                ));
+            };
+            if state.provider == "google" && state.kind == "thought_signature" {
+                return Err(DirectIrError::new(
+                    source,
+                    target,
+                    "thought_signature_position",
+                    path,
+                    DirectIrReason::Mismatch,
+                ));
+            }
+            let object = json_object(&state.raw);
+            let thinking = object
+                .and_then(|value| value.get("thinking"))
+                .and_then(json_string);
+            if state.provider == "anthropic" && state.kind == "thinking" {
+                let Some(thinking) = thinking else {
+                    return Err(DirectIrError::new(
+                        source,
+                        target,
+                        "thinking",
+                        path,
+                        DirectIrReason::InvalidOpaqueState,
+                    ));
+                };
+                record_loss(
+                    envelope,
+                    LossCode::LossOpaqueReasoning,
+                    Some(Feature::OpaqueReasoningSignature),
+                    path,
+                    "Claude thinking emitted as ordinary Gemini text without fabricated signature",
+                );
+                return Ok(GeminiPart {
+                    text: Some(thinking.to_owned()),
+                    inline_data: None,
+                    function_call: None,
+                    function_response: None,
+                    thought_signature: None,
+                });
+            }
+            Err(DirectIrError::unsupported(
+                source,
+                target,
+                "opaque_reasoning",
+                path,
+            ))
+        }
+        _ => Err(DirectIrError::unsupported(
+            source,
+            target,
+            "reasoning_part",
+            path,
+        )),
+    }
+}
+
+fn gemini_content_role(item: &Item) -> &'static str {
+    match &item.kind {
+        ItemKind::ToolCall | ItemKind::Reasoning => "model",
+        ItemKind::ToolResult => "user",
+        ItemKind::Message => match &item.role {
+            Role::Assistant | Role::Model => "model",
+            _ => "user",
+        },
+        ItemKind::Unknown(_) => "user",
+    }
+}
+
+fn append_gemini_content(
+    item: &Item,
+    contents: &mut Vec<GeminiContent>,
+    source: Protocol,
+    target: Protocol,
+    path: &str,
+    envelope: &mut Envelope,
+    pending_call: &mut Option<(String, bool)>,
+    synthetic_history: bool,
+    model: &str,
+) -> Result<(), DirectIrError> {
+    if matches!(&item.kind, ItemKind::Reasoning) {
+        let part = ordinary_reasoning_text(item, source, target, path, envelope)?;
+        contents.push(GeminiContent {
+            role: Some("model".to_owned()),
+            parts: vec![part],
+        });
+        return Ok(());
+    }
+    let part = gemini_part_for_item(item, source, target, path)?;
+    if matches!(&item.kind, ItemKind::ToolCall) {
+        let id = item
+            .call_id
+            .as_ref()
+            .ok_or_else(|| DirectIrError::missing(source, target, "function_call_id", path))?;
+        let name = item
+            .ordered_parts()
+            .first()
+            .and_then(|value| value.function.as_ref())
+            .and_then(|function| function.name.as_ref())
+            .ok_or_else(|| DirectIrError::missing(source, target, "function.name", path))?
+            .clone();
+        *pending_call = Some((name, false));
+        contents.push(GeminiContent {
+            role: Some("model".to_owned()),
+            parts: vec![part],
+        });
+        return Ok(());
+    }
+    if matches!(&item.kind, ItemKind::ToolResult) {
+        *pending_call = None;
+    }
+    if matches!(&item.kind, ItemKind::Message) {
+        *pending_call = None;
+    }
+    if let Some((_, saw_signature)) = pending_call.as_mut() {
+        if *saw_signature {
+            return Err(DirectIrError::new(
+                source,
+                target,
+                "thought_signature",
+                path,
+                DirectIrReason::DuplicateId,
+            ));
+        }
+        let _ = model;
+        let _ = synthetic_history;
+    }
+    contents.push(GeminiContent {
+        role: Some(gemini_content_role(item).to_owned()),
+        parts: vec![part],
+    });
+    Ok(())
+}
+
+fn append_gemini_opaque_item(
+    item: &Item,
+    contents: &mut Vec<GeminiContent>,
+    source: Protocol,
+    target: Protocol,
+    path: &str,
+    envelope: &mut Envelope,
+    pending_call: &mut Option<(String, bool)>,
+) -> Result<(), DirectIrError> {
+    let Some(part) = item.ordered_parts().first() else {
+        return Err(DirectIrError::missing(source, target, "opaque_state", path));
+    };
+    let Some(state) = part.opaque.as_ref() else {
+        return Err(DirectIrError::new(
+            source,
+            target,
+            "opaque_state",
+            path,
+            DirectIrReason::InvalidOpaqueState,
+        ));
+    };
+    if state.provider != "google" || state.kind != "thought_signature" {
+        return Err(DirectIrError::unsupported(
+            source,
+            target,
+            "opaque_reasoning",
+            path,
+        ));
+    }
+    let Some(last) = contents.last_mut() else {
+        return Err(DirectIrError::new(
+            source,
+            target,
+            "thought_signature_order",
+            path,
+            DirectIrReason::Mismatch,
+        ));
+    };
+    let Some(last_part) = last.parts.last_mut() else {
+        return Err(DirectIrError::new(
+            source,
+            target,
+            "thought_signature_order",
+            path,
+            DirectIrReason::Mismatch,
+        ));
+    };
+    if !matches!(&last_part.function_call, Some(_)) {
+        // A signature on ordinary text is retained at that exact Part.
+        if last_part.text.is_none() && last_part.inline_data.is_none() {
+            return Err(DirectIrError::new(
+                source,
+                target,
+                "thought_signature_order",
+                path,
+                DirectIrReason::Mismatch,
+            ));
+        }
+    }
+    if pending_call.is_some() {
+        let Some((_, saw_signature)) = pending_call.as_mut() else {
+            return Err(DirectIrError::new(
+                source,
+                target,
+                "thought_signature_order",
+                path,
+                DirectIrReason::Mismatch,
+            ));
+        };
+        if *saw_signature {
+            return Err(DirectIrError::new(
+                source,
+                target,
+                "thought_signature",
+                path,
+                DirectIrReason::DuplicateId,
+            ));
+        }
+        *saw_signature = true;
+    }
+    append_gemini_state_signature(last_part, state, source, target, path, envelope)
+}
+
+fn gemini_generation_config(envelope: &Envelope) -> Option<GeminiGenerationConfig> {
+    if envelope.controls.max_output_tokens.is_none() && envelope.controls.temperature.is_none() {
+        None
+    } else {
+        Some(GeminiGenerationConfig {
+            max_output_tokens: envelope.controls.max_output_tokens,
+            temperature: envelope.controls.temperature,
+        })
+    }
+}
+
+fn gemini_safety_settings(envelope: &Envelope) -> Vec<super::GeminiSafetySetting> {
+    let Some(JsonData::Array(values)) = envelope.extensions.get("gemini.safety_settings") else {
+        return Vec::new();
+    };
+    values
+        .iter()
+        .filter_map(|value| {
+            let object = json_object(value)?;
+            Some(super::GeminiSafetySetting {
+                category: object.get("category").and_then(json_string)?.to_owned(),
+                threshold: object.get("threshold").and_then(json_string)?.to_owned(),
+            })
+        })
+        .collect()
+}
+
+fn gemini_tool_choice(envelope: &mut Envelope) -> Option<GeminiToolConfig> {
+    let mode = match envelope.tool_choice.clone() {
+        ToolChoice::None => "NONE",
+        ToolChoice::Required => "ANY",
+        ToolChoice::Named { .. } => {
+            record_loss(
+                envelope,
+                LossCode::LossUnknownEvent,
+                Some(Feature::ToolChoiceNamed),
+                "tool_choice.name",
+                "Gemini function-calling config has no named-tool field; mode ANY is emitted",
+            );
+            "ANY"
+        }
+        ToolChoice::Auto => "AUTO",
+        ToolChoice::Provider { .. } => {
+            record_loss(
+                envelope,
+                LossCode::LossUnknownEvent,
+                Some(Feature::UnknownEventPassthrough),
+                "tool_choice",
+                "provider tool choice cannot be represented by Gemini; mode AUTO is emitted",
+            );
+            "AUTO"
+        }
+    };
+    Some(GeminiToolConfig {
+        function_calling_config: GeminiFunctionCallingConfig {
+            mode: mode.to_owned(),
+        },
+    })
+}
+
+/// Encodes an Envelope as a Gemini request using the envelope model.
+///
+/// Synthetic history signatures are enabled only for Gemini 2.5.  Gemini 3
+/// requires an authentic signature unless the caller explicitly supplied a
+/// synthetic state and opted into history compatibility via the model variant.
+pub fn envelope_to_gemini_request_v2(
+    envelope: Envelope,
+) -> Result<DirectIrConversion<GeminiRequest>, DirectIrError> {
+    let model = envelope.model.clone();
+    envelope_to_gemini_request_v2_for_model(envelope, &model, true)
+}
+
+/// Encodes an Envelope as a Gemini request with explicit signature policy.
+pub fn envelope_to_gemini_request_v2_for_model(
+    mut envelope: Envelope,
+    model: &str,
+    synthetic_history: bool,
+) -> Result<DirectIrConversion<GeminiRequest>, DirectIrError> {
+    let source = envelope.source;
+    let target = Protocol::Gemini;
+    record_request_projection_losses(&mut envelope, target);
+    let mut system_parts = Vec::new();
+    let mut contents = Vec::new();
+    let mut pending_call: Option<(String, bool)> = None;
+    for (index, item) in envelope.ordered_items().to_vec().into_iter().enumerate() {
+        let path = format!("items[{index}]");
+        if matches!(&item.role, Role::System | Role::Developer) {
+            if matches!(&item.kind, ItemKind::Reasoning) {
+                let part = ordinary_reasoning_text(&item, source, target, &path, &mut envelope)?;
+                system_parts.push(part);
+            } else {
+                let part = gemini_part_for_item(&item, source, target, &path)?;
+                if matches!(&item.kind, ItemKind::ToolCall) {
+                    return Err(DirectIrError::unsupported(
+                        source,
+                        target,
+                        "system_tool_call",
+                        &path,
+                    ));
+                }
+                system_parts.push(part);
+            }
+            continue;
+        }
+        if matches!(&item.kind, ItemKind::Reasoning)
+            && item
+                .ordered_parts()
+                .first()
+                .and_then(|part| part.opaque.as_ref())
+                .is_some_and(|state| {
+                    state.provider == "google" && state.kind == "thought_signature"
+                })
+        {
+            append_gemini_opaque_item(
+                &item,
+                &mut contents,
+                source,
+                target,
+                &path,
+                &mut envelope,
+                &mut pending_call,
+            )?;
+            continue;
+        }
+        append_gemini_content(
+            &item,
+            &mut contents,
+            source,
+            target,
+            &path,
+            &mut envelope,
+            &mut pending_call,
+            synthetic_history,
+            model,
+        )?;
+        if matches!(&item.kind, ItemKind::ToolCall) {
+            let has_signature = envelope
+                .ordered_items()
+                .get(index.saturating_add(1))
+                .and_then(|next| next.ordered_parts().first())
+                .and_then(|part| part.opaque.as_ref())
+                .is_some_and(|state| {
+                    state.provider == "google" && state.kind == "thought_signature"
+                });
+            if !has_signature && gemini_model_is_3(model) {
+                return Err(DirectIrError::new(
+                    source,
+                    target,
+                    "thought_signature",
+                    &path,
+                    DirectIrReason::Unsupported,
+                ));
+            }
+            if !has_signature && synthetic_history && gemini_model_is_25(model) {
+                let Some(last) = contents.last_mut() else {
+                    return Err(DirectIrError::new(
+                        source,
+                        target,
+                        "thought_signature",
+                        &path,
+                        DirectIrReason::Mismatch,
+                    ));
+                };
+                let Some(last_part) = last.parts.last_mut() else {
+                    return Err(DirectIrError::new(
+                        source,
+                        target,
+                        "thought_signature",
+                        &path,
+                        DirectIrReason::Mismatch,
+                    ));
+                };
+                last_part.thought_signature =
+                    Some(super::GEMINI_SYNTHETIC_THOUGHT_SIGNATURE.to_owned());
+                record_loss(
+                    &mut envelope,
+                    LossCode::SyntheticThoughtSignature,
+                    Some(Feature::OpaqueReasoningSignature),
+                    &path,
+                    "Gemini 2.5 history signature generated by explicit policy",
+                );
+            }
+        }
+    }
+    let mut declarations = Vec::new();
+    for (index, tool) in envelope.tools.iter().enumerate() {
+        let name = tool_name_for_target(tool, index, source, target)?;
+        declarations.push(GeminiFunctionDeclaration {
+            name,
+            description: tool.description.clone(),
+            parameters: tool.input_schema.clone().unwrap_or_else(|| object([])),
+        });
+    }
+    let output = GeminiRequest {
+        contents,
+        system_instruction: (!system_parts.is_empty()).then_some(GeminiContent {
+            role: None,
+            parts: system_parts,
+        }),
+        generation_config: gemini_generation_config(&envelope),
+        safety_settings: gemini_safety_settings(&envelope),
+        tools: if declarations.is_empty() {
+            Vec::new()
+        } else {
+            vec![GeminiTool {
+                function_declarations: declarations,
+            }]
+        },
+        tool_config: gemini_tool_choice(&mut envelope),
+    };
+    Ok(finish(output, envelope, source, target))
+}
+
+fn claude_block_to_items(
+    block: ClaudeContentBlock,
+    role: Role,
+    message_index: usize,
+    block_index: usize,
+    envelope: &mut Envelope,
+    source: Protocol,
+    target: Protocol,
+    model: &str,
+) -> Result<(), DirectIrError> {
+    let path = format!("messages[{message_index}].content[{block_index}]");
+    match block.kind.as_str() {
+        "text" => {
+            let text = block.text.ok_or_else(|| {
+                DirectIrError::missing(source, target, "text", &format!("{path}.text"))
+            })?;
+            let mut item = text_item(role, text, source, &path);
+            item.provenance.extensions = block.extra;
+            push_item(envelope, item, source, target, &path)?;
+        }
+        "thinking" => {
+            let thinking = block.thinking.ok_or_else(|| {
+                DirectIrError::missing(source, target, "thinking", &format!("{path}.thinking"))
+            })?;
+            let raw = object([
+                ("type".to_owned(), JsonData::String("thinking".to_owned())),
+                ("thinking".to_owned(), JsonData::String(thinking)),
+                (
+                    "signature".to_owned(),
+                    block
+                        .signature
+                        .map(JsonData::String)
+                        .unwrap_or(JsonData::Null),
+                ),
+                ("extra".to_owned(), JsonData::Object(block.extra)),
+            ]);
+            push_item(
+                envelope,
+                opaque_item(
+                    role,
+                    provider_state(
+                        "anthropic",
+                        "thinking",
+                        raw,
+                        OpaqueStateProvenance::Authentic,
+                        Some(model.to_owned()),
+                    ),
+                    source,
+                    &path,
+                ),
+                source,
+                target,
+                &path,
+            )?;
+        }
+        "redacted_thinking" => {
+            let data = block.data.or(block.content).ok_or_else(|| {
+                DirectIrError::missing(source, target, "redacted_thinking.data", &path)
+            })?;
+            push_item(
+                envelope,
+                opaque_item(
+                    role,
+                    provider_state(
+                        "anthropic",
+                        "redacted_thinking",
+                        object([
+                            (
+                                "type".to_owned(),
+                                JsonData::String("redacted_thinking".to_owned()),
+                            ),
+                            ("data".to_owned(), data),
+                            ("extra".to_owned(), JsonData::Object(block.extra)),
+                        ]),
+                        OpaqueStateProvenance::Authentic,
+                        Some(model.to_owned()),
+                    ),
+                    source,
+                    &path,
+                ),
+                source,
+                target,
+                &path,
+            )?;
+        }
+        "tool_use" => {
+            let id = block
+                .id
+                .ok_or_else(|| DirectIrError::missing(source, target, "tool_use.id", &path))?;
+            let call_id = authentic_id(
+                Some(id),
+                source,
+                target,
+                "function_call_id",
+                &format!("{path}.id"),
+            )?
+            .ok_or_else(|| DirectIrError::missing(source, target, "tool_use.id", &path))?;
+            let name = block
+                .name
+                .ok_or_else(|| DirectIrError::missing(source, target, "tool_use.name", &path))?;
+            let mut function = FunctionData::call(name, block.input.unwrap_or_else(|| object([])));
+            function.extensions = block.extra;
+            let mut item = Item::tool_call(
+                call_id,
+                vec![Part::function(function)],
+                Provenance::new(source),
+            );
+            item.provenance.source_path = Some(path.clone());
+            push_item(envelope, item, source, target, &path)?;
+        }
+        "tool_result" => {
+            let id = block.tool_use_id.ok_or_else(|| {
+                DirectIrError::missing(source, target, "tool_result.tool_use_id", &path)
+            })?;
+            let call_id = authentic_id(
+                Some(id),
+                source,
+                target,
+                "function_call_id",
+                &format!("{path}.tool_use_id"),
+            )?
+            .ok_or_else(|| {
+                DirectIrError::missing(source, target, "tool_result.tool_use_id", &path)
+            })?;
+            let mut function =
+                FunctionData::result(block.name, block.content.unwrap_or(JsonData::Null));
+            function.extensions = block.extra;
+            let mut item = Item::tool_result(
+                call_id,
+                vec![Part::function(function)],
+                Provenance::new(source),
+            );
+            item.provenance.source_path = Some(path.clone());
+            push_item(envelope, item, source, target, &path)?;
+        }
+        "image" => {
+            let media_source = block
+                .source
+                .ok_or_else(|| DirectIrError::missing(source, target, "image.source", &path))?;
+            let mut media = Media::new(MediaKind::Image);
+            match media_source.kind.as_str() {
+                "url" => media.uri = Some(media_source.data),
+                "base64" => {
+                    media.mime_type = Some(media_source.media_type);
+                    media.data = Some(JsonData::String(media_source.data));
+                }
+                _ => {
+                    return Err(DirectIrError::unsupported(
+                        source,
+                        target,
+                        "image_source",
+                        &path,
+                    ));
+                }
+            }
+            media.extensions = block.extra;
+            push_item(
+                envelope,
+                media_item(role, media, source, &path),
+                source,
+                target,
+                &path,
+            )?;
+        }
+        _ => {
+            return Err(DirectIrError::unsupported(
+                source,
+                target,
+                "claude_block",
+                &path,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn claude_tool_choice_to_ir(
+    choice: Option<&ClaudeToolChoice>,
+    source: Protocol,
+    target: Protocol,
+) -> Result<ToolChoice, DirectIrError> {
+    let Some(choice) = choice else {
+        return Ok(ToolChoice::Auto);
+    };
+    match choice.kind.as_str() {
+        "auto" => Ok(ToolChoice::Auto),
+        "any" => Ok(ToolChoice::Required),
+        "tool" => Ok(ToolChoice::Named {
+            name: choice.name.clone().ok_or_else(|| {
+                DirectIrError::missing(source, target, "tool_choice.name", "tool_choice")
+            })?,
+        }),
+        _ => Err(DirectIrError::unsupported(
+            source,
+            target,
+            "tool_choice",
+            "tool_choice.type",
+        )),
+    }
+}
+
+/// Decodes a Claude Messages request into an ordered IR Envelope.
+pub fn claude_request_to_envelope_v2(
+    request: ClaudeRequest,
+) -> Result<DirectIrConversion<Envelope>, DirectIrError> {
+    let model = request.model.clone();
+    let source = Protocol::Claude;
+    let target = Protocol::Claude;
+    let mut envelope = Envelope::new(source, model.clone());
+    envelope.controls.max_output_tokens = Some(request.max_tokens);
+    envelope.controls.temperature = request.temperature;
+    envelope.controls.stream = request.stream;
+    if let Some(system) = request.system {
+        match system {
+            StringOrParts::String(text) => {
+                envelope
+                    .extensions
+                    .insert("claude.system_string".to_owned(), JsonData::Bool(true));
+                push_item(
+                    &mut envelope,
+                    text_item(Role::System, text, source, "system"),
+                    source,
+                    target,
+                    "system",
+                )?;
+            }
+            StringOrParts::Parts(parts) => {
+                for (index, block) in parts.into_iter().enumerate() {
+                    claude_block_to_items(
+                        block,
+                        Role::System,
+                        0,
+                        index,
+                        &mut envelope,
+                        source,
+                        target,
+                        &model,
+                    )?;
+                }
+            }
+        }
+    }
+    for (message_index, message) in request.messages.into_iter().enumerate() {
+        let role = role_from_wire(
+            Some(&message.role),
+            source,
+            target,
+            &format!("messages[{message_index}].role"),
+        )?;
+        match message.content {
+            StringOrParts::String(text) => {
+                push_item(
+                    &mut envelope,
+                    text_item(
+                        if role == Role::Tool { Role::Tool } else { role },
+                        text,
+                        source,
+                        &format!("messages[{message_index}].content"),
+                    ),
+                    source,
+                    target,
+                    &format!("messages[{message_index}].content"),
+                )?;
+            }
+            StringOrParts::Parts(parts) => {
+                let is_tool_result = parts.iter().any(|part| part.kind == "tool_result");
+                let role = if is_tool_result { Role::Tool } else { role };
+                for (block_index, block) in parts.into_iter().enumerate() {
+                    claude_block_to_items(
+                        block,
+                        role.clone(),
+                        message_index,
+                        block_index,
+                        &mut envelope,
+                        source,
+                        target,
+                        &model,
+                    )?;
+                }
+            }
+        }
+    }
+    envelope.tools = request
+        .tools
+        .into_iter()
+        .map(|tool| Tool {
+            kind: ToolKind::Function,
+            name: Some(tool.name),
+            description: tool.description,
+            input_schema: Some(tool.input_schema),
+            extensions: empty_extensions(),
+        })
+        .collect();
+    envelope.tool_choice = claude_tool_choice_to_ir(request.tool_choice.as_ref(), source, target)?;
+    map_validation(envelope.validate(), source, target, "envelope")?;
+    Ok(finish(envelope.clone(), envelope, source, target))
+}
+
+fn opaque_state_to_claude_block(
+    state: &OpaqueProviderState,
+    source: Protocol,
+    target: Protocol,
+    path: &str,
+) -> Result<ClaudeContentBlock, DirectIrError> {
+    if state.provenance == OpaqueStateProvenance::Synthetic {
+        return Err(DirectIrError::unsupported(
+            source,
+            target,
+            "synthetic_claude_opaque_state",
+            path,
+        ));
+    }
+    let object = json_object(&state.raw).ok_or_else(|| {
+        DirectIrError::new(
+            source,
+            target,
+            "opaque_state",
+            path,
+            DirectIrReason::InvalidOpaqueState,
+        )
+    })?;
+    let extra = object
+        .get("extra")
+        .and_then(json_object)
+        .cloned()
+        .unwrap_or_default();
+    match state.kind.as_str() {
+        "thinking" => Ok(ClaudeContentBlock {
+            kind: "thinking".to_owned(),
+            text: None,
+            thinking: object
+                .get("thinking")
+                .and_then(json_string)
+                .map(str::to_owned),
+            signature: object
+                .get("signature")
+                .and_then(json_string)
+                .map(str::to_owned),
+            data: None,
+            id: None,
+            name: None,
+            input: None,
+            tool_use_id: None,
+            content: None,
+            source: None,
+            extra,
+        }),
+        "redacted_thinking" => Ok(ClaudeContentBlock {
+            kind: "redacted_thinking".to_owned(),
+            text: None,
+            thinking: None,
+            signature: None,
+            data: object.get("data").cloned(),
+            id: None,
+            name: None,
+            input: None,
+            tool_use_id: None,
+            content: None,
+            source: None,
+            extra,
+        }),
+        _ => Err(DirectIrError::unsupported(
+            source,
+            target,
+            "claude_opaque_state",
+            path,
+        )),
+    }
+}
+
+fn claude_block_from_item(
+    item: &Item,
+    source: Protocol,
+    target: Protocol,
+    path: &str,
+    envelope: &mut Envelope,
+) -> Result<ClaudeContentBlock, DirectIrError> {
+    let Some(part) = item.ordered_parts().first() else {
+        return Err(DirectIrError::missing(source, target, "part", path));
+    };
+    match &part.kind {
+        PartKind::Text => Ok(ClaudeContentBlock {
+            kind: "text".to_owned(),
+            text: Some(part.text.clone().unwrap_or_default()),
+            thinking: None,
+            signature: None,
+            data: None,
+            id: None,
+            name: None,
+            input: None,
+            tool_use_id: None,
+            content: None,
+            source: None,
+            extra: part.extensions.clone(),
+        }),
+        PartKind::Media => {
+            let media = part.media.as_ref().ok_or_else(|| {
+                DirectIrError::new(source, target, "media", path, DirectIrReason::InvalidShape)
+            })?;
+            let source = if let Some(uri) = media.uri.as_ref() {
+                ClaudeMediaSource {
+                    kind: "url".to_owned(),
+                    media_type: media
+                        .mime_type
+                        .clone()
+                        .unwrap_or_else(|| "image/*".to_owned()),
+                    data: uri.clone(),
+                }
+            } else if let Some(JsonData::String(data)) = media.data.as_ref() {
+                ClaudeMediaSource {
+                    kind: "base64".to_owned(),
+                    media_type: media
+                        .mime_type
+                        .clone()
+                        .unwrap_or_else(|| "application/octet-stream".to_owned()),
+                    data: data.clone(),
+                }
+            } else {
+                return Err(DirectIrError::unsupported(source, target, "media", path));
+            };
+            Ok(ClaudeContentBlock {
+                kind: "image".to_owned(),
+                text: None,
+                thinking: None,
+                signature: None,
+                data: None,
+                id: None,
+                name: None,
+                input: None,
+                tool_use_id: None,
+                content: None,
+                source: Some(source),
+                extra: media.extensions.clone(),
+            })
+        }
+        PartKind::Function => {
+            let function = part.function.as_ref().ok_or_else(|| {
+                DirectIrError::new(
+                    source,
+                    target,
+                    "function",
+                    path,
+                    DirectIrReason::InvalidShape,
+                )
+            })?;
+            let call_id = item
+                .call_id
+                .as_ref()
+                .ok_or_else(|| DirectIrError::missing(source, target, "function_call_id", path))?;
+            match &function.kind {
+                FunctionKind::Call => Ok(ClaudeContentBlock {
+                    kind: "tool_use".to_owned(),
+                    text: None,
+                    thinking: None,
+                    signature: None,
+                    data: None,
+                    id: Some(id_value(call_id)?),
+                    name: function.name.clone(),
+                    input: Some(function.arguments.clone().unwrap_or_else(|| object([]))),
+                    tool_use_id: None,
+                    content: None,
+                    source: None,
+                    extra: function.extensions.clone(),
+                }),
+                FunctionKind::Result => Ok(ClaudeContentBlock {
+                    kind: "tool_result".to_owned(),
+                    text: None,
+                    thinking: None,
+                    signature: None,
+                    data: None,
+                    id: None,
+                    name: function.name.clone(),
+                    input: None,
+                    tool_use_id: Some(id_value(call_id)?),
+                    content: Some(function.output.clone().unwrap_or(JsonData::Null)),
+                    source: None,
+                    extra: function.extensions.clone(),
+                }),
+                FunctionKind::Unknown(_) => Err(DirectIrError::unsupported(
+                    source,
+                    target,
+                    "function_kind",
+                    path,
+                )),
+            }
+        }
+        PartKind::Opaque => {
+            let state = part.opaque.as_ref().ok_or_else(|| {
+                DirectIrError::new(
+                    source,
+                    target,
+                    "opaque_state",
+                    path,
+                    DirectIrReason::InvalidOpaqueState,
+                )
+            })?;
+            if state.provider != "anthropic" {
+                return Err(DirectIrError::unsupported(
+                    source,
+                    target,
+                    "opaque_reasoning",
+                    path,
+                ));
+            }
+            opaque_state_to_claude_block(state, source, target, path)
+        }
+        PartKind::Unknown(_) => Err(DirectIrError::unsupported(
+            source,
+            target,
+            "part_kind",
+            path,
+        )),
+    }
+}
+
+/// Encodes an ordered Envelope as a Claude Messages request.
+pub fn envelope_to_claude_request_v2(
+    mut envelope: Envelope,
+) -> Result<DirectIrConversion<ClaudeRequest>, DirectIrError> {
+    let source = envelope.source;
+    let target = Protocol::Claude;
+    record_request_projection_losses(&mut envelope, target);
+    let mut system = Vec::new();
+    let mut messages = Vec::new();
+    for (index, item) in envelope.ordered_items().to_vec().into_iter().enumerate() {
+        let path = format!("items[{index}]");
+        let foreign_opaque_reasoning = item
+            .ordered_parts()
+            .first()
+            .and_then(|part| part.opaque.as_ref())
+            .is_some_and(|state| state.provider != "anthropic");
+        if matches!(&item.kind, ItemKind::Reasoning) && foreign_opaque_reasoning {
+            record_loss(
+                &mut envelope,
+                LossCode::LossOpaqueReasoning,
+                Some(Feature::OpaqueReasoningSignature),
+                &path,
+                "foreign provider opaque reasoning has no legal Claude signature representation",
+            );
+            continue;
+        }
+        let block = if matches!(&item.kind, ItemKind::Reasoning)
+            && item
+                .ordered_parts()
+                .first()
+                .and_then(|part| part.opaque.as_ref())
+                .is_none()
+        {
+            let Some(part) = item.ordered_parts().first() else {
+                return Err(DirectIrError::missing(source, target, "reasoning", &path));
+            };
+            let text = part.text.clone().unwrap_or_default();
+            record_loss(
+                &mut envelope,
+                LossCode::LossOpaqueReasoning,
+                Some(Feature::ReasoningSummary),
+                &path,
+                "ordinary reasoning emitted as Claude text without fabricated thinking signature",
+            );
+            ClaudeContentBlock {
+                kind: "text".to_owned(),
+                text: Some(text),
+                thinking: None,
+                signature: None,
+                data: None,
+                id: None,
+                name: None,
+                input: None,
+                tool_use_id: None,
+                content: None,
+                source: None,
+                extra: BTreeMap::new(),
+            }
+        } else if matches!(&item.kind, ItemKind::Reasoning)
+            && item
+                .ordered_parts()
+                .first()
+                .and_then(|part| part.opaque.as_ref())
+                .is_some()
+        {
+            claude_block_from_item(&item, source, target, &path, &mut envelope)?
+        } else {
+            claude_block_from_item(&item, source, target, &path, &mut envelope)?
+        };
+        if matches!(&item.role, Role::System | Role::Developer) {
+            system.push(block);
+        } else {
+            messages.push(ClaudeMessage {
+                role: if item.role == Role::Tool {
+                    "user".to_owned()
+                } else if item.role == Role::Model {
+                    "assistant".to_owned()
+                } else {
+                    chat_role(item.role.clone()).to_owned()
+                },
+                content: StringOrParts::Parts(vec![block]),
+            });
+        }
+    }
+    let mut tools = Vec::new();
+    for (index, tool) in envelope.tools.iter().enumerate() {
+        let name = tool_name_for_target(tool, index, source, target)?;
+        tools.push(ClaudeTool {
+            name,
+            description: tool.description.clone(),
+            input_schema: tool.input_schema.clone().unwrap_or_else(|| object([])),
+        });
+    }
+    let tool_choice = match envelope.tool_choice.clone() {
+        ToolChoice::Auto => Some(ClaudeToolChoice {
+            kind: "auto".to_owned(),
+            name: None,
+        }),
+        ToolChoice::Required => Some(ClaudeToolChoice {
+            kind: "any".to_owned(),
+            name: None,
+        }),
+        ToolChoice::Named { name } => Some(ClaudeToolChoice {
+            kind: "tool".to_owned(),
+            name: Some(name),
+        }),
+        ToolChoice::None => {
+            record_loss(
+                &mut envelope,
+                LossCode::LossUnknownEvent,
+                Some(Feature::ToolChoiceAuto),
+                "tool_choice",
+                "Claude has no none tool-choice mode; auto is emitted explicitly with loss",
+            );
+            Some(ClaudeToolChoice {
+                kind: "auto".to_owned(),
+                name: None,
+            })
+        }
+        ToolChoice::Provider { .. } => {
+            return Err(DirectIrError::unsupported(
+                source,
+                target,
+                "tool_choice",
+                "tool_choice",
+            ));
+        }
+    };
+    let max_tokens = match envelope.controls.max_output_tokens {
+        Some(value) => value,
+        None => {
+            record_loss(
+                &mut envelope,
+                LossCode::LossUnknownEvent,
+                Some(Feature::UnknownEventPassthrough),
+                "controls.max_output_tokens",
+                "Claude requires max_tokens; compatibility default 1 is synthesized",
+            );
+            1
+        }
+    };
+    let output = ClaudeRequest {
+        model: envelope.model.clone(),
+        max_tokens,
+        stream: envelope.controls.stream,
+        system: (!system.is_empty()).then_some(StringOrParts::Parts(system)),
+        messages,
+        temperature: envelope.controls.temperature,
+        tools,
+        tool_choice,
+    };
+    Ok(finish(output, envelope, source, target))
+}
+
+fn token_details_to_json(details: &TokenDetails) -> JsonData {
+    object([
+        (
+            "cached_tokens".to_owned(),
+            JsonData::Number(details.cached_tokens.into()),
+        ),
+        (
+            "cached_creation_tokens".to_owned(),
+            JsonData::Number(details.cached_creation_tokens.into()),
+        ),
+        (
+            "cache_write_tokens".to_owned(),
+            JsonData::Number(details.cache_write_tokens.into()),
+        ),
+        (
+            "text_tokens".to_owned(),
+            JsonData::Number(details.text_tokens.into()),
+        ),
+        (
+            "audio_tokens".to_owned(),
+            JsonData::Number(details.audio_tokens.into()),
+        ),
+        (
+            "image_tokens".to_owned(),
+            JsonData::Number(details.image_tokens.into()),
+        ),
+        (
+            "reasoning_tokens".to_owned(),
+            JsonData::Number(details.reasoning_tokens.into()),
+        ),
+    ])
+}
+
+fn wire_usage_to_json(usage: &WireUsage) -> JsonData {
+    let mut value = BTreeMap::new();
+    value.insert(
+        "prompt_tokens".to_owned(),
+        JsonData::Number(usage.prompt_tokens.into()),
+    );
+    value.insert(
+        "completion_tokens".to_owned(),
+        JsonData::Number(usage.completion_tokens.into()),
+    );
+    value.insert(
+        "total_tokens".to_owned(),
+        JsonData::Number(usage.total_tokens.into()),
+    );
+    value.insert(
+        "input_tokens".to_owned(),
+        JsonData::Number(usage.input_tokens.into()),
+    );
+    value.insert(
+        "output_tokens".to_owned(),
+        JsonData::Number(usage.output_tokens.into()),
+    );
+    if let Some(details) = usage.prompt_tokens_details.as_ref() {
+        value.insert(
+            "prompt_tokens_details".to_owned(),
+            token_details_to_json(details),
+        );
+    }
+    if let Some(details) = usage.completion_tokens_details.as_ref() {
+        value.insert(
+            "completion_tokens_details".to_owned(),
+            token_details_to_json(details),
+        );
+    }
+    if let Some(details) = usage.input_tokens_details.as_ref() {
+        value.insert(
+            "input_tokens_details".to_owned(),
+            token_details_to_json(details),
+        );
+    }
+    value.insert(
+        "claude_cache_creation_5_m_tokens".to_owned(),
+        JsonData::Number(usage.claude_cache_creation_5_m_tokens.into()),
+    );
+    value.insert(
+        "claude_cache_creation_1_h_tokens".to_owned(),
+        JsonData::Number(usage.claude_cache_creation_1_h_tokens.into()),
+    );
+    if let Some(source) = usage.usage_source.as_ref() {
+        value.insert("usage_source".to_owned(), JsonData::String(source.clone()));
+    }
+    if let Some(semantic) = usage.usage_semantic.as_ref() {
+        value.insert(
+            "usage_semantic".to_owned(),
+            JsonData::String(semantic.clone()),
+        );
+    }
+    JsonData::Object(value)
+}
+
+fn billing_usage_to_json(value: &BillingUsage) -> JsonData {
+    let mut entries = BTreeMap::new();
+    entries.insert("source".to_owned(), JsonData::String(value.source.clone()));
+    entries.insert(
+        "semantic".to_owned(),
+        JsonData::String(value.semantic.clone()),
+    );
+    if let Some(usage) = value.openai_usage.as_ref() {
+        entries.insert("openai_usage".to_owned(), wire_usage_to_json(usage));
+    }
+    if let Some(usage) = value.claude_usage.as_ref() {
+        entries.insert(
+            "claude_usage".to_owned(),
+            object([
+                (
+                    "input_tokens".to_owned(),
+                    JsonData::Number(usage.input_tokens.into()),
+                ),
+                (
+                    "output_tokens".to_owned(),
+                    JsonData::Number(usage.output_tokens.into()),
+                ),
+                (
+                    "cache_read_input_tokens".to_owned(),
+                    JsonData::Number(usage.cache_read_input_tokens.into()),
+                ),
+                (
+                    "cache_creation_input_tokens".to_owned(),
+                    JsonData::Number(usage.cache_creation_input_tokens.into()),
+                ),
+                (
+                    "claude_cache_creation_5_m_tokens".to_owned(),
+                    JsonData::Number(usage.claude_cache_creation_5_m_tokens.into()),
+                ),
+                (
+                    "claude_cache_creation_1_h_tokens".to_owned(),
+                    JsonData::Number(usage.claude_cache_creation_1_h_tokens.into()),
+                ),
+            ]),
+        );
+    }
+    if let Some(usage) = value.gemini_usage_metadata.as_ref() {
+        entries.insert(
+            "gemini_usage_metadata".to_owned(),
+            object([
+                (
+                    "prompt_token_count".to_owned(),
+                    JsonData::Number(usage.prompt_token_count.into()),
+                ),
+                (
+                    "candidates_token_count".to_owned(),
+                    JsonData::Number(usage.candidates_token_count.into()),
+                ),
+                (
+                    "thoughts_token_count".to_owned(),
+                    JsonData::Number(usage.thoughts_token_count.into()),
+                ),
+                (
+                    "total_token_count".to_owned(),
+                    JsonData::Number(usage.total_token_count.into()),
+                ),
+                (
+                    "cached_content_token_count".to_owned(),
+                    JsonData::Number(usage.cached_content_token_count.into()),
+                ),
+                (
+                    "tool_use_prompt_token_count".to_owned(),
+                    JsonData::Number(usage.tool_use_prompt_token_count.into()),
+                ),
+            ]),
+        );
+    }
+    JsonData::Object(entries)
+}
+
+fn cache_extensions_from_wire(usage: &WireUsage) -> BTreeMap<String, JsonData> {
+    let mut extensions = BTreeMap::new();
+    if let Some(details) = usage.prompt_tokens_details.as_ref() {
+        extensions.insert(
+            "openai.prompt_tokens_details".to_owned(),
+            token_details_to_json(details),
+        );
+    }
+    if let Some(details) = usage.completion_tokens_details.as_ref() {
+        extensions.insert(
+            "openai.completion_tokens_details".to_owned(),
+            token_details_to_json(details),
+        );
+    }
+    if let Some(details) = usage.input_tokens_details.as_ref() {
+        extensions.insert(
+            "openai.input_tokens_details".to_owned(),
+            token_details_to_json(details),
+        );
+    }
+    if usage.claude_cache_creation_5_m_tokens != 0 {
+        extensions.insert(
+            "claude.cache_creation_5m".to_owned(),
+            JsonData::Number(usage.claude_cache_creation_5_m_tokens.into()),
+        );
+    }
+    if usage.claude_cache_creation_1_h_tokens != 0 {
+        extensions.insert(
+            "claude.cache_creation_1h".to_owned(),
+            JsonData::Number(usage.claude_cache_creation_1_h_tokens.into()),
+        );
+    }
+    extensions
+}
+
+fn usage_from_wire(usage: &WireUsage) -> SemanticUsage {
+    let input_tokens = if usage.input_tokens != 0 {
+        usage.input_tokens
+    } else {
+        usage.prompt_tokens
+    };
+    let output_tokens = if usage.output_tokens != 0 {
+        usage.output_tokens
+    } else {
+        usage.completion_tokens
+    };
+    let total_tokens = if usage.total_tokens != 0 {
+        usage.total_tokens
+    } else {
+        input_tokens.saturating_add(output_tokens)
+    };
+    let cache = CacheUsage {
+        read_input_tokens: usage
+            .input_tokens_details
+            .as_ref()
+            .map(|details| details.cached_tokens)
+            .or_else(|| {
+                usage
+                    .prompt_tokens_details
+                    .as_ref()
+                    .map(|details| details.cached_tokens)
+            })
+            .unwrap_or(0),
+        write_input_tokens: usage
+            .input_tokens_details
+            .as_ref()
+            .map(|details| details.cache_write_tokens)
+            .unwrap_or(0),
+        creation_input_tokens: usage
+            .claude_cache_creation_5_m_tokens
+            .saturating_add(usage.claude_cache_creation_1_h_tokens),
+        extensions: cache_extensions_from_wire(usage),
+    };
+    let reasoning_tokens = usage
+        .completion_tokens_details
+        .as_ref()
+        .map(|details| details.reasoning_tokens)
+        .unwrap_or(0);
+    let billing = usage
+        .billing_usage
+        .as_ref()
+        .map(|value| SemanticBillingUsage {
+            source: Some(value.source.clone()),
+            semantic: Some(value.semantic.clone()),
+            input_tokens,
+            output_tokens,
+            cached_input_tokens: cache.read_input_tokens,
+            total_tokens,
+            cost: None,
+            extensions: BTreeMap::from([(
+                "billing.provider_payload".to_owned(),
+                billing_usage_to_json(value),
+            )]),
+        });
+    let mut extensions = cache_extensions_from_wire(usage);
+    if let Some(source) = usage.usage_source.as_ref() {
+        extensions.insert("usage_source".to_owned(), JsonData::String(source.clone()));
+    }
+    if let Some(semantic) = usage.usage_semantic.as_ref() {
+        extensions.insert(
+            "usage_semantic".to_owned(),
+            JsonData::String(semantic.clone()),
+        );
+    }
+    SemanticUsage {
+        input_tokens,
+        output_tokens,
+        total_tokens,
+        reasoning_tokens,
+        cache,
+        billing,
+        extensions,
+    }
+}
+
+fn token_details_from_json(value: &JsonData) -> Option<TokenDetails> {
+    let object = json_object(value)?;
+    let number = |name: &str| object.get(name).and_then(number_u64).unwrap_or(0);
+    Some(TokenDetails {
+        cached_tokens: number("cached_tokens"),
+        cached_creation_tokens: number("cached_creation_tokens"),
+        cache_write_tokens: number("cache_write_tokens"),
+        text_tokens: number("text_tokens"),
+        audio_tokens: number("audio_tokens"),
+        image_tokens: number("image_tokens"),
+        reasoning_tokens: number("reasoning_tokens"),
+    })
+}
+
+fn wire_usage_without_billing(usage: &SemanticUsage) -> WireUsage {
+    let prompt_details = TokenDetails {
+        cached_tokens: usage.cache.read_input_tokens,
+        cached_creation_tokens: usage.cache.creation_input_tokens,
+        cache_write_tokens: usage.cache.write_input_tokens,
+        reasoning_tokens: usage.reasoning_tokens,
+        ..TokenDetails::default()
+    };
+    let completion_details = TokenDetails {
+        reasoning_tokens: usage.reasoning_tokens,
+        ..TokenDetails::default()
+    };
+    let prompt_details = usage
+        .extensions
+        .get("openai.prompt_tokens_details")
+        .and_then(token_details_from_json)
+        .unwrap_or(prompt_details);
+    let completion_details = usage
+        .extensions
+        .get("openai.completion_tokens_details")
+        .and_then(token_details_from_json)
+        .unwrap_or(completion_details);
+    let input_details = usage
+        .extensions
+        .get("openai.input_tokens_details")
+        .and_then(token_details_from_json)
+        .unwrap_or_else(|| prompt_details.clone());
+    WireUsage {
+        prompt_tokens: usage.input_tokens,
+        completion_tokens: usage.output_tokens,
+        total_tokens: usage.total_tokens,
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        prompt_tokens_details: Some(prompt_details),
+        completion_tokens_details: Some(completion_details),
+        input_tokens_details: Some(input_details),
+        claude_cache_creation_5_m_tokens: usage
+            .cache
+            .extensions
+            .get("claude.cache_creation_5m")
+            .and_then(number_u64)
+            .unwrap_or(0),
+        claude_cache_creation_1_h_tokens: usage
+            .cache
+            .extensions
+            .get("claude.cache_creation_1h")
+            .and_then(number_u64)
+            .unwrap_or(0),
+        usage_source: usage
+            .billing
+            .as_ref()
+            .and_then(|value| value.source.clone())
+            .or_else(|| {
+                usage
+                    .extensions
+                    .get("usage_source")
+                    .and_then(json_string)
+                    .map(str::to_owned)
+            }),
+        usage_semantic: usage
+            .billing
+            .as_ref()
+            .and_then(|value| value.semantic.clone())
+            .or_else(|| {
+                usage
+                    .extensions
+                    .get("usage_semantic")
+                    .and_then(json_string)
+                    .map(str::to_owned)
+            }),
+        billing_usage: None,
+    }
+}
+
+fn billing_usage_for_target(usage: &SemanticUsage, target: Protocol) -> Option<Box<BillingUsage>> {
+    let billing = usage.billing.as_ref()?;
+    let mut output = BillingUsage {
+        source: billing.source.clone().unwrap_or_else(|| "relay".to_owned()),
+        semantic: billing
+            .semantic
+            .clone()
+            .unwrap_or_else(|| "semantic_usage".to_owned()),
+        openai_usage: None,
+        claude_usage: None,
+        gemini_usage_metadata: None,
+    };
+    match target {
+        Protocol::OpenAi | Protocol::OpenAiResponses => {
+            output.openai_usage = Some(Box::new(wire_usage_without_billing(usage)));
+        }
+        Protocol::Claude => {
+            output.claude_usage = Some(ClaudeUsage {
+                input_tokens: usage.input_tokens,
+                output_tokens: usage.output_tokens,
+                cache_read_input_tokens: usage.cache.read_input_tokens,
+                cache_creation_input_tokens: usage.cache.creation_input_tokens,
+                claude_cache_creation_5_m_tokens: usage
+                    .cache
+                    .extensions
+                    .get("claude.cache_creation_5m")
+                    .and_then(number_u64)
+                    .unwrap_or(0),
+                claude_cache_creation_1_h_tokens: usage
+                    .cache
+                    .extensions
+                    .get("claude.cache_creation_1h")
+                    .and_then(number_u64)
+                    .unwrap_or(0),
+                billing_usage: None,
+            });
+        }
+        Protocol::Gemini => {
+            output.gemini_usage_metadata = Some(gemini_usage_without_billing(usage));
+        }
+    }
+    Some(Box::new(output))
+}
+
+fn usage_to_wire(usage: &SemanticUsage, target: Protocol) -> WireUsage {
+    let mut output = wire_usage_without_billing(usage);
+    output.billing_usage = billing_usage_for_target(usage, target);
+    output
+}
+
+fn record_usage_projection_losses(envelope: &mut Envelope, target: Protocol) {
+    let Some(usage) = envelope.usage.clone() else {
+        return;
+    };
+    let supported_prefix = match target {
+        Protocol::OpenAi | Protocol::OpenAiResponses => "openai.",
+        Protocol::Claude => "claude.",
+        Protocol::Gemini => "gemini.",
+    };
+    let unsupported = usage
+        .extensions
+        .keys()
+        .filter(|key| {
+            !key.starts_with(supported_prefix) && *key != "usage_source" && *key != "usage_semantic"
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    for key in unsupported {
+        record_loss(
+            envelope,
+            LossCode::LossUnknownEvent,
+            Some(Feature::Usage),
+            format!("usage.extensions.{key}").as_str(),
+            "usage extension retained in IR but not expressible on target wire",
+        );
+    }
+    let unsupported_cache = usage
+        .cache
+        .extensions
+        .keys()
+        .filter(|key| {
+            !key.starts_with(supported_prefix) && !key.starts_with("claude.cache_creation_")
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let billing_loss = usage
+        .billing
+        .as_ref()
+        .is_some_and(|billing| !billing.extensions.is_empty() || billing.cost.is_some());
+    for key in unsupported_cache {
+        record_loss(
+            envelope,
+            LossCode::LossUnknownEvent,
+            Some(Feature::CacheUsage),
+            format!("usage.cache.extensions.{key}").as_str(),
+            "cache usage extension retained in IR but not expressible on target wire",
+        );
+    }
+    if billing_loss {
+        record_loss(
+            envelope,
+            LossCode::LossUnknownEvent,
+            Some(Feature::Usage),
+            "usage.billing",
+            "billing extension/cost retained in IR but not expressible on target wire",
+        );
+    }
+}
+
+fn semantic_from_claude_usage(usage: &ClaudeUsage) -> SemanticUsage {
+    let mut cache_extensions = BTreeMap::new();
+    if usage.claude_cache_creation_5_m_tokens != 0 {
+        cache_extensions.insert(
+            "claude.cache_creation_5m".to_owned(),
+            JsonData::Number(usage.claude_cache_creation_5_m_tokens.into()),
+        );
+    }
+    if usage.claude_cache_creation_1_h_tokens != 0 {
+        cache_extensions.insert(
+            "claude.cache_creation_1h".to_owned(),
+            JsonData::Number(usage.claude_cache_creation_1_h_tokens.into()),
+        );
+    }
+    let billing = usage
+        .billing_usage
+        .as_ref()
+        .map(|value| SemanticBillingUsage {
+            source: Some(value.source.clone()),
+            semantic: Some(value.semantic.clone()),
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            cached_input_tokens: usage.cache_read_input_tokens,
+            total_tokens: usage.input_tokens.saturating_add(usage.output_tokens),
+            cost: None,
+            extensions: BTreeMap::from([(
+                "billing.provider_payload".to_owned(),
+                billing_usage_to_json(value),
+            )]),
+        });
+    SemanticUsage {
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        total_tokens: usage.input_tokens.saturating_add(usage.output_tokens),
+        reasoning_tokens: 0,
+        cache: CacheUsage {
+            read_input_tokens: usage.cache_read_input_tokens,
+            write_input_tokens: 0,
+            creation_input_tokens: usage.cache_creation_input_tokens,
+            extensions: cache_extensions,
+        },
+        billing,
+        extensions: BTreeMap::new(),
+    }
+}
+
+fn semantic_from_gemini_usage(usage: &GeminiUsage) -> SemanticUsage {
+    let mut extensions = BTreeMap::new();
+    if usage.tool_use_prompt_token_count != 0 {
+        extensions.insert(
+            "gemini.tool_use_prompt_token_count".to_owned(),
+            JsonData::Number(usage.tool_use_prompt_token_count.into()),
+        );
+    }
+    if let Some(details) = usage.prompt_tokens_details.as_ref() {
+        extensions.insert("gemini.prompt_tokens_details".to_owned(), details.clone());
+    }
+    if let Some(details) = usage.candidates_tokens_details.as_ref() {
+        extensions.insert(
+            "gemini.candidates_tokens_details".to_owned(),
+            details.clone(),
+        );
+    }
+    if let Some(details) = usage.tool_use_prompt_tokens_details.as_ref() {
+        extensions.insert(
+            "gemini.tool_use_prompt_tokens_details".to_owned(),
+            details.clone(),
+        );
+    }
+    let billing = usage
+        .billing_usage
+        .as_ref()
+        .map(|value| SemanticBillingUsage {
+            source: Some(value.source.clone()),
+            semantic: Some(value.semantic.clone()),
+            input_tokens: usage.prompt_token_count,
+            output_tokens: usage.candidates_token_count,
+            cached_input_tokens: usage.cached_content_token_count,
+            total_tokens: usage.total_token_count,
+            cost: None,
+            extensions: BTreeMap::from([(
+                "billing.provider_payload".to_owned(),
+                billing_usage_to_json(value),
+            )]),
+        });
+    SemanticUsage {
+        input_tokens: usage.prompt_token_count,
+        output_tokens: usage.candidates_token_count,
+        total_tokens: if usage.total_token_count != 0 {
+            usage.total_token_count
+        } else {
+            usage
+                .prompt_token_count
+                .saturating_add(usage.candidates_token_count)
+                .saturating_add(usage.thoughts_token_count)
+        },
+        reasoning_tokens: usage.thoughts_token_count,
+        cache: CacheUsage {
+            read_input_tokens: usage.cached_content_token_count,
+            write_input_tokens: 0,
+            creation_input_tokens: 0,
+            extensions: BTreeMap::new(),
+        },
+        billing,
+        extensions,
+    }
+}
+
+fn openai_chat_message_to_response_envelope(
+    message: OpenAiChatMessage,
+    envelope: &mut Envelope,
+    source: Protocol,
+    target: Protocol,
+    path: &str,
+) -> Result<(), DirectIrError> {
+    // The message helper uses the same ordered item mapping as requests.  A
+    // response path is retained in the outer ledger, so no DTO is re-encoded
+    // merely to change protocols.
+    let index = envelope.ordered_items().len();
+    chat_message_to_envelope(message, index, envelope, source, target).map_err(|error| {
+        DirectIrError {
+            path: if error.path == format!("messages[{index}]") {
+                path.to_owned()
+            } else {
+                error.path
+            },
+            ..error
+        }
+    })
+}
+
+/// Decodes an OpenAI Chat non-stream response into an ordered IR Envelope.
+pub fn openai_chat_response_to_envelope_v2(
+    response: OpenAiChatResponse,
+) -> Result<DirectIrConversion<Envelope>, DirectIrError> {
+    let source = Protocol::OpenAi;
+    let target = Protocol::OpenAi;
+    let model = response.model.clone();
+    let mut envelope = Envelope::new(source, model);
+    envelope.extensions.insert(
+        "openai.response_id".to_owned(),
+        JsonData::String(response.id),
+    );
+    envelope.extensions.insert(
+        "openai.response_object".to_owned(),
+        JsonData::String(response.object),
+    );
+    envelope.extensions.insert(
+        "openai.response_created".to_owned(),
+        JsonData::Number(response.created.into()),
+    );
+    envelope.extensions.insert(
+        "openai.choice_count".to_owned(),
+        JsonData::Number(response.choices.len().into()),
+    );
+    for (index, choice) in response.choices.into_iter().enumerate() {
+        envelope.extensions.insert(
+            format!("openai.choice[{index}].index"),
+            JsonData::Number(choice.index.into()),
+        );
+        if let Some(reason) = choice.finish_reason {
+            envelope.extensions.insert(
+                format!("openai.choice[{index}].finish_reason"),
+                JsonData::String(reason),
+            );
+        }
+        openai_chat_message_to_response_envelope(
+            choice.message,
+            &mut envelope,
+            source,
+            target,
+            &format!("choices[{index}].message"),
+        )?;
+    }
+    if let Some(usage) = response.usage {
+        envelope.usage = Some(usage_from_wire(&usage));
+    }
+    map_validation(envelope.validate(), source, target, "envelope")?;
+    Ok(finish(envelope.clone(), envelope, source, target))
+}
+
+fn gemini_response_part_to_envelope(
+    part: GeminiPart,
+    candidate_index: usize,
+    part_index: usize,
+    envelope: &mut Envelope,
+    links: &mut GeminiCallLinks,
+    source: Protocol,
+    target: Protocol,
+    model: &str,
+) -> Result<(), DirectIrError> {
+    gemini_part_to_items(
+        part,
+        candidate_index,
+        part_index,
+        Role::Model,
+        envelope,
+        links,
+        source,
+        target,
+        model,
+    )
+}
+
+/// Decodes a Gemini non-stream response into an ordered IR Envelope.
+pub fn gemini_response_to_envelope_v2(
+    response: GeminiResponse,
+    model: impl Into<String>,
+) -> Result<DirectIrConversion<Envelope>, DirectIrError> {
+    let model = model.into();
+    let source = Protocol::Gemini;
+    let target = Protocol::Gemini;
+    let mut envelope = Envelope::new(source, model.clone());
+    let candidate_count = response.candidates.len();
+    envelope.extensions.insert(
+        "gemini.candidate_count".to_owned(),
+        JsonData::Number(candidate_count.into()),
+    );
+    let mut links = GeminiCallLinks::default();
+    for (candidate_index, candidate) in response.candidates.into_iter().enumerate() {
+        if let Some(index) = candidate.index {
+            envelope.extensions.insert(
+                format!("gemini.candidate[{candidate_index}].index"),
+                JsonData::Number(index.into()),
+            );
+        }
+        if let Some(reason) = candidate.finish_reason {
+            envelope.extensions.insert(
+                format!("gemini.candidate[{candidate_index}].finish_reason"),
+                JsonData::String(reason),
+            );
+        }
+        if let Some(safety_ratings) = candidate.safety_ratings {
+            envelope.extensions.insert(
+                format!("gemini.candidate[{candidate_index}].safety_ratings"),
+                safety_ratings,
+            );
+        }
+        for (part_index, part) in candidate.content.parts.into_iter().enumerate() {
+            gemini_response_part_to_envelope(
+                part,
+                candidate_index,
+                part_index,
+                &mut envelope,
+                &mut links,
+                source,
+                target,
+                &model,
+            )?;
+        }
+    }
+    if let Some(usage) = response.usage_metadata {
+        envelope.usage = Some(semantic_from_gemini_usage(&usage));
+    }
+    map_validation(envelope.validate(), source, target, "envelope")?;
+    Ok(finish(envelope.clone(), envelope, source, target))
+}
+
+/// Explicitly named Gemini model variant for response adapters.
+pub fn gemini_response_to_envelope_v2_for_model(
+    response: GeminiResponse,
+    model: &str,
+) -> Result<DirectIrConversion<Envelope>, DirectIrError> {
+    gemini_response_to_envelope_v2(response, model)
+}
+
+/// Decodes a Claude non-stream response into an ordered IR Envelope.
+pub fn claude_response_to_envelope_v2(
+    response: ClaudeResponse,
+) -> Result<DirectIrConversion<Envelope>, DirectIrError> {
+    let source = Protocol::Claude;
+    let target = Protocol::Claude;
+    let model = response.model.clone();
+    let mut envelope = Envelope::new(source, model.clone());
+    envelope.extensions.insert(
+        "claude.response_id".to_owned(),
+        JsonData::String(response.id),
+    );
+    envelope.extensions.insert(
+        "claude.response_type".to_owned(),
+        JsonData::String(response.kind),
+    );
+    if let Some(reason) = response.stop_reason {
+        envelope
+            .extensions
+            .insert("claude.stop_reason".to_owned(), JsonData::String(reason));
+    }
+    for (index, block) in response.content.into_iter().enumerate() {
+        claude_block_to_items(
+            block,
+            Role::Assistant,
+            0,
+            index,
+            &mut envelope,
+            source,
+            target,
+            &model,
+        )?;
+    }
+    if let Some(usage) = response.usage {
+        envelope.usage = Some(semantic_from_claude_usage(&usage));
+    }
+    map_validation(envelope.validate(), source, target, "envelope")?;
+    Ok(finish(envelope.clone(), envelope, source, target))
+}
+
+fn extension_string(envelope: &Envelope, key: &str) -> Option<String> {
+    envelope
+        .extensions
+        .get(key)
+        .and_then(json_string)
+        .map(str::to_owned)
+}
+
+fn extension_i64(envelope: &Envelope, key: &str) -> Option<i64> {
+    match envelope.extensions.get(key) {
+        Some(JsonData::Number(value)) => value.as_i64(),
+        _ => None,
+    }
+}
+
+fn response_finish_reason(envelope: &Envelope, index: usize) -> Option<String> {
+    extension_string(envelope, &format!("openai.choice[{index}].finish_reason"))
+        .or_else(|| extension_string(envelope, "claude.stop_reason"))
+        .or_else(|| extension_string(envelope, "gemini.candidate[0].finish_reason"))
+}
+
+fn openai_response_message_groups(
+    envelope: &mut Envelope,
+    source: Protocol,
+    target: Protocol,
+) -> Result<Vec<OpenAiChatMessage>, DirectIrError> {
+    let mut groups = Vec::new();
+    let items = envelope.ordered_items().to_vec();
+    for (index, item) in items.iter().enumerate() {
+        let is_bound_signature = matches!(&item.kind, ItemKind::Reasoning)
+            && item
+                .ordered_parts()
+                .first()
+                .and_then(|part| part.opaque.as_ref())
+                .is_some_and(|state| {
+                    state.provider == "google" && state.kind == "thought_signature"
+                })
+            && index > 0
+            && matches!(&items[index - 1].kind, ItemKind::ToolCall);
+        if is_bound_signature {
+            continue;
+        }
+        let bound_google_state = if matches!(&item.kind, ItemKind::ToolCall) {
+            items
+                .get(index.saturating_add(1))
+                .and_then(|next| next.ordered_parts().first())
+                .and_then(|part| part.opaque.as_ref())
+                .filter(|state| state.provider == "google" && state.kind == "thought_signature")
+        } else {
+            None
+        };
+        let message = openai_message_from_item(
+            item,
+            source,
+            target,
+            &format!("items[{index}]"),
+            bound_google_state,
+        )?;
+        let can_merge = groups.last().is_some_and(|last: &OpenAiChatMessage| {
+            last.role == message.role && message.role != "tool"
+        });
+        if can_merge {
+            let Some(last) = groups.last_mut() else {
+                return Err(DirectIrError::new(
+                    source,
+                    target,
+                    "response_order",
+                    &format!("items[{index}]"),
+                    DirectIrReason::Mismatch,
+                ));
+            };
+            merge_openai_messages(last, message, envelope, source, target, index)?;
+        } else {
+            groups.push(message);
+        }
+    }
+    Ok(groups)
+}
+
+fn merge_openai_messages(
+    target_message: &mut OpenAiChatMessage,
+    incoming: OpenAiChatMessage,
+    envelope: &mut Envelope,
+    source: Protocol,
+    target: Protocol,
+    index: usize,
+) -> Result<(), DirectIrError> {
+    match (target_message.content.take(), incoming.content) {
+        (None, content) => target_message.content = content,
+        (Some(StringOrParts::String(mut left)), Some(StringOrParts::String(right))) => {
+            left.push_str(&right);
+            target_message.content = Some(StringOrParts::String(left));
+        }
+        (Some(StringOrParts::String(left)), Some(StringOrParts::Parts(mut right))) => {
+            right.insert(
+                0,
+                OpenAiChatContentPart {
+                    kind: "text".to_owned(),
+                    text: Some(left),
+                    image_url: None,
+                },
+            );
+            target_message.content = Some(StringOrParts::Parts(right));
+        }
+        (Some(StringOrParts::Parts(mut left)), Some(StringOrParts::String(right))) => {
+            left.push(OpenAiChatContentPart {
+                kind: "text".to_owned(),
+                text: Some(right),
+                image_url: None,
+            });
+            target_message.content = Some(StringOrParts::Parts(left));
+        }
+        (Some(StringOrParts::Parts(mut left)), Some(StringOrParts::Parts(right))) => {
+            left.extend(right);
+            target_message.content = Some(StringOrParts::Parts(left));
+        }
+        (Some(content), None) => target_message.content = Some(content),
+    }
+    if let Some(reasoning) = incoming.reasoning_content {
+        match target_message.reasoning_content.as_mut() {
+            Some(value) => value.push_str(&reasoning),
+            None => target_message.reasoning_content = Some(reasoning),
+        }
+    }
+    if target_message.name.is_none() {
+        target_message.name = incoming.name.clone();
+    } else if incoming.name.is_some() && incoming.name != target_message.name {
+        record_loss(
+            envelope,
+            LossCode::LossContentOrder,
+            Some(Feature::UnknownEventPassthrough),
+            format!("items[{index}].name").as_str(),
+            "adjacent Chat messages had different names and share one merged message",
+        );
+    }
+    target_message.tool_calls.extend(incoming.tool_calls);
+    let mut existing = target_message
+        .extra_content
+        .take()
+        .unwrap_or(OpenAiExtraContent {
+            google: None,
+            anthropic: None,
+        });
+    if let Some(incoming) = incoming.extra_content {
+        if let Some(google) = incoming.google {
+            let mut pending_google = Some(google);
+            let mut attached_to_call = false;
+            if let Some(call) = target_message.tool_calls.last_mut() {
+                let mut call_extra = call.extra_content.take().unwrap_or(OpenAiExtraContent {
+                    google: None,
+                    anthropic: None,
+                });
+                if call_extra.google.is_some() {
+                    record_loss(
+                        envelope,
+                        LossCode::LossContentOrder,
+                        Some(Feature::OpaqueReasoningSignature),
+                        format!("items[{index}].extra_content.google").as_str(),
+                        "multiple Google signatures cannot share one ToolCall",
+                    );
+                    attached_to_call = true;
+                } else {
+                    call_extra.google = pending_google.take();
+                    attached_to_call = true;
+                }
+                call.extra_content = Some(call_extra);
+            }
+            if !attached_to_call {
+                if existing.google.is_some() {
+                    record_loss(
+                        envelope,
+                        LossCode::LossContentOrder,
+                        Some(Feature::OpaqueReasoningSignature),
+                        format!("items[{index}].extra_content.google").as_str(),
+                        "multiple Google signatures cannot share one Chat message slot",
+                    );
+                } else if let Some(google) = pending_google {
+                    existing.google = Some(google);
+                }
+            }
+        }
+        if let Some(anthropic) = incoming.anthropic {
+            match existing.anthropic.as_mut() {
+                Some(value) => value.blocks.extend(anthropic.blocks),
+                None => existing.anthropic = Some(anthropic),
+            }
+        }
+    }
+    if existing.google.is_some() || existing.anthropic.is_some() {
+        target_message.extra_content = Some(existing);
+    }
+    let _ = source;
+    let _ = target;
+    Ok(())
+}
+
+/// Encodes an ordered Envelope as an OpenAI Chat non-stream response.
+pub fn envelope_to_openai_chat_response_v2(
+    mut envelope: Envelope,
+) -> Result<DirectIrConversion<OpenAiChatResponse>, DirectIrError> {
+    let source = envelope.source;
+    let target = Protocol::OpenAi;
+    record_response_projection_losses(&mut envelope, target);
+    if extension_i64(&envelope, "gemini.candidate_count").is_some_and(|count| count > 1)
+        || extension_i64(&envelope, "openai.choice_count").is_some_and(|count| count > 1)
+    {
+        record_loss(
+            &mut envelope,
+            LossCode::LossContentOrder,
+            Some(Feature::Text),
+            "response.choices",
+            "target Chat response has one ordered choice; multiple source choices were merged",
+        );
+    }
+    record_usage_projection_losses(&mut envelope, target);
+    let messages = openai_response_message_groups(&mut envelope, source, target)?;
+    let choices = messages
+        .into_iter()
+        .enumerate()
+        .map(|(index, message)| OpenAiChoice {
+            index: extension_i64(&envelope, &format!("openai.choice[{index}].index"))
+                .and_then(|value| usize::try_from(value).ok())
+                .unwrap_or(index),
+            message,
+            finish_reason: response_finish_reason(&envelope, index),
+        })
+        .collect();
+    let response_id = extension_string(&envelope, "openai.response_id")
+        .or_else(|| extension_string(&envelope, "claude.response_id"));
+    if response_id.is_none() {
+        record_loss(
+            &mut envelope,
+            LossCode::LossUnknownEvent,
+            Some(Feature::UnknownEventPassthrough),
+            "response.id",
+            "OpenAI response id is synthesized because no source id is expressible",
+        );
+    }
+    let output = OpenAiChatResponse {
+        id: response_id.unwrap_or_else(|| "direct-ir-response".to_owned()),
+        model: envelope.model.clone(),
+        object: extension_string(&envelope, "openai.response_object")
+            .unwrap_or_else(|| "chat.completion".to_owned()),
+        created: extension_i64(&envelope, "openai.response_created").unwrap_or(0),
+        choices,
+        usage: envelope
+            .usage
+            .as_ref()
+            .map(|usage| usage_to_wire(usage, Protocol::OpenAi)),
+    };
+    Ok(finish(output, envelope, source, target))
+}
+
+fn gemini_usage_without_billing(usage: &SemanticUsage) -> GeminiUsage {
+    GeminiUsage {
+        prompt_token_count: usage.input_tokens,
+        candidates_token_count: usage.output_tokens,
+        thoughts_token_count: usage.reasoning_tokens,
+        total_token_count: usage.total_tokens,
+        cached_content_token_count: usage.cache.read_input_tokens,
+        tool_use_prompt_token_count: usage
+            .extensions
+            .get("gemini.tool_use_prompt_token_count")
+            .and_then(number_u64)
+            .unwrap_or(0),
+        prompt_tokens_details: usage
+            .extensions
+            .get("gemini.prompt_tokens_details")
+            .cloned(),
+        candidates_tokens_details: usage
+            .extensions
+            .get("gemini.candidates_tokens_details")
+            .cloned(),
+        tool_use_prompt_tokens_details: usage
+            .extensions
+            .get("gemini.tool_use_prompt_tokens_details")
+            .cloned(),
+        billing_usage: None,
+    }
+}
+
+fn gemini_usage_from_semantic(usage: &SemanticUsage) -> GeminiUsage {
+    let mut output = gemini_usage_without_billing(usage);
+    output.billing_usage = billing_usage_for_target(usage, Protocol::Gemini);
+    output
+}
+
+fn append_response_gemini_item(
+    item: &Item,
+    parts: &mut Vec<GeminiPart>,
+    source: Protocol,
+    target: Protocol,
+    path: &str,
+    envelope: &mut Envelope,
+) -> Result<(), DirectIrError> {
+    if matches!(&item.kind, ItemKind::Reasoning) {
+        let Some(part) = item.ordered_parts().first() else {
+            return Err(DirectIrError::missing(source, target, "reasoning", path));
+        };
+        match &part.kind {
+            PartKind::Opaque => {
+                let Some(state) = part.opaque.as_ref() else {
+                    return Err(DirectIrError::new(
+                        source,
+                        target,
+                        "opaque_state",
+                        path,
+                        DirectIrReason::InvalidOpaqueState,
+                    ));
+                };
+                if state.provider != "google" || state.kind != "thought_signature" {
+                    let object = json_object(&state.raw);
+                    let thinking = object
+                        .and_then(|value| value.get("thinking"))
+                        .and_then(json_string);
+                    let Some(thinking) = thinking else {
+                        return Err(DirectIrError::unsupported(
+                            source,
+                            target,
+                            "opaque_reasoning",
+                            path,
+                        ));
+                    };
+                    record_loss(
+                        envelope,
+                        LossCode::LossOpaqueReasoning,
+                        Some(Feature::OpaqueReasoningSignature),
+                        path,
+                        "foreign opaque reasoning emitted as ordinary Gemini text",
+                    );
+                    parts.push(GeminiPart {
+                        text: Some(thinking.to_owned()),
+                        inline_data: None,
+                        function_call: None,
+                        function_response: None,
+                        thought_signature: None,
+                    });
+                    return Ok(());
+                }
+                let Some(last) = parts.last_mut() else {
+                    return Err(DirectIrError::new(
+                        source,
+                        target,
+                        "thought_signature_order",
+                        path,
+                        DirectIrReason::Mismatch,
+                    ));
+                };
+                append_gemini_state_signature(last, state, source, target, path, envelope)?;
+            }
+            PartKind::Text => {
+                record_loss(
+                    envelope,
+                    LossCode::LossOpaqueReasoning,
+                    Some(Feature::ReasoningSummary),
+                    path,
+                    "ordinary reasoning emitted as Gemini response text",
+                );
+                parts.push(GeminiPart {
+                    text: Some(part.text.clone().unwrap_or_default()),
+                    inline_data: None,
+                    function_call: None,
+                    function_response: None,
+                    thought_signature: None,
+                });
+            }
+            _ => {
+                return Err(DirectIrError::unsupported(
+                    source,
+                    target,
+                    "reasoning_part",
+                    path,
+                ));
+            }
+        }
+        return Ok(());
+    }
+    parts.push(gemini_part_for_item(item, source, target, path)?);
+    Ok(())
+}
+
+/// Encodes an ordered Envelope as a Gemini non-stream response.
+pub fn envelope_to_gemini_response_v2(
+    mut envelope: Envelope,
+) -> Result<DirectIrConversion<GeminiResponse>, DirectIrError> {
+    let source = envelope.source;
+    let target = Protocol::Gemini;
+    record_response_projection_losses(&mut envelope, target);
+    if extension_i64(&envelope, "openai.choice_count").is_some_and(|count| count > 1)
+        || extension_i64(&envelope, "gemini.candidate_count").is_some_and(|count| count > 1)
+    {
+        record_loss(
+            &mut envelope,
+            LossCode::LossContentOrder,
+            Some(Feature::Text),
+            "response.candidates",
+            "target Gemini response has one ordered candidate; multiple source candidates were merged",
+        );
+    }
+    record_usage_projection_losses(&mut envelope, target);
+    let mut parts = Vec::new();
+    for (index, item) in envelope.ordered_items().to_vec().into_iter().enumerate() {
+        append_response_gemini_item(
+            &item,
+            &mut parts,
+            source,
+            target,
+            &format!("items[{index}]"),
+            &mut envelope,
+        )?;
+    }
+    let output = GeminiResponse {
+        candidates: vec![GeminiCandidate {
+            index: extension_i64(&envelope, "gemini.candidate[0].index")
+                .and_then(|value| usize::try_from(value).ok())
+                .or(Some(0)),
+            finish_reason: extension_string(&envelope, "gemini.candidate[0].finish_reason")
+                .or_else(|| extension_string(&envelope, "claude.stop_reason")),
+            content: GeminiContent {
+                role: Some("model".to_owned()),
+                parts,
+            },
+            safety_ratings: envelope
+                .extensions
+                .get("gemini.candidate[0].safety_ratings")
+                .cloned(),
+        }],
+        usage_metadata: envelope.usage.as_ref().map(gemini_usage_from_semantic),
+    };
+    Ok(finish(output, envelope, source, target))
+}
+
+fn claude_usage_without_billing(usage: &SemanticUsage) -> ClaudeUsage {
+    ClaudeUsage {
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        cache_read_input_tokens: usage.cache.read_input_tokens,
+        cache_creation_input_tokens: usage.cache.creation_input_tokens,
+        ..ClaudeUsage::default()
+    }
+}
+
+fn claude_usage_from_semantic(usage: &SemanticUsage) -> ClaudeUsage {
+    let mut output = claude_usage_without_billing(usage);
+    output.billing_usage = billing_usage_for_target(usage, Protocol::Claude);
+    output
+}
+
+/// Encodes an ordered Envelope as a Claude non-stream response.
+pub fn envelope_to_claude_response_v2(
+    mut envelope: Envelope,
+) -> Result<DirectIrConversion<ClaudeResponse>, DirectIrError> {
+    let source = envelope.source;
+    let target = Protocol::Claude;
+    record_response_projection_losses(&mut envelope, target);
+    if extension_i64(&envelope, "openai.choice_count").is_some_and(|count| count > 1)
+        || extension_i64(&envelope, "gemini.candidate_count").is_some_and(|count| count > 1)
+    {
+        record_loss(
+            &mut envelope,
+            LossCode::LossContentOrder,
+            Some(Feature::Text),
+            "response.content",
+            "target Claude response has one ordered content list; multiple source choices were merged",
+        );
+    }
+    record_usage_projection_losses(&mut envelope, target);
+    let mut content = Vec::new();
+    for (index, item) in envelope.ordered_items().to_vec().into_iter().enumerate() {
+        let path = format!("items[{index}]");
+        let foreign_opaque_reasoning = item
+            .ordered_parts()
+            .first()
+            .and_then(|part| part.opaque.as_ref())
+            .is_some_and(|state| state.provider != "anthropic");
+        if matches!(&item.kind, ItemKind::Reasoning) && foreign_opaque_reasoning {
+            record_loss(
+                &mut envelope,
+                LossCode::LossOpaqueReasoning,
+                Some(Feature::OpaqueReasoningSignature),
+                &path,
+                "foreign provider opaque reasoning has no legal Claude signature representation",
+            );
+            continue;
+        }
+        let block = if matches!(&item.kind, ItemKind::Reasoning)
+            && item
+                .ordered_parts()
+                .first()
+                .and_then(|part| part.opaque.as_ref())
+                .is_none()
+        {
+            let Some(part) = item.ordered_parts().first() else {
+                return Err(DirectIrError::missing(source, target, "reasoning", &path));
+            };
+            record_loss(
+                &mut envelope,
+                LossCode::LossOpaqueReasoning,
+                Some(Feature::ReasoningSummary),
+                &path,
+                "ordinary reasoning emitted as Claude response text",
+            );
+            ClaudeContentBlock {
+                kind: "text".to_owned(),
+                text: Some(part.text.clone().unwrap_or_default()),
+                thinking: None,
+                signature: None,
+                data: None,
+                id: None,
+                name: None,
+                input: None,
+                tool_use_id: None,
+                content: None,
+                source: None,
+                extra: BTreeMap::new(),
+            }
+        } else {
+            claude_block_from_item(&item, source, target, &path, &mut envelope)?
+        };
+        content.push(block);
+    }
+    let response_id = extension_string(&envelope, "claude.response_id")
+        .or_else(|| extension_string(&envelope, "openai.response_id"));
+    if response_id.is_none() {
+        record_loss(
+            &mut envelope,
+            LossCode::LossUnknownEvent,
+            Some(Feature::UnknownEventPassthrough),
+            "response.id",
+            "Claude response id is synthesized because no source id is expressible",
+        );
+    }
+    let output = ClaudeResponse {
+        id: response_id.unwrap_or_else(|| "direct-ir-response".to_owned()),
+        kind: extension_string(&envelope, "claude.response_type")
+            .unwrap_or_else(|| "message".to_owned()),
+        role: "assistant".to_owned(),
+        model: envelope.model.clone(),
+        content,
+        stop_reason: extension_string(&envelope, "claude.stop_reason")
+            .or_else(|| extension_string(&envelope, "openai.choice[0].finish_reason")),
+        usage: envelope.usage.as_ref().map(claude_usage_from_semantic),
+    };
+    Ok(finish(output, envelope, source, target))
+}
+
+fn direct_request<T, U, Decode, Encode>(
+    value: T,
+    source: Protocol,
+    target: Protocol,
+    decode: Decode,
+    encode: Encode,
+) -> Result<DirectIrConversion<U>, DirectIrError>
+where
+    Decode: FnOnce(T) -> Result<DirectIrConversion<Envelope>, DirectIrError>,
+    Encode: FnOnce(Envelope) -> Result<DirectIrConversion<U>, DirectIrError>,
+{
+    let decoded = decode(value).map_err(|error| remap_direct_error(error, source, target))?;
+    let mut encoded =
+        encode(decoded.envelope).map_err(|error| remap_direct_error(error, source, target))?;
+    encoded.plan.source = source;
+    encoded.plan.target = target;
+    encoded.plan.hop_count = if source == target { 0 } else { 1 };
+    encoded.plan.converter_ids =
+        vec![direct_ir_route_descriptor(source, target).request_converter_id];
+    Ok(encoded)
+}
+
+fn direct_response<T, U, Decode, Encode>(
+    value: T,
+    source: Protocol,
+    target: Protocol,
+    decode: Decode,
+    encode: Encode,
+) -> Result<DirectIrConversion<U>, DirectIrError>
+where
+    Decode: FnOnce(T) -> Result<DirectIrConversion<Envelope>, DirectIrError>,
+    Encode: FnOnce(Envelope) -> Result<DirectIrConversion<U>, DirectIrError>,
+{
+    let decoded = decode(value).map_err(|error| remap_direct_error(error, source, target))?;
+    let mut encoded =
+        encode(decoded.envelope).map_err(|error| remap_direct_error(error, source, target))?;
+    encoded.plan.source = source;
+    encoded.plan.target = target;
+    encoded.plan.hop_count = if source == target { 0 } else { 1 };
+    encoded.plan.converter_ids =
+        vec![direct_ir_route_descriptor(source, target).response_converter_id];
+    Ok(encoded)
+}
+
+fn remap_direct_error(
+    mut error: DirectIrError,
+    source: Protocol,
+    target: Protocol,
+) -> DirectIrError {
+    error.source = source;
+    error.target = target;
+    error
+}
+
+/// OpenAI Chat request → Gemini request, directly through one ordered IR.
+pub fn openai_chat_request_to_gemini_v2(
+    request: OpenAiChatRequest,
+    model: &str,
+) -> Result<DirectIrConversion<GeminiRequest>, DirectIrError> {
+    direct_request(
+        request,
+        Protocol::OpenAi,
+        Protocol::Gemini,
+        openai_chat_request_to_envelope_v2,
+        |envelope| envelope_to_gemini_request_v2_for_model(envelope, model, true),
+    )
+}
+
+/// Gemini request → OpenAI Chat request, directly through one ordered IR.
+pub fn gemini_request_to_openai_chat_v2(
+    request: GeminiRequest,
+    model: &str,
+) -> Result<DirectIrConversion<OpenAiChatRequest>, DirectIrError> {
+    direct_request(
+        request,
+        Protocol::Gemini,
+        Protocol::OpenAi,
+        |request| gemini_request_to_envelope_v2(request, model),
+        envelope_to_openai_chat_request_v2,
+    )
+}
+
+/// Claude request → OpenAI Chat request, directly through one ordered IR.
+pub fn claude_request_to_openai_chat_v2(
+    request: ClaudeRequest,
+) -> Result<DirectIrConversion<OpenAiChatRequest>, DirectIrError> {
+    direct_request(
+        request,
+        Protocol::Claude,
+        Protocol::OpenAi,
+        claude_request_to_envelope_v2,
+        envelope_to_openai_chat_request_v2,
+    )
+}
+
+/// OpenAI Chat request → Claude request, directly through one ordered IR.
+pub fn openai_chat_request_to_claude_v2(
+    request: OpenAiChatRequest,
+) -> Result<DirectIrConversion<ClaudeRequest>, DirectIrError> {
+    direct_request(
+        request,
+        Protocol::OpenAi,
+        Protocol::Claude,
+        openai_chat_request_to_envelope_v2,
+        envelope_to_claude_request_v2,
+    )
+}
+
+/// Gemini request → Claude request, directly through one ordered IR.
+pub fn gemini_request_to_claude_v2(
+    request: GeminiRequest,
+    model: &str,
+) -> Result<DirectIrConversion<ClaudeRequest>, DirectIrError> {
+    direct_request(
+        request,
+        Protocol::Gemini,
+        Protocol::Claude,
+        |request| gemini_request_to_envelope_v2(request, model),
+        envelope_to_claude_request_v2,
+    )
+}
+
+/// Claude request → Gemini request, directly through one ordered IR.
+pub fn claude_request_to_gemini_v2(
+    request: ClaudeRequest,
+    model: &str,
+) -> Result<DirectIrConversion<GeminiRequest>, DirectIrError> {
+    direct_request(
+        request,
+        Protocol::Claude,
+        Protocol::Gemini,
+        claude_request_to_envelope_v2,
+        |envelope| envelope_to_gemini_request_v2_for_model(envelope, model, false),
+    )
+}
+
+/// OpenAI Chat response → Gemini response, directly through one ordered IR.
+pub fn openai_chat_response_to_gemini_v2(
+    response: OpenAiChatResponse,
+    model: &str,
+) -> Result<DirectIrConversion<GeminiResponse>, DirectIrError> {
+    direct_response(
+        response,
+        Protocol::OpenAi,
+        Protocol::Gemini,
+        openai_chat_response_to_envelope_v2,
+        |envelope| {
+            let mut envelope = envelope;
+            envelope.model = model.to_owned();
+            envelope_to_gemini_response_v2(envelope)
+        },
+    )
+}
+
+/// Gemini response → OpenAI Chat response, directly through one ordered IR.
+pub fn gemini_response_to_openai_chat_v2(
+    response: GeminiResponse,
+    model: &str,
+) -> Result<DirectIrConversion<OpenAiChatResponse>, DirectIrError> {
+    direct_response(
+        response,
+        Protocol::Gemini,
+        Protocol::OpenAi,
+        |response| gemini_response_to_envelope_v2(response, model),
+        envelope_to_openai_chat_response_v2,
+    )
+}
+
+/// Claude response → OpenAI Chat response, directly through one ordered IR.
+pub fn claude_response_to_openai_chat_v2(
+    response: ClaudeResponse,
+) -> Result<DirectIrConversion<OpenAiChatResponse>, DirectIrError> {
+    direct_response(
+        response,
+        Protocol::Claude,
+        Protocol::OpenAi,
+        claude_response_to_envelope_v2,
+        envelope_to_openai_chat_response_v2,
+    )
+}
+
+/// OpenAI Chat response → Claude response, directly through one ordered IR.
+pub fn openai_chat_response_to_claude_v2(
+    response: OpenAiChatResponse,
+) -> Result<DirectIrConversion<ClaudeResponse>, DirectIrError> {
+    direct_response(
+        response,
+        Protocol::OpenAi,
+        Protocol::Claude,
+        openai_chat_response_to_envelope_v2,
+        envelope_to_claude_response_v2,
+    )
+}
+
+/// Gemini response → Claude response, directly through one ordered IR.
+pub fn gemini_response_to_claude_v2(
+    response: GeminiResponse,
+    model: &str,
+) -> Result<DirectIrConversion<ClaudeResponse>, DirectIrError> {
+    direct_response(
+        response,
+        Protocol::Gemini,
+        Protocol::Claude,
+        |response| gemini_response_to_envelope_v2(response, model),
+        envelope_to_claude_response_v2,
+    )
+}
+
+/// Claude response → Gemini response, directly through one ordered IR.
+pub fn claude_response_to_gemini_v2(
+    response: ClaudeResponse,
+    model: &str,
+) -> Result<DirectIrConversion<GeminiResponse>, DirectIrError> {
+    direct_response(
+        response,
+        Protocol::Claude,
+        Protocol::Gemini,
+        claude_response_to_envelope_v2,
+        |envelope| {
+            let mut envelope = envelope;
+            envelope.model = model.to_owned();
+            envelope_to_gemini_response_v2(envelope)
+        },
+    )
+}
+
+/// Source-protocol aliases used by route adapters and acceptance fixtures.
+pub fn openai_chat_to_gemini_request_v2(
+    request: OpenAiChatRequest,
+    model: &str,
+) -> Result<DirectIrConversion<GeminiRequest>, DirectIrError> {
+    openai_chat_request_to_gemini_v2(request, model)
+}
+
+pub fn gemini_to_openai_chat_request_v2(
+    request: GeminiRequest,
+    model: &str,
+) -> Result<DirectIrConversion<OpenAiChatRequest>, DirectIrError> {
+    gemini_request_to_openai_chat_v2(request, model)
+}
+
+pub fn claude_to_openai_chat_request_v2(
+    request: ClaudeRequest,
+) -> Result<DirectIrConversion<OpenAiChatRequest>, DirectIrError> {
+    claude_request_to_openai_chat_v2(request)
+}
+
+pub fn openai_chat_to_claude_request_v2(
+    request: OpenAiChatRequest,
+) -> Result<DirectIrConversion<ClaudeRequest>, DirectIrError> {
+    openai_chat_request_to_claude_v2(request)
+}
+
+pub fn gemini_to_claude_request_v2(
+    request: GeminiRequest,
+    model: &str,
+) -> Result<DirectIrConversion<ClaudeRequest>, DirectIrError> {
+    gemini_request_to_claude_v2(request, model)
+}
+
+pub fn claude_to_gemini_request_v2(
+    request: ClaudeRequest,
+    model: &str,
+) -> Result<DirectIrConversion<GeminiRequest>, DirectIrError> {
+    claude_request_to_gemini_v2(request, model)
+}
+
+pub fn openai_chat_to_gemini_response_v2(
+    response: OpenAiChatResponse,
+    model: &str,
+) -> Result<DirectIrConversion<GeminiResponse>, DirectIrError> {
+    openai_chat_response_to_gemini_v2(response, model)
+}
+
+pub fn gemini_to_openai_chat_response_v2(
+    response: GeminiResponse,
+    model: &str,
+) -> Result<DirectIrConversion<OpenAiChatResponse>, DirectIrError> {
+    gemini_response_to_openai_chat_v2(response, model)
+}
+
+pub fn claude_to_openai_chat_response_v2(
+    response: ClaudeResponse,
+) -> Result<DirectIrConversion<OpenAiChatResponse>, DirectIrError> {
+    claude_response_to_openai_chat_v2(response)
+}
+
+pub fn openai_chat_to_claude_response_v2(
+    response: OpenAiChatResponse,
+) -> Result<DirectIrConversion<ClaudeResponse>, DirectIrError> {
+    openai_chat_response_to_claude_v2(response)
+}
+
+pub fn gemini_to_claude_response_v2(
+    response: GeminiResponse,
+    model: &str,
+) -> Result<DirectIrConversion<ClaudeResponse>, DirectIrError> {
+    gemini_response_to_claude_v2(response, model)
+}
+
+pub fn claude_to_gemini_response_v2(
+    response: ClaudeResponse,
+    model: &str,
+) -> Result<DirectIrConversion<GeminiResponse>, DirectIrError> {
+    claude_response_to_gemini_v2(response, model)
+}
+
+#[cfg(test)]
+mod direct_ir_tests {
+    use super::*;
+
+    fn chat_request() -> OpenAiChatRequest {
+        serde_json::from_str(
+            r#"{"model":"gpt-test","messages":[{"role":"user","content":"hello"}]}"#,
+        )
+        .expect("test Chat request")
+    }
+
+    fn gemini_request() -> GeminiRequest {
+        serde_json::from_str(r#"{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}"#)
+            .expect("test Gemini request")
+    }
+
+    fn claude_request() -> ClaudeRequest {
+        serde_json::from_str(
+            r#"{"model":"claude-test","max_tokens":128,"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}"#,
+        )
+        .expect("test Claude request")
+    }
+
+    fn chat_response() -> OpenAiChatResponse {
+        serde_json::from_str(
+            r#"{"id":"chat-id","object":"chat.completion","created":1,"model":"gpt-test","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}"#,
+        )
+        .expect("test Chat response")
+    }
+
+    fn gemini_response() -> GeminiResponse {
+        serde_json::from_str(
+            r#"{"candidates":[{"index":0,"finishReason":"STOP","content":{"role":"model","parts":[{"text":"hello"}]}}],"usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":1,"totalTokenCount":3}}"#,
+        )
+        .expect("test Gemini response")
+    }
+
+    fn claude_response() -> ClaudeResponse {
+        serde_json::from_str(
+            r#"{"id":"claude-id","type":"message","role":"assistant","model":"claude-test","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","usage":{"input_tokens":2,"output_tokens":1}}"#,
+        )
+        .expect("test Claude response")
+    }
+
+    fn assert_one_hop<T>(conversion: &DirectIrConversion<T>, source: Protocol, target: Protocol) {
+        assert_eq!(conversion.plan.source, source);
+        assert_eq!(conversion.plan.target, target);
+        assert_eq!(conversion.plan.hop_count, 1);
+        assert_eq!(conversion.plan.converter_ids.len(), 1);
+        assert!(!direct_ir_route_descriptor(source, target).enabled);
+    }
+
+    #[test]
+    fn all_direct_request_pairs_use_one_ir_hop_and_one_converter_id() {
+        let openai_to_gemini = openai_chat_request_to_gemini_v2(chat_request(), "gemini-2.5-pro");
+        assert!(openai_to_gemini.is_ok());
+        if let Ok(value) = openai_to_gemini {
+            assert_one_hop(&value, Protocol::OpenAi, Protocol::Gemini);
+        }
+
+        let gemini_to_openai = gemini_request_to_openai_chat_v2(gemini_request(), "gemini-2.5-pro");
+        assert!(gemini_to_openai.is_ok());
+        if let Ok(value) = gemini_to_openai {
+            assert_one_hop(&value, Protocol::Gemini, Protocol::OpenAi);
+        }
+
+        let claude_to_openai = claude_request_to_openai_chat_v2(claude_request());
+        assert!(claude_to_openai.is_ok());
+        if let Ok(value) = claude_to_openai {
+            assert_one_hop(&value, Protocol::Claude, Protocol::OpenAi);
+        }
+
+        let openai_to_claude = openai_chat_request_to_claude_v2(chat_request());
+        assert!(openai_to_claude.is_ok());
+        if let Ok(value) = openai_to_claude {
+            assert_one_hop(&value, Protocol::OpenAi, Protocol::Claude);
+        }
+
+        let gemini_to_claude = gemini_request_to_claude_v2(gemini_request(), "gemini-2.5-pro");
+        assert!(gemini_to_claude.is_ok());
+        if let Ok(value) = gemini_to_claude {
+            assert_one_hop(&value, Protocol::Gemini, Protocol::Claude);
+        }
+
+        let claude_to_gemini = claude_request_to_gemini_v2(claude_request(), "gemini-2.5-pro");
+        assert!(claude_to_gemini.is_ok());
+        if let Ok(value) = claude_to_gemini {
+            assert_one_hop(&value, Protocol::Claude, Protocol::Gemini);
+        }
+    }
+
+    #[test]
+    fn all_direct_response_pairs_use_one_ir_hop_and_one_converter_id() {
+        let openai_to_gemini = openai_chat_response_to_gemini_v2(chat_response(), "gemini-2.5-pro");
+        assert!(openai_to_gemini.is_ok());
+        if let Ok(value) = openai_to_gemini {
+            assert_one_hop(&value, Protocol::OpenAi, Protocol::Gemini);
+        }
+
+        let gemini_to_openai =
+            gemini_response_to_openai_chat_v2(gemini_response(), "gemini-2.5-pro");
+        assert!(gemini_to_openai.is_ok());
+        if let Ok(value) = gemini_to_openai {
+            assert_one_hop(&value, Protocol::Gemini, Protocol::OpenAi);
+        }
+
+        let claude_to_openai = claude_response_to_openai_chat_v2(claude_response());
+        assert!(claude_to_openai.is_ok());
+        if let Ok(value) = claude_to_openai {
+            assert_one_hop(&value, Protocol::Claude, Protocol::OpenAi);
+        }
+
+        let openai_to_claude = openai_chat_response_to_claude_v2(chat_response());
+        assert!(openai_to_claude.is_ok());
+        if let Ok(value) = openai_to_claude {
+            assert_one_hop(&value, Protocol::OpenAi, Protocol::Claude);
+        }
+
+        let gemini_to_claude = gemini_response_to_claude_v2(gemini_response(), "gemini-2.5-pro");
+        assert!(gemini_to_claude.is_ok());
+        if let Ok(value) = gemini_to_claude {
+            assert_one_hop(&value, Protocol::Gemini, Protocol::Claude);
+        }
+
+        let claude_to_gemini = claude_response_to_gemini_v2(claude_response(), "gemini-2.5-pro");
+        assert!(claude_to_gemini.is_ok());
+        if let Ok(value) = claude_to_gemini {
+            assert_one_hop(&value, Protocol::Claude, Protocol::Gemini);
+        }
+    }
+
+    #[test]
+    fn gemini_claude_direct_wire_results_have_no_chat_intermediate_marker() {
+        let request = gemini_request_to_claude_v2(gemini_request(), "gemini-2.5-pro");
+        assert!(request.is_ok());
+        let Some(request) = request.ok() else { return };
+        let encoded_request = serde_json::to_string(&request.value).expect("Claude request JSON");
+        assert!(!encoded_request.contains("chat.completion"));
+        let response = claude_response_to_gemini_v2(claude_response(), "gemini-2.5-pro");
+        assert!(response.is_ok());
+        let Some(response) = response.ok() else {
+            return;
+        };
+        let encoded_response =
+            serde_json::to_string(&response.value).expect("Gemini response JSON");
+        assert!(!encoded_response.contains("chat.completion"));
+    }
+
+    #[test]
+    fn gemini_same_name_parallel_calls_match_explicit_ids_out_of_order() {
+        let request: GeminiRequest = serde_json::from_str(
+            r#"{"contents":[
+              {"role":"model","parts":[
+                {"functionCall":{"id":"call-a","name":"lookup","args":{"n":1}}},
+                {"functionCall":{"id":"call-b","name":"lookup","args":{"n":2}}}
+              ]},
+              {"role":"user","parts":[
+                {"functionResponse":{"id":"call-b","name":"lookup","response":{"ok":2}}},
+                {"functionResponse":{"id":"call-a","name":"lookup","response":{"ok":1}}}
+              ]}
+            ]}"#,
+        )
+        .expect("parallel Gemini request");
+        let result = gemini_request_to_envelope_v2(request, "gemini-2.5-pro");
+        assert!(result.is_ok());
+        let Ok(result) = result else { return };
+        let ids = result
+            .envelope
+            .ordered_items()
+            .iter()
+            .filter_map(|item| item.call_id.as_ref().map(|id| id.value.clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(ids, ["call-a", "call-b", "call-b", "call-a"]);
+    }
+
+    #[test]
+    fn gemini_tool_link_errors_are_typed_for_orphan_duplicate_and_mismatch() {
+        let orphan: GeminiRequest = serde_json::from_str(
+            r#"{"contents":[{"role":"user","parts":[{"functionResponse":{"id":"missing","name":"lookup","response":{}}}]}]}"#,
+        )
+        .expect("orphan Gemini result fixture");
+        let orphan_error = gemini_request_to_envelope_v2(orphan, "gemini-test").err();
+        assert!(orphan_error.is_some());
+        let Some(orphan_error) = orphan_error else {
+            return;
+        };
+        assert_eq!(orphan_error.reason, DirectIrReason::Orphan);
+
+        let duplicate: GeminiRequest = serde_json::from_str(
+            r#"{"contents":[{"role":"model","parts":[{"functionCall":{"id":"same","name":"lookup","args":{}},{"functionCall":{"id":"same","name":"lookup","args":{}}}]}]}"#,
+        )
+        .expect("duplicate Gemini call fixture");
+        let duplicate_error = gemini_request_to_envelope_v2(duplicate, "gemini-test").err();
+        assert!(duplicate_error.is_some());
+        let Some(duplicate_error) = duplicate_error else {
+            return;
+        };
+        assert_eq!(duplicate_error.reason, DirectIrReason::DuplicateId);
+
+        let mismatch: GeminiRequest = serde_json::from_str(
+            r#"{"contents":[{"role":"model","parts":[{"functionCall":{"id":"call-1","name":"lookup","args":{}}}]},{"role":"user","parts":[{"functionResponse":{"id":"call-1","name":"other","response":{}}}]}]}"#,
+        )
+        .expect("mismatch Gemini result fixture");
+        let mismatch_error = gemini_request_to_envelope_v2(mismatch, "gemini-test").err();
+        assert!(mismatch_error.is_some());
+        let Some(mismatch_error) = mismatch_error else {
+            return;
+        };
+        assert_eq!(mismatch_error.reason, DirectIrReason::Mismatch);
+    }
+
+    #[test]
+    fn gemini_missing_ids_are_deterministic_and_marked_synthetic() {
+        let request: GeminiRequest = serde_json::from_str(
+            r#"{"contents":[{"role":"model","parts":[{"functionCall":{"name":"lookup","args":{}}}]},{"role":"user","parts":[{"functionResponse":{"name":"lookup","response":{"ok":true}}}]}]}"#,
+        )
+        .expect("synthetic Gemini id fixture");
+        let result = gemini_request_to_envelope_v2(request, "gemini-test");
+        assert!(result.is_ok());
+        let Some(result) = result.ok() else { return };
+        assert!(result.losses.as_slice().iter().any(|loss| {
+            loss.code == LossCode::SyntheticToolCallId
+                && loss.path.as_deref() == Some("contents[0].parts[0].functionCall.id")
+        }));
+        let call = result
+            .envelope
+            .ordered_items()
+            .iter()
+            .find(|item| matches!(&item.kind, ItemKind::ToolCall));
+        assert!(call.is_some());
+        let Some(call) = call else { return };
+        assert_eq!(
+            call.call_id.as_ref().map(|id| id.provenance),
+            Some(OpaqueIdProvenance::Synthetic)
+        );
+    }
+
+    #[test]
+    fn claude_thinking_redacted_and_ordered_blocks_remain_opaque() {
+        let request: ClaudeRequest = serde_json::from_str(
+            r#"{"model":"claude-test","max_tokens":128,"messages":[{"role":"assistant","content":[
+              {"type":"thinking","thinking":"plan","signature":"sig-auth"},
+              {"type":"redacted_thinking","data":"opaque-bytes"},
+              {"type":"text","text":"answer"}
+            ]}]}"#,
+        )
+        .expect("Claude thinking request");
+        let result = claude_request_to_openai_chat_v2(request);
+        assert!(result.is_ok());
+        let Ok(result) = result else { return };
+        let blocks = result
+            .value
+            .messages
+            .iter()
+            .filter_map(|message| message.extra_content.as_ref())
+            .filter_map(|extra| extra.anthropic.as_ref())
+            .flat_map(|extra| extra.blocks.iter())
+            .collect::<Vec<_>>();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].kind, "thinking");
+        assert_eq!(blocks[0].signature.as_deref(), Some("sig-auth"));
+        assert_eq!(blocks[1].kind, "redacted_thinking");
+        assert_eq!(
+            blocks[1].data,
+            Some(JsonData::String("opaque-bytes".to_owned()))
+        );
+    }
+
+    #[test]
+    fn openai_tool_result_preserves_call_link_name_and_call_level_signatures() {
+        let request: OpenAiChatRequest = serde_json::from_str(
+            r#"{"model":"gpt-test","messages":[
+              {"role":"assistant","tool_calls":[
+                {"id":"call-a","type":"function","function":{"name":"lookup","arguments":"{}"},"extra_content":{"google":{"thought_signature":"sig-a"}}},
+                {"id":"call-b","type":"function","function":{"name":"lookup","arguments":"{}"},"extra_content":{"google":{"thought_signature":"sig-b"}}}
+              ]},
+              {"role":"tool","tool_call_id":"call-b","name":"lookup","content":"result-b"}
+            ]}"#,
+        )
+        .expect("OpenAI tool loop fixture");
+        let direct_gemini = openai_chat_request_to_gemini_v2(request.clone(), "gemini-2.5-pro");
+        assert!(direct_gemini.is_ok());
+        let Some(direct_gemini) = direct_gemini.ok() else {
+            return;
+        };
+        assert_eq!(
+            direct_gemini.value.contents[0].parts[0]
+                .function_call
+                .as_ref()
+                .and_then(|call| call.id.as_deref()),
+            Some("call-a")
+        );
+        assert_eq!(
+            direct_gemini.value.contents[2].parts[0]
+                .function_response
+                .as_ref()
+                .and_then(|result| result.id.as_deref()),
+            Some("call-b")
+        );
+        let direct_claude = openai_chat_request_to_claude_v2(request.clone());
+        assert!(direct_claude.is_ok());
+        let Some(direct_claude) = direct_claude.ok() else {
+            return;
+        };
+        assert!(direct_claude.value.messages.iter().any(|message| {
+            match &message.content {
+                StringOrParts::Parts(blocks) => blocks
+                    .iter()
+                    .any(|block| block.kind == "tool_use" && block.id.as_deref() == Some("call-a")),
+                StringOrParts::String(_) => false,
+            }
+        }));
+        let decoded = openai_chat_request_to_envelope_v2(request);
+        assert!(decoded.is_ok());
+        let Some(decoded) = decoded.ok() else { return };
+        let result_item = decoded
+            .envelope
+            .ordered_items()
+            .iter()
+            .find(|item| matches!(&item.kind, ItemKind::ToolResult));
+        assert!(result_item.is_some());
+        let Some(result_item) = result_item else {
+            return;
+        };
+        assert_eq!(
+            result_item.call_id.as_ref().map(|id| id.value.as_str()),
+            Some("call-b")
+        );
+        assert_eq!(
+            result_item
+                .ordered_parts()
+                .first()
+                .and_then(|part| part.function.as_ref())
+                .and_then(|function| function.name.as_deref()),
+            Some("lookup")
+        );
+        let encoded = envelope_to_openai_chat_request_v2(decoded.envelope);
+        assert!(encoded.is_ok());
+        let Some(encoded) = encoded.ok() else { return };
+        let assistant = encoded
+            .value
+            .messages
+            .iter()
+            .find(|message| message.role == "assistant");
+        assert!(assistant.is_some());
+        let Some(assistant) = assistant else { return };
+        assert_eq!(assistant.tool_calls.len(), 2);
+        assert_eq!(
+            assistant.tool_calls[0]
+                .extra_content
+                .as_ref()
+                .and_then(|extra| extra.google.as_ref())
+                .and_then(|google| google.thought_signature.as_deref()),
+            Some("sig-a")
+        );
+        assert_eq!(
+            assistant.tool_calls[1]
+                .extra_content
+                .as_ref()
+                .and_then(|extra| extra.google.as_ref())
+                .and_then(|google| google.thought_signature.as_deref()),
+            Some("sig-b")
+        );
+        let tool_message = encoded
+            .value
+            .messages
+            .iter()
+            .find(|message| message.role == "tool");
+        assert_eq!(
+            tool_message.and_then(|message| message.tool_call_id.as_deref()),
+            Some("call-b")
+        );
+        assert_eq!(
+            tool_message.and_then(|message| message.name.as_deref()),
+            Some("lookup")
+        );
+        assert_eq!(
+            tool_message.and_then(|message| match &message.content {
+                Some(StringOrParts::String(value)) => Some(value.as_str()),
+                _ => None,
+            }),
+            Some("result-b")
+        );
+    }
+
+    #[test]
+    fn openai_tool_result_without_id_is_a_typed_error() {
+        let request: OpenAiChatRequest = serde_json::from_str(
+            r#"{"model":"gpt-test","messages":[{"role":"tool","content":"orphan"}]}"#,
+        )
+        .expect("missing tool id fixture");
+        let error = openai_chat_request_to_envelope_v2(request).err();
+        assert!(error.is_some());
+        let Some(error) = error else { return };
+        assert_eq!(error.feature, "function_call_id");
+        assert_eq!(error.reason, DirectIrReason::MissingField);
+        assert_eq!(error.path, "messages[0].tool_call_id");
+    }
+
+    #[test]
+    fn response_usage_cache_and_billing_are_retained_with_projection_loss() {
+        let response: OpenAiChatResponse = serde_json::from_str(
+            r#"{"id":"chat-id","object":"chat.completion","created":1,"model":"gpt-test","choices":[{"index":0,"message":{"role":"assistant","content":"answer"},"finish_reason":"stop"}],"usage":{
+              "prompt_tokens":10,"completion_tokens":5,"total_tokens":15,
+              "prompt_tokens_details":{"cached_tokens":3,"cache_write_tokens":2},
+              "completion_tokens_details":{"reasoning_tokens":1},
+              "usage_source":"gateway","usage_semantic":"billable",
+              "billing_usage":{"source":"gateway","semantic":"billable"}
+            }}"#,
+        )
+        .expect("Chat response usage");
+        let result = openai_chat_response_to_claude_v2(response);
+        assert!(result.is_ok());
+        let Ok(result) = result else { return };
+        let Some(usage) = result.value.usage else {
+            return;
+        };
+        assert_eq!(usage.input_tokens, 10);
+        assert_eq!(usage.output_tokens, 5);
+        assert_eq!(usage.cache_read_input_tokens, 3);
+        assert!(usage.billing_usage.is_some());
+        assert!(!result.losses.is_empty());
+    }
+
+    #[test]
+    fn unsupported_stable_request_controls_are_recorded_for_targets() {
+        let request: OpenAiChatRequest = serde_json::from_str(
+            r#"{"model":"gpt-test","messages":[{"role":"user","content":"hello"}],"top_p":0.4,"reasoning_effort":"high","response_format":{"type":"json_object"},"parallel_tool_calls":true}"#,
+        )
+        .expect("request controls fixture");
+        let claude = openai_chat_request_to_claude_v2(request.clone());
+        assert!(claude.is_ok());
+        let Some(claude) = claude.ok() else { return };
+        assert!(claude.losses.as_slice().iter().any(|loss| {
+            loss.code == LossCode::LossUnknownEvent
+                && loss.path.as_deref() == Some("controls.top_p")
+        }));
+        let gemini = openai_chat_request_to_gemini_v2(request, "gemini-2.5-pro");
+        assert!(gemini.is_ok());
+        let Some(gemini) = gemini.ok() else { return };
+        assert!(gemini.losses.as_slice().iter().any(|loss| {
+            loss.code == LossCode::LossUnknownEvent
+                && loss.path.as_deref() == Some("controls.parallel_tool_calls")
+        }));
+    }
+
+    #[test]
+    fn openai_strict_tool_roundtrips_and_cross_protocol_loss_is_explicit() {
+        let request: OpenAiChatRequest = serde_json::from_str(
+            r#"{"model":"gpt-test","tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"},"strict":true}}],"messages":[]}"#,
+        )
+        .expect("strict tool fixture");
+        let decoded = openai_chat_request_to_envelope_v2(request);
+        assert!(decoded.is_ok());
+        let Some(decoded) = decoded.ok() else { return };
+        let openai = envelope_to_openai_chat_request_v2(decoded.envelope.clone());
+        assert!(openai.is_ok());
+        let Some(openai) = openai.ok() else { return };
+        assert_eq!(openai.value.tools[0].function.strict, Some(true));
+        let claude = envelope_to_claude_request_v2(decoded.envelope);
+        assert!(claude.is_ok());
+        let Some(claude) = claude.ok() else { return };
+        assert!(claude.losses.as_slice().iter().any(|loss| {
+            loss.code == LossCode::LossUnknownEvent
+                && loss.path.as_deref() == Some("tools[0].strict")
+        }));
+    }
+
+    #[test]
+    fn target_tool_encoder_rejects_non_function_or_empty_names() {
+        let mut builtin = Envelope::new(Protocol::OpenAi, "target-test");
+        builtin.tools.push(Tool {
+            kind: ToolKind::Builtin,
+            name: Some("search".to_owned()),
+            description: None,
+            input_schema: None,
+            extensions: BTreeMap::new(),
+        });
+        let builtin_error = envelope_to_gemini_request_v2(builtin).err();
+        assert!(builtin_error.is_some());
+        let Some(builtin_error) = builtin_error else {
+            return;
+        };
+        assert_eq!(builtin_error.path, "tools[0]");
+        assert_eq!(builtin_error.reason, DirectIrReason::Unsupported);
+
+        let mut empty = Envelope::new(Protocol::OpenAi, "target-test");
+        empty.tools.push(Tool {
+            kind: ToolKind::Function,
+            name: Some(String::new()),
+            description: None,
+            input_schema: None,
+            extensions: BTreeMap::new(),
+        });
+        let empty_error = envelope_to_claude_request_v2(empty).err();
+        assert!(empty_error.is_some());
+        let Some(empty_error) = empty_error else {
+            return;
+        };
+        assert_eq!(empty_error.path, "tools[0].name");
+        assert_eq!(empty_error.reason, DirectIrReason::EmptyId);
+    }
+
+    #[test]
+    fn conflicting_openai_token_limits_are_recorded_cross_protocol() {
+        let request: OpenAiChatRequest = serde_json::from_str(
+            r#"{"model":"gpt-test","max_tokens":32,"max_completion_tokens":64,"messages":[{"role":"user","content":"hello"}]}"#,
+        )
+        .expect("conflicting token limits fixture");
+        let result = openai_chat_request_to_gemini_v2(request, "gemini-2.5-pro");
+        assert!(result.is_ok());
+        let Some(result) = result.ok() else { return };
+        assert!(result.losses.as_slice().iter().any(|loss| {
+            loss.code == LossCode::LossUnknownEvent
+                && loss.path.as_deref() == Some("openai.max_tokens")
+        }));
+    }
+
+    #[test]
+    fn claude_required_controls_do_not_silently_change_tool_choice_or_max_tokens() {
+        let request: OpenAiChatRequest = serde_json::from_str(
+            r#"{"model":"gpt-test","messages":[{"role":"user","content":"hello"}],"tool_choice":"none"}"#,
+        )
+        .expect("none tool choice fixture");
+        let result = openai_chat_request_to_claude_v2(request);
+        assert!(result.is_ok());
+        let Some(result) = result.ok() else { return };
+        assert_eq!(result.value.max_tokens, 1);
+        assert_eq!(
+            result
+                .value
+                .tool_choice
+                .as_ref()
+                .map(|choice| choice.kind.as_str()),
+            Some("auto")
+        );
+        assert!(result.losses.as_slice().iter().any(|loss| {
+            loss.path.as_deref() == Some("tool_choice") && loss.code == LossCode::LossUnknownEvent
+        }));
+        assert!(result.losses.as_slice().iter().any(|loss| {
+            loss.path.as_deref() == Some("controls.max_output_tokens")
+                && loss.code == LossCode::LossUnknownEvent
+        }));
+    }
+
+    #[test]
+    fn gemini_named_and_provider_tool_choices_record_projection_loss() {
+        let mut named = Envelope::new(Protocol::OpenAi, "gemini-test");
+        named.tool_choice = ToolChoice::Named {
+            name: "lookup".to_owned(),
+        };
+        let named_result = envelope_to_gemini_request_v2(named);
+        assert!(named_result.is_ok());
+        let Some(named_result) = named_result.ok() else {
+            return;
+        };
+        assert_eq!(
+            named_result
+                .value
+                .tool_config
+                .as_ref()
+                .map(|config| config.function_calling_config.mode.as_str()),
+            Some("ANY")
+        );
+        assert!(named_result.losses.as_slice().iter().any(|loss| {
+            loss.path.as_deref() == Some("tool_choice.name")
+                && loss.code == LossCode::LossUnknownEvent
+        }));
+
+        let mut provider = Envelope::new(Protocol::OpenAi, "gemini-test");
+        provider.tool_choice = ToolChoice::Provider {
+            raw: JsonData::String("provider-choice".to_owned()),
+        };
+        let provider_result = envelope_to_gemini_request_v2(provider);
+        assert!(provider_result.is_ok());
+        let Some(provider_result) = provider_result.ok() else {
+            return;
+        };
+        assert_eq!(
+            provider_result
+                .value
+                .tool_config
+                .as_ref()
+                .map(|config| config.function_calling_config.mode.as_str()),
+            Some("AUTO")
+        );
+        assert!(provider_result.losses.as_slice().iter().any(|loss| {
+            loss.path.as_deref() == Some("tool_choice") && loss.code == LossCode::LossUnknownEvent
+        }));
+    }
+
+    #[test]
+    fn gemini_multiple_candidate_safety_ratings_record_safety_loss() {
+        let response: GeminiResponse = serde_json::from_str(
+            r#"{"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"first"}]},"safetyRatings":{"blocked":false}},{"index":1,"content":{"role":"model","parts":[{"text":"second"}]},"safetyRatings":{"blocked":true}}]}"#,
+        )
+        .expect("multi-candidate Gemini response");
+        let decoded = gemini_response_to_envelope_v2(response, "gemini-test");
+        assert!(decoded.is_ok());
+        let Some(decoded) = decoded.ok() else { return };
+        let encoded = envelope_to_gemini_response_v2(decoded.envelope);
+        assert!(encoded.is_ok());
+        let Some(encoded) = encoded.ok() else { return };
+        assert_eq!(encoded.value.candidates.len(), 1);
+        assert!(encoded.losses.as_slice().iter().any(|loss| {
+            loss.code == LossCode::LossSafetyMetadata
+                && loss.path.as_deref() == Some("gemini.candidate[].safetyRatings")
+        }));
+    }
+
+    #[test]
+    fn nonzero_openai_choice_and_gemini_candidate_indices_roundtrip() {
+        let openai: OpenAiChatResponse = serde_json::from_str(
+            r#"{"id":"chat-id","object":"chat.completion","created":1,"model":"gpt-test","choices":[{"index":7,"message":{"role":"assistant","content":"answer"}}]}"#,
+        )
+        .expect("nonzero Chat choice fixture");
+        let openai_decoded = openai_chat_response_to_envelope_v2(openai);
+        assert!(openai_decoded.is_ok());
+        let Some(openai_decoded) = openai_decoded.ok() else {
+            return;
+        };
+        let openai_encoded = envelope_to_openai_chat_response_v2(openai_decoded.envelope);
+        assert!(openai_encoded.is_ok());
+        let Some(openai_encoded) = openai_encoded.ok() else {
+            return;
+        };
+        assert_eq!(openai_encoded.value.choices[0].index, 7);
+
+        let gemini: GeminiResponse = serde_json::from_str(
+            r#"{"candidates":[{"index":9,"content":{"role":"model","parts":[{"text":"answer"}]}}]}"#,
+        )
+        .expect("nonzero Gemini candidate fixture");
+        let gemini_decoded = gemini_response_to_envelope_v2(gemini, "gemini-test");
+        assert!(gemini_decoded.is_ok());
+        let Some(gemini_decoded) = gemini_decoded.ok() else {
+            return;
+        };
+        let gemini_encoded = envelope_to_gemini_response_v2(gemini_decoded.envelope);
+        assert!(gemini_encoded.is_ok());
+        let Some(gemini_encoded) = gemini_encoded.ok() else {
+            return;
+        };
+        assert_eq!(gemini_encoded.value.candidates[0].index, Some(9));
+    }
+
+    #[test]
+    fn unrepresentable_response_metadata_and_synthetic_ids_are_recorded() {
+        let claude_to_gemini = claude_response_to_gemini_v2(claude_response(), "gemini-test");
+        assert!(claude_to_gemini.is_ok());
+        let Some(claude_to_gemini) = claude_to_gemini.ok() else {
+            return;
+        };
+        assert!(claude_to_gemini.losses.as_slice().iter().any(|loss| {
+            loss.code == LossCode::LossUnknownEvent
+                && loss.path.as_deref() == Some("claude.response_metadata")
+        }));
+
+        let gemini_to_openai = gemini_response_to_openai_chat_v2(gemini_response(), "gemini-test");
+        assert!(gemini_to_openai.is_ok());
+        let Some(gemini_to_openai) = gemini_to_openai.ok() else {
+            return;
+        };
+        assert_eq!(gemini_to_openai.value.id, "direct-ir-response");
+        assert!(gemini_to_openai.losses.as_slice().iter().any(|loss| {
+            loss.code == LossCode::LossUnknownEvent && loss.path.as_deref() == Some("response.id")
+        }));
+
+        let gemini_to_claude = gemini_response_to_claude_v2(gemini_response(), "gemini-test");
+        assert!(gemini_to_claude.is_ok());
+        let Some(gemini_to_claude) = gemini_to_claude.ok() else {
+            return;
+        };
+        assert_eq!(gemini_to_claude.value.id, "direct-ir-response");
+        assert!(gemini_to_claude.losses.as_slice().iter().any(|loss| {
+            loss.code == LossCode::LossUnknownEvent && loss.path.as_deref() == Some("response.id")
+        }));
+    }
+
+    #[test]
+    fn direct_error_has_path_without_source_body() {
+        let request: ClaudeRequest = serde_json::from_str(
+            r#"{"model":"claude-test","max_tokens":128,"messages":[{"role":"assistant","content":[{"type":"tool_use","name":"secret-name","input":{"secret":"do-not-display"}}]}]}"#,
+        )
+        .expect("invalid Claude request fixture");
+        let error = claude_request_to_openai_chat_v2(request).err();
+        assert!(error.is_some());
+        let Some(error) = error else { return };
+        let display = error.to_string();
+        assert!(display.contains("tool_use.id"));
+        assert!(!display.contains("do-not-display"));
+        assert!(!display.contains("secret-name"));
+        assert_eq!(error.source, Protocol::Claude);
+        assert_eq!(error.target, Protocol::OpenAi);
+        assert!(!error.retryable);
+    }
+
+    #[test]
+    fn direct_module_has_no_legacy_converter_dependency() {
+        let source = include_str!("ir_convert.rs");
+        let legacy_function_marker = ["to", "_", "canonical"].concat();
+        let legacy_prefix_marker = ["canonical", "_"].concat();
+        assert!(!source.contains(&legacy_function_marker));
+        assert!(!source.contains(&legacy_prefix_marker));
+        assert!(source.contains("wire→Envelope→wire") || source.contains("source decode/map"));
+    }
 }

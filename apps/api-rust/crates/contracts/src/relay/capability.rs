@@ -507,12 +507,7 @@ impl ConversionPlan {
         target: Protocol,
         model_family: impl Into<String>,
     ) -> Result<Self, PlanCompileError> {
-        Self::compile_for_features(
-            source,
-            target,
-            model_family,
-            std::iter::empty::<Feature>(),
-        )
+        Self::compile_for_features(source, target, model_family, std::iter::empty::<Feature>())
     }
 
     /// Compiles a plan from an explicit registry snapshot.
@@ -567,13 +562,7 @@ impl ConversionPlan {
         registry
             .validate()
             .map_err(PlanCompileError::RegistryInvalid)?;
-        Self::compile_from_registry_for_features(
-            source,
-            target,
-            model_family,
-            registry,
-            features,
-        )
+        Self::compile_from_registry_for_features(source, target, model_family, registry, features)
     }
 
     /// Compiles a plan from a registry that already passed runtime catalog
@@ -632,7 +621,11 @@ impl ConversionPlan {
 
         let requested_features = features.into_iter().collect::<Vec<_>>();
         let mut unsupported = if route.quality == Fidelity::Unsupported {
-            let declared = route.unsupported_features.iter().copied().collect::<Vec<_>>();
+            let declared = route
+                .unsupported_features
+                .iter()
+                .copied()
+                .collect::<Vec<_>>();
             if declared.is_empty() {
                 Feature::all().to_vec()
             } else {
@@ -926,9 +919,8 @@ mod tests {
         normalized.add_loss(Loss::new(LossCode::LossCitation, Some(Feature::Citations)));
         assert_eq!(normalized.fidelity, Fidelity::Lossy);
 
-        let mut unsupported =
-            ConversionPlan::compile(Protocol::Claude, Protocol::Gemini, "claude")
-                .expect("registered route");
+        let mut unsupported = ConversionPlan::compile(Protocol::Claude, Protocol::Gemini, "claude")
+            .expect("registered route");
         unsupported.add_loss(Loss::new(LossCode::LossCitation, Some(Feature::Citations)));
         assert_eq!(unsupported.fidelity, Fidelity::Unsupported);
     }

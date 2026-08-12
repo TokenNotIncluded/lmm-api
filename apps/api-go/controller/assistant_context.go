@@ -74,6 +74,10 @@ type assistantUserContext struct {
 	// It never contains a balance, restriction cause, payment secret, or user
 	// supplied payment details.
 	PaymentOfferState assistantPaymentOfferState `json:"payment_offer_state"`
+	// InterlocutorAssessed is an internal per-request agent-loop state. It is
+	// deliberately excluded from JSON: the model receives the assessment as a
+	// transient tool result, never as account metadata or a user-facing field.
+	InterlocutorAssessed bool `json:"-"`
 	// These fields are useful to local policy/profile decisions and cache
 	// invalidation, but are internal risk signals and are never model input.
 	PaymentRestrictionCauses []string                 `json:"-"`

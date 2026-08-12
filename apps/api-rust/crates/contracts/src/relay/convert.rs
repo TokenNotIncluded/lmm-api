@@ -21,15 +21,14 @@ use super::{
     GeminiContent, GeminiFunctionCall, GeminiFunctionCallingConfig, GeminiFunctionDeclaration,
     GeminiFunctionResponse, GeminiGenerationConfig, GeminiPart, GeminiRequest, GeminiResponse,
     GeminiStreamSnapshot, GeminiTool, GeminiToolConfig, GeminiUsage, JsonData, LossReport,
-    OpaqueProviderState, OpaqueStateProvenance, OpenAiChatContentPart, OpenAiChatMessage,
-    OpenAiAnthropicBlock, OpenAiAnthropicExtraContent, OpenAiChatRequest, OpenAiChatResponse,
+    OpaqueProviderState, OpaqueStateProvenance, OpenAiAnthropicBlock, OpenAiAnthropicExtraContent,
+    OpenAiChatContentPart, OpenAiChatMessage, OpenAiChatRequest, OpenAiChatResponse,
     OpenAiChatTool, OpenAiChoice, OpenAiExtraContent, OpenAiFunction, OpenAiGoogleExtraContent,
-    OpenAiResponsesRequest, OpenAiStreamChunk,
-    OpenAiStreamDelta, OpenAiStreamSnapshot, OpenAiToolCall, Protocol, ReasoningConfig,
-    RequestOptions, ResponsesContentPart, ResponsesInput, ResponsesInputItem,
-    ResponsesOutputContent, ResponsesOutputItem, ResponsesResponse, ResponsesStreamEvent,
-    ResponsesStreamSnapshot, ResponsesTool, Role, StreamContentKind, StringOrParts, TokenDetails,
-    TokenUsage, WireError, WireUsage,
+    OpenAiResponsesRequest, OpenAiStreamChunk, OpenAiStreamDelta, OpenAiStreamSnapshot,
+    OpenAiToolCall, Protocol, ReasoningConfig, RequestOptions, ResponsesContentPart,
+    ResponsesInput, ResponsesInputItem, ResponsesOutputContent, ResponsesOutputItem,
+    ResponsesResponse, ResponsesStreamEvent, ResponsesStreamSnapshot, ResponsesTool, Role,
+    StreamContentKind, StringOrParts, TokenDetails, TokenUsage, WireError, WireUsage,
 };
 
 #[derive(Debug)]
@@ -123,10 +122,7 @@ fn unsupported_responses_extra(path: impl Into<String>) -> RelayConvertError {
     unsupported_responses_feature("unknown_field", path, None)
 }
 
-fn first_extra_path(
-    base: &str,
-    extra: &BTreeMap<String, JsonData>,
-) -> Option<RelayConvertError> {
+fn first_extra_path(base: &str, extra: &BTreeMap<String, JsonData>) -> Option<RelayConvertError> {
     extra.keys().next().map(|key| {
         let path = if base.is_empty() {
             key.clone()
@@ -149,7 +145,10 @@ pub fn preflight_openai_responses_request_to_openai_chat(
     }
     for (field, value) in [
         ("conversation", request.conversation.as_ref()),
-        ("previous_response_id", request.previous_response_id.as_ref()),
+        (
+            "previous_response_id",
+            request.previous_response_id.as_ref(),
+        ),
         ("prompt", request.prompt.as_ref()),
         ("context_management", request.context_management.as_ref()),
     ] {
@@ -218,11 +217,7 @@ pub fn preflight_openai_responses_request_to_openai_chat(
     match request.input.as_ref() {
         None | Some(ResponsesInput::String(_)) => {}
         Some(ResponsesInput::Json(_)) => {
-            return Err(unsupported_responses_feature(
-                "input_shape",
-                "input",
-                None,
-            ));
+            return Err(unsupported_responses_feature("input_shape", "input", None));
         }
         Some(ResponsesInput::Items(items)) => {
             for (index, item) in items.iter().enumerate() {
@@ -247,10 +242,7 @@ fn format_for_protocol(protocol: Protocol) -> &'static str {
     }
 }
 
-fn retarget_unsupported_error(
-    error: RelayConvertError,
-    target: Protocol,
-) -> RelayConvertError {
+fn retarget_unsupported_error(error: RelayConvertError, target: Protocol) -> RelayConvertError {
     retarget_unsupported_error_format(error, format_for_protocol(target))
 }
 
@@ -293,14 +285,15 @@ pub fn preflight_openai_responses_request_for_canonical(
         .map_err(|error| retarget_unsupported_error_format(error, "provider_neutral_ir"))
 }
 
-fn preflight_responses_tool(
-    tool: &ResponsesTool,
-    index: usize,
-) -> Result<(), RelayConvertError> {
+fn preflight_responses_tool(tool: &ResponsesTool, index: usize) -> Result<(), RelayConvertError> {
     let path = format!("tools[{index}]");
     match tool.kind.as_str() {
         "function" => {
-            if tool.name.as_deref().is_none_or(|name| name.trim().is_empty()) {
+            if tool
+                .name
+                .as_deref()
+                .is_none_or(|name| name.trim().is_empty())
+            {
                 return Err(unsupported_responses_feature(
                     "function_tool_name",
                     format!("{path}.name"),
@@ -385,6 +378,20 @@ fn preflight_responses_input_item(
     let path = format!("input[{index}]");
     match item.kind.as_deref() {
         None | Some("message") => {
+            for (field, present) in [
+                ("call_id", item.call_id.is_some()),
+                ("name", item.name.is_some()),
+                ("arguments", item.arguments.is_some()),
+                ("output", item.output.is_some()),
+            ] {
+                if present {
+                    return Err(unsupported_responses_feature(
+                        "input_field",
+                        format!("{path}.{field}"),
+                        None,
+                    ));
+                }
+            }
             if let Some(role) = item.role.as_deref() {
                 if !matches!(role, "system" | "developer" | "user" | "assistant" | "tool") {
                     return Err(unsupported_responses_feature(
@@ -418,6 +425,26 @@ fn preflight_responses_input_item(
                     None,
                 ));
             }
+            if item.arguments.is_none() {
+                return Err(unsupported_responses_feature(
+                    "function_call_arguments",
+                    format!("{path}.arguments"),
+                    None,
+                ));
+            }
+            for (field, present) in [
+                ("role", item.role.is_some()),
+                ("content", item.content.is_some()),
+                ("output", item.output.is_some()),
+            ] {
+                if present {
+                    return Err(unsupported_responses_feature(
+                        "input_field",
+                        format!("{path}.{field}"),
+                        None,
+                    ));
+                }
+            }
             if !seen_call_ids.insert(call_id.to_owned()) {
                 return Err(unsupported_responses_feature(
                     "duplicate_function_call_id",
@@ -438,6 +465,27 @@ fn preflight_responses_input_item(
                     Some("LOSS_TOOL_CALL_ID"),
                 ));
             };
+            if item.output.is_none() {
+                return Err(unsupported_responses_feature(
+                    "function_call_output",
+                    format!("{path}.output"),
+                    None,
+                ));
+            }
+            for (field, present) in [
+                ("role", item.role.is_some()),
+                ("content", item.content.is_some()),
+                ("name", item.name.is_some()),
+                ("arguments", item.arguments.is_some()),
+            ] {
+                if present {
+                    return Err(unsupported_responses_feature(
+                        "input_field",
+                        format!("{path}.{field}"),
+                        None,
+                    ));
+                }
+            }
             if !outstanding_call_ids.remove(call_id) {
                 return Err(unsupported_responses_feature(
                     "function_call_output_id",
@@ -488,6 +536,13 @@ fn preflight_responses_content(
                         None,
                     ));
                 }
+                if part.image_url.is_some() {
+                    return Err(unsupported_responses_feature(
+                        "content_field",
+                        format!("{part_path}.image_url"),
+                        None,
+                    ));
+                }
                 if let Some(error) = first_extra_path(&part_path, &part.extra) {
                     return Err(error);
                 }
@@ -497,6 +552,13 @@ fn preflight_responses_content(
                     return Err(unsupported_responses_feature(
                         "image_content",
                         format!("{part_path}.image_url"),
+                        None,
+                    ));
+                }
+                if part.text.is_some() {
+                    return Err(unsupported_responses_feature(
+                        "content_field",
+                        format!("{part_path}.text"),
                         None,
                     ));
                 }
@@ -771,8 +833,7 @@ pub fn canonical_request_to_openai_chat(
         let has_anthropic_extension = message_parts.iter().any(|part| {
             matches!(
                 part,
-                CanonicalContent::ClaudeThinking { .. }
-                    | CanonicalContent::RedactedThinking { .. }
+                CanonicalContent::ClaudeThinking { .. } | CanonicalContent::RedactedThinking { .. }
             )
         });
         if message.role == Role::Model {
@@ -853,20 +914,16 @@ pub fn canonical_request_to_openai_chat(
                                 "provider state has no preceding tool call".to_owned(),
                             ));
                         };
-                        tool_call.extra_content = Some(merge_extra_content(
-                            tool_call.extra_content.take(),
-                            extra,
-                        ));
+                        tool_call.extra_content =
+                            Some(merge_extra_content(tool_call.extra_content.take(), extra));
                     } else if let Some(index) = previous_tool_result_message {
                         messages[index].extra_content = Some(merge_extra_content(
                             messages[index].extra_content.take(),
                             extra,
                         ));
                     } else {
-                        message_extra_content = Some(merge_extra_content(
-                            message_extra_content.take(),
-                            extra,
-                        ));
+                        message_extra_content =
+                            Some(merge_extra_content(message_extra_content.take(), extra));
                     }
                 }
                 CanonicalContent::ToolCall {
@@ -926,10 +983,8 @@ pub fn canonical_request_to_openai_chat(
                             extra,
                         ));
                     } else {
-                        message_extra_content = Some(merge_extra_content(
-                            message_extra_content.take(),
-                            extra,
-                        ));
+                        message_extra_content =
+                            Some(merge_extra_content(message_extra_content.take(), extra));
                     }
                     previous_was_tool_call = false;
                 }
@@ -946,10 +1001,8 @@ pub fn canonical_request_to_openai_chat(
                             extra,
                         ));
                     } else {
-                        message_extra_content = Some(merge_extra_content(
-                            message_extra_content.take(),
-                            extra,
-                        ));
+                        message_extra_content =
+                            Some(merge_extra_content(message_extra_content.take(), extra));
                     }
                     previous_was_tool_call = false;
                 }
@@ -972,7 +1025,8 @@ pub fn canonical_request_to_openai_chat(
             }
             if !has_anthropic_extension {
                 if let Some(extra) = message_extra_content {
-                    let Some(index) = first_tool_result_message.or(previous_tool_result_message) else {
+                    let Some(index) = first_tool_result_message.or(previous_tool_result_message)
+                    else {
                         return Err(RelayConvertError::Unsupported(
                             "tool message extension has no generated tool result".to_owned(),
                         ));
@@ -988,10 +1042,7 @@ pub fn canonical_request_to_openai_chat(
         if has_anthropic_extension {
             set_anthropic_extra(
                 &mut message_extra_content,
-                message_anthropic_extra(
-                    canonical_parts_to_anthropic_blocks(&message_parts)?,
-                    None,
-                ),
+                message_anthropic_extra(canonical_parts_to_anthropic_blocks(&message_parts)?, None),
             );
         }
         let content = if text.is_empty() {
@@ -1079,11 +1130,7 @@ pub fn openai_responses_request_to_canonical(
         }
         Some(ResponsesInput::Items(items)) => items,
         Some(ResponsesInput::Json(_)) => {
-            return Err(unsupported_responses_feature(
-                "input_shape",
-                "input",
-                None,
-            ));
+            return Err(unsupported_responses_feature("input_shape", "input", None));
         }
     };
     for (item_index, item) in input.into_iter().enumerate() {
@@ -1098,16 +1145,20 @@ pub fn openai_responses_request_to_canonical(
                             Some("LOSS_TOOL_CALL_ID"),
                         )
                     })?,
-                    name: item
-                        .name
-                        .ok_or_else(|| {
-                            unsupported_responses_feature(
-                                "function_call_name",
-                                format!("input[{item_index}].name"),
-                                None,
-                            )
-                        })?,
-                    arguments: item.arguments.unwrap_or_default(),
+                    name: item.name.ok_or_else(|| {
+                        unsupported_responses_feature(
+                            "function_call_name",
+                            format!("input[{item_index}].name"),
+                            None,
+                        )
+                    })?,
+                    arguments: item.arguments.ok_or_else(|| {
+                        unsupported_responses_feature(
+                            "function_call_arguments",
+                            format!("input[{item_index}].arguments"),
+                            None,
+                        )
+                    })?,
                 }],
             }),
             Some("function_call_output") => {
@@ -1122,7 +1173,13 @@ pub fn openai_responses_request_to_canonical(
                             )
                         })?,
                         name: None,
-                        output: item.output.unwrap_or(JsonData::String(String::new())),
+                        output: item.output.ok_or_else(|| {
+                            unsupported_responses_feature(
+                                "function_call_output",
+                                format!("input[{item_index}].output"),
+                                None,
+                            )
+                        })?,
                     }],
                 });
             }
@@ -1175,7 +1232,7 @@ pub fn openai_responses_request_to_canonical(
         .as_ref()
         .map(parse_tool_choice)
         .transpose()?;
-    let mut loss = LossReport::default();
+    let loss = LossReport::default();
     let reasoning_effort = request
         .reasoning
         .as_ref()
@@ -1464,6 +1521,13 @@ pub fn openai_responses_response_to_canonical(
     response: ResponsesResponse,
 ) -> Result<Converted<CanonicalResponse>, RelayConvertError> {
     preflight_openai_responses_response_for_canonical(&response)?;
+    let mut loss = LossReport::default();
+    if response.output.iter().any(|item| !item.id.is_empty()) {
+        // The provider item identifier is distinct from the canonical
+        // function call id and the current IR has no response-item slot.
+        // Keep the conversion explicit rather than silently discarding it.
+        record_dropped(&mut loss, "output[].id");
+    }
     let mut output = Vec::new();
     for (item_index, item) in response.output.iter().enumerate() {
         match item.kind.as_str() {
@@ -1473,7 +1537,7 @@ pub fn openai_responses_response_to_canonical(
                         .iter()
                         .flatten()
                         .map(|part| CanonicalContent::Text {
-                            text: part.text.clone(),
+                            text: part.text.clone().unwrap_or_default(),
                         }),
                 )
             }
@@ -1483,7 +1547,7 @@ pub fn openai_responses_response_to_canonical(
                     .chain(item.content.iter())
                     .flatten()
                     .map(|part| CanonicalContent::Reasoning {
-                        text: part.text.clone(),
+                        text: part.text.clone().unwrap_or_default(),
                     }),
             ),
             "function_call" => output.push(CanonicalContent::ToolCall {
@@ -1507,15 +1571,21 @@ pub fn openai_responses_response_to_canonical(
         }
     }
     let reason = match response.status.as_str() {
-        "incomplete" => match response
-            .incomplete_details
-            .as_ref()
-            .map(|details| details.reason.as_str())
-        {
-            Some("content_filter") => FinishReason::ContentFilter,
-            Some("max_output_tokens") => FinishReason::Length,
-            _ => FinishReason::Other,
-        },
+        "incomplete" => {
+            let reason = response
+                .incomplete_details
+                .as_ref()
+                .map(|details| details.reason.as_str());
+            match reason {
+                Some("content_filter") => FinishReason::ContentFilter,
+                Some("max_output_tokens") => FinishReason::Length,
+                Some(_) => {
+                    record_dropped(&mut loss, "incomplete_details.reason");
+                    FinishReason::Other
+                }
+                None => FinishReason::Other,
+            }
+        }
         "cancelled" => FinishReason::Cancelled,
         "failed" => FinishReason::Error,
         _ if output
@@ -1535,7 +1605,7 @@ pub fn openai_responses_response_to_canonical(
             finish_reason: Some(reason),
             usage: response.usage.as_ref().map(wire_usage),
         },
-        loss: LossReport::default(),
+        loss,
     })
 }
 
@@ -1545,13 +1615,59 @@ pub fn openai_responses_response_to_canonical(
 pub fn preflight_openai_responses_response_to_openai_chat(
     response: &ResponsesResponse,
 ) -> Result<(), RelayConvertError> {
-    if let Some(error) = first_extra_path("", &response.extra) {
+    for (field, value, feature, loss_code) in [
+        (
+            "instructions",
+            response.instructions.as_ref(),
+            "response_instructions",
+            None,
+        ),
+        (
+            "previous_response_id",
+            response.previous_response_id.as_ref(),
+            "stateful_conversation",
+            Some("LOSS_STATEFUL_CONTEXT"),
+        ),
+        (
+            "reasoning",
+            response.reasoning.as_ref(),
+            "reasoning_summary",
+            Some("LOSS_OPAQUE_REASONING"),
+        ),
+        (
+            "tools",
+            response.tools.as_ref(),
+            "builtin_tool",
+            Some("LOSS_BUILTIN_TOOL"),
+        ),
+        ("user", response.user.as_ref(), "provider_metadata", None),
+        (
+            "metadata",
+            response.metadata.as_ref(),
+            "provider_metadata",
+            None,
+        ),
+    ] {
+        if value.is_some() {
+            return Err(unsupported_responses_feature(feature, field, loss_code));
+        }
+    }
+    if response.error.is_some() {
+        return Err(unsupported_responses_feature(
+            "provider_error",
+            "error",
+            None,
+        ));
+    }
+    if let Some(error) = preflight_responses_response_extra(&response.extra) {
         return Err(error);
     }
+    preflight_responses_response_metadata(response)?;
     for (index, item) in response.output.iter().enumerate() {
         let path = format!("output[{index}]");
         match item.kind.as_str() {
             "message" => {
+                preflight_responses_output_item_metadata(item, &path)?;
                 if item.summary.is_some() {
                     return Err(unsupported_responses_feature(
                         "message_summary",
@@ -1559,27 +1675,37 @@ pub fn preflight_openai_responses_response_to_openai_chat(
                         Some("LOSS_OPAQUE_REASONING"),
                     ));
                 }
-                preflight_responses_output_content(item.content.as_ref(), &path)?;
+                preflight_responses_output_content(item.content.as_ref(), &path, "content")?;
                 if let Some(error) = first_extra_path(&path, &item.extra) {
                     return Err(error);
                 }
             }
             "reasoning" => {
-                preflight_responses_output_content(item.content.as_ref(), &path)?;
-                preflight_responses_output_content(item.summary.as_ref(), &path)?;
+                preflight_responses_output_item_metadata(item, &path)?;
+                preflight_responses_output_content(item.content.as_ref(), &path, "content")?;
+                preflight_responses_output_content(item.summary.as_ref(), &path, "summary")?;
                 if let Some(error) = first_extra_path(&path, &item.extra) {
                     return Err(error);
                 }
             }
             "function_call" => {
-                if item.call_id.as_deref().is_none_or(str::is_empty) {
+                preflight_responses_output_item_metadata(item, &path)?;
+                if item
+                    .call_id
+                    .as_deref()
+                    .is_none_or(|call_id| call_id.trim().is_empty())
+                {
                     return Err(unsupported_responses_feature(
                         "function_call_id",
                         format!("{path}.call_id"),
                         Some("LOSS_TOOL_CALL_ID"),
                     ));
                 }
-                if item.name.as_deref().is_none_or(str::is_empty) {
+                if item
+                    .name
+                    .as_deref()
+                    .is_none_or(|name| name.trim().is_empty())
+                {
                     return Err(unsupported_responses_feature(
                         "function_call_name",
                         format!("{path}.name"),
@@ -1597,6 +1723,11 @@ pub fn preflight_openai_responses_response_to_openai_chat(
                     Some("LOSS_CUSTOM_TOOL"),
                 ));
             }
+            kind if stream_event_kind_feature(kind).is_some() => {
+                let (feature, loss_code) = stream_event_kind_feature(kind)
+                    .unwrap_or(("builtin_tool", Some("LOSS_BUILTIN_TOOL")));
+                return Err(unsupported_responses_feature(feature, path, loss_code));
+            }
             _ => {
                 return Err(unsupported_responses_feature(
                     "unknown_output_item_type",
@@ -1605,6 +1736,193 @@ pub fn preflight_openai_responses_response_to_openai_chat(
                 ));
             }
         }
+    }
+    Ok(())
+}
+
+fn preflight_responses_response_extra(
+    extra: &BTreeMap<String, JsonData>,
+) -> Option<RelayConvertError> {
+    extra.keys().next().map(|key| {
+        let (feature, loss_code) = match key.as_str() {
+            "safety" | "safety_identifier" => ("safety_metadata", Some("LOSS_SAFETY_METADATA")),
+            key if key.starts_with("provider_") => ("provider_extension", None),
+            _ => ("unknown_field", None),
+        };
+        unsupported_responses_feature(feature, key, loss_code)
+    })
+}
+
+fn preflight_responses_response_metadata(
+    response: &ResponsesResponse,
+) -> Result<(), RelayConvertError> {
+    if response.object != "response" {
+        return Err(unsupported_responses_feature(
+            "response_object",
+            "object",
+            None,
+        ));
+    }
+    if !matches!(
+        response.status.as_str(),
+        "in_progress" | "completed" | "incomplete" | "failed" | "cancelled"
+    ) {
+        return Err(unsupported_responses_feature(
+            "response_status",
+            "status",
+            None,
+        ));
+    }
+    if response.status != "incomplete" && response.incomplete_details.is_some() {
+        return Err(unsupported_responses_feature(
+            "incomplete_details",
+            "incomplete_details",
+            None,
+        ));
+    }
+    if response.max_output_tokens.is_some() {
+        return Err(unsupported_responses_feature(
+            "response_max_output_tokens",
+            "max_output_tokens",
+            None,
+        ));
+    }
+    if response.parallel_tool_calls.is_some() {
+        return Err(unsupported_responses_feature(
+            "parallel_tool_calls",
+            "parallel_tool_calls",
+            None,
+        ));
+    }
+    if response.store.is_some() {
+        return Err(unsupported_responses_feature(
+            "response_store",
+            "store",
+            None,
+        ));
+    }
+    if response.temperature.is_some() {
+        return Err(unsupported_responses_feature(
+            "response_temperature",
+            "temperature",
+            None,
+        ));
+    }
+    if response.tool_choice.is_some() {
+        return Err(unsupported_responses_feature(
+            "response_tool_choice",
+            "tool_choice",
+            None,
+        ));
+    }
+    if response.top_p.is_some() {
+        return Err(unsupported_responses_feature(
+            "response_top_p",
+            "top_p",
+            None,
+        ));
+    }
+    if response.truncation.is_some() {
+        return Err(unsupported_responses_feature(
+            "response_truncation",
+            "truncation",
+            None,
+        ));
+    }
+    if response.status == "in_progress" {
+        return Err(unsupported_responses_feature(
+            "response_status",
+            "status",
+            None,
+        ));
+    }
+    Ok(())
+}
+
+fn preflight_responses_output_item_metadata(
+    item: &ResponsesOutputItem,
+    path: &str,
+) -> Result<(), RelayConvertError> {
+    if !matches!(item.status.as_str(), "" | "completed") {
+        return Err(unsupported_responses_feature(
+            "output_status",
+            format!("{path}.status"),
+            None,
+        ));
+    }
+    if !matches!(item.role.as_str(), "" | "assistant") {
+        return Err(unsupported_responses_feature(
+            "output_role",
+            format!("{path}.role"),
+            None,
+        ));
+    }
+    if !item.quality.is_empty() {
+        return Err(unsupported_responses_feature(
+            "output_quality",
+            format!("{path}.quality"),
+            None,
+        ));
+    }
+    if !item.size.is_empty() {
+        return Err(unsupported_responses_feature(
+            "output_size",
+            format!("{path}.size"),
+            None,
+        ));
+    }
+    match item.kind.as_str() {
+        "message" | "reasoning" => {
+            for (field, present) in [
+                ("call_id", item.call_id.is_some()),
+                ("name", item.name.is_some()),
+                ("arguments", item.arguments.is_some()),
+            ] {
+                if present {
+                    return Err(unsupported_responses_feature(
+                        "output_field",
+                        format!("{path}.{field}"),
+                        None,
+                    ));
+                }
+            }
+        }
+        "function_call" => {
+            if !item.role.is_empty() {
+                return Err(unsupported_responses_feature(
+                    "output_role",
+                    format!("{path}.role"),
+                    None,
+                ));
+            }
+            for (field, present) in [
+                ("content", item.content.is_some()),
+                ("summary", item.summary.is_some()),
+            ] {
+                if present {
+                    return Err(unsupported_responses_feature(
+                        "output_field",
+                        format!("{path}.{field}"),
+                        None,
+                    ));
+                }
+            }
+            if item.arguments.is_none() {
+                return Err(unsupported_responses_feature(
+                    "function_call_arguments",
+                    format!("{path}.arguments"),
+                    None,
+                ));
+            }
+        }
+        _ if item.arguments.is_some() => {
+            return Err(unsupported_responses_feature(
+                "output_arguments",
+                format!("{path}.arguments"),
+                None,
+            ));
+        }
+        _ => {}
     }
     Ok(())
 }
@@ -1633,12 +1951,13 @@ pub fn preflight_openai_responses_response_for_canonical(
 fn preflight_responses_output_content(
     content: Option<&Vec<super::ResponsesOutputContent>>,
     path: &str,
+    field: &str,
 ) -> Result<(), RelayConvertError> {
     let Some(content) = content else {
         return Ok(());
     };
     for (index, part) in content.iter().enumerate() {
-        let part_path = format!("{path}.content[{index}]");
+        let part_path = format!("{path}.{field}[{index}]");
         if !matches!(part.kind.as_str(), "output_text" | "summary_text" | "text") {
             return Err(unsupported_responses_feature(
                 "unknown_output_content_part",
@@ -1651,6 +1970,17 @@ fn preflight_responses_output_content(
                 "text_content",
                 format!("{part_path}.text"),
                 None,
+            ));
+        }
+        if part
+            .annotations
+            .as_ref()
+            .is_some_and(|annotations| !annotations.is_empty())
+        {
+            return Err(unsupported_responses_feature(
+                "citations",
+                format!("{part_path}.annotations"),
+                Some("LOSS_CITATION"),
             ));
         }
         if let Some(error) = first_extra_path(&part_path, &part.extra) {
@@ -1725,15 +2055,11 @@ pub fn canonical_response_to_openai_chat(
                         record_dropped(&mut loss, "output[].provider_state");
                         continue;
                     };
-                    tool_call.extra_content = Some(merge_extra_content(
-                        tool_call.extra_content.take(),
-                        extra,
-                    ));
+                    tool_call.extra_content =
+                        Some(merge_extra_content(tool_call.extra_content.take(), extra));
                 } else {
-                    message_extra_content = Some(merge_extra_content(
-                        message_extra_content.take(),
-                        extra,
-                    ));
+                    message_extra_content =
+                        Some(merge_extra_content(message_extra_content.take(), extra));
                 }
             }
             CanonicalContent::ToolCall {
@@ -1817,6 +2143,7 @@ pub fn canonical_response_to_openai_responses(
     for part in response.output {
         match part {
             CanonicalContent::Text { text } => {
+                record_synthetic(&mut loss, "SYNTHETIC_RESPONSES_ITEM_ID");
                 output.push(ResponsesOutputItem {
                     kind: "message".to_owned(),
                     id: format!("{}_msg_{message_index}", response.id),
@@ -1824,7 +2151,7 @@ pub fn canonical_response_to_openai_responses(
                     role: "assistant".to_owned(),
                     content: Some(vec![ResponsesOutputContent {
                         kind: "output_text".to_owned(),
-                        text,
+                        text: Some(text),
                         annotations: Some(Vec::new()),
                         extra: BTreeMap::new(),
                     }]),
@@ -1839,6 +2166,7 @@ pub fn canonical_response_to_openai_responses(
                 message_index += 1;
             }
             CanonicalContent::Reasoning { text } => {
+                record_synthetic(&mut loss, "SYNTHETIC_RESPONSES_ITEM_ID");
                 output.push(ResponsesOutputItem {
                     kind: "reasoning".to_owned(),
                     id: format!("{}_reasoning_{reasoning_index}", response.id),
@@ -1846,7 +2174,7 @@ pub fn canonical_response_to_openai_responses(
                     role: String::new(),
                     content: Some(vec![ResponsesOutputContent {
                         kind: "summary_text".to_owned(),
-                        text,
+                        text: Some(text),
                         annotations: None,
                         extra: BTreeMap::new(),
                     }]),
@@ -1870,20 +2198,23 @@ pub fn canonical_response_to_openai_responses(
                 id,
                 name,
                 arguments,
-            } => output.push(ResponsesOutputItem {
-                kind: "function_call".to_owned(),
-                id: id.clone(),
-                status: item_status.to_owned(),
-                role: String::new(),
-                content: None,
-                summary: None,
-                quality: String::new(),
-                size: String::new(),
-                call_id: Some(id),
-                name: Some(name),
-                arguments: Some(arguments),
-                extra: BTreeMap::new(),
-            }),
+            } => {
+                record_synthetic(&mut loss, "SYNTHETIC_RESPONSES_ITEM_ID");
+                output.push(ResponsesOutputItem {
+                    kind: "function_call".to_owned(),
+                    id: id.clone(),
+                    status: item_status.to_owned(),
+                    role: String::new(),
+                    content: None,
+                    summary: None,
+                    quality: String::new(),
+                    size: String::new(),
+                    call_id: Some(id),
+                    name: Some(name),
+                    arguments: Some(arguments),
+                    extra: BTreeMap::new(),
+                });
+            }
             CanonicalContent::Image { .. } => {
                 record_dropped(&mut loss, "output[].image");
             }
@@ -1908,17 +2239,17 @@ pub fn canonical_response_to_openai_responses(
             }
             .to_owned(),
             instructions: None,
-            max_output_tokens: 0,
+            max_output_tokens: None,
             model: response.model,
             output,
-            parallel_tool_calls: false,
+            parallel_tool_calls: Some(false),
             previous_response_id: None,
             reasoning: None,
-            store: false,
-            temperature: 0.0,
+            store: Some(false),
+            temperature: None,
             tool_choice: None,
             tools: None,
-            top_p: 0.0,
+            top_p: None,
             truncation: None,
             usage: response.usage.as_ref().map(token_usage_to_wire),
             user: None,
@@ -2098,84 +2429,116 @@ pub fn openai_stream_to_canonical(snapshot: &OpenAiStreamSnapshot) -> Vec<Canoni
     out
 }
 
-pub fn responses_stream_to_canonical(
+/// Converts a Responses stream and rejects unknown, provider-only, or
+/// structurally invalid events before producing canonical events.  Native
+/// Responses HTTP relays do not call this API; they forward raw SSE bytes.
+pub fn responses_stream_to_canonical_checked(
     snapshot: &ResponsesStreamSnapshot,
-) -> Vec<CanonicalStreamEvent> {
+) -> Result<Vec<CanonicalStreamEvent>, RelayConvertError> {
+    validate_responses_stream_events(snapshot)?;
     let mut out = Vec::new();
     let mut ended = BTreeSet::new();
     let mut saw_tool_call = false;
-    for event in &snapshot.events {
+    for (event_index, event) in snapshot.events.iter().enumerate() {
         let payload = &event.payload;
         match payload.kind.as_str() {
             "response.created" => {
-                if let Some(response) = &payload.response {
-                    out.push(CanonicalStreamEvent::ResponseStart {
-                        id: response.id.clone(),
-                        model: response.model.clone(),
+                let Some(response) = payload.response.as_ref() else {
+                    return Err(stream_feature_error(
+                        "stream_response",
+                        format!("events[{event_index}].response"),
+                        None,
+                    ));
+                };
+                out.push(CanonicalStreamEvent::ResponseStart {
+                    id: response.id.clone(),
+                    model: response.model.clone(),
+                });
+            }
+            "response.output_item.added" => {
+                let Some(item) = payload.item.as_ref() else {
+                    return Err(stream_feature_error(
+                        "stream_item",
+                        format!("events[{event_index}].item"),
+                        None,
+                    ));
+                };
+                let index = stream_output_index(payload, &format!("events[{event_index}]"))?;
+                let kind = match item.kind.as_str() {
+                    "function_call" => StreamContentKind::ToolCall,
+                    "reasoning" => StreamContentKind::Reasoning,
+                    _ => StreamContentKind::Text,
+                };
+                out.push(CanonicalStreamEvent::ContentStart { index, kind });
+                if item.kind == "function_call" {
+                    saw_tool_call = true;
+                    out.push(CanonicalStreamEvent::ToolCallStart {
+                        index,
+                        id: item.call_id.clone().unwrap_or_default(),
+                        name: item.name.clone().unwrap_or_default(),
                     });
                 }
             }
-            "response.output_item.added" => {
-                if let Some(item) = &payload.item {
-                    let index = payload.output_index.unwrap_or_default();
-                    let kind = match item.kind.as_str() {
-                        "function_call" | "custom_tool_call" => StreamContentKind::ToolCall,
-                        "reasoning" => StreamContentKind::Reasoning,
-                        _ => StreamContentKind::Text,
-                    };
-                    out.push(CanonicalStreamEvent::ContentStart { index, kind });
-                    if matches!(item.kind.as_str(), "function_call" | "custom_tool_call") {
-                        saw_tool_call = true;
-                        out.push(CanonicalStreamEvent::ToolCallStart {
-                            index,
-                            id: item.call_id.clone().unwrap_or_else(|| item.id.clone()),
-                            name: item.name.clone().unwrap_or_default(),
-                        });
-                    }
-                }
-            }
             "response.output_text.delta" => out.push(CanonicalStreamEvent::TextDelta {
-                index: payload.output_index.unwrap_or_default(),
-                delta: payload.delta.clone().unwrap_or_default(),
+                index: stream_output_index(payload, &format!("events[{event_index}]"))?,
+                delta: stream_delta(payload, &format!("events[{event_index}]"))?,
             }),
             "response.function_call_arguments.delta" => {
                 out.push(CanonicalStreamEvent::ToolArgumentsDelta {
-                    index: payload.output_index.unwrap_or_default(),
-                    delta: payload.delta.clone().unwrap_or_default(),
+                    index: stream_output_index(payload, &format!("events[{event_index}]"))?,
+                    delta: stream_delta(payload, &format!("events[{event_index}]"))?,
                 });
             }
             "response.custom_tool_call_input.delta" => {
-                out.push(CanonicalStreamEvent::ToolArgumentsDelta {
-                    index: payload.output_index.unwrap_or_default(),
-                    delta: payload.delta.clone().unwrap_or_default(),
-                });
+                return Err(stream_feature_error(
+                    "custom_tool",
+                    format!("events[{event_index}]"),
+                    Some("LOSS_CUSTOM_TOOL"),
+                ));
             }
             "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
                 out.push(CanonicalStreamEvent::ReasoningDelta {
-                    index: payload.output_index.unwrap_or_default(),
-                    delta: payload.delta.clone().unwrap_or_default(),
+                    index: stream_output_index(payload, &format!("events[{event_index}]"))?,
+                    delta: stream_delta(payload, &format!("events[{event_index}]"))?,
                 });
             }
             "response.output_text.done"
             | "response.reasoning_summary_text.done"
             | "response.reasoning_text.done"
             | "response.function_call_arguments.done"
-            | "response.custom_tool_call_input.done"
             | "response.output_item.done" => {
-                let index = payload.output_index.unwrap_or_default();
+                if payload.item.is_some() {
+                    return Err(stream_feature_error(
+                        "stream_terminal_item",
+                        format!("events[{event_index}].item"),
+                        Some("LOSS_UNKNOWN_EVENT"),
+                    ));
+                }
+                let index = stream_output_index(payload, &format!("events[{event_index}]"))?;
                 if ended.insert(index) {
                     out.push(CanonicalStreamEvent::ContentEnd { index });
                 }
             }
+            "response.custom_tool_call_input.done" => {
+                return Err(stream_feature_error(
+                    "custom_tool",
+                    format!("events[{event_index}]"),
+                    Some("LOSS_CUSTOM_TOOL"),
+                ));
+            }
             "response.completed" | "response.done" | "response.incomplete" => {
-                let response = payload.response.as_ref();
+                let Some(response) = payload.response.as_ref() else {
+                    return Err(stream_feature_error(
+                        "stream_response",
+                        format!("events[{event_index}].response"),
+                        None,
+                    ));
+                };
                 let finish_reason = if payload.kind == "response.incomplete" {
-                    incomplete_finish_reason(response)
+                    incomplete_finish_reason(Some(response))
                 } else if saw_tool_call
-                    || response.is_some_and(|value| {
-                        value.output.iter().any(|item| {
-                            matches!(item.kind.as_str(), "function_call" | "custom_tool_call")
-                        })
+                    || response.output.iter().any(|item| {
+                        matches!(item.kind.as_str(), "function_call" | "custom_tool_call")
                     })
                 {
                     FinishReason::ToolCalls
@@ -2190,9 +2553,7 @@ pub fn responses_stream_to_canonical(
                         .and_then(|response| response.usage.as_ref())
                         .map(wire_usage)
                         .or_else(|| Some(wire_usage(&snapshot.usage))),
-                    model: response
-                        .filter(|response| !response.model.is_empty())
-                        .map(|response| response.model.clone()),
+                    model: (!response.model.is_empty()).then(|| response.model.clone()),
                 });
             }
             "response.failed" | "response.error" => {
@@ -2211,10 +2572,914 @@ pub fn responses_stream_to_canonical(
                 });
             }
             "response.cancelled" => out.push(CanonicalStreamEvent::Cancelled),
-            _ => {}
+            _ => {
+                return Err(stream_feature_error(
+                    "unknown_event",
+                    format!("events[{event_index}]"),
+                    Some("LOSS_UNKNOWN_EVENT"),
+                ));
+            }
         }
     }
-    out
+    Ok(out)
+}
+
+/// Compatibility wrapper for existing offline callers.  A checked failure is
+/// represented as an explicit canonical error event, never as an empty vector
+/// or a silently dropped stream event.
+pub fn responses_stream_to_canonical(
+    snapshot: &ResponsesStreamSnapshot,
+) -> Vec<CanonicalStreamEvent> {
+    match responses_stream_to_canonical_checked(snapshot) {
+        Ok(events) => events,
+        Err(error) => vec![CanonicalStreamEvent::Error {
+            code: Some("conversion_unsupported_feature".to_owned()),
+            message: error.to_string(),
+        }],
+    }
+}
+
+/// Target-aware checked stream conversion.  The error target is the selected
+/// wire protocol rather than the legacy Chat label.
+pub fn responses_stream_to_canonical_for_target(
+    snapshot: &ResponsesStreamSnapshot,
+    target: Protocol,
+) -> Result<Vec<CanonicalStreamEvent>, RelayConvertError> {
+    responses_stream_to_canonical_checked(snapshot)
+        .map_err(|error| retarget_unsupported_error(error, target))
+}
+
+fn stream_feature_error(
+    feature: impl Into<String>,
+    path: impl Into<String>,
+    loss_code: Option<&str>,
+) -> RelayConvertError {
+    retarget_unsupported_error_format(
+        unsupported_responses_feature(feature, path, loss_code),
+        "provider_neutral_ir",
+    )
+}
+
+fn stream_event_kind_feature(kind: &str) -> Option<(&'static str, Option<&'static str>)> {
+    if kind.contains("custom_tool") {
+        return Some(("custom_tool", Some("LOSS_CUSTOM_TOOL")));
+    }
+    if kind.contains("web_search") {
+        return Some(("builtin_web_search", Some("LOSS_BUILTIN_TOOL")));
+    }
+    if kind.contains("file_search") {
+        return Some(("builtin_file_search", Some("LOSS_BUILTIN_TOOL")));
+    }
+    if kind.contains("code_interpreter") {
+        return Some(("builtin_code_execution", Some("LOSS_BUILTIN_TOOL")));
+    }
+    if kind.contains("mcp") {
+        return Some(("mcp", Some("LOSS_BUILTIN_TOOL")));
+    }
+    if kind.contains("computer_use") || kind.contains("computer_call") {
+        return Some(("computer_use", Some("LOSS_BUILTIN_TOOL")));
+    }
+    if kind.contains("image_generation") {
+        return Some(("builtin_image_generation", Some("LOSS_BUILTIN_TOOL")));
+    }
+    if kind.contains("hosted_shell") || kind.contains("shell_call") {
+        return Some(("builtin_hosted_shell", Some("LOSS_BUILTIN_TOOL")));
+    }
+    if kind.contains("apply_patch") {
+        return Some(("builtin_apply_patch", Some("LOSS_BUILTIN_TOOL")));
+    }
+    if kind.contains("tool_search") {
+        return Some(("builtin_tool_search", Some("LOSS_BUILTIN_TOOL")));
+    }
+    if kind.contains("programmatic_tool") {
+        return Some((
+            "builtin_programmatic_tool_calling",
+            Some("LOSS_BUILTIN_TOOL"),
+        ));
+    }
+    if kind.contains("annotation") || kind.contains("citation") {
+        return Some(("citations", Some("LOSS_CITATION")));
+    }
+    if kind.contains("safety") {
+        return Some(("safety_metadata", Some("LOSS_SAFETY_METADATA")));
+    }
+    if kind.contains("refusal") {
+        return Some(("refusal", None));
+    }
+    None
+}
+
+fn validate_stream_output_content(
+    content: Option<&Vec<super::ResponsesOutputContent>>,
+    event_path: &str,
+    field: &str,
+    require_text: bool,
+) -> Result<(), RelayConvertError> {
+    let Some(content) = content else {
+        return Ok(());
+    };
+    for (index, part) in content.iter().enumerate() {
+        let path = format!("{event_path}.{field}[{index}]");
+        if !matches!(part.kind.as_str(), "output_text" | "summary_text" | "text") {
+            return Err(stream_feature_error(
+                "unknown_output_content_part",
+                path,
+                None,
+            ));
+        }
+        if require_text && part.text.is_none() {
+            return Err(stream_feature_error(
+                "text_content",
+                format!("{path}.text"),
+                None,
+            ));
+        }
+        if part
+            .annotations
+            .as_ref()
+            .is_some_and(|annotations| !annotations.is_empty())
+        {
+            return Err(stream_feature_error(
+                "citations",
+                format!("{path}.annotations"),
+                Some("LOSS_CITATION"),
+            ));
+        }
+        if let Some(error) = first_extra_path(&path, &part.extra) {
+            return Err(retarget_unsupported_error_format(
+                error,
+                "provider_neutral_ir",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_stream_output_item(
+    item: &ResponsesOutputItem,
+    path: &str,
+    require_text: bool,
+) -> Result<(), RelayConvertError> {
+    match item.kind.as_str() {
+        "function_call" => {
+            if !item.role.is_empty() {
+                return Err(stream_feature_error(
+                    "output_role",
+                    format!("{path}.role"),
+                    None,
+                ));
+            }
+            for (field, present) in [
+                ("content", item.content.is_some()),
+                ("summary", item.summary.is_some()),
+            ] {
+                if present {
+                    return Err(stream_feature_error(
+                        "output_field",
+                        format!("{path}.{field}"),
+                        None,
+                    ));
+                }
+            }
+            if item
+                .call_id
+                .as_deref()
+                .is_none_or(|call_id| call_id.trim().is_empty())
+            {
+                return Err(stream_feature_error(
+                    "function_call_id",
+                    format!("{path}.call_id"),
+                    Some("LOSS_TOOL_CALL_ID"),
+                ));
+            }
+            if item
+                .name
+                .as_deref()
+                .is_none_or(|name| name.trim().is_empty())
+            {
+                return Err(stream_feature_error(
+                    "function_call_name",
+                    format!("{path}.name"),
+                    None,
+                ));
+            }
+        }
+        "message" => {
+            for (field, present) in [
+                ("call_id", item.call_id.is_some()),
+                ("name", item.name.is_some()),
+                ("arguments", item.arguments.is_some()),
+                ("summary", item.summary.is_some()),
+            ] {
+                if present {
+                    return Err(stream_feature_error(
+                        "output_field",
+                        format!("{path}.{field}"),
+                        None,
+                    ));
+                }
+            }
+            validate_stream_output_content(item.content.as_ref(), path, "content", require_text)?
+        }
+        "reasoning" => {
+            for (field, present) in [
+                ("call_id", item.call_id.is_some()),
+                ("name", item.name.is_some()),
+                ("arguments", item.arguments.is_some()),
+            ] {
+                if present {
+                    return Err(stream_feature_error(
+                        "output_field",
+                        format!("{path}.{field}"),
+                        None,
+                    ));
+                }
+            }
+            validate_stream_output_content(item.content.as_ref(), path, "content", require_text)?;
+            validate_stream_output_content(item.summary.as_ref(), path, "summary", require_text)?;
+        }
+        kind if stream_event_kind_feature(kind).is_some() => {
+            let (feature, loss_code) = stream_event_kind_feature(kind)
+                .unwrap_or(("builtin_tool", Some("LOSS_BUILTIN_TOOL")));
+            return Err(stream_feature_error(feature, path, loss_code));
+        }
+        _ => {
+            return Err(stream_feature_error("unknown_output_item_type", path, None));
+        }
+    }
+    if !matches!(
+        item.status.as_str(),
+        "" | "in_progress" | "completed" | "incomplete"
+    ) {
+        return Err(stream_feature_error(
+            "output_status",
+            format!("{path}.status"),
+            None,
+        ));
+    }
+    if !matches!(item.role.as_str(), "" | "assistant") {
+        return Err(stream_feature_error(
+            "output_role",
+            format!("{path}.role"),
+            None,
+        ));
+    }
+    if !item.quality.is_empty() {
+        return Err(stream_feature_error(
+            "output_quality",
+            format!("{path}.quality"),
+            None,
+        ));
+    }
+    if !item.size.is_empty() {
+        return Err(stream_feature_error(
+            "output_size",
+            format!("{path}.size"),
+            None,
+        ));
+    }
+    if item.kind != "function_call" && item.arguments.is_some() {
+        return Err(stream_feature_error(
+            "output_arguments",
+            format!("{path}.arguments"),
+            None,
+        ));
+    }
+    if !item.id.is_empty() {
+        return Err(stream_feature_error(
+            "output_item_id",
+            format!("{path}.id"),
+            None,
+        ));
+    }
+    if let Some(error) = first_extra_path(path, &item.extra) {
+        return Err(retarget_unsupported_error_format(
+            error,
+            "provider_neutral_ir",
+        ));
+    }
+    Ok(())
+}
+
+fn reject_stream_output_item_initial_data(
+    item: &ResponsesOutputItem,
+    path: &str,
+) -> Result<(), RelayConvertError> {
+    if item
+        .content
+        .as_ref()
+        .is_some_and(|content| !content.is_empty())
+    {
+        return Err(stream_feature_error(
+            "stream_item_content",
+            format!("{path}.content"),
+            Some("LOSS_UNKNOWN_EVENT"),
+        ));
+    }
+    if item
+        .summary
+        .as_ref()
+        .is_some_and(|summary| !summary.is_empty())
+    {
+        return Err(stream_feature_error(
+            "stream_item_summary",
+            format!("{path}.summary"),
+            Some("LOSS_UNKNOWN_EVENT"),
+        ));
+    }
+    if item
+        .arguments
+        .as_deref()
+        .is_some_and(|arguments| !arguments.is_empty())
+    {
+        return Err(stream_feature_error(
+            "stream_item_arguments",
+            format!("{path}.arguments"),
+            Some("LOSS_UNKNOWN_EVENT"),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_stream_delta(
+    payload: &ResponsesEventPayload,
+    path: &str,
+) -> Result<(), RelayConvertError> {
+    if payload.delta.is_none() {
+        return Err(stream_feature_error(
+            "stream_delta",
+            format!("{path}.delta"),
+            None,
+        ));
+    }
+    Ok(())
+}
+
+fn stream_unexpected_field(path: &str, field: &str) -> RelayConvertError {
+    stream_feature_error(
+        "stream_field",
+        format!("{path}.{field}"),
+        Some("LOSS_UNKNOWN_EVENT"),
+    )
+}
+
+fn stream_output_index(
+    payload: &ResponsesEventPayload,
+    path: &str,
+) -> Result<usize, RelayConvertError> {
+    match payload.output_index {
+        Some(index) => Ok(index),
+        None if payload.kind == "response.output_text.delta"
+            && payload.item_id.is_none()
+            && payload.content_index.is_none() =>
+        {
+            // Legacy snapshots emitted a single unindexed text stream.  It
+            // has no competing item identity, so index zero is deterministic.
+            Ok(0)
+        }
+        None => Err(stream_feature_error(
+            "stream_index",
+            format!("{path}.output_index"),
+            None,
+        )),
+    }
+}
+
+fn stream_delta(payload: &ResponsesEventPayload, path: &str) -> Result<String, RelayConvertError> {
+    payload
+        .delta
+        .clone()
+        .ok_or_else(|| stream_feature_error("stream_delta", format!("{path}.delta"), None))
+}
+
+fn validate_responses_stream_event_shape(
+    event: &ResponsesStreamEvent,
+    path: &str,
+) -> Result<(), RelayConvertError> {
+    if event.kind != event.payload.kind {
+        return Err(stream_feature_error(
+            "event_type_mismatch",
+            format!("{path}.Type"),
+            Some("LOSS_UNKNOWN_EVENT"),
+        ));
+    }
+    let payload = &event.payload;
+    if let Some((feature, loss_code)) = stream_event_kind_feature(payload.kind.as_str()) {
+        return Err(stream_feature_error(feature, path, loss_code));
+    }
+    match payload.kind.as_str() {
+        "response.created" => {
+            if payload.response.is_none() {
+                return Err(stream_feature_error(
+                    "stream_response",
+                    format!("{path}.response"),
+                    None,
+                ));
+            }
+            for (field, present) in [
+                ("item", payload.item.is_some()),
+                ("delta", payload.delta.is_some()),
+                ("text", payload.text.is_some()),
+                ("arguments", payload.arguments.is_some()),
+                ("part", payload.part.is_some()),
+                ("error", payload.error.is_some()),
+                ("output_index", payload.output_index.is_some()),
+                ("content_index", payload.content_index.is_some()),
+                ("item_id", payload.item_id.is_some()),
+                ("summary_index", payload.summary_index.is_some()),
+            ] {
+                if present {
+                    return Err(stream_unexpected_field(path, field));
+                }
+            }
+        }
+        "response.output_item.added" => {
+            if payload.item.is_none() {
+                return Err(stream_feature_error(
+                    "stream_item",
+                    format!("{path}.item"),
+                    None,
+                ));
+            }
+            if payload.output_index.is_none() {
+                return Err(stream_feature_error(
+                    "stream_index",
+                    format!("{path}.output_index"),
+                    None,
+                ));
+            }
+            for (field, present) in [
+                ("response", payload.response.is_some()),
+                ("delta", payload.delta.is_some()),
+                ("text", payload.text.is_some()),
+                ("arguments", payload.arguments.is_some()),
+                ("part", payload.part.is_some()),
+                ("error", payload.error.is_some()),
+                ("content_index", payload.content_index.is_some()),
+                ("item_id", payload.item_id.is_some()),
+                ("summary_index", payload.summary_index.is_some()),
+            ] {
+                if present {
+                    return Err(stream_unexpected_field(path, field));
+                }
+            }
+        }
+        kind if kind.ends_with(".delta") => {
+            if payload.delta.is_none() {
+                return Err(stream_feature_error(
+                    "stream_delta",
+                    format!("{path}.delta"),
+                    None,
+                ));
+            }
+            if !matches!(
+                kind,
+                "response.output_text.delta"
+                    | "response.function_call_arguments.delta"
+                    | "response.reasoning_summary_text.delta"
+                    | "response.reasoning_text.delta"
+            ) {
+                return Err(stream_feature_error(
+                    "unknown_event",
+                    path,
+                    Some("LOSS_UNKNOWN_EVENT"),
+                ));
+            }
+            let has_identity = payload.item_id.is_some() || payload.content_index.is_some();
+            if payload.output_index.is_none() && has_identity {
+                return Err(stream_feature_error(
+                    "stream_index",
+                    format!("{path}.output_index"),
+                    None,
+                ));
+            }
+            for (field, present) in [
+                ("response", payload.response.is_some()),
+                ("item", payload.item.is_some()),
+                ("text", payload.text.is_some()),
+                ("arguments", payload.arguments.is_some()),
+                ("part", payload.part.is_some()),
+                ("error", payload.error.is_some()),
+                ("item_id", payload.item_id.is_some()),
+                ("content_index", payload.content_index.is_some()),
+                ("summary_index", payload.summary_index.is_some()),
+            ] {
+                if present {
+                    return Err(stream_unexpected_field(path, field));
+                }
+            }
+        }
+        kind if kind.ends_with(".done") && kind != "response.done" => {
+            if payload.output_index.is_none() {
+                return Err(stream_feature_error(
+                    "stream_index",
+                    format!("{path}.output_index"),
+                    None,
+                ));
+            }
+            if kind == "response.output_item.done" && payload.item.is_none() {
+                return Err(stream_feature_error(
+                    "stream_item",
+                    format!("{path}.item"),
+                    None,
+                ));
+            }
+            for (field, present) in [
+                ("response", payload.response.is_some()),
+                ("delta", payload.delta.is_some()),
+                ("error", payload.error.is_some()),
+                ("text", payload.text.is_some()),
+                ("arguments", payload.arguments.is_some()),
+                ("part", payload.part.is_some()),
+                ("item_id", payload.item_id.is_some()),
+                ("content_index", payload.content_index.is_some()),
+                ("summary_index", payload.summary_index.is_some()),
+            ] {
+                if present {
+                    return Err(stream_unexpected_field(path, field));
+                }
+            }
+        }
+        "response.completed" | "response.done" | "response.incomplete" => {
+            if payload.response.is_none() {
+                return Err(stream_feature_error(
+                    "stream_response",
+                    format!("{path}.response"),
+                    None,
+                ));
+            }
+            for (field, present) in [
+                ("item", payload.item.is_some()),
+                ("delta", payload.delta.is_some()),
+                ("text", payload.text.is_some()),
+                ("arguments", payload.arguments.is_some()),
+                ("part", payload.part.is_some()),
+                ("error", payload.error.is_some()),
+                ("output_index", payload.output_index.is_some()),
+                ("content_index", payload.content_index.is_some()),
+                ("item_id", payload.item_id.is_some()),
+                ("summary_index", payload.summary_index.is_some()),
+            ] {
+                if present {
+                    return Err(stream_unexpected_field(path, field));
+                }
+            }
+        }
+        "response.failed" | "response.error" => {
+            if payload.error.is_some()
+                && payload
+                    .response
+                    .as_ref()
+                    .and_then(|response| response.error.as_ref())
+                    .is_some()
+            {
+                return Err(stream_feature_error(
+                    "duplicate_error",
+                    format!("{path}.response.error"),
+                    Some("LOSS_UNKNOWN_EVENT"),
+                ));
+            }
+            if payload.response.is_none() && payload.error.is_none() {
+                return Err(stream_feature_error(
+                    "stream_error",
+                    format!("{path}.error"),
+                    None,
+                ));
+            }
+            for (field, present) in [
+                ("item", payload.item.is_some()),
+                ("delta", payload.delta.is_some()),
+                ("text", payload.text.is_some()),
+                ("arguments", payload.arguments.is_some()),
+                ("part", payload.part.is_some()),
+                ("output_index", payload.output_index.is_some()),
+                ("content_index", payload.content_index.is_some()),
+                ("item_id", payload.item_id.is_some()),
+                ("summary_index", payload.summary_index.is_some()),
+            ] {
+                if present {
+                    return Err(stream_unexpected_field(path, field));
+                }
+            }
+        }
+        "response.cancelled" => {
+            for (field, present) in [
+                ("response", payload.response.is_some()),
+                ("item", payload.item.is_some()),
+                ("delta", payload.delta.is_some()),
+                ("text", payload.text.is_some()),
+                ("arguments", payload.arguments.is_some()),
+                ("part", payload.part.is_some()),
+                ("error", payload.error.is_some()),
+                ("output_index", payload.output_index.is_some()),
+                ("content_index", payload.content_index.is_some()),
+                ("item_id", payload.item_id.is_some()),
+                ("summary_index", payload.summary_index.is_some()),
+            ] {
+                if present {
+                    return Err(stream_unexpected_field(path, field));
+                }
+            }
+        }
+        _ => {
+            return Err(stream_feature_error(
+                "unknown_event",
+                path,
+                Some("LOSS_UNKNOWN_EVENT"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_stream_response_envelope(
+    response: &ResponsesResponse,
+    path: &str,
+    allow_error: bool,
+    require_text: bool,
+) -> Result<(), RelayConvertError> {
+    if response.object != "response" {
+        return Err(stream_feature_error(
+            "response_object",
+            format!("{path}.object"),
+            None,
+        ));
+    }
+    if !matches!(
+        response.status.as_str(),
+        "in_progress" | "completed" | "incomplete" | "failed" | "cancelled"
+    ) {
+        return Err(stream_feature_error(
+            "response_status",
+            format!("{path}.status"),
+            None,
+        ));
+    }
+    if response.status != "incomplete" && response.incomplete_details.is_some() {
+        return Err(stream_feature_error(
+            "incomplete_details",
+            format!("{path}.incomplete_details"),
+            None,
+        ));
+    }
+    if let Some(details) = response.incomplete_details.as_ref() {
+        if !matches!(
+            details.reason.as_str(),
+            "max_output_tokens" | "content_filter"
+        ) {
+            return Err(stream_feature_error(
+                "incomplete_reason",
+                format!("{path}.incomplete_details.reason"),
+                None,
+            ));
+        }
+    }
+    if response.max_output_tokens.is_some() {
+        return Err(stream_feature_error(
+            "response_max_output_tokens",
+            format!("{path}.max_output_tokens"),
+            None,
+        ));
+    }
+    if response.parallel_tool_calls.is_some() {
+        return Err(stream_feature_error(
+            "parallel_tool_calls",
+            format!("{path}.parallel_tool_calls"),
+            None,
+        ));
+    }
+    if response.store.is_some() {
+        return Err(stream_feature_error(
+            "response_store",
+            format!("{path}.store"),
+            None,
+        ));
+    }
+    if response.temperature.is_some() {
+        return Err(stream_feature_error(
+            "response_temperature",
+            format!("{path}.temperature"),
+            None,
+        ));
+    }
+    if response.tool_choice.is_some() {
+        return Err(stream_feature_error(
+            "response_tool_choice",
+            format!("{path}.tool_choice"),
+            None,
+        ));
+    }
+    if response.top_p.is_some() {
+        return Err(stream_feature_error(
+            "response_top_p",
+            format!("{path}.top_p"),
+            None,
+        ));
+    }
+    if response.truncation.is_some() {
+        return Err(stream_feature_error(
+            "response_truncation",
+            format!("{path}.truncation"),
+            None,
+        ));
+    }
+    for (field, value, feature, loss_code) in [
+        (
+            "instructions",
+            response.instructions.as_ref(),
+            "response_instructions",
+            None,
+        ),
+        (
+            "previous_response_id",
+            response.previous_response_id.as_ref(),
+            "stateful_conversation",
+            Some("LOSS_STATEFUL_CONTEXT"),
+        ),
+        (
+            "reasoning",
+            response.reasoning.as_ref(),
+            "reasoning_summary",
+            Some("LOSS_OPAQUE_REASONING"),
+        ),
+        (
+            "tools",
+            response.tools.as_ref(),
+            "builtin_tool",
+            Some("LOSS_BUILTIN_TOOL"),
+        ),
+        ("user", response.user.as_ref(), "provider_metadata", None),
+        (
+            "metadata",
+            response.metadata.as_ref(),
+            "provider_metadata",
+            None,
+        ),
+    ] {
+        if value.is_some() {
+            return Err(stream_feature_error(
+                feature,
+                format!("{path}.{field}"),
+                loss_code,
+            ));
+        }
+    }
+    if !allow_error && response.error.is_some() {
+        return Err(stream_feature_error(
+            "provider_error",
+            format!("{path}.error"),
+            None,
+        ));
+    }
+    if let Some(key) = response.extra.keys().next() {
+        let (feature, loss_code) = match key.as_str() {
+            "safety" | "safety_identifier" => ("safety_metadata", Some("LOSS_SAFETY_METADATA")),
+            key if key.starts_with("provider_") => ("provider_extension", None),
+            _ => ("unknown_field", None),
+        };
+        return Err(stream_feature_error(
+            feature,
+            format!("{path}.{key}"),
+            loss_code,
+        ));
+    }
+    if !response.output.is_empty() {
+        return Err(stream_feature_error(
+            "stream_response_output",
+            format!("{path}.output"),
+            Some("LOSS_UNKNOWN_EVENT"),
+        ));
+    }
+    for (item_index, item) in response.output.iter().enumerate() {
+        let item_path = format!("{path}.output[{item_index}]");
+        validate_stream_output_item(item, &item_path, require_text)?;
+    }
+    Ok(())
+}
+
+fn validate_responses_stream_events(
+    snapshot: &ResponsesStreamSnapshot,
+) -> Result<(), RelayConvertError> {
+    let mut terminal = false;
+    let mut terminal_error_seen = false;
+    for (index, event) in snapshot.events.iter().enumerate() {
+        let path = format!("events[{index}]");
+        if !event.extra.is_empty() {
+            return Err(stream_feature_error(
+                "unknown_event",
+                path,
+                Some("LOSS_UNKNOWN_EVENT"),
+            ));
+        }
+        validate_responses_stream_event_shape(event, &path)?;
+        let kind = event.payload.kind.as_str();
+        if terminal {
+            if kind != "response.error" || terminal_error_seen {
+                return Err(stream_feature_error(
+                    "stream_termination",
+                    path,
+                    Some("LOSS_UNKNOWN_EVENT"),
+                ));
+            }
+            terminal_error_seen = true;
+        }
+        if let Some((feature, loss_code)) = stream_event_kind_feature(kind) {
+            return Err(stream_feature_error(feature, path, loss_code));
+        }
+        if !event.payload.extra.is_empty() {
+            return Err(stream_feature_error(
+                "unknown_event",
+                path,
+                Some("LOSS_UNKNOWN_EVENT"),
+            ));
+        }
+        match kind {
+            "response.created" => {
+                let response = event.payload.response.as_ref().ok_or_else(|| {
+                    stream_feature_error("stream_response", format!("{path}.response"), None)
+                })?;
+                validate_stream_response_envelope(
+                    response,
+                    &format!("{path}.response"),
+                    false,
+                    false,
+                )?;
+            }
+            "response.output_item.added" => {
+                let item = event.payload.item.as_ref().ok_or_else(|| {
+                    stream_feature_error("stream_item", format!("{path}.item"), None)
+                })?;
+                validate_stream_output_item(item, &format!("{path}.item"), false)?;
+                reject_stream_output_item_initial_data(item, &format!("{path}.item"))?;
+            }
+            "response.output_text.delta"
+            | "response.function_call_arguments.delta"
+            | "response.reasoning_summary_text.delta"
+            | "response.reasoning_text.delta" => {
+                validate_stream_delta(&event.payload, &path)?;
+            }
+            "response.custom_tool_call_input.delta" | "response.custom_tool_call_input.done" => {
+                return Err(stream_feature_error(
+                    "custom_tool",
+                    path,
+                    Some("LOSS_CUSTOM_TOOL"),
+                ));
+            }
+            "response.output_text.done"
+            | "response.reasoning_summary_text.done"
+            | "response.reasoning_text.done"
+            | "response.function_call_arguments.done"
+            | "response.output_item.done" => {
+                if let Some(item) = event.payload.item.as_ref() {
+                    validate_stream_output_item(item, &format!("{path}.item"), false)?;
+                }
+            }
+            "response.completed" | "response.done" | "response.incomplete" => {
+                terminal = true;
+                let response = event.payload.response.as_ref().ok_or_else(|| {
+                    stream_feature_error("stream_response", format!("{path}.response"), None)
+                })?;
+                validate_stream_response_envelope(
+                    response,
+                    &format!("{path}.response"),
+                    false,
+                    kind != "response.incomplete",
+                )?;
+            }
+            "response.failed" => {
+                terminal = true;
+                if let Some(response) = event.payload.response.as_ref() {
+                    validate_stream_response_envelope(
+                        response,
+                        &format!("{path}.response"),
+                        true,
+                        false,
+                    )?;
+                }
+            }
+            "response.error" => {
+                terminal = true;
+                terminal_error_seen = true;
+                if let Some(response) = event.payload.response.as_ref() {
+                    validate_stream_response_envelope(
+                        response,
+                        &format!("{path}.response"),
+                        true,
+                        false,
+                    )?;
+                }
+            }
+            "response.cancelled" => terminal = true,
+            _ => {
+                return Err(stream_feature_error(
+                    "unknown_event",
+                    path,
+                    Some("LOSS_UNKNOWN_EVENT"),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Gemini model families whose tool-loop signature requirements differ.
@@ -2545,12 +3810,7 @@ pub fn gemini_response_to_canonical_for_model(
         .ok_or(RelayConvertError::Missing("candidates[0]"))?;
     let mut loss = LossReport::default();
     let mut ids = GeminiIdAllocator::default();
-    let output = gemini_parts_to_canonical(
-        candidate.content.parts,
-        model,
-        &mut loss,
-        &mut ids,
-    )?;
+    let output = gemini_parts_to_canonical(candidate.content.parts, model, &mut loss, &mut ids)?;
     Ok(Converted {
         value: CanonicalResponse {
             id: "gemini-response".to_owned(),
@@ -2758,9 +4018,7 @@ pub fn claude_request_to_canonical(
         let role = role_from_wire(&message.role)?;
         let parts = match message.content {
             StringOrParts::String(text) => vec![CanonicalContent::Text { text }],
-            StringOrParts::Parts(parts) => {
-                claude_blocks_to_canonical(parts, Some(&request.model))?
-            }
+            StringOrParts::Parts(parts) => claude_blocks_to_canonical(parts, Some(&request.model))?,
         };
         let role = if parts
             .iter()
@@ -2770,10 +4028,7 @@ pub fn claude_request_to_canonical(
         } else {
             role
         };
-        messages.push(CanonicalMessage {
-            role,
-            parts,
-        });
+        messages.push(CanonicalMessage { role, parts });
     }
     let tools = request
         .tools
@@ -2818,11 +4073,7 @@ pub fn canonical_request_to_claude(
     let mut messages = Vec::new();
     for message in request.messages {
         if message.role == Role::System || message.role == Role::Developer {
-            system_parts.extend(canonical_parts_to_claude(
-                &message.parts,
-                &mut loss,
-                false,
-            )?);
+            system_parts.extend(canonical_parts_to_claude(&message.parts, &mut loss, false)?);
             continue;
         }
         let has_tool_call = message
@@ -2849,9 +4100,7 @@ pub fn canonical_request_to_claude(
             input_schema: tool.input_schema,
         })
         .collect();
-    let tool_choice = request
-        .tool_choice
-        .map(canonical_tool_choice_to_claude);
+    let tool_choice = request.tool_choice.map(canonical_tool_choice_to_claude);
     Ok(Converted {
         value: ClaudeRequest {
             model: request.model,
@@ -3372,7 +4621,7 @@ fn validate_anthropic_extension_block_shape(
         kind => {
             return Err(RelayConvertError::Unsupported(format!(
                 "unsupported Anthropic extension block type {kind:?}"
-            )))
+            )));
         }
     }
     Ok(())
@@ -3385,7 +4634,7 @@ fn anthropic_block_to_canonical(
     if !block.extra.is_empty() {
         return Err(RelayConvertError::Unsupported(
             "unknown Anthropic extension block fields cannot cross the canonical boundary"
-            .to_owned(),
+                .to_owned(),
         ));
     }
     validate_anthropic_extension_block_shape(block)?;
@@ -3411,13 +4660,9 @@ fn anthropic_block_to_canonical(
             },
         }),
         "redacted_thinking" => Ok(CanonicalContent::RedactedThinking {
-            data: block
-                .data
-                .clone()
-                .or_else(|| block.content.clone())
-                .ok_or(RelayConvertError::Missing(
-                    "extra_content.anthropic.blocks[].data",
-                ))?,
+            data: block.data.clone().or_else(|| block.content.clone()).ok_or(
+                RelayConvertError::Missing("extra_content.anthropic.blocks[].data"),
+            )?,
             model,
             provenance: if block.synthetic.unwrap_or(false) {
                 OpaqueStateProvenance::Synthetic
@@ -3441,10 +4686,9 @@ fn anthropic_block_to_canonical(
                 .compact_string()?,
         }),
         "tool_result" => Ok(CanonicalContent::ToolResult {
-            id: block
-                .tool_use_id
-                .clone()
-                .ok_or(RelayConvertError::Missing("anthropic tool_result.tool_use_id"))?,
+            id: block.tool_use_id.clone().ok_or(RelayConvertError::Missing(
+                "anthropic tool_result.tool_use_id",
+            ))?,
             name: block.name.clone(),
             output: block.content.clone().unwrap_or(JsonData::Null),
         }),
@@ -3582,10 +4826,12 @@ fn canonical_part_to_anthropic_block(
             kind: "image".to_owned(),
             image_url: Some(match detail {
                 Some(detail) => JsonData::Object(
-                    [("url".to_owned(), JsonData::String(url.clone())),
-                        ("detail".to_owned(), JsonData::String(detail.clone()))]
-                        .into_iter()
-                        .collect(),
+                    [
+                        ("url".to_owned(), JsonData::String(url.clone())),
+                        ("detail".to_owned(), JsonData::String(detail.clone())),
+                    ]
+                    .into_iter()
+                    .collect(),
                 ),
                 None => JsonData::String(url.clone()),
             }),
@@ -3698,10 +4944,7 @@ fn attach_anthropic_response_extension(
     Ok(())
 }
 
-fn set_anthropic_extra(
-    target: &mut Option<OpenAiExtraContent>,
-    incoming: OpenAiExtraContent,
-) {
+fn set_anthropic_extra(target: &mut Option<OpenAiExtraContent>, incoming: OpenAiExtraContent) {
     let mut merged = target.take().unwrap_or(OpenAiExtraContent {
         google: None,
         anthropic: None,
@@ -3724,60 +4967,55 @@ fn claude_blocks_to_canonical(
             }
             validate_claude_block_shape(&block)?;
             match block.kind.as_str() {
-            "text" => Ok(CanonicalContent::Text {
-                text: block.text.unwrap_or_default(),
-            }),
-            "thinking" => Ok(CanonicalContent::ClaudeThinking {
-                thinking: block
-                    .thinking
-                    .or(block.text)
-                    .unwrap_or_default(),
-                signature: block.signature,
-                model: model.map(str::to_owned),
-                provenance: OpaqueStateProvenance::Authentic,
-            }),
-            "redacted_thinking" => Ok(CanonicalContent::RedactedThinking {
-                data: block
-                    .data
-                    .or(block.content)
-                    .ok_or(RelayConvertError::Missing("redacted_thinking.data"))?,
-                model: model.map(str::to_owned),
-                provenance: OpaqueStateProvenance::Authentic,
-            }),
-            "tool_use" => Ok(CanonicalContent::ToolCall {
-                id: block
-                    .id
-                    .ok_or(RelayConvertError::Missing("tool_use.id"))?,
-                name: block
-                    .name
-                    .ok_or(RelayConvertError::Missing("tool_use.name"))?,
-                arguments: block
-                    .input
-                    .ok_or(RelayConvertError::Missing("tool_use.input"))?
-                    .compact_string()?,
-            }),
-            "tool_result" => Ok(CanonicalContent::ToolResult {
-                id: block
-                    .tool_use_id
-                    .ok_or(RelayConvertError::Missing("tool_result.tool_use_id"))?,
-                name: block.name,
-                output: block.content.unwrap_or(JsonData::Null),
-            }),
-            "image" => {
-                let image = block
-                    .source
-                    .ok_or(RelayConvertError::Missing("image.source"))?;
-                if image.kind != "url" {
-                    return Err(RelayConvertError::Unsupported(
+                "text" => Ok(CanonicalContent::Text {
+                    text: block.text.unwrap_or_default(),
+                }),
+                "thinking" => Ok(CanonicalContent::ClaudeThinking {
+                    thinking: block.thinking.or(block.text).unwrap_or_default(),
+                    signature: block.signature,
+                    model: model.map(str::to_owned),
+                    provenance: OpaqueStateProvenance::Authentic,
+                }),
+                "redacted_thinking" => Ok(CanonicalContent::RedactedThinking {
+                    data: block
+                        .data
+                        .or(block.content)
+                        .ok_or(RelayConvertError::Missing("redacted_thinking.data"))?,
+                    model: model.map(str::to_owned),
+                    provenance: OpaqueStateProvenance::Authentic,
+                }),
+                "tool_use" => Ok(CanonicalContent::ToolCall {
+                    id: block.id.ok_or(RelayConvertError::Missing("tool_use.id"))?,
+                    name: block
+                        .name
+                        .ok_or(RelayConvertError::Missing("tool_use.name"))?,
+                    arguments: block
+                        .input
+                        .ok_or(RelayConvertError::Missing("tool_use.input"))?
+                        .compact_string()?,
+                }),
+                "tool_result" => Ok(CanonicalContent::ToolResult {
+                    id: block
+                        .tool_use_id
+                        .ok_or(RelayConvertError::Missing("tool_result.tool_use_id"))?,
+                    name: block.name,
+                    output: block.content.unwrap_or(JsonData::Null),
+                }),
+                "image" => {
+                    let image = block
+                        .source
+                        .ok_or(RelayConvertError::Missing("image.source"))?;
+                    if image.kind != "url" {
+                        return Err(RelayConvertError::Unsupported(
                         "Claude non-URL image source cannot be represented by canonical image URL"
                             .to_owned(),
                     ));
+                    }
+                    Ok(CanonicalContent::Image {
+                        url: image.data,
+                        detail: None,
+                    })
                 }
-                Ok(CanonicalContent::Image {
-                    url: image.data,
-                    detail: None,
-                })
-            }
                 kind => Err(RelayConvertError::Unsupported(format!(
                     "unsupported Claude content block type {kind:?}"
                 ))),
@@ -3786,9 +5024,7 @@ fn claude_blocks_to_canonical(
         .collect()
 }
 
-fn validate_claude_block_shape(
-    block: &ClaudeContentBlock,
-) -> Result<(), RelayConvertError> {
+fn validate_claude_block_shape(block: &ClaudeContentBlock) -> Result<(), RelayConvertError> {
     let reject = |field: &str| {
         Err(RelayConvertError::Unsupported(format!(
             "Claude {} block carries incompatible field {field:?}",
@@ -3982,7 +5218,7 @@ fn validate_claude_block_shape(
         kind => {
             return Err(RelayConvertError::Unsupported(format!(
                 "unsupported Claude content block type {kind:?}"
-            )))
+            )));
         }
     }
     Ok(())
@@ -4058,9 +5294,7 @@ fn canonical_parts_to_claude(
                 });
             }
             CanonicalContent::RedactedThinking {
-                data,
-                provenance,
-                ..
+                data, provenance, ..
             } => {
                 if *provenance == OpaqueStateProvenance::Synthetic {
                     return Err(RelayConvertError::Unsupported(
@@ -4192,25 +5426,50 @@ fn token_usage_to_claude(usage: &TokenUsage) -> super::ClaudeUsage {
 /// newline/text delta.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ClaudeStreamSemanticEvent {
-    MessageStart { message: Option<ClaudeResponse> },
+    MessageStart {
+        message: Option<ClaudeResponse>,
+    },
     ContentBlockStart {
         index: usize,
         block: ClaudeContentBlock,
     },
-    TextDelta { index: usize, delta: String },
-    ThinkingDelta { index: usize, delta: String },
-    SignatureDelta { index: usize, signature: String },
-    RedactedThinking { index: usize, data: JsonData },
-    ToolInputJsonDelta { index: usize, delta: String },
-    ContentBlockStop { index: usize },
+    TextDelta {
+        index: usize,
+        delta: String,
+    },
+    ThinkingDelta {
+        index: usize,
+        delta: String,
+    },
+    SignatureDelta {
+        index: usize,
+        signature: String,
+    },
+    RedactedThinking {
+        index: usize,
+        data: JsonData,
+    },
+    ToolInputJsonDelta {
+        index: usize,
+        delta: String,
+    },
+    ContentBlockStop {
+        index: usize,
+    },
     MessageDelta {
         stop_reason: Option<String>,
         usage: Option<super::ClaudeUsage>,
     },
     MessageStop,
     Ping,
-    Error { code: Option<String>, message: String },
-    Unknown { kind: String, fields: JsonData },
+    Error {
+        code: Option<String>,
+        message: String,
+    },
+    Unknown {
+        kind: String,
+        fields: JsonData,
+    },
     Cancelled,
 }
 
@@ -4238,10 +5497,7 @@ enum ClaudeStreamBlockKind {
 }
 
 impl ClaudeStreamState {
-    pub fn apply(
-        &mut self,
-        event: &ClaudeStreamSemanticEvent,
-    ) -> Result<(), RelayConvertError> {
+    pub fn apply(&mut self, event: &ClaudeStreamSemanticEvent) -> Result<(), RelayConvertError> {
         match event {
             ClaudeStreamSemanticEvent::MessageStart { .. } => {
                 if self.started || self.ended || self.cancelled {
@@ -4305,9 +5561,7 @@ impl ClaudeStreamState {
                         "Claude stream content block stopped out of order".to_owned(),
                     ));
                 };
-                if kind == ClaudeStreamBlockKind::Thinking
-                    && !self.signature_seen.contains(index)
-                {
+                if kind == ClaudeStreamBlockKind::Thinking && !self.signature_seen.contains(index) {
                     return Err(RelayConvertError::Unsupported(
                         "Claude thinking block stopped before signature_delta".to_owned(),
                     ));
@@ -4418,12 +5672,15 @@ pub fn claude_stream_to_semantic_events(
                 message: event.message.clone(),
             },
             "content_block_start" => ClaudeStreamSemanticEvent::ContentBlockStart {
-                index: event.index.ok_or(RelayConvertError::Missing(
-                    "content_block_start.index",
-                ))?,
-                block: event.content_block.clone().ok_or(RelayConvertError::Missing(
-                    "content_block_start.content_block",
-                ))?,
+                index: event
+                    .index
+                    .ok_or(RelayConvertError::Missing("content_block_start.index"))?,
+                block: event
+                    .content_block
+                    .clone()
+                    .ok_or(RelayConvertError::Missing(
+                        "content_block_start.content_block",
+                    ))?,
             },
             "content_block_delta" => {
                 let index = event
@@ -4450,15 +5707,17 @@ pub fn claude_stream_to_semantic_events(
                     },
                     Some("signature_delta") => ClaudeStreamSemanticEvent::SignatureDelta {
                         index,
-                        signature: delta.signature.clone().ok_or(
-                            RelayConvertError::Missing("signature_delta.signature"),
-                        )?,
+                        signature: delta
+                            .signature
+                            .clone()
+                            .ok_or(RelayConvertError::Missing("signature_delta.signature"))?,
                     },
                     Some("input_json_delta") => ClaudeStreamSemanticEvent::ToolInputJsonDelta {
                         index,
-                        delta: delta.partial_json.clone().ok_or(
-                            RelayConvertError::Missing("input_json_delta.partial_json"),
-                        )?,
+                        delta: delta
+                            .partial_json
+                            .clone()
+                            .ok_or(RelayConvertError::Missing("input_json_delta.partial_json"))?,
                     },
                     Some("redacted_thinking_delta") => {
                         ClaudeStreamSemanticEvent::RedactedThinking {
@@ -4496,9 +5755,10 @@ pub fn claude_stream_to_semantic_events(
             "message_stop" => ClaudeStreamSemanticEvent::MessageStop,
             "ping" => ClaudeStreamSemanticEvent::Ping,
             "error" => {
-                let error = event.error.as_ref().ok_or(RelayConvertError::Missing(
-                    "error.error",
-                ))?;
+                let error = event
+                    .error
+                    .as_ref()
+                    .ok_or(RelayConvertError::Missing("error.error"))?;
                 ClaudeStreamSemanticEvent::Error {
                     code: error.code.clone(),
                     message: error.message.clone(),
@@ -4514,9 +5774,7 @@ pub fn claude_stream_to_semantic_events(
     Ok(events)
 }
 
-fn claude_stream_event_fields(
-    event: &ClaudeStreamEvent,
-) -> Result<JsonData, RelayConvertError> {
+fn claude_stream_event_fields(event: &ClaudeStreamEvent) -> Result<JsonData, RelayConvertError> {
     let value = serde_json::to_value(event)?;
     Ok(serde_json::from_value(value)?)
 }
@@ -4653,11 +5911,7 @@ impl GeminiIdAllocator {
         id
     }
 
-    fn remember_call(
-        &mut self,
-        name: &str,
-        id: &str,
-    ) -> Result<(), RelayConvertError> {
+    fn remember_call(&mut self, name: &str, id: &str) -> Result<(), RelayConvertError> {
         if self.pending_by_id.contains_key(id) {
             return Err(RelayConvertError::Unsupported(format!(
                 "Gemini functionCall id {id:?} is duplicated before its result"
@@ -4693,11 +5947,7 @@ impl GeminiIdAllocator {
         Ok(id)
     }
 
-    fn remove_explicit_result(
-        &mut self,
-        name: &str,
-        id: &str,
-    ) -> Result<(), RelayConvertError> {
+    fn remove_explicit_result(&mut self, name: &str, id: &str) -> Result<(), RelayConvertError> {
         let Some(expected_name) = self.pending_by_id.get(id).cloned() else {
             return Err(RelayConvertError::Unsupported(format!(
                 "Gemini functionResponse id {id:?} has no outstanding functionCall"
@@ -4722,7 +5972,6 @@ impl GeminiIdAllocator {
         self.pending_by_id.remove(id);
         Ok(())
     }
-
 }
 
 fn gemini_parts_to_canonical(
@@ -4888,9 +6137,7 @@ fn append_canonical_gemini_parts(
                     ));
                 }
                 if next_state.is_none() && first_tool_call {
-                    if family == GeminiModelFamily::Gemini3
-                        && reject_gemini3_missing_signature
-                    {
+                    if family == GeminiModelFamily::Gemini3 && reject_gemini3_missing_signature {
                         return Err(RelayConvertError::Unsupported(format!(
                             "Gemini 3 tool call {id:?} is missing thoughtSignature"
                         )));
@@ -4961,8 +6208,7 @@ fn append_canonical_gemini_parts(
                                 .to_owned(),
                         ));
                     }
-                    if state.raw
-                        != JsonData::String(GEMINI_SYNTHETIC_THOUGHT_SIGNATURE.to_owned())
+                    if state.raw != JsonData::String(GEMINI_SYNTHETIC_THOUGHT_SIGNATURE.to_owned())
                     {
                         return Err(RelayConvertError::Unsupported(
                             "unsupported synthetic Gemini thoughtSignature value".to_owned(),
@@ -5442,11 +6688,15 @@ pub fn response_events_to_responses(events: &[CanonicalStreamEvent]) -> Vec<Resp
                 if let Some(item) = items.get_mut(index) {
                     let content = item.content.get_or_insert_default();
                     if let Some(part) = content.first_mut() {
-                        part.text.push_str(delta);
+                        if let Some(text) = part.text.as_mut() {
+                            text.push_str(delta);
+                        } else {
+                            part.text = Some(delta.clone());
+                        }
                     } else {
                         content.push(ResponsesOutputContent {
                             kind: "output_text".to_owned(),
-                            text: delta.clone(),
+                            text: Some(delta.clone()),
                             annotations: Some(Vec::new()),
                             extra: BTreeMap::new(),
                         });
@@ -5471,11 +6721,15 @@ pub fn response_events_to_responses(events: &[CanonicalStreamEvent]) -> Vec<Resp
                 if let Some(item) = items.get_mut(index) {
                     let summary = item.summary.get_or_insert_default();
                     if let Some(part) = summary.first_mut() {
-                        part.text.push_str(delta);
+                        if let Some(text) = part.text.as_mut() {
+                            text.push_str(delta);
+                        } else {
+                            part.text = Some(delta.clone());
+                        }
                     } else {
                         summary.push(ResponsesOutputContent {
                             kind: "summary_text".to_owned(),
-                            text: delta.clone(),
+                            text: Some(delta.clone()),
                             annotations: None,
                             extra: BTreeMap::new(),
                         });
@@ -5707,17 +6961,17 @@ fn empty_responses_stream_response(
         created_at: 0,
         status: status.to_owned(),
         instructions: None,
-        max_output_tokens: 0,
+        max_output_tokens: None,
         model: model.to_owned(),
         output: Vec::new(),
-        parallel_tool_calls: false,
+        parallel_tool_calls: Some(false),
         previous_response_id: None,
         reasoning: None,
-        store: false,
-        temperature: 0.0,
+        store: Some(false),
+        temperature: None,
         tool_choice: None,
         tools: None,
-        top_p: 0.0,
+        top_p: None,
         truncation: None,
         usage,
         user: None,

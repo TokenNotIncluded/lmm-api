@@ -29,13 +29,13 @@ use axum::{
     response::{IntoResponse, Response},
     routing::post,
 };
+use futures_util::StreamExt;
 use lmm_contracts::relay::{
     CanonicalRequest, CanonicalResponse, CanonicalStreamEvent, ConversionPlan, LossPolicy,
-    Protocol, RelayConvertError,
-    canonical_response_to_openai_chat, canonical_response_to_openai_responses,
-    response_events_to_openai_chunks, response_events_to_responses,
+    Protocol, RelayConvertError, canonical_response_to_openai_chat,
+    canonical_response_to_openai_responses, response_events_to_openai_chunks,
+    response_events_to_responses,
 };
-use futures_util::StreamExt;
 use serde::Serialize;
 use sqlx::{PgPool, Row};
 
@@ -746,25 +746,26 @@ fn parse_request(
 /// relay.  The selected upstream receives [`OpenAiRelayRequest::raw_body`]
 /// unchanged, so provider fields, future tools/items and unknown SSE shapes
 /// never pass through a closed canonical DTO on a native OpenAI route.
-fn minimal_openai_request_to_canonical(
-    body: &[u8],
-) -> Result<CanonicalRequest, RelayConvertError> {
+fn minimal_openai_request_to_canonical(body: &[u8]) -> Result<CanonicalRequest, RelayConvertError> {
     let value: serde_json::Value = serde_json::from_slice(body).map_err(RelayConvertError::from)?;
     let model = value
         .get("model")
         .and_then(serde_json::Value::as_str)
         .filter(|model| !model.trim().is_empty())
         .ok_or(RelayConvertError::Missing("model"))?;
+    let stream = match value.get("stream") {
+        None => false,
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| RelayConvertError::Unsupported("stream must be a boolean".to_owned()))?,
+    };
     Ok(CanonicalRequest {
         model: model.to_owned(),
         instructions: Vec::new(),
         messages: Vec::new(),
         max_output_tokens: None,
         temperature: None,
-        stream: value
-            .get("stream")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false),
+        stream,
         tools: Vec::new(),
         tool_choice: None,
         options: lmm_contracts::relay::RequestOptions::default(),
@@ -879,12 +880,8 @@ fn legacy_success(
                     );
                 }
             };
-            let body = observe_body_with_timing(
-                Body::from(body),
-                (*observer).clone(),
-                labels,
-                timing,
-            );
+            let body =
+                observe_body_with_timing(Body::from(body), (*observer).clone(), labels, timing);
             let mut response = Response::new(body);
             *response.status_mut() = result.status;
             response.headers_mut().insert(
@@ -1477,6 +1474,16 @@ mod tests {
             .expect("Responses uses the same native metadata path");
         assert_eq!(responses.model, "gpt-future");
         assert!(responses.stream);
+    }
+
+    #[test]
+    fn native_openai_parse_rejects_malformed_stream_metadata_without_reading_other_fields() {
+        let body = br#"{"model":"gpt-future","stream":"yes","future":true}"#;
+        assert!(matches!(
+            parse_request(OpenAiRelayEndpoint::Responses, body),
+            Err(RelayConvertError::Unsupported(message))
+                if message == "stream must be a boolean"
+        ));
     }
 
     #[test]

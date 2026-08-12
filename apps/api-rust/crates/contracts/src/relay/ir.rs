@@ -608,11 +608,7 @@ impl Item {
 
     /// Creates a tool-result item linked to a prior tool call.
     #[must_use]
-    pub fn tool_result(
-        call_id: OpaqueId,
-        parts: Vec<Part>,
-        provenance: Provenance,
-    ) -> Self {
+    pub fn tool_result(call_id: OpaqueId, parts: Vec<Part>, provenance: Provenance) -> Self {
         let mut item = Self::new(ItemKind::ToolResult, Role::Tool, provenance);
         item.call_id = Some(call_id);
         item.parts = parts;
@@ -1050,9 +1046,7 @@ impl Envelope {
         validate_item_merge(&left_before, &right_before)?;
         let right_item = self.items.remove(right);
         self.items[left].parts.extend(right_item.parts);
-        self.items[left]
-            .extensions
-            .extend(right_item.extensions);
+        self.items[left].extensions.extend(right_item.extensions);
         if let Err(error) = self.validate() {
             let _merged = self.items.remove(left);
             self.items.insert(left, left_before);
@@ -1102,7 +1096,10 @@ impl Envelope {
         let mut results = BTreeMap::<String, usize>::new();
         for (field, identifier) in [
             ("conversation_id", self.state.conversation_id.as_ref()),
-            ("previous_response_id", self.state.previous_response_id.as_ref()),
+            (
+                "previous_response_id",
+                self.state.previous_response_id.as_ref(),
+            ),
         ] {
             if identifier.is_some_and(|value| value.is_empty()) {
                 return Err(IrValidationError::EmptyStateId {
@@ -1474,16 +1471,17 @@ pub fn validate_opaque_state_invariant(
 
 fn exact_synthetic_id_error(envelope: &Envelope) -> Option<ExactRoundTripError> {
     let state_ids = [
-        ("state.conversation_id", envelope.state.conversation_id.as_ref()),
+        (
+            "state.conversation_id",
+            envelope.state.conversation_id.as_ref(),
+        ),
         (
             "state.previous_response_id",
             envelope.state.previous_response_id.as_ref(),
         ),
     ];
     for (field, identifier) in state_ids {
-        if identifier
-            .is_some_and(|value| value.provenance == OpaqueIdProvenance::Synthetic)
-        {
+        if identifier.is_some_and(|value| value.provenance == OpaqueIdProvenance::Synthetic) {
             return Some(ExactRoundTripError::SyntheticOpaqueId {
                 item_index: None,
                 field: field.to_owned(),
@@ -1495,9 +1493,7 @@ fn exact_synthetic_id_error(envelope: &Envelope) -> Option<ExactRoundTripError> 
             ("items[].id", item.id.as_ref()),
             ("items[].call_id", item.call_id.as_ref()),
         ] {
-            if identifier
-                .is_some_and(|value| value.provenance == OpaqueIdProvenance::Synthetic)
-            {
+            if identifier.is_some_and(|value| value.provenance == OpaqueIdProvenance::Synthetic) {
                 return Some(ExactRoundTripError::SyntheticOpaqueId {
                     item_index: Some(item_index),
                     field: field.to_owned(),
@@ -1708,10 +1704,7 @@ fn validate_item_merge(left: &Item, right: &Item) -> Result<(), IrMutationError>
             reason: "kind_or_role".to_owned(),
         });
     }
-    if left.id.is_some()
-        || left.call_id.is_some()
-        || right.id.is_some()
-        || right.call_id.is_some()
+    if left.id.is_some() || left.call_id.is_some() || right.id.is_some() || right.call_id.is_some()
     {
         return Err(IrMutationError::MergeConflict {
             collection: OrderedCollection::Items,
@@ -1836,7 +1829,10 @@ impl fmt::Display for IrValidationError {
             Self::OrphanToolResult {
                 item_index,
                 call_id,
-            } => write!(formatter, "tool result {item_index} has orphan call id {call_id}"),
+            } => write!(
+                formatter,
+                "tool result {item_index} has orphan call id {call_id}"
+            ),
             Self::DuplicateToolCallId {
                 first_item_index,
                 second_item_index,
@@ -1854,7 +1850,10 @@ impl fmt::Display for IrValidationError {
                 "tool result call id {call_id} is reused by items {first_item_index} and {second_item_index}"
             ),
             Self::EmptyOpaqueId { item_index, field } => {
-                write!(formatter, "item {item_index} has empty opaque id field {field}")
+                write!(
+                    formatter,
+                    "item {item_index} has empty opaque id field {field}"
+                )
             }
             Self::EmptyStateId { field } => {
                 write!(formatter, "state field {field} has an empty opaque id")
@@ -1897,7 +1896,11 @@ impl fmt::Display for ExactRoundTripError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::LossesPresent { losses } => {
-                write!(formatter, "exact round trip has {} loss entries", losses.len())
+                write!(
+                    formatter,
+                    "exact round trip has {} loss entries",
+                    losses.len()
+                )
             }
             Self::Validation(error) => error.fmt(formatter),
             Self::SyntheticOpaqueState {
@@ -1912,7 +1915,10 @@ impl fmt::Display for ExactRoundTripError {
                 "synthetic opaque id in {field} at item {item_index:?} is not exact"
             ),
             Self::UnmodeledField { path } => {
-                write!(formatter, "unmodeled field at {path} prevents exact round trip")
+                write!(
+                    formatter,
+                    "unmodeled field at {path} prevents exact round trip"
+                )
             }
         }
     }
@@ -1935,7 +1941,10 @@ mod tests {
     }
 
     fn content_loss() -> Loss {
-        Loss::new(super::super::LossCode::LossContentOrder, Some(super::super::Feature::Text))
+        Loss::new(
+            super::super::LossCode::LossContentOrder,
+            Some(super::super::Feature::Text),
+        )
     }
 
     fn tool_call_part() -> Part {
@@ -2015,13 +2024,11 @@ mod tests {
     fn orphan_tool_results_are_rejected() {
         let envelope = Envelope::new(Protocol::OpenAi, "gpt-test");
         let mut invalid = envelope;
-        invalid
-            .items
-            .push(Item::tool_result(
-                OpaqueId::authentic("missing", Protocol::OpenAi),
-                vec![tool_result_part()],
-                provenance(),
-            ));
+        invalid.items.push(Item::tool_result(
+            OpaqueId::authentic("missing", Protocol::OpenAi),
+            vec![tool_result_part()],
+            provenance(),
+        ));
         assert!(matches!(
             invalid.validate(),
             Err(IrValidationError::OrphanToolResult { .. })
@@ -2036,10 +2043,7 @@ mod tests {
             vec![tool_call_part()],
             provenance(),
         );
-        call.id = Some(OpaqueId::authentic(
-            "item-1",
-            Protocol::OpenAiResponses,
-        ));
+        call.id = Some(OpaqueId::authentic("item-1", Protocol::OpenAiResponses));
         envelope.items.push(call);
         envelope.items.push(Item::tool_result(
             OpaqueId::authentic("call-1", Protocol::OpenAiResponses),
@@ -2078,11 +2082,9 @@ mod tests {
             vec![tool_call_part()],
             provenance(),
         ));
-        absent_result.items.push(Item::tool_result(
-            call_id(),
-            Vec::new(),
-            provenance(),
-        ));
+        absent_result
+            .items
+            .push(Item::tool_result(call_id(), Vec::new(), provenance()));
         assert!(matches!(
             absent_result.validate(),
             Err(IrValidationError::InvalidItemShape { reason, .. })
@@ -2201,10 +2203,11 @@ mod tests {
         ));
 
         let mut opaque_payload = text_item("text");
-        opaque_payload.parts[0].opaque = Some(OpaqueProviderState::authentic_gemini_thought_signature(
-            "sig".to_owned(),
-            Some("gemini-2.5-pro".to_owned()),
-        ));
+        opaque_payload.parts[0].opaque =
+            Some(OpaqueProviderState::authentic_gemini_thought_signature(
+                "sig".to_owned(),
+                Some("gemini-2.5-pro".to_owned()),
+            ));
         let mut opaque_envelope = Envelope::new(Protocol::Gemini, "gemini-test");
         opaque_envelope.items.push(opaque_payload);
         assert!(matches!(
@@ -2251,7 +2254,9 @@ mod tests {
         let before = envelope.items.clone();
         assert!(matches!(
             envelope.reorder_items(0, 1, Some(content_loss())),
-            Err(IrMutationError::Validation(IrValidationError::InvalidPartShape { .. }))
+            Err(IrMutationError::Validation(
+                IrValidationError::InvalidPartShape { .. }
+            ))
         ));
         assert_eq!(envelope.items, before);
 
@@ -2263,7 +2268,9 @@ mod tests {
         let before_parts = part_envelope.items.clone();
         assert!(matches!(
             part_envelope.reorder_parts(0, 0, 1, Some(content_loss())),
-            Err(IrMutationError::Validation(IrValidationError::InvalidPartShape { .. }))
+            Err(IrMutationError::Validation(
+                IrValidationError::InvalidPartShape { .. }
+            ))
         ));
         assert_eq!(part_envelope.items, before_parts);
     }
@@ -2285,7 +2292,9 @@ mod tests {
         let before = envelope.items.clone();
         assert!(matches!(
             envelope.merge_items(0, 1, Some(content_loss())),
-            Err(IrMutationError::Validation(IrValidationError::InvalidOpaqueState { .. }))
+            Err(IrMutationError::Validation(
+                IrValidationError::InvalidOpaqueState { .. }
+            ))
         ));
         assert_eq!(envelope.items, before);
     }

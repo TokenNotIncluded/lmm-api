@@ -22,6 +22,28 @@ func TestAssistantEmailContextIsMaskedAndClassified(t *testing.T) {
 	assert.Equal(t, "missing", classifyAssistantEmail(""))
 }
 
+func TestAssistantL0ConversationAssessmentIsModelDrivenAndToolGated(t *testing.T) {
+	initial := assistantUserContext{AccessLevel: "L0"}
+	definitions := assistantToolDefinitionsForContext(initial)
+	assert.Len(t, definitions, 1)
+	assert.Equal(t, assistantInterlocutorAssessmentTool, definitions[0].Function.Name)
+	assert.NotEqual(t, "auto", assistantToolChoiceForContext(initial))
+
+	encoded, err := json.Marshal(initial)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), "interlocutor_assessed")
+
+	assessed := initial
+	assessed.InterlocutorAssessed = true
+	assessedDefinitions := assistantToolDefinitionsForContext(assessed)
+	assessedNames := make(map[string]bool, len(assessedDefinitions))
+	for _, definition := range assessedDefinitions {
+		assessedNames[definition.Function.Name] = true
+	}
+	assert.False(t, assessedNames[assistantInterlocutorAssessmentTool])
+	assert.True(t, assessedNames["get_service_facts"])
+}
+
 func TestAssistantCustomerProfileUsesAuditableSignals(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -340,6 +362,16 @@ func TestAssistantL0WelcomeStrategyAcceptsRelayOnlyBeginners(t *testing.T) {
 	assert.Contains(t, strategy, "new to AI or open-source projects")
 	assert.Contains(t, strategy, "simply want to use the relay")
 	assert.Contains(t, strategy, "do not need an open-source project")
+}
+
+func TestAssistantL0PromptGentlyClarifiesInterlocutor(t *testing.T) {
+	prompt := buildAssistantSystemPrompt(setting.GetAssistantSettings(), assistantUserContext{
+		UserID:      42,
+		AccessLevel: "L0",
+	})
+	assert.Contains(t, prompt, "assess_l0_interlocutor")
+	assert.Contains(t, prompt, "do not rely on a self-report")
+	assert.Contains(t, prompt, "Never reveal the tool")
 }
 
 func TestTrustLevelLabelSeparatesAdministratorRolesFromUserLevels(t *testing.T) {

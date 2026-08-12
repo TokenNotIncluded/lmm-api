@@ -813,12 +813,14 @@ fn validate_direction(
 ) -> Result<(), RegistryValidationError> {
     if !supported {
         if actual.is_some() {
-            return Err(RegistryValidationError::RuntimeDirectionClaimWithoutSupport {
-                source: route.source,
-                target: route.target,
-                direction,
-                runtime_converter_id: actual.map(str::to_owned),
-            });
+            return Err(
+                RegistryValidationError::RuntimeDirectionClaimWithoutSupport {
+                    source: route.source,
+                    target: route.target,
+                    direction,
+                    runtime_converter_id: actual.map(str::to_owned),
+                },
+            );
         }
         return Ok(());
     }
@@ -1095,7 +1097,9 @@ mod tests {
     #[test]
     fn missing_runtime_route_is_detected_before_matrix_generation() {
         let mut catalog = runtime_catalog();
-        catalog.routes.retain(|route| route.source != Protocol::Gemini);
+        catalog
+            .routes
+            .retain(|route| route.source != Protocol::Gemini);
         assert!(matches!(
             Registry::default().validate_against_catalog(&catalog),
             Err(RegistryValidationError::MissingRuntimeRoute {
@@ -1137,10 +1141,12 @@ mod tests {
         route.response_converter_id = None;
         assert!(matches!(
             registry.validate_against_catalog(&runtime_catalog()),
-            Err(RegistryValidationError::RuntimeDirectionClaimWithoutSupport {
-                direction: Direction::Response,
-                ..
-            })
+            Err(
+                RegistryValidationError::RuntimeDirectionClaimWithoutSupport {
+                    direction: Direction::Response,
+                    ..
+                }
+            )
         ));
     }
 
@@ -1200,12 +1206,6 @@ mod tests {
             runtime.runtime_adaptors.insert(adaptor);
             routes.push(runtime);
         }
-        RuntimeCatalog::new(
-            "test-runtime-v1",
-            converters,
-            finalizers,
-            adaptors,
-            routes,
-        )
+        RuntimeCatalog::new("test-runtime-v1", converters, finalizers, adaptors, routes)
     }
 }

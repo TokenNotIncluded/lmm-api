@@ -143,7 +143,7 @@ fn response_pair_preserves_text_reasoning_tools_finish_and_usage() {
     assert_eq!(roundtrip.finish_reason, Some(FinishReason::ToolCalls));
     assert_eq!(roundtrip.usage, canonical.usage);
 
-    let expected: ResponsesResponse =
+    let mut expected: ResponsesResponse =
         serde_json::from_str(&fixture("response", "openai", "openai_responses"))
             .expect("golden Responses response");
     let golden = openai_responses_response_to_canonical(expected.clone())
@@ -155,6 +155,9 @@ fn response_pair_preserves_text_reasoning_tools_finish_and_usage() {
     // Billing provenance is transport metadata injected outside relayconvert;
     // every converter-owned target field must match the frozen Go output.
     responses_wire.usage.clone_from(&expected.usage);
+    expected.max_output_tokens = None;
+    expected.temperature = None;
+    expected.top_p = None;
     assert_eq!(responses_wire, expected);
 }
 
@@ -353,6 +356,21 @@ fn openai_pair_golden_streams_execute_source_to_target_frame_by_frame() {
             actual.usage.clone_from(&expected.usage);
         }
     }
+    for event in &mut actual_responses.events {
+        if let Some(response) = event.payload.response.as_mut() {
+            response.max_output_tokens = None;
+            response.temperature = None;
+            response.top_p = None;
+        }
+    }
+    let mut expected_responses = expected_responses;
+    for event in &mut expected_responses.events {
+        if let Some(response) = event.payload.response.as_mut() {
+            response.max_output_tokens = None;
+            response.temperature = None;
+            response.top_p = None;
+        }
+    }
     assert_eq!(actual_responses, expected_responses);
 
     let responses_source: ResponsesStreamSnapshot = serde_json::from_str(
@@ -549,9 +567,9 @@ fn inbound_responses_stream_preserves_tool_reasoning_error_and_incomplete_finish
         r#"{
           "events":[
             {"Type":"response.created","Payload":{"type":"response.created","response":{"id":"resp_test","object":"response","status":"in_progress","model":"gpt-test","output":[]}}},
-            {"Type":"response.output_item.added","Payload":{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"item_1","call_id":"call_1","name":"weather","status":"in_progress","arguments":""}}},
-            {"Type":"response.function_call_arguments.delta","Payload":{"type":"response.function_call_arguments.delta","output_index":0,"item_id":"item_1","delta":"{\"city\":\"Paris\"}"}},
-            {"Type":"response.reasoning_summary_text.delta","Payload":{"type":"response.reasoning_summary_text.delta","output_index":1,"item_id":"reasoning_1","delta":"think"}},
+            {"Type":"response.output_item.added","Payload":{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","call_id":"call_1","name":"weather","status":"in_progress","arguments":""}}},
+            {"Type":"response.function_call_arguments.delta","Payload":{"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"city\":\"Paris\"}"}},
+            {"Type":"response.reasoning_summary_text.delta","Payload":{"type":"response.reasoning_summary_text.delta","output_index":1,"delta":"think"}},
             {"Type":"response.incomplete","Payload":{"type":"response.incomplete","response":{"id":"resp_test","object":"response","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"model":"gpt-test","output":[],"usage":{"input_tokens":4,"output_tokens":2,"total_tokens":6}}}},
             {"Type":"response.error","Payload":{"type":"response.error","error":{"code":"upstream_error","message":"boom"}}}
           ],
@@ -647,7 +665,7 @@ fn non_representable_request_fields_are_reported_or_rejected() {
     let reasoning: OpenAiResponsesRequest = serde_json::from_str(
         r#"{"model":"gpt-test","input":[],"reasoning":{"effort":"high","summary":"auto"}}"#,
     )
-        .expect("typed reasoning request");
+    .expect("typed reasoning request");
     assert!(matches!(
         openai_responses_request_to_canonical(reasoning),
         Err(RelayConvertError::UnsupportedFeature(error))
@@ -772,7 +790,7 @@ fn canonical_stream_to_responses_has_exact_semantic_frame_sequence() {
             .payload
             .part
             .as_ref()
-            .map(|part| part.text.as_str()),
+            .and_then(|part| part.text.as_deref()),
         Some("think")
     );
     assert_eq!(
@@ -909,6 +927,73 @@ fn responses_preflight_rejects_builtin_without_name_and_keeps_builtin_path() {
 }
 
 #[test]
+fn responses_preflight_maps_every_known_builtin_and_future_tool_kind() {
+    for (kind, feature) in [
+        ("web_search", "builtin_web_search"),
+        ("web_search_preview", "builtin_web_search"),
+        ("file_search", "builtin_file_search"),
+        ("code_interpreter", "builtin_code_execution"),
+        ("mcp", "mcp"),
+        ("computer_use", "computer_use"),
+        ("computer_use_preview", "computer_use"),
+        ("image_generation", "builtin_image_generation"),
+        ("hosted_shell", "builtin_hosted_shell"),
+        ("apply_patch", "builtin_apply_patch"),
+        ("skills", "builtin_skills"),
+        ("tool_search", "builtin_tool_search"),
+        (
+            "programmatic_tool_calling",
+            "builtin_programmatic_tool_calling",
+        ),
+        ("future_tool_type", "unknown_tool_type"),
+    ] {
+        let request: OpenAiResponsesRequest = serde_json::from_str(&format!(
+            r#"{{"model":"gpt-test","tools":[{{"type":"{kind}","provider_option":true}}]}}"#
+        ))
+        .expect("tool kind retained without requiring function name");
+        let error = preflight_openai_responses_request_to_openai_chat(&request)
+            .expect_err("non-function tool cannot cross into Chat");
+        let RelayConvertError::UnsupportedFeature(error) = error else {
+            panic!("expected structured tool feature error");
+        };
+        assert_eq!(error.code, ConversionUnsupportedFeature::CODE);
+        assert_eq!(error.path, "tools[0]");
+        assert_eq!(error.feature, feature);
+        assert_eq!(
+            error.loss_code.as_deref(),
+            Some("LOSS_BUILTIN_TOOL").filter(|_| { kind != "future_tool_type" })
+        );
+        assert!(!error.retryable);
+    }
+}
+
+#[test]
+fn responses_preflight_reports_each_state_field_at_its_source_path() {
+    for (field, value, feature) in [
+        ("conversation", "{}", "stateful_conversation"),
+        ("previous_response_id", "\"resp_1\"", "previous_response_id"),
+        ("prompt", "{}", "prompt_template"),
+        ("context_management", "{}", "context_management"),
+    ] {
+        let request: OpenAiResponsesRequest =
+            serde_json::from_str(&format!(r#"{{"model":"gpt-test","{field}":{value}}}"#))
+                .expect("state field retained");
+        let error = preflight_openai_responses_request_to_openai_chat(&request)
+            .expect_err("state cannot cross into stateless Chat");
+        let RelayConvertError::UnsupportedFeature(error) = error else {
+            panic!("expected structured state feature error");
+        };
+        assert_eq!(error.path, field);
+        assert_eq!(error.feature, feature);
+        assert_eq!(
+            error.loss_code.as_deref(),
+            Some("LOSS_STATEFUL_CONTEXT").filter(|_| { field != "prompt" })
+        );
+        assert!(!error.retryable);
+    }
+}
+
+#[test]
 fn responses_function_calls_match_parallel_results_by_exact_id_in_input_order() {
     let request: OpenAiResponsesRequest = serde_json::from_str(
         r#"{
@@ -937,6 +1022,89 @@ fn responses_function_calls_match_parallel_results_by_exact_id_in_input_order() 
 }
 
 #[test]
+fn responses_input_items_reject_inapplicable_fields_and_missing_required_values() {
+    for (item, expected_path) in [
+        (
+            r#"{"type":"message","role":"user","call_id":"call_1","content":"x"}"#,
+            "input[0].call_id",
+        ),
+        (
+            r#"{"type":"function_call","role":"assistant","call_id":"call_1","name":"run","arguments":"{}"}"#,
+            "input[0].role",
+        ),
+        (
+            r#"{"type":"function_call","content":"x","call_id":"call_1","name":"run","arguments":"{}"}"#,
+            "input[0].content",
+        ),
+        (
+            r#"{"type":"function_call","output":"x","call_id":"call_1","name":"run","arguments":"{}"}"#,
+            "input[0].output",
+        ),
+        (
+            r#"{"type":"function_call","call_id":"call_1","name":"run"}"#,
+            "input[0].arguments",
+        ),
+        (
+            r#"{"type":"function_call_output","call_id":"call_1","name":"run","output":"x"}"#,
+            "input[0].name",
+        ),
+        (
+            r#"{"type":"function_call_output","call_id":"call_1","arguments":"{}","output":"x"}"#,
+            "input[0].arguments",
+        ),
+        (
+            r#"{"type":"function_call_output","call_id":"call_1","content":"x","output":"x"}"#,
+            "input[0].content",
+        ),
+        (
+            r#"{"type":"function_call_output","call_id":"call_1","role":"tool","output":"x"}"#,
+            "input[0].role",
+        ),
+        (
+            r#"{"type":"function_call_output","call_id":"call_1"}"#,
+            "input[0].output",
+        ),
+    ] {
+        let request: OpenAiResponsesRequest =
+            serde_json::from_str(&format!(r#"{{"model":"gpt-test","input":[{item}]}}"#))
+                .expect("input item retained");
+        assert!(matches!(
+            openai_responses_request_to_canonical(request),
+            Err(RelayConvertError::UnsupportedFeature(error))
+                if error.path == expected_path
+                    && matches!(
+                        error.feature.as_str(),
+                        "input_field" | "function_call_arguments" | "function_call_output"
+                    )
+        ));
+    }
+}
+
+#[test]
+fn responses_input_content_rejects_mixed_text_and_image_payloads() {
+    for (content, expected_path) in [
+        (
+            r#"{"type":"input_text","text":"x","image_url":"https://example.test/image.png"}"#,
+            "input[0].content[0].image_url",
+        ),
+        (
+            r#"{"type":"input_image","image_url":"https://example.test/image.png","text":"x"}"#,
+            "input[0].content[0].text",
+        ),
+    ] {
+        let request: OpenAiResponsesRequest = serde_json::from_str(&format!(
+            r#"{{"model":"gpt-test","input":[{{"type":"message","role":"user","content":[{content}]}}]}}"#
+        ))
+        .expect("mixed content retained");
+        assert!(matches!(
+            openai_responses_request_to_canonical(request),
+            Err(RelayConvertError::UnsupportedFeature(error))
+                if error.feature == "content_field" && error.path == expected_path
+        ));
+    }
+}
+
+#[test]
 fn responses_unknown_content_and_custom_items_have_exact_typed_paths() {
     let unknown: OpenAiResponsesRequest = serde_json::from_str(
         r#"{"model":"gpt-test","input":[{"type":"message","role":"user","content":[{"type":"future_part","payload":true}]}]}"#,
@@ -962,10 +1130,9 @@ fn responses_unknown_content_and_custom_items_have_exact_typed_paths() {
 
 #[test]
 fn responses_unsupported_error_is_serializable_and_target_aware_without_body_text() {
-    let request: OpenAiResponsesRequest = serde_json::from_str(
-        r#"{"model":"gpt-test","tools":[{"type":"file_search"}]}"#,
-    )
-    .expect("built-in tool");
+    let request: OpenAiResponsesRequest =
+        serde_json::from_str(r#"{"model":"gpt-test","tools":[{"type":"file_search"}]}"#)
+            .expect("built-in tool");
     let error = preflight_openai_responses_request_for_target(&request, Protocol::Gemini)
         .expect_err("Gemini target is not Chat-equivalent for this tool");
     let RelayConvertError::UnsupportedFeature(error) = error else {
@@ -978,6 +1145,461 @@ fn responses_unsupported_error_is_serializable_and_target_aware_without_body_tex
     assert_eq!(serialized["path"], "tools[0]");
     assert_eq!(serialized["retryable"], false);
     assert!(serialized.get("raw_body").is_none());
+}
+
+#[test]
+fn responses_response_preflight_rejects_unknown_output_and_missing_function_id() {
+    let unknown: ResponsesResponse = serde_json::from_str(
+        r#"{"id":"resp-1","object":"response","status":"completed","model":"gpt-test","output":[{"type":"future_output"}]}"#,
+    )
+    .expect("unknown output item retained");
+    assert!(matches!(
+        openai_responses_response_to_canonical(unknown),
+        Err(RelayConvertError::UnsupportedFeature(error))
+            if error.path == "output[0]" && error.feature == "unknown_output_item_type"
+                && error.target_format == "provider_neutral_ir"
+    ));
+
+    let missing_id: ResponsesResponse = serde_json::from_str(
+        r#"{"id":"resp-1","object":"response","status":"completed","model":"gpt-test","output":[{"type":"function_call","name":"run","arguments":"{}"}]}"#,
+    )
+    .expect("function output without call id retained");
+    assert!(matches!(
+        openai_responses_response_to_canonical(missing_id),
+        Err(RelayConvertError::UnsupportedFeature(error))
+            if error.path == "output[0].call_id" && error.feature == "function_call_id"
+    ));
+}
+
+#[test]
+fn responses_response_item_ids_are_reported_as_explicit_loss() {
+    let response: ResponsesResponse = serde_json::from_str(
+        r#"{
+          "id":"resp-ids","object":"response","status":"completed","model":"gpt-test",
+          "output":[
+            {"type":"message","id":"msg_1","content":[{"type":"output_text","text":"ok"}]},
+            {"type":"function_call","id":"fc_1","call_id":"call_1","name":"lookup","arguments":"{}"}
+          ]
+        }"#,
+    )
+    .expect("response item ids retained");
+    let converted = openai_responses_response_to_canonical(response)
+        .expect("response item ids use explicit loss");
+    assert_eq!(converted.loss.dropped_fields, ["output[].id"]);
+}
+
+#[test]
+fn responses_response_preflight_rejects_missing_text_and_citations() {
+    let missing_text: ResponsesResponse = serde_json::from_str(
+        r#"{"id":"resp-text","object":"response","status":"completed","model":"gpt-test","output":[{"type":"message","content":[{"type":"output_text"}]}]}"#,
+    )
+    .expect("missing output text retained");
+    assert!(matches!(
+        openai_responses_response_to_canonical(missing_text),
+        Err(RelayConvertError::UnsupportedFeature(error))
+            if error.feature == "text_content"
+                && error.path == "output[0].content[0].text"
+    ));
+
+    let annotated: ResponsesResponse = serde_json::from_str(
+        r#"{"id":"resp-citation","object":"response","status":"completed","model":"gpt-test","output":[{"type":"message","content":[{"type":"output_text","text":"","annotations":[{"type":"url_citation"}]}]}]}"#,
+    )
+    .expect("annotations retained");
+    assert!(matches!(
+        openai_responses_response_to_canonical(annotated),
+        Err(RelayConvertError::UnsupportedFeature(error))
+            if error.feature == "citations"
+                && error.path == "output[0].content[0].annotations"
+                && error.loss_code.as_deref() == Some("LOSS_CITATION")
+    ));
+}
+
+#[test]
+fn responses_response_rejects_unmapped_output_fields_and_nonterminal_status() {
+    for (output, expected_path) in [
+        (
+            r#"{"type":"message","call_id":"call_1","content":[{"type":"output_text","text":"x"}]}"#,
+            "output[0].call_id",
+        ),
+        (
+            r#"{"type":"function_call","content":[{"type":"output_text","text":"x"}],"call_id":"call_1","name":"run","arguments":"{}"}"#,
+            "output[0].content",
+        ),
+        (
+            r#"{"type":"function_call","role":"assistant","call_id":"call_1","name":"run","arguments":"{}"}"#,
+            "output[0].role",
+        ),
+    ] {
+        let response: ResponsesResponse = serde_json::from_str(&format!(
+            r#"{{"id":"resp-fields","object":"response","status":"completed","model":"gpt-test","output":[{output}]}}"#
+        ))
+        .expect("response output field retained");
+        assert!(matches!(
+            openai_responses_response_to_canonical(response),
+            Err(RelayConvertError::UnsupportedFeature(error))
+                if error.path == expected_path
+                    && matches!(error.feature.as_str(), "output_field" | "output_role")
+        ));
+    }
+
+    let in_progress: ResponsesResponse = serde_json::from_str(
+        r#"{"id":"resp-progress","object":"response","status":"in_progress","model":"gpt-test"}"#,
+    )
+    .expect("nonterminal response retained");
+    assert!(matches!(
+        openai_responses_response_to_canonical(in_progress),
+        Err(RelayConvertError::UnsupportedFeature(error))
+            if error.feature == "response_status" && error.path == "status"
+    ));
+}
+
+#[test]
+fn responses_response_controls_reject_present_zero_or_default_values() {
+    for (field, value) in [
+        ("max_output_tokens", "0"),
+        ("temperature", "0.0"),
+        ("top_p", "1.0"),
+    ] {
+        let response: ResponsesResponse = serde_json::from_str(&format!(
+            r#"{{"id":"resp-control","object":"response","status":"completed","model":"gpt-test","{field}":{value}}}"#
+        ))
+        .expect("nullable response control retained");
+        assert!(matches!(
+            openai_responses_response_to_canonical(response),
+            Err(RelayConvertError::UnsupportedFeature(error))
+                if error.path == field
+        ));
+    }
+    for (field, value) in [("parallel_tool_calls", "false"), ("store", "false")] {
+        let response: ResponsesResponse = serde_json::from_str(&format!(
+            r#"{{"id":"resp-control","object":"response","status":"completed","model":"gpt-test","{field}":{value}}}"#
+        ))
+        .expect("nullable response boolean retained");
+        assert!(matches!(
+            openai_responses_response_to_canonical(response),
+            Err(RelayConvertError::UnsupportedFeature(error))
+                if error.path == field
+        ));
+    }
+}
+
+#[test]
+fn responses_response_rejects_incomplete_details_on_non_incomplete_status() {
+    let response: ResponsesResponse = serde_json::from_str(
+        r#"{"id":"resp-details","object":"response","status":"completed","model":"gpt-test","incomplete_details":{"reason":"max_output_tokens"}}"#,
+    )
+    .expect("incomplete details retained");
+    assert!(matches!(
+        openai_responses_response_to_canonical(response),
+        Err(RelayConvertError::UnsupportedFeature(error))
+            if error.feature == "incomplete_details" && error.path == "incomplete_details"
+    ));
+}
+
+#[test]
+fn responses_incomplete_unknown_reason_is_explicit_loss() {
+    let response: ResponsesResponse = serde_json::from_str(
+        r#"{"id":"resp-incomplete","object":"response","status":"incomplete","model":"gpt-test","incomplete_details":{"reason":"future_reason"}}"#,
+    )
+    .expect("unknown incomplete reason retained");
+    let converted = openai_responses_response_to_canonical(response)
+        .expect("unknown reason uses explicit loss ledger");
+    assert_eq!(converted.loss.dropped_fields, ["incomplete_details.reason"]);
+    assert_eq!(converted.value.finish_reason, Some(FinishReason::Other));
+}
+
+#[test]
+fn responses_response_outer_state_and_non_default_controls_are_typed() {
+    let stateful: ResponsesResponse = serde_json::from_str(
+        r#"{"id":"resp-state","object":"response","status":"completed","model":"gpt-test","previous_response_id":"resp-old"}"#,
+    )
+    .expect("stateful response retained");
+    assert!(matches!(
+        openai_responses_response_to_canonical(stateful),
+        Err(RelayConvertError::UnsupportedFeature(error))
+            if error.feature == "stateful_conversation"
+                && error.path == "previous_response_id"
+    ));
+
+    let controlled: ResponsesResponse = serde_json::from_str(
+        r#"{"id":"resp-control","object":"response","status":"completed","model":"gpt-test","max_output_tokens":128}"#,
+    )
+    .expect("response control retained");
+    assert!(matches!(
+        openai_responses_response_to_canonical(controlled),
+        Err(RelayConvertError::UnsupportedFeature(error))
+            if error.feature == "response_max_output_tokens"
+                && error.path == "max_output_tokens"
+    ));
+}
+
+#[test]
+fn responses_checked_stream_rejects_unknown_event_and_compatibility_is_explicit() {
+    let snapshot: ResponsesStreamSnapshot = serde_json::from_str(
+        r#"{"events":[{"Type":"future.event","Payload":{"type":"future.event","new_field":true}}],"usage":{}}"#,
+    )
+    .expect("unknown stream event retained");
+    assert!(matches!(
+        responses_stream_to_canonical_checked(&snapshot),
+        Err(RelayConvertError::UnsupportedFeature(error))
+            if error.feature == "unknown_event"
+                && error.path == "events[0]"
+                && error.loss_code.as_deref() == Some("LOSS_UNKNOWN_EVENT")
+    ));
+    assert!(matches!(
+        responses_stream_to_canonical(&snapshot).as_slice(),
+        [CanonicalStreamEvent::Error { code, .. }]
+            if code.as_deref() == Some("conversion_unsupported_feature")
+    ));
+}
+
+#[test]
+fn responses_checked_stream_rejects_event_type_mismatch_and_missing_index() {
+    let mismatch: ResponsesStreamSnapshot = serde_json::from_str(
+        r#"{"events":[{"Type":"response.output_text.delta","Payload":{"type":"response.reasoning_text.delta","delta":"wrong"}}],"usage":{}}"#,
+    )
+    .expect("mismatched event retained");
+    assert!(matches!(
+        responses_stream_to_canonical_checked(&mismatch),
+        Err(RelayConvertError::UnsupportedFeature(error))
+            if error.feature == "event_type_mismatch"
+                && error.path == "events[0].Type"
+    ));
+
+    let missing_index: ResponsesStreamSnapshot = serde_json::from_str(
+        r#"{"events":[{"Type":"response.function_call_arguments.delta","Payload":{"type":"response.function_call_arguments.delta","delta":"{}"}}],"usage":{}}"#,
+    )
+    .expect("unindexed tool delta retained");
+    assert!(matches!(
+        responses_stream_to_canonical_checked(&missing_index),
+        Err(RelayConvertError::UnsupportedFeature(error))
+            if error.feature == "stream_index"
+                && error.path == "events[0].output_index"
+    ));
+}
+
+#[test]
+fn responses_checked_stream_rejects_custom_and_builtin_output_items() {
+    for (kind, feature) in [
+        ("custom_tool_call", "custom_tool"),
+        ("web_search_call", "builtin_web_search"),
+    ] {
+        let snapshot: ResponsesStreamSnapshot = serde_json::from_str(&format!(
+            r#"{{"events":[{{"Type":"response.output_item.added","Payload":{{"type":"response.output_item.added","output_index":0,"item":{{"type":"{kind}"}}}}}}],"usage":{{}}}}"#
+        ))
+        .expect("provider output item retained");
+        assert!(matches!(
+            responses_stream_to_canonical_checked(&snapshot),
+            Err(RelayConvertError::UnsupportedFeature(error))
+                if error.feature == feature
+                    && error.path == "events[0].item"
+        ));
+    }
+}
+
+#[test]
+fn responses_checked_stream_rejects_custom_delta_with_custom_loss() {
+    let snapshot: ResponsesStreamSnapshot = serde_json::from_str(
+        r#"{"events":[{"Type":"response.custom_tool_call_input.delta","Payload":{"type":"response.custom_tool_call_input.delta","output_index":0,"delta":"{}"}}],"usage":{}}"#,
+    )
+    .expect("custom stream delta retained");
+    assert!(matches!(
+        responses_stream_to_canonical_checked(&snapshot),
+        Err(RelayConvertError::UnsupportedFeature(error))
+            if error.feature == "custom_tool"
+                && error.path == "events[0]"
+                && error.loss_code.as_deref() == Some("LOSS_CUSTOM_TOOL")
+    ));
+}
+
+#[test]
+fn responses_checked_stream_rejects_unrepresentable_output_item_id() {
+    let snapshot: ResponsesStreamSnapshot = serde_json::from_str(
+        r#"{"events":[{"Type":"response.output_item.added","Payload":{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_item","call_id":"call_1","name":"lookup","arguments":""}}}],"usage":{}}"#,
+    )
+    .expect("stream item id retained");
+    assert!(matches!(
+        responses_stream_to_canonical_checked(&snapshot),
+        Err(RelayConvertError::UnsupportedFeature(error))
+            if error.feature == "output_item_id"
+                && error.path == "events[0].item.id"
+    ));
+}
+
+#[test]
+fn responses_checked_stream_rejects_inapplicable_output_item_fields() {
+    for (item, expected_path) in [
+        (
+            r#"{"type":"message","call_id":"call_1","content":[{"type":"output_text","text":"x"}]}"#,
+            "events[0].item.call_id",
+        ),
+        (
+            r#"{"type":"function_call","content":[{"type":"output_text","text":"x"}],"call_id":"call_1","name":"run","arguments":"{}"}"#,
+            "events[0].item.content",
+        ),
+    ] {
+        let snapshot: ResponsesStreamSnapshot = serde_json::from_str(&format!(
+            r#"{{"events":[{{"Type":"response.output_item.added","Payload":{{"type":"response.output_item.added","output_index":0,"item":{item}}}}}}],"usage":{{}}}}"#
+        ))
+        .expect("stream output item field retained");
+        assert!(matches!(
+            responses_stream_to_canonical_checked(&snapshot),
+            Err(RelayConvertError::UnsupportedFeature(error))
+                if error.feature == "output_field" && error.path == expected_path
+        ));
+    }
+}
+
+#[test]
+fn responses_checked_stream_rejects_terminal_full_output_snapshot() {
+    let snapshot: ResponsesStreamSnapshot = serde_json::from_str(
+        r#"{
+          "events":[{"Type":"response.completed","Payload":{"type":"response.completed","response":{"id":"resp-full","object":"response","status":"completed","model":"gpt-test","output":[{"type":"message","content":[{"type":"output_text","text":"answer"}]}]}}}],
+          "usage":{}
+        }"#,
+    )
+    .expect("terminal response output retained");
+    assert!(matches!(
+        responses_stream_to_canonical_checked(&snapshot),
+        Err(RelayConvertError::UnsupportedFeature(error))
+            if error.feature == "stream_response_output"
+                && error.path == "events[0].response.output"
+                && error.loss_code.as_deref() == Some("LOSS_UNKNOWN_EVENT")
+    ));
+}
+
+#[test]
+fn responses_checked_stream_rejects_output_item_initial_payloads() {
+    for (item, expected_path) in [
+        (
+            r#"{"type":"message","content":[{"type":"output_text","text":"seed"}]}"#,
+            "events[0].item.content",
+        ),
+        (
+            r#"{"type":"function_call","call_id":"call_1","name":"run","arguments":"{}"}"#,
+            "events[0].item.arguments",
+        ),
+    ] {
+        let snapshot: ResponsesStreamSnapshot = serde_json::from_str(&format!(
+            r#"{{"events":[{{"Type":"response.output_item.added","Payload":{{"type":"response.output_item.added","output_index":0,"item":{item}}}}}}],"usage":{{}}}}"#
+        ))
+        .expect("initial output item payload retained");
+        assert!(matches!(
+            responses_stream_to_canonical_checked(&snapshot),
+            Err(RelayConvertError::UnsupportedFeature(error))
+                if error.path == expected_path
+                    && matches!(
+                        error.feature.as_str(),
+                        "stream_item_content" | "stream_item_arguments"
+                    )
+        ));
+    }
+}
+
+#[test]
+fn responses_checked_stream_rejects_annotations_before_terminal_conversion() {
+    let snapshot: ResponsesStreamSnapshot = serde_json::from_str(
+        r#"{
+          "events":[{"Type":"response.completed","Payload":{"type":"response.completed","response":{
+            "id":"resp-1","object":"response","status":"completed","model":"gpt-test",
+            "output":[{"type":"message","content":[{"type":"output_text","text":"answer","annotations":[{"type":"url_citation"}]}]}]
+          }}}],
+          "usage":{}
+        }"#,
+    )
+    .expect("annotated response stream retained");
+    assert!(matches!(
+        responses_stream_to_canonical_checked(&snapshot),
+        Err(RelayConvertError::UnsupportedFeature(error))
+            if error.feature == "citations"
+                && error.path == "events[0].response.output[0].content[0].annotations"
+                && error.loss_code.as_deref() == Some("LOSS_CITATION")
+    ));
+}
+
+#[test]
+fn responses_checked_stream_rejects_duplicate_terminal_events() {
+    let snapshot: ResponsesStreamSnapshot = serde_json::from_str(
+        r#"{
+          "events":[
+            {"Type":"response.completed","Payload":{"type":"response.completed","response":{"id":"resp-1","object":"response","status":"completed","model":"gpt-test","output":[]}}},
+            {"Type":"response.done","Payload":{"type":"response.done","response":{"id":"resp-1","object":"response","status":"completed","model":"gpt-test","output":[]}}}
+          ],
+          "usage":{}
+        }"#,
+    )
+    .expect("duplicate terminal stream retained");
+    assert!(matches!(
+        responses_stream_to_canonical_checked(&snapshot),
+        Err(RelayConvertError::UnsupportedFeature(error))
+            if error.feature == "stream_termination"
+                && error.path == "events[1]"
+    ));
+}
+
+#[test]
+fn responses_checked_stream_rejects_terminal_item_snapshot_in_cross_conversion() {
+    let snapshot: ResponsesStreamSnapshot = serde_json::from_str(
+        r#"{
+          "events":[{"Type":"response.output_item.done","Payload":{"type":"response.output_item.done","output_index":0,"item":{"type":"message","status":"completed"}}}],
+          "usage":{}
+        }"#,
+    )
+    .expect("terminal item snapshot retained");
+    assert!(matches!(
+        responses_stream_to_canonical_checked(&snapshot),
+        Err(RelayConvertError::UnsupportedFeature(error))
+            if error.feature == "stream_terminal_item"
+                && error.path == "events[0].item"
+                && error.loss_code.as_deref() == Some("LOSS_UNKNOWN_EVENT")
+    ));
+}
+
+#[test]
+fn responses_checked_stream_rejects_duplicate_error_sources() {
+    let snapshot: ResponsesStreamSnapshot = serde_json::from_str(
+        r#"{
+          "events":[{"Type":"response.error","Payload":{"type":"response.error","error":{"code":"outer","message":"outer"},"response":{"id":"resp-error","object":"response","status":"failed","model":"gpt-test","error":{"code":"inner","message":"inner"}}}}],
+          "usage":{}
+        }"#,
+    )
+    .expect("duplicate error sources retained");
+    assert!(matches!(
+        responses_stream_to_canonical_checked(&snapshot),
+        Err(RelayConvertError::UnsupportedFeature(error))
+            if error.feature == "duplicate_error"
+                && error.path == "events[0].response.error"
+                && error.loss_code.as_deref() == Some("LOSS_UNKNOWN_EVENT")
+    ));
+}
+
+#[test]
+fn responses_checked_stream_rejects_present_default_response_controls() {
+    for (field, value) in [("parallel_tool_calls", "false"), ("store", "false")] {
+        let snapshot: ResponsesStreamSnapshot = serde_json::from_str(&format!(
+            r#"{{"events":[{{"Type":"response.completed","Payload":{{"type":"response.completed","response":{{"id":"resp-control","object":"response","status":"completed","model":"gpt-test","{field}":{value}}}}}}}}],"usage":{{}}}}"#
+        ))
+        .expect("stream response control retained");
+        assert!(matches!(
+            responses_stream_to_canonical_checked(&snapshot),
+            Err(RelayConvertError::UnsupportedFeature(error))
+                if error.path == format!("events[0].response.{field}")
+        ));
+    }
+}
+
+#[test]
+fn responses_checked_stream_rejects_incomplete_details_on_completed_response() {
+    let snapshot: ResponsesStreamSnapshot = serde_json::from_str(
+        r#"{"events":[{"Type":"response.completed","Payload":{"type":"response.completed","response":{"id":"resp-details","object":"response","status":"completed","model":"gpt-test","incomplete_details":{"reason":"max_output_tokens"}}}}],"usage":{}}"#,
+    )
+    .expect("stream incomplete details retained");
+    assert!(matches!(
+        responses_stream_to_canonical_checked(&snapshot),
+        Err(RelayConvertError::UnsupportedFeature(error))
+            if error.feature == "incomplete_details"
+                && error.path == "events[0].response.incomplete_details"
+    ));
 }
 
 #[test]
@@ -1083,16 +1705,21 @@ fn gemini_missing_ids_use_global_stable_queue_and_mark_same_name_ambiguity() {
             id: "gemini_call_synthetic_0_lookup".to_owned(),
             name: Some("lookup".to_owned()),
             output: JsonData::Object(
-                [("n".to_owned(), JsonData::Number(serde_json::Number::from(1)))]
-                    .into_iter()
-                    .collect(),
+                [(
+                    "n".to_owned(),
+                    JsonData::Number(serde_json::Number::from(1))
+                )]
+                .into_iter()
+                .collect(),
             ),
         }
     );
-    assert!(converted
-        .loss
-        .synthetic_fields
-        .contains(&"SYNTHETIC_TOOL_RESULT_ID_AMBIGUOUS"));
+    assert!(
+        converted
+            .loss
+            .synthetic_fields
+            .contains(&"SYNTHETIC_TOOL_RESULT_ID_AMBIGUOUS")
+    );
 }
 
 #[test]
@@ -1275,12 +1902,9 @@ fn canonical_gemini_rejects_duplicate_and_parallel_second_signatures() {
         tool_choice: None,
         options: RequestOptions::default(),
     };
-    assert!(canonical_request_to_gemini_for_model(
-        duplicate_state,
-        "gemini-2.5-pro",
-        false
-    )
-    .is_err());
+    assert!(
+        canonical_request_to_gemini_for_model(duplicate_state, "gemini-2.5-pro", false).is_err()
+    );
 
     let parallel_second_signature = CanonicalRequest {
         model: "gemini-2.5-pro".to_owned(),
@@ -1319,12 +1943,10 @@ fn canonical_gemini_rejects_duplicate_and_parallel_second_signatures() {
         tool_choice: None,
         options: RequestOptions::default(),
     };
-    assert!(canonical_request_to_gemini_for_model(
-        parallel_second_signature,
-        "gemini-2.5-pro",
-        false
-    )
-    .is_err());
+    assert!(
+        canonical_request_to_gemini_for_model(parallel_second_signature, "gemini-2.5-pro", false)
+            .is_err()
+    );
 }
 
 #[test]
@@ -1390,8 +2012,8 @@ fn gemini_stream_signature_is_retained_before_later_finish_reason() {
         }"#,
     )
     .expect("Gemini stream");
-    let converted = gemini_stream_to_canonical(&snapshot, "gemini-3-pro")
-        .expect("Gemini stream conversion");
+    let converted =
+        gemini_stream_to_canonical(&snapshot, "gemini-3-pro").expect("Gemini stream conversion");
     assert_eq!(converted.value.finish_reason, Some(FinishReason::Stop));
     assert!(matches!(
         converted.value.output.as_slice(),
@@ -1774,10 +2396,7 @@ fn claude_mixed_thinking_and_tool_result_stays_in_one_ordered_extension() {
         })
         .map(|block| block.kind)
         .collect::<Vec<_>>();
-    assert_eq!(
-        kinds,
-        vec!["thinking".to_owned(), "tool_result".to_owned()]
-    );
+    assert_eq!(kinds, vec!["thinking".to_owned(), "tool_result".to_owned()]);
 }
 
 #[test]
@@ -1795,21 +2414,32 @@ fn ordinary_openai_reasoning_is_not_encoded_as_claude_thinking() {
     let canonical = openai_chat_response_to_canonical(response)
         .expect("Chat conversion")
         .value;
-    assert!(canonical
-        .output
-        .iter()
-        .any(|part| matches!(part, CanonicalContent::Reasoning { text } if text == "summary")));
-    assert!(!canonical
-        .output
-        .iter()
-        .any(|part| matches!(part, CanonicalContent::ClaudeThinking { .. })));
+    assert!(
+        canonical
+            .output
+            .iter()
+            .any(|part| matches!(part, CanonicalContent::Reasoning { text } if text == "summary"))
+    );
+    assert!(
+        !canonical
+            .output
+            .iter()
+            .any(|part| matches!(part, CanonicalContent::ClaudeThinking { .. }))
+    );
     let claude = canonical_response_to_claude(canonical).expect("canonical to Claude");
-    assert!(claude.loss.dropped_fields.contains(&"ordinary_reasoning->claude_text"));
-    assert!(claude
-        .value
-        .content
-        .iter()
-        .all(|block| block.kind != "thinking"));
+    assert!(
+        claude
+            .loss
+            .dropped_fields
+            .contains(&"ordinary_reasoning->claude_text")
+    );
+    assert!(
+        claude
+            .value
+            .content
+            .iter()
+            .all(|block| block.kind != "thinking")
+    );
 }
 
 #[test]
@@ -1866,9 +2496,11 @@ fn claude_stream_events_keep_signature_partial_json_ping_error_unknown_and_cance
         event,
         ClaudeStreamSemanticEvent::ToolInputJsonDelta { delta, .. } if delta == "{\"a\":"
     )));
-    assert!(events
-        .iter()
-        .any(|event| matches!(event, ClaudeStreamSemanticEvent::Ping)));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, ClaudeStreamSemanticEvent::Ping))
+    );
     assert!(events.iter().any(|event| matches!(
         event,
         ClaudeStreamSemanticEvent::Error { message, .. } if message == "retry"
@@ -1896,7 +2528,11 @@ fn claude_stream_events_keep_signature_partial_json_ping_error_unknown_and_cance
     for event in &events {
         state.apply(event).expect("valid Claude event sequence");
     }
-    assert!(state.apply(&ClaudeStreamSemanticEvent::MessageStop).is_err());
+    assert!(
+        state
+            .apply(&ClaudeStreamSemanticEvent::MessageStop)
+            .is_err()
+    );
 
     let mut interrupted = ClaudeStreamState::default();
     interrupted.apply(&events[0]).expect("stream start");
@@ -1972,12 +2608,14 @@ fn claude_stream_state_requires_typed_deltas_and_monotonic_non_concurrent_blocks
             },
         })
         .expect("open text block");
-    assert!(text_signature_state
-        .apply(&ClaudeStreamSemanticEvent::SignatureDelta {
-            index: 0,
-            signature: "wrong-block".to_owned(),
-        })
-        .is_err());
+    assert!(
+        text_signature_state
+            .apply(&ClaudeStreamSemanticEvent::SignatureDelta {
+                index: 0,
+                signature: "wrong-block".to_owned(),
+            })
+            .is_err()
+    );
 
     let concurrent = ClaudeStreamSemanticEvent::ContentBlockStart {
         index: 1,
@@ -2053,17 +2691,25 @@ fn claude_stream_state_rejects_duplicate_stop_and_events_after_end() {
     state
         .apply(&ClaudeStreamSemanticEvent::MessageStop)
         .expect("message stop");
-    assert!(state.apply(&ClaudeStreamSemanticEvent::MessageStop).is_err());
-    assert!(state
-        .apply(&ClaudeStreamSemanticEvent::MessageDelta {
-            stop_reason: Some("stop".to_owned()),
-            usage: None,
-        })
-        .is_err());
-    assert!(state
-        .apply(&ClaudeStreamSemanticEvent::TextDelta {
-            index: 0,
-            delta: "late".to_owned(),
-        })
-        .is_err());
+    assert!(
+        state
+            .apply(&ClaudeStreamSemanticEvent::MessageStop)
+            .is_err()
+    );
+    assert!(
+        state
+            .apply(&ClaudeStreamSemanticEvent::MessageDelta {
+                stop_reason: Some("stop".to_owned()),
+                usage: None,
+            })
+            .is_err()
+    );
+    assert!(
+        state
+            .apply(&ClaudeStreamSemanticEvent::TextDelta {
+                index: 0,
+                delta: "late".to_owned(),
+            })
+            .is_err()
+    );
 }
