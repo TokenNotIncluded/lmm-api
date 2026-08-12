@@ -1139,6 +1139,96 @@ fn tool_choice_from_json(
     }
 }
 
+fn responses_tool_choice_from_json(
+    choice: Option<JsonData>,
+    source: Protocol,
+    target: Protocol,
+    path: &str,
+) -> Result<ToolChoice, DirectIrError> {
+    let Some(choice) = choice else {
+        return Ok(ToolChoice::Auto);
+    };
+    match choice {
+        JsonData::String(value) => match value.as_str() {
+            "auto" => Ok(ToolChoice::Auto),
+            "none" => Ok(ToolChoice::None),
+            "required" => Ok(ToolChoice::Required),
+            _ => Err(DirectIrError::unsupported(
+                source,
+                target,
+                "tool_choice",
+                path,
+            )),
+        },
+        JsonData::Object(object) => {
+            if let Some(field) = object
+                .keys()
+                .find(|field| field.as_str() != "type" && field.as_str() != "name")
+            {
+                return Err(responses_unknown_field(
+                    source,
+                    target,
+                    format!("{path}.{field}"),
+                ));
+            }
+            match object.get("type").and_then(json_string) {
+                Some("function") => {}
+                Some(_) => {
+                    return Err(responses_option_error(
+                        source,
+                        target,
+                        "tool_choice.type",
+                        path,
+                    ));
+                }
+                None => {
+                    return Err(DirectIrError::missing(
+                        source,
+                        target,
+                        "tool_choice.type",
+                        path,
+                    ));
+                }
+            }
+            let name = object
+                .get("name")
+                .and_then(json_string)
+                .filter(|name| !name.trim().is_empty())
+                .ok_or_else(|| DirectIrError::missing(source, target, "tool_choice.name", path))?;
+            Ok(ToolChoice::Named {
+                name: name.to_owned(),
+            })
+        }
+        _ => Err(DirectIrError::unsupported(
+            source,
+            target,
+            "tool_choice",
+            path,
+        )),
+    }
+}
+
+fn responses_tool_choice_to_json(
+    choice: &ToolChoice,
+    source: Protocol,
+    target: Protocol,
+) -> Result<JsonData, DirectIrError> {
+    let value = match choice {
+        ToolChoice::Auto => JsonData::String("auto".to_owned()),
+        ToolChoice::None => JsonData::String("none".to_owned()),
+        ToolChoice::Required => JsonData::String("required".to_owned()),
+        ToolChoice::Named { name } => object([
+            ("type".to_owned(), JsonData::String("function".to_owned())),
+            ("name".to_owned(), JsonData::String(name.clone())),
+        ]),
+        ToolChoice::Provider { raw } => raw.clone(),
+    };
+    if matches!(choice, ToolChoice::Provider { .. }) {
+        responses_tool_choice_from_json(Some(value.clone()), source, target, "tool_choice")?;
+    }
+    Ok(value)
+}
+
 fn tool_choice_to_json(choice: &ToolChoice) -> JsonData {
     match choice {
         ToolChoice::Auto => JsonData::String("auto".to_owned()),
@@ -6474,8 +6564,12 @@ pub fn openai_responses_request_to_envelope_v2(
     let model = request.model.clone();
     let mut envelope = Envelope::new(source, model);
     responses_store_request_controls(&request, &mut envelope);
-    envelope.tool_choice =
-        tool_choice_from_json(request.tool_choice.clone(), source, target, "tool_choice")?;
+    envelope.tool_choice = responses_tool_choice_from_json(
+        request.tool_choice.clone(),
+        source,
+        target,
+        "tool_choice",
+    )?;
     for (index, tool) in request.tools.iter().enumerate() {
         let name = tool.name.clone().ok_or_else(|| {
             DirectIrError::missing(source, target, "tool.name", &format!("tools[{index}].name"))
@@ -7188,7 +7282,11 @@ pub fn envelope_to_openai_responses_request_v2(
         stream: envelope.controls.stream,
         temperature: envelope.controls.temperature,
         tools,
-        tool_choice: Some(tool_choice_to_json(&envelope.tool_choice)),
+        tool_choice: Some(responses_tool_choice_to_json(
+            &envelope.tool_choice,
+            source,
+            target,
+        )?),
         top_p: envelope.controls.top_p,
         reasoning: envelope
             .controls
@@ -8160,6 +8258,38 @@ mod responses_direct_ir_tests {
             .expect_err("builtin tools must be explicitly unsupported");
         assert_eq!(tool_error.feature, "tool_type");
         assert_eq!(tool_error.path, "tools[0]");
+    }
+
+    #[test]
+    fn responses_named_tool_choice_is_flat_and_unknown_fields_fail_closed() {
+        let mut request = responses_request_fixture();
+        request.tool_choice = Some(object([
+            ("type".to_owned(), JsonData::String("function".to_owned())),
+            ("name".to_owned(), JsonData::String("lookup".to_owned())),
+        ]));
+        let decoded = openai_responses_request_to_envelope_v2(request)
+            .expect("flat Responses tool choice decodes");
+        let encoded = envelope_to_openai_responses_request_v2(decoded.envelope)
+            .expect("flat Responses tool choice encodes");
+        assert_eq!(
+            encoded.value.tool_choice,
+            Some(object([
+                ("type".to_owned(), JsonData::String("function".to_owned())),
+                ("name".to_owned(), JsonData::String("lookup".to_owned())),
+            ]))
+        );
+
+        let nested: OpenAiResponsesRequest = serde_json::from_str(
+            r#"{
+              "model":"gpt-responses",
+              "tool_choice":{"type":"function","name":"lookup","function":{}}
+            }"#,
+        )
+        .expect("nested tool choice fixture");
+        let error = openai_responses_request_to_envelope_v2(nested)
+            .expect_err("unknown Responses tool-choice fields must be rejected");
+        assert_eq!(error.feature, "unknown_field");
+        assert_eq!(error.path, "tool_choice.function");
     }
 
     #[test]

@@ -9,16 +9,21 @@
 //! so the current validated registry remains closed for every cross-protocol
 //! stream.
 
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, time::Instant};
 
 use lmm_contracts::relay::{
-    CanonicalStreamEvent, ConversionPlan, Direction, Protocol, TokenUsage, ValidatedRegistry,
+    CanonicalStreamEvent, ConversionPlan, Direction, LossCode, Protocol, TokenUsage,
+    ValidatedRegistry,
 };
 
 use crate::{
+    conversion_observability::{
+        ClientAbortGuard, ConversionObserver, ConversionResult, ConverterVersion, FailureReason,
+        FeatureClass, MetricLabels, QueueDepthGuard, StreamTiming,
+    },
     migration_routes::sse::{
-        DEFAULT_MAX_FRAME_BYTES, SseFrame, UnknownEventClass, UnknownEventDecision,
-        unknown_event_decision,
+        DEFAULT_MAX_FRAME_BYTES, LOSS_UNKNOWN_EVENT, SseFrame, UnknownEventClass,
+        UnknownEventDecision, unknown_event_decision,
     },
     protocol_rollout::{ProtocolRolloutConfig, ProtocolRolloutSnapshot, RolloutContext},
     protocol_route_gate::{RouteGateBlocker, RouteGateDecision, RouteGateDetails, decide_route},
@@ -773,6 +778,137 @@ impl StreamRouteAdmission for ValidatedStreamRouteAdmission {
     }
 }
 
+/// Session-owned stream telemetry guards.
+///
+/// The queue and client-abort guards live for exactly as long as the admitted
+/// session unless the host explicitly completes or cancels it. This keeps a
+/// dropped or poisoned session from leaving a stale queue depth, while a
+/// normal completion cannot be mistaken for a client abort. Labels are built
+/// from the immutable route decision and contain no request or model text.
+struct StreamSessionTelemetry {
+    observer: ConversionObserver,
+    labels: MetricLabels,
+    queue_guard: QueueDepthGuard,
+    abort_guard: ClientAbortGuard,
+    timing: StreamTiming,
+    ttft_recorded: bool,
+    failure_recorded: bool,
+}
+
+impl StreamSessionTelemetry {
+    fn new(observer: &ConversionObserver, decision: &StreamSessionDecision) -> Option<Self> {
+        if decision.is_closed() {
+            return None;
+        }
+        let scope = decision.details().scope;
+        let converter_version = if scope.source == scope.target {
+            ConverterVersion::NativeRawV1
+        } else {
+            ConverterVersion::ProtocolStreamV1
+        };
+        let labels = MetricLabels::for_route(
+            scope.source,
+            scope.target,
+            converter_version,
+            1,
+            true,
+            FeatureClass::Stream,
+            ConversionResult::Success,
+        );
+        Some(Self {
+            observer: observer.clone(),
+            labels,
+            queue_guard: observer.enter_queue(labels),
+            abort_guard: ClientAbortGuard::new(observer.clone(), labels),
+            timing: StreamTiming::default(),
+            ttft_recorded: false,
+            failure_recorded: false,
+        })
+    }
+
+    fn mark_upstream_event(&mut self) {
+        self.timing.mark_upstream_event();
+    }
+
+    fn record_downstream_write(&mut self) {
+        self.timing.mark_downstream_write();
+        if !self.ttft_recorded {
+            if let Some(duration) = self.timing.gateway_ttft_tax() {
+                self.observer.record_gateway_ttft(self.labels, duration);
+                self.ttft_recorded = true;
+            }
+        }
+    }
+
+    fn record_raw_frame(&self, frame_bytes: usize, duration: std::time::Duration) {
+        self.observer
+            .record_conversion_duration(self.labels, duration);
+        self.observer.record_events(self.labels, 1);
+        self.observer.record_input_bytes(self.labels, frame_bytes);
+        self.observer.record_output_bytes(self.labels, frame_bytes);
+    }
+
+    fn record_typed_frame(
+        &self,
+        input_bytes: usize,
+        output_bytes: usize,
+        output_items: usize,
+        loss_count: usize,
+        unknown_event_count: usize,
+        duration: std::time::Duration,
+    ) {
+        self.observer
+            .record_conversion_duration(self.labels, duration);
+        let event_count = if output_items > u64::MAX as usize {
+            u64::MAX
+        } else {
+            output_items as u64
+        };
+        self.observer.record_events(self.labels, event_count);
+        self.observer.record_input_bytes(self.labels, input_bytes);
+        self.observer.record_output_bytes(self.labels, output_bytes);
+        // Adaptors expose only closed loss categories; the stream metric keeps
+        // the existing low-cardinality unknown-event code and never records
+        // an event name or payload.
+        for _ in 0..loss_count {
+            self.observer
+                .record_loss(self.labels, LossCode::LossUnknownEvent);
+        }
+        for _ in 0..unknown_event_count {
+            self.observer.record_unknown_event(self.labels);
+        }
+    }
+
+    fn record_failure(&mut self, failure: &TypedStreamFailure) {
+        if self.failure_recorded {
+            return;
+        }
+        let reason = if matches!(failure, TypedStreamFailure::Cancelled) {
+            FailureReason::Cancelled
+        } else {
+            FailureReason::Stream
+        };
+        self.observer
+            .record_failure_with_reason(self.labels, reason);
+        self.failure_recorded = true;
+        if matches!(failure, TypedStreamFailure::Cancelled) {
+            self.abort();
+        } else {
+            self.complete();
+        }
+    }
+
+    fn complete(&mut self) {
+        self.queue_guard.complete();
+        self.abort_guard.complete();
+    }
+
+    fn abort(&mut self) {
+        self.queue_guard.complete();
+        self.abort_guard.abort();
+    }
+}
+
 /// The one compiled stream session.
 pub struct StreamSession {
     decision: StreamSessionDecision,
@@ -785,6 +921,7 @@ pub struct StreamSession {
     output_started: bool,
     cancelled: bool,
     poisoned: bool,
+    telemetry: Option<StreamSessionTelemetry>,
 }
 
 impl StreamSession {
@@ -818,6 +955,39 @@ impl StreamSession {
         self.poisoned
     }
 
+    /// Attaches bounded route-specific stream telemetry to this admitted
+    /// session. Calling this more than once keeps the first lifecycle guards;
+    /// closed sessions remain uninstrumented. The observer is cloned only as
+    /// a handle to the shared bounded recorder.
+    #[must_use]
+    pub fn with_observer(mut self, observer: &ConversionObserver) -> Self {
+        if self.telemetry.is_none() {
+            self.telemetry = StreamSessionTelemetry::new(observer, &self.decision);
+        }
+        self
+    }
+
+    /// Marks the first downstream write for gateway-only TTFT measurement.
+    /// The host should call this after bytes are accepted by its downstream
+    /// writer; calling it repeatedly records only the first ordered interval.
+    pub fn mark_downstream_write(&mut self) {
+        if let Some(telemetry) = self.telemetry.as_mut() {
+            telemetry.record_downstream_write();
+        }
+    }
+
+    /// Marks a normal host-observed stream completion.
+    ///
+    /// Raw same-protocol sessions intentionally do not inspect terminal event
+    /// names, so the host must call this after the downstream stream completes.
+    /// Omitting it leaves the abort guard active and therefore fails closed as
+    /// a client-aborted/dropped session when the session is dropped.
+    pub fn complete(&mut self) {
+        if let Some(telemetry) = self.telemetry.as_mut() {
+            telemetry.complete();
+        }
+    }
+
     /// Cancels the session without creating a successful terminal event.
     /// The host remains responsible for aborting the upstream I/O operation.
     pub fn cancel(&mut self) -> Result<(), StreamProcessError> {
@@ -846,6 +1016,9 @@ impl StreamSession {
             return Err(self.poison(failure));
         }
         self.cancelled = true;
+        if let Some(telemetry) = self.telemetry.as_mut() {
+            telemetry.record_failure(&TypedStreamFailure::Cancelled);
+        }
         Ok(())
     }
 
@@ -867,8 +1040,15 @@ impl StreamSession {
         if self.cancelled {
             return Err(self.stage_failure(TypedStreamFailure::Cancelled));
         }
+        let frame_started = Instant::now();
+        if let Some(telemetry) = self.telemetry.as_mut() {
+            telemetry.mark_upstream_event();
+        }
         if self.decision.is_raw_passthrough() {
             self.output_started = true;
+            if let Some(telemetry) = self.telemetry.as_ref() {
+                telemetry.record_raw_frame(frame.raw.len(), frame_started.elapsed());
+            }
             return Ok(StreamFrameOutput::RawPassthrough { bytes: &frame.raw });
         }
         if frame.raw.len() > self.max_frame_bytes {
@@ -894,12 +1074,14 @@ impl StreamSession {
         if let Some(failure) = terminal_failure {
             return Err(self.poison(failure));
         }
-        self.finish_adaptor_output(output)
+        self.finish_adaptor_output(output, frame.raw.len(), frame_started)
     }
 
     fn finish_adaptor_output(
         &mut self,
         output: StreamAdaptorOutput,
+        input_bytes: usize,
+        frame_started: Instant,
     ) -> Result<StreamFrameOutput<'static>, StreamProcessError> {
         if output.len() > self.max_output_items {
             return Err(self.poison(TypedStreamFailure::OutputItemsExceeded {
@@ -940,6 +1122,23 @@ impl StreamSession {
         }
 
         let StreamAdaptorOutput { items } = output;
+        let output_item_count = items.len();
+        let loss_count = items
+            .iter()
+            .filter(|item| matches!(item, StreamAdaptorItem::Loss(_)))
+            .count();
+        let unknown_event_count = items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item,
+                    StreamAdaptorItem::Loss(StreamLoss {
+                        code: LOSS_UNKNOWN_EVENT,
+                        ..
+                    })
+                )
+            })
+            .count();
         for item in &items {
             if let StreamAdaptorItem::TargetFramed { event, .. }
             | StreamAdaptorItem::Canonical { event } = item
@@ -963,6 +1162,16 @@ impl StreamSession {
         let batch = TypedStreamBatch::new(output_items, aggregate_bytes);
         if !batch.is_empty() {
             self.output_started = true;
+        }
+        if let Some(telemetry) = self.telemetry.as_ref() {
+            telemetry.record_typed_frame(
+                input_bytes,
+                aggregate_bytes,
+                output_item_count,
+                loss_count,
+                unknown_event_count,
+                frame_started.elapsed(),
+            );
         }
         Ok(StreamFrameOutput::Typed { batch })
     }
@@ -988,6 +1197,9 @@ impl StreamSession {
 
     fn poison(&mut self, failure: TypedStreamFailure) -> StreamProcessError {
         self.poisoned = true;
+        if let Some(telemetry) = self.telemetry.as_mut() {
+            telemetry.record_failure(&failure);
+        }
         self.stage_failure(failure)
     }
 }
@@ -1045,6 +1257,7 @@ fn closed_session(
         output_started: false,
         cancelled: false,
         poisoned: false,
+        telemetry: None,
     }
 }
 
@@ -1125,6 +1338,7 @@ fn compile_stream_session_with_runtime(
                 output_started: false,
                 cancelled: false,
                 poisoned: false,
+                telemetry: None,
             })
         }
         RouteGateDecision::Closed { details, blockers } => Ok(closed_session(
@@ -1185,6 +1399,7 @@ fn compile_stream_session_with_runtime(
                 output_started: false,
                 cancelled: false,
                 poisoned: false,
+                telemetry: None,
             })
         }
     }
@@ -1295,6 +1510,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        conversion_observability::{ConversionObserver, MetricKind},
         migration_routes::sse::{LOSS_UNKNOWN_EVENT, UnknownEventAction, parse_sse_frames},
         protocol_rollout::{ProtocolRolloutControl, RolloutFlag},
         protocol_runtime_registry::validated_current_registry,
@@ -1566,6 +1782,52 @@ mod tests {
             panic!("expected raw output");
         };
         assert_eq!(bytes, input.raw.as_slice());
+    }
+
+    #[test]
+    fn observer_tracks_stream_lifecycle_without_counting_completed_abort() {
+        let registry = registry();
+        let rollout = ProtocolRolloutControl::default().snapshot();
+        let evidence = ownership(Protocol::Gemini, Protocol::Gemini);
+        let observer = ConversionObserver::default();
+        let mut session = compile_stream_session(spec(
+            &registry,
+            &rollout,
+            Protocol::Gemini,
+            Protocol::Gemini,
+            &evidence,
+        ))
+        .expect("native route admits raw passthrough")
+        .with_observer(&observer);
+
+        session
+            .process_frame(&frame(b"data: telemetry\n\n"))
+            .expect("raw frame is observed");
+        session.mark_downstream_write();
+        session.complete();
+        drop(session);
+
+        let snapshot = observer.snapshot();
+        assert!(snapshot.samples.iter().any(|sample| {
+            sample.metric == MetricKind::ConversionEventsTotal && sample.value == 1
+        }));
+        assert!(
+            snapshot
+                .samples
+                .iter()
+                .any(|sample| { sample.metric == MetricKind::StreamGatewayTtftSeconds })
+        );
+        assert!(
+            snapshot.samples.iter().any(|sample| {
+                sample.metric == MetricKind::StreamQueueDepth && sample.value == 0
+            })
+        );
+        assert!(
+            !snapshot
+                .samples
+                .iter()
+                .any(|sample| { sample.metric == MetricKind::StreamClientAbortTotal })
+        );
     }
 
     #[test]

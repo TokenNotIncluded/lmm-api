@@ -34,6 +34,8 @@ pub enum ConverterVersion {
     OpenAiResponsesV1,
     /// Native same-protocol bytes, without JSON decoding.
     NativeRawV1,
+    /// The bounded typed streaming-session conversion boundary.
+    ProtocolStreamV1,
 }
 
 impl ConverterVersion {
@@ -42,6 +44,7 @@ impl ConverterVersion {
             Self::OpenAiChatV1 => 0,
             Self::OpenAiResponsesV1 => 1,
             Self::NativeRawV1 => 2,
+            Self::ProtocolStreamV1 => 3,
         }
     }
 
@@ -50,6 +53,7 @@ impl ConverterVersion {
             0 => Some(Self::OpenAiChatV1),
             1 => Some(Self::OpenAiResponsesV1),
             2 => Some(Self::NativeRawV1),
+            3 => Some(Self::ProtocolStreamV1),
             _ => None,
         }
     }
@@ -773,13 +777,19 @@ impl ClientAbortGuard {
     pub fn complete(&mut self) {
         self.completed = true;
     }
+
+    /// Records an abort immediately and makes the guard idempotent on drop.
+    pub fn abort(&mut self) {
+        if !self.completed {
+            self.observer.record_client_abort(self.labels);
+            self.completed = true;
+        }
+    }
 }
 
 impl Drop for ClientAbortGuard {
     fn drop(&mut self) {
-        if !self.completed {
-            self.observer.record_client_abort(self.labels);
-        }
+        self.abort();
     }
 }
 
