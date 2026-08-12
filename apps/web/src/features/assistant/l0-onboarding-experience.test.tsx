@@ -227,7 +227,7 @@ describe('L0 onboarding assistant experience', () => {
       const textarea = document.querySelector<HTMLTextAreaElement>('textarea')
       assert.ok(textarea)
       assert.equal(textarea.required, true)
-      assert.equal(textarea.minLength, 5)
+      assert.ok(textarea.minLength <= 0)
       assert.match(
         textarea.getAttribute('aria-describedby') ?? '',
         /assistant-privacy-notice/

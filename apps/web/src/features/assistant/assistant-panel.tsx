@@ -26,7 +26,7 @@ import {
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useNavigate } from '@tanstack/react-router'
+import { Link } from '@tanstack/react-router'
 import { nanoid } from 'nanoid'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -570,7 +570,6 @@ export function AssistantPanel(props: {
   onToggleFullscreen?: () => void
 }) {
   const { t } = useTranslation()
-  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const mode = props.mode ?? 'mobile'
   const onConversationReset = props.onConversationReset
@@ -617,7 +616,6 @@ export function AssistantPanel(props: {
   const accountAccessConfirmed =
     accountAccessState === 'granted' || accountAccessState === 'restricted'
   const developerAccessGranted = accountAccessState === 'granted'
-  const previousDeveloperAccessRef = useRef(developerAccessGranted)
   const authUser = useAuthStore((state) => state.auth.user)
   const clearPrivacyNoticeTimer = useCallback(() => {
     if (privacyNoticeTimerRef.current === null) return
@@ -671,22 +669,6 @@ export function AssistantPanel(props: {
   })
   const accountToolActive = activeTool !== null
   const historyVisible = historyView !== null
-
-  useEffect(() => {
-    const wasGranted = previousDeveloperAccessRef.current
-    previousDeveloperAccessRef.current = developerAccessGranted
-    if (
-      wasGranted ||
-      !developerAccessGranted ||
-      activeTool !== 'activation' ||
-      !panelVisible
-    ) {
-      return
-    }
-
-    setActiveTool(null)
-    void navigate({ to: '/dashboard' })
-  }, [activeTool, developerAccessGranted, navigate, panelVisible])
 
   let assistantFooterStatus = t('Loading...')
   let assistantDescription = t('Loading...')
