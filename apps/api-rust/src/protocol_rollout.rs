@@ -7,14 +7,11 @@
 //! rollback telemetry without ever giving this API a way to repeat an
 //! upstream call.
 
-use std::{
-    collections::BTreeMap,
-    env,
-    error::Error,
-    fmt,
-};
+use std::{collections::BTreeMap, env, error::Error, fmt};
 
-use lmm_contracts::relay::{Feature as RelayFeature, LossCode, LossPolicy, Protocol, SyntheticField};
+use lmm_contracts::relay::{
+    Feature as RelayFeature, LossCode, LossPolicy, Protocol, SyntheticField,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -156,14 +153,16 @@ pub struct RolloutSelector {
 impl RolloutSelector {
     /// Returns whether this selector matches a request context.
     pub fn matches(&self, context: &RolloutContext<'_>) -> bool {
-        self.channel
-            .as_deref()
-            .is_none_or(|value| context.channel.is_some_and(|actual| value.eq_ignore_ascii_case(actual)))
-            && self.source.is_none_or(|value| value == context.source)
+        self.channel.as_deref().is_none_or(|value| {
+            context
+                .channel
+                .is_some_and(|actual| value.eq_ignore_ascii_case(actual))
+        }) && self.source.is_none_or(|value| value == context.source)
             && self.target.is_none_or(|value| value == context.target)
-            && self.model_family.as_deref().is_none_or(|value| {
-                value.eq_ignore_ascii_case(context.model_family)
-            })
+            && self
+                .model_family
+                .as_deref()
+                .is_none_or(|value| value.eq_ignore_ascii_case(context.model_family))
             && self.stream.is_none_or(|value| value == context.stream)
     }
 
@@ -271,9 +270,9 @@ impl ConverterPairOverride {
     /// Returns the effective canary value, defaulting explicit enablement to
     /// full allocation and explicit disablement to zero.
     pub fn effective_basis_points(&self) -> Result<u16, RolloutConfigError> {
-        let basis_points = self
-            .canary_basis_points
-            .unwrap_or(if self.enabled { MAX_BASIS_POINTS } else { 0 });
+        let basis_points =
+            self.canary_basis_points
+                .unwrap_or(if self.enabled { MAX_BASIS_POINTS } else { 0 });
         validate_basis_points(basis_points, "converter pair override")?;
         if !self.enabled && basis_points != 0 {
             return Err(RolloutConfigError::DisabledWithNonzeroCanary);
@@ -424,9 +423,7 @@ impl ProtocolRolloutConfig {
             .converter_pair_overrides
             .iter()
             .enumerate()
-            .filter(|(_, value)| {
-                value.flag == flag && value.selector().matches(context)
-            })
+            .filter(|(_, value)| value.flag == flag && value.selector().matches(context))
             .max_by_key(|(index, value)| (value.selector().specificity(), *index))
         {
             let Ok(basis_points) = pair_override.effective_basis_points() else {
@@ -606,10 +603,7 @@ pub fn parse_boolean(value: &str, name: &'static str) -> Result<bool, RolloutCon
 }
 
 /// Parses a bounded basis-point value.
-pub fn parse_basis_points(
-    value: &str,
-    name: &'static str,
-) -> Result<u16, RolloutConfigError> {
+pub fn parse_basis_points(value: &str, name: &'static str) -> Result<u16, RolloutConfigError> {
     let parsed = value
         .parse::<u16>()
         .map_err(|_| RolloutConfigError::InvalidBasisPoints { name })?;
@@ -633,9 +627,7 @@ fn parse_flag_env(
         Ok(value) => parse_boolean(&value, enabled_name)?,
         Err(env::VarError::NotPresent) => false,
         Err(env::VarError::NotUnicode(_)) => {
-            return Err(RolloutConfigError::InvalidBoolean {
-                name: enabled_name,
-            });
+            return Err(RolloutConfigError::InvalidBoolean { name: enabled_name });
         }
     };
     let basis_points = match env::var(basis_points_name) {
@@ -866,8 +858,14 @@ fn compare_local_results(
     old_result: Result<LocalConversionSummary, LocalConversionError>,
     new_result: Result<LocalConversionSummary, LocalConversionError>,
 ) -> ShadowRecord {
-    let old_converter_id = old_result.as_ref().ok().map(|value| value.converter_id.clone());
-    let new_converter_id = new_result.as_ref().ok().map(|value| value.converter_id.clone());
+    let old_converter_id = old_result
+        .as_ref()
+        .ok()
+        .map(|value| value.converter_id.clone());
+    let new_converter_id = new_result
+        .as_ref()
+        .ok()
+        .map(|value| value.converter_id.clone());
     let mut differences = Vec::new();
     match (&old_result, &new_result) {
         (Ok(old), Ok(new)) => {
@@ -915,12 +913,13 @@ pub struct ShadowAggregate {
 impl ShadowAggregate {
     /// Records one body-free comparison.
     pub fn record(&mut self, comparison: &ShadowRecord) {
-        self.total += 1;
+        self.total = self.total.saturating_add(1);
         if comparison.is_identical() {
-            self.identical += 1;
+            self.identical = self.identical.saturating_add(1);
         }
         for category in &comparison.differences {
-            *self.differences.entry(*category).or_default() += 1;
+            let count = self.differences.entry(*category).or_default();
+            *count = (*count).saturating_add(1);
         }
     }
 }
@@ -1016,14 +1015,16 @@ pub fn evaluate_rollback(signals: &RollbackSignals) -> RollbackDecision {
     }
 
     let mut invalid_metric = false;
-    let parse_exceeded = signals.parse_error_rate_percentage_points.is_some_and(|value| {
-        if !value.is_finite() || value < 0.0 {
-            invalid_metric = true;
-            false
-        } else {
-            value > PARSE_ERROR_RATE_PAUSE_PERCENTAGE_POINTS
-        }
-    });
+    let parse_exceeded = signals
+        .parse_error_rate_percentage_points
+        .is_some_and(|value| {
+            if !value.is_finite() || value < 0.0 {
+                invalid_metric = true;
+                false
+            } else {
+                value > PARSE_ERROR_RATE_PAUSE_PERCENTAGE_POINTS
+            }
+        });
     let ttft_exceeded = signals.ttft_p95_increase_percent.is_some_and(|value| {
         if !value.is_finite() || value < 0.0 {
             invalid_metric = true;
@@ -1164,8 +1165,16 @@ mod tests {
             .expect("valid");
         let internal = context("request-1").with_channel("internal");
         let public = context("request-1");
-        assert!(config.decide(RolloutFlag::ConversionEngineV2, &internal).enabled);
-        assert!(!config.decide(RolloutFlag::ConversionEngineV2, &public).enabled);
+        assert!(
+            config
+                .decide(RolloutFlag::ConversionEngineV2, &internal)
+                .enabled
+        );
+        assert!(
+            !config
+                .decide(RolloutFlag::ConversionEngineV2, &public)
+                .enabled
+        );
     }
 
     #[test]
@@ -1184,10 +1193,7 @@ mod tests {
                 canary_basis_points: None,
             })
             .expect("valid");
-        let decision = config.decide(
-            RolloutFlag::ConversionEngineV2,
-            &context("request-1"),
-        );
+        let decision = config.decide(RolloutFlag::ConversionEngineV2, &context("request-1"));
         assert!(!decision.enabled);
         assert!(matches!(
             decision.source,
@@ -1284,13 +1290,8 @@ mod tests {
                 synthetic: Vec::new(),
             })
         };
-        let runner = ShadowRunner::new(
-            old,
-            new,
-            Protocol::OpenAi,
-            Protocol::OpenAiResponses,
-            false,
-        );
+        let runner =
+            ShadowRunner::new(old, new, Protocol::OpenAi, Protocol::OpenAiResponses, false);
         let record = runner.compare(&LocalRequest::new(b"secret prompt"));
         assert_eq!(old_calls.load(Ordering::SeqCst), 1);
         assert_eq!(new_calls.load(Ordering::SeqCst), 1);
@@ -1323,7 +1324,11 @@ mod tests {
         assert!(record.differences.contains(&ShadowDifference::Plan));
         assert!(record.differences.contains(&ShadowDifference::Semantic));
         assert!(record.differences.contains(&ShadowDifference::LossLedger));
-        assert!(record.differences.contains(&ShadowDifference::SyntheticFields));
+        assert!(
+            record
+                .differences
+                .contains(&ShadowDifference::SyntheticFields)
+        );
     }
 
     #[test]
@@ -1375,9 +1380,11 @@ mod tests {
             ..RollbackSignals::default()
         });
         assert_eq!(decision.action, RollbackAction::Disable);
-        assert!(decision
-            .reasons
-            .contains(&RollbackReason::SseInterruptionRateElevated));
+        assert!(
+            decision
+                .reasons
+                .contains(&RollbackReason::SseInterruptionRateElevated)
+        );
     }
 
     #[test]
@@ -1387,9 +1394,11 @@ mod tests {
             ..RollbackSignals::default()
         });
         assert_eq!(decision.action, RollbackAction::Disable);
-        assert!(decision
-            .reasons
-            .contains(&RollbackReason::ToolSignature400RateIncreased));
+        assert!(
+            decision
+                .reasons
+                .contains(&RollbackReason::ToolSignature400RateIncreased)
+        );
     }
 
     #[test]

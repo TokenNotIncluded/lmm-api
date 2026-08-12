@@ -140,9 +140,11 @@ impl ConversionResult {
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MetricKind {
-    /// Total conversion time. Values are saturating nanoseconds.
+    /// Total conversion time. Snapshots store saturating nanoseconds; the
+    /// exporter view exposes seconds.
     ConversionDurationSeconds,
-    /// Time spent compiling a conversion plan. Values are saturating nanoseconds.
+    /// Time spent compiling a conversion plan. Snapshots store saturating
+    /// nanoseconds; the exporter view exposes seconds.
     ConversionPlanDurationSeconds,
     /// Number of conversion events.
     ConversionEventsTotal,
@@ -158,7 +160,8 @@ pub enum MetricKind {
     ConversionSyntheticFieldsTotal,
     /// Number of unknown events.
     ConversionUnknownEventsTotal,
-    /// Gateway-only first-event-to-first-write duration. Values are nanoseconds.
+    /// Gateway-only first-event-to-first-write duration. Snapshots store
+    /// nanoseconds; the exporter view exposes seconds.
     StreamGatewayTtftSeconds,
     /// Current number of active streams in the bounded queue.
     StreamQueueDepth,
@@ -263,11 +266,7 @@ impl MetricLabels {
 
     /// Returns the labels used by a raw same-protocol byte passthrough.
     #[must_use]
-    pub const fn native_raw(
-        protocol: Protocol,
-        stream: bool,
-        result: ConversionResult,
-    ) -> Self {
+    pub const fn native_raw(protocol: Protocol, stream: bool, result: ConversionResult) -> Self {
         Self::new(
             protocol,
             protocol,
@@ -439,11 +438,7 @@ impl ConversionObserver {
 
     /// Records conversion-plan compilation duration.
     pub fn record_plan_duration(&self, labels: MetricLabels, duration: Duration) {
-        self.record_duration(
-            MetricKind::ConversionPlanDurationSeconds,
-            labels,
-            duration,
-        );
+        self.record_duration(MetricKind::ConversionPlanDurationSeconds, labels, duration);
     }
 
     /// Records conversion events.
@@ -453,12 +448,20 @@ impl ConversionObserver {
 
     /// Records input bytes.
     pub fn record_input_bytes(&self, labels: MetricLabels, count: usize) {
-        self.record(MetricKind::ConversionInputBytes, labels, usize_to_u64(count));
+        self.record(
+            MetricKind::ConversionInputBytes,
+            labels,
+            usize_to_u64(count),
+        );
     }
 
     /// Records output bytes.
     pub fn record_output_bytes(&self, labels: MetricLabels, count: usize) {
-        self.record(MetricKind::ConversionOutputBytes, labels, usize_to_u64(count));
+        self.record(
+            MetricKind::ConversionOutputBytes,
+            labels,
+            usize_to_u64(count),
+        );
     }
 
     /// Records a failed conversion and fixes its result label to `failure`.
@@ -593,7 +596,8 @@ impl ConversionObserver {
 }
 
 /// Process-wide recorder used by route slices that do not receive a metrics
-/// state object. It remains bounded and exposes only [`RecorderSnapshot`].
+/// state object. It remains bounded and exposes [`RecorderSnapshot`] plus the
+/// unit-correct [`ExporterSnapshot`] view through [`ConversionObserver::export`].
 pub fn global_observer() -> &'static ConversionObserver {
     static OBSERVER: OnceLock<ConversionObserver> = OnceLock::new();
     OBSERVER.get_or_init(ConversionObserver::default)
@@ -818,15 +822,19 @@ mod tests {
     fn labels_are_closed_and_sensitive_text_cannot_be_serialized() {
         let serialized = serde_json::to_string(&labels()).unwrap_or_default();
         assert!(!serialized.contains("secret prompt"));
-        assert_eq!(MetricLabels::new(
-            Protocol::OpenAi,
-            Protocol::Gemini,
-            ConverterVersion::NativeRawV1,
-            u16::MAX,
-            false,
-            FeatureClass::Unknown,
-            ConversionResult::Success,
-        ).hop_count, MAX_HOP_COUNT);
+        assert_eq!(
+            MetricLabels::new(
+                Protocol::OpenAi,
+                Protocol::Gemini,
+                ConverterVersion::NativeRawV1,
+                u16::MAX,
+                false,
+                FeatureClass::Unknown,
+                ConversionResult::Success,
+            )
+            .hop_count,
+            MAX_HOP_COUNT
+        );
     }
 
     #[test]
@@ -859,7 +867,12 @@ mod tests {
             MetricKind::StreamClientAbortTotal,
         ];
         for metric in expected {
-            assert!(snapshot.samples.iter().any(|sample| sample.metric == metric));
+            assert!(
+                snapshot
+                    .samples
+                    .iter()
+                    .any(|sample| sample.metric == metric)
+            );
         }
     }
 
@@ -908,14 +921,18 @@ mod tests {
     fn queue_guard_increments_and_decrements_without_underflow() {
         let observer = ConversionObserver::default();
         let mut guard = observer.enter_queue(labels());
-        assert!(observer.snapshot().samples.iter().any(|sample| {
-            sample.metric == MetricKind::StreamQueueDepth && sample.value == 1
-        }));
+        assert!(
+            observer.snapshot().samples.iter().any(|sample| {
+                sample.metric == MetricKind::StreamQueueDepth && sample.value == 1
+            })
+        );
         guard.complete();
         drop(guard);
-        assert!(observer.snapshot().samples.iter().any(|sample| {
-            sample.metric == MetricKind::StreamQueueDepth && sample.value == 0
-        }));
+        assert!(
+            observer.snapshot().samples.iter().any(|sample| {
+                sample.metric == MetricKind::StreamQueueDepth && sample.value == 0
+            })
+        );
     }
 
     #[test]
@@ -948,9 +965,13 @@ mod tests {
         let mut guard = ClientAbortGuard::new(completed_observer.clone(), labels());
         guard.complete();
         drop(guard);
-        assert!(!completed_observer.snapshot().samples.iter().any(|sample| {
-            sample.metric == MetricKind::StreamClientAbortTotal
-        }));
+        assert!(
+            !completed_observer
+                .snapshot()
+                .samples
+                .iter()
+                .any(|sample| { sample.metric == MetricKind::StreamClientAbortTotal })
+        );
     }
 
     #[test]

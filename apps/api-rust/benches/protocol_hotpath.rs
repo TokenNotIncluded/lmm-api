@@ -9,13 +9,12 @@
 use std::{hint::black_box, time::Instant};
 
 use lmm_api_rs::{
-    migration_routes::sse::SseFrameParser,
-    protocol_runtime_registry::validated_current_registry,
+    migration_routes::sse::SseFrameParser, protocol_runtime_registry::validated_current_registry,
 };
 use lmm_contracts::relay::{
-    CanonicalStreamEvent, OpenAiChatRequest, OpenAiChatResponse, OpenAiStreamSnapshot,
-    openai_chat_request_to_canonical, openai_chat_response_to_canonical,
-    openai_stream_to_canonical,
+    CanonicalStreamEvent, ConversionPlan, Fidelity, OpenAiChatRequest, OpenAiChatResponse,
+    OpenAiStreamSnapshot, Protocol, openai_chat_request_to_canonical,
+    openai_chat_response_to_canonical, openai_stream_to_canonical,
 };
 
 const ITERATIONS: usize = 128;
@@ -46,8 +45,7 @@ const STREAM_CORPUS: &[u8] = br#"{
 
 const SSE_CORPUS: &[u8] = b"event: update\r\ndata: one\r\ndata: two\r\n\r\ndata: [DONE]\n\n";
 
-const NATIVE_PASSTHROUGH_CORPUS: &[u8] =
-    b"data: provider bytes stay opaque\n\ndata: [DONE]\n\n";
+const NATIVE_PASSTHROUGH_CORPUS: &[u8] = b"data: provider bytes stay opaque\n\ndata: [DONE]\n\n";
 
 fn report(label: &str, bytes: usize, elapsed_nanos: u128, checksum: u64) {
     let elapsed_nanos = elapsed_nanos.max(1);
@@ -77,14 +75,18 @@ fn request_conversion_hotpath_calibration() {
     for _ in 0..ITERATIONS {
         let request: OpenAiChatRequest =
             serde_json::from_slice(black_box(REQUEST_CORPUS)).expect("request corpus");
-        let converted = black_box(
-            openai_chat_request_to_canonical(request).expect("request conversion"),
-        );
+        let converted =
+            black_box(openai_chat_request_to_canonical(request).expect("request conversion"));
         checksum = checksum
             .wrapping_add(converted.value.model.len() as u64)
             .wrapping_add(converted.value.messages.len() as u64);
     }
-    report("request", REQUEST_CORPUS.len(), started.elapsed().as_nanos(), checksum);
+    report(
+        "request",
+        REQUEST_CORPUS.len(),
+        started.elapsed().as_nanos(),
+        checksum,
+    );
 }
 
 #[test]
@@ -95,9 +97,8 @@ fn response_conversion_hotpath_calibration() {
     for _ in 0..ITERATIONS {
         let response: OpenAiChatResponse =
             serde_json::from_slice(black_box(RESPONSE_CORPUS)).expect("response corpus");
-        let converted = black_box(
-            openai_chat_response_to_canonical(response).expect("response conversion"),
-        );
+        let converted =
+            black_box(openai_chat_response_to_canonical(response).expect("response conversion"));
         checksum = checksum
             .wrapping_add(converted.value.id.len() as u64)
             .wrapping_add(converted.value.output.len() as u64)
@@ -109,7 +110,12 @@ fn response_conversion_hotpath_calibration() {
                     .map_or(0, |usage| usage.total_tokens),
             );
     }
-    report("response", RESPONSE_CORPUS.len(), started.elapsed().as_nanos(), checksum);
+    report(
+        "response",
+        RESPONSE_CORPUS.len(),
+        started.elapsed().as_nanos(),
+        checksum,
+    );
 }
 
 #[test]
@@ -130,7 +136,12 @@ fn stream_conversion_hotpath_calibration() {
             _ => value.wrapping_add(1),
         });
     }
-    report("stream", STREAM_CORPUS.len(), started.elapsed().as_nanos(), checksum);
+    report(
+        "stream",
+        STREAM_CORPUS.len(),
+        started.elapsed().as_nanos(),
+        checksum,
+    );
 }
 
 #[test]
@@ -143,10 +154,20 @@ fn sse_frame_parser_hotpath_calibration() {
         let frames = black_box(parser.feed(SSE_CORPUS).expect("SSE corpus"));
         let tail = black_box(parser.finish().expect("SSE EOF"));
         checksum = checksum
-            .wrapping_add(frames.iter().map(|frame| frame.raw.len() as u64).sum::<u64>())
+            .wrapping_add(
+                frames
+                    .iter()
+                    .map(|frame| frame.raw.len() as u64)
+                    .sum::<u64>(),
+            )
             .wrapping_add(tail.iter().map(|frame| frame.raw.len() as u64).sum::<u64>());
     }
-    report("sse", SSE_CORPUS.len(), started.elapsed().as_nanos(), checksum);
+    report(
+        "sse",
+        SSE_CORPUS.len(),
+        started.elapsed().as_nanos(),
+        checksum,
+    );
 }
 
 #[test]
@@ -155,7 +176,10 @@ fn native_passthrough_hotpath_calibration() {
     let started = Instant::now();
     let mut checksum = 0_u64;
     for _ in 0..ITERATIONS {
+        // This is deliberately a slice observation, not an HTTP benchmark:
+        // the pointer assertion makes an accidental body copy visible.
         let bytes = black_box(NATIVE_PASSTHROUGH_CORPUS);
+        assert_eq!(bytes.as_ptr(), NATIVE_PASSTHROUGH_CORPUS.as_ptr());
         checksum = bytes.iter().fold(checksum, |value, byte| {
             value.wrapping_mul(257).wrapping_add(u64::from(*byte))
         });
@@ -172,12 +196,28 @@ fn native_passthrough_hotpath_calibration() {
 #[ignore = "run explicitly as an offline calibration benchmark"]
 fn plan_compile_hotpath_calibration() {
     let started = Instant::now();
+    let registry = validated_current_registry().expect("runtime registry");
     let mut checksum = 0_u64;
     for _ in 0..ITERATIONS {
-        let registry = black_box(validated_current_registry().expect("runtime registry"));
+        let plan = black_box(
+            ConversionPlan::compile_with_validated_registry(
+                Protocol::OpenAi,
+                Protocol::OpenAi,
+                "gpt-bench",
+                &registry,
+            )
+            .expect("raw conversion plan"),
+        );
+        let fidelity = match plan.fidelity {
+            Fidelity::Exact => 0,
+            Fidelity::Normalized => 1,
+            Fidelity::Lossy => 2,
+            Fidelity::Unsupported => 3,
+        };
         checksum = checksum
-            .wrapping_add(registry.support_matrix().routes.len() as u64)
-            .wrapping_add(registry.runtime_catalog_version().len() as u64);
+            .wrapping_add(fidelity)
+            .wrapping_add(plan.hop_count as u64)
+            .wrapping_add(plan.converter_ids.len() as u64);
     }
     report("plan_compile", 1, started.elapsed().as_nanos(), checksum);
 }
