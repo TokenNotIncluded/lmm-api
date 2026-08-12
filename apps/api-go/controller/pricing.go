@@ -134,25 +134,33 @@ func buildPricingView(
 	}
 }
 
-func GetPricing(c *gin.Context) {
+func buildPricingResponse(c *gin.Context, applyTrustDiscount bool) (int, gin.H) {
 	pricing := getPricingCache()
 	if pricing == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{
+		return http.StatusServiceUnavailable, gin.H{
 			"success": false,
 			"message": "pricing cache is not ready",
-		})
-		return
+		}
 	}
 	userId, exists := c.Get("id")
 	groupRatio := map[string]float64{}
+	var user *model.UserBase
 	for s, f := range ratio_setting.GetGroupRatioCopy() {
 		groupRatio[s] = f
 	}
 	var group string
 	if exists {
-		user, err := model.GetUserCache(userId.(int))
+		id, ok := userId.(int)
+		if !ok {
+			return http.StatusInternalServerError, gin.H{
+				"success": false,
+				"message": "pricing account context is invalid",
+			}
+		}
+		loadedUser, err := model.GetUserCache(id)
 		if err == nil {
-			group = user.Group
+			user = loadedUser
+			group = loadedUser.Group
 			for g := range groupRatio {
 				ratio, ok := ratio_setting.GetGroupGroupRatio(group, g)
 				if ok {
@@ -170,7 +178,7 @@ func GetPricing(c *gin.Context) {
 	}
 	view := buildPricingView(pricing, groupRatio, groupDescriptions, exists)
 
-	c.JSON(200, gin.H{
+	response := gin.H{
 		"success":            true,
 		"data":               view.pricing,
 		"vendors":            model.GetVendors(),
@@ -179,7 +187,30 @@ func GetPricing(c *gin.Context) {
 		"supported_endpoint": model.GetSupportedEndpointMap(),
 		"auto_groups":        service.GetUserAutoGroup(group),
 		"pricing_version":    "a42d372ccf0b5dd13ecf71203521f9d2",
-	})
+	}
+	if applyTrustDiscount && user != nil {
+		trust, err := model.GetTrustLevelInfoForUserBase(user)
+		if err != nil {
+			return http.StatusServiceUnavailable, gin.H{
+				"success": false,
+				"message": "trust-level pricing is temporarily unavailable",
+			}
+		}
+		adjustedRatios := make(map[string]float64, len(view.groupRatio))
+		for groupID, ratio := range view.groupRatio {
+			adjustedRatios[groupID] = ratio * trust.DiscountRatio
+		}
+		response["group_ratio"] = adjustedRatios
+		response["trust_level"] = trust.Level
+		response["trust_discount_ratio"] = trust.DiscountRatio
+		response["pricing_scope"] = "assistant_account"
+	}
+	return http.StatusOK, response
+}
+
+func GetPricing(c *gin.Context) {
+	status, response := buildPricingResponse(c, false)
+	c.JSON(status, response)
 }
 
 func ResetModelRatio(c *gin.Context) {

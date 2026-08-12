@@ -370,6 +370,26 @@ describe('AssistantPanel', () => {
         document.querySelector('[data-testid="assistant-collapse"]') !== null,
         true
       )
+
+      const fullscreenButton = document.querySelector<HTMLButtonElement>(
+        '[data-testid="assistant-fullscreen"]'
+      )
+      assert.ok(fullscreenButton)
+      await act(async () => {
+        fullscreenButton.click()
+        await flushEffects()
+      })
+      assert.ok(document.querySelector('[role="dialog"]'))
+      assert.ok(
+        document.querySelector('[aria-label="Exit full screen"]')
+      )
+      await act(async () => {
+        document
+          .querySelector<HTMLButtonElement>('[aria-label="Exit full screen"]')
+          ?.click()
+        await flushEffects()
+      })
+      assert.equal(document.querySelector('[role="dialog"]'), null)
     } finally {
       await act(async () => rendered.root.unmount())
       rendered.queryClient.clear()
@@ -616,6 +636,104 @@ describe('AssistantPanel', () => {
         /charged to the super administrator account, not your wallet/
       )
       assert.doesNotMatch(document.body.textContent ?? '', /Weekly included/)
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
+  test('gives administrators a confirmation-gated server change card', async () => {
+    let appliedRequest: unknown
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/assistant/status')
+      return {
+        data: {
+          success: true,
+          data: {
+            ...assistantStatus,
+            role: 10,
+            is_admin: true,
+            access_level: 'ADMIN',
+            capabilities: {
+              account: true,
+              admin_config: true,
+              admin_pricing: true,
+            },
+          },
+        },
+      }
+    }) as typeof api.get
+    api.post = (async (url: string, data: unknown) => {
+      if (url === '/api/assistant/chat') {
+        return {
+          data: {
+            choices: [{ message: { content: 'I prepared the exact preview.' } }],
+            lmm_assistant_action: {
+              type: 'admin_config_change',
+              confirmation_token: 'admin-secret-token',
+              requires_confirmation: true,
+              expires_in_seconds: 600,
+              changes: [
+                {
+                  key: 'DefaultCollapseSidebar',
+                  label: 'Collapse the main sidebar by default',
+                  old_value: 'false',
+                  new_value: 'true',
+                },
+              ],
+            },
+          },
+          headers: {},
+        }
+      }
+      assert.equal(url, '/api/assistant/admin/apply')
+      appliedRequest = data
+      return {
+        data: {
+          success: true,
+          data: { applied: true, kind: 'config' },
+        },
+      }
+    }) as typeof api.post
+
+    const rendered = await renderPanel()
+    try {
+      assert.match(document.body.textContent ?? '', /ADMIN · Administrator mode/)
+      const textarea = document.querySelector<HTMLTextAreaElement>(
+        'textarea[placeholder="Ask about server configuration, model pricing, or operations..."]'
+      )
+      assert.ok(textarea)
+      await setTextareaValue(textarea, 'Turn on the desktop sidebar default.')
+      await act(async () => {
+        document.querySelector<HTMLButtonElement>('button[aria-label="Submit"]')?.click()
+        await flushEffects()
+      })
+      await act(async () =>
+        waitForCondition(
+          () =>
+            document.body.textContent?.includes(
+              'Administrator configuration change'
+            ) === true,
+          'Administrator preview did not render'
+        )
+      )
+      assert.doesNotMatch(document.body.textContent ?? '', /admin-secret-token/)
+      await act(async () => {
+        findButton('Confirm and apply').click()
+        await flushEffects()
+      })
+      await act(async () =>
+        waitForCondition(
+          () =>
+            document.body.textContent?.includes('Administrator change applied') ===
+            true,
+          'Administrator change result did not render'
+        )
+      )
+      assert.deepEqual(appliedRequest, {
+        confirmation_token: 'admin-secret-token',
+        confirmed: true,
+      })
     } finally {
       await act(async () => rendered.root.unmount())
       rendered.queryClient.clear()

@@ -52,6 +52,20 @@ export type AssistantStatus = {
   model: string
   funding: AssistantFundingStatus
   developer_access_granted: boolean
+  access_level?: string
+  trust_level?: number
+  role?: number
+  is_admin?: boolean
+  is_root?: boolean
+  capabilities?: {
+    public_assistant?: boolean
+    account?: boolean
+    developer_tools?: boolean
+    personal_ip_allowlist?: boolean
+    usage_discount?: boolean
+    admin_config?: boolean
+    admin_pricing?: boolean
+  }
 }
 
 export type AssistantL1RecommendationAction = {
@@ -69,9 +83,43 @@ export type AssistantAccountDisableAction = {
   confirmation_token: string
 }
 
+export type AssistantAdminConfigPreview = {
+  key: string
+  label: string
+  old_value: string
+  new_value: string
+}
+
+export type AssistantAdminPricingPreview = {
+  model_id: string
+  old: Record<string, unknown>
+  next: Record<string, unknown>
+}
+
+export type AssistantAdminConfigChangeAction = {
+  type: 'admin_config_change'
+  confirmation_token: string
+  requires_confirmation: true
+  expires_in_seconds: number
+  changes: AssistantAdminConfigPreview[]
+}
+
+export type AssistantAdminPricingChangeAction = {
+  type: 'admin_pricing_change'
+  confirmation_token: string
+  requires_confirmation: true
+  expires_in_seconds: number
+  pricing: AssistantAdminPricingPreview
+}
+
+export type AssistantAdminChangeAction =
+  | AssistantAdminConfigChangeAction
+  | AssistantAdminPricingChangeAction
+
 export type AssistantAction =
   | AssistantL1RecommendationAction
   | AssistantAccountDisableAction
+  | AssistantAdminChangeAction
 
 export type AssistantCreatedKey = {
   id: number
@@ -112,7 +160,8 @@ export type AssistantConversationHistorySummary = {
   privacy_notice: string
 }
 
-export type AssistantConversationHistoryItem = AssistantConversationHistorySummary
+export type AssistantConversationHistoryItem =
+  AssistantConversationHistorySummary
 
 export type AssistantConversationHistory = {
   conversations: AssistantConversationHistorySummary[]
@@ -254,6 +303,84 @@ export function parseAssistantAction(
   if (!confirmationToken) return undefined
 
   if (
+    action.type === 'admin_config_change' &&
+    action.requires_confirmation === true &&
+    typeof action.expires_in_seconds === 'number' &&
+    Number.isInteger(action.expires_in_seconds) &&
+    action.expires_in_seconds > 0 &&
+    Array.isArray(action.changes)
+  ) {
+    const changes = action.changes
+      .map((item) => {
+        if (!item || typeof item !== 'object') return null
+        const change = item as Record<string, unknown>
+        if (
+          typeof change.key !== 'string' ||
+          typeof change.label !== 'string' ||
+          typeof change.old_value !== 'string' ||
+          typeof change.new_value !== 'string'
+        ) {
+          return null
+        }
+        const key = change.key.trim()
+        const label = change.label.trim()
+        if (!key || !label) return null
+        return {
+          key,
+          label,
+          old_value: change.old_value,
+          new_value: change.new_value,
+        }
+      })
+      .filter(
+        (change): change is AssistantAdminConfigPreview => change !== null
+      )
+    if (changes.length === action.changes.length && changes.length > 0) {
+      return {
+        type: 'admin_config_change',
+        confirmation_token: confirmationToken,
+        requires_confirmation: true,
+        expires_in_seconds: action.expires_in_seconds,
+        changes,
+      }
+    }
+  }
+
+  if (
+    action.type === 'admin_pricing_change' &&
+    action.requires_confirmation === true &&
+    typeof action.expires_in_seconds === 'number' &&
+    Number.isInteger(action.expires_in_seconds) &&
+    action.expires_in_seconds > 0 &&
+    action.pricing &&
+    typeof action.pricing === 'object'
+  ) {
+    const pricing = action.pricing as Record<string, unknown>
+    if (
+      typeof pricing.model_id === 'string' &&
+      pricing.old &&
+      typeof pricing.old === 'object' &&
+      pricing.next &&
+      typeof pricing.next === 'object'
+    ) {
+      const modelId = pricing.model_id.trim()
+      if (modelId) {
+        return {
+          type: 'admin_pricing_change',
+          confirmation_token: confirmationToken,
+          requires_confirmation: true,
+          expires_in_seconds: action.expires_in_seconds,
+          pricing: {
+            model_id: modelId,
+            old: pricing.old as Record<string, unknown>,
+            next: pricing.next as Record<string, unknown>,
+          },
+        }
+      }
+    }
+  }
+
+  if (
     action.type === 'l1_recommendation' &&
     typeof action.user_statement === 'string' &&
     typeof action.recommendation === 'string'
@@ -363,6 +490,22 @@ export async function submitAssistantAccountDisableRequest(input: {
   return requireAssistantData(
     response.data,
     'Unable to submit the account safety request'
+  )
+}
+
+export async function submitAssistantAdminChange(
+  confirmationToken: string
+): Promise<{ applied: boolean; kind: string }> {
+  const response = await api.post<
+    AssistantAPIResponse<{ applied: boolean; kind: string }>
+  >(
+    '/api/assistant/admin/apply',
+    { confirmation_token: confirmationToken, confirmed: true },
+    { skipBusinessError: true, skipErrorHandler: true }
+  )
+  return requireAssistantData(
+    response.data,
+    'Unable to apply the administrator change'
   )
 }
 

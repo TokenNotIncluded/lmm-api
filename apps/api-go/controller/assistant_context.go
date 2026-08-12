@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 )
 
@@ -40,6 +41,7 @@ type assistantUserContext struct {
 	AccountAgeDays           int                      `json:"account_age_days,omitempty"`
 	AuthProviders            []string                 `json:"auth_providers,omitempty"`
 	AccessLevel              string                   `json:"access_level"`
+	AdministratorMode        bool                     `json:"administrator_mode"`
 	DeveloperAccessGranted   bool                     `json:"developer_access_granted"`
 	AccessReviewStatus       string                   `json:"access_review_status,omitempty"`
 	PaymentMethodsHidden     bool                     `json:"payment_methods_hidden"`
@@ -72,6 +74,7 @@ func assistantUserContextForRequest(userID int, message string) assistantUserCon
 	}
 
 	context.Username = strings.TrimSpace(user.Username)
+	context.AdministratorMode = user.Role >= common.RoleAdminUser
 	context.Email, context.EmailDomain = maskAssistantEmail(user.Email)
 	context.EmailCategory = classifyAssistantEmail(user.Email)
 	if user.CreatedAt > 0 {
@@ -117,6 +120,12 @@ func assistantUserContextForRequest(userID int, message string) assistantUserCon
 }
 
 func trustLevelLabel(level int) string {
+	if level >= model.TrustLevelRoot {
+		return "ROOT"
+	}
+	if level >= model.TrustLevelAdmin {
+		return "ADMIN"
+	}
 	if level < model.TrustLevelMinUser {
 		level = model.TrustLevelMinUser
 	}

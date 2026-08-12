@@ -270,6 +270,14 @@ func UpdateOption(key string, value string) error {
 	return updateOptionMap(key, value)
 }
 
+// ValidateOptionValue exposes the same validation used by UpdateOption without
+// persisting or mutating the in-memory option map.  Assistant admin previews
+// use this to reject an invalid change before issuing a one-time confirmation
+// flow.
+func ValidateOptionValue(key, value string) error {
+	return validateOptionValue(key, value)
+}
+
 // UpdateOptionsBulk persists multiple key/value pairs in a single database
 // transaction, then dispatches them through updateOptionMap in one pass. If
 // any DB write fails the whole transaction rolls back and no in-memory state

@@ -216,6 +216,108 @@ func assistantToolDefinitions() []assistantOpenAIToolDefinition {
 				}, []string{"message"}),
 			},
 		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
+				Name:        "get_admin_server_config",
+				Description: "For an administrator only, read the current non-secret server configuration that the assistant can safely manage. Credentials, provider keys, payment secrets, session secrets, and arbitrary shell or database access are always omitted.",
+				Parameters:  emptyObjectSchema(),
+			},
+		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
+				Name:        "prepare_admin_config_change",
+				Description: "For an administrator only, prepare an exact preview of one or more allowlisted non-secret server settings. This never applies a change; the administrator must confirm the preview in the UI.",
+				Parameters: objectSchema(map[string]any{
+					"changes": map[string]any{
+						"type":                 "object",
+						"additionalProperties": true,
+					},
+				}, []string{"changes"}),
+			},
+		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
+				Name:        "get_admin_channels",
+				Description: "For an administrator only, list channel routing metadata and manual status. Channel keys, provider credentials, headers, proxies, upstream URLs, balances, and private settings are always omitted.",
+				Parameters:  emptyObjectSchema(),
+			},
+		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
+				Name:        "prepare_admin_channel_change",
+				Description: "For an administrator only, prepare an exact preview for safe channel routing metadata or enable/disable status. This never applies a change; the administrator must confirm the preview in the UI. Never request keys, provider settings, headers, proxies, or upstream URLs through this tool.",
+				Parameters: objectSchema(map[string]any{
+					"channel_id": map[string]any{"type": "integer", "minimum": 1},
+					"changes": map[string]any{
+						"type":                 "object",
+						"additionalProperties": true,
+					},
+				}, []string{"channel_id", "changes"}),
+			},
+		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
+				Name:        "prepare_admin_pricing_change",
+				Description: "For an administrator only, prepare an exact preview for one enabled model's pricing. Use ratio for token pricing or fixed_request for a per-request price; optional completion, cache, image, and audio ratios update the same exact model. This never applies a change; the administrator must confirm the preview in the UI.",
+				Parameters: objectSchema(map[string]any{
+					"model_id":               map[string]any{"type": "string", "minLength": 1, "maxLength": 200},
+					"mode":                   map[string]any{"type": "string", "enum": []string{"ratio", "fixed_request"}},
+					"value":                  map[string]any{"type": "number", "minimum": 0, "maximum": 1000000},
+					"completion_ratio":       map[string]any{"type": "number", "minimum": 0, "maximum": 1000000},
+					"cache_ratio":            map[string]any{"type": "number", "minimum": 0, "maximum": 1000000},
+					"create_cache_ratio":     map[string]any{"type": "number", "minimum": 0, "maximum": 1000000},
+					"image_ratio":            map[string]any{"type": "number", "minimum": 0, "maximum": 1000000},
+					"audio_ratio":            map[string]any{"type": "number", "minimum": 0, "maximum": 1000000},
+					"audio_completion_ratio": map[string]any{"type": "number", "minimum": 0, "maximum": 1000000},
+				}, []string{"model_id", "mode", "value"}),
+			},
+		},
+	}
+}
+
+// assistantToolDefinitionsForContext keeps the model's tool catalogue aligned
+// with the signed-in account.  Execution still performs the same checks as a
+// second line of defence, but an L0 model should not be invited to speculate
+// about administrator tools or account-specific pricing in the first place.
+func assistantToolDefinitionsForContext(userContext assistantUserContext) []assistantOpenAIToolDefinition {
+	all := assistantToolDefinitions()
+	definitions := make([]assistantOpenAIToolDefinition, 0, len(all))
+	for _, definition := range all {
+		if assistantToolAllowedForContext(definition.Function.Name, userContext) {
+			definitions = append(definitions, definition)
+		}
+	}
+	return definitions
+}
+
+func assistantToolAllowedForContext(name string, userContext assistantUserContext) bool {
+	if userContext.AdministratorMode {
+		return true
+	}
+	if userContext.DeveloperAccessGranted {
+		return name != "get_admin_server_config" &&
+			name != "prepare_admin_config_change" &&
+			name != "get_admin_channels" &&
+			name != "prepare_admin_channel_change" &&
+			name != "prepare_admin_pricing_change"
+	}
+	switch name {
+	case "get_service_facts",
+		"calculate_cost",
+		"get_account_access",
+		"get_bounty_guide",
+		"search_web",
+		"get_setup_guide",
+		"prepare_l1_recommendation",
+		"request_human_support":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -388,7 +490,7 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 		// Reserve the last turn for a final natural-language answer. This
 		// makes MaxSteps a hard bound while ensuring a tool call can finish.
 		if settings.AgentLoopEnabled && step < maxSteps-1 {
-			request.Tools = assistantToolDefinitions()
+			request.Tools = assistantToolDefinitionsForContext(assistantUserContextFromGin(c))
 			request.ToolChoice = "auto"
 		}
 
@@ -514,6 +616,25 @@ func assistantActorUserID(c *gin.Context) int {
 	return c.GetInt("id")
 }
 
+func assistantDeveloperCapabilityRequired(userID int, capability string) (map[string]any, bool) {
+	if userID <= 0 {
+		return map[string]any{"ok": false, "status": "l1_required", "error": "L1 access is required for " + capability}, true
+	}
+	_, granted, err := getAssistantDeveloperAccess(userID)
+	if err != nil {
+		return map[string]any{"ok": false, "error": "account access could not be loaded"}, true
+	}
+	if !granted {
+		return map[string]any{
+			"ok":        false,
+			"status":    "l1_required",
+			"error":     "L1 access is required for " + capability,
+			"next_step": "Ask the user to continue the L1 onboarding conversation and submit an administrator recommendation.",
+		}, true
+	}
+	return nil, false
+}
+
 func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[string]any {
 	actorUserID := assistantActorUserID(c)
 	name := strings.TrimSpace(call.Function.Name)
@@ -553,16 +674,31 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 	case "get_account_access":
 		return executeAssistantAccountTool(actorUserID)
 	case "get_available_models":
+		if result, blocked := assistantDeveloperCapabilityRequired(actorUserID, "model availability"); blocked {
+			return result
+		}
 		return executeAssistantModelsTool(actorUserID)
 	case "get_model_pricing":
+		if result, blocked := assistantDeveloperCapabilityRequired(actorUserID, "model pricing"); blocked {
+			return result
+		}
 		return executeAssistantModelPricingTool(actorUserID, input)
 	case "get_plan_offers":
+		if result, blocked := assistantDeveloperCapabilityRequired(actorUserID, "plan offers"); blocked {
+			return result
+		}
 		return executeAssistantPlanOffersTool(actorUserID)
 	case "get_invitation_rewards":
+		if result, blocked := assistantDeveloperCapabilityRequired(actorUserID, "invitation rewards"); blocked {
+			return result
+		}
 		return executeAssistantInvitationTool(actorUserID)
 	case "get_bounty_guide":
 		return executeAssistantBountyTool()
 	case "get_usage_summary":
+		if result, blocked := assistantDeveloperCapabilityRequired(actorUserID, "usage statistics"); blocked {
+			return result
+		}
 		return executeAssistantUsageTool(actorUserID, input)
 	case "search_web":
 		return executeAssistantSearchTool(c, input)
@@ -596,6 +732,16 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 			"message":       "Ask the user to confirm sending this message to an administrator.",
 			"draft_message": message,
 		}
+	case "get_admin_server_config":
+		return executeAssistantAdminConfigTool(c, actorUserID)
+	case "prepare_admin_config_change":
+		return executeAssistantAdminConfigChangeTool(c, actorUserID, input)
+	case "get_admin_channels":
+		return executeAssistantAdminChannelsTool(actorUserID)
+	case "prepare_admin_channel_change":
+		return executeAssistantAdminChannelChangeTool(c, actorUserID, input)
+	case "prepare_admin_pricing_change":
+		return executeAssistantAdminPricingChangeTool(c, actorUserID, input)
 	default:
 		return map[string]any{"ok": false, "error": "unknown assistant tool"}
 	}
@@ -771,6 +917,48 @@ func executeAssistantModelsTool(userID int) map[string]any {
 	if err != nil {
 		return map[string]any{"ok": false, "error": "available models could not be loaded"}
 	}
+	access, err := model.GetDeveloperAccessStateForUserBase(user)
+	if err != nil {
+		return map[string]any{"ok": false, "error": "developer access could not be loaded"}
+	}
+	if !access.Granted {
+		return map[string]any{
+			"ok":        false,
+			"status":    "l1_required",
+			"error":     "L1 access is required to view model availability",
+			"next_step": "Ask the user to continue the L1 onboarding conversation and submit an administrator recommendation.",
+		}
+	}
+	if user.Role >= common.RoleAdminUser {
+		pricing := getPricingCache()
+		modelSet := make(map[string]struct{}, len(pricing))
+		for _, candidate := range pricing {
+			if strings.TrimSpace(candidate.ModelName) != "" {
+				modelSet[candidate.ModelName] = struct{}{}
+			}
+		}
+		models := make([]string, 0, len(modelSet))
+		for modelID := range modelSet {
+			models = append(models, modelID)
+		}
+		sort.Strings(models)
+		groups := assistantAdminConfiguredGroups()
+		groupNames := make([]string, 0, len(groups))
+		for group := range groups {
+			groupNames = append(groupNames, group)
+		}
+		sort.Strings(groupNames)
+		return map[string]any{
+			"ok":                         true,
+			"groups":                     groupNames,
+			"model_ids":                  models,
+			"model_list_path":            "/models",
+			"selection_required":         true,
+			"assistant_model_is_client":  false,
+			"administrator_scope":        "all_enabled_models_and_configured_groups",
+			"sensitive_settings_omitted": true,
+		}
+	}
 	groups := service.GetUserUsableGroups(user.Group)
 	groupNames := make([]string, 0, len(groups))
 	for group := range groups {
@@ -806,7 +994,23 @@ func executeAssistantModelPricingTool(userID int, input map[string]any) map[stri
 	if err != nil {
 		return map[string]any{"ok": false, "error": "account pricing access could not be loaded"}
 	}
+	isAdministrator := user.Role >= common.RoleAdminUser
+	access, err := model.GetDeveloperAccessStateForUserBase(user)
+	if err != nil {
+		return map[string]any{"ok": false, "error": "developer access could not be loaded"}
+	}
+	if !access.Granted {
+		return map[string]any{
+			"ok":        false,
+			"status":    "l1_required",
+			"error":     "L1 access is required to view model pricing",
+			"next_step": "Ask the user to continue the L1 onboarding conversation and submit an administrator recommendation.",
+		}
+	}
 	usableGroups := service.GetUserUsableGroups(user.Group)
+	if isAdministrator {
+		usableGroups = assistantAdminConfiguredGroups()
+	}
 	requestedGroup := inputString(input, "group")
 	if requestedGroup != "" {
 		if _, ok := usableGroups[requestedGroup]; !ok {
@@ -850,20 +1054,27 @@ func executeAssistantModelPricingTool(userID int, input map[string]any) map[stri
 		groupIDs = append(groupIDs, groupID)
 	}
 	sort.Strings(groupIDs)
+	trust, err := model.GetTrustLevelInfoForUserBase(user)
+	if err != nil {
+		return map[string]any{"ok": false, "error": "trust-level pricing could not be loaded"}
+	}
 	configuredRatios := ratio_setting.GetGroupRatioCopy()
 	prices := make([]map[string]any, 0, len(groupIDs))
 	for _, groupID := range groupIDs {
-		groupRatio, configured := configuredRatios[groupID]
+		baseGroupRatio, configured := configuredRatios[groupID]
 		if !configured {
-			groupRatio = 1
+			baseGroupRatio = 1
 		}
 		if override, ok := ratio_setting.GetGroupGroupRatio(user.Group, groupID); ok {
-			groupRatio = override
+			baseGroupRatio = override
 		}
+		groupRatio := baseGroupRatio * trust.DiscountRatio
 		entry := map[string]any{
-			"group":             groupID,
-			"group_description": usableGroups[groupID],
-			"group_ratio":       groupRatio,
+			"group":                groupID,
+			"group_description":    usableGroups[groupID],
+			"base_group_ratio":     baseGroupRatio,
+			"trust_discount_ratio": trust.DiscountRatio,
+			"group_ratio":          groupRatio,
 		}
 		if selected.QuotaType == 0 && selected.BillingMode != "tiered_expr" {
 			inputRate := selected.ModelRatio * 2 * groupRatio
@@ -887,12 +1098,15 @@ func executeAssistantModelPricingTool(userID int, input map[string]any) map[stri
 	return map[string]any{
 		"ok":                       true,
 		"model_id":                 selected.ModelName,
+		"trust_level":              trust.Level,
+		"trust_discount_ratio":     trust.DiscountRatio,
 		"quota_type":               selected.QuotaType,
 		"billing_mode":             selected.BillingMode,
 		"billing_expression":       selected.BillingExpr,
 		"prices":                   prices,
 		"supported_endpoint_types": selected.SupportedEndpointTypes,
-		"calculation_instruction":  "The returned USD prices already include the group ratio. Pass group_ratio=1 to calculate_cost so the ratio is not applied twice.",
+		"administrator_scope":      isAdministrator,
+		"calculation_instruction":  "The returned USD prices already include the routing-group ratio and the live trust-level discount. Pass group_ratio=1 to calculate_cost so neither multiplier is applied twice.",
 	}
 }
 
@@ -958,6 +1172,9 @@ func executeAssistantPlanOffersTool(userID int) map[string]any {
 }
 
 func executeAssistantInvitationTool(userID int) map[string]any {
+	if result, blocked := assistantDeveloperCapabilityRequired(userID, "invitation rewards"); blocked {
+		return result
+	}
 	if userID <= 0 {
 		return map[string]any{"ok": false, "error": "signed-in account is unavailable"}
 	}
@@ -1006,6 +1223,9 @@ func executeAssistantBountyTool() map[string]any {
 }
 
 func executeAssistantUsageTool(userID int, input map[string]any) map[string]any {
+	if result, blocked := assistantDeveloperCapabilityRequired(userID, "usage statistics"); blocked {
+		return result
+	}
 	days := 30
 	if value, exists := inputNumber(input, "days"); exists {
 		days = int(value)

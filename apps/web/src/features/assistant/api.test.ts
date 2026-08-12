@@ -80,6 +80,73 @@ describe('assistant response parsing', () => {
     )
     assert.equal(parseAssistantAction({ type: 'open_wallet' }), undefined)
   })
+
+  test('accepts exact administrator previews and keeps the confirmation token', () => {
+    assert.deepEqual(
+      parseAssistantAction({
+        type: 'admin_config_change',
+        confirmation_token: ' admin-token ',
+        requires_confirmation: true,
+        expires_in_seconds: 600,
+        changes: [
+          {
+            key: 'AssistantModel',
+            label: 'Default assistant model ID',
+            old_value: 'old-model',
+            new_value: 'new-model',
+          },
+        ],
+      }),
+      {
+        type: 'admin_config_change',
+        confirmation_token: 'admin-token',
+        requires_confirmation: true,
+        expires_in_seconds: 600,
+        changes: [
+          {
+            key: 'AssistantModel',
+            label: 'Default assistant model ID',
+            old_value: 'old-model',
+            new_value: 'new-model',
+          },
+        ],
+      }
+    )
+    assert.equal(
+      parseAssistantAction({
+        type: 'admin_config_change',
+        confirmation_token: 'admin-token',
+        requires_confirmation: true,
+        expires_in_seconds: 600,
+        changes: [{ key: 'AssistantModel' }],
+      }),
+      undefined
+    )
+    assert.deepEqual(
+      parseAssistantAction({
+        type: 'admin_pricing_change',
+        confirmation_token: ' pricing-token ',
+        requires_confirmation: true,
+        expires_in_seconds: 600,
+        pricing: {
+          model_id: 'deepseek-v4-flash',
+          old: { mode: 'ratio', value: 1 },
+          next: { mode: 'ratio', value: 0.8 },
+        },
+      }),
+      {
+        type: 'admin_pricing_change',
+        confirmation_token: 'pricing-token',
+        requires_confirmation: true,
+        expires_in_seconds: 600,
+        pricing: {
+          model_id: 'deepseek-v4-flash',
+          old: { mode: 'ratio', value: 1 },
+          next: { mode: 'ratio', value: 0.8 },
+        },
+      }
+    )
+  })
 })
 
 describe('assistant conversation context', () => {
