@@ -638,6 +638,36 @@ fn classify_unknown_event(event_name: Option<&str>) -> UnknownEventClass {
         return UnknownEventClass::Content;
     };
     let name = event_name.to_ascii_lowercase();
+    // A termination signal must win over a metadata-looking prefix or
+    // suffix.  Continuing after an event such as `metadata.complete` can
+    // silently lose the stream's final state, which is more dangerous than
+    // conservatively entering degraded handling.
+    let mut parts = name.split(|character: char| !character.is_ascii_alphanumeric());
+    if parts.clone().any(|part| {
+        matches!(
+            part,
+            "error"
+                | "errors"
+                | "done"
+                | "finish"
+                | "finished"
+                | "complete"
+                | "completed"
+                | "completion"
+                | "terminate"
+                | "terminated"
+                | "close"
+                | "closed"
+                | "stop"
+                | "stopped"
+                | "halt"
+                | "halted"
+                | "end"
+                | "ended"
+        )
+    }) {
+        return UnknownEventClass::Termination;
+    }
     if matches!(
         name.as_str(),
         "ping"
@@ -649,20 +679,13 @@ fn classify_unknown_event(event_name: Option<&str>) -> UnknownEventClass {
             | "usage"
             | "trace"
             | "debug"
-    ) || name.ends_with("_metadata")
-        || name.starts_with("metadata_")
-    {
+    ) || parts.any(|part| {
+        matches!(
+            part,
+            "ping" | "keepalive" | "heartbeat" | "metadata" | "usage" | "trace" | "debug"
+        )
+    }) {
         return UnknownEventClass::Metadata;
-    }
-    if name.contains("error")
-        || name.contains("done")
-        || name.contains("finish")
-        || name.contains("complete")
-        || name.contains("terminate")
-        || name.contains("close")
-        || name.ends_with("_stop")
-    {
-        return UnknownEventClass::Termination;
     }
     UnknownEventClass::Content
 }
@@ -977,6 +1000,39 @@ mod tests {
         let decision = unknown_event_decision(false, Some("future_content"));
         assert_eq!(decision.class, UnknownEventClass::Content);
         assert_eq!(decision.action, UnknownEventAction::DegradedOrError);
+    }
+
+    #[test]
+    fn cross_protocol_punctuation_delimited_metadata_events_record_loss() {
+        for event_name in ["response.metadata", "response-usage", "metadata.update"] {
+            let decision = unknown_event_decision(false, Some(event_name));
+            assert_eq!(decision.class, UnknownEventClass::Metadata, "{event_name}");
+            assert_eq!(
+                decision.action,
+                UnknownEventAction::RecordLossAndContinue,
+                "{event_name}"
+            );
+        }
+    }
+
+    #[test]
+    fn cross_protocol_termination_takes_precedence_over_metadata_name() {
+        let decision = unknown_event_decision(false, Some("metadata.complete"));
+        assert_eq!(decision.class, UnknownEventClass::Termination);
+        assert_eq!(decision.action, UnknownEventAction::DegradedOrError);
+    }
+
+    #[test]
+    fn unknown_event_words_are_matched_as_tokens_not_substrings() {
+        for event_name in ["abandoned_content", "keepsake_content", "keep_content"] {
+            let decision = unknown_event_decision(false, Some(event_name));
+            assert_eq!(decision.class, UnknownEventClass::Content, "{event_name}");
+            assert_eq!(
+                decision.action,
+                UnknownEventAction::DegradedOrError,
+                "{event_name}"
+            );
+        }
     }
 
     #[test]

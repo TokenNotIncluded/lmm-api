@@ -8,8 +8,10 @@
 
 use std::{collections::BTreeSet, error::Error, fmt};
 
-use lmm_contracts::relay::Protocol;
+use lmm_contracts::relay::{Fidelity, Protocol, ValidatedRegistry};
 use serde::{Deserialize, Serialize};
+
+use crate::protocol_rollout::ShadowRecord;
 
 /// Maximum canary allocation represented in basis points.
 pub const MAX_CANARY_BASIS_POINTS: u16 = 10_000;
@@ -74,6 +76,16 @@ pub enum OwnershipBlocker {
     RolloutNotApproved,
     /// Evidence contains a canary value outside the closed range.
     InvalidCanary,
+    /// An emergency rollback configuration is active.
+    RollbackActive,
+    /// The route is absent from the validated capability matrix.
+    RouteUnavailable,
+    /// The route does not claim all directions required by this scope.
+    RouteDirectionUnsupported,
+    /// The route quality is explicitly unsupported.
+    RouteQualityUnsupported,
+    /// The model family is excluded by the route constraint.
+    ModelConstraintMismatch,
 }
 
 /// Evidence collected for one specific source/target route.
@@ -84,6 +96,7 @@ pub struct OwnershipEvidence {
     shadow_identical: bool,
     canary_basis_points: u16,
     rollout_approved: bool,
+    rollback_active: bool,
 }
 
 impl OwnershipEvidence {
@@ -96,6 +109,7 @@ impl OwnershipEvidence {
             shadow_identical: false,
             canary_basis_points: 0,
             rollout_approved: false,
+            rollback_active: false,
         }
     }
 
@@ -119,6 +133,22 @@ impl OwnershipEvidence {
     /// Records whether body-free old/new shadow summaries were identical.
     pub fn set_shadow_identical(&mut self, identical: bool) {
         self.shadow_identical = identical;
+    }
+
+    /// Records a body-free local shadow result for this exact route.
+    ///
+    /// Both converters must succeed for the same source/target/stream scope.
+    /// Scope mismatches and matching failures therefore fail closed instead of
+    /// trusting an empty difference list as positive evidence.
+    pub fn record_shadow(&mut self, shadow: &ShadowRecord) {
+        self.set_shadow_identical(
+            shadow.source == self.scope.source
+                && shadow.target == self.scope.target
+                && shadow.stream == self.scope.stream
+                && shadow.old_converter_id.is_some()
+                && shadow.new_converter_id.is_some()
+                && shadow.is_identical(),
+        );
     }
 
     /// Records a bounded canary allocation.
@@ -154,6 +184,17 @@ impl OwnershipEvidence {
     #[must_use]
     pub const fn rollout_approved(&self) -> bool {
         self.rollout_approved
+    }
+
+    /// Records that a configuration rollback is active for this route.
+    pub fn set_rollback_active(&mut self, active: bool) {
+        self.rollback_active = active;
+    }
+
+    /// Returns whether a rollback configuration is active.
+    #[must_use]
+    pub const fn rollback_active(&self) -> bool {
+        self.rollback_active
     }
 }
 
@@ -191,6 +232,9 @@ impl OwnershipGate {
         if evidence.canary_basis_points > MAX_CANARY_BASIS_POINTS {
             blockers.push(OwnershipBlocker::InvalidCanary);
         }
+        if evidence.rollback_active {
+            blockers.push(OwnershipBlocker::RollbackActive);
+        }
         if DifferentialClass::all()
             .iter()
             .any(|class| !evidence.green.contains(class))
@@ -216,6 +260,65 @@ impl OwnershipGate {
                 blockers,
             }
         }
+    }
+
+    /// Evaluates evidence plus the validated registry/model capability.
+    ///
+    /// This screens evidence before an ownership review; it does not itself
+    /// authorize mounting or selecting a business route. A complete
+    /// differential and canary proof cannot qualify a route that the registry
+    /// marks unsupported, that lacks a required request/response/stream
+    /// direction, or that excludes the requested model family.
+    #[must_use]
+    pub fn evaluate_with_registry(
+        &self,
+        evidence: &OwnershipEvidence,
+        registry: &ValidatedRegistry,
+        model_family: &str,
+    ) -> OwnershipDecision {
+        let mut blockers = match self.evaluate(evidence) {
+            OwnershipDecision::ClosedByDefault { blockers, .. } => blockers,
+            OwnershipDecision::EligibleForOwnershipReview { .. } => Vec::new(),
+        };
+        let scope = evidence.scope;
+        let Some(route) = registry.route(scope.source, scope.target) else {
+            blockers.push(OwnershipBlocker::RouteUnavailable);
+            return OwnershipDecision::ClosedByDefault { scope, blockers };
+        };
+        if !route.matches_model_family(model_family) {
+            blockers.push(OwnershipBlocker::ModelConstraintMismatch);
+        }
+        if route.quality == Fidelity::Unsupported {
+            blockers.push(OwnershipBlocker::RouteQualityUnsupported);
+        }
+        if !route.request_supported
+            || !route.response_supported
+            || (scope.stream && !route.stream_supported)
+        {
+            blockers.push(OwnershipBlocker::RouteDirectionUnsupported);
+        }
+        if blockers.is_empty() {
+            OwnershipDecision::EligibleForOwnershipReview { scope }
+        } else {
+            OwnershipDecision::ClosedByDefault { scope, blockers }
+        }
+    }
+
+    /// Returns whether the route is eligible to be reviewed for ownership.
+    ///
+    /// The method is deliberately side-effect free: it does not alter a
+    /// router, process configuration, or production ownership state.
+    #[must_use]
+    pub fn route_is_eligible_for_review(
+        &self,
+        evidence: &OwnershipEvidence,
+        registry: &ValidatedRegistry,
+        model_family: &str,
+    ) -> bool {
+        matches!(
+            self.evaluate_with_registry(evidence, registry, model_family),
+            OwnershipDecision::EligibleForOwnershipReview { .. }
+        )
     }
 }
 
@@ -312,5 +415,77 @@ mod tests {
             evidence.canary_basis_points(),
             MIN_REVIEW_CANARY_BASIS_POINTS
         );
+    }
+
+    #[test]
+    fn registry_gate_keeps_unsupported_route_closed_after_complete_differential_proof() {
+        let mut evidence = complete();
+        evidence.set_shadow_identical(true);
+        let registry = crate::protocol_runtime_registry::validated_current_registry()
+            .expect("native registry validates");
+        let unsupported_scope = RouteOwnershipScope {
+            source: Protocol::OpenAi,
+            target: Protocol::Claude,
+            stream: true,
+        };
+        evidence.scope = unsupported_scope;
+        let decision =
+            OwnershipGate::default().evaluate_with_registry(&evidence, &registry, "claude");
+        assert!(matches!(
+            decision,
+            OwnershipDecision::ClosedByDefault { blockers, .. }
+                if blockers.contains(&OwnershipBlocker::RouteQualityUnsupported)
+                    && blockers.contains(&OwnershipBlocker::RouteDirectionUnsupported)
+        ));
+    }
+
+    #[test]
+    fn rollback_marker_closes_even_an_otherwise_complete_native_route() {
+        let mut evidence = complete();
+        evidence.set_rollback_active(true);
+        let decision = OwnershipGate::default().evaluate(&evidence);
+        assert!(matches!(
+            decision,
+            OwnershipDecision::ClosedByDefault { blockers, .. }
+                if blockers.contains(&OwnershipBlocker::RollbackActive)
+        ));
+    }
+
+    #[test]
+    fn shadow_evidence_from_another_route_fails_closed() {
+        let mut evidence = complete();
+        evidence.record_shadow(&ShadowRecord {
+            source: Protocol::Claude,
+            target: Protocol::Claude,
+            stream: true,
+            old_converter_id: Some("raw-claude-v1".to_owned()),
+            new_converter_id: Some("raw-claude-v1".to_owned()),
+            differences: Vec::new(),
+        });
+
+        assert!(matches!(
+            OwnershipGate::default().evaluate(&evidence),
+            OwnershipDecision::ClosedByDefault { blockers, .. }
+                if blockers.contains(&OwnershipBlocker::ShadowDifference)
+        ));
+    }
+
+    #[test]
+    fn matching_shadow_failures_do_not_qualify_as_identical_evidence() {
+        let mut evidence = complete();
+        evidence.record_shadow(&ShadowRecord {
+            source: Protocol::OpenAi,
+            target: Protocol::OpenAi,
+            stream: false,
+            old_converter_id: None,
+            new_converter_id: None,
+            differences: Vec::new(),
+        });
+
+        assert!(matches!(
+            OwnershipGate::default().evaluate(&evidence),
+            OwnershipDecision::ClosedByDefault { blockers, .. }
+                if blockers.contains(&OwnershipBlocker::ShadowDifference)
+        ));
     }
 }

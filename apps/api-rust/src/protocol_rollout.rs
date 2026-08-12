@@ -27,6 +27,82 @@ pub const TTFT_P95_PAUSE_PERCENT: f64 = 10.0;
 
 const ROLLOUT_HASH_DOMAIN: &[u8] = b"lmm-protocol-rollout-v1\0";
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+/// PLAN's ordered canary stages.  Values are basis points, never floats, so
+/// traffic selection has one exact representation across configuration and
+/// metrics.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CanaryStage {
+    /// Internal test channel only; no public allocation.
+    Internal,
+    /// One percent plain-text canary.
+    TextOnePercent,
+    /// Five percent text/image canary.
+    TextImageFivePercent,
+    /// Five percent single-function-call canary.
+    SingleFunctionFivePercent,
+    /// Five percent parallel-function-call canary.
+    ParallelFunctionFivePercent,
+    /// Twenty-five percent full compatibility canary.
+    FullFeatureTwentyFivePercent,
+    /// Full allocation after all gates pass.
+    FullTraffic,
+}
+
+impl CanaryStage {
+    /// Stable PLAN order.
+    pub const ALL: [Self; 7] = [
+        Self::Internal,
+        Self::TextOnePercent,
+        Self::TextImageFivePercent,
+        Self::SingleFunctionFivePercent,
+        Self::ParallelFunctionFivePercent,
+        Self::FullFeatureTwentyFivePercent,
+        Self::FullTraffic,
+    ];
+
+    /// Returns the minimum allocation represented by this stage.
+    #[must_use]
+    pub const fn minimum_basis_points(self) -> u16 {
+        match self {
+            Self::Internal => 0,
+            Self::TextOnePercent => 100,
+            Self::TextImageFivePercent
+            | Self::SingleFunctionFivePercent
+            | Self::ParallelFunctionFivePercent => 500,
+            Self::FullFeatureTwentyFivePercent => 2_500,
+            Self::FullTraffic => MAX_BASIS_POINTS,
+        }
+    }
+
+    /// Returns whether an allocation has reached this stage.
+    #[must_use]
+    pub const fn accepts(self, canary_basis_points: u16) -> bool {
+        canary_basis_points >= self.minimum_basis_points()
+            && canary_basis_points <= MAX_BASIS_POINTS
+    }
+}
+
+/// Validates a requested canary allocation against a named rollout stage.
+pub fn validate_canary_stage(
+    stage: CanaryStage,
+    canary_basis_points: u16,
+) -> Result<(), RolloutConfigError> {
+    validate_basis_points(canary_basis_points, "canary stage")?;
+    if stage.accepts(canary_basis_points) {
+        Ok(())
+    } else {
+        Err(RolloutConfigError::CanaryBelowStage {
+            stage,
+            canary_basis_points,
+        })
+    }
+}
+
 /// Stable feature switches described by PLAN ROLL-001.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -75,6 +151,12 @@ impl RolloutFlag {
             Self::SseParserV2 => "SSE_PARSER_V2",
             Self::ConverterPairOverrides => "CONVERTER_PAIR_OVERRIDES",
         }
+    }
+
+    /// Returns whether this switch controls a v2 implementation.
+    #[must_use]
+    pub const fn is_v2(self) -> bool {
+        !matches!(self, Self::ConversionLossPolicy)
     }
 }
 
@@ -290,6 +372,14 @@ impl ConverterPairOverride {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProtocolRolloutConfig {
+    /// Emergency configuration-only rollback switch.
+    ///
+    /// When set, every v2 flag and pair override is fail-closed before a
+    /// request can be selected. This is intentionally configuration data, so
+    /// disabling v2 does not require rebuilding conversion code; installing a
+    /// changed value in a live selector remains the caller's responsibility.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub rollback: bool,
     /// Conversion-engine v2 rollout.
     pub conversion_engine_v2: FlagConfig,
     /// Loss policy applied by conversion planning.
@@ -310,6 +400,7 @@ pub struct ProtocolRolloutConfig {
 impl Default for ProtocolRolloutConfig {
     fn default() -> Self {
         Self {
+            rollback: false,
             conversion_engine_v2: FlagConfig::default(),
             conversion_loss_policy: LossPolicy::Reject,
             gemini_function_id_v2: FlagConfig::default(),
@@ -327,7 +418,18 @@ impl ProtocolRolloutConfig {
     /// Missing variables produce the disabled v1 configuration. Malformed
     /// values return an error rather than widening traffic.
     pub fn from_env() -> Result<Self, RolloutConfigError> {
+        let rollback = parse_rollback_env()?;
+        if rollback {
+            // An emergency rollback must remain usable even when a stale v2
+            // variable is malformed.  The safe default is reject-loss and no
+            // v2 allocation; no malformed value can widen traffic here.
+            return Ok(Self {
+                rollback: true,
+                ..Self::default()
+            });
+        }
         let config = Self {
+            rollback,
             conversion_engine_v2: parse_flag_env(
                 "LMM_CONVERSION_ENGINE_V2",
                 "LMM_CONVERSION_ENGINE_V2_CANARY_BPS",
@@ -376,6 +478,43 @@ impl ProtocolRolloutConfig {
         self.conversion_loss_policy
     }
 
+    /// Returns whether the configuration has disabled all v2 controls.
+    #[must_use]
+    pub const fn rollback_enabled(&self) -> bool {
+        self.rollback
+    }
+
+    /// Returns a fail-closed copy after a correctness or operational gate
+    /// fires. The caller remains responsible for installing this updated
+    /// configuration in the live request selector.
+    #[must_use]
+    pub fn rolled_back(&self) -> Self {
+        let mut rolled_back = self.clone();
+        rolled_back.disable_v2_controls();
+        rolled_back
+    }
+
+    /// Applies a rollback decision to this configuration.
+    ///
+    /// `pause` deliberately leaves the active allocation unchanged: a pause
+    /// stops expansion, while `disable` closes v2 decisions in this value.
+    /// The method has no external side effects or hot-reload behavior.
+    pub fn apply_rollback(&mut self, decision: &RollbackDecision) {
+        if decision.should_disable() {
+            self.disable_v2_controls();
+        }
+    }
+
+    fn disable_v2_controls(&mut self) {
+        self.rollback = true;
+        self.conversion_engine_v2 = FlagConfig::disabled();
+        self.gemini_function_id_v2 = FlagConfig::disabled();
+        self.gemini_thought_signature_v2 = FlagConfig::disabled();
+        self.claude_opaque_thinking_v2 = FlagConfig::disabled();
+        self.sse_parser_v2 = FlagConfig::disabled();
+        self.converter_pair_overrides.clear();
+    }
+
     /// Adds a pair override after validation.
     pub fn push_pair_override(
         &mut self,
@@ -389,6 +528,9 @@ impl ProtocolRolloutConfig {
     /// Decides one flag for a stable request context.
     pub fn decide(&self, flag: RolloutFlag, context: &RolloutContext<'_>) -> FlagDecision {
         let bucket = stable_bucket(context.request_key);
+        if self.rollback {
+            return FlagDecision::disabled(flag, bucket, DecisionSource::ConfigRollback);
+        }
         if context.request_key.is_empty() {
             return FlagDecision::disabled(flag, bucket, DecisionSource::EmptyRequestKey);
         }
@@ -532,6 +674,8 @@ pub enum DecisionSource {
     ConverterPairOverride(usize),
     /// Empty request keys fail closed.
     EmptyRequestKey,
+    /// An emergency configuration-only rollback is active.
+    ConfigRollback,
 }
 
 /// One deterministic flag decision.
@@ -655,6 +799,16 @@ fn parse_loss_policy_env() -> Result<LossPolicy, RolloutConfigError> {
         Ok(value) => parse_loss_policy(&value),
         Err(env::VarError::NotPresent) => Ok(LossPolicy::Reject),
         Err(env::VarError::NotUnicode(_)) => Err(RolloutConfigError::InvalidLossPolicy),
+    }
+}
+
+fn parse_rollback_env() -> Result<bool, RolloutConfigError> {
+    match env::var("LMM_PROTOCOL_ROLLBACK") {
+        Ok(value) => parse_boolean(&value, "LMM_PROTOCOL_ROLLBACK"),
+        Err(env::VarError::NotPresent) => Ok(false),
+        Err(env::VarError::NotUnicode(_)) => Err(RolloutConfigError::InvalidBoolean {
+            name: "LMM_PROTOCOL_ROLLBACK",
+        }),
     }
 }
 
@@ -908,6 +1062,72 @@ pub struct ShadowAggregate {
     /// Difference count by safe category.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub differences: BTreeMap<ShadowDifference, u64>,
+    /// Per-route counters with only source/target/stream dimensions.
+    ///
+    /// Keeping this key closed makes shadow telemetry useful for canary
+    /// decisions without retaining a request key, model name, or body.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<ShadowRouteAggregateEntry>,
+}
+
+/// Closed route key for body-free shadow aggregation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ShadowRouteKey {
+    /// Source protocol.
+    pub source: Protocol,
+    /// Target protocol.
+    pub target: Protocol,
+    /// Whether the route is streaming.
+    pub stream: bool,
+}
+
+impl Ord for ShadowRouteKey {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        route_protocol_rank(self.source)
+            .cmp(&route_protocol_rank(other.source))
+            .then_with(|| route_protocol_rank(self.target).cmp(&route_protocol_rank(other.target)))
+            .then_with(|| self.stream.cmp(&other.stream))
+    }
+}
+
+impl PartialOrd for ShadowRouteKey {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// Body-free totals for one shadow route.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ShadowRouteAggregate {
+    /// Number of comparisons for this route.
+    pub total: u64,
+    /// Number of identical old/new summaries.
+    pub identical: u64,
+    /// Difference count by closed category.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub differences: BTreeMap<ShadowDifference, u64>,
+}
+
+/// One serializable route key and its body-free shadow totals.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ShadowRouteAggregateEntry {
+    /// Closed route dimensions.
+    pub route: ShadowRouteKey,
+    /// Aggregated comparison totals.
+    pub aggregate: ShadowRouteAggregate,
+}
+
+impl ShadowRouteAggregate {
+    fn record(&mut self, comparison: &ShadowRecord) {
+        self.total = self.total.saturating_add(1);
+        if comparison.is_identical() {
+            self.identical = self.identical.saturating_add(1);
+        }
+        for category in &comparison.differences {
+            let count = self.differences.entry(*category).or_default();
+            *count = (*count).saturating_add(1);
+        }
+    }
 }
 
 impl ShadowAggregate {
@@ -921,6 +1141,29 @@ impl ShadowAggregate {
             let count = self.differences.entry(*category).or_default();
             *count = (*count).saturating_add(1);
         }
+        let route = ShadowRouteKey {
+            source: comparison.source,
+            target: comparison.target,
+            stream: comparison.stream,
+        };
+        if let Some(entry) = self.routes.iter_mut().find(|entry| entry.route == route) {
+            entry.aggregate.record(comparison);
+        } else {
+            let mut aggregate = ShadowRouteAggregate::default();
+            aggregate.record(comparison);
+            self.routes
+                .push(ShadowRouteAggregateEntry { route, aggregate });
+            self.routes.sort_by_key(|entry| entry.route);
+        }
+    }
+}
+
+fn route_protocol_rank(protocol: Protocol) -> u8 {
+    match protocol {
+        Protocol::OpenAi => 0,
+        Protocol::OpenAiResponses => 1,
+        Protocol::Claude => 2,
+        Protocol::Gemini => 3,
     }
 }
 
@@ -1078,6 +1321,13 @@ pub enum RolloutConfigError {
     InvalidPairOverrides,
     /// Selector contained an empty dimension.
     InvalidSelector,
+    /// A requested canary allocation has not reached its named stage.
+    CanaryBelowStage {
+        /// Required PLAN stage.
+        stage: CanaryStage,
+        /// Configured allocation.
+        canary_basis_points: u16,
+    },
 }
 
 impl RolloutConfigError {
@@ -1089,6 +1339,7 @@ impl RolloutConfigError {
             Self::InvalidLossPolicy => "LMM_CONVERSION_LOSS_POLICY",
             Self::InvalidPairOverrides => "LMM_CONVERTER_PAIR_OVERRIDES",
             Self::InvalidSelector => "LMM_CONVERTER_PAIR_OVERRIDES",
+            Self::CanaryBelowStage { .. } => "LMM_CONVERSION_ENGINE_V2_CANARY_BPS",
         }
     }
 }
@@ -1106,6 +1357,13 @@ impl fmt::Display for RolloutConfigError {
             Self::InvalidLossPolicy => formatter.write_str("invalid conversion loss policy"),
             Self::InvalidPairOverrides => formatter.write_str("invalid converter pair overrides"),
             Self::InvalidSelector => formatter.write_str("invalid rollout selector"),
+            Self::CanaryBelowStage {
+                stage,
+                canary_basis_points,
+            } => write!(
+                formatter,
+                "canary allocation {canary_basis_points} is below rollout stage {stage:?}"
+            ),
         }
     }
 }
@@ -1246,6 +1504,31 @@ mod tests {
     }
 
     #[test]
+    fn canary_stages_use_exact_basis_point_thresholds() {
+        assert!(validate_canary_stage(CanaryStage::TextOnePercent, 100).is_ok());
+        assert!(validate_canary_stage(CanaryStage::TextImageFivePercent, 499).is_err());
+        assert!(validate_canary_stage(CanaryStage::FullFeatureTwentyFivePercent, 2_500).is_ok());
+        assert!(validate_canary_stage(CanaryStage::FullTraffic, MAX_BASIS_POINTS).is_ok());
+    }
+
+    #[test]
+    fn updated_configuration_snapshot_closes_every_v2_decision() {
+        let mut config = ProtocolRolloutConfig::default();
+        config.conversion_engine_v2 = FlagConfig::enabled(MAX_BASIS_POINTS).expect("valid");
+        let before = config.decide(RolloutFlag::ConversionEngineV2, &context("request-1"));
+        assert!(before.enabled);
+        config.apply_rollback(&RollbackDecision {
+            action: RollbackAction::Disable,
+            reasons: vec![RollbackReason::SignatureModified],
+        });
+        let after = config.decide(RolloutFlag::ConversionEngineV2, &context("request-1"));
+        assert!(!after.enabled);
+        assert_eq!(after.source, DecisionSource::ConfigRollback);
+        assert!(config.rollback_enabled());
+        assert_eq!(config.converter_pair_overrides.len(), 0);
+    }
+
+    #[test]
     fn invalid_direct_pair_override_fails_closed_at_decision_time() {
         let mut config = ProtocolRolloutConfig::default();
         config.conversion_engine_v2 = FlagConfig::enabled(MAX_BASIS_POINTS).expect("valid");
@@ -1329,6 +1612,48 @@ mod tests {
                 .differences
                 .contains(&ShadowDifference::SyntheticFields)
         );
+    }
+
+    #[test]
+    fn shadow_aggregate_keeps_route_counters_without_request_body_or_key() {
+        let record = compare_local_results(
+            Protocol::OpenAi,
+            Protocol::Claude,
+            true,
+            Ok(LocalConversionSummary {
+                converter_id: "old".to_owned(),
+                plan_fingerprint: [1; 32],
+                semantic_fingerprint: [1; 32],
+                losses: Vec::new(),
+                synthetic: Vec::new(),
+            }),
+            Ok(LocalConversionSummary {
+                converter_id: "new".to_owned(),
+                plan_fingerprint: [1; 32],
+                semantic_fingerprint: [1; 32],
+                losses: Vec::new(),
+                synthetic: Vec::new(),
+            }),
+        );
+        let mut aggregate = ShadowAggregate::default();
+        aggregate.record(&record);
+        let route = aggregate
+            .routes
+            .iter()
+            .find(|entry| {
+                entry.route
+                    == (ShadowRouteKey {
+                        source: Protocol::OpenAi,
+                        target: Protocol::Claude,
+                        stream: true,
+                    })
+            })
+            .map(|entry| &entry.aggregate)
+            .expect("route aggregate");
+        assert_eq!(route.total, 1);
+        assert_eq!(route.identical, 1);
+        let serialized = serde_json::to_string(&aggregate).expect("aggregate serializes");
+        assert!(!serialized.contains("prompt"));
     }
 
     #[test]

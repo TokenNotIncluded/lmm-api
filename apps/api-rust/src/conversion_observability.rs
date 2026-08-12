@@ -22,6 +22,7 @@ pub const MAX_HOP_COUNT: u16 = 64;
 pub const DEFAULT_MAX_SERIES: usize = 512;
 
 const NO_LOSS_CODE: u8 = u8::MAX;
+const NO_FAILURE_REASON: u8 = u8::MAX;
 
 /// A closed converter/runtime version label.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -113,6 +114,64 @@ pub enum ConversionResult {
     Unsupported,
     /// The client or gateway cancelled the stream.
     Cancelled,
+}
+
+/// Closed failure categories suitable for route-specific metrics.
+///
+/// Provider messages, converter names, model names, and request data are
+/// intentionally excluded so failure telemetry remains low-cardinality.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureReason {
+    /// Request/body decoding failed.
+    InvalidInput,
+    /// The selected route or feature was not supported.
+    Unsupported,
+    /// Registry/runtime capability validation failed.
+    RegistryDrift,
+    /// A conversion plan or loss policy rejected the request.
+    PlanRejected,
+    /// A provider/upstream transport or HTTP operation failed.
+    Upstream,
+    /// A target wire representation could not be serialized.
+    Serialization,
+    /// A stream parser or stream state transition failed.
+    Stream,
+    /// The client cancelled an active stream.
+    Cancelled,
+    /// A failure did not fit a more precise closed category.
+    Unknown,
+}
+
+impl FailureReason {
+    const fn rank(self) -> u8 {
+        match self {
+            Self::InvalidInput => 0,
+            Self::Unsupported => 1,
+            Self::RegistryDrift => 2,
+            Self::PlanRejected => 3,
+            Self::Upstream => 4,
+            Self::Serialization => 5,
+            Self::Stream => 6,
+            Self::Cancelled => 7,
+            Self::Unknown => 8,
+        }
+    }
+
+    const fn from_rank(rank: u8) -> Option<Self> {
+        match rank {
+            0 => Some(Self::InvalidInput),
+            1 => Some(Self::Unsupported),
+            2 => Some(Self::RegistryDrift),
+            3 => Some(Self::PlanRejected),
+            4 => Some(Self::Upstream),
+            5 => Some(Self::Serialization),
+            6 => Some(Self::Stream),
+            7 => Some(Self::Cancelled),
+            8 => Some(Self::Unknown),
+            _ => None,
+        }
+    }
 }
 
 impl ConversionResult {
@@ -210,9 +269,13 @@ pub struct MetricLabels {
     /// Controlled semantic feature class.
     pub feature_class: FeatureClass,
     /// Structured loss code, when this series concerns one loss.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loss_code: Option<LossCode>,
     /// Result category.
     pub result: ConversionResult,
+    /// Closed failure category, when this series records a failure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<FailureReason>,
 }
 
 impl MetricLabels {
@@ -240,6 +303,7 @@ impl MetricLabels {
             feature_class,
             loss_code: None,
             result,
+            failure_reason: None,
         }
     }
 
@@ -264,6 +328,13 @@ impl MetricLabels {
         self
     }
 
+    /// Returns labels with a controlled failure reason.
+    #[must_use]
+    pub const fn with_failure_reason(mut self, reason: FailureReason) -> Self {
+        self.failure_reason = Some(reason);
+        self
+    }
+
     /// Returns the labels used by a raw same-protocol byte passthrough.
     #[must_use]
     pub const fn native_raw(protocol: Protocol, stream: bool, result: ConversionResult) -> Self {
@@ -274,6 +345,32 @@ impl MetricLabels {
             0,
             stream,
             FeatureClass::Unknown,
+            result,
+        )
+    }
+
+    /// Creates closed labels for a concrete source/target route.
+    ///
+    /// Callers should use this constructor for cross-protocol conversions so
+    /// metrics cannot accidentally collapse a route into a same-protocol
+    /// series.  All labels remain closed and bounded.
+    #[must_use]
+    pub const fn for_route(
+        source_format: Protocol,
+        target_format: Protocol,
+        converter_version: ConverterVersion,
+        hop_count: u16,
+        stream: bool,
+        feature_class: FeatureClass,
+        result: ConversionResult,
+    ) -> Self {
+        Self::new(
+            source_format,
+            target_format,
+            converter_version,
+            hop_count,
+            stream,
+            feature_class,
             result,
         )
     }
@@ -330,6 +427,7 @@ struct SeriesKey {
     feature_class: u8,
     loss_code: u8,
     result: u8,
+    failure_reason: u8,
 }
 
 impl SeriesKey {
@@ -344,6 +442,9 @@ impl SeriesKey {
             feature_class: labels.feature_class.rank(),
             loss_code: labels.loss_code.map_or(NO_LOSS_CODE, loss_code_rank),
             result: labels.result.rank(),
+            failure_reason: labels
+                .failure_reason
+                .map_or(NO_FAILURE_REASON, FailureReason::rank),
         }
     }
 
@@ -361,6 +462,11 @@ impl SeriesKey {
                 Some(loss_code_from_rank(self.loss_code)?)
             },
             result: ConversionResult::from_rank(self.result)?,
+            failure_reason: if self.failure_reason == NO_FAILURE_REASON {
+                None
+            } else {
+                Some(FailureReason::from_rank(self.failure_reason)?)
+            },
         })
     }
 }
@@ -466,9 +572,16 @@ impl ConversionObserver {
 
     /// Records a failed conversion and fixes its result label to `failure`.
     pub fn record_failure(&self, labels: MetricLabels) {
+        self.record_failure_with_reason(labels, FailureReason::Unknown);
+    }
+
+    /// Records a failed conversion with a closed, route-safe reason label.
+    pub fn record_failure_with_reason(&self, labels: MetricLabels, reason: FailureReason) {
         self.record(
             MetricKind::ConversionFailuresTotal,
-            labels.with_result(ConversionResult::Failure),
+            labels
+                .with_result(ConversionResult::Failure)
+                .with_failure_reason(reason),
             1,
         );
     }
@@ -480,6 +593,16 @@ impl ConversionObserver {
             labels.with_loss_code(loss_code),
             1,
         );
+    }
+
+    /// Records each loss in a caller-provided ledger.
+    pub fn record_losses<I>(&self, labels: MetricLabels, losses: I)
+    where
+        I: IntoIterator<Item = LossCode>,
+    {
+        for loss_code in losses {
+            self.record_loss(labels, loss_code);
+        }
     }
 
     /// Records one gateway-synthesized field without exposing its raw name.

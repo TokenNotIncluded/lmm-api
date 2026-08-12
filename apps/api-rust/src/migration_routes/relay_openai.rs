@@ -967,9 +967,11 @@ fn serialize_sse(
                 output.push_str("\n\n");
             }
         }
-        Protocol::Claude | Protocol::Gemini => Err(RelayConvertError::Unsupported(
-            "OpenAI SSE serializer does not support this protocol".to_owned(),
-        )),
+        Protocol::Claude | Protocol::Gemini => {
+            return Err(RelayConvertError::Unsupported(
+                "OpenAI SSE serializer does not support this protocol".to_owned(),
+            ));
+        }
     }
     output.push_str("data: [DONE]\n\n");
     Ok(output)

@@ -19,7 +19,8 @@ use lmm_api_rs::{
     },
     migration_routes::sse::{
         DEFAULT_MAX_FRAME_BYTES, SseError, SseFrameParser, UnknownEventAction, UnknownEventClass,
-        json_events_from_frames, parse_sse_frames, unknown_event_decision,
+        json_events_from_frames, parse_sse_frames, parse_sse_frames_lenient,
+        parse_sse_frames_rejecting_unterminated, unknown_event_decision,
     },
     protocol_rollout::{
         LocalConversionError, LocalConversionSummary, LocalRequest, ShadowDifference, ShadowRunner,
@@ -340,8 +341,7 @@ fn response_conformance_preserves_usage_finish_order_and_opaque_state() {
     assert!(
         matches!(chat.value.output.first(), Some(CanonicalContent::Text { text }) if text == "answer")
     );
-    let chat_wire = lmm_contracts::relay::canonical_response_to_openai_chat(chat.value)
-        .expect("Chat response round trip");
+    let chat_wire = lmm_contracts::relay::canonical_response_to_openai_chat(chat.value);
     assert_eq!(chat_wire.value.id, "chat-response");
 
     let responses: ResponsesResponse =
@@ -551,6 +551,23 @@ fn stream_conformance_preserves_order_unknown_events_and_cancel_class() {
     let termination = unknown_event_decision(false, Some("future_complete"));
     assert_eq!(termination.class, UnknownEventClass::Termination);
     assert_eq!(termination.action, UnknownEventAction::DegradedOrError);
+
+    for event_name in ["response.metadata", "response-usage", "metadata.update"] {
+        let metadata = unknown_event_decision(false, Some(event_name));
+        assert_eq!(metadata.class, UnknownEventClass::Metadata, "{event_name}");
+        assert_eq!(
+            metadata.action,
+            UnknownEventAction::RecordLossAndContinue,
+            "{event_name}"
+        );
+    }
+
+    let metadata_termination = unknown_event_decision(false, Some("metadata.complete"));
+    assert_eq!(metadata_termination.class, UnknownEventClass::Termination);
+    assert_eq!(
+        metadata_termination.action,
+        UnknownEventAction::DegradedOrError
+    );
 }
 
 #[test]
@@ -647,6 +664,90 @@ fn arbitrary_sse_bytes_are_bounded_without_panics() {
             "arbitrary SSE bytes panicked at width {width}"
         );
     }
+}
+
+#[test]
+fn sse_acceptance_covers_repeated_fields_mixed_line_endings_and_eof_modes() {
+    let input = b"event: first\r\nid: old\rretry: 7\n:event note\ndata: first\r\ndata: second\n\n";
+    let frames = parse_sse_frames(input, DEFAULT_MAX_FRAME_BYTES).expect("mixed SSE corpus");
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0].event_name(), Some("first"));
+    assert_eq!(frames[0].id.as_deref(), Some("old"));
+    assert_eq!(frames[0].retry_ms(), Some(7));
+    assert_eq!(frames[0].comments, vec!["event note"]);
+    assert_eq!(frames[0].data(), "first\nsecond");
+
+    let repeated = parse_sse_frames(
+        b"event: old\nevent: new\nid: old\nid:\nretry: 1\nretry: 2\ndata: {}\n\n",
+        DEFAULT_MAX_FRAME_BYTES,
+    )
+    .expect("repeated field corpus");
+    assert_eq!(repeated[0].event_name(), Some("new"));
+    assert_eq!(repeated[0].id.as_deref(), Some(""));
+    assert_eq!(repeated[0].retry_ms(), Some(2));
+
+    assert_eq!(
+        parse_sse_frames(b"data: final\n", DEFAULT_MAX_FRAME_BYTES)
+            .expect("strict EOF")
+            .len(),
+        0
+    );
+    assert_eq!(
+        parse_sse_frames_lenient(b"data: final\n", DEFAULT_MAX_FRAME_BYTES)
+            .expect("legacy EOF flush")[0]
+            .data(),
+        "final"
+    );
+    assert_eq!(
+        parse_sse_frames_rejecting_unterminated(b"data: final\n", DEFAULT_MAX_FRAME_BYTES),
+        Err(SseError::UnterminatedFrame)
+    );
+}
+
+#[test]
+fn sse_incremental_partitions_match_one_shot_frames() {
+    let corpora: &[&[u8]] = &[
+        b"event: update\r\ndata: {\"x\":1}\r\n\r\ndata: [DONE]\n\n",
+        b": heartbeat\n\ndata: one\ndata: two\r\n\r\n",
+    ];
+
+    for input in corpora {
+        let expected = parse_sse_frames(input, DEFAULT_MAX_FRAME_BYTES).expect("one-shot SSE");
+        for width in 1..=input.len() {
+            let mut parser = SseFrameParser::new(DEFAULT_MAX_FRAME_BYTES);
+            let mut actual = Vec::new();
+            let mut offset = 0;
+            while offset < input.len() {
+                let end = offset.saturating_add(width).min(input.len());
+                actual.extend(parser.feed(&input[offset..end]).expect("incremental SSE"));
+                offset = end;
+            }
+            actual.extend(parser.finish().expect("incremental EOF"));
+            assert_eq!(actual, expected, "chunk width {width}");
+        }
+    }
+}
+
+#[test]
+fn sse_parser_lifecycle_errors_are_typed_and_non_panicking() {
+    let mut finished = SseFrameParser::new(DEFAULT_MAX_FRAME_BYTES);
+    finished.finish().expect("empty EOF");
+    assert_eq!(
+        finished.feed(b"data: late\n\n"),
+        Err(SseError::AlreadyFinished)
+    );
+    assert_eq!(finished.finish(), Err(SseError::AlreadyFinished));
+
+    let mut failed = SseFrameParser::new(1);
+    assert_eq!(
+        failed.feed(b"xyz"),
+        Err(SseError::FrameTooLarge {
+            limit: 1,
+            observed: 2,
+        })
+    );
+    assert_eq!(failed.feed(b""), Err(SseError::ParserFailed));
+    assert_eq!(failed.finish(), Err(SseError::ParserFailed));
 }
 
 #[test]

@@ -318,10 +318,12 @@ fn responses_encoder_emits_a_checked_state_machine_stream() {
         event,
         CanonicalStreamEvent::TextDelta { delta, .. } if delta == "hello"
     )));
-    assert!(snapshot
-        .events
-        .iter()
-        .any(|event| event.kind == "response.output_item.done"));
+    assert!(
+        snapshot
+            .events
+            .iter()
+            .any(|event| event.kind == "response.output_item.done")
+    );
 
     let terminal_then_cancelled = vec![
         CanonicalStreamEvent::ResponseStart {
@@ -348,9 +350,11 @@ fn responses_encoder_emits_a_checked_state_machine_stream() {
             .count(),
         1
     );
-    assert!(checked
-        .iter()
-        .any(|event| matches!(event, CanonicalStreamEvent::Cancelled)));
+    assert!(
+        checked
+            .iter()
+            .any(|event| matches!(event, CanonicalStreamEvent::Cancelled))
+    );
 }
 
 #[test]
@@ -468,7 +472,7 @@ fn openai_pair_golden_streams_execute_source_to_target_frame_by_frame() {
         }"#,
     )
     .expect("typed Responses source stream");
-    let mut canonical = responses_stream_to_canonical(&responses_source);
+    let canonical = responses_stream_to_canonical(&responses_source);
     let expected_chat: OpenAiStreamSnapshot =
         serde_json::from_str(&fixture("stream", "openai_responses", "openai"))
             .expect("golden Chat target stream");
@@ -722,6 +726,35 @@ fn go_supported_chat_request_fields_survive_responses_round_trip() {
 }
 
 #[test]
+fn canonical_claude_request_reports_unrepresentable_options() {
+    let request = CanonicalRequest {
+        model: "claude-test".to_owned(),
+        instructions: Vec::new(),
+        messages: vec![CanonicalMessage {
+            role: Role::User,
+            parts: vec![CanonicalContent::Text {
+                text: "hello".to_owned(),
+            }],
+        }],
+        max_output_tokens: Some(32),
+        temperature: None,
+        stream: false,
+        tools: Vec::new(),
+        tool_choice: None,
+        options: RequestOptions {
+            top_p: Some(0.5),
+            user: Some(JsonData::String("tenant-a".to_owned())),
+            ..RequestOptions::default()
+        },
+    };
+    let converted = canonical_request_to_claude(request).expect("canonical to Claude");
+    assert_eq!(
+        converted.loss.dropped_fields,
+        ["options.top_p", "options.user"]
+    );
+}
+
+#[test]
 fn non_representable_request_fields_are_reported_or_rejected() {
     let multiple: OpenAiChatRequest =
         serde_json::from_str(r#"{"model":"gpt-test","messages":[],"n":2}"#)
@@ -949,18 +982,19 @@ fn responses_failed_stream_reads_the_nested_response_error() {
     )
     .expect("nested Responses error");
     let canonical = responses_stream_to_canonical(&snapshot);
-    assert!(
-        canonical.iter().any(|event| matches!(
-            event,
-            CanonicalStreamEvent::Error { code, message }
-                if code.as_deref() == Some("model_error") && message == "nested boom"
-        ))
-    );
+    assert!(canonical.iter().any(|event| matches!(
+        event,
+        CanonicalStreamEvent::Error { code, message }
+            if code.as_deref() == Some("model_error") && message == "nested boom"
+    )));
     assert!(canonical.iter().any(|event| matches!(
         event,
         CanonicalStreamEvent::ResponseEnd {
             finish_reason: FinishReason::Error,
-            usage: Some(TokenUsage { total_tokens: 4, .. }),
+            usage: Some(TokenUsage {
+                total_tokens: 4,
+                ..
+            }),
             ..
         }
     )));
@@ -1657,9 +1691,18 @@ fn responses_checked_stream_rejects_inapplicable_output_item_fields() {
             "events[0].item.content",
         ),
     ] {
-        let snapshot: ResponsesStreamSnapshot = serde_json::from_str(&format!(
-            r#"{{"events":[{{"Type":"response.output_item.added","Payload":{{"type":"response.output_item.added","output_index":0,"item":{item}}}}}}],"usage":{{}}}}"#
-        ))
+        let item: serde_json::Value = serde_json::from_str(item).expect("output item JSON");
+        let snapshot: ResponsesStreamSnapshot = serde_json::from_value(serde_json::json!({
+            "events": [{
+                "Type": "response.output_item.added",
+                "Payload": {
+                    "type": "response.output_item.added",
+                    "output_index": 0,
+                    "item": item,
+                },
+            }],
+            "usage": {},
+        }))
         .expect("stream output item field retained");
         assert!(matches!(
             responses_stream_to_canonical_checked(&snapshot),
@@ -1699,9 +1742,18 @@ fn responses_checked_stream_rejects_output_item_initial_payloads() {
             "events[0].item.arguments",
         ),
     ] {
-        let snapshot: ResponsesStreamSnapshot = serde_json::from_str(&format!(
-            r#"{{"events":[{{"Type":"response.output_item.added","Payload":{{"type":"response.output_item.added","output_index":0,"item":{item}}}}}}],"usage":{{}}}}"#
-        ))
+        let item: serde_json::Value = serde_json::from_str(item).expect("output item JSON");
+        let snapshot: ResponsesStreamSnapshot = serde_json::from_value(serde_json::json!({
+            "events": [{
+                "Type": "response.output_item.added",
+                "Payload": {
+                    "type": "response.output_item.added",
+                    "output_index": 0,
+                    "item": item,
+                },
+            }],
+            "usage": {},
+        }))
         .expect("initial output item payload retained");
         assert!(matches!(
             responses_stream_to_canonical_checked(&snapshot),
@@ -1796,9 +1848,25 @@ fn responses_checked_stream_rejects_duplicate_error_sources() {
 #[test]
 fn responses_checked_stream_rejects_present_default_response_controls() {
     for (field, value) in [("parallel_tool_calls", "false"), ("store", "false")] {
-        let snapshot: ResponsesStreamSnapshot = serde_json::from_str(&format!(
-            r#"{{"events":[{{"Type":"response.completed","Payload":{{"type":"response.completed","response":{{"id":"resp-control","object":"response","status":"completed","model":"gpt-test","{field}":{value}}}}}}}}],"usage":{{}}}}"#
-        ))
+        let mut response = serde_json::Map::new();
+        response.insert("id".to_owned(), serde_json::json!("resp-control"));
+        response.insert("object".to_owned(), serde_json::json!("response"));
+        response.insert("status".to_owned(), serde_json::json!("completed"));
+        response.insert("model".to_owned(), serde_json::json!("gpt-test"));
+        response.insert(
+            field.to_owned(),
+            serde_json::from_str::<serde_json::Value>(value).expect("response control JSON"),
+        );
+        let snapshot: ResponsesStreamSnapshot = serde_json::from_value(serde_json::json!({
+            "events": [{
+                "Type": "response.completed",
+                "Payload": {
+                    "type": "response.completed",
+                    "response": serde_json::Value::Object(response),
+                },
+            }],
+            "usage": {},
+        }))
         .expect("stream response control retained");
         assert!(matches!(
             responses_stream_to_canonical_checked(&snapshot),
@@ -2271,6 +2339,27 @@ fn gemini_2_5_legacy_call_without_signature_is_accepted() {
         options: RequestOptions::default(),
     };
     assert!(canonical_request_to_gemini_for_model(request, "gemini-2.5-pro", false).is_ok());
+}
+
+#[test]
+fn gemini_source_history_does_not_receive_a_synthetic_dummy_signature() {
+    let request: GeminiRequest = serde_json::from_str(
+        r#"{"contents":[{"role":"model","parts":[{"functionCall":{"id":"call","name":"lookup","args":{}}}]}]}"#,
+    )
+    .expect("Gemini source request");
+    let decoded = gemini_request_to_envelope_v2(request, "gemini-2.5-pro")
+        .expect("decode Gemini source history");
+    let encoded =
+        envelope_to_gemini_request_v2(decoded.envelope).expect("encode Gemini source history");
+
+    assert_eq!(encoded.value.contents[0].parts[0].thought_signature, None);
+    assert!(
+        !encoded
+            .loss_ledger()
+            .as_slice()
+            .iter()
+            .any(|loss| loss.code == LossCode::SyntheticThoughtSignature)
+    );
 }
 
 #[test]

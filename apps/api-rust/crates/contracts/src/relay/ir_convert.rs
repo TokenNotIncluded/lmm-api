@@ -733,7 +733,6 @@ fn tool_result_item(
 
 fn chat_content_to_parts(
     content: Option<StringOrParts<OpenAiChatContentPart>>,
-    role: Role,
     source: Protocol,
     target: Protocol,
     path: &str,
@@ -1912,13 +1911,8 @@ fn chat_message_to_envelope(
             envelope,
         )?;
     } else {
-        let parts = chat_content_to_parts(
-            message.content,
-            role.clone(),
-            source,
-            target,
-            &format!("{path}.content"),
-        )?;
+        let parts =
+            chat_content_to_parts(message.content, source, target, &format!("{path}.content"))?;
         let mut item = Item::new(ItemKind::Message, role.clone(), Provenance::new(source));
         item.provenance.source_path = Some(path.clone());
         if let Some(name) = message.name.clone() {
@@ -2322,63 +2316,63 @@ fn openai_message_from_item(
             if needs_anthropic_rebuild {
                 let mut anthropic_blocks = Vec::new();
                 for (index, part) in item.ordered_parts().iter().enumerate() {
-                let part_path = format!("{path}.parts[{index}]");
-                match &part.kind {
-                    PartKind::Text => {
-                        let text = part.text.clone().ok_or_else(|| {
-                            DirectIrError::new(
-                                source,
-                                target,
-                                "text",
-                                &part_path,
-                                DirectIrReason::InvalidShape,
-                            )
-                        })?;
-                        let mut block = empty_anthropic_block("text");
-                        block.text = Some(text);
-                        block.extra = part.extensions.clone();
-                        anthropic_blocks.push(block);
-                    }
-                    PartKind::Media => {
-                        let media = part.media.as_ref().ok_or_else(|| {
-                            DirectIrError::new(
-                                source,
-                                target,
-                                "media",
-                                &part_path,
-                                DirectIrReason::InvalidShape,
-                            )
-                        })?;
-                        if !matches!(&media.kind, MediaKind::Image) {
+                    let part_path = format!("{path}.parts[{index}]");
+                    match &part.kind {
+                        PartKind::Text => {
+                            let text = part.text.clone().ok_or_else(|| {
+                                DirectIrError::new(
+                                    source,
+                                    target,
+                                    "text",
+                                    &part_path,
+                                    DirectIrReason::InvalidShape,
+                                )
+                            })?;
+                            let mut block = empty_anthropic_block("text");
+                            block.text = Some(text);
+                            block.extra = part.extensions.clone();
+                            anthropic_blocks.push(block);
+                        }
+                        PartKind::Media => {
+                            let media = part.media.as_ref().ok_or_else(|| {
+                                DirectIrError::new(
+                                    source,
+                                    target,
+                                    "media",
+                                    &part_path,
+                                    DirectIrReason::InvalidShape,
+                                )
+                            })?;
+                            if !matches!(&media.kind, MediaKind::Image) {
+                                return Err(DirectIrError::unsupported(
+                                    source,
+                                    target,
+                                    "anthropic_media",
+                                    &part_path,
+                                ));
+                            }
+                            let image_url = media
+                                .uri
+                                .as_ref()
+                                .map(|value| JsonData::String(value.clone()))
+                                .or_else(|| media.data.clone())
+                                .ok_or_else(|| {
+                                    DirectIrError::missing(source, target, "image_url", &part_path)
+                                })?;
+                            let mut block = empty_anthropic_block("image");
+                            block.image_url = Some(image_url);
+                            block.extra = part.extensions.clone();
+                            anthropic_blocks.push(block);
+                        }
+                        PartKind::Function | PartKind::Opaque | PartKind::Unknown(_) => {
                             return Err(DirectIrError::unsupported(
                                 source,
                                 target,
-                                "anthropic_media",
+                                "anthropic_part_extensions",
                                 &part_path,
                             ));
                         }
-                        let image_url = media
-                            .uri
-                            .as_ref()
-                            .map(|value| JsonData::String(value.clone()))
-                            .or_else(|| media.data.clone())
-                            .ok_or_else(|| {
-                                DirectIrError::missing(source, target, "image_url", &part_path)
-                            })?;
-                        let mut block = empty_anthropic_block("image");
-                        block.image_url = Some(image_url);
-                        block.extra = part.extensions.clone();
-                        anthropic_blocks.push(block);
                     }
-                    PartKind::Function | PartKind::Opaque | PartKind::Unknown(_) => {
-                        return Err(DirectIrError::unsupported(
-                            source,
-                            target,
-                            "anthropic_part_extensions",
-                            &part_path,
-                        ));
-                    }
-                }
                 }
                 message.extra_content = Some(OpenAiExtraContent {
                     google: None,
@@ -2698,7 +2692,7 @@ impl GeminiCallLinks {
         self.by_name
             .entry(name.to_owned())
             .or_default()
-            .push(id.clone());
+            .push_back(id.clone());
         self.by_id.insert(id, name.to_owned());
         Ok(())
     }
@@ -2780,7 +2774,7 @@ impl GeminiCallLinks {
                     DirectIrReason::Orphan,
                 ));
             };
-            let Some(id) = queue.first().cloned() else {
+            let Some(id) = queue.front().cloned() else {
                 return Err(DirectIrError::new(
                     source,
                     target,
@@ -2789,7 +2783,7 @@ impl GeminiCallLinks {
                     DirectIrReason::Orphan,
                 ));
             };
-            queue.remove(0);
+            let _ = queue.pop_front();
             self.by_id.remove(&id);
             Ok((id, true))
         }
@@ -3027,8 +3021,17 @@ pub fn gemini_request_to_envelope_v2(
     let source = Protocol::Gemini;
     let target = Protocol::Gemini;
     let mut envelope = Envelope::new(source, model.clone());
-    let has_system_instruction = request.system_instruction.is_some();
-    if let Some(system) = request.system_instruction {
+    let tools = gemini_tools_to_ir(&request);
+    let tool_choice = gemini_tool_choice_to_ir(request.tool_config.as_ref(), source, target)?;
+    let GeminiRequest {
+        system_instruction,
+        contents,
+        generation_config,
+        safety_settings,
+        ..
+    } = request;
+    let has_system_instruction = system_instruction.is_some();
+    if let Some(system) = system_instruction {
         let role = Role::System;
         let mut links = GeminiCallLinks::default();
         for (part_index, part) in system.parts.into_iter().enumerate() {
@@ -3047,7 +3050,7 @@ pub fn gemini_request_to_envelope_v2(
     }
     let mut links = GeminiCallLinks::default();
     let system_offset = usize::from(has_system_instruction);
-    for (content_index, content) in request.contents.into_iter().enumerate() {
+    for (content_index, content) in contents.into_iter().enumerate() {
         let role = if content
             .parts
             .iter()
@@ -3086,15 +3089,14 @@ pub fn gemini_request_to_envelope_v2(
             )?;
         }
     }
-    envelope.tools = gemini_tools_to_ir(&request);
-    envelope.tool_choice = gemini_tool_choice_to_ir(request.tool_config.as_ref(), source, target)?;
-    if let Some(config) = request.generation_config {
+    envelope.tools = tools;
+    envelope.tool_choice = tool_choice;
+    if let Some(config) = generation_config {
         envelope.controls.max_output_tokens = config.max_output_tokens;
         envelope.controls.temperature = config.temperature;
     }
-    if !request.safety_settings.is_empty() {
-        let settings = request
-            .safety_settings
+    if !safety_settings.is_empty() {
+        let settings = safety_settings
             .into_iter()
             .map(|setting| {
                 object([
@@ -3433,8 +3435,7 @@ fn append_gemini_content(
     }
     let part = gemini_part_for_item(item, source, target, path)?;
     if matches!(&item.kind, ItemKind::ToolCall) {
-        let id = item
-            .call_id
+        item.call_id
             .as_ref()
             .ok_or_else(|| DirectIrError::missing(source, target, "function_call_id", path))?;
         let name = item
@@ -3713,7 +3714,16 @@ pub fn envelope_to_gemini_request_v2_for_model(
                     DirectIrReason::Unsupported,
                 ));
             }
-            if !has_signature && synthetic_history && gemini_model_is_25(model) {
+            // The documented dummy is only a compatibility value for history
+            // synthesized by a non-Gemini source.  A Gemini-origin envelope is
+            // already provider history: injecting the literal there would
+            // turn an omitted authentic signature into gateway-authored state
+            // and could change the provider's tool-loop validation semantics.
+            if !has_signature
+                && synthetic_history
+                && source != Protocol::Gemini
+                && gemini_model_is_25(model)
+            {
                 let Some(last) = contents.last_mut() else {
                     return Err(DirectIrError::new(
                         source,
@@ -4297,7 +4307,6 @@ fn claude_block_from_item(
     source: Protocol,
     target: Protocol,
     path: &str,
-    envelope: &mut Envelope,
 ) -> Result<ClaudeContentBlock, DirectIrError> {
     let part = single_item_part(item, source, target, path, "part")?;
     match &part.kind {
@@ -4499,9 +4508,9 @@ pub fn envelope_to_claude_request_v2(
                 .and_then(|part| part.opaque.as_ref())
                 .is_some()
         {
-            claude_block_from_item(&item, source, target, &path, &mut envelope)?
+            claude_block_from_item(&item, source, target, &path)?
         } else {
-            claude_block_from_item(&item, source, target, &path, &mut envelope)?
+            claude_block_from_item(&item, source, target, &path)?
         };
         if matches!(&item.role, Role::System | Role::Developer) {
             system.push(block);
@@ -5465,7 +5474,7 @@ fn merge_openai_messages(
 ) -> Result<(), DirectIrError> {
     match (target_message.content.take(), incoming.content) {
         (None, content) => target_message.content = content,
-        (Some(StringOrParts::String(mut left)), Some(StringOrParts::String(right))) => {
+        (Some(StringOrParts::String(left)), Some(StringOrParts::String(right))) => {
             target_message.content = Some(StringOrParts::Parts(vec![
                 OpenAiChatContentPart {
                     kind: "text".to_owned(),
@@ -5833,6 +5842,18 @@ fn claude_usage_without_billing(usage: &SemanticUsage) -> ClaudeUsage {
         output_tokens: usage.output_tokens,
         cache_read_input_tokens: usage.cache.read_input_tokens,
         cache_creation_input_tokens: usage.cache.creation_input_tokens,
+        claude_cache_creation_5_m_tokens: usage
+            .cache
+            .extensions
+            .get("claude.cache_creation_5m")
+            .and_then(number_u64)
+            .unwrap_or(0),
+        claude_cache_creation_1_h_tokens: usage
+            .cache
+            .extensions
+            .get("claude.cache_creation_1h")
+            .and_then(number_u64)
+            .unwrap_or(0),
         ..ClaudeUsage::default()
     }
 }
@@ -5911,7 +5932,7 @@ pub fn envelope_to_claude_response_v2(
                 extra: BTreeMap::new(),
             }
         } else {
-            claude_block_from_item(&item, source, target, &path, &mut envelope)?
+            claude_block_from_item(&item, source, target, &path)?
         };
         content.push(block);
     }
@@ -6767,12 +6788,10 @@ mod direct_ir_tests {
         assert!(encoded.is_ok());
         let Some(encoded) = encoded.ok() else { return };
         assert!(encoded.losses.as_slice().iter().any(|loss| {
-            loss.path.as_deref() == Some("items[0].id")
-                && loss.code == LossCode::LossUnknownEvent
+            loss.path.as_deref() == Some("items[0].id") && loss.code == LossCode::LossUnknownEvent
         }));
         assert!(encoded.losses.as_slice().iter().any(|loss| {
-            loss.path.as_deref() == Some("items[0].raw")
-                && loss.code == LossCode::LossUnknownEvent
+            loss.path.as_deref() == Some("items[0].raw") && loss.code == LossCode::LossUnknownEvent
         }));
         assert!(encoded.losses.as_slice().iter().any(|loss| {
             loss.path.as_deref() == Some("items[0].extensions")
@@ -6934,6 +6953,31 @@ mod direct_ir_tests {
         assert_eq!(usage.cache_read_input_tokens, 3);
         assert!(usage.billing_usage.is_some());
         assert!(!result.losses.is_empty());
+    }
+
+    #[test]
+    fn direct_claude_usage_round_trip_preserves_cache_creation_windows() {
+        let response: ClaudeResponse = serde_json::from_str(
+            r#"{"id":"msg-cache","type":"message","role":"assistant","model":"claude-test","content":[],"usage":{"input_tokens":10,"output_tokens":4,"cache_read_input_tokens":2,"cache_creation_input_tokens":9,"claude_cache_creation_5_m_tokens":6,"claude_cache_creation_1_h_tokens":3}}"#,
+        )
+        .expect("Claude usage response");
+        let decoded = claude_response_to_envelope_v2(response).expect("decode Claude response");
+        let encoded = envelope_to_claude_response_v2(decoded.envelope)
+            .expect("encode Claude response")
+            .value;
+        let usage = encoded.usage.expect("Claude usage");
+
+        assert_eq!(
+            (
+                usage.input_tokens,
+                usage.output_tokens,
+                usage.cache_read_input_tokens,
+                usage.cache_creation_input_tokens,
+                usage.claude_cache_creation_5_m_tokens,
+                usage.claude_cache_creation_1_h_tokens,
+            ),
+            (10, 4, 2, 9, 6, 3)
+        );
     }
 
     #[test]
