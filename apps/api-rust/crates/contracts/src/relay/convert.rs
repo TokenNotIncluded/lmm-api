@@ -2439,6 +2439,7 @@ pub fn responses_stream_to_canonical_checked(
     let mut out = Vec::new();
     let mut ended = BTreeSet::new();
     let mut saw_tool_call = false;
+    let mut response_terminal_emitted = false;
     for (event_index, event) in snapshot.events.iter().enumerate() {
         let payload = &event.payload;
         match payload.kind.as_str() {
@@ -2507,13 +2508,6 @@ pub fn responses_stream_to_canonical_checked(
             | "response.reasoning_text.done"
             | "response.function_call_arguments.done"
             | "response.output_item.done" => {
-                if payload.item.is_some() {
-                    return Err(stream_feature_error(
-                        "stream_terminal_item",
-                        format!("events[{event_index}].item"),
-                        Some("LOSS_UNKNOWN_EVENT"),
-                    ));
-                }
                 let index = stream_output_index(payload, &format!("events[{event_index}]"))?;
                 if ended.insert(index) {
                     out.push(CanonicalStreamEvent::ContentEnd { index });
@@ -2555,6 +2549,7 @@ pub fn responses_stream_to_canonical_checked(
                         .or_else(|| Some(wire_usage(&snapshot.usage))),
                     model: (!response.model.is_empty()).then(|| response.model.clone()),
                 });
+                response_terminal_emitted = true;
             }
             "response.failed" | "response.error" => {
                 let error = payload.error.as_ref().or_else(|| {
@@ -2563,6 +2558,20 @@ pub fn responses_stream_to_canonical_checked(
                         .as_ref()
                         .and_then(|response| response.error.as_ref())
                 });
+                if !response_terminal_emitted {
+                    if let Some(response) = payload.response.as_ref() {
+                        out.push(CanonicalStreamEvent::ResponseEnd {
+                            finish_reason: FinishReason::Error,
+                            usage: response
+                                .usage
+                                .as_ref()
+                                .map(wire_usage)
+                                .or_else(|| Some(wire_usage(&snapshot.usage))),
+                            model: (!response.model.is_empty()).then(|| response.model.clone()),
+                        });
+                        response_terminal_emitted = true;
+                    }
+                }
                 out.push(CanonicalStreamEvent::Error {
                     code: error.and_then(|value| value.code.clone()),
                     message: error.map_or_else(
@@ -2571,7 +2580,25 @@ pub fn responses_stream_to_canonical_checked(
                     ),
                 });
             }
-            "response.cancelled" => out.push(CanonicalStreamEvent::Cancelled),
+            "response.cancelled" => {
+                if response_terminal_emitted {
+                    out.push(CanonicalStreamEvent::Cancelled);
+                } else if let Some(response) = payload.response.as_ref() {
+                    out.push(CanonicalStreamEvent::ResponseEnd {
+                        finish_reason: FinishReason::Cancelled,
+                        usage: response
+                            .usage
+                            .as_ref()
+                            .map(wire_usage)
+                            .or_else(|| Some(wire_usage(&snapshot.usage))),
+                        model: (!response.model.is_empty()).then(|| response.model.clone()),
+                    });
+                    response_terminal_emitted = true;
+                } else {
+                    out.push(CanonicalStreamEvent::Cancelled);
+                    response_terminal_emitted = true;
+                }
+            }
             _ => {
                 return Err(stream_feature_error(
                     "unknown_event",
@@ -2845,7 +2872,7 @@ fn validate_stream_output_item(
             None,
         ));
     }
-    if !item.id.is_empty() {
+    if !item.id.is_empty() && item.id.trim().is_empty() {
         return Err(stream_feature_error(
             "output_item_id",
             format!("{path}.id"),
@@ -2929,14 +2956,6 @@ fn stream_output_index(
 ) -> Result<usize, RelayConvertError> {
     match payload.output_index {
         Some(index) => Ok(index),
-        None if payload.kind == "response.output_text.delta"
-            && payload.item_id.is_none()
-            && payload.content_index.is_none() =>
-        {
-            // Legacy snapshots emitted a single unindexed text stream.  It
-            // has no competing item identity, so index zero is deterministic.
-            Ok(0)
-        }
         None => Err(stream_feature_error(
             "stream_index",
             format!("{path}.output_index"),
@@ -3045,8 +3064,7 @@ fn validate_responses_stream_event_shape(
                     Some("LOSS_UNKNOWN_EVENT"),
                 ));
             }
-            let has_identity = payload.item_id.is_some() || payload.content_index.is_some();
-            if payload.output_index.is_none() && has_identity {
+            if payload.output_index.is_none() {
                 return Err(stream_feature_error(
                     "stream_index",
                     format!("{path}.output_index"),
@@ -3060,13 +3078,32 @@ fn validate_responses_stream_event_shape(
                 ("arguments", payload.arguments.is_some()),
                 ("part", payload.part.is_some()),
                 ("error", payload.error.is_some()),
-                ("item_id", payload.item_id.is_some()),
-                ("content_index", payload.content_index.is_some()),
-                ("summary_index", payload.summary_index.is_some()),
             ] {
                 if present {
                     return Err(stream_unexpected_field(path, field));
                 }
+            }
+            if payload.item_id.is_some()
+                && !matches!(
+                    kind,
+                    "response.output_text.delta"
+                        | "response.function_call_arguments.delta"
+                        | "response.reasoning_summary_text.delta"
+                        | "response.reasoning_text.delta"
+                )
+            {
+                return Err(stream_unexpected_field(path, "item_id"));
+            }
+            if payload.content_index.is_some() && kind != "response.output_text.delta" {
+                return Err(stream_unexpected_field(path, "content_index"));
+            }
+            if payload.summary_index.is_some()
+                && !matches!(
+                    kind,
+                    "response.reasoning_summary_text.delta" | "response.reasoning_text.delta"
+                )
+            {
+                return Err(stream_unexpected_field(path, "summary_index"));
             }
         }
         kind if kind.ends_with(".done") && kind != "response.done" => {
@@ -3088,15 +3125,66 @@ fn validate_responses_stream_event_shape(
                 ("response", payload.response.is_some()),
                 ("delta", payload.delta.is_some()),
                 ("error", payload.error.is_some()),
-                ("text", payload.text.is_some()),
-                ("arguments", payload.arguments.is_some()),
-                ("part", payload.part.is_some()),
-                ("item_id", payload.item_id.is_some()),
-                ("content_index", payload.content_index.is_some()),
-                ("summary_index", payload.summary_index.is_some()),
             ] {
                 if present {
                     return Err(stream_unexpected_field(path, field));
+                }
+            }
+            if kind == "response.output_item.done" {
+                if payload.item_id.is_some()
+                    || payload.content_index.is_some()
+                    || payload.summary_index.is_some()
+                    || payload.part.is_some()
+                    || payload.text.is_some()
+                    || payload.arguments.is_some()
+                {
+                    return Err(stream_unexpected_field(path, "item_identity"));
+                }
+            } else {
+                if payload.item_id.is_some()
+                    && !matches!(
+                        kind,
+                        "response.output_text.done"
+                            | "response.function_call_arguments.done"
+                            | "response.reasoning_summary_text.done"
+                            | "response.reasoning_text.done"
+                    )
+                {
+                    return Err(stream_unexpected_field(path, "item_id"));
+                }
+                if payload.content_index.is_some() && kind != "response.output_text.done" {
+                    return Err(stream_unexpected_field(path, "content_index"));
+                }
+                if payload.summary_index.is_some()
+                    && !matches!(
+                        kind,
+                        "response.reasoning_summary_text.done"
+                            | "response.reasoning_text.done"
+                    )
+                {
+                    return Err(stream_unexpected_field(path, "summary_index"));
+                }
+                if payload.part.is_some()
+                    && !matches!(
+                        kind,
+                        "response.reasoning_summary_text.done"
+                            | "response.reasoning_text.done"
+                    )
+                {
+                    return Err(stream_unexpected_field(path, "part"));
+                }
+                if payload.text.is_some()
+                    && !matches!(
+                        kind,
+                        "response.output_text.done"
+                            | "response.reasoning_summary_text.done"
+                            | "response.reasoning_text.done"
+                    )
+                {
+                    return Err(stream_unexpected_field(path, "text"));
+                }
+                if payload.arguments.is_some() && kind != "response.function_call_arguments.done" {
+                    return Err(stream_unexpected_field(path, "arguments"));
                 }
             }
         }
@@ -3164,7 +3252,6 @@ fn validate_responses_stream_event_shape(
         }
         "response.cancelled" => {
             for (field, present) in [
-                ("response", payload.response.is_some()),
                 ("item", payload.item.is_some()),
                 ("delta", payload.delta.is_some()),
                 ("text", payload.text.is_some()),
@@ -3343,13 +3430,6 @@ fn validate_stream_response_envelope(
             loss_code,
         ));
     }
-    if !response.output.is_empty() {
-        return Err(stream_feature_error(
-            "stream_response_output",
-            format!("{path}.output"),
-            Some("LOSS_UNKNOWN_EVENT"),
-        ));
-    }
     for (item_index, item) in response.output.iter().enumerate() {
         let item_path = format!("{path}.output[{item_index}]");
         validate_stream_output_item(item, &item_path, require_text)?;
@@ -3357,11 +3437,485 @@ fn validate_stream_response_envelope(
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResponsesStreamItemKind {
+    Message,
+    Reasoning,
+    FunctionCall,
+}
+
+#[derive(Clone, Debug)]
+struct ResponsesStreamItemState {
+    kind: ResponsesStreamItemKind,
+    item_id: Option<String>,
+    role: String,
+    call_id: Option<String>,
+    name: Option<String>,
+    content_index: Option<usize>,
+    summary_index: Option<usize>,
+    text: String,
+    summary: String,
+    arguments: Option<String>,
+    content_done: bool,
+    item_done: bool,
+}
+
+fn stream_item_kind(
+    item: &ResponsesOutputItem,
+    path: &str,
+) -> Result<ResponsesStreamItemKind, RelayConvertError> {
+    match item.kind.as_str() {
+        "message" => Ok(ResponsesStreamItemKind::Message),
+        "reasoning" => Ok(ResponsesStreamItemKind::Reasoning),
+        "function_call" => Ok(ResponsesStreamItemKind::FunctionCall),
+        _ => Err(stream_feature_error("unknown_output_item_type", path, None)),
+    }
+}
+
+fn stream_item_id(
+    value: &str,
+    path: &str,
+) -> Result<Option<String>, RelayConvertError> {
+    if value.is_empty() {
+        Ok(None)
+    } else if value.trim().is_empty() {
+        Err(stream_feature_error("output_item_id", path, None))
+    } else {
+        Ok(Some(value.to_owned()))
+    }
+}
+
+fn validate_stream_event_item_id(
+    state: &mut ResponsesStreamItemState,
+    item_id: Option<&String>,
+    path: &str,
+) -> Result<(), RelayConvertError> {
+    let Some(item_id) = item_id else {
+        return Ok(());
+    };
+    let item_id = stream_item_id(item_id, &format!("{path}.item_id"))?
+        .ok_or_else(|| stream_feature_error("output_item_id", format!("{path}.item_id"), None))?;
+    if let Some(expected) = state.item_id.as_ref() {
+        if expected != &item_id {
+            return Err(stream_feature_error(
+                "stream_item_identity",
+                format!("{path}.item_id"),
+                Some("LOSS_UNKNOWN_EVENT"),
+            ));
+        }
+    } else {
+        return Err(stream_feature_error(
+            "output_item_id",
+            format!("{path}.item_id"),
+            Some("LOSS_UNKNOWN_EVENT"),
+        ));
+    }
+    Ok(())
+}
+
+fn expected_stream_item_id(
+    response_id: &str,
+    kind: ResponsesStreamItemKind,
+    output_index: usize,
+) -> String {
+    let suffix = match kind {
+        ResponsesStreamItemKind::Message => "msg",
+        ResponsesStreamItemKind::Reasoning => "reasoning",
+        ResponsesStreamItemKind::FunctionCall => "tool",
+    };
+    format!("{response_id}_{suffix}_{output_index}")
+}
+
+fn validate_stream_snapshot_item(
+    state: &ResponsesStreamItemState,
+    item: &ResponsesOutputItem,
+    path: &str,
+) -> Result<(), RelayConvertError> {
+    let kind = stream_item_kind(item, path)?;
+    if kind != state.kind {
+        return Err(stream_feature_error(
+            "stream_item_identity",
+            format!("{path}.type"),
+            Some("LOSS_UNKNOWN_EVENT"),
+        ));
+    }
+    let item_id = stream_item_id(&item.id, &format!("{path}.id"))?;
+    match (state.item_id.as_ref(), item_id.as_ref()) {
+        (Some(expected), Some(actual)) if expected != actual => {
+            return Err(stream_feature_error(
+                "stream_item_identity",
+                format!("{path}.id"),
+                Some("LOSS_UNKNOWN_EVENT"),
+            ));
+        }
+        (Some(_), None) => {
+            return Err(stream_feature_error(
+                "stream_item_identity",
+                format!("{path}.id"),
+                Some("LOSS_UNKNOWN_EVENT"),
+            ));
+        }
+        (None, Some(_)) => {
+            return Err(stream_feature_error(
+                "output_item_id",
+                format!("{path}.id"),
+                Some("LOSS_UNKNOWN_EVENT"),
+            ));
+        }
+        _ => {}
+    }
+    match state.kind {
+        ResponsesStreamItemKind::Message => {
+            if item.role.as_str() != state.role.as_str() {
+                return Err(stream_feature_error(
+                    "stream_item_snapshot",
+                    format!("{path}.role"),
+                    Some("LOSS_UNKNOWN_EVENT"),
+                ));
+            }
+            validate_stream_snapshot_text(
+                item.content.as_ref(),
+                &state.text,
+                &format!("{path}.content"),
+            )?;
+        }
+        ResponsesStreamItemKind::Reasoning => {
+            if item.role.as_str() != state.role.as_str() {
+                return Err(stream_feature_error(
+                    "stream_item_snapshot",
+                    format!("{path}.role"),
+                    Some("LOSS_UNKNOWN_EVENT"),
+                ));
+            }
+            validate_stream_snapshot_text(
+                item.summary.as_ref(),
+                &state.summary,
+                &format!("{path}.summary"),
+            )?;
+        }
+        ResponsesStreamItemKind::FunctionCall => {
+            if item.role.as_str() != state.role.as_str()
+                || item.call_id.as_ref() != state.call_id.as_ref()
+                || item.name.as_ref() != state.name.as_ref()
+            {
+                return Err(stream_feature_error(
+                    "stream_item_snapshot",
+                    format!("{path}.call_id"),
+                    Some("LOSS_UNKNOWN_EVENT"),
+                ));
+            }
+            if item.arguments.as_ref() != state.arguments.as_ref() {
+                return Err(stream_feature_error(
+                    "stream_item_snapshot",
+                    format!("{path}.arguments"),
+                    Some("LOSS_UNKNOWN_EVENT"),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_stream_snapshot_text(
+    content: Option<&Vec<super::ResponsesOutputContent>>,
+    expected: &str,
+    path: &str,
+) -> Result<(), RelayConvertError> {
+    let Some(content) = content else {
+        return Err(stream_feature_error(
+            "stream_item_snapshot",
+            path,
+            Some("LOSS_UNKNOWN_EVENT"),
+        ));
+    };
+    if content.is_empty() && expected.is_empty() {
+        return Ok(());
+    }
+    if content.len() != 1 {
+        return Err(stream_feature_error(
+            "stream_item_snapshot",
+            path,
+            Some("LOSS_UNKNOWN_EVENT"),
+        ));
+    }
+    if content[0].text.as_deref() != Some(expected) {
+        return Err(stream_feature_error(
+            "stream_item_snapshot",
+            format!("{path}[0].text"),
+            Some("LOSS_UNKNOWN_EVENT"),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_stream_sub_index(
+    expected: &mut Option<usize>,
+    actual: Option<usize>,
+    field: &str,
+    path: &str,
+) -> Result<(), RelayConvertError> {
+    let Some(actual) = actual else {
+        return Ok(());
+    };
+    if actual != 0 {
+        return Err(stream_feature_error(
+            "stream_index_identity",
+            format!("{path}.{field}"),
+            Some("LOSS_UNKNOWN_EVENT"),
+        ));
+    }
+    if let Some(previous) = *expected {
+        if previous != actual {
+            return Err(stream_feature_error(
+                "stream_index_identity",
+                format!("{path}.{field}"),
+                Some("LOSS_UNKNOWN_EVENT"),
+            ));
+        }
+    } else {
+        *expected = Some(actual);
+    }
+    Ok(())
+}
+
+fn stream_item_state_mut<'a>(
+    states: &'a mut BTreeMap<usize, ResponsesStreamItemState>,
+    index: usize,
+    path: &str,
+) -> Result<&'a mut ResponsesStreamItemState, RelayConvertError> {
+    states.get_mut(&index).ok_or_else(|| {
+        stream_feature_error(
+            "stream_output_index",
+            format!("{path}.output_index"),
+            Some("LOSS_UNKNOWN_EVENT"),
+        )
+    })
+}
+
+fn validate_stream_delta_state(
+    states: &mut BTreeMap<usize, ResponsesStreamItemState>,
+    payload: &ResponsesEventPayload,
+    expected_kind: ResponsesStreamItemKind,
+    path: &str,
+) -> Result<(), RelayConvertError> {
+    let index = stream_output_index(payload, path)?;
+    let state = stream_item_state_mut(states, index, path)?;
+    if state.kind != expected_kind {
+        return Err(stream_feature_error(
+            "stream_item_identity",
+            format!("{path}.output_index"),
+            Some("LOSS_UNKNOWN_EVENT"),
+        ));
+    }
+    if state.content_done || state.item_done {
+        return Err(stream_feature_error(
+            "stream_delta_after_done",
+            path,
+            Some("LOSS_UNKNOWN_EVENT"),
+        ));
+    }
+    validate_stream_event_item_id(state, payload.item_id.as_ref(), path)?;
+    match expected_kind {
+        ResponsesStreamItemKind::Message => {
+            validate_stream_sub_index(
+                &mut state.content_index,
+                payload.content_index,
+                "content_index",
+                path,
+            )?;
+            if let Some(delta) = payload.delta.as_ref() {
+                state.text.push_str(delta);
+            }
+        }
+        ResponsesStreamItemKind::Reasoning => {
+            validate_stream_sub_index(
+                &mut state.summary_index,
+                payload.summary_index,
+                "summary_index",
+                path,
+            )?;
+            if let Some(delta) = payload.delta.as_ref() {
+                state.summary.push_str(delta);
+            }
+        }
+        ResponsesStreamItemKind::FunctionCall => {
+            if payload.content_index.is_some() || payload.summary_index.is_some() {
+                return Err(stream_feature_error(
+                    "stream_index",
+                    path,
+                    Some("LOSS_UNKNOWN_EVENT"),
+                ));
+            }
+            if let Some(delta) = payload.delta.as_ref() {
+                state
+                    .arguments
+                    .get_or_insert_with(String::new)
+                    .push_str(delta);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_stream_sub_done_state(
+    states: &mut BTreeMap<usize, ResponsesStreamItemState>,
+    payload: &ResponsesEventPayload,
+    expected_kind: ResponsesStreamItemKind,
+    path: &str,
+) -> Result<(), RelayConvertError> {
+    let index = stream_output_index(payload, path)?;
+    let state = stream_item_state_mut(states, index, path)?;
+    if state.kind != expected_kind {
+        return Err(stream_feature_error(
+            "stream_item_identity",
+            format!("{path}.output_index"),
+            Some("LOSS_UNKNOWN_EVENT"),
+        ));
+    }
+    if state.content_done || state.item_done {
+        return Err(stream_feature_error(
+            "stream_duplicate_done",
+            path,
+            Some("LOSS_UNKNOWN_EVENT"),
+        ));
+    }
+    validate_stream_event_item_id(state, payload.item_id.as_ref(), path)?;
+    match expected_kind {
+        ResponsesStreamItemKind::Message => {
+            validate_stream_sub_index(
+                &mut state.content_index,
+                payload.content_index,
+                "content_index",
+                path,
+            )?;
+            if let Some(text) = payload.text.as_ref() {
+                if text != &state.text {
+                    return Err(stream_feature_error(
+                        "stream_done_snapshot",
+                        format!("{path}.text"),
+                        Some("LOSS_UNKNOWN_EVENT"),
+                    ));
+                }
+            }
+        }
+        ResponsesStreamItemKind::Reasoning => {
+            validate_stream_sub_index(
+                &mut state.summary_index,
+                payload.summary_index,
+                "summary_index",
+                path,
+            )?;
+            if let Some(text) = payload.text.as_ref() {
+                if text != &state.summary {
+                    return Err(stream_feature_error(
+                        "stream_done_snapshot",
+                        format!("{path}.text"),
+                        Some("LOSS_UNKNOWN_EVENT"),
+                    ));
+                }
+            }
+        }
+        ResponsesStreamItemKind::FunctionCall => {
+            if let Some(arguments) = payload.arguments.as_ref() {
+                if state.arguments.as_ref() != Some(arguments) {
+                    return Err(stream_feature_error(
+                        "stream_done_snapshot",
+                        format!("{path}.arguments"),
+                        Some("LOSS_UNKNOWN_EVENT"),
+                    ));
+                }
+            }
+        }
+    }
+    state.content_done = true;
+    Ok(())
+}
+
+fn validate_stream_terminal_output(
+    response: &ResponsesResponse,
+    states: &BTreeMap<usize, ResponsesStreamItemState>,
+    path: &str,
+) -> Result<(), RelayConvertError> {
+    if response.output.is_empty() {
+        return Ok(());
+    }
+    if response.output.len() != states.len() {
+        return Err(stream_feature_error(
+            "stream_response_output",
+            format!("{path}.output"),
+            Some("LOSS_UNKNOWN_EVENT"),
+        ));
+    }
+    for (index, (item, (_, state))) in response.output.iter().zip(states.iter()).enumerate() {
+        let item_path = format!("{path}.output[{index}]");
+        if item.status != "completed" {
+            return Err(stream_feature_error(
+                "stream_item_status",
+                format!("{item_path}.status"),
+                Some("LOSS_UNKNOWN_EVENT"),
+            ));
+        }
+        validate_stream_snapshot_item(state, item, &item_path)?;
+    }
+    Ok(())
+}
+
+fn validate_stream_terminal_usage(
+    snapshot: &ResponsesStreamSnapshot,
+    response: &ResponsesResponse,
+    terminal_usage: &mut Option<WireUsage>,
+    path: &str,
+) -> Result<(), RelayConvertError> {
+    if let Some(event_usage) = response.usage.as_ref() {
+        if snapshot.usage != WireUsage::default() && &snapshot.usage != event_usage {
+            return Err(stream_feature_error(
+                "stream_usage_conflict",
+                format!("{path}.usage"),
+                Some("LOSS_UNKNOWN_EVENT"),
+            ));
+        }
+        if let Some(previous) = terminal_usage.as_ref() {
+            if previous != event_usage {
+                return Err(stream_feature_error(
+                    "stream_usage_conflict",
+                    format!("{path}.usage"),
+                    Some("LOSS_UNKNOWN_EVENT"),
+                ));
+            }
+        } else {
+            *terminal_usage = Some(event_usage.clone());
+        }
+    } else if terminal_usage.is_none() {
+        *terminal_usage = Some(snapshot.usage.clone());
+    }
+    Ok(())
+}
+
+fn validate_stream_items_done(
+    states: &BTreeMap<usize, ResponsesStreamItemState>,
+    path: &str,
+) -> Result<(), RelayConvertError> {
+    if states.values().any(|state| !state.item_done) {
+        return Err(stream_feature_error(
+            "stream_termination",
+            path,
+            Some("LOSS_UNKNOWN_EVENT"),
+        ));
+    }
+    Ok(())
+}
+
 fn validate_responses_stream_events(
     snapshot: &ResponsesStreamSnapshot,
 ) -> Result<(), RelayConvertError> {
+    let mut states = BTreeMap::<usize, ResponsesStreamItemState>::new();
+    let mut created_seen = false;
+    let mut response_id = String::new();
+    let mut response_model = String::new();
     let mut terminal = false;
     let mut terminal_error_seen = false;
+    let mut terminal_cancelled_seen = false;
+    let mut terminal_usage = None;
     for (index, event) in snapshot.events.iter().enumerate() {
         let path = format!("events[{index}]");
         if !event.extra.is_empty() {
@@ -3373,15 +3927,27 @@ fn validate_responses_stream_events(
         }
         validate_responses_stream_event_shape(event, &path)?;
         let kind = event.payload.kind.as_str();
+        if kind == "response.created" && (created_seen || index != 0) {
+            return Err(stream_feature_error(
+                "stream_start",
+                path,
+                Some("LOSS_UNKNOWN_EVENT"),
+            ));
+        }
         if terminal {
-            if kind != "response.error" || terminal_error_seen {
-                return Err(stream_feature_error(
-                    "stream_termination",
-                    path,
-                    Some("LOSS_UNKNOWN_EVENT"),
-                ));
+            match kind {
+                "response.error" if !terminal_error_seen => terminal_error_seen = true,
+                "response.cancelled" if !terminal_cancelled_seen => {
+                    terminal_cancelled_seen = true;
+                }
+                _ => {
+                    return Err(stream_feature_error(
+                        "stream_termination",
+                        path,
+                        Some("LOSS_UNKNOWN_EVENT"),
+                    ));
+                }
             }
-            terminal_error_seen = true;
         }
         if let Some((feature, loss_code)) = stream_event_kind_feature(kind) {
             return Err(stream_feature_error(feature, path, loss_code));
@@ -3398,25 +3964,108 @@ fn validate_responses_stream_events(
                 let response = event.payload.response.as_ref().ok_or_else(|| {
                     stream_feature_error("stream_response", format!("{path}.response"), None)
                 })?;
+                if response.status != "in_progress" {
+                    return Err(stream_feature_error(
+                        "stream_start_status",
+                        format!("{path}.response.status"),
+                        Some("LOSS_UNKNOWN_EVENT"),
+                    ));
+                }
                 validate_stream_response_envelope(
                     response,
                     &format!("{path}.response"),
                     false,
                     false,
                 )?;
+                if !response.output.is_empty() {
+                    return Err(stream_feature_error(
+                        "stream_initial_output",
+                        format!("{path}.response.output"),
+                        Some("LOSS_UNKNOWN_EVENT"),
+                    ));
+                }
+                response_id.clone_from(&response.id);
+                response_model.clone_from(&response.model);
+                created_seen = true;
             }
             "response.output_item.added" => {
                 let item = event.payload.item.as_ref().ok_or_else(|| {
                     stream_feature_error("stream_item", format!("{path}.item"), None)
                 })?;
+                let output_index = event.payload.output_index.ok_or_else(|| {
+                    stream_feature_error("stream_index", format!("{path}.output_index"), None)
+                })?;
+                if states.contains_key(&output_index) {
+                    return Err(stream_feature_error(
+                        "stream_duplicate_item",
+                        format!("{path}.output_index"),
+                        Some("LOSS_UNKNOWN_EVENT"),
+                    ));
+                }
                 validate_stream_output_item(item, &format!("{path}.item"), false)?;
                 reject_stream_output_item_initial_data(item, &format!("{path}.item"))?;
+                if item.status != "in_progress" {
+                    return Err(stream_feature_error(
+                        "stream_item_status",
+                        format!("{path}.item.status"),
+                        Some("LOSS_UNKNOWN_EVENT"),
+                    ));
+                }
+                let kind = stream_item_kind(item, &format!("{path}.item"))?;
+                let item_id = stream_item_id(&item.id, &format!("{path}.item.id"))?;
+                if let Some(item_id) = item_id.as_ref() {
+                    if item_id != &expected_stream_item_id(&response_id, kind, output_index) {
+                        return Err(stream_feature_error(
+                            "output_item_id",
+                            format!("{path}.item.id"),
+                            Some("LOSS_UNKNOWN_EVENT"),
+                        ));
+                    }
+                }
+                states.insert(
+                    output_index,
+                    ResponsesStreamItemState {
+                        kind,
+                        item_id,
+                        role: item.role.clone(),
+                        call_id: item.call_id.clone(),
+                        name: item.name.clone(),
+                        content_index: None,
+                        summary_index: None,
+                        text: String::new(),
+                        summary: String::new(),
+                        arguments: item.arguments.clone(),
+                        content_done: false,
+                        item_done: false,
+                    },
+                );
             }
-            "response.output_text.delta"
-            | "response.function_call_arguments.delta"
-            | "response.reasoning_summary_text.delta"
-            | "response.reasoning_text.delta" => {
+            "response.output_text.delta" => {
                 validate_stream_delta(&event.payload, &path)?;
+                validate_stream_delta_state(
+                    &mut states,
+                    &event.payload,
+                    ResponsesStreamItemKind::Message,
+                    &path,
+                )?;
+            }
+            "response.function_call_arguments.delta" => {
+                validate_stream_delta(&event.payload, &path)?;
+                validate_stream_delta_state(
+                    &mut states,
+                    &event.payload,
+                    ResponsesStreamItemKind::FunctionCall,
+                    &path,
+                )?;
+            }
+            "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
+                validate_stream_delta(&event.payload, &path)?;
+                validate_stream_delta_state(
+                    &mut states,
+                    &event.payload,
+                    ResponsesStreamItemKind::Reasoning,
+                    &path,
+                )?;
             }
             "response.custom_tool_call_input.delta" | "response.custom_tool_call_input.done" => {
                 return Err(stream_feature_error(
@@ -3425,26 +4074,144 @@ fn validate_responses_stream_events(
                     Some("LOSS_CUSTOM_TOOL"),
                 ));
             }
-            "response.output_text.done"
-            | "response.reasoning_summary_text.done"
-            | "response.reasoning_text.done"
-            | "response.function_call_arguments.done"
-            | "response.output_item.done" => {
-                if let Some(item) = event.payload.item.as_ref() {
-                    validate_stream_output_item(item, &format!("{path}.item"), false)?;
+            "response.output_text.done" => {
+                validate_stream_sub_done_state(
+                    &mut states,
+                    &event.payload,
+                    ResponsesStreamItemKind::Message,
+                    &path,
+                )?;
+            }
+            "response.reasoning_summary_text.done" | "response.reasoning_text.done" => {
+                if let Some(part) = event.payload.part.as_ref() {
+                    if !matches!(part.kind.as_str(), "summary_text" | "text")
+                        || part.annotations.as_ref().is_some_and(|value| !value.is_empty())
+                    {
+                        return Err(stream_feature_error(
+                            "stream_reasoning_part",
+                            format!("{path}.part"),
+                            Some("LOSS_OPAQUE_REASONING"),
+                        ));
+                    }
+                    if let Some(error) = first_extra_path(&format!("{path}.part"), &part.extra) {
+                        return Err(retarget_unsupported_error_format(
+                            error,
+                            "provider_neutral_ir",
+                        ));
+                    }
+                }
+                validate_stream_sub_done_state(
+                    &mut states,
+                    &event.payload,
+                    ResponsesStreamItemKind::Reasoning,
+                    &path,
+                )?;
+                if let Some(part) = event.payload.part.as_ref() {
+                    let output_index = stream_output_index(&event.payload, &path)?;
+                    let state = states.get(&output_index).ok_or_else(|| {
+                        stream_feature_error(
+                            "stream_output_index",
+                            format!("{path}.output_index"),
+                            Some("LOSS_UNKNOWN_EVENT"),
+                        )
+                    })?;
+                    if part.text.as_deref() != Some(state.summary.as_str()) {
+                        return Err(stream_feature_error(
+                            "stream_reasoning_part",
+                            format!("{path}.part.text"),
+                            Some("LOSS_OPAQUE_REASONING"),
+                        ));
+                    }
                 }
             }
+            "response.function_call_arguments.done" => {
+                validate_stream_sub_done_state(
+                    &mut states,
+                    &event.payload,
+                    ResponsesStreamItemKind::FunctionCall,
+                    &path,
+                )?;
+            }
+            "response.output_item.done" => {
+                let output_index = event.payload.output_index.ok_or_else(|| {
+                    stream_feature_error("stream_index", format!("{path}.output_index"), None)
+                })?;
+                let item = event.payload.item.as_ref().ok_or_else(|| {
+                    stream_feature_error("stream_item", format!("{path}.item"), None)
+                })?;
+                validate_stream_output_item(item, &format!("{path}.item"), false)?;
+                if item.status != "completed" {
+                    return Err(stream_feature_error(
+                        "stream_item_status",
+                        format!("{path}.item.status"),
+                        Some("LOSS_UNKNOWN_EVENT"),
+                    ));
+                }
+                let state = match states.get_mut(&output_index) {
+                    Some(state) => state,
+                    None => {
+                        return Err(stream_feature_error(
+                            "stream_terminal_item",
+                            format!("{path}.item"),
+                            Some("LOSS_UNKNOWN_EVENT"),
+                        ));
+                    }
+                };
+                if state.item_done {
+                    return Err(stream_feature_error(
+                        "stream_duplicate_done",
+                        path,
+                        Some("LOSS_UNKNOWN_EVENT"),
+                    ));
+                }
+                if !state.content_done {
+                    return Err(stream_feature_error(
+                        "stream_item_lifecycle",
+                        format!("{path}.item"),
+                        Some("LOSS_UNKNOWN_EVENT"),
+                    ));
+                }
+                validate_stream_snapshot_item(state, item, &format!("events[{index}].item"))?;
+                state.item_done = true;
+            }
             "response.completed" | "response.done" | "response.incomplete" => {
-                terminal = true;
                 let response = event.payload.response.as_ref().ok_or_else(|| {
                     stream_feature_error("stream_response", format!("{path}.response"), None)
                 })?;
+                let expected_status = if kind == "response.incomplete" {
+                    "incomplete"
+                } else {
+                    "completed"
+                };
+                if response.status != expected_status {
+                    return Err(stream_feature_error(
+                        "stream_response_status",
+                        format!("{path}.response.status"),
+                        Some("LOSS_UNKNOWN_EVENT"),
+                    ));
+                }
                 validate_stream_response_envelope(
                     response,
                     &format!("{path}.response"),
                     false,
                     kind != "response.incomplete",
                 )?;
+                validate_stream_terminal_usage(
+                    snapshot,
+                    response,
+                    &mut terminal_usage,
+                    &format!("{path}.response"),
+                )?;
+                validate_stream_terminal_output(response, &states, &format!("{path}.response"))?;
+                if response.id != response_id || response.model != response_model {
+                    return Err(stream_feature_error(
+                        "stream_response_identity",
+                        format!("{path}.response"),
+                        Some("LOSS_UNKNOWN_EVENT"),
+                    ));
+                }
+                validate_stream_items_done(&states, &path)?;
+                terminal = true;
             }
             "response.failed" => {
                 terminal = true;
@@ -3455,7 +4222,32 @@ fn validate_responses_stream_events(
                         true,
                         false,
                     )?;
+                    validate_stream_terminal_usage(
+                        snapshot,
+                        response,
+                        &mut terminal_usage,
+                        &format!("{path}.response"),
+                    )?;
+                    validate_stream_terminal_output(response, &states, &format!("{path}.response"))?;
+                    if response.id != response_id || response.model != response_model {
+                        return Err(stream_feature_error(
+                            "stream_response_identity",
+                            format!("{path}.response"),
+                            Some("LOSS_UNKNOWN_EVENT"),
+                        ));
+                    }
+                    if response.status != "failed" {
+                        return Err(stream_feature_error(
+                            "stream_response_status",
+                            format!("{path}.response.status"),
+                            Some("LOSS_UNKNOWN_EVENT"),
+                        ));
+                    }
                 }
+                if terminal_usage.is_none() {
+                    terminal_usage = Some(snapshot.usage.clone());
+                }
+                validate_stream_items_done(&states, &path)?;
             }
             "response.error" => {
                 terminal = true;
@@ -3467,9 +4259,70 @@ fn validate_responses_stream_events(
                         true,
                         false,
                     )?;
+                    validate_stream_terminal_usage(
+                        snapshot,
+                        response,
+                        &mut terminal_usage,
+                        &format!("{path}.response"),
+                    )?;
+                    validate_stream_terminal_output(response, &states, &format!("{path}.response"))?;
+                    if response.id != response_id || response.model != response_model {
+                        return Err(stream_feature_error(
+                            "stream_response_identity",
+                            format!("{path}.response"),
+                            Some("LOSS_UNKNOWN_EVENT"),
+                        ));
+                    }
+                    if response.status != "failed" {
+                        return Err(stream_feature_error(
+                            "stream_response_status",
+                            format!("{path}.response.status"),
+                            Some("LOSS_UNKNOWN_EVENT"),
+                        ));
+                    }
                 }
+                if terminal_usage.is_none() {
+                    terminal_usage = Some(snapshot.usage.clone());
+                }
+                validate_stream_items_done(&states, &path)?;
             }
-            "response.cancelled" => terminal = true,
+            "response.cancelled" => {
+                if let Some(response) = event.payload.response.as_ref() {
+                    validate_stream_response_envelope(
+                        response,
+                        &format!("{path}.response"),
+                        true,
+                        false,
+                    )?;
+                    validate_stream_terminal_usage(
+                        snapshot,
+                        response,
+                        &mut terminal_usage,
+                        &format!("{path}.response"),
+                    )?;
+                    validate_stream_terminal_output(response, &states, &format!("{path}.response"))?;
+                    if response.id != response_id || response.model != response_model {
+                        return Err(stream_feature_error(
+                            "stream_response_identity",
+                            format!("{path}.response"),
+                            Some("LOSS_UNKNOWN_EVENT"),
+                        ));
+                    }
+                    if response.status != "cancelled" {
+                        return Err(stream_feature_error(
+                            "stream_response_status",
+                            format!("{path}.response.status"),
+                            Some("LOSS_UNKNOWN_EVENT"),
+                        ));
+                    }
+                }
+                if terminal_usage.is_none() {
+                    terminal_usage = Some(snapshot.usage.clone());
+                }
+                validate_stream_items_done(&states, &path)?;
+                terminal = true;
+                terminal_cancelled_seen = true;
+            }
             _ => {
                 return Err(stream_feature_error(
                     "unknown_event",
@@ -3478,6 +4331,25 @@ fn validate_responses_stream_events(
                 ));
             }
         }
+    }
+    if snapshot
+        .events
+        .first()
+        .is_none_or(|event| event.payload.kind != "response.created")
+        || !created_seen
+    {
+        return Err(stream_feature_error(
+            "stream_start",
+            "events[0]",
+            Some("LOSS_UNKNOWN_EVENT"),
+        ));
+    }
+    if !terminal {
+        return Err(stream_feature_error(
+            "stream_termination",
+            "events",
+            Some("LOSS_UNKNOWN_EVENT"),
+        ));
     }
     Ok(())
 }
@@ -6646,6 +7518,7 @@ pub fn response_events_to_responses(events: &[CanonicalStreamEvent]) -> Vec<Resp
     let mut out = Vec::new();
     let mut items = BTreeMap::<usize, ResponsesOutputItem>::new();
     let mut open_items = BTreeSet::new();
+    let mut emitted_cancelled_terminal = false;
     for event in events {
         let mut payloads = Vec::new();
         match event {
@@ -6655,6 +7528,7 @@ pub fn response_events_to_responses(events: &[CanonicalStreamEvent]) -> Vec<Resp
             } => {
                 id.clone_from(event_id);
                 model.clone_from(event_model);
+                emitted_cancelled_terminal = false;
                 let response = empty_responses_stream_response(&id, &model, "in_progress", None);
                 let mut payload = responses_payload("response.created");
                 payload.response = Some(response);
@@ -6784,6 +7658,7 @@ pub fn response_events_to_responses(events: &[CanonicalStreamEvent]) -> Vec<Resp
                 usage,
                 model: _,
             } => {
+                emitted_cancelled_terminal = matches!(finish_reason, &FinishReason::Cancelled);
                 for index in open_items.clone() {
                     finish_responses_item(&mut payloads, &mut items, &mut open_items, index);
                 }
@@ -6827,7 +7702,9 @@ pub fn response_events_to_responses(events: &[CanonicalStreamEvent]) -> Vec<Resp
                 payloads.push(payload);
             }
             CanonicalStreamEvent::Cancelled => {
-                payloads.push(responses_payload("response.cancelled"));
+                if !emitted_cancelled_terminal {
+                    payloads.push(responses_payload("response.cancelled"));
+                }
             }
         }
         out.extend(payloads.into_iter().map(|payload| ResponsesStreamEvent {
@@ -6964,10 +7841,10 @@ fn empty_responses_stream_response(
         max_output_tokens: None,
         model: model.to_owned(),
         output: Vec::new(),
-        parallel_tool_calls: Some(false),
+        parallel_tool_calls: None,
         previous_response_id: None,
         reasoning: None,
-        store: Some(false),
+        store: None,
         temperature: None,
         tool_choice: None,
         tools: None,

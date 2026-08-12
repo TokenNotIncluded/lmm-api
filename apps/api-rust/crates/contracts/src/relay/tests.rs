@@ -224,9 +224,18 @@ fn responses_response_to_chat_matches_go_golden_semantics() {
 
 #[test]
 fn stream_pair_preserves_frame_order_text_finish_and_usage() {
-    let responses: ResponsesStreamSnapshot =
+    let mut responses: ResponsesStreamSnapshot =
         serde_json::from_str(&fixture("stream", "openai", "openai_responses"))
             .expect("golden Responses stream");
+    for event in &mut responses.events {
+        if let Some(response) = event.payload.response.as_mut() {
+            response.max_output_tokens = None;
+            response.parallel_tool_calls = None;
+            response.store = None;
+            response.temperature = None;
+            response.top_p = None;
+        }
+    }
     let canonical = responses_stream_to_canonical(&responses);
     let text = canonical
         .iter()
@@ -275,6 +284,73 @@ fn stream_pair_preserves_frame_order_text_finish_and_usage() {
             ..
         })
     ));
+}
+
+#[test]
+fn responses_encoder_emits_a_checked_state_machine_stream() {
+    let events = vec![
+        CanonicalStreamEvent::ResponseStart {
+            id: "resp-self-check".to_owned(),
+            model: "gpt-test".to_owned(),
+        },
+        CanonicalStreamEvent::ContentStart {
+            index: 0,
+            kind: StreamContentKind::Text,
+        },
+        CanonicalStreamEvent::TextDelta {
+            index: 0,
+            delta: "hello".to_owned(),
+        },
+        CanonicalStreamEvent::ContentEnd { index: 0 },
+        CanonicalStreamEvent::ResponseEnd {
+            finish_reason: FinishReason::Stop,
+            usage: None,
+            model: None,
+        },
+    ];
+    let snapshot = ResponsesStreamSnapshot {
+        events: response_events_to_responses(&events),
+        usage: WireUsage::default(),
+    };
+    let checked = responses_stream_to_canonical_checked(&snapshot)
+        .expect("the Responses encoder output must satisfy its checked parser");
+    assert!(checked.iter().any(|event| matches!(
+        event,
+        CanonicalStreamEvent::TextDelta { delta, .. } if delta == "hello"
+    )));
+    assert!(snapshot
+        .events
+        .iter()
+        .any(|event| event.kind == "response.output_item.done"));
+
+    let terminal_then_cancelled = vec![
+        CanonicalStreamEvent::ResponseStart {
+            id: "resp-terminal-cancel".to_owned(),
+            model: "gpt-test".to_owned(),
+        },
+        CanonicalStreamEvent::ResponseEnd {
+            finish_reason: FinishReason::Stop,
+            usage: None,
+            model: None,
+        },
+        CanonicalStreamEvent::Cancelled,
+    ];
+    let snapshot = ResponsesStreamSnapshot {
+        events: response_events_to_responses(&terminal_then_cancelled),
+        usage: WireUsage::default(),
+    };
+    let checked = responses_stream_to_canonical_checked(&snapshot)
+        .expect("a post-terminal cancellation remains a distinct checked event");
+    assert_eq!(
+        checked
+            .iter()
+            .filter(|event| matches!(event, CanonicalStreamEvent::ResponseEnd { .. }))
+            .count(),
+        1
+    );
+    assert!(checked
+        .iter()
+        .any(|event| matches!(event, CanonicalStreamEvent::Cancelled)));
 }
 
 #[test]
@@ -359,6 +435,8 @@ fn openai_pair_golden_streams_execute_source_to_target_frame_by_frame() {
     for event in &mut actual_responses.events {
         if let Some(response) = event.payload.response.as_mut() {
             response.max_output_tokens = None;
+            response.parallel_tool_calls = None;
+            response.store = None;
             response.temperature = None;
             response.top_p = None;
         }
@@ -367,6 +445,8 @@ fn openai_pair_golden_streams_execute_source_to_target_frame_by_frame() {
     for event in &mut expected_responses.events {
         if let Some(response) = event.payload.response.as_mut() {
             response.max_output_tokens = None;
+            response.parallel_tool_calls = None;
+            response.store = None;
             response.temperature = None;
             response.top_p = None;
         }
@@ -376,22 +456,19 @@ fn openai_pair_golden_streams_execute_source_to_target_frame_by_frame() {
     let responses_source: ResponsesStreamSnapshot = serde_json::from_str(
         r#"{
           "events":[
-            {"Type":"response.output_text.delta","Payload":{"type":"response.output_text.delta","delta":"Hello"}},
-            {"Type":"response.output_text.delta","Payload":{"type":"response.output_text.delta","delta":" world"}},
-            {"Type":"response.completed","Payload":{"type":"response.completed","response":{"id":"resp_fixed","object":"response","status":"completed","model":"gpt-test","output":[],"usage":{"input_tokens":4,"output_tokens":2,"total_tokens":6}}}}
+            {"Type":"response.created","Payload":{"type":"response.created","response":{"id":"stream_fixed","object":"response","status":"in_progress","model":"stream-model","output":[]}}},
+            {"Type":"response.output_item.added","Payload":{"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"stream_fixed_msg_0","status":"in_progress","role":"assistant","content":[]}}},
+            {"Type":"response.output_text.delta","Payload":{"type":"response.output_text.delta","delta":"Hello","output_index":0,"content_index":0,"item_id":"stream_fixed_msg_0"}},
+            {"Type":"response.output_text.delta","Payload":{"type":"response.output_text.delta","delta":" world","output_index":0,"content_index":0,"item_id":"stream_fixed_msg_0"}},
+            {"Type":"response.output_text.done","Payload":{"type":"response.output_text.done","output_index":0,"content_index":0,"item_id":"stream_fixed_msg_0"}},
+            {"Type":"response.output_item.done","Payload":{"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"stream_fixed_msg_0","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Hello world","annotations":[]}]}}},
+            {"Type":"response.completed","Payload":{"type":"response.completed","response":{"id":"stream_fixed","object":"response","status":"completed","model":"stream-model","output":[],"usage":{"input_tokens":4,"output_tokens":2,"total_tokens":6}}}}
           ],
           "usage":{"input_tokens":4,"output_tokens":2,"total_tokens":6}
         }"#,
     )
     .expect("typed Responses source stream");
     let mut canonical = responses_stream_to_canonical(&responses_source);
-    canonical.insert(
-        0,
-        CanonicalStreamEvent::ResponseStart {
-            id: "stream_fixed".to_owned(),
-            model: "stream-model".to_owned(),
-        },
-    );
     let expected_chat: OpenAiStreamSnapshot =
         serde_json::from_str(&fixture("stream", "openai_responses", "openai"))
             .expect("golden Chat target stream");
@@ -569,7 +646,12 @@ fn inbound_responses_stream_preserves_tool_reasoning_error_and_incomplete_finish
             {"Type":"response.created","Payload":{"type":"response.created","response":{"id":"resp_test","object":"response","status":"in_progress","model":"gpt-test","output":[]}}},
             {"Type":"response.output_item.added","Payload":{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","call_id":"call_1","name":"weather","status":"in_progress","arguments":""}}},
             {"Type":"response.function_call_arguments.delta","Payload":{"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"city\":\"Paris\"}"}},
+            {"Type":"response.output_item.added","Payload":{"type":"response.output_item.added","output_index":1,"item":{"type":"reasoning","status":"in_progress","summary":[]}}},
             {"Type":"response.reasoning_summary_text.delta","Payload":{"type":"response.reasoning_summary_text.delta","output_index":1,"delta":"think"}},
+            {"Type":"response.function_call_arguments.done","Payload":{"type":"response.function_call_arguments.done","output_index":0}},
+            {"Type":"response.output_item.done","Payload":{"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","call_id":"call_1","name":"weather","status":"completed","arguments":"{\"city\":\"Paris\"}"}}},
+            {"Type":"response.reasoning_summary_text.done","Payload":{"type":"response.reasoning_summary_text.done","output_index":1,"summary_index":0,"part":{"type":"summary_text","text":"think"}}},
+            {"Type":"response.output_item.done","Payload":{"type":"response.output_item.done","output_index":1,"item":{"type":"reasoning","status":"completed","summary":[{"type":"summary_text","text":"think"}]}}},
             {"Type":"response.incomplete","Payload":{"type":"response.incomplete","response":{"id":"resp_test","object":"response","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"model":"gpt-test","output":[],"usage":{"input_tokens":4,"output_tokens":2,"total_tokens":6}}}},
             {"Type":"response.error","Payload":{"type":"response.error","error":{"code":"upstream_error","message":"boom"}}}
           ],
@@ -858,20 +940,30 @@ fn chat_stream_allocates_distinct_global_responses_output_indices() {
 fn responses_failed_stream_reads_the_nested_response_error() {
     let snapshot: ResponsesStreamSnapshot = serde_json::from_str(
         r#"{
-          "events":[{"Type":"response.failed","Payload":{"type":"response.failed","response":{"id":"resp_test","object":"response","status":"failed","model":"gpt-test","output":[],"error":{"code":"model_error","message":"nested boom"}}}}],
-          "usage":{}
+          "events":[
+            {"Type":"response.created","Payload":{"type":"response.created","response":{"id":"resp_test","object":"response","status":"in_progress","model":"gpt-test","output":[]}}},
+            {"Type":"response.failed","Payload":{"type":"response.failed","response":{"id":"resp_test","object":"response","status":"failed","model":"gpt-test","output":[],"error":{"code":"model_error","message":"nested boom"}}}}
+          ],
+          "usage":{"input_tokens":3,"output_tokens":1,"total_tokens":4}
         }"#,
     )
     .expect("nested Responses error");
+    let canonical = responses_stream_to_canonical(&snapshot);
     assert!(
-        responses_stream_to_canonical(&snapshot)
-            .iter()
-            .any(|event| matches!(
-                event,
-                CanonicalStreamEvent::Error { code, message }
-                    if code.as_deref() == Some("model_error") && message == "nested boom"
-            ))
+        canonical.iter().any(|event| matches!(
+            event,
+            CanonicalStreamEvent::Error { code, message }
+                if code.as_deref() == Some("model_error") && message == "nested boom"
+        ))
     );
+    assert!(canonical.iter().any(|event| matches!(
+        event,
+        CanonicalStreamEvent::ResponseEnd {
+            finish_reason: FinishReason::Error,
+            usage: Some(TokenUsage { total_tokens: 4, .. }),
+            ..
+        }
+    )));
 }
 
 #[test]
@@ -1415,7 +1507,7 @@ fn responses_checked_stream_rejects_custom_delta_with_custom_loss() {
 #[test]
 fn responses_checked_stream_rejects_unrepresentable_output_item_id() {
     let snapshot: ResponsesStreamSnapshot = serde_json::from_str(
-        r#"{"events":[{"Type":"response.output_item.added","Payload":{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_item","call_id":"call_1","name":"lookup","arguments":""}}}],"usage":{}}"#,
+        r#"{"events":[{"Type":"response.output_item.added","Payload":{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_item","status":"in_progress","call_id":"call_1","name":"lookup","arguments":""}}}],"usage":{}}"#,
     )
     .expect("stream item id retained");
     assert!(matches!(
@@ -1423,6 +1515,133 @@ fn responses_checked_stream_rejects_unrepresentable_output_item_id() {
         Err(RelayConvertError::UnsupportedFeature(error))
             if error.feature == "output_item_id"
                 && error.path == "events[0].item.id"
+    ));
+}
+
+#[test]
+fn responses_checked_stream_accepts_and_checks_generated_item_identity() {
+    let events = vec![
+        CanonicalStreamEvent::ResponseStart {
+            id: "resp-id".to_owned(),
+            model: "gpt-test".to_owned(),
+        },
+        CanonicalStreamEvent::ContentStart {
+            index: 0,
+            kind: StreamContentKind::ToolCall,
+        },
+        CanonicalStreamEvent::ToolCallStart {
+            index: 0,
+            id: "call-id".to_owned(),
+            name: "lookup".to_owned(),
+        },
+        CanonicalStreamEvent::ToolArgumentsDelta {
+            index: 0,
+            delta: "{}".to_owned(),
+        },
+        CanonicalStreamEvent::ContentEnd { index: 0 },
+        CanonicalStreamEvent::ResponseEnd {
+            finish_reason: FinishReason::ToolCalls,
+            usage: None,
+            model: None,
+        },
+    ];
+    let snapshot = ResponsesStreamSnapshot {
+        events: response_events_to_responses(&events),
+        usage: WireUsage::default(),
+    };
+    assert!(responses_stream_to_canonical_checked(&snapshot).is_ok());
+
+    let mut done_snapshot = snapshot.clone();
+    if let Some(event) = done_snapshot
+        .events
+        .iter_mut()
+        .find(|event| event.kind == "response.function_call_arguments.done")
+    {
+        event.payload.arguments = Some("{}".to_owned());
+    }
+    assert!(responses_stream_to_canonical_checked(&done_snapshot).is_ok());
+
+    let mut mismatched = snapshot.clone();
+    if let Some(event) = mismatched
+        .events
+        .iter_mut()
+        .find(|event| event.kind == "response.function_call_arguments.delta")
+    {
+        event.payload.item_id = Some("wrong-item".to_owned());
+    }
+    assert!(matches!(
+        responses_stream_to_canonical_checked(&mismatched),
+        Err(RelayConvertError::UnsupportedFeature(error))
+            if error.feature == "stream_item_identity"
+                && error.loss_code.as_deref() == Some("LOSS_UNKNOWN_EVENT")
+    ));
+
+    let mut late_id = snapshot.clone();
+    for event in &mut late_id.events {
+        if event.kind == "response.output_item.added" {
+            if let Some(item) = event.payload.item.as_mut() {
+                item.id.clear();
+            }
+        }
+        event.payload.item_id = None;
+    }
+    assert!(matches!(
+        responses_stream_to_canonical_checked(&late_id),
+        Err(RelayConvertError::UnsupportedFeature(error))
+            if error.feature == "output_item_id"
+                && error.path.ends_with(".item.id")
+                && error.loss_code.as_deref() == Some("LOSS_UNKNOWN_EVENT")
+    ));
+
+    let mut missing_sub_done = snapshot.clone();
+    missing_sub_done
+        .events
+        .retain(|event| event.kind != "response.function_call_arguments.done");
+    assert!(matches!(
+        responses_stream_to_canonical_checked(&missing_sub_done),
+        Err(RelayConvertError::UnsupportedFeature(error))
+            if error.feature == "stream_item_lifecycle"
+                && error.path.ends_with(".item")
+                && error.loss_code.as_deref() == Some("LOSS_UNKNOWN_EVENT")
+    ));
+
+    let mut incomplete_item = snapshot.clone();
+    if let Some(event) = incomplete_item
+        .events
+        .iter_mut()
+        .find(|event| event.kind == "response.output_item.done")
+    {
+        if let Some(item) = event.payload.item.as_mut() {
+            item.status = "incomplete".to_owned();
+        }
+    }
+    assert!(matches!(
+        responses_stream_to_canonical_checked(&incomplete_item),
+        Err(RelayConvertError::UnsupportedFeature(error))
+            if error.feature == "stream_item_status"
+                && error.path.ends_with(".item.status")
+                && error.loss_code.as_deref() == Some("LOSS_UNKNOWN_EVENT")
+    ));
+
+    let mut usage_conflict = snapshot;
+    usage_conflict.usage.prompt_tokens = 1;
+    if let Some(event) = usage_conflict
+        .events
+        .iter_mut()
+        .find(|event| event.kind == "response.completed")
+    {
+        if let Some(response) = event.payload.response.as_mut() {
+            response.usage = Some(WireUsage {
+                prompt_tokens: 2,
+                ..WireUsage::default()
+            });
+        }
+    }
+    assert!(matches!(
+        responses_stream_to_canonical_checked(&usage_conflict),
+        Err(RelayConvertError::UnsupportedFeature(error))
+            if error.feature == "stream_usage_conflict"
+                && error.loss_code.as_deref() == Some("LOSS_UNKNOWN_EVENT")
     ));
 }
 
@@ -1522,6 +1741,7 @@ fn responses_checked_stream_rejects_duplicate_terminal_events() {
     let snapshot: ResponsesStreamSnapshot = serde_json::from_str(
         r#"{
           "events":[
+            {"Type":"response.created","Payload":{"type":"response.created","response":{"id":"resp-1","object":"response","status":"in_progress","model":"gpt-test","output":[]}}},
             {"Type":"response.completed","Payload":{"type":"response.completed","response":{"id":"resp-1","object":"response","status":"completed","model":"gpt-test","output":[]}}},
             {"Type":"response.done","Payload":{"type":"response.done","response":{"id":"resp-1","object":"response","status":"completed","model":"gpt-test","output":[]}}}
           ],
@@ -1533,7 +1753,7 @@ fn responses_checked_stream_rejects_duplicate_terminal_events() {
         responses_stream_to_canonical_checked(&snapshot),
         Err(RelayConvertError::UnsupportedFeature(error))
             if error.feature == "stream_termination"
-                && error.path == "events[1]"
+                && error.path == "events[2]"
     ));
 }
 
