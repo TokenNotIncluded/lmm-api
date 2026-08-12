@@ -15,23 +15,31 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     BillingUsage, CacheUsage, ClaudeContentBlock, ClaudeMediaSource, ClaudeMessage, ClaudeRequest,
-    ClaudeResponse, ClaudeTool, ClaudeToolChoice, ClaudeUsage, ConversionPlan, Envelope, Feature,
-    Fidelity, FunctionData, FunctionKind, GeminiCandidate, GeminiContent, GeminiFunctionCall,
-    GeminiFunctionCallingConfig, GeminiFunctionDeclaration, GeminiFunctionResponse,
-    GeminiGenerationConfig, GeminiInlineData, GeminiPart, GeminiRequest, GeminiResponse,
-    GeminiTool, GeminiToolConfig, GeminiUsage, GenerationControls, Item, ItemKind, JsonData, Loss,
-    LossCode, LossLedger, Media, MediaKind, OpaqueId, OpaqueIdProvenance, OpaqueProviderState,
+    ClaudeResponse, ClaudeTool, ClaudeToolChoice, ClaudeUsage, ConversionPlan,
+    ConversionPolicyError, Envelope, Feature, Fidelity, FunctionData, FunctionKind,
+    GeminiCandidate, GeminiContent, GeminiFunctionCall, GeminiFunctionCallingConfig,
+    GeminiFunctionDeclaration, GeminiFunctionResponse, GeminiGenerationConfig, GeminiInlineData,
+    GeminiPart, GeminiRequest, GeminiResponse, GeminiTool, GeminiToolConfig, GeminiUsage,
+    GenerationControls, IncompleteDetails, Item, ItemKind, JsonData, Loss, LossCode, LossLedger,
+    LossPolicy, Media, MediaKind, OpaqueId, OpaqueIdProvenance, OpaqueProviderState,
     OpaqueStateProvenance, OpenAiAnthropicBlock, OpenAiAnthropicExtraContent,
     OpenAiChatContentPart, OpenAiChatMessage, OpenAiChatRequest, OpenAiChatResponse,
     OpenAiChatTool, OpenAiChoice, OpenAiExtraContent, OpenAiFunction, OpenAiGoogleExtraContent,
-    OpenAiToolCall, Part, PartKind, Protocol, Provenance, Role, SemanticBillingUsage,
-    SemanticUsage, StringOrParts, TokenDetails, Tool, ToolChoice, ToolKind, WireUsage,
+    OpenAiResponsesRequest, OpenAiToolCall, Part, PartKind, PolicyOutcome, Protocol, Provenance,
+    ReasoningConfig, ResponsesContentPart, ResponsesInput, ResponsesInputItem,
+    ResponsesOutputContent, ResponsesOutputItem, ResponsesResponse, ResponsesTool, Role,
+    SemanticBillingUsage, SemanticUsage, StringOrParts, TokenDetails, Tool, ToolChoice, ToolKind,
+    WireUsage,
 };
 
 /// The default gate for candidate v2 direct routes.  The functions in this
 /// module are available for offline differential tests, but production route
 /// ownership remains with the existing registry until an explicit rollout.
 pub const DIRECT_IR_V2_DEFAULT_ENABLED: bool = false;
+
+/// OpenAI Responses direct routes remain disabled until an explicit runtime
+/// rollout registers both their request and response adaptors.
+pub const OPENAI_RESPONSES_DIRECT_IR_V2_DEFAULT_ENABLED: bool = false;
 
 /// A machine-readable route descriptor for one direct IR candidate route.
 ///
@@ -88,6 +96,23 @@ pub fn direct_ir_route(source: Protocol, target: Protocol) -> DirectIrRouteDescr
     direct_ir_route_descriptor(source, target)
 }
 
+/// Returns the disabled-by-default descriptor for an OpenAI Responses route.
+///
+/// This named seam keeps Responses route discovery explicit while retaining
+/// the generic descriptor as the single shape and converter-id generator.
+#[must_use]
+pub fn openai_responses_direct_ir_route_descriptor(target: Protocol) -> DirectIrRouteDescriptor {
+    let mut descriptor = direct_ir_route_descriptor(Protocol::OpenAiResponses, target);
+    descriptor.enabled = OPENAI_RESPONSES_DIRECT_IR_V2_DEFAULT_ENABLED;
+    descriptor
+}
+
+/// Alias used by route-oriented capability consumers.
+#[must_use]
+pub fn responses_direct_ir_route_descriptor(target: Protocol) -> DirectIrRouteDescriptor {
+    openai_responses_direct_ir_route_descriptor(target)
+}
+
 /// A direct conversion result with enough information for audit, policy, and
 /// offline differential comparison.
 #[derive(Clone, Debug, PartialEq)]
@@ -120,6 +145,24 @@ impl<T> DirectIrConversion<T> {
     pub fn loss_ledger(&self) -> &LossLedger {
         &self.losses
     }
+
+    /// Applies the same administrator-selected policy used by compiled relay
+    /// plans before a direct conversion is executed.
+    pub fn enforce_loss_policy(
+        &self,
+        policy: LossPolicy,
+    ) -> Result<PolicyOutcome, ConversionPolicyError> {
+        self.plan.enforce(policy)
+    }
+}
+
+/// Applies a direct conversion's loss policy without exposing the plan as a
+/// mutable escape hatch to route adapters.
+pub fn enforce_direct_ir_loss_policy<T>(
+    conversion: &DirectIrConversion<T>,
+    policy: LossPolicy,
+) -> Result<PolicyOutcome, ConversionPolicyError> {
+    conversion.enforce_loss_policy(policy)
 }
 
 /// Safe, typed failure from a direct source/target conversion.
@@ -1447,6 +1490,35 @@ fn record_request_projection_losses(envelope: &mut Envelope, target: Protocol) {
 }
 
 fn record_response_projection_losses(envelope: &mut Envelope, target: Protocol) {
+    let has_responses_id = envelope.extensions.contains_key("openai.responses.id");
+    let has_responses_created = envelope
+        .extensions
+        .contains_key("openai.responses.created_at");
+    if (target == Protocol::Gemini && (has_responses_id || has_responses_created))
+        || (target == Protocol::Claude && has_responses_created)
+    {
+        record_loss(
+            envelope,
+            LossCode::LossUnknownEvent,
+            Some(Feature::UnknownEventPassthrough),
+            "openai.responses.metadata",
+            "Responses id or creation timestamp is not fully expressible on target response",
+        );
+    }
+    if target != Protocol::OpenAiResponses
+        && extension_string(envelope, "openai.responses.status").as_deref() == Some("incomplete")
+        && extension_string(envelope, "openai.responses.incomplete_reason").is_some_and(|reason| {
+            !matches!(reason.as_str(), "content_filter" | "max_output_tokens")
+        })
+    {
+        record_loss(
+            envelope,
+            LossCode::LossUnknownEvent,
+            Some(Feature::UnknownEventPassthrough),
+            "incomplete_details.reason",
+            "unknown Responses incomplete reason is not expressible on target response",
+        );
+    }
     if target != Protocol::Gemini
         && envelope
             .extensions
@@ -5402,6 +5474,30 @@ fn response_finish_reason(envelope: &Envelope, index: usize) -> Option<String> {
     extension_string(envelope, &format!("openai.choice[{index}].finish_reason"))
         .or_else(|| extension_string(envelope, "claude.stop_reason"))
         .or_else(|| extension_string(envelope, "gemini.candidate[0].finish_reason"))
+        .or_else(|| {
+            let status = extension_string(envelope, "openai.responses.status")?;
+            Some(match status.as_str() {
+                "incomplete" => extension_string(envelope, "openai.responses.incomplete_reason")
+                    .map_or_else(
+                        || "length".to_owned(),
+                        |reason| match reason.as_str() {
+                            "max_output_tokens" => "length".to_owned(),
+                            "content_filter" => "content_filter".to_owned(),
+                            _ => "other".to_owned(),
+                        },
+                    ),
+                "failed" => "error".to_owned(),
+                "cancelled" => "cancelled".to_owned(),
+                _ if envelope
+                    .ordered_items()
+                    .iter()
+                    .any(|item| matches!(&item.kind, ItemKind::ToolCall)) =>
+                {
+                    "tool_calls".to_owned()
+                }
+                _ => "stop".to_owned(),
+            })
+        })
 }
 
 fn openai_response_message_groups(
@@ -5633,7 +5729,8 @@ pub fn envelope_to_openai_chat_response_v2(
         })
         .collect();
     let response_id = extension_string(&envelope, "openai.response_id")
-        .or_else(|| extension_string(&envelope, "claude.response_id"));
+        .or_else(|| extension_string(&envelope, "claude.response_id"))
+        .or_else(|| extension_string(&envelope, "openai.responses.id"));
     if response_id.is_none() {
         record_loss(
             &mut envelope,
@@ -5648,7 +5745,9 @@ pub fn envelope_to_openai_chat_response_v2(
         model: envelope.model.clone(),
         object: extension_string(&envelope, "openai.response_object")
             .unwrap_or_else(|| "chat.completion".to_owned()),
-        created: extension_i64(&envelope, "openai.response_created").unwrap_or(0),
+        created: extension_i64(&envelope, "openai.response_created")
+            .or_else(|| extension_i64(&envelope, "openai.responses.created_at"))
+            .unwrap_or(0),
         choices,
         usage: envelope
             .usage
@@ -5821,7 +5920,7 @@ pub fn envelope_to_gemini_response_v2(
                 .and_then(|value| usize::try_from(value).ok())
                 .or(Some(0)),
             finish_reason: extension_string(&envelope, "gemini.candidate[0].finish_reason")
-                .or_else(|| extension_string(&envelope, "claude.stop_reason")),
+                .or_else(|| response_finish_reason(&envelope, 0)),
             content: GeminiContent {
                 role: Some("model".to_owned()),
                 parts,
@@ -5937,7 +6036,8 @@ pub fn envelope_to_claude_response_v2(
         content.push(block);
     }
     let response_id = extension_string(&envelope, "claude.response_id")
-        .or_else(|| extension_string(&envelope, "openai.response_id"));
+        .or_else(|| extension_string(&envelope, "openai.response_id"))
+        .or_else(|| extension_string(&envelope, "openai.responses.id"));
     if response_id.is_none() {
         record_loss(
             &mut envelope,
@@ -5954,8 +6054,7 @@ pub fn envelope_to_claude_response_v2(
         role: "assistant".to_owned(),
         model: envelope.model.clone(),
         content,
-        stop_reason: extension_string(&envelope, "claude.stop_reason")
-            .or_else(|| extension_string(&envelope, "openai.choice[0].finish_reason")),
+        stop_reason: response_finish_reason(&envelope, 0),
         usage: envelope.usage.as_ref().map(claude_usage_from_semantic),
     };
     Ok(finish(output, envelope, source, target))
@@ -6013,6 +6112,520 @@ fn remap_direct_error(
     error.source = source;
     error.target = target;
     error
+}
+
+fn responses_unknown_field(
+    source: Protocol,
+    target: Protocol,
+    path: impl Into<String>,
+) -> DirectIrError {
+    DirectIrError::unsupported(source, target, "unknown_field", &path.into())
+}
+
+fn responses_option_error(
+    source: Protocol,
+    target: Protocol,
+    feature: &str,
+    path: impl Into<String>,
+) -> DirectIrError {
+    DirectIrError::unsupported(source, target, feature, &path.into())
+}
+
+fn responses_request_content_to_parts(
+    content: Option<StringOrParts<ResponsesContentPart>>,
+    source: Protocol,
+    target: Protocol,
+    path: &str,
+) -> Result<Vec<Part>, DirectIrError> {
+    let Some(content) = content else {
+        return Ok(Vec::new());
+    };
+    match content {
+        StringOrParts::String(text) => Ok(vec![Part::text(text)]),
+        StringOrParts::Parts(parts) => parts
+            .into_iter()
+            .enumerate()
+            .map(|(index, part)| {
+                let part_path = format!("{path}[{index}]");
+                if let Some(field) = part.extra.keys().next() {
+                    return Err(responses_unknown_field(
+                        source,
+                        target,
+                        format!("{part_path}.{field}"),
+                    ));
+                }
+                match part.kind.as_str() {
+                    "input_text" | "text" => {
+                        if part.image_url.is_some() {
+                            return Err(responses_option_error(
+                                source,
+                                target,
+                                "content_part",
+                                format!("{part_path}.image_url"),
+                            ));
+                        }
+                        part.text.map(Part::text).ok_or_else(|| {
+                            DirectIrError::missing(
+                                source,
+                                target,
+                                "text",
+                                &format!("{part_path}.text"),
+                            )
+                        })
+                    }
+                    "input_image" => {
+                        if part.text.is_some() {
+                            return Err(responses_option_error(
+                                source,
+                                target,
+                                "content_part",
+                                format!("{part_path}.text"),
+                            ));
+                        }
+                        let image_url = part.image_url.ok_or_else(|| {
+                            DirectIrError::missing(
+                                source,
+                                target,
+                                "image_url",
+                                &format!("{part_path}.image_url"),
+                            )
+                        })?;
+                        let mut media = Media::new(MediaKind::Image);
+                        media.uri = Some(image_url);
+                        Ok(Part::media(media))
+                    }
+                    _ => Err(responses_option_error(
+                        source,
+                        target,
+                        "content_part",
+                        part_path,
+                    )),
+                }
+            })
+            .collect(),
+    }
+}
+
+fn validate_responses_request_item(
+    item: &ResponsesInputItem,
+    index: usize,
+    source: Protocol,
+    target: Protocol,
+) -> Result<(), DirectIrError> {
+    let path = format!("input[{index}]");
+    if let Some(field) = item.extra.keys().next() {
+        return Err(responses_unknown_field(
+            source,
+            target,
+            format!("{path}.{field}"),
+        ));
+    }
+    match item.kind.as_deref() {
+        None | Some("message") => {
+            if item.call_id.is_some()
+                || item.name.is_some()
+                || item.arguments.is_some()
+                || item.output.is_some()
+            {
+                return Err(responses_option_error(source, target, "input_field", path));
+            }
+            let _ = role_from_wire(
+                item.role.as_deref(),
+                source,
+                target,
+                &format!("{path}.role"),
+            )?;
+            responses_request_content_to_parts(
+                item.content.clone(),
+                source,
+                target,
+                &format!("{path}.content"),
+            )?;
+        }
+        Some("function_call") => {
+            if item.call_id.as_deref().is_none_or(|value| value.is_empty()) {
+                return Err(DirectIrError::missing(
+                    source,
+                    target,
+                    "function_call_id",
+                    &format!("{path}.call_id"),
+                ));
+            }
+            if item.name.as_deref().is_none_or(|value| value.is_empty()) {
+                return Err(DirectIrError::missing(
+                    source,
+                    target,
+                    "function_call_name",
+                    &format!("{path}.name"),
+                ));
+            }
+            if item.arguments.is_none() {
+                return Err(DirectIrError::missing(
+                    source,
+                    target,
+                    "function_call_arguments",
+                    &format!("{path}.arguments"),
+                ));
+            }
+            if item.role.is_some() || item.content.is_some() || item.output.is_some() {
+                return Err(responses_option_error(source, target, "input_field", path));
+            }
+        }
+        Some("function_call_output") => {
+            if item.call_id.as_deref().is_none_or(|value| value.is_empty()) {
+                return Err(DirectIrError::missing(
+                    source,
+                    target,
+                    "function_call_output_id",
+                    &format!("{path}.call_id"),
+                ));
+            }
+            if item.output.is_none() {
+                return Err(DirectIrError::missing(
+                    source,
+                    target,
+                    "function_call_output",
+                    &format!("{path}.output"),
+                ));
+            }
+            if item.role.is_some()
+                || item.content.is_some()
+                || item.name.is_some()
+                || item.arguments.is_some()
+            {
+                return Err(responses_option_error(source, target, "input_field", path));
+            }
+        }
+        Some("custom_tool_call") | Some("custom_tool_call_output") => {
+            return Err(responses_option_error(source, target, "custom_tool", path));
+        }
+        Some(_) => {
+            return Err(responses_option_error(
+                source,
+                target,
+                "responses_input_item",
+                path,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_responses_request_surface(
+    request: &OpenAiResponsesRequest,
+) -> Result<(), DirectIrError> {
+    let source = Protocol::OpenAiResponses;
+    let target = Protocol::OpenAiResponses;
+    if request.model.trim().is_empty() {
+        return Err(DirectIrError::missing(source, target, "model", "model"));
+    }
+    if let Some(field) = request.extra.keys().next() {
+        return Err(responses_unknown_field(source, target, field.as_str()));
+    }
+    for (field, present) in [
+        ("conversation", request.conversation.is_some()),
+        (
+            "previous_response_id",
+            request.previous_response_id.is_some(),
+        ),
+        ("prompt", request.prompt.is_some()),
+        ("context_management", request.context_management.is_some()),
+    ] {
+        if present {
+            return Err(responses_option_error(
+                source,
+                target,
+                "state_reference",
+                field,
+            ));
+        }
+    }
+    for (field, present) in [
+        ("include", request.include.is_some()),
+        ("moderation", request.moderation.is_some()),
+        ("max_tool_calls", request.max_tool_calls.is_some()),
+        ("client_metadata", request.client_metadata.is_some()),
+    ] {
+        if present {
+            return Err(responses_option_error(
+                source,
+                target,
+                "responses_option",
+                field,
+            ));
+        }
+    }
+    if let Some(reasoning) = request.reasoning.as_ref() {
+        if let Some(field) = reasoning.extra.keys().next() {
+            return Err(responses_unknown_field(
+                source,
+                target,
+                format!("reasoning.{field}"),
+            ));
+        }
+        for (field, present) in [
+            ("summary", reasoning.summary.is_some()),
+            ("mode", reasoning.mode.is_some()),
+            ("context", reasoning.context.is_some()),
+        ] {
+            if present {
+                return Err(responses_option_error(
+                    source,
+                    target,
+                    "reasoning_summary",
+                    format!("reasoning.{field}"),
+                ));
+            }
+        }
+    }
+    for (index, tool) in request.tools.iter().enumerate() {
+        let path = format!("tools[{index}]");
+        if tool.kind != "function" {
+            return Err(responses_option_error(source, target, "tool_type", path));
+        }
+        if tool
+            .name
+            .as_deref()
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            return Err(DirectIrError::missing(
+                source,
+                target,
+                "tool.name",
+                &format!("{path}.name"),
+            ));
+        }
+        if let Some(field) = tool.extra.keys().next() {
+            return Err(responses_unknown_field(
+                source,
+                target,
+                format!("{path}.{field}"),
+            ));
+        }
+    }
+    if let Some(ResponsesInput::Items(items)) = request.input.as_ref() {
+        for (index, item) in items.iter().enumerate() {
+            validate_responses_request_item(item, index, source, target)?;
+        }
+    }
+    if matches!(request.input.as_ref(), Some(ResponsesInput::Json(_))) {
+        return Err(responses_option_error(
+            source,
+            target,
+            "input_shape",
+            "input",
+        ));
+    }
+    Ok(())
+}
+
+fn responses_store_request_controls(request: &OpenAiResponsesRequest, envelope: &mut Envelope) {
+    envelope.controls = GenerationControls {
+        max_output_tokens: request.max_output_tokens,
+        temperature: request.temperature,
+        top_p: request.top_p,
+        stream: request.stream,
+        reasoning_effort: request
+            .reasoning
+            .as_ref()
+            .and_then(|reasoning| reasoning.effort.clone()),
+        response_format: request.text.clone(),
+        parallel_tool_calls: request.parallel_tool_calls,
+        extensions: BTreeMap::new(),
+    };
+    let extensions = [
+        ("user", request.user.clone()),
+        ("store", request.store.clone()),
+        ("metadata", request.metadata.clone()),
+        ("stream_options", request.stream_options.clone()),
+        (
+            "top_logprobs",
+            request
+                .top_logprobs
+                .map(|value| JsonData::Number(value.into())),
+        ),
+        ("safety_identifier", request.safety_identifier.clone()),
+        (
+            "prompt_cache_retention",
+            request.prompt_cache_retention.clone(),
+        ),
+        ("prompt_cache_key", request.prompt_cache_key.clone()),
+        (
+            "service_tier",
+            request.service_tier.clone().map(JsonData::String),
+        ),
+        ("enable_thinking", request.enable_thinking.clone()),
+        ("thinking_budget", request.thinking_budget.clone()),
+    ];
+    for (name, value) in extensions {
+        if let Some(value) = value {
+            envelope.controls.extensions.insert(name.to_owned(), value);
+        }
+    }
+}
+
+/// Decodes an OpenAI Responses request into the ordered direct IR.
+pub fn openai_responses_request_to_envelope_v2(
+    request: OpenAiResponsesRequest,
+) -> Result<DirectIrConversion<Envelope>, DirectIrError> {
+    validate_responses_request_surface(&request)?;
+    let source = Protocol::OpenAiResponses;
+    let target = Protocol::OpenAiResponses;
+    let model = request.model.clone();
+    let mut envelope = Envelope::new(source, model);
+    responses_store_request_controls(&request, &mut envelope);
+    envelope.tool_choice =
+        tool_choice_from_json(request.tool_choice.clone(), source, target, "tool_choice")?;
+    for (index, tool) in request.tools.iter().enumerate() {
+        let name = tool.name.clone().ok_or_else(|| {
+            DirectIrError::missing(source, target, "tool.name", &format!("tools[{index}].name"))
+        })?;
+        envelope.tools.push(tool_to_ir(
+            tool.kind.clone(),
+            name,
+            tool.description.clone(),
+            tool.parameters.clone(),
+            tool.strict,
+            source,
+            target,
+            &format!("tools[{index}]"),
+        )?);
+    }
+    if let Some(instructions) = request.instructions.clone() {
+        let mut item = Item::new(ItemKind::Message, Role::System, Provenance::new(source));
+        item.push_part(Part::text(instructions));
+        push_item(&mut envelope, item, source, target, "instructions")?;
+    }
+    match request.input {
+        None => {}
+        Some(ResponsesInput::String(text)) => {
+            let mut item = Item::new(ItemKind::Message, Role::User, Provenance::new(source));
+            item.push_part(Part::text(text));
+            push_item(&mut envelope, item, source, target, "input")?;
+        }
+        Some(ResponsesInput::Items(items)) => {
+            for (index, item) in items.into_iter().enumerate() {
+                let path = format!("input[{index}]");
+                match item.kind.as_deref() {
+                    None | Some("message") => {
+                        let role = role_from_wire(
+                            item.role.as_deref(),
+                            source,
+                            target,
+                            &format!("{path}.role"),
+                        )?;
+                        let parts = responses_request_content_to_parts(
+                            item.content,
+                            source,
+                            target,
+                            &format!("{path}.content"),
+                        )?;
+                        let mut output =
+                            Item::new(ItemKind::Message, role, Provenance::new(source));
+                        for part in parts {
+                            output.push_part(part);
+                        }
+                        push_item(&mut envelope, output, source, target, &path)?;
+                    }
+                    Some("function_call") => {
+                        let id = item.call_id.ok_or_else(|| {
+                            DirectIrError::missing(
+                                source,
+                                target,
+                                "function_call_id",
+                                &format!("{path}.call_id"),
+                            )
+                        })?;
+                        let name = item.name.ok_or_else(|| {
+                            DirectIrError::missing(
+                                source,
+                                target,
+                                "function_call_name",
+                                &format!("{path}.name"),
+                            )
+                        })?;
+                        let arguments = item.arguments.ok_or_else(|| {
+                            DirectIrError::missing(
+                                source,
+                                target,
+                                "function_call_arguments",
+                                &format!("{path}.arguments"),
+                            )
+                        })?;
+                        let arguments = parse_json_field(
+                            &arguments,
+                            source,
+                            target,
+                            "function_arguments",
+                            &format!("{path}.arguments"),
+                        )?;
+                        push_item(
+                            &mut envelope,
+                            tool_call_item(
+                                OpaqueId::authentic(id, source),
+                                name,
+                                arguments,
+                                source,
+                                &path,
+                            ),
+                            source,
+                            target,
+                            &path,
+                        )?;
+                    }
+                    Some("function_call_output") => {
+                        let id = item.call_id.ok_or_else(|| {
+                            DirectIrError::missing(
+                                source,
+                                target,
+                                "function_call_output_id",
+                                &format!("{path}.call_id"),
+                            )
+                        })?;
+                        let output = item.output.ok_or_else(|| {
+                            DirectIrError::missing(
+                                source,
+                                target,
+                                "function_call_output",
+                                &format!("{path}.output"),
+                            )
+                        })?;
+                        push_item(
+                            &mut envelope,
+                            tool_result_item(
+                                OpaqueId::authentic(id, source),
+                                None,
+                                output,
+                                source,
+                                &path,
+                            ),
+                            source,
+                            target,
+                            &path,
+                        )?;
+                    }
+                    Some(_) => {
+                        return Err(responses_option_error(
+                            source,
+                            target,
+                            "responses_input_item",
+                            path,
+                        ));
+                    }
+                }
+            }
+        }
+        Some(ResponsesInput::Json(_)) => {
+            return Err(responses_option_error(
+                source,
+                target,
+                "input_shape",
+                "input",
+            ));
+        }
+    }
+    map_validation(envelope.validate(), source, target, "envelope")?;
+    Ok(finish(envelope.clone(), envelope, source, target))
 }
 
 /// OpenAI Chat request → Gemini request, directly through one ordered IR.
@@ -6266,6 +6879,1360 @@ pub fn claude_to_gemini_response_v2(
     model: &str,
 ) -> Result<DirectIrConversion<GeminiResponse>, DirectIrError> {
     claude_response_to_gemini_v2(response, model)
+}
+
+fn responses_request_parts_from_item(
+    item: &Item,
+    source: Protocol,
+    target: Protocol,
+    path: &str,
+) -> Result<Option<StringOrParts<ResponsesContentPart>>, DirectIrError> {
+    if item.ordered_parts().is_empty() {
+        return Ok(None);
+    }
+    let mut parts = Vec::new();
+    for (index, part) in item.ordered_parts().iter().enumerate() {
+        let part_path = format!("{path}.content[{index}]");
+        if let Some(field) = part.extensions.keys().next() {
+            return Err(responses_unknown_field(
+                source,
+                target,
+                format!("{part_path}.{field}"),
+            ));
+        }
+        match &part.kind {
+            PartKind::Text => parts.push(ResponsesContentPart {
+                kind: "input_text".to_owned(),
+                text: Some(part.text.clone().unwrap_or_default()),
+                image_url: None,
+                extra: BTreeMap::new(),
+            }),
+            PartKind::Media => {
+                let media = part.media.as_ref().ok_or_else(|| {
+                    DirectIrError::new(
+                        source,
+                        target,
+                        "media",
+                        &part_path,
+                        DirectIrReason::InvalidShape,
+                    )
+                })?;
+                if !matches!(&media.kind, MediaKind::Image) || media.data.is_some() {
+                    return Err(responses_option_error(
+                        source,
+                        target,
+                        "input_image",
+                        part_path,
+                    ));
+                }
+                parts.push(ResponsesContentPart {
+                    kind: "input_image".to_owned(),
+                    text: None,
+                    image_url: Some(media.uri.clone().ok_or_else(|| {
+                        DirectIrError::missing(source, target, "image_url", &part_path)
+                    })?),
+                    extra: BTreeMap::new(),
+                });
+            }
+            _ => {
+                return Err(responses_option_error(
+                    source,
+                    target,
+                    "content_part",
+                    part_path,
+                ));
+            }
+        }
+    }
+    if parts.len() == 1 && parts[0].kind == "input_text" {
+        return Ok(Some(StringOrParts::String(
+            parts[0].text.clone().unwrap_or_default(),
+        )));
+    }
+    Ok(Some(StringOrParts::Parts(parts)))
+}
+
+fn responses_control_value(envelope: &Envelope, key: &str) -> Option<JsonData> {
+    envelope.controls.extensions.get(key).cloned()
+}
+
+fn responses_require_request_shape(envelope: &Envelope) -> Result<(), DirectIrError> {
+    let source = envelope.source;
+    let target = Protocol::OpenAiResponses;
+    if envelope.state.conversation_id.is_some()
+        || envelope.state.previous_response_id.is_some()
+        || envelope.state.provider.is_some()
+        || !envelope.state.extensions.is_empty()
+    {
+        return Err(responses_option_error(
+            source,
+            target,
+            "state_reference",
+            "state",
+        ));
+    }
+    if envelope.extensions.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "openai.max_tokens" | "openai.max_completion_tokens"
+        )
+    }) {
+        return Err(responses_unknown_field(
+            source,
+            target,
+            "envelope.extensions",
+        ));
+    }
+    if let (Some(max_tokens), Some(max_completion_tokens)) = (
+        envelope.extensions.get("openai.max_tokens"),
+        envelope.extensions.get("openai.max_completion_tokens"),
+    ) {
+        if max_tokens != max_completion_tokens {
+            return Err(responses_option_error(
+                source,
+                target,
+                "conflicting_token_limits",
+                "openai.max_tokens",
+            ));
+        }
+    }
+    let allowed = [
+        "user",
+        "store",
+        "metadata",
+        "stream_options",
+        "top_logprobs",
+        "safety_identifier",
+        "prompt_cache_retention",
+        "prompt_cache_key",
+        "service_tier",
+        "enable_thinking",
+        "thinking_budget",
+    ];
+    if let Some(key) = envelope
+        .controls
+        .extensions
+        .keys()
+        .find(|key| !allowed.contains(&key.as_str()))
+    {
+        return Err(responses_unknown_field(
+            source,
+            target,
+            format!("controls.extensions.{key}"),
+        ));
+    }
+    Ok(())
+}
+
+/// Encodes an ordered IR envelope as an OpenAI Responses request.
+pub fn envelope_to_openai_responses_request_v2(
+    mut envelope: Envelope,
+) -> Result<DirectIrConversion<OpenAiResponsesRequest>, DirectIrError> {
+    let source = envelope.source;
+    let target = Protocol::OpenAiResponses;
+    map_validation(envelope.validate(), source, target, "envelope")?;
+    responses_require_request_shape(&envelope)?;
+    let mut instructions = Vec::new();
+    let mut input = Vec::new();
+    let mut input_seen = false;
+    for (index, item) in envelope.ordered_items().to_vec().into_iter().enumerate() {
+        let path = format!("items[{index}]");
+        if !item.extensions.is_empty() || item.raw.is_some() {
+            return Err(responses_unknown_field(
+                source,
+                target,
+                format!("{path}.extensions"),
+            ));
+        }
+        match &item.kind {
+            ItemKind::Message => {
+                let content = responses_request_parts_from_item(&item, source, target, &path)?;
+                if matches!(&item.role, Role::System) {
+                    let Some(StringOrParts::String(text)) = content else {
+                        return Err(responses_option_error(
+                            source,
+                            target,
+                            "instructions",
+                            format!("{path}.content"),
+                        ));
+                    };
+                    if input_seen || !instructions.is_empty() {
+                        record_loss(
+                            &mut envelope,
+                            LossCode::LossContentOrder,
+                            Some(Feature::Text),
+                            &path,
+                            "multiple or interleaved system messages are normalized into Responses instructions",
+                        );
+                    }
+                    instructions.push(text);
+                } else {
+                    input_seen = true;
+                    let role = match item.role {
+                        Role::Developer => "developer",
+                        Role::User => "user",
+                        Role::Assistant | Role::Model => "assistant",
+                        Role::System => "system",
+                        Role::Tool => {
+                            return Err(responses_option_error(
+                                source,
+                                target,
+                                "input_role",
+                                format!("{path}.role"),
+                            ));
+                        }
+                    };
+                    input.push(ResponsesInputItem {
+                        kind: Some("message".to_owned()),
+                        role: Some(role.to_owned()),
+                        content,
+                        call_id: None,
+                        name: None,
+                        arguments: None,
+                        output: None,
+                        extra: BTreeMap::new(),
+                    });
+                }
+            }
+            ItemKind::ToolCall | ItemKind::ToolResult => {
+                input_seen = true;
+                let call_id = item.call_id.as_ref().ok_or_else(|| {
+                    DirectIrError::missing(source, target, "function_call_id", &path)
+                })?;
+                let part = single_item_part(&item, source, target, &path, "function")?;
+                let function = part.function.as_ref().ok_or_else(|| {
+                    DirectIrError::new(
+                        source,
+                        target,
+                        "function",
+                        &path,
+                        DirectIrReason::InvalidShape,
+                    )
+                })?;
+                let id = id_value(call_id)?;
+                if call_id.provenance == OpaqueIdProvenance::Synthetic {
+                    record_loss(
+                        &mut envelope,
+                        LossCode::SyntheticToolCallId,
+                        Some(Feature::FunctionCallId),
+                        &path,
+                        "synthetic tool-call id emitted explicitly",
+                    );
+                }
+                match &function.kind {
+                    FunctionKind::Call if matches!(&item.kind, ItemKind::ToolCall) => {
+                        input.push(ResponsesInputItem {
+                            kind: Some("function_call".to_owned()),
+                            role: None,
+                            content: None,
+                            call_id: Some(id),
+                            name: Some(function.name.clone().ok_or_else(|| {
+                                DirectIrError::missing(source, target, "function.name", &path)
+                            })?),
+                            arguments: Some(compact_json(
+                                &function.arguments.clone().unwrap_or_else(|| object([])),
+                            )?),
+                            output: None,
+                            extra: BTreeMap::new(),
+                        });
+                    }
+                    FunctionKind::Result if matches!(&item.kind, ItemKind::ToolResult) => {
+                        input.push(ResponsesInputItem {
+                            kind: Some("function_call_output".to_owned()),
+                            role: None,
+                            content: None,
+                            call_id: Some(id),
+                            name: None,
+                            arguments: None,
+                            output: Some(function.output.clone().unwrap_or(JsonData::Null)),
+                            extra: BTreeMap::new(),
+                        });
+                    }
+                    _ => {
+                        return Err(responses_option_error(
+                            source,
+                            target,
+                            "function_kind",
+                            path,
+                        ));
+                    }
+                }
+            }
+            ItemKind::Reasoning | ItemKind::Unknown(_) => {
+                return Err(responses_option_error(source, target, "input_item", path));
+            }
+        }
+    }
+    let tools = envelope
+        .tools
+        .iter()
+        .enumerate()
+        .map(|(index, tool)| {
+            let name = tool_name_for_target(tool, index, source, target)?;
+            let strict = openai_strict_for_tool(tool, source, target, index)?;
+            Ok(ResponsesTool {
+                kind: "function".to_owned(),
+                name: Some(name),
+                description: tool.description.clone(),
+                parameters: tool.input_schema.clone(),
+                strict,
+                extra: BTreeMap::new(),
+            })
+        })
+        .collect::<Result<Vec<_>, DirectIrError>>()?;
+    let output = OpenAiResponsesRequest {
+        model: envelope.model.clone(),
+        input: (!input.is_empty()).then_some(ResponsesInput::Items(input)),
+        instructions: (!instructions.is_empty()).then(|| instructions.join("\n\n")),
+        max_output_tokens: envelope.controls.max_output_tokens,
+        stream: envelope.controls.stream,
+        temperature: envelope.controls.temperature,
+        tools,
+        tool_choice: Some(tool_choice_to_json(&envelope.tool_choice)),
+        top_p: envelope.controls.top_p,
+        reasoning: envelope
+            .controls
+            .reasoning_effort
+            .clone()
+            .map(|effort| ReasoningConfig {
+                effort: Some(effort),
+                summary: None,
+                mode: None,
+                context: None,
+                extra: BTreeMap::new(),
+            }),
+        text: envelope.controls.response_format.clone(),
+        parallel_tool_calls: envelope.controls.parallel_tool_calls,
+        user: responses_control_value(&envelope, "user"),
+        store: responses_control_value(&envelope, "store"),
+        metadata: responses_control_value(&envelope, "metadata"),
+        stream_options: responses_control_value(&envelope, "stream_options"),
+        top_logprobs: responses_control_value(&envelope, "top_logprobs").and_then(|value| {
+            match value {
+                JsonData::Number(number) => number.as_i64(),
+                _ => None,
+            }
+        }),
+        safety_identifier: responses_control_value(&envelope, "safety_identifier"),
+        prompt_cache_retention: responses_control_value(&envelope, "prompt_cache_retention"),
+        prompt_cache_key: responses_control_value(&envelope, "prompt_cache_key"),
+        service_tier: responses_control_value(&envelope, "service_tier")
+            .and_then(|value| json_string(&value).map(str::to_owned)),
+        enable_thinking: responses_control_value(&envelope, "enable_thinking"),
+        thinking_budget: responses_control_value(&envelope, "thinking_budget"),
+        conversation: None,
+        previous_response_id: None,
+        prompt: None,
+        context_management: None,
+        include: None,
+        moderation: None,
+        max_tool_calls: None,
+        client_metadata: None,
+        extra: BTreeMap::new(),
+    };
+    Ok(finish(output, envelope, source, target))
+}
+fn responses_output_content_to_parts(
+    content: Option<Vec<ResponsesOutputContent>>,
+    source: Protocol,
+    target: Protocol,
+    path: &str,
+) -> Result<Vec<Part>, DirectIrError> {
+    let Some(content) = content else {
+        return Ok(Vec::new());
+    };
+    content
+        .into_iter()
+        .enumerate()
+        .map(|(index, part)| {
+            let part_path = format!("{path}[{index}]");
+            if let Some(field) = part.extra.keys().next() {
+                return Err(responses_unknown_field(
+                    source,
+                    target,
+                    format!("{part_path}.{field}"),
+                ));
+            }
+            if part
+                .annotations
+                .as_ref()
+                .is_some_and(|annotations| !annotations.is_empty())
+            {
+                return Err(responses_option_error(
+                    source,
+                    target,
+                    "annotations",
+                    format!("{part_path}.annotations"),
+                ));
+            }
+            if !matches!(part.kind.as_str(), "output_text" | "summary_text" | "text") {
+                return Err(responses_option_error(
+                    source,
+                    target,
+                    "output_content",
+                    part_path,
+                ));
+            }
+            part.text.map(Part::text).ok_or_else(|| {
+                DirectIrError::missing(
+                    source,
+                    target,
+                    "output_text",
+                    format!("{path}[{index}].text").as_str(),
+                )
+            })
+        })
+        .collect()
+}
+
+fn validate_responses_response_surface(response: &ResponsesResponse) -> Result<(), DirectIrError> {
+    let source = Protocol::OpenAiResponses;
+    let target = Protocol::OpenAiResponses;
+    if response.object != "response" {
+        return Err(responses_option_error(
+            source,
+            target,
+            "response_object",
+            "object",
+        ));
+    }
+    if !matches!(
+        response.status.as_str(),
+        "completed" | "incomplete" | "failed" | "cancelled"
+    ) {
+        return Err(responses_option_error(
+            source,
+            target,
+            "response_status",
+            "status",
+        ));
+    }
+    if response.previous_response_id.is_some() {
+        return Err(responses_option_error(
+            source,
+            target,
+            "state_reference",
+            "previous_response_id",
+        ));
+    }
+    for (path, present) in [
+        ("instructions", response.instructions.is_some()),
+        ("max_output_tokens", response.max_output_tokens.is_some()),
+        (
+            "parallel_tool_calls",
+            response.parallel_tool_calls.is_some(),
+        ),
+        ("reasoning", response.reasoning.is_some()),
+        ("store", response.store.is_some()),
+        ("temperature", response.temperature.is_some()),
+        ("tool_choice", response.tool_choice.is_some()),
+        ("tools", response.tools.is_some()),
+        ("top_p", response.top_p.is_some()),
+        ("truncation", response.truncation.is_some()),
+        ("user", response.user.is_some()),
+        ("metadata", response.metadata.is_some()),
+        ("error", response.error.is_some()),
+    ] {
+        if present {
+            return Err(responses_option_error(
+                source,
+                target,
+                "response_option",
+                path,
+            ));
+        }
+    }
+    if response.status != "incomplete" && response.incomplete_details.is_some() {
+        return Err(responses_option_error(
+            source,
+            target,
+            "incomplete_details",
+            "incomplete_details",
+        ));
+    }
+    if let Some(field) = response.extra.keys().next() {
+        return Err(responses_unknown_field(source, target, field.as_str()));
+    }
+    for (index, item) in response.output.iter().enumerate() {
+        let path = format!("output[{index}]");
+        if !item.status.is_empty() && item.status != "completed" {
+            return Err(responses_option_error(
+                source,
+                target,
+                "output_status",
+                format!("{path}.status"),
+            ));
+        }
+        if !item.role.is_empty() && item.role != "assistant" {
+            return Err(responses_option_error(
+                source,
+                target,
+                "output_role",
+                format!("{path}.role"),
+            ));
+        }
+        if !item.quality.is_empty() || !item.size.is_empty() {
+            return Err(responses_option_error(
+                source,
+                target,
+                "output_metadata",
+                path,
+            ));
+        }
+        if let Some(field) = item.extra.keys().next() {
+            return Err(responses_unknown_field(
+                source,
+                target,
+                format!("{path}.{field}"),
+            ));
+        }
+        match item.kind.as_str() {
+            "message" => {
+                responses_output_content_to_parts(
+                    item.content.clone(),
+                    source,
+                    target,
+                    &format!("{path}.content"),
+                )?;
+                if item.summary.is_some()
+                    || item.call_id.is_some()
+                    || item.name.is_some()
+                    || item.arguments.is_some()
+                {
+                    return Err(responses_option_error(source, target, "output_field", path));
+                }
+            }
+            "reasoning" => {
+                if item.content.is_some() && item.summary.is_some() {
+                    return Err(responses_option_error(
+                        source,
+                        target,
+                        "reasoning_content",
+                        path,
+                    ));
+                }
+                responses_output_content_to_parts(
+                    item.content.clone().or_else(|| item.summary.clone()),
+                    source,
+                    target,
+                    &format!("{path}.content"),
+                )?;
+                if item.call_id.is_some() || item.name.is_some() || item.arguments.is_some() {
+                    return Err(responses_option_error(source, target, "output_field", path));
+                }
+            }
+            "function_call" => {
+                if item.call_id.as_deref().is_none_or(|value| value.is_empty()) {
+                    return Err(DirectIrError::missing(
+                        source,
+                        target,
+                        "function_call_id",
+                        &format!("{path}.call_id"),
+                    ));
+                }
+                if item.name.as_deref().is_none_or(|value| value.is_empty()) {
+                    return Err(DirectIrError::missing(
+                        source,
+                        target,
+                        "function_call_name",
+                        &format!("{path}.name"),
+                    ));
+                }
+                if item.arguments.is_none() {
+                    return Err(DirectIrError::missing(
+                        source,
+                        target,
+                        "function_call_arguments",
+                        &format!("{path}.arguments"),
+                    ));
+                }
+                if item.content.is_some() || item.summary.is_some() {
+                    return Err(responses_option_error(source, target, "output_field", path));
+                }
+            }
+            _ => {
+                return Err(responses_option_error(
+                    source,
+                    target,
+                    "responses_output_item",
+                    path,
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Decodes an OpenAI Responses response into the ordered direct IR.
+pub fn openai_responses_response_to_envelope_v2(
+    response: ResponsesResponse,
+) -> Result<DirectIrConversion<Envelope>, DirectIrError> {
+    validate_responses_response_surface(&response)?;
+    let source = Protocol::OpenAiResponses;
+    let target = Protocol::OpenAiResponses;
+    let mut envelope = Envelope::new(source, response.model.clone());
+    envelope.extensions.insert(
+        "openai.responses.id".to_owned(),
+        JsonData::String(response.id),
+    );
+    envelope.extensions.insert(
+        "openai.responses.object".to_owned(),
+        JsonData::String(response.object),
+    );
+    envelope.extensions.insert(
+        "openai.responses.created_at".to_owned(),
+        JsonData::Number(response.created_at.into()),
+    );
+    envelope.extensions.insert(
+        "openai.responses.status".to_owned(),
+        JsonData::String(response.status.clone()),
+    );
+    if let Some(details) = response.incomplete_details {
+        envelope.extensions.insert(
+            "openai.responses.incomplete_reason".to_owned(),
+            JsonData::String(details.reason),
+        );
+    }
+    if let Some(usage) = response.usage {
+        envelope.usage = Some(usage_from_wire(&usage));
+    }
+    for (index, output) in response.output.into_iter().enumerate() {
+        let path = format!("output[{index}]");
+        let output_id = output.id.clone();
+        let mut item = match output.kind.as_str() {
+            "message" => {
+                let mut item =
+                    Item::new(ItemKind::Message, Role::Assistant, Provenance::new(source));
+                for part in responses_output_content_to_parts(
+                    output.content,
+                    source,
+                    target,
+                    &format!("{path}.content"),
+                )? {
+                    item.push_part(part);
+                }
+                item
+            }
+            "reasoning" => {
+                let mut item = Item::new(
+                    ItemKind::Reasoning,
+                    Role::Assistant,
+                    Provenance::new(source),
+                );
+                for part in responses_output_content_to_parts(
+                    output.content.or(output.summary),
+                    source,
+                    target,
+                    &format!("{path}.content"),
+                )? {
+                    item.push_part(part);
+                }
+                item
+            }
+            "function_call" => {
+                let id = output.call_id.ok_or_else(|| {
+                    DirectIrError::missing(
+                        source,
+                        target,
+                        "function_call_id",
+                        &format!("{path}.call_id"),
+                    )
+                })?;
+                let name = output.name.ok_or_else(|| {
+                    DirectIrError::missing(
+                        source,
+                        target,
+                        "function_call_name",
+                        &format!("{path}.name"),
+                    )
+                })?;
+                let arguments = output.arguments.ok_or_else(|| {
+                    DirectIrError::missing(
+                        source,
+                        target,
+                        "function_call_arguments",
+                        &format!("{path}.arguments"),
+                    )
+                })?;
+                let arguments = parse_json_field(
+                    &arguments,
+                    source,
+                    target,
+                    "function_arguments",
+                    &format!("{path}.arguments"),
+                )?;
+                tool_call_item(
+                    OpaqueId::authentic(id, source),
+                    name,
+                    arguments,
+                    source,
+                    &path,
+                )
+            }
+            _ => {
+                return Err(responses_option_error(
+                    source,
+                    target,
+                    "responses_output_item",
+                    path,
+                ));
+            }
+        };
+        if !output_id.is_empty() {
+            item.id = Some(OpaqueId::authentic(output_id, source));
+        }
+        push_item(&mut envelope, item, source, target, &path)?;
+    }
+    map_validation(envelope.validate(), source, target, "envelope")?;
+    Ok(finish(envelope.clone(), envelope, source, target))
+}
+
+fn responses_response_item_id(
+    item: &Item,
+    index: usize,
+    envelope: &mut Envelope,
+    path: &str,
+) -> String {
+    if let Some(id) = item.id.as_ref() {
+        return id.value.clone();
+    }
+    let id = format!("direct-ir-item-{index}");
+    record_loss(
+        envelope,
+        LossCode::LossUnknownEvent,
+        Some(Feature::UnknownEventPassthrough),
+        path,
+        "Responses output item id synthesized explicitly",
+    );
+    id
+}
+
+fn responses_response_extension_is_known(key: &str) -> bool {
+    matches!(
+        key,
+        "openai.responses.id"
+            | "openai.responses.object"
+            | "openai.responses.created_at"
+            | "openai.responses.status"
+            | "openai.responses.incomplete_reason"
+            | "openai.response_id"
+            | "openai.response_object"
+            | "openai.response_created"
+            | "openai.choice_count"
+            | "claude.response_id"
+            | "claude.response_type"
+            | "claude.stop_reason"
+            | "gemini.candidate_count"
+    ) || (key.starts_with("openai.choice[")
+        && (key.ends_with(".index") || key.ends_with(".finish_reason")))
+        || (key.starts_with("gemini.candidate[")
+            && (key.ends_with(".index")
+                || key.ends_with(".finish_reason")
+                || key.ends_with(".safety_ratings")))
+}
+
+fn record_responses_response_projection_losses(envelope: &mut Envelope) {
+    if extension_i64(envelope, "openai.choice_count").is_some_and(|count| count > 1)
+        || extension_i64(envelope, "gemini.candidate_count").is_some_and(|count| count > 1)
+    {
+        record_loss(
+            envelope,
+            LossCode::LossContentOrder,
+            Some(Feature::Text),
+            "response.output",
+            "multiple source alternatives are flattened into ordered Responses output items",
+        );
+    }
+    if envelope
+        .extensions
+        .keys()
+        .any(|key| key.starts_with("openai.choice[") && key.ends_with(".index"))
+    {
+        record_loss(
+            envelope,
+            LossCode::LossUnknownEvent,
+            Some(Feature::UnknownEventPassthrough),
+            "openai.choice[].index",
+            "Chat choice indexes are not representable as Responses output indexes",
+        );
+    }
+    if envelope
+        .extensions
+        .keys()
+        .any(|key| key.starts_with("gemini.candidate[") && key.ends_with(".index"))
+    {
+        record_loss(
+            envelope,
+            LossCode::LossUnknownEvent,
+            Some(Feature::UnknownEventPassthrough),
+            "gemini.candidate[].index",
+            "Gemini candidate indexes are not representable as Responses output indexes",
+        );
+    }
+    if envelope
+        .extensions
+        .keys()
+        .any(|key| key.starts_with("gemini.candidate[") && key.ends_with(".safety_ratings"))
+    {
+        record_loss(
+            envelope,
+            LossCode::LossSafetyMetadata,
+            Some(Feature::SafetyMetadata),
+            "gemini.candidate[].safetyRatings",
+            "Gemini safety ratings are not representable in Responses",
+        );
+    }
+}
+
+fn responses_status_from_envelope(envelope: &mut Envelope) -> (String, Option<IncompleteDetails>) {
+    if let Some(status) = extension_string(envelope, "openai.responses.status") {
+        let details = extension_string(envelope, "openai.responses.incomplete_reason")
+            .map(|reason| IncompleteDetails { reason });
+        return (status, details);
+    }
+    let Some(reason) = response_finish_reason(envelope, 0) else {
+        return ("completed".to_owned(), None);
+    };
+    match reason.to_ascii_lowercase().as_str() {
+        "length" | "max_tokens" | "max_output_tokens" => (
+            "incomplete".to_owned(),
+            Some(IncompleteDetails {
+                reason: "max_output_tokens".to_owned(),
+            }),
+        ),
+        "content_filter" | "safety" | "recitation" => (
+            "incomplete".to_owned(),
+            Some(IncompleteDetails {
+                reason: "content_filter".to_owned(),
+            }),
+        ),
+        "error" | "failed" => ("failed".to_owned(), None),
+        "cancelled" | "canceled" => ("cancelled".to_owned(), None),
+        "stop" | "end_turn" | "tool_calls" | "tool_use" => ("completed".to_owned(), None),
+        _ => {
+            record_loss(
+                envelope,
+                LossCode::LossUnknownEvent,
+                Some(Feature::UnknownEventPassthrough),
+                "response.finish_reason",
+                "source finish reason is not representable in Responses status",
+            );
+            ("completed".to_owned(), None)
+        }
+    }
+}
+
+/// Encodes an ordered IR envelope as an OpenAI Responses response.
+pub fn envelope_to_openai_responses_response_v2(
+    mut envelope: Envelope,
+) -> Result<DirectIrConversion<ResponsesResponse>, DirectIrError> {
+    let source = envelope.source;
+    let target = Protocol::OpenAiResponses;
+    map_validation(envelope.validate(), source, target, "envelope")?;
+    if envelope.state.conversation_id.is_some()
+        || envelope.state.previous_response_id.is_some()
+        || envelope.state.provider.is_some()
+        || !envelope.state.extensions.is_empty()
+    {
+        return Err(responses_option_error(
+            source,
+            target,
+            "state_reference",
+            "state",
+        ));
+    }
+    if let Some(field) = envelope
+        .extensions
+        .keys()
+        .find(|key| !responses_response_extension_is_known(key))
+    {
+        return Err(responses_unknown_field(
+            source,
+            target,
+            format!("envelope.extensions.{field}"),
+        ));
+    }
+    record_responses_response_projection_losses(&mut envelope);
+    let mut output = Vec::new();
+    for (index, item) in envelope.ordered_items().to_vec().into_iter().enumerate() {
+        let path = format!("items[{index}]");
+        if !item.extensions.is_empty() || item.raw.is_some() {
+            return Err(responses_unknown_field(
+                source,
+                target,
+                format!("{path}.extensions"),
+            ));
+        }
+        let id = responses_response_item_id(&item, index, &mut envelope, &path);
+        match &item.kind {
+            ItemKind::Message | ItemKind::Reasoning => {
+                let mut content = Vec::new();
+                for (part_index, part) in item.ordered_parts().iter().enumerate() {
+                    let part_path = format!("{path}.parts[{part_index}]");
+                    if !part.extensions.is_empty() || !matches!(&part.kind, PartKind::Text) {
+                        return Err(responses_option_error(
+                            source,
+                            target,
+                            "output_content",
+                            part_path,
+                        ));
+                    }
+                    content.push(ResponsesOutputContent {
+                        kind: if matches!(&item.kind, ItemKind::Reasoning) {
+                            "summary_text".to_owned()
+                        } else {
+                            "output_text".to_owned()
+                        },
+                        text: Some(part.text.clone().unwrap_or_default()),
+                        annotations: Some(Vec::new()),
+                        extra: BTreeMap::new(),
+                    });
+                }
+                let reasoning = matches!(&item.kind, ItemKind::Reasoning);
+                let (content, summary) = if reasoning {
+                    (None, Some(content))
+                } else {
+                    (Some(content), None)
+                };
+                output.push(ResponsesOutputItem {
+                    kind: if reasoning {
+                        "reasoning".to_owned()
+                    } else {
+                        "message".to_owned()
+                    },
+                    id,
+                    status: "completed".to_owned(),
+                    role: if matches!(&item.kind, ItemKind::Message) {
+                        "assistant".to_owned()
+                    } else {
+                        String::new()
+                    },
+                    content,
+                    summary,
+                    quality: String::new(),
+                    size: String::new(),
+                    call_id: None,
+                    name: None,
+                    arguments: None,
+                    extra: BTreeMap::new(),
+                });
+            }
+            ItemKind::ToolCall => {
+                let call_id = item.call_id.as_ref().ok_or_else(|| {
+                    DirectIrError::missing(source, target, "function_call_id", &path)
+                })?;
+                let part = single_item_part(&item, source, target, &path, "function_call")?;
+                let function = part.function.as_ref().ok_or_else(|| {
+                    DirectIrError::new(
+                        source,
+                        target,
+                        "function_call",
+                        &path,
+                        DirectIrReason::InvalidShape,
+                    )
+                })?;
+                let name = function.name.clone().ok_or_else(|| {
+                    DirectIrError::missing(source, target, "function.name", &path)
+                })?;
+                let arguments =
+                    compact_json(&function.arguments.clone().unwrap_or_else(|| object([])))?;
+                output.push(ResponsesOutputItem {
+                    kind: "function_call".to_owned(),
+                    id,
+                    status: "completed".to_owned(),
+                    role: String::new(),
+                    content: None,
+                    summary: None,
+                    quality: String::new(),
+                    size: String::new(),
+                    call_id: Some(id_value(call_id)?),
+                    name: Some(name),
+                    arguments: Some(arguments),
+                    extra: BTreeMap::new(),
+                });
+            }
+            ItemKind::ToolResult => {
+                return Err(responses_option_error(
+                    source,
+                    target,
+                    "output_tool_result",
+                    path,
+                ));
+            }
+            ItemKind::Unknown(_) => {
+                return Err(responses_option_error(
+                    source,
+                    target,
+                    "responses_output_item",
+                    path,
+                ));
+            }
+        }
+    }
+    let (status, incomplete_details) = responses_status_from_envelope(&mut envelope);
+    if !matches!(
+        status.as_str(),
+        "completed" | "incomplete" | "failed" | "cancelled"
+    ) {
+        return Err(responses_option_error(
+            source,
+            target,
+            "response_status",
+            "status",
+        ));
+    }
+    let response_id = extension_string(&envelope, "openai.responses.id")
+        .or_else(|| extension_string(&envelope, "openai.response_id"))
+        .or_else(|| extension_string(&envelope, "claude.response_id"));
+    let response_id = response_id.unwrap_or_else(|| {
+        record_loss(
+            &mut envelope,
+            LossCode::LossUnknownEvent,
+            Some(Feature::UnknownEventPassthrough),
+            "response.id",
+            "Responses response id synthesized explicitly",
+        );
+        "direct-ir-response".to_owned()
+    });
+    let created_at = extension_i64(&envelope, "openai.responses.created_at")
+        .or_else(|| extension_i64(&envelope, "openai.response_created"));
+    let created_at = created_at.unwrap_or_else(|| {
+        record_loss(
+            &mut envelope,
+            LossCode::LossUnknownEvent,
+            Some(Feature::UnknownEventPassthrough),
+            "response.created_at",
+            "Responses creation timestamp synthesized explicitly",
+        );
+        0
+    });
+    record_usage_projection_losses(&mut envelope, target);
+    Ok(finish(
+        ResponsesResponse {
+            id: response_id,
+            object: "response".to_owned(),
+            created_at,
+            status,
+            instructions: None,
+            max_output_tokens: None,
+            model: envelope.model.clone(),
+            output,
+            parallel_tool_calls: None,
+            previous_response_id: None,
+            reasoning: None,
+            store: None,
+            temperature: None,
+            tool_choice: None,
+            tools: None,
+            top_p: None,
+            truncation: None,
+            usage: envelope
+                .usage
+                .as_ref()
+                .map(|usage| usage_to_wire(usage, Protocol::OpenAiResponses)),
+            user: None,
+            metadata: None,
+            incomplete_details,
+            error: None,
+            extra: BTreeMap::new(),
+        },
+        envelope,
+        source,
+        target,
+    ))
+}
+/// OpenAI Responses request → OpenAI Chat request through one ordered IR hop.
+pub fn openai_responses_request_to_openai_chat_v2(
+    request: OpenAiResponsesRequest,
+) -> Result<DirectIrConversion<OpenAiChatRequest>, DirectIrError> {
+    direct_request(
+        request,
+        Protocol::OpenAiResponses,
+        Protocol::OpenAi,
+        openai_responses_request_to_envelope_v2,
+        envelope_to_openai_chat_request_v2,
+    )
+}
+
+/// OpenAI Chat request → OpenAI Responses request through one ordered IR hop.
+pub fn openai_chat_request_to_openai_responses_v2(
+    request: OpenAiChatRequest,
+) -> Result<DirectIrConversion<OpenAiResponsesRequest>, DirectIrError> {
+    direct_request(
+        request,
+        Protocol::OpenAi,
+        Protocol::OpenAiResponses,
+        openai_chat_request_to_envelope_v2,
+        envelope_to_openai_responses_request_v2,
+    )
+}
+
+/// OpenAI Responses request → Claude request through one ordered IR hop.
+pub fn openai_responses_request_to_claude_v2(
+    request: OpenAiResponsesRequest,
+) -> Result<DirectIrConversion<ClaudeRequest>, DirectIrError> {
+    direct_request(
+        request,
+        Protocol::OpenAiResponses,
+        Protocol::Claude,
+        openai_responses_request_to_envelope_v2,
+        envelope_to_claude_request_v2,
+    )
+}
+
+/// OpenAI Responses request → Gemini request through one ordered IR hop.
+pub fn openai_responses_request_to_gemini_v2(
+    request: OpenAiResponsesRequest,
+    model: &str,
+) -> Result<DirectIrConversion<GeminiRequest>, DirectIrError> {
+    direct_request(
+        request,
+        Protocol::OpenAiResponses,
+        Protocol::Gemini,
+        openai_responses_request_to_envelope_v2,
+        |envelope| envelope_to_gemini_request_v2_for_model(envelope, model, true),
+    )
+}
+
+/// OpenAI Chat response → OpenAI Responses response through one ordered IR hop.
+pub fn openai_chat_response_to_openai_responses_v2(
+    response: OpenAiChatResponse,
+) -> Result<DirectIrConversion<ResponsesResponse>, DirectIrError> {
+    direct_response(
+        response,
+        Protocol::OpenAi,
+        Protocol::OpenAiResponses,
+        openai_chat_response_to_envelope_v2,
+        envelope_to_openai_responses_response_v2,
+    )
+}
+
+/// OpenAI Responses response → OpenAI Chat response through one ordered IR hop.
+pub fn openai_responses_response_to_openai_chat_v2(
+    response: ResponsesResponse,
+) -> Result<DirectIrConversion<OpenAiChatResponse>, DirectIrError> {
+    direct_response(
+        response,
+        Protocol::OpenAiResponses,
+        Protocol::OpenAi,
+        openai_responses_response_to_envelope_v2,
+        envelope_to_openai_chat_response_v2,
+    )
+}
+
+/// OpenAI Responses response → Claude response through one ordered IR hop.
+pub fn openai_responses_response_to_claude_v2(
+    response: ResponsesResponse,
+) -> Result<DirectIrConversion<ClaudeResponse>, DirectIrError> {
+    direct_response(
+        response,
+        Protocol::OpenAiResponses,
+        Protocol::Claude,
+        openai_responses_response_to_envelope_v2,
+        envelope_to_claude_response_v2,
+    )
+}
+
+/// OpenAI Responses response → Gemini response through one ordered IR hop.
+pub fn openai_responses_response_to_gemini_v2(
+    response: ResponsesResponse,
+    model: &str,
+) -> Result<DirectIrConversion<GeminiResponse>, DirectIrError> {
+    direct_response(
+        response,
+        Protocol::OpenAiResponses,
+        Protocol::Gemini,
+        openai_responses_response_to_envelope_v2,
+        |envelope| {
+            let mut envelope = envelope;
+            envelope.model = model.to_owned();
+            envelope_to_gemini_response_v2(envelope)
+        },
+    )
+}
+
+/// Claude request → OpenAI Responses request through one ordered IR hop.
+pub fn claude_request_to_openai_responses_v2(
+    request: ClaudeRequest,
+) -> Result<DirectIrConversion<OpenAiResponsesRequest>, DirectIrError> {
+    direct_request(
+        request,
+        Protocol::Claude,
+        Protocol::OpenAiResponses,
+        claude_request_to_envelope_v2,
+        envelope_to_openai_responses_request_v2,
+    )
+}
+
+/// Gemini request → OpenAI Responses request through one ordered IR hop.
+pub fn gemini_request_to_openai_responses_v2(
+    request: GeminiRequest,
+    model: &str,
+) -> Result<DirectIrConversion<OpenAiResponsesRequest>, DirectIrError> {
+    direct_request(
+        request,
+        Protocol::Gemini,
+        Protocol::OpenAiResponses,
+        |request| gemini_request_to_envelope_v2(request, model),
+        envelope_to_openai_responses_request_v2,
+    )
+}
+
+/// Claude response → OpenAI Responses response through one ordered IR hop.
+pub fn claude_response_to_openai_responses_v2(
+    response: ClaudeResponse,
+) -> Result<DirectIrConversion<ResponsesResponse>, DirectIrError> {
+    direct_response(
+        response,
+        Protocol::Claude,
+        Protocol::OpenAiResponses,
+        claude_response_to_envelope_v2,
+        envelope_to_openai_responses_response_v2,
+    )
+}
+
+/// Gemini response → OpenAI Responses response through one ordered IR hop.
+pub fn gemini_response_to_openai_responses_v2(
+    response: GeminiResponse,
+    model: &str,
+) -> Result<DirectIrConversion<ResponsesResponse>, DirectIrError> {
+    direct_response(
+        response,
+        Protocol::Gemini,
+        Protocol::OpenAiResponses,
+        |response| gemini_response_to_envelope_v2(response, model),
+        envelope_to_openai_responses_response_v2,
+    )
+}
+#[cfg(test)]
+mod responses_direct_ir_tests {
+    use super::*;
+
+    fn responses_request_fixture() -> OpenAiResponsesRequest {
+        serde_json::from_str(
+            r#"{
+              "model":"gpt-responses",
+              "instructions":"be concise",
+              "input":[{"type":"message","role":"user","content":"hello"}],
+              "tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}]
+            }"#,
+        )
+        .expect("Responses request fixture")
+    }
+
+    #[test]
+    fn responses_direct_request_exact_subset_round_trips_without_loss() {
+        let decoded = openai_responses_request_to_envelope_v2(responses_request_fixture())
+            .expect("Responses request decode");
+        assert_eq!(decoded.envelope.ordered_items().len(), 2);
+        assert_eq!(decoded.envelope.tools.len(), 1);
+        assert!(decoded.loss_ledger().is_empty());
+
+        let encoded = envelope_to_openai_responses_request_v2(decoded.envelope)
+            .expect("Responses request encode");
+        assert_eq!(encoded.value.model, "gpt-responses");
+        assert_eq!(encoded.value.instructions.as_deref(), Some("be concise"));
+        assert!(matches!(
+            encoded.value.input,
+            Some(ResponsesInput::Items(ref items))
+                if items.len() == 1
+                    && items[0].kind.as_deref() == Some("message")
+        ));
+        assert!(encoded.loss_ledger().is_empty());
+        assert!(encoded.enforce_loss_policy(LossPolicy::Reject).is_ok());
+    }
+
+    #[test]
+    fn responses_direct_request_rejects_state_and_non_function_tools() {
+        let stateful: OpenAiResponsesRequest = serde_json::from_str(
+            r#"{"model":"gpt-responses","input":[],"previous_response_id":"resp-old"}"#,
+        )
+        .expect("stateful Responses request");
+        let state_error = openai_responses_request_to_envelope_v2(stateful)
+            .expect_err("state must not enter stateless IR");
+        assert_eq!(state_error.feature, "state_reference");
+        assert_eq!(state_error.path, "previous_response_id");
+
+        let builtin: OpenAiResponsesRequest =
+            serde_json::from_str(r#"{"model":"gpt-responses","tools":[{"type":"web_search"}]}"#)
+                .expect("Responses builtin tool request");
+        let tool_error = openai_responses_request_to_envelope_v2(builtin)
+            .expect_err("builtin tools must be explicitly unsupported");
+        assert_eq!(tool_error.feature, "tool_type");
+        assert_eq!(tool_error.path, "tools[0]");
+    }
+
+    #[test]
+    fn responses_direct_response_round_trip_retains_ids_and_usage() {
+        let response: ResponsesResponse = serde_json::from_str(
+            r#"{
+              "id":"resp-1","object":"response","created_at":7,
+              "status":"completed","model":"gpt-responses",
+              "output":[
+                {"type":"message","id":"msg-1","status":"completed","role":"assistant",
+                 "content":[{"type":"output_text","text":"answer"}]}
+              ],
+              "usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}
+            }"#,
+        )
+        .expect("Responses response fixture");
+        let decoded =
+            openai_responses_response_to_envelope_v2(response).expect("Responses response decode");
+        assert_eq!(
+            decoded.envelope.ordered_items()[0]
+                .id
+                .as_ref()
+                .map(|id| id.value.as_str()),
+            Some("msg-1")
+        );
+        assert_eq!(
+            decoded
+                .envelope
+                .usage
+                .as_ref()
+                .map(|usage| usage.total_tokens),
+            Some(5)
+        );
+        let encoded = envelope_to_openai_responses_response_v2(decoded.envelope)
+            .expect("Responses response encode");
+        assert_eq!(encoded.value.id, "resp-1");
+        assert_eq!(encoded.value.output[0].id, "msg-1");
+        assert_eq!(
+            encoded.value.usage.as_ref().map(|usage| usage.total_tokens),
+            Some(5)
+        );
+        assert!(encoded.loss_ledger().is_empty());
+    }
+
+    #[test]
+    fn responses_direct_synthetic_id_enters_loss_ledger_and_reject_policy() {
+        let mut envelope = Envelope::new(Protocol::OpenAi, "gpt-responses");
+        let item = Item::tool_call(
+            OpaqueId::synthetic("call-synthetic", Protocol::OpenAi),
+            vec![function_call_part("lookup".to_owned(), object([]))],
+            Provenance::new(Protocol::OpenAi),
+        );
+        envelope.push_item(item).expect("valid synthetic call");
+        let converted = envelope_to_openai_responses_request_v2(envelope)
+            .expect("synthetic id remains explicit");
+        assert!(
+            converted
+                .loss_ledger()
+                .as_slice()
+                .iter()
+                .any(|loss| loss.code == LossCode::SyntheticToolCallId)
+        );
+        assert!(converted.enforce_loss_policy(LossPolicy::Reject).is_err());
+    }
+
+    #[test]
+    fn responses_descriptor_is_disabled_but_has_one_hop_converter_ids() {
+        let descriptor = openai_responses_direct_ir_route_descriptor(Protocol::OpenAi);
+        assert!(!descriptor.enabled);
+        assert_eq!(descriptor.hop_count, 1);
+        assert!(descriptor.request_converter_id.contains("openai-responses"));
+        assert!(descriptor.response_converter_id.contains("openai-chat"));
+    }
 }
 
 #[cfg(test)]

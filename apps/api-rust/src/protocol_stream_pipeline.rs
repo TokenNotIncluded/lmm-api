@@ -476,6 +476,8 @@ pub struct TypedStreamState {
     started: bool,
     terminal: bool,
     cancelled: bool,
+    terminal_error_seen: bool,
+    terminal_cancelled_seen: bool,
     open_blocks: BTreeSet<usize>,
     seen_blocks: BTreeSet<usize>,
     usage: Option<TokenUsage>,
@@ -490,6 +492,8 @@ impl TypedStreamState {
             started: false,
             terminal: false,
             cancelled: false,
+            terminal_error_seen: false,
+            terminal_cancelled_seen: false,
             open_blocks: BTreeSet::new(),
             seen_blocks: BTreeSet::new(),
             usage: None,
@@ -515,7 +519,8 @@ impl TypedStreamState {
         self.started
     }
 
-    /// Returns whether a successful terminal transition has occurred.
+    /// Returns whether a response, error, or cancellation terminal transition
+    /// has occurred.
     #[must_use]
     pub const fn terminal(&self) -> bool {
         self.terminal
@@ -558,7 +563,7 @@ impl TypedStreamState {
             CanonicalStreamEvent::ResponseEnd { usage, .. } => {
                 self.terminal_with_usage(usage.clone())
             }
-            CanonicalStreamEvent::Error { .. } => self.require_active(),
+            CanonicalStreamEvent::Error { .. } => self.mark_error(),
             CanonicalStreamEvent::Cancelled => self.mark_cancelled(),
         }
     }
@@ -592,8 +597,20 @@ impl TypedStreamState {
         }
     }
 
+    fn require_content_active(&self) -> Result<(), TypedStreamFailure> {
+        if self.started && !self.terminal && !self.cancelled {
+            Ok(())
+        } else if self.terminal {
+            Err(TypedStreamFailure::AfterTerminal)
+        } else if self.cancelled {
+            Err(TypedStreamFailure::Cancelled)
+        } else {
+            Err(TypedStreamFailure::OutOfOrder)
+        }
+    }
+
     fn block_start(&mut self, index: usize) -> Result<(), TypedStreamFailure> {
-        self.require_active()?;
+        self.require_content_active()?;
         if index > DEFAULT_MAX_BLOCK_INDEX
             || self.open_blocks.contains(&index)
             || self.seen_blocks.contains(&index)
@@ -607,7 +624,7 @@ impl TypedStreamState {
     }
 
     fn block_delta(&self, index: usize) -> Result<(), TypedStreamFailure> {
-        self.require_active()?;
+        self.require_content_active()?;
         if self.open_blocks.contains(&index) {
             Ok(())
         } else {
@@ -616,7 +633,7 @@ impl TypedStreamState {
     }
 
     fn block_end(&mut self, index: usize) -> Result<(), TypedStreamFailure> {
-        self.require_active()?;
+        self.require_content_active()?;
         if self.open_blocks.remove(&index) {
             Ok(())
         } else {
@@ -637,9 +654,47 @@ impl TypedStreamState {
         Ok(())
     }
 
+    fn mark_error(&mut self) -> Result<(), TypedStreamFailure> {
+        if !self.started {
+            return Err(TypedStreamFailure::OutOfOrder);
+        }
+        if !self.open_blocks.is_empty() {
+            return Err(TypedStreamFailure::OutOfOrder);
+        }
+        if self.cancelled && !self.terminal {
+            return Err(TypedStreamFailure::Cancelled);
+        }
+        if self.terminal_error_seen {
+            return Err(TypedStreamFailure::DuplicateTerminal);
+        }
+
+        // A canonical Error is a terminal outcome when it is independent of
+        // ResponseEnd.  When it follows ResponseEnd, it is the one checked
+        // error postlude permitted by the contracts state machine.
+        self.terminal_error_seen = true;
+        self.terminal = true;
+        Ok(())
+    }
+
     fn mark_cancelled(&mut self) -> Result<(), TypedStreamFailure> {
-        self.require_active()?;
+        if !self.started {
+            return Err(TypedStreamFailure::OutOfOrder);
+        }
+        if !self.open_blocks.is_empty() {
+            return Err(TypedStreamFailure::OutOfOrder);
+        }
+        if self.cancelled && !self.terminal {
+            return Err(TypedStreamFailure::Cancelled);
+        }
+        if self.terminal_cancelled_seen {
+            return Err(TypedStreamFailure::DuplicateTerminal);
+        }
+
+        // Cancellation can be the primary terminal event or the bounded
+        // postlude emitted after a provider response terminal.
+        self.terminal_cancelled_seen = true;
         self.cancelled = true;
+        self.terminal = true;
         Ok(())
     }
 }
@@ -822,23 +877,6 @@ impl StreamSession {
                 observed: frame.raw.len(),
             }));
         }
-        let state_failure = self.state.as_ref().and_then(|state| {
-            if state.terminal() {
-                Some(if frame.is_done() {
-                    TypedStreamFailure::DuplicateTerminal
-                } else {
-                    TypedStreamFailure::AfterTerminal
-                })
-            } else if state.cancelled() {
-                Some(TypedStreamFailure::Cancelled)
-            } else {
-                None
-            }
-        });
-        if let Some(failure) = state_failure {
-            return Err(self.poison(failure));
-        }
-
         let adaptor_result = if let Some(adaptor) = self.adaptor.as_mut() {
             adaptor.process_frame(frame)
         } else {
@@ -849,6 +887,13 @@ impl StreamSession {
             Ok(output) => output,
             Err(failure) => return Err(self.poison(failure)),
         };
+        let terminal_failure = match self.state.as_ref() {
+            Some(state) if state.terminal() => validate_terminal_postlude(state, &output).err(),
+            _ => None,
+        };
+        if let Some(failure) = terminal_failure {
+            return Err(self.poison(failure));
+        }
         self.finish_adaptor_output(output)
     }
 
@@ -944,6 +989,36 @@ impl StreamSession {
     fn poison(&mut self, failure: TypedStreamFailure) -> StreamProcessError {
         self.poisoned = true;
         self.stage_failure(failure)
+    }
+}
+
+fn validate_terminal_postlude(
+    state: &TypedStreamState,
+    output: &StreamAdaptorOutput,
+) -> Result<(), TypedStreamFailure> {
+    let [item] = output.items() else {
+        return Err(TypedStreamFailure::AfterTerminal);
+    };
+    let event = match item {
+        StreamAdaptorItem::TargetFramed { event, .. } | StreamAdaptorItem::Canonical { event } => {
+            event
+        }
+        StreamAdaptorItem::Loss(_) => return Err(TypedStreamFailure::AfterTerminal),
+    };
+    match event {
+        CanonicalStreamEvent::Error { .. } if !state.terminal_error_seen => Ok(()),
+        CanonicalStreamEvent::Cancelled if !state.terminal_cancelled_seen => Ok(()),
+        CanonicalStreamEvent::Error { .. } | CanonicalStreamEvent::Cancelled => {
+            Err(TypedStreamFailure::DuplicateTerminal)
+        }
+        CanonicalStreamEvent::ResponseEnd { .. } => Err(TypedStreamFailure::DuplicateTerminal),
+        CanonicalStreamEvent::ResponseStart { .. }
+        | CanonicalStreamEvent::ContentStart { .. }
+        | CanonicalStreamEvent::TextDelta { .. }
+        | CanonicalStreamEvent::ReasoningDelta { .. }
+        | CanonicalStreamEvent::ToolCallStart { .. }
+        | CanonicalStreamEvent::ToolArgumentsDelta { .. }
+        | CanonicalStreamEvent::ContentEnd { .. } => Err(TypedStreamFailure::AfterTerminal),
     }
 }
 
@@ -1569,6 +1644,102 @@ mod tests {
     }
 
     #[test]
+    fn canonical_terminal_postludes_are_bounded_and_content_stays_closed() {
+        let mut state = TypedStreamState::new(Protocol::Claude, Protocol::OpenAi);
+        state
+            .apply(&CanonicalStreamEvent::ResponseStart {
+                id: "response".to_owned(),
+                model: "model".to_owned(),
+            })
+            .expect("response start");
+        state
+            .apply(&CanonicalStreamEvent::ResponseEnd {
+                finish_reason: lmm_contracts::relay::FinishReason::Error,
+                usage: None,
+                model: None,
+            })
+            .expect("error response end");
+        state
+            .apply(&CanonicalStreamEvent::Error {
+                code: Some("upstream".to_owned()),
+                message: "failed".to_owned(),
+            })
+            .expect("one checked error postlude");
+        state
+            .apply(&CanonicalStreamEvent::Cancelled)
+            .expect("one checked cancellation postlude");
+        assert!(state.terminal());
+        assert!(state.cancelled());
+        assert_eq!(
+            state.apply(&CanonicalStreamEvent::Error {
+                code: None,
+                message: "duplicate".to_owned(),
+            }),
+            Err(TypedStreamFailure::DuplicateTerminal)
+        );
+        assert_eq!(
+            state.apply(&CanonicalStreamEvent::Cancelled),
+            Err(TypedStreamFailure::DuplicateTerminal)
+        );
+        assert_eq!(
+            state.apply(&CanonicalStreamEvent::TextDelta {
+                index: 0,
+                delta: "late".to_owned(),
+            }),
+            Err(TypedStreamFailure::AfterTerminal)
+        );
+    }
+
+    #[test]
+    fn independent_error_and_cancellation_are_terminal_without_success_usage() {
+        let mut error = TypedStreamState::new(Protocol::Claude, Protocol::OpenAi);
+        error
+            .apply(&CanonicalStreamEvent::ResponseStart {
+                id: "error-response".to_owned(),
+                model: "model".to_owned(),
+            })
+            .expect("response start");
+        error
+            .apply(&CanonicalStreamEvent::Error {
+                code: None,
+                message: "failed".to_owned(),
+            })
+            .expect("standalone error");
+        assert!(error.terminal());
+        assert!(!error.usage_finalized());
+        assert_eq!(
+            error.apply(&CanonicalStreamEvent::ResponseEnd {
+                finish_reason: lmm_contracts::relay::FinishReason::Error,
+                usage: None,
+                model: None,
+            }),
+            Err(TypedStreamFailure::DuplicateTerminal)
+        );
+
+        let mut cancelled = TypedStreamState::new(Protocol::Claude, Protocol::OpenAi);
+        cancelled
+            .apply(&CanonicalStreamEvent::ResponseStart {
+                id: "cancelled-response".to_owned(),
+                model: "model".to_owned(),
+            })
+            .expect("response start");
+        cancelled
+            .apply(&CanonicalStreamEvent::Cancelled)
+            .expect("standalone cancellation");
+        assert!(cancelled.terminal());
+        assert!(cancelled.cancelled());
+        assert!(!cancelled.usage_finalized());
+        assert_eq!(
+            cancelled.apply(&CanonicalStreamEvent::ResponseEnd {
+                finish_reason: lmm_contracts::relay::FinishReason::Cancelled,
+                usage: None,
+                model: None,
+            }),
+            Err(TypedStreamFailure::DuplicateTerminal)
+        );
+    }
+
+    #[test]
     fn cancellation_and_drop_do_not_finalize_successful_usage() {
         let mut state = TypedStreamState::new(Protocol::Claude, Protocol::OpenAi);
         state
@@ -1637,6 +1808,165 @@ mod tests {
                 .map(TypedStreamState::open_block_count),
             Some(1)
         );
+    }
+
+    #[test]
+    fn terminal_postludes_are_admitted_across_frames_but_late_content_poisoned() {
+        let registry = registry();
+        let rollout = ProtocolRolloutControl::default().snapshot();
+        let evidence = ownership(Protocol::Claude, Protocol::OpenAi);
+
+        let error_process_calls = Arc::new(AtomicUsize::new(0));
+        let error_adaptors = MockAdaptorRegistry {
+            adaptor: MockAdaptor {
+                compile_calls: Arc::new(AtomicUsize::new(0)),
+                process_calls: Arc::clone(&error_process_calls),
+                mode: MockBatchMode::ErrorPostlude,
+            },
+        };
+        let mut error_session = compile_stream_session_with_runtime(
+            spec(
+                &registry,
+                &rollout,
+                Protocol::Claude,
+                Protocol::OpenAi,
+                &evidence,
+            ),
+            &CountingCompiler::default(),
+            &error_adaptors,
+            &AlwaysOpenAdmission,
+        )
+        .expect("error postlude route");
+        let input = frame(b"data: first\n\n");
+        error_session
+            .process_frame(&input)
+            .expect("terminal error batch");
+        error_session
+            .process_frame(&frame(b"data: error\n\n"))
+            .expect("error postlude on the next frame");
+        assert!(
+            error_session
+                .typed_state()
+                .is_some_and(TypedStreamState::terminal)
+        );
+        assert_eq!(error_process_calls.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            error_session.process_frame(&frame(b"data: duplicate-error\n\n")),
+            Err(StreamProcessError::Stream(
+                TypedStreamFailure::DuplicateTerminal
+            ))
+        );
+
+        let cancelled_adaptors = MockAdaptorRegistry {
+            adaptor: MockAdaptor {
+                compile_calls: Arc::new(AtomicUsize::new(0)),
+                process_calls: Arc::new(AtomicUsize::new(0)),
+                mode: MockBatchMode::CancelledPostlude,
+            },
+        };
+        let mut cancelled_session = compile_stream_session_with_runtime(
+            spec(
+                &registry,
+                &rollout,
+                Protocol::Claude,
+                Protocol::OpenAi,
+                &evidence,
+            ),
+            &CountingCompiler::default(),
+            &cancelled_adaptors,
+            &AlwaysOpenAdmission,
+        )
+        .expect("cancellation postlude route");
+        cancelled_session
+            .process_frame(&input)
+            .expect("terminal response batch");
+        cancelled_session
+            .process_frame(&frame(b"data: cancelled\n\n"))
+            .expect("cancellation postlude on the next frame");
+        assert!(
+            cancelled_session
+                .typed_state()
+                .is_some_and(TypedStreamState::cancelled)
+        );
+
+        let late_content_adaptors = MockAdaptorRegistry {
+            adaptor: MockAdaptor {
+                compile_calls: Arc::new(AtomicUsize::new(0)),
+                process_calls: Arc::new(AtomicUsize::new(0)),
+                mode: MockBatchMode::ContentAfterTerminal,
+            },
+        };
+        let mut late_content_session = compile_stream_session_with_runtime(
+            spec(
+                &registry,
+                &rollout,
+                Protocol::Claude,
+                Protocol::OpenAi,
+                &evidence,
+            ),
+            &CountingCompiler::default(),
+            &late_content_adaptors,
+            &AlwaysOpenAdmission,
+        )
+        .expect("late content route");
+        late_content_session
+            .process_frame(&input)
+            .expect("terminal response batch");
+        assert_eq!(
+            late_content_session.process_frame(&frame(b"data: late\n\n")),
+            Err(StreamProcessError::Stream(
+                TypedStreamFailure::AfterTerminal
+            ))
+        );
+        assert!(late_content_session.is_poisoned());
+        assert_eq!(
+            late_content_session.process_frame(&frame(b"data: later\n\n")),
+            Err(StreamProcessError::Stream(TypedStreamFailure::Poisoned))
+        );
+    }
+
+    #[test]
+    fn terminal_frames_reject_empty_or_loss_only_adaptor_batches() {
+        let registry = registry();
+        let rollout = ProtocolRolloutControl::default().snapshot();
+        let evidence = ownership(Protocol::Claude, Protocol::OpenAi);
+        let input = frame(b"data: first\n\n");
+
+        for mode in [
+            MockBatchMode::EmptyAfterTerminal,
+            MockBatchMode::LossAfterTerminal,
+        ] {
+            let adaptors = MockAdaptorRegistry {
+                adaptor: MockAdaptor {
+                    compile_calls: Arc::new(AtomicUsize::new(0)),
+                    process_calls: Arc::new(AtomicUsize::new(0)),
+                    mode,
+                },
+            };
+            let mut session = compile_stream_session_with_runtime(
+                spec(
+                    &registry,
+                    &rollout,
+                    Protocol::Claude,
+                    Protocol::OpenAi,
+                    &evidence,
+                ),
+                &CountingCompiler::default(),
+                &adaptors,
+                &AlwaysOpenAdmission,
+            )
+            .expect("terminal batch route");
+            session
+                .process_frame(&input)
+                .expect("initial terminal batch");
+            assert_eq!(
+                session.process_frame(&frame(b"data: postlude\n\n")),
+                Err(StreamProcessError::Stream(
+                    TypedStreamFailure::AfterTerminal
+                ))
+            );
+            assert!(session.is_poisoned());
+        }
     }
 
     #[test]
@@ -1991,6 +2321,11 @@ mod tests {
         Empty,
         FailAfterFirst,
         CanonicalOversized,
+        ErrorPostlude,
+        CancelledPostlude,
+        ContentAfterTerminal,
+        EmptyAfterTerminal,
+        LossAfterTerminal,
     }
 
     impl StreamAdaptor for MockAdaptor {
@@ -2027,6 +2362,69 @@ mod tests {
             _frame: &SseFrame,
         ) -> Result<StreamAdaptorOutput, TypedStreamFailure> {
             self.process_calls.fetch_add(1, Ordering::Relaxed);
+            if matches!(
+                self.mode,
+                MockBatchMode::ErrorPostlude
+                    | MockBatchMode::CancelledPostlude
+                    | MockBatchMode::ContentAfterTerminal
+                    | MockBatchMode::EmptyAfterTerminal
+                    | MockBatchMode::LossAfterTerminal
+            ) {
+                if self.emitted {
+                    let event = match self.mode {
+                        MockBatchMode::ErrorPostlude => CanonicalStreamEvent::Error {
+                            code: Some("upstream".to_owned()),
+                            message: "failed".to_owned(),
+                        },
+                        MockBatchMode::CancelledPostlude => CanonicalStreamEvent::Cancelled,
+                        MockBatchMode::ContentAfterTerminal => CanonicalStreamEvent::TextDelta {
+                            index: 0,
+                            delta: "late".to_owned(),
+                        },
+                        MockBatchMode::EmptyAfterTerminal => {
+                            return Ok(StreamAdaptorOutput::empty());
+                        }
+                        MockBatchMode::LossAfterTerminal => {
+                            return Ok(StreamAdaptorOutput::new(vec![StreamAdaptorItem::Loss(
+                                StreamLoss {
+                                    code: LOSS_UNKNOWN_EVENT,
+                                    class: UnknownEventClass::Metadata,
+                                },
+                            )]));
+                        }
+                        MockBatchMode::Multi
+                        | MockBatchMode::Empty
+                        | MockBatchMode::FailAfterFirst
+                        | MockBatchMode::CanonicalOversized => unreachable!(
+                            "terminal postlude branch only handles terminal-postlude modes"
+                        ),
+                    };
+                    return Ok(StreamAdaptorOutput::new(vec![
+                        StreamAdaptorItem::Canonical { event },
+                    ]));
+                }
+                self.emitted = true;
+                let finish_reason = if matches!(self.mode, MockBatchMode::ErrorPostlude) {
+                    lmm_contracts::relay::FinishReason::Error
+                } else {
+                    lmm_contracts::relay::FinishReason::Stop
+                };
+                return Ok(StreamAdaptorOutput::new(vec![
+                    StreamAdaptorItem::Canonical {
+                        event: CanonicalStreamEvent::ResponseStart {
+                            id: "response".to_owned(),
+                            model: "model".to_owned(),
+                        },
+                    },
+                    StreamAdaptorItem::Canonical {
+                        event: CanonicalStreamEvent::ResponseEnd {
+                            finish_reason,
+                            usage: None,
+                            model: None,
+                        },
+                    },
+                ]));
+            }
             if matches!(self.mode, MockBatchMode::Empty) {
                 return Ok(StreamAdaptorOutput::empty());
             }

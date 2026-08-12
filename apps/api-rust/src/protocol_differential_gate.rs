@@ -125,6 +125,7 @@ pub enum DifferentialEvidenceError {
     BaselineShaNotAllowed,
     CandidateShaNotAllowed,
     EvidenceIdReplay,
+    ReplayGuardUnavailable,
     InvalidEvidenceLifetime,
     EvidenceLifetimeExceedsPolicy,
     ApprovalAfterIssue,
@@ -245,6 +246,9 @@ impl fmt::Display for DifferentialEvidenceError {
                 formatter.write_str("candidate SHA is not allowed by the trust policy")
             }
             Self::EvidenceIdReplay => formatter.write_str("evidence identifier was already used"),
+            Self::ReplayGuardUnavailable => {
+                formatter.write_str("evidence replay guard is unavailable")
+            }
             Self::InvalidEvidenceLifetime => {
                 formatter.write_str("evidence validity interval is invalid")
             }
@@ -359,6 +363,40 @@ impl fmt::Display for DifferentialEvidenceError {
 }
 
 impl Error for DifferentialEvidenceError {}
+
+/// Closed outcomes from the host-owned replay store.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EvidenceReplayGuardError {
+    /// The evidence identifier was atomically consumed by an earlier caller.
+    AlreadyConsumed,
+    /// The host could not complete the atomic consume operation.
+    Unavailable,
+}
+
+impl fmt::Display for EvidenceReplayGuardError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::AlreadyConsumed => formatter.write_str("evidence identifier was already used"),
+            Self::Unavailable => formatter.write_str("evidence replay guard is unavailable"),
+        }
+    }
+}
+
+impl Error for EvidenceReplayGuardError {}
+
+/// Host-owned atomic consume-once boundary for route admissions.
+///
+/// The implementation must perform a durable compare-and-insert (or
+/// equivalent) on `evidence_id` that is atomic across all relevant threads and
+/// processes. A process-local set or mutex is not sufficient for production,
+/// and this module intentionally provides no default or in-memory
+/// implementation that could be mistaken for that guarantee. The host should
+/// keep the same current registry snapshot and route-selection transaction
+/// around this call and the resulting admission use.
+pub trait EvidenceReplayGuard: Send + Sync {
+    /// Consumes an evidence identifier exactly once, or fails closed.
+    fn consume_once(&self, evidence_id: &str) -> Result<(), EvidenceReplayGuardError>;
+}
 
 /// Result asserted by one Go-vs-Rust differential class.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -793,6 +831,74 @@ impl VerifiedDifferentialEvidence {
         &self.document
     }
 
+    /// Atomically consumes this evidence and returns the only route-admission
+    /// view exposed by this module.
+    ///
+    /// The caller must provide a host-owned [`EvidenceReplayGuard`] whose
+    /// compare-and-insert is atomic across every process that can select the
+    /// route. Before consumption this method revalidates the current clock
+    /// (`issued_at`/`valid_until`), trust policy, signature, registry
+    /// fingerprint/version/runtime catalog, route directions and quality, the
+    /// requested model family, and the complete requested feature set. A
+    /// failed check never calls the replay guard, while an unavailable or
+    /// already-used guard fails closed. The returned view has no public
+    /// constructor or mutator and must be used with the same current registry
+    /// snapshot supplied here; this method does not alter a router or rollout
+    /// control.
+    pub fn consume_for_route_admission(
+        &self,
+        replay_guard: &dyn EvidenceReplayGuard,
+        registry: &ValidatedRegistry,
+        trust_policy: &EvidenceTrustPolicy,
+        model_family: &str,
+        feature_classes: &[Feature],
+        now_unix_seconds: u64,
+    ) -> Result<ConsumedRouteAdmission, DifferentialEvidenceError> {
+        validate_differential_count(self.document.differentials.len())?;
+        validate_feature_class_shape(&self.document.feature_classes)?;
+        trust_policy.validate()?;
+        validate_document(&self.document, registry)?;
+        validate_policy_claims_at(&self.document, trust_policy, now_unix_seconds)?;
+        verify_attestation(&self.document, trust_policy)?;
+
+        if model_family != self.document.model_family {
+            return Err(DifferentialEvidenceError::ModelConstraintMismatch);
+        }
+        let evidence_feature_classes = canonical_feature_classes(&self.document.feature_classes)?;
+        let requested_feature_classes = canonical_feature_classes(feature_classes)?;
+        if requested_feature_classes != evidence_feature_classes {
+            return Err(DifferentialEvidenceError::FeatureClassSetMismatch);
+        }
+
+        replay_guard
+            .consume_once(&self.document.evidence_id)
+            .map_err(|error| match error {
+                EvidenceReplayGuardError::AlreadyConsumed => {
+                    DifferentialEvidenceError::EvidenceIdReplay
+                }
+                EvidenceReplayGuardError::Unavailable => {
+                    DifferentialEvidenceError::ReplayGuardUnavailable
+                }
+            })?;
+
+        Ok(ConsumedRouteAdmission {
+            evidence_id: self.document.evidence_id.clone(),
+            ownership: self.ownership.clone(),
+            scope: self.document.scope,
+            model_family: self.document.model_family.clone(),
+            feature_classes: evidence_feature_classes,
+            registry_fingerprint: self.document.registry_fingerprint.clone(),
+            registry_version: self.document.registry_version.clone(),
+            runtime_catalog_version: self.document.runtime_catalog_version.clone(),
+            issued_at_unix_seconds: self.document.issued_at_unix_seconds,
+            valid_until_unix_seconds: self.document.valid_until_unix_seconds,
+            clock_skew_seconds: trust_policy.clock_skew_seconds,
+            minimum_canary_basis_points: trust_policy
+                .minimum_canary_basis_points
+                .max(MIN_REVIEW_CANARY_BASIS_POINTS),
+        })
+    }
+
     /// Evaluates the policy-bound, closed-by-default ownership gate.
     ///
     /// `true` means only “eligible for an independent ownership review”; it
@@ -818,6 +924,118 @@ impl VerifiedDifferentialEvidence {
             self.review_decision(),
             OwnershipDecision::EligibleForOwnershipReview { .. }
         )
+    }
+}
+
+/// A consumed, route-bound admission view.
+///
+/// Instances can only be constructed by
+/// [`VerifiedDifferentialEvidence::consume_for_route_admission`] after all
+/// current binding checks pass and the host replay store atomically consumes
+/// the evidence identifier. The private fields and absence of a public
+/// constructor prevent callers from assembling a trusted view from defaults
+/// or from a different route. This type is an admission observation only; it
+/// does not connect a router or open cross-protocol traffic.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ConsumedRouteAdmission {
+    evidence_id: String,
+    ownership: OwnershipEvidence,
+    scope: RouteOwnershipScope,
+    model_family: String,
+    feature_classes: Vec<Feature>,
+    registry_fingerprint: String,
+    registry_version: String,
+    runtime_catalog_version: String,
+    issued_at_unix_seconds: u64,
+    valid_until_unix_seconds: u64,
+    clock_skew_seconds: u64,
+    minimum_canary_basis_points: u16,
+}
+
+impl ConsumedRouteAdmission {
+    /// Returns the atomically consumed evidence identifier.
+    #[must_use]
+    pub fn evidence_id(&self) -> &str {
+        &self.evidence_id
+    }
+
+    /// Returns the route identity bound by the evidence document and current
+    /// registry check.
+    #[must_use]
+    pub const fn scope(&self) -> RouteOwnershipScope {
+        self.scope
+    }
+
+    /// Returns the exact model family bound by the admission.
+    #[must_use]
+    pub fn model_family(&self) -> &str {
+        &self.model_family
+    }
+
+    /// Returns the complete, canonical feature set bound by the admission.
+    #[must_use]
+    pub fn feature_classes(&self) -> &[Feature] {
+        &self.feature_classes
+    }
+
+    /// Returns the current registry fingerprint checked at consumption.
+    #[must_use]
+    pub fn registry_fingerprint(&self) -> &str {
+        &self.registry_fingerprint
+    }
+
+    /// Returns the current support-matrix version checked at consumption.
+    #[must_use]
+    pub fn registry_version(&self) -> &str {
+        &self.registry_version
+    }
+
+    /// Returns the current runtime catalog version checked at consumption.
+    #[must_use]
+    pub fn runtime_catalog_version(&self) -> &str {
+        &self.runtime_catalog_version
+    }
+
+    /// Evaluates this consumed admission at the traffic-selection clock.
+    ///
+    /// A consumed nonce is not a perpetual authorization: callers must pass
+    /// the current time at every selection boundary. An admission outside its
+    /// signed validity window fails closed even though it was valid when the
+    /// replay store consumed it.
+    pub fn review_decision_at(
+        &self,
+        now_unix_seconds: u64,
+    ) -> Result<OwnershipDecision, DifferentialEvidenceError> {
+        if now_unix_seconds.saturating_add(self.clock_skew_seconds) < self.issued_at_unix_seconds {
+            return Err(DifferentialEvidenceError::EvidenceNotYetValid);
+        }
+        if now_unix_seconds
+            > self
+                .valid_until_unix_seconds
+                .saturating_add(self.clock_skew_seconds)
+        {
+            return Err(DifferentialEvidenceError::EvidenceExpired);
+        }
+        Ok(match OwnershipGate::new(self.minimum_canary_basis_points) {
+            Ok(gate) => gate.evaluate(&self.ownership),
+            Err(_) => OwnershipDecision::ClosedByDefault {
+                scope: self.scope,
+                blockers: vec![OwnershipBlocker::InvalidCanary],
+            },
+        })
+    }
+
+    /// Returns whether the sealed view is eligible for the independent
+    /// ownership review stage at the supplied current time. This is not a
+    /// router takeover command.
+    pub fn eligible_for_route_admission_at(
+        &self,
+        now_unix_seconds: u64,
+    ) -> Result<bool, DifferentialEvidenceError> {
+        Ok(matches!(
+            self.review_decision_at(now_unix_seconds)?,
+            OwnershipDecision::EligibleForOwnershipReview { .. }
+        ))
     }
 }
 
@@ -978,6 +1196,14 @@ fn validate_policy_claims(
     document: &DifferentialEvidenceDocument,
     trust_policy: &EvidenceTrustPolicy,
 ) -> Result<(), DifferentialEvidenceError> {
+    validate_policy_claims_at(document, trust_policy, trust_policy.now_unix_seconds)
+}
+
+fn validate_policy_claims_at(
+    document: &DifferentialEvidenceDocument,
+    trust_policy: &EvidenceTrustPolicy,
+    now: u64,
+) -> Result<(), DifferentialEvidenceError> {
     if !trust_policy
         .allowed_baseline_go_shas
         .iter()
@@ -1032,7 +1258,6 @@ fn validate_policy_claims(
     if document.canary.basis_points < trust_policy.minimum_canary_basis_points {
         return Err(DifferentialEvidenceError::CanaryBelowPolicyMinimum);
     }
-    let now = trust_policy.now_unix_seconds;
     if now.saturating_add(trust_policy.clock_skew_seconds) < document.issued_at_unix_seconds {
         return Err(DifferentialEvidenceError::EvidenceNotYetValid);
     }
@@ -1269,7 +1494,11 @@ fn validate_registry_binding(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol_runtime_registry::validated_current_registry;
+    use crate::protocol_runtime_registry::{
+        current_runtime_catalog, validate_explicit_registry_against_catalog,
+        validated_current_registry,
+    };
+    use lmm_contracts::relay::Registry;
     const PRIVATE_ED25519_KEY_PK8: &[u8] = &[
         0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04,
         0x20, 0x6a, 0xc3, 0xfd, 0xee, 0xee, 0x29, 0x8a, 0x92, 0x63, 0x8b, 0x70, 0x0c, 0x4b, 0x11,
@@ -1369,6 +1598,42 @@ mod tests {
             now_unix_seconds: 1_500,
             clock_skew_seconds: 0,
             consumed_evidence_ids: BTreeSet::new(),
+        }
+    }
+
+    /// Test-only guard. Production callers must supply a durable,
+    /// cross-process atomic implementation of [`EvidenceReplayGuard`].
+    struct TestOnlyReplayGuard {
+        consumed: std::sync::Mutex<BTreeSet<String>>,
+    }
+
+    impl TestOnlyReplayGuard {
+        fn new() -> Self {
+            Self {
+                consumed: std::sync::Mutex::new(BTreeSet::new()),
+            }
+        }
+    }
+
+    impl EvidenceReplayGuard for TestOnlyReplayGuard {
+        fn consume_once(&self, evidence_id: &str) -> Result<(), EvidenceReplayGuardError> {
+            let mut consumed = self
+                .consumed
+                .lock()
+                .map_err(|_| EvidenceReplayGuardError::Unavailable)?;
+            if consumed.insert(evidence_id.to_owned()) {
+                Ok(())
+            } else {
+                Err(EvidenceReplayGuardError::AlreadyConsumed)
+            }
+        }
+    }
+
+    struct UnavailableReplayGuard;
+
+    impl EvidenceReplayGuard for UnavailableReplayGuard {
+        fn consume_once(&self, _evidence_id: &str) -> Result<(), EvidenceReplayGuardError> {
+            Err(EvidenceReplayGuardError::Unavailable)
         }
     }
 
@@ -1480,6 +1745,218 @@ mod tests {
             OwnershipDecision::EligibleForOwnershipReview {
                 scope: verified.document().scope
             }
+        );
+    }
+
+    #[test]
+    fn atomic_consumption_returns_only_bound_admission_view() {
+        let registry = validated_current_registry().expect("built-in registry validates");
+        let verified = valid_document()
+            .verify(&registry, &trusted_policy())
+            .expect("complete evidence validates");
+        let feature_classes = verified.document().feature_classes.clone();
+        let guard = TestOnlyReplayGuard::new();
+        let admission = verified
+            .consume_for_route_admission(
+                &guard,
+                &registry,
+                &trusted_policy(),
+                "gpt-4o",
+                &feature_classes,
+                1_500,
+            )
+            .expect("atomic consume admits complete evidence");
+
+        assert_eq!(admission.evidence_id(), "evidence-1");
+        assert_eq!(admission.scope(), verified.document().scope);
+        assert_eq!(admission.model_family(), "gpt-4o");
+        assert_eq!(admission.feature_classes(), feature_classes.as_slice());
+        assert_eq!(
+            admission.registry_fingerprint(),
+            verified.document().registry_fingerprint
+        );
+        assert_eq!(
+            admission.registry_version(),
+            verified.document().registry_version
+        );
+        assert_eq!(
+            admission.runtime_catalog_version(),
+            verified.document().runtime_catalog_version
+        );
+        assert_eq!(admission.eligible_for_route_admission_at(1_500), Ok(true));
+        assert_eq!(
+            admission.eligible_for_route_admission_at(2_001),
+            Err(DifferentialEvidenceError::EvidenceExpired)
+        );
+        assert!(admission.ownership.rollout_approved());
+    }
+
+    #[test]
+    fn replay_guard_allows_one_admission_only() {
+        let registry = validated_current_registry().expect("built-in registry validates");
+        let verified = valid_document()
+            .verify(&registry, &trusted_policy())
+            .expect("complete evidence validates");
+        let feature_classes = verified.document().feature_classes.clone();
+        let guard = TestOnlyReplayGuard::new();
+        verified
+            .consume_for_route_admission(
+                &guard,
+                &registry,
+                &trusted_policy(),
+                "gpt-4o",
+                &feature_classes,
+                1_500,
+            )
+            .expect("first consume succeeds");
+        assert_eq!(
+            verified.consume_for_route_admission(
+                &guard,
+                &registry,
+                &trusted_policy(),
+                "gpt-4o",
+                &feature_classes,
+                1_500,
+            ),
+            Err(DifferentialEvidenceError::EvidenceIdReplay)
+        );
+    }
+
+    #[test]
+    fn admission_rechecks_not_before_and_expiry_before_consuming() {
+        let registry = validated_current_registry().expect("built-in registry validates");
+        let verified = valid_document()
+            .verify(&registry, &trusted_policy())
+            .expect("complete evidence validates");
+        let feature_classes = verified.document().feature_classes.clone();
+        let guard = TestOnlyReplayGuard::new();
+
+        assert_eq!(
+            verified.consume_for_route_admission(
+                &guard,
+                &registry,
+                &trusted_policy(),
+                "gpt-4o",
+                &feature_classes,
+                900,
+            ),
+            Err(DifferentialEvidenceError::EvidenceNotYetValid)
+        );
+        assert_eq!(
+            verified.consume_for_route_admission(
+                &guard,
+                &registry,
+                &trusted_policy(),
+                "gpt-4o",
+                &feature_classes,
+                2_001,
+            ),
+            Err(DifferentialEvidenceError::EvidenceExpired)
+        );
+
+        verified
+            .consume_for_route_admission(
+                &guard,
+                &registry,
+                &trusted_policy(),
+                "gpt-4o",
+                &feature_classes,
+                1_500,
+            )
+            .expect("valid time consumes after failed checks");
+    }
+
+    #[test]
+    fn admission_rechecks_model_and_complete_feature_binding() {
+        let registry = validated_current_registry().expect("built-in registry validates");
+        let verified = valid_document()
+            .verify(&registry, &trusted_policy())
+            .expect("complete evidence validates");
+        let feature_classes = verified.document().feature_classes.clone();
+        let guard = TestOnlyReplayGuard::new();
+
+        assert_eq!(
+            verified.consume_for_route_admission(
+                &guard,
+                &registry,
+                &trusted_policy(),
+                "other-model",
+                &feature_classes,
+                1_500,
+            ),
+            Err(DifferentialEvidenceError::ModelConstraintMismatch)
+        );
+        assert_eq!(
+            verified.consume_for_route_admission(
+                &guard,
+                &registry,
+                &trusted_policy(),
+                "gpt-4o",
+                &[Feature::Text],
+                1_500,
+            ),
+            Err(DifferentialEvidenceError::FeatureClassSetMismatch)
+        );
+
+        verified
+            .consume_for_route_admission(
+                &guard,
+                &registry,
+                &trusted_policy(),
+                "gpt-4o",
+                &feature_classes,
+                1_500,
+            )
+            .expect("exact model and feature bindings consume");
+    }
+
+    #[test]
+    fn admission_rejects_changed_registry_snapshot() {
+        let original_registry = validated_current_registry().expect("built-in registry validates");
+        let verified = valid_document()
+            .verify(&original_registry, &trusted_policy())
+            .expect("complete evidence validates");
+        let mut registry_definition = Registry::current();
+        registry_definition.version = "relay-capabilities-test-v2".to_owned();
+        let changed_registry = validate_explicit_registry_against_catalog(
+            &registry_definition,
+            &current_runtime_catalog(),
+        )
+        .expect("changed registry version remains structurally valid");
+        let guard = TestOnlyReplayGuard::new();
+        let feature_classes = verified.document().feature_classes.clone();
+
+        assert_eq!(
+            verified.consume_for_route_admission(
+                &guard,
+                &changed_registry,
+                &trusted_policy(),
+                "gpt-4o",
+                &feature_classes,
+                1_500,
+            ),
+            Err(DifferentialEvidenceError::RegistryFingerprintMismatch)
+        );
+    }
+
+    #[test]
+    fn unavailable_replay_store_stays_closed() {
+        let registry = validated_current_registry().expect("built-in registry validates");
+        let verified = valid_document()
+            .verify(&registry, &trusted_policy())
+            .expect("complete evidence validates");
+        let feature_classes = verified.document().feature_classes.clone();
+
+        assert_eq!(
+            verified.consume_for_route_admission(
+                &UnavailableReplayGuard,
+                &registry,
+                &trusted_policy(),
+                "gpt-4o",
+                &feature_classes,
+                1_500,
+            ),
+            Err(DifferentialEvidenceError::ReplayGuardUnavailable)
         );
     }
 
