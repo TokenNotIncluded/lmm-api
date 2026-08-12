@@ -333,7 +333,7 @@ func (runtime *productionRuntime) confirmLoaded(ctx context.Context, workspace p
 			return productionStatus{}, err
 		}
 	}
-	if err := runtime.disarmRollbackTimer(ctx, workspace); err != nil {
+	if err := runtime.disarmRollbackTimer(ctx, workspace, true); err != nil {
 		return productionStatus{}, err
 	}
 	confirmed := productionStatus{
@@ -423,7 +423,10 @@ func (runtime *productionRuntime) rollback(ctx context.Context, workspace produc
 	if err := runtime.probeRelease(ctx, manifest, manifest.OldVersion, manifest.OldFrontendIndexSHA256); err != nil {
 		return fail(fmt.Errorf("rolled-back release probes failed: %w", err))
 	}
-	if err := runtime.disarmRollbackTimer(ctx, workspace); err != nil {
+	// The rollback command is executed by the rollback service itself.  It may
+	// disable its timer, but must not stop its own unit before the terminal
+	// status and transaction lock are written.
+	if err := runtime.disarmRollbackTimer(ctx, workspace, false); err != nil {
 		return fail(err)
 	}
 	rolledBack := productionStatus{
@@ -453,7 +456,7 @@ Description=LMM API Go release-scoped automatic rollback (%s)
 [Service]
 Type=oneshot
 ExecStart=%s deploy production rollback --workspace %s --reason watchdog-deadline
-TimeoutStartSec=5min
+	TimeoutStartSec=10min
 Restart=on-failure
 RestartSec=10s
 `, workspace.id, manifest.ProbeBinary, workspace.root)
@@ -494,7 +497,7 @@ WantedBy=timers.target
 	return true, nil
 }
 
-func (runtime *productionRuntime) disarmRollbackTimer(ctx context.Context, workspace productionWorkspace) error {
+func (runtime *productionRuntime) disarmRollbackTimer(ctx context.Context, workspace productionWorkspace, stopRollbackService bool) error {
 	timerExists := false
 	rollbackExists := false
 	for path, exists := range map[string]*bool{workspace.timerPath: &timerExists, workspace.rollbackPath: &rollbackExists} {
@@ -512,15 +515,17 @@ func (runtime *productionRuntime) disarmRollbackTimer(ctx context.Context, works
 			return fmt.Errorf("disable rollback timer: %w", err)
 		}
 	}
-	if rollbackExists {
+	if rollbackExists && stopRollbackService {
 		_, _ = runtime.runner.Run(ctx, productionCommand{Name: "systemctl", Args: []string{"stop", workspace.rollbackUnit}})
 	}
 	_, _ = runtime.runner.Run(ctx, productionCommand{Name: "systemctl", Args: []string{"reset-failed", workspace.timerUnit, workspace.rollbackUnit}})
 	if _, err := runtime.runner.Run(ctx, productionCommand{Name: "systemctl", Args: []string{"is-active", "--quiet", workspace.timerUnit}}); err == nil {
 		return errors.New("rollback timer remains active after disable")
 	}
-	if _, err := runtime.runner.Run(ctx, productionCommand{Name: "systemctl", Args: []string{"is-active", "--quiet", workspace.rollbackUnit}}); err == nil {
-		return errors.New("rollback service remains active after stop")
+	if stopRollbackService {
+		if _, err := runtime.runner.Run(ctx, productionCommand{Name: "systemctl", Args: []string{"is-active", "--quiet", workspace.rollbackUnit}}); err == nil {
+			return errors.New("rollback service remains active after stop")
+		}
 	}
 	for _, path := range []string{workspace.timerPath, workspace.rollbackPath} {
 		info, err := os.Lstat(path)
