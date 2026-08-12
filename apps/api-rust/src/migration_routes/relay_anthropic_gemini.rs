@@ -18,6 +18,7 @@ use axum::{
     routing::{MethodRouter, post},
 };
 use futures_util::StreamExt;
+use lmm_contracts::relay::{Direction, Fidelity, Protocol, ValidatedRegistry};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -29,6 +30,10 @@ use crate::{
         ClientAbortGuard, ConversionObserver, ConversionResult, ConverterVersion, FailureReason,
         FeatureClass, MetricLabels, StreamTiming, global_observer,
     },
+    protocol_rollout::{ProtocolRolloutControl, RolloutContext},
+    protocol_route_gate::{self, RouteGateDecision},
+    protocol_runtime_registry::validated_current_registry,
+    route_ownership::{OwnershipEvidence, RouteOwnershipScope},
 };
 
 const REQUEST_ID: &str = "x-request-id";
@@ -206,6 +211,8 @@ pub enum RelayFailure {
     ConcealedNotFound,
     /// No channel can serve the requested model.
     NoChannel,
+    /// The validated native route capability is unavailable or closed.
+    RouteUnavailable,
     /// The upstream did not complete the request.
     Upstream,
     /// The provider returned a protocol response after authentication.
@@ -224,13 +231,31 @@ pub enum RelayFailure {
 #[derive(Clone)]
 pub struct RelayHttpState {
     backend: Arc<dyn RelayBackend>,
+    protocol_rollout: ProtocolRolloutControl,
+    validated_registry: Option<Arc<ValidatedRegistry>>,
 }
 
 impl RelayHttpState {
     /// Creates router state from the application's authorization and relay adapter.
     #[must_use]
     pub fn new(backend: Arc<dyn RelayBackend>) -> Self {
-        Self { backend }
+        Self {
+            backend,
+            protocol_rollout: ProtocolRolloutControl::default(),
+            validated_registry: validated_current_registry().ok().map(Arc::new),
+        }
+    }
+
+    /// Installs the shared rollout control and validated runtime registry.
+    #[must_use]
+    pub fn with_protocol_runtime(
+        mut self,
+        rollout: ProtocolRolloutControl,
+        registry: Arc<ValidatedRegistry>,
+    ) -> Self {
+        self.protocol_rollout = rollout;
+        self.validated_registry = Some(registry);
+        self
     }
 }
 
@@ -485,6 +510,13 @@ async fn relay(
         observer.record_failure_with_reason(request_labels, FailureReason::InvalidInput);
         return invalid_request(protocol, "model is required", &request_id);
     }
+    if let Err(reason) = native_route_is_open(state, protocol, &request_id, &model, streaming) {
+        observer.record_failure_with_reason(
+            relay_observation_labels(protocol, streaming, ConversionResult::Failure),
+            reason,
+        );
+        return failure(protocol, &RelayFailure::RouteUnavailable, &request_id);
+    }
     let channel = match state
         .backend
         .select_channel(&identity, protocol, &model)
@@ -532,6 +564,60 @@ async fn relay(
             failure(protocol, &error, &request_id)
         }
     }
+}
+
+/// Checks both halves of a native same-protocol request before channel
+/// selection or upstream invocation. The rollout snapshot, context, and
+/// closed ownership evidence are shared by the request and response/stream
+/// capability checks.
+fn native_route_is_open(
+    state: &RelayHttpState,
+    protocol: RelayProtocol,
+    request_id: &str,
+    model: &str,
+    streaming: bool,
+) -> Result<(), FailureReason> {
+    let rollout_snapshot = state.protocol_rollout.snapshot();
+    let Some(registry) = state.validated_registry.as_deref() else {
+        return Err(FailureReason::RegistryDrift);
+    };
+    let wire_protocol = relay_observation_protocol(protocol);
+    let context = RolloutContext::new(request_id, wire_protocol, wire_protocol, model, streaming);
+    let scope = RouteOwnershipScope {
+        source: wire_protocol,
+        target: wire_protocol,
+        stream: streaming,
+    };
+    let evidence = OwnershipEvidence::closed(scope);
+    let config = rollout_snapshot.config();
+    let request_decision = protocol_route_gate::decide_route(
+        config,
+        &context,
+        registry,
+        Direction::Request,
+        &evidence,
+    );
+    let output_direction = if streaming {
+        Direction::Stream
+    } else {
+        Direction::Response
+    };
+    let output_decision =
+        protocol_route_gate::decide_route(config, &context, registry, output_direction, &evidence);
+    if is_exact_raw_native(&request_decision) && is_exact_raw_native(&output_decision) {
+        Ok(())
+    } else {
+        Err(FailureReason::Unsupported)
+    }
+}
+
+fn is_exact_raw_native(decision: &RouteGateDecision) -> bool {
+    let RouteGateDecision::NativeRaw { details } = decision else {
+        return false;
+    };
+    details.capability.as_ref().is_some_and(|capability| {
+        capability.quality == Fidelity::Exact && capability.raw_passthrough
+    })
 }
 
 /// Mirrors legacy distributor extraction for wildcard Gemini model paths.
@@ -617,7 +703,7 @@ fn request_id(request: &Request) -> String {
 fn outcome_for(error: &RelayFailure) -> RelayOutcome {
     match error {
         RelayFailure::Unauthorized | RelayFailure::ConcealedNotFound => RelayOutcome::Unauthorized,
-        RelayFailure::NoChannel => RelayOutcome::NoChannel,
+        RelayFailure::NoChannel | RelayFailure::RouteUnavailable => RelayOutcome::NoChannel,
         RelayFailure::Upstream | RelayFailure::Provider { .. } | RelayFailure::Sse(_) => {
             RelayOutcome::UpstreamFailure
         }
@@ -631,7 +717,7 @@ fn openai_failure(error: &RelayFailure, request_id: &str) -> Response {
     let status = match error {
         RelayFailure::Unauthorized => StatusCode::UNAUTHORIZED,
         RelayFailure::ConcealedNotFound => StatusCode::NOT_FOUND,
-        RelayFailure::NoChannel => StatusCode::SERVICE_UNAVAILABLE,
+        RelayFailure::NoChannel | RelayFailure::RouteUnavailable => StatusCode::SERVICE_UNAVAILABLE,
         RelayFailure::Upstream | RelayFailure::Provider { .. } | RelayFailure::Sse(_) => {
             StatusCode::BAD_GATEWAY
         }
@@ -639,7 +725,9 @@ fn openai_failure(error: &RelayFailure, request_id: &str) -> Response {
     let message = match error {
         RelayFailure::Unauthorized => "Invalid token",
         RelayFailure::ConcealedNotFound => "Not Found",
-        RelayFailure::NoChannel => "relay request could not be completed",
+        RelayFailure::NoChannel | RelayFailure::RouteUnavailable => {
+            "relay request could not be completed"
+        }
         RelayFailure::Upstream | RelayFailure::Provider { .. } | RelayFailure::Sse(_) => {
             "relay request could not be completed"
         }
@@ -668,11 +756,11 @@ fn openai_not_found(request_id: &str, path: &str) -> Response {
     response
 }
 
-fn relay_observation_protocol(protocol: RelayProtocol) -> lmm_contracts::relay::Protocol {
+fn relay_observation_protocol(protocol: RelayProtocol) -> Protocol {
     match protocol {
-        RelayProtocol::OpenAi => lmm_contracts::relay::Protocol::OpenAi,
-        RelayProtocol::Anthropic => lmm_contracts::relay::Protocol::Claude,
-        RelayProtocol::Gemini => lmm_contracts::relay::Protocol::Gemini,
+        RelayProtocol::OpenAi => Protocol::OpenAi,
+        RelayProtocol::Anthropic => Protocol::Claude,
+        RelayProtocol::Gemini => Protocol::Gemini,
     }
 }
 
@@ -707,6 +795,7 @@ fn relay_failure_reason(error: &RelayFailure) -> FailureReason {
         RelayFailure::Unauthorized | RelayFailure::ConcealedNotFound | RelayFailure::NoChannel => {
             FailureReason::Unknown
         }
+        RelayFailure::RouteUnavailable => FailureReason::Unsupported,
     }
 }
 
@@ -865,7 +954,9 @@ fn failure(protocol: RelayProtocol, error: &RelayFailure, request_id: &str) -> R
             "authentication_error",
             "UNAUTHENTICATED",
         ),
-        RelayFailure::NoChannel => (StatusCode::SERVICE_UNAVAILABLE, "api_error", "UNAVAILABLE"),
+        RelayFailure::NoChannel | RelayFailure::RouteUnavailable => {
+            (StatusCode::SERVICE_UNAVAILABLE, "api_error", "UNAVAILABLE")
+        }
         RelayFailure::Upstream | RelayFailure::Sse(_) => {
             (StatusCode::BAD_GATEWAY, "api_error", "UNAVAILABLE")
         }
@@ -922,12 +1013,14 @@ mod tests {
         ConversionObserver, ConversionResult, ConverterVersion, FeatureClass, RelayBackend,
         RelayChannel, RelayFailure, RelayHttpState, RelayIdentity, RelayOutcome, RelayProtocol,
         RelaySseEvent, UpstreamReply, UpstreamRequest, failure, gemini_is_streaming,
-        gemini_model_from_path, observe_native_sse_body, openai_failure, outcome_for, query_value,
-        relay_failure_reason, relay_observation_labels, relay_observation_protocol, router,
-        success, token_from_request,
+        gemini_model_from_path, native_route_is_open, observe_native_sse_body, openai_failure,
+        outcome_for, query_value, relay_failure_reason, relay_observation_labels,
+        relay_observation_protocol, router, success, token_from_request,
     };
     use crate::RequestContext;
     use crate::conversion_observability::{FailureReason, MetricKind};
+    use crate::protocol_rollout::ProtocolRolloutControl;
+    use crate::protocol_runtime_registry::validated_current_registry;
     use async_trait::async_trait;
     use axum::{
         body::to_bytes,
@@ -940,6 +1033,7 @@ mod tests {
     #[derive(Default)]
     struct RecordingBackend {
         tokens: Mutex<Vec<String>>,
+        selected_models: Mutex<Vec<String>>,
         request_ids: Mutex<Vec<String>>,
     }
 
@@ -962,6 +1056,7 @@ mod tests {
             _protocol: RelayProtocol,
             model: &str,
         ) -> Result<RelayChannel, RelayFailure> {
+            self.selected_models.lock().unwrap().push(model.to_owned());
             Ok(RelayChannel {
                 id: 7,
                 upstream_model: model.to_owned(),
@@ -1013,6 +1108,75 @@ mod tests {
             client_ip: None,
         });
         request
+    }
+
+    #[test]
+    fn default_state_opens_native_request_and_non_stream_response_directions() {
+        let state = RelayHttpState::new(Arc::new(RecordingBackend::default()));
+
+        assert!(
+            native_route_is_open(
+                &state,
+                RelayProtocol::Anthropic,
+                "request-id",
+                "claude-test",
+                false,
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn default_state_opens_native_stream_direction() {
+        let state = RelayHttpState::new(Arc::new(RecordingBackend::default()));
+
+        assert!(
+            native_route_is_open(
+                &state,
+                RelayProtocol::Gemini,
+                "request-id",
+                "gemini-test",
+                true,
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn runtime_builder_replaces_the_default_registry() {
+        let registry = Arc::new(validated_current_registry().expect("current registry validates"));
+        let state = RelayHttpState::new(Arc::new(RecordingBackend::default()))
+            .with_protocol_runtime(ProtocolRolloutControl::default(), registry.clone());
+
+        assert!(Arc::ptr_eq(
+            state
+                .validated_registry
+                .as_ref()
+                .expect("builder installs registry"),
+            &registry,
+        ));
+    }
+
+    #[tokio::test]
+    async fn missing_registry_fails_closed_after_authentication_before_channel_selection() {
+        let backend = Arc::new(RecordingBackend::default());
+        let state = RelayHttpState {
+            backend: backend.clone(),
+            protocol_rollout: ProtocolRolloutControl::default(),
+            validated_registry: None,
+        };
+        let mut request =
+            request_with_context("/v1/messages", r#"{"model":"claude-test","stream":false}"#);
+        request
+            .headers_mut()
+            .insert("x-api-key", "valid".parse().unwrap());
+
+        let response = router(state).oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(backend.tokens.lock().unwrap().as_slice(), ["valid"]);
+        assert!(backend.selected_models.lock().unwrap().is_empty());
+        assert!(backend.request_ids.lock().unwrap().is_empty());
     }
 
     #[test]

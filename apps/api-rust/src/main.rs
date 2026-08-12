@@ -126,6 +126,7 @@ use lmm_api_rs::{
         },
     },
     models::{ModelsHttpState, ModelsListenerMode, PgModelsService},
+    protocol_runtime_registry::validated_current_registry,
     status::{PgStatusRepository, StatusHttpState, StatusRepository},
 };
 use lmm_application::{GlobalApiRateLimiter, ValkeyReadinessPolicy};
@@ -171,9 +172,10 @@ impl ControlTaskStatusProbe for ListenerControlTaskStatusProbe {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     lmm_observability::init()?;
-    lmm_api_rs::protocol_runtime_registry::validate_protocol_runtime()
-        .map_err(|error| io::Error::other(format!("protocol runtime registry invalid: {error}")))?;
     let config = Config::from_env()?;
+    let protocol_registry = Arc::new(validated_current_registry().map_err(|error| {
+        io::Error::other(format!("protocol runtime registry invalid: {error}"))
+    })?);
     // Local acceptance is an explicit loopback-only development policy. It
     // must never alter the isolated frozen listener's historical contract.
     let local_acceptance = config.local_acceptance && !config.test_instance;
@@ -193,7 +195,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|value| value.parse::<bool>().ok())
         .unwrap_or(false);
     let turnstile = config.auth_turnstile.resolve_public(&initial_options)?;
-    let runtime_options = Arc::new(ProcessRuntimeOptions::new(initial_options));
+    let runtime_options = ProcessRuntimeOptions::new(initial_options)
+        .with_protocol_rollout(config.protocol_rollout.clone())
+        .await
+        .map_err(|_| io::Error::other("protocol rollout configuration invalid"))?;
+    let protocol_rollout = runtime_options
+        .protocol_rollout()
+        .ok_or_else(|| io::Error::other("protocol rollout control unavailable"))?;
+    let runtime_options = Arc::new(runtime_options);
     let valkey = redis::Client::open(config.valkey_url.as_str())?;
     let probe = InfrastructureProbe::new(
         pg.clone(),
@@ -661,14 +670,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // the upstream client bounded and let each executor own its billing
         // transaction; these routes must not fall through to a legacy Go
         // process once the Rust listener is selected.
-        let relay_openai = openai_relay_router(OpenAiRelayHttpState::new(
-            Arc::new(PgOpenAiRelayService::new(
-                pg.clone(),
-                OpenAiUpstreamClient::new(relay_client.clone(), config.dependency_timeout),
-                1,
-            )),
-            app_state.status.version().to_owned(),
-        ));
+        let relay_openai = openai_relay_router(
+            OpenAiRelayHttpState::new(
+                Arc::new(PgOpenAiRelayService::new(
+                    pg.clone(),
+                    OpenAiUpstreamClient::new(relay_client.clone(), config.dependency_timeout),
+                    1,
+                )),
+                app_state.status.version().to_owned(),
+            )
+            .with_protocol_runtime(protocol_rollout.clone(), protocol_registry.clone()),
+        );
         // Midjourney submissions need an outer distributor because the
         // request-scoped backend intentionally holds one selected channel.
         // The distributor resolves token/user group and `abilities` before
@@ -694,7 +706,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 pg.clone(),
                 relay_client.clone(),
                 config.dependency_timeout,
-            ))),
+            )))
+            .with_protocol_runtime(protocol_rollout.clone(), protocol_registry.clone()),
             model_lookup_state.clone(),
         );
         let relay_media = relay_media_router(RelayMediaHttpState::new(Arc::new(

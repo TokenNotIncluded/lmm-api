@@ -4,6 +4,10 @@
 //! `migration-plan.tsv`.  In particular it does not claim any route merely
 //! because it happens to start with `/api/option`.
 
+use crate::protocol_rollout::{
+    ConverterPairOverride, FlagConfig, ProtocolRolloutConfig, ProtocolRolloutControl,
+    ProtocolRolloutControlError, RolloutConfigError, parse_boolean, parse_loss_policy,
+};
 use async_trait::async_trait;
 use axum::{
     Extension, Json, Router,
@@ -31,13 +35,15 @@ use sha2::{Digest as _, Sha256};
 use sqlx::{PgPool, Row};
 use std::{
     collections::BTreeMap,
+    error::Error,
+    fmt,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 const OPTIONS_CACHE_KEY: &str = "lmm:system-config:options";
 const AFFINITY_CACHE_PREFIX: &str = "new-api:channel_affinity:v1:";
@@ -55,6 +61,26 @@ const MAX_PANCAKE_RESPONSE_BYTES: usize = 1 << 20;
 const PANCAKE_STORE_NAME: &str = "lmm-forge-store";
 const PANCAKE_PRIMARY_PRODUCT_NAME: &str = "lmm-forge-wallet-topup";
 const PANCAKE_TAX_CATEGORY: &str = "saas";
+
+const PROTOCOL_ROLLOUT_CONVERSION_ENGINE_KEY: &str = "conversion_engine_v2";
+const PROTOCOL_ROLLOUT_LOSS_POLICY_KEY: &str = "conversion_loss_policy";
+const PROTOCOL_ROLLOUT_GEMINI_FUNCTION_ID_KEY: &str = "gemini_function_id_v2";
+const PROTOCOL_ROLLOUT_GEMINI_THOUGHT_SIGNATURE_KEY: &str = "gemini_thought_signature_v2";
+const PROTOCOL_ROLLOUT_CLAUDE_THINKING_KEY: &str = "claude_opaque_thinking_v2";
+const PROTOCOL_ROLLOUT_SSE_PARSER_KEY: &str = "sse_parser_v2";
+const PROTOCOL_ROLLOUT_PAIR_OVERRIDES_KEY: &str = "converter_pair_overrides";
+const PROTOCOL_ROLLOUT_ROLLBACK_KEY: &str = "protocol_rollout_rollback";
+
+const PROTOCOL_ROLLOUT_KEYS: [&str; 8] = [
+    PROTOCOL_ROLLOUT_CONVERSION_ENGINE_KEY,
+    PROTOCOL_ROLLOUT_LOSS_POLICY_KEY,
+    PROTOCOL_ROLLOUT_GEMINI_FUNCTION_ID_KEY,
+    PROTOCOL_ROLLOUT_GEMINI_THOUGHT_SIGNATURE_KEY,
+    PROTOCOL_ROLLOUT_CLAUDE_THINKING_KEY,
+    PROTOCOL_ROLLOUT_SSE_PARSER_KEY,
+    PROTOCOL_ROLLOUT_PAIR_OVERRIDES_KEY,
+    PROTOCOL_ROLLOUT_ROLLBACK_KEY,
+];
 
 /// Concrete production adapter for the pinned GitHub update probe.
 ///
@@ -228,6 +254,184 @@ impl SystemConfigRuntimeWriter for MissingSystemConfigRuntimeWriter {
     }
 }
 
+/// Errors raised while turning persisted system options into a live protocol
+/// rollout configuration.
+///
+/// The error deliberately identifies only a stable option name.  Persisted
+/// rollout JSON is configuration data and must never be copied into an error,
+/// log line, or `Debug` representation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ProtocolRolloutRuntimeError {
+    /// A recognized option could not be parsed without widening traffic.
+    InvalidOption { key: &'static str },
+    /// A parsed candidate failed complete rollout validation.
+    InvalidConfig(RolloutConfigError),
+    /// The live control rejected installation of a candidate.
+    Control(ProtocolRolloutControlError),
+    /// A protocol option was requested before the shared control was bound.
+    MissingControl,
+}
+
+impl fmt::Display for ProtocolRolloutRuntimeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidOption { key } => {
+                write!(formatter, "invalid protocol rollout option {key}")
+            }
+            Self::InvalidConfig(error) => {
+                write!(formatter, "invalid protocol rollout config: {error}")
+            }
+            Self::Control(error) => write!(
+                formatter,
+                "protocol rollout control rejected update: {error}"
+            ),
+            Self::MissingControl => {
+                formatter.write_str("protocol rollout control is not configured")
+            }
+        }
+    }
+}
+
+impl Error for ProtocolRolloutRuntimeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::InvalidConfig(error) => Some(error),
+            Self::Control(error) => Some(error),
+            Self::InvalidOption { .. } | Self::MissingControl => None,
+        }
+    }
+}
+
+fn is_protocol_rollout_key(key: &str) -> bool {
+    PROTOCOL_ROLLOUT_KEYS.contains(&key)
+}
+
+fn invalid_rollout_option(key: &'static str) -> ProtocolRolloutRuntimeError {
+    ProtocolRolloutRuntimeError::InvalidOption { key }
+}
+
+fn parse_rollout_flag(
+    value: &str,
+    key: &'static str,
+) -> Result<FlagConfig, ProtocolRolloutRuntimeError> {
+    // JSON is required for enabled rollout values so a canary or selector
+    // cannot be widened accidentally. `false` is the only shorthand and is
+    // always fail-closed.
+    let flag = match value.trim() {
+        "false" => FlagConfig::disabled(),
+        _ => serde_json::from_str::<FlagConfig>(value).map_err(|_| invalid_rollout_option(key))?,
+    };
+    flag.validate()
+        .map_err(ProtocolRolloutRuntimeError::InvalidConfig)?;
+    Ok(flag)
+}
+
+fn parse_rollout_rollback(value: &str) -> Result<bool, ProtocolRolloutRuntimeError> {
+    parse_boolean(value.trim(), PROTOCOL_ROLLOUT_ROLLBACK_KEY)
+        .map_err(ProtocolRolloutRuntimeError::InvalidConfig)
+}
+
+fn emergency_rollback_value(value: &str) -> bool {
+    matches!(value.trim(), "true" | "1")
+}
+
+fn rollout_config_for_changes(
+    base: &ProtocolRolloutConfig,
+    changes: &[(String, String)],
+) -> Result<Option<ProtocolRolloutConfig>, ProtocolRolloutRuntimeError> {
+    // Collapse repeated keys before applying any safety rule. This preserves
+    // the database writer's last-write-wins contract, including rollback.
+    let mut recognized = BTreeMap::<&str, &str>::new();
+    for (key, value) in changes {
+        if is_protocol_rollout_key(key) {
+            recognized.insert(key.as_str(), value.as_str());
+        }
+    }
+    if recognized.is_empty() {
+        return Ok(None);
+    }
+
+    // A true rollback is an emergency fail-closed path.  Scan it before
+    // parsing any other recognized value so a stale malformed v2 setting in
+    // the same write cannot block the safety action or widen traffic.
+    if recognized
+        .get(PROTOCOL_ROLLOUT_ROLLBACK_KEY)
+        .is_some_and(|value| emergency_rollback_value(value))
+    {
+        return Ok(Some(base.rolled_back()));
+    }
+
+    let rollback_value = recognized
+        .get(PROTOCOL_ROLLOUT_ROLLBACK_KEY)
+        .map(|value| parse_rollout_rollback(value))
+        .transpose()?;
+
+    // An environment-level rollback is also fail-closed until an explicit,
+    // valid persisted false begins recovery. Do not make stale persisted v2
+    // values capable of blocking that emergency state.
+    if base.rollback && rollback_value != Some(false) {
+        return Ok(Some(base.rolled_back()));
+    }
+
+    let mut candidate = base.clone();
+    for (key, value) in recognized {
+        match key {
+            PROTOCOL_ROLLOUT_CONVERSION_ENGINE_KEY => {
+                candidate.conversion_engine_v2 =
+                    parse_rollout_flag(value, PROTOCOL_ROLLOUT_CONVERSION_ENGINE_KEY)?;
+            }
+            PROTOCOL_ROLLOUT_LOSS_POLICY_KEY => {
+                candidate.conversion_loss_policy = parse_loss_policy(value.trim())
+                    .map_err(ProtocolRolloutRuntimeError::InvalidConfig)?;
+            }
+            PROTOCOL_ROLLOUT_GEMINI_FUNCTION_ID_KEY => {
+                candidate.gemini_function_id_v2 =
+                    parse_rollout_flag(value, PROTOCOL_ROLLOUT_GEMINI_FUNCTION_ID_KEY)?;
+            }
+            PROTOCOL_ROLLOUT_GEMINI_THOUGHT_SIGNATURE_KEY => {
+                candidate.gemini_thought_signature_v2 =
+                    parse_rollout_flag(value, PROTOCOL_ROLLOUT_GEMINI_THOUGHT_SIGNATURE_KEY)?;
+            }
+            PROTOCOL_ROLLOUT_CLAUDE_THINKING_KEY => {
+                candidate.claude_opaque_thinking_v2 =
+                    parse_rollout_flag(value, PROTOCOL_ROLLOUT_CLAUDE_THINKING_KEY)?;
+            }
+            PROTOCOL_ROLLOUT_SSE_PARSER_KEY => {
+                candidate.sse_parser_v2 =
+                    parse_rollout_flag(value, PROTOCOL_ROLLOUT_SSE_PARSER_KEY)?;
+            }
+            PROTOCOL_ROLLOUT_PAIR_OVERRIDES_KEY => {
+                candidate.converter_pair_overrides =
+                    serde_json::from_str::<Vec<ConverterPairOverride>>(value)
+                        .map_err(|_| invalid_rollout_option(PROTOCOL_ROLLOUT_PAIR_OVERRIDES_KEY))?;
+            }
+            PROTOCOL_ROLLOUT_ROLLBACK_KEY => {
+                candidate.rollback = parse_rollout_rollback(value)?;
+            }
+            _ => {}
+        }
+    }
+    if candidate.rollback && rollback_value.is_none() {
+        return Ok(Some(candidate.rolled_back()));
+    }
+    candidate
+        .validate()
+        .map_err(ProtocolRolloutRuntimeError::InvalidConfig)?;
+    Ok(Some(candidate))
+}
+
+fn rollout_config_from_options(
+    base: &ProtocolRolloutConfig,
+    initial: &BTreeMap<String, String>,
+) -> Result<ProtocolRolloutConfig, ProtocolRolloutRuntimeError> {
+    let changes = initial
+        .iter()
+        .filter(|(key, _)| is_protocol_rollout_key(key))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<Vec<_>>();
+    Ok(rollout_config_for_changes(base, &changes)?.unwrap_or_else(|| base.clone()))
+}
+
 /// Process-wide option owner used by the normal Rust listener.
 ///
 /// Most migrated handlers read durable options from PostgreSQL for each
@@ -235,9 +439,31 @@ impl SystemConfigRuntimeWriter for MissingSystemConfigRuntimeWriter {
 /// process-wide view that the legacy Go `OptionMap` provided.  Keeping that
 /// view behind one shared lock gives `/api/option/` a concrete runtime owner
 /// without creating a route-local cache that other workers cannot observe.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone)]
 pub struct ProcessRuntimeOptions {
     values: Arc<RwLock<BTreeMap<String, String>>>,
+    protocol_rollout_base: Option<ProtocolRolloutConfig>,
+    protocol_rollout: Option<ProtocolRolloutControl>,
+    protocol_update_lock: Arc<Mutex<()>>,
+}
+
+impl Default for ProcessRuntimeOptions {
+    fn default() -> Self {
+        Self::new(BTreeMap::new())
+    }
+}
+
+impl fmt::Debug for ProcessRuntimeOptions {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ProcessRuntimeOptions")
+            .field("values", &"<redacted>")
+            .field(
+                "protocol_rollout_configured",
+                &self.protocol_rollout.is_some(),
+            )
+            .finish()
+    }
 }
 
 impl ProcessRuntimeOptions {
@@ -245,7 +471,41 @@ impl ProcessRuntimeOptions {
     pub fn new(initial: BTreeMap<String, String>) -> Self {
         Self {
             values: Arc::new(RwLock::new(initial)),
+            protocol_rollout_base: None,
+            protocol_rollout: None,
+            protocol_update_lock: Arc::new(Mutex::new(())),
         }
+    }
+
+    /// Overlays recognized persisted options onto the startup environment
+    /// configuration and installs one shared live control. Enabled flags use
+    /// complete `FlagConfig` JSON; only `false` is accepted as a shorthand.
+    /// A persisted rollback of `true` is evaluated before stale v2 values and
+    /// therefore always starts fail-closed. The startup baseline is retained
+    /// so a later `rollback=false` can rebuild the complete candidate from
+    /// persisted values rather than from a disabled rollback snapshot.
+    pub async fn with_protocol_rollout(
+        mut self,
+        startup: ProtocolRolloutConfig,
+    ) -> Result<Self, ProtocolRolloutRuntimeError> {
+        startup
+            .validate()
+            .map_err(ProtocolRolloutRuntimeError::InvalidConfig)?;
+        let initial = self.snapshot().await;
+        let candidate = rollout_config_from_options(&startup, &initial)?;
+        let control =
+            ProtocolRolloutControl::new(candidate).map_err(ProtocolRolloutRuntimeError::Control)?;
+        self.protocol_rollout_base = Some(startup);
+        self.protocol_rollout = Some(control);
+        Ok(self)
+    }
+
+    /// Returns a cheap clone of the shared live rollout holder for relay-state
+    /// composition.  Requests should call its snapshot method and release the
+    /// control mutex before doing request or stream work.
+    #[must_use]
+    pub fn protocol_rollout(&self) -> Option<ProtocolRolloutControl> {
+        self.protocol_rollout.clone()
     }
 
     /// Returns a coherent snapshot for runtime adapters that need options
@@ -261,15 +521,349 @@ impl SystemConfigRuntimeWriter for ProcessRuntimeOptions {
         if changes.is_empty() || changes.iter().any(|(key, _)| key.trim().is_empty()) {
             return Err(());
         }
+        if !changes.iter().any(|(key, _)| is_protocol_rollout_key(key)) {
+            return Ok(());
+        }
+        let (Some(base), Some(control)) = (
+            self.protocol_rollout_base.as_ref(),
+            self.protocol_rollout.as_ref(),
+        ) else {
+            return Err(());
+        };
+        let _update_guard = self.protocol_update_lock.lock().await;
+        control.try_snapshot().map_err(|_| ())?;
+        let mut merged = self.values.read().await.clone();
+        for (key, value) in changes {
+            merged.insert(key.clone(), value.clone());
+        }
+        rollout_config_from_options(base, &merged).map_err(|_| ())?;
         Ok(())
     }
 
     async fn apply_committed(&self, changes: &[(String, String)]) -> Result<(), ()> {
+        if changes.is_empty() {
+            return Ok(());
+        }
+        let _update_guard = self.protocol_update_lock.lock().await;
+        let mut merged = self.values.read().await.clone();
+        for (key, value) in changes {
+            merged.insert(key.clone(), value.clone());
+        }
+        let protocol_candidate = if changes.iter().any(|(key, _)| is_protocol_rollout_key(key)) {
+            let (Some(base), Some(control)) = (
+                self.protocol_rollout_base.as_ref(),
+                self.protocol_rollout.as_ref(),
+            ) else {
+                return Err(());
+            };
+            let candidate = rollout_config_from_options(base, &merged).map_err(|_| ())?;
+            Some((control.clone(), candidate))
+        } else {
+            None
+        };
         let mut values = self.values.write().await;
+        if let Some((control, candidate)) = protocol_candidate {
+            // No await point remains between installing the validated control
+            // snapshot and updating the corresponding option map entries.
+            control.replace(candidate).map_err(|_| ())?;
+        }
         for (key, value) in changes {
             values.insert(key.clone(), value.clone());
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod protocol_rollout_runtime_tests {
+    use super::{ProcessRuntimeOptions, ProtocolRolloutConfig, SystemConfigRuntimeWriter};
+    use crate::protocol_rollout::{FlagConfig, ProtocolRolloutSnapshotStatus};
+    use serde_json::from_str;
+    use std::collections::BTreeMap;
+
+    const FLAG_AT_ONE_PERCENT: &str =
+        r#"{"enabled":true,"canary_basis_points":100,"overrides":[]}"#;
+    const FLAG_AT_FIVE_PERCENT: &str =
+        r#"{"enabled":true,"canary_basis_points":500,"overrides":[]}"#;
+
+    async fn runtime_with_control() -> ProcessRuntimeOptions {
+        ProcessRuntimeOptions::new(BTreeMap::new())
+            .with_protocol_rollout(ProtocolRolloutConfig::default())
+            .await
+            .expect("default protocol rollout must validate")
+    }
+
+    #[tokio::test]
+    async fn persisted_options_overlay_startup_configuration() {
+        let mut initial = BTreeMap::new();
+        initial.insert(
+            "conversion_engine_v2".to_owned(),
+            FLAG_AT_ONE_PERCENT.to_owned(),
+        );
+        initial.insert("conversion_loss_policy".to_owned(), "warn".to_owned());
+        let runtime = ProcessRuntimeOptions::new(initial)
+            .with_protocol_rollout(ProtocolRolloutConfig::default())
+            .await
+            .expect("persisted rollout options must validate");
+
+        let control = runtime
+            .protocol_rollout()
+            .expect("builder must install the shared control");
+        let snapshot = control.snapshot();
+        assert_eq!(
+            snapshot.config().conversion_engine_v2.canary_basis_points,
+            100
+        );
+        assert_eq!(
+            snapshot.config().loss_policy(),
+            lmm_contracts::relay::LossPolicy::Warn
+        );
+    }
+
+    #[tokio::test]
+    async fn valid_protocol_change_replaces_immediately_and_advances_generation() {
+        let runtime = runtime_with_control().await;
+        let control = runtime
+            .protocol_rollout()
+            .expect("builder must install the shared control");
+        let before = control.snapshot();
+        let changes = vec![(
+            "conversion_engine_v2".to_owned(),
+            FLAG_AT_ONE_PERCENT.to_owned(),
+        )];
+
+        runtime
+            .preflight(&changes)
+            .await
+            .expect("valid protocol changes must pass preflight");
+        runtime
+            .apply_committed(&changes)
+            .await
+            .expect("valid protocol changes must install");
+
+        let after = control.snapshot();
+        assert_eq!(after.generation(), before.generation() + 1);
+        assert_eq!(after.config().conversion_engine_v2.canary_basis_points, 100);
+    }
+
+    #[tokio::test]
+    async fn invalid_preflight_does_not_mutate_control_or_option_map() {
+        let runtime = runtime_with_control().await;
+        let control = runtime
+            .protocol_rollout()
+            .expect("builder must install the shared control");
+        let before = control.snapshot();
+        let changes = vec![(
+            "conversion_engine_v2".to_owned(),
+            "{malformed rollout json}".to_owned(),
+        )];
+
+        assert!(runtime.preflight(&changes).await.is_err());
+        assert_eq!(control.snapshot(), before);
+        assert!(
+            !runtime
+                .snapshot()
+                .await
+                .contains_key("conversion_engine_v2")
+        );
+    }
+
+    #[tokio::test]
+    async fn unrelated_option_does_not_advance_rollout_generation() {
+        let runtime = runtime_with_control().await;
+        let control = runtime
+            .protocol_rollout()
+            .expect("builder must install the shared control");
+        let before = control.snapshot();
+        let changes = vec![("unrelated_option".to_owned(), "new-value".to_owned())];
+
+        runtime
+            .preflight(&changes)
+            .await
+            .expect("unrelated options preserve legacy preflight behavior");
+        runtime
+            .apply_committed(&changes)
+            .await
+            .expect("unrelated options must update the option map");
+
+        assert_eq!(control.snapshot().generation(), before.generation());
+        assert_eq!(
+            runtime
+                .snapshot()
+                .await
+                .get("unrelated_option")
+                .map(String::as_str),
+            Some("new-value")
+        );
+    }
+
+    #[tokio::test]
+    async fn emergency_rollback_wins_over_malformed_same_batch_values() {
+        let runtime = runtime_with_control().await;
+        let changes = vec![
+            (
+                "conversion_engine_v2".to_owned(),
+                "not-json-and-not-a-flag".to_owned(),
+            ),
+            ("protocol_rollout_rollback".to_owned(), "true".to_owned()),
+        ];
+
+        runtime
+            .preflight(&changes)
+            .await
+            .expect("true rollback must fail closed before parsing stale values");
+        runtime
+            .apply_committed(&changes)
+            .await
+            .expect("true rollback must install even with stale values");
+        let snapshot = runtime
+            .protocol_rollout()
+            .expect("builder must install the shared control")
+            .snapshot();
+        assert_eq!(snapshot.status(), ProtocolRolloutSnapshotStatus::Rollback);
+        assert!(snapshot.is_fail_closed());
+    }
+
+    #[tokio::test]
+    async fn duplicate_rollback_keys_use_only_the_last_value() {
+        let runtime = runtime_with_control().await;
+        let changes = vec![
+            ("protocol_rollout_rollback".to_owned(), "true".to_owned()),
+            (
+                "conversion_engine_v2".to_owned(),
+                FLAG_AT_ONE_PERCENT.to_owned(),
+            ),
+            ("protocol_rollout_rollback".to_owned(), "false".to_owned()),
+        ];
+
+        runtime
+            .preflight(&changes)
+            .await
+            .expect("the final rollback=false must win");
+        runtime
+            .apply_committed(&changes)
+            .await
+            .expect("the final rollback=false must install the candidate");
+        let snapshot = runtime
+            .protocol_rollout()
+            .expect("builder must install the shared control")
+            .snapshot();
+        assert_eq!(snapshot.status(), ProtocolRolloutSnapshotStatus::Active);
+        assert_eq!(
+            snapshot.config().conversion_engine_v2.canary_basis_points,
+            100
+        );
+    }
+
+    #[tokio::test]
+    async fn rollback_false_rebuilds_prior_persisted_flags_from_startup_baseline() {
+        let mut initial = BTreeMap::new();
+        initial.insert(
+            "conversion_engine_v2".to_owned(),
+            FLAG_AT_ONE_PERCENT.to_owned(),
+        );
+        initial.insert("protocol_rollout_rollback".to_owned(), "true".to_owned());
+        let runtime = ProcessRuntimeOptions::new(initial)
+            .with_protocol_rollout(ProtocolRolloutConfig::default())
+            .await
+            .expect("rollback startup overlay must be valid");
+        let control = runtime
+            .protocol_rollout()
+            .expect("builder must install the shared control");
+        assert!(control.snapshot().is_fail_closed());
+
+        let recovery = vec![("protocol_rollout_rollback".to_owned(), "false".to_owned())];
+        runtime
+            .preflight(&recovery)
+            .await
+            .expect("rollback=false must rebuild persisted prior flags");
+        runtime
+            .apply_committed(&recovery)
+            .await
+            .expect("rollback=false must install the rebuilt candidate");
+        let recovered = control.snapshot();
+        assert_eq!(recovered.status(), ProtocolRolloutSnapshotStatus::Active);
+        assert_eq!(
+            recovered.config().conversion_engine_v2.canary_basis_points,
+            100
+        );
+    }
+
+    #[tokio::test]
+    async fn rollback_recovery_requires_full_validation() {
+        let runtime = runtime_with_control().await;
+        let emergency = vec![("protocol_rollout_rollback".to_owned(), "true".to_owned())];
+        runtime
+            .apply_committed(&emergency)
+            .await
+            .expect("rollback must install");
+        let control = runtime
+            .protocol_rollout()
+            .expect("builder must install the shared control");
+        let before_recovery = control.snapshot();
+        let malformed_recovery = vec![
+            ("protocol_rollout_rollback".to_owned(), "false".to_owned()),
+            ("conversion_engine_v2".to_owned(), "malformed".to_owned()),
+        ];
+        assert!(runtime.preflight(&malformed_recovery).await.is_err());
+        assert_eq!(control.snapshot(), before_recovery);
+
+        let valid_recovery = vec![
+            ("protocol_rollout_rollback".to_owned(), "false".to_owned()),
+            (
+                "conversion_engine_v2".to_owned(),
+                FLAG_AT_FIVE_PERCENT.to_owned(),
+            ),
+        ];
+        runtime
+            .preflight(&valid_recovery)
+            .await
+            .expect("recovery must validate every replacement value");
+        runtime
+            .apply_committed(&valid_recovery)
+            .await
+            .expect("valid recovery must install");
+        let recovered = control.snapshot();
+        assert_eq!(recovered.status(), ProtocolRolloutSnapshotStatus::Active);
+        assert_eq!(
+            recovered.config().conversion_engine_v2.canary_basis_points,
+            500
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_same_key_replacements_keep_map_and_control_coherent() {
+        let runtime = runtime_with_control().await;
+        let left = runtime.clone();
+        let right = runtime.clone();
+        let left_change = vec![(
+            "conversion_engine_v2".to_owned(),
+            FLAG_AT_ONE_PERCENT.to_owned(),
+        )];
+        let right_change = vec![(
+            "conversion_engine_v2".to_owned(),
+            FLAG_AT_FIVE_PERCENT.to_owned(),
+        )];
+
+        let (left_result, right_result) = tokio::join!(
+            left.apply_committed(&left_change),
+            right.apply_committed(&right_change),
+        );
+        assert!(left_result.is_ok());
+        assert!(right_result.is_ok());
+
+        let control = runtime
+            .protocol_rollout()
+            .expect("builder must install the shared control");
+        let snapshot = control.snapshot();
+        let values = runtime.snapshot().await;
+        let persisted = values
+            .get("conversion_engine_v2")
+            .expect("same-key update must remain in the option map");
+        let persisted_flag = from_str::<FlagConfig>(persisted)
+            .expect("the final option map value must remain valid JSON");
+        assert_eq!(snapshot.config().conversion_engine_v2, persisted_flag);
+        assert_eq!(snapshot.generation(), 2);
     }
 }
 
@@ -842,6 +1436,7 @@ pub struct SystemConfigHttpState {
     pub project_update: Arc<dyn ProjectUpdateClient>,
     pub pancake: Arc<dyn WaffoPancakeGateway>,
     runtime_writer: Arc<dyn SystemConfigRuntimeWriter>,
+    option_write_lock: Arc<Mutex<()>>,
     pub option_cache_ttl: Duration,
     option_cache_dirty: Arc<AtomicBool>,
     runtime_coherent: Arc<AtomicBool>,
@@ -863,6 +1458,7 @@ impl SystemConfigHttpState {
             project_update,
             pancake,
             runtime_writer: Arc::new(MissingSystemConfigRuntimeWriter),
+            option_write_lock: Arc::new(Mutex::new(())),
             option_cache_ttl: Duration::from_secs(OPTIONS_CACHE_TTL_SECONDS),
             option_cache_dirty: Arc::new(AtomicBool::new(false)),
             runtime_coherent: Arc::new(AtomicBool::new(true)),
@@ -1145,7 +1741,8 @@ async fn cached_options(state: &SystemConfigHttpState) -> Result<BTreeMap<String
             tracing::warn!(%error, "system-config option cache write failed");
         } else {
             state.option_cache_dirty.store(false, Ordering::Release);
-            state.runtime_coherent.store(true, Ordering::Release);
+            // A cache refill proves only durable/cache convergence; it cannot
+            // prove that a previously failed runtime writer has caught up.
         }
     }
     Ok(options)
@@ -1397,6 +1994,11 @@ async fn persist_option_changes(
     state: &SystemConfigHttpState,
     changes: &[(String, String)],
 ) -> Result<(), ()> {
+    // The runtime preflight, durable transaction, live replacement, and cache
+    // invalidation form one per-process write critical section. PostgreSQL
+    // advisory locks cannot serialize this route with setup or another
+    // migration process, so the shared state mutex closes the local race.
+    let _option_write_guard = state.option_write_lock.lock().await;
     // A missing runtime writer must fail before the durable mutation.  Once a
     // real writer is composed, this mirrors Go's database -> OptionMap ->
     // cache-invalidating sequence.
@@ -1408,6 +2010,10 @@ async fn persist_option_changes(
             .map(|(key, value)| (key.as_str(), value.as_str())),
     )
     .await?;
+    // PostgreSQL has committed, so the process is no longer coherent until
+    // the shared runtime replacement succeeds. Keep this false on an apply
+    // failure; do not mark a transaction that failed before commit.
+    mark_runtime_dirty(state);
     state.runtime_writer.apply_committed(changes).await?;
     // Best effort: failure leaves dirty/runtime_coherent fail-closed.
     let _ = invalidate_options(state).await;
@@ -2068,6 +2674,10 @@ async fn post_setup(State(state): State<SystemConfigHttpState>, body: Bytes) -> 
         ("SelfUseModeEnabled".to_owned(), input.self_use.to_string()),
         ("DemoSiteEnabled".to_owned(), input.demo.to_string()),
     ];
+    // Keep setup's independent transaction and runtime application in the
+    // same option-write order as /api/option/. No option value is logged
+    // while this guard is held.
+    let _option_write_guard = state.option_write_lock.lock().await;
     let mut tx = match state.pg.begin().await {
         Ok(v) => v,
         Err(_) => return legacy_error("系统初始化失败"),
@@ -2151,6 +2761,7 @@ async fn post_setup(State(state): State<SystemConfigHttpState>, body: Bytes) -> 
     {
         return legacy_error("系统初始化失败");
     }
+    mark_runtime_dirty(&state);
     // Preserve Go's durable-store-first lifecycle.  If the shared runtime
     // fails after commit the caller sees a failure instead of an invented
     // success, and the process can recover from the authoritative store.

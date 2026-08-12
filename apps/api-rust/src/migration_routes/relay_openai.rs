@@ -15,10 +15,13 @@ use std::{
 use crate::{
     RequestContext,
     conversion_observability::{
-        ClientAbortGuard, ConversionObserver, ConversionResult, ConverterVersion, FeatureClass,
-        MetricLabels, StreamTiming, global_observer,
+        ClientAbortGuard, ConversionObserver, ConversionResult, ConverterVersion, FailureReason,
+        FeatureClass, MetricLabels, StreamTiming, global_observer,
     },
+    protocol_rollout::{ProtocolRolloutControl, RolloutContext},
+    protocol_route_gate::{RouteGateBlocker, RouteGateDecision, RouteGateDetails, decide_route},
     protocol_runtime_registry::validated_current_registry,
+    route_ownership::{OwnershipEvidence, RouteOwnershipScope},
 };
 use async_trait::async_trait;
 use axum::{
@@ -31,8 +34,8 @@ use axum::{
 };
 use futures_util::StreamExt;
 use lmm_contracts::relay::{
-    CanonicalRequest, CanonicalResponse, CanonicalStreamEvent, ConversionPlan, LossPolicy,
-    Protocol, RelayConvertError, canonical_response_to_openai_chat,
+    CanonicalRequest, CanonicalResponse, CanonicalStreamEvent, ConversionPlan, Direction, Fidelity,
+    Protocol, RelayConvertError, ValidatedRegistry, canonical_response_to_openai_chat,
     canonical_response_to_openai_responses, response_events_to_openai_chunks,
     response_events_to_responses,
 };
@@ -522,6 +525,8 @@ impl OpenAiRelayService for PgOpenAiRelayService {
 pub struct OpenAiRelayHttpState {
     service: Arc<dyn OpenAiRelayService>,
     version: Arc<str>,
+    protocol_rollout: ProtocolRolloutControl,
+    validated_registry: Option<Arc<ValidatedRegistry>>,
 }
 
 impl OpenAiRelayHttpState {
@@ -531,7 +536,22 @@ impl OpenAiRelayHttpState {
         Self {
             service,
             version: version.into(),
+            protocol_rollout: ProtocolRolloutControl::default(),
+            validated_registry: validated_current_registry().ok().map(Arc::new),
         }
+    }
+
+    /// Replaces the default runtime controls with the process-shared rollout
+    /// holder and validated capability snapshot.
+    #[must_use]
+    pub fn with_protocol_runtime(
+        mut self,
+        rollout: ProtocolRolloutControl,
+        registry: Arc<ValidatedRegistry>,
+    ) -> Self {
+        self.protocol_rollout = rollout;
+        self.validated_registry = Some(registry);
+        self
     }
 }
 
@@ -656,35 +676,36 @@ async fn relay(
         }
     };
     let stream = canonical.stream;
-    let plan_started = Instant::now();
-    let plan_labels = openai_conversion_labels(protocol, stream, ConversionResult::Success);
-    let validated_registry = match validated_current_registry() {
-        Ok(registry) => registry,
-        Err(_) => {
-            observer.record_plan_duration(plan_labels, plan_started.elapsed());
-            observer.record_failure(plan_labels);
-            return legacy_error(
-                &state,
-                &request_id,
-                OpenAiRelayFailure::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "conversion_registry_invalid",
-                    "protocol conversion registry is unavailable",
-                ),
+    let admission = match native_route_admission(
+        &state,
+        &request_id,
+        protocol,
+        canonical.model.as_str(),
+        stream,
+    ) {
+        Ok(admission) => admission,
+        Err(reason) => {
+            observer.record_failure_with_reason(
+                openai_conversion_labels(protocol, stream, ConversionResult::Failure),
+                reason,
             );
+            return legacy_error(&state, &request_id, route_closed_failure());
         }
     };
+    let NativeRouteAdmission { registry, details } = admission;
+    let plan_started = Instant::now();
+    let plan_labels = openai_conversion_labels(protocol, stream, ConversionResult::Success);
     let plan = ConversionPlan::compile_with_validated_registry(
         protocol,
         protocol,
         canonical.model.as_str(),
-        &validated_registry,
+        &registry,
     );
     observer.record_plan_duration(plan_labels, plan_started.elapsed());
     let compiled_plan = match plan {
         Ok(plan) => plan,
         Err(_) => {
-            observer.record_failure(plan_labels);
+            observer.record_failure_with_reason(plan_labels, FailureReason::RegistryDrift);
             return legacy_error(
                 &state,
                 &request_id,
@@ -696,8 +717,8 @@ async fn relay(
             );
         }
     };
-    if let Err(error) = compiled_plan.enforce(LossPolicy::Reject) {
-        observer.record_failure(plan_labels);
+    if let Err(error) = compiled_plan.enforce(details.loss_policy) {
+        observer.record_failure_with_reason(plan_labels, FailureReason::PlanRejected);
         return legacy_error(
             &state,
             &request_id,
@@ -728,6 +749,81 @@ async fn relay(
         }
     };
     legacy_success(&state, &request_id, protocol, result)
+}
+
+struct NativeRouteAdmission {
+    registry: Arc<ValidatedRegistry>,
+    details: RouteGateDetails,
+}
+
+fn native_route_admission(
+    state: &OpenAiRelayHttpState,
+    request_id: &str,
+    protocol: Protocol,
+    model: &str,
+    stream: bool,
+) -> Result<NativeRouteAdmission, FailureReason> {
+    let Some(registry) = state.validated_registry.clone() else {
+        return Err(FailureReason::RegistryDrift);
+    };
+    let context = RolloutContext::new(request_id, protocol, protocol, model, stream);
+    let scope = RouteOwnershipScope {
+        source: protocol,
+        target: protocol,
+        stream,
+    };
+    let evidence = OwnershipEvidence::closed(scope);
+    let rollout_snapshot = state.protocol_rollout.snapshot();
+    let request_gate = decide_route(
+        rollout_snapshot.config(),
+        &context,
+        &registry,
+        Direction::Request,
+        &evidence,
+    );
+    let output_direction = if stream {
+        Direction::Stream
+    } else {
+        Direction::Response
+    };
+    let output_gate = decide_route(
+        rollout_snapshot.config(),
+        &context,
+        &registry,
+        output_direction,
+        &evidence,
+    );
+    if !is_exact_raw_native(&request_gate) {
+        return Err(route_gate_failure_reason(&request_gate));
+    }
+    if !is_exact_raw_native(&output_gate) {
+        return Err(route_gate_failure_reason(&output_gate));
+    }
+    let RouteGateDecision::NativeRaw { details } = output_gate else {
+        return Err(FailureReason::Unsupported);
+    };
+    Ok(NativeRouteAdmission { registry, details })
+}
+
+fn is_exact_raw_native(decision: &RouteGateDecision) -> bool {
+    let RouteGateDecision::NativeRaw { details } = decision else {
+        return false;
+    };
+    details.capability.as_ref().is_some_and(|capability| {
+        capability.quality == Fidelity::Exact && capability.raw_passthrough
+    })
+}
+
+fn route_gate_failure_reason(decision: &RouteGateDecision) -> FailureReason {
+    if decision
+        .blockers()
+        .iter()
+        .any(|blocker| matches!(blocker, RouteGateBlocker::RegistryUnavailable))
+    {
+        FailureReason::RegistryDrift
+    } else {
+        FailureReason::Unsupported
+    }
 }
 
 fn parse_request(
@@ -1168,6 +1264,14 @@ fn no_channel_failure() -> OpenAiRelayFailure {
     )
 }
 
+fn route_closed_failure() -> OpenAiRelayFailure {
+    OpenAiRelayFailure::new(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "relay_unavailable",
+        "relay request could not be completed",
+    )
+}
+
 fn internal_failure() -> OpenAiRelayFailure {
     OpenAiRelayFailure::new(
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -1356,12 +1460,40 @@ struct UpstreamError {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{sync::Arc, time::Duration};
 
-    use axum::{body::Bytes, http::Uri};
+    use async_trait::async_trait;
+    use axum::{
+        body::{Body, Bytes},
+        http::{Request, Uri},
+    };
     use tokio::{net::TcpListener, sync::mpsc, task::JoinHandle};
+    use tower::ServiceExt;
 
     use super::*;
+
+    struct TestRelayService;
+
+    #[async_trait]
+    impl OpenAiRelayService for TestRelayService {
+        async fn authenticate(
+            &self,
+            _request: OpenAiRelayAuthorization,
+        ) -> Result<(), OpenAiRelayFailure> {
+            Ok(())
+        }
+
+        async fn relay(
+            &self,
+            _request: OpenAiRelayRequest,
+        ) -> Result<OpenAiRelayResult, OpenAiRelayFailure> {
+            Err(internal_failure())
+        }
+    }
+
+    fn test_state() -> OpenAiRelayHttpState {
+        OpenAiRelayHttpState::new(Arc::new(TestRelayService), "test-version")
+    }
 
     #[derive(Clone)]
     struct MockUpstream {
@@ -1486,6 +1618,120 @@ mod tests {
             Err(RelayConvertError::Unsupported(message))
                 if message == "stream must be a boolean"
         ));
+    }
+
+    #[test]
+    fn default_http_state_admits_validated_native_raw_route() {
+        let state = test_state();
+        let admission =
+            native_route_admission(&state, "request-1", Protocol::OpenAi, "gpt-future", false)
+                .expect("default state should admit the validated native route");
+
+        assert!(
+            admission
+                .details
+                .capability
+                .as_ref()
+                .is_some_and(|capability| capability.raw_passthrough)
+        );
+    }
+
+    #[test]
+    fn default_http_state_admits_validated_native_stream_route() {
+        let state = test_state();
+        let admission =
+            native_route_admission(&state, "request-1", Protocol::OpenAi, "gpt-future", true)
+                .expect("default state should admit the validated native stream route");
+
+        assert!(
+            admission
+                .details
+                .capability
+                .as_ref()
+                .is_some_and(|capability| capability.stream_supported)
+        );
+    }
+
+    #[test]
+    fn runtime_builder_installs_the_shared_validated_registry() {
+        let registry = Arc::new(
+            validated_current_registry().expect("built-in runtime registry should validate"),
+        );
+        let state =
+            test_state().with_protocol_runtime(ProtocolRolloutControl::default(), registry.clone());
+
+        assert!(Arc::ptr_eq(
+            state
+                .validated_registry
+                .as_ref()
+                .expect("builder installs registry"),
+            &registry,
+        ));
+    }
+
+    #[test]
+    fn missing_registry_closes_native_route_before_service_relay() {
+        let mut state = test_state();
+        state.validated_registry = None;
+
+        assert!(matches!(
+            native_route_admission(&state, "request-1", Protocol::OpenAi, "gpt-future", false,),
+            Err(FailureReason::RegistryDrift)
+        ));
+    }
+
+    #[tokio::test]
+    async fn missing_registry_returns_safe_server_error() {
+        let mut state = test_state();
+        state.validated_registry = None;
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/chat/completions")
+            .header(header::AUTHORIZATION, "Bearer tenant-token")
+            .body(Body::from(r#"{"model":"gpt-future"}"#))
+            .expect("valid test request");
+
+        let response = openai_relay_router(state)
+            .oneshot(request)
+            .await
+            .expect("router response");
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn builder_observes_shared_rollout_replacement_and_rollback() {
+        let control = ProtocolRolloutControl::default();
+        let registry = Arc::new(
+            validated_current_registry().expect("built-in runtime registry should validate"),
+        );
+        let state = test_state().with_protocol_runtime(control.clone(), registry);
+        let initial =
+            native_route_admission(&state, "request-1", Protocol::OpenAi, "gpt-future", false)
+                .expect("default native route should remain open");
+        assert!(!initial.details.flag_decision.enabled);
+
+        let mut enabled = crate::protocol_rollout::ProtocolRolloutConfig::default();
+        enabled.conversion_engine_v2 =
+            crate::protocol_rollout::FlagConfig::enabled(crate::protocol_rollout::MAX_BASIS_POINTS)
+                .expect("full rollout is bounded");
+        control
+            .replace(enabled)
+            .expect("replacement should install");
+        let replaced =
+            native_route_admission(&state, "request-1", Protocol::OpenAi, "gpt-future", false)
+                .expect("replacement must be visible to the next request");
+        assert!(replaced.details.flag_decision.enabled);
+
+        control.replace_rollback().expect("rollback should install");
+        let rolled_back =
+            native_route_admission(&state, "request-1", Protocol::OpenAi, "gpt-future", false)
+                .expect("native raw route remains available during rollback");
+        assert_eq!(
+            rolled_back.details.flag_decision.source,
+            crate::protocol_rollout::DecisionSource::ConfigRollback
+        );
+        assert!(!rolled_back.details.flag_decision.enabled);
     }
 
     #[test]
