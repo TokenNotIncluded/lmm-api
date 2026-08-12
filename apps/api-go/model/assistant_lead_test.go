@@ -64,10 +64,12 @@ func TestRecordAssistantIntentDoesNotPersistChatMessage(t *testing.T) {
 
 func TestAssistantHandoffRedactsSecretsAndIsIdempotent(t *testing.T) {
 	user := setupAssistantLeadTestDB(t)
-	lead, err := SubmitAssistantHandoff(user.Id, "登录失败，password: hunter2，key=sk-secret-token-123")
+	lead, err := SubmitAssistantHandoff(user.Id, "登录失败，password: hunter2，key=sk-secret-token-123，电话 13800138000，IP 192.0.2.10")
 	require.NoError(t, err)
 	assert.NotContains(t, lead.Message, "hunter2")
 	assert.NotContains(t, lead.Message, "sk-secret-token-123")
+	assert.NotContains(t, lead.Message, "13800138000")
+	assert.NotContains(t, lead.Message, "192.0.2.10")
 	assert.Contains(t, lead.Message, "[REDACTED]")
 
 	repeated, err := SubmitAssistantHandoff(user.Id, "another message")

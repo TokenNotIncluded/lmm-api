@@ -52,9 +52,6 @@ var (
 	ErrAssistantFirstQuestionRequired  = errors.New("assistant first question is required")
 	ErrAssistantFirstQuestionTooLong   = errors.New("assistant first question must be at most 4000 characters")
 
-	assistantAPIKeyPattern              = regexp.MustCompile(`(?i)\bsk-[a-z0-9._-]{6,}\b`)
-	assistantBearerPattern              = regexp.MustCompile(`(?i)\bbearer\s+[a-z0-9._~+/-]{6,}=*`)
-	assistantSecretPattern              = regexp.MustCompile(`(?i)(password|passwd|api[ _-]?key|access[ _-]?token|密码|密钥|令牌)\s*[:=：]\s*\S+`)
 	assistantFirstQuestionTokenPattern  = regexp.MustCompile(`(?i)\b(sk|rk|pk|ak|tok|token|key|secret)[_-][a-z0-9._~+/-]{6,}\b`)
 	assistantFirstQuestionFieldPattern  = regexp.MustCompile(`(?i)\b(token|client[_ -]?secret|secret|credential|private[_ -]?key|access[_ -]?key)\s*[:=：]\s*[^\s,;]+`)
 	assistantFirstQuestionUserIDPattern = regexp.MustCompile(`(?i)\b(user[_ -]?id|userid)\s*[:=：]\s*[a-z0-9_-]+`)
@@ -193,9 +190,7 @@ func ClassifyAssistantIntent(message string) string {
 }
 
 func redactAssistantHandoffMessage(message string) string {
-	message = assistantAPIKeyPattern.ReplaceAllString(message, "[REDACTED_API_KEY]")
-	message = assistantBearerPattern.ReplaceAllString(message, "Bearer [REDACTED_TOKEN]")
-	return assistantSecretPattern.ReplaceAllString(message, "$1: [REDACTED]")
+	return RedactAssistantHistoryContent(message)
 }
 
 func normalizeAssistantHandoffMessage(message string) (string, error) {

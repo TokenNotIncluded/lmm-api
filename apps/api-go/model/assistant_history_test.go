@@ -216,6 +216,33 @@ func TestRedactAssistantHistoryContentCoversCredentialsAndPersonalData(t *testin
 	assert.True(t, strings.Contains(redacted, "[REDACTED]") || strings.Contains(redacted, "[REDACTED_SECRET]"))
 }
 
+func TestRedactAssistantHistoryContentCoversPhonesNetworksCardsAndPrivateKeys(t *testing.T) {
+	redacted := RedactAssistantHistoryContent(`联系我 13800138000 或 +1 415 555 2671；IP 192.0.2.10、2001:db8::1；卡号 4111 1111 1111 1111；
+-----BEGIN PRIVATE KEY-----
+very-secret-key-material
+-----END PRIVATE KEY-----`)
+	for _, value := range []string{
+		"13800138000",
+		"+1 415 555 2671",
+		"192.0.2.10",
+		"2001:db8::1",
+		"4111 1111 1111 1111",
+		"very-secret-key-material",
+	} {
+		assert.NotContains(t, redacted, value)
+	}
+	assert.Contains(t, redacted, "[REDACTED_PHONE]")
+	assert.Contains(t, redacted, "[REDACTED_IP]")
+	assert.Contains(t, redacted, "[REDACTED_CARD]")
+	assert.Contains(t, redacted, "[REDACTED_PRIVATE_KEY]")
+}
+
+func TestRedactAssistantHistoryContentDoesNotTreatInvalidIPOrCardAsSensitive(t *testing.T) {
+	redacted := RedactAssistantHistoryContent("版本 1.2.3.999，编号 1234 5678 9012 3456")
+	assert.Contains(t, redacted, "1.2.3.999")
+	assert.Contains(t, redacted, "1234 5678 9012 3456")
+}
+
 func TestAssistantHistoryPostgreSQLMigration(t *testing.T) {
 	if strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN")) == "" || os.Getenv("TEST_POSTGRES_ISOLATED_SCHEMA") != "1" {
 		t.Skip("set TEST_POSTGRES_DSN and TEST_POSTGRES_ISOLATED_SCHEMA=1 to run PostgreSQL assistant history migration test")
