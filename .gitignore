@@ -49,6 +49,7 @@ skills-lock.json
 /packaging/local/lmm-api-rs-fallback-bin/out/
 /.codegraph/
 /SWAP.md
+/PLAN.md
 
 # Local-only live probes and scratch test workspaces.
 .local-tests/
