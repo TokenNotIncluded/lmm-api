@@ -59,8 +59,17 @@ pub mod conversion_observability;
 /// Deterministic protocol conversion rollout, shadow, and rollback decisions.
 pub mod protocol_rollout;
 
+/// Bounded local-only old/new protocol shadow coordination.
+pub mod protocol_shadow;
+
+/// Trusted import boundary for offline Go-vs-Rust differential evidence.
+pub mod protocol_differential_gate;
+
 /// Closed-by-default pure protocol-route admission decisions.
 pub mod protocol_route_gate;
+
+/// Closed-by-default typed streaming conversion pre-wiring.
+pub mod protocol_stream_pipeline;
 
 /// Closed-by-default route ownership evidence and review gate.
 pub mod route_ownership;

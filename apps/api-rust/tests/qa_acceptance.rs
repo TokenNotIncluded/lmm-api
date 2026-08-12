@@ -27,8 +27,8 @@ use lmm_api_rs::{
     },
     protocol_runtime_registry::current_support_matrix,
     route_ownership::{
-        DifferentialClass, MIN_REVIEW_CANARY_BASIS_POINTS, OwnershipDecision, OwnershipEvidence,
-        OwnershipGate, RouteOwnershipScope,
+        DifferentialClass, MIN_REVIEW_CANARY_BASIS_POINTS, OwnershipBlocker, OwnershipDecision,
+        OwnershipEvidence, OwnershipGate, RouteOwnershipScope,
     },
 };
 use lmm_contracts::relay::{
@@ -248,9 +248,14 @@ fn request_conformance_preserves_order_ids_and_provider_signatures() {
         serde_json::from_str(RESPONSES_REQUEST).expect("Responses corpus");
     let responses = openai_responses_request_to_canonical(responses).expect("Responses conversion");
     assert_eq!(responses.value.messages.len(), 3);
-    assert!(responses.value.messages.iter().flat_map(|message| &message.parts).any(
-        |part| matches!(part, CanonicalContent::ToolCall { id, .. } if id == "call-responses")
-    ));
+    assert!(responses
+        .value
+        .messages
+        .iter()
+        .flat_map(|message| &message.parts)
+        .any(
+            |part| matches!(part, CanonicalContent::ToolCall { id, .. } if id == "call-responses")
+        ));
 
     let gemini: GeminiRequest = serde_json::from_str(GEMINI_REQUEST).expect("Gemini corpus");
     let gemini =
@@ -971,10 +976,10 @@ fn local_summary(converter_id: &str, fingerprint: u8) -> LocalConversionSummary 
 }
 
 #[test]
-fn ownership_gate_defaults_closed_and_requires_all_five_differentials() {
+fn ownership_gate_defaults_closed_and_requires_attested_differentials() {
     let scope = RouteOwnershipScope {
         source: Protocol::OpenAi,
-        target: Protocol::OpenAi,
+        target: Protocol::Claude,
         stream: true,
     };
     let gate = OwnershipGate::default();
@@ -992,10 +997,11 @@ fn ownership_gate_defaults_closed_and_requires_all_five_differentials() {
         .set_canary_basis_points(MIN_REVIEW_CANARY_BASIS_POINTS)
         .expect("bounded canary");
     complete.approve_rollout();
-    assert_eq!(
+    assert!(matches!(
         gate.evaluate(&complete),
-        OwnershipDecision::EligibleForOwnershipReview { scope }
-    );
+        OwnershipDecision::ClosedByDefault { blockers, .. }
+            if blockers.contains(&OwnershipBlocker::UntrustedEvidence)
+    ));
 
     for missing in DifferentialClass::all() {
         let mut green = complete.green_classes().clone();
@@ -1066,6 +1072,7 @@ fn shadow_comparison_is_body_free_and_client_abort_is_bounded() {
             .contains(&ShadowDifference::ConverterId)
     );
     assert!(!mismatch.differences.is_empty());
+    assert!(mismatch.is_identical());
 
     let observer = ConversionObserver::with_max_series(2);
     let labels = MetricLabels::new(

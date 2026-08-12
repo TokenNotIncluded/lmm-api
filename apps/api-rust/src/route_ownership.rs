@@ -86,10 +86,12 @@ pub enum OwnershipBlocker {
     RouteQualityUnsupported,
     /// The model family is excluded by the route constraint.
     ModelConstraintMismatch,
+    /// Cross-protocol evidence was assembled without a trusted attestation.
+    UntrustedEvidence,
 }
 
 /// Evidence collected for one specific source/target route.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Serialize)]
 pub struct OwnershipEvidence {
     scope: RouteOwnershipScope,
     green: BTreeSet<DifferentialClass>,
@@ -97,6 +99,23 @@ pub struct OwnershipEvidence {
     canary_basis_points: u16,
     rollout_approved: bool,
     rollback_active: bool,
+    #[serde(skip)]
+    trusted_attestation: bool,
+}
+
+impl fmt::Debug for OwnershipEvidence {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("OwnershipEvidence")
+            .field("scope", &self.scope)
+            .field("green", &self.green)
+            .field("shadow_identical", &self.shadow_identical)
+            .field("canary_basis_points", &self.canary_basis_points)
+            .field("rollout_approved", &self.rollout_approved)
+            .field("rollback_active", &self.rollback_active)
+            .field("trusted_attestation", &self.trusted_attestation)
+            .finish()
+    }
 }
 
 impl OwnershipEvidence {
@@ -110,6 +129,7 @@ impl OwnershipEvidence {
             canary_basis_points: 0,
             rollout_approved: false,
             rollback_active: false,
+            trusted_attestation: false,
         }
     }
 
@@ -121,6 +141,7 @@ impl OwnershipEvidence {
 
     /// Marks one differential class green after its external comparison passes.
     pub fn mark_green(&mut self, class: DifferentialClass) {
+        self.trusted_attestation = false;
         self.green.insert(class);
     }
 
@@ -132,6 +153,7 @@ impl OwnershipEvidence {
 
     /// Records whether body-free old/new shadow summaries were identical.
     pub fn set_shadow_identical(&mut self, identical: bool) {
+        self.trusted_attestation = false;
         self.shadow_identical = identical;
     }
 
@@ -159,12 +181,14 @@ impl OwnershipEvidence {
         if basis_points > MAX_CANARY_BASIS_POINTS {
             return Err(OwnershipEvidenceError::InvalidCanary { basis_points });
         }
+        self.trusted_attestation = false;
         self.canary_basis_points = basis_points;
         Ok(())
     }
 
     /// Records the explicit operator approval required by the gate.
     pub fn approve_rollout(&mut self) {
+        self.trusted_attestation = false;
         self.rollout_approved = true;
     }
 
@@ -188,6 +212,7 @@ impl OwnershipEvidence {
 
     /// Records that a configuration rollback is active for this route.
     pub fn set_rollback_active(&mut self, active: bool) {
+        self.trusted_attestation = false;
         self.rollback_active = active;
     }
 
@@ -195,6 +220,13 @@ impl OwnershipEvidence {
     #[must_use]
     pub const fn rollback_active(&self) -> bool {
         self.rollback_active
+    }
+
+    /// Seals evidence after the differential trust policy and signature have
+    /// passed.  This crate-private seam is intentionally the only way to set
+    /// the trusted marker; public evidence mutators remain untrusted.
+    pub(crate) fn seal_trusted(&mut self) {
+        self.trusted_attestation = true;
     }
 }
 
@@ -234,6 +266,9 @@ impl OwnershipGate {
         }
         if evidence.rollback_active {
             blockers.push(OwnershipBlocker::RollbackActive);
+        }
+        if evidence.scope.source != evidence.scope.target && !evidence.trusted_attestation {
+            blockers.push(OwnershipBlocker::UntrustedEvidence);
         }
         if DifferentialClass::all()
             .iter()
@@ -389,6 +424,24 @@ mod tests {
         evidence
     }
 
+    fn complete_cross_protocol() -> OwnershipEvidence {
+        let cross_scope = RouteOwnershipScope {
+            source: Protocol::OpenAi,
+            target: Protocol::Claude,
+            stream: true,
+        };
+        let mut evidence = OwnershipEvidence::closed(cross_scope);
+        for class in DifferentialClass::all() {
+            evidence.mark_green(*class);
+        }
+        evidence.set_shadow_identical(true);
+        evidence
+            .set_canary_basis_points(MIN_REVIEW_CANARY_BASIS_POINTS)
+            .expect("bounded canary");
+        evidence.approve_rollout();
+        evidence
+    }
+
     #[test]
     fn default_is_closed_and_complete_evidence_only_opens_review() {
         let gate = OwnershipGate::default();
@@ -400,6 +453,32 @@ mod tests {
             gate.evaluate(&complete()),
             OwnershipDecision::EligibleForOwnershipReview { scope: scope() }
         );
+    }
+
+    #[test]
+    fn cross_protocol_manual_green_evidence_requires_private_seal() {
+        let gate = OwnershipGate::default();
+        let mut evidence = complete_cross_protocol();
+        assert!(matches!(
+            gate.evaluate(&evidence),
+            OwnershipDecision::ClosedByDefault { blockers, .. }
+                if blockers.contains(&OwnershipBlocker::UntrustedEvidence)
+        ));
+
+        evidence.seal_trusted();
+        assert!(matches!(
+            gate.evaluate(&evidence),
+            OwnershipDecision::EligibleForOwnershipReview { .. }
+        ));
+
+        evidence
+            .set_canary_basis_points(MIN_REVIEW_CANARY_BASIS_POINTS + 1)
+            .expect("bounded mutation");
+        assert!(matches!(
+            gate.evaluate(&evidence),
+            OwnershipDecision::ClosedByDefault { blockers, .. }
+                if blockers.contains(&OwnershipBlocker::UntrustedEvidence)
+        ));
     }
 
     #[test]
@@ -476,7 +555,7 @@ mod tests {
         evidence.record_shadow(&ShadowRecord {
             source: Protocol::OpenAi,
             target: Protocol::OpenAi,
-            stream: false,
+            stream: true,
             old_converter_id: None,
             new_converter_id: None,
             differences: Vec::new(),
@@ -486,6 +565,24 @@ mod tests {
             OwnershipGate::default().evaluate(&evidence),
             OwnershipDecision::ClosedByDefault { blockers, .. }
                 if blockers.contains(&OwnershipBlocker::ShadowDifference)
+        ));
+    }
+
+    #[test]
+    fn different_converter_versions_can_prove_identical_shadow_semantics() {
+        let mut evidence = complete();
+        evidence.record_shadow(&ShadowRecord {
+            source: Protocol::OpenAi,
+            target: Protocol::OpenAi,
+            stream: true,
+            old_converter_id: Some("openai-v1".to_owned()),
+            new_converter_id: Some("openai-v2".to_owned()),
+            differences: vec![crate::protocol_rollout::ShadowDifference::ConverterId],
+        });
+
+        assert!(matches!(
+            OwnershipGate::default().evaluate(&evidence),
+            OwnershipDecision::EligibleForOwnershipReview { .. }
         ));
     }
 }

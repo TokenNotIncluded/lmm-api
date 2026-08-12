@@ -1183,7 +1183,7 @@ pub enum ShadowDifference {
     LossLedger,
     /// Synthetic-field summaries differ.
     SyntheticFields,
-    /// Converter identifiers differ.
+    /// Converter identifiers differ; this is diagnostic, not semantic loss.
     ConverterId,
     /// One local converter failed.
     ConversionFailure,
@@ -1292,9 +1292,15 @@ pub struct ShadowRecord {
 }
 
 impl ShadowRecord {
-    /// Returns whether both local converters produced equivalent summaries.
+    /// Returns whether both local converters produced equivalent semantics.
+    ///
+    /// Old and new implementations are expected to use different converter
+    /// identifiers.  That distinction remains available as a diagnostic
+    /// difference, but it must not by itself fail semantic shadow acceptance.
     pub fn is_identical(&self) -> bool {
-        self.differences.is_empty()
+        self.differences
+            .iter()
+            .all(|difference| *difference == ShadowDifference::ConverterId)
     }
 }
 
@@ -2079,6 +2085,7 @@ mod tests {
         assert_eq!(old_calls.load(Ordering::SeqCst), 1);
         assert_eq!(new_calls.load(Ordering::SeqCst), 1);
         assert!(record.differences.contains(&ShadowDifference::ConverterId));
+        assert!(record.is_identical());
         let serialized = serde_json::to_string(&record).expect("record serializes");
         assert!(!serialized.contains("secret prompt"));
     }
