@@ -19,7 +19,10 @@ import (
 
 const (
 	financeExportDefaultWindow = 30 * 24 * 60 * 60
-	financeExportMaxWindow     = 90 * 24 * 60 * 60
+	// Keep a generous one-year upper bound while retaining a hard server-side
+	// limit. The UI accepts an exact datetime range; this bound prevents an
+	// accidental all-history export from exhausting the log database.
+	financeExportMaxWindow     = 365 * 24 * 60 * 60
 	financeExportMaxRows       = 200_000
 )
 
@@ -141,7 +144,7 @@ type financeUsageExport struct {
 	CompletionTokens int    `json:"completion_tokens" gorm:"column:completion_tokens"`
 	UseTime          int    `json:"use_time" gorm:"column:use_time"`
 	IsStream         bool   `json:"is_stream" gorm:"column:is_stream"`
-	ChannelID        int    `json:"channel_id" gorm:"column:channel"`
+	ChannelID        int    `json:"channel_id" gorm:"column:channel_id"`
 	Group            string `json:"group" gorm:"column:group"`
 }
 
@@ -349,7 +352,7 @@ func loadFinanceExportBundle(start, end int64) (financeExportBundle, error) {
 		model.LogTypeManage,
 	}
 	if err := model.LOG_DB.Model(&model.Log{}).
-		Select("id", "user_id", "created_at", "type", "username", "token_name", "model_name", "quota", "prompt_tokens", "completion_tokens", "use_time", "is_stream", "channel", "group").
+		Select("id", "user_id", "created_at", "type", "username", "token_name", "model_name", "quota", "prompt_tokens", "completion_tokens", "use_time", "is_stream", "channel_id", "group").
 		Where("created_at >= ? AND created_at <= ? AND type IN ?", start, end, usageTypes).
 		Order("created_at ASC, id ASC").Limit(financeExportMaxRows).Find(&bundle.Usage).Error; err != nil {
 		return bundle, err

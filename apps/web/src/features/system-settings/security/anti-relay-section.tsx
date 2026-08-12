@@ -206,7 +206,7 @@ export function AntiRelaySection({ defaultValues }: AntiRelaySectionProps) {
   }
 
   return (
-    <SettingsSection title={t('Anti-Relay Access')}>
+    <SettingsSection title={t('Reverse Proxy Access Control')}>
       <Form {...form}>
         <SettingsForm onSubmit={form.handleSubmit(onSubmit)}>
           <SettingsPageFormActions
@@ -216,10 +216,10 @@ export function AntiRelaySection({ defaultValues }: AntiRelaySectionProps) {
           />
 
           <Alert>
-            <AlertTitle>{t('Anti-relay policy limitation')}</AlertTitle>
+            <AlertTitle>{t('Reverse-proxy access control policy')}</AlertTitle>
             <AlertDescription>
               {t(
-                'This is a best-effort ingress policy. It can reject known peer IPs and explicit proxy headers, but no server-side rule can identify every relay that strips or rewrites those signals.'
+                'This controls requests reaching the reverse-proxy entrypoint. It does not block ordinary model proxy requests by itself.'
               )}
             </AlertDescription>
           </Alert>
@@ -241,10 +241,12 @@ export function AntiRelaySection({ defaultValues }: AntiRelaySectionProps) {
             render={({ field }) => (
               <SettingsSwitchItem>
                 <SettingsSwitchContent>
-                  <FormLabel>{t('Enable anti-relay access control')}</FormLabel>
+                  <FormLabel>
+                    {t('Enable reverse-proxy access control')}
+                  </FormLabel>
                   <FormDescription>
                     {t(
-                      'Reject requests that match a blocked peer IP or expose proxy forwarding signals.'
+                      'Reject requests that match a blocked reverse-proxy peer IP or expose untrusted forwarding signals.'
                     )}
                   </FormDescription>
                 </SettingsSwitchContent>
@@ -264,10 +266,12 @@ export function AntiRelaySection({ defaultValues }: AntiRelaySectionProps) {
             render={({ field }) => (
               <SettingsSwitchItem>
                 <SettingsSwitchContent>
-                  <FormLabel>{t('Reject proxy forwarding headers')}</FormLabel>
+                  <FormLabel>
+                    {t('Reject untrusted reverse-proxy headers')}
+                  </FormLabel>
                   <FormDescription>
                     {t(
-                      'Reject Forwarded, Via, X-Forwarded-*, X-Real-IP and similar headers from peers outside the trusted proxy list.'
+                      'Reject Forwarded, Via, X-Forwarded-*, X-Real-IP and similar headers from peers outside the trusted reverse-proxy list.'
                     )}
                   </FormDescription>
                 </SettingsSwitchContent>
@@ -287,7 +291,9 @@ export function AntiRelaySection({ defaultValues }: AntiRelaySectionProps) {
             render={({ field }) => (
               <SettingsSwitchItem>
                 <SettingsSwitchContent>
-                  <FormLabel>{t('Protect HTTPS/443 requests only')}</FormLabel>
+                  <FormLabel>
+                    {t('Protect reverse-proxy HTTPS/443 entry requests only')}
+                  </FormLabel>
                   <FormDescription>
                     {t(
                       'When enabled, apply this policy only to requests identified as HTTPS or port 443. Turn it off to cover every request.'
@@ -309,7 +315,9 @@ export function AntiRelaySection({ defaultValues }: AntiRelaySectionProps) {
             name='AntiRelayBlockedCIDRs'
             render={({ field }) => (
               <FormItem>
-                <FormLabel>{t('Blocked source IPs / CIDRs')}</FormLabel>
+                <FormLabel>
+                  {t('Blocked reverse-proxy peer IPs / CIDRs')}
+                </FormLabel>
                 <FormControl>
                   <Textarea
                     {...field}
@@ -321,7 +329,7 @@ export function AntiRelaySection({ defaultValues }: AntiRelaySectionProps) {
                 </FormControl>
                 <FormDescription>
                   {t(
-                    'One IP or CIDR per line. These are the peer addresses seen by this service, not the client IP claimed by a forwarding header.'
+                    'One IP or CIDR per line. These are reverse-proxy peer addresses observed by the service, not client IPs claimed by forwarding headers.'
                   )}
                 </FormDescription>
                 <FormMessage />
@@ -334,7 +342,7 @@ export function AntiRelaySection({ defaultValues }: AntiRelaySectionProps) {
             name='AntiRelayTrustedProxyCIDRs'
             render={({ field }) => (
               <FormItem>
-                <FormLabel>{t('Trusted reverse proxy IPs / CIDRs')}</FormLabel>
+                <FormLabel>{t('Trusted reverse proxies / CIDRs')}</FormLabel>
                 <FormControl>
                   <Textarea
                     {...field}
@@ -344,7 +352,7 @@ export function AntiRelaySection({ defaultValues }: AntiRelaySectionProps) {
                 </FormControl>
                 <FormDescription>
                   {t(
-                    'Add the IPs or CIDRs of your Nginx, CDN, or load balancer as seen by this service. Trusted peers may send forwarding headers and take precedence over blocked CIDRs.'
+                    'Add the IPs or CIDRs of your Nginx, CDN, or load balancer as seen by this service. Trusted peers may send forwarding headers and take precedence over blocked peers.'
                   )}
                 </FormDescription>
                 <FormMessage />

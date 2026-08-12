@@ -105,10 +105,22 @@ export async function executeLogout(
     const code = axios.isAxiosError(error)
       ? error.response?.data?.code
       : undefined
+    const status = axios.isAxiosError(error)
+      ? error.response?.status
+      : undefined
+    // Logout is intentionally idempotent at the client boundary. During a
+    // rolling deployment an older gateway can briefly answer 404, and an
+    // already-expired session can answer 401. In both cases there is no
+    // active session the browser can continue using, so the caller should
+    // still clear its local auth state. Keep origin failures and server
+    // errors visible; they indicate a real request/configuration problem.
+    if (axios.isAxiosError(error) && (status === 401 || status === 404)) {
+      return { success: true, message: '' }
+    }
     if (
       allowMismatchRecovery &&
       axios.isAxiosError(error) &&
-      error.response?.status === 409 &&
+      status === 409 &&
       code === 'AUTH_SESSION_MISMATCH'
     ) {
       const outcome = await runtime.refresh()

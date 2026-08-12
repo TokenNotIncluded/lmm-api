@@ -16,21 +16,22 @@ import (
 // action 的 params 填充。本地化展示文案在前端 i18n 模板中维护，本表是语言中立的
 // 英文基线——调用方因此无需在每个埋点处手写句子（避免与 params 重复书写同一份值）。
 var auditContentTemplates = map[string]string{
-	"user.create":           "Created user ${username} (role ${role})",
-	"user.update":           "Updated user ${username} (ID: ${id})",
-	"user.delete":           "Deleted user ${username} (ID: ${id})",
-	"user.manage":           "Performed ${action} on user ${username} (ID: ${id})",
-	"user.quota_add":        "Increased user quota by ${quota}",
-	"user.quota_subtract":   "Decreased user quota by ${quota}",
-	"user.quota_override":   "Overrode user quota from ${from} to ${to}",
-	"user.binding_clear":    "Cleared ${bindingType} binding for user ${username}",
-	"user.2fa_disable":      "Force-disabled two-factor authentication for the user",
-	"user.passkey_register": "Registered a passkey",
-	"user.passkey_delete":   "Deleted a passkey",
-	"user.reset_passkey":    "Reset the user passkey",
-	"option.update":         "Updated system setting ${key}",
+	"user.create":                   "Created user ${username} (role ${role})",
+	"user.update":                   "Updated user ${username} (ID: ${id})",
+	"user.delete":                   "Deleted user ${username} (ID: ${id})",
+	"user.manage":                   "Performed ${action} on user ${username} (ID: ${id})",
+	"user.quota_add":                "Increased user quota by ${quota}",
+	"user.quota_subtract":           "Decreased user quota by ${quota}",
+	"user.quota_override":           "Overrode user quota from ${from} to ${to}",
+	"user.binding_clear":            "Cleared ${bindingType} binding for user ${username}",
+	"user.2fa_disable":              "Force-disabled two-factor authentication for the user",
+	"user.passkey_register":         "Registered a passkey",
+	"user.passkey_delete":           "Deleted a passkey",
+	"user.reset_passkey":            "Reset the user passkey",
+	"option.update":                 "Updated system setting ${key}",
 	"assistant.admin_config_apply":  "Applied assistant administrator configuration (${keys})",
 	"assistant.admin_pricing_apply": "Applied assistant model pricing for ${model_id} (${mode})",
+	"assistant.user_profile_update": "Updated internal assistant profile for user ${target_user_id} (enabled: ${enabled}, tags: ${tags_count})",
 
 	"channel.create":             "Created channel ${name} (type ${type}, count ${count})",
 	"channel.update":             "Updated channel ${name} (ID: ${id})",
@@ -52,6 +53,7 @@ var auditContentTemplates = map[string]string{
 	"subscription.plan_reset":      "Reset active subscriptions for plan ${plan_id}",
 	"subscription.user_plan_reset": "Reset active plan ${plan_id} subscriptions for user ${target_user_id}",
 	"user.reset_onboarding":        "Reset user ${target_user_id} onboarding to L0",
+	"onboarding.todo_progress":     "Advanced L1 onboarding step ${step} via ${source}",
 }
 
 // auditContentEN 按 action 模板渲染英文兜底文本；未登记的 action 退回 action 本身。

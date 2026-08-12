@@ -73,7 +73,7 @@ const SECURITY_SECTIONS = [
   },
   {
     id: 'anti-relay',
-    titleKey: 'Anti-Relay Access',
+    titleKey: 'Reverse Proxy Access Control',
     build: (settings: SecuritySettings) => (
       <AntiRelaySection
         defaultValues={{

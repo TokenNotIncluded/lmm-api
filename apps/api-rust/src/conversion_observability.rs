@@ -287,7 +287,7 @@ pub struct MetricSample {
     pub metric: MetricKind,
     /// Closed labels.
     pub labels: MetricLabels,
-    /// Saturating value. Duration metrics use nanoseconds.
+    /// Saturating internal value. Duration metrics use nanoseconds here.
     pub value: u64,
 }
 
@@ -296,6 +296,26 @@ pub struct MetricSample {
 pub struct RecorderSnapshot {
     /// Stable metric samples sorted by their closed key.
     pub samples: Vec<MetricSample>,
+    /// Number of series rejected after the configured bound was reached.
+    pub dropped_series: u64,
+}
+
+/// One metric sample converted to exporter units.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ExporterSample {
+    /// Metric name.
+    pub metric: MetricKind,
+    /// Closed labels.
+    pub labels: MetricLabels,
+    /// Counter/gauge values as `f64`; duration values as seconds.
+    pub value: f64,
+}
+
+/// Bounded metric data ready for a metrics exporter.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ExporterSnapshot {
+    /// Stable metric samples sorted by their closed key.
+    pub samples: Vec<ExporterSample>,
     /// Number of series rejected after the configured bound was reached.
     pub dropped_series: u64,
 }
@@ -525,10 +545,26 @@ impl ConversionObserver {
         })
     }
 
-    /// Exports the same immutable data as [`Self::snapshot`].
+    /// Exports immutable samples with duration metrics expressed in seconds.
+    ///
+    /// [`Self::snapshot`] remains the raw, integer nanosecond view for
+    /// internal tests and arithmetic. The exporter view prevents a nanosecond
+    /// value from being mislabeled as a Prometheus seconds sample.
     #[must_use]
-    pub fn export(&self) -> RecorderSnapshot {
-        self.snapshot()
+    pub fn export(&self) -> ExporterSnapshot {
+        let snapshot = self.snapshot();
+        ExporterSnapshot {
+            samples: snapshot
+                .samples
+                .into_iter()
+                .map(|sample| ExporterSample {
+                    metric: sample.metric,
+                    labels: sample.labels,
+                    value: exporter_value(sample.metric, sample.value),
+                })
+                .collect(),
+            dropped_series: snapshot.dropped_series,
+        }
     }
 
     fn adjust_queue_depth(&self, labels: MetricLabels, increment: bool) {
@@ -683,6 +719,19 @@ fn duration_nanos(duration: Duration) -> u64 {
     }
 }
 
+fn exporter_value(metric: MetricKind, value: u64) -> f64 {
+    if matches!(
+        metric,
+        MetricKind::ConversionDurationSeconds
+            | MetricKind::ConversionPlanDurationSeconds
+            | MetricKind::StreamGatewayTtftSeconds
+    ) {
+        value as f64 / 1_000_000_000.0
+    } else {
+        value as f64
+    }
+}
+
 fn usize_to_u64(value: usize) -> u64 {
     if value > u64::MAX as usize {
         u64::MAX
@@ -824,6 +873,35 @@ mod tests {
         assert_eq!(first, second);
         assert_eq!(first.samples.len(), 1);
         assert_eq!(first.dropped_series, 1);
+    }
+
+    #[test]
+    fn exporter_converts_duration_nanos_to_seconds_but_keeps_counters_numeric() {
+        let observer = ConversionObserver::default();
+        let base = labels();
+        observer.record_gateway_ttft(base, Duration::from_millis(25));
+        observer.record_events(base, 3);
+        let export = observer.export();
+        let duration = export
+            .samples
+            .iter()
+            .find(|sample| sample.metric == MetricKind::StreamGatewayTtftSeconds)
+            .map_or(0.0, |sample| sample.value);
+        let events = export
+            .samples
+            .iter()
+            .find(|sample| sample.metric == MetricKind::ConversionEventsTotal)
+            .map_or(0.0, |sample| sample.value);
+        assert!((duration - 0.025).abs() < 1.0e-12);
+        assert_eq!(events, 3.0);
+        let raw = observer.snapshot();
+        assert_eq!(
+            raw.samples
+                .iter()
+                .find(|sample| sample.metric == MetricKind::StreamGatewayTtftSeconds)
+                .map(|sample| sample.value),
+            Some(25_000_000)
+        );
     }
 
     #[test]

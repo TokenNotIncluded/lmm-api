@@ -117,6 +117,23 @@ describe('logout coordination', () => {
       (error) => error === originalError
     )
   })
+
+  test('treats an already anonymous or legacy 404 logout endpoint as signed out', async () => {
+    for (const status of [401, 404]) {
+      const result = await executeLogout({
+        getExpectedSID: () => 'session-a',
+        request: async () => {
+          throw {
+            isAxiosError: true,
+            response: { status, data: { code: 'AUTH_NOT_FOUND' } },
+          }
+        },
+        refresh: async () => ({ kind: 'transient_error', error: new Error() }),
+      })
+
+      assert.deepEqual(result, { success: true, message: '' })
+    }
+  })
 })
 
 describe('OAuth flow initialization', () => {

@@ -343,8 +343,9 @@ func mainMigrationModels() []interface{} {
 		&SubscriptionOrder{}, &UserSubscription{}, &SubscriptionPreConsumeRecord{}, &CustomOAuthProvider{},
 		&UserOAuthBinding{}, &PerfMetric{}, &SystemInstance{}, &SystemTask{}, &SystemTaskLock{},
 		&CasbinRule{}, &AuthzRole{}, &PersonalAccessIP{},
-		&AssistantLead{}, &AssistantProfileBucket{}, &AssistantConversation{}, &AssistantHistoryMessage{}, &AssistantSecureCard{}, &AdvancedSecurityEvent{},
-		&ReleaseNote{}, &ReleaseNoteRead{},
+		&AssistantLead{}, &AssistantProfileBucket{}, &AssistantUserProfile{}, &AssistantFirstQuestionStat{}, &AssistantConversation{}, &AssistantHistoryMessage{}, &AssistantSecureCard{}, &AdvancedSecurityEvent{},
+		&ViolationFeeState{}, &ViolationFeeRecord{}, &ViolationFeeAppeal{},
+		&ReleaseNote{}, &ReleaseNoteRead{}, &UnifiedTodoRead{}, &L1OnboardingTodo{},
 	}
 }
 
@@ -443,12 +444,16 @@ func migrateDBFast() error {
 		{&PersonalAccessIP{}, "PersonalAccessIP"},
 		{&AssistantLead{}, "AssistantLead"},
 		{&AssistantProfileBucket{}, "AssistantProfileBucket"},
+		{&AssistantUserProfile{}, "AssistantUserProfile"},
+		{&AssistantFirstQuestionStat{}, "AssistantFirstQuestionStat"},
 		{&AssistantConversation{}, "AssistantConversation"},
 		{&AssistantHistoryMessage{}, "AssistantHistoryMessage"},
 		{&AssistantSecureCard{}, "AssistantSecureCard"},
 		{&AdvancedSecurityEvent{}, "AdvancedSecurityEvent"},
 		{&ReleaseNote{}, "ReleaseNote"},
 		{&ReleaseNoteRead{}, "ReleaseNoteRead"},
+		{&UnifiedTodoRead{}, "UnifiedTodoRead"},
+		{&L1OnboardingTodo{}, "L1OnboardingTodo"},
 	}
 	// 动态计算migration数量，确保errChan缓冲区足够大
 	errChan := make(chan error, len(migrations))

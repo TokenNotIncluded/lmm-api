@@ -14,7 +14,7 @@ import {
   Key01Icon,
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
-import { Link } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { type FormEvent, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -27,7 +27,10 @@ import { Progress } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
 import { requestAssistantOpen } from '@/features/assistant/assistant-events'
 import { ChallengeList } from '@/features/forge/challenge-list'
-import { getOnboardingState } from '@/lib/console-activation'
+import {
+  getAuthenticatedLandingRoute,
+  getOnboardingState,
+} from '@/lib/console-activation'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { getDeveloperAccessRequest, type DeveloperAccessRequest } from './api'
@@ -36,6 +39,7 @@ import { useAuthUserRefresh } from './use-auth-user-refresh'
 
 export function GettingStarted() {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const { refreshUser } = useAuthUserRefresh()
   const user = useAuthStore((state) => state.auth.user)
   const onboarding = getOnboardingState(user)
@@ -73,11 +77,44 @@ export function GettingStarted() {
     requestAssistantOpen('onboarding')
   }, [onboarding.stage, pendingRequestId, requestLoaded, userId])
 
+  useEffect(() => {
+    if (
+      !requestLoaded ||
+      accessRequest?.status !== 'approved' ||
+      onboarding.activationComplete
+    ) {
+      return
+    }
+
+    let cancelled = false
+    void refreshUser().then((refreshedUser) => {
+      if (cancelled || refreshedUser?.developer_access_granted !== true) {
+        return
+      }
+      void navigate({ to: getAuthenticatedLandingRoute(refreshedUser) })
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [
+    accessRequest?.status,
+    navigate,
+    onboarding.activationComplete,
+    refreshUser,
+    requestLoaded,
+  ])
+
   const submitPrompt = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const message = prompt.trim()
     if (!message) return
     requestAssistantOpen('onboarding', message)
+  }
+
+  const continueAfterApproval = async () => {
+    const refreshedUser = await refreshUser()
+    if (refreshedUser?.developer_access_granted !== true) return
+    await navigate({ to: getAuthenticatedLandingRoute(refreshedUser) })
   }
 
   if (!onboarding.activationComplete) {
@@ -232,7 +269,7 @@ export function GettingStarted() {
                         type='button'
                         size='sm'
                         className='mt-1 w-fit'
-                        onClick={() => void refreshUser()}
+                        onClick={() => void continueAfterApproval()}
                       >
                         {t('Continue setup')}
                         <HugeiconsIcon

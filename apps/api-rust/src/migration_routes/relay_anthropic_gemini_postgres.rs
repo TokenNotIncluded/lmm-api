@@ -13,11 +13,15 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::relay_anthropic_gemini::{
-    RelayBackend, RelayChannel, RelayFailure, RelayIdentity, RelayOutcome, RelayProtocol,
-    RelaySseEvent, UpstreamReply, UpstreamRequest,
+    NativeSseReply, RelayBackend, RelayChannel, RelayFailure, RelayIdentity, RelayOutcome,
+    RelayProtocol, RelaySseEvent, UpstreamReply, UpstreamRequest,
+};
+use super::sse::{
+    DEFAULT_MAX_FRAME_BYTES, JsonSseEvent, json_events_from_frames,
+    parse_sse_frames_rejecting_unterminated,
 };
 use async_trait::async_trait;
-use axum::http::header;
+use axum::{body::{Body, to_bytes}, http::header};
 use reqwest::Url;
 use serde_json::Value;
 use sqlx::{PgPool, Row};
@@ -30,6 +34,7 @@ pub struct PgAnthropicGeminiRelayBackend {
     pg: PgPool,
     client: reqwest::Client,
     response_header_timeout: Duration,
+    sse_max_frame_bytes: usize,
 }
 
 impl PgAnthropicGeminiRelayBackend {
@@ -40,7 +45,15 @@ impl PgAnthropicGeminiRelayBackend {
             pg,
             client,
             response_header_timeout,
+            sse_max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
         }
+    }
+
+    /// Sets the independent maximum size for one upstream SSE frame.
+    #[must_use]
+    pub fn with_sse_max_frame_bytes(mut self, max_frame_bytes: usize) -> Self {
+        self.sse_max_frame_bytes = max_frame_bytes;
+        self
     }
 
     async fn channel_target(&self, channel_id: i64) -> Result<(String, String), RelayFailure> {
@@ -168,32 +181,64 @@ impl PgAnthropicGeminiRelayBackend {
                 .map_err(|_| RelayFailure::Upstream)?
                 .map_err(|_| RelayFailure::Upstream)?;
         let status = response.status();
-        let content_type = response
+        let content_type_header = response
             .headers()
             .get(header::CONTENT_TYPE)
+            .cloned();
+        let content_type = content_type_header
+            .as_ref()
             .and_then(|value| value.to_str().ok())
             .unwrap_or_default()
             .to_ascii_lowercase();
-        let body = tokio::time::timeout(self.response_header_timeout, response.bytes())
-            .await
-            .map_err(|_| RelayFailure::Upstream)?
-            .map_err(|_| RelayFailure::Upstream)?;
-        if body.len() > MAX_RESPONSE_BYTES {
-            return Err(RelayFailure::Upstream);
-        }
-        let value = serde_json::from_slice::<Value>(&body)
-            .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&body).into_owned()));
+        let is_sse = content_type.contains("text/event-stream") || request.streaming;
         if !status.is_success() {
+            let body = collect_bounded_body(self.response_header_timeout, response).await?;
+            let value = serde_json::from_slice::<Value>(&body)
+                .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&body).into_owned()));
             return Err(RelayFailure::Provider {
                 status,
                 body: value,
             });
         }
-        if content_type.contains("text/event-stream") || request.streaming {
-            return Ok(UpstreamReply::Sse(parse_sse_events(&body)));
+
+        // Anthropic and Gemini are native same-protocol routes here. Keep
+        // their successful SSE response as a single-consumption body so new
+        // provider fields/events remain byte-for-byte visible and downstream
+        // backpressure controls upstream polling. OpenAI is intentionally not
+        // included: it still requires the typed cross-protocol conversion
+        // below rather than receiving a native body by assumption.
+        if is_sse && matches!(request.protocol, RelayProtocol::Anthropic | RelayProtocol::Gemini) {
+            return Ok(UpstreamReply::NativeSse(Box::new(NativeSseReply::new(
+                status,
+                Body::from_stream(response.bytes_stream()),
+                content_type_header,
+            ))));
+        }
+
+        let body = collect_bounded_body(self.response_header_timeout, response).await?;
+        let value = serde_json::from_slice::<Value>(&body)
+            .unwrap_or_else(|_| Value::String(String::from_utf8_lossy(&body).into_owned()));
+        if is_sse {
+            return Ok(UpstreamReply::Sse(parse_sse_events(
+                &body,
+                self.sse_max_frame_bytes,
+            )?));
         }
         Ok(UpstreamReply::Json(value))
     }
+}
+
+async fn collect_bounded_body(
+    timeout: Duration,
+    response: reqwest::Response,
+) -> Result<axum::body::Bytes, RelayFailure> {
+    tokio::time::timeout(
+        timeout,
+        to_bytes(Body::from_stream(response.bytes_stream()), MAX_RESPONSE_BYTES),
+    )
+    .await
+    .map_err(|_| RelayFailure::Upstream)?
+    .map_err(|_| RelayFailure::Upstream)
 }
 
 /// Reproduces the current Go provider-boundary normalization for the two
@@ -370,34 +415,77 @@ fn normalize_token(raw: &str) -> &str {
     raw.strip_prefix("sk-").unwrap_or(raw)
 }
 
-fn parse_sse_events(body: &[u8]) -> Vec<RelaySseEvent> {
-    let text = String::from_utf8_lossy(body);
-    let mut events = Vec::new();
-    for frame in text.split("\n\n") {
-        let mut kind = None;
-        let mut data = String::new();
-        for line in frame.lines() {
-            if let Some(value) = line.strip_prefix("event:") {
-                kind = Some(value.trim().to_owned());
-            } else if let Some(value) = line.strip_prefix("data:") {
-                if !data.is_empty() {
-                    data.push('\n');
-                }
-                data.push_str(value.trim_start());
-            }
-        }
-        if data.is_empty() || data == "[DONE]" {
-            continue;
-        }
-        if let Ok(payload) = serde_json::from_str::<Value>(&data) {
-            events.push(RelaySseEvent { kind, payload });
-        }
+fn parse_sse_events(
+    body: &[u8],
+    max_frame_bytes: usize,
+) -> Result<Vec<RelaySseEvent>, RelayFailure> {
+    let frames = parse_sse_frames_rejecting_unterminated(body, max_frame_bytes)
+        .map_err(RelayFailure::Sse)?;
+    let events = json_events_from_frames(&frames).map_err(RelayFailure::Sse)?;
+    Ok(events.into_iter().map(relay_sse_event).collect())
+}
+
+fn relay_sse_event(event: JsonSseEvent) -> RelaySseEvent {
+    RelaySseEvent {
+        kind: event.event,
+        payload: event.payload,
     }
-    events
 }
 
 fn epoch_seconds() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_secs() as i64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RelayFailure, parse_sse_events};
+    use crate::migration_routes::sse::SseError;
+    use serde_json::json;
+
+    #[test]
+    fn postgres_parser_keeps_unknown_json_event_names_and_multiline_data() {
+        let events = parse_sse_events(
+            b"event: future_event\r\ndata: {\r\ndata: \"value\": 1}\r\n\r\ndata: [DONE]\r\n\r\n",
+            1024,
+        )
+        .expect("JSON SSE frames");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind.as_deref(), Some("future_event"));
+        assert_eq!(events[0].payload, json!({"value": 1}));
+    }
+
+    #[test]
+    fn postgres_parser_returns_typed_error_for_unrepresentable_metadata() {
+        let error = parse_sse_events(b"id: upstream-id\ndata: {}\n\n", 1024).unwrap_err();
+        assert_eq!(
+            error,
+            RelayFailure::Sse(SseError::UnsupportedMetadata {
+                frame: 0,
+                field: "id",
+            })
+        );
+    }
+
+    #[test]
+    fn postgres_parser_returns_typed_error_for_non_json_data() {
+        let error = parse_sse_events(b"data: plain text\n\n", 1024).unwrap_err();
+        assert_eq!(error, RelayFailure::Sse(SseError::InvalidJson { frame: 0 }));
+    }
+
+    #[test]
+    fn postgres_parser_rejects_an_unterminated_frame_instead_of_dropping_it() {
+        let error = parse_sse_events(b"data: {}\n", 1024).unwrap_err();
+        assert_eq!(error, RelayFailure::Sse(SseError::UnterminatedFrame));
+    }
+
+    #[test]
+    fn postgres_parser_enforces_independent_frame_limit() {
+        let error = parse_sse_events(b"data: 123456789\n\n", 5).unwrap_err();
+        assert!(matches!(
+            error,
+            RelayFailure::Sse(SseError::FrameTooLarge { limit: 5, .. })
+        ));
+    }
 }

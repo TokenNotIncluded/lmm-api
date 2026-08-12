@@ -97,6 +97,7 @@ export function AssistantKeyTool(props: {
   availableModels: string[]
   modelsLoading?: boolean
   developerAccessGranted: boolean
+  onKeyCreated?: () => void
   onContinueSetup: () => void
 }) {
   const { t } = useTranslation()
@@ -151,6 +152,7 @@ export function AssistantKeyTool(props: {
     try {
       const result = await createAssistantDefaultKey(name.trim(), group.trim())
       setCreated(result)
+      props.onKeyCreated?.()
       setConfirmOpen(false)
       toast.success(t('API key created'))
     } catch (error) {

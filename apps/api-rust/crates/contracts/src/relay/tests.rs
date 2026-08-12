@@ -423,15 +423,21 @@ fn responses_scalar_input_converts_to_one_user_message() {
 }
 
 #[test]
-fn unknown_request_fields_are_rejected_instead_of_silently_dropped() {
+fn chat_unknown_fields_reject_but_responses_wire_retains_them_for_preflight() {
     let chat = serde_json::from_str::<OpenAiChatRequest>(
         r#"{"model":"gpt-test","messages":[],"made_up":true}"#,
     );
     let responses = serde_json::from_str::<OpenAiResponsesRequest>(
         r#"{"model":"gpt-test","input":[],"made_up":true}"#,
-    );
+    )
+    .expect("Responses retains unknown fields");
     assert!(chat.is_err());
-    assert!(responses.is_err());
+    assert_eq!(responses.extra.get("made_up"), Some(&JsonData::Bool(true)));
+    assert!(matches!(
+        openai_responses_request_to_canonical(responses),
+        Err(RelayConvertError::UnsupportedFeature(error))
+            if error.path == "made_up" && error.feature == "unknown_field"
+    ));
 }
 
 #[test]
@@ -631,23 +637,24 @@ fn non_representable_request_fields_are_reported_or_rejected() {
     .expect("typed stateful Responses request");
     assert!(matches!(
         openai_responses_request_to_canonical(stateful),
-        Err(RelayConvertError::Unsupported(message)) if message.contains("stateful")
+        Err(RelayConvertError::UnsupportedFeature(error))
+            if error.code == ConversionUnsupportedFeature::CODE
+                && error.path == "previous_response_id"
+                && error.feature == "previous_response_id"
+                && !error.retryable
     ));
 
     let reasoning: OpenAiResponsesRequest = serde_json::from_str(
         r#"{"model":"gpt-test","input":[],"reasoning":{"effort":"high","summary":"auto"}}"#,
     )
-    .expect("typed reasoning request");
-    let converted = openai_responses_request_to_canonical(reasoning)
-        .expect("supported effort with reported summary loss");
-    assert_eq!(
-        converted.value.options.reasoning_effort.as_deref(),
-        Some("high")
-    );
-    assert_eq!(
-        converted.loss.dropped_fields,
-        ["reasoning.summary/mode/context"]
-    );
+        .expect("typed reasoning request");
+    assert!(matches!(
+        openai_responses_request_to_canonical(reasoning),
+        Err(RelayConvertError::UnsupportedFeature(error))
+            if error.feature == "reasoning_summary"
+                && error.path == "reasoning.summary"
+                && error.loss_code.as_deref() == Some("LOSS_OPAQUE_REASONING")
+    ));
 }
 
 #[test]
@@ -850,7 +857,7 @@ fn responses_failed_stream_reads_the_nested_response_error() {
 }
 
 #[test]
-fn nested_unknown_request_fields_are_rejected_and_tool_strict_is_preserved() {
+fn nested_unknown_request_fields_are_retained_then_rejected_by_cross_protocol_preflight() {
     for invalid in [
         r#"{"model":"gpt-test","messages":[{"role":"user","content":"hi","made_up":true}]}"#,
         r#"{"model":"gpt-test","messages":[],"tools":[{"type":"function","function":{"name":"f","parameters":{},"made_up":true}}]}"#,
@@ -861,7 +868,13 @@ fn nested_unknown_request_fields_are_rejected_and_tool_strict_is_preserved() {
         r#"{"model":"gpt-test","input":[{"type":"message","role":"user","content":"hi","made_up":true}]}"#,
         r#"{"model":"gpt-test","input":[],"tools":[{"type":"function","name":"f","parameters":{},"made_up":true}]}"#,
     ] {
-        assert!(serde_json::from_str::<OpenAiResponsesRequest>(invalid).is_err());
+        let request = serde_json::from_str::<OpenAiResponsesRequest>(invalid)
+            .expect("Responses retains nested extension");
+        assert!(matches!(
+            openai_responses_request_to_canonical(request),
+            Err(RelayConvertError::UnsupportedFeature(error))
+                if error.feature == "unknown_field"
+        ));
     }
 
     let source: OpenAiChatRequest = serde_json::from_str(
@@ -875,6 +888,96 @@ fn nested_unknown_request_fields_are_rejected_and_tool_strict_is_preserved() {
         .expect("Responses tool conversion")
         .value;
     assert_eq!(responses.tools[0].strict, Some(true));
+}
+
+#[test]
+fn responses_preflight_rejects_builtin_without_name_and_keeps_builtin_path() {
+    let request: OpenAiResponsesRequest = serde_json::from_str(
+        r#"{"model":"gpt-test","tools":[{"type":"web_search","search_context_size":"high"}]}"#,
+    )
+    .expect("built-in tool is retained without a function name");
+    let error = preflight_openai_responses_request_to_openai_chat(&request)
+        .expect_err("Chat cannot represent a built-in tool");
+    let RelayConvertError::UnsupportedFeature(error) = error else {
+        panic!("expected typed unsupported feature");
+    };
+    assert_eq!(error.code, ConversionUnsupportedFeature::CODE);
+    assert_eq!(error.feature, "builtin_web_search");
+    assert_eq!(error.path, "tools[0]");
+    assert_eq!(error.loss_code.as_deref(), Some("LOSS_BUILTIN_TOOL"));
+    assert!(!error.retryable);
+}
+
+#[test]
+fn responses_function_calls_match_parallel_results_by_exact_id_in_input_order() {
+    let request: OpenAiResponsesRequest = serde_json::from_str(
+        r#"{
+          "model":"gpt-test",
+          "input":[
+            {"type":"function_call","call_id":"call_a","name":"one","arguments":"{}"},
+            {"type":"function_call","call_id":"call_b","name":"two","arguments":"{}"},
+            {"type":"function_call_output","call_id":"call_b","output":"b"},
+            {"type":"function_call_output","call_id":"call_a","output":"a"}
+          ]
+        }"#,
+    )
+    .expect("parallel function calls");
+    assert!(openai_responses_request_to_canonical(request).is_ok());
+
+    let early: OpenAiResponsesRequest = serde_json::from_str(
+        r#"{"model":"gpt-test","input":[{"type":"function_call_output","call_id":"call_a","output":"a"},{"type":"function_call","call_id":"call_a","name":"one","arguments":"{}"}]}"#,
+    )
+    .expect("early result wire");
+    assert!(matches!(
+        openai_responses_request_to_canonical(early),
+        Err(RelayConvertError::UnsupportedFeature(error))
+            if error.path == "input[0].call_id"
+                && error.feature == "function_call_output_id"
+    ));
+}
+
+#[test]
+fn responses_unknown_content_and_custom_items_have_exact_typed_paths() {
+    let unknown: OpenAiResponsesRequest = serde_json::from_str(
+        r#"{"model":"gpt-test","input":[{"type":"message","role":"user","content":[{"type":"future_part","payload":true}]}]}"#,
+    )
+    .expect("future content part retained");
+    assert!(matches!(
+        openai_responses_request_to_canonical(unknown),
+        Err(RelayConvertError::UnsupportedFeature(error))
+            if error.path == "input[0].content[0]"
+                && error.feature == "unknown_content_part"
+    ));
+
+    let custom: OpenAiResponsesRequest = serde_json::from_str(
+        r#"{"model":"gpt-test","input":[{"type":"custom_tool_call","call_id":"custom_1","name":"run","arguments":"{}"}]}"#,
+    )
+    .expect("custom item retained");
+    assert!(matches!(
+        openai_responses_request_to_canonical(custom),
+        Err(RelayConvertError::UnsupportedFeature(error))
+            if error.path == "input[0]" && error.feature == "custom_tool"
+    ));
+}
+
+#[test]
+fn responses_unsupported_error_is_serializable_and_target_aware_without_body_text() {
+    let request: OpenAiResponsesRequest = serde_json::from_str(
+        r#"{"model":"gpt-test","tools":[{"type":"file_search"}]}"#,
+    )
+    .expect("built-in tool");
+    let error = preflight_openai_responses_request_for_target(&request, Protocol::Gemini)
+        .expect_err("Gemini target is not Chat-equivalent for this tool");
+    let RelayConvertError::UnsupportedFeature(error) = error else {
+        panic!("expected typed unsupported feature");
+    };
+    assert_eq!(error.target_format, "google_gemini_generate_content");
+    let serialized = serde_json::to_value(&error).expect("serializable feature error");
+    assert_eq!(serialized["code"], ConversionUnsupportedFeature::CODE);
+    assert_eq!(serialized["source_format"], "openai_responses");
+    assert_eq!(serialized["path"], "tools[0]");
+    assert_eq!(serialized["retryable"], false);
+    assert!(serialized.get("raw_body").is_none());
 }
 
 #[test]

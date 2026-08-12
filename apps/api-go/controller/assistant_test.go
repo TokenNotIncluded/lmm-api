@@ -45,7 +45,7 @@ func withAssistantSettings(t *testing.T, enabled bool, modelID string) {
 func TestPrepareAssistantRequestOwnsModelAndPrompt(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := setupTokenControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.AssistantLead{}, &model.AssistantProfileBucket{}))
+	require.NoError(t, db.AutoMigrate(&model.AssistantLead{}, &model.AssistantProfileBucket{}, &model.AssistantFirstQuestionStat{}))
 	withAssistantSettings(t, true, "server-owned-model")
 	originalServerAddress := system_setting.ServerAddress
 	system_setting.ServerAddress = "https://api.example.com/"
@@ -238,7 +238,7 @@ func mustAssistantJSON(t *testing.T, value any) []byte {
 func TestPrepareAssistantRequestCacheHitSkipsDuplicateIntentWrite(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := setupTokenControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.AssistantLead{}, &model.AssistantProfileBucket{}))
+	require.NoError(t, db.AutoMigrate(&model.AssistantLead{}, &model.AssistantProfileBucket{}, &model.AssistantFirstQuestionStat{}))
 	original := setting.GetAssistantSettings()
 	setting.SetAssistantEnabled(true)
 	setting.SetAssistantCacheEnabled(true)
@@ -259,20 +259,36 @@ func TestPrepareAssistantRequestCacheHitSkipsDuplicateIntentWrite(t *testing.T) 
 	storeAssistantCachedResponse(settings, key, http.StatusOK, []byte(`{"choices":[{"message":{"role":"assistant","content":"cached"}}]}`))
 
 	engine := gin.New()
+	downstreamCalls := 0
 	engine.POST("/api/assistant/chat", func(c *gin.Context) {
 		c.Set("id", 42)
 		PrepareAssistantRequest(c)
+	}, func(c *gin.Context) {
+		downstreamCalls++
+		c.Status(http.StatusNoContent)
 	})
-	request := httptest.NewRequest(http.MethodPost, "/api/assistant/chat", strings.NewReader(`{"message":"`+message+`"}`))
-	request.Header.Set("Content-Type", "application/json")
-	response := httptest.NewRecorder()
-	engine.ServeHTTP(response, request)
+	performRequest := func(body string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/api/assistant/chat", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		engine.ServeHTTP(response, request)
+		return response
+	}
+	response := performRequest(`{"message":"` + message + `"}`)
 
 	assert.Equal(t, http.StatusOK, response.Code)
 	assert.Equal(t, "HIT", response.Header().Get("X-LMM-Assistant-Cache"))
-	var count int64
-	require.NoError(t, db.Model(&model.AssistantLead{}).Count(&count).Error)
-	assert.Zero(t, count)
+	secondResponse := performRequest(`{"message":"  ` + message + `   "}`)
+	assert.Equal(t, http.StatusOK, secondResponse.Code)
+	assert.Equal(t, "HIT", secondResponse.Header().Get("X-LMM-Assistant-Cache"))
+	assert.Zero(t, downstreamCalls)
+
+	var intentCount int64
+	require.NoError(t, db.Model(&model.AssistantLead{}).Count(&intentCount).Error)
+	assert.Zero(t, intentCount)
+	var firstQuestion model.AssistantFirstQuestionStat
+	require.NoError(t, db.First(&firstQuestion).Error)
+	assert.EqualValues(t, 2, firstQuestion.Count)
 }
 
 func TestPrepareAssistantRequestRejectsUnsafeOrOversizedConversation(t *testing.T) {
@@ -397,6 +413,34 @@ func TestPrepareAssistantRequestRejectsOversizedMessage(t *testing.T) {
 	engine.ServeHTTP(response, request)
 	assert.Equal(t, http.StatusRequestEntityTooLarge, response.Code)
 	assert.Contains(t, response.Body.String(), "ASSISTANT_MESSAGE_TOO_LONG")
+}
+
+func TestPrepareAssistantRequestRejectsSinglePunctuationButAllowsShortText(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	withAssistantSettings(t, true, "assistant-model")
+	for _, test := range []struct {
+		message    string
+		wantStatus int
+		wantCode   string
+	}{
+		{message: "。", wantStatus: http.StatusBadRequest, wantCode: "ASSISTANT_SINGLE_PUNCTUATION"},
+		{message: "好", wantStatus: http.StatusNoContent},
+	} {
+		t.Run(test.message, func(t *testing.T) {
+			engine := gin.New()
+			engine.POST("/api/assistant/chat", PrepareAssistantRequest, func(c *gin.Context) {
+				c.Status(http.StatusNoContent)
+			})
+			request := httptest.NewRequest(http.MethodPost, "/api/assistant/chat", strings.NewReader(`{"message":"`+test.message+`"}`))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			engine.ServeHTTP(response, request)
+			assert.Equal(t, test.wantStatus, response.Code)
+			if test.wantCode != "" {
+				assert.Contains(t, response.Body.String(), test.wantCode)
+			}
+		})
+	}
 }
 
 func createAssistantKeyTestContext(t *testing.T, username string) (*gin.Context, *httptest.ResponseRecorder) {
@@ -831,6 +875,16 @@ func TestAssistantAgentToolCatalogueMatchesAccessLevel(t *testing.T) {
 	assert.False(t, l0Names["get_plan_offers"])
 	assert.False(t, l0Names["get_admin_server_config"])
 
+	l0Ready := assistantToolDefinitionsForContext(assistantUserContext{
+		AccessLevel:       "L0",
+		PaymentOfferState: assistantPaymentOfferReady,
+	})
+	l0ReadyNames := make(map[string]bool, len(l0Ready))
+	for _, definition := range l0Ready {
+		l0ReadyNames[definition.Function.Name] = true
+	}
+	assert.True(t, l0ReadyNames["get_plan_offers"])
+
 	l1 := assistantToolDefinitionsForContext(assistantUserContext{
 		AccessLevel:            "L1",
 		DeveloperAccessGranted: true,
@@ -855,6 +909,60 @@ func TestAssistantAgentToolCatalogueMatchesAccessLevel(t *testing.T) {
 	}
 	assert.Len(t, adminNames, len(assistantToolDefinitions()))
 	assert.True(t, adminNames["prepare_admin_pricing_change"])
+}
+
+func TestAssistantPaymentOffersUseProgressiveGateAndKeepRestrictions(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}, &model.DeveloperAccessRequest{}, &model.SubscriptionPlan{}))
+	user := model.User{
+		Username: "assistant-payment-gate-l0",
+		Email:    "customer@example.com",
+		Password: "password",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+		Group:    "default",
+	}
+	require.NoError(t, db.Create(&user).Error)
+	require.NoError(t, db.Create(&model.SubscriptionPlan{Title: "Starter", Enabled: true, PriceAmount: 5}).Error)
+	paymentSetting := operation_setting.GetPaymentSetting()
+	originalCompliance := paymentSetting.ComplianceConfirmed
+	originalTermsVersion := paymentSetting.ComplianceTermsVersion
+	paymentSetting.ComplianceConfirmed = true
+	paymentSetting.ComplianceTermsVersion = operation_setting.CurrentComplianceTermsVersion
+	t.Cleanup(func() {
+		paymentSetting.ComplianceConfirmed = originalCompliance
+		paymentSetting.ComplianceTermsVersion = originalTermsVersion
+	})
+
+	needsDetailsContext := &gin.Context{}
+	needsDetailsContext.Set("id", user.Id)
+	needsDetailsContext.Set(assistantUserContextKey, assistantUserContext{
+		AccessLevel:       "L0",
+		PaymentOfferState: assistantPaymentOfferNeedsDetails,
+	})
+	needsDetails := executeAssistantTool(needsDetailsContext, assistantOpenAIToolCall{Function: assistantOpenAIToolCallFunction{Name: "get_plan_offers"}})
+	assert.Equal(t, "payment_intent_required", needsDetails["status"])
+
+	readyContext := &gin.Context{}
+	readyContext.Set("id", user.Id)
+	readyContext.Set(assistantUserContextKey, assistantUserContext{
+		AccessLevel:       "L0",
+		PaymentOfferState: assistantPaymentOfferReady,
+	})
+	ready := executeAssistantTool(readyContext, assistantOpenAIToolCall{Function: assistantOpenAIToolCallFunction{Name: "get_plan_offers"}})
+	assert.Equal(t, true, ready["ok"])
+	assert.Equal(t, true, ready["checkout_available"])
+
+	blockedContext := &gin.Context{}
+	blockedContext.Set("id", user.Id)
+	blockedContext.Set(assistantUserContextKey, assistantUserContext{
+		AccessLevel:          "L0",
+		PaymentMethodsHidden: true,
+		PaymentOfferState:    assistantPaymentOfferReady,
+	})
+	blocked := executeAssistantTool(blockedContext, assistantOpenAIToolCall{Function: assistantOpenAIToolCallFunction{Name: "get_plan_offers"}})
+	assert.Equal(t, "payment_restricted", blocked["status"])
+	assert.NotEqual(t, true, blocked["checkout_available"])
 }
 
 func TestAssistantL1RecommendationActionUsesActorAndIsAttachedToResponse(t *testing.T) {

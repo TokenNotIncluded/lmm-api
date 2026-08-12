@@ -359,6 +359,19 @@ func AdminGetAssistantIntentSummary(c *gin.Context) {
 	common.ApiSuccess(c, summary)
 }
 
+func AdminGetAssistantFirstQuestionSummary(c *gin.Context) {
+	since, ok := assistantSummarySince(c, "ASSISTANT_FIRST_QUESTION_DAYS_INVALID")
+	if !ok {
+		return
+	}
+	summary, err := model.ListAssistantFirstQuestionSummary(since)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, summary)
+}
+
 func AdminGetAssistantProfileSummary(c *gin.Context) {
 	since, ok := assistantSummarySince(c, "ASSISTANT_PROFILE_DAYS_INVALID")
 	if !ok {

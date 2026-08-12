@@ -32,7 +32,8 @@ func TestSecurityPolicySeparatesPublicAndAdminRuleDetails(t *testing.T) {
 	require.Equal(t, http.StatusOK, publicRecorder.Code)
 	assert.NotContains(t, publicRecorder.Body.String(), "do not publish this matcher")
 	assert.Contains(t, publicRecorder.Body.String(), "prompt_injection")
-	assert.Contains(t, publicRecorder.Body.String(), "violation_fee.grok.csam")
+	assert.Contains(t, publicRecorder.Body.String(), "violation_fee.usage_policy")
+	assert.NotContains(t, publicRecorder.Body.String(), "Grok / xAI upstream")
 	assert.Contains(t, publicRecorder.Body.String(), setting.AdvancedSecurityPolicyReferenceDate)
 
 	adminRecorder := httptest.NewRecorder()

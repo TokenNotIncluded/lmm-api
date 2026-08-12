@@ -26,7 +26,7 @@ type LmmBrandMarkProps = SVGProps<SVGSVGElement> & {
   title?: string
 }
 
-/** A literal L-shaped route ending in one API node. */
+/** An abstract woven mark for the forge: two paths crossing into one system. */
 export function LmmBrandMark({
   className,
   title,
@@ -48,20 +48,28 @@ export function LmmBrandMark({
         y='5'
         width='46'
         height='46'
-        rx='14'
+        rx='16'
         fill='var(--forge-brand-mark-surface)'
         stroke='var(--forge-brand-mark-ink)'
         strokeWidth='2'
       />
       <path
-        d='M18 16v20h20'
+        d='M13 34c5-10 10-15 16-15 5 0 10 4 14 12'
         fill='none'
         stroke='var(--forge-brand-mark-ink)'
-        strokeWidth='4'
+        strokeWidth='4.5'
         strokeLinecap='round'
         strokeLinejoin='round'
       />
-      <circle cx='39' cy='36' r='5' fill='var(--forge-brand-mark-accent)' />
+      <path
+        d='M13 22c5 10 10 15 16 15 5 0 10-4 14-12'
+        fill='none'
+        stroke='var(--forge-brand-mark-accent)'
+        strokeWidth='4.5'
+        strokeLinecap='round'
+        strokeLinejoin='round'
+      />
+      <circle cx='13' cy='28' r='3' fill='var(--forge-brand-mark-ink)' />
     </svg>
   )
 }

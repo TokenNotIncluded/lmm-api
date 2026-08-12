@@ -11,6 +11,8 @@ use std::{
     fmt,
 };
 
+use serde::{Deserialize, Serialize};
+
 use super::{
     CanonicalContent, CanonicalMessage, CanonicalRequest, CanonicalResponse, CanonicalStreamEvent,
     CanonicalTool, CanonicalToolChoice, ClaudeContentBlock, ClaudeMessage, ClaudeRequest,
@@ -45,10 +47,10 @@ pub enum RelayConvertError {
 /// sent.  `path` always points into the source envelope (for example,
 /// `tools[2]` or `input[1].content[0]`).  No request body or provider value is
 /// included in this type or its display implementation.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ConversionUnsupportedFeature {
     /// Stable machine-readable error code.
-    pub code: &'static str,
+    pub code: String,
     /// Source wire format identifier.
     pub source_format: String,
     /// Target wire format identifier.
@@ -96,6 +98,429 @@ impl From<serde_json::Error> for RelayConvertError {
     fn from(value: serde_json::Error) -> Self {
         Self::Json(value)
     }
+}
+
+const OPENAI_RESPONSES_FORMAT: &str = "openai_responses";
+const OPENAI_CHAT_FORMAT: &str = "openai_chat";
+
+fn unsupported_responses_feature(
+    feature: impl Into<String>,
+    path: impl Into<String>,
+    loss_code: Option<&str>,
+) -> RelayConvertError {
+    RelayConvertError::UnsupportedFeature(ConversionUnsupportedFeature {
+        code: ConversionUnsupportedFeature::CODE.to_owned(),
+        source_format: OPENAI_RESPONSES_FORMAT.to_owned(),
+        target_format: OPENAI_CHAT_FORMAT.to_owned(),
+        feature: feature.into(),
+        path: path.into(),
+        loss_code: loss_code.map(str::to_owned),
+        retryable: false,
+    })
+}
+
+fn unsupported_responses_extra(path: impl Into<String>) -> RelayConvertError {
+    unsupported_responses_feature("unknown_field", path, None)
+}
+
+fn first_extra_path(
+    base: &str,
+    extra: &BTreeMap<String, JsonData>,
+) -> Option<RelayConvertError> {
+    extra.keys().next().map(|key| {
+        let path = if base.is_empty() {
+            key.clone()
+        } else {
+            format!("{base}.{key}")
+        };
+        unsupported_responses_extra(path)
+    })
+}
+
+/// Pre-scans an OpenAI Responses request before any cross-protocol request is
+/// emitted.  Every feature which the OpenAI Chat representation cannot carry
+/// is rejected with a stable feature/path pair; no lossy `LossReport` entry is
+/// allowed to reach the upstream boundary.
+pub fn preflight_openai_responses_request_to_openai_chat(
+    request: &OpenAiResponsesRequest,
+) -> Result<(), RelayConvertError> {
+    if let Some(error) = first_extra_path("", &request.extra) {
+        return Err(error);
+    }
+    for (field, value) in [
+        ("conversation", request.conversation.as_ref()),
+        ("previous_response_id", request.previous_response_id.as_ref()),
+        ("prompt", request.prompt.as_ref()),
+        ("context_management", request.context_management.as_ref()),
+    ] {
+        if value.is_some() {
+            let feature = match field {
+                "conversation" => "stateful_conversation",
+                "previous_response_id" => "previous_response_id",
+                "prompt" => "prompt_template",
+                _ => "context_management",
+            };
+            let loss_code = match field {
+                "conversation" | "previous_response_id" | "context_management" => {
+                    Some("LOSS_STATEFUL_CONTEXT")
+                }
+                _ => None,
+            };
+            return Err(unsupported_responses_feature(feature, field, loss_code));
+        }
+    }
+    for (field, value) in [
+        ("include", request.include.as_ref()),
+        ("moderation", request.moderation.as_ref()),
+        ("max_tool_calls", request.max_tool_calls.as_ref()),
+        ("client_metadata", request.client_metadata.as_ref()),
+    ] {
+        if value.is_some() {
+            return Err(unsupported_responses_feature(
+                "responses_request_option",
+                field,
+                None,
+            ));
+        }
+    }
+    if let Some(reasoning) = request.reasoning.as_ref() {
+        if let Some(error) = first_extra_path("reasoning", &reasoning.extra) {
+            return Err(error);
+        }
+        for (field, value) in [
+            ("summary", reasoning.summary.as_ref()),
+            ("mode", reasoning.mode.as_ref()),
+            ("context", reasoning.context.as_ref()),
+        ] {
+            if value.is_some() {
+                return Err(unsupported_responses_feature(
+                    "reasoning_summary",
+                    format!("reasoning.{field}"),
+                    Some("LOSS_OPAQUE_REASONING"),
+                ));
+            }
+        }
+    }
+    if let Some(JsonData::String(_)) = request.prompt_cache_key.as_ref() {
+        // The string form is carried by Chat's prompt-cache extension.
+    } else if request.prompt_cache_key.is_some() {
+        return Err(unsupported_responses_feature(
+            "prompt_cache_key",
+            "prompt_cache_key",
+            Some("LOSS_CACHE_CONTROL"),
+        ));
+    }
+    for (index, tool) in request.tools.iter().enumerate() {
+        preflight_responses_tool(tool, index)?;
+    }
+    let mut seen_call_ids = BTreeSet::new();
+    let mut outstanding_call_ids = BTreeSet::new();
+    match request.input.as_ref() {
+        None | Some(ResponsesInput::String(_)) => {}
+        Some(ResponsesInput::Json(_)) => {
+            return Err(unsupported_responses_feature(
+                "input_shape",
+                "input",
+                None,
+            ));
+        }
+        Some(ResponsesInput::Items(items)) => {
+            for (index, item) in items.iter().enumerate() {
+                preflight_responses_input_item(
+                    item,
+                    index,
+                    &mut seen_call_ids,
+                    &mut outstanding_call_ids,
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn format_for_protocol(protocol: Protocol) -> &'static str {
+    match protocol {
+        Protocol::OpenAi => OPENAI_CHAT_FORMAT,
+        Protocol::OpenAiResponses => OPENAI_RESPONSES_FORMAT,
+        Protocol::Claude => "anthropic_messages",
+        Protocol::Gemini => "google_gemini_generate_content",
+    }
+}
+
+fn retarget_unsupported_error(
+    error: RelayConvertError,
+    target: Protocol,
+) -> RelayConvertError {
+    retarget_unsupported_error_format(error, format_for_protocol(target))
+}
+
+fn retarget_unsupported_error_format(
+    error: RelayConvertError,
+    target_format: &str,
+) -> RelayConvertError {
+    match error {
+        RelayConvertError::UnsupportedFeature(mut detail) => {
+            detail.target_format = target_format.to_owned();
+            RelayConvertError::UnsupportedFeature(detail)
+        }
+        other => other,
+    }
+}
+
+/// Runs the Responses cross-protocol preflight with an explicit target.  A
+/// native Responses route is already raw passthrough and therefore has no
+/// conversion feature to reject.  The current canonical request subset uses
+/// the same strict representability scan for non-native targets, while the
+/// returned target format remains the actual selected protocol.
+pub fn preflight_openai_responses_request_for_target(
+    request: &OpenAiResponsesRequest,
+    target: Protocol,
+) -> Result<(), RelayConvertError> {
+    if target == Protocol::OpenAiResponses {
+        return Ok(());
+    }
+    preflight_openai_responses_request_to_openai_chat(request)
+        .map_err(|error| retarget_unsupported_error(error, target))
+}
+
+/// Runs the same scanner for a provider-neutral canonical IR target.  The IR
+/// conversion boundary is stricter than native passthrough, but its errors do
+/// not claim that Chat was the selected destination.
+pub fn preflight_openai_responses_request_for_canonical(
+    request: &OpenAiResponsesRequest,
+) -> Result<(), RelayConvertError> {
+    preflight_openai_responses_request_to_openai_chat(request)
+        .map_err(|error| retarget_unsupported_error_format(error, "provider_neutral_ir"))
+}
+
+fn preflight_responses_tool(
+    tool: &ResponsesTool,
+    index: usize,
+) -> Result<(), RelayConvertError> {
+    let path = format!("tools[{index}]");
+    match tool.kind.as_str() {
+        "function" => {
+            if tool.name.as_deref().is_none_or(|name| name.trim().is_empty()) {
+                return Err(unsupported_responses_feature(
+                    "function_tool_name",
+                    format!("{path}.name"),
+                    None,
+                ));
+            }
+            if let Some(error) = first_extra_path(&path, &tool.extra) {
+                return Err(error);
+            }
+        }
+        "custom" | "custom_tool" => {
+            return Err(unsupported_responses_feature(
+                "custom_tool",
+                path,
+                Some("LOSS_CUSTOM_TOOL"),
+            ));
+        }
+        "web_search" | "web_search_preview" => {
+            return Err(unsupported_responses_feature(
+                "builtin_web_search",
+                path,
+                Some("LOSS_BUILTIN_TOOL"),
+            ));
+        }
+        "file_search" => {
+            return Err(unsupported_responses_feature(
+                "builtin_file_search",
+                path,
+                Some("LOSS_BUILTIN_TOOL"),
+            ));
+        }
+        "code_interpreter" => {
+            return Err(unsupported_responses_feature(
+                "builtin_code_execution",
+                path,
+                Some("LOSS_BUILTIN_TOOL"),
+            ));
+        }
+        "mcp" => {
+            return Err(unsupported_responses_feature(
+                "mcp",
+                path,
+                Some("LOSS_BUILTIN_TOOL"),
+            ));
+        }
+        "computer_use" | "computer_use_preview" => {
+            return Err(unsupported_responses_feature(
+                "computer_use",
+                path,
+                Some("LOSS_BUILTIN_TOOL"),
+            ));
+        }
+        "image_generation"
+        | "hosted_shell"
+        | "apply_patch"
+        | "skills"
+        | "tool_search"
+        | "programmatic_tool_calling" => {
+            return Err(unsupported_responses_feature(
+                format!("builtin_{}", tool.kind),
+                path,
+                Some("LOSS_BUILTIN_TOOL"),
+            ));
+        }
+        _ => {
+            return Err(unsupported_responses_feature(
+                "unknown_tool_type",
+                path,
+                None,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn preflight_responses_input_item(
+    item: &ResponsesInputItem,
+    index: usize,
+    seen_call_ids: &mut BTreeSet<String>,
+    outstanding_call_ids: &mut BTreeSet<String>,
+) -> Result<(), RelayConvertError> {
+    let path = format!("input[{index}]");
+    match item.kind.as_deref() {
+        None | Some("message") => {
+            if let Some(role) = item.role.as_deref() {
+                if !matches!(role, "system" | "developer" | "user" | "assistant" | "tool") {
+                    return Err(unsupported_responses_feature(
+                        "unknown_input_role",
+                        format!("{path}.role"),
+                        None,
+                    ));
+                }
+            }
+            if let Some(error) = first_extra_path(&path, &item.extra) {
+                return Err(error);
+            }
+            preflight_responses_content(item.content.as_ref(), &path)?;
+        }
+        Some("function_call") => {
+            let Some(call_id) = item.call_id.as_deref().filter(|id| !id.trim().is_empty()) else {
+                return Err(unsupported_responses_feature(
+                    "function_call_id",
+                    format!("{path}.call_id"),
+                    Some("LOSS_TOOL_CALL_ID"),
+                ));
+            };
+            if item
+                .name
+                .as_deref()
+                .is_none_or(|name| name.trim().is_empty())
+            {
+                return Err(unsupported_responses_feature(
+                    "function_call_name",
+                    format!("{path}.name"),
+                    None,
+                ));
+            }
+            if !seen_call_ids.insert(call_id.to_owned()) {
+                return Err(unsupported_responses_feature(
+                    "duplicate_function_call_id",
+                    format!("{path}.call_id"),
+                    Some("LOSS_TOOL_CALL_ID"),
+                ));
+            }
+            outstanding_call_ids.insert(call_id.to_owned());
+            if let Some(error) = first_extra_path(&path, &item.extra) {
+                return Err(error);
+            }
+        }
+        Some("function_call_output") => {
+            let Some(call_id) = item.call_id.as_deref().filter(|id| !id.trim().is_empty()) else {
+                return Err(unsupported_responses_feature(
+                    "function_call_output_id",
+                    format!("{path}.call_id"),
+                    Some("LOSS_TOOL_CALL_ID"),
+                ));
+            };
+            if !outstanding_call_ids.remove(call_id) {
+                return Err(unsupported_responses_feature(
+                    "function_call_output_id",
+                    format!("{path}.call_id"),
+                    Some("LOSS_TOOL_CALL_ID"),
+                ));
+            }
+            if let Some(error) = first_extra_path(&path, &item.extra) {
+                return Err(error);
+            }
+        }
+        Some("custom_tool_call") | Some("custom_tool_call_output") => {
+            return Err(unsupported_responses_feature(
+                "custom_tool",
+                path,
+                Some("LOSS_CUSTOM_TOOL"),
+            ));
+        }
+        Some(kind) => {
+            return Err(unsupported_responses_feature(
+                format!("responses_input_{kind}"),
+                path,
+                None,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn preflight_responses_content(
+    content: Option<&StringOrParts<ResponsesContentPart>>,
+    path: &str,
+) -> Result<(), RelayConvertError> {
+    let Some(content) = content else {
+        return Ok(());
+    };
+    let StringOrParts::Parts(parts) = content else {
+        return Ok(());
+    };
+    for (index, part) in parts.iter().enumerate() {
+        let part_path = format!("{path}.content[{index}]");
+        match part.kind.as_str() {
+            "input_text" | "output_text" | "text" => {
+                if part.text.is_none() {
+                    return Err(unsupported_responses_feature(
+                        "text_content",
+                        format!("{part_path}.text"),
+                        None,
+                    ));
+                }
+                if let Some(error) = first_extra_path(&part_path, &part.extra) {
+                    return Err(error);
+                }
+            }
+            "input_image" => {
+                if part.image_url.as_deref().is_none_or(str::is_empty) {
+                    return Err(unsupported_responses_feature(
+                        "image_content",
+                        format!("{part_path}.image_url"),
+                        None,
+                    ));
+                }
+                if let Some(error) = first_extra_path(&part_path, &part.extra) {
+                    return Err(error);
+                }
+            }
+            "input_file" | "input_audio" | "input_video" => {
+                return Err(unsupported_responses_feature(
+                    format!("{kind}_content", kind = part.kind),
+                    part_path,
+                    None,
+                ));
+            }
+            _ => {
+                return Err(unsupported_responses_feature(
+                    "unknown_content_part",
+                    part_path,
+                    None,
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 pub fn openai_chat_request_to_canonical(
@@ -640,24 +1065,7 @@ pub fn openai_responses_request_to_canonical(
     if request.model.trim().is_empty() {
         return Err(RelayConvertError::Missing("model"));
     }
-    if request.conversation.is_some()
-        || request.previous_response_id.is_some()
-        || request.prompt.is_some()
-        || request.context_management.is_some()
-    {
-        return Err(RelayConvertError::Unsupported(
-            "stateful Responses fields (conversation, previous_response_id, prompt, context_management) cannot be converted to Chat".to_owned(),
-        ));
-    }
-    if request.include.is_some()
-        || request.moderation.is_some()
-        || request.max_tool_calls.is_some()
-        || request.client_metadata.is_some()
-    {
-        return Err(RelayConvertError::Unsupported(
-            "Responses include, moderation, max_tool_calls, and client_metadata have no Chat equivalent".to_owned(),
-        ));
-    }
+    preflight_openai_responses_request_for_canonical(&request)?;
 
     let mut messages = Vec::new();
     let input = match request.input {
@@ -670,50 +1078,98 @@ pub fn openai_responses_request_to_canonical(
             Vec::new()
         }
         Some(ResponsesInput::Items(items)) => items,
+        Some(ResponsesInput::Json(_)) => {
+            return Err(unsupported_responses_feature(
+                "input_shape",
+                "input",
+                None,
+            ));
+        }
     };
-    for item in input {
+    for (item_index, item) in input.into_iter().enumerate() {
         match item.kind.as_deref() {
-            Some("function_call" | "custom_tool_call") => messages.push(CanonicalMessage {
+            Some("function_call") => messages.push(CanonicalMessage {
                 role: Role::Assistant,
                 parts: vec![CanonicalContent::ToolCall {
-                    id: item.call_id.unwrap_or_default(),
+                    id: item.call_id.ok_or_else(|| {
+                        unsupported_responses_feature(
+                            "function_call_id",
+                            format!("input[{item_index}].call_id"),
+                            Some("LOSS_TOOL_CALL_ID"),
+                        )
+                    })?,
                     name: item
                         .name
-                        .ok_or(RelayConvertError::Missing("input[].name"))?,
+                        .ok_or_else(|| {
+                            unsupported_responses_feature(
+                                "function_call_name",
+                                format!("input[{item_index}].name"),
+                                None,
+                            )
+                        })?,
                     arguments: item.arguments.unwrap_or_default(),
                 }],
             }),
-            Some("function_call_output" | "custom_tool_call_output") => {
+            Some("function_call_output") => {
                 messages.push(CanonicalMessage {
                     role: Role::Tool,
                     parts: vec![CanonicalContent::ToolResult {
-                        id: item.call_id.unwrap_or_default(),
+                        id: item.call_id.ok_or_else(|| {
+                            unsupported_responses_feature(
+                                "function_call_output_id",
+                                format!("input[{item_index}].call_id"),
+                                Some("LOSS_TOOL_CALL_ID"),
+                            )
+                        })?,
                         name: None,
                         output: item.output.unwrap_or(JsonData::String(String::new())),
                     }],
                 });
             }
-            Some(kind) if kind != "message" => {
-                return Err(RelayConvertError::Unsupported(format!(
-                    "unsupported Responses input item type {kind:?}"
-                )));
-            }
-            _ => messages.push(CanonicalMessage {
+            Some("message") => messages.push(CanonicalMessage {
                 role: role_from_wire(item.role.as_deref().unwrap_or("user"))?,
                 parts: responses_content_to_canonical(item.content)?,
             }),
+            None => messages.push(CanonicalMessage {
+                role: role_from_wire(item.role.as_deref().unwrap_or("user"))?,
+                parts: responses_content_to_canonical(item.content)?,
+            }),
+            Some("custom_tool_call" | "custom_tool_call_output") => {
+                return Err(unsupported_responses_feature(
+                    "custom_tool",
+                    format!("input[{item_index}]"),
+                    Some("LOSS_CUSTOM_TOOL"),
+                ));
+            }
+            Some(kind) => {
+                return Err(unsupported_responses_feature(
+                    format!("responses_input_{kind}"),
+                    format!("input[{item_index}]"),
+                    None,
+                ));
+            }
         }
     }
     let tools = request
         .tools
         .into_iter()
-        .map(|tool| CanonicalTool {
-            name: tool.name,
-            description: tool.description,
-            input_schema: tool.parameters.unwrap_or(JsonData::Null),
-            strict: tool.strict,
+        .enumerate()
+        .map(|(index, tool)| {
+            let name = tool.name.ok_or_else(|| {
+                unsupported_responses_feature(
+                    "function_tool_name",
+                    format!("tools[{index}].name"),
+                    None,
+                )
+            })?;
+            Ok(CanonicalTool {
+                name,
+                description: tool.description,
+                input_schema: tool.parameters.unwrap_or(JsonData::Null),
+                strict: tool.strict,
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, RelayConvertError>>()?;
     let tool_choice = request
         .tool_choice
         .as_ref()
@@ -724,11 +1180,6 @@ pub fn openai_responses_request_to_canonical(
         .reasoning
         .as_ref()
         .and_then(|value| value.effort.clone());
-    if request.reasoning.as_ref().is_some_and(|value| {
-        value.summary.is_some() || value.mode.is_some() || value.context.is_some()
-    }) {
-        loss.dropped_fields.push("reasoning.summary/mode/context");
-    }
     let prompt_cache_key = match request.prompt_cache_key {
         Some(JsonData::String(value)) => Some(value),
         Some(_) => {
@@ -803,6 +1254,7 @@ pub fn canonical_request_to_openai_responses(
                     .to_owned(),
                     text: Some(text),
                     image_url: None,
+                    extra: BTreeMap::new(),
                 }),
                 CanonicalContent::Image { url, detail } => {
                     if detail.is_some() {
@@ -812,6 +1264,7 @@ pub fn canonical_request_to_openai_responses(
                         kind: "input_image".to_owned(),
                         text: None,
                         image_url: Some(url),
+                        extra: BTreeMap::new(),
                     });
                 }
                 CanonicalContent::ToolCall {
@@ -826,6 +1279,7 @@ pub fn canonical_request_to_openai_responses(
                     name: Some(name),
                     arguments: Some(arguments),
                     output: None,
+                    extra: BTreeMap::new(),
                 }),
                 CanonicalContent::ToolResult {
                     id,
@@ -840,6 +1294,7 @@ pub fn canonical_request_to_openai_responses(
                         name: None,
                         arguments: None,
                         output: Some(output),
+                        extra: BTreeMap::new(),
                     });
                 }
                 CanonicalContent::Reasoning { .. } => {
@@ -880,6 +1335,7 @@ pub fn canonical_request_to_openai_responses(
                     name: None,
                     arguments: None,
                     output: None,
+                    extra: BTreeMap::new(),
                 },
             );
         }
@@ -889,10 +1345,11 @@ pub fn canonical_request_to_openai_responses(
         .into_iter()
         .map(|tool| ResponsesTool {
             kind: "function".to_owned(),
-            name: tool.name,
+            name: Some(tool.name),
             description: tool.description,
             parameters: Some(tool.input_schema),
             strict: tool.strict,
+            extra: BTreeMap::new(),
         })
         .collect();
     Ok(Converted {
@@ -912,6 +1369,7 @@ pub fn canonical_request_to_openai_responses(
                 summary: None,
                 mode: None,
                 context: None,
+                extra: BTreeMap::new(),
             }),
             text: chat_format_to_responses_text(options.response_format),
             parallel_tool_calls: options.parallel_tool_calls,
@@ -934,6 +1392,7 @@ pub fn canonical_request_to_openai_responses(
             moderation: None,
             max_tool_calls: None,
             client_metadata: None,
+            extra: BTreeMap::new(),
         },
         loss,
     })
@@ -978,11 +1437,11 @@ pub fn openai_chat_response_to_canonical(
     }
     if !has_anthropic_parts {
         for call in message.tool_calls {
-        output.push(CanonicalContent::ToolCall {
-            id: call.id,
-            name: call.function.name,
-            arguments: call.function.arguments,
-        });
+            output.push(CanonicalContent::ToolCall {
+                id: call.id,
+                name: call.function.name,
+                arguments: call.function.arguments,
+            });
             if let Some(state) = provider_state_from_extra(call.extra_content)? {
                 output.push(CanonicalContent::ProviderState { state });
             }
@@ -1004,8 +1463,9 @@ pub fn openai_chat_response_to_canonical(
 pub fn openai_responses_response_to_canonical(
     response: ResponsesResponse,
 ) -> Result<Converted<CanonicalResponse>, RelayConvertError> {
+    preflight_openai_responses_response_for_canonical(&response)?;
     let mut output = Vec::new();
-    for item in &response.output {
+    for (item_index, item) in response.output.iter().enumerate() {
         match item.kind.as_str() {
             "message" => {
                 output.extend(
@@ -1026,15 +1486,23 @@ pub fn openai_responses_response_to_canonical(
                         text: part.text.clone(),
                     }),
             ),
-            "function_call" | "custom_tool_call" => output.push(CanonicalContent::ToolCall {
-                id: item.call_id.clone().unwrap_or_else(|| item.id.clone()),
+            "function_call" => output.push(CanonicalContent::ToolCall {
+                id: item.call_id.clone().ok_or_else(|| {
+                    unsupported_responses_feature(
+                        "function_call_id",
+                        format!("output[{item_index}].call_id"),
+                        Some("LOSS_TOOL_CALL_ID"),
+                    )
+                })?,
                 name: item.name.clone().unwrap_or_default(),
                 arguments: item.arguments.clone().unwrap_or_default(),
             }),
             kind => {
-                return Err(RelayConvertError::Unsupported(format!(
-                    "unsupported Responses output item type {kind:?}"
-                )));
+                return Err(unsupported_responses_feature(
+                    format!("responses_output_{kind}"),
+                    format!("output[{item_index}]"),
+                    None,
+                ));
             }
         }
     }
@@ -1069,6 +1537,127 @@ pub fn openai_responses_response_to_canonical(
         },
         loss: LossReport::default(),
     })
+}
+
+/// Pre-scans a Responses response before converting it to Chat.  Native
+/// Responses HTTP relays do not call this function: they retain the raw body
+/// and therefore preserve future fields and event kinds unchanged.
+pub fn preflight_openai_responses_response_to_openai_chat(
+    response: &ResponsesResponse,
+) -> Result<(), RelayConvertError> {
+    if let Some(error) = first_extra_path("", &response.extra) {
+        return Err(error);
+    }
+    for (index, item) in response.output.iter().enumerate() {
+        let path = format!("output[{index}]");
+        match item.kind.as_str() {
+            "message" => {
+                if item.summary.is_some() {
+                    return Err(unsupported_responses_feature(
+                        "message_summary",
+                        format!("{path}.summary"),
+                        Some("LOSS_OPAQUE_REASONING"),
+                    ));
+                }
+                preflight_responses_output_content(item.content.as_ref(), &path)?;
+                if let Some(error) = first_extra_path(&path, &item.extra) {
+                    return Err(error);
+                }
+            }
+            "reasoning" => {
+                preflight_responses_output_content(item.content.as_ref(), &path)?;
+                preflight_responses_output_content(item.summary.as_ref(), &path)?;
+                if let Some(error) = first_extra_path(&path, &item.extra) {
+                    return Err(error);
+                }
+            }
+            "function_call" => {
+                if item.call_id.as_deref().is_none_or(str::is_empty) {
+                    return Err(unsupported_responses_feature(
+                        "function_call_id",
+                        format!("{path}.call_id"),
+                        Some("LOSS_TOOL_CALL_ID"),
+                    ));
+                }
+                if item.name.as_deref().is_none_or(str::is_empty) {
+                    return Err(unsupported_responses_feature(
+                        "function_call_name",
+                        format!("{path}.name"),
+                        None,
+                    ));
+                }
+                if let Some(error) = first_extra_path(&path, &item.extra) {
+                    return Err(error);
+                }
+            }
+            "custom_tool_call" => {
+                return Err(unsupported_responses_feature(
+                    "custom_tool",
+                    path,
+                    Some("LOSS_CUSTOM_TOOL"),
+                ));
+            }
+            _ => {
+                return Err(unsupported_responses_feature(
+                    "unknown_output_item_type",
+                    path,
+                    None,
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Target-aware response preflight counterpart to
+/// [`preflight_openai_responses_request_for_target`].
+pub fn preflight_openai_responses_response_for_target(
+    response: &ResponsesResponse,
+    target: Protocol,
+) -> Result<(), RelayConvertError> {
+    if target == Protocol::OpenAiResponses {
+        return Ok(());
+    }
+    preflight_openai_responses_response_to_openai_chat(response)
+        .map_err(|error| retarget_unsupported_error(error, target))
+}
+
+/// Provider-neutral IR response preflight with an explicit target label.
+pub fn preflight_openai_responses_response_for_canonical(
+    response: &ResponsesResponse,
+) -> Result<(), RelayConvertError> {
+    preflight_openai_responses_response_to_openai_chat(response)
+        .map_err(|error| retarget_unsupported_error_format(error, "provider_neutral_ir"))
+}
+
+fn preflight_responses_output_content(
+    content: Option<&Vec<super::ResponsesOutputContent>>,
+    path: &str,
+) -> Result<(), RelayConvertError> {
+    let Some(content) = content else {
+        return Ok(());
+    };
+    for (index, part) in content.iter().enumerate() {
+        let part_path = format!("{path}.content[{index}]");
+        if !matches!(part.kind.as_str(), "output_text" | "summary_text" | "text") {
+            return Err(unsupported_responses_feature(
+                "unknown_output_content_part",
+                part_path,
+                None,
+            ));
+        }
+        if part.text.is_none() {
+            return Err(unsupported_responses_feature(
+                "text_content",
+                format!("{part_path}.text"),
+                None,
+            ));
+        }
+        if let Some(error) = first_extra_path(&part_path, &part.extra) {
+            return Err(error);
+        }
+    }
+    Ok(())
 }
 
 pub fn canonical_response_to_openai_chat(
@@ -1237,6 +1826,7 @@ pub fn canonical_response_to_openai_responses(
                         kind: "output_text".to_owned(),
                         text,
                         annotations: Some(Vec::new()),
+                        extra: BTreeMap::new(),
                     }]),
                     summary: None,
                     quality: String::new(),
@@ -1244,6 +1834,7 @@ pub fn canonical_response_to_openai_responses(
                     call_id: None,
                     name: None,
                     arguments: None,
+                    extra: BTreeMap::new(),
                 });
                 message_index += 1;
             }
@@ -1257,6 +1848,7 @@ pub fn canonical_response_to_openai_responses(
                         kind: "summary_text".to_owned(),
                         text,
                         annotations: None,
+                        extra: BTreeMap::new(),
                     }]),
                     summary: None,
                     quality: String::new(),
@@ -1264,6 +1856,7 @@ pub fn canonical_response_to_openai_responses(
                     call_id: None,
                     name: None,
                     arguments: None,
+                    extra: BTreeMap::new(),
                 });
                 reasoning_index += 1;
             }
@@ -1289,6 +1882,7 @@ pub fn canonical_response_to_openai_responses(
                 call_id: Some(id),
                 name: Some(name),
                 arguments: Some(arguments),
+                extra: BTreeMap::new(),
             }),
             CanonicalContent::Image { .. } => {
                 record_dropped(&mut loss, "output[].image");
@@ -1339,6 +1933,7 @@ pub fn canonical_response_to_openai_responses(
                 _ => None,
             },
             error: None,
+            extra: BTreeMap::new(),
         },
         loss,
     }
@@ -4853,6 +5448,7 @@ pub fn response_events_to_responses(events: &[CanonicalStreamEvent]) -> Vec<Resp
                             kind: "output_text".to_owned(),
                             text: delta.clone(),
                             annotations: Some(Vec::new()),
+                            extra: BTreeMap::new(),
                         });
                     }
                 }
@@ -4881,6 +5477,7 @@ pub fn response_events_to_responses(events: &[CanonicalStreamEvent]) -> Vec<Resp
                             kind: "summary_text".to_owned(),
                             text: delta.clone(),
                             annotations: None,
+                            extra: BTreeMap::new(),
                         });
                     }
                 }
@@ -4902,6 +5499,7 @@ pub fn response_events_to_responses(events: &[CanonicalStreamEvent]) -> Vec<Resp
                     call_id: Some(call_id.clone()),
                     name: Some(name.clone()),
                     arguments: Some(String::new()),
+                    extra: BTreeMap::new(),
                 };
                 items.insert(*index, item.clone());
                 open_items.insert(*index);
@@ -4981,6 +5579,7 @@ pub fn response_events_to_responses(events: &[CanonicalStreamEvent]) -> Vec<Resp
         out.extend(payloads.into_iter().map(|payload| ResponsesStreamEvent {
             kind: payload.kind.clone(),
             payload,
+            extra: BTreeMap::new(),
         }));
     }
     out
@@ -5000,6 +5599,7 @@ fn responses_payload(kind: &str) -> super::ResponsesEventPayload {
         summary_index: None,
         part: None,
         error: None,
+        extra: BTreeMap::new(),
     }
 }
 
@@ -5027,6 +5627,7 @@ fn ensure_responses_item(
             call_id: None,
             name: None,
             arguments: None,
+            extra: BTreeMap::new(),
         },
         StreamContentKind::Reasoning => ResponsesOutputItem {
             kind: "reasoning".to_owned(),
@@ -5040,6 +5641,7 @@ fn ensure_responses_item(
             call_id: None,
             name: None,
             arguments: None,
+            extra: BTreeMap::new(),
         },
         StreamContentKind::ToolCall => return,
     };
@@ -5122,5 +5724,6 @@ fn empty_responses_stream_response(
         metadata: None,
         incomplete_details: None,
         error: None,
+        extra: BTreeMap::new(),
     }
 }

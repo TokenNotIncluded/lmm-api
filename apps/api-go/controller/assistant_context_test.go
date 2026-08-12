@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -273,6 +274,72 @@ func TestAssistantPromptKeepsAccountContextInternal(t *testing.T) {
 	assert.NotContains(t, prompt, "demo-user@example.com")
 	assert.Contains(t, prompt, "L1 users may use the developer setup")
 	assert.Contains(t, prompt, "Trust levels L1-L4 never grant server configuration")
+}
+
+func TestAssistantPaymentOfferStateRequiresProgressiveIntent(t *testing.T) {
+	tests := []struct {
+		name         string
+		message      string
+		want         assistantPaymentOfferState
+		conversation []assistantOpenAIMessage
+	}{
+		{name: "single payment keyword", message: "充值", want: assistantPaymentOfferNeedsDetails},
+		{name: "negative payment intent is not upsold", message: "我不想付费，只想了解开源项目", want: assistantPaymentOfferNone},
+		{name: "explicit intent without detail", message: "我想充值", want: assistantPaymentOfferNeedsDetails},
+		{name: "purpose is enough", message: "我要充值，用于 Claude Code", want: assistantPaymentOfferReady},
+		{name: "amount is enough", message: "我要充值 100 美元", want: assistantPaymentOfferReady},
+		{name: "bare approximate amount is enough", message: "我要充值100", want: assistantPaymentOfferReady},
+		{name: "payment method is enough", message: "我准备付款，使用支付宝", want: assistantPaymentOfferReady},
+		{
+			name:    "conversation combines intent and detail",
+			message: "大概每月用多少合适？",
+			want:    assistantPaymentOfferReady,
+			conversation: []assistantOpenAIMessage{
+				{Role: "user", Content: "我想充值"},
+				{Role: "assistant", Content: "请问用途或预计额度是什么？"},
+				{Role: "user", Content: "大概每月用多少合适？"},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			context := assistantUserContext{AccessLevel: "L0"}
+			got := assistantPaymentOfferStateForContextAndConversation(context, test.message, test.conversation)
+			assert.Equal(t, test.want, got)
+		})
+	}
+
+	blocked := assistantUserContext{AccessLevel: "L0", PaymentMethodsHidden: true}
+	assert.Equal(t, assistantPaymentOfferBlocked, assistantPaymentOfferStateForContextAndConversation(blocked, "我要充值 100 美元"))
+	assert.Equal(t, assistantPaymentOfferReady, assistantPaymentOfferStateForContext(assistantUserContext{PaymentOfferState: assistantPaymentOfferReady}))
+}
+
+func TestAssistantPaymentOfferStateDoesNotSerializeFinancialOrRiskDetails(t *testing.T) {
+	context := assistantUserContext{
+		UserID:                   42,
+		AccessLevel:              "L0",
+		PaymentMethodsHidden:     true,
+		PaymentRestrictionCauses: []string{"linuxdo_high_score"},
+		PaymentOfferState:        assistantPaymentOfferBlocked,
+	}
+	payload, err := json.Marshal(context)
+	require.NoError(t, err)
+	encoded := string(payload)
+	assert.Contains(t, encoded, `"payment_offer_state":"blocked"`)
+	assert.NotContains(t, encoded, "linuxdo_high_score")
+	assert.NotContains(t, encoded, "balance")
+	assert.NotContains(t, encoded, "quota")
+}
+
+func TestAssistantL0WelcomeStrategyAcceptsRelayOnlyBeginners(t *testing.T) {
+	strategy := assistantWelcomeStrategyForContext(assistantUserContext{
+		AccessLevel:     "L0",
+		CustomerProfile: assistantProfileGuided,
+	})
+
+	assert.Contains(t, strategy, "new to AI or open-source projects")
+	assert.Contains(t, strategy, "simply want to use the relay")
+	assert.Contains(t, strategy, "do not need an open-source project")
 }
 
 func TestTrustLevelLabelSeparatesAdministratorRolesFromUserLevels(t *testing.T) {

@@ -78,6 +78,8 @@ const { requestAssistantOpen } = await import('./assistant-events')
 const { AssistantLauncher } = await import('./assistant-launcher')
 const { AssistantPanel } = await import('./assistant-panel')
 
+const ASSISTANT_PRIVACY_NOTICE_COLLAPSE_DELAY_MS = 5_000
+
 const originalGet = api.get
 const originalPost = api.post
 const reactTestGlobals = globalThis as typeof globalThis & {
@@ -116,8 +118,11 @@ async function waitForCondition(
 }
 
 async function renderPanel(
-  initialPreset?: 'api-key' | 'models' | 'onboarding' | 'plan'
+  initialPreset?: 'api-key' | 'models' | 'onboarding' | 'plan',
+  mode: 'mobile' | 'rail' = 'mobile',
+  user: AuthUser | null = null
 ) {
+  useAuthStore.getState().auth.setUser(user)
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -127,6 +132,7 @@ async function renderPanel(
         <I18nextProvider i18n={i18n}>
           <AssistantPanel
             open
+            mode={mode}
             initialPreset={initialPreset}
             onOpenChange={() => {}}
           />
@@ -198,6 +204,53 @@ function findButton(text: string): HTMLButtonElement {
   return button
 }
 
+function findCard(text: string): HTMLElement | null {
+  return (
+    [...document.querySelectorAll<HTMLElement>('[data-slot="card"]')].find(
+      (card) => card.textContent?.includes(text)
+    ) ?? null
+  )
+}
+
+const originalSetTimeout = globalThis.setTimeout
+const originalClearTimeout = globalThis.clearTimeout
+const privacyNoticeTimerHandle = {} as ReturnType<typeof setTimeout>
+let capturedPrivacyNoticeTimer: (() => void) | null = null
+
+function capturePrivacyNoticeTimer() {
+  capturedPrivacyNoticeTimer = null
+  globalThis.setTimeout = ((callback: () => void, delay?: number) => {
+    if (
+      typeof callback === 'function' &&
+      delay === ASSISTANT_PRIVACY_NOTICE_COLLAPSE_DELAY_MS
+    ) {
+      capturedPrivacyNoticeTimer = () => callback()
+      return privacyNoticeTimerHandle
+    }
+    return originalSetTimeout(callback, delay)
+  }) as typeof globalThis.setTimeout
+  globalThis.clearTimeout = ((handle) => {
+    if (handle === privacyNoticeTimerHandle) {
+      capturedPrivacyNoticeTimer = null
+      return
+    }
+    return originalClearTimeout(handle)
+  }) as typeof globalThis.clearTimeout
+
+  return () => {
+    globalThis.setTimeout = originalSetTimeout
+    globalThis.clearTimeout = originalClearTimeout
+    capturedPrivacyNoticeTimer = null
+  }
+}
+
+function fireCapturedPrivacyNoticeTimer() {
+  const callback = capturedPrivacyNoticeTimer
+  if (!callback) throw new Error('Privacy notice collapse timer was not set')
+  capturedPrivacyNoticeTimer = null
+  callback()
+}
+
 async function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
   const setValue = Object.getOwnPropertyDescriptor(
     HTMLTextAreaElement.prototype,
@@ -212,6 +265,9 @@ async function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
 }
 
 afterEach(() => {
+  globalThis.setTimeout = originalSetTimeout
+  globalThis.clearTimeout = originalClearTimeout
+  capturedPrivacyNoticeTimer = null
   api.get = originalGet
   api.post = originalPost
   useAuthStore.getState().auth.reset('complete')
@@ -223,6 +279,200 @@ afterEach(() => {
 after(() => domWindow.close())
 
 describe('AssistantPanel', () => {
+  test('auto-collapses the privacy notice without moving focus and can reopen it', async () => {
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/assistant/status')
+      return { data: { success: true, data: assistantStatus } }
+    }) as typeof api.get
+
+    const restoreTimers = capturePrivacyNoticeTimer()
+    const rendered = await renderPanel()
+    try {
+      const toggle = document.querySelector<HTMLButtonElement>(
+        '[data-testid="assistant-privacy-notice-toggle"]'
+      )
+      assert.ok(toggle)
+      assert.equal(toggle.getAttribute('aria-expanded'), 'true')
+      const privacyDescription = document.querySelector(
+        '#assistant-privacy-notice-description'
+      )?.textContent
+      assert.match(
+        privacyDescription ?? '',
+        /Your assistant conversations are not private\. Authorized higher-access users may review them\./
+      )
+      assert.match(
+        privacyDescription ?? '',
+        /Do not send personal information, passwords, API keys, or credentials in chat\./
+      )
+      assert.match(
+        privacyDescription ?? '',
+        /Pattern matching is not a guarantee\./
+      )
+
+      toggle.focus()
+      await act(async () => {
+        fireCapturedPrivacyNoticeTimer()
+        await flushEffects()
+      })
+      assert.equal(toggle.getAttribute('aria-expanded'), 'false')
+      assert.equal(document.activeElement, toggle)
+      assert.match(
+        document.querySelector('#assistant-privacy-notice-description')
+          ?.className ?? '',
+        /sr-only/
+      )
+
+      await act(async () => {
+        toggle.click()
+        await flushEffects()
+      })
+      assert.equal(toggle.getAttribute('aria-expanded'), 'true')
+      assert.doesNotMatch(
+        document.querySelector('#assistant-privacy-notice-description')
+          ?.className ?? '',
+        /sr-only/
+      )
+
+      await act(async () => {
+        fireCapturedPrivacyNoticeTimer()
+        await flushEffects()
+      })
+      assert.equal(toggle.getAttribute('aria-expanded'), 'false')
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+      restoreTimers()
+    }
+  })
+
+  test('renders the mobile assistant sheet at the full dynamic viewport size', async () => {
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/assistant/status')
+      return { data: { success: true, data: assistantStatus } }
+    }) as typeof api.get
+
+    const rendered = await renderPanel(undefined, 'mobile')
+    try {
+      const sheetContent = document.querySelector<HTMLElement>(
+        '[data-slot="sheet-content"]'
+      )
+      assert.ok(sheetContent)
+      assert.match(sheetContent.className, /h-dvh/)
+      assert.match(sheetContent.className, /w-screen/)
+      assert.match(sheetContent.className, /max-w-none/)
+      assert.match(sheetContent.className, /rounded-none/)
+      assert.ok(sheetContent.querySelector('[data-slot="sheet-close"]'))
+      assert.ok(sheetContent.querySelector('textarea'))
+      assert.match(
+        sheetContent.textContent ?? '',
+        /Your assistant conversations are not private/
+      )
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
+  test('hides an active tool card for a new ordinary message and allows reopening it', async () => {
+    api.get = (async (url: string) => {
+      if (url === '/api/assistant/status') {
+        return { data: { success: true, data: assistantStatus } }
+      }
+      assert.equal(url, '/api/user/models')
+      return {
+        data: {
+          success: true,
+          data: ['claude-3-7-sonnet', 'deepseek-v4-flash'],
+        },
+      }
+    }) as typeof api.get
+    api.post = (async (url: string) => {
+      assert.equal(url, '/api/assistant/chat')
+      return {
+        data: {
+          choices: [{ message: { content: 'A fresh ordinary answer.' } }],
+        },
+        headers: {},
+      }
+    }) as typeof api.post
+
+    const rendered = await renderPanel('models')
+    try {
+      await act(async () =>
+        waitForCondition(
+          () => findCard('View all currently available models') !== null,
+          'Model tool card did not render'
+        )
+      )
+
+      const textarea = document.querySelector<HTMLTextAreaElement>('textarea')
+      assert.ok(textarea)
+      await setTextareaValue(textarea, 'Start a fresh ordinary message.')
+      const submit = document.querySelector<HTMLButtonElement>(
+        'button[aria-label="Submit"]'
+      )
+      assert.ok(submit)
+      await act(async () => {
+        submit.click()
+        await flushEffects()
+      })
+      await act(async () =>
+        waitForCondition(
+          () =>
+            document.body.textContent?.includes('A fresh ordinary answer.') ===
+            true,
+          'Fresh ordinary answer did not render'
+        )
+      )
+      assert.equal(findCard('View all currently available models'), null)
+
+      await act(async () => {
+        requestAssistantOpen('models')
+        await flushEffects()
+      })
+      await act(async () =>
+        waitForCondition(
+          () => findCard('View all currently available models') !== null,
+          'Model tool card did not reopen'
+        )
+      )
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
+  test('clears tool state and local entries when clearing the conversation', async () => {
+    api.get = (async (url: string) => {
+      if (url === '/api/assistant/status') {
+        return { data: { success: true, data: assistantStatus } }
+      }
+      assert.equal(url, '/api/user/models')
+      return { data: { success: true, data: ['claude-3-7-sonnet'] } }
+    }) as typeof api.get
+
+    const rendered = await renderPanel('models')
+    try {
+      await act(async () =>
+        waitForCondition(
+          () => findCard('View all currently available models') !== null,
+          'Model tool card did not render'
+        )
+      )
+
+      await act(async () => {
+        findButton('Clear conversation').click()
+        await flushEffects()
+      })
+      assert.equal(findCard('View all currently available models'), null)
+      assert.match(document.body.textContent ?? '', /How can I help\?/)
+      assert.throws(() => findButton('Clear conversation'))
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
   test('uses an L1 unlock label only for L0 users', async () => {
     api.get = (async (url: string) => {
       if (url === '/api/assistant/status') {
@@ -318,23 +568,22 @@ describe('AssistantPanel', () => {
         'ai-assistant-panel'
       )
       assert.ok(document.querySelector('#ai-assistant-panel'))
+      await act(async () => {
+        requestAssistantOpen('plan')
+        await flushEffects()
+      })
       await act(async () =>
         waitForCondition(
           () =>
             document.body.textContent?.includes(
-              'Which option is the best value?'
+              'Live plan and discount advisor'
             ) === true,
-          'L1 assistant presets did not render'
+          'Plan tool did not open from the shortcut'
         )
       )
-
-      await act(async () => {
-        findButton('Which option is the best value?').click()
-        await flushEffects()
-      })
-      assert.match(
+      assert.doesNotMatch(
         document.body.textContent ?? '',
-        /Choose by workload rather than list price\./
+        /Which option is the best value\?/
       )
 
       const collapseButton = document.querySelector<HTMLButtonElement>(
@@ -361,7 +610,7 @@ describe('AssistantPanel', () => {
         waitForCondition(
           () =>
             document.body.textContent?.includes(
-              'Choose by workload rather than list price.'
+              'Live plan and discount advisor'
             ) === true,
           'Assistant conversation was not restored'
         )
@@ -447,7 +696,7 @@ describe('AssistantPanel', () => {
     }
   })
 
-  test('appends guided presets without replacing the current conversation', async () => {
+  test('opens a tool shortcut without appending a canned question', async () => {
     api.get = (async (url: string) => {
       assert.equal(url, '/api/assistant/status')
       return { data: { success: true, data: assistantStatus } }
@@ -455,7 +704,15 @@ describe('AssistantPanel', () => {
 
     const rendered = await renderPanel('api-key')
     try {
-      assert.match(
+      await act(async () =>
+        waitForCondition(
+          () =>
+            document.body.textContent?.includes('Create a default API key') ===
+            true,
+          'API key tool did not open'
+        )
+      )
+      assert.doesNotMatch(
         document.body.textContent ?? '',
         /What are my Base URL, model ID, and API key\?/
       )
@@ -465,11 +722,16 @@ describe('AssistantPanel', () => {
         await flushEffects()
       })
 
-      assert.match(
-        document.body.textContent ?? '',
-        /What are my Base URL, model ID, and API key\?/
+      await act(async () =>
+        waitForCondition(
+          () =>
+            document.body.textContent?.includes(
+              'Live plan and discount advisor'
+            ) === true,
+          'Plan tool did not open'
+        )
       )
-      assert.match(
+      assert.doesNotMatch(
         document.body.textContent ?? '',
         /Which option is the best value\?/
       )
@@ -503,7 +765,8 @@ describe('AssistantPanel', () => {
           'L0 access request did not render'
         )
       )
-      assert.match(
+      assert.match(document.body.textContent ?? '', /Unlock L1 with AI/)
+      assert.doesNotMatch(
         document.body.textContent ?? '',
         /Ask an administrator to raise my access level/
       )
@@ -521,7 +784,10 @@ describe('AssistantPanel', () => {
         findButton('Clear conversation').click()
         await flushEffects()
       })
-      assert.ok(findButton('Ask an administrator to raise my access level'))
+      assert.doesNotMatch(
+        document.body.textContent ?? '',
+        /Ask an administrator to raise my access level/
+      )
       assert.throws(() => findButton('Which option is the best value?'))
       assert.throws(() => findButton('How is request cost calculated?'))
       assert.throws(() =>
@@ -538,6 +804,64 @@ describe('AssistantPanel', () => {
 
       assert.throws(() => findButton('Create API key'))
       assert.equal(document.querySelector('a[href="/wallet"]'), null)
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
+  test('shows the onboarding todo only after developer access is granted', async () => {
+    api.get = (async (url: string) => {
+      if (url === '/api/assistant/status') {
+        return { data: { success: true, data: assistantStatus } }
+      }
+      assert.equal(url, '/api/user/self/onboarding/todo')
+      return {
+        data: {
+          success: true,
+          data: {
+            eligibility: {
+              eligible: true,
+              developer_access_granted: true,
+              trust_level: 1,
+            },
+            status: 'in_progress',
+            current_step: 'create_api_key',
+            steps: [
+              { id: 'create_api_key', status: 'pending' },
+              { id: 'install_client', status: 'pending' },
+              { id: 'configure_client', status: 'pending' },
+              { id: 'first_successful_response', status: 'pending' },
+            ],
+          },
+        },
+      }
+    }) as typeof api.get
+
+    const rendered = await renderPanel(undefined, 'mobile', {
+      id: 42,
+      username: 'l1-user',
+      role: 1,
+      developer_access_granted: true,
+      onboarding: {
+        activation_complete: true,
+        credential_complete: false,
+        first_request_complete: false,
+        stage: 'credential',
+      },
+    })
+    try {
+      await act(async () =>
+        waitForCondition(
+          () =>
+            document.querySelector(
+              '[data-testid="assistant-onboarding-todo"]'
+            ) !== null,
+          'L1 onboarding todo did not render'
+        )
+      )
+      assert.match(document.body.textContent ?? '', /First-use checklist/)
+      assert.match(document.body.textContent ?? '', /Create API key/)
     } finally {
       await act(async () => rendered.root.unmount())
       rendered.queryClient.clear()
@@ -594,10 +918,6 @@ describe('AssistantPanel', () => {
 
     const rendered = await renderPanel('models')
     try {
-      await act(async () => {
-        findButton('View all currently available models').click()
-        await flushEffects()
-      })
       await act(async () =>
         waitForCondition(
           () =>

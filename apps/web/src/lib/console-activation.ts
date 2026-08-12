@@ -125,7 +125,10 @@ export function isConsoleActivated(user: AuthUser | null | undefined): boolean {
 export function getAuthenticatedLandingRoute(
   user: AuthUser | null | undefined
 ): '/dashboard' | '/getting-started' {
-  return getOnboardingState(user).stage === 'complete'
+  // Administrator approval is the access boundary.  The remaining setup
+  // checklist is guidance for an already-enabled account and must not trap a
+  // newly approved L1 user on the L0 welcome page.
+  return getOnboardingState(user).activationComplete
     ? '/dashboard'
     : '/getting-started'
 }

@@ -59,6 +59,9 @@ pub mod conversion_observability;
 /// Deterministic protocol conversion rollout, shadow, and rollback decisions.
 pub mod protocol_rollout;
 
+/// Closed-by-default route ownership evidence and review gate.
+pub mod route_ownership;
+
 /// Runtime-owned protocol capability catalog and startup drift validation.
 pub mod protocol_runtime_registry;
 

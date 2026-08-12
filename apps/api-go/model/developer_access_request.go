@@ -111,6 +111,37 @@ func GetDeveloperAccessRequest(userID int) (*DeveloperAccessRequest, error) {
 	return &request, nil
 }
 
+// reopenDeveloperAccessRequestForUserWithTx makes an explicit administrator L0
+// transition visible as a fresh application state without rewriting the
+// reviewed row. The previous approved request remains an audit record, while
+// the newest row is the one returned to the user and can be reviewed again.
+func reopenDeveloperAccessRequestForUserWithTx(tx *gorm.DB, userID int) error {
+	var latest DeveloperAccessRequest
+	err := lockForUpdate(tx).Where("user_id = ?", userID).Order("id DESC").First(&latest).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if latest.Status != DeveloperAccessRequestApproved {
+		return nil
+	}
+
+	source := latest.Source
+	if source == "" {
+		source = DeveloperAccessRequestSourceOld
+	}
+	return tx.Create(&DeveloperAccessRequest{
+		UserId:           userID,
+		Status:           DeveloperAccessRequestPending,
+		Source:           source,
+		Reason:           latest.Reason,
+		AIRecommendation: latest.AIRecommendation,
+		CreatedAt:        common.GetTimestamp(),
+	}).Error
+}
+
 func SubmitDeveloperAccessRequest(userID int, reason string) (*DeveloperAccessRequest, error) {
 	return submitDeveloperAccessRequest(userID, reason, "", DeveloperAccessRequestSourceOld)
 }

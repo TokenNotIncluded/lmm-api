@@ -23,16 +23,38 @@ type SecurityRuleSummary struct {
 }
 
 type SecurityViolationFeeRule struct {
-	Code              string  `json:"code"`
-	Provider          string  `json:"provider"`
-	Trigger           string  `json:"trigger"`
-	Enabled           bool    `json:"enabled"`
-	AmountUSD         float64 `json:"amount_usd"`
-	ChargeUnit        string  `json:"charge_unit"`
-	Retryable         bool    `json:"retryable"`
-	Description       string  `json:"description"`
-	ChargingNotes     string  `json:"charging_notes"`
-	LocalGuardrailFee bool    `json:"local_guardrail_fee"`
+	Code              string    `json:"code"`
+	Provider          string    `json:"provider,omitempty"` // deprecated; policy is no longer provider-specific
+	Groups            []string  `json:"groups,omitempty"`
+	Trigger           string    `json:"trigger"`
+	Enabled           bool      `json:"enabled"`
+	AmountUSD         float64   `json:"amount_usd"`
+	AmountsUSD        []float64 `json:"amounts_usd,omitempty"`
+	Multiplier        float64   `json:"multiplier,omitempty"`
+	MaxAmountUSD      float64   `json:"max_amount_usd,omitempty"`
+	PeriodSeconds     int64     `json:"period_seconds,omitempty"`
+	ChargeUnit        string    `json:"charge_unit"`
+	Retryable         bool      `json:"retryable"`
+	Description       string    `json:"description"`
+	ChargingNotes     string    `json:"charging_notes"`
+	LocalGuardrailFee bool      `json:"local_guardrail_fee"`
+}
+
+type SecurityViolationFeePolicy struct {
+	Name                  string    `json:"name,omitempty"`
+	Groups                []string  `json:"groups"`
+	Enabled               bool      `json:"enabled"`
+	AmountsUSD            []float64 `json:"amounts_usd,omitempty"`
+	InitialAmountUSD      float64   `json:"initial_amount_usd"`
+	Multiplier            float64   `json:"multiplier"`
+	MaxAmountUSD          float64   `json:"max_amount_usd"`
+	PeriodSeconds         int64     `json:"period_seconds"`
+	DrainBalanceWhenShort bool      `json:"drain_balance_when_short"`
+}
+
+type SecurityViolationFeeSettings struct {
+	Enabled  bool                         `json:"enabled"`
+	Policies []SecurityViolationFeePolicy `json:"policies"`
 }
 
 type PublicSecurityPolicy struct {
@@ -58,9 +80,10 @@ type SecurityAdminRule struct {
 }
 
 type AdminSecurityPolicy struct {
-	Public   PublicSecurityPolicy `json:"public"`
-	Settings SecuritySettings     `json:"settings"`
-	Rules    []SecurityAdminRule  `json:"rules"`
+	Public       PublicSecurityPolicy         `json:"public"`
+	Settings     SecuritySettings             `json:"settings"`
+	Rules        []SecurityAdminRule          `json:"rules"`
+	ViolationFee SecurityViolationFeeSettings `json:"violation_fee"`
 }
 
 type SecurityStatBucket struct {

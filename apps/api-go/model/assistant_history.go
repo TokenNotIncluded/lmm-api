@@ -34,11 +34,13 @@ const (
 )
 
 var (
-	ErrAssistantConversationNotFound = errors.New("assistant conversation not found")
-	ErrAssistantHistoryForbidden     = errors.New("assistant conversation is not visible to this account")
-	ErrAssistantSecureCardNotFound   = errors.New("assistant secure card not found")
-	ErrAssistantSecureCardConsumed   = errors.New("assistant secure card has already been revealed")
-	ErrAssistantSecureCardExpired    = errors.New("assistant secure card has expired")
+	ErrAssistantConversationNotFound        = errors.New("assistant conversation not found")
+	ErrAssistantHistoryForbidden            = errors.New("assistant conversation is not visible to this account")
+	ErrAssistantConversationAlreadyArchived = errors.New("assistant conversation is already archived")
+	ErrAssistantConversationNotArchived     = errors.New("assistant conversation is not archived")
+	ErrAssistantSecureCardNotFound          = errors.New("assistant secure card not found")
+	ErrAssistantSecureCardConsumed          = errors.New("assistant secure card has already been revealed")
+	ErrAssistantSecureCardExpired           = errors.New("assistant secure card has expired")
 
 	assistantHistoryAPIKeyPattern = regexp.MustCompile(`(?i)\b(?:sk|rk|pk|ak|tok|token|key|secret)[_-][a-z0-9._~+/-]{8,}\b`)
 	assistantHistoryJWTPattern    = regexp.MustCompile(`\beyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\b`)
@@ -59,6 +61,7 @@ type AssistantConversation struct {
 	LastMessagePreview string `json:"last_message_preview" gorm:"type:varchar(512);not null"`
 	CreatedAt          int64  `json:"created_at" gorm:"not null;index"`
 	UpdatedAt          int64  `json:"updated_at" gorm:"not null;index:idx_assistant_conversation_user_updated,priority:2"`
+	ArchivedAt         int64  `json:"archived_at" gorm:"not null;default:0;index"`
 }
 
 func (AssistantConversation) TableName() string { return "assistant_conversations" }
@@ -112,6 +115,7 @@ type AssistantConversationView struct {
 	LastMessagePreview string `json:"last_message_preview"`
 	CreatedAt          int64  `json:"created_at"`
 	UpdatedAt          int64  `json:"updated_at"`
+	ArchivedAt         int64  `json:"archived_at"`
 	Owner              string `json:"owner"`
 	PrivacyNotice      string `json:"privacy_notice"`
 }
@@ -320,7 +324,57 @@ func RecordAssistantConversationTurn(userID int, conversationID int64, userConte
 	})
 }
 
-func ListAssistantConversations(viewerUserID, ownerUserID int, limit int) ([]AssistantConversationView, error) {
+func setAssistantConversationArchived(userID int, conversationID int64, archived bool) (*AssistantConversation, error) {
+	if userID <= 0 || conversationID <= 0 {
+		return nil, ErrAssistantConversationNotFound
+	}
+
+	var updated AssistantConversation
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var conversation AssistantConversation
+		if err := lockForUpdate(tx).
+			Where("id = ? AND user_id = ?", conversationID, userID).
+			First(&conversation).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrAssistantConversationNotFound
+			}
+			return err
+		}
+		if archived {
+			if conversation.ArchivedAt != 0 {
+				return ErrAssistantConversationAlreadyArchived
+			}
+			conversation.ArchivedAt = common.GetTimestamp()
+		} else {
+			if conversation.ArchivedAt == 0 {
+				return ErrAssistantConversationNotArchived
+			}
+			conversation.ArchivedAt = 0
+		}
+		if err := tx.Model(&conversation).Update("archived_at", conversation.ArchivedAt).Error; err != nil {
+			return err
+		}
+		updated = conversation
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &updated, nil
+}
+
+// ArchiveAssistantConversation changes only the owner's soft archive state.
+// Visibility grants never confer mutation rights.
+func ArchiveAssistantConversation(userID int, conversationID int64) (*AssistantConversation, error) {
+	return setAssistantConversationArchived(userID, conversationID, true)
+}
+
+// UnarchiveAssistantConversation restores only the owner's soft archive state.
+func UnarchiveAssistantConversation(userID int, conversationID int64) (*AssistantConversation, error) {
+	return setAssistantConversationArchived(userID, conversationID, false)
+}
+
+func ListAssistantConversations(viewerUserID, ownerUserID int, limit int, archived bool) ([]AssistantConversationView, error) {
 	if err := AuthorizeAssistantHistoryViewer(viewerUserID, ownerUserID); err != nil {
 		return nil, err
 	}
@@ -328,7 +382,13 @@ func ListAssistantConversations(viewerUserID, ownerUserID int, limit int) ([]Ass
 		limit = 30
 	}
 	var conversations []AssistantConversation
-	if err := DB.Where("user_id = ?", ownerUserID).Order("updated_at DESC, id DESC").Limit(limit).Find(&conversations).Error; err != nil {
+	archiveFilter := "archived_at = 0"
+	if archived {
+		archiveFilter = "archived_at <> 0"
+	}
+	if err := DB.Where("user_id = ?", ownerUserID).
+		Where(archiveFilter).
+		Order("updated_at DESC, id DESC").Limit(limit).Find(&conversations).Error; err != nil {
 		return nil, err
 	}
 	owner := "lower_level_user"
@@ -343,6 +403,7 @@ func ListAssistantConversations(viewerUserID, ownerUserID int, limit int) ([]Ass
 			LastMessagePreview: conversation.LastMessagePreview,
 			CreatedAt:          conversation.CreatedAt,
 			UpdatedAt:          conversation.UpdatedAt,
+			ArchivedAt:         conversation.ArchivedAt,
 			Owner:              owner,
 			PrivacyNotice:      AssistantHistoryPrivacyNotice,
 		})
@@ -397,6 +458,7 @@ func GetAssistantConversationHistory(viewerUserID int, conversationID int64, lim
 		LastMessagePreview: conversation.LastMessagePreview,
 		CreatedAt:          conversation.CreatedAt,
 		UpdatedAt:          conversation.UpdatedAt,
+		ArchivedAt:         conversation.ArchivedAt,
 		Owner:              owner,
 		PrivacyNotice:      AssistantHistoryPrivacyNotice,
 	}

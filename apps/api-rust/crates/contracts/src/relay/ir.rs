@@ -770,7 +770,7 @@ pub struct Money {
 
 /// Semantic billing counters associated with one usage snapshot.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct BillingUsage {
+pub struct SemanticBillingUsage {
     /// Provider or gateway which supplied the billing snapshot.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
@@ -818,7 +818,7 @@ pub struct SemanticUsage {
     pub cache: CacheUsage,
     /// Optional semantic billing accounting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub billing: Option<BillingUsage>,
+    pub billing: Option<SemanticBillingUsage>,
     /// Usage fields introduced by a provider but not yet normalized.
     #[serde(flatten)]
     #[serde(default)]
@@ -1619,17 +1619,29 @@ fn validate_part(
     };
     match &part.kind {
         PartKind::Text => {
-            if part.text.is_none() || part.media.is_some() || part.function.is_some() {
+            if part.text.is_none()
+                || part.media.is_some()
+                || part.function.is_some()
+                || part.opaque.is_some()
+            {
                 return invalid_shape("text_payload");
             }
         }
         PartKind::Media => {
-            if part.media.is_none() || part.text.is_some() || part.function.is_some() {
+            if part.media.is_none()
+                || part.text.is_some()
+                || part.function.is_some()
+                || part.opaque.is_some()
+            {
                 return invalid_shape("media_payload");
             }
         }
         PartKind::Function => {
-            if part.function.is_none() || part.text.is_some() || part.media.is_some() {
+            if part.function.is_none()
+                || part.text.is_some()
+                || part.media.is_some()
+                || part.opaque.is_some()
+            {
                 return invalid_shape("function_payload");
             }
             if let Some(function) = part.function.as_ref() {
@@ -2185,6 +2197,18 @@ mod tests {
         envelope.items.push(malformed);
         assert!(matches!(
             envelope.validate(),
+            Err(IrValidationError::InvalidPartShape { reason, .. }) if reason == "text_payload"
+        ));
+
+        let mut opaque_payload = text_item("text");
+        opaque_payload.parts[0].opaque = Some(OpaqueProviderState::authentic_gemini_thought_signature(
+            "sig".to_owned(),
+            Some("gemini-2.5-pro".to_owned()),
+        ));
+        let mut opaque_envelope = Envelope::new(Protocol::Gemini, "gemini-test");
+        opaque_envelope.items.push(opaque_payload);
+        assert!(matches!(
+            opaque_envelope.validate(),
             Err(IrValidationError::InvalidPartShape { reason, .. }) if reason == "text_payload"
         ));
 

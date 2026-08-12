@@ -16,11 +16,17 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Alert02Icon, ShieldKeyIcon } from '@hugeicons/core-free-icons'
+import {
+  Alert02Icon,
+  Archive01Icon,
+  ArchiveRestoreIcon,
+  ShieldKeyIcon,
+} from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
-import { useQuery } from '@tanstack/react-query'
-import { useMemo } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 
 import { Response } from '@/components/ai-elements/response'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -29,8 +35,10 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { toIntlLocale } from '@/i18n/languages'
 
 import {
+  archiveAssistantConversation,
   getAssistantConversationHistory,
   getAssistantConversationHistoryDetail,
+  unarchiveAssistantConversation,
   type AssistantConversationHistoryItem,
   type AssistantConversationHistoryMessage,
 } from './api'
@@ -92,12 +100,42 @@ export function AssistantHistory(props: {
   onOpenConversation: (conversation: AssistantConversationHistoryItem) => void
 }) {
   const { t, i18n } = useTranslation()
+  const queryClient = useQueryClient()
+  const [filter, setFilter] = useState<'active' | 'archived'>('active')
+  const showingArchived = filter === 'archived'
   const historyQuery = useQuery({
-    queryKey: ['assistant-conversations'],
-    queryFn: getAssistantConversationHistory,
+    queryKey: ['assistant-conversations', filter],
+    queryFn: () => getAssistantConversationHistory(showingArchived),
     enabled: props.active,
     staleTime: 30_000,
     retry: false,
+  })
+  const archiveMutation = useMutation({
+    mutationFn: ({ id, archived }: { id: number; archived: boolean }) =>
+      archived
+        ? unarchiveAssistantConversation(id)
+        : archiveAssistantConversation(id),
+    onSuccess: async (_result, variables) => {
+      await queryClient.invalidateQueries({
+        queryKey: ['assistant-conversations'],
+      })
+      toast.success(
+        t(
+          variables.archived
+            ? 'Conversation restored.'
+            : 'Conversation archived.'
+        )
+      )
+    },
+    onError: (_error, variables) => {
+      toast.error(
+        t(
+          variables.archived
+            ? 'Unable to restore conversation. Try again.'
+            : 'Unable to archive conversation. Try again.'
+        )
+      )
+    },
   })
   const dateFormatter = useMemo(
     () =>
@@ -138,56 +176,114 @@ export function AssistantHistory(props: {
     )
   }
 
-  if (conversations.length === 0) {
-    return (
-      <p className='text-muted-foreground py-8 text-center text-sm leading-6'>
-        {t('No visible conversation history yet.')}
-      </p>
-    )
-  }
-
   return (
     <div className='grid gap-3'>
-      {conversations.map((conversation) => {
-        const safePreview = redactAssistantMessageForDisplay(
-          conversation.last_message_preview,
-          t(
-            'Sensitive content is hidden and can only be accessed from a private card.'
-          )
-        ).content
-        return (
-          <article
-            key={conversation.id}
-            className='grid gap-2 rounded-lg border p-3'
-          >
-            <div className='flex items-start justify-between gap-3'>
-              <div className='min-w-0'>
-                <p className='text-sm font-medium'>
-                  {conversation.owner === 'self'
-                    ? t('Your conversation')
-                    : t('Lower-access user conversation')}
-                </p>
-                <p className='text-muted-foreground mt-0.5 text-xs'>
-                  {dateFormatter.format(
-                    new Date(conversation.updated_at * 1000)
-                  )}
-                </p>
+      <div className='flex flex-wrap gap-2'>
+        <Button
+          type='button'
+          variant={showingArchived ? 'outline' : 'secondary'}
+          size='sm'
+          aria-pressed={!showingArchived}
+          onClick={() => setFilter('active')}
+        >
+          {t('Active conversations')}
+        </Button>
+        <Button
+          type='button'
+          variant={showingArchived ? 'secondary' : 'outline'}
+          size='sm'
+          aria-pressed={showingArchived}
+          onClick={() => setFilter('archived')}
+        >
+          {t('Archived conversations')}
+        </Button>
+      </div>
+      {conversations.length === 0 ? (
+        <p className='text-muted-foreground py-8 text-center text-sm leading-6'>
+          {t(
+            showingArchived
+              ? 'No archived conversations yet.'
+              : 'No active conversations yet.'
+          )}
+        </p>
+      ) : (
+        conversations.map((conversation) => {
+          const safePreview = redactAssistantMessageForDisplay(
+            conversation.last_message_preview,
+            t(
+              'Sensitive content is hidden and can only be accessed from a private card.'
+            )
+          ).content
+          const canManage = conversation.owner === 'self'
+          const actionPending =
+            archiveMutation.isPending &&
+            archiveMutation.variables?.id === conversation.id
+          return (
+            <article
+              key={conversation.id}
+              className='grid gap-2 rounded-lg border p-3'
+            >
+              <div className='flex items-start justify-between gap-3'>
+                <div className='min-w-0'>
+                  <p className='text-sm font-medium'>
+                    {conversation.owner === 'self'
+                      ? t('Your conversation')
+                      : t('Lower-access user conversation')}
+                  </p>
+                  <p className='text-muted-foreground mt-0.5 text-xs'>
+                    {dateFormatter.format(
+                      new Date(conversation.updated_at * 1000)
+                    )}
+                  </p>
+                </div>
+                <div className='flex shrink-0 flex-wrap justify-end gap-2'>
+                  <Button
+                    type='button'
+                    variant='outline'
+                    size='sm'
+                    onClick={() => props.onOpenConversation(conversation)}
+                  >
+                    {t('View')}
+                  </Button>
+                  {canManage ? (
+                    <Button
+                      type='button'
+                      variant='ghost'
+                      size='sm'
+                      aria-label={t(
+                        showingArchived
+                          ? 'Restore conversation'
+                          : 'Archive conversation'
+                      )}
+                      disabled={actionPending}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        archiveMutation.mutate({
+                          id: conversation.id,
+                          archived: showingArchived,
+                        })
+                      }}
+                    >
+                      <HugeiconsIcon
+                        icon={
+                          showingArchived ? ArchiveRestoreIcon : Archive01Icon
+                        }
+                        className='size-4'
+                        strokeWidth={2}
+                        aria-hidden='true'
+                      />
+                      {t(showingArchived ? 'Restore' : 'Archive')}
+                    </Button>
+                  ) : null}
+                </div>
               </div>
-              <Button
-                type='button'
-                variant='outline'
-                size='sm'
-                onClick={() => props.onOpenConversation(conversation)}
-              >
-                {t('View')}
-              </Button>
-            </div>
-            <p className='text-muted-foreground line-clamp-2 text-xs leading-5'>
-              {safePreview}
-            </p>
-          </article>
-        )
-      })}
+              <p className='text-muted-foreground line-clamp-2 text-xs leading-5'>
+                {safePreview}
+              </p>
+            </article>
+          )
+        })
+      )}
     </div>
   )
 }

@@ -28,6 +28,7 @@ const assistantSensitivePatterns = [
   /\bbearer\s+[A-Za-z0-9._~+\-/]+=*/g,
   /\bsk-[A-Za-z0-9_-]{12,}\b/g,
   /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g,
+  /(?<![\w])(?:\+\d{1,3}[\s.-]?)?(?:\(\d{2,4}\)|\d{2,4})[\s.-]?\d{3,4}[\s.-]?\d{4}(?!\w)/g,
 ] as const
 
 export function redactAssistantMessageForDisplay(

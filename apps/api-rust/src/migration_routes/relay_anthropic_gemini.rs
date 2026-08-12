@@ -11,7 +11,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use axum::{
     Json, Router,
-    body::to_bytes,
+    body::{Body, to_bytes},
     extract::{Path, Request, State},
     http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
@@ -21,6 +21,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::missing_relay_models_billing::{ModelLookupState, model_lookup_method_router};
+use super::sse::SseError;
 use crate::RequestContext;
 
 const REQUEST_ID: &str = "x-request-id";
@@ -81,12 +82,56 @@ pub struct UpstreamRequest {
 }
 
 /// Reply returned by a provider adapter after provider-to-client conversion.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum UpstreamReply {
     /// A complete provider-compatible JSON value.
     Json(Value),
     /// Ordered provider-compatible SSE events.
     Sse(Vec<RelaySseEvent>),
+    /// A single-consumption native Anthropic/Gemini SSE response.
+    ///
+    /// This variant is intentionally distinct from [`Self::Sse`]: it is only
+    /// produced for a same-protocol relay and keeps the provider's bytes in a
+    /// backpressured [`Body`] rather than decoding and re-encoding frames.
+    NativeSse(Box<NativeSseReply>),
+}
+
+/// A successful same-protocol SSE response whose body is consumed exactly once.
+///
+/// The body owns the upstream `bytes_stream`. Dropping the response before it
+/// is fully read therefore drops that stream as well, allowing the HTTP client
+/// cancellation to reach the provider without an intermediate queue.
+pub struct NativeSseReply {
+    status: StatusCode,
+    body: Body,
+    content_type: Option<HeaderValue>,
+}
+
+impl NativeSseReply {
+    /// Creates a native response for a same-protocol relay.
+    ///
+    /// `content_type` is copied from the upstream response when present. The
+    /// HTTP boundary supplies the event-stream fallback when it is absent and
+    /// always applies its safe `Cache-Control: no-cache` policy.
+    #[must_use]
+    pub fn new(status: StatusCode, body: Body, content_type: Option<HeaderValue>) -> Self {
+        Self {
+            status,
+            body,
+            content_type,
+        }
+    }
+}
+
+impl std::fmt::Debug for NativeSseReply {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("NativeSseReply")
+            .field("status", &self.status)
+            .field("content_type", &self.content_type)
+            .field("body", &"<stream>")
+            .finish()
+    }
 }
 
 /// A provider SSE event after protocol translation and before HTTP framing.
@@ -125,6 +170,11 @@ pub trait RelayBackend: Send + Sync {
         model: &str,
     ) -> Result<RelayChannel, RelayFailure>;
     /// Invokes a selected channel and converts its response to the caller protocol.
+    ///
+    /// A native Anthropic/Gemini SSE response is returned as
+    /// [`UpstreamReply::NativeSse`] and is consumed once by the HTTP boundary;
+    /// [`UpstreamReply::Sse`] remains the buffered representation for typed
+    /// conversion paths.
     async fn invoke(
         &self,
         channel: &RelayChannel,
@@ -158,6 +208,9 @@ pub enum RelayFailure {
         /// Client-protocol JSON response body after adapter conversion.
         body: Value,
     },
+    /// The provider returned an SSE frame that cannot be represented without
+    /// silently losing data or metadata at this relay boundary.
+    Sse(SseError),
 }
 
 /// State used by this independently mergeable relay router.
@@ -521,7 +574,9 @@ fn outcome_for(error: &RelayFailure) -> RelayOutcome {
     match error {
         RelayFailure::Unauthorized | RelayFailure::ConcealedNotFound => RelayOutcome::Unauthorized,
         RelayFailure::NoChannel => RelayOutcome::NoChannel,
-        RelayFailure::Upstream | RelayFailure::Provider { .. } => RelayOutcome::UpstreamFailure,
+        RelayFailure::Upstream | RelayFailure::Provider { .. } | RelayFailure::Sse(_) => {
+            RelayOutcome::UpstreamFailure
+        }
     }
 }
 
@@ -533,13 +588,15 @@ fn openai_failure(error: &RelayFailure, request_id: &str) -> Response {
         RelayFailure::Unauthorized => StatusCode::UNAUTHORIZED,
         RelayFailure::ConcealedNotFound => StatusCode::NOT_FOUND,
         RelayFailure::NoChannel => StatusCode::SERVICE_UNAVAILABLE,
-        RelayFailure::Upstream | RelayFailure::Provider { .. } => StatusCode::BAD_GATEWAY,
+        RelayFailure::Upstream | RelayFailure::Provider { .. } | RelayFailure::Sse(_) => {
+            StatusCode::BAD_GATEWAY
+        }
     };
     let message = match error {
         RelayFailure::Unauthorized => "Invalid token",
         RelayFailure::ConcealedNotFound => "Not Found",
         RelayFailure::NoChannel => "relay request could not be completed",
-        RelayFailure::Upstream | RelayFailure::Provider { .. } => {
+        RelayFailure::Upstream | RelayFailure::Provider { .. } | RelayFailure::Sse(_) => {
             "relay request could not be completed"
         }
     };
@@ -593,6 +650,24 @@ fn success(reply: UpstreamReply, channel_id: i64, request_id: &str) -> Response 
                 .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
             response
         }
+        UpstreamReply::NativeSse(native) => {
+            let NativeSseReply {
+                status,
+                body,
+                content_type,
+            } = *native;
+            let mut response = (status, body).into_response();
+            response.headers_mut().insert(
+                header::CONTENT_TYPE,
+                content_type.unwrap_or_else(|| {
+                    HeaderValue::from_static("text/event-stream; charset=utf-8")
+                }),
+            );
+            response
+                .headers_mut()
+                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+            response
+        }
     };
     add_compat_headers(&mut response, channel_id, request_id);
     response
@@ -634,7 +709,9 @@ fn failure(protocol: RelayProtocol, error: &RelayFailure, request_id: &str) -> R
             "UNAUTHENTICATED",
         ),
         RelayFailure::NoChannel => (StatusCode::SERVICE_UNAVAILABLE, "api_error", "UNAVAILABLE"),
-        RelayFailure::Upstream => (StatusCode::BAD_GATEWAY, "api_error", "UNAVAILABLE"),
+        RelayFailure::Upstream | RelayFailure::Sse(_) => {
+            (StatusCode::BAD_GATEWAY, "api_error", "UNAVAILABLE")
+        }
         RelayFailure::Provider { status, .. } => (*status, "api_error", "UNAVAILABLE"),
     };
     let body = match error {

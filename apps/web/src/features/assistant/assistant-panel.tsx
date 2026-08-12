@@ -26,9 +26,9 @@ import {
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { nanoid } from 'nanoid'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import {
@@ -76,6 +76,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useAuthStore } from '@/stores/auth-store'
 
 import {
   getAssistantAvailableModels,
@@ -108,7 +109,9 @@ import { getAssistantPresetForIntent } from './assistant-intent'
 import { AssistantKeyTool } from './assistant-key-tool'
 import { redactAssistantMessageForDisplay } from './assistant-message-safety'
 import { AssistantModelsTool } from './assistant-models-tool'
+import { AssistantOnboardingTodo } from './assistant-onboarding-todo'
 import { AssistantPlanTool } from './assistant-plan-tool'
+import { getAssistantPromptValidation } from './assistant-prompt-validation'
 import { AssistantSetupTool } from './assistant-setup-tool'
 import { AssistantUsageTool } from './assistant-usage-tool'
 
@@ -138,17 +141,6 @@ type AssistantAction =
         | 'usage'
     }
 
-type AssistantPreset = {
-  id: AssistantPresetId
-  question: string
-  answer: string
-  action?: AssistantAction
-  restricted?: {
-    answer: string
-    action?: AssistantAction
-  }
-}
-
 type ConversationEntry = {
   id: string
   role: 'user' | 'assistant'
@@ -169,7 +161,9 @@ function getBaseUrl(): string {
   return `${window.location.origin}/v1`
 }
 
-function PresetAction(props: {
+const ASSISTANT_PRIVACY_NOTICE_COLLAPSE_DELAY_MS = 5_000
+
+function AssistantActionButton(props: {
   action: AssistantAction
   onToolOpen: (
     tool:
@@ -222,6 +216,106 @@ function PresetAction(props: {
       />
     </Button>
   )
+}
+
+type AssistantTool = Exclude<
+  Extract<AssistantAction, { kind: 'tool' }>['tool'],
+  never
+>
+
+function getAssistantToolForTarget(
+  target: AssistantPresetId | undefined
+): AssistantTool | null {
+  switch (target) {
+    case 'onboarding':
+      return 'activation'
+    case 'api-key':
+      return 'key'
+    case 'client-setup':
+      return 'setup'
+    case 'cost':
+      return 'cost'
+    case 'human':
+      return 'handoff'
+    case 'models':
+      return 'models'
+    case 'plan':
+      return 'plan'
+    case 'usage':
+      return 'usage'
+    default:
+      return null
+  }
+}
+
+function getAssistantActionForTarget(
+  target: AssistantPresetId | undefined,
+  translate: (key: string) => string
+): AssistantAction | undefined {
+  switch (target) {
+    case 'onboarding':
+      return {
+        kind: 'tool',
+        label: translate('Unlock L1 access'),
+        tool: 'activation',
+      }
+    case 'plan':
+      return {
+        kind: 'tool',
+        label: translate('Compare live plans'),
+        tool: 'plan',
+      }
+    case 'api-key':
+      return {
+        kind: 'tool',
+        label: translate('View connection details'),
+        tool: 'key',
+      }
+    case 'client-setup':
+      return {
+        kind: 'tool',
+        label: translate('Open client setup guide'),
+        tool: 'setup',
+      }
+    case 'bounty':
+      return {
+        kind: 'route',
+        label: translate('Explore open-source bounties'),
+        to: '/open-source-bounties',
+      }
+    case 'cost':
+      return {
+        kind: 'tool',
+        label: translate('Calculate with live pricing'),
+        tool: 'cost',
+      }
+    case 'usage':
+      return {
+        kind: 'tool',
+        label: translate('Open usage statistics'),
+        tool: 'usage',
+      }
+    case 'models':
+      return {
+        kind: 'tool',
+        label: translate('View all currently available models'),
+        tool: 'models',
+      }
+    case 'invitation':
+      return {
+        kind: 'route',
+        label: translate('Open wallet and invitations'),
+        to: '/wallet',
+      }
+    case 'human':
+      return {
+        kind: 'tool',
+        label: translate('Send to an administrator'),
+        tool: 'handoff',
+      }
+    default:
+      return undefined
+  }
 }
 
 function AssistantAccountStatusNotice(props: {
@@ -290,19 +384,6 @@ function AssistantPromptInputSync(props: {
   return null
 }
 
-const L0_MINIMUM_MESSAGE_CHARACTERS = 5
-
-export function getAssistantPromptValidation(
-  message: string,
-  restricted: boolean
-) {
-  const characterCount = Array.from(message.trim()).length
-  return {
-    characterCount,
-    invalid: restricted && characterCount < L0_MINIMUM_MESSAGE_CHARACTERS,
-  }
-}
-
 function AssistantPromptComposer(props: {
   footerStatus: string
   placeholder: string
@@ -317,11 +398,12 @@ function AssistantPromptComposer(props: {
   } = usePromptInputController()
   const validation = getAssistantPromptValidation(value, props.restricted)
   const hasText = value.trim().length > 0
-  const showValidationError = props.restricted && hasText && validation.invalid
+  const showValidationError = hasText && validation.invalid
   const hintId = 'assistant-l0-input-hint'
-  const describedBy = props.restricted
-    ? `${props.privacyNoticeId} ${hintId}`
-    : props.privacyNoticeId
+  const describedBy =
+    props.restricted || showValidationError
+      ? `${props.privacyNoticeId} ${hintId}`
+      : props.privacyNoticeId
 
   return (
     <>
@@ -334,14 +416,9 @@ function AssistantPromptComposer(props: {
           <PromptInputTextarea
             placeholder={props.placeholder}
             maxLength={4000}
-            minLength={
-              props.restricted ? L0_MINIMUM_MESSAGE_CHARACTERS : undefined
-            }
             required={props.restricted}
             aria-describedby={describedBy}
-            aria-invalid={
-              props.restricted && hasText ? validation.invalid : undefined
-            }
+            aria-invalid={hasText ? validation.invalid : undefined}
             disabled={props.sending}
             className='max-h-32 min-h-12'
           />
@@ -350,25 +427,13 @@ function AssistantPromptComposer(props: {
           <span className='text-muted-foreground min-w-0 flex-1 truncate text-xs'>
             {props.footerStatus}
           </span>
-          {props.restricted ? (
-            <span
-              className={
-                showValidationError
-                  ? 'text-destructive shrink-0 text-xs'
-                  : 'text-muted-foreground shrink-0 text-xs'
-              }
-              aria-label={t('L0 message character count')}
-            >
-              {validation.characterCount}/{L0_MINIMUM_MESSAGE_CHARACTERS}
-            </span>
-          ) : null}
           <PromptInputSubmit
             status={props.sending ? 'submitted' : 'ready'}
             disabled={props.sending || validation.invalid}
           />
         </PromptInputFooter>
       </PromptInput>
-      {props.restricted ? (
+      {props.restricted || showValidationError ? (
         <p
           id={hintId}
           className={
@@ -380,7 +445,7 @@ function AssistantPromptComposer(props: {
           aria-live='polite'
         >
           {showValidationError
-            ? t('Support message must contain at least 5 characters.')
+            ? t('Please enter a message other than a single punctuation mark.')
             : t(
                 'Write a short explanation of what you want to build or why you need L1 access.'
               )}
@@ -404,7 +469,11 @@ function AssistantPanelHeader(props: {
 
   if (props.mode === 'mobile') {
     return (
-      <SheetHeader className={sideDrawerHeaderClassName('pr-12')}>
+      <SheetHeader
+        className={sideDrawerHeaderClassName(
+          'shrink-0 pr-12 pt-[max(0.75rem,env(safe-area-inset-top))]'
+        )}
+      >
         <SheetTitle>{t('Service guide')}</SheetTitle>
         <SheetDescription>{props.description}</SheetDescription>
         <Button
@@ -425,62 +494,64 @@ function AssistantPanelHeader(props: {
   }
 
   return (
-    <header className='border-border/70 bg-background/95 supports-[backdrop-filter]:bg-background/80 flex shrink-0 items-start gap-3 border-b px-4 py-3 backdrop-blur'>
+    <header className='border-border/70 bg-background/95 supports-[backdrop-filter]:bg-background/80 flex min-w-0 shrink-0 items-start gap-2 border-b px-3 py-3 backdrop-blur sm:gap-3 sm:px-4'>
       <div className='min-w-0 flex-1'>
-        <h2 className='text-base leading-6 font-semibold'>
+        <h2 className='truncate text-base leading-6 font-semibold'>
           {t('Service guide')}
         </h2>
         <p className='text-muted-foreground mt-0.5 text-xs leading-5'>
           {props.description}
         </p>
       </div>
-      <Button
-        type='button'
-        variant='ghost'
-        size='sm'
-        className='shrink-0'
-        onClick={
-          props.historyVisible ? props.onCloseHistory : props.onOpenHistory
-        }
-      >
-        {props.historyVisible ? t('Back') : t('Conversation history')}
-      </Button>
-      {!props.fullscreen ? (
+      <div className='flex min-w-0 shrink-0 items-center gap-0.5'>
+        <Button
+          type='button'
+          variant='ghost'
+          size='sm'
+          className='max-w-32 shrink-0 truncate px-2 sm:max-w-40'
+          onClick={
+            props.historyVisible ? props.onCloseHistory : props.onOpenHistory
+          }
+        >
+          {props.historyVisible ? t('Back') : t('Conversation history')}
+        </Button>
+        {!props.fullscreen ? (
+          <Button
+            type='button'
+            variant='ghost'
+            size='icon-sm'
+            aria-label={t('Collapse')}
+            title={t('Collapse')}
+            data-testid='assistant-collapse'
+            onClick={props.onToggleCollapsed}
+          >
+            <HugeiconsIcon
+              icon={ArrowRight01Icon}
+              strokeWidth={2}
+              aria-hidden='true'
+            />
+          </Button>
+        ) : null}
         <Button
           type='button'
           variant='ghost'
           size='icon-sm'
-          aria-label={t('Collapse')}
-          title={t('Collapse')}
-          data-testid='assistant-collapse'
-          onClick={props.onToggleCollapsed}
+          aria-label={
+            props.fullscreen ? t('Exit full screen') : t('Enter full screen')
+          }
+          title={
+            props.fullscreen ? t('Exit full screen') : t('Enter full screen')
+          }
+          data-testid='assistant-fullscreen'
+          onClick={props.onToggleFullscreen}
         >
           <HugeiconsIcon
-            icon={ArrowRight01Icon}
+            icon={props.fullscreen ? Minimize01Icon : Maximize01Icon}
             strokeWidth={2}
             aria-hidden='true'
           />
         </Button>
-      ) : null}
-      <Button
-        type='button'
-        variant='ghost'
-        size='icon-sm'
-        aria-label={
-          props.fullscreen ? t('Exit full screen') : t('Enter full screen')
-        }
-        title={
-          props.fullscreen ? t('Exit full screen') : t('Enter full screen')
-        }
-        data-testid='assistant-fullscreen'
-        onClick={props.onToggleFullscreen}
-      >
-        <HugeiconsIcon
-          icon={props.fullscreen ? Minimize01Icon : Maximize01Icon}
-          strokeWidth={2}
-          aria-hidden='true'
-        />
-      </Button>
+      </div>
     </header>
   )
 }
@@ -494,207 +565,19 @@ export function AssistantPanel(props: {
   initialMessage?: string
   initialMessageRevision?: number
   onOpenChange: (open: boolean) => void
+  onConversationReset?: () => void
   onToggleCollapsed?: () => void
   onToggleFullscreen?: () => void
 }) {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const mode = props.mode ?? 'mobile'
+  const onConversationReset = props.onConversationReset
   const panelVisible =
     mode === 'rail' ? !props.collapsed || props.fullscreen === true : props.open
   const baseUrl = getBaseUrl()
-  const presets = useMemo<AssistantPreset[]>(
-    () => [
-      {
-        id: 'onboarding',
-        question: t('Ask an administrator to raise my access level'),
-        answer: t(
-          'L0 accounts can browse challenges and ask the AI assistant to request L1 access.'
-        ),
-        action: {
-          kind: 'tool',
-          label: t('Unlock L1 access'),
-          tool: 'activation',
-        },
-        restricted: {
-          answer: t(
-            'L0 accounts can browse challenges and ask the AI assistant to request L1 access.'
-          ),
-          action: {
-            kind: 'tool',
-            label: t('Unlock L1 access'),
-            tool: 'activation',
-          },
-        },
-      },
-      {
-        id: 'service',
-        question: t('What can I do while access is under review?'),
-        answer: t(
-          'I can explain LMM services, compare plans, estimate costs, prepare client setup, and introduce open-source challenges while your request is reviewed.'
-        ),
-        restricted: {
-          answer: t(
-            'L0 access is restricted. Plans and top-up discounts stay hidden; explain your real use case and I can prepare an L1 recommendation for your confirmation.'
-          ),
-        },
-      },
-      {
-        id: 'plan',
-        question: t('Which option is the best value?'),
-        answer: t(
-          'Choose by workload rather than list price. I can compare the live included quota, reset period, and current top-up discounts against your expected usage.'
-        ),
-        action: {
-          kind: 'tool',
-          label: t('Compare live plans'),
-          tool: 'plan',
-        },
-      },
-      {
-        id: 'api-key',
-        question: t('What are my Base URL, model ID, and API key?'),
-        answer: t(
-          'Your Base URL is {{baseUrl}}. Open connection details to copy it, see the current model ID, and create a new API key after explicit confirmation. Existing keys remain private.',
-          { baseUrl }
-        ),
-        action: {
-          kind: 'tool',
-          label: t('View connection details'),
-          tool: 'key',
-        },
-      },
-      {
-        id: 'client-setup',
-        question: t('How do I set up Claude Code or CC Switch?'),
-        answer: t(
-          'Windows, Linux, and macOS clients use the same three values: Base URL, model ID, and API key. Open the setup guide for verified install commands and app-specific fields.'
-        ),
-        action: {
-          kind: 'tool',
-          label: t('Open client setup guide'),
-          tool: 'setup',
-        },
-        restricted: {
-          answer: t(
-            'You can install clients while L0 access is under review. API requests become available after L1 approval.'
-          ),
-          action: {
-            kind: 'tool',
-            label: t('Open client setup guide'),
-            tool: 'setup',
-          },
-        },
-      },
-      {
-        id: 'bounty',
-        question: t('How do open-source bounties and tips work?'),
-        answer: t(
-          'A publisher funds a challenge and reviews submitted work. When a contribution is accepted, the publisher can add a tip before settlement; every financial confirmation shows the exact amount first.'
-        ),
-        action: {
-          kind: 'route',
-          label: t('Explore open-source bounties'),
-          to: '/open-source-bounties',
-        },
-        restricted: {
-          answer: t(
-            'A publisher funds a challenge and reviews submitted work. When a contribution is accepted, the publisher can add a tip before settlement; every financial confirmation shows the exact amount first.'
-          ),
-          action: {
-            kind: 'route',
-            label: t('Explore open-source bounties'),
-            to: '/open-source-bounties',
-          },
-        },
-      },
-      {
-        id: 'cost',
-        question: t('How is request cost calculated?'),
-        answer: t(
-          'Estimated cost is input tokens multiplied by the input rate plus output tokens multiplied by the output rate. Cached tokens, images, or tools may have separate rates, so confirm the selected model in Pricing.'
-        ),
-        action: {
-          kind: 'tool',
-          label: t('Calculate with live pricing'),
-          tool: 'cost',
-        },
-        restricted: {
-          answer: t(
-            'Choose a model and enter expected input and output tokens. I can calculate a read-only estimate from live pricing while your L1 request is under review.'
-          ),
-          action: {
-            kind: 'tool',
-            label: t('Calculate with live pricing'),
-            tool: 'cost',
-          },
-        },
-      },
-      {
-        id: 'usage',
-        question: t('Can you analyze my historical calls and usage?'),
-        answer: t(
-          'I can summarize your recent requests, tokens, cost, models, and groups. Ask for a time range such as the last 7 or 30 days, or open the detailed usage logs.'
-        ),
-        action: {
-          kind: 'tool',
-          label: t('Open usage statistics'),
-          tool: 'usage',
-        },
-      },
-      {
-        id: 'models',
-        question: t('Which models and model IDs can I use?'),
-        answer: t(
-          'Ask me for the current model IDs and routing groups. I will read the account-specific list instead of guessing from a public model name.'
-        ),
-        action: {
-          kind: 'tool',
-          label: t('View all currently available models'),
-          tool: 'models',
-        },
-      },
-      {
-        id: 'invitation',
-        question: t('How do invitation rewards work?'),
-        answer: t(
-          'I can show your invitation code, link, invited count, and configured reward amounts. Rewards are calculated from the current account configuration.'
-        ),
-        action: {
-          kind: 'route',
-          label: t('Open wallet and invitations'),
-          to: '/wallet',
-        },
-      },
-      {
-        id: 'human',
-        question: t('I need human support'),
-        answer: t(
-          'Describe the account, billing, or technical issue and include the page and approximate time. Never include an API key or password in the message.'
-        ),
-        action: {
-          kind: 'tool',
-          label: t('Send to an administrator'),
-          tool: 'handoff',
-        },
-      },
-    ],
-    [baseUrl, t]
-  )
-
-  const [entries, setEntries] = useState<ConversationEntry[]>(() => {
-    const preset = presets.find((item) => item.id === props.initialPreset)
-    if (!preset) return []
-    return [
-      { id: nanoid(), role: 'user', content: preset.question },
-      {
-        id: nanoid(),
-        role: 'assistant',
-        content: preset.answer,
-        action: preset.action,
-      },
-    ]
-  })
+  const [entries, setEntries] = useState<ConversationEntry[]>([])
   const [sending, setSending] = useState(false)
   const [recommendationDraft, setRecommendationDraft] =
     useState<AssistantL1RecommendationAction | null>(null)
@@ -713,7 +596,13 @@ export function AssistantPanel(props: {
     | 'setup'
     | 'usage'
     | null
-  >(props.initialPreset === 'onboarding' ? 'activation' : null)
+  >(null)
+  const openedTargetRef = useRef<AssistantPresetId | undefined>(undefined)
+  const [conversationResetRevision, setConversationResetRevision] = useState(0)
+  const [privacyNoticeExpanded, setPrivacyNoticeExpanded] = useState(true)
+  const privacyNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  )
   const statusQuery = useQuery({
     queryKey: ['assistant-status'],
     queryFn: getAssistantStatus,
@@ -728,6 +617,42 @@ export function AssistantPanel(props: {
   const accountAccessConfirmed =
     accountAccessState === 'granted' || accountAccessState === 'restricted'
   const developerAccessGranted = accountAccessState === 'granted'
+  const previousDeveloperAccessRef = useRef(developerAccessGranted)
+  const authUser = useAuthStore((state) => state.auth.user)
+  const clearPrivacyNoticeTimer = useCallback(() => {
+    if (privacyNoticeTimerRef.current === null) return
+    clearTimeout(privacyNoticeTimerRef.current)
+    privacyNoticeTimerRef.current = null
+  }, [])
+  const schedulePrivacyNoticeCollapse = useCallback(() => {
+    clearPrivacyNoticeTimer()
+    setPrivacyNoticeExpanded(true)
+    privacyNoticeTimerRef.current = setTimeout(() => {
+      privacyNoticeTimerRef.current = null
+      setPrivacyNoticeExpanded(false)
+    }, ASSISTANT_PRIVACY_NOTICE_COLLAPSE_DELAY_MS)
+  }, [clearPrivacyNoticeTimer])
+  useEffect(() => {
+    if (!panelVisible) {
+      clearPrivacyNoticeTimer()
+      return
+    }
+
+    schedulePrivacyNoticeCollapse()
+    return clearPrivacyNoticeTimer
+  }, [clearPrivacyNoticeTimer, panelVisible, schedulePrivacyNoticeCollapse])
+  const togglePrivacyNotice = useCallback(() => {
+    if (privacyNoticeExpanded) {
+      clearPrivacyNoticeTimer()
+      setPrivacyNoticeExpanded(false)
+      return
+    }
+    schedulePrivacyNoticeCollapse()
+  }, [
+    clearPrivacyNoticeTimer,
+    privacyNoticeExpanded,
+    schedulePrivacyNoticeCollapse,
+  ])
   const isAdministrator = statusQuery.data?.is_admin === true
   const accessLevel = statusQuery.data?.access_level
   const withAccessLevel = (message: string) =>
@@ -746,14 +671,22 @@ export function AssistantPanel(props: {
   })
   const accountToolActive = activeTool !== null
   const historyVisible = historyView !== null
-  let visiblePresets: AssistantPreset[] = []
-  if (isAdministrator) {
-    visiblePresets = presets
-  } else if (accountAccessState === 'restricted') {
-    visiblePresets = presets.filter((preset) => preset.id === 'onboarding')
-  } else if (developerAccessGranted) {
-    visiblePresets = presets
-  }
+
+  useEffect(() => {
+    const wasGranted = previousDeveloperAccessRef.current
+    previousDeveloperAccessRef.current = developerAccessGranted
+    if (
+      wasGranted ||
+      !developerAccessGranted ||
+      activeTool !== 'activation' ||
+      !panelVisible
+    ) {
+      return
+    }
+
+    setActiveTool(null)
+    void navigate({ to: '/dashboard' })
+  }, [activeTool, developerAccessGranted, navigate, panelVisible])
 
   let assistantFooterStatus = t('Loading...')
   let assistantDescription = t('Loading...')
@@ -795,45 +728,66 @@ export function AssistantPanel(props: {
     assistantDescription = t('Unable to verify account access')
   }
 
-  const appendPreset = useCallback(
-    (preset: AssistantPreset) => {
-      const presentation =
-        accountAccessState === 'restricted' && preset.restricted
-          ? preset.restricted
-          : preset
-      setActiveTool(preset.id === 'onboarding' ? 'activation' : null)
+  const clearToolState = useCallback(() => {
+    setActiveTool(null)
+    setRecommendationDraft(null)
+    setAccountDisableDraft(null)
+  }, [])
+
+  const resetConversation = useCallback(() => {
+    setEntries([])
+    clearToolState()
+    setHistoryView(null)
+    openedTargetRef.current = undefined
+    setConversationResetRevision((revision) => revision + 1)
+    onConversationReset?.()
+  }, [clearToolState, onConversationReset])
+
+  const openAssistantTarget = useCallback(
+    (target: AssistantPresetId) => {
+      const restrictedTarget =
+        target === 'onboarding' ||
+        target === 'client-setup' ||
+        target === 'bounty' ||
+        target === 'cost'
+      if (
+        accountAccessState !== 'granted' &&
+        !(accountAccessState === 'restricted' && restrictedTarget)
+      ) {
+        return false
+      }
+
+      const tool = getAssistantToolForTarget(target)
+      const action = getAssistantActionForTarget(target, t)
+      setActiveTool(tool)
       setEntries((current) => [
         ...current,
         {
           id: nanoid(),
-          role: 'user',
-          content: preset.question,
-        },
-        {
-          id: nanoid(),
           role: 'assistant',
-          content: presentation.answer,
-          action: presentation.action,
+          content: assistantDescription,
+          action: tool ? undefined : action,
         },
       ])
+      return true
     },
-    [accountAccessState]
+    [accountAccessState, assistantDescription, t]
   )
+
+  useEffect(() => {
+    const target = props.initialPreset
+    if (!target || !accountAccessConfirmed) return
+    if (openedTargetRef.current === target) return
+    if (openAssistantTarget(target)) openedTargetRef.current = target
+  }, [accountAccessConfirmed, openAssistantTarget, props.initialPreset])
 
   useEffect(
     () =>
-      subscribeToAssistantOpen((presetId) => {
-        if (!presetId) return
-        const preset = presets.find((item) => item.id === presetId)
-        if (
-          accountAccessState !== 'granted' &&
-          !(accountAccessState === 'restricted' && preset?.restricted)
-        ) {
-          return
-        }
-        if (preset) appendPreset(preset)
+      subscribeToAssistantOpen((target) => {
+        if (!target) return
+        if (openAssistantTarget(target)) openedTargetRef.current = target
       }),
-    [accountAccessState, appendPreset, presets]
+    [openAssistantTarget]
   )
 
   const handleOpenChange = (open: boolean) => {
@@ -853,20 +807,16 @@ export function AssistantPanel(props: {
           'Sensitive content is hidden and can only be accessed from a private card.'
         )
       )
-      const suggestedPresetId = getAssistantPresetForIntent(reply.intent)
-      const suggestedPreset = suggestedPresetId
-        ? presets.find((preset) => preset.id === suggestedPresetId)
-        : undefined
+      const suggestedTarget = getAssistantPresetForIntent(reply.intent)
       const adminChange =
         reply.action?.type === 'admin_config_change' ||
         reply.action?.type === 'admin_pricing_change'
           ? reply.action
           : undefined
-      let suggestedAction = developerAccessGranted
-        ? suggestedPreset?.action
-        : suggestedPresetId === 'onboarding'
-          ? suggestedPreset?.restricted?.action
-          : undefined
+      let suggestedAction: AssistantAction | undefined
+      if (developerAccessGranted || suggestedTarget === 'onboarding') {
+        suggestedAction = getAssistantActionForTarget(suggestedTarget, t)
+      }
       if (adminChange) {
         setRecommendationDraft(null)
         setAccountDisableDraft(null)
@@ -927,20 +877,15 @@ export function AssistantPanel(props: {
     const message = text?.trim()
     if (sending) return
     if (!message) {
-      if (accountAccessState === 'restricted') {
-        throw new Error(
-          t('Support message must contain at least 5 characters.')
-        )
-      }
-      return
+      throw new Error(t('Please enter a message.'))
     }
-    const validation = getAssistantPromptValidation(
-      message,
-      accountAccessState === 'restricted'
-    )
+    const validation = getAssistantPromptValidation(message)
     if (validation.invalid) {
-      throw new Error(t('Support message must contain at least 5 characters.'))
+      throw new Error(
+        t('Please enter a message other than a single punctuation mark.')
+      )
     }
+    clearToolState()
     const safeMessage = redactAssistantMessageForDisplay(
       message,
       t(
@@ -991,21 +936,54 @@ export function AssistantPanel(props: {
       />
       <Alert
         id='assistant-privacy-notice'
-        className='m-3 mb-0'
+        className={
+          privacyNoticeExpanded
+            ? 'm-3 mb-0 max-w-[calc(100%-1.5rem)] min-w-0'
+            : 'm-3 mb-0 max-w-[calc(100%-1.5rem)] min-w-0 py-1.5'
+        }
         data-testid='assistant-privacy-notice'
         variant='default'
       >
         <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} aria-hidden='true' />
-        <AlertTitle>{t('Conversation privacy notice')}</AlertTitle>
-        <AlertDescription>
-          {t(
-            'Your assistant conversations are not private. Authorized higher-access users may review them; never send personal information, passwords, API keys, or credentials.'
-          )}
-        </AlertDescription>
+        <div className='min-w-0'>
+          <AlertTitle>
+            <button
+              type='button'
+              className='focus-visible:ring-ring/50 rounded-sm text-left font-medium outline-none focus-visible:ring-3'
+              aria-controls='assistant-privacy-notice-description'
+              aria-describedby='assistant-privacy-notice-description'
+              aria-expanded={privacyNoticeExpanded}
+              data-testid='assistant-privacy-notice-toggle'
+              onClick={togglePrivacyNotice}
+            >
+              {t('Conversation privacy notice')}
+            </button>
+          </AlertTitle>
+          <AlertDescription
+            id='assistant-privacy-notice-description'
+            className={privacyNoticeExpanded ? undefined : 'sr-only'}
+          >
+            <p>
+              {t(
+                'Your assistant conversations are not private. Authorized higher-access users may review them.'
+              )}
+            </p>
+            <p>
+              {t(
+                'Do not send personal information, passwords, API keys, or credentials in chat. Site-issued credentials such as API keys are shown in a shielded private card and are kept out of the assistant context.'
+              )}
+            </p>
+            <p>
+              {t(
+                'If you accidentally send supported sensitive data, the assistant safety filter may detect common email addresses, phone numbers, and API key formats and redact the message before this assistant request is sent. Pattern matching is not a guarantee.'
+              )}
+            </p>
+          </AlertDescription>
+        </div>
       </Alert>
       {historyVisible ? (
-        <Conversation className='bg-muted/20'>
-          <ConversationContent className='flex min-h-full flex-col gap-5 px-4 py-5 sm:px-6'>
+        <Conversation className='bg-muted/20 min-w-0'>
+          <ConversationContent className='flex min-h-full max-w-full min-w-0 flex-col gap-5 px-4 py-5 sm:px-6'>
             {historyView === 'list' ? (
               <AssistantHistory
                 active={panelVisible}
@@ -1020,8 +998,22 @@ export function AssistantPanel(props: {
         </Conversation>
       ) : (
         <>
-          <Conversation className='bg-muted/20'>
-            <ConversationContent className='flex min-h-full flex-col gap-5 px-4 py-5 sm:px-6'>
+          {developerAccessGranted && authUser ? (
+            <AssistantOnboardingTodo
+              userId={authUser.id}
+              enabled={developerAccessGranted}
+              onOpenKey={() => {
+                clearToolState()
+                setActiveTool('key')
+              }}
+              onOpenSetup={() => {
+                clearToolState()
+                setActiveTool('setup')
+              }}
+            />
+          ) : null}
+          <Conversation className='bg-muted/20 min-w-0'>
+            <ConversationContent className='flex min-h-full max-w-full min-w-0 flex-col gap-5 px-4 py-5 sm:px-6'>
               {entries.length === 0 ? (
                 <div className='flex flex-1 flex-col gap-5'>
                   {accountAccessState === 'loading' ||
@@ -1041,7 +1033,7 @@ export function AssistantPanel(props: {
                     >
                       <CardHeader className='gap-2'>
                         <Badge variant='secondary' className='w-fit'>
-                          {t('L0 tutorial required')}
+                          {t('Read-only')}
                         </Badge>
                         <CardTitle className='text-lg'>
                           {t('Tell the AI assistant what you want to do')}
@@ -1058,53 +1050,17 @@ export function AssistantPanel(props: {
                             'Write a short explanation of what you want to build or why you need L1 access.'
                           )}
                         </p>
-                        <Button
-                          type='button'
-                          className='w-full sm:w-fit'
-                          onClick={() => appendPreset(presets[0]!)}
-                        >
-                          {t('Ask an administrator to raise my access level')}
-                          <HugeiconsIcon
-                            icon={ArrowRight01Icon}
-                            strokeWidth={2}
-                            data-icon='inline-end'
-                            aria-hidden='true'
-                          />
-                        </Button>
                       </CardContent>
                     </Card>
                   ) : (
-                    <>
-                      <div>
-                        <p className='text-base font-medium'>
-                          {t('How can I help?')}
-                        </p>
-                        <p className='text-muted-foreground mt-1 text-sm leading-6'>
-                          {t(
-                            'Choose a common question or ask anything about using LMM.'
-                          )}
-                        </p>
-                      </div>
-                      <div className='grid gap-2'>
-                        {visiblePresets.map((preset) => (
-                          <Button
-                            key={preset.id}
-                            type='button'
-                            variant='outline'
-                            className='h-auto min-h-11 justify-between gap-3 px-3 py-2.5 text-left whitespace-normal'
-                            onClick={() => appendPreset(preset)}
-                          >
-                            <span>{preset.question}</span>
-                            <HugeiconsIcon
-                              icon={ArrowRight01Icon}
-                              strokeWidth={2}
-                              className='shrink-0'
-                              aria-hidden='true'
-                            />
-                          </Button>
-                        ))}
-                      </div>
-                    </>
+                    <div>
+                      <p className='text-base font-medium'>
+                        {t('How can I help?')}
+                      </p>
+                      <p className='text-muted-foreground mt-1 text-sm leading-6'>
+                        {assistantDescription}
+                      </p>
+                    </div>
                   )}
                 </div>
               ) : (
@@ -1115,16 +1071,21 @@ export function AssistantPanel(props: {
                         variant='flat'
                         className={
                           entry.error
-                            ? 'text-destructive gap-3 text-sm leading-6'
-                            : 'gap-3 text-sm leading-6'
+                            ? 'text-destructive max-w-full min-w-0 gap-3 text-sm leading-6'
+                            : 'max-w-full min-w-0 gap-3 text-sm leading-6'
                         }
                       >
                         {entry.role === 'assistant' ? (
-                          <Response className='leading-7' final>
+                          <Response
+                            className='max-w-full leading-7 break-words'
+                            final
+                          >
                             {entry.content}
                           </Response>
                         ) : (
-                          <p className='whitespace-pre-wrap'>{entry.content}</p>
+                          <p className='break-words whitespace-pre-wrap'>
+                            {entry.content}
+                          </p>
                         )}
                         {entry.adminChange ? (
                           <AssistantAdminChangeTool
@@ -1153,7 +1114,7 @@ export function AssistantPanel(props: {
                               </Button>
                             ) : null}
                             {entry.action ? (
-                              <PresetAction
+                              <AssistantActionButton
                                 action={entry.action}
                                 onToolOpen={setActiveTool}
                               />
@@ -1189,6 +1150,16 @@ export function AssistantPanel(props: {
                       availableModels={connectionModelsQuery.data ?? []}
                       modelsLoading={connectionModelsQuery.isLoading}
                       developerAccessGranted={developerAccessGranted}
+                      onKeyCreated={() => {
+                        if (authUser) {
+                          void queryClient.invalidateQueries({
+                            queryKey: [
+                              'assistant-onboarding-todo',
+                              authUser.id,
+                            ],
+                          })
+                        }
+                      }}
                       onContinueSetup={() => setActiveTool('setup')}
                     />
                   ) : null}
@@ -1256,12 +1227,7 @@ export function AssistantPanel(props: {
                       type='button'
                       variant='ghost'
                       size='sm'
-                      onClick={() => {
-                        setEntries([])
-                        setActiveTool(null)
-                        setRecommendationDraft(null)
-                        setAccountDisableDraft(null)
-                      }}
+                      onClick={resetConversation}
                       disabled={sending}
                     >
                       <HugeiconsIcon
@@ -1279,10 +1245,13 @@ export function AssistantPanel(props: {
             <ConversationScrollButton />
           </Conversation>
 
-          <div className='bg-background pb-[max(0.75rem,env(safe-area-inset-bottom))]'>
+          <div className='bg-background min-w-0 shrink-0 pb-[max(0.75rem,env(safe-area-inset-bottom))]'>
             <Separator className='bg-border/70' />
             <div className='px-3 py-3 sm:px-4'>
-              <PromptInputProvider initialInput={props.initialMessage}>
+              <PromptInputProvider
+                key={conversationResetRevision}
+                initialInput={props.initialMessage}
+              >
                 <AssistantPromptInputSync
                   initialMessage={props.initialMessage}
                   initialMessageRevision={props.initialMessageRevision}
@@ -1361,7 +1330,7 @@ export function AssistantPanel(props: {
     return (
       <aside
         id='ai-assistant-panel'
-        className='bg-background hidden min-h-0 w-[clamp(20rem,28vw,30rem)] shrink-0 flex-col border-l md:flex'
+        className='bg-background hidden min-h-0 w-[min(28vw,30rem)] max-w-full min-w-0 shrink-0 flex-col border-l md:flex'
         aria-label={t('Service guide')}
       >
         {panelContent}
@@ -1373,7 +1342,9 @@ export function AssistantPanel(props: {
     <Sheet open={props.open} onOpenChange={handleOpenChange}>
       <SheetContent
         id='ai-assistant-panel'
-        className={sideDrawerContentClassName('max-w-none sm:!max-w-[480px]')}
+        className={sideDrawerContentClassName(
+          'inset-0 !h-dvh !min-h-dvh !w-screen !max-w-none !min-w-0 rounded-none'
+        )}
       >
         {panelContent}
       </SheetContent>

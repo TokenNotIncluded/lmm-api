@@ -68,6 +68,12 @@ export function AssistantLauncher() {
     []
   )
 
+  const handleConversationReset = useCallback(() => {
+    setInitialPreset(undefined)
+    setInitialMessage(undefined)
+    setInitialMessageRevision((revision) => revision + 1)
+  }, [])
+
   useEffect(() => {
     const queuedPreset = consumeQueuedAssistantPreset()
     const queuedMessage = consumeQueuedAssistantMessage()
@@ -138,7 +144,7 @@ export function AssistantLauncher() {
       <Suspense
         fallback={
           <aside
-            className='bg-background hidden min-h-0 w-[clamp(20rem,28vw,30rem)] shrink-0 border-l md:flex'
+            className='bg-background hidden min-h-0 w-[min(28vw,30rem)] max-w-full min-w-0 shrink-0 border-l md:flex'
             aria-hidden='true'
           />
         }
@@ -152,6 +158,7 @@ export function AssistantLauncher() {
           initialMessage={initialMessage}
           initialMessageRevision={initialMessageRevision}
           onOpenChange={setMobileOpen}
+          onConversationReset={handleConversationReset}
           onToggleCollapsed={() => setDesktopCollapsed((value) => !value)}
           onToggleFullscreen={() => setDesktopFullscreen((value) => !value)}
         />

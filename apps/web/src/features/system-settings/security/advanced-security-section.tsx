@@ -53,6 +53,66 @@ import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 
+const STARTER_RULE_SET = {
+  version: 1,
+  rules: [
+    {
+      id: 'credential-theft',
+      name: 'Credential theft',
+      category: 'computer_network_compromise',
+      enabled: true,
+      patterns: [
+        'steal api key',
+        'exfiltrate credentials',
+        'dump environment variables',
+      ],
+    },
+    {
+      id: 'malware-development',
+      name: 'Malware development',
+      category: 'computer_network_compromise',
+      enabled: true,
+      patterns: ['ransomware payload', 'credential stealer', 'keylogger'],
+    },
+    {
+      id: 'weapons-and-explosives',
+      name: 'Weapons and dangerous materials',
+      category: 'weapons',
+      enabled: true,
+      patterns: ['build a bomb', 'explosive device instructions'],
+    },
+    {
+      id: 'violent-extremism',
+      name: 'Violence and hateful behavior',
+      category: 'violence_hate',
+      enabled: true,
+      patterns: ['terrorist attack plan', 'mass casualty attack'],
+    },
+    {
+      id: 'child-safety',
+      name: "Children's safety",
+      category: 'child_safety',
+      enabled: true,
+      patterns: ['groom a minor', 'child sexual abuse material'],
+    },
+    {
+      id: 'privacy-abuse',
+      name: 'Privacy and identity rights',
+      category: 'privacy_identity',
+      enabled: true,
+      patterns: ['doxx this person', "steal someone's identity"],
+    },
+    {
+      id: 'fraud-and-phishing',
+      name: 'Fraudulent and abusive practices',
+      category: 'fraudulent_abusive_predatory',
+      enabled: true,
+      patterns: ['phishing kit', 'credit card fraud'],
+    },
+  ],
+} as const
+
+const STARTER_RULE_SET_JSON = JSON.stringify(STARTER_RULE_SET, null, 2)
 const EMPTY_RULE_SET = '{\n  "version": 1,\n  "rules": []\n}'
 
 function createAdvancedSecuritySchema(t: TFunction) {
@@ -173,6 +233,27 @@ function formatRulesForEditor(value: string) {
   }
 }
 
+function formatInitialRules(value: string) {
+  const source = value.trim()
+  if (!source) return STARTER_RULE_SET_JSON
+
+  try {
+    const parsed = JSON.parse(source) as { rules?: unknown } | unknown[]
+    if (
+      (Array.isArray(parsed) && parsed.length === 0) ||
+      (!Array.isArray(parsed) &&
+        Array.isArray(parsed.rules) &&
+        parsed.rules.length === 0)
+    ) {
+      return STARTER_RULE_SET_JSON
+    }
+  } catch {
+    return value
+  }
+
+  return formatRulesForEditor(source)
+}
+
 function normalizeRules(value: string) {
   const source = value.trim() || EMPTY_RULE_SET
   try {
@@ -200,7 +281,7 @@ export function AdvancedSecuritySection({
     resolver: zodResolver(advancedSecuritySchema),
     defaultValues: {
       ...defaultValues,
-      AdvancedSecurityRules: formatRulesForEditor(
+      AdvancedSecurityRules: formatInitialRules(
         defaultValues.AdvancedSecurityRules
       ),
     },
@@ -215,7 +296,7 @@ export function AdvancedSecuritySection({
     }
     form.reset({
       ...defaultValues,
-      AdvancedSecurityRules: formatRulesForEditor(
+      AdvancedSecurityRules: formatInitialRules(
         defaultValues.AdvancedSecurityRules
       ),
     })
@@ -298,6 +379,11 @@ export function AdvancedSecuritySection({
             <p className='text-muted-foreground'>
               {t(
                 'Rules use literal, case-insensitive matching. Risk categories reference Anthropic’s public Usage Policy, but this local configuration is not an official equivalent, endorsement, or legal interpretation.'
+              )}
+            </p>
+            <p className='text-muted-foreground'>
+              {t(
+                'A starter rule set is loaded when no rules are configured. Review and edit it before enabling enforcement.'
               )}
             </p>
           </div>

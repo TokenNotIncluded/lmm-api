@@ -1,6 +1,8 @@
 package model
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"regexp"
 	"strings"
@@ -31,9 +33,12 @@ const (
 	AssistantIntentHumanSupport = "human_support"
 	AssistantIntentOther        = "other"
 
-	minAssistantHandoffRunes   = 5
-	maxAssistantHandoffRunes   = 2000
-	maxAssistantAdminNoteRunes = 2000
+	minAssistantHandoffRunes            = 5
+	maxAssistantHandoffRunes            = 2000
+	maxAssistantAdminNoteRunes          = 2000
+	assistantFirstQuestionMaxRunes      = 4000
+	assistantFirstQuestionBucketSeconds = 60 * 60
+	assistantFirstQuestionTopN          = 10
 )
 
 var (
@@ -44,10 +49,15 @@ var (
 	ErrAssistantLeadAlreadyResolved    = errors.New("assistant support request is already resolved")
 	ErrAssistantLeadStatus             = errors.New("assistant support request status is invalid")
 	ErrAssistantAdminNoteTooLong       = errors.New("assistant support note must be at most 2000 characters")
+	ErrAssistantFirstQuestionRequired  = errors.New("assistant first question is required")
+	ErrAssistantFirstQuestionTooLong   = errors.New("assistant first question must be at most 4000 characters")
 
-	assistantAPIKeyPattern = regexp.MustCompile(`(?i)\bsk-[a-z0-9._-]{6,}\b`)
-	assistantBearerPattern = regexp.MustCompile(`(?i)\bbearer\s+[a-z0-9._~+/-]{6,}=*`)
-	assistantSecretPattern = regexp.MustCompile(`(?i)(password|passwd|api[ _-]?key|access[ _-]?token|密码|密钥|令牌)\s*[:=：]\s*\S+`)
+	assistantAPIKeyPattern              = regexp.MustCompile(`(?i)\bsk-[a-z0-9._-]{6,}\b`)
+	assistantBearerPattern              = regexp.MustCompile(`(?i)\bbearer\s+[a-z0-9._~+/-]{6,}=*`)
+	assistantSecretPattern              = regexp.MustCompile(`(?i)(password|passwd|api[ _-]?key|access[ _-]?token|密码|密钥|令牌)\s*[:=：]\s*\S+`)
+	assistantFirstQuestionTokenPattern  = regexp.MustCompile(`(?i)\b(sk|rk|pk|ak|tok|token|key|secret)[_-][a-z0-9._~+/-]{6,}\b`)
+	assistantFirstQuestionFieldPattern  = regexp.MustCompile(`(?i)\b(token|client[_ -]?secret|secret|credential|private[_ -]?key|access[_ -]?key)\s*[:=：]\s*[^\s,;]+`)
+	assistantFirstQuestionUserIDPattern = regexp.MustCompile(`(?i)\b(user[_ -]?id|userid)\s*[:=：]\s*[a-z0-9_-]+`)
 )
 
 // AssistantLead stores privacy-minimized intent signals and explicit support
@@ -95,6 +105,27 @@ func (AssistantProfileBucket) TableName() string { return "assistant_profile_buc
 type AssistantProfileSummary struct {
 	Profile string `json:"profile"`
 	Count   int64  `json:"count"`
+}
+
+// AssistantFirstQuestionStat stores one redacted, normalized question per
+// hour. It is aggregate-only: no user identity, email, credential, or raw
+// request metadata is kept. Hourly buckets make the existing admin time-window
+// filter return accurate counts without retaining individual events.
+type AssistantFirstQuestionStat struct {
+	Id           int    `json:"-" gorm:"primaryKey"`
+	QuestionHash string `json:"-" gorm:"type:char(64);not null;uniqueIndex:idx_assistant_first_question_stat,priority:1"`
+	Question     string `json:"-" gorm:"type:text;not null"`
+	BucketStart  int64  `json:"-" gorm:"not null;uniqueIndex:idx_assistant_first_question_stat,priority:2"`
+	Count        int64  `json:"-" gorm:"not null;default:0"`
+	LastAskedAt  int64  `json:"-" gorm:"not null;index"`
+}
+
+func (AssistantFirstQuestionStat) TableName() string { return "assistant_first_question_stats" }
+
+type AssistantFirstQuestionSummary struct {
+	Question    string `json:"question"`
+	Count       int64  `json:"count"`
+	LastAskedAt int64  `json:"last_asked_at"`
 }
 
 var assistantProfileNames = map[string]struct{}{
@@ -203,6 +234,56 @@ func RecordAssistantIntent(userID int, message string) error {
 	}).Error
 }
 
+func normalizeAssistantFirstQuestion(question string) (string, string, error) {
+	question = RedactAssistantHistoryContent(question)
+	question = redactAssistantHandoffMessage(question)
+	question = assistantFirstQuestionTokenPattern.ReplaceAllString(question, "[REDACTED_SECRET]")
+	question = assistantFirstQuestionFieldPattern.ReplaceAllString(question, "$1: [REDACTED]")
+	question = assistantFirstQuestionUserIDPattern.ReplaceAllString(question, "[REDACTED_ID]")
+	question = strings.ToLower(strings.Join(strings.Fields(question), " "))
+	if question == "" {
+		return "", "", ErrAssistantFirstQuestionRequired
+	}
+	if utf8.RuneCountInString(question) > assistantFirstQuestionMaxRunes {
+		return "", "", ErrAssistantFirstQuestionTooLong
+	}
+	hash := sha256.Sum256([]byte(question))
+	return question, hex.EncodeToString(hash[:]), nil
+}
+
+// RecordAssistantFirstQuestion records one valid first-turn question. The
+// caller deliberately provides no user ID: the persisted row is a redacted,
+// normalized aggregate that is safe for admin product analytics.
+func RecordAssistantFirstQuestion(question string) error {
+	normalized, questionHash, err := normalizeAssistantFirstQuestion(question)
+	if err != nil {
+		return err
+	}
+
+	now := common.GetTimestamp()
+	bucketStart := now - now%assistantFirstQuestionBucketSeconds
+	countExpression := gorm.Expr("count + ?", 1)
+	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
+		countExpression = gorm.Expr(`"assistant_first_question_stats"."count" + ?`, 1)
+	}
+	return DB.Clauses(clause.OnConflict{
+		Columns: []clause.Column{
+			{Name: "question_hash"},
+			{Name: "bucket_start"},
+		},
+		DoUpdates: clause.Assignments(map[string]any{
+			"count":         countExpression,
+			"last_asked_at": now,
+		}),
+	}).Create(&AssistantFirstQuestionStat{
+		QuestionHash: questionHash,
+		Question:     normalized,
+		BucketStart:  bucketStart,
+		Count:        1,
+		LastAskedAt:  now,
+	}).Error
+}
+
 func SubmitAssistantHandoff(userID int, message string) (*AssistantLead, error) {
 	if userID <= 0 {
 		return nil, gorm.ErrInvalidData
@@ -286,6 +367,22 @@ func ListAssistantIntentSummary(since int64) ([]AssistantIntentSummary, error) {
 		query = query.Where("created_at >= ?", since)
 	}
 	var summary []AssistantIntentSummary
+	if err := query.Scan(&summary).Error; err != nil {
+		return nil, err
+	}
+	return summary, nil
+}
+
+func ListAssistantFirstQuestionSummary(since int64) ([]AssistantFirstQuestionSummary, error) {
+	query := DB.Model(&AssistantFirstQuestionStat{}).
+		Select("question, SUM(count) AS count, MAX(last_asked_at) AS last_asked_at").
+		Group("question_hash, question").
+		Order("count DESC, last_asked_at DESC, question ASC").
+		Limit(assistantFirstQuestionTopN)
+	if since > 0 {
+		query = query.Where("bucket_start >= ?", since)
+	}
+	var summary []AssistantFirstQuestionSummary
 	if err := query.Scan(&summary).Error; err != nil {
 		return nil, err
 	}

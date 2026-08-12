@@ -60,8 +60,29 @@ type productionArchiveRoot struct {
 
 func runProductionWorkspace(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		_, _ = fmt.Fprintf(stderr, "%s deploy production workspace: choose create or abort\n", ProgramName)
+		_, _ = fmt.Fprintf(stderr, "%s deploy production workspace: choose create, abort, or cleanup\n", ProgramName)
 		return ExitUsage
+	}
+	if args[0] == "cleanup" {
+		flags := flag.NewFlagSet("deploy production workspace cleanup", flag.ContinueOnError)
+		flags.SetOutput(stderr)
+		retention := productionWorkspaceCleanupRetention
+		execute := false
+		flags.DurationVar(&retention, "older-than", retention, "only clean terminal workspaces older than this duration")
+		flags.BoolVar(&execute, "execute", false, "remove eligible disposable children; default is a dry-run preview")
+		flags.Usage = func() { writeDeployUsage(stderr) }
+		if err := flags.Parse(args[1:]); errors.Is(err, flag.ErrHelp) {
+			return ExitOK
+		} else if err != nil || flags.NArg() != 0 {
+			return ExitUsage
+		}
+		runtime := defaultProductionRuntime()
+		result, err := runtime.cleanupWorkspaces(context.Background(), productionWorkspaceCleanupOptions{OlderThan: retention, Execute: execute})
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "%s deploy production workspace cleanup: %v\n", ProgramName, err)
+			return ExitError
+		}
+		return writeJSONCommandResult(result, stdout, stderr, "production workspace cleanup")
 	}
 	if args[0] == "abort" {
 		flags := flag.NewFlagSet("deploy production workspace abort", flag.ContinueOnError)
@@ -87,7 +108,7 @@ func runProductionWorkspace(args []string, stdout, stderr io.Writer) int {
 		return writeJSONCommandResult(status, stdout, stderr, "production workspace abort")
 	}
 	if args[0] != "create" {
-		_, _ = fmt.Fprintf(stderr, "%s deploy production workspace: choose create or abort\n", ProgramName)
+		_, _ = fmt.Fprintf(stderr, "%s deploy production workspace: choose create, abort, or cleanup\n", ProgramName)
 		return ExitUsage
 	}
 	flags := flag.NewFlagSet("deploy production workspace create", flag.ContinueOnError)

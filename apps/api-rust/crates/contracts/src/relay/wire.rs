@@ -346,7 +346,11 @@ pub struct ResponsesContentPart {
 pub struct ResponsesTool {
     #[serde(rename = "type", default = "function_kind")]
     pub kind: String,
-    pub name: String,
+    /// Function tools require a non-empty name, while OpenAI built-in and
+    /// future tool kinds may legitimately omit it.  Keeping this optional is
+    /// what lets preflight return a typed `tools[i]` error for those kinds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

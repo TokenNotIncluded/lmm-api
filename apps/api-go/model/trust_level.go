@@ -657,6 +657,9 @@ func SetUserTrustLevelOverride(userID int, level *int) error {
 	if level != nil && (*level < TrustLevelMinUser || *level > TrustLevelMaxUser) {
 		return gorm.ErrInvalidData
 	}
+	if level != nil && *level == TrustLevelMinUser {
+		return resetUserToL0(userID, "admin_set_trust_level_l0")
+	}
 	result := DB.Model(&User{}).
 		Where("id = ? AND role < ?", userID, common.RoleAdminUser).
 		Update("trust_level_override", level)
@@ -674,21 +677,64 @@ func SetUserTrustLevelOverride(userID int, level *int) error {
 // activation until an administrator clears the override or approves a new
 // access request.
 func ResetUserToL0(userID int) error {
+	return resetUserToL0(userID, "admin_reset_onboarding")
+}
+
+func resetUserToL0(userID int, sessionReason string) error {
 	if userID <= 0 {
 		return gorm.ErrInvalidData
 	}
-	result := DB.Model(&User{}).
-		Where("id = ? AND role < ?", userID, common.RoleAdminUser).
-		Updates(map[string]interface{}{
-			"console_activated_at": 0,
-			"trust_level_override": 0,
-			"auth_version":         gorm.Expr("auth_version + 1"),
-		})
-	if result.Error != nil {
-		return result.Error
+
+	var (
+		nextAuthVersion int64
+		sessions        []UserSession
+		tokens          []Token
+	)
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var target User
+		if err := lockForUpdate(tx).Select("id", "role").Where("id = ?", userID).First(&target).Error; err != nil {
+			return err
+		}
+		if target.Role >= common.RoleAdminUser {
+			return gorm.ErrRecordNotFound
+		}
+
+		var err error
+		sessions, err = revokeAccountSessionsWithTx(tx, userID, sessionReason, common.GetTimestamp())
+		if err != nil {
+			return err
+		}
+		if common.RedisEnabled {
+			if err := tx.Unscoped().Select("id", commonKeyCol).Where("user_id = ?", userID).Find(&tokens).Error; err != nil {
+				return err
+			}
+		}
+
+		nextAuthVersion, err = IncrementUserAuthVersionWithTx(tx, userID)
+		if err != nil {
+			return err
+		}
+		result := tx.Model(&User{}).
+			Where("id = ? AND role < ?", userID, common.RoleAdminUser).
+			Updates(map[string]interface{}{
+				"console_activated_at": 0,
+				"trust_level_override": 0,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return reopenDeveloperAccessRequestForUserWithTx(tx, userID)
+	})
+	if err != nil {
+		return err
 	}
-	if result.RowsAffected == 0 {
-		return gorm.ErrRecordNotFound
-	}
-	return invalidateUserCache(userID)
+
+	// This is the same fail-closed cache/session/token invalidation path used by
+	// account security transitions. The new auth version is published before a
+	// delayed old snapshot can repopulate any cache.
+	applyAccountActionCacheInvalidation(userID, nextAuthVersion, sessions, tokens)
+	return nil
 }

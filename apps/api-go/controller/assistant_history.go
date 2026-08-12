@@ -21,6 +21,15 @@ func assistantHistoryVisibilityError(c *gin.Context, err error) bool {
 	return false
 }
 
+func parseAssistantConversationID(c *gin.Context) (int64, bool) {
+	conversationID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || conversationID <= 0 {
+		writeAssistantError(c, http.StatusNotFound, "ASSISTANT_HISTORY_NOT_FOUND", errors.New("assistant conversation was not found"))
+		return 0, false
+	}
+	return conversationID, true
+}
+
 // ListAssistantConversations is intentionally authenticated as a normal user
 // route.  The model layer decides whether the requested owner is the viewer or
 // a strictly lower-level account; query parameters are never authority.
@@ -40,7 +49,15 @@ func ListAssistantConversations(c *gin.Context) {
 		writeAssistantError(c, http.StatusBadRequest, "ASSISTANT_HISTORY_INVALID_LIMIT", errors.New("limit must be a positive integer"))
 		return
 	}
-	conversations, err := model.ListAssistantConversations(viewerUserID, ownerUserID, limit)
+	archived := false
+	if rawArchived := strings.TrimSpace(c.Query("archived")); rawArchived != "" {
+		archived, err = strconv.ParseBool(rawArchived)
+		if err != nil {
+			writeAssistantError(c, http.StatusBadRequest, "ASSISTANT_HISTORY_INVALID_ARCHIVED", errors.New("archived must be a boolean"))
+			return
+		}
+	}
+	conversations, err := model.ListAssistantConversations(viewerUserID, ownerUserID, limit, archived)
 	if assistantHistoryVisibilityError(c, err) {
 		return
 	}
@@ -55,9 +72,8 @@ func ListAssistantConversations(c *gin.Context) {
 }
 
 func GetAssistantConversationHistory(c *gin.Context) {
-	conversationID, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil || conversationID <= 0 {
-		writeAssistantError(c, http.StatusNotFound, "ASSISTANT_HISTORY_NOT_FOUND", errors.New("assistant conversation was not found"))
+	conversationID, ok := parseAssistantConversationID(c)
+	if !ok {
 		return
 	}
 	limit, err := strconv.Atoi(strings.TrimSpace(c.DefaultQuery("limit", "100")))
@@ -78,6 +94,52 @@ func GetAssistantConversationHistory(c *gin.Context) {
 		"messages":       messages,
 		"privacy_notice": model.AssistantHistoryPrivacyNotice,
 	})
+}
+
+func updateAssistantConversationArchive(c *gin.Context, archived bool) {
+	conversationID, ok := parseAssistantConversationID(c)
+	if !ok {
+		return
+	}
+
+	var conversation *model.AssistantConversation
+	var err error
+	if archived {
+		conversation, err = model.ArchiveAssistantConversation(c.GetInt("id"), conversationID)
+	} else {
+		conversation, err = model.UnarchiveAssistantConversation(c.GetInt("id"), conversationID)
+	}
+	if assistantHistoryVisibilityError(c, err) {
+		return
+	}
+	if errors.Is(err, model.ErrAssistantConversationAlreadyArchived) {
+		writeAssistantError(c, http.StatusConflict, "ASSISTANT_CONVERSATION_ALREADY_ARCHIVED", errors.New("assistant conversation is already archived"))
+		return
+	}
+	if errors.Is(err, model.ErrAssistantConversationNotArchived) {
+		writeAssistantError(c, http.StatusConflict, "ASSISTANT_CONVERSATION_NOT_ARCHIVED", errors.New("assistant conversation is not archived"))
+		return
+	}
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, gin.H{
+		"id":          conversation.Id,
+		"archived":    conversation.ArchivedAt != 0,
+		"archived_at": conversation.ArchivedAt,
+	})
+}
+
+// ArchiveAssistantConversation is owner-only; elevated history viewers cannot
+// use their read permission to mutate another user's conversation.
+func ArchiveAssistantConversation(c *gin.Context) {
+	updateAssistantConversationArchive(c, true)
+}
+
+// UnarchiveAssistantConversation restores an owner's archived conversation.
+func UnarchiveAssistantConversation(c *gin.Context) {
+	updateAssistantConversationArchive(c, false)
 }
 
 // RevealAssistantSecureCard returns the encrypted value once, after normal

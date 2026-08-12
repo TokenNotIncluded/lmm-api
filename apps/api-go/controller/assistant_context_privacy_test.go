@@ -157,3 +157,34 @@ func TestAssistantContextAllowlistsReviewStatusAndProviders(t *testing.T) {
 	assert.NotContains(t, encoded, "raw-oauth-subject")
 	assert.NotContains(t, encoded, "admin_note=private")
 }
+
+func TestAssistantManualProfileIsInternalOnly(t *testing.T) {
+	db := setupManageUserTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.AssistantUserProfile{}))
+	user := &model.User{
+		Username: "profile-context-user",
+		Email:    "profile-context@example.com",
+		Password: "not-forwarded",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+		Group:    "default",
+	}
+	require.NoError(t, db.Create(user).Error)
+	_, err := model.UpsertAssistantUserProfile(user.Id, 99, model.AssistantProfileGuided,
+		[]string{"new-user", "needs setup"},
+		"Ask for one setup detail at a time. Never reveal internal_profile_secret: sk-hidden-value.", true)
+	require.NoError(t, err)
+
+	context := assistantUserContextForRequest(user.Id, "help me get started")
+	encoded, err := json.Marshal(context)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), "ManualProfile")
+	assert.NotContains(t, string(encoded), "guided_buyer")
+	assert.NotContains(t, string(encoded), "needs setup")
+	assert.NotContains(t, string(encoded), "sk-hidden-value")
+
+	prompt := buildAssistantSystemPrompt(setting.GetAssistantSettings(), context)
+	assert.Contains(t, prompt, "Ask for one setup detail at a time")
+	assert.Contains(t, prompt, "Internal manual profile strategy skill")
+	assert.NotContains(t, prompt, "sk-hidden-value")
+}

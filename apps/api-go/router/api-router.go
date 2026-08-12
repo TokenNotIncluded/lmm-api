@@ -46,6 +46,8 @@ func SetApiRouter(router *gin.Engine) {
 			securityAdminRoute.GET("/policy", controller.GetAdminSecurityPolicy)
 			securityAdminRoute.GET("/stats", controller.GetAdminSecurityStats)
 			securityAdminRoute.GET("/events", controller.ListAdminSecurityEvents)
+			securityAdminRoute.GET("/violation-fee-appeals", middleware.DisableCache(), controller.ListAdminViolationFeeAppeals)
+			securityAdminRoute.POST("/violation-fee-appeals/:id/:action", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.ReviewAdminViolationFeeAppeal)
 		}
 		releaseNoteRoute := apiRouter.Group("/release-notes")
 		releaseNoteRoute.Use(middleware.UserAuth())
@@ -58,6 +60,12 @@ func SetApiRouter(router *gin.Engine) {
 		{
 			releaseNoteAdminRoute.GET("", middleware.DisableCache(), controller.ListAdminReleaseNotes)
 			releaseNoteAdminRoute.POST("", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.PublishAdminReleaseNote)
+		}
+		todoRoute := apiRouter.Group("/todos")
+		todoRoute.Use(middleware.UserAuth())
+		{
+			todoRoute.GET("", middleware.DisableCache(), controller.GetUnifiedTodos)
+			todoRoute.POST("/read", middleware.DisableCache(), controller.MarkUnifiedTodosRead)
 		}
 		// Compatibility alias for older edge configurations. New package-managed
 		// Nginx uses /internal/access-ip-policy outside the API rate-limit group.
@@ -130,10 +138,14 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.PUT("/access-ip", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.SetPersonalAccessIP)
 				selfRoute.DELETE("/access-ip", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.DeletePersonalAccessIP)
 				selfRoute.GET("/models", controller.GetUserModels)
+				selfRoute.GET("/onboarding/todo", middleware.DisableCache(), controller.GetL1OnboardingTodo)
+				selfRoute.PATCH("/onboarding/todo", middleware.DisableCache(), controller.PatchL1OnboardingTodo)
 				selfRoute.GET("/developer-access/request", controller.GetDeveloperAccessRequest)
 				selfRoute.POST("/developer-access/request", middleware.CriticalRateLimit(), controller.SubmitDeveloperAccessRequest)
 				selfRoute.GET("/account-action-requests/appeal", middleware.DisableCache(), controller.GetAccountAppeal)
 				selfRoute.POST("/account-action-requests", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.SubmitAccountActionRequest)
+				selfRoute.GET("/violation-fees", middleware.DisableCache(), controller.ListSelfViolationFeeRecords)
+				selfRoute.POST("/violation-fee-appeals", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.SubmitViolationFeeAppeal)
 				selfRoute.PUT("/self", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.UpdateSelf)
 				selfRoute.DELETE("/self", controller.DeleteSelf)
 				selfRoute.GET("/token", middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit("access-token"), middleware.DisableCache(), controller.GenerateAccessToken)
@@ -192,6 +204,8 @@ func SetApiRouter(router *gin.Engine) {
 				adminRoute.DELETE("/:id/oauth/bindings/:provider_id", controller.UnbindCustomOAuthByAdmin)
 				adminRoute.DELETE("/:id/bindings/:binding_type", controller.AdminClearUserBinding)
 				adminRoute.GET("/:id", controller.GetUser)
+				adminRoute.GET("/:id/assistant-profile", controller.AdminGetAssistantUserProfile)
+				adminRoute.PUT("/:id/assistant-profile", controller.AdminUpdateAssistantUserProfile)
 				adminRoute.POST("/", controller.CreateUser)
 				adminRoute.POST("/manage", controller.ManageUser)
 				adminRoute.PUT("/", controller.UpdateUser)
@@ -203,6 +217,11 @@ func SetApiRouter(router *gin.Engine) {
 				adminRoute.DELETE("/:id/2fa", controller.AdminDisable2FA)
 
 			}
+		}
+		onboardingProofRoute := apiRouter.Group("/onboarding/todo")
+		onboardingProofRoute.Use(middleware.TokenAuth())
+		{
+			onboardingProofRoute.POST("/proof", middleware.DisableCache(), controller.PostL1OnboardingProof)
 		}
 
 		// Admin compensation gift management

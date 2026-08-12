@@ -55,8 +55,9 @@ const { createInstance } = await import('i18next')
 const { I18nextProvider, initReactI18next } = await import('react-i18next')
 const { api } = await import('@/lib/api')
 const { AssistantLauncher } = await import('./assistant-launcher')
-const { AssistantPanel, getAssistantPromptValidation } =
-  await import('./assistant-panel')
+const { AssistantPanel } = await import('./assistant-panel')
+const { getAssistantPromptValidation } =
+  await import('./assistant-prompt-validation')
 
 const originalGet = api.get
 const originalMatchMedia = window.matchMedia
@@ -164,17 +165,21 @@ afterEach(() => {
 after(() => domWindow.close())
 
 describe('L0 onboarding assistant experience', () => {
-  test('requires five trimmed characters for restricted access requests', () => {
-    assert.deepEqual(getAssistantPromptValidation('  甲乙丙丁  ', true), {
-      characterCount: 4,
-      invalid: true,
-    })
-    assert.deepEqual(getAssistantPromptValidation('  需要帮助配置  ', true), {
-      characterCount: 6,
+  test('allows short assistant messages but rejects a single punctuation mark', () => {
+    assert.deepEqual(getAssistantPromptValidation('  甲  ', true), {
+      characterCount: 1,
       invalid: false,
     })
-    assert.deepEqual(getAssistantPromptValidation('x', false), {
+    assert.deepEqual(getAssistantPromptValidation('  。  ', true), {
       characterCount: 1,
+      invalid: true,
+    })
+    assert.deepEqual(getAssistantPromptValidation('?', false), {
+      characterCount: 1,
+      invalid: true,
+    })
+    assert.deepEqual(getAssistantPromptValidation('。好', true), {
+      characterCount: 2,
       invalid: false,
     })
   })
@@ -196,7 +201,11 @@ describe('L0 onboarding assistant experience', () => {
         )
       )
 
-      assert.match(document.body.textContent ?? '', /L0 tutorial required/)
+      assert.match(document.body.textContent ?? '', /Read-only/)
+      assert.equal(
+        document.querySelector('[data-testid="assistant-onboarding-todo"]'),
+        null
+      )
       assert.match(
         document.body.textContent ?? '',
         /Tell the AI assistant what you want to do/
@@ -233,7 +242,7 @@ describe('L0 onboarding assistant experience', () => {
     }
   })
 
-  test('gives immediate, accessible feedback for a short L0 message', async () => {
+  test('allows a short L0 message and rejects a single punctuation mark', async () => {
     api.get = (async (url: string) => {
       assert.equal(url, '/api/assistant/status')
       return { data: { success: true, data: restrictedStatus } }
@@ -249,28 +258,32 @@ describe('L0 onboarding assistant experience', () => {
       )
       const textarea = document.querySelector<HTMLTextAreaElement>('textarea')
       assert.ok(textarea)
-      await setTextareaValue(textarea, '不够')
+      await setTextareaValue(textarea, '甲')
 
       const submit = document.querySelector<HTMLButtonElement>(
         'button[aria-label="Submit"]'
       )
       assert.ok(submit)
-      assert.equal(submit.disabled, true)
-      assert.equal(textarea.getAttribute('aria-invalid'), 'true')
+      assert.equal(submit.disabled, false)
+      assert.equal(textarea.getAttribute('aria-invalid'), 'false')
       assert.equal(
         document.querySelector('#assistant-l0-input-hint')?.textContent,
-        'Support message must contain at least 5 characters.'
+        'Write a short explanation of what you want to build or why you need L1 access.'
       )
       assert.equal(
         document
           .querySelector('#assistant-l0-input-hint')
           ?.getAttribute('role'),
-        'alert'
+        'status'
       )
 
-      await setTextareaValue(textarea, '需要配置 Claude Code')
-      assert.equal(submit.disabled, false)
-      assert.equal(textarea.getAttribute('aria-invalid'), 'false')
+      await setTextareaValue(textarea, '。')
+      assert.equal(submit.disabled, true)
+      assert.equal(textarea.getAttribute('aria-invalid'), 'true')
+      assert.equal(
+        document.querySelector('#assistant-l0-input-hint')?.textContent,
+        'Please enter a message other than a single punctuation mark.'
+      )
     } finally {
       await act(async () => rendered.root.unmount())
       rendered.queryClient.clear()

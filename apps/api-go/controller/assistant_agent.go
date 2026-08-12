@@ -316,6 +316,11 @@ func assistantToolAllowedForContext(name string, userContext assistantUserContex
 		"prepare_l1_recommendation",
 		"request_human_support":
 		return true
+	case "get_plan_offers":
+		// A regular L0 user may see current offers only after the assistant's
+		// deterministic payment-intent gate reaches ready. Restriction flags
+		// always win and are never overridden by user wording.
+		return assistantPaymentOfferStateForContext(userContext) == assistantPaymentOfferReady
 	default:
 		return false
 	}
@@ -684,6 +689,45 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 		}
 		return executeAssistantModelPricingTool(actorUserID, input)
 	case "get_plan_offers":
+		userContext := assistantUserContextFromGin(c)
+		if c == nil {
+			if result, blocked := assistantDeveloperCapabilityRequired(actorUserID, "plan offers"); blocked {
+				return result
+			}
+			return executeAssistantPlanOffersTool(actorUserID)
+		}
+		if _, hasContext := c.Get(assistantUserContextKey); !hasContext {
+			if result, blocked := assistantDeveloperCapabilityRequired(actorUserID, "plan offers"); blocked {
+				return result
+			}
+			return executeAssistantPlanOffersTool(actorUserID)
+		}
+		if !userContext.DeveloperAccessGranted && assistantPaymentOfferStateForContext(userContext) != assistantPaymentOfferReady {
+			if assistantPaymentOfferStateForContext(userContext) == assistantPaymentOfferBlocked {
+				return map[string]any{
+					"ok":        false,
+					"status":    "payment_restricted",
+					"error":     "payment channels are unavailable for this account",
+					"next_step": "Continue with the available account or administrator support options.",
+				}
+			}
+			return map[string]any{
+				"ok":        false,
+				"status":    "payment_intent_required",
+				"error":     "one more payment detail is needed before showing payment options",
+				"next_step": "Ask for the intended use, approximate amount, or preferred payment method.",
+			}
+		}
+		if !userContext.DeveloperAccessGranted && userContext.PaymentMethodsHidden {
+			return map[string]any{
+				"ok":     false,
+				"status": "payment_restricted",
+				"error":  "payment channels are unavailable for this account",
+			}
+		}
+		if !userContext.DeveloperAccessGranted {
+			return executeAssistantPlanOffersToolWithL0PaymentIntent(actorUserID)
+		}
 		if result, blocked := assistantDeveloperCapabilityRequired(actorUserID, "plan offers"); blocked {
 			return result
 		}
@@ -1111,6 +1155,14 @@ func executeAssistantModelPricingTool(userID int, input map[string]any) map[stri
 }
 
 func executeAssistantPlanOffersTool(userID int) map[string]any {
+	return executeAssistantPlanOffersToolWithAccess(userID, false)
+}
+
+func executeAssistantPlanOffersToolWithL0PaymentIntent(userID int) map[string]any {
+	return executeAssistantPlanOffersToolWithAccess(userID, true)
+}
+
+func executeAssistantPlanOffersToolWithAccess(userID int, allowL0PaymentIntent bool) map[string]any {
 	if userID <= 0 {
 		return map[string]any{"ok": false, "error": "signed-in account is unavailable"}
 	}
@@ -1128,20 +1180,23 @@ func executeAssistantPlanOffersTool(userID int) map[string]any {
 		"ok":                           access.Granted,
 		"developer_access_granted":     access.Granted,
 		"read_only":                    false,
-		"checkout_available":           access.Granted && complianceConfirmed && !paymentRestricted,
-		"payment_hidden":               !access.Granted || paymentRestricted,
+		"checkout_available":           (access.Granted || allowL0PaymentIntent) && complianceConfirmed && !paymentRestricted,
+		"payment_hidden":               !(access.Granted || allowL0PaymentIntent) || paymentRestricted,
 		"plans":                        []SubscriptionPlanDTO{},
 		"topup_discounts":              map[int]float64{},
-		"payment_compliance_confirmed": access.Granted && complianceConfirmed,
+		"payment_compliance_confirmed": (access.Granted || allowL0PaymentIntent) && complianceConfirmed,
 	}
-	if !access.Granted {
+	if !access.Granted && !allowL0PaymentIntent {
 		result["error"] = "L1 access is required to view plans and top-up discounts"
 		result["next_step"] = "Ask the user to submit an administrator L1 access request from the onboarding assistant."
 		return result
 	}
 	if paymentRestricted {
-		if access.Granted {
-			result["message"] = "Payment options are hidden for this account; do not direct the user to checkout."
+		result["ok"] = access.Granted
+		result["message"] = "Payment channels are unavailable for this account; do not direct the user to checkout."
+		if !access.Granted {
+			result["status"] = "payment_restricted"
+			return result
 		}
 	}
 	if !complianceConfirmed {
@@ -1166,6 +1221,7 @@ func executeAssistantPlanOffersTool(userID int) map[string]any {
 			discountValues[amount] = multiplier
 		}
 	}
+	result["ok"] = true
 	result["plans"] = planValues
 	result["topup_discounts"] = discountValues
 	return result

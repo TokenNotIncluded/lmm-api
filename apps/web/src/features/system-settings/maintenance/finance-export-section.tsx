@@ -31,12 +31,12 @@ import { toast } from 'sonner'
 
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { CompactDateTimeRangePicker } from '@/features/usage-logs/components/compact-date-time-range-picker'
 import { copyToClipboard } from '@/lib/copy-to-clipboard'
+import dayjs from '@/lib/dayjs'
 
 import { fetchFinanceExport } from '../api'
 import { SettingsSection } from '../components/settings-section'
-
-const exportWindowOptions = [7, 30, 90] as const
 
 function isJsonBlob(blob: Blob) {
   return blob.type.includes('json') || blob.type.includes('text/html')
@@ -54,7 +54,13 @@ async function blobErrorMessage(blob: Blob, fallback: string) {
 
 export function FinanceExportSection() {
   const { t } = useTranslation()
-  const [days, setDays] = useState<(typeof exportWindowOptions)[number]>(30)
+  const [range, setRange] = useState<{ start?: Date; end?: Date }>(() => {
+    const now = dayjs()
+    return {
+      start: now.subtract(29, 'day').startOf('day').toDate(),
+      end: now.endOf('day').toDate(),
+    }
+  })
   const [busyAction, setBusyAction] = useState<'copy' | 'download' | null>(null)
 
   const runExport = async (action: 'copy' | 'download') => {
@@ -62,7 +68,7 @@ export function FinanceExportSection() {
     try {
       const response = await fetchFinanceExport(
         action === 'copy' ? 'text' : 'zip',
-        days
+        range
       )
       const blob = response.data
       if (isJsonBlob(blob)) {
@@ -79,7 +85,7 @@ export function FinanceExportSection() {
         const url = URL.createObjectURL(blob)
         const link = document.createElement('a')
         link.href = url
-        link.download = `lmm-finance-export-${days}d.zip`
+        link.download = 'lmm-finance-export.zip'
         document.body.appendChild(link)
         link.click()
         link.remove()
@@ -108,27 +114,18 @@ export function FinanceExportSection() {
         </Alert>
 
         <div className='flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between'>
-          <label className='flex min-w-40 flex-col gap-1.5 text-sm'>
+          <div className='flex min-w-64 flex-col gap-1.5 text-sm'>
             <span className='font-medium'>{t('Billing record window')}</span>
-            <select
-              className='border-input bg-background h-9 rounded-md border px-3 text-sm'
-              value={days}
-              onChange={(event) =>
-                setDays(
-                  Number(
-                    event.target.value
-                  ) as (typeof exportWindowOptions)[number]
-                )
-              }
-              disabled={busyAction !== null}
-            >
-              {exportWindowOptions.map((option) => (
-                <option key={option} value={option}>
-                  {t('{{days}} days', { days: option })}
-                </option>
-              ))}
-            </select>
-          </label>
+            <CompactDateTimeRangePicker
+              start={range.start}
+              end={range.end}
+              onChange={setRange}
+              className='w-full sm:w-[min(520px,45vw)]'
+            />
+            <span className='text-muted-foreground text-xs'>
+              {t('Choose any start and end time within one year.')}
+            </span>
+          </div>
 
           <div className='flex flex-col gap-2 sm:flex-row'>
             <Button

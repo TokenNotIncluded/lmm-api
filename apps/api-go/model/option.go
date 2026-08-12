@@ -257,6 +257,9 @@ func validateOptionValue(key string, value string) error {
 	if key == "MaxTokenAutoGroups" {
 		return setting.ValidateMaxTokenAutoGroups(value)
 	}
+	if key == operation_setting.ViolationFeeOptionKey+".policies" {
+		return operation_setting.ValidateViolationFeeSettingsJSON(`{"enabled":true,"policies":` + value + `}`)
+	}
 	return nil
 }
 
@@ -326,6 +329,17 @@ func UpdateOptionsBulk(values map[string]string) error {
 }
 
 func updateOptionMap(key string, value string) (err error) {
+	// Legacy model-specific Grok violation options are intentionally ignored.
+	// The active policy is now operation_setting's provider-agnostic group
+	// policy; deleting these keys from the runtime map keeps old database rows
+	// from reappearing in the admin option API without requiring destructive
+	// migration of the historical rows.
+	if strings.HasPrefix(key, "grok.violation_") {
+		common.OptionMapRWMutex.Lock()
+		delete(common.OptionMap, key)
+		common.OptionMapRWMutex.Unlock()
+		return nil
+	}
 	if key == retiredThemeOptionKey {
 		common.OptionMapRWMutex.Lock()
 		delete(common.OptionMap, key)
