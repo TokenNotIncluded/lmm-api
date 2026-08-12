@@ -201,14 +201,17 @@ describe('L0 onboarding assistant experience', () => {
         )
       )
 
-      assert.match(document.body.textContent ?? '', /Read-only/)
+      assert.match(
+        document.body.textContent ?? '',
+        /L0 accounts can browse challenges/
+      )
       assert.equal(
         document.querySelector('[data-testid="assistant-onboarding-todo"]'),
         null
       )
       assert.match(
         document.body.textContent ?? '',
-        /Tell the AI assistant what you want to do/
+        /What would you like to do\?/
       )
       assert.match(
         document.body.textContent ?? '',

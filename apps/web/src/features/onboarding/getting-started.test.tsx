@@ -210,7 +210,10 @@ describe('getting started access boundaries', () => {
       l0Page.container.textContent?.includes('Three steps to get started'),
       false
     )
-    assert.equal(l0Page.container.textContent?.includes('Service guide'), true)
+    assert.equal(
+      l0Page.container.textContent?.includes('How can I help?'),
+      true
+    )
     await unmountPage(l0Page)
 
     const l1Page = await renderPage(false, undefined, null, {
@@ -240,7 +243,7 @@ describe('getting started access boundaries', () => {
     const question = [...page.container.querySelectorAll('button')].find(
       (button) =>
         button.textContent?.includes(
-          'Ask an administrator to raise my access level'
+          'What can I do while access is under review?'
         )
     )
     assert.ok(question)
@@ -250,10 +253,10 @@ describe('getting started access boundaries', () => {
     })
 
     assert.deepEqual(opened, ['onboarding'])
-    assert.deepEqual(messages, [undefined])
+    assert.deepEqual(messages, ['What can I do while access is under review?'])
 
     assert.deepEqual(opened, ['onboarding'])
-    assert.deepEqual(messages, [undefined])
+    assert.deepEqual(messages, ['What can I do while access is under review?'])
     assert.equal(
       page.container.textContent?.includes('Which option is the best value?'),
       false
@@ -390,7 +393,7 @@ describe('getting started access boundaries', () => {
 
     assert.equal(page.container.querySelector('a[href="/wallet"]'), null)
     assert.equal(page.gets.includes('/api/user/topup/info'), false)
-    assert.equal(page.container.textContent?.includes('Service guide'), true)
+    assert.equal(page.container.textContent?.includes('How can I help?'), true)
     assert.equal(page.container.querySelector('a[href="/challenges"]'), null)
     assert.equal(page.container.textContent?.includes('Create API key'), false)
     assert.equal(

@@ -58,15 +58,8 @@ import {
   AlertDescription,
   AlertTitle,
 } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import {
   Sheet,
@@ -384,6 +377,39 @@ function AssistantPromptInputSync(props: {
   return null
 }
 
+function AssistantPresetPrompts() {
+  const { t } = useTranslation()
+  const {
+    textInput: { setInput },
+  } = usePromptInputController()
+  const prompts = [
+    t('I am new to AI'),
+    t('I only want to use the gateway'),
+    t('How do I apply for L1 access?'),
+    t('What can I do while access is under review?'),
+  ]
+
+  return (
+    <div
+      className='flex flex-wrap gap-2'
+      aria-label={t('Choose a topic or write a message.')}
+    >
+      {prompts.map((prompt) => (
+        <Button
+          key={prompt}
+          type='button'
+          variant='outline'
+          size='sm'
+          className='h-auto min-h-8 text-left whitespace-normal'
+          onClick={() => setInput(prompt)}
+        >
+          {prompt}
+        </Button>
+      ))}
+    </div>
+  )
+}
+
 function AssistantPromptComposer(props: {
   footerStatus: string
   placeholder: string
@@ -430,7 +456,10 @@ function AssistantPromptComposer(props: {
           <PromptInputSubmit
             status={props.sending ? 'submitted' : 'ready'}
             disabled={props.sending || validation.invalid}
-          />
+            size='sm'
+          >
+            {t('Send')}
+          </PromptInputSubmit>
         </PromptInputFooter>
       </PromptInput>
       {props.restricted || showValidationError ? (
@@ -1008,32 +1037,19 @@ export function AssistantPanel(props: {
                     />
                   ) : null}
                   {accountAccessState === 'restricted' ? (
-                    <Card
-                      size='sm'
-                      className='border-primary/30 bg-primary/5'
+                    <div
+                      className='space-y-2'
                       data-testid='assistant-l0-welcome'
                     >
-                      <CardHeader className='gap-2'>
-                        <Badge variant='secondary' className='w-fit'>
-                          {t('Read-only')}
-                        </Badge>
-                        <CardTitle className='text-lg'>
-                          {t('Tell the AI assistant what you want to do')}
-                        </CardTitle>
-                        <CardDescription>
-                          {t(
-                            'L0 accounts can browse challenges and ask the AI assistant to request L1 access.'
-                          )}
-                        </CardDescription>
-                      </CardHeader>
-                      <CardContent className='grid gap-3'>
-                        <p className='text-muted-foreground text-sm leading-6'>
-                          {t(
-                            'Write a short explanation of what you want to build or why you need L1 access.'
-                          )}
-                        </p>
-                      </CardContent>
-                    </Card>
+                      <p className='text-base font-medium'>
+                        {t('What would you like to do?')}
+                      </p>
+                      <p className='text-muted-foreground text-sm leading-6'>
+                        {t(
+                          'L0 accounts can browse challenges and ask the AI assistant to request L1 access.'
+                        )}
+                      </p>
+                    </div>
                   ) : (
                     <div>
                       <p className='text-base font-medium'>
@@ -1238,6 +1254,10 @@ export function AssistantPanel(props: {
                   initialMessage={props.initialMessage}
                   initialMessageRevision={props.initialMessageRevision}
                 />
+                {accountAccessState === 'restricted' &&
+                !entries.some((entry) => entry.role === 'user') ? (
+                  <AssistantPresetPrompts />
+                ) : null}
                 <AssistantPromptComposer
                   footerStatus={assistantFooterStatus}
                   placeholder={assistantPromptPlaceholder}

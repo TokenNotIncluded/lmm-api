@@ -790,9 +790,7 @@ describe('AssistantPanel', () => {
       )
       assert.throws(() => findButton('Which option is the best value?'))
       assert.throws(() => findButton('How is request cost calculated?'))
-      assert.throws(() =>
-        findButton('What can I do while access is under review?')
-      )
+      assert.ok(findButton('What can I do while access is under review?'))
       assert.throws(() =>
         findButton('How do I set up Claude Code or CC Switch?')
       )

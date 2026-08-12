@@ -243,6 +243,12 @@ func actionableJournalLine(line string) bool {
 		strings.Contains(trimmed, "while sending request to upstream") {
 		return false
 	}
+	// A downstream client can close a proxied request before nginx finishes
+	// reading the upstream response. This connection-level event is expected
+	// during normal traffic and is not a failed release health gate.
+	if strings.Contains(trimmed, "upstream prematurely closed connection while reading upstream") {
+		return false
+	}
 	return true
 }
 
