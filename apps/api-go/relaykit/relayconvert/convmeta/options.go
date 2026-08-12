@@ -18,6 +18,13 @@ type Options struct {
 	// suffix must be kept on the outgoing model name (host blacklist lookup).
 	// Nil means "never preserve".
 	PreserveThinkingSuffix func(modelName string) bool
+
+	// EnableMessagesToGPTCompatibility turns on Claude Messages → GPT reasoning
+	// compatibility mode (for GPT reasoning-capable models like o1/o4 and gpt-5).
+	// When true, unsupported Claude thinking history blocks are not forwarded
+	// into OpenAI requests as Claude-specific media, and OpenAI reasoning deltas
+	// in stream responses are not rendered as Claude thinking blocks.
+	EnableMessagesToGPTCompatibility bool
 }
 
 type ClaudeOptions struct {

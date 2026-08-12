@@ -289,12 +289,13 @@ nginx_observation_is_clean() {
   done < <(journalctl --quiet -u nginx.service --since "@$observation_epoch" \
     --priority=err --no-pager --output=cat)
 }
-systemctl is-active --quiet lmm-api-go.service
+systemctl is-active --quiet lmm-api.service
 systemctl is-active --quiet "$timer"
-[[ $(systemctl show lmm-api-go.service -p NRestarts --value) == 0 ]]
+[[ $(systemctl show lmm-api.service -p NRestarts --value) == 0 ]]
 [[ $(pacman -Q lmm-api-go) == "lmm-api-go $expected_version-1" ]]
 ! pacman -Qq lmm-api >/dev/null 2>&1
-for removed in /usr/bin/lmm-api /usr/bin/lmm-api-select /usr/lib/lmm-api /usr/lib/systemd/system/lmm-api.service; do
+[[ -L /usr/bin/lmm-api && $(readlink -- /usr/bin/lmm-api) == lmm-api-go ]]
+for removed in /usr/bin/lmm-api-select /usr/lib/lmm-api /usr/lib/systemd/system/lmm-api-go.service; do
   [[ ! -e $removed && ! -L $removed ]]
 done
 "$cli" status --base-url http://127.0.0.1:3000 --timeout 8s --output "$state/observe-local.json"
@@ -308,7 +309,7 @@ jq -e '.success == true and .live == true' "$state/observe-live.json" >/dev/null
 "$cli" request --base-url https://api.lmm.best --path /v1/models --timeout 8s --fail \
   --token-file "$token" --output "$state/observe-models.json"
 jq -e '.data | type == "array"' "$state/observe-models.json" >/dev/null
-[[ -z $(journalctl --quiet -u lmm-api-go.service --since "@$observation_epoch" --priority=err --no-pager --output=cat) ]]
+[[ -z $(journalctl --quiet -u lmm-api.service --since "@$observation_epoch" --priority=err --no-pager --output=cat) ]]
 nginx_observation_is_clean
 REMOTE
   then

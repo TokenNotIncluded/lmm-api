@@ -117,10 +117,13 @@ export function AccountActionRequestsPanel() {
 
   if (!available) return null
 
-  const dateTimeFormatter = new Intl.DateTimeFormat(toIntlLocale(i18n.language), {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  })
+  const dateTimeFormatter = new Intl.DateTimeFormat(
+    toIntlLocale(i18n.language),
+    {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    }
+  )
 
   return (
     <section className='bg-muted/10 border px-5 py-5 sm:px-6'>

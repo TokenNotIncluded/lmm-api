@@ -204,6 +204,78 @@ func TestStreamResponseOpenAI2ClaudeClosesTextThinkingAndToolBlocks(t *testing.T
 	assert.Equal(t, "message_stop", finishResponses[2].Type)
 }
 
+func TestStreamResponseOpenAI2ClaudeCompatibilityModeSkipsThinkingBlocks(t *testing.T) {
+	info := &convmeta.Values{
+		Options: &convmeta.Options{
+			EnableMessagesToGPTCompatibility: true,
+		},
+		ClaudeConvertInfo: &convmeta.ClaudeConvertInfo{
+			LastMessagesType: convmeta.LastMessageTypeNone,
+		},
+	}
+
+	info.SendResponseCount = 1
+	reasoningOnly := StreamResponseOpenAI2Claude(&dto.ChatCompletionsStreamResponse{
+		Id:    "chatcmpl_2",
+		Model: "gpt-5",
+		Choices: []dto.ChatCompletionsStreamResponseChoice{
+			{
+				Delta: dto.ChatCompletionsStreamResponseChoiceDelta{
+					ReasoningContent: ptr("internal"),
+				},
+			},
+		},
+	}, info)
+	require.Len(t, reasoningOnly, 1)
+	assert.Equal(t, "message_start", reasoningOnly[0].Type)
+
+	info.SendResponseCount = 2
+	textChunk := StreamResponseOpenAI2Claude(&dto.ChatCompletionsStreamResponse{
+		Id:    "chatcmpl_2",
+		Model: "gpt-5",
+		Choices: []dto.ChatCompletionsStreamResponseChoice{
+			{
+				Delta: dto.ChatCompletionsStreamResponseChoiceDelta{
+					Content: ptr("answer"),
+				},
+			},
+		},
+	}, info)
+	require.Len(t, textChunk, 2)
+	assert.Equal(t, "content_block_start", textChunk[0].Type)
+	assert.Equal(t, "text", textChunk[0].ContentBlock.Type)
+	assert.Equal(t, "content_block_delta", textChunk[1].Type)
+
+	info.SendResponseCount = 3
+	done := StreamResponseOpenAI2Claude(&dto.ChatCompletionsStreamResponse{
+		Id:    "chatcmpl_2",
+		Model: "gpt-5",
+		Choices: []dto.ChatCompletionsStreamResponseChoice{
+			{FinishReason: ptr("stop")},
+		},
+		Usage: &dto.Usage{
+			PromptTokens:     10,
+			CompletionTokens: 3,
+			TotalTokens:      13,
+		},
+	}, info)
+	require.Len(t, done, 3)
+	assert.Equal(t, "content_block_stop", done[0].Type)
+	assert.Equal(t, 0, done[0].GetIndex())
+	assert.Equal(t, "message_delta", done[1].Type)
+	assert.Equal(t, "end_turn", *done[1].Delta.StopReason)
+	assert.Equal(t, "message_stop", done[2].Type)
+
+	for _, item := range append(reasoningOnly, append(textChunk, done...)...) {
+		if item.ContentBlock != nil {
+			assert.NotEqual(t, "thinking", item.ContentBlock.Type)
+		}
+		if item.Delta != nil {
+			assert.NotEqual(t, "thinking_delta", item.Delta.Type)
+		}
+	}
+}
+
 func TestNormalizeCacheCreationSplit(t *testing.T) {
 	cache5m, cache1h := NormalizeCacheCreationSplit(10, 3, 2)
 	assert.Equal(t, 8, cache5m)

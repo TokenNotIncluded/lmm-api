@@ -22,8 +22,8 @@ import { useQuery } from '@tanstack/react-query'
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Response } from '@/components/ai-elements/response'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { toIntlLocale } from '@/i18n/languages'
@@ -37,8 +37,8 @@ import {
 import { redactAssistantMessageForDisplay } from './assistant-message-safety'
 
 function assistantHistoryErrorStatus(error: unknown): number | null {
-  const status = (error as { response?: { status?: unknown } } | null)
-    ?.response?.status
+  const status = (error as { response?: { status?: unknown } } | null)?.response
+    ?.status
   return typeof status === 'number' ? status : null
 }
 
@@ -48,7 +48,9 @@ function HistoryMessage(props: {
   const { t } = useTranslation()
   const safeMessage = redactAssistantMessageForDisplay(
     props.message.content,
-    t('Sensitive content is hidden and can only be accessed from a private card.')
+    t(
+      'Sensitive content is hidden and can only be accessed from a private card.'
+    )
   )
   return (
     <div className='grid gap-1 rounded-md border px-3 py-2'>
@@ -72,8 +74,13 @@ function HistoryMessage(props: {
             strokeWidth={2}
             aria-hidden='true'
           />
-          {props.message.cards?.map((card) => card.label).filter(Boolean).join('、') ||
-            t('Sensitive content is hidden and can only be accessed from a private card.')}
+          {props.message.cards
+            ?.map((card) => card.label)
+            .filter(Boolean)
+            .join('、') ||
+            t(
+              'Sensitive content is hidden and can only be accessed from a private card.'
+            )}
         </div>
       ) : null}
     </div>
@@ -105,7 +112,10 @@ export function AssistantHistory(props: {
 
   if (historyQuery.isLoading) {
     return (
-      <div className='grid gap-3' aria-label={t('Loading conversation history...')}>
+      <div
+        className='grid gap-3'
+        aria-label={t('Loading conversation history...')}
+      >
         <Skeleton className='h-16 w-full' />
         <Skeleton className='h-16 w-full' />
       </div>
@@ -141,10 +151,15 @@ export function AssistantHistory(props: {
       {conversations.map((conversation) => {
         const safePreview = redactAssistantMessageForDisplay(
           conversation.last_message_preview,
-          t('Sensitive content is hidden and can only be accessed from a private card.')
+          t(
+            'Sensitive content is hidden and can only be accessed from a private card.'
+          )
         ).content
         return (
-          <article key={conversation.id} className='grid gap-2 rounded-lg border p-3'>
+          <article
+            key={conversation.id}
+            className='grid gap-2 rounded-lg border p-3'
+          >
             <div className='flex items-start justify-between gap-3'>
               <div className='min-w-0'>
                 <p className='text-sm font-medium'>
@@ -153,7 +168,9 @@ export function AssistantHistory(props: {
                     : t('Lower-access user conversation')}
                 </p>
                 <p className='text-muted-foreground mt-0.5 text-xs'>
-                  {dateFormatter.format(new Date(conversation.updated_at * 1000))}
+                  {dateFormatter.format(
+                    new Date(conversation.updated_at * 1000)
+                  )}
                 </p>
               </div>
               <Button
@@ -188,7 +205,10 @@ export function AssistantHistoryConversation(props: {
   const status = assistantHistoryErrorStatus(historyQuery.error)
   if (historyQuery.isLoading) {
     return (
-      <div className='grid gap-3' aria-label={t('Loading conversation history...')}>
+      <div
+        className='grid gap-3'
+        aria-label={t('Loading conversation history...')}
+      >
         <Skeleton className='h-8 w-48' />
         <Skeleton className='h-20 w-full' />
         <Skeleton className='h-20 w-full' />
@@ -219,7 +239,9 @@ export function AssistantHistoryConversation(props: {
         </p>
         {conversation.owner !== 'self' ? (
           <p className='text-muted-foreground mt-1 text-xs leading-5'>
-            {t('This history is available because the account has a lower access level. Private cards remain visible only to their owner.')}
+            {t(
+              'This history is available because the account has a lower access level. Private cards remain visible only to their owner.'
+            )}
           </p>
         ) : null}
       </div>

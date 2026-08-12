@@ -380,9 +380,7 @@ describe('AssistantPanel', () => {
         await flushEffects()
       })
       assert.ok(document.querySelector('[role="dialog"]'))
-      assert.ok(
-        document.querySelector('[aria-label="Exit full screen"]')
-      )
+      assert.ok(document.querySelector('[aria-label="Exit full screen"]'))
       await act(async () => {
         document
           .querySelector<HTMLButtonElement>('[aria-label="Exit full screen"]')
@@ -667,7 +665,9 @@ describe('AssistantPanel', () => {
       if (url === '/api/assistant/chat') {
         return {
           data: {
-            choices: [{ message: { content: 'I prepared the exact preview.' } }],
+            choices: [
+              { message: { content: 'I prepared the exact preview.' } },
+            ],
             lmm_assistant_action: {
               type: 'admin_config_change',
               confirmation_token: 'admin-secret-token',
@@ -698,14 +698,19 @@ describe('AssistantPanel', () => {
 
     const rendered = await renderPanel()
     try {
-      assert.match(document.body.textContent ?? '', /ADMIN · Administrator mode/)
+      assert.match(
+        document.body.textContent ?? '',
+        /ADMIN · Administrator mode/
+      )
       const textarea = document.querySelector<HTMLTextAreaElement>(
         'textarea[placeholder="Ask about server configuration, model pricing, or operations..."]'
       )
       assert.ok(textarea)
       await setTextareaValue(textarea, 'Turn on the desktop sidebar default.')
       await act(async () => {
-        document.querySelector<HTMLButtonElement>('button[aria-label="Submit"]')?.click()
+        document
+          .querySelector<HTMLButtonElement>('button[aria-label="Submit"]')
+          ?.click()
         await flushEffects()
       })
       await act(async () =>
@@ -725,8 +730,9 @@ describe('AssistantPanel', () => {
       await act(async () =>
         waitForCondition(
           () =>
-            document.body.textContent?.includes('Administrator change applied') ===
-            true,
+            document.body.textContent?.includes(
+              'Administrator change applied'
+            ) === true,
           'Administrator change result did not render'
         )
       )
@@ -829,13 +835,20 @@ describe('AssistantPanel', () => {
       await act(async () =>
         waitForCondition(
           () =>
-            document.body.textContent?.includes('Lower-access user conversation') ===
-            true,
+            document.body.textContent?.includes(
+              'Lower-access user conversation'
+            ) === true,
           'Assistant history did not render'
         )
       )
-      assert.doesNotMatch(document.body.textContent ?? '', /private@example\.test/)
-      assert.doesNotMatch(document.body.textContent ?? '', /sk-history-secret-123456/)
+      assert.doesNotMatch(
+        document.body.textContent ?? '',
+        /private@example\.test/
+      )
+      assert.doesNotMatch(
+        document.body.textContent ?? '',
+        /sk-history-secret-123456/
+      )
 
       await act(async () => {
         const viewButtons = [
@@ -955,7 +968,10 @@ describe('AssistantPanel', () => {
         document.body.textContent ?? '',
         /Sensitive message was not sent/
       )
-      assert.doesNotMatch(document.body.textContent ?? '', /private@example\.test/)
+      assert.doesNotMatch(
+        document.body.textContent ?? '',
+        /private@example\.test/
+      )
     } finally {
       await act(async () => rendered.root.unmount())
       rendered.queryClient.clear()
@@ -1196,7 +1212,9 @@ describe('AssistantPanel', () => {
       })
       await act(async () =>
         waitForCondition(
-          () => document.body.textContent?.includes('Keep your key private.') === true,
+          () =>
+            document.body.textContent?.includes('Keep your key private.') ===
+            true,
           'Markdown assistant answer did not render'
         )
       )

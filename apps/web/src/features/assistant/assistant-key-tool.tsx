@@ -57,21 +57,14 @@ import { getUserGroups } from '@/lib/api'
 import { createAssistantDefaultKey, type AssistantCreatedKey } from './api'
 import { AssistantPrivateCard } from './assistant-private-card'
 
-function ConnectionValue(props: {
-  label: string
-  value: string
-}) {
+function ConnectionValue(props: { label: string; value: string }) {
   return (
     <div className='flex items-center justify-between gap-2 py-2'>
       <span className='text-muted-foreground shrink-0 text-xs'>
         {props.label}
       </span>
       <div className='flex min-w-0 items-center gap-1.5'>
-        <code
-          className='min-w-0 flex-1 truncate text-xs'
-        >
-          {props.value}
-        </code>
+        <code className='min-w-0 flex-1 truncate text-xs'>{props.value}</code>
         <CopyButton value={props.value} size='sm' />
       </div>
     </div>
@@ -183,7 +176,9 @@ export function AssistantKeyTool(props: {
             {t('API key created')}
           </CardTitle>
           <CardDescription>
-            {t('The credential is protected in a private card and is never added to chat history.')}
+            {t(
+              'The credential is protected in a private card and is never added to chat history.'
+            )}
           </CardDescription>
         </CardHeader>
         <CardContent className='grid gap-3'>

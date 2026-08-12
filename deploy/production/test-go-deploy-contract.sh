@@ -29,11 +29,15 @@ if command -v shellcheck >/dev/null 2>&1; then
 fi
 
 for literal in \
-  'ExecStart=/usr/bin/lmm-api-go serve' \
+  'ExecStart=/usr/bin/lmm-api serve' \
   'Environment=LMM_API_FRONTEND_DIR=/usr/share/lmm-api-go/frontend-dist' \
   'Environment=LMM_DB_MIGRATION_MODE=verify'; do
-  contains "$literal" "$repo/packaging/common/lmm-api/lmm-api-go.service"
+  contains "$literal" "$repo/packaging/common/lmm-api/lmm-api.service"
 done
+contains 'readonly NEW_SERVICE=lmm-api.service' "$here/activate-go-release.sh"
+contains 'readonly LEGACY_SERVICE=lmm-api-go.service' "$here/activate-go-release.sh"
+contains 'readlink -- "$CANONICAL_LAUNCHER"' "$here/activate-go-release.sh"
+contains 'readlink -- /usr/bin/lmm-api' "$here/deploy-go.sh"
 for literal in \
   'lmm-api-go-rollback-$deployment_id.timer' \
   'Persistent=true' \
@@ -57,7 +61,7 @@ for literal in \
   contains "$literal" "$here/activate-go-release.sh"
 done
 if grep -Fq 'search_path=public' "$here/activate-go-release.sh" \
-  "$repo/packaging/common/lmm-api/lmm-api-go.service"; then
+  "$repo/packaging/common/lmm-api/lmm-api.service"; then
   fail 'production activation or service unit still hard-codes the public schema'
 fi
 contains 'PGOPTIONS="-c search_path=public"' "$repo/packaging/common/lmm-api/lmm-api-go.env"
@@ -111,7 +115,7 @@ if grep -R -nE '(^|[^[:alnum:]_])(curl|wget)([^[:alnum:]_]|$)|SIGKILL|mktemp[^\n
 fi
 if grep -R --exclude='test-cli-contract.sh' -nE \
   'lmm-api-launcher|backend\.conf.*selector|/usr/lib/lmm-api/backends/go/lmm-api.*ExecStart' \
-  "$repo/packaging/common/lmm-api" "$repo/packaging/local/lmm-api-go" \
+  "$repo/packaging/common/lmm-api" "$repo/packaging/local/lmm-api-go" "$here/precutover-lmm-api-go-direct.PKGBUILD" \
   "$repo"/packaging/aur/*/PKGBUILD "$repo"/packaging/aur/*/.SRCINFO; then
   fail 'new package path retains launcher/provider architecture'
 fi
@@ -141,4 +145,4 @@ fi
 "$here/test-backup-promotion-contract.sh"
 "$repo/deploy/test-frontend-release.sh"
 
-printf 'direct lmm-api-go production deployment contract verified\n'
+printf 'canonical lmm-api production deployment contract verified\n'

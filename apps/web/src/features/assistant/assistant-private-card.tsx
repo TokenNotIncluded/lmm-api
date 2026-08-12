@@ -22,13 +22,10 @@ import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
-import { copyToClipboard } from '@/lib/copy-to-clipboard'
 import { Button } from '@/components/ui/button'
+import { copyToClipboard } from '@/lib/copy-to-clipboard'
 
-import {
-  revealAssistantPrivateCard,
-  type AssistantPrivateCard,
-} from './api'
+import { revealAssistantPrivateCard, type AssistantPrivateCard } from './api'
 
 export function AssistantPrivateCard(props: {
   card: AssistantPrivateCard
@@ -94,13 +91,15 @@ export function AssistantPrivateCard(props: {
             {props.card.label || t('Private credential')}
           </p>
           <p className='text-muted-foreground mt-1 text-xs leading-5'>
-            {t('This card is visible only to you. Credentials are never written into chat history.')}
+            {t(
+              'This card is visible only to you. Credentials are never written into chat history.'
+            )}
           </p>
         </div>
       </div>
       {viewing && secretRef.current ? (
         <code
-          className='bg-background/80 block break-all rounded-md border px-2 py-2 text-xs'
+          className='bg-background/80 block rounded-md border px-2 py-2 text-xs break-all'
           data-testid='assistant-private-card-value'
         >
           {secretRef.current}
