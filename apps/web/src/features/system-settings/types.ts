@@ -423,6 +423,11 @@ export type SecuritySettings = {
   AdvancedSecurityOnPromptEnabled: boolean
   AdvancedSecurityAction: 'block' | 'audit'
   AdvancedSecurityRules: string
+  AntiRelayEnabled: boolean
+  AntiRelayRejectProxyHeadersEnabled: boolean
+  AntiRelayHTTPSOnlyEnabled: boolean
+  AntiRelayBlockedCIDRs: string[]
+  AntiRelayTrustedProxyCIDRs: string[]
   'fetch_setting.enable_ssrf_protection': boolean
   'fetch_setting.allow_private_ip': boolean
   'fetch_setting.domain_filter_mode': boolean

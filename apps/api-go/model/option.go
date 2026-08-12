@@ -197,6 +197,12 @@ func InitOptionMap() {
 	common.OptionMap[setting.AdvancedSecurityOnPromptOptionKey] = strconv.FormatBool(advancedSecuritySettings.OnPrompt)
 	common.OptionMap[setting.AdvancedSecurityActionOptionKey] = advancedSecuritySettings.Action
 	common.OptionMap[setting.AdvancedSecurityRulesOptionKey] = setting.AdvancedSecurityRulesToJSONString()
+	antiRelaySettings := setting.GetAntiRelaySettings()
+	common.OptionMap[setting.AntiRelayEnabledOptionKey] = strconv.FormatBool(antiRelaySettings.Enabled)
+	common.OptionMap[setting.AntiRelayRejectProxyHeadersOptionKey] = strconv.FormatBool(antiRelaySettings.RejectProxyHeaders)
+	common.OptionMap[setting.AntiRelayHTTPSOnlyOptionKey] = strconv.FormatBool(antiRelaySettings.HTTPSOnly)
+	common.OptionMap[setting.AntiRelayBlockedCIDRsOptionKey] = setting.AntiRelayBlockedCIDRsToJSONString()
+	common.OptionMap[setting.AntiRelayTrustedProxyCIDRsOptionKey] = setting.AntiRelayTrustedProxyCIDRsToJSONString()
 	common.OptionMap["StreamCacheQueueLength"] = strconv.Itoa(setting.StreamCacheQueueLength)
 	common.OptionMap["AutomaticDisableKeywords"] = operation_setting.AutomaticDisableKeywordsToString()
 	common.OptionMap["AutomaticDisableStatusCodes"] = operation_setting.AutomaticDisableStatusCodesToString()
@@ -236,6 +242,9 @@ func validateOptionValue(key string, value string) error {
 		return err
 	}
 	if err := setting.ValidateAdvancedSecurityOption(key, value); err != nil {
+		return err
+	}
+	if err := setting.ValidateAntiRelayOption(key, value); err != nil {
 		return err
 	}
 	if key == operation_setting.ToolPriceOptionKey {
@@ -432,6 +441,12 @@ func updateOptionMap(key string, value string) (err error) {
 			setting.SetAdvancedSecurityEnabled(boolValue)
 		case setting.AdvancedSecurityOnPromptOptionKey:
 			setting.SetAdvancedSecurityOnPrompt(boolValue)
+		case setting.AntiRelayEnabledOptionKey:
+			setting.SetAntiRelayEnabled(boolValue)
+		case setting.AntiRelayRejectProxyHeadersOptionKey:
+			setting.SetAntiRelayRejectProxyHeaders(boolValue)
+		case setting.AntiRelayHTTPSOnlyOptionKey:
+			setting.SetAntiRelayHTTPSOnly(boolValue)
 		case "SMTPSSLEnabled":
 			common.SMTPSSLEnabled = boolValue
 		case "SMTPStartTLSEnabled":
@@ -682,6 +697,10 @@ func updateOptionMap(key string, value string) (err error) {
 		err = setting.UpdateAdvancedSecurityAction(value)
 	case setting.AdvancedSecurityRulesOptionKey:
 		err = setting.UpdateAdvancedSecurityRules(value)
+	case setting.AntiRelayBlockedCIDRsOptionKey:
+		err = setting.UpdateAntiRelayBlockedCIDRs(value)
+	case setting.AntiRelayTrustedProxyCIDRsOptionKey:
+		err = setting.UpdateAntiRelayTrustedProxyCIDRs(value)
 	case "AutomaticDisableKeywords":
 		operation_setting.AutomaticDisableKeywordsFromString(value)
 	case "AutomaticDisableStatusCodes":
