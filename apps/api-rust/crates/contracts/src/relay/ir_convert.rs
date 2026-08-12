@@ -563,10 +563,33 @@ fn chat_content_to_parts(
             .map(|(index, part)| {
                 let part_path = format!("{path}[{index}]");
                 match part.kind.as_str() {
-                    "text" => part.text.map(Part::text).ok_or_else(|| {
-                        DirectIrError::missing(source, target, "text", &format!("{part_path}.text"))
-                    }),
+                    "text" => {
+                        if part.image_url.is_some() {
+                            return Err(DirectIrError::unsupported(
+                                source,
+                                target,
+                                "content_part.image_url",
+                                &format!("{part_path}.image_url"),
+                            ));
+                        }
+                        part.text.map(Part::text).ok_or_else(|| {
+                            DirectIrError::missing(
+                                source,
+                                target,
+                                "text",
+                                &format!("{part_path}.text"),
+                            )
+                        })
+                    }
                     "image_url" => {
+                        if part.text.is_some() {
+                            return Err(DirectIrError::unsupported(
+                                source,
+                                target,
+                                "content_part.text",
+                                &format!("{part_path}.text"),
+                            ));
+                        }
                         let image = part.image_url.ok_or_else(|| {
                             DirectIrError::missing(
                                 source,
@@ -575,21 +598,12 @@ fn chat_content_to_parts(
                                 &format!("{part_path}.image_url"),
                             )
                         })?;
-                        let (uri, data) = match image {
-                            JsonData::String(uri) => (Some(uri), None),
-                            JsonData::Object(mut object) => {
-                                let uri = object.remove("url").and_then(|value| match value {
-                                    JsonData::String(value) => Some(value),
-                                    _ => None,
-                                });
-                                (uri, Some(JsonData::Object(object)))
-                            }
-                            value => (None, Some(value)),
-                        };
-                        let mut media = Media::new(MediaKind::Image);
-                        media.uri = uri;
-                        media.data = data;
-                        Ok(Part::media(media))
+                        Ok(Part::media(chat_image_url_to_media(
+                            image,
+                            source,
+                            target,
+                            &format!("{part_path}.image_url"),
+                        )?))
                     }
                     _ => Err(DirectIrError::unsupported(
                         source,
@@ -601,6 +615,51 @@ fn chat_content_to_parts(
             })
             .collect(),
     }
+}
+
+fn chat_image_url_to_media(
+    image: JsonData,
+    source: Protocol,
+    target: Protocol,
+    path: &str,
+) -> Result<Media, DirectIrError> {
+    let mut media = Media::new(MediaKind::Image);
+    match image {
+        JsonData::String(uri) => {
+            media.uri = Some(uri);
+        }
+        JsonData::Object(mut object) => {
+            let Some(url) = object.remove("url") else {
+                return Err(DirectIrError::missing(
+                    source,
+                    target,
+                    "image_url.url",
+                    &format!("{path}.url"),
+                ));
+            };
+            let JsonData::String(url) = url else {
+                return Err(DirectIrError::new(
+                    source,
+                    target,
+                    "image_url.url",
+                    &format!("{path}.url"),
+                    DirectIrReason::InvalidShape,
+                ));
+            };
+            media.uri = Some(url);
+            media.extensions = object;
+        }
+        _ => {
+            return Err(DirectIrError::new(
+                source,
+                target,
+                "image_url",
+                path,
+                DirectIrReason::InvalidShape,
+            ));
+        }
+    }
+    Ok(media)
 }
 
 fn chat_content_to_json(
@@ -619,20 +678,73 @@ fn chat_content_to_json(
                 .into_iter()
                 .enumerate()
                 .map(|(index, part)| {
+                    let part_path = format!("{path}[{index}]");
                     let mut entries = BTreeMap::new();
                     entries.insert("type".to_owned(), JsonData::String(part.kind));
-                    if let Some(text) = part.text {
-                        entries.insert("text".to_owned(), JsonData::String(text));
-                    }
-                    if let Some(image) = part.image_url {
-                        entries.insert("image_url".to_owned(), image);
+                    match entries
+                        .get("type")
+                        .and_then(json_string)
+                        .unwrap_or_default()
+                    {
+                        "text" => {
+                            if part.image_url.is_some() {
+                                return Err(DirectIrError::unsupported(
+                                    source,
+                                    target,
+                                    "content_part.image_url",
+                                    &format!("{part_path}.image_url"),
+                                ));
+                            }
+                            let Some(text) = part.text else {
+                                return Err(DirectIrError::missing(
+                                    source,
+                                    target,
+                                    "text",
+                                    &format!("{part_path}.text"),
+                                ));
+                            };
+                            entries.insert("text".to_owned(), JsonData::String(text));
+                        }
+                        "image_url" => {
+                            if part.text.is_some() {
+                                return Err(DirectIrError::unsupported(
+                                    source,
+                                    target,
+                                    "content_part.text",
+                                    &format!("{part_path}.text"),
+                                ));
+                            }
+                            let Some(image) = part.image_url else {
+                                return Err(DirectIrError::missing(
+                                    source,
+                                    target,
+                                    "image",
+                                    &format!("{part_path}.image_url"),
+                                ));
+                            };
+                            let _ = chat_image_url_to_media(
+                                image.clone(),
+                                source,
+                                target,
+                                &format!("{part_path}.image_url"),
+                            )?;
+                            entries.insert("image_url".to_owned(), image);
+                        }
+                        _ => {
+                            return Err(DirectIrError::unsupported(
+                                source,
+                                target,
+                                "content_part",
+                                &format!("{part_path}.type"),
+                            ));
+                        }
                     }
                     if entries.len() == 1 {
                         Err(DirectIrError::missing(
                             source,
                             target,
                             "content_part",
-                            &format!("{path}[{index}]"),
+                            &part_path,
                         ))
                     } else {
                         Ok(JsonData::Object(entries))
@@ -657,6 +769,28 @@ fn chat_parts_to_content(
         .iter()
         .all(|part| matches!(&part.kind, PartKind::Text))
     {
+        if parts.len() > 1 {
+            let output = parts
+                .iter()
+                .map(|part| {
+                    let Some(value) = part.text.as_ref() else {
+                        return Err(DirectIrError::new(
+                            source,
+                            target,
+                            "text",
+                            path,
+                            DirectIrReason::InvalidShape,
+                        ));
+                    };
+                    Ok(OpenAiChatContentPart {
+                        kind: "text".to_owned(),
+                        text: Some(value.clone()),
+                        image_url: None,
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            return Ok(Some(StringOrParts::Parts(output)));
+        }
         let mut text = String::new();
         for part in parts {
             let Some(value) = part.text.as_ref() else {
@@ -699,8 +833,8 @@ fn chat_parts_to_content(
                     ));
                 }
                 let image_url = if let Some(uri) = media.uri.as_ref() {
-                    if let Some(JsonData::Object(extra)) = media.data.as_ref() {
-                        let mut value = extra.clone();
+                    if !media.extensions.is_empty() {
+                        let mut value = media.extensions.clone();
                         value.insert("url".to_owned(), JsonData::String(uri.clone()));
                         JsonData::Object(value)
                     } else {
@@ -837,6 +971,47 @@ fn tool_to_ir(
         input_schema: schema,
         extensions,
     })
+}
+
+fn validate_openai_tool_call(
+    call: &OpenAiToolCall,
+    source: Protocol,
+    target: Protocol,
+    path: &str,
+) -> Result<(), DirectIrError> {
+    if call.kind != "function" {
+        return Err(DirectIrError::unsupported(
+            source,
+            target,
+            "tool_call_type",
+            &format!("{path}.kind"),
+        ));
+    }
+    if call.function.description.is_some() {
+        return Err(DirectIrError::unsupported(
+            source,
+            target,
+            "tool_call.description",
+            &format!("{path}.function.description"),
+        ));
+    }
+    if call.function.parameters.is_some() {
+        return Err(DirectIrError::unsupported(
+            source,
+            target,
+            "tool_call.parameters",
+            &format!("{path}.function.parameters"),
+        ));
+    }
+    if call.function.strict.is_some() {
+        return Err(DirectIrError::unsupported(
+            source,
+            target,
+            "tool_call.strict",
+            &format!("{path}.function.strict"),
+        ));
+    }
+    Ok(())
 }
 
 fn tool_name_for_target(
@@ -1385,6 +1560,14 @@ fn chat_message_to_envelope(
                 &format!("{path}.tool_calls"),
             ));
         }
+        if message.reasoning_content.is_some() {
+            return Err(DirectIrError::unsupported(
+                source,
+                target,
+                "tool_result.reasoning_content",
+                &format!("{path}.reasoning_content"),
+            ));
+        }
         if message
             .extra_content
             .as_ref()
@@ -1443,7 +1626,13 @@ fn chat_message_to_envelope(
             &format!("{path}.tool_calls"),
         ));
     }
+    let mut message_item_is_emitted = has_anthropic_blocks || message.tool_calls.is_empty();
     if has_anthropic_blocks {
+        let anthropic_model = message
+            .extra_content
+            .as_ref()
+            .and_then(|extra| extra.anthropic.as_ref())
+            .and_then(|value| value.model.as_deref());
         let blocks = message
             .extra_content
             .as_ref()
@@ -1457,6 +1646,7 @@ fn chat_message_to_envelope(
             target,
             &format!("{path}.extra_content.anthropic.blocks"),
             message.name.as_deref(),
+            anthropic_model,
             envelope,
         )?;
     } else {
@@ -1477,7 +1667,9 @@ fn chat_message_to_envelope(
         for part in parts {
             item.push_part(part);
         }
-        if !item.ordered_parts().is_empty() || message.tool_calls.is_empty() {
+        message_item_is_emitted =
+            !item.ordered_parts().is_empty() || message.tool_calls.is_empty();
+        if message_item_is_emitted {
             push_item(envelope, item, source, target, &path)?;
         }
         if let Some(reasoning) = message.reasoning_content {
@@ -1499,6 +1691,7 @@ fn chat_message_to_envelope(
     let mut message_google_state = message_google_state;
     for (call_index, call) in message.tool_calls.into_iter().enumerate() {
         let call_path = format!("{path}.tool_calls[{call_index}]");
+        validate_openai_tool_call(&call, source, target, &call_path)?;
         if call
             .extra_content
             .as_ref()
@@ -1535,9 +1728,18 @@ fn chat_message_to_envelope(
         )?;
         let call_id = OpaqueId::authentic(call.id, source);
         let call_name = call.function.name;
+        let mut call_item = tool_call_item(call_id, call_name, arguments, source, &call_path);
+        if call_index == 0 && !message_item_is_emitted {
+            if let Some(name) = message.name.clone() {
+                call_item
+                    .provenance
+                    .extensions
+                    .insert("openai.name".to_owned(), JsonData::String(name));
+            }
+        }
         push_item(
             envelope,
-            tool_call_item(call_id, call_name, arguments, source, &call_path),
+            call_item,
             source,
             target,
             &call_path,
@@ -1613,6 +1815,14 @@ pub fn openai_chat_request_to_envelope_v2(
     envelope.tool_choice =
         tool_choice_from_json(request.tool_choice.clone(), source, target, "tool_choice")?;
     for (index, tool) in request.tools.iter().enumerate() {
+        if !tool.function.arguments.is_empty() {
+            return Err(DirectIrError::unsupported(
+                source,
+                target,
+                "tool.arguments",
+                &format!("tools[{index}].function.arguments"),
+            ));
+        }
         envelope.tools.push(tool_to_ir(
             tool.kind.clone(),
             tool.function.name.clone(),
@@ -4778,8 +4988,18 @@ fn merge_openai_messages(
     match (target_message.content.take(), incoming.content) {
         (None, content) => target_message.content = content,
         (Some(StringOrParts::String(mut left)), Some(StringOrParts::String(right))) => {
-            left.push_str(&right);
-            target_message.content = Some(StringOrParts::String(left));
+            target_message.content = Some(StringOrParts::Parts(vec![
+                OpenAiChatContentPart {
+                    kind: "text".to_owned(),
+                    text: Some(left),
+                    image_url: None,
+                },
+                OpenAiChatContentPart {
+                    kind: "text".to_owned(),
+                    text: Some(right),
+                    image_url: None,
+                },
+            ]));
         }
         (Some(StringOrParts::String(left)), Some(StringOrParts::Parts(mut right))) => {
             right.insert(
@@ -4808,7 +5028,16 @@ fn merge_openai_messages(
     }
     if let Some(reasoning) = incoming.reasoning_content {
         match target_message.reasoning_content.as_mut() {
-            Some(value) => value.push_str(&reasoning),
+            Some(value) => {
+                record_loss(
+                    envelope,
+                    LossCode::LossContentOrder,
+                    Some(Feature::ReasoningSummary),
+                    format!("items[{index}].reasoning_content").as_str(),
+                    "adjacent reasoning fields were merged into one OpenAI message",
+                );
+                value.push_str(&reasoning);
+            }
             None => target_message.reasoning_content = Some(reasoning),
         }
     }
