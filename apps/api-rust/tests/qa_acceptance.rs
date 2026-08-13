@@ -1798,6 +1798,54 @@ fn stream_session_decision_and_telemetry_follow_rollout_and_fail_closed() {
 }
 
 #[test]
+fn same_protocol_sse_unknown_event_and_bom_bytes_are_raw_passthrough() {
+    let registry = validated_current_registry().expect("current registry validates");
+    let scope = RouteOwnershipScope {
+        source: Protocol::OpenAi,
+        target: Protocol::OpenAi,
+        stream: true,
+    };
+    let rollout = ProtocolRolloutControl::default().snapshot();
+    let mut session = compile_stream_session(StreamSessionSpec::new(
+        "qa-same-protocol-raw",
+        Protocol::OpenAi,
+        Protocol::OpenAi,
+        "gpt-test",
+        &registry,
+        &rollout,
+        &OwnershipEvidence::closed(scope),
+    ))
+    .expect("same-protocol stream admits native raw passthrough");
+    assert!(session.decision().is_raw_passthrough());
+    assert!(session.plan().is_none());
+
+    let input = b"\xef\xbb\xbfevent: future_event\r\ndata: first\r\ndata: second\r\nx-provider-extension: opaque\r\n\r\n";
+    let mut parser = SseFrameParser::new(input.len());
+    let mut frames = Vec::new();
+    for chunk in input.chunks(2) {
+        frames.extend(parser.feed(chunk).expect("split SSE feed"));
+    }
+    frames.extend(parser.finish().expect("SSE EOF"));
+    assert_eq!(frames.len(), 1);
+    let frame = &frames[0];
+    assert_eq!(frame.raw, input);
+    assert_eq!(frame.event_name(), Some("future_event"));
+    assert_eq!(frame.data(), "first\nsecond");
+    assert_eq!(frame.unknown_fields.len(), 1);
+    assert_eq!(frame.unknown_fields[0], "x-provider-extension");
+    assert!(frame.has_unrepresentable_metadata());
+
+    let output = session
+        .process_frame(frame)
+        .expect("raw frame does not enter typed conversion");
+    assert!(matches!(
+        output,
+        StreamFrameOutput::RawPassthrough { bytes } if bytes == input
+    ));
+    session.complete();
+}
+
+#[test]
 fn rollout_feature_flags_select_deterministically_and_fail_closed() {
     let context = RolloutContext::new(
         "qa-rollout-stable-key",
