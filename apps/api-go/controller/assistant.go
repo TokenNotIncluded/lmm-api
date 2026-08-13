@@ -250,7 +250,7 @@ func recordAssistantHistoryResponse(c *gin.Context, status int, body []byte) {
 	conversationID := assistantHistoryConversationID(c)
 	actorUserID := assistantActorUserID(c)
 	latestMessage := c.GetString("assistant_history_latest_message")
-	if conversationID <= 0 || actorUserID <= 0 || latestMessage == "" {
+	if actorUserID <= 0 || latestMessage == "" {
 		return
 	}
 	response, err := parseAssistantResponse(body)
@@ -261,11 +261,31 @@ func recordAssistantHistoryResponse(c *gin.Context, status int, body []byte) {
 	if strings.TrimSpace(content) == "" {
 		return
 	}
-	if err := model.RecordAssistantConversationTurn(actorUserID, conversationID, latestMessage, content); err != nil {
+	recordedConversationID, err := model.RecordAssistantConversationTurnForRequest(actorUserID, conversationID, latestMessage, content)
+	if err != nil {
 		// History is a support feature, not a reason to drop a successful
 		// answer.  The failure is still observable to operators.
 		common.SysError(fmt.Sprintf("failed to record assistant conversation %d: %v", conversationID, err))
+		return
 	}
+	c.Set("assistant_history_conversation_id", recordedConversationID)
+}
+
+func trimAssistantHistoryToRuneBudget(messages []model.AssistantHistoryMessage, budget int) []model.AssistantHistoryMessage {
+	if budget <= 0 || len(messages) < 2 {
+		return []model.AssistantHistoryMessage{}
+	}
+	start := len(messages)
+	used := 0
+	for start >= 2 {
+		pairRunes := utf8.RuneCountInString(messages[start-2].Content) + utf8.RuneCountInString(messages[start-1].Content)
+		if used+pairRunes > budget {
+			break
+		}
+		used += pairRunes
+		start -= 2
+	}
+	return messages[start:]
 }
 
 func writeAssistantHistoryResponse(c *gin.Context, status int, body []byte) {
@@ -347,21 +367,22 @@ func PrepareAssistantRequest(c *gin.Context) {
 	}
 	actorUserID := c.GetInt("id")
 	if actorUserID > 0 {
-		conversationRecord, err := model.PrepareAssistantConversation(actorUserID, input.ConversationID, latestMessage)
-		if err != nil {
-			if errors.Is(err, model.ErrAssistantConversationNotFound) {
-				writeAssistantError(c, http.StatusNotFound, "ASSISTANT_CONVERSATION_NOT_FOUND", errors.New("assistant conversation was not found"))
-			} else {
-				writeAssistantError(c, http.StatusInternalServerError, "ASSISTANT_HISTORY_UNAVAILABLE", errors.New("assistant conversation history is unavailable"))
-			}
-			return
-		}
 		if input.ConversationID > 0 {
+			conversationRecord, err := model.PrepareAssistantConversation(actorUserID, input.ConversationID, latestMessage)
+			if err != nil {
+				if errors.Is(err, model.ErrAssistantConversationNotFound) {
+					writeAssistantError(c, http.StatusNotFound, "ASSISTANT_CONVERSATION_NOT_FOUND", errors.New("assistant conversation was not found"))
+				} else {
+					writeAssistantError(c, http.StatusInternalServerError, "ASSISTANT_HISTORY_UNAVAILABLE", errors.New("assistant conversation history is unavailable"))
+				}
+				return
+			}
 			history, historyErr := model.LoadAssistantConversationMessages(actorUserID, conversationRecord.Id, assistantConversationMaxItems-1)
 			if historyErr != nil {
 				writeAssistantError(c, http.StatusInternalServerError, "ASSISTANT_HISTORY_UNAVAILABLE", errors.New("assistant conversation history is unavailable"))
 				return
 			}
+			history = trimAssistantHistoryToRuneBudget(history, assistantConversationMaxRunes-utf8.RuneCountInString(latestMessage))
 			if len(history) > 0 {
 				conversation = make([]assistantOpenAIMessage, 0, len(history)+1)
 				for _, message := range history {
@@ -369,8 +390,8 @@ func PrepareAssistantRequest(c *gin.Context) {
 				}
 				conversation = append(conversation, assistantOpenAIMessage{Role: "user", Content: latestMessage})
 			}
+			c.Set("assistant_history_conversation_id", conversationRecord.Id)
 		}
-		c.Set("assistant_history_conversation_id", conversationRecord.Id)
 		c.Set("assistant_history_latest_message", latestMessage)
 	}
 	userContext := assistantUserContextForRequest(actorUserID, latestMessage, conversation)

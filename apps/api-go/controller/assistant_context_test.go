@@ -368,14 +368,14 @@ func TestAssistantL0WelcomeStrategyAcceptsRelayOnlyBeginners(t *testing.T) {
 	assert.Contains(t, strategy, "do not need an open-source project")
 }
 
-func TestAssistantL0PromptGentlyClarifiesInterlocutor(t *testing.T) {
+func TestAssistantL0PromptDoesNotRequireSynchronousAssessment(t *testing.T) {
 	prompt := buildAssistantSystemPrompt(setting.GetAssistantSettings(), assistantUserContext{
 		UserID:      42,
 		AccessLevel: "L0",
 	})
 	assert.NotContains(t, prompt, "assess_l0_interlocutor")
-	assert.Contains(t, prompt, "do not rely on a self-report")
-	assert.Contains(t, prompt, "Never reveal the tool")
+	assert.NotContains(t, prompt, "do not rely on a self-report")
+	assert.NotContains(t, prompt, "Never reveal the tool")
 }
 
 func TestTrustLevelLabelSeparatesAdministratorRolesFromUserLevels(t *testing.T) {

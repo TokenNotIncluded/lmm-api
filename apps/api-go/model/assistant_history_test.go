@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -95,6 +96,14 @@ func TestAssistantConversationArchiveIsOwnerOnlyAndListFilterPreservesHistory(t 
 	l0, l1, _, admin := setupAssistantHistoryTestDB(t)
 	active, err := PrepareAssistantConversation(l0.Id, 0, "active conversation")
 	require.NoError(t, err)
+	require.NoError(t, RecordAssistantConversationTurn(
+		l0.Id,
+		active.Id,
+		"active question",
+		"active answer",
+	))
+	empty, err := PrepareAssistantConversation(l0.Id, 0, "legacy failed request")
+	require.NoError(t, err)
 	archived, err := PrepareAssistantConversation(l0.Id, 0, "archived conversation")
 	require.NoError(t, err)
 	require.NoError(t, RecordAssistantConversationTurn(
@@ -124,6 +133,7 @@ func TestAssistantConversationArchiveIsOwnerOnlyAndListFilterPreservesHistory(t 
 	require.NoError(t, err)
 	require.Len(t, activeList, 1)
 	assert.Equal(t, active.Id, activeList[0].Id)
+	assert.NotEqual(t, empty.Id, activeList[0].Id)
 	assert.Zero(t, activeList[0].ArchivedAt)
 
 	archivedList, err := ListAssistantConversations(l0.Id, l0.Id, 100, true)
@@ -156,6 +166,76 @@ func TestAssistantConversationArchiveIsOwnerOnlyAndListFilterPreservesHistory(t 
 	archivedList, err = ListAssistantConversations(l0.Id, l0.Id, 100, true)
 	require.NoError(t, err)
 	assert.Empty(t, archivedList)
+}
+
+func TestAssistantConversationIsCreatedOnlyWithCompleteSuccessfulTurn(t *testing.T) {
+	l0, _, _, _ := setupAssistantHistoryTestDB(t)
+
+	conversationID, err := RecordAssistantConversationTurnForRequest(l0.Id, 0, "question", "")
+	require.Error(t, err)
+	assert.Zero(t, conversationID)
+	var conversations int64
+	require.NoError(t, DB.Model(&AssistantConversation{}).Where("user_id = ?", l0.Id).Count(&conversations).Error)
+	assert.Zero(t, conversations)
+
+	conversationID, err = RecordAssistantConversationTurnForRequest(l0.Id, 0, "question", "answer")
+	require.NoError(t, err)
+	assert.Positive(t, conversationID)
+	require.NoError(t, DB.Model(&AssistantConversation{}).Where("user_id = ?", l0.Id).Count(&conversations).Error)
+	assert.EqualValues(t, 1, conversations)
+	var messages []AssistantHistoryMessage
+	require.NoError(t, DB.Where("conversation_id = ?", conversationID).Order("sequence ASC").Find(&messages).Error)
+	require.Len(t, messages, 2)
+	assert.Equal(t, AssistantHistoryRoleUser, messages[0].Role)
+	assert.Equal(t, AssistantHistoryRoleAssistant, messages[1].Role)
+}
+
+func TestAssistantHistoryLoadsRecentCompletePairsAndRecentDetailRows(t *testing.T) {
+	l0, _, _, _ := setupAssistantHistoryTestDB(t)
+	conversation, err := PrepareAssistantConversation(l0.Id, 0, "question-1")
+	require.NoError(t, err)
+	for turn := 1; turn <= 7; turn++ {
+		require.NoError(t, RecordAssistantConversationTurn(
+			l0.Id,
+			conversation.Id,
+			fmt.Sprintf("question-%d", turn),
+			fmt.Sprintf("answer-%d", turn),
+		))
+	}
+	require.NoError(t, DB.Create(&AssistantHistoryMessage{
+		ConversationId: conversation.Id,
+		Sequence:       15,
+		Role:           AssistantHistoryRoleUser,
+		Content:        "incomplete-question",
+		CreatedAt:      common.GetTimestamp(),
+	}).Error)
+
+	contextMessages, err := LoadAssistantConversationMessages(l0.Id, conversation.Id, 11)
+	require.NoError(t, err)
+	require.Len(t, contextMessages, 10)
+	assert.Equal(t, "question-3", contextMessages[0].Content)
+	assert.Equal(t, "answer-7", contextMessages[len(contextMessages)-1].Content)
+	for index := 0; index < len(contextMessages); index += 2 {
+		assert.Equal(t, AssistantHistoryRoleUser, contextMessages[index].Role)
+		assert.Equal(t, AssistantHistoryRoleAssistant, contextMessages[index+1].Role)
+		assert.Equal(t, contextMessages[index].Sequence+1, contextMessages[index+1].Sequence)
+	}
+
+	detailConversation, err := PrepareAssistantConversation(l0.Id, 0, "detail-1")
+	require.NoError(t, err)
+	for turn := 1; turn <= 4; turn++ {
+		require.NoError(t, RecordAssistantConversationTurn(
+			l0.Id,
+			detailConversation.Id,
+			fmt.Sprintf("detail-question-%d", turn),
+			fmt.Sprintf("detail-answer-%d", turn),
+		))
+	}
+	_, detailMessages, err := GetAssistantConversationHistory(l0.Id, detailConversation.Id, 4)
+	require.NoError(t, err)
+	require.Len(t, detailMessages, 4)
+	assert.Equal(t, "detail-question-3", detailMessages[0].Content)
+	assert.Equal(t, "detail-answer-4", detailMessages[3].Content)
 }
 
 func TestAssistantSecureCardIsOpaqueEncryptedOwnerOnlyAndOneTime(t *testing.T) {

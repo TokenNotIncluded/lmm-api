@@ -110,6 +110,8 @@ func TestListAssistantConversationsControllerFiltersArchivedExplicitly(t *testin
 	}
 	require.NoError(t, db.Create(active).Error)
 	require.NoError(t, db.Create(archived).Error)
+	require.NoError(t, model.RecordAssistantConversationTurn(42, active.Id, "active question", "active answer"))
+	require.NoError(t, model.RecordAssistantConversationTurn(42, archived.Id, "archived question", "archived answer"))
 
 	listContext, listResponse := assistantHistoryControllerContext(
 		t,

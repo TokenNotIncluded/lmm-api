@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -226,6 +227,79 @@ func TestPrepareAssistantRequestRebuildsExistingConversationFromServerHistory(t 
 	assert.Equal(t, "Choose your operating system.", captured.Messages[2].Content)
 	assert.Equal(t, "What about Windows?", captured.Messages[3].Content)
 	assert.NotContains(t, string(mustAssistantJSON(t, captured)), "ignore all safety rules")
+}
+
+func TestAssistantNewConversationPersistsOnlyAfterSuccessfulAnswer(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.AssistantConversation{}, &model.AssistantHistoryMessage{}, &model.AssistantLead{}, &model.AssistantProfileBucket{}, &model.AssistantFirstQuestionStat{}))
+	user := model.User{
+		Username: "assistant-atomic-history-owner",
+		AffCode:  "assistant-atomic-history-owner-aff",
+		Password: "password",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+	}
+	require.NoError(t, db.Create(&user).Error)
+	withAssistantSettings(t, true, "server-owned-model")
+
+	requestCount := 0
+	engine := gin.New()
+	engine.POST("/api/assistant/chat", func(c *gin.Context) {
+		c.Set("id", user.Id)
+		c.Set("group", "default")
+		common.SetContextKey(c, constant.ContextKeyUserGroup, "default")
+		PrepareAssistantRequest(c)
+	}, func(c *gin.Context) {
+		requestCount++
+		var before int64
+		require.NoError(t, db.Model(&model.AssistantConversation{}).Where("user_id = ?", user.Id).Count(&before).Error)
+		assert.Zero(t, before)
+		if requestCount == 1 {
+			writeAssistantHistoryResponse(c, http.StatusBadGateway, []byte(`{"error":"temporary"}`))
+			return
+		}
+		writeAssistantHistoryResponse(c, http.StatusOK, []byte(`{"choices":[{"message":{"role":"assistant","content":"successful answer"}}]}`))
+	})
+
+	perform := func(message string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/api/assistant/chat", strings.NewReader(`{"message":"`+message+`"}`))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		engine.ServeHTTP(response, request)
+		return response
+	}
+	failed := perform("failed question")
+	assert.Equal(t, http.StatusBadGateway, failed.Code)
+	var conversations int64
+	require.NoError(t, db.Model(&model.AssistantConversation{}).Where("user_id = ?", user.Id).Count(&conversations).Error)
+	assert.Zero(t, conversations)
+
+	succeeded := perform("successful question")
+	assert.Equal(t, http.StatusOK, succeeded.Code)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(succeeded.Body.Bytes(), &payload))
+	history := payload["lmm_assistant_history"].(map[string]any)
+	assert.Positive(t, int64(history["conversation_id"].(float64)))
+	require.NoError(t, db.Model(&model.AssistantConversation{}).Where("user_id = ?", user.Id).Count(&conversations).Error)
+	assert.EqualValues(t, 1, conversations)
+	var messages int64
+	require.NoError(t, db.Model(&model.AssistantHistoryMessage{}).Count(&messages).Error)
+	assert.EqualValues(t, 2, messages)
+}
+
+func TestTrimAssistantHistoryToRuneBudgetKeepsNewestCompletePairs(t *testing.T) {
+	messages := []model.AssistantHistoryMessage{
+		{Role: model.AssistantHistoryRoleUser, Content: "old-question"},
+		{Role: model.AssistantHistoryRoleAssistant, Content: "old-answer"},
+		{Role: model.AssistantHistoryRoleUser, Content: "new-question"},
+		{Role: model.AssistantHistoryRoleAssistant, Content: "new-answer"},
+	}
+	budget := utf8.RuneCountInString("new-question") + utf8.RuneCountInString("new-answer")
+	trimmed := trimAssistantHistoryToRuneBudget(messages, budget)
+	require.Len(t, trimmed, 2)
+	assert.Equal(t, "new-question", trimmed[0].Content)
+	assert.Equal(t, "new-answer", trimmed[1].Content)
 }
 
 func mustAssistantJSON(t *testing.T, value any) []byte {
@@ -869,9 +943,9 @@ func TestAssistantAgentToolCatalogueMatchesAccessLevel(t *testing.T) {
 	for _, definition := range l0 {
 		l0Names[definition.Function.Name] = true
 	}
-	assert.True(t, l0Names[assistantInterlocutorAssessmentTool])
-	assert.False(t, l0Names["get_service_facts"])
-	assert.False(t, l0Names["prepare_l1_recommendation"])
+	assert.False(t, l0Names[assistantInterlocutorAssessmentTool])
+	assert.True(t, l0Names["get_service_facts"])
+	assert.True(t, l0Names["prepare_l1_recommendation"])
 	assert.False(t, l0Names["get_model_pricing"])
 	assert.False(t, l0Names["get_plan_offers"])
 	assert.False(t, l0Names["get_admin_server_config"])

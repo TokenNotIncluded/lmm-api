@@ -320,11 +320,46 @@ func LoadAssistantConversationMessages(userID int, conversationID int64, limit i
 	if limit <= 0 || limit > assistantHistoryPageMax {
 		limit = assistantHistoryPageMax
 	}
-	var messages []AssistantHistoryMessage
+	pairLimit := limit / 2
+	if pairLimit == 0 {
+		return []AssistantHistoryMessage{}, nil
+	}
+	// Fetch newest-first so a bounded query keeps the latest context.  Read a
+	// wider window to tolerate legacy/incomplete rows without ever returning a
+	// split user/assistant turn to the model.
+	scanLimit := limit * 4
+	if scanLimit < 20 {
+		scanLimit = 20
+	}
+	if scanLimit > assistantHistoryPageMax {
+		scanLimit = assistantHistoryPageMax
+	}
+	var candidates []AssistantHistoryMessage
 	if err := DB.Where("conversation_id = ?", conversation.Id).
 		Where("role IN ?", []string{AssistantHistoryRoleUser, AssistantHistoryRoleAssistant}).
-		Order("sequence ASC").Limit(limit).Find(&messages).Error; err != nil {
+		Order("sequence DESC").Limit(scanLimit).Find(&candidates).Error; err != nil {
 		return nil, err
+	}
+	for left, right := 0, len(candidates)-1; left < right; left, right = left+1, right-1 {
+		candidates[left], candidates[right] = candidates[right], candidates[left]
+	}
+	pairStarts := make([]int, 0, pairLimit)
+	for index := len(candidates) - 1; index > 0 && len(pairStarts) < pairLimit; {
+		userMessage := candidates[index-1]
+		assistantMessage := candidates[index]
+		if userMessage.Role == AssistantHistoryRoleUser &&
+			assistantMessage.Role == AssistantHistoryRoleAssistant &&
+			assistantMessage.Sequence == userMessage.Sequence+1 {
+			pairStarts = append(pairStarts, index-1)
+			index -= 2
+			continue
+		}
+		index--
+	}
+	messages := make([]AssistantHistoryMessage, 0, len(pairStarts)*2)
+	for index := len(pairStarts) - 1; index >= 0; index-- {
+		start := pairStarts[index]
+		messages = append(messages, candidates[start], candidates[start+1])
 	}
 	return messages, nil
 }
@@ -354,25 +389,41 @@ func appendAssistantHistoryMessageTx(tx *gorm.DB, conversationID int64, role, co
 	return message, nil
 }
 
-// RecordAssistantConversationTurn records the new user turn and the final
-// assistant text together.  Tool call payloads and upstream raw JSON are never
-// persisted.
-func RecordAssistantConversationTurn(userID int, conversationID int64, userContent, assistantContent string) error {
-	if userID <= 0 || conversationID <= 0 {
-		return gorm.ErrInvalidData
+// RecordAssistantConversationTurnForRequest records a complete successful turn.
+// A zero conversation ID creates the conversation in the same transaction, so
+// failed or empty upstream responses cannot leave empty conversation shells.
+func RecordAssistantConversationTurnForRequest(userID int, conversationID int64, userContent, assistantContent string) (int64, error) {
+	if userID <= 0 || conversationID < 0 {
+		return 0, gorm.ErrInvalidData
 	}
-	return DB.Transaction(func(tx *gorm.DB) error {
+	var recordedConversationID int64
+	err := DB.Transaction(func(tx *gorm.DB) error {
 		var conversation AssistantConversation
-		if err := lockForUpdate(tx).Where("id = ? AND user_id = ?", conversationID, userID).First(&conversation).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return ErrAssistantConversationNotFound
+		if conversationID > 0 {
+			if err := lockForUpdate(tx).Where("id = ? AND user_id = ?", conversationID, userID).First(&conversation).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return ErrAssistantConversationNotFound
+				}
+				return err
 			}
+		} else {
+			now := common.GetTimestamp()
+			conversation = AssistantConversation{
+				UserId:             userID,
+				Title:              assistantConversationTitle(userContent),
+				LastMessagePreview: assistantConversationTitle(userContent),
+				CreatedAt:          now,
+				UpdatedAt:          now,
+			}
+			if err := tx.Create(&conversation).Error; err != nil {
+				return err
+			}
+		}
+		recordedConversationID = conversation.Id
+		if _, err := appendAssistantHistoryMessageTx(tx, conversation.Id, AssistantHistoryRoleUser, userContent); err != nil {
 			return err
 		}
-		if _, err := appendAssistantHistoryMessageTx(tx, conversationID, AssistantHistoryRoleUser, userContent); err != nil {
-			return err
-		}
-		if _, err := appendAssistantHistoryMessageTx(tx, conversationID, AssistantHistoryRoleAssistant, assistantContent); err != nil {
+		if _, err := appendAssistantHistoryMessageTx(tx, conversation.Id, AssistantHistoryRoleAssistant, assistantContent); err != nil {
 			return err
 		}
 		now := common.GetTimestamp()
@@ -381,6 +432,20 @@ func RecordAssistantConversationTurn(userID int, conversationID int64, userConte
 			"updated_at":           now,
 		}).Error
 	})
+	if err != nil {
+		return 0, err
+	}
+	return recordedConversationID, nil
+}
+
+// RecordAssistantConversationTurn preserves the existing explicit-conversation
+// API for callers that already created a conversation.
+func RecordAssistantConversationTurn(userID int, conversationID int64, userContent, assistantContent string) error {
+	if conversationID <= 0 {
+		return gorm.ErrInvalidData
+	}
+	_, err := RecordAssistantConversationTurnForRequest(userID, conversationID, userContent, assistantContent)
+	return err
 }
 
 func setAssistantConversationArchived(userID int, conversationID int64, archived bool) (*AssistantConversation, error) {
@@ -447,6 +512,7 @@ func ListAssistantConversations(viewerUserID, ownerUserID int, limit int, archiv
 	}
 	if err := DB.Where("user_id = ?", ownerUserID).
 		Where(archiveFilter).
+		Where("EXISTS (SELECT 1 FROM assistant_history_messages WHERE assistant_history_messages.conversation_id = assistant_conversations.id)").
 		Order("updated_at DESC, id DESC").Limit(limit).Find(&conversations).Error; err != nil {
 		return nil, err
 	}
@@ -488,8 +554,11 @@ func GetAssistantConversationHistory(viewerUserID int, conversationID int64, lim
 		limit = assistantHistoryPageMax
 	}
 	var messages []AssistantHistoryMessage
-	if err := DB.Where("conversation_id = ?", conversation.Id).Order("sequence ASC").Limit(limit).Find(&messages).Error; err != nil {
+	if err := DB.Where("conversation_id = ?", conversation.Id).Order("sequence DESC").Limit(limit).Find(&messages).Error; err != nil {
 		return nil, nil, err
+	}
+	for left, right := 0, len(messages)-1; left < right; left, right = left+1, right-1 {
+		messages[left], messages[right] = messages[right], messages[left]
 	}
 	var cards []AssistantSecureCard
 	if err := DB.Where("conversation_id = ?", conversation.Id).Find(&cards).Error; err != nil {
