@@ -874,6 +874,27 @@ func TestMultiKeySelectionScansWithoutTemporaryIndexes(t *testing.T) {
 	}
 }
 
+func TestChannelRuntimeStatePrunesOrphansFromActiveSnapshot(t *testing.T) {
+	activeID := 99201
+	orphanID := 99202
+	channelRuntimeStates.Delete(activeID)
+	channelRuntimeStates.Delete(orphanID)
+	t.Cleanup(func() {
+		channelRuntimeStates.Delete(activeID)
+		channelRuntimeStates.Delete(orphanID)
+	})
+	getChannelRuntimeState(activeID, 0)
+	getChannelRuntimeState(orphanID, 0)
+
+	pruneChannelRuntimeStates(map[int]*Channel{activeID: {Id: activeID}})
+	if _, exists := channelRuntimeStates.Load(activeID); !exists {
+		t.Fatal("active channel runtime state was pruned")
+	}
+	if _, exists := channelRuntimeStates.Load(orphanID); exists {
+		t.Fatal("orphan channel runtime state was retained")
+	}
+}
+
 func setupMutationPathTest(t *testing.T, target *Channel, unrelatedID int) *gorm.DB {
 	t.Helper()
 	db := openCacheTestDB(t, &Channel{}, &Ability{})

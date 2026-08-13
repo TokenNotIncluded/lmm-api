@@ -160,6 +160,7 @@ func refreshChannelCache() error {
 	channelCacheReady = true
 	channelCacheLastError = nil
 	channelSyncLock.Unlock()
+	pruneChannelRuntimeStates(newChannelId2channel)
 	return nil
 }
 

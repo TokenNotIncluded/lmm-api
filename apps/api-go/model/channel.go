@@ -760,24 +760,22 @@ func GetChannelPollingLock(channelId int) *sync.Mutex {
 	return &getChannelRuntimeState(channelId, 0).mu
 }
 
-// CleanupChannelPollingLocks removes locks for channels that no longer exist
-// This is optional and can be called periodically to prevent memory leaks
-func CleanupChannelPollingLocks() {
-	var activeChannelIds []int
-	DB.Model(&Channel{}).Pluck("id", &activeChannelIds)
-
-	activeChannelSet := make(map[int]bool)
-	for _, id := range activeChannelIds {
-		activeChannelSet[id] = true
-	}
-
-	channelRuntimeStates.Range(func(key, value interface{}) bool {
-		channelId := key.(int)
-		if !activeChannelSet[channelId] {
-			channelRuntimeStates.Delete(channelId)
+func pruneChannelRuntimeStates(active map[int]*Channel) {
+	channelRuntimeStates.Range(func(key, _ any) bool {
+		channelID, ok := key.(int)
+		if !ok || active[channelID] == nil {
+			channelRuntimeStates.Delete(key)
 		}
 		return true
 	})
+}
+
+// CleanupChannelPollingLocks removes runtime state for channels outside the
+// active immutable cache snapshot. Full cache refreshes call the same helper.
+func CleanupChannelPollingLocks() {
+	channelSyncLock.RLock()
+	defer channelSyncLock.RUnlock()
+	pruneChannelRuntimeStates(channelsIDM)
 }
 
 func handlerMultiKeyUpdate(channel *Channel, usingKey string, status int, reason string) {
