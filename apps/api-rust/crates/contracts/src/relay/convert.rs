@@ -1485,6 +1485,9 @@ pub fn canonical_request_to_openai_responses(
 pub fn openai_chat_response_to_canonical(
     response: OpenAiChatResponse,
 ) -> Result<Converted<CanonicalResponse>, RelayConvertError> {
+    if let Some(usage) = response.usage.as_ref() {
+        validate_openai_stream_usage(usage, "usage")?;
+    }
     let choice = response
         .choices
         .into_iter()

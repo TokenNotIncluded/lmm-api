@@ -1157,6 +1157,54 @@ fn responses_response_usage_unknown_fields_are_typed_rejections() {
 }
 
 #[test]
+fn openai_chat_response_usage_unknown_fields_are_typed_rejections() {
+    let cases = [
+        (
+            serde_json::json!({"futureUsageField": true}),
+            "usage.futureUsageField",
+        ),
+        (
+            serde_json::json!({
+                "prompt_tokens_details": {"futurePromptField": true}
+            }),
+            "usage.prompt_tokens_details.futurePromptField",
+        ),
+        (
+            serde_json::json!({
+                "completion_tokens_details": {"futureCompletionField": true}
+            }),
+            "usage.completion_tokens_details.futureCompletionField",
+        ),
+    ];
+
+    for (usage, expected_path) in cases {
+        let response: OpenAiChatResponse = serde_json::from_value(serde_json::json!({
+            "id": "chat-usage",
+            "model": "gpt-test",
+            "object": "chat.completion",
+            "created": 1,
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant"},
+                "finish_reason": "stop"
+            }],
+            "usage": usage
+        }))
+        .expect("unknown OpenAI Chat response usage field is retained by the wire DTO");
+        let error = openai_chat_response_to_canonical(response)
+            .expect_err("OpenAI Chat response conversion must reject unknown usage fields");
+        assert!(matches!(
+            error,
+            RelayConvertError::UnsupportedFeature(detail)
+                if detail.feature == "unknown_field"
+                    && detail.path == expected_path
+                    && detail.source_format == "openai_chat"
+                    && detail.target_format == "provider_neutral_ir"
+        ));
+    }
+}
+
+#[test]
 fn responses_incomplete_details_round_trip_to_chat_finish_reasons() {
     for (reason, expected) in [
         ("max_output_tokens", FinishReason::Length),
