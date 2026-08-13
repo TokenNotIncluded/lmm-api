@@ -21,6 +21,8 @@ var ErrNoMemoryLimit = errors.New("process memory limit is unavailable")
 
 type Memory struct {
 	Current uint64
+	High    uint64
+	Max     uint64
 	Limit   uint64
 	Source  string
 }
@@ -32,9 +34,9 @@ func (memory Memory) UsedPercent() float64 {
 	return float64(memory.Current) * 100 / float64(memory.Limit)
 }
 
-// ReadProcessMemory returns the current cgroup-v2 usage and the tightest
-// configured finite boundary. memory.max is preferred; memory.high is used
-// only when the hard limit is unlimited.
+// ReadProcessMemory returns cgroup-v2 usage and the tightest configured finite
+// boundary. High and Max retain the individual controls; Limit is the lower
+// finite value used for pressure decisions.
 func ReadProcessMemory() (Memory, error) {
 	cgroup, err := os.ReadFile(procCgroupPath)
 	if err != nil {
@@ -52,22 +54,37 @@ func readMemory(root string, procCgroup []byte) (Memory, error) {
 	if err != nil || !finite {
 		return Memory{}, fmt.Errorf("read cgroup memory.current: %w", err)
 	}
-	for _, candidate := range []struct {
+	limits := []struct {
 		name   string
 		source string
 	}{
-		{name: "memory.max", source: "cgroup.memory.max"},
 		{name: "memory.high", source: "cgroup.memory.high"},
-	} {
+		{name: "memory.max", source: "cgroup.memory.max"},
+	}
+	memory := Memory{Current: current}
+	for _, candidate := range limits {
 		limit, isFinite, readErr := readLimit(filepath.Join(dir, candidate.name))
 		if readErr != nil {
 			return Memory{}, fmt.Errorf("read cgroup %s: %w", candidate.name, readErr)
 		}
-		if isFinite && limit > 0 {
-			return Memory{Current: current, Limit: limit, Source: candidate.source}, nil
+		if !isFinite || limit == 0 {
+			continue
+		}
+		switch candidate.name {
+		case "memory.high":
+			memory.High = limit
+		case "memory.max":
+			memory.Max = limit
+		}
+		if memory.Limit == 0 || limit < memory.Limit {
+			memory.Limit = limit
+			memory.Source = candidate.source
 		}
 	}
-	return Memory{}, ErrNoMemoryLimit
+	if memory.Limit == 0 {
+		return Memory{}, ErrNoMemoryLimit
+	}
+	return memory, nil
 }
 
 func cgroupDir(root string, procCgroup []byte) (string, error) {

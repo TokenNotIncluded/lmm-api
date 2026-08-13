@@ -175,12 +175,12 @@ func loadFromURL(c *gin.Context, url string, reason ...string) (*types.CachedFil
 	if common.DebugEnabled {
 		logger.LogDebug(c, "loadFromURL: reading response body")
 	}
-	fileBytes, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxFileSize+1)))
+	fileBytes, err := common.ReadAllLimit(resp.Body, int64(maxFileSize))
+	if err == common.ErrLimitExceeded {
+		return nil, fmt.Errorf("file size exceeds maximum allowed size: %dMB", constant.MaxFileDownloadMB)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file content: %w", err)
-	}
-	if len(fileBytes) > maxFileSize {
-		return nil, fmt.Errorf("file size exceeds maximum allowed size: %dMB", constant.MaxFileDownloadMB)
 	}
 
 	// 转换为 base64

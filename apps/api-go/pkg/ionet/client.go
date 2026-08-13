@@ -8,17 +8,21 @@ import (
 	"net/url"
 	"strconv"
 	"time"
+
+	"github.com/QuantumNous/new-api/common"
 )
 
 const (
 	DefaultEnterpriseBaseURL = "https://api.io.solutions/enterprise/v1/io-cloud/caas"
 	DefaultBaseURL           = "https://api.io.solutions/v1/io-cloud/caas"
 	DefaultTimeout           = 30 * time.Second
+	DefaultMaxResponseBytes  = 8 << 20
 )
 
 // DefaultHTTPClient is the default HTTP client implementation
 type DefaultHTTPClient struct {
-	client *http.Client
+	client           *http.Client
+	maxResponseBytes int64
 }
 
 // NewDefaultHTTPClient creates a new default HTTP client
@@ -27,6 +31,7 @@ func NewDefaultHTTPClient(timeout time.Duration) *DefaultHTTPClient {
 		client: &http.Client{
 			Timeout: timeout,
 		},
+		maxResponseBytes: DefaultMaxResponseBytes,
 	}
 }
 
@@ -48,9 +53,11 @@ func (c *DefaultHTTPClient) Do(req *HTTPRequest) (*HTTPResponse, error) {
 	}
 	defer resp.Body.Close()
 
-	// Read response body
-	var body bytes.Buffer
-	_, err = body.ReadFrom(resp.Body)
+	limit := c.maxResponseBytes
+	if limit <= 0 {
+		limit = DefaultMaxResponseBytes
+	}
+	body, err := common.ReadAllLimit(resp.Body, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
@@ -66,7 +73,7 @@ func (c *DefaultHTTPClient) Do(req *HTTPRequest) (*HTTPResponse, error) {
 	return &HTTPResponse{
 		StatusCode: resp.StatusCode,
 		Headers:    headers,
-		Body:       body.Bytes(),
+		Body:       body,
 	}, nil
 }
 

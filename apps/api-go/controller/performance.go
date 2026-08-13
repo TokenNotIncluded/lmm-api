@@ -48,6 +48,8 @@ type MemoryStats struct {
 	GoLimit int64 `json:"go_limit"`
 	// Process cgroup usage and finite limit in bytes.
 	ProcessBytes uint64  `json:"process_bytes"`
+	HighBytes    uint64  `json:"high_bytes"`
+	MaxBytes     uint64  `json:"max_bytes"`
 	LimitBytes   uint64  `json:"limit_bytes"`
 	LimitUsage   float64 `json:"limit_usage"`
 	LimitSource  string  `json:"limit_source,omitempty"`
@@ -139,6 +141,8 @@ func GetPerformanceStats(c *gin.Context) {
 			NumGoroutine: runtime.NumGoroutine(),
 			GoLimit:      debug.SetMemoryLimit(-1),
 			ProcessBytes: processMemory.Current,
+			HighBytes:    processMemory.High,
+			MaxBytes:     processMemory.Max,
 			LimitBytes:   processMemory.Limit,
 			LimitUsage:   processMemory.UsedPercent(),
 			LimitSource:  processMemory.Source,

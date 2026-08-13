@@ -306,8 +306,7 @@ func FetchUpstreamRatios(c *gin.Context) {
 			if ct := resp.Header.Get("Content-Type"); ct != "" && !strings.Contains(strings.ToLower(ct), "application/json") {
 				logger.LogWarn(c.Request.Context(), "unexpected content-type from "+chItem.Name+": "+ct)
 			}
-			limited := io.LimitReader(resp.Body, maxRatioConfigBytes)
-			bodyBytes, err := io.ReadAll(limited)
+			bodyBytes, err := common.ReadAllLimit(resp.Body, maxRatioConfigBytes)
 			if err != nil {
 				logger.LogWarn(c.Request.Context(), "read response failed from "+chItem.Name+": "+err.Error())
 				ch <- upstreamResult{Name: uniqueName, Err: err.Error()}

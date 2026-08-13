@@ -3,6 +3,7 @@ package controller
 import (
 	"archive/zip"
 	"bytes"
+	"io"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -57,13 +58,16 @@ func TestFinanceExportFilesAreRedactedAndClipboardFriendly(t *testing.T) {
 		Usage:  []financeUsageExport{{ID: 2, UserID: 7, Quota: 5}},
 	}
 
-	files, err := financeExportFiles(bundle)
-	require.NoError(t, err)
+	documents := financeDocuments(bundle)
 	applyFinanceUserRatios(bundle.Users, bundle.Options)
-	users, err := jsonFinanceFile(bundle.Users)
-	require.NoError(t, err)
-	require.Contains(t, string(users), `"effective_group_ratio": 0.8`)
-	require.Contains(t, string(users), `"effective_topup_group_ratio": 1.1`)
+	var users bytes.Buffer
+	require.NoError(t, writeFinanceJSON(&users, bundle.Users))
+	require.Contains(t, users.String(), `"effective_group_ratio":0.8`)
+	require.Contains(t, users.String(), `"effective_topup_group_ratio":1.1`)
+	names := make(map[string]bool, len(documents))
+	for _, document := range documents {
+		names[document.Name] = true
+	}
 	for _, name := range []string{
 		"manifest.json",
 		"financial-options.json",
@@ -80,9 +84,12 @@ func TestFinanceExportFilesAreRedactedAndClipboardFriendly(t *testing.T) {
 		"redemptions.json",
 		"user-subscriptions.json",
 	} {
-		require.Contains(t, files, name)
+		require.True(t, names[name])
 	}
-	text := string(financeExportText(files))
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	require.NoError(t, writeFinanceText(context, documents))
+	text := recorder.Body.String()
 	require.Contains(t, text, "users-balances.json")
 	require.Contains(t, text, `"gpt-test": 1.25`)
 	require.NotContains(t, text, "provider_event_id")
@@ -122,51 +129,71 @@ func TestSanitizeFinanceBaseURLRemovesCredentialsAndQuery(t *testing.T) {
 }
 
 func TestFinanceExportTextHasStableSectionOrder(t *testing.T) {
-	files := map[string][]byte{
-		"manifest.json":                []byte("manifest"),
-		"financial-options.json":       []byte("options"),
-		"model-prices-and-ratios.json": []byte("prices"),
-		"effective-model-pricing.json": []byte("effective-prices"),
-		"users-balances.json":          []byte("users"),
-		"channels-pricing.json":        []byte("channels"),
-		"subscription-plans.json":      []byte("plans"),
-		"topups.json":                  []byte("topups"),
-		"subscription-orders.json":     []byte("orders"),
-		"usage-billing-records.json":   []byte("usage"),
-		"bounty-ledger.json":           []byte("ledger"),
-		"checkins.json":                []byte("checkins"),
-		"redemptions.json":             []byte("redemptions"),
-		"user-subscriptions.json":      []byte("subscriptions"),
+	documents := []financeDocument{
+		{Name: "manifest.json", Value: "manifest"},
+		{Name: "financial-options.json", Value: "options"},
+		{Name: "model-prices-and-ratios.json", Value: "prices"},
+		{Name: "effective-model-pricing.json", Value: "effective-prices"},
+		{Name: "users-balances.json", Value: "users"},
+		{Name: "channels-pricing.json", Value: "channels"},
+		{Name: "subscription-plans.json", Value: "plans"},
+		{Name: "topups.json", Value: "topups"},
+		{Name: "subscription-orders.json", Value: "orders"},
+		{Name: "usage-billing-records.json", Value: "usage"},
+		{Name: "bounty-ledger.json", Value: "ledger"},
+		{Name: "checkins.json", Value: "checkins"},
+		{Name: "redemptions.json", Value: "redemptions"},
+		{Name: "user-subscriptions.json", Value: "subscriptions"},
 	}
-	text := string(financeExportText(files))
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	require.NoError(t, writeFinanceText(context, documents))
+	text := recorder.Body.String()
 	require.True(t, strings.Index(text, "manifest.json") < strings.Index(text, "users-balances.json"))
 	require.True(t, strings.Index(text, "users-balances.json") < strings.Index(text, "usage-billing-records.json"))
 }
 
 func TestWriteFinanceZipContainsStableFiles(t *testing.T) {
-	files := map[string][]byte{
-		"manifest.json":                []byte("manifest"),
-		"financial-options.json":       []byte("options"),
-		"model-prices-and-ratios.json": []byte("prices"),
-		"effective-model-pricing.json": []byte("effective-prices"),
-		"users-balances.json":          []byte("users"),
-		"channels-pricing.json":        []byte("channels"),
-		"subscription-plans.json":      []byte("plans"),
-		"topups.json":                  []byte("topups"),
-		"subscription-orders.json":     []byte("orders"),
-		"usage-billing-records.json":   []byte("usage"),
-		"bounty-ledger.json":           []byte("ledger"),
-		"checkins.json":                []byte("checkins"),
-		"redemptions.json":             []byte("redemptions"),
-		"user-subscriptions.json":      []byte("subscriptions"),
+	documents := []financeDocument{
+		{Name: "manifest.json", Value: "manifest"},
+		{Name: "financial-options.json", Value: "options"},
+		{Name: "model-prices-and-ratios.json", Value: "prices"},
+		{Name: "effective-model-pricing.json", Value: "effective-prices"},
+		{Name: "users-balances.json", Value: "users"},
+		{Name: "channels-pricing.json", Value: "channels"},
+		{Name: "subscription-plans.json", Value: "plans"},
+		{Name: "topups.json", Value: "topups"},
+		{Name: "subscription-orders.json", Value: "orders"},
+		{Name: "usage-billing-records.json", Value: "usage"},
+		{Name: "bounty-ledger.json", Value: "ledger"},
+		{Name: "checkins.json", Value: "checkins"},
+		{Name: "redemptions.json", Value: "redemptions"},
+		{Name: "user-subscriptions.json", Value: "subscriptions"},
 	}
 	recorder := httptest.NewRecorder()
 	context, _ := gin.CreateTestContext(recorder)
-	require.NoError(t, writeFinanceZip(context, files))
+	require.NoError(t, writeFinanceZip(context, documents))
 	require.Equal(t, "application/zip", recorder.Header().Get("Content-Type"))
 	archive, err := zip.NewReader(bytes.NewReader(recorder.Body.Bytes()), int64(recorder.Body.Len()))
 	require.NoError(t, err)
-	require.Len(t, archive.File, len(files))
+	require.Len(t, archive.File, len(documents))
 	require.Equal(t, "manifest.json", archive.File[0].Name)
 	require.Equal(t, "user-subscriptions.json", archive.File[len(archive.File)-1].Name)
+}
+
+func BenchmarkFinanceJSONStream(b *testing.B) {
+	usage := make([]financeUsageExport, 20_000)
+	for index := range usage {
+		usage[index] = financeUsageExport{
+			ID: index + 1, UserID: index%200 + 1, ModelName: "gpt-5.6-sol",
+			PromptTokens: 2048, CompletionTokens: 512, Quota: 2560,
+		}
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if err := writeFinanceJSON(io.Discard, usage); err != nil {
+			b.Fatal(err)
+		}
+	}
 }
