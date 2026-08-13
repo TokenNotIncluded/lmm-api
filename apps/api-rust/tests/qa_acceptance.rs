@@ -2589,6 +2589,243 @@ fn route_specific_stream_observability_preserves_dimensions() {
 }
 
 #[test]
+fn rollout_feature_flags_select_deterministically_and_fail_closed() {
+    let context = RolloutContext::new(
+        "qa-rollout-stable-key",
+        Protocol::OpenAi,
+        Protocol::OpenAiResponses,
+        "gpt-rollout",
+        true,
+    )
+    .with_channel("internal");
+    let expected_bucket = stable_bucket(context.request_key);
+    assert_eq!(expected_bucket, stable_bucket(context.request_key));
+
+    let disabled = ProtocolRolloutConfig::default();
+    let full_flag = || FlagConfig::enabled(MAX_BASIS_POINTS).expect("full canary is bounded");
+    let mut enabled = ProtocolRolloutConfig {
+        conversion_engine_v2: full_flag(),
+        gemini_function_id_v2: full_flag(),
+        gemini_thought_signature_v2: full_flag(),
+        claude_opaque_thinking_v2: full_flag(),
+        sse_parser_v2: full_flag(),
+        ..ProtocolRolloutConfig::default()
+    };
+    enabled
+        .push_pair_override(ConverterPairOverride {
+            flag: RolloutFlag::ConversionEngineV2,
+            source: Protocol::OpenAi,
+            target: Protocol::OpenAiResponses,
+            channel: Some("internal".to_owned()),
+            model_family: Some("gpt-rollout".to_owned()),
+            stream: Some(true),
+            enabled: true,
+            canary_basis_points: Some(MAX_BASIS_POINTS),
+        })
+        .expect("matching pair override is valid");
+
+    for flag in RolloutFlag::ALL {
+        let old_decision = disabled.decide(flag, &context);
+        assert!(!old_decision.enabled, "default v1 admitted {flag:?}");
+
+        let new_decision = enabled.decide(flag, &context);
+        assert_eq!(new_decision, enabled.decide(flag, &context));
+        assert_eq!(new_decision.flag, flag);
+        assert_eq!(new_decision.bucket, expected_bucket);
+        if flag.is_v2() {
+            assert!(
+                new_decision.enabled,
+                "configured v2 flag stayed disabled: {flag:?}"
+            );
+        } else {
+            assert!(
+                !new_decision.enabled,
+                "value-shaped flag was enabled: {flag:?}"
+            );
+            assert_eq!(new_decision.source, DecisionSource::DefaultV1);
+        }
+    }
+
+    // The old/new choice is a pure configuration decision for the same
+    // request dimensions; no converter or upstream state participates here.
+    assert!(!disabled.is_enabled(RolloutFlag::ConversionEngineV2, &context));
+    assert!(enabled.is_enabled(RolloutFlag::ConversionEngineV2, &context));
+
+    let same_key_other_route = RolloutContext::new(
+        context.request_key,
+        Protocol::Claude,
+        Protocol::Gemini,
+        "claude-rollout",
+        false,
+    );
+    for flag in RolloutFlag::ALL {
+        assert_eq!(
+            enabled.decide(flag, &context).bucket,
+            enabled.decide(flag, &same_key_other_route).bucket,
+            "bucket depends on route dimensions for {flag:?}"
+        );
+    }
+
+    let empty_key = RolloutContext::new(
+        "",
+        Protocol::OpenAi,
+        Protocol::OpenAiResponses,
+        "gpt-rollout",
+        true,
+    );
+    for flag in RolloutFlag::ALL {
+        let decision = enabled.decide(flag, &empty_key);
+        assert!(!decision.enabled, "empty request key admitted {flag:?}");
+        assert_eq!(decision.source, DecisionSource::EmptyRequestKey);
+    }
+
+    let rolled_back = enabled.rolled_back();
+    for flag in RolloutFlag::ALL {
+        let decision = rolled_back.decide(flag, &context);
+        assert!(!decision.enabled, "rollback admitted {flag:?}");
+        assert_eq!(decision.source, DecisionSource::ConfigRollback);
+    }
+}
+
+#[test]
+fn converter_pair_overrides_prioritize_route_model_stream_channel_and_stage_boundaries() {
+    let mut config = ProtocolRolloutConfig::default();
+    let pair = |channel: Option<&str>,
+                model_family: Option<&str>,
+                stream: Option<bool>,
+                enabled: bool|
+     -> ConverterPairOverride {
+        ConverterPairOverride {
+            flag: RolloutFlag::ConversionEngineV2,
+            source: Protocol::OpenAi,
+            target: Protocol::Claude,
+            channel: channel.map(str::to_owned),
+            model_family: model_family.map(str::to_owned),
+            stream,
+            enabled,
+            canary_basis_points: Some(if enabled { MAX_BASIS_POINTS } else { 0 }),
+        }
+    };
+
+    // Route-only specificity is two fields; each dimension below adds one,
+    // while the final rule combines all dimensions and must win.
+    for override_rule in [
+        pair(None, None, None, false),
+        pair(None, Some("gpt-special"), None, true),
+        pair(None, None, Some(true), true),
+        pair(Some("internal"), None, None, true),
+        pair(Some("internal"), Some("gpt-special"), Some(true), false),
+    ] {
+        config
+            .push_pair_override(override_rule)
+            .expect("pair override is valid");
+    }
+
+    fn assert_pair_decision(
+        config: &ProtocolRolloutConfig,
+        context: &RolloutContext<'_>,
+        expected_index: usize,
+        expected_enabled: bool,
+    ) {
+        let decision = config.decide(RolloutFlag::ConversionEngineV2, context);
+        assert_eq!(
+            decision.source,
+            DecisionSource::ConverterPairOverride(expected_index)
+        );
+        assert_eq!(decision.enabled, expected_enabled);
+        assert_eq!(
+            decision.canary_basis_points,
+            if expected_enabled {
+                MAX_BASIS_POINTS
+            } else {
+                0
+            }
+        );
+    }
+
+    let route = RolloutContext::new(
+        "pair-route",
+        Protocol::OpenAi,
+        Protocol::Claude,
+        "general",
+        false,
+    );
+    assert_pair_decision(&config, &route, 0, false);
+    let model = RolloutContext::new(
+        "pair-model",
+        Protocol::OpenAi,
+        Protocol::Claude,
+        "gpt-special",
+        false,
+    );
+    assert_pair_decision(&config, &model, 1, true);
+    let stream = RolloutContext::new(
+        "pair-stream",
+        Protocol::OpenAi,
+        Protocol::Claude,
+        "general",
+        true,
+    );
+    assert_pair_decision(&config, &stream, 2, true);
+    let channel = RolloutContext::new(
+        "pair-channel",
+        Protocol::OpenAi,
+        Protocol::Claude,
+        "general",
+        false,
+    )
+    .with_channel("internal");
+    assert_pair_decision(&config, &channel, 3, true);
+    let all_dimensions = RolloutContext::new(
+        "pair-all",
+        Protocol::OpenAi,
+        Protocol::Claude,
+        "gpt-special",
+        true,
+    )
+    .with_channel("internal");
+    assert_pair_decision(&config, &all_dimensions, 4, false);
+
+    let unmatched_route = RolloutContext::new(
+        "pair-unmatched",
+        Protocol::Claude,
+        Protocol::OpenAi,
+        "gpt-special",
+        true,
+    )
+    .with_channel("internal");
+    let unmatched = config.decide(RolloutFlag::ConversionEngineV2, &unmatched_route);
+    assert!(!unmatched.enabled);
+    assert_eq!(unmatched.source, DecisionSource::BaseConfig);
+    let value_shaped = config.decide(RolloutFlag::ConverterPairOverrides, &all_dimensions);
+    assert_eq!(
+        value_shaped.source,
+        DecisionSource::ConverterPairOverride(4)
+    );
+    assert!(!value_shaped.enabled);
+
+    for stage in CanaryStage::ALL {
+        let minimum = stage.minimum_basis_points();
+        assert!(
+            validate_canary_stage(stage, minimum).is_ok(),
+            "stage rejected its minimum: {stage:?}"
+        );
+        if minimum > 0 {
+            assert!(
+                validate_canary_stage(stage, minimum - 1).is_err(),
+                "stage accepted below its minimum: {stage:?}"
+            );
+        }
+    }
+    assert!(validate_canary_stage(CanaryStage::Internal, MAX_BASIS_POINTS).is_ok());
+    assert!(validate_canary_stage(CanaryStage::Internal, MAX_BASIS_POINTS + 1).is_err());
+    assert!(!bucket_is_in_rollout(0, 0));
+    assert!(bucket_is_in_rollout(0, 1));
+    assert!(!bucket_is_in_rollout(MAX_BASIS_POINTS, MAX_BASIS_POINTS));
+    assert!(bucket_is_in_rollout(MAX_BASIS_POINTS - 1, MAX_BASIS_POINTS));
+}
+
+#[test]
 fn route_specific_stream_observability_preserves_dimensions() {
     let observer = ConversionObserver::with_max_series(64);
     let labels = MetricLabels::for_route(
