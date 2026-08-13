@@ -18,12 +18,14 @@ exit 0
 EOF
 cat >"$work/bin/curl" <<'EOF'
 #!/usr/bin/env bash
+printf '%s\n' "$*" >>"$MOCK_CURL_LOG"
 [[ ${MOCK_CURL_FAIL:-0} != 1 ]]
 EOF
 chmod +x "$work/bin/"*
 
 export PATH="$work/bin:$PATH"
 export MOCK_SYSTEMCTL_LOG="$work/systemctl.log"
+export MOCK_CURL_LOG="$work/curl.log"
 export LMM_API_WEB_ROOT="$work/root"
 export LMM_API_WEB_SOURCE="$work/source"
 export LMM_API_WEB_PUBLISHER="$HERE/../../deploy/frontend-release.sh"
@@ -46,6 +48,7 @@ if MOCK_CURL_FAIL=1 "$HERE/lmm-api-web-bin/lmm-api-web-activate" 1.0.2-1; then
 fi
 [[ $(readlink "$work/root/current") == releases/1.0.1-1.g000000000000 ]]
 grep -Fqx 'reload nginx.service' "$work/systemctl.log"
+grep -Fq -- '--resolve api.lmm.best:443:127.0.0.1' "$work/curl.log"
 if grep -Eq 'restart.*lmm-api|reload.*lmm-api' "$work/systemctl.log"; then
   printf '%s\n' 'frontend activation touched the backend service' >&2
   exit 1
