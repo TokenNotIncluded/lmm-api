@@ -125,6 +125,7 @@ classify_database() {
   local seen_postgres=false
   local seen_mysql=false
   local -a files=(
+    "$(rooted /etc/lmm-api-go/lmm-api-go.env)"
     "$(rooted /etc/lmm-api/lmm-api.env)"
     "$(rooted /etc/lmm-api-rs/lmm-api.env)"
     "$(rooted /etc/lmm-api-rs/config.env)"
@@ -280,7 +281,13 @@ esac
 
 root_prefix=$(validate_root_prefix "$root_prefix")
 if [[ -z $observed_host ]]; then
-  observed_host=$(hostname -s)
+  if command -v hostname >/dev/null 2>&1; then
+    observed_host=$(hostname -s)
+  elif [[ -f $(rooted /etc/hostname) ]]; then
+    observed_host=$(<"$(rooted /etc/hostname)")
+  else
+    die 'cannot determine observed hostname'
+  fi
 fi
 validate_host "$observed_host"
 if [[ -n $expected_host ]]; then
@@ -308,14 +315,14 @@ declare -a keys=(
 )
 declare -a values=(
   "$role" "$observed_host" "${expected_host:-none}" "$host_match" "$db_engine" "$backend_selection" "$package_id" "$service"
-  "$(present "$(rooted /usr/bin/lmm-api)")" "$(present "$(rooted /usr/bin/lmm-api-select)")" \
-  "$(present "$(rooted /etc/lmm-api/backend.conf)")" "$(present "$(rooted /etc/lmm-api/lmm-api.env)")" \
+  "$(present "$(rooted /usr/bin/lmm-api-go)")" "$(present "$(rooted /usr/bin/lmm-api-select)")" \
+  "$(present "$(rooted /etc/lmm-api/backend.conf)")" "$(present "$(rooted /etc/lmm-api-go/lmm-api-go.env)")" \
   "$(present "$(rooted /usr/lib/systemd/system/lmm-api.service)")" \
-  "$(present "$(rooted /usr/lib/lmm-api/backends/go/lmm-api)")" \
+  "$(present "$(rooted /usr/bin/lmm-api)")" \
   "$(present "$(rooted /usr/lib/lmm-api/backends/rs/lmm-api-rs)")" \
   "$(present "$(rooted /srv/lmm-api-frontend)")" "$(present "$(rooted /srv/lmm-api-frontend/current)")" \
-  "$frontend_release" "$(present "$(rooted /var/lib/lmm-api/deploy-work)")" \
-  "$(present "$(rooted /var/lib/lmm-api/deploy-staging)")" "$(present "$(rooted /var/lib/lmm-api/deploy-backups)")"
+  "$frontend_release" "$(present "$(rooted /var/lib/lmm-api-go/deploy-work)")" \
+  "$(present "$(rooted /var/lib/lmm-api-go/deploy-staging)")" "$(present "$(rooted /var/lib/lmm-api-go/deploy-backups)")"
 )
 
 if [[ $format == kv ]]; then

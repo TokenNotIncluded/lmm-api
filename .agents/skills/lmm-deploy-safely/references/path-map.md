@@ -1,9 +1,8 @@
 # LMM deployment path map
 
-The installed package has one public operator entry point: `/usr/bin/lmm-api`.
-Use `lmm-api deploy ...` for deployment phases and `lmm-api serve` for the
-systemd service. Do not document or invoke a source-tree deployment helper or
-a second public CLI.
+The Go AUR package installs `/usr/bin/lmm-api-go` for operator commands and the
+byte-identical `/usr/bin/lmm-api` service entry. Use `lmm-api-go deploy ...`
+for deployment phases and verify systemd uses `/usr/bin/lmm-api serve`.
 
 ## Controller and package inputs
 
@@ -12,8 +11,8 @@ a second public CLI.
 | Go artifact | `apps/api-go/out/lmm-api` |
 | Rust artifacts | `apps/api-rust/target/release/lmm-api-rs`, `lmm-db-migrate` |
 | Frontend build | `apps/web/dist` |
-| Local split-package builder | `packaging/local/lmm-api-split/build-local-package.sh` |
-| Local package output | `packaging/local/lmm-api-split/out` by default |
+| Go AUR recipe | `packaging/aur/lmm-api-go-bin` |
+| Web AUR recipe | `packaging/aur/lmm-api-web-bin` |
 | Persistent controller work | `${XDG_STATE_HOME:-$HOME/.local/state}/lmm-api/deploy-work/<deployment-id>` |
 | Durable controller backups | `$HOME/backup/lmm-api/<verified-host>/<deployment-id>` |
 | Read-only production pressure report | `.agents/skills/lmm-deploy-safely/scripts/resource-pressure-report.sh` |
@@ -42,19 +41,20 @@ deployment backup, rollback, or retention requirements.
 
 | Purpose | Current path |
 | --- | --- |
-| Launcher and public CLI | `/usr/bin/lmm-api` |
-| Go backend | `/usr/lib/lmm-api/backends/go/lmm-api` |
-| Rust backend and migrator | `/usr/lib/lmm-api/backends/rs/` |
-| Backend selection | `/etc/lmm-api/backend.conf` |
-| Application environment | `/etc/lmm-api/lmm-api.env` |
+| Operator CLI | `/usr/bin/lmm-api-go` |
+| Service entry | `/usr/bin/lmm-api` (byte-identical Go binary) |
+| Application environment | `/etc/lmm-api-go/lmm-api-go.env` |
 | systemd unit | `/usr/lib/systemd/system/lmm-api.service` |
-| Runtime state | `/var/lib/lmm-api` via `StateDirectory=lmm-api` |
+| Runtime state | `/var/lib/lmm-api-go` via `StateDirectory=lmm-api-go` |
+| Bundled fallback frontend | `/usr/share/lmm-api-go/frontend-dist` |
+| Web package payload | `/usr/share/lmm-api-web/frontend-dist` |
+| Web activation tool | `/usr/lib/lmm-api-web/lmm-api-web-activate` |
 | Service port | `3000` |
 
-The AUR matrix consists of one core package (`lmm-api-bin` or `lmm-api-git`)
-and a Go and/or Rust provider package. Package installation does not
-authorize starting, restarting, enabling, or switching a service. The service
-unit invokes exactly `/usr/bin/lmm-api serve`.
+Production uses independent `lmm-api-go-bin` and `lmm-api-web-bin` packages.
+Rust has a separate ownership gate and is out of scope for a Go/Web update.
+Package discovery alone does not authorize a switch; the guarded transaction
+does. The service unit invokes exactly `/usr/bin/lmm-api serve`.
 
 Before using the transaction on an existing target, verify that the installed
 core really provides this launcher protocol. A legacy `/usr/bin/lmm-api` may be
@@ -67,7 +67,7 @@ guarded path before calling `deploy` phases.
 
 | Purpose | Current path or entry point |
 | --- | --- |
-| Controller entry point | `/usr/bin/lmm-api deploy production ...` |
+| Controller entry point | `/usr/bin/lmm-api-go deploy production ...` |
 | Target activator | Immutable payload under the marker-owned deployment workspace |
 | Default SSH alias | `ArchDmit` |
 | Required static hostname | `arch-dmit` |

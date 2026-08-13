@@ -7,10 +7,10 @@ description: Safely inspect, stage, back up, deploy, update, confirm, roll back,
 
 Apply one controlled deployment transaction. Do not infer production authority
 from an earlier turn, a generic request to “update,” or access to an SSH host.
-The installed package exposes one public operator CLI, `/usr/bin/lmm-api-go`:
-use `lmm-api-go deploy ...` for deployment phases and `lmm-api-go serve` for the
-systemd service. Do not invoke a source-tree deployment helper or document a
-second public deploy command.
+The Go AUR package exposes `/usr/bin/lmm-api-go` for operator commands and the
+byte-identical `/usr/bin/lmm-api` service entry. Use `lmm-api-go deploy ...`
+for deployment phases; verify that systemd invokes `/usr/bin/lmm-api serve`.
+Do not invoke a source-tree deployment helper or invent another deploy command.
 
 ## Read the deployment map
 
@@ -233,8 +233,10 @@ the identical checksum-verified artifact to test and production. Never rebuild
 on the target and never substitute a later artifact under the same release ID.
 
 Use the repository's existing package and release mechanisms only for their
-documented roles. AUR or paru work must preserve the split core/Go/Rust package
-matrix and run its packaging checks before delivery.
+documented roles. AUR or paru work must preserve the independent
+`lmm-api-go-bin` and `lmm-api-web-bin` packages and run their packaging checks.
+Do not publish or deploy Rust unless the current task explicitly includes it
+and its separate ownership gates pass.
 
 Treat a dirty or changing worktree as a release blocker. Freeze the exact
 revision and build manifest before creating the core package, Rust provider,
@@ -260,10 +262,10 @@ packages:
   package-owned atomic activation hook.
 
 Do not make a frontend-only release reinstall or restart the Go backend. Do not
-make a backend-only release replace the active frontend. Do not build either
-package on the production server, deploy the Rust provider, or make a Go/web
-release wait for Rust packaging unless the user explicitly requests a Rust
-release or cutover.
+make a backend-only release replace the active frontend. `paru` may assemble a
+verified prebuilt `-bin` archive on production, but it must never compile the
+application or substitute another artifact. Do not deploy Rust or make a
+Go/web release wait for Rust unless the user explicitly requests that cutover.
 
 Apply this sequence:
 
@@ -280,29 +282,30 @@ Apply this sequence:
    `packaging/aur/test-matrix.sh` plus the relevant clean `makepkg` package
    check, then commit and push each AUR update. Read the published AUR metadata
    back and stop if either package does not match the intended release.
-4. On the verified `arch-dmit` production host, run `paru` as its established
-   unprivileged AUR operator. Update only `lmm-api-web-bin` for a frontend-only
-   release, only `lmm-api-go-bin` for a backend-only release, or both packages
-   in one transaction when both changed. Never run `makepkg` or `paru` as root,
-   and never substitute a source, `-git`, or Rust package.
-5. Complete the package-owned update automation. A web update validates its
-   payload, publishes a new versioned frontend directory, atomically switches
-   the active link, runs `nginx -t`, reloads nginx without restarting the Go
-   service, probes public pages, and retains the prior frontend for independent
-   rollback. A Go update runs `systemctl daemon-reload`, restarts only
-   `lmm-api.service`, probes status/livez/database/cache/journal/resources, and
-   retains the previous Go package for independent rollback.
-6. For a paired release, verify the declared web/backend compatibility before
-   activation and again before confirmation. The update is complete only after
-   the exact installed package versions, Git revisions, active frontend link,
-   Go binary revision and relevant health probes are verified.
+4. On verified `arch-dmit`, run `paru` as the established unprivileged AUR
+   operator to fetch and assemble only the selected `-bin` recipes. Record the
+   exact package SHA-256. Never run `paru` as root or substitute source, `-git`,
+   or Rust packages.
+5. Stage the exact candidate and rollback packages, arm the ten-minute
+   watchdog, stop Go, then run the candidate binary as a root transient unit
+   with `/etc/lmm-api-go/lmm-api-go.env`: first `migrate --apply`, then
+   `migrate --verify`. Do not use the service's `DynamicUser`; it disappears
+   when the service stops and cannot traverse `/var/lib/private`. A failed
+   verification blocks installation. Never bypass it with manual SQL.
+6. Only after both migration phases pass, install the staged packages through
+   `paru -U`, apply the package-owned systemd memory limits, and start Go.
+   Activate Web after local backend health succeeds. A local activation probe
+   may avoid a DNS-only package-hook failure, but public probes remain required
+   before confirmation.
+7. Verify compatibility again, observe for at least 120 seconds, and confirm
+   only the exact package versions, Git revisions, frontend link, binary,
+   restart count, database/cache readiness, journals, and memory. Retain the
+   terminal marker/status; remove only exact disposable staging/cache children.
 
 The `paru` path does not weaken the rollback/watchdog or exact-release checks.
-Until `lmm-api-web-bin` exists in AUR and both packages provide their complete
-package-owned activation, verification and rollback hooks, keep using the
-canonical guarded release transaction. Do not remove the currently bundled
-frontend from `lmm-api-go-bin`, claim the split is live, or use `paru` alone for
-production activation during that transition.
+The two packages are live, but `paru` alone is not a deployment transaction.
+The migration gate, watchdog, exact-release confirmation and rollback package
+remain mandatory around every production activation.
 
 ## Keep backups optional
 

@@ -78,7 +78,7 @@ read_marker() {
     [[ ! -v marker_data[$key] ]] || die 'workspace marker contains a duplicate key'
     marker_data[$key]=$value
   done < "$marker"
-  for key in format deployment_id role workspace created_at_utc; do
+  for key in format deployment_id role created_at_utc; do
     [[ -v marker_data[$key] ]] || die 'workspace marker is incomplete'
   done
 }
@@ -145,12 +145,17 @@ read_marker "$marker"
 [[ ${marker_data[format]} == 1 ]] || die 'workspace marker format is unsupported'
 [[ ${marker_data[deployment_id]} == "$deployment_id" ]] || die 'workspace marker deployment ID mismatch'
 [[ ${marker_data[role]} == "$role" ]] || die 'workspace marker role mismatch'
-[[ ${marker_data[workspace]} == "$workspace" ]] || die 'workspace marker path mismatch'
+if [[ -v marker_data[workspace] ]]; then
+  [[ ${marker_data[workspace]} == "$workspace" ]] || die 'workspace marker path mismatch'
+elif [[ $role != target ]]; then
+  die 'controller workspace marker path is missing'
+fi
 [[ ${marker_data[created_at_utc]} =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] ||
   die 'workspace marker timestamp is invalid'
 
 [[ -f $state_file && ! -L $state_file ]] || die 'durable deployment state is missing or unsafe'
-final_state=$(<"$state_file")
+status=$(<"$state_file")
+final_state=${status%% *}
 case "$final_state" in
   CONFIRMED|ROLLED_BACK) ;;
   *) die 'workspace is not in CONFIRMED or ROLLED_BACK state' ;;
@@ -174,14 +179,32 @@ current_marker_checksum=$(sha256sum -- "$marker")
 current_marker_checksum=${current_marker_checksum%% *}
 [[ $current_marker_checksum == "$marker_checksum" ]] || die 'workspace marker changed before deletion'
 read_marker "$marker"
-[[ ${marker_data[deployment_id]} == "$deployment_id" && ${marker_data[role]} == "$role" && ${marker_data[workspace]} == "$workspace" ]] ||
-  die 'workspace ownership changed before deletion'
+[[ ${marker_data[deployment_id]} == "$deployment_id" && ${marker_data[role]} == "$role" ]] ||
+  die 'workspace ownership changed before cleanup'
+if [[ -v marker_data[workspace] ]]; then
+  [[ ${marker_data[workspace]} == "$workspace" ]] || die 'workspace ownership changed before cleanup'
+fi
 [[ -f $state_file && ! -L $state_file ]] || die 'deployment state changed before deletion'
-final_state=$(<"$state_file")
+status=$(<"$state_file")
+final_state=${status%% *}
 case "$final_state" in CONFIRMED|ROLLED_BACK) ;; *) die 'deployment state changed before deletion' ;; esac
 
-rm -rf -- "$workspace"
-[[ ! -e $workspace && ! -L $workspace ]] || die 'workspace deletion did not complete'
+removed=none
+for name in staging tmp cache; do
+  path="$workspace/$name"
+  [[ -e $path || -L $path ]] || continue
+  [[ -d $path && ! -L $path ]] || die "disposable child is not a real directory: $name"
+  [[ $(realpath -e -- "$path") == "$path" ]] || die "disposable child is not canonical: $name"
+  rm -rf -- "$path"
+  [[ ! -e $path && ! -L $path ]] || die "disposable child cleanup failed: $name"
+  if [[ $removed == none ]]; then
+    removed=$name
+  else
+    removed="$removed,$name"
+  fi
+done
 printf 'cleanup=executed\n'
 printf 'deployment_id=%s\n' "$deployment_id"
 printf 'role=%s\n' "$role"
+printf 'removed=%s\n' "$removed"
+printf 'audit_retained=%q\n' "$workspace"

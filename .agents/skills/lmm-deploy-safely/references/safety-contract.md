@@ -64,9 +64,9 @@ incident signal and must be recorded before any retry.
 
 ## Legacy CLI safety
 
-- Before invoking `/usr/bin/lmm-api` on a target, verify its package owner,
-  protocol/revision, supported `deploy production` transaction, and the
-  systemd `ExecStart` contract (`/usr/bin/lmm-api serve`).
+- Before invoking `/usr/bin/lmm-api-go` on a target, verify both installed
+  entries have the same package owner and bytes, the operator supports the
+  `deploy production` transaction, and systemd uses `/usr/bin/lmm-api serve`.
 - A legacy binary may start the backend for an unknown command. `status`,
   `deploy`, `--help`, and no-argument calls are not read-only until the
   protocol is proven.
@@ -166,6 +166,22 @@ green.
 - Automatic rollback never restores a database. Block the release unless its
   migrations are compatible with both N and N-1 during the confirmation
   window.
+
+## Go/Web AUR migration order
+
+- Require signed immutable release assets and pinned AUR hashes before target
+  package assembly. `paru` may assemble a `-bin` package; it must not compile or
+  replace the signed application artifact.
+- Arm the watchdog before stopping Go. Run the candidate binary as a root
+  transient unit with the production environment file; do not use the stopped
+  service's `DynamicUser` identity.
+- Run `migrate --apply` and then `migrate --verify` before `paru -U`. A failed
+  verification blocks package installation. Never repair the gate with ad-hoc
+  production SQL.
+- Start Go before final Web activation. A local Web activation probe avoids a
+  DNS-only package-hook failure; public status remains a confirmation gate.
+- Observe at least 120 seconds, then confirm exact Go/Web package versions,
+  revisions, frontend link, restart count, database/cache readiness, and memory.
 
 ## Rust ownership gate
 
