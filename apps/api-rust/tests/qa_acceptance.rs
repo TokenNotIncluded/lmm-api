@@ -633,6 +633,129 @@ fn bounded_protocol_json_corpus_is_panic_free() {
 }
 
 #[test]
+fn bounded_tool_schema_conversions_are_panic_free() {
+    fn next_xorshift(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
+    fn schema_value(
+        state: &mut u64,
+        depth: usize,
+        nodes_left: &mut usize,
+        forced_kind: Option<u8>,
+    ) -> serde_json::Value {
+        if *nodes_left == 0 {
+            return serde_json::Value::Null;
+        }
+        *nodes_left -= 1;
+        let kind = forced_kind.unwrap_or_else(|| (next_xorshift(state) % 6) as u8);
+        if depth >= 4 {
+            return match kind % 4 {
+                0 => serde_json::Value::String(format!("s{:x}", next_xorshift(state) & 0xff)),
+                1 => {
+                    serde_json::Value::Number(serde_json::Number::from(next_xorshift(state) % 1000))
+                }
+                2 => serde_json::Value::Bool(next_xorshift(state) & 1 == 0),
+                _ => serde_json::Value::Null,
+            };
+        }
+        match kind {
+            0 => {
+                let mut object = serde_json::Map::new();
+                let count = (next_xorshift(state) % 3) as usize;
+                for index in 0..count {
+                    if *nodes_left == 0 {
+                        break;
+                    }
+                    object.insert(
+                        format!("k{index}"),
+                        schema_value(state, depth + 1, nodes_left, None),
+                    );
+                }
+                serde_json::Value::Object(object)
+            }
+            1 => {
+                let count = (next_xorshift(state) % 3) as usize;
+                let mut array = Vec::with_capacity(count);
+                for _ in 0..count {
+                    if *nodes_left == 0 {
+                        break;
+                    }
+                    array.push(schema_value(state, depth + 1, nodes_left, None));
+                }
+                serde_json::Value::Array(array)
+            }
+            2 => serde_json::Value::String(format!("s{:x}", next_xorshift(state) & 0xffff)),
+            3 => serde_json::Value::Number(serde_json::Number::from(next_xorshift(state) % 1000)),
+            4 => serde_json::Value::Bool(next_xorshift(state) & 1 == 0),
+            _ => serde_json::Value::Null,
+        }
+    }
+
+    let mut state = 0x243f_6a88_85a3_08d3_u64;
+    for case_index in 0..32_u8 {
+        let mut nodes_left = 31;
+        let schema = schema_value(&mut state, 0, &mut nodes_left, Some(case_index % 6));
+        let schema_bytes = serde_json::to_vec(&schema).expect("schema serialization");
+        assert!(schema_bytes.len() <= 4096);
+
+        let chat = serde_json::json!({
+            "model": "fuzz-schema",
+            "messages": [],
+            "tools": [{
+                "type": "function",
+                "function": {"name": "lookup", "parameters": schema.clone()}
+            }]
+        });
+        let claude = serde_json::json!({
+            "model": "fuzz-schema",
+            "max_tokens": 128,
+            "messages": [],
+            "tools": [{"name": "lookup", "input_schema": schema.clone()}]
+        });
+        let gemini = serde_json::json!({
+            "contents": [],
+            "tools": [{
+                "functionDeclarations": [{"name": "lookup", "parameters": schema.clone()}]
+            }]
+        });
+        let responses = serde_json::json!({
+            "model": "fuzz-schema",
+            "input": [],
+            "tools": [{"type": "function", "name": "lookup", "parameters": schema}]
+        });
+        let documents = [
+            serde_json::to_vec(&chat).expect("Chat schema serialization"),
+            serde_json::to_vec(&claude).expect("Claude schema serialization"),
+            serde_json::to_vec(&gemini).expect("Gemini schema serialization"),
+            serde_json::to_vec(&responses).expect("Responses schema serialization"),
+        ];
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            if let Ok(request) = serde_json::from_slice::<OpenAiChatRequest>(&documents[0]) {
+                let _ = openai_chat_request_to_canonical(request);
+            }
+            if let Ok(request) = serde_json::from_slice::<ClaudeRequest>(&documents[1]) {
+                let _ = claude_request_to_canonical(request);
+            }
+            if let Ok(request) = serde_json::from_slice::<GeminiRequest>(&documents[2]) {
+                let _ = gemini_request_to_canonical_for_model(request, "fuzz-schema");
+            }
+            if let Ok(request) = serde_json::from_slice::<OpenAiResponsesRequest>(&documents[3]) {
+                let _ = openai_responses_request_to_canonical(request);
+            }
+        }));
+        assert!(
+            result.is_ok(),
+            "tool schema conversion panicked at case {case_index}"
+        );
+    }
+}
+
+#[test]
 fn claude_stream_state_machine_is_bounded_and_panic_free() {
     const MAX_STEPS: usize = 64;
     const MAX_EVENTS: usize = 4;
