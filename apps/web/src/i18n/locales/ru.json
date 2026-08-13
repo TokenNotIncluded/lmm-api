@@ -6832,6 +6832,19 @@
     "Zero retention": "Без хранения данных",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Масштаб"
+    "Zoom": "Масштаб",
+    "Conversation retention": "Хранение разговоров",
+    "Automatically remove old assistant conversations in small batches. Revealed or expired private-card secrets are erased separately.": "Автоматически удалять старые разговоры небольшими пакетами. Секреты просмотренных или просроченных приватных карточек стираются отдельно.",
+    "Enable scheduled cleanup": "Включить очистку по расписанию",
+    "Run conversation cleanup as a background system task.": "Запускать очистку разговоров как фоновую системную задачу.",
+    "Active conversations (days)": "Активные разговоры (дни)",
+    "Keep inactive conversations for 7–3650 days.": "Хранить неактивные разговоры от 7 до 3650 дней.",
+    "Archived conversations (days)": "Архивные разговоры (дни)",
+    "Keep archived conversations for 1–3650 days.": "Хранить архивные разговоры от 1 до 3650 дней.",
+    "Security reports (days)": "Отчёты безопасности (дни)",
+    "Keep terminated security conversations for 30–3650 days.": "Хранить разговоры, завершённые из-за угроз безопасности, от 30 до 3650 дней.",
+    "Cleanup interval (hours)": "Интервал очистки (часы)",
+    "Run every 1–168 hours; each pass is memory-bounded.": "Запускать каждые 1–168 часов; каждый проход ограничивает потребление памяти.",
+    "Assistant conversation cleanup": "Очистка разговоров ассистента"
   }
 }

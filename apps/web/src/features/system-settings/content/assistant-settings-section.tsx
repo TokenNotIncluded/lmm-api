@@ -88,6 +88,7 @@ export function AssistantSettingsSection(props: {
   const enabled = form.watch('AssistantEnabled')
   const agentLoopEnabled = form.watch('AssistantAgentLoopEnabled')
   const cacheEnabled = form.watch('AssistantCacheEnabled')
+  const retentionEnabled = form.watch('AssistantRetentionEnabled')
   const searchProvider = form.watch('AssistantSearchProvider')
   const searchProviderDescription: Record<AssistantSearchProvider, string> = {
     none: t('Disable assistant web search.'),
@@ -543,6 +544,143 @@ export function AssistantSettingsSection(props: {
                 </FormItem>
               )}
             />
+          </div>
+
+          <div className='grid gap-5 border-t pt-6'>
+            <div>
+              <h3 className='text-sm font-medium'>
+                {t('Conversation retention')}
+              </h3>
+              <p className='text-muted-foreground mt-1 text-sm'>
+                {t(
+                  'Automatically remove old assistant conversations in small batches. Revealed or expired private-card secrets are erased separately.'
+                )}
+              </p>
+            </div>
+
+            <FormField
+              control={form.control}
+              name='AssistantRetentionEnabled'
+              render={({ field }) => (
+                <SettingsSwitchItem>
+                  <SettingsSwitchContent>
+                    <FormLabel>{t('Enable scheduled cleanup')}</FormLabel>
+                    <FormDescription>
+                      {t(
+                        'Run conversation cleanup as a background system task.'
+                      )}
+                    </FormDescription>
+                  </SettingsSwitchContent>
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                  <FormMessage />
+                </SettingsSwitchItem>
+              )}
+            />
+
+            <div className='grid gap-5 sm:grid-cols-2'>
+              <FormField
+                control={form.control}
+                name='AssistantActiveRetentionDays'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Active conversations (days)')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        min={7}
+                        max={3650}
+                        step={1}
+                        {...safeNumberFieldProps(field)}
+                        disabled={!retentionEnabled}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t('Keep inactive conversations for 7–3650 days.')}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='AssistantArchivedRetentionDays'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Archived conversations (days)')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        min={1}
+                        max={3650}
+                        step={1}
+                        {...safeNumberFieldProps(field)}
+                        disabled={!retentionEnabled}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t('Keep archived conversations for 1–3650 days.')}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='AssistantSecurityRetentionDays'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Security reports (days)')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        min={30}
+                        max={3650}
+                        step={1}
+                        {...safeNumberFieldProps(field)}
+                        disabled={!retentionEnabled}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'Keep terminated security conversations for 30–3650 days.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='AssistantRetentionIntervalHours'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Cleanup interval (hours)')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        min={1}
+                        max={168}
+                        step={1}
+                        {...safeNumberFieldProps(field)}
+                        disabled={!retentionEnabled}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t('Run every 1–168 hours; each pass is memory-bounded.')}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
           </div>
         </SettingsForm>
       </Form>

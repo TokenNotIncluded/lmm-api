@@ -1,10 +1,12 @@
 package model
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/stretchr/testify/assert"
@@ -349,11 +351,113 @@ func TestAssistantSecureCardIsOpaqueEncryptedOwnerOnlyAndOneTime(t *testing.T) {
 	revealed, view, err := RevealAssistantSecureCard(l0.Id, card.Id)
 	require.NoError(t, err)
 	assert.Equal(t, "self", view.Owner)
+	require.NoError(t, DB.First(&stored, "id = ?", card.Id).Error)
+	assert.Empty(t, stored.Ciphertext)
 	payload, err := AssistantSecureCardPayload(revealed)
 	require.NoError(t, err)
 	assert.Equal(t, "sk_history_secret_123456", payload["api_key"])
 	_, _, err = RevealAssistantSecureCard(l0.Id, card.Id)
 	assert.ErrorIs(t, err, ErrAssistantSecureCardConsumed)
+}
+
+func TestAssistantRetentionPurgesOnlyExpiredConversationClassesInBoundedBatches(t *testing.T) {
+	l0, _, _, admin := setupAssistantHistoryTestDB(t)
+	require.NoError(t, DB.AutoMigrate(&UnifiedTodoRead{}))
+
+	makeConversation := func(title string, updatedAt, archivedAt, restrictedAt int64) AssistantConversation {
+		conversation := AssistantConversation{
+			UserId:             l0.Id,
+			Title:              title,
+			LastMessagePreview: title,
+			CreatedAt:          1,
+			UpdatedAt:          updatedAt,
+			ArchivedAt:         archivedAt,
+			RestrictedAt:       restrictedAt,
+		}
+		require.NoError(t, DB.Create(&conversation).Error)
+		require.NoError(t, DB.Create(&AssistantHistoryMessage{
+			ConversationId: conversation.Id,
+			Sequence:       1,
+			Role:           AssistantHistoryRoleUser,
+			Content:        title,
+			CreatedAt:      1,
+		}).Error)
+		return conversation
+	}
+
+	oldActive := makeConversation("old-active", 99, 0, 0)
+	oldArchived := makeConversation("old-archived", 500, 99, 0)
+	oldRestricted := makeConversation("old-restricted", 500, 0, 99)
+	boundary := makeConversation("boundary", 100, 0, 0)
+	recent := makeConversation("recent", 101, 0, 0)
+
+	card := AssistantSecureCard{Id: "retention-card", OwnerUserId: l0.Id, ConversationId: oldActive.Id, Type: AssistantSecureCardTypeAPIKey, Summary: "card", Ciphertext: "encrypted", CreatedAt: 1, ExpiresAt: 999}
+	require.NoError(t, DB.Create(&card).Error)
+	incident := AssistantSecurityIncident{UserId: l0.Id, ConversationId: oldRestricted.Id, Category: AssistantSecurityIncidentCategory, Status: AssistantSecurityIncidentStatusOpen, InputDigest: strings.Repeat("a", 64), CreatedAt: 1, UpdatedAt: 1}
+	require.NoError(t, DB.Create(&incident).Error)
+	require.NoError(t, DB.Create(&UnifiedTodoRead{UserId: admin.Id, Category: UnifiedTodoCategorySecurityIncident, ItemId: incident.Id, ReadAt: 1}).Error)
+
+	cutoffs := AssistantRetentionCutoffs{ActiveBefore: 100, ArchivedBefore: 100, RestrictedBefore: 100}
+	first, err := PurgeAssistantConversationsBefore(context.Background(), cutoffs, 2)
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, first.Conversations)
+	second, err := PurgeAssistantConversationsBefore(context.Background(), cutoffs, 2)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, second.Conversations)
+	third, err := PurgeAssistantConversationsBefore(context.Background(), cutoffs, 2)
+	require.NoError(t, err)
+	assert.Zero(t, third.Conversations)
+
+	var remaining []AssistantConversation
+	require.NoError(t, DB.Order("id ASC").Find(&remaining).Error)
+	require.Len(t, remaining, 2)
+	assert.Equal(t, boundary.Id, remaining[0].Id)
+	assert.Equal(t, recent.Id, remaining[1].Id)
+
+	for _, conversation := range []AssistantConversation{oldActive, oldArchived, oldRestricted} {
+		var count int64
+		require.NoError(t, DB.Model(&AssistantHistoryMessage{}).Where("conversation_id = ?", conversation.Id).Count(&count).Error)
+		assert.Zero(t, count)
+	}
+	var cardCount, incidentCount, readCount int64
+	require.NoError(t, DB.Model(&AssistantSecureCard{}).Where("id = ?", card.Id).Count(&cardCount).Error)
+	require.NoError(t, DB.Model(&AssistantSecurityIncident{}).Where("id = ?", incident.Id).Count(&incidentCount).Error)
+	require.NoError(t, DB.Model(&UnifiedTodoRead{}).Where("item_id = ?", incident.Id).Count(&readCount).Error)
+	assert.Zero(t, cardCount)
+	assert.Zero(t, incidentCount)
+	assert.Zero(t, readCount)
+}
+
+func TestAssistantSecureCardScrubIsBoundedAndIdempotent(t *testing.T) {
+	l0, _, _, _ := setupAssistantHistoryTestDB(t)
+	now := time.Now().Unix()
+	cards := []AssistantSecureCard{
+		{Id: "expired", OwnerUserId: l0.Id, Type: AssistantSecureCardTypeAPIKey, Summary: "expired", Ciphertext: "cipher-1", CreatedAt: 1, ExpiresAt: now - 1},
+		{Id: "revealed", OwnerUserId: l0.Id, Type: AssistantSecureCardTypeAPIKey, Summary: "revealed", Ciphertext: "cipher-2", CreatedAt: 2, ExpiresAt: now + 100, RevealedAt: now - 1},
+		{Id: "live", OwnerUserId: l0.Id, Type: AssistantSecureCardTypeAPIKey, Summary: "live", Ciphertext: "cipher-3", CreatedAt: 3, ExpiresAt: now + 100},
+	}
+	for index := range cards {
+		require.NoError(t, DB.Create(&cards[index]).Error)
+	}
+
+	count, err := ScrubExpiredAssistantSecureCards(context.Background(), now, 1)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, count)
+	count, err = ScrubExpiredAssistantSecureCards(context.Background(), now, 10)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, count)
+	count, err = ScrubExpiredAssistantSecureCards(context.Background(), now, 10)
+	require.NoError(t, err)
+	assert.Zero(t, count)
+
+	for _, testCase := range []struct {
+		id       string
+		expected string
+	}{{"expired", ""}, {"revealed", ""}, {"live", "cipher-3"}} {
+		var stored AssistantSecureCard
+		require.NoError(t, DB.First(&stored, "id = ?", testCase.id).Error)
+		assert.Equal(t, testCase.expected, stored.Ciphertext)
+	}
 }
 
 func TestAssistantKeySecureCardTransactionRollsBackCredentialOnCardFailure(t *testing.T) {

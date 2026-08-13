@@ -90,6 +90,11 @@ const baseValues = {
   AssistantSearchAPIKey: '',
   AssistantSearchMCPTool: '',
   AssistantSkills: '',
+  AssistantRetentionEnabled: true,
+  AssistantActiveRetentionDays: 90,
+  AssistantArchivedRetentionDays: 30,
+  AssistantSecurityRetentionDays: 180,
+  AssistantRetentionIntervalHours: 24,
 } as const
 
 async function renderSettings(
@@ -138,6 +143,22 @@ async function renderSettings(
 after(() => domWindow.close())
 
 describe('assistant search provider settings', () => {
+  test('validates bounded conversation retention settings', () => {
+    assert.equal(assistantSettingsSchema.safeParse(baseValues).success, true)
+    for (const invalid of [
+      { AssistantActiveRetentionDays: 6 },
+      { AssistantArchivedRetentionDays: 0 },
+      { AssistantSecurityRetentionDays: 29 },
+      { AssistantRetentionIntervalHours: 169 },
+    ]) {
+      assert.equal(
+        assistantSettingsSchema.safeParse({ ...baseValues, ...invalid })
+          .success,
+        false
+      )
+    }
+  })
+
   test('accepts supported providers and rejects unknown values', () => {
     for (const provider of ASSISTANT_SEARCH_PROVIDERS) {
       const result = assistantSettingsSchema.safeParse({

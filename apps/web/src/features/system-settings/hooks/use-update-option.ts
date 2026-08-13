@@ -51,6 +51,11 @@ const STATUS_RELATED_KEYS = new Set([
   'AssistantSearchAPIKey',
   'AssistantSearchMCPTool',
   'AssistantSkills',
+  'AssistantRetentionEnabled',
+  'AssistantActiveRetentionDays',
+  'AssistantArchivedRetentionDays',
+  'AssistantSecurityRetentionDays',
+  'AssistantRetentionIntervalHours',
 ])
 
 export function useUpdateOption() {

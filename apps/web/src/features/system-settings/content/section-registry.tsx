@@ -120,6 +120,14 @@ const CONTENT_SECTIONS = [
           AssistantSearchAPIKey: settings.AssistantSearchAPIKey,
           AssistantSearchMCPTool: settings.AssistantSearchMCPTool,
           AssistantSkills: settings.AssistantSkills,
+          AssistantRetentionEnabled: settings.AssistantRetentionEnabled,
+          AssistantActiveRetentionDays: settings.AssistantActiveRetentionDays,
+          AssistantArchivedRetentionDays:
+            settings.AssistantArchivedRetentionDays,
+          AssistantSecurityRetentionDays:
+            settings.AssistantSecurityRetentionDays,
+          AssistantRetentionIntervalHours:
+            settings.AssistantRetentionIntervalHours,
         }}
       />
     ),

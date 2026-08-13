@@ -6832,6 +6832,19 @@
     "Zero retention": "零數據保留",
     "Zhipu": "智譜",
     "Zhipu V4": "智譜 V4",
-    "Zoom": "縮放"
+    "Zoom": "縮放",
+    "Conversation retention": "對話保留",
+    "Automatically remove old assistant conversations in small batches. Revealed or expired private-card secrets are erased separately.": "自動分批刪除舊的助理對話；已查看或已過期的私密卡片密文會另外抹除。",
+    "Enable scheduled cleanup": "啟用排程清理",
+    "Run conversation cleanup as a background system task.": "將對話清理作為背景系統工作執行。",
+    "Active conversations (days)": "使用中對話（天）",
+    "Keep inactive conversations for 7–3650 days.": "未使用的對話保留 7–3650 天。",
+    "Archived conversations (days)": "已封存對話（天）",
+    "Keep archived conversations for 1–3650 days.": "已封存對話保留 1–3650 天。",
+    "Security reports (days)": "安全報告（天）",
+    "Keep terminated security conversations for 30–3650 days.": "因安全原因終止的對話保留 30–3650 天。",
+    "Cleanup interval (hours)": "清理間隔（小時）",
+    "Run every 1–168 hours; each pass is memory-bounded.": "每 1–168 小時執行一次；每次執行都會限制記憶體用量。",
+    "Assistant conversation cleanup": "助理對話清理"
   }
 }

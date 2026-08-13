@@ -6832,6 +6832,19 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Conversation retention": "会話の保持",
+    "Automatically remove old assistant conversations in small batches. Revealed or expired private-card secrets are erased separately.": "古いアシスタント会話を少量ずつ自動削除します。表示済みまたは期限切れの非公開カードの秘密情報は別途消去されます。",
+    "Enable scheduled cleanup": "定期クリーンアップを有効にする",
+    "Run conversation cleanup as a background system task.": "会話のクリーンアップをバックグラウンドのシステムタスクとして実行します。",
+    "Active conversations (days)": "アクティブな会話（日）",
+    "Keep inactive conversations for 7–3650 days.": "非アクティブな会話を 7～3650 日間保持します。",
+    "Archived conversations (days)": "アーカイブ済み会話（日）",
+    "Keep archived conversations for 1–3650 days.": "アーカイブ済み会話を 1～3650 日間保持します。",
+    "Security reports (days)": "セキュリティ報告（日）",
+    "Keep terminated security conversations for 30–3650 days.": "セキュリティ上の理由で終了した会話を 30～3650 日間保持します。",
+    "Cleanup interval (hours)": "クリーンアップ間隔（時間）",
+    "Run every 1–168 hours; each pass is memory-bounded.": "1～168 時間ごとに実行し、各処理のメモリ使用量を制限します。",
+    "Assistant conversation cleanup": "アシスタント会話のクリーンアップ"
   }
 }

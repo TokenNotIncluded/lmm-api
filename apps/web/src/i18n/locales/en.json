@@ -6832,6 +6832,19 @@
     "Zero retention": "Zero retention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Conversation retention": "Conversation retention",
+    "Automatically remove old assistant conversations in small batches. Revealed or expired private-card secrets are erased separately.": "Automatically remove old assistant conversations in small batches. Revealed or expired private-card secrets are erased separately.",
+    "Enable scheduled cleanup": "Enable scheduled cleanup",
+    "Run conversation cleanup as a background system task.": "Run conversation cleanup as a background system task.",
+    "Active conversations (days)": "Active conversations (days)",
+    "Keep inactive conversations for 7–3650 days.": "Keep inactive conversations for 7–3650 days.",
+    "Archived conversations (days)": "Archived conversations (days)",
+    "Keep archived conversations for 1–3650 days.": "Keep archived conversations for 1–3650 days.",
+    "Security reports (days)": "Security reports (days)",
+    "Keep terminated security conversations for 30–3650 days.": "Keep terminated security conversations for 30–3650 days.",
+    "Cleanup interval (hours)": "Cleanup interval (hours)",
+    "Run every 1–168 hours; each pass is memory-bounded.": "Run every 1–168 hours; each pass is memory-bounded.",
+    "Assistant conversation cleanup": "Assistant conversation cleanup"
   }
 }

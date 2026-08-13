@@ -138,6 +138,11 @@ func InitOptionMap() {
 	common.OptionMap[setting.AssistantSearchAPIKeyOptionKey] = assistantSettings.SearchAPIKey
 	common.OptionMap[setting.AssistantSearchMCPToolOptionKey] = assistantSettings.SearchMCPTool
 	common.OptionMap[setting.AssistantSkillsOptionKey] = assistantSettings.Skills
+	common.OptionMap[setting.AssistantRetentionEnabledOptionKey] = strconv.FormatBool(assistantSettings.RetentionEnabled)
+	common.OptionMap[setting.AssistantActiveRetentionDaysOptionKey] = strconv.Itoa(assistantSettings.ActiveRetentionDays)
+	common.OptionMap[setting.AssistantArchivedRetentionDaysOptionKey] = strconv.Itoa(assistantSettings.ArchivedRetentionDays)
+	common.OptionMap[setting.AssistantSecurityRetentionDaysOptionKey] = strconv.Itoa(assistantSettings.SecurityRetentionDays)
+	common.OptionMap[setting.AssistantRetentionIntervalHoursOptionKey] = strconv.Itoa(assistantSettings.RetentionIntervalHours)
 	common.OptionMap["AutoGroups"] = setting.AutoGroups2JsonString()
 	common.OptionMap["DefaultUseAutoGroup"] = strconv.FormatBool(setting.DefaultUseAutoGroup)
 	common.OptionMap["MaxTokenAutoGroups"] = strconv.Itoa(setting.GetMaxTokenAutoGroups())
@@ -481,6 +486,8 @@ func updateOptionMap(key string, value string) (err error) {
 			setting.SetAssistantAgentLoopEnabled(boolValue)
 		case setting.AssistantCacheEnabledOptionKey:
 			setting.SetAssistantCacheEnabled(boolValue)
+		case setting.AssistantRetentionEnabledOptionKey:
+			setting.SetAssistantRetentionEnabled(boolValue)
 		}
 	}
 	switch key {
@@ -529,6 +536,14 @@ func updateOptionMap(key string, value string) (err error) {
 		err = setting.UpdateAssistantSearchMCPTool(value)
 	case setting.AssistantSkillsOptionKey:
 		err = setting.UpdateAssistantSkills(value)
+	case setting.AssistantActiveRetentionDaysOptionKey:
+		err = setting.UpdateAssistantActiveRetentionDays(value)
+	case setting.AssistantArchivedRetentionDaysOptionKey:
+		err = setting.UpdateAssistantArchivedRetentionDays(value)
+	case setting.AssistantSecurityRetentionDaysOptionKey:
+		err = setting.UpdateAssistantSecurityRetentionDays(value)
+	case setting.AssistantRetentionIntervalHoursOptionKey:
+		err = setting.UpdateAssistantRetentionIntervalHours(value)
 	case "AutoGroups":
 		err = setting.UpdateAutoGroupsByJsonString(value)
 	case "MaxTokenAutoGroups":

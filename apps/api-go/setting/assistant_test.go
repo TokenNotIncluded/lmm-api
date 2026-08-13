@@ -17,12 +17,19 @@ func TestAssistantDefaultsAndValidation(t *testing.T) {
 	if !settings.AgentLoopEnabled || settings.MaxSteps != 6 || settings.TimeoutSeconds != 45 || !settings.CacheEnabled || settings.CacheTTLMinutes != 1440 {
 		t.Fatalf("unexpected assistant runtime defaults: %+v", settings)
 	}
+	if !settings.RetentionEnabled || settings.ActiveRetentionDays != 90 || settings.ArchivedRetentionDays != 30 || settings.SecurityRetentionDays != 180 || settings.RetentionIntervalHours != 24 {
+		t.Fatalf("unexpected assistant retention defaults: %+v", settings)
+	}
 
 	invalid := map[string]string{
-		AssistantModelOptionKey:           " ",
-		AssistantMaxStepsOptionKey:        "13",
-		AssistantTimeoutSecondsOptionKey:  "4",
-		AssistantCacheTTLMinutesOptionKey: "10081",
+		AssistantModelOptionKey:                  " ",
+		AssistantMaxStepsOptionKey:               "13",
+		AssistantTimeoutSecondsOptionKey:         "4",
+		AssistantCacheTTLMinutesOptionKey:        "10081",
+		AssistantActiveRetentionDaysOptionKey:    "6",
+		AssistantArchivedRetentionDaysOptionKey:  "0",
+		AssistantSecurityRetentionDaysOptionKey:  "29",
+		AssistantRetentionIntervalHoursOptionKey: "169",
 	}
 	for key, value := range invalid {
 		if err := ValidateAssistantOption(key, value); err == nil {
@@ -44,6 +51,11 @@ func TestAssistantSettingsUpdates(t *testing.T) {
 		_ = UpdateAssistantTimeoutSeconds(strconv.Itoa(original.TimeoutSeconds))
 		SetAssistantCacheEnabled(original.CacheEnabled)
 		_ = UpdateAssistantCacheTTLMinutes(strconv.Itoa(original.CacheTTLMinutes))
+		SetAssistantRetentionEnabled(original.RetentionEnabled)
+		_ = UpdateAssistantActiveRetentionDays(strconv.Itoa(original.ActiveRetentionDays))
+		_ = UpdateAssistantArchivedRetentionDays(strconv.Itoa(original.ArchivedRetentionDays))
+		_ = UpdateAssistantSecurityRetentionDays(strconv.Itoa(original.SecurityRetentionDays))
+		_ = UpdateAssistantRetentionIntervalHours(strconv.Itoa(original.RetentionIntervalHours))
 	})
 
 	SetAssistantEnabled(false)
@@ -61,9 +73,22 @@ func TestAssistantSettingsUpdates(t *testing.T) {
 	if err := UpdateAssistantCacheTTLMinutes("30"); err != nil {
 		t.Fatal(err)
 	}
+	SetAssistantRetentionEnabled(false)
+	if err := UpdateAssistantActiveRetentionDays("120"); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateAssistantArchivedRetentionDays("45"); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateAssistantSecurityRetentionDays("365"); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateAssistantRetentionIntervalHours("12"); err != nil {
+		t.Fatal(err)
+	}
 
 	settings := GetAssistantSettings()
-	if settings.Enabled || settings.Model != "custom-model" || settings.AgentLoopEnabled || settings.MaxSteps != 9 || settings.TimeoutSeconds != 60 || settings.CacheEnabled || settings.CacheTTLMinutes != 30 {
+	if settings.Enabled || settings.Model != "custom-model" || settings.AgentLoopEnabled || settings.MaxSteps != 9 || settings.TimeoutSeconds != 60 || settings.CacheEnabled || settings.CacheTTLMinutes != 30 || settings.RetentionEnabled || settings.ActiveRetentionDays != 120 || settings.ArchivedRetentionDays != 45 || settings.SecurityRetentionDays != 365 || settings.RetentionIntervalHours != 12 {
 		t.Fatalf("unexpected updated settings: %+v", settings)
 	}
 }

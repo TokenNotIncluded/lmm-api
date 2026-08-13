@@ -6832,6 +6832,19 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Thu phóng"
+    "Zoom": "Thu phóng",
+    "Conversation retention": "Lưu giữ cuộc trò chuyện",
+    "Automatically remove old assistant conversations in small batches. Revealed or expired private-card secrets are erased separately.": "Tự động xóa các cuộc trò chuyện cũ theo lô nhỏ. Bí mật trong thẻ riêng tư đã xem hoặc hết hạn được xóa riêng.",
+    "Enable scheduled cleanup": "Bật dọn dẹp theo lịch",
+    "Run conversation cleanup as a background system task.": "Chạy dọn dẹp cuộc trò chuyện dưới dạng tác vụ hệ thống nền.",
+    "Active conversations (days)": "Cuộc trò chuyện đang hoạt động (ngày)",
+    "Keep inactive conversations for 7–3650 days.": "Giữ cuộc trò chuyện không hoạt động trong 7–3650 ngày.",
+    "Archived conversations (days)": "Cuộc trò chuyện đã lưu trữ (ngày)",
+    "Keep archived conversations for 1–3650 days.": "Giữ cuộc trò chuyện đã lưu trữ trong 1–3650 ngày.",
+    "Security reports (days)": "Báo cáo bảo mật (ngày)",
+    "Keep terminated security conversations for 30–3650 days.": "Giữ cuộc trò chuyện bị chấm dứt vì lý do bảo mật trong 30–3650 ngày.",
+    "Cleanup interval (hours)": "Khoảng dọn dẹp (giờ)",
+    "Run every 1–168 hours; each pass is memory-bounded.": "Chạy mỗi 1–168 giờ; mỗi lượt đều giới hạn mức dùng bộ nhớ.",
+    "Assistant conversation cleanup": "Dọn dẹp cuộc trò chuyện trợ lý"
   }
 }

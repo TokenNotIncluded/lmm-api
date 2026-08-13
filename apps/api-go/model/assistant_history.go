@@ -67,7 +67,7 @@ type AssistantConversation struct {
 	Title              string `json:"title" gorm:"type:varchar(255);not null"`
 	LastMessagePreview string `json:"last_message_preview" gorm:"type:varchar(512);not null"`
 	CreatedAt          int64  `json:"created_at" gorm:"not null;index"`
-	UpdatedAt          int64  `json:"updated_at" gorm:"not null;index:idx_assistant_conversation_user_updated,priority:2"`
+	UpdatedAt          int64  `json:"updated_at" gorm:"not null;index:idx_assistant_conversation_user_updated,priority:2;index:idx_assistant_conversation_updated"`
 	ArchivedAt         int64  `json:"archived_at" gorm:"not null;default:0;index"`
 	RestrictedAt       int64  `json:"restricted_at" gorm:"not null;default:0;index"`
 	RestrictionReason  string `json:"-" gorm:"type:varchar(64);not null;default:''"`
@@ -1089,7 +1089,10 @@ func RevealAssistantSecureCard(ownerUserID int, cardID string) (string, Assistan
 			return fmt.Errorf("decrypt assistant secure card: %w", err)
 		}
 		now := common.GetTimestamp()
-		if result := tx.Model(&card).Where("revealed_at = ?", 0).Update("revealed_at", now); result.Error != nil {
+		if result := tx.Model(&card).Where("revealed_at = ?", 0).Updates(map[string]any{
+			"revealed_at": now,
+			"ciphertext":  "",
+		}); result.Error != nil {
 			return result.Error
 		} else if result.RowsAffected != 1 {
 			return ErrAssistantSecureCardConsumed
