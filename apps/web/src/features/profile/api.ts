@@ -247,7 +247,11 @@ export async function performCheckin(
   const url = turnstileToken
     ? `/api/user/checkin?turnstile=${encodeURIComponent(turnstileToken)}`
     : '/api/user/checkin'
-  const res = await api.post(url)
+  const res = await api.post(url, undefined, {
+    // The check-in card presents verification failures itself so that the
+    // challenge flow does not produce a duplicate global toast.
+    skipBusinessError: true,
+  })
   return res.data
 }
 

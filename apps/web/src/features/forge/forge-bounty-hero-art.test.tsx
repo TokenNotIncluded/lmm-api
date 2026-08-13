@@ -121,6 +121,7 @@ describe('ForgeBountyHeroArt', () => {
     )
     assert.equal(homeSource.includes('/forge-collaboration.webp'), false)
     assert.equal(homeSource.includes('before:bg-[#141413]'), false)
-    assert.equal(homeSource.includes('before:bg-foreground'), true)
+    assert.equal(homeSource.includes('before:bg-foreground'), false)
+    assert.equal(homeSource.includes('Describe what you need...'), true)
   })
 })

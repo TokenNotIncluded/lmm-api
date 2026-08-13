@@ -44,7 +44,9 @@ build_package() {
 }
 
 go_work="$tmp/lmm-api-go-bin"
-go_artifact=lmm-api-go-0.1.2-linux-amd64
+go_pkgver=$(awk -F= '$1 == "pkgver" { print $2; exit }' "$HERE/lmm-api-go-bin/PKGBUILD")
+[[ $go_pkgver =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "invalid Go binary pkgver: $go_pkgver"
+go_artifact="lmm-api-go-${go_pkgver}-linux-amd64"
 go_bundle="$go_work/stage/$go_artifact"
 mkdir -p "$go_bundle/frontend-dist"
 cp "$HERE/lmm-api-go-bin/PKGBUILD" "$go_work/"
@@ -62,7 +64,9 @@ build_package lmm-api-go-bin \
   usr/share/lmm-api-go/frontend-dist/index.html
 
 rs_work="$tmp/lmm-api-rs-bin"
-rs_artifact=lmm-api-rs-0.1.2-linux-amd64
+rs_pkgver=$(awk -F= '$1 == "pkgver" { print $2; exit }' "$HERE/lmm-api-rs-bin/PKGBUILD")
+[[ $rs_pkgver =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "invalid Rust binary pkgver: $rs_pkgver"
+rs_artifact="lmm-api-rs-${rs_pkgver}-linux-amd64"
 rs_bundle="$rs_work/stage/$rs_artifact"
 mkdir -p "$rs_bundle"
 cp "$HERE/lmm-api-rs-bin/PKGBUILD" "$rs_work/"

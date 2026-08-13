@@ -24,6 +24,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
+import { Textarea } from '@/components/ui/textarea'
 import {
   peekQueuedAssistantRequest,
   requestAssistantOpen,
@@ -35,7 +36,11 @@ import {
 } from '@/lib/console-activation'
 import { useAuthStore } from '@/stores/auth-store'
 
-import { getDeveloperAccessRequest, type DeveloperAccessRequest } from './api'
+import {
+  getDeveloperAccessRequest,
+  submitDeveloperAccessRequest,
+  type DeveloperAccessRequest,
+} from './api'
 import { claimOnboardingAssistantPrompt } from './pending-review-assistant'
 import { useAuthUserRefresh } from './use-auth-user-refresh'
 
@@ -50,6 +55,11 @@ export function GettingStarted() {
   const [accessRequest, setAccessRequest] =
     useState<DeveloperAccessRequest | null>(null)
   const [requestLoaded, setRequestLoaded] = useState(false)
+  const [directReason, setDirectReason] = useState('')
+  const [directRequestError, setDirectRequestError] = useState<string | null>(
+    null
+  )
+  const [directRequestSubmitting, setDirectRequestSubmitting] = useState(false)
 
   useEffect(() => {
     if (onboarding.stage !== 'activate') {
@@ -114,6 +124,31 @@ export function GettingStarted() {
     requestAssistantOpen('onboarding', message)
   }
 
+  const submitDirectRequest = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const reason = directReason.trim()
+    if (directRequestSubmitting || reason.length < 5) return
+
+    setDirectRequestSubmitting(true)
+    setDirectRequestError(null)
+    try {
+      const submitted = await submitDeveloperAccessRequest({
+        reason,
+        confirmed: true,
+      })
+      setAccessRequest(submitted)
+      setDirectReason('')
+    } catch (error) {
+      setDirectRequestError(
+        error instanceof Error
+          ? error.message
+          : t('Unable to submit unlock request')
+      )
+    } finally {
+      setDirectRequestSubmitting(false)
+    }
+  }
+
   const continueAfterApproval = async () => {
     const refreshedUser = await refreshUser()
     if (refreshedUser?.developer_access_granted !== true) return
@@ -149,9 +184,14 @@ export function GettingStarted() {
               </div>
 
               {accessRequest?.status === 'pending' ? (
-                <div className='border-border/70 mt-5 border-t pt-4 text-sm leading-6'>
+                <div
+                  className='border-border/70 mt-5 border-t pt-4 text-sm leading-6'
+                  data-testid='l0-pending-request'
+                >
                   <p className='font-medium'>
-                    {t('AI recommendation submitted')}
+                    {accessRequest.ai_recommendation
+                      ? t('AI recommendation submitted')
+                      : t('Access request submitted')}
                   </p>
                   <p className='text-muted-foreground mt-1 text-xs'>
                     {t('Pending review')}
@@ -230,6 +270,65 @@ export function GettingStarted() {
                     {t('Continue setup')}
                   </Button>
                 </div>
+              ) : null}
+
+              {requestLoaded &&
+              accessRequest?.status !== 'pending' &&
+              accessRequest?.status !== 'approved' ? (
+                <section
+                  className='border-border/70 mt-5 border-t pt-4'
+                  data-testid='l0-direct-access-request'
+                >
+                  <h3 className='text-sm font-semibold'>
+                    {t('Unlock L1 access')}
+                  </h3>
+                  <p className='text-muted-foreground mt-1 text-sm leading-6'>
+                    {t(
+                      'You can submit for administrator review without an AI recommendation. The recommendation only gives the reviewer more context; it never decides access.'
+                    )}
+                  </p>
+                  <form
+                    className='mt-3 grid gap-3'
+                    onSubmit={submitDirectRequest}
+                  >
+                    <Textarea
+                      value={directReason}
+                      onChange={(event) => {
+                        setDirectReason(event.target.value)
+                        if (directRequestError) setDirectRequestError(null)
+                      }}
+                      placeholder={t(
+                        'Explain what you want to build and why you need L1 access.'
+                      )}
+                      maxLength={2000}
+                      minLength={5}
+                      rows={4}
+                      required
+                      aria-label={t('L1 access request explanation')}
+                      data-testid='l0-direct-access-request-input'
+                      disabled={directRequestSubmitting}
+                    />
+                    {directRequestError ? (
+                      <p className='text-destructive text-sm' role='alert'>
+                        {directRequestError}
+                      </p>
+                    ) : null}
+                    <Button
+                      type='submit'
+                      variant='outline'
+                      className='w-full sm:w-fit'
+                      disabled={
+                        directRequestSubmitting ||
+                        directReason.trim().length < 5
+                      }
+                      data-testid='l0-direct-access-request-submit'
+                    >
+                      {directRequestSubmitting
+                        ? t('Submitting...')
+                        : t('Submit for administrator review')}
+                    </Button>
+                  </form>
+                </section>
               ) : null}
 
               <div className='border-border/70 mt-6 border-t pt-4'>

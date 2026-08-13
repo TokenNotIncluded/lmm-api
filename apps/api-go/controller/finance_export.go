@@ -22,8 +22,8 @@ const (
 	// Keep a generous one-year upper bound while retaining a hard server-side
 	// limit. The UI accepts an exact datetime range; this bound prevents an
 	// accidental all-history export from exhausting the log database.
-	financeExportMaxWindow     = 365 * 24 * 60 * 60
-	financeExportMaxRows       = 200_000
+	financeExportMaxWindow = 365 * 24 * 60 * 60
+	financeExportMaxRows   = 200_000
 )
 
 // FinanceExport is deliberately an allowlisted projection. Never add a

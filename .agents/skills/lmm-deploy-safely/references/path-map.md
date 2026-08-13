@@ -16,6 +16,7 @@ a second public CLI.
 | Local package output | `packaging/local/lmm-api-split/out` by default |
 | Persistent controller work | `${XDG_STATE_HOME:-$HOME/.local/state}/lmm-api/deploy-work/<deployment-id>` |
 | Durable controller backups | `$HOME/backup/lmm-api/<verified-host>/<deployment-id>` |
+| Read-only production pressure report | `.agents/skills/lmm-deploy-safely/scripts/resource-pressure-report.sh` |
 
 The local split package installs frontend files at
 `/usr/share/lmm-api/frontend-dist`. Deployment publishes immutable frontend
@@ -72,7 +73,7 @@ guarded path before calling `deploy` phases.
 | Required static hostname | `arch-dmit` |
 | Target work root | `/var/lib/lmm-api-go/deploy-work/<deployment-id>` (the service-managed path resolves under `/var/lib/private/lmm-api-go`) |
 | Target backup root | `/var/lib/lmm-api-go/deploy-backups/<deployment-id>` (the service-managed path resolves under `/var/lib/private/lmm-api-go`) |
-| Off-host backup root | `/home/arch/.local/state/lmm-api-production-backups/<deployment-id>` on `ArchCzy` |
+| Off-host backup root | `/home/arch/.local/state/lmm-api-production-backups/<deployment-id>` on the ArchCzy host through the case-sensitive SSH alias `archczy` |
 | Frontend release root | `/srv/lmm-api-frontend` |
 | Frontend releases | `/srv/lmm-api-frontend/releases/<version>` |
 | Active frontend | `/srv/lmm-api-frontend/current` |
@@ -82,6 +83,12 @@ The supported phases are `preflight`, `inspect`, `build`, `package`,
 `backup`, `watchdog`, `switch`, `confirm`, `rollback`, and `cleanup`. The
 default is read-only preflight. Remote mutation requires explicit execution,
 verified role/host identity, and current-turn authorization.
+
+The pressure report is a separate read-only observer, not a deployment phase.
+Run it on `ArchDmit` with the exact `arch-dmit` hostname check; it does not
+install a timer, restart `lmm-api`, clear swap, or remove files. Its report
+uses the 20 GiB root / 951 MiB RAM production profile as a visible reference
+and includes the actual service cgroup memory and restart counters.
 
 The transaction is marker-owned and persistent. Before a switch it requires
 the role-appropriate target/controller/off-host backup set, checksum
@@ -96,7 +103,8 @@ database.
 `deploy/backup/backup-sqlite-to-archczy.sh` is only for an explicitly verified
 SQLite source. It creates an online SQLite backup in a temporary directory and
 publishes a checksum pair to `/var/backups/lmm-api/sqlite/<instance>` on
-ArchCzy; it does not create a controller copy. Do not invoke it when the live
+the ArchCzy host via SSH alias `archczy`; it does not create a controller copy.
+Do not invoke it when the live
 service uses PostgreSQL.
 
 The live service may already use Go with PostgreSQL and dedicated Valkey after a

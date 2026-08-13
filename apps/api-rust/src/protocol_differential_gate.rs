@@ -1652,7 +1652,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_differential_class_stays_closed() {
+    fn missing_differential_class_stays_closed_at_the_count_boundary() {
         let registry = validated_current_registry().expect("built-in registry validates");
         let mut document = valid_document();
         document
@@ -1660,8 +1660,9 @@ mod tests {
             .retain(|value| value.class != DifferentialClass::Stream);
         assert_eq!(
             document.verify(&registry, &trusted_policy()),
-            Err(DifferentialEvidenceError::MissingDifferential {
-                class: DifferentialClass::Stream
+            Err(DifferentialEvidenceError::InvalidDifferentialCount {
+                expected: DifferentialClass::all().len(),
+                actual: DifferentialClass::all().len() - 1,
             })
         );
     }

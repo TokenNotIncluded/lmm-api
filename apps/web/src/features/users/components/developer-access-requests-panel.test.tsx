@@ -126,6 +126,20 @@ describe('DeveloperAccessRequestsPanel', () => {
               username: 'test-user',
               email: 'test@example.test',
             },
+            {
+              id: 18,
+              user_id: 9,
+              status: 'pending',
+              reason: 'I want to connect a local test client.',
+              source: 'assistant_request',
+              ai_recommendation: '',
+              admin_user_id: 0,
+              admin_note: '',
+              created_at: 1_786_400_001,
+              reviewed_at: 0,
+              username: 'manual-user',
+              email: 'manual@example.test',
+            },
           ],
         },
       }
@@ -154,7 +168,7 @@ describe('DeveloperAccessRequestsPanel', () => {
         () => document.body.textContent?.includes('test-user') === true,
         'AI recommendation did not render'
       )
-      assert.match(document.body.textContent ?? '', /AI access recommendations/)
+      assert.match(document.body.textContent ?? '', /L1 access requests/)
       assert.match(
         document.body.textContent ?? '',
         /I will use Claude Code for private development\./
@@ -162,6 +176,12 @@ describe('DeveloperAccessRequestsPanel', () => {
       assert.match(
         document.body.textContent ?? '',
         /Recommend L1 because the user supplied a concrete use case\./
+      )
+      assert.match(document.body.textContent ?? '', /manual-user/)
+      assert.match(document.body.textContent ?? '', /Direct request/)
+      assert.match(
+        document.body.textContent ?? '',
+        /No AI recommendation was recorded\./
       )
 
       const textarea = document.querySelector('textarea')

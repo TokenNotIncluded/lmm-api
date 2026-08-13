@@ -1,3 +1,7 @@
+// Protocol mappers deliberately receive explicit source/target/path and
+// ordering context; bundling those values would obscure audit call sites.
+#![allow(clippy::too_many_arguments)]
+
 //! Direct v2 conversions through the ordered relay IR.
 //!
 //! This module is intentionally independent from the legacy conversion
@@ -921,7 +925,7 @@ fn chat_image_url_to_media(
                     source,
                     target,
                     "image_url.url",
-                    &format!("{path}.url"),
+                    format!("{path}.url"),
                     DirectIrReason::InvalidShape,
                 ));
             };
@@ -1099,7 +1103,7 @@ fn chat_parts_to_content(
                         source,
                         target,
                         "media",
-                        &format!("{path}[{index}]"),
+                        format!("{path}[{index}]"),
                         DirectIrReason::InvalidShape,
                     ));
                 };
@@ -1325,7 +1329,7 @@ fn tool_to_ir(
             source,
             target,
             "tool.name",
-            &format!("{path}.name"),
+            format!("{path}.name"),
             DirectIrReason::EmptyId,
         ));
     }
@@ -1407,7 +1411,7 @@ fn tool_name_for_target(
             source,
             target,
             "tool.name",
-            &format!("{path}.name"),
+            format!("{path}.name"),
             DirectIrReason::EmptyId,
         ));
     }
@@ -1429,7 +1433,7 @@ fn openai_strict_for_tool(
             source,
             target,
             "tool.strict",
-            &format!("tools[{index}].strict"),
+            format!("tools[{index}].strict"),
             DirectIrReason::InvalidShape,
         )),
     }
@@ -1993,7 +1997,7 @@ fn chat_message_to_envelope(
             source,
             target,
             "tool_result.role",
-            &format!("{path}.role"),
+            format!("{path}.role"),
             DirectIrReason::Mismatch,
         ));
     }
@@ -2183,7 +2187,7 @@ fn chat_message_to_envelope(
                 source,
                 target,
                 "function_call_id",
-                &format!("{call_path}.id"),
+                format!("{call_path}.id"),
                 DirectIrReason::EmptyId,
             ));
         }
@@ -3083,7 +3087,7 @@ fn gemini_part_to_items(
                     source,
                     target,
                     "function_call_id",
-                    &format!("{path}.functionCall.id"),
+                    format!("{path}.functionCall.id"),
                     DirectIrReason::EmptyId,
                 ));
             }
@@ -3156,7 +3160,7 @@ fn gemini_part_to_items(
                 source,
                 target,
                 "thought_signature",
-                &format!("{path}.thoughtSignature"),
+                format!("{path}.thoughtSignature"),
                 DirectIrReason::EmptyId,
             ));
         }
@@ -3282,8 +3286,6 @@ pub fn gemini_request_to_envelope_v2(
         contents,
         generation_config,
         safety_settings,
-        tools: _,
-        tool_config: _,
         ..
     } = request;
     if let Some(system) = system_instruction.as_ref() {
@@ -3759,7 +3761,7 @@ fn append_gemini_content(
 
 fn append_gemini_opaque_item(
     item: &Item,
-    contents: &mut Vec<GeminiContent>,
+    contents: &mut [GeminiContent],
     source: Protocol,
     target: Protocol,
     path: &str,
@@ -3802,7 +3804,7 @@ fn append_gemini_opaque_item(
             DirectIrReason::Mismatch,
         ));
     };
-    if !matches!(&last_part.function_call, Some(_)) {
+    if last_part.function_call.is_none() {
         // A signature on ordinary text is retained at that exact Part.
         if last_part.text.is_none() && last_part.inline_data.is_none() {
             return Err(DirectIrError::new(
@@ -4839,14 +4841,6 @@ pub fn envelope_to_claude_request_v2(
                 source: None,
                 extra: BTreeMap::new(),
             }
-        } else if matches!(&item.kind, ItemKind::Reasoning)
-            && item
-                .ordered_parts()
-                .first()
-                .and_then(|part| part.opaque.as_ref())
-                .is_some()
-        {
-            claude_block_from_item(&item, source, target, &path)?
         } else {
             claude_block_from_item(&item, source, target, &path)?
         };
@@ -6005,7 +5999,7 @@ fn openai_response_message_groups(
                     source,
                     target,
                     "response_order",
-                    &format!("items[{index}]"),
+                    format!("items[{index}]"),
                     DirectIrReason::Mismatch,
                 ));
             };
@@ -8806,7 +8800,7 @@ mod responses_direct_ir_tests {
     }
 
     #[test]
-    fn responses_direct_synthetic_id_enters_loss_ledger_and_reject_policy() {
+    fn responses_direct_synthetic_id_enters_loss_ledger_as_a_warning() {
         let mut envelope = Envelope::new(Protocol::OpenAi, "gpt-responses");
         let item = Item::tool_call(
             OpaqueId::synthetic("call-synthetic", Protocol::OpenAi),
@@ -8823,7 +8817,16 @@ mod responses_direct_ir_tests {
                 .iter()
                 .any(|loss| loss.code == LossCode::SyntheticToolCallId)
         );
-        assert!(converted.enforce_loss_policy(LossPolicy::Reject).is_err());
+        let outcome = converted
+            .enforce_loss_policy(LossPolicy::Reject)
+            .expect("a deterministic synthetic identifier is warning-level metadata");
+        assert!(
+            outcome
+                .warnings
+                .as_slice()
+                .iter()
+                .any(|loss| { loss.code == LossCode::SyntheticToolCallId })
+        );
     }
 
     #[test]
@@ -9314,7 +9317,7 @@ mod direct_ir_tests {
         assert_eq!(orphan_error.reason, DirectIrReason::Orphan);
 
         let duplicate: GeminiRequest = serde_json::from_str(
-            r#"{"contents":[{"role":"model","parts":[{"functionCall":{"id":"same","name":"lookup","args":{}},{"functionCall":{"id":"same","name":"lookup","args":{}}}]}]}"#,
+            r#"{"contents":[{"role":"model","parts":[{"functionCall":{"id":"same","name":"lookup","args":{}}},{"functionCall":{"id":"same","name":"lookup","args":{}}}]}]}"#,
         )
         .expect("duplicate Gemini call fixture");
         let duplicate_error = gemini_request_to_envelope_v2(duplicate, "gemini-test").err();
@@ -9410,7 +9413,7 @@ mod direct_ir_tests {
             .filter_map(|extra| extra.anthropic.as_ref())
             .flat_map(|extra| extra.blocks.iter())
             .collect::<Vec<_>>();
-        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks.len(), 3);
         assert_eq!(blocks[0].kind, "thinking");
         assert_eq!(blocks[0].signature.as_deref(), Some("sig-auth"));
         assert_eq!(blocks[1].kind, "redacted_thinking");
@@ -9418,6 +9421,8 @@ mod direct_ir_tests {
             blocks[1].data,
             Some(JsonData::String("opaque-bytes".to_owned()))
         );
+        assert_eq!(blocks[2].kind, "text");
+        assert_eq!(blocks[2].text.as_deref(), Some("answer"));
     }
 
     #[test]

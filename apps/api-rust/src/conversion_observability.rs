@@ -646,7 +646,6 @@ impl ConversionObserver {
     }
 
     /// Enters a bounded stream queue and returns a guard that decrements on drop.
-    #[must_use]
     pub fn enter_queue(&self, labels: MetricLabels) -> QueueDepthGuard {
         self.adjust_queue_depth(labels, true);
         QueueDepthGuard {
@@ -764,7 +763,6 @@ pub struct ClientAbortGuard {
 
 impl ClientAbortGuard {
     /// Creates an abort guard for one stream.
-    #[must_use]
     pub fn new(observer: ConversionObserver, labels: MetricLabels) -> Self {
         Self {
             observer,
@@ -835,10 +833,8 @@ impl StreamTiming {
     /// Returns only the gateway TTFT tax, never a negative duration.
     #[must_use]
     pub fn gateway_ttft_tax(&self) -> Option<Duration> {
-        Some(
-            self.first_downstream_write_at?
-                .checked_duration_since(self.first_upstream_event_at?)?,
-        )
+        self.first_downstream_write_at?
+            .checked_duration_since(self.first_upstream_event_at?)
     }
 
     /// Records the gateway TTFT tax when both first timestamps are ordered.
@@ -850,10 +846,7 @@ impl StreamTiming {
 }
 
 fn duration_nanos(duration: Duration) -> u64 {
-    match u64::try_from(duration.as_nanos()) {
-        Ok(value) => value,
-        Err(_) => u64::MAX,
-    }
+    u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
 }
 
 fn exporter_value(metric: MetricKind, value: u64) -> f64 {

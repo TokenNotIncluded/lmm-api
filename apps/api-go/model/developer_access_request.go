@@ -10,25 +10,27 @@ import (
 )
 
 const (
-	DeveloperAccessRequestPending    = "pending"
-	DeveloperAccessRequestApproved   = "approved"
-	DeveloperAccessRequestRejected   = "rejected"
-	DeveloperAccessRequestSourceAI   = "assistant_recommendation"
-	DeveloperAccessRequestSourceOld  = "legacy"
-	minDeveloperAccessRequestReason  = 5
-	minDeveloperAccessReviewNote     = 2
-	minDeveloperAccessRecommendation = 20
-	maxDeveloperAccessRequestNote    = 2000
+	DeveloperAccessRequestPending         = "pending"
+	DeveloperAccessRequestApproved        = "approved"
+	DeveloperAccessRequestRejected        = "rejected"
+	DeveloperAccessRequestSourceAI        = "assistant_recommendation"
+	DeveloperAccessRequestSourceAssistant = "assistant_request"
+	DeveloperAccessRequestSourceOld       = "legacy"
+	minDeveloperAccessRequestReason       = 5
+	minDeveloperAccessReviewNote          = 2
+	minDeveloperAccessRecommendation      = 20
+	maxDeveloperAccessRequestNote         = 2000
 )
 
 var (
-	ErrDeveloperAccessRequestNotFound        = errors.New("解锁申请不存在")
-	ErrDeveloperAccessRequestReviewed        = errors.New("解锁申请已经处理")
-	ErrDeveloperAccessRequestStatus          = errors.New("解锁申请状态无效")
-	ErrDeveloperAccessRequestReasonTooShort  = errors.New("解锁申请说明至少需要 5 个字符")
-	ErrDeveloperAccessRecommendationTooShort = errors.New("AI 推荐信至少需要 20 个字符")
-	ErrDeveloperAccessReviewNoteTooShort     = errors.New("管理员意见至少需要 2 个字符")
-	ErrDeveloperAccessRequestNoteTooLong     = errors.New("解锁申请说明不能超过 2000 个字符")
+	ErrDeveloperAccessRequestNotFound         = errors.New("解锁申请不存在")
+	ErrDeveloperAccessRequestReviewed         = errors.New("解锁申请已经处理")
+	ErrDeveloperAccessRequestStatus           = errors.New("解锁申请状态无效")
+	ErrDeveloperAccessRequestReasonTooShort   = errors.New("解锁申请说明至少需要 5 个字符")
+	ErrDeveloperAccessRecommendationTooShort  = errors.New("AI 推荐信至少需要 20 个字符")
+	ErrDeveloperAccessReviewNoteTooShort      = errors.New("管理员意见至少需要 2 个字符")
+	ErrDeveloperAccessRequestNoteTooLong      = errors.New("解锁申请说明不能超过 2000 个字符")
+	ErrDeveloperAccessRequestQueueUnavailable = errors.New("解锁申请队列暂时不可用")
 )
 
 // DeveloperAccessRequest records the non-payment path to L1 access. The
@@ -146,6 +148,13 @@ func SubmitDeveloperAccessRequest(userID int, reason string) (*DeveloperAccessRe
 	return submitDeveloperAccessRequest(userID, reason, "", DeveloperAccessRequestSourceOld)
 }
 
+// SubmitAssistantDeveloperAccessRequest puts a concrete L1 request in the
+// administrator queue before any model/tool call. An AI recommendation is an
+// optional review aid, never a prerequisite for being seen by an operator.
+func SubmitAssistantDeveloperAccessRequest(userID int, reason string) (*DeveloperAccessRequest, error) {
+	return submitDeveloperAccessRequest(userID, reason, "", DeveloperAccessRequestSourceAssistant)
+}
+
 func SubmitAssistantDeveloperAccessRecommendation(userID int, reason string, recommendation string) (*DeveloperAccessRequest, error) {
 	return submitDeveloperAccessRequest(userID, reason, recommendation, DeveloperAccessRequestSourceAI)
 }
@@ -179,6 +188,20 @@ func submitDeveloperAccessRequest(userID int, reason string, recommendation stri
 		findErr := tx.Where("user_id = ? AND status = ?", userID, DeveloperAccessRequestPending).
 			Order("id DESC").First(&pending).Error
 		if findErr == nil {
+			// A request is visible as soon as it is submitted. If a later AI
+			// turn produces a recommendation, enrich that same pending row
+			// instead of creating a second queue item or making the user start
+			// over. Never replace the user's original statement.
+			if source == DeveloperAccessRequestSourceAI && strings.TrimSpace(pending.AIRecommendation) == "" {
+				if err := tx.Model(&pending).Updates(map[string]interface{}{
+					"ai_recommendation": normalizedRecommendation,
+					"source":            source,
+				}).Error; err != nil {
+					return err
+				}
+				pending.AIRecommendation = normalizedRecommendation
+				pending.Source = source
+			}
 			request = pending
 			return nil
 		}
@@ -196,7 +219,10 @@ func submitDeveloperAccessRequest(userID int, reason string, recommendation stri
 		return tx.Create(&request).Error
 	})
 	if err != nil {
-		return nil, err
+		// Keep the database cause for diagnostics while giving HTTP callers a
+		// stable classification. They must not treat a failed queue write as a
+		// successful chat turn and should retry the same request instead.
+		return nil, errors.Join(ErrDeveloperAccessRequestQueueUnavailable, err)
 	}
 	return &request, nil
 }

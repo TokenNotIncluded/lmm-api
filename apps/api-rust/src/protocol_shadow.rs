@@ -42,25 +42,13 @@ const SHADOW_HASH_DOMAIN: &[u8] = b"lmm-protocol-shadow-v1\0";
 /// `None` for `max_concurrency` is intentionally not treated as unlimited:
 /// an enabled coordinator with no finite bound fails closed with
 /// [`ShadowSkipReason::UnboundedConcurrency`].
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ShadowConfig {
     enabled: bool,
     max_input_bytes: usize,
     max_concurrency: Option<NonZeroUsize>,
     allowed_scopes: Vec<ShadowScope>,
     canary_basis_points: u16,
-}
-
-impl Default for ShadowConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            max_input_bytes: 0,
-            max_concurrency: None,
-            allowed_scopes: Vec::new(),
-            canary_basis_points: 0,
-        }
-    }
 }
 
 impl ShadowConfig {
@@ -344,6 +332,7 @@ impl fmt::Debug for ShadowRecord {
 }
 
 /// Result of an attempted shadow comparison.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ShadowOutcome {
     /// Both local converters ran once and produced a body-free record.

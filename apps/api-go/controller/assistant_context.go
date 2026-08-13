@@ -669,6 +669,35 @@ func assistantHasHighConfidenceSecurityAbuse(message string) bool {
 	)
 }
 
+// assistantShouldQueueL1Request is intentionally narrower than the general
+// onboarding classifier. A greeting or a generic "I'm new" question should
+// not create an administrator task, but an explicit L1/developer-access
+// request must be visible even if the model later times out or fails to emit a
+// recommendation action.
+func assistantShouldQueueL1Request(context assistantUserContext, message string) bool {
+	if context.AdministratorMode || context.DeveloperAccessGranted ||
+		!strings.EqualFold(strings.TrimSpace(context.AccessLevel), "L0") ||
+		context.CustomerProfile == assistantProfileSecurityRisk {
+		return false
+	}
+	return assistantTextContainsAny(
+		strings.ToLower(strings.TrimSpace(message)),
+		"l1",
+		"l0",
+		"申请开发者",
+		"开发者权限",
+		"开发者访问",
+		"解锁权限",
+		"提升权限",
+		"申请解锁",
+		"developer access",
+		"unlock access",
+		"request access",
+		"access review",
+		"l1 review",
+	)
+}
+
 func assistantWelcomeStrategy(profile assistantCustomerProfile) string {
 	switch profile {
 	case assistantProfileTechnical:

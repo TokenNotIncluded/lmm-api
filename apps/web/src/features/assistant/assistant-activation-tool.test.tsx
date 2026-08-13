@@ -167,6 +167,19 @@ function findButton(text: string): HTMLButtonElement {
   return button
 }
 
+async function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
+  const setValue = Object.getOwnPropertyDescriptor(
+    HTMLTextAreaElement.prototype,
+    'value'
+  )?.set
+  assert.ok(setValue)
+  await act(async () => {
+    setValue.call(textarea, value)
+    textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    await flushEffects()
+  })
+}
+
 async function waitForCondition(
   condition: () => boolean,
   failureMessage: string
@@ -193,20 +206,58 @@ afterEach(() => {
 after(() => domWindow.close())
 
 describe('AssistantActivationTool', () => {
-  test('shows chat guidance without a direct request form', async () => {
+  test('shows a direct request fallback when no AI recommendation exists', async () => {
     api.get = (async () => ({
       data: { success: true, data: null },
     })) as typeof api.get
 
     const rendered = await renderTool()
     try {
-      assert.equal(document.querySelector('textarea'), null)
+      assert.ok(document.querySelector('textarea'))
       assert.equal(document.querySelector('a[href="/wallet"]'), null)
       assert.match(
         document.body.textContent ?? '',
-        /Continue chatting and explain your use case/
+        /without an AI recommendation/
       )
-      assert.throws(() => findButton('Confirm and send to administrator'))
+      assert.equal(findButton('Submit for administrator review').disabled, true)
+    } finally {
+      await unmount(rendered)
+    }
+  })
+
+  test('submits a direct request without an AI recommendation', async () => {
+    api.get = (async () => ({
+      data: { success: true, data: null },
+    })) as typeof api.get
+    let submittedBody: unknown
+    api.post = (async (url: string, data: unknown) => {
+      assert.equal(url, '/api/user/developer-access/request')
+      submittedBody = data
+      return { data: { success: true, data: pendingRequest } }
+    }) as typeof api.post
+
+    const rendered = await renderTool()
+    try {
+      const textarea = document.querySelector<HTMLTextAreaElement>('textarea')
+      assert.ok(textarea)
+      await setTextareaValue(textarea, 'I need L1 for a small test client.')
+
+      await act(async () => {
+        findButton('Submit for administrator review').click()
+        await flushEffects()
+      })
+      await waitForCondition(
+        () => submittedBody !== undefined,
+        'Direct request was not submitted'
+      )
+      assert.deepEqual(submittedBody, {
+        reason: 'I need L1 for a small test client.',
+        confirmed: true,
+      })
+      assert.match(
+        document.body.textContent ?? '',
+        /AI recommendation submitted/
+      )
     } finally {
       await unmount(rendered)
     }
@@ -317,14 +368,14 @@ describe('AssistantActivationTool', () => {
     }
   })
 
-  test('shows the administrator reply after rejection without a direct form', async () => {
+  test('shows the administrator reply and keeps the direct form after rejection', async () => {
     api.get = (async () => ({
       data: { success: true, data: rejectedRequest },
     })) as typeof api.get
 
     const rendered = await renderTool()
     try {
-      assert.equal(document.querySelector('textarea'), null)
+      assert.ok(document.querySelector('textarea'))
       assert.match(document.body.textContent ?? '', /Previous request rejected/)
       assert.match(
         document.body.textContent ?? '',

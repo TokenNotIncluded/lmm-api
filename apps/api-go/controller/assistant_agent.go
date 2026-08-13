@@ -28,6 +28,8 @@ const (
 	assistantToolArgumentsMaxBytes        = 16 * 1024
 	assistantToolCallsPerTurn             = 4
 	assistantAgentDefaultTimeout          = 45 * time.Second
+	assistantUpstreamMaxAttempts          = 3
+	assistantUpstreamRetryBaseDelay       = 200 * time.Millisecond
 	assistantRecommendationTTL            = 30 * time.Minute
 	minDeveloperAccessReasonRunes         = 5
 	minDeveloperAccessRecommendationRunes = 20
@@ -377,6 +379,16 @@ func assistantL0InterlocutorAssessmentRequired(_ assistantUserContext) bool {
 	return false
 }
 
+func assistantToolExecutionAllowedForContext(name string, userContext assistantUserContext) bool {
+	if name == "get_plan_offers" && !userContext.AdministratorMode && !userContext.DeveloperAccessGranted {
+		// Let the read-only plan tool return the deterministic payment-intent or
+		// restriction result. It does not expose offers or checkout unless its own
+		// policy gate reaches ready.
+		return true
+	}
+	return assistantToolAllowedForContext(name, userContext)
+}
+
 func assistantToolChoiceForContext(userContext assistantUserContext) any {
 	// Some otherwise tool-capable upstreams reject a named/forced function
 	// choice while accepting the OpenAI-compatible automatic mode. During an
@@ -513,6 +525,67 @@ func relayAssistantTurn(c *gin.Context, request assistantOpenAIRequest, rootRequ
 	return recorder.Status(), append([]byte(nil), recorder.body.Bytes()...), nil
 }
 
+func assistantRetryableUpstreamStatus(status int) bool {
+	switch status {
+	case http.StatusRequestTimeout, http.StatusTooEarly, http.StatusTooManyRequests:
+		return true
+	default:
+		return status >= http.StatusInternalServerError && status <= 599
+	}
+}
+
+func assistantUpstreamRetryDelay(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	// Keep the retry budget short enough for an interactive chat while still
+	// spreading a burst across the provider's recovery window.
+	delay := assistantUpstreamRetryBaseDelay * time.Duration(1<<(attempt-1))
+	if delay > 1500*time.Millisecond {
+		return 1500 * time.Millisecond
+	}
+	return delay
+}
+
+// relayAssistantTurnWithRetry retries only the model call. Tool calls are
+// executed after a successful response, so a provider timeout cannot repeat a
+// key/configuration preparation action. The outer browser retry has the same
+// property because all assistant writes are confirmation-gated or idempotent.
+func relayAssistantTurnWithRetry(c *gin.Context, request assistantOpenAIRequest, rootRequestID string, step int) (int, []byte, error) {
+	var status int
+	var body []byte
+	for attempt := 1; attempt <= assistantUpstreamMaxAttempts; attempt++ {
+		status, body, err := relayAssistantTurn(c, request, rootRequestID, step)
+		if err != nil {
+			return status, body, err
+		}
+		if status >= http.StatusOK && status < http.StatusMultipleChoices {
+			response, parseErr := parseAssistantResponse(body)
+			if parseErr == nil && len(response.Choices) > 0 {
+				return status, body, nil
+			}
+			// A malformed/empty successful provider response is treated as a
+			// transient upstream failure and receives the same bounded retry.
+			if attempt == assistantUpstreamMaxAttempts {
+				return status, body, nil
+			}
+		} else if !assistantRetryableUpstreamStatus(status) || attempt == assistantUpstreamMaxAttempts {
+			return status, body, nil
+		}
+
+		timer := time.NewTimer(assistantUpstreamRetryDelay(attempt))
+		select {
+		case <-c.Request.Context().Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return http.StatusRequestTimeout, nil, c.Request.Context().Err()
+		case <-timer.C:
+		}
+	}
+	return status, body, nil
+}
+
 func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conversation []assistantOpenAIMessage) {
 	timeout := time.Duration(settings.TimeoutSeconds) * time.Second
 	if timeout < 5*time.Second {
@@ -568,7 +641,7 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 			request.ToolChoice = assistantToolChoiceForContext(userContext)
 		}
 
-		status, body, err := relayAssistantTurn(c, request, rootRequestID, step)
+		status, body, err := relayAssistantTurnWithRetry(c, request, rootRequestID, step)
 		if err != nil {
 			writeAssistantError(c, http.StatusInternalServerError, "ASSISTANT_REQUEST_BUILD_FAILED", errors.New("failed to build assistant request"))
 			return
@@ -614,6 +687,9 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 		usedTool = true
 		for index, call := range message.ToolCalls {
 			result := executeAssistantTool(c, call)
+			if c.IsAborted() {
+				return
+			}
 			resultJSON, marshalErr := json.Marshal(result)
 			if marshalErr != nil {
 				resultJSON = []byte(`{"ok":false,"error":"failed to encode tool result"}`)
@@ -754,6 +830,17 @@ func assistantDeveloperCapabilityRequired(userID int, capability string) (map[st
 func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[string]any {
 	actorUserID := assistantActorUserID(c)
 	name := strings.TrimSpace(call.Function.Name)
+	if c != nil {
+		if rawContext, exists := c.Get(assistantUserContextKey); exists {
+			if userContext, ok := rawContext.(assistantUserContext); ok && !assistantToolExecutionAllowedForContext(name, userContext) {
+				return map[string]any{
+					"ok":     false,
+					"status": "tool_not_allowed",
+					"error":  "this assistant action is not available for the current account state",
+				}
+			}
+		}
+	}
 	arguments := strings.TrimSpace(call.Function.Arguments)
 	if arguments == "" {
 		arguments = "{}"
@@ -1077,6 +1164,20 @@ func executeAssistantL1RecommendationTool(c *gin.Context, userID int, input map[
 	}
 	if len([]rune(recommendation)) < minDeveloperAccessRecommendationRunes || len([]rune(recommendation)) > maxDeveloperAccessDraftRunes {
 		return map[string]any{"ok": false, "status": "recommendation_invalid", "error": "AI recommendation must contain 20 to 2000 characters"}
+	}
+	// Make the review item durable before creating the short-lived confirmation
+	// flow. If this is the first L1 signal, the administrator can already see
+	// the user even when the browser closes or the confirmation is abandoned.
+	if _, queueErr := model.SubmitAssistantDeveloperAccessRequest(userID, statement); queueErr != nil {
+		common.SysError(fmt.Sprintf("failed to queue assistant L1 recommendation for user %d: %v", userID, queueErr))
+		writeAssistantL1QueueFailure(c, queueErr)
+		return map[string]any{
+			"ok":        false,
+			"status":    "queue_unavailable",
+			"code":      "ASSISTANT_L1_QUEUE_UNAVAILABLE",
+			"retryable": true,
+			"error":     "L1 request could not be queued; retry the same request",
+		}
 	}
 	payload, err := json.Marshal(assistantL1RecommendationDraft{
 		UserStatement:  statement,

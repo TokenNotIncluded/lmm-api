@@ -102,7 +102,10 @@ Before mutation, require:
 
 The production controller copy lives at
 `$HOME/backup/lmm-api/<verified-host>/<deployment-id>`. The off-host copy lives
-on ArchCzy under a fixed root or in explicitly configured object storage.
+on the ArchCzy host, reached through the case-sensitive SSH alias `archczy`,
+under a fixed root or in explicitly configured object storage. Verify that
+`ssh archczy` resolves to static hostname `archczy`; do not assume the display
+name `ArchCzy` is a configured SSH alias.
 
 Each copy contains `manifest.env`, `SHA256SUMS`, a nonempty application archive,
 frontend archive, configuration archive, and database backup. The manifest
@@ -132,7 +135,7 @@ Canonical roots are fixed:
   (resolved private state is below `/var/lib/private/lmm-api-go`);
 - production target backup: `/var/lib/lmm-api-go/deploy-backups/<deployment-id>`;
 - off-host copy: `/home/arch/.local/state/lmm-api-production-backups/<deployment-id>`
-  on `ArchCzy`.
+  on the ArchCzy host through SSH alias `archczy`.
 
 Only the exact workspace's `staging`, `tmp`, and cache children are disposable.
 After terminal state, retain its marker/status audit record and the three

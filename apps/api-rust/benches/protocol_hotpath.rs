@@ -137,14 +137,14 @@ fn calibrate(label: &str, bytes: usize, mut operation: impl FnMut() -> u64) {
         .checked_div(total_elapsed_nanos.max(1))
         .unwrap_or(0);
     let total_bytes = (bytes as u128).saturating_mul(TOTAL_ITERATIONS as u128);
-    let bytes_per_second = (bytes != 0)
-        .then(|| {
-            total_bytes
-                .checked_mul(1_000_000_000)
-                .and_then(|value| value.checked_div(total_elapsed_nanos.max(1)))
-                .unwrap_or(0)
-        })
-        .unwrap_or(0);
+    let bytes_per_second = if bytes == 0 {
+        0
+    } else {
+        total_bytes
+            .checked_mul(1_000_000_000)
+            .and_then(|value| value.checked_div(total_elapsed_nanos.max(1)))
+            .unwrap_or(0)
+    };
     eprintln!(
         "protocol_hotpath label={label} samples={SAMPLE_COUNT} iterations_per_sample={ITERATIONS_PER_SAMPLE} operations_per_second={operations_per_second} bytes_per_second={bytes_per_second} p50_nanos={p50_nanos} p95_nanos={p95_nanos} checksum={checksum}"
     );

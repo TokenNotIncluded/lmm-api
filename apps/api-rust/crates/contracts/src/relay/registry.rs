@@ -1139,6 +1139,8 @@ mod tests {
             .expect("native route");
         route.response_supported = false;
         route.response_converter_id = None;
+        route.raw_passthrough = false;
+        route.quality = Fidelity::Normalized;
         assert!(matches!(
             registry.validate_against_catalog(&runtime_catalog()),
             Err(

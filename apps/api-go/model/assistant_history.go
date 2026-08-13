@@ -312,6 +312,44 @@ func PrepareAssistantConversation(userID int, conversationID int64, firstMessage
 	return &conversation, nil
 }
 
+// FindRecentAssistantConversationForRetry finds a completed first-turn
+// conversation that a browser retry can safely resume.  The caller must only
+// use this for an explicit retry attempt; ordinary identical questions remain
+// independent conversations.  Matching is scoped to the owner, a short time
+// window, the redacted user message, and an existing assistant message so a
+// half-created conversation is never reused.
+func FindRecentAssistantConversationForRetry(userID int, firstMessage string, since time.Time) (*AssistantConversation, error) {
+	if userID <= 0 {
+		return nil, gorm.ErrInvalidData
+	}
+	firstMessage = redactAssistantHistoryBounded(firstMessage)
+	if strings.TrimSpace(firstMessage) == "" {
+		return nil, gorm.ErrInvalidData
+	}
+	if since.IsZero() {
+		since = time.Now().Add(-5 * time.Minute)
+	}
+
+	var conversation AssistantConversation
+	err := DB.Model(&AssistantConversation{}).
+		Joins("JOIN assistant_history_messages AS history ON history.conversation_id = assistant_conversations.id").
+		Where("assistant_conversations.user_id = ?", userID).
+		Where("assistant_conversations.archived_at = 0").
+		Where("assistant_conversations.updated_at >= ?", since.Unix()).
+		Where("history.role = ? AND history.content = ?", AssistantHistoryRoleUser, firstMessage).
+		Joins("JOIN assistant_history_messages AS assistant_history ON assistant_history.conversation_id = assistant_conversations.id").
+		Where("assistant_history.role = ?", AssistantHistoryRoleAssistant).
+		Order("assistant_conversations.updated_at DESC, assistant_conversations.id DESC").
+		First(&conversation).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &conversation, nil
+}
+
 func LoadAssistantConversationMessages(userID int, conversationID int64, limit int) ([]AssistantHistoryMessage, error) {
 	conversation, err := PrepareAssistantConversation(userID, conversationID, "")
 	if err != nil {
@@ -446,6 +484,47 @@ func RecordAssistantConversationTurn(userID int, conversationID int64, userConte
 	}
 	_, err := RecordAssistantConversationTurnForRequest(userID, conversationID, userContent, assistantContent)
 	return err
+}
+
+// RecordAssistantConversationTurnForRetry keeps a browser replay idempotent.
+// Ordinary repeated questions still use RecordAssistantConversationTurn and
+// remain visible as distinct turns.
+func RecordAssistantConversationTurnForRetry(userID int, conversationID int64, userContent, assistantContent string) error {
+	if userID <= 0 || conversationID <= 0 {
+		return gorm.ErrInvalidData
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var conversation AssistantConversation
+		if err := lockForUpdate(tx).Where("id = ? AND user_id = ?", conversationID, userID).First(&conversation).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrAssistantConversationNotFound
+			}
+			return err
+		}
+		var recent []AssistantHistoryMessage
+		if err := tx.Where("conversation_id = ?", conversation.Id).
+			Where("role IN ?", []string{AssistantHistoryRoleUser, AssistantHistoryRoleAssistant}).
+			Order("sequence DESC").Limit(2).Find(&recent).Error; err != nil {
+			return err
+		}
+		if len(recent) == 2 &&
+			recent[0].Role == AssistantHistoryRoleAssistant &&
+			recent[1].Role == AssistantHistoryRoleUser &&
+			recent[1].Content == redactAssistantHistoryBounded(userContent) {
+			return nil
+		}
+		if _, err := appendAssistantHistoryMessageTx(tx, conversation.Id, AssistantHistoryRoleUser, userContent); err != nil {
+			return err
+		}
+		if _, err := appendAssistantHistoryMessageTx(tx, conversation.Id, AssistantHistoryRoleAssistant, assistantContent); err != nil {
+			return err
+		}
+		now := common.GetTimestamp()
+		return tx.Model(&conversation).Updates(map[string]any{
+			"last_message_preview": assistantConversationTitle(assistantContent),
+			"updated_at":           now,
+		}).Error
+	})
 }
 
 func setAssistantConversationArchived(userID int, conversationID int64, archived bool) (*AssistantConversation, error) {

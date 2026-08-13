@@ -937,6 +937,23 @@ func TestAssistantAgentToolsExposeSafeAndConfirmationGatedActions(t *testing.T) 
 	assert.False(t, shortHandoff["ok"].(bool))
 }
 
+func TestAssistantToolExecutionRechecksServerSideAllowlist(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Set(assistantUserContextKey, assistantUserContext{
+		AccessLevel:          "L0",
+		InterlocutorAssessed: false,
+	})
+
+	result := executeAssistantTool(c, assistantOpenAIToolCall{
+		Function: assistantOpenAIToolCallFunction{
+			Name: "get_available_models",
+		},
+	})
+
+	assert.Equal(t, false, result["ok"])
+	assert.Equal(t, "tool_not_allowed", result["status"])
+}
+
 func TestAssistantAgentToolCatalogueMatchesAccessLevel(t *testing.T) {
 	l0 := assistantToolDefinitionsForContext(assistantUserContext{AccessLevel: "L0"})
 	l0Names := make(map[string]bool, len(l0))

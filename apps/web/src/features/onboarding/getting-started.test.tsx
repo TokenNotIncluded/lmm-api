@@ -59,6 +59,7 @@ const { useAuthStore } = await import('@/stores/auth-store')
 const { GettingStarted } = await import('./getting-started')
 
 const originalGet = api.get
+const originalPost = api.post
 const reactTestGlobals = globalThis as typeof globalThis & {
   IS_REACT_ACT_ENVIRONMENT?: boolean
 }
@@ -180,6 +181,7 @@ async function unmountPage(page: Awaited<ReturnType<typeof renderPage>>) {
 afterEach(() => {
   consumeQueuedAssistantRequest()
   api.get = originalGet
+  api.post = originalPost
   useAuthStore.getState().auth.reset('complete')
   window.localStorage.clear()
   window.sessionStorage.clear()
@@ -339,6 +341,34 @@ describe('getting started access boundaries', () => {
       true
     )
     assert.equal(page.container.querySelector('[role="progressbar"]'), null)
+    await unmountPage(page)
+  })
+
+  test('keeps a direct L1 application path visible without an AI recommendation', async () => {
+    const page = await renderPage(
+      false,
+      { data: { success: true, data: [] } },
+      null,
+      { id: 9904 }
+    )
+
+    assert.ok(
+      page.container.querySelector('[data-testid="l0-direct-access-request"]')
+    )
+    assert.ok(
+      page.container.querySelector(
+        '[data-testid="l0-direct-access-request-input"]'
+      )
+    )
+    const submit = page.container.querySelector<HTMLButtonElement>(
+      '[data-testid="l0-direct-access-request-submit"]'
+    )
+    assert.ok(submit)
+    assert.equal(submit.disabled, true)
+    assert.match(
+      page.container.textContent ?? '',
+      /without an AI recommendation/
+    )
     await unmountPage(page)
   })
 

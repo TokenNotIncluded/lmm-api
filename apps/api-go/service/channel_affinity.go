@@ -37,7 +37,12 @@ var (
 	channelAffinityUsageCacheStatsOnce  sync.Once
 	channelAffinityUsageCacheStatsCache *cachex.HybridCache[ChannelAffinityUsageCacheCounters]
 
-	channelAffinityRegexCache sync.Map // map[string]*regexp.Regexp
+	// Rules can be edited repeatedly by administrators. Keep compiled regexes
+	// bounded so old rule versions do not accumulate for the process lifetime.
+	channelAffinityRegexCache = hot.NewHotCache[string, *regexp.Regexp](hot.LRU, 512).
+					WithTTL(30 * time.Minute).
+					WithJanitor().
+					Build()
 )
 
 type channelAffinityMeta struct {
@@ -253,16 +258,16 @@ func matchAnyRegexCached(patterns []string, s string) bool {
 		if pattern == "" {
 			continue
 		}
-		re, ok := channelAffinityRegexCache.Load(pattern)
-		if !ok {
+		re, ok, _ := channelAffinityRegexCache.Get(pattern)
+		if !ok || re == nil {
 			compiled, err := regexp.Compile(pattern)
 			if err != nil {
 				continue
 			}
 			re = compiled
-			channelAffinityRegexCache.Store(pattern, re)
+			channelAffinityRegexCache.Set(pattern, re)
 		}
-		if re.(*regexp.Regexp).MatchString(s) {
+		if re.MatchString(s) {
 			return true
 		}
 	}

@@ -38,7 +38,7 @@ export type DeveloperAccessRequestAdmin = {
   user_id: number
   status: 'pending' | 'approved' | 'rejected'
   reason: string
-  source: 'assistant_recommendation' | 'legacy'
+  source: 'assistant_recommendation' | 'assistant_request' | 'legacy'
   ai_recommendation: string
   admin_user_id: number
   admin_note: string

@@ -1699,6 +1699,60 @@ describe('AssistantPanel', () => {
     rendered.queryClient.clear()
   })
 
+  test('keeps the direct L1 request path available when the AI request fails', async () => {
+    api.get = (async (url: string) => {
+      if (url === '/api/assistant/status') {
+        return {
+          data: {
+            success: true,
+            data: { ...assistantStatus, developer_access_granted: false },
+          },
+        }
+      }
+      if (url === '/api/user/developer-access/request') {
+        return { data: { success: true, data: null } }
+      }
+      throw new Error(`Unexpected GET ${url}`)
+    }) as typeof api.get
+    api.post = (async (url: string) => {
+      assert.equal(url, '/api/assistant/chat')
+      throw new Error('assistant offline')
+    }) as typeof api.post
+
+    const rendered = await renderPanel('onboarding')
+    try {
+      const textarea = document.querySelector<HTMLTextAreaElement>(
+        'textarea[placeholder="Write a short explanation of what you want to build or why you need L1 access."]'
+      )
+      assert.ok(textarea)
+      await setTextareaValue(textarea, 'I need L1 for a small integration.')
+
+      await act(async () => {
+        findButton('Send').click()
+        await flushEffects()
+      })
+      await act(async () =>
+        waitForCondition(
+          () =>
+            document.body.textContent?.includes(
+              'The AI assistant could not answer right now.'
+            ) === true,
+          'Assistant failure message did not render'
+        )
+      )
+
+      assert.ok(
+        document.querySelector(
+          'textarea[placeholder="Explain what you want to build and why you need L1 access."]'
+        )
+      )
+      assert.ok(findButton('Submit for administrator review'))
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
   test('renders assistant Markdown as safe structured content', async () => {
     api.get = (async (url: string) => {
       assert.equal(url, '/api/assistant/status')

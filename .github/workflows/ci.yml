@@ -3,20 +3,55 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.sha }}
+  cancel-in-progress: false
 
 env:
+  CI: 'true'
+  CARGO_BUILD_JOBS: '2'
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
   RUST_TOOLCHAIN: '1.88.0'
 
 jobs:
+  repository-contracts:
+    name: Workflow and resource-safety contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Go for actionlint
+        uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
+        with:
+          go-version-file: apps/api-go/go.mod
+          cache: false
+
+      - name: Lint workflow definitions
+        env:
+          GOWORK: 'off'
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color
+
+      - name: Validate the read-only resource observer
+        run: |
+          shellcheck \
+            .agents/skills/lmm-deploy-safely/scripts/resource-pressure-report.sh \
+            .agents/skills/lmm-deploy-safely/scripts/tests/test-resource-pressure-report.sh
+          bash .agents/skills/lmm-deploy-safely/scripts/tests/test-resource-pressure-report.sh
+
+      - name: Test release version and changelog tooling
+        run: node --test scripts/release.test.mjs
+
   web:
     name: Web checks, route manifest, and production build
     runs-on: ubuntu-latest
@@ -24,6 +59,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -69,29 +106,40 @@ jobs:
     name: Go default backend, relaykit, and static build
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      GOMAXPROCS: '2'
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
         with:
           go-version-file: apps/api-go/go.mod
           cache-dependency-path: |
             apps/api-go/go.sum
             apps/api-go/relaykit/go.sum
 
+      - name: Check formatting and static analysis
+        working-directory: apps/api-go
+        run: |
+          test -z "$(gofmt -l .)"
+          go vet ./...
+
       - name: Test default Go module
         working-directory: apps/api-go
-        run: go test ./...
+        run: go test -p 2 ./...
 
       - name: Test and build independent relaykit module
         working-directory: apps/api-go/relaykit
         env:
           GOWORK: 'off'
         run: |
-          go test ./...
-          go build ./...
+          go vet ./...
+          go test -p 2 ./...
+          go build -p 2 ./...
 
       - name: Build static Go production binary
         working-directory: apps/api-go
@@ -99,7 +147,7 @@ jobs:
           CGO_ENABLED: '0'
         run: |
           mkdir -p out
-          go build -trimpath -ldflags="-s -w" -o out/lmm-api-go .
+          go build -p 2 -trimpath -ldflags="-s -w" -o out/lmm-api-go .
           file out/lmm-api-go
           if ldd out/lmm-api-go 2>&1 | grep -qvE 'not a dynamic executable|statically linked'; then
             echo 'Go production binary is dynamically linked' >&2
@@ -107,12 +155,14 @@ jobs:
           fi
 
   rust-preview:
-    name: Rust preview health
+    name: Rust backend formatting, lint, and tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Install route coverage tooling
         run: |
@@ -124,12 +174,6 @@ jobs:
           rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component clippy,rustfmt
           rustup default "$RUST_TOOLCHAIN"
           rustc --version --verbose
-
-      - name: Report route ownership and parity without gating Go production
-        continue-on-error: true
-        run: |
-          bash apps/api-rust/tests/scripts/check-go-route-manifest.sh
-          echo 'Rust route ownership remains preview evidence and does not gate the Go release lane.' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Check formatting
         working-directory: apps/api-rust
@@ -144,15 +188,17 @@ jobs:
         run: cargo test --workspace --all-targets --all-features --locked
 
   route-coverage-contract:
-    name: Complete route coverage contract
+    name: Go and Rust route/behavior alignment gates
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Set up Go for route manifest checks
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
         with:
           go-version-file: apps/api-go/go.mod
           cache-dependency-path: apps/api-go/go.sum
@@ -190,12 +236,20 @@ jobs:
 
           run_check complete-route-coverage \
             bash apps/api-rust/tests/scripts/check-complete-route-coverage.sh
+          run_check go-route-manifest \
+            bash apps/api-rust/tests/scripts/check-go-route-manifest.sh
           run_check complete-route-coverage-tests \
             bash apps/api-rust/tests/scripts/test-check-complete-route-coverage.sh
           run_check fixture-contract \
             bash apps/api-rust/tests/behavior-oracle/tests/check-fixtures.sh
           run_check behavior-deviations \
             bash apps/api-rust/tests/scripts/check-behavior-deviations.sh
+          run_check behavior-deviations-tests \
+            bash apps/api-rust/tests/scripts/test-check-behavior-deviations.sh
+          run_check migration-plan \
+            bash apps/api-rust/tests/scripts/check-migration-plan.sh
+          run_check migration-plan-tests \
+            bash apps/api-rust/tests/scripts/test-check-migration-plan.sh
 
           {
             echo "route coverage contract status: $([[ $overall_status == 0 ]] && echo passed || echo failed)"
@@ -234,6 +288,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Validate all public AUR packages
         run: |

@@ -518,11 +518,13 @@ function AssistantPanelHeader(props: {
     return (
       <SheetHeader
         className={sideDrawerHeaderClassName(
-          'shrink-0 pr-12 pt-[max(0.75rem,env(safe-area-inset-top))]'
+          'min-w-0 shrink-0 pr-12 pt-[max(0.75rem,env(safe-area-inset-top))]'
         )}
       >
         <SheetTitle>{t('Service guide')}</SheetTitle>
-        <SheetDescription>{props.description}</SheetDescription>
+        <SheetDescription className='min-w-0 break-words'>
+          {props.description}
+        </SheetDescription>
         <Button
           type='button'
           variant='outline'
@@ -882,6 +884,18 @@ export function AssistantPanel(props: {
         setActiveTool(null)
         suggestedAction = undefined
       }
+      if (
+        accountAccessState === 'restricted' &&
+        !adminChange &&
+        reply.action?.type !== 'account_disable_request'
+      ) {
+        setActiveTool('activation')
+        suggestedAction ??= {
+          kind: 'tool',
+          label: t('Submit for administrator review'),
+          tool: 'activation',
+        }
+      }
       setEntries((current) => [
         ...current,
         {
@@ -894,6 +908,25 @@ export function AssistantPanel(props: {
       ])
       await queryClient.invalidateQueries({ queryKey: ['assistant-status'] })
     } catch {
+      const canSubmitWithoutAssistant = accountAccessState === 'restricted'
+      if (canSubmitWithoutAssistant) {
+        setRecommendationDraft(null)
+        setActiveTool('activation')
+      }
+      let errorAction: AssistantAction | undefined
+      if (canSubmitWithoutAssistant) {
+        errorAction = {
+          kind: 'tool',
+          label: t('Submit for administrator review'),
+          tool: 'activation',
+        }
+      } else if (developerAccessGranted) {
+        errorAction = {
+          kind: 'route',
+          label: t('Contact support'),
+          to: '/support',
+        }
+      }
       setEntries((current) => [
         ...current,
         {
@@ -904,13 +937,7 @@ export function AssistantPanel(props: {
           ),
           error: true,
           retry: { message, history },
-          action: developerAccessGranted
-            ? {
-                kind: 'route',
-                label: t('Contact support'),
-                to: '/support',
-              }
-            : undefined,
+          action: errorAction,
         },
       ])
     } finally {
@@ -1012,15 +1039,15 @@ export function AssistantPanel(props: {
         id='assistant-privacy-notice'
         className={
           privacyNoticeExpanded
-            ? 'm-3 mb-0 max-w-[calc(100%-1.5rem)] min-w-0'
-            : 'm-3 mb-0 max-w-[calc(100%-1.5rem)] min-w-0 py-1.5'
+            ? 'm-3 mb-0 max-w-[calc(100%-1.5rem)] min-w-0 overflow-hidden'
+            : 'm-3 mb-0 max-w-[calc(100%-1.5rem)] min-w-0 overflow-hidden py-1.5'
         }
         data-testid='assistant-privacy-notice'
         variant='default'
       >
         <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} aria-hidden='true' />
         <div className='min-w-0'>
-          <AlertTitle>
+          <AlertTitle className='min-w-0'>
             <button
               type='button'
               className='focus-visible:ring-ring/50 rounded-sm text-left font-medium outline-none focus-visible:ring-3'
@@ -1037,17 +1064,17 @@ export function AssistantPanel(props: {
             id='assistant-privacy-notice-description'
             className={privacyNoticeExpanded ? undefined : 'sr-only'}
           >
-            <p>
+            <p className='break-words'>
               {t(
                 'Your assistant conversations are not private. Authorized higher-access users may review them.'
               )}
             </p>
-            <p>
+            <p className='break-words'>
               {t(
                 'Do not send personal information, passwords, API keys, or credentials in chat. Site-issued credentials such as API keys are shown in a shielded private card and are kept out of the assistant context.'
               )}
             </p>
-            <p>
+            <p className='break-words'>
               {t(
                 'If you accidentally send supported sensitive data, the assistant safety filter may detect common email addresses, phone numbers, and API key formats and redact the message before this assistant request is sent. Pattern matching is not a guarantee.'
               )}
@@ -1056,8 +1083,8 @@ export function AssistantPanel(props: {
         </div>
       </Alert>
       {historyVisible ? (
-        <Conversation className='bg-muted/20 min-w-0'>
-          <ConversationContent className='flex min-h-full max-w-full min-w-0 flex-col gap-5 px-4 py-5 sm:px-6'>
+        <Conversation className='bg-muted/20 min-h-0 min-w-0 flex-1'>
+          <ConversationContent className='flex min-h-full max-w-full min-w-0 flex-col gap-5 overflow-x-hidden px-4 py-5 sm:px-6'>
             {historyView === 'list' ? (
               <AssistantHistory
                 active={panelVisible}
@@ -1086,8 +1113,8 @@ export function AssistantPanel(props: {
               }}
             />
           ) : null}
-          <Conversation className='bg-muted/20 min-w-0'>
-            <ConversationContent className='flex min-h-full max-w-full min-w-0 flex-col gap-5 px-4 py-5 sm:px-6'>
+          <Conversation className='bg-muted/20 min-h-0 min-w-0 flex-1'>
+            <ConversationContent className='flex min-h-full max-w-full min-w-0 flex-col gap-5 overflow-x-hidden px-4 py-5 sm:px-6'>
               {entries.length === 0 ? (
                 <div className='flex flex-1 flex-col gap-5'>
                   {accountAccessState === 'loading' ||
@@ -1138,7 +1165,7 @@ export function AssistantPanel(props: {
                       >
                         {entry.role === 'assistant' ? (
                           <Response
-                            className='max-w-full leading-7 break-words'
+                            className='max-w-full leading-7 break-words [&_pre]:max-w-full [&_pre]:overflow-x-auto'
                             final
                           >
                             {entry.content}
@@ -1306,7 +1333,7 @@ export function AssistantPanel(props: {
             <ConversationScrollButton />
           </Conversation>
 
-          <div className='bg-background min-w-0 shrink-0 pb-[max(0.75rem,env(safe-area-inset-bottom))]'>
+          <div className='bg-background min-w-0 shrink-0 overflow-hidden pb-[max(0.75rem,env(safe-area-inset-bottom))]'>
             <Separator className='bg-border/70' />
             <div className='px-3 py-3 sm:px-4'>
               <PromptInputProvider
@@ -1408,7 +1435,7 @@ export function AssistantPanel(props: {
       <SheetContent
         id='ai-assistant-panel'
         className={sideDrawerContentClassName(
-          'inset-0 !h-dvh !min-h-dvh !w-screen !max-w-none !min-w-0 rounded-none'
+          'inset-0 !h-dvh !max-h-dvh !min-h-0 !w-screen !max-w-none !min-w-0 rounded-none overscroll-contain'
         )}
       >
         {panelContent}

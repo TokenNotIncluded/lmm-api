@@ -122,7 +122,7 @@ every 30 seconds during a build or backup transfer:
 df -h /; df -i /
 free -h
 vmstat 1 5
-systemctl show lmm-api-go.service -p ActiveState -p SubState -p MainPID \
+systemctl show lmm-api.service -p ActiveState -p SubState -p MainPID \
   -p NRestarts -p MemoryCurrent -p MemoryHigh -p MemoryMax -p MemorySwapMax
 pg_isready
 /usr/bin/lmm-api-go request --base-url http://127.0.0.1:3000 \
@@ -139,6 +139,40 @@ error journal, and record disk/RAM/swap before confirming. Continue a
 read-only check at least every 15 minutes while a release is in its watchdog
 window, and at least hourly during normal operation. A failed check is an
 incident signal; do not hide it by clearing journals or restarting blindly.
+
+### Read-only ArchDmit pressure report
+
+For a repeatable, low-overhead point-in-time report, run
+[scripts/resource-pressure-report.sh](scripts/resource-pressure-report.sh) on
+the verified production host. It is intentionally not a service, timer, or
+repair command: it only reads `/proc`, `df`, `systemctl show`, and HTTP health
+responses. It reports `MemAvailable`, swap total/used/percentage and sampled
+change (`pswpin`/`pswpout` deltas), root filesystem total/used/free space,
+`lmm-api.service` memory/restart counters, and `/api/status` plus `/api/livez`.
+
+The report uses the ArchDmit profile of a 20 GiB root filesystem and 951 MiB
+RAM as explicit reference values, while separately applying the resource
+gates above. A profile-size mismatch is reported as a warning; the command
+never changes the host to make a metric pass. It exits `0` for green, `1` for
+warning, `3` for an expected-host mismatch, and `4` for stop-level pressure or
+a failed service/health gate. Invalid input or an unavailable required local
+probe exits `2`.
+
+Run it without copying files to production:
+
+```bash
+ssh ArchDmit 'bash -s -- --expected-host arch-dmit --format kv' \
+  < .agents/skills/lmm-deploy-safely/scripts/resource-pressure-report.sh
+```
+
+Use `--format json` for machine collection, or adjust the read-only sampling
+with `--samples 1..5` and `--interval 0..60`. Do not add a systemd timer for
+this entry point. Its offline fixture seam is `--proc-root`; the regression
+test is:
+
+```bash
+bash .agents/skills/lmm-deploy-safely/scripts/tests/test-resource-pressure-report.sh
+```
 
 The production package also owns the regional edge policy. Its Nginx templates
 and Go-rendered access error page are installed from
@@ -221,7 +255,8 @@ Create and verify the role-specific copies described in the safety contract:
 - test: target rollback snapshot and controller copy;
 - production: target rollback snapshot, controller copy under
   `$HOME/backup/lmm-api/<verified-host>/<deployment-id>`, and a verified
-  off-host archive on ArchCzy or explicitly configured object storage.
+  off-host archive on the ArchCzy host through the case-sensitive SSH alias
+  `archczy`, or explicitly configured object storage.
 
 Run [scripts/verify-backup-set.sh](scripts/verify-backup-set.sh). Do not mutate
 the target unless it succeeds. Encrypt every archive that can contain secrets
@@ -237,7 +272,7 @@ Use these exact, marker-owned paths; do not invent a per-run path under `/tmp`:
 | controller durable backup | `$HOME/backup/lmm-api/<verified-host>/<deployment-id>` | encrypted controller copy, `manifest.env`, `SHA256SUMS`; never delete active/latest-known-good |
 | production target workspace | `/var/lib/lmm-api-go/deploy-work/<deployment-id>` (resolves below `/var/lib/private/lmm-api-go`) | keep only marker/status after confirmation; staging is disposable |
 | production target backup | `/var/lib/lmm-api-go/deploy-backups/<deployment-id>` (resolves below `/var/lib/private/lmm-api-go`) | root-only, checksum-verified target snapshot; retain the configured latest-known-good set |
-| off-host backup | `/home/arch/.local/state/lmm-api-production-backups/<deployment-id>` on `ArchCzy` | encrypted controller/off-host archives; verify checksum after transfer |
+| off-host backup | `/home/arch/.local/state/lmm-api-production-backups/<deployment-id>` on the ArchCzy host (SSH alias `archczy`) | encrypted controller/off-host archives; verify checksum after transfer |
 
 The controller workspace is not a backup. Before removing it, prove the
 durable controller, target, and off-host copies exist, decrypt verification
@@ -261,7 +296,9 @@ database/cache.
 1. Record current UTC time, Git revision, remote `origin/main`, installed
    package/version, service PID, backend, PostgreSQL/Valkey identity, and the
    resource baseline. Verify SSH alias `ArchDmit` resolves to `arch-dmit` and
-   `ArchCzy` is the intended off-host.
+   the lowercase, case-sensitive SSH alias `archczy` resolves to the static
+   hostname `archczy` as the intended ArchCzy off-host. Do not use `ArchCzy`
+   as an SSH alias unless the local SSH configuration explicitly defines it.
 2. Require a clean source checkout whose HEAD equals `origin/main`. Create one
    marker-owned controller workspace and export all build caches into it.
 3. Build once, record artifact/package/frontend SHA-256, and run Go/frontend

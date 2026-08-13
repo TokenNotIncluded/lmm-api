@@ -502,6 +502,17 @@ for my $file (@source_files) {
             next;
         }
         my $path_expression = substr($clean, $opening + 1, $comma - $opening - 1);
+        my $expression = substr($clean, $comma + 1, $closing - $comma - 1);
+        my ($calls, $method_error) = method_calls($expression);
+        my $static_path_candidate =
+            $path_expression =~ /^\s*"(?:\\.|[^"\\])*"\s*$/s
+            || $path_expression =~ /^\s*[A-Za-z_][A-Za-z0-9_]*_PATH\s*$/s;
+        if (!$static_path_candidate && !$method_error && !@$calls) {
+            # Registry/catalog APIs also expose `.route(source, target)`.
+            # They are capability lookups, not Axum route declarations.
+            pos($clean) = $closing + 1;
+            next;
+        }
         my ($raw_path, $route_alias) = (undef, 0);
         if ($path_expression =~ /^\s*"((?:\\.|[^"\\])*)"\s*$/s) {
             $raw_path = $1;
@@ -533,8 +544,6 @@ for my $file (@source_files) {
             pos($clean) = $closing + 1;
             next;
         }
-        my $expression = substr($clean, $comma + 1, $closing - $comma - 1);
-        my ($calls, $method_error) = method_calls($expression);
         if ($method_error || !@$calls) {
             $failed |= fail("$file:$line: cannot statically parse route methods" . ($method_error ? ": $method_error" : ''));
             pos($clean) = $closing + 1;

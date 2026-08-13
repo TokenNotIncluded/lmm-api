@@ -6,9 +6,10 @@ import (
 	"hash/fnv"
 	"sort"
 	"strings"
-	"sync"
+	"time"
 
 	goahocorasick "github.com/anknown/ahocorasick"
+	"github.com/samber/hot"
 )
 
 func SundaySearch(text string, pattern string) bool {
@@ -70,7 +71,13 @@ func InitAc(dict []string) *goahocorasick.Machine {
 	return m
 }
 
-var acCache sync.Map
+// acCache is deliberately bounded because the sensitive-word dictionary can
+// change at runtime. A new dictionary hash must not retain every historical
+// Aho-Corasick machine for the lifetime of the process.
+var acCache = hot.NewHotCache[string, *goahocorasick.Machine](hot.LRU, 128).
+	WithTTL(30 * time.Minute).
+	WithJanitor().
+	Build()
 
 func acKey(dict []string) string {
 	if len(dict) == 0 {
@@ -100,20 +107,17 @@ func getOrBuildAC(dict []string) *goahocorasick.Machine {
 	if key == "" {
 		return nil
 	}
-	if v, ok := acCache.Load(key); ok {
-		if m, ok2 := v.(*goahocorasick.Machine); ok2 {
-			return m
-		}
+	if cached, ok, _ := acCache.Get(key); ok && cached != nil {
+		return cached
 	}
 	m := InitAc(dict)
 	if m == nil {
 		return nil
 	}
-	if actual, loaded := acCache.LoadOrStore(key, m); loaded {
-		if cached, ok := actual.(*goahocorasick.Machine); ok {
-			return cached
-		}
+	if cached, ok, _ := acCache.Get(key); ok && cached != nil {
+		return cached
 	}
+	acCache.Set(key, m)
 	return m
 }
 

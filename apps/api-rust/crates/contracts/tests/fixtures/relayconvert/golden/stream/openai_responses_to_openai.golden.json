@@ -59,7 +59,7 @@
       "id": "stream_fixed",
       "object": "chat.completion.chunk",
       "created": 0,
-      "model": "gpt-test",
+      "model": "stream-model",
       "system_fingerprint": null,
       "choices": [
         {

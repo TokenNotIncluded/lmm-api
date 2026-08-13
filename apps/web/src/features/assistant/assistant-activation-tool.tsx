@@ -38,6 +38,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
+import { Textarea } from '@/components/ui/textarea'
 import {
   getDeveloperAccessRequest,
   submitDeveloperAccessRequest,
@@ -69,6 +70,7 @@ export function AssistantActivationTool(props: {
   const [requestOverride, setRequestOverride] =
     useState<DeveloperAccessRequest | null>(null)
   const [loading, setLoading] = useState(false)
+  const [manualReason, setManualReason] = useState('')
 
   const requestQuery = useQuery({
     queryKey: ['assistant-developer-access-request'],
@@ -99,6 +101,29 @@ export function AssistantActivationTool(props: {
         reason: draft.user_statement,
         ai_recommendation: draft.recommendation,
         confirmation_token: draft.confirmation_token,
+        confirmed: true,
+      })
+      setRequestOverride(submitted)
+      props.onSubmitted?.(submitted)
+      toast.success(t('Unlock request submitted'))
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : t('Unable to submit unlock request')
+      )
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const submitWithoutAI = async () => {
+    const reason = manualReason.trim()
+    if (loading || props.recommendationDraft || reason.length < 5) return
+    setLoading(true)
+    try {
+      const submitted = await submitDeveloperAccessRequest({
+        reason,
         confirmed: true,
       })
       setRequestOverride(submitted)
@@ -177,7 +202,13 @@ export function AssistantActivationTool(props: {
                 {request.ai_recommendation}
               </p>
             </div>
-          ) : null}
+          ) : (
+            <p className='text-muted-foreground text-xs leading-5'>
+              {t(
+                'The request is already in the administrator queue. An AI recommendation is optional and may be added after you continue the conversation.'
+              )}
+            </p>
+          )}
           <AdministratorReply request={request} />
           <Button
             type='button'
@@ -258,7 +289,36 @@ export function AssistantActivationTool(props: {
                 : t('Confirm and send to administrator')}
             </Button>
           </div>
-        ) : null}
+        ) : (
+          <div className='grid gap-3'>
+            <Textarea
+              value={manualReason}
+              onChange={(event) => setManualReason(event.target.value)}
+              placeholder={t(
+                'Explain what you want to build and why you need L1 access.'
+              )}
+              maxLength={2000}
+              rows={4}
+              aria-label={t('L1 access request explanation')}
+              disabled={loading}
+            />
+            <p className='text-muted-foreground text-xs leading-5'>
+              {t(
+                'You can submit for administrator review without an AI recommendation. The recommendation only gives the reviewer more context; it never decides access.'
+              )}
+            </p>
+            <Button
+              type='button'
+              variant='outline'
+              onClick={() => void submitWithoutAI()}
+              disabled={loading || manualReason.trim().length < 5}
+            >
+              {loading
+                ? t('Submitting...')
+                : t('Submit for administrator review')}
+            </Button>
+          </div>
+        )}
       </CardContent>
     </Card>
   )

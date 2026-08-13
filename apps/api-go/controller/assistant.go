@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -27,6 +29,22 @@ const (
 const assistantIntentHeader = "X-LMM-Assistant-Intent"
 const assistantActorUserIDKey = "assistant_actor_user_id"
 const assistantClientActionKey = "assistant_client_action"
+const assistantAttemptHeader = "X-LMM-Assistant-Attempt"
+const assistantRetryConversationWindow = 5 * time.Minute
+
+func assistantRequestAttempt(c *gin.Context) int {
+	if c == nil {
+		return 1
+	}
+	attempt, err := strconv.Atoi(strings.TrimSpace(c.GetHeader(assistantAttemptHeader)))
+	if err != nil || attempt < 1 {
+		return 1
+	}
+	if attempt > 100 {
+		return 100
+	}
+	return attempt
+}
 
 var loadAssistantBillingUser = func() (*model.User, error) {
 	var user model.User
@@ -178,6 +196,16 @@ func writeAssistantError(c *gin.Context, status int, code string, err error) {
 	})
 }
 
+func writeAssistantL1QueueFailure(c *gin.Context, err error) {
+	if errors.Is(err, model.ErrDeveloperAccessRequestReasonTooShort) ||
+		errors.Is(err, model.ErrDeveloperAccessRequestNoteTooLong) {
+		writeAssistantError(c, http.StatusUnprocessableEntity, "ASSISTANT_L1_REQUEST_INVALID", err)
+		return
+	}
+	c.Header("Retry-After", "2")
+	writeAssistantError(c, http.StatusServiceUnavailable, "ASSISTANT_L1_QUEUE_UNAVAILABLE", errors.New("L1 request could not be queued; retry the same request"))
+}
+
 func normalizeAssistantConversation(input assistantChatInput) ([]assistantOpenAIMessage, string, error) {
 	if len(input.Messages) > assistantConversationMaxItems {
 		return nil, "", errAssistantConversationTooLong
@@ -261,8 +289,14 @@ func recordAssistantHistoryResponse(c *gin.Context, status int, body []byte) {
 	if strings.TrimSpace(content) == "" {
 		return
 	}
-	recordedConversationID, err := model.RecordAssistantConversationTurnForRequest(actorUserID, conversationID, latestMessage, content)
-	if err != nil {
+	recordedConversationID := conversationID
+	var recordErr error
+	if c.GetBool("assistant_history_replay") {
+		recordErr = model.RecordAssistantConversationTurnForRetry(actorUserID, conversationID, latestMessage, content)
+	} else {
+		recordedConversationID, recordErr = model.RecordAssistantConversationTurnForRequest(actorUserID, conversationID, latestMessage, content)
+	}
+	if recordErr != nil {
 		// History is a support feature, not a reason to drop a successful
 		// answer.  The failure is still observable to operators.
 		common.SysError(fmt.Sprintf("failed to record assistant conversation %d: %v", conversationID, err))
@@ -367,8 +401,24 @@ func PrepareAssistantRequest(c *gin.Context) {
 	}
 	actorUserID := c.GetInt("id")
 	if actorUserID > 0 {
-		if input.ConversationID > 0 {
-			conversationRecord, err := model.PrepareAssistantConversation(actorUserID, input.ConversationID, latestMessage)
+		resolvedConversationID := input.ConversationID
+		retryAttempt := assistantRequestAttempt(c) > 1
+		if resolvedConversationID == 0 && retryAttempt {
+			recentConversation, findErr := model.FindRecentAssistantConversationForRetry(
+				actorUserID,
+				latestMessage,
+				time.Now().Add(-assistantRetryConversationWindow),
+			)
+			if findErr != nil {
+				writeAssistantError(c, http.StatusInternalServerError, "ASSISTANT_HISTORY_UNAVAILABLE", errors.New("assistant conversation history is unavailable"))
+				return
+			}
+			if recentConversation != nil {
+				resolvedConversationID = recentConversation.Id
+			}
+		}
+		if resolvedConversationID > 0 {
+			conversationRecord, err := model.PrepareAssistantConversation(actorUserID, resolvedConversationID, latestMessage)
 			if err != nil {
 				if errors.Is(err, model.ErrAssistantConversationNotFound) {
 					writeAssistantError(c, http.StatusNotFound, "ASSISTANT_CONVERSATION_NOT_FOUND", errors.New("assistant conversation was not found"))
@@ -377,28 +427,40 @@ func PrepareAssistantRequest(c *gin.Context) {
 				}
 				return
 			}
-			history, historyErr := model.LoadAssistantConversationMessages(actorUserID, conversationRecord.Id, assistantConversationMaxItems-1)
-			if historyErr != nil {
-				writeAssistantError(c, http.StatusInternalServerError, "ASSISTANT_HISTORY_UNAVAILABLE", errors.New("assistant conversation history is unavailable"))
-				return
-			}
-			history = trimAssistantHistoryToRuneBudget(history, assistantConversationMaxRunes-utf8.RuneCountInString(latestMessage))
-			if len(history) > 0 {
-				conversation = make([]assistantOpenAIMessage, 0, len(history)+1)
-				for _, message := range history {
-					conversation = append(conversation, assistantOpenAIMessage{Role: message.Role, Content: message.Content})
+			if input.ConversationID > 0 {
+				history, historyErr := model.LoadAssistantConversationMessages(actorUserID, conversationRecord.Id, assistantConversationMaxItems-1)
+				if historyErr != nil {
+					writeAssistantError(c, http.StatusInternalServerError, "ASSISTANT_HISTORY_UNAVAILABLE", errors.New("assistant conversation history is unavailable"))
+					return
 				}
-				conversation = append(conversation, assistantOpenAIMessage{Role: "user", Content: latestMessage})
+				history = trimAssistantHistoryToRuneBudget(history, assistantConversationMaxRunes-utf8.RuneCountInString(latestMessage))
+				if len(history) > 0 {
+					conversation = make([]assistantOpenAIMessage, 0, len(history)+1)
+					for _, message := range history {
+						conversation = append(conversation, assistantOpenAIMessage{Role: message.Role, Content: message.Content})
+					}
+					conversation = append(conversation, assistantOpenAIMessage{Role: "user", Content: latestMessage})
+				}
 			}
 			c.Set("assistant_history_conversation_id", conversationRecord.Id)
 		}
 		c.Set("assistant_history_latest_message", latestMessage)
+		if retryAttempt && resolvedConversationID > 0 {
+			c.Set("assistant_history_replay", true)
+		}
 	}
 	userContext := assistantUserContextForRequest(actorUserID, latestMessage, conversation)
 	c.Set(assistantUserContextKey, userContext)
 	intent := model.ClassifyAssistantIntent(latestMessage)
 	c.Header(assistantIntentHeader, intent)
 	c.Set("assistant_conversation", conversation)
+	if assistantShouldQueueL1Request(userContext, latestMessage) {
+		if _, err := model.SubmitAssistantDeveloperAccessRequest(actorUserID, latestMessage); err != nil {
+			common.SysError(fmt.Sprintf("failed to queue assistant L1 request for user %d: %v", actorUserID, err))
+			writeAssistantL1QueueFailure(c, err)
+			return
+		}
+	}
 	// A first-turn question is an analytics event, not a model-call event. Keep
 	// it before both cache checks so repeated normalized cache hits are counted
 	// as questions while still returning before the billing/model middleware.
