@@ -14,7 +14,8 @@ use lmm_api_rs::{
 };
 use lmm_contracts::relay::{
     CanonicalStreamEvent, ConversionPlan, Fidelity, OpenAiChatRequest, OpenAiChatResponse,
-    OpenAiStreamSnapshot, Protocol, openai_chat_request_to_canonical,
+    OpenAiStreamSnapshot, Protocol, canonical_request_to_openai_chat,
+    canonical_request_to_openai_responses, openai_chat_request_to_canonical,
     openai_chat_response_to_canonical, openai_stream_to_canonical,
 };
 
@@ -728,6 +729,71 @@ fn request_feature_dimension_matrix_calibration() {
             }
         }
     }
+}
+
+#[test]
+#[ignore = "run explicitly as an offline calibration benchmark"]
+fn route_shape_conversion_calibration() {
+    // These are offline local conversion costs only. They do not exercise the
+    // production gateway route graph, HTTP transport, or provider runtime.
+    calibrate("route_one_hop", REQUEST_CORPUS.len(), || {
+        let request: OpenAiChatRequest =
+            serde_json::from_slice(black_box(REQUEST_CORPUS)).expect("route request corpus");
+        let canonical = black_box(
+            openai_chat_request_to_canonical(request).expect("one-hop request conversion"),
+        );
+        let canonical_bytes =
+            serde_json::to_vec(&canonical.value).expect("serialize one-hop canonical request");
+        (REQUEST_CORPUS.len() as u64).wrapping_add(canonical_bytes.len() as u64)
+    });
+
+    calibrate("route_old_two_hop", REQUEST_CORPUS.len(), || {
+        let request: OpenAiChatRequest =
+            serde_json::from_slice(black_box(REQUEST_CORPUS)).expect("route request corpus");
+        let canonical = black_box(
+            openai_chat_request_to_canonical(request).expect("old two-hop source conversion"),
+        );
+        let canonical_bytes =
+            serde_json::to_vec(&canonical.value).expect("serialize old two-hop canonical");
+        let chat = black_box(
+            canonical_request_to_openai_chat(canonical.value)
+                .expect("old two-hop canonical-to-chat conversion"),
+        );
+        let chat_bytes =
+            serde_json::to_vec(&chat.value).expect("serialize old two-hop chat wire");
+        let roundtrip = black_box(
+            openai_chat_request_to_canonical(
+                serde_json::from_slice(black_box(chat_bytes.as_slice()))
+                    .expect("parse old two-hop chat wire"),
+            )
+            .expect("old two-hop target conversion"),
+        );
+        let roundtrip_bytes =
+            serde_json::to_vec(&roundtrip.value).expect("serialize old two-hop target canonical");
+        (REQUEST_CORPUS.len() as u64)
+            .wrapping_add(canonical_bytes.len() as u64)
+            .wrapping_add(chat_bytes.len() as u64)
+            .wrapping_add(roundtrip_bytes.len() as u64)
+    });
+
+    calibrate("route_new_ir", REQUEST_CORPUS.len(), || {
+        let request: OpenAiChatRequest =
+            serde_json::from_slice(black_box(REQUEST_CORPUS)).expect("route request corpus");
+        let canonical = black_box(
+            openai_chat_request_to_canonical(request).expect("new-IR source conversion"),
+        );
+        let canonical_bytes =
+            serde_json::to_vec(&canonical.value).expect("serialize new-IR canonical request");
+        let responses = black_box(
+            canonical_request_to_openai_responses(canonical.value)
+                .expect("new-IR canonical-to-Responses conversion"),
+        );
+        let responses_bytes =
+            serde_json::to_vec(&responses.value).expect("serialize new-IR Responses wire");
+        (REQUEST_CORPUS.len() as u64)
+            .wrapping_add(canonical_bytes.len() as u64)
+            .wrapping_add(responses_bytes.len() as u64)
+    });
 }
 
 #[test]
