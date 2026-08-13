@@ -872,6 +872,15 @@ fn openai_stream_validator_reports_nested_function_unknown_path() {
             if detail.path == "events[0].choices[0].delta.tool_calls[0].function.futureFunctionField"
                 && detail.feature == "unknown_field"
     ));
+
+    let golden_json = serde_json::to_string(&snapshot).expect("snapshot serializes");
+    let golden_error = validate_golden(FixtureKind::Stream, Protocol::OpenAi, &golden_json)
+        .expect_err("OpenAI stream golden validation must use the checked validator");
+    assert!(matches!(
+        golden_error,
+        RelayConvertError::UnsupportedFeature(detail)
+            if detail.path == "events[0].choices[0].delta.tool_calls[0].function.futureFunctionField"
+    ));
 }
 
 #[test]

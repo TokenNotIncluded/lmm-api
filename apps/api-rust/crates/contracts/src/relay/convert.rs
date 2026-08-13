@@ -5297,6 +5297,7 @@ pub fn validate_golden(
         }
         (FixtureKind::Stream, Protocol::OpenAi) => {
             let value = serde_json::from_str::<OpenAiStreamSnapshot>(json)?;
+            validate_openai_stream_snapshot(&value)?;
             (value.events.len(), Some(wire_usage(&value.usage)))
         }
         (FixtureKind::Stream, Protocol::OpenAiResponses) => {
