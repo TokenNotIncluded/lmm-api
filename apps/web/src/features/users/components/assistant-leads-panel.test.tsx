@@ -105,7 +105,7 @@ afterEach(() => {
 after(() => domWindow.close())
 
 describe('AssistantLeadsPanel', () => {
-  test('shows pending and resolved queues and moves a resolved request', async () => {
+  test('prioritizes pending work and moves a completed task to history', async () => {
     let pending = [
       {
         id: 1,
@@ -237,41 +237,76 @@ describe('AssistantLeadsPanel', () => {
 
     assert.ok(requestedStatuses.includes('pending'))
     assert.ok(requestedStatuses.includes('resolved'))
+    assert.match(container.textContent ?? '', /Assistant support tasks/)
+    assert.match(container.textContent ?? '', /Pending work/)
+    assert.match(
+      container.textContent ?? '',
+      /1 support tasks waiting for review/
+    )
+    const rootPanel = container.querySelector(
+      '[data-testid="assistant-support-tasks"]'
+    )
+    const pendingWorkspace = container.querySelector(
+      '[data-testid="assistant-pending-workspace"]'
+    )
+    const secondaryWorkspace = container.querySelector(
+      '[data-testid="assistant-secondary-workspace"]'
+    )
+    const pendingTask = container.querySelector(
+      '[data-testid="assistant-pending-task-1"]'
+    )
+    assert.ok(rootPanel)
+    assert.ok(pendingWorkspace)
+    assert.ok(secondaryWorkspace)
+    assert.ok(pendingTask)
+    assert.ok(rootPanel.className.includes('min-w-0'))
+    assert.ok(rootPanel.className.includes('overflow-hidden'))
+    assert.ok(pendingTask.className.includes('min-w-0'))
+    assert.ok(pendingTask.className.includes('overflow-hidden'))
+    assert.ok(
+      Boolean(
+        pendingWorkspace.compareDocumentPosition(secondaryWorkspace) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+      )
+    )
+    assert.match(
+      container.textContent ?? '',
+      /Privacy-minimized request.*I need help configuring Claude Code\./s
+    )
+    assert.equal(
+      container
+        .querySelector('#assistant-support-note-1')
+        ?.getAttribute('aria-label'),
+      'Processing note'
+    )
+
+    await act(async () => {
+      findButton('Insights and AI cost').click()
+      await flushQueries()
+    })
     assert.match(container.textContent ?? '', /6 questions in 30 days/)
     assert.match(container.textContent ?? '', /4 profile signals in 30 days/)
     assert.match(container.textContent ?? '', /Guided buyer: 3/)
-    assert.match(container.textContent ?? '', /AI assistant.*Cost/)
+    assert.match(container.textContent ?? '', /AI usage and cost/)
     assert.match(container.textContent ?? '', /\$0\.003/)
     assert.match(container.textContent ?? '', /100,000 Remaining quota units/)
 
     await act(async () => {
-      findButton('Resolved').click()
+      findButton('Resolved history').click()
       await flushQueries()
-    })
-    assert.match(container.textContent ?? '', /resolved-user/)
-    assert.match(container.textContent ?? '', /Configuration confirmed\./)
-    assert.match(container.textContent ?? '', /Administrator resolution/)
-
-    await act(async () => {
-      findButton('Pending').click()
-      await flushQueries()
-      findButton('Mark resolved').click()
+      findButton('Complete task').click()
       await flushQueries()
     })
     await act(async () =>
       waitForCondition(
         () =>
-          container.textContent?.includes(
-            'No pending human-support requests.'
-          ) === true,
+          container.textContent?.includes('No pending support tasks.') === true,
         'Resolved request did not leave the pending queue'
       )
     )
 
-    await act(async () => {
-      findButton('Resolved').click()
-      await flushQueries()
-    })
+    assert.match(container.textContent ?? '', /resolved-user/)
+    assert.match(container.textContent ?? '', /Configuration confirmed\./)
     assert.match(container.textContent ?? '', /pending-user/)
     assert.match(
       container.textContent ?? '',
