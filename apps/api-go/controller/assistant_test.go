@@ -1862,3 +1862,24 @@ func TestAssistantCacheStoresOnlySuccessfulSingleTurnResponses(t *testing.T) {
 		{Role: "user", Content: "cache-key-test"},
 	}))
 }
+
+func TestAssistantPromptIsBuiltOncePerRequest(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	context := assistantUserContext{UserID: 7, AccessLevel: "L1"}
+	settings := setting.GetAssistantSettings()
+	settings.Persona = "first persona"
+
+	first := assistantPrompt(c, settings, context)
+	settings.Persona = "different persona"
+	second := assistantPrompt(c, settings, context)
+
+	assert.Equal(t, first, second)
+	assert.Contains(t, second, "first persona")
+	assert.NotContains(t, second, "different persona")
+	if allocations := testing.AllocsPerRun(1000, func() {
+		_ = assistantPrompt(c, settings, context)
+	}); allocations != 0 {
+		t.Fatalf("reused prompt allocations=%f, want 0", allocations)
+	}
+}

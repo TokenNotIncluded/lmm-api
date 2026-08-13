@@ -821,7 +821,7 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 
 	userContext := assistantUserContextFromGin(c)
 	messages := make([]assistantOpenAIMessage, 1, len(conversation)+1)
-	messages[0] = assistantOpenAIMessage{Role: "system", Content: buildAssistantSystemPrompt(settings, userContext)}
+	messages[0] = assistantOpenAIMessage{Role: "system", Content: assistantPrompt(c, settings, userContext)}
 	messages = append(messages, conversation...)
 	if assistantContextBytes(messages) > assistantAgentContextMaxBytes {
 		writeAssistantError(c, http.StatusRequestEntityTooLarge, "ASSISTANT_CONTEXT_TOO_LARGE", errors.New("assistant context exceeded its byte budget"))
