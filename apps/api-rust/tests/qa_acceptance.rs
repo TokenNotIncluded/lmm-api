@@ -27,9 +27,11 @@ use lmm_api_rs::{
         MAX_EVIDENCE_JSON_BYTES,
     },
     protocol_rollout::{
-        LocalConversionError, LocalConversionSummary, LocalRequest, ShadowDifference, ShadowRunner,
+        FlagConfig, LocalConversionError, LocalConversionSummary, LocalRequest,
+        ProtocolRolloutConfig, RolloutContext, ShadowDifference, ShadowRunner,
     },
-    protocol_runtime_registry::current_support_matrix,
+    protocol_route_gate::{RouteGateDecision, decide_route},
+    protocol_runtime_registry::{current_support_matrix, validated_current_registry},
     route_ownership::{
         DifferentialClass, MIN_REVIEW_CANARY_BASIS_POINTS, OwnershipBlocker, OwnershipDecision,
         OwnershipEvidence, OwnershipGate, RouteOwnershipScope,
@@ -37,7 +39,7 @@ use lmm_api_rs::{
 };
 use lmm_contracts::relay::{
     CacheUsage, CanonicalContent, ClaudeRequest, ClaudeResponse, ClaudeStreamSemanticEvent,
-    ClaudeStreamSnapshot, Envelope, Feature, FinishReason, FunctionData, GeminiRequest,
+    ClaudeStreamSnapshot, Direction, Envelope, Feature, FinishReason, FunctionData, GeminiRequest,
     GeminiResponse, GeminiStreamSnapshot, Item, ItemKind, JsonData, Loss, LossCode, Media,
     MediaKind, Money, OpaqueId, OpaqueIdProvenance, OpaqueProviderState, OpenAiChatRequest,
     OpenAiChatResponse, OpenAiResponsesRequest, OpenAiStreamSnapshot, Part, PartKind, Protocol,
@@ -49,7 +51,7 @@ use lmm_contracts::relay::{
     gemini_request_to_canonical_for_model, gemini_response_to_canonical_for_model,
     gemini_stream_to_canonical, openai_chat_request_to_canonical,
     openai_chat_response_to_canonical, openai_responses_request_to_canonical,
-    openai_responses_response_to_canonical, openai_stream_to_canonical,
+    openai_responses_response_to_canonical, openai_stream_to_canonical, protocols,
     responses_stream_to_canonical,
 };
 
@@ -799,6 +801,97 @@ fn malformed_differential_evidence_import_is_bounded_and_panic_free() {
             "differential evidence import panicked at case {case_index}"
         );
     }
+}
+
+#[test]
+fn route_gate_closed_evidence_and_rollout_flags_fail_closed() {
+    let registry = validated_current_registry().expect("current registry validates");
+    let default_config = ProtocolRolloutConfig::default();
+
+    for source in protocols() {
+        for target in protocols() {
+            if source == target {
+                continue;
+            }
+            for stream in [false, true] {
+                let scope = RouteOwnershipScope {
+                    source,
+                    target,
+                    stream,
+                };
+                let context = RolloutContext::new(
+                    "qa-route-gate-closed",
+                    source,
+                    target,
+                    "test-model",
+                    stream,
+                );
+                let evidence = OwnershipEvidence::closed(scope);
+                for direction in [Direction::Request, Direction::Response, Direction::Stream] {
+                    let decision =
+                        decide_route(&default_config, &context, &registry, direction, &evidence);
+                    assert!(
+                        matches!(decision, RouteGateDecision::Closed { .. }),
+                        "closed evidence admitted {source:?} -> {target:?}, stream={stream}, direction={direction:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    for protocol in protocols() {
+        let scope = RouteOwnershipScope {
+            source: protocol,
+            target: protocol,
+            stream: true,
+        };
+        let context = RolloutContext::new(
+            "qa-route-gate-native",
+            protocol,
+            protocol,
+            "test-model",
+            true,
+        );
+        let decision = decide_route(
+            &default_config,
+            &context,
+            &registry,
+            Direction::Stream,
+            &OwnershipEvidence::closed(scope),
+        );
+        assert!(
+            !matches!(decision, RouteGateDecision::CrossProtocol { .. }),
+            "same-protocol route selected cross-protocol conversion for {protocol:?}"
+        );
+        if let RouteGateDecision::NativeRaw { details } = decision {
+            assert_eq!(details.scope, scope);
+            assert!(
+                details
+                    .capability
+                    .as_ref()
+                    .is_some_and(|capability| capability.raw_passthrough)
+            );
+        }
+    }
+
+    let enabled = ProtocolRolloutConfig {
+        conversion_engine_v2: FlagConfig::enabled(10_000).expect("bounded full canary"),
+        ..default_config.clone()
+    };
+    let encoded = serde_json::to_string(&enabled).expect("rollout config serializes");
+    assert_eq!(
+        serde_json::from_str::<ProtocolRolloutConfig>(&encoded).expect("rollout config parses"),
+        enabled
+    );
+    let rolled_back = enabled.rolled_back();
+    assert!(rolled_back.rollback);
+    assert!(!rolled_back.conversion_engine_v2.enabled);
+    let rollback_encoded = serde_json::to_string(&rolled_back).expect("rollback serializes");
+    assert_eq!(
+        serde_json::from_str::<ProtocolRolloutConfig>(&rollback_encoded)
+            .expect("rollback config parses"),
+        rolled_back
+    );
 }
 
 #[test]
