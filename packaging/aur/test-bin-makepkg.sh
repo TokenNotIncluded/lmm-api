@@ -34,9 +34,10 @@ create_archive() {
 # temporary PKGBUILD a matching checksum array instead of weakening the real
 # package back to SKIP.
 pin_fixture_hashes() {
-  local pkgbuild=$1 source hash
-  shift
-  printf '\nsha256sums=(\n' >> "$pkgbuild"
+  local pkgbuild=$1 sums=$2 source hash
+  shift 2
+  [[ $sums =~ ^sha256sums(_[[:alnum:]_]+)?$ ]] || die "invalid checksum array: $sums"
+  printf '\n%s=(\n' "$sums" >> "$pkgbuild"
   for source in "$@"; do
     hash=$(sha256sum "$source")
     printf "  '%s'\n" "${hash%% *}" >> "$pkgbuild"
@@ -71,6 +72,10 @@ printf '<!doctype html>\n' > "$go_bundle/frontend-dist/index.html"
 cp "$SHARED/lmm-api.service" "$SHARED/lmm-api-go.env" "$go_bundle/"
 add_metadata "$go_bundle"
 create_archive "$go_work" "$go_artifact"
+pin_fixture_hashes "$go_work/PKGBUILD" sha256sums_x86_64 \
+  "$go_work/${go_artifact}.tar.gz" \
+  "$go_work/${go_artifact}.tar.gz.sha256" \
+  "$go_work/${go_artifact}.tar.gz.sigstore.json"
 build_package lmm-api-go-bin \
   usr/bin/lmm-api-go \
   usr/bin/lmm-api \
@@ -96,7 +101,7 @@ tar -czf "$web_work/${web_artifact}.tar.gz" -C "$web_work/stage" \
   LICENSE NOTICE THIRD-PARTY-LICENSES.md REVISION
 (cd "$web_work" && sha256sum "${web_artifact}.tar.gz" >"${web_artifact}.tar.gz.sha256")
 printf '{}\n' >"$web_work/${web_artifact}.tar.gz.sigstore.json"
-pin_fixture_hashes "$web_work/PKGBUILD" \
+pin_fixture_hashes "$web_work/PKGBUILD" sha256sums \
   "$web_work/${web_artifact}.tar.gz" \
   "$web_work/${web_artifact}.tar.gz.sha256" \
   "$web_work/${web_artifact}.tar.gz.sigstore.json"
@@ -121,6 +126,10 @@ for binary in lmm-api-rs lmm-db-migrate; do
 done
 add_metadata "$rs_bundle"
 create_archive "$rs_work" "$rs_artifact"
+pin_fixture_hashes "$rs_work/PKGBUILD" sha256sums \
+  "$rs_work/${rs_artifact}.tar.gz" \
+  "$rs_work/${rs_artifact}.tar.gz.sha256" \
+  "$rs_work/${rs_artifact}.tar.gz.sigstore.json"
 build_package lmm-api-rs-bin usr/bin/lmm-api-rs usr/bin/lmm-db-migrate
 
 printf '%s\n' 'prebuilt direct-backend AUR packages built with makepkg'
