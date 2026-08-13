@@ -25,6 +25,11 @@ import { useAuthUserRefresh } from '@/features/onboarding'
 import { useStatus } from '@/hooks/use-status'
 import { isConsoleActivated } from '@/lib/console-activation'
 import { isLocalPreview } from '@/lib/local-preview'
+import {
+  getDefaultWaffoPancakeCheckoutRegion,
+  getWaffoPancakeCheckoutLanguage,
+  type WaffoPancakeCheckoutRegion,
+} from '@/lib/waffo-pancake-checkout'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { AffiliateRewardsCard } from './components/affiliate-rewards-card'
@@ -68,7 +73,7 @@ const PAYMENT_REFRESH_INTERVAL_MS = 3_000
 const PAYMENT_REFRESH_DEADLINE_MS = 2 * 60 * 1_000
 
 export function Wallet(props: WalletProps) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const authUser = useAuthStore((state) => state.auth.user)
   const { refreshUser } = useAuthUserRefresh()
   const user = authUser as UserWalletData | null
@@ -91,6 +96,8 @@ export function Wallet(props: WalletProps) {
   const [selectedCreemProduct, setSelectedCreemProduct] =
     useState<CreemProduct | null>(null)
   const [showSubscriptionPanel, setShowSubscriptionPanel] = useState(true)
+  const [waffoPancakeCheckoutRegionOverride, setWaffoPancakeCheckoutRegion] =
+    useState<WaffoPancakeCheckoutRegion | null>(null)
   const [pendingCheckoutDeadline, setPendingCheckoutDeadline] = useState<
     number | null
   >(null)
@@ -124,6 +131,19 @@ export function Wallet(props: WalletProps) {
   const { processing: waffoProcessing, processWaffoPayment } = useWaffoPayment()
   const { processing: pancakeProcessing, processWaffoPancakePayment } =
     useWaffoPancakePayment()
+  const interfaceLanguage = i18n.resolvedLanguage || i18n.language
+  const waffoPancakeCheckoutRegion =
+    waffoPancakeCheckoutRegionOverride ??
+    getDefaultWaffoPancakeCheckoutRegion(interfaceLanguage)
+  const waffoPancakeCheckoutLanguage =
+    getWaffoPancakeCheckoutLanguage(interfaceLanguage)
+
+  const handleWaffoPancakeCheckoutRegionChange = useCallback(
+    (region: WaffoPancakeCheckoutRegion) => {
+      setWaffoPancakeCheckoutRegion(region)
+    },
+    []
+  )
 
   const refreshWalletUser = useCallback(async () => {
     await refreshUser()
@@ -285,6 +305,10 @@ export function Wallet(props: WalletProps) {
         regular: processPayment,
         waffo: processWaffoPayment,
         waffoPancake: processWaffoPancakePayment,
+      },
+      {
+        checkout_region: waffoPancakeCheckoutRegion,
+        checkout_language: waffoPancakeCheckoutLanguage,
       }
     )
 
@@ -437,6 +461,10 @@ export function Wallet(props: WalletProps) {
                   onOpenBilling={() => setBillingDialogOpen(true)}
                   onCreemProductSelect={handleCreemProductSelect}
                   onWaffoMethodSelect={handleWaffoMethodSelect}
+                  waffoPancakeCheckoutRegion={waffoPancakeCheckoutRegion}
+                  onWaffoPancakeCheckoutRegionChange={
+                    handleWaffoPancakeCheckoutRegionChange
+                  }
                   neutralMode={!developerAccessGranted}
                 />
               </div>

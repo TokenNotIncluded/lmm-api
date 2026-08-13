@@ -16,6 +16,51 @@ type WaffoPancakePriceSnapshot struct {
 	TaxCategory string
 }
 
+// WaffoPancake checkout regions are deliberately a closed set.  The Waffo
+// API has no `region` request field: the China market is selected by sending a
+// fixed CN billing detail, while global checkout leaves billingDetail omitted.
+type WaffoPancakeCheckoutRegion string
+
+const (
+	WaffoPancakeCheckoutRegionGlobal WaffoPancakeCheckoutRegion = "global"
+	WaffoPancakeCheckoutRegionChina  WaffoPancakeCheckoutRegion = "china"
+)
+
+// waffoPancakeCheckoutLanguages is the allow-list accepted by Waffo's
+// checkout endpoint.  Keep this list in sync with the provider's BCP 47
+// enum, rather than forwarding an arbitrary browser language tag.
+var waffoPancakeCheckoutLanguages = map[string]struct{}{
+	"en":         {},
+	"pt-BR":      {},
+	"es-MX":      {},
+	"id-ID":      {},
+	"vi-VN":      {},
+	"ru-RU":      {},
+	"en-KE":      {},
+	"es-PE":      {},
+	"es-CO":      {},
+	"es-CL":      {},
+	"zh-Hant-TW": {},
+	"zh-Hant-HK": {},
+	"th-TH":      {},
+	"ja-JP":      {},
+	"en-NG":      {},
+	"ko-KR":      {},
+	"en-HK":      {},
+	"zh-Hans-HK": {},
+	"pl-PL":      {},
+	"tr-TR":      {},
+	"zh-Hans":    {},
+	"ms-MY":      {},
+}
+
+var waffoPancakeChineseCheckoutLanguages = map[string]struct{}{
+	"zh-Hans":    {},
+	"zh-Hant-TW": {},
+	"zh-Hant-HK": {},
+	"zh-Hans-HK": {},
+}
+
 // WaffoPancakeCreateSessionParams is the input to CreateWaffoPancakeCheckoutSession.
 // BuyerIdentity must be stable per user (see WaffoPancakeBuyerIdentityFromUserID).
 // OrderMerchantExternalID = our trade_no; Pancake echoes it back in webhooks.
@@ -26,6 +71,11 @@ type WaffoPancakeCreateSessionParams struct {
 	BuyerEmail              string
 	ExpiresInSeconds        *int
 	OrderMerchantExternalID string
+	// CheckoutRegion is the application-level china/global selector. It is
+	// translated to billingDetail by the service; Waffo has no region field.
+	CheckoutRegion string
+	// CheckoutLanguage is validated against Waffo's supported BCP 47 enum.
+	CheckoutLanguage string
 }
 
 // WaffoPancakeCheckoutSession is the response of CreateWaffoPancakeCheckoutSession.
@@ -93,6 +143,90 @@ func newWaffoPancakeClientFromCreds(merchantID, privateKey string) (*pancake.Cli
 	})
 }
 
+// NormalizeWaffoPancakeCheckoutRegion accepts only the two regions exposed by
+// this application. Empty and invalid values intentionally fall back to the
+// unrestricted global checkout; callers that need language-based defaulting
+// should use ResolveWaffoPancakeCheckoutRegion.
+func NormalizeWaffoPancakeCheckoutRegion(region string) WaffoPancakeCheckoutRegion {
+	switch strings.TrimSpace(region) {
+	case string(WaffoPancakeCheckoutRegionChina):
+		return WaffoPancakeCheckoutRegionChina
+	case string(WaffoPancakeCheckoutRegionGlobal), "":
+		return WaffoPancakeCheckoutRegionGlobal
+	default:
+		return WaffoPancakeCheckoutRegionGlobal
+	}
+}
+
+// ResolveWaffoPancakeCheckoutRegion applies the application defaulting rule:
+// an omitted region follows one of the supported Chinese checkout languages,
+// while an omitted region with any other (or no) language is global. Explicit
+// values always win, and an unrecognised region is never allowed to select CN.
+func ResolveWaffoPancakeCheckoutRegion(region, language string) WaffoPancakeCheckoutRegion {
+	switch strings.TrimSpace(region) {
+	case string(WaffoPancakeCheckoutRegionChina):
+		return WaffoPancakeCheckoutRegionChina
+	case string(WaffoPancakeCheckoutRegionGlobal):
+		return WaffoPancakeCheckoutRegionGlobal
+	case "":
+		if language = NormalizeWaffoPancakeCheckoutLanguage(language); language != "" {
+			if _, ok := waffoPancakeChineseCheckoutLanguages[language]; ok {
+				return WaffoPancakeCheckoutRegionChina
+			}
+		}
+		return WaffoPancakeCheckoutRegionGlobal
+	default:
+		return WaffoPancakeCheckoutRegionGlobal
+	}
+}
+
+// NormalizeWaffoPancakeCheckoutLanguage returns a supported BCP 47 language
+// tag.  Invalid and empty values are omitted so Waffo can infer its default,
+// preserving compatibility with clients that predate checkout_language.
+func NormalizeWaffoPancakeCheckoutLanguage(language string) string {
+	language = strings.TrimSpace(language)
+	if _, ok := waffoPancakeCheckoutLanguages[language]; !ok {
+		return ""
+	}
+	return language
+}
+
+// buildWaffoPancakeSDKCheckoutParams is kept separate from the network call
+// so the region/language security boundary can be tested without credentials.
+func buildWaffoPancakeSDKCheckoutParams(params *WaffoPancakeCreateSessionParams) (pancake.AuthenticatedCheckoutParams, error) {
+	if params == nil {
+		return pancake.AuthenticatedCheckoutParams{}, fmt.Errorf("missing checkout params")
+	}
+
+	sdkParams := pancake.AuthenticatedCheckoutParams{
+		CreateCheckoutSessionParams: pancake.CreateCheckoutSessionParams{
+			ProductID:               params.ProductID,
+			Currency:                "USD",
+			BuyerEmail:              optionalString(params.BuyerEmail),
+			ExpiresInSeconds:        params.ExpiresInSeconds,
+			OrderMerchantExternalID: optionalString(params.OrderMerchantExternalID),
+		},
+		BuyerIdentity: params.BuyerIdentity,
+	}
+	if params.PriceSnapshot != nil {
+		sdkParams.PriceSnapshot = &pancake.PriceInfo{
+			Amount:      params.PriceSnapshot.Amount,
+			TaxCategory: pancake.TaxCategory(params.PriceSnapshot.TaxCategory),
+		}
+	}
+	if ResolveWaffoPancakeCheckoutRegion(params.CheckoutRegion, params.CheckoutLanguage) == WaffoPancakeCheckoutRegionChina {
+		sdkParams.BillingDetail = &pancake.BillingDetail{
+			Country:    "CN",
+			IsBusiness: false,
+		}
+	}
+	if language := NormalizeWaffoPancakeCheckoutLanguage(params.CheckoutLanguage); language != "" {
+		checkoutLanguage := pancake.CashierLanguage(language)
+		sdkParams.Language = &checkoutLanguage
+	}
+	return sdkParams, nil
+}
+
 // CreateWaffoPancakeCheckoutSession creates an Authenticated-mode checkout
 // session: the order is bound to BuyerIdentity (stable per user) so it stays
 // attributable even if the buyer edits the email on Waffo's checkout form.
@@ -111,21 +245,9 @@ func CreateWaffoPancakeCheckoutSession(ctx context.Context, params *WaffoPancake
 		return nil, fmt.Errorf("build Waffo Pancake client: %w", err)
 	}
 
-	sdkParams := pancake.AuthenticatedCheckoutParams{
-		CreateCheckoutSessionParams: pancake.CreateCheckoutSessionParams{
-			ProductID:               params.ProductID,
-			Currency:                "USD",
-			BuyerEmail:              optionalString(params.BuyerEmail),
-			ExpiresInSeconds:        params.ExpiresInSeconds,
-			OrderMerchantExternalID: optionalString(params.OrderMerchantExternalID),
-		},
-		BuyerIdentity: params.BuyerIdentity,
-	}
-	if params.PriceSnapshot != nil {
-		sdkParams.PriceSnapshot = &pancake.PriceInfo{
-			Amount:      params.PriceSnapshot.Amount,
-			TaxCategory: pancake.TaxCategory(params.PriceSnapshot.TaxCategory),
-		}
+	sdkParams, err := buildWaffoPancakeSDKCheckoutParams(params)
+	if err != nil {
+		return nil, err
 	}
 
 	session, err := client.Checkout.Authenticated.Create(ctx, sdkParams)

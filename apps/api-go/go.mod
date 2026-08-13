@@ -62,7 +62,7 @@ require (
 )
 
 require (
-	github.com/waffo-com/waffo-pancake-sdk-go v0.3.1
+	github.com/waffo-com/waffo-pancake-sdk-go v0.9.0
 	gorm.io/driver/clickhouse v0.6.0
 )
 

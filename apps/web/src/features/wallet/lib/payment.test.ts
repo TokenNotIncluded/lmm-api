@@ -289,6 +289,33 @@ describe('payment dispatch', () => {
     assert.equal(success, false)
     assert.equal(called, false)
   })
+
+  test('passes Waffo Pancake checkout preferences only to the Pancake processor', async () => {
+    let received: unknown = null
+    const success = await dispatchSelectedPayment(
+      { name: 'Waffo Pancake', type: PAYMENT_TYPES.WAFFO_PANCAKE },
+      120,
+      null,
+      {
+        regular: async () => false,
+        waffo: async () => false,
+        waffoPancake: async (_amount, options) => {
+          received = options
+          return true
+        },
+      },
+      {
+        checkout_region: 'china',
+        checkout_language: 'zh-Hans',
+      }
+    )
+
+    assert.equal(success, true)
+    assert.deepEqual(received, {
+      checkout_region: 'china',
+      checkout_language: 'zh-Hans',
+    })
+  })
 })
 
 describe('payment checkout navigation', () => {
