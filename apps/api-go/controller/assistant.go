@@ -522,26 +522,30 @@ func AssistantChat(c *gin.Context) {
 }
 
 func GetAssistantStatus(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
 	settings := setting.GetAssistantSettings()
 	userID := c.GetInt("id")
-	developerAccessGranted := false
-	role := 0
-	isAdmin := false
-	isRoot := false
-	accessLevel := "L0"
-	trustLevel := model.TrustLevelMinUser
-	if user, userErr := model.GetUserCache(userID); userErr == nil {
-		role = user.Role
-		isAdmin = user.Role >= common.RoleAdminUser
-		isRoot = user.Role >= common.RoleRootUser
-		if trust, trustErr := model.GetTrustLevelInfoForUserBase(user); trustErr == nil {
-			trustLevel = trust.Level
-			accessLevel = trustLevelLabel(trust.Level)
-		}
-		if access, accessErr := model.GetDeveloperAccessStateForUserBase(user); accessErr == nil {
-			developerAccessGranted = access.Granted
-		}
+	user, err := model.GetUserCache(userID)
+	if err != nil {
+		writeAssistantError(c, http.StatusServiceUnavailable, "ASSISTANT_PERMISSION_STATE_UNAVAILABLE", errors.New("assistant permission state unavailable"))
+		return
 	}
+	trust, err := model.GetTrustLevelInfoForUserBase(user)
+	if err != nil {
+		writeAssistantError(c, http.StatusServiceUnavailable, "ASSISTANT_PERMISSION_STATE_UNAVAILABLE", errors.New("assistant permission state unavailable"))
+		return
+	}
+	access, err := model.GetDeveloperAccessStateForUserBase(user)
+	if err != nil {
+		writeAssistantError(c, http.StatusServiceUnavailable, "ASSISTANT_PERMISSION_STATE_UNAVAILABLE", errors.New("assistant permission state unavailable"))
+		return
+	}
+	role := user.Role
+	isAdmin := user.Role >= common.RoleAdminUser
+	isRoot := user.Role >= common.RoleRootUser
+	trustLevel := trust.Level
+	accessLevel := trustLevelLabel(trust.Level)
+	developerAccessGranted := access.Granted
 	common.ApiSuccess(c, gin.H{
 		"enabled": settings.Enabled,
 		"model":   settings.Model,
