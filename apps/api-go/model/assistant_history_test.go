@@ -84,6 +84,42 @@ func TestAssistantHistoryRedactsBeforePersistenceAndRestrictsCrossAccountReadsTo
 	assert.ErrorIs(t, err, ErrAssistantHistoryForbidden)
 }
 
+func TestAssistantHistoryRoleLatticeAndVisibleConversationCounts(t *testing.T) {
+	l0, _, _, admin := setupAssistantHistoryTestDB(t)
+	secondAdmin := &User{Username: "history-admin-peer", AffCode: "history-admin-peer-aff", Password: "password", Role: common.RoleAdminUser, Status: common.UserStatusEnabled}
+	root := &User{Username: "history-root", AffCode: "history-root-aff", Password: "password", Role: common.RoleRootUser, Status: common.UserStatusEnabled}
+	require.NoError(t, DB.Create(secondAdmin).Error)
+	require.NoError(t, DB.Create(root).Error)
+
+	conversationID, err := RecordAssistantConversationTurnForRequest(l0.Id, 0, "ordinary question", "ordinary answer")
+	require.NoError(t, err)
+	adminConversationID, err := RecordAssistantConversationTurnForRequest(secondAdmin.Id, 0, "admin question", "admin answer")
+	require.NoError(t, err)
+	_, err = PrepareAssistantConversation(l0.Id, 0, "empty failed request")
+	require.NoError(t, err)
+
+	_, _, err = GetAssistantConversationHistory(admin.Id, conversationID, 100)
+	require.NoError(t, err)
+	_, _, err = GetAssistantConversationHistory(admin.Id, adminConversationID, 100)
+	assert.ErrorIs(t, err, ErrAssistantHistoryForbidden)
+
+	adminRows := []*User{l0, admin, secondAdmin, root}
+	require.NoError(t, PopulateAssistantConversationCounts(adminRows, admin.Id, admin.Role))
+	require.NotNil(t, l0.AssistantConversationCount)
+	assert.Equal(t, int64(1), *l0.AssistantConversationCount)
+	require.NotNil(t, admin.AssistantConversationCount)
+	assert.Zero(t, *admin.AssistantConversationCount)
+	assert.Nil(t, secondAdmin.AssistantConversationCount)
+	assert.Nil(t, root.AssistantConversationCount)
+
+	rootRows := []*User{l0, admin, secondAdmin, root}
+	require.NoError(t, PopulateAssistantConversationCounts(rootRows, root.Id, root.Role))
+	require.NotNil(t, secondAdmin.AssistantConversationCount)
+	assert.Equal(t, int64(1), *secondAdmin.AssistantConversationCount)
+	require.NotNil(t, root.AssistantConversationCount)
+	assert.Zero(t, *root.AssistantConversationCount)
+}
+
 func TestAssistantHistoryConversationContinuationRejectsForeignOwner(t *testing.T) {
 	l0, l1, _, _ := setupAssistantHistoryTestDB(t)
 	conversation, err := PrepareAssistantConversation(l0.Id, 0, "private support request")

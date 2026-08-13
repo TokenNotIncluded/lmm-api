@@ -26,6 +26,7 @@ import {
   Key,
   LayoutDashboard,
   LifeBuoy,
+  ListChecks,
   ListTodo,
   Medal,
   MessageSquare,
@@ -179,6 +180,11 @@ export function useSidebarData(): SidebarData {
             title: t('Models'),
             url: '/models/metadata',
             icon: Box,
+          },
+          {
+            title: t('To-dos'),
+            url: '/todos',
+            icon: ListChecks,
           },
           {
             title: t('Users'),

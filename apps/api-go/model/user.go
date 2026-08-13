@@ -118,6 +118,7 @@ type User struct {
 	AdminDisposableEmail          bool                       `json:"disposable_email,omitempty" gorm:"-:all"`
 	AdminLinuxDOGamificationScore *float64                   `json:"linux_do_gamification_score,omitempty" gorm:"-:all"`
 	AdminLinuxDOScoreUpdatedAt    int64                      `json:"linux_do_score_updated_at,omitempty" gorm:"-:all"`
+	AssistantConversationCount    *int64                     `json:"assistant_conversation_count,omitempty" gorm:"-:all"`
 	ConsoleActivatedAt            int64                      `json:"console_activated_at" gorm:"type:bigint;not null;default:0;column:console_activated_at"`
 	AuthVersion                   int64                      `json:"-" gorm:"type:bigint;not null;default:1;column:auth_version"`
 	AdminPermissions              map[string]map[string]bool `json:"admin_permissions,omitempty" gorm:"-:all"`

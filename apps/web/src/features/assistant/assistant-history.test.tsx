@@ -319,7 +319,7 @@ describe('AssistantHistory archive controls', () => {
     }
   })
 
-  test('shows the audit scope to a higher-trust L1 user', async () => {
+  test('does not show the audit scope to a higher-trust ordinary user', async () => {
     setUser(1, 1)
     api.get = (async () => ({
       data: {
@@ -330,7 +330,12 @@ describe('AssistantHistory archive controls', () => {
 
     const rendered = await renderHistory()
     try {
-      assert.ok(findButton('User audit'))
+      assert.equal(
+        [...rendered.container.querySelectorAll('button')].some((button) =>
+          button.textContent?.includes('User audit')
+        ),
+        false
+      )
     } finally {
       await unmount(rendered)
     }

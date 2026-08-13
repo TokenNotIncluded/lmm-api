@@ -615,6 +615,54 @@ func ListAssistantConversations(viewerUserID, ownerUserID int, limit int, archiv
 	return views, nil
 }
 
+// PopulateAssistantConversationCounts adds visible transcript counts to user
+// management rows. Ordinary users may only receive their own count; an
+// administrator receives counts only for accounts with a strictly lower role.
+// Empty conversation shells are excluded to match the history list.
+func PopulateAssistantConversationCounts(users []*User, viewerUserID, viewerRole int) error {
+	authorizedUserIDs := make([]int, 0, len(users))
+	usersByID := make(map[int]*User, len(users))
+	for _, user := range users {
+		if user == nil {
+			continue
+		}
+		canView := user.Id == viewerUserID ||
+			(viewerRole >= common.RoleAdminUser && viewerRole > user.Role)
+		if !canView {
+			user.AssistantConversationCount = nil
+			continue
+		}
+		count := int64(0)
+		user.AssistantConversationCount = &count
+		authorizedUserIDs = append(authorizedUserIDs, user.Id)
+		usersByID[user.Id] = user
+	}
+	if len(authorizedUserIDs) == 0 {
+		return nil
+	}
+
+	type conversationCount struct {
+		UserID int   `gorm:"column:user_id"`
+		Count  int64 `gorm:"column:count"`
+	}
+	var counts []conversationCount
+	if err := DB.Table("assistant_conversations").
+		Select("assistant_conversations.user_id, COUNT(DISTINCT assistant_conversations.id) AS count").
+		Joins("JOIN assistant_history_messages ON assistant_history_messages.conversation_id = assistant_conversations.id").
+		Where("assistant_conversations.user_id IN ?", authorizedUserIDs).
+		Group("assistant_conversations.user_id").
+		Scan(&counts).Error; err != nil {
+		return err
+	}
+	for _, row := range counts {
+		if user := usersByID[row.UserID]; user != nil {
+			count := row.Count
+			user.AssistantConversationCount = &count
+		}
+	}
+	return nil
+}
+
 func GetAssistantConversationHistory(viewerUserID int, conversationID int64, limit int) (*AssistantConversationView, []AssistantHistoryMessageView, error) {
 	if conversationID <= 0 {
 		return nil, nil, ErrAssistantConversationNotFound

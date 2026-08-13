@@ -70,7 +70,7 @@ export function ForgeHome() {
   }
 
   return (
-    <ForgePublicShell minimalNav>
+    <ForgePublicShell>
       <main>
         <section
           aria-labelledby='forge-home-title'

@@ -8,6 +8,7 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -17,6 +18,7 @@ import (
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/oauth"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/console_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -50,6 +52,16 @@ func GetLiveness(c *gin.Context) {
 		"live":    true,
 		"message": "",
 	})
+}
+
+func getPublicPreviewModelIDs() []string {
+	if model.DB == nil {
+		return []string{}
+	}
+
+	modelIDs := service.GetGroupsEnabledModels([]string{"default"})
+	sort.Strings(modelIDs)
+	return modelIDs
 }
 
 func GetStatus(c *gin.Context) {
@@ -112,6 +124,7 @@ func GetStatus(c *gin.Context) {
 		"password_login_enabled":        common.PasswordLoginEnabled,
 		"password_register_enabled":     common.PasswordRegisterEnabled,
 		"default_use_auto_group":        setting.DefaultUseAutoGroup,
+		"preview_model_ids":             getPublicPreviewModelIDs(),
 		"backend_capabilities": gin.H{
 			"bounty_notifications":    true,
 			"bounty_challenge_cancel": true,

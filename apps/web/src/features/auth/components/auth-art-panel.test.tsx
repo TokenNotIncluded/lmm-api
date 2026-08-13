@@ -44,7 +44,10 @@ const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 const { createInstance } = await import('i18next')
 const { I18nextProvider, initReactI18next } = await import('react-i18next')
+const { api } = await import('@/lib/api')
 const { AuthArtPanel } = await import('./auth-art-panel')
+
+const originalGet = api.get
 
 const i18n = createInstance()
 await i18n.use(initReactI18next).init({
@@ -71,12 +74,29 @@ async function renderArtwork() {
   return { container, root }
 }
 
-afterEach(() => document.body.replaceChildren())
+afterEach(() => {
+  api.get = originalGet
+  document.body.replaceChildren()
+})
 after(() => domWindow.close())
 
 describe('AuthArtPanel', () => {
   test('renders a current Responses API example with a live visual signal', async () => {
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/status')
+      return {
+        data: {
+          data: {
+            preview_model_ids: ['live-model-alpha', 'live-model-beta'],
+          },
+        },
+      }
+    }) as typeof api.get
+
     const rendered = await renderArtwork()
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
     const preview = rendered.container.querySelector(
       '[data-live-request-preview]'
     )
@@ -88,7 +108,7 @@ describe('AuthArtPanel', () => {
     )
     assert.equal(
       preview.querySelector('[data-request-model]')?.textContent?.trim(),
-      'gpt-5.6-terra'
+      'live-model-alpha'
     )
     assert.ok(preview.querySelector('.auth-art-request-sweep'))
     assert.ok(preview.querySelector('.auth-art-request-pulse'))
@@ -96,7 +116,7 @@ describe('AuthArtPanel', () => {
     await act(async () => rendered.root.unmount())
   })
 
-  test('does not regress to the retired gpt-4o static example', () => {
+  test('loads model IDs instead of embedding a static model list', () => {
     const source = readFileSync(
       new URL('./auth-art-panel.tsx', import.meta.url),
       'utf8'
@@ -106,8 +126,10 @@ describe('AuthArtPanel', () => {
       'utf8'
     )
 
-    assert.equal(source.includes('gpt-4o'), false)
-    assert.match(source, /REQUEST_MODELS/)
+    assert.match(source, /preview_model_ids/)
+    assert.match(source, /getStatus/)
+    assert.doesNotMatch(source, /gpt-[\d.]+/)
+    assert.doesNotMatch(source, /gemini-[\d.]+/)
     assert.match(source, /setInterval/)
     assert.match(styles, /@keyframes auth-art-request-sweep/)
     assert.match(styles, /\.auth-art-request-pulse/)

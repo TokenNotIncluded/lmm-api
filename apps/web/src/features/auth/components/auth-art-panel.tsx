@@ -20,24 +20,52 @@ import { Braces, Check, Gauge, ShieldCheck } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-const REQUEST_MODELS = ['gpt-5.6-terra', 'gpt-5.4', 'gemini-2.5-flash'] as const
+import { getStatus } from '@/lib/api'
 
 const REQUEST_ENDPOINT = '/v1/responses'
 const REQUEST_MODEL_ROTATION_MS = 4200
 
 export function AuthArtPanel() {
   const { t } = useTranslation()
+  const [requestModels, setRequestModels] = useState<string[]>([])
   const [requestModelIndex, setRequestModelIndex] = useState(0)
 
   useEffect(() => {
+    let active = true
+
+    void getStatus()
+      .then((status) => {
+        const rawModelIDs = status?.preview_model_ids
+        if (!active || !Array.isArray(rawModelIDs)) return
+
+        const modelIDs = [...new Set(rawModelIDs)]
+          .filter(
+            (modelID): modelID is string =>
+              typeof modelID === 'string' && modelID.trim().length > 0
+          )
+          .map((modelID) => modelID.trim())
+
+        setRequestModels(modelIDs)
+        setRequestModelIndex(0)
+      })
+      .catch(() => undefined)
+
+    return () => {
+      active = false
+    }
+  }, [])
+
+  useEffect(() => {
+    if (requestModels.length < 2) return
+
     const rotation = window.setInterval(() => {
-      setRequestModelIndex((current) => (current + 1) % REQUEST_MODELS.length)
+      setRequestModelIndex((current) => (current + 1) % requestModels.length)
     }, REQUEST_MODEL_ROTATION_MS)
 
     return () => window.clearInterval(rotation)
-  }, [])
+  }, [requestModels.length])
 
-  const requestModel = REQUEST_MODELS[requestModelIndex]
+  const requestModel = requestModels[requestModelIndex] ?? '—'
   const requestLines = [
     ['POST', REQUEST_ENDPOINT],
     ['model', requestModel],

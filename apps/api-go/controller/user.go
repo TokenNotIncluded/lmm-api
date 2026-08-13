@@ -362,6 +362,10 @@ func GetAllUsers(c *gin.Context) {
 		return
 	}
 	model.PopulateAdminPaymentRestrictions(users)
+	if err := model.PopulateAssistantConversationCounts(users, c.GetInt("id"), c.GetInt("role")); err != nil {
+		common.ApiError(c, err)
+		return
+	}
 
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(users)
@@ -394,6 +398,10 @@ func SearchUsers(c *gin.Context) {
 		return
 	}
 	model.PopulateAdminPaymentRestrictions(users)
+	if err := model.PopulateAssistantConversationCounts(users, c.GetInt("id"), c.GetInt("role")); err != nil {
+		common.ApiError(c, err)
+		return
+	}
 
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(users)

@@ -26,7 +26,6 @@ import './forge-public-shell.css'
 
 type ForgePublicShellProps = {
   children: React.ReactNode
-  minimalNav?: boolean
 }
 
 export function ForgePublicShell(props: ForgePublicShellProps) {
@@ -49,12 +48,6 @@ export function ForgePublicShell(props: ForgePublicShellProps) {
       logo={<LmmBrandMark className='size-7' title='LMM Forge' />}
       navLinks={[
         { title: 'Challenges', href: '/challenges' },
-        ...(props.minimalNav
-          ? []
-          : [
-              { title: 'Pricing', href: '/pricing' },
-              { title: 'How it works', href: '/#workflow' },
-            ]),
         ...(securityLink ? [securityLink] : []),
       ]}
       showNotifications={false}

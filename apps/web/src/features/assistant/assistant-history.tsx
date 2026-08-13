@@ -102,22 +102,28 @@ function HistoryMessage(props: {
 export function AssistantHistory(props: {
   active: boolean
   onOpenConversation: (conversation: AssistantConversationHistoryItem) => void
+  ownerUser?: { id: number; username: string }
 }) {
   const { t, i18n } = useTranslation()
   const queryClient = useQueryClient()
   const authUser = useAuthStore((state) => state.auth.user)
-  const canAudit =
-    (authUser?.role !== undefined && authUser.role >= ROLE.ADMIN) ||
-    (authUser?.trust_level_info?.level ?? 0) > 0
+  const canAudit = authUser?.role !== undefined && authUser.role >= ROLE.ADMIN
   const [scope, setScope] = useState<'self' | 'audit'>('self')
   const [auditUserIdInput, setAuditUserIdInput] = useState('')
   const [auditUserId, setAuditUserId] = useState<number | null>(null)
   const [auditInputError, setAuditInputError] = useState(false)
   const [filter, setFilter] = useState<'active' | 'archived'>('active')
   const showingArchived = filter === 'archived'
-  const effectiveScope = canAudit ? scope : 'self'
+  const fixedScope = props.ownerUser
+    ? props.ownerUser.id === authUser?.id
+      ? 'self'
+      : 'audit'
+    : null
+  const effectiveScope = fixedScope ?? (canAudit ? scope : 'self')
   const activeUserId =
-    effectiveScope === 'audit' ? (auditUserId ?? undefined) : undefined
+    effectiveScope === 'audit'
+      ? (props.ownerUser?.id ?? auditUserId ?? undefined)
+      : undefined
   const historyQuery = useQuery({
     queryKey: [
       'assistant-conversations',
@@ -128,7 +134,7 @@ export function AssistantHistory(props: {
     queryFn: () =>
       getAssistantConversationHistory(showingArchived, activeUserId),
     enabled:
-      props.active && (effectiveScope === 'self' || auditUserId !== null),
+      props.active && (effectiveScope === 'self' || activeUserId !== undefined),
     staleTime: 30_000,
     retry: false,
   })
@@ -212,7 +218,7 @@ export function AssistantHistory(props: {
 
   return (
     <div className='grid gap-3'>
-      {canAudit ? (
+      {canAudit && !props.ownerUser ? (
         <div className='grid gap-3 rounded-lg border p-3'>
           <div className='flex flex-wrap gap-2'>
             <Button
@@ -266,12 +272,14 @@ export function AssistantHistory(props: {
           ) : null}
         </div>
       ) : null}
-      {effectiveScope === 'audit' && auditUserId !== null ? (
+      {effectiveScope === 'audit' && activeUserId !== undefined ? (
         <div className='grid gap-1 rounded-lg border p-3'>
           <p className='text-sm font-medium'>{t('User audit')}</p>
           <p className='text-muted-foreground text-xs leading-5'>
-            {t('Lower-access user conversation')} · {t('User ID')}:{' '}
-            {auditUserId}
+            {props.ownerUser?.username
+              ? `${props.ownerUser.username} · `
+              : `${t('Lower-access user conversation')} · `}
+            {t('User ID')}: {activeUserId}
           </p>
         </div>
       ) : null}
@@ -313,14 +321,14 @@ export function AssistantHistory(props: {
           <AlertTitle>{t('Conversation history')}</AlertTitle>
           <AlertDescription>{historyErrorDescription}</AlertDescription>
         </Alert>
-      ) : effectiveScope === 'audit' && auditUserId === null ? (
+      ) : effectiveScope === 'audit' && activeUserId === undefined ? (
         <p className='text-muted-foreground py-8 text-center text-sm leading-6'>
           {t('Enter a positive integer')}
         </p>
       ) : conversations.length === 0 ? (
         <p className='text-muted-foreground py-8 text-center text-sm leading-6'>
           {effectiveScope === 'audit'
-            ? `${t('No visible conversation history yet.')} · ${t('User ID')}: ${auditUserId}`
+            ? `${t('No visible conversation history yet.')} · ${t('User ID')}: ${activeUserId}`
             : t(
                 showingArchived
                   ? 'No archived conversations yet.'
