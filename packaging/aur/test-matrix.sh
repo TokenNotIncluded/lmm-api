@@ -12,6 +12,7 @@ readonly PACKAGES=(
   lmm-api-go-git
   lmm-api-rs-bin
   lmm-api-rs-git
+  lmm-api-web-bin
 )
 
 die() { printf 'test-aur-matrix: %s\n' "$*" >&2; exit 1; }
@@ -68,7 +69,7 @@ done
 contains_srcinfo lmm-api-rs-bin $'\tconflicts = lmm-api-rs-git'
 contains_srcinfo lmm-api-rs-git $'\tconflicts = lmm-api-rs-bin'
 
-for package in "${PACKAGES[@]}"; do
+for package in lmm-api-go lmm-api-go-bin lmm-api-go-git lmm-api-rs-bin lmm-api-rs-git; do
   for removed_core in lmm-api lmm-api-bin lmm-api-git; do
     contains_srcinfo "$package" $'\tconflicts = '"$removed_core"
   done
@@ -83,6 +84,18 @@ for package in lmm-api-go-bin lmm-api-rs-bin; do
     die "$package invokes a project compiler"
   fi
 done
+for package in lmm-api-web-bin; do
+  pkgbuild="$HERE/$package/PKGBUILD"
+  grep -Fq 'cosign verify-blob' "$pkgbuild" || die "$package lacks Sigstore verification"
+  grep -Fq 'sha256sum' "$pkgbuild" || die "$package lacks SHA-256 verification"
+  grep -Fq 'noextract=(' "$pkgbuild" || die "$package extracts before verification"
+  contains_srcinfo_prefix "$package" $'\tprovides = lmm-api-web'
+done
+grep -Fq 'systemctl reload nginx.service' "$HERE/lmm-api-web-bin/lmm-api-web-activate" ||
+  die 'web package activation does not reload nginx'
+if grep -Eq 'systemctl (restart|reload) lmm-api' "$HERE/lmm-api-web-bin/lmm-api-web-activate"; then
+  die 'web package activation controls the backend service'
+fi
 contains_srcinfo lmm-api-go-git $'\tmakedepends = bun'
 contains_srcinfo lmm-api-go-git $'\tmakedepends = go>=1.25.1'
 contains_srcinfo lmm-api-go $'\tmakedepends = bun'
@@ -173,4 +186,4 @@ done
 [[ ! -e $tmp/pkg-rs/usr/bin/lmm-api && ! -L $tmp/pkg-rs/usr/bin/lmm-api ]] ||
   die 'Rust package exposes the Go provider command'
 
-printf '%s\n' 'five-package direct-backend AUR matrix verified'
+printf '%s\n' 'six-package direct-backend and web AUR matrix verified'

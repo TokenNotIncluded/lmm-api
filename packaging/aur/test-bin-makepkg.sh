@@ -63,6 +63,32 @@ build_package lmm-api-go-bin \
   etc/lmm-api-go/lmm-api-go.env \
   usr/share/lmm-api-go/frontend-dist/index.html
 
+web_work="$tmp/lmm-api-web-bin"
+web_pkgver=$(awk -F= '$1 == "pkgver" { print $2; exit }' "$HERE/lmm-api-web-bin/PKGBUILD")
+[[ $web_pkgver =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "invalid web binary pkgver: $web_pkgver"
+mkdir -p "$web_work/stage/dist"
+cp "$HERE/lmm-api-web-bin/PKGBUILD" \
+  "$HERE/lmm-api-web-bin/lmm-api-web.install" \
+  "$web_work/"
+printf '<!doctype html>\n' >"$web_work/stage/dist/index.html"
+cp "$HERE/lmm-api-web-bin/lmm-api-web-activate" "$web_work/stage/"
+cp "$HERE/../../deploy/frontend-release.sh" "$web_work/stage/frontend-release.sh"
+chmod 0755 "$web_work/stage/lmm-api-web-activate" "$web_work/stage/frontend-release.sh"
+add_metadata "$web_work/stage"
+web_artifact="lmm-api-web-${web_pkgver}"
+tar -czf "$web_work/${web_artifact}.tar.gz" -C "$web_work/stage" \
+  dist lmm-api-web-activate frontend-release.sh \
+  LICENSE NOTICE THIRD-PARTY-LICENSES.md REVISION
+(cd "$web_work" && sha256sum "${web_artifact}.tar.gz" >"${web_artifact}.tar.gz.sha256")
+printf '{}\n' >"$web_work/${web_artifact}.tar.gz.sigstore.json"
+build_package lmm-api-web-bin \
+  usr/share/lmm-api-web/frontend-dist/index.html \
+  usr/lib/lmm-api-web/lmm-api-web-activate \
+  usr/lib/lmm-api-web/frontend-release.sh \
+  usr/share/licenses/lmm-api-web-bin/LICENSE \
+  usr/share/doc/lmm-api-web-bin/REVISION \
+  .INSTALL
+
 rs_work="$tmp/lmm-api-rs-bin"
 rs_pkgver=$(awk -F= '$1 == "pkgver" { print $2; exit }' "$HERE/lmm-api-rs-bin/PKGBUILD")
 [[ $rs_pkgver =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "invalid Rust binary pkgver: $rs_pkgver"

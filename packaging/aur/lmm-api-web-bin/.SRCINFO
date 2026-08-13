@@ -1,0 +1,31 @@
+pkgbase = lmm-api-web-bin
+	pkgdesc = LMM API production web frontend (prebuilt)
+	pkgver = 0.1.1
+	pkgrel = 1
+	url = https://github.com/LIghtJUNction/api.lmm.best
+	install = lmm-api-web.install
+	arch = any
+	license = AGPL-3.0-only
+	makedepends = cosign
+	depends = bash
+	depends = coreutils
+	depends = curl
+	depends = diffutils
+	depends = findutils
+	depends = gawk
+	depends = grep
+	depends = nginx
+	depends = sed
+	depends = systemd
+	depends = util-linux
+	provides = lmm-api-web=0.1.1
+	conflicts = lmm-api-web
+	noextract = lmm-api-web-0.1.1.tar.gz
+	source = lmm-api-web-0.1.1.tar.gz::https://github.com/LIghtJUNction/api.lmm.best/releases/download/web-v0.1.1/lmm-api-web-0.1.1.tar.gz
+	source = lmm-api-web-0.1.1.tar.gz.sha256::https://github.com/LIghtJUNction/api.lmm.best/releases/download/web-v0.1.1/lmm-api-web-0.1.1.tar.gz.sha256
+	source = lmm-api-web-0.1.1.tar.gz.sigstore.json::https://github.com/LIghtJUNction/api.lmm.best/releases/download/web-v0.1.1/lmm-api-web-0.1.1.tar.gz.sigstore.json
+	sha256sums = SKIP
+	sha256sums = SKIP
+	sha256sums = SKIP
+
+pkgname = lmm-api-web-bin

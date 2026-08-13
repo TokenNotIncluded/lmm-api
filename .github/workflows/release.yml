@@ -200,12 +200,19 @@ jobs:
       - name: Package web artifact
         env:
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_REVISION: ${{ needs.prepare.outputs.revision }}
         run: |
           set -euo pipefail
-          mkdir -p release-web
+          bundle="release-web/bundle"
+          mkdir -p "$bundle"
+          cp -a apps/web/dist "$bundle/"
+          cp LICENSE NOTICE THIRD-PARTY-LICENSES.md "$bundle/"
+          printf '%s\n' "$RELEASE_REVISION" > "$bundle/REVISION"
           archive="release-web/lmm-api-web-${RELEASE_VERSION}.tar.gz"
-          tar -czf "$archive" -C apps/web dist
+          tar -czf "$archive" -C "$bundle" \
+            dist LICENSE NOTICE THIRD-PARTY-LICENSES.md REVISION
           (cd release-web && sha256sum "${archive##*/}" > "${archive##*/}.sha256")
+          rm -rf -- "$bundle"
 
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
@@ -433,6 +440,7 @@ jobs:
           chown --recursive package-builder:package-builder "$GITHUB_WORKSPACE"
           runuser --user package-builder -- env TMPDIR=/home/package-builder/lmm-ci-tmp bash packaging/aur/test-matrix.sh
           runuser --user package-builder -- env TMPDIR=/home/package-builder/lmm-ci-tmp bash packaging/aur/test-bin-makepkg.sh
+          runuser --user package-builder -- env TMPDIR=/home/package-builder/lmm-ci-tmp bash packaging/aur/test-web-activation.sh
           runuser --user package-builder -- env TMPDIR=/home/package-builder/lmm-ci-tmp bash deploy/production/test-precutover-packages.sh
           runuser --user package-builder -- env TMPDIR=/home/package-builder/lmm-ci-tmp bash deploy/production/test-go-package-roundtrip.sh
           runuser --user package-builder -- env TMPDIR=/home/package-builder/lmm-ci-tmp bash deploy/production/test-go-deploy-contract.sh

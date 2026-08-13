@@ -300,6 +300,7 @@ jobs:
           chown --recursive package-builder:package-builder "$GITHUB_WORKSPACE"
           runuser --user package-builder -- env TMPDIR=/home/package-builder/lmm-ci-tmp bash packaging/aur/test-matrix.sh
           runuser --user package-builder -- env TMPDIR=/home/package-builder/lmm-ci-tmp bash packaging/aur/test-bin-makepkg.sh
+          runuser --user package-builder -- env TMPDIR=/home/package-builder/lmm-ci-tmp bash packaging/aur/test-web-activation.sh
           runuser --user package-builder -- env TMPDIR=/home/package-builder/lmm-ci-tmp bash deploy/production/test-precutover-packages.sh
           runuser --user package-builder -- env TMPDIR=/home/package-builder/lmm-ci-tmp bash deploy/production/test-go-package-roundtrip.sh
           runtime_dir="/run/user/$(id -u package-builder)"
