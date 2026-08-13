@@ -1026,8 +1026,8 @@ func TestAssistantSetupToolReturnsExactEndpointFormatsAndClientLimits(t *testing
 	assert.Equal(t, "https://api.example.com", claudeCode["service_root"])
 	assert.Equal(t, "https://api.example.com/v1", claudeCode["openai_base_url"])
 	assert.Equal(t, "winget install Anthropic.ClaudeCode", claudeCode["install_command"])
-	assert.Contains(t, claudeCode["configuration"], "ANTHROPIC_BASE_URL=\"https://api.example.com\"")
-	assert.Contains(t, claudeCode["configuration"], "ANTHROPIC_MODEL=\"claude-sonnet-4-5\"")
+	assert.Contains(t, claudeCode["configuration"], "ANTHROPIC_BASE_URL='https://api.example.com'")
+	assert.Contains(t, claudeCode["configuration"], "ANTHROPIC_MODEL='claude-sonnet-4-5'")
 	assert.NotContains(t, claudeCode["configuration"], "api.example.com/v1")
 
 	codex := executeAssistantSetupTool(map[string]any{
@@ -1061,6 +1061,28 @@ func TestAssistantSetupToolReturnsExactEndpointFormatsAndClientLimits(t *testing
 	})
 	assert.Equal(t, false, claudeDesktopLinux["supported"])
 	assert.Contains(t, claudeDesktopLinux["limitation"], "use Claude Code on Linux")
+}
+
+func TestAssistantSetupToolShellQuotesConfiguredValues(t *testing.T) {
+	originalServerAddress := system_setting.ServerAddress
+	system_setting.ServerAddress = "https://api.example.com/$(touch /tmp/base-pwned)'suffix"
+	t.Cleanup(func() { system_setting.ServerAddress = originalServerAddress })
+
+	linux := executeAssistantSetupTool(map[string]any{
+		"platform": "linux",
+		"topic":    "claude-code",
+		"model_id": "claude-$(touch /tmp/model-pwned)'suffix",
+	})
+	assert.Contains(t, linux["configuration"], "ANTHROPIC_BASE_URL='https://api.example.com/$(touch /tmp/base-pwned)'\"'\"'suffix'")
+	assert.Contains(t, linux["configuration"], "ANTHROPIC_MODEL='claude-$(touch /tmp/model-pwned)'\"'\"'suffix'")
+
+	windows := executeAssistantSetupTool(map[string]any{
+		"platform": "windows",
+		"topic":    "claude-code",
+		"model_id": "claude-$(touch /tmp/model-pwned)'suffix",
+	})
+	assert.Contains(t, windows["configuration"], "ANTHROPIC_BASE_URL='https://api.example.com/$(touch /tmp/base-pwned)''suffix'")
+	assert.Contains(t, windows["configuration"], "ANTHROPIC_MODEL='claude-$(touch /tmp/model-pwned)''suffix'")
 }
 
 func TestAssistantCostToolAndResponseContent(t *testing.T) {

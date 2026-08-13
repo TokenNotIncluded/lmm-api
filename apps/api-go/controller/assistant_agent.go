@@ -1518,6 +1518,18 @@ func executeAssistantAccountTool(userID int) map[string]any {
 	return result
 }
 
+// quotePOSIXShellLiteral returns a single shell word without leaving any part of
+// value open to expansion or command substitution.
+func quotePOSIXShellLiteral(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
+// quotePowerShellLiteral returns a single-quoted PowerShell string. PowerShell
+// represents a literal apostrophe inside such a string as two apostrophes.
+func quotePowerShellLiteral(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
+}
+
 func executeAssistantSetupTool(input map[string]any) map[string]any {
 	platform := strings.ToLower(strings.TrimSpace(inputString(input, "platform")))
 	topic := strings.ToLower(strings.TrimSpace(inputString(input, "topic")))
@@ -1554,10 +1566,10 @@ func executeAssistantSetupTool(input map[string]any) map[string]any {
 	switch topic {
 	case "claude-code":
 		installCommand := "curl -fsSL https://claude.ai/install.sh | bash"
-		configuration := fmt.Sprintf("export ANTHROPIC_BASE_URL=%q\nexport ANTHROPIC_AUTH_TOKEN='<YOUR_API_KEY>'\nexport ANTHROPIC_MODEL=%q\nclaude", rootURL, clientModel)
+		configuration := fmt.Sprintf("export ANTHROPIC_BASE_URL=%s\nexport ANTHROPIC_AUTH_TOKEN='<YOUR_API_KEY>'\nexport ANTHROPIC_MODEL=%s\nclaude", quotePOSIXShellLiteral(rootURL), quotePOSIXShellLiteral(clientModel))
 		if platform == "windows" {
 			installCommand = "winget install Anthropic.ClaudeCode"
-			configuration = fmt.Sprintf("$env:ANTHROPIC_BASE_URL=%q\n$env:ANTHROPIC_AUTH_TOKEN='<YOUR_API_KEY>'\n$env:ANTHROPIC_MODEL=%q\nclaude", rootURL, clientModel)
+			configuration = fmt.Sprintf("$env:ANTHROPIC_BASE_URL=%s\n$env:ANTHROPIC_AUTH_TOKEN='<YOUR_API_KEY>'\n$env:ANTHROPIC_MODEL=%s\nclaude", quotePowerShellLiteral(rootURL), quotePowerShellLiteral(clientModel))
 		} else if platform == "macos" {
 			installCommand = "brew install --cask claude-code"
 		}
