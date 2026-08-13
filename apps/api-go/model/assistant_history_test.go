@@ -132,8 +132,11 @@ func TestAssistantConversationArchiveIsOwnerOnlyAndListFilterPreservesHistory(t 
 	assert.Equal(t, archived.Id, archivedList[0].Id)
 	assert.Positive(t, archivedList[0].ArchivedAt)
 
-	// Details retain the original visibility rules and message rows.
-	view, messages, err := GetAssistantConversationHistory(l1.Id, archived.Id, 100)
+	// Trust level does not grant cross-account access. Administrators retain
+	// read-only visibility, while archive ownership remains with the user.
+	_, _, err = GetAssistantConversationHistory(l1.Id, archived.Id, 100)
+	assert.ErrorIs(t, err, ErrAssistantHistoryForbidden)
+	view, messages, err := GetAssistantConversationHistory(admin.Id, archived.Id, 100)
 	require.NoError(t, err)
 	assert.Equal(t, archived.Id, view.Id)
 	require.Len(t, messages, 2)
