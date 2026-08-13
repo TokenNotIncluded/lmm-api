@@ -1035,6 +1035,74 @@ fn arbitrary_sse_bytes_are_bounded_without_panics() {
 }
 
 #[test]
+fn deterministic_sse_boundaries_are_bounded_and_panic_free() {
+    fn next_xorshift(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
+    const MAX_INPUT_BYTES: usize = 4096;
+    const MAX_FRAME_BYTES: usize = 512;
+    const MAX_FRAMES: usize = 16;
+    let mut state = 0xd1b5_4a32_d192_ed03_u64;
+
+    for case_index in 0..24 {
+        let mode = (next_xorshift(&mut state) % 5) as usize;
+        let mut input = match mode {
+            0 => b"\xef\xbb\xbfevent: future\ndata: first\ndata: second\n\n".to_vec(),
+            1 => b"event: update\r\ndata: {\"part\":\"one\"}\rdata: two\r\n\r\n".to_vec(),
+            2 => b": comment\nunknown: value\ndata: [DONE]\n\n".to_vec(),
+            3 => b"event: truncated\ndata: final".to_vec(),
+            _ => b"\r\ndata: empty\n\n".to_vec(),
+        };
+        input.extend_from_slice(b"event: fuzz\nunknown_field: ");
+        let suffix_len = (next_xorshift(&mut state) % 96) as usize;
+        for _ in 0..suffix_len {
+            let byte = (next_xorshift(&mut state) >> 56) as u8;
+            input.push(if mode == 4 { byte } else { b'a' + (byte % 26) });
+        }
+        if mode != 3 {
+            input.extend_from_slice(b"\ndata: generated\n\n");
+        }
+        assert!(input.len() <= MAX_INPUT_BYTES);
+
+        let chunk_width = (next_xorshift(&mut state) % 11 + 1) as usize;
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let mut parser = SseFrameParser::new(MAX_FRAME_BYTES);
+            let mut frames = Vec::new();
+            let mut offset = 0;
+            while offset < input.len() {
+                let end = offset.saturating_add(chunk_width).min(input.len());
+                match parser.feed(&input[offset..end]) {
+                    Ok(new_frames) => frames.extend(new_frames),
+                    Err(_) => break,
+                }
+                assert!(parser.buffered_frame_bytes() <= MAX_FRAME_BYTES);
+                offset = end;
+            }
+            let _ = parser.finish();
+            assert!(frames.len() <= MAX_FRAMES);
+
+            for parsed in [
+                parse_sse_frames(&input, MAX_FRAME_BYTES),
+                parse_sse_frames_lenient(&input, MAX_FRAME_BYTES),
+                parse_sse_frames_rejecting_unterminated(&input, MAX_FRAME_BYTES),
+            ] {
+                if let Ok(frames) = parsed {
+                    assert!(frames.len() <= MAX_FRAMES);
+                }
+            }
+        }));
+        assert!(
+            result.is_ok(),
+            "SSE boundary corpus panicked at case {case_index}"
+        );
+    }
+}
+
+#[test]
 fn sse_acceptance_covers_repeated_fields_mixed_line_endings_and_eof_modes() {
     let input = b"event: first\r\nid: old\rretry: 7\n:event note\ndata: first\r\ndata: second\n\n";
     let frames = parse_sse_frames(input, DEFAULT_MAX_FRAME_BYTES).expect("mixed SSE corpus");
