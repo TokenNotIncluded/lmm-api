@@ -432,7 +432,7 @@ func TestNativeProductionApplyAndConfirmOwnReleaseState(t *testing.T) {
 		t.Fatalf("frontend current=%q err=%v", current, err)
 	}
 	memory, err := os.ReadFile(filepath.Join(fixture.runtime.paths.DropInDir, productionMemoryFileName))
-	if err != nil || !strings.Contains(string(memory), "MemoryHigh=512M") {
+	if err != nil || !strings.Contains(string(memory), "MemoryHigh="+productionMemoryHigh) {
 		t.Fatalf("hardened memory=%q err=%v", memory, err)
 	}
 	confirmed, err := fixture.runtime.confirm(context.Background(), fixture.workspace)

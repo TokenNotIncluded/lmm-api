@@ -16,6 +16,9 @@ const (
 	defaultProductionDropInDir = "/etc/systemd/system/lmm-api.service.d"
 	productionMemoryFileName   = "80-production-memory.conf"
 	legacyEmergencyMemoryFile  = "99-emergency-memory-safety.conf"
+	productionMemoryHigh       = "320M"
+	productionMemoryMax        = "384M"
+	productionMemorySwapMax    = "256M"
 )
 
 type productionHardenOptions struct {
@@ -135,15 +138,19 @@ func hardenProductionConfiguration(options productionHardenOptions) error {
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("inspect production memory drop-in: %w", err)
 	}
-	if err := writeAtomicRegularFile(memoryPath, []byte(`[Service]
-MemoryAccounting=yes
-MemoryHigh=512M
-MemoryMax=640M
-MemorySwapMax=256M
-`), 0o644); err != nil {
+	if err := writeAtomicRegularFile(memoryPath, productionMemoryConfig(), 0o644); err != nil {
 		return fmt.Errorf("write production memory drop-in: %w", err)
 	}
 	return nil
+}
+
+func productionMemoryConfig() []byte {
+	return []byte(fmt.Sprintf(`[Service]
+MemoryAccounting=yes
+MemoryHigh=%s
+MemoryMax=%s
+MemorySwapMax=%s
+`, productionMemoryHigh, productionMemoryMax, productionMemorySwapMax))
 }
 
 func retireLegacyEmergencyMemoryDropIn(path string) error {

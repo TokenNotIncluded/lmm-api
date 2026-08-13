@@ -89,10 +89,10 @@ func buildPostgresSchemaInventory(db *gorm.DB, schema string, models []interface
 			if field.TagSettings["UNIQUE"] != "" {
 				inventory.Constraints = append(inventory.Constraints, postgresConstraintSpec{
 					Table: table,
-					Names: []string{
-						postgresDefaultConstraintName(table, field.DBName, "key"),
+					Names: pgNames(
+						pgJoin(table, field.DBName, "key"),
 						statement.DB.NamingStrategy.IndexName(table, field.DBName),
-					},
+					),
 					Kind:      postgresUniqueConstraint,
 					Columns:   []string{field.DBName},
 					Validated: true,
@@ -106,7 +106,7 @@ func buildPostgresSchemaInventory(db *gorm.DB, schema string, models []interface
 				columns = append(columns, field.DBName)
 			}
 			inventory.Constraints = append(inventory.Constraints, postgresConstraintSpec{
-				Table: table, Names: []string{postgresDefaultConstraintName(table, "pkey")},
+				Table: table, Names: pgNames(pgJoin(table, "pkey")),
 				Kind: postgresPrimaryConstraint, Columns: columns, Validated: true,
 			})
 		}
@@ -127,7 +127,7 @@ func buildPostgresSchemaInventory(db *gorm.DB, schema string, models []interface
 				method = "btree"
 			}
 			inventory.Indexes = append(inventory.Indexes, postgresIndexSpec{
-				Table: table, Name: index.Name, Method: method,
+				Table: table, Name: pgIdent(index.Name), Method: method,
 				Unique: strings.EqualFold(index.Class, "UNIQUE"), Valid: true,
 				KeyTerms: terms, Included: parsePostgresIncludedColumns(index.Option),
 				Predicate: normalizePostgresSQL(index.Where),
@@ -142,7 +142,7 @@ func buildPostgresSchemaInventory(db *gorm.DB, schema string, models []interface
 				columns = []string{check.Field.DBName}
 			}
 			inventory.Constraints = append(inventory.Constraints, postgresConstraintSpec{
-				Table: table, Names: []string{name}, Kind: postgresCheckConstraint,
+				Table: table, Names: pgNames(name), Kind: postgresCheckConstraint,
 				Columns: columns, Check: normalizePostgresSQL(check.Constraint), Validated: true,
 			})
 		}
@@ -162,10 +162,11 @@ func buildPostgresSchemaInventory(db *gorm.DB, schema string, models []interface
 			if constraint == nil || constraint.Schema != statement.Schema {
 				continue
 			}
-			if _, exists := seenConstraints[constraint.Name]; exists {
+			name := pgIdent(constraint.Name)
+			if _, exists := seenConstraints[name]; exists {
 				continue
 			}
-			seenConstraints[constraint.Name] = struct{}{}
+			seenConstraints[name] = struct{}{}
 			columns := make([]string, 0, len(constraint.ForeignKeys))
 			for _, field := range constraint.ForeignKeys {
 				columns = append(columns, field.DBName)
@@ -175,7 +176,7 @@ func buildPostgresSchemaInventory(db *gorm.DB, schema string, models []interface
 				referenceColumns = append(referenceColumns, field.DBName)
 			}
 			inventory.Constraints = append(inventory.Constraints, postgresConstraintSpec{
-				Table: table, Names: []string{constraint.Name}, Kind: postgresForeignConstraint,
+				Table: table, Names: pgNames(name), Kind: postgresForeignConstraint,
 				Columns: columns, ReferenceSchema: schema,
 				ReferenceTable: constraint.ReferenceSchema.Table, ReferenceCols: referenceColumns,
 				OnUpdate:  normalizePostgresAction(constraint.OnUpdate),
@@ -187,13 +188,34 @@ func buildPostgresSchemaInventory(db *gorm.DB, schema string, models []interface
 	return inventory, nil
 }
 
-func postgresDefaultConstraintName(parts ...string) string {
-	const postgresIdentifierMaxBytes = 63
-	name := strings.Join(parts, "_")
-	if len(name) > postgresIdentifierMaxBytes {
-		return name[:postgresIdentifierMaxBytes]
+const pgIdentMax = 63
+
+// PostgreSQL truncates unquoted identifiers to 63 bytes. GORM permits 64-byte
+// generated names, so catalog verification must compare the server identity,
+// not the pre-SQL spelling.
+func pgIdent(name string) string {
+	if len(name) > pgIdentMax {
+		return name[:pgIdentMax]
 	}
 	return name
+}
+
+func pgJoin(parts ...string) string {
+	return pgIdent(strings.Join(parts, "_"))
+}
+
+func pgNames(names ...string) []string {
+	result := make([]string, 0, len(names))
+	seen := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		name = pgIdent(name)
+		if _, exists := seen[name]; exists {
+			continue
+		}
+		seen[name] = struct{}{}
+		result = append(result, name)
+	}
+	return result
 }
 
 func sortedCatalogNames[T any](objects map[string]T) []string {

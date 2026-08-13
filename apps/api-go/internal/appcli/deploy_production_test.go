@@ -90,7 +90,11 @@ func TestNativeProductionHardenAtomicallyPinsSecurityAndMemoryGuards(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"MemoryHigh=512M", "MemoryMax=640M", "MemorySwapMax=256M"} {
+	for _, expected := range []string{
+		"MemoryHigh=" + productionMemoryHigh,
+		"MemoryMax=" + productionMemoryMax,
+		"MemorySwapMax=" + productionMemorySwapMax,
+	} {
 		if !strings.Contains(string(memory), expected) {
 			t.Errorf("memory guard missing %q: %q", expected, memory)
 		}

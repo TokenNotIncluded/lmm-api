@@ -70,6 +70,28 @@ func TestPostgresCatalogInventoryCarriesVersionedApplicationSchema(t *testing.T)
 	require.Equal(t, "lmm_prod_20260802", findPostgresConstraint(t, inventory, postgresForeignConstraint).ReferenceSchema)
 }
 
+func TestPostgresCatalogUsesServerIdentifierLength(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	inventory, err := buildPostgresSchemaInventory(db, "lmm_prod_20260802", []interface{}{
+		&PromptConversionRef{}, &PromptConversationRef{},
+	})
+	require.NoError(t, err)
+
+	const full = "idx_assistant_pre_conversation_conversion_attributions_preset_id"
+	require.Len(t, full, pgIdentMax+1)
+	requirePostgresIndexSpec(t, inventory,
+		"assistant_pre_conversation_conversion_attributions", pgIdent(full), false, []string{"preset_id"})
+	for _, index := range inventory.Indexes {
+		require.LessOrEqual(t, len(index.Name), pgIdentMax, index.Name)
+	}
+	for _, constraint := range inventory.Constraints {
+		for _, name := range constraint.Names {
+			require.LessOrEqual(t, len(name), pgIdentMax, name)
+		}
+	}
+}
+
 func TestPostgresCatalogVerificationRejectsWrongIndexVariants(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
