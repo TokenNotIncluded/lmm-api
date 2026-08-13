@@ -22,6 +22,10 @@ use lmm_api_rs::{
         json_events_from_frames, parse_sse_frames, parse_sse_frames_lenient,
         parse_sse_frames_rejecting_unterminated, unknown_event_decision,
     },
+    protocol_differential_gate::{
+        DifferentialEvidenceBundle, DifferentialEvidenceDocument, EVIDENCE_SCHEMA_VERSION,
+        MAX_EVIDENCE_JSON_BYTES,
+    },
     protocol_rollout::{
         LocalConversionError, LocalConversionSummary, LocalRequest, ShadowDifference, ShadowRunner,
     },
@@ -751,6 +755,48 @@ fn bounded_tool_schema_conversions_are_panic_free() {
         assert!(
             result.is_ok(),
             "tool schema conversion panicked at case {case_index}"
+        );
+    }
+}
+
+#[test]
+fn malformed_differential_evidence_import_is_bounded_and_panic_free() {
+    let mut cases = vec![
+        format!(
+            r#"{{"schema_version":"{}","future_field":true}}"#,
+            EVIDENCE_SCHEMA_VERSION
+        ),
+        format!(
+            r#"{{"schema_version":"{}","documents":[]}}"#,
+            EVIDENCE_SCHEMA_VERSION
+        ),
+        format!(
+            r#"{{"schema_version":"{}","documents":["#,
+            EVIDENCE_SCHEMA_VERSION
+        ),
+    ];
+
+    let mut state = 0x517c_c1b7_2722_0a95_u64;
+    let mut generated = Vec::with_capacity(4096);
+    for _ in 0..4096 {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        generated.push(32 + ((state >> 56) % 95) as u8);
+    }
+    for &length in &[0, 1, 7, 31, 127, 1024, 4096] {
+        cases.push(String::from_utf8(generated[..length].to_vec()).expect("ASCII corpus bytes"));
+    }
+    cases.push("x".repeat(MAX_EVIDENCE_JSON_BYTES + 1));
+
+    for (case_index, input) in cases.iter().enumerate() {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let _ = DifferentialEvidenceDocument::from_json(input);
+            let _ = DifferentialEvidenceBundle::from_json(input);
+        }));
+        assert!(
+            result.is_ok(),
+            "differential evidence import panicked at case {case_index}"
         );
     }
 }
