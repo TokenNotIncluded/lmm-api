@@ -835,6 +835,45 @@ func TestOrdinaryChannelPathFilterReusesCandidateSlice(t *testing.T) {
 	}
 }
 
+func TestMultiKeySelectionScansWithoutTemporaryIndexes(t *testing.T) {
+	preserveChannelTestState(t)
+	common.MemoryCacheEnabled = true
+	channel := &Channel{
+		Id: 99101, Key: "first\ndisabled\nthird", Keys: []string{"first", "disabled", "third"},
+		ChannelInfo: ChannelInfo{
+			IsMultiKey: true,
+			MultiKeyStatusList: map[int]int{
+				0: common.ChannelStatusEnabled,
+				1: common.ChannelStatusManuallyDisabled,
+				2: common.ChannelStatusEnabled,
+			},
+		},
+	}
+	channelRuntimeStates.Delete(channel.Id)
+	t.Cleanup(func() { channelRuntimeStates.Delete(channel.Id) })
+
+	for _, mode := range []constant.MultiKeyMode{
+		constant.MultiKeyModeRandom,
+		constant.MultiKeyModePolling,
+		"unknown",
+	} {
+		channel.ChannelInfo.MultiKeyMode = mode
+		for range 20 {
+			key, index, err := channel.GetNextEnabledKey()
+			if err != nil || key == "disabled" || index == 1 {
+				t.Fatalf("mode=%q key=%q index=%d err=%v", mode, key, index, err)
+			}
+		}
+	}
+
+	channel.ChannelInfo.MultiKeyMode = constant.MultiKeyModePolling
+	if allocations := testing.AllocsPerRun(1000, func() {
+		_, _, _ = channel.GetNextEnabledKey()
+	}); allocations != 0 {
+		t.Fatalf("polling multi-key selection allocations=%f, want 0", allocations)
+	}
+}
+
 func setupMutationPathTest(t *testing.T, target *Channel, unrelatedID int) *gorm.DB {
 	t.Helper()
 	db := openCacheTestDB(t, &Channel{}, &Ability{})
