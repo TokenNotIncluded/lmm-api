@@ -156,7 +156,7 @@ jobs:
           runuser --user package-builder -- env TMPDIR=/home/package-builder/lmm-ci-tmp \
             bash deploy/production/test-go-package-roundtrip.sh
           runuser --user package-builder -- env TMPDIR=/home/package-builder/lmm-ci-tmp \
-            bash deploy/production/test-go-deploy-contract.sh
+            bash deploy/production/test-go-rollback-state-machine.sh
 
   build:
     name: Build and sign Go linux/${{ matrix.arch }}

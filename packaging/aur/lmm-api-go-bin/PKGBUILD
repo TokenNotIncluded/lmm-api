@@ -1,7 +1,7 @@
 # Maintainer: LIghtJUNction <lightjunction.me@gmail.com>
 
 pkgname=lmm-api-go-bin
-pkgver=0.1.1
+pkgver=0.1.2
 pkgrel=1
 pkgdesc='LMM API Go backend, native CLI, systemd service, and web frontend (prebuilt)'
 arch=('x86_64' 'aarch64')
