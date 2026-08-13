@@ -659,7 +659,9 @@ fn request_feature_dimension_matrix_calibration() {
             for (reasoning_label, reasoning_effort) in [
                 ("none", None),
                 ("summary", Some("summary")),
-                ("opaque", Some("opaque")),
+                // The opaque case is represented by the authentic Google
+                // thought_signature extension below, not a control string.
+                ("opaque", None),
             ] {
                 let label = format!(
                     "request_feature_matrix_parallel_{parallel_tool_count}_{multimodal_label}_{reasoning_label}"
@@ -689,6 +691,15 @@ fn request_feature_dimension_matrix_calibration() {
                             {"type": "text", "text": "feature matrix"},
                             {"type": "image_url", "image_url": {"url": image_url}},
                         ],
+                        "extra_content": if reasoning_label == "opaque" {
+                            serde_json::json!({
+                                "google": {
+                                    "thought_signature": "bench-authentic-thought-signature",
+                                },
+                            })
+                        } else {
+                            serde_json::Value::Null
+                        },
                     }],
                     "tools": tools,
                     "parallel_tool_calls": true,
