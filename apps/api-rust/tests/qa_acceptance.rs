@@ -145,8 +145,11 @@ const CHAT_STREAM: &str = r#"{
 const RESPONSES_STREAM: &str = r#"{
   "events":[
     {"Type":"response.created","Payload":{"type":"response.created","response":{"id":"responses-stream","object":"response","status":"in_progress","model":"responses-test","output":[]}}},
-    {"Type":"response.output_text.delta","Payload":{"type":"response.output_text.delta","delta":"ab"}},
-    {"Type":"response.completed","Payload":{"type":"response.completed","response":{"id":"responses-stream","object":"response","status":"completed","model":"responses-test","output":[],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}}}
+    {"Type":"response.output_item.added","Payload":{"type":"response.output_item.added","item":{"type":"message","id":"responses-stream_msg_0","status":"in_progress","role":"assistant","content":[]},"output_index":0}},
+    {"Type":"response.output_text.delta","Payload":{"type":"response.output_text.delta","delta":"ab","output_index":0,"content_index":0,"item_id":"responses-stream_msg_0"}},
+    {"Type":"response.output_text.done","Payload":{"type":"response.output_text.done","text":"ab","output_index":0,"content_index":0,"item_id":"responses-stream_msg_0"}},
+    {"Type":"response.output_item.done","Payload":{"type":"response.output_item.done","item":{"type":"message","id":"responses-stream_msg_0","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ab"}]},"output_index":0}},
+    {"Type":"response.completed","Payload":{"type":"response.completed","response":{"id":"responses-stream","object":"response","status":"completed","model":"responses-test","output":[{"type":"message","id":"responses-stream_msg_0","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ab"}]}],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}}}
   ],
   "usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}
 }"#;
