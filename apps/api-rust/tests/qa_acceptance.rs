@@ -2291,6 +2291,102 @@ fn route_specific_stream_observability_preserves_dimensions() {
 }
 
 #[test]
+fn route_request_response_metrics_are_protocol_specific_and_body_free() {
+    let observer = ConversionObserver::with_max_series(64);
+    for (protocol, converter_version) in [
+        (Protocol::OpenAi, ConverterVersion::OpenAiChatV1),
+        (
+            Protocol::OpenAiResponses,
+            ConverterVersion::OpenAiResponsesV1,
+        ),
+    ] {
+        let labels = MetricLabels::for_route(
+            protocol,
+            protocol,
+            converter_version,
+            0,
+            false,
+            FeatureClass::Text,
+            ConversionResult::Success,
+        );
+
+        // These fixed values stand in for request parsing/plan and response
+        // serialization observations without retaining either body.
+        observer.record_conversion_duration(labels, Duration::from_nanos(17));
+        observer.record_plan_duration(labels, Duration::from_nanos(5));
+        observer.record_events(labels, 2);
+        observer.record_input_bytes(labels, 128);
+        observer.record_output_bytes(labels, 256);
+        observer.record_failure_with_reason(labels, FailureReason::Unsupported);
+        observer.record_loss(labels, LossCode::LossUnknownEvent);
+    }
+
+    let snapshot = observer.snapshot();
+    for (protocol, converter_version) in [
+        (Protocol::OpenAi, ConverterVersion::OpenAiChatV1),
+        (
+            Protocol::OpenAiResponses,
+            ConverterVersion::OpenAiResponsesV1,
+        ),
+    ] {
+        let route_sample = |metric| {
+            snapshot
+                .samples
+                .iter()
+                .find(|sample| {
+                    sample.metric == metric
+                        && sample.labels.source_format == protocol
+                        && sample.labels.target_format == protocol
+                })
+                .expect("route metric sample")
+        };
+        for metric in [
+            MetricKind::ConversionDurationSeconds,
+            MetricKind::ConversionPlanDurationSeconds,
+            MetricKind::ConversionEventsTotal,
+            MetricKind::ConversionInputBytes,
+            MetricKind::ConversionOutputBytes,
+        ] {
+            let sample = route_sample(metric);
+            assert_eq!(sample.labels.converter_version, converter_version);
+            assert!(!sample.labels.stream);
+            assert_eq!(sample.labels.feature_class, FeatureClass::Text);
+            assert_eq!(sample.labels.result, ConversionResult::Success);
+        }
+        let failure = route_sample(MetricKind::ConversionFailuresTotal);
+        assert_eq!(failure.labels.converter_version, converter_version);
+        assert!(!failure.labels.stream);
+        assert_eq!(failure.labels.feature_class, FeatureClass::Text);
+        assert_eq!(failure.labels.result, ConversionResult::Failure);
+        assert_eq!(
+            failure.labels.failure_reason,
+            Some(FailureReason::Unsupported)
+        );
+        let loss = route_sample(MetricKind::ConversionLossesTotal);
+        assert_eq!(loss.labels.converter_version, converter_version);
+        assert!(!loss.labels.stream);
+        assert_eq!(loss.labels.feature_class, FeatureClass::Text);
+        assert_eq!(loss.labels.result, ConversionResult::Success);
+        assert_eq!(loss.labels.loss_code, Some(LossCode::LossUnknownEvent));
+    }
+
+    let serialized = serde_json::to_string(&snapshot).expect("bounded metrics snapshot JSON");
+    for forbidden in [
+        "request_key",
+        "model",
+        "tool",
+        "body",
+        "private request",
+        "secret response",
+    ] {
+        assert!(
+            !serialized.contains(forbidden),
+            "metric snapshot leaked forbidden field {forbidden:?}"
+        );
+    }
+}
+
+#[test]
 fn claude_stream_state_machine_is_bounded_and_panic_free() {
     const MAX_STEPS: usize = 64;
     const MAX_EVENTS: usize = 4;
