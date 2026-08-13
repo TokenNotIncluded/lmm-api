@@ -598,6 +598,19 @@ fn bounded_protocol_json_corpus_is_panic_free() {
                 let _ = serde_json::from_slice::<ClaudeRequest>(&bytes);
                 let _ = serde_json::from_slice::<GeminiRequest>(&bytes);
 
+                if let Ok(response) = serde_json::from_slice::<OpenAiChatResponse>(&bytes) {
+                    let _ = openai_chat_response_to_canonical(response);
+                }
+                if let Ok(response) = serde_json::from_slice::<ResponsesResponse>(&bytes) {
+                    let _ = openai_responses_response_to_canonical(response);
+                }
+                if let Ok(response) = serde_json::from_slice::<ClaudeResponse>(&bytes) {
+                    let _ = claude_response_to_canonical(response);
+                }
+                if let Ok(response) = serde_json::from_slice::<GeminiResponse>(&bytes) {
+                    let _ = gemini_response_to_canonical_for_model(response, "fuzz-model");
+                }
+
                 if let Ok(snapshot) = serde_json::from_slice::<OpenAiStreamSnapshot>(&bytes) {
                     let _ = lmm_contracts::relay::openai_stream_to_canonical_checked(&snapshot);
                 }
