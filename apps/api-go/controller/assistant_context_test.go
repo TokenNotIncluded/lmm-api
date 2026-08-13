@@ -369,15 +369,17 @@ func TestAssistantPaymentOfferStateDoesNotSerializeFinancialOrRiskDetails(t *tes
 	assert.NotContains(t, encoded, "quota")
 }
 
-func TestAssistantL0WelcomeStrategyAcceptsRelayOnlyBeginners(t *testing.T) {
+func TestAssistantL0WelcomeStrategyAnswersWithoutRepeatingOnboardingQuestions(t *testing.T) {
 	strategy := assistantWelcomeStrategyForContext(assistantUserContext{
 		AccessLevel:     "L0",
 		CustomerProfile: assistantProfileGuided,
 	})
 
-	assert.Contains(t, strategy, "new to AI or open-source projects")
+	assert.Contains(t, strategy, "answer the user's current question directly")
+	assert.Contains(t, strategy, "Do not repeat onboarding questions already answered")
 	assert.Contains(t, strategy, "simply want to use the relay")
 	assert.Contains(t, strategy, "do not need an open-source project")
+	assert.NotContains(t, strategy, "Ask whether they are new")
 }
 
 func TestAssistantL0WelcomeStrategyPreservesProfileSpecialization(t *testing.T) {

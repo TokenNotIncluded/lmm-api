@@ -732,7 +732,7 @@ func assistantWelcomeStrategyForContext(context assistantUserContext) string {
 		return strategy
 	}
 
-	l0Boundary := "For this L0 account, welcome the user without presuming technical experience. Ask whether they are new to AI or open-source projects and what they hope to do, one easy question at a time. People may simply want to use the relay and do not need an open-source project, a technical stack, or a contribution plan. Keep developer and write actions unavailable until L1, answer practical usage questions directly, explain the next small step, and keep L1 or payment discussions proportional to the user's actual need."
+	l0Boundary := "For this L0 account, answer the user's current question directly without asking whether this is their first time using AI or open-source projects. Do not repeat onboarding questions already answered. People may simply want to use the relay and do not need an open-source project, a technical stack, or a contribution plan. Keep developer and write actions unavailable until L1, explain the next small step only when it helps the current request, and keep L1 or payment discussions proportional to the user's actual need."
 	if profile == assistantProfileL0Applicant {
 		return l0Boundary
 	}
