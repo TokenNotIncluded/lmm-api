@@ -4420,6 +4420,49 @@ fn claude_tool_choice_to_ir(
     }
 }
 
+fn reject_claude_request_nested_extra(
+    request: &ClaudeRequest,
+    source: Protocol,
+    target: Protocol,
+) -> Result<(), DirectIrError> {
+    reject_wire_extra(source, target, &request.extra, "")?;
+    if let Some(StringOrParts::Parts(parts)) = request.system.as_ref() {
+        for (index, block) in parts.iter().enumerate() {
+            if let Some(media_source) = block.source.as_ref() {
+                reject_wire_extra(
+                    source,
+                    target,
+                    &media_source.extra,
+                    &format!("system.parts[{index}].source"),
+                )?;
+            }
+        }
+    }
+    for (message_index, message) in request.messages.iter().enumerate() {
+        let message_path = format!("messages[{message_index}]");
+        reject_wire_extra(source, target, &message.extra, &message_path)?;
+        if let StringOrParts::Parts(parts) = &message.content {
+            for (block_index, block) in parts.iter().enumerate() {
+                if let Some(media_source) = block.source.as_ref() {
+                    reject_wire_extra(
+                        source,
+                        target,
+                        &media_source.extra,
+                        &format!("{message_path}.content[{block_index}].source"),
+                    )?;
+                }
+            }
+        }
+    }
+    for (index, tool) in request.tools.iter().enumerate() {
+        reject_wire_extra(source, target, &tool.extra, &format!("tools[{index}]"))?;
+    }
+    if let Some(tool_choice) = request.tool_choice.as_ref() {
+        reject_wire_extra(source, target, &tool_choice.extra, "tool_choice")?;
+    }
+    Ok(())
+}
+
 /// Decodes a Claude Messages request into an ordered IR Envelope.
 pub fn claude_request_to_envelope_v2(
     request: ClaudeRequest,
@@ -4427,7 +4470,7 @@ pub fn claude_request_to_envelope_v2(
     let model = request.model.clone();
     let source = Protocol::Claude;
     let target = Protocol::Claude;
-    reject_wire_extra(source, target, &request.extra, "")?;
+    reject_claude_request_nested_extra(&request, source, target)?;
     let mut envelope = Envelope::new(source, model.clone());
     envelope.controls.max_output_tokens = Some(request.max_tokens);
     envelope.controls.temperature = request.temperature;
@@ -4629,6 +4672,7 @@ fn claude_block_from_item(
                         .clone()
                         .unwrap_or_else(|| "image/*".to_owned()),
                     data: uri.clone(),
+                    extra: BTreeMap::new(),
                 }
             } else if let Some(JsonData::String(data)) = media.data.as_ref() {
                 ClaudeMediaSource {
@@ -4638,6 +4682,7 @@ fn claude_block_from_item(
                         .clone()
                         .unwrap_or_else(|| "application/octet-stream".to_owned()),
                     data: data.clone(),
+                    extra: BTreeMap::new(),
                 }
             } else {
                 return Err(DirectIrError::unsupported(source, target, "media", path));
@@ -4817,6 +4862,7 @@ pub fn envelope_to_claude_request_v2(
                     chat_role(item.role.clone()).to_owned()
                 },
                 content: StringOrParts::Parts(vec![block]),
+                extra: BTreeMap::new(),
             });
         }
     }
@@ -4827,20 +4873,24 @@ pub fn envelope_to_claude_request_v2(
             name,
             description: tool.description.clone(),
             input_schema: tool.input_schema.clone().unwrap_or_else(|| object([])),
+            extra: BTreeMap::new(),
         });
     }
     let tool_choice = match envelope.tool_choice.clone() {
         ToolChoice::Auto => Some(ClaudeToolChoice {
             kind: "auto".to_owned(),
             name: None,
+            extra: BTreeMap::new(),
         }),
         ToolChoice::Required => Some(ClaudeToolChoice {
             kind: "any".to_owned(),
             name: None,
+            extra: BTreeMap::new(),
         }),
         ToolChoice::Named { name } => Some(ClaudeToolChoice {
             kind: "tool".to_owned(),
             name: Some(name),
+            extra: BTreeMap::new(),
         }),
         ToolChoice::None => {
             record_loss(
@@ -4853,6 +4903,7 @@ pub fn envelope_to_claude_request_v2(
             Some(ClaudeToolChoice {
                 kind: "auto".to_owned(),
                 name: None,
+                extra: BTreeMap::new(),
             })
         }
         ToolChoice::Provider { .. } => {
@@ -9110,6 +9161,58 @@ mod direct_ir_tests {
             .expect_err("direct IR must not silently drop a Claude response field");
         assert_eq!(error.feature, "unknown_field");
         assert_eq!(error.path, "futureResponseField");
+    }
+
+    #[test]
+    fn claude_request_nested_unknown_fields_are_typed_rejections() {
+        let message: ClaudeRequest = serde_json::from_str(
+            r#"{"model":"claude-test","max_tokens":128,"messages":[{"role":"user","content":"hello","futureMessageField":true}]}"#,
+        )
+        .expect("unknown Claude message field is retained by the wire DTO");
+        assert!(message.messages[0].extra.contains_key("futureMessageField"));
+        let error = claude_request_to_envelope_v2(message)
+            .expect_err("direct IR must not silently drop a Claude message field");
+        assert_eq!(error.feature, "unknown_field");
+        assert_eq!(error.path, "messages[0].futureMessageField");
+
+        let system_source: ClaudeRequest = serde_json::from_str(
+            r#"{"model":"claude-test","max_tokens":128,"system":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AA==","futureSystemSourceField":true}}]}"#,
+        )
+        .expect("unknown Claude system media source field is retained by the wire DTO");
+        let error = claude_request_to_envelope_v2(system_source)
+            .expect_err("direct IR must not silently drop a system media source field");
+        assert_eq!(error.feature, "unknown_field");
+        assert_eq!(error.path, "system.parts[0].source.futureSystemSourceField");
+
+        let message_source: ClaudeRequest = serde_json::from_str(
+            r#"{"model":"claude-test","max_tokens":128,"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AA==","futureMessageSourceField":true}}]}]}"#,
+        )
+        .expect("unknown Claude message media source field is retained by the wire DTO");
+        let error = claude_request_to_envelope_v2(message_source)
+            .expect_err("direct IR must not silently drop a message media source field");
+        assert_eq!(error.feature, "unknown_field");
+        assert_eq!(
+            error.path,
+            "messages[0].content[0].source.futureMessageSourceField"
+        );
+
+        let tool: ClaudeRequest = serde_json::from_str(
+            r#"{"model":"claude-test","max_tokens":128,"tools":[{"name":"lookup","input_schema":{},"futureToolField":true}]}"#,
+        )
+        .expect("unknown Claude tool field is retained by the wire DTO");
+        let error = claude_request_to_envelope_v2(tool)
+            .expect_err("direct IR must not silently drop a Claude tool field");
+        assert_eq!(error.feature, "unknown_field");
+        assert_eq!(error.path, "tools[0].futureToolField");
+
+        let tool_choice: ClaudeRequest = serde_json::from_str(
+            r#"{"model":"claude-test","max_tokens":128,"tool_choice":{"type":"auto","futureToolChoiceField":true}}"#,
+        )
+        .expect("unknown Claude tool_choice field is retained by the wire DTO");
+        let error = claude_request_to_envelope_v2(tool_choice)
+            .expect_err("direct IR must not silently drop a Claude tool_choice field");
+        assert_eq!(error.feature, "unknown_field");
+        assert_eq!(error.path, "tool_choice.futureToolChoiceField");
     }
 
     #[test]

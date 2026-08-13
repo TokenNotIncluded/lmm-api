@@ -5027,6 +5027,7 @@ pub fn canonical_request_to_claude(
                 role => role_to_chat(role).to_owned(),
             },
             content: StringOrParts::Parts(parts),
+            extra: BTreeMap::new(),
         });
     }
     let tools = request
@@ -5036,6 +5037,7 @@ pub fn canonical_request_to_claude(
             name: tool.name,
             description: tool.description,
             input_schema: tool.input_schema,
+            extra: BTreeMap::new(),
         })
         .collect();
     let tool_choice = request.tool_choice.map(canonical_tool_choice_to_claude);
@@ -6375,18 +6377,22 @@ fn canonical_tool_choice_to_claude(choice: CanonicalToolChoice) -> ClaudeToolCho
         CanonicalToolChoice::Auto => ClaudeToolChoice {
             kind: "auto".to_owned(),
             name: None,
+            extra: BTreeMap::new(),
         },
         CanonicalToolChoice::Required => ClaudeToolChoice {
             kind: "any".to_owned(),
             name: None,
+            extra: BTreeMap::new(),
         },
         CanonicalToolChoice::Function { name } => ClaudeToolChoice {
             kind: "tool".to_owned(),
             name: Some(name),
+            extra: BTreeMap::new(),
         },
         CanonicalToolChoice::None => ClaudeToolChoice {
             kind: "auto".to_owned(),
             name: None,
+            extra: BTreeMap::new(),
         },
     }
 }
