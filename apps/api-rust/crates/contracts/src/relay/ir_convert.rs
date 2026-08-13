@@ -4375,6 +4375,7 @@ pub fn claude_request_to_envelope_v2(
     let model = request.model.clone();
     let source = Protocol::Claude;
     let target = Protocol::Claude;
+    reject_wire_extra(source, target, &request.extra, "")?;
     let mut envelope = Envelope::new(source, model.clone());
     envelope.controls.max_output_tokens = Some(request.max_tokens);
     envelope.controls.temperature = request.temperature;
@@ -5608,6 +5609,7 @@ pub fn openai_chat_response_to_envelope_v2(
 ) -> Result<DirectIrConversion<Envelope>, DirectIrError> {
     let source = Protocol::OpenAi;
     let target = Protocol::OpenAi;
+    reject_wire_extra(source, target, &response.extra, "")?;
     let model = response.model.clone();
     let mut envelope = Envelope::new(source, model);
     envelope.extensions.insert(
@@ -5627,6 +5629,7 @@ pub fn openai_chat_response_to_envelope_v2(
         JsonData::Number(response.choices.len().into()),
     );
     for (index, choice) in response.choices.into_iter().enumerate() {
+        reject_wire_extra(source, target, &choice.extra, &format!("choices[{index}]"))?;
         envelope.extensions.insert(
             format!("openai.choice[{index}].index"),
             JsonData::Number(choice.index.into()),
@@ -5683,6 +5686,7 @@ pub fn gemini_response_to_envelope_v2(
     let model = model.into();
     let source = Protocol::Gemini;
     let target = Protocol::Gemini;
+    reject_wire_extra(source, target, &response.extra, "")?;
     let mut envelope = Envelope::new(source, model.clone());
     let candidate_count = response.candidates.len();
     envelope.extensions.insert(
@@ -5691,6 +5695,14 @@ pub fn gemini_response_to_envelope_v2(
     );
     let mut links = GeminiCallLinks::default();
     for (candidate_index, candidate) in response.candidates.into_iter().enumerate() {
+        let candidate_path = format!("candidates[{candidate_index}]");
+        reject_wire_extra(source, target, &candidate.extra, &candidate_path)?;
+        reject_gemini_content_extra(
+            &candidate.content,
+            source,
+            target,
+            &format!("{candidate_path}.content"),
+        )?;
         if let Some(index) = candidate.index {
             envelope.extensions.insert(
                 format!("gemini.candidate[{candidate_index}].index"),
@@ -5743,6 +5755,7 @@ pub fn claude_response_to_envelope_v2(
 ) -> Result<DirectIrConversion<Envelope>, DirectIrError> {
     let source = Protocol::Claude;
     let target = Protocol::Claude;
+    reject_wire_extra(source, target, &response.extra, "")?;
     let model = response.model.clone();
     let mut envelope = Envelope::new(source, model.clone());
     envelope.extensions.insert(
@@ -8857,6 +8870,87 @@ mod direct_ir_tests {
             .expect_err("direct IR must not silently drop a Gemini part field");
         assert_eq!(error.feature, "unknown_field");
         assert_eq!(error.path, "contents[0].parts[0].futurePartField");
+    }
+
+    #[test]
+    fn gemini_response_unknown_fields_are_typed_rejections_at_each_wire_level() {
+        let top_level: GeminiResponse = serde_json::from_str(
+            r#"{"candidates":[{"content":{"parts":[{"text":"hello"}]}}],"futureResponseField":true}"#,
+        )
+        .expect("unknown Gemini response field is retained by the wire DTO");
+        let error = gemini_response_to_envelope_v2(top_level, "gemini-test")
+            .expect_err("direct IR must not silently drop a Gemini response field");
+        assert_eq!(error.feature, "unknown_field");
+        assert_eq!(error.path, "futureResponseField");
+
+        let candidate: GeminiResponse = serde_json::from_str(
+            r#"{"candidates":[{"content":{"parts":[{"text":"hello"}]},"futureCandidateField":true}]}"#,
+        )
+        .expect("unknown Gemini candidate field is retained by the wire DTO");
+        let error = gemini_response_to_envelope_v2(candidate, "gemini-test")
+            .expect_err("direct IR must not silently drop a Gemini candidate field");
+        assert_eq!(error.feature, "unknown_field");
+        assert_eq!(error.path, "candidates[0].futureCandidateField");
+
+        let content: GeminiResponse = serde_json::from_str(
+            r#"{"candidates":[{"content":{"parts":[{"text":"hello"}],"futureContentField":true}}]}"#,
+        )
+        .expect("unknown Gemini content field is retained by the wire DTO");
+        let error = gemini_response_to_envelope_v2(content, "gemini-test")
+            .expect_err("direct IR must not silently drop a Gemini content field");
+        assert_eq!(error.feature, "unknown_field");
+        assert_eq!(error.path, "candidates[0].content.futureContentField");
+
+        let part: GeminiResponse = serde_json::from_str(
+            r#"{"candidates":[{"content":{"parts":[{"text":"hello","futurePartField":1}]}}]}"#,
+        )
+        .expect("unknown Gemini part field is retained by the wire DTO");
+        let error = gemini_response_to_envelope_v2(part, "gemini-test")
+            .expect_err("direct IR must not silently drop a Gemini part field");
+        assert_eq!(error.feature, "unknown_field");
+        assert_eq!(error.path, "candidates[0].content.parts[0].futurePartField");
+    }
+
+    #[test]
+    fn claude_top_level_unknown_fields_are_typed_rejections() {
+        let request: ClaudeRequest = serde_json::from_str(
+            r#"{"model":"claude-test","max_tokens":128,"messages":[],"futureRequestField":true}"#,
+        )
+        .expect("unknown Claude request field is retained by the wire DTO");
+        let error = claude_request_to_envelope_v2(request)
+            .expect_err("direct IR must not silently drop a Claude request field");
+        assert_eq!(error.feature, "unknown_field");
+        assert_eq!(error.path, "futureRequestField");
+
+        let response: ClaudeResponse = serde_json::from_str(
+            r#"{"id":"claude-id","type":"message","role":"assistant","model":"claude-test","content":[],"futureResponseField":true}"#,
+        )
+        .expect("unknown Claude response field is retained by the wire DTO");
+        let error = claude_response_to_envelope_v2(response)
+            .expect_err("direct IR must not silently drop a Claude response field");
+        assert_eq!(error.feature, "unknown_field");
+        assert_eq!(error.path, "futureResponseField");
+    }
+
+    #[test]
+    fn openai_chat_response_unknown_fields_are_typed_rejections() {
+        let top_level: OpenAiChatResponse = serde_json::from_str(
+            r#"{"id":"chat-id","object":"chat.completion","created":1,"model":"gpt-test","choices":[],"futureResponseField":true}"#,
+        )
+        .expect("unknown OpenAI response field is retained by the wire DTO");
+        let error = openai_chat_response_to_envelope_v2(top_level)
+            .expect_err("direct IR must not silently drop an OpenAI response field");
+        assert_eq!(error.feature, "unknown_field");
+        assert_eq!(error.path, "futureResponseField");
+
+        let choice: OpenAiChatResponse = serde_json::from_str(
+            r#"{"id":"chat-id","object":"chat.completion","created":1,"model":"gpt-test","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"futureChoiceField":true}]}"#,
+        )
+        .expect("unknown OpenAI choice field is retained by the wire DTO");
+        let error = openai_chat_response_to_envelope_v2(choice)
+            .expect_err("direct IR must not silently drop an OpenAI choice field");
+        assert_eq!(error.feature, "unknown_field");
+        assert_eq!(error.path, "choices[0].futureChoiceField");
     }
 
     #[test]
