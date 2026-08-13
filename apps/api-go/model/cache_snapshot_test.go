@@ -786,6 +786,55 @@ func TestChannelGettersAndStatusUpdatesUseDefensiveCopyOnWrite(t *testing.T) {
 	}
 }
 
+func TestChannelSelectionUsesDistinctPriorityRetries(t *testing.T) {
+	preserveChannelTestState(t)
+	priorities := []int64{100, 10, 100, 50}
+	channelsIDM = make(map[int]*Channel, len(priorities))
+	ids := make([]int, len(priorities))
+	for index := range priorities {
+		id := index + 1
+		ids[index] = id
+		priority := priorities[index]
+		weight := uint(100)
+		channelsIDM[id] = &Channel{Id: id, Priority: &priority, Weight: &weight}
+	}
+	group2model2channels = map[string]map[string][]int{"default": {"model": ids}}
+	channel2advancedCustomConfig = map[int]*dto.AdvancedCustomConfig{}
+	channelCacheReady = true
+	common.MemoryCacheEnabled = true
+
+	for _, test := range []struct {
+		retry    int
+		priority int64
+	}{{-1, 100}, {0, 100}, {1, 50}, {2, 10}, {9, 10}} {
+		selected, err := GetRandomSatisfiedChannel("default", "model", test.retry, "")
+		if err != nil || selected == nil || selected.GetPriority() != test.priority {
+			t.Fatalf("retry=%d selected=%#v err=%v", test.retry, selected, err)
+		}
+	}
+}
+
+func TestOrdinaryChannelPathFilterReusesCandidateSlice(t *testing.T) {
+	preserveChannelTestState(t)
+	channels := []int{1, 2, 3}
+	channelsIDM = map[int]*Channel{
+		1: {Id: 1},
+		2: {Id: 2},
+		3: {Id: 3},
+	}
+	channel2advancedCustomConfig = map[int]*dto.AdvancedCustomConfig{}
+
+	filtered := filterChannelsByRequestPathAndModel(channels, "/v1/responses", "model")
+	if len(filtered) != len(channels) || &filtered[0] != &channels[0] {
+		t.Fatalf("ordinary route filter copied its unchanged input: %v", filtered)
+	}
+	if allocations := testing.AllocsPerRun(1000, func() {
+		_ = filterChannelsByRequestPathAndModel(channels, "/v1/responses", "model")
+	}); allocations != 0 {
+		t.Fatalf("ordinary route filter allocations=%f, want 0", allocations)
+	}
+}
+
 func setupMutationPathTest(t *testing.T, target *Channel, unrelatedID int) *gorm.DB {
 	t.Helper()
 	db := openCacheTestDB(t, &Channel{}, &Ability{})

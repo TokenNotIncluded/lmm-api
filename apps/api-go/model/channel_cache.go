@@ -216,41 +216,46 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 		return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channels[0])
 	}
 
-	uniquePriorities := make(map[int]bool)
-	for _, channelId := range channels {
-		if channel, ok := channelsIDM[channelId]; ok {
-			uniquePriorities[int(channel.GetPriority())] = true
-		} else {
-			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
-		}
+	if retry < 0 {
+		retry = 0
 	}
-	var sortedUniquePriorities []int
-	for priority := range uniquePriorities {
-		sortedUniquePriorities = append(sortedUniquePriorities, priority)
-	}
-	sort.Sort(sort.Reverse(sort.IntSlice(sortedUniquePriorities)))
-
-	if retry >= len(uniquePriorities) {
-		retry = len(uniquePriorities) - 1
-	}
-	targetPriority := int64(sortedUniquePriorities[retry])
-
-	// get the priority for the given retry number
-	var sumWeight = 0
-	var targetChannels []*Channel
-	for _, channelId := range channels {
-		if channel, ok := channelsIDM[channelId]; ok {
-			if channel.GetPriority() == targetPriority {
-				sumWeight += channel.GetWeight()
-				targetChannels = append(targetChannels, channel)
+	var targetPriority int64
+	foundPriority := false
+	for level := 0; level <= retry; level++ {
+		var next int64
+		foundNext := false
+		for _, channelID := range channels {
+			channel, ok := channelsIDM[channelID]
+			if !ok {
+				return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelID)
 			}
-		} else {
-			return nil, fmt.Errorf("数据库一致性错误，渠道# %d 不存在，请联系管理员修复", channelId)
+			priority := channel.GetPriority()
+			if foundPriority && priority >= targetPriority {
+				continue
+			}
+			if !foundNext || priority > next {
+				next = priority
+				foundNext = true
+			}
 		}
+		if !foundNext {
+			break
+		}
+		targetPriority = next
+		foundPriority = true
 	}
 
-	if len(targetChannels) == 0 {
-		return nil, errors.New(fmt.Sprintf("no channel found, group: %s, model: %s, priority: %d", group, model, targetPriority))
+	sumWeight := 0
+	targetCount := 0
+	for _, channelID := range channels {
+		channel := channelsIDM[channelID]
+		if channel.GetPriority() == targetPriority {
+			sumWeight += channel.GetWeight()
+			targetCount++
+		}
+	}
+	if targetCount == 0 {
+		return nil, fmt.Errorf("no channel found, group: %s, model: %s, priority: %d", group, model, targetPriority)
 	}
 
 	// smoothing factor and adjustment
@@ -260,9 +265,9 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 	if sumWeight == 0 {
 		// when all channels have weight 0, set sumWeight to the number of channels and set smoothing adjustment to 100
 		// each channel's effective weight = 100
-		sumWeight = len(targetChannels) * 100
+		sumWeight = targetCount * 100
 		smoothingAdjustment = 100
-	} else if sumWeight/len(targetChannels) < 10 {
+	} else if sumWeight/targetCount < 10 {
 		// when the average weight is less than 10, set smoothing factor to 100
 		smoothingFactor = 100
 	}
@@ -274,7 +279,11 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 	randomWeight := rand.Intn(totalWeight)
 
 	// Find a channel based on its weight
-	for _, channel := range targetChannels {
+	for _, channelID := range channels {
+		channel := channelsIDM[channelID]
+		if channel.GetPriority() != targetPriority {
+			continue
+		}
 		randomWeight -= channel.GetWeight()*smoothingFactor + smoothingAdjustment
 		if randomWeight < 0 {
 			return cloneChannel(channel), nil
@@ -293,21 +302,33 @@ func filterChannelsByRequestPathAndModel(channels []int, requestPath string, mod
 	if requestPath == "" || len(channels) == 0 {
 		return channels
 	}
-	filtered := make([]int, 0, len(channels))
-	for _, channelId := range channels {
+	var filtered []int
+	for index, channelId := range channels {
 		channel, ok := channelsIDM[channelId]
 		if !ok {
-			// keep it so the downstream consistency error is raised as before
-			filtered = append(filtered, channelId)
+			if filtered != nil {
+				filtered = append(filtered, channelId)
+			}
 			continue
 		}
-		if channel.Type != constant.ChannelTypeAdvancedCustom {
-			filtered = append(filtered, channelId)
+		keep := channel.Type != constant.ChannelTypeAdvancedCustom
+		if !keep {
+			config := channel2advancedCustomConfig[channelId]
+			keep = config != nil && config.SupportsPathForModel(requestPath, model)
+		}
+		if keep {
+			if filtered != nil {
+				filtered = append(filtered, channelId)
+			}
 			continue
 		}
-		if config := channel2advancedCustomConfig[channelId]; config != nil && config.SupportsPathForModel(requestPath, model) {
-			filtered = append(filtered, channelId)
+		if filtered == nil {
+			filtered = make([]int, 0, len(channels)-1)
+			filtered = append(filtered, channels[:index]...)
 		}
+	}
+	if filtered == nil {
+		return channels
 	}
 	return filtered
 }
