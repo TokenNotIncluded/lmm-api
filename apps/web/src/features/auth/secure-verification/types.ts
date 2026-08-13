@@ -39,9 +39,8 @@ export interface VerificationMethods {
 }
 
 /**
- * Sensitive dashboard actions use email when it is bound and otherwise fall
- * back to the existing Passkey flow. Other account capabilities, such as
- * signing in with 2FA, are intentionally not exposed as step-up methods.
+ * Sensitive dashboard actions use the strongest available independent proof
+ * in a stable order: email, 2FA, then an existing Passkey.
  */
 export function getPreferredVerificationMethods(
   methods: VerificationMethods
@@ -50,6 +49,14 @@ export function getPreferredVerificationMethods(
     return {
       ...methods,
       has2FA: false,
+      hasPasskey: false,
+    }
+  }
+
+  if (methods.has2FA) {
+    return {
+      ...methods,
+      hasEmail: false,
       hasPasskey: false,
     }
   }

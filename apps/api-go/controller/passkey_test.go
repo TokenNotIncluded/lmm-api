@@ -77,13 +77,10 @@ func TestPasskeyRegisterFinishRejectsMissingOrWrongProofWithoutConsumingFlow(t *
 	}
 	require.NoError(t, db.Create(user).Error)
 	require.NoError(t, db.Create(&model.TwoFA{UserId: user.Id, Secret: "totp-secret", IsEnabled: true}).Error)
-	require.NoError(t, db.Create(&model.PasskeyCredential{
-		UserID: user.Id, CredentialID: "credential-id", PublicKey: "public-key",
-	}).Error)
 	identity := service.AuthIdentity{
 		UserID: user.Id, SessionID: "passkey-proof-session", UserAuthVersion: 1, SessionVersion: 1,
 	}
-	wrongScopeProof, _, err := service.IssueSecurityProof(identity, secureVerificationMethodPasskey, []string{securityProofScopePasskeyDelete})
+	wrongScopeProof, _, err := service.IssueSecurityProof(identity, secureVerificationMethod2FA, []string{securityProofScopePasskeyDelete})
 	require.NoError(t, err)
 
 	tests := []struct {

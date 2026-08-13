@@ -61,8 +61,8 @@ func RequireSecurityProof(c *gin.Context, requiredScope string, allowedMethods [
 }
 
 // PreferredSecurityProofMethods returns the only proof method accepted for
-// sensitive dashboard actions. Email is the primary path when bound; Passkey
-// remains the compatibility fallback for accounts without a bound email.
+// sensitive dashboard actions. Email is the primary path when bound, followed
+// by an enabled 2FA factor; Passkey is the compatibility fallback otherwise.
 func PreferredSecurityProofMethods(userID int) ([]string, error) {
 	user, err := model.GetUserCache(userID)
 	if err != nil {
@@ -70,6 +70,13 @@ func PreferredSecurityProofMethods(userID int) ([]string, error) {
 	}
 	if model.NormalizeEmail(user.Email) != "" {
 		return []string{"email"}, nil
+	}
+	twoFA, err := model.GetTwoFAByUserId(userID)
+	if err != nil {
+		return nil, err
+	}
+	if twoFA != nil && twoFA.IsEnabled {
+		return []string{"2fa"}, nil
 	}
 	return []string{"passkey"}, nil
 }

@@ -112,7 +112,7 @@ export function PasskeyCard({ loading: pageLoading }: PasskeyCardProps) {
     }
 
     const methods = await fetchVerificationMethods()
-    if (!methods.hasEmail && !methods.hasPasskey) {
+    if (!methods.hasEmail && !methods.has2FA && !methods.hasPasskey) {
       // The first Passkey is the fallback credential itself, so there is no
       // existing Passkey available for a step-up proof yet.
       await register()
@@ -121,7 +121,9 @@ export function PasskeyCard({ loading: pageLoading }: PasskeyCardProps) {
 
     const requiredMethod: VerificationMethod = methods.hasEmail
       ? 'email'
-      : 'passkey'
+      : methods.has2FA
+        ? '2fa'
+        : 'passkey'
     setRestrictedMethod(requiredMethod)
     await startVerification(register, {
       scope: 'passkey.register',

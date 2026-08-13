@@ -38,10 +38,23 @@ describe('preferred secure verification methods', () => {
     })
   })
 
-  test('falls back to a supported Passkey when no email is bound', () => {
+  test('falls back to 2FA when no email is bound', () => {
     const result = getPreferredVerificationMethods({
       hasEmail: false,
       has2FA: true,
+      hasPasskey: true,
+      passkeySupported: true,
+    })
+
+    assert.equal(result.hasEmail, false)
+    assert.equal(result.has2FA, true)
+    assert.equal(result.hasPasskey, false)
+  })
+
+  test('falls back to a supported Passkey when email and 2FA are unavailable', () => {
+    const result = getPreferredVerificationMethods({
+      hasEmail: false,
+      has2FA: false,
       hasPasskey: true,
       passkeySupported: true,
     })
@@ -51,10 +64,10 @@ describe('preferred secure verification methods', () => {
     assert.equal(result.hasPasskey, true)
   })
 
-  test('fails closed when neither preferred method is usable', () => {
+  test('fails closed when no proof method is usable', () => {
     const result = getPreferredVerificationMethods({
       hasEmail: false,
-      has2FA: true,
+      has2FA: false,
       hasPasskey: true,
       passkeySupported: false,
     })

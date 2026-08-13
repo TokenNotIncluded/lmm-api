@@ -93,30 +93,42 @@ export function useSecureVerification(
       apiCall: (proofToken?: string) => Promise<unknown>,
       config: StartVerificationOptions
     ) => {
-      const { scope, title, description } = config
+      const { scope, preferredMethod, title, description } = config
       const availableMethods = getPreferredVerificationMethods(
         await fetchVerificationMethods()
       )
 
-      if (!availableMethods.hasEmail && !availableMethods.hasPasskey) {
+      if (
+        !availableMethods.hasEmail &&
+        !availableMethods.has2FA &&
+        !availableMethods.hasPasskey
+      ) {
         toast.error(
           i18next.t(
-            'Please bind an email or set up a Passkey before proceeding'
+            'Please bind an email, enable 2FA, or set up a Passkey before proceeding'
           )
         )
         onError?.(
           new Error(
-            'No verification methods available. Bind an email or set up a Passkey to continue.'
+            'No verification methods available. Bind an email, enable 2FA, or set up a Passkey to continue.'
           )
         )
         return false
       }
 
-      const defaultMethod: VerificationMethod | null = availableMethods.hasEmail
-        ? 'email'
-        : availableMethods.hasPasskey
-          ? 'passkey'
-          : null
+      const preferredMethodAvailable =
+        (preferredMethod === 'email' && availableMethods.hasEmail) ||
+        (preferredMethod === '2fa' && availableMethods.has2FA) ||
+        (preferredMethod === 'passkey' && availableMethods.hasPasskey)
+      const defaultMethod: VerificationMethod | null = preferredMethodAvailable
+        ? (preferredMethod ?? null)
+        : availableMethods.hasEmail
+          ? 'email'
+          : availableMethods.has2FA
+            ? '2fa'
+            : availableMethods.hasPasskey
+              ? 'passkey'
+              : null
 
       setState((prev) => ({
         ...prev,
@@ -246,6 +258,7 @@ export function useSecureVerification(
     (method: VerificationMethod) => {
       const preferredMethods = getPreferredVerificationMethods(methods)
       if (method === 'email') return preferredMethods.hasEmail
+      if (method === '2fa') return preferredMethods.has2FA
       if (method === 'passkey') return preferredMethods.hasPasskey
       return false
     },
@@ -255,6 +268,7 @@ export function useSecureVerification(
   const recommendedMethod = useMemo<VerificationMethod | null>(() => {
     const preferredMethods = getPreferredVerificationMethods(methods)
     if (preferredMethods.hasEmail) return 'email'
+    if (preferredMethods.has2FA) return '2fa'
     if (preferredMethods.hasPasskey) return 'passkey'
     return null
   }, [methods])
@@ -282,7 +296,10 @@ export function useSecureVerification(
     fetchVerificationMethods,
     canUseMethod,
     recommendedMethod,
-    hasAnyMethod: preferredMethods.hasEmail || preferredMethods.hasPasskey,
+    hasAnyMethod:
+      preferredMethods.hasEmail ||
+      preferredMethods.has2FA ||
+      preferredMethods.hasPasskey,
     preferredMethods,
     isLoading: state.loading,
     currentMethod: state.method,
