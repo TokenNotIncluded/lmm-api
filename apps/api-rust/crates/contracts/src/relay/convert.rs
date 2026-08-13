@@ -4055,6 +4055,36 @@ fn validate_stream_items_done(
     Ok(())
 }
 
+fn validate_responses_stream_usage(usage: &WireUsage, path: &str) -> Result<(), RelayConvertError> {
+    if let Some(error) = first_extra_path(path, &usage.extra) {
+        return Err(retarget_unsupported_error_format(
+            error,
+            "provider_neutral_ir",
+        ));
+    }
+    for (field, details) in [
+        (
+            "prompt_tokens_details",
+            usage.prompt_tokens_details.as_ref(),
+        ),
+        (
+            "completion_tokens_details",
+            usage.completion_tokens_details.as_ref(),
+        ),
+        ("input_tokens_details", usage.input_tokens_details.as_ref()),
+    ] {
+        if let Some(details) = details {
+            if let Some(error) = first_extra_path(&format!("{path}.{field}"), &details.extra) {
+                return Err(retarget_unsupported_error_format(
+                    error,
+                    "provider_neutral_ir",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_responses_stream_events(
     snapshot: &ResponsesStreamSnapshot,
 ) -> Result<(), RelayConvertError> {
@@ -4064,12 +4094,7 @@ fn validate_responses_stream_events(
             "provider_neutral_ir",
         ));
     }
-    if let Some(error) = first_extra_path("snapshot.usage", &snapshot.usage.extra) {
-        return Err(retarget_unsupported_error_format(
-            error,
-            "provider_neutral_ir",
-        ));
-    }
+    validate_responses_stream_usage(&snapshot.usage, "snapshot.usage")?;
     let mut states = BTreeMap::<usize, ResponsesStreamItemState>::new();
     let mut created_seen = false;
     let mut response_id = String::new();
@@ -4109,15 +4134,8 @@ fn validate_responses_stream_events(
                     "provider_neutral_ir",
                 ));
             }
-            if let Some(error) = response
-                .usage
-                .as_ref()
-                .and_then(|usage| first_extra_path(&format!("{path}.response.usage"), &usage.extra))
-            {
-                return Err(retarget_unsupported_error_format(
-                    error,
-                    "provider_neutral_ir",
-                ));
+            if let Some(usage) = response.usage.as_ref() {
+                validate_responses_stream_usage(usage, &format!("{path}.response.usage"))?;
             }
         }
         validate_responses_stream_event_shape(event, &path)?;
@@ -6938,6 +6956,42 @@ fn first_claude_stream_extra_path(
     })
 }
 
+fn validate_claude_wire_usage(usage: &WireUsage, path: &str) -> Result<(), RelayConvertError> {
+    if let Some(error) = first_claude_stream_extra_path(path, &usage.extra) {
+        return Err(error);
+    }
+    for (field, details) in [
+        (
+            "prompt_tokens_details",
+            usage.prompt_tokens_details.as_ref(),
+        ),
+        (
+            "completion_tokens_details",
+            usage.completion_tokens_details.as_ref(),
+        ),
+        ("input_tokens_details", usage.input_tokens_details.as_ref()),
+    ] {
+        if let Some(details) = details {
+            if let Some(error) =
+                first_claude_stream_extra_path(&format!("{path}.{field}"), &details.extra)
+            {
+                return Err(error);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_claude_event_usage(
+    usage: &super::ClaudeUsage,
+    path: &str,
+) -> Result<(), RelayConvertError> {
+    if let Some(error) = first_claude_stream_extra_path(path, &usage.extra) {
+        return Err(error);
+    }
+    Ok(())
+}
+
 fn claude_stream_known_event(kind: &str) -> bool {
     matches!(
         kind,
@@ -6960,9 +7014,7 @@ pub fn validate_claude_stream_snapshot(
     if let Some(error) = first_claude_stream_extra_path("snapshot", &snapshot.extra) {
         return Err(error);
     }
-    if let Some(error) = first_claude_stream_extra_path("snapshot.usage", &snapshot.usage.extra) {
-        return Err(error);
-    }
+    validate_claude_wire_usage(&snapshot.usage, "snapshot.usage")?;
     for (event_index, event) in snapshot.events.iter().enumerate() {
         if !claude_stream_known_event(&event.kind) {
             continue;
@@ -6978,20 +7030,11 @@ pub fn validate_claude_stream_snapshot(
                 return Err(error);
             }
             if let Some(usage) = delta.usage.as_ref() {
-                if let Some(error) = first_claude_stream_extra_path(
-                    &format!("{event_path}.delta.usage"),
-                    &usage.extra,
-                ) {
-                    return Err(error);
-                }
+                validate_claude_event_usage(usage, &format!("{event_path}.delta.usage"))?;
             }
         }
         if let Some(usage) = event.usage.as_ref() {
-            if let Some(error) =
-                first_claude_stream_extra_path(&format!("{event_path}.usage"), &usage.extra)
-            {
-                return Err(error);
-            }
+            validate_claude_event_usage(usage, &format!("{event_path}.usage"))?;
         }
         if let Some(error_value) = event.error.as_ref() {
             if let Some(error) =

@@ -996,6 +996,15 @@ fn responses_stream_unknown_envelope_fields_are_typed_rejections() {
         ),
         (
             serde_json::json!({
+                "events": [],
+                "usage": {
+                    "prompt_tokens_details": {"futurePromptField": true}
+                }
+            }),
+            "snapshot.usage.prompt_tokens_details.futurePromptField",
+        ),
+        (
+            serde_json::json!({
                 "events": [{
                     "Type": "response.error",
                     "Payload": {
@@ -1044,6 +1053,52 @@ fn responses_stream_unknown_envelope_fields_are_typed_rejections() {
                 "usage": {}
             }),
             "events[0].response.usage.futureResponseUsageField",
+        ),
+        (
+            serde_json::json!({
+                "events": [{
+                    "Type": "response.completed",
+                    "Payload": {
+                        "type": "response.completed",
+                        "response": {
+                            "id": "resp-complete",
+                            "object": "response",
+                            "status": "completed",
+                            "model": "gpt-test",
+                            "usage": {
+                                "completion_tokens_details": {
+                                    "futureCompletionField": true
+                                }
+                            }
+                        }
+                    }
+                }],
+                "usage": {}
+            }),
+            "events[0].response.usage.completion_tokens_details.futureCompletionField",
+        ),
+        (
+            serde_json::json!({
+                "events": [{
+                    "Type": "response.completed",
+                    "Payload": {
+                        "type": "response.completed",
+                        "response": {
+                            "id": "resp-complete",
+                            "object": "response",
+                            "status": "completed",
+                            "model": "gpt-test",
+                            "usage": {
+                                "input_tokens_details": {
+                                    "futureInputField": true
+                                }
+                            }
+                        }
+                    }
+                }],
+                "usage": {}
+            }),
+            "events[0].response.usage.input_tokens_details.futureInputField",
         ),
     ];
 
