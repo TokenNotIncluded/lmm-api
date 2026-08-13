@@ -2958,6 +2958,128 @@ fn bounded_rollout_configuration_corpus_is_panic_free_and_fail_closed() {
 }
 
 #[test]
+fn rollback_evaluation_covers_plan_thresholds_and_reason_order() {
+    fn assert_decision(
+        signals: RollbackSignals,
+        action: RollbackAction,
+        reasons: &[RollbackReason],
+    ) {
+        let decision = evaluate_rollback(&signals);
+        assert_eq!(decision.action, action);
+        assert_eq!(decision.reasons.as_slice(), reasons);
+        assert_eq!(decision.should_disable(), action == RollbackAction::Disable);
+        assert_eq!(decision.should_pause(), action == RollbackAction::Pause);
+    }
+
+    assert_decision(RollbackSignals::default(), RollbackAction::Continue, &[]);
+    assert_decision(
+        RollbackSignals {
+            parse_error_rate_percentage_points: Some(PARSE_ERROR_RATE_PAUSE_PERCENTAGE_POINTS),
+            ttft_p95_increase_percent: Some(TTFT_P95_PAUSE_PERCENT),
+            ..RollbackSignals::default()
+        },
+        RollbackAction::Continue,
+        &[],
+    );
+    assert_decision(
+        RollbackSignals {
+            silent_loss: true,
+            parse_error_rate_percentage_points: Some(
+                PARSE_ERROR_RATE_PAUSE_PERCENTAGE_POINTS + 0.01,
+            ),
+            ttft_p95_increase_percent: Some(TTFT_P95_PAUSE_PERCENT + 0.01),
+            ..RollbackSignals::default()
+        },
+        RollbackAction::Pause,
+        &[
+            RollbackReason::SilentLoss,
+            RollbackReason::ParseErrorRateExceeded,
+            RollbackReason::TtftP95Exceeded,
+        ],
+    );
+
+    assert_decision(
+        RollbackSignals {
+            tool_or_signature_400_rate_increased: true,
+            ..RollbackSignals::default()
+        },
+        RollbackAction::Disable,
+        &[RollbackReason::ToolSignature400RateIncreased],
+    );
+    assert_decision(
+        RollbackSignals {
+            signature_modified: true,
+            ..RollbackSignals::default()
+        },
+        RollbackAction::Disable,
+        &[RollbackReason::SignatureModified],
+    );
+    assert_decision(
+        RollbackSignals {
+            usage_billing_difference: true,
+            ..RollbackSignals::default()
+        },
+        RollbackAction::Disable,
+        &[RollbackReason::UsageBillingDifference],
+    );
+    assert_decision(
+        RollbackSignals {
+            sse_interruption_rate_elevated: true,
+            ..RollbackSignals::default()
+        },
+        RollbackAction::Disable,
+        &[RollbackReason::SseInterruptionRateElevated],
+    );
+
+    let all_immediate = RollbackSignals {
+        tool_or_signature_400_rate_increased: true,
+        signature_modified: true,
+        usage_billing_difference: true,
+        sse_interruption_rate_elevated: true,
+        ..RollbackSignals::default()
+    };
+    assert_decision(
+        all_immediate,
+        RollbackAction::Disable,
+        &[
+            RollbackReason::ToolSignature400RateIncreased,
+            RollbackReason::SignatureModified,
+            RollbackReason::UsageBillingDifference,
+            RollbackReason::SseInterruptionRateElevated,
+        ],
+    );
+
+    assert_decision(
+        RollbackSignals {
+            parse_error_rate_percentage_points: Some(f64::NAN),
+            ..RollbackSignals::default()
+        },
+        RollbackAction::Disable,
+        &[RollbackReason::InvalidMetric],
+    );
+    assert_decision(
+        RollbackSignals {
+            ttft_p95_increase_percent: Some(-0.01),
+            ..RollbackSignals::default()
+        },
+        RollbackAction::Disable,
+        &[RollbackReason::InvalidMetric],
+    );
+    assert_decision(
+        RollbackSignals {
+            tool_or_signature_400_rate_increased: true,
+            parse_error_rate_percentage_points: Some(f64::NAN),
+            ..RollbackSignals::default()
+        },
+        RollbackAction::Disable,
+        &[
+            RollbackReason::ToolSignature400RateIncreased,
+            RollbackReason::InvalidMetric,
+        ],
+    );
+}
+
+#[test]
 fn route_specific_stream_observability_preserves_dimensions() {
     let observer = ConversionObserver::with_max_series(64);
     let labels = MetricLabels::for_route(
