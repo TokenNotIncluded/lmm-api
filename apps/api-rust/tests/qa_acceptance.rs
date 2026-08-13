@@ -3287,3 +3287,177 @@ fn fixed_duration_sse_fuzz_is_panic_free() {
         "fixed SSE fuzz did not execute an iteration"
     );
 }
+
+#[test]
+#[ignore = "fixed-duration JSON conversion fuzz harness; run explicitly in QA"]
+fn fixed_duration_json_conversion_fuzz_is_panic_free() {
+    const INITIAL_SEED: u64 = 0x5d7a_91c3_24ef_0861;
+    const MAX_INPUT_BYTES: usize = 8192;
+    const MAX_ITERATIONS: u64 = 1_000_000;
+
+    fn next_xorshift(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
+    let seconds = std::env::var("LMM_FUZZ_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(1)
+        .max(1)
+        .min(30);
+    let deadline = Instant::now() + Duration::from_secs(seconds);
+    let mut seed = INITIAL_SEED;
+    let mut iterations = 0_u64;
+
+    while Instant::now() < deadline && iterations < MAX_ITERATIONS {
+        let template = match next_xorshift(&mut seed) % 9 {
+            0 => serde_json::json!({
+                "model": "fuzz-model",
+                "messages": []
+            }),
+            1 => serde_json::json!({
+                "model": "fuzz-model",
+                "messages": [{"role": "user", "content": "x"}],
+                "tools": [{
+                    "type": "function",
+                    "function": {
+                        "name": "lookup",
+                        "parameters": {"type": "object"}
+                    }
+                }]
+            }),
+            2 => serde_json::json!({
+                "model": "fuzz-model",
+                "input": "x",
+                "tools": [{
+                    "type": "function",
+                    "name": "lookup",
+                    "parameters": {"type": "object"}
+                }]
+            }),
+            3 => serde_json::json!({
+                "model": "fuzz-model",
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "x"}],
+                "tools": [{
+                    "name": "lookup",
+                    "input_schema": {"type": "object"}
+                }]
+            }),
+            4 => serde_json::json!({
+                "contents": [{"role": "user", "parts": [{"text": "x"}]}],
+                "tools": [{
+                    "functionDeclarations": [{
+                        "name": "lookup",
+                        "parameters": {"type": "object"}
+                    }]
+                }]
+            }),
+            5 => serde_json::json!({
+                "id": "fuzz",
+                "model": "fuzz-model",
+                "object": "chat.completion",
+                "created": 0,
+                "choices": []
+            }),
+            6 => serde_json::json!({
+                "id": "fuzz",
+                "object": "response",
+                "created_at": 0,
+                "status": "completed",
+                "model": "fuzz-model",
+                "output": []
+            }),
+            7 => serde_json::json!({
+                "id": "fuzz",
+                "type": "message",
+                "role": "assistant",
+                "model": "fuzz-model",
+                "content": []
+            }),
+            _ => serde_json::json!({"candidates": []}),
+        };
+        let mut input = serde_json::to_vec(&template).expect("JSON fuzz template");
+
+        match next_xorshift(&mut seed) % 3 {
+            0 => {}
+            1 => {
+                let suffix_len = (next_xorshift(&mut seed) % 128) as usize;
+                for _ in 0..suffix_len {
+                    let byte = (next_xorshift(&mut seed) >> 56) as u8;
+                    input.push(match byte % 8 {
+                        0 => b'{',
+                        1 => b'}',
+                        2 => b'[',
+                        3 => b']',
+                        4 => b':',
+                        5 => b',',
+                        _ => b'a' + (byte % 26),
+                    });
+                }
+            }
+            _ => {
+                let cut = (next_xorshift(&mut seed) as usize) % (input.len() + 1);
+                input.truncate(cut);
+            }
+        }
+        if input.len() > MAX_INPUT_BYTES {
+            input.truncate(MAX_INPUT_BYTES);
+        }
+        assert!(input.len() <= MAX_INPUT_BYTES);
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            if let Ok(request) = serde_json::from_slice::<OpenAiChatRequest>(&input) {
+                if let Ok(converted) = openai_chat_request_to_canonical(request) {
+                    let _ = canonical_request_to_openai_responses(converted.value);
+                }
+            }
+            if let Ok(request) = serde_json::from_slice::<OpenAiResponsesRequest>(&input) {
+                if let Ok(converted) = openai_responses_request_to_canonical(request) {
+                    let _ = canonical_request_to_openai_chat(converted.value);
+                }
+            }
+            if let Ok(request) = serde_json::from_slice::<ClaudeRequest>(&input) {
+                if let Ok(converted) = claude_request_to_canonical(request) {
+                    let _ = canonical_request_to_claude(converted.value);
+                }
+            }
+            if let Ok(request) = serde_json::from_slice::<GeminiRequest>(&input) {
+                if let Ok(converted) = gemini_request_to_canonical_for_model(request, "fuzz-model")
+                {
+                    let _ =
+                        canonical_request_to_gemini_for_model(converted.value, "fuzz-model", false);
+                }
+            }
+
+            if let Ok(response) = serde_json::from_slice::<OpenAiChatResponse>(&input) {
+                let _ = openai_chat_response_to_canonical(response);
+            }
+            if let Ok(response) = serde_json::from_slice::<ResponsesResponse>(&input) {
+                let _ = openai_responses_response_to_canonical(response);
+            }
+            if let Ok(response) = serde_json::from_slice::<ClaudeResponse>(&input) {
+                let _ = claude_response_to_canonical(response);
+            }
+            if let Ok(response) = serde_json::from_slice::<GeminiResponse>(&input) {
+                let _ = gemini_response_to_canonical_for_model(response, "fuzz-model");
+            }
+        }));
+        assert!(
+            result.is_ok(),
+            "fixed JSON conversion fuzz panic: seed={seed:#x}, iteration={iterations}"
+        );
+        iterations = iterations.saturating_add(1);
+    }
+
+    eprintln!(
+        "fixed JSON conversion fuzz complete: initial_seed={INITIAL_SEED:#x}, final_seed={seed:#x}, iterations={iterations}"
+    );
+    assert!(
+        iterations > 0,
+        "fixed JSON conversion fuzz did not execute an iteration"
+    );
+}
