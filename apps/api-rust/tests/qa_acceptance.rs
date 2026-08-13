@@ -3604,3 +3604,231 @@ fn fixed_duration_claude_stream_state_machine_fuzz_is_panic_free() {
         "Claude stream state fuzz did not execute an iteration"
     );
 }
+
+#[test]
+#[ignore = "fixed-duration tool-schema fuzz harness; run explicitly in QA"]
+fn fixed_duration_tool_schema_conversion_fuzz_is_panic_free() {
+    const INITIAL_SEED: u64 = 0x1d4c_8f72_a903_e6b5;
+    const MAX_INPUT_BYTES: usize = 4096;
+    const MAX_SCHEMA_DEPTH: usize = 6;
+    const MAX_SCHEMA_NODES: usize = 63;
+    const MAX_TOOLS: usize = 8;
+    const MAX_ITERATIONS: u64 = 1_000_000;
+
+    fn next_xorshift(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
+    fn schema_value(
+        state: &mut u64,
+        depth: usize,
+        nodes_left: &mut usize,
+        forced_kind: Option<u8>,
+    ) -> serde_json::Value {
+        if *nodes_left == 0 {
+            return serde_json::Value::Null;
+        }
+        *nodes_left -= 1;
+        let kind = forced_kind.unwrap_or_else(|| (next_xorshift(state) % 6) as u8);
+        if depth >= MAX_SCHEMA_DEPTH {
+            return match kind % 4 {
+                0 => serde_json::Value::String(format!("s{:x}", next_xorshift(state) & 0xff)),
+                1 => {
+                    serde_json::Value::Number(serde_json::Number::from(next_xorshift(state) % 1000))
+                }
+                2 => serde_json::Value::Bool(next_xorshift(state) & 1 == 0),
+                _ => serde_json::Value::Null,
+            };
+        }
+
+        match kind {
+            0 => {
+                let mut object = serde_json::Map::new();
+                let count = (next_xorshift(state) % 3) as usize;
+                for index in 0..count {
+                    if *nodes_left == 0 {
+                        break;
+                    }
+                    object.insert(
+                        format!("k{index}"),
+                        schema_value(state, depth + 1, nodes_left, None),
+                    );
+                }
+                serde_json::Value::Object(object)
+            }
+            1 => {
+                let count = (next_xorshift(state) % 3) as usize;
+                let mut array = Vec::with_capacity(count);
+                for _ in 0..count {
+                    if *nodes_left == 0 {
+                        break;
+                    }
+                    array.push(schema_value(state, depth + 1, nodes_left, None));
+                }
+                serde_json::Value::Array(array)
+            }
+            2 => serde_json::Value::String(format!(
+                "s{:x}",
+                next_xorshift(state) & 0xffff
+            )),
+            3 => serde_json::Value::Number(serde_json::Number::from(
+                next_xorshift(state) % 1000,
+            )),
+            4 => serde_json::Value::Bool(next_xorshift(state) & 1 == 0),
+            _ => serde_json::Value::Null,
+        }
+    }
+
+    let seconds = std::env::var("LMM_FUZZ_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(1)
+        .max(1)
+        .min(30);
+    let deadline = Instant::now() + Duration::from_secs(seconds);
+    let mut seed = INITIAL_SEED;
+    let mut iterations = 0_u64;
+
+    while Instant::now() < deadline && iterations < MAX_ITERATIONS {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let tool_count = (next_xorshift(&mut seed) % MAX_TOOLS as u64 + 1) as usize;
+            let mut schemas = Vec::with_capacity(tool_count);
+            for tool_index in 0..tool_count {
+                let mut nodes_left = MAX_SCHEMA_NODES;
+                schemas.push(schema_value(
+                    &mut seed,
+                    0,
+                    &mut nodes_left,
+                    Some((tool_index % 6) as u8),
+                ));
+            }
+            assert!(schemas.len() <= MAX_TOOLS);
+
+            let chat = serde_json::json!({
+                "model": "fuzz-schema",
+                "messages": [],
+                "tools": schemas.iter().enumerate().map(|(tool_index, schema)| {
+                    serde_json::json!({
+                        "type": "function",
+                        "function": {
+                            "name": format!("lookup_{tool_index}"),
+                            "parameters": schema.clone()
+                        }
+                    })
+                }).collect::<Vec<_>>()
+            });
+            let claude = serde_json::json!({
+                "model": "fuzz-schema",
+                "max_tokens": 128,
+                "messages": [],
+                "tools": schemas.iter().enumerate().map(|(tool_index, schema)| {
+                    serde_json::json!({
+                        "name": format!("lookup_{tool_index}"),
+                        "input_schema": schema.clone()
+                    })
+                }).collect::<Vec<_>>()
+            });
+            let gemini = serde_json::json!({
+                "contents": [],
+                "tools": [{
+                    "functionDeclarations": schemas.iter().enumerate().map(|(tool_index, schema)| {
+                        serde_json::json!({
+                            "name": format!("lookup_{tool_index}"),
+                            "parameters": schema.clone()
+                        })
+                    }).collect::<Vec<_>>()
+                }]
+            });
+            let responses = serde_json::json!({
+                "model": "fuzz-schema",
+                "input": [],
+                "tools": schemas.iter().enumerate().map(|(tool_index, schema)| {
+                    serde_json::json!({
+                        "type": "function",
+                        "name": format!("lookup_{tool_index}"),
+                        "parameters": schema.clone()
+                    })
+                }).collect::<Vec<_>>()
+            });
+
+            let documents = vec![
+                serde_json::to_vec(&chat).expect("Chat schema serialization"),
+                serde_json::to_vec(&claude).expect("Claude schema serialization"),
+                serde_json::to_vec(&gemini).expect("Gemini schema serialization"),
+                serde_json::to_vec(&responses).expect("Responses schema serialization"),
+            ];
+            for (document_index, mut input) in documents.into_iter().enumerate() {
+                match next_xorshift(&mut seed) % 3 {
+                    0 => {}
+                    1 => {
+                        let suffix_len = (next_xorshift(&mut seed) % 96) as usize;
+                        for _ in 0..suffix_len {
+                            let byte = (next_xorshift(&mut seed) >> 56) as u8;
+                            input.push(match byte % 8 {
+                                0 => b'{',
+                                1 => b'}',
+                                2 => b'[',
+                                3 => b']',
+                                4 => b':',
+                                5 => b',',
+                                _ => b'a' + (byte % 26),
+                            });
+                        }
+                    }
+                    _ => {
+                        let cut = (next_xorshift(&mut seed) as usize) % (input.len() + 1);
+                        input.truncate(cut);
+                    }
+                }
+                if input.len() > MAX_INPUT_BYTES {
+                    input.truncate(MAX_INPUT_BYTES);
+                }
+                assert!(input.len() <= MAX_INPUT_BYTES);
+
+                match document_index {
+                    0 => {
+                        if let Ok(request) =
+                            serde_json::from_slice::<OpenAiChatRequest>(&input)
+                        {
+                            let _ = openai_chat_request_to_canonical(request);
+                        }
+                    }
+                    1 => {
+                        if let Ok(request) = serde_json::from_slice::<ClaudeRequest>(&input) {
+                            let _ = claude_request_to_canonical(request);
+                        }
+                    }
+                    2 => {
+                        if let Ok(request) = serde_json::from_slice::<GeminiRequest>(&input) {
+                            let _ =
+                                gemini_request_to_canonical_for_model(request, "fuzz-schema");
+                        }
+                    }
+                    _ => {
+                        if let Ok(request) =
+                            serde_json::from_slice::<OpenAiResponsesRequest>(&input)
+                        {
+                            let _ = openai_responses_request_to_canonical(request);
+                        }
+                    }
+                }
+            }
+        }));
+        assert!(
+            result.is_ok(),
+            "tool schema fuzz panic: seed={seed:#x}, iteration={iterations}"
+        );
+        iterations = iterations.saturating_add(1);
+    }
+
+    eprintln!(
+        "tool schema fuzz complete: initial_seed={INITIAL_SEED:#x}, final_seed={seed:#x}, iterations={iterations}"
+    );
+    assert!(
+        iterations > 0,
+        "tool schema fuzz did not execute an iteration"
+    );
+}
