@@ -5852,6 +5852,24 @@ pub fn gemini_response_to_envelope_v2_for_model(
     gemini_response_to_envelope_v2(response, model)
 }
 
+fn reject_claude_response_nested_extra(
+    response: &ClaudeResponse,
+    source: Protocol,
+    target: Protocol,
+) -> Result<(), DirectIrError> {
+    for (index, block) in response.content.iter().enumerate() {
+        if let Some(media_source) = block.source.as_ref() {
+            reject_wire_extra(
+                source,
+                target,
+                &media_source.extra,
+                &format!("response.content[{index}].source"),
+            )?;
+        }
+    }
+    Ok(())
+}
+
 /// Decodes a Claude non-stream response into an ordered IR Envelope.
 pub fn claude_response_to_envelope_v2(
     response: ClaudeResponse,
@@ -5859,6 +5877,7 @@ pub fn claude_response_to_envelope_v2(
     let source = Protocol::Claude;
     let target = Protocol::Claude;
     reject_wire_extra(source, target, &response.extra, "")?;
+    reject_claude_response_nested_extra(&response, source, target)?;
     let model = response.model.clone();
     let mut envelope = Envelope::new(source, model.clone());
     envelope.extensions.insert(
@@ -9161,6 +9180,24 @@ mod direct_ir_tests {
             .expect_err("direct IR must not silently drop a Claude response field");
         assert_eq!(error.feature, "unknown_field");
         assert_eq!(error.path, "futureResponseField");
+    }
+
+    #[test]
+    fn claude_response_media_source_unknown_fields_are_typed_rejections() {
+        let response: ClaudeResponse = serde_json::from_str(
+            r#"{"id":"claude-id","type":"message","role":"assistant","model":"claude-test","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AA==","futureSourceField":true}}]}"#,
+        )
+        .expect("unknown Claude response media source field is retained by the wire DTO");
+        assert!(
+            response.content[0]
+                .source
+                .as_ref()
+                .is_some_and(|source| source.extra.contains_key("futureSourceField"))
+        );
+        let error = claude_response_to_envelope_v2(response)
+            .expect_err("direct IR must not silently drop a Claude response source field");
+        assert_eq!(error.feature, "unknown_field");
+        assert_eq!(error.path, "response.content[0].source.futureSourceField");
     }
 
     #[test]
