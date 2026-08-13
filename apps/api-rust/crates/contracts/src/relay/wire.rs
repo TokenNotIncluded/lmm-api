@@ -1065,6 +1065,9 @@ pub struct OpenAiStreamFunction {
 pub struct ResponsesStreamSnapshot {
     pub events: Vec<ResponsesStreamEvent>,
     pub usage: WireUsage,
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -312,6 +312,7 @@ fn responses_encoder_emits_a_checked_state_machine_stream() {
     let snapshot = ResponsesStreamSnapshot {
         events: response_events_to_responses(&events),
         usage: WireUsage::default(),
+        extra: BTreeMap::new(),
     };
     let checked = responses_stream_to_canonical_checked(&snapshot)
         .expect("the Responses encoder output must satisfy its checked parser");
@@ -341,6 +342,7 @@ fn responses_encoder_emits_a_checked_state_machine_stream() {
     let snapshot = ResponsesStreamSnapshot {
         events: response_events_to_responses(&terminal_then_cancelled),
         usage: WireUsage::default(),
+        extra: BTreeMap::new(),
     };
     let checked = responses_stream_to_canonical_checked(&snapshot)
         .expect("a post-terminal cancellation remains a distinct checked event");
@@ -423,6 +425,7 @@ fn openai_pair_golden_streams_execute_source_to_target_frame_by_frame() {
     let mut actual_responses = ResponsesStreamSnapshot {
         events: response_events_to_responses(&canonical),
         usage: expected_responses.usage.clone(),
+        extra: BTreeMap::new(),
     };
     for (actual, expected) in actual_responses
         .events
@@ -914,6 +917,93 @@ fn openai_stream_validator_reports_nested_function_unknown_path() {
         RelayConvertError::UnsupportedFeature(detail)
             if detail.path == "events[0].choices[0].delta.tool_calls[0].function.futureFunctionField"
     ));
+}
+
+#[test]
+fn responses_stream_unknown_envelope_fields_are_typed_rejections() {
+    let cases = [
+        (
+            serde_json::json!({
+                "events": [],
+                "usage": {},
+                "futureSnapshotField": true
+            }),
+            "snapshot.futureSnapshotField",
+        ),
+        (
+            serde_json::json!({
+                "events": [],
+                "usage": {"futureUsageField": true}
+            }),
+            "snapshot.usage.futureUsageField",
+        ),
+        (
+            serde_json::json!({
+                "events": [{
+                    "Type": "response.error",
+                    "Payload": {
+                        "type": "response.error",
+                        "error": {"message": "boom", "futurePayloadErrorField": true}
+                    }
+                }],
+                "usage": {}
+            }),
+            "events[0].error.futurePayloadErrorField",
+        ),
+        (
+            serde_json::json!({
+                "events": [{
+                    "Type": "response.error",
+                    "Payload": {
+                        "type": "response.error",
+                        "response": {
+                            "id": "resp-error",
+                            "object": "response",
+                            "status": "failed",
+                            "model": "gpt-test",
+                            "error": {"message": "boom", "futureResponseErrorField": true}
+                        }
+                    }
+                }],
+                "usage": {}
+            }),
+            "events[0].response.error.futureResponseErrorField",
+        ),
+        (
+            serde_json::json!({
+                "events": [{
+                    "Type": "response.completed",
+                    "Payload": {
+                        "type": "response.completed",
+                        "response": {
+                            "id": "resp-complete",
+                            "object": "response",
+                            "status": "completed",
+                            "model": "gpt-test",
+                            "usage": {"futureResponseUsageField": true}
+                        }
+                    }
+                }],
+                "usage": {}
+            }),
+            "events[0].response.usage.futureResponseUsageField",
+        ),
+    ];
+
+    for (document, expected_path) in cases {
+        let snapshot: ResponsesStreamSnapshot = serde_json::from_value(document)
+            .expect("unknown Responses stream envelope field is retained by the wire DTO");
+        let error = responses_stream_to_canonical_checked(&snapshot)
+            .expect_err("checked Responses stream conversion must reject unknown fields");
+        assert!(matches!(
+            error,
+            RelayConvertError::UnsupportedFeature(detail)
+                if detail.feature == "unknown_field"
+                    && detail.path == expected_path
+                    && detail.source_format == "openai_responses"
+                    && detail.target_format == "provider_neutral_ir"
+        ));
+    }
 }
 
 #[test]
@@ -1733,6 +1823,7 @@ fn responses_checked_stream_accepts_and_checks_generated_item_identity() {
     let snapshot = ResponsesStreamSnapshot {
         events: response_events_to_responses(&events),
         usage: WireUsage::default(),
+        extra: BTreeMap::new(),
     };
     assert!(responses_stream_to_canonical_checked(&snapshot).is_ok());
 

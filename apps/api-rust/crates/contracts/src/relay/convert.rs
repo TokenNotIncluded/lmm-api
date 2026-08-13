@@ -4028,6 +4028,18 @@ fn validate_stream_items_done(
 fn validate_responses_stream_events(
     snapshot: &ResponsesStreamSnapshot,
 ) -> Result<(), RelayConvertError> {
+    if let Some(error) = first_extra_path("snapshot", &snapshot.extra) {
+        return Err(retarget_unsupported_error_format(
+            error,
+            "provider_neutral_ir",
+        ));
+    }
+    if let Some(error) = first_extra_path("snapshot.usage", &snapshot.usage.extra) {
+        return Err(retarget_unsupported_error_format(
+            error,
+            "provider_neutral_ir",
+        ));
+    }
     let mut states = BTreeMap::<usize, ResponsesStreamItemState>::new();
     let mut created_seen = false;
     let mut response_id = String::new();
@@ -4044,6 +4056,39 @@ fn validate_responses_stream_events(
                 path,
                 Some("LOSS_UNKNOWN_EVENT"),
             ));
+        }
+        if let Some(error) = event
+            .payload
+            .error
+            .as_ref()
+            .and_then(|error| first_extra_path(&format!("{path}.error"), &error.extra))
+        {
+            return Err(retarget_unsupported_error_format(
+                error,
+                "provider_neutral_ir",
+            ));
+        }
+        if let Some(response) = event.payload.response.as_ref() {
+            if let Some(error) = response
+                .error
+                .as_ref()
+                .and_then(|error| first_extra_path(&format!("{path}.response.error"), &error.extra))
+            {
+                return Err(retarget_unsupported_error_format(
+                    error,
+                    "provider_neutral_ir",
+                ));
+            }
+            if let Some(error) = response
+                .usage
+                .as_ref()
+                .and_then(|usage| first_extra_path(&format!("{path}.response.usage"), &usage.extra))
+            {
+                return Err(retarget_unsupported_error_format(
+                    error,
+                    "provider_neutral_ir",
+                ));
+            }
         }
         validate_responses_stream_event_shape(event, &path)?;
         let kind = event.payload.kind.as_str();
