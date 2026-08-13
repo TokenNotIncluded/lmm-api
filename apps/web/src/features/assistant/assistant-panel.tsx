@@ -611,6 +611,8 @@ export function AssistantPanel(props: {
   initialPreset?: AssistantPresetId
   initialMessage?: string
   initialMessageRevision?: number
+  autoSendRequestId?: string
+  onAutoSendConsumed?: (requestId: string) => void
   onOpenChange: (open: boolean) => void
   onConversationReset?: () => void
   onToggleCollapsed?: () => void
@@ -625,6 +627,7 @@ export function AssistantPanel(props: {
   const baseUrl = getBaseUrl()
   const [entries, setEntries] = useState<ConversationEntry[]>([])
   const [sending, setSending] = useState(false)
+  const submittedAutoSendIdRef = useRef<string | undefined>(undefined)
   const [recommendationDraft, setRecommendationDraft] =
     useState<AssistantL1RecommendationAction | null>(null)
   const [accountDisableDraft, setAccountDisableDraft] =
@@ -824,7 +827,8 @@ export function AssistantPanel(props: {
 
   useEffect(
     () =>
-      subscribeToAssistantOpen((target) => {
+      subscribeToAssistantOpen((request) => {
+        const target = request.preset
         if (!target) return
         if (openAssistantTarget(target)) openedTargetRef.current = target
       }),
@@ -961,6 +965,30 @@ export function AssistantPanel(props: {
     ])
     await requestAssistantReply(safeMessage.content, history)
   }
+
+  useEffect(() => {
+    const requestId = props.autoSendRequestId
+    const message = props.initialMessage?.trim()
+    if (
+      !requestId ||
+      !message ||
+      !accountAccessConfirmed ||
+      submittedAutoSendIdRef.current === requestId
+    ) {
+      return
+    }
+    submittedAutoSendIdRef.current = requestId
+    props.onAutoSendConsumed?.(requestId)
+    void submitMessage({ text: message })
+    // The request id is a single-use delivery token. Keeping it in a ref
+    // prevents React StrictMode from submitting it again.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    accountAccessConfirmed,
+    props.autoSendRequestId,
+    props.initialMessage,
+    props.onAutoSendConsumed,
+  ])
 
   const retryMessage = async (entry: ConversationEntry) => {
     if (!entry.retry || sending) return

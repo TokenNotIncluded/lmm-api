@@ -27,8 +27,8 @@ import { isConsoleActivated } from '@/lib/console-activation'
 import { useAuthStore } from '@/stores/auth-store'
 
 import {
-  consumeQueuedAssistantPreset,
-  consumeQueuedAssistantMessage,
+  consumeQueuedAssistantRequest,
+  peekQueuedAssistantRequest,
   subscribeToAssistantOpen,
   type AssistantPresetId,
 } from './assistant-events'
@@ -52,36 +52,56 @@ export function AssistantLauncher() {
   const [initialPreset, setInitialPreset] = useState<AssistantPresetId>()
   const [initialMessage, setInitialMessage] = useState<string>()
   const [initialMessageRevision, setInitialMessageRevision] = useState(0)
+  const [autoSendRequestId, setAutoSendRequestId] = useState<string>()
 
   const showAssistant = useCallback(
-    (preset?: AssistantPresetId, message?: string) => {
-      const nextMessage = message ?? consumeQueuedAssistantMessage()
-      setInitialPreset(preset)
-      setInitialMessage(nextMessage)
-      if (nextMessage?.trim()) {
-        setInitialMessageRevision((revision) => revision + 1)
+    (request: {
+      id: string
+      preset?: AssistantPresetId
+      message?: string
+      autoSend: boolean
+    }) => {
+      let preset = request.preset
+      if (!preset && request.autoSend) {
+        preset = isConsoleActivated(user) ? 'service' : 'onboarding'
       }
+      setInitialPreset(preset)
+      setInitialMessage(request.message)
+      if (request.message?.trim()) {
+        setInitialMessageRevision((revision) => revision + 1)
+        setAutoSendRequestId(request.autoSend ? request.id : undefined)
+      }
+      if (!request.autoSend) consumeQueuedAssistantRequest(request.id)
       setDesktopCollapsed(false)
       setDesktopFullscreen(false)
       setMobileOpen(true)
     },
-    []
+    [user]
   )
+
+  const showManualAssistant = useCallback(() => {
+    showAssistant({ id: 'manual', autoSend: false })
+  }, [showAssistant])
 
   const handleConversationReset = useCallback(() => {
     setInitialPreset(undefined)
     setInitialMessage(undefined)
     setInitialMessageRevision((revision) => revision + 1)
+    setAutoSendRequestId(undefined)
   }, [])
 
   useEffect(() => {
-    const queuedPreset = consumeQueuedAssistantPreset()
-    const queuedMessage = consumeQueuedAssistantMessage()
-    if (queuedPreset || queuedMessage) {
-      showAssistant(queuedPreset, queuedMessage)
-    }
+    const queued = peekQueuedAssistantRequest()
+    if (queued) showAssistant(queued)
     return subscribeToAssistantOpen(showAssistant)
   }, [showAssistant])
+
+  const handleAutoSendConsumed = useCallback((requestId: string) => {
+    consumeQueuedAssistantRequest(requestId)
+    setAutoSendRequestId((current) =>
+      current === requestId ? undefined : current
+    )
+  }, [])
 
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
@@ -96,12 +116,12 @@ export function AssistantLauncher() {
       }
 
       event.preventDefault()
-      showAssistant()
+      showManualAssistant()
     }
 
     window.addEventListener('keydown', handleShortcut)
     return () => window.removeEventListener('keydown', handleShortcut)
-  }, [showAssistant])
+  }, [showManualAssistant])
 
   if (status?.assistant?.enabled === false) return null
 
@@ -129,7 +149,7 @@ export function AssistantLauncher() {
           aria-expanded={mobileOpen}
           aria-controls='ai-assistant-panel'
           data-testid='assistant-launcher'
-          onClick={() => showAssistant()}
+          onClick={showManualAssistant}
         >
           <HugeiconsIcon
             icon={AiChat02Icon}
@@ -157,6 +177,8 @@ export function AssistantLauncher() {
           initialPreset={initialPreset}
           initialMessage={initialMessage}
           initialMessageRevision={initialMessageRevision}
+          autoSendRequestId={autoSendRequestId}
+          onAutoSendConsumed={handleAutoSendConsumed}
           onOpenChange={setMobileOpen}
           onConversationReset={handleConversationReset}
           onToggleCollapsed={() => setDesktopCollapsed((value) => !value)}

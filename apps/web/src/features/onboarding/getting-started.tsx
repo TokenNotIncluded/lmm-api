@@ -24,7 +24,10 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
-import { requestAssistantOpen } from '@/features/assistant/assistant-events'
+import {
+  peekQueuedAssistantRequest,
+  requestAssistantOpen,
+} from '@/features/assistant/assistant-events'
 import { ChallengeList } from '@/features/forge/challenge-list'
 import {
   getAuthenticatedLandingRoute,
@@ -73,6 +76,7 @@ export function GettingStarted() {
   useEffect(() => {
     if (!requestLoaded || onboarding.stage !== 'activate') return
     if (!claimOnboardingAssistantPrompt(userId, pendingRequestId)) return
+    if (peekQueuedAssistantRequest()?.autoSend) return
     requestAssistantOpen('onboarding')
   }, [onboarding.stage, pendingRequestId, requestLoaded, userId])
 

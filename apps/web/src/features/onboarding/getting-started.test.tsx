@@ -53,7 +53,7 @@ const {
 const { createInstance } = await import('i18next')
 const { I18nextProvider, initReactI18next } = await import('react-i18next')
 const { api } = await import('@/lib/api')
-const { consumeQueuedAssistantMessage, subscribeToAssistantOpen } =
+const { consumeQueuedAssistantRequest, subscribeToAssistantOpen } =
   await import('@/features/assistant/assistant-events')
 const { useAuthStore } = await import('@/stores/auth-store')
 const { GettingStarted } = await import('./getting-started')
@@ -178,6 +178,7 @@ async function unmountPage(page: Awaited<ReturnType<typeof renderPage>>) {
 }
 
 afterEach(() => {
+  consumeQueuedAssistantRequest()
   api.get = originalGet
   useAuthStore.getState().auth.reset('complete')
   window.localStorage.clear()
@@ -190,8 +191,8 @@ after(() => domWindow.close())
 describe('getting started access boundaries', () => {
   test('opens the AI onboarding conversation once when an L0 user enters', async () => {
     const opened: Array<string | undefined> = []
-    const unsubscribe = subscribeToAssistantOpen((preset) =>
-      opened.push(preset)
+    const unsubscribe = subscribeToAssistantOpen((request) =>
+      opened.push(request.preset)
     )
 
     const first = await renderPage(false, undefined, null, { id: 7001 })
@@ -234,9 +235,9 @@ describe('getting started access boundaries', () => {
   test('offers only the access conversation to L0', async () => {
     const opened: Array<string | undefined> = []
     const messages: Array<string | undefined> = []
-    const unsubscribe = subscribeToAssistantOpen((preset) => {
-      opened.push(preset ?? undefined)
-      messages.push(consumeQueuedAssistantMessage())
+    const unsubscribe = subscribeToAssistantOpen((request) => {
+      opened.push(request.preset)
+      messages.push(request.message)
     })
     const page = await renderPage()
 
@@ -272,8 +273,8 @@ describe('getting started access boundaries', () => {
 
   test('opens onboarding guidance once while administrator review is pending', async () => {
     const opened: Array<string | undefined> = []
-    const unsubscribe = subscribeToAssistantOpen((preset) =>
-      opened.push(preset)
+    const unsubscribe = subscribeToAssistantOpen((request) =>
+      opened.push(request.preset)
     )
     const pendingRequest = {
       id: 9901,
@@ -343,8 +344,8 @@ describe('getting started access boundaries', () => {
 
   test('shows administrator feedback and lets a rejected user revise with AI', async () => {
     const opened: Array<string | undefined> = []
-    const unsubscribe = subscribeToAssistantOpen((preset) =>
-      opened.push(preset)
+    const unsubscribe = subscribeToAssistantOpen((request) =>
+      opened.push(request.preset)
     )
     const page = await renderPage(
       false,

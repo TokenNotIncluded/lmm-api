@@ -122,7 +122,12 @@ async function waitForCondition(
 async function renderPanel(
   initialPreset?: 'api-key' | 'models' | 'onboarding' | 'plan',
   mode: 'mobile' | 'rail' = 'mobile',
-  user: AuthUser | null = null
+  user: AuthUser | null = null,
+  handoff?: {
+    initialMessage: string
+    autoSendRequestId: string
+    onAutoSendConsumed?: (requestId: string) => void
+  }
 ) {
   useAuthStore.getState().auth.setUser(user)
   const queryClient = new QueryClient({
@@ -136,6 +141,9 @@ async function renderPanel(
             open
             mode={mode}
             initialPreset={initialPreset}
+            initialMessage={handoff?.initialMessage}
+            autoSendRequestId={handoff?.autoSendRequestId}
+            onAutoSendConsumed={handoff?.onAutoSendConsumed}
             onOpenChange={() => {}}
           />
         </I18nextProvider>
@@ -387,6 +395,54 @@ describe('AssistantPanel', () => {
       assert.match(
         sheetContent.textContent ?? '',
         /Your assistant conversations are not private/
+      )
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
+  test('auto-sends a homepage handoff exactly once after access is confirmed', async () => {
+    let posted = 0
+    const consumedIds: string[] = []
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/assistant/status')
+      return { data: { success: true, data: assistantStatus } }
+    }) as typeof api.get
+    api.post = (async (url: string, data: unknown) => {
+      assert.equal(url, '/api/assistant/chat')
+      posted += 1
+      assert.match(JSON.stringify(data), /Help me configure the SDK/)
+      return {
+        data: {
+          choices: [{ message: { content: 'SDK guidance is ready.' } }],
+        },
+        headers: {},
+      }
+    }) as typeof api.post
+
+    const rendered = await renderPanel(undefined, 'mobile', null, {
+      initialMessage: 'Help me configure the SDK',
+      autoSendRequestId: 'home-handoff-1',
+      onAutoSendConsumed: (requestId) => consumedIds.push(requestId),
+    })
+    try {
+      await act(async () =>
+        waitForCondition(
+          () =>
+            document.body.textContent?.includes('SDK guidance is ready.') ===
+            true,
+          'Homepage handoff did not send'
+        )
+      )
+      await act(flushEffects)
+      assert.equal(posted, 1)
+      assert.deepEqual(consumedIds, ['home-handoff-1'])
+      assert.equal(
+        [...document.querySelectorAll('.is-user')].filter((message) =>
+          message.textContent?.includes('Help me configure the SDK')
+        ).length,
+        1
       )
     } finally {
       await act(async () => rendered.root.unmount())

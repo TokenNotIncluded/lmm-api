@@ -23,6 +23,15 @@ import { type FormEvent, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from '@/components/ui/input-group'
+import { requestAssistantSend } from '@/features/assistant/assistant-events'
+import { redactAssistantMessageForRequest } from '@/features/assistant/assistant-message-safety'
+import { isConsoleActivated } from '@/lib/console-activation'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { ChallengeList } from './challenge-list'
@@ -36,8 +45,23 @@ export function ForgeHome() {
 
   const submitMessage = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!message.trim()) return
-    void navigate({ to: user ? '/dashboard' : '/sign-in' })
+    const safeMessage = redactAssistantMessageForRequest(message).content.trim()
+    if (!safeMessage) return
+
+    if (!user) {
+      requestAssistantSend(undefined, safeMessage)
+      void navigate({
+        to: '/sign-in',
+        // The route guard redirects L0 to getting-started after login while
+        // L1+ stays on the dashboard.
+        search: { redirect: '/dashboard' },
+      })
+      return
+    }
+
+    const activated = isConsoleActivated(user)
+    requestAssistantSend(activated ? 'service' : 'onboarding', safeMessage)
+    void navigate({ to: activated ? '/dashboard' : '/getting-started' })
   }
 
   return (
@@ -70,34 +94,37 @@ export function ForgeHome() {
               </p>
             </div>
 
-            <form
-              className='border-border bg-muted/20 grid max-w-2xl gap-3 border p-3 sm:grid-cols-[1fr_auto] sm:items-center'
-              onSubmit={submitMessage}
-            >
+            <form className='max-w-2xl' onSubmit={submitMessage}>
               <label className='sr-only' htmlFor='forge-home-message'>
                 {t('Tell us what you want to do')}
               </label>
-              <input
-                id='forge-home-message'
-                value={message}
-                onChange={(event) => setMessage(event.target.value)}
-                className='bg-background border-border h-11 min-w-0 border px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-current'
-                placeholder={t('Describe what you need...')}
-                maxLength={4000}
-              />
-              <Button
-                type='submit'
-                className='h-11 rounded-sm'
-                disabled={!message.trim()}
-              >
-                {t('Sign in or create an account to continue')}
-                <HugeiconsIcon
-                  icon={ArrowRight01Icon}
-                  data-icon='inline-end'
-                  strokeWidth={2}
-                  aria-hidden='true'
+              <InputGroup className='has-[[data-slot=input-group-control]:focus-visible]:border-foreground/50 h-12 rounded-sm has-[[data-slot=input-group-control]:focus-visible]:ring-0'>
+                <InputGroupInput
+                  id='forge-home-message'
+                  value={message}
+                  onChange={(event) => setMessage(event.target.value)}
+                  className='focus-visible:!outline-none'
+                  placeholder={t('Describe what you need...')}
+                  maxLength={4000}
                 />
-              </Button>
+                <InputGroupAddon align='inline-end' className='pr-1'>
+                  <InputGroupButton
+                    type='submit'
+                    variant='default'
+                    size='sm'
+                    className='h-10 rounded-sm px-3'
+                    disabled={!message.trim()}
+                  >
+                    {t('Ask AI assistant')}
+                    <HugeiconsIcon
+                      icon={ArrowRight01Icon}
+                      data-icon='inline-end'
+                      strokeWidth={2}
+                      aria-hidden='true'
+                    />
+                  </InputGroupButton>
+                </InputGroupAddon>
+              </InputGroup>
             </form>
           </div>
         </section>

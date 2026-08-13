@@ -21,13 +21,13 @@ import { describe, test } from 'node:test'
 
 import { isRedirect } from '@tanstack/react-router'
 
-import { consumeQueuedAssistantPreset } from '@/features/assistant/assistant-events'
+import { consumeQueuedAssistantRequest } from '@/features/assistant/assistant-events'
 
 import { Route } from './index'
 
 describe('legacy playground route', () => {
   test('opens the assistant API-key guide and leaves no playground page', async () => {
-    consumeQueuedAssistantPreset()
+    consumeQueuedAssistantRequest()
 
     let thrown: unknown
     try {
@@ -39,6 +39,6 @@ describe('legacy playground route', () => {
     assert.ok(isRedirect(thrown))
     assert.equal(thrown.options.to, '/getting-started')
     assert.equal(thrown.options.replace, true)
-    assert.equal(consumeQueuedAssistantPreset(), 'api-key')
+    assert.equal(consumeQueuedAssistantRequest()?.preset, 'api-key')
   })
 })

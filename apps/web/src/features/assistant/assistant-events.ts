@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { redactAssistantMessageForRequest } from './assistant-message-safety'
+
 export type AssistantPresetId =
   | 'onboarding'
   | 'service'
@@ -30,11 +32,22 @@ export type AssistantPresetId =
   | 'human'
 
 const ASSISTANT_OPEN_EVENT = 'lmm:assistant:open'
-const ASSISTANT_QUEUE_KEY = 'lmm_assistant_queued_preset'
-const ASSISTANT_MESSAGE_QUEUE_KEY = 'lmm_assistant_queued_message'
+const ASSISTANT_REQUEST_QUEUE_KEY = 'lmm_assistant_request:v1'
+const LEGACY_QUEUE_KEYS = [
+  'lmm_assistant_queued_preset',
+  'lmm_assistant_queued_message',
+  'lmm_assistant_auto_send:v1',
+] as const
 
-let memoryQueue: AssistantPresetId | null = null
-let memoryMessage: string | null = null
+let memoryRequest: QueuedAssistantRequest | null = null
+let requestSequence = 0
+
+export type QueuedAssistantRequest = {
+  id: string
+  preset?: AssistantPresetId
+  message?: string
+  autoSend: boolean
+}
 
 function isAssistantPresetId(value: string): value is AssistantPresetId {
   return [
@@ -52,75 +65,135 @@ function isAssistantPresetId(value: string): value is AssistantPresetId {
   ].includes(value)
 }
 
-export function requestAssistantOpen(
+function createRequestId(): string {
+  requestSequence += 1
+  return `${Date.now().toString(36)}-${requestSequence.toString(36)}`
+}
+
+function clearStoredRequest(): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.sessionStorage.removeItem(ASSISTANT_REQUEST_QUEUE_KEY)
+    for (const key of LEGACY_QUEUE_KEYS) window.sessionStorage.removeItem(key)
+  } catch {
+    // The in-memory queue still covers restricted storage environments.
+  }
+}
+
+function readStoredRequest(): QueuedAssistantRequest | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const stored = window.sessionStorage.getItem(ASSISTANT_REQUEST_QUEUE_KEY)
+    if (!stored) return null
+    const parsed = JSON.parse(stored) as Partial<QueuedAssistantRequest>
+    if (
+      typeof parsed.id !== 'string' ||
+      typeof parsed.autoSend !== 'boolean' ||
+      (parsed.preset !== undefined &&
+        !isAssistantPresetId(String(parsed.preset))) ||
+      (parsed.message !== undefined && typeof parsed.message !== 'string')
+    ) {
+      clearStoredRequest()
+      return null
+    }
+    return {
+      id: parsed.id,
+      preset: parsed.preset,
+      message: parsed.message?.trim() || undefined,
+      autoSend: parsed.autoSend,
+    }
+  } catch {
+    clearStoredRequest()
+    return null
+  }
+}
+
+function queueAssistantRequest(
   preset?: AssistantPresetId,
-  message?: string
+  message?: string,
+  autoSend = false
 ): void {
-  memoryQueue = preset ?? null
-  memoryMessage = message?.trim() || null
+  const pending = memoryRequest ?? readStoredRequest()
+  if (!message && !autoSend && pending?.autoSend && pending.message) {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent<QueuedAssistantRequest>(ASSISTANT_OPEN_EVENT, {
+          detail: pending,
+        })
+      )
+    }
+    return
+  }
+  const safeMessage = message
+    ? redactAssistantMessageForRequest(message).content.trim() || undefined
+    : undefined
+  const request: QueuedAssistantRequest = {
+    id: createRequestId(),
+    preset,
+    message: safeMessage,
+    autoSend: autoSend && safeMessage !== undefined,
+  }
+  memoryRequest = request
 
   if (typeof window === 'undefined') return
 
   try {
-    if (preset) window.sessionStorage.setItem(ASSISTANT_QUEUE_KEY, preset)
-    else window.sessionStorage.removeItem(ASSISTANT_QUEUE_KEY)
-    if (memoryMessage) {
-      window.sessionStorage.setItem(ASSISTANT_MESSAGE_QUEUE_KEY, memoryMessage)
-    } else {
-      window.sessionStorage.removeItem(ASSISTANT_MESSAGE_QUEUE_KEY)
-    }
+    window.sessionStorage.setItem(
+      ASSISTANT_REQUEST_QUEUE_KEY,
+      JSON.stringify(request)
+    )
+    for (const key of LEGACY_QUEUE_KEYS) window.sessionStorage.removeItem(key)
   } catch {
     // The in-memory queue still covers restricted storage environments.
   }
 
   window.dispatchEvent(
-    new CustomEvent<AssistantPresetId | undefined>(ASSISTANT_OPEN_EVENT, {
-      detail: preset,
+    new CustomEvent<QueuedAssistantRequest>(ASSISTANT_OPEN_EVENT, {
+      detail: request,
     })
   )
 }
 
-export function consumeQueuedAssistantPreset(): AssistantPresetId | undefined {
-  let preset = memoryQueue ?? undefined
-  memoryQueue = null
-
-  if (typeof window === 'undefined') return preset
-
-  try {
-    const stored = window.sessionStorage.getItem(ASSISTANT_QUEUE_KEY)
-    window.sessionStorage.removeItem(ASSISTANT_QUEUE_KEY)
-    if (stored && isAssistantPresetId(stored)) preset = stored
-  } catch {
-    // Fall back to the in-memory value when storage is unavailable.
-  }
-
-  return preset
+export function requestAssistantOpen(
+  preset?: AssistantPresetId,
+  message?: string
+): void {
+  queueAssistantRequest(preset, message)
 }
 
-export function consumeQueuedAssistantMessage(): string | undefined {
-  const message = memoryMessage ?? undefined
-  memoryMessage = null
+/** Queue a one-time message that the authenticated assistant sends on mount. */
+export function requestAssistantSend(
+  preset: AssistantPresetId | undefined,
+  message: string
+): void {
+  queueAssistantRequest(preset, message, true)
+}
 
-  if (typeof window === 'undefined') return message
+/** Consume a queued cross-route request atomically so it cannot send twice. */
+export function consumeQueuedAssistantRequest(
+  expectedId?: string
+): QueuedAssistantRequest | undefined {
+  const request = memoryRequest ?? readStoredRequest() ?? undefined
+  if (!request || (expectedId && request.id !== expectedId)) return undefined
+  memoryRequest = null
+  clearStoredRequest()
+  return request
+}
 
-  try {
-    const stored = window.sessionStorage.getItem(ASSISTANT_MESSAGE_QUEUE_KEY)
-    window.sessionStorage.removeItem(ASSISTANT_MESSAGE_QUEUE_KEY)
-    return stored?.trim() || message
-  } catch {
-    return message
-  }
+export function peekQueuedAssistantRequest():
+  | QueuedAssistantRequest
+  | undefined {
+  return memoryRequest ?? readStoredRequest() ?? undefined
 }
 
 export function subscribeToAssistantOpen(
-  listener: (preset?: AssistantPresetId) => void
+  listener: (request: QueuedAssistantRequest) => void
 ): () => void {
   if (typeof window === 'undefined') return () => undefined
 
   const handleOpen = (event: Event) => {
-    const preset = (event as CustomEvent<AssistantPresetId | undefined>).detail
-    consumeQueuedAssistantPreset()
-    listener(preset)
+    const request = (event as CustomEvent<QueuedAssistantRequest>).detail
+    listener(request)
   }
 
   window.addEventListener(ASSISTANT_OPEN_EVENT, handleOpen)
