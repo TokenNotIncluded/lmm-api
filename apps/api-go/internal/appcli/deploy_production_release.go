@@ -31,6 +31,8 @@ type productionReleaseOptions struct {
 	RollbackPackage    string
 	ObservationSeconds int
 	RollbackSeconds    int
+	ManualConfirm      bool
+	PreserveEdgePolicy bool
 }
 
 type productionReleaseResult struct {
@@ -42,6 +44,7 @@ type productionReleaseResult struct {
 	ControllerBackup string `json:"controller_backup"`
 	OffhostBackup    string `json:"offhost_backup"`
 	RollbackTimer    string `json:"rollback_timer"`
+	Workspace        string `json:"workspace"`
 }
 
 type productionReleaseRuntime struct {
@@ -79,6 +82,8 @@ func parseProductionReleaseOptions(args []string, stderr io.Writer) (productionR
 	flags.StringVar(&options.RollbackPackage, "rollback-package", "", "optional bootstrap package matching the currently installed release")
 	flags.IntVar(&options.ObservationSeconds, "observation-seconds", options.ObservationSeconds, "automatic stability observation window (120-360)")
 	flags.IntVar(&options.RollbackSeconds, "rollback-seconds", options.RollbackSeconds, "automatic rollback deadline (600-1800)")
+	flags.BoolVar(&options.ManualConfirm, "manual-confirm", false, "leave a healthy release awaiting an explicit confirm command")
+	flags.BoolVar(&options.PreserveEdgePolicy, "preserve-edge-policy", false, "preserve the active nginx edge policy during activation")
 	flags.Usage = func() { writeDeployUsage(stderr) }
 	if err := flags.Parse(args); err != nil {
 		return productionReleaseOptions{}, err
@@ -288,7 +293,7 @@ func (runtime *productionReleaseRuntime) release(ctx context.Context, options pr
 	}
 	deployUnit := "lmm-api-go-deploy-" + deploymentID
 	activationDispatched = true
-	if _, err := runtime.ssh(ctx, productionTargetAlias, 20*time.Minute,
+	applyArgs := []string{
 		"systemd-run", "--quiet", "--wait", "--collect", "--unit", deployUnit,
 		"--property=Type=oneshot", "--property=TimeoutStartSec=18min",
 		remoteProbe, "deploy", "production", "apply",
@@ -300,7 +305,14 @@ func (runtime *productionReleaseRuntime) release(ctx context.Context, options pr
 		"--backup-dir", remoteTargetBackup,
 		"--rollback-seconds", strconv.Itoa(options.RollbackSeconds),
 		"--observation-seconds", strconv.Itoa(options.ObservationSeconds),
-	); err != nil {
+	}
+	if options.ManualConfirm {
+		applyArgs = append(applyArgs, "--manual-confirm")
+	}
+	if options.PreserveEdgePolicy {
+		applyArgs = append(applyArgs, "--preserve-edge-policy")
+	}
+	if _, err := runtime.ssh(ctx, productionTargetAlias, 20*time.Minute, applyArgs...); err != nil {
 		return productionReleaseResult{}, fmt.Errorf("production activation failed or became transport-ambiguous; transaction retained: %w", err)
 	}
 	statusOutput, err := runtime.ssh(ctx, productionTargetAlias, 2*time.Minute,
@@ -309,14 +321,20 @@ func (runtime *productionReleaseRuntime) release(ctx context.Context, options pr
 		return productionReleaseResult{}, fmt.Errorf("read final deployment status: %w", err)
 	}
 	var status productionStatus
-	if err := json.Unmarshal(statusOutput, &status); err != nil || status.Phase != "CONFIRMED" || status.Version != version {
-		return productionReleaseResult{}, fmt.Errorf("production release did not finish confirmed: %s", strings.TrimSpace(string(statusOutput)))
+	expectedPhase := "CONFIRMED"
+	if options.ManualConfirm {
+		expectedPhase = "AWAITING_CONFIRMATION"
 	}
-	_, _ = runtime.ssh(ctx, productionTargetAlias, 2*time.Minute, "rm", "-f", "--", remoteBootstrap)
+	if err := json.Unmarshal(statusOutput, &status); err != nil || status.Phase != expectedPhase || status.Version != version {
+		return productionReleaseResult{}, fmt.Errorf("production release did not finish in %s: %s", expectedPhase, strings.TrimSpace(string(statusOutput)))
+	}
+	if status.Phase == "CONFIRMED" {
+		_, _ = runtime.ssh(ctx, productionTargetAlias, 2*time.Minute, "rm", "-f", "--", remoteBootstrap)
+	}
 	result = productionReleaseResult{
 		DeploymentID: deploymentID, Version: version, Revision: revision, Status: status.Phase,
 		TargetBackup: remoteTargetBackup, ControllerBackup: controllerBackup, OffhostBackup: offhostBackup,
-		RollbackTimer: "inactive",
+		RollbackTimer: status.RollbackTimer, Workspace: remoteWorkspace,
 	}
 	return result, nil
 }

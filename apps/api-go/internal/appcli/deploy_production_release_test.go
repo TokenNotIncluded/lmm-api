@@ -54,12 +54,15 @@ func TestParseProductionReleaseAcceptsSafeAbsoluteInputs(t *testing.T) {
 		"--rollback-package", filepath.Join(root, "rollback.pkg.tar.zst"),
 		"--observation-seconds", "240",
 		"--rollback-seconds", "900",
+		"--manual-confirm",
+		"--preserve-edge-policy",
 	)
 	options, err := parseProductionReleaseOptions(arguments, &bytes.Buffer{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if options.ObservationSeconds != 240 || options.RollbackSeconds != 900 || options.Confirm != "api.lmm.best" {
+	if options.ObservationSeconds != 240 || options.RollbackSeconds != 900 || options.Confirm != "api.lmm.best" ||
+		!options.ManualConfirm || !options.PreserveEdgePolicy {
 		t.Fatalf("options=%#v", options)
 	}
 }

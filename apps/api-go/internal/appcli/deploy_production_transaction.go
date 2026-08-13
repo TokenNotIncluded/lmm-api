@@ -153,6 +153,7 @@ func (runtime *productionRuntime) apply(ctx context.Context, workspace productio
 		MemoryDropInExisted: memoryExisted, MemoryDropInRestoreSHA256: memoryRestoreSHA256,
 		EnvironmentRestoreSHA256: environmentRestoreSHA256,
 		NginxEdgeRestoreSHA256:   nginxEdgeRestoreSHA256,
+		PreserveEdgePolicy:       options.PreserveEdgePolicy,
 	}
 	if err := runtime.writeManifest(workspace, manifest); err != nil {
 		return productionStatus{}, fmt.Errorf("write deployment manifest: %w", err)
@@ -205,7 +206,7 @@ func (runtime *productionRuntime) apply(ctx context.Context, workspace productio
 	if err := runtime.restoreConfiguration(workspace, manifest); err != nil {
 		return productionStatus{}, err
 	}
-	if manifest.NginxEdgeRestoreSHA256 != "" {
+	if manifest.NginxEdgeRestoreSHA256 != "" && !manifest.PreserveEdgePolicy {
 		if err := runtime.applyEdgePolicyAssets(ctx, runtime.paths.EdgeAssetRoot, filepath.Join(workspace.configRestore, "nginx-edge"), true); err != nil {
 			return productionStatus{}, fmt.Errorf("install managed nginx edge policy: %w", err)
 		}

@@ -192,6 +192,7 @@ type productionTransactionOptions struct {
 	RollbackWindow      time.Duration
 	ObservationWindow   time.Duration
 	ManualConfirm       bool
+	PreserveEdgePolicy  bool
 	Reason              string
 }
 
@@ -218,6 +219,7 @@ type productionManifest struct {
 	MemoryDropInRestoreSHA256 string    `json:"memory_dropin_restore_sha256,omitempty"`
 	EnvironmentRestoreSHA256  string    `json:"environment_restore_sha256"`
 	NginxEdgeRestoreSHA256    string    `json:"nginx_edge_restore_sha256,omitempty"`
+	PreserveEdgePolicy        bool      `json:"preserve_edge_policy,omitempty"`
 }
 
 type productionStatus struct {
@@ -304,6 +306,7 @@ func parseProductionTransactionOptions(action string, args []string, stderr io.W
 		flags.IntVar(&rollbackSeconds, "rollback-seconds", rollbackSeconds, "automatic rollback window (600-1800)")
 		flags.IntVar(&observationSeconds, "observation-seconds", observationSeconds, "stability observation window (120-360)")
 		flags.BoolVar(&options.ManualConfirm, "manual-confirm", false, "leave a healthy release awaiting an explicit confirm command")
+		flags.BoolVar(&options.PreserveEdgePolicy, "preserve-edge-policy", false, "preserve the active nginx edge policy instead of installing package defaults")
 		if err := flags.Parse(args); err != nil {
 			return productionTransactionOptions{}, err
 		}
