@@ -18,8 +18,8 @@ use lmm_api_rs::{
         FeatureClass, MetricKind, MetricLabels, StreamTiming,
     },
     migration_routes::sse::{
-        DEFAULT_MAX_FRAME_BYTES, SseError, SseFrameParser, UnknownEventAction, UnknownEventClass,
-        json_events_from_frames, parse_sse_frames, parse_sse_frames_lenient,
+        DEFAULT_MAX_FRAME_BYTES, SseError, SseFrame, SseFrameParser, UnknownEventAction,
+        UnknownEventClass, json_events_from_frames, parse_sse_frames, parse_sse_frames_lenient,
         parse_sse_frames_rejecting_unterminated, unknown_event_decision,
     },
     protocol_differential_gate::{
@@ -29,13 +29,18 @@ use lmm_api_rs::{
     protocol_rollout::{
         CanaryStage, ConverterPairOverride, DecisionSource, FlagConfig, FlagOverride,
         LocalConversionError, LocalConversionSummary, LocalRequest, MAX_BASIS_POINTS,
-        PARSE_ERROR_RATE_PAUSE_PERCENTAGE_POINTS, ProtocolRolloutConfig, RollbackAction,
-        RollbackReason, RollbackSignals, RolloutContext, RolloutFlag, RolloutSelector,
-        ShadowDifference, ShadowRunner, TTFT_P95_PAUSE_PERCENT, bucket_is_in_rollout,
-        evaluate_rollback, stable_bucket, validate_canary_stage,
+        PARSE_ERROR_RATE_PAUSE_PERCENTAGE_POINTS, ProtocolRolloutConfig, ProtocolRolloutControl,
+        RollbackAction, RollbackReason, RollbackSignals, RolloutContext, RolloutFlag,
+        RolloutSelector, ShadowDifference, ShadowRunner, TTFT_P95_PAUSE_PERCENT,
+        bucket_is_in_rollout, evaluate_rollback, stable_bucket, validate_canary_stage,
     },
     protocol_route_gate::{RouteGateDecision, decide_route},
     protocol_runtime_registry::{current_support_matrix, validated_current_registry},
+    protocol_stream_pipeline::{
+        StreamAdaptor, StreamAdaptorOutput, StreamAdaptorRegistry, StreamAdaptorSession,
+        StreamFrameOutput, StreamSessionSpec, StreamSetupFailure, TypedStreamFailure,
+        compile_stream_session, compile_stream_session_with_adaptors,
+    },
     route_ownership::{
         DifferentialClass, MIN_REVIEW_CANARY_BASIS_POINTS, OwnershipBlocker, OwnershipDecision,
         OwnershipEvidence, OwnershipGate, RouteOwnershipScope,
@@ -1390,6 +1395,203 @@ fn route_gate_closed_evidence_and_rollout_flags_fail_closed() {
             .expect("rollback config parses"),
         rolled_back
     );
+}
+
+#[derive(Default)]
+struct QaExplicitStreamAdaptor;
+
+impl StreamAdaptor for QaExplicitStreamAdaptor {
+    fn source(&self) -> Protocol {
+        Protocol::OpenAi
+    }
+
+    fn target(&self) -> Protocol {
+        Protocol::Claude
+    }
+
+    fn compile(
+        &self,
+        _plan: &lmm_contracts::relay::ConversionPlan,
+    ) -> Result<Box<dyn StreamAdaptorSession>, StreamSetupFailure> {
+        Ok(Box::new(QaExplicitStreamAdaptorSession))
+    }
+}
+
+struct QaExplicitStreamAdaptorSession;
+
+impl StreamAdaptorSession for QaExplicitStreamAdaptorSession {
+    fn process_frame(
+        &mut self,
+        _frame: &SseFrame,
+    ) -> Result<StreamAdaptorOutput, TypedStreamFailure> {
+        Ok(StreamAdaptorOutput::empty())
+    }
+
+    fn cancel(&mut self) -> Result<(), TypedStreamFailure> {
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct QaExplicitStreamAdaptorRegistry {
+    adaptor: QaExplicitStreamAdaptor,
+}
+
+impl StreamAdaptorRegistry for QaExplicitStreamAdaptorRegistry {
+    fn for_route(&self, source: Protocol, target: Protocol) -> Option<&dyn StreamAdaptor> {
+        (source == Protocol::OpenAi && target == Protocol::Claude)
+            .then_some(&self.adaptor as &dyn StreamAdaptor)
+    }
+}
+
+#[test]
+fn stream_session_decision_and_telemetry_follow_rollout_and_fail_closed() {
+    let registry = validated_current_registry().expect("current registry validates");
+    let default_config = ProtocolRolloutConfig::default();
+    let enabled_config = ProtocolRolloutConfig {
+        conversion_engine_v2: FlagConfig::enabled(MAX_BASIS_POINTS)
+            .expect("full conversion rollout is bounded"),
+        ..default_config.clone()
+    };
+    let default_rollout = ProtocolRolloutControl::new(default_config)
+        .expect("default rollout validates")
+        .snapshot();
+    let enabled_rollout = ProtocolRolloutControl::new(enabled_config)
+        .expect("enabled rollout validates")
+        .snapshot();
+
+    let native_scope = RouteOwnershipScope {
+        source: Protocol::Claude,
+        target: Protocol::Claude,
+        stream: true,
+    };
+    let observer = ConversionObserver::default();
+    let mut native = compile_stream_session(StreamSessionSpec::new(
+        "qa-native-stream",
+        Protocol::Claude,
+        Protocol::Claude,
+        "claude-test",
+        &registry,
+        &default_rollout,
+        &OwnershipEvidence::closed(native_scope),
+    ))
+    .expect("validated same-protocol stream admits raw passthrough")
+    .with_observer(&observer);
+    assert!(native.decision().is_raw_passthrough());
+    let frame = parse_sse_frames(b"event: future\ndata: opaque\n\n", DEFAULT_MAX_FRAME_BYTES)
+        .expect("bounded SSE frame")
+        .into_iter()
+        .next()
+        .expect("one SSE frame");
+    let output = native
+        .process_frame(&frame)
+        .expect("native frame passthrough");
+    assert!(matches!(
+        output,
+        StreamFrameOutput::RawPassthrough { bytes } if bytes == frame.raw.as_slice()
+    ));
+    native.complete();
+    drop(native);
+
+    let native_samples = observer.snapshot().samples;
+    assert!(native_samples.iter().any(|sample| {
+        sample.metric == MetricKind::ConversionEventsTotal
+            && sample.value == 1
+            && sample.labels.source_format == Protocol::Claude
+            && sample.labels.target_format == Protocol::Claude
+            && sample.labels.converter_version == ConverterVersion::NativeRawV1
+            && sample.labels.stream
+            && sample.labels.feature_class == FeatureClass::Stream
+            && sample.labels.result == ConversionResult::Success
+    }));
+
+    let cross_scope = RouteOwnershipScope {
+        source: Protocol::OpenAi,
+        target: Protocol::Claude,
+        stream: true,
+    };
+    let cross_evidence = OwnershipEvidence::closed(cross_scope);
+    let cross_context = RolloutContext::new(
+        "qa-cross-stream",
+        Protocol::OpenAi,
+        Protocol::Claude,
+        "gpt-test",
+        true,
+    );
+    let disabled_gate = decide_route(
+        &ProtocolRolloutConfig::default(),
+        &cross_context,
+        &registry,
+        Direction::Stream,
+        &cross_evidence,
+    );
+    let enabled_gate = decide_route(
+        &ProtocolRolloutConfig {
+            conversion_engine_v2: FlagConfig::enabled(MAX_BASIS_POINTS)
+                .expect("full conversion rollout is bounded"),
+            ..ProtocolRolloutConfig::default()
+        },
+        &cross_context,
+        &registry,
+        Direction::Stream,
+        &cross_evidence,
+    );
+    assert!(disabled_gate.is_closed());
+    assert!(enabled_gate.is_closed());
+    assert!(!disabled_gate.details().flag_decision.enabled);
+    assert!(enabled_gate.details().flag_decision.enabled);
+    assert!(!disabled_gate.blockers().is_empty());
+    assert!(!enabled_gate.blockers().is_empty());
+
+    let disabled_rollout = ProtocolRolloutControl::default().snapshot();
+    let disabled_cross = compile_stream_session(StreamSessionSpec::new(
+        "qa-cross-stream",
+        Protocol::OpenAi,
+        Protocol::Claude,
+        "gpt-test",
+        &registry,
+        &disabled_rollout,
+        &cross_evidence,
+    ))
+    .expect("disabled cross-protocol stream returns a closed decision");
+    assert!(disabled_cross.decision().is_closed());
+    assert!(!disabled_cross.decision().details().flag_decision.enabled);
+    assert!(disabled_cross.plan().is_none());
+    assert!(disabled_cross.typed_state().is_none());
+
+    let enabled_cross = compile_stream_session(StreamSessionSpec::new(
+        "qa-cross-stream",
+        Protocol::OpenAi,
+        Protocol::Claude,
+        "gpt-test",
+        &registry,
+        &enabled_rollout,
+        &cross_evidence,
+    ))
+    .expect("missing cross-protocol ownership returns a closed decision");
+    assert!(enabled_cross.decision().is_closed());
+    assert!(enabled_cross.decision().details().flag_decision.enabled);
+    assert!(!enabled_cross.decision().blockers().is_empty());
+    assert!(enabled_cross.plan().is_none());
+    assert!(enabled_cross.typed_state().is_none());
+
+    let explicit_adaptors = QaExplicitStreamAdaptorRegistry::default();
+    let with_explicit_adaptor = compile_stream_session_with_adaptors(
+        StreamSessionSpec::new(
+            "qa-cross-stream",
+            Protocol::OpenAi,
+            Protocol::Claude,
+            "gpt-test",
+            &registry,
+            &enabled_rollout,
+            &cross_evidence,
+        ),
+        &explicit_adaptors,
+    )
+    .expect("explicit adaptor cannot bypass a closed route gate");
+    assert!(with_explicit_adaptor.decision().is_closed());
+    assert!(with_explicit_adaptor.plan().is_none());
+    assert!(with_explicit_adaptor.typed_state().is_none());
 }
 
 #[test]
