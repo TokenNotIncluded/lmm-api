@@ -34,7 +34,7 @@ func setupAssistantHistoryTestDB(t *testing.T) (*User, *User, *User, *User) {
 	return users[0], users[1], users[2], users[3]
 }
 
-func TestAssistantHistoryRedactsBeforePersistenceAndUsesStrictHierarchy(t *testing.T) {
+func TestAssistantHistoryRedactsBeforePersistenceAndRestrictsCrossAccountReadsToAdmins(t *testing.T) {
 	l0, l1, l2, admin := setupAssistantHistoryTestDB(t)
 	conversation, err := PrepareAssistantConversation(l0.Id, 0, "帮我创建 key，邮箱 a.user@example.com")
 	require.NoError(t, err)
@@ -58,12 +58,12 @@ func TestAssistantHistoryRedactsBeforePersistenceAndUsesStrictHierarchy(t *testi
 	assert.Contains(t, stored, "[REDACTED_EMAIL]")
 	assert.Equal(t, AssistantHistoryPrivacyNotice, messages[0].PrivacyNotice)
 
-	// An L1 member can read an L0 transcript, but peers and lower-level
-	// accounts cannot read up.  Admin remains above every ordinary level.
+	// Ordinary users cannot read another account's transcript regardless of
+	// trust level. Admin remains above every ordinary level.
 	_, _, err = GetAssistantConversationHistory(l1.Id, conversation.Id, 100)
-	require.NoError(t, err)
+	assert.ErrorIs(t, err, ErrAssistantHistoryForbidden)
 	_, _, err = GetAssistantConversationHistory(l2.Id, conversation.Id, 100)
-	require.NoError(t, err)
+	assert.ErrorIs(t, err, ErrAssistantHistoryForbidden)
 	_, _, err = GetAssistantConversationHistory(admin.Id, conversation.Id, 100)
 	require.NoError(t, err)
 
@@ -74,9 +74,9 @@ func TestAssistantHistoryRedactsBeforePersistenceAndUsesStrictHierarchy(t *testi
 	_, _, err = GetAssistantConversationHistory(l1.Id, otherConversation.Id, 100)
 	require.NoError(t, err)
 	_, _, err = GetAssistantConversationHistory(l1.Id, conversation.Id, 100)
-	require.NoError(t, err)
+	assert.ErrorIs(t, err, ErrAssistantHistoryForbidden)
 	_, _, err = GetAssistantConversationHistory(l2.Id, otherConversation.Id, 100)
-	require.NoError(t, err)
+	assert.ErrorIs(t, err, ErrAssistantHistoryForbidden)
 	l2Conversation, err := PrepareAssistantConversation(l2.Id, 0, "L2 only")
 	require.NoError(t, err)
 	_, _, err = GetAssistantConversationHistory(l1.Id, l2Conversation.Id, 100)
@@ -132,8 +132,11 @@ func TestAssistantConversationArchiveIsOwnerOnlyAndListFilterPreservesHistory(t 
 	assert.Equal(t, archived.Id, archivedList[0].Id)
 	assert.Positive(t, archivedList[0].ArchivedAt)
 
-	// Details retain the original visibility rules and message rows.
-	view, messages, err := GetAssistantConversationHistory(l1.Id, archived.Id, 100)
+	// Trust level does not grant cross-account access. Administrators retain
+	// read-only visibility, while archive ownership remains with the user.
+	_, _, err = GetAssistantConversationHistory(l1.Id, archived.Id, 100)
+	assert.ErrorIs(t, err, ErrAssistantHistoryForbidden)
+	view, messages, err := GetAssistantConversationHistory(admin.Id, archived.Id, 100)
 	require.NoError(t, err)
 	assert.Equal(t, archived.Id, view.Id)
 	require.Len(t, messages, 2)

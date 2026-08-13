@@ -237,19 +237,13 @@ func assistantConversationRank(user *User) (int, error) {
 	if user.Role >= common.RoleAdminUser {
 		return 1_000 + user.Role, nil
 	}
-	trust, err := GetTrustLevelInfoForUserBase(user.ToBaseUser())
-	if err != nil {
-		return 0, err
-	}
-	if trust.Level > TrustLevelMinUser {
-		return 100 + trust.Level, nil
-	}
 	return 0, nil
 }
 
 // AuthorizeAssistantHistoryViewer implements the strict visibility lattice:
 // a user always sees their own conversation; other conversations are visible
-// only when the viewer has a strictly higher effective access rank.
+// only to an administrator with a strictly higher role. Ordinary account trust
+// levels never grant access to another user's transcripts.
 func AuthorizeAssistantHistoryViewer(viewerUserID, ownerUserID int) error {
 	if viewerUserID <= 0 || ownerUserID <= 0 {
 		return ErrAssistantHistoryForbidden
