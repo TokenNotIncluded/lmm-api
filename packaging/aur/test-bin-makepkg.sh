@@ -29,6 +29,21 @@ create_archive() {
   printf '{}\n' > "$work/${artifact}.tar.gz.sigstore.json"
 }
 
+# Published binary packages pin the immutable release asset hashes. The
+# makepkg smoke test builds deliberately tiny local fixtures, so give only the
+# temporary PKGBUILD a matching checksum array instead of weakening the real
+# package back to SKIP.
+pin_fixture_hashes() {
+  local pkgbuild=$1 source hash
+  shift
+  printf '\nsha256sums=(\n' >> "$pkgbuild"
+  for source in "$@"; do
+    hash=$(sha256sum "$source")
+    printf "  '%s'\n" "${hash%% *}" >> "$pkgbuild"
+  done
+  printf ')\n' >> "$pkgbuild"
+}
+
 build_package() {
   local package=$1
   shift
@@ -81,6 +96,10 @@ tar -czf "$web_work/${web_artifact}.tar.gz" -C "$web_work/stage" \
   LICENSE NOTICE THIRD-PARTY-LICENSES.md REVISION
 (cd "$web_work" && sha256sum "${web_artifact}.tar.gz" >"${web_artifact}.tar.gz.sha256")
 printf '{}\n' >"$web_work/${web_artifact}.tar.gz.sigstore.json"
+pin_fixture_hashes "$web_work/PKGBUILD" \
+  "$web_work/${web_artifact}.tar.gz" \
+  "$web_work/${web_artifact}.tar.gz.sha256" \
+  "$web_work/${web_artifact}.tar.gz.sigstore.json"
 build_package lmm-api-web-bin \
   usr/share/lmm-api-web/frontend-dist/index.html \
   usr/lib/lmm-api-web/lmm-api-web-activate \
