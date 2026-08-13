@@ -326,8 +326,14 @@ impl SseFrameParser {
                     continue;
                 }
                 if self.bom_prefix == b"\xef\xbb\xbf" {
-                    self.bom_prefix.clear();
+                    let bom = mem::take(&mut self.bom_prefix);
                     self.bom_checked = true;
+                    // The BOM is ignored by the SSE decoder, but it remains
+                    // part of the first raw frame so same-protocol
+                    // passthrough can forward the complete wire bytes.
+                    for byte in bom {
+                        self.push_raw(byte)?;
+                    }
                     continue;
                 }
                 self.bom_checked = true;
@@ -957,13 +963,10 @@ mod tests {
         let mut parser = SseFrameParser::new(DEFAULT_MAX_FRAME_BYTES);
         assert!(parser.feed(b"\xef").expect("BOM prefix").is_empty());
         assert!(parser.feed(b"\xbb").expect("BOM prefix").is_empty());
-        assert_eq!(
-            parser
-                .feed(b"\xbfdata: {}\n\n")
-                .expect("BOM and frame")
-                .len(),
-            1
-        );
+        let frames = parser.feed(b"\xbfdata: {}\n\n").expect("BOM and frame");
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].data, "{}");
+        assert_eq!(frames[0].raw, b"\xef\xbb\xbfdata: {}\n\n");
     }
 
     #[test]
