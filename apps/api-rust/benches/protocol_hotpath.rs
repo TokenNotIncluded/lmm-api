@@ -7,7 +7,7 @@
 //! tests are ignored by default so a normal test run does not become a
 //! benchmark run.
 
-use std::{hint::black_box, time::Instant};
+use std::{hint::black_box, sync::Once, time::Instant};
 
 use lmm_api_rs::{
     migration_routes::sse::SseFrameParser, protocol_runtime_registry::validated_current_registry,
@@ -49,6 +49,330 @@ const STREAM_CORPUS: &[u8] = br#"{
 const SSE_CORPUS: &[u8] = b"event: update\r\ndata: one\r\ndata: two\r\n\r\ndata: [DONE]\n\n";
 
 const NATIVE_PASSTHROUGH_CORPUS: &[u8] = b"data: provider bytes stay opaque\n\ndata: [DONE]\n\n";
+
+const BENCHMARK_MANIFEST_VERSION: &str = "protocol-hotpath-v1";
+
+#[derive(Clone, Copy, Debug)]
+struct BenchmarkScenario {
+    label: &'static str,
+    workload: &'static str,
+    text_bytes: usize,
+    history_messages: usize,
+    tool_count: usize,
+    stream_chunks: usize,
+    parallel_tool_calls: bool,
+    multimodal: bool,
+    reasoning: bool,
+    client_abort: bool,
+    native_passthrough: bool,
+    plan_compile: bool,
+}
+
+const SCENARIO_MANIFEST: &[BenchmarkScenario] = &[
+    BenchmarkScenario {
+        label: "request_text_1k",
+        workload: "request",
+        text_bytes: 1_024,
+        history_messages: 1,
+        tool_count: 0,
+        stream_chunks: 0,
+        parallel_tool_calls: false,
+        multimodal: false,
+        reasoning: false,
+        client_abort: false,
+        native_passthrough: false,
+        plan_compile: false,
+    },
+    BenchmarkScenario {
+        label: "request_text_16k",
+        workload: "request",
+        text_bytes: 16_384,
+        history_messages: 1,
+        tool_count: 0,
+        stream_chunks: 0,
+        parallel_tool_calls: false,
+        multimodal: false,
+        reasoning: false,
+        client_abort: false,
+        native_passthrough: false,
+        plan_compile: false,
+    },
+    BenchmarkScenario {
+        label: "request_text_256k",
+        workload: "request",
+        text_bytes: 262_144,
+        history_messages: 1,
+        tool_count: 0,
+        stream_chunks: 0,
+        parallel_tool_calls: false,
+        multimodal: false,
+        reasoning: false,
+        client_abort: false,
+        native_passthrough: false,
+        plan_compile: false,
+    },
+    BenchmarkScenario {
+        label: "request_history_10",
+        workload: "request",
+        text_bytes: 64,
+        history_messages: 10,
+        tool_count: 0,
+        stream_chunks: 0,
+        parallel_tool_calls: false,
+        multimodal: false,
+        reasoning: false,
+        client_abort: false,
+        native_passthrough: false,
+        plan_compile: false,
+    },
+    BenchmarkScenario {
+        label: "request_history_100",
+        workload: "request",
+        text_bytes: 64,
+        history_messages: 100,
+        tool_count: 0,
+        stream_chunks: 0,
+        parallel_tool_calls: false,
+        multimodal: false,
+        reasoning: false,
+        client_abort: false,
+        native_passthrough: false,
+        plan_compile: false,
+    },
+    BenchmarkScenario {
+        label: "request_tools_1",
+        workload: "request",
+        text_bytes: 64,
+        history_messages: 1,
+        tool_count: 1,
+        stream_chunks: 0,
+        parallel_tool_calls: false,
+        multimodal: false,
+        reasoning: false,
+        client_abort: false,
+        native_passthrough: false,
+        plan_compile: false,
+    },
+    BenchmarkScenario {
+        label: "request_tools_8",
+        workload: "request",
+        text_bytes: 64,
+        history_messages: 1,
+        tool_count: 8,
+        stream_chunks: 0,
+        parallel_tool_calls: false,
+        multimodal: false,
+        reasoning: false,
+        client_abort: false,
+        native_passthrough: false,
+        plan_compile: false,
+    },
+    BenchmarkScenario {
+        label: "request_tools_32",
+        workload: "request",
+        text_bytes: 64,
+        history_messages: 1,
+        tool_count: 32,
+        stream_chunks: 0,
+        parallel_tool_calls: false,
+        multimodal: false,
+        reasoning: false,
+        client_abort: false,
+        native_passthrough: false,
+        plan_compile: false,
+    },
+    BenchmarkScenario {
+        label: "stream_chunks_10",
+        workload: "stream",
+        text_bytes: 0,
+        history_messages: 0,
+        tool_count: 0,
+        stream_chunks: 10,
+        parallel_tool_calls: false,
+        multimodal: false,
+        reasoning: false,
+        client_abort: false,
+        native_passthrough: false,
+        plan_compile: false,
+    },
+    BenchmarkScenario {
+        label: "stream_chunks_100",
+        workload: "stream",
+        text_bytes: 0,
+        history_messages: 0,
+        tool_count: 0,
+        stream_chunks: 100,
+        parallel_tool_calls: false,
+        multimodal: false,
+        reasoning: false,
+        client_abort: false,
+        native_passthrough: false,
+        plan_compile: false,
+    },
+    BenchmarkScenario {
+        label: "stream_chunks_1000",
+        workload: "stream",
+        text_bytes: 0,
+        history_messages: 0,
+        tool_count: 0,
+        stream_chunks: 1_000,
+        parallel_tool_calls: false,
+        multimodal: false,
+        reasoning: false,
+        client_abort: false,
+        native_passthrough: false,
+        plan_compile: false,
+    },
+    BenchmarkScenario {
+        label: "request_parallel_tools",
+        workload: "request",
+        text_bytes: 64,
+        history_messages: 1,
+        tool_count: 4,
+        stream_chunks: 0,
+        parallel_tool_calls: true,
+        multimodal: false,
+        reasoning: false,
+        client_abort: false,
+        native_passthrough: false,
+        plan_compile: false,
+    },
+    BenchmarkScenario {
+        label: "request_multimodal",
+        workload: "request",
+        text_bytes: 64,
+        history_messages: 1,
+        tool_count: 0,
+        stream_chunks: 0,
+        parallel_tool_calls: false,
+        multimodal: true,
+        reasoning: false,
+        client_abort: false,
+        native_passthrough: false,
+        plan_compile: false,
+    },
+    BenchmarkScenario {
+        label: "request_reasoning",
+        workload: "request",
+        text_bytes: 64,
+        history_messages: 1,
+        tool_count: 0,
+        stream_chunks: 0,
+        parallel_tool_calls: false,
+        multimodal: false,
+        reasoning: true,
+        client_abort: false,
+        native_passthrough: false,
+        plan_compile: false,
+    },
+    BenchmarkScenario {
+        label: "stream_client_abort",
+        workload: "stream",
+        text_bytes: 0,
+        history_messages: 0,
+        tool_count: 0,
+        stream_chunks: 10,
+        parallel_tool_calls: false,
+        multimodal: false,
+        reasoning: false,
+        client_abort: true,
+        native_passthrough: false,
+        plan_compile: false,
+    },
+    BenchmarkScenario {
+        label: "native_passthrough",
+        workload: "native_passthrough",
+        text_bytes: 0,
+        history_messages: 0,
+        tool_count: 0,
+        stream_chunks: 0,
+        parallel_tool_calls: false,
+        multimodal: false,
+        reasoning: false,
+        client_abort: false,
+        native_passthrough: true,
+        plan_compile: false,
+    },
+    BenchmarkScenario {
+        label: "plan_compile",
+        workload: "plan_compile",
+        text_bytes: 0,
+        history_messages: 0,
+        tool_count: 0,
+        stream_chunks: 0,
+        parallel_tool_calls: false,
+        multimodal: false,
+        reasoning: false,
+        client_abort: false,
+        native_passthrough: false,
+        plan_compile: true,
+    },
+];
+
+static MANIFEST_REPORTED: Once = Once::new();
+
+fn report_scenario_manifest() {
+    MANIFEST_REPORTED.call_once(|| {
+        for scenario in SCENARIO_MANIFEST {
+            eprintln!(
+                "protocol_hotpath_manifest version={} label={} workload={} text_bytes={} history_messages={} tool_count={} stream_chunks={} parallel_tool_calls={} multimodal={} reasoning={} client_abort={} native_passthrough={} plan_compile={}",
+                BENCHMARK_MANIFEST_VERSION,
+                scenario.label,
+                scenario.workload,
+                scenario.text_bytes,
+                scenario.history_messages,
+                scenario.tool_count,
+                scenario.stream_chunks,
+                scenario.parallel_tool_calls,
+                scenario.multimodal,
+                scenario.reasoning,
+                scenario.client_abort,
+                scenario.native_passthrough,
+                scenario.plan_compile,
+            );
+        }
+    });
+}
+
+#[test]
+fn benchmark_scenario_manifest_is_complete() {
+    assert_eq!(BENCHMARK_MANIFEST_VERSION, "protocol-hotpath-v1");
+    for &(text_bytes, history_messages, tool_count) in &[
+        (1_024, 1, 0),
+        (16_384, 1, 0),
+        (262_144, 1, 0),
+        (64, 10, 0),
+        (64, 100, 0),
+        (64, 1, 1),
+        (64, 1, 8),
+        (64, 1, 32),
+    ] {
+        assert!(SCENARIO_MANIFEST.iter().any(|scenario| {
+            scenario.text_bytes == text_bytes
+                && scenario.history_messages == history_messages
+                && scenario.tool_count == tool_count
+        }));
+    }
+    for stream_chunks in [10, 100, 1_000] {
+        assert!(SCENARIO_MANIFEST
+            .iter()
+            .any(|scenario| scenario.stream_chunks == stream_chunks));
+    }
+    assert!(SCENARIO_MANIFEST
+        .iter()
+        .any(|scenario| scenario.native_passthrough));
+    assert!(SCENARIO_MANIFEST.iter().any(|scenario| scenario.plan_compile));
+    assert!(SCENARIO_MANIFEST
+        .iter()
+        .any(|scenario| scenario.parallel_tool_calls));
+    assert!(SCENARIO_MANIFEST.iter().any(|scenario| scenario.multimodal));
+    assert!(SCENARIO_MANIFEST.iter().any(|scenario| scenario.reasoning));
+    assert!(SCENARIO_MANIFEST
+        .iter()
+        .any(|scenario| scenario.client_abort));
+}
+
+
 
 fn request_scenario(text_bytes: usize, history_messages: usize, tool_count: usize) -> Vec<u8> {
     let content = "x".repeat(text_bytes);
@@ -113,6 +437,7 @@ fn stream_scenario(chunk_count: usize) -> Vec<u8> {
 }
 
 fn calibrate(label: &str, bytes: usize, mut operation: impl FnMut() -> u64) {
+    report_scenario_manifest();
     for _ in 0..ITERATIONS_PER_SAMPLE {
         black_box(operation());
     }
