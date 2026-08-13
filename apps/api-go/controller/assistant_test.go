@@ -1139,6 +1139,22 @@ func TestAssistantClientResponseStripsProviderMetadata(t *testing.T) {
 	assert.Equal(t, "Hello world", message["content"])
 }
 
+func TestAssistantClientResponseHeadersUseAllowlist(t *testing.T) {
+	destination := make(http.Header)
+	source := make(http.Header)
+	source.Set("Content-Type", "application/json")
+	source.Set("X-LMM-Assistant-Cache", "STORE")
+	source.Set("X-Upstream-Request-Id", "provider-secret-id")
+	source.Set("Server", "private-provider")
+
+	copyAssistantClientHeaders(destination, source)
+
+	assert.Equal(t, "application/json", destination.Get("Content-Type"))
+	assert.Equal(t, "STORE", destination.Get("X-LMM-Assistant-Cache"))
+	assert.Empty(t, destination.Get("X-Upstream-Request-Id"))
+	assert.Empty(t, destination.Get("Server"))
+}
+
 func TestAssistantUpstreamErrorsAreRedactedAndEmptyAnswersBecomeBadGateway(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, test := range []struct {

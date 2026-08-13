@@ -512,13 +512,22 @@ func AssistantChat(c *gin.Context) {
 	if !recorder.Written() {
 		return
 	}
-	for key, values := range recorder.Header() {
-		originalWriter.Header().Del(key)
-		for _, value := range values {
-			originalWriter.Header().Add(key, value)
+	copyAssistantClientHeaders(originalWriter.Header(), recorder.Header())
+	writeAssistantHistoryResponse(c, recorder.Status(), recorder.body.Bytes())
+}
+
+func copyAssistantClientHeaders(destination, source http.Header) {
+	for _, key := range []string{
+		"Content-Type",
+		"Retry-After",
+		"X-LMM-Assistant-Cache",
+		"X-LMM-Assistant-Policy",
+	} {
+		destination.Del(key)
+		for _, value := range source.Values(key) {
+			destination.Add(key, value)
 		}
 	}
-	writeAssistantHistoryResponse(c, recorder.Status(), recorder.body.Bytes())
 }
 
 func GetAssistantStatus(c *gin.Context) {
