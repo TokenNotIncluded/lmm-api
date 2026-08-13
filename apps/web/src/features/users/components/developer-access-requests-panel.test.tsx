@@ -104,7 +104,7 @@ afterEach(() => {
 after(() => domWindow.close())
 
 describe('DeveloperAccessRequestsPanel', () => {
-  test('requires an administrator reply before reviewing an AI recommendation', async () => {
+  test('requires an administrator reply before reviewing each user recommendation letter', async () => {
     api.get = (async (url: string) => {
       assert.equal(url, '/api/developer-access/requests')
       return {
@@ -171,17 +171,13 @@ describe('DeveloperAccessRequestsPanel', () => {
       assert.match(document.body.textContent ?? '', /L1 access requests/)
       assert.match(
         document.body.textContent ?? '',
-        /I will use Claude Code for private development\./
-      )
-      assert.match(
-        document.body.textContent ?? '',
         /Recommend L1 because the user supplied a concrete use case\./
       )
       assert.match(document.body.textContent ?? '', /manual-user/)
       assert.match(document.body.textContent ?? '', /Direct request/)
       assert.match(
         document.body.textContent ?? '',
-        /No AI recommendation was recorded\./
+        /I want to connect a local test client\./
       )
 
       const textarea = document.querySelector('textarea')

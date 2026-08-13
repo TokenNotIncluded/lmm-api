@@ -1591,7 +1591,7 @@ describe('AssistantPanel', () => {
       )
       assert.match(
         document.body.textContent ?? '',
-        /I will connect Claude Code for private work\./
+        /Recommend L1 because the user identified a specific client and purpose\./
       )
 
       await act(async () => {
@@ -1605,7 +1605,8 @@ describe('AssistantPanel', () => {
         )
       )
       assert.deepEqual(submittedRecommendation, {
-        reason: 'I will connect Claude Code for private work.',
+        reason:
+          'Recommend L1 because the user identified a specific client and purpose.',
         ai_recommendation:
           'Recommend L1 because the user identified a specific client and purpose.',
         confirmation_token: 'assistant-confirmation-token',

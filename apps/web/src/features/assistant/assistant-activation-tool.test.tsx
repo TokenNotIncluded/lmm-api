@@ -294,7 +294,7 @@ describe('AssistantActivationTool', () => {
         'Recommendation was not submitted'
       )
       assert.deepEqual(submittedBody, {
-        reason: recommendationDraft.user_statement,
+        reason: recommendationDraft.recommendation,
         ai_recommendation: recommendationDraft.recommendation,
         confirmation_token: recommendationDraft.confirmation_token,
         confirmed: true,

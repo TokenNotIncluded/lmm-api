@@ -84,12 +84,11 @@ export function AssistantActivationTool(props: {
   const submit = async () => {
     const draft = props.recommendationDraft
     if (loading || request?.status === 'pending' || !draft) return
-    const reason = manualReason.trim() || draft.user_statement
     const recommendation = letter.trim() || draft.recommendation
     setLoading(true)
     try {
       const submitted = await submitDeveloperAccessRequest({
-        reason,
+        reason: recommendation,
         ai_recommendation: recommendation,
         confirmation_token: draft.confirmation_token,
         confirmed: true,
@@ -115,12 +114,11 @@ export function AssistantActivationTool(props: {
       props.recommendationDraft?.recommendation ||
       request.ai_recommendation ||
       request.reason
-    const reason = props.recommendationDraft?.user_statement || recommendation
     if (recommendation.length < 20) return
     setLoading(true)
     try {
       const submitted = await submitDeveloperAccessRequest({
-        reason,
+        reason: recommendation,
         ai_recommendation: recommendation,
         confirmation_token: props.recommendationDraft?.confirmation_token,
         confirmed: true,

@@ -1,7 +1,7 @@
 # Maintainer: LIghtJUNction
 
 pkgname=lmm-api-web-bin
-pkgver=0.1.1
+pkgver=0.1.2
 pkgrel=1
 pkgdesc='LMM API production web frontend (prebuilt)'
 arch=('any')

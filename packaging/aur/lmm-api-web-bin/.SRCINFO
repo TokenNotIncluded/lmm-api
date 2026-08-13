@@ -1,6 +1,6 @@
 pkgbase = lmm-api-web-bin
 	pkgdesc = LMM API production web frontend (prebuilt)
-	pkgver = 0.1.1
+	pkgver = 0.1.2
 	pkgrel = 1
 	url = https://github.com/LIghtJUNction/api.lmm.best
 	install = lmm-api-web.install
@@ -18,12 +18,12 @@ pkgbase = lmm-api-web-bin
 	depends = sed
 	depends = systemd
 	depends = util-linux
-	provides = lmm-api-web=0.1.1
+	provides = lmm-api-web=0.1.2
 	conflicts = lmm-api-web
-	noextract = lmm-api-web-0.1.1.tar.gz
-	source = lmm-api-web-0.1.1.tar.gz::https://github.com/LIghtJUNction/api.lmm.best/releases/download/web-v0.1.1/lmm-api-web-0.1.1.tar.gz
-	source = lmm-api-web-0.1.1.tar.gz.sha256::https://github.com/LIghtJUNction/api.lmm.best/releases/download/web-v0.1.1/lmm-api-web-0.1.1.tar.gz.sha256
-	source = lmm-api-web-0.1.1.tar.gz.sigstore.json::https://github.com/LIghtJUNction/api.lmm.best/releases/download/web-v0.1.1/lmm-api-web-0.1.1.tar.gz.sigstore.json
+	noextract = lmm-api-web-0.1.2.tar.gz
+	source = lmm-api-web-0.1.2.tar.gz::https://github.com/LIghtJUNction/api.lmm.best/releases/download/web-v0.1.2/lmm-api-web-0.1.2.tar.gz
+	source = lmm-api-web-0.1.2.tar.gz.sha256::https://github.com/LIghtJUNction/api.lmm.best/releases/download/web-v0.1.2/lmm-api-web-0.1.2.tar.gz.sha256
+	source = lmm-api-web-0.1.2.tar.gz.sigstore.json::https://github.com/LIghtJUNction/api.lmm.best/releases/download/web-v0.1.2/lmm-api-web-0.1.2.tar.gz.sigstore.json
 	sha256sums = SKIP
 	sha256sums = SKIP
 	sha256sums = SKIP

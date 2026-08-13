@@ -35,9 +35,10 @@ describe('authenticated layout responsive contract', () => {
       source,
       /flex min-h-0 w-full min-w-0 flex-1 basis-0 flex-col flex-nowrap md:flex-row/
     )
+    assert.match(source, /'min-h-0 min-w-0 flex-1 basis-0 overflow-hidden'/)
     assert.match(
       source,
-      /min-h-0 min-w-0 flex-1 basis-0 overflow-hidden pb-\[calc\(4\.5rem\+env\(safe-area-inset-bottom\)\)\] md:pb-16 xl:pb-0/
+      /assistantPage[\s\S]*\? 'pb-0'[\s\S]*: 'pb-\[calc\(4\.5rem\+env\(safe-area-inset-bottom\)\)\] md:pb-16 xl:pb-0'/
     )
   })
 })
