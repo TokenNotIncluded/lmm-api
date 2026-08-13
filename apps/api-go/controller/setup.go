@@ -3,6 +3,7 @@ package controller
 import (
 	"errors"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -28,12 +29,13 @@ type SetupRequest struct {
 }
 
 var errSetupAlreadyCompleted = errors.New("setup already completed")
+var setupMu sync.Mutex
 
 func GetSetup(c *gin.Context) {
 	setup := Setup{
-		Status: constant.Setup,
+		Status: constant.IsSetup(),
 	}
-	if constant.Setup {
+	if setup.Status {
 		c.JSON(200, gin.H{
 			"success": true,
 			"data":    setup,
@@ -49,27 +51,31 @@ func GetSetup(c *gin.Context) {
 }
 
 func PostSetup(c *gin.Context) {
-	// Check if setup is already completed
-	if constant.Setup {
-		c.JSON(200, gin.H{
-			"success": false,
-			"message": "系统已经初始化完成",
-		})
+	if constant.IsSetup() {
+		setupDone(c)
 		return
 	}
 
-	// Check if root user already exists
-	rootExists := model.RootUserExists()
-
 	var req SetupRequest
-	err := c.ShouldBindJSON(&req)
-	if err != nil {
+	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(200, gin.H{
 			"success": false,
 			"message": "请求参数有误",
 		})
 		return
 	}
+
+	// Setup is a singleton write. The process lock avoids duplicate password
+	// hashing and noisy failed transactions; the database singleton remains the
+	// cross-instance authority.
+	setupMu.Lock()
+	defer setupMu.Unlock()
+	if constant.IsSetup() {
+		setupDone(c)
+		return
+	}
+
+	rootExists := model.RootUserExists()
 
 	var rootUser model.User
 	// If root doesn't exist, validate and create admin account
@@ -119,7 +125,7 @@ func PostSetup(c *gin.Context) {
 		}
 	}
 
-	err = model.DB.Transaction(func(tx *gorm.DB) error {
+	err := model.DB.Transaction(func(tx *gorm.DB) error {
 		setup := model.Setup{
 			ID:            model.SetupSingletonID,
 			Version:       common.Version,
@@ -149,11 +155,8 @@ func PostSetup(c *gin.Context) {
 	})
 	if err != nil {
 		if errors.Is(err, errSetupAlreadyCompleted) {
-			constant.Setup = true
-			c.JSON(200, gin.H{
-				"success": false,
-				"message": "系统已经初始化完成",
-			})
+			constant.SetSetup(true)
+			setupDone(c)
 			return
 		}
 		c.JSON(200, gin.H{
@@ -164,11 +167,18 @@ func PostSetup(c *gin.Context) {
 	}
 
 	applySetupOperationModes(req)
-	constant.Setup = true
+	constant.SetSetup(true)
 
 	c.JSON(200, gin.H{
 		"success": true,
 		"message": "系统初始化成功",
+	})
+}
+
+func setupDone(c *gin.Context) {
+	c.JSON(200, gin.H{
+		"success": false,
+		"message": "系统已经初始化完成",
 	})
 }
 

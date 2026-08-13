@@ -463,10 +463,10 @@ func TestMigrationModeDoesNotBlockBusinessWrites(t *testing.T) {
 
 func TestVerifySetupStateKeepsControllerClosedUntilReadOnlyVerificationSucceeds(t *testing.T) {
 	originalDB := DB
-	originalSetup := constant.Setup
+	originalSetup := constant.IsSetup()
 	t.Cleanup(func() {
 		DB = originalDB
-		constant.Setup = originalSetup
+		constant.SetSetup(originalSetup)
 	})
 
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
@@ -474,23 +474,23 @@ func TestVerifySetupStateKeepsControllerClosedUntilReadOnlyVerificationSucceeds(
 	require.NoError(t, db.AutoMigrate(&Setup{}))
 	require.NoError(t, db.Exec("CREATE TABLE users (id integer primary key, role integer, deleted_at datetime)").Error)
 	DB = db
-	constant.Setup = false
+	constant.SetSetup(false)
 
 	err = CheckSetupForStartup(false)
 	require.ErrorContains(t, err, "expected exactly one setup record")
-	require.False(t, constant.Setup)
+	require.False(t, constant.IsSetup())
 
 	require.NoError(t, db.Create(&Setup{Version: "test", InitializedAt: 1}).Error)
 	err = CheckSetupForStartup(false)
 	require.ErrorContains(t, err, "without a root user")
-	require.False(t, constant.Setup)
+	require.False(t, constant.IsSetup())
 
 	require.NoError(t, db.Exec("INSERT INTO users (id, role) VALUES (?, ?)", 1, common.RoleRootUser).Error)
 	var setupRowsBefore, userRowsBefore int64
 	require.NoError(t, db.Table("setups").Count(&setupRowsBefore).Error)
 	require.NoError(t, db.Table("users").Count(&userRowsBefore).Error)
 	require.NoError(t, CheckSetupForStartup(false))
-	require.True(t, constant.Setup)
+	require.True(t, constant.IsSetup())
 	var setupRowsAfter, userRowsAfter int64
 	require.NoError(t, db.Table("setups").Count(&setupRowsAfter).Error)
 	require.NoError(t, db.Table("users").Count(&userRowsAfter).Error)

@@ -24,7 +24,7 @@ func setupPostSetupTestDB(t *testing.T) *gorm.DB {
 	gin.SetMode(gin.TestMode)
 
 	previousDB := model.DB
-	previousSetup := constant.Setup
+	previousSetup := constant.IsSetup()
 	previousOptionMap := common.OptionMap
 	previousMainDatabaseType := common.MainDatabaseType()
 	previousLogDatabaseType := common.LogDatabaseType()
@@ -32,7 +32,7 @@ func setupPostSetupTestDB(t *testing.T) *gorm.DB {
 	previousDemoSite := operation_setting.DemoSiteEnabled
 
 	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
-	constant.Setup = false
+	constant.SetSetup(false)
 	common.OptionMap = map[string]string{}
 	operation_setting.SelfUseModeEnabled = false
 	operation_setting.DemoSiteEnabled = false
@@ -45,7 +45,7 @@ func setupPostSetupTestDB(t *testing.T) *gorm.DB {
 
 	t.Cleanup(func() {
 		model.DB = previousDB
-		constant.Setup = previousSetup
+		constant.SetSetup(previousSetup)
 		common.OptionMap = previousOptionMap
 		common.SetDatabaseTypes(previousMainDatabaseType, previousLogDatabaseType)
 		operation_setting.SelfUseModeEnabled = previousSelfUseMode

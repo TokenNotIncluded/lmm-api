@@ -166,7 +166,7 @@ func GetStatus(c *gin.Context) {
 		"passkey_allow_insecure":      passkeySetting.AllowInsecureOrigin,
 		"passkey_user_verification":   passkeySetting.UserVerification,
 		"passkey_attachment":          passkeySetting.AttachmentPreference,
-		"setup":                       constant.Setup,
+		"setup":                       constant.IsSetup(),
 		"user_agreement_enabled":      system_setting.UserAgreementPublished(),
 		"privacy_policy_enabled":      system_setting.PrivacyPolicyPublished(),
 		"checkin_enabled":             operation_setting.GetCheckinSetting().Enabled,
