@@ -91,7 +91,7 @@ cp "$HERE/lmm-api-web-bin/PKGBUILD" \
   "$HERE/lmm-api-web-bin/lmm-api-web.install" \
   "$web_work/"
 cp "$HERE/lmm-api-web-bin/lmm-api-web-activate" \
-  "$web_work/lmm-api-web-activate.local"
+  "$web_work/lmm-api-web-activate"
 printf '<!doctype html>\n' >"$web_work/stage/dist/index.html"
 cp "$HERE/lmm-api-web-bin/lmm-api-web-activate" "$web_work/stage/"
 cp "$HERE/../../deploy/frontend-release.sh" "$web_work/stage/frontend-release.sh"
@@ -107,7 +107,7 @@ pin_fixture_hashes "$web_work/PKGBUILD" sha256sums \
   "$web_work/${web_artifact}.tar.gz" \
   "$web_work/${web_artifact}.tar.gz.sha256" \
   "$web_work/${web_artifact}.tar.gz.sigstore.json" \
-  "$web_work/lmm-api-web-activate.local"
+  "$web_work/lmm-api-web-activate"
 build_package lmm-api-web-bin \
   usr/share/lmm-api-web/frontend-dist/index.html \
   usr/lib/lmm-api-web/lmm-api-web-activate \
