@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { QueryClient } from '@tanstack/react-query'
-import axios from 'axios'
+import axios, { type AxiosAdapter } from 'axios'
 import { t } from 'i18next'
 
 import { publishAuthSessionEvent } from '@/lib/auth-session-sync'
@@ -73,6 +73,11 @@ const authClient = axios.create({
     'Cache-Control': 'no-store',
   },
 })
+
+/** Installs the isolated refresh transport used by the development persona lab. */
+export function setDevelopmentAuthRefreshAdapter(adapter: AxiosAdapter): void {
+  authClient.defaults.adapter = adapter
+}
 
 const refreshRaceDelays = [80, 200, 500] as const
 let refreshPromise: Promise<RefreshOutcome> | null = null

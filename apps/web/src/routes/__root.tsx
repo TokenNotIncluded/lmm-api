@@ -26,7 +26,7 @@ import {
   useRouterState,
 } from '@tanstack/react-router'
 import { TanStackRouterDevtools } from '@tanstack/react-router-devtools'
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 
 import { FeedbackRewardButton } from '@/components/feedback-reward-button'
 import { Footer } from '@/components/layout/components/footer'
@@ -50,6 +50,14 @@ import {
 } from '@/lib/console-activation'
 import { resolveLegacyRoute } from '@/lib/legacy-route'
 import { useAuthStore } from '@/stores/auth-store'
+
+const PersonaDebugPanel = __LMM_PERSONA_DEBUG__
+  ? lazy(() =>
+      import('@/features/debug/persona-debug-panel').then((module) => ({
+        default: module.PersonaDebugPanel,
+      }))
+    )
+  : null
 
 function RootComponent() {
   const navigate = useNavigate()
@@ -81,27 +89,26 @@ function RootComponent() {
     [queryClient]
   )
 
-  useEffect(
-    () =>
-      subscribeAuthSessionEvents((event) => {
-        const currentSID = useAuthStore.getState().auth.session?.sid
+  useEffect(() => {
+    if (__LMM_PERSONA_DEBUG__) return
+    return subscribeAuthSessionEvents((event) => {
+      const currentSID = useAuthStore.getState().auth.session?.sid
 
-        if (event.kind === 'authenticated') {
-          if (event.sid === currentSID) return
-          if (currentSID) {
-            clearAuthentication(false)
-          }
-          window.location.reload()
-          return
+      if (event.kind === 'authenticated') {
+        if (event.sid === currentSID) return
+        if (currentSID) {
+          clearAuthentication(false)
         }
+        window.location.reload()
+        return
+      }
 
-        if (currentSID && event.sid === currentSID) {
-          clearAuthenticatedClientState(queryClient, false)
-          void navigate({ to: '/sign-in', replace: true })
-        }
-      }),
-    [navigate, queryClient]
-  )
+      if (currentSID && event.sid === currentSID) {
+        clearAuthenticatedClientState(queryClient, false)
+        void navigate({ to: '/sign-in', replace: true })
+      }
+    })
+  }, [navigate, queryClient])
 
   return (
     <ThemeCustomizationProvider>
@@ -110,6 +117,12 @@ function RootComponent() {
       {isHomeIntroSurface && <Footer />}
       {isHomeIntroSurface && <FeedbackRewardButton />}
       <Toaster closeButton duration={5000} position='top-center' richColors />
+      {PersonaDebugPanel &&
+      document.documentElement.dataset.personaDebug === 'true' ? (
+        <Suspense fallback={null}>
+          <PersonaDebugPanel />
+        </Suspense>
+      ) : null}
       {import.meta.env.DEV &&
         import.meta.env.VITE_ENABLE_DEVTOOLS === 'true' && (
           <>

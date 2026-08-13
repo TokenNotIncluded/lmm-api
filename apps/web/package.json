@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "rsbuild dev",
+    "dev:debug": "LMM_ENABLE_PERSONA_DEBUG=1 rsbuild dev",
     "build": "rsbuild build",
     "bundle:check": "node scripts/check-initial-bundle.mjs",
     "build:check": "tsgo -b && rsbuild build",
@@ -19,7 +20,8 @@
     "copyright": "node scripts/add-copyright.mjs",
     "i18n:sync": "node scripts/sync-i18n.mjs",
     "knip": "knip",
-    "smoke:dashboard": "node scripts/read-only-dashboard-smoke.mjs"
+    "smoke:dashboard": "node scripts/read-only-dashboard-smoke.mjs",
+    "blackbox:debug": "node scripts/debug-persona-blackbox.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",
