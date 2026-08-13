@@ -3076,7 +3076,7 @@ fn gemini_part_to_items(
         )?;
     }
     if let Some(call) = part.function_call {
-        let GeminiFunctionCall { id, name, args } = call;
+        let GeminiFunctionCall { id, name, args, .. } = call;
         let (id, provenance) = match id {
             Some(id) if id.is_empty() => {
                 return Err(DirectIrError::new(
@@ -3127,7 +3127,9 @@ fn gemini_part_to_items(
         )?;
     }
     if let Some(result) = part.function_response {
-        let GeminiFunctionResponse { id, name, response } = result;
+        let GeminiFunctionResponse {
+            id, name, response, ..
+        } = result;
         let (call_id, provenance) = links.take_result(
             &name,
             id,
@@ -3410,6 +3412,7 @@ fn media_to_gemini_part(
         inline_data: Some(GeminiInlineData {
             mime_type: mime_type.clone(),
             data: data.to_owned(),
+            extra: BTreeMap::new(),
         }),
         function_call: None,
         function_response: None,
@@ -3466,6 +3469,7 @@ fn gemini_part_for_item(
                             DirectIrError::missing(source, target, "function.name", path)
                         })?,
                         args: Some(function.arguments.clone().unwrap_or_else(|| object([]))),
+                        extra: BTreeMap::new(),
                     }),
                     function_response: None,
                     thought_signature: None,
@@ -3479,6 +3483,7 @@ fn gemini_part_for_item(
                         id: Some(id),
                         name: function.name.clone().unwrap_or_default(),
                         response: function.output.clone().unwrap_or(JsonData::Null),
+                        extra: BTreeMap::new(),
                     }),
                     thought_signature: None,
                     ..GeminiPart::default()
@@ -6492,12 +6497,32 @@ fn reject_gemini_content_extra(
 ) -> Result<(), DirectIrError> {
     reject_wire_extra(source, target, &content.extra, path)?;
     for (index, part) in content.parts.iter().enumerate() {
-        reject_wire_extra(
-            source,
-            target,
-            &part.extra,
-            &format!("{path}.parts[{index}]"),
-        )?;
+        let part_path = format!("{path}.parts[{index}]");
+        reject_wire_extra(source, target, &part.extra, &part_path)?;
+        if let Some(inline_data) = part.inline_data.as_ref() {
+            reject_wire_extra(
+                source,
+                target,
+                &inline_data.extra,
+                &format!("{part_path}.inlineData"),
+            )?;
+        }
+        if let Some(function_call) = part.function_call.as_ref() {
+            reject_wire_extra(
+                source,
+                target,
+                &function_call.extra,
+                &format!("{part_path}.functionCall"),
+            )?;
+        }
+        if let Some(function_response) = part.function_response.as_ref() {
+            reject_wire_extra(
+                source,
+                target,
+                &function_response.extra,
+                &format!("{part_path}.functionResponse"),
+            )?;
+        }
     }
     Ok(())
 }
@@ -8870,6 +8895,45 @@ mod direct_ir_tests {
             .expect_err("direct IR must not silently drop a Gemini part field");
         assert_eq!(error.feature, "unknown_field");
         assert_eq!(error.path, "contents[0].parts[0].futurePartField");
+    }
+
+    #[test]
+    fn gemini_nested_function_and_media_fields_are_typed_rejections() {
+        let inline_data: GeminiRequest = serde_json::from_str(
+            r#"{"contents":[{"role":"user","parts":[{"inlineData":{"mimeType":"image/png","data":"AA==","futureInlineField":true}}]}]}"#,
+        )
+        .expect("unknown Gemini inlineData field is retained by the wire DTO");
+        let error = gemini_request_to_envelope_v2(inline_data, "gemini-test")
+            .expect_err("direct IR must not silently drop an inlineData field");
+        assert_eq!(error.feature, "unknown_field");
+        assert_eq!(
+            error.path,
+            "contents[0].parts[0].inlineData.futureInlineField"
+        );
+
+        let function_call: GeminiRequest = serde_json::from_str(
+            r#"{"contents":[{"role":"model","parts":[{"functionCall":{"id":"call-1","name":"lookup","args":{},"futureCallField":1}}]}]}"#,
+        )
+        .expect("unknown Gemini functionCall field is retained by the wire DTO");
+        let error = gemini_request_to_envelope_v2(function_call, "gemini-test")
+            .expect_err("direct IR must not silently drop a functionCall field");
+        assert_eq!(error.feature, "unknown_field");
+        assert_eq!(
+            error.path,
+            "contents[0].parts[0].functionCall.futureCallField"
+        );
+
+        let function_response: GeminiRequest = serde_json::from_str(
+            r#"{"contents":[{"role":"model","parts":[{"functionCall":{"id":"call-1","name":"lookup","args":{}}}]},{"role":"user","parts":[{"functionResponse":{"id":"call-1","name":"lookup","response":{},"futureResponseField":1}}]}]}"#,
+        )
+        .expect("unknown Gemini functionResponse field is retained by the wire DTO");
+        let error = gemini_request_to_envelope_v2(function_response, "gemini-test")
+            .expect_err("direct IR must not silently drop a functionResponse field");
+        assert_eq!(error.feature, "unknown_field");
+        assert_eq!(
+            error.path,
+            "contents[1].parts[0].functionResponse.futureResponseField"
+        );
     }
 
     #[test]

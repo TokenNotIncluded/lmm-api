@@ -536,6 +536,11 @@ pub struct GeminiInlineData {
     #[serde(rename = "mimeType")]
     pub mime_type: String,
     pub data: String,
+    /// Provider media fields not modeled by the relay.  Direct IR rejects
+    /// these with the exact `inlineData` path instead of dropping them.
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -548,6 +553,11 @@ pub struct GeminiFunctionCall {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub args: Option<JsonData>,
+    /// Provider function-call fields not modeled by the relay.  Direct IR
+    /// rejects these with a path-aware typed error.
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -558,6 +568,11 @@ pub struct GeminiFunctionResponse {
     pub id: Option<String>,
     pub name: String,
     pub response: JsonData,
+    /// Provider function-result fields not modeled by the relay.  Direct IR
+    /// rejects these with a path-aware typed error.
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
