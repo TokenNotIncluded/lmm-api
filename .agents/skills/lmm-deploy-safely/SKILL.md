@@ -20,11 +20,12 @@ package, service, frontend, database, or rollback path. Read
 mutation, backup, retention, confirmation, rollback, or cleanup operation.
 
 Use the canonical installed CLI transaction and its immutable package payloads.
-The transaction requires role-appropriate backup copies, encrypted
-secret-bearing controller and off-host archives, checksum verification, a
-persistent ten-minute watchdog armed before switching, and explicit exact-
-release confirmation. Refuse a production deployment until these mechanisms
-exist and pass their offline contract tests.
+Backups are optional and operator-managed: do not create, transfer, verify, or
+prune them unless the user explicitly requests backups in the current turn.
+The transaction always requires a checksum-verified rollback package, captured
+frontend/configuration restore state, a persistent ten-minute watchdog armed
+before switching, and exact-release confirmation. These rollback artifacts are
+transaction state, not business or database backups.
 
 ## Classify authority
 
@@ -38,8 +39,9 @@ Choose exactly one role:
   the static hostname, the service role, and the exact release identity.
 
 Stop on an ambiguous host, role, database engine, current release, dirty or
-unexpected repository state, missing backup copy, unverified checksum, active
-deployment lock, or unconfirmed previous deployment.
+unexpected repository state, an unverified required checksum, active deployment
+lock, or unconfirmed previous deployment. When backups were explicitly enabled,
+also stop on a missing or unverified backup copy.
 
 ## Create persistent deployment work
 
@@ -247,9 +249,12 @@ approved for Rust, and PostgreSQL, Valkey, authentication, quota, billing,
 streaming, and drain/reconnect evidence must be current. A mounted candidate,
 an active slot link, or a successful `/readyz` probe is insufficient.
 
-## Require backups before mutation
+## Keep backups optional
 
-Create and verify the role-specific copies described in the safety contract:
+Do not include backup work in a deployment unless the user explicitly requests
+it. Use `deploy production release --with-backups` only for that opt-in path.
+When requested, create and verify the role-specific copies described in the
+safety contract:
 
 - local: controller copy;
 - test: target rollback snapshot and controller copy;
@@ -258,9 +263,9 @@ Create and verify the role-specific copies described in the safety contract:
   off-host archive on the ArchCzy host through the case-sensitive SSH alias
   `archczy`, or explicitly configured object storage.
 
-Run [scripts/verify-backup-set.sh](scripts/verify-backup-set.sh). Do not mutate
-the target unless it succeeds. Encrypt every archive that can contain secrets
-before it leaves the target. Never print archive contents or secret values.
+Run [scripts/verify-backup-set.sh](scripts/verify-backup-set.sh) for an opted-in
+backup set. Encrypt every archive that can contain secrets before it leaves the
+target. Never print archive contents or secret values.
 
 ## Canonical backup and workspace layout
 
@@ -274,9 +279,9 @@ Use these exact, marker-owned paths; do not invent a per-run path under `/tmp`:
 | production target backup | `/var/lib/lmm-api-go/deploy-backups/<deployment-id>` (resolves below `/var/lib/private/lmm-api-go`) | root-only, checksum-verified target snapshot; retain the configured latest-known-good set |
 | off-host backup | `/home/arch/.local/state/lmm-api-production-backups/<deployment-id>` on the ArchCzy host (SSH alias `archczy`) | encrypted controller/off-host archives; verify checksum after transfer |
 
-The controller workspace is not a backup. Before removing it, prove the
-durable controller, target, and off-host copies exist, decrypt verification
-passes, and the transaction is `CONFIRMED` or `ROLLED_BACK`. Production
+The controller workspace is not a backup. When backups were requested, prove
+the durable controller, target, and off-host copies exist and decrypt
+verification passes before removing them. Production
 cleanup may remove only the exact `<deployment-id>/staging`, `<deployment-id>/tmp`,
 and cache paths; it must not remove a backup root, release root, active
 workspace, transaction lock, or unresolved glob. Use mode `0700` for private
@@ -295,17 +300,14 @@ database/cache.
 
 1. Record current UTC time, Git revision, remote `origin/main`, installed
    package/version, service PID, backend, PostgreSQL/Valkey identity, and the
-   resource baseline. Verify SSH alias `ArchDmit` resolves to `arch-dmit` and
-   the lowercase, case-sensitive SSH alias `archczy` resolves to the static
-   hostname `archczy` as the intended ArchCzy off-host. Do not use `ArchCzy`
-   as an SSH alias unless the local SSH configuration explicitly defines it.
+   resource baseline. Verify SSH alias `ArchDmit` resolves to `arch-dmit`.
+   Verify `archczy` only when backups were explicitly requested.
 2. Require a clean source checkout whose HEAD equals `origin/main`. Create one
    marker-owned controller workspace and export all build caches into it.
 3. Build once, record artifact/package/frontend SHA-256, and run Go/frontend
    tests plus the native CLI preflight. Do not build on the production host.
-4. Create target, controller, and off-host backups; verify encrypted archives
-   offline and compare every transferred checksum. A missing or unverified
-   copy is a hard stop.
+4. If backups were explicitly requested, create target, controller, and
+   off-host copies, verify encrypted archives offline, and compare checksums.
 5. Arm the persistent 600-second rollback watchdog, apply the immutable package,
    run migrations only when N/N-1 compatible, and observe for at least 120
    seconds while checking the resource and error-journal gates.
@@ -314,7 +316,7 @@ database/cache.
    and acceptable resource headroom. Confirming disables the watchdog; if any
    gate fails, leave it armed and use the scoped rollback path.
 7. After a terminal state, remove remote/controller staging and caches by exact
-   path, retain status plus durable backups, and re-run disk/inode/memory probes.
+   path, retain status and any requested backups, and re-run resource probes.
    Record what was removed and the remaining free-space margin.
 
 ## Arm rollback before switching
@@ -334,10 +336,9 @@ generic healthy response is insufficient.
 
 ## Retain and clean safely
 
-Default retention is five target snapshots, ten controller copies, and thirty
-off-host copies. Never remove the active release, an unconfirmed deployment,
-or the latest known-good snapshot. Prune only after confirmation and successful
-backup verification.
+For explicitly requested backups, default retention is five target snapshots,
+ten controller copies, and thirty off-host copies. Never remove the active
+release, an unconfirmed deployment, or the latest known-good snapshot.
 
 Use [scripts/cleanup-owned-workspace.sh](scripts/cleanup-owned-workspace.sh)
 only for the exact marker-owned deployment directory after a durable
@@ -347,7 +348,7 @@ another deployment's workspace.
 
 For production, a terminal workspace must not retain package staging or build
 caches: remove only its exact `staging`, `tmp`, and cache children after the
-durable status and three backup copies are verified. Retain the marker and
+durable terminal status and, when requested, backup verification. Retain the marker and
 status as a small audit record. A scheduled cleanup may prune only terminal,
 inactive workspaces older than 24 hours, oldest first, and must stop before the
 filesystem crosses the 70% warning line. If the host is already above that

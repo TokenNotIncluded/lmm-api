@@ -66,8 +66,8 @@ func writeDeployUsage(output io.Writer) {
   %s deploy frontend rollback [--release ID] [--root DIR] [--keep N]
   %s deploy production harden [--env-file FILE] [--drop-in-dir DIR]
   %s deploy production edge-policy install|verify [--asset-root DIR] [--backup-dir DIR]
-  %s deploy production release --repo DIR --workspace DIR --age-recipient-file FILE \
-       --age-identity-file FILE --confirm api.lmm.best [--rollback-package FILE]
+  %s deploy production release --repo DIR --workspace DIR --confirm api.lmm.best \
+       [--rollback-package FILE] [--with-backups --age-recipient-file FILE --age-identity-file FILE]
   %s deploy production workspace create --deployment-id ID
   %s deploy production workspace abort --workspace DIR
   %s deploy production workspace cleanup [--older-than 24h] [--execute]
@@ -82,7 +82,7 @@ func writeDeployUsage(output io.Writer) {
   %s deploy production apply --workspace DIR --package FILE --package-sha256 HEX \
        --rollback-package FILE --rollback-sha256 HEX --probe-binary FILE \
        --probe-binary-sha256 HEX --expected-version VERSION \
-       --frontend-index-sha256 HEX --backup-dir DIR [--rollback-seconds 600] \
+       --frontend-index-sha256 HEX [--backup-dir DIR] [--rollback-seconds 600] \
        [--observation-seconds 180] [--manual-confirm]
   %s deploy production status --workspace DIR
   %s deploy production confirm --workspace DIR

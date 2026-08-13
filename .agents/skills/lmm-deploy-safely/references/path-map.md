@@ -90,10 +90,10 @@ install a timer, restart `lmm-api`, clear swap, or remove files. Its report
 uses the 20 GiB root / 951 MiB RAM production profile as a visible reference
 and includes the actual service cgroup memory and restart counters.
 
-The transaction is marker-owned and persistent. Before a switch it requires
-the role-appropriate target/controller/off-host backup set, checksum
-verification, encrypted secret-bearing controller and off-host archives, and
-a persistent ten-minute watchdog armed before switching. A switch ends in
+The transaction is marker-owned and persistent. Backups are optional and are
+created only with explicit current-turn authorization and `--with-backups`.
+Every switch requires a checksum-verified rollback package, captured frontend
+and configuration restore state, and a persistent ten-minute watchdog. A switch ends in
 `AWAITING_CONFIRMATION`; only exact-release identity checks and explicit
 confirmation produce `CONFIRMED`. Automatic rollback never restores a
 database.
@@ -139,9 +139,9 @@ This mechanism owns internal probes only, not production business traffic.
 
 The controller workspace is a transaction workspace, not durable backup
 storage. Keep its marker and terminal status for audit, but remove exact
-`staging`, `tmp`, and cache children after `CONFIRMED` or `ROLLED_BACK` and
-after the controller, target, and off-host copies have passed checksum and
-decryption verification. Production target workspaces follow the same rule;
+`staging`, `tmp`, and cache children after `CONFIRMED` or `ROLLED_BACK` and,
+when backups were requested, after their checksum/decryption verification.
+Production target workspaces follow the same rule;
 the target backup root and off-host root are durable and must not be removed
 by workspace cleanup. Private directories are `0700`, manifests/status and
 encrypted archives are `0600`, and no secret-bearing plaintext may leave the

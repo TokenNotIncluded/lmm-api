@@ -300,7 +300,7 @@ func parseProductionTransactionOptions(action string, args []string, stderr io.W
 		flags.StringVar(&options.ProbeBinarySHA256, "probe-binary-sha256", "", "probe binary SHA-256")
 		flags.StringVar(&options.ExpectedVersion, "expected-version", "", "candidate release version")
 		flags.StringVar(&options.FrontendIndexSHA256, "frontend-index-sha256", "", "candidate index.html SHA-256")
-		flags.StringVar(&options.BackupDir, "backup-dir", "", "verified target backup directory")
+		flags.StringVar(&options.BackupDir, "backup-dir", "", "optional verified target backup directory")
 		rollbackSeconds := int(options.RollbackWindow / time.Second)
 		observationSeconds := int(options.ObservationWindow / time.Second)
 		flags.IntVar(&rollbackSeconds, "rollback-seconds", rollbackSeconds, "automatic rollback window (600-1800)")
@@ -342,7 +342,6 @@ func parseProductionTransactionOptions(action string, args []string, stderr io.W
 			"--rollback-package": options.RollbackPackage, "--rollback-sha256": options.RollbackSHA256,
 			"--probe-binary": options.ProbeBinary, "--probe-binary-sha256": options.ProbeBinarySHA256,
 			"--expected-version": options.ExpectedVersion, "--frontend-index-sha256": options.FrontendIndexSHA256,
-			"--backup-dir": options.BackupDir,
 		} {
 			if value == "" {
 				return productionTransactionOptions{}, fmt.Errorf("%s is required", label)
@@ -365,13 +364,20 @@ func parseProductionTransactionOptions(action string, args []string, stderr io.W
 		}
 		for label, value := range map[string]*string{
 			"--package": &options.Package, "--rollback-package": &options.RollbackPackage,
-			"--probe-binary": &options.ProbeBinary, "--backup-dir": &options.BackupDir,
+			"--probe-binary": &options.ProbeBinary,
 		} {
 			clean, err := cleanAbsoluteNonRoot(*value)
 			if err != nil {
 				return productionTransactionOptions{}, fmt.Errorf("invalid %s: %w", label, err)
 			}
 			*value = clean
+		}
+		if options.BackupDir != "" {
+			clean, err := cleanAbsoluteNonRoot(options.BackupDir)
+			if err != nil {
+				return productionTransactionOptions{}, fmt.Errorf("invalid --backup-dir: %w", err)
+			}
+			options.BackupDir = clean
 		}
 	}
 	if action == "rollback" && !productionReasonPattern.MatchString(options.Reason) {
@@ -588,7 +594,7 @@ func (runtime *productionRuntime) validateManifest(workspace productionWorkspace
 			return fmt.Errorf("deployment manifest %s escapes staging", label)
 		}
 	}
-	if manifest.BackupDir != filepath.Join(runtime.paths.BackupRoot, workspace.id) {
+	if manifest.BackupDir != "" && manifest.BackupDir != filepath.Join(runtime.paths.BackupRoot, workspace.id) {
 		return errors.New("deployment manifest backup path is not release-scoped")
 	}
 	if !releaseIDPattern.MatchString(manifest.OldFrontendRelease) || !isDatabaseSchema(manifest.DatabaseSchema) {

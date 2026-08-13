@@ -60,12 +60,21 @@ func (runtime *productionRuntime) apply(ctx context.Context, workspace productio
 			return productionStatus{}, err
 		}
 	}
-	archivedEnvironment, err := runtime.validateBackupSet(ctx, workspace, options.BackupDir)
-	if err != nil {
-		return productionStatus{}, err
-	}
-	if err := validateBackupAttestation(options.BackupDir, workspace.id); err != nil {
-		return productionStatus{}, err
+	var archivedEnvironment []byte
+	var err error
+	if options.BackupDir != "" {
+		archivedEnvironment, err = runtime.validateBackupSet(ctx, workspace, options.BackupDir)
+		if err != nil {
+			return productionStatus{}, err
+		}
+		if err := validateBackupAttestation(options.BackupDir, workspace.id); err != nil {
+			return productionStatus{}, err
+		}
+	} else {
+		archivedEnvironment, err = readPrivateRegularFile(filepath.Join(runtime.paths.ConfigDir, "lmm-api-go.env"), 1<<20)
+		if err != nil {
+			return productionStatus{}, fmt.Errorf("read live environment for rollback state: %w", err)
+		}
 	}
 	if _, err := runtime.runner.Run(ctx, productionCommand{Name: "systemctl", Args: []string{"is-active", "--quiet", runtime.paths.Service}}); err != nil {
 		return productionStatus{}, errors.New("pre-upgrade lmm-api service is not active")

@@ -11,8 +11,6 @@ func validProductionReleaseArguments(root string) []string {
 	return []string{
 		"--repo", filepath.Join(root, "repo"),
 		"--workspace", filepath.Join(root, "workspace"),
-		"--age-recipient-file", filepath.Join(root, "recipient.txt"),
-		"--age-identity-file", filepath.Join(root, "identity.txt"),
 		"--confirm", "api.lmm.best",
 	}
 }
@@ -64,5 +62,13 @@ func TestParseProductionReleaseAcceptsSafeAbsoluteInputs(t *testing.T) {
 	if options.ObservationSeconds != 240 || options.RollbackSeconds != 900 || options.Confirm != "api.lmm.best" ||
 		!options.ManualConfirm || !options.PreserveEdgePolicy {
 		t.Fatalf("options=%#v", options)
+	}
+}
+
+func TestParseProductionReleaseRequiresAgeFilesOnlyWithBackups(t *testing.T) {
+	arguments := append(validProductionReleaseArguments(t.TempDir()), "--with-backups")
+	_, err := parseProductionReleaseOptions(arguments, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "required with --with-backups") {
+		t.Fatalf("backup input error=%v", err)
 	}
 }

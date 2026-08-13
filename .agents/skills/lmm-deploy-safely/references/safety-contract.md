@@ -90,9 +90,11 @@ nonempty target, or inability to verify identity is an immediate `STOP`, never
 a fallback. This override applies only to local acceptance previews; generic
 engine detection above remains applicable to other deployment roles.
 
-## Backup copies
+## Optional backup copies
 
-Before mutation, require:
+Backups are not a deployment prerequisite. Do not create, transfer, verify, or
+prune them unless the user explicitly requests backups in the current turn.
+When the opt-in backup path is selected, require:
 
 | Role | Required verified copies |
 | --- | --- |
@@ -138,8 +140,8 @@ Canonical roots are fixed:
   on the ArchCzy host through SSH alias `archczy`.
 
 Only the exact workspace's `staging`, `tmp`, and cache children are disposable.
-After terminal state, retain its marker/status audit record and the three
-durable copies; remove staging by exact path. Never recursively clean a backup
+After terminal state, retain its marker/status audit record and any explicitly
+requested durable copies; remove staging by exact path. Never recursively clean a backup
 root, release root, home/root, `/tmp`, `/var/tmp`, an unresolved variable, or a
 glob. A terminal workspace older than 24 hours may be pruned oldest first only
 after checksum/decryption verification and only while the storage gate remains
@@ -198,11 +200,11 @@ green.
 
 - Skill validation and shell syntax checks pass.
 - Offline tests cover safe IDs and paths, host mismatch, database disagreement,
-  backup corruption, missing copies, encrypted off-host artifacts, timer
+  optional-backup selection and verification, timer
   arming, exact-release confirmation, expiry rollback, reboot recovery, and
   scoped cleanup.
-- Existing production contract tests require dual backups, watchdog state, and
-  `AWAITING_CONFIRMATION`.
+- Existing production contract tests require watchdog state and
+  `AWAITING_CONFIRMATION`; opted-in backup tests require all requested copies.
 - A fresh runtime audit reconciles any historical PostgreSQL cutover result and
   proves the active schema, Valkey endpoint, and forward-only boundary.
 - Frontend-only publication is proven compatible with the current Go API before
