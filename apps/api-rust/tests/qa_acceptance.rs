@@ -56,13 +56,14 @@ use lmm_contracts::relay::{
     ResponsesResponse, ResponsesStreamSnapshot, Role, SemanticBillingUsage, SemanticUsage,
     TokenUsage, Tool, ToolChoice, canonical_request_to_claude,
     canonical_request_to_gemini_for_model, canonical_request_to_openai_chat,
-    canonical_response_to_claude, canonical_response_to_gemini, claude_request_to_canonical,
-    claude_response_to_canonical, claude_stream_to_semantic_events,
-    gemini_request_to_canonical_for_model, gemini_response_to_canonical_for_model,
-    gemini_stream_to_canonical, openai_chat_request_to_canonical,
-    openai_chat_response_to_canonical, openai_responses_request_to_canonical,
-    openai_responses_response_to_canonical, openai_stream_to_canonical,
-    preflight_openai_responses_request_to_openai_chat, protocols, responses_stream_to_canonical,
+    canonical_request_to_openai_responses, canonical_response_to_claude,
+    canonical_response_to_gemini, claude_request_to_canonical, claude_response_to_canonical,
+    claude_stream_to_semantic_events, gemini_request_to_canonical_for_model,
+    gemini_response_to_canonical_for_model, gemini_stream_to_canonical,
+    openai_chat_request_to_canonical, openai_chat_response_to_canonical,
+    openai_responses_request_to_canonical, openai_responses_response_to_canonical,
+    openai_stream_to_canonical, preflight_openai_responses_request_to_openai_chat, protocols,
+    responses_stream_to_canonical,
 };
 
 const CHAT_REQUEST: &str = r#"{
@@ -309,6 +310,81 @@ fn request_conformance_preserves_order_ids_and_provider_signatures() {
                 |part| matches!(part, CanonicalContent::ToolCall { id, .. } if id == "call-claude")
             )
     );
+}
+
+#[test]
+fn responses_request_round_trip_preserves_input_tool_order_and_fields() {
+    let source: OpenAiResponsesRequest = serde_json::from_str(
+        r#"{
+          "model":"responses-order",
+          "input":[
+            {"role":"user","content":"hello"},
+            {"type":"function_call","call_id":"call-order","name":"lookup","arguments":"{\"q\":\"x\"}"},
+            {"type":"function_call_output","call_id":"call-order","output":{"ok":true}}
+          ],
+          "tools":[{"type":"function","name":"lookup","description":"lookup tool","parameters":{"type":"object","properties":{"q":{"type":"string"}}},"strict":true}]
+        }"#,
+    )
+    .expect("ordered Responses request");
+    let canonical =
+        openai_responses_request_to_canonical(source).expect("Responses request conversion");
+    assert!(matches!(
+        canonical.value.messages.as_slice(),
+        [
+            message,
+            call,
+            result,
+        ] if message.role == Role::User
+            && matches!(message.parts.as_slice(), [CanonicalContent::Text { text }] if text == "hello")
+            && call.role == Role::Assistant
+            && matches!(call.parts.as_slice(), [CanonicalContent::ToolCall { id, name, arguments }] if id == "call-order" && name == "lookup" && arguments == "{\"q\":\"x\"}")
+            && result.role == Role::Tool
+            && matches!(result.parts.as_slice(), [CanonicalContent::ToolResult { id, output, .. }] if id == "call-order" && *output == JsonData::Object([("ok".to_owned(), JsonData::Bool(true))].into_iter().collect()))
+    ));
+
+    let round_trip = canonical_request_to_openai_responses(canonical.value)
+        .expect("Responses request round trip");
+    let items = match round_trip.value.input.expect("Responses input") {
+        lmm_contracts::relay::ResponsesInput::Items(items) => items,
+        lmm_contracts::relay::ResponsesInput::String(_)
+        | lmm_contracts::relay::ResponsesInput::Json(_) => panic!("Responses input was flattened"),
+    };
+    // The canonical model keeps the assistant call as a separate message;
+    // the Responses encoder therefore emits one structural assistant item
+    // before the standalone function_call item.  The call/result items and
+    // their relative order remain exact.
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.kind.as_deref())
+            .collect::<Vec<_>>(),
+        vec![
+            None,
+            None,
+            Some("function_call"),
+            Some("function_call_output")
+        ]
+    );
+    assert_eq!(items[0].role.as_deref(), Some("user"));
+    assert!(matches!(
+        items[0].content.as_ref(),
+        Some(lmm_contracts::relay::StringOrParts::String(text)) if text == "hello"
+    ));
+    assert_eq!(items[2].call_id.as_deref(), Some("call-order"));
+    assert_eq!(items[2].name.as_deref(), Some("lookup"));
+    assert_eq!(items[2].arguments.as_deref(), Some("{\"q\":\"x\"}"));
+    assert_eq!(items[3].call_id.as_deref(), Some("call-order"));
+    assert_eq!(
+        items[3].output,
+        Some(JsonData::Object(
+            [("ok".to_owned(), JsonData::Bool(true))]
+                .into_iter()
+                .collect()
+        ))
+    );
+    assert_eq!(round_trip.value.tools.len(), 1);
+    assert_eq!(round_trip.value.tools[0].name.as_deref(), Some("lookup"));
+    assert_eq!(round_trip.value.tools[0].strict, Some(true));
 }
 
 #[test]
