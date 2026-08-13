@@ -433,7 +433,7 @@ fn report_scenario_manifest() {
 
 #[test]
 fn benchmark_scenario_manifest_is_complete() {
-    assert_eq!(BENCHMARK_MANIFEST_VERSION, "protocol-hotpath-v1");
+    assert_eq!(BENCHMARK_MANIFEST_VERSION, "protocol-hotpath-v2");
     for &(text_bytes, history_messages, tool_count) in &[
         (1_024, 1, 0),
         (16_384, 1, 0),
