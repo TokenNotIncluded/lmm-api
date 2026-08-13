@@ -120,7 +120,7 @@ async function waitForCondition(
 }
 
 async function renderPanel(
-  initialPreset?: 'api-key' | 'models' | 'onboarding' | 'plan',
+  initialPreset?: 'api-key' | 'human' | 'models' | 'onboarding' | 'plan',
   mode: 'mobile' | 'rail' = 'mobile',
   user: AuthUser | null = null,
   handoff?: {
@@ -940,7 +940,7 @@ describe('AssistantPanel', () => {
       )
       assert.throws(() => findButton('Which option is the best value?'))
       assert.throws(() => findButton('How is request cost calculated?'))
-      assert.ok(findButton('What can I do while access is under review?'))
+      assert.ok(findButton('I need human support'))
       assert.throws(() =>
         findButton('How do I set up Claude Code or CC Switch?')
       )
@@ -952,6 +952,40 @@ describe('AssistantPanel', () => {
 
       assert.throws(() => findButton('Create API key'))
       assert.equal(document.querySelector('a[href="/wallet"]'), null)
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
+  test('allows an L0 user to open the administrator handoff', async () => {
+    api.get = (async (url: string) => {
+      if (url === '/api/assistant/status') {
+        return {
+          data: {
+            success: true,
+            data: { ...assistantStatus, developer_access_granted: false },
+          },
+        }
+      }
+      if (url === '/api/assistant/handoffs/self') {
+        return { data: { success: true, data: null } }
+      }
+      throw new Error(`Unexpected GET ${url}`)
+    }) as typeof api.get
+
+    const rendered = await renderPanel('human')
+    try {
+      await act(async () =>
+        waitForCondition(
+          () => document.querySelector('#assistant-handoff-message') !== null,
+          'L0 administrator handoff did not render'
+        )
+      )
+      assert.match(
+        document.body.textContent ?? '',
+        /Send a message to an administrator/
+      )
     } finally {
       await act(async () => rendered.root.unmount())
       rendered.queryClient.clear()

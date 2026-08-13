@@ -392,7 +392,7 @@ function AssistantPresetPrompts() {
     t('I am new to AI'),
     t('I only want to use the gateway'),
     t('How do I apply for L1 access?'),
-    t('What can I do while access is under review?'),
+    t('I need human support'),
   ]
 
   return (
@@ -460,6 +460,7 @@ function AssistantPromptComposer(props: {
         <PromptInputBody>
           <PromptInputTextarea
             placeholder={props.placeholder}
+            aria-label={t('Ask AI assistant')}
             maxLength={4000}
             required={props.restricted}
             aria-describedby={describedBy}
@@ -827,7 +828,8 @@ export function AssistantPanel(props: {
         target === 'onboarding' ||
         target === 'client-setup' ||
         target === 'bounty' ||
-        target === 'cost'
+        target === 'cost' ||
+        target === 'human'
       if (
         accountAccessState !== 'granted' &&
         !(accountAccessState === 'restricted' && restrictedTarget)
@@ -1329,7 +1331,7 @@ export function AssistantPanel(props: {
                       developerAccessGranted={developerAccessGranted}
                     />
                   ) : null}
-                  {activeTool === 'handoff' && developerAccessGranted ? (
+                  {activeTool === 'handoff' && accountAccessConfirmed ? (
                     <AssistantHandoffTool />
                   ) : null}
                   {activeTool === 'models' && developerAccessGranted ? (

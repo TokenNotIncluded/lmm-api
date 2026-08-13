@@ -552,7 +552,7 @@ func classifyAssistantCustomerProfile(context assistantUserContext, message stri
 	if context.PaymentMethodsHidden {
 		signals = append(signals, "payment_methods_hidden")
 	}
-	if assistantTextContainsAny(text, "薅羊毛", "羊毛", "白嫖", "免费", "优惠码", "coupon", "free", "discount", "referral", "multiple accounts", "批量注册", "临时邮箱") {
+	if assistantTextContainsAny(text, "薅羊毛", "羊毛", "白嫖", "优惠码", "coupon", "discount", "referral", "multiple accounts", "批量注册", "临时邮箱") {
 		signals = append(signals, "promotion_language")
 	}
 	if assistantTextContainsAny(text, "绕过", "破解", "爆破", "扫描", "注入", "盗", "越权", "jailbreak", "bypass", "brute force", "scrape", "ignore previous", "system prompt") {
@@ -561,7 +561,7 @@ func classifyAssistantCustomerProfile(context assistantUserContext, message stri
 	if assistantTextContainsAny(text, "生产环境", "生产部署", "稳定性", "可用性", "并发", "延迟", "限流配置", "监控", "告警", "sla", "observability", "production", "reliability", "latency", "concurrency", "rate limit") {
 		signals = append(signals, "operations_language")
 	}
-	if assistantTextContainsAny(text, "不想付费", "没钱", "讨厌付款", "不充值", "自建", "源码", "开源", "技术", "免费中转", "hate paying", "self host", "open source") {
+	if assistantTextContainsAny(text, "不想付费", "没钱", "讨厌付款", "不充值", "免费", "自建", "源码", "开源", "技术", "free", "hate paying", "self host", "open source") {
 		signals = append(signals, "cost_sensitive_technical_language")
 	}
 	if assistantTextContainsAny(text, "不会", "怎么配置", "怎么用", "教程", "一步一步", "帮我配置", "need help", "how do i", "step by step", "not technical") {
@@ -727,15 +727,16 @@ func assistantWelcomeStrategy(profile assistantCustomerProfile) string {
 
 func assistantWelcomeStrategyForContext(context assistantUserContext) string {
 	profile := assistantSafeCustomerProfile(context.CustomerProfile)
-	if context.AccessLevel == "L0" {
-		switch profile {
-		case assistantProfileSecurityRisk, assistantProfilePromotion, assistantProfileSupport:
-			return assistantWelcomeStrategy(profile)
-		default:
-			return "Welcome the user without presuming technical experience. Ask whether they are new to AI or open-source projects and what they hope to do, one easy question at a time. People may simply want to use the relay and do not need an open-source project, a technical stack, or a contribution plan. Answer practical usage questions directly, explain the next small step, and keep L1 or payment discussions proportional to the user's actual need."
-		}
+	strategy := assistantWelcomeStrategy(profile)
+	if context.AccessLevel != "L0" {
+		return strategy
 	}
-	return assistantWelcomeStrategy(profile)
+
+	l0Boundary := "For this L0 account, welcome the user without presuming technical experience. Ask whether they are new to AI or open-source projects and what they hope to do, one easy question at a time. People may simply want to use the relay and do not need an open-source project, a technical stack, or a contribution plan. Keep developer and write actions unavailable until L1, answer practical usage questions directly, explain the next small step, and keep L1 or payment discussions proportional to the user's actual need."
+	if profile == assistantProfileL0Applicant {
+		return l0Boundary
+	}
+	return strategy + " " + l0Boundary
 }
 
 func assistantUserContextFromGin(c interface{ Get(string) (any, bool) }) assistantUserContext {

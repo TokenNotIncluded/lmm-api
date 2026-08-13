@@ -122,12 +122,13 @@ func TestAssistantPersonaMatrix(t *testing.T) {
 			context := assistantPersonaContextFromFixture(fixture.User)
 			context.PaymentOfferState = assistantPaymentOfferStateForContextAndConversation(context, fixture.Message)
 			profile, signals := classifyAssistantCustomerProfile(context, fixture.Message)
+			context.CustomerProfile = profile
 			assert.Equal(t, fixture.Expected.Profile, string(profile))
 			for _, expectedSignal := range fixture.Expected.Signals {
 				assert.Contains(t, signals, expectedSignal)
 			}
 
-			strategy := assistantWelcomeStrategy(profile)
+			strategy := assistantWelcomeStrategyForContext(context)
 			for _, expectedText := range fixture.Expected.WelcomeContains {
 				assert.Contains(t, strategy, expectedText)
 			}

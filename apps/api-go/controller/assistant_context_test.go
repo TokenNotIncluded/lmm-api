@@ -89,6 +89,18 @@ func TestAssistantCustomerProfileUsesAuditableSignals(t *testing.T) {
 			signal:  "cost_sensitive_technical_language",
 		},
 		{
+			name:    "free open source is cost sensitive, not promotional abuse",
+			message: "我只接受免费开源方案，想自建并查看准确接口",
+			want:    assistantProfileTechnical,
+			signal:  "cost_sensitive_technical_language",
+		},
+		{
+			name:    "coupon and multiple accounts remain promotional abuse",
+			message: "有没有免费额度和优惠码，我要批量注册",
+			want:    assistantProfilePromotion,
+			signal:  "promotion_language",
+		},
+		{
 			name:    "guided",
 			message: "我不会配置，能一步一步教我吗",
 			want:    assistantProfileGuided,
@@ -366,6 +378,37 @@ func TestAssistantL0WelcomeStrategyAcceptsRelayOnlyBeginners(t *testing.T) {
 	assert.Contains(t, strategy, "new to AI or open-source projects")
 	assert.Contains(t, strategy, "simply want to use the relay")
 	assert.Contains(t, strategy, "do not need an open-source project")
+}
+
+func TestAssistantL0WelcomeStrategyPreservesProfileSpecialization(t *testing.T) {
+	tests := []struct {
+		profile assistantCustomerProfile
+		want    []string
+	}{
+		{
+			profile: assistantProfileTechnical,
+			want:    []string{"exact endpoints", "Do not pressure the user to pay"},
+		},
+		{
+			profile: assistantProfileGuided,
+			want:    []string{"short numbered steps", "ask only one easy question at a time"},
+		},
+		{
+			profile: assistantProfileOperator,
+			want:    []string{"reliability", "exact operational documentation"},
+		},
+	}
+
+	for _, test := range tests {
+		strategy := assistantWelcomeStrategyForContext(assistantUserContext{
+			AccessLevel:     "L0",
+			CustomerProfile: test.profile,
+		})
+		for _, want := range test.want {
+			assert.Contains(t, strategy, want)
+		}
+		assert.Contains(t, strategy, "Keep developer and write actions unavailable until L1")
+	}
 }
 
 func TestAssistantL0PromptDoesNotRequireSynchronousAssessment(t *testing.T) {

@@ -229,6 +229,7 @@ describe('L0 onboarding assistant experience', () => {
 
       const textarea = document.querySelector<HTMLTextAreaElement>('textarea')
       assert.ok(textarea)
+      assert.equal(textarea.getAttribute('aria-label'), 'Ask AI assistant')
       assert.equal(textarea.required, true)
       assert.ok(textarea.minLength <= 0)
       assert.match(
@@ -239,6 +240,7 @@ describe('L0 onboarding assistant experience', () => {
         textarea.getAttribute('aria-describedby') ?? '',
         /assistant-l0-input-hint/
       )
+      assert.match(document.body.textContent ?? '', /I need human support/)
     } finally {
       await act(async () => rendered.root.unmount())
       rendered.queryClient.clear()

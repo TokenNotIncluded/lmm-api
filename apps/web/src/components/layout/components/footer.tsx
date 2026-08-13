@@ -265,7 +265,6 @@ export function Footer(props: FooterProps) {
               className='forge-footer-meta flex flex-wrap gap-x-5 gap-y-2 text-sm'
             >
               <Link to='/challenges'>{t('Challenges')}</Link>
-              <Link to='/pricing'>{t('Pricing')}</Link>
               <Link to='/user-agreement'>{t('Terms of Service')}</Link>
               <Link to='/privacy-policy'>{t('Privacy Policy')}</Link>
               <a href='mailto:support@lmm.best'>support@lmm.best</a>

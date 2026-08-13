@@ -53,8 +53,6 @@ export const Route = createFileRoute('/pricing/')({
     }
 
     const { auth } = useAuthStore.getState()
-    if (!isConsoleActivated(auth.user)) return
-
     if (access.requireAuth) {
       if (!auth.user) {
         throw redirect({
@@ -63,6 +61,8 @@ export const Route = createFileRoute('/pricing/')({
         })
       }
     }
+
+    if (!isConsoleActivated(auth.user)) return
   },
   component: PricingRoute,
 })
