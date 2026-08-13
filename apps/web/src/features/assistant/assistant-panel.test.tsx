@@ -1494,6 +1494,11 @@ describe('AssistantPanel', () => {
           'Assistant history did not render'
         )
       )
+      const historyList = document.querySelector<HTMLElement>(
+        '[data-testid="assistant-history-list"]'
+      )
+      assert.ok(historyList)
+      assert.equal(historyList.dataset.presentation, 'rows')
       assert.doesNotMatch(
         document.body.textContent ?? '',
         /private@example\.test/

@@ -125,7 +125,7 @@ function setUser(role: number, trustLevel = 0) {
   })
 }
 
-async function renderHistory() {
+async function renderHistory(presentation: 'cards' | 'rows' = 'cards') {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -137,7 +137,11 @@ async function renderHistory() {
     root.render(
       <QueryClientProvider client={queryClient}>
         <I18nextProvider i18n={i18n}>
-          <AssistantHistory active onOpenConversation={() => {}} />
+          <AssistantHistory
+            active
+            presentation={presentation}
+            onOpenConversation={() => {}}
+          />
         </I18nextProvider>
       </QueryClientProvider>
     )
@@ -171,6 +175,46 @@ afterEach(() => {
 after(() => domWindow.close())
 
 describe('AssistantHistory archive controls', () => {
+  test('uses whitespace and separators instead of bordered cards in row presentation', async () => {
+    api.get = (async () => ({
+      data: {
+        success: true,
+        data: {
+          conversations: [activeConversation, lowerAccessConversation],
+        },
+      },
+    })) as typeof api.get
+
+    const rendered = await renderHistory('rows')
+    try {
+      const list = rendered.container.querySelector<HTMLElement>(
+        '[data-testid="assistant-history-list"]'
+      )
+      assert.ok(list)
+      assert.equal(list.dataset.presentation, 'rows')
+      assert.equal(
+        list.querySelectorAll('[data-testid="assistant-history-item"]').length,
+        2
+      )
+      assert.equal(list.querySelectorAll('[data-slot="separator"]').length, 1)
+      for (const item of list.querySelectorAll<HTMLElement>(
+        '[data-testid="assistant-history-item"]'
+      )) {
+        assert.match(item.className, /py-4/)
+        assert.doesNotMatch(item.className, /rounded-lg/)
+        assert.doesNotMatch(item.className, /border/)
+        assert.equal(
+          item
+            .querySelector<HTMLButtonElement>('button')
+            ?.className.includes('border-border'),
+          false
+        )
+      }
+    } finally {
+      await unmount(rendered)
+    }
+  })
+
   test('loads active conversations by default and shows archived conversations through the filter', async () => {
     const calls: Array<{ archived: boolean }> = []
     api.get = (async (_url: string, config: unknown) => {

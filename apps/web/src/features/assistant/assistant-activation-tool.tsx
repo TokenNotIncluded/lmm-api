@@ -60,8 +60,6 @@ export function AssistantActivationTool(props: {
 }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
-  const [requestOverride, setRequestOverride] =
-    useState<DeveloperAccessRequest | null>(null)
   const [loading, setLoading] = useState(false)
   const [manualReason, setManualReason] = useState('')
   const [letter, setLetter] = useState<string | null>(null)
@@ -69,15 +67,16 @@ export function AssistantActivationTool(props: {
   const [pendingLetterDraft, setPendingLetterDraft] = useState('')
   const initializedLetterKey = useRef('')
 
+  const requestQueryKey = ['assistant-developer-access-request'] as const
   const requestQuery = useQuery({
-    queryKey: ['assistant-developer-access-request'],
+    queryKey: requestQueryKey,
     queryFn: getDeveloperAccessRequest,
     staleTime: 0,
     retry: false,
     refetchInterval: (query) =>
       query.state.data?.status === 'pending' ? 15_000 : false,
   })
-  const request = requestOverride ?? requestQuery.data ?? null
+  const request = requestQuery.data ?? null
 
   useEffect(() => {
     if (request?.status === 'approved') {
@@ -98,7 +97,7 @@ export function AssistantActivationTool(props: {
       const key = `request:${request.id}`
       if (initializedLetterKey.current !== key) {
         initializedLetterKey.current = key
-        setLetter(request.ai_recommendation || request.reason)
+        setLetter(request.ai_recommendation)
       }
     }
   }, [props.recommendationDraft, request])
@@ -116,7 +115,7 @@ export function AssistantActivationTool(props: {
         confirmation_token: draft.confirmation_token,
         confirmed: true,
       })
-      setRequestOverride(submitted)
+      queryClient.setQueryData(requestQueryKey, submitted)
       props.onSubmitted?.(submitted)
       toast.success(t('Unlock request submitted'))
     } catch (error) {
@@ -149,7 +148,7 @@ export function AssistantActivationTool(props: {
               confirmed: true,
             }
       )
-      setRequestOverride(submitted)
+      queryClient.setQueryData(requestQueryKey, submitted)
       setLetter(submitted.ai_recommendation)
       setPendingLetterEditing(false)
       toast.success(t('Your changes were saved.'))
@@ -173,7 +172,7 @@ export function AssistantActivationTool(props: {
         reason,
         confirmed: true,
       })
-      setRequestOverride(submitted)
+      queryClient.setQueryData(requestQueryKey, submitted)
       props.onSubmitted?.(submitted)
       toast.success(t('Unlock request submitted'))
     } catch (error) {
@@ -221,8 +220,8 @@ export function AssistantActivationTool(props: {
   }
 
   if (request?.status === 'pending') {
-    const recommendation =
-      letter !== null ? letter : request.ai_recommendation || request.reason
+    const recommendation = letter !== null ? letter : request.ai_recommendation
+    const hasRecommendation = request.ai_recommendation.trim().length > 0
     if (!pendingLetterEditing) {
       return (
         <section
@@ -230,7 +229,11 @@ export function AssistantActivationTool(props: {
           data-testid='assistant-pending-recommendation'
         >
           <p className='text-muted-foreground min-w-0 flex-1 truncate text-xs'>
-            {t('AI recommendation submitted')}
+            {t(
+              hasRecommendation
+                ? 'AI recommendation submitted'
+                : 'Access request submitted'
+            )}
             <span aria-hidden='true'> · </span>
             {t('Pending review')}
           </p>

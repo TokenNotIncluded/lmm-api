@@ -91,6 +91,11 @@ const pendingRequest = {
   created_at: 1_786_400_000,
   reviewed_at: 0,
 }
+const directPendingRequest = {
+  ...pendingRequest,
+  source: 'assistant_request' as const,
+  ai_recommendation: '',
+}
 const approvedRequest = {
   ...pendingRequest,
   status: 'approved' as const,
@@ -233,7 +238,7 @@ describe('AssistantActivationTool', () => {
     api.post = (async (url: string, data: unknown) => {
       assert.equal(url, '/api/user/developer-access/request')
       submittedBody = data
-      return { data: { success: true, data: pendingRequest } }
+      return { data: { success: true, data: directPendingRequest } }
     }) as typeof api.post
 
     const rendered = await renderTool()
@@ -256,7 +261,7 @@ describe('AssistantActivationTool', () => {
       })
       assert.match(
         document.body.textContent ?? '',
-        /AI recommendation submitted · Pending review/
+        /Access request submitted · Pending review/
       )
       assert.equal(document.querySelector('textarea'), null)
     } finally {
@@ -370,10 +375,11 @@ describe('AssistantActivationTool', () => {
         confirmed: true,
       })
       assert.equal(document.querySelector('textarea'), null)
-      assert.ok(
+      assert.match(
         document.querySelector(
           '[data-testid="assistant-pending-recommendation"]'
-        )
+        )?.textContent ?? '',
+        /Access request submitted · Pending review/
       )
 
       await act(async () => {
@@ -386,6 +392,34 @@ describe('AssistantActivationTool', () => {
       assert.equal(reopenedTextarea.value, '')
     } finally {
       await unmount(rendered)
+    }
+  })
+
+  test('keeps a cleared recommendation empty after remounting the pending request', async () => {
+    api.get = (async () => ({
+      data: { success: true, data: directPendingRequest },
+    })) as typeof api.get
+
+    for (let mount = 0; mount < 2; mount += 1) {
+      const rendered = await renderTool()
+      try {
+        assert.match(
+          document.querySelector(
+            '[data-testid="assistant-pending-recommendation"]'
+          )?.textContent ?? '',
+          /Access request submitted · Pending review/
+        )
+
+        await act(async () => {
+          findButton('Edit').click()
+          await flushEffects()
+        })
+        const textarea = document.querySelector<HTMLTextAreaElement>('textarea')
+        assert.ok(textarea)
+        assert.equal(textarea.value, '')
+      } finally {
+        await unmount(rendered)
+      }
     }
   })
 
@@ -480,6 +514,64 @@ describe('AssistantActivationTool', () => {
       await unmount(rendered)
     }
   })
+
+  for (const reviewedRequest of [approvedRequest, rejectedRequest]) {
+    test(`lets polling replace a locally submitted pending request with ${reviewedRequest.status}`, async () => {
+      let getCalls = 0
+      api.get = (async (url: string) => {
+        assert.equal(url, '/api/user/developer-access/request')
+        getCalls += 1
+        return {
+          data: {
+            success: true,
+            data: getCalls === 1 ? null : reviewedRequest,
+          },
+        }
+      }) as typeof api.get
+      api.post = (async () => ({
+        data: { success: true, data: directPendingRequest },
+      })) as typeof api.post
+
+      const rendered = await renderTool()
+      try {
+        const textarea = document.querySelector<HTMLTextAreaElement>('textarea')
+        assert.ok(textarea)
+        await setTextareaValue(textarea, 'I need L1 for a small test client.')
+        await act(async () => {
+          findButton('Submit for administrator review').click()
+          await flushEffects()
+        })
+        await waitForCondition(
+          () =>
+            document.body.textContent?.includes('Access request submitted') ===
+            true,
+          'Locally submitted pending request did not render'
+        )
+
+        await act(async () => {
+          await rendered.queryClient.refetchQueries({
+            queryKey: ['assistant-developer-access-request'],
+          })
+          await flushEffects()
+        })
+        await waitForCondition(
+          () =>
+            document.body.textContent?.includes(
+              reviewedRequest.status === 'approved'
+                ? 'L1 access approved'
+                : 'Previous request rejected'
+            ) === true,
+          `Polled ${reviewedRequest.status} request did not replace local pending state`
+        )
+        assert.match(
+          document.body.textContent ?? '',
+          new RegExp(reviewedRequest.admin_note.replaceAll('.', '\\.'))
+        )
+      } finally {
+        await unmount(rendered)
+      }
+    })
+  }
 
   test('shows the administrator reply and keeps the direct form after rejection', async () => {
     api.get = (async () => ({

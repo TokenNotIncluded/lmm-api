@@ -24,7 +24,7 @@ import {
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useMemo, useState, type FormEvent } from 'react'
+import { Fragment, useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -33,9 +33,11 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { toIntlLocale } from '@/i18n/languages'
 import { ROLE } from '@/lib/roles'
+import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
 
 import {
@@ -104,6 +106,7 @@ export function AssistantHistory(props: {
   active: boolean
   onOpenConversation: (conversation: AssistantConversationHistoryItem) => void
   ownerUser?: { id: number; username: string }
+  presentation?: 'cards' | 'rows'
 }) {
   const { t, i18n } = useTranslation()
   const queryClient = useQueryClient()
@@ -337,86 +340,105 @@ export function AssistantHistory(props: {
               )}
         </p>
       ) : (
-        conversations.map((conversation) => {
-          const safePreview = redactAssistantMessageForDisplay(
-            conversation.last_message_preview,
-            t(
-              'Sensitive content is hidden and can only be accessed from a private card.'
-            )
-          ).content
-          const canManage =
-            effectiveScope === 'self' && conversation.owner === 'self'
-          const actionPending =
-            archiveMutation.isPending &&
-            archiveMutation.variables?.id === conversation.id
-          return (
-            <article
-              key={conversation.id}
-              className='grid min-w-0 gap-2 rounded-lg border p-3'
-            >
-              <div className='flex min-w-0 items-start justify-between gap-3'>
-                <div className='min-w-0'>
-                  <p className='line-clamp-2 text-sm font-medium'>
-                    <span className='sr-only'>
-                      {conversation.owner === 'self'
-                        ? `${t('Your conversation')}: `
-                        : `${t('Lower-access user conversation')}: `}
-                    </span>
-                    {conversation.title}
-                  </p>
-                  <p className='text-muted-foreground mt-0.5 text-xs'>
-                    {dateFormatter.format(
-                      new Date(conversation.updated_at * 1000)
-                    )}
-                  </p>
-                </div>
-                <div className='flex shrink-0 flex-wrap justify-end gap-2'>
-                  <Button
-                    type='button'
-                    variant='outline'
-                    size='sm'
-                    onClick={() => props.onOpenConversation(conversation)}
-                  >
-                    {t('View')}
-                  </Button>
-                  {canManage ? (
-                    <Button
-                      type='button'
-                      variant='ghost'
-                      size='sm'
-                      aria-label={t(
-                        showingArchived
-                          ? 'Restore conversation'
-                          : 'Archive conversation'
-                      )}
-                      disabled={actionPending}
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        archiveMutation.mutate({
-                          id: conversation.id,
-                          archived: showingArchived,
-                        })
-                      }}
-                    >
-                      <HugeiconsIcon
-                        icon={
-                          showingArchived ? ArchiveRestoreIcon : Archive01Icon
+        <div
+          data-presentation={props.presentation ?? 'cards'}
+          data-testid='assistant-history-list'
+        >
+          {conversations.map((conversation, index) => {
+            const safePreview = redactAssistantMessageForDisplay(
+              conversation.last_message_preview,
+              t(
+                'Sensitive content is hidden and can only be accessed from a private card.'
+              )
+            ).content
+            const canManage =
+              effectiveScope === 'self' && conversation.owner === 'self'
+            const actionPending =
+              archiveMutation.isPending &&
+              archiveMutation.variables?.id === conversation.id
+            return (
+              <Fragment key={conversation.id}>
+                {props.presentation === 'rows' && index > 0 ? (
+                  <Separator />
+                ) : null}
+                <article
+                  className={cn(
+                    'grid min-w-0 gap-2',
+                    props.presentation === 'rows'
+                      ? 'py-4'
+                      : 'mb-3 rounded-lg border p-3 last:mb-0'
+                  )}
+                  data-testid='assistant-history-item'
+                >
+                  <div className='flex min-w-0 items-start justify-between gap-3'>
+                    <div className='min-w-0'>
+                      <p className='line-clamp-2 text-sm font-medium'>
+                        <span className='sr-only'>
+                          {conversation.owner === 'self'
+                            ? `${t('Your conversation')}: `
+                            : `${t('Lower-access user conversation')}: `}
+                        </span>
+                        {conversation.title}
+                      </p>
+                      <p className='text-muted-foreground mt-0.5 text-xs'>
+                        {dateFormatter.format(
+                          new Date(conversation.updated_at * 1000)
+                        )}
+                      </p>
+                    </div>
+                    <div className='flex shrink-0 flex-wrap justify-end gap-2'>
+                      <Button
+                        type='button'
+                        variant={
+                          props.presentation === 'rows' ? 'ghost' : 'outline'
                         }
-                        className='size-4'
-                        strokeWidth={2}
-                        aria-hidden='true'
-                      />
-                      {t(showingArchived ? 'Restore' : 'Archive')}
-                    </Button>
-                  ) : null}
-                </div>
-              </div>
-              <p className='text-muted-foreground line-clamp-2 text-xs leading-5'>
-                {safePreview}
-              </p>
-            </article>
-          )
-        })
+                        size='sm'
+                        onClick={() => props.onOpenConversation(conversation)}
+                      >
+                        {t('View')}
+                      </Button>
+                      {canManage ? (
+                        <Button
+                          type='button'
+                          variant='ghost'
+                          size='sm'
+                          aria-label={t(
+                            showingArchived
+                              ? 'Restore conversation'
+                              : 'Archive conversation'
+                          )}
+                          disabled={actionPending}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            archiveMutation.mutate({
+                              id: conversation.id,
+                              archived: showingArchived,
+                            })
+                          }}
+                        >
+                          <HugeiconsIcon
+                            icon={
+                              showingArchived
+                                ? ArchiveRestoreIcon
+                                : Archive01Icon
+                            }
+                            className='size-4'
+                            strokeWidth={2}
+                            aria-hidden='true'
+                          />
+                          {t(showingArchived ? 'Restore' : 'Archive')}
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                  <p className='text-muted-foreground line-clamp-2 text-xs leading-5'>
+                    {safePreview}
+                  </p>
+                </article>
+              </Fragment>
+            )
+          })}
+        </div>
       )}
     </div>
   )

@@ -1214,6 +1214,7 @@ export function AssistantPanel(props: {
             {historyView === 'list' ? (
               <AssistantHistory
                 active={panelVisible}
+                presentation='rows'
                 onOpenConversation={(conversation) =>
                   setHistoryView(conversation)
                 }
@@ -1550,6 +1551,7 @@ export function AssistantPanel(props: {
           <div className='min-h-0 flex-1 overflow-y-auto p-3'>
             <AssistantHistory
               active={panelVisible}
+              presentation='rows'
               onOpenConversation={(conversation) =>
                 setHistoryView(conversation)
               }
