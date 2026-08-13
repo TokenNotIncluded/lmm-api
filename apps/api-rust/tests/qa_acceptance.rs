@@ -2826,6 +2826,138 @@ fn converter_pair_overrides_prioritize_route_model_stream_channel_and_stage_boun
 }
 
 #[test]
+fn bounded_rollout_configuration_corpus_is_panic_free_and_fail_closed() {
+    const MAX_INPUT_BYTES: usize = 4096;
+
+    fn next_xorshift(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
+    let default_config = ProtocolRolloutConfig::default();
+    let valid_bytes = serde_json::to_vec(&default_config).expect("default rollout serializes");
+    let mut rollback_config = default_config.clone();
+    rollback_config.rollback = true;
+    let rollback_bytes = serde_json::to_vec(&rollback_config).expect("rollback rollout serializes");
+
+    let mut corpus = vec![valid_bytes.clone(), rollback_bytes];
+    for &cut in &[
+        0,
+        1,
+        valid_bytes.len() / 2,
+        valid_bytes.len().saturating_sub(1),
+        valid_bytes.len(),
+    ] {
+        corpus.push(valid_bytes[..cut].to_vec());
+    }
+
+    let mut state = 0x6a09_e667_f3bc_c909_u64;
+    for &length in &[0, 1, 7, 31, 127, 1024, MAX_INPUT_BYTES] {
+        let mut bytes = Vec::with_capacity(length);
+        for _ in 0..length {
+            let value = next_xorshift(&mut state);
+            bytes.push(match value & 0x0f {
+                0 => b'{',
+                1 => b'}',
+                2 => b'"',
+                3 => b':',
+                4 => b',',
+                5 => b'[',
+                6 => b']',
+                _ => b'a' + ((value >> 8) as u8 % 26),
+            });
+        }
+        assert!(bytes.len() <= MAX_INPUT_BYTES);
+        corpus.push(bytes);
+    }
+
+    let context = RolloutContext::new(
+        "qa-rollout-config-corpus",
+        Protocol::OpenAi,
+        Protocol::OpenAiResponses,
+        "rollout-model",
+        true,
+    );
+    for (case_index, input) in corpus.iter().enumerate() {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            if let Ok(config) = serde_json::from_slice::<ProtocolRolloutConfig>(input) {
+                let _ = config.validate();
+                for flag in RolloutFlag::ALL {
+                    let _ = config.decide(flag, &context);
+                }
+            }
+        }));
+        assert!(
+            result.is_ok(),
+            "rollout configuration corpus panicked at case {case_index}"
+        );
+    }
+
+    let mut unknown = serde_json::to_value(&default_config).expect("default rollout value");
+    unknown
+        .as_object_mut()
+        .expect("rollout config object")
+        .insert(
+            "future_rollout_field".to_owned(),
+            serde_json::Value::Bool(true),
+        );
+
+    let mut disabled_nonzero = default_config.clone();
+    disabled_nonzero.sse_parser_v2.canary_basis_points = 1;
+
+    let mut invalid_basis = default_config.clone();
+    invalid_basis.gemini_function_id_v2.canary_basis_points = MAX_BASIS_POINTS + 1;
+
+    let mut invalid_selector = default_config.clone();
+    invalid_selector
+        .conversion_engine_v2
+        .overrides
+        .push(FlagOverride {
+            selector: RolloutSelector {
+                model_family: Some("   ".to_owned()),
+                ..RolloutSelector::default()
+            },
+            enabled: true,
+            canary_basis_points: MAX_BASIS_POINTS,
+        });
+
+    let mut invalid_pair_basis = default_config.clone();
+    invalid_pair_basis
+        .converter_pair_overrides
+        .push(ConverterPairOverride {
+            flag: RolloutFlag::ConversionEngineV2,
+            source: Protocol::OpenAi,
+            target: Protocol::Claude,
+            channel: None,
+            model_family: None,
+            stream: None,
+            enabled: true,
+            canary_basis_points: Some(MAX_BASIS_POINTS + 1),
+        });
+
+    let rollback_decoded: ProtocolRolloutConfig =
+        serde_json::from_slice(&serde_json::to_vec(&rollback_config).expect("rollback bytes"))
+            .expect("rollback config parses");
+    assert!(rollback_decoded.validate().is_ok());
+    for flag in RolloutFlag::ALL {
+        let decision = rollback_decoded.decide(flag, &context);
+        assert!(!decision.enabled, "rollback admitted {flag:?}");
+        assert_eq!(decision.source, DecisionSource::ConfigRollback);
+    }
+
+    let explicit = catch_unwind(AssertUnwindSafe(|| {
+        assert!(serde_json::from_value::<ProtocolRolloutConfig>(unknown).is_err());
+        assert!(disabled_nonzero.validate().is_err());
+        assert!(invalid_basis.validate().is_err());
+        assert!(invalid_selector.validate().is_err());
+        assert!(invalid_pair_basis.validate().is_err());
+    }));
+    assert!(explicit.is_ok(), "invalid rollout config handling panicked");
+}
+
+#[test]
 fn route_specific_stream_observability_preserves_dimensions() {
     let observer = ConversionObserver::with_max_series(64);
     let labels = MetricLabels::for_route(
