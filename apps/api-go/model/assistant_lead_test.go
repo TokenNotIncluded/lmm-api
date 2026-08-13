@@ -1,6 +1,8 @@
 package model
 
 import (
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -12,7 +14,7 @@ import (
 func setupAssistantLeadTestDB(t *testing.T) *User {
 	t.Helper()
 	db := setupConsoleActivationTestDB(t)
-	require.NoError(t, db.AutoMigrate(&AssistantLead{}, &AssistantProfileBucket{}))
+	require.NoError(t, db.AutoMigrate(&AssistantLead{}, &AssistantProfileBucket{}, &AssistantFirstQuestionStat{}))
 	user := &User{
 		Username: "assistant-lead-user",
 		Password: "password",
@@ -62,10 +64,12 @@ func TestRecordAssistantIntentDoesNotPersistChatMessage(t *testing.T) {
 
 func TestAssistantHandoffRedactsSecretsAndIsIdempotent(t *testing.T) {
 	user := setupAssistantLeadTestDB(t)
-	lead, err := SubmitAssistantHandoff(user.Id, "登录失败，password: hunter2，key=sk-secret-token-123")
+	lead, err := SubmitAssistantHandoff(user.Id, "登录失败，password: hunter2，key=sk-secret-token-123，电话 13800138000，IP 192.0.2.10")
 	require.NoError(t, err)
 	assert.NotContains(t, lead.Message, "hunter2")
 	assert.NotContains(t, lead.Message, "sk-secret-token-123")
+	assert.NotContains(t, lead.Message, "13800138000")
+	assert.NotContains(t, lead.Message, "192.0.2.10")
 	assert.Contains(t, lead.Message, "[REDACTED]")
 
 	repeated, err := SubmitAssistantHandoff(user.Id, "another message")
@@ -139,4 +143,57 @@ func TestAssistantProfileSummaryIsAggregateOnly(t *testing.T) {
 	assert.EqualValues(t, 1, counts["support_seeking"])
 	assert.EqualValues(t, 1, counts["l0_applicant"])
 	assert.Error(t, RecordAssistantProfile("user@example.com"))
+}
+
+func TestAssistantFirstQuestionAggregationNormalizesAndRedacts(t *testing.T) {
+	_ = setupAssistantLeadTestDB(t)
+	first := "  How   do I use the API? email: alice@example.com user_id=123 token=short-secret-123 api_key=sk_live_supersecret123  "
+	second := "how do I use the api? email: bob@example.com user_id=987 token=another-secret-456 api_key=sk_live_othersecret456"
+	require.NoError(t, RecordAssistantFirstQuestion(first))
+	require.NoError(t, RecordAssistantFirstQuestion(second))
+
+	var rows []AssistantFirstQuestionStat
+	require.NoError(t, DB.Find(&rows).Error)
+	require.Len(t, rows, 1)
+	assert.EqualValues(t, 2, rows[0].Count)
+	assert.NotContains(t, rows[0].Question, "alice@example.com")
+	assert.NotContains(t, rows[0].Question, "bob@example.com")
+	assert.NotContains(t, rows[0].Question, "sk_live_supersecret123")
+	assert.NotContains(t, rows[0].Question, "sk_live_othersecret456")
+	assert.NotContains(t, rows[0].Question, "short-secret-123")
+	assert.NotContains(t, rows[0].Question, "another-secret-456")
+	assert.NotContains(t, rows[0].Question, "user_id")
+
+	serialized, err := json.Marshal(rows[0])
+	require.NoError(t, err)
+	assert.NotContains(t, string(serialized), "email")
+	assert.NotContains(t, string(serialized), "user_id")
+
+	summary, err := ListAssistantFirstQuestionSummary(0)
+	require.NoError(t, err)
+	require.Len(t, summary, 1)
+	assert.EqualValues(t, 2, summary[0].Count)
+	assert.Positive(t, summary[0].LastAskedAt)
+	assert.Equal(t, rows[0].Question, summary[0].Question)
+}
+
+func TestAssistantFirstQuestionSummaryReturnsTopTen(t *testing.T) {
+	_ = setupAssistantLeadTestDB(t)
+	for index := 0; index < 12; index++ {
+		question := fmt.Sprintf("question %d", index)
+		for count := 0; count <= index; count++ {
+			require.NoError(t, RecordAssistantFirstQuestion(question))
+		}
+	}
+
+	summary, err := ListAssistantFirstQuestionSummary(0)
+	require.NoError(t, err)
+	require.Len(t, summary, 10)
+	assert.Equal(t, "question 11", summary[0].Question)
+	assert.EqualValues(t, 12, summary[0].Count)
+	assert.Equal(t, "question 2", summary[9].Question)
+	assert.EqualValues(t, 3, summary[9].Count)
+	for _, item := range summary {
+		assert.Positive(t, item.LastAskedAt)
+	}
 }

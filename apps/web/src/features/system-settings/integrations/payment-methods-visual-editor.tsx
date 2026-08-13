@@ -23,6 +23,7 @@ import { useTranslation } from 'react-i18next'
 import { StaticDataTable } from '@/components/data-table/static/static-data-table'
 import { StaticRowActions } from '@/components/data-table/static/static-row-actions'
 import { ReactIconByName } from '@/components/react-icon-by-name'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import {
@@ -92,7 +93,9 @@ export function PaymentMethodsVisualEditor({
       (method) =>
         method.name.toLowerCase().includes(lowerSearch) ||
         method.type.toLowerCase().includes(lowerSearch) ||
-        getEffectiveIconName(method).toLowerCase().includes(lowerSearch)
+        getEffectiveIconName(method).toLowerCase().includes(lowerSearch) ||
+        method.description?.toLowerCase().includes(lowerSearch) ||
+        method.audience_user_group?.toLowerCase().includes(lowerSearch)
     )
   }, [paymentMethods, searchText])
 
@@ -302,7 +305,21 @@ export function PaymentMethodsVisualEditor({
                 id: 'name',
                 header: t('Name'),
                 cellClassName: 'font-medium',
-                cell: (method) => method.name,
+                cell: (method) => (
+                  <div className='flex min-w-0 items-center gap-2'>
+                    {method.color && (
+                      <span
+                        aria-hidden='true'
+                        className='size-2 shrink-0 rounded-full'
+                        style={{ backgroundColor: method.color }}
+                      />
+                    )}
+                    <span className='truncate'>{method.name}</span>
+                    {method.enabled === 'false' && (
+                      <Badge variant='secondary'>{t('Disabled')}</Badge>
+                    )}
+                  </div>
+                ),
               },
               {
                 id: 'type',
@@ -381,6 +398,11 @@ export function PaymentMethodsVisualEditor({
                       <span className='text-muted-foreground'>
                         {details.audienceLabel}
                       </span>
+                      {method.description && (
+                        <span className='text-muted-foreground max-w-44 truncate'>
+                          {method.description}
+                        </span>
+                      )}
                     </span>
                   )
                 },
@@ -423,6 +445,10 @@ export function PaymentMethodsVisualEditor({
                 method.settlement_unit,
                 method.unit_price,
                 method.color,
+                method.enabled,
+                method.description,
+                method.audience_user_group,
+                method.audience_role,
               ]
                 .filter(Boolean)
                 .join('-')
@@ -431,7 +457,19 @@ export function PaymentMethodsVisualEditor({
                 <div key={methodKey} className='p-4'>
                   <div className='mb-3 flex items-start justify-between'>
                     <div className='flex-1'>
-                      <div className='mb-1 font-medium'>{method.name}</div>
+                      <div className='mb-1 flex items-center gap-2 font-medium'>
+                        {method.color && (
+                          <span
+                            aria-hidden='true'
+                            className='size-2 shrink-0 rounded-full'
+                            style={{ backgroundColor: method.color }}
+                          />
+                        )}
+                        <span className='truncate'>{method.name}</span>
+                        {method.enabled === 'false' && (
+                          <Badge variant='secondary'>{t('Disabled')}</Badge>
+                        )}
+                      </div>
                       <code className='bg-muted rounded px-1.5 py-0.5 text-xs'>
                         {method.type}
                       </code>
@@ -483,6 +521,16 @@ export function PaymentMethodsVisualEditor({
                         <span className='text-muted-foreground text-xs'>—</span>
                       )}
                     </div>
+                    {method.description && (
+                      <div className='flex items-start gap-2'>
+                        <span className='text-muted-foreground min-w-20'>
+                          {t('Description')}:
+                        </span>
+                        <span className='text-muted-foreground line-clamp-2'>
+                          {method.description}
+                        </span>
+                      </div>
+                    )}
                     {method.min_topup && (
                       <div className='flex items-center gap-2'>
                         <span className='text-muted-foreground min-w-20'>

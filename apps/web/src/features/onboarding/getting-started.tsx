@@ -14,11 +14,10 @@ import {
   Key01Icon,
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
-import { Link } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { type FormEvent, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { Message, MessageContent } from '@/components/ai-elements/message'
 import { SectionPageLayout } from '@/components/layout'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -27,7 +26,10 @@ import { Progress } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
 import { requestAssistantOpen } from '@/features/assistant/assistant-events'
 import { ChallengeList } from '@/features/forge/challenge-list'
-import { getOnboardingState } from '@/lib/console-activation'
+import {
+  getAuthenticatedLandingRoute,
+  getOnboardingState,
+} from '@/lib/console-activation'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { getDeveloperAccessRequest, type DeveloperAccessRequest } from './api'
@@ -36,6 +38,7 @@ import { useAuthUserRefresh } from './use-auth-user-refresh'
 
 export function GettingStarted() {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const { refreshUser } = useAuthUserRefresh()
   const user = useAuthStore((state) => state.auth.user)
   const onboarding = getOnboardingState(user)
@@ -73,6 +76,33 @@ export function GettingStarted() {
     requestAssistantOpen('onboarding')
   }, [onboarding.stage, pendingRequestId, requestLoaded, userId])
 
+  useEffect(() => {
+    if (
+      !requestLoaded ||
+      accessRequest?.status !== 'approved' ||
+      onboarding.activationComplete
+    ) {
+      return
+    }
+
+    let cancelled = false
+    void refreshUser().then((refreshedUser) => {
+      if (cancelled || refreshedUser?.developer_access_granted !== true) {
+        return
+      }
+      void navigate({ to: getAuthenticatedLandingRoute(refreshedUser) })
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [
+    accessRequest?.status,
+    navigate,
+    onboarding.activationComplete,
+    refreshUser,
+    requestLoaded,
+  ])
+
   const submitPrompt = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const message = prompt.trim()
@@ -80,202 +110,163 @@ export function GettingStarted() {
     requestAssistantOpen('onboarding', message)
   }
 
+  const continueAfterApproval = async () => {
+    const refreshedUser = await refreshUser()
+    if (refreshedUser?.developer_access_granted !== true) return
+    await navigate({ to: getAuthenticatedLandingRoute(refreshedUser) })
+  }
+
   if (!onboarding.activationComplete) {
+    const l0PresetPrompts = [
+      t('What can I do while access is under review?'),
+      t('How will you use the platform?'),
+      t('I need human support'),
+      t('Tell the AI assistant what you want to do'),
+    ]
+
     return (
       <SectionPageLayout>
         <SectionPageLayout.Title>
           {t('Getting started')}
         </SectionPageLayout.Title>
         <SectionPageLayout.Content>
-          <div className='mx-auto flex w-full max-w-2xl flex-col gap-5 pb-10 sm:pb-14'>
-            <section className='bg-muted/20 flex min-h-[min(36rem,calc(100vh-12rem))] flex-col border px-4 py-5 sm:px-6 sm:py-6'>
-              <div
-                className='flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto'
-                role='log'
-                aria-live='polite'
-                aria-label={t('Service guide')}
-              >
-                <Message from='assistant'>
-                  <MessageContent
-                    variant='flat'
-                    className='gap-2 text-sm leading-6'
+          <div className='mx-auto flex w-full max-w-2xl flex-col pb-10 sm:pb-14'>
+            <section
+              className='border px-4 py-5 sm:px-6 sm:py-7'
+              data-testid='l0-conversation'
+            >
+              <div className='space-y-2' role='log' aria-live='polite'>
+                <h2 className='text-lg font-medium'>{t('How can I help?')}</h2>
+                <p className='text-muted-foreground text-sm leading-6'>
+                  {t(
+                    'L0 accounts can browse challenges and ask the AI assistant to request L1 access.'
+                  )}
+                </p>
+              </div>
+
+              {accessRequest?.status === 'pending' ? (
+                <div className='border-border/70 mt-5 border-t pt-4 text-sm leading-6'>
+                  <p className='font-medium'>
+                    {t('AI recommendation submitted')}
+                  </p>
+                  <p className='text-muted-foreground mt-1 text-xs'>
+                    {t('Pending review')}
+                  </p>
+                  <p className='text-muted-foreground mt-2'>
+                    {t(
+                      'Your request is waiting for an administrator. Only an administrator can approve L1 access.'
+                    )}
+                  </p>
+                  {accessRequest.reason ? (
+                    <p className='text-muted-foreground mt-2 whitespace-pre-wrap'>
+                      {accessRequest.reason}
+                    </p>
+                  ) : null}
+                  {accessRequest.ai_recommendation ? (
+                    <p className='text-muted-foreground mt-2 whitespace-pre-wrap'>
+                      {accessRequest.ai_recommendation}
+                    </p>
+                  ) : null}
+                  <Button
+                    type='button'
+                    variant='ghost'
+                    size='sm'
+                    className='mt-2'
+                    onClick={() => requestAssistantOpen('onboarding')}
                   >
-                    <p className='font-medium'>{t('Service guide')}</p>
-                    <p>
-                      {t(
-                        'L0 accounts can browse challenges and ask the AI assistant to request L1 access.'
-                      )}
+                    {t('Continue')}
+                  </Button>
+                </div>
+              ) : null}
+
+              {accessRequest?.status === 'rejected' ? (
+                <div className='border-border/70 mt-5 border-t pt-4 text-sm leading-6'>
+                  <p className='text-destructive font-medium'>
+                    {t('Access request rejected')}
+                  </p>
+                  <p className='text-muted-foreground mt-1'>
+                    {t('Your previous unlock request was not approved.')}
+                  </p>
+                  {accessRequest.admin_note ? (
+                    <p className='mt-2 whitespace-pre-wrap'>
+                      {accessRequest.admin_note}
                     </p>
-                    <p className='text-muted-foreground text-xs'>
-                      {t('Read-only')}
+                  ) : null}
+                  <Button
+                    type='button'
+                    variant='outline'
+                    size='sm'
+                    className='mt-3'
+                    onClick={() => requestAssistantOpen('onboarding')}
+                  >
+                    {t('Revise')}
+                  </Button>
+                </div>
+              ) : null}
+
+              {accessRequest?.status === 'approved' ? (
+                <div className='border-border/70 mt-5 border-t pt-4 text-sm leading-6'>
+                  <p className='font-medium'>{t('Access request approved')}</p>
+                  <p className='text-muted-foreground mt-1'>
+                    {t(
+                      'Your developer access is active. Continue setup to create a key and connect your client.'
+                    )}
+                  </p>
+                  {accessRequest.admin_note ? (
+                    <p className='text-muted-foreground mt-2 whitespace-pre-wrap'>
+                      {accessRequest.admin_note}
                     </p>
+                  ) : null}
+                  <Button
+                    type='button'
+                    size='sm'
+                    className='mt-3'
+                    onClick={() => void continueAfterApproval()}
+                  >
+                    {t('Continue setup')}
+                  </Button>
+                </div>
+              ) : null}
+
+              <div className='border-border/70 mt-6 border-t pt-4'>
+                <p className='text-muted-foreground mb-3 text-xs'>
+                  {t(
+                    'Choose a common question or ask anything about using LMM.'
+                  )}
+                </p>
+                <div className='flex flex-wrap gap-2'>
+                  {l0PresetPrompts.map((preset) => (
                     <Button
+                      key={preset}
                       type='button'
                       variant='outline'
                       size='sm'
-                      className='mt-1 w-fit'
-                      onClick={() => requestAssistantOpen('onboarding')}
+                      className='h-auto min-h-8 text-left whitespace-normal'
+                      onClick={() => requestAssistantOpen('onboarding', preset)}
                     >
-                      {t('Ask an administrator to raise my access level')}
-                      <HugeiconsIcon
-                        icon={ArrowRight01Icon}
-                        strokeWidth={2}
-                        data-icon='inline-end'
-                        aria-hidden='true'
-                      />
+                      {preset}
                     </Button>
-                  </MessageContent>
-                </Message>
-
-                {accessRequest?.status === 'pending' ? (
-                  <Message from='assistant'>
-                    <MessageContent
-                      variant='flat'
-                      className='gap-2 text-sm leading-6'
-                    >
-                      <p className='font-medium'>
-                        {t('AI recommendation submitted')}
-                      </p>
-                      <p>
-                        {t(
-                          'Your request is waiting for an administrator. Only an administrator can approve L1 access.'
-                        )}
-                      </p>
-                      <p className='text-muted-foreground text-xs'>
-                        {t('Pending review')}
-                      </p>
-                      {accessRequest.reason ? (
-                        <p className='text-muted-foreground whitespace-pre-wrap'>
-                          {accessRequest.reason}
-                        </p>
-                      ) : null}
-                      {accessRequest.ai_recommendation ? (
-                        <p className='text-muted-foreground whitespace-pre-wrap'>
-                          {accessRequest.ai_recommendation}
-                        </p>
-                      ) : null}
-                      <Button
-                        type='button'
-                        variant='ghost'
-                        size='sm'
-                        className='mt-1 w-fit'
-                        onClick={() => requestAssistantOpen('onboarding')}
-                      >
-                        {t('Continue')}
-                        <HugeiconsIcon
-                          icon={ArrowRight01Icon}
-                          strokeWidth={2}
-                          data-icon='inline-end'
-                          aria-hidden='true'
-                        />
-                      </Button>
-                    </MessageContent>
-                  </Message>
-                ) : null}
-
-                {accessRequest?.status === 'rejected' ? (
-                  <Message from='assistant'>
-                    <MessageContent
-                      variant='flat'
-                      className='text-destructive gap-2 text-sm leading-6'
-                    >
-                      <p className='font-medium'>
-                        {t('Access request rejected')}
-                      </p>
-                      <p>
-                        {t('Your previous unlock request was not approved.')}
-                      </p>
-                      {accessRequest.admin_note ? (
-                        <p className='whitespace-pre-wrap'>
-                          {accessRequest.admin_note}
-                        </p>
-                      ) : null}
-                      <Button
-                        type='button'
-                        variant='outline'
-                        size='sm'
-                        className='mt-1 w-fit'
-                        onClick={() => requestAssistantOpen('onboarding')}
-                      >
-                        {t('Revise')}
-                        <HugeiconsIcon
-                          icon={ArrowRight01Icon}
-                          strokeWidth={2}
-                          data-icon='inline-end'
-                          aria-hidden='true'
-                        />
-                      </Button>
-                    </MessageContent>
-                  </Message>
-                ) : null}
-
-                {accessRequest?.status === 'approved' ? (
-                  <Message from='assistant'>
-                    <MessageContent
-                      variant='flat'
-                      className='gap-2 text-sm leading-6'
-                    >
-                      <p className='font-medium'>
-                        {t('Access request approved')}
-                      </p>
-                      <p>
-                        {t(
-                          'Your developer access is active. Continue setup to create a key and connect your client.'
-                        )}
-                      </p>
-                      {accessRequest.admin_note ? (
-                        <p className='text-muted-foreground whitespace-pre-wrap'>
-                          {accessRequest.admin_note}
-                        </p>
-                      ) : null}
-                      <Button
-                        type='button'
-                        size='sm'
-                        className='mt-1 w-fit'
-                        onClick={() => void refreshUser()}
-                      >
-                        {t('Continue setup')}
-                        <HugeiconsIcon
-                          icon={ArrowRight01Icon}
-                          strokeWidth={2}
-                          data-icon='inline-end'
-                          aria-hidden='true'
-                        />
-                      </Button>
-                    </MessageContent>
-                  </Message>
-                ) : null}
-              </div>
-
-              <form
-                className='mt-5 flex flex-col gap-2 border-t pt-4 sm:flex-row'
-                onSubmit={submitPrompt}
-              >
-                <Input
-                  value={prompt}
-                  onChange={(event) => setPrompt(event.target.value)}
-                  maxLength={4000}
-                  className='h-11 flex-1'
-                  placeholder={t(
-                    'Write a short explanation of what you want to build or why you need L1 access.'
-                  )}
-                  aria-label={t('Tell the AI assistant what you need')}
-                />
-                <Button type='submit' disabled={!prompt.trim()}>
-                  <HugeiconsIcon
-                    icon={AiChat02Icon}
-                    strokeWidth={2}
-                    data-icon='inline-start'
-                    aria-hidden='true'
+                  ))}
+                </div>
+                <form className='mt-4 flex gap-2' onSubmit={submitPrompt}>
+                  <Input
+                    value={prompt}
+                    onChange={(event) => setPrompt(event.target.value)}
+                    maxLength={4000}
+                    className='h-10 min-w-0 flex-1'
+                    placeholder={t('Tell the AI assistant what you need')}
+                    aria-label={t('Tell the AI assistant what you need')}
                   />
-                  {t('Start with AI assistant')}
-                </Button>
-              </form>
-              <p className='text-muted-foreground mt-3 text-xs leading-5'>
-                {t(
-                  'Never paste a password, API key, session cookie, or other secret into the conversation.'
-                )}
-              </p>
+                  <Button type='submit' size='sm' disabled={!prompt.trim()}>
+                    {t('Send')}
+                  </Button>
+                </form>
+                <p className='text-muted-foreground mt-3 text-xs leading-5'>
+                  {t(
+                    'Do not send personal information, passwords, API keys, or credentials in chat. Site-issued credentials such as API keys are shown in a shielded private card and are kept out of the assistant context.'
+                  )}
+                </p>
+              </div>
             </section>
           </div>
         </SectionPageLayout.Content>

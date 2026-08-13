@@ -70,6 +70,7 @@ func writeDeployUsage(output io.Writer) {
        --age-identity-file FILE --confirm api.lmm.best [--rollback-package FILE]
   %s deploy production workspace create --deployment-id ID
   %s deploy production workspace abort --workspace DIR
+  %s deploy production workspace cleanup [--older-than 24h] [--execute]
   %s deploy production package current
   %s deploy production backup create --workspace DIR --rollback-package FILE --rollback-sha256 HEX \
        --candidate-sha256 HEX --expected-version VERSION --git-revision REVISION
@@ -86,7 +87,7 @@ func writeDeployUsage(output io.Writer) {
   %s deploy production status --workspace DIR
   %s deploy production confirm --workspace DIR
   %s deploy production rollback --workspace DIR [--reason TEXT]
-`, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName)
+`, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName, ProgramName)
 }
 
 func runFrontendDeploy(args []string, stdout, stderr io.Writer) int {

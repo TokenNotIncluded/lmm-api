@@ -157,7 +157,7 @@ describe('AssistantCostTool', () => {
     }
   })
 
-  test('gives L0 a live read-only cost estimate', async () => {
+  test('keeps live pricing unavailable while L0 is under review', async () => {
     let calls = 0
     api.get = (async (url: string) => {
       assert.equal(url, '/api/assistant/pricing')
@@ -166,12 +166,12 @@ describe('AssistantCostTool', () => {
     }) as typeof api.get
 
     const rendered = await renderTool(false)
-    assert.equal(calls, 1)
+    assert.equal(calls, 0)
     assert.match(
       rendered.container.textContent ?? '',
       /read-only while your L1 request is under review/
     )
-    assert.match(rendered.container.textContent ?? '', /\$0\.3600/)
+    assert.doesNotMatch(rendered.container.textContent ?? '', /\$0\.3600/)
     await unmount(rendered)
   })
 

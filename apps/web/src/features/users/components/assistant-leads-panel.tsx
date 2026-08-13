@@ -54,7 +54,6 @@ import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
-import { toIntlLocale } from '@/i18n/languages'
 import {
   getAssistantIntentSummary,
   getAssistantFundingSummary,
@@ -65,6 +64,7 @@ import {
   type AssistantIntentSummary,
   type AssistantProfileSummary,
 } from '@/features/assistant/api'
+import { toIntlLocale } from '@/i18n/languages'
 
 const PENDING_HANDOFFS_QUERY_KEY = [
   'assistant-admin-handoffs',

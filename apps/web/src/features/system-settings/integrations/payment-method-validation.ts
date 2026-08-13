@@ -38,6 +38,8 @@ const AUDIENCE_CONDITION_FIELDS = [
   'audience_oauth_provider',
   'audience_linuxdo_score_min',
   'audience_linuxdo_score_max',
+  'audience_user_group',
+  'audience_role',
 ] as const
 
 export function isValidPaymentMethodData(
@@ -51,7 +53,14 @@ export function isValidPaymentMethodData(
     typeof item.name !== 'string' ||
     typeof item.type !== 'string' ||
     ('icon' in item && typeof item.icon !== 'string') ||
-    ('min_topup' in item && typeof item.min_topup !== 'string') ||
+    ('enabled' in item &&
+      item.enabled !== 'true' &&
+      item.enabled !== 'false') ||
+    ('description' in item && typeof item.description !== 'string') ||
+    ('min_topup' in item &&
+      (typeof item.min_topup !== 'string' ||
+        !NON_NEGATIVE_DECIMAL_PATTERN.test(item.min_topup) ||
+        !Number.isFinite(Number(item.min_topup)))) ||
     ('max_topup' in item &&
       (typeof item.max_topup !== 'string' ||
         !POSITIVE_DECIMAL_PATTERN.test(item.max_topup) ||
@@ -65,7 +74,9 @@ export function isValidPaymentMethodData(
       (typeof item.topup_ratio !== 'string' ||
         !POSITIVE_DECIMAL_PATTERN.test(item.topup_ratio) ||
         Number(item.topup_ratio) <= 0)) ||
-    ('color' in item && typeof item.color !== 'string')
+    ('color' in item &&
+      (typeof item.color !== 'string' ||
+        (item.color !== '' && !/^#[0-9a-fA-F]{6}$/.test(item.color))))
   ) {
     return false
   }
@@ -106,6 +117,8 @@ export function isValidPaymentMethodData(
     for (const field of [
       'audience_email_contains',
       'audience_oauth_provider',
+      'audience_user_group',
+      'audience_role',
     ]) {
       if (field in record && typeof record[field] !== 'string') return false
     }
@@ -113,6 +126,13 @@ export function isValidPaymentMethodData(
       'audience_oauth_provider' in record &&
       (!record.audience_oauth_provider ||
         !OAUTH_PROVIDERS.has(String(record.audience_oauth_provider)))
+    ) {
+      return false
+    }
+    if (
+      'audience_role' in record &&
+      record.audience_role !== 'none' &&
+      !new Set(['common', 'admin', 'root']).has(String(record.audience_role))
     ) {
       return false
     }
@@ -139,12 +159,11 @@ export function isValidPaymentMethodData(
     ) {
       return false
     }
-    const hasCondition = AUDIENCE_CONDITION_FIELDS.some(
-      (field) =>
-        field in record &&
-        typeof record[field] === 'string' &&
-        record[field].trim() !== ''
-    )
+    const hasCondition = AUDIENCE_CONDITION_FIELDS.some((field) => {
+      if (!(field in record) || typeof record[field] !== 'string') return false
+      const value = record[field].trim()
+      return value !== '' && !(field === 'audience_role' && value === 'none')
+    })
     const filtersUsers =
       record.audience_mode === 'include' || record.audience_mode === 'exclude'
     if (filtersUsers !== hasCondition) return false

@@ -1,17 +1,41 @@
 package controller
 
 import (
+	"encoding/json"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 )
 
 const assistantUserContextKey = "assistant_user_context"
 
+const assistantUsernameMaxRunes = 64
+
+var (
+	assistantUsernameEmailPattern  = regexp.MustCompile(`(?i)[a-z0-9][a-z0-9.*_%+\-]*@[a-z0-9.-]+\.[a-z]{2,}`)
+	assistantUsernameSecretPattern = regexp.MustCompile(`(?i)(password|passwd|api[ _-]?key|access[ _-]?token|refresh[ _-]?token|secret|credential|密码|密钥|令牌)\s*[:=：]\s*\S+`)
+	assistantUsernameAPIKeyPattern = regexp.MustCompile(`(?i)\b(?:sk|rk|pk)-[a-z0-9][a-z0-9._-]{5,}\b`)
+	assistantUsernameBearerPattern = regexp.MustCompile(`(?i)\bbearer\s+[a-z0-9._~+/-]{8,}=*`)
+	assistantPaymentAmountPattern  = regexp.MustCompile(`(?:\d+(?:\.\d+)?\s*(?:元|块|人民币|美元|美金|usd|rmb|cny|刀|\$|¥|￥)|预算|每月|一个月|月均|预计额度|金额|额度)`)
+	assistantPaymentNumberPattern  = regexp.MustCompile(`\d+(?:\.\d+)?`)
+)
+
 type assistantCustomerProfile string
+
+type assistantPaymentOfferState string
+
+const (
+	assistantPaymentOfferNone         assistantPaymentOfferState = "none"
+	assistantPaymentOfferNeedsDetails assistantPaymentOfferState = "needs_details"
+	assistantPaymentOfferReady        assistantPaymentOfferState = "ready"
+	assistantPaymentOfferBlocked      assistantPaymentOfferState = "blocked"
+)
 
 const (
 	assistantProfileUnknown      assistantCustomerProfile = "unknown"
@@ -32,25 +56,187 @@ const (
 // useful onboarding strategy. Passwords, API keys, access tokens, raw OAuth
 // subjects, balances, and raw chat messages never enter this structure.
 type assistantUserContext struct {
-	UserID                   int                      `json:"user_id,omitempty"`
-	Username                 string                   `json:"username,omitempty"`
-	Email                    string                   `json:"email,omitempty"`
-	EmailDomain              string                   `json:"email_domain,omitempty"`
-	EmailCategory            string                   `json:"email_category,omitempty"`
-	AccountAgeDays           int                      `json:"account_age_days,omitempty"`
-	AuthProviders            []string                 `json:"auth_providers,omitempty"`
-	AccessLevel              string                   `json:"access_level"`
-	DeveloperAccessGranted   bool                     `json:"developer_access_granted"`
-	AccessReviewStatus       string                   `json:"access_review_status,omitempty"`
-	PaymentMethodsHidden     bool                     `json:"payment_methods_hidden"`
-	PaymentRestrictionCauses []string                 `json:"payment_restriction_causes,omitempty"`
+	// UserID is retained for request/cache scoping, but must never cross the
+	// model boundary. It is an internal identifier, not personalization data.
+	UserID                 int      `json:"-"`
+	Username               string   `json:"username,omitempty"`
+	Email                  string   `json:"email,omitempty"`
+	EmailDomain            string   `json:"email_domain,omitempty"`
+	EmailCategory          string   `json:"email_category,omitempty"`
+	AccountAgeDays         int      `json:"account_age_days,omitempty"`
+	AuthProviders          []string `json:"auth_providers,omitempty"`
+	AccessLevel            string   `json:"access_level"`
+	AdministratorMode      bool     `json:"administrator_mode"`
+	DeveloperAccessGranted bool     `json:"developer_access_granted"`
+	AccessReviewStatus     string   `json:"access_review_status,omitempty"`
+	PaymentMethodsHidden   bool     `json:"payment_methods_hidden"`
+	// PaymentOfferState is a deliberately coarse, non-financial policy state.
+	// It never contains a balance, restriction cause, payment secret, or user
+	// supplied payment details.
+	PaymentOfferState assistantPaymentOfferState `json:"payment_offer_state"`
+	// InterlocutorAssessed is an internal per-request agent-loop state. It is
+	// deliberately excluded from JSON: the model receives the assessment as a
+	// transient tool result, never as account metadata or a user-facing field.
+	InterlocutorAssessed bool `json:"-"`
+	// These fields are useful to local policy/profile decisions and cache
+	// invalidation, but are internal risk signals and are never model input.
+	PaymentRestrictionCauses []string                 `json:"-"`
 	Intent                   string                   `json:"current_intent,omitempty"`
 	CustomerProfile          assistantCustomerProfile `json:"customer_profile"`
-	ProfileSignals           []string                 `json:"profile_signals,omitempty"`
+	ProfileSignals           []string                 `json:"-"`
 	WelcomeStrategy          string                   `json:"welcome_strategy"`
+	// Manual profile data is an internal strategy skill. It is deliberately
+	// excluded from JSON so it cannot cross the model/user response boundary
+	// through the serialized account context or assistant history.
+	ManualProfileEnabled   bool     `json:"-"`
+	ManualProfileKey       string   `json:"-"`
+	ManualProfileTags      []string `json:"-"`
+	ManualProfileStrategy  string   `json:"-"`
+	ManualProfileUpdatedAt int64    `json:"-"`
 }
 
-func assistantUserContextForRequest(userID int, message string) assistantUserContext {
+// MarshalJSON is the model boundary for this private context type. Keep
+// request/cache identity and local risk evidence in the Go value, but build an
+// explicit allowlist view for serialization so a future caller cannot
+// accidentally add a secret-bearing field to the assistant prompt.
+func (context assistantUserContext) MarshalJSON() ([]byte, error) {
+	maskedEmail, emailDomain := maskAssistantEmail(context.Email)
+	profile := assistantSafeCustomerProfile(context.CustomerProfile)
+	view := struct {
+		Username               string                     `json:"username,omitempty"`
+		Email                  string                     `json:"email,omitempty"`
+		EmailDomain            string                     `json:"email_domain,omitempty"`
+		EmailCategory          string                     `json:"email_category,omitempty"`
+		AccountAgeDays         int                        `json:"account_age_days,omitempty"`
+		AuthProviders          []string                   `json:"auth_providers,omitempty"`
+		AccessLevel            string                     `json:"access_level"`
+		AdministratorMode      bool                       `json:"administrator_mode"`
+		DeveloperAccessGranted bool                       `json:"developer_access_granted"`
+		AccessReviewStatus     string                     `json:"access_review_status,omitempty"`
+		PaymentMethodsHidden   bool                       `json:"payment_methods_hidden"`
+		PaymentOfferState      assistantPaymentOfferState `json:"payment_offer_state"`
+		Intent                 string                     `json:"current_intent,omitempty"`
+		CustomerProfile        assistantCustomerProfile   `json:"customer_profile"`
+		WelcomeStrategy        string                     `json:"welcome_strategy"`
+	}{
+		Username:               assistantSafeUsername(context.Username),
+		Email:                  maskedEmail,
+		EmailDomain:            emailDomain,
+		EmailCategory:          assistantSafeEmailCategory(context.EmailCategory),
+		AccountAgeDays:         maxInt(context.AccountAgeDays, 0),
+		AuthProviders:          assistantSafeAuthProviders(context.AuthProviders),
+		AccessLevel:            assistantSafeAccessLevel(context.AccessLevel),
+		AdministratorMode:      context.AdministratorMode,
+		DeveloperAccessGranted: context.DeveloperAccessGranted,
+		AccessReviewStatus:     assistantAccessReviewStatus(context.AccessReviewStatus),
+		PaymentMethodsHidden:   context.PaymentMethodsHidden,
+		PaymentOfferState:      assistantPaymentOfferStateForContext(context),
+		Intent:                 assistantSafeIntent(context.Intent),
+		CustomerProfile:        profile,
+		WelcomeStrategy: assistantWelcomeStrategyForContext(assistantUserContext{
+			AccessLevel:     context.AccessLevel,
+			CustomerProfile: profile,
+		}),
+	}
+	return json.Marshal(view)
+}
+
+func maxInt(value, minimum int) int {
+	if value < minimum {
+		return minimum
+	}
+	return value
+}
+
+func assistantSafeEmailCategory(category string) string {
+	switch strings.ToLower(strings.TrimSpace(category)) {
+	case "missing", "unknown", "linuxdo", "disposable", "privacy", "common", "custom":
+		return strings.ToLower(strings.TrimSpace(category))
+	default:
+		return "unknown"
+	}
+}
+
+func assistantSafeAccessLevel(level string) string {
+	level = strings.ToUpper(strings.TrimSpace(level))
+	switch level {
+	case "L0", "L1", "L2", "L3", "L4", "ADMIN", "ROOT":
+		return level
+	default:
+		return "L0"
+	}
+}
+
+func assistantSafeIntent(intent string) string {
+	intent = strings.ToLower(strings.TrimSpace(intent))
+	switch intent {
+	case model.AssistantIntentOnboarding,
+		model.AssistantIntentPlanPurchase,
+		model.AssistantIntentAPIKey,
+		model.AssistantIntentClientSetup,
+		model.AssistantIntentCost,
+		model.AssistantIntentBounty,
+		model.AssistantIntentUsage,
+		model.AssistantIntentModels,
+		model.AssistantIntentInvitation,
+		model.AssistantIntentHumanSupport,
+		model.AssistantIntentOther:
+		return intent
+	case "":
+		return ""
+	default:
+		return model.AssistantIntentOther
+	}
+}
+
+func assistantSafeCustomerProfile(profile assistantCustomerProfile) assistantCustomerProfile {
+	switch profile {
+	case assistantProfileUnknown,
+		assistantProfileTechnical,
+		assistantProfileGuided,
+		assistantProfilePromotion,
+		assistantProfileSecurityRisk,
+		assistantProfileOperator,
+		assistantProfilePrivacy,
+		assistantProfileAccessible,
+		assistantProfileNormal,
+		assistantProfileSupport,
+		assistantProfileL0Applicant:
+		return profile
+	default:
+		return assistantProfileUnknown
+	}
+}
+
+func assistantSafeAuthProviders(providers []string) []string {
+	allowed := map[string]struct{}{
+		"custom_oauth": {},
+		"discord":      {},
+		"github":       {},
+		"linuxdo":      {},
+		"oidc":         {},
+		"password":     {},
+		"telegram":     {},
+		"wechat":       {},
+	}
+	seen := make(map[string]struct{}, len(providers))
+	result := make([]string, 0, len(providers))
+	for _, provider := range providers {
+		provider = strings.ToLower(strings.TrimSpace(provider))
+		if _, ok := allowed[provider]; !ok {
+			continue
+		}
+		if _, ok := seen[provider]; ok {
+			continue
+		}
+		seen[provider] = struct{}{}
+		result = append(result, provider)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func assistantUserContextForRequest(userID int, message string, conversation ...[]assistantOpenAIMessage) assistantUserContext {
 	context := assistantUserContext{
 		UserID:             userID,
 		AccessLevel:        "L0",
@@ -60,18 +246,21 @@ func assistantUserContextForRequest(userID int, message string) assistantUserCon
 	}
 	if userID <= 0 {
 		context.CustomerProfile, context.ProfileSignals = classifyAssistantCustomerProfile(context, message)
-		context.WelcomeStrategy = assistantWelcomeStrategy(context.CustomerProfile)
+		context.WelcomeStrategy = assistantWelcomeStrategyForContext(context)
+		context.PaymentOfferState = assistantPaymentOfferStateForContextAndConversation(context, message, conversation...)
 		return context
 	}
 
 	user, err := model.GetUserById(userID, false)
 	if err != nil || user == nil {
 		context.CustomerProfile, context.ProfileSignals = classifyAssistantCustomerProfile(context, message)
-		context.WelcomeStrategy = assistantWelcomeStrategy(context.CustomerProfile)
+		context.WelcomeStrategy = assistantWelcomeStrategyForContext(context)
+		context.PaymentOfferState = assistantPaymentOfferStateForContextAndConversation(context, message, conversation...)
 		return context
 	}
 
-	context.Username = strings.TrimSpace(user.Username)
+	context.Username = assistantSafeUsername(user.Username)
+	context.AdministratorMode = user.Role >= common.RoleAdminUser
 	context.Email, context.EmailDomain = maskAssistantEmail(user.Email)
 	context.EmailCategory = classifyAssistantEmail(user.Email)
 	if user.CreatedAt > 0 {
@@ -82,6 +271,7 @@ func assistantUserContextForRequest(userID int, message string) assistantUserCon
 		context.AccountAgeDays = age
 	}
 	context.AuthProviders = assistantAuthProviders(user)
+	loadAssistantManualProfile(&context, user.Id)
 
 	flags := model.EffectivePaymentRestrictionFlags(user)
 	if flags != 0 {
@@ -104,19 +294,97 @@ func assistantUserContextForRequest(userID int, message string) assistantUserCon
 		if request == nil {
 			context.AccessReviewStatus = "none"
 		} else {
-			context.AccessReviewStatus = request.Status
+			context.AccessReviewStatus = assistantAccessReviewStatus(request.Status)
 		}
 	}
 
 	context.CustomerProfile, context.ProfileSignals = classifyAssistantCustomerProfile(context, message)
-	context.WelcomeStrategy = assistantWelcomeStrategy(context.CustomerProfile)
+	context.WelcomeStrategy = assistantWelcomeStrategyForContext(context)
+	context.PaymentOfferState = assistantPaymentOfferStateForContextAndConversation(context, message, conversation...)
 	sort.Strings(context.AuthProviders)
 	sort.Strings(context.PaymentRestrictionCauses)
 	sort.Strings(context.ProfileSignals)
 	return context
 }
 
+func assistantPaymentOfferStateForContext(context assistantUserContext) assistantPaymentOfferState {
+	if context.PaymentMethodsHidden {
+		return assistantPaymentOfferBlocked
+	}
+	return context.PaymentOfferState
+}
+
+func assistantPaymentOfferStateForContextAndConversation(context assistantUserContext, latestMessage string, conversations ...[]assistantOpenAIMessage) assistantPaymentOfferState {
+	if context.PaymentMethodsHidden {
+		return assistantPaymentOfferBlocked
+	}
+	messages := make([]string, 0, 1)
+	if len(conversations) > 0 {
+		for _, message := range conversations[0] {
+			if message.Role == "user" {
+				messages = append(messages, message.Content)
+			}
+		}
+	}
+	if len(messages) == 0 {
+		messages = append(messages, latestMessage)
+	}
+	text := strings.ToLower(strings.TrimSpace(strings.Join(messages, "\n")))
+	if assistantTextContainsAny(text, "不想付费", "不想付款", "不想支付", "不充值", "不愿意付费", "讨厌付款", "免费使用") {
+		return assistantPaymentOfferNone
+	}
+	if !assistantTextContainsAny(text,
+		"充值", "充值额度", "充值余额", "充值账户", "付费", "付款", "支付", "购买套餐", "买套餐", "买额度", "购买额度",
+		"top up", "top-up", "topup", "subscribe", "subscription", "purchase", "pay", "payment",
+	) {
+		return assistantPaymentOfferNone
+	}
+	if !assistantTextContainsAny(text,
+		"我要充值", "想充值", "准备充值", "打算充值", "需要充值", "我要付费", "想付费", "准备付费", "打算付费",
+		"我要付款", "想付款", "准备付款", "打算付款", "我要支付", "想支付", "准备支付", "打算支付",
+		"购买套餐", "买套餐", "购买额度", "买额度", "如何充值", "怎么充值", "怎样充值", "我要购买",
+		"i want to pay", "i want to purchase", "i want to subscribe", "how to top up", "how do i pay", "buy a plan",
+	) {
+		return assistantPaymentOfferNeedsDetails
+	}
+	if !assistantPaymentOfferHasKeyDetail(text) {
+		return assistantPaymentOfferNeedsDetails
+	}
+	return assistantPaymentOfferReady
+}
+
+func assistantPaymentOfferHasKeyDetail(text string) bool {
+	if assistantTextContainsAny(text,
+		"支付宝", "微信", "银行卡", "信用卡", "借记卡", "paypal", "stripe", "usdt", "crypto", "加密货币", "数字货币",
+		"用于", "用来", "拿来", "用途", "开发", "工作", "项目", "claude", "codex", "api", "调用", "测试", "生产",
+	) {
+		return true
+	}
+	return assistantPaymentAmountPattern.MatchString(text) || assistantPaymentNumberPattern.MatchString(text)
+}
+
+func loadAssistantManualProfile(context *assistantUserContext, userID int) {
+	if context == nil || userID <= 0 {
+		return
+	}
+	profile, err := model.GetAssistantUserProfile(userID)
+	if err != nil || profile == nil || !profile.Enabled {
+		return
+	}
+	context.ManualProfileEnabled = true
+	context.ManualProfileKey = profile.ProfileKey
+	context.ManualProfileTags = model.AssistantUserProfileTags(profile)
+	context.ManualProfileStrategy = profile.Strategy
+	context.ManualProfileUpdatedAt = profile.UpdatedAt
+}
+
 func trustLevelLabel(level int) string {
+	if level >= model.TrustLevelRoot {
+		return "ROOT"
+	}
+	if level >= model.TrustLevelAdmin {
+		return "ADMIN"
+	}
 	if level < model.TrustLevelMinUser {
 		level = model.TrustLevelMinUser
 	}
@@ -159,15 +427,16 @@ func assistantAuthProviders(user *model.User) []string {
 }
 
 func classifyAssistantEmail(email string) string {
-	email = model.NormalizeEmail(email)
-	if email == "" {
-		return "missing"
-	}
-	at := strings.LastIndexByte(email, '@')
-	if at <= 0 || at == len(email)-1 {
+	_, domain, ok := assistantEmailParts(email)
+	if !ok {
+		if strings.TrimSpace(email) == "" {
+			return "missing"
+		}
 		return "unknown"
 	}
-	domain := email[at+1:]
+	if domain == "" {
+		return "missing"
+	}
 	if domain == "linux.do" {
 		return "linuxdo"
 	}
@@ -198,20 +467,80 @@ func assistantEmailDomainIn(domain string, domains []string) bool {
 	return false
 }
 
-func maskAssistantEmail(email string) (string, string) {
+func assistantEmailParts(email string) (string, string, bool) {
 	email = model.NormalizeEmail(email)
-	at := strings.LastIndexByte(email, '@')
+	if email == "" || strings.Count(email, "@") != 1 {
+		return "", "", false
+	}
+	for _, character := range email {
+		if unicode.IsControl(character) || unicode.In(character, unicode.Cf) || unicode.IsSpace(character) {
+			return "", "", false
+		}
+	}
+	at := strings.IndexByte(email, '@')
 	if at <= 0 || at == len(email)-1 {
+		return "", "", false
+	}
+	return email[:at], email[at+1:], true
+}
+
+func maskAssistantEmail(email string) (string, string) {
+	local, domain, ok := assistantEmailParts(email)
+	if !ok {
 		return "", ""
 	}
-	local, domain := email[:at], email[at+1:]
-	if len(local) == 1 {
+	localRunes := []rune(local)
+	switch len(localRunes) {
+	case 1:
 		return "*@" + domain, domain
+	case 2:
+		return string(localRunes[:1]) + "*@" + domain, domain
+	default:
+		return string(localRunes[:2]) + "***" + string(localRunes[len(localRunes)-1:]) + "@" + domain, domain
 	}
-	if len(local) == 2 {
-		return local[:1] + "*@" + domain, domain
+}
+
+// assistantSafeUsername preserves the useful display name while preventing a
+// user-controlled name from becoming a second secret or prompt-injection
+// channel in the model's system message.
+func assistantSafeUsername(username string) string {
+	username = strings.Map(func(character rune) rune {
+		if unicode.IsControl(character) || unicode.In(character, unicode.Cf) {
+			return -1
+		}
+		return character
+	}, username)
+	username = strings.Join(strings.Fields(username), " ")
+	if username == "" {
+		return ""
 	}
-	return local[:2] + "***" + local[len(local)-1:] + "@" + domain, domain
+	username = assistantUsernameEmailPattern.ReplaceAllStringFunc(username, func(candidate string) string {
+		if masked, _ := maskAssistantEmail(candidate); masked != "" {
+			return masked
+		}
+		return "[REDACTED_EMAIL]"
+	})
+	username = assistantUsernameSecretPattern.ReplaceAllString(username, "$1: [REDACTED]")
+	username = assistantUsernameAPIKeyPattern.ReplaceAllString(username, "[REDACTED_API_KEY]")
+	username = assistantUsernameBearerPattern.ReplaceAllString(username, "Bearer [REDACTED_TOKEN]")
+	usernameRunes := []rune(username)
+	if len(usernameRunes) > assistantUsernameMaxRunes {
+		username = string(usernameRunes[:assistantUsernameMaxRunes])
+	}
+	return username
+}
+
+func assistantAccessReviewStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "none":
+		return "none"
+	case model.DeveloperAccessRequestPending,
+		model.DeveloperAccessRequestApproved,
+		model.DeveloperAccessRequestRejected:
+		return strings.ToLower(strings.TrimSpace(status))
+	default:
+		return "unknown"
+	}
 }
 
 func classifyAssistantCustomerProfile(context assistantUserContext, message string) (assistantCustomerProfile, []string) {
@@ -343,9 +672,9 @@ func assistantHasHighConfidenceSecurityAbuse(message string) bool {
 func assistantWelcomeStrategy(profile assistantCustomerProfile) string {
 	switch profile {
 	case assistantProfileTechnical:
-		return "Lead with exact endpoints, model IDs, client configuration, and transparent cost facts. Do not pressure the user to pay; explain the public challenge and administrator review path for L1."
+		return "Lead with exact endpoints, model IDs, client configuration, and transparent cost facts. Welcome users who simply want to use the relay without contributing to open source. Do not pressure the user to pay or contribute; explain the public challenge and administrator review path for L1 when relevant."
 	case assistantProfileGuided:
-		return "Use short numbered steps, ask for the operating system and target client, confirm each prerequisite, and avoid unexplained jargon. Keep payment hidden until L1."
+		return "Use short numbered steps, ask only one easy question at a time, confirm each prerequisite, and avoid unexplained jargon. Keep payment hidden until L1 by default: a bare payment keyword is not enough, while a clear purchase intent with one key detail may proceed unless policy blocks it."
 	case assistantProfilePromotion:
 		return "Be polite but firm about one-account, referral, rate-limit, and payment rules. Offer legitimate public challenges and support; never promise coupons, bypasses, or repeated-account rewards."
 	case assistantProfileSecurityRisk:
@@ -359,12 +688,25 @@ func assistantWelcomeStrategy(profile assistantCustomerProfile) string {
 	case assistantProfileSupport:
 		return "Acknowledge the access problem first. Ask only for the affected URL, approximate time, request ID, browser/device and network region; guide the user through status and session checks, then offer a redacted administrator handoff without promising an unverified fix."
 	case assistantProfileL0Applicant:
-		return "Welcome the L0 user inside the assistant, explain that payment and write actions remain unavailable, ask one concrete question about their intended project and client, and guide them toward a truthful administrator L1 review request."
+		return "Welcome the L0 user inside the assistant, including people who only want to use the relay. Keep developer and write actions unavailable by default; for payment, ask one calm question about purpose, amount, or method before showing options, and never override a payment restriction. Ask whether they are new to AI or open-source projects and what they hope to do, one step at a time. Guide them toward a truthful administrator L1 review request only when they need developer access."
 	case assistantProfileNormal:
 		return "Use the normal helpful onboarding flow, answer the concrete question first, and offer the smallest next step."
 	default:
 		return "Ask one focused clarification question, then provide a practical answer using live tools when account-specific facts are needed."
 	}
+}
+
+func assistantWelcomeStrategyForContext(context assistantUserContext) string {
+	profile := assistantSafeCustomerProfile(context.CustomerProfile)
+	if context.AccessLevel == "L0" {
+		switch profile {
+		case assistantProfileSecurityRisk, assistantProfilePromotion, assistantProfileSupport:
+			return assistantWelcomeStrategy(profile)
+		default:
+			return "Welcome the user without presuming technical experience. Ask whether they are new to AI or open-source projects and what they hope to do, one easy question at a time. People may simply want to use the relay and do not need an open-source project, a technical stack, or a contribution plan. Answer practical usage questions directly, explain the next small step, and keep L1 or payment discussions proportional to the user's actual need."
+		}
+	}
+	return assistantWelcomeStrategy(profile)
 }
 
 func assistantUserContextFromGin(c interface{ Get(string) (any, bool) }) assistantUserContext {

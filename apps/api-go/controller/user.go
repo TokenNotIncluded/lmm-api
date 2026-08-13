@@ -1304,22 +1304,6 @@ func ManageUser(c *gin.Context) {
 			common.ApiError(c, err)
 			return
 		}
-		if err := model.PublishUserAuthCache(user.Id); err != nil {
-			common.ApiError(c, err)
-			return
-		}
-		if _, err := model.RevokeAllUserSessions(user.Id, "admin_reset_onboarding"); err != nil {
-			common.ApiError(c, err)
-			return
-		}
-		// Resetting to L0 must also evict cached API-key records. The database
-		// token remains user-owned, but the trust-level gate will deny it after
-		// the refreshed user snapshot is loaded; leaving a stale Redis token
-		// entry would otherwise allow the old credential to survive the reset
-		// cache boundary.
-		if err := model.InvalidateUserTokensCache(user.Id); err != nil {
-			common.SysLog(fmt.Sprintf("failed to invalidate tokens cache for user %d after L0 reset: %s", user.Id, err))
-		}
 		recordManageAuditFor(c, user.Id, "user.reset_onboarding", map[string]interface{}{
 			"username": user.Username,
 			"level":    0,

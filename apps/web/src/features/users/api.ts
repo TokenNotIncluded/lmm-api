@@ -156,6 +156,32 @@ export async function getUser(id: number): Promise<ApiResponse<User>> {
   return res.data
 }
 
+export type AssistantUserProfile = {
+  profile_key: string
+  tags: string[]
+  strategy: string
+  enabled: boolean
+  updated_at: number
+}
+
+export async function getAssistantUserProfile(
+  id: number
+): Promise<ApiResponse<AssistantUserProfile>> {
+  const res = await api.get(`/api/user/${id}/assistant-profile`)
+  return res.data
+}
+
+export async function updateAssistantUserProfile(
+  id: number,
+  profile: Pick<
+    AssistantUserProfile,
+    'profile_key' | 'tags' | 'strategy' | 'enabled'
+  >
+): Promise<ApiResponse<AssistantUserProfile>> {
+  const res = await api.put(`/api/user/${id}/assistant-profile`, profile)
+  return res.data
+}
+
 /**
  * Create a new user
  */

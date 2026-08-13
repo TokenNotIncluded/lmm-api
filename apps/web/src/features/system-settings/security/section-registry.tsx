@@ -23,6 +23,7 @@ import { TokenLimitSection } from '../request-limits/token-limit-section'
 import type { SecuritySettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
 import { AdvancedSecuritySection } from './advanced-security-section'
+import { AntiRelaySection } from './anti-relay-section'
 
 const SECURITY_SECTIONS = [
   {
@@ -66,6 +67,22 @@ const SECURITY_SECTIONS = [
             settings.AdvancedSecurityOnPromptEnabled,
           AdvancedSecurityAction: settings.AdvancedSecurityAction,
           AdvancedSecurityRules: settings.AdvancedSecurityRules,
+        }}
+      />
+    ),
+  },
+  {
+    id: 'anti-relay',
+    titleKey: 'Reverse Proxy Access Control',
+    build: (settings: SecuritySettings) => (
+      <AntiRelaySection
+        defaultValues={{
+          AntiRelayEnabled: settings.AntiRelayEnabled,
+          AntiRelayRejectProxyHeadersEnabled:
+            settings.AntiRelayRejectProxyHeadersEnabled,
+          AntiRelayHTTPSOnlyEnabled: settings.AntiRelayHTTPSOnlyEnabled,
+          AntiRelayBlockedCIDRs: settings.AntiRelayBlockedCIDRs,
+          AntiRelayTrustedProxyCIDRs: settings.AntiRelayTrustedProxyCIDRs,
         }}
       />
     ),

@@ -42,6 +42,8 @@ import {
   InputGroupButton,
   InputGroupInput,
 } from '@/components/ui/input-group'
+import { Switch } from '@/components/ui/switch'
+import { Textarea } from '@/components/ui/textarea'
 import { usesDedicatedPaymentPricing } from '@/lib/payment-pricing'
 
 import { getPaymentMethodRatePresets } from './payment-method-rate-presets'
@@ -57,7 +59,30 @@ const createPaymentMethodDialogSchema = (t: (key: string) => string) =>
       name: z.string().min(1, t('Payment method name is required')),
       type: z.string().min(1, t('Payment type key is required')),
       icon: z.string().optional(),
-      min_topup: z.string().optional(),
+      enabled: z.boolean(),
+      description: z
+        .string()
+        .max(240, t('Description must be 240 characters or fewer'))
+        .optional(),
+      color: z
+        .string()
+        .optional()
+        .refine(
+          (value) => !value?.trim() || /^#[0-9a-fA-F]{6}$/.test(value.trim()),
+          { message: t('Color must be a six-digit hex value') }
+        ),
+      min_topup: z
+        .string()
+        .optional()
+        .refine(
+          (value) =>
+            !value?.trim() ||
+            (NON_NEGATIVE_DECIMAL_PATTERN.test(value.trim()) &&
+              Number.isFinite(Number(value.trim()))),
+          {
+            message: t('Minimum top-up must be a non-negative decimal number'),
+          }
+        ),
       max_topup: z
         .string()
         .optional()
@@ -85,6 +110,8 @@ const createPaymentMethodDialogSchema = (t: (key: string) => string) =>
       audience_match: z.enum(['any', 'all']),
       audience_email_contains: z.string().optional(),
       audience_oauth_provider: z.string().optional(),
+      audience_user_group: z.string().optional(),
+      audience_role: z.enum(['none', 'common', 'admin', 'root']),
       audience_linuxdo_score_min: z
         .string()
         .optional()
@@ -114,7 +141,9 @@ const createPaymentMethodDialogSchema = (t: (key: string) => string) =>
             const trimmed = value.trim()
             return POSITIVE_DECIMAL_PATTERN.test(trimmed) && Number(trimmed) > 0
           },
-          { message: t('Payment multiplier must be a positive decimal number') }
+          {
+            message: t('Payment multiplier must be a positive decimal number'),
+          }
         ),
       settlement_unit: z
         .string()
@@ -164,7 +193,9 @@ const createPaymentMethodDialogSchema = (t: (key: string) => string) =>
         (!!values.audience_oauth_provider?.trim() &&
           values.audience_oauth_provider !== 'none') ||
         !!values.audience_linuxdo_score_min?.trim() ||
-        !!values.audience_linuxdo_score_max?.trim()
+        !!values.audience_linuxdo_score_max?.trim() ||
+        !!values.audience_user_group?.trim() ||
+        (!!values.audience_role?.trim() && values.audience_role !== 'none')
       if (
         (values.audience_mode === 'include' ||
           values.audience_mode === 'exclude') &&
@@ -213,6 +244,9 @@ export type PaymentMethodData = {
   name: string
   type: string
   icon?: string
+  enabled?: string
+  description?: string
+  color?: string
   min_topup?: string
   max_topup?: string
   unlock_after_days?: string
@@ -220,12 +254,13 @@ export type PaymentMethodData = {
   audience_match?: 'any' | 'all'
   audience_email_contains?: string
   audience_oauth_provider?: string
+  audience_user_group?: string
+  audience_role?: 'none' | 'common' | 'admin' | 'root'
   audience_linuxdo_score_min?: string
   audience_linuxdo_score_max?: string
   topup_ratio?: string
   settlement_unit?: string
   unit_price?: string
-  color?: string
 }
 
 type PaymentMethodDialogProps = {
@@ -308,6 +343,9 @@ export function PaymentMethodDialog({
       name: '',
       type: '',
       icon: '',
+      enabled: true,
+      description: '',
+      color: '',
       min_topup: '',
       max_topup: '',
       unlock_after_days: '',
@@ -315,6 +353,8 @@ export function PaymentMethodDialog({
       audience_match: 'any',
       audience_email_contains: '',
       audience_oauth_provider: 'none',
+      audience_user_group: '',
+      audience_role: 'none',
       audience_linuxdo_score_min: '',
       audience_linuxdo_score_max: '',
       topup_ratio: '',
@@ -337,6 +377,9 @@ export function PaymentMethodDialog({
         name: editData.name,
         type: editData.type,
         icon: editData.icon ?? getDefaultIconName(editData.type),
+        enabled: editData.enabled !== 'false',
+        description: editData.description ?? '',
+        color: editData.color ?? '',
         min_topup: editData.min_topup ?? '',
         max_topup: editData.max_topup ?? '',
         unlock_after_days: editData.unlock_after_days ?? '',
@@ -344,6 +387,8 @@ export function PaymentMethodDialog({
         audience_match: editData.audience_match ?? 'any',
         audience_email_contains: editData.audience_email_contains ?? '',
         audience_oauth_provider: editData.audience_oauth_provider ?? 'none',
+        audience_user_group: editData.audience_user_group ?? '',
+        audience_role: editData.audience_role ?? 'none',
         audience_linuxdo_score_min: editData.audience_linuxdo_score_min ?? '',
         audience_linuxdo_score_max: editData.audience_linuxdo_score_max ?? '',
         topup_ratio: editData.topup_ratio ?? '',
@@ -355,6 +400,9 @@ export function PaymentMethodDialog({
         name: '',
         type: '',
         icon: '',
+        enabled: true,
+        description: '',
+        color: '',
         min_topup: '',
         max_topup: '',
         unlock_after_days: '',
@@ -362,6 +410,8 @@ export function PaymentMethodDialog({
         audience_match: 'any',
         audience_email_contains: '',
         audience_oauth_provider: 'none',
+        audience_user_group: '',
+        audience_role: 'none',
         audience_linuxdo_score_min: '',
         audience_linuxdo_score_max: '',
         topup_ratio: '',
@@ -379,6 +429,9 @@ export function PaymentMethodDialog({
     if (values.icon && values.icon.trim() !== '') {
       data.icon = values.icon.trim()
     }
+    if (!values.enabled) data.enabled = 'false'
+    if (values.description?.trim()) data.description = values.description.trim()
+    if (values.color?.trim()) data.color = values.color.trim()
     if (values.min_topup && values.min_topup.trim() !== '') {
       data.min_topup = values.min_topup
     }
@@ -415,6 +468,12 @@ export function PaymentMethodDialog({
           data.audience_linuxdo_score_max =
             values.audience_linuxdo_score_max.trim()
         }
+        if (values.audience_user_group?.trim()) {
+          data.audience_user_group = values.audience_user_group.trim()
+        }
+        if (values.audience_role?.trim() && values.audience_role !== 'none') {
+          data.audience_role = values.audience_role
+        }
       }
     }
     if (
@@ -449,7 +508,7 @@ export function PaymentMethodDialog({
       onOpenChange={onOpenChange}
       title={isEditMode ? t('Edit payment method') : t('Add payment method')}
       description={t('Configure a payment method for user recharge options.')}
-      contentClassName='sm:max-w-[500px]'
+      contentClassName='sm:max-w-[620px]'
       contentHeight='auto'
       bodyClassName='space-y-4'
       footer={
@@ -473,6 +532,29 @@ export function PaymentMethodDialog({
           onSubmit={form.handleSubmit(handleSubmit)}
           className='space-y-4'
         >
+          <FormField
+            control={form.control}
+            name='enabled'
+            render={({ field }) => (
+              <FormItem className='bg-muted/20 flex items-center justify-between rounded-md border p-3'>
+                <div className='space-y-1'>
+                  <FormLabel>{t('Payment method enabled')}</FormLabel>
+                  <FormDescription>
+                    {t(
+                      'Disabled methods are hidden from users and rejected at checkout.'
+                    )}
+                  </FormDescription>
+                </div>
+                <FormControl>
+                  <Switch
+                    checked={field.value}
+                    onCheckedChange={field.onChange}
+                  />
+                </FormControl>
+              </FormItem>
+            )}
+          />
+
           <FormField
             control={form.control}
             name='name'
@@ -586,6 +668,58 @@ export function PaymentMethodDialog({
               </FormItem>
             )}
           />
+
+          <div className='grid gap-4 sm:grid-cols-[1fr_auto]'>
+            <FormField
+              control={form.control}
+              name='description'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('User-facing payment description')}</FormLabel>
+                  <FormControl>
+                    <Textarea
+                      rows={2}
+                      placeholder={t(
+                        'Optional instructions or maintenance note'
+                      )}
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Shown on the user payment button; do not put secrets here.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+            <FormField
+              control={form.control}
+              name='color'
+              render={({ field }) => (
+                <FormItem className='sm:w-36'>
+                  <FormLabel>{t('Display color')}</FormLabel>
+                  <FormControl>
+                    <div className='flex items-center gap-2'>
+                      <Input
+                        type='color'
+                        value={
+                          field.value && /^#[0-9a-fA-F]{6}$/.test(field.value)
+                            ? field.value
+                            : '#64748b'
+                        }
+                        onChange={field.onChange}
+                        className='h-10 w-12 cursor-pointer p-1'
+                      />
+                      <Input placeholder='#64748b' {...field} />
+                    </div>
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
 
           <FormField
             control={form.control}
@@ -851,6 +985,52 @@ export function PaymentMethodDialog({
                             step='any'
                             placeholder={t('No maximum')}
                             {...field}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+                <div className='grid gap-3 sm:grid-cols-2'>
+                  <FormField
+                    control={form.control}
+                    name='audience_user_group'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('User group condition')}</FormLabel>
+                        <FormControl>
+                          <Input placeholder='default, vip' {...field} />
+                        </FormControl>
+                        <FormDescription>
+                          {t(
+                            'Comma-separated user groups; matching is case-insensitive.'
+                          )}
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name='audience_role'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('Account role condition')}</FormLabel>
+                        <FormControl>
+                          <Combobox
+                            options={[
+                              { label: t('No role condition'), value: 'none' },
+                              { label: t('Common user'), value: 'common' },
+                              { label: t('Administrator'), value: 'admin' },
+                              { label: t('Root administrator'), value: 'root' },
+                            ]}
+                            value={field.value || 'none'}
+                            onValueChange={(value) =>
+                              value && field.onChange(value)
+                            }
+                            placeholder={t('Select account role')}
+                            searchPlaceholder={t('Search account roles...')}
                           />
                         </FormControl>
                         <FormMessage />

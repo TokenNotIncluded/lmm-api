@@ -169,7 +169,8 @@ export function PaymentConfirmDialog({
                   paymentMethod?.type,
                   'h-4 w-4',
                   paymentMethod?.icon,
-                  paymentMethodLabel
+                  paymentMethodLabel,
+                  paymentMethod?.color
                 )}
                 <span className='font-medium'>{paymentMethodLabel}</span>
               </div>

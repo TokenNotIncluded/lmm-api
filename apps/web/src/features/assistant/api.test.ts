@@ -19,13 +19,27 @@ For commercial licensing, please contact support@quantumnous.com
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
+import { api } from '@/lib/api'
+
 import {
+  ASSISTANT_MAX_REQUEST_ATTEMPTS,
+  archiveAssistantConversation,
   buildAssistantConversation,
+  getAssistantConversationHistory,
   parseAssistantAction,
   parseAssistantIntent,
   parseAssistantReply,
+  sendAssistantMessage,
   type AssistantChatMessage,
+  unarchiveAssistantConversation,
 } from './api'
+
+function retryableAxiosError(status: number) {
+  return Object.assign(new Error(`HTTP ${status}`), {
+    isAxiosError: true,
+    response: { status },
+  })
+}
 
 describe('assistant response parsing', () => {
   test('extracts the first assistant message', () => {
@@ -80,6 +94,73 @@ describe('assistant response parsing', () => {
     )
     assert.equal(parseAssistantAction({ type: 'open_wallet' }), undefined)
   })
+
+  test('accepts exact administrator previews and keeps the confirmation token', () => {
+    assert.deepEqual(
+      parseAssistantAction({
+        type: 'admin_config_change',
+        confirmation_token: ' admin-token ',
+        requires_confirmation: true,
+        expires_in_seconds: 600,
+        changes: [
+          {
+            key: 'AssistantModel',
+            label: 'Default assistant model ID',
+            old_value: 'old-model',
+            new_value: 'new-model',
+          },
+        ],
+      }),
+      {
+        type: 'admin_config_change',
+        confirmation_token: 'admin-token',
+        requires_confirmation: true,
+        expires_in_seconds: 600,
+        changes: [
+          {
+            key: 'AssistantModel',
+            label: 'Default assistant model ID',
+            old_value: 'old-model',
+            new_value: 'new-model',
+          },
+        ],
+      }
+    )
+    assert.equal(
+      parseAssistantAction({
+        type: 'admin_config_change',
+        confirmation_token: 'admin-token',
+        requires_confirmation: true,
+        expires_in_seconds: 600,
+        changes: [{ key: 'AssistantModel' }],
+      }),
+      undefined
+    )
+    assert.deepEqual(
+      parseAssistantAction({
+        type: 'admin_pricing_change',
+        confirmation_token: ' pricing-token ',
+        requires_confirmation: true,
+        expires_in_seconds: 600,
+        pricing: {
+          model_id: 'deepseek-v4-flash',
+          old: { mode: 'ratio', value: 1 },
+          next: { mode: 'ratio', value: 0.8 },
+        },
+      }),
+      {
+        type: 'admin_pricing_change',
+        confirmation_token: 'pricing-token',
+        requires_confirmation: true,
+        expires_in_seconds: 600,
+        pricing: {
+          model_id: 'deepseek-v4-flash',
+          old: { mode: 'ratio', value: 1 },
+          next: { mode: 'ratio', value: 0.8 },
+        },
+      }
+    )
+  })
 })
 
 describe('assistant conversation context', () => {
@@ -130,6 +211,161 @@ describe('assistant conversation context', () => {
     assert.throws(
       () => buildAssistantConversation([], '问'.repeat(4001)),
       /between 1 and 4000 characters/
+    )
+  })
+})
+
+describe('assistant chat retry policy', () => {
+  test('redacts current and historical secrets at the request boundary', async () => {
+    const originalPost = api.post
+    let capturedBody: unknown
+    api.post = (async (_url: string, data: unknown) => {
+      capturedBody = data
+      return {
+        data: { choices: [{ message: { content: 'safe reply' } }] },
+        headers: {},
+      }
+    }) as typeof api.post
+
+    try {
+      await sendAssistantMessage(
+        'Explain this error for owner@example.test using sk-current-secret-123456.',
+        [
+          {
+            role: 'user',
+            content: 'Earlier token: bearer history-secret-token',
+          },
+        ]
+      )
+    } finally {
+      api.post = originalPost
+    }
+
+    const serializedBody = JSON.stringify(capturedBody)
+    assert.doesNotMatch(serializedBody, /owner@example\.test/)
+    assert.doesNotMatch(serializedBody, /sk-current-secret-123456/)
+    assert.doesNotMatch(serializedBody, /history-secret-token/)
+    assert.match(serializedBody, /REDACTED_EMAIL/)
+    assert.match(serializedBody, /REDACTED_API_KEY/)
+    assert.match(serializedBody, /REDACTED_TOKEN/)
+  })
+
+  test('retries transient upstream failures and preserves the attempt header', async () => {
+    const originalPost = api.post
+    const attempts: string[] = []
+    let callCount = 0
+    api.post = (async (_url: string, _data: unknown, config: unknown) => {
+      callCount += 1
+      attempts.push(
+        String(
+          (config as { headers?: Record<string, string> } | undefined)
+            ?.headers?.['X-LMM-Assistant-Attempt']
+        )
+      )
+      if (callCount === 1) throw retryableAxiosError(503)
+      return {
+        data: { choices: [{ message: { content: 'ready' } }] },
+        headers: { 'x-lmm-assistant-intent': 'other' },
+      }
+    }) as typeof api.post
+
+    try {
+      assert.deepEqual(await sendAssistantMessage('hello'), {
+        content: 'ready',
+        intent: 'other',
+        action: undefined,
+      })
+    } finally {
+      api.post = originalPost
+    }
+
+    assert.equal(callCount, 2)
+    assert.deepEqual(attempts, ['1', '2'])
+  })
+
+  test('stops after five total attempts', async () => {
+    const originalPost = api.post
+    let callCount = 0
+    api.post = (async () => {
+      callCount += 1
+      throw retryableAxiosError(502)
+    }) as typeof api.post
+
+    try {
+      await assert.rejects(() => sendAssistantMessage('hello'))
+    } finally {
+      api.post = originalPost
+    }
+
+    assert.equal(callCount, ASSISTANT_MAX_REQUEST_ATTEMPTS)
+  })
+})
+
+describe('assistant conversation history API', () => {
+  test('uses the active default and an explicit archived list filter', async () => {
+    const originalGet = api.get
+    const calls: Array<{ url: string; config: unknown }> = []
+    api.get = (async (url: string, config: unknown) => {
+      calls.push({ url, config })
+      return {
+        data: {
+          success: true,
+          data: { conversations: [] },
+        },
+      }
+    }) as typeof api.get
+    try {
+      await getAssistantConversationHistory()
+      await getAssistantConversationHistory(true)
+    } finally {
+      api.get = originalGet
+    }
+
+    assert.equal(calls[0]?.url, '/api/assistant/conversations')
+    assert.equal(
+      (calls[0]?.config as { params?: unknown } | undefined)?.params,
+      undefined
+    )
+    assert.deepEqual(
+      (calls[1]?.config as { params?: unknown } | undefined)?.params,
+      { archived: true }
+    )
+  })
+
+  test('posts owner archive and restore actions to separate endpoints', async () => {
+    const originalPost = api.post
+    const calls: Array<{ url: string; data: unknown }> = []
+    api.post = (async (url: string, data: unknown) => {
+      calls.push({ url, data })
+      const archived = !url.endsWith('/unarchive')
+      return {
+        data: {
+          success: true,
+          data: { id: 42, archived, archived_at: archived ? 123 : 0 },
+        },
+      }
+    }) as typeof api.post
+    try {
+      assert.deepEqual(await archiveAssistantConversation(42), {
+        id: 42,
+        archived: true,
+        archived_at: 123,
+      })
+      assert.deepEqual(await unarchiveAssistantConversation(42), {
+        id: 42,
+        archived: false,
+        archived_at: 0,
+      })
+    } finally {
+      api.post = originalPost
+    }
+
+    assert.deepEqual(
+      calls.map((call) => call.url),
+      [
+        '/api/assistant/conversations/42/archive',
+        '/api/assistant/conversations/42/unarchive',
+      ]
     )
   })
 })

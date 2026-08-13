@@ -77,6 +77,22 @@ describe('payment method JSON validation', () => {
     )
   })
 
+  test('accepts display, status, group, and role controls', () => {
+    assert.equal(
+      isValidPaymentMethodData({
+        name: 'VIP card',
+        type: 'stripe',
+        enabled: 'false',
+        description: 'Scheduled maintenance',
+        color: '#123456',
+        audience_mode: 'include',
+        audience_user_group: 'vip, partner',
+        audience_role: 'admin',
+      }),
+      true
+    )
+  })
+
   test('rejects incomplete, unsafe, and non-decimal metadata', () => {
     const base = { name: 'LINUX DO Credit', type: 'epay' }
     for (const value of [
@@ -96,6 +112,9 @@ describe('payment method JSON validation', () => {
       { ...base, max_topup: '1e2' },
       { ...base, max_topup: 20 },
       { ...base, min_topup: '50', max_topup: '20' },
+      { ...base, enabled: 'yes' },
+      { ...base, color: 'red' },
+      { ...base, audience_mode: 'include', audience_role: 'owner' },
       { ...base, unlock_after_days: '-1' },
       { ...base, unlock_after_days: '1.5' },
       { ...base, unlock_after_days: 7 },

@@ -10,9 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
-	"github.com/QuantumNous/new-api/setting/model_setting"
-
-	"github.com/shopspring/decimal"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -38,14 +36,31 @@ func HasCSAMViolationMarker(err *types.NewAPIError) bool {
 	return strings.Contains(msg, CSAMViolationMarker) || strings.Contains(err.Error(), ContentViolatesUsageMarker)
 }
 
-func WrapAsViolationFeeGrokCSAM(err *types.NewAPIError) *types.NewAPIError {
+// HasUsagePolicyViolationMarker is provider/model agnostic. The old helper
+// name remains as a compatibility alias for callers outside this package.
+func HasUsagePolicyViolationMarker(err *types.NewAPIError) bool {
+	if err == nil {
+		return false
+	}
+	if strings.Contains(err.Error(), CSAMViolationMarker) || strings.Contains(err.Error(), ContentViolatesUsageMarker) {
+		return true
+	}
+	msg := err.ToOpenAIError().Message
+	return strings.Contains(msg, CSAMViolationMarker) || strings.Contains(msg, ContentViolatesUsageMarker)
+}
+
+func WrapAsViolationFee(err *types.NewAPIError) *types.NewAPIError {
 	if err == nil {
 		return nil
 	}
 	oai := err.ToOpenAIError()
-	oai.Type = string(types.ErrorCodeViolationFeeGrokCSAM)
-	oai.Code = string(types.ErrorCodeViolationFeeGrokCSAM)
+	oai.Type = string(types.ErrorCodeViolationFeeUsagePolicy)
+	oai.Code = string(types.ErrorCodeViolationFeeUsagePolicy)
 	return types.WithOpenAIError(oai, err.StatusCode, types.ErrOptionWithSkipRetry())
+}
+
+func WrapAsViolationFeeGrokCSAM(err *types.NewAPIError) *types.NewAPIError {
+	return WrapAsViolationFee(err)
 }
 
 // NormalizeViolationFeeError ensures:
@@ -58,8 +73,8 @@ func NormalizeViolationFeeError(err *types.NewAPIError) *types.NewAPIError {
 		return nil
 	}
 
-	if HasCSAMViolationMarker(err) {
-		return WrapAsViolationFeeGrokCSAM(err)
+	if HasUsagePolicyViolationMarker(err) {
+		return WrapAsViolationFee(err)
 	}
 
 	if IsViolationFeeCode(err.GetErrorCode()) {
@@ -74,11 +89,11 @@ func shouldChargeViolationFee(err *types.NewAPIError) bool {
 	if err == nil {
 		return false
 	}
-	if err.GetErrorCode() == types.ErrorCodeViolationFeeGrokCSAM {
+	if IsViolationFeeCode(err.GetErrorCode()) {
 		return true
 	}
 	// In case some callers didn't normalize, keep a safety net.
-	return HasCSAMViolationMarker(err)
+	return HasUsagePolicyViolationMarker(err)
 }
 
 func calcViolationFeeQuota(amount, groupRatio float64) int {
@@ -88,19 +103,17 @@ func calcViolationFeeQuota(amount, groupRatio float64) int {
 	if groupRatio <= 0 {
 		return 0
 	}
-	quota := decimal.NewFromFloat(amount).
-		Mul(decimal.NewFromFloat(common.QuotaPerUnit)).
-		Mul(decimal.NewFromFloat(groupRatio)).
-		Round(0).
-		IntPart()
+	quota := common.QuotaFromFloat(amount * common.QuotaPerUnit * groupRatio)
 	if quota <= 0 {
 		return 0
 	}
-	return int(quota)
+	return quota
 }
 
 // ChargeViolationFeeIfNeeded charges an additional fee after the normal flow finishes (including refund).
-// It uses Grok fee settings as the fee policy.
+// It uses the group-selected global violation policy. Only the user's wallet
+// quota is touched; token and subscription balances are not used for this
+// punishment path.
 func ChargeViolationFeeIfNeeded(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, apiErr *types.NewAPIError) bool {
 	if ctx == nil || relayInfo == nil || apiErr == nil {
 		return false
@@ -112,24 +125,33 @@ func ChargeViolationFeeIfNeeded(ctx *gin.Context, relayInfo *relaycommon.RelayIn
 		return false
 	}
 
-	settings := model_setting.GetGrokSettings()
-	if settings == nil || !settings.ViolationDeductionEnabled {
+	userGroup := strings.TrimSpace(relayInfo.UserGroup)
+	if userGroup == "" {
+		userGroup = strings.TrimSpace(relayInfo.UsingGroup)
+	}
+	policy, ok := operation_setting.ResolveViolationFeePolicy(userGroup)
+	if !ok {
 		return false
 	}
 
-	groupRatio := relayInfo.PriceData.GroupRatioInfo.GroupRatio
-	feeQuota := calcViolationFeeQuota(settings.ViolationDeductionAmount, groupRatio)
-	if feeQuota <= 0 {
-		return false
-	}
-
-	if err := PostConsumeQuota(relayInfo, feeQuota, 0, true); err != nil {
+	charge, err := model.ApplyViolationFee(model.ViolationFeeChargeInput{
+		UserID:    relayInfo.UserId,
+		RequestID: ctx.GetString(common.RequestIdKey),
+		Policy:    policy,
+		Group:     userGroup,
+		ErrorCode: string(types.ErrorCodeViolationFeeUsagePolicy),
+	})
+	if err != nil {
 		logger.LogError(ctx, fmt.Sprintf("failed to charge violation fee: %s", err.Error()))
 		return false
 	}
-
-	model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, feeQuota)
-	model.UpdateChannelUsedQuota(relayInfo.ChannelId, feeQuota)
+	if charge.AlreadyExist {
+		return charge.Record.ChargedQuota > 0
+	}
+	if charge.Record.ChargedQuota <= 0 {
+		return false
+	}
+	model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, charge.Record.ChargedQuota)
 
 	useTimeSeconds := time.Now().Unix() - relayInfo.StartTime.Unix()
 	tokenName := ctx.GetString("token_name")
@@ -137,10 +159,14 @@ func ChargeViolationFeeIfNeeded(ctx *gin.Context, relayInfo *relaycommon.RelayIn
 
 	other := map[string]any{
 		"violation_fee":        true,
-		"violation_fee_code":   string(types.ErrorCodeViolationFeeGrokCSAM),
-		"fee_quota":            feeQuota,
-		"base_amount":          settings.ViolationDeductionAmount,
-		"group_ratio":          groupRatio,
+		"violation_fee_code":   string(types.ErrorCodeViolationFeeUsagePolicy),
+		"fee_quota":            charge.Record.ChargedQuota,
+		"requested_fee_quota":  charge.Record.RequestedQuota,
+		"base_amount":          charge.Record.RequestedAmountUSD,
+		"charged_amount":       charge.Record.ChargedAmountUSD,
+		"group":                relayInfo.UsingGroup,
+		"occurrence":           charge.Record.Occurrence,
+		"period_ends_at":       charge.Record.PeriodEndsAt,
 		"status_code":          apiErr.StatusCode,
 		"upstream_error_type":  oai.Type,
 		"upstream_error_code":  fmt.Sprintf("%v", oai.Code),
@@ -151,7 +177,7 @@ func ChargeViolationFeeIfNeeded(ctx *gin.Context, relayInfo *relaycommon.RelayIn
 		ChannelId:      relayInfo.ChannelId,
 		ModelName:      relayInfo.OriginModelName,
 		TokenName:      tokenName,
-		Quota:          feeQuota,
+		Quota:          charge.Record.ChargedQuota,
 		Content:        "Violation fee charged",
 		TokenId:        relayInfo.TokenId,
 		UseTimeSeconds: int(useTimeSeconds),

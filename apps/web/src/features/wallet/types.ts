@@ -96,6 +96,8 @@ export interface PaymentMethod {
   type: string
   /** Legacy optional color for UI display */
   color?: string
+  /** Optional administrator-provided instructions shown on the selector. */
+  description?: string
   /** Minimum topup amount for this payment method */
   min_topup?: number
   /** Maximum credited USD allowed in one payment for this method. */

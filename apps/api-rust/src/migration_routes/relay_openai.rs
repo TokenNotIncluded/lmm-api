@@ -9,10 +9,20 @@
 use std::{
     net::IpAddr,
     sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use crate::RequestContext;
+use crate::{
+    RequestContext,
+    conversion_observability::{
+        ClientAbortGuard, ConversionObserver, ConversionResult, ConverterVersion, FailureReason,
+        FeatureClass, MetricLabels, StreamTiming, global_observer,
+    },
+    protocol_rollout::{ProtocolRolloutControl, RolloutContext},
+    protocol_route_gate::{RouteGateBlocker, RouteGateDecision, RouteGateDetails, decide_route},
+    protocol_runtime_registry::validated_current_registry,
+    route_ownership::{OwnershipEvidence, RouteOwnershipScope},
+};
 use async_trait::async_trait;
 use axum::{
     Router,
@@ -22,11 +32,12 @@ use axum::{
     response::{IntoResponse, Response},
     routing::post,
 };
+use futures_util::StreamExt;
 use lmm_contracts::relay::{
-    CanonicalRequest, CanonicalResponse, CanonicalStreamEvent, Protocol, RelayConvertError,
-    canonical_response_to_openai_chat, canonical_response_to_openai_responses,
-    openai_chat_request_to_canonical, openai_responses_request_to_canonical,
-    response_events_to_openai_chunks, response_events_to_responses,
+    CanonicalRequest, CanonicalResponse, CanonicalStreamEvent, ConversionPlan, Direction, Fidelity,
+    Protocol, RelayConvertError, ValidatedRegistry, canonical_response_to_openai_chat,
+    canonical_response_to_openai_responses, response_events_to_openai_chunks,
+    response_events_to_responses,
 };
 use serde::Serialize;
 use sqlx::{PgPool, Row};
@@ -514,6 +525,8 @@ impl OpenAiRelayService for PgOpenAiRelayService {
 pub struct OpenAiRelayHttpState {
     service: Arc<dyn OpenAiRelayService>,
     version: Arc<str>,
+    protocol_rollout: ProtocolRolloutControl,
+    validated_registry: Option<Arc<ValidatedRegistry>>,
 }
 
 impl OpenAiRelayHttpState {
@@ -523,7 +536,22 @@ impl OpenAiRelayHttpState {
         Self {
             service,
             version: version.into(),
+            protocol_rollout: ProtocolRolloutControl::default(),
+            validated_registry: validated_current_registry().ok().map(Arc::new),
         }
+    }
+
+    /// Replaces the default runtime controls with the process-shared rollout
+    /// holder and validated capability snapshot.
+    #[must_use]
+    pub fn with_protocol_runtime(
+        mut self,
+        rollout: ProtocolRolloutControl,
+        registry: Arc<ValidatedRegistry>,
+    ) -> Self {
+        self.protocol_rollout = rollout;
+        self.validated_registry = Some(registry);
+        self
     }
 }
 
@@ -586,6 +614,7 @@ async fn relay(
     protocol: Protocol,
     endpoint: OpenAiRelayEndpoint,
 ) -> Response {
+    let observer = global_observer();
     let request_id = request_id(&request);
     let headers = request.headers().clone();
     if let Err(error) = state
@@ -605,6 +634,11 @@ async fn relay(
     let body = match to_bytes(request.into_body(), MAX_RELAY_BODY_BYTES).await {
         Ok(body) => body,
         Err(_) => {
+            observer.record_failure(openai_conversion_labels(
+                protocol,
+                false,
+                ConversionResult::Failure,
+            ));
             return legacy_error(
                 &state,
                 &request_id,
@@ -616,9 +650,20 @@ async fn relay(
             );
         }
     };
+    let parse_started = Instant::now();
     let canonical = match parse_request(endpoint, &body) {
-        Ok(request) => request,
+        Ok(request) => {
+            let labels =
+                openai_conversion_labels(protocol, request.stream, ConversionResult::Success);
+            observer.record_input_bytes(labels, body.len());
+            observer.record_conversion_duration(labels, parse_started.elapsed());
+            request
+        }
         Err(error) => {
+            let labels = openai_conversion_labels(protocol, false, ConversionResult::Failure);
+            observer.record_input_bytes(labels, body.len());
+            observer.record_conversion_duration(labels, parse_started.elapsed());
+            observer.record_failure(labels);
             return legacy_error(
                 &state,
                 &request_id,
@@ -630,22 +675,155 @@ async fn relay(
             );
         }
     };
-    let result = match state
-        .service
-        .relay(OpenAiRelayRequest {
-            endpoint,
-            protocol,
-            request_id: request_id.clone(),
-            headers,
-            request: canonical,
-            raw_body: body.to_vec(),
-        })
-        .await
-    {
+    let stream = canonical.stream;
+    let admission = match native_route_admission(
+        &state,
+        &request_id,
+        protocol,
+        canonical.model.as_str(),
+        stream,
+    ) {
+        Ok(admission) => admission,
+        Err(reason) => {
+            observer.record_failure_with_reason(
+                openai_conversion_labels(protocol, stream, ConversionResult::Failure),
+                reason,
+            );
+            return legacy_error(&state, &request_id, route_closed_failure());
+        }
+    };
+    let NativeRouteAdmission { registry, details } = admission;
+    let plan_started = Instant::now();
+    let plan_labels = openai_conversion_labels(protocol, stream, ConversionResult::Success);
+    let plan = ConversionPlan::compile_with_validated_registry(
+        protocol,
+        protocol,
+        canonical.model.as_str(),
+        &registry,
+    );
+    observer.record_plan_duration(plan_labels, plan_started.elapsed());
+    let compiled_plan = match plan {
+        Ok(plan) => plan,
+        Err(_) => {
+            observer.record_failure_with_reason(plan_labels, FailureReason::RegistryDrift);
+            return legacy_error(
+                &state,
+                &request_id,
+                OpenAiRelayFailure::new(
+                    StatusCode::BAD_REQUEST,
+                    "conversion_unsupported_feature",
+                    "requested conversion route is unavailable",
+                ),
+            );
+        }
+    };
+    if let Err(error) = compiled_plan.enforce(details.loss_policy) {
+        observer.record_failure_with_reason(plan_labels, FailureReason::PlanRejected);
+        return legacy_error(
+            &state,
+            &request_id,
+            OpenAiRelayFailure::new(
+                StatusCode::BAD_REQUEST,
+                error.code,
+                "requested conversion plan is not executable",
+            ),
+        );
+    }
+    let relay_request = OpenAiRelayRequest {
+        endpoint,
+        protocol,
+        request_id: request_id.clone(),
+        headers,
+        request: canonical,
+        raw_body: body.to_vec(),
+    };
+    let result = match state.service.relay(relay_request).await {
         Ok(result) => result,
-        Err(error) => return legacy_error(&state, &request_id, error),
+        Err(error) => {
+            observer.record_failure(openai_conversion_labels(
+                protocol,
+                stream,
+                ConversionResult::Failure,
+            ));
+            return legacy_error(&state, &request_id, error);
+        }
     };
     legacy_success(&state, &request_id, protocol, result)
+}
+
+struct NativeRouteAdmission {
+    registry: Arc<ValidatedRegistry>,
+    details: RouteGateDetails,
+}
+
+fn native_route_admission(
+    state: &OpenAiRelayHttpState,
+    request_id: &str,
+    protocol: Protocol,
+    model: &str,
+    stream: bool,
+) -> Result<NativeRouteAdmission, FailureReason> {
+    let Some(registry) = state.validated_registry.clone() else {
+        return Err(FailureReason::RegistryDrift);
+    };
+    let context = RolloutContext::new(request_id, protocol, protocol, model, stream);
+    let scope = RouteOwnershipScope {
+        source: protocol,
+        target: protocol,
+        stream,
+    };
+    let evidence = OwnershipEvidence::closed(scope);
+    let rollout_snapshot = state.protocol_rollout.snapshot();
+    let request_gate = decide_route(
+        rollout_snapshot.config(),
+        &context,
+        &registry,
+        Direction::Request,
+        &evidence,
+    );
+    let output_direction = if stream {
+        Direction::Stream
+    } else {
+        Direction::Response
+    };
+    let output_gate = decide_route(
+        rollout_snapshot.config(),
+        &context,
+        &registry,
+        output_direction,
+        &evidence,
+    );
+    if !is_exact_raw_native(&request_gate) {
+        return Err(route_gate_failure_reason(&request_gate));
+    }
+    if !is_exact_raw_native(&output_gate) {
+        return Err(route_gate_failure_reason(&output_gate));
+    }
+    let RouteGateDecision::NativeRaw { details } = output_gate else {
+        return Err(FailureReason::Unsupported);
+    };
+    Ok(NativeRouteAdmission { registry, details })
+}
+
+fn is_exact_raw_native(decision: &RouteGateDecision) -> bool {
+    let RouteGateDecision::NativeRaw { details } = decision else {
+        return false;
+    };
+    details.capability.as_ref().is_some_and(|capability| {
+        capability.quality == Fidelity::Exact && capability.raw_passthrough
+    })
+}
+
+fn route_gate_failure_reason(decision: &RouteGateDecision) -> FailureReason {
+    if decision
+        .blockers()
+        .iter()
+        .any(|blocker| matches!(blocker, RouteGateBlocker::RegistryUnavailable))
+    {
+        FailureReason::RegistryDrift
+    } else {
+        FailureReason::Unsupported
+    }
 }
 
 fn parse_request(
@@ -653,18 +831,41 @@ fn parse_request(
     body: &[u8],
 ) -> Result<CanonicalRequest, RelayConvertError> {
     match endpoint {
-        OpenAiRelayEndpoint::ChatCompletions => serde_json::from_slice(body)
-            .map_err(RelayConvertError::from)
-            .and_then(openai_chat_request_to_canonical)
-            .map(|converted| converted.value),
-        OpenAiRelayEndpoint::Responses | OpenAiRelayEndpoint::ResponsesCompact => {
-            serde_json::from_slice(body)
-                .map_err(RelayConvertError::from)
-                .and_then(openai_responses_request_to_canonical)
-                .map(|converted| converted.value)
-        }
+        OpenAiRelayEndpoint::ChatCompletions
+        | OpenAiRelayEndpoint::Responses
+        | OpenAiRelayEndpoint::ResponsesCompact => minimal_openai_request_to_canonical(body),
         OpenAiRelayEndpoint::Completions => completion_request_to_canonical(body),
     }
+}
+
+/// Extracts only the metadata required by the same-protocol transactional
+/// relay.  The selected upstream receives [`OpenAiRelayRequest::raw_body`]
+/// unchanged, so provider fields, future tools/items and unknown SSE shapes
+/// never pass through a closed canonical DTO on a native OpenAI route.
+fn minimal_openai_request_to_canonical(body: &[u8]) -> Result<CanonicalRequest, RelayConvertError> {
+    let value: serde_json::Value = serde_json::from_slice(body).map_err(RelayConvertError::from)?;
+    let model = value
+        .get("model")
+        .and_then(serde_json::Value::as_str)
+        .filter(|model| !model.trim().is_empty())
+        .ok_or(RelayConvertError::Missing("model"))?;
+    let stream = match value.get("stream") {
+        None => false,
+        Some(value) => value
+            .as_bool()
+            .ok_or_else(|| RelayConvertError::Unsupported("stream must be a boolean".to_owned()))?,
+    };
+    Ok(CanonicalRequest {
+        model: model.to_owned(),
+        instructions: Vec::new(),
+        messages: Vec::new(),
+        max_output_tokens: None,
+        temperature: None,
+        stream,
+        tools: Vec::new(),
+        tool_choice: None,
+        options: lmm_contracts::relay::RequestOptions::default(),
+    })
 }
 
 fn channel_selection_model(endpoint: OpenAiRelayEndpoint, model: &str) -> String {
@@ -716,32 +917,54 @@ fn legacy_success(
     protocol: Protocol,
     result: OpenAiRelayResult,
 ) -> Response {
+    let observer = global_observer();
     let mut response = match result.body {
-        OpenAiRelayBody::Complete(response) => match serialize_complete(protocol, response) {
-            Ok(body) => {
-                let mut response = (result.status, body).into_response();
-                response.headers_mut().insert(
-                    header::CONTENT_TYPE,
-                    HeaderValue::from_static("application/json; charset=utf-8"),
-                );
-                response
-            }
-            Err(error) => {
-                return legacy_error(
-                    state,
-                    request_id,
-                    OpenAiRelayFailure::new(
-                        StatusCode::BAD_GATEWAY,
-                        "upstream_protocol_error",
-                        error.to_string(),
-                    ),
-                );
-            }
-        },
-        OpenAiRelayBody::Stream(events) => {
-            let body = match serialize_sse(protocol, &events) {
-                Ok(body) => body,
+        OpenAiRelayBody::Complete(response) => {
+            let labels = openai_conversion_labels(protocol, false, ConversionResult::Success);
+            let conversion_started = Instant::now();
+            match serialize_complete(protocol, response) {
+                Ok(body) => {
+                    observer.record_conversion_duration(labels, conversion_started.elapsed());
+                    observer.record_events(labels, 1);
+                    observer.record_output_bytes(labels, body.len());
+                    let mut response = (result.status, body).into_response();
+                    response.headers_mut().insert(
+                        header::CONTENT_TYPE,
+                        HeaderValue::from_static("application/json; charset=utf-8"),
+                    );
+                    response
+                }
                 Err(error) => {
+                    observer.record_conversion_duration(labels, conversion_started.elapsed());
+                    observer.record_failure(labels);
+                    return legacy_error(
+                        state,
+                        request_id,
+                        OpenAiRelayFailure::new(
+                            StatusCode::BAD_GATEWAY,
+                            "upstream_protocol_error",
+                            error.to_string(),
+                        ),
+                    );
+                }
+            }
+        }
+        OpenAiRelayBody::Stream(events) => {
+            let labels = openai_conversion_labels(protocol, true, ConversionResult::Success);
+            let conversion_started = Instant::now();
+            let mut timing = StreamTiming::default();
+            if !events.is_empty() {
+                timing.mark_upstream_event();
+            }
+            let body = match serialize_sse(protocol, &events) {
+                Ok(body) => {
+                    observer.record_conversion_duration(labels, conversion_started.elapsed());
+                    observer.record_events(labels, usize_to_u64(events.len()));
+                    body
+                }
+                Err(error) => {
+                    observer.record_conversion_duration(labels, conversion_started.elapsed());
+                    observer.record_failure(labels);
                     return legacy_error(
                         state,
                         request_id,
@@ -753,7 +976,9 @@ fn legacy_success(
                     );
                 }
             };
-            let mut response = Response::new(Body::from(body));
+            let body =
+                observe_body_with_timing(Body::from(body), (*observer).clone(), labels, timing);
+            let mut response = Response::new(body);
             *response.status_mut() = result.status;
             response.headers_mut().insert(
                 header::CONTENT_TYPE,
@@ -765,6 +990,20 @@ fn legacy_success(
             response
         }
         OpenAiRelayBody::Upstream { content_type, body } => {
+            // Native passthrough records bytes/result only. It intentionally
+            // does not decode JSON or inspect provider event names.
+            let stream = content_type
+                .as_ref()
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.split(';').next())
+                .is_some_and(|value| value.trim().eq_ignore_ascii_case("text/event-stream"));
+            let labels = MetricLabels::native_raw(protocol, stream, ConversionResult::Success);
+            let body = observe_body_with_timing(
+                body,
+                (*observer).clone(),
+                labels,
+                StreamTiming::default(),
+            );
             let mut response = Response::new(body);
             *response.status_mut() = result.status;
             if let Some(content_type) = content_type {
@@ -793,7 +1032,9 @@ fn serialize_complete(
             serde_json::to_string(&canonical_response_to_openai_responses(response).value)
                 .map_err(RelayConvertError::from)
         }
-        Protocol::Claude | Protocol::Gemini => unreachable!("route only accepts OpenAI protocols"),
+        Protocol::Claude | Protocol::Gemini => Err(RelayConvertError::Unsupported(
+            "OpenAI serializer does not support this protocol".to_owned(),
+        )),
     }
 }
 
@@ -822,10 +1063,98 @@ fn serialize_sse(
                 output.push_str("\n\n");
             }
         }
-        Protocol::Claude | Protocol::Gemini => unreachable!("route only accepts OpenAI protocols"),
+        Protocol::Claude | Protocol::Gemini => {
+            return Err(RelayConvertError::Unsupported(
+                "OpenAI SSE serializer does not support this protocol".to_owned(),
+            ));
+        }
     }
     output.push_str("data: [DONE]\n\n");
     Ok(output)
+}
+
+fn openai_conversion_labels(
+    protocol: Protocol,
+    stream: bool,
+    result: ConversionResult,
+) -> MetricLabels {
+    let converter_version = match protocol {
+        Protocol::OpenAi => ConverterVersion::OpenAiChatV1,
+        Protocol::OpenAiResponses => ConverterVersion::OpenAiResponsesV1,
+        Protocol::Claude | Protocol::Gemini => ConverterVersion::NativeRawV1,
+    };
+    MetricLabels::new(
+        protocol,
+        protocol,
+        converter_version,
+        0,
+        stream,
+        if stream {
+            FeatureClass::Stream
+        } else {
+            FeatureClass::Text
+        },
+        result,
+    )
+}
+
+fn usize_to_u64(value: usize) -> u64 {
+    if value > u64::MAX as usize {
+        u64::MAX
+    } else {
+        value as u64
+    }
+}
+
+fn observe_body_with_timing(
+    body: Body,
+    observer: ConversionObserver,
+    labels: MetricLabels,
+    timing: StreamTiming,
+) -> Body {
+    let stream = body.into_data_stream();
+    if !labels.stream {
+        let observed = stream.map(move |item| {
+            if let Ok(bytes) = &item {
+                observer.record_output_bytes(labels, bytes.len());
+            }
+            item
+        });
+        return Body::from_stream(observed);
+    }
+    let guard = ClientAbortGuard::new(observer.clone(), labels);
+    let queue_guard = observer.enter_queue(labels);
+    let observed = futures_util::stream::unfold(
+        (stream, guard, queue_guard, timing),
+        move |(mut stream, mut guard, mut queue_guard, mut timing)| {
+            let observer = observer.clone();
+            async move {
+                match stream.next().await {
+                    Some(Ok(bytes)) => {
+                        timing.mark_upstream_event();
+                        if timing.first_downstream_write_at.is_none() {
+                            timing.mark_downstream_write();
+                            timing.record_gateway_ttft(&observer, labels);
+                        }
+                        observer.record_output_bytes(labels, bytes.len());
+                        Some((Ok(bytes), (stream, guard, queue_guard, timing)))
+                    }
+                    Some(Err(error)) => {
+                        guard.complete();
+                        queue_guard.complete();
+                        observer.record_failure(labels);
+                        Some((Err(error), (stream, guard, queue_guard, timing)))
+                    }
+                    None => {
+                        guard.complete();
+                        queue_guard.complete();
+                        None
+                    }
+                }
+            }
+        },
+    );
+    Body::from_stream(observed)
 }
 
 fn legacy_error(
@@ -932,6 +1261,14 @@ fn no_channel_failure() -> OpenAiRelayFailure {
         StatusCode::SERVICE_UNAVAILABLE,
         "channel_not_found",
         "no available channel for this model",
+    )
+}
+
+fn route_closed_failure() -> OpenAiRelayFailure {
+    OpenAiRelayFailure::new(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "relay_unavailable",
+        "relay request could not be completed",
     )
 }
 
@@ -1123,12 +1460,40 @@ struct UpstreamError {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{sync::Arc, time::Duration};
 
-    use axum::{body::Bytes, http::Uri};
+    use async_trait::async_trait;
+    use axum::{
+        body::{Body, Bytes},
+        http::{Request, Uri},
+    };
     use tokio::{net::TcpListener, sync::mpsc, task::JoinHandle};
+    use tower::ServiceExt;
 
     use super::*;
+
+    struct TestRelayService;
+
+    #[async_trait]
+    impl OpenAiRelayService for TestRelayService {
+        async fn authenticate(
+            &self,
+            _request: OpenAiRelayAuthorization,
+        ) -> Result<(), OpenAiRelayFailure> {
+            Ok(())
+        }
+
+        async fn relay(
+            &self,
+            _request: OpenAiRelayRequest,
+        ) -> Result<OpenAiRelayResult, OpenAiRelayFailure> {
+            Err(internal_failure())
+        }
+    }
+
+    fn test_state() -> OpenAiRelayHttpState {
+        OpenAiRelayHttpState::new(Arc::new(TestRelayService), "test-version")
+    }
 
     #[derive(Clone)]
     struct MockUpstream {
@@ -1228,6 +1593,145 @@ mod tests {
             url.as_str(),
             "https://upstream.example/channel-prefix/v1/responses/compact"
         );
+    }
+
+    #[test]
+    fn native_openai_parse_extracts_metadata_without_filtering_unknown_wire_fields() {
+        let body = br#"{"model":"gpt-future","stream":true,"tools":[{"type":"future_tool","opaque":{"x":1}}],"future_request_field":[1,2,3]}"#;
+        let canonical = parse_request(OpenAiRelayEndpoint::ChatCompletions, body)
+            .expect("minimal native metadata");
+        assert_eq!(canonical.model, "gpt-future");
+        assert!(canonical.stream);
+        assert!(canonical.messages.is_empty());
+
+        let responses = parse_request(OpenAiRelayEndpoint::Responses, body)
+            .expect("Responses uses the same native metadata path");
+        assert_eq!(responses.model, "gpt-future");
+        assert!(responses.stream);
+    }
+
+    #[test]
+    fn native_openai_parse_rejects_malformed_stream_metadata_without_reading_other_fields() {
+        let body = br#"{"model":"gpt-future","stream":"yes","future":true}"#;
+        assert!(matches!(
+            parse_request(OpenAiRelayEndpoint::Responses, body),
+            Err(RelayConvertError::Unsupported(message))
+                if message == "stream must be a boolean"
+        ));
+    }
+
+    #[test]
+    fn default_http_state_admits_validated_native_raw_route() {
+        let state = test_state();
+        let admission =
+            native_route_admission(&state, "request-1", Protocol::OpenAi, "gpt-future", false)
+                .expect("default state should admit the validated native route");
+
+        assert!(
+            admission
+                .details
+                .capability
+                .as_ref()
+                .is_some_and(|capability| capability.raw_passthrough)
+        );
+    }
+
+    #[test]
+    fn default_http_state_admits_validated_native_stream_route() {
+        let state = test_state();
+        let admission =
+            native_route_admission(&state, "request-1", Protocol::OpenAi, "gpt-future", true)
+                .expect("default state should admit the validated native stream route");
+
+        assert!(
+            admission
+                .details
+                .capability
+                .as_ref()
+                .is_some_and(|capability| capability.stream_supported)
+        );
+    }
+
+    #[test]
+    fn runtime_builder_installs_the_shared_validated_registry() {
+        let registry = Arc::new(
+            validated_current_registry().expect("built-in runtime registry should validate"),
+        );
+        let state =
+            test_state().with_protocol_runtime(ProtocolRolloutControl::default(), registry.clone());
+
+        assert!(Arc::ptr_eq(
+            state
+                .validated_registry
+                .as_ref()
+                .expect("builder installs registry"),
+            &registry,
+        ));
+    }
+
+    #[test]
+    fn missing_registry_closes_native_route_before_service_relay() {
+        let mut state = test_state();
+        state.validated_registry = None;
+
+        assert!(matches!(
+            native_route_admission(&state, "request-1", Protocol::OpenAi, "gpt-future", false,),
+            Err(FailureReason::RegistryDrift)
+        ));
+    }
+
+    #[tokio::test]
+    async fn missing_registry_returns_safe_server_error() {
+        let mut state = test_state();
+        state.validated_registry = None;
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/chat/completions")
+            .header(header::AUTHORIZATION, "Bearer tenant-token")
+            .body(Body::from(r#"{"model":"gpt-future"}"#))
+            .expect("valid test request");
+
+        let response = openai_relay_router(state)
+            .oneshot(request)
+            .await
+            .expect("router response");
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn builder_observes_shared_rollout_replacement_and_rollback() {
+        let control = ProtocolRolloutControl::default();
+        let registry = Arc::new(
+            validated_current_registry().expect("built-in runtime registry should validate"),
+        );
+        let state = test_state().with_protocol_runtime(control.clone(), registry);
+        let initial =
+            native_route_admission(&state, "request-1", Protocol::OpenAi, "gpt-future", false)
+                .expect("default native route should remain open");
+        assert!(!initial.details.flag_decision.enabled);
+
+        let mut enabled = crate::protocol_rollout::ProtocolRolloutConfig::default();
+        enabled.conversion_engine_v2 =
+            crate::protocol_rollout::FlagConfig::enabled(crate::protocol_rollout::MAX_BASIS_POINTS)
+                .expect("full rollout is bounded");
+        control
+            .replace(enabled)
+            .expect("replacement should install");
+        let replaced =
+            native_route_admission(&state, "request-1", Protocol::OpenAi, "gpt-future", false)
+                .expect("replacement must be visible to the next request");
+        assert!(replaced.details.flag_decision.enabled);
+
+        control.replace_rollback().expect("rollback should install");
+        let rolled_back =
+            native_route_admission(&state, "request-1", Protocol::OpenAi, "gpt-future", false)
+                .expect("native raw route remains available during rollback");
+        assert_eq!(
+            rolled_back.details.flag_decision.source,
+            crate::protocol_rollout::DecisionSource::ConfigRollback
+        );
+        assert!(!rolled_back.details.flag_decision.enabled);
     }
 
     #[test]

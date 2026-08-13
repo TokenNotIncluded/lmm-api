@@ -66,8 +66,11 @@ export function getPaymentIcon(
   paymentType: string | undefined,
   className: string = 'h-4 w-4',
   icon?: string,
-  altName?: string
+  altName?: string,
+  color?: string
 ): ReactNode {
+  const configuredColor =
+    color && /^#[0-9a-fA-F]{6}$/.test(color.trim()) ? color.trim() : undefined
   const iconValue = icon?.trim()
   const safeIconUrl = normalizeHttpIconUrl(iconValue)
   if (safeIconUrl) {
@@ -89,6 +92,7 @@ export function getPaymentIcon(
         name={iconValue}
         className={className}
         title={altName || paymentType || iconValue}
+        style={configuredColor ? { color: configuredColor } : undefined}
       />
     )
   }
@@ -102,35 +106,45 @@ export function getPaymentIcon(
       return (
         <SiAlipay
           className={className}
-          style={{ color: PAYMENT_ICON_COLORS[PAYMENT_TYPES.ALIPAY] }}
+          style={{
+            color: configuredColor ?? PAYMENT_ICON_COLORS[PAYMENT_TYPES.ALIPAY],
+          }}
         />
       )
     case PAYMENT_TYPES.WECHAT:
       return (
         <SiWechat
           className={className}
-          style={{ color: PAYMENT_ICON_COLORS[PAYMENT_TYPES.WECHAT] }}
+          style={{
+            color: configuredColor ?? PAYMENT_ICON_COLORS[PAYMENT_TYPES.WECHAT],
+          }}
         />
       )
     case PAYMENT_TYPES.STRIPE:
       return (
         <SiStripe
           className={className}
-          style={{ color: PAYMENT_ICON_COLORS[PAYMENT_TYPES.STRIPE] }}
+          style={{
+            color: configuredColor ?? PAYMENT_ICON_COLORS[PAYMENT_TYPES.STRIPE],
+          }}
         />
       )
     case PAYMENT_TYPES.CREEM:
       return (
         <Landmark
           className={className}
-          style={{ color: PAYMENT_ICON_COLORS[PAYMENT_TYPES.CREEM] }}
+          style={{
+            color: configuredColor ?? PAYMENT_ICON_COLORS[PAYMENT_TYPES.CREEM],
+          }}
         />
       )
     case PAYMENT_TYPES.WAFFO:
       return (
         <CreditCard
           className={className}
-          style={{ color: PAYMENT_ICON_COLORS[PAYMENT_TYPES.WAFFO] }}
+          style={{
+            color: configuredColor ?? PAYMENT_ICON_COLORS[PAYMENT_TYPES.WAFFO],
+          }}
         />
       )
     case PAYMENT_TYPES.WAFFO_PANCAKE:

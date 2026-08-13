@@ -491,6 +491,28 @@ func TestNativeProductionFailureAfterArmingRestoresDirectGoRelease(t *testing.T)
 	}
 }
 
+func TestNativeProductionRollbackDoesNotStopItsOwnService(t *testing.T) {
+	fixture := newProductionFixture(t)
+	if _, err := fixture.runtime.apply(context.Background(), fixture.workspace, fixture.options); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.runtime.rollback(context.Background(), fixture.workspace, "watchdog-deadline"); err != nil {
+		t.Fatal(err)
+	}
+	status, err := fixture.runtime.readStatus(fixture.workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Phase != "ROLLED_BACK" {
+		t.Fatalf("rollback status=%#v", status)
+	}
+	for _, command := range fixture.runner.commands {
+		if len(command.Args) >= 2 && command.Name == "systemctl" && command.Args[0] == "stop" && strings.Contains(command.Args[len(command.Args)-1], "rollback-") {
+			t.Fatalf("rollback attempted to stop its own service: %v", command.Args)
+		}
+	}
+}
+
 func TestNativeProductionAmbiguousTimerArmFailureRollsBackAndReleasesLock(t *testing.T) {
 	fixture := newProductionFixture(t)
 	fixture.runner.failTimerEnable = true

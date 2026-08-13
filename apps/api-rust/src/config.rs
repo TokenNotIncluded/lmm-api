@@ -1,4 +1,7 @@
-use lmm_api_rs::status::TurnstilePublicConfig;
+use lmm_api_rs::{
+    protocol_rollout::{ProtocolRolloutConfig, RolloutConfigError},
+    status::TurnstilePublicConfig,
+};
 use lmm_application::ValkeyReadinessPolicy;
 use secrecy::{ExposeSecret, SecretString};
 use std::{
@@ -83,6 +86,8 @@ pub struct Config {
     /// IPv6 loopback address (127.0.0.1 or ::1).  Mirrors Go's
     /// `LMM_LOCAL_ACCEPTANCE` startup policy.
     pub local_acceptance: bool,
+    /// Typed protocol conversion rollout controls, parsed before the listener binds.
+    pub protocol_rollout: ProtocolRolloutConfig,
 }
 
 /// The startup-owned Turnstile policy. The verification secret is never part
@@ -221,6 +226,7 @@ impl std::fmt::Debug for Config {
             .field("trusted_proxies", &self.trusted_proxies)
             .field("test_instance", &self.test_instance)
             .field("local_acceptance", &self.local_acceptance)
+            .field("protocol_rollout", &self.protocol_rollout)
             .finish()
     }
 }
@@ -230,6 +236,8 @@ pub enum ConfigError {
     Missing(&'static str),
     #[error("environment variable {0} is invalid")]
     Invalid(&'static str),
+    #[error("protocol rollout configuration is invalid: {0}")]
+    ProtocolRollout(#[from] RolloutConfigError),
 }
 impl Config {
     pub fn from_env() -> Result<Self, ConfigError> {
@@ -299,6 +307,7 @@ impl Config {
             trusted_proxies: trusted_proxies()?,
             test_instance,
             local_acceptance,
+            protocol_rollout: ProtocolRolloutConfig::from_env()?,
         };
         if let Some(test_valkey_port) = test_valkey_port_override {
             validate_test_instance_isolation(&config, test_valkey_port)?;
@@ -761,6 +770,7 @@ fn boolean_with_legacy(
 #[cfg(test)]
 mod tests {
     use super::{Config, TrustedProxyPolicy, TurnstileConfig};
+    use lmm_api_rs::protocol_rollout::ProtocolRolloutConfig;
     use lmm_api_rs::status::TurnstilePublicConfig;
     use lmm_application::ValkeyReadinessPolicy;
     use secrecy::SecretString;
@@ -806,6 +816,7 @@ mod tests {
             trusted_proxies: TrustedProxyPolicy::Disabled,
             test_instance: false,
             local_acceptance: false,
+            protocol_rollout: ProtocolRolloutConfig::default(),
         };
         let rendered = format!("{config:?}");
         assert!(!rendered.contains("postgres://secret"));

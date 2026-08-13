@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
@@ -113,6 +114,68 @@ func TestPaymentMethodAudienceSupportsAnyAndAllConditionMatching(t *testing.T) {
 	visible, err = paymentMethodVisibleForUser(user, "stripe")
 	require.NoError(t, err)
 	assert.False(t, visible)
+}
+
+func TestPaymentMethodAudienceMatchesUserGroupAndRole(t *testing.T) {
+	user := &model.User{Group: "vip", Role: common.RoleAdminUser}
+	method := map[string]string{
+		"name": "Card", "type": "stripe", "audience_mode": "include",
+		"audience_match": "all", "audience_user_group": "default, vip",
+		"audience_role": "admin",
+	}
+	withPaymentMethods(t, []map[string]string{method})
+
+	visible, err := paymentMethodVisibleForUser(user, "stripe")
+	require.NoError(t, err)
+	assert.True(t, visible)
+
+	user.Group = "default"
+	visible, err = paymentMethodVisibleForUser(user, "stripe")
+	require.NoError(t, err)
+	assert.True(t, visible)
+
+	user.Role = common.RoleCommonUser
+	visible, err = paymentMethodVisibleForUser(user, "stripe")
+	require.NoError(t, err)
+	assert.False(t, visible)
+}
+
+func TestDisabledPaymentMethodIsUnavailableAndInvalidEnabledFailsClosed(t *testing.T) {
+	user := &model.User{}
+	withPaymentMethods(t, []map[string]string{{
+		"name": "Card", "type": "stripe", "enabled": "false",
+	}})
+	available, _, err := paymentMethodAvailableForUser(user, "stripe", time.Now())
+	require.NoError(t, err)
+	assert.False(t, available)
+
+	operation_setting.PayMethods[0]["enabled"] = "invalid"
+	available, _, err = paymentMethodAvailableForUser(user, "stripe", time.Now())
+	assert.Error(t, err)
+	assert.False(t, available)
+}
+
+func TestSanitizedPaymentMethodsHideServerOnlyPolicyFields(t *testing.T) {
+	methods := []map[string]string{{
+		"name":                    "Card",
+		"type":                    "stripe",
+		"enabled":                 "false",
+		"description":             "Scheduled maintenance",
+		"color":                   "#123456",
+		"audience_mode":           "exclude",
+		"audience_user_group":     "vip",
+		"audience_role":           "admin",
+		"audience_email_contains": "linux.do",
+	}}
+
+	public := sanitizedPaymentMethods(methods)
+	require.Len(t, public, 1)
+	assert.Equal(t, "Scheduled maintenance", public[0]["description"])
+	assert.Equal(t, "#123456", public[0]["color"])
+	_, hasEnabled := public[0]["enabled"]
+	_, hasAudience := public[0]["audience_mode"]
+	assert.False(t, hasEnabled)
+	assert.False(t, hasAudience)
 }
 
 func TestPaymentMethodAudienceRejectsInvalidOrEmptyRules(t *testing.T) {

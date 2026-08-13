@@ -38,10 +38,13 @@ const (
 type ErrorCode string
 
 const (
-	ErrorCodeInvalidRequest         ErrorCode = "invalid_request"
-	ErrorCodeSensitiveWordsDetected ErrorCode = "sensitive_words_detected"
-	ErrorCodeAdvancedSecurity       ErrorCode = "advanced_security_guardrail"
-	ErrorCodeViolationFeeGrokCSAM   ErrorCode = "violation_fee.grok.csam"
+	ErrorCodeInvalidRequest          ErrorCode = "invalid_request"
+	ErrorCodeSensitiveWordsDetected  ErrorCode = "sensitive_words_detected"
+	ErrorCodeAdvancedSecurity        ErrorCode = "advanced_security_guardrail"
+	ErrorCodeViolationFeeUsagePolicy ErrorCode = "violation_fee.usage_policy"
+	// Deprecated compatibility code. New violations are normalized to the
+	// provider/model-agnostic usage-policy code above.
+	ErrorCodeViolationFeeGrokCSAM ErrorCode = "violation_fee.grok.csam"
 
 	// gateway error
 	ErrorCodeCountTokenFailed   ErrorCode = "count_token_failed"

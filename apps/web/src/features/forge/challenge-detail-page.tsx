@@ -41,9 +41,9 @@ import {
   getBountyDetail,
 } from '@/features/open-source-bounties/api'
 import { useStatus } from '@/hooks/use-status'
+import { toIntlLocale } from '@/i18n/languages'
 import { getBackendCapabilities } from '@/lib/backend-capabilities'
 import { formatQuota } from '@/lib/format'
-import { toIntlLocale } from '@/i18n/languages'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { ForgePublicShell } from './forge-public-shell'

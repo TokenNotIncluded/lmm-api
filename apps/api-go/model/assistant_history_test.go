@@ -91,6 +91,70 @@ func TestAssistantHistoryConversationContinuationRejectsForeignOwner(t *testing.
 	assert.ErrorIs(t, err, ErrAssistantConversationNotFound)
 }
 
+func TestAssistantConversationArchiveIsOwnerOnlyAndListFilterPreservesHistory(t *testing.T) {
+	l0, l1, _, admin := setupAssistantHistoryTestDB(t)
+	active, err := PrepareAssistantConversation(l0.Id, 0, "active conversation")
+	require.NoError(t, err)
+	archived, err := PrepareAssistantConversation(l0.Id, 0, "archived conversation")
+	require.NoError(t, err)
+	require.NoError(t, RecordAssistantConversationTurn(
+		l0.Id,
+		archived.Id,
+		"keep this question",
+		"keep this answer",
+	))
+	require.True(t, DB.Migrator().HasColumn(&AssistantConversation{}, "archived_at"))
+
+	// Read elevation does not grant archive or restore authority.
+	_, err = ArchiveAssistantConversation(l1.Id, archived.Id)
+	assert.ErrorIs(t, err, ErrAssistantConversationNotFound)
+	_, err = ArchiveAssistantConversation(admin.Id, archived.Id)
+	assert.ErrorIs(t, err, ErrAssistantConversationNotFound)
+	_, err = UnarchiveAssistantConversation(l1.Id, archived.Id)
+	assert.ErrorIs(t, err, ErrAssistantConversationNotFound)
+
+	updated, err := ArchiveAssistantConversation(l0.Id, archived.Id)
+	require.NoError(t, err)
+	assert.Positive(t, updated.ArchivedAt)
+	var stored AssistantConversation
+	require.NoError(t, DB.First(&stored, archived.Id).Error)
+	assert.Equal(t, updated.ArchivedAt, stored.ArchivedAt)
+
+	activeList, err := ListAssistantConversations(l0.Id, l0.Id, 100, false)
+	require.NoError(t, err)
+	require.Len(t, activeList, 1)
+	assert.Equal(t, active.Id, activeList[0].Id)
+	assert.Zero(t, activeList[0].ArchivedAt)
+
+	archivedList, err := ListAssistantConversations(l0.Id, l0.Id, 100, true)
+	require.NoError(t, err)
+	require.Len(t, archivedList, 1)
+	assert.Equal(t, archived.Id, archivedList[0].Id)
+	assert.Positive(t, archivedList[0].ArchivedAt)
+
+	// Details retain the original visibility rules and message rows.
+	view, messages, err := GetAssistantConversationHistory(l1.Id, archived.Id, 100)
+	require.NoError(t, err)
+	assert.Equal(t, archived.Id, view.Id)
+	require.Len(t, messages, 2)
+	assert.Equal(t, "keep this question", messages[0].Content)
+
+	_, err = ArchiveAssistantConversation(l0.Id, archived.Id)
+	assert.ErrorIs(t, err, ErrAssistantConversationAlreadyArchived)
+	updated, err = UnarchiveAssistantConversation(l0.Id, archived.Id)
+	require.NoError(t, err)
+	assert.Zero(t, updated.ArchivedAt)
+	_, err = UnarchiveAssistantConversation(l0.Id, archived.Id)
+	assert.ErrorIs(t, err, ErrAssistantConversationNotArchived)
+
+	activeList, err = ListAssistantConversations(l0.Id, l0.Id, 100, false)
+	require.NoError(t, err)
+	assert.Len(t, activeList, 2)
+	archivedList, err = ListAssistantConversations(l0.Id, l0.Id, 100, true)
+	require.NoError(t, err)
+	assert.Empty(t, archivedList)
+}
+
 func TestAssistantSecureCardIsOpaqueEncryptedOwnerOnlyAndOneTime(t *testing.T) {
 	l0, l1, _, _ := setupAssistantHistoryTestDB(t)
 	card, err := CreateAssistantSecureCard(
@@ -145,11 +209,38 @@ func TestAssistantKeySecureCardTransactionRollsBackCredentialOnCardFailure(t *te
 }
 
 func TestRedactAssistantHistoryContentCoversCredentialsAndPersonalData(t *testing.T) {
-	redacted := RedactAssistantHistoryContent("email: alice@example.com cookie=session-abc token=eyJabcDEF012345.abcDEF012345.abcDEF012345 api_key=sk_example_secret_123456")
-	for _, value := range []string{"alice@example.com", "session-abc", "eyJabcDEF012345", "sk_example_secret_123456"} {
+	redacted := RedactAssistantHistoryContent("email: alice@example.com cookie=session-abc token=eyJabcDEF012345.abcDEF012345.abcDEF012345 api_key=sk_example_secret_123456 bare=sk-live-secret-token-123456")
+	for _, value := range []string{"alice@example.com", "session-abc", "eyJabcDEF012345", "sk_example_secret_123456", "sk-live-secret-token-123456"} {
 		assert.NotContains(t, redacted, value)
 	}
 	assert.True(t, strings.Contains(redacted, "[REDACTED]") || strings.Contains(redacted, "[REDACTED_SECRET]"))
+}
+
+func TestRedactAssistantHistoryContentCoversPhonesNetworksCardsAndPrivateKeys(t *testing.T) {
+	redacted := RedactAssistantHistoryContent(`联系我 13800138000 或 +1 415 555 2671；IP 192.0.2.10、2001:db8::1；卡号 4111 1111 1111 1111；
+-----BEGIN PRIVATE KEY-----
+very-secret-key-material
+-----END PRIVATE KEY-----`)
+	for _, value := range []string{
+		"13800138000",
+		"+1 415 555 2671",
+		"192.0.2.10",
+		"2001:db8::1",
+		"4111 1111 1111 1111",
+		"very-secret-key-material",
+	} {
+		assert.NotContains(t, redacted, value)
+	}
+	assert.Contains(t, redacted, "[REDACTED_PHONE]")
+	assert.Contains(t, redacted, "[REDACTED_IP]")
+	assert.Contains(t, redacted, "[REDACTED_CARD]")
+	assert.Contains(t, redacted, "[REDACTED_PRIVATE_KEY]")
+}
+
+func TestRedactAssistantHistoryContentDoesNotTreatInvalidIPOrCardAsSensitive(t *testing.T) {
+	redacted := RedactAssistantHistoryContent("版本 1.2.3.999，编号 1234 5678 9012 3456")
+	assert.Contains(t, redacted, "1.2.3.999")
+	assert.Contains(t, redacted, "1234 5678 9012 3456")
 }
 
 func TestAssistantHistoryPostgreSQLMigration(t *testing.T) {

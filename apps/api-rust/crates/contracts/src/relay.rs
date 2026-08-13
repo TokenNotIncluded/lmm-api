@@ -10,13 +10,21 @@
 #![allow(missing_docs)]
 
 mod canonical;
+mod capability;
 mod convert;
+mod ir;
+mod ir_convert;
 mod json;
+mod registry;
 mod wire;
 
 pub use canonical::*;
+pub use capability::*;
 pub use convert::*;
+pub use ir::*;
+pub use ir_convert::*;
 pub use json::*;
+pub use registry::*;
 pub use wire::*;
 
 #[cfg(test)]

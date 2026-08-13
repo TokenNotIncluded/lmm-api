@@ -71,6 +71,8 @@ function parsePaymentMethods(
         name: typeof item.name === 'string' ? item.name : '',
         type,
         color: typeof item.color === 'string' ? item.color : undefined,
+        description:
+          typeof item.description === 'string' ? item.description : undefined,
         icon: typeof item.icon === 'string' ? item.icon : undefined,
         settlement_unit:
           typeof item.settlement_unit === 'string'

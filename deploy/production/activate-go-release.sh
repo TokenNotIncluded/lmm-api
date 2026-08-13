@@ -3,8 +3,8 @@ set -Eeuo pipefail
 umask 077
 
 readonly EXPECTED_HOST=arch-dmit
-readonly NEW_SERVICE=lmm-api-go.service
-readonly OLD_SERVICE=lmm-api.service
+readonly NEW_SERVICE=lmm-api.service
+readonly LEGACY_SERVICE=lmm-api-go.service
 if [[ ${LMM_DEPLOY_TEST_MODE:-0} == 1 ]]; then
   WORK_ROOT=${LMM_DEPLOY_TEST_WORK_ROOT:?}
   BACKUP_ROOT=${LMM_DEPLOY_TEST_BACKUP_ROOT:?}
@@ -19,10 +19,10 @@ if [[ ${LMM_DEPLOY_TEST_MODE:-0} == 1 ]]; then
   PACKAGED_FRONTEND_DIR=${LMM_DEPLOY_TEST_PACKAGED_FRONTEND_DIR:?}
   MIGRATION_WORKDIR=${LMM_DEPLOY_TEST_MIGRATION_WORKDIR:?}
   DIRECT_MIGRATION_WORKDIR=${LMM_DEPLOY_TEST_DIRECT_MIGRATION_WORKDIR:?}
-  REMOVED_BINARY=${LMM_DEPLOY_TEST_REMOVED_BINARY:?}
   REMOVED_SELECTOR=${LMM_DEPLOY_TEST_REMOVED_SELECTOR:?}
   REMOVED_PROVIDER_ROOT=${LMM_DEPLOY_TEST_REMOVED_PROVIDER_ROOT:?}
-  OLD_SERVICE_FILE=${LMM_DEPLOY_TEST_OLD_SERVICE_FILE:?}
+  REMOVED_LEGACY_SERVICE=${LMM_DEPLOY_TEST_REMOVED_LEGACY_SERVICE:?}
+  CANONICAL_LAUNCHER=${LMM_DEPLOY_TEST_CANONICAL_LAUNCHER:?}
   TRANSACTION_LOCK=${LMM_DEPLOY_TEST_TRANSACTION_LOCK:?}
   PROBE_ATTEMPTS=${LMM_DEPLOY_TEST_PROBE_ATTEMPTS:-1}
 else
@@ -33,16 +33,16 @@ else
   SYSTEMD_UNIT_ROOT=/etc/systemd/system
   OLD_CONFIG_DIR=/etc/lmm-api
   NEW_CONFIG_DIR=/etc/lmm-api-go
-  OLD_DROPIN_DIR=/etc/systemd/system/lmm-api.service.d
-  NEW_DROPIN_DIR=/etc/systemd/system/lmm-api-go.service.d
-  INSTALLED_BINARY=/usr/bin/lmm-api-go
+  OLD_DROPIN_DIR=/etc/systemd/system/lmm-api-go.service.d
+  NEW_DROPIN_DIR=/etc/systemd/system/lmm-api.service.d
+  INSTALLED_BINARY=/usr/bin/lmm-api
   PACKAGED_FRONTEND_DIR=/usr/share/lmm-api-go/frontend-dist
   MIGRATION_WORKDIR=/var/lib/lmm-api
   DIRECT_MIGRATION_WORKDIR=/var/lib/lmm-api-go
-  REMOVED_BINARY=/usr/bin/lmm-api
   REMOVED_SELECTOR=/usr/bin/lmm-api-select
   REMOVED_PROVIDER_ROOT=/usr/lib/lmm-api
-  OLD_SERVICE_FILE=/usr/lib/systemd/system/lmm-api.service
+  REMOVED_LEGACY_SERVICE=/usr/lib/systemd/system/lmm-api-go.service
+  CANONICAL_LAUNCHER=/usr/bin/lmm-api
   TRANSACTION_LOCK=/var/lib/lmm-api-go/deploy-transaction.lock
   PROBE_ATTEMPTS=45
 fi
@@ -50,7 +50,7 @@ readonly WORK_ROOT BACKUP_ROOT LOCK_FILE FRONTEND_ROOT SYSTEMD_UNIT_ROOT
 readonly OLD_CONFIG_DIR NEW_CONFIG_DIR OLD_DROPIN_DIR NEW_DROPIN_DIR
 readonly INSTALLED_BINARY PACKAGED_FRONTEND_DIR MIGRATION_WORKDIR
 readonly DIRECT_MIGRATION_WORKDIR
-readonly REMOVED_BINARY REMOVED_SELECTOR REMOVED_PROVIDER_ROOT OLD_SERVICE_FILE PROBE_ATTEMPTS
+readonly REMOVED_SELECTOR REMOVED_PROVIDER_ROOT REMOVED_LEGACY_SERVICE CANONICAL_LAUNCHER PROBE_ATTEMPTS
 readonly TRANSACTION_LOCK
 
 die() { printf 'activate-go-release: %s\n' "$*" >&2; return 2; }
@@ -163,6 +163,14 @@ active_migration_workdir() {
     split) printf '%s' "$MIGRATION_WORKDIR" ;;
     direct) printf '%s' "$DIRECT_MIGRATION_WORKDIR" ;;
   esac
+}
+
+old_service() {
+  if [[ $ROLLBACK_LAYOUT == split ]]; then
+    printf '%s\n' "$NEW_SERVICE"
+  else
+    printf '%s\n' "$LEGACY_SERVICE"
+  fi
 }
 
 native_request() {
@@ -439,13 +447,7 @@ perform_rollback() {
   write_status "ROLLING_BACK $reason"
   old_frontend=$(manifest_value old_frontend_release)
   config_restore=$state_dir/config-restore
-  if systemctl cat "$NEW_SERVICE" >/dev/null 2>&1; then
-    if [[ $ROLLBACK_LAYOUT == split ]]; then
-      systemctl disable --now "$NEW_SERVICE" >/dev/null 2>&1 || true
-    else
-      systemctl stop "$NEW_SERVICE" >/dev/null 2>&1 || true
-    fi
-  fi
+  systemctl disable --now "$NEW_SERVICE" >/dev/null 2>&1 || true
   if [[ -d $FRONTEND_ROOT/releases/$old_frontend ]]; then
     "$FRONTEND_RELEASE_SCRIPT" rollback --root "$FRONTEND_ROOT" --release "$old_frontend" --keep 3
   fi
@@ -454,16 +456,17 @@ perform_rollback() {
     install -d -m0700 "$OLD_CONFIG_DIR"
     install -m0600 "$config_restore/lmm-api/lmm-api.env" "$OLD_CONFIG_DIR/lmm-api.env"
     install -m0644 "$config_restore/lmm-api/backend.conf" "$OLD_CONFIG_DIR/backend.conf"
-    remove_owned_new_dropins
   else
     pacman -U --noconfirm "$ROLLBACK_GO"
     restore_direct_environment_config "$config_restore/lmm-api-go/lmm-api-go.env"
+    remove_owned_new_dropins
   fi
   systemctl daemon-reload
   if [[ $ROLLBACK_LAYOUT == split ]]; then
-    systemctl enable --now "$OLD_SERVICE"
+    systemctl enable --now "$(old_service)"
   else
-    systemctl enable --now "$NEW_SERVICE"
+    remove_owned_new_dropins
+    systemctl enable --now "$LEGACY_SERVICE"
   fi
   PROBE_BINARY=$(manifest_value probe_binary)
   OLD_VERSION=$(manifest_value old_version)
@@ -539,14 +542,14 @@ case $ACTION in
     [[ $(pacman -Qp "$ROLLBACK_GO") == "$(pacman -Q lmm-api-go)" ]] || die 'Go rollback package identity mismatch'
     if [[ $ROLLBACK_LAYOUT == split ]]; then
       [[ $(pacman -Qp "$ROLLBACK_CORE") == "$(pacman -Q lmm-api)" ]] || die 'core rollback package identity mismatch'
-      systemctl is-active --quiet "$OLD_SERVICE" || die 'pre-cutover service is not active'
-      systemctl is-enabled --quiet "$OLD_SERVICE" || die 'pre-cutover service is not enabled'
+      systemctl is-active --quiet "$(old_service)" || die 'pre-cutover service is not active'
+      systemctl is-enabled --quiet "$(old_service)" || die 'pre-cutover service is not enabled'
       validate_old_configuration_directory
     else
       [[ $(<"$ROLLBACK_CORE") == direct ]] || die 'direct rollback marker is invalid'
       ! pacman -Q lmm-api >/dev/null 2>&1 || die 'direct Go upgrade unexpectedly found the split core package'
-      systemctl is-active --quiet "$NEW_SERVICE" || die 'pre-upgrade Go service is not active'
-      systemctl is-enabled --quiet "$NEW_SERVICE" || die 'pre-upgrade Go service is not enabled'
+      systemctl is-active --quiet "$LEGACY_SERVICE" || die 'pre-upgrade Go service is not active'
+      systemctl is-enabled --quiet "$LEGACY_SERVICE" || die 'pre-upgrade Go service is not enabled'
       validate_current_go_configuration_directory
     fi
     old_frontend_link=$(readlink -- "$FRONTEND_ROOT/current")
@@ -622,12 +625,12 @@ EOF
     systemctl is-active --quiet "$timer_unit" || die 'rollback timer did not arm'
     write_status "ARMED deadline=$deadline_utc"
 		trap activation_error ERR
-		if [[ $ROLLBACK_LAYOUT == split ]]; then
-			copy_old_dropins_for_new_service
-			systemctl disable --now "$OLD_SERVICE"
-		else
-			systemctl stop "$NEW_SERVICE"
-		fi
+    if [[ $ROLLBACK_LAYOUT == split ]]; then
+      systemctl disable --now "$(old_service)"
+    else
+      copy_old_dropins_for_new_service
+      systemctl disable --now "$LEGACY_SERVICE"
+    fi
 		write_status "MIGRATING deadline=$deadline_utc version=$EXPECTED_VERSION"
 		run_candidate_migration apply
 		run_candidate_migration verify
@@ -650,9 +653,11 @@ EOF
     systemctl daemon-reload
     pacman -Qkk lmm-api-go >/dev/null
     [[ $("$INSTALLED_BINARY" version) == "$EXPECTED_VERSION" ]] || die 'installed binary version mismatch'
-    for removed in "$REMOVED_BINARY" "$REMOVED_SELECTOR" "$REMOVED_PROVIDER_ROOT" "$OLD_SERVICE_FILE"; do
+    for removed in "$REMOVED_SELECTOR" "$REMOVED_PROVIDER_ROOT" "$REMOVED_LEGACY_SERVICE"; do
       [[ ! -e $removed && ! -L $removed ]] || die "removed split-architecture path remains: $removed"
     done
+    [[ -L $CANONICAL_LAUNCHER && $(readlink -- "$CANONICAL_LAUNCHER") == lmm-api-go ]] || \
+      die 'canonical /usr/bin/lmm-api symlink is missing'
     systemctl enable --now "$NEW_SERVICE"
     "$FRONTEND_RELEASE_SCRIPT" publish --root "$FRONTEND_ROOT" \
       --source "$PACKAGED_FRONTEND_DIR" --release "$EXPECTED_VERSION" --keep 3

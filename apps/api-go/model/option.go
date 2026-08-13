@@ -197,6 +197,12 @@ func InitOptionMap() {
 	common.OptionMap[setting.AdvancedSecurityOnPromptOptionKey] = strconv.FormatBool(advancedSecuritySettings.OnPrompt)
 	common.OptionMap[setting.AdvancedSecurityActionOptionKey] = advancedSecuritySettings.Action
 	common.OptionMap[setting.AdvancedSecurityRulesOptionKey] = setting.AdvancedSecurityRulesToJSONString()
+	antiRelaySettings := setting.GetAntiRelaySettings()
+	common.OptionMap[setting.AntiRelayEnabledOptionKey] = strconv.FormatBool(antiRelaySettings.Enabled)
+	common.OptionMap[setting.AntiRelayRejectProxyHeadersOptionKey] = strconv.FormatBool(antiRelaySettings.RejectProxyHeaders)
+	common.OptionMap[setting.AntiRelayHTTPSOnlyOptionKey] = strconv.FormatBool(antiRelaySettings.HTTPSOnly)
+	common.OptionMap[setting.AntiRelayBlockedCIDRsOptionKey] = setting.AntiRelayBlockedCIDRsToJSONString()
+	common.OptionMap[setting.AntiRelayTrustedProxyCIDRsOptionKey] = setting.AntiRelayTrustedProxyCIDRsToJSONString()
 	common.OptionMap["StreamCacheQueueLength"] = strconv.Itoa(setting.StreamCacheQueueLength)
 	common.OptionMap["AutomaticDisableKeywords"] = operation_setting.AutomaticDisableKeywordsToString()
 	common.OptionMap["AutomaticDisableStatusCodes"] = operation_setting.AutomaticDisableStatusCodesToString()
@@ -238,6 +244,9 @@ func validateOptionValue(key string, value string) error {
 	if err := setting.ValidateAdvancedSecurityOption(key, value); err != nil {
 		return err
 	}
+	if err := setting.ValidateAntiRelayOption(key, value); err != nil {
+		return err
+	}
 	if key == operation_setting.ToolPriceOptionKey {
 		return operation_setting.ValidateToolPricesJSON(value)
 	}
@@ -247,6 +256,9 @@ func validateOptionValue(key string, value string) error {
 	}
 	if key == "MaxTokenAutoGroups" {
 		return setting.ValidateMaxTokenAutoGroups(value)
+	}
+	if key == operation_setting.ViolationFeeOptionKey+".policies" {
+		return operation_setting.ValidateViolationFeeSettingsJSON(`{"enabled":true,"policies":` + value + `}`)
 	}
 	return nil
 }
@@ -268,6 +280,14 @@ func UpdateOption(key string, value string) error {
 	DB.Save(&option)
 	// Update OptionMap
 	return updateOptionMap(key, value)
+}
+
+// ValidateOptionValue exposes the same validation used by UpdateOption without
+// persisting or mutating the in-memory option map.  Assistant admin previews
+// use this to reject an invalid change before issuing a one-time confirmation
+// flow.
+func ValidateOptionValue(key, value string) error {
+	return validateOptionValue(key, value)
 }
 
 // UpdateOptionsBulk persists multiple key/value pairs in a single database
@@ -309,6 +329,17 @@ func UpdateOptionsBulk(values map[string]string) error {
 }
 
 func updateOptionMap(key string, value string) (err error) {
+	// Legacy model-specific Grok violation options are intentionally ignored.
+	// The active policy is now operation_setting's provider-agnostic group
+	// policy; deleting these keys from the runtime map keeps old database rows
+	// from reappearing in the admin option API without requiring destructive
+	// migration of the historical rows.
+	if strings.HasPrefix(key, "grok.violation_") {
+		common.OptionMapRWMutex.Lock()
+		delete(common.OptionMap, key)
+		common.OptionMapRWMutex.Unlock()
+		return nil
+	}
 	if key == retiredThemeOptionKey {
 		common.OptionMapRWMutex.Lock()
 		delete(common.OptionMap, key)
@@ -424,6 +455,12 @@ func updateOptionMap(key string, value string) (err error) {
 			setting.SetAdvancedSecurityEnabled(boolValue)
 		case setting.AdvancedSecurityOnPromptOptionKey:
 			setting.SetAdvancedSecurityOnPrompt(boolValue)
+		case setting.AntiRelayEnabledOptionKey:
+			setting.SetAntiRelayEnabled(boolValue)
+		case setting.AntiRelayRejectProxyHeadersOptionKey:
+			setting.SetAntiRelayRejectProxyHeaders(boolValue)
+		case setting.AntiRelayHTTPSOnlyOptionKey:
+			setting.SetAntiRelayHTTPSOnly(boolValue)
 		case "SMTPSSLEnabled":
 			common.SMTPSSLEnabled = boolValue
 		case "SMTPStartTLSEnabled":
@@ -674,6 +711,10 @@ func updateOptionMap(key string, value string) (err error) {
 		err = setting.UpdateAdvancedSecurityAction(value)
 	case setting.AdvancedSecurityRulesOptionKey:
 		err = setting.UpdateAdvancedSecurityRules(value)
+	case setting.AntiRelayBlockedCIDRsOptionKey:
+		err = setting.UpdateAntiRelayBlockedCIDRs(value)
+	case setting.AntiRelayTrustedProxyCIDRsOptionKey:
+		err = setting.UpdateAntiRelayTrustedProxyCIDRs(value)
 	case "AutomaticDisableKeywords":
 		operation_setting.AutomaticDisableKeywordsFromString(value)
 	case "AutomaticDisableStatusCodes":

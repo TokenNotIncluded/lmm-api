@@ -21,7 +21,12 @@ import { describe, test } from 'node:test'
 
 import { api } from '@/lib/api'
 
-import { getUsers, searchUsers } from './api'
+import {
+  getAssistantUserProfile,
+  getUsers,
+  searchUsers,
+  updateAssistantUserProfile,
+} from './api'
 
 describe('user management API filters', () => {
   test('passes the L0 filter to the paginated user endpoint', async () => {
@@ -66,6 +71,70 @@ describe('user management API filters', () => {
       assert.equal(params.get('trust_level'), '0')
     } finally {
       api.get = originalGet
+    }
+  })
+})
+
+describe('administrator assistant profile API', () => {
+  test('uses the admin-only per-user profile endpoints', async () => {
+    const originalGet = api.get
+    const originalPut = api.put
+    const requests: Array<{ method: string; url: string; data?: unknown }> = []
+    api.get = (async (url: string) => {
+      requests.push({ method: 'GET', url })
+      return {
+        data: {
+          success: true,
+          data: {
+            profile_key: 'guided_buyer',
+            tags: ['new-user'],
+            strategy: 'Ask one question at a time.',
+            enabled: true,
+            updated_at: 1,
+          },
+        },
+      }
+    }) as typeof api.get
+    api.put = (async (url: string, data: unknown) => {
+      requests.push({ method: 'PUT', url, data })
+      return {
+        data: {
+          success: true,
+          data: {
+            profile_key: 'guided_buyer',
+            tags: ['new-user'],
+            strategy: 'Ask one question at a time.',
+            enabled: true,
+            updated_at: 2,
+          },
+        },
+      }
+    }) as typeof api.put
+
+    try {
+      await getAssistantUserProfile(41)
+      await updateAssistantUserProfile(41, {
+        profile_key: 'guided_buyer',
+        tags: ['new-user'],
+        strategy: 'Ask one question at a time.',
+        enabled: true,
+      })
+      assert.deepEqual(requests, [
+        { method: 'GET', url: '/api/user/41/assistant-profile' },
+        {
+          method: 'PUT',
+          url: '/api/user/41/assistant-profile',
+          data: {
+            profile_key: 'guided_buyer',
+            tags: ['new-user'],
+            strategy: 'Ask one question at a time.',
+            enabled: true,
+          },
+        },
+      ])
+    } finally {
+      api.get = originalGet
+      api.put = originalPut
     }
   })
 })

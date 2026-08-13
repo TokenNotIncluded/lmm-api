@@ -95,7 +95,7 @@ describe('console activation boundary', () => {
     })
 
     assert.equal(isConsoleActivated(account), true)
-    assert.equal(getAuthenticatedLandingRoute(account), '/getting-started')
+    assert.equal(getAuthenticatedLandingRoute(account), '/dashboard')
   })
 
   test('lands only explicitly granted complete accounts in the dashboard', () => {
@@ -127,7 +127,7 @@ describe('console activation boundary', () => {
           } as AuthUser['trust_level_info'],
         })
       ),
-      '/getting-started'
+      '/dashboard'
     )
   })
 

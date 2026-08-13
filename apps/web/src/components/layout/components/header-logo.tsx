@@ -47,6 +47,12 @@ export function HeaderLogo({
   decoding,
   fetchPriority,
 }: HeaderLogoProps) {
+  const isCustomLogo = src !== DEFAULT_LOGO
+  let visibilityClassName: string | undefined
+  if (isCustomLogo) {
+    visibilityClassName = loading || !logoLoaded ? 'opacity-0' : 'opacity-100'
+  }
+
   return (
     <BrandLogo
       src={src}
@@ -57,11 +63,7 @@ export function HeaderLogo({
       fetchPriority={fetchPriority}
       className={cn(
         'h-7 w-7 transition-opacity duration-200',
-        src !== DEFAULT_LOGO && !loading && logoLoaded
-          ? 'opacity-100'
-          : src !== DEFAULT_LOGO
-            ? 'opacity-0'
-            : undefined,
+        visibilityClassName,
         className
       )}
     />

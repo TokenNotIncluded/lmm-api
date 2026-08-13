@@ -99,6 +99,7 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 		return nil
 	}
 
+	emitReasoningAsThinking := !convmeta.OptionsOf(info).EnableMessagesToGPTCompatibility
 	var claudeResponses []*dto.ClaudeResponse
 	// stopOpenBlocks emits the required content_block_stop event(s) for the currently open block(s)
 	// according to Anthropic's SSE streaming state machine:
@@ -195,7 +196,7 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 			reasoning := openAIResponse.Choices[0].Delta.GetReasoningContent()
 			content := openAIResponse.Choices[0].Delta.GetContentString()
 
-			if reasoning != "" {
+			if emitReasoningAsThinking && reasoning != "" {
 				if state.LastMessagesType != convmeta.LastMessageTypeThinking {
 					stopOpenBlocksAndAdvance()
 				}
@@ -365,8 +366,8 @@ func StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamRespon
 		} else {
 			reasoning := chosenChoice.Delta.GetReasoningContent()
 			textContent := chosenChoice.Delta.GetContentString()
-			if reasoning != "" || textContent != "" {
-				if reasoning != "" {
+			if (emitReasoningAsThinking && reasoning != "") || textContent != "" {
+				if emitReasoningAsThinking && reasoning != "" {
 					if state.LastMessagesType != convmeta.LastMessageTypeThinking {
 						stopOpenBlocksAndAdvance()
 						idx := state.Index

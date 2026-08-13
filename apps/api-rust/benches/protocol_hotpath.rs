@@ -1,0 +1,340 @@
+//! Offline microbench calibration for request, response, and stream paths.
+//!
+//! This intentionally uses only the standard library harness (`Instant` and
+//! `black_box`) plus the production contract APIs. It reports measured
+//! throughput and per-operation p50/p95 from batch-average samples. An
+//! accepted regression baseline remains an external release artifact. The
+//! tests are ignored by default so a normal test run does not become a
+//! benchmark run.
+
+use std::{hint::black_box, time::Instant};
+
+use lmm_api_rs::{
+    migration_routes::sse::SseFrameParser, protocol_runtime_registry::validated_current_registry,
+};
+use lmm_contracts::relay::{
+    CanonicalStreamEvent, ConversionPlan, Fidelity, OpenAiChatRequest, OpenAiChatResponse,
+    OpenAiStreamSnapshot, Protocol, openai_chat_request_to_canonical,
+    openai_chat_response_to_canonical, openai_stream_to_canonical,
+};
+
+const SAMPLE_COUNT: usize = 32;
+const ITERATIONS_PER_SAMPLE: usize = 4;
+const TOTAL_ITERATIONS: usize = SAMPLE_COUNT * ITERATIONS_PER_SAMPLE;
+
+const REQUEST_CORPUS: &[u8] = br#"{
+  "model":"gpt-bench",
+  "messages":[{"role":"user","content":"calibrate"}],
+  "stream":false
+}"#;
+
+const RESPONSE_CORPUS: &[u8] = br#"{
+  "id":"bench-response",
+  "object":"chat.completion",
+  "created":1,
+  "model":"gpt-bench",
+  "choices":[{"index":0,"message":{"role":"assistant","content":"answer"},"finish_reason":"stop"}],
+  "usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}
+}"#;
+
+const STREAM_CORPUS: &[u8] = br#"{
+  "events":[
+    {"id":"bench-stream","model":"gpt-bench","choices":[{"index":0,"delta":{"role":"assistant","content":"a"}}]},
+    {"id":"bench-stream","model":"gpt-bench","choices":[{"index":0,"delta":{"content":"b"}}]},
+    {"id":"bench-stream","model":"gpt-bench","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}
+  ],
+  "usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}
+}"#;
+
+const SSE_CORPUS: &[u8] = b"event: update\r\ndata: one\r\ndata: two\r\n\r\ndata: [DONE]\n\n";
+
+const NATIVE_PASSTHROUGH_CORPUS: &[u8] = b"data: provider bytes stay opaque\n\ndata: [DONE]\n\n";
+
+fn request_scenario(text_bytes: usize, history_messages: usize, tool_count: usize) -> Vec<u8> {
+    let content = "x".repeat(text_bytes);
+    let messages = (0..history_messages)
+        .map(|index| {
+            serde_json::json!({
+                "role": if index % 2 == 0 { "user" } else { "assistant" },
+                "content": content,
+            })
+        })
+        .collect::<Vec<_>>();
+    let tools = (0..tool_count)
+        .map(|index| {
+            serde_json::json!({
+                "type": "function",
+                "function": {
+                    "name": format!("tool_{index}"),
+                    "description": "benchmark tool",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"value": {"type": "string"}},
+                    },
+                },
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_vec(&serde_json::json!({
+        "model": "gpt-bench",
+        "messages": messages,
+        "tools": tools,
+        "stream": false,
+    }))
+    .expect("serialize request scenario")
+}
+
+fn stream_scenario(chunk_count: usize) -> Vec<u8> {
+    let mut events = Vec::with_capacity(chunk_count.saturating_add(1));
+    for index in 0..chunk_count {
+        events.push(serde_json::json!({
+            "id": "bench-stream",
+            "model": "gpt-bench",
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "role": (index == 0).then_some("assistant"),
+                    "content": "x",
+                },
+            }],
+        }));
+    }
+    events.push(serde_json::json!({
+        "id": "bench-stream",
+        "model": "gpt-bench",
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 2, "completion_tokens": chunk_count, "total_tokens": chunk_count.saturating_add(2)},
+    }));
+    serde_json::to_vec(&serde_json::json!({
+        "events": events,
+        "usage": {"prompt_tokens": 2, "completion_tokens": chunk_count, "total_tokens": chunk_count.saturating_add(2)},
+    }))
+    .expect("serialize stream scenario")
+}
+
+fn calibrate(label: &str, bytes: usize, mut operation: impl FnMut() -> u64) {
+    for _ in 0..ITERATIONS_PER_SAMPLE {
+        black_box(operation());
+    }
+    let mut sample_nanos = Vec::with_capacity(SAMPLE_COUNT);
+    let mut checksum = 0_u64;
+    let mut total_elapsed_nanos = 0_u128;
+    for _ in 0..SAMPLE_COUNT {
+        let started = Instant::now();
+        for _ in 0..ITERATIONS_PER_SAMPLE {
+            checksum = checksum.wrapping_add(black_box(operation()));
+        }
+        let elapsed_nanos = started.elapsed().as_nanos().max(1);
+        total_elapsed_nanos = total_elapsed_nanos.saturating_add(elapsed_nanos);
+        sample_nanos.push(elapsed_nanos.div_ceil(ITERATIONS_PER_SAMPLE as u128).max(1));
+    }
+    sample_nanos.sort_unstable();
+    let p50_nanos = sample_nanos[(SAMPLE_COUNT / 2).saturating_sub(1)];
+    let p95_index = (SAMPLE_COUNT * 95).div_ceil(100).saturating_sub(1);
+    let p95_nanos = sample_nanos[p95_index];
+    let operations_per_second = (TOTAL_ITERATIONS as u128)
+        .saturating_mul(1_000_000_000)
+        .checked_div(total_elapsed_nanos.max(1))
+        .unwrap_or(0);
+    let total_bytes = (bytes as u128).saturating_mul(TOTAL_ITERATIONS as u128);
+    let bytes_per_second = (bytes != 0)
+        .then(|| {
+            total_bytes
+                .checked_mul(1_000_000_000)
+                .and_then(|value| value.checked_div(total_elapsed_nanos.max(1)))
+                .unwrap_or(0)
+        })
+        .unwrap_or(0);
+    eprintln!(
+        "protocol_hotpath label={label} samples={SAMPLE_COUNT} iterations_per_sample={ITERATIONS_PER_SAMPLE} operations_per_second={operations_per_second} bytes_per_second={bytes_per_second} p50_nanos={p50_nanos} p95_nanos={p95_nanos} checksum={checksum}"
+    );
+    assert_ne!(checksum, 0, "benchmark semantic checksum must be non-zero");
+}
+
+#[test]
+#[ignore = "run explicitly as an offline calibration benchmark"]
+fn request_conversion_hotpath_calibration() {
+    calibrate("request", REQUEST_CORPUS.len(), || {
+        let request: OpenAiChatRequest =
+            serde_json::from_slice(black_box(REQUEST_CORPUS)).expect("request corpus");
+        let converted =
+            black_box(openai_chat_request_to_canonical(request).expect("request conversion"));
+        (converted.value.model.len() as u64).wrapping_add(converted.value.messages.len() as u64)
+    });
+}
+
+#[test]
+#[ignore = "run explicitly as an offline calibration benchmark"]
+fn request_conversion_dimension_matrix_calibration() {
+    for (label, text_bytes, history_messages, tool_count) in [
+        ("request_text_1k", 1_024, 1, 0),
+        ("request_text_16k", 16_384, 1, 0),
+        ("request_text_256k", 262_144, 1, 0),
+        ("request_history_10", 64, 10, 0),
+        ("request_history_100", 64, 100, 0),
+        ("request_tools_1", 64, 1, 1),
+        ("request_tools_8", 64, 1, 8),
+        ("request_tools_32", 64, 1, 32),
+    ] {
+        let corpus = request_scenario(text_bytes, history_messages, tool_count);
+        calibrate(label, corpus.len(), || {
+            let request: OpenAiChatRequest =
+                serde_json::from_slice(black_box(corpus.as_slice())).expect("request scenario");
+            let converted = black_box(
+                openai_chat_request_to_canonical(request).expect("request scenario conversion"),
+            );
+            (converted.value.model.len() as u64)
+                .wrapping_add(converted.value.messages.len() as u64)
+                .wrapping_add(converted.value.tools.len() as u64)
+        });
+    }
+}
+
+#[test]
+#[ignore = "run explicitly as an offline calibration benchmark"]
+fn response_conversion_hotpath_calibration() {
+    calibrate("response", RESPONSE_CORPUS.len(), || {
+        let response: OpenAiChatResponse =
+            serde_json::from_slice(black_box(RESPONSE_CORPUS)).expect("response corpus");
+        let converted =
+            black_box(openai_chat_response_to_canonical(response).expect("response conversion"));
+        (converted.value.id.len() as u64)
+            .wrapping_add(converted.value.output.len() as u64)
+            .wrapping_add(
+                converted
+                    .value
+                    .usage
+                    .as_ref()
+                    .map_or(0, |usage| usage.total_tokens),
+            )
+    });
+}
+
+#[test]
+#[ignore = "run explicitly as an offline calibration benchmark"]
+fn stream_conversion_hotpath_calibration() {
+    calibrate("stream", STREAM_CORPUS.len(), || {
+        let snapshot: OpenAiStreamSnapshot =
+            serde_json::from_slice(black_box(STREAM_CORPUS)).expect("stream corpus");
+        let events = black_box(openai_stream_to_canonical(&snapshot));
+        events.iter().fold(0_u64, |value, event| match event {
+            CanonicalStreamEvent::TextDelta { delta, .. }
+            | CanonicalStreamEvent::ReasoningDelta { delta, .. }
+            | CanonicalStreamEvent::ToolArgumentsDelta { delta, .. } => {
+                value.wrapping_add(delta.len() as u64)
+            }
+            _ => value.wrapping_add(1),
+        })
+    });
+}
+
+#[test]
+#[ignore = "run explicitly as an offline calibration benchmark"]
+fn stream_chunk_cardinality_calibration() {
+    for (label, chunk_count) in [
+        ("stream_chunks_10", 10),
+        ("stream_chunks_100", 100),
+        ("stream_chunks_1000", 1_000),
+    ] {
+        let corpus = stream_scenario(chunk_count);
+        calibrate(label, corpus.len(), || {
+            let snapshot: OpenAiStreamSnapshot =
+                serde_json::from_slice(black_box(corpus.as_slice())).expect("stream scenario");
+            let events = black_box(openai_stream_to_canonical(&snapshot));
+            events.iter().fold(0_u64, |value, event| match event {
+                CanonicalStreamEvent::TextDelta { delta, .. }
+                | CanonicalStreamEvent::ReasoningDelta { delta, .. }
+                | CanonicalStreamEvent::ToolArgumentsDelta { delta, .. } => {
+                    value.wrapping_add(delta.len() as u64)
+                }
+                _ => value.wrapping_add(1),
+            })
+        });
+    }
+}
+
+#[test]
+#[ignore = "run explicitly as an offline calibration benchmark"]
+fn sse_frame_parser_hotpath_calibration() {
+    calibrate("sse", SSE_CORPUS.len(), || {
+        let mut parser = SseFrameParser::new(1024);
+        let frames = black_box(parser.feed(SSE_CORPUS).expect("SSE corpus"));
+        let tail = black_box(parser.finish().expect("SSE EOF"));
+        frames
+            .iter()
+            .map(|frame| frame.raw.len() as u64)
+            .sum::<u64>()
+            .wrapping_add(
+                frames
+                    .iter()
+                    .map(|frame| frame.data.len() as u64)
+                    .sum::<u64>(),
+            )
+            .wrapping_add(tail.iter().map(|frame| frame.raw.len() as u64).sum::<u64>())
+    });
+}
+
+#[test]
+#[ignore = "run explicitly as an offline calibration benchmark"]
+fn sse_incremental_byte_partition_calibration() {
+    calibrate("sse_incremental_one_byte", SSE_CORPUS.len(), || {
+        let mut parser = SseFrameParser::new(1024);
+        let mut checksum = 0_u64;
+        for chunk in black_box(SSE_CORPUS).chunks(1) {
+            let frames = parser.feed(chunk).expect("incremental SSE corpus");
+            checksum = frames.iter().fold(checksum, |value, frame| {
+                value.wrapping_add(frame.raw.len() as u64)
+            });
+        }
+        let tail = parser.finish().expect("incremental SSE EOF");
+        tail.iter().fold(checksum, |value, frame| {
+            value.wrapping_add(frame.raw.len() as u64)
+        })
+    });
+}
+
+#[test]
+#[ignore = "run explicitly as an offline calibration benchmark"]
+fn native_passthrough_hotpath_calibration() {
+    calibrate(
+        "native_passthrough",
+        NATIVE_PASSTHROUGH_CORPUS.len(),
+        || {
+            // This is deliberately a slice observation, not an HTTP benchmark:
+            // the pointer assertion makes an accidental body copy visible.
+            let bytes = black_box(NATIVE_PASSTHROUGH_CORPUS);
+            assert_eq!(bytes.as_ptr(), NATIVE_PASSTHROUGH_CORPUS.as_ptr());
+            bytes.iter().fold(0_u64, |value, byte| {
+                value.wrapping_mul(257).wrapping_add(u64::from(*byte))
+            })
+        },
+    );
+}
+
+#[test]
+#[ignore = "run explicitly as an offline calibration benchmark"]
+fn plan_compile_hotpath_calibration() {
+    let registry = validated_current_registry().expect("runtime registry");
+    // Plan compilation has no meaningful byte denominator, so this reports
+    // operations/second and latency while leaving bytes/second at zero.
+    calibrate("plan_compile", 0, || {
+        let plan = black_box(
+            ConversionPlan::compile_with_validated_registry(
+                Protocol::OpenAi,
+                Protocol::OpenAi,
+                "gpt-bench",
+                &registry,
+            )
+            .expect("raw conversion plan"),
+        );
+        let fidelity: u64 = match plan.fidelity {
+            Fidelity::Exact => 0,
+            Fidelity::Normalized => 1,
+            Fidelity::Lossy => 2,
+            Fidelity::Unsupported => 3,
+        };
+        fidelity
+            .wrapping_add(plan.hop_count as u64)
+            .wrapping_add(plan.converter_ids.len() as u64)
+    });
+}

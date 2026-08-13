@@ -8,12 +8,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 )
 
 const (
+	paymentMethodEnabledKey          = "enabled"
 	paymentMethodUnlockAfterDaysKey  = "unlock_after_days"
 	paymentMethodAudienceModeKey     = "audience_mode"
 	paymentMethodAudienceMatchKey    = "audience_match"
@@ -21,6 +23,8 @@ const (
 	paymentMethodAudienceOAuthKey    = "audience_oauth_provider"
 	paymentMethodAudienceScoreMinKey = "audience_linuxdo_score_min"
 	paymentMethodAudienceScoreMaxKey = "audience_linuxdo_score_max"
+	paymentMethodAudienceGroupKey    = "audience_user_group"
+	paymentMethodAudienceRoleKey     = "audience_role"
 	secondsPerDay                    = int64(24 * time.Hour / time.Second)
 )
 
@@ -31,6 +35,32 @@ type paymentMethodAudienceRule struct {
 	OAuthProvider string
 	ScoreMin      *float64
 	ScoreMax      *float64
+	UserGroup     string
+	Role          string
+}
+
+// configuredPaymentMethodEnabled applies the safest value when duplicate
+// entries share a payment type: one explicit disabled entry disables the
+// type. Checkout only carries the type, so a duplicate must not weaken policy.
+func configuredPaymentMethodEnabled(paymentType string) (bool, error) {
+	paymentType = strings.TrimSpace(paymentType)
+	for _, method := range operation_setting.PayMethods {
+		if strings.TrimSpace(method["type"]) != paymentType {
+			continue
+		}
+		rawEnabled := strings.TrimSpace(method[paymentMethodEnabledKey])
+		if rawEnabled == "" {
+			continue
+		}
+		enabled, err := strconv.ParseBool(rawEnabled)
+		if err != nil {
+			return false, fmt.Errorf("payment method %q has invalid %s", paymentType, paymentMethodEnabledKey)
+		}
+		if !enabled {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // configuredPaymentMethodUnlockDays returns the strongest unlock delay for a
@@ -123,6 +153,10 @@ func parsePaymentMethodAudienceRule(method map[string]string) (paymentMethodAudi
 		return paymentMethodAudienceRule{}, true, fmt.Errorf("LinuxDO score minimum exceeds maximum")
 	}
 
+	configuredRole := strings.ToLower(strings.TrimSpace(method[paymentMethodAudienceRoleKey]))
+	if configuredRole == "none" {
+		configuredRole = ""
+	}
 	rule := paymentMethodAudienceRule{
 		Mode:          mode,
 		Match:         match,
@@ -130,6 +164,8 @@ func parsePaymentMethodAudienceRule(method map[string]string) (paymentMethodAudi
 		OAuthProvider: strings.ToLower(strings.TrimSpace(method[paymentMethodAudienceOAuthKey])),
 		ScoreMin:      scoreMin,
 		ScoreMax:      scoreMax,
+		UserGroup:     strings.TrimSpace(method[paymentMethodAudienceGroupKey]),
+		Role:          configuredRole,
 	}
 	if rule.OAuthProvider != "" {
 		normalizedProvider := strings.ReplaceAll(rule.OAuthProvider, ".", "")
@@ -140,7 +176,14 @@ func parsePaymentMethodAudienceRule(method map[string]string) (paymentMethodAudi
 			return paymentMethodAudienceRule{}, true, fmt.Errorf("unsupported OAuth provider %q", rule.OAuthProvider)
 		}
 	}
-	if mode != "all" && rule.EmailContains == "" && rule.OAuthProvider == "" && scoreMin == nil && scoreMax == nil {
+	if rule.Role != "" {
+		switch rule.Role {
+		case "common", "admin", "root":
+		default:
+			return paymentMethodAudienceRule{}, true, fmt.Errorf("unsupported payment audience role %q", rule.Role)
+		}
+	}
+	if mode != "all" && rule.EmailContains == "" && rule.OAuthProvider == "" && scoreMin == nil && scoreMax == nil && rule.UserGroup == "" && rule.Role == "" {
 		return paymentMethodAudienceRule{}, true, fmt.Errorf("payment audience rule has no conditions")
 	}
 	return rule, true, nil
@@ -168,11 +211,43 @@ func userHasOAuthProvider(user *model.User, provider string) bool {
 	}
 }
 
+func userHasPaymentAudienceGroup(user *model.User, configuredGroups string) bool {
+	if user == nil {
+		return false
+	}
+	userGroup := strings.TrimSpace(user.Group)
+	if userGroup == "" {
+		return false
+	}
+	for _, group := range strings.Split(configuredGroups, ",") {
+		if strings.EqualFold(userGroup, strings.TrimSpace(group)) {
+			return true
+		}
+	}
+	return false
+}
+
+func userHasPaymentAudienceRole(user *model.User, role string) bool {
+	if user == nil {
+		return false
+	}
+	switch role {
+	case "common":
+		return user.Role == common.RoleCommonUser
+	case "admin":
+		return user.Role >= common.RoleAdminUser && user.Role < common.RoleRootUser
+	case "root":
+		return user.Role >= common.RoleRootUser
+	default:
+		return false
+	}
+}
+
 func paymentMethodAudienceRuleMatches(user *model.User, rule paymentMethodAudienceRule) bool {
 	if user == nil {
 		return false
 	}
-	conditions := make([]bool, 0, 3)
+	conditions := make([]bool, 0, 5)
 	if rule.EmailContains != "" {
 		conditions = append(conditions, strings.Contains(strings.ToLower(strings.TrimSpace(user.Email)), rule.EmailContains))
 	}
@@ -189,6 +264,12 @@ func paymentMethodAudienceRuleMatches(user *model.User, rule paymentMethodAudien
 			matches = score <= *rule.ScoreMax
 		}
 		conditions = append(conditions, matches)
+	}
+	if rule.UserGroup != "" {
+		conditions = append(conditions, userHasPaymentAudienceGroup(user, rule.UserGroup))
+	}
+	if rule.Role != "" {
+		conditions = append(conditions, userHasPaymentAudienceRole(user, rule.Role))
 	}
 
 	if rule.Match == "all" {
@@ -239,6 +320,10 @@ func paymentMethodVisibleForUser(user *model.User, paymentType string) (bool, er
 }
 
 func paymentMethodAvailableForUser(user *model.User, paymentType string, now time.Time) (bool, int64, error) {
+	enabled, err := configuredPaymentMethodEnabled(paymentType)
+	if err != nil || !enabled {
+		return false, 0, err
+	}
 	unlocked, unlockAt, err := paymentMethodUnlockedForUser(user, paymentType, now)
 	if err != nil || !unlocked {
 		return false, unlockAt, err

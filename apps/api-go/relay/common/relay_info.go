@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/model_setting"
+	"github.com/QuantumNous/new-api/setting/reasoning"
 	hosttypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -776,6 +777,18 @@ func (info *RelayInfo) IncrSendResponseCount() {
 	info.SendResponseCount++
 }
 
+func isMessagesToGPTCompatibilityModel(modelName string) bool {
+	modelName = strings.TrimSpace(modelName)
+	if modelName == "" {
+		return false
+	}
+	if slashIdx := strings.LastIndex(modelName, "/"); slashIdx != -1 && slashIdx < len(modelName)-1 {
+		modelName = modelName[slashIdx+1:]
+	}
+	_, baseModel := reasoning.ParseOpenAIReasoningEffortFromModelSuffix(modelName)
+	return dto.IsOpenAIReasoningOModel(baseModel) || dto.IsOpenAIGPT5Model(baseModel)
+}
+
 // ConvOptions snapshots host settings for the converters. Rebuilt on each
 // call site's first use; cached so one relay session sees one snapshot.
 func (info *RelayInfo) ConvOptions() *convmeta.Options {
@@ -798,7 +811,9 @@ func (info *RelayInfo) ConvOptions() *convmeta.Options {
 			SupportsImagine:                       model_setting.IsGeminiModelSupportImagine,
 			SafetySetting:                         model_setting.GetGeminiSafetySetting,
 		},
-		OpenRouterDialect:      info != nil && info.GetChannelType() == constant.ChannelTypeOpenRouter,
+		OpenRouterDialect: info != nil && info.GetChannelType() == constant.ChannelTypeOpenRouter,
+		EnableMessagesToGPTCompatibility: isMessagesToGPTCompatibilityModel(info.GetOriginModelName()) ||
+			isMessagesToGPTCompatibilityModel(info.GetUpstreamModelName()),
 		PreserveThinkingSuffix: model_setting.ShouldPreserveThinkingSuffix,
 	}
 	if info != nil {

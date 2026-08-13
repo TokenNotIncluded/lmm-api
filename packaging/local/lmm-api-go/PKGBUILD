@@ -43,9 +43,9 @@ package() {
   local file
 
   install -Dm0755 "${srcdir}/lmm-api-go" "${pkgdir}/usr/bin/lmm-api-go"
-  ln -s lmm-api-go "${pkgdir}/usr/bin/lmm-api"
-  install -Dm0644 "${srcdir}/lmm-api.service" \
-    "${pkgdir}/usr/lib/systemd/system/lmm-api.service"
+	ln -s lmm-api-go "${pkgdir}/usr/bin/lmm-api"
+	install -Dm0644 "${srcdir}/lmm-api.service" \
+		"${pkgdir}/usr/lib/systemd/system/lmm-api.service"
   install -Dm0644 "${srcdir}/geoip2-country-update.service" \
     "${pkgdir}/usr/lib/systemd/system/geoip2-country-update.service"
   install -Dm0644 "${srcdir}/geoip2-country-update.timer" \

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"regexp"
 	"strings"
 	"time"
@@ -34,19 +35,26 @@ const (
 )
 
 var (
-	ErrAssistantConversationNotFound = errors.New("assistant conversation not found")
-	ErrAssistantHistoryForbidden     = errors.New("assistant conversation is not visible to this account")
-	ErrAssistantSecureCardNotFound   = errors.New("assistant secure card not found")
-	ErrAssistantSecureCardConsumed   = errors.New("assistant secure card has already been revealed")
-	ErrAssistantSecureCardExpired    = errors.New("assistant secure card has expired")
+	ErrAssistantConversationNotFound        = errors.New("assistant conversation not found")
+	ErrAssistantHistoryForbidden            = errors.New("assistant conversation is not visible to this account")
+	ErrAssistantConversationAlreadyArchived = errors.New("assistant conversation is already archived")
+	ErrAssistantConversationNotArchived     = errors.New("assistant conversation is not archived")
+	ErrAssistantSecureCardNotFound          = errors.New("assistant secure card not found")
+	ErrAssistantSecureCardConsumed          = errors.New("assistant secure card has already been revealed")
+	ErrAssistantSecureCardExpired           = errors.New("assistant secure card has expired")
 
-	assistantHistoryAPIKeyPattern = regexp.MustCompile(`(?i)\b(?:sk|rk|pk|ak|tok|token|key|secret)_[a-z0-9._~+/-]{8,}\b`)
+	assistantHistoryAPIKeyPattern = regexp.MustCompile(`(?i)\b(?:sk|rk|pk|ak|tok|token|key|secret)[_-][a-z0-9._~+/-]{8,}\b`)
 	assistantHistoryJWTPattern    = regexp.MustCompile(`\beyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\b`)
 	assistantHistoryEmailPattern  = regexp.MustCompile(`(?i)\b[a-z0-9.!#$%&'*+/=?^_` + "`" + `{|}~-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+\b`)
 	assistantHistoryCookiePattern = regexp.MustCompile(`(?i)\b(cookie|set-cookie|session(?:[_ -]?id)?|csrf(?:[_ -]?token)?)\s*[:=：]\s*[^\s;,]+`)
 	assistantHistoryBearerPattern = regexp.MustCompile(`(?i)\bbearer\s+[a-z0-9._~+/-]{6,}=*`)
 	assistantHistorySecretPattern = regexp.MustCompile(`(?i)\b(password|passwd|pwd|api[ _-]?key|access[ _-]?token|refresh[ _-]?token|bearer|authorization|密碼|密码|密钥|令牌)\s*[:=：]\s*[^\s,;]+`)
 	assistantHistoryURLSecret     = regexp.MustCompile(`(?i)([?&](?:api[_-]?key|access[_-]?token|token|password|passwd|secret)=)[^&#\s]+`)
+	assistantHistoryPEMPrivateKey = regexp.MustCompile(`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----`)
+	assistantHistoryIPv4Pattern   = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
+	assistantHistoryIPv6Pattern   = regexp.MustCompile(`[0-9A-Fa-f:]{2,39}`)
+	assistantHistoryPhonePattern  = regexp.MustCompile(`(^|[^\w])((?:\+?86[\s-]?)?1[3-9]\d{9}|\+\d{1,3}(?:[\s.-]?\d{2,4}){2,4})([^\w]|$)`)
+	assistantHistoryCardPattern   = regexp.MustCompile(`(^|[^0-9])([0-9][0-9 -]{11,22}[0-9])([^0-9]|$)`)
 )
 
 // AssistantConversation holds only redacted, support-oriented text.  Its
@@ -59,6 +67,7 @@ type AssistantConversation struct {
 	LastMessagePreview string `json:"last_message_preview" gorm:"type:varchar(512);not null"`
 	CreatedAt          int64  `json:"created_at" gorm:"not null;index"`
 	UpdatedAt          int64  `json:"updated_at" gorm:"not null;index:idx_assistant_conversation_user_updated,priority:2"`
+	ArchivedAt         int64  `json:"archived_at" gorm:"not null;default:0;index"`
 }
 
 func (AssistantConversation) TableName() string { return "assistant_conversations" }
@@ -112,6 +121,7 @@ type AssistantConversationView struct {
 	LastMessagePreview string `json:"last_message_preview"`
 	CreatedAt          int64  `json:"created_at"`
 	UpdatedAt          int64  `json:"updated_at"`
+	ArchivedAt         int64  `json:"archived_at"`
 	Owner              string `json:"owner"`
 	PrivacyNotice      string `json:"privacy_notice"`
 }
@@ -130,14 +140,73 @@ type AssistantHistoryMessageView struct {
 // false positives over retaining credentials in a support transcript.
 func RedactAssistantHistoryContent(value string) string {
 	value = strings.TrimSpace(value)
+	value = assistantHistoryPEMPrivateKey.ReplaceAllString(value, "[REDACTED_PRIVATE_KEY]")
 	value = assistantHistoryURLSecret.ReplaceAllString(value, "$1[REDACTED]")
 	value = assistantHistoryCookiePattern.ReplaceAllString(value, "$1: [REDACTED]")
 	value = assistantHistoryBearerPattern.ReplaceAllString(value, "Bearer [REDACTED_TOKEN]")
 	value = assistantHistorySecretPattern.ReplaceAllString(value, "$1: [REDACTED]")
-	value = assistantHistoryAPIKeyPattern.ReplaceAllString(value, "[REDACTED_SECRET]")
+	value = assistantHistoryAPIKeyPattern.ReplaceAllString(value, "[REDACTED_API_KEY]")
 	value = assistantHistoryJWTPattern.ReplaceAllString(value, "[REDACTED_TOKEN]")
 	value = assistantHistoryEmailPattern.ReplaceAllString(value, "[REDACTED_EMAIL]")
+	value = redactAssistantPhoneNumbers(value)
+	value = redactAssistantIPAddresses(value)
+	value = redactAssistantCardNumbers(value)
 	return value
+}
+
+func redactAssistantPhoneNumbers(value string) string {
+	return assistantHistoryPhonePattern.ReplaceAllString(value, "$1[REDACTED_PHONE]$3")
+}
+
+func redactAssistantIPAddresses(value string) string {
+	value = assistantHistoryIPv4Pattern.ReplaceAllStringFunc(value, func(candidate string) string {
+		if net.ParseIP(candidate) != nil {
+			return "[REDACTED_IP]"
+		}
+		return candidate
+	})
+	return assistantHistoryIPv6Pattern.ReplaceAllStringFunc(value, func(candidate string) string {
+		if !strings.Contains(candidate, ":") || net.ParseIP(candidate) == nil {
+			return candidate
+		}
+		return "[REDACTED_IP]"
+	})
+}
+
+func redactAssistantCardNumbers(value string) string {
+	return assistantHistoryCardPattern.ReplaceAllStringFunc(value, func(candidate string) string {
+		matches := assistantHistoryCardPattern.FindStringSubmatch(candidate)
+		if len(matches) != 4 {
+			return candidate
+		}
+		digits := strings.Map(func(r rune) rune {
+			if r >= '0' && r <= '9' {
+				return r
+			}
+			return -1
+		}, matches[2])
+		if len(digits) < 13 || len(digits) > 19 || !assistantLuhnValid(digits) {
+			return candidate
+		}
+		return matches[1] + "[REDACTED_CARD]" + matches[3]
+	})
+}
+
+func assistantLuhnValid(digits string) bool {
+	sum := 0
+	double := false
+	for index := len(digits) - 1; index >= 0; index-- {
+		digit := int(digits[index] - '0')
+		if double {
+			digit *= 2
+			if digit > 9 {
+				digit -= 9
+			}
+		}
+		sum += digit
+		double = !double
+	}
+	return sum%10 == 0
 }
 
 func redactAssistantHistoryBounded(value string) string {
@@ -314,7 +383,57 @@ func RecordAssistantConversationTurn(userID int, conversationID int64, userConte
 	})
 }
 
-func ListAssistantConversations(viewerUserID, ownerUserID int, limit int) ([]AssistantConversationView, error) {
+func setAssistantConversationArchived(userID int, conversationID int64, archived bool) (*AssistantConversation, error) {
+	if userID <= 0 || conversationID <= 0 {
+		return nil, ErrAssistantConversationNotFound
+	}
+
+	var updated AssistantConversation
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var conversation AssistantConversation
+		if err := lockForUpdate(tx).
+			Where("id = ? AND user_id = ?", conversationID, userID).
+			First(&conversation).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrAssistantConversationNotFound
+			}
+			return err
+		}
+		if archived {
+			if conversation.ArchivedAt != 0 {
+				return ErrAssistantConversationAlreadyArchived
+			}
+			conversation.ArchivedAt = common.GetTimestamp()
+		} else {
+			if conversation.ArchivedAt == 0 {
+				return ErrAssistantConversationNotArchived
+			}
+			conversation.ArchivedAt = 0
+		}
+		if err := tx.Model(&conversation).Update("archived_at", conversation.ArchivedAt).Error; err != nil {
+			return err
+		}
+		updated = conversation
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &updated, nil
+}
+
+// ArchiveAssistantConversation changes only the owner's soft archive state.
+// Visibility grants never confer mutation rights.
+func ArchiveAssistantConversation(userID int, conversationID int64) (*AssistantConversation, error) {
+	return setAssistantConversationArchived(userID, conversationID, true)
+}
+
+// UnarchiveAssistantConversation restores only the owner's soft archive state.
+func UnarchiveAssistantConversation(userID int, conversationID int64) (*AssistantConversation, error) {
+	return setAssistantConversationArchived(userID, conversationID, false)
+}
+
+func ListAssistantConversations(viewerUserID, ownerUserID int, limit int, archived bool) ([]AssistantConversationView, error) {
 	if err := AuthorizeAssistantHistoryViewer(viewerUserID, ownerUserID); err != nil {
 		return nil, err
 	}
@@ -322,7 +441,13 @@ func ListAssistantConversations(viewerUserID, ownerUserID int, limit int) ([]Ass
 		limit = 30
 	}
 	var conversations []AssistantConversation
-	if err := DB.Where("user_id = ?", ownerUserID).Order("updated_at DESC, id DESC").Limit(limit).Find(&conversations).Error; err != nil {
+	archiveFilter := "archived_at = 0"
+	if archived {
+		archiveFilter = "archived_at <> 0"
+	}
+	if err := DB.Where("user_id = ?", ownerUserID).
+		Where(archiveFilter).
+		Order("updated_at DESC, id DESC").Limit(limit).Find(&conversations).Error; err != nil {
 		return nil, err
 	}
 	owner := "lower_level_user"
@@ -337,6 +462,7 @@ func ListAssistantConversations(viewerUserID, ownerUserID int, limit int) ([]Ass
 			LastMessagePreview: conversation.LastMessagePreview,
 			CreatedAt:          conversation.CreatedAt,
 			UpdatedAt:          conversation.UpdatedAt,
+			ArchivedAt:         conversation.ArchivedAt,
 			Owner:              owner,
 			PrivacyNotice:      AssistantHistoryPrivacyNotice,
 		})
@@ -391,6 +517,7 @@ func GetAssistantConversationHistory(viewerUserID int, conversationID int64, lim
 		LastMessagePreview: conversation.LastMessagePreview,
 		CreatedAt:          conversation.CreatedAt,
 		UpdatedAt:          conversation.UpdatedAt,
+		ArchivedAt:         conversation.ArchivedAt,
 		Owner:              owner,
 		PrivacyNotice:      AssistantHistoryPrivacyNotice,
 	}

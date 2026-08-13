@@ -30,6 +30,11 @@ import {
   resolveChatUrl,
 } from '@/features/chat/lib/chat-links'
 
+export const CHAT_IFRAME_SANDBOX =
+  'allow-scripts allow-forms allow-popups allow-presentation'
+export const CHAT_IFRAME_REFERRER_POLICY = 'no-referrer'
+export const CHAT_IFRAME_ALLOW = 'camera; microphone'
+
 export const Route = createFileRoute('/_authenticated/chat/$chatId')({
   loader: async ({ params }) => {
     if (!Number.isInteger(Number(params.chatId))) {
@@ -158,7 +163,9 @@ function ChatRouteComponent() {
       src={iframeSrc}
       key={iframeSrc}
       className='h-full w-full border-0'
-      allow='camera; microphone'
+      allow={CHAT_IFRAME_ALLOW}
+      referrerPolicy={CHAT_IFRAME_REFERRER_POLICY}
+      sandbox={CHAT_IFRAME_SANDBOX}
       title={`Chat preset: ${preset.name}`}
     />
   )

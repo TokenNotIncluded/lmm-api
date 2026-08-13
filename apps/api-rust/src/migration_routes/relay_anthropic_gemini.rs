@@ -6,22 +6,35 @@
 //! PostgreSQL/Valkey authorization, channel selection, retry, accounting, and
 //! provider transport work.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use async_trait::async_trait;
 use axum::{
     Json, Router,
-    body::to_bytes,
+    body::{Body, to_bytes},
     extract::{Path, Request, State},
     http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{MethodRouter, post},
 };
+use futures_util::StreamExt;
+use lmm_contracts::relay::{Direction, Fidelity, Protocol, ValidatedRegistry};
 use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::missing_relay_models_billing::{ModelLookupState, model_lookup_method_router};
-use crate::RequestContext;
+use super::sse::SseError;
+use crate::{
+    RequestContext,
+    conversion_observability::{
+        ClientAbortGuard, ConversionObserver, ConversionResult, ConverterVersion, FailureReason,
+        FeatureClass, MetricLabels, StreamTiming, global_observer,
+    },
+    protocol_rollout::{ProtocolRolloutControl, RolloutContext},
+    protocol_route_gate::{self, RouteGateDecision},
+    protocol_runtime_registry::validated_current_registry,
+    route_ownership::{OwnershipEvidence, RouteOwnershipScope},
+};
 
 const REQUEST_ID: &str = "x-request-id";
 const LEGACY_REQUEST_ID: &str = "x-oneapi-request-id";
@@ -81,12 +94,56 @@ pub struct UpstreamRequest {
 }
 
 /// Reply returned by a provider adapter after provider-to-client conversion.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum UpstreamReply {
     /// A complete provider-compatible JSON value.
     Json(Value),
     /// Ordered provider-compatible SSE events.
     Sse(Vec<RelaySseEvent>),
+    /// A single-consumption native Anthropic/Gemini SSE response.
+    ///
+    /// This variant is intentionally distinct from [`Self::Sse`]: it is only
+    /// produced for a same-protocol relay and keeps the provider's bytes in a
+    /// backpressured [`Body`] rather than decoding and re-encoding frames.
+    NativeSse(Box<NativeSseReply>),
+}
+
+/// A successful same-protocol SSE response whose body is consumed exactly once.
+///
+/// The body owns the upstream `bytes_stream`. Dropping the response before it
+/// is fully read therefore drops that stream as well, allowing the HTTP client
+/// cancellation to reach the provider without an intermediate queue.
+pub struct NativeSseReply {
+    status: StatusCode,
+    body: Body,
+    content_type: Option<HeaderValue>,
+}
+
+impl NativeSseReply {
+    /// Creates a native response for a same-protocol relay.
+    ///
+    /// `content_type` is copied from the upstream response when present. The
+    /// HTTP boundary supplies the event-stream fallback when it is absent and
+    /// always applies its safe `Cache-Control: no-cache` policy.
+    #[must_use]
+    pub fn new(status: StatusCode, body: Body, content_type: Option<HeaderValue>) -> Self {
+        Self {
+            status,
+            body,
+            content_type,
+        }
+    }
+}
+
+impl std::fmt::Debug for NativeSseReply {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("NativeSseReply")
+            .field("status", &self.status)
+            .field("content_type", &self.content_type)
+            .field("body", &"<stream>")
+            .finish()
+    }
 }
 
 /// A provider SSE event after protocol translation and before HTTP framing.
@@ -125,6 +182,11 @@ pub trait RelayBackend: Send + Sync {
         model: &str,
     ) -> Result<RelayChannel, RelayFailure>;
     /// Invokes a selected channel and converts its response to the caller protocol.
+    ///
+    /// A native Anthropic/Gemini SSE response is returned as
+    /// [`UpstreamReply::NativeSse`] and is consumed once by the HTTP boundary;
+    /// [`UpstreamReply::Sse`] remains the buffered representation for typed
+    /// conversion paths.
     async fn invoke(
         &self,
         channel: &RelayChannel,
@@ -149,6 +211,8 @@ pub enum RelayFailure {
     ConcealedNotFound,
     /// No channel can serve the requested model.
     NoChannel,
+    /// The validated native route capability is unavailable or closed.
+    RouteUnavailable,
     /// The upstream did not complete the request.
     Upstream,
     /// The provider returned a protocol response after authentication.
@@ -158,19 +222,40 @@ pub enum RelayFailure {
         /// Client-protocol JSON response body after adapter conversion.
         body: Value,
     },
+    /// The provider returned an SSE frame that cannot be represented without
+    /// silently losing data or metadata at this relay boundary.
+    Sse(SseError),
 }
 
 /// State used by this independently mergeable relay router.
 #[derive(Clone)]
 pub struct RelayHttpState {
     backend: Arc<dyn RelayBackend>,
+    protocol_rollout: ProtocolRolloutControl,
+    validated_registry: Option<Arc<ValidatedRegistry>>,
 }
 
 impl RelayHttpState {
     /// Creates router state from the application's authorization and relay adapter.
     #[must_use]
     pub fn new(backend: Arc<dyn RelayBackend>) -> Self {
-        Self { backend }
+        Self {
+            backend,
+            protocol_rollout: ProtocolRolloutControl::default(),
+            validated_registry: validated_current_registry().ok().map(Arc::new),
+        }
+    }
+
+    /// Installs the shared rollout control and validated runtime registry.
+    #[must_use]
+    pub fn with_protocol_runtime(
+        mut self,
+        rollout: ProtocolRolloutControl,
+        registry: Arc<ValidatedRegistry>,
+    ) -> Self {
+        self.protocol_rollout = rollout;
+        self.validated_registry = Some(registry);
+        self
     }
 }
 
@@ -248,14 +333,18 @@ async fn gemini_content_for_path(
     path: String,
     http_request: Request,
 ) -> Response {
+    let streaming = gemini_is_streaming(http_request.uri());
     let Some(model) = gemini_model_from_path(&path) else {
+        global_observer().record_failure_with_reason(
+            relay_observation_labels(RelayProtocol::Gemini, streaming, ConversionResult::Failure),
+            FailureReason::InvalidInput,
+        );
         return invalid_request(
             RelayProtocol::Gemini,
             "model is required",
             &request_id(&http_request),
         );
     };
-    let streaming = gemini_is_streaming(http_request.uri());
     relay(
         &state,
         http_request,
@@ -356,9 +445,15 @@ async fn relay(
     protocol: RelayProtocol,
     gemini_route: Option<(&str, bool)>,
 ) -> Response {
+    let observer = global_observer();
     let request_id = request_id(&request);
     let request_path = request.uri().path().to_owned();
+    let stream_hint = gemini_route.is_some_and(|(_, streaming)| streaming);
     let Some(token) = token_from_request(&request, protocol) else {
+        observer.record_failure_with_reason(
+            relay_observation_labels(protocol, stream_hint, ConversionResult::Failure),
+            FailureReason::Unknown,
+        );
         state
             .backend
             .record_outcome(None, None, RelayOutcome::Unauthorized)
@@ -368,6 +463,10 @@ async fn relay(
     let identity = match state.backend.authenticate(&token).await {
         Ok(identity) => identity,
         Err(error) => {
+            observer.record_failure_with_reason(
+                relay_observation_labels(protocol, stream_hint, ConversionResult::Failure),
+                relay_failure_reason(&error),
+            );
             state
                 .backend
                 .record_outcome(None, None, outcome_for(&error))
@@ -377,11 +476,22 @@ async fn relay(
     };
     let raw_body = match to_bytes(request.into_body(), MAX_RELAY_BODY_BYTES).await {
         Ok(body) => body.to_vec(),
-        Err(_) => return invalid_request(protocol, "request body too large", &request_id),
+        Err(_) => {
+            let labels = relay_observation_labels(protocol, stream_hint, ConversionResult::Failure);
+            observer.record_failure_with_reason(labels, FailureReason::InvalidInput);
+            return invalid_request(protocol, "request body too large", &request_id);
+        }
     };
+    let parse_started = Instant::now();
     let body: Value = match serde_json::from_slice(&raw_body) {
         Ok(body) => body,
-        Err(_) => return invalid_request(protocol, "invalid JSON request body", &request_id),
+        Err(_) => {
+            let labels = relay_observation_labels(protocol, stream_hint, ConversionResult::Failure);
+            observer.record_input_bytes(labels, raw_body.len());
+            observer.record_conversion_duration(labels, parse_started.elapsed());
+            observer.record_failure_with_reason(labels, FailureReason::InvalidInput);
+            return invalid_request(protocol, "invalid JSON request body", &request_id);
+        }
     };
     let (model, streaming) = match gemini_route {
         Some((model, streaming)) => (model.to_owned(), streaming),
@@ -393,8 +503,19 @@ async fn relay(
             body.get("stream").and_then(Value::as_bool).unwrap_or(false),
         ),
     };
+    let request_labels = relay_observation_labels(protocol, streaming, ConversionResult::Success);
+    observer.record_input_bytes(request_labels, raw_body.len());
+    observer.record_conversion_duration(request_labels, parse_started.elapsed());
     if model.trim().is_empty() {
+        observer.record_failure_with_reason(request_labels, FailureReason::InvalidInput);
         return invalid_request(protocol, "model is required", &request_id);
+    }
+    if let Err(reason) = native_route_is_open(state, protocol, &request_id, &model, streaming) {
+        observer.record_failure_with_reason(
+            relay_observation_labels(protocol, streaming, ConversionResult::Failure),
+            reason,
+        );
+        return failure(protocol, &RelayFailure::RouteUnavailable, &request_id);
     }
     let channel = match state
         .backend
@@ -403,6 +524,10 @@ async fn relay(
     {
         Ok(channel) => channel,
         Err(error) => {
+            observer.record_failure_with_reason(
+                relay_observation_labels(protocol, streaming, ConversionResult::Failure),
+                relay_failure_reason(&error),
+            );
             state
                 .backend
                 .record_outcome(Some(&identity), None, outcome_for(&error))
@@ -425,9 +550,13 @@ async fn relay(
                 .backend
                 .record_outcome(Some(&identity), Some(&channel), RelayOutcome::Succeeded)
                 .await;
-            success(reply, channel.id, &request_id)
+            success(reply, channel.id, &request_id, protocol, observer)
         }
         Err(error) => {
+            observer.record_failure_with_reason(
+                relay_observation_labels(protocol, streaming, ConversionResult::Failure),
+                relay_failure_reason(&error),
+            );
             state
                 .backend
                 .record_outcome(Some(&identity), Some(&channel), outcome_for(&error))
@@ -435,6 +564,60 @@ async fn relay(
             failure(protocol, &error, &request_id)
         }
     }
+}
+
+/// Checks both halves of a native same-protocol request before channel
+/// selection or upstream invocation. The rollout snapshot, context, and
+/// closed ownership evidence are shared by the request and response/stream
+/// capability checks.
+fn native_route_is_open(
+    state: &RelayHttpState,
+    protocol: RelayProtocol,
+    request_id: &str,
+    model: &str,
+    streaming: bool,
+) -> Result<(), FailureReason> {
+    let rollout_snapshot = state.protocol_rollout.snapshot();
+    let Some(registry) = state.validated_registry.as_deref() else {
+        return Err(FailureReason::RegistryDrift);
+    };
+    let wire_protocol = relay_observation_protocol(protocol);
+    let context = RolloutContext::new(request_id, wire_protocol, wire_protocol, model, streaming);
+    let scope = RouteOwnershipScope {
+        source: wire_protocol,
+        target: wire_protocol,
+        stream: streaming,
+    };
+    let evidence = OwnershipEvidence::closed(scope);
+    let config = rollout_snapshot.config();
+    let request_decision = protocol_route_gate::decide_route(
+        config,
+        &context,
+        registry,
+        Direction::Request,
+        &evidence,
+    );
+    let output_direction = if streaming {
+        Direction::Stream
+    } else {
+        Direction::Response
+    };
+    let output_decision =
+        protocol_route_gate::decide_route(config, &context, registry, output_direction, &evidence);
+    if is_exact_raw_native(&request_decision) && is_exact_raw_native(&output_decision) {
+        Ok(())
+    } else {
+        Err(FailureReason::Unsupported)
+    }
+}
+
+fn is_exact_raw_native(decision: &RouteGateDecision) -> bool {
+    let RouteGateDecision::NativeRaw { details } = decision else {
+        return false;
+    };
+    details.capability.as_ref().is_some_and(|capability| {
+        capability.quality == Fidelity::Exact && capability.raw_passthrough
+    })
 }
 
 /// Mirrors legacy distributor extraction for wildcard Gemini model paths.
@@ -520,8 +703,10 @@ fn request_id(request: &Request) -> String {
 fn outcome_for(error: &RelayFailure) -> RelayOutcome {
     match error {
         RelayFailure::Unauthorized | RelayFailure::ConcealedNotFound => RelayOutcome::Unauthorized,
-        RelayFailure::NoChannel => RelayOutcome::NoChannel,
-        RelayFailure::Upstream | RelayFailure::Provider { .. } => RelayOutcome::UpstreamFailure,
+        RelayFailure::NoChannel | RelayFailure::RouteUnavailable => RelayOutcome::NoChannel,
+        RelayFailure::Upstream | RelayFailure::Provider { .. } | RelayFailure::Sse(_) => {
+            RelayOutcome::UpstreamFailure
+        }
     }
 }
 
@@ -532,14 +717,18 @@ fn openai_failure(error: &RelayFailure, request_id: &str) -> Response {
     let status = match error {
         RelayFailure::Unauthorized => StatusCode::UNAUTHORIZED,
         RelayFailure::ConcealedNotFound => StatusCode::NOT_FOUND,
-        RelayFailure::NoChannel => StatusCode::SERVICE_UNAVAILABLE,
-        RelayFailure::Upstream | RelayFailure::Provider { .. } => StatusCode::BAD_GATEWAY,
+        RelayFailure::NoChannel | RelayFailure::RouteUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+        RelayFailure::Upstream | RelayFailure::Provider { .. } | RelayFailure::Sse(_) => {
+            StatusCode::BAD_GATEWAY
+        }
     };
     let message = match error {
         RelayFailure::Unauthorized => "Invalid token",
         RelayFailure::ConcealedNotFound => "Not Found",
-        RelayFailure::NoChannel => "relay request could not be completed",
-        RelayFailure::Upstream | RelayFailure::Provider { .. } => {
+        RelayFailure::NoChannel | RelayFailure::RouteUnavailable => {
+            "relay request could not be completed"
+        }
+        RelayFailure::Upstream | RelayFailure::Provider { .. } | RelayFailure::Sse(_) => {
             "relay request could not be completed"
         }
     };
@@ -567,10 +756,122 @@ fn openai_not_found(request_id: &str, path: &str) -> Response {
     response
 }
 
-fn success(reply: UpstreamReply, channel_id: i64, request_id: &str) -> Response {
+fn relay_observation_protocol(protocol: RelayProtocol) -> Protocol {
+    match protocol {
+        RelayProtocol::OpenAi => Protocol::OpenAi,
+        RelayProtocol::Anthropic => Protocol::Claude,
+        RelayProtocol::Gemini => Protocol::Gemini,
+    }
+}
+
+fn relay_observation_labels(
+    protocol: RelayProtocol,
+    stream: bool,
+    result: ConversionResult,
+) -> MetricLabels {
+    let protocol = relay_observation_protocol(protocol);
+    MetricLabels::for_route(
+        protocol,
+        protocol,
+        ConverterVersion::NativeRawV1,
+        0,
+        stream,
+        if stream {
+            FeatureClass::Stream
+        } else {
+            FeatureClass::Text
+        },
+        result,
+    )
+}
+
+fn relay_failure_reason(error: &RelayFailure) -> FailureReason {
+    match error {
+        RelayFailure::Sse(_) => FailureReason::Stream,
+        RelayFailure::Provider { .. } | RelayFailure::Upstream => FailureReason::Upstream,
+        // Authentication and channel eligibility have no dedicated closed
+        // reason label; keep them in the bounded catch-all rather than
+        // misclassifying them as malformed payloads.
+        RelayFailure::Unauthorized | RelayFailure::ConcealedNotFound | RelayFailure::NoChannel => {
+            FailureReason::Unknown
+        }
+        RelayFailure::RouteUnavailable => FailureReason::Unsupported,
+    }
+}
+
+/// Observes native SSE chunks without decoding, buffering, or changing them.
+/// The wrapper advances the upstream stream only when Axum asks for the next
+/// body chunk, so provider backpressure and cancellation remain intact.
+fn observe_native_sse_body(body: Body, observer: ConversionObserver, labels: MetricLabels) -> Body {
+    let stream = body.into_data_stream();
+    let guard = ClientAbortGuard::new(observer.clone(), labels);
+    let queue_guard = observer.enter_queue(labels);
+    let timing = StreamTiming::default();
+    let observed = futures_util::stream::unfold(
+        (stream, guard, queue_guard, timing),
+        move |(mut stream, mut guard, mut queue_guard, mut timing)| {
+            let observer = observer.clone();
+            async move {
+                match stream.next().await {
+                    Some(Ok(bytes)) => {
+                        timing.mark_upstream_event();
+                        if timing.first_downstream_write_at.is_none() {
+                            timing.mark_downstream_write();
+                            timing.record_gateway_ttft(&observer, labels);
+                        }
+                        observer.record_output_bytes(labels, bytes.len());
+                        Some((Ok(bytes), (stream, guard, queue_guard, timing)))
+                    }
+                    Some(Err(error)) => {
+                        guard.complete();
+                        queue_guard.complete();
+                        observer.record_failure_with_reason(labels, FailureReason::Stream);
+                        Some((Err(error), (stream, guard, queue_guard, timing)))
+                    }
+                    None => {
+                        guard.complete();
+                        queue_guard.complete();
+                        None
+                    }
+                }
+            }
+        },
+    );
+    Body::from_stream(observed)
+}
+
+/// Counts bytes from an already serialized buffered response without causing
+/// another JSON/SSE encode pass. Bytes are recorded only as the downstream
+/// body is consumed.
+fn observe_buffered_response(
+    response: Response,
+    observer: ConversionObserver,
+    labels: MetricLabels,
+) -> Response {
+    let (parts, body) = response.into_parts();
+    let observed = body.into_data_stream().map(move |item| {
+        if let Ok(bytes) = &item {
+            observer.record_output_bytes(labels, bytes.len());
+        }
+        item
+    });
+    Response::from_parts(parts, Body::from_stream(observed))
+}
+
+fn success(
+    reply: UpstreamReply,
+    channel_id: i64,
+    request_id: &str,
+    protocol: RelayProtocol,
+    observer: &ConversionObserver,
+) -> Response {
     let mut response = match reply {
-        UpstreamReply::Json(body) => Json(body).into_response(),
+        UpstreamReply::Json(body) => {
+            let labels = relay_observation_labels(protocol, false, ConversionResult::Success);
+            observe_buffered_response(Json(body).into_response(), (*observer).clone(), labels)
+        }
         UpstreamReply::Sse(events) => {
+            let labels = relay_observation_labels(protocol, true, ConversionResult::Success);
             let mut framed = String::new();
             for event in events {
                 if let Some(kind) = event.kind {
@@ -587,6 +888,26 @@ fn success(reply: UpstreamReply, channel_id: i64, request_id: &str) -> Response 
             response.headers_mut().insert(
                 header::CONTENT_TYPE,
                 HeaderValue::from_static("text/event-stream; charset=utf-8"),
+            );
+            response
+                .headers_mut()
+                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+            observe_buffered_response(response, (*observer).clone(), labels)
+        }
+        UpstreamReply::NativeSse(native) => {
+            let NativeSseReply {
+                status,
+                body,
+                content_type,
+            } = *native;
+            let labels = relay_observation_labels(protocol, true, ConversionResult::Success);
+            let body = observe_native_sse_body(body, (*observer).clone(), labels);
+            let mut response = (status, body).into_response();
+            response.headers_mut().insert(
+                header::CONTENT_TYPE,
+                content_type.unwrap_or_else(|| {
+                    HeaderValue::from_static("text/event-stream; charset=utf-8")
+                }),
             );
             response
                 .headers_mut()
@@ -633,8 +954,12 @@ fn failure(protocol: RelayProtocol, error: &RelayFailure, request_id: &str) -> R
             "authentication_error",
             "UNAUTHENTICATED",
         ),
-        RelayFailure::NoChannel => (StatusCode::SERVICE_UNAVAILABLE, "api_error", "UNAVAILABLE"),
-        RelayFailure::Upstream => (StatusCode::BAD_GATEWAY, "api_error", "UNAVAILABLE"),
+        RelayFailure::NoChannel | RelayFailure::RouteUnavailable => {
+            (StatusCode::SERVICE_UNAVAILABLE, "api_error", "UNAVAILABLE")
+        }
+        RelayFailure::Upstream | RelayFailure::Sse(_) => {
+            (StatusCode::BAD_GATEWAY, "api_error", "UNAVAILABLE")
+        }
         RelayFailure::Provider { status, .. } => (*status, "api_error", "UNAVAILABLE"),
     };
     let body = match error {
@@ -685,12 +1010,17 @@ fn add_compat_headers(response: &mut Response, channel_id: i64, request_id: &str
 #[cfg(test)]
 mod tests {
     use super::{
-        RelayBackend, RelayChannel, RelayFailure, RelayHttpState, RelayIdentity, RelayOutcome,
-        RelayProtocol, UpstreamReply, UpstreamRequest, failure, gemini_is_streaming,
-        gemini_model_from_path, openai_failure, outcome_for, query_value, router,
-        token_from_request,
+        ConversionObserver, ConversionResult, ConverterVersion, FeatureClass, RelayBackend,
+        RelayChannel, RelayFailure, RelayHttpState, RelayIdentity, RelayOutcome, RelayProtocol,
+        RelaySseEvent, UpstreamReply, UpstreamRequest, failure, gemini_is_streaming,
+        gemini_model_from_path, native_route_is_open, observe_native_sse_body, openai_failure,
+        outcome_for, query_value, relay_failure_reason, relay_observation_labels,
+        relay_observation_protocol, router, success, token_from_request,
     };
     use crate::RequestContext;
+    use crate::conversion_observability::{FailureReason, MetricKind};
+    use crate::protocol_rollout::ProtocolRolloutControl;
+    use crate::protocol_runtime_registry::validated_current_registry;
     use async_trait::async_trait;
     use axum::{
         body::to_bytes,
@@ -703,6 +1033,7 @@ mod tests {
     #[derive(Default)]
     struct RecordingBackend {
         tokens: Mutex<Vec<String>>,
+        selected_models: Mutex<Vec<String>>,
         request_ids: Mutex<Vec<String>>,
     }
 
@@ -725,6 +1056,7 @@ mod tests {
             _protocol: RelayProtocol,
             model: &str,
         ) -> Result<RelayChannel, RelayFailure> {
+            self.selected_models.lock().unwrap().push(model.to_owned());
             Ok(RelayChannel {
                 id: 7,
                 upstream_model: model.to_owned(),
@@ -776,6 +1108,75 @@ mod tests {
             client_ip: None,
         });
         request
+    }
+
+    #[test]
+    fn default_state_opens_native_request_and_non_stream_response_directions() {
+        let state = RelayHttpState::new(Arc::new(RecordingBackend::default()));
+
+        assert!(
+            native_route_is_open(
+                &state,
+                RelayProtocol::Anthropic,
+                "request-id",
+                "claude-test",
+                false,
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn default_state_opens_native_stream_direction() {
+        let state = RelayHttpState::new(Arc::new(RecordingBackend::default()));
+
+        assert!(
+            native_route_is_open(
+                &state,
+                RelayProtocol::Gemini,
+                "request-id",
+                "gemini-test",
+                true,
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn runtime_builder_replaces_the_default_registry() {
+        let registry = Arc::new(validated_current_registry().expect("current registry validates"));
+        let state = RelayHttpState::new(Arc::new(RecordingBackend::default()))
+            .with_protocol_runtime(ProtocolRolloutControl::default(), registry.clone());
+
+        assert!(Arc::ptr_eq(
+            state
+                .validated_registry
+                .as_ref()
+                .expect("builder installs registry"),
+            &registry,
+        ));
+    }
+
+    #[tokio::test]
+    async fn missing_registry_fails_closed_after_authentication_before_channel_selection() {
+        let backend = Arc::new(RecordingBackend::default());
+        let state = RelayHttpState {
+            backend: backend.clone(),
+            protocol_rollout: ProtocolRolloutControl::default(),
+            validated_registry: None,
+        };
+        let mut request =
+            request_with_context("/v1/messages", r#"{"model":"claude-test","stream":false}"#);
+        request
+            .headers_mut()
+            .insert("x-api-key", "valid".parse().unwrap());
+
+        let response = router(state).oneshot(request).await.unwrap();
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(backend.tokens.lock().unwrap().as_slice(), ["valid"]);
+        assert!(backend.selected_models.lock().unwrap().is_empty());
+        assert!(backend.request_ids.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -910,6 +1311,122 @@ mod tests {
             outcome_for(&RelayFailure::Upstream),
             RelayOutcome::UpstreamFailure
         );
+    }
+
+    #[test]
+    fn observation_labels_map_provider_routes_to_same_protocols() {
+        for (route, protocol) in [
+            (
+                RelayProtocol::OpenAi,
+                lmm_contracts::relay::Protocol::OpenAi,
+            ),
+            (
+                RelayProtocol::Anthropic,
+                lmm_contracts::relay::Protocol::Claude,
+            ),
+            (
+                RelayProtocol::Gemini,
+                lmm_contracts::relay::Protocol::Gemini,
+            ),
+        ] {
+            let labels = relay_observation_labels(route, true, ConversionResult::Success);
+            assert_eq!(labels.source_format, protocol);
+            assert_eq!(labels.target_format, protocol);
+            assert_eq!(labels.converter_version, ConverterVersion::NativeRawV1);
+            assert_eq!(labels.feature_class, FeatureClass::Stream);
+        }
+    }
+
+    #[test]
+    fn observation_failure_reasons_remain_closed() {
+        assert_eq!(
+            relay_failure_reason(&RelayFailure::Upstream),
+            FailureReason::Upstream
+        );
+        assert_eq!(
+            relay_failure_reason(&RelayFailure::NoChannel),
+            FailureReason::Unknown
+        );
+        assert_eq!(
+            relay_observation_protocol(RelayProtocol::Anthropic),
+            lmm_contracts::relay::Protocol::Claude
+        );
+    }
+
+    #[tokio::test]
+    async fn native_sse_observation_preserves_raw_body_and_stream_metrics() {
+        let observer = ConversionObserver::default();
+        let labels =
+            relay_observation_labels(RelayProtocol::Anthropic, true, ConversionResult::Success);
+        let raw = b"event: message_start\ndata: {\"type\":\"message_start\"}\n\n";
+        let body = observe_native_sse_body(
+            axum::body::Body::from(raw.to_vec()),
+            observer.clone(),
+            labels,
+        );
+        let bytes = to_bytes(body, usize::MAX).await.unwrap();
+        assert_eq!(bytes.as_ref(), raw);
+
+        let snapshot = observer.snapshot();
+        assert!(snapshot.samples.iter().any(|sample| {
+            sample.metric == MetricKind::ConversionOutputBytes && sample.value == raw.len() as u64
+        }));
+        assert!(
+            snapshot
+                .samples
+                .iter()
+                .any(|sample| sample.metric == MetricKind::StreamGatewayTtftSeconds)
+        );
+        assert!(
+            !snapshot
+                .samples
+                .iter()
+                .any(|sample| sample.metric == MetricKind::StreamClientAbortTotal)
+        );
+    }
+
+    #[tokio::test]
+    async fn buffered_replies_record_wire_output_bytes() {
+        let json_observer = ConversionObserver::default();
+        let json_body = json!({"ok":true});
+        let json_bytes = json_body.to_string().len() as u64;
+        let json_response = success(
+            UpstreamReply::Json(json_body),
+            7,
+            "request-id",
+            RelayProtocol::Anthropic,
+            &json_observer,
+        );
+        assert_eq!(json_response.status(), StatusCode::OK);
+        let json_wire = to_bytes(json_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(json_wire.len() as u64, json_bytes);
+        assert!(json_observer.snapshot().samples.iter().any(|sample| {
+            sample.metric == MetricKind::ConversionOutputBytes && sample.value == json_bytes
+        }));
+
+        let sse_observer = ConversionObserver::default();
+        let sse_bytes = "event: message\ndata: {\"text\":\"ok\"}\n\ndata: [DONE]\n\n";
+        let sse_response = success(
+            UpstreamReply::Sse(vec![RelaySseEvent {
+                kind: Some("message".to_owned()),
+                payload: json!({"text":"ok"}),
+            }]),
+            7,
+            "request-id",
+            RelayProtocol::Anthropic,
+            &sse_observer,
+        );
+        assert_eq!(sse_response.status(), StatusCode::OK);
+        let sse_wire = to_bytes(sse_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(sse_wire.len(), sse_bytes.len());
+        assert!(sse_observer.snapshot().samples.iter().any(|sample| {
+            sample.metric == MetricKind::ConversionOutputBytes
+                && sample.value == sse_bytes.len() as u64
+        }));
     }
 
     #[test]

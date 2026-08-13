@@ -148,16 +148,19 @@ async function request(method, requestPath, options = {}) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    const response = await fetch(requestedUrl, {
+    const fetchOptions = {
       method,
       headers: {
         accept: 'application/json, text/html;q=0.9',
-        ...(options.headers || {}),
+        ...options.headers,
       },
-      body: options.body,
       redirect: 'error',
       signal: controller.signal,
-    })
+    }
+    if (options.body !== undefined) {
+      fetchOptions.body = options.body
+    }
+    const response = await fetch(requestedUrl, fetchOptions)
     const responseUrl = new URL(response.url)
     if (responseUrl.origin !== parsedBaseUrl.origin) {
       throw new Error('local test request redirected outside the local origin')
@@ -248,10 +251,11 @@ async function login(credentials, personaId = '') {
   const data = result.json?.data
   if (data?.require_2fa) {
     const code = personaEnvironment('PERSONA_2FA_CODE', personaId)
-    if (!code)
+    if (!code) {
       throw new Error(
         `${identity} requires 2FA; set the matching PERSONA_2FA_CODE variable`
       )
+    }
     const second = await request('POST', '/api/user/login/2fa', {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ code, flow_token: data.flow_token }),
@@ -457,10 +461,13 @@ async function run() {
     checks.push({ method, path: requestPath, status: result.status })
   }
   for (const [method, requestPath] of anonymousProtectedChecks) {
-    const result = await request(method, requestPath, {
+    const requestOptions = {
       headers: { 'content-type': 'application/json' },
-      body: method === 'POST' ? '{}' : undefined,
-    })
+    }
+    if (method === 'POST') {
+      requestOptions.body = '{}'
+    }
+    const result = await request(method, requestPath, requestOptions)
     assertNoServerError(result, `anonymous ${method} ${requestPath}`)
     // ConsoleAccessGate deliberately masks dashboard discovery routes as 404
     // for anonymous or unactivated callers. Accept that generic not-found

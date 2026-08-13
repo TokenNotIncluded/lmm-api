@@ -22,6 +22,43 @@ type openRouterRequestReasoning struct {
 	Exclude   bool   `json:"exclude,omitempty"`
 }
 
+func mapClaudeReasoningEffortFromEffort(effort string) string {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "low":
+		return "low"
+	case "medium":
+		return "medium"
+	case "high":
+		return "high"
+	case "minimal":
+		return "low"
+	case "xhigh":
+		return "high"
+	default:
+		return ""
+	}
+}
+
+func mapClaudeThinkingToReasoningEffort(thinkingType string, budgetTokens int) string {
+	switch strings.ToLower(strings.TrimSpace(thinkingType)) {
+	case "adaptive":
+		return "medium"
+	case "enabled":
+		switch {
+		case budgetTokens <= 1536:
+			return "low"
+		case budgetTokens <= 3072:
+			return "medium"
+		case budgetTokens > 3072:
+			return "high"
+		default:
+			return "low"
+		}
+	default:
+		return ""
+	}
+}
+
 func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info convmeta.Meta) (*dto.GeneralOpenAIRequest, error) {
 	openAIRequest := dto.GeneralOpenAIRequest{
 		Model:       claudeRequest.Model,
@@ -40,7 +77,8 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info con
 		openAIRequest.Stream = kitutil.GetPointer(*claudeRequest.Stream)
 	}
 
-	isOpenRouter := convmeta.OptionsOf(info).OpenRouterDialect
+	options := convmeta.OptionsOf(info)
+	isOpenRouter := options.OpenRouterDialect
 	if isOpenRouter {
 		if effort := claudeRequest.GetEfforts(); effort != "" {
 			effortBytes, _ := kitutil.Marshal(effort)
@@ -69,6 +107,18 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info con
 		if strings.HasSuffix(info.GetOriginModelName(), thinkingSuffix) &&
 			!strings.HasSuffix(openAIRequest.Model, thinkingSuffix) {
 			openAIRequest.Model = openAIRequest.Model + thinkingSuffix
+		}
+
+		if options.EnableMessagesToGPTCompatibility {
+			if effort := claudeRequest.GetEfforts(); effort != "" {
+				openAIRequest.ReasoningEffort = mapClaudeReasoningEffortFromEffort(effort)
+			}
+			if openAIRequest.ReasoningEffort == "" && claudeRequest.Thinking != nil {
+				openAIRequest.ReasoningEffort = mapClaudeThinkingToReasoningEffort(
+					claudeRequest.Thinking.Type,
+					claudeRequest.Thinking.GetBudgetTokens(),
+				)
+			}
 		}
 	}
 
@@ -191,13 +241,15 @@ func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info con
 						oaiToolMessage.SetStringContent(string(encodedJSON))
 					}
 					openAIMessages = append(openAIMessages, oaiToolMessage)
+				case "thinking", "redacted_thinking":
+					continue
 				}
 			}
 
 			if len(toolCalls) > 0 {
 				openAIMessage.SetToolCalls(toolCalls)
 			}
-			if len(mediaMessages) > 0 && len(toolCalls) == 0 {
+			if len(mediaMessages) > 0 {
 				openAIMessage.SetMediaContent(mediaMessages)
 			}
 		}

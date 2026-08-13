@@ -78,8 +78,12 @@ const { requestAssistantOpen } = await import('./assistant-events')
 const { AssistantLauncher } = await import('./assistant-launcher')
 const { AssistantPanel } = await import('./assistant-panel')
 
+const ASSISTANT_PRIVACY_NOTICE_COLLAPSE_DELAY_MS = 5_000
+
 const originalGet = api.get
 const originalPost = api.post
+const originalMatchMedia = window.matchMedia
+const originalInnerWidth = window.innerWidth
 const reactTestGlobals = globalThis as typeof globalThis & {
   IS_REACT_ACT_ENVIRONMENT?: boolean
 }
@@ -116,8 +120,11 @@ async function waitForCondition(
 }
 
 async function renderPanel(
-  initialPreset?: 'api-key' | 'models' | 'onboarding' | 'plan'
+  initialPreset?: 'api-key' | 'models' | 'onboarding' | 'plan',
+  mode: 'mobile' | 'rail' = 'mobile',
+  user: AuthUser | null = null
 ) {
+  useAuthStore.getState().auth.setUser(user)
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -127,6 +134,7 @@ async function renderPanel(
         <I18nextProvider i18n={i18n}>
           <AssistantPanel
             open
+            mode={mode}
             initialPreset={initialPreset}
             onOpenChange={() => {}}
           />
@@ -156,6 +164,20 @@ async function renderPanel(
 }
 
 async function renderLauncher(user: AuthUser | null = null) {
+  Object.defineProperty(window, 'innerWidth', {
+    configurable: true,
+    value: 1280,
+  })
+  window.matchMedia = ((query: string) => ({
+    matches: query === '(min-width: 1280px)',
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  })) as typeof window.matchMedia
   useAuthStore.getState().auth.setUser(user)
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -198,6 +220,53 @@ function findButton(text: string): HTMLButtonElement {
   return button
 }
 
+function findCard(text: string): HTMLElement | null {
+  return (
+    [...document.querySelectorAll<HTMLElement>('[data-slot="card"]')].find(
+      (card) => card.textContent?.includes(text)
+    ) ?? null
+  )
+}
+
+const originalSetTimeout = globalThis.setTimeout
+const originalClearTimeout = globalThis.clearTimeout
+const privacyNoticeTimerHandle = {} as ReturnType<typeof setTimeout>
+let capturedPrivacyNoticeTimer: (() => void) | null = null
+
+function capturePrivacyNoticeTimer() {
+  capturedPrivacyNoticeTimer = null
+  globalThis.setTimeout = ((callback: () => void, delay?: number) => {
+    if (
+      typeof callback === 'function' &&
+      delay === ASSISTANT_PRIVACY_NOTICE_COLLAPSE_DELAY_MS
+    ) {
+      capturedPrivacyNoticeTimer = () => callback()
+      return privacyNoticeTimerHandle
+    }
+    return originalSetTimeout(callback, delay)
+  }) as typeof globalThis.setTimeout
+  globalThis.clearTimeout = ((handle) => {
+    if (handle === privacyNoticeTimerHandle) {
+      capturedPrivacyNoticeTimer = null
+      return
+    }
+    return originalClearTimeout(handle)
+  }) as typeof globalThis.clearTimeout
+
+  return () => {
+    globalThis.setTimeout = originalSetTimeout
+    globalThis.clearTimeout = originalClearTimeout
+    capturedPrivacyNoticeTimer = null
+  }
+}
+
+function fireCapturedPrivacyNoticeTimer() {
+  const callback = capturedPrivacyNoticeTimer
+  if (!callback) throw new Error('Privacy notice collapse timer was not set')
+  capturedPrivacyNoticeTimer = null
+  callback()
+}
+
 async function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
   const setValue = Object.getOwnPropertyDescriptor(
     HTMLTextAreaElement.prototype,
@@ -212,8 +281,16 @@ async function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
 }
 
 afterEach(() => {
+  globalThis.setTimeout = originalSetTimeout
+  globalThis.clearTimeout = originalClearTimeout
+  capturedPrivacyNoticeTimer = null
   api.get = originalGet
   api.post = originalPost
+  window.matchMedia = originalMatchMedia
+  Object.defineProperty(window, 'innerWidth', {
+    configurable: true,
+    value: originalInnerWidth,
+  })
   useAuthStore.getState().auth.reset('complete')
   window.localStorage.clear()
   window.sessionStorage.clear()
@@ -223,6 +300,273 @@ afterEach(() => {
 after(() => domWindow.close())
 
 describe('AssistantPanel', () => {
+  test('auto-collapses the privacy notice without moving focus and can reopen it', async () => {
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/assistant/status')
+      return { data: { success: true, data: assistantStatus } }
+    }) as typeof api.get
+
+    const restoreTimers = capturePrivacyNoticeTimer()
+    const rendered = await renderPanel()
+    try {
+      const toggle = document.querySelector<HTMLButtonElement>(
+        '[data-testid="assistant-privacy-notice-toggle"]'
+      )
+      assert.ok(toggle)
+      assert.equal(toggle.getAttribute('aria-expanded'), 'true')
+      const privacyDescription = document.querySelector(
+        '#assistant-privacy-notice-description'
+      )?.textContent
+      assert.match(
+        privacyDescription ?? '',
+        /Your assistant conversations are not private\. Authorized higher-access users may review them\./
+      )
+      assert.match(
+        privacyDescription ?? '',
+        /Do not send personal information, passwords, API keys, or credentials in chat\./
+      )
+      assert.match(
+        privacyDescription ?? '',
+        /Pattern matching is not a guarantee\./
+      )
+
+      toggle.focus()
+      await act(async () => {
+        fireCapturedPrivacyNoticeTimer()
+        await flushEffects()
+      })
+      assert.equal(toggle.getAttribute('aria-expanded'), 'false')
+      assert.equal(document.activeElement, toggle)
+      assert.match(
+        document.querySelector('#assistant-privacy-notice-description')
+          ?.className ?? '',
+        /sr-only/
+      )
+
+      await act(async () => {
+        toggle.click()
+        await flushEffects()
+      })
+      assert.equal(toggle.getAttribute('aria-expanded'), 'true')
+      assert.doesNotMatch(
+        document.querySelector('#assistant-privacy-notice-description')
+          ?.className ?? '',
+        /sr-only/
+      )
+
+      await act(async () => {
+        fireCapturedPrivacyNoticeTimer()
+        await flushEffects()
+      })
+      assert.equal(toggle.getAttribute('aria-expanded'), 'false')
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+      restoreTimers()
+    }
+  })
+
+  test('renders the mobile assistant sheet at the full dynamic viewport size', async () => {
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/assistant/status')
+      return { data: { success: true, data: assistantStatus } }
+    }) as typeof api.get
+
+    const rendered = await renderPanel(undefined, 'mobile')
+    try {
+      const sheetContent = document.querySelector<HTMLElement>(
+        '[data-slot="sheet-content"]'
+      )
+      assert.ok(sheetContent)
+      assert.match(sheetContent.className, /h-dvh/)
+      assert.match(sheetContent.className, /w-screen/)
+      assert.match(sheetContent.className, /max-w-none/)
+      assert.match(sheetContent.className, /rounded-none/)
+      assert.ok(sheetContent.querySelector('[data-slot="sheet-close"]'))
+      assert.ok(sheetContent.querySelector('textarea'))
+      assert.match(
+        sheetContent.textContent ?? '',
+        /Your assistant conversations are not private/
+      )
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
+  test('hides an active tool card for a new ordinary message and allows reopening it', async () => {
+    api.get = (async (url: string) => {
+      if (url === '/api/assistant/status') {
+        return { data: { success: true, data: assistantStatus } }
+      }
+      assert.equal(url, '/api/user/models')
+      return {
+        data: {
+          success: true,
+          data: ['claude-3-7-sonnet', 'deepseek-v4-flash'],
+        },
+      }
+    }) as typeof api.get
+    api.post = (async (url: string) => {
+      assert.equal(url, '/api/assistant/chat')
+      return {
+        data: {
+          choices: [{ message: { content: 'A fresh ordinary answer.' } }],
+        },
+        headers: {},
+      }
+    }) as typeof api.post
+
+    const rendered = await renderPanel('models')
+    try {
+      await act(async () =>
+        waitForCondition(
+          () => findCard('View all currently available models') !== null,
+          'Model tool card did not render'
+        )
+      )
+
+      const textarea = document.querySelector<HTMLTextAreaElement>('textarea')
+      assert.ok(textarea)
+      await setTextareaValue(textarea, 'Start a fresh ordinary message.')
+      const submit = document.querySelector<HTMLButtonElement>(
+        'button[aria-label="Submit"]'
+      )
+      assert.ok(submit)
+      await act(async () => {
+        submit.click()
+        await flushEffects()
+      })
+      await act(async () =>
+        waitForCondition(
+          () =>
+            document.body.textContent?.includes('A fresh ordinary answer.') ===
+            true,
+          'Fresh ordinary answer did not render'
+        )
+      )
+      assert.equal(findCard('View all currently available models'), null)
+
+      await act(async () => {
+        requestAssistantOpen('models')
+        await flushEffects()
+      })
+      await act(async () =>
+        waitForCondition(
+          () => findCard('View all currently available models') !== null,
+          'Model tool card did not reopen'
+        )
+      )
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
+  test('removes response action cards when a new question starts', async () => {
+    let requestCount = 0
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/assistant/status')
+      return { data: { success: true, data: assistantStatus } }
+    }) as typeof api.get
+    api.post = (async (url: string) => {
+      assert.equal(url, '/api/assistant/chat')
+      requestCount += 1
+      return {
+        data: {
+          choices: [
+            {
+              message: {
+                content:
+                  requestCount === 1
+                    ? 'Here are the model IDs.'
+                    : 'The new question has a clean response.',
+              },
+            },
+          ],
+        },
+        headers:
+          requestCount === 1 ? { 'x-lmm-assistant-intent': 'models' } : {},
+      }
+    }) as typeof api.post
+
+    const rendered = await renderPanel()
+    try {
+      const textarea = document.querySelector<HTMLTextAreaElement>('textarea')
+      assert.ok(textarea)
+
+      await setTextareaValue(textarea, 'Which models can I use?')
+      await act(async () => {
+        findButton('Send').click()
+        await flushEffects()
+      })
+      await act(async () =>
+        waitForCondition(
+          () =>
+            document.body.textContent?.includes(
+              'View all currently available models'
+            ) === true,
+          'Response action card did not render'
+        )
+      )
+
+      await setTextareaValue(textarea, 'How do I continue?')
+      await act(async () => {
+        findButton('Send').click()
+        await flushEffects()
+      })
+      await act(async () =>
+        waitForCondition(
+          () =>
+            document.body.textContent?.includes(
+              'The new question has a clean response.'
+            ) === true,
+          'Second assistant response did not render'
+        )
+      )
+
+      assert.doesNotMatch(
+        document.body.textContent ?? '',
+        /View all currently available models/
+      )
+      assert.match(document.body.textContent ?? '', /Here are the model IDs\./)
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
+  test('clears tool state and local entries when clearing the conversation', async () => {
+    api.get = (async (url: string) => {
+      if (url === '/api/assistant/status') {
+        return { data: { success: true, data: assistantStatus } }
+      }
+      assert.equal(url, '/api/user/models')
+      return { data: { success: true, data: ['claude-3-7-sonnet'] } }
+    }) as typeof api.get
+
+    const rendered = await renderPanel('models')
+    try {
+      await act(async () =>
+        waitForCondition(
+          () => findCard('View all currently available models') !== null,
+          'Model tool card did not render'
+        )
+      )
+
+      await act(async () => {
+        findButton('Clear conversation').click()
+        await flushEffects()
+      })
+      assert.equal(findCard('View all currently available models'), null)
+      assert.match(document.body.textContent ?? '', /How can I help\?/)
+      assert.throws(() => findButton('Clear conversation'))
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
   test('uses an L1 unlock label only for L0 users', async () => {
     api.get = (async (url: string) => {
       if (url === '/api/assistant/status') {
@@ -318,23 +662,22 @@ describe('AssistantPanel', () => {
         'ai-assistant-panel'
       )
       assert.ok(document.querySelector('#ai-assistant-panel'))
+      await act(async () => {
+        requestAssistantOpen('plan')
+        await flushEffects()
+      })
       await act(async () =>
         waitForCondition(
           () =>
             document.body.textContent?.includes(
-              'Which option is the best value?'
+              'Live plan and discount advisor'
             ) === true,
-          'L1 assistant presets did not render'
+          'Plan tool did not open from the shortcut'
         )
       )
-
-      await act(async () => {
-        findButton('Which option is the best value?').click()
-        await flushEffects()
-      })
-      assert.match(
+      assert.doesNotMatch(
         document.body.textContent ?? '',
-        /Choose by workload rather than list price\./
+        /Which option is the best value\?/
       )
 
       const collapseButton = document.querySelector<HTMLButtonElement>(
@@ -361,7 +704,7 @@ describe('AssistantPanel', () => {
         waitForCondition(
           () =>
             document.body.textContent?.includes(
-              'Choose by workload rather than list price.'
+              'Live plan and discount advisor'
             ) === true,
           'Assistant conversation was not restored'
         )
@@ -370,6 +713,24 @@ describe('AssistantPanel', () => {
         document.querySelector('[data-testid="assistant-collapse"]') !== null,
         true
       )
+
+      const fullscreenButton = document.querySelector<HTMLButtonElement>(
+        '[data-testid="assistant-fullscreen"]'
+      )
+      assert.ok(fullscreenButton)
+      await act(async () => {
+        fullscreenButton.click()
+        await flushEffects()
+      })
+      assert.ok(document.querySelector('[role="dialog"]'))
+      assert.ok(document.querySelector('[aria-label="Exit full screen"]'))
+      await act(async () => {
+        document
+          .querySelector<HTMLButtonElement>('[aria-label="Exit full screen"]')
+          ?.click()
+        await flushEffects()
+      })
+      assert.equal(document.querySelector('[role="dialog"]'), null)
     } finally {
       await act(async () => rendered.root.unmount())
       rendered.queryClient.clear()
@@ -429,7 +790,7 @@ describe('AssistantPanel', () => {
     }
   })
 
-  test('appends guided presets without replacing the current conversation', async () => {
+  test('opens a tool shortcut without appending a canned question', async () => {
     api.get = (async (url: string) => {
       assert.equal(url, '/api/assistant/status')
       return { data: { success: true, data: assistantStatus } }
@@ -437,7 +798,15 @@ describe('AssistantPanel', () => {
 
     const rendered = await renderPanel('api-key')
     try {
-      assert.match(
+      await act(async () =>
+        waitForCondition(
+          () =>
+            document.body.textContent?.includes('Create a default API key') ===
+            true,
+          'API key tool did not open'
+        )
+      )
+      assert.doesNotMatch(
         document.body.textContent ?? '',
         /What are my Base URL, model ID, and API key\?/
       )
@@ -447,11 +816,16 @@ describe('AssistantPanel', () => {
         await flushEffects()
       })
 
-      assert.match(
-        document.body.textContent ?? '',
-        /What are my Base URL, model ID, and API key\?/
+      await act(async () =>
+        waitForCondition(
+          () =>
+            document.body.textContent?.includes(
+              'Live plan and discount advisor'
+            ) === true,
+          'Plan tool did not open'
+        )
       )
-      assert.match(
+      assert.doesNotMatch(
         document.body.textContent ?? '',
         /Which option is the best value\?/
       )
@@ -485,7 +859,8 @@ describe('AssistantPanel', () => {
           'L0 access request did not render'
         )
       )
-      assert.match(
+      assert.match(document.body.textContent ?? '', /Unlock L1 with AI/)
+      assert.doesNotMatch(
         document.body.textContent ?? '',
         /Ask an administrator to raise my access level/
       )
@@ -503,12 +878,13 @@ describe('AssistantPanel', () => {
         findButton('Clear conversation').click()
         await flushEffects()
       })
-      assert.ok(findButton('Ask an administrator to raise my access level'))
+      assert.doesNotMatch(
+        document.body.textContent ?? '',
+        /Ask an administrator to raise my access level/
+      )
       assert.throws(() => findButton('Which option is the best value?'))
       assert.throws(() => findButton('How is request cost calculated?'))
-      assert.throws(() =>
-        findButton('What can I do while access is under review?')
-      )
+      assert.ok(findButton('What can I do while access is under review?'))
       assert.throws(() =>
         findButton('How do I set up Claude Code or CC Switch?')
       )
@@ -520,6 +896,64 @@ describe('AssistantPanel', () => {
 
       assert.throws(() => findButton('Create API key'))
       assert.equal(document.querySelector('a[href="/wallet"]'), null)
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
+  test('shows the onboarding todo only after developer access is granted', async () => {
+    api.get = (async (url: string) => {
+      if (url === '/api/assistant/status') {
+        return { data: { success: true, data: assistantStatus } }
+      }
+      assert.equal(url, '/api/user/self/onboarding/todo')
+      return {
+        data: {
+          success: true,
+          data: {
+            eligibility: {
+              eligible: true,
+              developer_access_granted: true,
+              trust_level: 1,
+            },
+            status: 'in_progress',
+            current_step: 'create_api_key',
+            steps: [
+              { id: 'create_api_key', status: 'pending' },
+              { id: 'install_client', status: 'pending' },
+              { id: 'configure_client', status: 'pending' },
+              { id: 'first_successful_response', status: 'pending' },
+            ],
+          },
+        },
+      }
+    }) as typeof api.get
+
+    const rendered = await renderPanel(undefined, 'mobile', {
+      id: 42,
+      username: 'l1-user',
+      role: 1,
+      developer_access_granted: true,
+      onboarding: {
+        activation_complete: true,
+        credential_complete: false,
+        first_request_complete: false,
+        stage: 'credential',
+      },
+    })
+    try {
+      await act(async () =>
+        waitForCondition(
+          () =>
+            document.querySelector(
+              '[data-testid="assistant-onboarding-todo"]'
+            ) !== null,
+          'L1 onboarding todo did not render'
+        )
+      )
+      assert.match(document.body.textContent ?? '', /First-use checklist/)
+      assert.match(document.body.textContent ?? '', /Create API key/)
     } finally {
       await act(async () => rendered.root.unmount())
       rendered.queryClient.clear()
@@ -576,10 +1010,6 @@ describe('AssistantPanel', () => {
 
     const rendered = await renderPanel('models')
     try {
-      await act(async () => {
-        findButton('View all currently available models').click()
-        await flushEffects()
-      })
       await act(async () =>
         waitForCondition(
           () =>
@@ -616,6 +1046,112 @@ describe('AssistantPanel', () => {
         /charged to the super administrator account, not your wallet/
       )
       assert.doesNotMatch(document.body.textContent ?? '', /Weekly included/)
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
+  test('gives administrators a confirmation-gated server change card', async () => {
+    let appliedRequest: unknown
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/assistant/status')
+      return {
+        data: {
+          success: true,
+          data: {
+            ...assistantStatus,
+            role: 10,
+            is_admin: true,
+            access_level: 'ADMIN',
+            capabilities: {
+              account: true,
+              admin_config: true,
+              admin_pricing: true,
+            },
+          },
+        },
+      }
+    }) as typeof api.get
+    api.post = (async (url: string, data: unknown) => {
+      if (url === '/api/assistant/chat') {
+        return {
+          data: {
+            choices: [
+              { message: { content: 'I prepared the exact preview.' } },
+            ],
+            lmm_assistant_action: {
+              type: 'admin_config_change',
+              confirmation_token: 'admin-secret-token',
+              requires_confirmation: true,
+              expires_in_seconds: 600,
+              changes: [
+                {
+                  key: 'DefaultCollapseSidebar',
+                  label: 'Collapse the main sidebar by default',
+                  old_value: 'false',
+                  new_value: 'true',
+                },
+              ],
+            },
+          },
+          headers: {},
+        }
+      }
+      assert.equal(url, '/api/assistant/admin/apply')
+      appliedRequest = data
+      return {
+        data: {
+          success: true,
+          data: { applied: true, kind: 'config' },
+        },
+      }
+    }) as typeof api.post
+
+    const rendered = await renderPanel()
+    try {
+      assert.match(
+        document.body.textContent ?? '',
+        /ADMIN · Administrator mode/
+      )
+      const textarea = document.querySelector<HTMLTextAreaElement>(
+        'textarea[placeholder="Ask about server configuration, model pricing, or operations..."]'
+      )
+      assert.ok(textarea)
+      await setTextareaValue(textarea, 'Turn on the desktop sidebar default.')
+      await act(async () => {
+        document
+          .querySelector<HTMLButtonElement>('button[aria-label="Submit"]')
+          ?.click()
+        await flushEffects()
+      })
+      await act(async () =>
+        waitForCondition(
+          () =>
+            document.body.textContent?.includes(
+              'Administrator configuration change'
+            ) === true,
+          'Administrator preview did not render'
+        )
+      )
+      assert.doesNotMatch(document.body.textContent ?? '', /admin-secret-token/)
+      await act(async () => {
+        findButton('Confirm and apply').click()
+        await flushEffects()
+      })
+      await act(async () =>
+        waitForCondition(
+          () =>
+            document.body.textContent?.includes(
+              'Administrator change applied'
+            ) === true,
+          'Administrator change result did not render'
+        )
+      )
+      assert.deepEqual(appliedRequest, {
+        confirmation_token: 'admin-secret-token',
+        confirmed: true,
+      })
     } finally {
       await act(async () => rendered.root.unmount())
       rendered.queryClient.clear()
@@ -711,13 +1247,20 @@ describe('AssistantPanel', () => {
       await act(async () =>
         waitForCondition(
           () =>
-            document.body.textContent?.includes('Lower-access user conversation') ===
-            true,
+            document.body.textContent?.includes(
+              'Lower-access user conversation'
+            ) === true,
           'Assistant history did not render'
         )
       )
-      assert.doesNotMatch(document.body.textContent ?? '', /private@example\.test/)
-      assert.doesNotMatch(document.body.textContent ?? '', /sk-history-secret-123456/)
+      assert.doesNotMatch(
+        document.body.textContent ?? '',
+        /private@example\.test/
+      )
+      assert.doesNotMatch(
+        document.body.textContent ?? '',
+        /sk-history-secret-123456/
+      )
 
       await act(async () => {
         const viewButtons = [
@@ -808,22 +1351,29 @@ describe('AssistantPanel', () => {
     }
   })
 
-  test('does not place sensitive input into the chat transcript or send it to the assistant', async () => {
-    let posted = 0
+  test('redacts mixed sensitive input and continues the assistant request', async () => {
+    let postedBody: unknown
     api.get = (async (url: string) => {
       assert.equal(url, '/api/assistant/status')
       return { data: { success: true, data: assistantStatus } }
     }) as typeof api.get
-    api.post = (async () => {
-      posted += 1
-      throw new Error('Sensitive input must not be sent')
+    api.post = (async (url: string, data: unknown) => {
+      assert.equal(url, '/api/assistant/chat')
+      postedBody = data
+      return {
+        data: { choices: [{ message: { content: 'Here is the diagnosis.' } }] },
+        headers: {},
+      }
     }) as typeof api.post
 
     const rendered = await renderPanel()
     try {
       const textarea = document.querySelector<HTMLTextAreaElement>('textarea')
       assert.ok(textarea)
-      await setTextareaValue(textarea, 'my email is private@example.test')
+      await setTextareaValue(
+        textarea,
+        'Explain this failure for private@example.test with sk-private-secret-123456.'
+      )
       const submit = document.querySelector<HTMLButtonElement>(
         'button[aria-label="Submit"]'
       )
@@ -832,12 +1382,67 @@ describe('AssistantPanel', () => {
         submit.click()
         await flushEffects()
       })
+      await act(async () =>
+        waitForCondition(
+          () =>
+            document.body.textContent?.includes('Here is the diagnosis.') ===
+            true,
+          'Redacted assistant request did not complete'
+        )
+      )
+      const serializedBody = JSON.stringify(postedBody)
+      assert.doesNotMatch(serializedBody, /private@example\.test/)
+      assert.doesNotMatch(serializedBody, /sk-private-secret-123456/)
+      assert.match(serializedBody, /REDACTED_EMAIL/)
+      assert.match(serializedBody, /REDACTED_API_KEY/)
+      assert.match(
+        document.body.textContent ?? '',
+        /Sensitive content was redacted before sending\./
+      )
+      assert.doesNotMatch(
+        document.body.textContent ?? '',
+        /private@example\.test/
+      )
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
+  test('does not send a message that contains only a secret', async () => {
+    let posted = 0
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/assistant/status')
+      return { data: { success: true, data: assistantStatus } }
+    }) as typeof api.get
+    api.post = (async () => {
+      posted += 1
+      throw new Error('A secret-only message must not be sent')
+    }) as typeof api.post
+
+    const rendered = await renderPanel()
+    try {
+      const textarea = document.querySelector<HTMLTextAreaElement>('textarea')
+      assert.ok(textarea)
+      await setTextareaValue(textarea, 'sk-private-secret-123456')
+      const submit = document.querySelector<HTMLButtonElement>(
+        'button[aria-label="Submit"]'
+      )
+      assert.ok(submit)
+      await act(async () => {
+        submit.click()
+        await flushEffects()
+      })
+
       assert.equal(posted, 0)
       assert.match(
         document.body.textContent ?? '',
-        /Sensitive message was not sent/
+        /Only sensitive content remained after redaction\./
       )
-      assert.doesNotMatch(document.body.textContent ?? '', /private@example\.test/)
+      assert.doesNotMatch(
+        document.body.textContent ?? '',
+        /sk-private-secret-123456/
+      )
     } finally {
       await act(async () => rendered.root.unmount())
       rendered.queryClient.clear()
@@ -1078,7 +1683,9 @@ describe('AssistantPanel', () => {
       })
       await act(async () =>
         waitForCondition(
-          () => document.body.textContent?.includes('Keep your key private.') === true,
+          () =>
+            document.body.textContent?.includes('Keep your key private.') ===
+            true,
           'Markdown assistant answer did not render'
         )
       )

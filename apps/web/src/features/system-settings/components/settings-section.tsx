@@ -16,9 +16,17 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { Copy } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
+
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
-import { useSuppressSettingsSectionHeader } from './settings-page-context'
+import {
+  SettingsPageActionsPortal,
+  useSuppressSettingsSectionHeader,
+} from './settings-page-context'
 
 type SettingsSectionProps = {
   title: string
@@ -34,18 +42,62 @@ export function SettingsSection({
   className,
 }: SettingsSectionProps) {
   const suppressHeader = useSuppressSettingsSectionHeader()
+  const { t } = useTranslation()
+
+  const copyConfigurationPrompt = async () => {
+    const prompt = JSON.stringify(
+      {
+        source: 'lmm.best.settings',
+        action: 'help_configure',
+        page: typeof window === 'undefined' ? '' : window.location.pathname,
+        section: title,
+        instructions: [
+          'Help configure this settings section.',
+          'First explain the relevant options and ask concise questions about the desired outcome.',
+          'Propose a safe configuration before any change and keep existing security safeguards enabled.',
+          'Do not invent server capabilities or credentials.',
+        ],
+      },
+      null,
+      2
+    )
+
+    try {
+      await navigator.clipboard.writeText(prompt)
+      toast.success(t('Copied to clipboard'))
+    } catch {
+      toast.error(t('Failed to copy'))
+    }
+  }
+
+  const configureButton = (
+    <Button
+      type='button'
+      size='sm'
+      variant='outline'
+      onClick={copyConfigurationPrompt}
+      title={t('Copy configuration prompt to AI')}
+    >
+      <Copy data-icon='inline-start' />
+      <span>{t('Help me configure')}</span>
+    </Button>
+  )
 
   return (
     <section className={cn('flex flex-col gap-4', className)}>
       {!suppressHeader && (
-        <div className='flex flex-col gap-1'>
+        <div className='flex flex-wrap items-center justify-between gap-2'>
           <h3
             {...titleProps}
             className={cn('text-base font-semibold', titleProps?.className)}
           >
             {title}
           </h3>
+          {configureButton}
         </div>
+      )}
+      {suppressHeader && (
+        <SettingsPageActionsPortal>{configureButton}</SettingsPageActionsPortal>
       )}
       {children}
     </section>

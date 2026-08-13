@@ -39,12 +39,94 @@ import { useAuthStore } from '@/stores/auth-store'
 import { defaultTopNavLinks } from '../config/top-nav.config'
 import type { TopNavLink } from '../types'
 import { HeaderLogo } from './header-logo'
+import { getNavLinkKey } from './nav-link-key'
 
 const AUTH_PROMPT_SECONDS = 5
 
 type AuthPromptTarget = {
   title: string
   href: string
+}
+
+function getDisplaySiteName(
+  customSiteName: string | undefined,
+  usesDefaultBrand: boolean,
+  systemName: string
+) {
+  if (customSiteName) return customSiteName
+  if (usesDefaultBrand && systemName === DEFAULT_SYSTEM_NAME) {
+    return LMM_BRAND_NAME
+  }
+  return systemName
+}
+
+function getPublicNavClassName(
+  editorialHeader: boolean | undefined,
+  scrolled: boolean
+) {
+  let surfaceClassName: string
+  if (scrolled) {
+    surfaceClassName = editorialHeader
+      ? 'forge-public-nav-scrolled'
+      : 'border-border bg-background shadow-md'
+  } else {
+    surfaceClassName = editorialHeader
+      ? 'forge-public-nav-top'
+      : 'border-border'
+  }
+
+  return cn(
+    'flex items-center justify-between transition-all duration-700 ease-[cubic-bezier(0.16,1,0.3,1)]',
+    editorialHeader ? 'forge-public-nav' : 'text-foreground',
+    scrolled ? 'h-12 rounded-sm pr-1.5 pl-4' : 'h-16 border-b px-2',
+    surfaceClassName
+  )
+}
+
+function getDesktopNavLinkClassName(
+  editorialHeader: boolean | undefined,
+  isActive: boolean,
+  disabled: boolean | undefined
+) {
+  let stateClassName: string
+  if (editorialHeader) {
+    stateClassName = isActive
+      ? 'forge-public-nav-link-active'
+      : 'forge-public-nav-link'
+  } else {
+    stateClassName = isActive
+      ? 'text-foreground'
+      : 'text-foreground/68 hover:text-foreground'
+  }
+
+  return cn(
+    'focus-visible:ring-ring focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none touch-manipulation rounded-lg px-3 py-1.5 text-[13px] font-medium transition-colors duration-200',
+    stateClassName,
+    disabled && 'pointer-events-none opacity-50'
+  )
+}
+
+function getMobileNavLinkClassName(
+  editorialHeader: boolean | undefined,
+  isActive: boolean,
+  mobileOpen: boolean,
+  disabled: boolean | undefined
+) {
+  let stateClassName: string
+  if (editorialHeader) {
+    stateClassName = isActive
+      ? 'forge-public-mobile-link-active'
+      : 'forge-public-mobile-link'
+  } else {
+    stateClassName = isActive ? 'text-foreground' : 'text-muted-foreground'
+  }
+
+  return cn(
+    'focus-visible:ring-ring focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none touch-manipulation flex min-h-11 items-center gap-3 py-3 text-base font-medium tracking-tight transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)]',
+    mobileOpen ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0',
+    stateClassName,
+    disabled && 'pointer-events-none opacity-50'
+  )
 }
 
 export interface PublicHeaderProps {
@@ -105,11 +187,11 @@ export function PublicHeader(props: PublicHeaderProps) {
   const editorialHeader = props.className?.includes('forge-public-header')
   const isAuthenticated = !!user
   const usesDefaultBrand = !customLogo && systemLogo === DEFAULT_LOGO
-  const displaySiteName =
-    customSiteName ||
-    (usesDefaultBrand && systemName === DEFAULT_SYSTEM_NAME
-      ? LMM_BRAND_NAME
-      : systemName)
+  const displaySiteName = getDisplaySiteName(
+    customSiteName,
+    usesDefaultBrand,
+    systemName
+  )
   const links =
     useDynamicNavLinks && dynamicLinks.length > 0 ? dynamicLinks : navLinks
   const mobileNavigationLinks = props.mobileLinks ?? links
@@ -143,11 +225,11 @@ export function PublicHeader(props: PublicHeaderProps) {
 
     const menu = mobileMenuRef.current
     const focusable = menu
-      ? Array.from(
-          menu.querySelectorAll<HTMLElement>(
+      ? [
+          ...menu.querySelectorAll<HTMLElement>(
             'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])'
-          )
-        )
+          ),
+        ]
       : []
     const firstFocusable = focusable[0]
     firstFocusable?.focus()
@@ -283,26 +365,14 @@ export function PublicHeader(props: PublicHeaderProps) {
           )}
         >
           <nav
-            className={cn(
-              'flex items-center justify-between transition-all duration-700 ease-[cubic-bezier(0.16,1,0.3,1)]',
-              editorialHeader ? 'forge-public-nav' : 'text-foreground',
-              scrolled
-                ? cn(
-                    'h-12 rounded-sm pr-1.5 pl-4',
-                    editorialHeader
-                      ? 'forge-public-nav-scrolled'
-                      : 'border-border bg-background shadow-md'
-                  )
-                : cn(
-                    'h-16 border-b px-2',
-                    editorialHeader ? 'forge-public-nav-top' : 'border-border'
-                  )
-            )}
+            className={getPublicNavClassName(editorialHeader, scrolled)}
+            aria-label={t('Header navigation')}
           >
             {/* Logo */}
             <Link
               to={homeUrl}
-              className='group flex shrink-0 items-center gap-2.5'
+              aria-label={displaySiteName}
+              className='group focus-visible:ring-ring flex shrink-0 touch-manipulation items-center gap-2.5 focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none'
             >
               <div className='flex size-7 shrink-0 items-center justify-center transition-all duration-300 group-hover:scale-105'>
                 {logoContent}
@@ -319,19 +389,18 @@ export function PublicHeader(props: PublicHeaderProps) {
                 if (link.external) {
                   return (
                     <a
-                      key={`${link.title}:${link.href}`}
+                      key={getNavLinkKey(link)}
                       href={link.href}
                       target='_blank'
                       rel='noopener noreferrer'
-                      aria-disabled={link.disabled}
+                      aria-current={isActive ? 'page' : undefined}
+                      aria-disabled={link.disabled || undefined}
                       tabIndex={link.disabled ? -1 : undefined}
                       onClick={(event) => handleNavLinkClick(event, link)}
-                      className={cn(
-                        'rounded-lg px-3 py-1.5 text-[13px] font-medium transition-colors duration-200',
-                        editorialHeader
-                          ? 'forge-public-nav-link'
-                          : 'text-foreground/68 hover:text-foreground',
-                        link.disabled && 'pointer-events-none opacity-50'
+                      className={getDesktopNavLinkClassName(
+                        editorialHeader,
+                        isActive,
+                        link.disabled
                       )}
                     >
                       {t(link.title)}
@@ -340,20 +409,17 @@ export function PublicHeader(props: PublicHeaderProps) {
                 }
                 return (
                   <Link
-                    key={`${link.title}:${link.href}`}
+                    key={getNavLinkKey(link)}
                     to={link.href}
                     disabled={link.disabled}
+                    aria-current={isActive ? 'page' : undefined}
+                    aria-disabled={link.disabled || undefined}
+                    tabIndex={link.disabled ? -1 : undefined}
                     onClick={(event) => handleNavLinkClick(event, link)}
-                    className={cn(
-                      'rounded-lg px-3 py-1.5 text-[13px] font-medium transition-colors duration-200',
-                      isActive
-                        ? editorialHeader
-                          ? 'forge-public-nav-link-active'
-                          : 'text-foreground'
-                        : editorialHeader
-                          ? 'forge-public-nav-link'
-                          : 'text-foreground/68 hover:text-foreground',
-                      link.disabled && 'pointer-events-none opacity-50'
+                    className={getDesktopNavLinkClassName(
+                      editorialHeader,
+                      isActive,
+                      link.disabled
                     )}
                   >
                     {t(link.title)}
@@ -386,10 +452,10 @@ export function PublicHeader(props: PublicHeaderProps) {
               )}
 
               {showAuthButtons && (
-                <>
+                <div className='contents'>
                   <div className='bg-border/40 mx-1 h-4 w-px' />
                   {desktopAuthContent}
-                </>
+                </div>
               )}
             </div>
 
@@ -403,12 +469,13 @@ export function PublicHeader(props: PublicHeaderProps) {
                 type='button'
                 variant='ghost'
                 size='icon'
-                className='size-11'
+                className='focus-visible:ring-ring size-11 touch-manipulation focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none'
                 ref={mobileMenuButtonRef}
                 onClick={() => setMobileOpen((v) => !v)}
                 aria-label={t('Toggle navigation menu')}
                 aria-expanded={mobileOpen}
                 aria-controls='public-mobile-navigation'
+                aria-haspopup='dialog'
               >
                 <div className='relative size-4'>
                   <span
@@ -453,26 +520,21 @@ export function PublicHeader(props: PublicHeaderProps) {
           ref={mobileMenuRef}
           role='dialog'
           aria-modal='true'
-          aria-label={t('Toggle navigation menu')}
+          aria-label={t('Header navigation')}
           aria-hidden={!mobileOpen}
           className='public-mobile-navigation flex h-full flex-col justify-between px-8 pt-[calc(5rem+env(safe-area-inset-top))] pb-[max(2.5rem,env(safe-area-inset-bottom))]'
         >
-          <nav className='flex flex-col gap-1'>
+          <nav
+            aria-label={t('Header navigation')}
+            className='flex flex-col gap-1'
+          >
             {mobileNavigationLinks.map((link, i) => {
               const isActive = pathname === link.href
-              const linkClassName = cn(
-                'flex items-center gap-3 py-3 text-base font-medium tracking-tight transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)]',
-                mobileOpen
-                  ? 'translate-y-0 opacity-100'
-                  : 'translate-y-4 opacity-0',
-                editorialHeader
-                  ? isActive
-                    ? 'forge-public-mobile-link-active'
-                    : 'forge-public-mobile-link'
-                  : isActive
-                    ? 'text-foreground'
-                    : 'text-muted-foreground',
-                link.disabled && 'pointer-events-none opacity-50'
+              const linkClassName = getMobileNavLinkClassName(
+                editorialHeader,
+                isActive,
+                mobileOpen,
+                link.disabled
               )
               const transitionStyle = {
                 transitionDelay: mobileOpen ? `${100 + i * 50}ms` : '0ms',
@@ -480,11 +542,12 @@ export function PublicHeader(props: PublicHeaderProps) {
               if (link.external) {
                 return (
                   <a
-                    key={`${link.title}:${link.href}`}
+                    key={getNavLinkKey(link)}
                     href={link.href}
                     target='_blank'
                     rel='noopener noreferrer'
-                    aria-disabled={link.disabled}
+                    aria-current={isActive ? 'page' : undefined}
+                    aria-disabled={link.disabled || undefined}
                     tabIndex={!mobileOpen || link.disabled ? -1 : undefined}
                     onClick={(event) => handleNavLinkClick(event, link, true)}
                     className={linkClassName}
@@ -496,9 +559,11 @@ export function PublicHeader(props: PublicHeaderProps) {
               }
               return (
                 <Link
-                  key={`${link.title}:${link.href}`}
+                  key={getNavLinkKey(link)}
                   to={link.href}
                   disabled={link.disabled}
+                  aria-current={isActive ? 'page' : undefined}
+                  aria-disabled={link.disabled || undefined}
                   onClick={(event) => handleNavLinkClick(event, link, true)}
                   className={linkClassName}
                   style={transitionStyle}
@@ -528,7 +593,7 @@ export function PublicHeader(props: PublicHeaderProps) {
                 }
                 onClick={() => setMobileOpen(false)}
                 className={cn(
-                  'inline-flex h-10 items-center justify-center rounded-lg text-sm font-medium transition-opacity hover:opacity-90 active:opacity-80',
+                  'focus-visible:ring-ring focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none touch-manipulation inline-flex min-h-11 h-10 items-center justify-center rounded-lg text-sm font-medium transition-opacity hover:opacity-90 active:opacity-80',
                   editorialHeader
                     ? 'forge-public-mobile-action'
                     : 'bg-foreground text-background'
@@ -555,14 +620,14 @@ export function PublicHeader(props: PublicHeaderProps) {
         })}
         contentClassName='sm:max-w-md'
         contentHeight='auto'
-        footer={
-          <>
-            <Button variant='outline' onClick={closeAuthPrompt}>
-              {t('Cancel')}
-            </Button>
-            <Button onClick={navigateToSignIn}>{t('Sign in now')}</Button>
-          </>
-        }
+        footer={[
+          <Button key='cancel' variant='outline' onClick={closeAuthPrompt}>
+            {t('Cancel')}
+          </Button>,
+          <Button key='sign-in' onClick={navigateToSignIn}>
+            {t('Sign in now')}
+          </Button>,
+        ]}
       >
         <div className='bg-muted/40 text-muted-foreground rounded-lg px-3 py-2 text-sm'>
           {t('Redirecting to sign in in {{seconds}} seconds.', {

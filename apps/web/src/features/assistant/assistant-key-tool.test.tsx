@@ -237,8 +237,13 @@ describe('AssistantKeyTool', () => {
     assert.match(rendered.container.textContent ?? '', /API key created/)
     assert.match(rendered.container.textContent ?? '', /claude-sonnet-4-5/)
     assert.match(rendered.container.textContent ?? '', /Private API key/)
-    assert.doesNotMatch(rendered.container.textContent ?? '', /sk-created-by-test/)
-    assert.ok(rendered.container.querySelector('[data-testid="assistant-private-card"]'))
+    assert.doesNotMatch(
+      rendered.container.textContent ?? '',
+      /sk-created-by-test/
+    )
+    assert.ok(
+      rendered.container.querySelector('[data-testid="assistant-private-card"]')
+    )
     assert.equal(continued, 0)
 
     await act(async () => {
@@ -254,7 +259,10 @@ describe('AssistantKeyTool', () => {
       findButton('Hide credential').click()
       await flushEffects()
     })
-    assert.doesNotMatch(rendered.container.textContent ?? '', /sk-created-by-test/)
+    assert.doesNotMatch(
+      rendered.container.textContent ?? '',
+      /sk-created-by-test/
+    )
 
     await act(async () => {
       findButton('I copied it — continue setup').click()

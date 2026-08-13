@@ -195,7 +195,7 @@ func GetTopUpInfo(c *gin.Context) {
 			return nil
 		}(),
 		"creem_products":          setting.CreemProducts,
-		"pay_methods":             payMethods,
+		"pay_methods":             sanitizedPaymentMethods(payMethods),
 		"topup_group_ratio":       topupGroupRatio,
 		"min_topup":               operation_setting.MinTopUp,
 		"stripe_min_topup":        setting.StripeMinTopUp,
@@ -281,7 +281,7 @@ func availablePaymentMethods(complianceConfirmed bool) []map[string]string {
 func sanitizedPaymentMethods(methods []map[string]string) []map[string]string {
 	allowed := map[string]struct{}{
 		"name": {}, "type": {}, "icon": {}, "color": {}, "min_topup": {},
-		"max_topup": {}, "settlement_unit": {}, "unit_price": {}, "topup_ratio": {},
+		"max_topup": {}, "description": {}, "settlement_unit": {}, "unit_price": {}, "topup_ratio": {},
 	}
 	result := make([]map[string]string, 0, len(methods))
 	for _, method := range methods {
@@ -413,9 +413,17 @@ func GetEpayClient() *epay.Client {
 }
 
 var positiveDecimalPattern = regexp.MustCompile(`^[0-9]+(?:\.[0-9]+)?$`)
+var nonNegativeDecimalPattern = regexp.MustCompile(`^[0-9]+(?:\.[0-9]+)?$`)
 var settlementUnitPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,16}$`)
 
 func getPayMethod(paymentMethod string) (map[string]string, error) {
+	enabled, err := configuredPaymentMethodEnabled(paymentMethod)
+	if err != nil {
+		return nil, err
+	}
+	if !enabled {
+		return nil, fmt.Errorf("payment method %q is disabled", paymentMethod)
+	}
 	for _, payMethod := range operation_setting.PayMethods {
 		if payMethod["type"] == paymentMethod {
 			return payMethod, nil

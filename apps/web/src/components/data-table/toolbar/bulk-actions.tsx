@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import type { Table } from '@tanstack/react-table'
 import { X } from 'lucide-react'
-import { useState, useEffect, useLayoutEffect, useRef } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Badge } from '@/components/ui/badge'
@@ -57,10 +57,14 @@ export function DataTableBulkActions<TData>({
   const selectedCount = selectedRows.length
   const toolbarRef = useRef<HTMLDivElement>(null)
   const buttonsRef = useRef<NodeListOf<HTMLButtonElement> | null>(null)
+  const descriptionId = useId()
   const [announcement, setAnnouncement] = useState('')
 
   useLayoutEffect(() => {
-    buttonsRef.current = toolbarRef.current?.querySelectorAll('button') ?? null
+    buttonsRef.current =
+      toolbarRef.current?.querySelectorAll<HTMLButtonElement>(
+        'button:not(:disabled)'
+      ) ?? null
   })
 
   // Announce selection changes to screen readers
@@ -82,23 +86,24 @@ export function DataTableBulkActions<TData>({
 
   const handleKeyDown = (event: React.KeyboardEvent) => {
     const buttons = buttonsRef.current
-    if (!buttons) return
+    if (!buttons?.length) return
 
-    const currentIndex = [...buttons].findIndex(
-      (button) => button === document.activeElement
+    const currentIndex = [...buttons].indexOf(
+      document.activeElement as HTMLButtonElement
     )
 
     switch (event.key) {
       case 'ArrowRight': {
         event.preventDefault()
-        const nextIndex = (currentIndex + 1) % buttons.length
+        const nextIndex =
+          currentIndex < 0 ? 0 : (currentIndex + 1) % buttons.length
         buttons[nextIndex]?.focus()
         break
       }
       case 'ArrowLeft': {
         event.preventDefault()
         const prevIndex =
-          currentIndex === 0 ? buttons.length - 1 : currentIndex - 1
+          currentIndex <= 0 ? buttons.length - 1 : currentIndex - 1
         buttons[prevIndex]?.focus()
         break
       }
@@ -162,7 +167,7 @@ export function DataTableBulkActions<TData>({
         ref={toolbarRef}
         role='toolbar'
         aria-label={`Bulk actions for ${selectedCount} selected ${entityName}${selectedCount > 1 ? 's' : ''}`}
-        aria-describedby='bulk-actions-description'
+        aria-describedby={descriptionId}
         tabIndex={-1}
         onKeyDown={handleKeyDown}
         className={cn(
@@ -173,7 +178,7 @@ export function DataTableBulkActions<TData>({
       >
         <div
           className={cn(
-            'p-2 shadow-xl',
+            'max-w-[calc(100vw-1rem)] overflow-x-auto p-2 shadow-xl',
             'rounded-xl border',
             'bg-background/95 supports-[backdrop-filter]:bg-background/60 backdrop-blur-lg',
             'flex items-center gap-x-2'
@@ -206,10 +211,7 @@ export function DataTableBulkActions<TData>({
             aria-hidden='true'
           />
 
-          <div
-            className='flex items-center gap-x-1 text-sm'
-            id='bulk-actions-description'
-          >
+          <div className='flex items-center gap-x-1 text-sm' id={descriptionId}>
             <Badge
               variant='default'
               className='min-w-8 rounded-lg'

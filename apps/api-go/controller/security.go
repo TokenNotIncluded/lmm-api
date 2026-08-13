@@ -11,7 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting"
-	"github.com/QuantumNous/new-api/setting/model_setting"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -48,7 +48,8 @@ func GetAdminSecurityPolicy(c *gin.Context) {
 			OnPrompt: settings.OnPrompt,
 			Action:   settings.Action,
 		},
-		Rules: adminRules,
+		Rules:        adminRules,
+		ViolationFee: violationFeeSettingsDTO(),
 	})
 }
 
@@ -156,21 +157,32 @@ func buildPublicSecurityPolicy() dto.PublicSecurityPolicy {
 		})
 	}
 
-	violationFees := make([]dto.SecurityViolationFeeRule, 0, 1)
-	grokSettings := model_setting.GetGrokSettings()
-	if grokSettings != nil {
-		violationFees = append(violationFees, dto.SecurityViolationFeeRule{
-			Code:              string(types.ErrorCodeViolationFeeGrokCSAM),
-			Provider:          "Grok / xAI upstream",
-			Trigger:           "The upstream provider returns a content-safety violation marker.",
-			Enabled:           grokSettings.ViolationDeductionEnabled,
-			AmountUSD:         grokSettings.ViolationDeductionAmount,
-			ChargeUnit:        "per request",
-			Retryable:         false,
-			Description:       "An additional fee may be charged when the upstream provider classifies a request as a usage-policy violation.",
-			ChargingNotes:     "amount_usd is the base amount before the request's group ratio; it is converted to quota and charged after the normal flow (including refund). It applies only when enabled and the upstream violation marker is present. Local advanced-security block/audit matches do not incur this fee.",
-			LocalGuardrailFee: false,
-		})
+	violationFees := make([]dto.SecurityViolationFeeRule, 0)
+	violationSettings := operation_setting.GetViolationFeeSettings()
+	if violationSettings != nil {
+		for _, policy := range violationSettings.Policies {
+			amount := policy.InitialAmountUSD
+			if len(policy.AmountsUSD) > 0 {
+				amount = policy.AmountsUSD[0]
+			}
+			violationFees = append(violationFees, dto.SecurityViolationFeeRule{
+				Code:              string(types.ErrorCodeViolationFeeUsagePolicy),
+				Provider:          "",
+				Groups:            append([]string(nil), policy.Groups...),
+				Trigger:           "Any upstream usage-policy violation marker, regardless of model or provider.",
+				Enabled:           violationSettings.Enabled && policy.Enabled,
+				AmountUSD:         amount,
+				AmountsUSD:        append([]float64(nil), policy.AmountsUSD...),
+				Multiplier:        policy.Multiplier,
+				MaxAmountUSD:      policy.MaxAmountUSD,
+				PeriodSeconds:     policy.PeriodSeconds,
+				ChargeUnit:        "per violating request",
+				Retryable:         false,
+				Description:       "The configured group policy charges an escalating penalty after a usage-policy violation.",
+				ChargingNotes:     "The penalty is deducted from wallet quota only, never below zero. The counter resets after the configured period. Users may appeal and administrators may reverse an approved penalty.",
+				LocalGuardrailFee: false,
+			})
+		}
 	}
 
 	return dto.PublicSecurityPolicy{
@@ -182,6 +194,25 @@ func buildPublicSecurityPolicy() dto.PublicSecurityPolicy {
 		Rules:                  publicRules,
 		ViolationFees:          violationFees,
 	}
+}
+
+func violationFeeSettingsDTO() dto.SecurityViolationFeeSettings {
+	settings := operation_setting.GetViolationFeeSettings()
+	result := dto.SecurityViolationFeeSettings{}
+	if settings == nil {
+		return result
+	}
+	result.Enabled = settings.Enabled
+	result.Policies = make([]dto.SecurityViolationFeePolicy, 0, len(settings.Policies))
+	for _, policy := range settings.Policies {
+		result.Policies = append(result.Policies, dto.SecurityViolationFeePolicy{
+			Name: policy.Name, Groups: append([]string(nil), policy.Groups...), Enabled: policy.Enabled,
+			AmountsUSD: append([]float64(nil), policy.AmountsUSD...), InitialAmountUSD: policy.InitialAmountUSD,
+			Multiplier: policy.Multiplier, MaxAmountUSD: policy.MaxAmountUSD, PeriodSeconds: policy.PeriodSeconds,
+			DrainBalanceWhenShort: policy.DrainBalanceWhenShort,
+		})
+	}
+	return result
 }
 
 func buildSecurityStatsDTO(stats model.AdvancedSecurityStats, start, end int64, includeRules bool) dto.SecurityStats {

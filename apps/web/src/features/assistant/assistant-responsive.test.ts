@@ -1,0 +1,58 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { describe, test } from 'node:test'
+
+import {
+  ASSISTANT_RAIL_MIN_WIDTH,
+  isAssistantRailViewport,
+} from './assistant-responsive'
+
+const launcherSource = readFileSync(
+  new URL('./assistant-launcher.tsx', import.meta.url),
+  'utf8'
+)
+const panelSource = readFileSync(
+  new URL('./assistant-panel.tsx', import.meta.url),
+  'utf8'
+)
+
+describe('assistant responsive presentation', () => {
+  test('keeps the assistant in an overlay below the xl rail breakpoint', () => {
+    assert.equal(ASSISTANT_RAIL_MIN_WIDTH, 1280)
+    for (const width of [767, 768, 1039, 1279]) {
+      assert.equal(
+        isAssistantRailViewport(width),
+        false,
+        `${width}px should use the assistant overlay`
+      )
+    }
+  })
+
+  test('enables the assistant rail at the xl breakpoint', () => {
+    assert.equal(isAssistantRailViewport(1280), true)
+  })
+
+  test('keeps launcher, lazy fallback, and rail on the same xl breakpoint', () => {
+    assert.match(launcherSource, /xl:hidden/)
+    assert.match(launcherSource, /xl:flex/)
+    assert.match(panelSource, /border-l xl:flex/)
+  })
+})

@@ -1,8 +1,8 @@
 package model_setting
 
-import "github.com/QuantumNous/new-api/setting/config"
-
-// GrokSettings defines Grok model configuration.
+// GrokSettings is retained only as a source-compatibility shim for older
+// callers. Violation charging no longer reads or registers model-specific
+// Grok settings; use operation_setting.ViolationFeeSettings instead.
 type GrokSettings struct {
 	ViolationDeductionEnabled bool    `json:"violation_deduction_enabled"`
 	ViolationDeductionAmount  float64 `json:"violation_deduction_amount"`
@@ -16,7 +16,8 @@ var defaultGrokSettings = GrokSettings{
 var grokSettings = defaultGrokSettings
 
 func init() {
-	config.GlobalConfig.Register("grok", &grokSettings)
+	// Intentionally not registered. Existing grok.* database options are
+	// ignored after upgrading and cannot select a model-specific fee policy.
 }
 
 func GetGrokSettings() *GrokSettings {

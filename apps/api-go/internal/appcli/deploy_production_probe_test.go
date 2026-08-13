@@ -23,6 +23,11 @@ func TestActionableJournalLineFiltersExpectedProxyDisconnects(t *testing.T) {
 			line:       `nginx: connect() failed (111: Connection refused) while sending request to upstream`,
 			actionable: true,
 		},
+		{
+			name:       "client closes proxied response",
+			line:       `nginx: [error] upstream prematurely closed connection while reading upstream, client: 203.0.113.10`,
+			actionable: false,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

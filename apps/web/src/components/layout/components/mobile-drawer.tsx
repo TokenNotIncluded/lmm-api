@@ -16,9 +16,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Link } from '@tanstack/react-router'
+import { Link, useRouterState } from '@tanstack/react-router'
 import { X, User, Wallet, LogOut } from 'lucide-react'
 import { AnimatePresence, motion, type Variants } from 'motion/react'
+import { useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { SignOutDialog } from '@/components/sign-out-dialog'
@@ -32,6 +33,9 @@ import type { AuthUser } from '@/stores/auth-store'
 
 import { MOBILE_DRAWER_ANIMATION, MOBILE_DRAWER_CONFIG } from '../constants'
 import type { TopNavLink } from '../types'
+import { getNavLinkKey } from './nav-link-key'
+
+const MOBILE_NAV_SKELETON_KEYS = ['first', 'second', 'third', 'fourth'] as const
 
 /**
  * Brand logo component with skeleton loading
@@ -56,7 +60,7 @@ function BrandLogo({
   return (
     <Link
       to={homeUrl}
-      className='flex items-center gap-2 text-xl font-bold'
+      className='focus-visible:ring-ring flex touch-manipulation items-center gap-2 text-xl font-bold focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none'
       onClick={onClick}
     >
       <div className='relative h-6 w-6'>
@@ -80,6 +84,7 @@ interface MobileUserProfileProps {
 
 function MobileUserProfile({ user, onNavigate }: MobileUserProfileProps) {
   const { t } = useTranslation()
+  const pathname = useRouterState().location.pathname
   const [signOutOpen, setSignOutOpen] = useDialogState()
   const { displayName, initials, roleLabel } = useUserDisplay(user)
   const consoleActivated = isConsoleActivated(user)
@@ -87,69 +92,66 @@ function MobileUserProfile({ user, onNavigate }: MobileUserProfileProps) {
   if (!user) return null
 
   return (
-    <>
+    <div className='flex flex-col text-sm'>
       {/* User info section - compact style matching navigation */}
-      <div className='flex flex-col text-sm'>
-        {/* User header - simplified */}
-        <div className='border-border flex items-center gap-2.5 border-b p-2.5'>
-          <Avatar className='size-9'>
-            <AvatarImage src='/avatars/01.png' alt={`@${displayName}`} />
-            <AvatarFallback className='text-xs'>{initials}</AvatarFallback>
-          </Avatar>
-          <div className='flex flex-1 flex-col gap-0.5 overflow-hidden'>
-            <p className='text-foreground truncate font-medium'>
-              {displayName}
-            </p>
-            <div className='flex items-center gap-1.5'>
-              <span className='text-muted-foreground text-xs'>{roleLabel}</span>
-              {user.group && (
-                <>
-                  <span className='text-muted-foreground text-xs'>·</span>
-                  <span className='text-muted-foreground text-xs'>
-                    {String(user.group)}
-                  </span>
-                </>
-              )}
-            </div>
+      {/* User header - simplified */}
+      <div className='border-border flex items-center gap-2.5 border-b p-2.5'>
+        <Avatar className='size-9'>
+          <AvatarImage src='/avatars/01.png' alt={`@${displayName}`} />
+          <AvatarFallback className='text-xs'>{initials}</AvatarFallback>
+        </Avatar>
+        <div className='flex flex-1 flex-col gap-0.5 overflow-hidden'>
+          <p className='text-foreground truncate font-medium'>{displayName}</p>
+          <div className='flex items-center gap-1.5'>
+            <span className='text-muted-foreground text-xs'>{roleLabel}</span>
+            {user.group ? (
+              <span className='text-muted-foreground inline-flex items-center gap-1.5 text-xs'>
+                <span aria-hidden='true'>·</span>
+                <span>{String(user.group)}</span>
+              </span>
+            ) : null}
           </div>
         </div>
-
-        {/* Navigation links - same style as top nav */}
-        {consoleActivated ? (
-          <>
-            <Link
-              to='/profile'
-              onClick={onNavigate}
-              className='text-primary/60 hover:text-primary/80 border-border flex items-center gap-2.5 border-b p-2.5 transition-colors'
-            >
-              <User className='size-4' />
-              {t('Profile')}
-            </Link>
-
-            <Link
-              to='/wallet'
-              onClick={onNavigate}
-              className='text-primary/60 hover:text-primary/80 border-border flex items-center gap-2.5 border-b p-2.5 transition-colors'
-            >
-              <Wallet className='size-4' />
-              {t('Wallet')}
-            </Link>
-          </>
-        ) : null}
-
-        {/* Sign out - consistent style */}
-        <Button
-          variant='ghost'
-          onClick={() => setSignOutOpen(true)}
-          className='text-destructive hover:text-destructive/80 h-auto w-full justify-start gap-2.5 p-2.5 hover:bg-transparent'
-        >
-          <LogOut className='size-4' />
-          {t('Sign out')}
-        </Button>
       </div>
 
+      {/* Navigation links - same style as top nav */}
+      {consoleActivated
+        ? [
+            <Link
+              key='profile'
+              to='/profile'
+              onClick={onNavigate}
+              aria-current={pathname === '/profile' ? 'page' : undefined}
+              className='text-primary/60 hover:text-primary/80 focus-visible:ring-ring border-border flex min-h-11 touch-manipulation items-center gap-2.5 border-b p-2.5 transition-colors focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none'
+            >
+              <User className='size-4' aria-hidden='true' />
+              {t('Profile')}
+            </Link>,
+            <Link
+              key='wallet'
+              to='/wallet'
+              onClick={onNavigate}
+              aria-current={pathname === '/wallet' ? 'page' : undefined}
+              className='text-primary/60 hover:text-primary/80 focus-visible:ring-ring border-border flex min-h-11 touch-manipulation items-center gap-2.5 border-b p-2.5 transition-colors focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none'
+            >
+              <Wallet className='size-4' aria-hidden='true' />
+              {t('Wallet')}
+            </Link>,
+          ]
+        : null}
+
+      {/* Sign out - consistent style */}
+      <Button
+        variant='ghost'
+        onClick={() => setSignOutOpen(true)}
+        className='text-destructive hover:text-destructive/80 focus-visible:ring-ring h-auto min-h-11 w-full touch-manipulation justify-start gap-2.5 p-2.5 hover:bg-transparent focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none'
+      >
+        <LogOut className='size-4' aria-hidden='true' />
+        {t('Sign out')}
+      </Button>
+
       <SignOutDialog open={!!signOutOpen} onOpenChange={setSignOutOpen} />
-    </>
+    </div>
   )
 }
 
@@ -166,7 +168,7 @@ function MobileSignInButton({ onNavigate }: MobileSignInButtonProps) {
     <Button
       variant='secondary'
       size='sm'
-      className='h-10 w-full'
+      className='focus-visible:ring-ring h-10 min-h-11 w-full touch-manipulation focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none'
       render={<Link to='/sign-in' onClick={onNavigate} />}
     >
       {t('Sign in')}
@@ -207,6 +209,45 @@ export function MobileDrawer({
   user,
 }: MobileDrawerProps) {
   const { t } = useTranslation()
+  const pathname = useRouterState().location.pathname
+  const drawerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!isOpen) return
+
+    const drawer = drawerRef.current
+    const focusable = drawer
+      ? [
+          ...drawer.querySelectorAll<HTMLElement>(
+            'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])'
+          ),
+        ]
+      : []
+    focusable[0]?.focus()
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        onClose()
+        return
+      }
+      if (event.key !== 'Tab' || focusable.length === 0) return
+
+      const activeIndex = focusable.indexOf(
+        document.activeElement as HTMLElement
+      )
+      if (event.shiftKey && (activeIndex <= 0 || activeIndex === -1)) {
+        event.preventDefault()
+        focusable.at(-1)?.focus()
+      } else if (!event.shiftKey && activeIndex === focusable.length - 1) {
+        event.preventDefault()
+        focusable[0]?.focus()
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [isOpen, onClose])
+
   return (
     <AnimatePresence>
       {isOpen && (
@@ -222,6 +263,7 @@ export function MobileDrawer({
               duration: MOBILE_DRAWER_CONFIG.overlayTransitionDuration,
             }}
             onClick={onClose}
+            aria-hidden='true'
           />
 
           {/* Drawer Content */}
@@ -231,6 +273,11 @@ export function MobileDrawer({
             animate='visible'
             exit='exit'
             variants={MOBILE_DRAWER_ANIMATION.drawer as Variants}
+            ref={drawerRef}
+            role='dialog'
+            aria-modal='true'
+            aria-label={t('Header navigation')}
+            tabIndex={-1}
           >
             <div className='flex flex-col gap-4'>
               {/* Header with logo and close button */}
@@ -247,44 +294,87 @@ export function MobileDrawer({
                   variant='ghost'
                   size='icon-sm'
                   onClick={onClose}
-                  className='hover:text-primary cursor-pointer'
+                  className='hover:text-primary focus-visible:ring-ring cursor-pointer touch-manipulation focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none'
                   aria-label={t('Close menu')}
                 >
-                  <X className='size-5' />
+                  <X className='size-5' aria-hidden='true' />
                 </Button>
               </div>
 
               {/* Navigation links */}
-              <motion.div
+              <motion.nav
                 className='border-border mb-4 flex flex-col rounded-md border text-sm'
                 variants={{ hidden: { opacity: 0 }, visible: { opacity: 1 } }}
+                aria-label={t('Header navigation')}
               >
                 {loading ? (
                   <div className='flex flex-col gap-1 p-2'>
-                    {Array.from({ length: 4 }, (_, i) => (
-                      <Skeleton key={i} className='h-8 w-full' />
+                    {MOBILE_NAV_SKELETON_KEYS.map((skeletonKey) => (
+                      <Skeleton
+                        key={`mobile-nav-skeleton:${skeletonKey}`}
+                        className='h-8 w-full'
+                      />
                     ))}
                   </div>
                 ) : (
                   <AnimatePresence>
-                    {mobileLinksList.map((link, index) => (
-                      <motion.div
-                        key={`${link.href}-${index}`}
-                        className='border-border border-b p-2.5 last:border-b-0'
-                        variants={MOBILE_DRAWER_ANIMATION.menuItem as Variants}
-                      >
-                        <Link
-                          to={link.href}
-                          className='text-primary/60 hover:text-primary/80 transition-colors'
-                          onClick={onClose}
+                    {mobileLinksList.map((link) => {
+                      const isActive = link.isActive ?? pathname === link.href
+                      const linkClassName =
+                        'text-primary/60 hover:text-primary/80 focus-visible:ring-ring focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none touch-manipulation flex min-h-11 items-center transition-colors'
+                      const disabledClassName = link.disabled
+                        ? 'pointer-events-none opacity-50'
+                        : ''
+                      const handleLinkClick = (
+                        event: React.MouseEvent<HTMLAnchorElement>
+                      ) => {
+                        if (link.disabled) {
+                          event.preventDefault()
+                          return
+                        }
+                        onClose()
+                      }
+
+                      return (
+                        <motion.div
+                          key={getNavLinkKey(link)}
+                          className='border-border border-b p-2.5 last:border-b-0'
+                          variants={
+                            MOBILE_DRAWER_ANIMATION.menuItem as Variants
+                          }
                         >
-                          {link.title}
-                        </Link>
-                      </motion.div>
-                    ))}
+                          {link.external ? (
+                            <a
+                              href={link.href}
+                              target='_blank'
+                              rel='noopener noreferrer'
+                              className={`${linkClassName} ${disabledClassName}`}
+                              aria-current={isActive ? 'page' : undefined}
+                              aria-disabled={link.disabled || undefined}
+                              tabIndex={link.disabled ? -1 : undefined}
+                              onClick={handleLinkClick}
+                            >
+                              {link.title}
+                            </a>
+                          ) : (
+                            <Link
+                              to={link.href}
+                              disabled={link.disabled}
+                              className={`${linkClassName} ${disabledClassName}`}
+                              aria-current={isActive ? 'page' : undefined}
+                              aria-disabled={link.disabled || undefined}
+                              tabIndex={link.disabled ? -1 : undefined}
+                              onClick={handleLinkClick}
+                            >
+                              {link.title}
+                            </Link>
+                          )}
+                        </motion.div>
+                      )
+                    })}
                   </AnimatePresence>
                 )}
-              </motion.div>
+              </motion.nav>
 
               {/* User profile section */}
               {showAuthButtons &&

@@ -5,14 +5,15 @@ use std::sync::{
 
 use async_trait::async_trait;
 use axum::{
-    body::{Body, to_bytes},
+    body::{Body, Bytes, to_bytes},
     extract::Request as AxumRequest,
-    http::{Request, StatusCode},
+    http::{HeaderValue, Request, StatusCode},
     response::Response,
 };
 use lmm_api_rs::migration_routes::relay_anthropic_gemini::{
-    RelayBackend, RelayChannel, RelayFailure, RelayHttpState, RelayIdentity, RelayOutcome,
-    RelayProtocol, RelaySseEvent, UpstreamReply, UpstreamRequest, router, router_with_model_lookup,
+    NativeSseReply, RelayBackend, RelayChannel, RelayFailure, RelayHttpState, RelayIdentity,
+    RelayOutcome, RelayProtocol, RelaySseEvent, UpstreamReply, UpstreamRequest, router,
+    router_with_model_lookup,
 };
 use lmm_api_rs::migration_routes::{
     missing_relay_models_billing::{ModelLookupRequest, ModelLookupService, ModelLookupState},
@@ -100,7 +101,7 @@ fn shared_models_app(backend: Arc<CapturingBackend>) -> axum::Router {
 
 struct CapturingBackend {
     selection: Result<RelayChannel, RelayFailure>,
-    result: Result<UpstreamReply, RelayFailure>,
+    result: Mutex<Option<Result<UpstreamReply, RelayFailure>>>,
     requests: Mutex<Vec<UpstreamRequest>>,
 }
 
@@ -111,7 +112,7 @@ impl CapturingBackend {
                 id: 42,
                 upstream_model: "mapped-model".to_owned(),
             }),
-            result: Ok(reply),
+            result: Mutex::new(Some(Ok(reply))),
             requests: Mutex::new(Vec::new()),
         }
     }
@@ -142,7 +143,11 @@ impl RelayBackend for CapturingBackend {
         request: UpstreamRequest,
     ) -> Result<UpstreamReply, RelayFailure> {
         self.requests.lock().expect("request lock").push(request);
-        self.result.clone()
+        self.result
+            .lock()
+            .expect("result lock")
+            .take()
+            .unwrap_or_else(|| Ok(UpstreamReply::Json(Value::Null)))
     }
 
     async fn record_outcome(
@@ -506,13 +511,127 @@ async fn anthropic_sse_should_frame_nullable_payload_and_terminal_event() {
 }
 
 #[tokio::test]
+async fn native_sse_passthrough_preserves_unknown_frames_and_does_not_append_done() {
+    let expected = b"event: future_event\r\ndata: first\r\ndata: second\r\n\r\n";
+    let backend = Arc::new(CapturingBackend::successful(UpstreamReply::NativeSse(
+        Box::new(NativeSseReply::new(
+            StatusCode::CREATED,
+            Body::from(expected.to_vec()),
+            Some(HeaderValue::from_static(
+                "text/event-stream; charset=iso-8859-1",
+            )),
+        )),
+    )));
+    let response = capturing_app(backend)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/messages")
+                .header("x-api-key", "test-token")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"model":"claude-test","stream":true}"#))
+                .expect("request is valid"),
+        )
+        .await
+        .expect("router responds");
+
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(
+        response.headers()["content-type"],
+        "text/event-stream; charset=iso-8859-1"
+    );
+    assert_eq!(response.headers()["cache-control"], "no-cache");
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body");
+    assert_eq!(body.as_ref(), expected);
+    assert!(
+        !body
+            .windows(b"[DONE]".len())
+            .any(|window| window == b"[DONE]")
+    );
+}
+
+#[tokio::test]
+async fn dropping_native_sse_response_drops_the_upstream_stream() {
+    struct DropSignal(Arc<AtomicUsize>);
+
+    impl Drop for DropSignal {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let guard = DropSignal(dropped.clone());
+    let stream = futures_util::stream::once(async move {
+        let _guard = guard;
+        Ok::<Bytes, std::io::Error>(Bytes::from_static(b"data: never\n\n"))
+    });
+    let backend = Arc::new(CapturingBackend::successful(UpstreamReply::NativeSse(
+        Box::new(NativeSseReply::new(
+            StatusCode::OK,
+            Body::from_stream(stream),
+            None,
+        )),
+    )));
+    let response = capturing_app(backend)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/messages")
+                .header("x-api-key", "test-token")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"model":"claude-test","stream":true}"#))
+                .expect("request is valid"),
+        )
+        .await
+        .expect("router responds");
+
+    drop(response);
+    assert_eq!(dropped.load(Ordering::Relaxed), 1);
+}
+
+#[tokio::test]
+async fn native_sse_body_uses_a_bounded_stream_without_prefetch_queue() {
+    let (sender, receiver) = tokio::sync::mpsc::channel::<Bytes>(1);
+    let stream = futures_util::stream::unfold(receiver, |mut receiver| async move {
+        receiver
+            .recv()
+            .await
+            .map(|chunk| (Ok::<Bytes, std::io::Error>(chunk), receiver))
+    });
+    let body = Body::from_stream(stream);
+    sender
+        .send(Bytes::from_static(b"data: first\n\n"))
+        .await
+        .expect("bounded stream receiver");
+    assert!(matches!(
+        sender.try_send(Bytes::from_static(b"data: second\n\n")),
+        Err(tokio::sync::mpsc::error::TrySendError::Full(_))
+    ));
+
+    let reader = tokio::spawn(to_bytes(body, usize::MAX));
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        sender.send(Bytes::from_static(b"data: second\n\n")),
+    )
+    .await
+    .expect("body should release one bounded slot")
+    .expect("bounded stream receiver");
+    drop(sender);
+    let bytes = reader.await.expect("body reader task").expect("body bytes");
+    assert_eq!(bytes.as_ref(), b"data: first\n\ndata: second\n\n");
+}
+
+#[tokio::test]
 async fn gemini_upstream_failure_should_use_the_gemini_compatibility_envelope() {
     let backend = Arc::new(CapturingBackend {
         selection: Ok(RelayChannel {
             id: 42,
             upstream_model: "mapped-model".to_owned(),
         }),
-        result: Err(RelayFailure::Upstream),
+        result: Mutex::new(Some(Err(RelayFailure::Upstream))),
         requests: Mutex::new(Vec::new()),
     });
     let response = capturing_app(backend)

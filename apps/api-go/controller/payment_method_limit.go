@@ -29,7 +29,44 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-const paymentMethodMaxTopUpKey = "max_topup"
+const (
+	paymentMethodMinTopUpKey = "min_topup"
+	paymentMethodMaxTopUpKey = "max_topup"
+)
+
+// configuredPaymentMethodMinTopUp returns the strictest configured minimum
+// when duplicate entries share a payment type. The amount is the credited USD
+// value, matching max_topup and the payment quote shown to users.
+func configuredPaymentMethodMinTopUp(paymentType string) (decimal.Decimal, bool, error) {
+	paymentType = strings.TrimSpace(paymentType)
+	var minimum decimal.Decimal
+	configured := false
+
+	for _, method := range operation_setting.PayMethods {
+		if strings.TrimSpace(method["type"]) != paymentType {
+			continue
+		}
+
+		rawMinimum, exists := method[paymentMethodMinTopUpKey]
+		rawMinimum = strings.TrimSpace(rawMinimum)
+		if !exists || rawMinimum == "" {
+			continue
+		}
+		if !nonNegativeDecimalPattern.MatchString(rawMinimum) {
+			return decimal.Zero, true, fmt.Errorf("payment method %q has invalid %s", paymentType, paymentMethodMinTopUpKey)
+		}
+		parsed, err := decimal.NewFromString(rawMinimum)
+		if err != nil || parsed.IsNegative() {
+			return decimal.Zero, true, fmt.Errorf("payment method %q has invalid %s", paymentType, paymentMethodMinTopUpKey)
+		}
+		if !configured || parsed.GreaterThan(minimum) {
+			minimum = parsed
+			configured = true
+		}
+	}
+
+	return minimum, configured, nil
+}
 
 // configuredPaymentMethodMaxTopUp returns the most restrictive configured
 // limit when duplicate catalog entries share a payment type. Checkout only
@@ -87,6 +124,19 @@ func requirePaymentMethodCreditedQuotaWithinLimit(c *gin.Context, paymentType st
 }
 
 func requirePaymentMethodUSDWithinLimit(c *gin.Context, paymentType string, amount decimal.Decimal) bool {
+	minimum, minimumConfigured, err := configuredPaymentMethodMinTopUp(paymentType)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "支付方式配置无效"})
+		return false
+	}
+	if minimumConfigured && amount.LessThan(minimum) {
+		c.JSON(http.StatusOK, gin.H{
+			"message": "error",
+			"data":    fmt.Sprintf("该支付方式单笔最少充值 %s 美元到账余额", minimum.String()),
+		})
+		return false
+	}
+
 	limit, configured, err := configuredPaymentMethodMaxTopUp(paymentType)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "支付方式配置无效"})

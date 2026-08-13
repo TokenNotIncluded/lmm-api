@@ -121,8 +121,12 @@ cleanup() { rm -rf -- "$tmp"; }
 trap cleanup EXIT
 
 stage="$tmp/stage"
-go_bundle="$stage/go/lmm-api-go-0.1.2-linux-amd64"
-rs_bundle="$stage/rs/lmm-api-rs-0.1.2-linux-amd64"
+go_bin_pkgver=$(sed -n 's/^pkgver=//p' "$HERE/lmm-api-go-bin/PKGBUILD")
+rs_bin_pkgver=$(sed -n 's/^pkgver=//p' "$HERE/lmm-api-rs-bin/PKGBUILD")
+[[ $go_bin_pkgver =~ ^[0-9]+(\.[0-9]+)*$ ]] || die 'Go binary package version is not a fixture-safe release version'
+[[ $rs_bin_pkgver =~ ^[0-9]+(\.[0-9]+)*$ ]] || die 'Rust binary package version is not a fixture-safe release version'
+go_bundle="$stage/go/lmm-api-go-${go_bin_pkgver}-linux-amd64"
+rs_bundle="$stage/rs/lmm-api-rs-${rs_bin_pkgver}-linux-amd64"
 mkdir -p "$go_bundle/frontend-dist" "$rs_bundle"
 printf '#!/bin/sh\n' > "$go_bundle/lmm-api-go"
 printf '#!/bin/sh\n' > "$rs_bundle/lmm-api-rs"

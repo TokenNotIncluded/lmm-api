@@ -71,6 +71,7 @@ export function AssistantCostTool(props: { developerAccessGranted: boolean }) {
   const pricingQuery = useQuery({
     queryKey: ['assistant-pricing'],
     queryFn: getAssistantPricing,
+    enabled: props.developerAccessGranted,
     staleTime: 5 * 60 * 1000,
     retry: false,
   })
@@ -121,7 +122,19 @@ export function AssistantCostTool(props: { developerAccessGranted: boolean }) {
   )
 
   let calculatorContent: ReactNode
-  if (pricingQuery.isLoading) {
+  if (!props.developerAccessGranted) {
+    calculatorContent = (
+      <Alert>
+        <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} aria-hidden='true' />
+        <AlertTitle>{t('Read-only')}</AlertTitle>
+        <AlertDescription>
+          {t(
+            'This live estimate is read-only while your L1 request is under review.'
+          )}
+        </AlertDescription>
+      </Alert>
+    )
+  } else if (pricingQuery.isLoading) {
     calculatorContent = (
       <div className='grid gap-3' aria-label={t('Loading...')}>
         <Skeleton className='h-9 w-full' />

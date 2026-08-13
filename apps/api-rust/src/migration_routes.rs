@@ -56,6 +56,7 @@ pub mod relay_openai;
 pub mod release_notes;
 pub mod responses_websocket;
 pub mod security_overview;
+pub mod sse;
 pub mod system_config;
 pub mod user_rankings;
 pub mod verify_email;

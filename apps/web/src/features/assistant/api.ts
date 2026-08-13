@@ -16,10 +16,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import axios, { type AxiosResponse } from 'axios'
+
 import type { QuotaDataItem } from '@/features/dashboard/types'
 import type { PricingData } from '@/features/pricing/types'
 import type { PlanRecord } from '@/features/subscriptions/types'
 import { api } from '@/lib/api'
+
+import { redactAssistantMessageForRequest } from './assistant-message-safety'
 
 type AssistantChatPayload = {
   choices?: Array<{
@@ -42,6 +46,24 @@ export type AssistantChatMessage = {
 const ASSISTANT_CONVERSATION_MAX_ITEMS = 12
 const ASSISTANT_CONVERSATION_MAX_RUNES = 12_000
 const ASSISTANT_MESSAGE_MAX_RUNES = 4_000
+export const ASSISTANT_MAX_REQUEST_ATTEMPTS = 5
+const ASSISTANT_RETRY_DELAYS_MS = [200, 500, 1_000, 1_500] as const
+
+function isRetryableAssistantError(error: unknown): boolean {
+  if (!axios.isAxiosError(error)) return false
+  const status = error.response?.status
+  return (
+    status === undefined ||
+    status === 408 ||
+    status === 425 ||
+    status === 429 ||
+    status >= 500
+  )
+}
+
+function waitForAssistantRetry(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs))
+}
 
 export type AssistantFundingStatus = {
   mode: 'super_administrator'
@@ -52,6 +74,43 @@ export type AssistantStatus = {
   model: string
   funding: AssistantFundingStatus
   developer_access_granted: boolean
+  access_level?: string
+  trust_level?: number
+  role?: number
+  is_admin?: boolean
+  is_root?: boolean
+  capabilities?: {
+    public_assistant?: boolean
+    account?: boolean
+    developer_tools?: boolean
+    personal_ip_allowlist?: boolean
+    usage_discount?: boolean
+    admin_config?: boolean
+    admin_pricing?: boolean
+  }
+}
+
+export type L1OnboardingStepId =
+  | 'create_api_key'
+  | 'install_client'
+  | 'configure_client'
+  | 'first_successful_response'
+
+export type L1OnboardingTodo = {
+  eligibility: {
+    eligible: boolean
+    developer_access_granted: boolean
+    trust_level: number
+    reason?: string
+  }
+  status: 'unavailable' | 'in_progress' | 'completed'
+  current_step?: L1OnboardingStepId
+  steps: Array<{
+    id: L1OnboardingStepId
+    status: 'pending' | 'completed'
+    completed_at?: number
+  }>
+  completed_at?: number
 }
 
 export type AssistantL1RecommendationAction = {
@@ -69,9 +128,43 @@ export type AssistantAccountDisableAction = {
   confirmation_token: string
 }
 
+export type AssistantAdminConfigPreview = {
+  key: string
+  label: string
+  old_value: string
+  new_value: string
+}
+
+export type AssistantAdminPricingPreview = {
+  model_id: string
+  old: Record<string, unknown>
+  next: Record<string, unknown>
+}
+
+export type AssistantAdminConfigChangeAction = {
+  type: 'admin_config_change'
+  confirmation_token: string
+  requires_confirmation: true
+  expires_in_seconds: number
+  changes: AssistantAdminConfigPreview[]
+}
+
+export type AssistantAdminPricingChangeAction = {
+  type: 'admin_pricing_change'
+  confirmation_token: string
+  requires_confirmation: true
+  expires_in_seconds: number
+  pricing: AssistantAdminPricingPreview
+}
+
+export type AssistantAdminChangeAction =
+  | AssistantAdminConfigChangeAction
+  | AssistantAdminPricingChangeAction
+
 export type AssistantAction =
   | AssistantL1RecommendationAction
   | AssistantAccountDisableAction
+  | AssistantAdminChangeAction
 
 export type AssistantCreatedKey = {
   id: number
@@ -108,11 +201,13 @@ export type AssistantConversationHistorySummary = {
   last_message_preview: string
   created_at: number
   updated_at: number
+  archived_at: number
   owner: 'self' | 'lower_level_user'
   privacy_notice: string
 }
 
-export type AssistantConversationHistoryItem = AssistantConversationHistorySummary
+export type AssistantConversationHistoryItem =
+  AssistantConversationHistorySummary
 
 export type AssistantConversationHistory = {
   conversations: AssistantConversationHistorySummary[]
@@ -123,6 +218,12 @@ export type AssistantConversationHistoryDetail = {
   conversation: AssistantConversationHistorySummary
   messages: AssistantConversationHistoryMessage[]
   privacy_notice: string
+}
+
+export type AssistantConversationArchiveResult = {
+  id: number
+  archived: boolean
+  archived_at: number
 }
 
 export type AssistantHandoff = {
@@ -254,6 +355,84 @@ export function parseAssistantAction(
   if (!confirmationToken) return undefined
 
   if (
+    action.type === 'admin_config_change' &&
+    action.requires_confirmation === true &&
+    typeof action.expires_in_seconds === 'number' &&
+    Number.isInteger(action.expires_in_seconds) &&
+    action.expires_in_seconds > 0 &&
+    Array.isArray(action.changes)
+  ) {
+    const changes = action.changes
+      .map((item) => {
+        if (!item || typeof item !== 'object') return null
+        const change = item as Record<string, unknown>
+        if (
+          typeof change.key !== 'string' ||
+          typeof change.label !== 'string' ||
+          typeof change.old_value !== 'string' ||
+          typeof change.new_value !== 'string'
+        ) {
+          return null
+        }
+        const key = change.key.trim()
+        const label = change.label.trim()
+        if (!key || !label) return null
+        return {
+          key,
+          label,
+          old_value: change.old_value,
+          new_value: change.new_value,
+        }
+      })
+      .filter(
+        (change): change is AssistantAdminConfigPreview => change !== null
+      )
+    if (changes.length === action.changes.length && changes.length > 0) {
+      return {
+        type: 'admin_config_change',
+        confirmation_token: confirmationToken,
+        requires_confirmation: true,
+        expires_in_seconds: action.expires_in_seconds,
+        changes,
+      }
+    }
+  }
+
+  if (
+    action.type === 'admin_pricing_change' &&
+    action.requires_confirmation === true &&
+    typeof action.expires_in_seconds === 'number' &&
+    Number.isInteger(action.expires_in_seconds) &&
+    action.expires_in_seconds > 0 &&
+    action.pricing &&
+    typeof action.pricing === 'object'
+  ) {
+    const pricing = action.pricing as Record<string, unknown>
+    if (
+      typeof pricing.model_id === 'string' &&
+      pricing.old &&
+      typeof pricing.old === 'object' &&
+      pricing.next &&
+      typeof pricing.next === 'object'
+    ) {
+      const modelId = pricing.model_id.trim()
+      if (modelId) {
+        return {
+          type: 'admin_pricing_change',
+          confirmation_token: confirmationToken,
+          requires_confirmation: true,
+          expires_in_seconds: action.expires_in_seconds,
+          pricing: {
+            model_id: modelId,
+            old: pricing.old as Record<string, unknown>,
+            next: pricing.next as Record<string, unknown>,
+          },
+        }
+      }
+    }
+  }
+
+  if (
     action.type === 'l1_recommendation' &&
     typeof action.user_statement === 'string' &&
     typeof action.recommendation === 'string'
@@ -294,7 +473,9 @@ export function parseAssistantAction(
 function normalizedAssistantHistoryMessage(
   message: AssistantChatMessage
 ): AssistantChatMessage | null {
-  const content = message.content.trim()
+  const content = redactAssistantMessageForRequest(
+    message.content
+  ).content.trim()
   if (!content) return null
   return {
     role: message.role,
@@ -336,13 +517,39 @@ export async function sendAssistantMessage(
   message: string,
   history: AssistantChatMessage[] = []
 ): Promise<AssistantReply> {
-  const normalizedMessage = message.trim()
+  const normalizedMessage =
+    redactAssistantMessageForRequest(message).content.trim()
   const messages = buildAssistantConversation(history, normalizedMessage)
-  const response = await api.post<AssistantChatPayload>(
-    '/api/assistant/chat',
-    { message: normalizedMessage, messages },
-    { skipBusinessError: true, skipErrorHandler: true }
-  )
+  let response: AxiosResponse<AssistantChatPayload> | undefined
+  for (
+    let attempt = 1;
+    attempt <= ASSISTANT_MAX_REQUEST_ATTEMPTS;
+    attempt += 1
+  ) {
+    try {
+      response = await api.post<AssistantChatPayload>(
+        '/api/assistant/chat',
+        { message: normalizedMessage, messages },
+        {
+          skipBusinessError: true,
+          skipErrorHandler: true,
+          headers: { 'X-LMM-Assistant-Attempt': String(attempt) },
+        }
+      )
+      break
+    } catch (error) {
+      if (
+        !isRetryableAssistantError(error) ||
+        attempt >= ASSISTANT_MAX_REQUEST_ATTEMPTS
+      ) {
+        throw error
+      }
+      await waitForAssistantRetry(
+        ASSISTANT_RETRY_DELAYS_MS[attempt - 1] ?? 1_500
+      )
+    }
+  }
+  if (!response) throw new Error('Assistant request did not complete')
   return {
     content: parseAssistantReply(response.data),
     intent: parseAssistantIntent(response.headers['x-lmm-assistant-intent']),
@@ -363,6 +570,22 @@ export async function submitAssistantAccountDisableRequest(input: {
   return requireAssistantData(
     response.data,
     'Unable to submit the account safety request'
+  )
+}
+
+export async function submitAssistantAdminChange(
+  confirmationToken: string
+): Promise<{ applied: boolean; kind: string }> {
+  const response = await api.post<
+    AssistantAPIResponse<{ applied: boolean; kind: string }>
+  >(
+    '/api/assistant/admin/apply',
+    { confirmation_token: confirmationToken, confirmed: true },
+    { skipBusinessError: true, skipErrorHandler: true }
+  )
+  return requireAssistantData(
+    response.data,
+    'Unable to apply the administrator change'
   )
 }
 
@@ -449,6 +672,18 @@ export async function createAssistantDefaultKey(
   return requireAssistantData(response.data, 'Unable to create API key')
 }
 
+export async function getL1OnboardingTodo(): Promise<L1OnboardingTodo> {
+  const response = await api.get<AssistantAPIResponse<L1OnboardingTodo>>(
+    '/api/user/self/onboarding/todo',
+    {
+      disableDuplicate: true,
+      skipBusinessError: true,
+      skipErrorHandler: true,
+    }
+  )
+  return requireAssistantData(response.data, 'Unable to load setup checklist')
+}
+
 export async function revealAssistantPrivateCard(id: string): Promise<string> {
   const response = await api.get<
     AssistantAPIResponse<{
@@ -468,10 +703,17 @@ export async function revealAssistantPrivateCard(id: string): Promise<string> {
   return value
 }
 
-export async function getAssistantConversationHistory(): Promise<AssistantConversationHistory> {
+export async function getAssistantConversationHistory(
+  archived = false,
+  ownerUserId?: number
+): Promise<AssistantConversationHistory> {
+  const params: { archived?: true; user_id?: number } = {}
+  if (archived) params.archived = true
+  if (ownerUserId !== undefined) params.user_id = ownerUserId
   const response = await api.get<
     AssistantAPIResponse<AssistantConversationHistory>
   >('/api/assistant/conversations', {
+    ...(Object.keys(params).length > 0 ? { params } : {}),
     disableDuplicate: true,
     skipBusinessError: true,
     skipErrorHandler: true,
@@ -480,6 +722,41 @@ export async function getAssistantConversationHistory(): Promise<AssistantConver
     response.data,
     'Unable to load conversation history'
   )
+}
+
+async function setAssistantConversationArchived(
+  id: number,
+  action: 'archive' | 'unarchive'
+): Promise<AssistantConversationArchiveResult> {
+  const response = await api.post<
+    AssistantAPIResponse<AssistantConversationArchiveResult>
+  >(
+    `/api/assistant/conversations/${encodeURIComponent(id)}/${action}`,
+    {},
+    {
+      disableDuplicate: true,
+      skipBusinessError: true,
+      skipErrorHandler: true,
+    }
+  )
+  return requireAssistantData(
+    response.data,
+    action === 'archive'
+      ? 'Unable to archive conversation'
+      : 'Unable to restore conversation'
+  )
+}
+
+export function archiveAssistantConversation(
+  id: number
+): Promise<AssistantConversationArchiveResult> {
+  return setAssistantConversationArchived(id, 'archive')
+}
+
+export function unarchiveAssistantConversation(
+  id: number
+): Promise<AssistantConversationArchiveResult> {
+  return setAssistantConversationArchived(id, 'unarchive')
 }
 
 export async function getAssistantConversationHistoryDetail(

@@ -90,6 +90,7 @@ import {
   transformUserToFormDefaults,
 } from '../lib'
 import type { User } from '../types'
+import { AssistantUserProfileEditor } from './assistant-user-profile-editor'
 import { UserQuotaDialog } from './user-quota-dialog'
 import { useUsers } from './users-provider'
 
@@ -544,6 +545,13 @@ export function UsersMutateDrawer({
                     )}
                   </SideDrawerSection>
                 )}
+
+              {isUpdate && currentRow && (
+                <AssistantUserProfileEditor
+                  userId={currentRow.id}
+                  open={open}
+                />
+              )}
 
               {/* Binding Information (Read-only) */}
               {isUpdate && (

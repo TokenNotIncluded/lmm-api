@@ -27,8 +27,15 @@ func TestParseFinanceExportWindowDefaultsAndLimits(t *testing.T) {
 	_, _, err = parseFinanceExportWindow(financeExportTestContext("?start_timestamp=20&end_timestamp=10"))
 	require.ErrorContains(t, err, "start_timestamp must be before end_timestamp")
 
-	_, _, err = parseFinanceExportWindow(financeExportTestContext("?start_timestamp=1&end_timestamp=7776002"))
+	_, _, err = parseFinanceExportWindow(financeExportTestContext("?start_timestamp=1&end_timestamp=31536002"))
 	require.ErrorContains(t, err, "cannot exceed")
+}
+
+func TestParseFinanceExportWindowAcceptsExactOneYearRange(t *testing.T) {
+	start, end, err := parseFinanceExportWindow(financeExportTestContext("?start_timestamp=1700000000&end_timestamp=1731536000"))
+	require.NoError(t, err)
+	require.EqualValues(t, 1700000000, start)
+	require.EqualValues(t, 1731536000, end)
 }
 
 func TestFinanceExportFilesAreRedactedAndClipboardFriendly(t *testing.T) {

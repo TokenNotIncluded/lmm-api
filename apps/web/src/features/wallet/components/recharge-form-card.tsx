@@ -615,7 +615,8 @@ export function RechargeFormCard({
                                 method.type,
                                 'h-4 w-4',
                                 method.icon,
-                                paymentMethodLabel
+                                paymentMethodLabel,
+                                method.color
                               )
                             )}
                             <span className='flex min-w-0 flex-col items-start gap-0.5'>
@@ -630,6 +631,11 @@ export function RechargeFormCard({
                               {settlementRule && (
                                 <span className='text-muted-foreground max-w-full truncate text-[11px] leading-4 font-normal'>
                                   {settlementRule}
+                                </span>
+                              )}
+                              {method.description && (
+                                <span className='text-muted-foreground line-clamp-2 max-w-full text-[11px] leading-4 font-normal'>
+                                  {method.description}
                                 </span>
                               )}
                               {!neutralMode && methodTopupRatio !== 1 && (

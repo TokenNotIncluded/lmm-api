@@ -51,6 +51,30 @@ func TestConfiguredPaymentMethodMaxTopUpRejectsInvalidLimit(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestConfiguredPaymentMethodMinTopUpUsesStrictestDuplicate(t *testing.T) {
+	withPaymentMethods(t, []map[string]string{
+		{"name": "Card A", "type": "epay", "min_topup": "2"},
+		{"name": "Card B", "type": "epay", "min_topup": "7.5"},
+	})
+
+	minimum, configured, err := configuredPaymentMethodMinTopUp("epay")
+	require.NoError(t, err)
+	assert.True(t, configured)
+	assert.Equal(t, "7.5", minimum.String())
+}
+
+func TestRequirePaymentMethodTopUpWithinLimitEnforcesMinimum(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	withPaymentMethods(t, []map[string]string{{
+		"name": "LinuxDO", "type": "epay", "min_topup": "5",
+	}})
+
+	response := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(response)
+	assert.False(t, requirePaymentMethodTopUpWithinLimit(context, "epay", 4))
+	assert.Contains(t, response.Body.String(), "5")
+}
+
 func TestRequirePaymentMethodTopUpWithinLimitUsesCreditedUSD(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	withPaymentMethods(t, []map[string]string{{

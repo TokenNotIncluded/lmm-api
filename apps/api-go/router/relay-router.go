@@ -76,6 +76,8 @@ func SetRelayRouter(router *gin.Engine) {
 		assistantRouter.POST("/chat", middleware.UserCriticalRateLimit("assistant"), controller.PrepareAssistantRequest, middleware.Distribute(), controller.AssistantChat)
 		assistantRouter.GET("/conversations", middleware.DisableCache(), controller.ListAssistantConversations)
 		assistantRouter.GET("/conversations/:id", middleware.DisableCache(), controller.GetAssistantConversationHistory)
+		assistantRouter.POST("/conversations/:id/archive", middleware.DisableCache(), controller.ArchiveAssistantConversation)
+		assistantRouter.POST("/conversations/:id/unarchive", middleware.DisableCache(), controller.UnarchiveAssistantConversation)
 		assistantRouter.GET("/cards/:id/reveal", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.RevealAssistantSecureCard)
 		assistantRouter.GET("/handoffs/self", middleware.DisableCache(), controller.GetAssistantHandoff)
 		assistantRouter.POST("/handoffs", middleware.UserCriticalRateLimit("assistant-handoff"), middleware.DisableCache(), controller.SubmitAssistantHandoff)
@@ -95,9 +97,11 @@ func SetRelayRouter(router *gin.Engine) {
 	assistantAdminRouter.Use(middleware.RouteTag("api"))
 	assistantAdminRouter.Use(middleware.AdminAuth())
 	{
+		assistantAdminRouter.POST("/apply", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.ApplyAssistantAdminChange)
 		assistantAdminRouter.GET("/handoffs", controller.AdminListAssistantHandoffs)
 		assistantAdminRouter.POST("/handoffs/:id/resolve", middleware.CriticalRateLimit(), controller.AdminResolveAssistantHandoff)
 		assistantAdminRouter.GET("/intents", controller.AdminGetAssistantIntentSummary)
+		assistantAdminRouter.GET("/first-questions", middleware.DisableCache(), controller.AdminGetAssistantFirstQuestionSummary)
 		assistantAdminRouter.GET("/profiles", controller.AdminGetAssistantProfileSummary)
 		assistantAdminRouter.GET("/funding", controller.AdminGetAssistantFundingSummary)
 	}

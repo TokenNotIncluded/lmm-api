@@ -53,6 +53,30 @@ pub mod models;
 /// Hardened shared construction for outbound control-plane HTTP calls.
 pub mod outbound_http;
 
+/// Bounded low-cardinality protocol-conversion observability.
+pub mod conversion_observability;
+
+/// Deterministic protocol conversion rollout, shadow, and rollback decisions.
+pub mod protocol_rollout;
+
+/// Bounded local-only old/new protocol shadow coordination.
+pub mod protocol_shadow;
+
+/// Trusted import boundary for offline Go-vs-Rust differential evidence.
+pub mod protocol_differential_gate;
+
+/// Closed-by-default pure protocol-route admission decisions.
+pub mod protocol_route_gate;
+
+/// Closed-by-default typed streaming conversion pre-wiring.
+pub mod protocol_stream_pipeline;
+
+/// Closed-by-default route ownership evidence and review gate.
+pub mod route_ownership;
+
+/// Runtime-owned protocol capability catalog and startup drift validation.
+pub mod protocol_runtime_registry;
+
 /// Candidate route slices compiled for migration testing but not mounted.
 pub mod migration_routes;
 
