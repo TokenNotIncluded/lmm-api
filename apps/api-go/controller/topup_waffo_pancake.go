@@ -19,7 +19,9 @@ import (
 )
 
 type WaffoPancakePayRequest struct {
-	Amount int64 `json:"amount"`
+	Amount           int64  `json:"amount"`
+	CheckoutRegion   string `json:"checkout_region"`
+	CheckoutLanguage string `json:"checkout_language"`
 }
 
 func RequestWaffoPancakeAmount(c *gin.Context) {
@@ -424,6 +426,8 @@ func RequestWaffoPancakePay(c *gin.Context) {
 		BuyerEmail:              getWaffoPancakeBuyerEmail(user),
 		ExpiresInSeconds:        &expiresInSeconds,
 		OrderMerchantExternalID: tradeNo,
+		CheckoutRegion:          req.CheckoutRegion,
+		CheckoutLanguage:        req.CheckoutLanguage,
 	})
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 创建结账会话失败 user_id=%d trade_no=%s error=%q", id, tradeNo, err.Error()))

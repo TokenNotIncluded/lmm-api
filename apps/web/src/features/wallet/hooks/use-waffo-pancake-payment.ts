@@ -20,8 +20,14 @@ import i18next from 'i18next'
 import { useState, useCallback } from 'react'
 import { toast } from 'sonner'
 
+import {
+  getDefaultWaffoPancakeCheckoutRegion,
+  getWaffoPancakeCheckoutLanguage,
+} from '@/lib/waffo-pancake-checkout'
+
 import { requestWaffoPancakePayment, isApiSuccess } from '../api'
 import { isSafeHttpCheckoutUrl } from '../lib'
+import type { WaffoPancakePaymentRequest } from '../types'
 
 function getCheckoutUrl(data: unknown): string | null {
   if (!data || typeof data !== 'object') {
@@ -53,12 +59,25 @@ export function useWaffoPancakePayment() {
   const [processing, setProcessing] = useState(false)
 
   const processWaffoPancakePayment = useCallback(
-    async (topupAmount: number) => {
+    async (
+      topupAmount: number,
+      checkoutOptions?: Pick<
+        WaffoPancakePaymentRequest,
+        'checkout_region' | 'checkout_language'
+      >
+    ) => {
       setProcessing(true)
 
       try {
+        const interfaceLanguage = i18next.resolvedLanguage || i18next.language
         const response = await requestWaffoPancakePayment({
           amount: Math.floor(topupAmount),
+          checkout_region:
+            checkoutOptions?.checkout_region ??
+            getDefaultWaffoPancakeCheckoutRegion(interfaceLanguage),
+          checkout_language:
+            checkoutOptions?.checkout_language ??
+            getWaffoPancakeCheckoutLanguage(interfaceLanguage),
         })
 
         if (isApiSuccess(response)) {
