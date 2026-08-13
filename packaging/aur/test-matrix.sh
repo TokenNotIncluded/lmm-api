@@ -101,15 +101,15 @@ contains_srcinfo lmm-api-go-git $'\tmakedepends = go>=1.25.1'
 contains_srcinfo lmm-api-go $'\tmakedepends = bun'
 contains_srcinfo lmm-api-go $'\tmakedepends = git'
 contains_srcinfo lmm-api-go $'\tmakedepends = go>=1.25.1'
-go_release_commit=3cdab7e7f7c5c5788fa1f9b904671da5ce379c1a
+go_release_commit=11217412480e81b58f96f2b9889bd317120ff8f0
 readonly go_release_commit
 grep -Fqx "_commit=$go_release_commit" "$HERE/lmm-api-go/PKGBUILD" ||
   die 'canonical Go package is not pinned to the reviewed direct-package revision'
 # Pull requests are checked out shallowly without tag refs. Keep the reviewed
 # package version as the deterministic fallback, while still validating the
 # derived value whenever the local checkout has the tag history available.
-readonly reviewed_go_release_pkgver=0.1.1.r376.g3cdab7e7f
-if go_release_description=$(git -C "$ROOT" describe --long --tags --abbrev=9 "$go_release_commit" 2>/dev/null); then
+readonly reviewed_go_release_pkgver=0.1.1.r490.g112174124
+if go_release_description=$(git -C "$ROOT" describe --long --tags --exclude='web-v*' --abbrev=9 "$go_release_commit" 2>/dev/null); then
   go_release_pkgver=$(printf '%s\n' "$go_release_description" | \
     sed -E 's/^v//; s/([^-]*-g)/r\1/; s/-/./g')
 else

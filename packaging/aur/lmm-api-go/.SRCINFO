@@ -1,6 +1,6 @@
 pkgbase = lmm-api-go
 	pkgdesc = LMM API Go backend, native CLI, systemd service, and web frontend
-	pkgver = 0.1.1.r376.g3cdab7e7f
+	pkgver = 0.1.1.r490.g112174124
 	pkgrel = 1
 	url = https://github.com/LIghtJUNction/api.lmm.best
 	arch = x86_64
@@ -21,7 +21,7 @@ pkgbase = lmm-api-go
 	conflicts = lmm-api-go-git
 	options = !strip
 	backup = etc/lmm-api-go/lmm-api-go.env
-	source = lmm-api-go::git+https://github.com/LIghtJUNction/api.lmm.best.git#commit=3cdab7e7f7c5c5788fa1f9b904671da5ce379c1a
+	source = lmm-api-go::git+https://github.com/LIghtJUNction/api.lmm.best.git#commit=11217412480e81b58f96f2b9889bd317120ff8f0
 	sha256sums = SKIP
 
 pkgname = lmm-api-go
