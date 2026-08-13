@@ -195,6 +195,42 @@ func TestConcurrentColdPricingCallersReturnImmediatelyAndStartOneRefresh(t *test
 	}
 }
 
+func TestAsyncPricingRefreshKeepsLaunchDatabase(t *testing.T) {
+	preservePricingTestState(t)
+	first := openCacheTestDB(t, &Channel{}, &Ability{}, &Model{}, &Vendor{})
+	second := openCacheTestDB(t, &Channel{}, &Ability{}, &Model{}, &Vendor{})
+	common.MemoryCacheEnabled = false
+	if err := first.Create(&Ability{Group: "default", Model: "from-first", Enabled: true}).Error; err != nil {
+		t.Fatalf("insert first ability: %v", err)
+	}
+	if err := second.Create(&Ability{Group: "default", Model: "from-second", Enabled: true}).Error; err != nil {
+		t.Fatalf("insert second ability: %v", err)
+	}
+	DB = first
+	pricingCache.Store(nil)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	pricingContextHook = func() (context.Context, context.CancelFunc) {
+		close(started)
+		<-release
+		return context.WithCancel(context.Background())
+	}
+
+	if pricing := GetPricing(); pricing != nil {
+		t.Fatalf("cold pricing = %#v, want nil", pricing)
+	}
+	<-started
+	DB = second
+	close(release)
+	waitForPricingRefreshIdle(t)
+
+	snapshot := pricingCache.Load()
+	if snapshot == nil || len(snapshot.pricing) != 1 || snapshot.pricing[0].ModelName != "from-first" {
+		t.Fatalf("refresh did not retain launch database: %#v", snapshot)
+	}
+}
+
 func TestPricingVendorWriteHonorsCanceledRefreshContext(t *testing.T) {
 	preservePricingTestState(t)
 	db := openCacheTestDB(t, &Channel{}, &Ability{}, &Model{}, &Vendor{})

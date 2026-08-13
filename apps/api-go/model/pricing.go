@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
+	"gorm.io/gorm"
 )
 
 type Pricing struct {
@@ -132,15 +133,16 @@ func startPricingRefresh() {
 	if !updatePricingLock.TryLock() {
 		return
 	}
-	go func() {
+	db := DB
+	go func(db *gorm.DB) {
 		defer updatePricingLock.Unlock()
 		if snapshot := pricingCache.Load(); !pricingCacheNeedsRefresh(snapshot) {
 			return
 		}
-		if err := refreshPricingLockedSafely(); err != nil {
+		if err := refreshPricingLockedSafely(db); err != nil {
 			common.SysLog(fmt.Sprintf("refresh pricing cache failed: %v", err))
 		}
-	}()
+	}(db)
 }
 
 // refreshPricingNow is the synchronous seam used by explicit administrative
@@ -148,21 +150,24 @@ func startPricingRefresh() {
 func refreshPricingNow() error {
 	updatePricingLock.Lock()
 	defer updatePricingLock.Unlock()
-	return refreshPricingLockedSafely()
+	return refreshPricingLockedSafely(DB)
 }
 
-func refreshPricingLockedSafely() (err error) {
+func refreshPricingLockedSafely(db *gorm.DB) (err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			err = fmt.Errorf("pricing cache refresh panic: %v", recovered)
 		}
 	}()
-	return refreshPricingLocked()
+	return refreshPricingLocked(db)
 }
 
 // refreshPricingLocked records the generation it started for, builds every
 // derived datum locally under one deadline, and publishes exactly once.
-func refreshPricingLocked() error {
+func refreshPricingLocked(db *gorm.DB) error {
+	if db == nil {
+		return fmt.Errorf("pricing database is unavailable")
+	}
 	generation := pricingInvalidation.Load()
 	ctx, cancel := context.WithTimeout(context.Background(), pricingRefreshTimeout)
 	if pricingContextHook != nil {
@@ -171,7 +176,7 @@ func refreshPricingLocked() error {
 	}
 	defer cancel()
 
-	snapshot, err := buildPricingSnapshot(ctx, generation)
+	snapshot, err := buildPricingSnapshot(ctx, db, generation)
 	if err != nil {
 		return err
 	}
@@ -232,7 +237,7 @@ func getPricingEndpointTypesForAbility(ability AbilityWithChannel, advancedCusto
 // The returned configs are pointers shared with the channel cache; they are
 // replaced wholesale on update and never mutated in place, so reading them after
 // RUnlock is safe.
-func loadPricingAdvancedCustomConfigs(ctx context.Context, enableAbilities []AbilityWithChannel) (map[int]*dto.AdvancedCustomConfig, error) {
+func loadPricingAdvancedCustomConfigs(ctx context.Context, db *gorm.DB, enableAbilities []AbilityWithChannel) (map[int]*dto.AdvancedCustomConfig, error) {
 	channelIDs := make([]int, 0)
 	seen := make(map[int]struct{})
 	for _, ability := range enableAbilities {
@@ -266,7 +271,7 @@ func loadPricingAdvancedCustomConfigs(ctx context.Context, enableAbilities []Abi
 
 	for _, channelID := range channelIDs {
 		channel := &Channel{Id: channelID}
-		err := DB.WithContext(ctx).First(channel, "id = ?", channelID).Error
+		err := db.WithContext(ctx).First(channel, "id = ?", channelID).Error
 		if err != nil {
 			return nil, fmt.Errorf("load advanced custom channel settings for channel %d: %w", channelID, err)
 		}
@@ -287,9 +292,9 @@ func appendPricingEndpoint(endpoints []string, endpoint string) []string {
 	return append(endpoints, endpoint)
 }
 
-func loadEnabledPricingAbilities(ctx context.Context) ([]AbilityWithChannel, error) {
+func loadEnabledPricingAbilities(ctx context.Context, db *gorm.DB) ([]AbilityWithChannel, error) {
 	var abilities []AbilityWithChannel
-	err := DB.WithContext(ctx).Table("abilities").
+	err := db.WithContext(ctx).Table("abilities").
 		Select("abilities.*, channels.type as channel_type").
 		Joins("left join channels on abilities.channel_id = channels.id").
 		Where("abilities.enabled = ?", true).
@@ -297,15 +302,15 @@ func loadEnabledPricingAbilities(ctx context.Context) ([]AbilityWithChannel, err
 	return abilities, err
 }
 
-func buildPricingSnapshot(ctx context.Context, generation uint64) (*pricingSnapshot, error) {
+func buildPricingSnapshot(ctx context.Context, db *gorm.DB, generation uint64) (*pricingSnapshot, error) {
 	//modelRatios := common.GetModelRatios()
-	enableAbilities, err := loadEnabledPricingAbilities(ctx)
+	enableAbilities, err := loadEnabledPricingAbilities(ctx, db)
 	if err != nil {
 		return nil, fmt.Errorf("load enabled abilities: %w", err)
 	}
 	// 预加载模型元数据与供应商一次，避免循环查询
 	var allMeta []Model
-	if err := DB.WithContext(ctx).Find(&allMeta).Error; err != nil {
+	if err := db.WithContext(ctx).Find(&allMeta).Error; err != nil {
 		return nil, fmt.Errorf("load model metadata: %w", err)
 	}
 	metaMap := make(map[string]*Model)
@@ -359,7 +364,7 @@ func buildPricingSnapshot(ctx context.Context, generation uint64) (*pricingSnaps
 
 	// 预加载供应商
 	var vendors []Vendor
-	if err := DB.WithContext(ctx).Find(&vendors).Error; err != nil {
+	if err := db.WithContext(ctx).Find(&vendors).Error; err != nil {
 		return nil, fmt.Errorf("load vendors: %w", err)
 	}
 	vendorMap := make(map[int]*Vendor)
@@ -368,7 +373,7 @@ func buildPricingSnapshot(ctx context.Context, generation uint64) (*pricingSnaps
 	}
 
 	// 初始化默认供应商映射
-	if err := initDefaultVendorMapping(ctx, metaMap, vendorMap, enableAbilities); err != nil {
+	if err := initDefaultVendorMapping(ctx, db, metaMap, vendorMap, enableAbilities); err != nil {
 		return nil, fmt.Errorf("initialize default vendor mapping: %w", err)
 	}
 
@@ -396,7 +401,7 @@ func buildPricingSnapshot(ctx context.Context, generation uint64) (*pricingSnaps
 
 	//这里使用切片而不是Set，因为一个模型可能支持多个端点类型，并且第一个端点是优先使用端点
 	modelSupportEndpointsStr := make(map[string][]string)
-	advancedCustomConfigs, err := loadPricingAdvancedCustomConfigs(ctx, enableAbilities)
+	advancedCustomConfigs, err := loadPricingAdvancedCustomConfigs(ctx, db, enableAbilities)
 	if err != nil {
 		return nil, err
 	}
