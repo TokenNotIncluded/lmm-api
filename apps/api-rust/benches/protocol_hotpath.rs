@@ -316,9 +316,11 @@ struct BenchmarkDimension {
     value: &'static str,
 }
 
-/// Metadata-only coverage contract for PLAN 10.1.  These rows describe the
+/// Metadata-only coverage contract for PLAN 10.1. These rows describe the
 /// dimensions a benchmark run must identify; they do not claim that a run has
-/// executed or establish a performance baseline.
+/// executed or establish a performance baseline. Route-shape and
+/// client-behavior rows remain metadata-only because this offline file has no
+/// gateway route graph or client lifecycle/abort harness.
 const SCENARIO_DIMENSION_MANIFEST: &[BenchmarkDimension] = &[
     BenchmarkDimension {
         label: "request_parallel_tools_1",
@@ -636,6 +638,84 @@ fn request_conversion_dimension_matrix_calibration() {
                 .wrapping_add(converted.value.messages.len() as u64)
                 .wrapping_add(converted.value.tools.len() as u64)
         });
+    }
+}
+
+#[test]
+#[ignore = "run explicitly as an offline calibration benchmark"]
+fn request_feature_dimension_matrix_calibration() {
+    // This is an offline typed-conversion matrix, not an HTTP/provider run.
+    // OpenAiChatContentPart models image_url.url, so the file-reference case
+    // uses a file URI without claiming that a gateway upload was measured.
+    for parallel_tool_count in [1, 4, 16] {
+        for (multimodal_label, image_url) in [
+            ("url", "https://example.invalid/bench-image.png"),
+            (
+                "base64",
+                "data:image/png;base64,YmVuY2htYXJrLWltYWdl",
+            ),
+            ("file_reference", "file://benchmark/image.png"),
+        ] {
+            for (reasoning_label, reasoning_effort) in [
+                ("none", None),
+                ("summary", Some("summary")),
+                ("opaque", Some("opaque")),
+            ] {
+                let label = format!(
+                    "request_feature_matrix_parallel_{parallel_tool_count}_{multimodal_label}_{reasoning_label}"
+                );
+                let tools = (0..parallel_tool_count)
+                    .map(|index| {
+                        serde_json::json!({
+                            "type": "function",
+                            "function": {
+                                "name": format!("feature_tool_{index}"),
+                                "description": "benchmark feature-matrix tool",
+                                "parameters": {
+                                    "type": "object",
+                                    "properties": {
+                                        "value": {"type": "string"},
+                                    },
+                                },
+                            },
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let request_json = serde_json::json!({
+                    "model": "gpt-bench",
+                    "messages": [{
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "feature matrix"},
+                            {"type": "image_url", "image_url": {"url": image_url}},
+                        ],
+                    }],
+                    "tools": tools,
+                    "parallel_tool_calls": true,
+                    "reasoning_effort": reasoning_effort,
+                    "stream": false,
+                });
+                let corpus =
+                    serde_json::to_vec(&request_json).expect("serialize feature matrix request");
+                calibrate(label.as_str(), corpus.len(), || {
+                    let request: OpenAiChatRequest =
+                        serde_json::from_slice(black_box(corpus.as_slice()))
+                            .expect("feature matrix request");
+                    let converted = black_box(
+                        openai_chat_request_to_canonical(request)
+                            .expect("feature matrix request conversion"),
+                    );
+                    let canonical_bytes = serde_json::to_vec(&converted.value)
+                        .expect("serialize canonical feature matrix");
+                    (canonical_bytes.len() as u64)
+                        .wrapping_add(converted.value.messages.len() as u64)
+                        .wrapping_add(converted.value.tools.len() as u64)
+                        .wrapping_add(u64::from(
+                            converted.value.options.parallel_tool_calls.unwrap_or(false),
+                        ))
+                });
+            }
+        }
     }
 }
 
