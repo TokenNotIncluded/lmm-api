@@ -1105,6 +1105,20 @@ func TestAssistantAgentToolsExposeSafeAndConfirmationGatedActions(t *testing.T) 
 	assert.False(t, shortHandoff["ok"].(bool))
 }
 
+func BenchmarkAssistantToolDefinitionsForContext(b *testing.B) {
+	context := assistantUserContext{AdministratorMode: true, ConversationTitleNeeded: true}
+	if len(assistantToolDefinitionsForContext(context)) == 0 {
+		b.Fatal("assistant tool catalogue is empty")
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if len(assistantToolDefinitionsForContext(context)) == 0 {
+			b.Fatal("assistant tool catalogue is empty")
+		}
+	}
+}
+
 func TestAssistantL0ModelToolReturnsRealPublicPreviewIDs(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Ability{}, &model.TopUp{}))

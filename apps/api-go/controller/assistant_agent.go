@@ -12,6 +12,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -53,6 +54,7 @@ var (
 	assistantMathExpressionPattern = regexp.MustCompile(`^[0-9A-Za-z_+\-*/%^().,\s]+$`)
 	assistantMathVariablePattern   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,31}$`)
 	assistantAgentLimiter          = syncx.NewLimiter(assistantAgentMaxConcurrent)
+	assistantTools                 = sync.OnceValue(buildAssistantTools)
 )
 
 type assistantL1RecommendationDraft struct {
@@ -71,7 +73,28 @@ type assistantOpenAIResponse = agent.Response
 type assistantOpenAIResponseChoice = agent.Choice
 type assistantOpenAIResponseMessage = agent.ResponseMessage
 
+type toolSetKey uint8
+
+const (
+	toolAssessment toolSetKey = 1 << iota
+	toolTitle
+	toolAdmin
+	toolDeveloper
+	toolOffers
+)
+
+var assistantToolSets [1 << 5]struct {
+	once  sync.Once
+	tools []assistantOpenAIToolDefinition
+}
+
 func assistantToolDefinitions() []assistantOpenAIToolDefinition {
+	return assistantTools()
+}
+
+// buildAssistantTools creates one immutable catalogue. Request handling only
+// filters this snapshot; it never rebuilds the nested JSON schemas per step.
+func buildAssistantTools() []assistantOpenAIToolDefinition {
 	definitions := []assistantOpenAIToolDefinition{
 		{
 			Type: "function",
@@ -349,14 +372,37 @@ func assistantToolDefinitions() []assistantOpenAIToolDefinition {
 // second line of defence, but an L0 model should not be invited to speculate
 // about administrator tools or account-specific pricing in the first place.
 func assistantToolDefinitionsForContext(userContext assistantUserContext) []assistantOpenAIToolDefinition {
-	all := assistantToolDefinitions()
-	definitions := make([]assistantOpenAIToolDefinition, 0, len(all))
-	for _, definition := range all {
-		if assistantToolAllowedForContext(definition.Function.Name, userContext) {
-			definitions = append(definitions, definition)
+	set := &assistantToolSets[keyForTools(userContext)]
+	set.once.Do(func() {
+		all := assistantToolDefinitions()
+		set.tools = make([]assistantOpenAIToolDefinition, 0, len(all))
+		for _, definition := range all {
+			if assistantToolAllowedForContext(definition.Function.Name, userContext) {
+				set.tools = append(set.tools, definition)
+			}
 		}
+	})
+	return set.tools
+}
+
+func keyForTools(context assistantUserContext) toolSetKey {
+	var key toolSetKey
+	if assistantL0InterlocutorAssessmentRequired(context) {
+		key |= toolAssessment
 	}
-	return definitions
+	if context.ConversationTitleNeeded {
+		key |= toolTitle
+	}
+	if context.AdministratorMode {
+		key |= toolAdmin
+	}
+	if context.DeveloperAccessGranted {
+		key |= toolDeveloper
+	}
+	if assistantPaymentOfferStateForContext(context) == assistantPaymentOfferReady {
+		key |= toolOffers
+	}
+	return key
 }
 
 func assistantToolAllowedForContext(name string, userContext assistantUserContext) bool {
@@ -773,8 +819,9 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 		c.Set(common.RequestIdKey, rootRequestID)
 	}
 
+	userContext := assistantUserContextFromGin(c)
 	messages := make([]assistantOpenAIMessage, 1, len(conversation)+1)
-	messages[0] = assistantOpenAIMessage{Role: "system", Content: buildAssistantSystemPrompt(settings, assistantUserContextFromGin(c))}
+	messages[0] = assistantOpenAIMessage{Role: "system", Content: buildAssistantSystemPrompt(settings, userContext)}
 	messages = append(messages, conversation...)
 	if assistantContextBytes(messages) > assistantAgentContextMaxBytes {
 		writeAssistantError(c, http.StatusRequestEntityTooLarge, "ASSISTANT_CONTEXT_TOO_LARGE", errors.New("assistant context exceeded its byte budget"))
@@ -784,12 +831,12 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 	if maxSteps < 1 {
 		maxSteps = 1
 	}
-	forceL0Assessment := assistantL0InterlocutorAssessmentRequired(assistantUserContextFromGin(c))
-	forceRecommendationWorkflow := assistantRecommendationWorkflowRequired(assistantUserContextFromGin(c))
+	forceL0Assessment := assistantL0InterlocutorAssessmentRequired(userContext)
+	forceRecommendationWorkflow := assistantRecommendationWorkflowRequired(userContext)
 	if forceL0Assessment && maxSteps < 2 {
 		maxSteps = 2
 	}
-	if minimum := assistantRecommendationWorkflowMinSteps(assistantUserContextFromGin(c)); maxSteps < minimum {
+	if minimum := assistantRecommendationWorkflowMinSteps(userContext); maxSteps < minimum {
 		maxSteps = minimum
 	}
 	if !settings.AgentLoopEnabled {
@@ -799,8 +846,14 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 	}
 	cacheKey := c.GetString("assistant_cache_key")
 	usedCacheSensitiveTool := false
-	calledTools := make(map[string]bool)
-	successfulTools := make(map[string]bool)
+	agentEnabled := maxSteps > 1 && (settings.AgentLoopEnabled || forceL0Assessment || forceRecommendationWorkflow)
+	var tools []assistantOpenAIToolDefinition
+	var calledTools, successfulTools map[string]bool
+	if agentEnabled {
+		tools = assistantToolDefinitionsForContext(userContext)
+		calledTools = make(map[string]bool)
+		successfulTools = make(map[string]bool)
+	}
 
 	for step := 0; step < maxSteps; step++ {
 		request := assistantOpenAIRequest{
@@ -812,9 +865,8 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 		}
 		// Reserve the last turn for a final natural-language answer. This
 		// makes MaxSteps a hard bound while ensuring a tool call can finish.
-		if (settings.AgentLoopEnabled || forceL0Assessment || forceRecommendationWorkflow) && step < maxSteps-1 {
-			userContext := assistantUserContextFromGin(c)
-			request.Tools = assistantToolDefinitionsForContext(userContext)
+		if agentEnabled && step < maxSteps-1 {
+			request.Tools = tools
 			request.ToolChoice = assistantToolChoiceForAgentStep(userContext, calledTools, successfulTools)
 		}
 
