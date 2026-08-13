@@ -3,6 +3,7 @@ package controller
 import (
 	"encoding/json"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -227,27 +228,17 @@ func assistantSafeCustomerProfile(profile assistantCustomerProfile) assistantCus
 }
 
 func assistantSafeAuthProviders(providers []string) []string {
-	allowed := map[string]struct{}{
-		"custom_oauth": {},
-		"discord":      {},
-		"github":       {},
-		"linuxdo":      {},
-		"oidc":         {},
-		"password":     {},
-		"telegram":     {},
-		"wechat":       {},
-	}
-	seen := make(map[string]struct{}, len(providers))
 	result := make([]string, 0, len(providers))
 	for _, provider := range providers {
 		provider = strings.ToLower(strings.TrimSpace(provider))
-		if _, ok := allowed[provider]; !ok {
+		switch provider {
+		case "custom_oauth", "discord", "github", "linuxdo", "oidc", "password", "telegram", "wechat":
+		default:
 			continue
 		}
-		if _, ok := seen[provider]; ok {
+		if slices.Contains(result, provider) {
 			continue
 		}
-		seen[provider] = struct{}{}
 		result = append(result, provider)
 	}
 	sort.Strings(result)
@@ -255,7 +246,7 @@ func assistantSafeAuthProviders(providers []string) []string {
 }
 
 func assistantUserContextForRequest(userID int, message string, conversation ...[]assistantOpenAIMessage) assistantUserContext {
-	profileText := assistantProfileTextForConversation(message, conversation...)
+	userText := assistantUserText(message, conversation...)
 	context := assistantUserContext{
 		UserID:               userID,
 		AccessLevel:          "L0",
@@ -265,17 +256,17 @@ func assistantUserContextForRequest(userID int, message string, conversation ...
 		RecommendationAction: classifyAssistantRecommendationAction(message),
 	}
 	if userID <= 0 {
-		context.CustomerProfile, context.ProfileSignals = classifyAssistantCustomerProfile(context, profileText)
+		context.CustomerProfile, context.ProfileSignals = classifyAssistantCustomerProfile(context, userText)
 		context.WelcomeStrategy = assistantWelcomeStrategyForContext(context)
-		context.PaymentOfferState = assistantPaymentOfferStateForContextAndConversation(context, message, conversation...)
+		context.PaymentOfferState = assistantPaymentOfferStateForText(context, userText)
 		return context
 	}
 
 	user, err := model.GetUserById(userID, false)
 	if err != nil || user == nil {
-		context.CustomerProfile, context.ProfileSignals = classifyAssistantCustomerProfile(context, profileText)
+		context.CustomerProfile, context.ProfileSignals = classifyAssistantCustomerProfile(context, userText)
 		context.WelcomeStrategy = assistantWelcomeStrategyForContext(context)
-		context.PaymentOfferState = assistantPaymentOfferStateForContextAndConversation(context, message, conversation...)
+		context.PaymentOfferState = assistantPaymentOfferStateForText(context, userText)
 		return context
 	}
 
@@ -323,9 +314,9 @@ func assistantUserContextForRequest(userID int, message string, conversation ...
 		}
 	}
 
-	context.CustomerProfile, context.ProfileSignals = classifyAssistantCustomerProfile(context, profileText)
+	context.CustomerProfile, context.ProfileSignals = classifyAssistantCustomerProfile(context, userText)
 	context.WelcomeStrategy = assistantWelcomeStrategyForContext(context)
-	context.PaymentOfferState = assistantPaymentOfferStateForContextAndConversation(context, message, conversation...)
+	context.PaymentOfferState = assistantPaymentOfferStateForText(context, userText)
 	sort.Strings(context.AuthProviders)
 	sort.Strings(context.PaymentRestrictionCauses)
 	sort.Strings(context.ProfileSignals)
@@ -356,7 +347,7 @@ func classifyAssistantRecommendationAction(message string) assistantRecommendati
 	return assistantRecommendationActionNone
 }
 
-func assistantProfileTextForConversation(latestMessage string, conversations ...[]assistantOpenAIMessage) string {
+func assistantUserText(latestMessage string, conversations ...[]assistantOpenAIMessage) string {
 	messages := make([]string, 0, 4)
 	if len(conversations) > 0 {
 		for _, message := range conversations[0] {
@@ -380,9 +371,6 @@ func assistantPaymentOfferStateForContext(context assistantUserContext) assistan
 }
 
 func assistantPaymentOfferStateForContextAndConversation(context assistantUserContext, latestMessage string, conversations ...[]assistantOpenAIMessage) assistantPaymentOfferState {
-	if context.PaymentMethodsHidden {
-		return assistantPaymentOfferBlocked
-	}
 	messages := make([]string, 0, 1)
 	if len(conversations) > 0 {
 		for _, message := range conversations[0] {
@@ -394,7 +382,14 @@ func assistantPaymentOfferStateForContextAndConversation(context assistantUserCo
 	if len(messages) == 0 {
 		messages = append(messages, latestMessage)
 	}
-	text := strings.ToLower(strings.TrimSpace(strings.Join(messages, "\n")))
+	return assistantPaymentOfferStateForText(context, strings.Join(messages, "\n"))
+}
+
+func assistantPaymentOfferStateForText(context assistantUserContext, text string) assistantPaymentOfferState {
+	if context.PaymentMethodsHidden {
+		return assistantPaymentOfferBlocked
+	}
+	text = strings.ToLower(strings.TrimSpace(text))
 	if assistantTextContainsAny(text, "不想付费", "不想付款", "不想支付", "不充值", "不愿意付费", "讨厌付款", "免费使用") {
 		return assistantPaymentOfferNone
 	}

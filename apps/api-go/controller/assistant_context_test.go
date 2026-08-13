@@ -236,7 +236,7 @@ func TestAssistantProfileUsesPriorUserTurns(t *testing.T) {
 		{Role: "user", Content: "现在偶尔出现故障，怎么排查？"},
 	}
 
-	text := assistantProfileTextForConversation("现在偶尔出现故障，怎么排查？", conversation)
+	text := assistantUserText("现在偶尔出现故障，怎么排查？", conversation)
 	profile, signals := classifyAssistantCustomerProfile(assistantUserContext{}, text)
 
 	assert.Equal(t, assistantProfileOperator, profile)
