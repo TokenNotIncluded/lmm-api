@@ -576,6 +576,50 @@ fn stream_conformance_preserves_order_unknown_events_and_cancel_class() {
 }
 
 #[test]
+fn bounded_protocol_json_corpus_is_panic_free() {
+    const LENGTHS: &[usize] = &[0, 1, 7, 31, 127, 1024];
+    const SEEDS: &[u64] = &[0x0123_4567_89ab_cdef, 0xfedc_ba98_7654_3210];
+
+    for &seed in SEEDS {
+        for &length in LENGTHS {
+            let mut state = seed;
+            let mut bytes = Vec::with_capacity(length);
+            for _ in 0..length {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                bytes.push((state >> 56) as u8);
+            }
+            assert!(bytes.len() <= 1024);
+
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                let _ = serde_json::from_slice::<OpenAiChatRequest>(&bytes);
+                let _ = serde_json::from_slice::<OpenAiResponsesRequest>(&bytes);
+                let _ = serde_json::from_slice::<ClaudeRequest>(&bytes);
+                let _ = serde_json::from_slice::<GeminiRequest>(&bytes);
+
+                if let Ok(snapshot) = serde_json::from_slice::<OpenAiStreamSnapshot>(&bytes) {
+                    let _ = lmm_contracts::relay::openai_stream_to_canonical_checked(&snapshot);
+                }
+                if let Ok(snapshot) = serde_json::from_slice::<ResponsesStreamSnapshot>(&bytes) {
+                    let _ = lmm_contracts::relay::responses_stream_to_canonical_checked(&snapshot);
+                }
+                if let Ok(snapshot) = serde_json::from_slice::<ClaudeStreamSnapshot>(&bytes) {
+                    let _ = claude_stream_to_semantic_events(&snapshot);
+                }
+                if let Ok(snapshot) = serde_json::from_slice::<GeminiStreamSnapshot>(&bytes) {
+                    let _ = gemini_stream_to_canonical(&snapshot, "fuzz-model");
+                }
+            }));
+            assert!(
+                result.is_ok(),
+                "protocol JSON corpus panicked for seed {seed:#x}, length {length}"
+            );
+        }
+    }
+}
+
+#[test]
 fn sse_regression_corpus_is_incremental_bounded_and_panic_free() {
     const CORPUS: &[&[u8]] = &[
         b"data: one\ndata: two\n\n",
