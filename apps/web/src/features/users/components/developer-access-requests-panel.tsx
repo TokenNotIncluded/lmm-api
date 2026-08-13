@@ -189,22 +189,13 @@ function RequestCard(props: {
           <Badge variant='outline'>{t('Pending review')}</Badge>
         </div>
       </div>
-      <div className='mt-3 grid gap-3 sm:grid-cols-2'>
-        <div className='bg-muted/20 border p-3'>
-          <p className='text-xs font-medium'>{t('User statement')}</p>
-          <p className='text-muted-foreground mt-1 text-sm whitespace-pre-wrap'>
-            {request.reason || t('No reason provided.')}
-          </p>
-        </div>
-        <div className='bg-muted/20 border p-3'>
-          <p className='text-xs font-medium'>
-            {t('AI recommendation (optional)')}
-          </p>
-          <p className='text-muted-foreground mt-1 text-sm whitespace-pre-wrap'>
-            {request.ai_recommendation ||
-              t('No AI recommendation was recorded.')}
-          </p>
-        </div>
+      <div className='bg-muted/20 mt-3 border p-3'>
+        <p className='text-xs font-medium'>{t('Recommendation letter')}</p>
+        <p className='text-muted-foreground mt-1 text-sm whitespace-pre-wrap'>
+          {request.ai_recommendation ||
+            request.reason ||
+            t('No reason provided.')}
+        </p>
       </div>
       <Textarea
         className='mt-3'

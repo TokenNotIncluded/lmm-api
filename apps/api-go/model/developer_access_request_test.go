@@ -32,7 +32,7 @@ func TestAssistantDeveloperAccessRecommendationApprovalUnlocksL1WithoutPayment(t
 	assert.Equal(t, DeveloperAccessRequestSourceAI, request.Source)
 	assert.NotEmpty(t, request.AIRecommendation)
 
-	// Repeated submissions are idempotent while the first request is pending.
+	// Repeated submissions edit the user's one pending recommendation letter.
 	repeated, err := SubmitAssistantDeveloperAccessRecommendation(
 		user.Id,
 		"a second browser tab should not replace the original reason",
@@ -40,8 +40,8 @@ func TestAssistantDeveloperAccessRecommendationApprovalUnlocksL1WithoutPayment(t
 	)
 	require.NoError(t, err)
 	assert.Equal(t, request.Id, repeated.Id)
-	assert.Equal(t, request.Reason, repeated.Reason)
-	assert.Equal(t, request.AIRecommendation, repeated.AIRecommendation)
+	assert.Equal(t, "a second browser tab should not replace the original reason", repeated.Reason)
+	assert.Equal(t, "A second recommendation should not replace the original pending recommendation.", repeated.AIRecommendation)
 	assert.Equal(t, DeveloperAccessRequestSourceAI, repeated.Source)
 
 	pending, err := ListDeveloperAccessRequests(DeveloperAccessRequestPending, 10)

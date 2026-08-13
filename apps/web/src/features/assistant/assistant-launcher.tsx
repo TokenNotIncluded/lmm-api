@@ -41,7 +41,7 @@ const AssistantPanel = lazy(() =>
   }))
 )
 
-export function AssistantLauncher() {
+export function AssistantLauncher(props: { page?: boolean }) {
   const { t } = useTranslation()
   const { status } = useStatus()
   const user = useAuthStore((state) => state.auth.user)
@@ -49,7 +49,15 @@ export function AssistantLauncher() {
   const [mobileOpen, setMobileOpen] = useState(false)
   const [desktopCollapsed, setDesktopCollapsed] = useState(false)
   const [desktopFullscreen, setDesktopFullscreen] = useState(false)
-  const [initialPreset, setInitialPreset] = useState<AssistantPresetId>()
+  const [initialPreset, setInitialPreset] = useState<
+    AssistantPresetId | undefined
+  >(() =>
+    props.page
+      ? isConsoleActivated(user)
+        ? 'client-setup'
+        : 'onboarding'
+      : undefined
+  )
   const [initialMessage, setInitialMessage] = useState<string>()
   const [initialMessageRevision, setInitialMessageRevision] = useState(0)
   const [autoSendRequestId, setAutoSendRequestId] = useState<string>()
@@ -135,43 +143,49 @@ export function AssistantLauncher() {
 
   return (
     <div className='contents'>
-      <div
-        className='border-border bg-muted/20 pointer-events-none fixed inset-x-0 bottom-0 z-40 flex min-h-14 items-center justify-center border-t px-3 py-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))] md:inset-x-auto md:right-4 md:bottom-4 md:min-h-0 md:w-auto md:justify-end md:border md:border-none md:bg-transparent md:px-0 md:py-0 md:pb-0 xl:hidden'
-        data-testid='assistant-mobile-launcher'
-      >
-        <Button
-          type='button'
-          variant='secondary'
-          className='pointer-events-auto h-11 w-full max-w-md justify-start gap-2 px-3 shadow-sm md:w-auto md:min-w-44'
-          aria-label={accessibleLabel}
-          title={accessibleLabel}
-          aria-haspopup='dialog'
-          aria-expanded={mobileOpen}
-          aria-controls='ai-assistant-panel'
-          data-testid='assistant-launcher'
-          onClick={showManualAssistant}
+      {props.page ? null : (
+        <div
+          className='border-border bg-muted/20 pointer-events-none fixed inset-x-0 bottom-0 z-40 flex min-h-14 items-center justify-center border-t px-3 py-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))] md:inset-x-auto md:right-4 md:bottom-4 md:min-h-0 md:w-auto md:justify-end md:border md:border-none md:bg-transparent md:px-0 md:py-0 md:pb-0 xl:hidden'
+          data-testid='assistant-mobile-launcher'
         >
-          <HugeiconsIcon
-            icon={AiChat02Icon}
-            strokeWidth={2}
-            data-icon='inline-start'
-            aria-hidden='true'
-          />
-          <span className='truncate text-sm font-medium'>{visibleLabel}</span>
-        </Button>
-      </div>
+          <Button
+            type='button'
+            variant='secondary'
+            className='pointer-events-auto h-11 w-full max-w-md justify-start gap-2 px-3 shadow-sm md:w-auto md:min-w-44'
+            aria-label={accessibleLabel}
+            title={accessibleLabel}
+            aria-haspopup='dialog'
+            aria-expanded={mobileOpen}
+            aria-controls='ai-assistant-panel'
+            data-testid='assistant-launcher'
+            onClick={showManualAssistant}
+          >
+            <HugeiconsIcon
+              icon={AiChat02Icon}
+              strokeWidth={2}
+              data-icon='inline-start'
+              aria-hidden='true'
+            />
+            <span className='truncate text-sm font-medium'>{visibleLabel}</span>
+          </Button>
+        </div>
+      )}
 
       <Suspense
         fallback={
           <aside
-            className='bg-background hidden min-h-0 w-[min(28vw,30rem)] max-w-full min-w-0 shrink-0 border-l xl:flex'
+            className={
+              props.page
+                ? 'bg-background flex min-h-0 w-full flex-1'
+                : 'bg-background hidden min-h-0 w-[min(28vw,30rem)] max-w-full min-w-0 shrink-0 border-l xl:flex'
+            }
             aria-hidden='true'
           />
         }
       >
         <AssistantPanel
-          mode={assistantOverlay ? 'mobile' : 'rail'}
-          open={assistantOverlay ? mobileOpen : true}
+          mode={props.page ? 'page' : assistantOverlay ? 'mobile' : 'rail'}
+          open={props.page || (assistantOverlay ? mobileOpen : true)}
           collapsed={!assistantOverlay && desktopCollapsed}
           fullscreen={!assistantOverlay && desktopFullscreen}
           initialPreset={initialPreset}

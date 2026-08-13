@@ -254,10 +254,7 @@ describe('AssistantActivationTool', () => {
         reason: 'I need L1 for a small test client.',
         confirmed: true,
       })
-      assert.match(
-        document.body.textContent ?? '',
-        /AI recommendation submitted/
-      )
+      assert.match(document.body.textContent ?? '', /Recommendation letter/)
     } finally {
       await unmount(rendered)
     }
@@ -282,11 +279,7 @@ describe('AssistantActivationTool', () => {
       },
     })
     try {
-      assert.equal(document.querySelector('textarea'), null)
-      assert.match(
-        document.body.textContent ?? '',
-        /I need access for a private Claude Code integration\./
-      )
+      assert.equal(document.querySelectorAll('textarea').length, 1)
       assert.match(
         document.body.textContent ?? '',
         /Recommend L1 because the user provided a specific client/
@@ -307,10 +300,7 @@ describe('AssistantActivationTool', () => {
         confirmed: true,
       })
       assert.equal(submittedCalls, 1)
-      assert.match(
-        document.body.textContent ?? '',
-        /AI recommendation submitted/
-      )
+      assert.match(document.body.textContent ?? '', /Recommendation letter/)
     } finally {
       await unmount(rendered)
     }
@@ -338,16 +328,15 @@ describe('AssistantActivationTool', () => {
     try {
       await waitForCondition(
         () =>
-          document.body.textContent?.includes(
-            'waiting for an administrator'
-          ) === true,
-        'Pending approval state did not render'
+          document.body.textContent?.includes('Recommendation letter') === true,
+        'Pending recommendation state did not render'
       )
       assert.equal(getCalls, 1)
-      assert.ok(findButton('Refresh'))
 
       await act(async () => {
-        findButton('Refresh').click()
+        await rendered.queryClient.refetchQueries({
+          queryKey: ['assistant-developer-access-request'],
+        })
         await flushEffects()
       })
       await waitForCondition(

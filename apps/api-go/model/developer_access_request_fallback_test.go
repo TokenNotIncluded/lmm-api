@@ -28,12 +28,12 @@ func TestAssistantL1RequestIsQueuedBeforeOptionalRecommendation(t *testing.T) {
 
 	enriched, err := SubmitAssistantDeveloperAccessRecommendation(
 		user.Id,
-		"A different statement must not replace the original request.",
+		"An edited statement replaces the earlier draft.",
 		"The user described a concrete integration and can be reviewed for L1 access.",
 	)
 	require.NoError(t, err)
 	assert.Equal(t, queued.Id, enriched.Id)
-	assert.Equal(t, queued.Reason, enriched.Reason)
+	assert.Equal(t, "An edited statement replaces the earlier draft.", enriched.Reason)
 	assert.Equal(t, DeveloperAccessRequestSourceAI, enriched.Source)
 	assert.NotEmpty(t, enriched.AIRecommendation)
 
@@ -60,12 +60,12 @@ func TestAssistantL1QueueEnrichmentAndApprovalIsOneDurableFlow(t *testing.T) {
 
 	enriched, err := SubmitAssistantDeveloperAccessRecommendation(
 		user.Id,
-		"The AI must not replace the user's original statement.",
+		"AI and human edits share one recommendation letter.",
 		"The user described a concrete integration workflow and can be reviewed for L1 access.",
 	)
 	require.NoError(t, err)
 	assert.Equal(t, queued.Id, enriched.Id)
-	assert.Equal(t, queued.Reason, enriched.Reason)
+	assert.Equal(t, "AI and human edits share one recommendation letter.", enriched.Reason)
 	assert.Equal(t, DeveloperAccessRequestSourceAI, enriched.Source)
 
 	var requestCount int64

@@ -111,8 +111,8 @@ func SubmitDeveloperAccessRequest(c *gin.Context) {
 		// same administrator queue with only the user's redacted statement.
 		// This is not an approval and does not unlock L1.
 		request, err = model.SubmitAssistantDeveloperAccessRequest(user.Id, input.Reason)
-	} else {
-		if strings.TrimSpace(input.AIRecommendation) == "" || strings.TrimSpace(input.ConfirmationToken) == "" {
+	} else if strings.TrimSpace(input.ConfirmationToken) != "" {
+		if strings.TrimSpace(input.AIRecommendation) == "" {
 			developerAccessRequestError(c, http.StatusUnprocessableEntity, "DEVELOPER_ACCESS_AI_CONFIRMATION_INVALID", "AI recommendation confirmation is incomplete; continue the conversation to prepare a new one")
 			return
 		}
@@ -134,13 +134,11 @@ func SubmitDeveloperAccessRequest(c *gin.Context) {
 			return
 		}
 		var draft assistantL1RecommendationDraft
-		if json.Unmarshal([]byte(flow.Payload), &draft) != nil ||
-			strings.TrimSpace(input.Reason) != draft.UserStatement ||
-			strings.TrimSpace(input.AIRecommendation) != draft.Recommendation {
-			developerAccessRequestError(c, http.StatusUnprocessableEntity, "DEVELOPER_ACCESS_AI_CONFIRMATION_MISMATCH", "AI recommendation does not match the confirmed draft")
+		if json.Unmarshal([]byte(flow.Payload), &draft) != nil {
+			developerAccessRequestError(c, http.StatusUnprocessableEntity, "DEVELOPER_ACCESS_AI_CONFIRMATION_MISMATCH", "AI recommendation draft is invalid")
 			return
 		}
-		if _, err = model.SubmitAssistantDeveloperAccessRequest(user.Id, draft.UserStatement); err != nil {
+		if _, err = model.SubmitAssistantDeveloperAccessRequest(user.Id, input.Reason); err != nil {
 			// Leave the confirmation token unconsumed so a transient queue
 			// failure can be retried with the exact same confirmed draft.
 			// The common error mapping below returns a retryable response.
@@ -157,8 +155,13 @@ func SubmitDeveloperAccessRequest(c *gin.Context) {
 				common.ApiError(c, flowErr)
 				return
 			}
-			request, err = model.SubmitAssistantDeveloperAccessRecommendation(user.Id, draft.UserStatement, draft.Recommendation)
+			request, err = model.SubmitAssistantDeveloperAccessRecommendation(user.Id, input.Reason, input.AIRecommendation)
 		}
+	} else {
+		// The signed-in user may edit the one shared recommendation letter
+		// directly. AI drafts use a token for their first confirmation; later
+		// human edits update the same pending row without creating another one.
+		request, err = model.SubmitAssistantDeveloperAccessRecommendation(user.Id, input.Reason, input.AIRecommendation)
 	}
 	if err != nil {
 		switch {

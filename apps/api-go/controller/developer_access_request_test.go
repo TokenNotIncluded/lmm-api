@@ -60,8 +60,12 @@ func TestSubmitDeveloperAccessRequestRequiresConfirmedAIRecommendation(t *testin
 	request.Header.Set("Content-Type", "application/json")
 	response = httptest.NewRecorder()
 	engine.ServeHTTP(response, request)
-	assert.Equal(t, http.StatusUnprocessableEntity, response.Code)
-	assert.Contains(t, response.Body.String(), "DEVELOPER_ACCESS_AI_CONFIRMATION_INVALID")
+	assert.Equal(t, http.StatusOK, response.Code)
+	assert.Contains(t, response.Body.String(), model.DeveloperAccessRequestSourceAI)
+	stored, err = model.GetDeveloperAccessRequest(user.Id)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, "The user gave a concrete development use case and compatible client.", stored.AIRecommendation)
 
 	payload, err := common.Marshal(assistantL1RecommendationDraft{
 		UserStatement:  "I want to connect Claude Code for a Go project.",

@@ -69,6 +69,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
+import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
 
 import {
@@ -152,7 +153,7 @@ type ConversationEntry = {
   }
 }
 
-type AssistantPanelMode = 'mobile' | 'rail'
+type AssistantPanelMode = 'mobile' | 'page' | 'rail'
 
 function getBaseUrl(): string {
   if (typeof window === 'undefined') return 'https://api.lmm.best/v1'
@@ -514,6 +515,27 @@ function AssistantPanelHeader(props: {
 }) {
   const { t } = useTranslation()
 
+  if (props.mode === 'page') {
+    return (
+      <header className='border-border/70 bg-background/95 flex min-w-0 shrink-0 items-center justify-between gap-3 border-b px-4 py-3 sm:px-6'>
+        <h1 className='truncate text-sm font-medium'>{t('Service guide')}</h1>
+        <Button
+          type='button'
+          variant='ghost'
+          size='sm'
+          className='md:hidden'
+          onClick={
+            props.historyVisible ? props.onCloseHistory : props.onOpenHistory
+          }
+        >
+          {props.historyVisible
+            ? t('Back to conversation')
+            : t('Conversation history')}
+        </Button>
+      </header>
+    )
+  }
+
   if (props.mode === 'mobile') {
     return (
       <SheetHeader
@@ -625,7 +647,11 @@ export function AssistantPanel(props: {
   const mode = props.mode ?? 'mobile'
   const onConversationReset = props.onConversationReset
   const panelVisible =
-    mode === 'rail' ? !props.collapsed || props.fullscreen === true : props.open
+    mode === 'page'
+      ? true
+      : mode === 'rail'
+        ? !props.collapsed || props.fullscreen === true
+        : props.open
   const baseUrl = getBaseUrl()
   const [entries, setEntries] = useState<ConversationEntry[]>([])
   const [sending, setSending] = useState(false)
@@ -650,7 +676,9 @@ export function AssistantPanel(props: {
   >(null)
   const openedTargetRef = useRef<AssistantPresetId | undefined>(undefined)
   const [conversationResetRevision, setConversationResetRevision] = useState(0)
-  const [privacyNoticeExpanded, setPrivacyNoticeExpanded] = useState(true)
+  const [privacyNoticeExpanded, setPrivacyNoticeExpanded] = useState(
+    mode !== 'page'
+  )
   const privacyNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null
   )
@@ -683,14 +711,19 @@ export function AssistantPanel(props: {
     }, ASSISTANT_PRIVACY_NOTICE_COLLAPSE_DELAY_MS)
   }, [clearPrivacyNoticeTimer])
   useEffect(() => {
-    if (!panelVisible) {
+    if (!panelVisible || mode === 'page') {
       clearPrivacyNoticeTimer()
       return
     }
 
     schedulePrivacyNoticeCollapse()
     return clearPrivacyNoticeTimer
-  }, [clearPrivacyNoticeTimer, panelVisible, schedulePrivacyNoticeCollapse])
+  }, [
+    clearPrivacyNoticeTimer,
+    mode,
+    panelVisible,
+    schedulePrivacyNoticeCollapse,
+  ])
   const togglePrivacyNotice = useCallback(() => {
     if (privacyNoticeExpanded) {
       clearPrivacyNoticeTimer()
@@ -1037,11 +1070,11 @@ export function AssistantPanel(props: {
       />
       <Alert
         id='assistant-privacy-notice'
-        className={
-          privacyNoticeExpanded
-            ? 'm-3 mb-0 max-w-[calc(100%-1.5rem)] min-w-0 overflow-hidden'
-            : 'm-3 mb-0 max-w-[calc(100%-1.5rem)] min-w-0 overflow-hidden py-1.5'
-        }
+        className={cn(
+          'mb-0 min-w-0 overflow-hidden',
+          mode === 'page' ? 'hidden' : 'm-3 max-w-[calc(100%-1.5rem)]',
+          !privacyNoticeExpanded && 'py-1.5'
+        )}
         data-testid='assistant-privacy-notice'
         variant='default'
       >
@@ -1084,7 +1117,12 @@ export function AssistantPanel(props: {
       </Alert>
       {historyVisible ? (
         <Conversation className='bg-muted/20 min-h-0 min-w-0 flex-1'>
-          <ConversationContent className='flex min-h-full max-w-full min-w-0 flex-col gap-5 overflow-x-hidden px-4 py-5 sm:px-6'>
+          <ConversationContent
+            className={cn(
+              'flex min-h-full min-w-0 flex-col gap-5 overflow-x-hidden px-4 py-5 sm:px-6',
+              mode === 'page' ? 'mx-auto w-full max-w-3xl' : 'max-w-full'
+            )}
+          >
             {historyView === 'list' ? (
               <AssistantHistory
                 active={panelVisible}
@@ -1099,7 +1137,7 @@ export function AssistantPanel(props: {
         </Conversation>
       ) : (
         <>
-          {developerAccessGranted && authUser ? (
+          {mode !== 'page' && developerAccessGranted && authUser ? (
             <AssistantOnboardingTodo
               userId={authUser.id}
               enabled={developerAccessGranted}
@@ -1114,9 +1152,19 @@ export function AssistantPanel(props: {
             />
           ) : null}
           <Conversation className='bg-muted/20 min-h-0 min-w-0 flex-1'>
-            <ConversationContent className='flex min-h-full max-w-full min-w-0 flex-col gap-5 overflow-x-hidden px-4 py-5 sm:px-6'>
+            <ConversationContent
+              className={cn(
+                'flex min-h-full min-w-0 flex-col gap-5 overflow-x-hidden px-4 py-5 sm:px-6',
+                mode === 'page' ? 'mx-auto w-full max-w-3xl' : 'max-w-full'
+              )}
+            >
               {entries.length === 0 ? (
-                <div className='flex flex-1 flex-col gap-5'>
+                <div
+                  className={cn(
+                    'flex flex-1 flex-col gap-5',
+                    mode === 'page' && 'justify-center py-12'
+                  )}
+                >
                   {accountAccessState === 'loading' ||
                   accountAccessState === 'error' ? (
                     <AssistantAccountStatusNotice
@@ -1335,7 +1383,12 @@ export function AssistantPanel(props: {
 
           <div className='bg-background min-w-0 shrink-0 overflow-hidden pb-[max(0.75rem,env(safe-area-inset-bottom))]'>
             <Separator className='bg-border/70' />
-            <div className='px-3 py-3 sm:px-4'>
+            <div
+              className={cn(
+                'px-3 py-3 sm:px-4',
+                mode === 'page' && 'mx-auto w-full max-w-3xl'
+              )}
+            >
               <PromptInputProvider
                 key={conversationResetRevision}
                 initialInput={props.initialMessage}
@@ -1375,6 +1428,42 @@ export function AssistantPanel(props: {
       )}
     </>
   )
+
+  if (mode === 'page') {
+    return (
+      <section
+        id='ai-assistant-panel'
+        className='bg-background flex min-h-0 min-w-0 flex-1'
+        aria-label={t('Service guide')}
+      >
+        <aside className='bg-muted/20 hidden min-h-0 w-72 shrink-0 flex-col border-r md:flex'>
+          <div className='border-border/70 flex items-center justify-between border-b px-3 py-3'>
+            <p className='text-sm font-medium'>{t('Conversation history')}</p>
+            <Button
+              type='button'
+              variant='ghost'
+              size='sm'
+              onClick={resetConversation}
+              disabled={sending}
+            >
+              {t('Clear conversation')}
+            </Button>
+          </div>
+          <div className='min-h-0 flex-1 overflow-y-auto p-3'>
+            <AssistantHistory
+              active={panelVisible}
+              onOpenConversation={(conversation) =>
+                setHistoryView(conversation)
+              }
+            />
+          </div>
+        </aside>
+        <main className='flex min-h-0 min-w-0 flex-1 flex-col'>
+          {panelContent}
+        </main>
+      </section>
+    )
+  }
 
   if (mode === 'rail') {
     if (props.fullscreen) {

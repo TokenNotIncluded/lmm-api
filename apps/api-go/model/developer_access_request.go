@@ -113,10 +113,8 @@ func GetDeveloperAccessRequest(userID int) (*DeveloperAccessRequest, error) {
 	return &request, nil
 }
 
-// reopenDeveloperAccessRequestForUserWithTx makes an explicit administrator L0
-// transition visible as a fresh application state without rewriting the
-// reviewed row. The previous approved request remains an audit record, while
-// the newest row is the one returned to the user and can be reviewed again.
+// reopenDeveloperAccessRequestForUserWithTx reopens the user's one letter when
+// an administrator explicitly returns the account to L0.
 func reopenDeveloperAccessRequestForUserWithTx(tx *gorm.DB, userID int) error {
 	var latest DeveloperAccessRequest
 	err := lockForUpdate(tx).Where("user_id = ?", userID).Order("id DESC").First(&latest).Error
@@ -130,17 +128,11 @@ func reopenDeveloperAccessRequestForUserWithTx(tx *gorm.DB, userID int) error {
 		return nil
 	}
 
-	source := latest.Source
-	if source == "" {
-		source = DeveloperAccessRequestSourceOld
-	}
-	return tx.Create(&DeveloperAccessRequest{
-		UserId:           userID,
-		Status:           DeveloperAccessRequestPending,
-		Source:           source,
-		Reason:           latest.Reason,
-		AIRecommendation: latest.AIRecommendation,
-		CreatedAt:        common.GetTimestamp(),
+	return tx.Model(&latest).Updates(map[string]interface{}{
+		"status":        DeveloperAccessRequestPending,
+		"admin_user_id": 0,
+		"admin_note":    "",
+		"reviewed_at":   0,
 	}).Error
 }
 
@@ -185,22 +177,34 @@ func submitDeveloperAccessRequest(userID int, reason string, recommendation stri
 			return err
 		}
 		var pending DeveloperAccessRequest
-		findErr := tx.Where("user_id = ? AND status = ?", userID, DeveloperAccessRequestPending).
-			Order("id DESC").First(&pending).Error
+		findErr := tx.Where("user_id = ?", userID).Order("id DESC").First(&pending).Error
 		if findErr == nil {
-			// A request is visible as soon as it is submitted. If a later AI
-			// turn produces a recommendation, enrich that same pending row
-			// instead of creating a second queue item or making the user start
-			// over. Never replace the user's original statement.
-			if source == DeveloperAccessRequestSourceAI && strings.TrimSpace(pending.AIRecommendation) == "" {
-				if err := tx.Model(&pending).Updates(map[string]interface{}{
-					"ai_recommendation": normalizedRecommendation,
-					"source":            source,
-				}).Error; err != nil {
-					return err
-				}
+			if pending.Status == DeveloperAccessRequestApproved {
+				return ErrDeveloperAccessRequestReviewed
+			}
+			// A user has one active recommendation letter. AI suggestions and
+			// manual edits update that same pending row instead of creating a
+			// second queue item or preserving conflicting copies.
+			updates := map[string]interface{}{
+				"reason":        redactAssistantHandoffMessage(normalizedReason),
+				"status":        DeveloperAccessRequestPending,
+				"admin_user_id": 0,
+				"admin_note":    "",
+				"reviewed_at":   0,
+			}
+			pending.Reason = updates["reason"].(string)
+			pending.Status = DeveloperAccessRequestPending
+			pending.AdminUserId = 0
+			pending.AdminNote = ""
+			pending.ReviewedAt = 0
+			if source == DeveloperAccessRequestSourceAI {
+				updates["ai_recommendation"] = normalizedRecommendation
+				updates["source"] = source
 				pending.AIRecommendation = normalizedRecommendation
 				pending.Source = source
+			}
+			if err := tx.Model(&pending).Updates(updates).Error; err != nil {
+				return err
 			}
 			request = pending
 			return nil
