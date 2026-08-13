@@ -118,6 +118,51 @@ func TestLoadFromRedisUnavailable(t *testing.T) {
 	}
 }
 
+// TestRestoredHighFactorIsStepClampedDown covers the Redis-restore path:
+// LoadFromRedis is only called by the ticker, so a factor restored from
+// Redis flows into the next Tick, where EnforceBounds step-clamps movement
+// instead of applying the restored value in full. A restored Factor of 3.0
+// under zero load / zero heat must move DOWN by at most maxStepDown (default
+// 0.03), i.e. a single tick lands in [3.0*(1-0.03), 3.0) = [2.91, 3.0).
+func TestRestoredHighFactorIsStepClampedDown(t *testing.T) {
+	disableRedis(t)
+	resetStatesForTest()
+	s := defaultSetting()
+
+	// Simulate the ticker's cold-start restore: LoadFromRedis would populate
+	// the in-memory store with the persisted high factor; SetState + GetState
+	// is the LoadFromRedis-equivalent here (Redis is disabled in tests).
+	SetState("restore-high-factor", &ModelState{Factor: 3.0, UpdatedAt: 0})
+	st, ok := GetState("restore-high-factor")
+	if !ok {
+		t.Fatal("GetState after SetState returned ok=false")
+	}
+
+	// First tick after the restore: zero load / zero heat, so the target is
+	// 1.0 and only the step-down clamp may move the factor.
+	got := Tick(st, zeroLoadInput(), s)
+
+	floor := 3.0 * (1 - s.MaxStepDown) // 2.91 with the default 0.03
+	if got < floor-eps || got >= 3.0 {
+		t.Fatalf("Tick(restored factor 3.0, zero load) = %v, want in [%v, 3.0) (step-down clamp must bind, not the full restored factor)", got, floor)
+	}
+	if approxEqual(got, 3.0, eps) {
+		t.Fatalf("Tick(restored factor 3.0, zero load) = %v, want < 3.0 (factor must step down from the restored value)", got)
+	}
+	if !approxEqual(st.Factor, got, eps) {
+		t.Errorf("state.Factor = %v, return value = %v, want equal", st.Factor, got)
+	}
+
+	// Convergence: repeated zero-load ticks decay the factor asymptotically
+	// toward the 1.0 base price (EMA decay once the step clamp stops binding).
+	for i := 0; i < 100; i++ {
+		got = Tick(st, zeroLoadInput(), s)
+	}
+	if got < 1.0-eps || got >= 1.1 {
+		t.Errorf("factor after 100 zero-load ticks = %v, want in [1.0, 1.1) (convergence toward base price)", got)
+	}
+}
+
 func TestAllModels(t *testing.T) {
 	disableRedis(t)
 	resetStatesForTest()

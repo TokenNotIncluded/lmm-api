@@ -397,3 +397,61 @@ func TestModelPriceHelperPreConsumeIncludesDynamicMultiplier(t *testing.T) {
 	require.Equal(t, 20000, priceData.QuotaToPreConsume)
 	require.InDelta(t, 2.0, priceData.OtherRatioMultiplier(), 1e-9)
 }
+
+// TestModelPriceHelperPerCallIncludesDynamicMultiplier verifies the per-call
+// (按次计费, MJ/Task) billing path: the dynamic pricing multiplier is injected
+// into OtherRatios BEFORE the Quota write, but the base Quota itself stays
+// unmultiplied — downstream (relay_task) applies OtherRatios when settling, so
+// folding the multiplier into Quota here would double-charge it.
+func TestModelPriceHelperPerCallIncludesDynamicMultiplier(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	savedModelPrices := ratio_setting.ModelPrice2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(savedModelPrices))
+	})
+
+	modelPrices, err := common.Marshal(map[string]float64{"dyn-percall-price": 0.04})
+	require.NoError(t, err)
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(string(modelPrices)))
+
+	// GetMultiplier gates on dynamic_pricing_setting.enabled, so enable the
+	// feature (and restore the full previous setting on cleanup).
+	dpCfg := config.GlobalConfig.Get("dynamic_pricing_setting").(*dynamic_pricing_setting.DynamicPricingSetting)
+	oldDpCfg := dynamic_pricing_setting.GetSetting()
+	dpCfg.Enabled = true
+	t.Cleanup(func() { *dpCfg = oldDpCfg })
+
+	// Seed dynamic pricing state: GetMultiplier returns 2.0 for the model.
+	dynamic_pricing.SetState("dyn-percall-price", &dynamic_pricing.ModelState{Factor: 2.0})
+	t.Cleanup(func() {
+		// No delete API; neutralise so other tests in this package are
+		// unaffected by the seeded multiplier.
+		dynamic_pricing.SetState("dyn-percall-price", &dynamic_pricing.ModelState{Factor: 1.0})
+	})
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Set("group", "default")
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "dyn-percall-price",
+		UserGroup:       "default",
+		UsingGroup:      "default",
+	}
+
+	priceData, err := ModelPriceHelperPerCall(ctx, info)
+	require.NoError(t, err)
+
+	// modelPrice 0.04 with groupRatio 1 is not free, and the fixed-price
+	// (usePrice) branch is taken.
+	require.False(t, priceData.FreeModel)
+	require.True(t, priceData.UsePrice)
+
+	// The multiplier is exposed via OtherRatios for downstream settlement...
+	require.InDelta(t, 2.0, priceData.OtherRatioMultiplier(), 1e-9)
+	require.Contains(t, priceData.OtherRatios(), "dynamic_pricing")
+	require.InDelta(t, 2.0, priceData.OtherRatios()["dynamic_pricing"], 1e-9)
+
+	// ...but the base quota is NOT multiplied: 0.04 × 500000 × 1 = 20000.
+	// relay_task applies OtherRatios afterwards; multiplying here would
+	// double-charge the dynamic multiplier.
+	require.Equal(t, 20000, priceData.Quota)
+}
