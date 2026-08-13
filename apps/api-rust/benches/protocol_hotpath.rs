@@ -901,6 +901,62 @@ fn sse_incremental_byte_partition_calibration() {
 
 #[test]
 #[ignore = "run explicitly as an offline calibration benchmark"]
+fn client_sse_lifecycle_calibration() {
+    // These scenarios measure only local SSE parser lifecycle costs. They do
+    // not represent HTTP scheduling, client backpressure, network pacing, or
+    // production client-abort metrics.
+    calibrate("client_normal", SSE_CORPUS.len(), || {
+        let mut parser = SseFrameParser::new(1024);
+        let frames = black_box(parser.feed(SSE_CORPUS).expect("normal SSE feed"));
+        let tail = black_box(parser.finish().expect("normal SSE finish"));
+        frames
+            .iter()
+            .chain(tail.iter())
+            .fold(SSE_CORPUS.len() as u64, |value, frame| {
+                value
+                    .wrapping_add(frame.raw.len() as u64)
+                    .wrapping_add(frame.data.len() as u64)
+            })
+    });
+
+    calibrate("client_slow", SSE_CORPUS.len(), || {
+        let mut parser = SseFrameParser::new(1024);
+        let mut checksum = SSE_CORPUS.len() as u64;
+        for chunk in black_box(SSE_CORPUS).chunks(1) {
+            let frames = parser.feed(chunk).expect("slow SSE feed");
+            checksum = frames.iter().fold(checksum, |value, frame| {
+                value
+                    .wrapping_add(frame.raw.len() as u64)
+                    .wrapping_add(frame.data.len() as u64)
+            });
+        }
+        let tail = parser.finish().expect("slow SSE finish");
+        tail.iter().fold(checksum, |value, frame| {
+            value
+                .wrapping_add(frame.raw.len() as u64)
+                .wrapping_add(frame.data.len() as u64)
+        })
+    });
+
+    calibrate("client_interrupted", SSE_CORPUS.len().saturating_sub(2), || {
+        let prefix_len = SSE_CORPUS.len().saturating_sub(2);
+        let prefix = &SSE_CORPUS[..prefix_len];
+        let mut parser = SseFrameParser::new(1024);
+        let frames = parser.feed(black_box(prefix)).expect("interrupted SSE feed");
+        assert!(parser.has_unfinished_frame());
+        let checksum = frames.iter().fold(prefix_len as u64, |value, frame| {
+            value
+                .wrapping_add(frame.raw.len() as u64)
+                .wrapping_add(frame.data.len() as u64)
+        });
+        let buffered = parser.buffered_frame_bytes() as u64;
+        drop(parser);
+        checksum.wrapping_add(buffered)
+    });
+}
+
+#[test]
+#[ignore = "run explicitly as an offline calibration benchmark"]
 fn native_passthrough_hotpath_calibration() {
     calibrate(
         "native_passthrough",
