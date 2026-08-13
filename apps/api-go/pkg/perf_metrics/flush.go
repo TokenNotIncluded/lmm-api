@@ -24,6 +24,9 @@ func flushLoop() {
 }
 
 func flushCompletedBuckets() {
+	if dropped := hotBucketDropped.Swap(0); dropped > 0 {
+		common.SysError(fmt.Sprintf("perf metric hot-bucket budget dropped %d local samples", dropped))
+	}
 	currentBucket := bucketStart(time.Now().Unix())
 	hotBuckets.Range(func(key, value any) bool {
 		k := key.(bucketKey)
@@ -63,7 +66,7 @@ func flushCompletedBuckets() {
 
 func deleteOldEmptyBucket(k bucketKey, rawKey any) {
 	if k.bucketTs < bucketStart(time.Now().Add(-24*time.Hour).Unix()) {
-		hotBuckets.Delete(rawKey)
+		deleteHotBucket(rawKey)
 	}
 }
 
