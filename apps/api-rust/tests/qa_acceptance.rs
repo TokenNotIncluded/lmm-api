@@ -2511,6 +2511,84 @@ fn route_request_response_metrics_are_protocol_specific_and_body_free() {
 }
 
 #[test]
+fn route_specific_stream_observability_preserves_dimensions() {
+    let observer = ConversionObserver::with_max_series(64);
+    let labels = MetricLabels::for_route(
+        Protocol::OpenAi,
+        Protocol::OpenAiResponses,
+        ConverterVersion::ProtocolStreamV1,
+        1,
+        true,
+        FeatureClass::Stream,
+        ConversionResult::Success,
+    );
+    observer.record_conversion_duration(labels, Duration::from_nanos(11));
+    observer.record_plan_duration(labels, Duration::from_nanos(7));
+    observer.record_events(labels, 3);
+    observer.record_input_bytes(labels, 128);
+    observer.record_output_bytes(labels, 256);
+    observer.record_failure_with_reason(labels, FailureReason::Stream);
+    observer.record_loss(labels, LossCode::LossUnknownEvent);
+    observer.record_synthetic_field(labels, lmm_contracts::relay::SyntheticField::ToolCallId);
+    observer.record_unknown_event(labels);
+    observer.record_gateway_ttft(labels, Duration::from_nanos(13));
+    observer.record_client_abort(labels);
+
+    let snapshot = observer.snapshot();
+    let expected = [
+        MetricKind::ConversionDurationSeconds,
+        MetricKind::ConversionPlanDurationSeconds,
+        MetricKind::ConversionEventsTotal,
+        MetricKind::ConversionInputBytes,
+        MetricKind::ConversionOutputBytes,
+        MetricKind::ConversionFailuresTotal,
+        MetricKind::ConversionLossesTotal,
+        MetricKind::ConversionSyntheticFieldsTotal,
+        MetricKind::ConversionUnknownEventsTotal,
+        MetricKind::StreamGatewayTtftSeconds,
+        MetricKind::StreamClientAbortTotal,
+    ];
+    for metric in expected {
+        assert!(
+            snapshot
+                .samples
+                .iter()
+                .any(|sample| sample.metric == metric),
+            "missing route metric {metric:?}"
+        );
+    }
+    let route_sample = |metric| {
+        snapshot
+            .samples
+            .iter()
+            .find(|sample| sample.metric == metric)
+            .expect("route metric sample")
+    };
+    for metric in [
+        MetricKind::ConversionDurationSeconds,
+        MetricKind::ConversionPlanDurationSeconds,
+        MetricKind::ConversionEventsTotal,
+        MetricKind::ConversionInputBytes,
+        MetricKind::ConversionOutputBytes,
+        MetricKind::StreamGatewayTtftSeconds,
+    ] {
+        let sample = route_sample(metric);
+        assert_eq!(sample.labels.source_format, Protocol::OpenAi);
+        assert_eq!(sample.labels.target_format, Protocol::OpenAiResponses);
+        assert!(sample.labels.stream);
+        assert_eq!(sample.labels.feature_class, FeatureClass::Stream);
+        assert_eq!(sample.labels.result, ConversionResult::Success);
+    }
+    let failure = route_sample(MetricKind::ConversionFailuresTotal);
+    assert_eq!(failure.labels.failure_reason, Some(FailureReason::Stream));
+    assert_eq!(failure.labels.result, ConversionResult::Failure);
+    let loss = route_sample(MetricKind::ConversionLossesTotal);
+    assert_eq!(loss.labels.loss_code, Some(LossCode::LossUnknownEvent));
+    let abort = route_sample(MetricKind::StreamClientAbortTotal);
+    assert_eq!(abort.labels.result, ConversionResult::Cancelled);
+}
+
+#[test]
 fn claude_stream_state_machine_is_bounded_and_panic_free() {
     const MAX_STEPS: usize = 64;
     const MAX_EVENTS: usize = 4;
