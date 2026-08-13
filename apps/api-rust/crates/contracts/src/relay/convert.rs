@@ -4614,6 +4614,7 @@ pub fn canonical_request_to_gemini_for_model(
             name: tool.name,
             description: tool.description,
             parameters: tool.input_schema,
+            extra: BTreeMap::new(),
         })
         .collect::<Vec<_>>();
     let tools = if declarations.is_empty() {
@@ -4621,6 +4622,7 @@ pub fn canonical_request_to_gemini_for_model(
     } else {
         vec![GeminiTool {
             function_declarations: declarations,
+            extra: BTreeMap::new(),
         }]
     };
     let tool_config = request.tool_choice.map(|choice| GeminiToolConfig {
@@ -4631,7 +4633,9 @@ pub fn canonical_request_to_gemini_for_model(
                 CanonicalToolChoice::Required | CanonicalToolChoice::Function { .. } => "ANY",
             }
             .to_owned(),
+            extra: BTreeMap::new(),
         },
+        extra: BTreeMap::new(),
     });
     Ok(Converted {
         value: GeminiRequest {
@@ -4646,6 +4650,7 @@ pub fn canonical_request_to_gemini_for_model(
             .then_some(GeminiGenerationConfig {
                 max_output_tokens: request.max_output_tokens,
                 temperature: request.temperature,
+                extra: BTreeMap::new(),
             }),
             safety_settings: Vec::new(),
             tools,

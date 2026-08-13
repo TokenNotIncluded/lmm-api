@@ -3223,6 +3223,47 @@ fn gemini_tool_choice_to_ir(
     }
 }
 
+fn reject_gemini_request_nested_extra(
+    request: &GeminiRequest,
+    source: Protocol,
+    target: Protocol,
+) -> Result<(), DirectIrError> {
+    reject_wire_extra(source, target, &request.extra, "")?;
+    if let Some(config) = request.generation_config.as_ref() {
+        reject_wire_extra(source, target, &config.extra, "generationConfig")?;
+    }
+    for (index, setting) in request.safety_settings.iter().enumerate() {
+        reject_wire_extra(
+            source,
+            target,
+            &setting.extra,
+            &format!("safetySettings[{index}]"),
+        )?;
+    }
+    for (tool_index, tool) in request.tools.iter().enumerate() {
+        let tool_path = format!("tools[{tool_index}]");
+        reject_wire_extra(source, target, &tool.extra, &tool_path)?;
+        for (declaration_index, declaration) in tool.function_declarations.iter().enumerate() {
+            reject_wire_extra(
+                source,
+                target,
+                &declaration.extra,
+                &format!("{tool_path}.functionDeclarations[{declaration_index}]"),
+            )?;
+        }
+    }
+    if let Some(config) = request.tool_config.as_ref() {
+        reject_wire_extra(source, target, &config.extra, "toolConfig")?;
+        reject_wire_extra(
+            source,
+            target,
+            &config.function_calling_config.extra,
+            "toolConfig.functionCallingConfig",
+        )?;
+    }
+    Ok(())
+}
+
 /// Decodes a Gemini request.  Gemini does not put its model in the JSON body,
 /// so callers supply the route model explicitly.
 pub fn gemini_request_to_envelope_v2(
@@ -3233,6 +3274,7 @@ pub fn gemini_request_to_envelope_v2(
     let source = Protocol::Gemini;
     let target = Protocol::Gemini;
     let mut envelope = Envelope::new(source, model.clone());
+    reject_gemini_request_nested_extra(&request, source, target)?;
     let tools = gemini_tools_to_ir(&request);
     let tool_choice = gemini_tool_choice_to_ir(request.tool_config.as_ref(), source, target)?;
     let GeminiRequest {
@@ -3242,9 +3284,8 @@ pub fn gemini_request_to_envelope_v2(
         safety_settings,
         tools: _,
         tool_config: _,
-        extra,
+        ..
     } = request;
-    reject_wire_extra(source, target, &extra, "")?;
     if let Some(system) = system_instruction.as_ref() {
         reject_gemini_content_extra(system, source, target, "systemInstruction")?;
     }
@@ -3804,6 +3845,7 @@ fn gemini_generation_config(envelope: &Envelope) -> Option<GeminiGenerationConfi
         Some(GeminiGenerationConfig {
             max_output_tokens: envelope.controls.max_output_tokens,
             temperature: envelope.controls.temperature,
+            extra: BTreeMap::new(),
         })
     }
 }
@@ -3819,6 +3861,7 @@ fn gemini_safety_settings(envelope: &Envelope) -> Vec<super::GeminiSafetySetting
             Some(super::GeminiSafetySetting {
                 category: object.get("category").and_then(json_string)?.to_owned(),
                 threshold: object.get("threshold").and_then(json_string)?.to_owned(),
+                extra: BTreeMap::new(),
             })
         })
         .collect()
@@ -3853,7 +3896,9 @@ fn gemini_tool_choice(envelope: &mut Envelope) -> Option<GeminiToolConfig> {
     Some(GeminiToolConfig {
         function_calling_config: GeminiFunctionCallingConfig {
             mode: mode.to_owned(),
+            extra: BTreeMap::new(),
         },
+        extra: BTreeMap::new(),
     })
 }
 
@@ -3999,6 +4044,7 @@ pub fn envelope_to_gemini_request_v2_for_model(
             name,
             description: tool.description.clone(),
             parameters: tool.input_schema.clone().unwrap_or_else(|| object([])),
+            extra: BTreeMap::new(),
         });
     }
     let output = GeminiRequest {
@@ -4015,6 +4061,7 @@ pub fn envelope_to_gemini_request_v2_for_model(
         } else {
             vec![GeminiTool {
                 function_declarations: declarations,
+                extra: BTreeMap::new(),
             }]
         },
         tool_config: gemini_tool_choice(&mut envelope),
@@ -8933,6 +8980,75 @@ mod direct_ir_tests {
         assert_eq!(
             error.path,
             "contents[1].parts[0].functionResponse.futureResponseField"
+        );
+    }
+
+    #[test]
+    fn gemini_request_nested_configuration_fields_are_typed_rejections() {
+        let generation_config: GeminiRequest = serde_json::from_str(
+            r#"{"generationConfig":{"maxOutputTokens":128,"futureGenerationField":true}}"#,
+        )
+        .expect("unknown Gemini generationConfig field is retained by the wire DTO");
+        assert!(
+            generation_config
+                .generation_config
+                .as_ref()
+                .is_some_and(|config| config.extra.contains_key("futureGenerationField"))
+        );
+        let error = gemini_request_to_envelope_v2(generation_config, "gemini-test")
+            .expect_err("direct IR must not silently drop a generationConfig field");
+        assert_eq!(error.feature, "unknown_field");
+        assert_eq!(error.path, "generationConfig.futureGenerationField");
+
+        let safety_settings: GeminiRequest = serde_json::from_str(
+            r#"{"safetySettings":[{"category":"HARM_CATEGORY_HATE_SPEECH","threshold":"BLOCK_NONE","futureSafetyField":true}]}"#,
+        )
+        .expect("unknown Gemini safetySettings field is retained by the wire DTO");
+        let error = gemini_request_to_envelope_v2(safety_settings, "gemini-test")
+            .expect_err("direct IR must not silently drop a safetySettings field");
+        assert_eq!(error.feature, "unknown_field");
+        assert_eq!(error.path, "safetySettings[0].futureSafetyField");
+
+        let tool: GeminiRequest = serde_json::from_str(
+            r#"{"tools":[{"functionDeclarations":[],"futureToolField":true}]}"#,
+        )
+        .expect("unknown Gemini tool field is retained by the wire DTO");
+        let error = gemini_request_to_envelope_v2(tool, "gemini-test")
+            .expect_err("direct IR must not silently drop a tool field");
+        assert_eq!(error.feature, "unknown_field");
+        assert_eq!(error.path, "tools[0].futureToolField");
+
+        let declaration: GeminiRequest = serde_json::from_str(
+            r#"{"tools":[{"functionDeclarations":[{"name":"lookup","parameters":{},"futureDeclarationField":true}]}]}"#,
+        )
+        .expect("unknown Gemini function declaration field is retained by the wire DTO");
+        let error = gemini_request_to_envelope_v2(declaration, "gemini-test")
+            .expect_err("direct IR must not silently drop a function declaration field");
+        assert_eq!(error.feature, "unknown_field");
+        assert_eq!(
+            error.path,
+            "tools[0].functionDeclarations[0].futureDeclarationField"
+        );
+
+        let tool_config: GeminiRequest = serde_json::from_str(
+            r#"{"toolConfig":{"futureToolConfigField":true,"functionCallingConfig":{"mode":"AUTO"}}}"#,
+        )
+        .expect("unknown Gemini toolConfig field is retained by the wire DTO");
+        let error = gemini_request_to_envelope_v2(tool_config, "gemini-test")
+            .expect_err("direct IR must not silently drop a toolConfig field");
+        assert_eq!(error.feature, "unknown_field");
+        assert_eq!(error.path, "toolConfig.futureToolConfigField");
+
+        let function_calling_config: GeminiRequest = serde_json::from_str(
+            r#"{"toolConfig":{"functionCallingConfig":{"mode":"AUTO","futureModeField":true}}}"#,
+        )
+        .expect("unknown Gemini functionCallingConfig field is retained by the wire DTO");
+        let error = gemini_request_to_envelope_v2(function_calling_config, "gemini-test")
+            .expect_err("direct IR must not silently drop a functionCallingConfig field");
+        assert_eq!(error.feature, "unknown_field");
+        assert_eq!(
+            error.path,
+            "toolConfig.functionCallingConfig.futureModeField"
         );
     }
 
