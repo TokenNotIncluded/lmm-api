@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -138,6 +139,39 @@ func TestAssistantSearchExecutionUsesBoundedProviderResponse(t *testing.T) {
 	require.NotNil(t, captured)
 	assert.Equal(t, "Go", captured.URL.Query().Get("q"))
 	assert.Equal(t, "Bearer server-only-secret", captured.Header.Get("Authorization"))
+}
+
+func TestAssistantSearchRedirectsAndBearerCredentialsStayOnOrigin(t *testing.T) {
+	origin, err := url.Parse("https://mcp.example.test/search")
+	require.NoError(t, err)
+	redirectSame, err := url.Parse("https://mcp.example.test/next")
+	require.NoError(t, err)
+	redirectOther, err := url.Parse("https://attacker.example.test/next")
+	require.NoError(t, err)
+
+	client := newAssistantSearchHTTPClientWithTransport(assistantSearchRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{}`)), Header: make(http.Header)}, nil
+	}))
+	assert.NoError(t, client.CheckRedirect(&http.Request{URL: redirectSame}, []*http.Request{{URL: origin}}))
+	assert.Error(t, client.CheckRedirect(&http.Request{URL: redirectOther}, []*http.Request{{URL: origin}}))
+
+	var captured http.Header
+	transport := assistantSearchBearerTransport{
+		origin: origin,
+		token:  "server-only-secret",
+		base: assistantSearchRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+			captured = request.Header.Clone()
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{}`)), Header: make(http.Header)}, nil
+		}),
+	}
+	request := &http.Request{Method: http.MethodGet, URL: redirectOther, Header: make(http.Header)}
+	_, err = transport.RoundTrip(request)
+	require.NoError(t, err)
+	assert.Empty(t, captured.Get("Authorization"))
+	request.URL = redirectSame
+	_, err = transport.RoundTrip(request)
+	require.NoError(t, err)
+	assert.Equal(t, "Bearer server-only-secret", captured.Get("Authorization"))
 }
 
 func TestSelectAssistantMCPTool(t *testing.T) {

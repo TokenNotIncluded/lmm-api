@@ -267,12 +267,34 @@ func newAssistantSearchHTTPClientWithTransport(transport http.RoundTripper) *htt
 		Timeout:   assistantSearchDefaultTimeout,
 		Transport: assistantSearchResponseLimitTransport{base: transport},
 		CheckRedirect: func(request *http.Request, via []*http.Request) error {
-			if len(via) >= assistantSearchMaxRedirects || setting.ValidateAssistantSearchURL(request.URL.String()) != nil {
+			if len(via) >= assistantSearchMaxRedirects ||
+				setting.ValidateAssistantSearchURL(request.URL.String()) != nil ||
+				len(via) == 0 || !sameAssistantSearchOrigin(via[0].URL, request.URL) {
 				return errors.New("search provider redirect is not allowed")
 			}
 			return nil
 		},
 	}
+}
+
+func sameAssistantSearchOrigin(first, next *url.URL) bool {
+	if first == nil || next == nil || !strings.EqualFold(first.Scheme, next.Scheme) ||
+		!strings.EqualFold(first.Hostname(), next.Hostname()) {
+		return false
+	}
+	effectivePort := func(value *url.URL) string {
+		if port := value.Port(); port != "" {
+			return port
+		}
+		if strings.EqualFold(value.Scheme, "https") {
+			return "443"
+		}
+		if strings.EqualFold(value.Scheme, "http") {
+			return "80"
+		}
+		return ""
+	}
+	return effectivePort(first) == effectivePort(next)
 }
 
 func dialAssistantSearchProviderAddress(ctx context.Context, network, address string) (net.Conn, error) {
@@ -355,14 +377,15 @@ func (body *assistantSearchLimitedBody) Read(p []byte) (int, error) {
 }
 
 type assistantSearchBearerTransport struct {
-	base  http.RoundTripper
-	token string
+	base   http.RoundTripper
+	token  string
+	origin *url.URL
 }
 
 func (transport assistantSearchBearerTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	clone := request.Clone(request.Context())
 	clone.Header = request.Header.Clone()
-	if token := strings.TrimSpace(transport.token); token != "" {
+	if token := strings.TrimSpace(transport.token); token != "" && sameAssistantSearchOrigin(transport.origin, request.URL) {
 		clone.Header.Set("Authorization", "Bearer "+token)
 	}
 	return transport.base.RoundTrip(clone)
@@ -376,7 +399,11 @@ func executeAssistantMCP(ctx context.Context, endpoint, apiKey, configuredTool, 
 		client.Transport = http.DefaultTransport
 	}
 	mcpClient := *client
-	mcpClient.Transport = assistantSearchBearerTransport{base: client.Transport, token: apiKey}
+	origin, err := url.Parse(endpoint)
+	if err != nil {
+		return nil, errors.New("MCP search endpoint is invalid")
+	}
+	mcpClient.Transport = assistantSearchBearerTransport{base: client.Transport, token: apiKey, origin: origin}
 
 	clientSDK := mcp.NewClient(&mcp.Implementation{
 		Name:    "api.lmm.best-assistant-search",
