@@ -620,6 +620,50 @@ fn bounded_protocol_json_corpus_is_panic_free() {
 }
 
 #[test]
+fn claude_stream_state_machine_is_bounded_and_panic_free() {
+    const MAX_STEPS: usize = 64;
+    const MAX_EVENTS: usize = 4;
+    const MAX_BYTES: usize = 4096;
+
+    let source: serde_json::Value = serde_json::from_str(CLAUDE_STREAM).expect("Claude corpus");
+    let templates = source
+        .get("events")
+        .and_then(serde_json::Value::as_array)
+        .expect("Claude event corpus");
+    let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+    let mut history = Vec::new();
+
+    for step in 0..MAX_STEPS {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        history.push(templates[(state as usize) % templates.len()].clone());
+        if history.len() > MAX_EVENTS {
+            history.remove(0);
+        }
+        let document = serde_json::json!({"events": history, "usage": {}});
+        let bytes = serde_json::to_vec(&document).expect("Claude state serialization");
+        assert!(bytes.len() <= MAX_BYTES);
+        let truncated_at = ((state >> 32) as usize) % (bytes.len() + 1);
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            if let Ok(snapshot) = serde_json::from_slice::<ClaudeStreamSnapshot>(&bytes) {
+                let _ = claude_stream_to_semantic_events(&snapshot);
+            }
+            if let Ok(snapshot) =
+                serde_json::from_slice::<ClaudeStreamSnapshot>(&bytes[..truncated_at])
+            {
+                let _ = claude_stream_to_semantic_events(&snapshot);
+            }
+        }));
+        assert!(
+            result.is_ok(),
+            "Claude stream state panicked at step {step}"
+        );
+    }
+}
+
+#[test]
 fn sse_regression_corpus_is_incremental_bounded_and_panic_free() {
     const CORPUS: &[&[u8]] = &[
         b"data: one\ndata: two\n\n",
