@@ -2331,6 +2331,80 @@ pub fn openai_responses_response_to_chat(
     })
 }
 
+fn openai_stream_unknown_field(path: impl Into<String>) -> RelayConvertError {
+    RelayConvertError::UnsupportedFeature(ConversionUnsupportedFeature {
+        code: ConversionUnsupportedFeature::CODE.to_owned(),
+        source_format: OPENAI_CHAT_FORMAT.to_owned(),
+        target_format: "provider_neutral_ir".to_owned(),
+        feature: "unknown_field".to_owned(),
+        path: path.into(),
+        loss_code: None,
+        retryable: false,
+    })
+}
+
+fn first_openai_stream_extra_path(
+    base: &str,
+    extra: &BTreeMap<String, JsonData>,
+) -> Option<RelayConvertError> {
+    extra.keys().next().map(|key| {
+        let path = if base.is_empty() {
+            key.clone()
+        } else {
+            format!("{base}.{key}")
+        };
+        openai_stream_unknown_field(path)
+    })
+}
+
+/// Validates all typed OpenAI Chat stream envelopes before canonical mapping.
+/// The legacy infallible mapper remains available for compatibility; callers
+/// that need typed unknown-field rejection should use this validator or the
+/// checked mapping entry point below.
+pub fn validate_openai_stream_snapshot(
+    snapshot: &OpenAiStreamSnapshot,
+) -> Result<(), RelayConvertError> {
+    for (chunk_index, chunk) in snapshot.events.iter().enumerate() {
+        let chunk_path = format!("events[{chunk_index}]");
+        if let Some(error) = first_openai_stream_extra_path(&chunk_path, &chunk.extra) {
+            return Err(error);
+        }
+        for (choice_index, choice) in chunk.choices.iter().enumerate() {
+            let choice_path = format!("{chunk_path}.choices[{choice_index}]");
+            if let Some(error) = first_openai_stream_extra_path(&choice_path, &choice.extra) {
+                return Err(error);
+            }
+            let delta_path = format!("{choice_path}.delta");
+            if let Some(error) = first_openai_stream_extra_path(&delta_path, &choice.delta.extra) {
+                return Err(error);
+            }
+            for (call_index, call) in choice.delta.tool_calls.iter().enumerate() {
+                let call_path = format!("{delta_path}.tool_calls[{call_index}]");
+                if let Some(error) = first_openai_stream_extra_path(&call_path, &call.extra) {
+                    return Err(error);
+                }
+                if let Some(function) = call.function.as_ref() {
+                    let function_path = format!("{call_path}.function");
+                    if let Some(error) =
+                        first_openai_stream_extra_path(&function_path, &function.extra)
+                    {
+                        return Err(error);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Converts an OpenAI Chat stream after rejecting unknown typed DTO fields.
+pub fn openai_stream_to_canonical_checked(
+    snapshot: &OpenAiStreamSnapshot,
+) -> Result<Vec<CanonicalStreamEvent>, RelayConvertError> {
+    validate_openai_stream_snapshot(snapshot)?;
+    Ok(openai_stream_to_canonical(snapshot))
+}
+
 pub fn openai_stream_to_canonical(snapshot: &OpenAiStreamSnapshot) -> Vec<CanonicalStreamEvent> {
     let mut out = Vec::new();
     let mut started = false;
@@ -7524,6 +7598,7 @@ pub fn response_events_to_openai_chunks(events: &[CanonicalStreamEvent]) -> Vec<
                         content: Some(String::new()),
                         reasoning_content: None,
                         tool_calls: Vec::new(),
+                        extra: BTreeMap::new(),
                     },
                     None,
                     None,
@@ -7561,7 +7636,9 @@ pub fn response_events_to_openai_chunks(events: &[CanonicalStreamEvent]) -> Vec<
                         function: Some(super::OpenAiStreamFunction {
                             name: Some(name.clone()),
                             arguments: Some(String::new()),
+                            extra: BTreeMap::new(),
                         }),
+                        extra: BTreeMap::new(),
                     }],
                     ..OpenAiStreamDelta::default()
                 },
@@ -7579,7 +7656,9 @@ pub fn response_events_to_openai_chunks(events: &[CanonicalStreamEvent]) -> Vec<
                         function: Some(super::OpenAiStreamFunction {
                             name: None,
                             arguments: Some(delta.clone()),
+                            extra: BTreeMap::new(),
                         }),
+                        extra: BTreeMap::new(),
                     }],
                     ..OpenAiStreamDelta::default()
                 },
@@ -7627,6 +7706,7 @@ pub fn response_events_to_openai_chunks(events: &[CanonicalStreamEvent]) -> Vec<
                 logprobs: None,
                 finish_reason,
                 index: 0,
+                extra: BTreeMap::new(),
             }]
         };
         out.push(OpenAiStreamChunk {
@@ -7639,6 +7719,7 @@ pub fn response_events_to_openai_chunks(events: &[CanonicalStreamEvent]) -> Vec<
             usage,
             error,
             cancelled,
+            extra: BTreeMap::new(),
         });
     }
     out

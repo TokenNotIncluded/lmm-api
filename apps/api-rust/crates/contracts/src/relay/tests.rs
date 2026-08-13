@@ -791,6 +791,90 @@ fn non_representable_request_fields_are_reported_or_rejected() {
 }
 
 #[test]
+fn openai_stream_nested_unknown_fields_are_typed_rejections() {
+    let cases = [
+        (
+            serde_json::json!({"futureChunkField": true}),
+            "events[0].futureChunkField",
+        ),
+        (
+            serde_json::json!({
+                "choices":[{"delta":{},"index":0,"futureChoiceField":true}]
+            }),
+            "events[0].choices[0].futureChoiceField",
+        ),
+        (
+            serde_json::json!({
+                "choices":[{"delta":{"futureDeltaField":true},"index":0}]
+            }),
+            "events[0].choices[0].delta.futureDeltaField",
+        ),
+        (
+            serde_json::json!({
+                "choices":[{"delta":{"tool_calls":[{"index":0,"futureToolCallField":true}]},"index":0}]
+            }),
+            "events[0].choices[0].delta.tool_calls[0].futureToolCallField",
+        ),
+        (
+            serde_json::json!({
+                "choices":[{"delta":{"tool_calls":[{"index":0,"function":{"futureFunctionField":true}}]},"index":0}]
+            }),
+            "events[0].choices[0].delta.tool_calls[0].function.futureFunctionField",
+        ),
+    ];
+    let retained: OpenAiStreamSnapshot = serde_json::from_value(serde_json::json!({
+        "events": [{"futureChunkField": true}],
+        "usage": {},
+    }))
+    .expect("unknown OpenAI stream chunk field is retained by the wire DTO");
+    assert!(retained.events[0].extra.contains_key("futureChunkField"));
+
+    for (event, expected_path) in cases {
+        let snapshot: OpenAiStreamSnapshot =
+            serde_json::from_value(serde_json::json!({"events":[event],"usage":{}}))
+                .expect("unknown OpenAI stream field is retained by the wire DTO");
+        let error = openai_stream_to_canonical_checked(&snapshot)
+            .expect_err("checked OpenAI stream conversion must reject unknown fields");
+        assert!(matches!(
+            error,
+            RelayConvertError::UnsupportedFeature(detail)
+                if detail.feature == "unknown_field"
+                    && detail.path == expected_path
+                    && detail.source_format == "openai_chat"
+                    && detail.target_format == "provider_neutral_ir"
+        ));
+    }
+}
+
+#[test]
+fn openai_stream_validator_reports_nested_function_unknown_path() {
+    let snapshot: OpenAiStreamSnapshot = serde_json::from_value(serde_json::json!({
+        "events": [{
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "function": {"futureFunctionField": true}
+                    }]
+                }
+            }]
+        }],
+        "usage": {}
+    }))
+    .expect("unknown OpenAI function field is retained by the wire DTO");
+
+    let error = validate_openai_stream_snapshot(&snapshot)
+        .expect_err("validator must reject unknown nested function fields");
+    assert!(matches!(
+        error,
+        RelayConvertError::UnsupportedFeature(detail)
+            if detail.path == "events[0].choices[0].delta.tool_calls[0].function.futureFunctionField"
+                && detail.feature == "unknown_field"
+    ));
+}
+
+#[test]
 fn responses_incomplete_details_round_trip_to_chat_finish_reasons() {
     for (reason, expected) in [
         ("max_output_tokens", FinishReason::Length),

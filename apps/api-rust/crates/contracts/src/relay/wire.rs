@@ -996,6 +996,9 @@ pub struct OpenAiStreamChunk {
     pub error: Option<WireError>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub cancelled: bool,
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -1010,6 +1013,9 @@ pub struct OpenAiStreamChoice {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finish_reason: Option<String>,
     pub index: usize,
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -1022,6 +1028,9 @@ pub struct OpenAiStreamDelta {
     pub reasoning_content: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_calls: Vec<OpenAiStreamToolCall>,
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1033,6 +1042,9 @@ pub struct OpenAiStreamToolCall {
     pub kind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub function: Option<OpenAiStreamFunction>,
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -1041,6 +1053,9 @@ pub struct OpenAiStreamFunction {
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arguments: Option<String>,
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
