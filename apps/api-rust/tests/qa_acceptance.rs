@@ -45,10 +45,10 @@ use lmm_contracts::relay::{
     CacheUsage, CanonicalContent, ClaudeRequest, ClaudeResponse, ClaudeStreamSemanticEvent,
     ClaudeStreamSnapshot, Direction, Envelope, Feature, FinishReason, FunctionData, GeminiRequest,
     GeminiResponse, GeminiStreamSnapshot, Item, ItemKind, JsonData, Loss, LossCode, Media,
-    MediaKind, Money, OpaqueId, OpaqueIdProvenance, OpaqueProviderState, OpenAiChatRequest,
-    OpenAiChatResponse, OpenAiResponsesRequest, OpenAiStreamSnapshot, Part, PartKind, Protocol,
-    Provenance, ResponsesResponse, ResponsesStreamSnapshot, Role, SemanticBillingUsage,
-    SemanticUsage, TokenUsage, Tool, ToolChoice, canonical_request_to_claude,
+    MediaKind, Money, OpaqueId, OpaqueIdProvenance, OpaqueProviderState, OpaqueStateProvenance,
+    OpenAiChatRequest, OpenAiChatResponse, OpenAiResponsesRequest, OpenAiStreamSnapshot, Part,
+    PartKind, Protocol, Provenance, ResponsesResponse, ResponsesStreamSnapshot, Role,
+    SemanticBillingUsage, SemanticUsage, TokenUsage, Tool, ToolChoice, canonical_request_to_claude,
     canonical_request_to_gemini_for_model, canonical_request_to_openai_chat,
     canonical_response_to_claude, canonical_response_to_gemini, claude_request_to_canonical,
     claude_response_to_canonical, claude_stream_to_semantic_events,
@@ -341,6 +341,99 @@ fn request_round_trip_keeps_authentic_tool_and_signature_data() {
     };
     assert_eq!(blocks[0].signature.as_deref(), Some("sig-claude"));
     assert_eq!(blocks[1].id.as_deref(), Some("call-claude"));
+}
+
+#[test]
+fn gemini3_function_call_id_and_authentic_signature_round_trip() {
+    const MODEL: &str = "gemini-3-pro";
+    const CALL_ID: &str = "call-gemini-3";
+    const SIGNATURE: &str = "authentic-gemini-3-signature";
+
+    let request: GeminiRequest = serde_json::from_value(serde_json::json!({
+        "contents": [{
+            "role": "model",
+            "parts": [{
+                "functionCall": {
+                    "id": CALL_ID,
+                    "name": "lookup",
+                    "args": {"q": "rust"}
+                },
+                "thoughtSignature": SIGNATURE
+            }]
+        }]
+    }))
+    .expect("Gemini 3 request");
+    let canonical =
+        gemini_request_to_canonical_for_model(request, MODEL).expect("Gemini 3 request conversion");
+    assert!(matches!(
+        canonical.value.messages[0].parts.as_slice(),
+        [
+            CanonicalContent::ToolCall { id, .. },
+            CanonicalContent::ProviderState { state }
+        ] if id == CALL_ID
+            && state.raw == JsonData::String(SIGNATURE.to_owned())
+            && state.provenance == OpaqueStateProvenance::Authentic
+    ));
+    let round_trip = canonical_request_to_gemini_for_model(canonical.value, MODEL, false)
+        .expect("Gemini 3 request round trip");
+    assert_eq!(
+        round_trip.value.contents[0].parts[0]
+            .function_call
+            .as_ref()
+            .and_then(|call| call.id.as_deref()),
+        Some(CALL_ID)
+    );
+    assert_eq!(
+        round_trip.value.contents[0].parts[0]
+            .thought_signature
+            .as_deref(),
+        Some(SIGNATURE)
+    );
+
+    let response: GeminiResponse = serde_json::from_value(serde_json::json!({
+        "candidates": [{
+            "index": 0,
+            "finishReason": "STOP",
+            "content": {
+                "role": "model",
+                "parts": [{
+                    "functionCall": {
+                        "id": CALL_ID,
+                        "name": "lookup",
+                        "args": {"q": "rust"}
+                    },
+                    "thoughtSignature": SIGNATURE
+                }]
+            }
+        }]
+    }))
+    .expect("Gemini 3 response");
+    let canonical = gemini_response_to_canonical_for_model(response, MODEL)
+        .expect("Gemini 3 response conversion");
+    assert!(matches!(
+        canonical.value.output.as_slice(),
+        [
+            CanonicalContent::ToolCall { id, .. },
+            CanonicalContent::ProviderState { state }
+        ] if id == CALL_ID
+            && state.raw == JsonData::String(SIGNATURE.to_owned())
+            && state.provenance == OpaqueStateProvenance::Authentic
+    ));
+    let round_trip =
+        canonical_response_to_gemini(canonical.value).expect("Gemini 3 response round trip");
+    assert_eq!(
+        round_trip.value.candidates[0].content.parts[0]
+            .function_call
+            .as_ref()
+            .and_then(|call| call.id.as_deref()),
+        Some(CALL_ID)
+    );
+    assert_eq!(
+        round_trip.value.candidates[0].content.parts[0]
+            .thought_signature
+            .as_deref(),
+        Some(SIGNATURE)
+    );
 }
 
 #[test]
