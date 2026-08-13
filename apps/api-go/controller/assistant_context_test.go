@@ -27,7 +27,7 @@ func TestAssistantL0ConversationAssessmentIsModelDrivenAndToolGated(t *testing.T
 	definitions := assistantToolDefinitionsForContext(initial)
 	assert.Len(t, definitions, 1)
 	assert.Equal(t, assistantInterlocutorAssessmentTool, definitions[0].Function.Name)
-	assert.NotEqual(t, "auto", assistantToolChoiceForContext(initial))
+	assert.Equal(t, "auto", assistantToolChoiceForContext(initial))
 
 	encoded, err := json.Marshal(initial)
 	require.NoError(t, err)

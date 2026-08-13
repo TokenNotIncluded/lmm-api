@@ -376,14 +376,13 @@ func assistantL0InterlocutorAssessmentRequired(userContext assistantUserContext)
 }
 
 func assistantToolChoiceForContext(userContext assistantUserContext) any {
-	if assistantL0InterlocutorAssessmentRequired(userContext) {
-		return map[string]any{
-			"type": "function",
-			"function": map[string]string{
-				"name": assistantInterlocutorAssessmentTool,
-			},
-		}
-	}
+	// Some otherwise tool-capable upstreams reject a named/forced function
+	// choice while accepting the OpenAI-compatible automatic mode. During an
+	// unassessed L0 turn the catalogue is already reduced to the single safe
+	// assessment tool and the system prompt instructs the model to use it, so a
+	// forced choice adds no authorization boundary and only harms compatibility.
+	// If the upstream answers directly, returning that low-risk answer is safer
+	// than making the whole L0 assistant unavailable.
 	return "auto"
 }
 
