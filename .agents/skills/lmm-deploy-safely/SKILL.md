@@ -249,6 +249,42 @@ approved for Rust, and PostgreSQL, Valkey, authentication, quota, billing,
 streaming, and drain/reconnect evidence must be current. A mounted candidate,
 an active slot link, or a successful `/readyz` probe is insufficient.
 
+## Default Go production update: `-bin` AUR and `paru`
+
+Use `lmm-api-go-bin` as the default delivery path for production Go backend and
+frontend updates. Do not build on the production server, deploy the Rust
+provider, or make a Go release wait for Rust packaging unless the user
+explicitly requests a Rust release or cutover.
+
+Apply this sequence:
+
+1. Freeze a clean `main` revision that equals `origin/main`; run the relevant
+   Go, web, route-contract, and AUR package checks.
+2. Publish an immutable, signed GitHub release containing the matching Go
+   backend and bundled frontend artifacts for the new version.
+3. Update the separate AUR `lmm-api-go-bin` repository's `PKGBUILD` and
+   `.SRCINFO` to that exact version. Verify release URLs, checksum and Sigstore
+   identity, run `packaging/aur/test-matrix.sh` and
+   `packaging/aur/test-bin-makepkg.sh`, then commit and push the AUR update.
+   Read the published AUR metadata back and stop if it does not match the
+   intended release.
+4. On the verified `arch-dmit` production host, run `paru` as its established
+   unprivileged AUR operator to update `lmm-api-go-bin`. Never run `makepkg` or
+   `paru` as root, and never substitute `lmm-api-go`, `lmm-api-go-git`, or a
+   Rust package.
+5. Complete the package-owned update automation: publish the bundled frontend
+   atomically, run `systemctl daemon-reload`, restart `lmm-api.service`, retain
+   the previous package/frontend as rollback state, and perform the standard
+   status, livez, database/cache, journal, resource, and public-route checks.
+   The update is complete only after the exact package version, Go binary
+   revision, frontend revision, and healthy service are all verified.
+
+The `paru` path does not weaken the rollback/watchdog or exact-release checks.
+If the installed package does not yet provide the package-owned automatic
+frontend switch, service restart, health verification, and rollback contract,
+stop and use the canonical guarded release transaction for that deployment;
+do not claim that `paru` alone completed production activation.
+
 ## Keep backups optional
 
 Do not include backup work in a deployment unless the user explicitly requests
