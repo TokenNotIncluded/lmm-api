@@ -368,11 +368,13 @@ func assistantToolAllowedForContext(name string, userContext assistantUserContex
 	}
 }
 
-func assistantL0InterlocutorAssessmentRequired(userContext assistantUserContext) bool {
-	return !userContext.AdministratorMode &&
-		!userContext.DeveloperAccessGranted &&
-		strings.EqualFold(strings.TrimSpace(userContext.AccessLevel), "L0") &&
-		!userContext.InterlocutorAssessed
+func assistantL0InterlocutorAssessmentRequired(_ assistantUserContext) bool {
+	// The model-generated assessment was not persisted or consumed by any
+	// authorization or abuse-control decision. Keeping it in the synchronous
+	// path doubled model calls for L0 users without adding a security boundary.
+	// Any future anti-abuse signal must be collected asynchronously and consumed
+	// by a deterministic policy before this gate can be enabled again.
+	return false
 }
 
 func assistantToolChoiceForContext(userContext assistantUserContext) any {
@@ -572,22 +574,27 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 			return
 		}
 		if status < http.StatusOK || status >= http.StatusMultipleChoices {
-			writeAssistantRawResponse(c, status, body, "ASSISTANT_UPSTREAM_FAILED")
+			writeAssistantUpstreamError(c, "ASSISTANT_UPSTREAM_FAILED", "AI assistant upstream request failed")
 			return
 		}
 
 		response, err := parseAssistantResponse(body)
 		if err != nil || len(response.Choices) == 0 {
-			writeAssistantError(c, http.StatusBadGateway, "ASSISTANT_INVALID_UPSTREAM_RESPONSE", errors.New("assistant upstream returned an invalid response"))
+			writeAssistantUpstreamError(c, "ASSISTANT_INVALID_UPSTREAM_RESPONSE", "AI assistant upstream returned an invalid response")
 			return
 		}
 		message := response.Choices[0].Message
 		if len(message.ToolCalls) == 0 {
+			normalizedBody, normalizeErr := normalizeAssistantClientResponse(c, body)
+			if normalizeErr != nil {
+				writeAssistantUpstreamError(c, "ASSISTANT_EMPTY_UPSTREAM_RESPONSE", "AI assistant upstream returned no usable answer")
+				return
+			}
 			if !usedTool && cacheKey != "" {
-				storeAssistantCachedResponse(settings, cacheKey, status, body)
+				storeAssistantCachedResponse(settings, cacheKey, status, normalizedBody)
 				c.Header("X-LMM-Assistant-Cache", "STORE")
 			}
-			writeAssistantRawResponse(c, status, body, "ASSISTANT_UPSTREAM_FAILED")
+			c.Data(status, "application/json; charset=utf-8", normalizedBody)
 			return
 		}
 		if !settings.AgentLoopEnabled || step >= maxSteps-1 {
@@ -645,6 +652,10 @@ func assistantResponseContent(raw json.RawMessage) string {
 	if json.Unmarshal(raw, &text) == nil {
 		return text
 	}
+	var textParts []string
+	if json.Unmarshal(raw, &textParts) == nil {
+		return strings.Join(textParts, "")
+	}
 	var parts []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
@@ -661,21 +672,54 @@ func assistantResponseContent(raw json.RawMessage) string {
 	return ""
 }
 
-func writeAssistantRawResponse(c *gin.Context, status int, body []byte, fallbackCode string) {
-	if len(body) == 0 {
-		writeAssistantError(c, http.StatusBadGateway, fallbackCode, errors.New("assistant upstream returned an empty response"))
-		return
+// normalizeAssistantClientResponse is the only provider-to-browser response
+// boundary. It deliberately discards provider IDs, model names, usage,
+// reasoning, errors, and unknown fields, retaining only normalized text and
+// server-issued metadata.
+func normalizeAssistantClientResponse(c *gin.Context, body []byte) ([]byte, error) {
+	response, err := parseAssistantResponse(body)
+	if err != nil || len(response.Choices) == 0 {
+		return nil, errors.New("assistant upstream returned an invalid response")
 	}
-	if action, exists := c.Get(assistantClientActionKey); exists {
-		var payload map[string]any
-		if json.Unmarshal(body, &payload) == nil {
+	content := strings.TrimSpace(assistantResponseContent(response.Choices[0].Message.Content))
+	if content == "" {
+		return nil, errors.New("assistant upstream returned no usable text")
+	}
+	payload := map[string]any{
+		"choices": []any{map[string]any{
+			"message": map[string]any{"role": "assistant", "content": content},
+		}},
+	}
+	if c != nil {
+		if requestID := strings.TrimSpace(c.GetString(common.RequestIdKey)); requestID != "" {
+			payload["lmm_request_id"] = requestID
+		}
+		if action, exists := c.Get(assistantClientActionKey); exists {
 			payload["lmm_assistant_action"] = action
-			if enriched, err := json.Marshal(payload); err == nil {
-				body = enriched
-			}
 		}
 	}
-	c.Data(status, "application/json; charset=utf-8", body)
+	return json.Marshal(payload)
+}
+
+func writeAssistantUpstreamError(c *gin.Context, code, message string) {
+	payload := gin.H{"success": false, "code": code, "message": message, "retryable": true}
+	if requestID := strings.TrimSpace(c.GetString(common.RequestIdKey)); requestID != "" {
+		payload["request_id"] = requestID
+	}
+	c.AbortWithStatusJSON(http.StatusBadGateway, payload)
+}
+
+func writeAssistantRawResponse(c *gin.Context, status int, body []byte, fallbackCode string) {
+	if status < http.StatusOK || status >= http.StatusMultipleChoices {
+		writeAssistantUpstreamError(c, fallbackCode, "AI assistant upstream request failed")
+		return
+	}
+	normalizedBody, err := normalizeAssistantClientResponse(c, body)
+	if err != nil {
+		writeAssistantUpstreamError(c, fallbackCode, "AI assistant upstream returned no usable answer")
+		return
+	}
+	c.Data(status, "application/json; charset=utf-8", normalizedBody)
 }
 
 func assistantActorUserID(c *gin.Context) int {

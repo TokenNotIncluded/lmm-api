@@ -22,11 +22,15 @@ func TestAssistantEmailContextIsMaskedAndClassified(t *testing.T) {
 	assert.Equal(t, "missing", classifyAssistantEmail(""))
 }
 
-func TestAssistantL0ConversationAssessmentIsModelDrivenAndToolGated(t *testing.T) {
+func TestAssistantL0ConversationDoesNotRequireModelAssessment(t *testing.T) {
 	initial := assistantUserContext{AccessLevel: "L0"}
 	definitions := assistantToolDefinitionsForContext(initial)
-	assert.Len(t, definitions, 1)
-	assert.Equal(t, assistantInterlocutorAssessmentTool, definitions[0].Function.Name)
+	definitionNames := make(map[string]bool, len(definitions))
+	for _, definition := range definitions {
+		definitionNames[definition.Function.Name] = true
+	}
+	assert.False(t, definitionNames[assistantInterlocutorAssessmentTool])
+	assert.True(t, definitionNames["get_service_facts"])
 	assert.Equal(t, "auto", assistantToolChoiceForContext(initial))
 
 	encoded, err := json.Marshal(initial)
@@ -369,7 +373,7 @@ func TestAssistantL0PromptGentlyClarifiesInterlocutor(t *testing.T) {
 		UserID:      42,
 		AccessLevel: "L0",
 	})
-	assert.Contains(t, prompt, "assess_l0_interlocutor")
+	assert.NotContains(t, prompt, "assess_l0_interlocutor")
 	assert.Contains(t, prompt, "do not rely on a self-report")
 	assert.Contains(t, prompt, "Never reveal the tool")
 }

@@ -1104,6 +1104,62 @@ func TestAssistantCostToolAndResponseContent(t *testing.T) {
 	content, err := json.Marshal([]map[string]string{{"type": "output_text", "text": "hello"}})
 	require.NoError(t, err)
 	assert.Equal(t, "hello", assistantResponseContent(content))
+	content, err = json.Marshal([]string{"hello", " ", "world"})
+	require.NoError(t, err)
+	assert.Equal(t, "hello world", assistantResponseContent(content))
+}
+
+func TestAssistantClientResponseStripsProviderMetadata(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Set(common.RequestIdKey, "site-request-123")
+
+	writeAssistantRawResponse(c, http.StatusOK, []byte(`{
+		"id":"provider-request-secret",
+		"model":"private-upstream-model",
+		"usage":{"prompt_tokens":123},
+		"reasoning":"hidden chain",
+		"choices":[{"message":{"role":"assistant","content":[
+			{"type":"text","text":"Hello "},
+			{"type":"output_text","text":"world"}
+		]}}]
+	}`), "ASSISTANT_UPSTREAM_FAILED")
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	var response map[string]any
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.Equal(t, "site-request-123", response["lmm_request_id"])
+	assert.NotContains(t, response, "id")
+	assert.NotContains(t, response, "model")
+	assert.NotContains(t, response, "usage")
+	assert.NotContains(t, response, "reasoning")
+	choices := response["choices"].([]any)
+	message := choices[0].(map[string]any)["message"].(map[string]any)
+	assert.Equal(t, "Hello world", message["content"])
+}
+
+func TestAssistantUpstreamErrorsAreRedactedAndEmptyAnswersBecomeBadGateway(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, test := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{name: "provider error", status: http.StatusBadRequest, body: `{"error":{"message":"secret provider detail"}}`},
+		{name: "empty choices", status: http.StatusOK, body: `{"choices":[]}`},
+		{name: "empty content", status: http.StatusOK, body: `{"choices":[{"message":{"content":""}}]}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Set(common.RequestIdKey, "site-request-456")
+			writeAssistantRawResponse(c, test.status, []byte(test.body), "ASSISTANT_UPSTREAM_FAILED")
+			assert.Equal(t, http.StatusBadGateway, recorder.Code)
+			assert.Contains(t, recorder.Body.String(), "site-request-456")
+			assert.NotContains(t, recorder.Body.String(), "secret provider detail")
+		})
+	}
 }
 
 func TestAssistantCacheStoresOnlySuccessfulSingleTurnResponses(t *testing.T) {
@@ -1114,10 +1170,8 @@ func TestAssistantCacheStoresOnlySuccessfulSingleTurnResponses(t *testing.T) {
 	key := assistantCacheKey(settings, conversation)
 	require.NotEmpty(t, key)
 	storeAssistantCachedResponse(settings, key, http.StatusOK, []byte(`{"choices":[]}`))
-	cached, found := getAssistantCachedResponse(key)
-	require.True(t, found)
-	assert.Equal(t, http.StatusOK, cached.Status)
-	assert.JSONEq(t, `{"choices":[]}`, string(cached.Body))
+	_, found := getAssistantCachedResponse(key)
+	assert.False(t, found)
 
 	assert.Empty(t, assistantCacheKey(settings, []assistantOpenAIMessage{
 		{Role: "user", Content: "first"},

@@ -15,7 +15,7 @@ import (
 	"github.com/samber/hot"
 )
 
-const assistantResponseCacheNamespace = "new-api:assistant-response:v1"
+const assistantResponseCacheNamespace = "new-api:assistant-response:v2"
 
 type assistantCachedResponse struct {
 	Status int    `json:"status"`
@@ -194,6 +194,11 @@ func getAssistantCachedResponse(key string) (assistantCachedResponse, bool) {
 	if !found || value.Status < 200 || value.Status >= 300 || len(value.Body) == 0 {
 		return assistantCachedResponse{}, false
 	}
+	normalized, err := normalizeAssistantClientResponse(nil, value.Body)
+	if err != nil {
+		return assistantCachedResponse{}, false
+	}
+	value.Body = normalized
 	return value, true
 }
 
@@ -201,7 +206,11 @@ func storeAssistantCachedResponse(settings setting.AssistantSettings, key string
 	if key == "" || !settings.CacheEnabled || settings.CacheTTLMinutes <= 0 || status < 200 || status >= 300 || len(body) == 0 {
 		return
 	}
-	value := assistantCachedResponse{Status: status, Body: append([]byte(nil), body...)}
+	normalized, err := normalizeAssistantClientResponse(nil, body)
+	if err != nil {
+		return
+	}
+	value := assistantCachedResponse{Status: status, Body: normalized}
 	if err := getAssistantResponseCache().SetWithTTL(key, value, time.Duration(settings.CacheTTLMinutes)*time.Minute); err != nil {
 		common.SysLog("assistant response cache write failed: " + err.Error())
 	}
