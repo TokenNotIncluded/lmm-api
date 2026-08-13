@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -80,7 +81,7 @@ func TestAssistantAdminPricingPreviewAndApplyUpdatesRuntimeRates(t *testing.T) {
 	admin := model.User{
 		Username: "assistant-admin-pricing-apply",
 		Password: "password",
-		Role:     common.RoleAdminUser,
+		Role:     common.RoleRootUser,
 		Status:   common.UserStatusEnabled,
 		Group:    "default",
 	}
@@ -263,7 +264,7 @@ func TestAssistantAdminPreviewIsSessionBoundAndOneTime(t *testing.T) {
 	user := model.User{
 		Username: "assistant-admin-apply",
 		Password: "password",
-		Role:     common.RoleAdminUser,
+		Role:     common.RoleRootUser,
 		Status:   common.UserStatusEnabled,
 		Group:    "default",
 	}
@@ -325,6 +326,51 @@ func TestAssistantAdminPreviewIsSessionBoundAndOneTime(t *testing.T) {
 	replayContext.Set("session_id", "admin-browser-session")
 	ApplyAssistantAdminChange(replayContext)
 	require.Equal(t, http.StatusUnprocessableEntity, replayRecorder.Code)
+}
+
+func TestAssistantConfigChangesRequireRootAdministrator(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Option{}, &model.AuthFlow{}))
+	admin := model.User{
+		Username: "assistant-non-root-admin",
+		Password: "password",
+		Role:     common.RoleAdminUser,
+		Status:   common.UserStatusEnabled,
+		Group:    "default",
+	}
+	require.NoError(t, db.Create(&admin).Error)
+
+	previewContext, _ := gin.CreateTestContext(httptest.NewRecorder())
+	previewContext.Set("session_id", "non-root-admin-session")
+	preview := executeAssistantAdminConfigChangeTool(previewContext, admin.Id, map[string]any{
+		"changes": map[string]any{"RegisterEnabled": false},
+	})
+	require.Equal(t, false, preview["ok"])
+	require.Contains(t, preview["error"], "root administrator access is required")
+
+	payload, err := json.Marshal(assistantAdminChangePayload{
+		Kind:           assistantAdminConfigChangeKind,
+		ConfigChanges:  map[string]string{"RegisterEnabled": "false"},
+		ConfigExpected: map[string]string{"RegisterEnabled": "true"},
+	})
+	require.NoError(t, err)
+	token, _, err := model.CreateAuthFlow(model.AuthFlowCreate{
+		Purpose:   model.AuthFlowPurposeAssistantAdmin,
+		UserId:    admin.Id,
+		SessionId: "non-root-admin-session",
+		Payload:   string(payload),
+		ExpiresAt: time.Now().Add(time.Minute),
+	})
+	require.NoError(t, err)
+
+	applyRecorder := httptest.NewRecorder()
+	applyContext, _ := gin.CreateTestContext(applyRecorder)
+	applyContext.Request = httptest.NewRequest(http.MethodPost, "/api/assistant/admin/apply", strings.NewReader(`{"confirmed":true,"confirmation_token":"`+token+`"}`))
+	applyContext.Request.Header.Set("Content-Type", "application/json")
+	applyContext.Set("id", admin.Id)
+	applyContext.Set("session_id", "non-root-admin-session")
+	ApplyAssistantAdminChange(applyContext)
+	require.Equal(t, http.StatusForbidden, applyRecorder.Code)
 }
 
 func float64Pointer(value float64) *float64 {

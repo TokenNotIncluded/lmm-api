@@ -382,6 +382,14 @@ func assistantAdminUser(userID int) (*model.UserBase, error) {
 	return user, nil
 }
 
+func assistantRootUser(userID int) (*model.UserBase, error) {
+	user, err := assistantAdminUser(userID)
+	if err != nil || user.Role < common.RoleRootUser {
+		return nil, errors.New("root administrator access is required")
+	}
+	return user, nil
+}
+
 func assistantAdminConfiguredGroups() map[string]string {
 	groups := setting.GetUserUsableGroupsCopy()
 	for group := range ratio_setting.GetGroupRatioCopy() {
@@ -1181,7 +1189,7 @@ func createAssistantAdminFlow(c *gin.Context, userID int, payload assistantAdmin
 }
 
 func executeAssistantAdminConfigTool(c *gin.Context, userID int) map[string]any {
-	user, err := assistantAdminUser(userID)
+	user, err := assistantRootUser(userID)
 	if err != nil {
 		return map[string]any{"ok": false, "error": err.Error()}
 	}
@@ -1206,7 +1214,7 @@ func executeAssistantAdminConfigTool(c *gin.Context, userID int) map[string]any 
 }
 
 func executeAssistantAdminConfigChangeTool(c *gin.Context, userID int, input map[string]any) map[string]any {
-	if _, err := assistantAdminUser(userID); err != nil {
+	if _, err := assistantRootUser(userID); err != nil {
 		return map[string]any{"ok": false, "error": err.Error()}
 	}
 	changes, err := assistantAdminConfigChanges(input)
@@ -1416,7 +1424,7 @@ func assistantAdminPricingPreview(change assistantAdminPricingChange) map[string
 }
 
 func executeAssistantAdminPricingChangeTool(c *gin.Context, userID int, input map[string]any) map[string]any {
-	if _, err := assistantAdminUser(userID); err != nil {
+	if _, err := assistantRootUser(userID); err != nil {
 		return map[string]any{"ok": false, "error": err.Error()}
 	}
 	modelID := inputString(input, "model_id")
@@ -1791,6 +1799,12 @@ func ApplyAssistantAdminChange(c *gin.Context) {
 	if err := json.Unmarshal([]byte(flow.Payload), &payload); err != nil {
 		writeAssistantError(c, http.StatusInternalServerError, "ASSISTANT_ADMIN_CHANGE_INVALID", errors.New("administrator preview could not be decoded"))
 		return
+	}
+	if payload.Kind == assistantAdminConfigChangeKind || payload.Kind == assistantAdminPricingChangeKind {
+		if _, err := assistantRootUser(user.Id); err != nil {
+			writeAssistantError(c, http.StatusForbidden, "ASSISTANT_ROOT_REQUIRED", err)
+			return
+		}
 	}
 	if err := applyAssistantAdminChange(c, payload); err != nil {
 		writeAssistantError(c, http.StatusUnprocessableEntity, "ASSISTANT_ADMIN_CHANGE_FAILED", err)
