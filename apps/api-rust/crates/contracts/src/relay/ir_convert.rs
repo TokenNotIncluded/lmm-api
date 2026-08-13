@@ -421,6 +421,31 @@ fn object(entries: impl IntoIterator<Item = (String, JsonData)>) -> JsonData {
     JsonData::Object(entries.into_iter().collect())
 }
 
+fn insert_extra_fields(
+    target: &mut BTreeMap<String, JsonData>,
+    extra: &BTreeMap<String, JsonData>,
+    known: &[&str],
+) {
+    for (key, value) in extra {
+        if !known.contains(&key.as_str()) {
+            target.entry(key.clone()).or_insert_with(|| value.clone());
+        }
+    }
+}
+
+fn extensions_with_prefix(
+    extensions: &BTreeMap<String, JsonData>,
+    prefix: &str,
+) -> BTreeMap<String, JsonData> {
+    extensions
+        .iter()
+        .filter_map(|(key, value)| {
+            key.strip_prefix(prefix)
+                .map(|suffix| (suffix.to_owned(), value.clone()))
+        })
+        .collect()
+}
+
 fn json_string(value: &JsonData) -> Option<&str> {
     match value {
         JsonData::String(value) => Some(value),
@@ -726,6 +751,32 @@ fn validate_anthropic_block_shape(
         ));
     }
     Ok(())
+}
+
+fn required_claude_thinking_signature(
+    signature: Option<&str>,
+    source: Protocol,
+    target: Protocol,
+    path: &str,
+) -> Result<String, DirectIrError> {
+    let Some(signature) = signature else {
+        return Err(DirectIrError::missing(
+            source,
+            target,
+            "thinking_signature",
+            path,
+        ));
+    };
+    if signature.is_empty() {
+        return Err(DirectIrError::new(
+            source,
+            target,
+            "thinking_signature",
+            path,
+            DirectIrReason::EmptyId,
+        ));
+    }
+    Ok(signature.to_owned())
 }
 
 fn opaque_item(role: Role, state: OpaqueProviderState, source: Protocol, path: &str) -> Item {
@@ -1784,16 +1835,16 @@ fn chat_anthropic_blocks_to_items(
                 let thinking = block.thinking.ok_or_else(|| {
                     DirectIrError::missing(source, target, "thinking", &block_path)
                 })?;
+                let signature = required_claude_thinking_signature(
+                    block.signature.as_deref(),
+                    source,
+                    target,
+                    &format!("{block_path}.signature"),
+                )?;
                 let raw = object([
                     ("type".to_owned(), JsonData::String("thinking".to_owned())),
                     ("thinking".to_owned(), JsonData::String(thinking)),
-                    (
-                        "signature".to_owned(),
-                        block
-                            .signature
-                            .map(JsonData::String)
-                            .unwrap_or(JsonData::Null),
-                    ),
+                    ("signature".to_owned(), JsonData::String(signature)),
                     ("extra".to_owned(), JsonData::Object(block.extra)),
                 ]);
                 let state = provider_state(
@@ -2702,27 +2753,32 @@ fn opaque_state_to_anthropic_block(
         .cloned()
         .unwrap_or_default();
     match kind {
-        "thinking" => Ok(OpenAiAnthropicBlock {
-            kind: "thinking".to_owned(),
-            text: None,
-            thinking: object
-                .get("thinking")
-                .and_then(json_string)
-                .map(str::to_owned),
-            signature: object
-                .get("signature")
-                .and_then(json_string)
-                .map(str::to_owned),
-            synthetic: (state.provenance == OpaqueStateProvenance::Synthetic).then_some(true),
-            data: None,
-            id: None,
-            name: None,
-            input: None,
-            tool_use_id: None,
-            content: None,
-            image_url: None,
-            extra,
-        }),
+        "thinking" => {
+            let signature = required_claude_thinking_signature(
+                object.get("signature").and_then(json_string),
+                source,
+                target,
+                &format!("{path}.signature"),
+            )?;
+            Ok(OpenAiAnthropicBlock {
+                kind: "thinking".to_owned(),
+                text: None,
+                thinking: object
+                    .get("thinking")
+                    .and_then(json_string)
+                    .map(str::to_owned),
+                signature: Some(signature),
+                synthetic: (state.provenance == OpaqueStateProvenance::Synthetic).then_some(true),
+                data: None,
+                id: None,
+                name: None,
+                input: None,
+                tool_use_id: None,
+                content: None,
+                image_url: None,
+                extra,
+            })
+        }
         "redacted_thinking" => Ok(OpenAiAnthropicBlock {
             kind: "redacted_thinking".to_owned(),
             text: None,
@@ -4118,16 +4174,16 @@ fn claude_block_to_items(
             let thinking = block.thinking.ok_or_else(|| {
                 DirectIrError::missing(source, target, "thinking", &format!("{path}.thinking"))
             })?;
+            let signature = required_claude_thinking_signature(
+                block.signature.as_deref(),
+                source,
+                target,
+                &format!("{path}.signature"),
+            )?;
             let raw = object([
                 ("type".to_owned(), JsonData::String("thinking".to_owned())),
                 ("thinking".to_owned(), JsonData::String(thinking)),
-                (
-                    "signature".to_owned(),
-                    block
-                        .signature
-                        .map(JsonData::String)
-                        .unwrap_or(JsonData::Null),
-                ),
+                ("signature".to_owned(), JsonData::String(signature)),
                 ("extra".to_owned(), JsonData::Object(block.extra)),
             ]);
             push_item(
@@ -4421,26 +4477,31 @@ fn opaque_state_to_claude_block(
         .cloned()
         .unwrap_or_default();
     match state.kind.as_str() {
-        "thinking" => Ok(ClaudeContentBlock {
-            kind: "thinking".to_owned(),
-            text: None,
-            thinking: object
-                .get("thinking")
-                .and_then(json_string)
-                .map(str::to_owned),
-            signature: object
-                .get("signature")
-                .and_then(json_string)
-                .map(str::to_owned),
-            data: None,
-            id: None,
-            name: None,
-            input: None,
-            tool_use_id: None,
-            content: None,
-            source: None,
-            extra,
-        }),
+        "thinking" => {
+            let signature = required_claude_thinking_signature(
+                object.get("signature").and_then(json_string),
+                source,
+                target,
+                &format!("{path}.signature"),
+            )?;
+            Ok(ClaudeContentBlock {
+                kind: "thinking".to_owned(),
+                text: None,
+                thinking: object
+                    .get("thinking")
+                    .and_then(json_string)
+                    .map(str::to_owned),
+                signature: Some(signature),
+                data: None,
+                id: None,
+                name: None,
+                input: None,
+                tool_use_id: None,
+                content: None,
+                source: None,
+                extra,
+            })
+        }
         "redacted_thinking" => Ok(ClaudeContentBlock {
             kind: "redacted_thinking".to_owned(),
             text: None,
@@ -4760,7 +4821,7 @@ pub fn envelope_to_claude_request_v2(
 }
 
 fn token_details_to_json(details: &TokenDetails) -> JsonData {
-    object([
+    let mut value = BTreeMap::from([
         (
             "cached_tokens".to_owned(),
             JsonData::Number(details.cached_tokens.into()),
@@ -4789,7 +4850,21 @@ fn token_details_to_json(details: &TokenDetails) -> JsonData {
             "reasoning_tokens".to_owned(),
             JsonData::Number(details.reasoning_tokens.into()),
         ),
-    ])
+    ]);
+    insert_extra_fields(
+        &mut value,
+        &details.extra,
+        &[
+            "cached_tokens",
+            "cached_creation_tokens",
+            "cache_write_tokens",
+            "text_tokens",
+            "audio_tokens",
+            "image_tokens",
+            "reasoning_tokens",
+        ],
+    );
+    JsonData::Object(value)
 }
 
 fn wire_usage_to_json(usage: &WireUsage) -> JsonData {
@@ -4849,6 +4924,28 @@ fn wire_usage_to_json(usage: &WireUsage) -> JsonData {
             JsonData::String(semantic.clone()),
         );
     }
+    if let Some(billing) = usage.billing_usage.as_ref() {
+        value.insert("billing_usage".to_owned(), billing_usage_to_json(billing));
+    }
+    insert_extra_fields(
+        &mut value,
+        &usage.extra,
+        &[
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+            "input_tokens",
+            "output_tokens",
+            "prompt_tokens_details",
+            "completion_tokens_details",
+            "input_tokens_details",
+            "claude_cache_creation_5_m_tokens",
+            "claude_cache_creation_1_h_tokens",
+            "usage_source",
+            "usage_semantic",
+            "billing_usage",
+        ],
+    );
     JsonData::Object(value)
 }
 
@@ -4863,67 +4960,121 @@ fn billing_usage_to_json(value: &BillingUsage) -> JsonData {
         entries.insert("openai_usage".to_owned(), wire_usage_to_json(usage));
     }
     if let Some(usage) = value.claude_usage.as_ref() {
-        entries.insert(
-            "claude_usage".to_owned(),
-            object([
-                (
-                    "input_tokens".to_owned(),
-                    JsonData::Number(usage.input_tokens.into()),
-                ),
-                (
-                    "output_tokens".to_owned(),
-                    JsonData::Number(usage.output_tokens.into()),
-                ),
-                (
-                    "cache_read_input_tokens".to_owned(),
-                    JsonData::Number(usage.cache_read_input_tokens.into()),
-                ),
-                (
-                    "cache_creation_input_tokens".to_owned(),
-                    JsonData::Number(usage.cache_creation_input_tokens.into()),
-                ),
-                (
-                    "claude_cache_creation_5_m_tokens".to_owned(),
-                    JsonData::Number(usage.claude_cache_creation_5_m_tokens.into()),
-                ),
-                (
-                    "claude_cache_creation_1_h_tokens".to_owned(),
-                    JsonData::Number(usage.claude_cache_creation_1_h_tokens.into()),
-                ),
-            ]),
+        let mut usage_entries = BTreeMap::from([
+            (
+                "input_tokens".to_owned(),
+                JsonData::Number(usage.input_tokens.into()),
+            ),
+            (
+                "output_tokens".to_owned(),
+                JsonData::Number(usage.output_tokens.into()),
+            ),
+            (
+                "cache_read_input_tokens".to_owned(),
+                JsonData::Number(usage.cache_read_input_tokens.into()),
+            ),
+            (
+                "cache_creation_input_tokens".to_owned(),
+                JsonData::Number(usage.cache_creation_input_tokens.into()),
+            ),
+            (
+                "claude_cache_creation_5_m_tokens".to_owned(),
+                JsonData::Number(usage.claude_cache_creation_5_m_tokens.into()),
+            ),
+            (
+                "claude_cache_creation_1_h_tokens".to_owned(),
+                JsonData::Number(usage.claude_cache_creation_1_h_tokens.into()),
+            ),
+        ]);
+        if let Some(billing) = usage.billing_usage.as_ref() {
+            usage_entries.insert("billing_usage".to_owned(), billing_usage_to_json(billing));
+        }
+        insert_extra_fields(
+            &mut usage_entries,
+            &usage.extra,
+            &[
+                "input_tokens",
+                "output_tokens",
+                "cache_read_input_tokens",
+                "cache_creation_input_tokens",
+                "claude_cache_creation_5_m_tokens",
+                "claude_cache_creation_1_h_tokens",
+                "billing_usage",
+            ],
         );
+        entries.insert("claude_usage".to_owned(), JsonData::Object(usage_entries));
     }
     if let Some(usage) = value.gemini_usage_metadata.as_ref() {
+        let mut usage_entries = BTreeMap::from([
+            (
+                "prompt_token_count".to_owned(),
+                JsonData::Number(usage.prompt_token_count.into()),
+            ),
+            (
+                "candidates_token_count".to_owned(),
+                JsonData::Number(usage.candidates_token_count.into()),
+            ),
+            (
+                "thoughts_token_count".to_owned(),
+                JsonData::Number(usage.thoughts_token_count.into()),
+            ),
+            (
+                "total_token_count".to_owned(),
+                JsonData::Number(usage.total_token_count.into()),
+            ),
+            (
+                "cached_content_token_count".to_owned(),
+                JsonData::Number(usage.cached_content_token_count.into()),
+            ),
+            (
+                "tool_use_prompt_token_count".to_owned(),
+                JsonData::Number(usage.tool_use_prompt_token_count.into()),
+            ),
+        ]);
+        if let Some(details) = usage.prompt_tokens_details.as_ref() {
+            usage_entries.insert("promptTokensDetails".to_owned(), details.clone());
+        }
+        if let Some(details) = usage.candidates_tokens_details.as_ref() {
+            usage_entries.insert("candidatesTokensDetails".to_owned(), details.clone());
+        }
+        if let Some(details) = usage.tool_use_prompt_tokens_details.as_ref() {
+            usage_entries.insert("toolUsePromptTokensDetails".to_owned(), details.clone());
+        }
+        if let Some(billing) = usage.billing_usage.as_ref() {
+            usage_entries.insert("billing_usage".to_owned(), billing_usage_to_json(billing));
+        }
+        insert_extra_fields(
+            &mut usage_entries,
+            &usage.extra,
+            &[
+                "promptTokenCount",
+                "candidatesTokenCount",
+                "thoughtsTokenCount",
+                "totalTokenCount",
+                "cachedContentTokenCount",
+                "toolUsePromptTokenCount",
+                "promptTokensDetails",
+                "candidatesTokensDetails",
+                "toolUsePromptTokensDetails",
+                "billing_usage",
+            ],
+        );
         entries.insert(
             "gemini_usage_metadata".to_owned(),
-            object([
-                (
-                    "prompt_token_count".to_owned(),
-                    JsonData::Number(usage.prompt_token_count.into()),
-                ),
-                (
-                    "candidates_token_count".to_owned(),
-                    JsonData::Number(usage.candidates_token_count.into()),
-                ),
-                (
-                    "thoughts_token_count".to_owned(),
-                    JsonData::Number(usage.thoughts_token_count.into()),
-                ),
-                (
-                    "total_token_count".to_owned(),
-                    JsonData::Number(usage.total_token_count.into()),
-                ),
-                (
-                    "cached_content_token_count".to_owned(),
-                    JsonData::Number(usage.cached_content_token_count.into()),
-                ),
-                (
-                    "tool_use_prompt_token_count".to_owned(),
-                    JsonData::Number(usage.tool_use_prompt_token_count.into()),
-                ),
-            ]),
+            JsonData::Object(usage_entries),
         );
     }
+    insert_extra_fields(
+        &mut entries,
+        &value.extra,
+        &[
+            "source",
+            "semantic",
+            "openai_usage",
+            "claude_usage",
+            "gemini_usage_metadata",
+        ],
+    );
     JsonData::Object(entries)
 }
 
@@ -4960,6 +5111,14 @@ fn cache_extensions_from_wire(usage: &WireUsage) -> BTreeMap<String, JsonData> {
         );
     }
     extensions
+}
+
+fn usage_extensions_from_wire(usage: &WireUsage) -> BTreeMap<String, JsonData> {
+    usage
+        .extra
+        .iter()
+        .map(|(key, value)| (format!("openai.usage.{key}"), value.clone()))
+        .collect()
 }
 
 fn usage_from_wire(usage: &WireUsage) -> SemanticUsage {
@@ -5021,7 +5180,8 @@ fn usage_from_wire(usage: &WireUsage) -> SemanticUsage {
                 billing_usage_to_json(value),
             )]),
         });
-    let mut extensions = cache_extensions_from_wire(usage);
+    let mut extensions = usage_extensions_from_wire(usage);
+    extensions.extend(cache_extensions_from_wire(usage));
     if let Some(source) = usage.usage_source.as_ref() {
         extensions.insert("usage_source".to_owned(), JsonData::String(source.clone()));
     }
@@ -5045,6 +5205,22 @@ fn usage_from_wire(usage: &WireUsage) -> SemanticUsage {
 fn token_details_from_json(value: &JsonData) -> Option<TokenDetails> {
     let object = json_object(value)?;
     let number = |name: &str| object.get(name).and_then(number_u64).unwrap_or(0);
+    let mut extra = BTreeMap::new();
+    for (key, value) in object {
+        if ![
+            "cached_tokens",
+            "cached_creation_tokens",
+            "cache_write_tokens",
+            "text_tokens",
+            "audio_tokens",
+            "image_tokens",
+            "reasoning_tokens",
+        ]
+        .contains(&key.as_str())
+        {
+            extra.insert(key.clone(), value.clone());
+        }
+    }
     Some(TokenDetails {
         cached_tokens: number("cached_tokens"),
         cached_creation_tokens: number("cached_creation_tokens"),
@@ -5053,6 +5229,7 @@ fn token_details_from_json(value: &JsonData) -> Option<TokenDetails> {
         audio_tokens: number("audio_tokens"),
         image_tokens: number("image_tokens"),
         reasoning_tokens: number("reasoning_tokens"),
+        extra,
     })
 }
 
@@ -5127,7 +5304,34 @@ fn wire_usage_without_billing(usage: &SemanticUsage) -> WireUsage {
                     .map(str::to_owned)
             }),
         billing_usage: None,
+        extra: extensions_with_prefix(&usage.extensions, "openai.usage."),
     }
+}
+
+fn billing_extra_from_semantic(usage: &SemanticUsage) -> BTreeMap<String, JsonData> {
+    usage
+        .billing
+        .as_ref()
+        .and_then(|billing| billing.extensions.get("billing.provider_payload"))
+        .and_then(json_object)
+        .map(|payload| {
+            let mut extra = BTreeMap::new();
+            for (key, value) in payload {
+                if ![
+                    "source",
+                    "semantic",
+                    "openai_usage",
+                    "claude_usage",
+                    "gemini_usage_metadata",
+                ]
+                .contains(&key.as_str())
+                {
+                    extra.insert(key.clone(), value.clone());
+                }
+            }
+            extra
+        })
+        .unwrap_or_default()
 }
 
 fn billing_usage_for_target(usage: &SemanticUsage, target: Protocol) -> Option<Box<BillingUsage>> {
@@ -5141,6 +5345,7 @@ fn billing_usage_for_target(usage: &SemanticUsage, target: Protocol) -> Option<B
         openai_usage: None,
         claude_usage: None,
         gemini_usage_metadata: None,
+        extra: billing_extra_from_semantic(usage),
     };
     match target {
         Protocol::OpenAi | Protocol::OpenAiResponses => {
@@ -5165,6 +5370,7 @@ fn billing_usage_for_target(usage: &SemanticUsage, target: Protocol) -> Option<B
                     .and_then(number_u64)
                     .unwrap_or(0),
                 billing_usage: None,
+                extra: extensions_with_prefix(&usage.extensions, "claude.usage."),
             });
         }
         Protocol::Gemini => {
@@ -5281,12 +5487,20 @@ fn semantic_from_claude_usage(usage: &ClaudeUsage) -> SemanticUsage {
             extensions: cache_extensions,
         },
         billing,
-        extensions: BTreeMap::new(),
+        extensions: usage
+            .extra
+            .iter()
+            .map(|(key, value)| (format!("claude.usage.{key}"), value.clone()))
+            .collect(),
     }
 }
 
 fn semantic_from_gemini_usage(usage: &GeminiUsage) -> SemanticUsage {
-    let mut extensions = BTreeMap::new();
+    let mut extensions = usage
+        .extra
+        .iter()
+        .map(|(key, value)| (format!("gemini.usage.{key}"), value.clone()))
+        .collect::<BTreeMap<_, _>>();
     if usage.tool_use_prompt_token_count != 0 {
         extensions.insert(
             "gemini.tool_use_prompt_token_count".to_owned(),
@@ -5872,6 +6086,7 @@ fn gemini_usage_without_billing(usage: &SemanticUsage) -> GeminiUsage {
             .get("gemini.tool_use_prompt_tokens_details")
             .cloned(),
         billing_usage: None,
+        extra: extensions_with_prefix(&usage.extensions, "gemini.usage."),
     }
 }
 
@@ -6043,6 +6258,7 @@ fn claude_usage_without_billing(usage: &SemanticUsage) -> ClaudeUsage {
             .get("claude.cache_creation_1h")
             .and_then(number_u64)
             .unwrap_or(0),
+        extra: extensions_with_prefix(&usage.extensions, "claude.usage."),
         ..ClaudeUsage::default()
     }
 }
@@ -8646,6 +8862,28 @@ mod direct_ir_tests {
     }
 
     #[test]
+    fn claude_thinking_without_a_non_empty_signature_is_rejected() {
+        for (signature, reason) in [
+            ("", DirectIrReason::EmptyId),
+            ("missing", DirectIrReason::MissingField),
+        ] {
+            let thinking = if signature == "missing" {
+                r#"{"type":"thinking","thinking":"plan"}"#.to_owned()
+            } else {
+                format!(r#"{{"type":"thinking","thinking":"plan","signature":"{signature}"}}"#)
+            };
+            let request: ClaudeRequest = serde_json::from_str(&format!(
+                r#"{{"model":"claude-test","max_tokens":128,"messages":[{{"role":"assistant","content":[{thinking}]}}]}}"#
+            ))
+            .expect("Claude thinking signature fixture");
+            let error = claude_request_to_openai_chat_v2(request)
+                .expect_err("incomplete Claude thinking must fail closed");
+            assert_eq!(error.feature, "thinking_signature");
+            assert_eq!(error.reason, reason);
+        }
+    }
+
+    #[test]
     fn openai_anthropic_outer_model_and_text_extensions_roundtrip() {
         let request: OpenAiChatRequest = serde_json::from_str(
             r#"{"model":"gpt-test","messages":[{"role":"assistant","extra_content":{"anthropic":{"model":"claude-source","blocks":[{"type":"text","text":"answer","vendor_marker":"keep"},{"type":"thinking","thinking":"plan","signature":"sig"}]}}}]}"#,
@@ -9062,6 +9300,72 @@ mod direct_ir_tests {
         assert_eq!(usage.cache_read_input_tokens, 3);
         assert!(usage.billing_usage.is_some());
         assert!(!result.losses.is_empty());
+    }
+
+    #[test]
+    fn response_usage_unknown_fields_round_trip_through_ir_extensions() {
+        let response: OpenAiChatResponse = serde_json::from_str(
+            r#"{"id":"chat-id","object":"chat.completion","created":1,"model":"gpt-test","choices":[],"usage":{
+              "prompt_tokens":10,"completion_tokens":5,"total_tokens":15,
+              "prompt_tokens_details":{"cached_tokens":3,"future_cache_tokens":7},
+              "future_usage":{"unit":"tokens"},
+              "billing_usage":{"source":"gateway","semantic":"billable","future_charge":{"amount":"0.01"}}
+            }}"#,
+        )
+        .expect("Chat response usage with provider extensions");
+        let decoded = openai_chat_response_to_envelope_v2(response)
+            .expect("decode usage extensions")
+            .envelope;
+        assert!(matches!(
+            decoded
+                .usage
+                .as_ref()
+                .and_then(|usage| usage.extensions.get("openai.usage.future_usage")),
+            Some(JsonData::Object(_))
+        ));
+        assert!(matches!(
+            decoded
+                .usage
+                .as_ref()
+                .and_then(|usage| usage.cache.extensions.get("openai.prompt_tokens_details")),
+            Some(JsonData::Object(details))
+                if details.get("future_cache_tokens") == Some(&JsonData::Number(7.into()))
+        ));
+        assert!(matches!(
+            decoded
+                .usage
+                .as_ref()
+                .and_then(|usage| usage.billing.as_ref())
+                .and_then(|billing| billing.extensions.get("billing.provider_payload")),
+            Some(JsonData::Object(payload))
+                if payload.contains_key("future_charge")
+        ));
+
+        let encoded = envelope_to_openai_chat_response_v2(decoded)
+            .expect("encode usage extensions")
+            .value;
+        let usage = encoded.usage.expect("encoded usage");
+        assert_eq!(
+            usage.extra.get("future_usage"),
+            Some(&JsonData::Object(BTreeMap::from([(
+                "unit".to_owned(),
+                JsonData::String("tokens".to_owned()),
+            )])))
+        );
+        assert_eq!(
+            usage
+                .prompt_tokens_details
+                .as_ref()
+                .and_then(|details| details.extra.get("future_cache_tokens")),
+            Some(&JsonData::Number(7.into()))
+        );
+        assert!(
+            usage
+                .billing_usage
+                .as_ref()
+                .and_then(|billing| billing.extra.get("future_charge"))
+                .is_some()
+        );
     }
 
     #[test]

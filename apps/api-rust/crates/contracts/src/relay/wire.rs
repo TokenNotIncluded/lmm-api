@@ -733,6 +733,12 @@ pub struct ClaudeUsage {
     pub claude_cache_creation_1_h_tokens: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub billing_usage: Option<Box<BillingUsage>>,
+    /// Provider usage counters introduced after this DTO was published.
+    /// Keeping them verbatim prevents a typed round-trip from silently
+    /// deleting accounting data that the relay does not understand yet.
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -800,6 +806,10 @@ pub struct GeminiUsage {
     pub tool_use_prompt_tokens_details: Option<JsonData>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub billing_usage: Option<Box<BillingUsage>>,
+    /// Provider usage counters introduced after this DTO was published.
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -830,6 +840,12 @@ pub struct WireUsage {
     pub usage_semantic: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub billing_usage: Option<Box<BillingUsage>>,
+    /// Provider usage/cache fields not known by this version of the DTO.
+    /// Direct same-protocol paths can serialize these values unchanged;
+    /// cross-protocol paths must account for them in the loss ledger.
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -848,6 +864,10 @@ pub struct TokenDetails {
     pub image_tokens: u64,
     #[serde(default)]
     pub reasoning_tokens: u64,
+    /// Provider token dimensions introduced after this DTO was published.
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -860,6 +880,10 @@ pub struct BillingUsage {
     pub claude_usage: Option<ClaudeUsage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gemini_usage_metadata: Option<GeminiUsage>,
+    /// Provider billing fields not normalized by the relay yet.
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
