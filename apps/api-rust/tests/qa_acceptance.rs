@@ -3832,3 +3832,102 @@ fn fixed_duration_tool_schema_conversion_fuzz_is_panic_free() {
         "tool schema fuzz did not execute an iteration"
     );
 }
+
+#[test]
+#[ignore = "fixed-duration observer/parser race harness; run explicitly in QA"]
+fn fixed_duration_observer_and_parser_race_is_panic_free() {
+    const INITIAL_SEED: u64 = 0xc31b_5e79_04a2_d6f8;
+    const WORKER_COUNT: usize = 4;
+    const MAX_ITERATIONS_PER_WORKER: u64 = 1_000_000;
+    const MAX_INPUT_BYTES: usize = 128;
+    const MAX_FRAME_BYTES: usize = 64;
+    const MAX_FRAMES: usize = 8;
+
+    fn next_xorshift(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
+    let seconds = std::env::var("LMM_FUZZ_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(1)
+        .max(1)
+        .min(30);
+    let deadline = Instant::now() + Duration::from_secs(seconds);
+    let observer = Arc::new(ConversionObserver::with_max_series(8));
+    let mut handles = Vec::with_capacity(WORKER_COUNT);
+
+    for worker_index in 0..WORKER_COUNT {
+        let observer = Arc::clone(&observer);
+        let worker_seed = INITIAL_SEED ^ (worker_index as u64).wrapping_mul(0x9e37_79b9);
+        handles.push(thread::spawn(move || {
+            catch_unwind(AssertUnwindSafe(|| {
+                let labels =
+                    MetricLabels::native_raw(Protocol::OpenAi, true, ConversionResult::Success);
+                let mut seed = worker_seed;
+                let mut iterations = 0_u64;
+
+                while Instant::now() < deadline && iterations < MAX_ITERATIONS_PER_WORKER {
+                    let input: &[u8] = if next_xorshift(&mut seed) & 1 == 0 {
+                        b"data: chunk\n\n"
+                    } else {
+                        b"event: update\r\ndata: chunk\r\n\r\n"
+                    };
+                    assert!(input.len() <= MAX_INPUT_BYTES);
+
+                    let mut parser = SseFrameParser::new(MAX_FRAME_BYTES);
+                    let mut offset = 0_usize;
+                    while offset < input.len() {
+                        let width = (next_xorshift(&mut seed) % 8 + 1) as usize;
+                        let end = offset.saturating_add(width).min(input.len());
+                        let frames = parser
+                            .feed(&input[offset..end])
+                            .expect("race harness SSE input is valid");
+                        assert!(frames.len() <= MAX_FRAMES);
+                        assert!(parser.buffered_frame_bytes() <= MAX_FRAME_BYTES);
+                        offset = end;
+                    }
+                    let _ = parser.finish();
+                    assert!(parser.buffered_frame_bytes() <= MAX_FRAME_BYTES);
+
+                    observer.record_events(labels, 1);
+                    if next_xorshift(&mut seed) & 15 == 0 {
+                        assert!(observer.snapshot().samples.len() <= 8);
+                    }
+                    iterations = iterations.saturating_add(1);
+                }
+
+                (iterations, seed)
+            }))
+        }));
+    }
+
+    let mut total_iterations = 0_u64;
+    for (worker_index, handle) in handles.into_iter().enumerate() {
+        let result = handle.join().expect("race harness worker joined");
+        match result {
+            Ok((iterations, final_seed)) => {
+                total_iterations = total_iterations.saturating_add(iterations);
+                eprintln!(
+                    "observer/parser race worker complete: worker={worker_index}, final_seed={final_seed:#x}, iterations={iterations}"
+                );
+            }
+            Err(_) => panic!(
+                "observer/parser race panic: worker={worker_index}, initial_seed={:#x}",
+                INITIAL_SEED ^ (worker_index as u64).wrapping_mul(0x9e37_79b9)
+            ),
+        }
+    }
+
+    assert!(total_iterations > 0, "race harness executed no iterations");
+    let snapshot = observer.snapshot();
+    let event_total = snapshot
+        .samples
+        .iter()
+        .find(|sample| sample.metric == MetricKind::ConversionEventsTotal)
+        .map_or(0, |sample| sample.value);
+    assert_eq!(event_total, total_iterations);
+}
