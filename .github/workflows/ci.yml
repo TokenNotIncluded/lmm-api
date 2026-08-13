@@ -203,6 +203,11 @@ jobs:
           go-version-file: apps/api-go/go.mod
           cache-dependency-path: apps/api-go/go.sum
 
+      - name: Install route coverage tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes ripgrep
+
       - name: Run route coverage and fixture contracts
         id: route-coverage
         shell: bash
