@@ -18,8 +18,9 @@ import (
 const assistantResponseCacheNamespace = "new-api:assistant-response:v2"
 
 type assistantCachedResponse struct {
-	Status int    `json:"status"`
-	Body   []byte `json:"body"`
+	Status            int    `json:"status"`
+	Body              []byte `json:"body"`
+	ConversationTitle string `json:"conversation_title,omitempty"`
 }
 
 var (
@@ -152,6 +153,11 @@ func assistantCacheKey(settings setting.AssistantSettings, conversation []assist
 	if len(contexts) > 0 {
 		userContext = contexts[0]
 	}
+	// Title generation is metadata work for a new conversation. It must not
+	// change the identity of the user's question, otherwise a replay after a
+	// lost first response cannot hit the response that was already cached.
+	cachePromptContext := userContext
+	cachePromptContext.ConversationTitleNeeded = false
 
 	fingerprint := struct {
 		Version          string                   `json:"version"`
@@ -164,9 +170,9 @@ func assistantCacheKey(settings setting.AssistantSettings, conversation []assist
 		UserContext      assistantCacheContext    `json:"user_context"`
 		Conversation     []assistantOpenAIMessage `json:"conversation"`
 	}{
-		Version:          "assistant-cache-v1",
+		Version:          "assistant-cache-v2",
 		Model:            settings.Model,
-		SystemPrompt:     buildAssistantSystemPrompt(settings, userContext),
+		SystemPrompt:     buildAssistantSystemPrompt(settings, cachePromptContext),
 		AgentLoopEnabled: settings.AgentLoopEnabled,
 		MaxSteps:         settings.MaxSteps,
 		TimeoutSeconds:   settings.TimeoutSeconds,
@@ -202,7 +208,7 @@ func getAssistantCachedResponse(key string) (assistantCachedResponse, bool) {
 	return value, true
 }
 
-func storeAssistantCachedResponse(settings setting.AssistantSettings, key string, status int, body []byte) {
+func storeAssistantCachedResponse(settings setting.AssistantSettings, key string, status int, body []byte, conversationTitles ...string) {
 	if key == "" || !settings.CacheEnabled || settings.CacheTTLMinutes <= 0 || status < 200 || status >= 300 || len(body) == 0 {
 		return
 	}
@@ -210,7 +216,11 @@ func storeAssistantCachedResponse(settings setting.AssistantSettings, key string
 	if err != nil {
 		return
 	}
-	value := assistantCachedResponse{Status: status, Body: normalized}
+	conversationTitle := ""
+	if len(conversationTitles) > 0 {
+		conversationTitle = strings.TrimSpace(conversationTitles[0])
+	}
+	value := assistantCachedResponse{Status: status, Body: normalized, ConversationTitle: conversationTitle}
 	if err := getAssistantResponseCache().SetWithTTL(key, value, time.Duration(settings.CacheTTLMinutes)*time.Minute); err != nil {
 		common.SysLog("assistant response cache write failed: " + err.Error())
 	}

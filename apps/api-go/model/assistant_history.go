@@ -227,6 +227,25 @@ func assistantConversationTitle(value string) string {
 	return value
 }
 
+// UpdateAssistantConversationTitle stores an automatically summarized title
+// only on a conversation owned by the requesting user. The same redaction and
+// length boundary as fallback titles applies before persistence.
+func UpdateAssistantConversationTitle(userID int, conversationID int64, title string) error {
+	if userID <= 0 || conversationID <= 0 || strings.TrimSpace(title) == "" {
+		return gorm.ErrInvalidData
+	}
+	result := DB.Model(&AssistantConversation{}).
+		Where("id = ? AND user_id = ?", conversationID, userID).
+		Update("title", assistantConversationTitle(title))
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrAssistantConversationNotFound
+	}
+	return nil
+}
+
 func assistantConversationRank(user *User) (int, error) {
 	if user == nil || user.Id <= 0 {
 		return 0, gorm.ErrInvalidData

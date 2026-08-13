@@ -48,6 +48,26 @@ func TestAssistantL0ConversationDoesNotRequireModelAssessment(t *testing.T) {
 	assert.True(t, assessedNames["get_service_facts"])
 }
 
+func TestAssistantAgentForcesTaskToolsBeforeAnswering(t *testing.T) {
+	assert.Equal(t, "get_available_models", assistantNamedToolChoiceName(assistantToolChoiceForContext(assistantUserContext{
+		Intent:      model.AssistantIntentCost,
+		AccessLevel: "L0",
+	})))
+	assert.Equal(t, "calculate_math", assistantNamedToolChoiceName(assistantToolChoiceForContext(assistantUserContext{
+		Intent:      model.AssistantIntentMath,
+		AccessLevel: "L0",
+	})))
+	assert.Equal(t, "get_l1_recommendation", assistantNamedToolChoiceName(assistantToolChoiceForContext(assistantUserContext{
+		Intent:      model.AssistantIntentRecommendation,
+		AccessLevel: "L0",
+	})))
+	assert.Equal(t, "set_conversation_title", assistantNamedToolChoiceName(assistantToolChoiceForContext(assistantUserContext{
+		Intent:                  model.AssistantIntentRecommendation,
+		AccessLevel:             "L0",
+		ConversationTitleNeeded: true,
+	})))
+}
+
 func TestAssistantCustomerProfileUsesAuditableSignals(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -421,6 +441,9 @@ func TestAssistantL0PromptDoesNotRequireSynchronousAssessment(t *testing.T) {
 	assert.NotContains(t, prompt, "assess_l0_interlocutor")
 	assert.NotContains(t, prompt, "do not rely on a self-report")
 	assert.NotContains(t, prompt, "Never reveal the tool")
+	assert.Contains(t, prompt, "Never ask whether this is their first time using AI")
+	assert.Contains(t, prompt, "Always call get_available_models")
+	assert.Contains(t, prompt, "Never describe an L1-L4 or administrator account as L0")
 }
 
 func TestTrustLevelLabelSeparatesAdministratorRolesFromUserLevels(t *testing.T) {

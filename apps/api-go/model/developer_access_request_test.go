@@ -67,6 +67,27 @@ func TestAssistantDeveloperAccessRecommendationApprovalUnlocksL1WithoutPayment(t
 	assert.ErrorIs(t, err, ErrDeveloperAccessRequestReviewed)
 }
 
+func TestAssistantDeveloperAccessRecommendationCanBeCleared(t *testing.T) {
+	db := setupConsoleActivationTestDB(t)
+	require.NoError(t, db.AutoMigrate(&DeveloperAccessRequest{}))
+	user := User{Username: "clear-recommendation-user", Password: "password", Role: common.RoleCommonUser}
+	require.NoError(t, db.Create(&user).Error)
+
+	request, err := SubmitAssistantDeveloperAccessRecommendation(
+		user.Id,
+		"I use the relay for a concrete coding workflow.",
+		"Recommend L1 because the user described a concrete coding workflow.",
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, request.AIRecommendation)
+
+	cleared, err := SubmitAssistantDeveloperAccessRequestWithoutRecommendation(user.Id, request.Reason)
+	require.NoError(t, err)
+	assert.Equal(t, request.Id, cleared.Id)
+	assert.Empty(t, cleared.AIRecommendation)
+	assert.Equal(t, DeveloperAccessRequestSourceAssistant, cleared.Source)
+}
+
 func TestAssistantDeveloperAccessRecommendationRejectionDoesNotActivate(t *testing.T) {
 	db := setupConsoleActivationTestDB(t)
 	require.NoError(t, db.AutoMigrate(&DeveloperAccessRequest{}))

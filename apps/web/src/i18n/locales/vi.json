@@ -6814,6 +6814,20 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Thu phóng"
+    "Zoom": "Thu phóng",
+    "Challenge reviews": "Duyệt thử thách",
+    "Bounty notifications": "Thông báo tiền thưởng",
+    "Account actions": "Thao tác tài khoản",
+    "Mark all as read": "Đánh dấu tất cả đã đọc",
+    "Challenge submitted": "Đã gửi thử thách",
+    "Tip received": "Đã nhận tiền boa",
+    "Reward received": "Đã nhận phần thưởng",
+    "Dispute reward received": "Đã nhận thưởng giải quyết tranh chấp",
+    "Bounty notification": "Thông báo tiền thưởng",
+    "Developer access request": "Yêu cầu quyền truy cập nhà phát triển",
+    "Account action request": "Yêu cầu thao tác tài khoản",
+    "Failed to load to-dos": "Không thể tải việc cần làm",
+    "No pending to-dos": "Không có việc đang chờ",
+    "Submitted challenge work and account requests will appear here.": "Bài làm thử thách và yêu cầu tài khoản đã gửi sẽ xuất hiện tại đây."
   }
 }

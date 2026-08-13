@@ -110,7 +110,7 @@ func SubmitDeveloperAccessRequest(c *gin.Context) {
 		// The no-AI path is deliberately first-class: the request enters the
 		// same administrator queue with only the user's redacted statement.
 		// This is not an approval and does not unlock L1.
-		request, err = model.SubmitAssistantDeveloperAccessRequest(user.Id, input.Reason)
+		request, err = model.SubmitAssistantDeveloperAccessRequestWithoutRecommendation(user.Id, input.Reason)
 	} else if strings.TrimSpace(input.ConfirmationToken) != "" {
 		if strings.TrimSpace(input.AIRecommendation) == "" {
 			developerAccessRequestError(c, http.StatusUnprocessableEntity, "DEVELOPER_ACCESS_AI_CONFIRMATION_INVALID", "AI recommendation confirmation is incomplete; continue the conversation to prepare a new one")

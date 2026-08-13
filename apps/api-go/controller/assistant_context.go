@@ -82,6 +82,7 @@ type assistantUserContext struct {
 	// invalidation, but are internal risk signals and are never model input.
 	PaymentRestrictionCauses []string                 `json:"-"`
 	Intent                   string                   `json:"current_intent,omitempty"`
+	ConversationTitleNeeded  bool                     `json:"conversation_title_needed,omitempty"`
 	CustomerProfile          assistantCustomerProfile `json:"customer_profile"`
 	ProfileSignals           []string                 `json:"-"`
 	WelcomeStrategy          string                   `json:"welcome_strategy"`
@@ -103,36 +104,38 @@ func (context assistantUserContext) MarshalJSON() ([]byte, error) {
 	maskedEmail, emailDomain := maskAssistantEmail(context.Email)
 	profile := assistantSafeCustomerProfile(context.CustomerProfile)
 	view := struct {
-		Username               string                     `json:"username,omitempty"`
-		Email                  string                     `json:"email,omitempty"`
-		EmailDomain            string                     `json:"email_domain,omitempty"`
-		EmailCategory          string                     `json:"email_category,omitempty"`
-		AccountAgeDays         int                        `json:"account_age_days,omitempty"`
-		AuthProviders          []string                   `json:"auth_providers,omitempty"`
-		AccessLevel            string                     `json:"access_level"`
-		AdministratorMode      bool                       `json:"administrator_mode"`
-		DeveloperAccessGranted bool                       `json:"developer_access_granted"`
-		AccessReviewStatus     string                     `json:"access_review_status,omitempty"`
-		PaymentMethodsHidden   bool                       `json:"payment_methods_hidden"`
-		PaymentOfferState      assistantPaymentOfferState `json:"payment_offer_state"`
-		Intent                 string                     `json:"current_intent,omitempty"`
-		CustomerProfile        assistantCustomerProfile   `json:"customer_profile"`
-		WelcomeStrategy        string                     `json:"welcome_strategy"`
+		Username                string                     `json:"username,omitempty"`
+		Email                   string                     `json:"email,omitempty"`
+		EmailDomain             string                     `json:"email_domain,omitempty"`
+		EmailCategory           string                     `json:"email_category,omitempty"`
+		AccountAgeDays          int                        `json:"account_age_days,omitempty"`
+		AuthProviders           []string                   `json:"auth_providers,omitempty"`
+		AccessLevel             string                     `json:"access_level"`
+		AdministratorMode       bool                       `json:"administrator_mode"`
+		DeveloperAccessGranted  bool                       `json:"developer_access_granted"`
+		AccessReviewStatus      string                     `json:"access_review_status,omitempty"`
+		PaymentMethodsHidden    bool                       `json:"payment_methods_hidden"`
+		PaymentOfferState       assistantPaymentOfferState `json:"payment_offer_state"`
+		Intent                  string                     `json:"current_intent,omitempty"`
+		ConversationTitleNeeded bool                       `json:"conversation_title_needed,omitempty"`
+		CustomerProfile         assistantCustomerProfile   `json:"customer_profile"`
+		WelcomeStrategy         string                     `json:"welcome_strategy"`
 	}{
-		Username:               assistantSafeUsername(context.Username),
-		Email:                  maskedEmail,
-		EmailDomain:            emailDomain,
-		EmailCategory:          assistantSafeEmailCategory(context.EmailCategory),
-		AccountAgeDays:         maxInt(context.AccountAgeDays, 0),
-		AuthProviders:          assistantSafeAuthProviders(context.AuthProviders),
-		AccessLevel:            assistantSafeAccessLevel(context.AccessLevel),
-		AdministratorMode:      context.AdministratorMode,
-		DeveloperAccessGranted: context.DeveloperAccessGranted,
-		AccessReviewStatus:     assistantAccessReviewStatus(context.AccessReviewStatus),
-		PaymentMethodsHidden:   context.PaymentMethodsHidden,
-		PaymentOfferState:      assistantPaymentOfferStateForContext(context),
-		Intent:                 assistantSafeIntent(context.Intent),
-		CustomerProfile:        profile,
+		Username:                assistantSafeUsername(context.Username),
+		Email:                   maskedEmail,
+		EmailDomain:             emailDomain,
+		EmailCategory:           assistantSafeEmailCategory(context.EmailCategory),
+		AccountAgeDays:          maxInt(context.AccountAgeDays, 0),
+		AuthProviders:           assistantSafeAuthProviders(context.AuthProviders),
+		AccessLevel:             assistantSafeAccessLevel(context.AccessLevel),
+		AdministratorMode:       context.AdministratorMode,
+		DeveloperAccessGranted:  context.DeveloperAccessGranted,
+		AccessReviewStatus:      assistantAccessReviewStatus(context.AccessReviewStatus),
+		PaymentMethodsHidden:    context.PaymentMethodsHidden,
+		PaymentOfferState:       assistantPaymentOfferStateForContext(context),
+		Intent:                  assistantSafeIntent(context.Intent),
+		ConversationTitleNeeded: context.ConversationTitleNeeded,
+		CustomerProfile:         profile,
 		WelcomeStrategy: assistantWelcomeStrategyForContext(assistantUserContext{
 			AccessLevel:     context.AccessLevel,
 			CustomerProfile: profile,
@@ -175,6 +178,8 @@ func assistantSafeIntent(intent string) string {
 		model.AssistantIntentAPIKey,
 		model.AssistantIntentClientSetup,
 		model.AssistantIntentCost,
+		model.AssistantIntentMath,
+		model.AssistantIntentRecommendation,
 		model.AssistantIntentBounty,
 		model.AssistantIntentUsage,
 		model.AssistantIntentModels,

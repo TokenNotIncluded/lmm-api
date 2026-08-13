@@ -22,18 +22,30 @@ import { SectionPageLayout } from '@/components/layout'
 import { AccountActionRequestsPanel } from '@/features/users/components/account-action-requests-panel'
 import { AssistantLeadsPanel } from '@/features/users/components/assistant-leads-panel'
 import { DeveloperAccessRequestsPanel } from '@/features/users/components/developer-access-requests-panel'
+import { ROLE } from '@/lib/roles'
+import { useAuthStore } from '@/stores/auth-store'
+
+import { UnifiedTodoList } from './unified-todo-list'
 
 export function Todos() {
   const { t } = useTranslation()
+  const isAdmin = useAuthStore(
+    (state) => (state.auth.user?.role ?? 0) >= ROLE.ADMIN
+  )
 
   return (
     <SectionPageLayout>
       <SectionPageLayout.Title>{t('To-dos')}</SectionPageLayout.Title>
       <SectionPageLayout.Content>
         <div className='flex min-h-0 flex-col gap-6'>
-          <AssistantLeadsPanel />
-          <AccountActionRequestsPanel />
-          <DeveloperAccessRequestsPanel />
+          <UnifiedTodoList />
+          {isAdmin ? (
+            <>
+              <AssistantLeadsPanel />
+              <AccountActionRequestsPanel />
+              <DeveloperAccessRequestsPanel />
+            </>
+          ) : null}
         </div>
       </SectionPageLayout.Content>
     </SectionPageLayout>

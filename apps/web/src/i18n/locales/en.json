@@ -6814,6 +6814,20 @@
     "Zero retention": "Zero retention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Challenge reviews": "Challenge reviews",
+    "Bounty notifications": "Bounty notifications",
+    "Account actions": "Account actions",
+    "Mark all as read": "Mark all as read",
+    "Challenge submitted": "Challenge submitted",
+    "Tip received": "Tip received",
+    "Reward received": "Reward received",
+    "Dispute reward received": "Dispute reward received",
+    "Bounty notification": "Bounty notification",
+    "Developer access request": "Developer access request",
+    "Account action request": "Account action request",
+    "Failed to load to-dos": "Failed to load to-dos",
+    "No pending to-dos": "No pending to-dos",
+    "Submitted challenge work and account requests will appear here.": "Submitted challenge work and account requests will appear here."
   }
 }

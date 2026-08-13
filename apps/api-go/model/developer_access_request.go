@@ -137,21 +137,28 @@ func reopenDeveloperAccessRequestForUserWithTx(tx *gorm.DB, userID int) error {
 }
 
 func SubmitDeveloperAccessRequest(userID int, reason string) (*DeveloperAccessRequest, error) {
-	return submitDeveloperAccessRequest(userID, reason, "", DeveloperAccessRequestSourceOld)
+	return submitDeveloperAccessRequest(userID, reason, "", DeveloperAccessRequestSourceOld, false)
 }
 
 // SubmitAssistantDeveloperAccessRequest puts a concrete L1 request in the
 // administrator queue before any model/tool call. An AI recommendation is an
 // optional review aid, never a prerequisite for being seen by an operator.
 func SubmitAssistantDeveloperAccessRequest(userID int, reason string) (*DeveloperAccessRequest, error) {
-	return submitDeveloperAccessRequest(userID, reason, "", DeveloperAccessRequestSourceAssistant)
+	return submitDeveloperAccessRequest(userID, reason, "", DeveloperAccessRequestSourceAssistant, false)
+}
+
+// SubmitAssistantDeveloperAccessRequestWithoutRecommendation records the
+// user's explicit choice to remove the optional AI letter while retaining the
+// same single pending L1 request.
+func SubmitAssistantDeveloperAccessRequestWithoutRecommendation(userID int, reason string) (*DeveloperAccessRequest, error) {
+	return submitDeveloperAccessRequest(userID, reason, "", DeveloperAccessRequestSourceAssistant, true)
 }
 
 func SubmitAssistantDeveloperAccessRecommendation(userID int, reason string, recommendation string) (*DeveloperAccessRequest, error) {
-	return submitDeveloperAccessRequest(userID, reason, recommendation, DeveloperAccessRequestSourceAI)
+	return submitDeveloperAccessRequest(userID, reason, recommendation, DeveloperAccessRequestSourceAI, false)
 }
 
-func submitDeveloperAccessRequest(userID int, reason string, recommendation string, source string) (*DeveloperAccessRequest, error) {
+func submitDeveloperAccessRequest(userID int, reason string, recommendation string, source string, clearRecommendation bool) (*DeveloperAccessRequest, error) {
 	if userID <= 0 {
 		return nil, gorm.ErrInvalidData
 	}
@@ -202,6 +209,11 @@ func submitDeveloperAccessRequest(userID int, reason string, recommendation stri
 				updates["source"] = source
 				pending.AIRecommendation = normalizedRecommendation
 				pending.Source = source
+			} else if clearRecommendation {
+				updates["ai_recommendation"] = ""
+				updates["source"] = DeveloperAccessRequestSourceAssistant
+				pending.AIRecommendation = ""
+				pending.Source = DeveloperAccessRequestSourceAssistant
 			}
 			if err := tx.Model(&pending).Updates(updates).Error; err != nil {
 				return err

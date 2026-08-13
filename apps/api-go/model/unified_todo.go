@@ -14,6 +14,7 @@ import (
 const (
 	UnifiedTodoCategoryAll             = "all"
 	UnifiedTodoCategoryBounty          = "open_source_bounty"
+	UnifiedTodoCategoryBountyReview    = "open_source_bounty_review"
 	UnifiedTodoCategoryDeveloperAccess = "developer_access"
 	UnifiedTodoCategoryAccountAction   = "account_action"
 
@@ -76,6 +77,7 @@ type unifiedTodoCandidate struct {
 }
 
 var unifiedTodoCategories = []string{
+	UnifiedTodoCategoryBountyReview,
 	UnifiedTodoCategoryBounty,
 	UnifiedTodoCategoryDeveloperAccess,
 	UnifiedTodoCategoryAccountAction,
@@ -165,6 +167,44 @@ func unifiedTodoBountyCandidates(userID, limit int) ([]unifiedTodoCandidate, err
 				"quota":           notification.Quota,
 				"note":            RedactAssistantHistoryContent(notification.Note),
 				"thanked":         notification.ThankedAt > 0,
+			},
+		}})
+	}
+	return items, nil
+}
+
+func unifiedTodoBountyReviewQuery(userID int) *gorm.DB {
+	return openSourceBountyChallengeViewQuery().
+		Where("p.owner_user_id = ? AND c.status = ?", userID, OpenSourceBountyChallengeSubmitted)
+}
+
+func unifiedTodoBountyReviewCandidates(userID, limit int) ([]unifiedTodoCandidate, error) {
+	rows := make([]OpenSourceBountyChallengeView, 0)
+	if err := unifiedTodoBountyReviewQuery(userID).
+		Order("c.submitted_at DESC, c.id DESC").Limit(limit).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	items := make([]unifiedTodoCandidate, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, unifiedTodoCandidate{Item: UnifiedTodoItem{
+			Id:        unifiedTodoItemID(UnifiedTodoCategoryBountyReview, row.Id),
+			SourceId:  row.Id,
+			Category:  UnifiedTodoCategoryBountyReview,
+			Type:      "challenge_submitted",
+			Title:     "open_source_bounty.challenge_submitted",
+			Summary:   RedactAssistantHistoryContent(row.ProjectTitle),
+			CreatedAt: row.SubmittedAt,
+			UpdatedAt: row.UpdatedAt,
+			Details: map[string]any{
+				"project_id":           row.ProjectId,
+				"challenge_id":         row.Id,
+				"participant_user_id":  row.ParticipantUserId,
+				"participant_username": row.ParticipantUsername,
+				"project_title":        RedactAssistantHistoryContent(row.ProjectTitle),
+				"issue_url":            row.IssueUrl,
+				"pull_request_url":     row.PullRequestUrl,
+				"submission_note":      RedactAssistantHistoryContent(row.SubmissionNote),
 			},
 		}})
 	}
@@ -293,6 +333,17 @@ func unifiedBountyCount(userID int, unreadOnly bool) (int64, error) {
 	return unifiedTodoCount(query)
 }
 
+func unifiedBountyReviewCount(userID int, unreadOnly bool) (int64, error) {
+	query := unifiedTodoBountyReviewQuery(userID)
+	if unreadOnly {
+		query = query.Where(`NOT EXISTS (
+			SELECT 1 FROM unified_todo_reads AS read_marker
+			WHERE read_marker.user_id = ? AND read_marker.category = ? AND read_marker.item_id = c.id
+		)`, userID, UnifiedTodoCategoryBountyReview)
+	}
+	return unifiedTodoCount(query)
+}
+
 func unifiedDeveloperAccessCount(userID int, isAdmin bool, unreadOnly bool) (int64, error) {
 	query := unifiedDeveloperAccessQuery(userID, isAdmin)
 	if unreadOnly {
@@ -372,6 +423,11 @@ func GetUnifiedTodoCenter(userID, role int, category string, page, pageSize int)
 	for _, knownCategory := range unifiedTodoCategories {
 		var total, unread int64
 		switch knownCategory {
+		case UnifiedTodoCategoryBountyReview:
+			total, err = unifiedBountyReviewCount(userID, false)
+			if err == nil {
+				unread, err = unifiedBountyReviewCount(userID, true)
+			}
 		case UnifiedTodoCategoryBounty:
 			total, err = unifiedBountyCount(userID, false)
 			if err == nil {
@@ -410,6 +466,8 @@ func GetUnifiedTodoCenter(userID, role int, category string, page, pageSize int)
 	for _, selectedCategory := range unifiedTodoSelectedCategories(category) {
 		var categoryCandidates []unifiedTodoCandidate
 		switch selectedCategory {
+		case UnifiedTodoCategoryBountyReview:
+			categoryCandidates, err = unifiedTodoBountyReviewCandidates(userID, limit)
 		case UnifiedTodoCategoryBounty:
 			categoryCandidates, err = unifiedTodoBountyCandidates(userID, limit)
 		case UnifiedTodoCategoryDeveloperAccess:
@@ -471,6 +529,17 @@ func visibleUnifiedTodoIDs(userID, role int, category string, ids []int, all boo
 	isAdmin := role >= common.RoleAdminUser
 	var visible []int
 	switch category {
+	case UnifiedTodoCategoryBountyReview:
+		query := DB.Table("open_source_bounty_challenges AS c").
+			Select("c.id").
+			Joins("JOIN open_source_bounty_projects AS p ON p.id = c.project_id").
+			Where("p.owner_user_id = ? AND c.status = ?", userID, OpenSourceBountyChallengeSubmitted)
+		if !all {
+			query = query.Where("c.id IN ?", ids)
+		}
+		if err := query.Pluck("c.id", &visible).Error; err != nil {
+			return nil, err
+		}
 	case UnifiedTodoCategoryDeveloperAccess:
 		query := DB.Model(&DeveloperAccessRequest{}).Select("id")
 		if !isAdmin {

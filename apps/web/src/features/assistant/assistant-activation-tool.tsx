@@ -25,7 +25,7 @@ import {
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -43,7 +43,7 @@ function AdministratorReply(props: { request: DeveloperAccessRequest }) {
   const { t } = useTranslation()
   if (!props.request.admin_note) return null
   return (
-    <div className='border-border/70 bg-background/70 grid gap-1 border p-3'>
+    <div className='border-border grid gap-1 border-l-2 py-1 pl-3'>
       <p className='text-xs font-medium'>{t('Administrator reply')}</p>
       <p className='text-muted-foreground text-xs leading-5 whitespace-pre-wrap'>
         {props.request.admin_note}
@@ -63,7 +63,8 @@ export function AssistantActivationTool(props: {
     useState<DeveloperAccessRequest | null>(null)
   const [loading, setLoading] = useState(false)
   const [manualReason, setManualReason] = useState('')
-  const [letter, setLetter] = useState('')
+  const [letter, setLetter] = useState<string | null>(null)
+  const initializedLetterKey = useRef('')
 
   const requestQuery = useQuery({
     queryKey: ['assistant-developer-access-request'],
@@ -81,10 +82,29 @@ export function AssistantActivationTool(props: {
     }
   }, [queryClient, request?.status])
 
+  useEffect(() => {
+    if (props.recommendationDraft) {
+      const key = `draft:${props.recommendationDraft.confirmation_token}`
+      if (initializedLetterKey.current !== key) {
+        initializedLetterKey.current = key
+        setLetter(props.recommendationDraft.recommendation)
+      }
+      return
+    }
+    if (request?.status === 'pending') {
+      const key = `request:${request.id}`
+      if (initializedLetterKey.current !== key) {
+        initializedLetterKey.current = key
+        setLetter(request.ai_recommendation || request.reason)
+      }
+    }
+  }, [props.recommendationDraft, request])
+
   const submit = async () => {
     const draft = props.recommendationDraft
     if (loading || request?.status === 'pending' || !draft) return
-    const recommendation = letter.trim() || draft.recommendation
+    const recommendation = (letter ?? draft.recommendation).trim()
+    if (recommendation.length < 20) return
     setLoading(true)
     try {
       const submitted = await submitDeveloperAccessRequest({
@@ -110,19 +130,27 @@ export function AssistantActivationTool(props: {
   const savePendingLetter = async () => {
     if (!request || request.status !== 'pending' || loading) return
     const recommendation =
-      letter.trim() ||
-      props.recommendationDraft?.recommendation ||
-      request.ai_recommendation ||
-      request.reason
-    if (recommendation.length < 20) return
+      letter !== null
+        ? letter.trim()
+        : props.recommendationDraft?.recommendation ||
+          request.ai_recommendation ||
+          request.reason
+    if (recommendation.length > 0 && recommendation.length < 20) return
     setLoading(true)
     try {
-      const submitted = await submitDeveloperAccessRequest({
-        reason: recommendation,
-        ai_recommendation: recommendation,
-        confirmation_token: props.recommendationDraft?.confirmation_token,
-        confirmed: true,
-      })
+      const submitted = await submitDeveloperAccessRequest(
+        recommendation
+          ? {
+              reason: recommendation,
+              ai_recommendation: recommendation,
+              confirmation_token: props.recommendationDraft?.confirmation_token,
+              confirmed: true,
+            }
+          : {
+              reason: request.reason,
+              confirmed: true,
+            }
+      )
       setRequestOverride(submitted)
       setLetter(submitted.ai_recommendation)
       toast.success(t('Your changes were saved.'))
@@ -162,7 +190,7 @@ export function AssistantActivationTool(props: {
 
   if (request?.status === 'approved') {
     return (
-      <section className='border-success/40 bg-success/5 grid gap-3 border p-4'>
+      <section className='grid gap-4 py-4'>
         <h3 className='flex items-center gap-2 text-sm font-medium'>
           <HugeiconsIcon
             icon={CheckmarkCircle02Icon}
@@ -195,12 +223,13 @@ export function AssistantActivationTool(props: {
 
   if (request?.status === 'pending') {
     const recommendation =
-      letter ||
-      props.recommendationDraft?.recommendation ||
-      request.ai_recommendation ||
-      request.reason
+      letter !== null
+        ? letter
+        : props.recommendationDraft?.recommendation ||
+          request.ai_recommendation ||
+          request.reason
     return (
-      <section className='grid gap-3 border p-4'>
+      <section className='grid min-w-0 gap-4 py-4'>
         <div>
           <h3 className='text-sm font-medium'>{t('Recommendation letter')}</h3>
           <p className='text-muted-foreground mt-1 text-xs leading-5'>
@@ -214,6 +243,7 @@ export function AssistantActivationTool(props: {
           onChange={(event) => setLetter(event.target.value)}
           maxLength={2000}
           rows={5}
+          className='focus-visible:border-foreground/30 min-h-36 w-full resize-y text-base focus-visible:ring-0 sm:text-sm'
           placeholder={t('Recommendation letter')}
           aria-label={t('Recommendation letter')}
         />
@@ -221,8 +251,13 @@ export function AssistantActivationTool(props: {
         <Button
           type='button'
           size='sm'
+          className='w-full sm:w-auto sm:justify-self-start'
           onClick={() => void savePendingLetter()}
-          disabled={loading || recommendation.trim().length < 20}
+          disabled={
+            loading ||
+            (recommendation.trim().length > 0 &&
+              recommendation.trim().length < 20)
+          }
         >
           {loading ? t('Submitting...') : t('Save changes')}
         </Button>
@@ -233,7 +268,7 @@ export function AssistantActivationTool(props: {
   const draft = props.recommendationDraft
 
   return (
-    <section className='grid gap-3 border p-4'>
+    <section className='grid min-w-0 gap-4 py-4'>
       <h3 className='text-sm font-medium'>
         {draft ? t('Confirm AI recommendation') : t('Unlock L1 with AI')}
       </h3>
@@ -247,7 +282,7 @@ export function AssistantActivationTool(props: {
             )}
       </p>
       {request?.status === 'rejected' ? (
-        <div className='border-destructive/40 bg-destructive/5 grid gap-2 border p-3'>
+        <div className='border-destructive/60 grid gap-2 border-l-2 py-1 pl-3'>
           <p className='text-sm font-medium'>
             {t('Previous request rejected')}
           </p>
@@ -262,18 +297,22 @@ export function AssistantActivationTool(props: {
         </div>
       ) : null}
       {draft ? (
-        <div className='grid gap-3'>
+        <div className='grid min-w-0 gap-3'>
           <Textarea
-            value={letter || draft.recommendation}
+            value={letter ?? draft.recommendation}
             onChange={(event) => setLetter(event.target.value)}
             maxLength={2000}
             rows={5}
+            className='focus-visible:border-foreground/30 min-h-36 w-full resize-y text-base focus-visible:ring-0 sm:text-sm'
             aria-label={t('Recommendation letter')}
           />
           <Button
             type='button'
+            className='w-full sm:w-auto sm:justify-self-start'
             onClick={() => void submit()}
-            disabled={loading}
+            disabled={
+              loading || (letter ?? draft.recommendation).trim().length < 20
+            }
           >
             {loading
               ? t('Submitting...')
@@ -290,6 +329,7 @@ export function AssistantActivationTool(props: {
             )}
             maxLength={2000}
             rows={4}
+            className='focus-visible:border-foreground/30 min-h-32 w-full resize-y text-base focus-visible:ring-0 sm:text-sm'
             aria-label={t('L1 access request explanation')}
             disabled={loading}
           />
@@ -301,6 +341,7 @@ export function AssistantActivationTool(props: {
           <Button
             type='button'
             variant='outline'
+            className='w-full sm:w-auto sm:justify-self-start'
             onClick={() => void submitWithoutAI()}
             disabled={loading || manualReason.trim().length < 5}
           >

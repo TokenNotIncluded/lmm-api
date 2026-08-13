@@ -355,10 +355,13 @@ export function AssistantHistory(props: {
             >
               <div className='flex min-w-0 items-start justify-between gap-3'>
                 <div className='min-w-0'>
-                  <p className='text-sm font-medium'>
-                    {conversation.owner === 'self'
-                      ? t('Your conversation')
-                      : t('Lower-access user conversation')}
+                  <p className='line-clamp-2 text-sm font-medium'>
+                    <span className='sr-only'>
+                      {conversation.owner === 'self'
+                        ? `${t('Your conversation')}: `
+                        : `${t('Lower-access user conversation')}: `}
+                    </span>
+                    {conversation.title}
                   </p>
                   <p className='text-muted-foreground mt-0.5 text-xs'>
                     {dateFormatter.format(
@@ -458,11 +461,7 @@ export function AssistantHistoryConversation(props: {
   return (
     <div className='grid gap-3'>
       <div>
-        <p className='text-sm font-medium'>
-          {conversation.owner === 'self'
-            ? t('Your conversation')
-            : t('Lower-access user conversation')}
-        </p>
+        <p className='text-sm font-medium'>{conversation.title}</p>
         {conversation.owner !== 'self' ? (
           <p className='text-muted-foreground mt-1 text-xs leading-5'>
             {t(

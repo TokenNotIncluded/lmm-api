@@ -73,6 +73,11 @@ export function useSidebarData(): SidebarData {
               url: '/open-source-bounties',
               icon: Compass,
             },
+            {
+              title: t('To-dos'),
+              url: '/todos',
+              icon: ListChecks,
+            },
           ],
         },
       ],
@@ -165,6 +170,11 @@ export function useSidebarData(): SidebarData {
             url: '/support',
             icon: LifeBuoy,
           },
+          {
+            title: t('To-dos'),
+            url: '/todos',
+            icon: ListChecks,
+          },
         ],
       },
       {
@@ -180,11 +190,6 @@ export function useSidebarData(): SidebarData {
             title: t('Models'),
             url: '/models/metadata',
             icon: Box,
-          },
-          {
-            title: t('To-dos'),
-            url: '/todos',
-            icon: ListChecks,
           },
           {
             title: t('Users'),

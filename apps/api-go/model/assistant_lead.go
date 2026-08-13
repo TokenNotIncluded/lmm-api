@@ -21,17 +21,19 @@ const (
 	AssistantLeadStatusPending  = "pending"
 	AssistantLeadStatusResolved = "resolved"
 
-	AssistantIntentOnboarding   = "onboarding"
-	AssistantIntentPlanPurchase = "plan_purchase"
-	AssistantIntentAPIKey       = "api_key"
-	AssistantIntentClientSetup  = "client_setup"
-	AssistantIntentCost         = "cost"
-	AssistantIntentBounty       = "bounty"
-	AssistantIntentUsage        = "usage"
-	AssistantIntentModels       = "models"
-	AssistantIntentInvitation   = "invitation"
-	AssistantIntentHumanSupport = "human_support"
-	AssistantIntentOther        = "other"
+	AssistantIntentOnboarding     = "onboarding"
+	AssistantIntentPlanPurchase   = "plan_purchase"
+	AssistantIntentAPIKey         = "api_key"
+	AssistantIntentClientSetup    = "client_setup"
+	AssistantIntentCost           = "cost"
+	AssistantIntentMath           = "math"
+	AssistantIntentRecommendation = "recommendation"
+	AssistantIntentBounty         = "bounty"
+	AssistantIntentUsage          = "usage"
+	AssistantIntentModels         = "models"
+	AssistantIntentInvitation     = "invitation"
+	AssistantIntentHumanSupport   = "human_support"
+	AssistantIntentOther          = "other"
 
 	minAssistantHandoffRunes            = 5
 	maxAssistantHandoffRunes            = 2000
@@ -155,14 +157,20 @@ func ClassifyAssistantIntent(message string) string {
 	normalized := strings.ToLower(strings.TrimSpace(message))
 	switch {
 	case assistantMessageContains(normalized,
+		"推荐信", "推荐函", "推荐内容", "recommendation letter", "l1 recommendation", "access recommendation"):
+		return AssistantIntentRecommendation
+	case assistantMessageContains(normalized,
 		"新手", "入门", "审核", "解锁", "l0", "l1", "onboarding", "review", "approval", "getting started"):
 		return AssistantIntentOnboarding
 	case assistantMessageContains(normalized,
 		"人工", "客服", "管理员", "工单", "human", "support", "administrator", "agent"):
 		return AssistantIntentHumanSupport
 	case assistantMessageContains(normalized,
-		"成本", "费用", "计费", "消耗", "cost", "estimate", "billing", "token price"):
+		"成本", "费用", "计费", "消耗", "价格", "单价", "cost", "estimate", "billing", "price", "pricing", "token rate"):
 		return AssistantIntentCost
+	case assistantMessageContains(normalized,
+		"计算", "算一下", "数学", "换算", "百分比", "calculate", "calculator", "math", "percentage", "convert units"):
+		return AssistantIntentMath
 	case assistantMessageContains(normalized,
 		"历史调用", "调用数据", "调用统计", "用量统计", "使用统计", "调用记录", "usage", "usage logs", "request history", "statistics"):
 		return AssistantIntentUsage
@@ -173,7 +181,7 @@ func ClassifyAssistantIntent(message string) string {
 		"邀请奖励", "邀请码", "邀请链接", "邀请用户", "affiliate", "referral", "invite reward"):
 		return AssistantIntentInvitation
 	case assistantMessageContains(normalized,
-		"claude code", "cc switch", "cc-switch", "chatgpt", "windows", "linux", "macos", "mac os", "桌面版", "安装", "配置客户端"):
+		"claude code", "cc switch", "cc-switch", "chatgpt", "hermes", "windows", "linux", "macos", "mac os", "桌面版", "安装", "配置客户端"):
 		return AssistantIntentClientSetup
 	case assistantMessageContains(normalized,
 		"api key", "api-key", "apikey", "base url", "base_url", "model id", "模型 id", "模型id", "密钥", "令牌", "token", "创建 key", "创建key", "create key", "create a key", "create my key"):

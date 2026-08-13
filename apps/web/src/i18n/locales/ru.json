@@ -6814,6 +6814,20 @@
     "Zero retention": "Без хранения данных",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Масштаб"
+    "Zoom": "Масштаб",
+    "Challenge reviews": "Проверка заданий",
+    "Bounty notifications": "Уведомления о наградах",
+    "Account actions": "Действия с аккаунтом",
+    "Mark all as read": "Отметить всё прочитанным",
+    "Challenge submitted": "Задание отправлено",
+    "Tip received": "Получены чаевые",
+    "Reward received": "Получена награда",
+    "Dispute reward received": "Получена награда по спору",
+    "Bounty notification": "Уведомление о награде",
+    "Developer access request": "Запрос доступа разработчика",
+    "Account action request": "Запрос действия с аккаунтом",
+    "Failed to load to-dos": "Не удалось загрузить задачи",
+    "No pending to-dos": "Нет ожидающих задач",
+    "Submitted challenge work and account requests will appear here.": "Отправленные решения заданий и запросы аккаунта появятся здесь."
   }
 }

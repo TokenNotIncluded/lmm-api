@@ -306,6 +306,52 @@ describe('AssistantActivationTool', () => {
     }
   })
 
+  test('allows a pending recommendation letter to be cleared completely', async () => {
+    api.get = (async () => ({
+      data: { success: true, data: pendingRequest },
+    })) as typeof api.get
+    let submittedBody: unknown
+    api.post = (async (url: string, data: unknown) => {
+      assert.equal(url, '/api/user/developer-access/request')
+      submittedBody = data
+      return {
+        data: {
+          success: true,
+          data: {
+            ...pendingRequest,
+            source: 'assistant_request',
+            ai_recommendation: '',
+          },
+        },
+      }
+    }) as typeof api.post
+
+    const rendered = await renderTool()
+    try {
+      const textarea = document.querySelector<HTMLTextAreaElement>('textarea')
+      assert.ok(textarea)
+      await setTextareaValue(textarea, '')
+      assert.equal(textarea.value, '')
+      assert.equal(findButton('Save changes').disabled, false)
+
+      await act(async () => {
+        findButton('Save changes').click()
+        await flushEffects()
+      })
+      await waitForCondition(
+        () => submittedBody !== undefined,
+        'Cleared recommendation was not saved'
+      )
+      assert.deepEqual(submittedBody, {
+        reason: pendingRequest.reason,
+        confirmed: true,
+      })
+      assert.equal(textarea.value, '')
+    } finally {
+      await unmount(rendered)
+    }
+  })
+
   test('refreshes a pending request and opens setup after approval', async () => {
     let getCalls = 0
     api.get = (async (url: string) => {

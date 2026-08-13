@@ -454,7 +454,7 @@ function AssistantPromptComposer(props: {
     <>
       <PromptInput
         onSubmit={handleSubmit}
-        groupClassName='rounded-xl'
+        groupClassName='has-[[data-slot=input-group-control]:focus-visible]:border-foreground/30 has-[[data-slot=input-group-control]:focus-visible]:ring-0 rounded-xl'
         aria-label={t('Ask AI assistant')}
       >
         <PromptInputBody>
@@ -655,6 +655,7 @@ export function AssistantPanel(props: {
         : props.open
   const baseUrl = getBaseUrl()
   const [entries, setEntries] = useState<ConversationEntry[]>([])
+  const [conversationId, setConversationId] = useState<number | null>(null)
   const [sending, setSending] = useState(false)
   const submittedAutoSendIdRef = useRef<string | undefined>(undefined)
   const [recommendationDraft, setRecommendationDraft] =
@@ -815,6 +816,7 @@ export function AssistantPanel(props: {
 
   const resetConversation = useCallback(() => {
     setEntries([])
+    setConversationId(null)
     clearToolState()
     setHistoryView(null)
     openedTargetRef.current = undefined
@@ -882,7 +884,12 @@ export function AssistantPanel(props: {
   ) => {
     setSending(true)
     try {
-      const reply = await sendAssistantMessage(message, history)
+      const reply = await sendAssistantMessage(
+        message,
+        history,
+        conversationId ?? undefined
+      )
+      if (reply.conversationId) setConversationId(reply.conversationId)
       const safeReply = redactAssistantMessageForDisplay(
         reply.content,
         t(
@@ -942,6 +949,9 @@ export function AssistantPanel(props: {
         },
       ])
       await queryClient.invalidateQueries({ queryKey: ['assistant-status'] })
+      await queryClient.invalidateQueries({
+        queryKey: ['assistant-conversations'],
+      })
     } catch {
       const canSubmitWithoutAssistant = accountAccessState === 'restricted'
       if (canSubmitWithoutAssistant) {

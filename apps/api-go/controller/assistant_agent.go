@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
+	"github.com/expr-lang/expr"
 	"github.com/gin-gonic/gin"
 )
 
@@ -35,6 +37,14 @@ const (
 	minDeveloperAccessRecommendationRunes = 20
 	maxDeveloperAccessDraftRunes          = 2000
 	assistantInterlocutorAssessmentTool   = "assess_l0_interlocutor"
+	assistantMathExpressionMaxBytes       = 512
+	assistantMathVariablesMax             = 32
+	assistantConversationTitleMaxRunes    = 60
+)
+
+var (
+	assistantMathExpressionPattern = regexp.MustCompile(`^[0-9A-Za-z_+\-*/%^().,\s]+$`)
+	assistantMathVariablePattern   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,31}$`)
 )
 
 type assistantL1RecommendationDraft struct {
@@ -118,9 +128,33 @@ func assistantToolDefinitions() []assistantOpenAIToolDefinition {
 		{
 			Type: "function",
 			Function: assistantOpenAIToolFunction{
+				Name:        "set_conversation_title",
+				Description: "Set a short automatic title for this new conversation. Summarize the user's actual task in 3-8 specific words, in the user's language. Never use a greeting, generic label, secret, or complete sentence.",
+				Parameters: objectSchema(map[string]any{
+					"title": map[string]any{"type": "string", "minLength": 2, "maxLength": assistantConversationTitleMaxRunes},
+				}, []string{"title"}),
+			},
+		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
 				Name:        "get_service_facts",
 				Description: "Return the current public connection facts for this LMM console. Use this before explaining Base URL, compatible client endpoints, or where to manage private API keys.",
 				Parameters:  emptyObjectSchema(),
+			},
+		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
+				Name:        "calculate_math",
+				Description: "Evaluate arithmetic exactly instead of doing mental math. Use this for every calculation, including percentages, discounts, ratios, averages, projections, unit conversions expressed as factors, and intermediate arithmetic in a multi-step task. Operators: +, -, *, /, %, ^ or **. Functions: abs, sqrt, cbrt, pow, exp, ln, log10, sin, cos, tan, asin, acos, atan, atan2, hypot, floor, ceil, round, trunc, min, max, percent, clamp. Constants: pi and e. Supply named numeric variables when that makes the expression auditable.",
+				Parameters: objectSchema(map[string]any{
+					"expression": map[string]any{"type": "string", "minLength": 1, "maxLength": assistantMathExpressionMaxBytes},
+					"variables": map[string]any{
+						"type":                 "object",
+						"additionalProperties": map[string]any{"type": "number"},
+					},
+				}, []string{"expression"}),
 			},
 		},
 		{
@@ -142,6 +176,14 @@ func assistantToolDefinitions() []assistantOpenAIToolDefinition {
 			Function: assistantOpenAIToolFunction{
 				Name:        "get_account_access",
 				Description: "Read the signed-in user's non-secret access state, such as trust level and whether developer features are unlocked.",
+				Parameters:  emptyObjectSchema(),
+			},
+		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
+				Name:        "get_l1_recommendation",
+				Description: "Read the signed-in user's one current L1 access recommendation letter and review status. Call this before discussing, drafting, polishing, replacing, or removing the in-console recommendation. This is the authoritative shared letter visible to the user and administrators.",
 				Parameters:  emptyObjectSchema(),
 			},
 		},
@@ -340,6 +382,9 @@ func assistantToolAllowedForContext(name string, userContext assistantUserContex
 	if name == assistantInterlocutorAssessmentTool {
 		return false
 	}
+	if name == "set_conversation_title" {
+		return userContext.ConversationTitleNeeded
+	}
 	if userContext.AdministratorMode {
 		return true
 	}
@@ -352,8 +397,12 @@ func assistantToolAllowedForContext(name string, userContext assistantUserContex
 	}
 	switch name {
 	case "get_service_facts",
+		"calculate_math",
 		"calculate_cost",
 		"get_account_access",
+		"get_l1_recommendation",
+		"get_available_models",
+		"get_model_pricing",
 		"get_bounty_guide",
 		"search_web",
 		"get_setup_guide",
@@ -390,14 +439,51 @@ func assistantToolExecutionAllowedForContext(name string, userContext assistantU
 }
 
 func assistantToolChoiceForContext(userContext assistantUserContext) any {
-	// Some otherwise tool-capable upstreams reject a named/forced function
-	// choice while accepting the OpenAI-compatible automatic mode. During an
-	// unassessed L0 turn the catalogue is already reduced to the single safe
-	// assessment tool and the system prompt instructs the model to use it, so a
-	// forced choice adds no authorization boundary and only harms compatibility.
-	// If the upstream answers directly, returning that low-risk answer is safer
-	// than making the whole L0 assistant unavailable.
+	name := ""
+	if userContext.ConversationTitleNeeded {
+		name = "set_conversation_title"
+	} else {
+		switch userContext.Intent {
+		case model.AssistantIntentCost, model.AssistantIntentModels:
+			name = "get_available_models"
+		case model.AssistantIntentMath:
+			name = "calculate_math"
+		case model.AssistantIntentAPIKey, model.AssistantIntentClientSetup:
+			name = "get_service_facts"
+		case model.AssistantIntentOnboarding:
+			name = "get_account_access"
+		case model.AssistantIntentRecommendation:
+			name = "get_l1_recommendation"
+		case model.AssistantIntentUsage:
+			name = "get_usage_summary"
+		case model.AssistantIntentInvitation:
+			name = "get_invitation_rewards"
+		case model.AssistantIntentBounty:
+			name = "get_bounty_guide"
+		}
+	}
+	if name != "" && assistantToolAllowedForContext(name, userContext) {
+		return map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name": name,
+			},
+		}
+	}
 	return "auto"
+}
+
+func assistantNamedToolChoiceName(choice any) string {
+	object, ok := choice.(map[string]any)
+	if !ok {
+		return ""
+	}
+	function, ok := object["function"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	name, _ := function["name"].(string)
+	return strings.TrimSpace(name)
 }
 
 func emptyObjectSchema() map[string]any {
@@ -623,7 +709,8 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 		}
 	}
 	cacheKey := c.GetString("assistant_cache_key")
-	usedTool := false
+	usedCacheSensitiveTool := false
+	calledTools := make(map[string]bool)
 
 	for step := 0; step < maxSteps; step++ {
 		request := assistantOpenAIRequest{
@@ -639,6 +726,9 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 			userContext := assistantUserContextFromGin(c)
 			request.Tools = assistantToolDefinitionsForContext(userContext)
 			request.ToolChoice = assistantToolChoiceForContext(userContext)
+			if forcedName := assistantNamedToolChoiceName(request.ToolChoice); forcedName != "" && calledTools[forcedName] {
+				request.ToolChoice = "auto"
+			}
 		}
 
 		status, body, err := relayAssistantTurnWithRetry(c, request, rootRequestID, step)
@@ -663,8 +753,8 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 				writeAssistantUpstreamError(c, "ASSISTANT_EMPTY_UPSTREAM_RESPONSE", "AI assistant upstream returned no usable answer")
 				return
 			}
-			if !usedTool && cacheKey != "" {
-				storeAssistantCachedResponse(settings, cacheKey, status, normalizedBody)
+			if !usedCacheSensitiveTool && cacheKey != "" {
+				storeAssistantCachedResponse(settings, cacheKey, status, normalizedBody, c.GetString(assistantConversationTitleDraftKey))
 				c.Header("X-LMM-Assistant-Cache", "STORE")
 			}
 			c.Data(status, "application/json; charset=utf-8", normalizedBody)
@@ -684,8 +774,12 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 			Content:   assistantResponseContent(message.Content),
 			ToolCalls: message.ToolCalls,
 		})
-		usedTool = true
 		for index, call := range message.ToolCalls {
+			toolName := strings.TrimSpace(call.Function.Name)
+			calledTools[toolName] = true
+			if toolName != "set_conversation_title" {
+				usedCacheSensitiveTool = true
+			}
 			result := executeAssistantTool(c, call)
 			if c.IsAborted() {
 				return
@@ -856,6 +950,8 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 	switch name {
 	case assistantInterlocutorAssessmentTool:
 		return executeAssistantInterlocutorAssessmentTool(c, input)
+	case "set_conversation_title":
+		return executeAssistantConversationTitleTool(c, input)
 	case "get_service_facts":
 		rootURL := strings.TrimRight(system_setting.ServerAddress, "/")
 		baseURL := rootURL
@@ -874,19 +970,17 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 			"key_management_path":      "/keys",
 			"write_actions":            "require explicit confirmation in the UI",
 		}
+	case "calculate_math":
+		return executeAssistantMathTool(input)
 	case "calculate_cost":
 		return executeAssistantCostTool(input)
 	case "get_account_access":
 		return executeAssistantAccountTool(actorUserID)
+	case "get_l1_recommendation":
+		return executeAssistantL1RecommendationStateTool(actorUserID)
 	case "get_available_models":
-		if result, blocked := assistantDeveloperCapabilityRequired(actorUserID, "model availability"); blocked {
-			return result
-		}
 		return executeAssistantModelsTool(actorUserID)
 	case "get_model_pricing":
-		if result, blocked := assistantDeveloperCapabilityRequired(actorUserID, "model pricing"); blocked {
-			return result
-		}
 		return executeAssistantModelPricingTool(actorUserID, input)
 	case "get_plan_offers":
 		userContext := assistantUserContextFromGin(c)
@@ -988,6 +1082,57 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 		return executeAssistantAdminPricingChangeTool(c, actorUserID, input)
 	default:
 		return map[string]any{"ok": false, "error": "unknown assistant tool"}
+	}
+}
+
+func executeAssistantConversationTitleTool(c *gin.Context, input map[string]any) map[string]any {
+	if c == nil || !assistantUserContextFromGin(c).ConversationTitleNeeded {
+		return map[string]any{"ok": false, "error": "this conversation does not need an automatic title"}
+	}
+	title := strings.TrimSpace(inputString(input, "title"))
+	if title == "" {
+		return map[string]any{"ok": false, "error": "a conversation title is required"}
+	}
+	runes := []rune(model.RedactAssistantHistoryContent(title))
+	if len(runes) > assistantConversationTitleMaxRunes {
+		runes = runes[:assistantConversationTitleMaxRunes]
+	}
+	title = strings.TrimSpace(string(runes))
+	if title == "" {
+		return map[string]any{"ok": false, "error": "the conversation title became empty after safety filtering"}
+	}
+	c.Set(assistantConversationTitleDraftKey, title)
+	userContext := assistantUserContextFromGin(c)
+	userContext.ConversationTitleNeeded = false
+	c.Set(assistantUserContextKey, userContext)
+	return map[string]any{"ok": true, "title": title}
+}
+
+func executeAssistantL1RecommendationStateTool(userID int) map[string]any {
+	if userID <= 0 {
+		return map[string]any{"ok": false, "error": "signed-in account is unavailable"}
+	}
+	request, err := model.GetDeveloperAccessRequest(userID)
+	if err != nil {
+		return map[string]any{"ok": false, "error": "the current recommendation could not be loaded"}
+	}
+	if request == nil {
+		return map[string]any{
+			"ok":             true,
+			"status":         "none",
+			"recommendation": "",
+			"next_step":      "Use the conversation context to prepare the user's one L1 recommendation when requested.",
+		}
+	}
+	return map[string]any{
+		"ok":                      true,
+		"status":                  request.Status,
+		"source":                  request.Source,
+		"user_statement":          request.Reason,
+		"recommendation":          request.AIRecommendation,
+		"administrator_note":      request.AdminNote,
+		"is_single_shared_letter": true,
+		"next_step":               "For an AI edit, prepare a revised draft of this same letter and require UI confirmation before replacing it.",
 	}
 }
 
@@ -1238,6 +1383,71 @@ func executeAssistantCostTool(input map[string]any) map[string]any {
 	}
 }
 
+func executeAssistantMathTool(input map[string]any) map[string]any {
+	expression := strings.TrimSpace(inputString(input, "expression"))
+	if expression == "" {
+		return map[string]any{"ok": false, "error": "a math expression is required"}
+	}
+	if len(expression) > assistantMathExpressionMaxBytes || !assistantMathExpressionPattern.MatchString(expression) {
+		return map[string]any{"ok": false, "error": "expression contains unsupported characters or is too long"}
+	}
+
+	environment := map[string]any{
+		"pi":  math.Pi,
+		"e":   math.E,
+		"abs": math.Abs, "sqrt": math.Sqrt, "cbrt": math.Cbrt,
+		"pow": math.Pow, "exp": math.Exp, "ln": math.Log, "log10": math.Log10,
+		"sin": math.Sin, "cos": math.Cos, "tan": math.Tan,
+		"asin": math.Asin, "acos": math.Acos, "atan": math.Atan, "atan2": math.Atan2,
+		"hypot": math.Hypot, "floor": math.Floor, "ceil": math.Ceil,
+		"round": math.Round, "trunc": math.Trunc, "min": math.Min, "max": math.Max,
+		"percent": func(value float64) float64 { return value / 100 },
+		"clamp": func(value, minimum, maximum float64) float64 {
+			return math.Min(math.Max(value, minimum), maximum)
+		},
+	}
+	variables := map[string]float64{}
+	if rawVariables, exists := input["variables"]; exists {
+		variableMap, ok := rawVariables.(map[string]any)
+		if !ok || len(variableMap) > assistantMathVariablesMax {
+			return map[string]any{"ok": false, "error": "variables must be an object with at most 32 numeric entries"}
+		}
+		for name := range variableMap {
+			if !assistantMathVariablePattern.MatchString(name) {
+				return map[string]any{"ok": false, "error": "variable names must be simple ASCII identifiers"}
+			}
+			if _, reserved := environment[name]; reserved {
+				return map[string]any{"ok": false, "error": "variable name conflicts with a math function or constant"}
+			}
+			value, ok := inputNumber(variableMap, name)
+			if !ok {
+				return map[string]any{"ok": false, "error": "all variables must be finite numbers"}
+			}
+			variables[name] = value
+			environment[name] = value
+		}
+	}
+
+	program, err := expr.Compile(expression, expr.Env(environment), expr.AsFloat64())
+	if err != nil {
+		return map[string]any{"ok": false, "error": "invalid math expression"}
+	}
+	output, err := expr.Run(program, environment)
+	if err != nil {
+		return map[string]any{"ok": false, "error": "math expression could not be evaluated"}
+	}
+	result, ok := output.(float64)
+	if !ok || math.IsNaN(result) || math.IsInf(result, 0) {
+		return map[string]any{"ok": false, "error": "math result is not a finite number"}
+	}
+	return map[string]any{
+		"ok":         true,
+		"expression": expression,
+		"variables":  variables,
+		"result":     result,
+	}
+}
+
 func executeAssistantModelsTool(userID int) map[string]any {
 	if userID <= 0 {
 		return map[string]any{"ok": false, "error": "signed-in account is unavailable"}
@@ -1251,11 +1461,17 @@ func executeAssistantModelsTool(userID int) map[string]any {
 		return map[string]any{"ok": false, "error": "developer access could not be loaded"}
 	}
 	if !access.Granted {
+		models := getPublicPreviewModelIDs()
 		return map[string]any{
-			"ok":        false,
-			"status":    "l1_required",
-			"error":     "L1 access is required to view model availability",
-			"next_step": "Ask the user to continue the L1 onboarding conversation and submit an administrator recommendation.",
+			"ok":                           true,
+			"status":                       "public_preview",
+			"model_ids":                    models,
+			"model_list_path":              "/pricing",
+			"availability_scope":           "public_preview_not_account_entitlement",
+			"developer_access_granted":     false,
+			"account_model_access_locked":  true,
+			"preview_matches_live_catalog": true,
+			"next_step":                    "Answer with these exact preview IDs. Explain that L1 is required to use them, but do not claim that the models are unknown.",
 		}
 	}
 	if user.Role >= common.RoleAdminUser {
@@ -1328,17 +1544,14 @@ func executeAssistantModelPricingTool(userID int, input map[string]any) map[stri
 	if err != nil {
 		return map[string]any{"ok": false, "error": "developer access could not be loaded"}
 	}
-	if !access.Granted {
-		return map[string]any{
-			"ok":        false,
-			"status":    "l1_required",
-			"error":     "L1 access is required to view model pricing",
-			"next_step": "Ask the user to continue the L1 onboarding conversation and submit an administrator recommendation.",
-		}
-	}
+	previewOnly := !access.Granted
 	usableGroups := service.GetUserUsableGroups(user.Group)
 	if isAdministrator {
 		usableGroups = assistantAdminConfiguredGroups()
+	} else if previewOnly {
+		usableGroups = map[string]string{
+			"default": setting.GetUsableGroupDescription("default"),
+		}
 	}
 	requestedGroup := inputString(input, "group")
 	if requestedGroup != "" {
@@ -1364,6 +1577,14 @@ func executeAssistantModelPricingTool(userID int, input map[string]any) map[stri
 		break
 	}
 	if selected == nil {
+		if previewOnly {
+			return map[string]any{
+				"ok":        false,
+				"status":    "model_not_in_public_preview",
+				"error":     "the exact model ID is not in the current public preview",
+				"next_step": "Call get_available_models and answer with the exact public preview IDs instead of guessing.",
+			}
+		}
 		return map[string]any{
 			"ok":        false,
 			"status":    "model_unavailable",
@@ -1383,9 +1604,15 @@ func executeAssistantModelPricingTool(userID int, input map[string]any) map[stri
 		groupIDs = append(groupIDs, groupID)
 	}
 	sort.Strings(groupIDs)
-	trust, err := model.GetTrustLevelInfoForUserBase(user)
-	if err != nil {
-		return map[string]any{"ok": false, "error": "trust-level pricing could not be loaded"}
+	trustLevel := 0
+	trustDiscountRatio := 1.0
+	if !previewOnly {
+		trust, trustErr := model.GetTrustLevelInfoForUserBase(user)
+		if trustErr != nil {
+			return map[string]any{"ok": false, "error": "trust-level pricing could not be loaded"}
+		}
+		trustLevel = trust.Level
+		trustDiscountRatio = trust.DiscountRatio
 	}
 	configuredRatios := ratio_setting.GetGroupRatioCopy()
 	prices := make([]map[string]any, 0, len(groupIDs))
@@ -1394,15 +1621,15 @@ func executeAssistantModelPricingTool(userID int, input map[string]any) map[stri
 		if !configured {
 			baseGroupRatio = 1
 		}
-		if override, ok := ratio_setting.GetGroupGroupRatio(user.Group, groupID); ok {
+		if override, ok := ratio_setting.GetGroupGroupRatio(user.Group, groupID); ok && !previewOnly {
 			baseGroupRatio = override
 		}
-		groupRatio := baseGroupRatio * trust.DiscountRatio
+		groupRatio := baseGroupRatio * trustDiscountRatio
 		entry := map[string]any{
 			"group":                groupID,
 			"group_description":    usableGroups[groupID],
 			"base_group_ratio":     baseGroupRatio,
-			"trust_discount_ratio": trust.DiscountRatio,
+			"trust_discount_ratio": trustDiscountRatio,
 			"group_ratio":          groupRatio,
 		}
 		if selected.QuotaType == 0 && selected.BillingMode != "tiered_expr" {
@@ -1423,19 +1650,27 @@ func executeAssistantModelPricingTool(userID int, input map[string]any) map[stri
 	if len(prices) == 0 {
 		return map[string]any{"ok": false, "error": "no usable pricing group was found for this model"}
 	}
+	pricingScope := "assistant_account"
+	calculationInstruction := "The returned USD prices already include the routing-group ratio and the live trust-level discount. Pass group_ratio=1 to calculate_cost so neither multiplier is applied twice."
+	if previewOnly {
+		pricingScope = "public_preview_reference"
+		calculationInstruction = "The returned USD reference prices include the public default-group ratio and no account-specific discount. Pass group_ratio=1 to calculate_cost and explain that L1 access is still required to use the model."
+	}
 
 	return map[string]any{
-		"ok":                       true,
-		"model_id":                 selected.ModelName,
-		"trust_level":              trust.Level,
-		"trust_discount_ratio":     trust.DiscountRatio,
-		"quota_type":               selected.QuotaType,
-		"billing_mode":             selected.BillingMode,
-		"billing_expression":       selected.BillingExpr,
-		"prices":                   prices,
-		"supported_endpoint_types": selected.SupportedEndpointTypes,
-		"administrator_scope":      isAdministrator,
-		"calculation_instruction":  "The returned USD prices already include the routing-group ratio and the live trust-level discount. Pass group_ratio=1 to calculate_cost so neither multiplier is applied twice.",
+		"ok":                          true,
+		"model_id":                    selected.ModelName,
+		"trust_level":                 trustLevel,
+		"trust_discount_ratio":        trustDiscountRatio,
+		"quota_type":                  selected.QuotaType,
+		"billing_mode":                selected.BillingMode,
+		"billing_expression":          selected.BillingExpr,
+		"prices":                      prices,
+		"supported_endpoint_types":    selected.SupportedEndpointTypes,
+		"administrator_scope":         isAdministrator,
+		"pricing_scope":               pricingScope,
+		"account_model_access_locked": previewOnly,
+		"calculation_instruction":     calculationInstruction,
 	}
 }
 

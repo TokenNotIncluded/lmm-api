@@ -6814,6 +6814,20 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Challenge reviews": "チャレンジ審査",
+    "Bounty notifications": "報奨金通知",
+    "Account actions": "アカウント操作",
+    "Mark all as read": "すべて既読にする",
+    "Challenge submitted": "チャレンジが提出されました",
+    "Tip received": "チップを受け取りました",
+    "Reward received": "報酬を受け取りました",
+    "Dispute reward received": "異議申立て報酬を受け取りました",
+    "Bounty notification": "報奨金通知",
+    "Developer access request": "開発者アクセス申請",
+    "Account action request": "アカウント操作申請",
+    "Failed to load to-dos": "対応待ちを読み込めませんでした",
+    "No pending to-dos": "対応待ちはありません",
+    "Submitted challenge work and account requests will appear here.": "提出されたチャレンジ成果とアカウント申請がここに表示されます。"
   }
 }

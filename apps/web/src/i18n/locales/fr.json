@@ -6814,6 +6814,20 @@
     "Zero retention": "Aucune rétention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Challenge reviews": "Révisions des défis",
+    "Bounty notifications": "Notifications de primes",
+    "Account actions": "Actions sur le compte",
+    "Mark all as read": "Tout marquer comme lu",
+    "Challenge submitted": "Défi soumis",
+    "Tip received": "Pourboire reçu",
+    "Reward received": "Récompense reçue",
+    "Dispute reward received": "Récompense de litige reçue",
+    "Bounty notification": "Notification de prime",
+    "Developer access request": "Demande d’accès développeur",
+    "Account action request": "Demande d’action sur le compte",
+    "Failed to load to-dos": "Échec du chargement des tâches",
+    "No pending to-dos": "Aucune tâche en attente",
+    "Submitted challenge work and account requests will appear here.": "Les travaux de défi soumis et les demandes de compte apparaîtront ici."
   }
 }

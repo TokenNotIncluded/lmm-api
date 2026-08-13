@@ -6814,6 +6814,20 @@
     "Zero retention": "零數據保留",
     "Zhipu": "智譜",
     "Zhipu V4": "智譜 V4",
-    "Zoom": "縮放"
+    "Zoom": "縮放",
+    "Challenge reviews": "挑戰審核",
+    "Bounty notifications": "懸賞通知",
+    "Account actions": "帳號操作",
+    "Mark all as read": "全部標為已讀",
+    "Challenge submitted": "挑戰已提交",
+    "Tip received": "收到打賞",
+    "Reward received": "收到獎勵",
+    "Dispute reward received": "收到爭議裁決獎勵",
+    "Bounty notification": "懸賞通知",
+    "Developer access request": "開發者權限申請",
+    "Account action request": "帳號操作申請",
+    "Failed to load to-dos": "待辦載入失敗",
+    "No pending to-dos": "暫無待辦",
+    "Submitted challenge work and account requests will appear here.": "已提交的挑戰成果和帳號申請會顯示在這裡。"
   }
 }

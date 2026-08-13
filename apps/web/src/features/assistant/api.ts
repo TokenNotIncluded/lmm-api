@@ -36,6 +36,10 @@ type AssistantChatPayload = {
   }
   message?: string
   lmm_assistant_action?: unknown
+  lmm_assistant_history?: {
+    conversation_id?: unknown
+    privacy_notice?: unknown
+  }
 }
 
 export type AssistantChatMessage = {
@@ -247,6 +251,8 @@ export type AssistantIntent =
   | 'api_key'
   | 'client_setup'
   | 'cost'
+  | 'math'
+  | 'recommendation'
   | 'bounty'
   | 'usage'
   | 'models'
@@ -281,6 +287,7 @@ export type AssistantReply = {
   content: string
   intent?: AssistantIntent
   action?: AssistantAction
+  conversationId?: number
 }
 
 export type AssistantPlanOffers = {
@@ -303,6 +310,8 @@ const ASSISTANT_INTENTS = new Set<AssistantIntent>([
   'api_key',
   'client_setup',
   'cost',
+  'math',
+  'recommendation',
   'bounty',
   'usage',
   'models',
@@ -515,7 +524,8 @@ export function buildAssistantConversation(
 
 export async function sendAssistantMessage(
   message: string,
-  history: AssistantChatMessage[] = []
+  history: AssistantChatMessage[] = [],
+  conversationId?: number
 ): Promise<AssistantReply> {
   const normalizedMessage =
     redactAssistantMessageForRequest(message).content.trim()
@@ -529,7 +539,13 @@ export async function sendAssistantMessage(
     try {
       response = await api.post<AssistantChatPayload>(
         '/api/assistant/chat',
-        { message: normalizedMessage, messages },
+        {
+          message: normalizedMessage,
+          messages,
+          ...(conversationId && conversationId > 0
+            ? { conversation_id: conversationId }
+            : {}),
+        },
         {
           skipBusinessError: true,
           skipErrorHandler: true,
@@ -550,11 +566,21 @@ export async function sendAssistantMessage(
     }
   }
   if (!response) throw new Error('Assistant request did not complete')
-  return {
+  const responseConversationId =
+    response.data.lmm_assistant_history?.conversation_id
+  const reply: AssistantReply = {
     content: parseAssistantReply(response.data),
     intent: parseAssistantIntent(response.headers['x-lmm-assistant-intent']),
     action: parseAssistantAction(response.data.lmm_assistant_action),
   }
+  if (
+    typeof responseConversationId === 'number' &&
+    Number.isSafeInteger(responseConversationId) &&
+    responseConversationId > 0
+  ) {
+    reply.conversationId = responseConversationId
+  }
+  return reply
 }
 
 export async function submitAssistantAccountDisableRequest(input: {

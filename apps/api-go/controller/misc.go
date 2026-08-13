@@ -18,7 +18,6 @@ import (
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/oauth"
-	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/console_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -58,8 +57,12 @@ func getPublicPreviewModelIDs() []string {
 	if model.DB == nil {
 		return []string{}
 	}
-
-	modelIDs := service.GetGroupsEnabledModels([]string{"default"})
+	modelIDs := make([]string, 0)
+	if err := model.DB.Model(&model.Ability{}).
+		Where(&model.Ability{Group: "default", Enabled: true}).
+		Distinct("model").Pluck("model", &modelIDs).Error; err != nil {
+		return []string{}
+	}
 	sort.Strings(modelIDs)
 	return modelIDs
 }

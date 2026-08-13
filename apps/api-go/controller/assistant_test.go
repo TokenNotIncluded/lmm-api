@@ -790,7 +790,16 @@ func TestAssistantModelPricingUsesAccountGroupsAndLiveRates(t *testing.T) {
 	}
 	require.NoError(t, db.Create(&l0User).Error)
 	l0Pricing := executeAssistantModelPricingTool(l0User.Id, map[string]any{"model_id": "priced-model"})
-	assert.Equal(t, "l1_required", l0Pricing["status"])
+	assert.Equal(t, true, l0Pricing["ok"])
+	assert.Equal(t, "public_preview_reference", l0Pricing["pricing_scope"])
+	assert.Equal(t, true, l0Pricing["account_model_access_locked"])
+	assert.Equal(t, 0, l0Pricing["trust_level"])
+	assert.Equal(t, 1.0, l0Pricing["trust_discount_ratio"])
+	l0Prices, ok := l0Pricing["prices"].([]map[string]any)
+	require.True(t, ok)
+	require.Len(t, l0Prices, 1)
+	assert.Equal(t, 3.0, l0Prices[0]["input_usd_per_million"])
+	assert.Equal(t, 6.0, l0Prices[0]["output_usd_per_million"])
 
 	missing := executeAssistantModelPricingTool(user.Id, map[string]any{})
 	assert.Equal(t, "model_required", missing["status"])
@@ -873,14 +882,17 @@ func TestAssistantPricingEndpointAppliesTrustDiscountToGroupRatios(t *testing.T)
 func TestAssistantAgentToolsExposeSafeAndConfirmationGatedActions(t *testing.T) {
 	c, _ := createAssistantKeyTestContext(t, "assistant-tool-user")
 	definitions := assistantToolDefinitions()
-	require.Len(t, definitions, 20)
+	require.Len(t, definitions, 23)
 	names := make(map[string]bool, len(definitions))
 	for _, definition := range definitions {
 		names[definition.Function.Name] = true
 	}
 	assert.True(t, names["get_service_facts"])
+	assert.True(t, names["set_conversation_title"])
+	assert.True(t, names["calculate_math"])
 	assert.True(t, names["calculate_cost"])
 	assert.True(t, names["get_account_access"])
+	assert.True(t, names["get_l1_recommendation"])
 	assert.True(t, names["get_available_models"])
 	assert.True(t, names["get_model_pricing"])
 	assert.True(t, names["get_plan_offers"])
@@ -937,11 +949,27 @@ func TestAssistantAgentToolsExposeSafeAndConfirmationGatedActions(t *testing.T) 
 	assert.False(t, shortHandoff["ok"].(bool))
 }
 
-func TestAssistantToolExecutionRechecksServerSideAllowlist(t *testing.T) {
+func TestAssistantL0ModelToolReturnsRealPublicPreviewIDs(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Ability{}, &model.TopUp{}))
+	user := model.User{
+		Username: "assistant-preview-user",
+		Password: "password",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+		Group:    "default",
+	}
+	require.NoError(t, db.Create(&user).Error)
+	require.NoError(t, db.Create(&[]model.Ability{
+		{Group: "default", Model: "claude-opus-5", ChannelId: 1, Enabled: true},
+		{Group: "default", Model: "gpt-5.6-sol", ChannelId: 2, Enabled: true},
+		{Group: "private", Model: "private-only", ChannelId: 3, Enabled: true},
+	}).Error)
+
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Set("id", user.Id)
 	c.Set(assistantUserContextKey, assistantUserContext{
-		AccessLevel:          "L0",
-		InterlocutorAssessed: false,
+		AccessLevel: "L0",
 	})
 
 	result := executeAssistantTool(c, assistantOpenAIToolCall{
@@ -950,8 +978,18 @@ func TestAssistantToolExecutionRechecksServerSideAllowlist(t *testing.T) {
 		},
 	})
 
-	assert.Equal(t, false, result["ok"])
-	assert.Equal(t, "tool_not_allowed", result["status"])
+	assert.Equal(t, true, result["ok"])
+	assert.Equal(t, "public_preview", result["status"])
+	assert.Equal(t, []string{"claude-opus-5", "gpt-5.6-sol"}, result["model_ids"])
+	assert.Equal(t, "public_preview_not_account_entitlement", result["availability_scope"])
+
+	denied := executeAssistantTool(c, assistantOpenAIToolCall{
+		Function: assistantOpenAIToolCallFunction{
+			Name: "get_usage_summary",
+		},
+	})
+	assert.Equal(t, false, denied["ok"])
+	assert.Equal(t, "tool_not_allowed", denied["status"])
 }
 
 func TestAssistantAgentToolCatalogueMatchesAccessLevel(t *testing.T) {
@@ -962,8 +1000,9 @@ func TestAssistantAgentToolCatalogueMatchesAccessLevel(t *testing.T) {
 	}
 	assert.False(t, l0Names[assistantInterlocutorAssessmentTool])
 	assert.True(t, l0Names["get_service_facts"])
+	assert.True(t, l0Names["get_available_models"])
+	assert.True(t, l0Names["get_model_pricing"])
 	assert.True(t, l0Names["prepare_l1_recommendation"])
-	assert.False(t, l0Names["get_model_pricing"])
 	assert.False(t, l0Names["get_plan_offers"])
 	assert.False(t, l0Names["get_admin_server_config"])
 
@@ -1002,7 +1041,7 @@ func TestAssistantAgentToolCatalogueMatchesAccessLevel(t *testing.T) {
 	for _, definition := range admin {
 		adminNames[definition.Function.Name] = true
 	}
-	assert.Len(t, adminNames, len(assistantToolDefinitions())-1)
+	assert.Len(t, adminNames, len(assistantToolDefinitions())-2)
 	assert.True(t, adminNames["prepare_admin_pricing_change"])
 }
 
@@ -1191,6 +1230,23 @@ func TestAssistantCostToolAndResponseContent(t *testing.T) {
 	})
 	assert.True(t, result["ok"].(bool))
 	assert.InDelta(t, 0.003, result["total_cost_usd"], 0.0000001)
+
+	mathResult := executeAssistantTool(nil, assistantOpenAIToolCall{
+		Function: assistantOpenAIToolCallFunction{
+			Name:      "calculate_math",
+			Arguments: `{"expression":"subtotal * (1 - percent(discount)) + sqrt(81)","variables":{"subtotal":125.5,"discount":17.5}}`,
+		},
+	})
+	assert.True(t, mathResult["ok"].(bool))
+	assert.InDelta(t, 112.5375, mathResult["result"], 0.0000001)
+
+	invalidMath := executeAssistantTool(nil, assistantOpenAIToolCall{
+		Function: assistantOpenAIToolCallFunction{
+			Name:      "calculate_math",
+			Arguments: `{"expression":"[1,2,3] | map(# * 2)"}`,
+		},
+	})
+	assert.False(t, invalidMath["ok"].(bool))
 
 	content, err := json.Marshal([]map[string]string{{"type": "output_text", "text": "hello"}})
 	require.NoError(t, err)
