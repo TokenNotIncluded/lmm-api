@@ -31,6 +31,8 @@ import {
 } from '@/components/ui/input-group'
 import { requestAssistantSend } from '@/features/assistant/assistant-events'
 import { redactAssistantMessageForRequest } from '@/features/assistant/assistant-message-safety'
+import { getAssistantPromptValidation } from '@/features/assistant/assistant-prompt-validation'
+import { useStatus } from '@/hooks/use-status'
 import { isConsoleActivated } from '@/lib/console-activation'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -41,12 +43,15 @@ export function ForgeHome() {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const user = useAuthStore((state) => state.auth.user)
+  const { status } = useStatus()
   const [message, setMessage] = useState('')
+  const assistantEnabled = status?.assistant?.enabled !== false
+  const messageInvalid = getAssistantPromptValidation(message).invalid
 
   const submitMessage = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const safeMessage = redactAssistantMessageForRequest(message).content.trim()
-    if (!safeMessage) return
+    if (!safeMessage || messageInvalid || !assistantEnabled) return
 
     if (!user) {
       requestAssistantSend(undefined, safeMessage)
@@ -113,7 +118,9 @@ export function ForgeHome() {
                     variant='default'
                     size='sm'
                     className='h-10 rounded-sm px-3'
-                    disabled={!message.trim()}
+                    disabled={
+                      !message.trim() || messageInvalid || !assistantEnabled
+                    }
                   >
                     {t('Ask AI assistant')}
                     <HugeiconsIcon

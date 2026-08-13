@@ -129,7 +129,11 @@ function makeRouter() {
   })
 }
 
-async function renderHome(user: AuthUser | null) {
+async function renderHome(
+  user: AuthUser | null,
+  assistantEnabled = true,
+  statusPending = false
+) {
   useAuthStore.getState().auth.setUser(user)
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -150,11 +154,13 @@ async function renderHome(user: AuthUser | null) {
       return { data: { success: true, data: '' } }
     }
     if (url === '/api/status') {
+      if (statusPending) return await new Promise(() => undefined)
       return {
         data: {
           success: true,
           data: {
             backend_capabilities: { bounty_public_read: false },
+            assistant: { enabled: assistantEnabled },
           },
         },
       }
@@ -335,6 +341,45 @@ describe('ForgeHome assistant entry', () => {
     assert.equal(rendered.router.state.location.pathname, '/')
 
     unsubscribe()
+    await unmountHome(rendered)
+  })
+
+  test('keeps the homepage input available while status is loading', async () => {
+    const rendered = await renderHome(null, true, true)
+
+    await submitMessage(rendered.container, 'Help me configure the SDK')
+
+    assert.equal(rendered.router.state.location.pathname, '/sign-in')
+    assert.equal(consumeQueuedAssistantRequest()?.autoSend, true)
+
+    await unmountHome(rendered)
+  })
+
+  test('does not queue or navigate for a single punctuation mark', async () => {
+    const opened: string[] = []
+    const unsubscribe = subscribeToAssistantOpen((request) => {
+      opened.push(request.id)
+    })
+    const rendered = await renderHome(null)
+
+    await submitMessage(rendered.container, '.')
+
+    assert.deepEqual(opened, [])
+    assert.equal(rendered.router.state.location.pathname, '/')
+    assert.equal(consumeQueuedAssistantRequest(), undefined)
+
+    unsubscribe()
+    await unmountHome(rendered)
+  })
+
+  test('does not leave a queued message when the assistant is disabled', async () => {
+    const rendered = await renderHome(null, false)
+
+    await submitMessage(rendered.container, 'Help me configure the SDK')
+
+    assert.equal(rendered.router.state.location.pathname, '/')
+    assert.equal(consumeQueuedAssistantRequest(), undefined)
+
     await unmountHome(rendered)
   })
 
