@@ -4942,6 +4942,9 @@ pub fn gemini_response_to_canonical_for_model(
     response: GeminiResponse,
     model: &str,
 ) -> Result<Converted<CanonicalResponse>, RelayConvertError> {
+    if let Some(usage) = response.usage_metadata.as_ref() {
+        validate_gemini_response_usage(usage)?;
+    }
     let candidate = response
         .candidates
         .into_iter()
@@ -4961,6 +4964,13 @@ pub fn gemini_response_to_canonical_for_model(
         },
         loss,
     })
+}
+
+fn validate_gemini_response_usage(usage: &super::GeminiUsage) -> Result<(), RelayConvertError> {
+    if let Some(error) = first_gemini_stream_extra_path("usageMetadata", &usage.extra) {
+        return Err(error);
+    }
+    Ok(())
 }
 
 fn gemini_stream_unknown_field(path: impl Into<String>) -> RelayConvertError {
@@ -5362,6 +5372,9 @@ pub fn canonical_request_to_claude(
 pub fn claude_response_to_canonical(
     response: ClaudeResponse,
 ) -> Result<Converted<CanonicalResponse>, RelayConvertError> {
+    if let Some(usage) = response.usage.as_ref() {
+        validate_claude_response_usage(usage)?;
+    }
     let output = claude_blocks_to_canonical(response.content, Some(&response.model))?;
     Ok(Converted {
         value: CanonicalResponse {
@@ -5374,6 +5387,13 @@ pub fn claude_response_to_canonical(
         },
         loss: LossReport::default(),
     })
+}
+
+fn validate_claude_response_usage(usage: &super::ClaudeUsage) -> Result<(), RelayConvertError> {
+    if let Some(error) = first_claude_stream_extra_path("usage", &usage.extra) {
+        return Err(error);
+    }
+    Ok(())
 }
 
 /// Converts canonical response output to Claude's typed response blocks.

@@ -1205,6 +1205,50 @@ fn openai_chat_response_usage_unknown_fields_are_typed_rejections() {
 }
 
 #[test]
+fn gemini_response_usage_unknown_fields_are_typed_rejections() {
+    let response: GeminiResponse = serde_json::from_value(serde_json::json!({
+        "candidates": [{
+            "content": {"parts": [{"text": "ok"}]}
+        }],
+        "usageMetadata": {"futureUsageField": true}
+    }))
+    .expect("unknown Gemini response usage field is retained by the wire DTO");
+    let error = gemini_response_to_canonical(response)
+        .expect_err("Gemini response conversion must reject unknown usage fields");
+    assert!(matches!(
+        error,
+        RelayConvertError::UnsupportedFeature(detail)
+            if detail.feature == "unknown_field"
+                && detail.path == "usageMetadata.futureUsageField"
+                && detail.source_format == "gemini"
+                && detail.target_format == "provider_neutral_ir"
+    ));
+}
+
+#[test]
+fn claude_response_usage_unknown_fields_are_typed_rejections() {
+    let response: ClaudeResponse = serde_json::from_value(serde_json::json!({
+        "id": "msg-usage",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet",
+        "content": [{"type": "text", "text": "ok"}],
+        "usage": {"futureUsageField": true}
+    }))
+    .expect("unknown Claude response usage field is retained by the wire DTO");
+    let error = claude_response_to_canonical(response)
+        .expect_err("Claude response conversion must reject unknown usage fields");
+    assert!(matches!(
+        error,
+        RelayConvertError::UnsupportedFeature(detail)
+            if detail.feature == "unknown_field"
+                && detail.path == "usage.futureUsageField"
+                && detail.source_format == "claude"
+                && detail.target_format == "provider_neutral_ir"
+    ));
+}
+
+#[test]
 fn responses_incomplete_details_round_trip_to_chat_finish_reasons() {
     for (reason, expected) in [
         ("max_output_tokens", FinishReason::Length),
