@@ -52,7 +52,7 @@ export function AuthenticatedLayout(props: AuthenticatedLayoutProps) {
       <SearchProvider>
         <SidebarProvider
           defaultOpen={defaultOpen}
-          className='console-editorial h-svh min-h-0 flex-col overflow-hidden'
+          className='console-editorial h-dvh min-h-0 flex-col overflow-hidden'
         >
           <SkipToMain />
           <AppHeader

@@ -28,7 +28,7 @@ func SubscriptionRequestCreemPay(c *gin.Context) {
 	var req SubscriptionCreemPayRequest
 
 	// Keep body for debugging consistency (like RequestCreemPay)
-	bodyBytes, err := io.ReadAll(c.Request.Body)
+	bodyBytes, err := common.ReadAllLimit(c.Request.Body, common.GetAnonymousRequestBodyLimitBytes())
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Creem 订阅支付请求读取失败 error=%q", err.Error()))
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "read query error"})

@@ -604,7 +604,7 @@ func readTestResponseBody(body io.ReadCloser, isStream bool) ([]byte, error) {
 	if isStream {
 		return io.ReadAll(io.LimitReader(body, maxStreamLogBytes))
 	}
-	return io.ReadAll(body)
+	return common.ReadAllLimit(body, common.ResponseBodyLimit())
 }
 
 func detectErrorFromTestResponseBody(respBody []byte) error {

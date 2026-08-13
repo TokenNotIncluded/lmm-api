@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/syncx"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
@@ -41,16 +41,24 @@ const (
 	assistantMathExpressionMaxBytes       = 512
 	assistantMathVariablesMax             = 32
 	assistantConversationTitleMaxRunes    = 60
+	assistantUpstreamResponseMaxBytes     = 256 << 10
+	assistantToolResultMaxBytes           = 64 << 10
+	assistantAgentContextMaxBytes         = 512 << 10
+	assistantAgentMaxConcurrent           = 16
 )
 
 var (
 	assistantMathExpressionPattern = regexp.MustCompile(`^[0-9A-Za-z_+\-*/%^().,\s]+$`)
 	assistantMathVariablePattern   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,31}$`)
+	assistantAgentLimiter          = syncx.NewLimiter(assistantAgentMaxConcurrent)
 )
 
 type assistantL1RecommendationDraft struct {
-	UserStatement  string `json:"user_statement"`
-	Recommendation string `json:"recommendation"`
+	UserStatement    string `json:"user_statement"`
+	Recommendation   string `json:"recommendation"`
+	PresetId         string `json:"preset_id,omitempty"`
+	PresetGeneration int64  `json:"preset_generation,omitempty"`
+	PresetVersion    string `json:"preset_version,omitempty"`
 }
 
 type assistantOpenAIToolDefinition struct {
@@ -90,7 +98,7 @@ type assistantOpenAIResponseMessage struct {
 }
 
 func assistantToolDefinitions() []assistantOpenAIToolDefinition {
-	return []assistantOpenAIToolDefinition{
+	definitions := []assistantOpenAIToolDefinition{
 		{
 			Type: "function",
 			Function: assistantOpenAIToolFunction{
@@ -267,7 +275,7 @@ func assistantToolDefinitions() []assistantOpenAIToolDefinition {
 			Type: "function",
 			Function: assistantOpenAIToolFunction{
 				Name:        "prepare_l1_recommendation",
-				Description: "Prepare an administrator recommendation for a concrete L0 user after a substantive onboarding conversation. This does not submit or approve anything; the user must explicitly confirm the draft in the UI.",
+				Description: "Prepare a new or revised draft of the signed-in L0 user's one shared administrator recommendation after a substantive conversation. For an edit, use the current letter returned by get_l1_recommendation and the full conversation. Never use this tool to remove a letter. This does not submit, update, delete, or approve anything; the user must explicitly confirm the draft in the UI.",
 				Parameters: objectSchema(map[string]any{
 					"user_statement": map[string]any{"type": "string", "minLength": 5, "maxLength": 2000},
 					"recommendation": map[string]any{"type": "string", "minLength": 20, "maxLength": 2000},
@@ -359,6 +367,7 @@ func assistantToolDefinitions() []assistantOpenAIToolDefinition {
 			},
 		},
 	}
+	return append(definitions, assistantSkillTools()...)
 }
 
 // assistantToolDefinitionsForContext keeps the model's tool catalogue aligned
@@ -395,6 +404,9 @@ func assistantToolAllowedForContext(name string, userContext assistantUserContex
 			name != "get_admin_channels" &&
 			name != "prepare_admin_channel_change" &&
 			name != "prepare_admin_pricing_change"
+	}
+	if isAssistantSkillTool(name) {
+		return true
 	}
 	switch name {
 	case "get_service_facts",
@@ -474,6 +486,66 @@ func assistantToolChoiceForContext(userContext assistantUserContext) any {
 	return "auto"
 }
 
+func assistantRecommendationWorkflowRequired(userContext assistantUserContext) bool {
+	return userContext.Intent == model.AssistantIntentRecommendation &&
+		userContext.RecommendationAction != assistantRecommendationActionNone
+}
+
+func assistantRecommendationWorkflowMinSteps(userContext assistantUserContext) int {
+	if !assistantRecommendationWorkflowRequired(userContext) {
+		return 0
+	}
+	steps := 2 // read the current letter, then produce a final answer
+	if userContext.RecommendationAction == assistantRecommendationActionRevise &&
+		!userContext.DeveloperAccessGranted &&
+		strings.EqualFold(strings.TrimSpace(userContext.AccessLevel), "L0") {
+		steps++ // prepare the confirmation-gated revision draft
+	}
+	if userContext.ConversationTitleNeeded {
+		steps++
+	}
+	return steps
+}
+
+func assistantToolChoiceForAgentStep(userContext assistantUserContext, calledTools map[string]bool, successfulTools map[string]bool) any {
+	choice := assistantToolChoiceForContext(userContext)
+	if userContext.ConversationTitleNeeded {
+		return choice
+	}
+	if !assistantRecommendationWorkflowRequired(userContext) {
+		if forcedName := assistantNamedToolChoiceName(choice); forcedName != "" && calledTools[forcedName] {
+			return "auto"
+		}
+		return choice
+	}
+
+	if !calledTools["get_l1_recommendation"] {
+		return assistantNamedToolChoice("get_l1_recommendation")
+	}
+	if !successfulTools["get_l1_recommendation"] {
+		return "none"
+	}
+	if userContext.RecommendationAction == assistantRecommendationActionRemove {
+		return "none"
+	}
+	if userContext.DeveloperAccessGranted || !strings.EqualFold(strings.TrimSpace(userContext.AccessLevel), "L0") {
+		return "none"
+	}
+	if !successfulTools["prepare_l1_recommendation"] {
+		return assistantNamedToolChoice("prepare_l1_recommendation")
+	}
+	return "none"
+}
+
+func assistantNamedToolChoice(name string) any {
+	return map[string]any{
+		"type": "function",
+		"function": map[string]any{
+			"name": strings.TrimSpace(name),
+		},
+	}
+}
+
 func assistantNamedToolChoiceName(choice any) string {
 	object, ok := choice.(map[string]any)
 	if !ok {
@@ -532,7 +604,8 @@ func setAssistantRelayRequest(c *gin.Context, request assistantOpenAIRequest) er
 type assistantRelayRecorder struct {
 	gin.ResponseWriter
 	header      http.Header
-	body        bytes.Buffer
+	body        *common.LimitBuffer
+	writeErr    error
 	status      int
 	wroteHeader bool
 }
@@ -541,6 +614,7 @@ func newAssistantRelayRecorder(writer gin.ResponseWriter) *assistantRelayRecorde
 	return &assistantRelayRecorder{
 		ResponseWriter: writer,
 		header:         make(http.Header),
+		body:           common.NewLimitBuffer(assistantUpstreamResponseMaxBytes),
 	}
 }
 
@@ -564,12 +638,28 @@ func (r *assistantRelayRecorder) WriteHeaderNow() {
 
 func (r *assistantRelayRecorder) Write(data []byte) (int, error) {
 	r.WriteHeaderNow()
-	return r.body.Write(data)
+	if r.writeErr != nil {
+		return len(data), nil
+	}
+	written, err := r.body.Write(data)
+	if err != nil {
+		r.writeErr = err
+		return len(data), nil
+	}
+	return written, nil
 }
 
 func (r *assistantRelayRecorder) WriteString(data string) (int, error) {
 	r.WriteHeaderNow()
-	return r.body.WriteString(data)
+	if r.writeErr != nil {
+		return len(data), nil
+	}
+	written, err := r.body.WriteString(data)
+	if err != nil {
+		r.writeErr = err
+		return len(data), nil
+	}
+	return written, nil
 }
 
 func (r *assistantRelayRecorder) Flush() {
@@ -609,7 +699,10 @@ func relayAssistantTurn(c *gin.Context, request assistantOpenAIRequest, rootRequ
 	}()
 
 	Relay(c, types.RelayFormatOpenAI)
-	return recorder.Status(), append([]byte(nil), recorder.body.Bytes()...), nil
+	if recorder.writeErr != nil {
+		return recorder.Status(), nil, recorder.writeErr
+	}
+	return recorder.Status(), recorder.body.Bytes(), nil
 }
 
 func assistantRetryableUpstreamStatus(status int) bool {
@@ -673,7 +766,27 @@ func relayAssistantTurnWithRetry(c *gin.Context, request assistantOpenAIRequest,
 	return status, body, nil
 }
 
+var relayAssistantAgentTurn = relayAssistantTurnWithRetry
+
+func assistantContextBytes(messages []assistantOpenAIMessage) int {
+	total := 0
+	for _, message := range messages {
+		total += len(message.Role) + len(message.Content)
+		for _, call := range message.ToolCalls {
+			total += len(call.ID) + len(call.Type) + len(call.Function.Name) + len(call.Function.Arguments)
+		}
+	}
+	return total
+}
+
 func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conversation []assistantOpenAIMessage) {
+	release, acquired := assistantAgentLimiter.TryAcquire()
+	if !acquired {
+		writeAssistantError(c, http.StatusServiceUnavailable, "ASSISTANT_BUSY", errors.New("AI assistant is busy; retry shortly"))
+		return
+	}
+	defer release()
+
 	timeout := time.Duration(settings.TimeoutSeconds) * time.Second
 	if timeout < 5*time.Second {
 		timeout = assistantAgentDefaultTimeout
@@ -696,22 +809,31 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 	messages := make([]assistantOpenAIMessage, 1, len(conversation)+1)
 	messages[0] = assistantOpenAIMessage{Role: "system", Content: buildAssistantSystemPrompt(settings, assistantUserContextFromGin(c))}
 	messages = append(messages, conversation...)
+	if assistantContextBytes(messages) > assistantAgentContextMaxBytes {
+		writeAssistantError(c, http.StatusRequestEntityTooLarge, "ASSISTANT_CONTEXT_TOO_LARGE", errors.New("assistant context exceeded its byte budget"))
+		return
+	}
 	maxSteps := settings.MaxSteps
 	if maxSteps < 1 {
 		maxSteps = 1
 	}
 	forceL0Assessment := assistantL0InterlocutorAssessmentRequired(assistantUserContextFromGin(c))
+	forceRecommendationWorkflow := assistantRecommendationWorkflowRequired(assistantUserContextFromGin(c))
 	if forceL0Assessment && maxSteps < 2 {
 		maxSteps = 2
 	}
+	if minimum := assistantRecommendationWorkflowMinSteps(assistantUserContextFromGin(c)); maxSteps < minimum {
+		maxSteps = minimum
+	}
 	if !settings.AgentLoopEnabled {
-		if !forceL0Assessment {
+		if !forceL0Assessment && !forceRecommendationWorkflow {
 			maxSteps = 1
 		}
 	}
 	cacheKey := c.GetString("assistant_cache_key")
 	usedCacheSensitiveTool := false
 	calledTools := make(map[string]bool)
+	successfulTools := make(map[string]bool)
 
 	for step := 0; step < maxSteps; step++ {
 		request := assistantOpenAIRequest{
@@ -723,16 +845,13 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 		}
 		// Reserve the last turn for a final natural-language answer. This
 		// makes MaxSteps a hard bound while ensuring a tool call can finish.
-		if (settings.AgentLoopEnabled || assistantL0InterlocutorAssessmentRequired(assistantUserContextFromGin(c))) && step < maxSteps-1 {
+		if (settings.AgentLoopEnabled || forceL0Assessment || forceRecommendationWorkflow) && step < maxSteps-1 {
 			userContext := assistantUserContextFromGin(c)
 			request.Tools = assistantToolDefinitionsForContext(userContext)
-			request.ToolChoice = assistantToolChoiceForContext(userContext)
-			if forcedName := assistantNamedToolChoiceName(request.ToolChoice); forcedName != "" && calledTools[forcedName] {
-				request.ToolChoice = "auto"
-			}
+			request.ToolChoice = assistantToolChoiceForAgentStep(userContext, calledTools, successfulTools)
 		}
 
-		status, body, err := relayAssistantTurnWithRetry(c, request, rootRequestID, step)
+		status, body, err := relayAssistantAgentTurn(c, request, rootRequestID, step)
 		if err != nil {
 			writeAssistantError(c, http.StatusInternalServerError, "ASSISTANT_REQUEST_BUILD_FAILED", errors.New("failed to build assistant request"))
 			return
@@ -748,6 +867,13 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 			return
 		}
 		message := response.Choices[0].Message
+		if forceRecommendationWorkflow {
+			requiredTool := assistantNamedToolChoiceName(request.ToolChoice)
+			if requiredTool != "" && (len(message.ToolCalls) != 1 || strings.TrimSpace(message.ToolCalls[0].Function.Name) != requiredTool) {
+				writeAssistantError(c, http.StatusBadGateway, "ASSISTANT_REQUIRED_TOOL_MISSING", errors.New("assistant did not follow the required recommendation workflow"))
+				return
+			}
+		}
 		if len(message.ToolCalls) == 0 {
 			normalizedBody, normalizeErr := normalizeAssistantClientResponse(c, body)
 			if normalizeErr != nil {
@@ -761,7 +887,7 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 			c.Data(status, "application/json; charset=utf-8", normalizedBody)
 			return
 		}
-		if !settings.AgentLoopEnabled || step >= maxSteps-1 {
+		if (!settings.AgentLoopEnabled && !forceL0Assessment && !forceRecommendationWorkflow) || step >= maxSteps-1 {
 			writeAssistantError(c, http.StatusBadGateway, "ASSISTANT_AGENT_MAX_STEPS", errors.New("assistant agent reached its step limit before producing a final answer"))
 			return
 		}
@@ -785,9 +911,12 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 			if c.IsAborted() {
 				return
 			}
-			resultJSON, marshalErr := json.Marshal(result)
+			resultJSON, marshalErr := common.MarshalLimit(result, assistantToolResultMaxBytes)
+			if ok, _ := result["ok"].(bool); ok {
+				successfulTools[toolName] = true
+			}
 			if marshalErr != nil {
-				resultJSON = []byte(`{"ok":false,"error":"failed to encode tool result"}`)
+				resultJSON = []byte(`{"ok":false,"error":"tool result exceeded its byte budget"}`)
 			}
 			callID := strings.TrimSpace(call.ID)
 			if callID == "" {
@@ -798,6 +927,10 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 				Content:    string(resultJSON),
 				ToolCallID: callID,
 			})
+		}
+		if assistantContextBytes(messages) > assistantAgentContextMaxBytes {
+			writeAssistantError(c, http.StatusBadGateway, "ASSISTANT_CONTEXT_TOO_LARGE", errors.New("assistant tool context exceeded its byte budget"))
+			return
 		}
 	}
 
@@ -947,6 +1080,9 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 	if err := json.Unmarshal([]byte(arguments), &input); err != nil {
 		return map[string]any{"ok": false, "error": "tool arguments must be valid JSON"}
 	}
+	if result, handled := runSkillTool(name, actorUserID, input); handled {
+		return result
+	}
 
 	switch name {
 	case assistantInterlocutorAssessmentTool:
@@ -978,7 +1114,7 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 	case "get_account_access":
 		return executeAssistantAccountTool(actorUserID)
 	case "get_l1_recommendation":
-		return executeAssistantL1RecommendationStateTool(actorUserID)
+		return executeAssistantL1RecommendationStateTool(c, actorUserID)
 	case "get_available_models":
 		return executeAssistantModelsTool(actorUserID)
 	case "get_model_pricing":
@@ -1030,6 +1166,14 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 	case "get_setup_guide":
 		return executeAssistantSetupTool(actorUserID, input)
 	case "prepare_l1_recommendation":
+		if assistantUserContextFromGin(c).RecommendationAction == assistantRecommendationActionRemove {
+			return map[string]any{
+				"ok":      false,
+				"status":  "removal_requires_user_ui",
+				"error":   "AI cannot remove or replace a recommendation for a removal request",
+				"message": "Tell the user to clear the visible Recommendation letter field and choose Save changes in the existing UI.",
+			}
+		}
 		return executeAssistantL1RecommendationTool(c, actorUserID, input)
 	case "request_create_key":
 		if c == nil {
@@ -1095,7 +1239,7 @@ func executeAssistantConversationTitleTool(c *gin.Context, input map[string]any)
 	return map[string]any{"ok": true, "title": title}
 }
 
-func executeAssistantL1RecommendationStateTool(userID int) map[string]any {
+func executeAssistantL1RecommendationStateTool(c *gin.Context, userID int) map[string]any {
 	if userID <= 0 {
 		return map[string]any{"ok": false, "error": "signed-in account is unavailable"}
 	}
@@ -1104,14 +1248,18 @@ func executeAssistantL1RecommendationStateTool(userID int) map[string]any {
 		return map[string]any{"ok": false, "error": "the current recommendation could not be loaded"}
 	}
 	if request == nil {
-		return map[string]any{
+		result := map[string]any{
 			"ok":             true,
 			"status":         "none",
 			"recommendation": "",
 			"next_step":      "Use the conversation context to prepare the user's one L1 recommendation when requested.",
 		}
+		if assistantUserContextFromGin(c).RecommendationAction == assistantRecommendationActionRemove {
+			result["next_step"] = "Tell the user there is no recommendation letter to remove. Do not call prepare_l1_recommendation."
+		}
+		return result
 	}
-	return map[string]any{
+	result := map[string]any{
 		"ok":                      true,
 		"status":                  request.Status,
 		"source":                  request.Source,
@@ -1121,6 +1269,11 @@ func executeAssistantL1RecommendationStateTool(userID int) map[string]any {
 		"is_single_shared_letter": true,
 		"next_step":               "For an AI edit, prepare a revised draft of this same letter and require UI confirmation before replacing it.",
 	}
+	if assistantUserContextFromGin(c).RecommendationAction == assistantRecommendationActionRemove {
+		result["next_step"] = "Do not call prepare_l1_recommendation and do not change the administrator queue. Tell the user to clear the visible Recommendation letter field in the existing UI and choose Save changes; that direct user action remains explicitly confirmed."
+		result["removal_requires_user_ui"] = true
+	}
+	return result
 }
 
 func executeAssistantInterlocutorAssessmentTool(c *gin.Context, input map[string]any) map[string]any {
@@ -1297,10 +1450,16 @@ func executeAssistantL1RecommendationTool(c *gin.Context, userID int, input map[
 	if len([]rune(recommendation)) < minDeveloperAccessRecommendationRunes || len([]rune(recommendation)) > maxDeveloperAccessDraftRunes {
 		return map[string]any{"ok": false, "status": "recommendation_invalid", "error": "AI recommendation must contain 20 to 2000 characters"}
 	}
-	payload, err := json.Marshal(assistantL1RecommendationDraft{
+	draft := assistantL1RecommendationDraft{
 		UserStatement:  statement,
 		Recommendation: recommendation,
-	})
+	}
+	if attribution, ok := promptPresetRef(c); ok {
+		draft.PresetId = attribution.PresetId
+		draft.PresetGeneration = attribution.Generation
+		draft.PresetVersion = attribution.Version
+	}
+	payload, err := json.Marshal(draft)
 	if err != nil {
 		return map[string]any{"ok": false, "error": "AI recommendation could not be prepared"}
 	}

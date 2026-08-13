@@ -68,6 +68,55 @@ func TestAssistantAgentForcesTaskToolsBeforeAnswering(t *testing.T) {
 	})))
 }
 
+func TestAssistantRecommendationEditWorkflowToolChoices(t *testing.T) {
+	assert.Equal(t, assistantRecommendationActionRevise, classifyAssistantRecommendationAction("请帮我重写这封推荐信"))
+	assert.Equal(t, assistantRecommendationActionRevise, classifyAssistantRecommendationAction("修改我的 L1 推荐信"))
+	assert.Equal(t, assistantRecommendationActionRevise, classifyAssistantRecommendationAction("把现有推荐信润色一下"))
+	assert.Equal(t, assistantRecommendationActionRevise, classifyAssistantRecommendationAction("Please polish my recommendation letter"))
+	assert.Equal(t, assistantRecommendationActionRemove, classifyAssistantRecommendationAction("删除我的推荐信"))
+	assert.Equal(t, assistantRecommendationActionRemove, classifyAssistantRecommendationAction("清空我的 L1 推荐信"))
+	assert.Equal(t, assistantRecommendationActionRemove, classifyAssistantRecommendationAction("Clear my L1 recommendation"))
+	assert.Equal(t, assistantRecommendationActionNone, classifyAssistantRecommendationAction("请显示我的推荐信"))
+	assert.Equal(t, assistantRecommendationActionNone, classifyAssistantRecommendationAction("管理员修改了我的推荐信"))
+	assert.Equal(t, assistantRecommendationActionNone, classifyAssistantRecommendationAction("不要删除我的推荐信"))
+	assert.Equal(t, assistantRecommendationActionNone, classifyAssistantRecommendationAction("Please edit my profile"))
+
+	revise := assistantUserContext{
+		Intent:               model.AssistantIntentRecommendation,
+		AccessLevel:          "L0",
+		RecommendationAction: assistantRecommendationActionRevise,
+	}
+	assert.Equal(t, "get_l1_recommendation", assistantNamedToolChoiceName(assistantToolChoiceForAgentStep(revise, nil, nil)))
+	assert.Equal(t, "prepare_l1_recommendation", assistantNamedToolChoiceName(assistantToolChoiceForAgentStep(
+		revise,
+		map[string]bool{"get_l1_recommendation": true},
+		map[string]bool{"get_l1_recommendation": true},
+	)))
+	assert.Equal(t, "none", assistantToolChoiceForAgentStep(
+		revise,
+		map[string]bool{"get_l1_recommendation": true, "prepare_l1_recommendation": true},
+		map[string]bool{"get_l1_recommendation": true, "prepare_l1_recommendation": true},
+	))
+	assert.Equal(t, 3, assistantRecommendationWorkflowMinSteps(revise))
+
+	remove := revise
+	remove.RecommendationAction = assistantRecommendationActionRemove
+	assert.Equal(t, "none", assistantToolChoiceForAgentStep(
+		remove,
+		map[string]bool{"get_l1_recommendation": true},
+		map[string]bool{"get_l1_recommendation": true},
+	))
+	assert.Equal(t, 2, assistantRecommendationWorkflowMinSteps(remove))
+
+	revise.ConversationTitleNeeded = true
+	assert.Equal(t, "set_conversation_title", assistantNamedToolChoiceName(assistantToolChoiceForAgentStep(revise, nil, nil)))
+	assert.Equal(t, 4, assistantRecommendationWorkflowMinSteps(revise))
+
+	encoded, err := json.Marshal(revise)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), "revise")
+}
+
 func TestAssistantCustomerProfileUsesAuditableSignals(t *testing.T) {
 	tests := []struct {
 		name    string

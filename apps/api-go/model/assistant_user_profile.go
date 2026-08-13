@@ -27,6 +27,8 @@ const (
 	AssistantProfileSupport      = "support_seeking"
 	AssistantProfileL0Applicant  = "l0_applicant"
 	AssistantProfileCustom       = "custom"
+	AssistantProfileSourceAI     = "assistant"
+	AssistantProfileSourceAdmin  = "administrator"
 
 	AssistantUserProfileMaxStrategyRunes = 4000
 	AssistantUserProfileMaxTags          = 12
@@ -50,6 +52,7 @@ type AssistantUserProfile struct {
 	ProfileKey string `json:"-" gorm:"type:varchar(64);not null;default:''"`
 	TagsJSON   string `json:"-" gorm:"type:text;not null;default:'[]'"`
 	Strategy   string `json:"-" gorm:"type:text;not null;default:''"`
+	Source     string `json:"-" gorm:"type:varchar(24);not null;default:administrator"`
 	Enabled    bool   `json:"-" gorm:"not null;default:false"`
 	UpdatedBy  int    `json:"-" gorm:"not null;default:0;index"`
 	CreatedAt  int64  `json:"-" gorm:"not null"`
@@ -65,7 +68,16 @@ type AssistantUserProfileView struct {
 	Tags       []string `json:"tags"`
 	Strategy   string   `json:"strategy"`
 	Enabled    bool     `json:"enabled"`
+	Source     string   `json:"source"`
 	UpdatedAt  int64    `json:"updated_at"`
+}
+
+type ProfileInput struct {
+	Key      string
+	Tags     []string
+	Strategy string
+	Source   string
+	Enabled  bool
 }
 
 func (AssistantUserProfile) TableName() string { return "assistant_user_profiles" }
@@ -179,6 +191,7 @@ func AssistantUserProfileViewOf(profile *AssistantUserProfile) AssistantUserProf
 		Tags:       AssistantUserProfileTags(profile),
 		Strategy:   strategy,
 		Enabled:    profile.Enabled,
+		Source:     profile.Source,
 		UpdatedAt:  profile.UpdatedAt,
 	}
 }
@@ -199,21 +212,31 @@ func GetAssistantUserProfile(userID int) (*AssistantUserProfile, error) {
 }
 
 func UpsertAssistantUserProfile(userID, updatedBy int, profileKey string, tags []string, strategy string, enabled bool) (*AssistantUserProfile, error) {
+	return SaveProfile(userID, updatedBy, ProfileInput{
+		Key: profileKey, Tags: tags, Strategy: strategy,
+		Source: AssistantProfileSourceAdmin, Enabled: enabled,
+	})
+}
+
+func SaveProfile(userID, updatedBy int, input ProfileInput) (*AssistantUserProfile, error) {
 	if userID <= 0 || updatedBy <= 0 {
 		return nil, gorm.ErrInvalidData
 	}
-	profileKey, err := NormalizeAssistantProfileKey(profileKey)
+	if input.Source != AssistantProfileSourceAI && input.Source != AssistantProfileSourceAdmin {
+		return nil, ErrAssistantProfileKey
+	}
+	profileKey, err := NormalizeAssistantProfileKey(input.Key)
 	if err != nil {
 		return nil, err
 	}
-	strategy, err = NormalizeAssistantProfileStrategy(strategy)
+	strategy, err := NormalizeAssistantProfileStrategy(input.Strategy)
 	if err != nil {
 		return nil, err
 	}
 	if profileKey == "" {
-		enabled = false
+		input.Enabled = false
 	}
-	tags, err = NormalizeAssistantProfileTags(tags)
+	tags, err := NormalizeAssistantProfileTags(input.Tags)
 	if err != nil {
 		return nil, err
 	}
@@ -227,7 +250,8 @@ func UpsertAssistantUserProfile(userID, updatedBy int, profileKey string, tags [
 		ProfileKey: profileKey,
 		TagsJSON:   string(tagsJSON),
 		Strategy:   strategy,
-		Enabled:    enabled,
+		Source:     input.Source,
+		Enabled:    input.Enabled,
 		UpdatedBy:  updatedBy,
 		CreatedAt:  now,
 		UpdatedAt:  now,
@@ -235,7 +259,7 @@ func UpsertAssistantUserProfile(userID, updatedBy int, profileKey string, tags [
 	err = DB.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "user_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{
-			"profile_key", "tags_json", "strategy", "enabled", "updated_by", "updated_at",
+			"profile_key", "tags_json", "strategy", "source", "enabled", "updated_by", "updated_at",
 		}),
 	}).Create(row).Error
 	if err != nil {

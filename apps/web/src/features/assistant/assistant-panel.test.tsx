@@ -104,6 +104,23 @@ const assistantStatus = {
   },
 }
 
+const assistantPreConversationPresets = {
+  generation: 1_786_500_000,
+  version: 'generated-v1',
+  presets: [
+    {
+      id: 'generated_support',
+      label: 'Talk to support',
+      prompt: 'Please connect me with human support.',
+    },
+    {
+      id: 'generated_setup',
+      label: 'Configure my client',
+      prompt: 'Configure my client with a currently available model.',
+    },
+  ],
+}
+
 async function flushEffects() {
   await new Promise((resolve) => setTimeout(resolve, 25))
 }
@@ -121,7 +138,7 @@ async function waitForCondition(
 
 async function renderPanel(
   initialPreset?: 'api-key' | 'human' | 'models' | 'onboarding' | 'plan',
-  mode: 'mobile' | 'rail' = 'mobile',
+  mode: 'mobile' | 'page' | 'rail' = 'mobile',
   user: AuthUser | null = null,
   handoff?: {
     initialMessage: string
@@ -399,6 +416,66 @@ describe('AssistantPanel', () => {
     } finally {
       await act(async () => rendered.root.unmount())
       rendered.queryClient.clear()
+    }
+  })
+
+  test('keeps restricted page and mobile composers compact without changing preset content', async () => {
+    api.get = (async (url: string) => {
+      if (url === '/api/assistant/pre-conversation-presets') {
+        return {
+          data: { success: true, data: assistantPreConversationPresets },
+        }
+      }
+      assert.equal(url, '/api/assistant/status')
+      return {
+        data: {
+          success: true,
+          data: { ...assistantStatus, developer_access_granted: false },
+        },
+      }
+    }) as typeof api.get
+
+    for (const mode of ['page', 'mobile'] as const) {
+      const rendered = await renderPanel(undefined, mode)
+      try {
+        const presets = document.querySelector<HTMLElement>(
+          '[data-testid="assistant-preset-prompts"]'
+        )
+        assert.ok(presets)
+        assert.match(presets.className, /flex-nowrap/)
+        assert.match(presets.className, /overflow-x-auto/)
+        assert.match(presets.className, /sm:flex-wrap/)
+        assert.ok(findButton('Talk to support'))
+        assert.match(document.body.textContent ?? '', /Configure my client/)
+
+        const composerFooter = document.querySelector<HTMLElement>(
+          '[data-testid="assistant-composer-footer"]'
+        )
+        assert.ok(composerFooter)
+        assert.match(composerFooter.className, /pb-\[max\(0\.5rem/)
+
+        const promptForm = document.querySelector<HTMLFormElement>(
+          '[data-testid="assistant-prompt-form"]'
+        )
+        const promptShell = promptForm?.querySelector<HTMLElement>(
+          '[data-slot="input-group"]'
+        )
+        const textarea = promptShell?.querySelector<HTMLTextAreaElement>(
+          '[data-slot="input-group-control"]'
+        )
+        assert.ok(promptShell)
+        assert.ok(textarea)
+        assert.match(promptShell.className, /assistant-prompt-input/)
+        assert.match(promptShell.className, /rounded-xl/)
+        assert.match(textarea.className, /min-h-10/)
+        assert.doesNotMatch(
+          document.body.textContent ?? '',
+          /charged to the super administrator account, not your wallet/
+        )
+      } finally {
+        await act(async () => rendered.root.unmount())
+        rendered.queryClient.clear()
+      }
     }
   })
 
@@ -967,6 +1044,11 @@ describe('AssistantPanel', () => {
       if (url === '/api/user/developer-access/request') {
         return { data: { success: true, data: null } }
       }
+      if (url === '/api/assistant/pre-conversation-presets') {
+        return {
+          data: { success: true, data: assistantPreConversationPresets },
+        }
+      }
       throw new Error(`Unexpected GET ${url}`)
     }) as typeof api.get
 
@@ -1003,7 +1085,7 @@ describe('AssistantPanel', () => {
       )
       assert.throws(() => findButton('Which option is the best value?'))
       assert.throws(() => findButton('How is request cost calculated?'))
-      assert.ok(findButton('I need human support'))
+      assert.ok(findButton('Talk to support'))
       assert.throws(() =>
         findButton('How do I set up Claude Code or CC Switch?')
       )
@@ -1194,7 +1276,13 @@ describe('AssistantPanel', () => {
         document.body.textContent ?? '',
         /Funded by the super administrator/
       )
-      assert.match(
+      assert.equal(
+        (document.body.textContent ?? '').match(
+          /Funded by the super administrator/g
+        )?.length,
+        1
+      )
+      assert.doesNotMatch(
         document.body.textContent ?? '',
         /charged to the super administrator account, not your wallet/
       )
@@ -1863,6 +1951,10 @@ describe('AssistantPanel', () => {
     )
     assert.ok(textarea)
     assert.match(
+      document.body.textContent ?? '',
+      /Funded by the super administrator/
+    )
+    assert.doesNotMatch(
       document.body.textContent ?? '',
       /AI customer-service token usage is charged to the super administrator account, not your wallet\./
     )

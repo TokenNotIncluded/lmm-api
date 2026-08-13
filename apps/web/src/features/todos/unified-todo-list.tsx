@@ -85,7 +85,10 @@ export function UnifiedTodoList() {
       })
       return
     }
-    if (item.category === 'security_incident') {
+    if (
+      item.category === 'security_incident' ||
+      item.category === 'developer_access'
+    ) {
       const username = detailString(item, 'username')
       if (username) {
         await navigate({
@@ -122,7 +125,7 @@ export function UnifiedTodoList() {
 
   return (
     <section aria-busy={query.isLoading}>
-      <div className='border-border flex flex-wrap items-center gap-x-6 gap-y-2 border-b pb-3'>
+      <div className='border-border flex flex-wrap items-center gap-x-8 gap-y-3 border-b pb-4'>
         {visibleCategories.map((key) => {
           const summary = categories.find((item) => item.key === key)
           const unread =
@@ -173,19 +176,26 @@ export function UnifiedTodoList() {
         <div>
           {query.data.items.map((item) => {
             let participant = detailString(item, 'participant_username')
-            if (!participant && item.category === 'security_incident') {
+            if (
+              !participant &&
+              (item.category === 'security_incident' ||
+                item.category === 'developer_access')
+            ) {
               participant = detailString(item, 'username')
             }
+            const applicantId = detailNumber(item, 'user_id')
+            const applicantEmail = detailString(item, 'email')
             const title = t(ITEM_LABELS[item.title] ?? 'Notification')
             const canOpen =
               Boolean(detailNumber(item, 'project_id')) ||
-              (item.category === 'security_incident' &&
+              ((item.category === 'security_incident' ||
+                item.category === 'developer_access') &&
                 Boolean(detailString(item, 'username')))
             return (
               <button
                 key={item.id}
                 type='button'
-                className='border-border hover:bg-muted/30 flex w-full items-center gap-4 border-b py-5 text-left transition-colors sm:px-2'
+                className='border-border hover:text-foreground flex w-full items-start gap-4 border-b py-7 text-left transition-colors sm:items-center'
                 onClick={() => void openItem(item)}
                 disabled={markOne.isPending && !item.read}
               >
@@ -204,13 +214,23 @@ export function UnifiedTodoList() {
                         @{participant}
                       </span>
                     ) : null}
+                    {applicantId ? (
+                      <span className='text-muted-foreground text-xs'>
+                        {t('User ID')} {applicantId}
+                      </span>
+                    ) : null}
                   </span>
+                  {applicantEmail ? (
+                    <span className='text-muted-foreground mt-0.5 block truncate text-xs'>
+                      {applicantEmail}
+                    </span>
+                  ) : null}
                   <span className='text-muted-foreground mt-1 block truncate text-sm'>
                     {item.summary}
                   </span>
                 </span>
                 <time
-                  className='text-muted-foreground shrink-0 text-xs'
+                  className='text-muted-foreground shrink-0 pt-0.5 text-xs sm:pt-0'
                   dateTime={new Date(item.updated_at * 1000).toISOString()}
                   title={formatTimestampToDate(item.updated_at)}
                 >

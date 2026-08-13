@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"sort"
 	"strings"
@@ -251,7 +250,7 @@ func updateSunoTasks(ctx context.Context, channelId int, taskIds []string, taskM
 		return fmt.Errorf("Get Task status code: %d", resp.StatusCode)
 	}
 	defer resp.Body.Close()
-	responseBody, err := io.ReadAll(resp.Body)
+	responseBody, err := common.ReadResponseBody(resp)
 	if err != nil {
 		common.SysLog(fmt.Sprintf("Get Suno Task parse body error: %v", err))
 		return err
@@ -467,7 +466,7 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		return fmt.Errorf("fetchTask failed for task %s: %w", taskId, err)
 	}
 	defer resp.Body.Close()
-	responseBody, err := io.ReadAll(resp.Body)
+	responseBody, err := common.ReadResponseBody(resp)
 	if err != nil {
 		return fmt.Errorf("readAll failed for task %s: %w", taskId, err)
 	}

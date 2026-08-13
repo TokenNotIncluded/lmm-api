@@ -161,6 +161,12 @@ describe('AssistantLeadsPanel', () => {
             data: [
               { intent: 'client_setup', count: 4 },
               { intent: 'human_support', count: 2 },
+              { intent: 'math', count: 3 },
+              { intent: 'recommendation', count: 5 },
+              { intent: 'usage', count: 6 },
+              { intent: 'models', count: 7 },
+              { intent: 'invitation', count: 8 },
+              { intent: 'other', count: 1 },
             ],
           },
         }
@@ -172,6 +178,7 @@ describe('AssistantLeadsPanel', () => {
             data: [
               { profile: 'guided_buyer', count: 3 },
               { profile: 'normal_user', count: 1 },
+              { profile: 'unknown', count: 2 },
             ],
           },
         }
@@ -284,8 +291,15 @@ describe('AssistantLeadsPanel', () => {
       findButton('Insights and AI cost').click()
       await flushQueries()
     })
-    assert.match(container.textContent ?? '', /6 questions in 30 days/)
-    assert.match(container.textContent ?? '', /4 profile signals in 30 days/)
+    assert.match(container.textContent ?? '', /36 questions in 30 days/)
+    assert.match(container.textContent ?? '', /6 profile signals in 30 days/)
+    assert.match(container.textContent ?? '', /Math calculation: 3/)
+    assert.match(container.textContent ?? '', /Recommendation letter: 5/)
+    assert.match(container.textContent ?? '', /Usage: 6/)
+    assert.match(container.textContent ?? '', /Models: 7/)
+    assert.match(container.textContent ?? '', /Invitation rewards: 8/)
+    assert.match(container.textContent ?? '', /Other questions: 1/)
+    assert.match(container.textContent ?? '', /Insufficient signals: 2/)
     assert.match(container.textContent ?? '', /Guided buyer: 3/)
     assert.match(container.textContent ?? '', /AI usage and cost/)
     assert.match(container.textContent ?? '', /\$0\.003/)

@@ -140,6 +140,20 @@ describe('DeveloperAccessRequestsPanel', () => {
               username: 'manual-user',
               email: 'manual@example.test',
             },
+            {
+              id: 19,
+              user_id: 10,
+              status: 'pending',
+              reason: 'Obsolete legacy request.',
+              source: 'legacy',
+              ai_recommendation: '',
+              admin_user_id: 0,
+              admin_note: '',
+              created_at: 1_786_400_002,
+              reviewed_at: 0,
+              username: 'legacy-user',
+              email: 'legacy@example.test',
+            },
           ],
         },
       }
@@ -175,6 +189,8 @@ describe('DeveloperAccessRequestsPanel', () => {
       )
       assert.match(document.body.textContent ?? '', /manual-user/)
       assert.match(document.body.textContent ?? '', /Direct request/)
+      assert.doesNotMatch(document.body.textContent ?? '', /legacy-user/)
+      assert.doesNotMatch(document.body.textContent ?? '', /Legacy request/)
       assert.match(
         document.body.textContent ?? '',
         /I want to connect a local test client\./

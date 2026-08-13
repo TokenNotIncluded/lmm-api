@@ -450,6 +450,47 @@ func TestPrepareAssistantRequestCacheHitSkipsDuplicateIntentWrite(t *testing.T) 
 	assert.EqualValues(t, 2, firstQuestion.Count)
 }
 
+func TestPrepareAssistantRequestRecommendationEditBypassesCachedAnswer(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.AssistantLead{}, &model.AssistantProfileBucket{}, &model.AssistantFirstQuestionStat{}))
+	withAssistantSettings(t, true, "assistant-recommendation-cache-bypass-model")
+	original := setting.GetAssistantSettings()
+	setting.SetAssistantCacheEnabled(true)
+	require.NoError(t, setting.UpdateAssistantCacheTTLMinutes("10"))
+	t.Cleanup(func() {
+		setting.SetAssistantCacheEnabled(original.CacheEnabled)
+		_ = setting.UpdateAssistantCacheTTLMinutes(strconv.Itoa(original.CacheTTLMinutes))
+	})
+
+	message := "请帮我重写这封推荐信 " + t.Name()
+	settings := setting.GetAssistantSettings()
+	context := assistantUserContextForRequest(42, message)
+	require.Equal(t, assistantRecommendationActionRevise, context.RecommendationAction)
+	key := assistantCacheKey(settings, []assistantOpenAIMessage{{Role: "user", Content: message}}, context)
+	require.NotEmpty(t, key)
+	storeAssistantCachedResponse(settings, key, http.StatusOK, []byte(`{"choices":[{"message":{"role":"assistant","content":"stale cached answer"}}]}`))
+
+	downstreamCalls := 0
+	engine := gin.New()
+	engine.POST("/api/assistant/chat", func(c *gin.Context) {
+		c.Set("id", 42)
+		PrepareAssistantRequest(c)
+	}, func(c *gin.Context) {
+		downstreamCalls++
+		c.Status(http.StatusNoContent)
+	})
+	request := httptest.NewRequest(http.MethodPost, "/api/assistant/chat", strings.NewReader(`{"message":"`+message+`"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	engine.ServeHTTP(response, request)
+
+	assert.Equal(t, http.StatusNoContent, response.Code)
+	assert.Empty(t, response.Header().Get("X-LMM-Assistant-Cache"))
+	assert.Equal(t, 1, downstreamCalls)
+	assert.NotContains(t, response.Body.String(), "stale cached answer")
+}
+
 func TestPrepareAssistantRequestRejectsUnsafeOrOversizedConversation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	withAssistantSettings(t, true, "assistant-model")
@@ -994,7 +1035,7 @@ func TestAssistantPricingEndpointAppliesTrustDiscountToGroupRatios(t *testing.T)
 func TestAssistantAgentToolsExposeSafeAndConfirmationGatedActions(t *testing.T) {
 	c, _ := createAssistantKeyTestContext(t, "assistant-tool-user")
 	definitions := assistantToolDefinitions()
-	require.Len(t, definitions, 23)
+	require.Len(t, definitions, 26)
 	names := make(map[string]bool, len(definitions))
 	for _, definition := range definitions {
 		names[definition.Function.Name] = true
@@ -1021,6 +1062,9 @@ func TestAssistantAgentToolsExposeSafeAndConfirmationGatedActions(t *testing.T) 
 	assert.True(t, names["get_admin_channels"])
 	assert.True(t, names["prepare_admin_channel_change"])
 	assert.True(t, names["prepare_admin_pricing_change"])
+	assert.True(t, names["recall_memory"])
+	assert.True(t, names["remember_memory"])
+	assert.True(t, names["remember_profile_skill"])
 
 	createKey := executeAssistantTool(c, assistantOpenAIToolCall{
 		Function: assistantOpenAIToolCallFunction{
@@ -1323,6 +1367,211 @@ func TestAssistantL1RecommendationPreparationDoesNotEditExistingLetter(t *testin
 	assert.Equal(t, existing.Id, stored.Id)
 	assert.Equal(t, existing.Reason, stored.Reason)
 	assert.Equal(t, existing.AIRecommendation, stored.AIRecommendation)
+}
+
+func TestAssistantAgentDeterministicallyReadsThenPreparesRecommendationEdit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}, &model.DeveloperAccessRequest{}, &model.AuthFlow{}))
+	user := model.User{
+		Username: "assistant-recommendation-edit-chain",
+		Password: "password",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+		Group:    "default",
+	}
+	require.NoError(t, db.Create(&user).Error)
+	existing, err := model.SubmitAssistantDeveloperAccessRecommendation(
+		user.Id,
+		"I use the relay for a concrete integration workflow.",
+		"The current recommendation describes the user's concrete integration workflow.",
+	)
+	require.NoError(t, err)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/assistant/chat", nil)
+	c.Set("id", user.Id)
+	c.Set(assistantActorUserIDKey, user.Id)
+	c.Set("session_id", "assistant-recommendation-edit-chain-session")
+	c.Set(assistantUserContextKey, assistantUserContext{
+		UserID:               user.Id,
+		Intent:               model.AssistantIntentRecommendation,
+		AccessLevel:          "L0",
+		RecommendationAction: assistantRecommendationActionRevise,
+	})
+
+	turn := 0
+	originalRelay := relayAssistantAgentTurn
+	relayAssistantAgentTurn = func(_ *gin.Context, request assistantOpenAIRequest, _ string, _ int) (int, []byte, error) {
+		turn++
+		switch turn {
+		case 1:
+			assert.Equal(t, "get_l1_recommendation", assistantNamedToolChoiceName(request.ToolChoice))
+			return http.StatusOK, []byte(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"read-letter","type":"function","function":{"name":"get_l1_recommendation","arguments":"{}"}}]}}]}`), nil
+		case 2:
+			assert.Equal(t, "prepare_l1_recommendation", assistantNamedToolChoiceName(request.ToolChoice))
+			encoded := string(mustAssistantJSON(t, request.Messages))
+			assert.Contains(t, encoded, existing.AIRecommendation)
+			return http.StatusOK, []byte(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"prepare-edit","type":"function","function":{"name":"prepare_l1_recommendation","arguments":"{\"user_statement\":\"I use the relay for a concrete integration workflow.\",\"recommendation\":\"The revised recommendation clearly describes the user's concrete integration workflow.\"}"}}]}}]}`), nil
+		case 3:
+			assert.Nil(t, request.ToolChoice)
+			assert.Empty(t, request.Tools)
+			return http.StatusOK, []byte(`{"choices":[{"message":{"role":"assistant","content":"Please review and confirm the revised recommendation in the UI."}}]}`), nil
+		default:
+			return http.StatusInternalServerError, nil, nil
+		}
+	}
+	t.Cleanup(func() { relayAssistantAgentTurn = originalRelay })
+
+	runAssistantAgent(c, setting.AssistantSettings{
+		Model:            "assistant-recommendation-edit-chain-model",
+		AgentLoopEnabled: false,
+		MaxSteps:         1,
+		TimeoutSeconds:   45,
+	}, []assistantOpenAIMessage{{Role: "user", Content: "请帮我重写这封推荐信"}})
+
+	assert.Equal(t, 3, turn)
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	var response map[string]any
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+	action, ok := response["lmm_assistant_action"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "l1_recommendation", action["type"])
+	assert.Contains(t, action["recommendation"], "revised recommendation")
+	assert.NotEmpty(t, action["confirmation_token"])
+
+	stored, err := model.GetDeveloperAccessRequest(user.Id)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, existing.Id, stored.Id)
+	assert.Equal(t, existing.Reason, stored.Reason)
+	assert.Equal(t, existing.AIRecommendation, stored.AIRecommendation)
+	var flowCount int64
+	require.NoError(t, db.Model(&model.AuthFlow{}).Count(&flowCount).Error)
+	assert.EqualValues(t, 1, flowCount)
+}
+
+func TestAssistantAgentReadsThenRoutesRecommendationRemovalToUserUI(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}, &model.DeveloperAccessRequest{}, &model.AuthFlow{}))
+	user := model.User{
+		Username: "assistant-recommendation-remove-chain",
+		Password: "password",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+		Group:    "default",
+	}
+	require.NoError(t, db.Create(&user).Error)
+	existing, err := model.SubmitAssistantDeveloperAccessRecommendation(
+		user.Id,
+		"I use the relay for another concrete integration workflow.",
+		"This recommendation must remain unchanged until the user clears it in the UI.",
+	)
+	require.NoError(t, err)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/assistant/chat", nil)
+	c.Set("id", user.Id)
+	c.Set(assistantActorUserIDKey, user.Id)
+	c.Set("session_id", "assistant-recommendation-remove-chain-session")
+	c.Set(assistantUserContextKey, assistantUserContext{
+		UserID:               user.Id,
+		Intent:               model.AssistantIntentRecommendation,
+		AccessLevel:          "L0",
+		RecommendationAction: assistantRecommendationActionRemove,
+	})
+
+	turn := 0
+	originalRelay := relayAssistantAgentTurn
+	relayAssistantAgentTurn = func(_ *gin.Context, request assistantOpenAIRequest, _ string, _ int) (int, []byte, error) {
+		turn++
+		switch turn {
+		case 1:
+			assert.Equal(t, "get_l1_recommendation", assistantNamedToolChoiceName(request.ToolChoice))
+			return http.StatusOK, []byte(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"read-before-remove","type":"function","function":{"name":"get_l1_recommendation","arguments":"{}"}}]}}]}`), nil
+		case 2:
+			assert.Nil(t, request.ToolChoice)
+			assert.Empty(t, request.Tools)
+			require.NotEmpty(t, request.Messages)
+			toolResult := request.Messages[len(request.Messages)-1].Content
+			assert.Contains(t, toolResult, `"removal_requires_user_ui":true`)
+			assert.Contains(t, toolResult, "Do not call prepare_l1_recommendation")
+			return http.StatusOK, []byte(`{"choices":[{"message":{"role":"assistant","content":"Clear the Recommendation letter field in the existing UI, then choose Save changes."}}]}`), nil
+		default:
+			return http.StatusInternalServerError, nil, nil
+		}
+	}
+	t.Cleanup(func() { relayAssistantAgentTurn = originalRelay })
+
+	runAssistantAgent(c, setting.AssistantSettings{
+		Model:            "assistant-recommendation-remove-chain-model",
+		AgentLoopEnabled: false,
+		MaxSteps:         1,
+		TimeoutSeconds:   45,
+	}, []assistantOpenAIMessage{{Role: "user", Content: "删除我的推荐信"}})
+
+	assert.Equal(t, 2, turn)
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "Save changes")
+	_, hasAction := c.Get(assistantClientActionKey)
+	assert.False(t, hasAction)
+	stored, err := model.GetDeveloperAccessRequest(user.Id)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, existing.Id, stored.Id)
+	assert.Equal(t, existing.Reason, stored.Reason)
+	assert.Equal(t, existing.AIRecommendation, stored.AIRecommendation)
+	blocked := executeAssistantTool(c, assistantOpenAIToolCall{
+		Function: assistantOpenAIToolCallFunction{
+			Name: "prepare_l1_recommendation",
+			Arguments: `{
+				"user_statement":"I use the relay for another concrete integration workflow.",
+				"recommendation":"The model must not prepare a replacement during a removal request."
+			}`,
+		},
+	})
+	assert.Equal(t, false, blocked["ok"])
+	assert.Equal(t, "removal_requires_user_ui", blocked["status"])
+	var flowCount int64
+	require.NoError(t, db.Model(&model.AuthFlow{}).Count(&flowCount).Error)
+	assert.Zero(t, flowCount)
+}
+
+func TestAssistantAgentRejectsSkippedRecommendationRead(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/assistant/chat", nil)
+	c.Set(assistantUserContextKey, assistantUserContext{
+		Intent:               model.AssistantIntentRecommendation,
+		AccessLevel:          "L0",
+		RecommendationAction: assistantRecommendationActionRevise,
+	})
+
+	turns := 0
+	originalRelay := relayAssistantAgentTurn
+	relayAssistantAgentTurn = func(_ *gin.Context, request assistantOpenAIRequest, _ string, _ int) (int, []byte, error) {
+		turns++
+		assert.Equal(t, "get_l1_recommendation", assistantNamedToolChoiceName(request.ToolChoice))
+		return http.StatusOK, []byte(`{"choices":[{"message":{"role":"assistant","content":"I changed it without reading it."}}]}`), nil
+	}
+	t.Cleanup(func() { relayAssistantAgentTurn = originalRelay })
+
+	runAssistantAgent(c, setting.AssistantSettings{
+		Model:            "assistant-recommendation-required-tool-model",
+		AgentLoopEnabled: true,
+		MaxSteps:         6,
+		TimeoutSeconds:   45,
+	}, []assistantOpenAIMessage{{Role: "user", Content: "请修改推荐信"}})
+
+	assert.Equal(t, 1, turns)
+	assert.Equal(t, http.StatusBadGateway, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "ASSISTANT_REQUIRED_TOOL_MISSING")
+	_, hasAction := c.Get(assistantClientActionKey)
+	assert.False(t, hasAction)
 }
 
 func TestAssistantSetupToolReturnsExactEndpointFormatsAndClientLimits(t *testing.T) {

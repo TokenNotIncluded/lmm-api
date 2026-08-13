@@ -60,6 +60,46 @@ func TestUnifiedTodoIncludesSubmittedBountyForOwner(t *testing.T) {
 	assert.Zero(t, page.Total)
 }
 
+func TestUnifiedTodoDeveloperAccessQueueContainsOnlyPendingIdentifiedApplicants(t *testing.T) {
+	db := setupOpenSourceBountyTestDB(t)
+	require.NoError(t, db.AutoMigrate(&UnifiedTodoRead{}, &DeveloperAccessRequest{}, &AccountActionRequest{}, &AssistantConversation{}, &AssistantHistoryMessage{}, &AssistantSecurityIncident{}))
+
+	admin := createOpenSourceBountyUser(t, db, "todo-admin", 0, common.RoleAdminUser)
+	pendingUser := createOpenSourceBountyUser(t, db, "pending-applicant", 0, common.RoleCommonUser)
+	pendingUser.Email = "pending@example.test"
+	require.NoError(t, db.Model(&pendingUser).Update("email", pendingUser.Email).Error)
+	approvedUser := createOpenSourceBountyUser(t, db, "approved-applicant", 0, common.RoleCommonUser)
+	rejectedUser := createOpenSourceBountyUser(t, db, "rejected-applicant", 0, common.RoleCommonUser)
+	legacyUser := createOpenSourceBountyUser(t, db, "legacy-applicant", 0, common.RoleCommonUser)
+	now := common.GetTimestamp()
+	requests := []DeveloperAccessRequest{
+		{UserId: pendingUser.Id, Status: DeveloperAccessRequestPending, Source: DeveloperAccessRequestSourceAI, Reason: "Build a real client integration.", AIRecommendation: "Recommend this applicant for a concrete production integration.", CreatedAt: now},
+		{UserId: approvedUser.Id, Status: DeveloperAccessRequestApproved, Source: DeveloperAccessRequestSourceAI, Reason: "Already reviewed.", CreatedAt: now - 1, ReviewedAt: now},
+		{UserId: rejectedUser.Id, Status: DeveloperAccessRequestRejected, Source: DeveloperAccessRequestSourceAssistant, Reason: "Already rejected.", CreatedAt: now - 2, ReviewedAt: now},
+		{UserId: legacyUser.Id, Status: DeveloperAccessRequestPending, Source: DeveloperAccessRequestSourceOld, Reason: "Obsolete legacy request.", CreatedAt: now - 3},
+	}
+	require.NoError(t, db.Create(&requests).Error)
+
+	page, err := GetUnifiedTodoCenter(admin.Id, admin.Role, UnifiedTodoCategoryDeveloperAccess, 1, 20)
+	require.NoError(t, err)
+	require.Len(t, page.Items, 1)
+	assert.Equal(t, int64(1), page.Total)
+	assert.Equal(t, int64(1), page.UnreadCount)
+	assert.Equal(t, requests[0].Id, page.Items[0].SourceId)
+	assert.Equal(t, pendingUser.Id, page.Items[0].Details["user_id"])
+	assert.Equal(t, pendingUser.Username, page.Items[0].Details["username"])
+	assert.Equal(t, pendingUser.Email, page.Items[0].Details["email"])
+	assert.Equal(t, requests[0].AIRecommendation, page.Items[0].Summary)
+
+	marked, err := MarkUnifiedTodoReads(admin.Id, admin.Role, UnifiedTodoCategoryDeveloperAccess, nil, true)
+	require.NoError(t, err)
+	assert.Equal(t, 1, marked)
+	var reads []UnifiedTodoRead
+	require.NoError(t, db.Where("user_id = ? AND category = ?", admin.Id, UnifiedTodoCategoryDeveloperAccess).Find(&reads).Error)
+	require.Len(t, reads, 1)
+	assert.Equal(t, requests[0].Id, reads[0].ItemId)
+}
+
 func TestUnifiedTodoSecurityIncidentsFollowAdministratorRoleLattice(t *testing.T) {
 	db := setupOpenSourceBountyTestDB(t)
 	require.NoError(t, db.AutoMigrate(

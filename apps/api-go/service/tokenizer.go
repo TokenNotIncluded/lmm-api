@@ -1,21 +1,19 @@
 package service
 
 import (
-	"sync"
-
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/pkg/cachex"
 	"github.com/tiktoken-go/tokenizer"
 	"github.com/tiktoken-go/tokenizer/codec"
 )
 
-// tokenEncoderMap won't grow after initialization
 var defaultTokenEncoder tokenizer.Codec
 
-// tokenEncoderMap is used to store token encoders for different models
-var tokenEncoderMap = make(map[string]tokenizer.Codec)
-
-// tokenEncoderMutex protects tokenEncoderMap for concurrent access
-var tokenEncoderMutex sync.RWMutex
+// Model names come from requests and therefore have unbounded cardinality.
+// Codec values are shared references, but their keys still need a hard budget.
+var tokenEncoders = cachex.NewByteCache[tokenizer.Codec](256, 256<<10, func(model string, _ tokenizer.Codec) int64 {
+	return int64(len(model) + 64)
+})
 
 func InitTokenEncoders() {
 	common.SysLog("initializing token encoders")
@@ -24,33 +22,15 @@ func InitTokenEncoders() {
 }
 
 func getTokenEncoder(model string) tokenizer.Codec {
-	// First, try to get the encoder from cache with read lock
-	tokenEncoderMutex.RLock()
-	if encoder, exists := tokenEncoderMap[model]; exists {
-		tokenEncoderMutex.RUnlock()
+	if encoder, exists := tokenEncoders.Load(model); exists {
 		return encoder
 	}
-	tokenEncoderMutex.RUnlock()
-
-	// If not in cache, create new encoder with write lock
-	tokenEncoderMutex.Lock()
-	defer tokenEncoderMutex.Unlock()
-
-	// Double-check if another goroutine already created the encoder
-	if encoder, exists := tokenEncoderMap[model]; exists {
-		return encoder
-	}
-
-	// Create new encoder
 	modelCodec, err := tokenizer.ForModel(tokenizer.Model(model))
 	if err != nil {
-		// Cache the default encoder for this model to avoid repeated failures
-		tokenEncoderMap[model] = defaultTokenEncoder
+		tokenEncoders.Store(model, defaultTokenEncoder)
 		return defaultTokenEncoder
 	}
-
-	// Cache the new encoder
-	tokenEncoderMap[model] = modelCodec
+	tokenEncoders.Store(model, modelCodec)
 	return modelCodec
 }
 

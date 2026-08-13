@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -155,7 +154,7 @@ func GetResponseBody(method, url string, channel *model.Channel, headers http.He
 	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("status code: %d", res.StatusCode)
 	}
-	body, err := io.ReadAll(res.Body)
+	body, err := common.ReadResponseBody(res)
 	if err != nil {
 		return nil, err
 	}

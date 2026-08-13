@@ -166,7 +166,7 @@ func RequestCreemPay(c *gin.Context) {
 	var req CreemPayRequest
 
 	// 读取body内容用于打印，同时保留原始数据供后续使用
-	bodyBytes, err := io.ReadAll(c.Request.Body)
+	bodyBytes, err := common.ReadAllLimit(c.Request.Body, common.GetAnonymousRequestBodyLimitBytes())
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Creem 支付请求读取失败 error=%q", err.Error()))
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "read query error"})
@@ -255,7 +255,7 @@ func CreemWebhook(c *gin.Context) {
 	}
 
 	// 读取body内容用于打印，同时保留原始数据供后续使用
-	bodyBytes, err := io.ReadAll(c.Request.Body)
+	bodyBytes, err := common.ReadAllLimit(c.Request.Body, common.GetAnonymousRequestBodyLimitBytes())
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Creem webhook 读取请求体失败 path=%q client_ip=%s error=%q", c.Request.RequestURI, c.ClientIP(), err.Error()))
 		c.AbortWithStatus(http.StatusBadRequest)
@@ -474,7 +474,7 @@ func genCreemLink(ctx context.Context, referenceId string, product *CreemProduct
 	defer resp.Body.Close()
 
 	// 读取响应
-	body, err := io.ReadAll(resp.Body)
+	body, err := common.ReadResponseBody(resp)
 	if err != nil {
 		return "", fmt.Errorf("读取响应失败: %v", err)
 	}

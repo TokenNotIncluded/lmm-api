@@ -75,6 +75,18 @@ export type AssistantFundingStatus = {
   mode: 'super_administrator'
 }
 
+export type AssistantPreConversationPreset = {
+  id: string
+  prompt: string
+  label?: string
+}
+
+export type AssistantPreConversationPresets = {
+  generation: number
+  version: string
+  presets: AssistantPreConversationPreset[]
+}
+
 export type AssistantStatus = {
   enabled: boolean
   model: string
@@ -529,7 +541,8 @@ export function buildAssistantConversation(
 export async function sendAssistantMessage(
   message: string,
   history: AssistantChatMessage[] = [],
-  conversationId?: number
+  conversationId?: number,
+  presetId?: string
 ): Promise<AssistantReply> {
   const normalizedMessage =
     redactAssistantMessageForRequest(message).content.trim()
@@ -549,6 +562,7 @@ export async function sendAssistantMessage(
           ...(conversationId && conversationId > 0
             ? { conversation_id: conversationId }
             : {}),
+          ...(presetId ? { preset_id: presetId } : {}),
         },
         {
           skipBusinessError: true,
@@ -590,6 +604,26 @@ export async function sendAssistantMessage(
     reply.conversationId = responseConversationId
   }
   return reply
+}
+
+export async function getAssistantPreConversationPresets(): Promise<AssistantPreConversationPresets> {
+  const response = await api.get<
+    AssistantAPIResponse<AssistantPreConversationPresets>
+  >('/api/assistant/pre-conversation-presets')
+  return requireAssistantData(
+    response.data,
+    'Unable to load assistant conversation starters'
+  )
+}
+
+export async function recordAssistantPreConversationPresetClick(
+  presetId: string
+): Promise<void> {
+  await api.post(
+    `/api/assistant/pre-conversation-presets/${encodeURIComponent(presetId)}/click`,
+    undefined,
+    { skipBusinessError: true, skipErrorHandler: true }
+  )
 }
 
 export async function submitAssistantAccountDisableRequest(input: {

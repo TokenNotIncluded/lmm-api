@@ -313,6 +313,12 @@ func ListDeveloperAccessRequests(status string, limit int) ([]DeveloperAccessReq
 			return nil, ErrDeveloperAccessRequestStatus
 		}
 		query = query.Where("request.status = ?", status)
+		if status == DeveloperAccessRequestPending {
+			// Legacy requests predate the single shared recommendation-letter
+			// workflow. Keep them as history, but never surface or approve them as
+			// actionable queue entries.
+			query = query.Where("request.source <> ?", DeveloperAccessRequestSourceOld)
+		}
 	}
 	var requests []DeveloperAccessRequestView
 	if err := query.Find(&requests).Error; err != nil {

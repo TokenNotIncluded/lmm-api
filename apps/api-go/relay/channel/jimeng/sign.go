@@ -1,20 +1,19 @@
 package jimeng
 
 import (
-	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/gin-gonic/gin"
 )
@@ -58,20 +57,10 @@ func getPayloadHash(c *gin.Context) string {
 func Sign(c *gin.Context, req *http.Request, apiKey string) error {
 	header := req.Header
 
-	var bodyBytes []byte
-	var err error
-
-	if req.Body != nil {
-		bodyBytes, err = io.ReadAll(req.Body)
-		if err != nil {
-			return err
-		}
-		_ = req.Body.Close()
-		req.Body = io.NopCloser(bytes.NewBuffer(bodyBytes)) // Rewind
+	hexPayloadHash, err := common.SHA256RequestBody(req, common.ResponseBodyLimit())
+	if err != nil {
+		return err
 	}
-
-	payloadHash := sha256.Sum256(bodyBytes)
-	hexPayloadHash := hex.EncodeToString(payloadHash[:])
 
 	method := c.Request.Method
 	u := req.URL

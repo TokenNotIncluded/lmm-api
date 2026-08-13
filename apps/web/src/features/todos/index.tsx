@@ -37,7 +37,7 @@ export function Todos() {
     <SectionPageLayout>
       <SectionPageLayout.Title>{t('To-dos')}</SectionPageLayout.Title>
       <SectionPageLayout.Content>
-        <div className='flex min-h-0 flex-col gap-6'>
+        <div className='mx-auto flex min-h-0 w-full max-w-5xl flex-col gap-14 pb-20'>
           <UnifiedTodoList />
           {isAdmin ? (
             <>

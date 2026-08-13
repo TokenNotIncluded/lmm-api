@@ -19,8 +19,8 @@ type DiskCacheConfig struct {
 
 // 全局磁盘缓存配置
 var diskCacheConfig = DiskCacheConfig{
-	Enabled:     false,
-	ThresholdMB: 10,
+	Enabled:     true,
+	ThresholdMB: 4,
 	MaxSizeMB:   1024,
 	Path:        "",
 }

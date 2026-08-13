@@ -34,8 +34,10 @@ func assistantUserProfileRequest(t *testing.T, method, path, body string, role i
 func TestAdminAssistantUserProfileIsAdminOnlyAndRedactsSecrets(t *testing.T) {
 	db := setupManageUserTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.AssistantUserProfile{}))
-	target := &model.User{Id: 41, Username: "profile-target", Password: "password", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default"}
+	target := &model.User{Id: 41, Username: "profile-target", Password: "password", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "profile-target-41"}
 	require.NoError(t, db.Create(target).Error)
+	admin := &model.User{Id: 99, Username: "profile-admin", Password: "password", Role: common.RoleRootUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "profile-admin-99"}
+	require.NoError(t, db.Create(admin).Error)
 
 	denied := assistantUserProfileRequest(t, http.MethodGet, "/api/user/41/assistant-profile", "", common.RoleCommonUser)
 	assert.Equal(t, http.StatusForbidden, denied.Code)

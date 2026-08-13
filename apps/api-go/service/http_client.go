@@ -13,6 +13,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/pkg/cachex"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 
@@ -26,7 +27,9 @@ var (
 		clients: make(map[string]*http.Client),
 		aliases: make(map[string]string),
 	}
-	legacyProxyURLWarnings sync.Map
+	legacyProxyURLWarnings = cachex.NewByteCache[struct{}](256, 128<<10, func(key string, _ struct{}) int64 {
+		return int64(len(key) + 8)
+	})
 )
 
 type proxyHTTPClientCache struct {

@@ -74,8 +74,11 @@ import { useAuthStore } from '@/stores/auth-store'
 
 import {
   getAssistantAvailableModels,
+  getAssistantPreConversationPresets,
   getAssistantStatus,
+  recordAssistantPreConversationPresetClick,
   sendAssistantMessage,
+  type AssistantPreConversationPreset,
   type AssistantConversationHistoryItem,
   type AssistantConversationHistoryDetail,
   type AssistantChatMessage,
@@ -154,6 +157,7 @@ type ConversationEntry = {
   retry?: {
     message: string
     history: AssistantChatMessage[]
+    presetId?: string
   }
 }
 
@@ -387,33 +391,35 @@ function AssistantPromptInputSync(props: {
   return null
 }
 
-function AssistantPresetPrompts() {
+function AssistantPresetPrompts(props: {
+  presets: AssistantPreConversationPreset[]
+  onSelect: (preset: AssistantPreConversationPreset) => void
+}) {
   const { t } = useTranslation()
   const {
     textInput: { setInput },
   } = usePromptInputController()
-  const prompts = [
-    t('I am new to AI'),
-    t('I only want to use the gateway'),
-    t('How do I apply for L1 access?'),
-    t('I need human support'),
-  ]
+  if (props.presets.length === 0) return null
 
   return (
     <div
-      className='flex flex-wrap gap-2'
+      className='mb-2 flex max-w-full flex-nowrap gap-2 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible sm:pb-0'
       aria-label={t('Choose a topic or write a message.')}
+      data-testid='assistant-preset-prompts'
     >
-      {prompts.map((prompt) => (
+      {props.presets.map((preset) => (
         <Button
-          key={prompt}
+          key={preset.id}
           type='button'
-          variant='outline'
+          variant='ghost'
           size='sm'
-          className='h-auto min-h-8 text-left whitespace-normal'
-          onClick={() => setInput(prompt)}
+          className='bg-muted/40 h-auto min-h-8 shrink-0 rounded-full px-3 text-left whitespace-normal'
+          onClick={() => {
+            setInput(preset.prompt)
+            props.onSelect(preset)
+          }}
         >
-          {prompt}
+          {preset.label || preset.prompt}
         </Button>
       ))}
     </div>
@@ -458,8 +464,9 @@ function AssistantPromptComposer(props: {
     <>
       <PromptInput
         onSubmit={handleSubmit}
-        groupClassName='bg-muted/40 has-[[data-slot=input-group-control]:focus-visible]:border-transparent has-[[data-slot=input-group-control]:focus-visible]:ring-0 rounded-xl border-transparent dark:bg-muted/30'
+        groupClassName='assistant-prompt-input bg-muted/40 has-[[data-slot=input-group-control]:focus-visible]:border-transparent has-[[data-slot=input-group-control]:focus-visible]:ring-0 rounded-xl border-transparent dark:bg-muted/30'
         aria-label={t('Ask AI assistant')}
+        data-testid='assistant-prompt-form'
       >
         <PromptInputBody>
           <PromptInputTextarea
@@ -474,10 +481,10 @@ function AssistantPromptComposer(props: {
             aria-describedby={describedBy}
             aria-invalid={hasText ? validation.invalid : undefined}
             disabled={props.sending || props.terminated}
-            className='max-h-32 min-h-12'
+            className='max-h-24 min-h-10 sm:max-h-32 sm:min-h-12'
           />
         </PromptInputBody>
-        <PromptInputFooter>
+        <PromptInputFooter className='px-2 py-1 pb-1.5'>
           <span className='text-muted-foreground min-w-0 flex-1 truncate text-xs'>
             {props.footerStatus}
           </span>
@@ -669,6 +676,8 @@ export function AssistantPanel(props: {
   const baseUrl = getBaseUrl()
   const [entries, setEntries] = useState<ConversationEntry[]>([])
   const [conversationId, setConversationId] = useState<number | null>(null)
+  const [selectedPreConversationPresetId, setSelectedPreConversationPresetId] =
+    useState<string | null>(null)
   const [conversationRestricted, setConversationRestricted] = useState(false)
   const [sending, setSending] = useState(false)
   const submittedAutoSendIdRef = useRef<string | undefined>(undefined)
@@ -712,6 +721,13 @@ export function AssistantPanel(props: {
   const accountAccessConfirmed =
     accountAccessState === 'granted' || accountAccessState === 'restricted'
   const developerAccessGranted = accountAccessState === 'granted'
+  const preConversationPresetsQuery = useQuery({
+    queryKey: ['assistant-pre-conversation-presets'],
+    queryFn: getAssistantPreConversationPresets,
+    enabled: panelVisible && accountAccessState === 'restricted',
+    staleTime: 5 * 60_000,
+    retry: false,
+  })
   const authUser = useAuthStore((state) => state.auth.user)
   const clearPrivacyNoticeTimer = useCallback(() => {
     if (privacyNoticeTimerRef.current === null) return
@@ -829,6 +845,7 @@ export function AssistantPanel(props: {
   const resetConversation = useCallback(() => {
     setEntries([])
     setConversationId(null)
+    setSelectedPreConversationPresetId(null)
     setConversationRestricted(false)
     clearToolState()
     setHistoryView(null)
@@ -922,14 +939,16 @@ export function AssistantPanel(props: {
 
   const requestAssistantReply = async (
     message: string,
-    history: AssistantChatMessage[]
+    history: AssistantChatMessage[],
+    presetId?: string
   ) => {
     setSending(true)
     try {
       const reply = await sendAssistantMessage(
         message,
         history,
-        conversationId ?? undefined
+        conversationId ?? undefined,
+        presetId
       )
       if (reply.conversationId) setConversationId(reply.conversationId)
       if (reply.restricted) setConversationRestricted(true)
@@ -1027,7 +1046,7 @@ export function AssistantPanel(props: {
             'The AI assistant could not answer right now. Try again or contact support.'
           ),
           error: true,
-          retry: { message, history },
+          retry: { message, history, presetId },
           action: errorAction,
         },
       ])
@@ -1081,7 +1100,9 @@ export function AssistantPanel(props: {
           ]
         : []),
     ])
-    await requestAssistantReply(safeMessage.content, history)
+    const presetId = selectedPreConversationPresetId ?? undefined
+    setSelectedPreConversationPresetId(null)
+    await requestAssistantReply(safeMessage.content, history, presetId)
   }
 
   useEffect(() => {
@@ -1111,7 +1132,11 @@ export function AssistantPanel(props: {
   const retryMessage = async (entry: ConversationEntry) => {
     if (!entry.retry || sending) return
     setEntries((current) => current.filter((item) => item.id !== entry.id))
-    await requestAssistantReply(entry.retry.message, entry.retry.history)
+    await requestAssistantReply(
+      entry.retry.message,
+      entry.retry.history,
+      entry.retry.presetId
+    )
   }
 
   const panelContent = (
@@ -1445,11 +1470,14 @@ export function AssistantPanel(props: {
             <ConversationScrollButton />
           </Conversation>
 
-          <div className='bg-background min-w-0 shrink-0 overflow-hidden pb-[max(0.75rem,env(safe-area-inset-bottom))]'>
+          <div
+            className='bg-background min-w-0 shrink-0 overflow-hidden pb-[max(0.5rem,env(safe-area-inset-bottom))] sm:pb-[max(0.75rem,env(safe-area-inset-bottom))]'
+            data-testid='assistant-composer-footer'
+          >
             <Separator className='bg-border/70' />
             <div
               className={cn(
-                'px-3 py-3 sm:px-4',
+                'px-3 py-2 sm:px-4 sm:py-3',
                 mode === 'page' && 'mx-auto w-full max-w-3xl'
               )}
             >
@@ -1463,7 +1491,15 @@ export function AssistantPanel(props: {
                 />
                 {accountAccessState === 'restricted' &&
                 !entries.some((entry) => entry.role === 'user') ? (
-                  <AssistantPresetPrompts />
+                  <AssistantPresetPrompts
+                    presets={preConversationPresetsQuery.data?.presets ?? []}
+                    onSelect={(preset) => {
+                      setSelectedPreConversationPresetId(preset.id)
+                      void recordAssistantPreConversationPresetClick(
+                        preset.id
+                      ).catch(() => undefined)
+                    }}
+                  />
                 ) : null}
                 <AssistantPromptComposer
                   footerStatus={
@@ -1479,13 +1515,6 @@ export function AssistantPanel(props: {
                   onSubmit={submitMessage}
                 />
               </PromptInputProvider>
-              {accountAccessConfirmed && superAdministratorFunded ? (
-                <p className='text-muted-foreground mt-2 px-1 text-[11px] leading-4'>
-                  {t(
-                    'AI customer-service token usage is charged to the super administrator account, not your wallet.'
-                  )}
-                </p>
-              ) : null}
               <p className='text-muted-foreground mt-1 px-1 text-[11px] leading-4'>
                 {t(
                   'Private details, passwords, API keys, and credentials are never safe to send in chat. Use a shielded private card when one is offered.'

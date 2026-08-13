@@ -106,6 +106,7 @@ func SubmitDeveloperAccessRequest(c *gin.Context) {
 		return
 	}
 	var request *model.DeveloperAccessRequest
+	var presetAttribution *model.PromptPresetRef
 	if strings.TrimSpace(input.AIRecommendation) == "" && strings.TrimSpace(input.ConfirmationToken) == "" {
 		// The no-AI path is deliberately first-class: the request enters the
 		// same administrator queue with only the user's redacted statement.
@@ -135,6 +136,11 @@ func SubmitDeveloperAccessRequest(c *gin.Context) {
 		if json.Unmarshal([]byte(flow.Payload), &draft) != nil {
 			developerAccessRequestError(c, http.StatusUnprocessableEntity, "DEVELOPER_ACCESS_AI_CONFIRMATION_MISMATCH", "AI recommendation draft is invalid")
 			return
+		}
+		if draft.PresetId != "" && draft.PresetVersion != "" {
+			presetAttribution = &model.PromptPresetRef{
+				PresetId: draft.PresetId, Generation: draft.PresetGeneration, Version: draft.PresetVersion,
+			}
 		}
 		request, err = model.SubmitConfirmedAssistantDeveloperAccessRecommendation(
 			input.ConfirmationToken,
@@ -175,6 +181,11 @@ func SubmitDeveloperAccessRequest(c *gin.Context) {
 		}
 		common.ApiError(c, err)
 		return
+	}
+	if presetAttribution != nil {
+		if statErr := model.CountPresetRecommendation(*presetAttribution, request.Id); statErr != nil {
+			common.SysError("failed to record assistant preset recommendation for request " + strconv.Itoa(request.Id))
+		}
 	}
 	common.ApiSuccess(c, toDeveloperAccessRequestSelfResponse(request))
 }
@@ -222,6 +233,9 @@ func reviewDeveloperAccessRequest(c *gin.Context, approve bool) {
 		return
 	}
 	if approve {
+		if statErr := model.CountPresetApproval(requestID); statErr != nil && !errors.Is(statErr, gorm.ErrRecordNotFound) {
+			common.SysError("failed to record assistant preset approval for request " + strconv.Itoa(requestID))
+		}
 		model.RecordLog(c.GetInt("id"), model.LogTypeSystem, "approved developer access request "+strconv.Itoa(requestID))
 	} else {
 		model.RecordLog(c.GetInt("id"), model.LogTypeSystem, "rejected developer access request "+strconv.Itoa(requestID))

@@ -733,6 +733,7 @@ func (channel *Channel) Delete() error {
 	// The database deletion is already committed. Remove the channel from route
 	// selection before a later failed refresh can retain stale routing.
 	cacheDeleteChannels([]int{channel.Id})
+	channelRuntimeStates.Delete(channel.Id)
 	err = channel.DeleteAbilities()
 	return err
 }

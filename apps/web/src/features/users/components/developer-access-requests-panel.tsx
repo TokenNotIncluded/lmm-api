@@ -36,7 +36,9 @@ export function DeveloperAccessRequestsPanel() {
       if (!response.success) {
         throw new Error(response.message || t('Unable to load unlock requests'))
       }
-      setRequests(response.data ?? [])
+      setRequests(
+        (response.data ?? []).filter((request) => request.source !== 'legacy')
+      )
       setAvailable(true)
     } catch (error) {
       // A mixed-version deployment may not have the optional admin route yet;
@@ -101,7 +103,7 @@ export function DeveloperAccessRequestsPanel() {
   if (!available) return null
 
   return (
-    <section className='bg-muted/10 border px-5 py-5 sm:px-6'>
+    <section className='border-border border-t pt-10'>
       <div className='flex flex-wrap items-center justify-between gap-3'>
         <div>
           <div className='flex items-center gap-2'>
@@ -137,7 +139,7 @@ export function DeveloperAccessRequestsPanel() {
         </p>
       ) : null}
       {requests.length > 0 ? (
-        <div className='mt-5 grid gap-3'>
+        <div className='mt-6'>
           {requests.map((request) => (
             <RequestCard
               key={request.id}
@@ -168,7 +170,7 @@ function RequestCard(props: {
 }) {
   const { t } = useTranslation()
   const { request, reviewing, notes, onReview, onNoteChange } = props
-  let sourceLabel = t('Legacy request')
+  let sourceLabel = t('Direct request')
   if (request.source === 'assistant_recommendation') {
     sourceLabel = t('AI recommendation')
   } else if (request.source === 'assistant_request') {
@@ -176,7 +178,7 @@ function RequestCard(props: {
   }
 
   return (
-    <article className='bg-background border p-4'>
+    <article className='border-border border-b py-7'>
       <div className='flex flex-wrap items-start justify-between gap-3'>
         <div className='min-w-0'>
           <p className='font-medium'>{request.username}</p>
@@ -189,7 +191,7 @@ function RequestCard(props: {
           <Badge variant='outline'>{t('Pending review')}</Badge>
         </div>
       </div>
-      <div className='bg-muted/20 mt-3 border p-3'>
+      <div className='mt-5 max-w-3xl'>
         <p className='text-xs font-medium'>{t('Recommendation letter')}</p>
         <p className='text-muted-foreground mt-1 text-sm whitespace-pre-wrap'>
           {request.ai_recommendation ||
@@ -198,7 +200,7 @@ function RequestCard(props: {
         </p>
       </div>
       <Textarea
-        className='mt-3'
+        className='mt-5 max-w-3xl rounded-xl'
         rows={2}
         required
         minLength={2}

@@ -88,6 +88,30 @@ func TestAssistantDeveloperAccessRecommendationCanBeCleared(t *testing.T) {
 	assert.Equal(t, DeveloperAccessRequestSourceAssistant, cleared.Source)
 }
 
+func TestPendingLegacyDeveloperAccessRequestsAreRetiredFromTheQueue(t *testing.T) {
+	db := setupConsoleActivationTestDB(t)
+	require.NoError(t, db.AutoMigrate(&DeveloperAccessRequest{}))
+	legacyUser := User{Username: "legacy-request-user", Password: "password", Role: common.RoleCommonUser, AffCode: "legacy-request"}
+	currentUser := User{Username: "current-request-user", Password: "password", Role: common.RoleCommonUser, AffCode: "current-request"}
+	require.NoError(t, db.Create(&legacyUser).Error)
+	require.NoError(t, db.Create(&currentUser).Error)
+	now := common.GetTimestamp()
+	require.NoError(t, db.Create(&[]DeveloperAccessRequest{
+		{UserId: legacyUser.Id, Status: DeveloperAccessRequestPending, Source: DeveloperAccessRequestSourceOld, Reason: "obsolete request", CreatedAt: now},
+		{UserId: currentUser.Id, Status: DeveloperAccessRequestPending, Source: DeveloperAccessRequestSourceAssistant, Reason: "current request", CreatedAt: now + 1},
+	}).Error)
+
+	pending, err := ListDeveloperAccessRequests(DeveloperAccessRequestPending, 10)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	assert.Equal(t, currentUser.Id, pending[0].UserId)
+
+	// Retirement is non-destructive: the old row remains available as history.
+	all, err := ListDeveloperAccessRequests("", 10)
+	require.NoError(t, err)
+	require.Len(t, all, 2)
+}
+
 func TestAssistantDeveloperAccessRecommendationRejectionDoesNotActivate(t *testing.T) {
 	db := setupConsoleActivationTestDB(t)
 	require.NoError(t, db.AutoMigrate(&DeveloperAccessRequest{}))

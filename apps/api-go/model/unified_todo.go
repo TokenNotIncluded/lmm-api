@@ -260,7 +260,8 @@ func unifiedTodoBountyReviewCandidates(userID, limit int) ([]unifiedTodoCandidat
 func unifiedDeveloperAccessQuery(userID int, isAdmin bool) *gorm.DB {
 	query := DB.Table("developer_access_requests AS request").
 		Select("request.*, users.username, users.email").
-		Joins("JOIN users ON users.id = request.user_id AND users.deleted_at IS NULL")
+		Joins("JOIN users ON users.id = request.user_id AND users.deleted_at IS NULL").
+		Where("request.status = ? AND request.source <> ?", DeveloperAccessRequestPending, DeveloperAccessRequestSourceOld)
 	if !isAdmin {
 		query = query.Where("request.user_id = ?", userID)
 	}
@@ -272,7 +273,8 @@ func unifiedAccountActionQuery(userID int, isAdmin bool) *gorm.DB {
 		Select(`request.*, target.username AS target_username, target.email AS target_email,
 			requester.username AS requested_by_username, requester.email AS requested_by_email`).
 		Joins("JOIN users AS target ON target.id = request.target_user_id AND target.deleted_at IS NULL").
-		Joins("LEFT JOIN users AS requester ON requester.id = request.requested_by_user_id AND requester.deleted_at IS NULL")
+		Joins("LEFT JOIN users AS requester ON requester.id = request.requested_by_user_id AND requester.deleted_at IS NULL").
+		Where("request.status = ?", AccountActionStatusPending)
 	if !isAdmin {
 		query = query.Where("(request.target_user_id = ? OR request.requested_by_user_id = ?)", userID, userID)
 	}
@@ -282,16 +284,16 @@ func unifiedAccountActionQuery(userID int, isAdmin bool) *gorm.DB {
 func unifiedDeveloperAccessCandidates(userID, limit int, isAdmin bool) ([]unifiedTodoCandidate, error) {
 	rows := make([]DeveloperAccessRequestView, 0)
 	if err := unifiedDeveloperAccessQuery(userID, isAdmin).
-		Order("CASE WHEN request.reviewed_at > 0 THEN request.reviewed_at ELSE request.created_at END DESC, request.id DESC").
+		Order("request.created_at DESC, request.id DESC").
 		Limit(limit).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 
 	items := make([]unifiedTodoCandidate, 0, len(rows))
 	for _, row := range rows {
-		updatedAt := row.CreatedAt
-		if row.ReviewedAt > 0 {
-			updatedAt = row.ReviewedAt
+		summary := RedactAssistantHistoryContent(row.AIRecommendation)
+		if strings.TrimSpace(summary) == "" {
+			summary = RedactAssistantHistoryContent(row.Reason)
 		}
 		details := map[string]any{
 			"request_id":        row.Id,
@@ -304,6 +306,7 @@ func unifiedDeveloperAccessCandidates(userID, limit int, isAdmin bool) ([]unifie
 		if isAdmin {
 			details["user_id"] = row.UserId
 			details["username"] = row.Username
+			details["email"] = row.Email
 		}
 		items = append(items, unifiedTodoCandidate{Item: UnifiedTodoItem{
 			Id:        unifiedTodoItemID(UnifiedTodoCategoryDeveloperAccess, row.Id),
@@ -311,9 +314,9 @@ func unifiedDeveloperAccessCandidates(userID, limit int, isAdmin bool) ([]unifie
 			Category:  UnifiedTodoCategoryDeveloperAccess,
 			Type:      row.Status,
 			Title:     "developer_access.request",
-			Summary:   "developer access request: " + row.Status,
+			Summary:   summary,
 			CreatedAt: row.CreatedAt,
-			UpdatedAt: updatedAt,
+			UpdatedAt: row.CreatedAt,
 			Details:   details,
 		}})
 	}
@@ -613,7 +616,8 @@ func visibleUnifiedTodoIDs(userID, role int, category string, ids []int, all boo
 			return nil, err
 		}
 	case UnifiedTodoCategoryDeveloperAccess:
-		query := DB.Model(&DeveloperAccessRequest{}).Select("id")
+		query := DB.Model(&DeveloperAccessRequest{}).Select("id").
+			Where("status = ? AND source <> ?", DeveloperAccessRequestPending, DeveloperAccessRequestSourceOld)
 		if !isAdmin {
 			query = query.Where("user_id = ?", userID)
 		}
@@ -624,7 +628,8 @@ func visibleUnifiedTodoIDs(userID, role int, category string, ids []int, all boo
 			return nil, err
 		}
 	case UnifiedTodoCategoryAccountAction:
-		query := DB.Model(&AccountActionRequest{}).Select("id")
+		query := DB.Model(&AccountActionRequest{}).Select("id").
+			Where("status = ?", AccountActionStatusPending)
 		if !isAdmin {
 			query = query.Where("(target_user_id = ? OR requested_by_user_id = ?)", userID, userID)
 		}

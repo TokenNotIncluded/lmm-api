@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -311,7 +310,7 @@ func GeminiChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *
 }
 
 func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
-	responseBody, err := io.ReadAll(resp.Body)
+	responseBody, err := common.ReadResponseBody(resp)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
@@ -392,7 +391,7 @@ func GeminiChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.R
 func GeminiEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	defer service.CloseResponseBodyGracefully(resp)
 
-	responseBody, readErr := io.ReadAll(resp.Body)
+	responseBody, readErr := common.ReadResponseBody(resp)
 	if readErr != nil {
 		return nil, types.NewOpenAIError(readErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
@@ -435,7 +434,7 @@ func GeminiEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 }
 
 func GeminiImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
-	responseBody, readErr := io.ReadAll(resp.Body)
+	responseBody, readErr := common.ReadResponseBody(resp)
 	if readErr != nil {
 		return nil, types.NewOpenAIError(readErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
@@ -525,13 +524,13 @@ func FetchGeminiModels(baseURL, apiKey, proxyURL string) ([]string, error) {
 		}
 
 		if response.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(response.Body)
+			body, _ := common.ReadResponseBody(response)
 			response.Body.Close()
 			cancel()
 			return nil, fmt.Errorf("服务器返回错误 %d: %s", response.StatusCode, string(body))
 		}
 
-		body, err := io.ReadAll(response.Body)
+		body, err := common.ReadResponseBody(response)
 		response.Body.Close()
 		cancel()
 		if err != nil {

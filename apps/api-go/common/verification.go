@@ -2,15 +2,14 @@ package common
 
 import (
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/QuantumNous/new-api/pkg/cachex"
 	"github.com/google/uuid"
 )
 
 type verificationValue struct {
 	code string
-	time time.Time
 }
 
 const (
@@ -20,16 +19,20 @@ const (
 	// replayed in an account-creation flow (or vice versa).
 	SecurityEmailVerificationPurpose = "s"
 	PasswordResetPurpose             = "r"
+
+	verificationMaxEntries = 16_384
+	verificationMaxBytes   = 2 << 20
 )
 
-var verificationMutex sync.Mutex
-var verificationMap map[string]verificationValue
-var verificationMapMaxSize = 10
-var VerificationValidMinutes = 10
+var (
+	VerificationValidMinutes = 10
+	verificationCodes        = cachex.NewByteCache[verificationValue](verificationMaxEntries, verificationMaxBytes, func(key string, value verificationValue) int64 {
+		return int64(len(key) + len(value.code) + 16)
+	})
+)
 
 func GenerateVerificationCode(length int) string {
-	code := uuid.New().String()
-	code = strings.Replace(code, "-", "", -1)
+	code := strings.ReplaceAll(uuid.New().String(), "-", "")
 	if length == 0 {
 		return code
 	}
@@ -37,46 +40,14 @@ func GenerateVerificationCode(length int) string {
 }
 
 func RegisterVerificationCodeWithKey(key string, code string, purpose string) {
-	verificationMutex.Lock()
-	defer verificationMutex.Unlock()
-	verificationMap[purpose+key] = verificationValue{
-		code: code,
-		time: time.Now(),
-	}
-	if len(verificationMap) > verificationMapMaxSize {
-		removeExpiredPairs()
-	}
+	verificationCodes.SetWithTTL(purpose+key, verificationValue{code: code}, time.Duration(VerificationValidMinutes)*time.Minute)
 }
 
 func VerifyCodeWithKey(key string, code string, purpose string) bool {
-	verificationMutex.Lock()
-	defer verificationMutex.Unlock()
-	value, okay := verificationMap[purpose+key]
-	now := time.Now()
-	if !okay || int(now.Sub(value.time).Seconds()) >= VerificationValidMinutes*60 {
-		return false
-	}
-	return code == value.code
+	value, found := verificationCodes.Load(purpose + key)
+	return found && code == value.code
 }
 
 func DeleteKey(key string, purpose string) {
-	verificationMutex.Lock()
-	defer verificationMutex.Unlock()
-	delete(verificationMap, purpose+key)
-}
-
-// no lock inside, so the caller must lock the verificationMap before calling!
-func removeExpiredPairs() {
-	now := time.Now()
-	for key := range verificationMap {
-		if int(now.Sub(verificationMap[key].time).Seconds()) >= VerificationValidMinutes*60 {
-			delete(verificationMap, key)
-		}
-	}
-}
-
-func init() {
-	verificationMutex.Lock()
-	defer verificationMutex.Unlock()
-	verificationMap = make(map[string]verificationValue)
+	verificationCodes.Delete(purpose + key)
 }

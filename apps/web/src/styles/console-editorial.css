@@ -979,6 +979,20 @@ For commercial licensing, please contact support@quantumnous.com
   outline-offset: 3px;
 }
 
+.assistant-prompt-input:has([data-slot='input-group-control']:focus-visible) {
+  outline: 2px solid var(--console-clay, var(--forge-clay-light));
+  outline-offset: 3px;
+}
+
+.dark
+  .assistant-prompt-input:has([data-slot='input-group-control']:focus-visible) {
+  outline-color: var(--console-clay, var(--forge-clay-dark));
+}
+
+.assistant-prompt-input [data-slot='input-group-control']:focus-visible {
+  outline: none;
+}
+
 .console-editorial .console-info-panel {
   border: 1px solid color-mix(in oklch, var(--console-info) 44%, transparent);
   background: color-mix(in oklch, var(--console-info) 14%, var(--background));

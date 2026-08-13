@@ -30,11 +30,19 @@ type assistantCustomerProfile string
 
 type assistantPaymentOfferState string
 
+type assistantRecommendationAction string
+
 const (
 	assistantPaymentOfferNone         assistantPaymentOfferState = "none"
 	assistantPaymentOfferNeedsDetails assistantPaymentOfferState = "needs_details"
 	assistantPaymentOfferReady        assistantPaymentOfferState = "ready"
 	assistantPaymentOfferBlocked      assistantPaymentOfferState = "blocked"
+)
+
+const (
+	assistantRecommendationActionNone   assistantRecommendationAction = ""
+	assistantRecommendationActionRevise assistantRecommendationAction = "revise"
+	assistantRecommendationActionRemove assistantRecommendationAction = "remove"
 )
 
 const (
@@ -83,6 +91,10 @@ type assistantUserContext struct {
 	PaymentRestrictionCauses []string `json:"-"`
 	Intent                   string   `json:"current_intent,omitempty"`
 	ConversationTitleNeeded  bool     `json:"conversation_title_needed,omitempty"`
+	// RecommendationAction is deterministic per-request workflow state. It is
+	// never model-visible account metadata; the user request and tool results
+	// provide the model-visible editing context.
+	RecommendationAction assistantRecommendationAction `json:"-"`
 	// CustomerProfile is a local routing decision. The model receives only the
 	// neutral behavior strategy, never labels such as security_risk or
 	// promotion_seeker that could be repeated back to the user.
@@ -245,11 +257,12 @@ func assistantSafeAuthProviders(providers []string) []string {
 func assistantUserContextForRequest(userID int, message string, conversation ...[]assistantOpenAIMessage) assistantUserContext {
 	profileText := assistantProfileTextForConversation(message, conversation...)
 	context := assistantUserContext{
-		UserID:             userID,
-		AccessLevel:        "L0",
-		AccessReviewStatus: "unknown",
-		CustomerProfile:    assistantProfileUnknown,
-		Intent:             model.ClassifyAssistantIntent(message),
+		UserID:               userID,
+		AccessLevel:          "L0",
+		AccessReviewStatus:   "unknown",
+		CustomerProfile:      assistantProfileUnknown,
+		Intent:               model.ClassifyAssistantIntent(message),
+		RecommendationAction: classifyAssistantRecommendationAction(message),
 	}
 	if userID <= 0 {
 		context.CustomerProfile, context.ProfileSignals = classifyAssistantCustomerProfile(context, profileText)
@@ -317,6 +330,30 @@ func assistantUserContextForRequest(userID int, message string, conversation ...
 	sort.Strings(context.PaymentRestrictionCauses)
 	sort.Strings(context.ProfileSignals)
 	return context
+}
+
+func classifyAssistantRecommendationAction(message string) assistantRecommendationAction {
+	text := strings.ToLower(strings.TrimSpace(message))
+	if model.ClassifyAssistantIntent(text) != model.AssistantIntentRecommendation {
+		return assistantRecommendationActionNone
+	}
+	if !assistantTextContainsAny(text, "不要删除", "别删除", "不要清空", "别清空", "do not delete", "don't delete", "do not remove", "don't remove") &&
+		assistantTextContainsAny(text, "删除", "删掉", "移除", "清空", "清除", "撤回", "不要这封", "delete", "remove", "clear", "discard") {
+		return assistantRecommendationActionRemove
+	}
+	revisionVerbs := []string{"润色", "修改", "改写", "重写", "编辑", "优化", "更新", "替换", "精简", "缩短", "扩写", "polish", "edit", "revise", "rewrite", "update", "improve", "replace", "shorten", "expand"}
+	if !assistantTextContainsAny(text, revisionVerbs...) {
+		return assistantRecommendationActionNone
+	}
+	if assistantTextContainsAny(text, "帮我", "请", "麻烦", "替我", "给我", "我要", "我想", "一下", "把", "please", "can you", "could you", "would you", "i want", "i'd like") {
+		return assistantRecommendationActionRevise
+	}
+	for _, verb := range revisionVerbs {
+		if strings.HasPrefix(text, verb) {
+			return assistantRecommendationActionRevise
+		}
+	}
+	return assistantRecommendationActionNone
 }
 
 func assistantProfileTextForConversation(latestMessage string, conversations ...[]assistantOpenAIMessage) string {

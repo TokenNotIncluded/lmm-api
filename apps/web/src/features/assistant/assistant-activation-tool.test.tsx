@@ -254,7 +254,11 @@ describe('AssistantActivationTool', () => {
         reason: 'I need L1 for a small test client.',
         confirmed: true,
       })
-      assert.match(document.body.textContent ?? '', /Recommendation letter/)
+      assert.match(
+        document.body.textContent ?? '',
+        /AI recommendation submitted · Pending review/
+      )
+      assert.equal(document.querySelector('textarea'), null)
     } finally {
       await unmount(rendered)
     }
@@ -300,7 +304,11 @@ describe('AssistantActivationTool', () => {
         confirmed: true,
       })
       assert.equal(submittedCalls, 1)
-      assert.match(document.body.textContent ?? '', /Recommendation letter/)
+      assert.match(
+        document.body.textContent ?? '',
+        /AI recommendation submitted · Pending review/
+      )
+      assert.equal(document.querySelector('textarea'), null)
     } finally {
       await unmount(rendered)
     }
@@ -328,6 +336,21 @@ describe('AssistantActivationTool', () => {
 
     const rendered = await renderTool()
     try {
+      const pendingStatus = document.querySelector(
+        '[data-testid="assistant-pending-recommendation"]'
+      )
+      assert.ok(pendingStatus)
+      assert.match(
+        pendingStatus.textContent ?? '',
+        /AI recommendation submitted · Pending review/
+      )
+      assert.equal(pendingStatus.querySelector('[data-slot="card"]'), null)
+      assert.equal(document.querySelector('textarea'), null)
+
+      await act(async () => {
+        findButton('Edit').click()
+        await flushEffects()
+      })
       const textarea = document.querySelector<HTMLTextAreaElement>('textarea')
       assert.ok(textarea)
       await setTextareaValue(textarea, '')
@@ -346,7 +369,61 @@ describe('AssistantActivationTool', () => {
         reason: pendingRequest.reason,
         confirmed: true,
       })
-      assert.equal(textarea.value, '')
+      assert.equal(document.querySelector('textarea'), null)
+      assert.ok(
+        document.querySelector(
+          '[data-testid="assistant-pending-recommendation"]'
+        )
+      )
+
+      await act(async () => {
+        findButton('Edit').click()
+        await flushEffects()
+      })
+      const reopenedTextarea =
+        document.querySelector<HTMLTextAreaElement>('textarea')
+      assert.ok(reopenedTextarea)
+      assert.equal(reopenedTextarea.value, '')
+    } finally {
+      await unmount(rendered)
+    }
+  })
+
+  test('cancels a pending recommendation edit without changing its one stored letter', async () => {
+    api.get = (async () => ({
+      data: { success: true, data: pendingRequest },
+    })) as typeof api.get
+    let submittedCalls = 0
+    api.post = (async () => {
+      submittedCalls += 1
+      throw new Error('Cancel must not submit the recommendation')
+    }) as typeof api.post
+
+    const rendered = await renderTool()
+    try {
+      await act(async () => {
+        findButton('Edit').click()
+        await flushEffects()
+      })
+      let textarea = document.querySelector<HTMLTextAreaElement>('textarea')
+      assert.ok(textarea)
+      assert.equal(textarea.value, pendingRequest.ai_recommendation)
+      await setTextareaValue(textarea, 'A local edit that should be discarded.')
+
+      await act(async () => {
+        findButton('Cancel').click()
+        await flushEffects()
+      })
+      assert.equal(document.querySelector('textarea'), null)
+      assert.equal(submittedCalls, 0)
+
+      await act(async () => {
+        findButton('Edit').click()
+        await flushEffects()
+      })
+      textarea = document.querySelector<HTMLTextAreaElement>('textarea')
+      assert.ok(textarea)
+      assert.equal(textarea.value, pendingRequest.ai_recommendation)
     } finally {
       await unmount(rendered)
     }
@@ -374,7 +451,8 @@ describe('AssistantActivationTool', () => {
     try {
       await waitForCondition(
         () =>
-          document.body.textContent?.includes('Recommendation letter') === true,
+          document.body.textContent?.includes('AI recommendation submitted') ===
+          true,
         'Pending recommendation state did not render'
       )
       assert.equal(getCalls, 1)

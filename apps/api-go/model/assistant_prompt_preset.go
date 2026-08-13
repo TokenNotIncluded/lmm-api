@@ -1,0 +1,211 @@
+package model
+
+import (
+	"errors"
+	"strings"
+)
+
+const (
+	PromptPresetVersion   = "aggregate-topic-v1"
+	fallbackPresetVersion = "backend-seed-v1"
+	maxPromptPresets      = 4
+	presetGenerations     = 12
+	presetRetentionDays   = 90
+	presetSignalDays      = 30
+)
+
+var ErrPromptPresetNotFound = errors.New("assistant pre-conversation preset not found")
+
+// PromptPresetRow is a bounded, server-generated snapshot.
+// It contains only reviewed backend copy and aggregate-derived ordering.
+type PromptPresetRow struct {
+	Id         int64  `json:"-" gorm:"primaryKey"`
+	PresetId   string `json:"id" gorm:"type:varchar(64);not null;uniqueIndex:idx_assistant_pre_conversation_generation_preset,priority:2"`
+	Prompt     string `json:"prompt" gorm:"type:varchar(1000);not null"`
+	Label      string `json:"label,omitempty" gorm:"type:varchar(120);not null;default:''"`
+	Intent     string `json:"-" gorm:"type:varchar(40);not null"`
+	Generation int64  `json:"-" gorm:"not null;uniqueIndex:idx_assistant_pre_conversation_generation_preset,priority:1;index"`
+	Version    string `json:"-" gorm:"type:varchar(40);not null"`
+	Position   int    `json:"-" gorm:"not null"`
+	CreatedAt  int64  `json:"-" gorm:"not null"`
+}
+
+func (PromptPresetRow) TableName() string {
+	return "assistant_pre_conversation_preset_cache"
+}
+
+// PromptPresetStat stores aggregate-only counters. There is
+// intentionally no user, conversation, session, IP, or raw-message column.
+type PromptPresetStat struct {
+	Id                  int64  `json:"-" gorm:"primaryKey"`
+	PresetId            string `json:"preset_id" gorm:"type:varchar(64);not null;uniqueIndex:idx_assistant_pre_conversation_stat,priority:1"`
+	BucketStart         int64  `json:"bucket_start" gorm:"not null;uniqueIndex:idx_assistant_pre_conversation_stat,priority:2;index"`
+	Generation          int64  `json:"generation" gorm:"not null;uniqueIndex:idx_assistant_pre_conversation_stat,priority:3"`
+	Version             string `json:"version" gorm:"type:varchar(40);not null;uniqueIndex:idx_assistant_pre_conversation_stat,priority:4"`
+	ClickCount          int64  `json:"click_count" gorm:"not null;default:0"`
+	ConversationCount   int64  `json:"conversation_count" gorm:"not null;default:0"`
+	RecommendationCount int64  `json:"recommendation_count" gorm:"not null;default:0"`
+	ApprovalCount       int64  `json:"approval_count" gorm:"not null;default:0"`
+	UpdatedAt           int64  `json:"updated_at" gorm:"not null"`
+}
+
+func (PromptPresetStat) TableName() string {
+	return "assistant_pre_conversation_preset_stats"
+}
+
+// PromptConversionRef links an existing access
+// review request to an aggregate cohort. It deliberately stores neither a
+// user ID nor recommendation/request text, and is removed after review or the
+// bounded retention window.
+type PromptConversionRef struct {
+	RequestId  int    `json:"-" gorm:"primaryKey"`
+	PresetId   string `json:"-" gorm:"type:varchar(64);not null;index"`
+	Generation int64  `json:"-" gorm:"not null"`
+	Version    string `json:"-" gorm:"type:varchar(40);not null"`
+	UpdatedAt  int64  `json:"-" gorm:"not null;index"`
+}
+
+func (PromptConversionRef) TableName() string {
+	return "assistant_pre_conversation_conversion_attributions"
+}
+
+// PromptConversationRef keeps the aggregate cohort
+// available on later turns without copying a user ID or any conversation text.
+type PromptConversationRef struct {
+	ConversationId int64  `json:"-" gorm:"primaryKey"`
+	PresetId       string `json:"-" gorm:"type:varchar(64);not null;index"`
+	Generation     int64  `json:"-" gorm:"not null"`
+	Version        string `json:"-" gorm:"type:varchar(40);not null"`
+	UpdatedAt      int64  `json:"-" gorm:"not null;index"`
+}
+
+func (PromptConversationRef) TableName() string {
+	return "assistant_pre_conversation_conversation_attributions"
+}
+
+type PromptPreset struct {
+	Id     string `json:"id"`
+	Prompt string `json:"prompt"`
+	Label  string `json:"label,omitempty"`
+}
+
+type PromptPresetSet struct {
+	Generation int64          `json:"generation"`
+	Version    string         `json:"version"`
+	Presets    []PromptPreset `json:"presets"`
+}
+
+type PromptPresetRef struct {
+	PresetId   string
+	Generation int64
+	Version    string
+}
+
+type promptCandidate struct {
+	PromptPreset
+	Intent string
+	Order  int
+}
+
+type topicRule struct {
+	Topic string
+	Terms []string
+}
+
+// Only fixed, reviewed topic names can cross from aggregate questions into a
+// generated preset. Source substrings are never copied to cache rows.
+var topicRules = []topicRule{
+	{Topic: "开发者访问", Terms: []string{"l0", "l1", "开发者权限", "开发者访问", "developer access", "api access"}},
+	{Topic: "API Key", Terms: []string{"api key", "apikey", "密钥"}},
+	{Topic: "Base URL", Terms: []string{"base url", "接口地址"}},
+	{Topic: "Claude Code", Terms: []string{"claude code"}},
+	{Topic: "客户端配置", Terms: []string{"客户端", "client", "配置", "setup"}},
+	{Topic: "模型选择", Terms: []string{"模型", "model", "质量", "速度"}},
+	{Topic: "Token 用量", Terms: []string{"token", "用量", "usage"}},
+	{Topic: "模型价格", Terms: []string{"价格", "单价", "price", "pricing"}},
+	{Topic: "费用估算", Terms: []string{"费用", "成本", "计费", "cost", "billing", "estimate"}},
+	{Topic: "套餐折扣", Terms: []string{"套餐", "折扣", "优惠", "discount", "plan"}},
+	{Topic: "开源悬赏", Terms: []string{"开源", "悬赏", "bounty", "challenge"}},
+	{Topic: "提交证据", Terms: []string{"pull request", "提交", "证据", "evidence"}},
+	{Topic: "人工支持", Terms: []string{"人工", "客服", "管理员", "support", "administrator"}},
+}
+
+var promptCandidates = []promptCandidate{
+	{PromptPreset: PromptPreset{Id: "getting_started", Label: "快速开始", Prompt: "我是第一次使用，请根据我的实际需求介绍最合适的开始方式。"}, Intent: AssistantIntentOnboarding, Order: 0},
+	{PromptPreset: PromptPreset{Id: "developer_access", Label: "开发者访问", Prompt: "我想使用 API，请说明当前账户可以做什么，以及如何申请开发者访问。"}, Intent: AssistantIntentOnboarding, Order: 1},
+	{PromptPreset: PromptPreset{Id: "client_setup", Label: "客户端配置", Prompt: "请帮我选择并配置兼容的客户端，我会补充操作系统和使用场景。"}, Intent: AssistantIntentClientSetup, Order: 2},
+	{PromptPreset: PromptPreset{Id: "pricing_cost", Label: "费用估算", Prompt: "请先解释计费方式，再根据我的模型和用量估算成本。"}, Intent: AssistantIntentCost, Order: 3},
+	{PromptPreset: PromptPreset{Id: "api_key", Label: "连接 API", Prompt: "请说明创建 API Key、Base URL 和模型 ID 的安全配置步骤。"}, Intent: AssistantIntentAPIKey, Order: 4},
+	{PromptPreset: PromptPreset{Id: "model_choice", Label: "选择模型", Prompt: "请根据质量、速度和成本要求帮助我选择可用模型。"}, Intent: AssistantIntentModels, Order: 5},
+	{PromptPreset: PromptPreset{Id: "bounty", Label: "开源悬赏", Prompt: "请介绍如何浏览、接受或发布开源悬赏，以及需要准备哪些真实证据。"}, Intent: AssistantIntentBounty, Order: 6},
+	{PromptPreset: PromptPreset{Id: "human_support", Label: "人工支持", Prompt: "我遇到了需要人工处理的问题，请先帮我整理必要信息并说明联系途径。"}, Intent: AssistantIntentHumanSupport, Order: 7},
+}
+
+func fallbackPromptPresets() PromptPresetSet {
+	presets := make([]PromptPreset, 0, maxPromptPresets)
+	for _, candidate := range promptCandidates[:maxPromptPresets] {
+		presets = append(presets, candidate.PromptPreset)
+	}
+	return PromptPresetSet{
+		Generation: 0,
+		Version:    fallbackPresetVersion,
+		Presets:    presets,
+	}
+}
+
+func GetPromptPresets() (PromptPresetSet, error) {
+	var generation int64
+	if err := DB.Model(&PromptPresetRow{}).Select("COALESCE(MAX(generation), 0)").Scan(&generation).Error; err != nil {
+		return PromptPresetSet{}, err
+	}
+	if generation <= 0 {
+		return fallbackPromptPresets(), nil
+	}
+	rows := make([]PromptPresetRow, 0, maxPromptPresets)
+	if err := DB.Where("generation = ?", generation).
+		Order("position ASC, preset_id ASC").Limit(maxPromptPresets).Find(&rows).Error; err != nil {
+		return PromptPresetSet{}, err
+	}
+	if len(rows) == 0 {
+		return fallbackPromptPresets(), nil
+	}
+	presets := make([]PromptPreset, 0, len(rows))
+	for _, row := range rows {
+		presets = append(presets, PromptPreset{Id: row.PresetId, Prompt: row.Prompt, Label: row.Label})
+	}
+	return PromptPresetSet{Generation: generation, Version: rows[0].Version, Presets: presets}, nil
+}
+
+func findPromptPreset(presetId string) (*PromptPresetRef, string, error) {
+	presetId = strings.TrimSpace(presetId)
+	if presetId == "" {
+		return nil, "", ErrPromptPresetNotFound
+	}
+	current, err := GetPromptPresets()
+	if err != nil {
+		return nil, "", err
+	}
+	for _, preset := range current.Presets {
+		if preset.Id == presetId {
+			return &PromptPresetRef{
+				PresetId: preset.Id, Generation: current.Generation, Version: current.Version,
+			}, preset.Prompt, nil
+		}
+	}
+	return nil, "", ErrPromptPresetNotFound
+}
+
+// ResolvePromptPreset validates that a first turn
+// came from the current server-owned preset rather than trusting an arbitrary
+// client-supplied analytics label.
+func ResolvePromptPreset(presetId string, prompt string) (*PromptPresetRef, error) {
+	attribution, expectedPrompt, err := findPromptPreset(presetId)
+	if err != nil {
+		return nil, err
+	}
+	normalize := func(value string) string { return strings.Join(strings.Fields(strings.TrimSpace(value)), " ") }
+	if normalize(prompt) != normalize(expectedPrompt) {
+		return nil, ErrPromptPresetNotFound
+	}
+	return attribution, nil
+}

@@ -2,7 +2,6 @@ package dto
 
 import (
 	"encoding/json"
-	"regexp"
 	"testing"
 
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -314,15 +313,12 @@ func TestAdvancedCustomRouteModelRegexRulesAreCachedCompiled(t *testing.T) {
 	cached, ok := advancedCustomModelRegexCache.Load("^cache-probe-")
 	require.True(t, ok)
 	require.NotNil(t, cached)
-	_, isRegexp := cached.(*regexp.Regexp)
-	require.True(t, isRegexp)
 
 	// Invalid patterns never match and are cached as nil so they are not recompiled.
 	require.False(t, matchAdvancedCustomRouteModelRule("re:(", "anything"))
 	cached, ok = advancedCustomModelRegexCache.Load("(")
 	require.True(t, ok)
-	re, _ := cached.(*regexp.Regexp)
-	require.Nil(t, re)
+	require.Nil(t, cached)
 
 	// Cached entries keep matching correctly on subsequent calls.
 	require.True(t, matchAdvancedCustomRouteModelRule("re:^cache-probe-", "cache-probe-other"))

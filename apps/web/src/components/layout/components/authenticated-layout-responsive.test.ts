@@ -24,12 +24,16 @@ const source = readFileSync(
   new URL('./authenticated-layout.tsx', import.meta.url),
   'utf8'
 )
+const documentSource = readFileSync(
+  new URL('../../../../index.html', import.meta.url),
+  'utf8'
+)
 
 describe('authenticated layout responsive contract', () => {
   test('keeps the narrow viewport content row and inset stretchable', () => {
     assert.match(
       source,
-      /console-editorial h-svh min-h-0 flex-col overflow-hidden/
+      /console-editorial h-dvh min-h-0 flex-col overflow-hidden/
     )
     assert.match(
       source,
@@ -40,5 +44,6 @@ describe('authenticated layout responsive contract', () => {
       source,
       /assistantPage[\s\S]*\? 'pb-0'[\s\S]*: 'pb-\[calc\(4\.5rem\+env\(safe-area-inset-bottom\)\)\] md:pb-16 xl:pb-0'/
     )
+    assert.match(documentSource, /interactive-widget=resizes-content/)
   })
 })

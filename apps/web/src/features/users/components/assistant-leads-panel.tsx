@@ -86,7 +86,12 @@ const INTENT_LABELS: Record<string, string> = {
   api_key: 'API keys',
   client_setup: 'Client setup',
   cost: 'Cost calculation',
+  math: 'Math calculation',
+  recommendation: 'Recommendation letter',
   bounty: 'Open-source bounties',
+  usage: 'Usage',
+  models: 'Models',
+  invitation: 'Invitation rewards',
   human_support: 'Human support',
   other: 'Other questions',
 }
@@ -100,7 +105,7 @@ const PROFILE_LABELS: Record<string, string> = {
   privacy_conscious: 'Privacy-conscious',
   mobile_accessibility: 'Mobile accessibility',
   normal_user: 'Normal user',
-  unknown: 'Unknown profile',
+  unknown: 'Insufficient signals',
 }
 
 function isNotFound(error: unknown): boolean {
@@ -116,7 +121,7 @@ function HandoffsSkeleton() {
       {[1, 2].map((key) => (
         <div
           key={key}
-          className='min-w-0 space-y-3 rounded-lg border p-3 sm:p-4'
+          className='border-border min-w-0 space-y-3 border-b py-6'
         >
           <div className='flex min-w-0 justify-between gap-3'>
             <div className='min-w-0 space-y-2'>
@@ -138,7 +143,7 @@ function EmptyHandoffs(props: {
 }) {
   const { icon: Icon, title } = props
   return (
-    <Empty className='min-w-0 rounded-lg border border-dashed'>
+    <Empty className='min-w-0 border-0 py-12'>
       <EmptyHeader>
         <EmptyMedia variant='icon'>
           <Icon aria-hidden='true' />
@@ -300,10 +305,7 @@ export function AssistantLeadsPanel() {
       )
     }
     return (
-      <div
-        className='grid min-w-0 gap-3'
-        data-testid='assistant-pending-task-list'
-      >
+      <div className='min-w-0' data-testid='assistant-pending-task-list'>
         {pending.map((handoff) => {
           const isResolving =
             resolveMutation.isPending &&
@@ -313,7 +315,7 @@ export function AssistantLeadsPanel() {
           return (
             <article
               key={handoff.id}
-              className='bg-background min-w-0 overflow-hidden rounded-lg border p-3 sm:p-4'
+              className='border-border min-w-0 overflow-hidden border-b py-7'
               data-testid={`assistant-pending-task-${handoff.id}`}
             >
               <div className='flex min-w-0 flex-col gap-2 sm:flex-row sm:items-start sm:justify-between'>
@@ -334,7 +336,7 @@ export function AssistantLeadsPanel() {
               </div>
 
               <div
-                className='bg-muted/20 mt-3 min-w-0 rounded-md border p-3'
+                className='mt-5 max-w-3xl min-w-0'
                 data-testid={`assistant-redacted-request-${handoff.id}`}
               >
                 <p className='text-xs font-medium'>
@@ -353,7 +355,7 @@ export function AssistantLeadsPanel() {
               </label>
               <Textarea
                 id={noteId}
-                className='mt-1 min-w-0'
+                className='mt-2 max-w-3xl min-w-0 rounded-xl'
                 rows={2}
                 maxLength={2000}
                 aria-label={t('Processing note')}
@@ -417,16 +419,13 @@ export function AssistantLeadsPanel() {
       )
     }
     return (
-      <div
-        className='grid min-w-0 gap-3'
-        data-testid='assistant-resolved-task-list'
-      >
+      <div className='min-w-0' data-testid='assistant-resolved-task-list'>
         {resolved.map((handoff) => {
           const createdAt = new Date(handoff.created_at * 1000)
           return (
             <article
               key={handoff.id}
-              className='bg-background min-w-0 overflow-hidden rounded-lg border p-3 sm:p-4'
+              className='border-border min-w-0 overflow-hidden border-b py-7'
               data-testid={`assistant-resolved-task-${handoff.id}`}
             >
               <div className='flex min-w-0 flex-col gap-2 sm:flex-row sm:items-start sm:justify-between'>
@@ -445,7 +444,7 @@ export function AssistantLeadsPanel() {
                   {t('Resolved')}
                 </Badge>
               </div>
-              <div className='bg-muted/20 mt-3 min-w-0 rounded-md border p-3'>
+              <div className='mt-5 max-w-3xl min-w-0'>
                 <p className='text-xs font-medium'>
                   {t('Privacy-minimized request')}
                 </p>
@@ -628,10 +627,10 @@ export function AssistantLeadsPanel() {
 
   return (
     <Card
-      className='max-w-full min-w-0 overflow-hidden'
+      className='max-w-full min-w-0 overflow-hidden border-0 bg-transparent shadow-none'
       data-testid='assistant-support-tasks'
     >
-      <CardHeader className='gap-3'>
+      <CardHeader className='border-border gap-3 border-t px-0 pt-10'>
         <div className='min-w-0'>
           <CardTitle className='flex min-w-0 flex-wrap items-center gap-2'>
             <MessageSquareText className='size-4 shrink-0' aria-hidden='true' />
@@ -662,7 +661,7 @@ export function AssistantLeadsPanel() {
           </Button>
         </CardAction>
       </CardHeader>
-      <CardContent className='min-w-0 space-y-5 overflow-hidden'>
+      <CardContent className='min-w-0 space-y-8 overflow-hidden px-0'>
         {firstError ? (
           <Alert variant='destructive' role='alert'>
             <CircleAlert aria-hidden='true' />
@@ -692,7 +691,7 @@ export function AssistantLeadsPanel() {
           className='min-w-0 space-y-3'
           data-testid='assistant-pending-workspace'
         >
-          <div className='bg-primary/5 border-primary/20 flex min-w-0 flex-wrap items-center justify-between gap-3 rounded-lg border p-3 sm:p-4'>
+          <div className='flex min-w-0 flex-wrap items-center justify-between gap-3 py-2'>
             <div className='min-w-0'>
               <p
                 id='assistant-support-task-list-title'
@@ -728,16 +727,16 @@ export function AssistantLeadsPanel() {
           data-testid='assistant-secondary-workspace'
         >
           <Tabs defaultValue='resolved' className='min-w-0'>
-            <TabsList className='flex h-auto w-full max-w-full flex-wrap justify-start gap-1 overflow-hidden p-1'>
+            <TabsList className='border-border flex h-auto w-full max-w-full flex-wrap justify-start gap-6 overflow-hidden rounded-none border-b bg-transparent p-0'>
               <TabsTrigger
-                className='min-w-0 flex-1 px-2 py-1.5 text-center text-xs whitespace-normal sm:flex-none sm:text-sm'
+                className='min-w-0 rounded-none border-0 bg-transparent px-0 py-3 text-center text-xs whitespace-normal shadow-none sm:flex-none sm:text-sm'
                 value='resolved'
               >
                 {t('Resolved history')}
                 <Badge variant='secondary'>{resolved.length}</Badge>
               </TabsTrigger>
               <TabsTrigger
-                className='min-w-0 flex-1 px-2 py-1.5 text-center text-xs whitespace-normal sm:flex-none sm:text-sm'
+                className='min-w-0 rounded-none border-0 bg-transparent px-0 py-3 text-center text-xs whitespace-normal shadow-none sm:flex-none sm:text-sm'
                 value='insights'
               >
                 {t('Insights and AI cost')}

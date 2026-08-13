@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	corecommon "github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -75,7 +76,7 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *common.RelayInfo, requestBody 
 	}
 	// 解析 resp
 	var cozeResponse CozeChatResponse
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := corecommon.ReadResponseBody(resp)
 	if err != nil {
 		return nil, err
 	}

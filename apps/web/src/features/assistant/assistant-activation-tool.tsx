@@ -30,6 +30,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { Button } from '@/components/ui/button'
+import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Textarea } from '@/components/ui/textarea'
 import {
   getDeveloperAccessRequest,
@@ -64,6 +65,8 @@ export function AssistantActivationTool(props: {
   const [loading, setLoading] = useState(false)
   const [manualReason, setManualReason] = useState('')
   const [letter, setLetter] = useState<string | null>(null)
+  const [pendingLetterEditing, setPendingLetterEditing] = useState(false)
+  const [pendingLetterDraft, setPendingLetterDraft] = useState('')
   const initializedLetterKey = useRef('')
 
   const requestQuery = useQuery({
@@ -129,12 +132,7 @@ export function AssistantActivationTool(props: {
 
   const savePendingLetter = async () => {
     if (!request || request.status !== 'pending' || loading) return
-    const recommendation =
-      letter !== null
-        ? letter.trim()
-        : props.recommendationDraft?.recommendation ||
-          request.ai_recommendation ||
-          request.reason
+    const recommendation = pendingLetterDraft.trim()
     if (recommendation.length > 0 && recommendation.length < 20) return
     setLoading(true)
     try {
@@ -153,6 +151,7 @@ export function AssistantActivationTool(props: {
       )
       setRequestOverride(submitted)
       setLetter(submitted.ai_recommendation)
+      setPendingLetterEditing(false)
       toast.success(t('Your changes were saved.'))
     } catch (error) {
       toast.error(
@@ -223,44 +222,83 @@ export function AssistantActivationTool(props: {
 
   if (request?.status === 'pending') {
     const recommendation =
-      letter !== null
-        ? letter
-        : props.recommendationDraft?.recommendation ||
-          request.ai_recommendation ||
-          request.reason
-    return (
-      <section className='grid min-w-0 gap-4 py-4'>
-        <div>
-          <h3 className='text-sm font-medium'>{t('Recommendation letter')}</h3>
-          <p className='text-muted-foreground mt-1 text-xs leading-5'>
-            {t(
-              'AI and you can edit the same letter before an administrator reviews it.'
-            )}
-          </p>
-        </div>
-        <Textarea
-          value={recommendation}
-          onChange={(event) => setLetter(event.target.value)}
-          maxLength={2000}
-          rows={5}
-          className='focus-visible:border-foreground/30 min-h-36 w-full resize-y text-base focus-visible:ring-0 sm:text-sm'
-          placeholder={t('Recommendation letter')}
-          aria-label={t('Recommendation letter')}
-        />
-        <AdministratorReply request={request} />
-        <Button
-          type='button'
-          size='sm'
-          className='w-full sm:w-auto sm:justify-self-start'
-          onClick={() => void savePendingLetter()}
-          disabled={
-            loading ||
-            (recommendation.trim().length > 0 &&
-              recommendation.trim().length < 20)
-          }
+      letter !== null ? letter : request.ai_recommendation || request.reason
+    if (!pendingLetterEditing) {
+      return (
+        <section
+          className='flex min-w-0 items-center gap-2 py-2'
+          data-testid='assistant-pending-recommendation'
         >
-          {loading ? t('Submitting...') : t('Save changes')}
-        </Button>
+          <p className='text-muted-foreground min-w-0 flex-1 truncate text-xs'>
+            {t('AI recommendation submitted')}
+            <span aria-hidden='true'> · </span>
+            {t('Pending review')}
+          </p>
+          <Button
+            type='button'
+            variant='ghost'
+            size='sm'
+            className='shrink-0'
+            aria-label={`${t('Edit')} ${t('Recommendation letter')}`}
+            onClick={() => {
+              setPendingLetterDraft(recommendation)
+              setPendingLetterEditing(true)
+            }}
+          >
+            {t('Edit')}
+          </Button>
+        </section>
+      )
+    }
+
+    return (
+      <section
+        className='grid min-w-0 gap-3 py-3'
+        data-testid='assistant-pending-recommendation-editor'
+      >
+        <FieldGroup className='gap-3'>
+          <Field>
+            <FieldLabel
+              htmlFor='assistant-pending-recommendation-letter'
+              className='sr-only'
+            >
+              {t('Recommendation letter')}
+            </FieldLabel>
+            <Textarea
+              id='assistant-pending-recommendation-letter'
+              value={pendingLetterDraft}
+              onChange={(event) => setPendingLetterDraft(event.target.value)}
+              maxLength={2000}
+              rows={4}
+              className='focus-visible:border-foreground/30 min-h-28 w-full resize-y text-base focus-visible:ring-0 sm:text-sm'
+              placeholder={t('Recommendation letter')}
+            />
+          </Field>
+        </FieldGroup>
+        <AdministratorReply request={request} />
+        <div className='flex flex-wrap justify-end gap-2'>
+          <Button
+            type='button'
+            variant='ghost'
+            size='sm'
+            disabled={loading}
+            onClick={() => setPendingLetterEditing(false)}
+          >
+            {t('Cancel')}
+          </Button>
+          <Button
+            type='button'
+            size='sm'
+            onClick={() => void savePendingLetter()}
+            disabled={
+              loading ||
+              (pendingLetterDraft.trim().length > 0 &&
+                pendingLetterDraft.trim().length < 20)
+            }
+          >
+            {loading ? t('Submitting...') : t('Save changes')}
+          </Button>
+        </div>
       </section>
     )
   }

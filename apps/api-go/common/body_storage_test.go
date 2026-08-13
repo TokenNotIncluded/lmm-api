@@ -3,6 +3,7 @@ package common
 import (
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -34,4 +35,17 @@ func TestNewReplayableBodyReaderKeepsStorageLifecycleWithCaller(t *testing.T) {
 	require.NoError(t, storage.Close())
 	_, err = body.NewReader()
 	require.ErrorIs(t, err, ErrStorageClosed)
+}
+
+func TestUnknownLengthBodySpillsToDisk(t *testing.T) {
+	previous := GetDiskCacheConfig()
+	SetDiskCacheConfig(DiskCacheConfig{Enabled: true, ThresholdMB: 1, MaxSizeMB: 16, Path: t.TempDir()})
+	t.Cleanup(func() { SetDiskCacheConfig(previous) })
+
+	payload := strings.Repeat("x", (1<<20)+1)
+	storage, err := CreateBodyStorageFromReader(strings.NewReader(payload), -1, 2<<20)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = storage.Close() })
+	assert.True(t, storage.IsDisk())
+	assert.EqualValues(t, len(payload), storage.Size())
 }

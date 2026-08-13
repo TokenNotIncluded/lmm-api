@@ -10,6 +10,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const assistantRequestMaxBytes = 64 << 10
+
 func SetRelayRouter(router *gin.Engine) {
 	router.Use(middleware.CORS())
 	router.Use(middleware.DecompressRequestMiddleware())
@@ -66,6 +68,14 @@ func SetRelayRouter(router *gin.Engine) {
 	{
 		playgroundRouter.POST("/chat/completions", controller.Playground)
 	}
+	assistantPresetRouter := router.Group("/api/assistant/pre-conversation-presets")
+	assistantPresetRouter.Use(middleware.RouteTag("api"))
+	assistantPresetRouter.Use(middleware.SystemPerformanceCheck())
+	assistantPresetRouter.Use(middleware.TryUserAuth())
+	{
+		assistantPresetRouter.GET("", controller.GetPromptPresets)
+		assistantPresetRouter.POST("/:id/click", middleware.CriticalRateLimit(), controller.CountPromptPresetClick)
+	}
 	assistantRouter := router.Group("/api/assistant")
 	assistantRouter.Use(middleware.RouteTag("relay"))
 	assistantRouter.Use(middleware.SystemPerformanceCheck())
@@ -73,7 +83,7 @@ func SetRelayRouter(router *gin.Engine) {
 	{
 		assistantRouter.GET("/status", controller.GetAssistantStatus)
 		assistantRouter.GET("/offers", controller.GetAssistantPlanOffers)
-		assistantRouter.POST("/chat", middleware.UserCriticalRateLimit("assistant"), controller.PrepareAssistantRequest, middleware.Distribute(), controller.AssistantChat)
+		assistantRouter.POST("/chat", middleware.UserCriticalRateLimit("assistant"), middleware.RequestBodyLimit(assistantRequestMaxBytes), controller.PrepareAssistantRequest, middleware.Distribute(), controller.AssistantChat)
 		assistantRouter.GET("/conversations", middleware.DisableCache(), controller.ListAssistantConversations)
 		assistantRouter.GET("/conversations/:id", middleware.DisableCache(), controller.GetAssistantConversationHistory)
 		assistantRouter.POST("/conversations/:id/archive", middleware.DisableCache(), controller.ArchiveAssistantConversation)

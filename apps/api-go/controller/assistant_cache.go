@@ -11,11 +11,17 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/cachex"
+	"github.com/QuantumNous/new-api/pkg/syncx"
 	"github.com/QuantumNous/new-api/setting"
-	"github.com/samber/hot"
 )
 
-const assistantResponseCacheNamespace = "new-api:assistant-response:v2"
+const (
+	assistantResponseCacheNamespace = "new-api:assistant-response:v2"
+	assistantCacheMaxEntries        = 256
+	assistantCacheMaxBytes          = 8 << 20
+	assistantCacheMaxValueBytes     = 256 << 10
+	assistantCacheMaxGates          = 256
+)
 
 type assistantCachedResponse struct {
 	Status            int    `json:"status"`
@@ -26,58 +32,14 @@ type assistantCachedResponse struct {
 var (
 	assistantResponseCacheOnce sync.Once
 	assistantResponseCache     *cachex.HybridCache[assistantCachedResponse]
-	assistantCacheGates        = struct {
-		sync.Mutex
-		entries map[string]*assistantCacheGate
-	}{entries: make(map[string]*assistantCacheGate)}
+	assistantCacheGates        = syncx.NewKeyedGate(assistantCacheMaxGates)
 )
 
-// assistantCacheGate prevents a burst of identical, cache-eligible questions
-// from all reaching the upstream model before the first response is stored.
-// The gate is deliberately narrower than the response cache: it never shares
-// a tool result or a response between users, and callers re-check the cache
-// after waiting for the current owner.
-type assistantCacheGate struct {
-	done chan struct{}
-}
-
 // acquireAssistantCacheGate serializes only the same cache key. The returned
-// release function is idempotent so middleware error paths can safely defer it.
+// release function is idempotent. The shared implementation also caps the
+// number of distinct in-flight keys, preventing cardinality-driven map growth.
 func acquireAssistantCacheGate(ctx context.Context, key string) (func(), bool) {
-	if key == "" {
-		return func() {}, true
-	}
-	for {
-		assistantCacheGates.Lock()
-		entry, exists := assistantCacheGates.entries[key]
-		if !exists {
-			entry = &assistantCacheGate{done: make(chan struct{})}
-			assistantCacheGates.entries[key] = entry
-			assistantCacheGates.Unlock()
-
-			var once sync.Once
-			return func() {
-				once.Do(func() {
-					assistantCacheGates.Lock()
-					if current, ok := assistantCacheGates.entries[key]; ok && current == entry {
-						delete(assistantCacheGates.entries, key)
-						close(entry.done)
-					}
-					assistantCacheGates.Unlock()
-				})
-			}, true
-		}
-		wait := entry.done
-		assistantCacheGates.Unlock()
-
-		select {
-		case <-wait:
-			// The owner has finished. Re-check the map because another request
-			// may have become the next owner before this waiter woke up.
-		case <-ctx.Done():
-			return func() {}, false
-		}
-	}
+	return assistantCacheGates.Acquire(ctx, key)
 }
 
 func getAssistantResponseCache() *cachex.HybridCache[assistantCachedResponse] {
@@ -89,11 +51,14 @@ func getAssistantResponseCache() *cachex.HybridCache[assistantCachedResponse] {
 				return common.RedisEnabled && common.RDB != nil
 			},
 			RedisCodec: cachex.JSONCodec[assistantCachedResponse]{},
-			Memory: func() *hot.HotCache[string, assistantCachedResponse] {
-				return hot.NewHotCache[string, assistantCachedResponse](hot.LRU, 2048).
-					WithTTL(7 * 24 * time.Hour).
-					WithJanitor().
-					Build()
+			MemoryStore: func() cachex.MemoryCache[assistantCachedResponse] {
+				return cachex.NewByteCache[assistantCachedResponse](
+					assistantCacheMaxEntries,
+					assistantCacheMaxBytes,
+					func(key string, value assistantCachedResponse) int64 {
+						return int64(len(key) + len(value.Body) + len(value.ConversationTitle) + 16)
+					},
+				)
 			},
 		})
 	})
@@ -209,7 +174,7 @@ func getAssistantCachedResponse(key string) (assistantCachedResponse, bool) {
 }
 
 func storeAssistantCachedResponse(settings setting.AssistantSettings, key string, status int, body []byte, conversationTitles ...string) {
-	if key == "" || !settings.CacheEnabled || settings.CacheTTLMinutes <= 0 || status < 200 || status >= 300 || len(body) == 0 {
+	if key == "" || !settings.CacheEnabled || settings.CacheTTLMinutes <= 0 || status < 200 || status >= 300 || len(body) == 0 || len(body) > assistantCacheMaxValueBytes {
 		return
 	}
 	normalized, err := normalizeAssistantClientResponse(nil, body)

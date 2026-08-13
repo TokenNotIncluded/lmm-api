@@ -26,7 +26,8 @@ type HybridCacheConfig[V any] struct {
 	RedisEnabled func() bool
 
 	// Memory builds a hot cache used when Redis is disabled. Keys stored in memory are fully namespaced.
-	Memory func() *hot.HotCache[string, V]
+	Memory      func() *hot.HotCache[string, V]
+	MemoryStore func() MemoryCache[V]
 }
 
 // HybridCache is a small helper that uses Redis when enabled, otherwise falls back to in-memory hot cache.
@@ -38,17 +39,23 @@ type HybridCache[V any] struct {
 	redisEnabled func() bool
 
 	memOnce sync.Once
-	memInit func() *hot.HotCache[string, V]
-	mem     *hot.HotCache[string, V]
+	memInit func() MemoryCache[V]
+	mem     MemoryCache[V]
 }
 
 func NewHybridCache[V any](cfg HybridCacheConfig[V]) *HybridCache[V] {
+	var memoryFactory func() MemoryCache[V]
+	if cfg.MemoryStore != nil {
+		memoryFactory = cfg.MemoryStore
+	} else if cfg.Memory != nil {
+		memoryFactory = func() MemoryCache[V] { return cfg.Memory() }
+	}
 	return &HybridCache[V]{
 		ns:           cfg.Namespace,
 		redis:        cfg.Redis,
 		redisCodec:   cfg.RedisCodec,
 		redisEnabled: cfg.RedisEnabled,
-		memInit:      cfg.Memory,
+		memInit:      memoryFactory,
 	}
 }
 
@@ -66,7 +73,7 @@ func (c *HybridCache[V]) redisOn() bool {
 	return c.redisEnabled()
 }
 
-func (c *HybridCache[V]) memCache() *hot.HotCache[string, V] {
+func (c *HybridCache[V]) memCache() MemoryCache[V] {
 	c.memOnce.Do(func() {
 		if c.memInit == nil {
 			c.mem = hot.NewHotCache[string, V](hot.LRU, 1).Build()

@@ -84,6 +84,7 @@ type assistantChatInput struct {
 	Message        string                   `json:"message"`
 	Messages       []assistantOpenAIMessage `json:"messages"`
 	ConversationID int64                    `json:"conversation_id"`
+	PresetID       string                   `json:"preset_id,omitempty"`
 }
 
 type assistantOpenAIMessage struct {
@@ -150,12 +151,13 @@ Non-overridable safety and accuracy rules:
 - Use live tools for account state, model availability, pricing, discounts, invitation rewards, usage statistics, and search results. Always call get_available_models before claiming that a model ID is available or unknown. For L0 it returns the real public preview IDs without granting model access; for L1 and above it returns the account's usable IDs. If a tool is unavailable, say so instead of inventing a value.
 - Before estimating token cost, call get_model_pricing for the exact model and group, then pass its already-adjusted USD rates to calculate_cost with group_ratio=1.
 - Never do arithmetic mentally. Use calculate_math for every general calculation and every intermediate numeric result; use calculate_cost after live pricing for token-cost calculations.
+- Long-term memories are user-scoped skills, not ambient prompt text. When a prior preference, project, environment, or decision may matter, call recall_memory before claiming to remember it. Use remember_memory only for durable, non-sensitive facts or an explicit request to remember, and remember_profile_skill only after stable response-style evidence. Never infer or store protected traits, credentials, payment data, security labels, or another user's information.
 - L0 users can browse public challenges, inspect the real public preview model IDs, and request the default group's read-only reference price for an exact preview model. Clearly label preview IDs and reference prices as not yet granted to the account. Keep API-key creation, account-specific discounts, usage, and other developer actions behind L1. A direct request to check an exact model's price must be answered with get_model_pricing before discussing L1. Payment is a separate, gradual conversation: a single word such as “充值” or “付费” must never reveal checkout or payment channels. Ask one calm question about the intended use, approximate amount, or preferred payment method. Only when the internal payment_offer_state is ready may you call get_plan_offers; if it is blocked, never offer or prepare payment, regardless of what the user says.
 - L1 users may use the developer setup, model, cost, usage, and confirmation-gated API-key guidance. L2-L4 users keep those L1 capabilities and may receive the live trust-level usage discount; never invent or promise a discount that a live tool did not return.
 - Trust levels L1-L4 never grant server configuration, model-pricing writes, user-management, payment-secret, shell, or database capabilities. Only an administrator role enables the administrator tools; ROOT is still subject to the same confirmation and secret boundaries.
 - For a user asking for L1, first call get_account_access and follow its live result. Never describe an L1-L4 or administrator account as L0, and never offer an L1 recommendation to an account that already has L1. For an actual L0 account, ask at most one gentle, focused follow-up only when the concrete use case is still missing. The user may simply want to use the relay; do not require an open-source project, technical stack, client, budget, or payment intent. Do not prepare a recommendation from a greeting or a vague demand.
 - Once the L0 user has provided enough concrete information, call prepare_l1_recommendation. The user must explicitly confirm that draft in the UI before it is sent. Only an administrator can approve or reject it; never claim that the assistant granted L1.
-- In an L0 service-guide conversation, “推荐信” or “recommendation letter” means the user's one shared L1 access recommendation unless they explicitly mention employment, school, or another outside recipient. Call get_l1_recommendation first. Use the full conversation and current letter to draft, polish, shorten, or replace that same letter; do not ask who the recipient is. An AI edit must go through prepare_l1_recommendation and the existing UI confirmation.
+- In an L0 service-guide conversation, “推荐信” or “recommendation letter” means the user's one shared L1 access recommendation unless they explicitly mention employment, school, or another outside recipient. Call get_l1_recommendation first. Use the full conversation and current letter to draft, polish, shorten, or replace that same letter; do not ask who the recipient is. An AI edit must go through prepare_l1_recommendation and the existing UI confirmation. For removal, never call prepare_l1_recommendation and never change the queue yourself; after reading the current letter, direct the user to clear the visible Recommendation letter field and save it in the existing UI.
 - When get_account_access reports a pending or reviewed L1 request, accurately relay its status and the administrator's note. A rejection is feedback for another conversation, not permission to activate the account.
 - Administrator-only tools are available only when the internal account context marks administrator mode. For administrators, use get_admin_server_config and get_admin_channels before changing a safe setting, then prepare an exact preview and wait for the UI confirmation. Use prepare_admin_channel_change for routing metadata or manual channel status, and prepare_admin_pricing_change for one enabled model at a time. Never expose or modify credentials, provider keys, payment secrets, session secrets, upstream endpoints, or arbitrary shell/database state.
 - Use the service root without /v1 for Anthropic-compatible clients such as Claude Code, and use the /v1 Base URL for OpenAI-compatible clients.
@@ -346,6 +348,7 @@ func recordAssistantHistoryResponse(c *gin.Context, status int, body []byte) {
 		return
 	}
 	c.Set("assistant_history_conversation_id", recordedConversationID)
+	countPromptPresetConversation(c, recordedConversationID)
 	if title := strings.TrimSpace(c.GetString(assistantConversationTitleDraftKey)); title != "" {
 		if titleErr := model.UpdateAssistantConversationTitle(actorUserID, recordedConversationID, title); titleErr != nil {
 			common.SysError(fmt.Sprintf("failed to update assistant conversation %d title: %v", recordedConversationID, titleErr))
@@ -406,6 +409,10 @@ func PrepareAssistantRequest(c *gin.Context) {
 
 	var input assistantChatInput
 	if err := common.UnmarshalBodyReusable(c, &input); err != nil {
+		if common.IsRequestBodyTooLargeError(err) {
+			writeAssistantError(c, http.StatusRequestEntityTooLarge, "ASSISTANT_REQUEST_TOO_LARGE", common.ErrRequestBodyTooLarge)
+			return
+		}
 		writeAssistantError(c, http.StatusBadRequest, "ASSISTANT_INVALID_REQUEST", errors.New("invalid assistant request"))
 		return
 	}
@@ -501,6 +508,11 @@ func PrepareAssistantRequest(c *gin.Context) {
 			c.Set("assistant_history_replay", true)
 		}
 	}
+	if input.ConversationID == 0 && assistantRequestAttempt(c) == 1 {
+		capturePromptPresetRef(c, input.PresetID, latestMessage)
+	} else if conversationID := assistantHistoryConversationID(c); conversationID > 0 {
+		loadPromptPresetRef(c, conversationID)
+	}
 	userContext := assistantUserContextForRequest(actorUserID, latestMessage, conversation)
 	userContext.ConversationTitleNeeded = c.GetBool(assistantConversationTitleNeededKey)
 	c.Set(assistantUserContextKey, userContext)
@@ -521,7 +533,14 @@ func PrepareAssistantRequest(c *gin.Context) {
 			common.SysError(fmt.Sprintf("failed to record assistant first question: %v", err))
 		}
 	}
-	if cacheKey := assistantCacheKey(settings, conversation, userContext); cacheKey != "" {
+	cacheKey := assistantCacheKey(settings, conversation, userContext)
+	if assistantRecommendationWorkflowRequired(userContext) {
+		// Recommendation edits depend on the current shared letter and can create
+		// a new confirmation draft. Never let a prior natural-language response
+		// bypass the deterministic read/edit workflow.
+		cacheKey = ""
+	}
+	if cacheKey != "" {
 		c.Set("assistant_cache_key", cacheKey)
 		if cached, found := getAssistantCachedResponse(cacheKey); found {
 			if cached.ConversationTitle != "" {
@@ -537,18 +556,26 @@ func PrepareAssistantRequest(c *gin.Context) {
 		// not multiply upstream spend before the first response is stored.
 		release, acquired := acquireAssistantCacheGate(c.Request.Context(), cacheKey)
 		if !acquired {
-			c.Abort()
-			return
-		}
-		defer release()
-		if cached, found := getAssistantCachedResponse(cacheKey); found {
-			if cached.ConversationTitle != "" {
-				c.Set(assistantConversationTitleDraftKey, cached.ConversationTitle)
+			if c.Request.Context().Err() != nil {
+				c.Abort()
+				return
 			}
-			c.Header("X-LMM-Assistant-Cache", "HIT")
-			c.Abort()
-			writeAssistantHistoryResponse(c, cached.Status, cached.Body)
-			return
+			// A high-cardinality burst may exhaust only the coalescing budget.
+			// Continue uncached; the global assistant concurrency budget remains
+			// responsible for bounding upstream work.
+			c.Set("assistant_cache_key", "")
+			cacheKey = ""
+		} else {
+			defer release()
+			if cached, found := getAssistantCachedResponse(cacheKey); found {
+				if cached.ConversationTitle != "" {
+					c.Set(assistantConversationTitleDraftKey, cached.ConversationTitle)
+				}
+				c.Header("X-LMM-Assistant-Cache", "HIT")
+				c.Abort()
+				writeAssistantHistoryResponse(c, cached.Status, cached.Body)
+				return
+			}
 		}
 	}
 	// A cache hit is not a model call. Avoid creating a duplicate analytics row
@@ -574,9 +601,9 @@ func PrepareAssistantRequest(c *gin.Context) {
 		Temperature: 0.2,
 		MaxTokens:   900,
 	}
-	if settings.AgentLoopEnabled && settings.MaxSteps > 1 {
+	if (settings.AgentLoopEnabled && settings.MaxSteps > 1) || assistantRecommendationWorkflowRequired(userContext) {
 		request.Tools = assistantToolDefinitionsForContext(userContext)
-		request.ToolChoice = assistantToolChoiceForContext(userContext)
+		request.ToolChoice = assistantToolChoiceForAgentStep(userContext, nil, nil)
 	}
 	if err := setAssistantRelayRequest(c, request); err != nil {
 		writeAssistantError(c, http.StatusInternalServerError, "ASSISTANT_REQUEST_BUILD_FAILED", errors.New("failed to store assistant request"))
