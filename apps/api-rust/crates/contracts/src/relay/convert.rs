@@ -1868,6 +1868,33 @@ fn preflight_responses_response_metadata(
             None,
         ));
     }
+    if let Some(usage) = response.usage.as_ref() {
+        validate_responses_response_usage(usage)?;
+    }
+    Ok(())
+}
+
+fn validate_responses_response_usage(usage: &WireUsage) -> Result<(), RelayConvertError> {
+    if let Some(error) = first_extra_path("usage", &usage.extra) {
+        return Err(error);
+    }
+    for (field, details) in [
+        (
+            "prompt_tokens_details",
+            usage.prompt_tokens_details.as_ref(),
+        ),
+        (
+            "completion_tokens_details",
+            usage.completion_tokens_details.as_ref(),
+        ),
+        ("input_tokens_details", usage.input_tokens_details.as_ref()),
+    ] {
+        if let Some(details) = details {
+            if let Some(error) = first_extra_path(&format!("usage.{field}"), &details.extra) {
+                return Err(error);
+            }
+        }
+    }
     Ok(())
 }
 

@@ -1119,6 +1119,44 @@ fn responses_stream_unknown_envelope_fields_are_typed_rejections() {
 }
 
 #[test]
+fn responses_response_usage_unknown_fields_are_typed_rejections() {
+    let cases = [
+        (
+            serde_json::json!({"futureUsageField": true}),
+            "usage.futureUsageField",
+        ),
+        (
+            serde_json::json!({
+                "prompt_tokens_details": {"futurePromptField": true}
+            }),
+            "usage.prompt_tokens_details.futurePromptField",
+        ),
+    ];
+
+    for (usage, expected_path) in cases {
+        let response: ResponsesResponse = serde_json::from_value(serde_json::json!({
+            "id": "resp-usage",
+            "object": "response",
+            "model": "gpt-test",
+            "status": "completed",
+            "output": [],
+            "usage": usage
+        }))
+        .expect("unknown Responses response usage field is retained by the wire DTO");
+        let error = openai_responses_response_to_canonical(response)
+            .expect_err("canonical Responses conversion must reject unknown usage fields");
+        assert!(matches!(
+            error,
+            RelayConvertError::UnsupportedFeature(detail)
+                if detail.feature == "unknown_field"
+                    && detail.path == expected_path
+                    && detail.source_format == "openai_responses"
+                    && detail.target_format == "provider_neutral_ir"
+        ));
+    }
+}
+
+#[test]
 fn responses_incomplete_details_round_trip_to_chat_finish_reasons() {
     for (reason, expected) in [
         ("max_output_tokens", FinishReason::Length),
