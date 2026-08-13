@@ -42,16 +42,16 @@ use lmm_api_rs::{
     },
 };
 use lmm_contracts::relay::{
-    CacheUsage, CanonicalContent, ClaudeRequest, ClaudeResponse, ClaudeStreamSemanticEvent,
-    ClaudeStreamSnapshot, Direction, Envelope, Feature, FinishReason, FunctionData, GeminiRequest,
-    GeminiResponse, GeminiStreamSnapshot, Item, ItemKind, JsonData, Loss, LossCode, Media,
-    MediaKind, Money, OpaqueId, OpaqueIdProvenance, OpaqueProviderState, OpaqueStateProvenance,
-    OpenAiChatRequest, OpenAiChatResponse, OpenAiResponsesRequest, OpenAiStreamSnapshot, Part,
-    PartKind, Protocol, Provenance, ResponsesResponse, ResponsesStreamSnapshot, Role,
-    SemanticBillingUsage, SemanticUsage, TokenUsage, Tool, ToolChoice, canonical_request_to_claude,
-    canonical_request_to_gemini_for_model, canonical_request_to_openai_chat,
-    canonical_response_to_claude, canonical_response_to_gemini, claude_request_to_canonical,
-    claude_response_to_canonical, claude_stream_to_semantic_events,
+    CacheUsage, CanonicalContent, CanonicalResponse, ClaudeRequest, ClaudeResponse,
+    ClaudeStreamSemanticEvent, ClaudeStreamSnapshot, Direction, Envelope, Feature, FinishReason,
+    FunctionData, GeminiRequest, GeminiResponse, GeminiStreamSnapshot, Item, ItemKind, JsonData,
+    Loss, LossCode, Media, MediaKind, Money, OpaqueId, OpaqueIdProvenance, OpaqueProviderState,
+    OpaqueStateProvenance, OpenAiChatRequest, OpenAiChatResponse, OpenAiResponsesRequest,
+    OpenAiStreamSnapshot, Part, PartKind, Protocol, Provenance, ResponsesResponse,
+    ResponsesStreamSnapshot, Role, SemanticBillingUsage, SemanticUsage, TokenUsage, Tool,
+    ToolChoice, canonical_request_to_claude, canonical_request_to_gemini_for_model,
+    canonical_request_to_openai_chat, canonical_response_to_claude, canonical_response_to_gemini,
+    claude_request_to_canonical, claude_response_to_canonical, claude_stream_to_semantic_events,
     gemini_request_to_canonical_for_model, gemini_response_to_canonical_for_model,
     gemini_stream_to_canonical, openai_chat_request_to_canonical,
     openai_chat_response_to_canonical, openai_responses_request_to_canonical,
@@ -433,6 +433,135 @@ fn gemini3_function_call_id_and_authentic_signature_round_trip() {
             .thought_signature
             .as_deref(),
         Some(SIGNATURE)
+    );
+}
+
+#[test]
+fn claude_thinking_redacted_and_reasoning_provenance_stay_distinct() {
+    let opaque_data: JsonData = serde_json::from_value(serde_json::json!({
+        "ciphertext": "opaque-redacted",
+        "version": 1
+    }))
+    .expect("opaque redacted payload");
+    let request: ClaudeRequest = serde_json::from_value(serde_json::json!({
+        "model": "claude-3-7-sonnet",
+        "max_tokens": 256,
+        "messages": [{
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "thinking",
+                    "thinking": "private plan",
+                    "signature": "opaque-thinking-signature"
+                },
+                {"type": "redacted_thinking", "data": opaque_data.clone()},
+                {"type": "text", "text": "answer"}
+            ]
+        }]
+    }))
+    .expect("Claude provenance request");
+    let canonical = claude_request_to_canonical(request).expect("Claude provenance conversion");
+    assert!(matches!(
+        canonical.value.messages[0].parts.as_slice(),
+        [
+            CanonicalContent::ClaudeThinking {
+                thinking,
+                signature: Some(signature),
+                provenance: OpaqueStateProvenance::Authentic,
+                ..
+            },
+            CanonicalContent::RedactedThinking {
+                data,
+                provenance: OpaqueStateProvenance::Authentic,
+                ..
+            },
+            CanonicalContent::Text { text }
+        ] if thinking == "private plan"
+            && signature == "opaque-thinking-signature"
+            && data == &opaque_data
+            && text == "answer"
+    ));
+    let round_trip =
+        canonical_request_to_claude(canonical.value).expect("Claude provenance round trip");
+    let blocks = match &round_trip.value.messages[0].content {
+        lmm_contracts::relay::StringOrParts::Parts(parts) => parts,
+        lmm_contracts::relay::StringOrParts::String(_) => {
+            panic!("Claude provenance blocks flattened")
+        }
+    };
+    assert_eq!(blocks.len(), 3);
+    assert_eq!(blocks[0].kind, "thinking");
+    assert_eq!(blocks[0].thinking.as_deref(), Some("private plan"));
+    assert_eq!(
+        blocks[0].signature.as_deref(),
+        Some("opaque-thinking-signature")
+    );
+    assert_eq!(blocks[1].kind, "redacted_thinking");
+    assert_eq!(blocks[1].data.as_ref(), Some(&opaque_data));
+    assert_eq!(blocks[2].kind, "text");
+
+    let reasoning: OpenAiChatResponse = serde_json::from_value(serde_json::json!({
+        "id": "reasoning-boundary",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "openai-reasoning",
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "answer",
+                "reasoning_content": "ordinary reasoning summary"
+            },
+            "finish_reason": "stop"
+        }]
+    }))
+    .expect("OpenAI reasoning response");
+    let reasoning =
+        openai_chat_response_to_canonical(reasoning).expect("OpenAI reasoning conversion");
+    assert!(reasoning
+        .value
+        .output
+        .iter()
+        .any(|part| matches!(part, CanonicalContent::Reasoning { text } if text == "ordinary reasoning summary")));
+    assert!(
+        !reasoning
+            .value
+            .output
+            .iter()
+            .any(|part| matches!(part, CanonicalContent::ClaudeThinking { .. }))
+    );
+    let claude =
+        canonical_response_to_claude(reasoning.value).expect("ordinary reasoning to Claude");
+    assert!(
+        claude
+            .loss
+            .dropped_fields
+            .contains(&"ordinary_reasoning->claude_text")
+    );
+    assert!(
+        claude
+            .value
+            .content
+            .iter()
+            .all(|block| block.kind != "thinking")
+    );
+
+    let synthetic = CanonicalResponse {
+        id: "synthetic-claude".to_owned(),
+        model: "claude-3-7-sonnet".to_owned(),
+        created_at: 0,
+        output: vec![CanonicalContent::ClaudeThinking {
+            thinking: "generated".to_owned(),
+            signature: Some("not-provider-authentic".to_owned()),
+            model: Some("claude-3-7-sonnet".to_owned()),
+            provenance: OpaqueStateProvenance::Synthetic,
+        }],
+        finish_reason: None,
+        usage: None,
+    };
+    assert!(
+        canonical_response_to_claude(synthetic).is_err(),
+        "synthetic Claude thinking must be rejected upstream"
     );
 }
 
