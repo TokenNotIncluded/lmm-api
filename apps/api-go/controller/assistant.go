@@ -246,16 +246,6 @@ func writeAssistantError(c *gin.Context, status int, code string, err error) {
 	})
 }
 
-func writeAssistantL1QueueFailure(c *gin.Context, err error) {
-	if errors.Is(err, model.ErrDeveloperAccessRequestReasonTooShort) ||
-		errors.Is(err, model.ErrDeveloperAccessRequestNoteTooLong) {
-		writeAssistantError(c, http.StatusUnprocessableEntity, "ASSISTANT_L1_REQUEST_INVALID", err)
-		return
-	}
-	c.Header("Retry-After", "2")
-	writeAssistantError(c, http.StatusServiceUnavailable, "ASSISTANT_L1_QUEUE_UNAVAILABLE", errors.New("L1 request could not be queued; retry the same request"))
-}
-
 func normalizeAssistantConversation(input assistantChatInput) ([]assistantOpenAIMessage, string, error) {
 	if len(input.Messages) > assistantConversationMaxItems {
 		return nil, "", errAssistantConversationTooLong
@@ -520,13 +510,6 @@ func PrepareAssistantRequest(c *gin.Context) {
 	if assistantHasHighConfidenceSecurityAbuseConversation(conversation) {
 		writeAssistantSecurityRefusal(c)
 		return
-	}
-	if assistantShouldQueueL1Request(userContext, latestMessage) {
-		if _, err := model.SubmitAssistantDeveloperAccessRequest(actorUserID, latestMessage); err != nil {
-			common.SysError(fmt.Sprintf("failed to queue assistant L1 request for user %d: %v", actorUserID, err))
-			writeAssistantL1QueueFailure(c, err)
-			return
-		}
 	}
 	// A first-turn question is an analytics event, not a model-call event. Keep
 	// it before both cache checks so repeated normalized cache hits are counted

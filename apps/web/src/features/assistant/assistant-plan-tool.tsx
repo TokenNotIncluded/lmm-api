@@ -115,7 +115,6 @@ export function AssistantPlanTool(props: {
   const offersQuery = useQuery({
     queryKey: ['assistant-plan-offers'],
     queryFn: getAssistantPlanOffers,
-    enabled: props.developerAccessGranted,
     staleTime: 5 * 60 * 1000,
     retry: false,
   })
@@ -143,37 +142,8 @@ export function AssistantPlanTool(props: {
     (offer) => offer.amount === normalizedTopupAmount
   )
   const recommendedTopupOffer = exactTopupOffer ?? offers[0]
-  const readOnly =
-    !props.developerAccessGranted || offersQuery.data?.read_only === true
-
-  if (!props.developerAccessGranted) {
-    return (
-      <Alert>
-        <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} aria-hidden='true' />
-        <AlertTitle>{t('L1 access required')}</AlertTitle>
-        <AlertDescription>
-          {t(
-            'Subscription plans and top-up discounts are hidden until an administrator approves L1 access.'
-          )}
-        </AlertDescription>
-        <AlertAction>
-          <Button
-            type='button'
-            variant='outline'
-            onClick={props.onRequestAccess}
-          >
-            {t('Unlock L1 access')}
-            <HugeiconsIcon
-              icon={ArrowRight01Icon}
-              strokeWidth={2}
-              data-icon='inline-end'
-              aria-hidden='true'
-            />
-          </Button>
-        </AlertAction>
-      </Alert>
-    )
-  }
+  const readOnly = offersQuery.data?.read_only === true
+  const checkoutAvailable = offersQuery.data?.checkout_available === true
 
   let planContent: ReactNode = (
     <div className='grid gap-2'>
@@ -411,34 +381,7 @@ export function AssistantPlanTool(props: {
   }
 
   let checkoutContent: ReactNode
-  if (readOnly) {
-    checkoutContent = (
-      <Alert>
-        <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} aria-hidden='true' />
-        <AlertTitle>{t('Read-only plan advice')}</AlertTitle>
-        <AlertDescription>
-          {t(
-            'You can compare live plans and discounts now. Checkout and payment remain locked until an administrator approves L1.'
-          )}
-        </AlertDescription>
-        <AlertAction>
-          <Button
-            type='button'
-            variant='outline'
-            onClick={props.onRequestAccess}
-          >
-            {t('Unlock L1 access')}
-            <HugeiconsIcon
-              icon={ArrowRight01Icon}
-              strokeWidth={2}
-              data-icon='inline-end'
-              aria-hidden='true'
-            />
-          </Button>
-        </AlertAction>
-      </Alert>
-    )
-  } else if (offersQuery.data?.checkout_available) {
+  if (checkoutAvailable) {
     checkoutContent = (
       <Button variant='outline' render={<Link to='/wallet' />}>
         {t('Review plans and exact checkout prices')}
@@ -449,6 +392,37 @@ export function AssistantPlanTool(props: {
           aria-hidden='true'
         />
       </Button>
+    )
+  } else if (readOnly) {
+    checkoutContent = (
+      <Alert>
+        <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} aria-hidden='true' />
+        <AlertTitle>{t('Read-only plan advice')}</AlertTitle>
+        <AlertDescription>
+          {props.developerAccessGranted
+            ? t('Payment is unavailable for this account.')
+            : t(
+                'You can compare live plans and discounts now. Checkout and payment remain locked until an administrator approves L1.'
+              )}
+        </AlertDescription>
+        {!props.developerAccessGranted ? (
+          <AlertAction>
+            <Button
+              type='button'
+              variant='outline'
+              onClick={props.onRequestAccess}
+            >
+              {t('Unlock L1 access')}
+              <HugeiconsIcon
+                icon={ArrowRight01Icon}
+                strokeWidth={2}
+                data-icon='inline-end'
+                aria-hidden='true'
+              />
+            </Button>
+          </AlertAction>
+        ) : null}
+      </Alert>
     )
   } else {
     checkoutContent = (

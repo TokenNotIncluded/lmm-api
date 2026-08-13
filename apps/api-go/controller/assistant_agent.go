@@ -997,15 +997,8 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 			}
 			return executeAssistantPlanOffersTool(actorUserID)
 		}
-		if !userContext.DeveloperAccessGranted && assistantPaymentOfferStateForContext(userContext) != assistantPaymentOfferReady {
-			if assistantPaymentOfferStateForContext(userContext) == assistantPaymentOfferBlocked {
-				return map[string]any{
-					"ok":        false,
-					"status":    "payment_restricted",
-					"error":     "payment channels are unavailable for this account",
-					"next_step": "Continue with the available account or administrator support options.",
-				}
-			}
+		paymentOfferState := assistantPaymentOfferStateForContext(userContext)
+		if !userContext.DeveloperAccessGranted && paymentOfferState != assistantPaymentOfferReady && paymentOfferState != assistantPaymentOfferBlocked {
 			return map[string]any{
 				"ok":        false,
 				"status":    "payment_intent_required",
@@ -1013,15 +1006,8 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 				"next_step": "Ask for the intended use, approximate amount, or preferred payment method.",
 			}
 		}
-		if !userContext.DeveloperAccessGranted && userContext.PaymentMethodsHidden {
-			return map[string]any{
-				"ok":     false,
-				"status": "payment_restricted",
-				"error":  "payment channels are unavailable for this account",
-			}
-		}
 		if !userContext.DeveloperAccessGranted {
-			return executeAssistantPlanOffersToolWithL0PaymentIntent(actorUserID)
+			return executeAssistantPlanOffersTool(actorUserID)
 		}
 		if result, blocked := assistantDeveloperCapabilityRequired(actorUserID, "plan offers"); blocked {
 			return result
@@ -1310,20 +1296,6 @@ func executeAssistantL1RecommendationTool(c *gin.Context, userID int, input map[
 	}
 	if len([]rune(recommendation)) < minDeveloperAccessRecommendationRunes || len([]rune(recommendation)) > maxDeveloperAccessDraftRunes {
 		return map[string]any{"ok": false, "status": "recommendation_invalid", "error": "AI recommendation must contain 20 to 2000 characters"}
-	}
-	// Make the review item durable before creating the short-lived confirmation
-	// flow. If this is the first L1 signal, the administrator can already see
-	// the user even when the browser closes or the confirmation is abandoned.
-	if _, queueErr := model.SubmitAssistantDeveloperAccessRequest(userID, statement); queueErr != nil {
-		common.SysError(fmt.Sprintf("failed to queue assistant L1 recommendation for user %d: %v", userID, queueErr))
-		writeAssistantL1QueueFailure(c, queueErr)
-		return map[string]any{
-			"ok":        false,
-			"status":    "queue_unavailable",
-			"code":      "ASSISTANT_L1_QUEUE_UNAVAILABLE",
-			"retryable": true,
-			"error":     "L1 request could not be queued; retry the same request",
-		}
 	}
 	payload, err := json.Marshal(assistantL1RecommendationDraft{
 		UserStatement:  statement,
@@ -1676,14 +1648,6 @@ func executeAssistantModelPricingTool(userID int, input map[string]any) map[stri
 }
 
 func executeAssistantPlanOffersTool(userID int) map[string]any {
-	return executeAssistantPlanOffersToolWithAccess(userID, false)
-}
-
-func executeAssistantPlanOffersToolWithL0PaymentIntent(userID int) map[string]any {
-	return executeAssistantPlanOffersToolWithAccess(userID, true)
-}
-
-func executeAssistantPlanOffersToolWithAccess(userID int, allowL0PaymentIntent bool) map[string]any {
 	if userID <= 0 {
 		return map[string]any{"ok": false, "error": "signed-in account is unavailable"}
 	}
@@ -1696,33 +1660,25 @@ func executeAssistantPlanOffersToolWithAccess(userID int, allowL0PaymentIntent b
 		return map[string]any{"ok": false, "error": "developer access could not be loaded"}
 	}
 	complianceConfirmed := operation_setting.IsPaymentComplianceConfirmed()
-	paymentRestricted := model.IsPaymentRestricted(user)
+	checkoutAvailable := paymentGatewayAvailabilityForUser(user, complianceConfirmed, time.Now()).hasPayment()
+	paymentHidden := model.IsPaymentRestricted(user) && !checkoutAvailable
 	result := map[string]any{
-		"ok":                           access.Granted,
+		"ok":                           true,
 		"developer_access_granted":     access.Granted,
-		"read_only":                    false,
-		"checkout_available":           (access.Granted || allowL0PaymentIntent) && complianceConfirmed && !paymentRestricted,
-		"payment_hidden":               !(access.Granted || allowL0PaymentIntent) || paymentRestricted,
+		"read_only":                    !checkoutAvailable,
+		"checkout_available":           checkoutAvailable,
+		"payment_hidden":               paymentHidden,
 		"plans":                        []SubscriptionPlanDTO{},
 		"topup_discounts":              map[int]float64{},
-		"payment_compliance_confirmed": (access.Granted || allowL0PaymentIntent) && complianceConfirmed,
+		"payment_compliance_confirmed": complianceConfirmed,
 	}
-	if !access.Granted && !allowL0PaymentIntent {
-		result["error"] = "L1 access is required to view plans and top-up discounts"
-		result["next_step"] = "Ask the user to submit an administrator L1 access request from the onboarding assistant."
-		return result
-	}
-	if paymentRestricted {
-		result["ok"] = access.Granted
+	if paymentHidden {
 		result["message"] = "Payment channels are unavailable for this account; do not direct the user to checkout."
-		if !access.Granted {
-			result["status"] = "payment_restricted"
-			return result
-		}
-	}
-	if !complianceConfirmed {
-		result["message"] = "Current plan offers are unavailable until payment compliance is confirmed."
-		return result
+		result["status"] = "payment_restricted"
+	} else if !complianceConfirmed {
+		result["message"] = "Current plan offers are view-only until payment compliance is confirmed."
+	} else if !checkoutAvailable {
+		result["message"] = "Current plan offers are view-only because no eligible checkout method is available."
 	}
 	if model.DB == nil {
 		return map[string]any{"ok": false, "error": "subscription plans are temporarily unavailable"}
@@ -1737,12 +1693,11 @@ func executeAssistantPlanOffersToolWithAccess(userID int, allowL0PaymentIntent b
 		planValues = append(planValues, SubscriptionPlanDTO{Plan: plan})
 	}
 	discountValues := make(map[int]float64, len(operation_setting.GetPaymentSetting().AmountDiscount))
-	if !paymentRestricted {
+	if !paymentHidden {
 		for amount, multiplier := range operation_setting.GetPaymentSetting().AmountDiscount {
 			discountValues[amount] = multiplier
 		}
 	}
-	result["ok"] = true
 	result["plans"] = planValues
 	result["topup_discounts"] = discountValues
 	return result
@@ -1954,16 +1909,39 @@ func executeAssistantSetupTool(userID int, input map[string]any) map[string]any 
 			"next_step":           "Use one exact available_model_ids value; do not guess or rewrite the model ID.",
 		}
 	}
+	accountModelAccessLocked, _ := modelsResult["account_model_access_locked"].(bool)
+	developerAccessGranted := !accountModelAccessLocked
+	if reportedAccess, reported := modelsResult["developer_access_granted"].(bool); reported {
+		developerAccessGranted = reportedAccess
+	}
+	securityNote := "Create the key in this console, never paste an existing secret into chat, and test with a newly opened terminal or client session."
+	credentialStep := "Create an API key in this console and replace only the <YOUR_API_KEY> placeholder."
+	credentialPhrase := "a newly created API key"
+	testStep := "Send a short test request after configuring the client."
+	if accountModelAccessLocked {
+		securityNote = "API key creation and authenticated requests remain locked until L1 approval. You can install the client and review the placeholder configuration now without creating or sharing a key."
+		credentialStep = "Keep the <YOUR_API_KEY> placeholder while access is locked; after L1 approval, create a key in this console and replace only that placeholder."
+		credentialPhrase = "the <YOUR_API_KEY> placeholder (replace it with a new key only after L1 approval)"
+		testStep = "After L1 approval and key creation, open a new client session and send a short test request."
+	}
+	lockedAwareStep := func(unlocked, locked string) string {
+		if accountModelAccessLocked {
+			return locked
+		}
+		return unlocked
+	}
 
 	result := map[string]any{
-		"ok":              true,
-		"platform":        platform,
-		"topic":           topic,
-		"service_root":    rootURL,
-		"openai_base_url": openAIBaseURL,
-		"client_model_id": clientModel,
-		"api_key":         "<YOUR_API_KEY>",
-		"security_note":   "Create the key in this console, never paste an existing secret into chat, and test with a newly opened terminal or client session.",
+		"ok":                          true,
+		"platform":                    platform,
+		"topic":                       topic,
+		"service_root":                rootURL,
+		"openai_base_url":             openAIBaseURL,
+		"client_model_id":             clientModel,
+		"api_key":                     "<YOUR_API_KEY>",
+		"developer_access_granted":    developerAccessGranted,
+		"account_model_access_locked": accountModelAccessLocked,
+		"security_note":               securityNote,
 	}
 
 	switch topic {
@@ -1981,8 +1959,8 @@ func executeAssistantSetupTool(userID int, input map[string]any) map[string]any 
 		result["endpoint_format"] = "Anthropic Messages; use the service root without /v1"
 		result["steps"] = []string{
 			"Install Claude Code with the command returned by this tool, then run claude --version.",
-			"Create an API key in this console and replace only the <YOUR_API_KEY> placeholder.",
-			"Apply the returned environment variables in a terminal opened for the project, then run claude.",
+			credentialStep,
+			lockedAwareStep("Apply the returned environment variables in a terminal opened for the project, then run claude.", testStep),
 		}
 		result["official_docs"] = "https://code.claude.com/docs/en/setup"
 	case "cc-switch":
@@ -2004,8 +1982,8 @@ func executeAssistantSetupTool(userID int, input map[string]any) map[string]any 
 		result["endpoint_format"] = "Anthropic Messages; use the service root without /v1"
 		result["steps"] = []string{
 			"Install CC Switch only from its official site or GitHub Releases.",
-			"Select Claude, add a Custom provider, and enter the returned service root, model ID, and a newly created API key.",
-			"Save and enable the provider, open a new terminal, and send a short test with Claude Code.",
+			"Select Claude, add a Custom provider, and enter the returned service root, model ID, and " + credentialPhrase + ".",
+			lockedAwareStep("Save and enable the provider, open a new terminal, and send a short test with Claude Code.", testStep),
 		}
 		result["official_docs"] = "https://github.com/farion1231/cc-switch"
 	case "claude-desktop":
@@ -2042,8 +2020,8 @@ func executeAssistantSetupTool(userID int, input map[string]any) map[string]any 
 		result["endpoint_format"] = "OpenAI Responses API; use the /v1 Base URL"
 		result["steps"] = []string{
 			"Install Codex, then create the user-level ~/.codex/config.toml with the returned provider configuration.",
-			"Set LMM_API_KEY in the current shell without writing the key into config.toml.",
-			"Run codex in a project directory and verify the provider and model shown by /status.",
+			lockedAwareStep("Set LMM_API_KEY in the current shell without writing the key into config.toml.", credentialStep),
+			lockedAwareStep("Run codex in a project directory and verify the provider and model shown by /status.", testStep),
 		}
 		result["official_docs"] = "https://developers.openai.com/codex/cli"
 		result["config_reference"] = "https://developers.openai.com/codex/config-reference"
@@ -2051,23 +2029,23 @@ func executeAssistantSetupTool(userID int, input map[string]any) map[string]any 
 		result["endpoint_format"] = "OpenAI-compatible; use the /v1 Base URL only if the installed Cursor version exposes a custom Base URL"
 		result["steps"] = []string{
 			"Open Cursor Settings and check whether the installed version exposes a custom OpenAI-compatible Base URL.",
-			"If supported, enter the returned /v1 Base URL, exact model ID, and a newly created API key.",
+			"If supported, enter the returned /v1 Base URL, exact model ID, and " + credentialPhrase + ".",
 			"If the setting is absent, do not assume the official client can use this gateway; choose CC Switch or another compatible client.",
 		}
 	case "open-webui":
 		result["endpoint_format"] = "OpenAI-compatible; use the /v1 Base URL"
 		result["steps"] = []string{
 			"Open Open WebUI administrator settings and add an OpenAI-compatible connection.",
-			"Enter the returned /v1 Base URL and a newly created API key, then refresh the model list.",
-			"Select the exact returned model ID and send a short test request.",
+			"Enter the returned /v1 Base URL and " + credentialPhrase + ", then refresh the model list.",
+			lockedAwareStep("Select the exact returned model ID and send a short test request.", testStep),
 		}
 		result["official_docs"] = "https://docs.openwebui.com/getting-started/quick-start/connect-a-provider/starting-with-openai-compatible/"
 	case "other-openai-compatible":
 		result["endpoint_format"] = "OpenAI-compatible; use the /v1 Base URL"
 		result["steps"] = []string{
 			"Confirm that the client explicitly supports a custom OpenAI-compatible Base URL.",
-			"Enter the returned /v1 Base URL, exact model ID, and a newly created API key.",
-			"Send a short test and verify that the client uses a route supported by this service.",
+			"Enter the returned /v1 Base URL, exact model ID, and " + credentialPhrase + ".",
+			lockedAwareStep("Send a short test and verify that the client uses a route supported by this service.", testStep),
 		}
 	}
 	return result

@@ -58,7 +58,8 @@ func setupOpenSourceBountyMCPControllerTest(t *testing.T) (*gorm.DB, model.User,
 	))
 	root := model.User{Username: "fee-recipient-root", Password: "password", AffCode: "fee-recipient-root", Quota: 0, Role: common.RoleRootUser, Status: common.UserStatusEnabled}
 	require.NoError(t, db.Create(&root).Error)
-	user := model.User{Username: "mcp-owner", Password: "password", AffCode: "mcp-owner", Quota: 10_000, Role: common.RoleCommonUser, Status: common.UserStatusEnabled}
+	levelOne := model.TrustLevelMinUser + 1
+	user := model.User{Username: "mcp-owner", Password: "password", AffCode: "mcp-owner", Quota: 10_000, Role: common.RoleCommonUser, Status: common.UserStatusEnabled, TrustLevelOverride: &levelOne}
 	require.NoError(t, db.Create(&user).Error)
 	token, _, err := model.RotateOpenSourceBountyMCPToken(user.Id)
 	require.NoError(t, err)
@@ -321,4 +322,30 @@ func TestOpenSourceBountyMCPAuthenticationToolsAndPublishConfirmation(t *testing
 	require.NoError(t, err, "a response-loss retry must recover the committed escrow refund")
 	require.NoError(t, db.First(&after, user.Id).Error)
 	assert.Equal(t, 9_526, after.Quota, "the remaining net escrow refund is credited exactly once")
+}
+
+func TestOpenSourceBountyMCPRejectsTokenAfterDeveloperAccessDowngrade(t *testing.T) {
+	db, user, token := setupOpenSourceBountyMCPControllerTest(t)
+	server := httptest.NewServer(NewOpenSourceBountyMCPHandler())
+	t.Cleanup(server.Close)
+
+	require.NoError(t, db.Model(&model.User{}).Where("id = ?", user.Id).Updates(map[string]any{
+		"trust_level_override": model.TrustLevelMinUser,
+		"auth_version":         gorm.Expr("auth_version + 1"),
+	}).Error)
+	call := func() int {
+		request, err := http.NewRequest(http.MethodPost, server.URL, strings.NewReader(`{}`))
+		require.NoError(t, err)
+		request.Header.Set("Authorization", "Bearer "+token)
+		request.Header.Set("Content-Type", "application/json")
+		response, err := http.DefaultClient.Do(request)
+		require.NoError(t, err)
+		defer response.Body.Close()
+		return response.StatusCode
+	}
+	assert.Equal(t, http.StatusUnauthorized, call(), "the first MCP call after downgrade must reject the old token")
+
+	require.NoError(t, db.Model(&model.User{}).Where("id = ?", user.Id).
+		Update("trust_level_override", model.TrustLevelMinUser+1).Error)
+	assert.Equal(t, http.StatusUnauthorized, call(), "restoring L1 must not revive the downgraded token")
 }

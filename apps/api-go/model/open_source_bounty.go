@@ -906,6 +906,7 @@ func attachViewerChallenges(views []OpenSourceBountyProjectView, viewerUserId in
 }
 
 func ListOpenSourceBounties(viewerUserId int, page int, pageSize int) ([]OpenSourceBountyProjectView, int64, error) {
+	viewerUserId = openSourceBountyPrivateViewerId(viewerUserId)
 	if page < 1 {
 		page = 1
 	}
@@ -953,6 +954,7 @@ func ListOwnedOpenSourceBountiesFiltered(ownerUserId int, archived bool) ([]Open
 }
 
 func GetOpenSourceBountyDetail(viewerUserId int, projectId int) (*OpenSourceBountyProjectDetail, error) {
+	viewerUserId = openSourceBountyPrivateViewerId(viewerUserId)
 	var view OpenSourceBountyProjectView
 	if err := openSourceBountyProjectQuery().Where("p.id = ?", projectId).Scan(&view).Error; err != nil {
 		return nil, err

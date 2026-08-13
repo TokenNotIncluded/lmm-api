@@ -94,3 +94,68 @@ func TestSubmitDeveloperAccessRequestRequiresConfirmedAIRecommendation(t *testin
 	assert.Contains(t, response.Body.String(), model.DeveloperAccessRequestSourceAI)
 	assert.Contains(t, response.Body.String(), "ai_recommendation")
 }
+
+func TestSubmitPreparedL1RecommendationCommitsExactlyOnceAfterConfirmation(t *testing.T) {
+	user, engine := setupDeveloperAccessRequestControllerTest(t)
+	originalRecommendation := "The AI drafted a concrete recommendation for the user's integration workflow."
+	editedRecommendation := "The user edited this concrete recommendation before explicitly confirming it."
+	payload, err := common.Marshal(assistantL1RecommendationDraft{
+		UserStatement:  "I need L1 access for a concrete integration workflow.",
+		Recommendation: originalRecommendation,
+	})
+	require.NoError(t, err)
+	confirmationToken, _, err := model.CreateAuthFlow(model.AuthFlowCreate{
+		Purpose:   model.AuthFlowPurposeAssistantL1,
+		UserId:    user.Id,
+		SessionId: "developer-access-test-session",
+		Payload:   string(payload),
+		ExpiresAt: time.Now().Add(time.Minute),
+	})
+	require.NoError(t, err)
+
+	stored, err := model.GetDeveloperAccessRequest(user.Id)
+	require.NoError(t, err)
+	assert.Nil(t, stored)
+
+	body := `{
+		"reason":"` + editedRecommendation + `",
+		"ai_recommendation":"` + editedRecommendation + `",
+		"confirmation_token":"` + confirmationToken + `",
+		"confirmed":true
+	}`
+	request := httptest.NewRequest(http.MethodPost, "/request", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	engine.ServeHTTP(response, request)
+	assert.Equal(t, http.StatusOK, response.Code)
+
+	stored, err = model.GetDeveloperAccessRequest(user.Id)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, editedRecommendation, stored.Reason)
+	assert.Equal(t, editedRecommendation, stored.AIRecommendation)
+	assert.Equal(t, model.DeveloperAccessRequestSourceAI, stored.Source)
+	requestID := stored.Id
+	_, err = model.GetAuthFlow(confirmationToken, model.AuthFlowMatch{
+		Purpose:   model.AuthFlowPurposeAssistantL1,
+		UserId:    user.Id,
+		SessionId: "developer-access-test-session",
+	})
+	assert.ErrorIs(t, err, model.ErrAuthFlowConsumed)
+
+	request = httptest.NewRequest(http.MethodPost, "/request", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	response = httptest.NewRecorder()
+	engine.ServeHTTP(response, request)
+	assert.Equal(t, http.StatusUnprocessableEntity, response.Code)
+	assert.Contains(t, response.Body.String(), "DEVELOPER_ACCESS_AI_CONFIRMATION_INVALID")
+
+	var requestCount int64
+	require.NoError(t, model.DB.Model(&model.DeveloperAccessRequest{}).Where("user_id = ?", user.Id).Count(&requestCount).Error)
+	assert.EqualValues(t, 1, requestCount)
+	stored, err = model.GetDeveloperAccessRequest(user.Id)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, requestID, stored.Id)
+	assert.Equal(t, editedRecommendation, stored.AIRecommendation)
+}

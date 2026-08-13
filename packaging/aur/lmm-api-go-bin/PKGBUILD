@@ -1,7 +1,7 @@
-# Maintainer: LIghtJUNction
+# Maintainer: LIghtJUNction <lightjunction.me@gmail.com>
 
 pkgname=lmm-api-go-bin
-pkgver=0.1.0
+pkgver=0.1.1
 pkgrel=1
 pkgdesc='LMM API Go backend, native CLI, systemd service, and web frontend (prebuilt)'
 arch=('x86_64' 'aarch64')
@@ -18,7 +18,7 @@ conflicts=('lmm-api' 'lmm-api-bin' 'lmm-api-git' 'lmm-api-go' 'lmm-api-go-git')
 backup=('etc/lmm-api-go/lmm-api-go.env')
 options=('!strip')
 
-_release_tag="v${pkgver}"
+_release_tag="go-v${pkgver}"
 _artifact="lmm-api-go-${pkgver}-linux"
 _release_base="${url}/releases/download/${_release_tag}"
 source_x86_64=(
@@ -52,7 +52,7 @@ prepare() {
   cosign verify-blob \
     --bundle "${archive}.sigstore.json" \
     --certificate-identity \
-      "${url}/.github/workflows/release.yml@refs/tags/${_release_tag}" \
+      "${url}/.github/workflows/release-go.yml@refs/tags/${_release_tag}" \
     --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
     "${archive}"
   bsdtar -xf "${archive}"

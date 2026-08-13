@@ -445,14 +445,6 @@ func TestAssistantL0WelcomeStrategyAnswersWithoutRepeatingOnboardingQuestions(t 
 	assert.NotContains(t, strategy, "Ask whether they are new")
 }
 
-func TestAssistantQueuesOnlyExplicitL1Requests(t *testing.T) {
-	context := assistantUserContext{AccessLevel: "L0"}
-	assert.True(t, assistantShouldQueueL1Request(context, "请帮我申请 L1 权限"))
-	assert.True(t, assistantShouldQueueL1Request(context, "I want to apply for developer access"))
-	assert.False(t, assistantShouldQueueL1Request(context, "我是 L0，GPT 5.6 SOL 的价格是多少？"))
-	assert.False(t, assistantShouldQueueL1Request(context, "Explain developer access levels"))
-}
-
 func TestAssistantL0WelcomeStrategyPreservesProfileSpecialization(t *testing.T) {
 	tests := []struct {
 		profile assistantCustomerProfile

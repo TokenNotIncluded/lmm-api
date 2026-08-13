@@ -84,6 +84,11 @@ for package in lmm-api-go-bin lmm-api-rs-bin; do
     die "$package invokes a project compiler"
   fi
 done
+grep -Fq '_release_tag="go-v${pkgver}"' "$HERE/lmm-api-go-bin/PKGBUILD" ||
+  die 'Go binary package does not use the independent Go release tag'
+grep -Fq '.github/workflows/release-go.yml@refs/tags/${_release_tag}' \
+  "$HERE/lmm-api-go-bin/PKGBUILD" ||
+  die 'Go binary package does not verify the independent Go release identity'
 for package in lmm-api-web-bin; do
   pkgbuild="$HERE/$package/PKGBUILD"
   grep -Fq 'cosign verify-blob' "$pkgbuild" || die "$package lacks Sigstore verification"

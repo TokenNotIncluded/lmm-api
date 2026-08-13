@@ -116,10 +116,8 @@ func SubmitDeveloperAccessRequest(c *gin.Context) {
 			developerAccessRequestError(c, http.StatusUnprocessableEntity, "DEVELOPER_ACCESS_AI_CONFIRMATION_INVALID", "AI recommendation confirmation is incomplete; continue the conversation to prepare a new one")
 			return
 		}
-		// Validate the short-lived draft before consuming its one-time token.
-		// The pending queue write intentionally happens before token consumption:
-		// even if the recommendation enrichment or confirmation flow later
-		// fails, the administrator can still see and review the user's request.
+		// Validate the short-lived draft before atomically consuming its one-time
+		// token and writing the user's one shared recommendation letter.
 		flow, flowErr := model.GetAuthFlow(input.ConfirmationToken, model.AuthFlowMatch{
 			Purpose:   model.AuthFlowPurposeAssistantL1,
 			UserId:    user.Id,
@@ -138,24 +136,20 @@ func SubmitDeveloperAccessRequest(c *gin.Context) {
 			developerAccessRequestError(c, http.StatusUnprocessableEntity, "DEVELOPER_ACCESS_AI_CONFIRMATION_MISMATCH", "AI recommendation draft is invalid")
 			return
 		}
-		if _, err = model.SubmitAssistantDeveloperAccessRequest(user.Id, input.Reason); err != nil {
-			// Leave the confirmation token unconsumed so a transient queue
-			// failure can be retried with the exact same confirmed draft.
-			// The common error mapping below returns a retryable response.
-		} else {
-			if _, flowErr = model.ConsumeAuthFlow(input.ConfirmationToken, model.AuthFlowMatch{
+		request, err = model.SubmitConfirmedAssistantDeveloperAccessRecommendation(
+			input.ConfirmationToken,
+			model.AuthFlowMatch{
 				Purpose:   model.AuthFlowPurposeAssistantL1,
 				UserId:    user.Id,
 				SessionId: sessionID,
-			}); flowErr != nil {
-				if errors.Is(flowErr, model.ErrAuthFlowInvalid) || errors.Is(flowErr, model.ErrAuthFlowExpired) || errors.Is(flowErr, model.ErrAuthFlowConsumed) {
-					developerAccessRequestError(c, http.StatusUnprocessableEntity, "DEVELOPER_ACCESS_AI_CONFIRMATION_INVALID", "AI recommendation confirmation is invalid or expired; the pending request remains available for administrator review")
-					return
-				}
-				common.ApiError(c, flowErr)
-				return
-			}
-			request, err = model.SubmitAssistantDeveloperAccessRecommendation(user.Id, input.Reason, input.AIRecommendation)
+			},
+			user.Id,
+			input.Reason,
+			input.AIRecommendation,
+		)
+		if errors.Is(err, model.ErrAuthFlowInvalid) || errors.Is(err, model.ErrAuthFlowExpired) || errors.Is(err, model.ErrAuthFlowConsumed) {
+			developerAccessRequestError(c, http.StatusUnprocessableEntity, "DEVELOPER_ACCESS_AI_CONFIRMATION_INVALID", "AI recommendation confirmation is invalid, expired, or already used")
+			return
 		}
 	} else {
 		// The signed-in user may edit the one shared recommendation letter

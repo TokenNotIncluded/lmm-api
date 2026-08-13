@@ -157,7 +157,7 @@ func TestAssistantRetryRejectsInvalidInputBeforePersistentWrites(t *testing.T) {
 	assert.Zero(t, developerAccessCount)
 }
 
-func TestAssistantRetryKeepsL1QueueWriteIdempotent(t *testing.T) {
+func TestAssistantRetryDoesNotQueueL1BeforeConfirmation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := setupTokenControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(
@@ -208,13 +208,10 @@ func TestAssistantRetryKeepsL1QueueWriteIdempotent(t *testing.T) {
 
 	var requests []model.DeveloperAccessRequest
 	require.NoError(t, db.Where("user_id = ?", user.Id).Find(&requests).Error)
-	require.Len(t, requests, 1)
-	assert.Equal(t, model.DeveloperAccessRequestPending, requests[0].Status)
-	assert.Equal(t, model.DeveloperAccessRequestSourceAssistant, requests[0].Source)
-	assert.Equal(t, message, requests[0].Reason)
+	assert.Empty(t, requests)
 }
 
-func TestAssistantChatQueuesL1BeforeDownstreamFailure(t *testing.T) {
+func TestAssistantChatDoesNotQueueL1BeforeConfirmationOnDownstreamFailure(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := setupTokenControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(
@@ -246,8 +243,6 @@ func TestAssistantChatQueuesL1BeforeDownstreamFailure(t *testing.T) {
 		c.Set("id", user.Id)
 		PrepareAssistantRequest(c)
 	}, func(c *gin.Context) {
-		// The model/provider failed after request preparation. The durable
-		// review item must already exist at this point.
 		c.AbortWithStatus(http.StatusBadGateway)
 	})
 
@@ -263,12 +258,10 @@ func TestAssistantChatQueuesL1BeforeDownstreamFailure(t *testing.T) {
 	assert.Equal(t, http.StatusBadGateway, response.Code)
 	queued, err := model.GetDeveloperAccessRequest(user.Id)
 	require.NoError(t, err)
-	require.NotNil(t, queued)
-	assert.Equal(t, model.DeveloperAccessRequestPending, queued.Status)
-	assert.Equal(t, model.DeveloperAccessRequestSourceAssistant, queued.Source)
+	assert.Nil(t, queued)
 }
 
-func TestAssistantL1QueueFailureIsRetryableAndStopsDownstream(t *testing.T) {
+func TestAssistantL1ConversationDoesNotTouchQueueBeforeConfirmation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := setupTokenControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(
@@ -315,13 +308,11 @@ func TestAssistantL1QueueFailureIsRetryableAndStopsDownstream(t *testing.T) {
 	response := httptest.NewRecorder()
 	engine.ServeHTTP(response, request)
 
-	assert.Equal(t, http.StatusServiceUnavailable, response.Code)
-	assert.Equal(t, "2", response.Header().Get("Retry-After"))
-	assert.Contains(t, response.Body.String(), "ASSISTANT_L1_QUEUE_UNAVAILABLE")
-	assert.Zero(t, downstreamCalls)
+	assert.Equal(t, http.StatusNoContent, response.Code)
+	assert.Equal(t, 1, downstreamCalls)
 }
 
-func TestAssistantL1RecommendationQueueFailureIsExplicitlyRetryable(t *testing.T) {
+func TestAssistantL1RecommendationPreparationDoesNotTouchQueue(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := setupTokenControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(
@@ -355,17 +346,14 @@ func TestAssistantL1RecommendationQueueFailureIsExplicitlyRetryable(t *testing.T
 		"recommendation": "The user described a concrete integration workflow and can be reviewed for L1 access.",
 	})
 
-	assert.Equal(t, false, result["ok"])
-	assert.Equal(t, "queue_unavailable", result["status"])
-	assert.Equal(t, "ASSISTANT_L1_QUEUE_UNAVAILABLE", result["code"])
-	assert.Equal(t, true, result["retryable"])
-	assert.Equal(t, http.StatusServiceUnavailable, recorder.Code)
-	assert.Equal(t, "2", recorder.Header().Get("Retry-After"))
-	assert.Contains(t, recorder.Body.String(), "ASSISTANT_L1_QUEUE_UNAVAILABLE")
+	assert.Equal(t, true, result["ok"])
+	assert.Equal(t, "confirmation_required", result["status"])
+	assert.Equal(t, "l1_recommendation", result["action"])
+	assert.Empty(t, recorder.Body.String())
 
 	var flowCount int64
 	require.NoError(t, db.Model(&model.AuthFlow{}).Count(&flowCount).Error)
-	assert.Zero(t, flowCount)
+	assert.EqualValues(t, 1, flowCount)
 }
 
 func TestAssistantRetryDoesNotDuplicateFirstTurnConversationOnReplay(t *testing.T) {

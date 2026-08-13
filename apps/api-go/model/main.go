@@ -374,6 +374,9 @@ func migrateDB() error {
 	if err := InitializeExistingUsersL1Backfill(); err != nil {
 		return err
 	}
+	if err := migrateOpenSourceBountyMCPTokenAuthVersions(); err != nil {
+		return err
+	}
 	if err := InitializeExternalIdentityClaims(); err != nil {
 		return err
 	}
@@ -489,6 +492,9 @@ func migrateDBFast() error {
 		return err
 	}
 	if err := InitializeExistingUsersL1Backfill(); err != nil {
+		return err
+	}
+	if err := migrateOpenSourceBountyMCPTokenAuthVersions(); err != nil {
 		return err
 	}
 	if err := InitializeExternalIdentityClaims(); err != nil {

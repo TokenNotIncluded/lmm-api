@@ -716,7 +716,7 @@ func TestCreateAssistantDefaultKeyRejectsL0(t *testing.T) {
 	assert.Contains(t, response.Body.String(), "ASSISTANT_L1_REQUIRED")
 }
 
-func TestAssistantPlanOffersHidePlansAndDiscountsFromL0(t *testing.T) {
+func TestAssistantPlanOffersExposePublicOffersToL0WithoutInventingCheckout(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}, &model.SubscriptionPlan{}))
 	user := model.User{
@@ -745,20 +745,47 @@ func TestAssistantPlanOffersHidePlansAndDiscountsFromL0(t *testing.T) {
 	})
 
 	result := executeAssistantPlanOffersTool(user.Id)
-	assert.Equal(t, false, result["ok"])
+	assert.Equal(t, true, result["ok"])
 	assert.Equal(t, false, result["developer_access_granted"])
-	assert.Equal(t, false, result["read_only"])
+	assert.Equal(t, true, result["read_only"])
 	assert.Equal(t, false, result["checkout_available"])
-	assert.Equal(t, true, result["payment_hidden"])
+	assert.Equal(t, false, result["payment_hidden"])
 	assert.Equal(t, false, result["payment_compliance_confirmed"])
 	plans, ok := result["plans"].([]SubscriptionPlanDTO)
 	require.True(t, ok)
-	assert.Empty(t, plans)
+	require.Len(t, plans, 1)
+	assert.Equal(t, "L0 visible", plans[0].Plan.Title)
 	discounts, ok := result["topup_discounts"].(map[int]float64)
 	require.True(t, ok)
-	assert.Empty(t, discounts)
-	assert.Contains(t, result["error"], "L1 access")
-	assert.Contains(t, result["next_step"], "L1 access request")
+	assert.Equal(t, map[int]float64{50: 0.9}, discounts)
+	assert.Contains(t, result["message"], "view-only")
+
+	response := httptest.NewRecorder()
+	browserContext, _ := gin.CreateTestContext(response)
+	browserContext.Request = httptest.NewRequest(http.MethodGet, "/api/assistant/offers", nil)
+	browserContext.Set("id", user.Id)
+	GetAssistantPlanOffers(browserContext)
+	assert.Equal(t, http.StatusOK, response.Code)
+	var payload struct {
+		Success bool `json:"success"`
+		Data    struct {
+			OK                     bool                  `json:"ok"`
+			DeveloperAccessGranted bool                  `json:"developer_access_granted"`
+			ReadOnly               bool                  `json:"read_only"`
+			CheckoutAvailable      bool                  `json:"checkout_available"`
+			Plans                  []SubscriptionPlanDTO `json:"plans"`
+			TopupDiscounts         map[string]float64    `json:"topup_discounts"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &payload))
+	assert.True(t, payload.Success)
+	assert.True(t, payload.Data.OK)
+	assert.False(t, payload.Data.DeveloperAccessGranted)
+	assert.True(t, payload.Data.ReadOnly)
+	assert.False(t, payload.Data.CheckoutAvailable)
+	require.Len(t, payload.Data.Plans, 1)
+	assert.Equal(t, "L0 visible", payload.Data.Plans[0].Plan.Title)
+	assert.Equal(t, 0.9, payload.Data.TopupDiscounts["50"])
 
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Set("id", user.Id)
@@ -799,7 +826,7 @@ func TestAssistantPlanOffersKeepLinuxDOPaymentHiddenForL1(t *testing.T) {
 	result := executeAssistantPlanOffersTool(user.Id)
 	assert.Equal(t, true, result["ok"])
 	assert.Equal(t, true, result["developer_access_granted"])
-	assert.Equal(t, false, result["read_only"])
+	assert.Equal(t, true, result["read_only"])
 	assert.Equal(t, false, result["checkout_available"])
 	assert.Equal(t, true, result["payment_hidden"])
 	plans, ok := result["plans"].([]SubscriptionPlanDTO)
@@ -1148,9 +1175,21 @@ func TestAssistantPaymentOffersUseProgressiveGateAndKeepRestrictions(t *testing.
 	originalTermsVersion := paymentSetting.ComplianceTermsVersion
 	paymentSetting.ComplianceConfirmed = true
 	paymentSetting.ComplianceTermsVersion = operation_setting.CurrentComplianceTermsVersion
+	originalPayAddress := operation_setting.PayAddress
+	originalEpayID := operation_setting.EpayId
+	originalEpayKey := operation_setting.EpayKey
+	originalPayMethods := operation_setting.PayMethods
+	operation_setting.PayAddress = "https://pay.example.test"
+	operation_setting.EpayId = "merchant"
+	operation_setting.EpayKey = "secret"
+	operation_setting.PayMethods = []map[string]string{{"name": "Card", "type": "card"}}
 	t.Cleanup(func() {
 		paymentSetting.ComplianceConfirmed = originalCompliance
 		paymentSetting.ComplianceTermsVersion = originalTermsVersion
+		operation_setting.PayAddress = originalPayAddress
+		operation_setting.EpayId = originalEpayID
+		operation_setting.EpayKey = originalEpayKey
+		operation_setting.PayMethods = originalPayMethods
 	})
 
 	needsDetailsContext := &gin.Context{}
@@ -1170,8 +1209,19 @@ func TestAssistantPaymentOffersUseProgressiveGateAndKeepRestrictions(t *testing.
 	})
 	ready := executeAssistantTool(readyContext, assistantOpenAIToolCall{Function: assistantOpenAIToolCallFunction{Name: "get_plan_offers"}})
 	assert.Equal(t, true, ready["ok"])
+	assert.Equal(t, false, ready["read_only"])
 	assert.Equal(t, true, ready["checkout_available"])
+	operation_setting.PayAddress = ""
+	withoutGateway := executeAssistantTool(readyContext, assistantOpenAIToolCall{Function: assistantOpenAIToolCallFunction{Name: "get_plan_offers"}})
+	assert.Equal(t, true, withoutGateway["ok"])
+	assert.Equal(t, true, withoutGateway["read_only"])
+	assert.Equal(t, false, withoutGateway["checkout_available"])
+	withoutGatewayPlans, ok := withoutGateway["plans"].([]SubscriptionPlanDTO)
+	require.True(t, ok)
+	assert.Len(t, withoutGatewayPlans, 1)
+	operation_setting.PayAddress = "https://pay.example.test"
 
+	require.NoError(t, db.Model(&user).Update("payment_restriction_flags", model.PaymentRestrictionLinuxDOHighScore).Error)
 	blockedContext := &gin.Context{}
 	blockedContext.Set("id", user.Id)
 	blockedContext.Set(assistantUserContextKey, assistantUserContext{
@@ -1180,8 +1230,16 @@ func TestAssistantPaymentOffersUseProgressiveGateAndKeepRestrictions(t *testing.
 		PaymentOfferState:    assistantPaymentOfferReady,
 	})
 	blocked := executeAssistantTool(blockedContext, assistantOpenAIToolCall{Function: assistantOpenAIToolCallFunction{Name: "get_plan_offers"}})
+	assert.Equal(t, true, blocked["ok"])
 	assert.Equal(t, "payment_restricted", blocked["status"])
-	assert.NotEqual(t, true, blocked["checkout_available"])
+	assert.Equal(t, true, blocked["read_only"])
+	assert.Equal(t, false, blocked["checkout_available"])
+	blockedPlans, ok := blocked["plans"].([]SubscriptionPlanDTO)
+	require.True(t, ok)
+	assert.Len(t, blockedPlans, 1)
+	blockedDiscounts, ok := blocked["topup_discounts"].(map[int]float64)
+	require.True(t, ok)
+	assert.Empty(t, blockedDiscounts)
 }
 
 func TestAssistantL1RecommendationActionUsesActorAndIsAttachedToResponse(t *testing.T) {
@@ -1214,6 +1272,9 @@ func TestAssistantL1RecommendationActionUsesActorAndIsAttachedToResponse(t *test
 	assert.Equal(t, true, result["ok"])
 	assert.Equal(t, "confirmation_required", result["status"])
 	assert.Equal(t, "l1_recommendation", result["action"])
+	stored, err := model.GetDeveloperAccessRequest(user.Id)
+	require.NoError(t, err)
+	assert.Nil(t, stored)
 
 	writeAssistantRawResponse(c, http.StatusOK, []byte(`{"choices":[{"message":{"content":"Please confirm."}}]}`), "ASSISTANT_UPSTREAM_FAILED")
 	assert.Equal(t, http.StatusOK, recorder.Code)
@@ -1224,6 +1285,44 @@ func TestAssistantL1RecommendationActionUsesActorAndIsAttachedToResponse(t *test
 	assert.Equal(t, "l1_recommendation", action["type"])
 	assert.Contains(t, action["recommendation"], "concrete development workflow")
 	assert.NotEmpty(t, action["confirmation_token"])
+}
+
+func TestAssistantL1RecommendationPreparationDoesNotEditExistingLetter(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}, &model.DeveloperAccessRequest{}, &model.AuthFlow{}))
+	user := model.User{
+		Username: "assistant-existing-l1-letter",
+		Password: "password",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+		Group:    "default",
+	}
+	require.NoError(t, db.Create(&user).Error)
+	existing, err := model.SubmitAssistantDeveloperAccessRecommendation(
+		user.Id,
+		"My current concrete integration request.",
+		"Keep this existing recommendation unchanged until I confirm an edit.",
+	)
+	require.NoError(t, err)
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Set("id", user.Id)
+	c.Set(assistantActorUserIDKey, user.Id)
+	c.Set("session_id", "assistant-existing-l1-letter-session")
+	result := executeAssistantL1RecommendationTool(c, user.Id, map[string]any{
+		"user_statement": "My replacement concrete integration request.",
+		"recommendation": "Replace the existing recommendation only after explicit confirmation.",
+	})
+
+	assert.Equal(t, true, result["ok"])
+	assert.Equal(t, "confirmation_required", result["status"])
+	stored, err := model.GetDeveloperAccessRequest(user.Id)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.Equal(t, existing.Id, stored.Id)
+	assert.Equal(t, existing.Reason, stored.Reason)
+	assert.Equal(t, existing.AIRecommendation, stored.AIRecommendation)
 }
 
 func TestAssistantSetupToolReturnsExactEndpointFormatsAndClientLimits(t *testing.T) {
@@ -1260,6 +1359,13 @@ func TestAssistantSetupToolReturnsExactEndpointFormatsAndClientLimits(t *testing
 	assert.Contains(t, claudeCode["configuration"], "ANTHROPIC_BASE_URL='https://api.example.com'")
 	assert.Contains(t, claudeCode["configuration"], "ANTHROPIC_MODEL='claude-sonnet-4-5'")
 	assert.NotContains(t, claudeCode["configuration"], "api.example.com/v1")
+	assert.Equal(t, false, claudeCode["developer_access_granted"])
+	assert.Equal(t, true, claudeCode["account_model_access_locked"])
+	assert.Contains(t, claudeCode["security_note"], "remain locked until L1 approval")
+	claudeSteps, ok := claudeCode["steps"].([]string)
+	require.True(t, ok)
+	assert.Contains(t, strings.Join(claudeSteps, " "), "after L1 approval")
+	assert.NotContains(t, strings.Join(claudeSteps, " "), "Create an API key in this console and replace only")
 
 	codex := executeAssistantSetupTool(user.Id, map[string]any{
 		"platform": "linux",
@@ -1270,6 +1376,10 @@ func TestAssistantSetupToolReturnsExactEndpointFormatsAndClientLimits(t *testing
 	assert.Contains(t, codex["config_toml"], "wire_api = \"responses\"")
 	assert.NotContains(t, codex["config_toml"], "<YOUR_API_KEY>")
 	assert.NotContains(t, codex["config_toml"], "deepseek-v4-flash")
+	assert.Equal(t, true, codex["account_model_access_locked"])
+	codexSteps, ok := codex["steps"].([]string)
+	require.True(t, ok)
+	assert.Contains(t, strings.Join(codexSteps, " "), "After L1 approval")
 
 	withoutModel := executeAssistantSetupTool(user.Id, map[string]any{
 		"platform": "linux",

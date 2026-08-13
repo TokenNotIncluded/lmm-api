@@ -18,6 +18,14 @@ func SetApiRouter(router *gin.Engine) {
 	apiRouter.Use(middleware.BodyStorageCleanup()) // 清理请求体存储
 	apiRouter.Use(middleware.GlobalAPIRateLimit())
 	apiRouter.Use(middleware.ConsoleAccessGate())
+	// Bounty routes have their own L1 boundary and a deliberately public board.
+	// Keep them outside ConsoleAccessGate so L0 callers can browse public data
+	// and receive redacted empty private feeds without a page-wide 404.
+	openSourceBountyApiRouter := router.Group("/api")
+	openSourceBountyApiRouter.Use(middleware.RouteTag("api"))
+	openSourceBountyApiRouter.Use(gzip.Gzip(gzip.DefaultCompression))
+	openSourceBountyApiRouter.Use(middleware.BodyStorageCleanup())
+	openSourceBountyApiRouter.Use(middleware.GlobalAPIRateLimit())
 	anonymousRequestBodyLimit := middleware.AnonymousRequestBodyLimit()
 	{
 		apiRouter.GET("/setup", controller.GetSetup)
@@ -371,17 +379,17 @@ func SetApiRouter(router *gin.Engine) {
 			redemptionRoute.DELETE("/:id", controller.DeleteRedemption)
 		}
 
-		openSourceBountyPublicRoute := apiRouter.Group("/open-source-bounties")
+		openSourceBountyPublicRoute := openSourceBountyApiRouter.Group("/open-source-bounties")
 		openSourceBountyPublicRoute.Use(middleware.TryUserAuth())
 		{
 			openSourceBountyPublicRoute.GET("", controller.ListOpenSourceBounties)
 			openSourceBountyPublicRoute.GET("/projects/:id", controller.GetOpenSourceBounty)
+			openSourceBountyPublicRoute.GET("/config", controller.GetOpenSourceBountyConfig)
 		}
 
-		openSourceBountyRoute := apiRouter.Group("/open-source-bounties")
-		openSourceBountyRoute.Use(middleware.UserAuth())
+		openSourceBountyRoute := openSourceBountyApiRouter.Group("/open-source-bounties")
+		openSourceBountyRoute.Use(middleware.UserAuth(), requireOpenSourceBountyDeveloperAccess())
 		{
-			openSourceBountyRoute.GET("/config", controller.GetOpenSourceBountyConfig)
 			openSourceBountyRoute.GET("/mcp-token", middleware.DisableCache(), controller.GetOpenSourceBountyMCPToken)
 			openSourceBountyRoute.POST("/mcp-token", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.RotateOpenSourceBountyMCPToken)
 			openSourceBountyRoute.DELETE("/mcp-token", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.RevokeOpenSourceBountyMCPToken)

@@ -1,7 +1,7 @@
-# Maintainer: LIghtJUNction
+# Maintainer: LIghtJUNction <lightjunction.me@gmail.com>
 
 pkgname=lmm-api-web-bin
-pkgver=0.1.4
+pkgver=0.1.5
 pkgrel=1
 pkgdesc='LMM API production web frontend (prebuilt)'
 arch=('any')
@@ -22,11 +22,7 @@ source=(
   "${_artifact}.sigstore.json::${_release_base}/${_artifact}.sigstore.json"
 )
 noextract=("${_artifact}")
-sha256sums=(
-  '6b61a225b9eb6ff7dda37db98456cd7b17bc205a722a2c035a57e731ef2cf914'
-  '92b24cdc26402c6c349b70aef949e63e5f16ca9a453484e57100715f1d3bd127'
-  '42cd06abb7b27c2779ec4f5d8394d6f8b5f3534bddaf5886443fffdefb7ed576'
-)
+sha256sums=('SKIP' 'SKIP' 'SKIP')
 
 prepare() {
   local expected actual

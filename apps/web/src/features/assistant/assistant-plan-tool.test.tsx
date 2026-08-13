@@ -211,9 +211,8 @@ describe('AssistantPlanTool', () => {
     }
   })
 
-  test('does not request or expose plans and discounts to L0 users', async () => {
+  test('renders backend-authorized offers and checkout for an L0 user', async () => {
     let calls = 0
-    let accessRequests = 0
     api.get = (async (url: string) => {
       assert.equal(url, '/api/assistant/offers')
       calls += 1
@@ -223,8 +222,46 @@ describe('AssistantPlanTool', () => {
           data: {
             ...assistantOffersFixture.data,
             developer_access_granted: false,
-            read_only: true,
+            read_only: false,
             checkout_available: true,
+          },
+        },
+      }
+    }) as typeof api.get
+
+    const rendered = await renderTool(false)
+
+    assert.equal(calls, 1)
+    assert.match(rendered.container.textContent ?? '', /Pro/)
+    assert.match(rendered.container.textContent ?? '', /save 20%/)
+    assert.match(
+      rendered.container.textContent ?? '',
+      /Estimated discounted base amount\$80 USD/
+    )
+    assert.ok(rendered.container.querySelector('#assistant-expected-credit'))
+    assert.ok(rendered.container.querySelector('#assistant-topup-credit'))
+    assert.ok(rendered.container.querySelector('a[href="/wallet"]'))
+    assert.doesNotMatch(rendered.container.textContent ?? '', /Read-only/)
+    assert.doesNotMatch(
+      rendered.container.textContent ?? '',
+      /Unlock L1 access/
+    )
+
+    await unmount(rendered)
+  })
+
+  test('offers the L1 request only for an L0 read-only response', async () => {
+    let accessRequests = 0
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/assistant/offers')
+      return {
+        data: {
+          ...assistantOffersFixture,
+          data: {
+            ...assistantOffersFixture.data,
+            developer_access_granted: false,
+            read_only: true,
+            checkout_available: false,
           },
         },
       }
@@ -233,24 +270,10 @@ describe('AssistantPlanTool', () => {
     const rendered = await renderTool(false, () => {
       accessRequests += 1
     })
-
-    assert.equal(calls, 0)
-    assert.doesNotMatch(rendered.container.textContent ?? '', /Pro/)
-    assert.doesNotMatch(rendered.container.textContent ?? '', /save 20%/)
-    assert.match(rendered.container.textContent ?? '', /L1 access required/)
-    assert.match(
-      rendered.container.textContent ?? '',
-      /plans and top-up discounts are hidden/i
-    )
-    assert.equal(
-      rendered.container.querySelector('#assistant-expected-credit'),
-      null
-    )
-    assert.equal(
-      rendered.container.querySelector('#assistant-topup-credit'),
-      null
-    )
+    assert.match(rendered.container.textContent ?? '', /Pro/)
+    assert.match(rendered.container.textContent ?? '', /Read-only plan advice/)
     assert.equal(rendered.container.querySelector('a[href="/wallet"]'), null)
+
     await act(async () => {
       const button = [...rendered.container.querySelectorAll('button')].find(
         (candidate) => candidate.textContent?.includes('Unlock L1 access')
@@ -315,7 +338,7 @@ describe('AssistantPlanTool', () => {
     await unmount(rendered)
   })
 
-  test('does not expose checkout when payment is hidden for an L1 account', async () => {
+  test('keeps L1 read-only offers visible without suggesting another unlock', async () => {
     api.get = (async (url: string) => {
       assert.equal(url, '/api/assistant/offers')
       return {
@@ -323,6 +346,7 @@ describe('AssistantPlanTool', () => {
           ...assistantOffersFixture,
           data: {
             ...assistantOffersFixture.data,
+            read_only: true,
             checkout_available: false,
             payment_hidden: true,
             topup_discounts: {},
@@ -333,8 +357,16 @@ describe('AssistantPlanTool', () => {
 
     const rendered = await renderTool(true)
     assert.match(rendered.container.textContent ?? '', /Closest fit/)
-    assert.match(rendered.container.textContent ?? '', /Payment unavailable/)
+    assert.match(rendered.container.textContent ?? '', /Read-only plan advice/)
+    assert.match(
+      rendered.container.textContent ?? '',
+      /Payment is unavailable for this account\./
+    )
     assert.equal(rendered.container.querySelector('a[href="/wallet"]'), null)
+    assert.doesNotMatch(
+      rendered.container.textContent ?? '',
+      /Unlock L1 access/
+    )
     assert.doesNotMatch(rendered.container.textContent ?? '', /save 20%/)
 
     await unmount(rendered)
