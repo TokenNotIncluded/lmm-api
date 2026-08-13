@@ -450,6 +450,69 @@ describe('AssistantPanel', () => {
     }
   })
 
+  test('locks only the terminated conversation and offers a clean reset', async () => {
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/assistant/status')
+      return { data: { success: true, data: assistantStatus } }
+    }) as typeof api.get
+    api.post = (async (url: string) => {
+      assert.equal(url, '/api/assistant/chat')
+      return {
+        data: {
+          choices: [{ message: { content: 'This conversation has ended.' } }],
+          lmm_assistant_policy: 'conversation_restricted',
+          lmm_assistant_history: {
+            conversation_id: 73,
+            restricted: true,
+          },
+        },
+        headers: {},
+      }
+    }) as typeof api.post
+
+    const rendered = await renderPanel()
+    try {
+      const textarea = document.querySelector<HTMLTextAreaElement>('textarea')
+      assert.ok(textarea)
+      await setTextareaValue(textarea, 'Send a policy-boundary test.')
+      await act(async () => {
+        findButton('Send').click()
+        await flushEffects()
+      })
+      await act(async () =>
+        waitForCondition(
+          () => textarea.disabled,
+          'Terminated conversation input did not lock'
+        )
+      )
+      assert.equal(
+        textarea.placeholder,
+        'This conversation has ended. Start a new conversation.'
+      )
+      assert.match(
+        document.body.textContent ?? '',
+        /Conversation ended by safety policy/
+      )
+      assert.equal(findButton('Send').disabled, true)
+
+      await act(async () => {
+        findButton('Clear conversation').click()
+        await flushEffects()
+      })
+      const resetTextarea =
+        document.querySelector<HTMLTextAreaElement>('textarea')
+      assert.ok(resetTextarea)
+      assert.equal(resetTextarea.disabled, false)
+      assert.notEqual(
+        resetTextarea.placeholder,
+        'This conversation has ended. Start a new conversation.'
+      )
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
   test('hides an active tool card for a new ordinary message and allows reopening it', async () => {
     api.get = (async (url: string) => {
       if (url === '/api/assistant/status') {

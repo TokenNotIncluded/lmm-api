@@ -343,7 +343,7 @@ func mainMigrationModels() []interface{} {
 		&SubscriptionOrder{}, &UserSubscription{}, &SubscriptionPreConsumeRecord{}, &CustomOAuthProvider{},
 		&UserOAuthBinding{}, &PerfMetric{}, &SystemInstance{}, &SystemTask{}, &SystemTaskLock{},
 		&CasbinRule{}, &AuthzRole{}, &PersonalAccessIP{},
-		&AssistantLead{}, &AssistantProfileBucket{}, &AssistantUserProfile{}, &AssistantFirstQuestionStat{}, &AssistantConversation{}, &AssistantHistoryMessage{}, &AssistantSecureCard{}, &AdvancedSecurityEvent{},
+		&AssistantLead{}, &AssistantProfileBucket{}, &AssistantUserProfile{}, &AssistantFirstQuestionStat{}, &AssistantConversation{}, &AssistantHistoryMessage{}, &AssistantSecureCard{}, &AssistantSecurityIncident{}, &AdvancedSecurityEvent{},
 		&ViolationFeeState{}, &ViolationFeeRecord{}, &ViolationFeeAppeal{},
 		&ReleaseNote{}, &ReleaseNoteRead{}, &UnifiedTodoRead{}, &L1OnboardingTodo{},
 	}
@@ -449,6 +449,7 @@ func migrateDBFast() error {
 		{&AssistantConversation{}, "AssistantConversation"},
 		{&AssistantHistoryMessage{}, "AssistantHistoryMessage"},
 		{&AssistantSecureCard{}, "AssistantSecureCard"},
+		{&AssistantSecurityIncident{}, "AssistantSecurityIncident"},
 		{&AdvancedSecurityEvent{}, "AdvancedSecurityEvent"},
 		{&ReleaseNote{}, "ReleaseNote"},
 		{&ReleaseNoteRead{}, "ReleaseNoteRead"},

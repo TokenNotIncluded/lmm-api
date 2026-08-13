@@ -36,9 +36,11 @@ type AssistantChatPayload = {
   }
   message?: string
   lmm_assistant_action?: unknown
+  lmm_assistant_policy?: unknown
   lmm_assistant_history?: {
     conversation_id?: unknown
     privacy_notice?: unknown
+    restricted?: unknown
   }
 }
 
@@ -206,6 +208,7 @@ export type AssistantConversationHistorySummary = {
   created_at: number
   updated_at: number
   archived_at: number
+  restricted_at?: number
   owner: 'self' | 'lower_level_user'
   privacy_notice: string
 }
@@ -288,6 +291,7 @@ export type AssistantReply = {
   intent?: AssistantIntent
   action?: AssistantAction
   conversationId?: number
+  restricted?: boolean
 }
 
 export type AssistantPlanOffers = {
@@ -568,11 +572,16 @@ export async function sendAssistantMessage(
   if (!response) throw new Error('Assistant request did not complete')
   const responseConversationId =
     response.data.lmm_assistant_history?.conversation_id
+  const conversationRestricted =
+    response.data.lmm_assistant_history?.restricted === true ||
+    response.data.lmm_assistant_policy === 'security_refusal' ||
+    response.data.lmm_assistant_policy === 'conversation_restricted'
   const reply: AssistantReply = {
     content: parseAssistantReply(response.data),
     intent: parseAssistantIntent(response.headers['x-lmm-assistant-intent']),
     action: parseAssistantAction(response.data.lmm_assistant_action),
   }
+  if (conversationRestricted) reply.restricted = true
   if (
     typeof responseConversationId === 'number' &&
     Number.isSafeInteger(responseConversationId) &&

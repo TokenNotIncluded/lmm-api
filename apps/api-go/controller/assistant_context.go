@@ -80,12 +80,15 @@ type assistantUserContext struct {
 	InterlocutorAssessed bool `json:"-"`
 	// These fields are useful to local policy/profile decisions and cache
 	// invalidation, but are internal risk signals and are never model input.
-	PaymentRestrictionCauses []string                 `json:"-"`
-	Intent                   string                   `json:"current_intent,omitempty"`
-	ConversationTitleNeeded  bool                     `json:"conversation_title_needed,omitempty"`
-	CustomerProfile          assistantCustomerProfile `json:"customer_profile"`
-	ProfileSignals           []string                 `json:"-"`
-	WelcomeStrategy          string                   `json:"welcome_strategy"`
+	PaymentRestrictionCauses []string `json:"-"`
+	Intent                   string   `json:"current_intent,omitempty"`
+	ConversationTitleNeeded  bool     `json:"conversation_title_needed,omitempty"`
+	// CustomerProfile is a local routing decision. The model receives only the
+	// neutral behavior strategy, never labels such as security_risk or
+	// promotion_seeker that could be repeated back to the user.
+	CustomerProfile assistantCustomerProfile `json:"-"`
+	ProfileSignals  []string                 `json:"-"`
+	WelcomeStrategy string                   `json:"welcome_strategy"`
 	// Manual profile data is an internal strategy skill. It is deliberately
 	// excluded from JSON so it cannot cross the model/user response boundary
 	// through the serialized account context or assistant history.
@@ -118,7 +121,6 @@ func (context assistantUserContext) MarshalJSON() ([]byte, error) {
 		PaymentOfferState       assistantPaymentOfferState `json:"payment_offer_state"`
 		Intent                  string                     `json:"current_intent,omitempty"`
 		ConversationTitleNeeded bool                       `json:"conversation_title_needed,omitempty"`
-		CustomerProfile         assistantCustomerProfile   `json:"customer_profile"`
 		WelcomeStrategy         string                     `json:"welcome_strategy"`
 	}{
 		Username:                assistantSafeUsername(context.Username),
@@ -135,9 +137,8 @@ func (context assistantUserContext) MarshalJSON() ([]byte, error) {
 		PaymentOfferState:       assistantPaymentOfferStateForContext(context),
 		Intent:                  assistantSafeIntent(context.Intent),
 		ConversationTitleNeeded: context.ConversationTitleNeeded,
-		CustomerProfile:         profile,
 		WelcomeStrategy: assistantWelcomeStrategyForContext(assistantUserContext{
-			AccessLevel:     context.AccessLevel,
+			AccessLevel:     assistantSafeAccessLevel(context.AccessLevel),
 			CustomerProfile: profile,
 		}),
 	}
@@ -566,6 +567,9 @@ func classifyAssistantCustomerProfile(context assistantUserContext, message stri
 	if assistantTextContainsAny(text, "生产环境", "生产部署", "稳定性", "可用性", "并发", "延迟", "限流配置", "监控", "告警", "sla", "observability", "production", "reliability", "latency", "concurrency", "rate limit") {
 		signals = append(signals, "operations_language")
 	}
+	if assistantTextContainsAny(text, "企业", "公司", "团队", "采购", "合规", "审计", "business", "enterprise", "company", "team", "procurement", "compliance") {
+		signals = append(signals, "enterprise_language")
+	}
 	if assistantTextContainsAny(text, "不想付费", "没钱", "讨厌付款", "不充值", "免费", "自建", "源码", "开源", "技术", "free", "hate paying", "self host", "open source") {
 		signals = append(signals, "cost_sensitive_technical_language")
 	}
@@ -592,7 +596,7 @@ func classifyAssistantCustomerProfile(context assistantUserContext, message stri
 		return assistantProfilePromotion, signals
 	case assistantTextContainsAnyValue(signals, "support_problem_language"):
 		return assistantProfileSupport, signals
-	case assistantTextContainsAnyValue(signals, "operations_language"):
+	case assistantTextContainsAnyValue(signals, "operations_language") && assistantTextContainsAnyValue(signals, "enterprise_language"):
 		return assistantProfileOperator, signals
 	case assistantTextContainsAnyValue(signals, "mobile_accessibility_language"):
 		return assistantProfileAccessible, signals
@@ -600,6 +604,8 @@ func classifyAssistantCustomerProfile(context assistantUserContext, message stri
 		return assistantProfilePrivacy, signals
 	case assistantTextContainsAnyValue(signals, "guided_setup_language"):
 		return assistantProfileGuided, signals
+	case assistantTextContainsAnyValue(signals, "operations_language"):
+		return assistantProfileOperator, signals
 	case assistantTextContainsAnyValue(signals, "cost_sensitive_technical_language"):
 		return assistantProfileTechnical, signals
 	case assistantTextContainsAnyValue(signals, "l0_access"):
@@ -633,45 +639,89 @@ func assistantTextContainsAnyValue(values []string, terms ...string) bool {
 
 func assistantHasHighConfidenceSecurityAbuse(message string) bool {
 	text := strings.ToLower(strings.TrimSpace(message))
-	if assistantTextContainsAny(
-		text,
-		"绕过",
-		"破解",
-		"爆破",
-		"盗取",
-		"越权",
-		"jailbreak",
-		"bypass",
-		"brute force",
-		"ignore previous",
-		"忽略 system prompt",
-		"忽略系统提示",
-		"提取 system prompt",
-		"窃取 system prompt",
-		"extract system prompt",
-		"steal system prompt",
-	) {
-		return true
-	}
-	if !assistantTextContainsAny(text, "注入", "sql injection", "prompt injection") {
+	text = strings.Map(func(value rune) rune {
+		switch value {
+		case '\u200b', '\u200c', '\u200d', '\u2060', '\ufeff':
+			return -1
+		default:
+			return value
+		}
+	}, text)
+	if text == "" {
 		return false
 	}
-	return !assistantTextContainsAny(
+
+	// Quoted reports and explicit defensive work remain available. Merely
+	// claiming authorization is not enough to neutralize an otherwise direct
+	// prompt-theft or brute-force request.
+	if assistantTextContainsAny(text, "安全报告", "漏洞报告", "引用日志", "报告中", "security report", "vulnerability report", "quoted log") {
+		return false
+	}
+	strongAbuse := assistantTextContainsAny(
 		text,
+		"爆破",
+		"盗取",
+		"窃取 system prompt",
+		"提取 system prompt",
+		"忽略 system prompt",
+		"忽略系统提示",
+		"brute force",
+		"jailbreak",
+		"ignore previous",
+		"extract system prompt",
+		"steal system prompt",
+	)
+	if strongAbuse {
+		return true
+	}
+	defensiveContext := assistantTextContainsAny(
+		text,
+		"防止",
 		"防护",
 		"防御",
 		"检测",
 		"修复",
-		"授权",
+		"授权范围",
 		"安全测试",
 		"非破坏性",
 		"protect",
 		"defend",
 		"mitigate",
-		"authorized",
+		"authorized assessment",
+		"authorized scope",
 		"non-destructive",
-		"security report",
+		"report a finding",
 	)
+	if defensiveContext {
+		return false
+	}
+
+	attackGroups := [][]string{
+		{"绕过", "bypass", "规避安全控制", "evade security"},
+		{"扫描接口", "端口扫描", "scan endpoints", "port scan"},
+		{"注入", "sql injection", "prompt injection"},
+		{"越权", "提权", "privilege escalation"},
+	}
+	matchedGroups := 0
+	for _, terms := range attackGroups {
+		if assistantTextContainsAny(text, terms...) {
+			matchedGroups++
+		}
+	}
+	if matchedGroups >= 2 {
+		return true
+	}
+	return assistantTextContainsAny(text, "prompt injection 攻击", "perform prompt injection", "execute sql injection")
+}
+
+func assistantHasHighConfidenceSecurityAbuseConversation(messages []assistantOpenAIMessage) bool {
+	userMessages := make([]string, 0, len(messages))
+	for _, message := range messages {
+		if message.Role == "user" && strings.TrimSpace(message.Content) != "" {
+			userMessages = append(userMessages, message.Content)
+		}
+	}
+	return assistantHasHighConfidenceSecurityAbuse(strings.Join(userMessages, "\n"))
 }
 
 // assistantShouldQueueL1Request is intentionally narrower than the general
@@ -733,7 +783,7 @@ func assistantWelcomeStrategy(profile assistantCustomerProfile) string {
 func assistantWelcomeStrategyForContext(context assistantUserContext) string {
 	profile := assistantSafeCustomerProfile(context.CustomerProfile)
 	strategy := assistantWelcomeStrategy(profile)
-	if context.AccessLevel != "L0" {
+	if assistantSafeAccessLevel(context.AccessLevel) != "L0" {
 		return strategy
 	}
 

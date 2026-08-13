@@ -14,6 +14,7 @@ export type TodoCategory =
   | 'open_source_bounty'
   | 'developer_access'
   | 'account_action'
+  | 'security_incident'
 
 export interface TodoItem {
   id: string

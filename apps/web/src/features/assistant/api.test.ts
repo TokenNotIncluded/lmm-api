@@ -216,6 +216,33 @@ describe('assistant conversation context', () => {
 })
 
 describe('assistant chat retry policy', () => {
+  test('marks a safety-terminated conversation from server-owned metadata', async () => {
+    const originalPost = api.post
+    api.post = (async () => ({
+      data: {
+        choices: [{ message: { content: 'This conversation has ended.' } }],
+        lmm_assistant_policy: 'conversation_restricted',
+        lmm_assistant_history: {
+          conversation_id: 73,
+          restricted: true,
+        },
+      },
+      headers: {},
+    })) as typeof api.post
+
+    try {
+      assert.deepEqual(await sendAssistantMessage('hello'), {
+        content: 'This conversation has ended.',
+        intent: undefined,
+        action: undefined,
+        conversationId: 73,
+        restricted: true,
+      })
+    } finally {
+      api.post = originalPost
+    }
+  })
+
   test('redacts current and historical secrets at the request boundary', async () => {
     const originalPost = api.post
     let capturedBody: unknown

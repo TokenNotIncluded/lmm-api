@@ -32,6 +32,7 @@ const CATEGORY_LABELS: Record<TodoCategory, string> = {
   open_source_bounty: 'Bounty notifications',
   developer_access: 'Developer access',
   account_action: 'Account actions',
+  security_incident: 'Security incidents',
 }
 
 const ITEM_LABELS: Record<string, string> = {
@@ -42,6 +43,7 @@ const ITEM_LABELS: Record<string, string> = {
   'open_source_bounty.notification': 'Bounty notification',
   'developer_access.request': 'Developer access request',
   'account_action.request': 'Account action request',
+  'assistant.security_incident': 'Assistant safety incident',
 }
 
 function detailString(item: TodoItem, key: string) {
@@ -81,6 +83,24 @@ export function UnifiedTodoList() {
         to: '/challenges/$challengeId',
         params: { challengeId: String(projectId) },
       })
+      return
+    }
+    if (item.category === 'security_incident') {
+      const username = detailString(item, 'username')
+      if (username) {
+        await navigate({
+          to: '/users',
+          search: {
+            page: 1,
+            pageSize: undefined,
+            filter: username,
+            status: [],
+            role: [],
+            group: '',
+            l0Only: false,
+          },
+        })
+      }
     }
   }
 
@@ -92,6 +112,8 @@ export function UnifiedTodoList() {
         (item) =>
           item.total > 0 ||
           item.key === 'open_source_bounty_review' ||
+          ((user?.role ?? 0) >= ROLE.ADMIN &&
+            item.key === 'security_incident') ||
           ((user?.role ?? 0) >= ROLE.ADMIN &&
             (item.key === 'developer_access' || item.key === 'account_action'))
       )
@@ -150,9 +172,15 @@ export function UnifiedTodoList() {
       ) : query.data?.items.length ? (
         <div>
           {query.data.items.map((item) => {
-            const participant = detailString(item, 'participant_username')
+            let participant = detailString(item, 'participant_username')
+            if (!participant && item.category === 'security_incident') {
+              participant = detailString(item, 'username')
+            }
             const title = t(ITEM_LABELS[item.title] ?? 'Notification')
-            const canOpen = Boolean(detailNumber(item, 'project_id'))
+            const canOpen =
+              Boolean(detailNumber(item, 'project_id')) ||
+              (item.category === 'security_incident' &&
+                Boolean(detailString(item, 'username')))
             return (
               <button
                 key={item.id}

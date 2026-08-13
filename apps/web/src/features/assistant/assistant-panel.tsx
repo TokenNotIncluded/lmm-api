@@ -421,6 +421,7 @@ function AssistantPromptComposer(props: {
   placeholder: string
   privacyNoticeId: string
   restricted: boolean
+  terminated: boolean
   sending: boolean
   onSubmit: (message: { text?: string }) => void | Promise<void>
 }) {
@@ -459,13 +460,17 @@ function AssistantPromptComposer(props: {
       >
         <PromptInputBody>
           <PromptInputTextarea
-            placeholder={props.placeholder}
+            placeholder={
+              props.terminated
+                ? t('This conversation has ended. Start a new conversation.')
+                : props.placeholder
+            }
             aria-label={t('Ask AI assistant')}
             maxLength={4000}
             required={props.restricted}
             aria-describedby={describedBy}
             aria-invalid={hasText ? validation.invalid : undefined}
-            disabled={props.sending}
+            disabled={props.sending || props.terminated}
             className='max-h-32 min-h-12'
           />
         </PromptInputBody>
@@ -475,7 +480,7 @@ function AssistantPromptComposer(props: {
           </span>
           <PromptInputSubmit
             status={props.sending ? 'submitted' : 'ready'}
-            disabled={props.sending || validation.invalid}
+            disabled={props.sending || props.terminated || validation.invalid}
             size='sm'
           >
             {t('Send')}
@@ -656,6 +661,7 @@ export function AssistantPanel(props: {
   const baseUrl = getBaseUrl()
   const [entries, setEntries] = useState<ConversationEntry[]>([])
   const [conversationId, setConversationId] = useState<number | null>(null)
+  const [conversationRestricted, setConversationRestricted] = useState(false)
   const [sending, setSending] = useState(false)
   const submittedAutoSendIdRef = useRef<string | undefined>(undefined)
   const [recommendationDraft, setRecommendationDraft] =
@@ -817,6 +823,7 @@ export function AssistantPanel(props: {
   const resetConversation = useCallback(() => {
     setEntries([])
     setConversationId(null)
+    setConversationRestricted(false)
     clearToolState()
     setHistoryView(null)
     openedTargetRef.current = undefined
@@ -890,6 +897,7 @@ export function AssistantPanel(props: {
         conversationId ?? undefined
       )
       if (reply.conversationId) setConversationId(reply.conversationId)
+      if (reply.restricted) setConversationRestricted(true)
       const safeReply = redactAssistantMessageForDisplay(
         reply.content,
         t(
@@ -992,7 +1000,7 @@ export function AssistantPanel(props: {
 
   const submitMessage = async ({ text }: { text?: string }) => {
     const message = text?.trim()
-    if (sending) return
+    if (sending || conversationRestricted) return
     if (!message) {
       throw new Error(t('Please enter a message.'))
     }
@@ -1414,10 +1422,15 @@ export function AssistantPanel(props: {
                   <AssistantPresetPrompts />
                 ) : null}
                 <AssistantPromptComposer
-                  footerStatus={assistantFooterStatus}
+                  footerStatus={
+                    conversationRestricted
+                      ? t('Conversation ended by safety policy')
+                      : assistantFooterStatus
+                  }
                   placeholder={assistantPromptPlaceholder}
                   privacyNoticeId='assistant-privacy-notice'
                   restricted={accountAccessState === 'restricted'}
+                  terminated={conversationRestricted}
                   sending={sending}
                   onSubmit={submitMessage}
                 />

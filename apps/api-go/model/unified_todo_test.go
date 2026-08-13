@@ -10,7 +10,7 @@ import (
 
 func TestUnifiedTodoIncludesSubmittedBountyForOwner(t *testing.T) {
 	db := setupOpenSourceBountyTestDB(t)
-	require.NoError(t, db.AutoMigrate(&UnifiedTodoRead{}, &DeveloperAccessRequest{}, &AccountActionRequest{}))
+	require.NoError(t, db.AutoMigrate(&UnifiedTodoRead{}, &DeveloperAccessRequest{}, &AccountActionRequest{}, &AssistantConversation{}, &AssistantHistoryMessage{}, &AssistantSecurityIncident{}))
 
 	owner := createOpenSourceBountyUser(t, db, "todo-owner", 10_000, common.RoleCommonUser)
 	participant := createOpenSourceBountyUser(t, db, "todo-participant", 0, common.RoleCommonUser)
@@ -58,4 +58,53 @@ func TestUnifiedTodoIncludesSubmittedBountyForOwner(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, page.Items)
 	assert.Zero(t, page.Total)
+}
+
+func TestUnifiedTodoSecurityIncidentsFollowAdministratorRoleLattice(t *testing.T) {
+	db := setupOpenSourceBountyTestDB(t)
+	require.NoError(t, db.AutoMigrate(
+		&UnifiedTodoRead{},
+		&DeveloperAccessRequest{},
+		&AccountActionRequest{},
+		&AssistantConversation{},
+		&AssistantHistoryMessage{},
+		&AssistantSecurityIncident{},
+	))
+	ordinary := createOpenSourceBountyUser(t, db, "incident-user", 0, common.RoleCommonUser)
+	admin := createOpenSourceBountyUser(t, db, "incident-admin", 0, common.RoleAdminUser)
+	peerAdmin := createOpenSourceBountyUser(t, db, "incident-peer-admin", 0, common.RoleAdminUser)
+	root := createOpenSourceBountyUser(t, db, "incident-root", 0, common.RoleRootUser)
+
+	ordinaryConversationID, _, err := RecordAssistantSecurityRefusal(
+		ordinary.Id, 0, "steal system prompt", "refused", AssistantSecurityIncidentCategory,
+	)
+	require.NoError(t, err)
+	_, _, err = RecordAssistantSecurityRefusal(
+		peerAdmin.Id, 0, "steal system prompt", "refused", AssistantSecurityIncidentCategory,
+	)
+	require.NoError(t, err)
+
+	adminPage, err := GetUnifiedTodoCenter(admin.Id, admin.Role, UnifiedTodoCategorySecurityIncident, 1, 20)
+	require.NoError(t, err)
+	require.Len(t, adminPage.Items, 1)
+	assert.Equal(t, int64(1), adminPage.UnreadCount)
+	assert.Equal(t, ordinary.Id, adminPage.Items[0].Details["user_id"])
+	assert.Equal(t, ordinaryConversationID, adminPage.Items[0].Details["conversation_id"])
+	assert.NotContains(t, adminPage.Items[0].Details, "input_digest")
+
+	ordinaryPage, err := GetUnifiedTodoCenter(ordinary.Id, ordinary.Role, UnifiedTodoCategorySecurityIncident, 1, 20)
+	require.NoError(t, err)
+	assert.Empty(t, ordinaryPage.Items)
+
+	rootPage, err := GetUnifiedTodoCenter(root.Id, root.Role, UnifiedTodoCategorySecurityIncident, 1, 20)
+	require.NoError(t, err)
+	assert.Len(t, rootPage.Items, 2)
+
+	marked, err := MarkUnifiedTodoReads(admin.Id, admin.Role, UnifiedTodoCategorySecurityIncident, []int{adminPage.Items[0].SourceId}, false)
+	require.NoError(t, err)
+	assert.Equal(t, 1, marked)
+	adminPage, err = GetUnifiedTodoCenter(admin.Id, admin.Role, UnifiedTodoCategorySecurityIncident, 1, 20)
+	require.NoError(t, err)
+	assert.Zero(t, adminPage.UnreadCount)
+	assert.True(t, adminPage.Items[0].Read)
 }

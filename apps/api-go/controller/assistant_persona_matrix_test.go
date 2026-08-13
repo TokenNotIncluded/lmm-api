@@ -73,6 +73,7 @@ func loadAssistantPersonaMatrix(t *testing.T) []assistantPersonaMatrixFixture {
 
 func assistantPersonaContextFromFixture(fixture assistantPersonaUserFixture) assistantUserContext {
 	context := assistantUserContext{
+		UserID:                 1,
 		Username:               strings.TrimSpace(fixture.Username),
 		AccessLevel:            fixture.AccessLevel,
 		AdministratorMode:      fixture.AdministratorMode,
@@ -161,6 +162,11 @@ func TestAssistantPersonaMatrix(t *testing.T) {
 			serialized, err := json.Marshal(context)
 			require.NoError(t, err)
 			encoded := string(serialized)
+			var modelContext map[string]any
+			require.NoError(t, json.Unmarshal(serialized, &modelContext))
+			assert.Equal(t, assistantSafeAccessLevel(context.AccessLevel), modelContext["access_level"])
+			assert.Equal(t, strategy, modelContext["welcome_strategy"])
+			assert.NotContains(t, modelContext, "customer_profile")
 			assert.NotContains(t, encoded, fixture.User.Email, "raw email must not cross the model boundary")
 			assert.NotContains(t, encoded, "matrix-password")
 			assert.NotContains(t, encoded, "sk-matrix-secret")
@@ -169,6 +175,9 @@ func TestAssistantPersonaMatrix(t *testing.T) {
 			assert.NotContains(t, encoded, "payment_restriction_causes")
 
 			prompt := buildAssistantSystemPrompt(setting.GetAssistantSettings(), context)
+			for _, expectedText := range fixture.Expected.WelcomeContains {
+				assert.Contains(t, prompt, expectedText)
+			}
 			assert.NotContains(t, prompt, fixture.User.Email, "raw email must not enter the model prompt")
 			assert.NotContains(t, prompt, "matrix-password")
 			assert.NotContains(t, prompt, "sk-matrix-secret")
@@ -183,6 +192,7 @@ func TestAssistantPersonaMatrix(t *testing.T) {
 
 func TestAssistantPersonaMatrixKeepsInternalProfileStrategyOutOfModelContext(t *testing.T) {
 	context := assistantUserContext{
+		UserID:                   1,
 		Username:                 "matrix-user password=matrix-password api_key=sk-matrix-secret",
 		Email:                    "person@example.com",
 		EmailCategory:            "common",
@@ -221,12 +231,12 @@ func TestAssistantPersonaMatrixKeepsInternalProfileStrategyOutOfModelContext(t *
 		"sk-matrix-secret",
 		"internal-profile-key",
 		"internal-tag",
-		"internal-persona-strategy-secret",
 		"internal-restriction-cause",
 		"internal-profile-signal",
 	} {
 		assert.NotContains(t, prompt, secret)
 	}
+	assert.Contains(t, prompt, "internal-persona-strategy-secret", "the normalized administrator strategy is the only manual profile field the model needs")
 }
 
 func TestAssistantPersonaContextRedactsIdentitySecrets(t *testing.T) {
