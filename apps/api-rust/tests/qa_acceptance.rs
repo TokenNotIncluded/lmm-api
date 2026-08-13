@@ -3461,3 +3461,146 @@ fn fixed_duration_json_conversion_fuzz_is_panic_free() {
         "fixed JSON conversion fuzz did not execute an iteration"
     );
 }
+
+#[test]
+#[ignore = "fixed-duration Claude stream state-machine fuzz harness; run explicitly in QA"]
+fn fixed_duration_claude_stream_state_machine_fuzz_is_panic_free() {
+    const INITIAL_SEED: u64 = 0xa7f2_4c91_6e03_b58d;
+    const MAX_EVENTS: usize = 64;
+    const MAX_BYTES: usize = 4096;
+    const MAX_ITERATIONS: u64 = 1_000_000;
+
+    fn next_xorshift(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
+    let seconds = std::env::var("LMM_FUZZ_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(1)
+        .max(1)
+        .min(30);
+    let deadline = Instant::now() + Duration::from_secs(seconds);
+    let source: serde_json::Value =
+        serde_json::from_str(CLAUDE_STREAM).expect("Claude event corpus");
+    let templates = source
+        .get("events")
+        .and_then(serde_json::Value::as_array)
+        .expect("Claude event corpus array");
+    assert!(!templates.is_empty());
+
+    let mut seed = INITIAL_SEED;
+    let mut iterations = 0_u64;
+    while Instant::now() < deadline && iterations < MAX_ITERATIONS {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let event_count = (next_xorshift(&mut seed) % (MAX_EVENTS as u64 + 1)) as usize;
+            let mut events = Vec::with_capacity(event_count);
+            for event_index in 0..event_count {
+                let template_index =
+                    (next_xorshift(&mut seed) as usize) % templates.len();
+                let event = match next_xorshift(&mut seed) % 9 {
+                    0 => templates[template_index].clone(),
+                    1 => serde_json::json!({
+                        "type": "message_start",
+                        "message": {
+                            "id": format!("fuzz-{event_index}"),
+                            "type": "message",
+                            "role": "assistant",
+                            "model": "fuzz-model",
+                            "content": []
+                        }
+                    }),
+                    2 => serde_json::json!({
+                        "type": "content_block_start",
+                        "index": event_index,
+                        "content_block": {
+                            "type": "thinking",
+                            "thinking": "",
+                            "signature": format!("sig-{}", next_xorshift(&mut seed) % 32)
+                        }
+                    }),
+                    3 => serde_json::json!({
+                        "type": "content_block_delta",
+                        "index": event_index,
+                        "delta": {
+                            "type": "thinking_delta",
+                            "thinking": format!("plan-{}", next_xorshift(&mut seed) % 32)
+                        }
+                    }),
+                    4 => serde_json::json!({
+                        "type": "content_block_delta",
+                        "index": event_index,
+                        "delta": {
+                            "type": "signature_delta",
+                            "signature": format!("sig-{}", next_xorshift(&mut seed) % 32)
+                        }
+                    }),
+                    5 => serde_json::json!({
+                        "type": "content_block_stop",
+                        "index": event_index
+                    }),
+                    6 => serde_json::json!({
+                        "type": "message_delta",
+                        "delta": {
+                            "stop_reason": if next_xorshift(&mut seed) & 1 == 0 {
+                                "end_turn"
+                            } else {
+                                "tool_use"
+                            }
+                        }
+                    }),
+                    7 => serde_json::json!({"type": "message_stop"}),
+                    _ => serde_json::json!({
+                        "type": format!(
+                            "future_event_{}",
+                            next_xorshift(&mut seed) % 32
+                        ),
+                        "provider_field": next_xorshift(&mut seed)
+                    }),
+                };
+                events.push(event);
+            }
+            assert!(events.len() <= MAX_EVENTS);
+
+            let document = serde_json::json!({
+                "events": events,
+                "usage": {
+                    "input_tokens": next_xorshift(&mut seed) % 32,
+                    "output_tokens": next_xorshift(&mut seed) % 32
+                }
+            });
+            let mut bytes = serde_json::to_vec(&document).expect("Claude fuzz serialization");
+            if bytes.len() > MAX_BYTES {
+                bytes.truncate(MAX_BYTES);
+            }
+            assert!(bytes.len() <= MAX_BYTES);
+
+            let prefix_len = if bytes.is_empty() {
+                0
+            } else {
+                (next_xorshift(&mut seed) as usize) % (bytes.len() + 1)
+            };
+            for candidate in [bytes.as_slice(), &bytes[..prefix_len]] {
+                if let Ok(snapshot) = serde_json::from_slice::<ClaudeStreamSnapshot>(candidate) {
+                    let _ = claude_stream_to_semantic_events(&snapshot);
+                }
+            }
+        }));
+        assert!(
+            result.is_ok(),
+            "Claude stream state fuzz panic: seed={seed:#x}, iteration={iterations}"
+        );
+        iterations = iterations.saturating_add(1);
+    }
+
+    eprintln!(
+        "Claude stream state fuzz complete: initial_seed={INITIAL_SEED:#x}, final_seed={seed:#x}, iterations={iterations}"
+    );
+    assert!(
+        iterations > 0,
+        "Claude stream state fuzz did not execute an iteration"
+    );
+}
