@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/http"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -254,12 +255,12 @@ func assistantToolDefinitions() []assistantOpenAIToolDefinition {
 			Type: "function",
 			Function: assistantOpenAIToolFunction{
 				Name:        "get_setup_guide",
-				Description: "Return verified platform-specific install commands and gateway configuration for Claude Code, CC Switch, Claude Desktop, Codex, and compatible clients. Use this instead of guessing client capabilities or endpoint formats.",
+				Description: "Return verified platform-specific install commands and gateway configuration for Claude Code, CC Switch, Claude Desktop, Codex, and compatible clients. model_id must be an exact value returned by get_available_models for this account; use this tool instead of guessing client capabilities, models, or endpoint formats.",
 				Parameters: objectSchema(map[string]any{
 					"platform": map[string]any{"type": "string", "enum": []string{"windows", "linux", "macos"}},
 					"topic":    map[string]any{"type": "string", "enum": []string{"claude-code", "cc-switch", "claude-desktop", "chatgpt-client", "codex", "cursor", "open-webui", "other-openai-compatible"}},
 					"model_id": map[string]any{"type": "string", "minLength": 1, "maxLength": 200},
-				}, []string{"platform", "topic"}),
+				}, []string{"platform", "topic", "model_id"}),
 			},
 		},
 		{
@@ -1041,7 +1042,7 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 	case "search_web":
 		return executeAssistantSearchTool(c, input)
 	case "get_setup_guide":
-		return executeAssistantSetupTool(input)
+		return executeAssistantSetupTool(actorUserID, input)
 	case "prepare_l1_recommendation":
 		return executeAssistantL1RecommendationTool(c, actorUserID, input)
 	case "request_create_key":
@@ -1909,7 +1910,7 @@ func quotePowerShellLiteral(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }
 
-func executeAssistantSetupTool(input map[string]any) map[string]any {
+func executeAssistantSetupTool(userID int, input map[string]any) map[string]any {
 	platform := strings.ToLower(strings.TrimSpace(inputString(input, "platform")))
 	topic := strings.ToLower(strings.TrimSpace(inputString(input, "topic")))
 	if platform != "windows" && platform != "linux" && platform != "macos" {
@@ -1928,7 +1929,30 @@ func executeAssistantSetupTool(input map[string]any) map[string]any {
 	}
 	clientModel := strings.TrimSpace(inputString(input, "model_id"))
 	if clientModel == "" {
-		clientModel = "<MODEL_ID_FROM_GET_AVAILABLE_MODELS>"
+		return map[string]any{
+			"ok":        false,
+			"status":    "model_required",
+			"error":     "an exact model ID is required",
+			"next_step": "Call get_available_models and use one exact model_ids value.",
+		}
+	}
+	modelsResult := executeAssistantModelsTool(userID)
+	if ok, _ := modelsResult["ok"].(bool); !ok {
+		return modelsResult
+	}
+	modelIDs, ok := modelsResult["model_ids"].([]string)
+	if !ok || !slices.Contains(modelIDs, clientModel) {
+		status := "model_unavailable"
+		if modelsResult["status"] == "public_preview" {
+			status = "model_not_in_public_preview"
+		}
+		return map[string]any{
+			"ok":                  false,
+			"status":              status,
+			"error":               "the requested model ID is not available in the signed-in account catalog",
+			"available_model_ids": modelIDs,
+			"next_step":           "Use one exact available_model_ids value; do not guess or rewrite the model ID.",
+		}
 	}
 
 	result := map[string]any{

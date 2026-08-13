@@ -155,16 +155,23 @@ func assistantMessageContains(message string, terms ...string) bool {
 // model output into an account action.
 func ClassifyAssistantIntent(message string) string {
 	normalized := strings.ToLower(strings.TrimSpace(message))
+	explicitAccessRequest := assistantMessageContains(normalized,
+		"l0", "l1", "开发者权限", "开发者访问", "api 权限", "api 访问", "developer access", "api access") &&
+		assistantMessageContains(normalized,
+			"申请", "开通", "解锁", "升级", "审核", "需要", "想要", "apply", "request", "unlock", "upgrade", "review", "need", "want")
 	switch {
 	case assistantMessageContains(normalized,
 		"推荐信", "推荐函", "推荐内容", "recommendation letter", "l1 recommendation", "access recommendation"):
 		return AssistantIntentRecommendation
-	case assistantMessageContains(normalized,
-		"新手", "入门", "审核", "解锁", "l0", "l1", "onboarding", "review", "approval", "getting started"):
+	case explicitAccessRequest:
 		return AssistantIntentOnboarding
 	case assistantMessageContains(normalized,
 		"人工", "客服", "管理员", "工单", "human", "support", "administrator", "agent"):
 		return AssistantIntentHumanSupport
+	case assistantMessageContains(normalized,
+		"用了多少 token", "使用了多少 token", "消耗了多少 token", "本月 token", "这个月 token", "token 用量", "token 使用量",
+		"tokens used", "tokens have i used", "how many tokens", "token usage", "token consumption", "monthly tokens", "usage logs", "request history"):
+		return AssistantIntentUsage
 	case assistantMessageContains(normalized,
 		"成本", "费用", "计费", "消耗", "价格", "单价", "cost", "estimate", "billing", "price", "pricing", "token rate"):
 		return AssistantIntentCost
@@ -172,7 +179,7 @@ func ClassifyAssistantIntent(message string) string {
 		"计算", "算一下", "数学", "换算", "百分比", "calculate", "calculator", "math", "percentage", "convert units"):
 		return AssistantIntentMath
 	case assistantMessageContains(normalized,
-		"历史调用", "调用数据", "调用统计", "用量统计", "使用统计", "调用记录", "usage", "usage logs", "request history", "statistics"):
+		"历史调用", "调用数据", "调用统计", "用量统计", "使用统计", "调用记录", "usage", "statistics"):
 		return AssistantIntentUsage
 	case assistantMessageContains(normalized,
 		"有哪些模型", "模型列表", "可用模型", "模型清单", "available models", "model list", "model ids"):
@@ -184,7 +191,7 @@ func ClassifyAssistantIntent(message string) string {
 		"claude code", "cc switch", "cc-switch", "chatgpt", "hermes", "windows", "linux", "macos", "mac os", "桌面版", "安装", "配置客户端"):
 		return AssistantIntentClientSetup
 	case assistantMessageContains(normalized,
-		"api key", "api-key", "apikey", "base url", "base_url", "model id", "模型 id", "模型id", "密钥", "令牌", "token", "创建 key", "创建key", "create key", "create a key", "create my key"):
+		"api key", "api-key", "api_key", "apikey", "base url", "base_url", "model id", "模型 id", "模型id", "密钥", "令牌", "access token", "创建 key", "创建key", "create key", "create a key", "create my key"):
 		return AssistantIntentAPIKey
 	case assistantMessageContains(normalized,
 		"开源", "悬赏", "挑战", "小费", "bounty", "tip", "challenge", "任务发布"):
@@ -192,6 +199,9 @@ func ClassifyAssistantIntent(message string) string {
 	case assistantMessageContains(normalized,
 		"套餐", "购买", "划算", "优惠", "折扣", "订阅", "plan", "purchase", "discount", "best value"):
 		return AssistantIntentPlanPurchase
+	case assistantMessageContains(normalized,
+		"新手", "入门", "onboarding", "approval", "getting started"):
+		return AssistantIntentOnboarding
 	default:
 		return AssistantIntentOther
 	}

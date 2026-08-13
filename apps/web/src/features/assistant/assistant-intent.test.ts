@@ -19,7 +19,10 @@ For commercial licensing, please contact support@quantumnous.com
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
-import { getAssistantPresetForIntent } from './assistant-intent'
+import {
+  getAssistantPresetForIntent,
+  isExplicitAssistantL1Request,
+} from './assistant-intent'
 
 describe('assistant retention actions', () => {
   test('maps actionable intents to the matching guided flow', () => {
@@ -35,5 +38,17 @@ describe('assistant retention actions', () => {
   test('does not force an action for general questions', () => {
     assert.equal(getAssistantPresetForIntent('other'), undefined)
     assert.equal(getAssistantPresetForIntent(undefined), undefined)
+  })
+
+  test('only treats an explicit access request as an L1 request', () => {
+    assert.equal(isExplicitAssistantL1Request('请帮我申请 L1 权限'), true)
+    assert.equal(
+      isExplicitAssistantL1Request('I want to apply for developer access'),
+      true
+    )
+    assert.equal(
+      isExplicitAssistantL1Request('GPT 5.6 SOL 的价格和 Hermes 配置是什么？'),
+      false
+    )
   })
 })

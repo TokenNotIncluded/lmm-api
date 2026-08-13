@@ -1473,6 +1473,128 @@ describe('AssistantPanel', () => {
     }
   })
 
+  test('continues an owned history thread with its conversation id', async () => {
+    let postedBody: Record<string, unknown> | undefined
+    api.get = (async (url: string) => {
+      if (url === '/api/assistant/status') {
+        return { data: { success: true, data: assistantStatus } }
+      }
+      if (url === '/api/assistant/conversations') {
+        return {
+          data: {
+            success: true,
+            data: {
+              conversations: [
+                {
+                  id: 73,
+                  title: 'Hermes model setup',
+                  last_message_preview: 'Use gpt-5.6-sol',
+                  owner: 'self',
+                  archived_at: 0,
+                  created_at: 1_786_400_000,
+                  updated_at: 1_786_400_001,
+                  privacy_notice: 'Conversations are not private.',
+                },
+              ],
+            },
+          },
+        }
+      }
+      if (url === '/api/assistant/conversations/73') {
+        return {
+          data: {
+            success: true,
+            data: {
+              conversation: {
+                id: 73,
+                title: 'Hermes model setup',
+                last_message_preview: 'Use gpt-5.6-sol',
+                owner: 'self',
+                archived_at: 0,
+                created_at: 1_786_400_000,
+                updated_at: 1_786_400_001,
+                privacy_notice: 'Conversations are not private.',
+              },
+              messages: [
+                {
+                  id: 701,
+                  role: 'user',
+                  content: 'Configure Hermes with gpt-5.6-sol.',
+                  created_at: 1_786_400_000,
+                },
+                {
+                  id: 702,
+                  role: 'assistant',
+                  content: 'Use the OpenAI-compatible endpoint.',
+                  created_at: 1_786_400_001,
+                },
+              ],
+              privacy_notice: 'Conversations are not private.',
+            },
+          },
+        }
+      }
+      throw new Error(`Unexpected GET ${url}`)
+    }) as typeof api.get
+    api.post = (async (url: string, body: unknown) => {
+      assert.equal(url, '/api/assistant/chat')
+      postedBody = body as Record<string, unknown>
+      return {
+        data: {
+          choices: [
+            { message: { content: 'Windows uses the same model ID.' } },
+          ],
+          lmm_assistant_history: { conversation_id: 73 },
+        },
+        headers: { 'x-lmm-assistant-intent': 'client_setup' },
+      }
+    }) as typeof api.post
+
+    const rendered = await renderPanel()
+    try {
+      await act(async () => {
+        findButton('Conversation history').click()
+        await flushEffects()
+      })
+      await act(async () => {
+        findButton('View').click()
+        await flushEffects()
+      })
+      await act(async () =>
+        waitForCondition(
+          () => findButton('Continue') !== undefined,
+          'Continue action did not render'
+        )
+      )
+      await act(async () => {
+        findButton('Continue').click()
+        await flushEffects()
+      })
+      assert.match(
+        document.body.textContent ?? '',
+        /Configure Hermes with gpt-5\.6-sol\./
+      )
+
+      const textarea = document.querySelector<HTMLTextAreaElement>('textarea')
+      assert.ok(textarea)
+      await setTextareaValue(textarea, 'What changes on Windows?')
+      await act(async () => {
+        findButton('Send').click()
+        await flushEffects()
+      })
+      await act(async () =>
+        waitForCondition(
+          () => postedBody?.conversation_id === 73,
+          'Continued request did not reuse its conversation id'
+        )
+      )
+      assert.equal(postedBody?.conversation_id, 73)
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
   test('handles a missing conversation history endpoint without exposing an HTTP error', async () => {
     api.get = (async (url: string) => {
       if (url === '/api/assistant/status') {
@@ -1663,7 +1785,7 @@ describe('AssistantPanel', () => {
     const rendered = await renderPanel()
     try {
       const textarea = document.querySelector<HTMLTextAreaElement>(
-        'textarea[placeholder="Write a short explanation of what you want to build or why you need L1 access."]'
+        'textarea[placeholder="Ask AI assistant"]'
       )
       assert.ok(textarea)
       await setTextareaValue(
@@ -1820,7 +1942,7 @@ describe('AssistantPanel', () => {
     const rendered = await renderPanel('onboarding')
     try {
       const textarea = document.querySelector<HTMLTextAreaElement>(
-        'textarea[placeholder="Write a short explanation of what you want to build or why you need L1 access."]'
+        'textarea[placeholder="Ask AI assistant"]'
       )
       assert.ok(textarea)
       await setTextareaValue(textarea, 'I need L1 for a small integration.')
@@ -1845,6 +1967,63 @@ describe('AssistantPanel', () => {
         )
       )
       assert.ok(findButton('Submit for administrator review'))
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
+  test('does not push a general L0 question into an L1 application', async () => {
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/assistant/status')
+      return {
+        data: {
+          success: true,
+          data: { ...assistantStatus, developer_access_granted: false },
+        },
+      }
+    }) as typeof api.get
+    api.post = (async (url: string) => {
+      assert.equal(url, '/api/assistant/chat')
+      return {
+        data: {
+          choices: [{ message: { content: 'Here are the live model IDs.' } }],
+        },
+        headers: { 'x-lmm-assistant-intent': 'other' },
+      }
+    }) as typeof api.post
+
+    const rendered = await renderPanel()
+    try {
+      const textarea = document.querySelector<HTMLTextAreaElement>(
+        'textarea[placeholder="Ask AI assistant"]'
+      )
+      assert.ok(textarea)
+      await setTextareaValue(textarea, 'What models are available?')
+      await act(async () => {
+        findButton('Send').click()
+        await flushEffects()
+      })
+      await act(async () =>
+        waitForCondition(
+          () =>
+            document.body.textContent?.includes(
+              'Here are the live model IDs.'
+            ) === true,
+          'Assistant answer did not render'
+        )
+      )
+
+      assert.equal(
+        Array.from(document.querySelectorAll('button')).some(
+          (button) => button.textContent === 'Submit for administrator review'
+        ),
+        false
+      )
+      assert.equal(
+        document.querySelector('textarea[aria-label="Recommendation letter"]'),
+        null
+      )
     } finally {
       await act(async () => rendered.root.unmount())
       rendered.queryClient.clear()

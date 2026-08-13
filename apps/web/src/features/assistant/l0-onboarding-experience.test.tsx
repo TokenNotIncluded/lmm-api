@@ -203,7 +203,7 @@ describe('L0 onboarding assistant experience', () => {
 
       assert.match(
         document.body.textContent ?? '',
-        /L0 accounts can browse challenges/
+        /Guidance for plans, setup, API keys, costs, and support\./
       )
       assert.equal(
         document.querySelector('[data-testid="assistant-onboarding-todo"]'),
@@ -236,7 +236,7 @@ describe('L0 onboarding assistant experience', () => {
         textarea.getAttribute('aria-describedby') ?? '',
         /assistant-privacy-notice/
       )
-      assert.match(
+      assert.doesNotMatch(
         textarea.getAttribute('aria-describedby') ?? '',
         /assistant-l0-input-hint/
       )
@@ -271,16 +271,7 @@ describe('L0 onboarding assistant experience', () => {
       assert.ok(submit)
       assert.equal(submit.disabled, false)
       assert.equal(textarea.getAttribute('aria-invalid'), 'false')
-      assert.equal(
-        document.querySelector('#assistant-l0-input-hint')?.textContent,
-        'Write a short explanation of what you want to build or why you need L1 access.'
-      )
-      assert.equal(
-        document
-          .querySelector('#assistant-l0-input-hint')
-          ?.getAttribute('role'),
-        'status'
-      )
+      assert.equal(document.querySelector('#assistant-l0-input-hint'), null)
 
       await setTextareaValue(textarea, '。')
       assert.equal(submit.disabled, true)

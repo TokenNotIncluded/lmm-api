@@ -43,6 +43,7 @@ import {
   getAssistantConversationHistory,
   getAssistantConversationHistoryDetail,
   unarchiveAssistantConversation,
+  type AssistantConversationHistoryDetail,
   type AssistantConversationHistoryItem,
   type AssistantConversationHistoryMessage,
 } from './api'
@@ -65,7 +66,7 @@ function HistoryMessage(props: {
     )
   )
   return (
-    <div className='grid gap-1 rounded-md border px-3 py-2'>
+    <div className='grid gap-1 py-2'>
       <p className='text-muted-foreground text-[11px] font-medium'>
         {props.message.role === 'assistant' ? t('Service guide') : t('You')}
       </p>
@@ -423,6 +424,7 @@ export function AssistantHistory(props: {
 
 export function AssistantHistoryConversation(props: {
   conversation: AssistantConversationHistoryItem
+  onContinue?: (detail: AssistantConversationHistoryDetail) => void
 }) {
   const { t } = useTranslation()
   const historyQuery = useQuery({
@@ -460,14 +462,30 @@ export function AssistantHistoryConversation(props: {
   const conversation = historyQuery.data.conversation
   return (
     <div className='grid gap-3'>
-      <div>
-        <p className='text-sm font-medium'>{conversation.title}</p>
-        {conversation.owner !== 'self' ? (
-          <p className='text-muted-foreground mt-1 text-xs leading-5'>
-            {t(
-              'This history is available because the account has a lower access level. Private cards remain visible only to their owner.'
-            )}
-          </p>
+      <div className='flex items-start justify-between gap-3'>
+        <div className='min-w-0'>
+          <p className='truncate text-sm font-medium'>{conversation.title}</p>
+          {conversation.owner !== 'self' ? (
+            <p className='text-muted-foreground mt-1 text-xs leading-5'>
+              {t(
+                'This history is available because the account has a lower access level. Private cards remain visible only to their owner.'
+              )}
+            </p>
+          ) : null}
+        </div>
+        {props.onContinue &&
+        conversation.owner === 'self' &&
+        conversation.archived_at === 0 &&
+        !conversation.restricted_at ? (
+          <Button
+            type='button'
+            variant='ghost'
+            size='sm'
+            className='shrink-0'
+            onClick={() => props.onContinue?.(historyQuery.data)}
+          >
+            {t('Continue')}
+          </Button>
         ) : null}
       </div>
       {historyQuery.data.messages.map((message) => (

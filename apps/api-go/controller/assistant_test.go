@@ -1227,12 +1227,28 @@ func TestAssistantL1RecommendationActionUsesActorAndIsAttachedToResponse(t *test
 }
 
 func TestAssistantSetupToolReturnsExactEndpointFormatsAndClientLimits(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Ability{}, &model.TopUp{}))
+	levelZero := 0
+	user := model.User{
+		Username:           "assistant-setup-preview",
+		Password:           "password",
+		Role:               common.RoleCommonUser,
+		Status:             common.UserStatusEnabled,
+		Group:              "default",
+		TrustLevelOverride: &levelZero,
+	}
+	require.NoError(t, db.Create(&user).Error)
+	require.NoError(t, db.Create(&[]model.Ability{
+		{Group: "default", Model: "claude-sonnet-4-5", ChannelId: 1, Enabled: true},
+		{Group: "default", Model: "gpt-5.6-codex", ChannelId: 2, Enabled: true},
+	}).Error)
 	originalServerAddress := system_setting.ServerAddress
 	system_setting.ServerAddress = "https://api.example.com/"
 	t.Cleanup(func() { system_setting.ServerAddress = originalServerAddress })
 	withAssistantSettings(t, true, "deepseek-v4-flash")
 
-	claudeCode := executeAssistantSetupTool(map[string]any{
+	claudeCode := executeAssistantSetupTool(user.Id, map[string]any{
 		"platform": "windows",
 		"topic":    "claude-code",
 		"model_id": "claude-sonnet-4-5",
@@ -1245,7 +1261,7 @@ func TestAssistantSetupToolReturnsExactEndpointFormatsAndClientLimits(t *testing
 	assert.Contains(t, claudeCode["configuration"], "ANTHROPIC_MODEL='claude-sonnet-4-5'")
 	assert.NotContains(t, claudeCode["configuration"], "api.example.com/v1")
 
-	codex := executeAssistantSetupTool(map[string]any{
+	codex := executeAssistantSetupTool(user.Id, map[string]any{
 		"platform": "linux",
 		"topic":    "codex",
 		"model_id": "gpt-5.6-codex",
@@ -1255,49 +1271,95 @@ func TestAssistantSetupToolReturnsExactEndpointFormatsAndClientLimits(t *testing
 	assert.NotContains(t, codex["config_toml"], "<YOUR_API_KEY>")
 	assert.NotContains(t, codex["config_toml"], "deepseek-v4-flash")
 
-	withoutModel := executeAssistantSetupTool(map[string]any{
+	withoutModel := executeAssistantSetupTool(user.Id, map[string]any{
 		"platform": "linux",
 		"topic":    "claude-code",
 	})
-	assert.Equal(t, "<MODEL_ID_FROM_GET_AVAILABLE_MODELS>", withoutModel["client_model_id"])
-	assert.NotContains(t, withoutModel["configuration"], "deepseek-v4-flash")
+	assert.Equal(t, false, withoutModel["ok"])
+	assert.Equal(t, "model_required", withoutModel["status"])
 
-	chatGPT := executeAssistantSetupTool(map[string]any{
+	chatGPT := executeAssistantSetupTool(user.Id, map[string]any{
 		"platform": "macos",
 		"topic":    "chatgpt-client",
+		"model_id": "gpt-5.6-codex",
 	})
 	assert.Equal(t, false, chatGPT["supported"])
 	assert.Equal(t, false, chatGPT["direct_custom_gateway_supported"])
 	assert.Contains(t, chatGPT["limitation"], "does not accept")
 
-	claudeDesktopLinux := executeAssistantSetupTool(map[string]any{
+	claudeDesktopLinux := executeAssistantSetupTool(user.Id, map[string]any{
 		"platform": "linux",
 		"topic":    "claude-desktop",
+		"model_id": "claude-sonnet-4-5",
 	})
 	assert.Equal(t, false, claudeDesktopLinux["supported"])
 	assert.Contains(t, claudeDesktopLinux["limitation"], "use Claude Code on Linux")
 }
 
 func TestAssistantSetupToolShellQuotesConfiguredValues(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Ability{}, &model.TopUp{}))
+	levelZero := 0
+	maliciousModelID := "claude-$(touch /tmp/model-pwned)'suffix"
+	user := model.User{
+		Username:           "assistant-setup-quoting",
+		Password:           "password",
+		Role:               common.RoleCommonUser,
+		Status:             common.UserStatusEnabled,
+		Group:              "default",
+		TrustLevelOverride: &levelZero,
+	}
+	require.NoError(t, db.Create(&user).Error)
+	require.NoError(t, db.Create(&model.Ability{
+		Group: "default", Model: maliciousModelID, ChannelId: 1, Enabled: true,
+	}).Error)
 	originalServerAddress := system_setting.ServerAddress
 	system_setting.ServerAddress = "https://api.example.com/$(touch /tmp/base-pwned)'suffix"
 	t.Cleanup(func() { system_setting.ServerAddress = originalServerAddress })
 
-	linux := executeAssistantSetupTool(map[string]any{
+	linux := executeAssistantSetupTool(user.Id, map[string]any{
 		"platform": "linux",
 		"topic":    "claude-code",
-		"model_id": "claude-$(touch /tmp/model-pwned)'suffix",
+		"model_id": maliciousModelID,
 	})
 	assert.Contains(t, linux["configuration"], "ANTHROPIC_BASE_URL='https://api.example.com/$(touch /tmp/base-pwned)'\"'\"'suffix'")
 	assert.Contains(t, linux["configuration"], "ANTHROPIC_MODEL='claude-$(touch /tmp/model-pwned)'\"'\"'suffix'")
 
-	windows := executeAssistantSetupTool(map[string]any{
+	windows := executeAssistantSetupTool(user.Id, map[string]any{
 		"platform": "windows",
 		"topic":    "claude-code",
-		"model_id": "claude-$(touch /tmp/model-pwned)'suffix",
+		"model_id": maliciousModelID,
 	})
 	assert.Contains(t, windows["configuration"], "ANTHROPIC_BASE_URL='https://api.example.com/$(touch /tmp/base-pwned)''suffix'")
 	assert.Contains(t, windows["configuration"], "ANTHROPIC_MODEL='claude-$(touch /tmp/model-pwned)''suffix'")
+}
+
+func TestAssistantSetupToolRejectsUnavailableModel(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Ability{}, &model.TopUp{}))
+	levelZero := 0
+	user := model.User{
+		Username:           "assistant-setup-reject",
+		Password:           "password",
+		Role:               common.RoleCommonUser,
+		Status:             common.UserStatusEnabled,
+		Group:              "default",
+		TrustLevelOverride: &levelZero,
+	}
+	require.NoError(t, db.Create(&user).Error)
+	require.NoError(t, db.Create(&model.Ability{
+		Group: "default", Model: "gpt-5.6-sol", ChannelId: 1, Enabled: true,
+	}).Error)
+
+	result := executeAssistantSetupTool(user.Id, map[string]any{
+		"platform": "linux",
+		"topic":    "codex",
+		"model_id": "invented-model",
+	})
+
+	assert.Equal(t, false, result["ok"])
+	assert.Equal(t, "model_not_in_public_preview", result["status"])
+	assert.Equal(t, []string{"gpt-5.6-sol"}, result["available_model_ids"])
 }
 
 func TestAssistantCostToolAndResponseContent(t *testing.T) {

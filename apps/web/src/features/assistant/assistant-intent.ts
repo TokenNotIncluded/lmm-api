@@ -37,3 +37,14 @@ export function getAssistantPresetForIntent(
 ): AssistantPresetId | undefined {
   return intent ? INTENT_PRESET[intent] : undefined
 }
+
+export function isExplicitAssistantL1Request(message: string): boolean {
+  const normalized = message.toLocaleLowerCase().trim()
+  return [
+    /(?:申请|开通|解锁|升级|审核|需要|想要).{0,12}l1/i,
+    /l1.{0,12}(?:申请|开通|解锁|升级|审核|需要|想要)/i,
+    /(?:request|apply|unlock|upgrade|review|need|want).{0,12}l1/i,
+    /(?:developer|api) access.{0,20}(?:request|apply|unlock|upgrade|need|want)/i,
+    /(?:request|apply|unlock|upgrade|need|want).{0,20}(?:l1|developer|api) access?/i,
+  ].some((pattern) => pattern.test(normalized))
+}

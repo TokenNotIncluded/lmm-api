@@ -243,6 +243,7 @@ func assistantSafeAuthProviders(providers []string) []string {
 }
 
 func assistantUserContextForRequest(userID int, message string, conversation ...[]assistantOpenAIMessage) assistantUserContext {
+	profileText := assistantProfileTextForConversation(message, conversation...)
 	context := assistantUserContext{
 		UserID:             userID,
 		AccessLevel:        "L0",
@@ -251,7 +252,7 @@ func assistantUserContextForRequest(userID int, message string, conversation ...
 		Intent:             model.ClassifyAssistantIntent(message),
 	}
 	if userID <= 0 {
-		context.CustomerProfile, context.ProfileSignals = classifyAssistantCustomerProfile(context, message)
+		context.CustomerProfile, context.ProfileSignals = classifyAssistantCustomerProfile(context, profileText)
 		context.WelcomeStrategy = assistantWelcomeStrategyForContext(context)
 		context.PaymentOfferState = assistantPaymentOfferStateForContextAndConversation(context, message, conversation...)
 		return context
@@ -259,7 +260,7 @@ func assistantUserContextForRequest(userID int, message string, conversation ...
 
 	user, err := model.GetUserById(userID, false)
 	if err != nil || user == nil {
-		context.CustomerProfile, context.ProfileSignals = classifyAssistantCustomerProfile(context, message)
+		context.CustomerProfile, context.ProfileSignals = classifyAssistantCustomerProfile(context, profileText)
 		context.WelcomeStrategy = assistantWelcomeStrategyForContext(context)
 		context.PaymentOfferState = assistantPaymentOfferStateForContextAndConversation(context, message, conversation...)
 		return context
@@ -295,6 +296,11 @@ func assistantUserContextForRequest(userID int, message string, conversation ...
 		context.DeveloperAccessGranted = snapshot.DeveloperAccess.Granted
 	} else if access, accessErr := model.GetDeveloperAccessStateForUser(user); accessErr == nil {
 		context.DeveloperAccessGranted = access.Granted
+		if access.Granted {
+			// A degraded trust snapshot must not produce the contradictory state
+			// "L0 + developer access granted". L1 is the lowest truthful fallback.
+			context.AccessLevel = "L1"
+		}
 	}
 	if request, requestErr := model.GetDeveloperAccessRequest(userID); requestErr == nil {
 		if request == nil {
@@ -304,13 +310,29 @@ func assistantUserContextForRequest(userID int, message string, conversation ...
 		}
 	}
 
-	context.CustomerProfile, context.ProfileSignals = classifyAssistantCustomerProfile(context, message)
+	context.CustomerProfile, context.ProfileSignals = classifyAssistantCustomerProfile(context, profileText)
 	context.WelcomeStrategy = assistantWelcomeStrategyForContext(context)
 	context.PaymentOfferState = assistantPaymentOfferStateForContextAndConversation(context, message, conversation...)
 	sort.Strings(context.AuthProviders)
 	sort.Strings(context.PaymentRestrictionCauses)
 	sort.Strings(context.ProfileSignals)
 	return context
+}
+
+func assistantProfileTextForConversation(latestMessage string, conversations ...[]assistantOpenAIMessage) string {
+	messages := make([]string, 0, 4)
+	if len(conversations) > 0 {
+		for _, message := range conversations[0] {
+			if message.Role != "user" || strings.TrimSpace(message.Content) == "" {
+				continue
+			}
+			messages = append(messages, message.Content)
+		}
+	}
+	if len(messages) == 0 || strings.TrimSpace(messages[len(messages)-1]) != strings.TrimSpace(latestMessage) {
+		messages = append(messages, latestMessage)
+	}
+	return strings.Join(messages, "\n")
 }
 
 func assistantPaymentOfferStateForContext(context assistantUserContext) assistantPaymentOfferState {
@@ -594,10 +616,10 @@ func classifyAssistantCustomerProfile(context assistantUserContext, message stri
 		return assistantProfileSecurityRisk, signals
 	case assistantTextContainsAnyValue(signals, "disposable_email", "promotion_language"):
 		return assistantProfilePromotion, signals
-	case assistantTextContainsAnyValue(signals, "support_problem_language"):
-		return assistantProfileSupport, signals
 	case assistantTextContainsAnyValue(signals, "operations_language") && assistantTextContainsAnyValue(signals, "enterprise_language"):
 		return assistantProfileOperator, signals
+	case assistantTextContainsAnyValue(signals, "support_problem_language"):
+		return assistantProfileSupport, signals
 	case assistantTextContainsAnyValue(signals, "mobile_accessibility_language"):
 		return assistantProfileAccessible, signals
 	case assistantTextContainsAnyValue(signals, "privacy_conscious_language"):
@@ -735,22 +757,16 @@ func assistantShouldQueueL1Request(context assistantUserContext, message string)
 		context.CustomerProfile == assistantProfileSecurityRisk {
 		return false
 	}
-	return assistantTextContainsAny(
-		strings.ToLower(strings.TrimSpace(message)),
-		"l1",
-		"l0",
-		"申请开发者",
-		"开发者权限",
-		"开发者访问",
-		"解锁权限",
-		"提升权限",
-		"申请解锁",
-		"developer access",
-		"unlock access",
-		"request access",
-		"access review",
-		"l1 review",
+	text := strings.ToLower(strings.TrimSpace(message))
+	targetsAccess := assistantTextContainsAny(
+		text,
+		"l1", "开发者权限", "开发者访问", "api 权限", "api 访问", "developer access", "api access",
 	)
+	requestsChange := assistantTextContainsAny(
+		text,
+		"申请", "开通", "解锁", "升级", "审核", "需要", "想要", "apply", "request", "unlock", "upgrade", "review", "need", "want",
+	)
+	return targetsAccess && requestsChange
 }
 
 func assistantWelcomeStrategy(profile assistantCustomerProfile) string {

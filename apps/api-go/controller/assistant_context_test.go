@@ -140,6 +140,12 @@ func TestAssistantCustomerProfileUsesAuditableSignals(t *testing.T) {
 			signal:  "enterprise_language",
 		},
 		{
+			name:    "enterprise incident remains operator",
+			message: "企业生产环境故障处理需要 SLA、并发、监控和合规说明",
+			want:    assistantProfileOperator,
+			signal:  "support_problem_language",
+		},
+		{
 			name:    "privacy conscious",
 			message: "我不想暴露多余个人信息，请说明数据保留和删除方式",
 			want:    assistantProfilePrivacy,
@@ -172,6 +178,22 @@ func TestAssistantCustomerProfileUsesAuditableSignals(t *testing.T) {
 			assert.Contains(t, signals, test.signal)
 		})
 	}
+}
+
+func TestAssistantProfileUsesPriorUserTurns(t *testing.T) {
+	conversation := []assistantOpenAIMessage{
+		{Role: "user", Content: "我们是企业团队，要用于生产环境并关注 SLA 与合规"},
+		{Role: "assistant", Content: "请告诉我当前最需要解决的问题。"},
+		{Role: "user", Content: "现在偶尔出现故障，怎么排查？"},
+	}
+
+	text := assistantProfileTextForConversation("现在偶尔出现故障，怎么排查？", conversation)
+	profile, signals := classifyAssistantCustomerProfile(assistantUserContext{}, text)
+
+	assert.Equal(t, assistantProfileOperator, profile)
+	assert.Contains(t, signals, "enterprise_language")
+	assert.Contains(t, signals, "operations_language")
+	assert.Contains(t, signals, "support_problem_language")
 }
 
 func TestAssistantSecurityHardGuardRequiresHighConfidenceAbuse(t *testing.T) {
@@ -421,6 +443,14 @@ func TestAssistantL0WelcomeStrategyAnswersWithoutRepeatingOnboardingQuestions(t 
 	assert.Contains(t, strategy, "simply want to use the relay")
 	assert.Contains(t, strategy, "do not need an open-source project")
 	assert.NotContains(t, strategy, "Ask whether they are new")
+}
+
+func TestAssistantQueuesOnlyExplicitL1Requests(t *testing.T) {
+	context := assistantUserContext{AccessLevel: "L0"}
+	assert.True(t, assistantShouldQueueL1Request(context, "请帮我申请 L1 权限"))
+	assert.True(t, assistantShouldQueueL1Request(context, "I want to apply for developer access"))
+	assert.False(t, assistantShouldQueueL1Request(context, "我是 L0，GPT 5.6 SOL 的价格是多少？"))
+	assert.False(t, assistantShouldQueueL1Request(context, "Explain developer access levels"))
 }
 
 func TestAssistantL0WelcomeStrategyPreservesProfileSpecialization(t *testing.T) {
