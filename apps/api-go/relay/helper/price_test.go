@@ -11,10 +11,12 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
+	"github.com/QuantumNous/new-api/pkg/dynamic_pricing"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/QuantumNous/new-api/setting/dynamic_pricing_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -323,4 +325,75 @@ func TestModelPriceHelperRequestBillingRatiosOnlyApplyToFixedPrice(t *testing.T)
 	require.Equal(t, "QuotaFromFloat", clamp.Op)
 	require.Equal(t, common.QuotaClampOverflow, clamp.Kind)
 	require.Nil(t, info.Billing)
+}
+
+// TestModelPriceHelperPreConsumeIncludesDynamicMultiplier verifies that the
+// dynamic pricing ratio is injected before the pre-consume quota computation
+// in BOTH billing branches: the fixed-price (usePrice) branch and the
+// ratio-billed (non-usePrice) branch. The latter previously computed
+// QuotaToPreConsume before the injection, so the pre-consume under-covered
+// the final charge (tokens × ratio × dynamic multiplier).
+func TestModelPriceHelperPreConsumeIncludesDynamicMultiplier(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	savedModelPrices := ratio_setting.ModelPrice2JSONString()
+	savedModelRatios := ratio_setting.ModelRatio2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(savedModelPrices))
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(savedModelRatios))
+	})
+
+	modelPrices, err := common.Marshal(map[string]float64{"dyn-fixed-price": 0.04})
+	require.NoError(t, err)
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(string(modelPrices)))
+	modelRatios, err := common.Marshal(map[string]float64{"dyn-ratio-price": 10})
+	require.NoError(t, err)
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(string(modelRatios)))
+
+	// GetMultiplier gates on dynamic_pricing_setting.enabled, so enable the
+	// feature (and restore the full previous setting on cleanup).
+	dpCfg := config.GlobalConfig.Get("dynamic_pricing_setting").(*dynamic_pricing_setting.DynamicPricingSetting)
+	oldDpCfg := dynamic_pricing_setting.GetSetting()
+	dpCfg.Enabled = true
+	t.Cleanup(func() { *dpCfg = oldDpCfg })
+
+	// Seed dynamic pricing state: GetMultiplier returns 2.0 for both models.
+	dynamic_pricing.SetState("dyn-fixed-price", &dynamic_pricing.ModelState{Factor: 2.0})
+	dynamic_pricing.SetState("dyn-ratio-price", &dynamic_pricing.ModelState{Factor: 2.0})
+	t.Cleanup(func() {
+		// No delete API; neutralise so other tests in this package are
+		// unaffected by the seeded multipliers.
+		dynamic_pricing.SetState("dyn-fixed-price", &dynamic_pricing.ModelState{Factor: 1.0})
+		dynamic_pricing.SetState("dyn-ratio-price", &dynamic_pricing.ModelState{Factor: 1.0})
+	})
+
+	newInfo := func(model string) (*gin.Context, *relaycommon.RelayInfo) {
+		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		ctx.Set("group", "default")
+		return ctx, &relaycommon.RelayInfo{
+			OriginModelName: model,
+			UserGroup:       "default",
+			UsingGroup:      "default",
+		}
+	}
+	meta := &types.TokenCountMeta{}
+
+	// Fixed-price (usePrice): pre-consume = modelPrice × quotaPerUnit ×
+	// groupRatio × dynamic multiplier = 0.04 × 500000 × 1 × 2.0 = 40000.
+	ctx, info := newInfo("dyn-fixed-price")
+	priceData, err := ModelPriceHelper(ctx, info, 1000, meta)
+	require.NoError(t, err)
+	require.True(t, priceData.UsePrice)
+	require.Equal(t, 40000, priceData.QuotaToPreConsume)
+	require.InDelta(t, 2.0, priceData.OtherRatioMultiplier(), 1e-9)
+
+	// Ratio-billed (non-usePrice): preConsumedTokens = max(1000, 500) = 1000,
+	// ratio = modelRatio × groupRatio = 10; base = 10000, and the dynamic
+	// multiplier must be applied so pre-consume matches the final charge
+	// (tokens × ratio × dynamic = 20000).
+	ctx, info = newInfo("dyn-ratio-price")
+	priceData, err = ModelPriceHelper(ctx, info, 1000, meta)
+	require.NoError(t, err)
+	require.False(t, priceData.UsePrice)
+	require.Equal(t, 20000, priceData.QuotaToPreConsume)
+	require.InDelta(t, 2.0, priceData.OtherRatioMultiplier(), 1e-9)
 }

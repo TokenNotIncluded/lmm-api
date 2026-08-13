@@ -6,6 +6,7 @@ This directory contains operational, API, and legal documentation for LMM Forge.
 
 - [`authentication.md`](./authentication.md): authentication and session architecture.
 - [`seamless-upgrades.md`](./seamless-upgrades.md): operator upgrade flow.
+- [`dynamic-pricing.md`](./dynamic-pricing.md): dynamic pricing feature: formula pipeline, configuration, status API, and operation.
 - [`postgresql-migration.md`](./postgresql-migration.md): migration rehearsal workflow.
 - [`postgresql-cutover.md`](./postgresql-cutover.md): production cutover transaction.
 - [`valkey-lmm-api.md`](./valkey-lmm-api.md): dedicated Valkey deployment guidance.

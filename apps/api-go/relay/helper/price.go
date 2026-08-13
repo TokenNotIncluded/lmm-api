@@ -8,6 +8,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
+	"github.com/QuantumNous/new-api/pkg/dynamic_pricing"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
@@ -91,7 +92,6 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		return modelPriceHelperTiered(c, info, promptTokens, meta, groupRatioInfo)
 	}
 
-	var preConsumedQuota int
 	var modelRatio float64
 	var completionRatio float64
 	var cacheRatio float64
@@ -103,10 +103,6 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 	var audioCompletionRatio float64
 	var freeModel bool
 	if !usePrice {
-		preConsumedTokens := common.Max(promptTokens, common.PreConsumedQuota)
-		if meta.MaxTokens != 0 {
-			preConsumedTokens += meta.MaxTokens
-		}
 		var success bool
 		var matchName string
 		modelRatio, success, matchName = ratio_setting.GetModelRatio(info.OriginModelName)
@@ -128,12 +124,6 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		imageRatio, _ = ratio_setting.GetImageRatio(info.OriginModelName)
 		audioRatio = ratio_setting.GetAudioRatio(info.OriginModelName)
 		audioCompletionRatio = ratio_setting.GetAudioCompletionRatio(info.OriginModelName)
-		ratio := modelRatio * groupRatioInfo.GroupRatio
-		quota, err := common.QuotaFromFloatStrict(float64(preConsumedTokens) * ratio)
-		if err != nil {
-			return hosttypes.PriceData{}, err
-		}
-		preConsumedQuota = quota
 	} else {
 		if meta.ImagePriceRatio != 0 {
 			modelPrice = modelPrice * meta.ImagePriceRatio
@@ -144,16 +134,13 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 	if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
 		// if model price or ratio is 0, do not pre-consume quota
 		if groupRatioInfo.GroupRatio == 0 {
-			preConsumedQuota = 0
 			freeModel = true
 		} else if usePrice {
 			if modelPrice == 0 {
-				preConsumedQuota = 0
 				freeModel = true
 			}
 		} else {
 			if modelRatio == 0 {
-				preConsumedQuota = 0
 				freeModel = true
 			}
 		}
@@ -173,18 +160,36 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		CacheCreationRatio:   cacheCreationRatio,
 		CacheCreation5mRatio: cacheCreationRatio5m,
 		CacheCreation1hRatio: cacheCreationRatio1h,
-		QuotaToPreConsume:    preConsumedQuota,
 	}
-	if usePrice {
-		for name, ratio := range meta.BillingRatios {
-			priceData.AddOtherRatio(name, ratio)
+	// 动态定价：在预扣与结算两个路径之前注入倍率，使 pre-consume 与 post-consume 一致。
+	// 两条计费分支的预扣额度计算都必须发生在此注入之后，确保 ratio-billed
+	// (非 usePrice) 模型的 pre-consume 同样包含动态倍率。
+	if mult := dynamic_pricing.GetMultiplier(info.OriginModelName); mult != 1.0 {
+		priceData.AddOtherRatio("dynamic_pricing", mult)
+	}
+	if !freeModel {
+		if usePrice {
+			for name, ratio := range meta.BillingRatios {
+				priceData.AddOtherRatio(name, ratio)
+			}
+			quotaToPreConsume := priceData.ApplyOtherRatiosToFloat(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
+			quota, err := common.QuotaFromFloatStrict(quotaToPreConsume)
+			if err != nil {
+				return hosttypes.PriceData{}, err
+			}
+			priceData.QuotaToPreConsume = quota
+		} else {
+			preConsumedTokens := common.Max(promptTokens, common.PreConsumedQuota)
+			if meta.MaxTokens != 0 {
+				preConsumedTokens += meta.MaxTokens
+			}
+			ratio := modelRatio * groupRatioInfo.GroupRatio
+			quota, err := common.QuotaFromFloatStrict(priceData.ApplyOtherRatiosToFloat(float64(preConsumedTokens) * ratio))
+			if err != nil {
+				return hosttypes.PriceData{}, err
+			}
+			priceData.QuotaToPreConsume = quota
 		}
-		quotaToPreConsume := priceData.ApplyOtherRatiosToFloat(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
-		quota, err := common.QuotaFromFloatStrict(quotaToPreConsume)
-		if err != nil {
-			return hosttypes.PriceData{}, err
-		}
-		priceData.QuotaToPreConsume = quota
 	}
 
 	if common.DebugEnabled {
@@ -221,32 +226,19 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (hostt
 		}
 	}
 
-	var quota int
 	freeModel := false
 
 	if usePrice {
-		var err error
-		quota, err = common.QuotaFromFloatStrict(modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
-		if err != nil {
-			return hosttypes.PriceData{}, err
-		}
 		if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
 			if groupRatioInfo.GroupRatio == 0 || modelPrice == 0 {
-				quota = 0
 				freeModel = true
 			}
 		}
 	} else {
 		// 按量计费：以模型倍率的一半作为预扣额度
-		var err error
-		quota, err = common.QuotaFromFloatStrict(modelRatio / 2 * common.QuotaPerUnit * groupRatioInfo.GroupRatio)
-		if err != nil {
-			return hosttypes.PriceData{}, err
-		}
 		modelPrice = -1
 		if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
 			if groupRatioInfo.GroupRatio == 0 || modelRatio == 0 {
-				quota = 0
 				freeModel = true
 			}
 		}
@@ -257,9 +249,32 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (hostt
 		ModelPrice:     modelPrice,
 		ModelRatio:     modelRatio,
 		UsePrice:       usePrice,
-		Quota:          quota,
 		GroupRatioInfo: groupRatioInfo,
 	}
+	// 动态定价：按次计费同样应用模型倍率。注入必须位于 Quota 写入之前，
+	// 这样 priceData 额度的所有下游使用（relay_task 的预扣按 OtherRatios 折算、
+	// task_billing 的差额结算）都能看到该倍率。
+	if mult := dynamic_pricing.GetMultiplier(info.OriginModelName); mult != 1.0 {
+		priceData.AddOtherRatio("dynamic_pricing", mult)
+	}
+
+	// 预扣额度（基础额度，不含 OtherRatios；下游统一按 OtherRatios 折算，
+	// 此处不可把动态倍率直接折入 Quota，否则 relay_task 会重复应用）。
+	if !freeModel {
+		var quotaBase float64
+		if usePrice {
+			quotaBase = modelPrice * common.QuotaPerUnit * groupRatioInfo.GroupRatio
+		} else {
+			// 按量计费：以模型倍率的一半作为预扣额度
+			quotaBase = modelRatio / 2 * common.QuotaPerUnit * groupRatioInfo.GroupRatio
+		}
+		quota, err := common.QuotaFromFloatStrict(quotaBase)
+		if err != nil {
+			return hosttypes.PriceData{}, err
+		}
+		priceData.Quota = quota
+	}
+
 	return priceData, nil
 }
 

@@ -395,6 +395,9 @@ func InitResources() (returnErr error) {
 
 	perfmetrics.Init()
 
+	// 启动动态定价 ticker（按窗口聚合用量并更新模型价格倍率）
+	service.StartDynamicPricingTicker()
+
 	// 启动系统监控
 	common.StartSystemMonitor()
 
