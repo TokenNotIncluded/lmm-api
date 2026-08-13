@@ -50,7 +50,7 @@ const SSE_CORPUS: &[u8] = b"event: update\r\ndata: one\r\ndata: two\r\n\r\ndata:
 
 const NATIVE_PASSTHROUGH_CORPUS: &[u8] = b"data: provider bytes stay opaque\n\ndata: [DONE]\n\n";
 
-const BENCHMARK_MANIFEST_VERSION: &str = "protocol-hotpath-v1";
+const BENCHMARK_MANIFEST_VERSION: &str = "protocol-hotpath-v2";
 
 #[derive(Clone, Copy, Debug)]
 struct BenchmarkScenario {
@@ -309,6 +309,94 @@ const SCENARIO_MANIFEST: &[BenchmarkScenario] = &[
     },
 ];
 
+#[derive(Clone, Copy, Debug)]
+struct BenchmarkDimension {
+    label: &'static str,
+    dimension: &'static str,
+    value: &'static str,
+}
+
+/// Metadata-only coverage contract for PLAN 10.1.  These rows describe the
+/// dimensions a benchmark run must identify; they do not claim that a run has
+/// executed or establish a performance baseline.
+const SCENARIO_DIMENSION_MANIFEST: &[BenchmarkDimension] = &[
+    BenchmarkDimension {
+        label: "request_parallel_tools_1",
+        dimension: "parallel_tool_calls",
+        value: "1",
+    },
+    BenchmarkDimension {
+        label: "request_parallel_tools_4",
+        dimension: "parallel_tool_calls",
+        value: "4",
+    },
+    BenchmarkDimension {
+        label: "request_parallel_tools_16",
+        dimension: "parallel_tool_calls",
+        value: "16",
+    },
+    BenchmarkDimension {
+        label: "request_multimodal_url",
+        dimension: "multimodal",
+        value: "url",
+    },
+    BenchmarkDimension {
+        label: "request_multimodal_base64",
+        dimension: "multimodal",
+        value: "base64",
+    },
+    BenchmarkDimension {
+        label: "request_multimodal_file_reference",
+        dimension: "multimodal",
+        value: "file_reference",
+    },
+    BenchmarkDimension {
+        label: "request_reasoning_none",
+        dimension: "reasoning",
+        value: "none",
+    },
+    BenchmarkDimension {
+        label: "request_reasoning_summary",
+        dimension: "reasoning",
+        value: "summary",
+    },
+    BenchmarkDimension {
+        label: "request_reasoning_opaque_signature",
+        dimension: "reasoning",
+        value: "opaque_signature",
+    },
+    BenchmarkDimension {
+        label: "route_one_hop",
+        dimension: "route_shape",
+        value: "one_hop",
+    },
+    BenchmarkDimension {
+        label: "route_old_two_hop",
+        dimension: "route_shape",
+        value: "old_two_hop",
+    },
+    BenchmarkDimension {
+        label: "route_new_ir",
+        dimension: "route_shape",
+        value: "new_ir",
+    },
+    BenchmarkDimension {
+        label: "client_normal",
+        dimension: "client_behavior",
+        value: "normal",
+    },
+    BenchmarkDimension {
+        label: "client_slow",
+        dimension: "client_behavior",
+        value: "slow",
+    },
+    BenchmarkDimension {
+        label: "client_interrupted",
+        dimension: "client_behavior",
+        value: "interrupted",
+    },
+];
+
 static MANIFEST_REPORTED: Once = Once::new();
 
 fn report_scenario_manifest() {
@@ -329,6 +417,15 @@ fn report_scenario_manifest() {
                 scenario.client_abort,
                 scenario.native_passthrough,
                 scenario.plan_compile,
+            );
+        }
+        for dimension in SCENARIO_DIMENSION_MANIFEST {
+            eprintln!(
+                "protocol_hotpath_dimension_manifest version={} label={} dimension={} value={}",
+                BENCHMARK_MANIFEST_VERSION,
+                dimension.label,
+                dimension.dimension,
+                dimension.value,
             );
         }
     });
@@ -370,6 +467,33 @@ fn benchmark_scenario_manifest_is_complete() {
     assert!(SCENARIO_MANIFEST
         .iter()
         .any(|scenario| scenario.client_abort));
+
+    for expected in [
+        ("parallel_tool_calls", "1"),
+        ("parallel_tool_calls", "4"),
+        ("parallel_tool_calls", "16"),
+        ("multimodal", "url"),
+        ("multimodal", "base64"),
+        ("multimodal", "file_reference"),
+        ("reasoning", "none"),
+        ("reasoning", "summary"),
+        ("reasoning", "opaque_signature"),
+        ("route_shape", "one_hop"),
+        ("route_shape", "old_two_hop"),
+        ("route_shape", "new_ir"),
+        ("client_behavior", "normal"),
+        ("client_behavior", "slow"),
+        ("client_behavior", "interrupted"),
+    ] {
+        assert!(
+            SCENARIO_DIMENSION_MANIFEST
+                .iter()
+                .any(|scenario| scenario.dimension == expected.0 && scenario.value == expected.1),
+            "missing benchmark dimension {}={}",
+            expected.0,
+            expected.1
+        );
+    }
 }
 
 
