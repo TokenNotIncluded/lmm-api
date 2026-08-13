@@ -60,9 +60,10 @@ export function DataTablePagination<TData>({
   return (
     <div
       className={cn(
-        '@container/pagination flex min-w-0 items-center justify-end overflow-clip'
+        '@container/pagination flex min-w-0 items-center justify-start overflow-x-auto overflow-y-hidden @lg/pagination:justify-end'
       )}
-      style={{ overflowClipMargin: 1 }}
+      role='navigation'
+      aria-label={t('Pagination')}
     >
       <div className='flex min-w-0 shrink-0 items-center gap-2 @xl/pagination:gap-3'>
         <div className='flex shrink-0 items-baseline gap-1.5 text-xs font-medium whitespace-nowrap sm:text-sm'>
@@ -83,7 +84,10 @@ export function DataTablePagination<TData>({
               table.setPageSize(Number(value))
             }}
           >
-            <SelectTrigger className='text-foreground h-8 w-[64px] font-medium tabular-nums sm:w-[70px]'>
+            <SelectTrigger
+              aria-label={t('Rows per page')}
+              className='text-foreground h-8 w-[64px] font-medium tabular-nums sm:w-[70px]'
+            >
               <SelectValue placeholder={pageSize} />
             </SelectTrigger>
             <SelectContent side='top' alignItemWithTrigger={false}>
@@ -119,11 +123,20 @@ export function DataTablePagination<TData>({
           </Button>
 
           {pageNumbers.map((pageNumber, index) => (
-            <div key={`${pageNumber}-${index}`} className='flex items-center'>
+            <div
+              key={getPageItemKey(pageNumbers, pageNumber, index)}
+              className='flex items-center'
+            >
               {pageNumber === '...' ? (
-                <span className='text-muted-foreground/60 px-0.5 text-sm @lg/pagination:px-1'>
-                  ...
-                </span>
+                <>
+                  <span
+                    aria-hidden='true'
+                    className='text-muted-foreground/60 px-0.5 text-sm @lg/pagination:px-1'
+                  >
+                    ...
+                  </span>
+                  <span className='sr-only'>{t('More pages')}</span>
+                </>
               ) : (
                 <Button
                   variant={currentPage === pageNumber ? 'default' : 'outline'}
@@ -134,6 +147,7 @@ export function DataTablePagination<TData>({
                       : 'text-muted-foreground hover:text-foreground'
                   )}
                   onClick={() => table.setPageIndex((pageNumber as number) - 1)}
+                  aria-current={currentPage === pageNumber ? 'page' : undefined}
                 >
                   <span className='sr-only'>
                     {t('Go to page {{page}}', { page: pageNumber })}
@@ -166,4 +180,18 @@ export function DataTablePagination<TData>({
       </div>
     </div>
   )
+}
+
+function getPageItemKey(
+  pageNumbers: readonly (number | string)[],
+  pageNumber: number | string,
+  pageIndex: number
+) {
+  if (pageNumber !== '...') {
+    return `page-${pageNumber}`
+  }
+
+  const previousPage = pageNumbers[pageIndex - 1] ?? 'start'
+  const nextPage = pageNumbers[pageIndex + 1] ?? 'end'
+  return `ellipsis-${previousPage}-${nextPage}`
 }

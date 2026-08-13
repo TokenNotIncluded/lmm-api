@@ -82,6 +82,8 @@ const ASSISTANT_PRIVACY_NOTICE_COLLAPSE_DELAY_MS = 5_000
 
 const originalGet = api.get
 const originalPost = api.post
+const originalMatchMedia = window.matchMedia
+const originalInnerWidth = window.innerWidth
 const reactTestGlobals = globalThis as typeof globalThis & {
   IS_REACT_ACT_ENVIRONMENT?: boolean
 }
@@ -162,6 +164,20 @@ async function renderPanel(
 }
 
 async function renderLauncher(user: AuthUser | null = null) {
+  Object.defineProperty(window, 'innerWidth', {
+    configurable: true,
+    value: 1280,
+  })
+  window.matchMedia = ((query: string) => ({
+    matches: query === '(min-width: 1280px)',
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  })) as typeof window.matchMedia
   useAuthStore.getState().auth.setUser(user)
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -270,6 +286,11 @@ afterEach(() => {
   capturedPrivacyNoticeTimer = null
   api.get = originalGet
   api.post = originalPost
+  window.matchMedia = originalMatchMedia
+  Object.defineProperty(window, 'innerWidth', {
+    configurable: true,
+    value: originalInnerWidth,
+  })
   useAuthStore.getState().auth.reset('complete')
   window.localStorage.clear()
   window.sessionStorage.clear()
@@ -436,6 +457,79 @@ describe('AssistantPanel', () => {
           'Model tool card did not reopen'
         )
       )
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
+  test('removes response action cards when a new question starts', async () => {
+    let requestCount = 0
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/assistant/status')
+      return { data: { success: true, data: assistantStatus } }
+    }) as typeof api.get
+    api.post = (async (url: string) => {
+      assert.equal(url, '/api/assistant/chat')
+      requestCount += 1
+      return {
+        data: {
+          choices: [
+            {
+              message: {
+                content:
+                  requestCount === 1
+                    ? 'Here are the model IDs.'
+                    : 'The new question has a clean response.',
+              },
+            },
+          ],
+        },
+        headers:
+          requestCount === 1 ? { 'x-lmm-assistant-intent': 'models' } : {},
+      }
+    }) as typeof api.post
+
+    const rendered = await renderPanel()
+    try {
+      const textarea = document.querySelector<HTMLTextAreaElement>('textarea')
+      assert.ok(textarea)
+
+      await setTextareaValue(textarea, 'Which models can I use?')
+      await act(async () => {
+        findButton('Send').click()
+        await flushEffects()
+      })
+      await act(async () =>
+        waitForCondition(
+          () =>
+            document.body.textContent?.includes(
+              'View all currently available models'
+            ) === true,
+          'Response action card did not render'
+        )
+      )
+
+      await setTextareaValue(textarea, 'How do I continue?')
+      await act(async () => {
+        findButton('Send').click()
+        await flushEffects()
+      })
+      await act(async () =>
+        waitForCondition(
+          () =>
+            document.body.textContent?.includes(
+              'The new question has a clean response.'
+            ) === true,
+          'Second assistant response did not render'
+        )
+      )
+
+      assert.doesNotMatch(
+        document.body.textContent ?? '',
+        /View all currently available models/
+      )
+      assert.match(document.body.textContent ?? '', /Here are the model IDs\./)
     } finally {
       await act(async () => rendered.root.unmount())
       rendered.queryClient.clear()
@@ -1257,22 +1351,29 @@ describe('AssistantPanel', () => {
     }
   })
 
-  test('does not place sensitive input into the chat transcript or send it to the assistant', async () => {
-    let posted = 0
+  test('redacts mixed sensitive input and continues the assistant request', async () => {
+    let postedBody: unknown
     api.get = (async (url: string) => {
       assert.equal(url, '/api/assistant/status')
       return { data: { success: true, data: assistantStatus } }
     }) as typeof api.get
-    api.post = (async () => {
-      posted += 1
-      throw new Error('Sensitive input must not be sent')
+    api.post = (async (url: string, data: unknown) => {
+      assert.equal(url, '/api/assistant/chat')
+      postedBody = data
+      return {
+        data: { choices: [{ message: { content: 'Here is the diagnosis.' } }] },
+        headers: {},
+      }
     }) as typeof api.post
 
     const rendered = await renderPanel()
     try {
       const textarea = document.querySelector<HTMLTextAreaElement>('textarea')
       assert.ok(textarea)
-      await setTextareaValue(textarea, 'my email is private@example.test')
+      await setTextareaValue(
+        textarea,
+        'Explain this failure for private@example.test with sk-private-secret-123456.'
+      )
       const submit = document.querySelector<HTMLButtonElement>(
         'button[aria-label="Submit"]'
       )
@@ -1281,14 +1382,66 @@ describe('AssistantPanel', () => {
         submit.click()
         await flushEffects()
       })
-      assert.equal(posted, 0)
+      await act(async () =>
+        waitForCondition(
+          () =>
+            document.body.textContent?.includes('Here is the diagnosis.') ===
+            true,
+          'Redacted assistant request did not complete'
+        )
+      )
+      const serializedBody = JSON.stringify(postedBody)
+      assert.doesNotMatch(serializedBody, /private@example\.test/)
+      assert.doesNotMatch(serializedBody, /sk-private-secret-123456/)
+      assert.match(serializedBody, /REDACTED_EMAIL/)
+      assert.match(serializedBody, /REDACTED_API_KEY/)
       assert.match(
         document.body.textContent ?? '',
-        /Sensitive message was not sent/
+        /Sensitive content was redacted before sending\./
       )
       assert.doesNotMatch(
         document.body.textContent ?? '',
         /private@example\.test/
+      )
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
+  test('does not send a message that contains only a secret', async () => {
+    let posted = 0
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/assistant/status')
+      return { data: { success: true, data: assistantStatus } }
+    }) as typeof api.get
+    api.post = (async () => {
+      posted += 1
+      throw new Error('A secret-only message must not be sent')
+    }) as typeof api.post
+
+    const rendered = await renderPanel()
+    try {
+      const textarea = document.querySelector<HTMLTextAreaElement>('textarea')
+      assert.ok(textarea)
+      await setTextareaValue(textarea, 'sk-private-secret-123456')
+      const submit = document.querySelector<HTMLButtonElement>(
+        'button[aria-label="Submit"]'
+      )
+      assert.ok(submit)
+      await act(async () => {
+        submit.click()
+        await flushEffects()
+      })
+
+      assert.equal(posted, 0)
+      assert.match(
+        document.body.textContent ?? '',
+        /Only sensitive content remained after redaction\./
+      )
+      assert.doesNotMatch(
+        document.body.textContent ?? '',
+        /sk-private-secret-123456/
       )
     } finally {
       await act(async () => rendered.root.unmount())

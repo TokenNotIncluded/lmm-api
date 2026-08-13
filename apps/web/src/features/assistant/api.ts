@@ -23,6 +23,8 @@ import type { PricingData } from '@/features/pricing/types'
 import type { PlanRecord } from '@/features/subscriptions/types'
 import { api } from '@/lib/api'
 
+import { redactAssistantMessageForRequest } from './assistant-message-safety'
+
 type AssistantChatPayload = {
   choices?: Array<{
     message?: {
@@ -471,7 +473,9 @@ export function parseAssistantAction(
 function normalizedAssistantHistoryMessage(
   message: AssistantChatMessage
 ): AssistantChatMessage | null {
-  const content = message.content.trim()
+  const content = redactAssistantMessageForRequest(
+    message.content
+  ).content.trim()
   if (!content) return null
   return {
     role: message.role,
@@ -513,7 +517,8 @@ export async function sendAssistantMessage(
   message: string,
   history: AssistantChatMessage[] = []
 ): Promise<AssistantReply> {
-  const normalizedMessage = message.trim()
+  const normalizedMessage =
+    redactAssistantMessageForRequest(message).content.trim()
   const messages = buildAssistantConversation(history, normalizedMessage)
   let response: AxiosResponse<AssistantChatPayload> | undefined
   for (
@@ -699,12 +704,16 @@ export async function revealAssistantPrivateCard(id: string): Promise<string> {
 }
 
 export async function getAssistantConversationHistory(
-  archived = false
+  archived = false,
+  ownerUserId?: number
 ): Promise<AssistantConversationHistory> {
+  const params: { archived?: true; user_id?: number } = {}
+  if (archived) params.archived = true
+  if (ownerUserId !== undefined) params.user_id = ownerUserId
   const response = await api.get<
     AssistantAPIResponse<AssistantConversationHistory>
   >('/api/assistant/conversations', {
-    ...(archived ? { params: { archived: true } } : {}),
+    ...(Object.keys(params).length > 0 ? { params } : {}),
     disableDuplicate: true,
     skipBusinessError: true,
     skipErrorHandler: true,

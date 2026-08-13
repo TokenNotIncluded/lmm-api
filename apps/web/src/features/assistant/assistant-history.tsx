@@ -24,15 +24,19 @@ import {
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { Response } from '@/components/ai-elements/response'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { toIntlLocale } from '@/i18n/languages'
+import { ROLE } from '@/lib/roles'
+import { useAuthStore } from '@/stores/auth-store'
 
 import {
   archiveAssistantConversation,
@@ -101,12 +105,30 @@ export function AssistantHistory(props: {
 }) {
   const { t, i18n } = useTranslation()
   const queryClient = useQueryClient()
+  const authUser = useAuthStore((state) => state.auth.user)
+  const canAudit =
+    (authUser?.role !== undefined && authUser.role >= ROLE.ADMIN) ||
+    (authUser?.trust_level_info?.level ?? 0) > 0
+  const [scope, setScope] = useState<'self' | 'audit'>('self')
+  const [auditUserIdInput, setAuditUserIdInput] = useState('')
+  const [auditUserId, setAuditUserId] = useState<number | null>(null)
+  const [auditInputError, setAuditInputError] = useState(false)
   const [filter, setFilter] = useState<'active' | 'archived'>('active')
   const showingArchived = filter === 'archived'
+  const effectiveScope = canAudit ? scope : 'self'
+  const activeUserId =
+    effectiveScope === 'audit' ? (auditUserId ?? undefined) : undefined
   const historyQuery = useQuery({
-    queryKey: ['assistant-conversations', filter],
-    queryFn: () => getAssistantConversationHistory(showingArchived),
-    enabled: props.active,
+    queryKey: [
+      'assistant-conversations',
+      effectiveScope,
+      activeUserId ?? null,
+      filter,
+    ],
+    queryFn: () =>
+      getAssistantConversationHistory(showingArchived, activeUserId),
+    enabled:
+      props.active && (effectiveScope === 'self' || auditUserId !== null),
     staleTime: 30_000,
     retry: false,
   })
@@ -148,36 +170,111 @@ export function AssistantHistory(props: {
   const conversations = historyQuery.data?.conversations ?? []
   const status = assistantHistoryErrorStatus(historyQuery.error)
 
-  if (historyQuery.isLoading) {
-    return (
-      <div
-        className='grid gap-3'
-        aria-label={t('Loading conversation history...')}
-      >
-        <Skeleton className='h-16 w-full' />
-        <Skeleton className='h-16 w-full' />
-      </div>
-    )
+  const selectSelfScope = () => {
+    setScope('self')
+    setAuditUserId(null)
+    setAuditInputError(false)
   }
 
-  if (historyQuery.isError) {
-    const description =
-      status === 403
+  const selectAuditScope = () => {
+    setScope('audit')
+    setAuditInputError(false)
+  }
+
+  const submitAuditUserId = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const input = event.currentTarget.elements.namedItem(
+      'assistant-history-audit-user-id'
+    ) as HTMLInputElement | null
+    const value = (input?.value ?? auditUserIdInput).trim()
+    if (!/^[1-9]\d*$/.test(value)) {
+      setAuditInputError(true)
+      return
+    }
+    const nextUserId = Number(value)
+    if (!Number.isSafeInteger(nextUserId) || nextUserId <= 0) {
+      setAuditInputError(true)
+      return
+    }
+    setAuditInputError(false)
+    setAuditUserId(nextUserId)
+    setScope('audit')
+  }
+
+  const historyErrorDescription =
+    status === 400
+      ? t('Enter a positive integer')
+      : status === 403
         ? t('Conversation history is not available to this account.')
         : status === 404
           ? t('This conversation no longer exists or is unavailable.')
           : t('Unable to load conversation history. Try again.')
-    return (
-      <Alert variant='destructive'>
-        <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} aria-hidden='true' />
-        <AlertTitle>{t('Conversation history')}</AlertTitle>
-        <AlertDescription>{description}</AlertDescription>
-      </Alert>
-    )
-  }
 
   return (
     <div className='grid gap-3'>
+      {canAudit ? (
+        <div className='grid gap-3 rounded-lg border p-3'>
+          <div className='flex flex-wrap gap-2'>
+            <Button
+              type='button'
+              variant={effectiveScope === 'self' ? 'secondary' : 'outline'}
+              size='sm'
+              aria-pressed={effectiveScope === 'self'}
+              onClick={selectSelfScope}
+            >
+              {t('My conversations')}
+            </Button>
+            <Button
+              type='button'
+              variant={effectiveScope === 'audit' ? 'secondary' : 'outline'}
+              size='sm'
+              aria-pressed={effectiveScope === 'audit'}
+              onClick={selectAuditScope}
+            >
+              {t('User audit')}
+            </Button>
+          </div>
+          {effectiveScope === 'audit' ? (
+            <form className='grid gap-2' onSubmit={submitAuditUserId}>
+              <Label htmlFor='assistant-history-audit-user-id'>
+                {t('User ID')}
+              </Label>
+              <div className='flex flex-wrap gap-2 sm:flex-nowrap'>
+                <Input
+                  id='assistant-history-audit-user-id'
+                  value={auditUserIdInput}
+                  onChange={(event) => {
+                    setAuditUserIdInput(event.target.value)
+                    setAuditUserId(null)
+                    setAuditInputError(false)
+                  }}
+                  inputMode='numeric'
+                  autoComplete='off'
+                  placeholder={t('Enter a positive integer')}
+                  aria-invalid={auditInputError}
+                />
+                <Button type='submit' variant='outline' className='shrink-0'>
+                  {t('View')}
+                </Button>
+              </div>
+              {auditInputError ? (
+                <p className='text-destructive text-xs' role='alert'>
+                  {t('Enter a positive integer')}
+                </p>
+              ) : null}
+            </form>
+          ) : null}
+        </div>
+      ) : null}
+      {effectiveScope === 'audit' && auditUserId !== null ? (
+        <div className='grid gap-1 rounded-lg border p-3'>
+          <p className='text-sm font-medium'>{t('User audit')}</p>
+          <p className='text-muted-foreground text-xs leading-5'>
+            {t('Lower-access user conversation')} · {t('User ID')}:{' '}
+            {auditUserId}
+          </p>
+        </div>
+      ) : null}
       <div className='flex flex-wrap gap-2'>
         <Button
           type='button'
@@ -198,13 +295,37 @@ export function AssistantHistory(props: {
           {t('Archived conversations')}
         </Button>
       </div>
-      {conversations.length === 0 ? (
+      {historyQuery.isLoading ? (
+        <div
+          className='grid gap-3'
+          aria-label={t('Loading conversation history...')}
+        >
+          <Skeleton className='h-16 w-full' />
+          <Skeleton className='h-16 w-full' />
+        </div>
+      ) : historyQuery.isError ? (
+        <Alert variant='destructive'>
+          <HugeiconsIcon
+            icon={Alert02Icon}
+            strokeWidth={2}
+            aria-hidden='true'
+          />
+          <AlertTitle>{t('Conversation history')}</AlertTitle>
+          <AlertDescription>{historyErrorDescription}</AlertDescription>
+        </Alert>
+      ) : effectiveScope === 'audit' && auditUserId === null ? (
         <p className='text-muted-foreground py-8 text-center text-sm leading-6'>
-          {t(
-            showingArchived
-              ? 'No archived conversations yet.'
-              : 'No active conversations yet.'
-          )}
+          {t('Enter a positive integer')}
+        </p>
+      ) : conversations.length === 0 ? (
+        <p className='text-muted-foreground py-8 text-center text-sm leading-6'>
+          {effectiveScope === 'audit'
+            ? `${t('No visible conversation history yet.')} · ${t('User ID')}: ${auditUserId}`
+            : t(
+                showingArchived
+                  ? 'No archived conversations yet.'
+                  : 'No active conversations yet.'
+              )}
         </p>
       ) : (
         conversations.map((conversation) => {
@@ -214,16 +335,17 @@ export function AssistantHistory(props: {
               'Sensitive content is hidden and can only be accessed from a private card.'
             )
           ).content
-          const canManage = conversation.owner === 'self'
+          const canManage =
+            effectiveScope === 'self' && conversation.owner === 'self'
           const actionPending =
             archiveMutation.isPending &&
             archiveMutation.variables?.id === conversation.id
           return (
             <article
               key={conversation.id}
-              className='grid gap-2 rounded-lg border p-3'
+              className='grid min-w-0 gap-2 rounded-lg border p-3'
             >
-              <div className='flex items-start justify-between gap-3'>
+              <div className='flex min-w-0 items-start justify-between gap-3'>
                 <div className='min-w-0'>
                   <p className='text-sm font-medium'>
                     {conversation.owner === 'self'

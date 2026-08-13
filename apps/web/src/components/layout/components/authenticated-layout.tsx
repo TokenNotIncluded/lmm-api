@@ -46,19 +46,19 @@ export function AuthenticatedLayout(props: AuthenticatedLayoutProps) {
       <SearchProvider>
         <SidebarProvider
           defaultOpen={defaultOpen}
-          className='console-editorial flex-col'
+          className='console-editorial h-svh min-h-0 flex-col overflow-hidden'
         >
           <SkipToMain />
           <AppHeader
             showTopNav={consoleActivated}
             showSearch={consoleActivated}
           />
-          <div className='flex min-h-0 w-full flex-1 flex-wrap md:flex-nowrap'>
+          <div className='flex min-h-0 w-full min-w-0 flex-1 basis-0 flex-col flex-nowrap md:flex-row'>
             <AppSidebar />
             <SidebarInset
               className={cn(
                 '@container/content',
-                'min-h-0 min-w-0 overflow-hidden'
+                'min-h-0 min-w-0 flex-1 basis-0 overflow-hidden pb-[calc(4.5rem+env(safe-area-inset-bottom))] md:pb-16 xl:pb-0'
               )}
             >
               {props.children ?? <AnimatedOutlet />}

@@ -21,7 +21,7 @@ import {
   type Header,
   type Table as TanstackTable,
 } from '@tanstack/react-table'
-import type { KeyboardEvent, MouseEvent } from 'react'
+import type { AriaAttributes, KeyboardEvent, MouseEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -57,6 +57,7 @@ export function DataTableHeader<TData>({
               key={header.id}
               colSpan={header.colSpan}
               data-column-id={header.column.id}
+              aria-sort={getHeaderSortState(header)}
               className={cn(
                 'relative',
                 getColumnClassName?.(header.column.id, 'header')
@@ -92,6 +93,29 @@ export function DataTableHeader<TData>({
       ))}
     </TableHeader>
   )
+}
+
+function getHeaderSortState<TData>(
+  header: Header<TData, unknown>
+): AriaAttributes['aria-sort'] {
+  if (
+    header.isPlaceholder ||
+    header.colSpan !== 1 ||
+    !header.column.getCanSort()
+  ) {
+    return undefined
+  }
+
+  const sorted = header.column.getIsSorted()
+  if (sorted === 'asc') {
+    return 'ascending'
+  }
+
+  if (sorted === 'desc') {
+    return 'descending'
+  }
+
+  return 'none'
 }
 
 function handleColumnResizeKeyDown<TData>(

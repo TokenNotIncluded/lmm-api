@@ -16,11 +16,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Link } from '@tanstack/react-router'
+import { Link, useRouterState } from '@tanstack/react-router'
 
 import { cn } from '@/lib/utils'
 
 import type { TopNavLink } from '../types'
+import { getNavLinkKey } from './nav-link-key'
 
 interface NavLinkItemProps {
   link: TopNavLink
@@ -32,11 +33,16 @@ interface NavLinkItemProps {
  * Handles routing and proper link attributes
  */
 export function NavLinkItem({ link, className }: NavLinkItemProps) {
+  const pathname = useRouterState().location.pathname
+  const isActive = link.isActive ?? pathname === link.href
   const linkClassName = cn(
-    'text-muted-foreground hover:text-foreground transition-colors',
+    'text-muted-foreground hover:text-foreground focus-visible:ring-ring focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none touch-manipulation transition-colors',
     link.disabled && 'pointer-events-none opacity-50',
     className
   )
+  const handleClick = (event: React.MouseEvent<HTMLAnchorElement>) => {
+    if (link.disabled) event.preventDefault()
+  }
 
   if (link.external) {
     return (
@@ -45,7 +51,10 @@ export function NavLinkItem({ link, className }: NavLinkItemProps) {
         target='_blank'
         rel='noopener noreferrer'
         className={linkClassName}
-        aria-disabled={link.disabled}
+        aria-current={isActive ? 'page' : undefined}
+        aria-disabled={link.disabled || undefined}
+        tabIndex={link.disabled ? -1 : undefined}
+        onClick={handleClick}
       >
         {link.title}
       </a>
@@ -53,7 +62,15 @@ export function NavLinkItem({ link, className }: NavLinkItemProps) {
   }
 
   return (
-    <Link to={link.href} className={linkClassName} disabled={link.disabled}>
+    <Link
+      to={link.href}
+      className={linkClassName}
+      disabled={link.disabled}
+      aria-current={isActive ? 'page' : undefined}
+      aria-disabled={link.disabled || undefined}
+      tabIndex={link.disabled ? -1 : undefined}
+      onClick={handleClick}
+    >
       {link.title}
     </Link>
   )
@@ -74,15 +91,11 @@ export function NavLinkList({
   className,
   itemClassName,
 }: NavLinkListProps) {
-  return (
-    <>
-      {links.map((link, index) => (
-        <NavLinkItem
-          key={index}
-          link={link}
-          className={cn(className, itemClassName)}
-        />
-      ))}
-    </>
-  )
+  return links.map((link) => (
+    <NavLinkItem
+      key={getNavLinkKey(link)}
+      link={link}
+      className={cn(className, itemClassName)}
+    />
+  ))
 }

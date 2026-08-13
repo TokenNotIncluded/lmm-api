@@ -16,13 +16,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Link } from '@tanstack/react-router'
+import { Link, useRouterState } from '@tanstack/react-router'
+import { useTranslation } from 'react-i18next'
 
 import { useTopNavLinks } from '@/hooks/use-top-nav-links'
 import { cn } from '@/lib/utils'
 
 import { defaultTopNavLinks } from '../config/top-nav.config'
 import type { TopNavLink } from '../types'
+import { getNavLinkKey } from './nav-link-key'
 
 interface PublicNavigationProps {
   /**
@@ -46,24 +48,39 @@ export function PublicNavigation({
 }: PublicNavigationProps = {}) {
   // Use the same logic as AppHeader: prioritize dynamic links from backend
   const dynamicLinks = useTopNavLinks()
+  const { t } = useTranslation()
+  const pathname = useRouterState().location.pathname
   const defaultLinks = providedLinks || defaultTopNavLinks
   const links = dynamicLinks.length > 0 ? dynamicLinks : defaultLinks
 
   return (
-    <nav className={cn('hidden items-center gap-1 md:flex', className)}>
-      {links.map((link, index) => {
+    <nav
+      aria-label={t('Header navigation')}
+      className={cn('hidden items-center gap-1 md:flex', className)}
+    >
+      {links.map((link) => {
+        const isActive = pathname === link.href
+        const linkClassName = cn(
+          'text-muted-foreground hover:bg-accent hover:text-accent-foreground focus-visible:ring-ring focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none touch-manipulation inline-flex h-9 w-max items-center justify-center rounded-md bg-transparent px-4 py-2 text-sm font-medium transition-colors',
+          link.disabled && 'pointer-events-none opacity-50'
+        )
+        const handleClick = (event: React.MouseEvent<HTMLAnchorElement>) => {
+          if (link.disabled) event.preventDefault()
+        }
+
         // Handle external links
         if (link.external) {
           return (
             <a
-              key={index}
+              key={getNavLinkKey(link)}
               href={link.href}
               target='_blank'
               rel='noopener noreferrer'
-              className={cn(
-                'text-muted-foreground hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground inline-flex h-9 w-max items-center justify-center rounded-md bg-transparent px-4 py-2 text-sm font-medium transition-colors focus:outline-none',
-                link.disabled && 'pointer-events-none opacity-50'
-              )}
+              aria-current={isActive ? 'page' : undefined}
+              aria-disabled={link.disabled || undefined}
+              tabIndex={link.disabled ? -1 : undefined}
+              onClick={handleClick}
+              className={linkClassName}
             >
               {link.title}
             </a>
@@ -72,12 +89,14 @@ export function PublicNavigation({
         // Handle internal links
         return (
           <Link
-            key={index}
+            key={getNavLinkKey(link)}
             to={link.href}
-            className={cn(
-              'text-muted-foreground hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground inline-flex h-9 w-max items-center justify-center rounded-md bg-transparent px-4 py-2 text-sm font-medium transition-colors focus:outline-none',
-              link.disabled && 'pointer-events-none opacity-50'
-            )}
+            disabled={link.disabled}
+            aria-current={isActive ? 'page' : undefined}
+            aria-disabled={link.disabled || undefined}
+            tabIndex={link.disabled ? -1 : undefined}
+            onClick={handleClick}
+            className={linkClassName}
           >
             {link.title}
           </Link>

@@ -22,7 +22,6 @@ import { lazy, Suspense, useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
-import { useIsMobile } from '@/hooks/use-mobile'
 import { useStatus } from '@/hooks/use-status'
 import { isConsoleActivated } from '@/lib/console-activation'
 import { useAuthStore } from '@/stores/auth-store'
@@ -33,6 +32,7 @@ import {
   subscribeToAssistantOpen,
   type AssistantPresetId,
 } from './assistant-events'
+import { useAssistantOverlay } from './assistant-responsive'
 
 const loadAssistantPanel = () => import('./assistant-panel')
 const AssistantPanel = lazy(() =>
@@ -45,7 +45,7 @@ export function AssistantLauncher() {
   const { t } = useTranslation()
   const { status } = useStatus()
   const user = useAuthStore((state) => state.auth.user)
-  const isMobile = useIsMobile()
+  const assistantOverlay = useAssistantOverlay()
   const [mobileOpen, setMobileOpen] = useState(false)
   const [desktopCollapsed, setDesktopCollapsed] = useState(false)
   const [desktopFullscreen, setDesktopFullscreen] = useState(false)
@@ -116,13 +116,13 @@ export function AssistantLauncher() {
   return (
     <div className='contents'>
       <div
-        className='border-border bg-muted/20 flex min-h-14 w-full shrink-0 items-center border-t px-3 py-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))] md:hidden'
+        className='border-border bg-muted/20 pointer-events-none fixed inset-x-0 bottom-0 z-40 flex min-h-14 items-center justify-center border-t px-3 py-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))] md:inset-x-auto md:right-4 md:bottom-4 md:min-h-0 md:w-auto md:justify-end md:border md:border-none md:bg-transparent md:px-0 md:py-0 md:pb-0 xl:hidden'
         data-testid='assistant-mobile-launcher'
       >
         <Button
           type='button'
           variant='secondary'
-          className='h-11 w-full justify-start gap-2 px-3 shadow-sm'
+          className='pointer-events-auto h-11 w-full max-w-md justify-start gap-2 px-3 shadow-sm md:w-auto md:min-w-44'
           aria-label={accessibleLabel}
           title={accessibleLabel}
           aria-haspopup='dialog'
@@ -144,16 +144,16 @@ export function AssistantLauncher() {
       <Suspense
         fallback={
           <aside
-            className='bg-background hidden min-h-0 w-[min(28vw,30rem)] max-w-full min-w-0 shrink-0 border-l md:flex'
+            className='bg-background hidden min-h-0 w-[min(28vw,30rem)] max-w-full min-w-0 shrink-0 border-l xl:flex'
             aria-hidden='true'
           />
         }
       >
         <AssistantPanel
-          mode={isMobile ? 'mobile' : 'rail'}
-          open={isMobile ? mobileOpen : true}
-          collapsed={!isMobile && desktopCollapsed}
-          fullscreen={!isMobile && desktopFullscreen}
+          mode={assistantOverlay ? 'mobile' : 'rail'}
+          open={assistantOverlay ? mobileOpen : true}
+          collapsed={!assistantOverlay && desktopCollapsed}
+          fullscreen={!assistantOverlay && desktopFullscreen}
           initialPreset={initialPreset}
           initialMessage={initialMessage}
           initialMessageRevision={initialMessageRevision}

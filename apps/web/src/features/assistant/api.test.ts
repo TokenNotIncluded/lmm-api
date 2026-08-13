@@ -216,6 +216,40 @@ describe('assistant conversation context', () => {
 })
 
 describe('assistant chat retry policy', () => {
+  test('redacts current and historical secrets at the request boundary', async () => {
+    const originalPost = api.post
+    let capturedBody: unknown
+    api.post = (async (_url: string, data: unknown) => {
+      capturedBody = data
+      return {
+        data: { choices: [{ message: { content: 'safe reply' } }] },
+        headers: {},
+      }
+    }) as typeof api.post
+
+    try {
+      await sendAssistantMessage(
+        'Explain this error for owner@example.test using sk-current-secret-123456.',
+        [
+          {
+            role: 'user',
+            content: 'Earlier token: bearer history-secret-token',
+          },
+        ]
+      )
+    } finally {
+      api.post = originalPost
+    }
+
+    const serializedBody = JSON.stringify(capturedBody)
+    assert.doesNotMatch(serializedBody, /owner@example\.test/)
+    assert.doesNotMatch(serializedBody, /sk-current-secret-123456/)
+    assert.doesNotMatch(serializedBody, /history-secret-token/)
+    assert.match(serializedBody, /REDACTED_EMAIL/)
+    assert.match(serializedBody, /REDACTED_API_KEY/)
+    assert.match(serializedBody, /REDACTED_TOKEN/)
+  })
+
   test('retries transient upstream failures and preserves the attempt header', async () => {
     const originalPost = api.post
     const attempts: string[] = []

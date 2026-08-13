@@ -293,7 +293,7 @@ describe('L0 onboarding assistant experience', () => {
     }
   })
 
-  test('keeps the mobile launcher in normal layout with a safe-area inset', async () => {
+  test('keeps the overlay launcher out of layout flow with a safe-area inset', async () => {
     Object.defineProperty(window, 'innerWidth', {
       configurable: true,
       value: 390,
@@ -330,6 +330,9 @@ describe('L0 onboarding assistant experience', () => {
         '[data-testid="assistant-mobile-launcher"]'
       )
       assert.ok(launcher)
+      assert.match(launcher.className, /fixed/)
+      assert.match(launcher.className, /pointer-events-none/)
+      assert.match(launcher.className, /xl:hidden/)
       assert.match(
         launcher.className,
         /pb-\[max\(0\.375rem,env\(safe-area-inset-bottom\)\)\]/

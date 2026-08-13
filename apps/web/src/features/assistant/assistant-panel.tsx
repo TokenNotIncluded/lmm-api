@@ -100,7 +100,11 @@ import {
 } from './assistant-history'
 import { getAssistantPresetForIntent } from './assistant-intent'
 import { AssistantKeyTool } from './assistant-key-tool'
-import { redactAssistantMessageForDisplay } from './assistant-message-safety'
+import {
+  hasAssistantMessageSubstantialMeaning,
+  redactAssistantMessageForDisplay,
+  redactAssistantMessageForRequest,
+} from './assistant-message-safety'
 import { AssistantModelsTool } from './assistant-models-tool'
 import { AssistantOnboardingTodo } from './assistant-onboarding-todo'
 import { AssistantPlanTool } from './assistant-plan-tool'
@@ -141,6 +145,7 @@ type ConversationEntry = {
   action?: AssistantAction
   adminChange?: AssistantAdminChangeAction
   error?: boolean
+  notice?: boolean
   retry?: {
     message: string
     history: AssistantChatMessage[]
@@ -420,8 +425,9 @@ function AssistantPromptComposer(props: {
 }) {
   const { t } = useTranslation()
   const {
-    textInput: { value },
+    textInput: { setInput, value },
   } = usePromptInputController()
+  const onSubmit = props.onSubmit
   const validation = getAssistantPromptValidation(value, props.restricted)
   const hasText = value.trim().length > 0
   const showValidationError = hasText && validation.invalid
@@ -431,10 +437,22 @@ function AssistantPromptComposer(props: {
       ? `${props.privacyNoticeId} ${hintId}`
       : props.privacyNoticeId
 
+  const handleSubmit = useCallback(
+    (message: { text?: string }) => {
+      const safeMessage = redactAssistantMessageForRequest(message.text ?? '')
+      // PromptInput keeps provider state until the async submit resolves. Set
+      // the safe value immediately so the raw textarea value cannot linger
+      // while the assistant request is in flight.
+      if (safeMessage.redacted) setInput(safeMessage.content)
+      return onSubmit({ text: safeMessage.content })
+    },
+    [onSubmit, setInput]
+  )
+
   return (
     <>
       <PromptInput
-        onSubmit={props.onSubmit}
+        onSubmit={handleSubmit}
         groupClassName='rounded-xl'
         aria-label={t('Ask AI assistant')}
       >
@@ -745,6 +763,17 @@ export function AssistantPanel(props: {
     setAccountDisableDraft(null)
   }, [])
 
+  const clearTransientCards = useCallback(() => {
+    clearToolState()
+    setEntries((current) =>
+      current.map((entry) =>
+        entry.action || entry.adminChange
+          ? { ...entry, action: undefined, adminChange: undefined }
+          : entry
+      )
+    )
+  }, [clearToolState])
+
   const resetConversation = useCallback(() => {
     setEntries([])
     clearToolState()
@@ -770,6 +799,7 @@ export function AssistantPanel(props: {
 
       const tool = getAssistantToolForTarget(target)
       const action = getAssistantActionForTarget(target, t)
+      clearTransientCards()
       setActiveTool(tool)
       setEntries((current) => [
         ...current,
@@ -782,7 +812,7 @@ export function AssistantPanel(props: {
       ])
       return true
     },
-    [accountAccessState, assistantDescription, t]
+    [accountAccessState, assistantDescription, clearTransientCards, t]
   )
 
   useEffect(() => {
@@ -896,33 +926,38 @@ export function AssistantPanel(props: {
         t('Please enter a message other than a single punctuation mark.')
       )
     }
-    clearToolState()
-    const safeMessage = redactAssistantMessageForDisplay(
-      message,
-      t(
-        'Sensitive content is hidden and can only be accessed from a private card.'
-      )
-    )
-    if (safeMessage.redacted) {
+    clearTransientCards()
+    const safeMessage = redactAssistantMessageForRequest(message)
+    if (!hasAssistantMessageSubstantialMeaning(safeMessage.content)) {
       setEntries((current) => [
         ...current,
         {
           id: nanoid(),
           role: 'assistant',
           content: t(
-            'Sensitive message was not sent. Use the secure private card for credentials.'
+            'Only sensitive content remained after redaction. Add a question without including the secret.'
           ),
-          error: true,
+          notice: true,
         },
       ])
       return
     }
     const history: AssistantChatMessage[] = entries
-      .filter((entry) => !entry.error)
+      .filter((entry) => !entry.error && !entry.notice)
       .map((entry) => ({ role: entry.role, content: entry.content }))
     setEntries((current) => [
       ...current,
       { id: nanoid(), role: 'user', content: safeMessage.content },
+      ...(safeMessage.redacted
+        ? [
+            {
+              id: nanoid(),
+              role: 'assistant' as const,
+              content: t('Sensitive content was redacted before sending.'),
+              notice: true,
+            },
+          ]
+        : []),
     ])
     await requestAssistantReply(safeMessage.content, history)
   }
@@ -1304,7 +1339,7 @@ export function AssistantPanel(props: {
       return (
         <aside
           id='ai-assistant-panel'
-          className='bg-background hidden min-h-0 w-12 shrink-0 flex-col border-l md:flex'
+          className='bg-background hidden min-h-0 w-12 shrink-0 flex-col border-l xl:flex'
           aria-label={t('Service guide')}
         >
           <Button
@@ -1332,7 +1367,7 @@ export function AssistantPanel(props: {
     return (
       <aside
         id='ai-assistant-panel'
-        className='bg-background hidden min-h-0 w-[min(28vw,30rem)] max-w-full min-w-0 shrink-0 flex-col border-l md:flex'
+        className='bg-background hidden min-h-0 w-[min(28vw,30rem)] max-w-full min-w-0 shrink-0 flex-col border-l xl:flex'
         aria-label={t('Service guide')}
       >
         {panelContent}

@@ -57,6 +57,7 @@ const { QueryClient, QueryClientProvider } =
 const { createInstance } = await import('i18next')
 const { I18nextProvider, initReactI18next } = await import('react-i18next')
 const { api } = await import('@/lib/api')
+const { useAuthStore } = await import('@/stores/auth-store')
 const { AssistantHistory } = await import('./assistant-history')
 
 const originalGet = api.get
@@ -101,6 +102,29 @@ async function flushEffects() {
   await new Promise((resolve) => setTimeout(resolve, 25))
 }
 
+function setUser(role: number, trustLevel = 0) {
+  useAuthStore.getState().auth.setUser({
+    id: 99,
+    username: 'history-tester',
+    role,
+    ...(trustLevel > 0
+      ? {
+          trust_level_info: {
+            level: trustLevel,
+            automatic_level: trustLevel,
+            override_level: null,
+            paid_amount: 0,
+            discount_ratio: 1,
+            discount_percent: 0,
+            inactivity_decay_steps: 0,
+            decay_period_days: 0,
+            overridden: false,
+          },
+        }
+      : {}),
+  })
+}
+
 async function renderHistory() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -140,6 +164,7 @@ async function unmount(rendered: Awaited<ReturnType<typeof renderHistory>>) {
 afterEach(() => {
   api.get = originalGet
   api.post = originalPost
+  useAuthStore.getState().auth.reset('complete')
   document.body.replaceChildren()
 })
 
@@ -266,6 +291,230 @@ describe('AssistantHistory archive controls', () => {
       assert.match(
         rendered.container.textContent ?? '',
         /No archived conversations yet\./
+      )
+    } finally {
+      await unmount(rendered)
+    }
+  })
+
+  test('does not show the audit scope to an ordinary L0 user', async () => {
+    setUser(1)
+    api.get = (async () => ({
+      data: {
+        success: true,
+        data: { conversations: [activeConversation] },
+      },
+    })) as typeof api.get
+
+    const rendered = await renderHistory()
+    try {
+      assert.equal(
+        [...rendered.container.querySelectorAll('button')].some((button) =>
+          button.textContent?.includes('User audit')
+        ),
+        false
+      )
+    } finally {
+      await unmount(rendered)
+    }
+  })
+
+  test('shows the audit scope to a higher-trust L1 user', async () => {
+    setUser(1, 1)
+    api.get = (async () => ({
+      data: {
+        success: true,
+        data: { conversations: [activeConversation] },
+      },
+    })) as typeof api.get
+
+    const rendered = await renderHistory()
+    try {
+      assert.ok(findButton('User audit'))
+    } finally {
+      await unmount(rendered)
+    }
+  })
+
+  test('audits a positive user ID on submit, keeps lower-access records read-only, and restores self on switch back', async () => {
+    setUser(10)
+    const calls: Array<{ params?: Record<string, unknown> }> = []
+    api.get = (async (_url: string, config: unknown) => {
+      const params = (
+        config as { params?: Record<string, unknown> } | undefined
+      )?.params
+      calls.push({ params })
+      const ownerId = params?.user_id
+      return {
+        data: {
+          success: true,
+          data: {
+            conversations:
+              ownerId === 42 ? [lowerAccessConversation] : [activeConversation],
+          },
+        },
+      }
+    }) as typeof api.get
+
+    const rendered = await renderHistory()
+    try {
+      await act(async () => {
+        findButton('User audit').click()
+        await flushEffects()
+      })
+
+      const input = rendered.container.querySelector<HTMLInputElement>(
+        '#assistant-history-audit-user-id'
+      )
+      assert.ok(input)
+      await act(async () => {
+        input.value = '42'
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        input.dispatchEvent(new Event('change', { bubbles: true }))
+        await flushEffects()
+      })
+      const callsBeforeSubmit = calls.length
+      assert.equal(callsBeforeSubmit, 1)
+
+      await act(async () => {
+        findButton('View').click()
+        await flushEffects()
+      })
+      await act(flushEffects)
+
+      assert.deepEqual(calls.at(-1)?.params, { user_id: 42 })
+      assert.match(
+        rendered.container.textContent ?? '',
+        /Lower-access user conversation/
+      )
+      assert.equal(
+        document.querySelectorAll('button[aria-label="Archive conversation"]')
+          .length,
+        0
+      )
+      assert.equal(
+        document.querySelectorAll('button[aria-label="Restore conversation"]')
+          .length,
+        0
+      )
+      assert.deepEqual(
+        rendered.queryClient
+          .getQueryCache()
+          .findAll({ queryKey: ['assistant-conversations'] })
+          .map((query) => query.queryKey),
+        [
+          ['assistant-conversations', 'self', null, 'active'],
+          ['assistant-conversations', 'audit', null, 'active'],
+          ['assistant-conversations', 'audit', 42, 'active'],
+        ]
+      )
+
+      await act(async () => {
+        findButton('My conversations').click()
+        await flushEffects()
+      })
+      assert.match(rendered.container.textContent ?? '', /active-support/)
+      assert.doesNotMatch(
+        rendered.container.textContent ?? '',
+        /lower-access-support/
+      )
+      assert.equal(
+        document.querySelectorAll('button[aria-label="Archive conversation"]')
+          .length,
+        1
+      )
+    } finally {
+      await unmount(rendered)
+    }
+  })
+
+  test('does not request while typing an invalid ID and gives field feedback', async () => {
+    setUser(10)
+    let getCalls = 0
+    api.get = (async () => {
+      getCalls += 1
+      return {
+        data: {
+          success: true,
+          data: { conversations: [activeConversation] },
+        },
+      }
+    }) as typeof api.get
+
+    const rendered = await renderHistory()
+    try {
+      await act(async () => {
+        findButton('User audit').click()
+        await flushEffects()
+      })
+      const input = rendered.container.querySelector<HTMLInputElement>(
+        '#assistant-history-audit-user-id'
+      )
+      assert.ok(input)
+      await act(async () => {
+        input.value = '0'
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        input.dispatchEvent(new Event('change', { bubbles: true }))
+        await flushEffects()
+        findButton('View').click()
+        await flushEffects()
+      })
+      assert.equal(getCalls, 1)
+      assert.ok(rendered.container.querySelector('[role="alert"]'))
+      assert.match(
+        rendered.container.textContent ?? '',
+        /Enter a positive integer/
+      )
+    } finally {
+      await unmount(rendered)
+    }
+  })
+
+  test('keeps a safe non-enumerating message for a missing audited user', async () => {
+    setUser(10)
+    api.get = (async (_url: string, config: unknown) => {
+      const params = (
+        config as { params?: Record<string, unknown> } | undefined
+      )?.params
+      if (params?.user_id === 404) {
+        const error = Object.assign(new Error('not found'), {
+          response: { status: 404 },
+        })
+        throw error
+      }
+      return {
+        data: {
+          success: true,
+          data: { conversations: [activeConversation] },
+        },
+      }
+    }) as typeof api.get
+
+    const rendered = await renderHistory()
+    try {
+      await act(async () => {
+        findButton('User audit').click()
+        await flushEffects()
+      })
+      const input = rendered.container.querySelector<HTMLInputElement>(
+        '#assistant-history-audit-user-id'
+      )
+      assert.ok(input)
+      await act(async () => {
+        input.value = '404'
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        input.dispatchEvent(new Event('change', { bubbles: true }))
+        await flushEffects()
+        findButton('View').click()
+        await flushEffects()
+      })
+      await act(flushEffects)
+      assert.match(
+        rendered.container.textContent ?? '',
+        /This conversation no longer exists or is unavailable\./
+      )
+      assert.ok(
+        rendered.container.querySelector('#assistant-history-audit-user-id')
       )
     } finally {
       await unmount(rendered)

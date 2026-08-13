@@ -81,7 +81,12 @@ function DataTableFacetedFilterInner<TData, TValue>({
     <Popover>
       <PopoverTrigger
         render={
-          <Button variant='outline' size='sm' className='h-8 border-dashed' />
+          <Button
+            variant='outline'
+            size='sm'
+            className='h-8 border-dashed'
+            aria-label={title ?? t('Filter')}
+          />
         }
       >
         <PlusCircledIcon className='size-4' />
@@ -122,12 +127,21 @@ function DataTableFacetedFilterInner<TData, TValue>({
       </PopoverTrigger>
       <PopoverContent className='max-w-[360px] min-w-[200px] p-0' align='start'>
         <Command>
-          <CommandInput placeholder={title} />
+          <CommandInput aria-label={title ?? t('Filter')} placeholder={title} />
           <CommandList>
             <CommandEmpty>{t('No results found.')}</CommandEmpty>
             <CommandGroup>
               {options.map((option) => {
                 const isSelected = selectedValues.has(option.value)
+                const icon = renderOptionIcon(option)
+                const facetCount = facets?.get(option.value)
+                const hasExplicitCount = typeof option.count === 'number'
+                const optionCount = hasExplicitCount ? option.count : facetCount
+                const shouldShowCount = hasExplicitCount || Boolean(facetCount)
+                const countClassName = hasExplicitCount
+                  ? 'text-muted-foreground ms-auto flex h-4 min-w-4 items-center justify-center font-mono text-xs'
+                  : 'ms-auto flex h-4 w-4 items-center justify-center font-mono text-xs'
+
                 return (
                   <CommandItem
                     key={option.value}
@@ -143,28 +157,16 @@ function DataTableFacetedFilterInner<TData, TValue>({
                     >
                       <CheckIcon className={cn('text-background h-4 w-4')} />
                     </div>
-                    {option.iconNode ? (
-                      <span className='text-muted-foreground flex size-4 items-center justify-center'>
-                        {option.iconNode}
-                      </span>
-                    ) : option.icon ? (
-                      <option.icon className='text-muted-foreground size-4' />
-                    ) : null}
+                    {icon}
                     <span
                       className='min-w-0 flex-1 truncate'
                       title={t(option.label)}
                     >
                       {t(option.label)}
                     </span>
-                    {typeof option.count === 'number' ? (
-                      <span className='text-muted-foreground ms-auto flex h-4 min-w-4 items-center justify-center font-mono text-xs'>
-                        {option.count}
-                      </span>
-                    ) : facets?.get(option.value) ? (
-                      <span className='ms-auto flex h-4 w-4 items-center justify-center font-mono text-xs'>
-                        {facets.get(option.value)}
-                      </span>
-                    ) : null}
+                    {shouldShowCount && (
+                      <span className={countClassName}>{optionCount}</span>
+                    )}
                   </CommandItem>
                 )
               })}
@@ -192,6 +194,26 @@ function DataTableFacetedFilterInner<TData, TValue>({
 export const DataTableFacetedFilter = React.memo(
   DataTableFacetedFilterInner
 ) as typeof DataTableFacetedFilterInner
+
+function renderOptionIcon(option: {
+  icon?: React.ComponentType<{ className?: string }>
+  iconNode?: React.ReactNode
+}) {
+  if (option.iconNode) {
+    return (
+      <span className='text-muted-foreground flex size-4 items-center justify-center'>
+        {option.iconNode}
+      </span>
+    )
+  }
+
+  if (option.icon) {
+    const Icon = option.icon
+    return <Icon className='text-muted-foreground size-4' />
+  }
+
+  return null
+}
 
 function getNextSelectedValues(
   selectedValues: Set<string>,
