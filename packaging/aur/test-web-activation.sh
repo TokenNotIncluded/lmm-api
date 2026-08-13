@@ -49,6 +49,7 @@ fi
 [[ $(readlink "$work/root/current") == releases/1.0.1-1.g000000000000 ]]
 grep -Fqx 'reload nginx.service' "$work/systemctl.log"
 grep -Fq -- '--resolve api.lmm.best:443:127.0.0.1' "$work/curl.log"
+grep -Fq -- '--retry-connrefused' "$work/curl.log"
 if grep -Eq 'restart.*lmm-api|reload.*lmm-api' "$work/systemctl.log"; then
   printf '%s\n' 'frontend activation touched the backend service' >&2
   exit 1
