@@ -1126,6 +1126,9 @@ pub struct WireError {
 pub struct ClaudeStreamSnapshot {
     pub events: Vec<ClaudeStreamEvent>,
     pub usage: WireUsage,
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

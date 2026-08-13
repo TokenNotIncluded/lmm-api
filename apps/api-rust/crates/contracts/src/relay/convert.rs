@@ -5455,6 +5455,7 @@ pub fn validate_golden(
         }
         (FixtureKind::Stream, Protocol::Claude) => {
             let value = serde_json::from_str::<ClaudeStreamSnapshot>(json)?;
+            validate_claude_stream_snapshot(&value)?;
             (value.events.len(), Some(wire_usage(&value.usage)))
         }
         (FixtureKind::Stream, Protocol::Gemini) => {
@@ -6881,12 +6882,105 @@ impl ClaudeStreamBlockKind {
     }
 }
 
+fn claude_stream_unknown_field(path: impl Into<String>) -> RelayConvertError {
+    RelayConvertError::UnsupportedFeature(ConversionUnsupportedFeature {
+        code: ConversionUnsupportedFeature::CODE.to_owned(),
+        source_format: "claude".to_owned(),
+        target_format: "provider_neutral_ir".to_owned(),
+        feature: "unknown_field".to_owned(),
+        path: path.into(),
+        loss_code: None,
+        retryable: false,
+    })
+}
+
+fn first_claude_stream_extra_path(
+    base: &str,
+    extra: &BTreeMap<String, JsonData>,
+) -> Option<RelayConvertError> {
+    extra.keys().next().map(|key| {
+        let path = if base.is_empty() {
+            key.clone()
+        } else {
+            format!("{base}.{key}")
+        };
+        claude_stream_unknown_field(path)
+    })
+}
+
+fn claude_stream_known_event(kind: &str) -> bool {
+    matches!(
+        kind,
+        "message_start"
+            | "content_block_start"
+            | "content_block_delta"
+            | "content_block_stop"
+            | "message_delta"
+            | "message_stop"
+            | "ping"
+            | "error"
+    )
+}
+
+/// Rejects unknown fields that typed Claude semantic events cannot retain.
+/// Unknown event kinds and content-block/message provenance remain lossless.
+pub fn validate_claude_stream_snapshot(
+    snapshot: &ClaudeStreamSnapshot,
+) -> Result<(), RelayConvertError> {
+    if let Some(error) = first_claude_stream_extra_path("snapshot", &snapshot.extra) {
+        return Err(error);
+    }
+    if let Some(error) = first_claude_stream_extra_path("snapshot.usage", &snapshot.usage.extra) {
+        return Err(error);
+    }
+    for (event_index, event) in snapshot.events.iter().enumerate() {
+        if !claude_stream_known_event(&event.kind) {
+            continue;
+        }
+        let event_path = format!("events[{event_index}]");
+        if let Some(error) = first_claude_stream_extra_path(&event_path, &event.extra) {
+            return Err(error);
+        }
+        if let Some(delta) = event.delta.as_ref() {
+            if let Some(error) =
+                first_claude_stream_extra_path(&format!("{event_path}.delta"), &delta.extra)
+            {
+                return Err(error);
+            }
+            if let Some(usage) = delta.usage.as_ref() {
+                if let Some(error) = first_claude_stream_extra_path(
+                    &format!("{event_path}.delta.usage"),
+                    &usage.extra,
+                ) {
+                    return Err(error);
+                }
+            }
+        }
+        if let Some(usage) = event.usage.as_ref() {
+            if let Some(error) =
+                first_claude_stream_extra_path(&format!("{event_path}.usage"), &usage.extra)
+            {
+                return Err(error);
+            }
+        }
+        if let Some(error_value) = event.error.as_ref() {
+            if let Some(error) =
+                first_claude_stream_extra_path(&format!("{event_path}.error"), &error_value.extra)
+            {
+                return Err(error);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Decodes typed Claude stream DTOs into explicit semantic events.  Unknown
 /// provider events and pings are retained; malformed typed deltas fail rather
 /// than being silently converted into text.
 pub fn claude_stream_to_semantic_events(
     snapshot: &ClaudeStreamSnapshot,
 ) -> Result<Vec<ClaudeStreamSemanticEvent>, RelayConvertError> {
+    validate_claude_stream_snapshot(snapshot)?;
     let mut events = Vec::new();
     for event in &snapshot.events {
         let semantic = match event.kind.as_str() {

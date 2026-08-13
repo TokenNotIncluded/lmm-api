@@ -3234,6 +3234,137 @@ fn claude_stream_events_keep_signature_partial_json_ping_error_unknown_and_cance
 }
 
 #[test]
+fn claude_stream_known_event_unknown_fields_are_typed_rejections() {
+    let cases = [
+        (
+            serde_json::json!({
+                "events": [],
+                "usage": {},
+                "futureSnapshotField": true
+            }),
+            "snapshot.futureSnapshotField",
+        ),
+        (
+            serde_json::json!({
+                "events": [],
+                "usage": {"futureUsageField": true}
+            }),
+            "snapshot.usage.futureUsageField",
+        ),
+        (
+            serde_json::json!({
+                "events": [{
+                    "type": "message_delta",
+                    "futureMessageDeltaField": true
+                }],
+                "usage": {}
+            }),
+            "events[0].futureMessageDeltaField",
+        ),
+        (
+            serde_json::json!({
+                "events": [{
+                    "type": "content_block_delta",
+                    "delta": {
+                        "type": "text_delta",
+                        "text": "x",
+                        "futureDeltaField": true
+                    }
+                }],
+                "usage": {}
+            }),
+            "events[0].delta.futureDeltaField",
+        ),
+        (
+            serde_json::json!({
+                "events": [{
+                    "type": "content_block_delta",
+                    "delta": {
+                        "type": "text_delta",
+                        "text": "x",
+                        "stop_reason": "end_turn",
+                        "futureStopReasonField": true
+                    }
+                }],
+                "usage": {}
+            }),
+            "events[0].delta.futureStopReasonField",
+        ),
+        (
+            serde_json::json!({
+                "events": [{
+                    "type": "content_block_start",
+                    "futureContentBlockStartField": true
+                }],
+                "usage": {}
+            }),
+            "events[0].futureContentBlockStartField",
+        ),
+        (
+            serde_json::json!({
+                "events": [{
+                    "type": "content_block_stop",
+                    "futureContentBlockStopField": true
+                }],
+                "usage": {}
+            }),
+            "events[0].futureContentBlockStopField",
+        ),
+        (
+            serde_json::json!({
+                "events": [{
+                    "type": "error",
+                    "error": {
+                        "message": "boom",
+                        "futureErrorField": true
+                    }
+                }],
+                "usage": {}
+            }),
+            "events[0].error.futureErrorField",
+        ),
+    ];
+
+    for (document, expected_path) in cases {
+        let snapshot: ClaudeStreamSnapshot = serde_json::from_value(document)
+            .expect("unknown Claude stream field is retained by the wire DTO");
+        let error = validate_claude_stream_snapshot(&snapshot)
+            .expect_err("Claude stream validator must reject unknown known-event fields");
+        assert!(matches!(
+            error,
+            RelayConvertError::UnsupportedFeature(detail)
+                if detail.feature == "unknown_field"
+                    && detail.path == expected_path
+                    && detail.source_format == "claude"
+                    && detail.target_format == "provider_neutral_ir"
+        ));
+    }
+
+    let block_snapshot: ClaudeStreamSnapshot = serde_json::from_value(serde_json::json!({
+        "events": [{
+            "type": "content_block_start",
+            "content_block": {
+                "type": "text",
+                "text": "kept",
+                "futureBlockField": true
+            }
+        }],
+        "usage": {}
+    }))
+    .expect("Claude content block extra is retained by the wire DTO");
+    assert!(
+        block_snapshot.events[0]
+            .content_block
+            .as_ref()
+            .expect("content block")
+            .extra
+            .contains_key("futureBlockField")
+    );
+    validate_claude_stream_snapshot(&block_snapshot)
+        .expect("ClaudeContentBlock.extra is an intentional retention point");
+}
+
+#[test]
 fn claude_stream_state_requires_typed_deltas_and_monotonic_non_concurrent_blocks() {
     let snapshot: ClaudeStreamSnapshot = serde_json::from_str(
         r#"{
