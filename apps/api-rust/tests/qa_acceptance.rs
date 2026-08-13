@@ -437,6 +437,121 @@ fn gemini3_function_call_id_and_authentic_signature_round_trip() {
 }
 
 #[test]
+fn gemini3_stream_keeps_function_id_and_authentic_signature_before_finish() {
+    const MODEL: &str = "gemini-3-pro";
+    const CALL_ID: &str = "call-gemini-3-stream";
+    const SIGNATURE: &str = "authentic-gemini-3-stream-signature";
+
+    let snapshot: GeminiStreamSnapshot = serde_json::from_value(serde_json::json!({
+        "events": [
+            {
+                "candidates": [{
+                    "content": {
+                        "role": "model",
+                        "parts": [{
+                            "functionCall": {
+                                "id": CALL_ID,
+                                "name": "lookup",
+                                "args": {"q": "rust"}
+                            },
+                            "thoughtSignature": SIGNATURE
+                        }]
+                    }
+                }]
+            },
+            {
+                "candidates": [{
+                    "finishReason": "STOP",
+                    "content": {"role": "model", "parts": []}
+                }]
+            }
+        ],
+        "usage": {}
+    }))
+    .expect("Gemini 3 stream");
+    let canonical =
+        gemini_stream_to_canonical(&snapshot, MODEL).expect("Gemini 3 stream conversion");
+    assert_eq!(canonical.value.finish_reason, Some(FinishReason::Stop));
+    assert!(matches!(
+        canonical.value.output.as_slice(),
+        [
+            CanonicalContent::ToolCall { id, .. },
+            CanonicalContent::ProviderState { state }
+        ] if id == CALL_ID
+            && state.raw == JsonData::String(SIGNATURE.to_owned())
+            && state.provenance == OpaqueStateProvenance::Authentic
+    ));
+    let semantic_round_trip =
+        canonical_response_to_gemini(canonical.value).expect("Gemini 3 stream semantic round trip");
+    assert_eq!(
+        semantic_round_trip.value.candidates[0].content.parts[0]
+            .function_call
+            .as_ref()
+            .and_then(|call| call.id.as_deref()),
+        Some(CALL_ID)
+    );
+    assert_eq!(
+        semantic_round_trip.value.candidates[0].content.parts[0]
+            .thought_signature
+            .as_deref(),
+        Some(SIGNATURE)
+    );
+}
+
+#[test]
+fn gemini_missing_signature_never_becomes_implicit_authentic_history() {
+    let request: OpenAiChatRequest = serde_json::from_value(serde_json::json!({
+        "model": "openai-history",
+        "messages": [{
+            "role": "assistant",
+            "tool_calls": [{
+                "id": "history-call",
+                "type": "function",
+                "function": {"name": "lookup", "arguments": "{}"}
+            }]
+        }]
+    }))
+    .expect("OpenAI history request");
+    let canonical = openai_chat_request_to_canonical(request).expect("history conversion");
+
+    let native_history =
+        canonical_request_to_gemini_for_model(canonical.value.clone(), "gemini-2.5-pro", false)
+            .expect("Gemini native history");
+    assert_eq!(
+        native_history.value.contents[0].parts[0]
+            .thought_signature
+            .as_deref(),
+        None
+    );
+    assert!(
+        !native_history
+            .loss
+            .synthetic_fields
+            .contains(&"SYNTHETIC_THOUGHT_SIGNATURE")
+    );
+
+    let synthetic_history =
+        canonical_request_to_gemini_for_model(canonical.value.clone(), "gemini-2.5-pro", true)
+            .expect("Gemini synthetic history");
+    assert_eq!(
+        synthetic_history.value.contents[0].parts[0]
+            .thought_signature
+            .as_deref(),
+        Some("context_engineering_is_the_way_to_go")
+    );
+    assert!(
+        synthetic_history
+            .loss
+            .synthetic_fields
+            .contains(&"SYNTHETIC_THOUGHT_SIGNATURE")
+    );
+
+    let error = canonical_request_to_gemini_for_model(canonical.value, "gemini-3-pro", false)
+        .expect_err("Gemini 3 must reject missing authentic signature");
+    assert!(error.to_string().contains("missing thoughtSignature"));
+}
+
+#[test]
 fn claude_thinking_redacted_and_reasoning_provenance_stay_distinct() {
     let opaque_data: JsonData = serde_json::from_value(serde_json::json!({
         "ciphertext": "opaque-redacted",
