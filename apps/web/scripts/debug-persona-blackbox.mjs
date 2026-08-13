@@ -241,6 +241,34 @@ async function runL0(browser) {
       'debug runtime marker',
       (await page.locator('html').getAttribute('data-persona-debug')) === 'true'
     )
+    const isolationProbe = await page.evaluate(async () => {
+      const capture = async (url) => {
+        try {
+          await fetch(url)
+          return 'resolved'
+        } catch (error) {
+          return String(error)
+        }
+      }
+      return {
+        backend: await capture('/api/persona-debug-network-probe'),
+        external: await capture(
+          'https://persona-debug-probe.invalid/credential-leak'
+        ),
+      }
+    })
+    record(
+      evidence,
+      'unmocked backend fetch is blocked before network',
+      isolationProbe.backend.includes('PERSONA_DEBUG_UNMOCKED_REQUEST'),
+      isolationProbe.backend
+    )
+    record(
+      evidence,
+      'external fetch is blocked before network',
+      isolationProbe.external.includes('PERSONA_DEBUG_EXTERNAL_REQUEST'),
+      isolationProbe.external
+    )
     await page.goto(new URL('/keys', baseUrl).toString(), {
       waitUntil: 'domcontentloaded',
     })

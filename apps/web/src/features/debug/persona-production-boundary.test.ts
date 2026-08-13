@@ -40,6 +40,7 @@ describe('persona debug production boundary', () => {
       /personaDebugEnabled\s*\?\s*'\.\/src\/debug-main\.tsx'\s*:\s*'\.\/src\/main\.tsx'/
     )
     assert.match(config, /personaDebugEnabled\s*\?\s*\{\}\s*:/)
+    assert.match(config, /lazyCompilation:\s*personaDebugEnabled\s*\?\s*false/)
     assert.match(
       config,
       /__LMM_PERSONA_DEBUG__:\s*JSON\.stringify\(personaDebugEnabled\)/

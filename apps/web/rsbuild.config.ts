@@ -76,6 +76,14 @@ export default defineConfig(({ envMode }) => {
     html: {
       template: './index.html',
     },
+    dev: {
+      // The debug entry must install its in-memory transport before importing
+      // the app. Eagerly compile that import so a cold browser session cannot
+      // remain suspended on Rsbuild's lazy-compilation proxy.
+      lazyCompilation: personaDebugEnabled
+        ? false
+        : { imports: true, entries: false },
+    },
     server: {
       // The synthetic identity harness is deliberately loopback-only.
       host: personaDebugEnabled ? '127.0.0.1' : '0.0.0.0',
