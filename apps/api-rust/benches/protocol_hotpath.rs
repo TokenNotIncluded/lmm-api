@@ -787,3 +787,41 @@ fn plan_compile_hotpath_calibration() {
             .wrapping_add(plan.converter_ids.len() as u64)
     });
 }
+
+#[test]
+#[ignore = "run explicitly as an offline calibration benchmark"]
+fn request_parallel_tool_dimension_matrix_calibration() {
+    // The wire contract exposes parallel_tool_calls as a boolean; the
+    // requested 1/4/16 dimension is represented by the number of generated
+    // tool definitions while the flag remains enabled.  Message-history
+    // variants are included here as executable request workloads.  Route
+    // shape and client pacing/abort rows remain metadata-only because this
+    // offline contract benchmark has no HTTP/session driver.
+    for (label, parallel_tool_calls, history_messages) in [
+        ("request_parallel_tools_1", 1, 1),
+        ("request_parallel_tools_4", 4, 1),
+        ("request_parallel_tools_16", 16, 1),
+        ("request_parallel_tools_4_history_10", 4, 10),
+        ("request_parallel_tools_4_history_100", 4, 100),
+    ] {
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&request_scenario(64, history_messages, parallel_tool_calls))
+                .expect("parallel request scenario");
+        value["parallel_tool_calls"] = serde_json::Value::Bool(true);
+        let corpus = serde_json::to_vec(&value).expect("serialize parallel request scenario");
+        calibrate(label, corpus.len(), || {
+            let request: OpenAiChatRequest =
+                serde_json::from_slice(black_box(corpus.as_slice()))
+                    .expect("parallel request scenario");
+            let converted = black_box(
+                openai_chat_request_to_canonical(request)
+                    .expect("parallel request scenario conversion"),
+            );
+            assert_eq!(converted.value.messages.len(), history_messages);
+            assert_eq!(converted.value.tools.len(), parallel_tool_calls);
+            (converted.value.messages.len() as u64)
+                .wrapping_mul(257)
+                .wrapping_add(converted.value.tools.len() as u64)
+        });
+    }
+}
