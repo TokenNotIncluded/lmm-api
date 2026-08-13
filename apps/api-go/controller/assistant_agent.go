@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/internal/agent"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/syncx"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -41,6 +42,7 @@ const (
 	assistantMathExpressionMaxBytes       = 512
 	assistantMathVariablesMax             = 32
 	assistantConversationTitleMaxRunes    = 60
+	assistantUpstreamRequestMaxBytes      = 768 << 10
 	assistantUpstreamResponseMaxBytes     = 256 << 10
 	assistantToolResultMaxBytes           = 64 << 10
 	assistantAgentContextMaxBytes         = 512 << 10
@@ -61,41 +63,13 @@ type assistantL1RecommendationDraft struct {
 	PresetVersion    string `json:"preset_version,omitempty"`
 }
 
-type assistantOpenAIToolDefinition struct {
-	Type     string                      `json:"type"`
-	Function assistantOpenAIToolFunction `json:"function"`
-}
-
-type assistantOpenAIToolFunction struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	Parameters  map[string]any `json:"parameters"`
-}
-
-type assistantOpenAIToolCall struct {
-	ID       string                          `json:"id"`
-	Type     string                          `json:"type"`
-	Function assistantOpenAIToolCallFunction `json:"function"`
-}
-
-type assistantOpenAIToolCallFunction struct {
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
-}
-
-type assistantOpenAIResponse struct {
-	Choices []assistantOpenAIResponseChoice `json:"choices"`
-}
-
-type assistantOpenAIResponseChoice struct {
-	Message assistantOpenAIResponseMessage `json:"message"`
-}
-
-type assistantOpenAIResponseMessage struct {
-	Role      string                    `json:"role"`
-	Content   json.RawMessage           `json:"content"`
-	ToolCalls []assistantOpenAIToolCall `json:"tool_calls"`
-}
+type assistantOpenAIToolDefinition = agent.Tool
+type assistantOpenAIToolFunction = agent.Function
+type assistantOpenAIToolCall = agent.Call
+type assistantOpenAIToolCallFunction = agent.CallFunction
+type assistantOpenAIResponse = agent.Response
+type assistantOpenAIResponseChoice = agent.Choice
+type assistantOpenAIResponseMessage = agent.ResponseMessage
 
 func assistantToolDefinitions() []assistantOpenAIToolDefinition {
 	definitions := []assistantOpenAIToolDefinition{
@@ -580,7 +554,7 @@ func objectSchema(properties map[string]any, required []string) map[string]any {
 }
 
 func setAssistantRelayRequest(c *gin.Context, request assistantOpenAIRequest) error {
-	payload, err := common.Marshal(request)
+	payload, err := common.MarshalLimit(request, assistantUpstreamRequestMaxBytes)
 	if err != nil {
 		return err
 	}
@@ -769,14 +743,7 @@ func relayAssistantTurnWithRetry(c *gin.Context, request assistantOpenAIRequest,
 var relayAssistantAgentTurn = relayAssistantTurnWithRetry
 
 func assistantContextBytes(messages []assistantOpenAIMessage) int {
-	total := 0
-	for _, message := range messages {
-		total += len(message.Role) + len(message.Content)
-		for _, call := range message.ToolCalls {
-			total += len(call.ID) + len(call.Type) + len(call.Function.Name) + len(call.Function.Arguments)
-		}
-	}
-	return total
+	return agent.Bytes(messages)
 }
 
 func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conversation []assistantOpenAIMessage) {
@@ -938,42 +905,11 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 }
 
 func parseAssistantResponse(body []byte) (assistantOpenAIResponse, error) {
-	var response assistantOpenAIResponse
-	if len(body) == 0 {
-		return response, errors.New("empty assistant response")
-	}
-	if err := json.Unmarshal(body, &response); err != nil {
-		return response, err
-	}
-	return response, nil
+	return agent.Parse(body)
 }
 
 func assistantResponseContent(raw json.RawMessage) string {
-	if len(raw) == 0 || string(raw) == "null" {
-		return ""
-	}
-	var text string
-	if json.Unmarshal(raw, &text) == nil {
-		return text
-	}
-	var textParts []string
-	if json.Unmarshal(raw, &textParts) == nil {
-		return strings.Join(textParts, "")
-	}
-	var parts []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	}
-	if json.Unmarshal(raw, &parts) == nil {
-		var builder strings.Builder
-		for _, part := range parts {
-			if part.Type == "text" || part.Type == "output_text" || part.Type == "" {
-				builder.WriteString(part.Text)
-			}
-		}
-		return builder.String()
-	}
-	return ""
+	return agent.Text(raw)
 }
 
 // normalizeAssistantClientResponse is the only provider-to-browser response

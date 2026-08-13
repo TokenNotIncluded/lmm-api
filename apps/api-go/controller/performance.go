@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/pkg/sysinfo"
 	"github.com/gin-gonic/gin"
 )
 
@@ -42,6 +44,13 @@ type MemoryStats struct {
 	NumGC uint32 `json:"num_gc"`
 	// Goroutine 数量
 	NumGoroutine int `json:"num_goroutine"`
+	// Go runtime soft heap limit in bytes.
+	GoLimit int64 `json:"go_limit"`
+	// Process cgroup usage and finite limit in bytes.
+	ProcessBytes uint64  `json:"process_bytes"`
+	LimitBytes   uint64  `json:"limit_bytes"`
+	LimitUsage   float64 `json:"limit_usage"`
+	LimitSource  string  `json:"limit_source,omitempty"`
 }
 
 // DiskCacheInfo 磁盘缓存目录信息
@@ -88,6 +97,7 @@ func GetPerformanceStats(c *gin.Context) {
 	// 获取内存统计
 	var memStats runtime.MemStats
 	runtime.ReadMemStats(&memStats)
+	processMemory, _ := sysinfo.ReadProcessMemory()
 
 	// 获取磁盘缓存目录信息
 	diskCacheInfo := getDiskCacheInfo()
@@ -127,6 +137,11 @@ func GetPerformanceStats(c *gin.Context) {
 			Sys:          memStats.Sys,
 			NumGC:        memStats.NumGC,
 			NumGoroutine: runtime.NumGoroutine(),
+			GoLimit:      debug.SetMemoryLimit(-1),
+			ProcessBytes: processMemory.Current,
+			LimitBytes:   processMemory.Limit,
+			LimitUsage:   processMemory.UsedPercent(),
+			LimitSource:  processMemory.Source,
 		},
 		DiskCacheInfo: diskCacheInfo,
 		DiskSpaceInfo: diskSpaceInfo,

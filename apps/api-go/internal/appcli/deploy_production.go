@@ -19,6 +19,7 @@ const (
 	productionMemoryHigh       = "320M"
 	productionMemoryMax        = "384M"
 	productionMemorySwapMax    = "256M"
+	productionGoMemoryLimit    = "256MiB"
 )
 
 type productionHardenOptions struct {
@@ -150,7 +151,8 @@ MemoryAccounting=yes
 MemoryHigh=%s
 MemoryMax=%s
 MemorySwapMax=%s
-`, productionMemoryHigh, productionMemoryMax, productionMemorySwapMax))
+Environment=GOMEMLIMIT=%s
+`, productionMemoryHigh, productionMemoryMax, productionMemorySwapMax, productionGoMemoryLimit))
 }
 
 func retireLegacyEmergencyMemoryDropIn(path string) error {

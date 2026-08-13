@@ -1,6 +1,8 @@
 package controller
 
 import (
+	"errors"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -31,4 +33,19 @@ func TestAssistantContextBudgetIncludesToolArguments(t *testing.T) {
 		}},
 	}}
 	assert.GreaterOrEqual(t, assistantContextBytes(messages), 128)
+}
+
+func TestAssistantRelayRequestHasSerializedByteBudget(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	context, _ := gin.CreateTestContext(httptest.NewRecorder())
+	context.Request = httptest.NewRequest(http.MethodPost, "/api/assistant/chat", nil)
+	originalBody := context.Request.Body
+	request := assistantOpenAIRequest{
+		Model:    "test",
+		Messages: []assistantOpenAIMessage{{Role: "user", Content: strings.Repeat("x", assistantUpstreamRequestMaxBytes)}},
+	}
+
+	err := setAssistantRelayRequest(context, request)
+	assert.True(t, errors.Is(err, common.ErrLimitExceeded))
+	assert.Equal(t, originalBody, context.Request.Body)
 }

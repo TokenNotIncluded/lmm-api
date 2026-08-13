@@ -13,6 +13,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/internal/agent"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
@@ -87,23 +88,8 @@ type assistantChatInput struct {
 	PresetID       string                   `json:"preset_id,omitempty"`
 }
 
-type assistantOpenAIMessage struct {
-	Role       string                    `json:"role"`
-	Content    string                    `json:"content,omitempty"`
-	Name       string                    `json:"name,omitempty"`
-	ToolCalls  []assistantOpenAIToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string                    `json:"tool_call_id,omitempty"`
-}
-
-type assistantOpenAIRequest struct {
-	Model       string                          `json:"model"`
-	Messages    []assistantOpenAIMessage        `json:"messages"`
-	Stream      bool                            `json:"stream"`
-	Temperature float64                         `json:"temperature"`
-	MaxTokens   int                             `json:"max_tokens"`
-	Tools       []assistantOpenAIToolDefinition `json:"tools,omitempty"`
-	ToolChoice  any                             `json:"tool_choice,omitempty"`
-}
+type assistantOpenAIMessage = agent.Message
+type assistantOpenAIRequest = agent.Request
 
 func buildAssistantSystemPrompt(settings setting.AssistantSettings, contexts ...assistantUserContext) string {
 	rootURL := strings.TrimRight(system_setting.ServerAddress, "/")
