@@ -90,6 +90,9 @@ const baseValues = {
   AssistantSearchAPIKey: '',
   AssistantSearchMCPTool: '',
   AssistantSkills: '',
+  AssistantReviewEnabled: true,
+  AssistantReviewWindowDays: 30,
+  AssistantReviewIntervalHours: 24,
   AssistantRetentionEnabled: true,
   AssistantActiveRetentionDays: 90,
   AssistantArchivedRetentionDays: 30,
@@ -146,6 +149,8 @@ describe('assistant search provider settings', () => {
   test('validates bounded conversation retention settings', () => {
     assert.equal(assistantSettingsSchema.safeParse(baseValues).success, true)
     for (const invalid of [
+      { AssistantReviewWindowDays: 0 },
+      { AssistantReviewIntervalHours: 169 },
       { AssistantActiveRetentionDays: 6 },
       { AssistantArchivedRetentionDays: 0 },
       { AssistantSecurityRetentionDays: 29 },
