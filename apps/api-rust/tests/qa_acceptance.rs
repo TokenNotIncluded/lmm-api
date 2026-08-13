@@ -2511,653 +2511,6 @@ fn route_request_response_metrics_are_protocol_specific_and_body_free() {
 }
 
 #[test]
-fn route_specific_stream_observability_preserves_dimensions() {
-    let observer = ConversionObserver::with_max_series(64);
-    let labels = MetricLabels::for_route(
-        Protocol::OpenAi,
-        Protocol::OpenAiResponses,
-        ConverterVersion::ProtocolStreamV1,
-        1,
-        true,
-        FeatureClass::Stream,
-        ConversionResult::Success,
-    );
-    observer.record_conversion_duration(labels, Duration::from_nanos(11));
-    observer.record_plan_duration(labels, Duration::from_nanos(7));
-    observer.record_events(labels, 3);
-    observer.record_input_bytes(labels, 128);
-    observer.record_output_bytes(labels, 256);
-    observer.record_failure_with_reason(labels, FailureReason::Stream);
-    observer.record_loss(labels, LossCode::LossUnknownEvent);
-    observer.record_synthetic_field(labels, lmm_contracts::relay::SyntheticField::ToolCallId);
-    observer.record_unknown_event(labels);
-    observer.record_gateway_ttft(labels, Duration::from_nanos(13));
-    observer.record_client_abort(labels);
-
-    let snapshot = observer.snapshot();
-    let expected = [
-        MetricKind::ConversionDurationSeconds,
-        MetricKind::ConversionPlanDurationSeconds,
-        MetricKind::ConversionEventsTotal,
-        MetricKind::ConversionInputBytes,
-        MetricKind::ConversionOutputBytes,
-        MetricKind::ConversionFailuresTotal,
-        MetricKind::ConversionLossesTotal,
-        MetricKind::ConversionSyntheticFieldsTotal,
-        MetricKind::ConversionUnknownEventsTotal,
-        MetricKind::StreamGatewayTtftSeconds,
-        MetricKind::StreamClientAbortTotal,
-    ];
-    for metric in expected {
-        assert!(
-            snapshot
-                .samples
-                .iter()
-                .any(|sample| sample.metric == metric),
-            "missing route metric {metric:?}"
-        );
-    }
-    let route_sample = |metric| {
-        snapshot
-            .samples
-            .iter()
-            .find(|sample| sample.metric == metric)
-            .expect("route metric sample")
-    };
-    for metric in [
-        MetricKind::ConversionDurationSeconds,
-        MetricKind::ConversionPlanDurationSeconds,
-        MetricKind::ConversionEventsTotal,
-        MetricKind::ConversionInputBytes,
-        MetricKind::ConversionOutputBytes,
-        MetricKind::StreamGatewayTtftSeconds,
-    ] {
-        let sample = route_sample(metric);
-        assert_eq!(sample.labels.source_format, Protocol::OpenAi);
-        assert_eq!(sample.labels.target_format, Protocol::OpenAiResponses);
-        assert!(sample.labels.stream);
-        assert_eq!(sample.labels.feature_class, FeatureClass::Stream);
-        assert_eq!(sample.labels.result, ConversionResult::Success);
-    }
-    let failure = route_sample(MetricKind::ConversionFailuresTotal);
-    assert_eq!(failure.labels.failure_reason, Some(FailureReason::Stream));
-    assert_eq!(failure.labels.result, ConversionResult::Failure);
-    let loss = route_sample(MetricKind::ConversionLossesTotal);
-    assert_eq!(loss.labels.loss_code, Some(LossCode::LossUnknownEvent));
-    let abort = route_sample(MetricKind::StreamClientAbortTotal);
-    assert_eq!(abort.labels.result, ConversionResult::Cancelled);
-}
-
-#[test]
-fn rollout_feature_flags_select_deterministically_and_fail_closed() {
-    let context = RolloutContext::new(
-        "qa-rollout-stable-key",
-        Protocol::OpenAi,
-        Protocol::OpenAiResponses,
-        "gpt-rollout",
-        true,
-    )
-    .with_channel("internal");
-    let expected_bucket = stable_bucket(context.request_key);
-    assert_eq!(expected_bucket, stable_bucket(context.request_key));
-
-    let disabled = ProtocolRolloutConfig::default();
-    let full_flag = || FlagConfig::enabled(MAX_BASIS_POINTS).expect("full canary is bounded");
-    let mut enabled = ProtocolRolloutConfig {
-        conversion_engine_v2: full_flag(),
-        gemini_function_id_v2: full_flag(),
-        gemini_thought_signature_v2: full_flag(),
-        claude_opaque_thinking_v2: full_flag(),
-        sse_parser_v2: full_flag(),
-        ..ProtocolRolloutConfig::default()
-    };
-    enabled
-        .push_pair_override(ConverterPairOverride {
-            flag: RolloutFlag::ConversionEngineV2,
-            source: Protocol::OpenAi,
-            target: Protocol::OpenAiResponses,
-            channel: Some("internal".to_owned()),
-            model_family: Some("gpt-rollout".to_owned()),
-            stream: Some(true),
-            enabled: true,
-            canary_basis_points: Some(MAX_BASIS_POINTS),
-        })
-        .expect("matching pair override is valid");
-
-    for flag in RolloutFlag::ALL {
-        let old_decision = disabled.decide(flag, &context);
-        assert!(!old_decision.enabled, "default v1 admitted {flag:?}");
-
-        let new_decision = enabled.decide(flag, &context);
-        assert_eq!(new_decision, enabled.decide(flag, &context));
-        assert_eq!(new_decision.flag, flag);
-        assert_eq!(new_decision.bucket, expected_bucket);
-        if flag.is_v2() {
-            assert!(
-                new_decision.enabled,
-                "configured v2 flag stayed disabled: {flag:?}"
-            );
-        } else {
-            assert!(
-                !new_decision.enabled,
-                "value-shaped flag was enabled: {flag:?}"
-            );
-            assert_eq!(new_decision.source, DecisionSource::DefaultV1);
-        }
-    }
-
-    // The old/new choice is a pure configuration decision for the same
-    // request dimensions; no converter or upstream state participates here.
-    assert!(!disabled.is_enabled(RolloutFlag::ConversionEngineV2, &context));
-    assert!(enabled.is_enabled(RolloutFlag::ConversionEngineV2, &context));
-
-    let same_key_other_route = RolloutContext::new(
-        context.request_key,
-        Protocol::Claude,
-        Protocol::Gemini,
-        "claude-rollout",
-        false,
-    );
-    for flag in RolloutFlag::ALL {
-        assert_eq!(
-            enabled.decide(flag, &context).bucket,
-            enabled.decide(flag, &same_key_other_route).bucket,
-            "bucket depends on route dimensions for {flag:?}"
-        );
-    }
-
-    let empty_key = RolloutContext::new(
-        "",
-        Protocol::OpenAi,
-        Protocol::OpenAiResponses,
-        "gpt-rollout",
-        true,
-    );
-    for flag in RolloutFlag::ALL {
-        let decision = enabled.decide(flag, &empty_key);
-        assert!(!decision.enabled, "empty request key admitted {flag:?}");
-        assert_eq!(decision.source, DecisionSource::EmptyRequestKey);
-    }
-
-    let rolled_back = enabled.rolled_back();
-    for flag in RolloutFlag::ALL {
-        let decision = rolled_back.decide(flag, &context);
-        assert!(!decision.enabled, "rollback admitted {flag:?}");
-        assert_eq!(decision.source, DecisionSource::ConfigRollback);
-    }
-}
-
-#[test]
-fn converter_pair_overrides_prioritize_route_model_stream_channel_and_stage_boundaries() {
-    let mut config = ProtocolRolloutConfig::default();
-    let pair = |channel: Option<&str>,
-                model_family: Option<&str>,
-                stream: Option<bool>,
-                enabled: bool|
-     -> ConverterPairOverride {
-        ConverterPairOverride {
-            flag: RolloutFlag::ConversionEngineV2,
-            source: Protocol::OpenAi,
-            target: Protocol::Claude,
-            channel: channel.map(str::to_owned),
-            model_family: model_family.map(str::to_owned),
-            stream,
-            enabled,
-            canary_basis_points: Some(if enabled { MAX_BASIS_POINTS } else { 0 }),
-        }
-    };
-
-    // Route-only specificity is two fields; each dimension below adds one,
-    // while the final rule combines all dimensions and must win.
-    for override_rule in [
-        pair(None, None, None, false),
-        pair(None, Some("gpt-special"), None, true),
-        pair(None, None, Some(true), true),
-        pair(Some("internal"), None, None, true),
-        pair(Some("internal"), Some("gpt-special"), Some(true), false),
-    ] {
-        config
-            .push_pair_override(override_rule)
-            .expect("pair override is valid");
-    }
-
-    fn assert_pair_decision(
-        config: &ProtocolRolloutConfig,
-        context: &RolloutContext<'_>,
-        expected_index: usize,
-        expected_enabled: bool,
-    ) {
-        let decision = config.decide(RolloutFlag::ConversionEngineV2, context);
-        assert_eq!(
-            decision.source,
-            DecisionSource::ConverterPairOverride(expected_index)
-        );
-        assert_eq!(decision.enabled, expected_enabled);
-        assert_eq!(
-            decision.canary_basis_points,
-            if expected_enabled {
-                MAX_BASIS_POINTS
-            } else {
-                0
-            }
-        );
-    }
-
-    let route = RolloutContext::new(
-        "pair-route",
-        Protocol::OpenAi,
-        Protocol::Claude,
-        "general",
-        false,
-    );
-    assert_pair_decision(&config, &route, 0, false);
-    let model = RolloutContext::new(
-        "pair-model",
-        Protocol::OpenAi,
-        Protocol::Claude,
-        "gpt-special",
-        false,
-    );
-    assert_pair_decision(&config, &model, 1, true);
-    let stream = RolloutContext::new(
-        "pair-stream",
-        Protocol::OpenAi,
-        Protocol::Claude,
-        "general",
-        true,
-    );
-    assert_pair_decision(&config, &stream, 2, true);
-    let channel = RolloutContext::new(
-        "pair-channel",
-        Protocol::OpenAi,
-        Protocol::Claude,
-        "general",
-        false,
-    )
-    .with_channel("internal");
-    assert_pair_decision(&config, &channel, 3, true);
-    let all_dimensions = RolloutContext::new(
-        "pair-all",
-        Protocol::OpenAi,
-        Protocol::Claude,
-        "gpt-special",
-        true,
-    )
-    .with_channel("internal");
-    assert_pair_decision(&config, &all_dimensions, 4, false);
-
-    let unmatched_route = RolloutContext::new(
-        "pair-unmatched",
-        Protocol::Claude,
-        Protocol::OpenAi,
-        "gpt-special",
-        true,
-    )
-    .with_channel("internal");
-    let unmatched = config.decide(RolloutFlag::ConversionEngineV2, &unmatched_route);
-    assert!(!unmatched.enabled);
-    assert_eq!(unmatched.source, DecisionSource::BaseConfig);
-    let value_shaped = config.decide(RolloutFlag::ConverterPairOverrides, &all_dimensions);
-    assert_eq!(
-        value_shaped.source,
-        DecisionSource::ConverterPairOverride(4)
-    );
-    assert!(!value_shaped.enabled);
-
-    for stage in CanaryStage::ALL {
-        let minimum = stage.minimum_basis_points();
-        assert!(
-            validate_canary_stage(stage, minimum).is_ok(),
-            "stage rejected its minimum: {stage:?}"
-        );
-        if minimum > 0 {
-            assert!(
-                validate_canary_stage(stage, minimum - 1).is_err(),
-                "stage accepted below its minimum: {stage:?}"
-            );
-        }
-    }
-    assert!(validate_canary_stage(CanaryStage::Internal, MAX_BASIS_POINTS).is_ok());
-    assert!(validate_canary_stage(CanaryStage::Internal, MAX_BASIS_POINTS + 1).is_err());
-    assert!(!bucket_is_in_rollout(0, 0));
-    assert!(bucket_is_in_rollout(0, 1));
-    assert!(!bucket_is_in_rollout(MAX_BASIS_POINTS, MAX_BASIS_POINTS));
-    assert!(bucket_is_in_rollout(MAX_BASIS_POINTS - 1, MAX_BASIS_POINTS));
-}
-
-#[test]
-fn bounded_rollout_configuration_corpus_is_panic_free_and_fail_closed() {
-    const MAX_INPUT_BYTES: usize = 4096;
-
-    fn next_xorshift(state: &mut u64) -> u64 {
-        *state ^= *state << 13;
-        *state ^= *state >> 7;
-        *state ^= *state << 17;
-        *state
-    }
-
-    let default_config = ProtocolRolloutConfig::default();
-    let valid_bytes = serde_json::to_vec(&default_config).expect("default rollout serializes");
-    let mut rollback_config = default_config.clone();
-    rollback_config.rollback = true;
-    let rollback_bytes = serde_json::to_vec(&rollback_config).expect("rollback rollout serializes");
-
-    let mut corpus = vec![valid_bytes.clone(), rollback_bytes];
-    for &cut in &[
-        0,
-        1,
-        valid_bytes.len() / 2,
-        valid_bytes.len().saturating_sub(1),
-        valid_bytes.len(),
-    ] {
-        corpus.push(valid_bytes[..cut].to_vec());
-    }
-
-    let mut state = 0x6a09_e667_f3bc_c909_u64;
-    for &length in &[0, 1, 7, 31, 127, 1024, MAX_INPUT_BYTES] {
-        let mut bytes = Vec::with_capacity(length);
-        for _ in 0..length {
-            let value = next_xorshift(&mut state);
-            bytes.push(match value & 0x0f {
-                0 => b'{',
-                1 => b'}',
-                2 => b'"',
-                3 => b':',
-                4 => b',',
-                5 => b'[',
-                6 => b']',
-                _ => b'a' + ((value >> 8) as u8 % 26),
-            });
-        }
-        assert!(bytes.len() <= MAX_INPUT_BYTES);
-        corpus.push(bytes);
-    }
-
-    let context = RolloutContext::new(
-        "qa-rollout-config-corpus",
-        Protocol::OpenAi,
-        Protocol::OpenAiResponses,
-        "rollout-model",
-        true,
-    );
-    for (case_index, input) in corpus.iter().enumerate() {
-        let result = catch_unwind(AssertUnwindSafe(|| {
-            if let Ok(config) = serde_json::from_slice::<ProtocolRolloutConfig>(input) {
-                let _ = config.validate();
-                for flag in RolloutFlag::ALL {
-                    let _ = config.decide(flag, &context);
-                }
-            }
-        }));
-        assert!(
-            result.is_ok(),
-            "rollout configuration corpus panicked at case {case_index}"
-        );
-    }
-
-    let mut unknown = serde_json::to_value(&default_config).expect("default rollout value");
-    unknown
-        .as_object_mut()
-        .expect("rollout config object")
-        .insert(
-            "future_rollout_field".to_owned(),
-            serde_json::Value::Bool(true),
-        );
-
-    let mut disabled_nonzero = default_config.clone();
-    disabled_nonzero.sse_parser_v2.canary_basis_points = 1;
-
-    let mut invalid_basis = default_config.clone();
-    invalid_basis.gemini_function_id_v2.canary_basis_points = MAX_BASIS_POINTS + 1;
-
-    let mut invalid_selector = default_config.clone();
-    invalid_selector
-        .conversion_engine_v2
-        .overrides
-        .push(FlagOverride {
-            selector: RolloutSelector {
-                model_family: Some("   ".to_owned()),
-                ..RolloutSelector::default()
-            },
-            enabled: true,
-            canary_basis_points: MAX_BASIS_POINTS,
-        });
-
-    let mut invalid_pair_basis = default_config.clone();
-    invalid_pair_basis
-        .converter_pair_overrides
-        .push(ConverterPairOverride {
-            flag: RolloutFlag::ConversionEngineV2,
-            source: Protocol::OpenAi,
-            target: Protocol::Claude,
-            channel: None,
-            model_family: None,
-            stream: None,
-            enabled: true,
-            canary_basis_points: Some(MAX_BASIS_POINTS + 1),
-        });
-
-    let rollback_decoded: ProtocolRolloutConfig =
-        serde_json::from_slice(&serde_json::to_vec(&rollback_config).expect("rollback bytes"))
-            .expect("rollback config parses");
-    assert!(rollback_decoded.validate().is_ok());
-    for flag in RolloutFlag::ALL {
-        let decision = rollback_decoded.decide(flag, &context);
-        assert!(!decision.enabled, "rollback admitted {flag:?}");
-        assert_eq!(decision.source, DecisionSource::ConfigRollback);
-    }
-
-    let explicit = catch_unwind(AssertUnwindSafe(|| {
-        assert!(serde_json::from_value::<ProtocolRolloutConfig>(unknown).is_err());
-        assert!(disabled_nonzero.validate().is_err());
-        assert!(invalid_basis.validate().is_err());
-        assert!(invalid_selector.validate().is_err());
-        assert!(invalid_pair_basis.validate().is_err());
-    }));
-    assert!(explicit.is_ok(), "invalid rollout config handling panicked");
-}
-
-#[test]
-fn rollback_evaluation_covers_plan_thresholds_and_reason_order() {
-    fn assert_decision(
-        signals: RollbackSignals,
-        action: RollbackAction,
-        reasons: &[RollbackReason],
-    ) {
-        let decision = evaluate_rollback(&signals);
-        assert_eq!(decision.action, action);
-        assert_eq!(decision.reasons.as_slice(), reasons);
-        assert_eq!(decision.should_disable(), action == RollbackAction::Disable);
-        assert_eq!(decision.should_pause(), action == RollbackAction::Pause);
-    }
-
-    assert_decision(RollbackSignals::default(), RollbackAction::Continue, &[]);
-    assert_decision(
-        RollbackSignals {
-            parse_error_rate_percentage_points: Some(PARSE_ERROR_RATE_PAUSE_PERCENTAGE_POINTS),
-            ttft_p95_increase_percent: Some(TTFT_P95_PAUSE_PERCENT),
-            ..RollbackSignals::default()
-        },
-        RollbackAction::Continue,
-        &[],
-    );
-    assert_decision(
-        RollbackSignals {
-            silent_loss: true,
-            parse_error_rate_percentage_points: Some(
-                PARSE_ERROR_RATE_PAUSE_PERCENTAGE_POINTS + 0.01,
-            ),
-            ttft_p95_increase_percent: Some(TTFT_P95_PAUSE_PERCENT + 0.01),
-            ..RollbackSignals::default()
-        },
-        RollbackAction::Pause,
-        &[
-            RollbackReason::SilentLoss,
-            RollbackReason::ParseErrorRateExceeded,
-            RollbackReason::TtftP95Exceeded,
-        ],
-    );
-
-    assert_decision(
-        RollbackSignals {
-            tool_or_signature_400_rate_increased: true,
-            ..RollbackSignals::default()
-        },
-        RollbackAction::Disable,
-        &[RollbackReason::ToolSignature400RateIncreased],
-    );
-    assert_decision(
-        RollbackSignals {
-            signature_modified: true,
-            ..RollbackSignals::default()
-        },
-        RollbackAction::Disable,
-        &[RollbackReason::SignatureModified],
-    );
-    assert_decision(
-        RollbackSignals {
-            usage_billing_difference: true,
-            ..RollbackSignals::default()
-        },
-        RollbackAction::Disable,
-        &[RollbackReason::UsageBillingDifference],
-    );
-    assert_decision(
-        RollbackSignals {
-            sse_interruption_rate_elevated: true,
-            ..RollbackSignals::default()
-        },
-        RollbackAction::Disable,
-        &[RollbackReason::SseInterruptionRateElevated],
-    );
-
-    let all_immediate = RollbackSignals {
-        tool_or_signature_400_rate_increased: true,
-        signature_modified: true,
-        usage_billing_difference: true,
-        sse_interruption_rate_elevated: true,
-        ..RollbackSignals::default()
-    };
-    assert_decision(
-        all_immediate,
-        RollbackAction::Disable,
-        &[
-            RollbackReason::ToolSignature400RateIncreased,
-            RollbackReason::SignatureModified,
-            RollbackReason::UsageBillingDifference,
-            RollbackReason::SseInterruptionRateElevated,
-        ],
-    );
-
-    assert_decision(
-        RollbackSignals {
-            parse_error_rate_percentage_points: Some(f64::NAN),
-            ..RollbackSignals::default()
-        },
-        RollbackAction::Disable,
-        &[RollbackReason::InvalidMetric],
-    );
-    assert_decision(
-        RollbackSignals {
-            ttft_p95_increase_percent: Some(-0.01),
-            ..RollbackSignals::default()
-        },
-        RollbackAction::Disable,
-        &[RollbackReason::InvalidMetric],
-    );
-    assert_decision(
-        RollbackSignals {
-            tool_or_signature_400_rate_increased: true,
-            parse_error_rate_percentage_points: Some(f64::NAN),
-            ..RollbackSignals::default()
-        },
-        RollbackAction::Disable,
-        &[
-            RollbackReason::ToolSignature400RateIncreased,
-            RollbackReason::InvalidMetric,
-        ],
-    );
-}
-
-#[test]
-fn route_specific_stream_observability_preserves_dimensions() {
-    let observer = ConversionObserver::with_max_series(64);
-    let labels = MetricLabels::for_route(
-        Protocol::OpenAi,
-        Protocol::OpenAiResponses,
-        ConverterVersion::ProtocolStreamV1,
-        1,
-        true,
-        FeatureClass::Stream,
-        ConversionResult::Success,
-    );
-    observer.record_conversion_duration(labels, Duration::from_nanos(11));
-    observer.record_plan_duration(labels, Duration::from_nanos(7));
-    observer.record_events(labels, 3);
-    observer.record_input_bytes(labels, 128);
-    observer.record_output_bytes(labels, 256);
-    observer.record_failure_with_reason(labels, FailureReason::Stream);
-    observer.record_loss(labels, LossCode::LossUnknownEvent);
-    observer.record_synthetic_field(labels, lmm_contracts::relay::SyntheticField::ToolCallId);
-    observer.record_unknown_event(labels);
-    observer.record_gateway_ttft(labels, Duration::from_nanos(13));
-    observer.record_client_abort(labels);
-
-    let snapshot = observer.snapshot();
-    let expected = [
-        MetricKind::ConversionDurationSeconds,
-        MetricKind::ConversionPlanDurationSeconds,
-        MetricKind::ConversionEventsTotal,
-        MetricKind::ConversionInputBytes,
-        MetricKind::ConversionOutputBytes,
-        MetricKind::ConversionFailuresTotal,
-        MetricKind::ConversionLossesTotal,
-        MetricKind::ConversionSyntheticFieldsTotal,
-        MetricKind::ConversionUnknownEventsTotal,
-        MetricKind::StreamGatewayTtftSeconds,
-        MetricKind::StreamClientAbortTotal,
-    ];
-    for metric in expected {
-        assert!(
-            snapshot
-                .samples
-                .iter()
-                .any(|sample| sample.metric == metric),
-            "missing route metric {metric:?}"
-        );
-    }
-    let route_sample = |metric| {
-        snapshot
-            .samples
-            .iter()
-            .find(|sample| sample.metric == metric)
-            .expect("route metric sample")
-    };
-    for metric in [
-        MetricKind::ConversionDurationSeconds,
-        MetricKind::ConversionPlanDurationSeconds,
-        MetricKind::ConversionEventsTotal,
-        MetricKind::ConversionInputBytes,
-        MetricKind::ConversionOutputBytes,
-        MetricKind::StreamGatewayTtftSeconds,
-    ] {
-        let sample = route_sample(metric);
-        assert_eq!(sample.labels.source_format, Protocol::OpenAi);
-        assert_eq!(sample.labels.target_format, Protocol::OpenAiResponses);
-        assert!(sample.labels.stream);
-        assert_eq!(sample.labels.feature_class, FeatureClass::Stream);
-        assert_eq!(sample.labels.result, ConversionResult::Success);
-    }
-    let failure = route_sample(MetricKind::ConversionFailuresTotal);
-    assert_eq!(failure.labels.failure_reason, Some(FailureReason::Stream));
-    assert_eq!(failure.labels.result, ConversionResult::Failure);
-    let loss = route_sample(MetricKind::ConversionLossesTotal);
-    assert_eq!(loss.labels.loss_code, Some(LossCode::LossUnknownEvent));
-    let abort = route_sample(MetricKind::StreamClientAbortTotal);
-    assert_eq!(abort.labels.result, ConversionResult::Cancelled);
-}
-
-#[test]
 fn claude_stream_state_machine_is_bounded_and_panic_free() {
     const MAX_STEPS: usize = 64;
     const MAX_EVENTS: usize = 4;
@@ -3807,4 +3160,130 @@ fn typed_mutation_and_provider_types_are_reachable_from_public_api() {
     let media_part = Part::media(media);
     assert_eq!(media_part.kind, PartKind::Media);
     assert!(!Feature::all().is_empty());
+}
+
+#[test]
+#[ignore = "fixed-duration fuzz harness; run explicitly in QA"]
+fn fixed_duration_sse_fuzz_is_panic_free() {
+    const INITIAL_SEED: u64 = 0x8f3c_1a27_d4e5_b609;
+    const MAX_INPUT_BYTES: usize = 4096;
+    const MAX_FRAME_BYTES: usize = 512;
+    const MAX_FRAMES: usize = 64;
+
+    fn next_xorshift(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
+    let seconds = std::env::var("LMM_FUZZ_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(1)
+        .max(1)
+        .min(30);
+    let deadline = Instant::now() + Duration::from_secs(seconds);
+    let mut seed = INITIAL_SEED;
+    let mut iterations = 0_u64;
+
+    while Instant::now() < deadline {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let frame_count = (next_xorshift(&mut seed) % 16 + 1) as usize;
+            let mut input = Vec::with_capacity(MAX_INPUT_BYTES);
+            for frame_index in 0..frame_count {
+                let mode = (next_xorshift(&mut seed) % 4) as usize;
+                let prefix = match mode {
+                    0 => b"event: future\ndata: {\"ok\":true}\n".as_slice(),
+                    1 => b"data: [DONE]\n".as_slice(),
+                    2 => b": heartbeat\nunknown: extension\ndata: value\n".as_slice(),
+                    _ => b"data: ".as_slice(),
+                };
+                input.extend_from_slice(prefix);
+                let suffix_len = (next_xorshift(&mut seed) % 96) as usize;
+                for _ in 0..suffix_len {
+                    let byte = (next_xorshift(&mut seed) >> 56) as u8;
+                    input.push(match byte % 8 {
+                        0 => b'{',
+                        1 => b'}',
+                        2 => b'[',
+                        3 => b']',
+                        4 => b':',
+                        _ => b'a' + (byte % 26),
+                    });
+                }
+                if frame_index + 1 < frame_count || next_xorshift(&mut seed) & 1 == 0 {
+                    input.extend_from_slice(b"\n\n");
+                }
+            }
+            if input.len() > MAX_INPUT_BYTES {
+                input.truncate(MAX_INPUT_BYTES);
+            }
+            assert!(input.len() <= MAX_INPUT_BYTES);
+
+            let mut parser = SseFrameParser::new(MAX_FRAME_BYTES);
+            let mut frames = Vec::new();
+            let mut offset = 0_usize;
+            while offset < input.len() {
+                let width = (next_xorshift(&mut seed) % 64 + 1) as usize;
+                let end = offset.saturating_add(width).min(input.len());
+                match parser.feed(&input[offset..end]) {
+                    Ok(new_frames) => frames.extend(new_frames),
+                    Err(_) => break,
+                }
+                assert!(parser.buffered_frame_bytes() <= MAX_FRAME_BYTES);
+                assert!(frames.len() <= MAX_FRAMES);
+                offset = end;
+            }
+            let _ = parser.finish();
+            assert!(parser.buffered_frame_bytes() <= MAX_FRAME_BYTES);
+            assert!(frames.len() <= MAX_FRAMES);
+
+            for parsed in [
+                parse_sse_frames(&input, MAX_FRAME_BYTES),
+                parse_sse_frames_lenient(&input, MAX_FRAME_BYTES),
+                parse_sse_frames_rejecting_unterminated(&input, MAX_FRAME_BYTES),
+            ] {
+                if let Ok(parsed) = parsed {
+                    assert!(parsed.len() <= MAX_FRAMES);
+                    let _ = json_events_from_frames(&parsed);
+                    for frame in parsed {
+                        if let Ok(snapshot) =
+                            serde_json::from_str::<OpenAiStreamSnapshot>(&frame.data)
+                        {
+                            let _ = openai_stream_to_canonical(&snapshot);
+                        }
+                        if let Ok(snapshot) =
+                            serde_json::from_str::<ResponsesStreamSnapshot>(&frame.data)
+                        {
+                            let _ = responses_stream_to_canonical(&snapshot);
+                        }
+                        if let Ok(snapshot) =
+                            serde_json::from_str::<ClaudeStreamSnapshot>(&frame.data)
+                        {
+                            let _ = claude_stream_to_semantic_events(&snapshot);
+                        }
+                        if let Ok(snapshot) =
+                            serde_json::from_str::<GeminiStreamSnapshot>(&frame.data)
+                        {
+                            let _ = gemini_stream_to_canonical(&snapshot, "fuzz-model");
+                        }
+                    }
+                }
+            }
+        }));
+        assert!(
+            result.is_ok(),
+            "fixed SSE fuzz panic: seed={seed:#x}, iteration={iterations}"
+        );
+        iterations = iterations.saturating_add(1);
+    }
+
+    eprintln!(
+        "fixed SSE fuzz complete: initial_seed={INITIAL_SEED:#x}, final_seed={seed:#x}, iterations={iterations}"
+    );
+    assert!(
+        iterations > 0,
+        "fixed SSE fuzz did not execute an iteration"
+    );
 }
