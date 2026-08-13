@@ -2561,6 +2561,144 @@ fn gemini_stream_signature_is_retained_before_later_finish_reason() {
 }
 
 #[test]
+fn gemini_stream_unknown_fields_are_typed_rejections() {
+    let cases = [
+        (
+            serde_json::json!({
+                "events": [],
+                "usage": {},
+                "futureSnapshotField": true
+            }),
+            "snapshot.futureSnapshotField",
+        ),
+        (
+            serde_json::json!({
+                "events": [],
+                "usage": {"futureUsageField": true}
+            }),
+            "snapshot.usage.futureUsageField",
+        ),
+        (
+            serde_json::json!({
+                "events": [{"futureEventField": true}],
+                "usage": {}
+            }),
+            "events[0].futureEventField",
+        ),
+        (
+            serde_json::json!({
+                "events": [{"usageMetadata": {"futureUsageMetadataField": true}}],
+                "usage": {}
+            }),
+            "events[0].usageMetadata.futureUsageMetadataField",
+        ),
+        (
+            serde_json::json!({
+                "events": [{
+                    "candidates": [{"content": {}, "futureCandidateField": true}]
+                }],
+                "usage": {}
+            }),
+            "events[0].candidates[0].futureCandidateField",
+        ),
+        (
+            serde_json::json!({
+                "events": [{
+                    "candidates": [{
+                        "content": {"futureContentField": true}
+                    }]
+                }],
+                "usage": {}
+            }),
+            "events[0].candidates[0].content.futureContentField",
+        ),
+        (
+            serde_json::json!({
+                "events": [{
+                    "candidates": [{
+                        "content": {"parts": [{"futurePartField": true}]}
+                    }]
+                }],
+                "usage": {}
+            }),
+            "events[0].candidates[0].content.parts[0].futurePartField",
+        ),
+        (
+            serde_json::json!({
+                "events": [{
+                    "candidates": [{
+                        "content": {
+                            "parts": [{
+                                "inlineData": {
+                                    "mimeType": "text/plain",
+                                    "data": "a",
+                                    "futureInlineField": true
+                                }
+                            }]
+                        }
+                    }]
+                }],
+                "usage": {}
+            }),
+            "events[0].candidates[0].content.parts[0].inlineData.futureInlineField",
+        ),
+        (
+            serde_json::json!({
+                "events": [{
+                    "candidates": [{
+                        "content": {
+                            "parts": [{
+                                "functionCall": {
+                                    "name": "lookup",
+                                    "args": {},
+                                    "futureFunctionField": true
+                                }
+                            }]
+                        }
+                    }]
+                }],
+                "usage": {}
+            }),
+            "events[0].candidates[0].content.parts[0].functionCall.futureFunctionField",
+        ),
+        (
+            serde_json::json!({
+                "events": [{
+                    "candidates": [{
+                        "content": {
+                            "parts": [{
+                                "functionResponse": {
+                                    "name": "lookup",
+                                    "response": {},
+                                    "futureResponseField": true
+                                }
+                            }]
+                        }
+                    }]
+                }],
+                "usage": {}
+            }),
+            "events[0].candidates[0].content.parts[0].functionResponse.futureResponseField",
+        ),
+    ];
+
+    for (document, expected_path) in cases {
+        let snapshot: GeminiStreamSnapshot = serde_json::from_value(document)
+            .expect("unknown Gemini stream field is retained by the wire DTO");
+        let error = gemini_stream_to_canonical(&snapshot, "gemini-2.5-pro")
+            .expect_err("Gemini stream conversion must reject unknown fields");
+        assert!(matches!(
+            error,
+            RelayConvertError::UnsupportedFeature(detail)
+                if detail.feature == "unknown_field"
+                    && detail.path == expected_path
+                    && detail.source_format == "gemini"
+                    && detail.target_format == "provider_neutral_ir"
+        ));
+    }
+}
+
+#[test]
 fn gemini_2_5_legacy_call_without_signature_is_accepted() {
     let request = CanonicalRequest {
         model: "gemini-2.5-pro".to_owned(),

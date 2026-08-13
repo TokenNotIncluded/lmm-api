@@ -1178,4 +1178,7 @@ pub struct ClaudeStreamDelta {
 pub struct GeminiStreamSnapshot {
     pub events: Vec<GeminiResponse>,
     pub usage: WireUsage,
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }

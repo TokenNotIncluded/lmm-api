@@ -4885,6 +4885,101 @@ pub fn gemini_response_to_canonical_for_model(
     })
 }
 
+fn gemini_stream_unknown_field(path: impl Into<String>) -> RelayConvertError {
+    RelayConvertError::UnsupportedFeature(ConversionUnsupportedFeature {
+        code: ConversionUnsupportedFeature::CODE.to_owned(),
+        source_format: "gemini".to_owned(),
+        target_format: "provider_neutral_ir".to_owned(),
+        feature: "unknown_field".to_owned(),
+        path: path.into(),
+        loss_code: None,
+        retryable: false,
+    })
+}
+
+fn first_gemini_stream_extra_path(
+    base: &str,
+    extra: &BTreeMap<String, JsonData>,
+) -> Option<RelayConvertError> {
+    extra.keys().next().map(|key| {
+        let path = if base.is_empty() {
+            key.clone()
+        } else {
+            format!("{base}.{key}")
+        };
+        gemini_stream_unknown_field(path)
+    })
+}
+
+/// Validates typed Gemini GenerateContent stream envelopes before canonical
+/// aggregation so provider fields are never silently discarded.
+pub fn validate_gemini_stream_snapshot(
+    snapshot: &GeminiStreamSnapshot,
+) -> Result<(), RelayConvertError> {
+    if let Some(error) = first_gemini_stream_extra_path("snapshot", &snapshot.extra) {
+        return Err(error);
+    }
+    if let Some(error) = first_gemini_stream_extra_path("snapshot.usage", &snapshot.usage.extra) {
+        return Err(error);
+    }
+    for (event_index, event) in snapshot.events.iter().enumerate() {
+        let event_path = format!("events[{event_index}]");
+        if let Some(error) = first_gemini_stream_extra_path(&event_path, &event.extra) {
+            return Err(error);
+        }
+        if let Some(usage) = event.usage_metadata.as_ref() {
+            if let Some(error) =
+                first_gemini_stream_extra_path(&format!("{event_path}.usageMetadata"), &usage.extra)
+            {
+                return Err(error);
+            }
+        }
+        for (candidate_index, candidate) in event.candidates.iter().enumerate() {
+            let candidate_path = format!("{event_path}.candidates[{candidate_index}]");
+            if let Some(error) = first_gemini_stream_extra_path(&candidate_path, &candidate.extra) {
+                return Err(error);
+            }
+            let content_path = format!("{candidate_path}.content");
+            if let Some(error) =
+                first_gemini_stream_extra_path(&content_path, &candidate.content.extra)
+            {
+                return Err(error);
+            }
+            for (part_index, part) in candidate.content.parts.iter().enumerate() {
+                let part_path = format!("{content_path}.parts[{part_index}]");
+                if let Some(error) = first_gemini_stream_extra_path(&part_path, &part.extra) {
+                    return Err(error);
+                }
+                if let Some(inline_data) = part.inline_data.as_ref() {
+                    if let Some(error) = first_gemini_stream_extra_path(
+                        &format!("{part_path}.inlineData"),
+                        &inline_data.extra,
+                    ) {
+                        return Err(error);
+                    }
+                }
+                if let Some(function_call) = part.function_call.as_ref() {
+                    if let Some(error) = first_gemini_stream_extra_path(
+                        &format!("{part_path}.functionCall"),
+                        &function_call.extra,
+                    ) {
+                        return Err(error);
+                    }
+                }
+                if let Some(function_response) = part.function_response.as_ref() {
+                    if let Some(error) = first_gemini_stream_extra_path(
+                        &format!("{part_path}.functionResponse"),
+                        &function_response.extra,
+                    ) {
+                        return Err(error);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Aggregates incremental Gemini GenerateContent responses into one canonical
 /// response.  Each snapshot event is treated as a delta: Parts are consumed
 /// in arrival order and a candidate `finishReason` only finalizes the
@@ -4895,6 +4990,7 @@ pub fn gemini_stream_to_canonical(
     snapshot: &GeminiStreamSnapshot,
     model: &str,
 ) -> Result<Converted<CanonicalResponse>, RelayConvertError> {
+    validate_gemini_stream_snapshot(snapshot)?;
     let mut loss = LossReport::default();
     let mut ids = GeminiIdAllocator::default();
     let mut output = Vec::new();
