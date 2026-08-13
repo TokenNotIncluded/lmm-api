@@ -30,7 +30,7 @@ const (
 	productionCommandTimeout       = 2 * time.Minute
 	productionProbeTimeout         = 8 * time.Second
 	productionProbeAttempts        = 45
-	productionTransactionFormat    = 1
+	productionTransactionFormat    = 2
 	productionStatusFormat         = 1
 	productionFrontendReleaseKeep  = 3
 	productionTransactionMarker    = "deployment.env"
@@ -39,6 +39,8 @@ const (
 	productionStatusFilename       = "status.json"
 	productionProbeTokenFilename   = "probe-token"
 	productionConfigRestoreDirname = "config-restore"
+	productionSourcePackageName    = "lmm-api-go"
+	productionAURPackageName       = "lmm-api-go-bin"
 )
 
 var (
@@ -193,12 +195,14 @@ type productionTransactionOptions struct {
 	ObservationWindow   time.Duration
 	ManualConfirm       bool
 	PreserveEdgePolicy  bool
+	ActivateFrontend    bool
 	Reason              string
 }
 
 type productionManifest struct {
 	Format                    int       `json:"format"`
 	DeploymentID              string    `json:"deployment_id"`
+	PackageName               string    `json:"package_name"`
 	Package                   string    `json:"package"`
 	PackageSHA256             string    `json:"package_sha256"`
 	RollbackPackage           string    `json:"rollback_package"`
@@ -220,6 +224,44 @@ type productionManifest struct {
 	EnvironmentRestoreSHA256  string    `json:"environment_restore_sha256"`
 	NginxEdgeRestoreSHA256    string    `json:"nginx_edge_restore_sha256,omitempty"`
 	PreserveEdgePolicy        bool      `json:"preserve_edge_policy,omitempty"`
+	ActivateFrontend          bool      `json:"activate_bundled_frontend,omitempty"`
+}
+
+func parseProductionPackageIdentity(output []byte) (name, version, identity string, err error) {
+	fields := strings.Fields(string(output))
+	if len(fields) != 2 {
+		return "", "", "", errors.New("invalid package identity")
+	}
+	name, version = fields[0], fields[1]
+	if name != productionAURPackageName && name != productionSourcePackageName {
+		return "", "", "", fmt.Errorf("unsupported Go package %q", name)
+	}
+	packageVersion, found := strings.CutSuffix(version, "-1")
+	if !found || !productionVersionPattern.MatchString(packageVersion) {
+		return "", "", "", errors.New("invalid Go package version")
+	}
+	return name, version, name + " " + version, nil
+}
+
+func (runtime *productionRuntime) installedGoPackage(ctx context.Context) (name, identity string, err error) {
+	for _, candidate := range []string{productionAURPackageName, productionSourcePackageName} {
+		output, queryErr := runtime.runner.Run(ctx, productionCommand{Name: "pacman", Args: []string{"-Q", candidate}})
+		if queryErr != nil {
+			continue
+		}
+		parsedName, _, parsedIdentity, parseErr := parseProductionPackageIdentity(output)
+		if parseErr != nil || parsedName != candidate {
+			return "", "", errors.New("installed Go package identity is invalid")
+		}
+		if identity != "" {
+			return "", "", errors.New("multiple Go packages are installed")
+		}
+		name, identity = parsedName, parsedIdentity
+	}
+	if identity == "" {
+		return "", "", errors.New("installed Go package was not found")
+	}
+	return name, identity, nil
 }
 
 type productionStatus struct {
@@ -292,14 +334,14 @@ func parseProductionTransactionOptions(action string, args []string, stderr io.W
 	flags.StringVar(&options.Workspace, "workspace", "", "marker-owned target deployment workspace")
 	switch action {
 	case "apply":
-		flags.StringVar(&options.Package, "package", "", "candidate lmm-api-go package")
+		flags.StringVar(&options.Package, "package", "", "candidate Go backend package")
 		flags.StringVar(&options.PackageSHA256, "package-sha256", "", "candidate package SHA-256")
-		flags.StringVar(&options.RollbackPackage, "rollback-package", "", "captured installed lmm-api-go package")
+		flags.StringVar(&options.RollbackPackage, "rollback-package", "", "captured installed Go backend package")
 		flags.StringVar(&options.RollbackSHA256, "rollback-sha256", "", "rollback package SHA-256")
-		flags.StringVar(&options.ProbeBinary, "probe-binary", "", "candidate lmm-api-go binary used for migration and probes")
+		flags.StringVar(&options.ProbeBinary, "probe-binary", "", "candidate Go backend binary used for migration and probes")
 		flags.StringVar(&options.ProbeBinarySHA256, "probe-binary-sha256", "", "probe binary SHA-256")
 		flags.StringVar(&options.ExpectedVersion, "expected-version", "", "candidate release version")
-		flags.StringVar(&options.FrontendIndexSHA256, "frontend-index-sha256", "", "candidate index.html SHA-256")
+		flags.StringVar(&options.FrontendIndexSHA256, "frontend-index-sha256", "", "bundled frontend index.html SHA-256 (required with --activate-bundled-frontend)")
 		flags.StringVar(&options.BackupDir, "backup-dir", "", "optional verified target backup directory")
 		rollbackSeconds := int(options.RollbackWindow / time.Second)
 		observationSeconds := int(options.ObservationWindow / time.Second)
@@ -307,6 +349,7 @@ func parseProductionTransactionOptions(action string, args []string, stderr io.W
 		flags.IntVar(&observationSeconds, "observation-seconds", observationSeconds, "stability observation window (120-360)")
 		flags.BoolVar(&options.ManualConfirm, "manual-confirm", false, "leave a healthy release awaiting an explicit confirm command")
 		flags.BoolVar(&options.PreserveEdgePolicy, "preserve-edge-policy", false, "preserve the active nginx edge policy instead of installing package defaults")
+		flags.BoolVar(&options.ActivateFrontend, "activate-bundled-frontend", false, "publish the frontend bundled in the Go package (legacy combined release only)")
 		if err := flags.Parse(args); err != nil {
 			return productionTransactionOptions{}, err
 		}
@@ -341,7 +384,7 @@ func parseProductionTransactionOptions(action string, args []string, stderr io.W
 			"--package": options.Package, "--package-sha256": options.PackageSHA256,
 			"--rollback-package": options.RollbackPackage, "--rollback-sha256": options.RollbackSHA256,
 			"--probe-binary": options.ProbeBinary, "--probe-binary-sha256": options.ProbeBinarySHA256,
-			"--expected-version": options.ExpectedVersion, "--frontend-index-sha256": options.FrontendIndexSHA256,
+			"--expected-version": options.ExpectedVersion,
 		} {
 			if value == "" {
 				return productionTransactionOptions{}, fmt.Errorf("%s is required", label)
@@ -349,9 +392,14 @@ func parseProductionTransactionOptions(action string, args []string, stderr io.W
 		}
 		if !productionSHA256Pattern.MatchString(options.PackageSHA256) ||
 			!productionSHA256Pattern.MatchString(options.RollbackSHA256) ||
-			!productionSHA256Pattern.MatchString(options.ProbeBinarySHA256) ||
-			!productionSHA256Pattern.MatchString(options.FrontendIndexSHA256) {
+			!productionSHA256Pattern.MatchString(options.ProbeBinarySHA256) {
 			return productionTransactionOptions{}, errors.New("all SHA-256 values must be 64 lowercase hexadecimal characters")
+		}
+		if options.ActivateFrontend && !productionSHA256Pattern.MatchString(options.FrontendIndexSHA256) {
+			return productionTransactionOptions{}, errors.New("--frontend-index-sha256 is required with --activate-bundled-frontend")
+		}
+		if options.FrontendIndexSHA256 != "" && !productionSHA256Pattern.MatchString(options.FrontendIndexSHA256) {
+			return productionTransactionOptions{}, errors.New("invalid --frontend-index-sha256")
 		}
 		if !productionVersionPattern.MatchString(options.ExpectedVersion) {
 			return productionTransactionOptions{}, errors.New("invalid --expected-version")
@@ -578,6 +626,9 @@ func (runtime *productionRuntime) readManifest(workspace productionWorkspace) (p
 func (runtime *productionRuntime) validateManifest(workspace productionWorkspace, manifest productionManifest) error {
 	if !productionVersionPattern.MatchString(manifest.ExpectedVersion) || !productionVersionPattern.MatchString(manifest.OldVersion) {
 		return errors.New("deployment manifest contains an invalid version")
+	}
+	if manifest.PackageName != productionAURPackageName && manifest.PackageName != productionSourcePackageName {
+		return errors.New("deployment manifest contains an unsupported package name")
 	}
 	for _, digest := range []string{
 		manifest.PackageSHA256, manifest.RollbackSHA256, manifest.ProbeBinarySHA256,

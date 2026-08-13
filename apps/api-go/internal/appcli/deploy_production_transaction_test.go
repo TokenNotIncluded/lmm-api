@@ -24,6 +24,7 @@ type fakeProductionRunner struct {
 	oldVersion       string
 	newVersion       string
 	installedVersion string
+	packageName      string
 	serviceActive    bool
 	timerActive      bool
 	migrationFailure bool
@@ -145,24 +146,24 @@ func (runner *fakeProductionRunner) pacman(args []string) ([]byte, error) {
 	}
 	switch args[0] {
 	case "-Q":
-		if args[1] == "lmm-api" {
+		if args[1] == "lmm-api" || args[1] != runner.packageName {
 			return nil, errors.New("package not found")
 		}
-		return []byte("lmm-api-go " + runner.installedVersion + "-1\n"), nil
+		return []byte(runner.packageName + " " + runner.installedVersion + "-1\n"), nil
 	case "-Qp":
 		switch args[1] {
 		case runner.candidatePackage:
-			return []byte("lmm-api-go " + runner.newVersion + "-1\n"), nil
+			return []byte(runner.packageName + " " + runner.newVersion + "-1\n"), nil
 		case runner.rollbackPackage:
-			return []byte("lmm-api-go " + runner.oldVersion + "-1\n"), nil
+			return []byte(runner.packageName + " " + runner.oldVersion + "-1\n"), nil
 		}
 		if filepath.Base(args[1]) == filepath.Base(runner.candidatePackage) {
-			return []byte("lmm-api-go " + runner.newVersion + "-1\n"), nil
+			return []byte(runner.packageName + " " + runner.newVersion + "-1\n"), nil
 		}
 	case "-Qkk":
 		return []byte("0 altered files\n"), nil
 	case "-Qi":
-		return []byte("Name : lmm-api-go\nVersion : " + runner.installedVersion + "-1\n"), nil
+		return []byte("Name : " + runner.packageName + "\nVersion : " + runner.installedVersion + "-1\n"), nil
 	case "-U":
 		path := args[len(args)-1]
 		if path == runner.candidatePackage {
@@ -336,7 +337,8 @@ func newProductionFixture(t *testing.T) productionFixture {
 	runner := &fakeProductionRunner{
 		t: t, candidatePackage: candidate, rollbackPackage: rollbackPackage,
 		probeBinary: probe, installedBinary: paths.InstalledBinary, frontendRoot: paths.FrontendRoot,
-		oldVersion: oldVersion, newVersion: newVersion, installedVersion: oldVersion, serviceActive: true,
+		oldVersion: oldVersion, newVersion: newVersion, installedVersion: oldVersion,
+		packageName: productionSourcePackageName, serviceActive: true,
 	}
 	clock := time.Date(2026, 8, 10, 1, 0, 0, 0, time.UTC)
 	runtime := &productionRuntime{
@@ -355,7 +357,7 @@ func newProductionFixture(t *testing.T) productionFixture {
 		ProbeBinary: probe, ProbeBinarySHA256: mustHashFile(t, probe), ExpectedVersion: newVersion,
 		FrontendIndexSHA256: mustHashFile(t, filepath.Join(paths.PackagedFrontend, "index.html")),
 		BackupDir:           backupDir, RollbackWindow: 10 * time.Minute, ObservationWindow: 2 * time.Minute,
-		ManualConfirm: true,
+		ManualConfirm: true, ActivateFrontend: true,
 	}
 	return productionFixture{runtime: runtime, runner: runner, workspace: workspace, options: options, environment: environment, oldMemoryDropIn: oldMemory}
 }
@@ -417,6 +419,45 @@ func mustHashFile(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return digest
+}
+
+func TestProductionPackageIdentitySupportsSourceAndAURPackages(t *testing.T) {
+	for _, name := range []string{productionSourcePackageName, productionAURPackageName} {
+		t.Run(name, func(t *testing.T) {
+			gotName, version, identity, err := parseProductionPackageIdentity([]byte(name + " 0.1.5-1\n"))
+			if err != nil || gotName != name || version != "0.1.5-1" || identity != name+" 0.1.5-1" {
+				t.Fatalf("identity=(%q, %q, %q) err=%v", gotName, version, identity, err)
+			}
+		})
+	}
+}
+
+func TestNativeBackendUpgradeLeavesIndependentFrontendUntouched(t *testing.T) {
+	fixture := newProductionFixture(t)
+	fixture.runner.packageName = productionAURPackageName
+	fixture.options.ActivateFrontend = false
+	fixture.options.FrontendIndexSHA256 = ""
+
+	status, err := fixture.runtime.apply(context.Background(), fixture.workspace, fixture.options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Phase != "AWAITING_CONFIRMATION" {
+		t.Fatalf("status=%#v", status)
+	}
+	if current, err := currentFrontendRelease(fixture.runtime.paths.FrontendRoot); err != nil || current != fixture.runner.oldVersion {
+		t.Fatalf("frontend changed during backend-only upgrade: current=%q err=%v", current, err)
+	}
+	manifest, err := fixture.runtime.readManifest(fixture.workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.PackageName != productionAURPackageName || manifest.ActivateFrontend {
+		t.Fatalf("manifest=%#v", manifest)
+	}
+	if manifest.FrontendIndexSHA256 != manifest.OldFrontendIndexSHA256 {
+		t.Fatalf("backend-only transaction changed frontend identity: %#v", manifest)
+	}
 }
 
 func TestNativeProductionApplyAndConfirmOwnReleaseState(t *testing.T) {

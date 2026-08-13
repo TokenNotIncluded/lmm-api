@@ -331,6 +331,7 @@ func (runtime *productionReleaseRuntime) release(ctx context.Context, options pr
 		"--rollback-package", remoteRollback, "--rollback-sha256", rollbackSHA256,
 		"--probe-binary", remoteProbe, "--probe-binary-sha256", build.BinarySHA256,
 		"--expected-version", version, "--frontend-index-sha256", build.FrontendIndexSHA256,
+		"--activate-bundled-frontend",
 		"--rollback-seconds", strconv.Itoa(options.RollbackSeconds),
 		"--observation-seconds", strconv.Itoa(options.ObservationSeconds),
 	}
@@ -375,11 +376,10 @@ func (runtime *productionReleaseRuntime) obtainRollbackPackage(
 	options productionReleaseOptions,
 	remoteBootstrap, artifactDir string,
 ) (string, string, error) {
-	installedOutput, err := runtime.ssh(ctx, productionTargetAlias, 2*time.Minute, "pacman", "-Q", "lmm-api-go")
+	installed, err := runtime.remoteGoPackage(ctx)
 	if err != nil {
-		return "", "", fmt.Errorf("query production package identity: %w", err)
+		return "", "", err
 	}
-	installed := strings.TrimSpace(string(installedOutput))
 	if options.RollbackPackage != "" {
 		info, err := os.Lstat(options.RollbackPackage)
 		if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Size() == 0 {
@@ -422,6 +422,28 @@ func (runtime *productionReleaseRuntime) obtainRollbackPackage(
 		return "", "", errors.New("retrieved rollback package identity mismatch")
 	}
 	return local, digest, nil
+}
+
+func (runtime *productionReleaseRuntime) remoteGoPackage(ctx context.Context) (string, error) {
+	installed := ""
+	for _, name := range []string{productionAURPackageName, productionSourcePackageName} {
+		output, err := runtime.ssh(ctx, productionTargetAlias, 2*time.Minute, "pacman", "-Q", name)
+		if err != nil {
+			continue
+		}
+		_, _, identity, err := parseProductionPackageIdentity(output)
+		if err != nil {
+			return "", errors.New("production Go package identity is invalid")
+		}
+		if installed != "" {
+			return "", errors.New("multiple production Go packages are installed")
+		}
+		installed = identity
+	}
+	if installed == "" {
+		return "", errors.New("production Go package was not found")
+	}
+	return installed, nil
 }
 
 func (runtime *productionReleaseRuntime) assertRemoteHost(ctx context.Context, alias, expected string) error {

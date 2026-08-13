@@ -283,8 +283,8 @@ func (runtime *productionRuntime) healthCheck(ctx context.Context, workspace pro
 	if err := runtime.checkMemoryHeadroom(ctx); err != nil {
 		return err
 	}
-	installed, err := runtime.runner.Run(ctx, productionCommand{Name: "pacman", Args: []string{"-Q", "lmm-api-go"}})
-	if err != nil || strings.TrimSpace(string(installed)) != "lmm-api-go "+manifest.ExpectedVersion+"-1" {
+	packageName, installed, err := runtime.installedGoPackage(ctx)
+	if err != nil || packageName != manifest.PackageName || installed != manifest.PackageName+" "+manifest.ExpectedVersion+"-1" {
 		return errors.New("installed production package identity changed")
 	}
 	if _, err := runtime.runner.Run(ctx, productionCommand{Name: "pacman", Args: []string{"-Q", "lmm-api"}}); err == nil {
