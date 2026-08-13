@@ -1,6 +1,6 @@
 //! Differential contract tests against the frozen Go relayconvert snapshots.
 
-use std::{fs, path::PathBuf};
+use std::{collections::BTreeMap, fs, path::PathBuf};
 
 use super::*;
 
@@ -263,6 +263,7 @@ fn stream_pair_preserves_frame_order_text_finish_and_usage() {
     let chat = OpenAiStreamSnapshot {
         events: chat_chunks,
         usage: responses.usage,
+        extra: BTreeMap::new(),
     };
     let chat_canonical = openai_stream_to_canonical(&chat);
     let chat_text = chat_canonical
@@ -479,6 +480,7 @@ fn openai_pair_golden_streams_execute_source_to_target_frame_by_frame() {
     let mut actual_chat = OpenAiStreamSnapshot {
         events: response_events_to_openai_chunks(&canonical),
         usage: expected_chat.usage.clone(),
+        extra: BTreeMap::new(),
     };
     // Rust carries terminal usage on the final Chat chunk as well as the
     // aggregate; the frozen Go fixture stored it only in the aggregate.
@@ -828,6 +830,37 @@ fn openai_stream_nested_unknown_fields_are_typed_rejections() {
     }))
     .expect("unknown OpenAI stream chunk field is retained by the wire DTO");
     assert!(retained.events[0].extra.contains_key("futureChunkField"));
+
+    let snapshot_with_extra: OpenAiStreamSnapshot = serde_json::from_value(serde_json::json!({
+        "events": [],
+        "usage": {},
+        "futureSnapshotField": true,
+    }))
+    .expect("unknown OpenAI stream snapshot field is retained by the wire DTO");
+    let snapshot_error = validate_openai_stream_snapshot(&snapshot_with_extra)
+        .expect_err("validator must reject unknown snapshot fields");
+    assert!(matches!(
+        snapshot_error,
+        RelayConvertError::UnsupportedFeature(detail)
+            if detail.path == "snapshot.futureSnapshotField"
+                && detail.feature == "unknown_field"
+    ));
+
+    let error_snapshot: OpenAiStreamSnapshot = serde_json::from_value(serde_json::json!({
+        "events": [{
+            "error": {"message": "upstream failed", "futureErrorField": true}
+        }],
+        "usage": {},
+    }))
+    .expect("unknown OpenAI stream error field is retained by the wire DTO");
+    let error_field = validate_openai_stream_snapshot(&error_snapshot)
+        .expect_err("validator must reject unknown stream error fields");
+    assert!(matches!(
+        error_field,
+        RelayConvertError::UnsupportedFeature(detail)
+            if detail.path == "events[0].error.futureErrorField"
+                && detail.feature == "unknown_field"
+    ));
 
     for (event, expected_path) in cases {
         let snapshot: OpenAiStreamSnapshot =

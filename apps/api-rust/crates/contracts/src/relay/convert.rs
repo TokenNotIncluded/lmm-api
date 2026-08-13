@@ -2364,9 +2364,17 @@ fn first_openai_stream_extra_path(
 pub fn validate_openai_stream_snapshot(
     snapshot: &OpenAiStreamSnapshot,
 ) -> Result<(), RelayConvertError> {
+    if let Some(error) = first_openai_stream_extra_path("snapshot", &snapshot.extra) {
+        return Err(error);
+    }
     for (chunk_index, chunk) in snapshot.events.iter().enumerate() {
         let chunk_path = format!("events[{chunk_index}]");
         if let Some(error) = first_openai_stream_extra_path(&chunk_path, &chunk.extra) {
+            return Err(error);
+        }
+        if let Some(error) = chunk.error.as_ref().and_then(|error| {
+            first_openai_stream_extra_path(&format!("{chunk_path}.error"), &error.extra)
+        }) {
             return Err(error);
         }
         for (choice_index, choice) in chunk.choices.iter().enumerate() {
@@ -7691,6 +7699,7 @@ pub fn response_events_to_openai_chunks(events: &[CanonicalStreamEvent]) -> Vec<
                 Some(WireError {
                     code: code.clone(),
                     message: message.clone(),
+                    extra: BTreeMap::new(),
                 }),
                 false,
             ),
@@ -7914,6 +7923,7 @@ pub fn response_events_to_responses(events: &[CanonicalStreamEvent]) -> Vec<Resp
                 payload.error = Some(WireError {
                     code: code.clone(),
                     message: message.clone(),
+                    extra: BTreeMap::new(),
                 });
                 payloads.push(payload);
             }

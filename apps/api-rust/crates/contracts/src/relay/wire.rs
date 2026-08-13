@@ -974,6 +974,9 @@ pub struct BillingUsage {
 pub struct OpenAiStreamSnapshot {
     pub events: Vec<OpenAiStreamChunk>,
     pub usage: WireUsage,
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1106,11 +1109,14 @@ pub struct ResponsesEventPayload {
     pub extra: BTreeMap<String, JsonData>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WireError {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
     pub message: String,
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
