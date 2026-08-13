@@ -2357,6 +2357,32 @@ fn first_openai_stream_extra_path(
     })
 }
 
+fn validate_openai_stream_usage(usage: &WireUsage, path: &str) -> Result<(), RelayConvertError> {
+    if let Some(error) = first_openai_stream_extra_path(path, &usage.extra) {
+        return Err(error);
+    }
+    for (field, details) in [
+        (
+            "prompt_tokens_details",
+            usage.prompt_tokens_details.as_ref(),
+        ),
+        (
+            "completion_tokens_details",
+            usage.completion_tokens_details.as_ref(),
+        ),
+        ("input_tokens_details", usage.input_tokens_details.as_ref()),
+    ] {
+        if let Some(details) = details {
+            if let Some(error) =
+                first_openai_stream_extra_path(&format!("{path}.{field}"), &details.extra)
+            {
+                return Err(error);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Validates all typed OpenAI Chat stream envelopes before canonical mapping.
 /// The legacy infallible mapper remains available for compatibility; callers
 /// that need typed unknown-field rejection should use this validator or the
@@ -2367,10 +2393,14 @@ pub fn validate_openai_stream_snapshot(
     if let Some(error) = first_openai_stream_extra_path("snapshot", &snapshot.extra) {
         return Err(error);
     }
+    validate_openai_stream_usage(&snapshot.usage, "snapshot.usage")?;
     for (chunk_index, chunk) in snapshot.events.iter().enumerate() {
         let chunk_path = format!("events[{chunk_index}]");
         if let Some(error) = first_openai_stream_extra_path(&chunk_path, &chunk.extra) {
             return Err(error);
+        }
+        if let Some(usage) = chunk.usage.as_ref() {
+            validate_openai_stream_usage(usage, &format!("{chunk_path}.usage"))?;
         }
         if let Some(error) = chunk.error.as_ref().and_then(|error| {
             first_openai_stream_extra_path(&format!("{chunk_path}.error"), &error.extra)

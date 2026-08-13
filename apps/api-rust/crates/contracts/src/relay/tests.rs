@@ -920,6 +920,63 @@ fn openai_stream_validator_reports_nested_function_unknown_path() {
 }
 
 #[test]
+fn openai_stream_usage_unknown_fields_are_typed_rejections() {
+    let cases = [
+        (
+            serde_json::json!({
+                "events": [],
+                "usage": {"futureUsageField": true}
+            }),
+            "snapshot.usage.futureUsageField",
+        ),
+        (
+            serde_json::json!({
+                "events": [],
+                "usage": {
+                    "prompt_tokens_details": {"futurePromptField": true}
+                }
+            }),
+            "snapshot.usage.prompt_tokens_details.futurePromptField",
+        ),
+        (
+            serde_json::json!({
+                "events": [],
+                "usage": {
+                    "completion_tokens_details": {"futureCompletionField": true}
+                }
+            }),
+            "snapshot.usage.completion_tokens_details.futureCompletionField",
+        ),
+        (
+            serde_json::json!({
+                "events": [{
+                    "usage": {
+                        "input_tokens_details": {"futureInputField": true}
+                    }
+                }],
+                "usage": {}
+            }),
+            "events[0].usage.input_tokens_details.futureInputField",
+        ),
+    ];
+
+    for (document, expected_path) in cases {
+        let snapshot: OpenAiStreamSnapshot = serde_json::from_value(document)
+            .expect("unknown OpenAI stream usage field is retained by the wire DTO");
+        let error = validate_openai_stream_snapshot(&snapshot)
+            .expect_err("OpenAI stream usage validator must reject unknown fields");
+        assert!(matches!(
+            error,
+            RelayConvertError::UnsupportedFeature(detail)
+                if detail.feature == "unknown_field"
+                    && detail.path == expected_path
+                    && detail.source_format == "openai_chat"
+                    && detail.target_format == "provider_neutral_ir"
+        ));
+    }
+}
+
+#[test]
 fn responses_stream_unknown_envelope_fields_are_typed_rejections() {
     let cases = [
         (
