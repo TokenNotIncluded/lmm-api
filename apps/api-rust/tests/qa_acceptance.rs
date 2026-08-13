@@ -52,16 +52,17 @@ use lmm_contracts::relay::{
     FunctionData, GeminiRequest, GeminiResponse, GeminiStreamSnapshot, Item, ItemKind, JsonData,
     Loss, LossCode, Media, MediaKind, Money, OpaqueId, OpaqueIdProvenance, OpaqueProviderState,
     OpaqueStateProvenance, OpenAiChatRequest, OpenAiChatResponse, OpenAiResponsesRequest,
-    OpenAiStreamSnapshot, Part, PartKind, Protocol, Provenance, ResponsesResponse,
-    ResponsesStreamSnapshot, Role, SemanticBillingUsage, SemanticUsage, TokenUsage, Tool,
-    ToolChoice, canonical_request_to_claude, canonical_request_to_gemini_for_model,
-    canonical_request_to_openai_chat, canonical_response_to_claude, canonical_response_to_gemini,
-    claude_request_to_canonical, claude_response_to_canonical, claude_stream_to_semantic_events,
+    OpenAiStreamSnapshot, Part, PartKind, Protocol, Provenance, RelayConvertError,
+    ResponsesResponse, ResponsesStreamSnapshot, Role, SemanticBillingUsage, SemanticUsage,
+    TokenUsage, Tool, ToolChoice, canonical_request_to_claude,
+    canonical_request_to_gemini_for_model, canonical_request_to_openai_chat,
+    canonical_response_to_claude, canonical_response_to_gemini, claude_request_to_canonical,
+    claude_response_to_canonical, claude_stream_to_semantic_events,
     gemini_request_to_canonical_for_model, gemini_response_to_canonical_for_model,
     gemini_stream_to_canonical, openai_chat_request_to_canonical,
     openai_chat_response_to_canonical, openai_responses_request_to_canonical,
-    openai_responses_response_to_canonical, openai_stream_to_canonical, protocols,
-    responses_stream_to_canonical,
+    openai_responses_response_to_canonical, openai_stream_to_canonical,
+    preflight_openai_responses_request_to_openai_chat, protocols, responses_stream_to_canonical,
 };
 
 const CHAT_REQUEST: &str = r#"{
@@ -346,6 +347,132 @@ fn request_round_trip_keeps_authentic_tool_and_signature_data() {
     };
     assert_eq!(blocks[0].signature.as_deref(), Some("sig-claude"));
     assert_eq!(blocks[1].id.as_deref(), Some("call-claude"));
+}
+
+#[test]
+fn public_converters_reject_unmapped_boundary_fields_with_paths() {
+    let response: ResponsesResponse = serde_json::from_str(
+        r#"{"id":"resp-fields","object":"response","status":"completed","model":"gpt-test","output":[{"type":"future_output"}]}"#,
+    )
+    .expect("unknown Responses output item");
+    let error = openai_responses_response_to_canonical(response)
+        .expect_err("unknown output must not be silently dropped");
+    let RelayConvertError::UnsupportedFeature(error) = error else {
+        panic!("expected typed output feature error");
+    };
+    assert_eq!(error.feature, "unknown_output_item_type");
+    assert_eq!(error.path, "output[0]");
+
+    let request: OpenAiResponsesRequest = serde_json::from_str(
+        r#"{"model":"gpt-test","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"x","image_url":"https://example.test/image.png"}]}]}"#,
+    )
+    .expect("Responses content extension");
+    let error = openai_responses_request_to_canonical(request)
+        .expect_err("unmapped input content must be rejected");
+    let RelayConvertError::UnsupportedFeature(error) = error else {
+        panic!("expected typed input content feature error");
+    };
+    assert_eq!(error.feature, "content_field");
+    assert_eq!(error.path, "input[0].content[0].image_url");
+
+    let request: OpenAiResponsesRequest = serde_json::from_str(
+        r#"{"model":"gpt-test","tools":[{"type":"web_search","search_context_size":"high"}]}"#,
+    )
+    .expect("Responses built-in tool");
+    let error = preflight_openai_responses_request_to_openai_chat(&request)
+        .expect_err("built-in tool must not cross into Chat as a function");
+    let RelayConvertError::UnsupportedFeature(error) = error else {
+        panic!("expected typed tool feature error");
+    };
+    assert_eq!(error.feature, "builtin_web_search");
+    assert_eq!(error.path, "tools[0]");
+
+    let chat: OpenAiChatRequest =
+        serde_json::from_str(r#"{"model":"gpt-test","messages":[],"n":2}"#)
+            .expect("Chat multiplicity option");
+    let error = openai_chat_request_to_canonical(chat)
+        .expect_err("Chat n > 1 must not be silently reduced to one response");
+    assert!(matches!(
+        error,
+        RelayConvertError::Unsupported(message) if message.contains("n > 1")
+    ));
+}
+
+#[test]
+fn claude_public_converter_preserves_ordered_text_and_tool_blocks() {
+    let request: ClaudeRequest = serde_json::from_str(
+        r#"{
+          "model":"claude-order",
+          "max_tokens":128,
+          "messages":[
+            {"role":"assistant","content":[
+              {"type":"text","text":"before"},
+              {"type":"tool_use","id":"call-order","name":"lookup","input":{"q":"x"}},
+              {"type":"text","text":"after"}
+            ]},
+            {"role":"user","content":[
+              {"type":"tool_result","tool_use_id":"call-order","content":{"ok":true}}
+            ]}
+          ]
+        }"#,
+    )
+    .expect("ordered Claude request");
+    let canonical = claude_request_to_canonical(request).expect("Claude request conversion");
+    assert!(matches!(
+        canonical.value.messages[0].parts.as_slice(),
+        [
+            CanonicalContent::Text { text: before },
+            CanonicalContent::ToolCall { id, name, .. },
+            CanonicalContent::Text { text: after },
+        ] if before == "before" && id == "call-order" && name == "lookup" && after == "after"
+    ));
+    assert!(matches!(
+        canonical.value.messages[1].parts.as_slice(),
+        [CanonicalContent::ToolResult { id, .. }] if id == "call-order"
+    ));
+
+    let round_trip =
+        canonical_request_to_claude(canonical.value).expect("Claude ordered request round trip");
+    let first_blocks = match &round_trip.value.messages[0].content {
+        lmm_contracts::relay::StringOrParts::Parts(blocks) => blocks,
+        lmm_contracts::relay::StringOrParts::String(_) => {
+            panic!("Claude content blocks were flattened")
+        }
+    };
+    assert_eq!(
+        first_blocks
+            .iter()
+            .map(|block| block.kind.as_str())
+            .collect::<Vec<_>>(),
+        vec!["text", "tool_use", "text"]
+    );
+    assert_eq!(first_blocks[1].id.as_deref(), Some("call-order"));
+    assert_eq!(first_blocks[2].text.as_deref(), Some("after"));
+    let result_block = match &round_trip.value.messages[1].content {
+        lmm_contracts::relay::StringOrParts::Parts(blocks) => {
+            blocks.first().expect("Claude tool result block")
+        }
+        lmm_contracts::relay::StringOrParts::String(_) => {
+            panic!("Claude tool result was flattened")
+        }
+    };
+    assert_eq!(result_block.kind, "tool_result");
+    assert_eq!(result_block.tool_use_id.as_deref(), Some("call-order"));
+}
+
+#[test]
+fn gemini_public_converter_rejects_mixed_text_and_tool_content() {
+    let request: GeminiRequest = serde_json::from_str(
+        r#"{"contents":[{"role":"model","parts":[{"text":"prefix","functionCall":{"id":"call-mixed","name":"lookup","args":{}}}]}]}"#,
+    )
+    .expect("mixed Gemini part");
+    let error = gemini_request_to_canonical_for_model(request, "gemini-3-pro")
+        .expect_err("mixed text and function call must be rejected");
+    assert!(matches!(
+        error,
+        RelayConvertError::Unsupported(message)
+            if message.contains("multiple content payloads")
+    ));
 }
 
 #[test]
