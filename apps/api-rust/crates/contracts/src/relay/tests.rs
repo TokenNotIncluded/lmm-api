@@ -1435,6 +1435,31 @@ fn responses_incomplete_unknown_reason_is_explicit_loss() {
 }
 
 #[test]
+fn responses_incomplete_detail_extensions_are_retained_then_rejected_with_path() {
+    let response: ResponsesResponse = serde_json::from_str(
+        r#"{"id":"resp-incomplete-extra","object":"response","status":"incomplete","model":"gpt-test","incomplete_details":{"reason":"max_output_tokens","future_detail":{"retry_after":1}}}"#,
+    )
+    .expect("future incomplete detail is retained by the wire DTO");
+    assert!(
+        response
+            .incomplete_details
+            .as_ref()
+            .is_some_and(|details| details.extra.contains_key("future_detail"))
+    );
+    let serialized = serde_json::to_value(&response).expect("future detail serializes unchanged");
+    assert_eq!(
+        serialized["incomplete_details"]["future_detail"]["retry_after"],
+        serde_json::json!(1)
+    );
+    assert!(matches!(
+        openai_responses_response_to_canonical(response),
+        Err(RelayConvertError::UnsupportedFeature(error))
+            if error.feature == "unknown_field"
+                && error.path == "incomplete_details.future_detail"
+    ));
+}
+
+#[test]
 fn responses_response_outer_state_and_non_default_controls_are_typed() {
     let stateful: ResponsesResponse = serde_json::from_str(
         r#"{"id":"resp-state","object":"response","status":"completed","model":"gpt-test","previous_response_id":"resp-old"}"#,

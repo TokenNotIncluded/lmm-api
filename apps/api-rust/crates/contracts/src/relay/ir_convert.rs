@@ -2875,8 +2875,8 @@ pub fn envelope_to_openai_chat_request(
 
 #[derive(Default)]
 struct GeminiCallLinks {
-    by_id: BTreeMap<String, String>,
-    by_name: BTreeMap<String, VecDeque<String>>,
+    by_id: BTreeMap<String, (String, OpaqueIdProvenance)>,
+    by_name: BTreeMap<String, VecDeque<(String, OpaqueIdProvenance)>>,
     next: usize,
 }
 
@@ -2885,6 +2885,7 @@ impl GeminiCallLinks {
         &mut self,
         name: &str,
         id: String,
+        provenance: OpaqueIdProvenance,
         source: Protocol,
         target: Protocol,
         path: &str,
@@ -2910,8 +2911,8 @@ impl GeminiCallLinks {
         self.by_name
             .entry(name.to_owned())
             .or_default()
-            .push_back(id.clone());
-        self.by_id.insert(id, name.to_owned());
+            .push_back((id.clone(), provenance));
+        self.by_id.insert(id, (name.to_owned(), provenance));
         Ok(())
     }
 
@@ -2932,7 +2933,7 @@ impl GeminiCallLinks {
         source: Protocol,
         target: Protocol,
         path: &str,
-    ) -> Result<(String, bool), DirectIrError> {
+    ) -> Result<(String, OpaqueIdProvenance), DirectIrError> {
         if let Some(id) = id {
             if id.is_empty() {
                 return Err(DirectIrError::new(
@@ -2952,7 +2953,7 @@ impl GeminiCallLinks {
                     DirectIrReason::Orphan,
                 ));
             };
-            if expected_name != name {
+            if expected_name.0 != name {
                 return Err(DirectIrError::new(
                     source,
                     target,
@@ -2970,7 +2971,7 @@ impl GeminiCallLinks {
                     DirectIrReason::Orphan,
                 ));
             };
-            let Some(position) = queue.iter().position(|candidate| candidate == &id) else {
+            let Some(position) = queue.iter().position(|candidate| candidate.0 == id) else {
                 return Err(DirectIrError::new(
                     source,
                     target,
@@ -2979,9 +2980,17 @@ impl GeminiCallLinks {
                     DirectIrReason::Mismatch,
                 ));
             };
-            queue.remove(position);
+            let Some((_, provenance)) = queue.remove(position) else {
+                return Err(DirectIrError::new(
+                    source,
+                    target,
+                    "function_call_id",
+                    path,
+                    DirectIrReason::Mismatch,
+                ));
+            };
             self.by_id.remove(&id);
-            Ok((id, false))
+            Ok((id, provenance))
         } else {
             let Some(queue) = self.by_name.get_mut(name) else {
                 return Err(DirectIrError::new(
@@ -2992,7 +3001,7 @@ impl GeminiCallLinks {
                     DirectIrReason::Orphan,
                 ));
             };
-            let Some(id) = queue.front().cloned() else {
+            let Some((id, provenance)) = queue.front().cloned() else {
                 return Err(DirectIrError::new(
                     source,
                     target,
@@ -3003,7 +3012,7 @@ impl GeminiCallLinks {
             };
             let _ = queue.pop_front();
             self.by_id.remove(&id);
-            Ok((id, true))
+            Ok((id, provenance))
         }
     }
 }
@@ -3068,7 +3077,7 @@ fn gemini_part_to_items(
     }
     if let Some(call) = part.function_call {
         let GeminiFunctionCall { id, name, args } = call;
-        let call_id = match id {
+        let (id, provenance) = match id {
             Some(id) if id.is_empty() => {
                 return Err(DirectIrError::new(
                     source,
@@ -3078,25 +3087,9 @@ fn gemini_part_to_items(
                     DirectIrReason::EmptyId,
                 ));
             }
-            Some(id) => {
-                links.remember(
-                    &name,
-                    id.clone(),
-                    source,
-                    target,
-                    &format!("{path}.functionCall.id"),
-                )?;
-                OpaqueId::authentic(id, source)
-            }
+            Some(id) => (id, OpaqueIdProvenance::Authentic),
             None => {
                 let id = links.synthetic_call_id(content_index, part_index, &name);
-                links.remember(
-                    &name,
-                    id.clone(),
-                    source,
-                    target,
-                    &format!("{path}.functionCall.id"),
-                )?;
                 record_loss(
                     envelope,
                     LossCode::SyntheticToolCallId,
@@ -3104,13 +3097,25 @@ fn gemini_part_to_items(
                     &format!("{path}.functionCall.id"),
                     "Gemini omitted function call id; deterministic id retained",
                 );
-                OpaqueId::synthetic(id, source)
+                (id, OpaqueIdProvenance::Synthetic)
             }
         };
+        links.remember(
+            &name,
+            id.clone(),
+            provenance,
+            source,
+            target,
+            &format!("{path}.functionCall.id"),
+        )?;
         push_item(
             envelope,
             tool_call_item(
-                call_id,
+                OpaqueId {
+                    value: id,
+                    provenance,
+                    source,
+                },
                 name,
                 args.unwrap_or_else(|| object([])),
                 source,
@@ -3123,29 +3128,16 @@ fn gemini_part_to_items(
     }
     if let Some(result) = part.function_response {
         let GeminiFunctionResponse { id, name, response } = result;
-        let (call_id, synthetic) = links.take_result(
+        let (call_id, provenance) = links.take_result(
             &name,
             id,
             source,
             target,
             &format!("{path}.functionResponse.id"),
         )?;
-        if synthetic {
-            record_loss(
-                envelope,
-                LossCode::SyntheticToolCallId,
-                Some(Feature::FunctionCallId),
-                &format!("{path}.functionResponse.id"),
-                "Gemini omitted function result id; FIFO name matching retained",
-            );
-        }
         let id = OpaqueId {
             value: call_id,
-            provenance: if synthetic {
-                OpaqueIdProvenance::Synthetic
-            } else {
-                OpaqueIdProvenance::Authentic
-            },
+            provenance,
             source,
         };
         push_item(
@@ -3246,8 +3238,22 @@ pub fn gemini_request_to_envelope_v2(
         contents,
         generation_config,
         safety_settings,
-        ..
+        tools: _,
+        tool_config: _,
+        extra,
     } = request;
+    reject_wire_extra(source, target, &extra, "")?;
+    if let Some(system) = system_instruction.as_ref() {
+        reject_gemini_content_extra(system, source, target, "systemInstruction")?;
+    }
+    for (content_index, content) in contents.iter().enumerate() {
+        reject_gemini_content_extra(
+            content,
+            source,
+            target,
+            &format!("contents[{content_index}]"),
+        )?;
+    }
     let has_system_instruction = system_instruction.is_some();
     if let Some(system) = system_instruction {
         let role = Role::System;
@@ -3408,6 +3414,7 @@ fn media_to_gemini_part(
         function_call: None,
         function_response: None,
         thought_signature: None,
+        ..GeminiPart::default()
     })
 }
 
@@ -3425,6 +3432,7 @@ fn gemini_part_for_item(
             function_call: None,
             function_response: None,
             thought_signature: None,
+            ..GeminiPart::default()
         }),
         PartKind::Media => part
             .media
@@ -3461,6 +3469,7 @@ fn gemini_part_for_item(
                     }),
                     function_response: None,
                     thought_signature: None,
+                    ..GeminiPart::default()
                 }),
                 FunctionKind::Result => Ok(GeminiPart {
                     text: None,
@@ -3472,6 +3481,7 @@ fn gemini_part_for_item(
                         response: function.output.clone().unwrap_or(JsonData::Null),
                     }),
                     thought_signature: None,
+                    ..GeminiPart::default()
                 }),
                 FunctionKind::Unknown(_) => Err(DirectIrError::unsupported(
                     source,
@@ -3554,6 +3564,7 @@ fn ordinary_reasoning_text(
                 function_call: None,
                 function_response: None,
                 thought_signature: None,
+                ..GeminiPart::default()
             })
         }
         PartKind::Opaque => {
@@ -3602,6 +3613,7 @@ fn ordinary_reasoning_text(
                     function_call: None,
                     function_response: None,
                     thought_signature: None,
+                    ..GeminiPart::default()
                 });
             }
             Err(DirectIrError::unsupported(
@@ -3648,6 +3660,7 @@ fn append_gemini_content(
         contents.push(GeminiContent {
             role: Some("model".to_owned()),
             parts: vec![part],
+            ..GeminiContent::default()
         });
         return Ok(());
     }
@@ -3667,6 +3680,7 @@ fn append_gemini_content(
         contents.push(GeminiContent {
             role: Some("model".to_owned()),
             parts: vec![part],
+            ..GeminiContent::default()
         });
         return Ok(());
     }
@@ -3692,6 +3706,7 @@ fn append_gemini_content(
     contents.push(GeminiContent {
         role: Some(gemini_content_role(item).to_owned()),
         parts: vec![part],
+        ..GeminiContent::default()
     });
     Ok(())
 }
@@ -3986,6 +4001,7 @@ pub fn envelope_to_gemini_request_v2_for_model(
         system_instruction: (!system_parts.is_empty()).then_some(GeminiContent {
             role: None,
             parts: system_parts,
+            ..GeminiContent::default()
         }),
         generation_config: gemini_generation_config(&envelope),
         safety_settings: gemini_safety_settings(&envelope),
@@ -3997,6 +4013,7 @@ pub fn envelope_to_gemini_request_v2_for_model(
             }]
         },
         tool_config: gemini_tool_choice(&mut envelope),
+        extra: BTreeMap::new(),
     };
     Ok(finish(output, envelope, source, target))
 }
@@ -4816,6 +4833,7 @@ pub fn envelope_to_claude_request_v2(
         temperature: envelope.controls.temperature,
         tools,
         tool_choice,
+        extra: BTreeMap::new(),
     };
     Ok(finish(output, envelope, source, target))
 }
@@ -6030,6 +6048,7 @@ pub fn envelope_to_openai_chat_response_v2(
                 .unwrap_or(index),
             message,
             finish_reason: response_finish_reason(&envelope, index),
+            extra: BTreeMap::new(),
         })
         .collect();
     let response_id = extension_string(&envelope, "openai.response_id")
@@ -6057,6 +6076,7 @@ pub fn envelope_to_openai_chat_response_v2(
             .usage
             .as_ref()
             .map(|usage| usage_to_wire(usage, Protocol::OpenAi)),
+        extra: BTreeMap::new(),
     };
     Ok(finish(output, envelope, source, target))
 }
@@ -6143,6 +6163,7 @@ fn append_response_gemini_item(
                         function_call: None,
                         function_response: None,
                         thought_signature: None,
+                        ..GeminiPart::default()
                     });
                     return Ok(());
                 }
@@ -6171,6 +6192,7 @@ fn append_response_gemini_item(
                     function_call: None,
                     function_response: None,
                     thought_signature: None,
+                    ..GeminiPart::default()
                 });
             }
             _ => {
@@ -6229,13 +6251,16 @@ pub fn envelope_to_gemini_response_v2(
             content: GeminiContent {
                 role: Some("model".to_owned()),
                 parts,
+                ..GeminiContent::default()
             },
             safety_ratings: envelope
                 .extensions
                 .get("gemini.candidate[0].safety_ratings")
                 .cloned(),
+            ..GeminiCandidate::default()
         }],
         usage_metadata: envelope.usage.as_ref().map(gemini_usage_from_semantic),
+        ..GeminiResponse::default()
     };
     Ok(finish(output, envelope, source, target))
 }
@@ -6362,6 +6387,7 @@ pub fn envelope_to_claude_response_v2(
         content,
         stop_reason: response_finish_reason(&envelope, 0),
         usage: envelope.usage.as_ref().map(claude_usage_from_semantic),
+        extra: BTreeMap::new(),
     };
     Ok(finish(output, envelope, source, target))
 }
@@ -6426,6 +6452,41 @@ fn responses_unknown_field(
     path: impl Into<String>,
 ) -> DirectIrError {
     DirectIrError::unsupported(source, target, "unknown_field", &path.into())
+}
+
+fn reject_wire_extra(
+    source: Protocol,
+    target: Protocol,
+    extra: &BTreeMap<String, JsonData>,
+    path: &str,
+) -> Result<(), DirectIrError> {
+    if let Some(field) = extra.keys().next() {
+        let path = if path.is_empty() {
+            field.clone()
+        } else {
+            format!("{path}.{field}")
+        };
+        return Err(responses_unknown_field(source, target, path));
+    }
+    Ok(())
+}
+
+fn reject_gemini_content_extra(
+    content: &GeminiContent,
+    source: Protocol,
+    target: Protocol,
+    path: &str,
+) -> Result<(), DirectIrError> {
+    reject_wire_extra(source, target, &content.extra, path)?;
+    for (index, part) in content.parts.iter().enumerate() {
+        reject_wire_extra(
+            source,
+            target,
+            &part.extra,
+            &format!("{path}.parts[{index}]"),
+        )?;
+    }
+    Ok(())
 }
 
 fn responses_option_error(
@@ -7664,6 +7725,15 @@ fn validate_responses_response_surface(response: &ResponsesResponse) -> Result<(
             "incomplete_details",
         ));
     }
+    if let Some(details) = response.incomplete_details.as_ref() {
+        if let Some(field) = details.extra.keys().next() {
+            return Err(responses_unknown_field(
+                source,
+                target,
+                format!("incomplete_details.{field}"),
+            ));
+        }
+    }
     if let Some(field) = response.extra.keys().next() {
         return Err(responses_unknown_field(source, target, field.as_str()));
     }
@@ -8000,8 +8070,13 @@ fn record_responses_response_projection_losses(envelope: &mut Envelope) {
 
 fn responses_status_from_envelope(envelope: &mut Envelope) -> (String, Option<IncompleteDetails>) {
     if let Some(status) = extension_string(envelope, "openai.responses.status") {
-        let details = extension_string(envelope, "openai.responses.incomplete_reason")
-            .map(|reason| IncompleteDetails { reason });
+        let details =
+            extension_string(envelope, "openai.responses.incomplete_reason").map(|reason| {
+                IncompleteDetails {
+                    reason,
+                    extra: BTreeMap::new(),
+                }
+            });
         return (status, details);
     }
     let Some(reason) = response_finish_reason(envelope, 0) else {
@@ -8012,12 +8087,14 @@ fn responses_status_from_envelope(envelope: &mut Envelope) -> (String, Option<In
             "incomplete".to_owned(),
             Some(IncompleteDetails {
                 reason: "max_output_tokens".to_owned(),
+                extra: BTreeMap::new(),
             }),
         ),
         "content_filter" | "safety" | "recitation" => (
             "incomplete".to_owned(),
             Some(IncompleteDetails {
                 reason: "content_filter".to_owned(),
+                extra: BTreeMap::new(),
             }),
         ),
         "error" | "failed" => ("failed".to_owned(), None),
@@ -8551,15 +8628,26 @@ mod responses_direct_ir_tests {
     }
 
     #[test]
-    fn responses_incomplete_details_reject_unknown_nested_fields() {
-        let response: Result<ResponsesResponse, _> = serde_json::from_str(
+    fn responses_incomplete_details_retain_unknown_fields_for_typed_rejection() {
+        let response: ResponsesResponse = serde_json::from_str(
             r#"{
               "id":"resp-1","object":"response","created_at":7,
               "status":"incomplete","model":"gpt-responses","output":[],
               "incomplete_details":{"reason":"max_output_tokens","future":true}
             }"#,
+        )
+        .expect("unknown Responses detail is retained by the wire DTO");
+        assert_eq!(
+            response
+                .incomplete_details
+                .as_ref()
+                .and_then(|details| details.extra.get("future")),
+            Some(&JsonData::Bool(true))
         );
-        assert!(response.is_err());
+        let error = openai_responses_response_to_envelope_v2(response)
+            .expect_err("direct IR must reject an unrepresentable detail");
+        assert_eq!(error.path, "incomplete_details.future");
+        assert_eq!(error.feature, "unknown_field");
     }
 
     #[test]
@@ -8742,6 +8830,36 @@ mod direct_ir_tests {
     }
 
     #[test]
+    fn gemini_request_unknown_top_level_and_content_fields_are_typed_rejections() {
+        let top_level: GeminiRequest = serde_json::from_str(
+            r#"{"contents":[{"role":"user","parts":[{"text":"hello"}]}],"futureRequestField":true}"#,
+        )
+        .expect("unknown Gemini request field is retained by the wire DTO");
+        let error = gemini_request_to_envelope_v2(top_level, "gemini-test")
+            .expect_err("direct IR must not silently drop a Gemini request field");
+        assert_eq!(error.feature, "unknown_field");
+        assert_eq!(error.path, "futureRequestField");
+
+        let content: GeminiRequest = serde_json::from_str(
+            r#"{"contents":[{"role":"user","futureContentField":true,"parts":[{"text":"hello"}]}]}"#,
+        )
+        .expect("unknown Gemini content field is retained by the wire DTO");
+        let error = gemini_request_to_envelope_v2(content, "gemini-test")
+            .expect_err("direct IR must not silently drop a Gemini content field");
+        assert_eq!(error.feature, "unknown_field");
+        assert_eq!(error.path, "contents[0].futureContentField");
+
+        let part: GeminiRequest = serde_json::from_str(
+            r#"{"contents":[{"role":"user","parts":[{"text":"hello","futurePartField":1}]}]}"#,
+        )
+        .expect("unknown Gemini part field is retained by the wire DTO");
+        let error = gemini_request_to_envelope_v2(part, "gemini-test")
+            .expect_err("direct IR must not silently drop a Gemini part field");
+        assert_eq!(error.feature, "unknown_field");
+        assert_eq!(error.path, "contents[0].parts[0].futurePartField");
+    }
+
+    #[test]
     fn gemini_same_name_parallel_calls_match_explicit_ids_out_of_order() {
         let request: GeminiRequest = serde_json::from_str(
             r#"{"contents":[
@@ -8828,6 +8946,33 @@ mod direct_ir_tests {
             call.call_id.as_ref().map(|id| id.provenance),
             Some(OpaqueIdProvenance::Synthetic)
         );
+    }
+
+    #[test]
+    fn gemini_missing_result_id_inherits_authentic_call_provenance() {
+        let request: GeminiRequest = serde_json::from_str(
+            r#"{"contents":[{"role":"model","parts":[{"functionCall":{"id":"auth-call","name":"lookup","args":{}}}]},{"role":"user","parts":[{"functionResponse":{"name":"lookup","response":{"ok":true}}}]}]}"#,
+        )
+        .expect("authentic Gemini call with omitted result id");
+        let result = gemini_request_to_envelope_v2(request, "gemini-test")
+            .expect("Gemini result id should link to its authentic call");
+        let tool_result = result
+            .envelope
+            .ordered_items()
+            .iter()
+            .find(|item| matches!(&item.kind, ItemKind::ToolResult));
+        assert!(tool_result.is_some());
+        let Some(tool_result) = tool_result else {
+            return;
+        };
+        assert_eq!(
+            tool_result.call_id.as_ref().map(|id| id.provenance),
+            Some(OpaqueIdProvenance::Authentic)
+        );
+        assert!(!result.losses.as_slice().iter().any(|loss| {
+            loss.code == LossCode::SyntheticToolCallId
+                && loss.path.as_deref() == Some("contents[1].parts[0].functionResponse.id")
+        }));
     }
 
     #[test]

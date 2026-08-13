@@ -378,6 +378,12 @@ pub struct ClaudeRequest {
     pub tools: Vec<ClaudeTool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<ClaudeToolChoice>,
+    /// Provider request fields not modeled by this version of the direct IR.
+    /// The direct converter must either preserve or explicitly reject them;
+    /// they must not disappear during DTO decoding.
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -475,17 +481,24 @@ pub struct GeminiRequest {
         skip_serializing_if = "Option::is_none"
     )]
     pub tool_config: Option<GeminiToolConfig>,
+    /// Provider request fields not modeled by this version of the direct IR.
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct GeminiContent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
     #[serde(default)]
     pub parts: Vec<GeminiPart>,
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct GeminiPart {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
@@ -513,6 +526,9 @@ pub struct GeminiPart {
         skip_serializing_if = "Option::is_none"
     )]
     pub thought_signature: Option<String>,
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -597,6 +613,10 @@ pub struct OpenAiChatResponse {
     pub choices: Vec<OpenAiChoice>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<WireUsage>,
+    /// Provider response fields not modeled by this version of the IR.
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -605,6 +625,9 @@ pub struct OpenAiChoice {
     pub message: OpenAiChatMessage,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finish_reason: Option<String>,
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -654,10 +677,16 @@ pub struct ResponsesResponse {
     pub extra: BTreeMap<String, JsonData>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct IncompleteDetails {
     pub reason: String,
+    /// Provider-defined detail fields introduced after this DTO.  Native
+    /// Responses relays forward them from the raw body; typed converters use
+    /// this bag to reject them with an exact source path instead of turning a
+    /// future field into a generic serde decode failure.
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -715,6 +744,10 @@ pub struct ClaudeResponse {
     pub stop_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<ClaudeUsage>,
+    /// Provider response fields not modeled by this version of the IR.
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -741,7 +774,7 @@ pub struct ClaudeUsage {
     pub extra: BTreeMap<String, JsonData>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct GeminiResponse {
     #[serde(default)]
     pub candidates: Vec<GeminiCandidate>,
@@ -751,9 +784,12 @@ pub struct GeminiResponse {
         skip_serializing_if = "Option::is_none"
     )]
     pub usage_metadata: Option<GeminiUsage>,
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct GeminiCandidate {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index: Option<usize>,
@@ -770,6 +806,9 @@ pub struct GeminiCandidate {
         skip_serializing_if = "Option::is_none"
     )]
     pub safety_ratings: Option<JsonData>,
+    #[serde(flatten)]
+    #[serde(default)]
+    pub extra: BTreeMap<String, JsonData>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

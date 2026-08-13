@@ -1807,6 +1807,11 @@ fn preflight_responses_response_metadata(
             None,
         ));
     }
+    if let Some(details) = response.incomplete_details.as_ref() {
+        if let Some(error) = first_extra_path("incomplete_details", &details.extra) {
+            return Err(error);
+        }
+    }
     if response.max_output_tokens.is_some() {
         return Err(unsupported_responses_feature(
             "response_max_output_tokens",
@@ -2144,8 +2149,10 @@ pub fn canonical_response_to_openai_chat(
                     extra_content: message_extra_content,
                 },
                 finish_reason: response.finish_reason.map(finish_reason_to_chat),
+                extra: BTreeMap::new(),
             }],
             usage: response.usage.as_ref().map(token_usage_to_wire),
+            extra: BTreeMap::new(),
         },
         loss,
     }
@@ -2284,9 +2291,11 @@ pub fn canonical_response_to_openai_responses(
             incomplete_details: match finish_reason {
                 Some(FinishReason::Length) => Some(super::IncompleteDetails {
                     reason: "max_output_tokens".to_owned(),
+                    extra: BTreeMap::new(),
                 }),
                 Some(FinishReason::ContentFilter) => Some(super::IncompleteDetails {
                     reason: "content_filter".to_owned(),
+                    extra: BTreeMap::new(),
                 }),
                 _ => None,
             },
@@ -3335,6 +3344,13 @@ fn validate_stream_response_envelope(
         ));
     }
     if let Some(details) = response.incomplete_details.as_ref() {
+        if let Some(field) = details.extra.keys().next() {
+            return Err(stream_feature_error(
+                "unknown_field",
+                format!("{path}.incomplete_details.{field}"),
+                None,
+            ));
+        }
         if !matches!(
             details.reason.as_str(),
             "max_output_tokens" | "content_filter"
@@ -4550,6 +4566,7 @@ pub fn canonical_request_to_gemini_for_model(
             function_call: None,
             function_response: None,
             thought_signature: None,
+            extra: BTreeMap::new(),
         })
         .collect::<Vec<_>>();
     let mut contents = Vec::new();
@@ -4587,6 +4604,7 @@ pub fn canonical_request_to_gemini_for_model(
         contents.push(GeminiContent {
             role: Some(role.to_owned()),
             parts,
+            extra: BTreeMap::new(),
         });
     }
     let declarations = request
@@ -4621,6 +4639,7 @@ pub fn canonical_request_to_gemini_for_model(
             system_instruction: (!system_parts.is_empty()).then_some(GeminiContent {
                 role: None,
                 parts: system_parts,
+                extra: BTreeMap::new(),
             }),
             generation_config: (request.max_output_tokens.is_some()
                 || request.temperature.is_some())
@@ -4631,6 +4650,7 @@ pub fn canonical_request_to_gemini_for_model(
             safety_settings: Vec::new(),
             tools,
             tool_config,
+            extra: BTreeMap::new(),
         },
         loss,
     })
@@ -4813,10 +4833,13 @@ pub fn canonical_response_to_gemini(
                 content: GeminiContent {
                     role: Some("model".to_owned()),
                     parts,
+                    extra: BTreeMap::new(),
                 },
                 safety_ratings: None,
+                extra: BTreeMap::new(),
             }],
             usage_metadata: response.usage.as_ref().map(token_usage_to_gemini),
+            extra: BTreeMap::new(),
         },
         loss,
     })
@@ -5021,6 +5044,7 @@ pub fn canonical_request_to_claude(
             temperature: request.temperature,
             tools,
             tool_choice,
+            extra: BTreeMap::new(),
         },
         loss,
     })
@@ -5059,6 +5083,7 @@ pub fn canonical_response_to_claude(
             content,
             stop_reason: response.finish_reason.map(claude_finish_reason),
             usage: response.usage.as_ref().map(token_usage_to_claude),
+            extra: BTreeMap::new(),
         },
         loss,
     })
@@ -6950,6 +6975,7 @@ fn gemini_parts_to_canonical(
             function_call,
             function_response,
             thought_signature,
+            ..
         } = part;
         let had_text = text.is_some();
         let had_function_call = function_call.is_some();
@@ -7058,6 +7084,7 @@ fn append_canonical_gemini_parts(
                 function_call: None,
                 function_response: None,
                 thought_signature: None,
+                extra: BTreeMap::new(),
             }),
             CanonicalContent::ToolCall {
                 id,
@@ -7083,6 +7110,7 @@ fn append_canonical_gemini_parts(
                     }),
                     function_response: None,
                     thought_signature: None,
+                    extra: BTreeMap::new(),
                 });
                 let next_state = parts.get(index + 1).and_then(|next| match next {
                     CanonicalContent::ProviderState { state }
@@ -7139,6 +7167,7 @@ fn append_canonical_gemini_parts(
                         response: output.clone(),
                     }),
                     thought_signature: None,
+                    extra: BTreeMap::new(),
                 });
                 call_names.remove(id);
             }
@@ -7758,6 +7787,7 @@ pub fn response_events_to_responses(events: &[CanonicalStreamEvent]) -> Vec<Resp
                         "incomplete",
                         Some(super::IncompleteDetails {
                             reason: "max_output_tokens".to_owned(),
+                            extra: BTreeMap::new(),
                         }),
                     ),
                     FinishReason::ContentFilter => (
@@ -7765,6 +7795,7 @@ pub fn response_events_to_responses(events: &[CanonicalStreamEvent]) -> Vec<Resp
                         "incomplete",
                         Some(super::IncompleteDetails {
                             reason: "content_filter".to_owned(),
+                            extra: BTreeMap::new(),
                         }),
                     ),
                     FinishReason::Cancelled => ("response.cancelled", "cancelled", None),
