@@ -249,41 +249,60 @@ approved for Rust, and PostgreSQL, Valkey, authentication, quota, billing,
 streaming, and drain/reconnect evidence must be current. A mounted candidate,
 an active slot link, or a successful `/readyz` probe is insufficient.
 
-## Default Go production update: `-bin` AUR and `paru`
+## Default production update: split `-bin` AUR packages and `paru`
 
-Use `lmm-api-go-bin` as the default delivery path for production Go backend and
-frontend updates. Do not build on the production server, deploy the Rust
-provider, or make a Go release wait for Rust packaging unless the user
-explicitly requests a Rust release or cutover.
+Publish the production frontend and Go backend as two independently versioned
+packages:
+
+- `lmm-api-go-bin` owns only the Go backend, native operator CLI, service and
+  backend-owned policy assets.
+- `lmm-api-web-bin` owns only the immutable production frontend payload and its
+  package-owned atomic activation hook.
+
+Do not make a frontend-only release reinstall or restart the Go backend. Do not
+make a backend-only release replace the active frontend. Do not build either
+package on the production server, deploy the Rust provider, or make a Go/web
+release wait for Rust packaging unless the user explicitly requests a Rust
+release or cutover.
 
 Apply this sequence:
 
 1. Freeze a clean `main` revision that equals `origin/main`; run the relevant
    Go, web, route-contract, and AUR package checks.
-2. Publish an immutable, signed GitHub release containing the matching Go
-   backend and bundled frontend artifacts for the new version.
-3. Update the separate AUR `lmm-api-go-bin` repository's `PKGBUILD` and
-   `.SRCINFO` to that exact version. Verify release URLs, checksum and Sigstore
-   identity, run `packaging/aur/test-matrix.sh` and
-   `packaging/aur/test-bin-makepkg.sh`, then commit and push the AUR update.
-   Read the published AUR metadata back and stop if it does not match the
-   intended release.
+2. Publish immutable, signed GitHub release assets for the Go backend and web
+   frontend separately. Each asset records its Git revision and API/route
+   contract revision; independent package versions may differ only when the
+   compatibility gate proves that pair is supported.
+3. Update the separate AUR repositories for every changed artifact:
+   `lmm-api-go-bin` for the backend and `lmm-api-web-bin` for the frontend.
+   Update each `PKGBUILD` and `.SRCINFO` to the exact intended release, verify
+   release URLs, checksums and Sigstore identity, run
+   `packaging/aur/test-matrix.sh` plus the relevant clean `makepkg` package
+   check, then commit and push each AUR update. Read the published AUR metadata
+   back and stop if either package does not match the intended release.
 4. On the verified `arch-dmit` production host, run `paru` as its established
-   unprivileged AUR operator to update `lmm-api-go-bin`. Never run `makepkg` or
-   `paru` as root, and never substitute `lmm-api-go`, `lmm-api-go-git`, or a
-   Rust package.
-5. Complete the package-owned update automation: publish the bundled frontend
-   atomically, run `systemctl daemon-reload`, restart `lmm-api.service`, retain
-   the previous package/frontend as rollback state, and perform the standard
-   status, livez, database/cache, journal, resource, and public-route checks.
-   The update is complete only after the exact package version, Go binary
-   revision, frontend revision, and healthy service are all verified.
+   unprivileged AUR operator. Update only `lmm-api-web-bin` for a frontend-only
+   release, only `lmm-api-go-bin` for a backend-only release, or both packages
+   in one transaction when both changed. Never run `makepkg` or `paru` as root,
+   and never substitute a source, `-git`, or Rust package.
+5. Complete the package-owned update automation. A web update validates its
+   payload, publishes a new versioned frontend directory, atomically switches
+   the active link, runs `nginx -t`, reloads nginx without restarting the Go
+   service, probes public pages, and retains the prior frontend for independent
+   rollback. A Go update runs `systemctl daemon-reload`, restarts only
+   `lmm-api.service`, probes status/livez/database/cache/journal/resources, and
+   retains the previous Go package for independent rollback.
+6. For a paired release, verify the declared web/backend compatibility before
+   activation and again before confirmation. The update is complete only after
+   the exact installed package versions, Git revisions, active frontend link,
+   Go binary revision and relevant health probes are verified.
 
 The `paru` path does not weaken the rollback/watchdog or exact-release checks.
-If the installed package does not yet provide the package-owned automatic
-frontend switch, service restart, health verification, and rollback contract,
-stop and use the canonical guarded release transaction for that deployment;
-do not claim that `paru` alone completed production activation.
+Until `lmm-api-web-bin` exists in AUR and both packages provide their complete
+package-owned activation, verification and rollback hooks, keep using the
+canonical guarded release transaction. Do not remove the currently bundled
+frontend from `lmm-api-go-bin`, claim the split is live, or use `paru` alone for
+production activation during that transition.
 
 ## Keep backups optional
 
