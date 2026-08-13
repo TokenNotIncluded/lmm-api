@@ -53,6 +53,7 @@ const (
 var (
 	assistantMathExpressionPattern = regexp.MustCompile(`^[0-9A-Za-z_+\-*/%^().,\s]+$`)
 	assistantMathVariablePattern   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,31}$`)
+	assistantModelReferencePattern = regexp.MustCompile(`(?i)\b(?:gpt|claude|gemini|deepseek|qwen|llama|mistral|kimi|glm)[a-z0-9._:/-]*\b`)
 	assistantAgentLimiter          = syncx.NewLimiter(assistantAgentMaxConcurrent)
 	assistantTools                 = sync.OnceValue(buildAssistantTools)
 )
@@ -79,11 +80,12 @@ const (
 	toolAssessment toolSetKey = 1 << iota
 	toolTitle
 	toolAdmin
+	toolRoot
 	toolDeveloper
 	toolOffers
 )
 
-var assistantToolSets [1 << 5]struct {
+var assistantToolSets [1 << 6]struct {
 	once  sync.Once
 	tools []assistantOpenAIToolDefinition
 }
@@ -305,6 +307,14 @@ func buildAssistantTools() []assistantOpenAIToolDefinition {
 		{
 			Type: "function",
 			Function: assistantOpenAIToolFunction{
+				Name:        "get_admin_assistant_review",
+				Description: "For an administrator only, read the latest privacy-minimized automatic assistant review. It contains bounded aggregate intent, profile, preset-conversion, support-queue, and security-follow-up signals; it never contains transcripts, user identities, or per-user memory. Use it before proposing changes to AssistantSkills.",
+				Parameters:  emptyObjectSchema(),
+			},
+		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
 				Name:        "get_admin_server_config",
 				Description: "For an administrator only, read the current non-secret server configuration that the assistant can safely manage. Credentials, provider keys, payment secrets, session secrets, and arbitrary shell or database access are always omitted.",
 				Parameters:  emptyObjectSchema(),
@@ -396,6 +406,9 @@ func keyForTools(context assistantUserContext) toolSetKey {
 	if context.AdministratorMode {
 		key |= toolAdmin
 	}
+	if context.AccessLevel == "ROOT" {
+		key |= toolRoot
+	}
 	if context.DeveloperAccessGranted {
 		key |= toolDeveloper
 	}
@@ -416,10 +429,17 @@ func assistantToolAllowedForContext(name string, userContext assistantUserContex
 		return userContext.ConversationTitleNeeded
 	}
 	if userContext.AdministratorMode {
+		if userContext.AccessLevel != "ROOT" {
+			switch name {
+			case "get_admin_server_config", "prepare_admin_config_change", "prepare_admin_pricing_change":
+				return false
+			}
+		}
 		return true
 	}
 	if userContext.DeveloperAccessGranted {
-		return name != "get_admin_server_config" &&
+		return name != "get_admin_assistant_review" &&
+			name != "get_admin_server_config" &&
 			name != "prepare_admin_config_change" &&
 			name != "get_admin_channels" &&
 			name != "prepare_admin_channel_change" &&
@@ -506,9 +526,64 @@ func assistantToolChoiceForContext(userContext assistantUserContext) any {
 	return "auto"
 }
 
+// assistantReadChain returns the smallest deterministic read chain
+// needed to answer compound fact requests. A model remains responsible for
+// the tool arguments, but it cannot skip live service/model/price reads and
+// replace them with an advertisement or a guessed value.
+func assistantReadChain(userContext assistantUserContext) []string {
+	text := strings.ToLower(strings.TrimSpace(userContext.LatestUserRequest))
+	if text == "" {
+		return nil
+	}
+	tools := make([]string, 0, 3)
+	if assistantTextContainsAny(text,
+		"base url", "base_url", "服务地址", "接口地址", "endpoint", "端点",
+	) {
+		tools = append(tools, "get_service_facts")
+	}
+	if userContext.Intent == model.AssistantIntentCost ||
+		userContext.Intent == model.AssistantIntentModels ||
+		assistantTextContainsAny(text, "模型", "model id", "model_id", "available model") {
+		tools = append(tools, "get_available_models")
+	}
+	if userContext.Intent == model.AssistantIntentCost && assistantModelReferencePattern.MatchString(text) {
+		tools = append(tools, "get_model_pricing")
+	}
+	return tools
+}
+
+func assistantNextRead(userContext assistantUserContext, calledTools, successfulTools map[string]bool) (string, bool) {
+	for _, name := range assistantReadChain(userContext) {
+		if !calledTools[name] {
+			return name, false
+		}
+		if !successfulTools[name] {
+			// A failed authoritative read must not be bypassed by a later tool.
+			// Stop forcing the chain and let the final answer report the failure.
+			return "", true
+		}
+	}
+	return "", false
+}
+
 func assistantRecommendationWorkflowRequired(userContext assistantUserContext) bool {
 	return userContext.Intent == model.AssistantIntentRecommendation &&
 		userContext.RecommendationAction != assistantRecommendationActionNone
+}
+
+func assistantNeedsReadChain(userContext assistantUserContext) bool {
+	return len(assistantReadChain(userContext)) > 1
+}
+
+func assistantReadChainSteps(userContext assistantUserContext) int {
+	if !assistantNeedsReadChain(userContext) {
+		return 0
+	}
+	steps := len(assistantReadChain(userContext)) + 1 // reads, then final answer
+	if userContext.ConversationTitleNeeded {
+		steps++
+	}
+	return steps
 }
 
 func assistantRecommendationWorkflowMinSteps(userContext assistantUserContext) int {
@@ -533,6 +608,11 @@ func assistantToolChoiceForAgentStep(userContext assistantUserContext, calledToo
 		return choice
 	}
 	if !assistantRecommendationWorkflowRequired(userContext) {
+		if name, failed := assistantNextRead(userContext, calledTools, successfulTools); name != "" && assistantToolAllowedForContext(name, userContext) {
+			return assistantNamedToolChoice(name)
+		} else if failed {
+			return "none"
+		}
 		if forcedName := assistantNamedToolChoiceName(choice); forcedName != "" && calledTools[forcedName] {
 			return "auto"
 		}
@@ -833,20 +913,24 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 	}
 	forceL0Assessment := assistantL0InterlocutorAssessmentRequired(userContext)
 	forceRecommendationWorkflow := assistantRecommendationWorkflowRequired(userContext)
+	forceReadChain := assistantNeedsReadChain(userContext)
 	if forceL0Assessment && maxSteps < 2 {
 		maxSteps = 2
 	}
 	if minimum := assistantRecommendationWorkflowMinSteps(userContext); maxSteps < minimum {
 		maxSteps = minimum
 	}
+	if minimum := assistantReadChainSteps(userContext); maxSteps < minimum {
+		maxSteps = minimum
+	}
 	if !settings.AgentLoopEnabled {
-		if !forceL0Assessment && !forceRecommendationWorkflow {
+		if !forceL0Assessment && !forceRecommendationWorkflow && !forceReadChain {
 			maxSteps = 1
 		}
 	}
 	cacheKey := c.GetString("assistant_cache_key")
 	usedCacheSensitiveTool := false
-	agentEnabled := maxSteps > 1 && (settings.AgentLoopEnabled || forceL0Assessment || forceRecommendationWorkflow)
+	agentEnabled := maxSteps > 1 && (settings.AgentLoopEnabled || forceL0Assessment || forceRecommendationWorkflow || forceReadChain)
 	var tools []assistantOpenAIToolDefinition
 	var calledTools, successfulTools map[string]bool
 	if agentEnabled {
@@ -886,10 +970,10 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 			return
 		}
 		message := response.Choices[0].Message
-		if forceRecommendationWorkflow {
+		if forceRecommendationWorkflow || forceReadChain {
 			requiredTool := assistantNamedToolChoiceName(request.ToolChoice)
 			if requiredTool != "" && (len(message.ToolCalls) != 1 || strings.TrimSpace(message.ToolCalls[0].Function.Name) != requiredTool) {
-				writeAssistantError(c, http.StatusBadGateway, "ASSISTANT_REQUIRED_TOOL_MISSING", errors.New("assistant did not follow the required recommendation workflow"))
+				writeAssistantError(c, http.StatusBadGateway, "ASSISTANT_REQUIRED_TOOL_MISSING", errors.New("assistant did not follow the required tool workflow"))
 				return
 			}
 		}
@@ -906,7 +990,7 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 			c.Data(status, "application/json; charset=utf-8", normalizedBody)
 			return
 		}
-		if (!settings.AgentLoopEnabled && !forceL0Assessment && !forceRecommendationWorkflow) || step >= maxSteps-1 {
+		if (!settings.AgentLoopEnabled && !forceL0Assessment && !forceRecommendationWorkflow && !forceReadChain) || step >= maxSteps-1 {
 			writeAssistantError(c, http.StatusBadGateway, "ASSISTANT_AGENT_MAX_STEPS", errors.New("assistant agent reached its step limit before producing a final answer"))
 			return
 		}
@@ -933,6 +1017,12 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 			resultJSON, marshalErr := common.MarshalLimit(result, assistantToolResultMaxBytes)
 			if ok, _ := result["ok"].(bool); ok {
 				successfulTools[toolName] = true
+			}
+			if toolName == "set_conversation_title" {
+				// The title tool updates the Gin context. Keep this loop's local
+				// policy snapshot in sync so the next step advances to the task
+				// tool instead of forcing the title again.
+				userContext = assistantUserContextFromGin(c)
 			}
 			if marshalErr != nil {
 				resultJSON = []byte(`{"ok":false,"error":"tool result exceeded its byte budget"}`)
@@ -1191,6 +1281,8 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 		}
 	case "get_admin_server_config":
 		return executeAssistantAdminConfigTool(c, actorUserID)
+	case "get_admin_assistant_review":
+		return executeAssistantReviewTool(actorUserID)
 	case "prepare_admin_config_change":
 		return executeAssistantAdminConfigChangeTool(c, actorUserID, input)
 	case "get_admin_channels":

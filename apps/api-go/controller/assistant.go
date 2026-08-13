@@ -747,8 +747,9 @@ func GetAssistantStatus(c *gin.Context) {
 			"developer_tools":       developerAccessGranted,
 			"personal_ip_allowlist": isAdmin || trustLevel >= model.PersonalAccessIPMinTrustLevel,
 			"usage_discount":        isAdmin || trustLevel >= model.TrustLevelMinUser+2,
-			"admin_config":          isAdmin,
-			"admin_pricing":         isAdmin,
+			"admin_config":          isRoot,
+			"admin_pricing":         isRoot,
+			"assistant_review":      isAdmin,
 		},
 		"agent": gin.H{
 			"enabled":           settings.AgentLoopEnabled,

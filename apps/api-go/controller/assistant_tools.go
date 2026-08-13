@@ -377,6 +377,28 @@ func AdminGetAssistantProfileSummary(c *gin.Context) {
 	common.ApiSuccess(c, summary)
 }
 
+func AdminGetAssistantReview(c *gin.Context) {
+	task, err := model.GetLatestSystemTask(model.SystemTaskTypeAssistantReview)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if task == nil {
+		common.ApiSuccess(c, nil)
+		return
+	}
+	common.ApiSuccess(c, task.ToResponse())
+}
+
+func AdminRunAssistantReview(c *gin.Context) {
+	task, err := service.StartAssistantReview()
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, task.ToResponse())
+}
+
 func AdminGetAssistantFundingSummary(c *gin.Context) {
 	since, ok := assistantSummarySince(c, "ASSISTANT_FUNDING_DAYS_INVALID")
 	if !ok {

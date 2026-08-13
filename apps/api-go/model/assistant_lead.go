@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -41,6 +42,7 @@ const (
 	assistantFirstQuestionMaxRunes      = 4000
 	assistantFirstQuestionBucketSeconds = 60 * 60
 	assistantFirstQuestionTopN          = 10
+	assistantSummaryMaxRows             = 64
 )
 
 var (
@@ -373,11 +375,19 @@ func ListAssistantHandoffs(status string, limit int) ([]AssistantLeadView, error
 }
 
 func ListAssistantIntentSummary(since int64) ([]AssistantIntentSummary, error) {
-	query := DB.Model(&AssistantLead{}).
+	return listAssistantIntents(context.Background(), since, 0)
+}
+
+func listAssistantIntents(ctx context.Context, since, until int64) ([]AssistantIntentSummary, error) {
+	query := DB.WithContext(ctx).Model(&AssistantLead{}).
 		Select("intent, COUNT(*) AS count").
-		Group("intent").Order("count DESC, intent ASC")
+		Group("intent").Order("count DESC, intent ASC").
+		Limit(assistantSummaryMaxRows)
 	if since > 0 {
 		query = query.Where("created_at >= ?", since)
+	}
+	if until > 0 {
+		query = query.Where("created_at <= ?", until)
 	}
 	var summary []AssistantIntentSummary
 	if err := query.Scan(&summary).Error; err != nil {
@@ -434,11 +444,19 @@ func RecordAssistantProfile(profile string) error {
 }
 
 func ListAssistantProfileSummary(since int64) ([]AssistantProfileSummary, error) {
-	query := DB.Model(&AssistantProfileBucket{}).
+	return listAssistantProfiles(context.Background(), since, 0)
+}
+
+func listAssistantProfiles(ctx context.Context, since, until int64) ([]AssistantProfileSummary, error) {
+	query := DB.WithContext(ctx).Model(&AssistantProfileBucket{}).
 		Select("profile, SUM(count) AS count").
-		Group("profile").Order("count DESC, profile ASC")
+		Group("profile").Order("count DESC, profile ASC").
+		Limit(assistantSummaryMaxRows)
 	if since > 0 {
 		query = query.Where("bucket_start >= ?", since)
+	}
+	if until > 0 {
+		query = query.Where("bucket_start <= ?", until)
 	}
 	var summary []AssistantProfileSummary
 	if err := query.Scan(&summary).Error; err != nil {

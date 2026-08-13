@@ -113,3 +113,36 @@ func TestGetAssistantStatusFailsClosedWhenDeveloperAccessReadFails(t *testing.T)
 
 	assertAssistantStatusUnavailable(t, recorder)
 }
+
+func TestAssistantStatusCapabilities(t *testing.T) {
+	db := openTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}))
+	users := []model.User{
+		{Id: 781105, Username: "assistant-status-admin", Password: "password", Role: common.RoleAdminUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "status-admin"},
+		{Id: 781106, Username: "assistant-status-root", Password: "password", Role: common.RoleRootUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "status-root"},
+	}
+	for index := range users {
+		require.NoError(t, db.Create(&users[index]).Error)
+	}
+
+	capabilities := func(userID int) map[string]bool {
+		recorder := performAssistantStatusTestRequest(t, userID)
+		require.Equal(t, http.StatusOK, recorder.Code)
+		var payload struct {
+			Data struct {
+				Capabilities map[string]bool `json:"capabilities"`
+			} `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &payload))
+		return payload.Data.Capabilities
+	}
+
+	admin := capabilities(users[0].Id)
+	assert.True(t, admin["assistant_review"])
+	assert.False(t, admin["admin_config"])
+	assert.False(t, admin["admin_pricing"])
+	root := capabilities(users[1].Id)
+	assert.True(t, root["assistant_review"])
+	assert.True(t, root["admin_config"])
+	assert.True(t, root["admin_pricing"])
+}

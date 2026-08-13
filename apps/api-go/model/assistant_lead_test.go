@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -66,6 +67,21 @@ func TestRecordAssistantIntentDoesNotPersistChatMessage(t *testing.T) {
 	assert.Equal(t, AssistantLeadSourceChat, lead.Source)
 	assert.Equal(t, AssistantIntentAPIKey, lead.Intent)
 	assert.Empty(t, lead.Message)
+}
+
+func TestAssistantAggregateSummariesAreRowBounded(t *testing.T) {
+	user := setupAssistantLeadTestDB(t)
+	for index := range assistantSummaryMaxRows + 5 {
+		require.NoError(t, DB.Create(&AssistantLead{
+			UserId: user.Id, Source: AssistantLeadSourceChat,
+			Intent: fmt.Sprintf("legacy-%03d", index), Status: AssistantLeadStatusObserved,
+			CreatedAt: 100,
+		}).Error)
+	}
+
+	rows, err := listAssistantIntents(context.Background(), 1, 200)
+	require.NoError(t, err)
+	assert.Len(t, rows, assistantSummaryMaxRows)
 }
 
 func TestAssistantHandoffRedactsSecretsAndIsIdempotent(t *testing.T) {

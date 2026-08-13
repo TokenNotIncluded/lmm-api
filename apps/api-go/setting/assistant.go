@@ -27,6 +27,9 @@ const (
 	AssistantSearchAPIKeyOptionKey           = "AssistantSearchAPIKey"
 	AssistantSearchMCPToolOptionKey          = "AssistantSearchMCPTool"
 	AssistantSkillsOptionKey                 = "AssistantSkills"
+	AssistantReviewEnabledOptionKey          = "AssistantReviewEnabled"
+	AssistantReviewWindowDaysOptionKey       = "AssistantReviewWindowDays"
+	AssistantReviewIntervalHoursOptionKey    = "AssistantReviewIntervalHours"
 	AssistantRetentionEnabledOptionKey       = "AssistantRetentionEnabled"
 	AssistantActiveRetentionDaysOptionKey    = "AssistantActiveRetentionDays"
 	AssistantArchivedRetentionDaysOptionKey  = "AssistantArchivedRetentionDays"
@@ -64,6 +67,9 @@ type AssistantSettings struct {
 	SearchAPIKey           string
 	SearchMCPTool          string
 	Skills                 string
+	ReviewEnabled          bool
+	ReviewWindowDays       int
+	ReviewIntervalHours    int
 	RetentionEnabled       bool
 	ActiveRetentionDays    int
 	ArchivedRetentionDays  int
@@ -88,6 +94,9 @@ var (
 		SearchAPIKey:           "",
 		SearchMCPTool:          "",
 		Skills:                 "",
+		ReviewEnabled:          true,
+		ReviewWindowDays:       30,
+		ReviewIntervalHours:    24,
 		RetentionEnabled:       true,
 		ActiveRetentionDays:    90,
 		ArchivedRetentionDays:  30,
@@ -220,13 +229,27 @@ func UpdateAssistantSkills(value string) error {
 	return updateAssistantText(&assistantSettings.Skills, value, 12000, "assistant skills must be at most 12000 characters")
 }
 
+func SetAssistantReviewEnabled(enabled bool) {
+	assistantSettingsMutex.Lock()
+	defer assistantSettingsMutex.Unlock()
+	assistantSettings.ReviewEnabled = enabled
+}
+
+func UpdateAssistantReviewWindowDays(value string) error {
+	return updateAssistantNumber(&assistantSettings.ReviewWindowDays, value, 1, 90, "assistant review window must be between 1 and 90 days")
+}
+
+func UpdateAssistantReviewIntervalHours(value string) error {
+	return updateAssistantNumber(&assistantSettings.ReviewIntervalHours, value, 1, 168, "assistant review interval must be between 1 and 168 hours")
+}
+
 func SetAssistantRetentionEnabled(enabled bool) {
 	assistantSettingsMutex.Lock()
 	defer assistantSettingsMutex.Unlock()
 	assistantSettings.RetentionEnabled = enabled
 }
 
-func updateAssistantRetentionNumber(target *int, value string, minimum, maximum int, message string) error {
+func updateAssistantNumber(target *int, value string, minimum, maximum int, message string) error {
 	number, err := strconv.Atoi(strings.TrimSpace(value))
 	if err != nil || number < minimum || number > maximum {
 		return errors.New(message)
@@ -238,23 +261,27 @@ func updateAssistantRetentionNumber(target *int, value string, minimum, maximum 
 }
 
 func UpdateAssistantActiveRetentionDays(value string) error {
-	return updateAssistantRetentionNumber(&assistantSettings.ActiveRetentionDays, value, 7, 3650, "assistant active retention must be between 7 and 3650 days")
+	return updateAssistantNumber(&assistantSettings.ActiveRetentionDays, value, 7, 3650, "assistant active retention must be between 7 and 3650 days")
 }
 
 func UpdateAssistantArchivedRetentionDays(value string) error {
-	return updateAssistantRetentionNumber(&assistantSettings.ArchivedRetentionDays, value, 1, 3650, "assistant archived retention must be between 1 and 3650 days")
+	return updateAssistantNumber(&assistantSettings.ArchivedRetentionDays, value, 1, 3650, "assistant archived retention must be between 1 and 3650 days")
 }
 
 func UpdateAssistantSecurityRetentionDays(value string) error {
-	return updateAssistantRetentionNumber(&assistantSettings.SecurityRetentionDays, value, 30, 3650, "assistant security retention must be between 30 and 3650 days")
+	return updateAssistantNumber(&assistantSettings.SecurityRetentionDays, value, 30, 3650, "assistant security retention must be between 30 and 3650 days")
 }
 
 func UpdateAssistantRetentionIntervalHours(value string) error {
-	return updateAssistantRetentionNumber(&assistantSettings.RetentionIntervalHours, value, 1, 168, "assistant retention interval must be between 1 and 168 hours")
+	return updateAssistantNumber(&assistantSettings.RetentionIntervalHours, value, 1, 168, "assistant retention interval must be between 1 and 168 hours")
 }
 
 func ValidateAssistantOption(key string, value string) error {
 	switch key {
+	case AssistantReviewEnabledOptionKey:
+		if _, err := strconv.ParseBool(strings.TrimSpace(value)); err != nil {
+			return errors.New("assistant review enabled must be a boolean")
+		}
 	case AssistantModelOptionKey:
 		model := strings.TrimSpace(value)
 		if model == "" {
@@ -304,19 +331,23 @@ func ValidateAssistantOption(key string, value string) error {
 		if len([]rune(strings.TrimSpace(value))) > 12000 {
 			return errors.New("assistant skills must be at most 12000 characters")
 		}
+	case AssistantReviewWindowDaysOptionKey:
+		return validateAssistantNumber(value, 1, 90, "assistant review window must be between 1 and 90 days")
+	case AssistantReviewIntervalHoursOptionKey:
+		return validateAssistantNumber(value, 1, 168, "assistant review interval must be between 1 and 168 hours")
 	case AssistantActiveRetentionDaysOptionKey:
-		return validateAssistantRetentionNumber(value, 7, 3650, "assistant active retention must be between 7 and 3650 days")
+		return validateAssistantNumber(value, 7, 3650, "assistant active retention must be between 7 and 3650 days")
 	case AssistantArchivedRetentionDaysOptionKey:
-		return validateAssistantRetentionNumber(value, 1, 3650, "assistant archived retention must be between 1 and 3650 days")
+		return validateAssistantNumber(value, 1, 3650, "assistant archived retention must be between 1 and 3650 days")
 	case AssistantSecurityRetentionDaysOptionKey:
-		return validateAssistantRetentionNumber(value, 30, 3650, "assistant security retention must be between 30 and 3650 days")
+		return validateAssistantNumber(value, 30, 3650, "assistant security retention must be between 30 and 3650 days")
 	case AssistantRetentionIntervalHoursOptionKey:
-		return validateAssistantRetentionNumber(value, 1, 168, "assistant retention interval must be between 1 and 168 hours")
+		return validateAssistantNumber(value, 1, 168, "assistant retention interval must be between 1 and 168 hours")
 	}
 	return nil
 }
 
-func validateAssistantRetentionNumber(value string, minimum, maximum int, message string) error {
+func validateAssistantNumber(value string, minimum, maximum int, message string) error {
 	number, err := strconv.Atoi(strings.TrimSpace(value))
 	if err != nil || number < minimum || number > maximum {
 		return errors.New(message)

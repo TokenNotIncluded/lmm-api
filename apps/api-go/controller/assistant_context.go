@@ -91,7 +91,11 @@ type assistantUserContext struct {
 	// invalidation, but are internal risk signals and are never model input.
 	PaymentRestrictionCauses []string `json:"-"`
 	Intent                   string   `json:"current_intent,omitempty"`
-	ConversationTitleNeeded  bool     `json:"conversation_title_needed,omitempty"`
+	// LatestUserRequest is retained only for deterministic per-request tool
+	// planning. It is never serialized into account context, cache identity, or
+	// persisted profile data; the same text already appears as the user message.
+	LatestUserRequest       string `json:"-"`
+	ConversationTitleNeeded bool   `json:"conversation_title_needed,omitempty"`
 	// RecommendationAction is deterministic per-request workflow state. It is
 	// never model-visible account metadata; the user request and tool results
 	// provide the model-visible editing context.
@@ -253,6 +257,7 @@ func assistantUserContextForRequest(userID int, message string, conversation ...
 		AccessReviewStatus:   "unknown",
 		CustomerProfile:      assistantProfileUnknown,
 		Intent:               model.ClassifyAssistantIntent(message),
+		LatestUserRequest:    message,
 		RecommendationAction: classifyAssistantRecommendationAction(message),
 	}
 	if userID <= 0 {
@@ -390,7 +395,11 @@ func assistantPaymentOfferStateForText(context assistantUserContext, text string
 		return assistantPaymentOfferBlocked
 	}
 	text = strings.ToLower(strings.TrimSpace(text))
-	if assistantTextContainsAny(text, "不想付费", "不想付款", "不想支付", "不充值", "不愿意付费", "讨厌付款", "免费使用") {
+	if assistantTextContainsAny(text,
+		"不想付费", "不想付款", "不想支付", "不充值", "不愿意付费", "讨厌付款", "讨厌支付",
+		"讨厌法币", "不想使用法币", "不接受法币", "拒绝法币", "只接受免费", "免费使用",
+		"do not want to pay", "don't want to pay", "no fiat", "reject fiat", "free only",
+	) {
 		return assistantPaymentOfferNone
 	}
 	if !assistantTextContainsAny(text,
@@ -781,9 +790,9 @@ func assistantHasHighConfidenceSecurityAbuseConversation(messages []assistantOpe
 func assistantWelcomeStrategy(profile assistantCustomerProfile) string {
 	switch profile {
 	case assistantProfileTechnical:
-		return "Lead with exact endpoints, model IDs, client configuration, and transparent cost facts. Welcome users who simply want to use the relay without contributing to open source. Do not pressure the user to pay or contribute; explain the public challenge and administrator review path for L1 when relevant."
+		return "Lead with exact endpoints, model IDs, client configuration, and transparent cost facts. Treat explicit free, self-hosted, open-source, no-payment, and no-relay constraints as hard requirements: do not recommend this hosted relay, a paid plan, or a fiat payment path when they conflict. Welcome users who simply want to use the relay without contributing to open source. Do not pressure the user to pay or contribute; explain the public challenge and administrator review path for L1 only when relevant."
 	case assistantProfileGuided:
-		return "Use short numbered steps, ask only one easy question at a time, confirm each prerequisite, and avoid unexplained jargon. Keep payment hidden until L1 by default: a bare payment keyword is not enough, while a clear purchase intent with one key detail may proceed unless policy blocks it."
+		return "Use short numbered steps, ask only one easy question at a time, confirm each prerequisite, and avoid unexplained jargon. Treat the user's stated experience level as already answered and never ask again whether they are new or technical. Keep payment hidden until L1 by default: willingness to pay is not permission to pitch a plan, while a clear purchase intent with one key detail may proceed unless policy blocks it."
 	case assistantProfilePromotion:
 		return "Be polite but firm about one-account, referral, rate-limit, and payment rules. Offer legitimate public challenges and support; never promise coupons, bypasses, or repeated-account rewards."
 	case assistantProfileSecurityRisk:

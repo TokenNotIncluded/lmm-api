@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
 
@@ -23,9 +24,15 @@ const (
 	SystemTaskTypeAsyncTaskPoll      = "async_task_poll"
 	SystemTaskTypeAssistantRetention = "assistant_retention"
 	SystemTaskTypeAssistantPresets   = "assistant_pre_conversation_presets"
+	SystemTaskTypeAssistantReview    = "assistant_review"
 )
 
 var ErrSystemTaskLockLost = errors.New("system task lock lost")
+
+const (
+	systemTaskJSONMaxBytes  = 1 << 20
+	systemTaskErrorMaxBytes = 4 << 10
+)
 
 type SystemTask struct {
 	ID        int64            `json:"id" gorm:"primary_key"`
@@ -187,6 +194,26 @@ func ListSystemTasks(limit int) ([]*SystemTask, error) {
 	var tasks []*SystemTask
 	err := DB.Order("id desc").Limit(limit).Find(&tasks).Error
 	return tasks, err
+}
+
+// PruneTaskHistory bounds terminal task history without touching work that can
+// still run. Keeping this policy in the model prevents each scheduled task
+// from growing its own unbounded table history.
+func PruneTaskHistory(taskType string, keep int) error {
+	if taskType == "" || keep < 0 {
+		return gorm.ErrInvalidData
+	}
+	terminal := []SystemTaskStatus{SystemTaskStatusSucceeded, SystemTaskStatusFailed}
+	query := DB.Where("type = ? AND status IN ?", taskType, terminal)
+	if keep > 0 {
+		retained := DB.Model(&SystemTask{}).
+			Select("id").
+			Where("type = ? AND status IN ?", taskType, terminal).
+			Order("id DESC").
+			Limit(keep)
+		query = query.Where("id NOT IN (?)", retained)
+	}
+	return query.Delete(&SystemTask{}).Error
 }
 
 // GetLatestSystemTask returns the most recent task row of the given type
@@ -385,8 +412,14 @@ func ReleaseSystemTaskLock(taskID string, lockedBy string) error {
 func FinishSystemTask(taskID string, lockedBy string, status SystemTaskStatus, resultPayload any, errorMessage string) error {
 	resultText, err := marshalSystemTaskJSON(resultPayload)
 	if err != nil {
-		return err
+		if !errors.Is(err, common.ErrLimitExceeded) {
+			return err
+		}
+		status = SystemTaskStatusFailed
+		resultText = ""
+		errorMessage = "system task result exceeded byte limit"
 	}
+	errorMessage = limitSystemTaskError(errorMessage)
 	now := common.GetTimestamp()
 	result := DB.Model(&SystemTask{}).
 		Where("task_id = ? AND status = ? AND locked_by = ?", taskID, SystemTaskStatusRunning, lockedBy).
@@ -440,11 +473,22 @@ func marshalSystemTaskJSON(v any) (string, error) {
 	if v == nil {
 		return "", nil
 	}
-	data, err := common.Marshal(v)
+	data, err := common.MarshalLimit(v, systemTaskJSONMaxBytes)
 	if err != nil {
 		return "", err
 	}
 	return string(data), nil
+}
+
+func limitSystemTaskError(message string) string {
+	if len(message) <= systemTaskErrorMaxBytes {
+		return message
+	}
+	message = message[:systemTaskErrorMaxBytes]
+	for len(message) > 0 && !utf8.ValidString(message) {
+		message = message[:len(message)-1]
+	}
+	return message
 }
 
 func decodeSystemTaskJSONString(data string, v any) error {
