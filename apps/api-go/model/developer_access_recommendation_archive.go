@@ -28,6 +28,8 @@ type recommendationArchiveIdentity struct {
 	approvedAt int64
 }
 
+const developerAccessRecommendationBackfillBatchSize = 200
+
 func (DeveloperAccessRecommendationArchive) TableName() string {
 	return "developer_access_recommendation_archives"
 }
@@ -74,17 +76,16 @@ func archiveApprovedDeveloperAccessRecommendation(tx *gorm.DB, request Developer
 // uses the immutable approval timestamp so a later re-approval of a reopened
 // request receives its own snapshot.
 func BackfillDeveloperAccessRecommendationArchives() error {
-	const batchSize = 200
 	return DB.Transaction(func(tx *gorm.DB) error {
 		var requests []DeveloperAccessRequest
 		return tx.Where("status = ? AND TRIM(ai_recommendation) <> ''", DeveloperAccessRequestApproved).
-			FindInBatches(&requests, batchSize, func(batchTx *gorm.DB, _ int) error {
-				requestIDs := make([]int, 0, len(requests))
+			FindInBatches(&requests, developerAccessRecommendationBackfillBatchSize, func(batchTx *gorm.DB, _ int) error {
+				archiveKeys := make([][]interface{}, 0, len(requests))
 				for _, request := range requests {
-					requestIDs = append(requestIDs, request.Id)
+					archiveKeys = append(archiveKeys, []interface{}{request.Id, request.ReviewedAt})
 				}
 				var existing []DeveloperAccessRecommendationArchive
-				if err := batchTx.Where("request_id IN ?", requestIDs).Find(&existing).Error; err != nil {
+				if err := batchTx.Where("(request_id, approved_at) IN ?", archiveKeys).Find(&existing).Error; err != nil {
 					return err
 				}
 				existingKeys := make(map[recommendationArchiveIdentity]struct{}, len(existing))

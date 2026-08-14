@@ -8,6 +8,7 @@ import (
 	"github.com/LIghtJUNction/api.lmm.best/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestAssistantDeveloperAccessRecommendationApprovalUnlocksL1WithoutPayment(t *testing.T) {
@@ -98,7 +99,7 @@ func TestRecommendationArchiveBackfillIsBatchedAndIdempotent(t *testing.T) {
 	db := setupConsoleActivationTestDB(t)
 	require.NoError(t, db.AutoMigrate(&DeveloperAccessRequest{}, &DeveloperAccessRecommendationArchive{}))
 
-	const total = 401
+	const total = developerAccessRecommendationBackfillBatchSize*2 + 1
 	requests := make([]DeveloperAccessRequest, 0, total)
 	for index := 0; index < total; index++ {
 		approvedAt := int64(1_700_000_000 + index)
@@ -116,7 +117,24 @@ func TestRecommendationArchiveBackfillIsBatchedAndIdempotent(t *testing.T) {
 	}
 	require.NoError(t, db.Create(&requests).Error)
 
+	recorder := &migrationSQLRecorder{}
+	DB = db.Session(&gorm.Session{Logger: recorder})
 	require.NoError(t, BackfillDeveloperAccessRecommendationArchives())
+	recorder.mu.Lock()
+	statements := append([]string(nil), recorder.statements...)
+	recorder.mu.Unlock()
+	var archiveSelects []string
+	for _, statement := range statements {
+		normalized := strings.ToUpper(strings.TrimSpace(statement))
+		if strings.HasPrefix(normalized, "SELECT") && strings.Contains(normalized, "DEVELOPER_ACCESS_RECOMMENDATION_ARCHIVES") {
+			archiveSelects = append(archiveSelects, normalized)
+		}
+	}
+	assert.GreaterOrEqual(t, len(archiveSelects), 3)
+	for _, statement := range archiveSelects {
+		assert.Contains(t, statement, "APPROVED_AT")
+	}
+
 	var count int64
 	require.NoError(t, db.Model(&DeveloperAccessRecommendationArchive{}).Count(&count).Error)
 	assert.EqualValues(t, total, count)
