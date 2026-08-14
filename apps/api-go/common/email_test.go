@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -267,6 +268,16 @@ func withSMTPSettings(t *testing.T) {
 	})
 }
 
+func requireEmailHTMLBody(t *testing.T, message, expected string) {
+	t.Helper()
+	parts := strings.SplitN(message, "\r\n\r\n", 2)
+	require.Len(t, parts, 2)
+	encoded := strings.ReplaceAll(strings.TrimSpace(parts[1]), "\r\n", "")
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	require.NoError(t, err)
+	require.Equal(t, expected, string(decoded))
+}
+
 func TestSendEmailUsesExplicitStartTLSWithInsecureCertificate(t *testing.T) {
 	server := newFakeSMTPServer(t)
 	defer server.close()
@@ -289,7 +300,7 @@ func TestSendEmailUsesExplicitStartTLSWithInsecureCertificate(t *testing.T) {
 	select {
 	case message := <-server.messages:
 		require.Contains(t, message, "Subject: =?UTF-8?B?")
-		require.Contains(t, message, "<p>123456</p>")
+		requireEmailHTMLBody(t, message, "<p>123456</p>")
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for SMTP DATA")
 	}
@@ -343,7 +354,7 @@ func TestSendEmailDoesNotAutoUpgradeWhenStartTLSDisabled(t *testing.T) {
 
 	select {
 	case message := <-server.messages:
-		require.Contains(t, message, "<p>123456</p>")
+		requireEmailHTMLBody(t, message, "<p>123456</p>")
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for SMTP DATA")
 	}
@@ -446,7 +457,7 @@ func TestSendEmailSkipsAuthWhenCredentialsAreEmpty(t *testing.T) {
 
 	select {
 	case message := <-server.messages:
-		require.Contains(t, message, "<p>123456</p>")
+		requireEmailHTMLBody(t, message, "<p>123456</p>")
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for SMTP DATA")
 	}
@@ -479,7 +490,7 @@ func TestSendEmailSkipsAuthWhenCredentialsAreIncomplete(t *testing.T) {
 
 	select {
 	case message := <-server.messages:
-		require.Contains(t, message, "<p>123456</p>")
+		requireEmailHTMLBody(t, message, "<p>123456</p>")
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for SMTP DATA")
 	}

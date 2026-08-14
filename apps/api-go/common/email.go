@@ -213,9 +213,9 @@ func buildEmailMessage(toHeader, fromHeader, encodedSubject, date, messageID, co
 	writeEmailHeader(&message, "Date", date)
 	writeEmailHeader(&message, "Message-ID", messageID)
 	writeEmailHeader(&message, "Content-Type", "text/html; charset=UTF-8")
+	writeEmailHeader(&message, "Content-Transfer-Encoding", "base64")
 	message.WriteString("\r\n")
-	message.WriteString(content)
-	message.WriteString("\r\n")
+	writeEmailBodyBase64(&message, content)
 	return message.Bytes(), nil
 }
 
@@ -224,6 +224,26 @@ func writeEmailHeader(message *bytes.Buffer, name, value string) {
 	message.WriteString(": ")
 	message.WriteString(value)
 	message.WriteString("\r\n")
+}
+
+// writeEmailBodyBase64 keeps the MIME body opaque to the SMTP transport. In
+// particular, user-controlled CRLF sequences can never become new MIME lines
+// or headers after the message has been assembled. Mail clients decode the
+// body back to the original UTF-8 HTML before rendering it.
+func writeEmailBodyBase64(message *bytes.Buffer, content string) {
+	encoded := base64.StdEncoding.EncodeToString([]byte(content))
+	for len(encoded) > 0 {
+		lineLength := 76
+		if len(encoded) < lineLength {
+			lineLength = len(encoded)
+		}
+		message.WriteString(encoded[:lineLength])
+		message.WriteString("\r\n")
+		encoded = encoded[lineLength:]
+	}
+	if len(content) == 0 {
+		message.WriteString("\r\n")
+	}
 }
 
 var allowedEmailHTMLTags = map[string]struct{}{
