@@ -42,6 +42,54 @@ func TestLimitBodyStopsAtSourceBudget(t *testing.T) {
 	assert.Equal(t, "1234", string(overflow))
 }
 
+func TestLimitHTTPClientCapsResponseBeforeConsumer(t *testing.T) {
+	tests := []struct {
+		name          string
+		payload       string
+		contentLength int64
+		wantBody      string
+		wantReadError bool
+		wantDoError   bool
+	}{
+		{name: "unknown length", payload: "12345", contentLength: -1, wantBody: "1234", wantReadError: true},
+		{name: "known overflow", payload: "12345", contentLength: 5, wantDoError: true},
+		{name: "exact boundary", payload: "1234", contentLength: 4, wantBody: "1234"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := LimitHTTPClient(httpDoerFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode:    http.StatusOK,
+					ContentLength: test.contentLength,
+					Body:          io.NopCloser(strings.NewReader(test.payload)),
+				}, nil
+			}), 4)
+
+			response, err := client.Do(&http.Request{})
+			if test.wantDoError {
+				assert.ErrorIs(t, err, ErrLimitExceeded)
+				assert.Nil(t, response)
+				return
+			}
+			require.NoError(t, err)
+			body, readErr := io.ReadAll(response.Body)
+			if test.wantReadError {
+				assert.ErrorIs(t, readErr, ErrLimitExceeded)
+			} else {
+				require.NoError(t, readErr)
+			}
+			assert.Equal(t, test.wantBody, string(body))
+		})
+	}
+}
+
+type httpDoerFunc func(*http.Request) (*http.Response, error)
+
+func (function httpDoerFunc) Do(request *http.Request) (*http.Response, error) {
+	return function(request)
+}
+
 func TestMarshalLimitBoundsJSON(t *testing.T) {
 	data, err := MarshalLimit(map[string]string{"value": "ok"}, 32)
 	require.NoError(t, err)

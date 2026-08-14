@@ -66,6 +66,15 @@ type limitedBody struct {
 	remaining int64
 }
 
+type HTTPDoer interface {
+	Do(*http.Request) (*http.Response, error)
+}
+
+type limitedHTTPClient struct {
+	HTTPDoer
+	limit int64
+}
+
 // LimitBody caps bytes delivered by a response body without buffering it.
 // One overflow byte is probed and discarded so callers receive
 // ErrLimitExceeded while retained memory stays within the configured limit.
@@ -77,6 +86,40 @@ func LimitBody(body io.ReadCloser, limit int64) io.ReadCloser {
 		limit = 0
 	}
 	return &limitedBody{ReadCloser: body, remaining: limit}
+}
+
+// LimitResponseBody rejects known oversized responses immediately and caps
+// unknown-length bodies at their source.
+func LimitResponseBody(response *http.Response, limit int64) error {
+	if response == nil || response.Body == nil || limit <= 0 {
+		return nil
+	}
+	if response.ContentLength > limit {
+		_ = response.Body.Close()
+		return ErrLimitExceeded
+	}
+	response.Body = LimitBody(response.Body, limit)
+	return nil
+}
+
+// LimitHTTPClient applies LimitResponseBody before an SDK or adapter can
+// buffer the upstream response.
+func LimitHTTPClient(client HTTPDoer, limit int64) HTTPDoer {
+	if client == nil || limit <= 0 {
+		return client
+	}
+	return &limitedHTTPClient{HTTPDoer: client, limit: limit}
+}
+
+func (client *limitedHTTPClient) Do(request *http.Request) (*http.Response, error) {
+	response, err := client.HTTPDoer.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	if err := LimitResponseBody(response, client.limit); err != nil {
+		return nil, err
+	}
+	return response, nil
 }
 
 func (body *limitedBody) Read(buffer []byte) (int, error) {

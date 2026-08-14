@@ -536,12 +536,10 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	if resp == nil {
 		return nil, errors.New("resp is nil")
 	}
-	if limit := common2.GetContextKeyInt(c, appconstant.ContextKeyResponseByteLimit); limit > 0 && resp.Body != nil {
-		if resp.ContentLength > int64(limit) {
-			_ = resp.Body.Close()
-			return nil, common2.ErrLimitExceeded
+	if limit := common2.GetContextKeyInt(c, appconstant.ContextKeyResponseByteLimit); limit > 0 {
+		if err := common2.LimitResponseBody(resp, int64(limit)); err != nil {
+			return nil, err
 		}
-		resp.Body = common2.LimitBody(resp.Body, int64(limit))
 	}
 	if common2.DebugEnabled {
 		policy := service.NormalizeHTTPTransportPolicy(info.ChannelSetting)
