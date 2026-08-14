@@ -36,6 +36,11 @@ describe('mobile sign-in presentation', () => {
     assert.match(providers, /IconGoogle/)
     assert.match(providers, /Continue with Google/)
     assert.match(providers, /t\('Or'\)/)
+    assert.match(
+      providers,
+      /const showProviderDivider =\s+!featuredProvider\s+\|\|\s+otherProviders\.length > 0/
+    )
+    assert.match(providers, /showProviderDivider \? \(/)
     assert.match(providers, /grid-cols-2/)
     assert.match(form, /featureGoogle/)
     assert.match(form, /auth-field h-11 rounded-xl/)
