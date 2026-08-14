@@ -317,6 +317,16 @@ func SetApiRouter(router *gin.Engine) {
 			optionRoute.GET("/waffo-pancake/subscription-product-options", controller.ListWaffoPancakeSubscriptionProductOptions)
 		}
 
+		dynamicPricingRoute := apiRouter.Group("/dynamic_pricing")
+		dynamicPricingRoute.Use(middleware.AdminAuth())
+		{
+			dynamicPricingRoute.GET("/status", controller.GetDynamicPricingStatus)
+		}
+		dynamicPricingSettingRoute := apiRouter.Group("/dynamic_pricing")
+		dynamicPricingSettingRoute.Use(middleware.RootAuth())
+		{
+			dynamicPricingSettingRoute.PUT("/setting", controller.UpdateDynamicPricingSetting)
+		}
 		// Custom OAuth provider management (root only)
 		customOAuthRoute := apiRouter.Group("/custom-oauth-provider")
 		customOAuthRoute.Use(middleware.RootAuth())

@@ -104,15 +104,16 @@ func refreshTieredBillingGroup(relayInfo *relaycommon.RelayInfo) (*billingexpr.B
 	}
 
 	groupRatio := relayInfo.PriceData.GroupRatioInfo.GroupRatio
-	if snap.GroupRatio == groupRatio {
-		return snap, nil
-	}
-
+	// Always recompute: the dynamic-pricing multiplier can increase when a
+	// retry selects a costlier channel even if the group itself did not change.
 	estimatedQuotaAfterGroup := snap.EstimatedQuotaBeforeGroup * groupRatio
 	estimatedQuota, err := billingexpr.QuotaRoundStrict(estimatedQuotaAfterGroup)
 	if err != nil {
 		return nil, err
 	}
+	scaledQuota, clamp := applyDynamicPricingToQuota(relayInfo, estimatedQuota)
+	noteQuotaClamp(relayInfo, clamp)
+	estimatedQuota = scaledQuota
 	snap.GroupRatio = groupRatio
 	snap.EstimatedQuotaAfterGroup = estimatedQuota
 	return snap, nil
@@ -185,5 +186,10 @@ func TryTieredSettle(relayInfo *relaycommon.RelayInfo, params billingexpr.TokenP
 	// (text, audio, WSS) consumes the returned quota. First non-nil wins.
 	noteQuotaClamp(relayInfo, tr.Clamp)
 
-	return true, tr.ActualQuotaAfterGroup, &tr
+	quota = tr.ActualQuotaAfterGroup
+	scaledQuota, clamp := applyDynamicPricingToQuota(relayInfo, quota)
+	noteQuotaClamp(relayInfo, clamp)
+	quota = scaledQuota
+
+	return true, quota, &tr
 }

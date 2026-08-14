@@ -138,6 +138,8 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 
 	quota, clamp := calculateAudioQuota(quotaInfo)
 	noteQuotaClamp(relayInfo, clamp)
+	quota, clamp = applyDynamicPricingToQuota(relayInfo, quota)
+	noteQuotaClamp(relayInfo, clamp)
 
 	if userQuota < quota {
 		return fmt.Errorf("user quota is not enough, user quota: %s, need quota: %s", logger.FormatQuota(userQuota), logger.FormatQuota(quota))
@@ -204,6 +206,9 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 	noteQuotaClamp(relayInfo, clamp)
 	if tieredOk {
 		quota = tieredQuota
+	} else {
+		quota, clamp = applyDynamicPricingToQuota(relayInfo, quota)
+		noteQuotaClamp(relayInfo, clamp)
 	}
 
 	totalTokens := usage.TotalTokens
@@ -327,6 +332,9 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 	noteQuotaClamp(relayInfo, clamp)
 	if tieredOk {
 		quota = tieredQuota
+	} else {
+		quota, clamp = applyDynamicPricingToQuota(relayInfo, quota)
+		noteQuotaClamp(relayInfo, clamp)
 	}
 
 	totalTokens := usage.TotalTokens

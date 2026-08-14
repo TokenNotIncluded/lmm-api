@@ -249,6 +249,15 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			break
 		}
 		addUsedChannel(c, channel.Id)
+		if pricingErr := service.PrepareDynamicPricingForSelectedChannel(relayInfo, channel.Id); pricingErr != nil {
+			newAPIError = types.NewErrorWithStatusCode(
+				pricingErr,
+				types.ErrorCodeModelPriceError,
+				http.StatusServiceUnavailable,
+				types.ErrOptionWithSkipRetry(),
+			)
+			break
+		}
 		if billingErr := service.PrepareTieredBillingForSelectedGroup(c, relayInfo); billingErr != nil {
 			newAPIError = billingErr
 			break
@@ -513,6 +522,10 @@ func RelayTask(c *gin.Context) {
 		}
 
 		addUsedChannel(c, channel.Id)
+		if pricingErr := service.PrepareDynamicPricingForSelectedChannel(relayInfo, channel.Id); pricingErr != nil {
+			taskErr = service.TaskErrorWrapperLocal(pricingErr, "dynamic_pricing_not_ready", http.StatusServiceUnavailable)
+			break
+		}
 		bodyStorage, bodyErr := common.GetBodyStorage(c)
 		if bodyErr != nil {
 			if common.IsRequestBodyTooLargeError(bodyErr) || errors.Is(bodyErr, common.ErrRequestBodyTooLarge) {

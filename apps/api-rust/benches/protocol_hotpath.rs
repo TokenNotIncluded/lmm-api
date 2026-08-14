@@ -454,22 +454,34 @@ fn benchmark_scenario_manifest_is_complete() {
         }));
     }
     for stream_chunks in [10, 100, 1_000] {
-        assert!(SCENARIO_MANIFEST
-            .iter()
-            .any(|scenario| scenario.stream_chunks == stream_chunks));
+        assert!(
+            SCENARIO_MANIFEST
+                .iter()
+                .any(|scenario| scenario.stream_chunks == stream_chunks)
+        );
     }
-    assert!(SCENARIO_MANIFEST
-        .iter()
-        .any(|scenario| scenario.native_passthrough));
-    assert!(SCENARIO_MANIFEST.iter().any(|scenario| scenario.plan_compile));
-    assert!(SCENARIO_MANIFEST
-        .iter()
-        .any(|scenario| scenario.parallel_tool_calls));
+    assert!(
+        SCENARIO_MANIFEST
+            .iter()
+            .any(|scenario| scenario.native_passthrough)
+    );
+    assert!(
+        SCENARIO_MANIFEST
+            .iter()
+            .any(|scenario| scenario.plan_compile)
+    );
+    assert!(
+        SCENARIO_MANIFEST
+            .iter()
+            .any(|scenario| scenario.parallel_tool_calls)
+    );
     assert!(SCENARIO_MANIFEST.iter().any(|scenario| scenario.multimodal));
     assert!(SCENARIO_MANIFEST.iter().any(|scenario| scenario.reasoning));
-    assert!(SCENARIO_MANIFEST
-        .iter()
-        .any(|scenario| scenario.client_abort));
+    assert!(
+        SCENARIO_MANIFEST
+            .iter()
+            .any(|scenario| scenario.client_abort)
+    );
 
     for expected in [
         ("parallel_tool_calls", "1"),
@@ -498,8 +510,6 @@ fn benchmark_scenario_manifest_is_complete() {
         );
     }
 }
-
-
 
 fn request_scenario(text_bytes: usize, history_messages: usize, tool_count: usize) -> Vec<u8> {
     let content = "x".repeat(text_bytes);
@@ -651,10 +661,7 @@ fn request_feature_dimension_matrix_calibration() {
     for parallel_tool_count in [1, 4, 16] {
         for (multimodal_label, image_url) in [
             ("url", "https://example.invalid/bench-image.png"),
-            (
-                "base64",
-                "data:image/png;base64,YmVuY2htYXJrLWltYWdl",
-            ),
+            ("base64", "data:image/png;base64,YmVuY2htYXJrLWltYWdl"),
             ("file_reference", "file://benchmark/image.png"),
         ] {
             for (reasoning_label, reasoning_effort) in [
@@ -759,8 +766,7 @@ fn route_shape_conversion_calibration() {
             canonical_request_to_openai_chat(canonical.value)
                 .expect("old two-hop canonical-to-chat conversion"),
         );
-        let chat_bytes =
-            serde_json::to_vec(&chat.value).expect("serialize old two-hop chat wire");
+        let chat_bytes = serde_json::to_vec(&chat.value).expect("serialize old two-hop chat wire");
         let roundtrip = black_box(
             openai_chat_request_to_canonical(
                 serde_json::from_slice(black_box(chat_bytes.as_slice()))
@@ -779,9 +785,8 @@ fn route_shape_conversion_calibration() {
     calibrate("route_new_ir", REQUEST_CORPUS.len(), || {
         let request: OpenAiChatRequest =
             serde_json::from_slice(black_box(REQUEST_CORPUS)).expect("route request corpus");
-        let canonical = black_box(
-            openai_chat_request_to_canonical(request).expect("new-IR source conversion"),
-        );
+        let canonical =
+            black_box(openai_chat_request_to_canonical(request).expect("new-IR source conversion"));
         let canonical_bytes =
             serde_json::to_vec(&canonical.value).expect("serialize new-IR canonical request");
         let responses = black_box(
@@ -938,21 +943,27 @@ fn client_sse_lifecycle_calibration() {
         })
     });
 
-    calibrate("client_interrupted", SSE_CORPUS.len().saturating_sub(2), || {
-        let prefix_len = SSE_CORPUS.len().saturating_sub(2);
-        let prefix = &SSE_CORPUS[..prefix_len];
-        let mut parser = SseFrameParser::new(1024);
-        let frames = parser.feed(black_box(prefix)).expect("interrupted SSE feed");
-        assert!(parser.has_unfinished_frame());
-        let checksum = frames.iter().fold(prefix_len as u64, |value, frame| {
-            value
-                .wrapping_add(frame.raw.len() as u64)
-                .wrapping_add(frame.data.len() as u64)
-        });
-        let buffered = parser.buffered_frame_bytes() as u64;
-        drop(parser);
-        checksum.wrapping_add(buffered)
-    });
+    calibrate(
+        "client_interrupted",
+        SSE_CORPUS.len().saturating_sub(2),
+        || {
+            let prefix_len = SSE_CORPUS.len().saturating_sub(2);
+            let prefix = &SSE_CORPUS[..prefix_len];
+            let mut parser = SseFrameParser::new(1024);
+            let frames = parser
+                .feed(black_box(prefix))
+                .expect("interrupted SSE feed");
+            assert!(parser.has_unfinished_frame());
+            let checksum = frames.iter().fold(prefix_len as u64, |value, frame| {
+                value
+                    .wrapping_add(frame.raw.len() as u64)
+                    .wrapping_add(frame.data.len() as u64)
+            });
+            let buffered = parser.buffered_frame_bytes() as u64;
+            drop(parser);
+            checksum.wrapping_add(buffered)
+        },
+    );
 }
 
 #[test]
@@ -1023,9 +1034,8 @@ fn request_parallel_tool_dimension_matrix_calibration() {
         value["parallel_tool_calls"] = serde_json::Value::Bool(true);
         let corpus = serde_json::to_vec(&value).expect("serialize parallel request scenario");
         calibrate(label, corpus.len(), || {
-            let request: OpenAiChatRequest =
-                serde_json::from_slice(black_box(corpus.as_slice()))
-                    .expect("parallel request scenario");
+            let request: OpenAiChatRequest = serde_json::from_slice(black_box(corpus.as_slice()))
+                .expect("parallel request scenario");
             let converted = black_box(
                 openai_chat_request_to_canonical(request)
                     .expect("parallel request scenario conversion"),
