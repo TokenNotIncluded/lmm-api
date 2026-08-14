@@ -1,6 +1,7 @@
 package common
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 )
@@ -68,8 +69,13 @@ func TestBuildEmailMessageKeepsHTMLBodyAfterHeaders(t *testing.T) {
 	if strings.Contains(parts[0], "Bcc:") {
 		t.Fatalf("body content became a message header: %q", parts[0])
 	}
-	if !strings.HasPrefix(parts[1], content) {
-		t.Fatalf("HTML body was not preserved: %q", parts[1])
+	encodedBody := strings.ReplaceAll(parts[1], "\r\n", "")
+	decodedBody, err := base64.StdEncoding.DecodeString(encodedBody)
+	if err != nil {
+		t.Fatalf("encoded MIME body is invalid: %v", err)
+	}
+	if string(decodedBody) != content {
+		t.Fatalf("HTML body was not preserved after MIME decoding: %q", decodedBody)
 	}
 }
 
