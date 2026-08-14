@@ -235,6 +235,22 @@ func TestAssistantRecommendationEditWorkflowToolChoices(t *testing.T) {
 	assert.NotContains(t, string(encoded), "revise")
 }
 
+func TestAssistantRecommendationQuestionsAlwaysReadTheSharedLetter(t *testing.T) {
+	context := assistantUserContext{
+		Intent:               model.AssistantIntentRecommendation,
+		AccessLevel:          "L0",
+		LatestUserRequest:    "请显示我的推荐信",
+		RecommendationAction: assistantRecommendationActionNone,
+	}
+
+	assert.Equal(t, []string{"get_l1_recommendation"}, assistantReadChain(context))
+	assert.True(t, assistantLiveReadRequired(context))
+	assert.Equal(t, 2, assistantReadChainSteps(context))
+	assert.Equal(t, "get_l1_recommendation", assistantNamedToolChoiceName(
+		assistantToolChoiceForAgentStep(context, nil, nil),
+	))
+}
+
 func TestAssistantCustomerProfileUsesAuditableSignals(t *testing.T) {
 	tests := []struct {
 		name    string

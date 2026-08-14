@@ -384,6 +384,58 @@ describe('AssistantActivationTool', () => {
     }
   })
 
+  test('switches an edited AI draft to the token-free manual path', async () => {
+    api.get = (async () => ({
+      data: { success: true, data: pendingRequest },
+    })) as typeof api.get
+    let submittedBody: unknown
+    api.post = (async (url: string, data: unknown) => {
+      assert.equal(url, '/api/user/developer-access/request')
+      submittedBody = data
+      return {
+        data: {
+          success: true,
+          data: {
+            ...pendingRequest,
+            source: 'user_edited',
+            ai_recommendation:
+              'A manually revised recommendation from the user.',
+          },
+        },
+      }
+    }) as typeof api.post
+
+    const rendered = await renderTool({ recommendationDraft })
+    try {
+      await waitForCondition(
+        () => document.querySelector('textarea') !== null,
+        'AI revision editor did not open'
+      )
+      const textarea = document.querySelector<HTMLTextAreaElement>('textarea')
+      assert.ok(textarea)
+      await setTextareaValue(
+        textarea,
+        'A manually revised recommendation from the user.'
+      )
+      await act(async () => {
+        findButton('Save changes').click()
+        await flushEffects()
+      })
+      await waitForCondition(
+        () => submittedBody !== undefined,
+        'Manual edit was not submitted'
+      )
+      assert.deepEqual(submittedBody, {
+        reason: pendingRequest.reason,
+        ai_recommendation: 'A manually revised recommendation from the user.',
+        confirmation_token: undefined,
+        confirmed: true,
+      })
+    } finally {
+      await unmount(rendered)
+    }
+  })
+
   test('allows a pending recommendation letter to be cleared completely', async () => {
     api.get = (async () => ({
       data: { success: true, data: pendingRequest },

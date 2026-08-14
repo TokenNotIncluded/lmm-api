@@ -87,7 +87,10 @@ func readAndRestoreResponseBody(resp *http.Response) ([]byte, bool) {
 	if resp.ContentLength > compatibilityErrorBodyLimit {
 		return nil, false
 	}
-	body, err := io.ReadAll(resp.Body)
+	// ContentLength is commonly unknown for chunked upstream errors. Keep the
+	// same ceiling in that case too; a malformed 400 response must not turn the
+	// compatibility probe into an unbounded heap allocation.
+	body, err := common2.ReadAllLimit(resp.Body, compatibilityErrorBodyLimit)
 	_ = resp.Body.Close()
 	resp.Body = io.NopCloser(bytes.NewReader(body))
 	if err != nil {

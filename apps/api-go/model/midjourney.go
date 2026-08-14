@@ -1,5 +1,7 @@
 package model
 
+import "github.com/LIghtJUNction/api.lmm.best/constant"
+
 type Midjourney struct {
 	Id          int    `json:"id"`
 	Code        int    `json:"code"`
@@ -91,10 +93,20 @@ func GetAllTasks(startIdx int, num int, queryParams TaskQueryParams) []*Midjourn
 }
 
 func GetAllUnFinishTasks() []*Midjourney {
+	return GetUnfinishedMidjourneyTasks(constant.TaskQueryLimit)
+}
+
+// GetUnfinishedMidjourneyTasks keeps one polling pass bounded.  A stalled or
+// provider-owned task can otherwise remain unfinished indefinitely; loading
+// every such row into the scheduler's maps turns that database state into an
+// unbounded heap allocation.  The caller can use the same environment-backed
+// limit as the other asynchronous task poller.
+func GetUnfinishedMidjourneyTasks(limit int) []*Midjourney {
 	var tasks []*Midjourney
 	var err error
+	limit = normalizeTaskQueryLimit(limit)
 	// get all tasks progress is not 100%
-	err = DB.Where("progress != ?", "100%").Find(&tasks).Error
+	err = DB.Where("progress != ?", "100%").Order("id").Limit(limit).Find(&tasks).Error
 	if err != nil {
 		return nil
 	}

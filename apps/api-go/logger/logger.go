@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/LIghtJUNction/api.lmm.best/common"
@@ -26,9 +27,9 @@ const (
 
 const maxLogCount = 1000000
 
-var logCount int
+var logCount atomic.Int64
 var setupLogLock sync.Mutex
-var setupLogWorking bool
+var setupLogWorking atomic.Bool
 var currentLogPath string
 var currentLogPathMu sync.RWMutex
 var currentLogFile *os.File
@@ -41,7 +42,7 @@ func GetCurrentLogPath() string {
 
 func SetupLogger() {
 	defer func() {
-		setupLogWorking = false
+		setupLogWorking.Store(false)
 	}()
 	if *common.LogDir != "" {
 		ok := setupLogLock.TryLock()
@@ -109,10 +110,11 @@ func logHelper(ctx context.Context, level string, msg string) {
 	}
 	_, _ = fmt.Fprintf(writer, "[%s] %v | %s | %s \n", level, now.Format("2006/01/02 - 15:04:05"), id, msg)
 	common.LogWriterMu.RUnlock()
-	logCount++ // we don't need accurate count, so no lock here
-	if logCount > maxLogCount && !setupLogWorking {
-		logCount = 0
-		setupLogWorking = true
+	// Logging is called concurrently by request and task workers.  The counter
+	// is only a rotation hint, but it still must be race-free; the CAS ensures
+	// that at most one asynchronous rotation is scheduled at a time.
+	if logCount.Add(1) > maxLogCount && setupLogWorking.CompareAndSwap(false, true) {
+		logCount.Store(0)
 		gopool.Go(func() {
 			SetupLogger()
 		})

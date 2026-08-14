@@ -303,7 +303,14 @@ export function AssistantActivationTool(props: {
             <Textarea
               id='assistant-pending-recommendation-letter'
               value={pendingLetterDraft}
-              onChange={(event) => setPendingLetterDraft(event.target.value)}
+              onChange={(event) => {
+                setPendingLetterDraft(event.target.value)
+                // An AI draft's one-time token authorizes confirming the exact
+                // text prepared by the assistant. As soon as the user edits
+                // that text, use the normal session-authenticated manual-edit
+                // path instead of submitting a stale AI confirmation token.
+                if (pendingEditSource === 'ai') setPendingEditSource('user')
+              }}
               maxLength={2000}
               rows={4}
               className='focus-visible:border-foreground/30 min-h-28 w-full resize-y text-base focus-visible:ring-0 sm:text-sm'

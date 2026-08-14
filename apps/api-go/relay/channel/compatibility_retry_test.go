@@ -27,6 +27,25 @@ func TestUnsupportedOpenAIParameterDetection(t *testing.T) {
 	assert.False(t, isVisionCapabilityError([]byte(`{"error":{"message":"invalid image_url"}}`)))
 }
 
+func TestReadAndRestoreResponseBodyBoundsUnknownLength(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: http.StatusBadRequest,
+		// No ContentLength models a chunked response. The helper must still
+		// reject it once the diagnostic budget is crossed.
+		Body: io.NopCloser(strings.NewReader(strings.Repeat("x", compatibilityErrorBodyLimit+1))),
+	}
+
+	body, readable := readAndRestoreResponseBody(resp)
+	assert.False(t, readable)
+	assert.Nil(t, body)
+	// The response is deliberately replaced with an empty body after the
+	// bounded read, so later relay error handling cannot read an oversized
+	// diagnostic into memory a second time.
+	restored, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Empty(t, restored)
+}
+
 func TestRequestBodyWithoutParameterPreservesSemanticFields(t *testing.T) {
 	req, err := http.NewRequest(http.MethodPost, "http://example.test/v1/chat/completions", strings.NewReader(`{"model":"gpt-5.6-luna","messages":[{"role":"user","content":"hello"}],"temperature":0.2}`))
 	require.NoError(t, err)

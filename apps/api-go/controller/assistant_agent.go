@@ -780,6 +780,13 @@ func assistantReadChain(userContext assistantUserContext) []string {
 		return nil
 	}
 	tools := make([]string, 0, 3)
+	if userContext.Intent == model.AssistantIntentRecommendation {
+		// Recommendation is a single shared, user-visible document. Read the
+		// authoritative current row before answering even for a plain “show my
+		// recommendation” request; otherwise a disabled agent loop could make
+		// the model answer from stale context and miss the existing letter.
+		tools = append(tools, "get_l1_recommendation")
+	}
 	if assistantPublicActivityQuestion(text) {
 		tools = append(tools, "get_service_facts")
 	}
@@ -877,10 +884,11 @@ func assistantNeedsReadChain(userContext assistantUserContext) bool {
 	return len(assistantReadChain(userContext)) > 1
 }
 
-// assistantLiveReadRequired keeps authoritative catalog/activity reads on the
-// agent path even when the optional multi-step loop is disabled. A single
-// model-ID question still needs one live tool call; otherwise the configured
-// model can answer from stale training data.
+// assistantLiveReadRequired keeps authoritative recommendation,
+// catalog/activity reads on the agent path even when the optional multi-step
+// loop is disabled. A single model-ID or recommendation question still needs
+// one live tool call; otherwise the configured model can answer from stale
+// training data.
 func assistantLiveReadRequired(userContext assistantUserContext) bool {
 	return len(assistantReadChain(userContext)) > 0
 }
