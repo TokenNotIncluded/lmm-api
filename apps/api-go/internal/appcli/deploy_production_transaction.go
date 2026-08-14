@@ -211,10 +211,10 @@ func (runtime *productionRuntime) apply(ctx context.Context, workspace productio
 	}); err != nil {
 		return productionStatus{}, err
 	}
-	if err := runtime.runMigration(ctx, manifest, "apply"); err != nil {
+	if err := runtime.runMigration(ctx, workspace, manifest, "apply"); err != nil {
 		return productionStatus{}, err
 	}
-	if err := runtime.runMigration(ctx, manifest, "verify"); err != nil {
+	if err := runtime.runMigration(ctx, workspace, manifest, "verify"); err != nil {
 		return productionStatus{}, err
 	}
 	if err := runtime.writeStatus(workspace, productionStatus{

@@ -509,7 +509,12 @@ func (runtime *productionRuntime) migrationEnvironment(environment []byte, schem
 	}), nil
 }
 
-func (runtime *productionRuntime) runMigration(ctx context.Context, manifest productionManifest, mode string) error {
+func (runtime *productionRuntime) runMigration(
+	ctx context.Context,
+	workspace productionWorkspace,
+	manifest productionManifest,
+	mode string,
+) error {
 	if mode != "apply" && mode != "verify" {
 		return errors.New("migration mode must be apply or verify")
 	}
@@ -527,15 +532,30 @@ func (runtime *productionRuntime) runMigration(ctx context.Context, manifest pro
 			break
 		}
 	}
+	migrationWorkdir, err := prepareMigrationDir(workspace, mode)
+	if err != nil {
+		return err
+	}
 	_, err = runtime.runner.Run(ctx, productionCommand{
 		Name: manifest.ProbeBinary, Args: []string{"migrate", "--" + mode},
-		Env: childEnvironment, Dir: runtime.paths.MigrationWorkdir, Timeout: 5 * time.Minute,
+		Env: childEnvironment, Dir: migrationWorkdir, Timeout: 5 * time.Minute,
 		Sensitive: true,
 	})
 	if err != nil {
 		return fmt.Errorf("candidate migration %s failed: %w", mode, err)
 	}
 	return nil
+}
+
+func prepareMigrationDir(workspace productionWorkspace, mode string) (string, error) {
+	path := workspace.root
+	for _, name := range []string{"tmp", "migrations", mode} {
+		path = filepath.Join(path, name)
+		if err := ensureRealDirectory(path, 0o700); err != nil {
+			return "", fmt.Errorf("prepare migration directory %s: %w", name, err)
+		}
+	}
+	return path, nil
 }
 
 // Keep this helper close to backup parsing: timestamps in manifests should be

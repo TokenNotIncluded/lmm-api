@@ -5,6 +5,8 @@ umask 077
 readonly EXPECTED_HOST=arch-dmit
 readonly NEW_SERVICE=lmm-api.service
 readonly LEGACY_SERVICE=lmm-api-go.service
+readonly SOURCE_PACKAGE=lmm-api-go
+readonly AUR_PACKAGE=lmm-api-go-bin
 if [[ ${LMM_DEPLOY_TEST_MODE:-0} == 1 ]]; then
   WORK_ROOT=${LMM_DEPLOY_TEST_WORK_ROOT:?}
   BACKUP_ROOT=${LMM_DEPLOY_TEST_BACKUP_ROOT:?}
@@ -17,8 +19,6 @@ if [[ ${LMM_DEPLOY_TEST_MODE:-0} == 1 ]]; then
   NEW_DROPIN_DIR=${LMM_DEPLOY_TEST_NEW_DROPIN_DIR:?}
   INSTALLED_BINARY=${LMM_DEPLOY_TEST_INSTALLED_BINARY:?}
   PACKAGED_FRONTEND_DIR=${LMM_DEPLOY_TEST_PACKAGED_FRONTEND_DIR:?}
-  MIGRATION_WORKDIR=${LMM_DEPLOY_TEST_MIGRATION_WORKDIR:?}
-  DIRECT_MIGRATION_WORKDIR=${LMM_DEPLOY_TEST_DIRECT_MIGRATION_WORKDIR:?}
   REMOVED_SELECTOR=${LMM_DEPLOY_TEST_REMOVED_SELECTOR:?}
   REMOVED_PROVIDER_ROOT=${LMM_DEPLOY_TEST_REMOVED_PROVIDER_ROOT:?}
   REMOVED_LEGACY_SERVICE=${LMM_DEPLOY_TEST_REMOVED_LEGACY_SERVICE:?}
@@ -37,8 +37,6 @@ else
   NEW_DROPIN_DIR=/etc/systemd/system/lmm-api.service.d
   INSTALLED_BINARY=/usr/bin/lmm-api
   PACKAGED_FRONTEND_DIR=/usr/share/lmm-api-go/frontend-dist
-  MIGRATION_WORKDIR=/var/lib/lmm-api
-  DIRECT_MIGRATION_WORKDIR=/var/lib/lmm-api-go
   REMOVED_SELECTOR=/usr/bin/lmm-api-select
   REMOVED_PROVIDER_ROOT=/usr/lib/lmm-api
   REMOVED_LEGACY_SERVICE=/usr/lib/systemd/system/lmm-api-go.service
@@ -48,8 +46,7 @@ else
 fi
 readonly WORK_ROOT BACKUP_ROOT LOCK_FILE FRONTEND_ROOT SYSTEMD_UNIT_ROOT
 readonly OLD_CONFIG_DIR NEW_CONFIG_DIR OLD_DROPIN_DIR NEW_DROPIN_DIR
-readonly INSTALLED_BINARY PACKAGED_FRONTEND_DIR MIGRATION_WORKDIR
-readonly DIRECT_MIGRATION_WORKDIR
+readonly INSTALLED_BINARY PACKAGED_FRONTEND_DIR
 readonly REMOVED_SELECTOR REMOVED_PROVIDER_ROOT REMOVED_LEGACY_SERVICE CANONICAL_LAUNCHER PROBE_ATTEMPTS
 readonly TRANSACTION_LOCK
 
@@ -75,6 +72,8 @@ FRONTEND_RELEASE_SCRIPT=''
 BACKUP_DIR=''
 DATABASE_SCHEMA=''
 ROLLBACK_LAYOUT='split'
+CANDIDATE_PACKAGE_NAME=''
+ROLLBACK_PACKAGE_NAME=''
 ROLLBACK_SECONDS=600
 while (($#)); do
   case $1 in
@@ -158,15 +157,38 @@ active_environment_file() {
   esac
 }
 
-active_migration_workdir() {
-  case $ROLLBACK_LAYOUT in
-    split) printf '%s' "$MIGRATION_WORKDIR" ;;
-    direct) printf '%s' "$DIRECT_MIGRATION_WORKDIR" ;;
+go_package_record() {
+  local archive=$1 record name version extra
+  record=$(pacman -Qp "$archive") || die 'could not read Go package identity'
+  read -r name version extra <<<"$record"
+  [[ -z ${extra:-} && $version =~ ^[0-9][0-9A-Za-z._+]*-1$ ]] || die 'invalid Go package identity'
+  case $name in
+    "$SOURCE_PACKAGE"|"$AUR_PACKAGE") ;;
+    *) die "unsupported Go package: $name" ;;
   esac
+  printf '%s %s\n' "$name" "$version"
+}
+
+load_package_layout() {
+  local candidate_record rollback_record
+  candidate_record=$(go_package_record "$PACKAGE")
+  rollback_record=$(go_package_record "$ROLLBACK_GO")
+  CANDIDATE_PACKAGE_NAME=${candidate_record%% *}
+  ROLLBACK_PACKAGE_NAME=${rollback_record%% *}
+  [[ $CANDIDATE_PACKAGE_NAME == "$ROLLBACK_PACKAGE_NAME" ]] || \
+    die 'candidate and rollback Go package names differ'
+}
+
+uses_legacy_direct_layout() {
+  [[ $ROLLBACK_LAYOUT == direct && $ROLLBACK_PACKAGE_NAME == "$SOURCE_PACKAGE" ]]
+}
+
+activates_bundled_frontend() {
+  [[ $CANDIDATE_PACKAGE_NAME == "$SOURCE_PACKAGE" ]]
 }
 
 old_service() {
-  if [[ $ROLLBACK_LAYOUT == split ]]; then
+  if [[ $ROLLBACK_LAYOUT == split || $ROLLBACK_PACKAGE_NAME == "$AUR_PACKAGE" ]]; then
     printf '%s\n' "$NEW_SERVICE"
   else
     printf '%s\n' "$LEGACY_SERVICE"
@@ -391,7 +413,8 @@ run_candidate_migration() {
 	case $mode in apply|verify) ;; *) die 'candidate migration mode must be apply or verify' ;; esac
 	is_database_schema "$DATABASE_SCHEMA" || die 'database schema is unavailable for migration'
 	environment_file=$(active_environment_file)
-	migration_workdir=$(active_migration_workdir)
+	migration_workdir=$WORKSPACE/tmp/migrations/$mode
+	install -d -m0700 "$WORKSPACE/tmp" "$WORKSPACE/tmp/migrations" "$migration_workdir"
 	systemd-run --quiet --wait --collect --unit="$unit" \
 		--property=Type=oneshot \
 		--property=WorkingDirectory="$migration_workdir" \
@@ -459,15 +482,12 @@ perform_rollback() {
   else
     pacman -U --noconfirm "$ROLLBACK_GO"
     restore_direct_environment_config "$config_restore/lmm-api-go/lmm-api-go.env"
-    remove_owned_new_dropins
+    if uses_legacy_direct_layout; then
+      remove_owned_new_dropins
+    fi
   fi
   systemctl daemon-reload
-  if [[ $ROLLBACK_LAYOUT == split ]]; then
-    systemctl enable --now "$(old_service)"
-  else
-    remove_owned_new_dropins
-    systemctl enable --now "$LEGACY_SERVICE"
-  fi
+  systemctl enable --now "$(old_service)"
   PROBE_BINARY=$(manifest_value probe_binary)
   OLD_VERSION=$(manifest_value old_version)
   FRONTEND_INDEX_SHA256=$(manifest_value old_frontend_index_sha256)
@@ -513,6 +533,7 @@ load_manifest() {
     path=${pair%%:*}; remainder=${pair#*:}; checksum=${remainder%%:*}; label=${remainder#*:}
     assert_staged_file "$path" "$checksum" "$label"
   done
+  load_package_layout
   [[ $FRONTEND_RELEASE_SCRIPT == "$staging_dir"/* && -x $FRONTEND_RELEASE_SCRIPT && ! -L $FRONTEND_RELEASE_SCRIPT ]] || \
     die 'frontend release script is missing or unsafe'
   [[ $BACKUP_DIR == "$BACKUP_ROOT/$deployment_id" && -d $BACKUP_DIR && ! -L $BACKUP_DIR ]] || die 'verified target backup is missing'
@@ -538,8 +559,9 @@ case $ACTION in
     [[ $EXPECTED_VERSION =~ ^[0-9][0-9A-Za-z._+]*$ && $OLD_VERSION =~ ^[0-9][0-9A-Za-z._+]*$ ]] || die 'invalid release version'
     is_sha256 "$FRONTEND_INDEX_SHA256" || die 'frontend checksum is invalid'
     [[ $ROLLBACK_SECONDS =~ ^[0-9]+$ && $ROLLBACK_SECONDS -ge 600 && $ROLLBACK_SECONDS -le 1800 ]] || die 'rollback window must be 600-1800 seconds'
-    [[ $(pacman -Qp "$PACKAGE") == "lmm-api-go $EXPECTED_VERSION-1" ]] || die 'candidate package identity mismatch'
-    [[ $(pacman -Qp "$ROLLBACK_GO") == "$(pacman -Q lmm-api-go)" ]] || die 'Go rollback package identity mismatch'
+    load_package_layout
+    [[ $(go_package_record "$PACKAGE") == "$CANDIDATE_PACKAGE_NAME $EXPECTED_VERSION-1" ]] || die 'candidate package identity mismatch'
+    [[ $(go_package_record "$ROLLBACK_GO") == "$(pacman -Q "$ROLLBACK_PACKAGE_NAME")" ]] || die 'Go rollback package identity mismatch'
     if [[ $ROLLBACK_LAYOUT == split ]]; then
       [[ $(pacman -Qp "$ROLLBACK_CORE") == "$(pacman -Q lmm-api)" ]] || die 'core rollback package identity mismatch'
       systemctl is-active --quiet "$(old_service)" || die 'pre-cutover service is not active'
@@ -548,14 +570,18 @@ case $ACTION in
     else
       [[ $(<"$ROLLBACK_CORE") == direct ]] || die 'direct rollback marker is invalid'
       ! pacman -Q lmm-api >/dev/null 2>&1 || die 'direct Go upgrade unexpectedly found the split core package'
-      systemctl is-active --quiet "$LEGACY_SERVICE" || die 'pre-upgrade Go service is not active'
-      systemctl is-enabled --quiet "$LEGACY_SERVICE" || die 'pre-upgrade Go service is not enabled'
+      systemctl is-active --quiet "$(old_service)" || die 'pre-upgrade Go service is not active'
+      systemctl is-enabled --quiet "$(old_service)" || die 'pre-upgrade Go service is not enabled'
       validate_current_go_configuration_directory
     fi
     old_frontend_link=$(readlink -- "$FRONTEND_ROOT/current")
     [[ $old_frontend_link =~ ^releases/([A-Za-z0-9][A-Za-z0-9._-]{0,127})$ ]] || die 'pre-cutover frontend identity is unsafe'
     old_frontend_release=${BASH_REMATCH[1]}
     old_frontend_index_sha256=$(sha256sum "$FRONTEND_ROOT/current/index.html" | awk '{print $1}')
+    if ! activates_bundled_frontend; then
+      [[ $FRONTEND_INDEX_SHA256 == "$old_frontend_index_sha256" ]] || \
+        die 'backend-only AUR upgrade must preserve the active frontend identity'
+    fi
     config_restore=$state_dir/config-restore
     mkdir -m0700 "$config_restore"
     if tar -tf "$BACKUP_DIR/configuration.archive" | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
@@ -625,12 +651,10 @@ EOF
     systemctl is-active --quiet "$timer_unit" || die 'rollback timer did not arm'
     write_status "ARMED deadline=$deadline_utc"
 		trap activation_error ERR
-    if [[ $ROLLBACK_LAYOUT == split ]]; then
-      systemctl disable --now "$(old_service)"
-    else
+    if uses_legacy_direct_layout; then
       copy_old_dropins_for_new_service
-      systemctl disable --now "$LEGACY_SERVICE"
     fi
+    systemctl disable --now "$(old_service)"
 		write_status "MIGRATING deadline=$deadline_utc version=$EXPECTED_VERSION"
 		run_candidate_migration apply
 		run_candidate_migration verify
@@ -651,7 +675,7 @@ EOF
     fi
     harden_production_environment_config
     systemctl daemon-reload
-    pacman -Qkk lmm-api-go >/dev/null
+    pacman -Qkk "$CANDIDATE_PACKAGE_NAME" >/dev/null
     [[ $("$INSTALLED_BINARY" version) == "$EXPECTED_VERSION" ]] || die 'installed binary version mismatch'
     for removed in "$REMOVED_SELECTOR" "$REMOVED_PROVIDER_ROOT" "$REMOVED_LEGACY_SERVICE"; do
       [[ ! -e $removed && ! -L $removed ]] || die "removed split-architecture path remains: $removed"
@@ -659,8 +683,10 @@ EOF
     [[ -L $CANONICAL_LAUNCHER && $(readlink -- "$CANONICAL_LAUNCHER") == lmm-api-go ]] || \
       die 'canonical /usr/bin/lmm-api symlink is missing'
     systemctl enable --now "$NEW_SERVICE"
-    "$FRONTEND_RELEASE_SCRIPT" publish --root "$FRONTEND_ROOT" \
-      --source "$PACKAGED_FRONTEND_DIR" --release "$EXPECTED_VERSION" --keep 3
+    if activates_bundled_frontend; then
+      "$FRONTEND_RELEASE_SCRIPT" publish --root "$FRONTEND_ROOT" \
+        --source "$PACKAGED_FRONTEND_DIR" --release "$EXPECTED_VERSION" --keep 3
+    fi
     probe_release "$EXPECTED_VERSION" "$FRONTEND_INDEX_SHA256"
     trap - ERR
     write_status "AWAITING_CONFIRMATION deadline=$deadline_utc version=$EXPECTED_VERSION"

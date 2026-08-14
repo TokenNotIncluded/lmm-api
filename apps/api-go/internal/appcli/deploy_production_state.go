@@ -63,7 +63,6 @@ type productionPaths struct {
 	EdgeAssetRoot    string
 	InstalledBinary  string
 	PackagedFrontend string
-	MigrationWorkdir string
 	ReleasePackages  string
 	PackageCache     string
 	RemovedPaths     []string
@@ -88,7 +87,6 @@ func defaultProductionPaths() productionPaths {
 		EdgeAssetRoot:    defaultEdgeAssetRoot,
 		InstalledBinary:  "/usr/bin/lmm-api",
 		PackagedFrontend: "/usr/share/lmm-api-go/frontend-dist",
-		MigrationWorkdir: "/var/lib/lmm-api-go",
 		ReleasePackages:  "/var/lib/lmm-api-go/release-packages",
 		PackageCache:     "/var/cache/pacman/pkg",
 		RemovedPaths: []string{

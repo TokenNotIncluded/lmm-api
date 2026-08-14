@@ -268,7 +268,6 @@ func newProductionFixture(t *testing.T) productionFixture {
 		DropInDir:        filepath.Join(root, "systemd", "lmm-api.service.d"),
 		InstalledBinary:  filepath.Join(root, "usr", "bin", "lmm-api"),
 		PackagedFrontend: filepath.Join(root, "usr", "share", "lmm-api-go", "frontend-dist"),
-		MigrationWorkdir: filepath.Join(root, "var", "lib", "lmm-api-go"),
 		ReleasePackages:  filepath.Join(root, "var", "lib", "lmm-api-go", "release-packages"),
 		PackageCache:     filepath.Join(root, "var", "cache", "pacman", "pkg"),
 		RemovedPaths:     []string{filepath.Join(root, "usr", "bin", "lmm-api-go")},
@@ -280,7 +279,7 @@ func newProductionFixture(t *testing.T) productionFixture {
 	}
 	for _, directory := range []string{
 		paths.WorkRoot, paths.BackupRoot, filepath.Dir(paths.GlobalLock), paths.SystemdUnitRoot,
-		paths.ConfigDir, paths.DropInDir, filepath.Dir(paths.InstalledBinary), paths.MigrationWorkdir,
+		paths.ConfigDir, paths.DropInDir, filepath.Dir(paths.InstalledBinary),
 	} {
 		if err := os.MkdirAll(directory, 0o755); err != nil {
 			t.Fatal(err)
@@ -457,6 +456,33 @@ func TestNativeBackendUpgradeLeavesIndependentFrontendUntouched(t *testing.T) {
 	}
 	if manifest.FrontendIndexSHA256 != manifest.OldFrontendIndexSHA256 {
 		t.Fatalf("backend-only transaction changed frontend identity: %#v", manifest)
+	}
+}
+
+func TestNativeMigrationsUseReleaseScopedDisposableDirectories(t *testing.T) {
+	fixture := newProductionFixture(t)
+	if _, err := fixture.runtime.apply(context.Background(), fixture.workspace, fixture.options); err != nil {
+		t.Fatal(err)
+	}
+
+	wantRoot := filepath.Join(fixture.workspace.root, "tmp", "migrations")
+	seen := map[string]bool{}
+	for _, command := range fixture.runner.commands {
+		if command.Name != fixture.runner.probeBinary || len(command.Args) != 2 || command.Args[0] != "migrate" {
+			continue
+		}
+		mode := strings.TrimPrefix(command.Args[1], "--")
+		want := filepath.Join(wantRoot, mode)
+		if command.Dir != want {
+			t.Fatalf("migration %s workdir=%q, want %q", mode, command.Dir, want)
+		}
+		if info, err := os.Stat(command.Dir); err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+			t.Fatalf("migration %s directory info=%v err=%v", mode, info, err)
+		}
+		seen[mode] = true
+	}
+	if !seen["apply"] || !seen["verify"] {
+		t.Fatalf("migration commands=%v", seen)
 	}
 }
 

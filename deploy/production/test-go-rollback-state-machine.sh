@@ -103,9 +103,9 @@ set -Eeuo pipefail
 case $1 in
   -Qp)
     case ${2##*/} in
-      candidate.pkg.tar.zst) printf 'lmm-api-go %s-1\n' "$LMM_TEST_NEW_VERSION" ;;
+      candidate.pkg.tar.zst) printf '%s %s-1\n' "$LMM_TEST_PACKAGE_NAME" "$LMM_TEST_NEW_VERSION" ;;
       rollback-core.pkg.tar.zst) printf 'lmm-api %s-1\n' "$LMM_TEST_OLD_CORE_VERSION" ;;
-      rollback-go.pkg.tar.zst) printf 'lmm-api-go %s-1\n' "$LMM_TEST_OLD_VERSION" ;;
+      rollback-go.pkg.tar.zst) printf '%s %s-1\n' "$LMM_TEST_PACKAGE_NAME" "$LMM_TEST_OLD_VERSION" ;;
       *) exit 92 ;;
     esac
     ;;
@@ -115,7 +115,10 @@ case $1 in
         [[ $LMM_TEST_PREVIOUS_LAYOUT == split ]] || exit 1
         printf 'lmm-api %s-1\n' "$LMM_TEST_OLD_CORE_VERSION"
         ;;
-      lmm-api-go) printf 'lmm-api-go %s-1\n' "$(<"$LMM_TEST_SERVICE_STATE/version")" ;;
+      lmm-api-go|lmm-api-go-bin)
+        [[ $2 == "$LMM_TEST_PACKAGE_NAME" ]] || exit 1
+        printf '%s %s-1\n' "$LMM_TEST_PACKAGE_NAME" "$(<"$LMM_TEST_SERVICE_STATE/version")"
+        ;;
       *) exit 93 ;;
     esac
     ;;
@@ -159,7 +162,12 @@ case $1 in
       rm -f -- "$LMM_TEST_SERVICE_STATE/new.installed" "$LMM_DEPLOY_TEST_CANONICAL_LAUNCHER" \
         "$LMM_DEPLOY_TEST_CANONICAL_SERVICE"
       install -Dm0755 "$LMM_TEST_PROBE_SOURCE" "$LMM_DEPLOY_TEST_PROVIDER_BINARY"
-      install -Dm0644 "$LMM_TEST_LEGACY_SERVICE_SOURCE" "$LMM_DEPLOY_TEST_REMOVED_LEGACY_SERVICE"
+      if [[ $LMM_TEST_PACKAGE_NAME == lmm-api-go-bin ]]; then
+        ln -sfn -- lmm-api-go "$LMM_DEPLOY_TEST_CANONICAL_LAUNCHER"
+        install -Dm0644 "$LMM_TEST_CANONICAL_SERVICE_SOURCE" "$LMM_DEPLOY_TEST_CANONICAL_SERVICE"
+      else
+        install -Dm0644 "$LMM_TEST_LEGACY_SERVICE_SOURCE" "$LMM_DEPLOY_TEST_REMOVED_LEGACY_SERVICE"
+      fi
     elif (($# == 2)); then
       printf '%s\n' "$LMM_TEST_OLD_VERSION" >"$LMM_TEST_SERVICE_STATE/version"
       rm -f -- "$LMM_TEST_SERVICE_STATE/new.installed"
@@ -253,10 +261,12 @@ export LMM_DEPLOY_TEST_PROBE_ATTEMPTS=1
 export LMM_TEST_NEW_VERSION=0.1.0.r233.gb57eb0977
 export LMM_TEST_OLD_VERSION=0.1.0.r122.g27d4df76
 export LMM_TEST_OLD_CORE_VERSION=0.1.0.r31.g3e39995.payrate2.cachefix1.txfix1
+export LMM_TEST_PACKAGE_NAME=lmm-api-go
 
 setup_case() {
-  local id=$1 layout=${2:-split} case_root workspace
+  local id=$1 layout=${2:-split} package=${3:-lmm-api-go} case_root workspace
   export LMM_TEST_PREVIOUS_LAYOUT=$layout
+  export LMM_TEST_PACKAGE_NAME=$package
   case_root=$tmp/$id
   export LMM_DEPLOY_TEST_WORK_ROOT=$case_root/work
   export LMM_DEPLOY_TEST_BACKUP_ROOT=$case_root/backups
@@ -265,7 +275,7 @@ setup_case() {
   export LMM_DEPLOY_TEST_SYSTEMD_UNIT_ROOT=$case_root/systemd
   export LMM_DEPLOY_TEST_OLD_CONFIG_DIR=$case_root/etc/lmm-api
   export LMM_DEPLOY_TEST_NEW_CONFIG_DIR=$case_root/etc/lmm-api-go
-  if [[ $layout == split ]]; then
+  if [[ $layout == split || $package == lmm-api-go-bin ]]; then
     export LMM_DEPLOY_TEST_OLD_DROPIN_DIR=$case_root/etc/systemd/lmm-api.service.d
   else
     export LMM_DEPLOY_TEST_OLD_DROPIN_DIR=$case_root/etc/systemd/lmm-api-go.service.d
@@ -275,8 +285,6 @@ setup_case() {
   export LMM_DEPLOY_TEST_PROVIDER_BINARY=$case_root/usr/bin/lmm-api-go
   export LMM_DEPLOY_TEST_CANONICAL_LAUNCHER=$case_root/usr/bin/lmm-api
   export LMM_DEPLOY_TEST_PACKAGED_FRONTEND_DIR=$case_root/usr/share/lmm-api-go/frontend-dist
-  export LMM_DEPLOY_TEST_MIGRATION_WORKDIR=$case_root/state-old
-  export LMM_DEPLOY_TEST_DIRECT_MIGRATION_WORKDIR=$case_root/state-go
   export LMM_DEPLOY_TEST_REMOVED_BINARY=$case_root/usr/bin/lmm-api
   export LMM_DEPLOY_TEST_REMOVED_SELECTOR=$case_root/usr/bin/lmm-api-select
   export LMM_DEPLOY_TEST_REMOVED_PROVIDER_ROOT=$case_root/usr/lib/lmm-api
@@ -293,7 +301,6 @@ setup_case() {
   install -d -m0700 "$workspace/staging" "$LMM_DEPLOY_TEST_BACKUP_ROOT/$id" \
     "$LMM_DEPLOY_TEST_FRONTEND_ROOT/releases/old" "$LMM_DEPLOY_TEST_SYSTEMD_UNIT_ROOT" \
     "$LMM_DEPLOY_TEST_OLD_CONFIG_DIR" "$LMM_DEPLOY_TEST_OLD_DROPIN_DIR" \
-    "$LMM_DEPLOY_TEST_MIGRATION_WORKDIR" "$LMM_DEPLOY_TEST_DIRECT_MIGRATION_WORKDIR" \
     "$LMM_TEST_SERVICE_STATE"
   printf 'format=1\ndeployment_id=%s\n' "$id" >"$workspace/.lmm-deploy-workspace"
   printf '%s\n' "$LMM_TEST_OLD_VERSION" >"$LMM_TEST_SERVICE_STATE/version"
@@ -319,14 +326,24 @@ setup_case() {
     tar -C "$case_root/etc" -cf "$LMM_DEPLOY_TEST_BACKUP_ROOT/$id/configuration.archive" lmm-api
   else
     install -d -m0700 "$LMM_DEPLOY_TEST_NEW_CONFIG_DIR"
-    : >"$LMM_TEST_SERVICE_STATE/old.active"
-    : >"$LMM_TEST_SERVICE_STATE/old.enabled"
+    if [[ $package == lmm-api-go-bin ]]; then
+      : >"$LMM_TEST_SERVICE_STATE/new.active"
+      : >"$LMM_TEST_SERVICE_STATE/new.enabled"
+    else
+      : >"$LMM_TEST_SERVICE_STATE/old.active"
+      : >"$LMM_TEST_SERVICE_STATE/old.enabled"
+    fi
     printf 'SQL_DSN=postgres://fixture\nSESSION_SECRET=fixture\nPGOPTIONS="-c search_path=lmm_prod_contract"\n' \
       >"$LMM_DEPLOY_TEST_NEW_CONFIG_DIR/lmm-api-go.env"
     chmod 0600 "$LMM_DEPLOY_TEST_NEW_CONFIG_DIR/lmm-api-go.env"
     printf '[Service]\nMemoryHigh=224M\n' >"$LMM_DEPLOY_TEST_OLD_DROPIN_DIR/50-memory.conf"
     install -Dm0755 "$LMM_TEST_PROBE_SOURCE" "$LMM_DEPLOY_TEST_PROVIDER_BINARY"
-    install -Dm0644 "$LMM_TEST_LEGACY_SERVICE_SOURCE" "$LMM_DEPLOY_TEST_REMOVED_LEGACY_SERVICE"
+    if [[ $package == lmm-api-go-bin ]]; then
+      ln -sfn -- lmm-api-go "$LMM_DEPLOY_TEST_CANONICAL_LAUNCHER"
+      install -Dm0644 "$LMM_TEST_CANONICAL_SERVICE_SOURCE" "$LMM_DEPLOY_TEST_CANONICAL_SERVICE"
+    else
+      install -Dm0644 "$LMM_TEST_LEGACY_SERVICE_SOURCE" "$LMM_DEPLOY_TEST_REMOVED_LEGACY_SERVICE"
+    fi
     install -d -m0755 "$LMM_DEPLOY_TEST_PACKAGED_FRONTEND_DIR"
     printf 'old packaged frontend\n' >"$LMM_DEPLOY_TEST_PACKAGED_FRONTEND_DIR/index.html"
     tar -C "$case_root/etc" -cf "$LMM_DEPLOY_TEST_BACKUP_ROOT/$id/configuration.archive" lmm-api-go
@@ -349,7 +366,11 @@ activate_case() {
   local probe=$workspace/staging/lmm-api-go frontend_sha
   local -a layout_args=()
   [[ $LMM_TEST_PREVIOUS_LAYOUT == split ]] || layout_args=(--rollback-layout direct)
-  frontend_sha=$(printf 'new frontend\n' | sha256sum | awk '{print $1}')
+  if [[ $LMM_TEST_PACKAGE_NAME == lmm-api-go-bin ]]; then
+    frontend_sha=$(sha256sum "$LMM_DEPLOY_TEST_FRONTEND_ROOT/current/index.html" | awk '{print $1}')
+  else
+    frontend_sha=$(printf 'new frontend\n' | sha256sum | awk '{print $1}')
+  fi
   "$workspace/staging/activate-go-release.sh" activate \
     --workspace "$workspace" \
     --package "$candidate" --package-sha256 "$(sha256sum "$candidate" | awk '{print $1}')" \
@@ -373,6 +394,8 @@ grep -Fq 'AWAITING_CONFIRMATION' "$confirm_workspace/state/status" || fail 'acti
   fail 'activation did not apply and verify the candidate migration before package replacement'
 grep -Fqx -- '--setenv=PGOPTIONS=-c search_path=lmm_prod_contract' \
   "$LMM_TEST_SERVICE_STATE/migrate.apply.args" || fail 'migration did not use the captured production schema'
+grep -Fqx -- "--property=WorkingDirectory=$confirm_workspace/tmp/migrations/apply" \
+  "$LMM_TEST_SERVICE_STATE/migrate.apply.args" || fail 'migration did not use its release-scoped disposable directory'
 grep -Fqx 'database_schema=lmm_prod_contract' "$confirm_workspace/state/deployment.env" || \
   fail 'deployment manifest did not freeze the production schema'
 grep -Fqx 'PGOPTIONS="-c search_path=lmm_prod_contract"' \
@@ -464,5 +487,37 @@ if grep -Eq '^(SESSION_COOKIE_SECURE|SESSION_COOKIE_TRUSTED_URL|TRUSTED_PROXIES)
   fail 'direct rollback did not restore the original Go environment'
 fi
 [[ ! -e $LMM_TEST_SERVICE_STATE/timer.active ]] || fail 'direct rollback left its timer active'
+
+setup_case aur-direct-confirm-case direct lmm-api-go-bin
+aur_direct_confirm_workspace=$CASE_WORKSPACE
+activate_case "$aur_direct_confirm_workspace" >"$tmp/activate-aur-direct-confirm.out"
+grep -Fq 'AWAITING_CONFIRMATION' "$aur_direct_confirm_workspace/state/status" || \
+  fail 'AUR Go upgrade did not await confirmation'
+[[ -f $LMM_TEST_SERVICE_STATE/new.active && ! -e $LMM_TEST_SERVICE_STATE/old.active ]] || \
+  fail 'AUR Go upgrade switched away from lmm-api.service'
+[[ $(readlink "$LMM_DEPLOY_TEST_FRONTEND_ROOT/current") == releases/old ]] || \
+  fail 'backend-only AUR upgrade changed the independent frontend'
+[[ -f $LMM_DEPLOY_TEST_NEW_DROPIN_DIR/50-memory.conf ]] || \
+  fail 'AUR Go upgrade replaced the existing lmm-api.service drop-ins'
+"$aur_direct_confirm_workspace/staging/activate-go-release.sh" confirm \
+  --workspace "$aur_direct_confirm_workspace" >"$tmp/confirm-aur-direct.out"
+grep -Fq 'CONFIRMED' "$aur_direct_confirm_workspace/state/status" || fail 'AUR Go upgrade was not confirmed'
+
+setup_case aur-direct-rollback-case direct lmm-api-go-bin
+aur_direct_rollback_workspace=$CASE_WORKSPACE
+export LMM_TEST_FAIL_NEW=1
+if activate_case "$aur_direct_rollback_workspace" >"$tmp/activate-aur-direct-rollback.out" 2>"$tmp/activate-aur-direct-rollback.err"; then
+  fail 'injected AUR Go probe failure unexpectedly succeeded'
+fi
+unset LMM_TEST_FAIL_NEW
+grep -Fq 'ROLLED_BACK' "$aur_direct_rollback_workspace/state/status" || fail 'AUR Go probe failure did not roll back'
+[[ -f $LMM_TEST_SERVICE_STATE/new.active && ! -e $LMM_TEST_SERVICE_STATE/old.active ]] || \
+  fail 'AUR Go rollback did not restore lmm-api.service'
+[[ $(<"$LMM_TEST_SERVICE_STATE/version") == "$LMM_TEST_OLD_VERSION" ]] || \
+  fail 'AUR Go rollback did not reinstall the previous lmm-api-go-bin package'
+[[ $(readlink "$LMM_DEPLOY_TEST_FRONTEND_ROOT/current") == releases/old ]] || \
+  fail 'AUR Go rollback changed the independent frontend'
+[[ -f $LMM_DEPLOY_TEST_NEW_DROPIN_DIR/50-memory.conf ]] || \
+  fail 'AUR Go rollback removed the existing lmm-api.service drop-ins'
 
 printf 'Go rollback and confirmation state machine verified\n'
