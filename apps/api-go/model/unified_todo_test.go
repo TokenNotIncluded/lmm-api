@@ -148,3 +148,82 @@ func TestUnifiedTodoSecurityIncidentsFollowAdministratorRoleLattice(t *testing.T
 	assert.Zero(t, adminPage.UnreadCount)
 	assert.True(t, adminPage.Items[0].Read)
 }
+
+func TestUnifiedTodoDeepPageLoadsOnlySelectedRows(t *testing.T) {
+	db := setupOpenSourceBountyTestDB(t)
+	require.NoError(t, db.AutoMigrate(
+		&UnifiedTodoRead{},
+		&DeveloperAccessRequest{},
+		&AccountActionRequest{},
+		&AssistantConversation{},
+		&AssistantHistoryMessage{},
+		&AssistantSecurityIncident{},
+	))
+	admin := createOpenSourceBountyUser(t, db, "todo-page-admin", 0, common.RoleAdminUser)
+	applicant := createOpenSourceBountyUser(t, db, "todo-page-applicant", 0, common.RoleCommonUser)
+
+	const total = 450
+	requests := make([]DeveloperAccessRequest, total)
+	for index := range requests {
+		requests[index] = DeveloperAccessRequest{
+			UserId: applicant.Id, Status: DeveloperAccessRequestPending,
+			Source: DeveloperAccessRequestSourceAI, Reason: "bounded page request",
+			CreatedAt: int64(index + 1),
+		}
+	}
+	require.NoError(t, db.CreateInBatches(&requests, 100).Error)
+
+	refs, err := todoRefs(admin.Id, admin.Role, UnifiedTodoCategoryAll, 445, 5)
+	require.NoError(t, err)
+	require.Len(t, refs, 5)
+	for _, ref := range refs {
+		assert.Equal(t, UnifiedTodoCategoryDeveloperAccess, ref.Category)
+	}
+
+	page, err := GetUnifiedTodoCenter(admin.Id, admin.Role, UnifiedTodoCategoryAll, 90, 5)
+	require.NoError(t, err)
+	require.Len(t, page.Items, 5)
+	assert.EqualValues(t, total, page.Total)
+	assert.Equal(t, []int{requests[4].Id, requests[3].Id, requests[2].Id, requests[1].Id, requests[0].Id}, []int{
+		page.Items[0].SourceId, page.Items[1].SourceId, page.Items[2].SourceId, page.Items[3].SourceId, page.Items[4].SourceId,
+	})
+}
+
+func TestUnifiedTodoMarkAllUsesBoundedBatches(t *testing.T) {
+	db := setupOpenSourceBountyTestDB(t)
+	require.NoError(t, db.AutoMigrate(
+		&UnifiedTodoRead{},
+		&DeveloperAccessRequest{},
+		&AccountActionRequest{},
+		&AssistantConversation{},
+		&AssistantHistoryMessage{},
+		&AssistantSecurityIncident{},
+	))
+	admin := createOpenSourceBountyUser(t, db, "todo-batch-admin", 0, common.RoleAdminUser)
+	applicant := createOpenSourceBountyUser(t, db, "todo-batch-applicant", 0, common.RoleCommonUser)
+
+	const total = unifiedTodoReadBatch*2 + 17
+	requests := make([]DeveloperAccessRequest, total)
+	for index := range requests {
+		requests[index] = DeveloperAccessRequest{
+			UserId: applicant.Id, Status: DeveloperAccessRequestPending,
+			Source: DeveloperAccessRequestSourceAI, Reason: "bounded mark request",
+			CreatedAt: int64(index + 1),
+		}
+	}
+	require.NoError(t, db.CreateInBatches(&requests, unifiedTodoReadBatch).Error)
+
+	marked, err := MarkUnifiedTodoReads(admin.Id, admin.Role, UnifiedTodoCategoryDeveloperAccess, nil, true)
+	require.NoError(t, err)
+	assert.Equal(t, total, marked)
+	marked, err = MarkUnifiedTodoReads(admin.Id, admin.Role, UnifiedTodoCategoryDeveloperAccess, nil, true)
+	require.NoError(t, err)
+	assert.Zero(t, marked)
+
+	tooMany := make([]int, maxUnifiedTodoReadIDs+1)
+	for index := range tooMany {
+		tooMany[index] = index + 1
+	}
+	_, err = MarkUnifiedTodoReads(admin.Id, admin.Role, UnifiedTodoCategoryDeveloperAccess, tooMany, false)
+	assert.ErrorIs(t, err, ErrUnifiedTodoReadBody)
+}

@@ -2,7 +2,6 @@ package model
 
 import (
 	"errors"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -22,6 +21,8 @@ const (
 	maxUnifiedTodoPage     = 100
 	maxUnifiedTodoPageSize = 50
 	defaultUnifiedTodoSize = 20
+	maxUnifiedTodoReadIDs  = 100
+	unifiedTodoReadBatch   = 200
 )
 
 var (
@@ -77,6 +78,15 @@ type unifiedTodoCandidate struct {
 	Item UnifiedTodoItem
 }
 
+// todoRef is the small, fixed-width row used for cross-source pagination.
+// Full todo payloads are loaded only for the selected page, so deep pages do
+// not retain page*size objects from every source in Go memory.
+type todoRef struct {
+	SourceID int    `gorm:"column:source_id"`
+	Category string `gorm:"column:category"`
+	Updated  int64  `gorm:"column:updated_at"`
+}
+
 var unifiedTodoCategories = []string{
 	UnifiedTodoCategorySecurityIncident,
 	UnifiedTodoCategoryBountyReview,
@@ -100,10 +110,13 @@ func unifiedSecurityIncidentQuery(viewerRole int) *gorm.DB {
 	return query.Where("users.role < ? AND incident.status = ?", viewerRole, AssistantSecurityIncidentStatusOpen)
 }
 
-func unifiedSecurityIncidentCandidates(viewerRole, limit int) ([]unifiedTodoCandidate, error) {
+func unifiedSecurityIncidentCandidates(viewerRole int, ids []int) ([]unifiedTodoCandidate, error) {
+	if len(ids) == 0 {
+		return []unifiedTodoCandidate{}, nil
+	}
 	rows := make([]unifiedAssistantSecurityIncidentView, 0)
 	if err := unifiedSecurityIncidentQuery(viewerRole).
-		Order("incident.updated_at DESC, incident.id DESC").Limit(limit).Scan(&rows).Error; err != nil {
+		Where("incident.id IN ?", ids).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 
@@ -172,6 +185,122 @@ func unifiedTodoSelectedCategories(category string) []string {
 	return []string{category}
 }
 
+func todoRefs(userID, role int, category string, offset, limit int) ([]todoRef, error) {
+	selected := make(map[string]bool, len(unifiedTodoCategories))
+	for _, key := range unifiedTodoSelectedCategories(category) {
+		selected[key] = true
+	}
+	isAdmin := role >= common.RoleAdminUser
+	parts := make([]string, 0, len(selected))
+	args := make([]any, 0, 24)
+	add := func(query string, values ...any) {
+		parts = append(parts, query)
+		args = append(args, values...)
+	}
+
+	if selected[UnifiedTodoCategorySecurityIncident] && isAdmin {
+		add(`SELECT incident.id AS source_id, ? AS category, incident.updated_at AS updated_at
+			FROM assistant_security_incidents AS incident
+			JOIN users ON users.id = incident.user_id AND users.deleted_at IS NULL
+			WHERE users.role < ? AND incident.status = ?`,
+			UnifiedTodoCategorySecurityIncident, role, AssistantSecurityIncidentStatusOpen)
+	}
+	if selected[UnifiedTodoCategoryBountyReview] {
+		add(`SELECT challenge.id AS source_id, ? AS category, challenge.updated_at AS updated_at
+			FROM open_source_bounty_challenges AS challenge
+			JOIN open_source_bounty_projects AS project ON project.id = challenge.project_id
+			WHERE project.owner_user_id = ? AND challenge.status = ?`,
+			UnifiedTodoCategoryBountyReview, userID, OpenSourceBountyChallengeSubmitted)
+	}
+	if selected[UnifiedTodoCategoryBounty] {
+		add(`SELECT notification.id AS source_id, ? AS category, notification.created_at AS updated_at
+			FROM open_source_bounty_ledgers AS notification
+			JOIN users AS sender ON sender.id = notification.user_id AND sender.deleted_at IS NULL
+			JOIN open_source_bounty_projects AS project ON project.id = notification.project_id
+			WHERE notification.kind IN ? AND notification.counterparty_user_id = ?`,
+			UnifiedTodoCategoryBounty, openSourceBountyNotificationKinds(), userID)
+	}
+	if selected[UnifiedTodoCategoryDeveloperAccess] {
+		query := `SELECT request.id AS source_id, ? AS category, request.created_at AS updated_at
+			FROM developer_access_requests AS request
+			JOIN users ON users.id = request.user_id AND users.deleted_at IS NULL
+			WHERE request.status = ? AND request.source <> ?`
+		values := []any{UnifiedTodoCategoryDeveloperAccess, DeveloperAccessRequestPending, DeveloperAccessRequestSourceOld}
+		if !isAdmin {
+			query += " AND request.user_id = ?"
+			values = append(values, userID)
+		}
+		add(query, values...)
+	}
+	if selected[UnifiedTodoCategoryAccountAction] {
+		query := `SELECT request.id AS source_id, ? AS category,
+			CASE WHEN request.reviewed_at > 0 THEN request.reviewed_at ELSE request.created_at END AS updated_at
+			FROM account_action_requests AS request
+			JOIN users AS target ON target.id = request.target_user_id AND target.deleted_at IS NULL
+			WHERE request.status = ?`
+		values := []any{UnifiedTodoCategoryAccountAction, AccountActionStatusPending}
+		if !isAdmin {
+			query += " AND (request.target_user_id = ? OR request.requested_by_user_id = ?)"
+			values = append(values, userID, userID)
+		}
+		add(query, values...)
+	}
+	if len(parts) == 0 {
+		return []todoRef{}, nil
+	}
+
+	query := "SELECT source_id, category, updated_at FROM (" + strings.Join(parts, " UNION ALL ") +
+		") AS todo ORDER BY updated_at DESC, category ASC, source_id DESC LIMIT ? OFFSET ?"
+	args = append(args, limit, offset)
+	refs := make([]todoRef, 0, limit)
+	if err := DB.Raw(query, args...).Scan(&refs).Error; err != nil {
+		return nil, err
+	}
+	return refs, nil
+}
+
+func loadTodoCandidates(userID, role int, refs []todoRef) ([]unifiedTodoCandidate, error) {
+	ids := make(map[string][]int, len(unifiedTodoCategories))
+	for _, ref := range refs {
+		ids[ref.Category] = append(ids[ref.Category], ref.SourceID)
+	}
+	isAdmin := role >= common.RoleAdminUser
+	loaded := make([]unifiedTodoCandidate, 0, len(refs))
+	for _, category := range unifiedTodoCategories {
+		var items []unifiedTodoCandidate
+		var err error
+		switch category {
+		case UnifiedTodoCategorySecurityIncident:
+			items, err = unifiedSecurityIncidentCandidates(role, ids[category])
+		case UnifiedTodoCategoryBountyReview:
+			items, err = unifiedTodoBountyReviewCandidates(userID, ids[category])
+		case UnifiedTodoCategoryBounty:
+			items, err = unifiedTodoBountyCandidates(userID, ids[category])
+		case UnifiedTodoCategoryDeveloperAccess:
+			items, err = unifiedDeveloperAccessCandidates(userID, ids[category], isAdmin)
+		case UnifiedTodoCategoryAccountAction:
+			items, err = unifiedAccountActionCandidates(userID, ids[category], isAdmin)
+		}
+		if err != nil {
+			return nil, err
+		}
+		loaded = append(loaded, items...)
+	}
+
+	byID := make(map[string]unifiedTodoCandidate, len(loaded))
+	for _, item := range loaded {
+		byID[item.Item.Id] = item
+	}
+	ordered := make([]unifiedTodoCandidate, 0, len(refs))
+	for _, ref := range refs {
+		id := unifiedTodoItemID(ref.Category, ref.SourceID)
+		if item, ok := byID[id]; ok {
+			ordered = append(ordered, item)
+		}
+	}
+	return ordered, nil
+}
+
 func unifiedTodoNotificationTitle(kind string) string {
 	switch kind {
 	case OpenSourceBountyLedgerTipTransfer:
@@ -185,11 +314,14 @@ func unifiedTodoNotificationTitle(kind string) string {
 	}
 }
 
-func unifiedTodoBountyCandidates(userID, limit int) ([]unifiedTodoCandidate, error) {
+func unifiedTodoBountyCandidates(userID int, ids []int) ([]unifiedTodoCandidate, error) {
+	if len(ids) == 0 {
+		return []unifiedTodoCandidate{}, nil
+	}
 	notifications := make([]OpenSourceBountyNotification, 0)
 	if err := openSourceBountyNotificationQuery().
 		Where("notification.kind IN ? AND notification.counterparty_user_id = ?", openSourceBountyNotificationKinds(), userID).
-		Order("notification.created_at DESC, notification.id DESC").Limit(limit).Scan(&notifications).Error; err != nil {
+		Where("notification.id IN ?", ids).Scan(&notifications).Error; err != nil {
 		return nil, err
 	}
 
@@ -224,10 +356,13 @@ func unifiedTodoBountyReviewQuery(userID int) *gorm.DB {
 		Where("p.owner_user_id = ? AND c.status = ?", userID, OpenSourceBountyChallengeSubmitted)
 }
 
-func unifiedTodoBountyReviewCandidates(userID, limit int) ([]unifiedTodoCandidate, error) {
+func unifiedTodoBountyReviewCandidates(userID int, ids []int) ([]unifiedTodoCandidate, error) {
+	if len(ids) == 0 {
+		return []unifiedTodoCandidate{}, nil
+	}
 	rows := make([]OpenSourceBountyChallengeView, 0)
 	if err := unifiedTodoBountyReviewQuery(userID).
-		Order("c.submitted_at DESC, c.id DESC").Limit(limit).Scan(&rows).Error; err != nil {
+		Where("c.id IN ?", ids).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 
@@ -251,6 +386,7 @@ func unifiedTodoBountyReviewCandidates(userID, limit int) ([]unifiedTodoCandidat
 				"issue_url":            row.IssueUrl,
 				"pull_request_url":     row.PullRequestUrl,
 				"submission_note":      RedactAssistantHistoryContent(row.SubmissionNote),
+				"status":               row.Status,
 			},
 		}})
 	}
@@ -281,11 +417,13 @@ func unifiedAccountActionQuery(userID int, isAdmin bool) *gorm.DB {
 	return query
 }
 
-func unifiedDeveloperAccessCandidates(userID, limit int, isAdmin bool) ([]unifiedTodoCandidate, error) {
+func unifiedDeveloperAccessCandidates(userID int, ids []int, isAdmin bool) ([]unifiedTodoCandidate, error) {
+	if len(ids) == 0 {
+		return []unifiedTodoCandidate{}, nil
+	}
 	rows := make([]DeveloperAccessRequestView, 0)
 	if err := unifiedDeveloperAccessQuery(userID, isAdmin).
-		Order("request.created_at DESC, request.id DESC").
-		Limit(limit).Find(&rows).Error; err != nil {
+		Where("request.id IN ?", ids).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 
@@ -323,11 +461,13 @@ func unifiedDeveloperAccessCandidates(userID, limit int, isAdmin bool) ([]unifie
 	return items, nil
 }
 
-func unifiedAccountActionCandidates(userID, limit int, isAdmin bool) ([]unifiedTodoCandidate, error) {
+func unifiedAccountActionCandidates(userID int, ids []int, isAdmin bool) ([]unifiedTodoCandidate, error) {
+	if len(ids) == 0 {
+		return []unifiedTodoCandidate{}, nil
+	}
 	rows := make([]AccountActionRequestView, 0)
 	if err := unifiedAccountActionQuery(userID, isAdmin).
-		Order("CASE WHEN request.reviewed_at > 0 THEN request.reviewed_at ELSE request.created_at END DESC, request.id DESC").
-		Limit(limit).Find(&rows).Error; err != nil {
+		Where("request.id IN ?", ids).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 
@@ -526,51 +666,21 @@ func GetUnifiedTodoCenter(userID, role int, category string, page, pageSize int)
 		selectedUnread += counts[selectedCategory].Unread
 	}
 
-	limit := page * pageSize
-	candidates := make([]unifiedTodoCandidate, 0)
-	for _, selectedCategory := range unifiedTodoSelectedCategories(category) {
-		var categoryCandidates []unifiedTodoCandidate
-		switch selectedCategory {
-		case UnifiedTodoCategorySecurityIncident:
-			categoryCandidates, err = unifiedSecurityIncidentCandidates(role, limit)
-		case UnifiedTodoCategoryBountyReview:
-			categoryCandidates, err = unifiedTodoBountyReviewCandidates(userID, limit)
-		case UnifiedTodoCategoryBounty:
-			categoryCandidates, err = unifiedTodoBountyCandidates(userID, limit)
-		case UnifiedTodoCategoryDeveloperAccess:
-			categoryCandidates, err = unifiedDeveloperAccessCandidates(userID, limit, isAdmin)
-		case UnifiedTodoCategoryAccountAction:
-			categoryCandidates, err = unifiedAccountActionCandidates(userID, limit, isAdmin)
-		}
-		if err != nil {
-			return nil, err
-		}
-		candidates = append(candidates, categoryCandidates...)
+	start := (page - 1) * pageSize
+	refs, err := todoRefs(userID, role, category, start, pageSize)
+	if err != nil {
+		return nil, err
+	}
+	candidates, err := loadTodoCandidates(userID, role, refs)
+	if err != nil {
+		return nil, err
 	}
 	if err := applyUnifiedTodoReadMap(candidates, userID); err != nil {
 		return nil, err
 	}
-	sort.SliceStable(candidates, func(i, j int) bool {
-		left, right := candidates[i].Item, candidates[j].Item
-		if left.UpdatedAt != right.UpdatedAt {
-			return left.UpdatedAt > right.UpdatedAt
-		}
-		if left.Category != right.Category {
-			return left.Category < right.Category
-		}
-		return left.SourceId > right.SourceId
-	})
-
-	start := (page - 1) * pageSize
-	items := make([]UnifiedTodoItem, 0, pageSize)
-	if start < len(candidates) {
-		end := start + pageSize
-		if end > len(candidates) {
-			end = len(candidates)
-		}
-		for _, candidate := range candidates[start:end] {
-			items = append(items, candidate.Item)
-		}
+	items := make([]UnifiedTodoItem, 0, len(candidates))
+	for _, candidate := range candidates {
+		items = append(items, candidate.Item)
 	}
 
 	categorySummaries := make([]UnifiedTodoCategorySummary, 0, len(unifiedTodoCategories))
@@ -592,73 +702,82 @@ func GetUnifiedTodoCenter(userID, role int, category string, page, pageSize int)
 	}, nil
 }
 
-func visibleUnifiedTodoIDs(userID, role int, category string, ids []int, all bool) ([]int, error) {
+func visibleTodoQuery(userID, role int, category string) (*gorm.DB, string, error) {
 	isAdmin := role >= common.RoleAdminUser
-	var visible []int
 	switch category {
 	case UnifiedTodoCategorySecurityIncident:
-		query := unifiedSecurityIncidentQuery(role).Select("incident.id")
-		if !all {
-			query = query.Where("incident.id IN ?", ids)
-		}
-		if err := query.Pluck("incident.id", &visible).Error; err != nil {
-			return nil, err
-		}
+		return unifiedSecurityIncidentQuery(role).Select("incident.id"), "incident.id", nil
 	case UnifiedTodoCategoryBountyReview:
 		query := DB.Table("open_source_bounty_challenges AS c").
 			Select("c.id").
 			Joins("JOIN open_source_bounty_projects AS p ON p.id = c.project_id").
 			Where("p.owner_user_id = ? AND c.status = ?", userID, OpenSourceBountyChallengeSubmitted)
-		if !all {
-			query = query.Where("c.id IN ?", ids)
-		}
-		if err := query.Pluck("c.id", &visible).Error; err != nil {
-			return nil, err
-		}
+		return query, "c.id", nil
 	case UnifiedTodoCategoryDeveloperAccess:
 		query := DB.Model(&DeveloperAccessRequest{}).Select("id").
 			Where("status = ? AND source <> ?", DeveloperAccessRequestPending, DeveloperAccessRequestSourceOld)
 		if !isAdmin {
 			query = query.Where("user_id = ?", userID)
 		}
-		if !all {
-			query = query.Where("id IN ?", ids)
-		}
-		if err := query.Pluck("id", &visible).Error; err != nil {
-			return nil, err
-		}
+		return query, "id", nil
 	case UnifiedTodoCategoryAccountAction:
 		query := DB.Model(&AccountActionRequest{}).Select("id").
 			Where("status = ?", AccountActionStatusPending)
 		if !isAdmin {
 			query = query.Where("(target_user_id = ? OR requested_by_user_id = ?)", userID, userID)
 		}
-		if !all {
-			query = query.Where("id IN ?", ids)
-		}
-		if err := query.Pluck("id", &visible).Error; err != nil {
-			return nil, err
-		}
+		return query, "id", nil
 	default:
-		return nil, ErrUnifiedTodoCategory
+		return nil, "", ErrUnifiedTodoCategory
 	}
-	return visible, nil
 }
 
 func markUnifiedGenericTodosRead(userID, role int, category string, ids []int, all bool) (int, error) {
-	visible, err := visibleUnifiedTodoIDs(userID, role, category, ids, all)
+	query, idColumn, err := visibleTodoQuery(userID, role, category)
 	if err != nil {
 		return 0, err
 	}
-	if len(visible) == 0 {
+	if !all {
+		var visible []int
+		if err := query.Where(idColumn+" IN ?", ids).Pluck(idColumn, &visible).Error; err != nil {
+			return 0, err
+		}
+		return insertTodoReads(userID, category, visible)
+	}
+
+	total := 0
+	cursor := 0
+	for {
+		visible := make([]int, 0, unifiedTodoReadBatch)
+		page := query.Session(&gorm.Session{}).
+			Where(idColumn+" > ?", cursor).
+			Order(idColumn + " ASC").
+			Limit(unifiedTodoReadBatch)
+		if err := page.Pluck(idColumn, &visible).Error; err != nil {
+			return total, err
+		}
+		if len(visible) == 0 {
+			return total, nil
+		}
+		marked, err := insertTodoReads(userID, category, visible)
+		if err != nil {
+			return total, err
+		}
+		total += marked
+		cursor = visible[len(visible)-1]
+	}
+}
+
+func insertTodoReads(userID int, category string, ids []int) (int, error) {
+	if len(ids) == 0 {
 		return 0, nil
 	}
-	rows := make([]UnifiedTodoRead, 0, len(visible))
+	rows := make([]UnifiedTodoRead, len(ids))
 	now := common.GetTimestamp()
-	for _, itemID := range visible {
-		rows = append(rows, UnifiedTodoRead{UserId: userID, Category: category, ItemId: itemID, ReadAt: now})
+	for index, itemID := range ids {
+		rows[index] = UnifiedTodoRead{UserId: userID, Category: category, ItemId: itemID, ReadAt: now}
 	}
-	result := DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&rows)
+	result := DB.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(&rows, unifiedTodoReadBatch)
 	return int(result.RowsAffected), result.Error
 }
 
@@ -701,6 +820,9 @@ func MarkUnifiedTodoReads(userID, role int, category string, ids []int, all bool
 		return 0, ErrUnifiedTodoReadBody
 	}
 	if !all {
+		if len(ids) > maxUnifiedTodoReadIDs {
+			return 0, ErrUnifiedTodoReadBody
+		}
 		seen := make(map[int]struct{}, len(ids))
 		normalized := make([]int, 0, len(ids))
 		for _, id := range ids {
