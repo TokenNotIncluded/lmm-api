@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"math"
 	"strings"
 
@@ -179,6 +180,12 @@ func saveProfileSkill(skills service.UserSkills, input map[string]any) map[strin
 	}
 	saved, err := skills.LearnProfile(service.ProfileDraft{Key: profile, Tags: tags, Strategy: strategy, Enabled: true})
 	if err != nil {
+		if errors.Is(err, model.ErrAssistantProfileManaged) {
+			return map[string]any{
+				"ok": false, "status": "administrator_managed",
+				"error": "profile skill is managed by an administrator and was not changed",
+			}
+		}
 		return map[string]any{"ok": false, "error": "profile skill could not be saved"}
 	}
 	view := model.AssistantUserProfileViewOf(saved)

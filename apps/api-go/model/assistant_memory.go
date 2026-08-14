@@ -141,6 +141,9 @@ func SaveMemory(ownerUserID, updatedBy int, input MemoryInput) (*AssistantMemory
 	now := common.GetTimestamp()
 	var saved AssistantMemory
 	err = DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockAssistantOwner(tx, ownerUserID); err != nil {
+			return err
+		}
 		if input.ID > 0 {
 			if err := lockForUpdate(tx).Where("id = ? AND user_id = ?", input.ID, ownerUserID).First(&saved).Error; err != nil {
 				if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -256,12 +259,20 @@ func RecallMemories(ownerUserID int, query string, limit int) ([]AssistantMemory
 }
 
 func DeleteMemory(ownerUserID int, memoryID int64) error {
-	result := DB.Where("id = ? AND user_id = ?", memoryID, ownerUserID).Delete(&AssistantMemory{})
-	if result.Error != nil {
-		return result.Error
+	if ownerUserID <= 0 || memoryID <= 0 {
+		return gorm.ErrInvalidData
 	}
-	if result.RowsAffected == 0 {
-		return ErrAssistantMemoryMissing
-	}
-	return nil
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockAssistantOwner(tx, ownerUserID); err != nil {
+			return err
+		}
+		result := tx.Where("id = ? AND user_id = ?", memoryID, ownerUserID).Delete(&AssistantMemory{})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return ErrAssistantMemoryMissing
+		}
+		return nil
+	})
 }

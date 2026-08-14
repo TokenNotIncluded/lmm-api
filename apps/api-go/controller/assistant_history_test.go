@@ -25,8 +25,12 @@ func assistantHistoryControllerContext(t *testing.T, method, path string, userID
 
 func TestAssistantConversationArchiveControllerIsOwnerOnlyAndUsesEnvelope(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
+	owner := model.User{Id: 42, Username: "history-owner", Password: "password", AffCode: "history-owner"}
+	viewer := model.User{Id: 99, Username: "history-viewer", Password: "password", AffCode: "history-viewer"}
+	require.NoError(t, db.Create(&owner).Error)
+	require.NoError(t, db.Create(&viewer).Error)
 	conversation := &model.AssistantConversation{
-		UserId:             42,
+		UserId:             owner.Id,
 		Title:              "owner conversation",
 		LastMessagePreview: "safe preview",
 		CreatedAt:          1,
@@ -93,15 +97,17 @@ func TestAssistantConversationArchiveControllerIsOwnerOnlyAndUsesEnvelope(t *tes
 
 func TestListAssistantConversationsControllerFiltersArchivedExplicitly(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
+	owner := model.User{Id: 42, Username: "history-list-owner", Password: "password", AffCode: "history-list-owner"}
+	require.NoError(t, db.Create(&owner).Error)
 	active := &model.AssistantConversation{
-		UserId:             42,
+		UserId:             owner.Id,
 		Title:              "active",
 		LastMessagePreview: "active preview",
 		CreatedAt:          1,
 		UpdatedAt:          2,
 	}
 	archived := &model.AssistantConversation{
-		UserId:             42,
+		UserId:             owner.Id,
 		Title:              "archived",
 		LastMessagePreview: "archived preview",
 		CreatedAt:          1,
@@ -110,14 +116,14 @@ func TestListAssistantConversationsControllerFiltersArchivedExplicitly(t *testin
 	}
 	require.NoError(t, db.Create(active).Error)
 	require.NoError(t, db.Create(archived).Error)
-	require.NoError(t, model.RecordAssistantConversationTurn(42, active.Id, "active question", "active answer"))
-	require.NoError(t, model.RecordAssistantConversationTurn(42, archived.Id, "archived question", "archived answer"))
+	require.NoError(t, model.RecordAssistantConversationTurn(owner.Id, active.Id, "active question", "active answer"))
+	require.NoError(t, model.RecordAssistantConversationTurn(owner.Id, archived.Id, "archived question", "archived answer"))
 
 	listContext, listResponse := assistantHistoryControllerContext(
 		t,
 		http.MethodGet,
 		"/api/assistant/conversations",
-		42,
+		owner.Id,
 		0,
 	)
 	ListAssistantConversations(listContext)
@@ -135,7 +141,7 @@ func TestListAssistantConversationsControllerFiltersArchivedExplicitly(t *testin
 		t,
 		http.MethodGet,
 		"/api/assistant/conversations?archived=true",
-		42,
+		owner.Id,
 		0,
 	)
 	ListAssistantConversations(listContext)

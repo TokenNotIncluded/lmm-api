@@ -260,16 +260,21 @@ func UpdateAssistantConversationTitle(userID int, conversationID int64, title st
 	if userID <= 0 || conversationID <= 0 || strings.TrimSpace(title) == "" {
 		return gorm.ErrInvalidData
 	}
-	result := DB.Model(&AssistantConversation{}).
-		Where("id = ? AND user_id = ?", conversationID, userID).
-		Update("title", assistantConversationTitle(title))
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return ErrAssistantConversationNotFound
-	}
-	return nil
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockAssistantOwner(tx, userID); err != nil {
+			return err
+		}
+		result := tx.Model(&AssistantConversation{}).
+			Where("id = ? AND user_id = ?", conversationID, userID).
+			Update("title", assistantConversationTitle(title))
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return ErrAssistantConversationNotFound
+		}
+		return nil
+	})
 }
 
 func assistantConversationRank(user *User) (int, error) {
@@ -354,7 +359,12 @@ func PrepareAssistantConversation(userID int, conversationID int64, firstMessage
 		CreatedAt:          now,
 		UpdatedAt:          now,
 	}
-	if err := DB.Create(&conversation).Error; err != nil {
+	if err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockAssistantOwner(tx, userID); err != nil {
+			return err
+		}
+		return tx.Create(&conversation).Error
+	}); err != nil {
 		return nil, err
 	}
 	return &conversation, nil
@@ -378,6 +388,9 @@ func RecordAssistantSecurityRefusal(userID int, conversationID int64, userConten
 	var recordedConversationID int64
 	created := false
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockAssistantOwner(tx, userID); err != nil {
+			return err
+		}
 		var conversation AssistantConversation
 		if conversationID > 0 {
 			if err := lockForUpdate(tx).Where("id = ? AND user_id = ?", conversationID, userID).First(&conversation).Error; err != nil {
@@ -564,6 +577,9 @@ func RecordAssistantConversationTurnForRequest(userID int, conversationID int64,
 	}
 	var recordedConversationID int64
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockAssistantOwner(tx, userID); err != nil {
+			return err
+		}
 		var conversation AssistantConversation
 		if conversationID > 0 {
 			if err := lockForUpdate(tx).Where("id = ? AND user_id = ?", conversationID, userID).First(&conversation).Error; err != nil {
@@ -625,6 +641,9 @@ func RecordAssistantConversationTurnForRetry(userID int, conversationID int64, u
 		return gorm.ErrInvalidData
 	}
 	return DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockAssistantOwner(tx, userID); err != nil {
+			return err
+		}
 		var conversation AssistantConversation
 		if err := lockForUpdate(tx).Where("id = ? AND user_id = ?", conversationID, userID).First(&conversation).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -668,6 +687,9 @@ func setAssistantConversationArchived(userID int, conversationID int64, archived
 
 	var updated AssistantConversation
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockAssistantOwner(tx, userID); err != nil {
+			return err
+		}
 		var conversation AssistantConversation
 		if err := lockForUpdate(tx).
 			Where("id = ? AND user_id = ?", conversationID, userID).
@@ -955,6 +977,9 @@ func CreateAssistantSecureCard(ownerUserID int, conversationID int64, cardType, 
 		ExpiresAt:      time.Now().Add(assistantSecureCardDefaultLifetime).Unix(),
 	}
 	if err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockAssistantOwner(tx, ownerUserID); err != nil {
+			return err
+		}
 		if conversationID > 0 {
 			var conversation AssistantConversation
 			if err := lockForUpdate(tx).Where("id = ? AND user_id = ?", conversationID, ownerUserID).First(&conversation).Error; err != nil {
@@ -1004,6 +1029,9 @@ func InsertAssistantTokenAndCreateSecureCard(token *Token, ownerUserID int, conv
 		ExpiresAt:      time.Now().Add(assistantSecureCardDefaultLifetime).Unix(),
 	}
 	err = DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockAssistantOwner(tx, ownerUserID); err != nil {
+			return err
+		}
 		if conversationID > 0 {
 			var conversation AssistantConversation
 			if err := lockForUpdate(tx).Where("id = ? AND user_id = ?", conversationID, ownerUserID).First(&conversation).Error; err != nil {
@@ -1071,6 +1099,9 @@ func RevealAssistantSecureCard(ownerUserID int, cardID string) (string, Assistan
 	var payload string
 	var view AssistantSecureCardView
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockAssistantOwner(tx, ownerUserID); err != nil {
+			return err
+		}
 		var card AssistantSecureCard
 		if err := lockForUpdate(tx).Where("id = ? AND owner_user_id = ?", cardID, ownerUserID).First(&card).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {

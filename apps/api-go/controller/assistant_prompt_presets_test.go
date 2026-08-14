@@ -55,13 +55,15 @@ func TestPromptPresetPublicReadAndClick(t *testing.T) {
 func TestAssistantPresetConversationCountsOnlySuccessfulRecordedTurn(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	setupPromptPresetControllerTestDB(t)
+	owner := model.User{Username: "preset-conversation-owner", Password: "password", AffCode: "preset-conversation-owner"}
+	require.NoError(t, model.DB.Create(&owner).Error)
 	set, err := model.GetPromptPresets()
 	require.NoError(t, err)
 	require.NotEmpty(t, set.Presets)
 
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
-	c.Set(assistantActorUserIDKey, 42)
+	c.Set(assistantActorUserIDKey, owner.Id)
 	c.Set("assistant_history_latest_message", set.Presets[0].Prompt)
 	capturePromptPresetRef(c, set.Presets[0].Id, set.Presets[0].Prompt)
 

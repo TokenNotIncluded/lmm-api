@@ -11,7 +11,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 const (
@@ -39,6 +38,7 @@ var (
 	ErrAssistantProfileKey          = errors.New("assistant profile key is invalid")
 	ErrAssistantProfileStrategyLong = errors.New("assistant profile strategy is too long")
 	ErrAssistantProfileTagsInvalid  = errors.New("assistant profile tags are invalid")
+	ErrAssistantProfileManaged      = errors.New("assistant profile is administrator managed")
 	assistantProfileSecretPattern   = regexp.MustCompile(`(?i)(password|passwd|api[ _-]?key|access[ _-]?token|refresh[ _-]?token|client[ _-]?secret|secret|credential|密码|密钥|令牌)\s*[:=：]\s*[^\s,;]+`)
 )
 
@@ -245,27 +245,33 @@ func SaveProfile(userID, updatedBy int, input ProfileInput) (*AssistantUserProfi
 		return nil, err
 	}
 	now := common.GetTimestamp()
-	row := &AssistantUserProfile{
-		UserId:     userID,
-		ProfileKey: profileKey,
-		TagsJSON:   string(tagsJSON),
-		Strategy:   strategy,
-		Source:     input.Source,
-		Enabled:    input.Enabled,
-		UpdatedBy:  updatedBy,
-		CreatedAt:  now,
-		UpdatedAt:  now,
-	}
-	err = DB.Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "user_id"}},
-		DoUpdates: clause.AssignmentColumns([]string{
-			"profile_key", "tags_json", "strategy", "source", "enabled", "updated_by", "updated_at",
-		}),
-	}).Create(row).Error
+	var saved AssistantUserProfile
+	err = DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockAssistantOwner(tx, userID); err != nil {
+			return err
+		}
+		findErr := lockForUpdate(tx).Where("user_id = ?", userID).First(&saved).Error
+		if errors.Is(findErr, gorm.ErrRecordNotFound) {
+			saved = AssistantUserProfile{
+				UserId: userID, ProfileKey: profileKey, TagsJSON: string(tagsJSON), Strategy: strategy,
+				Source: input.Source, Enabled: input.Enabled, UpdatedBy: updatedBy, CreatedAt: now, UpdatedAt: now,
+			}
+			return tx.Create(&saved).Error
+		}
+		if findErr != nil {
+			return findErr
+		}
+		if input.Source == AssistantProfileSourceAI && saved.Source != AssistantProfileSourceAI {
+			return ErrAssistantProfileManaged
+		}
+		saved.ProfileKey, saved.TagsJSON, saved.Strategy = profileKey, string(tagsJSON), strategy
+		saved.Source, saved.Enabled, saved.UpdatedBy, saved.UpdatedAt = input.Source, input.Enabled, updatedBy, now
+		return tx.Save(&saved).Error
+	})
 	if err != nil {
 		return nil, err
 	}
-	return GetAssistantUserProfile(userID)
+	return &saved, nil
 }
 
 // AssistantUserProfileDefault returns an API-safe empty state for users who

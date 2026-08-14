@@ -240,13 +240,18 @@ func RecordAssistantIntent(userID int, message string) error {
 	if userID <= 0 {
 		return gorm.ErrInvalidData
 	}
-	return DB.Create(&AssistantLead{
-		UserId:    userID,
-		Source:    AssistantLeadSourceChat,
-		Intent:    ClassifyAssistantIntent(message),
-		Status:    AssistantLeadStatusObserved,
-		CreatedAt: common.GetTimestamp(),
-	}).Error
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockAssistantOwner(tx, userID); err != nil {
+			return err
+		}
+		return tx.Create(&AssistantLead{
+			UserId:    userID,
+			Source:    AssistantLeadSourceChat,
+			Intent:    ClassifyAssistantIntent(message),
+			Status:    AssistantLeadStatusObserved,
+			CreatedAt: common.GetTimestamp(),
+		}).Error
+	})
 }
 
 func normalizeAssistantFirstQuestion(question string) (string, string, error) {
@@ -310,8 +315,7 @@ func SubmitAssistantHandoff(userID int, message string) (*AssistantLead, error) 
 
 	var lead AssistantLead
 	err = DB.Transaction(func(tx *gorm.DB) error {
-		var user User
-		if err := lockForUpdate(tx).Select("id").First(&user, userID).Error; err != nil {
+		if err := lockAssistantOwner(tx, userID); err != nil {
 			return err
 		}
 		findErr := tx.Where("user_id = ? AND source = ? AND status = ?", userID, AssistantLeadSourceHandoff, AssistantLeadStatusPending).

@@ -36,8 +36,8 @@ var (
 type UnifiedTodoRead struct {
 	Id       int    `json:"id" gorm:"primaryKey"`
 	UserId   int    `json:"user_id" gorm:"not null;uniqueIndex:idx_unified_todo_read,priority:1;index"`
-	Category string `json:"category" gorm:"type:varchar(40);not null;uniqueIndex:idx_unified_todo_read,priority:2"`
-	ItemId   int    `json:"item_id" gorm:"not null;uniqueIndex:idx_unified_todo_read,priority:3"`
+	Category string `json:"category" gorm:"type:varchar(40);not null;uniqueIndex:idx_unified_todo_read,priority:2;index:idx_unified_todo_source,priority:1"`
+	ItemId   int    `json:"item_id" gorm:"not null;uniqueIndex:idx_unified_todo_read,priority:3;index:idx_unified_todo_source,priority:2"`
 	ReadAt   int64  `json:"read_at" gorm:"not null"`
 }
 

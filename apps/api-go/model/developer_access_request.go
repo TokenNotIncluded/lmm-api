@@ -242,8 +242,7 @@ func submitNormalizedDeveloperAccessRequestWithTx(tx *gorm.DB, userID int, norma
 	// Lock the user row before checking for a pending request. This makes
 	// duplicate submissions from two browser tabs collapse to one request on
 	// databases that support row-level locks.
-	var user User
-	if err := lockForUpdate(tx).Where("id = ?", userID).First(&user).Error; err != nil {
+	if err := lockAssistantOwner(tx, userID); err != nil {
 		return nil, err
 	}
 	var pending DeveloperAccessRequest
