@@ -660,7 +660,7 @@ func handleWaffoPancakeRefundEvent(c *gin.Context, event *service.WaffoPancakeWe
 			reason = string([]rune(reason)[:200])
 		}
 		logger.LogWarn(c.Request.Context(), fmt.Sprintf("Waffo Pancake 退款失败 trade_no=%s user_id=%d refund_id=%s reason=%q", tradeNo, userID, event.Data.RefundTicketMerchantExternalID, reason))
-		model.RecordLog(userID, model.LogTypeError, fmt.Sprintf("Waffo Pancake refund.failed trade_no=%s refund_id=%s reason=%s", tradeNo, event.Data.RefundTicketMerchantExternalID, reason))
+		model.RecordLog(userID, model.LogTypeRefund, fmt.Sprintf("Waffo Pancake refund.failed trade_no=%s refund_id=%s reason=%s", tradeNo, event.Data.RefundTicketMerchantExternalID, reason))
 		return nil
 	}
 
@@ -700,6 +700,7 @@ func handleWaffoPancakeRefundEvent(c *gin.Context, event *service.WaffoPancakeWe
 	if err != nil {
 		return err
 	}
+	model.RecordLog(userID, model.LogTypeRefund, fmt.Sprintf("Waffo Pancake refund.succeeded trade_no=%s refund_id=%s amount=%s %s", tradeNo, event.Data.RefundTicketMerchantExternalID, event.Data.Amount, strings.ToUpper(strings.TrimSpace(event.Data.Currency))))
 	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo Pancake 退款已记账 trade_no=%s user_id=%d amount_micros=%d refund_id=%s", tradeNo, userID, amountMicros, event.Data.RefundTicketMerchantExternalID))
 	return nil
 }
