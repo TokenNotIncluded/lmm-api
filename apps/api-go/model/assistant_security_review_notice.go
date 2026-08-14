@@ -19,19 +19,22 @@ const (
 // produced by a successful assistant review. It has no user or request
 // identity and is intentionally separate from per-conversation incidents.
 type AssistantSecurityReviewNotice struct {
-	ID               int64  `json:"id" gorm:"primaryKey"`
-	TaskID           string `json:"-" gorm:"type:varchar(64);not null;uniqueIndex"`
-	WindowStart      int64  `json:"window_start" gorm:"not null;index"`
-	WindowEnd        int64  `json:"window_end" gorm:"not null;index"`
-	TotalMatches     int64  `json:"total_matches" gorm:"not null"`
-	BlockedMatches   int64  `json:"blocked_matches" gorm:"not null"`
-	AuditedMatches   int64  `json:"audited_matches" gorm:"not null"`
-	AffectedRequests int64  `json:"affected_requests" gorm:"not null"`
-	AffectedUsers    int64  `json:"affected_users" gorm:"not null"`
-	ByCategoryJSON   string `json:"-" gorm:"type:text;not null"`
-	ByRuleJSON       string `json:"-" gorm:"type:text;not null"`
-	CreatedAt        int64  `json:"created_at" gorm:"not null;index"`
-	UpdatedAt        int64  `json:"updated_at" gorm:"not null;index"`
+	ID                int64  `json:"id" gorm:"primaryKey"`
+	TaskID            string `json:"-" gorm:"type:varchar(64);not null;uniqueIndex"`
+	WindowStart       int64  `json:"window_start" gorm:"not null;index"`
+	WindowEnd         int64  `json:"window_end" gorm:"not null;index"`
+	TotalMatches      int64  `json:"total_matches" gorm:"not null"`
+	BlockedMatches    int64  `json:"blocked_matches" gorm:"not null"`
+	AuditedMatches    int64  `json:"audited_matches" gorm:"not null"`
+	AffectedRequests  int64  `json:"affected_requests" gorm:"not null"`
+	AffectedUsers     int64  `json:"affected_users" gorm:"not null"`
+	ByCategoryJSON    string `json:"-" gorm:"type:text;not null"`
+	ByRuleJSON        string `json:"-" gorm:"type:text;not null"`
+	ErrorLogCount     int64  `json:"error_log_count" gorm:"not null;default:0"`
+	ErrorChannelsJSON string `json:"-" gorm:"type:text;not null;default:''"`
+	ErrorModelsJSON   string `json:"-" gorm:"type:text;not null;default:''"`
+	CreatedAt         int64  `json:"created_at" gorm:"not null;index"`
+	UpdatedAt         int64  `json:"updated_at" gorm:"not null;index"`
 }
 
 func (AssistantSecurityReviewNotice) TableName() string { return "assistant_security_review_notices" }
@@ -43,7 +46,7 @@ func SaveAssistantSecurityReviewNotice(taskID string, windowStart, windowEnd int
 	if taskID == "" || windowStart <= 0 || windowEnd < windowStart {
 		return errors.New("assistant security review notice window is invalid")
 	}
-	if review.TotalMatches <= 0 {
+	if review.TotalMatches <= 0 && review.ErrorLogCount <= 0 {
 		return nil
 	}
 	if now <= 0 {
@@ -57,19 +60,30 @@ func SaveAssistantSecurityReviewNotice(taskID string, windowStart, windowEnd int
 	if err != nil {
 		return err
 	}
+	errorChannels, err := json.Marshal(boundSecurityReviewBuckets(review.ErrorChannels))
+	if err != nil {
+		return err
+	}
+	errorModels, err := json.Marshal(boundSecurityReviewBuckets(review.ErrorModels))
+	if err != nil {
+		return err
+	}
 	notice := AssistantSecurityReviewNotice{
-		TaskID:           taskID,
-		WindowStart:      windowStart,
-		WindowEnd:        windowEnd,
-		TotalMatches:     review.TotalMatches,
-		BlockedMatches:   review.BlockedMatches,
-		AuditedMatches:   review.AuditedMatches,
-		AffectedRequests: review.AffectedRequests,
-		AffectedUsers:    review.AffectedUsers,
-		ByCategoryJSON:   string(byCategory),
-		ByRuleJSON:       string(byRule),
-		CreatedAt:        now,
-		UpdatedAt:        now,
+		TaskID:            taskID,
+		WindowStart:       windowStart,
+		WindowEnd:         windowEnd,
+		TotalMatches:      review.TotalMatches,
+		BlockedMatches:    review.BlockedMatches,
+		AuditedMatches:    review.AuditedMatches,
+		AffectedRequests:  review.AffectedRequests,
+		AffectedUsers:     review.AffectedUsers,
+		ByCategoryJSON:    string(byCategory),
+		ByRuleJSON:        string(byRule),
+		ErrorLogCount:     review.ErrorLogCount,
+		ErrorChannelsJSON: string(errorChannels),
+		ErrorModelsJSON:   string(errorModels),
+		CreatedAt:         now,
+		UpdatedAt:         now,
 	}
 	return DB.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "task_id"}}, DoNothing: true}).Create(&notice).Error
 }
@@ -81,6 +95,7 @@ func (notice AssistantSecurityReviewNotice) Aggregate() (AssistantSecurityReview
 		AuditedMatches:   notice.AuditedMatches,
 		AffectedRequests: notice.AffectedRequests,
 		AffectedUsers:    notice.AffectedUsers,
+		ErrorLogCount:    notice.ErrorLogCount,
 	}
 	if notice.ByCategoryJSON != "" && json.Unmarshal([]byte(notice.ByCategoryJSON), &review.ByCategory) != nil {
 		return AssistantSecurityReview{}, errors.New("assistant security review categories are invalid")
@@ -88,8 +103,16 @@ func (notice AssistantSecurityReviewNotice) Aggregate() (AssistantSecurityReview
 	if notice.ByRuleJSON != "" && json.Unmarshal([]byte(notice.ByRuleJSON), &review.ByRule) != nil {
 		return AssistantSecurityReview{}, errors.New("assistant security review rules are invalid")
 	}
+	if notice.ErrorChannelsJSON != "" && json.Unmarshal([]byte(notice.ErrorChannelsJSON), &review.ErrorChannels) != nil {
+		return AssistantSecurityReview{}, errors.New("assistant security review error channels are invalid")
+	}
+	if notice.ErrorModelsJSON != "" && json.Unmarshal([]byte(notice.ErrorModelsJSON), &review.ErrorModels) != nil {
+		return AssistantSecurityReview{}, errors.New("assistant security review error models are invalid")
+	}
 	review.ByCategory = boundSecurityReviewBuckets(review.ByCategory)
 	review.ByRule = boundSecurityReviewBuckets(review.ByRule)
+	review.ErrorChannels = boundSecurityReviewBuckets(review.ErrorChannels)
+	review.ErrorModels = boundSecurityReviewBuckets(review.ErrorModels)
 	return review, nil
 }
 

@@ -178,13 +178,20 @@ func unifiedSecurityReviewCandidates(db *gorm.DB, viewerRole int, ids []int) ([]
 		if err != nil {
 			return nil, err
 		}
+		summaryParts := make([]string, 0, 2)
+		if review.TotalMatches > 0 {
+			summaryParts = append(summaryParts, fmt.Sprintf("Automated security review found %d matches (%d blocked, %d audited)", review.TotalMatches, review.BlockedMatches, review.AuditedMatches))
+		}
+		if review.ErrorLogCount > 0 {
+			summaryParts = append(summaryParts, fmt.Sprintf("detected %d error logs across %d channels", review.ErrorLogCount, len(review.ErrorChannels)))
+		}
 		items = append(items, unifiedTodoCandidate{Item: UnifiedTodoItem{
 			Id:        unifiedTodoItemID(UnifiedTodoCategorySecurityReview, int(notice.ID)),
 			SourceId:  int(notice.ID),
 			Category:  UnifiedTodoCategorySecurityReview,
 			Type:      "assistant_security_review",
 			Title:     "assistant.security_review",
-			Summary:   fmt.Sprintf("Automated security review found %d matches (%d blocked, %d audited)", review.TotalMatches, review.BlockedMatches, review.AuditedMatches),
+			Summary:   strings.Join(summaryParts, "; "),
 			CreatedAt: notice.CreatedAt,
 			UpdatedAt: notice.UpdatedAt,
 			Details: map[string]any{
@@ -197,6 +204,9 @@ func unifiedSecurityReviewCandidates(db *gorm.DB, viewerRole int, ids []int) ([]
 				"affected_users":    review.AffectedUsers,
 				"by_category":       review.ByCategory,
 				"by_rule":           review.ByRule,
+				"error_log_count":   review.ErrorLogCount,
+				"error_channels":    review.ErrorChannels,
+				"error_models":      review.ErrorModels,
 				"privacy_scope":     "aggregate_only",
 			},
 		}})

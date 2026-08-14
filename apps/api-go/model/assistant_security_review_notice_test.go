@@ -21,14 +21,19 @@ func TestAssistantSecurityReviewNoticeSaveIsIdempotentAndAggregateOnly(t *testin
 		AffectedUsers:    2,
 		ByCategory:       []AdvancedSecurityStatBucket{{Key: strings.Repeat("category-", 40), Count: 3}},
 		ByRule:           []AdvancedSecurityStatBucket{{Key: "prompt-injection", Count: 3}},
+		ErrorLogCount:    4,
+		ErrorChannels:    []AdvancedSecurityStatBucket{{Key: "7", Count: 4}},
+		ErrorModels:      []AdvancedSecurityStatBucket{{Key: "gpt-review", Count: 4}},
 	}
 	require.NoError(t, SaveAssistantSecurityReviewNotice("review-task-1", 100, 200, review, 300))
 	review.TotalMatches = 99
+	review.ErrorLogCount = 99
 	require.NoError(t, SaveAssistantSecurityReviewNotice("review-task-1", 100, 200, review, 301))
 
 	var notice AssistantSecurityReviewNotice
 	require.NoError(t, db.First(&notice).Error)
 	assert.EqualValues(t, 3, notice.TotalMatches)
+	assert.EqualValues(t, 4, notice.ErrorLogCount)
 	assert.NotContains(t, notice.ByCategoryJSON, "request_id")
 	assert.NotContains(t, notice.ByCategoryJSON, "user_id")
 	assert.NotContains(t, notice.ByCategoryJSON, "username")
@@ -38,6 +43,9 @@ func TestAssistantSecurityReviewNoticeSaveIsIdempotentAndAggregateOnly(t *testin
 	require.NoError(t, err)
 	assert.EqualValues(t, 3, aggregate.TotalMatches)
 	assert.Len(t, aggregate.ByCategory, 1)
+	assert.EqualValues(t, 4, aggregate.ErrorLogCount)
+	assert.Equal(t, []AdvancedSecurityStatBucket{{Key: "7", Count: 4}}, aggregate.ErrorChannels)
+	assert.Equal(t, []AdvancedSecurityStatBucket{{Key: "gpt-review", Count: 4}}, aggregate.ErrorModels)
 	assert.LessOrEqual(t, len([]rune(aggregate.ByCategory[0].Key)), assistantSecurityReviewKeyMax)
 	encoded, err := json.Marshal(notice)
 	require.NoError(t, err)

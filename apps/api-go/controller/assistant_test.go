@@ -1181,7 +1181,7 @@ func TestAssistantPricingEndpointAppliesTrustDiscountToGroupRatios(t *testing.T)
 func TestAssistantAgentToolsExposeSafeAndConfirmationGatedActions(t *testing.T) {
 	c, _ := createAssistantKeyTestContext(t, "assistant-tool-user")
 	definitions := assistantToolDefinitions()
-	require.Len(t, definitions, 38)
+	require.Len(t, definitions, 39)
 	names := make(map[string]bool, len(definitions))
 	for _, definition := range definitions {
 		names[definition.Function.Name] = true
@@ -1197,6 +1197,7 @@ func TestAssistantAgentToolsExposeSafeAndConfirmationGatedActions(t *testing.T) 
 	assert.True(t, names["get_plan_offers"])
 	assert.True(t, names["get_invitation_rewards"])
 	assert.True(t, names["get_bounty_guide"])
+	assert.True(t, names["get_bounty_data"])
 	assert.True(t, names["prepare_new_user_gift"])
 	assert.True(t, names["get_usage_summary"])
 	assert.True(t, names["navigate_to_page"])
@@ -1488,7 +1489,9 @@ func TestAssistantAgentToolCatalogueMatchesAccessLevel(t *testing.T) {
 	for _, definition := range admin {
 		adminNames[definition.Function.Name] = true
 	}
-	assert.Len(t, adminNames, len(assistantToolDefinitions())-7)
+	// get_bounty_data is topic-gated and is not included until the request is
+	// classified as an open-source bounty read.
+	assert.Len(t, adminNames, len(assistantToolDefinitions())-8)
 	assert.True(t, adminNames["get_admin_assistant_review"])
 	assert.False(t, adminNames["get_admin_server_config"])
 	assert.False(t, adminNames["prepare_admin_config_change"])
@@ -1505,7 +1508,7 @@ func TestAssistantAgentToolCatalogueMatchesAccessLevel(t *testing.T) {
 	for _, definition := range root {
 		rootNames[definition.Function.Name] = true
 	}
-	assert.Len(t, rootNames, len(assistantToolDefinitions())-3)
+	assert.Len(t, rootNames, len(assistantToolDefinitions())-4)
 	assert.True(t, rootNames["get_admin_server_config"])
 	assert.True(t, rootNames["prepare_admin_config_change"])
 	assert.True(t, rootNames["prepare_admin_pricing_change"])

@@ -48,6 +48,9 @@ type AssistantSecurityReview struct {
 	AffectedUsers    int64                        `json:"affected_users"`
 	ByCategory       []AdvancedSecurityStatBucket `json:"by_category"`
 	ByRule           []AdvancedSecurityStatBucket `json:"by_rule"`
+	ErrorLogCount    int64                        `json:"error_log_count"`
+	ErrorChannels    []AdvancedSecurityStatBucket `json:"error_channels"`
+	ErrorModels      []AdvancedSecurityStatBucket `json:"error_models"`
 }
 
 // AssistantReview is aggregate-only. It deliberately excludes user IDs,
@@ -188,7 +191,7 @@ func reviewCommerce(ctx context.Context, since, until int64) (AssistantCommerceR
 }
 
 func reviewActions(review AssistantReview) []AssistantReviewAction {
-	actions := make([]AssistantReviewAction, 0, 4)
+	actions := make([]AssistantReviewAction, 0, 8)
 	if review.CurrentSupport > 0 {
 		actions = append(actions, AssistantReviewAction{Code: "review_support_queue", Count: review.CurrentSupport})
 	}
@@ -197,6 +200,9 @@ func reviewActions(review AssistantReview) []AssistantReviewAction {
 	}
 	if review.Security.TotalMatches > 0 {
 		actions = append(actions, AssistantReviewAction{Code: "review_security_events", Count: review.Security.TotalMatches})
+	}
+	if review.Security.ErrorLogCount > 0 {
+		actions = append(actions, AssistantReviewAction{Code: "review_error_channels", Count: review.Security.ErrorLogCount})
 	}
 
 	var profiles, unknown int64
@@ -281,6 +287,13 @@ func BuildAssistantReview(ctx context.Context, start, end int64) (AssistantRevie
 		ByCategory:       trimReview(securityStats.ByCategory),
 		ByRule:           trimReview(securityStats.ByRule),
 	}
+	errorStats, err := GetAssistantErrorLogReview(ctx, start, end)
+	if err != nil {
+		return AssistantReview{}, err
+	}
+	review.Security.ErrorLogCount = errorStats.Count
+	review.Security.ErrorChannels = errorStats.Channels
+	review.Security.ErrorModels = errorStats.Models
 	review.Actions = reviewActions(review)
 	return review, nil
 }

@@ -164,7 +164,10 @@ func TestUnifiedTodoSecurityReviewIsAggregateOnlyAndAdminVisible(t *testing.T) {
 		AssistantSecurityReview{
 			TotalMatches: 5, BlockedMatches: 3, AuditedMatches: 2,
 			AffectedRequests: 4, AffectedUsers: 2,
-			ByCategory: []AdvancedSecurityStatBucket{{Key: "prompt_injection", Count: 5}},
+			ByCategory:    []AdvancedSecurityStatBucket{{Key: "prompt_injection", Count: 5}},
+			ErrorLogCount: 2,
+			ErrorChannels: []AdvancedSecurityStatBucket{{Key: "7", Count: 2}},
+			ErrorModels:   []AdvancedSecurityStatBucket{{Key: "gpt-review", Count: 2}},
 		}, 300,
 	))
 
@@ -175,6 +178,9 @@ func TestUnifiedTodoSecurityReviewIsAggregateOnlyAndAdminVisible(t *testing.T) {
 	assert.EqualValues(t, 1, adminPage.UnreadCount)
 	assert.EqualValues(t, 5, adminPage.Items[0].Details["total_matches"])
 	assert.EqualValues(t, 2, adminPage.Items[0].Details["affected_users"])
+	assert.EqualValues(t, 2, adminPage.Items[0].Details["error_log_count"])
+	assert.Contains(t, adminPage.Items[0].Summary, "2 error logs")
+	assert.Equal(t, []AdvancedSecurityStatBucket{{Key: "7", Count: 2}}, adminPage.Items[0].Details["error_channels"])
 	assert.Equal(t, "aggregate_only", adminPage.Items[0].Details["privacy_scope"])
 	assert.NotContains(t, adminPage.Items[0].Details, "user_id")
 	assert.NotContains(t, adminPage.Items[0].Details, "request_id")

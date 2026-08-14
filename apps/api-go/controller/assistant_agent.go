@@ -85,9 +85,10 @@ const (
 	toolDeveloper
 	toolOffers
 	toolGift
+	toolBounty
 )
 
-var assistantToolSets [1 << 7]struct {
+var assistantToolSets [1 << 8]struct {
 	once  sync.Once
 	tools []assistantOpenAIToolDefinition
 }
@@ -238,6 +239,24 @@ func buildAssistantTools() []assistantOpenAIToolDefinition {
 				Name:        "get_bounty_guide",
 				Description: "Return the current safe workflow for publishing, funding, reviewing, tipping, and settling an open-source bounty.",
 				Parameters:  emptyObjectSchema(),
+			},
+		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
+				Name:        "get_bounty_data",
+				Description: "Read the signed-in user's open-source bounty data through the same permission boundary as the internal open_source_bounties MCP: board (public), one public bounty detail, my accepted challenges, my owned projects, or my/admin disputes. This tool is strictly read-only; it never creates an MCP token or mutates a bounty. Private views require current L1 developer access, and administrator dispute views require administrator access. Never invent a project or evidence.",
+				Parameters: objectSchema(map[string]any{
+					"view": map[string]any{
+						"type": "string",
+						"enum": []string{"board", "detail", "accepted", "owned", "disputes"},
+					},
+					"project_id": map[string]any{"type": "integer", "minimum": 1},
+					"page":       map[string]any{"type": "integer", "minimum": 1, "maximum": 1000000},
+					"page_size":  map[string]any{"type": "integer", "minimum": 1, "maximum": 50},
+					"status":     map[string]any{"type": "string", "enum": []string{"open", "resolved_paid", "resolved_denied"}},
+					"limit":      map[string]any{"type": "integer", "minimum": 1, "maximum": 100},
+				}, []string{"view"}),
 			},
 		},
 		{
@@ -546,6 +565,9 @@ func keyForTools(context assistantUserContext) toolSetKey {
 	if assistantNewUserGiftToolAllowed(context) {
 		key |= toolGift
 	}
+	if assistantBountyReadToolAllowed(context) {
+		key |= toolBounty
+	}
 	return key
 }
 
@@ -576,6 +598,9 @@ func assistantToolAllowedForContext(name string, userContext assistantUserContex
 	}
 	if name == "prepare_image_generation" {
 		return common.DrawingEnabled && userContext.DeveloperAccessGranted
+	}
+	if name == "get_bounty_data" {
+		return assistantBountyReadToolAllowed(userContext)
 	}
 	if userContext.AdministratorMode {
 		if userContext.AccessLevel != "ROOT" {
@@ -614,6 +639,7 @@ func assistantToolAllowedForContext(name string, userContext assistantUserContex
 		"get_user_usage_summary",
 		"prepare_user_action",
 		"get_bounty_guide",
+		"get_bounty_data",
 		"search_web",
 		"get_setup_guide",
 		"prepare_l1_recommendation",
@@ -675,7 +701,11 @@ func assistantToolChoiceForContext(userContext assistantUserContext) any {
 		case model.AssistantIntentInvitation:
 			name = "get_invitation_rewards"
 		case model.AssistantIntentBounty:
-			name = "get_bounty_guide"
+			if assistantBountyReadRequest(userContext.LatestUserRequest) {
+				name = "get_bounty_data"
+			} else {
+				name = "get_bounty_guide"
+			}
 		}
 	}
 	if name == "" && assistantExplicitImageRequest(userContext.LatestUserRequest) {
@@ -690,6 +720,25 @@ func assistantToolChoiceForContext(userContext assistantUserContext) any {
 		}
 	}
 	return "auto"
+}
+
+// assistantBountyReadToolAllowed keeps the larger read tool out of unrelated
+// conversations. The intent is part of the tool-set cache key, so a bounty
+// request cannot accidentally reuse a catalogue built for another topic.
+func assistantBountyReadToolAllowed(userContext assistantUserContext) bool {
+	return userContext.Intent == model.AssistantIntentBounty || assistantBountyReadRequest(userContext.LatestUserRequest)
+}
+
+func assistantBountyReadRequest(text string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(text))
+	if normalized == "" {
+		return false
+	}
+	return assistantTextContainsAny(normalized,
+		"有哪些悬赏", "悬赏列表", "浏览悬赏", "查看悬赏", "查悬赏", "悬赏详情", "悬赏状态",
+		"我的悬赏", "我接受的", "已接受", "争议", "纠纷", "dispute", "bounty list", "list bounties",
+		"browse bounties", "show my bounties", "accepted challenges", "bounty details", "bounty status",
+	)
 }
 
 // assistantHumanSupportRequest distinguishes an explicit handoff request from
@@ -750,6 +799,9 @@ func assistantReadChain(userContext assistantUserContext) []string {
 	}
 	if userContext.Intent == model.AssistantIntentCost && assistantModelReferencePattern.MatchString(text) {
 		tools = append(tools, "get_model_pricing")
+	}
+	if userContext.Intent == model.AssistantIntentBounty && assistantBountyReadRequest(text) {
+		tools = append(tools, "get_bounty_data")
 	}
 	return tools
 }
@@ -1669,6 +1721,8 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 		return executeAssistantInvitationTool(actorUserID)
 	case "get_bounty_guide":
 		return executeAssistantBountyTool()
+	case "get_bounty_data":
+		return executeAssistantBountyDataTool(actorUserID, input)
 	case "prepare_new_user_gift":
 		return executeAssistantNewUserGiftTool(c, actorUserID, input)
 	case "prepare_image_generation":
@@ -2448,6 +2502,153 @@ func executeAssistantBountyTool() map[string]any {
 		"page":                 "/open-source-bounties",
 		"message":              "The public platform fee helps fund AI customer-service token costs. A bounty publisher may also give a contributor a separate tip; exact charges and escrow are shown before confirmation.",
 	}
+}
+
+const assistantBountyReadMaxRows = 50
+
+// executeAssistantBountyDataTool is the in-process equivalent of the
+// read-only open_source_bounties MCP tools. It deliberately uses the actor's
+// session identity rather than minting or reading a personal MCP token. The
+// model functions are the same permission-aware functions used by the MCP
+// handlers, and no write operation is exposed here.
+func executeAssistantBountyDataTool(userID int, input map[string]any) map[string]any {
+	if userID <= 0 {
+		return map[string]any{"ok": false, "status": "signed_in_required", "error": "a signed-in account is required to read bounty data"}
+	}
+	view := strings.ToLower(inputString(input, "view"))
+	if view == "" {
+		view = "board"
+	}
+	mcpToolName := map[string]string{
+		"board": "open_source_bounties.list", "detail": "open_source_bounties.get",
+		"accepted": "open_source_bounties.list_accepted", "owned": "open_source_bounties.list_owned",
+		"disputes": "open_source_bounties.list_disputes",
+	}[view]
+	result := map[string]any{
+		"ok":                                    true,
+		"view":                                  view,
+		"read_only":                             true,
+		"mcp_equivalent":                        mcpToolName,
+		"write_actions_require_ui_confirmation": true,
+	}
+	fail := func(err error) map[string]any {
+		result["ok"] = false
+		result["error"] = "bounty data could not be loaded"
+		if code := model.OpenSourceBountyErrorCode(err); code != "OPEN_SOURCE_BOUNTY_INTERNAL_ERROR" {
+			result["status"] = code
+		}
+		return result
+	}
+	privateRead := func() bool {
+		if err := model.RequireOpenSourceBountyDeveloperAccess(userID); err != nil {
+			result["ok"] = false
+			result["status"] = "l1_required"
+			result["error"] = "L1 developer access is required for private bounty data"
+			result["next_step"] = "Continue the L1 onboarding conversation if you need your accepted, owned, or dispute records."
+			return false
+		}
+		return true
+	}
+
+	switch view {
+	case "board":
+		page, ok := assistantBountyReadInt(input, "page", 1, 1, 1000000)
+		if !ok {
+			return map[string]any{"ok": false, "status": "invalid_input", "error": "page must be an integer from 1 to 1000000"}
+		}
+		pageSize, ok := assistantBountyReadInt(input, "page_size", 20, 1, assistantBountyReadMaxRows)
+		if !ok {
+			return map[string]any{"ok": false, "status": "invalid_input", "error": "page_size must be an integer from 1 to 50"}
+		}
+		items, total, err := model.ListOpenSourceBounties(userID, page, pageSize)
+		if err != nil {
+			return fail(err)
+		}
+		result["data"] = map[string]any{"items": items, "total": total, "page": page, "page_size": pageSize}
+		return result
+	case "detail":
+		projectID, ok := assistantBountyReadInt(input, "project_id", 0, 1, int(^uint(0)>>1))
+		if !ok {
+			return map[string]any{"ok": false, "status": "invalid_input", "error": "project_id must be a positive integer"}
+		}
+		detail, err := model.GetOpenSourceBountyDetail(userID, projectID)
+		if err != nil {
+			return fail(err)
+		}
+		if detail == nil {
+			return map[string]any{"ok": false, "status": "not_found", "error": "bounty project was not found"}
+		}
+		bounded := *detail
+		bounded.Challenges, bounded.Ledger = boundAssistantBountyDetail(detail.Challenges, detail.Ledger)
+		result["data"] = &bounded
+		result["truncated"] = len(detail.Challenges) > len(bounded.Challenges) || len(detail.Ledger) > len(bounded.Ledger)
+		return result
+	case "accepted":
+		if !privateRead() {
+			return result
+		}
+		items, err := model.ListAcceptedOpenSourceBounties(userID)
+		if err != nil {
+			return fail(err)
+		}
+		result["data"], result["truncated"] = boundAssistantBountyRows(items)
+		return result
+	case "owned":
+		if !privateRead() {
+			return result
+		}
+		items, err := model.ListOwnedOpenSourceBounties(userID)
+		if err != nil {
+			return fail(err)
+		}
+		result["data"], result["truncated"] = boundAssistantBountyRows(items)
+		return result
+	case "disputes":
+		if !privateRead() {
+			return result
+		}
+		limit, ok := assistantBountyReadInt(input, "limit", assistantBountyReadMaxRows, 1, 100)
+		if !ok {
+			return map[string]any{"ok": false, "status": "invalid_input", "error": "limit must be an integer from 1 to 100"}
+		}
+		status := inputString(input, "status")
+		items, err := model.ListOpenSourceBountyDisputesFiltered(userID, bountyMCPIsAdmin(userID), status, limit)
+		if err != nil {
+			return fail(err)
+		}
+		result["data"] = items
+		return result
+	default:
+		return map[string]any{"ok": false, "status": "invalid_input", "error": "view must be board, detail, accepted, owned, or disputes"}
+	}
+}
+
+func assistantBountyReadInt(input map[string]any, key string, fallback int, minimum int, maximum int) (int, bool) {
+	value, exists := inputNumber(input, key)
+	if !exists {
+		return fallback, true
+	}
+	if value != math.Trunc(value) || value < float64(minimum) || value > float64(maximum) {
+		return 0, false
+	}
+	return int(value), true
+}
+
+func boundAssistantBountyDetail(challenges []model.OpenSourceBountyChallengeView, ledger []model.OpenSourceBountyLedger) ([]model.OpenSourceBountyChallengeView, []model.OpenSourceBountyLedger) {
+	if len(challenges) > assistantBountyReadMaxRows {
+		challenges = challenges[:assistantBountyReadMaxRows]
+	}
+	if len(ledger) > assistantBountyReadMaxRows {
+		ledger = ledger[:assistantBountyReadMaxRows]
+	}
+	return challenges, ledger
+}
+
+func boundAssistantBountyRows[T any](rows []T) ([]T, bool) {
+	if len(rows) <= assistantBountyReadMaxRows {
+		return rows, false
+	}
+	return rows[:assistantBountyReadMaxRows], true
 }
 
 func executeAssistantUsageTool(userID int, input map[string]any) map[string]any {

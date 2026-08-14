@@ -13,7 +13,7 @@ import (
 
 func TestReviewAggregates(t *testing.T) {
 	user := setupAssistantLeadTestDB(t)
-	require.NoError(t, DB.AutoMigrate(&PromptPresetStat{}, &AssistantSecurityIncident{}, &AdvancedSecurityEvent{}, &TopUp{}, &SubscriptionOrder{}, &FinanceLedgerEntry{}))
+	require.NoError(t, DB.AutoMigrate(&PromptPresetStat{}, &AssistantSecurityIncident{}, &AdvancedSecurityEvent{}, &TopUp{}, &SubscriptionOrder{}, &FinanceLedgerEntry{}, &Log{}))
 
 	require.NoError(t, DB.Create(&AssistantProfileBucket{Profile: AssistantProfileUnknown, BucketStart: 100, Count: 5}).Error)
 	require.NoError(t, DB.Create(&AssistantProfileBucket{Profile: AssistantProfileTechnical, BucketStart: 100, Count: 2}).Error)
@@ -74,6 +74,11 @@ func TestReviewAggregates(t *testing.T) {
 		CreatedAt: 300, RequestID: "request-outside-window", UserID: user.Id, Username: user.Username,
 		Decision: AdvancedSecurityDecisionAudited, RuleID: "outside", Category: "outside",
 	}).Error)
+	require.NoError(t, DB.Create(&[]Log{
+		{CreatedAt: 100, Type: LogTypeError, ChannelId: 7, ModelName: "gpt-review", Content: "private upstream response"},
+		{CreatedAt: 150, Type: LogTypeError, ChannelId: 7, ModelName: "gpt-review", Content: "another private error"},
+		{CreatedAt: 300, Type: LogTypeError, ChannelId: 8, ModelName: "outside-model", Content: "outside window"},
+	}).Error)
 
 	review, err := BuildAssistantReview(context.Background(), 1, 200)
 	require.NoError(t, err)
@@ -93,6 +98,9 @@ func TestReviewAggregates(t *testing.T) {
 	assert.EqualValues(t, 1, review.Security.AffectedUsers)
 	assert.Equal(t, []AdvancedSecurityStatBucket{{Key: "prompt_injection", Count: 1}}, review.Security.ByCategory)
 	assert.Equal(t, []AdvancedSecurityStatBucket{{Key: "prompt-injection", Count: 1}}, review.Security.ByRule)
+	assert.EqualValues(t, 2, review.Security.ErrorLogCount)
+	assert.Equal(t, []AdvancedSecurityStatBucket{{Key: "7", Count: 2}}, review.Security.ErrorChannels)
+	assert.Equal(t, []AdvancedSecurityStatBucket{{Key: "gpt-review", Count: 2}}, review.Security.ErrorModels)
 	require.Len(t, review.Presets, 1)
 	assert.EqualValues(t, 10, review.Presets[0].Clicks)
 	assert.EqualValues(t, 5, review.Profiles[0].Count)
@@ -105,6 +113,7 @@ func TestReviewAggregates(t *testing.T) {
 		"review_support_queue",
 		"review_security_incidents",
 		"review_security_events",
+		"review_error_channels",
 		"improve_profile_classification",
 		"improve_pre_conversation_prompts",
 		"review_recommendation_quality",
@@ -116,6 +125,7 @@ func TestReviewAggregates(t *testing.T) {
 	assert.NotContains(t, string(encoded), user.Email)
 	assert.NotContains(t, string(encoded), "request-in-window")
 	assert.NotContains(t, string(encoded), "digest-in-window")
+	assert.NotContains(t, string(encoded), "private upstream response")
 	assert.Less(t, len(encoded), 16*1024)
 }
 
