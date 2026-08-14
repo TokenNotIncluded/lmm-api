@@ -424,6 +424,7 @@ export function AssistantHistory(props: {
                           props.presentation === 'rows' ? 'ghost' : 'outline'
                         }
                         size='sm'
+                        aria-label={`${t('View')} ${conversation.title}`}
                         onClick={() => props.onOpenConversation(conversation)}
                       >
                         {t('View')}

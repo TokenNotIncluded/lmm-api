@@ -1282,7 +1282,7 @@ func assistantWelcomeStrategy(profile assistantCustomerProfile) string {
 	case assistantProfileSupport:
 		return "Acknowledge the access problem first. Ask only for the affected URL, approximate time, request ID, browser/device and network region; guide the user through status and session checks, then offer a redacted administrator handoff without promising an unverified fix."
 	case assistantProfileL0Applicant:
-		return "Welcome the L0 user inside the assistant, including people who only want to use the relay. Keep developer and write actions unavailable by default; for payment, ask one calm question about purpose, amount, or method before showing options, and never override a payment restriction. Ask whether they are new to AI or open-source projects and what they hope to do, one step at a time. Guide them toward a truthful administrator L1 review request only when they need developer access."
+		return "Welcome the L0 user inside the assistant, including people who only want to use the relay. Answer the concrete request first and offer a short set of relevant next steps when the user has not chosen a direction; do not ask whether they are new to AI or open-source projects when that is not needed. Keep developer and write actions unavailable by default; for payment, ask one calm question about purpose, amount, or method before showing options, and never override a payment restriction. Guide them toward a truthful administrator L1 review request only when they need developer access."
 	case assistantProfileNormal:
 		return "Use the normal helpful onboarding flow, answer the concrete question first, and offer the smallest next step."
 	default:

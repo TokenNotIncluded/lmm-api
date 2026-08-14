@@ -729,6 +729,18 @@ func TestAssistantL0WelcomeStrategyAnswersWithoutRepeatingOnboardingQuestions(t 
 	assert.NotContains(t, strategy, "Ask whether they are new")
 }
 
+func TestAssistantL0ApplicantWelcomeStrategyDoesNotAskWhetherNew(t *testing.T) {
+	strategy := assistantWelcomeStrategyForContext(assistantUserContext{
+		AccessLevel:     "L0",
+		CustomerProfile: assistantProfileL0Applicant,
+	})
+
+	assert.Contains(t, strategy, "answer the user's current question directly")
+	assert.Contains(t, strategy, "explain the next small step only when it helps the current request")
+	assert.NotContains(t, strategy, "Ask whether they are new")
+	assert.NotContains(t, strategy, "ask whether they are new to AI")
+}
+
 func TestAssistantL0WelcomeStrategyPreservesProfileSpecialization(t *testing.T) {
 	tests := []struct {
 		profile assistantCustomerProfile

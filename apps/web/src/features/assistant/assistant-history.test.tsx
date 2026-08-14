@@ -87,6 +87,7 @@ const activeConversation = {
 const lowerAccessConversation = {
   ...activeConversation,
   id: 2,
+  title: 'Lower-access support',
   last_message_preview: 'lower-access-support',
   owner: 'lower_level_user' as const,
 }
@@ -245,6 +246,16 @@ describe('AssistantHistory archive controls', () => {
       assert.doesNotMatch(
         rendered.container.textContent ?? '',
         /sk-history-secret-123456/
+      )
+      assert.deepEqual(
+        [
+          ...document.querySelectorAll<HTMLButtonElement>(
+            '[data-testid="assistant-history-list"] button'
+          ),
+        ]
+          .filter((button) => button.textContent?.trim() === 'View')
+          .map((button) => button.getAttribute('aria-label')),
+        ['View Active support', 'View Lower-access support']
       )
       assert.equal(
         document.querySelectorAll('button[aria-label="Archive conversation"]')
