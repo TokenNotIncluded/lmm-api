@@ -15,21 +15,22 @@ import (
 )
 
 type fakeProductionRunner struct {
-	t                *testing.T
-	candidatePackage string
-	rollbackPackage  string
-	probeBinary      string
-	installedBinary  string
-	frontendRoot     string
-	oldVersion       string
-	newVersion       string
-	installedVersion string
-	packageName      string
-	serviceActive    bool
-	timerActive      bool
-	migrationFailure bool
-	failTimerEnable  bool
-	commands         []productionCommand
+	t                        *testing.T
+	candidatePackage         string
+	rollbackPackage          string
+	probeBinary              string
+	installedBinary          string
+	frontendRoot             string
+	oldVersion               string
+	newVersion               string
+	installedVersion         string
+	packageName              string
+	serviceActive            bool
+	timerActive              bool
+	migrationFailure         bool
+	rollbackMigrationFailure bool
+	failTimerEnable          bool
+	commands                 []productionCommand
 }
 
 func (runner *fakeProductionRunner) Run(_ context.Context, command productionCommand) ([]byte, error) {
@@ -48,6 +49,9 @@ func (runner *fakeProductionRunner) Run(_ context.Context, command productionCom
 		case "migrate":
 			if runner.migrationFailure && len(command.Args) > 1 && command.Args[1] == "--apply" {
 				return nil, errors.New("injected migration failure")
+			}
+			if runner.rollbackMigrationFailure && command.Name == runner.installedBinary {
+				return nil, errors.New("injected rollback compatibility failure")
 			}
 			return nil, nil
 		case "request":
@@ -422,12 +426,18 @@ func mustHashFile(t *testing.T, path string) string {
 
 func TestProductionPackageIdentitySupportsSourceAndAURPackages(t *testing.T) {
 	for _, name := range []string{productionSourcePackageName, productionAURPackageName} {
-		t.Run(name, func(t *testing.T) {
-			gotName, version, identity, err := parseProductionPackageIdentity([]byte(name + " 0.1.5-1\n"))
-			if err != nil || gotName != name || version != "0.1.5-1" || identity != name+" 0.1.5-1" {
-				t.Fatalf("identity=(%q, %q, %q) err=%v", gotName, version, identity, err)
-			}
-		})
+		for _, pkgrel := range []string{"1", "2", "1.1"} {
+			t.Run(name+"-"+pkgrel, func(t *testing.T) {
+				wantVersion := "0.1.5-" + pkgrel
+				gotName, version, identity, err := parseProductionPackageIdentity([]byte(name + " " + wantVersion + "\n"))
+				if err != nil || gotName != name || version != wantVersion || identity != name+" "+wantVersion {
+					t.Fatalf("identity=(%q, %q, %q) err=%v", gotName, version, identity, err)
+				}
+				if !productionPackageMatches(version, "0.1.5") {
+					t.Fatalf("package version %q did not match release", version)
+				}
+			})
+		}
 	}
 }
 
@@ -451,7 +461,9 @@ func TestNativeBackendUpgradeLeavesIndependentFrontendUntouched(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manifest.PackageName != productionAURPackageName || manifest.ActivateFrontend {
+	if manifest.PackageName != productionAURPackageName ||
+		manifest.PackageIdentity != productionAURPackageName+" "+fixture.runner.newVersion+"-1" ||
+		manifest.ActivateFrontend {
 		t.Fatalf("manifest=%#v", manifest)
 	}
 	if manifest.FrontendIndexSHA256 != manifest.OldFrontendIndexSHA256 {
@@ -466,23 +478,46 @@ func TestNativeMigrationsUseReleaseScopedDisposableDirectories(t *testing.T) {
 	}
 
 	wantRoot := filepath.Join(fixture.workspace.root, "tmp", "migrations")
+	want := map[string]struct {
+		binary string
+		mode   string
+	}{
+		"candidate-apply":  {binary: fixture.runner.probeBinary, mode: "apply"},
+		"candidate-verify": {binary: fixture.runner.probeBinary, mode: "verify"},
+		"rollback-verify":  {binary: fixture.runner.installedBinary, mode: "verify"},
+	}
 	seen := map[string]bool{}
-	for _, command := range fixture.runner.commands {
-		if command.Name != fixture.runner.probeBinary || len(command.Args) != 2 || command.Args[0] != "migrate" {
+	rollbackVerifyIndex := -1
+	installIndex := -1
+	for index, command := range fixture.runner.commands {
+		if command.Name == "pacman" && len(command.Args) > 0 && command.Args[0] == "-U" && installIndex == -1 {
+			installIndex = index
+		}
+		if len(command.Args) != 2 || command.Args[0] != "migrate" {
 			continue
 		}
-		mode := strings.TrimPrefix(command.Args[1], "--")
-		want := filepath.Join(wantRoot, mode)
-		if command.Dir != want {
-			t.Fatalf("migration %s workdir=%q, want %q", mode, command.Dir, want)
+		name := filepath.Base(command.Dir)
+		expected, ok := want[name]
+		if !ok || command.Name != expected.binary || command.Args[1] != "--"+expected.mode {
+			t.Fatalf("unexpected migration %s: %#v", name, command)
+		}
+		wantDir := filepath.Join(wantRoot, name)
+		if command.Dir != wantDir {
+			t.Fatalf("migration %s workdir=%q, want %q", name, command.Dir, wantDir)
 		}
 		if info, err := os.Stat(command.Dir); err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
-			t.Fatalf("migration %s directory info=%v err=%v", mode, info, err)
+			t.Fatalf("migration %s directory info=%v err=%v", name, info, err)
 		}
-		seen[mode] = true
+		seen[name] = true
+		if name == "rollback-verify" {
+			rollbackVerifyIndex = index
+		}
 	}
-	if !seen["apply"] || !seen["verify"] {
+	if len(seen) != len(want) {
 		t.Fatalf("migration commands=%v", seen)
+	}
+	if rollbackVerifyIndex < 0 || installIndex < 0 || rollbackVerifyIndex > installIndex {
+		t.Fatalf("rollback verify index=%d package install index=%d", rollbackVerifyIndex, installIndex)
 	}
 }
 
@@ -533,7 +568,7 @@ func TestNativeProductionFailureAfterArmingRestoresDirectGoRelease(t *testing.T)
 	fixture := newProductionFixture(t)
 	fixture.runner.migrationFailure = true
 	_, err := fixture.runtime.apply(context.Background(), fixture.workspace, fixture.options)
-	if err == nil || !strings.Contains(err.Error(), "migration apply") {
+	if err == nil || !strings.Contains(err.Error(), "migration candidate-apply") {
 		t.Fatalf("apply error=%v", err)
 	}
 	status, statusErr := fixture.runtime.readStatus(fixture.workspace)
@@ -556,6 +591,28 @@ func TestNativeProductionFailureAfterArmingRestoresDirectGoRelease(t *testing.T)
 	}
 	if _, err := os.Lstat(fixture.runtime.paths.TransactionLock); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("transaction lock was not released: %v", err)
+	}
+}
+
+func TestNativeProductionBlocksSchemaThatPreviousReleaseCannotRead(t *testing.T) {
+	fixture := newProductionFixture(t)
+	fixture.runner.rollbackMigrationFailure = true
+	_, err := fixture.runtime.apply(context.Background(), fixture.workspace, fixture.options)
+	if err == nil || !strings.Contains(err.Error(), "migration rollback-verify") {
+		t.Fatalf("apply error=%v", err)
+	}
+	status, statusErr := fixture.runtime.readStatus(fixture.workspace)
+	if statusErr != nil {
+		t.Fatal(statusErr)
+	}
+	if status.Phase != "ROLLED_BACK" || fixture.runner.installedVersion != fixture.runner.oldVersion {
+		t.Fatalf("rollback status=%#v installed=%s", status, fixture.runner.installedVersion)
+	}
+	for _, command := range fixture.runner.commands {
+		if command.Name == "pacman" && len(command.Args) > 0 && command.Args[0] == "-U" &&
+			command.Args[len(command.Args)-1] == fixture.options.Package {
+			t.Fatalf("candidate package was installed after rollback compatibility failed: %v", command.Args)
+		}
 	}
 }
 

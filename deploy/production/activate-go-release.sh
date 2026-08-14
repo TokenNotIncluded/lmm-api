@@ -74,6 +74,8 @@ DATABASE_SCHEMA=''
 ROLLBACK_LAYOUT='split'
 CANDIDATE_PACKAGE_NAME=''
 ROLLBACK_PACKAGE_NAME=''
+CANDIDATE_PACKAGE_VERSION=''
+ROLLBACK_PACKAGE_VERSION=''
 ROLLBACK_SECONDS=600
 while (($#)); do
   case $1 in
@@ -161,7 +163,8 @@ go_package_record() {
   local archive=$1 record name version extra
   record=$(pacman -Qp "$archive") || die 'could not read Go package identity'
   read -r name version extra <<<"$record"
-  [[ -z ${extra:-} && $version =~ ^[0-9][0-9A-Za-z._+]*-1$ ]] || die 'invalid Go package identity'
+  [[ -z ${extra:-} && $version =~ ^[0-9][0-9A-Za-z._+]*-[1-9][0-9]*(\.[0-9]+)?$ ]] || \
+    die 'invalid Go package identity'
   case $name in
     "$SOURCE_PACKAGE"|"$AUR_PACKAGE") ;;
     *) die "unsupported Go package: $name" ;;
@@ -173,8 +176,8 @@ load_package_layout() {
   local candidate_record rollback_record
   candidate_record=$(go_package_record "$PACKAGE")
   rollback_record=$(go_package_record "$ROLLBACK_GO")
-  CANDIDATE_PACKAGE_NAME=${candidate_record%% *}
-  ROLLBACK_PACKAGE_NAME=${rollback_record%% *}
+  read -r CANDIDATE_PACKAGE_NAME CANDIDATE_PACKAGE_VERSION <<<"$candidate_record"
+  read -r ROLLBACK_PACKAGE_NAME ROLLBACK_PACKAGE_VERSION <<<"$rollback_record"
   [[ $CANDIDATE_PACKAGE_NAME == "$ROLLBACK_PACKAGE_NAME" ]] || \
     die 'candidate and rollback Go package names differ'
 }
@@ -408,13 +411,24 @@ remove_old_application_configuration() {
   rmdir -- "$OLD_CONFIG_DIR" 2>/dev/null || true
 }
 
-run_candidate_migration() {
-	local mode=$1 unit="lmm-api-go-migrate-$1-$deployment_id" environment_file migration_workdir
+run_migration() {
+	local mode=$1 name=$2 binary=$3 unit environment_file migration_workdir path
 	case $mode in apply|verify) ;; *) die 'candidate migration mode must be apply or verify' ;; esac
+	[[ $name =~ ^[a-z][a-z-]{0,31}$ ]] || die 'candidate migration name is invalid'
 	is_database_schema "$DATABASE_SCHEMA" || die 'database schema is unavailable for migration'
 	environment_file=$(active_environment_file)
-	migration_workdir=$WORKSPACE/tmp/migrations/$mode
-	install -d -m0700 "$WORKSPACE/tmp" "$WORKSPACE/tmp/migrations" "$migration_workdir"
+	migration_workdir=$WORKSPACE/tmp/migrations/$name
+	path=$WORKSPACE
+	for component in tmp migrations "$name"; do
+		path=$path/$component
+		if [[ -e $path || -L $path ]]; then
+			[[ -d $path && ! -L $path ]] || die "migration directory is unsafe: $path"
+		else
+			mkdir -m0700 "$path"
+		fi
+		chmod 0700 "$path"
+	done
+	unit="lmm-api-go-migrate-$name-$deployment_id"
 	systemd-run --quiet --wait --collect --unit="$unit" \
 		--property=Type=oneshot \
 		--property=WorkingDirectory="$migration_workdir" \
@@ -422,7 +436,7 @@ run_candidate_migration() {
 		--setenv=GIN_MODE=release \
 		--setenv="LMM_DB_MIGRATION_MODE=$mode" \
 		--setenv="PGOPTIONS=-c search_path=$DATABASE_SCHEMA" \
-		"$PROBE_BINARY" migrate "--$mode"
+		"$binary" migrate "--$mode"
 }
 
 disable_rollback_timer() {
@@ -486,6 +500,9 @@ perform_rollback() {
       remove_owned_new_dropins
     fi
   fi
+  [[ $(pacman -Q "$ROLLBACK_PACKAGE_NAME") == "$(go_package_record "$ROLLBACK_GO")" ]] || \
+    die 'rolled-back Go package identity mismatch'
+  pacman -Qkk "$ROLLBACK_PACKAGE_NAME" >/dev/null
   systemctl daemon-reload
   systemctl enable --now "$(old_service)"
   PROBE_BINARY=$(manifest_value probe_binary)
@@ -560,8 +577,10 @@ case $ACTION in
     is_sha256 "$FRONTEND_INDEX_SHA256" || die 'frontend checksum is invalid'
     [[ $ROLLBACK_SECONDS =~ ^[0-9]+$ && $ROLLBACK_SECONDS -ge 600 && $ROLLBACK_SECONDS -le 1800 ]] || die 'rollback window must be 600-1800 seconds'
     load_package_layout
-    [[ $(go_package_record "$PACKAGE") == "$CANDIDATE_PACKAGE_NAME $EXPECTED_VERSION-1" ]] || die 'candidate package identity mismatch'
+    [[ ${CANDIDATE_PACKAGE_VERSION%-*} == "$EXPECTED_VERSION" ]] || die 'candidate package identity mismatch'
+    [[ ${ROLLBACK_PACKAGE_VERSION%-*} == "$OLD_VERSION" ]] || die 'Go rollback package version mismatch'
     [[ $(go_package_record "$ROLLBACK_GO") == "$(pacman -Q "$ROLLBACK_PACKAGE_NAME")" ]] || die 'Go rollback package identity mismatch'
+    pacman -Qkk "$ROLLBACK_PACKAGE_NAME" >/dev/null
     if [[ $ROLLBACK_LAYOUT == split ]]; then
       [[ $(pacman -Qp "$ROLLBACK_CORE") == "$(pacman -Q lmm-api)" ]] || die 'core rollback package identity mismatch'
       systemctl is-active --quiet "$(old_service)" || die 'pre-cutover service is not active'
@@ -656,8 +675,9 @@ EOF
     fi
     systemctl disable --now "$(old_service)"
 		write_status "MIGRATING deadline=$deadline_utc version=$EXPECTED_VERSION"
-		run_candidate_migration apply
-		run_candidate_migration verify
+		run_migration apply candidate-apply "$PROBE_BINARY"
+		run_migration verify candidate-verify "$PROBE_BINARY"
+		run_migration verify rollback-verify "$INSTALLED_BINARY"
 		write_status "DEPLOYING deadline=$deadline_utc version=$EXPECTED_VERSION"
     if [[ $ROLLBACK_LAYOUT == split ]]; then
       # pacman does not resolve a local package's conflict with an explicitly
@@ -675,6 +695,8 @@ EOF
     fi
     harden_production_environment_config
     systemctl daemon-reload
+    [[ $(pacman -Q "$CANDIDATE_PACKAGE_NAME") == "$(go_package_record "$PACKAGE")" ]] || \
+      die 'installed candidate package identity mismatch'
     pacman -Qkk "$CANDIDATE_PACKAGE_NAME" >/dev/null
     [[ $("$INSTALLED_BINARY" version) == "$EXPECTED_VERSION" ]] || die 'installed binary version mismatch'
     for removed in "$REMOVED_SELECTOR" "$REMOVED_PROVIDER_ROOT" "$REMOVED_LEGACY_SERVICE"; do

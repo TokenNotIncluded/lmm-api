@@ -30,7 +30,7 @@ const (
 	productionCommandTimeout       = 2 * time.Minute
 	productionProbeTimeout         = 8 * time.Second
 	productionProbeAttempts        = 45
-	productionTransactionFormat    = 2
+	productionTransactionFormat    = 3
 	productionStatusFormat         = 1
 	productionFrontendReleaseKeep  = 3
 	productionTransactionMarker    = "deployment.env"
@@ -48,6 +48,7 @@ var (
 	productionVersionPattern = regexp.MustCompile(`^[0-9][0-9A-Za-z._+]*$`)
 	productionSHA256Pattern  = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	productionReasonPattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+	productionPkgrelPattern  = regexp.MustCompile(`^[1-9][0-9]*(?:\.[0-9]+)?$`)
 )
 
 type productionPaths struct {
@@ -201,6 +202,7 @@ type productionManifest struct {
 	Format                    int       `json:"format"`
 	DeploymentID              string    `json:"deployment_id"`
 	PackageName               string    `json:"package_name"`
+	PackageIdentity           string    `json:"package_identity"`
 	Package                   string    `json:"package"`
 	PackageSHA256             string    `json:"package_sha256"`
 	RollbackPackage           string    `json:"rollback_package"`
@@ -234,11 +236,18 @@ func parseProductionPackageIdentity(output []byte) (name, version, identity stri
 	if name != productionAURPackageName && name != productionSourcePackageName {
 		return "", "", "", fmt.Errorf("unsupported Go package %q", name)
 	}
-	packageVersion, found := strings.CutSuffix(version, "-1")
-	if !found || !productionVersionPattern.MatchString(packageVersion) {
+	separator := strings.LastIndexByte(version, '-')
+	if separator <= 0 || !productionVersionPattern.MatchString(version[:separator]) ||
+		!productionPkgrelPattern.MatchString(version[separator+1:]) {
 		return "", "", "", errors.New("invalid Go package version")
 	}
 	return name, version, name + " " + version, nil
+}
+
+func productionPackageMatches(version, release string) bool {
+	separator := strings.LastIndexByte(version, '-')
+	return separator > 0 && version[:separator] == release &&
+		productionPkgrelPattern.MatchString(version[separator+1:])
 }
 
 func (runtime *productionRuntime) installedGoPackage(ctx context.Context) (name, identity string, err error) {
@@ -260,6 +269,20 @@ func (runtime *productionRuntime) installedGoPackage(ctx context.Context) (name,
 		return "", "", errors.New("installed Go package was not found")
 	}
 	return name, identity, nil
+}
+
+func (runtime *productionRuntime) verifyInstalledGoPackage(ctx context.Context, name, identity string) error {
+	installed, err := runtime.runner.Run(ctx, productionCommand{Name: "pacman", Args: []string{"-Q", name}})
+	if err != nil || strings.TrimSpace(string(installed)) != identity {
+		return errors.New("installed Go package identity mismatch")
+	}
+	integrity, err := runtime.runner.Run(ctx, productionCommand{
+		Name: "pacman", Args: []string{"-Qkk", name}, Env: append(os.Environ(), "LC_ALL=C"),
+	})
+	if err != nil || !strings.Contains(string(integrity), "0 altered files") {
+		return errors.New("installed Go package integrity check failed")
+	}
+	return nil
 }
 
 type productionStatus struct {
@@ -627,6 +650,11 @@ func (runtime *productionRuntime) validateManifest(workspace productionWorkspace
 	}
 	if manifest.PackageName != productionAURPackageName && manifest.PackageName != productionSourcePackageName {
 		return errors.New("deployment manifest contains an unsupported package name")
+	}
+	packageName, packageVersion, packageIdentity, err := parseProductionPackageIdentity([]byte(manifest.PackageIdentity))
+	if err != nil || packageName != manifest.PackageName || packageIdentity != manifest.PackageIdentity ||
+		!productionPackageMatches(packageVersion, manifest.ExpectedVersion) {
+		return errors.New("deployment manifest contains an invalid package identity")
 	}
 	for _, digest := range []string{
 		manifest.PackageSHA256, manifest.RollbackSHA256, manifest.ProbeBinarySHA256,

@@ -509,14 +509,23 @@ func (runtime *productionRuntime) migrationEnvironment(environment []byte, schem
 	}), nil
 }
 
+type migrationRun struct {
+	name   string
+	binary string
+	mode   string
+}
+
 func (runtime *productionRuntime) runMigration(
 	ctx context.Context,
 	workspace productionWorkspace,
 	manifest productionManifest,
-	mode string,
+	run migrationRun,
 ) error {
-	if mode != "apply" && mode != "verify" {
+	if run.mode != "apply" && run.mode != "verify" {
 		return errors.New("migration mode must be apply or verify")
+	}
+	if !productionReasonPattern.MatchString(run.name) || run.binary == "" {
+		return errors.New("migration run identity is invalid")
 	}
 	environment, err := readPrivateRegularFile(filepath.Join(runtime.paths.ConfigDir, "lmm-api-go.env"), 1<<20)
 	if err != nil {
@@ -528,21 +537,21 @@ func (runtime *productionRuntime) runMigration(
 	}
 	for index, assignment := range childEnvironment {
 		if strings.HasPrefix(assignment, "LMM_DB_MIGRATION_MODE=") {
-			childEnvironment[index] = "LMM_DB_MIGRATION_MODE=" + mode
+			childEnvironment[index] = "LMM_DB_MIGRATION_MODE=" + run.mode
 			break
 		}
 	}
-	migrationWorkdir, err := prepareMigrationDir(workspace, mode)
+	migrationWorkdir, err := prepareMigrationDir(workspace, run.name)
 	if err != nil {
 		return err
 	}
 	_, err = runtime.runner.Run(ctx, productionCommand{
-		Name: manifest.ProbeBinary, Args: []string{"migrate", "--" + mode},
+		Name: run.binary, Args: []string{"migrate", "--" + run.mode},
 		Env: childEnvironment, Dir: migrationWorkdir, Timeout: 5 * time.Minute,
 		Sensitive: true,
 	})
 	if err != nil {
-		return fmt.Errorf("candidate migration %s failed: %w", mode, err)
+		return fmt.Errorf("migration %s failed: %w", run.name, err)
 	}
 	return nil
 }

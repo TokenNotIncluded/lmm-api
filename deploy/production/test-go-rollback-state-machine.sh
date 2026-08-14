@@ -84,14 +84,19 @@ case $unit in
     printf 'sk-%032d' 0 >"$last"
     chmod 0600 "$last"
     ;;
-	lmm-api-go-migrate-apply-*)
+	lmm-api-go-migrate-candidate-apply-*)
 		printf '%s\n' "$@" >"$LMM_TEST_SERVICE_STATE/migrate.apply.args"
 		: >"$LMM_TEST_SERVICE_STATE/migrate.apply"
 		;;
-	lmm-api-go-migrate-verify-*)
+	lmm-api-go-migrate-candidate-verify-*)
 		printf '%s\n' "$@" >"$LMM_TEST_SERVICE_STATE/migrate.verify.args"
 		[[ -f $LMM_TEST_SERVICE_STATE/migrate.apply ]] || exit 91
 		: >"$LMM_TEST_SERVICE_STATE/migrate.verify"
+		;;
+	lmm-api-go-migrate-rollback-verify-*)
+		printf '%s\n' "$@" >"$LMM_TEST_SERVICE_STATE/migrate.rollback.verify.args"
+		[[ -f $LMM_TEST_SERVICE_STATE/migrate.verify ]] || exit 91
+		: >"$LMM_TEST_SERVICE_STATE/migrate.rollback.verify"
 		;;
   *) printf 'unexpected transient unit: %s\n' "$unit" >&2; exit 91 ;;
 esac
@@ -103,9 +108,9 @@ set -Eeuo pipefail
 case $1 in
   -Qp)
     case ${2##*/} in
-      candidate.pkg.tar.zst) printf '%s %s-1\n' "$LMM_TEST_PACKAGE_NAME" "$LMM_TEST_NEW_VERSION" ;;
+      candidate.pkg.tar.zst) printf '%s %s-%s\n' "$LMM_TEST_PACKAGE_NAME" "$LMM_TEST_NEW_VERSION" "$LMM_TEST_NEW_PKGREL" ;;
       rollback-core.pkg.tar.zst) printf 'lmm-api %s-1\n' "$LMM_TEST_OLD_CORE_VERSION" ;;
-      rollback-go.pkg.tar.zst) printf '%s %s-1\n' "$LMM_TEST_PACKAGE_NAME" "$LMM_TEST_OLD_VERSION" ;;
+      rollback-go.pkg.tar.zst) printf '%s %s-%s\n' "$LMM_TEST_PACKAGE_NAME" "$LMM_TEST_OLD_VERSION" "$LMM_TEST_OLD_PKGREL" ;;
       *) exit 92 ;;
     esac
     ;;
@@ -117,7 +122,8 @@ case $1 in
         ;;
       lmm-api-go|lmm-api-go-bin)
         [[ $2 == "$LMM_TEST_PACKAGE_NAME" ]] || exit 1
-        printf '%s %s-1\n' "$LMM_TEST_PACKAGE_NAME" "$(<"$LMM_TEST_SERVICE_STATE/version")"
+        printf '%s %s-%s\n' "$LMM_TEST_PACKAGE_NAME" "$(<"$LMM_TEST_SERVICE_STATE/version")" \
+          "$(<"$LMM_TEST_SERVICE_STATE/pkgrel")"
         ;;
       *) exit 93 ;;
     esac
@@ -146,6 +152,7 @@ case $1 in
       [[ $LMM_TEST_PREVIOUS_LAYOUT == direct || -f $LMM_TEST_SERVICE_STATE/core.removed ]] || exit 94
       [[ -f $LMM_TEST_SERVICE_STATE/migrate.verify ]] || exit 94
       printf '%s\n' "$LMM_TEST_NEW_VERSION" >"$LMM_TEST_SERVICE_STATE/version"
+      printf '%s\n' "$LMM_TEST_NEW_PKGREL" >"$LMM_TEST_SERVICE_STATE/pkgrel"
       : >"$LMM_TEST_SERVICE_STATE/new.installed"
       rm -rf -- "$LMM_DEPLOY_TEST_REMOVED_PROVIDER_ROOT"
       install -d -m0755 "$LMM_DEPLOY_TEST_PACKAGED_FRONTEND_DIR"
@@ -159,6 +166,7 @@ case $1 in
       fi
     elif [[ $# == 1 && ${1##*/} == rollback-go.pkg.tar.zst && $LMM_TEST_PREVIOUS_LAYOUT == direct ]]; then
       printf '%s\n' "$LMM_TEST_OLD_VERSION" >"$LMM_TEST_SERVICE_STATE/version"
+      printf '%s\n' "$LMM_TEST_OLD_PKGREL" >"$LMM_TEST_SERVICE_STATE/pkgrel"
       rm -f -- "$LMM_TEST_SERVICE_STATE/new.installed" "$LMM_DEPLOY_TEST_CANONICAL_LAUNCHER" \
         "$LMM_DEPLOY_TEST_CANONICAL_SERVICE"
       install -Dm0755 "$LMM_TEST_PROBE_SOURCE" "$LMM_DEPLOY_TEST_PROVIDER_BINARY"
@@ -170,6 +178,7 @@ case $1 in
       fi
     elif (($# == 2)); then
       printf '%s\n' "$LMM_TEST_OLD_VERSION" >"$LMM_TEST_SERVICE_STATE/version"
+      printf '%s\n' "$LMM_TEST_OLD_PKGREL" >"$LMM_TEST_SERVICE_STATE/pkgrel"
       rm -f -- "$LMM_TEST_SERVICE_STATE/new.installed"
       rm -f -- "$LMM_TEST_SERVICE_STATE/core.removed"
       install -Dm0755 "$LMM_TEST_OLD_EXECUTABLE" "$LMM_DEPLOY_TEST_REMOVED_BINARY"
@@ -262,6 +271,8 @@ export LMM_TEST_NEW_VERSION=0.1.0.r233.gb57eb0977
 export LMM_TEST_OLD_VERSION=0.1.0.r122.g27d4df76
 export LMM_TEST_OLD_CORE_VERSION=0.1.0.r31.g3e39995.payrate2.cachefix1.txfix1
 export LMM_TEST_PACKAGE_NAME=lmm-api-go
+export LMM_TEST_NEW_PKGREL=1
+export LMM_TEST_OLD_PKGREL=1
 
 setup_case() {
   local id=$1 layout=${2:-split} package=${3:-lmm-api-go} case_root workspace
@@ -304,6 +315,7 @@ setup_case() {
     "$LMM_TEST_SERVICE_STATE"
   printf 'format=1\ndeployment_id=%s\n' "$id" >"$workspace/.lmm-deploy-workspace"
   printf '%s\n' "$LMM_TEST_OLD_VERSION" >"$LMM_TEST_SERVICE_STATE/version"
+  printf '%s\n' "$LMM_TEST_OLD_PKGREL" >"$LMM_TEST_SERVICE_STATE/pkgrel"
   printf 'old frontend\n' >"$LMM_DEPLOY_TEST_FRONTEND_ROOT/releases/old/index.html"
   ln -s releases/old "$LMM_DEPLOY_TEST_FRONTEND_ROOT/current"
   install -d -m0700 "$LMM_DEPLOY_TEST_OLD_CONFIG_DIR/credentials"
@@ -390,12 +402,15 @@ confirm_workspace=$CASE_WORKSPACE
 activate_case "$confirm_workspace" >"$tmp/activate-confirm.out"
 grep -Fq 'AWAITING_CONFIRMATION' "$confirm_workspace/state/status" || fail 'activation did not await confirmation'
 [[ -f $LMM_TEST_SERVICE_STATE/core.removed ]] || fail 'activation did not explicitly remove the old core package'
-[[ -f $LMM_TEST_SERVICE_STATE/migrate.apply && -f $LMM_TEST_SERVICE_STATE/migrate.verify ]] || \
-  fail 'activation did not apply and verify the candidate migration before package replacement'
+[[ -f $LMM_TEST_SERVICE_STATE/migrate.apply && -f $LMM_TEST_SERVICE_STATE/migrate.verify && \
+   -f $LMM_TEST_SERVICE_STATE/migrate.rollback.verify ]] || \
+  fail 'activation did not prove candidate migration and rollback compatibility before package replacement'
 grep -Fqx -- '--setenv=PGOPTIONS=-c search_path=lmm_prod_contract' \
   "$LMM_TEST_SERVICE_STATE/migrate.apply.args" || fail 'migration did not use the captured production schema'
-grep -Fqx -- "--property=WorkingDirectory=$confirm_workspace/tmp/migrations/apply" \
+grep -Fqx -- "--property=WorkingDirectory=$confirm_workspace/tmp/migrations/candidate-apply" \
   "$LMM_TEST_SERVICE_STATE/migrate.apply.args" || fail 'migration did not use its release-scoped disposable directory'
+grep -Fqx -- "--property=WorkingDirectory=$confirm_workspace/tmp/migrations/rollback-verify" \
+  "$LMM_TEST_SERVICE_STATE/migrate.rollback.verify.args" || fail 'rollback verification did not use an isolated directory'
 grep -Fqx 'database_schema=lmm_prod_contract' "$confirm_workspace/state/deployment.env" || \
   fail 'deployment manifest did not freeze the production schema'
 grep -Fqx 'PGOPTIONS="-c search_path=lmm_prod_contract"' \
@@ -488,6 +503,20 @@ if grep -Eq '^(SESSION_COOKIE_SECURE|SESSION_COOKIE_TRUSTED_URL|TRUSTED_PROXIES)
 fi
 [[ ! -e $LMM_TEST_SERVICE_STATE/timer.active ]] || fail 'direct rollback left its timer active'
 
+setup_case unsafe-migration-directory-case direct
+unsafe_migration_workspace=$CASE_WORKSPACE
+unsafe_target=$tmp/unsafe-migration-target
+mkdir -m0700 "$unsafe_target"
+ln -s -- "$unsafe_target" "$unsafe_migration_workspace/tmp"
+if activate_case "$unsafe_migration_workspace" >"$tmp/activate-unsafe-migration.out" 2>"$tmp/activate-unsafe-migration.err"; then
+  fail 'symlinked migration directory unexpectedly succeeded'
+fi
+grep -Fq 'ROLLED_BACK' "$unsafe_migration_workspace/state/status" || \
+  fail 'unsafe migration directory did not enter the guarded rollback path'
+[[ -z $(find "$unsafe_target" -mindepth 1 -print -quit) ]] || \
+  fail 'unsafe migration directory wrote outside the deployment workspace'
+
+export LMM_TEST_NEW_PKGREL=2
 setup_case aur-direct-confirm-case direct lmm-api-go-bin
 aur_direct_confirm_workspace=$CASE_WORKSPACE
 activate_case "$aur_direct_confirm_workspace" >"$tmp/activate-aur-direct-confirm.out"
@@ -519,5 +548,6 @@ grep -Fq 'ROLLED_BACK' "$aur_direct_rollback_workspace/state/status" || fail 'AU
   fail 'AUR Go rollback changed the independent frontend'
 [[ -f $LMM_DEPLOY_TEST_NEW_DROPIN_DIR/50-memory.conf ]] || \
   fail 'AUR Go rollback removed the existing lmm-api.service drop-ins'
+export LMM_TEST_NEW_PKGREL=1
 
 printf 'Go rollback and confirmation state machine verified\n'

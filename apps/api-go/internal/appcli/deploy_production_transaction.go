@@ -102,8 +102,11 @@ func (runtime *productionRuntime) apply(ctx context.Context, workspace productio
 		return productionStatus{}, errors.New("query candidate package identity")
 	}
 	candidateName, candidateVersion, _, err := parseProductionPackageIdentity(candidateIdentity)
-	if err != nil || candidateName != packageName || candidateVersion != options.ExpectedVersion+"-1" {
+	if err != nil || candidateName != packageName || !productionPackageMatches(candidateVersion, options.ExpectedVersion) {
 		return productionStatus{}, errors.New("candidate package identity mismatch")
+	}
+	if err := runtime.verifyInstalledGoPackage(ctx, packageName, installedPackage); err != nil {
+		return productionStatus{}, fmt.Errorf("verify pre-upgrade Go package: %w", err)
 	}
 	probeVersion, err := runtime.runner.Run(ctx, productionCommand{Name: options.ProbeBinary, Args: []string{"version"}})
 	if err != nil || strings.TrimSpace(string(probeVersion)) != options.ExpectedVersion {
@@ -166,8 +169,8 @@ func (runtime *productionRuntime) apply(ctx context.Context, workspace productio
 
 	deadline := utcSecond(runtime.now().Add(options.RollbackWindow))
 	manifest := productionManifest{
-		PackageName: packageName,
-		Package:     options.Package, PackageSHA256: options.PackageSHA256,
+		PackageName: packageName, PackageIdentity: candidateName + " " + candidateVersion,
+		Package: options.Package, PackageSHA256: options.PackageSHA256,
 		RollbackPackage: options.RollbackPackage, RollbackSHA256: options.RollbackSHA256,
 		ProbeBinary: options.ProbeBinary, ProbeBinarySHA256: options.ProbeBinarySHA256,
 		ExpectedVersion: options.ExpectedVersion, OldVersion: oldVersion,
@@ -211,10 +214,19 @@ func (runtime *productionRuntime) apply(ctx context.Context, workspace productio
 	}); err != nil {
 		return productionStatus{}, err
 	}
-	if err := runtime.runMigration(ctx, workspace, manifest, "apply"); err != nil {
+	if err := runtime.runMigration(ctx, workspace, manifest, migrationRun{
+		name: "candidate-apply", binary: manifest.ProbeBinary, mode: "apply",
+	}); err != nil {
 		return productionStatus{}, err
 	}
-	if err := runtime.runMigration(ctx, workspace, manifest, "verify"); err != nil {
+	if err := runtime.runMigration(ctx, workspace, manifest, migrationRun{
+		name: "candidate-verify", binary: manifest.ProbeBinary, mode: "verify",
+	}); err != nil {
+		return productionStatus{}, err
+	}
+	if err := runtime.runMigration(ctx, workspace, manifest, migrationRun{
+		name: "rollback-verify", binary: runtime.paths.InstalledBinary, mode: "verify",
+	}); err != nil {
 		return productionStatus{}, err
 	}
 	if err := runtime.writeStatus(workspace, productionStatus{
@@ -245,14 +257,8 @@ func (runtime *productionRuntime) apply(ctx context.Context, workspace productio
 	if _, err := runtime.runner.Run(ctx, productionCommand{Name: "systemctl", Args: []string{"daemon-reload"}}); err != nil {
 		return productionStatus{}, fmt.Errorf("reload systemd after package installation: %w", err)
 	}
-	integrityOutput, err := runtime.runner.Run(ctx, productionCommand{
-		Name: "pacman", Args: []string{"-Qkk", manifest.PackageName}, Env: append(os.Environ(), "LC_ALL=C"),
-	})
-	if err != nil {
-		return productionStatus{}, fmt.Errorf("verify installed package files: %w", err)
-	}
-	if !strings.Contains(string(integrityOutput), "0 altered files") {
-		return productionStatus{}, fmt.Errorf("installed package integrity is not clean: %s", strings.TrimSpace(string(integrityOutput)))
+	if err := runtime.verifyInstalledGoPackage(ctx, manifest.PackageName, manifest.PackageIdentity); err != nil {
+		return productionStatus{}, fmt.Errorf("verify installed candidate package: %w", err)
 	}
 	installedVersion, err := runtime.runner.Run(ctx, productionCommand{Name: runtime.paths.InstalledBinary, Args: []string{"version"}})
 	if err != nil || strings.TrimSpace(string(installedVersion)) != options.ExpectedVersion {
@@ -435,6 +441,17 @@ func (runtime *productionRuntime) rollback(ctx context.Context, workspace produc
 		Name: "pacman", Args: []string{"-U", "--noconfirm", manifest.RollbackPackage}, Timeout: 5 * time.Minute,
 	}); err != nil {
 		return fail(fmt.Errorf("install rollback package: %w", err))
+	}
+	rollbackIdentity, err := runtime.runner.Run(ctx, productionCommand{Name: "pacman", Args: []string{"-Qp", manifest.RollbackPackage}})
+	if err != nil {
+		return fail(errors.New("query installed rollback package identity"))
+	}
+	rollbackName, _, parsedRollback, err := parseProductionPackageIdentity(rollbackIdentity)
+	if err != nil || rollbackName != manifest.PackageName {
+		return fail(errors.New("rollback package identity became invalid"))
+	}
+	if err := runtime.verifyInstalledGoPackage(ctx, rollbackName, parsedRollback); err != nil {
+		return fail(fmt.Errorf("verify installed rollback package: %w", err))
 	}
 	if err := runtime.restoreConfiguration(workspace, manifest); err != nil {
 		return fail(err)

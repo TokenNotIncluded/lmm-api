@@ -284,7 +284,7 @@ func (runtime *productionRuntime) healthCheck(ctx context.Context, workspace pro
 		return err
 	}
 	packageName, installed, err := runtime.installedGoPackage(ctx)
-	if err != nil || packageName != manifest.PackageName || installed != manifest.PackageName+" "+manifest.ExpectedVersion+"-1" {
+	if err != nil || packageName != manifest.PackageName || installed != manifest.PackageIdentity {
 		return errors.New("installed production package identity changed")
 	}
 	if _, err := runtime.runner.Run(ctx, productionCommand{Name: "pacman", Args: []string{"-Q", "lmm-api"}}); err == nil {
