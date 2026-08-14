@@ -12,6 +12,7 @@ func TestParseAdvancedSecurityRulesNormalizesAndValidates(t *testing.T) {
     "id": " prompt-injection ",
     "category": " abuse ",
     "enabled": true,
+    "groups": [" default ", "DEFAULT", "premium"],
     "patterns": [" Ignore previous instructions ", "ignore previous instructions"]
   }]
 }`)
@@ -22,11 +23,11 @@ func TestParseAdvancedSecurityRulesNormalizesAndValidates(t *testing.T) {
 		t.Fatalf("unexpected rule set: %+v", ruleSet)
 	}
 	rule := ruleSet.Rules[0]
-	if rule.ID != "prompt-injection" || rule.Name != "prompt-injection" || rule.Category != "abuse" || rule.Severity != "medium" || rule.Source != "local_custom" || rule.Version != "v1" || len(rule.Patterns) != 1 || rule.Patterns[0] != "Ignore previous instructions" {
+	if rule.ID != "prompt-injection" || rule.Name != "prompt-injection" || rule.Category != "abuse" || rule.Severity != "medium" || rule.Source != "local_custom" || rule.Version != "v1" || len(rule.Groups) != 2 || rule.Groups[0] != "default" || rule.Groups[1] != "premium" || len(rule.Patterns) != 1 || rule.Patterns[0] != "Ignore previous instructions" {
 		t.Fatalf("unexpected normalized rule: %+v", rule)
 	}
 
-	anthropicRuleSet, err := ParseAdvancedSecurityRules(`[{"id":"child","category":"child_safety","enabled":true,"patterns":["minor"]}]`)
+	anthropicRuleSet, err := ParseAdvancedSecurityRules(`[{"id":"child","category":"child_safety","enabled":true,"groups":["default"],"patterns":["minor"]}]`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,14 +35,23 @@ func TestParseAdvancedSecurityRulesNormalizesAndValidates(t *testing.T) {
 		t.Fatalf("expected Anthropic-aligned metadata, got %+v", got)
 	}
 
-	if _, err := ParseAdvancedSecurityRules(`[{"id":"duplicate","enabled":true,"patterns":["x"]},{"id":"duplicate","enabled":true,"patterns":["y"]}]`); err == nil {
+	if _, err := ParseAdvancedSecurityRules(`[{"id":"duplicate","enabled":true,"groups":["default"],"patterns":["x"]},{"id":"duplicate","enabled":true,"groups":["default"],"patterns":["y"]}]`); err == nil {
 		t.Fatal("expected duplicate rule ids to be rejected")
 	}
 	if _, err := ParseAdvancedSecurityRules(`{"version":2,"rules":[]}`); err == nil {
 		t.Fatal("expected unsupported rule version to be rejected")
 	}
-	if _, err := ParseAdvancedSecurityRules(`{"version":1,"rules":[{"id":"empty","enabled":true,"patterns":[]}]}`); err == nil {
+	if _, err := ParseAdvancedSecurityRules(`{"version":1,"rules":[{"id":"empty","enabled":true,"groups":["default"],"patterns":[]}]}`); err == nil {
 		t.Fatal("expected empty patterns to be rejected")
+	}
+	if _, err := ParseAdvancedSecurityRules(`[{"id":"missing-groups","enabled":true,"patterns":["x"]}]`); err == nil {
+		t.Fatal("expected rules without explicit groups to be rejected")
+	}
+	if _, err := ParseAdvancedSecurityRules(`[{"id":"wildcard-group","enabled":true,"groups":["*"],"patterns":["x"]}]`); err == nil {
+		t.Fatal("expected wildcard groups to be rejected")
+	}
+	if _, err := ParseAdvancedSecurityRules(`[{"id":"empty-group","enabled":true,"groups":["   "],"patterns":["x"]}]`); err == nil {
+		t.Fatal("expected empty groups to be rejected")
 	}
 }
 
@@ -59,7 +69,7 @@ func TestAdvancedSecuritySettingsUpdates(t *testing.T) {
 	if err := UpdateAdvancedSecurityAction(AdvancedSecurityActionAudit); err != nil {
 		t.Fatal(err)
 	}
-	if err := UpdateAdvancedSecurityRules(`[{"id":"test","enabled":true,"patterns":["needle"]}]`); err != nil {
+	if err := UpdateAdvancedSecurityRules(`[{"id":"test","enabled":true,"groups":["default"],"patterns":["needle"]}]`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -84,7 +94,7 @@ func TestApplyAdvancedSecuritySettingsSwapsCompletePolicy(t *testing.T) {
 		true,
 		true,
 		AdvancedSecurityActionAudit,
-		`[{"id":"disabled","enabled":false,"patterns":["needle"]}]`,
+		`[{"id":"disabled","enabled":false,"groups":["default"],"patterns":["needle"]}]`,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -94,7 +104,7 @@ func TestApplyAdvancedSecuritySettingsSwapsCompletePolicy(t *testing.T) {
 	}
 
 	beforeInvalid := GetAdvancedSecuritySettings()
-	if err := ApplyAdvancedSecuritySettings(false, false, "invalid", `[{"id":"other","enabled":true,"patterns":["other"]}]`); err == nil {
+	if err := ApplyAdvancedSecuritySettings(false, false, "invalid", `[{"id":"other","enabled":true,"groups":["default"],"patterns":["other"]}]`); err == nil {
 		t.Fatal("expected invalid action to be rejected")
 	}
 	afterInvalid := GetAdvancedSecuritySettings()

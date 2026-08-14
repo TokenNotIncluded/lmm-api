@@ -1075,10 +1075,74 @@ const regionPolicyTranslations = {
   },
 }
 
+const advancedSecurityTranslations = {
+  en: {
+    'Each advanced security rule must include at least one explicit group.':
+      'Each advanced security rule must include at least one explicit group.',
+    'Rule groups must be non-empty explicit names of at most 64 characters; wildcard groups are not allowed.':
+      'Rule groups must be non-empty explicit names of at most 64 characters; wildcard groups are not allowed.',
+    'Every rule must list the API group or groups it applies to; rules never apply globally.':
+      'Every rule must list the API group or groups it applies to; rules never apply globally.',
+  },
+  zh: {
+    'Each advanced security rule must include at least one explicit group.':
+      '每条高级安全规则至少要指定一个明确分组。',
+    'Rule groups must be non-empty explicit names of at most 64 characters; wildcard groups are not allowed.':
+      '规则分组必须是非空的明确名称，长度不超过 64 个字符；不允许使用通配符分组。',
+    'Every rule must list the API group or groups it applies to; rules never apply globally.':
+      '每条规则都必须列出它适用的 API 分组；规则不会全局生效。',
+  },
+  'zh-TW': {
+    'Each advanced security rule must include at least one explicit group.':
+      '每條進階安全規則至少要指定一個明確分組。',
+    'Rule groups must be non-empty explicit names of at most 64 characters; wildcard groups are not allowed.':
+      '規則分組必須是非空的明確名稱，長度不超過 64 個字元；不允許使用萬用字元分組。',
+    'Every rule must list the API group or groups it applies to; rules never apply globally.':
+      '每條規則都必須列出適用的 API 分組；規則不會全域生效。',
+  },
+  fr: {
+    'Each advanced security rule must include at least one explicit group.':
+      'Chaque règle de sécurité avancée doit spécifier au moins un groupe explicite.',
+    'Rule groups must be non-empty explicit names of at most 64 characters; wildcard groups are not allowed.':
+      'Les groupes doivent être des noms explicites non vides de 64 caractères maximum ; les groupes génériques sont interdits.',
+    'Every rule must list the API group or groups it applies to; rules never apply globally.':
+      'Chaque règle doit indiquer les groupes API auxquels elle s’applique ; elle ne s’applique jamais globalement.',
+  },
+  ja: {
+    'Each advanced security rule must include at least one explicit group.':
+      '高度なセキュリティルールごとに、明示的なグループを1つ以上指定してください。',
+    'Rule groups must be non-empty explicit names of at most 64 characters; wildcard groups are not allowed.':
+      'ルールのグループは空でない64文字以内の明示的な名前にしてください。ワイルドカードは使用できません。',
+    'Every rule must list the API group or groups it applies to; rules never apply globally.':
+      '各ルールには適用するAPIグループを指定してください。ルールが全体に適用されることはありません。',
+  },
+  ru: {
+    'Each advanced security rule must include at least one explicit group.':
+      'Для каждого расширенного правила безопасности укажите хотя бы одну явную группу.',
+    'Rule groups must be non-empty explicit names of at most 64 characters; wildcard groups are not allowed.':
+      'Группы правил должны быть непустыми явными именами длиной не более 64 символов; группы с подстановочными знаками запрещены.',
+    'Every rule must list the API group or groups it applies to; rules never apply globally.':
+      'Для каждого правила укажите группы API, к которым оно применяется; глобальное применение невозможно.',
+  },
+  vi: {
+    'Each advanced security rule must include at least one explicit group.':
+      'Mỗi quy tắc bảo mật nâng cao phải chỉ định ít nhất một nhóm cụ thể.',
+    'Rule groups must be non-empty explicit names of at most 64 characters; wildcard groups are not allowed.':
+      'Nhóm quy tắc phải là tên cụ thể không rỗng, dài tối đa 64 ký tự; không cho phép nhóm ký tự đại diện.',
+    'Every rule must list the API group or groups it applies to; rules never apply globally.':
+      'Mỗi quy tắc phải liệt kê các nhóm API mà nó áp dụng; quy tắc không bao giờ áp dụng toàn cục.',
+  },
+}
+
 for (const [locale, translations] of Object.entries(discountTranslations)) {
   Object.assign(newKeys[locale], translations)
 }
 for (const [locale, translations] of Object.entries(regionPolicyTranslations)) {
+  Object.assign(newKeys[locale], translations)
+}
+for (const [locale, translations] of Object.entries(
+  advancedSecurityTranslations
+)) {
   Object.assign(newKeys[locale], translations)
 }
 

@@ -34,14 +34,14 @@ func TestCheckAdvancedSecurityTaskPromptBlocksBeforeUpstream(t *testing.T) {
 	setting.SetAdvancedSecurityEnabled(true)
 	setting.SetAdvancedSecurityOnPrompt(true)
 	require.NoError(t, setting.UpdateAdvancedSecurityAction(setting.AdvancedSecurityActionBlock))
-	require.NoError(t, setting.UpdateAdvancedSecurityRules(`[{"id":"task-rule","category":"computer_network_compromise","enabled":true,"patterns":["blocked task prompt"]}]`))
+	require.NoError(t, setting.UpdateAdvancedSecurityRules(`[{"id":"task-rule","category":"computer_network_compromise","enabled":true,"groups":["default"],"patterns":["blocked task prompt"]}]`))
 
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest("POST", "/v1/videos", nil)
 	c.Set("id", 42)
 	c.Set("task_request", relaycommon.TaskSubmitReq{Prompt: "please use a blocked task prompt now"})
 
-	taskErr := checkAdvancedSecurityTaskPrompt(c, &relaycommon.RelayInfo{UserId: 42})
+	taskErr := checkAdvancedSecurityTaskPrompt(c, &relaycommon.RelayInfo{UserId: 42, UserGroup: "default", UsingGroup: "default"})
 	require.NotNil(t, taskErr)
 	assert.Equal(t, "advanced_security_guardrail", taskErr.Code)
 	assert.Equal(t, 400, taskErr.StatusCode)

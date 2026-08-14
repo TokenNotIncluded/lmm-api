@@ -77,6 +77,7 @@ type SecuritySettings struct {
 type SecurityAdminRule struct {
 	SecurityRuleSummary
 	Enabled  bool     `json:"enabled"`
+	Groups   []string `json:"groups"`
 	Patterns []string `json:"patterns"`
 }
 

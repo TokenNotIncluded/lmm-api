@@ -25,7 +25,7 @@ func TestSecurityPolicySeparatesPublicAndAdminRuleDetails(t *testing.T) {
 	setting.SetAdvancedSecurityEnabled(true)
 	setting.SetAdvancedSecurityOnPrompt(true)
 	require.NoError(t, setting.UpdateAdvancedSecurityAction(setting.AdvancedSecurityActionBlock))
-	require.NoError(t, setting.UpdateAdvancedSecurityRules(`[{"id":"prompt-injection","name":"Prompt injection","category":"prompt_injection","enabled":true,"patterns":["do not publish this matcher"]}]`))
+	require.NoError(t, setting.UpdateAdvancedSecurityRules(`[{"id":"prompt-injection","name":"Prompt injection","category":"prompt_injection","enabled":true,"groups":["default","premium"],"patterns":["do not publish this matcher"]}]`))
 
 	publicRecorder := httptest.NewRecorder()
 	publicContext, _ := gin.CreateTestContext(publicRecorder)
@@ -54,10 +54,12 @@ func TestSecurityPolicySeparatesPublicAndAdminRuleDetails(t *testing.T) {
 					Action   string `json:"action"`
 				} `json:"enforcement"`
 				Rules []struct {
+					Groups   []string `json:"groups"`
 					Patterns []string `json:"patterns"`
 				} `json:"rules"`
 			} `json:"public"`
 			Rules []struct {
+				Groups   []string `json:"groups"`
 				Patterns []string `json:"patterns"`
 			} `json:"rules"`
 		} `json:"data"`
@@ -69,5 +71,6 @@ func TestSecurityPolicySeparatesPublicAndAdminRuleDetails(t *testing.T) {
 	require.Len(t, payload.Data.Public.Rules, 1)
 	assert.Empty(t, payload.Data.Public.Rules[0].Patterns)
 	require.Len(t, payload.Data.Rules, 1)
+	assert.Equal(t, []string{"default", "premium"}, payload.Data.Rules[0].Groups)
 	assert.Equal(t, []string{"do not publish this matcher"}, payload.Data.Rules[0].Patterns)
 }

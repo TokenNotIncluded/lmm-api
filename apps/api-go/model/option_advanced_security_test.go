@@ -40,7 +40,7 @@ func TestUpdateAdvancedSecurityOptionsPersistsAndAppliesAsUnit(t *testing.T) {
 		common.OptionMapRWMutex.Unlock()
 	})
 
-	rules := `{"version":1,"rules":[{"id":"privacy","enabled":true,"patterns":["doxx this person"]}]}`
+	rules := `{"version":1,"rules":[{"id":"privacy","enabled":true,"groups":["default"],"patterns":["doxx this person"]}]}`
 	require.NoError(t, UpdateAdvancedSecurityOptions(true, true, setting.AdvancedSecurityActionAudit, rules))
 
 	var options []Option

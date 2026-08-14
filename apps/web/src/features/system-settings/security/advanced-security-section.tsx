@@ -62,6 +62,7 @@ const STARTER_RULE_SET = {
       name: 'Credential theft',
       category: 'computer_network_compromise',
       enabled: true,
+      groups: ['default'],
       patterns: [
         'steal api key',
         'exfiltrate credentials',
@@ -73,6 +74,7 @@ const STARTER_RULE_SET = {
       name: 'Malware development',
       category: 'computer_network_compromise',
       enabled: true,
+      groups: ['default'],
       patterns: ['ransomware payload', 'credential stealer', 'keylogger'],
     },
     {
@@ -80,6 +82,7 @@ const STARTER_RULE_SET = {
       name: 'Weapons and dangerous materials',
       category: 'weapons',
       enabled: true,
+      groups: ['default'],
       patterns: ['build a bomb', 'explosive device instructions'],
     },
     {
@@ -87,6 +90,7 @@ const STARTER_RULE_SET = {
       name: 'Violence and hateful behavior',
       category: 'violence_hate',
       enabled: true,
+      groups: ['default'],
       patterns: ['terrorist attack plan', 'mass casualty attack'],
     },
     {
@@ -94,6 +98,7 @@ const STARTER_RULE_SET = {
       name: "Children's safety",
       category: 'child_safety',
       enabled: true,
+      groups: ['default'],
       patterns: ['groom a minor', 'child sexual abuse material'],
     },
     {
@@ -101,6 +106,7 @@ const STARTER_RULE_SET = {
       name: 'Privacy and identity rights',
       category: 'privacy_identity',
       enabled: true,
+      groups: ['default'],
       patterns: ['doxx this person', "steal someone's identity"],
     },
     {
@@ -108,6 +114,7 @@ const STARTER_RULE_SET = {
       name: 'Fraudulent and abusive practices',
       category: 'fraudulent_abusive_predatory',
       enabled: true,
+      groups: ['default'],
       patterns: ['phishing kit', 'credit card fraud'],
     },
   ],
@@ -180,6 +187,34 @@ function createAdvancedSecuritySchema(t: TFunction) {
           code: z.ZodIssueCode.custom,
           message: t(
             'Each advanced security rule must include a non-empty id.'
+          ),
+        })
+        return
+      }
+
+      if (!Array.isArray(record.groups) || record.groups.length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: t(
+            'Each advanced security rule must include at least one explicit group.'
+          ),
+        })
+        return
+      }
+
+      if (
+        record.groups.some(
+          (group) =>
+            typeof group !== 'string' ||
+            !group.trim() ||
+            group.trim() === '*' ||
+            group.trim().length > 64
+        )
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: t(
+            'Rule groups must be non-empty explicit names of at most 64 characters; wildcard groups are not allowed.'
           ),
         })
         return
@@ -380,6 +415,11 @@ export function AdvancedSecuritySection({
             <p className='text-muted-foreground'>
               {t(
                 'A starter rule set is loaded when no rules are configured. Review and edit it before enabling enforcement.'
+              )}
+            </p>
+            <p className='text-muted-foreground'>
+              {t(
+                'Every rule must list the API group or groups it applies to; rules never apply globally.'
               )}
             </p>
           </div>

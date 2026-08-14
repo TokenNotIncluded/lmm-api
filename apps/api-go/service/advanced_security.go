@@ -38,15 +38,19 @@ func (evaluation AdvancedSecurityEvaluation) Blocked() bool {
 	return evaluation.Decision == model.AdvancedSecurityDecisionBlocked
 }
 
-// CheckAdvancedSecurityText applies the configured literal rule library with
-// the shared Aho-Corasick matcher. It is intentionally separate from the
-// legacy sensitive-word check so operators can tune either mechanism without
-// changing the other one's behavior.
+// CheckAdvancedSecurityText applies the configured literal rule library to
+// the default group. Production callers should use
+// CheckAdvancedSecurityTextForGroup or EvaluateAdvancedSecurityText so a
+// rule can never silently become global.
 func CheckAdvancedSecurityText(text string) []AdvancedSecurityMatch {
-	return checkAdvancedSecurityTextWithSettings(text, setting.GetAdvancedSecuritySettings())
+	return CheckAdvancedSecurityTextForGroup(text, "default")
 }
 
-func checkAdvancedSecurityTextWithSettings(text string, settings setting.AdvancedSecuritySettings) []AdvancedSecurityMatch {
+func CheckAdvancedSecurityTextForGroup(text, group string) []AdvancedSecurityMatch {
+	return checkAdvancedSecurityTextWithSettings(text, group, setting.GetAdvancedSecuritySettings())
+}
+
+func checkAdvancedSecurityTextWithSettings(text, group string, settings setting.AdvancedSecuritySettings) []AdvancedSecurityMatch {
 	if !settings.Enabled || !settings.OnPrompt || strings.TrimSpace(text) == "" {
 		return nil
 	}
@@ -54,7 +58,7 @@ func checkAdvancedSecurityTextWithSettings(text string, settings setting.Advance
 	patterns := make([]string, 0)
 	seenPatterns := make(map[string]struct{})
 	for _, rule := range settings.RuleSet.Rules {
-		if !rule.Enabled {
+		if !rule.Enabled || !setting.AdvancedSecurityRuleAppliesToGroup(rule, group) {
 			continue
 		}
 		for _, pattern := range rule.Patterns {
@@ -84,7 +88,7 @@ func checkAdvancedSecurityTextWithSettings(text string, settings setting.Advance
 
 	matches := make([]AdvancedSecurityMatch, 0)
 	for _, rule := range settings.RuleSet.Rules {
-		if !rule.Enabled {
+		if !rule.Enabled || !setting.AdvancedSecurityRuleAppliesToGroup(rule, group) {
 			continue
 		}
 		for _, pattern := range rule.Patterns {
@@ -113,7 +117,14 @@ func checkAdvancedSecurityTextWithSettings(text string, settings setting.Advance
 // those steps together prevents protocol-specific relays from drifting apart.
 func EvaluateAdvancedSecurityText(c *gin.Context, relayInfo *relaycommon.RelayInfo, text string) AdvancedSecurityEvaluation {
 	settings := setting.GetAdvancedSecuritySettings()
-	matches := checkAdvancedSecurityTextWithSettings(text, settings)
+	group := ""
+	if relayInfo != nil {
+		group = strings.TrimSpace(relayInfo.UsingGroup)
+		if group == "" {
+			group = strings.TrimSpace(relayInfo.UserGroup)
+		}
+	}
+	matches := checkAdvancedSecurityTextWithSettings(text, group, settings)
 	if len(matches) == 0 {
 		return AdvancedSecurityEvaluation{}
 	}

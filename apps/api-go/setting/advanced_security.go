@@ -30,6 +30,8 @@ const (
 	advancedSecurityMaxRuleVersionLength  = 32
 	advancedSecurityMaxRuleDescriptionLen = 512
 	advancedSecurityMaxRuleLayerLength    = 32
+	advancedSecurityMaxGroupsPerRule      = 64
+	advancedSecurityMaxGroupLength        = 64
 )
 
 // AdvancedSecurityRiskCategory describes the public policy taxonomy. The
@@ -91,6 +93,7 @@ type AdvancedSecurityRule struct {
 	Version     string   `json:"version,omitempty"`
 	Description string   `json:"description,omitempty"`
 	Enabled     bool     `json:"enabled"`
+	Groups      []string `json:"groups"`
 	Patterns    []string `json:"patterns"`
 }
 
@@ -223,7 +226,23 @@ func ShouldCheckAdvancedSecurityPrompt() bool {
 		return false
 	}
 	for _, rule := range advancedSecuritySettings.RuleSet.Rules {
-		if rule.Enabled && len(rule.Patterns) > 0 {
+		if rule.Enabled && len(rule.Patterns) > 0 && len(rule.Groups) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// AdvancedSecurityRuleAppliesToGroup deliberately requires an explicit,
+// non-empty request group. A rule without a configured group never matches;
+// there is no wildcard or global fallback.
+func AdvancedSecurityRuleAppliesToGroup(rule AdvancedSecurityRule, group string) bool {
+	group = strings.TrimSpace(group)
+	if group == "" {
+		return false
+	}
+	for _, configured := range rule.Groups {
+		if strings.EqualFold(strings.TrimSpace(configured), group) {
 			return true
 		}
 	}
@@ -308,6 +327,11 @@ func ParseAdvancedSecurityRules(value string) (AdvancedSecurityRuleSet, error) {
 		if len(rule.Patterns) == 0 || len(rule.Patterns) > advancedSecurityMaxPatternsPerRule {
 			return AdvancedSecurityRuleSet{}, fmt.Errorf("advanced security rule %q must contain 1-%d patterns", rule.ID, advancedSecurityMaxPatternsPerRule)
 		}
+		groups, err := normalizeAdvancedSecurityGroups(rule.Groups)
+		if err != nil {
+			return AdvancedSecurityRuleSet{}, fmt.Errorf("advanced security rule %q: %w", rule.ID, err)
+		}
+		rule.Groups = groups
 		applyAdvancedSecurityRuleMetadata(rule)
 		switch rule.Severity {
 		case "low", "medium", "high", "critical":
@@ -336,6 +360,33 @@ func ParseAdvancedSecurityRules(value string) (AdvancedSecurityRuleSet, error) {
 	}
 
 	return ruleSet, nil
+}
+
+func normalizeAdvancedSecurityGroups(groups []string) ([]string, error) {
+	if len(groups) == 0 || len(groups) > advancedSecurityMaxGroupsPerRule {
+		return nil, fmt.Errorf("groups must contain 1-%d explicit group names", advancedSecurityMaxGroupsPerRule)
+	}
+	seen := make(map[string]struct{}, len(groups))
+	result := make([]string, 0, len(groups))
+	for _, group := range groups {
+		group = strings.TrimSpace(group)
+		if group == "" || len(group) > advancedSecurityMaxGroupLength {
+			return nil, fmt.Errorf("groups must contain non-empty names no longer than %d characters", advancedSecurityMaxGroupLength)
+		}
+		if group == "*" {
+			return nil, errors.New("wildcard groups are not allowed; list each group explicitly")
+		}
+		key := strings.ToLower(group)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, group)
+	}
+	if len(result) == 0 {
+		return nil, errors.New("groups must contain at least one explicit group name")
+	}
+	return result, nil
 }
 
 func applyAdvancedSecurityRuleMetadata(rule *AdvancedSecurityRule) {
@@ -403,6 +454,7 @@ func cloneAdvancedSecurityRules(rules []AdvancedSecurityRule) []AdvancedSecurity
 	cloned := make([]AdvancedSecurityRule, len(rules))
 	for index, rule := range rules {
 		cloned[index] = rule
+		cloned[index].Groups = append([]string(nil), rule.Groups...)
 		cloned[index].Patterns = append([]string(nil), rule.Patterns...)
 	}
 	return cloned

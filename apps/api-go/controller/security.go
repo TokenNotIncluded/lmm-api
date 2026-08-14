@@ -39,6 +39,7 @@ func GetAdminSecurityPolicy(c *gin.Context) {
 				Description: rule.Description,
 			},
 			Enabled:  rule.Enabled,
+			Groups:   append([]string(nil), rule.Groups...),
 			Patterns: append([]string(nil), rule.Patterns...),
 		})
 	}
