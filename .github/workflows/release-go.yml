@@ -40,7 +40,13 @@ jobs:
           [[ "$revision" == "$GITHUB_SHA" ]]
           version=${GITHUB_REF_NAME#go-v}
           [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
-          [[ $(sed -n 's/^pkgver=//p' packaging/aur/lmm-api-go-bin/PKGBUILD) == "$version" ]]
+          # AUR metadata remains on the last published version until signed
+          # assets exist and their immutable hashes can be pinned.  Requiring
+          # pkgver to equal the tag here creates a circular, wrong-hash commit.
+          aur_version=$(sed -n 's/^pkgver=//p' packaging/aur/lmm-api-go-bin/PKGBUILD)
+          [[ "$aur_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$aur_version" != "$version" ]]
+          [[ $(printf '%s\n%s\n' "$aur_version" "$version" | sort -V | tail -n 1) == "$version" ]]
           [[ $(git rev-list -n 1 "$GITHUB_REF_NAME") == "$revision" ]]
           {
             echo "version=$version"

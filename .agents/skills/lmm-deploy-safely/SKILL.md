@@ -190,6 +190,12 @@ Run [scripts/inspect-state.sh](scripts/inspect-state.sh) before planning a
 mutation. It reports sanitized key/value or JSON state and never sources an
 environment file or prints a DSN.
 
+For PostgreSQL, inspection also validates the canonical lowercase
+`pg-write-boundary`, `cutover-journal`, and `post-cutover-verify.json` records.
+Their transaction/schema identities must agree, the journal must be complete,
+and the verification must attest PostgreSQL plus the historical migration.
+Anything other than `cutover_state=verified` is a production stop condition.
+
 Reconcile the reported database engine with the chosen deployer and backup
 method. Fail closed when SQLite, PostgreSQL, MySQL, or configuration evidence
 disagrees. Do not select an engine from stale prose documentation.

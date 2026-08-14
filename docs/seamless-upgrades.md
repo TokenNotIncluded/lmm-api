@@ -20,15 +20,14 @@ deployment transaction has been explicitly authorized.
 
 ## Current production boundary
 
-The 2026-08-09 read-only audit found `api.lmm.best` running the Go backend with
-PostgreSQL and the dedicated Valkey listener on port `6380`. The frontend still
-points at the existing versioned release, while Rust blue/green slots are
-internal-probe state only and do not own business traffic. A historical
-PostgreSQL cutover result exists, but its post-cutover verification was marked
-`failed/contract` and no current forward-only boundary was present; treat the
-database state as unverified until a fresh coordinator audit proves the active
-schema, boundary, and canaries. Do not copy the older “production is still
-Go/SQLite” statement into a new runbook.
+The 2026-08-14 read-only audit found `api.lmm.best` running the Go backend with
+PostgreSQL and dedicated Valkey. The canonical lowercase
+`pg-write-boundary` and `cutover-journal` agree on the transaction, schema and
+revision; the journal phase is `COMPLETE`; and `post-cutover-verify.json`
+attests the PostgreSQL historical migration as verified. Re-run the sanitized
+`inspect-state.sh` gate before every mutation instead of treating this dated
+observation as permanent evidence. Rust remains internal-probe-only and does
+not own production business traffic.
 
 ## Frontend: zero-downtime static releases
 
@@ -89,10 +88,10 @@ remain exact aliases to the legal HTML files.
 
 ## Backend service and upgrades
 
-Systemd runs the installed launcher directly:
+Systemd runs the canonical service entry directly:
 
 ```ini
-ExecStart=/usr/bin/lmm-api-go serve
+ExecStart=/usr/bin/lmm-api serve
 ```
 
 Backend selection and status remain launcher subcommands (`lmm-api-go select`
