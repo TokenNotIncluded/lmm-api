@@ -197,8 +197,15 @@ func initConstantEnv() {
 	constant.GenerateDefaultToken = GetEnvOrDefaultBool("GENERATE_DEFAULT_TOKEN", false)
 	// 是否启用错误日志
 	constant.ErrorLogEnabled = GetEnvOrDefaultBool("ERROR_LOG_ENABLED", false)
-	// 任务轮询时查询的最大数量
-	constant.TaskQueryLimit = GetEnvOrDefault("TASK_QUERY_LIMIT", 1000)
+	// 任务轮询时查询的最大数量。即使环境变量错误，也必须保持有限，
+	// 否则 GORM 的 Limit(<=0) 会取消 SQL LIMIT，可能一次性载入全部任务。
+	constant.TaskQueryLimit = GetEnvOrDefault("TASK_QUERY_LIMIT", constant.DefaultTaskQueryLimit)
+	if constant.TaskQueryLimit <= 0 {
+		constant.TaskQueryLimit = constant.DefaultTaskQueryLimit
+	}
+	if constant.TaskQueryLimit > constant.MaxTaskQueryLimit {
+		constant.TaskQueryLimit = constant.MaxTaskQueryLimit
+	}
 	// 异步任务超时时间（分钟），超过此时间未完成的任务将被标记为失败并退款。0 表示禁用。
 	constant.TaskTimeoutMinutes = GetEnvOrDefault("TASK_TIMEOUT_MINUTES", 1440)
 	// Provider polling is I/O-bound, but an unbounded goroutine per channel can

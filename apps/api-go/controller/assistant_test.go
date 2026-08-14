@@ -191,13 +191,15 @@ func TestPrepareAssistantRequestTerminatesAndReportsConversationWithoutModelSpen
 	conversationID := int64(history["conversation_id"].(float64))
 	assert.Positive(t, conversationID)
 	assert.Equal(t, true, history["restricted"])
-	var incidentCount, l1RequestCount, messageCount int64
+	var incidentCount, l1RequestCount, messageCount, firstQuestionCount int64
 	require.NoError(t, db.Model(&model.AssistantSecurityIncident{}).Where("conversation_id = ?", conversationID).Count(&incidentCount).Error)
 	require.NoError(t, db.Model(&model.DeveloperAccessRequest{}).Where("user_id = ?", user.Id).Count(&l1RequestCount).Error)
 	require.NoError(t, db.Model(&model.AssistantHistoryMessage{}).Where("conversation_id = ?", conversationID).Count(&messageCount).Error)
+	require.NoError(t, db.Model(&model.AssistantFirstQuestionStat{}).Count(&firstQuestionCount).Error)
 	assert.EqualValues(t, 1, incidentCount)
 	assert.Zero(t, l1RequestCount)
 	assert.EqualValues(t, 2, messageCount)
+	assert.EqualValues(t, 1, firstQuestionCount)
 
 	billingLoaderCalled = false
 	downstreamCalled = false
@@ -211,8 +213,10 @@ func TestPrepareAssistantRequestTerminatesAndReportsConversationWithoutModelSpen
 	assert.False(t, downstreamCalled)
 	require.NoError(t, db.Model(&model.AssistantSecurityIncident{}).Where("conversation_id = ?", conversationID).Count(&incidentCount).Error)
 	require.NoError(t, db.Model(&model.AssistantHistoryMessage{}).Where("conversation_id = ?", conversationID).Count(&messageCount).Error)
+	require.NoError(t, db.Model(&model.AssistantFirstQuestionStat{}).Count(&firstQuestionCount).Error)
 	assert.EqualValues(t, 1, incidentCount)
 	assert.EqualValues(t, 2, messageCount)
+	assert.EqualValues(t, 1, firstQuestionCount)
 }
 
 func TestPrepareAssistantRequestAllowsAuthorizedSecurityGuidance(t *testing.T) {

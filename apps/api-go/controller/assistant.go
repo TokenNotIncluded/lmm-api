@@ -566,6 +566,14 @@ func PrepareAssistantRequest(c *gin.Context) {
 	c.Header(assistantIntentHeader, intent)
 	c.Set("assistant_conversation", conversation)
 	if assistantHasHighConfidenceSecurityAbuseConversation(conversation) {
+		// Security refusals still represent a real first question. Keep the
+		// privacy-minimized first-question analytics complete without allowing a
+		// transport retry to create a second count.
+		if firstTurnAttempt && len(conversation) == 1 && conversation[0].Role == "user" {
+			if err := model.RecordAssistantFirstQuestion(latestMessage); err != nil {
+				common.SysError(fmt.Sprintf("failed to record assistant first question: %v", err))
+			}
+		}
 		writeAssistantSecurityRefusal(c)
 		return
 	}
