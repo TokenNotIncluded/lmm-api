@@ -23,6 +23,16 @@ const (
 	assistantCacheMaxGates          = 256
 )
 
+// Personal skills are deliberately request-scoped.  A cached first-turn
+// answer must never stand in for a fresh recall of the signed-in user's
+// memories or profile: those skills can change between two otherwise
+// identical questions.  Keep this guard narrow so ordinary service questions
+// still benefit from the bounded response cache.
+var assistantPersonalSkillCacheTerms = []string{
+	"记忆", "记住", "记得", "回忆", "回想", "忘记", "画像", "标签",
+	"memory", "remember", "recall", "forget", "profile", "preferences",
+}
+
 type assistantCachedResponse struct {
 	Status            int    `json:"status"`
 	Body              []byte `json:"body"`
@@ -114,6 +124,9 @@ func assistantCacheKey(settings setting.AssistantSettings, conversation []assist
 	if !settings.CacheEnabled || settings.CacheTTLMinutes <= 0 || len(conversation) != 1 || conversation[0].Role != "user" {
 		return ""
 	}
+	if assistantConversationUsesPersonalSkills(conversation) {
+		return ""
+	}
 	var userContext assistantUserContext
 	if len(contexts) > 0 {
 		userContext = contexts[0]
@@ -151,6 +164,19 @@ func assistantCacheKey(settings setting.AssistantSettings, conversation []assist
 	}
 	digest := sha256.Sum256(raw)
 	return hex.EncodeToString(digest[:])
+}
+
+func assistantConversationUsesPersonalSkills(conversation []assistantOpenAIMessage) bool {
+	for _, message := range conversation {
+		if message.Role != "user" {
+			continue
+		}
+		text := strings.ToLower(strings.TrimSpace(message.Content))
+		if assistantTextContainsAny(text, assistantPersonalSkillCacheTerms...) {
+			return true
+		}
+	}
+	return false
 }
 
 func getAssistantCachedResponse(key string) (assistantCachedResponse, bool) {

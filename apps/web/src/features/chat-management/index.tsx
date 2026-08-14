@@ -20,6 +20,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
 import type { AssistantConversationHistoryItem } from '../assistant/api'
 import {
@@ -55,7 +56,10 @@ export function ChatManagement() {
         </header>
 
         <div className='grid min-w-0 gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(18rem,24rem)] lg:gap-12'>
-          <section aria-labelledby='chat-history-heading' className='min-w-0'>
+          <section
+            aria-labelledby='chat-history-heading'
+            className={cn('min-w-0', selected && 'hidden lg:block')}
+          >
             <div className='mb-4 flex items-center justify-between gap-3'>
               <h2
                 id='chat-history-heading'
@@ -88,9 +92,32 @@ export function ChatManagement() {
             />
           </section>
 
-          <aside className='min-w-0 border-t pt-8 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-10'>
+          <aside
+            className={cn(
+              'min-w-0 border-t pt-8 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-10',
+              !selected && 'hidden lg:block'
+            )}
+          >
             {selected ? (
-              <AssistantHistoryConversation conversation={selected} />
+              <div className='grid gap-4'>
+                <Button
+                  type='button'
+                  variant='ghost'
+                  size='sm'
+                  className='w-fit px-0 lg:hidden'
+                  data-testid='chat-management-back'
+                  onClick={() => setSelected(null)}
+                >
+                  <HugeiconsIcon
+                    icon={ArrowLeft01Icon}
+                    className='size-4'
+                    strokeWidth={2}
+                    aria-hidden='true'
+                  />
+                  {t('Back to list')}
+                </Button>
+                <AssistantHistoryConversation conversation={selected} />
+              </div>
             ) : (
               <div className='grid gap-2 py-1'>
                 <p className='text-base font-medium'>
