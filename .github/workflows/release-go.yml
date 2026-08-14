@@ -210,7 +210,7 @@ jobs:
           (
             cd apps/api-go
             go build -p 2 -trimpath \
-              -ldflags="-s -w -X github.com/QuantumNous/new-api/common.Version=${RELEASE_VERSION}" \
+              -ldflags="-s -w -X github.com/LIghtJUNction/api.lmm.best/common.Version=${RELEASE_VERSION}" \
               -o "../../${bundle}/lmm-api-go" .
           )
           file "$bundle/lmm-api-go"

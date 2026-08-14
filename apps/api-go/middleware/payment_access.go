@@ -3,7 +3,7 @@ package middleware
 import (
 	"net/http"
 
-	"github.com/QuantumNous/new-api/model"
+	"github.com/LIghtJUNction/api.lmm.best/model"
 	"github.com/gin-gonic/gin"
 )
 

@@ -41,7 +41,7 @@ package dynamic_pricing
 import (
 	"math"
 
-	"github.com/QuantumNous/new-api/setting/dynamic_pricing_setting"
+	"github.com/LIghtJUNction/api.lmm.best/setting/dynamic_pricing_setting"
 )
 
 // ModelState holds the persistent per-model pricing state.

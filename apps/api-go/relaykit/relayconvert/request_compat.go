@@ -2,13 +2,13 @@ package relayconvert
 
 import (
 	"context"
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
-	claudemessages "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/claude_messages"
-	geminichat "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/gemini_chat"
-	oaichat "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/oai_chat"
-	oairesponses "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/oai_responses"
-	sharedgemini "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/gemini"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/relayconvert/convmeta"
+	claudemessages "github.com/LIghtJUNction/api.lmm.best/relaykit/relayconvert/internal/claude_messages"
+	geminichat "github.com/LIghtJUNction/api.lmm.best/relaykit/relayconvert/internal/gemini_chat"
+	oaichat "github.com/LIghtJUNction/api.lmm.best/relaykit/relayconvert/internal/oai_chat"
+	oairesponses "github.com/LIghtJUNction/api.lmm.best/relaykit/relayconvert/internal/oai_responses"
+	sharedgemini "github.com/LIghtJUNction/api.lmm.best/relaykit/relayconvert/internal/shared/gemini"
 )
 
 func ClaudeMessagesRequestToOpenAIChat(claudeRequest dto.ClaudeRequest, info convmeta.Meta) (*dto.GeneralOpenAIRequest, error) {

@@ -1,9 +1,9 @@
 package oaichat
 
 import (
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
-	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/relayconvert/convmeta"
+	kitutil "github.com/LIghtJUNction/api.lmm.best/relaykit/relayconvert/kitutil"
 )
 
 // ResponseOpenAI2Gemini 将 OpenAI 响应转换为 Gemini 格式

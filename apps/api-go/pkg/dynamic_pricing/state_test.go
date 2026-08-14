@@ -4,9 +4,9 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/setting/config"
-	"github.com/QuantumNous/new-api/setting/dynamic_pricing_setting"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/setting/config"
+	"github.com/LIghtJUNction/api.lmm.best/setting/dynamic_pricing_setting"
 )
 
 // disableRedis forces the in-memory-only path (no live RDB in tests) and

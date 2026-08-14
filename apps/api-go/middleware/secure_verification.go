@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/service"
 	"github.com/gin-gonic/gin"
 )
 

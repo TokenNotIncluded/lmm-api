@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
+	"github.com/LIghtJUNction/api.lmm.best/common"
 )
 
 type AssistantUsageBreakdown struct {

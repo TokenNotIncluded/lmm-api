@@ -7,11 +7,11 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/model"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/logger"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	relaycommon "github.com/LIghtJUNction/api.lmm.best/relay/common"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/types"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"

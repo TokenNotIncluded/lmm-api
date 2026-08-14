@@ -9,7 +9,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/QuantumNous/new-api/constant"
+	"github.com/LIghtJUNction/api.lmm.best/constant"
 )
 
 var ErrLimitExceeded = errors.New("byte limit exceeded")

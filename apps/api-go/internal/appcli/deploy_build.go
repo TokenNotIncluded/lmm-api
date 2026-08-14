@@ -170,7 +170,7 @@ func (buildRuntime *buildDeployRuntime) build(ctx context.Context, options build
 	}
 	defer os.Remove(temporaryBinaryPath)
 	goEnvironment := append(os.Environ(), "CGO_ENABLED=0")
-	linkerFlags := "-s -w -extldflags=-static -X github.com/QuantumNous/new-api/common.Version=" + version
+	linkerFlags := "-s -w -extldflags=-static -X github.com/LIghtJUNction/api.lmm.best/common.Version=" + version
 	if _, err := buildRuntime.runner.Run(ctx, productionCommand{
 		Name: "go",
 		Args: []string{"build", "-trimpath", "-buildvcs=false", "-ldflags", linkerFlags, "-o", temporaryBinaryPath, "."},

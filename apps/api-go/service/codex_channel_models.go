@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/LIghtJUNction/api.lmm.best/constant"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/setting/ratio_setting"
 )
 
 func FetchCodexChannelModels(channel *model.Channel) ([]string, error) {

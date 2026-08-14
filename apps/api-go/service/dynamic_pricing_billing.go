@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/pkg/dynamic_pricing"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/setting/dynamic_pricing_setting"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/pkg/dynamic_pricing"
+	relaycommon "github.com/LIghtJUNction/api.lmm.best/relay/common"
+	"github.com/LIghtJUNction/api.lmm.best/setting/dynamic_pricing_setting"
 )
 
 const dynamicPricingRatioKey = "dynamic_pricing"

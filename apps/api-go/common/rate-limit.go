@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QuantumNous/new-api/pkg/cachex"
+	"github.com/LIghtJUNction/api.lmm.best/pkg/cachex"
 )
 
 const (

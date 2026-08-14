@@ -16,13 +16,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/logger"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/logger"
 
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/setting/billing_setting"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
+	"github.com/LIghtJUNction/api.lmm.best/setting/billing_setting"
+	"github.com/LIghtJUNction/api.lmm.best/setting/ratio_setting"
 	"github.com/samber/lo"
 
 	"github.com/gin-gonic/gin"

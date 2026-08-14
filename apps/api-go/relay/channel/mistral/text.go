@@ -3,8 +3,8 @@ package mistral
 import (
 	"regexp"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
 )
 
 var mistralToolCallIdRegexp = regexp.MustCompile("^[a-zA-Z0-9]{9}$")

@@ -3,11 +3,11 @@ package service
 import (
 	"testing"
 
-	"github.com/QuantumNous/new-api/pkg/dynamic_pricing"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/setting/config"
-	"github.com/QuantumNous/new-api/setting/dynamic_pricing_setting"
-	hosttypes "github.com/QuantumNous/new-api/types"
+	"github.com/LIghtJUNction/api.lmm.best/pkg/dynamic_pricing"
+	relaycommon "github.com/LIghtJUNction/api.lmm.best/relay/common"
+	"github.com/LIghtJUNction/api.lmm.best/setting/config"
+	"github.com/LIghtJUNction/api.lmm.best/setting/dynamic_pricing_setting"
+	hosttypes "github.com/LIghtJUNction/api.lmm.best/types"
 
 	"github.com/stretchr/testify/require"
 )

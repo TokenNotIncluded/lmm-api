@@ -1,8 +1,8 @@
 package router
 
 import (
-	"github.com/QuantumNous/new-api/controller"
-	"github.com/QuantumNous/new-api/middleware"
+	"github.com/LIghtJUNction/api.lmm.best/controller"
+	"github.com/LIghtJUNction/api.lmm.best/middleware"
 
 	"github.com/gin-gonic/gin"
 )

@@ -3,7 +3,7 @@ package model
 import (
 	"fmt"
 
-	"github.com/QuantumNous/new-api/common"
+	"github.com/LIghtJUNction/api.lmm.best/common"
 )
 
 // RefreshPricing 强制立即重新计算与定价相关的缓存。

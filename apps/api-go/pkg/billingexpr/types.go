@@ -4,7 +4,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 
-	"github.com/QuantumNous/new-api/common"
+	"github.com/LIghtJUNction/api.lmm.best/common"
 )
 
 type RequestInput struct {

@@ -3,8 +3,8 @@ package service
 import (
 	"regexp"
 
-	"github.com/QuantumNous/new-api/pkg/cachex"
-	"github.com/QuantumNous/new-api/setting/model_setting"
+	"github.com/LIghtJUNction/api.lmm.best/pkg/cachex"
+	"github.com/LIghtJUNction/api.lmm.best/setting/model_setting"
 )
 
 // Chat→Responses upgrade policy is host routing logic (it decides *whether*

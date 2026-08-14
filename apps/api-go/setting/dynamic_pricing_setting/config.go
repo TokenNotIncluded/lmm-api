@@ -24,7 +24,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/LIghtJUNction/api.lmm.best/setting/config"
 	"github.com/samber/lo"
 )
 

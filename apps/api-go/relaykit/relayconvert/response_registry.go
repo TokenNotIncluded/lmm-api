@@ -8,12 +8,12 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
-	geminichat "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/gemini_chat"
-	oaichat "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/oai_chat"
-	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
-	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/relayconvert/convmeta"
+	geminichat "github.com/LIghtJUNction/api.lmm.best/relaykit/relayconvert/internal/gemini_chat"
+	oaichat "github.com/LIghtJUNction/api.lmm.best/relaykit/relayconvert/internal/oai_chat"
+	kitutil "github.com/LIghtJUNction/api.lmm.best/relaykit/relayconvert/kitutil"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/types"
 )
 
 type ResponseConverterFunc func(c context.Context, info convmeta.Meta, response any) (any, *dto.Usage, error)

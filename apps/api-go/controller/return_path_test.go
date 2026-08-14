@@ -3,7 +3,7 @@ package controller
 import (
 	"testing"
 
-	"github.com/QuantumNous/new-api/setting/system_setting"
+	"github.com/LIghtJUNction/api.lmm.best/setting/system_setting"
 	"github.com/stretchr/testify/assert"
 )
 

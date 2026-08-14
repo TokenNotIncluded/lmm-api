@@ -3,8 +3,8 @@ package controller
 import (
 	"testing"
 
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/oauth"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/oauth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

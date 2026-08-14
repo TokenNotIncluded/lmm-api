@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/setting"
 )
 
 const promptPresetRefreshInterval = 6 * time.Hour

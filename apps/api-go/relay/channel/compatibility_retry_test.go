@@ -8,10 +8,10 @@ import (
 	"sync"
 	"testing"
 
-	common2 "github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relaykit/types"
+	common2 "github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/constant"
+	relaycommon "github.com/LIghtJUNction/api.lmm.best/relay/common"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"

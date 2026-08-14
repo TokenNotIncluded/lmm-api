@@ -1,6 +1,6 @@
 package vertex
 
-import "github.com/QuantumNous/new-api/common"
+import "github.com/LIghtJUNction/api.lmm.best/common"
 
 func GetModelRegion(other string, localModelName string) string {
 	// if other is json string

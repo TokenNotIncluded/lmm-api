@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	appconstant "github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	appconstant "github.com/LIghtJUNction/api.lmm.best/constant"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"

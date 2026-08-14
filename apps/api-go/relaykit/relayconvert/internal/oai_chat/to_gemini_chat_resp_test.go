@@ -3,8 +3,8 @@ package oaichat
 import (
 	"testing"
 
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/relayconvert/convmeta"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -3,12 +3,12 @@ package controller
 import (
 	"strconv"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/relay"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/constant"
+	"github.com/LIghtJUNction/api.lmm.best/dto"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/relay"
+	"github.com/LIghtJUNction/api.lmm.best/types"
 
 	"github.com/gin-gonic/gin"
 )

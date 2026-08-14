@@ -1,6 +1,6 @@
 package dto
 
-import "github.com/QuantumNous/new-api/relaykit/types"
+import "github.com/LIghtJUNction/api.lmm.best/relaykit/types"
 
 const (
 	RealtimeEventTypeError              = "error"

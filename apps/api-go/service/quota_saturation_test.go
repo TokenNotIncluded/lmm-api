@@ -4,9 +4,9 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/QuantumNous/new-api/common"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	relaycommon "github.com/LIghtJUNction/api.lmm.best/relay/common"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"

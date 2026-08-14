@@ -3,9 +3,9 @@ package moonshot
 import (
 	"testing"
 
-	"github.com/QuantumNous/new-api/common"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	relaycommon "github.com/LIghtJUNction/api.lmm.best/relay/common"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
 	"github.com/stretchr/testify/require"
 )
 

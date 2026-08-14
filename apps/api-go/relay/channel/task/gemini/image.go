@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/constant"
+	relaycommon "github.com/LIghtJUNction/api.lmm.best/relay/common"
 	"github.com/gin-gonic/gin"
 )
 

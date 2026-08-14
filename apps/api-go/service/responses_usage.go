@@ -1,6 +1,6 @@
 package service
 
-import "github.com/QuantumNous/new-api/relaykit/dto"
+import "github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
 
 // ApplyResponsesUsage normalizes Responses API token names into the common
 // usage fields consumed by billing while preserving provider detail fields.

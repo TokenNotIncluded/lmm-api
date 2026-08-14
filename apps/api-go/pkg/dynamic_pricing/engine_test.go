@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/QuantumNous/new-api/setting/dynamic_pricing_setting"
+	"github.com/LIghtJUNction/api.lmm.best/setting/dynamic_pricing_setting"
 )
 
 // approxEqual reports whether a and b are within eps of each other.

@@ -1,6 +1,6 @@
 package controller
 
-import "github.com/QuantumNous/new-api/model"
+import "github.com/LIghtJUNction/api.lmm.best/model"
 
 var cacheReadinessError = model.CacheReadinessError
 var ensureCachesWarmAsync = model.EnsureCachesWarmAsync

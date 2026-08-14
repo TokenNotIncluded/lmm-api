@@ -3,7 +3,7 @@ package operation_setting
 import (
 	"math"
 
-	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/LIghtJUNction/api.lmm.best/setting/config"
 )
 
 const checkinTrustLevelCount = 5

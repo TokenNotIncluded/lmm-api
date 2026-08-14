@@ -3,9 +3,9 @@ package relay
 import (
 	"testing"
 
-	"github.com/QuantumNous/new-api/constant"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	hosttypes "github.com/QuantumNous/new-api/types"
+	"github.com/LIghtJUNction/api.lmm.best/constant"
+	relaycommon "github.com/LIghtJUNction/api.lmm.best/relay/common"
+	hosttypes "github.com/LIghtJUNction/api.lmm.best/types"
 
 	"github.com/stretchr/testify/require"
 )

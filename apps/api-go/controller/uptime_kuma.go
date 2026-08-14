@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/setting/console_setting"
+	"github.com/LIghtJUNction/api.lmm.best/setting/console_setting"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/sync/errgroup"

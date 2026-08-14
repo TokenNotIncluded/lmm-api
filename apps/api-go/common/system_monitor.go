@@ -4,7 +4,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/QuantumNous/new-api/pkg/sysinfo"
+	"github.com/LIghtJUNction/api.lmm.best/pkg/sysinfo"
 	"github.com/shirou/gopsutil/cpu"
 	"github.com/shirou/gopsutil/mem"
 )

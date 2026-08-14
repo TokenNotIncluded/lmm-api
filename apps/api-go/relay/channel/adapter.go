@@ -4,11 +4,11 @@ import (
 	"io"
 	"net/http"
 
-	taskdto "github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/model"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/types"
+	taskdto "github.com/LIghtJUNction/api.lmm.best/dto"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	relaycommon "github.com/LIghtJUNction/api.lmm.best/relay/common"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/types"
 
 	"github.com/gin-gonic/gin"
 )

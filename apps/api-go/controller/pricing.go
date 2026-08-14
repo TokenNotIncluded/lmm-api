@@ -3,11 +3,11 @@ package controller
 import (
 	"net/http"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/service"
+	"github.com/LIghtJUNction/api.lmm.best/setting"
+	"github.com/LIghtJUNction/api.lmm.best/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 )

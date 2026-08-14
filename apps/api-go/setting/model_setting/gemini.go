@@ -3,8 +3,8 @@ package model_setting
 import (
 	"fmt"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/setting/config"
 )
 
 const defaultGeminiSafetySetting = "OFF"

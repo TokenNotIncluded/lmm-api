@@ -14,7 +14,7 @@ func TestApiRouterRegistersPublicLivenessRoute(t *testing.T) {
 
 	for _, route := range engine.Routes() {
 		if route.Method == "GET" && route.Path == "/api/livez" {
-			require.Equal(t, "github.com/QuantumNous/new-api/controller.GetLiveness", route.Handler)
+			require.Equal(t, "github.com/LIghtJUNction/api.lmm.best/controller.GetLiveness", route.Handler)
 			return
 		}
 	}

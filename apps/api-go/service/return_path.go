@@ -3,7 +3,7 @@ package service
 import (
 	"strings"
 
-	"github.com/QuantumNous/new-api/setting/system_setting"
+	"github.com/LIghtJUNction/api.lmm.best/setting/system_setting"
 )
 
 func PaymentReturnURL(suffix string) string {

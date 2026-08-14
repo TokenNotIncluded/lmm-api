@@ -7,7 +7,7 @@ import (
 	"os"
 	"sort"
 
-	"github.com/QuantumNous/new-api/router"
+	"github.com/LIghtJUNction/api.lmm.best/router"
 	"github.com/gin-gonic/gin"
 )
 

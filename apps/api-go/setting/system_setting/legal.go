@@ -3,7 +3,7 @@ package system_setting
 import (
 	"strings"
 
-	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/LIghtJUNction/api.lmm.best/setting/config"
 )
 
 type LegalSettings struct {

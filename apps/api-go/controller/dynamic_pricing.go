@@ -7,11 +7,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/pkg/dynamic_pricing"
-	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/dynamic_pricing_setting"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/pkg/dynamic_pricing"
+	"github.com/LIghtJUNction/api.lmm.best/service"
+	"github.com/LIghtJUNction/api.lmm.best/setting/dynamic_pricing_setting"
 
 	"github.com/gin-gonic/gin"
 )

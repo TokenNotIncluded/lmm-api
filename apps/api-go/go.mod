@@ -1,4 +1,4 @@
-module github.com/QuantumNous/new-api
+module github.com/LIghtJUNction/api.lmm.best
 
 // +heroku goVersion go1.18
 go 1.25.1
@@ -168,9 +168,9 @@ require (
 
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.32.0
-	github.com/QuantumNous/new-api/relaykit v0.0.0
+	github.com/LIghtJUNction/api.lmm.best/relaykit v0.0.0
 	github.com/google/jsonschema-go v0.4.3
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 )
 
-replace github.com/QuantumNous/new-api/relaykit => ./relaykit
+replace github.com/LIghtJUNction/api.lmm.best/relaykit => ./relaykit

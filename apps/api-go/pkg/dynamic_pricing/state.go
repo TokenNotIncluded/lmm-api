@@ -26,8 +26,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/setting/dynamic_pricing_setting"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/setting/dynamic_pricing_setting"
 )
 
 // stateTTL bounds how long a persisted pricing state survives in Redis. The

@@ -13,10 +13,10 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/constant"
+	"github.com/LIghtJUNction/api.lmm.best/logger"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/types"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/image/webp"

@@ -1,7 +1,7 @@
 package ratio_setting
 
 import (
-	"github.com/QuantumNous/new-api/types"
+	"github.com/LIghtJUNction/api.lmm.best/types"
 )
 
 var defaultCacheRatio = map[string]float64{

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
+	kitutil "github.com/LIghtJUNction/api.lmm.best/relaykit/relayconvert/kitutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"

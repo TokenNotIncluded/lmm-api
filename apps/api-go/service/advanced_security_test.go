@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/QuantumNous/new-api/setting"
+	"github.com/LIghtJUNction/api.lmm.best/setting"
 )
 
 func TestCheckAdvancedSecurityTextUsesEnabledRulesAndAhoCorasick(t *testing.T) {

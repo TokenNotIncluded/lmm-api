@@ -17,9 +17,9 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
-	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/relayconvert/convmeta"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/types"
 	"github.com/stretchr/testify/require"
 )
 

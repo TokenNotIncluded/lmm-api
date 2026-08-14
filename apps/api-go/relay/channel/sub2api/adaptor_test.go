@@ -3,9 +3,9 @@ package sub2api
 import (
 	"testing"
 
-	"github.com/QuantumNous/new-api/constant"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/LIghtJUNction/api.lmm.best/constant"
+	relaycommon "github.com/LIghtJUNction/api.lmm.best/relay/common"
+	relayconstant "github.com/LIghtJUNction/api.lmm.best/relay/constant"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

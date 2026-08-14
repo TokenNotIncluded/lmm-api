@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/QuantumNous/new-api/constant"
+	"github.com/LIghtJUNction/api.lmm.best/constant"
 
 	"github.com/abema/go-mp4"
 	"github.com/go-audio/aiff"

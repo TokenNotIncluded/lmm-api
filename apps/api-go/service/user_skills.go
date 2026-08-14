@@ -1,6 +1,6 @@
 package service
 
-import "github.com/QuantumNous/new-api/model"
+import "github.com/LIghtJUNction/api.lmm.best/model"
 
 // UserSkills is an authorized view over one user's private assistant state.
 // actorID and ownerID are deliberately private so handlers cannot swap owners

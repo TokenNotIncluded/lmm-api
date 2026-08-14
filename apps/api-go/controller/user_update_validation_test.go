@@ -3,7 +3,7 @@ package controller
 import (
 	"testing"
 
-	"github.com/QuantumNous/new-api/model"
+	"github.com/LIghtJUNction/api.lmm.best/model"
 )
 
 func TestValidateUserUpdatePreservesOmittedAndLiteralPasswords(t *testing.T) {

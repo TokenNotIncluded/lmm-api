@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/pkg/cachex"
-	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/LIghtJUNction/api.lmm.best/logger"
+	"github.com/LIghtJUNction/api.lmm.best/pkg/cachex"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
 )
 
 // HTTPTransportPolicy is the runtime-normalized outbound HTTP transport policy

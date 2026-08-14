@@ -5,11 +5,11 @@ import (
 	"strings"
 
 	"context"
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
-	relaymedia "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/media"
-	sharedclaude "github.com/QuantumNous/new-api/relaykit/relayconvert/internal/shared/claude"
-	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/relayconvert/convmeta"
+	relaymedia "github.com/LIghtJUNction/api.lmm.best/relaykit/relayconvert/internal/media"
+	sharedclaude "github.com/LIghtJUNction/api.lmm.best/relaykit/relayconvert/internal/shared/claude"
+	kitutil "github.com/LIghtJUNction/api.lmm.best/relaykit/relayconvert/kitutil"
 )
 
 func convertOpenAIResponsesRequestToClaudeMessages(c context.Context, info convmeta.Meta, request any) (any, error) {

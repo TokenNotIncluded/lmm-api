@@ -8,10 +8,10 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/pkg/cachex"
-	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/logger"
+	"github.com/LIghtJUNction/api.lmm.best/pkg/cachex"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
 )
 
 // shardedRoundTripper fans requests for each origin across N independent

@@ -9,19 +9,19 @@ import (
 	"strings"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/model"
 	"github.com/gin-gonic/gin"
 
-	"github.com/QuantumNous/new-api/constant"
-	taskdto "github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/relay/channel"
-	geminitask "github.com/QuantumNous/new-api/relay/channel/task/gemini"
-	taskcommon "github.com/QuantumNous/new-api/relay/channel/task/taskcommon"
-	vertexcore "github.com/QuantumNous/new-api/relay/channel/vertex"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/QuantumNous/new-api/service"
+	"github.com/LIghtJUNction/api.lmm.best/constant"
+	taskdto "github.com/LIghtJUNction/api.lmm.best/dto"
+	"github.com/LIghtJUNction/api.lmm.best/relay/channel"
+	geminitask "github.com/LIghtJUNction/api.lmm.best/relay/channel/task/gemini"
+	taskcommon "github.com/LIghtJUNction/api.lmm.best/relay/channel/task/taskcommon"
+	vertexcore "github.com/LIghtJUNction/api.lmm.best/relay/channel/vertex"
+	relaycommon "github.com/LIghtJUNction/api.lmm.best/relay/common"
+	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
+	"github.com/LIghtJUNction/api.lmm.best/service"
 )
 
 // ============================

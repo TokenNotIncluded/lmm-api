@@ -74,7 +74,7 @@ OUTPUT_TMP="$(mktemp "$OUT_DIR/.lmm-api-go.XXXXXX")"
 (
   cd "$SOURCE_DIR"
   GOPROXY=off CGO_ENABLED=0 go build -trimpath -buildvcs=false \
-    -ldflags "-s -w -extldflags '-static' -X github.com/QuantumNous/new-api/common.Version=$RELEASE_VERSION" \
+    -ldflags "-s -w -extldflags '-static' -X github.com/LIghtJUNction/api.lmm.best/common.Version=$RELEASE_VERSION" \
     -o "$OUTPUT_TMP" .
 )
 chmod 0755 "$OUTPUT_TMP"
