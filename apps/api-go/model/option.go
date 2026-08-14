@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"sort"
 	"strconv"
 	"strings"
@@ -255,6 +256,9 @@ func validateOptionValue(key string, value string) error {
 	}
 	if err := setting.ValidateAssistantOption(key, value); err != nil {
 		return err
+	}
+	if key == setting.AssistantModelOptionKey && !IsModelEnabledForGroup("default", strings.TrimSpace(value)) {
+		return errors.New("assistant model is not enabled in the default group; choose a live model from the model list")
 	}
 	if err := setting.ValidateAdvancedSecurityOption(key, value); err != nil {
 		return err

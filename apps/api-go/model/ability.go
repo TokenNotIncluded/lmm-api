@@ -48,6 +48,23 @@ func GetGroupEnabledModels(group string) []string {
 	return models
 }
 
+// IsModelEnabledForGroup is the cheap, write-time guard used by settings
+// endpoints. Assistant configuration is global, but ordinary users are
+// routed through the default group; accepting a model that exists only in a
+// private group would persist a setting that can never serve those users.
+func IsModelEnabledForGroup(group, model string) bool {
+	group = strings.TrimSpace(group)
+	model = strings.TrimSpace(model)
+	if group == "" || model == "" {
+		return false
+	}
+	var count int64
+	err := DB.Model(&Ability{}).
+		Where(commonGroupCol+" = ? AND model = ? AND enabled = ?", group, model, true).
+		Count(&count).Error
+	return err == nil && count > 0
+}
+
 func GetEnabledModels() []string {
 	var models []string
 	// Find distinct models
