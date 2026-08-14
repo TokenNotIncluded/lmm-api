@@ -3502,8 +3502,7 @@ fn fixed_duration_claude_stream_state_machine_fuzz_is_panic_free() {
             let event_count = (next_xorshift(&mut seed) % (MAX_EVENTS as u64 + 1)) as usize;
             let mut events = Vec::with_capacity(event_count);
             for event_index in 0..event_count {
-                let template_index =
-                    (next_xorshift(&mut seed) as usize) % templates.len();
+                let template_index = (next_xorshift(&mut seed) as usize) % templates.len();
                 let event = match next_xorshift(&mut seed) % 9 {
                     0 => templates[template_index].clone(),
                     1 => serde_json::json!({
@@ -3673,13 +3672,8 @@ fn fixed_duration_tool_schema_conversion_fuzz_is_panic_free() {
                 }
                 serde_json::Value::Array(array)
             }
-            2 => serde_json::Value::String(format!(
-                "s{:x}",
-                next_xorshift(state) & 0xffff
-            )),
-            3 => serde_json::Value::Number(serde_json::Number::from(
-                next_xorshift(state) % 1000,
-            )),
+            2 => serde_json::Value::String(format!("s{:x}", next_xorshift(state) & 0xffff)),
+            3 => serde_json::Value::Number(serde_json::Number::from(next_xorshift(state) % 1000)),
             4 => serde_json::Value::Bool(next_xorshift(state) & 1 == 0),
             _ => serde_json::Value::Null,
         }
@@ -3793,9 +3787,7 @@ fn fixed_duration_tool_schema_conversion_fuzz_is_panic_free() {
 
                 match document_index {
                     0 => {
-                        if let Ok(request) =
-                            serde_json::from_slice::<OpenAiChatRequest>(&input)
-                        {
+                        if let Ok(request) = serde_json::from_slice::<OpenAiChatRequest>(&input) {
                             let _ = openai_chat_request_to_canonical(request);
                         }
                     }
@@ -3806,8 +3798,7 @@ fn fixed_duration_tool_schema_conversion_fuzz_is_panic_free() {
                     }
                     2 => {
                         if let Ok(request) = serde_json::from_slice::<GeminiRequest>(&input) {
-                            let _ =
-                                gemini_request_to_canonical_for_model(request, "fuzz-schema");
+                            let _ = gemini_request_to_canonical_for_model(request, "fuzz-schema");
                         }
                     }
                     _ => {
