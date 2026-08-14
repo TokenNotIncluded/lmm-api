@@ -174,7 +174,13 @@ func resolveWaffoPancakeAdminCreds(bodyMerchantID, bodyPrivateKey string) (strin
 	m := strings.TrimSpace(bodyMerchantID)
 	k := strings.TrimSpace(bodyPrivateKey)
 	if m == "" && k == "" {
-		return setting.WaffoPancakeMerchantID, setting.WaffoPancakePrivateKey
+		return service.WaffoPancakeCredentials()
+	}
+	if m == "" {
+		m, _ = service.WaffoPancakeCredentials()
+	}
+	if k == "" {
+		_, k = service.WaffoPancakeCredentials()
 	}
 	return m, k
 }
@@ -495,11 +501,11 @@ func WaffoPancakeWebhook(c *gin.Context) {
 	}
 
 	signature := c.GetHeader("X-Waffo-Signature")
-	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo Pancake webhook 收到请求 path=%q client_ip=%s signature=%q body=%q", c.Request.RequestURI, c.ClientIP(), signature, string(bodyBytes)))
+	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo Pancake webhook 收到请求 path=%q client_ip=%s body_bytes=%d", c.Request.RequestURI, c.ClientIP(), len(bodyBytes)))
 
 	event, err := service.VerifyConfiguredWaffoPancakeWebhook(string(bodyBytes), signature)
 	if err != nil {
-		logger.LogWarn(c.Request.Context(), fmt.Sprintf("Waffo Pancake webhook 验签失败 path=%q client_ip=%s signature=%q body=%q error=%q", c.Request.RequestURI, c.ClientIP(), signature, string(bodyBytes), err.Error()))
+		logger.LogWarn(c.Request.Context(), fmt.Sprintf("Waffo Pancake webhook 验签失败 path=%q client_ip=%s error=%q", c.Request.RequestURI, c.ClientIP(), err.Error()))
 		c.String(http.StatusUnauthorized, "invalid signature")
 		return
 	}
@@ -513,8 +519,18 @@ func WaffoPancakeWebhook(c *gin.Context) {
 		return
 	}
 
-	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo Pancake webhook 验签成功 event_type=%s event_id=%s order_id=%s client_ip=%s", event.NormalizedEventType(), event.ID, event.Data.OrderID, c.ClientIP()))
-	if event.NormalizedEventType() != "order.completed" {
+	eventType := event.NormalizedEventType()
+	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo Pancake webhook 验签成功 event_type=%s event_id=%s order_id=%s client_ip=%s", eventType, event.ID, event.Data.OrderID, c.ClientIP()))
+	switch service.WaffoPancakeWebhookActionForEvent(eventType) {
+	case service.WaffoPancakeWebhookActionRefundSucceeded, service.WaffoPancakeWebhookActionRefundFailed:
+		if err := handleWaffoPancakeRefundEvent(c, event); err != nil {
+			logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 退款事件处理失败 event_type=%s event_id=%s order_id=%s client_ip=%s error=%q", eventType, event.ID, event.Data.OrderID, c.ClientIP(), err.Error()))
+			c.String(http.StatusInternalServerError, "retry")
+			return
+		}
+		c.String(http.StatusOK, "OK")
+		return
+	case service.WaffoPancakeWebhookActionIgnore:
 		c.String(http.StatusOK, "OK")
 		return
 	}
@@ -594,4 +610,96 @@ func WaffoPancakeWebhook(c *gin.Context) {
 
 	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo Pancake 充值成功 trade_no=%s user_id=%d quota=%d event_id=%s order_id=%s client_ip=%s", tradeNo, completed.UserId, completed.CreditedQuota, event.ID, event.Data.OrderID, c.ClientIP()))
 	c.String(http.StatusOK, "OK")
+}
+
+// handleWaffoPancakeRefundEvent records a signed refund notification in the
+// append-only finance ledger. It deliberately does not debit user quota: a
+// refund can be partial or arrive after quota has been spent, so an automatic
+// wallet reversal needs a separate, user-facing policy and idempotent balance
+// settlement. The ledger entry is enough to make the notification durable and
+// visible to the finance dashboard without silently changing balances.
+func handleWaffoPancakeRefundEvent(c *gin.Context, event *service.WaffoPancakeWebhookEvent) error {
+	if event == nil {
+		return fmt.Errorf("missing refund event")
+	}
+	rawTradeNo := strings.TrimSpace(event.Data.OrderMerchantExternalID)
+	isSubscription := strings.HasPrefix(rawTradeNo, "WAFFO_PANCAKE_SUB-")
+	var err error
+	var tradeNo string
+	var userID int
+	var status string
+	if isSubscription {
+		tradeNo, err = service.ResolveWaffoPancakeRefundSubscriptionTradeNo(event)
+		if err != nil {
+			return fmt.Errorf("resolve refund subscription: %w", err)
+		}
+		order := model.GetSubscriptionOrderByTradeNo(tradeNo)
+		if order == nil {
+			return fmt.Errorf("refund subscription order disappeared trade_no=%s", tradeNo)
+		}
+		userID, status = order.UserId, order.Status
+	} else {
+		tradeNo, err = service.ResolveWaffoPancakeRefundTradeNo(event)
+		if err != nil {
+			return fmt.Errorf("resolve refund order: %w", err)
+		}
+		topUp := model.GetTopUpByTradeNo(tradeNo)
+		if topUp == nil {
+			return fmt.Errorf("refund order disappeared trade_no=%s", tradeNo)
+		}
+		userID, status = topUp.UserId, topUp.Status
+	}
+	if status != common.TopUpStatusSuccess {
+		return fmt.Errorf("refund order is not settled trade_no=%s status=%s", tradeNo, status)
+	}
+
+	action := service.WaffoPancakeWebhookActionForEvent(event.NormalizedEventType())
+	if action == service.WaffoPancakeWebhookActionRefundFailed {
+		reason := strings.TrimSpace(event.Data.RefundReason)
+		if len([]rune(reason)) > 200 {
+			reason = string([]rune(reason)[:200])
+		}
+		logger.LogWarn(c.Request.Context(), fmt.Sprintf("Waffo Pancake 退款失败 trade_no=%s user_id=%d refund_id=%s reason=%q", tradeNo, userID, event.Data.RefundTicketMerchantExternalID, reason))
+		model.RecordLog(userID, model.LogTypeError, fmt.Sprintf("Waffo Pancake refund.failed trade_no=%s refund_id=%s reason=%s", tradeNo, event.Data.RefundTicketMerchantExternalID, reason))
+		return nil
+	}
+
+	amountMicros, err := monetaryStringToMicros(event.Data.Amount)
+	if err != nil || amountMicros <= 0 {
+		if err == nil {
+			err = fmt.Errorf("refund amount must be positive")
+		}
+		return fmt.Errorf("invalid refund amount: %w", err)
+	}
+	providerEventID := strings.TrimSpace(event.ID)
+	if providerEventID == "" {
+		providerEventID = strings.TrimSpace(event.EventID)
+	}
+	if providerEventID == "" {
+		providerEventID = strings.TrimSpace(event.Data.RefundTicketMerchantExternalID)
+	}
+	if providerEventID == "" {
+		return fmt.Errorf("refund event has no stable id")
+	}
+	_, err = model.AppendFinanceLedgerEntry(&model.FinanceLedgerEntry{
+		EntryType:       model.FinanceEntryRevenue,
+		Category:        "refund",
+		AmountMicros:    amountMicros,
+		Currency:        strings.ToUpper(strings.TrimSpace(event.Data.Currency)),
+		Direction:       model.FinanceDirectionDebit,
+		PaymentMethod:   model.PaymentMethodWaffoPancake,
+		PaymentProvider: model.PaymentProviderWaffoPancake,
+		UserId:          &userID,
+		SourceType:      model.FinanceSourceRefund,
+		SourceId:        providerEventID,
+		Note:            fmt.Sprintf("Waffo Pancake refund.succeeded trade_no=%s order_id=%s refund_id=%s", tradeNo, event.Data.OrderID, event.Data.RefundTicketMerchantExternalID),
+		OccurredAt:      time.Now().Unix(),
+		CreatedBy:       userID,
+		IdempotencyKey:  "waffo:pancake:refund:" + providerEventID,
+	})
+	if err != nil {
+		return err
+	}
+	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo Pancake 退款已记账 trade_no=%s user_id=%d amount_micros=%d refund_id=%s", tradeNo, userID, amountMicros, event.Data.RefundTicketMerchantExternalID))
+	return nil
 }

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/LIghtJUNction/api.lmm.best/model"
@@ -104,14 +105,49 @@ type WaffoPancakeWebhookEvent struct {
 
 type WaffoPancakeWebhookData struct {
 	// OrderID = Pancake ORD_* (logs); OrderMerchantExternalID = our trade_no (lookup).
-	OrderID                       string
-	OrderMerchantExternalID       string
-	BuyerEmail                    string
-	Currency                      string
-	Amount                        string
-	TaxAmount                     string
-	ProductName                   string
-	MerchantProvidedBuyerIdentity string
+	OrderID                        string
+	OrderMerchantExternalID        string
+	RefundTicketMerchantExternalID string
+	BuyerEmail                     string
+	Currency                       string
+	Amount                         string
+	TaxAmount                      string
+	ProductName                    string
+	MerchantProvidedBuyerIdentity  string
+	PaymentID                      string
+	PaymentStatus                  string
+	PaymentMethod                  string
+	PaymentLast4                   string
+	RefundStatus                   string
+	RefundReason                   string
+	RefundCreatedAt                string
+	Total                          string
+}
+
+// WaffoPancakeWebhookAction is the small, explicit dispatch surface used by
+// the HTTP handler. Unknown provider events are acknowledged without mutating
+// local payment state so adding a provider event cannot accidentally credit or
+// debit a wallet.
+type WaffoPancakeWebhookAction string
+
+const (
+	WaffoPancakeWebhookActionOrderCompleted  WaffoPancakeWebhookAction = "order_completed"
+	WaffoPancakeWebhookActionRefundSucceeded WaffoPancakeWebhookAction = "refund_succeeded"
+	WaffoPancakeWebhookActionRefundFailed    WaffoPancakeWebhookAction = "refund_failed"
+	WaffoPancakeWebhookActionIgnore          WaffoPancakeWebhookAction = "ignore"
+)
+
+func WaffoPancakeWebhookActionForEvent(eventType string) WaffoPancakeWebhookAction {
+	switch strings.TrimSpace(eventType) {
+	case "order.completed":
+		return WaffoPancakeWebhookActionOrderCompleted
+	case "refund.succeeded":
+		return WaffoPancakeWebhookActionRefundSucceeded
+	case "refund.failed":
+		return WaffoPancakeWebhookActionRefundFailed
+	default:
+		return WaffoPancakeWebhookActionIgnore
+	}
 }
 
 // NormalizedEventType returns the event type or empty string for a nil event.
@@ -127,10 +163,27 @@ func (e *WaffoPancakeWebhookEvent) NormalizedEventType() string {
 // newWaffoPancakeClientFromCreds so the operator can verify typed-but-not-
 // yet-saved credentials.
 func newWaffoPancakeClient() (*pancake.Client, error) {
+	merchantID, privateKey := WaffoPancakeCredentials()
 	return pancake.New(pancake.Config{
-		MerchantID: setting.WaffoPancakeMerchantID,
-		PrivateKey: setting.WaffoPancakePrivateKey,
+		MerchantID: merchantID,
+		PrivateKey: privateKey,
 	})
+}
+
+// WaffoPancakeCredentials resolves persisted settings first, then the two
+// official environment variables used by the first server-side integration.
+// Environment fallback keeps secrets out of the database and is intentionally
+// limited to credentials; store/product IDs remain runtime configuration.
+func WaffoPancakeCredentials() (string, string) {
+	merchantID := strings.TrimSpace(setting.WaffoPancakeMerchantID)
+	if merchantID == "" {
+		merchantID = strings.TrimSpace(os.Getenv("WAFFO_MERCHANT_ID"))
+	}
+	privateKey := strings.TrimSpace(setting.WaffoPancakePrivateKey)
+	if privateKey == "" {
+		privateKey = strings.TrimSpace(os.Getenv("WAFFO_PRIVATE_KEY"))
+	}
+	return merchantID, privateKey
 }
 
 func newWaffoPancakeClientFromCreds(merchantID, privateKey string) (*pancake.Client, error) {
@@ -296,6 +349,42 @@ func VerifyConfiguredWaffoPancakeWebhook(payload string, signatureHeader string)
 	if evt.Data.OrderMerchantExternalID != nil {
 		externalID = *evt.Data.OrderMerchantExternalID
 	}
+	refundExternalID := ""
+	if evt.Data.RefundTicketMerchantExternalID != nil {
+		refundExternalID = *evt.Data.RefundTicketMerchantExternalID
+	}
+	paymentID := ""
+	if evt.Data.PaymentID != nil {
+		paymentID = *evt.Data.PaymentID
+	}
+	paymentStatus := ""
+	if evt.Data.PaymentStatus != nil {
+		paymentStatus = *evt.Data.PaymentStatus
+	}
+	paymentMethod := ""
+	if evt.Data.PaymentMethod != nil {
+		paymentMethod = *evt.Data.PaymentMethod
+	}
+	paymentLast4 := ""
+	if evt.Data.PaymentLast4 != nil {
+		paymentLast4 = *evt.Data.PaymentLast4
+	}
+	refundStatus := ""
+	if evt.Data.RefundStatus != nil {
+		refundStatus = *evt.Data.RefundStatus
+	}
+	refundReason := ""
+	if evt.Data.RefundReason != nil {
+		refundReason = *evt.Data.RefundReason
+	}
+	refundCreatedAt := ""
+	if evt.Data.RefundCreatedAt != nil {
+		refundCreatedAt = *evt.Data.RefundCreatedAt
+	}
+	total := ""
+	if evt.Data.Total != nil {
+		total = *evt.Data.Total
+	}
 	return &WaffoPancakeWebhookEvent{
 		ID:        evt.ID,
 		Timestamp: evt.Timestamp,
@@ -304,14 +393,23 @@ func VerifyConfiguredWaffoPancakeWebhook(payload string, signatureHeader string)
 		StoreID:   evt.StoreID,
 		Mode:      string(evt.Mode),
 		Data: WaffoPancakeWebhookData{
-			OrderID:                       evt.Data.OrderID,
-			OrderMerchantExternalID:       externalID,
-			BuyerEmail:                    evt.Data.BuyerEmail,
-			Currency:                      evt.Data.Currency,
-			Amount:                        evt.Data.Amount,
-			TaxAmount:                     evt.Data.TaxAmount,
-			ProductName:                   evt.Data.ProductName,
-			MerchantProvidedBuyerIdentity: identity,
+			OrderID:                        evt.Data.OrderID,
+			OrderMerchantExternalID:        externalID,
+			RefundTicketMerchantExternalID: refundExternalID,
+			BuyerEmail:                     evt.Data.BuyerEmail,
+			Currency:                       evt.Data.Currency,
+			Amount:                         evt.Data.Amount,
+			TaxAmount:                      evt.Data.TaxAmount,
+			ProductName:                    evt.Data.ProductName,
+			MerchantProvidedBuyerIdentity:  identity,
+			PaymentID:                      paymentID,
+			PaymentStatus:                  paymentStatus,
+			PaymentMethod:                  paymentMethod,
+			PaymentLast4:                   paymentLast4,
+			RefundStatus:                   refundStatus,
+			RefundReason:                   refundReason,
+			RefundCreatedAt:                refundCreatedAt,
+			Total:                          total,
 		},
 	}, nil
 }
@@ -343,6 +441,38 @@ func ResolveWaffoPancakeTradeNo(event *WaffoPancakeWebhookEvent) (string, error)
 	return tradeNo, nil
 }
 
+// ResolveWaffoPancakeRefundTradeNo applies the same provider/order binding as
+// ResolveWaffoPancakeTradeNo, but accepts a missing buyer identity. Pancake's
+// refund payload inherits the order external ID, while identity is optional on
+// the SDK type; a signed provider event must not be discarded merely because
+// that optional field was omitted. If present, the identity is still checked.
+func ResolveWaffoPancakeRefundTradeNo(event *WaffoPancakeWebhookEvent) (string, error) {
+	if event == nil {
+		return "", fmt.Errorf("missing webhook event")
+	}
+	tradeNo := strings.TrimSpace(event.Data.OrderMerchantExternalID)
+	if tradeNo == "" {
+		return "", fmt.Errorf("missing webhook orderMerchantExternalId")
+	}
+	topUp := model.GetTopUpByTradeNo(tradeNo)
+	if topUp == nil || topUp.PaymentProvider != model.PaymentProviderWaffoPancake {
+		return "", fmt.Errorf("waffo pancake refund order not found for tradeNo=%s", tradeNo)
+	}
+	actualIdentity := strings.TrimSpace(event.Data.MerchantProvidedBuyerIdentity)
+	if actualIdentity != "" {
+		expectedIdentity := WaffoPancakeBuyerIdentityFromUserID(topUp.UserId)
+		if actualIdentity != expectedIdentity {
+			return "", fmt.Errorf(
+				"waffo pancake refund buyer identity mismatch for tradeNo=%s: expected=%q actual=%q",
+				tradeNo,
+				expectedIdentity,
+				actualIdentity,
+			)
+		}
+	}
+	return tradeNo, nil
+}
+
 // ResolveWaffoPancakeSubscriptionTradeNo is the SubscriptionOrder counterpart
 // of ResolveWaffoPancakeTradeNo.
 func ResolveWaffoPancakeSubscriptionTradeNo(event *WaffoPancakeWebhookEvent) (string, error) {
@@ -366,6 +496,37 @@ func ResolveWaffoPancakeSubscriptionTradeNo(event *WaffoPancakeWebhookEvent) (st
 			expectedIdentity,
 			actualIdentity,
 		)
+	}
+	return tradeNo, nil
+}
+
+// ResolveWaffoPancakeRefundSubscriptionTradeNo is the refund counterpart of
+// ResolveWaffoPancakeSubscriptionTradeNo. Refund payloads may omit the
+// optional buyer identity, so an empty value is accepted while a supplied one
+// is still verified against the original subscription order.
+func ResolveWaffoPancakeRefundSubscriptionTradeNo(event *WaffoPancakeWebhookEvent) (string, error) {
+	if event == nil {
+		return "", fmt.Errorf("missing webhook event")
+	}
+	tradeNo := strings.TrimSpace(event.Data.OrderMerchantExternalID)
+	if tradeNo == "" {
+		return "", fmt.Errorf("missing webhook orderMerchantExternalId")
+	}
+	order := model.GetSubscriptionOrderByTradeNo(tradeNo)
+	if order == nil || order.PaymentProvider != model.PaymentProviderWaffoPancake {
+		return "", fmt.Errorf("waffo pancake refund subscription order not found for tradeNo=%s", tradeNo)
+	}
+	actualIdentity := strings.TrimSpace(event.Data.MerchantProvidedBuyerIdentity)
+	if actualIdentity != "" {
+		expectedIdentity := WaffoPancakeBuyerIdentityFromUserID(order.UserId)
+		if actualIdentity != expectedIdentity {
+			return "", fmt.Errorf(
+				"waffo pancake refund subscription buyer identity mismatch for tradeNo=%s: expected=%q actual=%q",
+				tradeNo,
+				expectedIdentity,
+				actualIdentity,
+			)
+		}
 	}
 	return tradeNo, nil
 }
@@ -512,6 +673,9 @@ func CreateWaffoPancakePrimaryPair(ctx context.Context, merchantID, privateKey, 
 // (Stripe-style API-secret UX) and is omitted from the bulk payload.
 func SaveWaffoPancakeConfig(ctx context.Context, merchantID, privateKey, returnURL, storeID, productID string) error {
 	merchantID = strings.TrimSpace(merchantID)
+	if merchantID == "" {
+		merchantID, _ = WaffoPancakeCredentials()
+	}
 	storeID = strings.TrimSpace(storeID)
 	productID = strings.TrimSpace(productID)
 	if merchantID == "" || storeID == "" || productID == "" {

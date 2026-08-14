@@ -3,6 +3,7 @@ package controller
 import (
 	"strings"
 
+	"github.com/LIghtJUNction/api.lmm.best/service"
 	"github.com/LIghtJUNction/api.lmm.best/setting"
 	"github.com/LIghtJUNction/api.lmm.best/setting/operation_setting"
 )
@@ -79,8 +80,9 @@ func isWaffoPancakeTopUpEnabled() bool {
 	}
 	// Presence-of-credentials = enabled. Webhook public keys ship inside
 	// the SDK; mode (test/prod) is read from each event.
-	return strings.TrimSpace(setting.WaffoPancakeMerchantID) != "" &&
-		strings.TrimSpace(setting.WaffoPancakePrivateKey) != "" &&
+	merchantID, privateKey := service.WaffoPancakeCredentials()
+	return merchantID != "" &&
+		privateKey != "" &&
 		strings.TrimSpace(setting.WaffoPancakeProductID) != ""
 }
 

@@ -142,6 +142,24 @@ func TestWaffoPancakeWebhookEnabledRequiresTopUpAndWebhookConfig(t *testing.T) {
 	require.False(t, isWaffoPancakeWebhookEnabled())
 }
 
+func TestWaffoPancakeWebhookEnabledUsesOfficialEnvironmentCredentials(t *testing.T) {
+	confirmPaymentComplianceForTest(t)
+	originalMerchantID := setting.WaffoPancakeMerchantID
+	originalPrivateKey := setting.WaffoPancakePrivateKey
+	originalProductID := setting.WaffoPancakeProductID
+	t.Cleanup(func() {
+		setting.WaffoPancakeMerchantID = originalMerchantID
+		setting.WaffoPancakePrivateKey = originalPrivateKey
+		setting.WaffoPancakeProductID = originalProductID
+	})
+	t.Setenv("WAFFO_MERCHANT_ID", "env-merchant")
+	t.Setenv("WAFFO_PRIVATE_KEY", "env-private-key")
+	setting.WaffoPancakeMerchantID = ""
+	setting.WaffoPancakePrivateKey = ""
+	setting.WaffoPancakeProductID = "product-from-dashboard"
+	require.True(t, isWaffoPancakeWebhookEnabled())
+}
+
 func TestEpayWebhookEnabledRequiresTopUpAndWebhookConfig(t *testing.T) {
 	confirmPaymentComplianceForTest(t)
 	originalPayAddress := operation_setting.PayAddress

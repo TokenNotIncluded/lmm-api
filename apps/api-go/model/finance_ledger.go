@@ -21,6 +21,7 @@ const (
 	FinanceSourceTopUp        = "topup"
 	FinanceSourceSubscription = "subscription"
 	FinanceSourceUsage        = "usage"
+	FinanceSourceRefund       = "refund"
 )
 
 var (
