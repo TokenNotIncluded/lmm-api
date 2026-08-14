@@ -44,14 +44,18 @@ bun run waffo:pancake:smoke -- \
 - 正式 webhook：`POST /api/waffo-pancake/webhook/prod`
 
 在 Pancake Dashboard 的 Webhooks 中注册测试 URL，并至少订阅：
-`order.completed`、`refund.succeeded`、`refund.failed`。请求体会先验签，再按订单的 merchant external ID 绑定本地订单。
+`order.completed`、`subscription.activated`、`subscription.payment_succeeded`、
+`refund.succeeded`、`refund.failed`。请求体会先验签，再按订单的 merchant
+external ID 绑定本地订单；订阅事件只有 `WAFFO_PANCAKE_SUB-*` 订单会进入
+订阅结算路径，普通钱包订单收到订阅事件只确认、不改余额。
 
 ## 测试卡与验收
 
 测试模式使用 Visa `4576 7500 0000 0110`，任意未来有效期和三位 CVC。成功后应看到：
 
 1. checkout session 返回 `checkout_url`；
-2. webhook 收到并处理 `order.completed`，本地充值订单变为成功；
+2. webhook 收到并处理 `order.completed`（订阅首付对应
+   `subscription.activated`），本地订单变为成功；
 3. 退款成功事件写入幂等的财务收入冲销记录；退款失败只记录审计，不扣用户额度；
 4. 重复投递不会重复记账。
 
