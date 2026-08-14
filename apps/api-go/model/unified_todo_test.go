@@ -173,7 +173,7 @@ func TestUnifiedTodoDeepPageLoadsOnlySelectedRows(t *testing.T) {
 	}
 	require.NoError(t, db.CreateInBatches(&requests, 100).Error)
 
-	refs, err := todoRefs(admin.Id, admin.Role, UnifiedTodoCategoryAll, 445, 5)
+	refs, err := todoRefs(db, admin.Id, admin.Role, UnifiedTodoCategoryAll, 445, 5)
 	require.NoError(t, err)
 	require.Len(t, refs, 5)
 	for _, ref := range refs {
@@ -226,4 +226,24 @@ func TestUnifiedTodoMarkAllUsesBoundedBatches(t *testing.T) {
 	}
 	_, err = MarkUnifiedTodoReads(admin.Id, admin.Role, UnifiedTodoCategoryDeveloperAccess, tooMany, false)
 	assert.ErrorIs(t, err, ErrUnifiedTodoReadBody)
+}
+
+func TestUnifiedTodoMarkAllRollsBackEarlierCategories(t *testing.T) {
+	db := setupConsoleActivationTestDB(t)
+	require.NoError(t, db.AutoMigrate(&UnifiedTodoRead{}, &AssistantSecurityIncident{}))
+	admin := User{Username: "todo-rollback-admin", Password: "password", AffCode: "todo-rollback-admin", Role: common.RoleAdminUser}
+	owner := User{Username: "todo-rollback-owner", Password: "password", AffCode: "todo-rollback-owner", Role: common.RoleCommonUser}
+	require.NoError(t, db.Create(&admin).Error)
+	require.NoError(t, db.Create(&owner).Error)
+	require.NoError(t, db.Create(&AssistantSecurityIncident{
+		UserId: owner.Id, ConversationId: 9001, Category: AssistantSecurityIncidentCategory,
+		Status: AssistantSecurityIncidentStatusOpen, InputDigest: "digest", CreatedAt: 1, UpdatedAt: 1,
+	}).Error)
+
+	marked, err := MarkUnifiedTodoReads(admin.Id, admin.Role, UnifiedTodoCategoryAll, nil, true)
+	require.Error(t, err)
+	assert.Zero(t, marked)
+	var count int64
+	require.NoError(t, db.Model(&UnifiedTodoRead{}).Count(&count).Error)
+	assert.Zero(t, count, "read markers must roll back when a later category fails: %v", err)
 }
