@@ -2,6 +2,7 @@ package controller
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -43,6 +44,34 @@ func TestFinanceOverviewAggregatesPaymentMethodsUsersAndTokenCost(t *testing.T) 
 	require.Equal(t, int64(10_000_000), stripeView.RevenueMicros)
 }
 
+func TestFinanceOverviewDoesNotDoubleCountSubscriptionTopUpMirror(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}, &model.SubscriptionOrder{}, &model.Log{}, &model.FinanceLedgerEntry{}, &model.FinancePaymentMethod{}))
+	now := time.Now().Unix()
+	user := model.User{Username: "finance-subscription", Password: "password", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "finance-subscription"}
+	require.NoError(t, db.Create(&user).Error)
+	tradeNo := "finance-subscription-mirror"
+	// CompleteSubscriptionOrder keeps a successful TopUp mirror for wallet and
+	// order compatibility. Finance must count the SubscriptionOrder only.
+	require.NoError(t, db.Create(&model.TopUp{
+		UserId: user.Id, TradeNo: tradeNo, Money: 10, Status: common.TopUpStatusSuccess,
+		PaymentMethod: model.PaymentMethodStripe, CompleteTime: now - 10,
+	}).Error)
+	require.NoError(t, db.Create(&model.SubscriptionOrder{
+		UserId: user.Id, PlanId: 1, Money: 10, TradeNo: tradeNo,
+		PaymentMethod: model.PaymentMethodStripe, PaymentProvider: model.PaymentProviderStripe,
+		Status: common.TopUpStatusSuccess, CreateTime: now - 20, CompleteTime: now - 10,
+	}).Error)
+
+	view, err := buildFinanceOverview(now-100, now+1, 0, "")
+	require.NoError(t, err)
+	require.Equal(t, int64(10_000_000), view.RevenueMicros)
+	require.Len(t, view.RevenueByMethod, 1)
+	require.Equal(t, int64(1), view.RevenueByMethod[0].Orders)
+	require.Len(t, view.Users, 1)
+	require.Equal(t, int64(10_000_000), view.Users[0].RevenueMicros)
+}
+
 func TestFinanceOverviewStreamsSourcesAcrossBatchBoundary(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}, &model.SubscriptionOrder{}, &model.Log{}, &model.FinanceLedgerEntry{}, &model.FinancePaymentMethod{}))
@@ -68,6 +97,35 @@ func TestFinanceOverviewStreamsSourcesAcrossBatchBoundary(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(financeDashboardBatchSize+1)*1_000_000, view.RevenueMicros)
 	require.Len(t, view.Users, 1)
+}
+
+func TestFinanceOverviewStreamsClickHouseOrderedLogsAcrossSameSecond(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}, &model.SubscriptionOrder{}, &model.Log{}, &model.FinanceLedgerEntry{}, &model.FinancePaymentMethod{}))
+	now := time.Now().Unix()
+	user := model.User{Username: "finance-log-batch", Password: "password", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "finance-log-batch"}
+	require.NoError(t, db.Create(&user).Error)
+
+	// ClickHouse stores Log.id as zero and orders by (created_at, request_id).
+	// Keep every row in the same second so a numeric-id cursor would stop after
+	// the first batch and silently undercount the dashboard.
+	count := financeDashboardBatchSize + 1
+	logs := make([]model.Log, count)
+	for index := range logs {
+		logs[index] = model.Log{
+			UserId: user.Id, CreatedAt: now, Type: model.LogTypeConsume,
+			PromptTokens: 1, CompletionTokens: 1,
+			RequestId: fmt.Sprintf("finance-log-%04d", index),
+		}
+	}
+	require.NoError(t, db.Create(&logs).Error)
+
+	view, err := buildFinanceOverview(now-1, now+1, 0, "")
+	require.NoError(t, err)
+	require.Equal(t, int64(count), view.Tokens.Requests)
+	require.Equal(t, int64(count*2), view.Tokens.TotalTokens)
+	require.Len(t, view.Users, 1)
+	require.Equal(t, int64(count), view.Users[0].Requests)
 }
 
 func TestFinanceLedgerIsAppendOnlyAndReversalIsExactlyOnce(t *testing.T) {

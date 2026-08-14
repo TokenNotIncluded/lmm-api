@@ -326,7 +326,7 @@ func financeBatchLimit(processed int) int {
 	return financeDashboardBatchSize
 }
 
-// iterateFinanceSource reads a source ordered by its timestamp and primary
+// iterateFinanceSource reads a source ordered by its timestamp and numeric primary
 // key. Offset pagination becomes increasingly expensive for large windows and
 // can repeat/skip rows when a new payment or log arrives while the dashboard
 // is loading. The composite cursor keeps every batch bounded and stable.
@@ -366,6 +366,48 @@ func iterateFinanceSource[T any](base *gorm.DB, timestampColumn string, visit fu
 	}
 }
 
+// iterateFinanceLogSource mirrors the ClickHouse logs table's physical order.
+// ClickHouse intentionally leaves Log.id at its zero default and orders rows by
+// (created_at, request_id), so a numeric id cursor can silently skip rows when
+// a busy second spans more than one batch. Request IDs are assigned when a log
+// is written and are stable across repeated reads.
+func iterateFinanceLogSource(base *gorm.DB, visit func(model.Log) error) error {
+	if base == nil || visit == nil {
+		return gorm.ErrInvalidData
+	}
+	processed := 0
+	var lastTimestamp int64
+	var lastRequestID string
+	for {
+		limit := financeBatchLimit(processed)
+		if limit == 0 {
+			return nil
+		}
+		rows := make([]model.Log, 0, limit)
+		query := base.Session(&gorm.Session{}).
+			Where("(created_at > ? OR (created_at = ? AND request_id > ?))", lastTimestamp, lastTimestamp, lastRequestID).
+			Order("created_at ASC, request_id ASC").
+			Limit(limit)
+		if err := query.Find(&rows).Error; err != nil {
+			return err
+		}
+		if len(rows) == 0 {
+			return nil
+		}
+		for index := range rows {
+			if err := visit(rows[index]); err != nil {
+				return err
+			}
+		}
+		processed += len(rows)
+		last := rows[len(rows)-1]
+		lastTimestamp, lastRequestID = last.CreatedAt, last.RequestId
+		if len(rows) < limit {
+			return nil
+		}
+	}
+}
+
 // financeSourceCursor extracts the two cursor fields without retaining a
 // second copy of any source row. The concrete source types are intentionally
 // kept here so the query helper remains generic while its public JSON shape
@@ -379,10 +421,6 @@ func financeSourceCursor[T any](row T, timestampColumn string) (int64, int64) {
 	case model.SubscriptionOrder:
 		if timestampColumn == "complete_time" {
 			return value.CompleteTime, int64(value.Id)
-		}
-	case model.Log:
-		if timestampColumn == "created_at" {
-			return value.CreatedAt, int64(value.Id)
 		}
 	case model.FinanceLedgerEntry:
 		if timestampColumn == "occurred_at" {
@@ -398,7 +436,16 @@ func buildFinanceOverview(start, end int64, userFilter int, methodFilter string)
 		return financeOverview{}, err
 	}
 	a := newFinanceAccumulator(start, end, methods)
-	tx := model.DB.Where("status = ? AND complete_time >= ? AND complete_time < ?", common.TopUpStatusSuccess, start, end)
+	// Completing a subscription creates a TopUp mirror with the same trade_no
+	// so the existing wallet/order paths keep their historical semantics. The
+	// subscription order is the financial source of truth, however; excluding
+	// its mirror here prevents one payment from being counted twice.
+	tx := model.DB.Where("status = ? AND complete_time >= ? AND complete_time < ?", common.TopUpStatusSuccess, start, end).
+		Where(`NOT EXISTS (
+			SELECT 1 FROM subscription_orders AS subscription_order
+			WHERE subscription_order.trade_no = top_ups.trade_no
+			  AND subscription_order.status = ?
+		)`, common.TopUpStatusSuccess)
 	if userFilter > 0 {
 		tx = tx.Where("user_id = ?", userFilter)
 	}
@@ -450,7 +497,7 @@ func buildFinanceOverview(start, end int64, userFilter int, methodFilter string)
 	if userFilter > 0 {
 		tx = tx.Where("user_id = ?", userFilter)
 	}
-	if err := iterateFinanceSource[model.Log](tx.Select("id, user_id, created_at, type, prompt_tokens, completion_tokens, other"), "created_at", func(log model.Log) error {
+	if err := iterateFinanceLogSource(tx.Select("id, user_id, created_at, request_id, type, prompt_tokens, completion_tokens, other"), func(log model.Log) error {
 		other, _ := common.StrToMap(log.Other)
 		price, priced := 0.0, false
 		if raw, ok := other["model_price"].(float64); ok && raw > 0 {
