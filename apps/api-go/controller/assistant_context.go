@@ -2,6 +2,7 @@ package controller
 
 import (
 	"encoding/json"
+	"errors"
 	"regexp"
 	"slices"
 	"sort"
@@ -643,6 +644,83 @@ func loadAssistantManualProfile(context *assistantUserContext, userID int) {
 	context.ManualProfileTags = model.AssistantUserProfileTags(profile)
 	context.ManualProfileStrategy = profile.Strategy
 	context.ManualProfileUpdatedAt = profile.UpdatedAt
+}
+
+// assistantProfileEvidenceReady keeps a single greeting or an isolated
+// request from becoming durable personalization. Two substantive user turns
+// are enough to make the label useful while keeping the stored state bounded
+// and independent of raw conversation text.
+func assistantProfileEvidenceReady(conversation []assistantOpenAIMessage) bool {
+	turns := 0
+	for _, message := range conversation {
+		if message.Role == "user" && utf8.RuneCountInString(strings.TrimSpace(message.Content)) >= 4 {
+			turns++
+		}
+	}
+	return turns >= 2
+}
+
+func assistantProfileDraft(context assistantUserContext) (model.ProfileInput, bool) {
+	var key string
+	var tags []string
+	switch context.CustomerProfile {
+	case assistantProfileTechnical:
+		key, tags = model.AssistantProfileTechnical, []string{"technical", "cost_sensitive"}
+	case assistantProfileGuided:
+		key, tags = model.AssistantProfileGuided, []string{"guided", "needs_steps"}
+	case assistantProfileOperator:
+		key, tags = model.AssistantProfileOperator, []string{"production", "reliability"}
+	case assistantProfilePrivacy:
+		key, tags = model.AssistantProfilePrivacy, []string{"privacy"}
+	case assistantProfileAccessible:
+		key, tags = model.AssistantProfileAccessible, []string{"mobile", "accessibility"}
+	case assistantProfileSupport:
+		key, tags = model.AssistantProfileSupport, []string{"support"}
+	case assistantProfileL0Applicant:
+		key, tags = model.AssistantProfileL0Applicant, []string{"l0"}
+	default:
+		// Promotion and security signals are deliberately not persisted as user
+		// labels. They remain deterministic, request-local policy inputs.
+		return model.ProfileInput{}, false
+	}
+	return model.ProfileInput{
+		Key: key, Tags: tags, Strategy: profileSkillStrategy(key),
+		Source: model.AssistantProfileSourceAI, Enabled: true,
+	}, true
+}
+
+// syncAssistantProfile stores only a coarse response-style skill
+// derived from the current redacted conversation. Administrator-owned skills
+// remain authoritative, and security/promotion labels never become durable
+// metadata. All writes are best-effort so a profile table outage cannot break
+// chat availability.
+func syncAssistantProfile(context assistantUserContext, conversation []assistantOpenAIMessage) {
+	if context.UserID <= 0 || context.AdministratorMode || !assistantProfileEvidenceReady(conversation) {
+		return
+	}
+	input, ok := assistantProfileDraft(context)
+	if !ok || input.Strategy == "" {
+		return
+	}
+	existing, err := model.GetAssistantUserProfile(context.UserID)
+	if err != nil {
+		common.SysError("failed to load assistant AI profile: " + err.Error())
+		return
+	}
+	if existing != nil && existing.Source == model.AssistantProfileSourceAdmin {
+		return
+	}
+	if existing != nil {
+		normalizedTags := model.AssistantUserProfileTags(existing)
+		if existing.Enabled && existing.ProfileKey == input.Key && existing.Strategy == input.Strategy && slices.Equal(normalizedTags, input.Tags) {
+			return
+		}
+	}
+	if _, err := model.SaveProfile(context.UserID, context.UserID, input); err != nil {
+		if !errors.Is(err, model.ErrAssistantProfileManaged) {
+			common.SysError("failed to persist assistant AI profile: " + err.Error())
+		}
+	}
 }
 
 func trustLevelLabel(level int) string {

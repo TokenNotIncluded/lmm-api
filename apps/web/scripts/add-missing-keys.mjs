@@ -1426,6 +1426,101 @@ for (const [locale, translations] of Object.entries(
   Object.assign(newKeys[locale], translations)
 }
 
+const aiProfileTranslations = {
+  en: {
+    'AI labels': 'AI labels',
+    'Generated from assistant conversations':
+      'Generated from assistant conversations',
+    'Managed by an administrator': 'Managed by an administrator',
+    'Continue with Google': 'Continue with Google',
+    'Discount code': 'Discount code',
+    'Discount code is invalid': 'Discount code is invalid',
+    Or: 'Or',
+    'Page {{page}} of {{total}}': 'Page {{page}} of {{total}}',
+    'The drawing workbench is available after developer access is approved.':
+      'The drawing workbench is available after developer access is approved.',
+  },
+  zh: {
+    'AI labels': 'AI 标签',
+    'Generated from assistant conversations': '根据助手对话生成',
+    'Managed by an administrator': '由管理员管理',
+    'Continue with Google': '使用 Google 继续',
+    'Discount code': '优惠码',
+    'Discount code is invalid': '优惠码无效',
+    Or: '或',
+    'Page {{page}} of {{total}}': '第 {{page}} / {{total}} 页',
+    'The drawing workbench is available after developer access is approved.':
+      '开发者访问获批后即可使用绘图工作台。',
+  },
+  'zh-TW': {
+    'AI labels': 'AI 標籤',
+    'Generated from assistant conversations': '根據助手對話產生',
+    'Managed by an administrator': '由管理員管理',
+    'Continue with Google': '使用 Google 繼續',
+    'Discount code': '優惠碼',
+    'Discount code is invalid': '優惠碼無效',
+    Or: '或',
+    'Page {{page}} of {{total}}': '第 {{page}} / {{total}} 頁',
+    'The drawing workbench is available after developer access is approved.':
+      '開發者存取獲核准後即可使用繪圖工作台。',
+  },
+  fr: {
+    'AI labels': 'Étiquettes IA',
+    'Generated from assistant conversations':
+      'Générées à partir des conversations avec l’assistant',
+    'Managed by an administrator': 'Gérées par un administrateur',
+    'Continue with Google': 'Continuer avec Google',
+    'Discount code': 'Code de réduction',
+    'Discount code is invalid': 'Le code de réduction est invalide',
+    Or: 'Ou',
+    'Page {{page}} of {{total}}': 'Page {{page}} sur {{total}}',
+    'The drawing workbench is available after developer access is approved.':
+      'L’atelier de dessin est disponible après l’approbation de l’accès développeur.',
+  },
+  ja: {
+    'AI labels': 'AIラベル',
+    'Generated from assistant conversations': 'アシスタントとの会話から生成',
+    'Managed by an administrator': '管理者が管理',
+    'Continue with Google': 'Google で続行',
+    'Discount code': '割引コード',
+    'Discount code is invalid': '割引コードが無効です',
+    Or: 'または',
+    'Page {{page}} of {{total}}': '{{total}} ページ中 {{page}} ページ',
+    'The drawing workbench is available after developer access is approved.':
+      '開発者アクセスの承認後に描画ワークベンチを利用できます。',
+  },
+  ru: {
+    'AI labels': 'Метки ИИ',
+    'Generated from assistant conversations':
+      'Созданы по диалогам с ассистентом',
+    'Managed by an administrator': 'Управляются администратором',
+    'Continue with Google': 'Продолжить через Google',
+    'Discount code': 'Код скидки',
+    'Discount code is invalid': 'Код скидки недействителен',
+    Or: 'Или',
+    'Page {{page}} of {{total}}': 'Страница {{page}} из {{total}}',
+    'The drawing workbench is available after developer access is approved.':
+      'Рабочая область рисования доступна после одобрения доступа разработчика.',
+  },
+  vi: {
+    'AI labels': 'Nhãn AI',
+    'Generated from assistant conversations':
+      'Được tạo từ hội thoại với trợ lý',
+    'Managed by an administrator': 'Do quản trị viên quản lý',
+    'Continue with Google': 'Tiếp tục với Google',
+    'Discount code': 'Mã giảm giá',
+    'Discount code is invalid': 'Mã giảm giá không hợp lệ',
+    Or: 'Hoặc',
+    'Page {{page}} of {{total}}': 'Trang {{page}} / {{total}}',
+    'The drawing workbench is available after developer access is approved.':
+      'Có thể sử dụng bàn vẽ sau khi quyền nhà phát triển được phê duyệt.',
+  },
+}
+
+for (const [locale, translations] of Object.entries(aiProfileTranslations)) {
+  Object.assign(newKeys[locale], translations)
+}
+
 for (const [locale, translations] of Object.entries(todoTranslations)) {
   Object.assign(newKeys[locale], translations)
 }

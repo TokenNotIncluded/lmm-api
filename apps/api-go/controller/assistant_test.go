@@ -1372,6 +1372,66 @@ func TestAssistantSingleModelQuestionForcesLiveReadWhenAgentLoopIsOff(t *testing
 	assert.Equal(t, "get_available_models", assistantNamedToolChoiceName(assistantToolChoiceForAgentStep(context, map[string]bool{}, map[string]bool{})))
 }
 
+func TestAssistantAgentLoopOffExecutesSingleLiveModelRead(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Ability{}, &model.TopUp{}))
+	previousPricing := getPricingCache
+	getPricingCache = func() []model.Pricing {
+		return []model.Pricing{{ModelName: "gpt-5.6-sol", EnableGroup: []string{"default"}}}
+	}
+	t.Cleanup(func() { getPricingCache = previousPricing })
+	user := model.User{
+		Username: "assistant-live-read-off",
+		Password: "password",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+		Group:    "default",
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	message := "查看账户可用的准确模型 ID"
+	context := assistantUserContext{
+		UserID:            user.Id,
+		AccessLevel:       "L0",
+		LatestUserRequest: message,
+		Intent:            model.AssistantIntentModels,
+	}
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/assistant/chat", nil)
+	c.Set("id", user.Id)
+	c.Set(assistantActorUserIDKey, user.Id)
+	c.Set(assistantUserContextKey, context)
+
+	turn := 0
+	originalRelay := relayAssistantAgentTurn
+	relayAssistantAgentTurn = func(_ *gin.Context, request assistantOpenAIRequest, _ string, _ int) (int, []byte, error) {
+		turn++
+		switch turn {
+		case 1:
+			assert.Equal(t, "get_available_models", assistantNamedToolChoiceName(request.ToolChoice))
+			return http.StatusOK, []byte(`{"choices":[{"message":{"tool_calls":[{"id":"models","type":"function","function":{"name":"get_available_models","arguments":"{}"}}]}}]}`), nil
+		case 2:
+			assert.Nil(t, request.ToolChoice)
+			assert.Empty(t, request.Tools)
+			encoded := string(mustAssistantJSON(t, request.Messages))
+			assert.Contains(t, encoded, `\"model_ids\":[\"gpt-5.6-sol\"]`)
+			return http.StatusOK, []byte(`{"choices":[{"message":{"content":"已读取实时模型目录。"}}]}`), nil
+		default:
+			return http.StatusInternalServerError, nil, nil
+		}
+	}
+	t.Cleanup(func() { relayAssistantAgentTurn = originalRelay })
+
+	runAssistantAgent(c, setting.AssistantSettings{
+		Model: "live-read-off-model", AgentLoopEnabled: false, MaxSteps: 1, TimeoutSeconds: 45,
+	}, []assistantOpenAIMessage{{Role: "user", Content: message}})
+
+	assert.Equal(t, 2, turn)
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "已读取实时模型目录")
+}
+
 func TestAssistantAgentToolCatalogueMatchesAccessLevel(t *testing.T) {
 	l0 := assistantToolDefinitionsForContext(assistantUserContext{AccessLevel: "L0"})
 	l0Names := make(map[string]bool, len(l0))

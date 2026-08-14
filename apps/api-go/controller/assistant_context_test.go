@@ -506,6 +506,42 @@ func TestAssistantUserContextIncludesPolicySignalsWithoutSecrets(t *testing.T) {
 	assert.NotContains(t, context.Email, "secret-token")
 }
 
+func TestAssistantAIPersonalizationPersistsOnlyBoundedSafeLabels(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.AssistantUserProfile{}))
+	user := &model.User{
+		Username: "ai-profile-owner", Password: "password", Role: common.RoleCommonUser,
+		Status: common.UserStatusEnabled, Group: "default", AffCode: "ai-profile-owner",
+	}
+	require.NoError(t, db.Create(user).Error)
+	context := assistantUserContext{UserID: user.Id, CustomerProfile: assistantProfileGuided}
+	oneTurn := []assistantOpenAIMessage{{Role: "user", Content: "我需要配置客户端"}}
+	syncAssistantProfile(context, oneTurn)
+	profile, err := model.GetAssistantUserProfile(user.Id)
+	require.NoError(t, err)
+	assert.Nil(t, profile)
+
+	twoTurns := append(oneTurn, assistantOpenAIMessage{Role: "user", Content: "请用短步骤教我完成配置"})
+	syncAssistantProfile(context, twoTurns)
+	profile, err = model.GetAssistantUserProfile(user.Id)
+	require.NoError(t, err)
+	require.NotNil(t, profile)
+	assert.Equal(t, model.AssistantProfileGuided, profile.ProfileKey)
+	assert.Equal(t, []string{"guided", "needs_steps"}, model.AssistantUserProfileTags(profile))
+	assert.Equal(t, model.AssistantProfileSourceAI, profile.Source)
+
+	adminProfile, err := model.SaveProfile(user.Id, 99, model.ProfileInput{
+		Key: model.AssistantProfileOperator, Tags: []string{"production"},
+		Strategy: "Administrator-owned strategy.", Source: model.AssistantProfileSourceAdmin, Enabled: true,
+	})
+	require.NoError(t, err)
+	syncAssistantProfile(assistantUserContext{UserID: user.Id, CustomerProfile: assistantProfileTechnical}, twoTurns)
+	stored, err := model.GetAssistantUserProfile(user.Id)
+	require.NoError(t, err)
+	assert.Equal(t, adminProfile.ProfileKey, stored.ProfileKey)
+	assert.Equal(t, model.AssistantProfileSourceAdmin, stored.Source)
+}
+
 func TestAssistantPromptKeepsAccountContextInternal(t *testing.T) {
 	settings := setting.GetAssistantSettings()
 	context := assistantUserContext{

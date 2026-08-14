@@ -72,6 +72,16 @@ type AssistantUserProfileView struct {
 	UpdatedAt  int64    `json:"updated_at"`
 }
 
+// AssistantUserProfileSummary is the bounded administrator-list view. It is
+// deliberately smaller than AssistantUserProfileView: a user table needs the
+// AI labels and provenance, never the private response strategy.
+type AssistantUserProfileSummary struct {
+	ProfileKey string   `json:"profile_key"`
+	Tags       []string `json:"tags"`
+	Source     string   `json:"source"`
+	UpdatedAt  int64    `json:"updated_at"`
+}
+
 type ProfileInput struct {
 	Key      string
 	Tags     []string
@@ -170,6 +180,9 @@ func NormalizeAssistantProfileTags(tags []string) ([]string, error) {
 			return r
 		}, strings.TrimSpace(tag))
 		tag = strings.Join(strings.Fields(tag), " ")
+		// Tags are shown in administrator tooling, so apply the same secret
+		// redaction boundary as assistant memory before persisting them.
+		tag = RedactAssistantHistoryContent(tag)
 		if tag == "" {
 			continue
 		}
@@ -222,6 +235,18 @@ func AssistantUserProfileViewOf(profile *AssistantUserProfile) AssistantUserProf
 	}
 }
 
+func AssistantUserProfileSummaryOf(profile *AssistantUserProfile) AssistantUserProfileSummary {
+	if profile == nil {
+		return AssistantUserProfileSummary{Tags: []string{}}
+	}
+	return AssistantUserProfileSummary{
+		ProfileKey: profile.ProfileKey,
+		Tags:       AssistantUserProfileTags(profile),
+		Source:     profile.Source,
+		UpdatedAt:  profile.UpdatedAt,
+	}
+}
+
 func GetAssistantUserProfile(userID int) (*AssistantUserProfile, error) {
 	if userID <= 0 {
 		return nil, gorm.ErrInvalidData
@@ -235,6 +260,45 @@ func GetAssistantUserProfile(userID int) (*AssistantUserProfile, error) {
 		return nil, err
 	}
 	return &profile, nil
+}
+
+// PopulateAssistantUserProfiles attaches bounded AI-label summaries to user
+// management rows. Visibility mirrors transcript history: an administrator
+// may see only a strictly lower-role account, and no ordinary user receives
+// another account's internal profile. The query is batched for the page, so a
+// user table never incurs one profile query per row.
+func PopulateAssistantUserProfiles(users []*User, viewerUserID, viewerRole int) error {
+	authorizedIDs := make([]int, 0, len(users))
+	usersByID := make(map[int]*User, len(users))
+	for _, user := range users {
+		if user == nil {
+			continue
+		}
+		user.AssistantProfile = nil
+		if viewerRole < common.RoleAdminUser || viewerRole <= user.Role || user.Id == viewerUserID {
+			continue
+		}
+		authorizedIDs = append(authorizedIDs, user.Id)
+		usersByID[user.Id] = user
+	}
+	if len(authorizedIDs) == 0 {
+		return nil
+	}
+
+	var profiles []AssistantUserProfile
+	if err := DB.Where("user_id IN ? AND enabled = ?", authorizedIDs, true).
+		Select("user_id, profile_key, tags_json, source, updated_at").
+		Find(&profiles).Error; err != nil {
+		return err
+	}
+	for index := range profiles {
+		profile := &profiles[index]
+		if user := usersByID[profile.UserId]; user != nil {
+			summary := AssistantUserProfileSummaryOf(profile)
+			user.AssistantProfile = &summary
+		}
+	}
+	return nil
 }
 
 func UpsertAssistantUserProfile(userID, updatedBy int, profileKey string, tags []string, strategy string, enabled bool) (*AssistantUserProfile, error) {

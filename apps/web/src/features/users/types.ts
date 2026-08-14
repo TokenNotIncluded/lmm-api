@@ -70,6 +70,14 @@ export const userSchema = z.object({
   linux_do_gamification_score: z.number().optional(),
   linux_do_score_updated_at: z.number().optional(),
   assistant_conversation_count: z.number().optional(),
+  assistant_profile: z
+    .object({
+      profile_key: z.string(),
+      tags: z.array(z.string()),
+      source: z.string(),
+      updated_at: z.number(),
+    })
+    .optional(),
 })
 export type User = z.infer<typeof userSchema>
 

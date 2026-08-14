@@ -586,6 +586,11 @@ func PrepareAssistantRequest(c *gin.Context) {
 		writeAssistantScopeRefusal(c)
 		return
 	}
+	// Once the conversation contains enough substantive evidence, persist only
+	// a bounded response-style profile for this user. The helper skips admin
+	// overrides and sensitive risk/promotion labels; raw turns never enter the
+	// profile table.
+	syncAssistantProfile(userContext, conversation)
 	// A first-turn question is an analytics event, not a model-call event. Keep
 	// it before both cache checks so a user-initiated first turn is counted even
 	// on a cache hit, but never count transport retries as new questions.

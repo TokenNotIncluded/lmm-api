@@ -366,6 +366,10 @@ func GetAllUsers(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	if err := model.PopulateAssistantUserProfiles(users, c.GetInt("id"), c.GetInt("role")); err != nil {
+		common.ApiError(c, err)
+		return
+	}
 
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(users)
@@ -399,6 +403,10 @@ func SearchUsers(c *gin.Context) {
 	}
 	model.PopulateAdminPaymentRestrictions(users)
 	if err := model.PopulateAssistantConversationCounts(users, c.GetInt("id"), c.GetInt("role")); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if err := model.PopulateAssistantUserProfiles(users, c.GetInt("id"), c.GetInt("role")); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -437,6 +445,10 @@ func GetUser(c *gin.Context) {
 	user.TrustLevelInfo = &trustLevel
 	user.AdminPermissions = authz.Capabilities(user.Id, user.Role)
 	model.PopulateAdminPaymentRestriction(user)
+	if err := model.PopulateAssistantUserProfiles([]*model.User{user}, c.GetInt("id"), myRole); err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",

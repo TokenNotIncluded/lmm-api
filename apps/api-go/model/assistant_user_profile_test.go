@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LIghtJUNction/api.lmm.best/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -49,6 +50,13 @@ func TestAssistantUserProfileRejectsUnsafeOrOversizedValues(t *testing.T) {
 	assert.ErrorIs(t, err, ErrAssistantProfileTagsInvalid)
 	_, err = NormalizeAssistantProfileStrategy(strings.Repeat("策略 ", AssistantUserProfileMaxStrategyRunes))
 	assert.ErrorIs(t, err, ErrAssistantProfileStrategyLong)
+}
+
+func TestAssistantUserProfileTagsRedactSecrets(t *testing.T) {
+	tags, err := NormalizeAssistantProfileTags([]string{"api_key: sk-secret-value", "safe"})
+	require.NoError(t, err)
+	assert.NotContains(t, strings.Join(tags, ","), "sk-secret-value")
+	assert.Contains(t, tags, "safe")
 }
 
 func TestAssistantUserProfileEmptyKeyAlwaysDisables(t *testing.T) {
@@ -100,4 +108,38 @@ func TestAdministratorCanReplaceAssistantProfile(t *testing.T) {
 	assert.Equal(t, AssistantProfileOperator, stored.ProfileKey)
 	assert.Equal(t, "Administrator strategy.", stored.Strategy)
 	assert.Equal(t, AssistantProfileSourceAdmin, stored.Source)
+}
+
+func TestPopulateAssistantUserProfilesUsesStrictLowerRoleVisibility(t *testing.T) {
+	db := setupConsoleActivationTestDB(t)
+	require.NoError(t, db.AutoMigrate(&AssistantUserProfile{}))
+	viewer := &User{Username: "profile-viewer", Password: "password", Role: 100, AffCode: "profile-viewer"}
+	target := &User{Username: "profile-target-visible", Password: "password", Role: 1, AffCode: "profile-target-visible"}
+	peer := &User{Username: "profile-target-peer", Password: "password", Role: 10, AffCode: "profile-target-peer"}
+	require.NoError(t, db.Create(viewer).Error)
+	require.NoError(t, db.Create(target).Error)
+	require.NoError(t, db.Create(peer).Error)
+	_, err := SaveProfile(target.Id, target.Id, ProfileInput{
+		Key: AssistantProfileTechnical, Tags: []string{"technical", "cost_sensitive"},
+		Source: AssistantProfileSourceAI, Enabled: true,
+	})
+	require.NoError(t, err)
+	_, err = SaveProfile(peer.Id, peer.Id, ProfileInput{
+		Key: AssistantProfileGuided, Tags: []string{"needs_steps"},
+		Source: AssistantProfileSourceAI, Enabled: true,
+	})
+	require.NoError(t, err)
+
+	rows := []*User{viewer, target, peer}
+	require.NoError(t, PopulateAssistantUserProfiles(rows, viewer.Id, viewer.Role))
+	require.NotNil(t, target.AssistantProfile)
+	assert.Equal(t, []string{"technical", "cost_sensitive"}, target.AssistantProfile.Tags)
+	assert.Equal(t, AssistantProfileSourceAI, target.AssistantProfile.Source)
+	assert.Nil(t, viewer.AssistantProfile)
+	require.NotNil(t, peer.AssistantProfile)
+	assert.Equal(t, []string{"needs_steps"}, peer.AssistantProfile.Tags)
+
+	rows = []*User{target}
+	require.NoError(t, PopulateAssistantUserProfiles(rows, target.Id, common.RoleCommonUser))
+	assert.Nil(t, target.AssistantProfile)
 }

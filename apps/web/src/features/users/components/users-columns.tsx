@@ -276,6 +276,55 @@ export function useUsersColumns(): ColumnDef<User>[] {
       meta: { mobileBadge: true, mobileOrder: 25 },
     },
     {
+      id: 'assistant_profile',
+      header: t('AI labels'),
+      cell: ({ row }) => {
+        const profile = row.original.assistant_profile
+        const tags = profile?.tags ?? []
+        const source = profile?.source
+        if (tags.length === 0) {
+          return <span className='text-muted-foreground text-sm'>-</span>
+        }
+        return (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <div className='flex max-w-[220px] flex-wrap gap-1 overflow-hidden' />
+              }
+            >
+              {tags.slice(0, 3).map((tag) => (
+                <StatusBadge
+                  key={tag}
+                  label={tag}
+                  variant='neutral'
+                  copyable={false}
+                />
+              ))}
+              {tags.length > 3 && (
+                <StatusBadge
+                  label={`+${tags.length - 3}`}
+                  variant='neutral'
+                  copyable={false}
+                />
+              )}
+            </TooltipTrigger>
+            <TooltipContent>
+              <p className='mb-1 text-xs font-medium'>{t('AI labels')}</p>
+              <p className='text-xs'>{tags.join(', ')}</p>
+              <p className='text-muted-foreground mt-1 text-xs'>
+                {source === 'assistant'
+                  ? t('Generated from assistant conversations')
+                  : t('Managed by an administrator')}
+              </p>
+            </TooltipContent>
+          </Tooltip>
+        )
+      },
+      enableSorting: false,
+      size: 230,
+      meta: { mobileOrder: 28 },
+    },
+    {
       id: 'assistant_conversations',
       header: t('Support conversations'),
       cell: ({ row }) => <UserAssistantHistoryDialog user={row.original} />,
