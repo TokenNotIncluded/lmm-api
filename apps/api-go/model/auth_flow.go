@@ -25,6 +25,7 @@ const (
 	AuthFlowPurposeAssistantL1       = "assistant_l1_recommendation"
 	AuthFlowPurposeAssistantAdmin    = "assistant_admin_change"
 	AuthFlowPurposeAssistantKey      = "assistant_key_creation"
+	AuthFlowPurposeAssistantDrawing  = "assistant_drawing_generation"
 	AuthFlowIntentLogin              = "login"
 	AuthFlowIntentBind               = "bind"
 	AuthFlowTokenBytes               = 32

@@ -269,12 +269,27 @@ func buildAssistantTools() []assistantOpenAIToolDefinition {
 				Parameters: objectSchema(map[string]any{
 					"page": map[string]any{
 						"type": "string",
-						"enum": []string{"home", "getting-started", "pricing", "wallet", "usage-logs", "keys", "profile", "support", "open-source-bounties", "users"},
+						"enum": []string{"home", "getting-started", "pricing", "wallet", "usage-logs", "keys", "drawing", "profile", "support", "open-source-bounties", "users"},
 					},
 					"identifier": map[string]any{"type": "string", "maxLength": 200},
 					"query":      map[string]any{"type": "string", "maxLength": 200},
 					"section":    map[string]any{"type": "string", "enum": []string{"common", "drawing", "task"}},
 				}, []string{"page"}),
+			},
+		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
+				Name:        "prepare_image_generation",
+				Description: "For an L1 user, prepare one image-generation request through the drawing workbench. Use the live catalog and an exact image-capable model; prefer the live image-2 group/model only when the catalog exposes them, otherwise ask the user to choose. This only creates a short-lived confirmation card; it never spends quota until the user confirms in the UI.",
+				Parameters: objectSchema(map[string]any{
+					"prompt":  map[string]any{"type": "string", "minLength": 1, "maxLength": assistantDrawingPromptMaxRunes},
+					"model":   map[string]any{"type": "string", "maxLength": 200},
+					"group":   map[string]any{"type": "string", "maxLength": 64},
+					"size":    map[string]any{"type": "string", "maxLength": 32},
+					"quality": map[string]any{"type": "string", "maxLength": 32},
+					"n":       map[string]any{"type": "integer", "minimum": 1, "maximum": assistantDrawingMaxImages},
+				}, []string{"prompt"}),
 			},
 		},
 		{
@@ -535,6 +550,9 @@ func assistantToolAllowedForContext(name string, userContext assistantUserContex
 	if name == "prepare_new_user_gift" {
 		return assistantNewUserGiftToolAllowed(userContext)
 	}
+	if name == "prepare_image_generation" {
+		return common.DrawingEnabled && userContext.DeveloperAccessGranted
+	}
 	if userContext.AdministratorMode {
 		if userContext.AccessLevel != "ROOT" {
 			switch name {
@@ -627,6 +645,9 @@ func assistantToolChoiceForContext(userContext assistantUserContext) any {
 		case model.AssistantIntentBounty:
 			name = "get_bounty_guide"
 		}
+	}
+	if name == "" && assistantExplicitImageRequest(userContext.LatestUserRequest) {
+		name = "prepare_image_generation"
 	}
 	if name != "" && assistantToolAllowedForContext(name, userContext) {
 		return map[string]any{
@@ -747,6 +768,12 @@ func assistantToolChoiceForAgentStep(userContext assistantUserContext, calledToo
 		}
 		if !calledTools["request_create_key"] {
 			return assistantNamedToolChoice("request_create_key")
+		}
+		return "none"
+	}
+	if assistantImageGenerationWorkflowRequired(userContext) {
+		if !calledTools["prepare_image_generation"] {
+			return assistantNamedToolChoice("prepare_image_generation")
 		}
 		return "none"
 	}
@@ -1058,6 +1085,7 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 	forceL0Assessment := assistantL0InterlocutorAssessmentRequired(userContext)
 	forceRecommendationWorkflow := assistantRecommendationWorkflowRequired(userContext)
 	forceCreateKeyWorkflow := assistantCreateKeyWorkflowRequired(userContext)
+	forceImageGenerationWorkflow := assistantImageGenerationWorkflowRequired(userContext)
 	forceReadChain := assistantNeedsReadChain(userContext)
 	if forceL0Assessment && maxSteps < 2 {
 		maxSteps = 2
@@ -1068,17 +1096,20 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 	if minimum := assistantCreateKeyWorkflowMinSteps(userContext); maxSteps < minimum {
 		maxSteps = minimum
 	}
+	if minimum := assistantImageGenerationWorkflowMinSteps(userContext); maxSteps < minimum {
+		maxSteps = minimum
+	}
 	if minimum := assistantReadChainSteps(userContext); maxSteps < minimum {
 		maxSteps = minimum
 	}
 	if !settings.AgentLoopEnabled {
-		if !forceL0Assessment && !forceRecommendationWorkflow && !forceCreateKeyWorkflow && !forceReadChain {
+		if !forceL0Assessment && !forceRecommendationWorkflow && !forceCreateKeyWorkflow && !forceImageGenerationWorkflow && !forceReadChain {
 			maxSteps = 1
 		}
 	}
 	cacheKey := c.GetString("assistant_cache_key")
 	usedCacheSensitiveTool := false
-	agentEnabled := maxSteps > 1 && (settings.AgentLoopEnabled || forceL0Assessment || forceRecommendationWorkflow || forceCreateKeyWorkflow || forceReadChain)
+	agentEnabled := maxSteps > 1 && (settings.AgentLoopEnabled || forceL0Assessment || forceRecommendationWorkflow || forceCreateKeyWorkflow || forceImageGenerationWorkflow || forceReadChain)
 	var tools []assistantOpenAIToolDefinition
 	var calledTools, successfulTools map[string]bool
 	toolTraces := make([]assistantToolTrace, 0, assistantToolCallsPerTurn)
@@ -1119,7 +1150,7 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 			return
 		}
 		message := response.Choices[0].Message
-		if forceRecommendationWorkflow || forceCreateKeyWorkflow || forceReadChain {
+		if forceRecommendationWorkflow || forceCreateKeyWorkflow || forceImageGenerationWorkflow || forceReadChain {
 			requiredTool := assistantNamedToolChoiceName(request.ToolChoice)
 			if requiredTool != "" && (len(message.ToolCalls) != 1 || strings.TrimSpace(message.ToolCalls[0].Function.Name) != requiredTool) {
 				writeAssistantError(c, http.StatusBadGateway, "ASSISTANT_REQUIRED_TOOL_MISSING", errors.New("assistant did not follow the required tool workflow"))
@@ -1139,7 +1170,7 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 			c.Data(status, "application/json; charset=utf-8", normalizedBody)
 			return
 		}
-		if (!settings.AgentLoopEnabled && !forceL0Assessment && !forceRecommendationWorkflow && !forceCreateKeyWorkflow && !forceReadChain) || step >= maxSteps-1 {
+		if (!settings.AgentLoopEnabled && !forceL0Assessment && !forceRecommendationWorkflow && !forceCreateKeyWorkflow && !forceImageGenerationWorkflow && !forceReadChain) || step >= maxSteps-1 {
 			writeAssistantError(c, http.StatusBadGateway, "ASSISTANT_AGENT_MAX_STEPS", errors.New("assistant agent reached its step limit before producing a final answer"))
 			return
 		}
@@ -1407,6 +1438,8 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 		return executeAssistantBountyTool()
 	case "prepare_new_user_gift":
 		return executeAssistantNewUserGiftTool(c, actorUserID, input)
+	case "prepare_image_generation":
+		return executeAssistantImageGenerationTool(c, actorUserID, input)
 	case "get_usage_summary":
 		if result, blocked := assistantDeveloperCapabilityRequired(actorUserID, "usage statistics"); blocked {
 			return result

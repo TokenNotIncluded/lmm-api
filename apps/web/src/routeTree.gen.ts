@@ -47,6 +47,7 @@ import { Route as AuthenticatedDashboardIndexRouteImport } from './routes/_authe
 import { Route as AuthenticatedDashboardSectionRouteImport } from './routes/_authenticated/dashboard/$section'
 import { Route as AuthenticatedDeveloperAccessIndexRouteImport } from './routes/_authenticated/developer-access/index'
 import { Route as AuthenticatedDiscountCodesIndexRouteImport } from './routes/_authenticated/discount-codes/index'
+import { Route as AuthenticatedDrawingIndexRouteImport } from './routes/_authenticated/drawing/index'
 import { Route as AuthenticatedErrorsErrorRouteImport } from './routes/_authenticated/errors/$error'
 import { Route as AuthenticatedFinanceIndexRouteImport } from './routes/_authenticated/finance/index'
 import { Route as AuthenticatedGettingStartedIndexRouteImport } from './routes/_authenticated/getting-started/index'
@@ -276,6 +277,12 @@ const AuthenticatedDiscountCodesIndexRoute =
   AuthenticatedDiscountCodesIndexRouteImport.update({
     id: '/discount-codes/',
     path: '/discount-codes/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedDrawingIndexRoute =
+  AuthenticatedDrawingIndexRouteImport.update({
+    id: '/drawing/',
+    path: '/drawing/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
 const AuthenticatedErrorsErrorRoute =
@@ -525,6 +532,7 @@ export interface FileRoutesByFullPath {
   '/dashboard/': typeof AuthenticatedDashboardIndexRoute
   '/developer-access/': typeof AuthenticatedDeveloperAccessIndexRoute
   '/discount-codes/': typeof AuthenticatedDiscountCodesIndexRoute
+  '/drawing/': typeof AuthenticatedDrawingIndexRoute
   '/finance/': typeof AuthenticatedFinanceIndexRoute
   '/getting-started/': typeof AuthenticatedGettingStartedIndexRoute
   '/keys/': typeof AuthenticatedKeysIndexRoute
@@ -597,6 +605,7 @@ export interface FileRoutesByTo {
   '/dashboard': typeof AuthenticatedDashboardIndexRoute
   '/developer-access': typeof AuthenticatedDeveloperAccessIndexRoute
   '/discount-codes': typeof AuthenticatedDiscountCodesIndexRoute
+  '/drawing': typeof AuthenticatedDrawingIndexRoute
   '/finance': typeof AuthenticatedFinanceIndexRoute
   '/getting-started': typeof AuthenticatedGettingStartedIndexRoute
   '/keys': typeof AuthenticatedKeysIndexRoute
@@ -673,6 +682,7 @@ export interface FileRoutesById {
   '/_authenticated/dashboard/': typeof AuthenticatedDashboardIndexRoute
   '/_authenticated/developer-access/': typeof AuthenticatedDeveloperAccessIndexRoute
   '/_authenticated/discount-codes/': typeof AuthenticatedDiscountCodesIndexRoute
+  '/_authenticated/drawing/': typeof AuthenticatedDrawingIndexRoute
   '/_authenticated/finance/': typeof AuthenticatedFinanceIndexRoute
   '/_authenticated/getting-started/': typeof AuthenticatedGettingStartedIndexRoute
   '/_authenticated/keys/': typeof AuthenticatedKeysIndexRoute
@@ -748,6 +758,7 @@ export interface FileRouteTypes {
     | '/dashboard/'
     | '/developer-access/'
     | '/discount-codes/'
+    | '/drawing/'
     | '/finance/'
     | '/getting-started/'
     | '/keys/'
@@ -820,6 +831,7 @@ export interface FileRouteTypes {
     | '/dashboard'
     | '/developer-access'
     | '/discount-codes'
+    | '/drawing'
     | '/finance'
     | '/getting-started'
     | '/keys'
@@ -895,6 +907,7 @@ export interface FileRouteTypes {
     | '/_authenticated/dashboard/'
     | '/_authenticated/developer-access/'
     | '/_authenticated/discount-codes/'
+    | '/_authenticated/drawing/'
     | '/_authenticated/finance/'
     | '/_authenticated/getting-started/'
     | '/_authenticated/keys/'
@@ -1219,6 +1232,13 @@ declare module '@tanstack/react-router' {
       path: '/discount-codes'
       fullPath: '/discount-codes/'
       preLoaderRoute: typeof AuthenticatedDiscountCodesIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/drawing/': {
+      id: '/_authenticated/drawing/'
+      path: '/drawing'
+      fullPath: '/drawing/'
+      preLoaderRoute: typeof AuthenticatedDrawingIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/errors/$error': {
@@ -1567,6 +1587,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedDashboardIndexRoute: typeof AuthenticatedDashboardIndexRoute
   AuthenticatedDeveloperAccessIndexRoute: typeof AuthenticatedDeveloperAccessIndexRoute
   AuthenticatedDiscountCodesIndexRoute: typeof AuthenticatedDiscountCodesIndexRoute
+  AuthenticatedDrawingIndexRoute: typeof AuthenticatedDrawingIndexRoute
   AuthenticatedFinanceIndexRoute: typeof AuthenticatedFinanceIndexRoute
   AuthenticatedGettingStartedIndexRoute: typeof AuthenticatedGettingStartedIndexRoute
   AuthenticatedKeysIndexRoute: typeof AuthenticatedKeysIndexRoute
@@ -1600,6 +1621,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedDeveloperAccessIndexRoute:
     AuthenticatedDeveloperAccessIndexRoute,
   AuthenticatedDiscountCodesIndexRoute: AuthenticatedDiscountCodesIndexRoute,
+  AuthenticatedDrawingIndexRoute: AuthenticatedDrawingIndexRoute,
   AuthenticatedFinanceIndexRoute: AuthenticatedFinanceIndexRoute,
   AuthenticatedGettingStartedIndexRoute: AuthenticatedGettingStartedIndexRoute,
   AuthenticatedKeysIndexRoute: AuthenticatedKeysIndexRoute,

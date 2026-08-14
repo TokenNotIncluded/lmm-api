@@ -25,6 +25,7 @@ export type AssistantNavigationPath =
   | '/wallet'
   | '/usage-logs'
   | '/keys'
+  | '/drawing'
   | '/models'
   | '/open-source-bounties'
   | '/support'

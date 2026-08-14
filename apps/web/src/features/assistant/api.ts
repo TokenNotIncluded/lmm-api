@@ -186,6 +186,19 @@ export type AssistantCreateKeyAction = {
   group: string
 }
 
+export type AssistantImageGenerationAction = {
+  type: 'image_generation'
+  confirmation_token: string
+  requires_confirmation: true
+  expires_in_seconds: number
+  prompt: string
+  model: string
+  group: string
+  n: number
+  size?: string
+  quality?: string
+}
+
 export type AssistantAdminConfigPreview = {
   key: string
   label: string
@@ -228,6 +241,7 @@ export type AssistantNavigationPath =
   | '/usage-logs/drawing'
   | '/usage-logs/task'
   | '/keys'
+  | '/drawing'
   | '/profile'
   | '/support'
   | '/open-source-bounties'
@@ -280,6 +294,7 @@ export type AssistantAction =
   | AssistantL1RecommendationAction
   | AssistantAccountDisableAction
   | AssistantCreateKeyAction
+  | AssistantImageGenerationAction
   | AssistantAdminChangeAction
   | AssistantNavigationAction
   | AssistantUserAction
@@ -484,6 +499,7 @@ const ASSISTANT_NAVIGATION_PATHS = new Set<AssistantNavigationPath>([
   '/usage-logs/drawing',
   '/usage-logs/task',
   '/keys',
+  '/drawing',
   '/profile',
   '/support',
   '/open-source-bounties',
@@ -502,6 +518,7 @@ const ASSISTANT_NAVIGATION_QUERY_KEYS: Record<
   '/usage-logs/drawing': ['username'],
   '/usage-logs/task': ['username'],
   '/keys': [],
+  '/drawing': [],
   '/profile': [],
   '/support': [],
   '/open-source-bounties': [],
@@ -774,6 +791,51 @@ export function parseAssistantAction(
         expires_in_seconds: action.expires_in_seconds,
         name,
         group,
+      }
+    }
+  }
+
+  if (
+    action.type === 'image_generation' &&
+    action.requires_confirmation === true &&
+    typeof action.expires_in_seconds === 'number' &&
+    Number.isInteger(action.expires_in_seconds) &&
+    action.expires_in_seconds > 0 &&
+    typeof action.prompt === 'string' &&
+    typeof action.model === 'string' &&
+    typeof action.group === 'string' &&
+    typeof action.n === 'number' &&
+    Number.isInteger(action.n) &&
+    action.n >= 1 &&
+    action.n <= 4
+  ) {
+    const prompt = action.prompt.trim()
+    const model = action.model.trim()
+    const group = action.group.trim()
+    const size = typeof action.size === 'string' ? action.size.trim() : ''
+    const quality =
+      typeof action.quality === 'string' ? action.quality.trim() : ''
+    if (
+      prompt &&
+      prompt.length <= 2000 &&
+      model &&
+      model.length <= 200 &&
+      group &&
+      group.length <= 64 &&
+      (!size || size.length <= 32) &&
+      (!quality || quality.length <= 32)
+    ) {
+      return {
+        type: 'image_generation',
+        confirmation_token: confirmationToken,
+        requires_confirmation: true,
+        expires_in_seconds: action.expires_in_seconds,
+        prompt,
+        model,
+        group,
+        n: action.n,
+        ...(size ? { size } : {}),
+        ...(quality ? { quality } : {}),
       }
     }
   }
@@ -1054,6 +1116,43 @@ export async function submitAssistantAdminChange(
   return requireAssistantData(
     response.data,
     'Unable to apply the administrator change'
+  )
+}
+
+export type AssistantGeneratedImage = {
+  url?: string
+  b64_json?: string
+  revised_prompt?: string
+}
+
+type AssistantImageGenerationResponse = {
+  data?: AssistantGeneratedImage[]
+  error?: { message?: string }
+  message?: string
+}
+
+export async function generateAssistantImage(
+  confirmationToken: string
+): Promise<AssistantGeneratedImage[]> {
+  const response = await api.post<AssistantImageGenerationResponse>(
+    '/api/assistant/drawing/generate',
+    { confirmation_token: confirmationToken },
+    { skipBusinessError: true, skipErrorHandler: true }
+  )
+  const payload = response.data
+  if (payload.error || !Array.isArray(payload.data)) {
+    throw new Error(
+      payload.error?.message ||
+        payload.message ||
+        'Unable to generate the image'
+    )
+  }
+  return payload.data.filter((item): item is AssistantGeneratedImage =>
+    Boolean(
+      item &&
+      typeof item === 'object' &&
+      (typeof item.url === 'string' || typeof item.b64_json === 'string')
+    )
   )
 }
 

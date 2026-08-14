@@ -401,6 +401,220 @@ const newKeys = {
   },
 }
 
+const drawingTranslations = {
+  en: {
+    'Drawing studio': 'Drawing studio',
+    'Create images through the same safe, group-aware relay used by the API.':
+      'Create images through the same safe, group-aware relay used by the API.',
+    'Describe an image': 'Describe an image',
+    'Describe what you want to see...': 'Describe what you want to see...',
+    'Routing group': 'Routing group',
+    'Billing follows the selected group configuration.':
+      'Billing follows the selected group configuration.',
+    'Image model': 'Image model',
+    'Size (optional)': 'Size (optional)',
+    'Quality (optional)': 'Quality (optional)',
+    'Generate image': 'Generate image',
+    'Generating...': 'Generating...',
+    'Your generated images will appear here.':
+      'Your generated images will appear here.',
+    'Image catalog unavailable': 'Image catalog unavailable',
+    'No image-capable model and routing group is currently available.':
+      'No image-capable model and routing group is currently available.',
+    'Unable to generate the image': 'Unable to generate the image',
+    'No images were returned': 'No images were returned',
+    'Ready to generate an image': 'Ready to generate an image',
+    'Review the prompt and routing choice before generating.':
+      'Review the prompt and routing choice before generating.',
+    Prompt: 'Prompt',
+    Images: 'Images',
+    'Image generated': 'Image generated',
+    'The confirmation was consumed or the image request failed. Ask the assistant to prepare it again.':
+      'The confirmation was consumed or the image request failed. Ask the assistant to prepare it again.',
+  },
+  zh: {
+    'Drawing studio': '绘图工作台',
+    'Create images through the same safe, group-aware relay used by the API.':
+      '通过与 API 相同的安全分组路由创建图片。',
+    'Describe an image': '描述图片',
+    'Describe what you want to see...': '描述你想看到的内容……',
+    'Routing group': '路由分组',
+    'Billing follows the selected group configuration.':
+      '费用按所选分组配置结算。',
+    'Image model': '图片模型',
+    'Size (optional)': '尺寸（可选）',
+    'Quality (optional)': '质量（可选）',
+    'Generate image': '生成图片',
+    'Generating...': '生成中……',
+    'Your generated images will appear here.': '生成的图片会显示在这里。',
+    'Image catalog unavailable': '图片目录不可用',
+    'No image-capable model and routing group is currently available.':
+      '当前没有可用的图片模型和路由分组。',
+    'Unable to generate the image': '无法生成图片',
+    'No images were returned': '没有返回图片',
+    'Ready to generate an image': '已准备生成图片',
+    'Review the prompt and routing choice before generating.':
+      '请在生成前检查提示词和路由选择。',
+    Prompt: '提示词',
+    Images: '图片数量',
+    'Image generated': '图片已生成',
+    'The confirmation was consumed or the image request failed. Ask the assistant to prepare it again.':
+      '确认已使用或图片请求失败，请让助手重新准备。',
+  },
+  'zh-TW': {
+    'Drawing studio': '繪圖工作台',
+    'Create images through the same safe, group-aware relay used by the API.':
+      '透過與 API 相同的安全分組路由建立圖片。',
+    'Describe an image': '描述圖片',
+    'Describe what you want to see...': '描述你想看到的內容……',
+    'Routing group': '路由分組',
+    'Billing follows the selected group configuration.':
+      '費用依所選分組設定結算。',
+    'Image model': '圖片模型',
+    'Size (optional)': '尺寸（選填）',
+    'Quality (optional)': '品質（選填）',
+    'Generate image': '產生圖片',
+    'Generating...': '產生中……',
+    'Your generated images will appear here.': '產生的圖片會顯示在這裡。',
+    'Image catalog unavailable': '圖片目錄無法使用',
+    'No image-capable model and routing group is currently available.':
+      '目前沒有可用的圖片模型與路由分組。',
+    'Unable to generate the image': '無法產生圖片',
+    'No images were returned': '沒有回傳圖片',
+    'Ready to generate an image': '已準備產生圖片',
+    'Review the prompt and routing choice before generating.':
+      '產生前請檢查提示詞與路由選擇。',
+    Prompt: '提示詞',
+    Images: '圖片數量',
+    'Image generated': '圖片已產生',
+    'The confirmation was consumed or the image request failed. Ask the assistant to prepare it again.':
+      '確認已使用或圖片請求失敗，請讓助手重新準備。',
+  },
+  fr: {
+    'Drawing studio': 'Atelier de dessin',
+    'Create images through the same safe, group-aware relay used by the API.':
+      'Créez des images via le même relais sécurisé et sensible aux groupes que l’API.',
+    'Describe an image': 'Décrire une image',
+    'Describe what you want to see...': 'Décrivez ce que vous voulez voir…',
+    'Routing group': 'Groupe de routage',
+    'Billing follows the selected group configuration.':
+      'La facturation suit la configuration du groupe choisi.',
+    'Image model': 'Modèle d’image',
+    'Size (optional)': 'Taille (facultatif)',
+    'Quality (optional)': 'Qualité (facultatif)',
+    'Generate image': 'Générer l’image',
+    'Generating...': 'Génération…',
+    'Your generated images will appear here.': 'Vos images apparaîtront ici.',
+    'Image catalog unavailable': 'Catalogue d’images indisponible',
+    'No image-capable model and routing group is currently available.':
+      'Aucun modèle d’image ni groupe de routage n’est disponible.',
+    'Unable to generate the image': 'Impossible de générer l’image',
+    'No images were returned': 'Aucune image reçue',
+    'Ready to generate an image': 'Image prête à être générée',
+    'Review the prompt and routing choice before generating.':
+      'Vérifiez le prompt et le routage avant de générer.',
+    Prompt: 'Prompt',
+    Images: 'Images',
+    'Image generated': 'Image générée',
+    'The confirmation was consumed or the image request failed. Ask the assistant to prepare it again.':
+      'La confirmation a été utilisée ou la demande a échoué. Demandez à l’assistant de la préparer à nouveau.',
+  },
+  ja: {
+    'Drawing studio': '画像スタジオ',
+    'Create images through the same safe, group-aware relay used by the API.':
+      'API と同じ安全なグループ対応リレーで画像を作成します。',
+    'Describe an image': '画像を説明',
+    'Describe what you want to see...': '見たいものを説明してください…',
+    'Routing group': 'ルーティンググループ',
+    'Billing follows the selected group configuration.':
+      '料金は選択したグループ設定に従います。',
+    'Image model': '画像モデル',
+    'Size (optional)': 'サイズ（任意）',
+    'Quality (optional)': '品質（任意）',
+    'Generate image': '画像を生成',
+    'Generating...': '生成中…',
+    'Your generated images will appear here.':
+      '生成した画像がここに表示されます。',
+    'Image catalog unavailable': '画像カタログを利用できません',
+    'No image-capable model and routing group is currently available.':
+      '利用可能な画像モデルとルーティンググループがありません。',
+    'Unable to generate the image': '画像を生成できません',
+    'No images were returned': '画像が返されませんでした',
+    'Ready to generate an image': '画像を生成する準備ができました',
+    'Review the prompt and routing choice before generating.':
+      '生成前にプロンプトとルーティングを確認してください。',
+    Prompt: 'プロンプト',
+    Images: '画像数',
+    'Image generated': '画像を生成しました',
+    'The confirmation was consumed or the image request failed. Ask the assistant to prepare it again.':
+      '確認が使用済みか画像リクエストに失敗しました。アシスタントに再準備を依頼してください。',
+  },
+  ru: {
+    'Drawing studio': 'Студия изображений',
+    'Create images through the same safe, group-aware relay used by the API.':
+      'Создавайте изображения через тот же безопасный групповой релей, что и API.',
+    'Describe an image': 'Опишите изображение',
+    'Describe what you want to see...': 'Опишите, что хотите увидеть…',
+    'Routing group': 'Группа маршрутизации',
+    'Billing follows the selected group configuration.':
+      'Расчёт выполняется по настройкам выбранной группы.',
+    'Image model': 'Модель изображений',
+    'Size (optional)': 'Размер (необязательно)',
+    'Quality (optional)': 'Качество (необязательно)',
+    'Generate image': 'Создать изображение',
+    'Generating...': 'Создание…',
+    'Your generated images will appear here.':
+      'Созданные изображения появятся здесь.',
+    'Image catalog unavailable': 'Каталог изображений недоступен',
+    'No image-capable model and routing group is currently available.':
+      'Нет доступной модели изображений и группы маршрутизации.',
+    'Unable to generate the image': 'Не удалось создать изображение',
+    'No images were returned': 'Изображения не получены',
+    'Ready to generate an image': 'Изображение готово к созданию',
+    'Review the prompt and routing choice before generating.':
+      'Проверьте запрос и маршрут перед созданием.',
+    Prompt: 'Запрос',
+    Images: 'Изображения',
+    'Image generated': 'Изображение создано',
+    'The confirmation was consumed or the image request failed. Ask the assistant to prepare it again.':
+      'Подтверждение использовано или запрос завершился ошибкой. Попросите ассистента подготовить его снова.',
+  },
+  vi: {
+    'Drawing studio': 'Xưởng tạo ảnh',
+    'Create images through the same safe, group-aware relay used by the API.':
+      'Tạo ảnh qua cùng relay an toàn, hỗ trợ nhóm như API.',
+    'Describe an image': 'Mô tả hình ảnh',
+    'Describe what you want to see...': 'Mô tả điều bạn muốn thấy…',
+    'Routing group': 'Nhóm định tuyến',
+    'Billing follows the selected group configuration.':
+      'Chi phí tuân theo cấu hình nhóm đã chọn.',
+    'Image model': 'Model hình ảnh',
+    'Size (optional)': 'Kích thước (tuỳ chọn)',
+    'Quality (optional)': 'Chất lượng (tuỳ chọn)',
+    'Generate image': 'Tạo hình ảnh',
+    'Generating...': 'Đang tạo…',
+    'Your generated images will appear here.':
+      'Ảnh được tạo sẽ xuất hiện ở đây.',
+    'Image catalog unavailable': 'Danh mục hình ảnh không khả dụng',
+    'No image-capable model and routing group is currently available.':
+      'Hiện không có model hình ảnh và nhóm định tuyến khả dụng.',
+    'Unable to generate the image': 'Không thể tạo hình ảnh',
+    'No images were returned': 'Không có hình ảnh được trả về',
+    'Ready to generate an image': 'Đã sẵn sàng tạo hình ảnh',
+    'Review the prompt and routing choice before generating.':
+      'Hãy kiểm tra prompt và lựa chọn định tuyến trước khi tạo.',
+    Prompt: 'Prompt',
+    Images: 'Số ảnh',
+    'Image generated': 'Đã tạo hình ảnh',
+    'The confirmation was consumed or the image request failed. Ask the assistant to prepare it again.':
+      'Xác nhận đã được dùng hoặc yêu cầu tạo ảnh thất bại. Hãy yêu cầu trợ lý chuẩn bị lại.',
+  },
+}
+
+for (const [locale, translations] of Object.entries(drawingTranslations)) {
+  Object.assign(newKeys[locale], translations)
+}
+
 const todoTranslations = {
   en: {
     All: 'All',

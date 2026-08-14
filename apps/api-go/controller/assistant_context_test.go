@@ -93,6 +93,33 @@ func TestAssistantCreateKeyRequestRequiresAStandaloneKeyTerm(t *testing.T) {
 	}
 }
 
+func TestAssistantImageGenerationWorkflowIsExplicitAndL1Only(t *testing.T) {
+	for _, message := range []string{"帮我画一张极简海报", "generate an image of a quiet workshop"} {
+		context := assistantUserContext{
+			AccessLevel:            "L1",
+			DeveloperAccessGranted: true,
+			LatestUserRequest:      message,
+		}
+		assert.True(t, assistantExplicitImageRequest(message))
+		assert.True(t, assistantImageGenerationWorkflowRequired(context))
+		assert.Equal(t, "prepare_image_generation", assistantNamedToolChoiceName(assistantToolChoiceForContext(context)))
+		assert.Equal(t, "prepare_image_generation", assistantNamedToolChoiceName(assistantToolChoiceForAgentStep(context, nil, nil)))
+		assert.Equal(t, "none", assistantToolChoiceForAgentStep(
+			context,
+			map[string]bool{"prepare_image_generation": true},
+			map[string]bool{"prepare_image_generation": true},
+		))
+	}
+
+	assert.False(t, assistantExplicitImageRequest("How do I price image generation?"))
+	l0 := assistantUserContext{
+		AccessLevel:       "L0",
+		LatestUserRequest: "帮我画一张图",
+	}
+	assert.False(t, assistantImageGenerationWorkflowRequired(l0))
+	assert.False(t, assistantToolAllowedForContext("prepare_image_generation", l0))
+}
+
 func TestAssistantRecommendationEditWorkflowToolChoices(t *testing.T) {
 	assert.Equal(t, assistantRecommendationActionRevise, classifyAssistantRecommendationAction("请帮我重写这封推荐信"))
 	assert.Equal(t, assistantRecommendationActionRevise, classifyAssistantRecommendationAction("修改我的 L1 推荐信"))

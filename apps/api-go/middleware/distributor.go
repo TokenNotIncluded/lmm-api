@@ -399,14 +399,24 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 		}
 		c.Set("relay_mode", relayMode)
 	}
-	if strings.HasPrefix(c.Request.URL.Path, "/pg/chat/completions") {
-		// playground chat completions
+	if strings.HasPrefix(c.Request.URL.Path, "/pg/chat/completions") || strings.HasPrefix(c.Request.URL.Path, "/pg/images/generations") {
+		// Playground requests may carry their selected routing group in the
+		// body (chat compatibility) or the query (image workbench).
 		req, err := getModelFromRequest(c)
 		if err != nil {
 			return nil, false, err
 		}
 		modelRequest.Model = req.Model
 		modelRequest.Group = req.Group
+		if strings.HasPrefix(c.Request.URL.Path, "/pg/images/generations") {
+			queryGroup := strings.TrimSpace(c.Query("group"))
+			if queryGroup != "" && modelRequest.Group != "" && modelRequest.Group != queryGroup {
+				return nil, false, errors.New("image request group differs between query and body")
+			}
+			if modelRequest.Group == "" {
+				modelRequest.Group = queryGroup
+			}
+		}
 		common.SetContextKey(c, constant.ContextKeyTokenGroup, modelRequest.Group)
 	}
 

@@ -24,6 +24,7 @@ import {
   CreditCard,
   ChartNoAxesCombined,
   FileText,
+  Image as ImageIcon,
   Key,
   LayoutDashboard,
   LifeBuoy,
@@ -142,6 +143,11 @@ export function useSidebarData(): SidebarData {
             title: t('API Keys'),
             url: '/keys',
             icon: Key,
+          },
+          {
+            title: t('Drawing studio'),
+            url: '/drawing',
+            icon: ImageIcon,
           },
           {
             title: t('Usage Logs'),

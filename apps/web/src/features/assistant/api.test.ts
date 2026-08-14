@@ -118,6 +118,49 @@ describe('assistant response parsing', () => {
     )
   })
 
+  test('accepts an image generation confirmation without exposing credentials', () => {
+    assert.deepEqual(
+      parseAssistantAction({
+        type: 'image_generation',
+        confirmation_token: ' image-token ',
+        requires_confirmation: true,
+        expires_in_seconds: 600,
+        prompt: '  a quiet workshop at sunrise  ',
+        model: 'image-2',
+        group: 'image-2',
+        n: 2,
+        size: '1024x1024',
+        quality: 'high',
+        api_key: 'must-never-be-forwarded',
+      }),
+      {
+        type: 'image_generation',
+        confirmation_token: 'image-token',
+        requires_confirmation: true,
+        expires_in_seconds: 600,
+        prompt: 'a quiet workshop at sunrise',
+        model: 'image-2',
+        group: 'image-2',
+        n: 2,
+        size: '1024x1024',
+        quality: 'high',
+      }
+    )
+    assert.equal(
+      parseAssistantAction({
+        type: 'image_generation',
+        confirmation_token: 'image-token',
+        requires_confirmation: true,
+        expires_in_seconds: 600,
+        prompt: 'draw',
+        model: 'image-2',
+        group: 'image-2',
+        n: 5,
+      }),
+      undefined
+    )
+  })
+
   test('accepts exact administrator previews and keeps the confirmation token', () => {
     assert.deepEqual(
       parseAssistantAction({

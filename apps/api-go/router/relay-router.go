@@ -68,6 +68,14 @@ func SetRelayRouter(router *gin.Engine) {
 	{
 		playgroundRouter.POST("/chat/completions", controller.Playground)
 	}
+	// Keep the image body ceiling before Distribute reads the model/group
+	// envelope; image responses are still relayed through the normal billing
+	// path after the controller validates the dynamic catalog.
+	playgroundImageRouter := router.Group("/pg/images")
+	playgroundImageRouter.Use(middleware.RouteTag("relay"))
+	playgroundImageRouter.Use(middleware.SystemPerformanceCheck())
+	playgroundImageRouter.Use(middleware.UserAuth(), middleware.RequestBodyLimit(32<<10), middleware.Distribute())
+	playgroundImageRouter.POST("/generations", controller.PlaygroundImage)
 	assistantPresetRouter := router.Group("/api/assistant/pre-conversation-presets")
 	assistantPresetRouter.Use(middleware.RouteTag("api"))
 	assistantPresetRouter.Use(middleware.SystemPerformanceCheck())
@@ -95,6 +103,7 @@ func SetRelayRouter(router *gin.Engine) {
 		assistantRouter.GET("/handoffs/self", middleware.DisableCache(), controller.GetAssistantHandoff)
 		assistantRouter.POST("/handoffs", middleware.UserCriticalRateLimit("assistant-handoff"), middleware.DisableCache(), controller.SubmitAssistantHandoff)
 		assistantRouter.POST("/tools/create-key", middleware.ConsoleAccessGate(), middleware.UserCriticalRateLimit("assistant-create-key"), middleware.DisableCache(), controller.CreateAssistantDefaultKey)
+		assistantRouter.POST("/drawing/generate", middleware.UserCriticalRateLimit("assistant-drawing"), middleware.RequestBodyLimit(8<<10), middleware.DisableCache(), controller.GenerateAssistantDrawing)
 	}
 	// Model prices include group ratios and therefore can disclose the same
 	// discounted console inventory as /api/pricing.  Keep this read behind the

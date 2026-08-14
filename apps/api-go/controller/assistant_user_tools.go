@@ -227,6 +227,7 @@ func executeAssistantNavigateTool(c *gin.Context, actorUserID int, input map[str
 		"pricing":              "/pricing",
 		"wallet":               "/wallet",
 		"keys":                 "/keys",
+		"drawing":              "/drawing",
 		"profile":              "/profile",
 		"support":              "/support",
 		"open-source-bounties": "/open-source-bounties",
@@ -245,6 +246,17 @@ func executeAssistantNavigateTool(c *gin.Context, actorUserID int, input map[str
 		section := strings.TrimSpace(inputString(input, "section"))
 		if section == "drawing" || section == "task" || section == "common" {
 			path = "/usage-logs/" + section
+		}
+		ok = true
+	}
+	if page == "drawing" {
+		user, err := model.GetUserById(actorUserID, false)
+		if err != nil {
+			return map[string]any{"ok": false, "status": "context_unavailable", "error": "account access could not be loaded"}
+		}
+		access, err := model.GetDeveloperAccessStateForUser(user)
+		if err != nil || !access.Granted {
+			return map[string]any{"ok": false, "status": "target_forbidden", "error": "L1 access is required for the drawing workbench"}
 		}
 		ok = true
 	}

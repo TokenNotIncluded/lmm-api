@@ -87,6 +87,7 @@ import {
   type AssistantAccountDisableAction,
   type AssistantCreateKeyAction,
   type AssistantAdminChangeAction,
+  type AssistantImageGenerationAction,
   type AssistantL1RecommendationAction,
   type AssistantNavigationAction,
   type AssistantToolTrace,
@@ -109,6 +110,7 @@ import {
   AssistantHistory,
   AssistantHistoryConversation,
 } from './assistant-history'
+import { AssistantImageTool } from './assistant-image-tool'
 import {
   getExplicitAssistantNavigation,
   getAssistantPresetForIntent,
@@ -138,6 +140,7 @@ type AssistantActionPath =
   | '/wallet'
   | '/usage-logs'
   | '/keys'
+  | '/drawing'
   | '/profile'
   | '/open-source-bounties'
   | '/support'
@@ -168,6 +171,7 @@ type ConversationEntry = {
   tools?: AssistantToolTrace[]
   action?: AssistantAction
   adminChange?: AssistantAdminChangeAction
+  imageAction?: AssistantImageGenerationAction
   error?: boolean
   notice?: boolean
   retry?: {
@@ -1099,8 +1103,13 @@ export function AssistantPanel(props: {
     clearToolState()
     setEntries((current) =>
       current.map((entry) =>
-        entry.action || entry.adminChange
-          ? { ...entry, action: undefined, adminChange: undefined }
+        entry.action || entry.adminChange || entry.imageAction
+          ? {
+              ...entry,
+              action: undefined,
+              adminChange: undefined,
+              imageAction: undefined,
+            }
           : entry
       )
     )
@@ -1232,6 +1241,8 @@ export function AssistantPanel(props: {
         reply.action?.type === 'admin_pricing_change'
           ? reply.action
           : undefined
+      const imageAction =
+        reply.action?.type === 'image_generation' ? reply.action : undefined
       const userAction =
         reply.action?.type === 'user_password_change' ||
         reply.action?.type === 'user_oauth_unbind' ||
@@ -1255,7 +1266,14 @@ export function AssistantPanel(props: {
       if (developerAccessGranted || restrictedTargetAllowed) {
         suggestedAction = getAssistantActionForTarget(suggestedTarget, t)
       }
-      if (adminChange) {
+      if (imageAction) {
+        setRecommendationDraft(null)
+        setAccountDisableDraft(null)
+        setKeyCreationAction(null)
+        setUserActionDraft(null)
+        setActiveTool(null)
+        suggestedAction = undefined
+      } else if (adminChange) {
         setRecommendationDraft(null)
         setAccountDisableDraft(null)
         setKeyCreationAction(null)
@@ -1308,6 +1326,7 @@ export function AssistantPanel(props: {
         accountAccessState === 'restricted' &&
         isExplicitAssistantL1Request(message) &&
         !adminChange &&
+        !imageAction &&
         !userAction &&
         reply.action?.type !== 'account_disable_request' &&
         reply.action?.type !== 'navigate' &&
@@ -1329,6 +1348,7 @@ export function AssistantPanel(props: {
           tools: reply.tools,
           action: suggestedAction,
           adminChange,
+          imageAction,
         },
       ])
       if (explicitNavigation && developerAccessGranted) {
@@ -1658,6 +1678,9 @@ export function AssistantPanel(props: {
                         )}
                         {entry.tools?.length ? (
                           <AssistantToolCalls traces={entry.tools} />
+                        ) : null}
+                        {entry.imageAction ? (
+                          <AssistantImageTool action={entry.imageAction} />
                         ) : null}
                         {entry.adminChange ? (
                           <AssistantAdminChangeTool
