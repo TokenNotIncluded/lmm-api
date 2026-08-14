@@ -3,7 +3,10 @@ package model
 import (
 	"context"
 	"errors"
+	"math"
 	"sort"
+
+	"github.com/LIghtJUNction/api.lmm.best/common"
 )
 
 const reviewListLimit = 20
@@ -19,6 +22,19 @@ type AssistantPresetReview struct {
 type AssistantReviewAction struct {
 	Code  string `json:"code"`
 	Count int64  `json:"count"`
+}
+
+// AssistantCommerceReview contains only bounded aggregates.  It connects
+// assistant chat activity to settled orders through distinct user counts in
+// SQL, but never returns the join keys or any user-level data to callers.
+type AssistantCommerceReview struct {
+	ChatUsers                    int64   `json:"chat_users"`
+	SuccessfulTopUpOrders        int64   `json:"successful_topup_orders"`
+	SuccessfulSubscriptionOrders int64   `json:"successful_subscription_orders"`
+	PaidUsers                    int64   `json:"paid_users"`
+	ConversionRatePercent        float64 `json:"conversion_rate_percent"`
+	RefundCount                  int64   `json:"refund_count"`
+	RefundAmountMicros           int64   `json:"refund_amount_micros"`
 }
 
 // AssistantSecurityReview contains only windowed counters and bounded
@@ -45,6 +61,7 @@ type AssistantReview struct {
 	Presets          []AssistantPresetReview   `json:"presets"`
 	CurrentSupport   int64                     `json:"current_pending_support"`
 	CurrentIncidents int64                     `json:"current_open_security_incidents"`
+	Commerce         AssistantCommerceReview   `json:"commerce"`
 	Security         AssistantSecurityReview   `json:"security"`
 	Actions          []AssistantReviewAction   `json:"actions"`
 }
@@ -72,6 +89,102 @@ func reviewCount(ctx context.Context, table any, query string, args ...any) (int
 	var count int64
 	err := DB.WithContext(ctx).Model(table).Where(query, args...).Count(&count).Error
 	return count, err
+}
+
+func reviewSuccessfulOrderCount(ctx context.Context, tableName string, since, until int64) (int64, error) {
+	var count int64
+	err := DB.WithContext(ctx).Table(tableName+" AS orders").
+		Joins(`JOIN (
+  SELECT user_id, MIN(created_at) AS first_chat_at
+  FROM assistant_leads
+  WHERE source = ? AND created_at >= ? AND created_at <= ?
+  GROUP BY user_id
+) AS chat_cohort ON chat_cohort.user_id = orders.user_id`, AssistantLeadSourceChat, since, until).
+		Where("orders.status = ?", common.TopUpStatusSuccess).
+		Where("COALESCE(NULLIF(orders.complete_time, 0), orders.create_time) >= chat_cohort.first_chat_at").
+		Where("COALESCE(NULLIF(orders.complete_time, 0), orders.create_time) >= ? AND COALESCE(NULLIF(orders.complete_time, 0), orders.create_time) <= ?", since, until).
+		Count(&count).Error
+	return count, err
+}
+
+func reviewDistinctChatUsers(ctx context.Context, since, until int64) (int64, error) {
+	var count int64
+	err := DB.WithContext(ctx).Model(&AssistantLead{}).
+		Where("source = ? AND created_at >= ? AND created_at <= ?", AssistantLeadSourceChat, since, until).
+		Distinct("user_id").Count(&count).Error
+	return count, err
+}
+
+func reviewPaidChatUsers(ctx context.Context, since, until int64) (int64, error) {
+	// Keep this as one bounded aggregate query.  The UNION removes users who
+	// bought both a top-up and a subscription before the intersection with the
+	// chat cohort; no user IDs leave the database.
+	const query = `
+SELECT COUNT(DISTINCT paid.user_id)
+FROM (
+  SELECT orders.user_id FROM top_ups AS orders
+  JOIN (
+    SELECT user_id, MIN(created_at) AS first_chat_at
+    FROM assistant_leads
+    WHERE source = ? AND created_at >= ? AND created_at <= ?
+    GROUP BY user_id
+  ) AS chat_cohort ON chat_cohort.user_id = orders.user_id
+  WHERE orders.status = ? AND COALESCE(NULLIF(orders.complete_time, 0), orders.create_time) >= chat_cohort.first_chat_at
+    AND COALESCE(NULLIF(orders.complete_time, 0), orders.create_time) >= ? AND COALESCE(NULLIF(orders.complete_time, 0), orders.create_time) <= ?
+  UNION
+  SELECT orders.user_id FROM subscription_orders AS orders
+  JOIN (
+    SELECT user_id, MIN(created_at) AS first_chat_at
+    FROM assistant_leads
+    WHERE source = ? AND created_at >= ? AND created_at <= ?
+    GROUP BY user_id
+  ) AS chat_cohort ON chat_cohort.user_id = orders.user_id
+  WHERE orders.status = ? AND COALESCE(NULLIF(orders.complete_time, 0), orders.create_time) >= chat_cohort.first_chat_at
+    AND COALESCE(NULLIF(orders.complete_time, 0), orders.create_time) >= ? AND COALESCE(NULLIF(orders.complete_time, 0), orders.create_time) <= ?
+) AS paid
+`
+	var count int64
+	err := DB.WithContext(ctx).Raw(query,
+		AssistantLeadSourceChat, since, until, common.TopUpStatusSuccess, since, until,
+		AssistantLeadSourceChat, since, until, common.TopUpStatusSuccess, since, until,
+	).Scan(&count).Error
+	return count, err
+}
+
+func reviewRefunds(ctx context.Context, since, until int64) (int64, int64, error) {
+	var result struct {
+		Count  int64 `gorm:"column:count"`
+		Amount int64 `gorm:"column:amount"`
+	}
+	err := DB.WithContext(ctx).Model(&FinanceLedgerEntry{}).
+		Select("COUNT(*) AS count, COALESCE(SUM(amount_micros), 0) AS amount").
+		Where("source_type = ? AND occurred_at >= ? AND occurred_at <= ?", FinanceSourceRefund, since, until).
+		Scan(&result).Error
+	return result.Count, result.Amount, err
+}
+
+func reviewCommerce(ctx context.Context, since, until int64) (AssistantCommerceReview, error) {
+	var review AssistantCommerceReview
+	var err error
+	if review.ChatUsers, err = reviewDistinctChatUsers(ctx, since, until); err != nil {
+		return AssistantCommerceReview{}, err
+	}
+	if review.SuccessfulTopUpOrders, err = reviewSuccessfulOrderCount(ctx, "top_ups", since, until); err != nil {
+		return AssistantCommerceReview{}, err
+	}
+	if review.SuccessfulSubscriptionOrders, err = reviewSuccessfulOrderCount(ctx, "subscription_orders", since, until); err != nil {
+		return AssistantCommerceReview{}, err
+	}
+	if review.PaidUsers, err = reviewPaidChatUsers(ctx, since, until); err != nil {
+		return AssistantCommerceReview{}, err
+	}
+	if review.ChatUsers > 0 {
+		review.ConversionRatePercent = math.Round(float64(review.PaidUsers)*10000/float64(review.ChatUsers)) / 100
+	}
+	if review.RefundCount, review.RefundAmountMicros, err = reviewRefunds(ctx, since, until); err != nil {
+		return AssistantCommerceReview{}, err
+	}
+	return review, nil
 }
 
 func reviewActions(review AssistantReview) []AssistantReviewAction {
@@ -110,6 +223,9 @@ func reviewActions(review AssistantReview) []AssistantReviewAction {
 	if recommendations >= 3 && approvals*100 < recommendations*30 {
 		actions = append(actions, AssistantReviewAction{Code: "review_recommendation_quality", Count: recommendations - approvals})
 	}
+	if review.Commerce.ChatUsers >= 5 && review.Commerce.PaidUsers*100 < review.Commerce.ChatUsers*5 {
+		actions = append(actions, AssistantReviewAction{Code: "review_chat_to_purchase_conversion", Count: review.Commerce.ChatUsers - review.Commerce.PaidUsers})
+	}
 
 	sort.SliceStable(actions, func(i, j int) bool {
 		if actions[i].Count != actions[j].Count {
@@ -144,6 +260,9 @@ func BuildAssistantReview(ctx context.Context, start, end int64) (AssistantRevie
 		return AssistantReview{}, err
 	}
 	if review.CurrentIncidents, err = reviewCount(ctx, &AssistantSecurityIncident{}, "status = ?", AssistantSecurityIncidentStatusOpen); err != nil {
+		return AssistantReview{}, err
+	}
+	if review.Commerce, err = reviewCommerce(ctx, start, end); err != nil {
 		return AssistantReview{}, err
 	}
 	securityStats, err := GetAdvancedSecurityStats(AdvancedSecurityEventFilter{

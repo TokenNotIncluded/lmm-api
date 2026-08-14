@@ -6,13 +6,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LIghtJUNction/api.lmm.best/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestReviewAggregates(t *testing.T) {
 	user := setupAssistantLeadTestDB(t)
-	require.NoError(t, DB.AutoMigrate(&PromptPresetStat{}, &AssistantSecurityIncident{}, &AdvancedSecurityEvent{}))
+	require.NoError(t, DB.AutoMigrate(&PromptPresetStat{}, &AssistantSecurityIncident{}, &AdvancedSecurityEvent{}, &TopUp{}, &SubscriptionOrder{}, &FinanceLedgerEntry{}))
 
 	require.NoError(t, DB.Create(&AssistantProfileBucket{Profile: AssistantProfileUnknown, BucketStart: 100, Count: 5}).Error)
 	require.NoError(t, DB.Create(&AssistantProfileBucket{Profile: AssistantProfileTechnical, BucketStart: 100, Count: 2}).Error)
@@ -20,6 +21,37 @@ func TestReviewAggregates(t *testing.T) {
 	require.NoError(t, DB.Create(&AssistantLead{
 		UserId: user.Id, Source: AssistantLeadSourceHandoff, Intent: AssistantIntentHumanSupport,
 		Message: "private support text", Status: AssistantLeadStatusPending, CreatedAt: 100,
+	}).Error)
+	require.NoError(t, DB.Create(&AssistantLead{
+		UserId: user.Id, Source: AssistantLeadSourceChat, Intent: AssistantIntentCost,
+		Status: AssistantLeadStatusObserved, CreatedAt: 120,
+	}).Error)
+	require.NoError(t, DB.Create(&TopUp{
+		UserId: user.Id, TradeNo: "review-topup", PaymentProvider: PaymentProviderStripe,
+		Status: common.TopUpStatusSuccess, CreateTime: 110, CompleteTime: 150,
+	}).Error)
+	require.NoError(t, DB.Create(&SubscriptionOrder{
+		UserId: user.Id, TradeNo: "review-subscription", PaymentProvider: PaymentProviderStripe,
+		Status: common.TopUpStatusSuccess, CreateTime: 110, CompleteTime: 160,
+	}).Error)
+	_, err := AppendFinanceLedgerEntry(&FinanceLedgerEntry{
+		EntryType: FinanceEntryRevenue, AmountMicros: 2_500_000, Currency: FinanceCurrencyUSD,
+		Direction: FinanceDirectionDebit, SourceType: FinanceSourceRefund, SourceId: "review-refund",
+		OccurredAt: 170, CreatedBy: user.Id, IdempotencyKey: "review-refund",
+	})
+	require.NoError(t, err)
+	priorPaidUser := &User{
+		Username: "assistant-review-prior-paid", Password: "password", Email: "prior-paid@example.com",
+		Role: common.RoleCommonUser, Status: common.UserStatusEnabled, AffCode: "review-prior-aff",
+	}
+	require.NoError(t, DB.Create(priorPaidUser).Error)
+	require.NoError(t, DB.Create(&TopUp{
+		UserId: priorPaidUser.Id, TradeNo: "review-prior-topup", PaymentProvider: PaymentProviderCreem,
+		Status: common.TopUpStatusSuccess, CreateTime: 130, CompleteTime: 140,
+	}).Error)
+	require.NoError(t, DB.Create(&AssistantLead{
+		UserId: priorPaidUser.Id, Source: AssistantLeadSourceChat, Intent: AssistantIntentCost,
+		Status: AssistantLeadStatusObserved, CreatedAt: 180,
 	}).Error)
 	require.NoError(t, DB.Create(&PromptPresetStat{
 		PresetId: "pricing_cost", BucketStart: 100, Generation: 1, Version: PromptPresetVersion,
@@ -47,6 +79,13 @@ func TestReviewAggregates(t *testing.T) {
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, review.CurrentSupport)
 	assert.EqualValues(t, 1, review.CurrentIncidents)
+	assert.EqualValues(t, 2, review.Commerce.ChatUsers)
+	assert.EqualValues(t, 1, review.Commerce.SuccessfulTopUpOrders)
+	assert.EqualValues(t, 1, review.Commerce.SuccessfulSubscriptionOrders)
+	assert.EqualValues(t, 1, review.Commerce.PaidUsers)
+	assert.Equal(t, float64(50), review.Commerce.ConversionRatePercent)
+	assert.EqualValues(t, 1, review.Commerce.RefundCount)
+	assert.EqualValues(t, 2_500_000, review.Commerce.RefundAmountMicros)
 	assert.EqualValues(t, 1, review.Security.TotalMatches)
 	assert.EqualValues(t, 1, review.Security.BlockedMatches)
 	assert.EqualValues(t, 0, review.Security.AuditedMatches)

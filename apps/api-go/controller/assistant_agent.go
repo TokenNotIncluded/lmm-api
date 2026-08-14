@@ -388,7 +388,7 @@ func buildAssistantTools() []assistantOpenAIToolDefinition {
 			Type: "function",
 			Function: assistantOpenAIToolFunction{
 				Name:        "get_admin_assistant_review",
-				Description: "For an administrator only, read the latest privacy-minimized automatic assistant review. It contains bounded aggregate intent, profile, preset-conversion, support-queue, and security-follow-up signals; it never contains transcripts, user identities, or per-user memory. Use it before proposing changes to AssistantSkills.",
+				Description: "For an administrator only, read the latest privacy-minimized automatic assistant review. It contains bounded aggregate intent, profile, preset-conversion, chat-to-purchase conversion, order, and refund signals plus support-queue and security follow-ups; it never contains transcripts, user identities, or per-user memory. Use it before proposing changes to AssistantSkills.",
 				Parameters:  emptyObjectSchema(),
 			},
 		},

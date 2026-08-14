@@ -39,6 +39,7 @@ func TestReviewTask(t *testing.T) {
 	require.NoError(t, model.DB.AutoMigrate(
 		&model.AssistantLead{}, &model.AssistantProfileBucket{}, &model.PromptPresetStat{},
 		&model.AssistantSecurityIncident{}, &model.AdvancedSecurityEvent{}, &model.AssistantSecurityReviewNotice{},
+		&model.TopUp{}, &model.SubscriptionOrder{}, &model.FinanceLedgerEntry{},
 	))
 	t.Cleanup(func() {
 		model.DB.Exec("DELETE FROM assistant_security_incidents")
