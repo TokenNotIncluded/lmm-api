@@ -249,3 +249,14 @@ func TestTryUserAuthCredentialClassification(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, databaseFailureResponse.Code)
 	assert.Contains(t, databaseFailureResponse.Body.String(), "AUTH_INTERNAL_ERROR")
 }
+
+func TestPrepareRelayTokenCredentialAcceptsGeminiKeyOnV1Models(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models?key=gemini-key", nil)
+
+	prepareRelayTokenCredential(c)
+
+	assert.Equal(t, "Bearer gemini-key", c.Request.Header.Get("Authorization"))
+}

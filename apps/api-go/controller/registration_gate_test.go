@@ -42,6 +42,7 @@ func (provider *registrationGateTestOAuthProvider) FillUserByProviderID(user *mo
 }
 func (*registrationGateTestOAuthProvider) SetProviderUserID(*model.User, string) {}
 func (*registrationGateTestOAuthProvider) GetProviderPrefix() string             { return "gate_" }
+func (*registrationGateTestOAuthProvider) ProviderUserIDColumn() string          { return "" }
 
 func setRegistrationGateTestState(t *testing.T, agreement, privacy string) {
 	t.Helper()

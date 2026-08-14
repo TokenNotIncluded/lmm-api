@@ -176,6 +176,35 @@ func UpdateUserAccessToken(id int, token string) error {
 	return nil
 }
 
+var userBindColumns = map[string]bool{
+	"github_id":   true,
+	"discord_id":  true,
+	"oidc_id":     true,
+	"wechat_id":   true,
+	"linux_do_id": true,
+}
+
+// UpdateUserBindColumn changes only a whitelisted OAuth binding column. OAuth
+// callbacks can race with an administrator disabling, demoting, or regrouping
+// the same account; writing a previously loaded User snapshot would otherwise
+// restore those stale fields.
+func UpdateUserBindColumn(userID int, column, value string) error {
+	if userID <= 0 {
+		return errors.New("id 为空！")
+	}
+	if !userBindColumns[column] {
+		return fmt.Errorf("invalid user bind column: %s", column)
+	}
+	result := DB.Model(&User{}).Where("id = ?", userID).Update(column, value)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
+}
+
 func (user *User) GetSetting() dto.UserSetting {
 	setting := dto.UserSetting{}
 	if user.Setting != "" {

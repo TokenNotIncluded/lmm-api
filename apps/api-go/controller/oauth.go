@@ -332,9 +332,14 @@ func handleOAuthBind(c *gin.Context, provider oauth.Provider, pendingFlow *model
 			return
 		}
 	} else {
-		// Built-in provider: update user record directly
-		provider.SetProviderUserID(&user, oauthUser.ProviderUserID)
-		err = user.Update(false)
+		// Built-in provider: update only the binding column. Do not write the
+		// full user snapshot, which may contain stale role/status/group values.
+		column := provider.ProviderUserIDColumn()
+		if column == "" {
+			err = errors.New("oauth provider does not expose a bind column")
+		} else {
+			err = model.UpdateUserBindColumn(user.Id, column, oauthUser.ProviderUserID)
+		}
 		if err != nil {
 			common.ApiError(c, err)
 			return

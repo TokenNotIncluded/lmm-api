@@ -127,6 +127,47 @@ func TestUpdateUserAccessTokenRejectsSoftDeletedUser(t *testing.T) {
 	assert.Equal(t, "old-token", got.GetAccessToken())
 }
 
+func TestUpdateUserBindColumnPreservesConcurrentAccountChanges(t *testing.T) {
+	setupUserUpdateTestState(t)
+
+	user := User{
+		Id:       3,
+		Username: "oauth-bind-user",
+		Password: "password",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+		Group:    "default",
+	}
+	require.NoError(t, DB.Create(&user).Error)
+
+	// Simulate an administrator change racing with the OAuth callback.
+	require.NoError(t, DB.Model(&User{}).Where("id = ?", user.Id).Updates(map[string]any{
+		"role":   common.RoleAdminUser,
+		"status": common.UserStatusDisabled,
+		"group":  "restricted",
+	}).Error)
+	require.NoError(t, UpdateUserBindColumn(user.Id, "github_id", "github-123"))
+
+	var got User
+	require.NoError(t, DB.First(&got, user.Id).Error)
+	assert.Equal(t, "github-123", got.GitHubId)
+	assert.Equal(t, common.RoleAdminUser, got.Role)
+	assert.Equal(t, common.UserStatusDisabled, got.Status)
+	assert.Equal(t, "restricted", got.Group)
+}
+
+func TestUpdateUserBindColumnRejectsUnsafeColumnAndMissingUser(t *testing.T) {
+	setupUserUpdateTestState(t)
+	user := User{Id: 4, Username: "oauth-bind-validation", Password: "password", Status: common.UserStatusEnabled}
+	require.NoError(t, DB.Create(&user).Error)
+
+	for _, column := range []string{"role", "status", "group", "quota", "username", "password", "id", "github_id; DROP TABLE users"} {
+		assert.Error(t, UpdateUserBindColumn(user.Id, column, "1"), column)
+	}
+	assert.EqualError(t, UpdateUserBindColumn(0, "github_id", "value"), "id 为空！")
+	assert.ErrorIs(t, UpdateUserBindColumn(99999, "github_id", "value"), gorm.ErrRecordNotFound)
+}
+
 func TestUpdateUserSettingOnlyUpdatesSetting(t *testing.T) {
 	setupUserUpdateTestState(t)
 

@@ -175,3 +175,7 @@ func (p *GitHubProvider) SetProviderUserID(user *model.User, providerUserID stri
 func (p *GitHubProvider) GetProviderPrefix() string {
 	return "github_"
 }
+
+func (p *GitHubProvider) ProviderUserIDColumn() string {
+	return "github_id"
+}

@@ -34,3 +34,15 @@ func TestValidateAnnouncementsCountsUnicodeCharacters(t *testing.T) {
 		t.Fatal("501 Unicode characters should be rejected")
 	}
 }
+
+func TestValidateAnnouncementsCountsEmojiAsTwoBrowserCharacters(t *testing.T) {
+	valid := `[{"content":"` + strings.Repeat("😀", 250) + `","publishDate":"2026-08-14T00:00:00Z","type":"default"}]`
+	if err := ValidateConsoleSettings(valid, "Announcements"); err != nil {
+		t.Fatalf("250 surrogate-pair emoji should fit the 500 UTF-16-unit limit: %v", err)
+	}
+
+	tooLong := `[{"content":"` + strings.Repeat("😀", 251) + `","publishDate":"2026-08-14T00:00:00Z","type":"default"}]`
+	if err := ValidateConsoleSettings(tooLong, "Announcements"); err == nil {
+		t.Fatal("251 surrogate-pair emoji should exceed the 500 UTF-16-unit limit")
+	}
+}

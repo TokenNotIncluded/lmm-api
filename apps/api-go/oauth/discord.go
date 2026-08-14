@@ -170,3 +170,7 @@ func (p *DiscordProvider) SetProviderUserID(user *model.User, providerUserID str
 func (p *DiscordProvider) GetProviderPrefix() string {
 	return "discord_"
 }
+
+func (p *DiscordProvider) ProviderUserIDColumn() string {
+	return "discord_id"
+}

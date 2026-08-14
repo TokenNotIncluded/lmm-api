@@ -883,6 +883,12 @@ type OpenAIResponsesRequest struct {
 	SafetyIdentifier json.RawMessage `json:"safety_identifier,omitempty"`
 	Stream           *bool           `json:"stream,omitempty"`
 	StreamOptions    *StreamOptions  `json:"stream_options,omitempty"`
+	// Some OpenAI-compatible Responses providers accept these optional
+	// sampling controls even though the official API does not document them.
+	// Keep them lossless during Chat Completions <-> Responses conversion;
+	// provider adaptors can explicitly strip them when unsupported.
+	FrequencyPenalty json.RawMessage `json:"frequency_penalty,omitempty"`
+	PresencePenalty  json.RawMessage `json:"presence_penalty,omitempty"`
 	Temperature      *float64        `json:"temperature,omitempty"`
 	Text             json.RawMessage `json:"text,omitempty"`
 	ToolChoice       json.RawMessage `json:"tool_choice,omitempty"`

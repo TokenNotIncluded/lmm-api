@@ -175,3 +175,7 @@ func (p *OIDCProvider) SetProviderUserID(user *model.User, providerUserID string
 func (p *OIDCProvider) GetProviderPrefix() string {
 	return "oidc_"
 }
+
+func (p *OIDCProvider) ProviderUserIDColumn() string {
+	return "oidc_id"
+}
