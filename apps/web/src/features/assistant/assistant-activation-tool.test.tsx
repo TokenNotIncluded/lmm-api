@@ -849,4 +849,27 @@ describe('AssistantActivationTool', () => {
       await unmount(rendered)
     }
   })
+
+  test('wraps long administrator replies for narrow screens', async () => {
+    const adminNote =
+      'https://console.example.test/review/this-is-a-very-long-administrator-note-without-spaces-that-must-wrap-on-mobile'
+    api.get = (async () => ({
+      data: {
+        success: true,
+        data: { ...rejectedRequest, admin_note: adminNote },
+      },
+    })) as typeof api.get
+
+    const rendered = await renderTool()
+    try {
+      const reply = [...document.querySelectorAll('p')].find(
+        (node) => node.textContent === adminNote
+      )
+      assert.ok(reply)
+      assert.match(reply.className, /break-words/)
+      assert.match(reply.className, /\[overflow-wrap:anywhere\]/)
+    } finally {
+      await unmount(rendered)
+    }
+  })
 })

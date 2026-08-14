@@ -47,7 +47,7 @@ function AdministratorReply(props: { request: DeveloperAccessRequest }) {
   return (
     <div className='border-border grid gap-1 border-l-2 py-1 pl-3'>
       <p className='text-xs font-medium'>{t('Administrator reply')}</p>
-      <p className='text-muted-foreground text-xs leading-5 whitespace-pre-wrap'>
+      <p className='text-muted-foreground text-xs leading-5 [overflow-wrap:anywhere] break-words whitespace-pre-wrap'>
         {props.request.admin_note}
       </p>
     </div>
