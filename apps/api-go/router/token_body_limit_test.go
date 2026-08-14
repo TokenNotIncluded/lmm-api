@@ -1,0 +1,63 @@
+package router
+
+import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
+)
+
+func TestTokenMutationRoutesRejectOversizedJSONBeforeBinding(t *testing.T) {
+	previousDB := model.DB
+	previousRedisEnabled := common.RedisEnabled
+	previousMainDatabaseType, previousLogDatabaseType := common.MainDatabaseType(), common.LogDatabaseType()
+	common.RedisEnabled = false
+	common.SetDatabaseTypes(common.DatabaseTypeSQLite, previousLogDatabaseType)
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	model.DB = db
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}))
+	t.Cleanup(func() {
+		model.DB = previousDB
+		common.RedisEnabled = previousRedisEnabled
+		common.SetDatabaseTypes(previousMainDatabaseType, previousLogDatabaseType)
+		if sqlDB, sqlErr := db.DB(); sqlErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	levelOne := model.TrustLevelMinUser + 1
+	accessToken := "token-limit-test-pat"
+	user := model.User{
+		Username:           "token-limit-user",
+		Password:           "password-placeholder",
+		AffCode:            "token-limit-aff",
+		Group:              "default",
+		Role:               common.RoleCommonUser,
+		Status:             common.UserStatusEnabled,
+		AccessToken:        &accessToken,
+		TrustLevelOverride: &levelOne,
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	SetApiRouter(engine)
+	body := `{"name":"` + strings.Repeat("x", tokenMutationRequestMaxBytes) + `"}`
+	request := httptest.NewRequest(http.MethodPost, "/api/token/", strings.NewReader(body))
+	request.Header.Set("Authorization", "Bearer "+accessToken)
+	response := httptest.NewRecorder()
+
+	engine.ServeHTTP(response, request)
+
+	require.Equal(t, http.StatusRequestEntityTooLarge, response.Code)
+}

@@ -11,7 +11,13 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const waffoPancakeMutationRequestMaxBytes = 16 << 10
+const (
+	waffoPancakeMutationRequestMaxBytes = 16 << 10
+	// Token mutation payloads contain only bounded metadata (name, group,
+	// optional model/IP limits, or at most 100 IDs).  Keep these key-management
+	// endpoints from handing an unbounded JSON stream to encoding/json.
+	tokenMutationRequestMaxBytes = 16 << 10
+)
 
 func SetApiRouter(router *gin.Engine) {
 	apiRouter := router.Group("/api")
@@ -373,11 +379,11 @@ func SetApiRouter(router *gin.Engine) {
 			tokenRoute.GET("/auto-groups", controller.GetTokenAutoGroups)
 			tokenRoute.GET("/:id", controller.GetToken)
 			tokenRoute.POST("/:id/key", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.GetTokenKey)
-			tokenRoute.POST("/", controller.AddToken)
-			tokenRoute.PUT("/", controller.UpdateToken)
+			tokenRoute.POST("/", middleware.RequestBodyLimit(tokenMutationRequestMaxBytes), controller.AddToken)
+			tokenRoute.PUT("/", middleware.RequestBodyLimit(tokenMutationRequestMaxBytes), controller.UpdateToken)
 			tokenRoute.DELETE("/:id", controller.DeleteToken)
-			tokenRoute.POST("/batch", controller.DeleteTokenBatch)
-			tokenRoute.POST("/batch/keys", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.GetTokenKeysBatch)
+			tokenRoute.POST("/batch", middleware.RequestBodyLimit(tokenMutationRequestMaxBytes), controller.DeleteTokenBatch)
+			tokenRoute.POST("/batch/keys", middleware.RequestBodyLimit(tokenMutationRequestMaxBytes), middleware.CriticalRateLimit(), middleware.DisableCache(), controller.GetTokenKeysBatch)
 		}
 
 		usageRoute := apiRouter.Group("/usage")
