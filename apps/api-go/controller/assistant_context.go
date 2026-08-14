@@ -336,7 +336,7 @@ func assistantUserContextForRequest(userID int, message string, conversation ...
 		AccessLevel:          "L0",
 		AccessReviewStatus:   "unknown",
 		CustomerProfile:      assistantProfileUnknown,
-		Intent:               model.ClassifyAssistantIntent(message),
+		Intent:               assistantRequestIntent(message),
 		LatestUserRequest:    message,
 		RecommendationAction: classifyAssistantRecommendationAction(message),
 		CreateKeyAction:      classifyAssistantCreateKeyAction(message, conversation...),
@@ -408,6 +408,23 @@ func assistantUserContextForRequest(userID int, message string, conversation ...
 	sort.Strings(context.PaymentRestrictionCauses)
 	sort.Strings(context.ProfileSignals)
 	return context
+}
+
+// assistantRequestIntent keeps common natural-language price questions on the
+// live pricing path even when they do not contain one of the classifier's
+// shorter price keywords (for example, “GPT 5.6 SOL 多少钱”). This is only a
+// routing refinement; persisted intent analytics continue to use the shared
+// model classifier.
+func assistantRequestIntent(message string) string {
+	intent := model.ClassifyAssistantIntent(message)
+	if intent != model.AssistantIntentOther {
+		return intent
+	}
+	normalized := strings.ToLower(strings.TrimSpace(message))
+	if assistantTextContainsAny(normalized, "多少钱", "多少费用", "怎么收费", "收费标准", "报价") {
+		return model.AssistantIntentCost
+	}
+	return intent
 }
 
 func assistantConversationHasNewUserGiftRequest(conversations ...[]assistantOpenAIMessage) bool {

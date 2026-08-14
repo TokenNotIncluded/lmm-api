@@ -530,7 +530,8 @@ func WaffoPancakeWebhook(c *gin.Context) {
 
 	eventType := event.NormalizedEventType()
 	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo Pancake webhook 验签成功 event_type=%s event_id=%s order_id=%s client_ip=%s", eventType, event.ID, event.Data.OrderID, c.ClientIP()))
-	switch service.WaffoPancakeWebhookActionForEvent(eventType) {
+	action := service.WaffoPancakeWebhookActionForEvent(eventType)
+	switch action {
 	case service.WaffoPancakeWebhookActionRefundSucceeded, service.WaffoPancakeWebhookActionRefundFailed:
 		if err := handleWaffoPancakeRefundEvent(c, event); err != nil {
 			logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 退款事件处理失败 event_type=%s event_id=%s order_id=%s client_ip=%s error=%q", eventType, event.ID, event.Data.OrderID, c.ClientIP(), err.Error()))
@@ -548,6 +549,15 @@ func WaffoPancakeWebhook(c *gin.Context) {
 	// OrderID is Pancake's internal ORD_* (logs only).
 	rawTradeNo := strings.TrimSpace(event.Data.OrderMerchantExternalID)
 	isSubscription := strings.HasPrefix(rawTradeNo, "WAFFO_PANCAKE_SUB-")
+	if (action == service.WaffoPancakeWebhookActionSubscriptionActivated ||
+		action == service.WaffoPancakeWebhookActionSubscriptionPaymentSucceeded) && !isSubscription {
+		// A recurring-provider event must never be allowed to settle a wallet
+		// top-up. The local subscription order prefix is the explicit type
+		// boundary; acknowledge a misrouted signed event without mutating state.
+		logger.LogWarn(c.Request.Context(), fmt.Sprintf("Waffo Pancake 订阅事件与本地订单类型不匹配 event_type=%s event_id=%s trade_no=%s client_ip=%s", eventType, event.ID, rawTradeNo, c.ClientIP()))
+		c.String(http.StatusOK, "OK")
+		return
+	}
 
 	if isSubscription {
 		tradeNo, err := service.ResolveWaffoPancakeSubscriptionTradeNo(event)

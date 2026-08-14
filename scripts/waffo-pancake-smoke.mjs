@@ -15,11 +15,14 @@ const DEFAULT_AMOUNT = '1.00'
 const TEST_CARD = '4576750000000110'
 
 // Keep the smoke runner's managed webhook subscription aligned with every
-// provider event that the Go webhook endpoint can settle or audit. Without
-// the refund events, a seemingly successful `--configure-webhook` setup
-// would silently miss refund notifications.
+// provider event that the Go webhook endpoint can settle or audit. The smoke
+// checkout itself remains an OnetimeProduct, but subscribing to the recurring
+// events keeps a manually selected SubscriptionProduct observable during a
+// Test run instead of silently dropping its first payment notification.
 export const WAFFO_PANCAKE_WEBHOOK_EVENTS = Object.freeze([
   WebhookEventType.OrderCompleted,
+  WebhookEventType.SubscriptionActivated,
+  WebhookEventType.SubscriptionPaymentSucceeded,
   WebhookEventType.RefundSucceeded,
   WebhookEventType.RefundFailed,
 ])

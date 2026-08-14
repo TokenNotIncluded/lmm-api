@@ -57,7 +57,7 @@ var (
 	// Require a model-like suffix after the provider family. Without this
 	// boundary, ordinary phrases such as “Claude Code” look like a model ID and
 	// unnecessarily force a catalog read on every client-setup question.
-	assistantModelReferencePattern = regexp.MustCompile(`(?i)\b(?:gpt|claude|gemini|deepseek|qwen|llama|mistral|kimi|glm|codex)(?:[-._:/][a-z0-9]+|[0-9])[a-z0-9._:/-]*\b`)
+	assistantModelReferencePattern = regexp.MustCompile(`(?i)\b(?:gpt|claude|gemini|deepseek|qwen|llama|mistral|kimi|glm|codex)(?:(?:[-._:/][a-z0-9]+|[0-9])[a-z0-9._:/-]*|\s+[0-9]+(?:\.[0-9]+)*(?:(?:\s+|[-._:/])[a-z0-9]+(?:[._:/-][a-z0-9]+)*)?)\b`)
 	assistantAgentLimiter          = syncx.NewLimiter(assistantAgentMaxConcurrent)
 	assistantTools                 = sync.OnceValue(buildAssistantTools)
 )

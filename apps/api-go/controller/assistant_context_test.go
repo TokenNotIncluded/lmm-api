@@ -68,6 +68,19 @@ func TestAssistantAgentForcesTaskToolsBeforeAnswering(t *testing.T) {
 	})))
 }
 
+func TestAssistantNaturalSpacedModelPriceQuestionUsesLivePricingChain(t *testing.T) {
+	context := assistantUserContextForRequest(0, "我们科研项目需要 GPT 5.6 SOL，多少钱？")
+
+	assert.Equal(t, model.AssistantIntentCost, context.Intent)
+	assert.Equal(t, []string{"get_available_models", "get_model_pricing"}, assistantReadChain(context))
+	assert.Equal(t, "get_available_models", assistantNamedToolChoiceName(assistantToolChoiceForAgentStep(context, nil, nil)))
+	assert.Equal(t, "get_model_pricing", assistantNamedToolChoiceName(assistantToolChoiceForAgentStep(
+		context,
+		map[string]bool{"get_available_models": true},
+		map[string]bool{"get_available_models": true},
+	)))
+}
+
 func TestAssistantOutOfScopeRequestStopsGenericWritingBeforeModelCall(t *testing.T) {
 	tests := []struct {
 		name         string

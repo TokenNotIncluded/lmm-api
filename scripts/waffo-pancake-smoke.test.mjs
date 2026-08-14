@@ -22,9 +22,11 @@ import { WebhookEventType } from '@waffo/pancake-ts'
 
 import { WAFFO_PANCAKE_WEBHOOK_EVENTS } from './waffo-pancake-smoke.mjs'
 
-test('managed Test webhook subscribes to settlement and refund events', () => {
+test('managed Test webhook subscribes to settlement, subscription, and refund events', () => {
   assert.deepEqual([...WAFFO_PANCAKE_WEBHOOK_EVENTS], [
     WebhookEventType.OrderCompleted,
+    WebhookEventType.SubscriptionActivated,
+    WebhookEventType.SubscriptionPaymentSucceeded,
     WebhookEventType.RefundSucceeded,
     WebhookEventType.RefundFailed,
   ])

@@ -9,11 +9,13 @@ import (
 
 func TestWaffoPancakeWebhookActionForEvent(t *testing.T) {
 	tests := map[string]WaffoPancakeWebhookAction{
-		"order.completed":       WaffoPancakeWebhookActionOrderCompleted,
-		"refund.succeeded":      WaffoPancakeWebhookActionRefundSucceeded,
-		"refund.failed":         WaffoPancakeWebhookActionRefundFailed,
-		"subscription.canceled": WaffoPancakeWebhookActionIgnore,
-		"":                      WaffoPancakeWebhookActionIgnore,
+		"order.completed":                WaffoPancakeWebhookActionOrderCompleted,
+		"subscription.activated":         WaffoPancakeWebhookActionSubscriptionActivated,
+		"subscription.payment_succeeded": WaffoPancakeWebhookActionSubscriptionPaymentSucceeded,
+		"refund.succeeded":               WaffoPancakeWebhookActionRefundSucceeded,
+		"refund.failed":                  WaffoPancakeWebhookActionRefundFailed,
+		"subscription.canceled":          WaffoPancakeWebhookActionIgnore,
+		"":                               WaffoPancakeWebhookActionIgnore,
 	}
 	for eventType, expected := range tests {
 		t.Run(eventType, func(t *testing.T) {

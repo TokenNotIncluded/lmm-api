@@ -131,16 +131,22 @@ type WaffoPancakeWebhookData struct {
 type WaffoPancakeWebhookAction string
 
 const (
-	WaffoPancakeWebhookActionOrderCompleted  WaffoPancakeWebhookAction = "order_completed"
-	WaffoPancakeWebhookActionRefundSucceeded WaffoPancakeWebhookAction = "refund_succeeded"
-	WaffoPancakeWebhookActionRefundFailed    WaffoPancakeWebhookAction = "refund_failed"
-	WaffoPancakeWebhookActionIgnore          WaffoPancakeWebhookAction = "ignore"
+	WaffoPancakeWebhookActionOrderCompleted               WaffoPancakeWebhookAction = "order_completed"
+	WaffoPancakeWebhookActionSubscriptionActivated        WaffoPancakeWebhookAction = "subscription_activated"
+	WaffoPancakeWebhookActionSubscriptionPaymentSucceeded WaffoPancakeWebhookAction = "subscription_payment_succeeded"
+	WaffoPancakeWebhookActionRefundSucceeded              WaffoPancakeWebhookAction = "refund_succeeded"
+	WaffoPancakeWebhookActionRefundFailed                 WaffoPancakeWebhookAction = "refund_failed"
+	WaffoPancakeWebhookActionIgnore                       WaffoPancakeWebhookAction = "ignore"
 )
 
 func WaffoPancakeWebhookActionForEvent(eventType string) WaffoPancakeWebhookAction {
 	switch strings.TrimSpace(eventType) {
 	case "order.completed":
 		return WaffoPancakeWebhookActionOrderCompleted
+	case "subscription.activated":
+		return WaffoPancakeWebhookActionSubscriptionActivated
+	case "subscription.payment_succeeded":
+		return WaffoPancakeWebhookActionSubscriptionPaymentSucceeded
 	case "refund.succeeded":
 		return WaffoPancakeWebhookActionRefundSucceeded
 	case "refund.failed":
