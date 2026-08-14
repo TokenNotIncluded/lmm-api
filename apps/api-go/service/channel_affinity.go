@@ -146,35 +146,31 @@ func GetChannelAffinityCacheStats() ChannelAffinityCacheStats {
 		byRuleName[name] = 0
 	}
 
-	keys, err := cache.Keys()
-	if err != nil {
-		common.SysError(fmt.Sprintf("channel affinity cache list keys failed: err=%v", err))
-		keys = nil
-	}
-	total := len(keys)
+	total := 0
 	unknown := 0
-	for _, k := range keys {
+	err := cache.ForEachKey(func(k string) error {
+		total++
 		prefix := channelAffinityCacheNamespace + ":"
 		if !strings.HasPrefix(k, prefix) {
 			unknown++
-			continue
+			return nil
 		}
 		rest := strings.TrimPrefix(k, prefix)
 		parts := strings.Split(rest, ":")
 		if len(parts) < 2 {
 			unknown++
-			continue
+			return nil
 		}
 		ruleName := parts[0]
 		rule, ok := ruleByName[ruleName]
 		if !ok {
 			unknown++
-			continue
+			return nil
 		}
 		if rule.IncludeModelName {
 			if len(parts) < 3 {
 				unknown++
-				continue
+				return nil
 			}
 		}
 		if rule.IncludeUsingGroup {
@@ -184,10 +180,14 @@ func GetChannelAffinityCacheStats() ChannelAffinityCacheStats {
 			}
 			if len(parts) < minParts {
 				unknown++
-				continue
+				return nil
 			}
 		}
 		byRuleName[ruleName]++
+		return nil
+	})
+	if err != nil {
+		common.SysError(fmt.Sprintf("channel affinity cache list keys failed: err=%v", err))
 	}
 
 	return ChannelAffinityCacheStats{
@@ -202,17 +202,11 @@ func GetChannelAffinityCacheStats() ChannelAffinityCacheStats {
 
 func ClearChannelAffinityCacheAll() int {
 	cache := getChannelAffinityCache()
-	keys, err := cache.Keys()
+	deleted, err := cache.DeleteAll()
 	if err != nil {
-		common.SysError(fmt.Sprintf("channel affinity cache list keys failed: err=%v", err))
-		keys = nil
+		common.SysError(fmt.Sprintf("channel affinity cache delete all failed: err=%v", err))
 	}
-	if len(keys) > 0 {
-		if _, err := cache.DeleteMany(keys); err != nil {
-			common.SysError(fmt.Sprintf("channel affinity cache delete many failed: err=%v", err))
-		}
-	}
-	return len(keys)
+	return deleted
 }
 
 func ClearChannelAffinityCacheByRuleName(ruleName string) (int, error) {
