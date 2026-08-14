@@ -17,9 +17,12 @@
 package dynamic_pricing_setting
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
+	"reflect"
 	"strconv"
+	"strings"
 
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/samber/lo"
@@ -39,6 +42,8 @@ type ModelPricingOverride struct {
 // DB keys: dynamic_pricing_setting.<json tag of each field>
 type DynamicPricingSetting struct {
 	Enabled                bool                            `json:"enabled"`
+	MinFactor              float64                         `json:"min_factor"`
+	RequireChannelCost     bool                            `json:"require_channel_cost"`
 	TickIntervalSeconds    int                             `json:"tick_interval_seconds"`
 	WindowMinutes          int                             `json:"window_minutes"`
 	TargetTPM              float64                         `json:"target_tpm"`
@@ -61,6 +66,8 @@ type DynamicPricingSetting struct {
 
 var dynamicPricingSetting = DynamicPricingSetting{
 	Enabled:                false,
+	MinFactor:              1.0,
+	RequireChannelCost:     true,
 	TickIntervalSeconds:    60,
 	WindowMinutes:          5,
 	TargetTPM:              100000,
@@ -99,6 +106,8 @@ func IsEnabled() bool {
 func GetSetting() DynamicPricingSetting {
 	return DynamicPricingSetting{
 		Enabled:                dynamicPricingSetting.Enabled,
+		MinFactor:              dynamicPricingSetting.MinFactor,
+		RequireChannelCost:     dynamicPricingSetting.RequireChannelCost,
 		TickIntervalSeconds:    dynamicPricingSetting.TickIntervalSeconds,
 		WindowMinutes:          dynamicPricingSetting.WindowMinutes,
 		TargetTPM:              dynamicPricingSetting.TargetTPM,
@@ -121,11 +130,15 @@ func GetSetting() DynamicPricingSetting {
 }
 
 // Validate checks the live configuration before a ticker iteration uses it.
-// Zero target dimensions disable that dimension, and a zero base price keeps
-// backwards compatibility with old configs by falling back to 1 USD per 1M
-// tokens. Every other numeric control is required to be finite and within its
-// documented range so malformed admin input cannot produce NaN/Inf factors.
+// Zero target dimensions disable that dimension. The reference base price
+// may remain zero only while the feature is disabled; enabling requires a
+// positive value. Every other numeric control is required to be finite and
+// within its documented range so malformed admin input cannot produce
+// NaN/Inf factors.
 func (s DynamicPricingSetting) Validate() error {
+	if s.MinFactor < 1 || !isFinite(s.MinFactor) {
+		return fmt.Errorf("min_factor must be finite and at least 1")
+	}
 	if s.TickIntervalSeconds <= 0 {
 		return fmt.Errorf("tick_interval_seconds must be positive")
 	}
@@ -144,6 +157,12 @@ func (s DynamicPricingSetting) Validate() error {
 	if s.BasePriceUSDPerMillion < 0 || !isFinite(s.BasePriceUSDPerMillion) {
 		return fmt.Errorf("base_price_usd_per_million must be finite and non-negative")
 	}
+	if s.Enabled && s.BasePriceUSDPerMillion <= 0 {
+		return fmt.Errorf("base_price_usd_per_million must be positive while dynamic pricing is enabled")
+	}
+	if s.Enabled && !s.RequireChannelCost {
+		return fmt.Errorf("require_channel_cost must be true while dynamic pricing is enabled")
+	}
 	if err := validateUnitInterval("alpha_load", s.AlphaLoad); err != nil {
 		return err
 	}
@@ -158,6 +177,9 @@ func (s DynamicPricingSetting) Validate() error {
 	}
 	if s.MaxFactor < 1 || !isFinite(s.MaxFactor) {
 		return fmt.Errorf("max_factor must be finite and at least 1")
+	}
+	if s.MinFactor > s.MaxFactor {
+		return fmt.Errorf("min_factor must not exceed max_factor")
 	}
 	if s.LoadDeadzone < 0 || s.LoadDeadzone >= 1 || !isFinite(s.LoadDeadzone) {
 		return fmt.Errorf("load_deadzone must be finite and in [0, 1)")
@@ -175,9 +197,12 @@ func (s DynamicPricingSetting) Validate() error {
 		return err
 	}
 	for channelID, cost := range s.ChannelCosts {
-		if cost < 0 || !isFinite(cost) {
-			return fmt.Errorf("channel_costs[%q] must be finite and non-negative", channelID)
+		if cost <= 0 || !isFinite(cost) {
+			return fmt.Errorf("channel_costs[%q] must be finite and positive", channelID)
 		}
+	}
+	if s.Enabled && s.RequireChannelCost && len(s.ChannelCosts) == 0 {
+		return fmt.Errorf("channel_costs must contain at least one positive channel cost while dynamic pricing is enabled")
 	}
 	for model, override := range s.PerModel {
 		if err := validateNonNegative(fmt.Sprintf("per_model[%q].target_tpm", model), override.TargetTPM); err != nil {
@@ -194,6 +219,57 @@ func (s DynamicPricingSetting) Validate() error {
 		}
 	}
 	return nil
+}
+
+// ValidateOptionValues applies one or more flattened
+// dynamic_pricing_setting.<field> values to an isolated copy and validates the
+// resulting configuration. It is used by the generic option API and bulk
+// updates so malformed values can never be persisted or partially applied.
+func ValidateOptionValues(values map[string]string) error {
+	candidate := GetSetting()
+	for key, value := range values {
+		fieldName := strings.TrimPrefix(key, "dynamic_pricing_setting.")
+		if fieldName == key {
+			continue
+		}
+		if err := setStrictConfigField(&candidate, fieldName, value); err != nil {
+			return err
+		}
+	}
+	return candidate.Validate()
+}
+
+// IsOptionKey reports whether key belongs to the dynamic-pricing config.
+func IsOptionKey(key string) bool {
+	return strings.HasPrefix(key, "dynamic_pricing_setting.")
+}
+
+func setStrictConfigField(candidate *DynamicPricingSetting, key, value string) error {
+	rv := reflect.ValueOf(candidate).Elem()
+	rt := rv.Type()
+	for i := 0; i < rv.NumField(); i++ {
+		fieldType := rt.Field(i)
+		fieldKey := strings.Split(fieldType.Tag.Get("json"), ",")[0]
+		if fieldKey == "" {
+			fieldKey = fieldType.Name
+		}
+		if fieldKey != key {
+			continue
+		}
+
+		field := rv.Field(i)
+		if field.Kind() == reflect.String {
+			field.SetString(value)
+			return nil
+		}
+		parsed := reflect.New(field.Type())
+		if err := json.Unmarshal([]byte(value), parsed.Interface()); err != nil {
+			return fmt.Errorf("dynamic_pricing_setting.%s is invalid: %w", key, err)
+		}
+		field.Set(parsed.Elem())
+		return nil
+	}
+	return fmt.Errorf("unknown dynamic pricing setting %q", key)
 }
 
 func isFinite(value float64) bool {
@@ -218,7 +294,22 @@ func validateUnitInterval(name string, value float64) error {
 // the given channel, and whether an entry exists for it.
 func GetChannelCost(channelId int) (float64, bool) {
 	cost, ok := dynamicPricingSetting.ChannelCosts[strconv.Itoa(channelId)]
-	return cost, ok
+	return cost, ok && cost > 0 && isFinite(cost)
+}
+
+// GetMinFactor returns the configured request-path floor. Invalid live state
+// falls back to 1.0; validated option writes prevent this in normal operation.
+func GetMinFactor() float64 {
+	if dynamicPricingSetting.MinFactor < 1 || !isFinite(dynamicPricingSetting.MinFactor) {
+		return 1.0
+	}
+	return dynamicPricingSetting.MinFactor
+}
+
+// RequiresChannelCost reports whether requests on channels without a
+// configured conservative cost must fail closed.
+func RequiresChannelCost() bool {
+	return dynamicPricingSetting.RequireChannelCost
 }
 
 // GetModelTargets returns the effective pricing targets for a model. Per-model

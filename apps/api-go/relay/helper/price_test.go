@@ -140,10 +140,15 @@ func TestModelPriceHelperTieredIncludesDynamicMultiplier(t *testing.T) {
 		"group_ratio_setting.group_ratio": `{"default":1}`,
 	}))
 	dpCfg.Enabled = true
+	dpCfg.MinFactor = 1
+	dpCfg.RequireChannelCost = true
+	dpCfg.BasePriceUSDPerMillion = 1
+	dpCfg.ChannelCosts = map[string]float64{"1": 1}
 	dynamic_pricing.SetState("tiered-dynamic-model", &dynamic_pricing.ModelState{Factor: 2})
 
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	ctx.Set("group", "default")
+	ctx.Set("channel_id", 1)
 	info := &relaycommon.RelayInfo{
 		OriginModelName: "tiered-dynamic-model",
 		UserGroup:       "default",
@@ -397,6 +402,10 @@ func TestModelPriceHelperPreConsumeIncludesDynamicMultiplier(t *testing.T) {
 	dpCfg := config.GlobalConfig.Get("dynamic_pricing_setting").(*dynamic_pricing_setting.DynamicPricingSetting)
 	oldDpCfg := dynamic_pricing_setting.GetSetting()
 	dpCfg.Enabled = true
+	dpCfg.MinFactor = 1
+	dpCfg.RequireChannelCost = true
+	dpCfg.BasePriceUSDPerMillion = 1
+	dpCfg.ChannelCosts = map[string]float64{"1": 1}
 	t.Cleanup(func() { *dpCfg = oldDpCfg })
 
 	// Seed dynamic pricing state: GetMultiplier returns 2.0 for both models.
@@ -412,6 +421,7 @@ func TestModelPriceHelperPreConsumeIncludesDynamicMultiplier(t *testing.T) {
 	newInfo := func(model string) (*gin.Context, *relaycommon.RelayInfo) {
 		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 		ctx.Set("group", "default")
+		ctx.Set("channel_id", 1)
 		return ctx, &relaycommon.RelayInfo{
 			OriginModelName: model,
 			UserGroup:       "default",
@@ -444,8 +454,9 @@ func TestModelPriceHelperPreConsumeIncludesDynamicMultiplier(t *testing.T) {
 // TestModelPriceHelperPerCallIncludesDynamicMultiplier verifies the per-call
 // (按次计费, MJ/Task) billing path: the dynamic pricing multiplier is injected
 // into OtherRatios BEFORE the Quota write, but the base Quota itself stays
-// unmultiplied — downstream (relay_task) applies OtherRatios when settling, so
-// folding the multiplier into Quota here would double-charge it.
+// unmultiplied — downstream task and Midjourney integrations apply
+// OtherRatios, so folding the multiplier into Quota here would double-charge
+// it.
 func TestModelPriceHelperPerCallIncludesDynamicMultiplier(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	savedModelPrices := ratio_setting.ModelPrice2JSONString()
@@ -462,6 +473,10 @@ func TestModelPriceHelperPerCallIncludesDynamicMultiplier(t *testing.T) {
 	dpCfg := config.GlobalConfig.Get("dynamic_pricing_setting").(*dynamic_pricing_setting.DynamicPricingSetting)
 	oldDpCfg := dynamic_pricing_setting.GetSetting()
 	dpCfg.Enabled = true
+	dpCfg.MinFactor = 1
+	dpCfg.RequireChannelCost = true
+	dpCfg.BasePriceUSDPerMillion = 1
+	dpCfg.ChannelCosts = map[string]float64{"1": 1}
 	t.Cleanup(func() { *dpCfg = oldDpCfg })
 
 	// Seed dynamic pricing state: GetMultiplier returns 2.0 for the model.
@@ -474,6 +489,7 @@ func TestModelPriceHelperPerCallIncludesDynamicMultiplier(t *testing.T) {
 
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	ctx.Set("group", "default")
+	ctx.Set("channel_id", 1)
 	info := &relaycommon.RelayInfo{
 		OriginModelName: "dyn-percall-price",
 		UserGroup:       "default",
@@ -494,7 +510,19 @@ func TestModelPriceHelperPerCallIncludesDynamicMultiplier(t *testing.T) {
 	require.InDelta(t, 2.0, priceData.OtherRatios()["dynamic_pricing"], 1e-9)
 
 	// ...but the base quota is NOT multiplied: 0.04 × 500000 × 1 = 20000.
-	// relay_task applies OtherRatios afterwards; multiplying here would
-	// double-charge the dynamic multiplier.
+	// Per-call integrations apply OtherRatios afterwards; multiplying here
+	// would double-charge the dynamic multiplier.
 	require.Equal(t, 20000, priceData.Quota)
+}
+
+func TestDynamicPricingRejectsNonBillableBase(t *testing.T) {
+	dpCfg := config.GlobalConfig.Get("dynamic_pricing_setting").(*dynamic_pricing_setting.DynamicPricingSetting)
+	oldDP := dynamic_pricing_setting.GetSetting()
+	dpCfg.Enabled = true
+	dpCfg.RequireChannelCost = true
+	t.Cleanup(func() { *dpCfg = oldDP })
+
+	require.Error(t, validateDynamicPricingBillingBase("free-group-model", 0, 1))
+	require.Error(t, validateDynamicPricingBillingBase("free-model", 1, 0))
+	require.NoError(t, validateDynamicPricingBillingBase("paid-model", 0.8, 2))
 }

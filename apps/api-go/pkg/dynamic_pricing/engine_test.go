@@ -17,6 +17,8 @@ func approxEqual(a, b, eps float64) bool {
 func defaultSetting() dynamic_pricing_setting.DynamicPricingSetting {
 	return dynamic_pricing_setting.DynamicPricingSetting{
 		Enabled:                true,
+		MinFactor:              1.0,
+		RequireChannelCost:     true,
 		TickIntervalSeconds:    60,
 		WindowMinutes:          5,
 		TargetTPM:              100000,
@@ -33,6 +35,7 @@ func defaultSetting() dynamic_pricing_setting.DynamicPricingSetting {
 		MaxStepUp:              0.10,
 		MaxStepDown:            0.03,
 		FailoverProbability:    0.15,
+		ChannelCosts:           map[string]float64{"1": 1.0},
 	}
 }
 
@@ -268,18 +271,28 @@ func TestEffectiveCost(t *testing.T) {
 	}
 }
 
+func TestCostFloorMultiplier(t *testing.T) {
+	if got := CostFloorMultiplier(5, 1, 1.2); !approxEqual(got, 6, eps) {
+		t.Fatalf("CostFloorMultiplier(5, 1, 1.2) = %v, want 6", got)
+	}
+	if got := CostFloorMultiplier(1, 0, 1.2); got != 0 {
+		t.Fatalf("CostFloorMultiplier with unknown base = %v, want 0", got)
+	}
+}
+
 // fullLoadInput returns a TickInput that saturates the default TPM target
 // (load >= 1) with a known upstream unit cost.
 func fullLoadInput(costPerM float64) TickInput {
 	return TickInput{
-		Model:                 "test-model",
-		WindowTokens:          600000,
-		WindowRequests:        0,
-		WindowUpstreamCostUSD: costPerM * 600000 / 1e6,
-		WindowMinutes:         5,
-		CheapCost:             costPerM,
-		BackupCost:            costPerM * 1.8,
-		Now:                   1700000000,
+		Model:                  "test-model",
+		WindowTokens:           600000,
+		WindowRequests:         0,
+		WindowUpstreamCostUSD:  costPerM * 600000 / 1e6,
+		WindowMinutes:          5,
+		CheapCost:              costPerM,
+		BackupCost:             costPerM * 1.8,
+		BasePriceUSDPerMillion: 1.0,
+		Now:                    1700000000,
 	}
 }
 
@@ -364,10 +377,9 @@ func TestTickColdStartFactorZeroIsStepClamped(t *testing.T) {
 
 	got := Tick(state, fullLoadInput(1.0), s)
 
-	want := 1.0 * (1 + s.MaxStepUp) // 1.10
-	if got > want+eps {
-		t.Errorf("Tick(cold start, full load) = %v, want <= %v (step-up clamp must bind on the first tick, not jump to maxFactor %v)", got, want, s.MaxFactor)
-	}
+	// The expected route is 1.12 USD/M after failover weighting, so its
+	// 1.344x known-cost floor overrides the 1.1x movement clamp immediately.
+	want := 1.344
 	if !approxEqual(got, want, eps) {
 		t.Errorf("Tick(cold start, full load) = %v, want %v", got, want)
 	}
@@ -475,8 +487,8 @@ func TestTickRisingFasterThanFalling(t *testing.T) {
 	if upDelta <= downDelta {
 		t.Errorf("rising delta %v should exceed falling delta %v", upDelta, downDelta)
 	}
-	if !approxEqual(upFactor, 1.1, eps) {
-		t.Errorf("rising tick factor = %v, want 1.1 (step-up clamp)", upFactor)
+	if !approxEqual(upFactor, 1.344, eps) {
+		t.Errorf("rising tick factor = %v, want 1.344 (immediate route cost floor)", upFactor)
 	}
 	if !approxEqual(downFactor, 1.95, eps) {
 		t.Errorf("falling tick factor = %v, want 1.95 (alphaDown EMA)", downFactor)
@@ -519,7 +531,8 @@ func TestTickPerStepRiseLimit(t *testing.T) {
 	s.AlphaUp = 1.0
 
 	state := &ModelState{Factor: 1.0, UpdatedAt: 0}
-	got := Tick(state, fullLoadInput(1.0), s)
+	in := fullLoadInput(0.1)
+	got := Tick(state, in, s)
 
 	want := 1.0 * (1 + s.MaxStepUp) // 1.10
 	if got > want+eps {
@@ -548,8 +561,38 @@ func TestTickStateMutation(t *testing.T) {
 	if !approxEqual(state.CostEMA, 1.0, eps) {
 		t.Errorf("state.CostEMA = %v, want 1.0", state.CostEMA)
 	}
-	if !approxEqual(state.Factor, 1.1, eps) {
-		t.Errorf("state.Factor = %v, want 1.1", state.Factor)
+	if !approxEqual(state.Factor, 1.344, eps) {
+		t.Errorf("state.Factor = %v, want 1.344", state.Factor)
+	}
+}
+
+func TestTickImmediateCostSpikeOverridesStepAndMaxFactor(t *testing.T) {
+	s := defaultSetting()
+	state := &ModelState{Factor: 1.0}
+	in := TickInput{
+		Model: "cost-spike", WindowTokens: 1e6, WindowUpstreamCostUSD: 5,
+		WindowMinutes: 5, CheapCost: 5, BasePriceUSDPerMillion: 1, Now: 1,
+	}
+
+	got := Tick(state, in, s)
+	if !approxEqual(got, 6, eps) {
+		t.Fatalf("Tick(cost spike) = %v, want immediate 6x hard floor", got)
+	}
+	if got <= s.MaxFactor {
+		t.Fatalf("known-cost floor %v must override max_factor %v", got, s.MaxFactor)
+	}
+}
+
+func TestTickHonorsConfiguredMinimum(t *testing.T) {
+	s := defaultSetting()
+	s.MinFactor = 1.35
+	state := &ModelState{Factor: 2}
+
+	for i := 0; i < 200; i++ {
+		Tick(state, TickInput{Model: "idle", WindowMinutes: 5, Now: int64(i + 1)}, s)
+	}
+	if state.Factor < s.MinFactor || !approxEqual(state.Factor, s.MinFactor, 1e-4) {
+		t.Fatalf("idle factor = %v, want configured minimum %v", state.Factor, s.MinFactor)
 	}
 }
 

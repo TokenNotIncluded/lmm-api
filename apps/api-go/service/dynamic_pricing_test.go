@@ -35,10 +35,14 @@ func setupDynamicPricingTestDB(t *testing.T) (*gorm.DB, int64) {
 	require.True(t, ok, "dynamic_pricing_setting not registered")
 	oldCfg := dynamic_pricing_setting.GetSetting()
 	cfg.Enabled = true
+	cfg.MinFactor = 1.0
+	cfg.RequireChannelCost = true
+	cfg.TickIntervalSeconds = 60
 	cfg.WindowMinutes = 5
 	cfg.TargetTPM = 100000
 	cfg.TargetRPM = 60
 	cfg.TargetCostRate = 1.0
+	cfg.BasePriceUSDPerMillion = 1.0
 	cfg.AlphaLoad = 0.3
 	cfg.AlphaUp = 0.30
 	cfg.AlphaDown = 0.05
@@ -111,9 +115,9 @@ func TestRunDynamicPricingTick(t *testing.T) {
 	require.True(t, ok, "m1 state missing")
 	require.True(t, approxEq(st.LoadEMA, 2.0, 1e-9), "m1 LoadEMA = %v, want 2.0", st.LoadEMA)
 	require.True(t, approxEq(st.CostEMA, 2.0, 1e-9), "m1 CostEMA = %v, want 2.0", st.CostEMA)
-	// Cold start seeds Factor=1.0, so the first tick is step-clamped to
-	// 1.0*(1+MaxStepUp)=1.1 instead of jumping straight to maxFactor.
-	require.True(t, approxEq(st.Factor, 1.1, 1e-9), "m1 Factor = %v, want 1.1 (first-tick step-up clamp)", st.Factor)
+	// Known cost is a hard floor: $2/M × 1.2 margin / $1/M base = 2.4x,
+	// applied immediately instead of waiting for the step-up smoother.
+	require.True(t, approxEq(st.Factor, 2.4, 1e-9), "m1 Factor = %v, want immediate 2.4 cost floor", st.Factor)
 	require.True(t, st.UpdatedAt >= before && st.UpdatedAt <= after, "m1 UpdatedAt = %d outside [%d, %d]", st.UpdatedAt, before, after)
 
 	// m2: total tokens=7e5, but only 5e5 priced tokens (ch3 is unknown),
@@ -123,7 +127,8 @@ func TestRunDynamicPricingTick(t *testing.T) {
 	require.True(t, ok, "m2 state missing")
 	require.True(t, approxEq(st.LoadEMA, 1.0, 1e-9), "m2 LoadEMA = %v, want 1.0", st.LoadEMA)
 	require.True(t, approxEq(st.CostEMA, 0.74e6/5e5, 1e-6), "m2 CostEMA = %v, want %v", st.CostEMA, 0.74e6/5e5)
-	require.True(t, approxEq(st.Factor, 1.1, 1e-9), "m2 Factor = %v, want 1.1 (first-tick step-up clamp)", st.Factor)
+	require.True(t, approxEq(st.Factor, 1.776, 1e-9), "m2 Factor = %v, want immediate 1.776 cost floor", st.Factor)
+	require.True(t, st.HasUnpricedTraffic, "m2 must expose mixed unknown-cost traffic")
 
 	// m3: no configured cost -> factor stays at base price.
 	if got := dynamic_pricing.GetMultiplier("m3"); got != 1.0 {

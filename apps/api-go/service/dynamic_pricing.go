@@ -12,8 +12,9 @@
 //     (setting/dynamic_pricing_setting.GetChannelCost), never from billed
 //     quota amounts. A channel without a configured cost has its tokens
 //     excluded from the upstream-cost calculation (and from cheap/backup
-//     route selection); a model whose channels all lack configured costs
-//     therefore keeps Factor at the base price (1.0).
+//     route selection). Request-path pricing separately fails closed for a
+//     selected channel without a configured cost when RequireChannelCost is
+//     enabled, so missing data cannot silently create upstream spend.
 //   - Revenue is deliberately never used as a load input: charging more
 //     under load would feed back into measured revenue and could spiral.
 //     Only token/request volume and upstream cost drive the factor.
@@ -158,18 +159,15 @@ func runDynamicPricingTick() {
 		s.TargetTPM, s.TargetRPM, s.TargetCostRate = dynamic_pricing_setting.GetModelTargets(modelName)
 		s.BasePriceUSDPerMillion = dynamic_pricing_setting.GetModelBasePrice(modelName)
 
-		// Cold start: in-memory state, then Redis persistence, then fresh.
-		// A fresh state seeds Factor=1.0 so the very first tick is clamped by
-		// MaxStepUp instead of jumping straight to the target (a Factor<=0
-		// would make NextMultiplier return the target directly and
-		// EnforceBounds skip the step clamp). Tick also guards Factor<=0 as a
-		// defensive backstop for pure-function callers.
+		// Cold start: in-memory state, then Redis persistence, then fresh. The
+		// demand premium still moves through the configured smoothing controls,
+		// while Tick applies minimum and known-cost safety floors immediately.
 		state, ok := dynamic_pricing.GetState(modelName)
 		if !ok {
 			if loaded, loadedOK := dynamic_pricing.LoadFromRedis(modelName); loadedOK {
 				state = loaded
 			} else {
-				state = &dynamic_pricing.ModelState{Factor: 1.0}
+				state = &dynamic_pricing.ModelState{Factor: s.MinFactor}
 			}
 		}
 		dynamic_pricing.ClampState(state, s.MaxFactor)
@@ -194,6 +192,13 @@ func runDynamicPricingTick() {
 			common.SysLog(fmt.Sprintf("dynamic pricing: model %s load EMA %.2f exceeds target; dynamic pricing only raises the price factor and cannot replace capacity control", modelName, state.LoadEMA))
 		}
 	}
+}
+
+// RunDynamicPricingTickNow refreshes the in-memory preview immediately after
+// an administrator saves the feature settings. The regular background ticker
+// remains the source of ongoing updates.
+func RunDynamicPricingTickNow() {
+	runDynamicPricingTick()
 }
 
 // queryDynamicPricingWindow aggregates consume (type=2) logs over

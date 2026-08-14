@@ -26,9 +26,22 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
+	hosttypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
+
+func applyMidjourneyPriceRatios(priceData *hosttypes.PriceData) error {
+	if priceData == nil || priceData.Quota <= 0 {
+		return nil
+	}
+	quota, err := common.QuotaFromFloatStrict(priceData.ApplyOtherRatiosToFloat(float64(priceData.Quota)))
+	if err != nil {
+		return err
+	}
+	priceData.Quota = quota
+	return nil
+}
 
 func RelayMidjourneyImage(c *gin.Context) {
 	taskId := c.Param("id")
@@ -254,6 +267,9 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 			Code:        4,
 			Description: err.Error(),
 		}
+	}
+	if err := applyMidjourneyPriceRatios(&priceData); err != nil {
+		return &dto.MidjourneyResponse{Code: 4, Description: err.Error()}
 	}
 
 	userQuota, err := model.GetUserQuota(info.UserId, false)
@@ -575,6 +591,9 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 			Code:        4,
 			Description: err.Error(),
 		}
+	}
+	if err := applyMidjourneyPriceRatios(&priceData); err != nil {
+		return &dto.MidjourneyResponse{Code: 4, Description: err.Error()}
 	}
 
 	userQuota, err := model.GetUserQuota(relayInfo.UserId, false)

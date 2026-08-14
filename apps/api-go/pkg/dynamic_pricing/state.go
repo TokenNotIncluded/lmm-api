@@ -92,8 +92,9 @@ func SetState(model string, st *ModelState) {
 	}
 }
 
-// GetMultiplier returns the current dynamic multiplier for model: the stored
-// Factor when present and positive, otherwise 1.0 (base price). This is the
+// GetMultiplier returns the current dynamic multiplier for model: at least
+// the configured MinFactor, and otherwise the stored Factor when it is
+// larger. This is the
 // hot path, called once per request; it only reads the Factor float64 under
 // RLock and touches neither Redis nor the rest of the state.
 func GetMultiplier(model string) float64 {
@@ -105,6 +106,7 @@ func GetMultiplier(model string) float64 {
 	if !dynamic_pricing_setting.IsEnabled() {
 		return 1.0
 	}
+	minimum := dynamic_pricing_setting.GetMinFactor()
 	statesMu.RLock()
 	st, ok := states[model]
 	var f float64
@@ -113,13 +115,45 @@ func GetMultiplier(model string) float64 {
 	}
 	statesMu.RUnlock()
 	if f >= 1 && !math.IsNaN(f) && !math.IsInf(f, 0) {
-		maxFactor := dynamic_pricing_setting.GetMaxFactor()
-		if f > maxFactor {
-			return maxFactor
-		}
-		return f
+		return math.Max(minimum, f)
 	}
-	return 1.0
+	return minimum
+}
+
+// GetRequestMultiplier returns the multiplier to capture for a request after
+// routing has selected a channel. It combines the live model factor, the
+// operator's minimum factor, and an immediate hard floor derived from that
+// channel's conservative configured cost. Unknown channel costs fail closed
+// when RequireChannelCost is enabled, preventing upstream spend at an
+// unverified selling price.
+func GetRequestMultiplier(model string, channelID int) (factor float64, costFloor float64, err error) {
+	if !dynamic_pricing_setting.IsEnabled() {
+		return 1.0, 0, nil
+	}
+
+	setting := dynamic_pricing_setting.GetSetting()
+	if validateErr := setting.Validate(); validateErr != nil {
+		return 0, 0, fmt.Errorf("dynamic pricing configuration is invalid: %w", validateErr)
+	}
+
+	factor = math.Max(setting.MinFactor, GetMultiplier(model))
+	channelCost, ok := dynamic_pricing_setting.GetChannelCost(channelID)
+	if !ok {
+		if setting.RequireChannelCost {
+			return 0, 0, fmt.Errorf("dynamic pricing blocked channel %d: conservative upstream cost is not configured", channelID)
+		}
+		return factor, 0, nil
+	}
+
+	costFloor = CostFloorMultiplier(
+		channelCost,
+		dynamic_pricing_setting.GetModelBasePrice(model),
+		setting.CostFloorFactor,
+	)
+	if costFloor <= 0 {
+		return 0, 0, fmt.Errorf("dynamic pricing blocked channel %d: configured cost floor is invalid", channelID)
+	}
+	return math.Max(factor, costFloor), costFloor, nil
 }
 
 // LoadFromRedis fetches the persisted state for model from Redis (used by

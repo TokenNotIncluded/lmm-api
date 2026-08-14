@@ -104,10 +104,8 @@ func refreshTieredBillingGroup(relayInfo *relaycommon.RelayInfo) (*billingexpr.B
 	}
 
 	groupRatio := relayInfo.PriceData.GroupRatioInfo.GroupRatio
-	if snap.GroupRatio == groupRatio {
-		return snap, nil
-	}
-
+	// Always recompute: the dynamic-pricing multiplier can increase when a
+	// retry selects a costlier channel even if the group itself did not change.
 	estimatedQuotaAfterGroup := snap.EstimatedQuotaBeforeGroup * groupRatio
 	estimatedQuota, err := billingexpr.QuotaRoundStrict(estimatedQuotaAfterGroup)
 	if err != nil {

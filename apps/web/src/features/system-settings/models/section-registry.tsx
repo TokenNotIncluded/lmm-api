@@ -21,6 +21,7 @@ import { IoNetDeploymentSettingsSection } from '../integrations/ionet-deployment
 import type { ModelSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
 import { ClaudeSettingsCard } from './claude-settings-card'
+import { DynamicPricingSection } from './dynamic-pricing-section'
 import { GeminiSettingsCard } from './gemini-settings-card'
 import { GlobalSettingsCard } from './global-settings-card'
 import { GrokSettingsCard } from './grok-settings-card'
@@ -85,6 +86,28 @@ const MODELS_SECTIONS = [
             settings['monitor_setting.auto_test_channel_minutes'],
           'monitor_setting.channel_test_mode':
             settings['monitor_setting.channel_test_mode'],
+        }}
+      />
+    ),
+  },
+  {
+    id: 'dynamic-group-multiplier',
+    titleKey: 'Dynamic Group Multiplier',
+    build: (settings: ModelSettings) => (
+      <DynamicPricingSection
+        defaultValues={{
+          'dynamic_pricing_setting.enabled':
+            settings['dynamic_pricing_setting.enabled'],
+          'dynamic_pricing_setting.min_factor':
+            settings['dynamic_pricing_setting.min_factor'],
+          'dynamic_pricing_setting.base_price_usd_per_million':
+            settings['dynamic_pricing_setting.base_price_usd_per_million'],
+          'dynamic_pricing_setting.cost_floor_factor':
+            settings['dynamic_pricing_setting.cost_floor_factor'],
+          'dynamic_pricing_setting.max_factor':
+            settings['dynamic_pricing_setting.max_factor'],
+          'dynamic_pricing_setting.channel_costs':
+            settings['dynamic_pricing_setting.channel_costs'],
         }}
       />
     ),

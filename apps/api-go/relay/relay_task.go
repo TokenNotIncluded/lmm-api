@@ -198,13 +198,13 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		}
 	}
 
-	// 6. 将 OtherRatios 应用到基础额度（饱和转换，防止溢出成负数）
-	if !common.StringsContains(constant.TaskPricePatches, modelName) {
-		quotaWithRatios := info.PriceData.ApplyOtherRatiosToFloat(float64(info.PriceData.Quota))
-		quota, clamp := common.QuotaFromFloatChecked(quotaWithRatios)
-		info.PriceData.Quota = quota
-		noteTaskQuotaClamp(info, clamp)
-	}
+	// 6. 将 OtherRatios 应用到基础额度（饱和转换，防止溢出成负数）。
+	// TASK_PRICE_PATCH models intentionally skip adaptor dimension ratios, but
+	// the independently captured dynamic-pricing safety ratio must still be
+	// charged.
+	quota, clamp := taskSubmitQuotaWithRatios(info, modelName)
+	info.PriceData.Quota = quota
+	noteTaskQuotaClamp(info, clamp)
 
 	// 7. 预扣费（仅首次 — 重试时 info.Billing 已存在，跳过）
 	if info.Billing == nil && !info.PriceData.FreeModel {
@@ -262,6 +262,21 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		Platform:       platform,
 		Quota:          finalQuota,
 	}, nil
+}
+
+func taskSubmitQuotaWithRatios(info *relaycommon.RelayInfo, modelName string) (int, *common.QuotaClamp) {
+	if info == nil {
+		return 0, nil
+	}
+	quota := float64(info.PriceData.Quota)
+	if common.StringsContains(constant.TaskPricePatches, modelName) {
+		if dynamicRatio, ok := info.PriceData.OtherRatios()["dynamic_pricing"]; ok {
+			quota *= dynamicRatio
+		}
+	} else {
+		quota = info.PriceData.ApplyOtherRatiosToFloat(quota)
+	}
+	return common.QuotaFromFloatChecked(quota)
 }
 
 // checkAdvancedSecurityTaskPrompt closes the gap between the normal model

@@ -376,6 +376,32 @@ func TestPrepareTieredBillingForSelectedGroupUpdatesReservation(t *testing.T) {
 	assert.Equal(t, 100_000, relayInfo.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
 }
 
+func TestPrepareTieredBillingRecomputesWhenDynamicMultiplierChanges(t *testing.T) {
+	const expr = `tier("base", p)`
+	billing := &recordingBillingSettler{preConsumedQuota: 100}
+	relayInfo := &relaycommon.RelayInfo{
+		Billing:               billing,
+		FinalPreConsumedQuota: 100,
+		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
+			BillingMode:               "tiered_expr",
+			ExprString:                expr,
+			ExprHash:                  billingexpr.ExprHashString(expr),
+			GroupRatio:                1,
+			EstimatedQuotaBeforeGroup: 100,
+			EstimatedQuotaAfterGroup:  100,
+			QuotaPerUnit:              testQuotaPerUnit,
+		},
+		PriceData: types.PriceData{
+			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
+		},
+	}
+	relayInfo.PriceData.AddOtherRatio(dynamicPricingRatioKey, 2)
+
+	require.Nil(t, PrepareTieredBillingForSelectedGroup(nil, relayInfo))
+	require.Equal(t, 200, relayInfo.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
+	require.Equal(t, []int{200}, billing.reserveTargets)
+}
+
 func TestPrepareTieredBillingForSelectedGroupPreservesDynamicMultiplier(t *testing.T) {
 	const expr = `tier("base", p)`
 	billing := &recordingBillingSettler{preConsumedQuota: 50_000}

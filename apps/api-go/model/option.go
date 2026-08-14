@@ -1,6 +1,7 @@
 package model
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -8,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/QuantumNous/new-api/setting/dynamic_pricing_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/performance_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -238,6 +240,9 @@ func SyncOptions(frequency int) {
 }
 
 func validateOptionValue(key string, value string) error {
+	if dynamic_pricing_setting.IsOptionKey(key) {
+		return dynamic_pricing_setting.ValidateOptionValues(map[string]string{key: value})
+	}
 	if err := setting.ValidateAssistantOption(key, value); err != nil {
 		return err
 	}
@@ -299,13 +304,46 @@ func UpdateOptionsBulk(values map[string]string) error {
 	if len(values) == 0 {
 		return nil
 	}
+	dynamicValues := make(map[string]string)
 	for key, value := range values {
+		if dynamic_pricing_setting.IsOptionKey(key) {
+			dynamicValues[key] = value
+			continue
+		}
 		if err := validateOptionValue(key, value); err != nil {
 			return err
 		}
 	}
+	if len(dynamicValues) > 0 {
+		if err := dynamic_pricing_setting.ValidateOptionValues(dynamicValues); err != nil {
+			return err
+		}
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	// Apply the master switch last when enabling (all safety inputs are live
+	// first), and first when disabling (request-path pricing stops before any
+	// other setting changes).
+	enabledKey := "dynamic_pricing_setting.enabled"
+	if enabledValue, ok := values[enabledKey]; ok {
+		withoutEnabled := make([]string, 0, len(keys)-1)
+		for _, key := range keys {
+			if key != enabledKey {
+				withoutEnabled = append(withoutEnabled, key)
+			}
+		}
+		if enabledValue == "false" {
+			keys = append([]string{enabledKey}, withoutEnabled...)
+		} else {
+			keys = append(withoutEnabled, enabledKey)
+		}
+	}
 	err := DB.Transaction(func(tx *gorm.DB) error {
-		for k, v := range values {
+		for _, k := range keys {
+			v := values[k]
 			option := Option{Key: k}
 			if err := tx.FirstOrCreate(&option, Option{Key: k}).Error; err != nil {
 				return err
@@ -320,7 +358,8 @@ func UpdateOptionsBulk(values map[string]string) error {
 	if err != nil {
 		return err
 	}
-	for k, v := range values {
+	for _, k := range keys {
+		v := values[k]
 		if err := updateOptionMap(k, v); err != nil {
 			return err
 		}

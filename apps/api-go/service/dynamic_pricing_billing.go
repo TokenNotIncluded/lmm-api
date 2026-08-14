@@ -1,11 +1,13 @@
 package service
 
 import (
+	"fmt"
 	"math"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/dynamic_pricing"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/dynamic_pricing_setting"
 )
 
 const dynamicPricingRatioKey = "dynamic_pricing"
@@ -27,6 +29,66 @@ func dynamicPricingMultiplier(info *relaycommon.RelayInfo) float64 {
 		return 1.0
 	}
 	return dynamic_pricing.GetMultiplier(info.OriginModelName)
+}
+
+// PrepareDynamicPricingForSelectedChannel revalidates the captured request
+// multiplier before every upstream attempt. A retry can land on a more
+// expensive channel than the initial route; in that case this function raises
+// (never lowers) the request ratio and reserves the corresponding larger
+// pre-consume amount before any upstream spend.
+func PrepareDynamicPricingForSelectedChannel(info *relaycommon.RelayInfo, channelID int) error {
+	if info == nil || !dynamic_pricing_setting.IsEnabled() {
+		return nil
+	}
+
+	multiplier, _, err := dynamic_pricing.GetRequestMultiplier(info.OriginModelName, channelID)
+	if err != nil {
+		return err
+	}
+
+	oldMultiplier := 1.0
+	if ratios := info.PriceData.OtherRatios(); ratios != nil {
+		if captured, ok := ratios[dynamicPricingRatioKey]; ok && captured > 0 {
+			oldMultiplier = captured
+		}
+	}
+	if multiplier <= oldMultiplier {
+		return nil
+	}
+
+	info.PriceData.AddOtherRatio(dynamicPricingRatioKey, multiplier)
+	if info.TieredBillingSnapshot != nil {
+		// PrepareTieredBillingForSelectedGroup, called immediately afterwards,
+		// recomputes and reserves the tiered estimate with the raised ratio.
+		return nil
+	}
+
+	quotaToReserve := info.PriceData.QuotaToPreConsume
+	usesPerCallQuota := false
+	if quotaToReserve <= 0 && info.PriceData.Quota > 0 {
+		quotaToReserve = info.PriceData.Quota
+		usesPerCallQuota = true
+	}
+	if quotaToReserve > 0 {
+		target, convertErr := common.QuotaFromFloatStrict(math.Ceil(
+			float64(quotaToReserve) / oldMultiplier * multiplier,
+		))
+		if convertErr != nil {
+			return fmt.Errorf("dynamic pricing retry reservation is invalid: %w", convertErr)
+		}
+		if usesPerCallQuota {
+			info.PriceData.Quota = target
+		} else {
+			info.PriceData.QuotaToPreConsume = target
+		}
+		if info.Billing != nil {
+			if reserveErr := info.Billing.Reserve(target); reserveErr != nil {
+				return fmt.Errorf("dynamic pricing retry reservation failed: %w", reserveErr)
+			}
+			info.FinalPreConsumedQuota = info.Billing.GetPreConsumedQuota()
+		}
+	}
+	return nil
 }
 
 // applyDynamicPricingToQuota applies the captured dynamic multiplier to a

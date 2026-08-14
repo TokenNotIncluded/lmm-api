@@ -8,20 +8,21 @@
 //     failing over to a more expensive backup channel.
 //  2. CostEMA is updated from the measured upstream cost (USD per 1M tokens)
 //     with an exponential moving average (AlphaLoad).
-//  3. C = EffectiveCost(routeCost, CostEMA): the effective unit cost used as
-//     the anchor for the factor, including the configured cost-floor factor.
+//  3. C = EffectiveCost(max(routeCost, currentCost), CostEMA): the effective
+//     unit cost used as the anchor for the factor, including the configured
+//     cost-floor factor. The current measured cost is applied immediately.
 //  4. raw = RawLoad(...) measures how far the window exceeded the TPM/RPM /
 //     cost-rate targets; LoadEMA smooths it.
 //  5. heat = Heat(LoadEMA, deadzone, gamma) maps excess load to [0,1] with a
 //     deadzone (small fluctuations produce no heat) and a non-linear shaping
 //     exponent.
-//  6. target = DynamicMultiplier(C, basePrice, maxFactor, heat): the desired
-//     multiplier in [1, maxFactor], taking the larger of the cost floor and
-//     the supply-demand premium.
+//  6. target = DynamicMultiplier(C, basePrice, maxFactor, heat): the bounded
+//     demand target in [1, maxFactor].
 //  7. smoothed = NextMultiplier(...): an asymmetric EMA so the factor rises
 //     fast (AlphaUp) but falls slowly (AlphaDown).
-//  8. final = EnforceBounds(...): per-tick step clamps (MaxStepUp /
-//     MaxStepDown) and the absolute range [1, maxFactor].
+//  8. final = max(MinFactor, CostFloorMultiplier(...), EnforceBounds(...)).
+//     Step clamps and maxFactor apply only to the demand premium; known-cost
+//     and operator floors are immediate and may exceed that demand ceiling.
 //
 // Design: cost floor (the price never undercuts the upstream cost scaled by
 // CostFloorFactor) plus a supply-demand premium (excess load raises the
@@ -45,14 +46,17 @@ import (
 
 // ModelState holds the persistent per-model pricing state.
 //
-// The initial Factor is chosen by the caller (e.g. the setting's
-// CostFloorFactor) when the state is first created; the engine only evolves
-// it from there.
+// The initial Factor is chosen by the caller (normally MinFactor) when the
+// state is first created; the engine only evolves it from there.
 type ModelState struct {
-	LoadEMA   float64 // smoothed load (dimensionless; 1.0 == at target)
-	CostEMA   float64 // smoothed actual unit cost, USD per 1M tokens
-	Factor    float64 // current dynamic multiplier
-	UpdatedAt int64   // unix seconds of the last tick
+	LoadEMA            float64 // smoothed load (dimensionless; 1.0 == at target)
+	CostEMA            float64 // smoothed actual unit cost, USD per 1M tokens
+	Factor             float64 // current effective dynamic multiplier
+	CostFloor          float64 // immediate configured-cost floor multiplier
+	UnpricedTokens     float64 // latest-window tokens on channels without a cost
+	UnpricedRequests   float64 // latest-window requests on channels without a cost
+	HasUnpricedTraffic bool    // latest window contains traffic with unknown cost
+	UpdatedAt          int64   // unix seconds of the last tick
 }
 
 // TickInput carries the per-tick window measurements for one model.
@@ -66,7 +70,7 @@ type TickInput struct {
 	BackupCost             float64 // USD per 1M tokens of the failover route; 0 = unknown
 	WindowUnpricedTokens   float64 // traffic on channels without a configured cost
 	WindowUnpricedRequests float64 // requests on channels without a configured cost
-	BasePriceUSDPerMillion float64 // reference price used by the cost floor; 0 = 1.0
+	BasePriceUSDPerMillion float64 // positive reference price used by the cost floor
 	Now                    int64   // unix seconds of this tick
 }
 
@@ -103,6 +107,25 @@ func EffectiveCost(routeCost, costEMA, floorFactor float64) float64 {
 		floorFactor = 1
 	}
 	return anchor * floorFactor
+}
+
+// CostFloorMultiplier converts a conservative upstream unit cost into the
+// request multiplier needed to cover it, including the configured safety
+// margin. Unlike the load premium, this hard floor is not capped by
+// max_factor: a price ceiling must never force the selling price below known
+// cost. Invalid or unknown inputs return zero so callers can fail closed.
+func CostFloorMultiplier(unitCost, basePrice, floorFactor float64) float64 {
+	if !isFinitePositive(unitCost) || !isFinitePositive(basePrice) {
+		return 0
+	}
+	if !isFinitePositive(floorFactor) || floorFactor < 1 {
+		floorFactor = 1
+	}
+	floor := unitCost * floorFactor / basePrice
+	if !isFinitePositive(floor) {
+		return 0
+	}
+	return math.Max(1, floor)
 }
 
 // RawLoad measures how far the window exceeded the configured targets,
@@ -240,14 +263,26 @@ func ClampState(state *ModelState, maxFactor float64) {
 	if !isFinite(state.CostEMA) || state.CostEMA < 0 {
 		state.CostEMA = 0
 	}
+	if !isFinite(state.CostFloor) || state.CostFloor < 0 {
+		state.CostFloor = 0
+	}
+	if !isFinite(state.UnpricedTokens) || state.UnpricedTokens < 0 {
+		state.UnpricedTokens = 0
+	}
+	if !isFinite(state.UnpricedRequests) || state.UnpricedRequests < 0 {
+		state.UnpricedRequests = 0
+	}
 	if !isFinitePositive(maxFactor) || maxFactor < 1 {
 		maxFactor = 1
 	}
 	if !isFinite(state.Factor) || state.Factor < 1 {
 		state.Factor = 1
 	}
-	if state.Factor > maxFactor {
-		state.Factor = maxFactor
+	// max_factor caps only the demand premium. A known-cost floor may
+	// legitimately exceed it and must survive Redis restoration.
+	upperBound := math.Max(maxFactor, state.CostFloor)
+	if state.Factor > upperBound {
+		state.Factor = upperBound
 	}
 }
 
@@ -282,22 +317,35 @@ func NextMultiplier(prev float64, target float64, alphaUp, alphaDown float64) fl
 // it passes. If the raw load exceeds 1.0 the caller may log a warning; the
 // engine only computes.
 //
-// No-cost-signal ticks with non-zero unpriced traffic reset to the base price:
-// the model has traffic but no trustworthy cost anchor. A genuinely idle
-// model, by contrast, follows the decay path below so stale high factors do
-// not survive zero-traffic windows indefinitely.
+// No-cost-signal ticks with non-zero unpriced traffic reset the engine state
+// to MinFactor: the model has traffic but no trustworthy cost anchor. The
+// strict request path separately blocks that selected channel before spend.
+// A genuinely idle model follows the decay path below so stale high factors
+// do not survive zero-traffic windows indefinitely.
 func Tick(state *ModelState, in TickInput, s dynamic_pricing_setting.DynamicPricingSetting) float64 {
 	if state == nil {
 		return 1.0
 	}
 	if err := s.Validate(); err != nil {
+		minimum := 1.0
+		if isFinitePositive(s.MinFactor) && s.MinFactor >= 1 {
+			minimum = s.MinFactor
+		}
 		state.LoadEMA = 0
 		state.CostEMA = 0
-		state.Factor = 1.0
+		state.CostFloor = 0
+		state.UnpricedTokens = in.WindowUnpricedTokens
+		state.UnpricedRequests = in.WindowUnpricedRequests
+		state.HasUnpricedTraffic = in.WindowUnpricedTokens > 0 || in.WindowUnpricedRequests > 0
+		state.Factor = minimum
 		state.UpdatedAt = in.Now
-		return 1.0
+		return minimum
 	}
 	ClampState(state, s.MaxFactor)
+	minimum := s.MinFactor
+	state.UnpricedTokens = math.Max(0, in.WindowUnpricedTokens)
+	state.UnpricedRequests = math.Max(0, in.WindowUnpricedRequests)
+	state.HasUnpricedTraffic = state.UnpricedTokens > 0 || state.UnpricedRequests > 0
 
 	// No traffic is an explicit zero-load sample. Decay both EMAs and the
 	// factor toward the neutral price, subject to the same downward step clamp
@@ -307,9 +355,14 @@ func Tick(state *ModelState, in TickInput, s dynamic_pricing_setting.DynamicPric
 		in.WindowUnpricedTokens <= 0 && in.WindowUnpricedRequests <= 0 {
 		state.LoadEMA = UpdateLoadEMA(state.LoadEMA, 0, s.AlphaLoad)
 		state.CostEMA = UpdateLoadEMA(state.CostEMA, 0, s.AlphaLoad)
-		smoothed := NextMultiplier(state.Factor, 1.0, s.AlphaUp, s.AlphaDown)
+		state.CostFloor = 0
+		state.HasUnpricedTraffic = false
+		state.UnpricedTokens = 0
+		state.UnpricedRequests = 0
+		smoothed := NextMultiplier(state.Factor, minimum, s.AlphaUp, s.AlphaDown)
 		state.Factor = EnforceBounds(smoothed, state.Factor, 1.0, s.CostFloorFactor,
 			s.MaxFactor, s.MaxStepUp, s.MaxStepDown)
+		state.Factor = math.Max(minimum, state.Factor)
 		state.UpdatedAt = in.Now
 		return state.Factor
 	}
@@ -319,9 +372,10 @@ func Tick(state *ModelState, in TickInput, s dynamic_pricing_setting.DynamicPric
 	// are unpriced.
 	if in.CheapCost <= 0 && in.BackupCost <= 0 && in.WindowUpstreamCostUSD <= 0 {
 		state.CostEMA = 0
-		state.Factor = 1.0
+		state.CostFloor = 0
+		state.Factor = minimum
 		state.UpdatedAt = in.Now
-		return 1.0
+		return minimum
 	}
 
 	// Defensive cold-start guard: a Factor <= 0 would make NextMultiplier
@@ -331,7 +385,7 @@ func Tick(state *ModelState, in TickInput, s dynamic_pricing_setting.DynamicPric
 	// seeds fresh states with Factor 1.0; this guard covers pure-function
 	// callers that pass an empty ModelState.)
 	if state.Factor <= 0 {
-		state.Factor = 1.0
+		state.Factor = minimum
 	}
 
 	// (a,b) expected upstream cost given failover routing.
@@ -347,8 +401,15 @@ func Tick(state *ModelState, in TickInput, s dynamic_pricing_setting.DynamicPric
 		state.CostEMA = UpdateLoadEMA(state.CostEMA, actualUnitCost, s.AlphaLoad)
 	}
 
-	// (e) effective cost: never below the smoothed actual upstream cost.
-	C := EffectiveCost(routeCost, state.CostEMA, s.CostFloorFactor)
+	// (e) effective cost: include the current window's actual unit cost
+	// immediately. Cost increases must not wait for EMA or step-up convergence.
+	currentCost := math.Max(routeCost, actualUnitCost)
+	C := EffectiveCost(currentCost, state.CostEMA, s.CostFloorFactor)
+	state.CostFloor = CostFloorMultiplier(
+		math.Max(currentCost, state.CostEMA),
+		in.BasePriceUSDPerMillion,
+		s.CostFloorFactor,
+	)
 
 	// (f) load vs targets, smoothed.
 	raw := RawLoad(in.WindowTokens, in.WindowRequests, in.WindowUpstreamCostUSD,
@@ -363,6 +424,10 @@ func Tick(state *ModelState, in TickInput, s dynamic_pricing_setting.DynamicPric
 	smoothed := NextMultiplier(state.Factor, target, s.AlphaUp, s.AlphaDown)
 	final := EnforceBounds(smoothed, state.Factor, C, s.CostFloorFactor,
 		s.MaxFactor, s.MaxStepUp, s.MaxStepDown)
+	// Financial safety floors are immediate and intentionally override both
+	// smoothing/step clamps and max_factor. Only the demand premium is bounded.
+	final = math.Max(final, minimum)
+	final = math.Max(final, state.CostFloor)
 
 	// (k) persist and return.
 	state.Factor = final

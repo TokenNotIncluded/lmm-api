@@ -111,6 +111,60 @@ func TestGetMultiplierRespectsEnabledSetting(t *testing.T) {
 	}
 }
 
+func TestGetMultiplierHonorsConfiguredMinimum(t *testing.T) {
+	disableRedis(t)
+	resetStatesForTest()
+	setDynamicPricingEnabledForTest(t, true)
+	cfg := config.GlobalConfig.Get("dynamic_pricing_setting").(*dynamic_pricing_setting.DynamicPricingSetting)
+	cfg.MinFactor = 1.4
+
+	if got := GetMultiplier("missing-model"); !approxEqual(got, 1.4, eps) {
+		t.Fatalf("GetMultiplier(missing) = %v, want minimum 1.4", got)
+	}
+	SetState("low-state", &ModelState{Factor: 1.1})
+	if got := GetMultiplier("low-state"); !approxEqual(got, 1.4, eps) {
+		t.Fatalf("GetMultiplier(low state) = %v, want minimum 1.4", got)
+	}
+}
+
+func TestGetRequestMultiplierAppliesImmediateChannelCostFloor(t *testing.T) {
+	disableRedis(t)
+	resetStatesForTest()
+	setDynamicPricingEnabledForTest(t, true)
+	cfg := config.GlobalConfig.Get("dynamic_pricing_setting").(*dynamic_pricing_setting.DynamicPricingSetting)
+	cfg.MinFactor = 1.25
+	cfg.RequireChannelCost = true
+	cfg.BasePriceUSDPerMillion = 1
+	cfg.CostFloorFactor = 1.2
+	cfg.ChannelCosts = map[string]float64{"7": 5}
+	SetState("costly-model", &ModelState{Factor: 1.5})
+
+	factor, floor, err := GetRequestMultiplier("costly-model", 7)
+	if err != nil {
+		t.Fatalf("GetRequestMultiplier returned error: %v", err)
+	}
+	if !approxEqual(floor, 6, eps) || !approxEqual(factor, 6, eps) {
+		t.Fatalf("GetRequestMultiplier = (factor=%v, floor=%v), want (6, 6)", factor, floor)
+	}
+	if factor <= cfg.MaxFactor {
+		t.Fatalf("request cost floor %v must override max_factor %v", factor, cfg.MaxFactor)
+	}
+}
+
+func TestGetRequestMultiplierFailsClosedOnUnknownChannelCost(t *testing.T) {
+	disableRedis(t)
+	resetStatesForTest()
+	setDynamicPricingEnabledForTest(t, true)
+	cfg := config.GlobalConfig.Get("dynamic_pricing_setting").(*dynamic_pricing_setting.DynamicPricingSetting)
+	cfg.MinFactor = 1
+	cfg.RequireChannelCost = true
+	cfg.ChannelCosts = map[string]float64{"7": 1}
+
+	if _, _, err := GetRequestMultiplier("model", 8); err == nil {
+		t.Fatal("unknown channel cost must fail closed")
+	}
+}
+
 func TestLoadFromRedisUnavailable(t *testing.T) {
 	disableRedis(t)
 	if st, ok := LoadFromRedis("any-model"); ok || st != nil {

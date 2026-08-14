@@ -90,6 +90,12 @@ func TestValidateRejectsUnsafePricingControls(t *testing.T) {
 		name   string
 		mutate func(*DynamicPricingSetting)
 	}{
+		{"minimum below one", func(s *DynamicPricingSetting) { s.MinFactor = 0.99 }},
+		{"minimum above maximum", func(s *DynamicPricingSetting) { s.MinFactor = s.MaxFactor + 1 }},
+		{"unknown cost fail-closed disabled", func(s *DynamicPricingSetting) {
+			s.Enabled = true
+			s.RequireChannelCost = false
+		}},
 		{"max factor NaN", func(s *DynamicPricingSetting) { s.MaxFactor = math.NaN() }},
 		{"alpha out of range", func(s *DynamicPricingSetting) { s.AlphaLoad = 1.1 }},
 		{"step below zero", func(s *DynamicPricingSetting) { s.MaxStepDown = -0.1 }},
@@ -106,5 +112,31 @@ func TestValidateRejectsUnsafePricingControls(t *testing.T) {
 				t.Fatal("Validate returned nil for unsafe setting")
 			}
 		})
+	}
+}
+
+func TestValidateOptionValuesValidatesCombinedEnableUpdate(t *testing.T) {
+	saveSettingSnapshot(t)
+	dynamicPricingSetting.Enabled = false
+	dynamicPricingSetting.ChannelCosts = map[string]float64{}
+
+	err := ValidateOptionValues(map[string]string{
+		"dynamic_pricing_setting.enabled":       "true",
+		"dynamic_pricing_setting.min_factor":    "1.25",
+		"dynamic_pricing_setting.channel_costs": `{"7":2.5}`,
+	})
+	if err != nil {
+		t.Fatalf("combined valid option update failed: %v", err)
+	}
+	if dynamicPricingSetting.Enabled || len(dynamicPricingSetting.ChannelCosts) != 0 {
+		t.Fatal("validation must not mutate the live setting")
+	}
+}
+
+func TestValidateOptionValuesRejectsMalformedValue(t *testing.T) {
+	if err := ValidateOptionValues(map[string]string{
+		"dynamic_pricing_setting.min_factor": "not-a-number",
+	}); err == nil {
+		t.Fatal("malformed numeric option must be rejected")
 	}
 }
