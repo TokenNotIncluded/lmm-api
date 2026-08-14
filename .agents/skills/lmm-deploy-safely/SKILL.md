@@ -1,6 +1,6 @@
 ---
 name: lmm-deploy-safely
-description: Safely inspect, stage, back up, deploy, update, confirm, roll back, or clean up this LMM repository across the local Arch workstation, isolated test hosts, and production. Use for local installation, production updates, AUR or paru packaging, systemd service changes, backup verification, release promotion, rollback timers, or deployment cleanup. Defaults to local-only work and requires explicit current-turn authorization plus exact host and role verification for test or production mutations.
+description: Safely inspect, stage, back up, deploy, update, confirm, roll back, or clean up this LMM repository across the local Arch workstation, isolated test hosts, and production. Use for local installation, signed core/provider or independent web AUR releases, paru updates, systemd service changes, backup verification, release promotion, rollback timers, memory/state-budget checks, or deployment cleanup. Defaults to local-only work and requires explicit current-turn authorization plus exact host and role verification for test or production mutations.
 ---
 
 # LMM Safe Deployment
@@ -312,6 +312,33 @@ The `paru` path does not weaken the rollback/watchdog or exact-release checks.
 The two packages are live, but `paru` alone is not a deployment transaction.
 The migration gate, watchdog, exact-release confirmation and rollback package
 remain mandatory around every production activation.
+
+Before creating a tag or touching AUR, reconcile the release workflow tag
+pattern and artifact names with the `_release_tag`/source URLs in every changed
+`PKGBUILD`, tracked `.SRCINFO`, `packaging/aur/README.md`, and the Sigstore
+workflow identity from the same frozen commit. A `vX.Y.Z` workflow cannot
+satisfy a `web-vX.Y.Z` source (or the reverse) without an explicit matching
+asset; treat that mismatch as a hard `STOP` rather than inventing a tag,
+reusing an old archive, or bypassing verification.
+
+## Bound deployment state and build memory
+
+Treat `${XDG_STATE_HOME:-$HOME/.local/state}/lmm-api` and any deployment-side
+alias such as `states/api.lmm.best` as bounded operational state, not a dump for
+artifacts or application history. Before a build and after every terminal
+cleanup, measure it with `du -sx --bytes`; warn at `256 MiB` and stop new builds
+at `512 MiB` (or earlier when the filesystem gate is yellow). Keep only the
+marker and final status in terminal deployment workspaces. Remove disposable
+`artifacts`, `staging`, `tmp`, Bun/Go/Cargo caches, `node_modules`, `dist`, and
+package archives by exact marker-owned path after `CONFIRMED`, `ROLLED_BACK`,
+`VALIDATED`, or `ABORTED`.
+
+Never delete conversation/history state, PostgreSQL/Valkey data, active release
+trees, backups, or another deployment's workspace to satisfy this budget. If a
+state directory is larger than expected, report its top-level owners and stop;
+do not use `rm -rf`, a wildcard, or a broad `/tmp` cleanup. Keep one heavy build
+active, cap Go/Bun/Cargo concurrency, and re-run the memory/resource baseline
+before resuming.
 
 ## Keep backups optional
 

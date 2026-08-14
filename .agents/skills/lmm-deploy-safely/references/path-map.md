@@ -8,7 +8,7 @@ for deployment phases and verify systemd uses `/usr/bin/lmm-api serve`.
 
 | Purpose | Current path or entry point |
 | --- | --- |
-| Go artifact | `apps/api-go/out/lmm-api` |
+| Go artifact | `apps/api-go/out/lmm-api-go` |
 | Rust artifacts | `apps/api-rust/target/release/lmm-api-rs`, `lmm-db-migrate` |
 | Frontend build | `apps/web/dist` |
 | Go AUR recipe | `packaging/aur/lmm-api-go-bin` |
@@ -17,9 +17,11 @@ for deployment phases and verify systemd uses `/usr/bin/lmm-api serve`.
 | Durable controller backups | `$HOME/backup/lmm-api/<verified-host>/<deployment-id>` |
 | Read-only production pressure report | `.agents/skills/lmm-deploy-safely/scripts/resource-pressure-report.sh` |
 
-The local split package installs frontend files at
-`/usr/share/lmm-api/frontend-dist`. Deployment publishes immutable frontend
-releases through the installed CLI transaction.
+The direct Go package installs its bundled fallback frontend at
+`/usr/share/lmm-api-go/frontend-dist`; the independent web package publishes
+the active immutable tree under `/srv/lmm-api-frontend`. Read the installed
+package owner and release identity before choosing either path; never mix a
+bundled fallback with an independent frontend release.
 
 ## Historical parity oracle input
 
@@ -169,7 +171,15 @@ active release, latest-known-good snapshot, and any unconfirmed transaction.
 | database cutover | `/var/lib/lmm-api-cutover`, `/var/log/lmm-api-cutover` |
 
 These older mechanisms have independent retention. Do not broaden cleanup to
-`/tmp`, backup roots, release roots, or another deployment's workspace.
+`/tmp`, backup roots, release roots, application history, or another
+deployment's workspace.
+
+The controller state root is
+`${XDG_STATE_HOME:-$HOME/.local/state}/lmm-api`; a deployment-side directory
+named `states/api.lmm.best` is subject to the same marker and size rules. Keep
+only terminal markers/status files plus active operational state. Warn at
+256 MiB and stop new builds at 512 MiB or earlier when the filesystem gate is
+yellow; measure with `du -sx --bytes` before pruning exact terminal workspaces.
 
 ## Temporary-path findings
 

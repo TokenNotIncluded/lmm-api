@@ -7,6 +7,10 @@
 - Verify the expected SSH alias, static hostname, role marker, service name,
   installed package identity, current backend artifact, frontend symlink, and
   installed CLI protocol/service entry point.
+- Classify the installed layout before invoking a command: direct Go provider
+  (`lmm-api-go*` owns `/usr/bin/lmm-api` and the bundled frontend) or guarded
+  core/provider (`lmm-api-bin`/`lmm-api-git` owns the launcher). Never mix their
+  paths, package identities, rollback archives, or state roots.
 - Treat host or role disagreement as a stop condition.
 - Preserve the repository's one-branch, one-worktree, one-diff rules. A deploy
   request does not authorize Git repair, branch switching, commit, or push.
@@ -23,6 +27,36 @@
 - Build once. Record and verify the same artifact SHA-256 at every promotion
   boundary.
 - Never overwrite an existing immutable release with different bytes.
+- Serialize heavy builds on the small controller (`GOMAXPROCS=2`, Go package
+  parallelism `2`, Cargo jobs `2`) unless fresh resource evidence justifies a
+  higher limit. Keep all caches in the marker-owned workspace.
+
+### Bounded state
+
+- Treat `${XDG_STATE_HOME:-$HOME/.local/state}/lmm-api` and any deployment-side
+  alias such as `states/api.lmm.best` as bounded operational state. Measure the
+  resolved root with `du -sx --bytes` before a build and after terminal cleanup.
+- Warn at `256 MiB`; stop new builds at `512 MiB` or earlier when the storage
+  gate is yellow. Keep only the marker/status in terminal workspaces and remove
+  exact `staging`, `tmp`, build-cache, `node_modules`, `dist`, and package
+  archive children after `CONFIRMED` or `ROLLED_BACK`.
+- Never prune application history, PostgreSQL/Valkey data, active releases,
+  backups, or another deployment's workspace to satisfy the budget. A large or
+  unexplained state root is a stop-and-report condition, not permission for a
+  broad deletion.
+
+### Release and AUR identity
+
+- Reconcile the release workflow tag pattern, artifact names, each changed
+  `PKGBUILD`/`.SRCINFO` source URL, Sigstore identity, and
+  `packaging/aur/README.md` from one frozen revision before publishing.
+- A `vX.Y.Z` workflow cannot satisfy a `web-vX.Y.Z` AUR source (or the reverse)
+  without an explicit compatibility/release asset. Treat that mismatch as a
+  hard stop; never retag, reuse, or hand-edit around it.
+- Push package metadata only to the matching AUR repository. Production
+  `paru` runs as the established unprivileged operator, never root, and may
+  update only the exact verified package set. A plain `paru` invocation never
+  replaces the watchdog, confirmation, or health gates.
 
 ### Production resource gates
 
@@ -135,6 +169,8 @@ Canonical roots are fixed:
 - durable controller copy: `$HOME/backup/lmm-api/<verified-host>/<deployment-id>`;
 - production target workspace: `/var/lib/lmm-api-go/deploy-work/<deployment-id>`
   (resolved private state is below `/var/lib/private/lmm-api-go`);
+- guarded core target workspace: `/var/lib/lmm-api/deploy-work/<deployment-id>`
+  when the installed core contract selects the guarded layout;
 - production target backup: `/var/lib/lmm-api-go/deploy-backups/<deployment-id>`;
 - off-host copy: `/home/arch/.local/state/lmm-api-production-backups/<deployment-id>`
   on the ArchCzy host through SSH alias `archczy`.
@@ -216,10 +252,15 @@ green.
 - Re-run disk/inode/RAM/swap, service state, PostgreSQL/Valkey readiness, and
   native CLI status/livez checks after cleanup; record exact paths removed and
   the remaining free-space margin.
+- Re-run the bounded-state measurement after cleanup and record the remaining
+  bytes. Do not report success if the state root still exceeds the warning
+  budget without an owner and an explicit follow-up.
 
 ## Minimum validation before production enablement
 
 - Skill validation and shell syntax checks pass.
+- Release workflow, AUR source tags, package identities, and Sigstore
+  identities are mutually consistent for the exact frozen revision.
 - Offline tests cover safe IDs and paths, host mismatch, database disagreement,
   optional-backup selection and verification, timer
   arming, exact-release confirmation, expiry rollback, reboot recovery, and
