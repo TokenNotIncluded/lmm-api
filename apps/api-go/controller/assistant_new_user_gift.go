@@ -93,11 +93,21 @@ func executeAssistantNewUserGiftTool(c *gin.Context, userID int, input map[strin
 		c.ClientIP(),
 	)
 	if err != nil {
+		reasonCode := model.AssistantGiftErrorCode(err)
 		switch {
 		case errors.Is(err, model.ErrAssistantGiftIneligible), errors.Is(err, model.ErrAssistantGiftAbuse):
-			return map[string]any{"ok": false, "status": "ineligible", "error": "this account is not eligible for a new-user gift"}
+			if reasonCode == "" {
+				reasonCode = "ineligible"
+			}
+			return map[string]any{"ok": false, "status": "ineligible", "reason_code": reasonCode, "error": "this account is not eligible for a new-user gift"}
 		case errors.Is(err, model.ErrAssistantGiftInvalid):
-			return map[string]any{"ok": false, "status": "more_conversation_needed", "error": "the one-time gift decision needs at least two substantive user turns"}
+			if reasonCode == "" {
+				reasonCode = "invalid_decision"
+			}
+			if reasonCode == "insufficient_conversation" {
+				return map[string]any{"ok": false, "status": "more_conversation_needed", "reason_code": reasonCode, "error": "continue the conversation with at least two substantive user turns before evaluating the one-time gift"}
+			}
+			return map[string]any{"ok": false, "status": "invalid_decision", "reason_code": reasonCode, "error": "the one-time gift decision was invalid"}
 		default:
 			return map[string]any{"ok": false, "status": "unavailable", "error": "the gift decision could not be saved"}
 		}

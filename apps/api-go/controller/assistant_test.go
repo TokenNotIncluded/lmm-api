@@ -1969,6 +1969,19 @@ func TestAssistantGiftRequestUsesOneTimeDecisionToolForL1(t *testing.T) {
 	assert.Equal(t, "prepare_new_user_gift", assistantNamedToolChoiceName(assistantToolChoiceForAgentStep(context, map[string]bool{}, map[string]bool{})))
 }
 
+func TestAssistantExplicitHumanHandoffUsesConfirmationTool(t *testing.T) {
+	context := assistantUserContext{
+		AccessLevel:       "L1",
+		LatestUserRequest: "帮我整理一段说明，提交人工客服核查",
+	}
+	assert.True(t, assistantHumanSupportRequest(context.LatestUserRequest))
+	assert.True(t, assistantHumanSupportWorkflowRequired(context))
+	assert.Equal(t, 2, assistantHumanSupportWorkflowMinSteps(context))
+	assert.Equal(t, "request_human_support", assistantNamedToolChoiceName(assistantToolChoiceForContext(context)))
+	assert.Equal(t, "request_human_support", assistantNamedToolChoiceName(assistantToolChoiceForAgentStep(context, map[string]bool{}, map[string]bool{})))
+	assert.False(t, assistantHumanSupportRequest("客服入口在哪里？"))
+}
+
 func TestAssistantSetupToolShellQuotesConfiguredValues(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Ability{}, &model.TopUp{}))

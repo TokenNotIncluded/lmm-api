@@ -28,6 +28,40 @@ var (
 	ErrAssistantGiftAbuse       = errors.New("new-user assistant gift risk limit reached")
 )
 
+// AssistantGiftError preserves the coarse sentinel used by callers while
+// attaching a safe, non-identifying reason for UI/support. The code never
+// includes an email, IP, account age, or another user's state.
+type AssistantGiftError struct {
+	Code  string
+	Cause error
+}
+
+func (err *AssistantGiftError) Error() string {
+	if err == nil || err.Cause == nil {
+		return "new-user assistant gift decision failed"
+	}
+	return err.Cause.Error()
+}
+
+func (err *AssistantGiftError) Unwrap() error {
+	if err == nil {
+		return nil
+	}
+	return err.Cause
+}
+
+func assistantGiftError(code string, cause error) error {
+	return &AssistantGiftError{Code: code, Cause: cause}
+}
+
+func AssistantGiftErrorCode(err error) string {
+	var giftErr *AssistantGiftError
+	if errors.As(err, &giftErr) && giftErr != nil {
+		return giftErr.Code
+	}
+	return ""
+}
+
 const (
 	assistantGiftRiskIdentity = "identity"
 	assistantGiftRiskNetwork  = "network"
@@ -83,12 +117,19 @@ func GetAssistantNewUserGift(userID int) (*AssistantNewUserGift, error) {
 // not accepted from a browser. The database uniqueness constraint is the
 // final race boundary across retries and instances.
 func DecideAssistantNewUserGift(userID int, conversationID int64, amountCents int, reason string, substantiveTurns int, substantiveRunes int, clientIP string) (*AssistantNewUserGift, bool, error) {
-	if userID <= 0 || conversationID < 0 || amountCents < 0 || amountCents > assistantGiftMaxCents || substantiveTurns < 2 || substantiveRunes < 24 {
-		return nil, false, ErrAssistantGiftInvalid
+	if userID <= 0 || conversationID < 0 || amountCents < 0 || amountCents > assistantGiftMaxCents {
+		return nil, false, assistantGiftError("invalid_decision", ErrAssistantGiftInvalid)
+	}
+	// The controller counts each user turn only when it has at least four
+	// runes. Requiring two such turns is the actual product rule; a second
+	// language-dependent total-rune threshold would reject concise but valid
+	// conversations (for example, short Chinese project descriptions).
+	if substantiveTurns < 2 || substantiveRunes < 8 {
+		return nil, false, assistantGiftError("insufficient_conversation", ErrAssistantGiftInvalid)
 	}
 	reason = strings.TrimSpace(redactAssistantHandoffMessage(reason))
 	if len([]rune(reason)) < 2 || len([]rune(reason)) > 240 {
-		return nil, false, ErrAssistantGiftInvalid
+		return nil, false, assistantGiftError("invalid_decision", ErrAssistantGiftInvalid)
 	}
 
 	if existing, err := GetAssistantNewUserGift(userID); err != nil || existing != nil {
@@ -100,16 +141,16 @@ func DecideAssistantNewUserGift(userID int, conversationID int64, amountCents in
 		return nil, false, err
 	}
 	if user.Role != common.RoleCommonUser || user.Status != common.UserStatusEnabled || strings.TrimSpace(user.Email) == "" || IsDisposableEmail(user.Email) {
-		return nil, false, ErrAssistantGiftIneligible
+		return nil, false, assistantGiftError("account_not_eligible", ErrAssistantGiftIneligible)
 	}
 	identityHash, networkHash, err := assistantGiftRiskKeys(user.Email, clientIP)
 	if err != nil {
-		return nil, false, ErrAssistantGiftIneligible
+		return nil, false, assistantGiftError("risk_check_unavailable", ErrAssistantGiftIneligible)
 	}
 
 	quota := int(math.Round(float64(amountCents) * common.QuotaPerUnit / 100))
 	if quota < 0 || (amountCents > 0 && quota <= 0) {
-		return nil, false, ErrAssistantGiftInvalid
+		return nil, false, assistantGiftError("invalid_decision", ErrAssistantGiftInvalid)
 	}
 	status := AssistantGiftOffered
 	if amountCents == 0 {
@@ -140,9 +181,15 @@ func DecideAssistantNewUserGift(userID int, conversationID int64, amountCents in
 		}
 		nowTimestamp := common.GetTimestamp()
 		if err := reserveAssistantGiftRisk(tx, identityHash, assistantGiftRiskIdentity, nowTimestamp, 1, 0); err != nil {
+			if errors.Is(err, ErrAssistantGiftAbuse) {
+				return assistantGiftError("identity_already_used", err)
+			}
 			return err
 		}
 		if err := reserveAssistantGiftRisk(tx, networkHash, assistantGiftRiskNetwork, nowTimestamp, assistantGiftIPLimit, int64(assistantGiftRiskAge/time.Second)); err != nil {
+			if errors.Is(err, ErrAssistantGiftAbuse) {
+				return assistantGiftError("network_limit_reached", err)
+			}
 			return err
 		}
 		if err := tx.Create(&gift).Error; err != nil {

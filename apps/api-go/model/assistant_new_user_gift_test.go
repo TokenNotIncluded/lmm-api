@@ -99,10 +99,20 @@ func TestAssistantNewUserGiftRejectsIneligibleOrShallowDecisions(t *testing.T) {
 	user := newAssistantGiftUser(t, db, "shallow-gift-user", "shallow@example.com")
 	_, _, err := DecideAssistantNewUserGift(user.Id, 0, 100, "Too early.", 1, 100, "198.51.100.20")
 	assert.ErrorIs(t, err, ErrAssistantGiftInvalid)
+	assert.Equal(t, "insufficient_conversation", AssistantGiftErrorCode(err))
+
+	concise := newAssistantGiftUser(t, db, "concise-gift-user", "concise@example.com")
+	// Two substantive turns are sufficient even when the language uses fewer
+	// than the old, arbitrary 24-rune aggregate threshold.
+	gift, created, err := DecideAssistantNewUserGift(concise.Id, 1, 100, "软件开发与编程辅助。", 2, 23, "198.51.100.23")
+	require.NoError(t, err)
+	assert.True(t, created)
+	assert.Equal(t, AssistantGiftOffered, gift.Status)
 
 	disposable := newAssistantGiftUser(t, db, "disposable-gift-user", "disposable@mailinator.com")
 	_, _, err = DecideAssistantNewUserGift(disposable.Id, 0, 100, "Disposable accounts are not rewarded.", 2, 40, "198.51.100.21")
 	assert.ErrorIs(t, err, ErrAssistantGiftIneligible)
+	assert.Equal(t, "account_not_eligible", AssistantGiftErrorCode(err))
 
 	zero, created, err := DecideAssistantNewUserGift(user.Id, 0, 0, "No gift was earned in this conversation.", 2, 40, "198.51.100.20")
 	require.NoError(t, err)
@@ -121,6 +131,7 @@ func TestAssistantGiftGlobalRiskMemoryBlocksAliasesAndBulkNetworks(t *testing.T)
 	require.NoError(t, err)
 	_, _, err = DecideAssistantNewUserGift(alias.Id, 2, 100, "The same mailbox under another alias.", 2, 40, "203.0.113.11")
 	assert.ErrorIs(t, err, ErrAssistantGiftAbuse)
+	assert.Equal(t, "identity_already_used", AssistantGiftErrorCode(err))
 
 	for index := 0; index < assistantGiftIPLimit; index++ {
 		user := newAssistantGiftUser(t, db, fmt.Sprintf("gift-network-%d", index), fmt.Sprintf("network-%d@example.com", index))
@@ -130,6 +141,7 @@ func TestAssistantGiftGlobalRiskMemoryBlocksAliasesAndBulkNetworks(t *testing.T)
 	blocked := newAssistantGiftUser(t, db, "gift-network-blocked", "network-blocked@example.com")
 	_, _, err = DecideAssistantNewUserGift(blocked.Id, 20, 100, "A fourth decision from one network.", 2, 40, "203.0.113.20")
 	assert.ErrorIs(t, err, ErrAssistantGiftAbuse)
+	assert.Equal(t, "network_limit_reached", AssistantGiftErrorCode(err))
 
 	var memories []AssistantGiftRiskMemory
 	require.NoError(t, db.Find(&memories).Error)

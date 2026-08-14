@@ -631,6 +631,8 @@ func assistantToolChoiceForContext(userContext assistantUserContext) any {
 	name := ""
 	if userContext.ConversationTitleNeeded {
 		name = "set_conversation_title"
+	} else if assistantHumanSupportRequest(userContext.LatestUserRequest) {
+		name = "request_human_support"
 	} else if assistantPublicActivityQuestion(userContext.LatestUserRequest) {
 		name = "get_service_facts"
 	} else if assistantNewUserGiftRequest(userContext.LatestUserRequest) {
@@ -667,6 +669,19 @@ func assistantToolChoiceForContext(userContext assistantUserContext) any {
 		}
 	}
 	return "auto"
+}
+
+// assistantHumanSupportRequest distinguishes an explicit handoff request from
+// a general question about where support lives. The former must prepare the
+// confirmation-gated handoff tool so the assistant cannot merely draft prose;
+// the latter can still receive ordinary navigation guidance.
+func assistantHumanSupportRequest(text string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(text))
+	return assistantTextContainsAny(normalized,
+		"提交人工客服", "提交工单", "人工核查", "转人工", "联系管理员处理", "请管理员处理",
+		"submit a support ticket", "submit to support", "request human support", "human review",
+		"contact an administrator", "send this to support",
+	)
 }
 
 func assistantPublicActivityQuestion(text string) bool {
@@ -749,6 +764,22 @@ func assistantPublicActivityWorkflowRequired(userContext assistantUserContext) b
 func assistantNewUserGiftWorkflowRequired(userContext assistantUserContext) bool {
 	return assistantNewUserGiftRequest(userContext.LatestUserRequest) &&
 		assistantNewUserGiftToolAllowed(userContext)
+}
+
+func assistantHumanSupportWorkflowRequired(userContext assistantUserContext) bool {
+	return assistantHumanSupportRequest(userContext.LatestUserRequest) &&
+		assistantToolAllowedForContext("request_human_support", userContext)
+}
+
+func assistantHumanSupportWorkflowMinSteps(userContext assistantUserContext) int {
+	if !assistantHumanSupportWorkflowRequired(userContext) {
+		return 0
+	}
+	steps := 2 // prepare a confirmation card, then answer
+	if userContext.ConversationTitleNeeded {
+		steps++
+	}
+	return steps
 }
 
 func assistantLiveActivityWorkflowMinSteps(userContext assistantUserContext) int {
@@ -835,6 +866,12 @@ func assistantToolChoiceForAgentStep(userContext assistantUserContext, calledToo
 		}
 		if !calledTools["request_create_key"] {
 			return assistantNamedToolChoice("request_create_key")
+		}
+		return "none"
+	}
+	if assistantHumanSupportWorkflowRequired(userContext) {
+		if !calledTools["request_human_support"] {
+			return assistantNamedToolChoice("request_human_support")
 		}
 		return "none"
 	}
@@ -1171,6 +1208,7 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 	forceImageGenerationWorkflow := assistantImageGenerationWorkflowRequired(userContext)
 	forcePublicActivityWorkflow := assistantPublicActivityWorkflowRequired(userContext)
 	forceNewUserGiftWorkflow := assistantNewUserGiftWorkflowRequired(userContext)
+	forceHumanSupportWorkflow := assistantHumanSupportWorkflowRequired(userContext)
 	forceReadChain := assistantLiveReadRequired(userContext)
 	if forceL0Assessment && maxSteps < 2 {
 		maxSteps = 2
@@ -1187,17 +1225,20 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 	if minimum := assistantLiveActivityWorkflowMinSteps(userContext); maxSteps < minimum {
 		maxSteps = minimum
 	}
+	if minimum := assistantHumanSupportWorkflowMinSteps(userContext); maxSteps < minimum {
+		maxSteps = minimum
+	}
 	if minimum := assistantReadChainSteps(userContext); maxSteps < minimum {
 		maxSteps = minimum
 	}
 	if !settings.AgentLoopEnabled {
-		if !forceL0Assessment && !forceRecommendationWorkflow && !forceCreateKeyWorkflow && !forceImageGenerationWorkflow && !forcePublicActivityWorkflow && !forceNewUserGiftWorkflow && !forceReadChain {
+		if !forceL0Assessment && !forceRecommendationWorkflow && !forceCreateKeyWorkflow && !forceImageGenerationWorkflow && !forcePublicActivityWorkflow && !forceNewUserGiftWorkflow && !forceHumanSupportWorkflow && !forceReadChain {
 			maxSteps = 1
 		}
 	}
 	cacheKey := c.GetString("assistant_cache_key")
 	usedCacheSensitiveTool := false
-	agentEnabled := maxSteps > 1 && (settings.AgentLoopEnabled || forceL0Assessment || forceRecommendationWorkflow || forceCreateKeyWorkflow || forceImageGenerationWorkflow || forcePublicActivityWorkflow || forceNewUserGiftWorkflow || forceReadChain)
+	agentEnabled := maxSteps > 1 && (settings.AgentLoopEnabled || forceL0Assessment || forceRecommendationWorkflow || forceCreateKeyWorkflow || forceImageGenerationWorkflow || forcePublicActivityWorkflow || forceNewUserGiftWorkflow || forceHumanSupportWorkflow || forceReadChain)
 	var tools []assistantOpenAIToolDefinition
 	var calledTools, successfulTools map[string]bool
 	toolTraces := make([]assistantToolTrace, 0, assistantToolCallsPerTurn)
@@ -1238,7 +1279,7 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 			return
 		}
 		message := response.Choices[0].Message
-		if forceRecommendationWorkflow || forceCreateKeyWorkflow || forceImageGenerationWorkflow || forcePublicActivityWorkflow || forceNewUserGiftWorkflow || forceReadChain {
+		if forceRecommendationWorkflow || forceCreateKeyWorkflow || forceImageGenerationWorkflow || forcePublicActivityWorkflow || forceNewUserGiftWorkflow || forceHumanSupportWorkflow || forceReadChain {
 			requiredTool := assistantNamedToolChoiceName(request.ToolChoice)
 			if requiredTool != "" && (len(message.ToolCalls) != 1 || strings.TrimSpace(message.ToolCalls[0].Function.Name) != requiredTool) {
 				writeAssistantError(c, http.StatusBadGateway, "ASSISTANT_REQUIRED_TOOL_MISSING", errors.New("assistant did not follow the required tool workflow"))
@@ -1258,7 +1299,7 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 			c.Data(status, "application/json; charset=utf-8", normalizedBody)
 			return
 		}
-		if (!settings.AgentLoopEnabled && !forceL0Assessment && !forceRecommendationWorkflow && !forceCreateKeyWorkflow && !forceImageGenerationWorkflow && !forcePublicActivityWorkflow && !forceNewUserGiftWorkflow && !forceReadChain) || step >= maxSteps-1 {
+		if (!settings.AgentLoopEnabled && !forceL0Assessment && !forceRecommendationWorkflow && !forceCreateKeyWorkflow && !forceImageGenerationWorkflow && !forcePublicActivityWorkflow && !forceNewUserGiftWorkflow && !forceHumanSupportWorkflow && !forceReadChain) || step >= maxSteps-1 {
 			writeAssistantError(c, http.StatusBadGateway, "ASSISTANT_AGENT_MAX_STEPS", errors.New("assistant agent reached its step limit before producing a final answer"))
 			return
 		}
