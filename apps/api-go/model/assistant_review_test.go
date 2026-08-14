@@ -34,6 +34,13 @@ func TestReviewAggregates(t *testing.T) {
 		UserId: user.Id, TradeNo: "review-subscription", PaymentProvider: PaymentProviderStripe,
 		Status: common.TopUpStatusSuccess, CreateTime: 110, CompleteTime: 160,
 	}).Error)
+	// Subscription settlement keeps a successful TopUp mirror for wallet/order
+	// compatibility. The automatic review must count this as a subscription,
+	// not as an additional top-up order.
+	require.NoError(t, DB.Create(&TopUp{
+		UserId: user.Id, TradeNo: "review-subscription", PaymentProvider: PaymentProviderStripe,
+		Status: common.TopUpStatusSuccess, CreateTime: 110, CompleteTime: 160,
+	}).Error)
 	_, err := AppendFinanceLedgerEntry(&FinanceLedgerEntry{
 		EntryType: FinanceEntryRevenue, AmountMicros: 2_500_000, Currency: FinanceCurrencyUSD,
 		Direction: FinanceDirectionDebit, SourceType: FinanceSourceRefund, SourceId: "review-refund",

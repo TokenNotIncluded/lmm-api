@@ -95,8 +95,7 @@ func reviewCount(ctx context.Context, table any, query string, args ...any) (int
 }
 
 func reviewSuccessfulOrderCount(ctx context.Context, tableName string, since, until int64) (int64, error) {
-	var count int64
-	err := DB.WithContext(ctx).Table(tableName+" AS orders").
+	query := DB.WithContext(ctx).Table(tableName+" AS orders").
 		Joins(`JOIN (
   SELECT user_id, MIN(created_at) AS first_chat_at
   FROM assistant_leads
@@ -105,8 +104,20 @@ func reviewSuccessfulOrderCount(ctx context.Context, tableName string, since, un
 ) AS chat_cohort ON chat_cohort.user_id = orders.user_id`, AssistantLeadSourceChat, since, until).
 		Where("orders.status = ?", common.TopUpStatusSuccess).
 		Where("COALESCE(NULLIF(orders.complete_time, 0), orders.create_time) >= chat_cohort.first_chat_at").
-		Where("COALESCE(NULLIF(orders.complete_time, 0), orders.create_time) >= ? AND COALESCE(NULLIF(orders.complete_time, 0), orders.create_time) <= ?", since, until).
-		Count(&count).Error
+		Where("COALESCE(NULLIF(orders.complete_time, 0), orders.create_time) >= ? AND COALESCE(NULLIF(orders.complete_time, 0), orders.create_time) <= ?", since, until)
+	// A completed subscription also creates a successful TopUp mirror for
+	// wallet/order compatibility. It is not a second payment order and must
+	// not inflate the automatic review's top-up conversion metric. Keep the
+	// exclusion local to this source so real standalone top-ups are unchanged.
+	if tableName == "top_ups" {
+		query = query.Where(`NOT EXISTS (
+  SELECT 1 FROM subscription_orders AS subscription_order
+  WHERE subscription_order.trade_no = orders.trade_no
+    AND subscription_order.status = ?
+)`, common.TopUpStatusSuccess)
+	}
+	var count int64
+	err := query.Count(&count).Error
 	return count, err
 }
 
