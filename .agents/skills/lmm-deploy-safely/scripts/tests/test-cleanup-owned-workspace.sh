@@ -19,6 +19,9 @@ mkdir -p "$workspace"/{state,staging,tmp,cache}
 printf 'payload\n' >"$workspace/staging/package"
 printf 'payload\n' >"$workspace/tmp/file"
 printf 'payload\n' >"$workspace/cache/file"
+mkdir -p "$workspace/cache/read-only/module"
+printf 'module\n' >"$workspace/cache/read-only/module/go.mod"
+chmod -R u-w "$workspace/cache/read-only"
 cat >"$workspace/.lmm-deploy-workspace" <<EOF
 format=1
 deployment_id=$deployment_id
@@ -34,4 +37,40 @@ grep -Fq 'removed=staging,tmp,cache' <<<"$output"
 [[ -d $workspace && -f $workspace/.lmm-deploy-workspace && -f $workspace/state/status ]]
 [[ ! -e $workspace/staging && ! -e $workspace/tmp && ! -e $workspace/cache ]]
 
-printf 'cleanup retains terminal audit state and removes only disposable children\n'
+aborted_id='cleanup-contract-aborted'
+aborted=$root/$aborted_id
+mkdir -p "$aborted"/{state,staging,tmp,cache}
+printf 'payload\n' >"$aborted/cache/file"
+cat >"$aborted/.lmm-deploy-workspace" <<EOF
+format=1
+deployment_id=$aborted_id
+role=controller
+workspace=$aborted
+created_at_utc=2026-08-14T00:00:00Z
+EOF
+printf 'ABORTED reason=pre-switch-test\n' >"$aborted/state/status"
+output=$("$cleanup" --role controller --deployment-id "$aborted_id" --root "$root")
+grep -Fq 'final_state=ABORTED' <<<"$output"
+output=$("$cleanup" --role controller --deployment-id "$aborted_id" --root "$root" --execute)
+grep -Fq 'removed=staging,tmp,cache' <<<"$output"
+[[ ! -e $aborted/cache ]]
+
+validated_id='cleanup-contract-validated'
+validated=$root/$validated_id
+mkdir -p "$validated"/{state,staging,tmp,cache}
+printf 'payload\n' >"$validated/cache/file"
+cat >"$validated/.lmm-deploy-workspace" <<EOF
+format=1
+deployment_id=$validated_id
+role=controller
+workspace=$validated
+created_at_utc=2026-08-14T00:00:00Z
+EOF
+printf 'VALIDATED reason=pre-release-tests-complete no-switch=true processes=stopped\n' >"$validated/state/status"
+output=$("$cleanup" --role controller --deployment-id "$validated_id" --root "$root")
+grep -Fq 'final_state=VALIDATED' <<<"$output"
+output=$("$cleanup" --role controller --deployment-id "$validated_id" --root "$root" --execute)
+grep -Fq 'removed=staging,tmp,cache' <<<"$output"
+[[ ! -e $validated/cache ]]
+
+printf 'cleanup retains terminal audit state and removes only disposable children, including pre-switch validation and aborts\n'

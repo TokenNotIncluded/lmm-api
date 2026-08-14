@@ -157,8 +157,11 @@ fi
 status=$(<"$state_file")
 final_state=${status%% *}
 case "$final_state" in
-  CONFIRMED|ROLLED_BACK) ;;
-  *) die 'workspace is not in CONFIRMED or ROLLED_BACK state' ;;
+  CONFIRMED|ROLLED_BACK|ABORTED) ;;
+  VALIDATED)
+    [[ $role == controller ]] || die 'VALIDATED cleanup is limited to controller workspaces'
+    ;;
+  *) die 'workspace is not in a cleanup-safe terminal state' ;;
 esac
 
 marker_checksum=$(sha256sum -- "$marker")
@@ -187,7 +190,13 @@ fi
 [[ -f $state_file && ! -L $state_file ]] || die 'deployment state changed before deletion'
 status=$(<"$state_file")
 final_state=${status%% *}
-case "$final_state" in CONFIRMED|ROLLED_BACK) ;; *) die 'deployment state changed before deletion' ;; esac
+case "$final_state" in
+  CONFIRMED|ROLLED_BACK|ABORTED) ;;
+  VALIDATED)
+    [[ $role == controller ]] || die 'deployment state changed before deletion'
+    ;;
+  *) die 'deployment state changed before deletion' ;;
+esac
 
 removed=none
 for name in staging tmp cache; do
@@ -195,6 +204,9 @@ for name in staging tmp cache; do
   [[ -e $path || -L $path ]] || continue
   [[ -d $path && ! -L $path ]] || die "disposable child is not a real directory: $name"
   [[ $(realpath -e -- "$path") == "$path" ]] || die "disposable child is not canonical: $name"
+  # Go's module cache intentionally removes owner-write bits. Restore them
+  # only inside this already validated disposable subtree before deletion.
+  chmod -R u+w -- "$path"
   rm -rf -- "$path"
   [[ ! -e $path && ! -L $path ]] || die "disposable child cleanup failed: $name"
   if [[ $removed == none ]]; then

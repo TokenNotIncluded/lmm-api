@@ -400,7 +400,11 @@ release, an unconfirmed deployment, or the latest known-good snapshot.
 
 Use [scripts/cleanup-owned-workspace.sh](scripts/cleanup-owned-workspace.sh)
 only for the exact marker-owned deployment directory after a durable
-`CONFIRMED` or `ROLLED_BACK` state. Preview first. Never clean a broad temp
+`CONFIRMED`, `ROLLED_BACK`, controller-only pre-switch `VALIDATED`, or
+pre-switch `ABORTED` state. `VALIDATED` records completed pre-release checks;
+`ABORTED` records an interrupted attempt. Both require that no application or
+frontend switch occurred and all workspace-owned processes have stopped.
+Preview first. Never clean a broad temp
 directory, backup root, release root, unresolved variable, glob, symlink, or
 another deployment's workspace.
 

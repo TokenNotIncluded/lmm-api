@@ -201,7 +201,10 @@ green.
 
 - Clean only the exact deployment workspace carrying the expected marker and
   matching deployment ID.
-- Require a durable `CONFIRMED` or `ROLLED_BACK` final state.
+- Require a durable `CONFIRMED`, `ROLLED_BACK`, controller-only pre-switch
+  `VALIDATED`, or pre-switch `ABORTED` final state. Use `VALIDATED` for
+  completed pre-release checks and `ABORTED` for an interrupted attempt, only
+  after proving no switch occurred and stopping every workspace-owned process.
 - Reject `/`, home roots, workspace roots, `/tmp`, `/var/tmp`, backup roots,
   release roots, unresolved variables, tildes, globs, symlinks, and paths not
   owned by the marker.
