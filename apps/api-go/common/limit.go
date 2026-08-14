@@ -10,6 +10,7 @@ import (
 	"net/http"
 
 	"github.com/LIghtJUNction/api.lmm.best/constant"
+	"github.com/gorilla/websocket"
 )
 
 var ErrLimitExceeded = errors.New("byte limit exceeded")
@@ -148,6 +149,26 @@ func ResponseBodyLimit() int64 {
 		megabytes = 32
 	}
 	return int64(megabytes) << 20
+}
+
+// WebSocketMessageLimit returns the maximum size of a single WebSocket
+// message accepted by relay paths. WebSocket connections do not pass through
+// the HTTP request-body limiter, so they need an explicit frame ceiling to
+// prevent Gorilla from allocating an attacker-controlled message size.
+// Keeping this aligned with the bounded upstream response limit preserves the
+// existing payload budget while making the previously unbounded path finite.
+func WebSocketMessageLimit() int64 {
+	return ResponseBodyLimit()
+}
+
+// SetWebSocketReadLimit applies the shared message ceiling to a connection.
+// A nil connection is accepted so callers can use it safely on optional
+// upstream connections during error cleanup.
+func SetWebSocketReadLimit(conn *websocket.Conn) {
+	if conn == nil {
+		return
+	}
+	conn.SetReadLimit(WebSocketMessageLimit())
 }
 
 func ReadResponseBody(response *http.Response) ([]byte, error) {

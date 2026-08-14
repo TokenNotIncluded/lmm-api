@@ -50,10 +50,10 @@ var (
 		"never pay", "won't pay", "won’t pay", "will not pay", "hate paying", "hate payment",
 		"no payment", "no fiat", "reject fiat", "free only", "do not subscribe", "don't subscribe",
 		"will not subscribe", "won't subscribe", "cancel my subscription", "not buying", "will not buy", "won't buy",
-		"不想花钱", "不愿花钱", "不舍得花钱", "舍不得花钱", "不值得花钱", "不要法币", "不接受法币支付",
+		"不想花钱", "不愿花钱", "不舍得花钱", "舍不得花钱", "不值得花钱", "不要花钱", "不要法币", "不接受法币支付",
 	}
 	assistantPaymentLanguageTerms = []string{
-		"充值", "充值额度", "充值余额", "充值账户", "付费", "付款", "支付", "订阅", "购买套餐", "买套餐", "买额度", "购买额度",
+		"充值", "充值额度", "充值余额", "充值账户", "付费", "付款", "支付", "花钱", "付钱", "订阅", "购买套餐", "买套餐", "买额度", "购买额度",
 		"top up", "top-up", "topup", "subscribe", "subscription", "purchase", "payment",
 	}
 	assistantPaymentPurchaseIntentTerms = []string{
@@ -984,13 +984,13 @@ func classifyAssistantCustomerProfile(context assistantUserContext, message stri
 	if assistantHasGuidedSetupLanguage(text) {
 		signals = append(signals, "guided_setup_language")
 	}
-	if assistantTextContainsAny(text, "隐私", "数据最小化", "不想暴露", "数据保留", "删除我的数据", "gdpr", "privacy", "data retention", "tracking") {
+	if assistantTextContainsAny(text, "隐私", "数据最小化", "不想暴露", "不要记录", "不记录邮箱", "数据保留", "删除我的数据", "删除记录", "gdpr", "privacy", "data retention", "delete my data", "delete history", "tracking") {
 		signals = append(signals, "privacy_conscious_language")
 	}
-	if assistantTextContainsAny(text, "手机", "移动端", "无障碍", "屏幕阅读器", "大字体", "mobile", "accessibility", "screen reader", "keyboard navigation") {
+	if assistantTextContainsAny(text, "手机", "移动端", "无障碍", "屏幕阅读器", "大字体", "iphone", "ipad", "voiceover", "talkback", "mobile", "accessibility", "screen reader", "keyboard navigation") {
 		signals = append(signals, "mobile_accessibility_language")
 	}
-	if assistantTextContainsAny(text, "502", "503", "504", "404", "429", "报错", "错误", "无法登录", "登录失败", "访问不了", "连不上", "故障", "工单", "人工客服", "support ticket", "login failed", "cannot access", "incident", "outage") {
+	if assistantTextContainsAny(text, "400", "401", "403", "404", "422", "429", "500", "502", "503", "504", "报错", "错误", "无法登录", "登录失败", "访问不了", "连不上", "故障", "工单", "人工客服", "support ticket", "login failed", "cannot access", "incident", "outage") {
 		signals = append(signals, "support_problem_language")
 	}
 	if context.AccessLevel == "L0" {
@@ -1033,10 +1033,11 @@ func classifyAssistantCustomerProfile(context assistantUserContext, message stri
 func assistantHasCostSensitiveTechnicalLanguage(text string) bool {
 	return assistantHasNegativePaymentIntent(text) || assistantTextContainsAny(
 		text,
-		"没钱", "免费", "自建", "源码", "开源", "free", "self host", "open source",
+		"没钱", "免费", "自建", "源码", "开源", "free", "self host", "self-host", "open source", "open-source",
 		"不想花钱", "不愿花钱", "不舍得花钱", "舍不得花钱", "不值得花钱",
 		"讨厌中转站", "讨厌中转", "不想用中转站", "不想用中转", "拒绝中转站", "拒绝中转",
-		"不要中转站", "不要中转", "不用中转站", "不用中转", "no relay", "hate relays", "reject relay",
+		"不要中转站", "不要中转", "不用中转站", "不用中转", "no relay", "hate relay", "hate relays", "reject relay",
+		"中间人", "中间商", "middleman", "middlemen", "relay service", "intermediary", "intermediaries",
 	)
 }
 
@@ -1046,7 +1047,7 @@ func assistantHasGuidedSetupLanguage(text string) bool {
 		"不会配置", "不会使用", "不会操作", "怎么配置", "怎么用", "教程", "一步一步", "帮我配置", "手把手", "带我操作",
 		"技术不好", "技术不太好", "不懂技术", "不太懂技术", "不熟悉技术", "没有技术基础", "没技术基础",
 		"新手", "小白", "需要详细指导", "详细指导",
-		"need help", "how do i", "step by step", "not technical", "not very technical", "beginner", "newbie",
+		"need help", "how do i", "step by step", "not technical", "not very technical", "non-technical", "nontechnical", "not tech-savvy", "don't know how", "do not know how", "beginner", "newbie",
 	)
 }
 
@@ -1081,7 +1082,7 @@ func assistantHasProfileRoutingSignal(text string) bool {
 		assistantTextContainsAny(text,
 			"绕过", "破解", "爆破", "扫描", "注入", "盗", "越权", "脚本小子",
 			"jailbreak", "bypass", "brute force", "credential stuffing", "exploit", "payload",
-			"scrape", "ignore previous", "system prompt", "script kiddie",
+			"scrape", "ignore previous", "system prompt", "dump system prompt", "override system prompt", "script kiddie",
 			"生产环境", "生产部署", "稳定性", "可用性", "并发", "延迟", "限流配置", "监控", "告警",
 			"sla", "observability", "production", "reliability", "latency", "concurrency", "rate limit",
 			"企业", "公司", "团队", "采购", "合规", "审计", "business", "enterprise", "company", "team", "procurement", "compliance",
@@ -1154,6 +1155,10 @@ func assistantHasHighConfidenceSecurityAbuse(message string) bool {
 		"steal system prompt",
 		"reveal system prompt",
 		"get system prompt",
+		"dump system prompt",
+		"override system prompt",
+		"bypass rate limit",
+		"bypass rate limits",
 	)
 	if strongAbuse {
 		// A quoted finding may contain the abuse marker while asking for a

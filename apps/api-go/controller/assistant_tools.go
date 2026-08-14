@@ -43,9 +43,12 @@ type assistantKeyGroupOption struct {
 }
 
 type assistantHandoffInput struct {
-	Confirmed bool   `json:"confirmed"`
-	Message   string `json:"message"`
+	Confirmed         bool   `json:"confirmed"`
+	Message           string `json:"message"`
+	ConfirmationToken string `json:"confirmation_token"`
 }
+
+const assistantHandoffConfirmationTTL = 10 * time.Minute
 
 type assistantResolveHandoffInput struct {
 	Note string `json:"note"`
@@ -378,9 +381,35 @@ func SubmitAssistantHandoff(c *gin.Context) {
 	if !requireAssistantConfirmation(c, input.Confirmed) {
 		return
 	}
-	lead, err := model.SubmitAssistantHandoff(c.GetInt("id"), input.Message)
+	userID := c.GetInt("id")
+	confirmationToken := strings.TrimSpace(input.ConfirmationToken)
+	var (
+		lead *model.AssistantLead
+		err  error
+	)
+	if confirmationToken != "" {
+		sessionID := strings.TrimSpace(c.GetString("session_id"))
+		if sessionID == "" {
+			writeAssistantError(c, http.StatusForbidden, "ASSISTANT_SESSION_REQUIRED", errors.New("a browser login session is required for assistant support confirmation"))
+			return
+		}
+		lead, err = model.SubmitAssistantHandoffWithAuthFlow(
+			confirmationToken,
+			model.AuthFlowMatch{
+				Purpose:   model.AuthFlowPurposeAssistantHandoff,
+				UserId:    userID,
+				SessionId: sessionID,
+			},
+		)
+	} else {
+		lead, err = model.SubmitAssistantHandoff(userID, input.Message)
+	}
 	if err != nil {
 		switch {
+		case errors.Is(err, model.ErrAuthFlowInvalid),
+			errors.Is(err, model.ErrAuthFlowExpired),
+			errors.Is(err, model.ErrAuthFlowConsumed):
+			writeAssistantError(c, http.StatusUnprocessableEntity, "ASSISTANT_HANDOFF_CONFIRMATION_INVALID", errors.New("support confirmation is invalid, expired, or already used"))
 		case errors.Is(err, model.ErrAssistantHandoffMessageRequired),
 			errors.Is(err, model.ErrAssistantHandoffMessageTooShort),
 			errors.Is(err, model.ErrAssistantHandoffMessageTooLong):

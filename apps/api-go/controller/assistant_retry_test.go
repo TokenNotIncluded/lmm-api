@@ -130,6 +130,34 @@ func TestAssistantRelayRetryAdaptsResponsesToolChoiceShape(t *testing.T) {
 	assert.NotContains(t, second, "function")
 }
 
+func TestAssistantRelayRetryOmitsStringToolChoiceWhenGatewayRequiresName(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/assistant/chat", nil)
+	choices := make([]any, 0, 2)
+	calls := 0
+
+	status, _, err := relayAssistantTurnWithRetryUsing(c, assistantOpenAIRequest{ToolChoice: "auto"}, "assistant-tool-choice-omit", 0,
+		func(_ *gin.Context, req assistantOpenAIRequest, _ string, _ int) (int, []byte, error) {
+			calls++
+			choices = append(choices, req.ToolChoice)
+			if calls == 1 {
+				return http.StatusBadRequest, []byte(`{"error":{"message":"Missing required parameter: 'tool_choice.name'"}}`), nil
+			}
+			return http.StatusOK, []byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`), nil
+		})
+
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, status)
+	assert.Equal(t, 2, calls)
+	assert.Equal(t, "auto", choices[0])
+	assert.Nil(t, choices[1])
+}
+
+func TestAssistantNamedToolChoiceDoesNotSerializeEmptyName(t *testing.T) {
+	assert.Equal(t, "auto", assistantNamedToolChoice("  "))
+}
+
 func TestAssistantRetryRejectsInvalidInputBeforePersistentWrites(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := setupTokenControllerTestDB(t)

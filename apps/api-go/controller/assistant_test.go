@@ -1250,7 +1250,7 @@ func TestAssistantAgentToolsExposeSafeAndConfirmationGatedActions(t *testing.T) 
 	assert.Equal(t, "create_key", createKey["action"])
 	assert.Equal(t, "default", createKey["requested_group"])
 
-	handoff := executeAssistantTool(nil, assistantOpenAIToolCall{
+	handoff := executeAssistantTool(c, assistantOpenAIToolCall{
 		Function: assistantOpenAIToolCallFunction{
 			Name:      "request_human_support",
 			Arguments: `{"message":"Please help me configure CC Switch."}`,
@@ -1258,7 +1258,7 @@ func TestAssistantAgentToolsExposeSafeAndConfirmationGatedActions(t *testing.T) 
 	})
 	assert.Equal(t, "confirmation_required", handoff["status"])
 	assert.Equal(t, "human_support", handoff["action"])
-	shortHandoff := executeAssistantTool(nil, assistantOpenAIToolCall{
+	shortHandoff := executeAssistantTool(c, assistantOpenAIToolCall{
 		Function: assistantOpenAIToolCallFunction{
 			Name:      "request_human_support",
 			Arguments: `{"message":"四个字"}`,
@@ -1266,6 +1266,69 @@ func TestAssistantAgentToolsExposeSafeAndConfirmationGatedActions(t *testing.T) 
 	})
 	assert.Equal(t, "message_invalid", shortHandoff["status"])
 	assert.False(t, shortHandoff["ok"].(bool))
+}
+
+func TestAssistantHumanHandoffConfirmationIsSessionBoundAndOneTime(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.AuthFlow{}, &model.AssistantLead{}))
+	user := model.User{
+		Username: "assistant-handoff-agent",
+		Password: "password",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+		Group:    "default",
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	prepareRecorder := httptest.NewRecorder()
+	prepareContext, _ := gin.CreateTestContext(prepareRecorder)
+	prepareContext.Set("id", user.Id)
+	prepareContext.Set("session_id", "handoff-browser-session")
+	result := executeAssistantTool(prepareContext, assistantOpenAIToolCall{
+		Function: assistantOpenAIToolCallFunction{
+			Name:      "request_human_support",
+			Arguments: `{"message":"Please investigate the failed API request."}`,
+		},
+	})
+	assert.Equal(t, "confirmation_required", result["status"])
+	action, ok := prepareContext.Get(assistantClientActionKey)
+	require.True(t, ok)
+	actionMap, ok := action.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "human_support", actionMap["type"])
+	assert.Equal(t, true, actionMap["requires_confirmation"])
+	confirmationToken, ok := actionMap["confirmation_token"].(string)
+	require.True(t, ok)
+	require.NotEmpty(t, confirmationToken)
+
+	confirm := func(sessionID string) *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		context, _ := gin.CreateTestContext(recorder)
+		context.Request = httptest.NewRequest(http.MethodPost, "/api/assistant/handoffs", strings.NewReader(
+			fmt.Sprintf(`{"confirmed":true,"confirmation_token":%q}`, confirmationToken),
+		))
+		context.Request.Header.Set("Content-Type", "application/json")
+		context.Set("id", user.Id)
+		context.Set("session_id", sessionID)
+		SubmitAssistantHandoff(context)
+		return recorder
+	}
+
+	wrongSession := confirm("different-browser-session")
+	assert.Equal(t, http.StatusUnprocessableEntity, wrongSession.Code)
+	assert.Contains(t, wrongSession.Body.String(), "ASSISTANT_HANDOFF_CONFIRMATION_INVALID")
+
+	confirmed := confirm("handoff-browser-session")
+	assert.Equal(t, http.StatusOK, confirmed.Code)
+	assert.Contains(t, confirmed.Body.String(), `"status":"pending"`)
+	replayed := confirm("handoff-browser-session")
+	assert.Equal(t, http.StatusUnprocessableEntity, replayed.Code)
+	assert.Contains(t, replayed.Body.String(), "ASSISTANT_HANDOFF_CONFIRMATION_INVALID")
+
+	lead, err := model.GetLatestAssistantHandoff(user.Id)
+	require.NoError(t, err)
+	require.NotNil(t, lead)
+	assert.Equal(t, "Please investigate the failed API request.", lead.Message)
 }
 
 func BenchmarkAssistantToolDefinitionsForContext(b *testing.B) {

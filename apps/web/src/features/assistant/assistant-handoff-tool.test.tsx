@@ -60,6 +60,7 @@ const { createInstance } = await import('i18next')
 const { I18nextProvider, initReactI18next } = await import('react-i18next')
 const { api } = await import('@/lib/api')
 const { AssistantHandoffTool } = await import('./assistant-handoff-tool')
+type AssistantHumanSupportAction = import('./api').AssistantHumanSupportAction
 
 const originalGet = api.get
 const originalPost = api.post
@@ -91,7 +92,7 @@ async function flushEffects() {
   await new Promise((resolve) => setTimeout(resolve, 25))
 }
 
-async function renderTool() {
+async function renderTool(confirmationAction?: AssistantHumanSupportAction) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -103,7 +104,7 @@ async function renderTool() {
     root.render(
       <QueryClientProvider client={queryClient}>
         <I18nextProvider i18n={i18n}>
-          <AssistantHandoffTool />
+          <AssistantHandoffTool confirmationAction={confirmationAction} />
         </I18nextProvider>
       </QueryClientProvider>
     )
@@ -259,6 +260,54 @@ describe('AssistantHandoffTool', () => {
       /Administrator follow-up requested/
     )
 
+    await unmount(rendered)
+  })
+
+  test('renders an assistant-prepared handoff and submits its confirmation token', async () => {
+    let posted: { url: string; data: unknown } | undefined
+    api.get = (async () => {
+      return { data: { success: true, data: null } }
+    }) as typeof api.get
+    api.post = (async (url: string, data: unknown) => {
+      posted = { url, data }
+      return { data: { success: true, data: pendingHandoff } }
+    }) as typeof api.post
+
+    const action: AssistantHumanSupportAction = {
+      type: 'human_support',
+      confirmation_token: 'handoff-token',
+      requires_confirmation: true,
+      expires_in_seconds: 600,
+      message: 'Please investigate the failed API request.',
+    }
+    const rendered = await renderTool(action)
+    assert.equal(
+      rendered.container.querySelector('#assistant-handoff-message'),
+      null
+    )
+    assert.match(
+      rendered.container.textContent ?? '',
+      /Please investigate the failed API request\./
+    )
+
+    await act(async () => {
+      findButton('Review message').click()
+      await flushEffects()
+    })
+    await act(async () => {
+      findButton('Confirm and send').click()
+      await flushEffects()
+    })
+    await act(flushEffects)
+
+    assert.deepEqual(posted, {
+      url: '/api/assistant/handoffs',
+      data: {
+        confirmed: true,
+        message: 'Please investigate the failed API request.',
+        confirmation_token: 'handoff-token',
+      },
+    })
     await unmount(rendered)
   })
 })

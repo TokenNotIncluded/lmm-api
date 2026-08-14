@@ -84,6 +84,7 @@ var isResponsesWSChannelAvailable = appmodel.IsChannelEnabledForGroupModel
 var postResponsesWSConsumeQuota = service.PostTextConsumeQuota
 
 func ResponsesWebSocketHelper(c *gin.Context, client *websocket.Conn) *types.NewAPIError {
+	common.SetWebSocketReadLimit(client)
 	session := &responsesWSSession{c: c, client: client}
 	defer session.closeTarget()
 	defer session.failCurrent()
@@ -554,6 +555,7 @@ func dialResponsesWebSocketUpstream(c *gin.Context, adaptor relaychannel.Adaptor
 		}
 		return nil, types.NewErrorWithStatusCode(fmt.Errorf("dial failed to %s: %w", relaycommon.SanitizeURLForLog(fullRequestURL), err), types.ErrorCodeDoRequestFailed, statusCode)
 	}
+	common.SetWebSocketReadLimit(targetConn)
 	return targetConn, nil
 }
 

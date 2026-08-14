@@ -118,6 +118,45 @@ describe('assistant response parsing', () => {
     )
   })
 
+  test('accepts only a complete session-bound human-support confirmation', () => {
+    assert.deepEqual(
+      parseAssistantAction({
+        type: 'human_support',
+        confirmation_token: ' handoff-token ',
+        requires_confirmation: true,
+        expires_in_seconds: 600,
+        message: '  Please investigate the failed API request.  ',
+      }),
+      {
+        type: 'human_support',
+        confirmation_token: 'handoff-token',
+        requires_confirmation: true,
+        expires_in_seconds: 600,
+        message: 'Please investigate the failed API request.',
+      }
+    )
+    assert.equal(
+      parseAssistantAction({
+        type: 'human_support',
+        confirmation_token: 'handoff-token',
+        requires_confirmation: true,
+        expires_in_seconds: 600,
+        message: 'x',
+      })?.type,
+      undefined
+    )
+    assert.equal(
+      parseAssistantAction({
+        type: 'human_support',
+        confirmation_token: 'handoff-token',
+        requires_confirmation: false,
+        expires_in_seconds: 600,
+        message: 'Please investigate the failed API request.',
+      }),
+      undefined
+    )
+  })
+
   test('accepts an image generation confirmation without exposing credentials', () => {
     assert.deepEqual(
       parseAssistantAction({

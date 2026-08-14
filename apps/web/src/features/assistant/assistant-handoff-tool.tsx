@@ -23,7 +23,7 @@ import {
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -60,14 +60,19 @@ import { Textarea } from '@/components/ui/textarea'
 import {
   getAssistantHandoff,
   submitAssistantHandoff,
+  type AssistantHumanSupportAction,
   type AssistantHandoff,
 } from './api'
 
 const minAssistantHandoffCharacters = 5
 
-export function AssistantHandoffTool() {
+export function AssistantHandoffTool(props: {
+  confirmationAction?: AssistantHumanSupportAction | null
+}) {
   const { t } = useTranslation()
-  const [message, setMessage] = useState('')
+  const [message, setMessage] = useState(
+    props.confirmationAction?.message ?? ''
+  )
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [submitted, setSubmitted] = useState<AssistantHandoff | null>(null)
@@ -78,6 +83,14 @@ export function AssistantHandoffTool() {
     retry: false,
   })
   const current = submitted ?? handoffQuery.data
+  const confirmationToken = props.confirmationAction?.confirmation_token
+  const isPreparedAction = Boolean(props.confirmationAction)
+  useEffect(() => {
+    if (props.confirmationAction) {
+      setMessage(props.confirmationAction.message)
+      setSubmitted(null)
+    }
+  }, [props.confirmationAction])
   const trimmedMessage = message.trim()
   const messageLength = Array.from(trimmedMessage).length
   const messageTooShort =
@@ -87,7 +100,10 @@ export function AssistantHandoffTool() {
     if (submitting || messageLength < minAssistantHandoffCharacters) return
     setSubmitting(true)
     try {
-      const result = await submitAssistantHandoff(trimmedMessage)
+      const result = await submitAssistantHandoff(
+        trimmedMessage,
+        confirmationToken
+      )
       setSubmitted(result)
       setConfirmOpen(false)
       toast.success(t('Your message was sent to an administrator'))
@@ -190,25 +206,38 @@ export function AssistantHandoffTool() {
             </Alert>
           ) : null}
           <div className='grid gap-1.5'>
-            <Label htmlFor='assistant-handoff-message'>
+            <Label
+              htmlFor={
+                isPreparedAction ? undefined : 'assistant-handoff-message'
+              }
+            >
               {t('Issue description')}
             </Label>
-            <Textarea
-              id='assistant-handoff-message'
-              rows={4}
-              maxLength={2000}
-              minLength={minAssistantHandoffCharacters}
-              required
-              aria-required='true'
-              aria-invalid={messageTooShort}
-              aria-describedby={
-                messageTooShort ? 'assistant-handoff-message-hint' : undefined
-              }
-              value={message}
-              onChange={(event) => setMessage(event.target.value)}
-              placeholder={t('What happened, where, and when?')}
-            />
-            {messageTooShort ? (
+            {isPreparedAction ? (
+              <div
+                className='bg-muted/40 rounded-lg border px-3 py-2.5 text-sm leading-6 whitespace-pre-wrap'
+                aria-label={t('Issue description')}
+              >
+                {message}
+              </div>
+            ) : (
+              <Textarea
+                id='assistant-handoff-message'
+                rows={4}
+                maxLength={2000}
+                minLength={minAssistantHandoffCharacters}
+                required
+                aria-required='true'
+                aria-invalid={messageTooShort}
+                aria-describedby={
+                  messageTooShort ? 'assistant-handoff-message-hint' : undefined
+                }
+                value={message}
+                onChange={(event) => setMessage(event.target.value)}
+                placeholder={t('What happened, where, and when?')}
+              />
+            )}
+            {!isPreparedAction && messageTooShort ? (
               <p
                 id='assistant-handoff-message-hint'
                 className='text-destructive text-sm'

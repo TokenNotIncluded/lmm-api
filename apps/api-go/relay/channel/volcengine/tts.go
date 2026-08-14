@@ -225,6 +225,7 @@ func handleTTSWebSocketResponse(c *gin.Context, requestURL string, volcRequest V
 		)
 	}
 	defer conn.Close()
+	common.SetWebSocketReadLimit(conn)
 
 	payload, marshalErr := json.Marshal(volcRequest)
 	if marshalErr != nil {

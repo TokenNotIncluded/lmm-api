@@ -26,6 +26,7 @@ const (
 	AuthFlowPurposeAssistantAdmin    = "assistant_admin_change"
 	AuthFlowPurposeAssistantKey      = "assistant_key_creation"
 	AuthFlowPurposeAssistantDrawing  = "assistant_drawing_generation"
+	AuthFlowPurposeAssistantHandoff  = "assistant_handoff"
 	AuthFlowIntentLogin              = "login"
 	AuthFlowIntentBind               = "bind"
 	AuthFlowTokenBytes               = 32

@@ -7,9 +7,13 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/LIghtJUNction/api.lmm.best/constant"
+	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -100,6 +104,46 @@ func TestMarshalLimitBoundsJSON(t *testing.T) {
 
 func TestResponseBodyLimitHasSafeDefault(t *testing.T) {
 	assert.Greater(t, ResponseBodyLimit(), int64(0))
+}
+
+func TestSetWebSocketReadLimitRejectsOversizedFrame(t *testing.T) {
+	previous := constant.MaxResponseBodyMB
+	constant.MaxResponseBodyMB = 1
+	t.Cleanup(func() { constant.MaxResponseBodyMB = previous })
+
+	serverErr := make(chan error, 1)
+	serverUpgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		conn, err := serverUpgrader.Upgrade(writer, request, nil)
+		if err != nil {
+			serverErr <- err
+			return
+		}
+		defer conn.Close()
+		SetWebSocketReadLimit(conn)
+		_, _, err = conn.ReadMessage()
+		serverErr <- err
+	}))
+	defer server.Close()
+
+	client, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	require.NoError(t, err)
+	defer client.Close()
+	// Keep the test small while still exercising the same Gorilla read-limit
+	// path used by relay connections in production.
+	err = client.WriteMessage(websocket.TextMessage, bytes.Repeat([]byte{'x'}, (1<<20)+1))
+	if err != nil {
+		// The peer may send the 1009 close before WriteMessage returns; the
+		// authoritative assertion is the server-side ErrReadLimit below.
+		assert.Error(t, err)
+	}
+
+	select {
+	case readErr := <-serverErr:
+		assert.ErrorIs(t, readErr, websocket.ErrReadLimit)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for oversized websocket frame rejection")
+	}
 }
 
 func TestSHA256RequestBodyPreservesBodyAndHonorsLimit(t *testing.T) {

@@ -88,6 +88,7 @@ import {
   type AssistantCreateKeyAction,
   type AssistantAdminChangeAction,
   type AssistantImageGenerationAction,
+  type AssistantHumanSupportAction,
   type AssistantL1RecommendationAction,
   type AssistantNavigationAction,
   type AssistantToolTrace,
@@ -932,6 +933,8 @@ export function AssistantPanel(props: {
     useState<AssistantL1RecommendationAction | null>(null)
   const [accountDisableDraft, setAccountDisableDraft] =
     useState<AssistantAccountDisableAction | null>(null)
+  const [humanSupportAction, setHumanSupportAction] =
+    useState<AssistantHumanSupportAction | null>(null)
   const [keyCreationAction, setKeyCreationAction] =
     useState<AssistantCreateKeyAction | null>(null)
   const [autoConfirmKeyToken, setAutoConfirmKeyToken] = useState<string | null>(
@@ -1105,6 +1108,7 @@ export function AssistantPanel(props: {
     setActiveTool(null)
     setRecommendationDraft(null)
     setAccountDisableDraft(null)
+    setHumanSupportAction(null)
     setKeyCreationAction(null)
     setAutoConfirmKeyToken(null)
     setUserActionDraft(null)
@@ -1255,6 +1259,8 @@ export function AssistantPanel(props: {
           : undefined
       const imageAction =
         reply.action?.type === 'image_generation' ? reply.action : undefined
+      const humanSupportAction =
+        reply.action?.type === 'human_support' ? reply.action : undefined
       const userAction =
         reply.action?.type === 'user_password_change' ||
         reply.action?.type === 'user_oauth_unbind' ||
@@ -1281,6 +1287,7 @@ export function AssistantPanel(props: {
       if (imageAction) {
         setRecommendationDraft(null)
         setAccountDisableDraft(null)
+        setHumanSupportAction(null)
         setKeyCreationAction(null)
         setUserActionDraft(null)
         setActiveTool(null)
@@ -1288,6 +1295,7 @@ export function AssistantPanel(props: {
       } else if (adminChange) {
         setRecommendationDraft(null)
         setAccountDisableDraft(null)
+        setHumanSupportAction(null)
         setKeyCreationAction(null)
         setUserActionDraft(null)
         setActiveTool(null)
@@ -1295,6 +1303,7 @@ export function AssistantPanel(props: {
       } else if (reply.action?.type === 'navigate') {
         setRecommendationDraft(null)
         setAccountDisableDraft(null)
+        setHumanSupportAction(null)
         setUserActionDraft(null)
         setActiveTool(null)
         suggestedAction = {
@@ -1305,6 +1314,7 @@ export function AssistantPanel(props: {
       } else if (reply.action?.type === 'l1_recommendation') {
         setRecommendationDraft(reply.action)
         setAccountDisableDraft(null)
+        setHumanSupportAction(null)
         setUserActionDraft(null)
         setActiveTool('activation')
         suggestedAction = {
@@ -1314,6 +1324,7 @@ export function AssistantPanel(props: {
         }
       } else if (reply.action?.type === 'account_disable_request') {
         setAccountDisableDraft(reply.action)
+        setHumanSupportAction(null)
         setRecommendationDraft(null)
         setKeyCreationAction(null)
         setUserActionDraft(null)
@@ -1321,6 +1332,7 @@ export function AssistantPanel(props: {
         suggestedAction = undefined
       } else if (reply.action?.type === 'create_key') {
         setKeyCreationAction(reply.action)
+        setHumanSupportAction(null)
         setRecommendationDraft(null)
         setAccountDisableDraft(null)
         setUserActionDraft(null)
@@ -1329,9 +1341,18 @@ export function AssistantPanel(props: {
       } else if (userAction) {
         setRecommendationDraft(null)
         setAccountDisableDraft(null)
+        setHumanSupportAction(null)
         setKeyCreationAction(null)
         setUserActionDraft(userAction)
         setActiveTool(null)
+        suggestedAction = undefined
+      } else if (humanSupportAction) {
+        setRecommendationDraft(null)
+        setAccountDisableDraft(null)
+        setHumanSupportAction(humanSupportAction)
+        setKeyCreationAction(null)
+        setUserActionDraft(null)
+        setActiveTool('handoff')
         suggestedAction = undefined
       }
       if (
@@ -1339,10 +1360,12 @@ export function AssistantPanel(props: {
         isExplicitAssistantL1Request(message) &&
         !adminChange &&
         !imageAction &&
+        !humanSupportAction &&
         !userAction &&
         reply.action?.type !== 'account_disable_request' &&
         reply.action?.type !== 'navigate' &&
-        reply.action?.type !== 'create_key'
+        reply.action?.type !== 'create_key' &&
+        reply.action?.type !== 'human_support'
       ) {
         setActiveTool('activation')
         suggestedAction ??= {
@@ -1830,7 +1853,9 @@ export function AssistantPanel(props: {
                       />
                     ) : null}
                     {activeTool === 'handoff' && accountAccessConfirmed ? (
-                      <AssistantHandoffTool />
+                      <AssistantHandoffTool
+                        confirmationAction={humanSupportAction}
+                      />
                     ) : null}
                     {activeTool === 'models' && developerAccessGranted ? (
                       <AssistantModelsTool />

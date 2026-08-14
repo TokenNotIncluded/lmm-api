@@ -179,6 +179,14 @@ export type AssistantAccountDisableAction = {
   confirmation_token: string
 }
 
+export type AssistantHumanSupportAction = {
+  type: 'human_support'
+  confirmation_token: string
+  requires_confirmation: true
+  expires_in_seconds: number
+  message: string
+}
+
 export type AssistantCreateKeyAction = {
   type: 'create_key'
   confirmation_token: string
@@ -322,6 +330,7 @@ export type AssistantToolTrace = {
 export type AssistantAction =
   | AssistantL1RecommendationAction
   | AssistantAccountDisableAction
+  | AssistantHumanSupportAction
   | AssistantCreateKeyAction
   | AssistantImageGenerationAction
   | AssistantAdminChangeAction
@@ -722,6 +731,27 @@ export function parseAssistantAction(
       ? action.confirmation_token.trim()
       : ''
   if (!confirmationToken) return undefined
+
+  if (
+    action.type === 'human_support' &&
+    action.requires_confirmation === true &&
+    typeof action.expires_in_seconds === 'number' &&
+    Number.isInteger(action.expires_in_seconds) &&
+    action.expires_in_seconds > 0 &&
+    typeof action.message === 'string'
+  ) {
+    const message = action.message.trim()
+    const messageRunes = [...message].length
+    if (messageRunes >= 5 && messageRunes <= 2000) {
+      return {
+        type: 'human_support',
+        confirmation_token: confirmationToken,
+        requires_confirmation: true,
+        expires_in_seconds: action.expires_in_seconds,
+        message,
+      }
+    }
+  }
 
   if (
     action.type === 'admin_config_change' &&
@@ -1548,11 +1578,16 @@ export async function getAssistantHandoff(): Promise<AssistantHandoff | null> {
 }
 
 export async function submitAssistantHandoff(
-  message: string
+  message: string,
+  confirmationToken?: string
 ): Promise<AssistantHandoff> {
   const response = await api.post<AssistantAPIResponse<AssistantHandoff>>(
     '/api/assistant/handoffs',
-    { confirmed: true, message },
+    {
+      confirmed: true,
+      message,
+      ...(confirmationToken ? { confirmation_token: confirmationToken } : {}),
+    },
     { skipBusinessError: true, skipErrorHandler: true }
   )
   return requireAssistantData(response.data, 'Unable to contact support')

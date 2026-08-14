@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/LIghtJUNction/api.lmm.best/common"
 	"github.com/LIghtJUNction/api.lmm.best/pkg/wsmanager"
 	relaycommon "github.com/LIghtJUNction/api.lmm.best/relay/common"
 	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
@@ -35,6 +36,7 @@ func WssHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.
 
 	if resp != nil {
 		info.TargetWs = resp.(*websocket.Conn)
+		common.SetWebSocketReadLimit(info.TargetWs)
 		defer info.TargetWs.Close()
 		var closeOnce sync.Once
 		unregister := wsmanager.Register(info.ChannelId, wsmanager.KindRealtime, func(reason string) {

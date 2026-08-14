@@ -25,6 +25,8 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 	info.IsStream = true
 	clientConn := info.ClientWs
 	targetConn := info.TargetWs
+	common.SetWebSocketReadLimit(clientConn)
+	common.SetWebSocketReadLimit(targetConn)
 
 	clientClosed := make(chan struct{})
 	targetClosed := make(chan struct{})

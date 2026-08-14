@@ -1010,10 +1010,17 @@ func assistantToolChoiceForAgentStep(userContext assistantUserContext, calledToo
 }
 
 func assistantNamedToolChoice(name string) any {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		// Never serialize an empty function name. Some OpenAI-compatible
+		// gateways treat an empty named choice as `tool_choice.name` missing
+		// and reject the entire request. Let the provider choose instead.
+		return "auto"
+	}
 	return map[string]any{
 		"type": "function",
 		"function": map[string]any{
-			"name": strings.TrimSpace(name),
+			"name": name,
 		},
 	}
 }
@@ -1055,10 +1062,35 @@ func assistantResponsesToolChoice(choice any) (any, bool) {
 	return map[string]any{"type": "function", "name": name}, true
 }
 
+// assistantOmitToolChoiceForMissingName handles gateways that reject the
+// otherwise-valid OpenAI string choices (`auto`/`none`) with a misleading
+// `tool_choice.name` error. Omitting the optional field lets those gateways
+// apply their native default. Named choices are adapted to the Responses
+// shape first, so required-tool workflows keep their explicit contract.
+func assistantOmitToolChoiceForMissingName(choice any) bool {
+	value, ok := choice.(string)
+	if !ok {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "auto", "none", "required":
+		return true
+	default:
+		return false
+	}
+}
+
 func assistantToolChoiceNameRequired(body []byte) bool {
 	text := strings.ToLower(string(body))
-	return strings.Contains(text, "tool_choice.name") &&
-		strings.Contains(text, "missing_required_parameter")
+	if !strings.Contains(text, "tool_choice.name") {
+		return false
+	}
+	// Gateways use both the OpenAI-style error code and a human-readable
+	// variant.  Treat only an explicit missing-parameter message as the
+	// compatibility signal; a generic tool-choice error must not silently
+	// drop a required choice.
+	return strings.Contains(text, "missing_required_parameter") ||
+		strings.Contains(text, "missing required parameter")
 }
 
 func emptyObjectSchema() map[string]any {
@@ -1242,6 +1274,7 @@ func relayAssistantTurnWithRetryUsing(c *gin.Context, request assistantOpenAIReq
 	var status int
 	var body []byte
 	responsesToolChoiceFallbackUsed := false
+	omitToolChoiceFallbackUsed := false
 	for attempt := 1; attempt <= assistantUpstreamMaxAttempts; attempt++ {
 		status, body, err := turn(c, request, rootRequestID, step)
 		if err != nil {
@@ -1257,18 +1290,30 @@ func relayAssistantTurnWithRetryUsing(c *gin.Context, request assistantOpenAIReq
 			if attempt == assistantUpstreamMaxAttempts {
 				return status, body, nil
 			}
-		} else if assistantToolChoiceNameRequired(body) && !responsesToolChoiceFallbackUsed {
-			if fallback, ok := assistantResponsesToolChoice(request.ToolChoice); ok {
-				// A few OpenAI-compatible Responses gateways expose the chat
-				// endpoint but validate tool_choice using the Responses shape:
-				// {"type":"function","name":"..."}. Retry once with that
-				// shape instead of burning the normal retry budget on the same
-				// invalid request.
-				request.ToolChoice = fallback
-				responsesToolChoiceFallbackUsed = true
+		}
+		if assistantToolChoiceNameRequired(body) {
+			if !responsesToolChoiceFallbackUsed {
+				if fallback, ok := assistantResponsesToolChoice(request.ToolChoice); ok {
+					// A few OpenAI-compatible Responses gateways expose the chat
+					// endpoint but validate tool_choice using the Responses shape:
+					// {"type":"function","name":"..."}. Retry once with that
+					// shape instead of burning the normal retry budget on the same
+					// invalid request.
+					request.ToolChoice = fallback
+					responsesToolChoiceFallbackUsed = true
+					continue
+				}
+			}
+			if !omitToolChoiceFallbackUsed && assistantOmitToolChoiceForMissingName(request.ToolChoice) {
+				// Some gateways reject `auto` or `none` as if a named function
+				// were required. Omitting the field is the provider-neutral
+				// fallback for a turn that does not have a required tool.
+				request.ToolChoice = nil
+				omitToolChoiceFallbackUsed = true
 				continue
 			}
-		} else if !assistantRetryableUpstreamStatus(status) || attempt == assistantUpstreamMaxAttempts {
+		}
+		if !assistantRetryableUpstreamStatus(status) || attempt == assistantUpstreamMaxAttempts {
 			return status, body, nil
 		}
 
@@ -1773,6 +1818,36 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 		if inputString(input, "action") == "disable_account" {
 			return executeAssistantAccountDisableRequestTool(c, actorUserID, input, message)
 		}
+		if c == nil || c.GetBool("use_access_token") {
+			return map[string]any{"ok": false, "status": "session_required", "error": "a browser login session is required to prepare support confirmation"}
+		}
+		sessionID := strings.TrimSpace(c.GetString("session_id"))
+		if sessionID == "" {
+			return map[string]any{"ok": false, "status": "session_required", "error": "a browser login session is required to prepare support confirmation"}
+		}
+		payload, err := json.Marshal(map[string]string{"message": message})
+		if err != nil {
+			return map[string]any{"ok": false, "error": "support confirmation could not be prepared"}
+		}
+		confirmationToken, _, err := model.CreateAuthFlow(model.AuthFlowCreate{
+			Purpose:   model.AuthFlowPurposeAssistantHandoff,
+			UserId:    actorUserID,
+			SessionId: sessionID,
+			Payload:   string(payload),
+			ExpiresAt: time.Now().Add(assistantHandoffConfirmationTTL),
+		})
+		if err != nil {
+			return map[string]any{"ok": false, "error": "support confirmation could not be prepared"}
+		}
+		action := map[string]any{
+			"type":                  "human_support",
+			"confirmation_token":    confirmationToken,
+			"requires_confirmation": true,
+			"expires_in_seconds":    int(assistantHandoffConfirmationTTL / time.Second),
+			"message":               message,
+			"ui_path":               "/support",
+		}
+		c.Set(assistantClientActionKey, action)
 		return map[string]any{
 			"ok":            true,
 			"status":        "confirmation_required",

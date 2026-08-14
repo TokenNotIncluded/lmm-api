@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"regexp"
 	"strings"
@@ -317,31 +318,68 @@ func SubmitAssistantHandoff(userID int, message string) (*AssistantLead, error) 
 
 	var lead AssistantLead
 	err = DB.Transaction(func(tx *gorm.DB) error {
-		if err := lockAssistantOwner(tx, userID); err != nil {
-			return err
-		}
-		findErr := tx.Where("user_id = ? AND source = ? AND status = ?", userID, AssistantLeadSourceHandoff, AssistantLeadStatusPending).
-			Order("id DESC").First(&lead).Error
-		if findErr == nil {
-			return nil
-		}
-		if !errors.Is(findErr, gorm.ErrRecordNotFound) {
-			return findErr
-		}
-		lead = AssistantLead{
-			UserId:    userID,
-			Source:    AssistantLeadSourceHandoff,
-			Intent:    AssistantIntentHumanSupport,
-			Message:   normalized,
-			Status:    AssistantLeadStatusPending,
-			CreatedAt: common.GetTimestamp(),
-		}
-		return tx.Create(&lead).Error
+		return submitAssistantHandoffWithTx(tx, userID, normalized, &lead)
 	})
 	if err != nil {
 		return nil, err
 	}
 	return &lead, nil
+}
+
+// SubmitAssistantHandoffWithAuthFlow atomically consumes a confirmation flow
+// and creates the handoff from its server-side draft. The flow match binds
+// the operation to the current browser session and user; the draft is never
+// taken from the confirmation request body, so a client cannot replace the
+// assistant-prepared message while confirming it.
+func SubmitAssistantHandoffWithAuthFlow(token string, match AuthFlowMatch) (*AssistantLead, error) {
+	if strings.TrimSpace(token) == "" || match.Purpose != AuthFlowPurposeAssistantHandoff || match.UserId <= 0 || strings.TrimSpace(match.SessionId) == "" {
+		return nil, ErrAuthFlowInvalid
+	}
+
+	var lead AssistantLead
+	_, err := ConsumeAuthFlowWithAction(token, match, func(tx *gorm.DB, flow *AuthFlow) error {
+		var draft struct {
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(flow.Payload), &draft); err != nil {
+			return ErrAuthFlowInvalid
+		}
+		normalized, err := normalizeAssistantHandoffMessage(draft.Message)
+		if err != nil {
+			return ErrAuthFlowInvalid
+		}
+		return submitAssistantHandoffWithTx(tx, match.UserId, normalized, &lead)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &lead, nil
+}
+
+func submitAssistantHandoffWithTx(tx *gorm.DB, userID int, normalized string, lead *AssistantLead) error {
+	if tx == nil || userID <= 0 || lead == nil {
+		return gorm.ErrInvalidData
+	}
+	if err := lockAssistantOwner(tx, userID); err != nil {
+		return err
+	}
+	findErr := tx.Where("user_id = ? AND source = ? AND status = ?", userID, AssistantLeadSourceHandoff, AssistantLeadStatusPending).
+		Order("id DESC").First(lead).Error
+	if findErr == nil {
+		return nil
+	}
+	if !errors.Is(findErr, gorm.ErrRecordNotFound) {
+		return findErr
+	}
+	*lead = AssistantLead{
+		UserId:    userID,
+		Source:    AssistantLeadSourceHandoff,
+		Intent:    AssistantIntentHumanSupport,
+		Message:   normalized,
+		Status:    AssistantLeadStatusPending,
+		CreatedAt: common.GetTimestamp(),
+	}
+	return tx.Create(lead).Error
 }
 
 func GetLatestAssistantHandoff(userID int) (*AssistantLead, error) {
