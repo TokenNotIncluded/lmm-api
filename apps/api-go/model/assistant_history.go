@@ -43,6 +43,7 @@ var (
 	ErrAssistantSecureCardNotFound          = errors.New("assistant secure card not found")
 	ErrAssistantSecureCardConsumed          = errors.New("assistant secure card has already been revealed")
 	ErrAssistantSecureCardExpired           = errors.New("assistant secure card has expired")
+	ErrAssistantTokenLimit                  = errors.New("assistant API key limit reached")
 
 	assistantHistoryAPIKeyPattern = regexp.MustCompile(`(?i)\b(?:sk|rk|pk|ak|tok|token|key|secret)[_-][a-z0-9._~+/-]{8,}\b`)
 	assistantHistoryJWTPattern    = regexp.MustCompile(`\beyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\b`)
@@ -1001,11 +1002,9 @@ func CreateAssistantSecureCard(ownerUserID int, conversationID int64, cardType, 
 	return card, nil
 }
 
-// InsertAssistantTokenAndCreateSecureCard keeps credential creation atomic:
-// either the user receives an opaque, owner-bound card or the token itself is
-// not created.  This prevents an unusable API key from being left behind when
-// secure-card storage is unavailable.
-func InsertAssistantTokenAndCreateSecureCard(token *Token, ownerUserID int, conversationID int64, summary, payload string) (*AssistantSecureCard, error) {
+// insertAssistantTokenAndCreateSecureCardTx writes a key and its opaque card
+// under the caller's transaction and owner lock.
+func insertAssistantTokenAndCreateSecureCardTx(tx *gorm.DB, token *Token, ownerUserID int, conversationID int64, summary, payload string, maxUserTokens int) (*AssistantSecureCard, error) {
 	if token == nil || token.UserId <= 0 || token.UserId != ownerUserID {
 		return nil, gorm.ErrInvalidData
 	}
@@ -1028,40 +1027,91 @@ func InsertAssistantTokenAndCreateSecureCard(token *Token, ownerUserID int, conv
 		CreatedAt:      now,
 		ExpiresAt:      time.Now().Add(assistantSecureCardDefaultLifetime).Unix(),
 	}
-	err = DB.Transaction(func(tx *gorm.DB) error {
-		if err := lockAssistantOwner(tx, ownerUserID); err != nil {
-			return err
-		}
-		if conversationID > 0 {
-			var conversation AssistantConversation
-			if err := lockForUpdate(tx).Where("id = ? AND user_id = ?", conversationID, ownerUserID).First(&conversation).Error; err != nil {
-				if errors.Is(err, gorm.ErrRecordNotFound) {
-					return ErrAssistantConversationNotFound
-				}
-				return err
-			}
-			message, err := appendAssistantHistoryMessageTx(tx, conversationID, AssistantHistoryRoleCard, "")
-			if err != nil {
-				return err
-			}
-			card.MessageId = message.Id
-		}
-		if err := tx.Create(token).Error; err != nil {
-			return err
-		}
-		if err := tx.Model(&User{}).
-			Where("id = ? AND console_activated_at = ?", token.UserId, 0).
-			Update("console_activated_at", time.Now().Unix()).Error; err != nil {
-			return err
-		}
-		return tx.Create(card).Error
-	})
-	if err != nil {
+	if err := lockAssistantOwner(tx, ownerUserID); err != nil {
 		return nil, err
+	}
+	if maxUserTokens > 0 {
+		var count int64
+		if err := tx.Model(&Token{}).Where("user_id = ?", ownerUserID).Count(&count).Error; err != nil {
+			return nil, err
+		}
+		if count >= int64(maxUserTokens) {
+			return nil, ErrAssistantTokenLimit
+		}
+	}
+	if conversationID > 0 {
+		var conversation AssistantConversation
+		if err := lockForUpdate(tx).Where("id = ? AND user_id = ?", conversationID, ownerUserID).First(&conversation).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, ErrAssistantConversationNotFound
+			}
+			return nil, err
+		}
+		message, err := appendAssistantHistoryMessageTx(tx, conversationID, AssistantHistoryRoleCard, "")
+		if err != nil {
+			return nil, err
+		}
+		card.MessageId = message.Id
+	}
+	if err := tx.Create(token).Error; err != nil {
+		return nil, err
+	}
+	if err := tx.Model(&User{}).
+		Where("id = ? AND console_activated_at = ?", token.UserId, 0).
+		Update("console_activated_at", time.Now().Unix()).Error; err != nil {
+		return nil, err
+	}
+	if err := tx.Create(card).Error; err != nil {
+		return nil, err
+	}
+	return card, nil
+}
+
+func finalizeAssistantTokenCreation(token *Token) {
+	if token == nil {
+		return
 	}
 	if err := invalidateUserCache(token.UserId); err != nil {
 		common.SysLog("failed to invalidate user cache after assistant key creation: " + err.Error())
 	}
+}
+
+// InsertAssistantTokenAndCreateSecureCard keeps credential creation atomic:
+// either the user receives an opaque, owner-bound card or the token itself is
+// not created. This is also used by the direct key form, whose confirmation is
+// owned by that form rather than an assistant auth flow.
+func InsertAssistantTokenAndCreateSecureCard(token *Token, ownerUserID int, conversationID int64, summary, payload string) (*AssistantSecureCard, error) {
+	var card *AssistantSecureCard
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		card, err = insertAssistantTokenAndCreateSecureCardTx(tx, token, ownerUserID, conversationID, summary, payload, 0)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	finalizeAssistantTokenCreation(token)
+	return card, nil
+}
+
+// ConsumeAssistantKeyFlowAndCreateSecureCard binds the one-time browser
+// confirmation to credential creation in one transaction. A failed insert
+// rolls the flow consumption back, while a replay can never create a second
+// key. The generated credential is written only to the encrypted secure card.
+func ConsumeAssistantKeyFlowAndCreateSecureCard(flowToken string, match AuthFlowMatch, token *Token, ownerUserID int, conversationID int64, summary, payload string, maxUserTokens int) (*AssistantSecureCard, error) {
+	if match.Purpose != AuthFlowPurposeAssistantKey || match.UserId != ownerUserID || strings.TrimSpace(match.SessionId) == "" {
+		return nil, ErrAuthFlowInvalid
+	}
+	var card *AssistantSecureCard
+	_, err := ConsumeAuthFlowWithAction(flowToken, match, func(tx *gorm.DB, _ *AuthFlow) error {
+		var insertErr error
+		card, insertErr = insertAssistantTokenAndCreateSecureCardTx(tx, token, ownerUserID, conversationID, summary, payload, maxUserTokens)
+		return insertErr
+	})
+	if err != nil {
+		return nil, err
+	}
+	finalizeAssistantTokenCreation(token)
 	return card, nil
 }
 

@@ -19,6 +19,16 @@ For commercial licensing, please contact support@quantumnous.com
 import type { AssistantIntent } from './api'
 import type { AssistantPresetId } from './assistant-events'
 
+export type AssistantNavigationPath =
+  | '/getting-started'
+  | '/pricing'
+  | '/wallet'
+  | '/usage-logs'
+  | '/keys'
+  | '/models'
+  | '/open-source-bounties'
+  | '/support'
+
 const INTENT_PRESET: Partial<Record<AssistantIntent, AssistantPresetId>> = {
   onboarding: 'onboarding',
   plan_purchase: 'plan',
@@ -36,6 +46,40 @@ export function getAssistantPresetForIntent(
   intent: AssistantIntent | undefined
 ): AssistantPresetId | undefined {
   return intent ? INTENT_PRESET[intent] : undefined
+}
+
+const NAVIGATION_WORDS =
+  /(?:打开|进入|跳转|前往|查看|go to|open|take me to|show me)/i
+
+/**
+ * Navigation is opt-in: an intent alone only suggests a tool card. We only
+ * leave the assistant surface when the user explicitly asks to open a page.
+ */
+export function getExplicitAssistantNavigation(
+  message: string,
+  intent: AssistantIntent | undefined
+): AssistantNavigationPath | undefined {
+  if (!intent || !NAVIGATION_WORDS.test(message)) return undefined
+  switch (intent) {
+    case 'onboarding':
+      return '/getting-started'
+    case 'plan_purchase':
+      return '/pricing'
+    case 'api_key':
+      return '/keys'
+    case 'usage':
+      return '/usage-logs'
+    case 'models':
+      return '/models'
+    case 'bounty':
+      return '/open-source-bounties'
+    case 'invitation':
+      return '/wallet'
+    case 'human_support':
+      return '/support'
+    default:
+      return undefined
+  }
 }
 
 export function isExplicitAssistantL1Request(message: string): boolean {

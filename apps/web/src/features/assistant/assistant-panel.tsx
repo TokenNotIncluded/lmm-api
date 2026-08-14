@@ -26,7 +26,7 @@ import {
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { nanoid } from 'nanoid'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -83,6 +83,7 @@ import {
   type AssistantConversationHistoryDetail,
   type AssistantChatMessage,
   type AssistantAccountDisableAction,
+  type AssistantCreateKeyAction,
   type AssistantAdminChangeAction,
   type AssistantL1RecommendationAction,
 } from './api'
@@ -104,6 +105,7 @@ import {
   AssistantHistoryConversation,
 } from './assistant-history'
 import {
+  getExplicitAssistantNavigation,
   getAssistantPresetForIntent,
   isExplicitAssistantL1Request,
 } from './assistant-intent'
@@ -532,25 +534,25 @@ function AssistantPanelHeader(props: {
 
   if (props.mode === 'page') {
     return (
-      <header className='assistant-glass-surface border-border/60 bg-background/70 flex min-w-0 shrink-0 items-center justify-between gap-3 border-b px-4 py-3 sm:px-6'>
-        <h1 className='truncate text-sm font-medium'>{t('Service guide')}</h1>
-        <div className='flex min-w-0 items-center gap-4'>
-          <AssistantJourneyProgress />
-          <Button
-            type='button'
-            variant='ghost'
-            size='sm'
-            onClick={
-              props.historyVisible ? props.onCloseHistory : props.onOpenHistory
-            }
-          >
-            {props.historyVisible
-              ? props.historyDetail
-                ? t('Conversation history')
-                : t('Back to conversation')
-              : t('Conversation history')}
-          </Button>
-        </div>
+      <header className='assistant-glass-surface border-border/60 bg-background/70 flex min-w-0 shrink-0 flex-wrap items-center gap-3 border-b px-4 py-3 sm:px-6'>
+        <h1 className='min-w-0 flex-1 truncate text-sm font-medium'>
+          {t('Service guide')}
+        </h1>
+        <AssistantJourneyProgress presentation='page' />
+        <Button
+          type='button'
+          variant='ghost'
+          size='sm'
+          onClick={
+            props.historyVisible ? props.onCloseHistory : props.onOpenHistory
+          }
+        >
+          {props.historyVisible
+            ? props.historyDetail
+              ? t('Conversation history')
+              : t('Back to conversation')
+            : t('Conversation history')}
+        </Button>
       </header>
     )
   }
@@ -668,6 +670,7 @@ export function AssistantPanel(props: {
   onToggleFullscreen?: () => void
 }) {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const mode = props.mode ?? 'mobile'
   const onConversationReset = props.onConversationReset
@@ -689,6 +692,8 @@ export function AssistantPanel(props: {
     useState<AssistantL1RecommendationAction | null>(null)
   const [accountDisableDraft, setAccountDisableDraft] =
     useState<AssistantAccountDisableAction | null>(null)
+  const [keyCreationAction, setKeyCreationAction] =
+    useState<AssistantCreateKeyAction | null>(null)
   const [historyView, setHistoryView] = useState<
     'list' | AssistantConversationHistoryItem | null
   >(null)
@@ -845,6 +850,7 @@ export function AssistantPanel(props: {
     setActiveTool(null)
     setRecommendationDraft(null)
     setAccountDisableDraft(null)
+    setKeyCreationAction(null)
   }, [])
 
   const clearTransientCards = useCallback(() => {
@@ -975,6 +981,10 @@ export function AssistantPanel(props: {
         )
       )
       const suggestedTarget = getAssistantPresetForIntent(reply.intent)
+      const explicitNavigation = getExplicitAssistantNavigation(
+        message,
+        reply.intent
+      )
       const adminChange =
         reply.action?.type === 'admin_config_change' ||
         reply.action?.type === 'admin_pricing_change'
@@ -1000,6 +1010,7 @@ export function AssistantPanel(props: {
       if (adminChange) {
         setRecommendationDraft(null)
         setAccountDisableDraft(null)
+        setKeyCreationAction(null)
         setActiveTool(null)
         suggestedAction = undefined
       } else if (reply.action?.type === 'l1_recommendation') {
@@ -1014,7 +1025,14 @@ export function AssistantPanel(props: {
       } else if (reply.action?.type === 'account_disable_request') {
         setAccountDisableDraft(reply.action)
         setRecommendationDraft(null)
+        setKeyCreationAction(null)
         setActiveTool(null)
+        suggestedAction = undefined
+      } else if (reply.action?.type === 'create_key') {
+        setKeyCreationAction(reply.action)
+        setRecommendationDraft(null)
+        setAccountDisableDraft(null)
+        setActiveTool('key')
         suggestedAction = undefined
       }
       setEntries((current) => [
@@ -1027,6 +1045,9 @@ export function AssistantPanel(props: {
           adminChange,
         },
       ])
+      if (explicitNavigation && developerAccessGranted) {
+        void navigate({ to: explicitNavigation })
+      }
       await queryClient.invalidateQueries({ queryKey: ['assistant-status'] })
       await queryClient.invalidateQueries({ queryKey: ['assistant-journey'] })
       await queryClient.invalidateQueries({
@@ -1405,7 +1426,9 @@ export function AssistantPanel(props: {
                         availableModels={connectionModelsQuery.data ?? []}
                         modelsLoading={connectionModelsQuery.isLoading}
                         developerAccessGranted={developerAccessGranted}
+                        confirmationAction={keyCreationAction}
                         onKeyCreated={() => {
+                          setKeyCreationAction(null)
                           if (authUser) {
                             void queryClient.invalidateQueries({
                               queryKey: [

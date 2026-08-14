@@ -125,6 +125,45 @@ describe('assistant game-style progress', () => {
     }
   })
 
+  test('keeps the open page journey in normal flow on narrow screens and makes the desktop popover opaque', async () => {
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/assistant/journey')
+      return {
+        data: {
+          success: true,
+          data: {
+            main: [{ id: 'ask_ai', status: 'completed' }],
+            side: [{ id: 'accept_bounty', status: 'pending' }],
+          },
+        },
+      }
+    }) as typeof api.get
+
+    const rendered = await render(
+      <AssistantJourneyProgress presentation='page' />
+    )
+    try {
+      const journey = rendered.container.querySelector<HTMLElement>(
+        '[data-testid="assistant-journey"]'
+      )
+      const panel = rendered.container.querySelector<HTMLElement>(
+        '[data-testid="assistant-journey-panel"]'
+      )
+      assert.ok(journey)
+      assert.ok(panel)
+      assert.match(journey.className, /order-last/)
+      assert.match(journey.className, /w-full/)
+      assert.match(journey.className, /md:relative/)
+      assert.match(panel.className, /bg-background/)
+      assert.match(panel.className, /w-full/)
+      assert.match(panel.className, /md:absolute/)
+      assert.doesNotMatch(panel.className, /bg-background\//)
+      assert.doesNotMatch(panel.className, /(?:^|\s)absolute(?:\s|$)/)
+    } finally {
+      await unmount(rendered)
+    }
+  })
+
   test('shows a zero decision as consumed and claims a positive gift once', async () => {
     let gift: Gift = {
       amount_cents: 0,

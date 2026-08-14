@@ -67,6 +67,7 @@ const { createInstance } = await import('i18next')
 const { I18nextProvider, initReactI18next } = await import('react-i18next')
 const { api } = await import('@/lib/api')
 const { AssistantKeyTool } = await import('./assistant-key-tool')
+import type { AssistantCreateKeyAction } from './api'
 
 const originalPost = api.post
 const originalGet = api.get
@@ -93,7 +94,8 @@ async function flushEffects() {
 
 async function renderTool(
   developerAccessGranted: boolean,
-  onContinueSetup = () => {}
+  onContinueSetup = () => {},
+  confirmationAction?: AssistantCreateKeyAction
 ): Promise<RenderedTool> {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -106,6 +108,7 @@ async function renderTool(
             baseUrl='https://api.example.test/v1'
             availableModels={['claude-sonnet-4-5']}
             developerAccessGranted={developerAccessGranted}
+            confirmationAction={confirmationAction}
             onContinueSetup={onContinueSetup}
           />
         </I18nextProvider>
@@ -270,6 +273,47 @@ describe('AssistantKeyTool', () => {
     })
     assert.equal(continued, 1)
 
+    await unmount(rendered)
+  })
+
+  test('uses the assistant preview token and server-owned name/group', async () => {
+    let posted: unknown
+    api.post = (async (_url: string, data: unknown) => {
+      posted = data
+      return {
+        data: {
+          success: true,
+          data: {
+            id: 10,
+            name: 'test',
+            group: 'GPT-Auto',
+            expired_time: -1,
+            card: { id: 'card-10', label: 'Private API key' },
+          },
+        },
+      }
+    }) as typeof api.post
+    const rendered = await renderTool(true, () => {}, {
+      type: 'create_key',
+      confirmation_token: 'preview-token',
+      requires_confirmation: true,
+      expires_in_seconds: 600,
+      name: 'test',
+      group: 'GPT-Auto',
+    })
+
+    await act(async () => {
+      findButton('Review key creation').click()
+      await flushEffects()
+      findButton('Confirm and create').click()
+      await flushEffects()
+    })
+    assert.deepEqual(posted, {
+      confirmed: true,
+      name: 'test',
+      group: 'GPT-Auto',
+      confirmation_token: 'preview-token',
+    })
     await unmount(rendered)
   })
 })

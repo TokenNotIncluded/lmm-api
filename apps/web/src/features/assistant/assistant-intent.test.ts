@@ -20,6 +20,7 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
 import {
+  getExplicitAssistantNavigation,
   getAssistantPresetForIntent,
   isExplicitAssistantL1Request,
 } from './assistant-intent'
@@ -33,6 +34,21 @@ describe('assistant retention actions', () => {
     assert.equal(getAssistantPresetForIntent('cost'), 'cost')
     assert.equal(getAssistantPresetForIntent('bounty'), 'bounty')
     assert.equal(getAssistantPresetForIntent('human_support'), 'human')
+  })
+
+  test('only navigates after an explicit page request', () => {
+    assert.equal(
+      getExplicitAssistantNavigation('打开 API 密钥页面', 'api_key'),
+      '/keys'
+    )
+    assert.equal(
+      getExplicitAssistantNavigation('请进入排行榜看看', 'bounty'),
+      '/open-source-bounties'
+    )
+    assert.equal(
+      getExplicitAssistantNavigation('How do I create a key?', 'api_key'),
+      undefined
+    )
   })
 
   test('does not force an action for general questions', () => {

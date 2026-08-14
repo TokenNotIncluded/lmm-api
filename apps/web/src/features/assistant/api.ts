@@ -176,6 +176,15 @@ export type AssistantAccountDisableAction = {
   confirmation_token: string
 }
 
+export type AssistantCreateKeyAction = {
+  type: 'create_key'
+  confirmation_token: string
+  requires_confirmation: true
+  expires_in_seconds: number
+  name: string
+  group: string
+}
+
 export type AssistantAdminConfigPreview = {
   key: string
   label: string
@@ -212,6 +221,7 @@ export type AssistantAdminChangeAction =
 export type AssistantAction =
   | AssistantL1RecommendationAction
   | AssistantAccountDisableAction
+  | AssistantCreateKeyAction
   | AssistantAdminChangeAction
 
 export type AssistantCreatedKey = {
@@ -483,6 +493,29 @@ export function parseAssistantAction(
             next: pricing.next as Record<string, unknown>,
           },
         }
+      }
+    }
+  }
+
+  if (
+    action.type === 'create_key' &&
+    action.requires_confirmation === true &&
+    typeof action.expires_in_seconds === 'number' &&
+    Number.isInteger(action.expires_in_seconds) &&
+    action.expires_in_seconds > 0 &&
+    typeof action.name === 'string' &&
+    typeof action.group === 'string'
+  ) {
+    const name = action.name.trim()
+    const group = action.group.trim()
+    if (name && group) {
+      return {
+        type: 'create_key',
+        confirmation_token: confirmationToken,
+        requires_confirmation: true,
+        expires_in_seconds: action.expires_in_seconds,
+        name,
+        group,
       }
     }
   }
@@ -761,11 +794,19 @@ export async function getAssistantUsageData(
 
 export async function createAssistantDefaultKey(
   name: string,
-  group: string
+  group: string,
+  confirmationToken?: string
 ): Promise<AssistantCreatedKey> {
   const response = await api.post<AssistantAPIResponse<AssistantCreatedKey>>(
     '/api/assistant/tools/create-key',
-    { confirmed: true, name, group },
+    {
+      confirmed: true,
+      name,
+      group,
+      ...(confirmationToken
+        ? { confirmation_token: confirmationToken }
+        : undefined),
+    },
     { skipBusinessError: true, skipErrorHandler: true }
   )
   return requireAssistantData(response.data, 'Unable to create API key')

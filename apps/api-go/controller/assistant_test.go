@@ -2,6 +2,7 @@ package controller
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -646,7 +647,7 @@ func TestPrepareAssistantRequestRejectsSinglePunctuationButAllowsShortText(t *te
 func createAssistantKeyTestContext(t *testing.T, username string) (*gin.Context, *httptest.ResponseRecorder) {
 	t.Helper()
 	db := setupTokenControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.User{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.AuthFlow{}))
 	user := &model.User{
 		Username:           username,
 		Password:           "password",
@@ -659,6 +660,7 @@ func createAssistantKeyTestContext(t *testing.T, username string) (*gin.Context,
 	response := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(response)
 	c.Set("id", user.Id)
+	c.Set("session_id", "assistant-key-test-session")
 	return c, response
 }
 
@@ -733,6 +735,149 @@ func TestCreateAssistantDefaultKeyForL1Session(t *testing.T) {
 	assert.Equal(t, "default", token.Group)
 	assert.True(t, token.UnlimitedQuota)
 	assert.EqualValues(t, -1, token.ExpiredTime)
+}
+
+func TestAssistantCreateKeyAgentConfirmationIsSessionBoundAndExactlyOnce(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(
+		&model.TopUp{}, &model.UserOAuthBinding{}, &model.AssistantUserProfile{},
+		&model.DeveloperAccessRequest{}, &model.AuthFlow{},
+	))
+	user := model.User{
+		Username: "assistant-key-agent", Password: "password", Role: common.RoleCommonUser,
+		Status: common.UserStatusEnabled, Group: "default", ConsoleActivatedAt: 1,
+	}
+	require.NoError(t, db.Create(&user).Error)
+
+	initialMessage := "请直接在助手里帮我创建一个 API key"
+	initialConversation := []assistantOpenAIMessage{{Role: "user", Content: initialMessage}}
+	initialContext := assistantUserContextForRequest(user.Id, initialMessage, initialConversation)
+	require.True(t, initialContext.DeveloperAccessGranted)
+	require.Equal(t, assistantCreateKeyActionRequest, initialContext.CreateKeyAction)
+
+	initialRecorder := httptest.NewRecorder()
+	initialGin, _ := gin.CreateTestContext(initialRecorder)
+	initialGin.Request = httptest.NewRequest(http.MethodPost, "/api/assistant/chat", nil)
+	initialGin.Set("id", user.Id)
+	initialGin.Set("session_id", "assistant-key-agent-session")
+	initialGin.Set(assistantActorUserIDKey, user.Id)
+	initialGin.Set(assistantUserContextKey, initialContext)
+
+	turn := 0
+	originalRelay := relayAssistantAgentTurn
+	relayAssistantAgentTurn = func(_ *gin.Context, request assistantOpenAIRequest, _ string, _ int) (int, []byte, error) {
+		turn++
+		switch turn {
+		case 1:
+			assert.Equal(t, "get_service_facts", assistantNamedToolChoiceName(request.ToolChoice))
+			return http.StatusOK, []byte(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"facts","type":"function","function":{"name":"get_service_facts","arguments":"{}"}}]}}]}`), nil
+		case 2:
+			assert.Equal(t, "request_create_key", assistantNamedToolChoiceName(request.ToolChoice))
+			return http.StatusOK, []byte(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"key-groups","type":"function","function":{"name":"request_create_key","arguments":"{\"name\":\"chat-created\",\"group\":\"default\"}"}}]}}]}`), nil
+		case 3:
+			assert.Nil(t, request.ToolChoice)
+			assert.Empty(t, request.Tools)
+			assert.Contains(t, string(mustAssistantJSON(t, request.Messages)), `\"status\":\"group_required\"`)
+			return http.StatusOK, []byte(`{"choices":[{"message":{"role":"assistant","content":"请选择一个 routing group，例如 default。"}}]}`), nil
+		case 4:
+			assert.Equal(t, "request_create_key", assistantNamedToolChoiceName(request.ToolChoice))
+			return http.StatusOK, []byte(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"key-confirm","type":"function","function":{"name":"request_create_key","arguments":"{\"name\":\"chat-created\",\"group\":\"default\"}"}}]}}]}`), nil
+		case 5:
+			assert.Nil(t, request.ToolChoice)
+			assert.Empty(t, request.Tools)
+			encoded := string(mustAssistantJSON(t, request.Messages))
+			assert.Contains(t, encoded, `\"status\":\"confirmation_required\"`)
+			assert.NotContains(t, encoded, "confirmation_token")
+			return http.StatusOK, []byte(`{"choices":[{"message":{"role":"assistant","content":"请在聊天卡片中确认创建 chat-created（default）。"}}]}`), nil
+		default:
+			return http.StatusInternalServerError, nil, nil
+		}
+	}
+	t.Cleanup(func() { relayAssistantAgentTurn = originalRelay })
+
+	settings := setting.AssistantSettings{Model: "key-workflow-model", AgentLoopEnabled: false, MaxSteps: 1, TimeoutSeconds: 45}
+	runAssistantAgent(initialGin, settings, initialConversation)
+	assert.Equal(t, http.StatusOK, initialRecorder.Code)
+	var flowCount int64
+	require.NoError(t, db.Model(&model.AuthFlow{}).Count(&flowCount).Error)
+	assert.Zero(t, flowCount, "the model cannot select the first routing group on the user's behalf")
+
+	groupMessage := "default"
+	selectionConversation := []assistantOpenAIMessage{
+		{Role: "user", Content: initialMessage},
+		{Role: "assistant", Content: "请选择一个 routing group，例如 default。"},
+		{Role: "user", Content: groupMessage},
+	}
+	selectionContext := assistantUserContextForRequest(user.Id, groupMessage, selectionConversation)
+	require.Equal(t, assistantCreateKeyActionSelectGroup, selectionContext.CreateKeyAction)
+	selectionRecorder := httptest.NewRecorder()
+	selectionGin, _ := gin.CreateTestContext(selectionRecorder)
+	selectionGin.Request = httptest.NewRequest(http.MethodPost, "/api/assistant/chat", nil)
+	conversationRecord, err := model.PrepareAssistantConversation(user.Id, 0, initialMessage)
+	require.NoError(t, err)
+	selectionGin.Set("id", user.Id)
+	selectionGin.Set("session_id", "assistant-key-agent-session")
+	selectionGin.Set(assistantActorUserIDKey, user.Id)
+	selectionGin.Set(assistantUserContextKey, selectionContext)
+	selectionGin.Set("assistant_history_conversation_id", conversationRecord.Id)
+	runAssistantAgent(selectionGin, settings, selectionConversation)
+	require.Equal(t, 5, turn)
+	require.Equal(t, http.StatusOK, selectionRecorder.Code)
+
+	var reply map[string]any
+	require.NoError(t, json.Unmarshal(selectionRecorder.Body.Bytes(), &reply))
+	action, ok := reply["lmm_assistant_action"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "create_key", action["type"])
+	assert.Equal(t, "chat-created", action["name"])
+	assert.Equal(t, "default", action["group"])
+	assert.EqualValues(t, conversationRecord.Id, action["conversation_id"])
+	confirmationToken, _ := action["confirmation_token"].(string)
+	require.NotEmpty(t, confirmationToken)
+	assert.NotContains(t, selectionRecorder.Body.String(), `"api_key"`)
+
+	confirmBody := fmt.Sprintf(`{"confirmed":true,"confirmation_token":%q,"name":"tampered","group":"auto","conversation_id":999999}`, confirmationToken)
+	wrongSessionRecorder := httptest.NewRecorder()
+	wrongSessionGin, _ := gin.CreateTestContext(wrongSessionRecorder)
+	wrongSessionGin.Request = httptest.NewRequest(http.MethodPost, "/api/assistant/tools/create-key", strings.NewReader(confirmBody))
+	wrongSessionGin.Request.Header.Set("Content-Type", "application/json")
+	wrongSessionGin.Set("id", user.Id)
+	wrongSessionGin.Set("session_id", "other-browser-session")
+	CreateAssistantDefaultKey(wrongSessionGin)
+	assert.Equal(t, http.StatusUnprocessableEntity, wrongSessionRecorder.Code)
+
+	confirmRecorder := httptest.NewRecorder()
+	confirmGin, _ := gin.CreateTestContext(confirmRecorder)
+	confirmGin.Request = httptest.NewRequest(http.MethodPost, "/api/assistant/tools/create-key", strings.NewReader(confirmBody))
+	confirmGin.Request.Header.Set("Content-Type", "application/json")
+	confirmGin.Set("id", user.Id)
+	confirmGin.Set("session_id", "assistant-key-agent-session")
+	CreateAssistantDefaultKey(confirmGin)
+	require.Equal(t, http.StatusOK, confirmRecorder.Code)
+	assert.Contains(t, confirmRecorder.Body.String(), `"name":"chat-created"`)
+	assert.Contains(t, confirmRecorder.Body.String(), `"group":"default"`)
+	assert.NotContains(t, confirmRecorder.Body.String(), "sk-")
+
+	replayRecorder := httptest.NewRecorder()
+	replayGin, _ := gin.CreateTestContext(replayRecorder)
+	replayGin.Request = httptest.NewRequest(http.MethodPost, "/api/assistant/tools/create-key", strings.NewReader(confirmBody))
+	replayGin.Request.Header.Set("Content-Type", "application/json")
+	replayGin.Set("id", user.Id)
+	replayGin.Set("session_id", "assistant-key-agent-session")
+	CreateAssistantDefaultKey(replayGin)
+	assert.Equal(t, http.StatusUnprocessableEntity, replayRecorder.Code)
+	assert.Contains(t, replayRecorder.Body.String(), "ASSISTANT_KEY_CONFIRMATION_INVALID")
+
+	var tokens []model.Token
+	require.NoError(t, db.Where("user_id = ?", user.Id).Find(&tokens).Error)
+	require.Len(t, tokens, 1)
+	assert.Equal(t, "chat-created", tokens[0].Name)
+	assert.Equal(t, "default", tokens[0].Group)
+	var card model.AssistantSecureCard
+	require.NoError(t, db.Where("owner_user_id = ?", user.Id).First(&card).Error)
+	assert.Equal(t, conversationRecord.Id, card.ConversationId)
+	assert.NotContains(t, card.Ciphertext, "sk-")
 }
 
 func TestCreateAssistantDefaultKeyRejectsL0(t *testing.T) {

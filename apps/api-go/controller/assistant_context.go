@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -33,6 +34,8 @@ type assistantPaymentOfferState string
 
 type assistantRecommendationAction string
 
+type assistantCreateKeyAction string
+
 const (
 	assistantPaymentOfferNone         assistantPaymentOfferState = "none"
 	assistantPaymentOfferNeedsDetails assistantPaymentOfferState = "needs_details"
@@ -44,6 +47,12 @@ const (
 	assistantRecommendationActionNone   assistantRecommendationAction = ""
 	assistantRecommendationActionRevise assistantRecommendationAction = "revise"
 	assistantRecommendationActionRemove assistantRecommendationAction = "remove"
+)
+
+const (
+	assistantCreateKeyActionNone        assistantCreateKeyAction = ""
+	assistantCreateKeyActionRequest     assistantCreateKeyAction = "request"
+	assistantCreateKeyActionSelectGroup assistantCreateKeyAction = "select_group"
 )
 
 const (
@@ -100,6 +109,10 @@ type assistantUserContext struct {
 	// never model-visible account metadata; the user request and tool results
 	// provide the model-visible editing context.
 	RecommendationAction assistantRecommendationAction `json:"-"`
+	// CreateKeyAction drives the confirmation-gated key workflow. It is
+	// reconstructed from the current user turn and the immediately preceding
+	// group-choice prompt, and never crosses the model context boundary.
+	CreateKeyAction assistantCreateKeyAction `json:"-"`
 	// CustomerProfile is a local routing decision. The model receives only the
 	// neutral behavior strategy, never labels such as security_risk or
 	// promotion_seeker that could be repeated back to the user.
@@ -259,6 +272,7 @@ func assistantUserContextForRequest(userID int, message string, conversation ...
 		Intent:               model.ClassifyAssistantIntent(message),
 		LatestUserRequest:    message,
 		RecommendationAction: classifyAssistantRecommendationAction(message),
+		CreateKeyAction:      classifyAssistantCreateKeyAction(message, conversation...),
 	}
 	if userID <= 0 {
 		context.CustomerProfile, context.ProfileSignals = classifyAssistantCustomerProfile(context, userText)
@@ -350,6 +364,36 @@ func classifyAssistantRecommendationAction(message string) assistantRecommendati
 		}
 	}
 	return assistantRecommendationActionNone
+}
+
+func assistantExplicitCreateKeyRequest(message string) bool {
+	text := strings.ToLower(strings.TrimSpace(message))
+	return assistantTextContainsAny(text, "api key", "api-key", "api_key", "apikey", "密钥", "key") &&
+		assistantTextContainsAny(text, "创建", "新建", "生成", "开一个", "建一个", "create", "generate", "make", "new key")
+}
+
+func classifyAssistantCreateKeyAction(message string, conversations ...[]assistantOpenAIMessage) assistantCreateKeyAction {
+	if assistantExplicitCreateKeyRequest(message) {
+		return assistantCreateKeyActionRequest
+	}
+	if len(conversations) == 0 {
+		return assistantCreateKeyActionNone
+	}
+	messages := conversations[0]
+	if len(messages) < 3 || messages[len(messages)-1].Role != "user" ||
+		strings.TrimSpace(messages[len(messages)-1].Content) != strings.TrimSpace(message) {
+		return assistantCreateKeyActionNone
+	}
+	previousAssistant := strings.ToLower(strings.TrimSpace(messages[len(messages)-2].Content))
+	previousUser := messages[len(messages)-3]
+	if previousUser.Role != "user" || !assistantExplicitCreateKeyRequest(previousUser.Content) ||
+		!assistantTextContainsAny(previousAssistant, "routing group", "choose a group", "select a group", "分组", "路由组") {
+		return assistantCreateKeyActionNone
+	}
+	if model.ClassifyAssistantIntent(message) != model.AssistantIntentOther || utf8.RuneCountInString(strings.TrimSpace(message)) > 64 {
+		return assistantCreateKeyActionNone
+	}
+	return assistantCreateKeyActionSelectGroup
 }
 
 func assistantUserText(latestMessage string, conversations ...[]assistantOpenAIMessage) string {

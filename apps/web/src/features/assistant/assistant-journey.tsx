@@ -15,6 +15,8 @@ import { HugeiconsIcon } from '@hugeicons/react'
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 
+import { cn } from '@/lib/utils'
+
 import { getAssistantJourney, type AssistantJourneyStepId } from './api'
 
 const journeyLabels: Record<AssistantJourneyStepId, string> = {
@@ -28,7 +30,9 @@ const journeyLabels: Record<AssistantJourneyStepId, string> = {
   accept_bounty: 'Accept an open-source bounty',
 }
 
-export function AssistantJourneyProgress() {
+export function AssistantJourneyProgress(props: {
+  presentation?: 'page' | 'popover'
+}) {
   const { t } = useTranslation()
   const journeyQuery = useQuery({
     queryKey: ['assistant-journey'],
@@ -47,17 +51,34 @@ export function AssistantJourneyProgress() {
   const sideDone = journey.side.filter(
     (step) => step.status === 'completed'
   ).length
+  const pagePresentation = props.presentation === 'page'
 
   return (
-    <details className='group relative min-w-0' data-testid='assistant-journey'>
-      <summary className='text-muted-foreground hover:text-foreground cursor-pointer list-none text-xs whitespace-nowrap transition-colors [&::-webkit-details-marker]:hidden'>
+    <details
+      className={cn(
+        'group min-w-0',
+        pagePresentation
+          ? 'order-last w-full md:order-none md:w-auto md:relative'
+          : 'relative'
+      )}
+      data-testid='assistant-journey'
+    >
+      <summary className='text-muted-foreground hover:text-foreground cursor-pointer list-none text-xs transition-colors md:whitespace-nowrap [&::-webkit-details-marker]:hidden'>
         {t('Main quest')} {mainDone}/{journey.main.length}
         <span className='px-1.5' aria-hidden='true'>
           ·
         </span>
         {t('Side quest')} {sideDone}/{journey.side.length}
       </summary>
-      <div className='assistant-glass-surface border-border/60 bg-background/80 absolute top-8 right-0 z-30 grid w-72 gap-5 border-b border-l px-5 py-5 shadow-xl'>
+      <div
+        className={cn(
+          'border-border/60 bg-background grid gap-5 border px-5 py-5',
+          pagePresentation
+            ? 'mt-3 w-full md:absolute md:top-8 md:right-0 md:z-30 md:mt-0 md:w-72 md:shadow-xl'
+            : 'absolute top-8 right-0 z-30 w-72 shadow-xl'
+        )}
+        data-testid='assistant-journey-panel'
+      >
         {[
           { title: t('Main quest'), steps: journey.main },
           { title: t('Side quest'), steps: journey.side },

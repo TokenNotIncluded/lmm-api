@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -19,11 +20,20 @@ import (
 )
 
 type assistantCreateKeyInput struct {
-	Confirmed      bool   `json:"confirmed"`
+	Confirmed         bool   `json:"confirmed"`
+	ConfirmationToken string `json:"confirmation_token"`
+	Name              string `json:"name"`
+	Group             string `json:"group"`
+	ConversationID    int64  `json:"conversation_id"`
+}
+
+type assistantCreateKeyDraft struct {
 	Name           string `json:"name"`
 	Group          string `json:"group"`
 	ConversationID int64  `json:"conversation_id"`
 }
+
+const assistantKeyConfirmationTTL = 10 * time.Minute
 
 type assistantKeyGroupOption struct {
 	ID            string   `json:"id"`
@@ -120,7 +130,10 @@ func getAssistantKeyGroupOptions(userGroup string) []assistantKeyGroupOption {
 	return options
 }
 
-func executeAssistantCreateKeyRequestTool(userID int, input map[string]any) map[string]any {
+func executeAssistantCreateKeyRequestTool(c *gin.Context, userID int, input map[string]any) map[string]any {
+	if c == nil || c.GetBool("use_access_token") {
+		return map[string]any{"ok": false, "error": "a browser login session is required to prepare API key creation"}
+	}
 	user, granted, err := getAssistantDeveloperAccess(userID)
 	if err != nil {
 		return map[string]any{"ok": false, "error": "account access could not be loaded"}
@@ -129,8 +142,20 @@ func executeAssistantCreateKeyRequestTool(userID int, input map[string]any) map[
 		return map[string]any{"ok": false, "error": "L1 access is required to create an API key"}
 	}
 
+	name := strings.TrimSpace(inputString(input, "name"))
+	if name == "" {
+		name = "AI assistant key"
+	}
+	if utf8.RuneCountInString(name) > 50 {
+		return map[string]any{"ok": false, "status": "name_invalid", "error": "API key name must be at most 50 characters"}
+	}
 	options := getAssistantKeyGroupOptions(user.Group)
 	group := inputString(input, "group")
+	if assistantUserContextFromGin(c).CreateKeyAction == assistantCreateKeyActionRequest {
+		// The first model turn may discover choices but may not choose one on the
+		// user's behalf. A later user turn naming the group is required.
+		group = ""
+	}
 	if group == "" {
 		return map[string]any{
 			"ok":               true,
@@ -138,7 +163,7 @@ func executeAssistantCreateKeyRequestTool(userID int, input map[string]any) map[
 			"action":           "create_key",
 			"available_groups": options,
 			"message":          "Ask the user to choose one exact routing group before requesting confirmation.",
-			"requested_name":   inputString(input, "name"),
+			"requested_name":   name,
 		}
 	}
 	if (group != "auto" && !service.IsUserSelectableGroup(user.Group, group)) ||
@@ -150,13 +175,35 @@ func executeAssistantCreateKeyRequestTool(userID int, input map[string]any) map[
 			"available_groups": options,
 		}
 	}
+	sessionID := strings.TrimSpace(c.GetString("session_id"))
+	if sessionID == "" {
+		return map[string]any{"ok": false, "status": "session_required", "error": "a browser login session is required to prepare API key creation"}
+	}
+	conversationID := assistantHistoryConversationID(c)
+	payload, err := json.Marshal(assistantCreateKeyDraft{Name: name, Group: group, ConversationID: conversationID})
+	if err != nil {
+		return map[string]any{"ok": false, "error": "API key confirmation could not be prepared"}
+	}
+	confirmationToken, _, err := model.CreateAuthFlow(model.AuthFlowCreate{
+		Purpose: model.AuthFlowPurposeAssistantKey, UserId: userID, SessionId: sessionID,
+		Payload: string(payload), ExpiresAt: time.Now().Add(assistantKeyConfirmationTTL),
+	})
+	if err != nil {
+		return map[string]any{"ok": false, "error": "API key confirmation could not be prepared"}
+	}
+	action := map[string]any{
+		"type": "create_key", "confirmation_token": confirmationToken,
+		"requires_confirmation": true, "expires_in_seconds": int(assistantKeyConfirmationTTL / time.Second),
+		"name": name, "group": group, "conversation_id": conversationID, "ui_path": "/keys",
+	}
+	c.Set(assistantClientActionKey, action)
 	return map[string]any{
 		"ok":              true,
 		"status":          "confirmation_required",
 		"action":          "create_key",
 		"ui_path":         "/keys",
 		"message":         "Ask the user to explicitly confirm creating the key with this exact group; do not claim that a key exists yet.",
-		"requested_name":  inputString(input, "name"),
+		"requested_name":  name,
 		"requested_group": group,
 	}
 }
@@ -184,7 +231,35 @@ func CreateAssistantDefaultKey(c *gin.Context) {
 		return
 	}
 
+	confirmationToken := strings.TrimSpace(input.ConfirmationToken)
 	name := strings.TrimSpace(input.Name)
+	group := strings.TrimSpace(input.Group)
+	flowMatch := model.AuthFlowMatch{}
+	if confirmationToken != "" {
+		sessionID := strings.TrimSpace(c.GetString("session_id"))
+		if sessionID == "" {
+			writeAssistantError(c, http.StatusForbidden, "ASSISTANT_SESSION_REQUIRED", errors.New("a browser login session is required for assistant key confirmation"))
+			return
+		}
+		flowMatch = model.AuthFlowMatch{
+			Purpose: model.AuthFlowPurposeAssistantKey, UserId: userID, SessionId: sessionID,
+		}
+		flow, flowErr := model.GetAuthFlow(confirmationToken, flowMatch)
+		if flowErr != nil {
+			writeAssistantError(c, http.StatusUnprocessableEntity, "ASSISTANT_KEY_CONFIRMATION_INVALID", errors.New("API key confirmation is invalid, expired, or already used"))
+			return
+		}
+		var draft assistantCreateKeyDraft
+		if json.Unmarshal([]byte(flow.Payload), &draft) != nil {
+			writeAssistantError(c, http.StatusUnprocessableEntity, "ASSISTANT_KEY_CONFIRMATION_INVALID", errors.New("API key confirmation is invalid"))
+			return
+		}
+		// The browser confirms only the opaque draft. Never trust client-side
+		// replacements for the assistant-prepared name or group.
+		name = strings.TrimSpace(draft.Name)
+		group = strings.TrimSpace(draft.Group)
+		input.ConversationID = draft.ConversationID
+	}
 	if name == "" {
 		name = "AI assistant key"
 	}
@@ -192,7 +267,6 @@ func CreateAssistantDefaultKey(c *gin.Context) {
 		writeAssistantError(c, http.StatusUnprocessableEntity, "ASSISTANT_KEY_NAME_TOO_LONG", errors.New("API key name must be at most 50 characters"))
 		return
 	}
-	group := strings.TrimSpace(input.Group)
 	if utf8.RuneCountInString(group) > 64 {
 		writeAssistantError(c, http.StatusUnprocessableEntity, "ASSISTANT_KEY_GROUP_TOO_LONG", errors.New("API key group must be at most 64 characters"))
 		return
@@ -217,15 +291,17 @@ func CreateAssistantDefaultKey(c *gin.Context) {
 	if !requireAssistantConfirmation(c, input.Confirmed) {
 		return
 	}
-	count, err := model.CountUserTokens(userID)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
 	maxTokens := operation_setting.GetMaxUserTokens()
-	if int(count) >= maxTokens {
-		writeAssistantError(c, http.StatusConflict, "ASSISTANT_KEY_LIMIT_REACHED", fmt.Errorf("API key limit reached (%d)", maxTokens))
-		return
+	if confirmationToken == "" {
+		count, countErr := model.CountUserTokens(userID)
+		if countErr != nil {
+			common.ApiError(c, countErr)
+			return
+		}
+		if int(count) >= maxTokens {
+			writeAssistantError(c, http.StatusConflict, "ASSISTANT_KEY_LIMIT_REACHED", fmt.Errorf("API key limit reached (%d)", maxTokens))
+			return
+		}
 	}
 
 	key, err := common.GenerateKey()
@@ -251,14 +327,29 @@ func CreateAssistantDefaultKey(c *gin.Context) {
 		token.Group = "auto"
 		token.CrossGroupRetry = true
 	}
-	card, err := model.InsertAssistantTokenAndCreateSecureCard(
-		&token,
-		userID,
-		input.ConversationID,
-		"已创建 API 凭证；仅你可一次性查看和复制",
-		fmt.Sprintf(`{"api_key":%q}`, "sk-"+token.Key),
-	)
+	var card *model.AssistantSecureCard
+	if confirmationToken != "" {
+		card, err = model.ConsumeAssistantKeyFlowAndCreateSecureCard(
+			confirmationToken, flowMatch, &token, userID, input.ConversationID,
+			"已创建 API 凭证；仅你可一次性查看和复制",
+			fmt.Sprintf(`{"api_key":%q}`, "sk-"+token.Key), maxTokens,
+		)
+	} else {
+		card, err = model.InsertAssistantTokenAndCreateSecureCard(
+			&token, userID, input.ConversationID,
+			"已创建 API 凭证；仅你可一次性查看和复制",
+			fmt.Sprintf(`{"api_key":%q}`, "sk-"+token.Key),
+		)
+	}
 	if err != nil {
+		if errors.Is(err, model.ErrAuthFlowInvalid) || errors.Is(err, model.ErrAuthFlowExpired) || errors.Is(err, model.ErrAuthFlowConsumed) {
+			writeAssistantError(c, http.StatusUnprocessableEntity, "ASSISTANT_KEY_CONFIRMATION_INVALID", errors.New("API key confirmation is invalid, expired, or already used"))
+			return
+		}
+		if errors.Is(err, model.ErrAssistantTokenLimit) {
+			writeAssistantError(c, http.StatusConflict, "ASSISTANT_KEY_LIMIT_REACHED", fmt.Errorf("API key limit reached (%d)", maxTokens))
+			return
+		}
 		// Never fall back to serializing the key in a normal JSON response. The
 		// model transaction rolls back the token as well as the card on failure.
 		writeAssistantError(c, http.StatusInternalServerError, "ASSISTANT_SECURE_CARD_CREATE_FAILED", errors.New("API key could not be created securely; please try again"))

@@ -597,6 +597,10 @@ func assistantRecommendationWorkflowRequired(userContext assistantUserContext) b
 		userContext.RecommendationAction != assistantRecommendationActionNone
 }
 
+func assistantCreateKeyWorkflowRequired(userContext assistantUserContext) bool {
+	return userContext.DeveloperAccessGranted && userContext.CreateKeyAction != assistantCreateKeyActionNone
+}
+
 func assistantNeedsReadChain(userContext assistantUserContext) bool {
 	return len(assistantReadChain(userContext)) > 1
 }
@@ -628,10 +632,36 @@ func assistantRecommendationWorkflowMinSteps(userContext assistantUserContext) i
 	return steps
 }
 
+func assistantCreateKeyWorkflowMinSteps(userContext assistantUserContext) int {
+	if !assistantCreateKeyWorkflowRequired(userContext) {
+		return 0
+	}
+	steps := 2 // prepare the confirmation or group-choice result, then answer
+	if userContext.CreateKeyAction == assistantCreateKeyActionRequest {
+		steps++ // read live service facts before preparing key creation
+	}
+	if userContext.ConversationTitleNeeded {
+		steps++
+	}
+	return steps
+}
+
 func assistantToolChoiceForAgentStep(userContext assistantUserContext, calledTools map[string]bool, successfulTools map[string]bool) any {
 	choice := assistantToolChoiceForContext(userContext)
 	if userContext.ConversationTitleNeeded {
 		return choice
+	}
+	if assistantCreateKeyWorkflowRequired(userContext) {
+		if userContext.CreateKeyAction == assistantCreateKeyActionRequest && !calledTools["get_service_facts"] {
+			return assistantNamedToolChoice("get_service_facts")
+		}
+		if userContext.CreateKeyAction == assistantCreateKeyActionRequest && !successfulTools["get_service_facts"] {
+			return "none"
+		}
+		if !calledTools["request_create_key"] {
+			return assistantNamedToolChoice("request_create_key")
+		}
+		return "none"
 	}
 	if !assistantRecommendationWorkflowRequired(userContext) {
 		if name, failed := assistantNextRead(userContext, calledTools, successfulTools); name != "" && assistantToolAllowedForContext(name, userContext) {
@@ -940,6 +970,7 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 	}
 	forceL0Assessment := assistantL0InterlocutorAssessmentRequired(userContext)
 	forceRecommendationWorkflow := assistantRecommendationWorkflowRequired(userContext)
+	forceCreateKeyWorkflow := assistantCreateKeyWorkflowRequired(userContext)
 	forceReadChain := assistantNeedsReadChain(userContext)
 	if forceL0Assessment && maxSteps < 2 {
 		maxSteps = 2
@@ -947,17 +978,20 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 	if minimum := assistantRecommendationWorkflowMinSteps(userContext); maxSteps < minimum {
 		maxSteps = minimum
 	}
+	if minimum := assistantCreateKeyWorkflowMinSteps(userContext); maxSteps < minimum {
+		maxSteps = minimum
+	}
 	if minimum := assistantReadChainSteps(userContext); maxSteps < minimum {
 		maxSteps = minimum
 	}
 	if !settings.AgentLoopEnabled {
-		if !forceL0Assessment && !forceRecommendationWorkflow && !forceReadChain {
+		if !forceL0Assessment && !forceRecommendationWorkflow && !forceCreateKeyWorkflow && !forceReadChain {
 			maxSteps = 1
 		}
 	}
 	cacheKey := c.GetString("assistant_cache_key")
 	usedCacheSensitiveTool := false
-	agentEnabled := maxSteps > 1 && (settings.AgentLoopEnabled || forceL0Assessment || forceRecommendationWorkflow || forceReadChain)
+	agentEnabled := maxSteps > 1 && (settings.AgentLoopEnabled || forceL0Assessment || forceRecommendationWorkflow || forceCreateKeyWorkflow || forceReadChain)
 	var tools []assistantOpenAIToolDefinition
 	var calledTools, successfulTools map[string]bool
 	if agentEnabled {
@@ -997,7 +1031,7 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 			return
 		}
 		message := response.Choices[0].Message
-		if forceRecommendationWorkflow || forceReadChain {
+		if forceRecommendationWorkflow || forceCreateKeyWorkflow || forceReadChain {
 			requiredTool := assistantNamedToolChoiceName(request.ToolChoice)
 			if requiredTool != "" && (len(message.ToolCalls) != 1 || strings.TrimSpace(message.ToolCalls[0].Function.Name) != requiredTool) {
 				writeAssistantError(c, http.StatusBadGateway, "ASSISTANT_REQUIRED_TOOL_MISSING", errors.New("assistant did not follow the required tool workflow"))
@@ -1017,7 +1051,7 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 			c.Data(status, "application/json; charset=utf-8", normalizedBody)
 			return
 		}
-		if (!settings.AgentLoopEnabled && !forceL0Assessment && !forceRecommendationWorkflow && !forceReadChain) || step >= maxSteps-1 {
+		if (!settings.AgentLoopEnabled && !forceL0Assessment && !forceRecommendationWorkflow && !forceCreateKeyWorkflow && !forceReadChain) || step >= maxSteps-1 {
 			writeAssistantError(c, http.StatusBadGateway, "ASSISTANT_AGENT_MAX_STEPS", errors.New("assistant agent reached its step limit before producing a final answer"))
 			return
 		}
@@ -1286,7 +1320,7 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 		if c == nil {
 			return map[string]any{"ok": false, "error": "signed-in account is unavailable"}
 		}
-		return executeAssistantCreateKeyRequestTool(actorUserID, input)
+		return executeAssistantCreateKeyRequestTool(c, actorUserID, input)
 	case "request_human_support":
 		message := strings.TrimSpace(inputString(input, "message"))
 		messageLength := len([]rune(message))
