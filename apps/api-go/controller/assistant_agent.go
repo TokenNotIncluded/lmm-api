@@ -1474,7 +1474,21 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 	if err := json.Unmarshal([]byte(arguments), &input); err != nil {
 		return map[string]any{"ok": false, "error": "tool arguments must be valid JSON"}
 	}
-	if result, handled := runSkillTool(name, actorUserID, input); handled {
+	if name == forgetProfileTool && (c == nil || !assistantExplicitProfileForgetRequest(c.GetString("assistant_history_latest_message"))) {
+		return map[string]any{
+			"ok": false, "status": "explicit_request_required",
+			"error": "profile removal requires an explicit user request",
+		}
+	}
+	explicitProfileForget := false
+	if name == forgetProfileTool && c != nil {
+		if rawContext, exists := c.Get(assistantUserContextKey); exists {
+			if userContext, ok := rawContext.(assistantUserContext); ok {
+				explicitProfileForget = assistantExplicitProfileForgetRequest(userContext.LatestUserRequest)
+			}
+		}
+	}
+	if result, handled := runSkillTool(name, actorUserID, input, explicitProfileForget); handled {
 		return result
 	}
 

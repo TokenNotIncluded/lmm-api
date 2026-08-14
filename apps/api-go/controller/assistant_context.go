@@ -481,6 +481,37 @@ func assistantExplicitCreateKeyRequest(message string) bool {
 		assistantTextContainsAny(text, "创建", "新建", "生成", "开一个", "建一个", "create", "generate", "make", "new key")
 }
 
+// assistantExplicitProfileForgetRequest is the deterministic consent boundary
+// for the profile-forgetting skill. A model-provided confirm flag is not
+// enough: the current user turn must contain a direct request to remove their
+// own AI profile/labels. Questions about profiles, memories, or administrator
+// controls deliberately remain false.
+func assistantExplicitProfileForgetRequest(message string) bool {
+	text := strings.ToLower(strings.TrimSpace(message))
+	if text == "" || assistantTextContainsAny(text,
+		"不要删除", "别删除", "不要删", "别删", "不要移除", "别移除", "不要忘记", "别忘记",
+		"do not delete", "don't delete", "do not remove", "don't remove", "do not forget", "don't forget",
+		"如何删除", "怎么删除", "怎样删除", "how to delete", "how can i remove", "how do i remove",
+	) {
+		return false
+	}
+	hasTarget := assistantTextContainsAny(text,
+		"用户画像", "个人画像", "ai画像", "ai profile", "assistant profile", "profile skill", "personalization",
+		"我的画像", "我的标签", "ai标签", "ai 标签", "标签", "tags",
+	)
+	hasAction := assistantTextContainsAny(text,
+		"删除", "删掉", "移除", "清除", "清空", "忘记", "重置",
+		"delete", "remove", "erase", "clear", "forget", "reset",
+	)
+	if !hasTarget || !hasAction {
+		return false
+	}
+	return assistantTextContainsAny(text,
+		"帮我", "请", "我要", "我想", "替我", "给我", "我的",
+		"please", "can you", "could you", "would you", "i want", "i'd like", "my", "mine",
+	)
+}
+
 func classifyAssistantCreateKeyAction(message string, conversations ...[]assistantOpenAIMessage) assistantCreateKeyAction {
 	if assistantExplicitCreateKeyRequest(message) {
 		return assistantCreateKeyActionRequest
@@ -694,7 +725,7 @@ func assistantProfileDraft(context assistantUserContext) (model.ProfileInput, bo
 // remain authoritative, and security/promotion labels never become durable
 // metadata. All writes are best-effort so a profile table outage cannot break
 // chat availability.
-func syncAssistantProfile(context assistantUserContext, conversation []assistantOpenAIMessage) {
+func syncAssistantProfile(context assistantUserContext, conversation []assistantOpenAIMessage, requestID string) {
 	if context.UserID <= 0 || context.AdministratorMode || !assistantProfileEvidenceReady(conversation) {
 		return
 	}
@@ -716,10 +747,15 @@ func syncAssistantProfile(context assistantUserContext, conversation []assistant
 			return
 		}
 	}
-	if _, err := model.SaveProfile(context.UserID, context.UserID, input); err != nil {
+	saved, err := model.SaveProfile(context.UserID, context.UserID, input)
+	if err != nil {
 		if !errors.Is(err, model.ErrAssistantProfileManaged) {
 			common.SysError("failed to persist assistant AI profile: " + err.Error())
 		}
+		return
+	}
+	if err := model.RecordAssistantUserProfileAudit(context.UserID, existing, saved, requestID); err != nil {
+		common.SysError("failed to record assistant AI profile audit: " + err.Error())
 	}
 }
 

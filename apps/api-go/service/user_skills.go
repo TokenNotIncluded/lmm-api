@@ -69,6 +69,10 @@ func (skills UserSkills) LearnProfile(draft ProfileDraft) (*model.AssistantUserP
 	return skills.saveProfile(draft, model.AssistantProfileSourceAI)
 }
 
+func (skills UserSkills) ForgetProfile() error {
+	return model.DeleteAssistantUserProfile(skills.ownerID, skills.actorID)
+}
+
 func (skills UserSkills) SetProfile(draft ProfileDraft) (*model.AssistantUserProfile, error) {
 	return skills.saveProfile(draft, model.AssistantProfileSourceAdmin)
 }

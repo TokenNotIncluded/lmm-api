@@ -39,13 +39,16 @@ var (
 	ErrAssistantProfileStrategyLong = errors.New("assistant profile strategy is too long")
 	ErrAssistantProfileTagsInvalid  = errors.New("assistant profile tags are invalid")
 	ErrAssistantProfileManaged      = errors.New("assistant profile is administrator managed")
+	ErrAssistantProfileMissing      = errors.New("assistant profile not found")
+	ErrAssistantProfileOwner        = errors.New("assistant profile can only be forgotten by its owner")
 	assistantProfileSecretPattern   = regexp.MustCompile(`(?i)(password|passwd|api[ _-]?key|access[ _-]?token|refresh[ _-]?token|client[ _-]?secret|secret|credential|密码|密钥|令牌)\s*[:=：]\s*[^\s,;]+`)
 )
 
-// AssistantUserProfile is the administrator-maintained profile override for
-// one user. It intentionally stores no raw conversations, inferred identity
-// traits, or credentials. The assistant may use it internally to choose a
-// response strategy, but it is never exposed by a user-facing endpoint.
+// AssistantUserProfile is a per-user response-style skill. The source records
+// whether it was learned by the assistant or authored by an administrator;
+// administrator-owned rows are authoritative and cannot be overwritten by
+// the assistant. It intentionally stores no raw conversations, inferred
+// identity traits, or credentials, and is never exposed by a user endpoint.
 type AssistantUserProfile struct {
 	Id         int    `json:"-" gorm:"primaryKey"`
 	UserId     int    `json:"-" gorm:"not null;uniqueIndex"`
@@ -252,12 +255,12 @@ func GetAssistantUserProfile(userID int) (*AssistantUserProfile, error) {
 		return nil, gorm.ErrInvalidData
 	}
 	var profile AssistantUserProfile
-	err := DB.Where("user_id = ?", userID).First(&profile).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
+	result := DB.Where("user_id = ?", userID).Limit(1).Find(&profile)
+	if result.Error != nil {
+		return nil, result.Error
 	}
-	if err != nil {
-		return nil, err
+	if result.RowsAffected == 0 {
+		return nil, nil
 	}
 	return &profile, nil
 }
@@ -328,16 +331,16 @@ func SaveProfile(userID, updatedBy int, input ProfileInput) (*AssistantUserProfi
 		if err := lockAssistantOwner(tx, userID); err != nil {
 			return err
 		}
-		findErr := lockForUpdate(tx).Where("user_id = ?", userID).First(&saved).Error
-		if errors.Is(findErr, gorm.ErrRecordNotFound) {
+		findResult := lockForUpdate(tx).Where("user_id = ?", userID).Limit(1).Find(&saved)
+		if findResult.Error != nil {
+			return findResult.Error
+		}
+		if findResult.RowsAffected == 0 {
 			saved = AssistantUserProfile{
 				UserId: userID, ProfileKey: profileKey, TagsJSON: string(tagsJSON), Strategy: strategy,
 				Source: input.Source, Enabled: input.Enabled, UpdatedBy: updatedBy, CreatedAt: now, UpdatedAt: now,
 			}
 			return tx.Create(&saved).Error
-		}
-		if findErr != nil {
-			return findErr
 		}
 		if input.Source == AssistantProfileSourceAI && saved.Source != AssistantProfileSourceAI {
 			return ErrAssistantProfileManaged
@@ -350,6 +353,35 @@ func SaveProfile(userID, updatedBy int, input ProfileInput) (*AssistantUserProfi
 		return nil, err
 	}
 	return &saved, nil
+}
+
+// DeleteAssistantUserProfile removes only an assistant-owned profile after an
+// explicit owner request. Administrator-authored profiles are immutable from
+// this path, and actor/user equality is checked again at the model boundary.
+func DeleteAssistantUserProfile(userID, actorID int) error {
+	if userID <= 0 || actorID <= 0 {
+		return gorm.ErrInvalidData
+	}
+	if userID != actorID {
+		return ErrAssistantProfileOwner
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockAssistantOwner(tx, userID); err != nil {
+			return err
+		}
+		var profile AssistantUserProfile
+		result := lockForUpdate(tx).Where("user_id = ?", userID).Limit(1).Find(&profile)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return ErrAssistantProfileMissing
+		}
+		if profile.Source != AssistantProfileSourceAI {
+			return ErrAssistantProfileManaged
+		}
+		return tx.Delete(&profile).Error
+	})
 }
 
 // AssistantUserProfileDefault returns an API-safe empty state for users who

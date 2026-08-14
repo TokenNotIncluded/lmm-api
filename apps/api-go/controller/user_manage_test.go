@@ -36,7 +36,7 @@ func setupManageUserTestDB(t *testing.T) *gorm.DB {
 		&model.User{}, &model.UserSession{}, &model.Log{}, &model.CasbinRule{}, &model.AuthzRole{},
 		&model.TopUp{}, &model.DeveloperAccessRequest{}, &model.DeveloperAccessRecommendationArchive{}, &model.UnifiedTodoRead{},
 		&model.AccountActionRequest{}, &model.L1OnboardingTodo{}, &model.AdvancedSecurityEvent{},
-		&model.AssistantLead{}, &model.AssistantUserProfile{}, &model.AssistantMemory{},
+		&model.AssistantLead{}, &model.AssistantUserProfile{}, &model.AssistantUserProfileAudit{}, &model.AssistantMemory{},
 		&model.PromptConversionRef{}, &model.PromptConversationRef{}, &model.AssistantConversation{}, &model.AssistantHistoryMessage{},
 		&model.AssistantSecureCard{}, &model.AssistantSecurityIncident{},
 		&model.AssistantNewUserGift{},

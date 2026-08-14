@@ -137,6 +137,28 @@ func TestAssistantCreateKeyRequestRequiresAStandaloneKeyTerm(t *testing.T) {
 	}
 }
 
+func TestAssistantExplicitProfileForgetRequestRequiresDirectUserConsent(t *testing.T) {
+	tests := []struct {
+		name    string
+		message string
+		want    bool
+	}{
+		{name: "Chinese direct request", message: "请删除我的 AI 用户画像和标签", want: true},
+		{name: "English direct request", message: "Please forget my AI profile", want: true},
+		{name: "clear own profile", message: "Can you clear my profile skill?", want: true},
+		{name: "profile question is not consent", message: "What is my profile?", want: false},
+		{name: "negative request is not consent", message: "不要删除我的 AI 画像", want: false},
+		{name: "memory request is not profile deletion", message: "请忘记我的 API 配置记忆", want: false},
+		{name: "generic profile deletion lacks owner request", message: "delete profile", want: false},
+		{name: "account profile is not assistant profile", message: "delete my account profile", want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, assistantExplicitProfileForgetRequest(test.message))
+		})
+	}
+}
+
 func TestAssistantImageGenerationWorkflowIsExplicitAndL1Only(t *testing.T) {
 	for _, message := range []string{"帮我画一张极简海报", "generate an image of a quiet workshop"} {
 		context := assistantUserContext{
@@ -508,7 +530,7 @@ func TestAssistantUserContextIncludesPolicySignalsWithoutSecrets(t *testing.T) {
 
 func TestAssistantAIPersonalizationPersistsOnlyBoundedSafeLabels(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.AssistantUserProfile{}))
+	require.NoError(t, db.AutoMigrate(&model.AssistantUserProfile{}, &model.AssistantUserProfileAudit{}))
 	user := &model.User{
 		Username: "ai-profile-owner", Password: "password", Role: common.RoleCommonUser,
 		Status: common.UserStatusEnabled, Group: "default", AffCode: "ai-profile-owner",
@@ -516,30 +538,42 @@ func TestAssistantAIPersonalizationPersistsOnlyBoundedSafeLabels(t *testing.T) {
 	require.NoError(t, db.Create(user).Error)
 	context := assistantUserContext{UserID: user.Id, CustomerProfile: assistantProfileGuided}
 	oneTurn := []assistantOpenAIMessage{{Role: "user", Content: "我需要配置客户端"}}
-	syncAssistantProfile(context, oneTurn)
+	syncAssistantProfile(context, oneTurn, "profile-audit-first")
 	profile, err := model.GetAssistantUserProfile(user.Id)
 	require.NoError(t, err)
 	assert.Nil(t, profile)
 
 	twoTurns := append(oneTurn, assistantOpenAIMessage{Role: "user", Content: "请用短步骤教我完成配置"})
-	syncAssistantProfile(context, twoTurns)
+	syncAssistantProfile(context, twoTurns, "profile-audit-second")
 	profile, err = model.GetAssistantUserProfile(user.Id)
 	require.NoError(t, err)
 	require.NotNil(t, profile)
 	assert.Equal(t, model.AssistantProfileGuided, profile.ProfileKey)
 	assert.Equal(t, []string{"guided", "needs_steps"}, model.AssistantUserProfileTags(profile))
 	assert.Equal(t, model.AssistantProfileSourceAI, profile.Source)
+	var audit model.AssistantUserProfileAudit
+	require.NoError(t, db.Where("user_id = ?", user.Id).First(&audit).Error)
+	assert.Equal(t, "profile-audit-second", audit.RequestId)
+	assert.Equal(t, "", audit.OldProfileKey)
+	assert.Equal(t, model.AssistantProfileGuided, audit.NewProfileKey)
+	assert.Equal(t, 0, audit.OldTagCount)
+	assert.Equal(t, 2, audit.NewTagCount)
+	assert.NotEmpty(t, audit.NewTagsHash)
+	assert.NotContains(t, audit.NewTagsHash, "guided")
 
 	adminProfile, err := model.SaveProfile(user.Id, 99, model.ProfileInput{
 		Key: model.AssistantProfileOperator, Tags: []string{"production"},
 		Strategy: "Administrator-owned strategy.", Source: model.AssistantProfileSourceAdmin, Enabled: true,
 	})
 	require.NoError(t, err)
-	syncAssistantProfile(assistantUserContext{UserID: user.Id, CustomerProfile: assistantProfileTechnical}, twoTurns)
+	syncAssistantProfile(assistantUserContext{UserID: user.Id, CustomerProfile: assistantProfileTechnical}, twoTurns, "profile-audit-admin-owned")
 	stored, err := model.GetAssistantUserProfile(user.Id)
 	require.NoError(t, err)
 	assert.Equal(t, adminProfile.ProfileKey, stored.ProfileKey)
 	assert.Equal(t, model.AssistantProfileSourceAdmin, stored.Source)
+	var auditCount int64
+	require.NoError(t, db.Model(&model.AssistantUserProfileAudit{}).Where("user_id = ?", user.Id).Count(&auditCount).Error)
+	assert.EqualValues(t, 1, auditCount)
 }
 
 func TestAssistantPromptKeepsAccountContextInternal(t *testing.T) {

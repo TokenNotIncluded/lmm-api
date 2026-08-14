@@ -143,3 +143,37 @@ func TestPopulateAssistantUserProfilesUsesStrictLowerRoleVisibility(t *testing.T
 	require.NoError(t, PopulateAssistantUserProfiles(rows, target.Id, common.RoleCommonUser))
 	assert.Nil(t, target.AssistantProfile)
 }
+
+func TestDeleteAssistantUserProfileOnlyAllowsOwnerToForgetAIProfile(t *testing.T) {
+	db := setupConsoleActivationTestDB(t)
+	require.NoError(t, db.AutoMigrate(&AssistantUserProfile{}))
+	owner := newProfileOwner(t, db, "forget-owner")
+	admin := newProfileOwner(t, db, "forget-admin")
+	_, err := SaveProfile(owner.Id, owner.Id, ProfileInput{
+		Key: AssistantProfileGuided, Tags: []string{"guided"}, Strategy: "short steps",
+		Source: AssistantProfileSourceAI, Enabled: true,
+	})
+	require.NoError(t, err)
+
+	assert.ErrorIs(t, DeleteAssistantUserProfile(owner.Id, admin.Id), ErrAssistantProfileOwner)
+	assert.NoError(t, DeleteAssistantUserProfile(owner.Id, owner.Id))
+	profile, err := GetAssistantUserProfile(owner.Id)
+	require.NoError(t, err)
+	assert.Nil(t, profile)
+	assert.ErrorIs(t, DeleteAssistantUserProfile(owner.Id, owner.Id), ErrAssistantProfileMissing)
+}
+
+func TestDeleteAssistantUserProfileRefusesAdministratorOwnedProfile(t *testing.T) {
+	db := setupConsoleActivationTestDB(t)
+	require.NoError(t, db.AutoMigrate(&AssistantUserProfile{}))
+	owner := newProfileOwner(t, db, "forget-managed")
+	_, err := SaveProfile(owner.Id, 99, ProfileInput{
+		Key: AssistantProfileOperator, Tags: []string{"production"}, Strategy: "admin",
+		Source: AssistantProfileSourceAdmin, Enabled: true,
+	})
+	require.NoError(t, err)
+	assert.ErrorIs(t, DeleteAssistantUserProfile(owner.Id, owner.Id), ErrAssistantProfileManaged)
+	profile, err := GetAssistantUserProfile(owner.Id)
+	require.NoError(t, err)
+	assert.NotNil(t, profile)
+}

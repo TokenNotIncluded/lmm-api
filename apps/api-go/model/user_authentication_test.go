@@ -23,6 +23,7 @@ func migrateUserAssistantData(t *testing.T) {
 		&UnifiedTodoRead{},
 		&AssistantLead{},
 		&AssistantUserProfile{},
+		&AssistantUserProfileAudit{},
 		&AssistantMemory{},
 		&AdvancedSecurityEvent{},
 		&DeveloperAccessRequest{},
@@ -38,7 +39,7 @@ func migrateUserAssistantData(t *testing.T) {
 	))
 	t.Cleanup(func() {
 		for _, table := range []string{
-			"unified_todo_reads", "assistant_leads", "assistant_user_profiles", "assistant_memories",
+			"unified_todo_reads", "assistant_leads", "assistant_user_profiles", "assistant_user_profile_audits", "assistant_memories",
 			"advanced_security_events", "developer_access_requests", "account_action_requests", "l1_onboarding_todos",
 			"assistant_pre_conversation_conversion_attributions",
 			"assistant_pre_conversation_conversation_attributions", "assistant_history_messages",

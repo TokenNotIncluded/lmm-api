@@ -10,9 +10,10 @@ import (
 )
 
 const (
-	recallMemoryTool = "recall_memory"
-	saveMemoryTool   = "remember_memory"
-	saveProfileTool  = "remember_profile_skill"
+	recallMemoryTool  = "recall_memory"
+	saveMemoryTool    = "remember_memory"
+	saveProfileTool   = "remember_profile_skill"
+	forgetProfileTool = "forget_profile_skill"
 )
 
 func assistantSkillTools() []assistantOpenAIToolDefinition {
@@ -59,19 +60,26 @@ func assistantSkillTools() []assistantOpenAIToolDefinition {
 				},
 			}, []string{"profile_key"}),
 		}},
+		{Type: "function", Function: assistantOpenAIToolFunction{
+			Name:        forgetProfileTool,
+			Description: "Forget the signed-in user's AI-created response-style profile only after the user explicitly asks to remove it. Set confirm=true only for that explicit request. Never use this for an administrator-managed profile; the server will refuse it. This changes no memories, account access, or billing data.",
+			Parameters: objectSchema(map[string]any{
+				"confirm": map[string]any{"type": "boolean"},
+			}, []string{"confirm"}),
+		}},
 	}
 }
 
 func isAssistantSkillTool(name string) bool {
 	switch name {
-	case recallMemoryTool, saveMemoryTool, saveProfileTool:
+	case recallMemoryTool, saveMemoryTool, saveProfileTool, forgetProfileTool:
 		return true
 	default:
 		return false
 	}
 }
 
-func runSkillTool(name string, userID int, input map[string]any) (map[string]any, bool) {
+func runSkillTool(name string, userID int, input map[string]any, explicitProfileForget bool) (map[string]any, bool) {
 	if !isAssistantSkillTool(name) {
 		return nil, false
 	}
@@ -89,8 +97,44 @@ func runSkillTool(name string, userID int, input map[string]any) (map[string]any
 		return saveMemory(skills, input), true
 	case saveProfileTool:
 		return saveProfileSkill(skills, input), true
+	case forgetProfileTool:
+		return forgetProfileSkill(skills, input, explicitProfileForget), true
 	default:
 		return nil, false
+	}
+}
+
+func forgetProfileSkill(skills service.UserSkills, input map[string]any, explicitProfileForget bool) map[string]any {
+	confirmed, ok := input["confirm"].(bool)
+	if !ok || !confirmed || !explicitProfileForget {
+		return map[string]any{
+			"ok": false, "status": "explicit_request_required",
+			"error": "profile removal requires an explicit user request",
+		}
+	}
+	if err := skills.ForgetProfile(); err != nil {
+		if errors.Is(err, model.ErrAssistantProfileManaged) {
+			return map[string]any{
+				"ok": false, "status": "administrator_managed",
+				"error": "profile skill is managed by an administrator and was not removed",
+			}
+		}
+		if errors.Is(err, model.ErrAssistantProfileMissing) {
+			return map[string]any{
+				"ok": false, "status": "not_found",
+				"error": "no AI-created profile skill exists",
+			}
+		}
+		if errors.Is(err, model.ErrAssistantProfileOwner) {
+			return map[string]any{
+				"ok": false, "status": "owner_scope_required",
+				"error": "profile skills can only be removed by their owner",
+			}
+		}
+		return map[string]any{"ok": false, "error": "profile skill could not be removed"}
+	}
+	return map[string]any{
+		"ok": true, "status": "profile_skill_forgotten", "owner_scope": "signed_in_user_only",
 	}
 }
 
