@@ -419,6 +419,58 @@ describe('AssistantPanel', () => {
     }
   })
 
+  test('switches the page assistant to the persisted classic layout', async () => {
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/assistant/status')
+      return { data: { success: true, data: assistantStatus } }
+    }) as typeof api.get
+
+    const rendered = await renderPanel(undefined, 'page')
+    try {
+      const panel = document.querySelector<HTMLElement>('#ai-assistant-panel')
+      assert.ok(panel)
+      assert.equal(panel.dataset.layout, 'modern')
+      assert.equal(
+        document.querySelector('[data-testid="assistant-classic-sidebar"]'),
+        null
+      )
+
+      const toggle = document.querySelector<HTMLButtonElement>(
+        '[data-testid="assistant-layout-toggle"]'
+      )
+      assert.ok(toggle)
+      await act(async () => {
+        toggle.click()
+        await flushEffects()
+      })
+
+      assert.equal(panel.dataset.layout, 'classic')
+      assert.ok(
+        document.querySelector('[data-testid="assistant-classic-sidebar"]')
+      )
+      assert.ok(
+        document.querySelector('[data-testid="assistant-classic-welcome"]')
+      )
+      assert.equal(
+        window.localStorage.getItem('lmm-assistant-layout'),
+        'classic'
+      )
+
+      await act(async () => {
+        const activeToggle = document.querySelector<HTMLButtonElement>(
+          '[data-testid="assistant-layout-toggle"]'
+        )
+        assert.ok(activeToggle)
+        activeToggle.click()
+        await flushEffects()
+      })
+      assert.equal(panel.dataset.layout, 'modern')
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
   test('keeps restricted page and mobile composers compact without changing preset content', async () => {
     api.get = (async (url: string) => {
       if (url === '/api/assistant/pre-conversation-presets') {

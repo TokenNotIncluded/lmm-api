@@ -345,6 +345,7 @@ func mainMigrationModels() []interface{} {
 		&CasbinRule{}, &AuthzRole{}, &PersonalAccessIP{},
 		&AssistantLead{}, &AssistantProfileBucket{}, &AssistantUserProfile{}, &AssistantMemory{}, &AssistantFirstQuestionStat{}, &PromptPresetRow{}, &PromptPresetStat{}, &PromptConversionRef{}, &PromptConversationRef{}, &AssistantConversation{}, &AssistantHistoryMessage{}, &AssistantSecureCard{}, &AssistantSecurityIncident{}, &AssistantNewUserGift{}, &AssistantGiftRiskMemory{}, &AdvancedSecurityEvent{},
 		&ViolationFeeState{}, &ViolationFeeRecord{}, &ViolationFeeAppeal{},
+		&FinanceLedgerEntry{}, &FinancePaymentMethod{},
 		&ReleaseNote{}, &ReleaseNoteRead{}, &UnifiedTodoRead{}, &L1OnboardingTodo{},
 	}
 }
@@ -437,6 +438,8 @@ func migrateDBFast() error {
 		{&OpenSourceBountyRESTOperation{}, "OpenSourceBountyRESTOperation"},
 		{&SubscriptionOrder{}, "SubscriptionOrder"},
 		{&UserSubscription{}, "UserSubscription"},
+		{&FinanceLedgerEntry{}, "FinanceLedgerEntry"},
+		{&FinancePaymentMethod{}, "FinancePaymentMethod"},
 		{&SubscriptionPreConsumeRecord{}, "SubscriptionPreConsumeRecord"},
 		{&CustomOAuthProvider{}, "CustomOAuthProvider"},
 		{&UserOAuthBinding{}, "UserOAuthBinding"},

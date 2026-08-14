@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 56 56" role="img" aria-label="LMM Forge">
+  <rect x="5" y="5" width="46" height="46" rx="16" fill="#dce9e4" stroke="#141413" stroke-width="2"/>
+  <path d="M13 34c5-10 10-15 16-15 5 0 10 4 14 12" fill="none" stroke="#141413" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M13 22c5 10 10 15 16 15 5 0 10-4 14-12" fill="none" stroke="#df8062" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="13" cy="28" r="3" fill="#141413"/>
+</svg>

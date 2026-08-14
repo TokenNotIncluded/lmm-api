@@ -22,6 +22,7 @@ import {
   Bug,
   Compass,
   CreditCard,
+  ChartNoAxesCombined,
   FileText,
   Key,
   LayoutDashboard,
@@ -205,6 +206,11 @@ export function useSidebarData(): SidebarData {
             title: t('Subscriptions'),
             url: '/subscriptions',
             icon: CreditCard,
+          },
+          {
+            title: t('Cost control'),
+            url: '/finance',
+            icon: ChartNoAxesCombined,
           },
           {
             title: t('System Info'),

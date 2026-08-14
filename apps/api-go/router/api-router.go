@@ -437,6 +437,14 @@ func SetApiRouter(router *gin.Engine) {
 		financeRoute.Use(middleware.AdminAuth(), middleware.DisableCache())
 		{
 			financeRoute.GET("/export", controller.ExportFinancialData)
+			financeRoute.GET("/overview", controller.GetFinanceOverview)
+			financeRoute.GET("/users", controller.GetFinanceUsers)
+			financeRoute.GET("/users/:user_id", controller.GetFinanceUser)
+			financeRoute.GET("/entries", controller.ListFinanceEntries)
+			financeRoute.POST("/entries", controller.CreateFinanceEntry)
+			financeRoute.POST("/entries/:entry_id/reverse", controller.ReverseFinanceEntry)
+			financeRoute.GET("/payment-methods", controller.ListFinancePaymentMethods)
+			financeRoute.PUT("/payment-methods/:method", controller.UpdateFinancePaymentMethod)
 		}
 		logRoute.GET("/self", middleware.UserAuth(), controller.GetUserLogs)
 		logRoute.GET("/self/search", middleware.UserAuth(), middleware.SearchRateLimit(), controller.SearchUserLogs)
