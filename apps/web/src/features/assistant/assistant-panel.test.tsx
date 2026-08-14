@@ -461,12 +461,8 @@ describe('AssistantPanel', () => {
       )
       assert.ok(findButton('Back to conversation'))
 
-      const closeButton = document.querySelector<HTMLButtonElement>(
-        '[data-slot="sheet-close"]'
-      )
-      assert.ok(closeButton)
       await act(async () => {
-        closeButton.click()
+        findButton('Back to conversation').click()
         await flushEffects()
       })
 
