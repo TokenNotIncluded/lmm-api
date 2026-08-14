@@ -72,6 +72,35 @@ func TestFinanceOverviewDoesNotDoubleCountSubscriptionTopUpMirror(t *testing.T) 
 	require.Equal(t, int64(10_000_000), view.Users[0].RevenueMicros)
 }
 
+func TestFinancePaymentMethodsDiscoverAllFinancialSources(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.TopUp{}, &model.SubscriptionOrder{}, &model.FinanceLedgerEntry{}, &model.FinancePaymentMethod{}))
+	now := time.Now().Unix()
+	require.NoError(t, db.Create(&model.SubscriptionOrder{
+		UserId: 1, PlanId: 1, Money: 2, TradeNo: "finance-method-subscription",
+		PaymentMethod: "", PaymentProvider: "subscription-provider",
+		Status: common.TopUpStatusSuccess, CreateTime: now - 2, CompleteTime: now - 1,
+	}).Error)
+	_, err := model.AppendFinanceLedgerEntry(&model.FinanceLedgerEntry{
+		EntryType: model.FinanceEntryExpense, Category: "refund", AmountMicros: 1_000_000,
+		Currency: model.FinanceCurrencyUSD, Direction: model.FinanceDirectionDebit,
+		PaymentMethod: "manual-wire", SourceType: model.FinanceSourceRefund,
+		OccurredAt: now - 1, CreatedBy: 1, IdempotencyKey: "finance-method-ledger",
+	})
+	require.NoError(t, err)
+
+	methods, byMethod, err := loadFinancePaymentMethods()
+	require.NoError(t, err)
+	require.Contains(t, byMethod, "subscription-provider")
+	require.Contains(t, byMethod, "manual-wire")
+	methodNames := make([]string, 0, len(methods))
+	for _, method := range methods {
+		methodNames = append(methodNames, method.Method)
+	}
+	require.Contains(t, methodNames, "subscription-provider")
+	require.Contains(t, methodNames, "manual-wire")
+}
+
 func TestFinanceOverviewStreamsSourcesAcrossBatchBoundary(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}, &model.SubscriptionOrder{}, &model.Log{}, &model.FinanceLedgerEntry{}, &model.FinancePaymentMethod{}))

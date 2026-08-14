@@ -298,9 +298,41 @@ func loadFinancePaymentMethods() ([]model.FinancePaymentMethod, map[string]model
 		byMethod[config.Method] = config
 	}
 	known := []string{model.PaymentProviderStripe, model.PaymentProviderCreem, model.PaymentProviderEpay, model.PaymentProviderFastPay, model.PaymentProviderWaffo, model.PaymentProviderWaffoPancake}
-	var observed []string
-	model.DB.Model(&model.TopUp{}).Where("payment_method <> '' OR payment_provider <> ''").Distinct().Pluck("payment_method", &observed)
-	known = append(known, observed...)
+	// Discover methods from every financial source. Payment methods are not
+	// guaranteed to be stored in TopUp: subscription orders and manually
+	// imported/refund ledger rows may be the only evidence of a provider, and
+	// older integrations sometimes populated only payment_provider. The
+	// normalized method follows the same method-then-provider rule used by the
+	// revenue accumulator, so the selector cannot silently omit a real source.
+	// Keep discovery server-side DISTINCT: loading every historical payment row
+	// just to find a handful of method names would defeat the dashboard's memory
+	// bound.
+	appendObserved := func(query *gorm.DB) error {
+		const normalizedMethod = "COALESCE(NULLIF(TRIM(payment_method), ''), NULLIF(TRIM(payment_provider), ''))"
+		var observed []string
+		if err := query.
+			Where("payment_method <> '' OR payment_provider <> ''").
+			Distinct(normalizedMethod).
+			Pluck(normalizedMethod, &observed).Error; err != nil {
+			return err
+		}
+		for _, method := range observed {
+			method = strings.TrimSpace(method)
+			if method != "" {
+				known = append(known, method)
+			}
+		}
+		return nil
+	}
+	if err := appendObserved(model.DB.Model(&model.TopUp{}).Select("payment_method, payment_provider")); err != nil {
+		return nil, nil, err
+	}
+	if err := appendObserved(model.DB.Model(&model.SubscriptionOrder{}).Select("payment_method, payment_provider")); err != nil {
+		return nil, nil, err
+	}
+	if err := appendObserved(model.DB.Model(&model.FinanceLedgerEntry{}).Select("payment_method, payment_provider")); err != nil {
+		return nil, nil, err
+	}
 	for _, method := range known {
 		method = strings.TrimSpace(method)
 		if method == "" || seen[method] || method == model.PaymentProviderBalance {
