@@ -2108,11 +2108,26 @@ func TestAssistantGiftRequestUsesOneTimeDecisionToolForL1(t *testing.T) {
 	// “新人福利” is the wording users actually see in the console. It must
 	// enter the same confirmation-gated gift workflow as “新用户礼包” rather
 	// than falling through to a generic onboarding answer.
-	for _, message := range []string{"申请新人福利", "我想领取新手福利"} {
+	for _, message := range []string{"申请新人福利", "我想领取新手福利", "我想申请新用户福利", "How do I claim the new user gift?"} {
 		context.LatestUserRequest = message
 		assert.Equal(t, []string{"prepare_new_user_gift"}, assistantReadChain(context), message)
 		assert.True(t, assistantNewUserGiftWorkflowRequired(context), message)
 	}
+}
+
+func TestAssistantGiftWorkflowCarriesIntoSubstantiveFollowUp(t *testing.T) {
+	conversation := []assistantOpenAIMessage{
+		{Role: "user", Content: "我想申请新用户福利。"},
+		{Role: "assistant", Content: "请说明你的实际用途。"},
+		{Role: "user", Content: "我会用它做软件开发和 API 调试。"},
+	}
+	context := assistantUserContextForRequest(0, conversation[len(conversation)-1].Content, conversation)
+	assert.True(t, context.NewUserGiftRequested)
+	assert.True(t, assistantNewUserGiftWorkflowRequired(context))
+	assert.Equal(t, "prepare_new_user_gift", assistantNamedToolChoiceName(
+		assistantToolChoiceForAgentStep(context, map[string]bool{}, map[string]bool{}),
+	))
+	assert.Equal(t, []string{"prepare_new_user_gift"}, assistantReadChain(context))
 }
 
 func TestAssistantExplicitHumanHandoffUsesConfirmationTool(t *testing.T) {

@@ -97,6 +97,44 @@ func (assistantRetentionHandler) Run(ctx context.Context, task *model.SystemTask
 			failSystemTask(task, runnerID, err)
 			return
 		}
+		deleted, err := model.PurgeAssistantProfileBucketsBefore(ctx, payload.ActiveBefore, payload.BatchSize)
+		if err != nil {
+			failSystemTask(task, runnerID, err)
+			return
+		}
+		if deleted == 0 {
+			break
+		}
+		state.ProfileBuckets += deleted
+		if err := model.UpdateSystemTaskState(task.TaskID, runnerID, state); err != nil {
+			logSystemTaskLockError(ctx, task, err)
+			return
+		}
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			failSystemTask(task, runnerID, err)
+			return
+		}
+		deleted, err := model.PurgeAssistantFirstQuestionsBefore(ctx, payload.ActiveBefore, payload.BatchSize)
+		if err != nil {
+			failSystemTask(task, runnerID, err)
+			return
+		}
+		if deleted == 0 {
+			break
+		}
+		state.FirstQuestions += deleted
+		if err := model.UpdateSystemTaskState(task.TaskID, runnerID, state); err != nil {
+			logSystemTaskLockError(ctx, task, err)
+			return
+		}
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			failSystemTask(task, runnerID, err)
+			return
+		}
 		deleted, err := model.PurgeAssistantIntentLeadsBefore(ctx, payload.ActiveBefore, payload.BatchSize)
 		if err != nil {
 			failSystemTask(task, runnerID, err)

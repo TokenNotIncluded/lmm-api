@@ -764,8 +764,8 @@ func assistantPublicActivityQuestion(text string) bool {
 func assistantNewUserGiftRequest(text string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(text))
 	return assistantTextContainsAny(normalized,
-		"新用户礼包", "新手礼包", "新手奖励", "新用户奖励", "新人礼包", "新人福利", "新手福利",
-		"welcome gift", "welcome bonus", "new-user gift", "new user bonus",
+		"新用户礼包", "新用户福利", "新手礼包", "新手奖励", "新用户奖励", "新人礼包", "新人福利", "新手福利",
+		"welcome gift", "welcome bonus", "new-user gift", "new user gift", "new user bonus",
 		"免费额度", "赠送额度", "送我额度", "刀额度", "美元额度", "美金额度", "free credit", "welcome credit",
 	)
 }
@@ -790,7 +790,7 @@ func assistantReadChain(userContext assistantUserContext) []string {
 	if assistantPublicActivityQuestion(text) {
 		tools = append(tools, "get_service_facts")
 	}
-	if assistantNewUserGiftRequest(text) && assistantNewUserGiftToolAllowed(userContext) {
+	if (assistantNewUserGiftRequest(text) || userContext.NewUserGiftRequested) && assistantNewUserGiftToolAllowed(userContext) {
 		tools = append(tools, "prepare_new_user_gift")
 	}
 	if assistantTextContainsAny(text,
@@ -843,7 +843,7 @@ func assistantPublicActivityWorkflowRequired(userContext assistantUserContext) b
 }
 
 func assistantNewUserGiftWorkflowRequired(userContext assistantUserContext) bool {
-	return assistantNewUserGiftRequest(userContext.LatestUserRequest) &&
+	return (assistantNewUserGiftRequest(userContext.LatestUserRequest) || userContext.NewUserGiftRequested) &&
 		assistantNewUserGiftToolAllowed(userContext)
 }
 

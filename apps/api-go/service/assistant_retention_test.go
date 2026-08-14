@@ -46,6 +46,8 @@ func TestAssistantRetentionHandlerDeletesInBatchesAndFinishesTask(t *testing.T) 
 	require.NoError(t, model.DB.AutoMigrate(
 		&model.AssistantLead{},
 		&model.AssistantUserProfileAudit{},
+		&model.AssistantProfileBucket{},
+		&model.AssistantFirstQuestionStat{},
 		&model.AssistantConversation{},
 		&model.AssistantHistoryMessage{},
 		&model.AssistantSecureCard{},
@@ -57,6 +59,8 @@ func TestAssistantRetentionHandlerDeletesInBatchesAndFinishesTask(t *testing.T) 
 	t.Cleanup(func() {
 		model.DB.Exec("DELETE FROM assistant_leads")
 		model.DB.Exec("DELETE FROM assistant_user_profile_audits")
+		model.DB.Exec("DELETE FROM assistant_profile_buckets")
+		model.DB.Exec("DELETE FROM assistant_first_question_stats")
 		model.DB.Exec("DELETE FROM unified_todo_reads")
 		model.DB.Exec("DELETE FROM assistant_security_incidents")
 		model.DB.Exec("DELETE FROM assistant_secure_cards")
@@ -76,6 +80,14 @@ func TestAssistantRetentionHandlerDeletesInBatchesAndFinishesTask(t *testing.T) 
 		{UserId: 100, Source: model.AssistantProfileSourceAI, CreatedAt: 2},
 		{UserId: 100, Source: model.AssistantProfileSourceAI, CreatedAt: 11},
 		{UserId: 100, Source: model.AssistantProfileSourceAdmin, CreatedAt: 1},
+	}).Error)
+	require.NoError(t, model.DB.Create(&[]model.AssistantProfileBucket{
+		{Profile: model.AssistantProfileUnknown, BucketStart: 1, Count: 2},
+		{Profile: model.AssistantProfileTechnical, BucketStart: 11, Count: 3},
+	}).Error)
+	require.NoError(t, model.DB.Create(&[]model.AssistantFirstQuestionStat{
+		{QuestionHash: "old-question", Question: "old question", BucketStart: 1, Count: 2, LastAskedAt: 1},
+		{QuestionHash: "new-question", Question: "new question", BucketStart: 11, Count: 3, LastAskedAt: 11},
 	}).Error)
 
 	for index := range 3 {
@@ -133,6 +145,8 @@ func TestAssistantRetentionHandlerDeletesInBatchesAndFinishesTask(t *testing.T) 
 	assert.EqualValues(t, 3, state.Messages)
 	assert.EqualValues(t, 2, state.IntentLeads)
 	assert.EqualValues(t, 2, state.ProfileAudits)
+	assert.EqualValues(t, 1, state.ProfileBuckets)
+	assert.EqualValues(t, 1, state.FirstQuestions)
 	assert.EqualValues(t, 2, state.SecurityEvents)
 	assert.EqualValues(t, 2, state.GiftRiskMemory)
 	assert.Equal(t, 100, state.Progress)

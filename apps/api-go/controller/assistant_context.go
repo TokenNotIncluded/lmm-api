@@ -177,6 +177,10 @@ type assistantUserContext struct {
 	// reconstructed from the current user turn and the immediately preceding
 	// group-choice prompt, and never crosses the model context boundary.
 	CreateKeyAction assistantCreateKeyAction `json:"-"`
+	// NewUserGiftRequested carries a pending one-time gift request across a
+	// substantive follow-up turn. It is local workflow state and must never
+	// cross the model boundary or become durable user metadata.
+	NewUserGiftRequested bool `json:"-"`
 	// CustomerProfile is a local routing decision. The model receives only the
 	// neutral behavior strategy, never labels such as security_risk or
 	// promotion_seeker that could be repeated back to the user.
@@ -337,6 +341,7 @@ func assistantUserContextForRequest(userID int, message string, conversation ...
 		LatestUserRequest:    message,
 		RecommendationAction: classifyAssistantRecommendationAction(message),
 		CreateKeyAction:      classifyAssistantCreateKeyAction(message, conversation...),
+		NewUserGiftRequested: assistantNewUserGiftRequest(message) || assistantPendingNewUserGiftRequest(userID, conversation...),
 	}
 	if userID <= 0 {
 		context.CustomerProfile, context.ProfileSignals = classifyAssistantCustomerProfile(context, userText)
@@ -404,6 +409,33 @@ func assistantUserContextForRequest(userID int, message string, conversation ...
 	sort.Strings(context.PaymentRestrictionCauses)
 	sort.Strings(context.ProfileSignals)
 	return context
+}
+
+func assistantConversationHasNewUserGiftRequest(conversations ...[]assistantOpenAIMessage) bool {
+	if len(conversations) == 0 {
+		return false
+	}
+	for _, message := range conversations[0] {
+		if message.Role == "user" && assistantNewUserGiftRequest(message.Content) {
+			return true
+		}
+	}
+	return false
+}
+
+func assistantPendingNewUserGiftRequest(userID int, conversations ...[]assistantOpenAIMessage) bool {
+	if !assistantConversationHasNewUserGiftRequest(conversations...) {
+		return false
+	}
+	// A signed-in account's durable one-time decision is authoritative. If it
+	// already exists, do not force the gift tool on every later turn merely
+	// because the old request remains in the transcript. Keep the anonymous
+	// path useful for deterministic tests and pre-auth context construction.
+	if userID <= 0 {
+		return true
+	}
+	gift, err := model.GetAssistantNewUserGift(userID)
+	return err == nil && gift == nil
 }
 
 func assistantLooksLikeGreeting(text string) bool {

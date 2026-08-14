@@ -22,6 +22,8 @@ type AssistantRetentionDeleteResult struct {
 	Incidents      int64 `json:"incidents"`
 	IntentLeads    int64 `json:"intent_leads"`
 	ProfileAudits  int64 `json:"profile_audits"`
+	ProfileBuckets int64 `json:"profile_buckets"`
+	FirstQuestions int64 `json:"first_questions"`
 	SecurityEvents int64 `json:"security_events"`
 	GiftRiskMemory int64 `json:"gift_risk_memory"`
 }
@@ -242,5 +244,52 @@ func PurgeAssistantUserProfileAuditsBefore(ctx context.Context, cutoff int64, ba
 	deleted := DB.WithContext(ctx).
 		Where("id IN ? AND source = ? AND created_at < ?", ids, AssistantProfileSourceAI, cutoff).
 		Delete(&AssistantUserProfileAudit{})
+	return deleted.RowsAffected, deleted.Error
+}
+
+// PurgeAssistantProfileBucketsBefore removes old aggregate profile buckets in
+// bounded batches. The bucket key is hourly, but time alone does not cap the
+// number of rows; without this boundary even the fixed profile vocabulary
+// grows forever.
+func PurgeAssistantProfileBucketsBefore(ctx context.Context, cutoff int64, batchSize int) (int64, error) {
+	if cutoff <= 0 {
+		return 0, gorm.ErrInvalidData
+	}
+	batchSize = NormalizeAssistantRetentionBatchSize(batchSize)
+	var ids []int
+	if err := DB.WithContext(ctx).Model(&AssistantProfileBucket{}).
+		Where("bucket_start < ?", cutoff).
+		Order("bucket_start ASC, id ASC").Limit(batchSize).Pluck("id", &ids).Error; err != nil {
+		return 0, err
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	deleted := DB.WithContext(ctx).
+		Where("id IN ? AND bucket_start < ?", ids, cutoff).
+		Delete(&AssistantProfileBucket{})
+	return deleted.RowsAffected, deleted.Error
+}
+
+// PurgeAssistantFirstQuestionsBefore removes old first-question aggregate
+// buckets in bounded batches. Questions are redacted and aggregate-only, but
+// a new question hash can still create one row per hour indefinitely.
+func PurgeAssistantFirstQuestionsBefore(ctx context.Context, cutoff int64, batchSize int) (int64, error) {
+	if cutoff <= 0 {
+		return 0, gorm.ErrInvalidData
+	}
+	batchSize = NormalizeAssistantRetentionBatchSize(batchSize)
+	var ids []int
+	if err := DB.WithContext(ctx).Model(&AssistantFirstQuestionStat{}).
+		Where("bucket_start < ?", cutoff).
+		Order("bucket_start ASC, id ASC").Limit(batchSize).Pluck("id", &ids).Error; err != nil {
+		return 0, err
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	deleted := DB.WithContext(ctx).
+		Where("id IN ? AND bucket_start < ?", ids, cutoff).
+		Delete(&AssistantFirstQuestionStat{})
 	return deleted.RowsAffected, deleted.Error
 }
