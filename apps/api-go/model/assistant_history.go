@@ -31,8 +31,15 @@ const (
 	assistantHistoryMessageMaxRunes    = 4000
 	assistantHistoryPageMax            = 100
 	assistantHistorySecureCardMax      = 100
-	assistantSecureCardPayloadMaxBytes = 16 * 1024
-	assistantSecureCardDefaultLifetime = 10 * time.Minute
+	// A conversation is intentionally bounded independently of the retention
+	// task.  Retention handles old conversations; these limits protect an
+	// active conversation from becoming an unbounded in-process/database
+	// payload when a client keeps chatting for months.
+	assistantHistoryConversationMaxMessages = 128
+	assistantHistoryConversationMaxBytes    = 256 * 1024
+	assistantHistoryTrimBatch               = 256
+	assistantSecureCardPayloadMaxBytes      = 16 * 1024
+	assistantSecureCardDefaultLifetime      = 10 * time.Minute
 )
 
 var (
@@ -567,7 +574,70 @@ func appendAssistantHistoryMessageTx(tx *gorm.DB, conversationID int64, role, co
 	if err := tx.Create(message).Error; err != nil {
 		return nil, err
 	}
+	if err := trimAssistantHistoryTx(tx, conversationID); err != nil {
+		return nil, err
+	}
 	return message, nil
+}
+
+// trimAssistantHistoryTx keeps active conversations within a small, explicit
+// storage budget.  It runs inside the owner's transaction, so a concurrent
+// turn cannot observe or create an inconsistent sequence.  Only the oldest
+// rows are removed; the newest turn remains available for the model and UI.
+// Secure cards linked to removed card rows are deleted first so encrypted
+// payloads cannot outlive the transcript row that referenced them.
+func trimAssistantHistoryTx(tx *gorm.DB, conversationID int64) error {
+	if conversationID <= 0 {
+		return gorm.ErrInvalidData
+	}
+	var count int64
+	if err := tx.Model(&AssistantHistoryMessage{}).
+		Where("conversation_id = ?", conversationID).
+		Count(&count).Error; err != nil {
+		return err
+	}
+	var totals struct {
+		Bytes int64 `gorm:"column:bytes"`
+	}
+	if err := tx.Model(&AssistantHistoryMessage{}).
+		Select("COALESCE(SUM(LENGTH(content)), 0) AS bytes").
+		Where("conversation_id = ?", conversationID).
+		Scan(&totals).Error; err != nil {
+		return err
+	}
+	if count <= assistantHistoryConversationMaxMessages && totals.Bytes <= assistantHistoryConversationMaxBytes {
+		return nil
+	}
+
+	var candidates []AssistantHistoryMessage
+	if err := tx.Select("id", "content").
+		Where("conversation_id = ?", conversationID).
+		Order("sequence ASC, id ASC").
+		Limit(assistantHistoryTrimBatch).
+		Find(&candidates).Error; err != nil {
+		return err
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	deleteIDs := make([]int64, 0, len(candidates))
+	remainingCount := count
+	remainingBytes := totals.Bytes
+	for _, candidate := range candidates {
+		if remainingCount <= assistantHistoryConversationMaxMessages && remainingBytes <= assistantHistoryConversationMaxBytes {
+			break
+		}
+		deleteIDs = append(deleteIDs, candidate.Id)
+		remainingCount--
+		remainingBytes -= int64(len(candidate.Content))
+	}
+	if len(deleteIDs) == 0 {
+		return nil
+	}
+	if err := tx.Where("message_id IN ?", deleteIDs).Delete(&AssistantSecureCard{}).Error; err != nil {
+		return err
+	}
+	return tx.Where("id IN ?", deleteIDs).Delete(&AssistantHistoryMessage{}).Error
 }
 
 // RecordAssistantConversationTurnForRequest records a complete successful turn.

@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func setupAssistantHistoryTestDB(t *testing.T) (*User, *User, *User, *User) {
@@ -365,6 +366,49 @@ func TestAssistantHistoryLoadsRecentCompletePairsAndRecentDetailRows(t *testing.
 	require.Len(t, detailMessages, 4)
 	assert.Equal(t, "detail-question-3", detailMessages[0].Content)
 	assert.Equal(t, "detail-answer-4", detailMessages[3].Content)
+}
+
+func TestAssistantHistoryBoundsActiveConversationStorage(t *testing.T) {
+	l0, _, _, _ := setupAssistantHistoryTestDB(t)
+	conversation, err := PrepareAssistantConversation(l0.Id, 0, "bounded active history")
+	require.NoError(t, err)
+
+	card, err := CreateAssistantSecureCard(
+		l0.Id,
+		conversation.Id,
+		AssistantSecureCardTypeAPIKey,
+		"old card",
+		`{"api_key":"old-secret"}`,
+	)
+	require.NoError(t, err)
+
+	largeMessage := strings.Repeat("x", assistantHistoryMessageMaxRunes)
+	for turn := 0; turn < assistantHistoryConversationMaxMessages; turn += 2 {
+		require.NoError(t, RecordAssistantConversationTurn(
+			l0.Id,
+			conversation.Id,
+			largeMessage,
+			largeMessage,
+		))
+	}
+
+	var count int64
+	require.NoError(t, DB.Model(&AssistantHistoryMessage{}).
+		Where("conversation_id = ?", conversation.Id).
+		Count(&count).Error)
+	assert.LessOrEqual(t, count, int64(assistantHistoryConversationMaxMessages))
+	var bytes int64
+	require.NoError(t, DB.Model(&AssistantHistoryMessage{}).
+		Select("COALESCE(SUM(LENGTH(content)), 0)").
+		Where("conversation_id = ?", conversation.Id).
+		Scan(&bytes).Error)
+	assert.LessOrEqual(t, bytes, int64(assistantHistoryConversationMaxBytes))
+	var storedCard AssistantSecureCard
+	assert.ErrorIs(t, DB.First(&storedCard, "id = ?", card.Id).Error, gorm.ErrRecordNotFound)
+
+	_, messages, err := GetAssistantConversationHistory(l0.Id, conversation.Id, assistantHistoryPageMax)
+	require.NoError(t, err)
+	assert.NotEmpty(t, messages)
 }
 
 func TestAssistantSecureCardIsOpaqueEncryptedOwnerOnlyAndOneTime(t *testing.T) {
