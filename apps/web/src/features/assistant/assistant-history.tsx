@@ -73,7 +73,10 @@ function HistoryMessage(props: {
         {props.message.role === 'assistant' ? t('Service guide') : t('You')}
       </p>
       {props.message.role === 'assistant' && safeMessage.content ? (
-        <Response className='text-sm leading-6' final>
+        <Response
+          className='max-w-full text-sm leading-6 break-words [&_pre]:max-w-full [&_pre]:overflow-x-auto'
+          final
+        >
           {safeMessage.content}
         </Response>
       ) : props.message.role !== 'secure_card' && safeMessage.content ? (

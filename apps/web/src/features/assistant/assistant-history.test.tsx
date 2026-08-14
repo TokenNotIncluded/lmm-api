@@ -58,7 +58,8 @@ const { createInstance } = await import('i18next')
 const { I18nextProvider, initReactI18next } = await import('react-i18next')
 const { api } = await import('@/lib/api')
 const { useAuthStore } = await import('@/stores/auth-store')
-const { AssistantHistory } = await import('./assistant-history')
+const { AssistantHistory, AssistantHistoryConversation } =
+  await import('./assistant-history')
 
 const originalGet = api.get
 const originalPost = api.post
@@ -143,6 +144,28 @@ async function renderHistory(presentation: 'cards' | 'rows' = 'cards') {
             presentation={presentation}
             onOpenConversation={() => {}}
           />
+        </I18nextProvider>
+      </QueryClientProvider>
+    )
+    await flushEffects()
+  })
+  await act(flushEffects)
+  return { container, queryClient, root }
+}
+
+async function renderHistoryConversation() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  const container = document.createElement('div')
+  document.body.append(container)
+  const root = createRoot(container)
+
+  await act(async () => {
+    root.render(
+      <QueryClientProvider client={queryClient}>
+        <I18nextProvider i18n={i18n}>
+          <AssistantHistoryConversation conversation={activeConversation} />
         </I18nextProvider>
       </QueryClientProvider>
     )
@@ -576,6 +599,45 @@ describe('AssistantHistory archive controls', () => {
       assert.ok(
         rendered.container.querySelector('#assistant-history-audit-user-id')
       )
+    } finally {
+      await unmount(rendered)
+    }
+  })
+
+  test('keeps long assistant history messages usable on narrow screens', async () => {
+    const longMessage =
+      'https://console.example.test/history/this-is-a-very-long-assistant-message-without-spaces-that-must-remain-readable-on-mobile'
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/assistant/conversations/1')
+      return {
+        data: {
+          success: true,
+          data: {
+            conversation: activeConversation,
+            messages: [
+              {
+                id: 101,
+                role: 'assistant' as const,
+                content: longMessage,
+                created_at: 1_786_400_002,
+              },
+            ],
+            privacy_notice: 'Conversations are not private.',
+          },
+        },
+      }
+    }) as typeof api.get
+
+    const rendered = await renderHistoryConversation()
+    try {
+      const response = [...rendered.container.querySelectorAll('div')].find(
+        (node) =>
+          node.textContent === longMessage &&
+          node.className.includes('break-words')
+      )
+      assert.ok(response)
+      assert.match(response.className, /max-w-full/)
+      assert.match(response.className, /\[&_pre\]:overflow-x-auto/)
     } finally {
       await unmount(rendered)
     }
