@@ -11,6 +11,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const waffoPancakeMutationRequestMaxBytes = 16 << 10
+
 func SetApiRouter(router *gin.Engine) {
 	apiRouter := router.Group("/api")
 	apiRouter.Use(middleware.RouteTag("api"))
@@ -177,8 +179,8 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.POST("/creem/pay", middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.RequestCreemPay)
 				selfRoute.POST("/waffo/amount", middleware.PaymentMethodAccessGate(), controller.RequestWaffoAmount)
 				selfRoute.POST("/waffo/pay", middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.RequestWaffoPay)
-				selfRoute.POST("/waffo-pancake/amount", middleware.PaymentMethodAccessGate(), controller.RequestWaffoPancakeAmount)
-				selfRoute.POST("/waffo-pancake/pay", middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.RequestWaffoPancakePay)
+				selfRoute.POST("/waffo-pancake/amount", middleware.RequestBodyLimit(waffoPancakeMutationRequestMaxBytes), middleware.PaymentMethodAccessGate(), controller.RequestWaffoPancakeAmount)
+				selfRoute.POST("/waffo-pancake/pay", middleware.RequestBodyLimit(waffoPancakeMutationRequestMaxBytes), middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.RequestWaffoPancakePay)
 				selfRoute.POST("/aff_transfer", middleware.UserCriticalRateLimit("aff-transfer"), controller.TransferAffQuota)
 				selfRoute.PUT("/setting", controller.UpdateUserSetting)
 
@@ -277,7 +279,7 @@ func SetApiRouter(router *gin.Engine) {
 			subscriptionRoute.POST("/fastpay/pay", middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.SubscriptionRequestFastPay)
 			subscriptionRoute.POST("/stripe/pay", middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.SubscriptionRequestStripePay)
 			subscriptionRoute.POST("/creem/pay", middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.SubscriptionRequestCreemPay)
-			subscriptionRoute.POST("/waffo-pancake/pay", middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.SubscriptionRequestWaffoPancakePay)
+			subscriptionRoute.POST("/waffo-pancake/pay", middleware.RequestBodyLimit(waffoPancakeMutationRequestMaxBytes), middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.SubscriptionRequestWaffoPancakePay)
 		}
 		subscriptionAdminRoute := apiRouter.Group("/subscription/admin")
 		subscriptionAdminRoute.Use(middleware.AdminAuth())
@@ -317,10 +319,10 @@ func SetApiRouter(router *gin.Engine) {
 			// copied into access logs, browser history, and tracing systems. The
 			// catalog probe accepts an optional JSON body and otherwise resolves
 			// the server-side WAFFO_* credentials.
-			optionRoute.POST("/waffo-pancake/catalog", controller.ListWaffoPancakeCatalog)
-			optionRoute.POST("/waffo-pancake/pair", controller.CreateWaffoPancakePair)
-			optionRoute.POST("/waffo-pancake/save", controller.SaveWaffoPancake)
-			optionRoute.POST("/waffo-pancake/subscription-product", controller.CreateWaffoPancakeSubscriptionProduct)
+			optionRoute.POST("/waffo-pancake/catalog", middleware.RequestBodyLimit(waffoPancakeMutationRequestMaxBytes), controller.ListWaffoPancakeCatalog)
+			optionRoute.POST("/waffo-pancake/pair", middleware.RequestBodyLimit(waffoPancakeMutationRequestMaxBytes), controller.CreateWaffoPancakePair)
+			optionRoute.POST("/waffo-pancake/save", middleware.RequestBodyLimit(waffoPancakeMutationRequestMaxBytes), controller.SaveWaffoPancake)
+			optionRoute.POST("/waffo-pancake/subscription-product", middleware.RequestBodyLimit(waffoPancakeMutationRequestMaxBytes), controller.CreateWaffoPancakeSubscriptionProduct)
 			optionRoute.GET("/waffo-pancake/subscription-product-options", controller.ListWaffoPancakeSubscriptionProductOptions)
 		}
 
