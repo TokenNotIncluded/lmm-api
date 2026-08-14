@@ -4534,7 +4534,6 @@
     "Privacy-conscious": "プライバシー重視",
     "Private credential": "非公開の認証情報",
     "Private Deployment URL": "プライベートデプロイメントURL",
-    "Private details, passwords, API keys, and credentials are never safe to send in chat. Use a shielded private card when one is offered.": "個人情報、パスワード、API キー、認証情報をチャットで送信しないでください。必要な場合はシールド付きの非公開カードを使用してください。",
     "Processing OAuth response...": "OAuth応答を処理中...",
     "Processing...": "処理中...",
     "Product": "商品",
@@ -6858,6 +6857,23 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Main quest": "メインクエスト",
+    "Side quest": "サブクエスト",
+    "Ask AI for help": "AI に相談する",
+    "Get a recommendation": "推薦文を取得する",
+    "Create an API key": "API キーを作成する",
+    "Configure the API key": "API キーを設定する",
+    "Complete a real API call": "実際の API 呼び出しを完了する",
+    "Accept an open-source bounty": "オープンソース懸賞を引き受ける",
+    "New-user gift": "新規ユーザーギフト",
+    "Welcome gift claimed": "新規ユーザーギフトを受け取りました",
+    "Unable to claim welcome gift": "新規ユーザーギフトを受け取れません",
+    "Claim gift": "受け取る",
+    "The AI recommendation expired. Ask the assistant to prepare it again, or continue editing it yourself.": "AI の推薦文は期限切れです。助手に再作成を依頼するか、手動編集を続けてください。",
+    "Chat with AI to earn a $0–$10 new-user gift": "AI と会話して $0〜$10 の新規ユーザーギフトを獲得",
+    "No gift this time": "今回はギフトなし",
+    "Opportunity used": "チャンス使用済み",
+    "User-edited recommendation": "ユーザー編集済み推薦状"
   }
 }

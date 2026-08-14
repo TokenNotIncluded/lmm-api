@@ -4534,7 +4534,6 @@
     "Privacy-conscious": "Privacy-conscious",
     "Private credential": "Private credential",
     "Private Deployment URL": "Private Deployment URL",
-    "Private details, passwords, API keys, and credentials are never safe to send in chat. Use a shielded private card when one is offered.": "Private details, passwords, API keys, and credentials are never safe to send in chat. Use a shielded private card when one is offered.",
     "Processing OAuth response...": "Processing OAuth response...",
     "Processing...": "Processing...",
     "Product": "Product",
@@ -6858,6 +6857,23 @@
     "Zero retention": "Zero retention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Main quest": "Main quest",
+    "Side quest": "Side quest",
+    "Ask AI for help": "Ask AI for help",
+    "Get a recommendation": "Get a recommendation",
+    "Create an API key": "Create an API key",
+    "Configure the API key": "Configure the API key",
+    "Complete a real API call": "Complete a real API call",
+    "Accept an open-source bounty": "Accept an open-source bounty",
+    "New-user gift": "New-user gift",
+    "Welcome gift claimed": "Welcome gift claimed",
+    "Unable to claim welcome gift": "Unable to claim welcome gift",
+    "Claim gift": "Claim gift",
+    "The AI recommendation expired. Ask the assistant to prepare it again, or continue editing it yourself.": "The AI recommendation expired. Ask the assistant to prepare it again, or continue editing it yourself.",
+    "Chat with AI to earn a $0–$10 new-user gift": "Chat with AI to earn a $0–$10 new-user gift",
+    "No gift this time": "No gift this time",
+    "Opportunity used": "Opportunity used",
+    "User-edited recommendation": "User-edited recommendation"
   }
 }

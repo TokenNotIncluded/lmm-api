@@ -4534,7 +4534,6 @@
     "Privacy-conscious": "Souci de la confidentialité",
     "Private credential": "Identifiant privé",
     "Private Deployment URL": "URL de déploiement privé",
-    "Private details, passwords, API keys, and credentials are never safe to send in chat. Use a shielded private card when one is offered.": "N’envoyez jamais de données privées, mots de passe, clés API ou identifiants dans la discussion. Utilisez une carte privée protégée lorsqu’elle est proposée.",
     "Processing OAuth response...": "Traitement de la réponse OAuth...",
     "Processing...": "Traitement...",
     "Product": "Produit",
@@ -6858,6 +6857,23 @@
     "Zero retention": "Aucune rétention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Main quest": "Quête principale",
+    "Side quest": "Quête secondaire",
+    "Ask AI for help": "Demander l’aide de l’IA",
+    "Get a recommendation": "Obtenir une recommandation",
+    "Create an API key": "Créer une clé API",
+    "Configure the API key": "Configurer la clé API",
+    "Complete a real API call": "Effectuer un véritable appel API",
+    "Accept an open-source bounty": "Accepter une prime open source",
+    "New-user gift": "Cadeau de bienvenue",
+    "Welcome gift claimed": "Cadeau de bienvenue récupéré",
+    "Unable to claim welcome gift": "Impossible de récupérer le cadeau",
+    "Claim gift": "Récupérer",
+    "The AI recommendation expired. Ask the assistant to prepare it again, or continue editing it yourself.": "La recommandation de l’IA a expiré. Demandez-lui de la préparer à nouveau ou poursuivez la modification manuelle.",
+    "Chat with AI to earn a $0–$10 new-user gift": "Discutez avec l’IA pour gagner un cadeau de bienvenue de 0 à 10 $",
+    "No gift this time": "Aucun cadeau cette fois-ci",
+    "Opportunity used": "Chance utilisée",
+    "User-edited recommendation": "Recommandation modifiée par l’utilisateur"
   }
 }

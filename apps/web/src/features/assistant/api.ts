@@ -131,6 +131,36 @@ export type L1OnboardingTodo = {
   completed_at?: number
 }
 
+export type AssistantJourneyStepId =
+  | 'ask_ai'
+  | 'get_recommendation'
+  | 'create_api_key'
+  | 'install_client'
+  | 'configure_client'
+  | 'first_api_call'
+  | 'earn_ai_gift'
+  | 'accept_bounty'
+
+export type AssistantJourney = {
+  main: Array<{
+    id: AssistantJourneyStepId
+    status: 'pending' | 'completed' | 'failed'
+  }>
+  side: Array<{
+    id: AssistantJourneyStepId
+    status: 'pending' | 'completed' | 'failed'
+  }>
+}
+
+export type AssistantNewUserGift = {
+  amount_cents: number
+  quota: number
+  status: 'offered' | 'claimed' | 'declined'
+  reason: string
+  created_at: number
+  claimed_at: number
+}
+
 export type AssistantL1RecommendationAction = {
   type: 'l1_recommendation'
   user_statement: string
@@ -751,6 +781,45 @@ export async function getL1OnboardingTodo(): Promise<L1OnboardingTodo> {
     }
   )
   return requireAssistantData(response.data, 'Unable to load setup checklist')
+}
+
+export async function getAssistantJourney(): Promise<AssistantJourney> {
+  const response = await api.get<AssistantAPIResponse<AssistantJourney>>(
+    '/api/assistant/journey',
+    {
+      disableDuplicate: true,
+      skipBusinessError: true,
+      skipErrorHandler: true,
+    }
+  )
+  return requireAssistantData(response.data, 'Unable to load task progress')
+}
+
+export async function getAssistantNewUserGift(): Promise<AssistantNewUserGift | null> {
+  const response = await api.get<
+    AssistantAPIResponse<AssistantNewUserGift | null>
+  >('/api/assistant/new-user-gift', {
+    disableDuplicate: true,
+    skipBusinessError: true,
+    skipErrorHandler: true,
+  })
+  return requireAssistantData(response.data, 'Unable to load welcome gift')
+}
+
+export async function claimAssistantNewUserGift(): Promise<{
+  gift: AssistantNewUserGift
+  already_claimed: boolean
+}> {
+  const response = await api.post<
+    AssistantAPIResponse<{
+      gift: AssistantNewUserGift
+      already_claimed: boolean
+    }>
+  >('/api/assistant/new-user-gift/claim', undefined, {
+    skipBusinessError: true,
+    skipErrorHandler: true,
+  })
+  return requireAssistantData(response.data, 'Unable to claim welcome gift')
 }
 
 export async function revealAssistantPrivateCard(id: string): Promise<string> {

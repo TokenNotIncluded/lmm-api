@@ -41,6 +41,7 @@ func deleteUserAssistantData(tx *gorm.DB, userID int) error {
 		{&AssistantLead{}, "user_id = ?", []any{userID}},
 		{&AssistantMemory{}, "user_id = ?", []any{userID}},
 		{&AssistantUserProfile{}, "user_id = ?", []any{userID}},
+		{&AssistantNewUserGift{}, "user_id = ?", []any{userID}},
 		{&AdvancedSecurityEvent{}, "user_id = ?", []any{userID}},
 		{&DeveloperAccessRequest{}, "user_id = ?", []any{userID}},
 		{&AccountActionRequest{}, "target_user_id = ? OR requested_by_user_id = ?", []any{userID, userID}},

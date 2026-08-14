@@ -124,6 +124,7 @@ async function renderTool(
   options: {
     onContinueSetup?: () => void
     onSubmitted?: () => void
+    onDraftConsumed?: () => void
     recommendationDraft?: typeof recommendationDraft
   } = {}
 ) {
@@ -138,6 +139,7 @@ async function renderTool(
             recommendationDraft={options.recommendationDraft}
             onContinueSetup={options.onContinueSetup}
             onSubmitted={options.onSubmitted}
+            onDraftConsumed={options.onDraftConsumed}
           />
         </I18nextProvider>
       </QueryClientProvider>
@@ -453,6 +455,139 @@ describe('AssistantActivationTool', () => {
         document.querySelector<HTMLTextAreaElement>('textarea')
       assert.ok(reopenedTextarea)
       assert.equal(reopenedTextarea.value, '')
+    } finally {
+      await unmount(rendered)
+    }
+  })
+
+  test('manual edits never reuse an AI confirmation token', async () => {
+    api.get = (async () => ({
+      data: { success: true, data: pendingRequest },
+    })) as typeof api.get
+    const submittedBodies: unknown[] = []
+    api.post = (async (_url: string, data: unknown) => {
+      submittedBodies.push(data)
+      return {
+        data: {
+          success: true,
+          data: {
+            ...pendingRequest,
+            ai_recommendation:
+              'A manually revised recommendation that remains editable.',
+          },
+        },
+      }
+    }) as typeof api.post
+
+    const rendered = await renderTool({ recommendationDraft })
+    try {
+      await waitForCondition(
+        () => document.querySelector('textarea') !== null,
+        'AI revision editor did not open'
+      )
+      await act(async () => {
+        findButton('Save changes').click()
+        await flushEffects()
+      })
+      await waitForCondition(
+        () => submittedBodies.length === 1,
+        'AI revision was not saved'
+      )
+
+      await act(async () => {
+        findButton('Edit').click()
+        await flushEffects()
+      })
+      const textarea = document.querySelector<HTMLTextAreaElement>('textarea')
+      assert.ok(textarea)
+      await setTextareaValue(
+        textarea,
+        'A manually revised recommendation that remains editable.'
+      )
+      await act(async () => {
+        findButton('Save changes').click()
+        await flushEffects()
+      })
+      await waitForCondition(
+        () => submittedBodies.length === 2,
+        'Manual revision was not saved'
+      )
+
+      assert.deepEqual(submittedBodies[0], {
+        reason: recommendationDraft.recommendation,
+        ai_recommendation: recommendationDraft.recommendation,
+        confirmation_token: recommendationDraft.confirmation_token,
+        confirmed: true,
+      })
+      assert.deepEqual(submittedBodies[1], {
+        reason: 'A manually revised recommendation that remains editable.',
+        ai_recommendation:
+          'A manually revised recommendation that remains editable.',
+        confirmation_token: undefined,
+        confirmed: true,
+      })
+    } finally {
+      await unmount(rendered)
+    }
+  })
+
+  test('recovers an expired AI edit as a token-free manual edit', async () => {
+    api.get = (async () => ({
+      data: { success: true, data: pendingRequest },
+    })) as typeof api.get
+    const submittedBodies: unknown[] = []
+    api.post = (async (_url: string, data: unknown) => {
+      submittedBodies.push(data)
+      if (submittedBodies.length === 1) {
+        throw {
+          response: {
+            data: { code: 'DEVELOPER_ACCESS_AI_CONFIRMATION_INVALID' },
+          },
+        }
+      }
+      return {
+        data: {
+          success: true,
+          data: {
+            ...pendingRequest,
+            ai_recommendation: recommendationDraft.recommendation,
+          },
+        },
+      }
+    }) as typeof api.post
+    let consumed = 0
+
+    const rendered = await renderTool({
+      recommendationDraft,
+      onDraftConsumed: () => {
+        consumed += 1
+      },
+    })
+    try {
+      await waitForCondition(
+        () => document.querySelector('textarea') !== null,
+        'AI revision editor did not open'
+      )
+      await act(async () => {
+        findButton('Save changes').click()
+        await flushEffects()
+      })
+      assert.equal(consumed, 1)
+
+      await act(async () => {
+        findButton('Save changes').click()
+        await flushEffects()
+      })
+      await waitForCondition(
+        () => submittedBodies.length === 2,
+        'Recovered manual edit was not submitted'
+      )
+      assert.deepEqual(submittedBodies[1], {
+        reason: recommendationDraft.recommendation,
+        ai_recommendation: recommendationDraft.recommendation,
+        confirmation_token: undefined,
+        confirmed: true,
+      })
     } finally {
       await unmount(rendered)
     }

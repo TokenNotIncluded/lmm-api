@@ -27,7 +27,7 @@
       },
       "payment_offer_state": "none",
       "tools": {
-        "allowed": ["get_service_facts", "calculate_math", "calculate_cost", "get_account_access", "get_l1_recommendation", "get_available_models", "get_model_pricing", "get_bounty_guide", "search_web", "get_setup_guide", "prepare_l1_recommendation", "request_human_support", "recall_memory", "remember_memory", "remember_profile_skill"],
+        "allowed": ["get_service_facts", "calculate_math", "calculate_cost", "get_account_access", "get_l1_recommendation", "get_available_models", "get_model_pricing", "get_bounty_guide", "prepare_new_user_gift", "search_web", "get_setup_guide", "prepare_l1_recommendation", "request_human_support", "recall_memory", "remember_memory", "remember_profile_skill"],
         "denied": ["assess_l0_interlocutor", "get_plan_offers", "request_create_key", "get_usage_summary"]
       }
     }
@@ -60,7 +60,7 @@
       },
       "payment_offer_state": "needs_details",
       "tools": {
-        "allowed": ["get_service_facts", "calculate_math", "calculate_cost", "get_account_access", "get_l1_recommendation", "get_available_models", "get_model_pricing", "get_bounty_guide", "search_web", "get_setup_guide", "prepare_l1_recommendation", "request_human_support", "recall_memory", "remember_memory", "remember_profile_skill"],
+        "allowed": ["get_service_facts", "calculate_math", "calculate_cost", "get_account_access", "get_l1_recommendation", "get_available_models", "get_model_pricing", "get_bounty_guide", "prepare_new_user_gift", "search_web", "get_setup_guide", "prepare_l1_recommendation", "request_human_support", "recall_memory", "remember_memory", "remember_profile_skill"],
         "denied": ["assess_l0_interlocutor", "get_plan_offers", "request_create_key", "get_usage_summary"]
       }
     }

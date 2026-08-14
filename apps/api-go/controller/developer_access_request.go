@@ -161,7 +161,7 @@ func SubmitDeveloperAccessRequest(c *gin.Context) {
 		// The signed-in user may edit the one shared recommendation letter
 		// directly. AI drafts use a token for their first confirmation; later
 		// human edits update the same pending row without creating another one.
-		request, err = model.SubmitAssistantDeveloperAccessRecommendation(user.Id, input.Reason, input.AIRecommendation)
+		request, err = model.SubmitUserEditedDeveloperAccessRecommendation(user.Id, input.Reason, input.AIRecommendation)
 	}
 	if err != nil {
 		switch {

@@ -103,8 +103,9 @@ type PromptPresetRef struct {
 
 type promptCandidate struct {
 	PromptPreset
-	Intent string
-	Order  int
+	Intent   string
+	Order    int
+	Required bool
 }
 
 type topicRule struct {
@@ -115,6 +116,7 @@ type topicRule struct {
 // Only fixed, reviewed topic names can cross from aggregate questions into a
 // generated preset. Source substrings are never copied to cache rows.
 var topicRules = []topicRule{
+	{Topic: "推荐信", Terms: []string{"推荐信", "推荐正文", "recommendation", "reference letter"}},
 	{Topic: "开发者访问", Terms: []string{"l0", "l1", "开发者权限", "开发者访问", "developer access", "api access"}},
 	{Topic: "API Key", Terms: []string{"api key", "apikey", "密钥"}},
 	{Topic: "Base URL", Terms: []string{"base url", "接口地址"}},
@@ -131,14 +133,15 @@ var topicRules = []topicRule{
 }
 
 var promptCandidates = []promptCandidate{
-	{PromptPreset: PromptPreset{Id: "getting_started", Label: "快速开始", Prompt: "我是第一次使用，请根据我的实际需求介绍最合适的开始方式。"}, Intent: AssistantIntentOnboarding, Order: 0},
-	{PromptPreset: PromptPreset{Id: "developer_access", Label: "开发者访问", Prompt: "我想使用 API，请说明当前账户可以做什么，以及如何申请开发者访问。"}, Intent: AssistantIntentOnboarding, Order: 1},
-	{PromptPreset: PromptPreset{Id: "client_setup", Label: "客户端配置", Prompt: "请帮我选择并配置兼容的客户端，我会补充操作系统和使用场景。"}, Intent: AssistantIntentClientSetup, Order: 2},
-	{PromptPreset: PromptPreset{Id: "pricing_cost", Label: "费用估算", Prompt: "请先解释计费方式，再根据我的模型和用量估算成本。"}, Intent: AssistantIntentCost, Order: 3},
-	{PromptPreset: PromptPreset{Id: "api_key", Label: "连接 API", Prompt: "请说明创建 API Key、Base URL 和模型 ID 的安全配置步骤。"}, Intent: AssistantIntentAPIKey, Order: 4},
-	{PromptPreset: PromptPreset{Id: "model_choice", Label: "选择模型", Prompt: "请根据质量、速度和成本要求帮助我选择可用模型。"}, Intent: AssistantIntentModels, Order: 5},
-	{PromptPreset: PromptPreset{Id: "bounty", Label: "开源悬赏", Prompt: "请介绍如何浏览、接受或发布开源悬赏，以及需要准备哪些真实证据。"}, Intent: AssistantIntentBounty, Order: 6},
-	{PromptPreset: PromptPreset{Id: "human_support", Label: "人工支持", Prompt: "我遇到了需要人工处理的问题，请先帮我整理必要信息并说明联系途径。"}, Intent: AssistantIntentHumanSupport, Order: 7},
+	{PromptPreset: PromptPreset{Id: "ai_recommendation", Label: "获取推荐信", Prompt: "请根据我的真实用途帮我准备并完善 L1 推荐信；先读取当前推荐信，信息足够后让我确认。"}, Intent: AssistantIntentRecommendation, Order: 0, Required: true},
+	{PromptPreset: PromptPreset{Id: "getting_started", Label: "快速开始", Prompt: "请根据我的实际目标直接说明你能替我完成什么，以及最短的开始方式。"}, Intent: AssistantIntentOnboarding, Order: 1},
+	{PromptPreset: PromptPreset{Id: "developer_access", Label: "开发者访问", Prompt: "我想使用 API，请说明当前账户可以做什么，以及如何申请开发者访问。"}, Intent: AssistantIntentOnboarding, Order: 2},
+	{PromptPreset: PromptPreset{Id: "client_setup", Label: "客户端配置", Prompt: "请帮我选择并配置兼容的客户端，我会补充操作系统和使用场景。"}, Intent: AssistantIntentClientSetup, Order: 3},
+	{PromptPreset: PromptPreset{Id: "pricing_cost", Label: "费用估算", Prompt: "请先解释计费方式，再根据我的模型和用量估算成本。"}, Intent: AssistantIntentCost, Order: 4},
+	{PromptPreset: PromptPreset{Id: "api_key", Label: "连接 API", Prompt: "请说明创建 API Key、Base URL 和模型 ID 的安全配置步骤。"}, Intent: AssistantIntentAPIKey, Order: 5},
+	{PromptPreset: PromptPreset{Id: "model_choice", Label: "选择模型", Prompt: "请根据质量、速度和成本要求帮助我选择可用模型。"}, Intent: AssistantIntentModels, Order: 6},
+	{PromptPreset: PromptPreset{Id: "bounty", Label: "开源悬赏", Prompt: "请介绍如何浏览、接受或发布开源悬赏，以及需要准备哪些真实证据。"}, Intent: AssistantIntentBounty, Order: 7},
+	{PromptPreset: PromptPreset{Id: "human_support", Label: "人工支持", Prompt: "我遇到了需要人工处理的问题，请先帮我整理必要信息并说明联系途径。"}, Intent: AssistantIntentHumanSupport, Order: 8},
 }
 
 func fallbackPromptPresets() PromptPresetSet {

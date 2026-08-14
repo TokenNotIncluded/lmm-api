@@ -4534,7 +4534,6 @@
     "Privacy-conscious": "Quan tâm quyền riêng tư",
     "Private credential": "Thông tin xác thực riêng tư",
     "Private Deployment URL": "URL Triển khai Riêng",
-    "Private details, passwords, API keys, and credentials are never safe to send in chat. Use a shielded private card when one is offered.": "Không bao giờ gửi thông tin riêng tư, mật khẩu, khóa API hoặc thông tin xác thực trong chat. Hãy dùng thẻ riêng tư có bảo vệ khi được cung cấp.",
     "Processing OAuth response...": "Đang xử lý phản hồi OAuth...",
     "Processing...": "Đang xử lý...",
     "Product": "Sản phẩm",
@@ -6858,6 +6857,23 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Thu phóng"
+    "Zoom": "Thu phóng",
+    "Main quest": "Nhiệm vụ chính",
+    "Side quest": "Nhiệm vụ phụ",
+    "Ask AI for help": "Nhờ AI hỗ trợ",
+    "Get a recommendation": "Nhận thư giới thiệu",
+    "Create an API key": "Tạo khóa API",
+    "Configure the API key": "Cấu hình khóa API",
+    "Complete a real API call": "Hoàn tất một lệnh gọi API thực tế",
+    "Accept an open-source bounty": "Nhận một nhiệm vụ mã nguồn mở",
+    "New-user gift": "Quà cho người dùng mới",
+    "Welcome gift claimed": "Đã nhận quà người dùng mới",
+    "Unable to claim welcome gift": "Không thể nhận quà người dùng mới",
+    "Claim gift": "Nhận quà",
+    "The AI recommendation expired. Ask the assistant to prepare it again, or continue editing it yourself.": "Thư giới thiệu của AI đã hết hạn. Hãy yêu cầu trợ lý chuẩn bị lại hoặc tiếp tục tự chỉnh sửa.",
+    "Chat with AI to earn a $0–$10 new-user gift": "Trò chuyện với AI để nhận quà người dùng mới từ $0 đến $10",
+    "No gift this time": "Lần này không có quà",
+    "Opportunity used": "Đã dùng cơ hội",
+    "User-edited recommendation": "Thư giới thiệu do người dùng chỉnh sửa"
   }
 }

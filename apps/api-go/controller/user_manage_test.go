@@ -39,6 +39,7 @@ func setupManageUserTestDB(t *testing.T) *gorm.DB {
 		&model.AssistantLead{}, &model.AssistantUserProfile{}, &model.AssistantMemory{},
 		&model.PromptConversionRef{}, &model.PromptConversationRef{}, &model.AssistantConversation{}, &model.AssistantHistoryMessage{},
 		&model.AssistantSecureCard{}, &model.AssistantSecurityIncident{},
+		&model.AssistantNewUserGift{},
 	))
 
 	t.Cleanup(func() {

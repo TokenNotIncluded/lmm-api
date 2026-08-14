@@ -83,6 +83,9 @@ func SetRelayRouter(router *gin.Engine) {
 	{
 		assistantRouter.GET("/status", controller.GetAssistantStatus)
 		assistantRouter.GET("/offers", controller.GetAssistantPlanOffers)
+		assistantRouter.GET("/journey", middleware.DisableCache(), controller.GetAssistantJourney)
+		assistantRouter.GET("/new-user-gift", middleware.DisableCache(), controller.GetAssistantNewUserGift)
+		assistantRouter.POST("/new-user-gift/claim", middleware.UserCriticalRateLimit("assistant-new-user-gift"), middleware.DisableCache(), controller.ClaimAssistantNewUserGift)
 		assistantRouter.POST("/chat", middleware.UserCriticalRateLimit("assistant"), middleware.RequestBodyLimit(assistantRequestMaxBytes), controller.PrepareAssistantRequest, middleware.Distribute(), controller.AssistantChat)
 		assistantRouter.GET("/conversations", middleware.DisableCache(), controller.ListAssistantConversations)
 		assistantRouter.GET("/conversations/:id", middleware.DisableCache(), controller.GetAssistantConversationHistory)

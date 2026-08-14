@@ -34,6 +34,7 @@ func migrateUserAssistantData(t *testing.T) {
 		&AssistantHistoryMessage{},
 		&AssistantSecureCard{},
 		&AssistantSecurityIncident{},
+		&AssistantNewUserGift{},
 	))
 	t.Cleanup(func() {
 		for _, table := range []string{
@@ -41,7 +42,7 @@ func migrateUserAssistantData(t *testing.T) {
 			"advanced_security_events", "developer_access_requests", "account_action_requests", "l1_onboarding_todos",
 			"assistant_pre_conversation_conversion_attributions",
 			"assistant_pre_conversation_conversation_attributions", "assistant_history_messages",
-			"assistant_secure_cards", "assistant_security_incidents", "assistant_conversations",
+			"assistant_secure_cards", "assistant_security_incidents", "assistant_conversations", "assistant_new_user_gifts",
 		} {
 			DB.Exec("DELETE FROM " + table)
 		}

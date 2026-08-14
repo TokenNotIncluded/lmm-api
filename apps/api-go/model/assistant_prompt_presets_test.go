@@ -26,7 +26,8 @@ func TestPromptPresetFallbackAndAggregateAttribution(t *testing.T) {
 	assert.EqualValues(t, 0, set.Generation)
 	assert.Equal(t, fallbackPresetVersion, set.Version)
 	require.Len(t, set.Presets, maxPromptPresets)
-	assert.Equal(t, "getting_started", set.Presets[0].Id)
+	assert.Equal(t, "ai_recommendation", set.Presets[0].Id)
+	assert.Contains(t, set.Presets[0].Prompt, "推荐信")
 	assert.NotEmpty(t, set.Presets[0].Prompt)
 
 	attribution, err := ResolvePromptPreset(set.Presets[0].Id, set.Presets[0].Prompt)
@@ -71,11 +72,13 @@ func TestPromptPresetValidationAndBoundedRefresh(t *testing.T) {
 	assert.Positive(t, generated.Generation)
 	require.NotEmpty(t, generated.Presets)
 	assert.LessOrEqual(t, len(generated.Presets), maxPromptPresets)
-	assert.Equal(t, "pricing_cost", generated.Presets[0].Id)
-	assert.NotEqual(t, promptCandidates[3].Prompt, generated.Presets[0].Prompt)
-	assert.Contains(t, generated.Presets[0].Prompt, "费用")
-	assert.NotContains(t, generated.Presets[0].Prompt, "alice")
-	assert.NotContains(t, generated.Presets[0].Prompt, "secret")
+	assert.Equal(t, "ai_recommendation", generated.Presets[0].Id)
+	assert.Contains(t, generated.Presets[0].Prompt, "推荐信")
+	require.GreaterOrEqual(t, len(generated.Presets), 2)
+	assert.Equal(t, "pricing_cost", generated.Presets[1].Id)
+	assert.Contains(t, generated.Presets[1].Prompt, "费用")
+	assert.NotContains(t, generated.Presets[1].Prompt, "alice")
+	assert.NotContains(t, generated.Presets[1].Prompt, "secret")
 
 	for range presetGenerations + 2 {
 		_, err = RefreshPromptPresets()

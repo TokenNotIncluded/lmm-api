@@ -4534,7 +4534,6 @@
     "Privacy-conscious": "Заботящийся о приватности",
     "Private credential": "Закрытые учётные данные",
     "Private Deployment URL": "URL частного развертывания",
-    "Private details, passwords, API keys, and credentials are never safe to send in chat. Use a shielded private card when one is offered.": "Никогда не отправляйте в чат личные данные, пароли, API-ключи или учётные данные. Если доступна защищённая личная карточка, используйте её.",
     "Processing OAuth response...": "Обработка ответа OAuth...",
     "Processing...": "Обработка...",
     "Product": "Продукт",
@@ -6858,6 +6857,23 @@
     "Zero retention": "Без хранения данных",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Масштаб"
+    "Zoom": "Масштаб",
+    "Main quest": "Основное задание",
+    "Side quest": "Дополнительное задание",
+    "Ask AI for help": "Обратиться к ИИ за помощью",
+    "Get a recommendation": "Получить рекомендацию",
+    "Create an API key": "Создать API-ключ",
+    "Configure the API key": "Настроить API-ключ",
+    "Complete a real API call": "Выполнить реальный API-запрос",
+    "Accept an open-source bounty": "Принять задачу с открытой наградой",
+    "New-user gift": "Подарок новому пользователю",
+    "Welcome gift claimed": "Подарок получен",
+    "Unable to claim welcome gift": "Не удалось получить подарок",
+    "Claim gift": "Получить подарок",
+    "The AI recommendation expired. Ask the assistant to prepare it again, or continue editing it yourself.": "Рекомендация ИИ истекла. Попросите помощника подготовить её заново или продолжите редактирование вручную.",
+    "Chat with AI to earn a $0–$10 new-user gift": "Общайтесь с ИИ и получите подарок новичку от $0 до $10",
+    "No gift this time": "В этот раз без подарка",
+    "Opportunity used": "Попытка использована",
+    "User-edited recommendation": "Рекомендация изменена пользователем"
   }
 }

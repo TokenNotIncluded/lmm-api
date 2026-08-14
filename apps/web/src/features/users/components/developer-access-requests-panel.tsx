@@ -173,6 +173,8 @@ function RequestCard(props: {
   let sourceLabel = t('Direct request')
   if (request.source === 'assistant_recommendation') {
     sourceLabel = t('AI recommendation')
+  } else if (request.source === 'user_edited') {
+    sourceLabel = t('User-edited recommendation')
   } else if (request.source === 'assistant_request') {
     sourceLabel = t('Direct request')
   }

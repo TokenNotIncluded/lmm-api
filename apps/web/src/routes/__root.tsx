@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useQueryClient, type QueryClient } from '@tanstack/react-query'
+import type { QueryClient } from '@tanstack/react-query'
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools'
 import {
   createRootRouteWithContext,
@@ -40,7 +40,6 @@ import { getSetupStatus } from '@/features/setup/api'
 import { useSystemConfig } from '@/hooks/use-system-config'
 import {
   bootstrapAuthentication,
-  clearAuthenticatedClientState,
   clearAuthentication,
 } from '@/lib/auth-session'
 import { subscribeAuthSessionEvents } from '@/lib/auth-session-sync'
@@ -61,7 +60,6 @@ const PersonaDebugPanel = __LMM_PERSONA_DEBUG__
 
 function RootComponent() {
   const navigate = useNavigate()
-  const queryClient = useQueryClient()
   const pathname = useRouterState({
     select: (state) => state.location.pathname,
   })
@@ -76,18 +74,6 @@ function RootComponent() {
       saveAffiliateCode(aff)
     }
   }, [])
-
-  useEffect(
-    () =>
-      useAuthStore.subscribe((state, previousState) => {
-        const sid = state.auth.session?.sid
-        const previousSID = previousState.auth.session?.sid
-        if (sid !== previousSID) {
-          queryClient.clear()
-        }
-      }),
-    [queryClient]
-  )
 
   useEffect(() => {
     if (__LMM_PERSONA_DEBUG__) return
@@ -104,11 +90,11 @@ function RootComponent() {
       }
 
       if (currentSID && event.sid === currentSID) {
-        clearAuthenticatedClientState(queryClient, false)
+        clearAuthentication(false)
         void navigate({ to: '/sign-in', replace: true })
       }
     })
-  }, [navigate, queryClient])
+  }, [navigate])
 
   return (
     <ThemeCustomizationProvider>

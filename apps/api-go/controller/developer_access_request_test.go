@@ -62,11 +62,12 @@ func TestSubmitDeveloperAccessRequestRequiresConfirmedAIRecommendation(t *testin
 	response = httptest.NewRecorder()
 	engine.ServeHTTP(response, request)
 	assert.Equal(t, http.StatusOK, response.Code)
-	assert.Contains(t, response.Body.String(), model.DeveloperAccessRequestSourceAI)
+	assert.Contains(t, response.Body.String(), model.DeveloperAccessRequestSourceUser)
 	stored, err = model.GetDeveloperAccessRequest(user.Id)
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.Equal(t, "The user gave a concrete development use case and compatible client.", stored.AIRecommendation)
+	assert.Equal(t, model.DeveloperAccessRequestSourceUser, stored.Source)
 
 	payload, err := common.Marshal(assistantL1RecommendationDraft{
 		UserStatement:  "I want to connect Claude Code for a Go project.",

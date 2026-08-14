@@ -21,6 +21,7 @@ import { api } from '@/lib/http-client'
 export {
   applyAuthBundle,
   applyAuthRotation,
+  bindAuthCache,
   bootstrapAuthentication,
   clearAuthenticatedClientState,
   clearAuthentication,

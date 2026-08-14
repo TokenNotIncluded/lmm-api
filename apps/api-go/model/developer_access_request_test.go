@@ -88,6 +88,31 @@ func TestAssistantDeveloperAccessRecommendationCanBeCleared(t *testing.T) {
 	assert.Equal(t, DeveloperAccessRequestSourceAssistant, cleared.Source)
 }
 
+func TestUserEditKeepsOneRecommendationWithoutClaimingAIProvenance(t *testing.T) {
+	db := setupConsoleActivationTestDB(t)
+	require.NoError(t, db.AutoMigrate(&DeveloperAccessRequest{}))
+	user := User{Username: "user-edited-recommendation", Password: "password", Role: common.RoleCommonUser}
+	require.NoError(t, db.Create(&user).Error)
+
+	draft, err := SubmitAssistantDeveloperAccessRecommendation(
+		user.Id,
+		"I have a concrete coding integration to build.",
+		"The AI recommends access for the user's concrete coding integration.",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, DeveloperAccessRequestSourceAI, draft.Source)
+
+	edited, err := SubmitUserEditedDeveloperAccessRecommendation(
+		user.Id,
+		"I have a concrete coding integration to build.",
+		"I edited the recommendation to accurately describe my concrete coding integration.",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, draft.Id, edited.Id)
+	assert.Equal(t, DeveloperAccessRequestSourceUser, edited.Source)
+	assert.Contains(t, edited.AIRecommendation, "I edited")
+}
+
 func TestPendingLegacyDeveloperAccessRequestsAreRetiredFromTheQueue(t *testing.T) {
 	db := setupConsoleActivationTestDB(t)
 	require.NoError(t, db.AutoMigrate(&DeveloperAccessRequest{}))

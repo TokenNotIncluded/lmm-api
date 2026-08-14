@@ -107,6 +107,7 @@ import {
   getAssistantPresetForIntent,
   isExplicitAssistantL1Request,
 } from './assistant-intent'
+import { AssistantJourneyProgress } from './assistant-journey'
 import { AssistantKeyTool } from './assistant-key-tool'
 import {
   hasAssistantMessageSubstantialMeaning,
@@ -114,6 +115,7 @@ import {
   redactAssistantMessageForRequest,
 } from './assistant-message-safety'
 import { AssistantModelsTool } from './assistant-models-tool'
+import { AssistantNewUserGift } from './assistant-new-user-gift'
 import { AssistantOnboardingTodo } from './assistant-onboarding-todo'
 import { AssistantPlanTool } from './assistant-plan-tool'
 import { getAssistantPromptValidation } from './assistant-prompt-validation'
@@ -530,23 +532,25 @@ function AssistantPanelHeader(props: {
 
   if (props.mode === 'page') {
     return (
-      <header className='border-border/70 bg-background/95 flex min-w-0 shrink-0 items-center justify-between gap-3 border-b px-4 py-3 sm:px-6'>
+      <header className='assistant-glass-surface border-border/60 bg-background/70 flex min-w-0 shrink-0 items-center justify-between gap-3 border-b px-4 py-3 sm:px-6'>
         <h1 className='truncate text-sm font-medium'>{t('Service guide')}</h1>
-        <Button
-          type='button'
-          variant='ghost'
-          size='sm'
-          className={props.historyVisible ? undefined : 'md:hidden'}
-          onClick={
-            props.historyVisible ? props.onCloseHistory : props.onOpenHistory
-          }
-        >
-          {props.historyVisible
-            ? props.historyDetail
-              ? t('Conversation history')
-              : t('Back to conversation')
-            : t('Conversation history')}
-        </Button>
+        <div className='flex min-w-0 items-center gap-4'>
+          <AssistantJourneyProgress />
+          <Button
+            type='button'
+            variant='ghost'
+            size='sm'
+            onClick={
+              props.historyVisible ? props.onCloseHistory : props.onOpenHistory
+            }
+          >
+            {props.historyVisible
+              ? props.historyDetail
+                ? t('Conversation history')
+                : t('Back to conversation')
+              : t('Conversation history')}
+          </Button>
+        </div>
       </header>
     )
   }
@@ -700,6 +704,7 @@ export function AssistantPanel(props: {
     | null
   >(null)
   const openedTargetRef = useRef<AssistantPresetId | undefined>(undefined)
+  const activeToolRegionRef = useRef<HTMLDivElement | null>(null)
   const [conversationResetRevision, setConversationResetRevision] = useState(0)
   const [privacyNoticeExpanded, setPrivacyNoticeExpanded] = useState(
     mode !== 'page'
@@ -786,6 +791,17 @@ export function AssistantPanel(props: {
   })
   const accountToolActive = activeTool !== null
   const historyVisible = historyView !== null
+
+  const openAssistantTool = useCallback((tool: AssistantTool) => {
+    setActiveTool(tool)
+    window.requestAnimationFrame(() => {
+      activeToolRegionRef.current?.focus({ preventScroll: true })
+      activeToolRegionRef.current?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+      })
+    })
+  }, [])
 
   let assistantFooterStatus = t('Loading...')
   let assistantDescription = t('Loading...')
@@ -1012,6 +1028,10 @@ export function AssistantPanel(props: {
         },
       ])
       await queryClient.invalidateQueries({ queryKey: ['assistant-status'] })
+      await queryClient.invalidateQueries({ queryKey: ['assistant-journey'] })
+      await queryClient.invalidateQueries({
+        queryKey: ['assistant-new-user-gift'],
+      })
       await queryClient.invalidateQueries({
         queryKey: ['assistant-conversations'],
       })
@@ -1342,7 +1362,7 @@ export function AssistantPanel(props: {
                             {entry.action ? (
                               <AssistantActionButton
                                 action={entry.action}
-                                onToolOpen={setActiveTool}
+                                onToolOpen={openAssistantTool}
                               />
                             ) : null}
                           </div>
@@ -1362,91 +1382,102 @@ export function AssistantPanel(props: {
                       </MessageContent>
                     </Message>
                   ) : null}
-                  {accountToolActive && !accountAccessConfirmed ? (
-                    <AssistantAccountStatusNotice
-                      state={
-                        accountAccessState === 'error' ? 'error' : 'loading'
-                      }
-                      onRetry={() => void statusQuery.refetch()}
-                    />
-                  ) : null}
-                  {activeTool === 'key' && developerAccessGranted ? (
-                    <AssistantKeyTool
-                      baseUrl={baseUrl}
-                      availableModels={connectionModelsQuery.data ?? []}
-                      modelsLoading={connectionModelsQuery.isLoading}
-                      developerAccessGranted={developerAccessGranted}
-                      onKeyCreated={() => {
-                        if (authUser) {
-                          void queryClient.invalidateQueries({
-                            queryKey: [
-                              'assistant-onboarding-todo',
-                              authUser.id,
-                            ],
-                          })
+                  <AssistantNewUserGift
+                    enabled={accountAccessState === 'restricted'}
+                  />
+                  <div
+                    ref={activeToolRegionRef}
+                    className='grid gap-5 outline-none'
+                    data-testid='assistant-active-tool-region'
+                    tabIndex={-1}
+                  >
+                    {accountToolActive && !accountAccessConfirmed ? (
+                      <AssistantAccountStatusNotice
+                        state={
+                          accountAccessState === 'error' ? 'error' : 'loading'
                         }
-                      }}
-                      onContinueSetup={() => setActiveTool('setup')}
-                    />
-                  ) : null}
-                  {activeTool === 'activation' && accountAccessConfirmed ? (
-                    <AssistantActivationTool
-                      recommendationDraft={recommendationDraft}
-                      onContinueSetup={() => setActiveTool('setup')}
-                      onSubmitted={() => {
-                        setRecommendationDraft(null)
-                        setEntries((current) => [
-                          ...current,
-                          {
-                            id: nanoid(),
-                            role: 'assistant',
-                            content: t(
-                              'Your AI recommendation was sent to an administrator. L1 remains locked until the administrator approves it.'
-                            ),
-                          },
-                        ])
-                      }}
-                    />
-                  ) : null}
-                  {accountDisableDraft ? (
-                    <AssistantAccountActionTool
-                      action={accountDisableDraft}
-                      onSubmitted={() => setAccountDisableDraft(null)}
-                    />
-                  ) : null}
-                  {activeTool === 'cost' && accountAccessConfirmed ? (
-                    <AssistantCostTool
-                      developerAccessGranted={developerAccessGranted}
-                    />
-                  ) : null}
-                  {activeTool === 'handoff' && accountAccessConfirmed ? (
-                    <AssistantHandoffTool />
-                  ) : null}
-                  {activeTool === 'models' && developerAccessGranted ? (
-                    <AssistantModelsTool />
-                  ) : null}
-                  {activeTool === 'plan' && accountAccessConfirmed ? (
-                    <AssistantPlanTool
-                      developerAccessGranted={developerAccessGranted}
-                      onRequestAccess={() => setActiveTool('activation')}
-                    />
-                  ) : null}
-                  {activeTool === 'setup' && accountAccessConfirmed ? (
-                    <AssistantSetupTool
-                      rootUrl={baseUrl.replace(/\/v1$/, '')}
-                      openAIBaseUrl={baseUrl}
-                      availableModels={connectionModelsQuery.data ?? []}
-                      modelsLoading={connectionModelsQuery.isLoading}
-                      developerAccessGranted={developerAccessGranted}
-                      onCreateKey={() => setActiveTool('key')}
-                      onRequestAccess={() => setActiveTool('activation')}
-                    />
-                  ) : null}
-                  {activeTool === 'usage' && developerAccessGranted ? (
-                    <AssistantUsageTool
-                      developerAccessGranted={developerAccessGranted}
-                    />
-                  ) : null}
+                        onRetry={() => void statusQuery.refetch()}
+                      />
+                    ) : null}
+                    {activeTool === 'key' && developerAccessGranted ? (
+                      <AssistantKeyTool
+                        baseUrl={baseUrl}
+                        availableModels={connectionModelsQuery.data ?? []}
+                        modelsLoading={connectionModelsQuery.isLoading}
+                        developerAccessGranted={developerAccessGranted}
+                        onKeyCreated={() => {
+                          if (authUser) {
+                            void queryClient.invalidateQueries({
+                              queryKey: [
+                                'assistant-onboarding-todo',
+                                authUser.id,
+                              ],
+                            })
+                          }
+                        }}
+                        onContinueSetup={() => setActiveTool('setup')}
+                      />
+                    ) : null}
+                    {activeTool === 'activation' && accountAccessConfirmed ? (
+                      <AssistantActivationTool
+                        recommendationDraft={recommendationDraft}
+                        onDraftConsumed={() => setRecommendationDraft(null)}
+                        onContinueSetup={() => setActiveTool('setup')}
+                        onSubmitted={() => {
+                          setRecommendationDraft(null)
+                          setEntries((current) => [
+                            ...current,
+                            {
+                              id: nanoid(),
+                              role: 'assistant',
+                              content: t(
+                                'Your AI recommendation was sent to an administrator. L1 remains locked until the administrator approves it.'
+                              ),
+                            },
+                          ])
+                        }}
+                      />
+                    ) : null}
+                    {accountDisableDraft ? (
+                      <AssistantAccountActionTool
+                        action={accountDisableDraft}
+                        onSubmitted={() => setAccountDisableDraft(null)}
+                      />
+                    ) : null}
+                    {activeTool === 'cost' && accountAccessConfirmed ? (
+                      <AssistantCostTool
+                        developerAccessGranted={developerAccessGranted}
+                      />
+                    ) : null}
+                    {activeTool === 'handoff' && accountAccessConfirmed ? (
+                      <AssistantHandoffTool />
+                    ) : null}
+                    {activeTool === 'models' && developerAccessGranted ? (
+                      <AssistantModelsTool />
+                    ) : null}
+                    {activeTool === 'plan' && accountAccessConfirmed ? (
+                      <AssistantPlanTool
+                        developerAccessGranted={developerAccessGranted}
+                        onRequestAccess={() => setActiveTool('activation')}
+                      />
+                    ) : null}
+                    {activeTool === 'setup' && accountAccessConfirmed ? (
+                      <AssistantSetupTool
+                        rootUrl={baseUrl.replace(/\/v1$/, '')}
+                        openAIBaseUrl={baseUrl}
+                        availableModels={connectionModelsQuery.data ?? []}
+                        modelsLoading={connectionModelsQuery.isLoading}
+                        developerAccessGranted={developerAccessGranted}
+                        onCreateKey={() => setActiveTool('key')}
+                        onRequestAccess={() => setActiveTool('activation')}
+                      />
+                    ) : null}
+                    {activeTool === 'usage' && developerAccessGranted ? (
+                      <AssistantUsageTool
+                        developerAccessGranted={developerAccessGranted}
+                      />
+                    ) : null}
+                  </div>
                   <div className='grid gap-3 pt-1'>
                     <Separator />
                     <Button
@@ -1516,11 +1547,6 @@ export function AssistantPanel(props: {
                   onSubmit={submitMessage}
                 />
               </PromptInputProvider>
-              <p className='text-muted-foreground mt-1 px-1 text-[11px] leading-4'>
-                {t(
-                  'Private details, passwords, API keys, and credentials are never safe to send in chat. Use a shielded private card when one is offered.'
-                )}
-              </p>
             </div>
           </div>
         </>
@@ -1535,29 +1561,6 @@ export function AssistantPanel(props: {
         className='bg-background flex min-h-0 min-w-0 flex-1'
         aria-label={t('Service guide')}
       >
-        <aside className='bg-muted/20 hidden min-h-0 w-72 shrink-0 flex-col border-r md:flex'>
-          <div className='border-border/70 flex items-center justify-between border-b px-3 py-3'>
-            <p className='text-sm font-medium'>{t('Conversation history')}</p>
-            <Button
-              type='button'
-              variant='ghost'
-              size='sm'
-              onClick={resetConversation}
-              disabled={sending}
-            >
-              {t('Clear conversation')}
-            </Button>
-          </div>
-          <div className='min-h-0 flex-1 overflow-y-auto p-3'>
-            <AssistantHistory
-              active={panelVisible}
-              presentation='rows'
-              onOpenConversation={(conversation) =>
-                setHistoryView(conversation)
-              }
-            />
-          </div>
-        </aside>
         <main className='flex min-h-0 min-w-0 flex-1 flex-col'>
           {panelContent}
         </main>

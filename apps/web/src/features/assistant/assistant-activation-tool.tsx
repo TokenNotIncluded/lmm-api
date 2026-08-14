@@ -37,6 +37,7 @@ import {
   submitDeveloperAccessRequest,
   type DeveloperAccessRequest,
 } from '@/features/onboarding/api'
+import { getServerErrorMessageKey } from '@/lib/server-error-message'
 
 import type { AssistantL1RecommendationAction } from './api'
 
@@ -57,6 +58,7 @@ export function AssistantActivationTool(props: {
   recommendationDraft?: AssistantL1RecommendationAction | null
   onContinueSetup?: () => void
   onSubmitted?: (request: DeveloperAccessRequest) => void
+  onDraftConsumed?: () => void
 }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
@@ -66,6 +68,9 @@ export function AssistantActivationTool(props: {
   const [letter, setLetter] = useState<string | null>(null)
   const [pendingLetterEditing, setPendingLetterEditing] = useState(false)
   const [pendingLetterDraft, setPendingLetterDraft] = useState('')
+  const [pendingEditSource, setPendingEditSource] = useState<'ai' | 'user'>(
+    'user'
+  )
   const initializedLetterKey = useRef('')
   const initializedRevisionKey = useRef('')
 
@@ -99,6 +104,7 @@ export function AssistantActivationTool(props: {
       ) {
         initializedRevisionKey.current = key
         setPendingLetterDraft(props.recommendationDraft.recommendation)
+        setPendingEditSource('ai')
         setPendingLetterEditing(true)
       }
       return
@@ -111,6 +117,21 @@ export function AssistantActivationTool(props: {
       }
     }
   }, [props.recommendationDraft, request])
+
+  const showSubmitError = (error: unknown, recoverManualEdit = false) => {
+    const messageKey = getServerErrorMessageKey(error)
+    if (messageKey && recoverManualEdit) {
+      props.onDraftConsumed?.()
+      setPendingEditSource('user')
+    }
+    toast.error(
+      messageKey
+        ? t(messageKey)
+        : error instanceof Error
+          ? error.message
+          : t('Unable to submit unlock request')
+    )
+  }
 
   const submit = async () => {
     const draft = props.recommendationDraft
@@ -130,11 +151,7 @@ export function AssistantActivationTool(props: {
       props.onSubmitted?.(submitted)
       toast.success(t('Unlock request submitted'))
     } catch (error) {
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : t('Unable to submit unlock request')
-      )
+      showSubmitError(error)
     } finally {
       setLoading(false)
     }
@@ -146,12 +163,16 @@ export function AssistantActivationTool(props: {
     if (recommendation.length > 0 && recommendation.length < 20) return
     setLoading(true)
     try {
+      const confirmationToken =
+        pendingEditSource === 'ai'
+          ? props.recommendationDraft?.confirmation_token
+          : undefined
       const submitted = await submitDeveloperAccessRequest(
         recommendation
           ? {
               reason: recommendation,
               ai_recommendation: recommendation,
-              confirmation_token: props.recommendationDraft?.confirmation_token,
+              confirmation_token: confirmationToken,
               confirmed: true,
             }
           : {
@@ -162,13 +183,11 @@ export function AssistantActivationTool(props: {
       queryClient.setQueryData(requestQueryKey, submitted)
       setLetter(submitted.ai_recommendation)
       setPendingLetterEditing(false)
+      if (confirmationToken) props.onDraftConsumed?.()
+      setPendingEditSource('user')
       toast.success(t('Your changes were saved.'))
     } catch (error) {
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : t('Unable to submit unlock request')
-      )
+      showSubmitError(error, true)
     } finally {
       setLoading(false)
     }
@@ -187,11 +206,7 @@ export function AssistantActivationTool(props: {
       props.onSubmitted?.(submitted)
       toast.success(t('Unlock request submitted'))
     } catch (error) {
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : t('Unable to submit unlock request')
-      )
+      showSubmitError(error)
     } finally {
       setLoading(false)
     }
@@ -256,6 +271,7 @@ export function AssistantActivationTool(props: {
             aria-label={`${t('Edit')} ${t('Recommendation letter')}`}
             onClick={() => {
               setPendingLetterDraft(recommendation)
+              setPendingEditSource('user')
               setPendingLetterEditing(true)
             }}
           >

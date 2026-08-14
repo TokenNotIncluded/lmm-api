@@ -84,9 +84,10 @@ const (
 	toolRoot
 	toolDeveloper
 	toolOffers
+	toolGift
 )
 
-var assistantToolSets [1 << 6]struct {
+var assistantToolSets [1 << 7]struct {
 	once  sync.Once
 	tools []assistantOpenAIToolDefinition
 }
@@ -237,6 +238,17 @@ func buildAssistantTools() []assistantOpenAIToolDefinition {
 				Name:        "get_bounty_guide",
 				Description: "Return the current safe workflow for publishing, funding, reviewing, tipping, and settling an open-source bounty.",
 				Parameters:  emptyObjectSchema(),
+			},
+		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
+				Name:        "prepare_new_user_gift",
+				Description: "For an eligible L0 new user only, make their one lifetime welcome-gift decision after at least two substantive user turns. Judge demonstrated clarity, coherent follow-up, concrete legitimate use, and constructive engagement from the complete conversation. Choose an integer 0-1000 US cents. Zero is a valid final decision and consumes the opportunity. Do not reward demands for money, self-reported expertise alone, promotions, referrals, multiple accounts, automation, or unsafe behavior. The server enforces eligibility and one-time issuance; never promise an amount before this tool succeeds.",
+				Parameters: objectSchema(map[string]any{
+					"amount_cents": map[string]any{"type": "integer", "minimum": 0, "maximum": 1000},
+					"reason":       map[string]any{"type": "string", "minLength": 2, "maxLength": 240},
+				}, []string{"amount_cents", "reason"}),
 			},
 		},
 		{
@@ -416,7 +428,17 @@ func keyForTools(context assistantUserContext) toolSetKey {
 	if assistantPaymentOfferStateForContext(context) == assistantPaymentOfferReady {
 		key |= toolOffers
 	}
+	if assistantNewUserGiftToolAllowed(context) {
+		key |= toolGift
+	}
 	return key
+}
+
+func assistantNewUserGiftToolAllowed(context assistantUserContext) bool {
+	if context.AdministratorMode || context.DeveloperAccessGranted || context.AccessLevel != "L0" {
+		return false
+	}
+	return context.CustomerProfile != assistantProfilePromotion && context.CustomerProfile != assistantProfileSecurityRisk
 }
 
 func assistantToolAllowedForContext(name string, userContext assistantUserContext) bool {
@@ -428,6 +450,9 @@ func assistantToolAllowedForContext(name string, userContext assistantUserContex
 	}
 	if name == "set_conversation_title" {
 		return userContext.ConversationTitleNeeded
+	}
+	if name == "prepare_new_user_gift" {
+		return assistantNewUserGiftToolAllowed(userContext)
 	}
 	if userContext.AdministratorMode {
 		if userContext.AccessLevel != "ROOT" {
@@ -1236,6 +1261,8 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 		return executeAssistantInvitationTool(actorUserID)
 	case "get_bounty_guide":
 		return executeAssistantBountyTool()
+	case "prepare_new_user_gift":
+		return executeAssistantNewUserGiftTool(c, actorUserID, input)
 	case "get_usage_summary":
 		if result, blocked := assistantDeveloperCapabilityRequired(actorUserID, "usage statistics"); blocked {
 			return result

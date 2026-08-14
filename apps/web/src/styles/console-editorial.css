@@ -1115,6 +1115,22 @@ For commercial licensing, please contact support@quantumnous.com
   backdrop-filter: none;
 }
 
+/* The assistant header is intentionally translucent. Keep its blur bounded
+ * and lower on narrow screens so the fixed surface remains inexpensive. */
+@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  .console-editorial .assistant-glass-surface {
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+  }
+
+  @media (min-width: 640px) {
+    .console-editorial .assistant-glass-surface {
+      -webkit-backdrop-filter: blur(18px);
+      backdrop-filter: blur(18px);
+    }
+  }
+}
+
 .setup-editorial {
   --setup-canvas: var(--forge-paper-light);
   --setup-panel: color-mix(

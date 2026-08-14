@@ -4534,7 +4534,6 @@
     "Privacy-conscious": "隱私關注型",
     "Private credential": "私有憑證",
     "Private Deployment URL": "私有部署 URL",
-    "Private details, passwords, API keys, and credentials are never safe to send in chat. Use a shielded private card when one is offered.": "請勿在聊天中傳送個人資料、密碼、API 金鑰或憑證；如有需要，請使用帶盾牌的私有卡片。",
     "Processing OAuth response...": "正在處理 OAuth 回應...",
     "Processing...": "處理中...",
     "Product": "產品",
@@ -6858,6 +6857,23 @@
     "Zero retention": "零數據保留",
     "Zhipu": "智譜",
     "Zhipu V4": "智譜 V4",
-    "Zoom": "縮放"
+    "Zoom": "縮放",
+    "Main quest": "主線任務",
+    "Side quest": "支線任務",
+    "Ask AI for help": "尋求 AI 的協助",
+    "Get a recommendation": "取得推薦信",
+    "Create an API key": "建立 API Key",
+    "Configure the API key": "設定 API Key",
+    "Complete a real API call": "完成一次實際呼叫",
+    "Accept an open-source bounty": "接受一個開源懸賞任務",
+    "New-user gift": "新使用者禮包",
+    "Welcome gift claimed": "新使用者禮包已領取",
+    "Unable to claim welcome gift": "無法領取新使用者禮包",
+    "Claim gift": "領取禮包",
+    "The AI recommendation expired. Ask the assistant to prepare it again, or continue editing it yourself.": "AI 推薦信已過期。請讓助手重新準備，或繼續手動編輯。",
+    "Chat with AI to earn a $0–$10 new-user gift": "和 AI 聊天爭取 $0–$10 新用戶禮包",
+    "No gift this time": "本次未獲得禮包",
+    "Opportunity used": "機會已使用",
+    "User-edited recommendation": "用戶編輯的推薦信"
   }
 }

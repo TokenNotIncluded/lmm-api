@@ -14,6 +14,7 @@ const (
 	DeveloperAccessRequestApproved        = "approved"
 	DeveloperAccessRequestRejected        = "rejected"
 	DeveloperAccessRequestSourceAI        = "assistant_recommendation"
+	DeveloperAccessRequestSourceUser      = "user_edited"
 	DeveloperAccessRequestSourceAssistant = "assistant_request"
 	DeveloperAccessRequestSourceOld       = "legacy"
 	minDeveloperAccessRequestReason       = 5
@@ -157,6 +158,12 @@ func SubmitAssistantDeveloperAccessRecommendation(userID int, reason string, rec
 	return submitDeveloperAccessRequest(userID, reason, recommendation, DeveloperAccessRequestSourceAI, false)
 }
 
+// SubmitUserEditedDeveloperAccessRecommendation updates the user's one shared
+// letter without falsely preserving AI provenance after a manual edit.
+func SubmitUserEditedDeveloperAccessRecommendation(userID int, reason string, recommendation string) (*DeveloperAccessRequest, error) {
+	return submitDeveloperAccessRequest(userID, reason, recommendation, DeveloperAccessRequestSourceUser, false)
+}
+
 // SubmitConfirmedAssistantDeveloperAccessRecommendation consumes the user's
 // one-time confirmation and writes their one shared recommendation letter in
 // the same transaction. A failed write leaves the confirmation reusable, and
@@ -209,7 +216,7 @@ func submitDeveloperAccessRequest(userID int, reason string, recommendation stri
 		return nil, err
 	}
 	normalizedRecommendation := ""
-	if source == DeveloperAccessRequestSourceAI {
+	if source == DeveloperAccessRequestSourceAI || source == DeveloperAccessRequestSourceUser {
 		normalizedRecommendation, err = normalizeDeveloperAccessRecommendation(recommendation)
 		if err != nil {
 			return nil, err
@@ -266,7 +273,7 @@ func submitNormalizedDeveloperAccessRequestWithTx(tx *gorm.DB, userID int, norma
 		pending.AdminUserId = 0
 		pending.AdminNote = ""
 		pending.ReviewedAt = 0
-		if source == DeveloperAccessRequestSourceAI {
+		if source == DeveloperAccessRequestSourceAI || source == DeveloperAccessRequestSourceUser {
 			updates["ai_recommendation"] = normalizedRecommendation
 			updates["source"] = source
 			pending.AIRecommendation = normalizedRecommendation

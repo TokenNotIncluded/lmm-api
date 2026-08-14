@@ -68,6 +68,8 @@ func generatePromptPreset(candidate promptCandidate, topicCounts map[string]int6
 	focus := strings.Join(rankPresetTopics(topicCounts, candidate.Label), "、")
 	prompt := ""
 	switch candidate.Intent {
+	case AssistantIntentRecommendation:
+		prompt = fmt.Sprintf("请围绕%s读取我当前唯一的 L1 推荐信，并根据这次对话直接帮我起草或完善；信息足够后在界面中让我确认。", focus)
 	case AssistantIntentOnboarding:
 		prompt = fmt.Sprintf("请围绕%s评估我的当前状态，并给出最短、可执行的入门步骤。", focus)
 	case AssistantIntentClientSetup:
@@ -154,7 +156,7 @@ func RefreshPromptPresets() (PromptPresetSet, error) {
 	for _, candidate := range promptCandidates {
 		stat := stats[candidate.Id]
 		score := intentCounts[candidate.Intent]*1000 + stat.ClickCount + stat.ConversationCount*5 + stat.RecommendationCount*25 + stat.ApprovalCount*100
-		if score <= 0 {
+		if score <= 0 && !candidate.Required {
 			continue
 		}
 		preset, ok := generatePromptPreset(candidate, intentTopics[candidate.Intent], stat)
@@ -164,6 +166,9 @@ func RefreshPromptPresets() (PromptPresetSet, error) {
 		scored = append(scored, scoredCandidate{candidate: candidate, score: score, preset: preset})
 	}
 	sort.SliceStable(scored, func(i, j int) bool {
+		if scored[i].candidate.Required != scored[j].candidate.Required {
+			return scored[i].candidate.Required
+		}
 		if scored[i].score != scored[j].score {
 			return scored[i].score > scored[j].score
 		}
