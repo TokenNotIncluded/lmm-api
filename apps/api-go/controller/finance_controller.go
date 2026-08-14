@@ -20,7 +20,12 @@ const (
 	financeDashboardDefaultWindow = 30 * 24 * 60 * 60
 	financeDashboardMaxWindow     = 366 * 24 * 60 * 60
 	financeDashboardMaxSourceRows = 100_000
-	financeDashboardMaxEntries    = 100
+	// Finance dashboards are read-only, but a busy installation can still
+	// have hundreds of thousands of source rows in one window. Keep each
+	// database round-trip small so the accumulator never retains raw source
+	// rows after a batch has been processed.
+	financeDashboardBatchSize  = 1_000
+	financeDashboardMaxEntries = 100
 )
 
 type financeRange struct {
@@ -310,43 +315,115 @@ func loadFinancePaymentMethods() ([]model.FinancePaymentMethod, map[string]model
 	return configs, byMethod, nil
 }
 
+func financeBatchLimit(processed int) int {
+	remaining := financeDashboardMaxSourceRows - processed
+	if remaining <= 0 {
+		return 0
+	}
+	if remaining < financeDashboardBatchSize {
+		return remaining
+	}
+	return financeDashboardBatchSize
+}
+
+// iterateFinanceSource reads a source ordered by its timestamp and primary
+// key. Offset pagination becomes increasingly expensive for large windows and
+// can repeat/skip rows when a new payment or log arrives while the dashboard
+// is loading. The composite cursor keeps every batch bounded and stable.
+func iterateFinanceSource[T any](base *gorm.DB, timestampColumn string, visit func(T) error) error {
+	if base == nil || visit == nil {
+		return gorm.ErrInvalidData
+	}
+	processed := 0
+	var lastTimestamp int64
+	var lastID int64
+	for {
+		limit := financeBatchLimit(processed)
+		if limit == 0 {
+			return nil
+		}
+		rows := make([]T, 0, limit)
+		query := base.Session(&gorm.Session{}).
+			Where("("+timestampColumn+" > ? OR ("+timestampColumn+" = ? AND id > ?))", lastTimestamp, lastTimestamp, lastID).
+			Order(timestampColumn + " ASC, id ASC").
+			Limit(limit)
+		if err := query.Find(&rows).Error; err != nil {
+			return err
+		}
+		if len(rows) == 0 {
+			return nil
+		}
+		for index := range rows {
+			if err := visit(rows[index]); err != nil {
+				return err
+			}
+		}
+		processed += len(rows)
+		lastTimestamp, lastID = financeSourceCursor(rows[len(rows)-1], timestampColumn)
+		if len(rows) < limit {
+			return nil
+		}
+	}
+}
+
+// financeSourceCursor extracts the two cursor fields without retaining a
+// second copy of any source row. The concrete source types are intentionally
+// kept here so the query helper remains generic while its public JSON shape
+// stays unchanged.
+func financeSourceCursor[T any](row T, timestampColumn string) (int64, int64) {
+	switch value := any(row).(type) {
+	case model.TopUp:
+		if timestampColumn == "complete_time" {
+			return value.CompleteTime, int64(value.Id)
+		}
+	case model.SubscriptionOrder:
+		if timestampColumn == "complete_time" {
+			return value.CompleteTime, int64(value.Id)
+		}
+	case model.Log:
+		if timestampColumn == "created_at" {
+			return value.CreatedAt, int64(value.Id)
+		}
+	case model.FinanceLedgerEntry:
+		if timestampColumn == "occurred_at" {
+			return value.OccurredAt, value.Id
+		}
+	}
+	return 0, 0
+}
+
 func buildFinanceOverview(start, end int64, userFilter int, methodFilter string) (financeOverview, error) {
 	methods, configMap, err := loadFinancePaymentMethods()
 	if err != nil {
 		return financeOverview{}, err
 	}
 	a := newFinanceAccumulator(start, end, methods)
-	var topUps []model.TopUp
 	tx := model.DB.Where("status = ? AND complete_time >= ? AND complete_time < ?", common.TopUpStatusSuccess, start, end)
 	if userFilter > 0 {
 		tx = tx.Where("user_id = ?", userFilter)
 	}
-	if err := tx.Select("id, user_id, expected_amount_micros, settled_amount_micros, money, payment_method, payment_provider, create_time, complete_time, status").Order("complete_time asc, id asc").Limit(financeDashboardMaxSourceRows).Find(&topUps).Error; err != nil {
-		return financeOverview{}, err
-	}
-	for _, topUp := range topUps {
+	if err := iterateFinanceSource[model.TopUp](tx.Select("id, user_id, expected_amount_micros, settled_amount_micros, money, payment_method, payment_provider, create_time, complete_time, status"), "complete_time", func(topUp model.TopUp) error {
 		method, provider := financeMethodFromTopUp(topUp)
 		if methodFilter != "" && method != methodFilter {
-			continue
+			return nil
 		}
 		if !financePaymentMethodAllowed(method, configMap) {
-			continue
+			return nil
 		}
 		timestamp := topUp.CompleteTime
 		if timestamp <= 0 {
 			timestamp = topUp.CreateTime
 		}
 		a.addRevenue(method, provider, financeTopUpAmount(topUp), timestamp, topUp.UserId)
+		return nil
+	}); err != nil {
+		return financeOverview{}, err
 	}
-	var orders []model.SubscriptionOrder
 	tx = model.DB.Where("status = ? AND complete_time >= ? AND complete_time < ?", common.TopUpStatusSuccess, start, end)
 	if userFilter > 0 {
 		tx = tx.Where("user_id = ?", userFilter)
 	}
-	if err := tx.Select("id, user_id, money, payment_method, payment_provider, create_time, complete_time, status").Order("complete_time asc, id asc").Limit(financeDashboardMaxSourceRows).Find(&orders).Error; err != nil {
-		return financeOverview{}, err
-	}
-	for _, order := range orders {
+	if err := iterateFinanceSource[model.SubscriptionOrder](tx.Select("id, user_id, money, payment_method, payment_provider, create_time, complete_time, status"), "complete_time", func(order model.SubscriptionOrder) error {
 		method, provider := strings.TrimSpace(order.PaymentMethod), strings.TrimSpace(order.PaymentProvider)
 		if method == "" {
 			method = provider
@@ -355,26 +432,25 @@ func buildFinanceOverview(start, end int64, userFilter int, methodFilter string)
 			provider = method
 		}
 		if methodFilter != "" && method != methodFilter {
-			continue
+			return nil
 		}
 		if !financePaymentMethodAllowed(method, configMap) {
-			continue
+			return nil
 		}
 		timestamp := order.CompleteTime
 		if timestamp <= 0 {
 			timestamp = order.CreateTime
 		}
 		a.addRevenue(method, provider, financeMicrosFromFloat(order.Money), timestamp, order.UserId)
+		return nil
+	}); err != nil {
+		return financeOverview{}, err
 	}
-	var logs []model.Log
 	tx = model.LOG_DB.Where("type = ? AND created_at >= ? AND created_at < ?", model.LogTypeConsume, start, end)
 	if userFilter > 0 {
 		tx = tx.Where("user_id = ?", userFilter)
 	}
-	if err := tx.Select("id, user_id, created_at, type, prompt_tokens, completion_tokens, other").Order("created_at asc, id asc").Limit(financeDashboardMaxSourceRows).Find(&logs).Error; err != nil {
-		return financeOverview{}, err
-	}
-	for _, log := range logs {
+	if err := iterateFinanceSource[model.Log](tx.Select("id, user_id, created_at, type, prompt_tokens, completion_tokens, other"), "created_at", func(log model.Log) error {
 		other, _ := common.StrToMap(log.Other)
 		price, priced := 0.0, false
 		if raw, ok := other["model_price"].(float64); ok && raw > 0 {
@@ -382,8 +458,10 @@ func buildFinanceOverview(start, end int64, userFilter int, methodFilter string)
 		}
 		cost := int64(math.Round(price * float64(max(0, log.PromptTokens+log.CompletionTokens))))
 		a.addUsage(log.UserId, log.CreatedAt, log.PromptTokens, log.CompletionTokens, cost, priced)
+		return nil
+	}); err != nil {
+		return financeOverview{}, err
 	}
-	var entries []model.FinanceLedgerEntry
 	tx = model.DB.Where("occurred_at >= ? AND occurred_at < ?", start, end)
 	if userFilter > 0 {
 		tx = tx.Where("user_id = ?", userFilter)
@@ -391,10 +469,7 @@ func buildFinanceOverview(start, end int64, userFilter int, methodFilter string)
 	if methodFilter != "" {
 		tx = tx.Where("payment_method = ?", methodFilter)
 	}
-	if err := tx.Select("id, entry_type, category, amount_micros, currency, direction, payment_method, payment_provider, user_id, source_type, source_id, token_units, occurred_at, created_at, created_by, reversal_of_id").Order("occurred_at asc, id asc").Limit(financeDashboardMaxSourceRows).Find(&entries).Error; err != nil {
-		return financeOverview{}, err
-	}
-	for _, entry := range entries {
+	if err := iterateFinanceSource[model.FinanceLedgerEntry](tx.Select("id, entry_type, category, amount_micros, currency, direction, payment_method, payment_provider, user_id, source_type, source_id, token_units, occurred_at, created_at, created_by, reversal_of_id"), "occurred_at", func(entry model.FinanceLedgerEntry) error {
 		if entry.EntryType == model.FinanceEntryRevenue {
 			if entry.Direction == model.FinanceDirectionCredit {
 				a.addRevenue(entry.PaymentMethod, entry.PaymentProvider, entry.AmountMicros, entry.OccurredAt, derefFinanceUser(entry.UserId))
@@ -404,6 +479,9 @@ func buildFinanceOverview(start, end int64, userFilter int, methodFilter string)
 		} else if entry.EntryType == model.FinanceEntryExpense || entry.EntryType == model.FinanceEntryTokenCost {
 			a.addExpense(entry.Category, entry.PaymentMethod, entry.PaymentProvider, entry.AmountMicros, entry.OccurredAt, derefFinanceUser(entry.UserId))
 		}
+		return nil
+	}); err != nil {
+		return financeOverview{}, err
 	}
 	return a.finish(), nil
 }

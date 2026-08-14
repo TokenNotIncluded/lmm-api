@@ -28,6 +28,7 @@ func TestPromptPresetFallbackAndAggregateAttribution(t *testing.T) {
 	require.Len(t, set.Presets, maxPromptPresets)
 	assert.Equal(t, "ai_recommendation", set.Presets[0].Id)
 	assert.Contains(t, set.Presets[0].Prompt, "推荐信")
+	assert.Contains(t, promptPresetIDs(set.Presets), "new_user_gift")
 	assert.NotEmpty(t, set.Presets[0].Prompt)
 
 	attribution, err := ResolvePromptPreset(set.Presets[0].Id, set.Presets[0].Prompt)
@@ -57,6 +58,14 @@ func TestPromptPresetFallbackAndAggregateAttribution(t *testing.T) {
 	assert.Zero(t, attributionCount)
 }
 
+func promptPresetIDs(presets []PromptPreset) map[string]struct{} {
+	ids := make(map[string]struct{}, len(presets))
+	for _, preset := range presets {
+		ids[preset.Id] = struct{}{}
+	}
+	return ids
+}
+
 func TestPromptPresetValidationAndBoundedRefresh(t *testing.T) {
 	setupPromptPresetTestDB(t)
 
@@ -75,10 +84,18 @@ func TestPromptPresetValidationAndBoundedRefresh(t *testing.T) {
 	assert.Equal(t, "ai_recommendation", generated.Presets[0].Id)
 	assert.Contains(t, generated.Presets[0].Prompt, "推荐信")
 	require.GreaterOrEqual(t, len(generated.Presets), 2)
-	assert.Equal(t, "pricing_cost", generated.Presets[1].Id)
-	assert.Contains(t, generated.Presets[1].Prompt, "费用")
-	assert.NotContains(t, generated.Presets[1].Prompt, "alice")
-	assert.NotContains(t, generated.Presets[1].Prompt, "secret")
+	var pricing *PromptPreset
+	for index := range generated.Presets {
+		if generated.Presets[index].Id == "pricing_cost" {
+			pricing = &generated.Presets[index]
+			break
+		}
+	}
+	require.NotNil(t, pricing)
+	assert.Contains(t, pricing.Prompt, "费用")
+	assert.NotContains(t, pricing.Prompt, "alice")
+	assert.NotContains(t, pricing.Prompt, "secret")
+	assert.Contains(t, promptPresetIDs(generated.Presets), "new_user_gift")
 
 	for range presetGenerations + 2 {
 		_, err = RefreshPromptPresets()

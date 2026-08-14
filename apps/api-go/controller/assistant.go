@@ -522,7 +522,8 @@ func PrepareAssistantRequest(c *gin.Context) {
 			c.Set("assistant_history_replay", true)
 		}
 	}
-	if input.ConversationID == 0 && assistantRequestAttempt(c) == 1 {
+	firstTurnAttempt := input.ConversationID == 0 && assistantRequestAttempt(c) == 1
+	if firstTurnAttempt {
 		capturePromptPresetRef(c, input.PresetID, latestMessage)
 	} else if conversationID := assistantHistoryConversationID(c); conversationID > 0 {
 		loadPromptPresetRef(c, conversationID)
@@ -539,9 +540,9 @@ func PrepareAssistantRequest(c *gin.Context) {
 		return
 	}
 	// A first-turn question is an analytics event, not a model-call event. Keep
-	// it before both cache checks so repeated normalized cache hits are counted
-	// as questions while still returning before the billing/model middleware.
-	if input.ConversationID == 0 && len(conversation) == 1 && conversation[0].Role == "user" {
+	// it before both cache checks so a user-initiated first turn is counted even
+	// on a cache hit, but never count transport retries as new questions.
+	if firstTurnAttempt && len(conversation) == 1 && conversation[0].Role == "user" {
 		if err := model.RecordAssistantFirstQuestion(latestMessage); err != nil {
 			// Product analytics must never make the assistant unavailable, and the
 			// question itself must not be written to logs.

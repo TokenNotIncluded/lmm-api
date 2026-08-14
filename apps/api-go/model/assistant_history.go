@@ -30,6 +30,7 @@ const (
 	assistantConversationTitleMaxRunes = 120
 	assistantHistoryMessageMaxRunes    = 4000
 	assistantHistoryPageMax            = 100
+	assistantHistorySecureCardMax      = 100
 	assistantSecureCardPayloadMaxBytes = 16 * 1024
 	assistantSecureCardDefaultLifetime = 10 * time.Minute
 )
@@ -846,7 +847,16 @@ func GetAssistantConversationHistory(viewerUserID int, conversationID int64, lim
 		messages[left], messages[right] = messages[right], messages[left]
 	}
 	var cards []AssistantSecureCard
-	if err := DB.Where("conversation_id = ?", conversation.Id).Find(&cards).Error; err != nil {
+	// Cards are metadata-only in this response, so keep their query bounded by
+	// a fixed page size and never hydrate ciphertext that this endpoint cannot
+	// use. The newest cards win when a legacy or future conversation contains
+	// more cards than the page can represent; the reveal endpoint remains the
+	// only path that reads the encrypted payload.
+	if err := DB.Select("id", "owner_user_id", "conversation_id", "message_id", "type", "summary", "created_at", "expires_at", "revealed_at").
+		Where("conversation_id = ?", conversation.Id).
+		Order("created_at DESC, id DESC").
+		Limit(assistantHistorySecureCardMax).
+		Find(&cards).Error; err != nil {
 		return nil, nil, err
 	}
 	cardsByMessageID := make(map[int64][]AssistantSecureCardView)

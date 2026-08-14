@@ -184,6 +184,43 @@ func TestAssistantHistoryConversationContinuationRejectsForeignOwner(t *testing.
 	assert.ErrorIs(t, err, ErrAssistantConversationNotFound)
 }
 
+func TestAssistantConversationHistoryBoundsSecureCardMetadata(t *testing.T) {
+	l0, _, _, _ := setupAssistantHistoryTestDB(t)
+	conversation, err := PrepareAssistantConversation(l0.Id, 0, "card history")
+	require.NoError(t, err)
+
+	cardCount := assistantHistorySecureCardMax + 7
+	for index := 0; index < cardCount; index++ {
+		card := AssistantSecureCard{
+			Id:             fmt.Sprintf("history-bound-card-%03d", index),
+			OwnerUserId:    l0.Id,
+			ConversationId: conversation.Id,
+			Type:           AssistantSecureCardTypeAPIKey,
+			Summary:        fmt.Sprintf("card %03d", index),
+			Ciphertext:     strings.Repeat("encrypted-payload", 128),
+			CreatedAt:      int64(index + 1),
+			ExpiresAt:      int64(index + 1000),
+		}
+		require.NoError(t, DB.Create(&card).Error)
+	}
+
+	_, messages, err := GetAssistantConversationHistory(l0.Id, conversation.Id, assistantHistoryPageMax)
+	require.NoError(t, err)
+
+	metadataCount := 0
+	newestCardVisible := false
+	for _, message := range messages {
+		metadataCount += len(message.Cards)
+		for _, card := range message.Cards {
+			if card.ID == fmt.Sprintf("history-bound-card-%03d", cardCount-1) {
+				newestCardVisible = true
+			}
+		}
+	}
+	assert.LessOrEqual(t, metadataCount, assistantHistorySecureCardMax)
+	assert.True(t, newestCardVisible, "bounded history should retain the newest secure-card metadata")
+}
+
 func TestAssistantConversationArchiveIsOwnerOnlyAndListFilterPreservesHistory(t *testing.T) {
 	l0, l1, _, admin := setupAssistantHistoryTestDB(t)
 	active, err := PrepareAssistantConversation(l0.Id, 0, "active conversation")

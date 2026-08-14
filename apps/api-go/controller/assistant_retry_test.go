@@ -429,8 +429,11 @@ func TestAssistantRetryDoesNotDuplicateFirstTurnConversationOnReplay(t *testing.
 
 	var conversationCount int64
 	var historyMessageCount int64
+	var firstQuestion model.AssistantFirstQuestionStat
 	require.NoError(t, db.Model(&model.AssistantConversation{}).Count(&conversationCount).Error)
 	require.NoError(t, db.Model(&model.AssistantHistoryMessage{}).Count(&historyMessageCount).Error)
+	require.NoError(t, db.First(&firstQuestion).Error)
 	assert.EqualValues(t, 1, conversationCount)
 	assert.EqualValues(t, 2, historyMessageCount)
+	assert.EqualValues(t, 1, firstQuestion.Count)
 }

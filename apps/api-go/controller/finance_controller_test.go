@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -40,6 +41,33 @@ func TestFinanceOverviewAggregatesPaymentMethodsUsersAndTokenCost(t *testing.T) 
 	stripeView, err := buildFinanceOverview(now-100, now+1, 0, "stripe")
 	require.NoError(t, err)
 	require.Equal(t, int64(10_000_000), stripeView.RevenueMicros)
+}
+
+func TestFinanceOverviewStreamsSourcesAcrossBatchBoundary(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}, &model.SubscriptionOrder{}, &model.Log{}, &model.FinanceLedgerEntry{}, &model.FinancePaymentMethod{}))
+	now := time.Now().Unix()
+	user := model.User{Username: "finance-batch", Password: "password", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "finance-batch"}
+	require.NoError(t, db.Create(&user).Error)
+
+	rows := make([]model.TopUp, financeDashboardBatchSize+1)
+	for index := range rows {
+		rows[index] = model.TopUp{
+			UserId:          user.Id,
+			TradeNo:         "finance-batch-" + strconv.Itoa(index),
+			Money:           1,
+			Status:          common.TopUpStatusSuccess,
+			PaymentMethod:   "stripe",
+			PaymentProvider: "stripe",
+			CompleteTime:    now - int64(index),
+		}
+	}
+	require.NoError(t, db.Create(&rows).Error)
+
+	view, err := buildFinanceOverview(now-int64(len(rows))-1, now+1, 0, "")
+	require.NoError(t, err)
+	require.Equal(t, int64(financeDashboardBatchSize+1)*1_000_000, view.RevenueMicros)
+	require.Len(t, view.Users, 1)
 }
 
 func TestFinanceLedgerIsAppendOnlyAndReversalIsExactlyOnce(t *testing.T) {

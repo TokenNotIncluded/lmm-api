@@ -82,6 +82,8 @@ func generatePromptPreset(candidate promptCandidate, topicCounts map[string]int6
 		prompt = fmt.Sprintf("请围绕%s，按质量、速度和成本比较当前可用方案。", focus)
 	case AssistantIntentBounty:
 		prompt = fmt.Sprintf("请围绕%s说明参与流程、权限边界和需要准备的真实材料。", focus)
+	case AssistantIntentInvitation:
+		prompt = fmt.Sprintf("请围绕%s说明一次性新用户礼包的规则、资格和下一步；不要承诺金额，等服务端完成评估。", focus)
 	case AssistantIntentHumanSupport:
 		prompt = fmt.Sprintf("请围绕%s帮我整理不含敏感信息的问题摘要和下一步联系途径。", focus)
 	default:

@@ -187,7 +187,8 @@ func ClassifyAssistantIntent(message string) string {
 		"有哪些模型", "模型列表", "可用模型", "模型清单", "available models", "model list", "model ids"):
 		return AssistantIntentModels
 	case assistantMessageContains(normalized,
-		"邀请奖励", "邀请码", "邀请链接", "邀请用户", "affiliate", "referral", "invite reward"):
+		"邀请奖励", "邀请码", "邀请链接", "邀请用户", "affiliate", "referral", "invite reward",
+		"新用户礼包", "新手奖励", "新用户奖励", "新人礼包", "welcome gift", "new-user gift"):
 		return AssistantIntentInvitation
 	case assistantMessageContains(normalized,
 		"claude code", "cc switch", "cc-switch", "chatgpt", "hermes", "windows", "linux", "macos", "mac os", "桌面版", "安装", "配置客户端"):
