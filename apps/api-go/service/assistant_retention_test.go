@@ -44,6 +44,8 @@ func TestAssistantRetentionHandlerUsesConfiguredScheduleAndPrivacySafePayload(t 
 func TestAssistantRetentionHandlerDeletesInBatchesAndFinishesTask(t *testing.T) {
 	truncate(t)
 	require.NoError(t, model.DB.AutoMigrate(
+		&model.AssistantLead{},
+		&model.AssistantUserProfileAudit{},
 		&model.AssistantConversation{},
 		&model.AssistantHistoryMessage{},
 		&model.AssistantSecureCard{},
@@ -52,6 +54,8 @@ func TestAssistantRetentionHandlerDeletesInBatchesAndFinishesTask(t *testing.T) 
 		&model.UnifiedTodoRead{},
 	))
 	t.Cleanup(func() {
+		model.DB.Exec("DELETE FROM assistant_leads")
+		model.DB.Exec("DELETE FROM assistant_user_profile_audits")
 		model.DB.Exec("DELETE FROM unified_todo_reads")
 		model.DB.Exec("DELETE FROM assistant_security_incidents")
 		model.DB.Exec("DELETE FROM assistant_secure_cards")
@@ -59,6 +63,18 @@ func TestAssistantRetentionHandlerDeletesInBatchesAndFinishesTask(t *testing.T) 
 		model.DB.Exec("DELETE FROM assistant_conversations")
 		model.DB.Exec("DELETE FROM advanced_security_events")
 	})
+	require.NoError(t, model.DB.Create(&[]model.AssistantLead{
+		{UserId: 100, Source: model.AssistantLeadSourceChat, Intent: model.AssistantIntentAPIKey, Status: model.AssistantLeadStatusObserved, CreatedAt: 1},
+		{UserId: 100, Source: model.AssistantLeadSourceChat, Intent: model.AssistantIntentCost, Status: model.AssistantLeadStatusObserved, CreatedAt: 2},
+		{UserId: 100, Source: model.AssistantLeadSourceChat, Intent: model.AssistantIntentUsage, Status: model.AssistantLeadStatusObserved, CreatedAt: 11},
+		{UserId: 100, Source: model.AssistantLeadSourceHandoff, Intent: model.AssistantIntentHumanSupport, Status: model.AssistantLeadStatusPending, CreatedAt: 1, Message: "keep support queue"},
+	}).Error)
+	require.NoError(t, model.DB.Create(&[]model.AssistantUserProfileAudit{
+		{UserId: 100, Source: model.AssistantProfileSourceAI, CreatedAt: 1},
+		{UserId: 100, Source: model.AssistantProfileSourceAI, CreatedAt: 2},
+		{UserId: 100, Source: model.AssistantProfileSourceAI, CreatedAt: 11},
+		{UserId: 100, Source: model.AssistantProfileSourceAdmin, CreatedAt: 1},
+	}).Error)
 
 	for index := range 3 {
 		conversation := model.AssistantConversation{
@@ -107,6 +123,8 @@ func TestAssistantRetentionHandlerDeletesInBatchesAndFinishesTask(t *testing.T) 
 	require.NoError(t, stored.DecodeState(&state))
 	assert.EqualValues(t, 3, state.Conversations)
 	assert.EqualValues(t, 3, state.Messages)
+	assert.EqualValues(t, 2, state.IntentLeads)
+	assert.EqualValues(t, 2, state.ProfileAudits)
 	assert.EqualValues(t, 2, state.SecurityEvents)
 	assert.Equal(t, 100, state.Progress)
 	var remaining int64
@@ -115,5 +133,13 @@ func TestAssistantRetentionHandlerDeletesInBatchesAndFinishesTask(t *testing.T) 
 	require.NoError(t, model.DB.Model(&model.AdvancedSecurityEvent{}).Where("created_at < ?", 10).Count(&remaining).Error)
 	assert.Zero(t, remaining)
 	require.NoError(t, model.DB.Model(&model.AdvancedSecurityEvent{}).Where("created_at >= ?", 10).Count(&remaining).Error)
+	assert.EqualValues(t, 1, remaining)
+	require.NoError(t, model.DB.Model(&model.AssistantLead{}).Where("source = ? AND created_at < ?", model.AssistantLeadSourceChat, 10).Count(&remaining).Error)
+	assert.Zero(t, remaining)
+	require.NoError(t, model.DB.Model(&model.AssistantLead{}).Where("source = ?", model.AssistantLeadSourceHandoff).Count(&remaining).Error)
+	assert.EqualValues(t, 1, remaining)
+	require.NoError(t, model.DB.Model(&model.AssistantUserProfileAudit{}).Where("source = ? AND created_at < ?", model.AssistantProfileSourceAI, 10).Count(&remaining).Error)
+	assert.Zero(t, remaining)
+	require.NoError(t, model.DB.Model(&model.AssistantUserProfileAudit{}).Where("source = ?", model.AssistantProfileSourceAdmin).Count(&remaining).Error)
 	assert.EqualValues(t, 1, remaining)
 }

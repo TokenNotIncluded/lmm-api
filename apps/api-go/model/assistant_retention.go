@@ -20,6 +20,8 @@ type AssistantRetentionDeleteResult struct {
 	Messages       int64 `json:"messages"`
 	SecureCards    int64 `json:"secure_cards"`
 	Incidents      int64 `json:"incidents"`
+	IntentLeads    int64 `json:"intent_leads"`
+	ProfileAudits  int64 `json:"profile_audits"`
 	SecurityEvents int64 `json:"security_events"`
 }
 
@@ -162,5 +164,54 @@ func PurgeAdvancedSecurityEventsBefore(ctx context.Context, cutoff int64, batchS
 	}
 	deleted := DB.WithContext(ctx).Where("id IN ? AND created_at < ?", ids, cutoff).
 		Delete(&AdvancedSecurityEvent{})
+	return deleted.RowsAffected, deleted.Error
+}
+
+// PurgeAssistantIntentLeadsBefore removes old aggregate chat-intent rows in a
+// bounded batch. Chat rows contain no transcript, but they still retain a user
+// id and one row per uncached turn; retaining them forever would let routine
+// assistant traffic grow the table without limit. Explicit support handoffs
+// are excluded because they are an operator queue/history, not analytics.
+func PurgeAssistantIntentLeadsBefore(ctx context.Context, cutoff int64, batchSize int) (int64, error) {
+	if cutoff <= 0 {
+		return 0, gorm.ErrInvalidData
+	}
+	batchSize = NormalizeAssistantRetentionBatchSize(batchSize)
+	var ids []int
+	if err := DB.WithContext(ctx).Model(&AssistantLead{}).
+		Where("source = ? AND created_at < ?", AssistantLeadSourceChat, cutoff).
+		Order("created_at ASC, id ASC").Limit(batchSize).Pluck("id", &ids).Error; err != nil {
+		return 0, err
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	deleted := DB.WithContext(ctx).
+		Where("id IN ? AND source = ? AND created_at < ?", ids, AssistantLeadSourceChat, cutoff).
+		Delete(&AssistantLead{})
+	return deleted.RowsAffected, deleted.Error
+}
+
+// PurgeAssistantUserProfileAuditsBefore removes old automatic profile-change
+// audit rows in bounded batches. The audit stores only hashes and counts, but
+// it is still one row per profile transition; source=administrator is kept as
+// a durable operator audit and is not part of this assistant retention pass.
+func PurgeAssistantUserProfileAuditsBefore(ctx context.Context, cutoff int64, batchSize int) (int64, error) {
+	if cutoff <= 0 {
+		return 0, gorm.ErrInvalidData
+	}
+	batchSize = NormalizeAssistantRetentionBatchSize(batchSize)
+	var ids []int64
+	if err := DB.WithContext(ctx).Model(&AssistantUserProfileAudit{}).
+		Where("source = ? AND created_at < ?", AssistantProfileSourceAI, cutoff).
+		Order("created_at ASC, id ASC").Limit(batchSize).Pluck("id", &ids).Error; err != nil {
+		return 0, err
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	deleted := DB.WithContext(ctx).
+		Where("id IN ? AND source = ? AND created_at < ?", ids, AssistantProfileSourceAI, cutoff).
+		Delete(&AssistantUserProfileAudit{})
 	return deleted.RowsAffected, deleted.Error
 }

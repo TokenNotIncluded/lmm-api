@@ -86,6 +86,34 @@ func TestAssistantAggregateSummariesAreRowBounded(t *testing.T) {
 	assert.Len(t, rows, assistantSummaryMaxRows)
 }
 
+func TestPurgeAssistantIntentLeadsBeforeIsBoundedAndPreservesHandoffs(t *testing.T) {
+	user := setupAssistantLeadTestDB(t)
+	require.NoError(t, DB.Create(&[]AssistantLead{
+		{UserId: user.Id, Source: AssistantLeadSourceChat, Intent: AssistantIntentAPIKey, Status: AssistantLeadStatusObserved, CreatedAt: 1},
+		{UserId: user.Id, Source: AssistantLeadSourceChat, Intent: AssistantIntentCost, Status: AssistantLeadStatusObserved, CreatedAt: 2},
+		{UserId: user.Id, Source: AssistantLeadSourceChat, Intent: AssistantIntentUsage, Status: AssistantLeadStatusObserved, CreatedAt: 3},
+		{UserId: user.Id, Source: AssistantLeadSourceHandoff, Intent: AssistantIntentHumanSupport, Status: AssistantLeadStatusResolved, CreatedAt: 1, ResolvedAt: 2, Message: "keep operator history"},
+		{UserId: user.Id, Source: AssistantLeadSourceChat, Intent: AssistantIntentBounty, Status: AssistantLeadStatusObserved, CreatedAt: 11},
+	}).Error)
+
+	deleted, err := PurgeAssistantIntentLeadsBefore(context.Background(), 10, 2)
+	require.NoError(t, err)
+	assert.EqualValues(t, 2, deleted)
+	deleted, err = PurgeAssistantIntentLeadsBefore(context.Background(), 10, 2)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, deleted)
+	deleted, err = PurgeAssistantIntentLeadsBefore(context.Background(), 10, 2)
+	require.NoError(t, err)
+	assert.Zero(t, deleted)
+
+	var leads []AssistantLead
+	require.NoError(t, DB.Order("id ASC").Find(&leads).Error)
+	require.Len(t, leads, 2)
+	assert.Equal(t, AssistantLeadSourceHandoff, leads[0].Source)
+	assert.Equal(t, AssistantLeadSourceChat, leads[1].Source)
+	assert.Equal(t, "keep operator history", leads[0].Message)
+}
+
 func TestAssistantHandoffRedactsSecretsAndIsIdempotent(t *testing.T) {
 	user := setupAssistantLeadTestDB(t)
 	lead, err := SubmitAssistantHandoff(user.Id, "登录失败，password: hunter2，key=sk-secret-token-123，电话 13800138000，IP 192.0.2.10")
