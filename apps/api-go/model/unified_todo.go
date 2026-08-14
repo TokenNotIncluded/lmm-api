@@ -3,6 +3,7 @@ package model
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -18,6 +19,7 @@ const (
 	UnifiedTodoCategoryDeveloperAccess  = "developer_access"
 	UnifiedTodoCategoryAccountAction    = "account_action"
 	UnifiedTodoCategorySecurityIncident = "security_incident"
+	UnifiedTodoCategorySecurityReview   = "security_review"
 
 	maxUnifiedTodoPage     = 100
 	maxUnifiedTodoPageSize = 50
@@ -94,11 +96,20 @@ var unifiedTodoCategories = []string{
 	UnifiedTodoCategoryBounty,
 	UnifiedTodoCategoryDeveloperAccess,
 	UnifiedTodoCategoryAccountAction,
+	UnifiedTodoCategorySecurityReview,
 }
 
 type unifiedAssistantSecurityIncidentView struct {
 	AssistantSecurityIncident
 	Username string `gorm:"column:username"`
+}
+
+func unifiedSecurityReviewNoticeQuery(db *gorm.DB, viewerRole int) *gorm.DB {
+	query := db.Table("assistant_security_review_notices AS notice")
+	if viewerRole < common.RoleAdminUser {
+		return query.Where("1 = 0")
+	}
+	return query
 }
 
 func todoTx(readOnly bool, action func(*gorm.DB) error) error {
@@ -144,6 +155,49 @@ func unifiedSecurityIncidentCandidates(db *gorm.DB, viewerRole int, ids []int) (
 				"username":        row.Username,
 				"conversation_id": row.ConversationId,
 				"status":          row.Status,
+			},
+		}})
+	}
+	return items, nil
+}
+
+func unifiedSecurityReviewCandidates(db *gorm.DB, viewerRole int, ids []int) ([]unifiedTodoCandidate, error) {
+	if len(ids) == 0 || viewerRole < common.RoleAdminUser {
+		return []unifiedTodoCandidate{}, nil
+	}
+	var notices []AssistantSecurityReviewNotice
+	if err := unifiedSecurityReviewNoticeQuery(db, viewerRole).
+		Where("notice.id IN ?", ids).
+		Order("notice.id DESC").
+		Find(&notices).Error; err != nil {
+		return nil, err
+	}
+	items := make([]unifiedTodoCandidate, 0, len(notices))
+	for _, notice := range notices {
+		review, err := notice.Aggregate()
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, unifiedTodoCandidate{Item: UnifiedTodoItem{
+			Id:        unifiedTodoItemID(UnifiedTodoCategorySecurityReview, int(notice.ID)),
+			SourceId:  int(notice.ID),
+			Category:  UnifiedTodoCategorySecurityReview,
+			Type:      "assistant_security_review",
+			Title:     "assistant.security_review",
+			Summary:   fmt.Sprintf("Automated security review found %d matches (%d blocked, %d audited)", review.TotalMatches, review.BlockedMatches, review.AuditedMatches),
+			CreatedAt: notice.CreatedAt,
+			UpdatedAt: notice.UpdatedAt,
+			Details: map[string]any{
+				"window_start":      notice.WindowStart,
+				"window_end":        notice.WindowEnd,
+				"total_matches":     review.TotalMatches,
+				"blocked_matches":   review.BlockedMatches,
+				"audited_matches":   review.AuditedMatches,
+				"affected_requests": review.AffectedRequests,
+				"affected_users":    review.AffectedUsers,
+				"by_category":       review.ByCategory,
+				"by_rule":           review.ByRule,
+				"privacy_scope":     "aggregate_only",
 			},
 		}})
 	}
@@ -213,6 +267,10 @@ func todoRefs(db *gorm.DB, userID, role int, category string, offset, limit int)
 			WHERE users.role < ? AND incident.status = ?`,
 			UnifiedTodoCategorySecurityIncident, role, AssistantSecurityIncidentStatusOpen)
 	}
+	if selected[UnifiedTodoCategorySecurityReview] && isAdmin {
+		add(`SELECT notice.id AS source_id, ? AS category, notice.updated_at AS updated_at
+			FROM assistant_security_review_notices AS notice`, UnifiedTodoCategorySecurityReview)
+	}
 	if selected[UnifiedTodoCategoryBountyReview] {
 		add(`SELECT challenge.id AS source_id, ? AS category, challenge.updated_at AS updated_at
 			FROM open_source_bounty_challenges AS challenge
@@ -280,6 +338,8 @@ func loadTodoCandidates(db *gorm.DB, userID, role int, refs []todoRef) ([]unifie
 		switch category {
 		case UnifiedTodoCategorySecurityIncident:
 			items, err = unifiedSecurityIncidentCandidates(db, role, ids[category])
+		case UnifiedTodoCategorySecurityReview:
+			items, err = unifiedSecurityReviewCandidates(db, role, ids[category])
 		case UnifiedTodoCategoryBountyReview:
 			items, err = unifiedTodoBountyReviewCandidates(db, userID, ids[category])
 		case UnifiedTodoCategoryBounty:
@@ -574,6 +634,17 @@ func unifiedSecurityIncidentCount(db *gorm.DB, userID, role int, unreadOnly bool
 	return unifiedTodoCount(query)
 }
 
+func unifiedSecurityReviewCount(db *gorm.DB, userID, role int, unreadOnly bool) (int64, error) {
+	query := unifiedSecurityReviewNoticeQuery(db, role)
+	if unreadOnly {
+		query = query.Where(`NOT EXISTS (
+			SELECT 1 FROM unified_todo_reads AS read_marker
+			WHERE read_marker.user_id = ? AND read_marker.category = ? AND read_marker.item_id = notice.id
+		)`, userID, UnifiedTodoCategorySecurityReview)
+	}
+	return unifiedTodoCount(query)
+}
+
 func loadUnifiedTodoReadMap(db *gorm.DB, userID int, category string, ids []int) (map[int]bool, error) {
 	result := make(map[int]bool, len(ids))
 	if len(ids) == 0 {
@@ -646,6 +717,11 @@ func readTodoPage(db *gorm.DB, userID, role int, category string, page, pageSize
 			total, err = unifiedSecurityIncidentCount(db, userID, role, false)
 			if err == nil {
 				unread, err = unifiedSecurityIncidentCount(db, userID, role, true)
+			}
+		case UnifiedTodoCategorySecurityReview:
+			total, err = unifiedSecurityReviewCount(db, userID, role, false)
+			if err == nil {
+				unread, err = unifiedSecurityReviewCount(db, userID, role, true)
 			}
 		case UnifiedTodoCategoryBountyReview:
 			total, err = unifiedBountyReviewCount(db, userID, false)
@@ -726,6 +802,8 @@ func visibleTodoQuery(db *gorm.DB, userID, role int, category string) (*gorm.DB,
 	switch category {
 	case UnifiedTodoCategorySecurityIncident:
 		return unifiedSecurityIncidentQuery(db, role).Select("incident.id"), "incident.id", nil
+	case UnifiedTodoCategorySecurityReview:
+		return unifiedSecurityReviewNoticeQuery(db, role).Select("notice.id"), "notice.id", nil
 	case UnifiedTodoCategoryBountyReview:
 		query := db.Table("open_source_bounty_challenges AS c").
 			Select("c.id").

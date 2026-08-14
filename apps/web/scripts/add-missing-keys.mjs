@@ -77,6 +77,8 @@ const newKeys = {
     Approved: 'Approved',
     Request: 'Request',
     'Administrator note': 'Administrator note',
+    'Security reviews': 'Security reviews',
+    'assistant.security_review': 'Assistant security review',
   },
   zh: {
     'Cost control': '成本控制',
@@ -127,6 +129,8 @@ const newKeys = {
     Approved: '已批准',
     Request: '申请',
     'Administrator note': '管理员意见',
+    'Security reviews': '安全巡检',
+    'assistant.security_review': '助手安全巡检',
   },
   'zh-TW': {
     'Cost control': '成本控制',
@@ -177,6 +181,8 @@ const newKeys = {
     Approved: '已核准',
     Request: '申請',
     'Administrator note': '管理員備註',
+    'Security reviews': '安全巡檢',
+    'assistant.security_review': '助手安全巡檢',
   },
   fr: {
     'Cost control': 'Contrôle des coûts',
@@ -230,6 +236,8 @@ const newKeys = {
     Approved: 'Approuvée',
     Request: 'Demande',
     'Administrator note': 'Note de l’administrateur',
+    'Security reviews': 'Revues de sécurité',
+    'assistant.security_review': 'Revue de sécurité de l’assistant',
   },
   ja: {
     'Cost control': 'コスト管理',
@@ -281,6 +289,8 @@ const newKeys = {
     Approved: '承認済み',
     Request: '申請',
     'Administrator note': '管理者メモ',
+    'Security reviews': 'セキュリティレビュー',
+    'assistant.security_review': 'アシスタントのセキュリティレビュー',
   },
   ru: {
     'Cost control': 'Контроль затрат',
@@ -333,6 +343,8 @@ const newKeys = {
     Approved: 'Одобрено',
     Request: 'Заявка',
     'Administrator note': 'Заметка администратора',
+    'Security reviews': 'Проверки безопасности',
+    'assistant.security_review': 'Проверка безопасности ассистента',
   },
   vi: {
     'Cost control': 'Kiểm soát chi phí',
@@ -384,6 +396,8 @@ const newKeys = {
     Approved: 'Đã phê duyệt',
     Request: 'Yêu cầu',
     'Administrator note': 'Ghi chú của quản trị viên',
+    'Security reviews': 'Đánh giá bảo mật',
+    'assistant.security_review': 'Đánh giá bảo mật của trợ lý',
   },
 }
 

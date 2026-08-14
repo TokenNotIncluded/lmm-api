@@ -38,7 +38,7 @@ func TestReviewTask(t *testing.T) {
 	truncate(t)
 	require.NoError(t, model.DB.AutoMigrate(
 		&model.AssistantLead{}, &model.AssistantProfileBucket{}, &model.PromptPresetStat{},
-		&model.AssistantSecurityIncident{}, &model.AdvancedSecurityEvent{},
+		&model.AssistantSecurityIncident{}, &model.AdvancedSecurityEvent{}, &model.AssistantSecurityReviewNotice{},
 	))
 	t.Cleanup(func() {
 		model.DB.Exec("DELETE FROM assistant_security_incidents")
@@ -46,6 +46,7 @@ func TestReviewTask(t *testing.T) {
 		model.DB.Exec("DELETE FROM assistant_profile_buckets")
 		model.DB.Exec("DELETE FROM assistant_leads")
 		model.DB.Exec("DELETE FROM advanced_security_events")
+		model.DB.Exec("DELETE FROM assistant_security_review_notices")
 	})
 	require.NoError(t, model.DB.Create(&model.AdvancedSecurityEvent{
 		CreatedAt: 50, RequestID: "review-request", UserID: 42,
@@ -66,4 +67,7 @@ func TestReviewTask(t *testing.T) {
 	assert.Contains(t, stored.Result, `"window_start":1`)
 	assert.Contains(t, stored.Result, `"review_security_events"`)
 	assert.Less(t, len(stored.Result), 16*1024)
+	var notices []model.AssistantSecurityReviewNotice
+	require.NoError(t, model.DB.Find(&notices).Error)
+	assert.Len(t, notices, 1)
 }

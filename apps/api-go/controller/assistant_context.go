@@ -25,6 +25,7 @@ var (
 	assistantUsernameAPIKeyPattern = regexp.MustCompile(`(?i)\b(?:sk|rk|pk)-[a-z0-9][a-z0-9._-]{5,}\b`)
 	assistantUsernameBearerPattern = regexp.MustCompile(`(?i)\bbearer\s+[a-z0-9._~+/-]{8,}=*`)
 	assistantPaymentPayWordPattern = regexp.MustCompile(`(?i)\bpay\b`)
+	assistantKeyWordPattern        = regexp.MustCompile(`(?i)\bkey\b`)
 	assistantPaymentAmountPattern  = regexp.MustCompile(`(?:\d+(?:\.\d+)?\s*(?:元|块|人民币|美元|美金|usd|rmb|cny|刀|\$|¥|￥)|预算|每月|一个月|月均|预计额度|金额|额度)`)
 	assistantPaymentNumberPattern  = regexp.MustCompile(`\d+(?:\.\d+)?`)
 
@@ -404,7 +405,9 @@ func classifyAssistantRecommendationAction(message string) assistantRecommendati
 
 func assistantExplicitCreateKeyRequest(message string) bool {
 	text := strings.ToLower(strings.TrimSpace(message))
-	return assistantTextContainsAny(text, "api key", "api-key", "api_key", "apikey", "密钥", "key") &&
+	hasKeyTerm := assistantTextContainsAny(text, "api key", "api-key", "api_key", "apikey", "密钥") ||
+		assistantKeyWordPattern.MatchString(text)
+	return hasKeyTerm &&
 		assistantTextContainsAny(text, "创建", "新建", "生成", "开一个", "建一个", "create", "generate", "make", "new key")
 }
 

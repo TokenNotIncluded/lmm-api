@@ -15,6 +15,7 @@ export type TodoCategory =
   | 'developer_access'
   | 'account_action'
   | 'security_incident'
+  | 'security_review'
 
 export interface TodoItem {
   id: string

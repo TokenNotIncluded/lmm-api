@@ -33,6 +33,7 @@ const CATEGORY_LABELS: Record<TodoCategory, string> = {
   developer_access: 'Developer access',
   account_action: 'Account actions',
   security_incident: 'Security incidents',
+  security_review: 'Security reviews',
 }
 
 const ITEM_LABELS: Record<string, string> = {
@@ -44,6 +45,7 @@ const ITEM_LABELS: Record<string, string> = {
   'developer_access.request': 'Developer access request',
   'account_action.request': 'Account action request',
   'assistant.security_incident': 'Assistant safety incident',
+  'assistant.security_review': 'Assistant security review',
 }
 
 function detailString(item: TodoItem, key: string) {
@@ -85,6 +87,10 @@ export function UnifiedTodoList() {
       })
       return
     }
+    if (item.category === 'security_review') {
+      await navigate({ to: '/system-settings/security' })
+      return
+    }
     if (
       item.category === 'security_incident' ||
       item.category === 'developer_access'
@@ -117,6 +123,7 @@ export function UnifiedTodoList() {
           item.key === 'open_source_bounty_review' ||
           ((user?.role ?? 0) >= ROLE.ADMIN &&
             item.key === 'security_incident') ||
+          ((user?.role ?? 0) >= ROLE.ADMIN && item.key === 'security_review') ||
           ((user?.role ?? 0) >= ROLE.ADMIN &&
             (item.key === 'developer_access' || item.key === 'account_action'))
       )

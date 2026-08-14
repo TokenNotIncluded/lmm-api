@@ -3,8 +3,10 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
 )
@@ -76,7 +78,16 @@ func (assistantReviewHandler) Run(ctx context.Context, task *model.SystemTask, r
 		logSystemTaskLockError(ctx, task, err)
 		return
 	}
+	if err := model.SaveAssistantSecurityReviewNotice(
+		task.TaskID, payload.WindowStart, payload.WindowEnd, review.Security, review.ObservedAt,
+	); err != nil {
+		logger.LogWarn(ctx, fmt.Sprintf("assistant security review notification failed: %v", err))
+		return
+	}
 	if err := model.PruneTaskHistory(task.Type, reviewHistoryLimit); err != nil {
+		logSystemTaskLockError(ctx, task, err)
+	}
+	if err := model.PruneAssistantSecurityReviewNotices(reviewHistoryLimit); err != nil {
 		logSystemTaskLockError(ctx, task, err)
 	}
 }

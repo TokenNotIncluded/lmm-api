@@ -251,6 +251,13 @@ func SyncOptions(frequency int) {
 }
 
 func validateOptionValue(key string, value string) error {
+	// Region enforcement is a security boundary rather than a presentation
+	// setting. Validate it here (instead of only in the generic controller) so
+	// assistant-admin bulk updates and other internal callers cannot persist a
+	// malformed value that silently disables the edge policy.
+	if err := validateRegionPolicyOption(key, value); err != nil {
+		return err
+	}
 	if dynamic_pricing_setting.IsOptionKey(key) {
 		return dynamic_pricing_setting.ValidateOptionValues(map[string]string{key: value})
 	}
@@ -278,6 +285,22 @@ func validateOptionValue(key string, value string) error {
 	}
 	if key == operation_setting.ViolationFeeOptionKey+".policies" {
 		return operation_setting.ValidateViolationFeeSettingsJSON(`{"enabled":true,"policies":` + value + `}`)
+	}
+	return nil
+}
+
+func validateRegionPolicyOption(key, value string) error {
+	switch key {
+	case common.RegionAccessPolicyEnabledOptionKey:
+		// updateOptionMap intentionally treats only the exact string "true" as
+		// enabled. Keep validation equally strict so values such as "TRUE" or
+		// "1" cannot be accepted and then applied as false.
+		if value != "true" && value != "false" {
+			return errors.New("region access policy enabled must be true or false")
+		}
+	case common.RegionBlockedCountryCodesOptionKey:
+		_, err := common.ParseRegionBlockedCountryCodes(value)
+		return err
 	}
 	return nil
 }
@@ -440,6 +463,12 @@ func UpdateAdvancedSecurityOptions(enabled, onPrompt bool, action, rules string)
 }
 
 func updateOptionMap(key string, value string) (err error) {
+	// Reject malformed persisted region settings before touching OptionMap or
+	// runtime enforcement. This also makes startup fail closed for an invalid
+	// legacy row instead of interpreting it as "disabled".
+	if err := validateRegionPolicyOption(key, value); err != nil {
+		return err
+	}
 	// Legacy model-specific Grok violation options are intentionally ignored.
 	// The active policy is now operation_setting's provider-agnostic group
 	// policy; deleting these keys from the runtime map keeps old database rows

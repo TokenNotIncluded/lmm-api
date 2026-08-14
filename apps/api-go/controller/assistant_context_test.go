@@ -68,6 +68,31 @@ func TestAssistantAgentForcesTaskToolsBeforeAnswering(t *testing.T) {
 	})))
 }
 
+func TestAssistantCreateKeyRequestRequiresAStandaloneKeyTerm(t *testing.T) {
+	tests := []struct {
+		name    string
+		message string
+		want    bool
+	}{
+		{name: "explicit API key", message: "请直接在助手里帮我创建一个 API key", want: true},
+		{name: "explicit Chinese key", message: "帮我生成一个密钥", want: true},
+		{name: "explicit standalone English key", message: "Generate a new key for me", want: true},
+		{name: "keyboard accessibility", message: "How can I make keyboard navigation accessible?", want: false},
+		{name: "keyframe animation", message: "Please make these keyframes smoother", want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, assistantExplicitCreateKeyRequest(test.message))
+			wantAction := assistantCreateKeyActionNone
+			if test.want {
+				wantAction = assistantCreateKeyActionRequest
+			}
+			assert.Equal(t, wantAction, classifyAssistantCreateKeyAction(test.message))
+		})
+	}
+}
+
 func TestAssistantRecommendationEditWorkflowToolChoices(t *testing.T) {
 	assert.Equal(t, assistantRecommendationActionRevise, classifyAssistantRecommendationAction("请帮我重写这封推荐信"))
 	assert.Equal(t, assistantRecommendationActionRevise, classifyAssistantRecommendationAction("修改我的 L1 推荐信"))

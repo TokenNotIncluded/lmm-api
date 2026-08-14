@@ -343,7 +343,7 @@ func mainMigrationModels() []interface{} {
 		&SubscriptionOrder{}, &UserSubscription{}, &SubscriptionPreConsumeRecord{}, &CustomOAuthProvider{},
 		&UserOAuthBinding{}, &PerfMetric{}, &SystemInstance{}, &SystemTask{}, &SystemTaskLock{},
 		&CasbinRule{}, &AuthzRole{}, &PersonalAccessIP{},
-		&AssistantLead{}, &AssistantProfileBucket{}, &AssistantUserProfile{}, &AssistantMemory{}, &AssistantFirstQuestionStat{}, &PromptPresetRow{}, &PromptPresetStat{}, &PromptConversionRef{}, &PromptConversationRef{}, &AssistantConversation{}, &AssistantHistoryMessage{}, &AssistantSecureCard{}, &AssistantSecurityIncident{}, &AssistantNewUserGift{}, &AssistantGiftRiskMemory{}, &AdvancedSecurityEvent{},
+		&AssistantLead{}, &AssistantProfileBucket{}, &AssistantUserProfile{}, &AssistantMemory{}, &AssistantFirstQuestionStat{}, &PromptPresetRow{}, &PromptPresetStat{}, &PromptConversionRef{}, &PromptConversationRef{}, &AssistantConversation{}, &AssistantHistoryMessage{}, &AssistantSecureCard{}, &AssistantSecurityIncident{}, &AssistantSecurityReviewNotice{}, &AssistantNewUserGift{}, &AssistantGiftRiskMemory{}, &AdvancedSecurityEvent{},
 		&ViolationFeeState{}, &ViolationFeeRecord{}, &ViolationFeeAppeal{},
 		&FinanceLedgerEntry{}, &FinancePaymentMethod{},
 		&ReleaseNote{}, &ReleaseNoteRead{}, &UnifiedTodoRead{}, &L1OnboardingTodo{},

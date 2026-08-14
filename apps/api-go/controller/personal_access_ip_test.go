@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -39,6 +40,37 @@ func TestPersonalAccessIPPolicyMarksOnlyDeniedRequests(t *testing.T) {
 		context, _ := gin.CreateTestContext(recorder)
 		context.Request = httptest.NewRequest(http.MethodGet, "/internal/access-ip-policy", nil)
 		context.Request.RemoteAddr = "127.0.0.1:42000"
+
+		CheckPersonalAccessIPPolicy(context)
+
+		assert.Equal(t, http.StatusNoContent, context.Writer.Status())
+		assert.Empty(t, recorder.Header().Get(accessPolicyResultHeader))
+	})
+
+	t.Run("public peer cannot spoof edge headers", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		context, _ := gin.CreateTestContext(recorder)
+		context.Request = httptest.NewRequest(http.MethodGet, "/internal/access-ip-policy", nil)
+		context.Request.RemoteAddr = "198.51.100.2:42000"
+		context.Request.Header.Set("X-LMM-Edge-Country", "US")
+		context.Request.Header.Set("X-LMM-CN-Source", "0")
+
+		CheckPersonalAccessIPPolicy(context)
+
+		assert.Equal(t, http.StatusForbidden, context.Writer.Status())
+		assert.Equal(t, accessPolicyDenied, recorder.Header().Get(accessPolicyResultHeader))
+	})
+
+	t.Run("disabled policy allows blocked country", func(t *testing.T) {
+		previous := common.IsRegionAccessPolicyEnabled()
+		common.SetRegionAccessPolicyEnabled(false)
+		t.Cleanup(func() { common.SetRegionAccessPolicyEnabled(previous) })
+
+		recorder := httptest.NewRecorder()
+		context, _ := gin.CreateTestContext(recorder)
+		context.Request = httptest.NewRequest(http.MethodGet, "/internal/access-ip-policy", nil)
+		context.Request.RemoteAddr = "127.0.0.1:42000"
+		context.Request.Header.Set("X-LMM-CN-Source", "1")
 
 		CheckPersonalAccessIPPolicy(context)
 
