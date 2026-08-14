@@ -17,10 +17,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { VChart } from '@visactor/react-vchart'
-import { BarChart3, Trophy } from 'lucide-react'
+import { BarChart3, ChevronDown, Trophy } from 'lucide-react'
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
 import { useChartTheme } from '@/lib/use-chart-theme'
 import { VCHART_OPTION } from '@/lib/vchart'
 
@@ -212,26 +217,31 @@ export function ModelsSection(props: ModelsSectionProps) {
       </div>
 
       {/* Leaderboard block ----------------------------------------------- */}
-      <div className='border-t'>
-        <header className='px-5 pt-4 pb-2'>
-          <h3 className='text-foreground inline-flex items-center gap-2 text-sm font-semibold'>
-            <Trophy className='console-status-warning-icon size-3.5' />
-            {t('LLM Leaderboard')}
-          </h3>
-          <p className='text-muted-foreground/80 mt-0.5 text-xs'>
-            {t('Compare the most popular models on the platform')}
-          </p>
-        </header>
-        {props.rows.length === 0 ? (
-          <div className='text-muted-foreground/80 px-5 py-8 text-center text-sm'>
-            {t('No models match the selected filters')}
-          </div>
-        ) : (
-          <div className='px-5 pt-1 pb-4'>
-            <ModelLeaderboard rows={props.rows} />
-          </div>
-        )}
-      </div>
+      <Collapsible defaultOpen={false} className='border-t'>
+        <CollapsibleTrigger className='group flex w-full items-start justify-between gap-4 px-5 pt-4 pb-3 text-left'>
+          <span>
+            <span className='text-foreground inline-flex items-center gap-2 text-sm font-semibold'>
+              <Trophy className='console-status-warning-icon size-3.5' />
+              {t('LLM Leaderboard')}
+            </span>
+            <span className='text-muted-foreground/80 mt-0.5 block text-xs'>
+              {t('Compare the most popular models on the platform')}
+            </span>
+          </span>
+          <ChevronDown className='text-muted-foreground mt-0.5 h-4 w-4 shrink-0 transition-transform group-data-[panel-open]:rotate-180' />
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          {props.rows.length === 0 ? (
+            <div className='text-muted-foreground/80 px-5 py-8 text-center text-sm'>
+              {t('No models match the selected filters')}
+            </div>
+          ) : (
+            <div className='px-5 pt-1 pb-4'>
+              <ModelLeaderboard rows={props.rows} />
+            </div>
+          )}
+        </CollapsibleContent>
+      </Collapsible>
     </section>
   )
 }
