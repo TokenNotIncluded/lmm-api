@@ -61,6 +61,44 @@ func ReadAllLimit(reader io.Reader, limit int64) ([]byte, error) {
 	return data, nil
 }
 
+type limitedBody struct {
+	io.ReadCloser
+	remaining int64
+}
+
+// LimitBody caps bytes delivered by a response body without buffering it.
+// One overflow byte is probed and discarded so callers receive
+// ErrLimitExceeded while retained memory stays within the configured limit.
+func LimitBody(body io.ReadCloser, limit int64) io.ReadCloser {
+	if body == nil {
+		return nil
+	}
+	if limit < 0 {
+		limit = 0
+	}
+	return &limitedBody{ReadCloser: body, remaining: limit}
+}
+
+func (body *limitedBody) Read(buffer []byte) (int, error) {
+	if len(buffer) == 0 {
+		return 0, nil
+	}
+	if body.remaining > 0 {
+		if int64(len(buffer)) > body.remaining {
+			buffer = buffer[:body.remaining]
+		}
+		read, err := body.ReadCloser.Read(buffer)
+		body.remaining -= int64(read)
+		return read, err
+	}
+	var probe [1]byte
+	read, err := body.ReadCloser.Read(probe[:])
+	if read > 0 {
+		return 0, ErrLimitExceeded
+	}
+	return 0, err
+}
+
 func ResponseBodyLimit() int64 {
 	megabytes := constant.MaxResponseBodyMB
 	if megabytes <= 0 {

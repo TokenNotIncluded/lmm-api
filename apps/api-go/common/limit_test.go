@@ -32,6 +32,16 @@ func TestReadAllLimitRejectsOverflow(t *testing.T) {
 	assert.True(t, errors.Is(err, ErrLimitExceeded))
 }
 
+func TestLimitBodyStopsAtSourceBudget(t *testing.T) {
+	exact, err := io.ReadAll(LimitBody(io.NopCloser(strings.NewReader("1234")), 4))
+	require.NoError(t, err)
+	assert.Equal(t, "1234", string(exact))
+
+	overflow, err := io.ReadAll(LimitBody(io.NopCloser(strings.NewReader("12345")), 4))
+	assert.ErrorIs(t, err, ErrLimitExceeded)
+	assert.Equal(t, "1234", string(overflow))
+}
+
 func TestMarshalLimitBoundsJSON(t *testing.T) {
 	data, err := MarshalLimit(map[string]string{"value": "ok"}, 32)
 	require.NoError(t, err)

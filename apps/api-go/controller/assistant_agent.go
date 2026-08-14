@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/internal/agent"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/syncx"
@@ -691,6 +692,7 @@ func setAssistantRelayRequest(c *gin.Context, request assistantOpenAIRequest) er
 		return err
 	}
 	c.Set(common.KeyBodyStorage, storage)
+	common.SetContextKey(c, constant.ContextKeyResponseByteLimit, assistantUpstreamResponseMaxBytes)
 	c.Set("assistant_request", true)
 	c.Request.Body = io.NopCloser(storage)
 	c.Request.ContentLength = int64(len(payload))
