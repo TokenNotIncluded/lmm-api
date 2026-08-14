@@ -24,9 +24,9 @@ pkgbase = lmm-api-web-bin
 	source = lmm-api-web-0.1.10.tar.gz.sha256::https://github.com/LIghtJUNction/api.lmm.best/releases/download/web-v0.1.10/lmm-api-web-0.1.10.tar.gz.sha256
 	source = lmm-api-web-0.1.10.tar.gz.sigstore.json::https://github.com/LIghtJUNction/api.lmm.best/releases/download/web-v0.1.10/lmm-api-web-0.1.10.tar.gz.sigstore.json
 	source = lmm-api-web-activate::https://github.com/LIghtJUNction/api.lmm.best/raw/refs/tags/web-v0.1.10/packaging/aur/lmm-api-web-bin/lmm-api-web-activate
-	sha256sums = 5c3f1a2c5fdca43ff2cc10f4d8b2e458b6e3f22904b3de2f4918e8c7cc769a00
-	sha256sums = a1b9f60b588ed727bb9c30201e1197eb02f7191feef1c3aa1080da89dfc756a5
-	sha256sums = 090021987884cdd061d38641f340f34ee3b1b4b97fe781835a690be89e89933b
+	sha256sums = a441261bffd8e478d50a3b8b3161df668512402374d8c0c56ef36562eb0f5ad9
+	sha256sums = a72561628401548df0ed382b6ce2795e942be3bd15c956e25bae39918f1ff85f
+	sha256sums = 3653951189a74c875730de5f61c873551684548953ddeccc8f6197c9fb10f9bc
 	sha256sums = 358f5b958f3520757628d803027dafb1b67ec61b565d00bf4cd4f7927347cf33
 
 pkgname = lmm-api-web-bin
