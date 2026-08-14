@@ -7,6 +7,10 @@
 - Verify the expected SSH alias, static hostname, role marker, service name,
   installed package identity, current backend artifact, frontend symlink, and
   installed CLI protocol/service entry point.
+- Classify the installed layout before invoking a command: direct Go provider
+  (`lmm-api-go*` owns `/usr/bin/lmm-api` and the bundled frontend) or guarded
+  core/provider (`lmm-api-bin`/`lmm-api-git` owns the launcher). Never mix their
+  paths, package identities, rollback archives, or state roots.
 - Treat host or role disagreement as a stop condition.
 - Preserve the repository's one-branch, one-worktree, one-diff rules. A deploy
   request does not authorize Git repair, branch switching, commit, or push.
@@ -23,6 +27,36 @@
 - Build once. Record and verify the same artifact SHA-256 at every promotion
   boundary.
 - Never overwrite an existing immutable release with different bytes.
+- Serialize heavy builds on the small controller (`GOMAXPROCS=2`, Go package
+  parallelism `2`, Cargo jobs `2`) unless fresh resource evidence justifies a
+  higher limit. Keep all caches in the marker-owned workspace.
+
+### Bounded state
+
+- Treat `${XDG_STATE_HOME:-$HOME/.local/state}/lmm-api` and any deployment-side
+  alias such as `states/api.lmm.best` as bounded operational state. Measure the
+  resolved root with `du -sx --bytes` before a build and after terminal cleanup.
+- Warn at `256 MiB`; stop new builds at `512 MiB` or earlier when the storage
+  gate is yellow. Keep only the marker/status in terminal workspaces and remove
+  exact `staging`, `tmp`, build-cache, `node_modules`, `dist`, and package
+  archive children after `CONFIRMED` or `ROLLED_BACK`.
+- Never prune application history, PostgreSQL/Valkey data, active releases,
+  backups, or another deployment's workspace to satisfy the budget. A large or
+  unexplained state root is a stop-and-report condition, not permission for a
+  broad deletion.
+
+### Release and AUR identity
+
+- Reconcile the release workflow tag pattern, artifact names, each changed
+  `PKGBUILD`/`.SRCINFO` source URL, Sigstore identity, and
+  `packaging/aur/README.md` from one frozen revision before publishing.
+- A `vX.Y.Z` workflow cannot satisfy a `web-vX.Y.Z` AUR source (or the reverse)
+  without an explicit compatibility/release asset. Treat that mismatch as a
+  hard stop; never retag, reuse, or hand-edit around it.
+- Push package metadata only to the matching AUR repository. Production
+  `paru` runs as the established unprivileged operator, never root, and may
+  update only the exact verified package set. A plain `paru` invocation never
+  replaces the watchdog, confirmation, or health gates.
 
 ### Production resource gates
 
@@ -64,9 +98,9 @@ incident signal and must be recorded before any retry.
 
 ## Legacy CLI safety
 
-- Before invoking `/usr/bin/lmm-api` on a target, verify its package owner,
-  protocol/revision, supported `deploy production` transaction, and the
-  systemd `ExecStart` contract (`/usr/bin/lmm-api serve`).
+- Before invoking `/usr/bin/lmm-api-go` on a target, verify both installed
+  entries have the same package owner and bytes, the operator supports the
+  `deploy production` transaction, and systemd uses `/usr/bin/lmm-api serve`.
 - A legacy binary may start the backend for an unknown command. `status`,
   `deploy`, `--help`, and no-argument calls are not read-only until the
   protocol is proven.
@@ -90,9 +124,11 @@ nonempty target, or inability to verify identity is an immediate `STOP`, never
 a fallback. This override applies only to local acceptance previews; generic
 engine detection above remains applicable to other deployment roles.
 
-## Backup copies
+## Optional backup copies
 
-Before mutation, require:
+Backups are not a deployment prerequisite. Do not create, transfer, verify, or
+prune them unless the user explicitly requests backups in the current turn.
+When the opt-in backup path is selected, require:
 
 | Role | Required verified copies |
 | --- | --- |
@@ -102,7 +138,10 @@ Before mutation, require:
 
 The production controller copy lives at
 `$HOME/backup/lmm-api/<verified-host>/<deployment-id>`. The off-host copy lives
-on ArchCzy under a fixed root or in explicitly configured object storage.
+on the ArchCzy host, reached through the case-sensitive SSH alias `archczy`,
+under a fixed root or in explicitly configured object storage. Verify that
+`ssh archczy` resolves to static hostname `archczy`; do not assume the display
+name `ArchCzy` is a configured SSH alias.
 
 Each copy contains `manifest.env`, `SHA256SUMS`, a nonempty application archive,
 frontend archive, configuration archive, and database backup. The manifest
@@ -130,13 +169,15 @@ Canonical roots are fixed:
 - durable controller copy: `$HOME/backup/lmm-api/<verified-host>/<deployment-id>`;
 - production target workspace: `/var/lib/lmm-api-go/deploy-work/<deployment-id>`
   (resolved private state is below `/var/lib/private/lmm-api-go`);
+- guarded core target workspace: `/var/lib/lmm-api/deploy-work/<deployment-id>`
+  when the installed core contract selects the guarded layout;
 - production target backup: `/var/lib/lmm-api-go/deploy-backups/<deployment-id>`;
 - off-host copy: `/home/arch/.local/state/lmm-api-production-backups/<deployment-id>`
-  on `ArchCzy`.
+  on the ArchCzy host through SSH alias `archczy`.
 
 Only the exact workspace's `staging`, `tmp`, and cache children are disposable.
-After terminal state, retain its marker/status audit record and the three
-durable copies; remove staging by exact path. Never recursively clean a backup
+After terminal state, retain its marker/status audit record and any explicitly
+requested durable copies; remove staging by exact path. Never recursively clean a backup
 root, release root, home/root, `/tmp`, `/var/tmp`, an unresolved variable, or a
 glob. A terminal workspace older than 24 hours may be pruned oldest first only
 after checksum/decryption verification and only while the storage gate remains
@@ -162,6 +203,22 @@ green.
   migrations are compatible with both N and N-1 during the confirmation
   window.
 
+## Go/Web AUR migration order
+
+- Require signed immutable release assets and pinned AUR hashes before target
+  package assembly. `paru` may assemble a `-bin` package; it must not compile or
+  replace the signed application artifact.
+- Arm the watchdog before stopping Go. Run the candidate binary as a root
+  transient unit with the production environment file; do not use the stopped
+  service's `DynamicUser` identity.
+- Run `migrate --apply` and then `migrate --verify` before `paru -U`. A failed
+  verification blocks package installation. Never repair the gate with ad-hoc
+  production SQL.
+- Start Go before final Web activation. A local Web activation probe avoids a
+  DNS-only package-hook failure; public status remains a confirmation gate.
+- Observe at least 120 seconds, then confirm exact Go/Web package versions,
+  revisions, frontend link, restart count, database/cache readiness, and memory.
+
 ## Rust ownership gate
 
 - The Rust blue/green slots own internal GET/HEAD probes only until the route
@@ -180,26 +237,36 @@ green.
 
 - Clean only the exact deployment workspace carrying the expected marker and
   matching deployment ID.
-- Require a durable `CONFIRMED` or `ROLLED_BACK` final state.
+- Require a durable `CONFIRMED`, `ROLLED_BACK`, controller-only pre-switch
+  `VALIDATED`, or pre-switch `ABORTED` final state. Use `VALIDATED` for
+  completed pre-release checks and `ABORTED` for an interrupted attempt, only
+  after proving no switch occurred and stopping every workspace-owned process.
 - Reject `/`, home roots, workspace roots, `/tmp`, `/var/tmp`, backup roots,
   release roots, unresolved variables, tildes, globs, symlinks, and paths not
   owned by the marker.
 - Preview cleanup before execution.
+- Remove release artifacts together with staging, temporary files, and build
+  caches; durable releases and rollback packages belong outside deploy-work.
 - Never implement “clear tmp” as a broad directory deletion. Identify and
   remove only stale, inactive, marker-owned LMM deployment workspaces.
 - Re-run disk/inode/RAM/swap, service state, PostgreSQL/Valkey readiness, and
   native CLI status/livez checks after cleanup; record exact paths removed and
   the remaining free-space margin.
+- Re-run the bounded-state measurement after cleanup and record the remaining
+  bytes. Do not report success if the state root still exceeds the warning
+  budget without an owner and an explicit follow-up.
 
 ## Minimum validation before production enablement
 
 - Skill validation and shell syntax checks pass.
+- Release workflow, AUR source tags, package identities, and Sigstore
+  identities are mutually consistent for the exact frozen revision.
 - Offline tests cover safe IDs and paths, host mismatch, database disagreement,
-  backup corruption, missing copies, encrypted off-host artifacts, timer
+  optional-backup selection and verification, timer
   arming, exact-release confirmation, expiry rollback, reboot recovery, and
   scoped cleanup.
-- Existing production contract tests require dual backups, watchdog state, and
-  `AWAITING_CONFIRMATION`.
+- Existing production contract tests require watchdog state and
+  `AWAITING_CONFIRMATION`; opted-in backup tests require all requested copies.
 - A fresh runtime audit reconciles any historical PostgreSQL cutover result and
   proves the active schema, Valkey endpoint, and forward-only boundary.
 - Frontend-only publication is proven compatible with the current Go API before

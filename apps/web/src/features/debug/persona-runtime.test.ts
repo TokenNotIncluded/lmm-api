@@ -76,6 +76,26 @@ describe('persona debug runtime', () => {
     assert.equal(status.data.data.is_root, true)
   })
 
+  test('serves dynamic assistant starters without reaching a backend', async () => {
+    installPersonaDebugRuntime()
+
+    const presets = await api.get('/api/assistant/pre-conversation-presets')
+    assert.equal(presets.data.success, true)
+    assert.equal(presets.data.data.version, 'persona-fixture-v1')
+    assert.equal(presets.data.data.presets.length, 4)
+    assert.ok(
+      presets.data.data.presets.every(
+        (preset: { id?: string; prompt?: string }) =>
+          Boolean(preset.id?.trim()) && Boolean(preset.prompt?.trim())
+      )
+    )
+
+    const click = await api.post(
+      '/api/assistant/pre-conversation-presets/models-and-pricing/click'
+    )
+    assert.deepEqual(click.data, { success: true, data: null })
+  })
+
   test('returns lower-access conversation fixtures without raw secrets', async () => {
     setActiveDebugPersona('admin')
     const history = await api.get('/api/assistant/conversations', {

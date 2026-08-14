@@ -296,25 +296,22 @@ func (channel *Channel) GetNextEnabledKey() (string, int, *types.NewAPIError) {
 		return common.ChannelStatusEnabled
 	}
 
-	// Collect indexes of enabled keys
-	enabledIdx := make([]int, 0, len(keys))
-	for i := range keys {
-		if getStatus(i) == common.ChannelStatusEnabled {
-			enabledIdx = append(enabledIdx, i)
-		}
-	}
-	// If no specific status list or none enabled, return an explicit error so caller can
-	// properly handle a channel with no available keys (e.g. mark channel disabled).
-	// Returning the first key here caused requests to keep using an already-disabled key.
-	if len(enabledIdx) == 0 {
-		return "", 0, types.NewError(errors.New("no enabled keys"), types.ErrorCodeChannelNoAvailableKey)
-	}
-
 	switch channel.ChannelInfo.MultiKeyMode {
 	case constant.MultiKeyModeRandom:
-		// Randomly pick one enabled key
-		selectedIdx := enabledIdx[rand.Intn(len(enabledIdx))]
-		return keys[selectedIdx], selectedIdx, nil
+		selected := -1
+		seen := 0
+		for index := range keys {
+			if getStatus(index) != common.ChannelStatusEnabled {
+				continue
+			}
+			seen++
+			if rand.Intn(seen) == 0 {
+				selected = index
+			}
+		}
+		if selected >= 0 {
+			return keys[selected], selected, nil
+		}
 	case constant.MultiKeyModePolling:
 		// Start from the saved polling index and look for the next enabled key
 		start := runtimeState.pollingIndex
@@ -336,12 +333,14 @@ func (channel *Channel) GetNextEnabledKey() (string, int, *types.NewAPIError) {
 				return keys[idx], idx, nil
 			}
 		}
-		// Fallback – should not happen, but return first enabled key
-		return keys[enabledIdx[0]], enabledIdx[0], nil
 	default:
-		// Unknown mode, default to first enabled key (or original key string)
-		return keys[enabledIdx[0]], enabledIdx[0], nil
+		for index := range keys {
+			if getStatus(index) == common.ChannelStatusEnabled {
+				return keys[index], index, nil
+			}
+		}
 	}
+	return "", 0, types.NewError(errors.New("no enabled keys"), types.ErrorCodeChannelNoAvailableKey)
 }
 
 func (channel *Channel) SaveChannelInfo() error {
@@ -733,6 +732,7 @@ func (channel *Channel) Delete() error {
 	// The database deletion is already committed. Remove the channel from route
 	// selection before a later failed refresh can retain stale routing.
 	cacheDeleteChannels([]int{channel.Id})
+	channelRuntimeStates.Delete(channel.Id)
 	err = channel.DeleteAbilities()
 	return err
 }
@@ -747,6 +747,9 @@ type channelRuntimeState struct {
 var channelRuntimeStates sync.Map
 
 func getChannelRuntimeState(channelID int, initialPollingIndex int) *channelRuntimeState {
+	if state, ok := channelRuntimeStates.Load(channelID); ok {
+		return state.(*channelRuntimeState)
+	}
 	state := &channelRuntimeState{pollingIndex: initialPollingIndex}
 	actual, _ := channelRuntimeStates.LoadOrStore(channelID, state)
 	return actual.(*channelRuntimeState)
@@ -757,24 +760,22 @@ func GetChannelPollingLock(channelId int) *sync.Mutex {
 	return &getChannelRuntimeState(channelId, 0).mu
 }
 
-// CleanupChannelPollingLocks removes locks for channels that no longer exist
-// This is optional and can be called periodically to prevent memory leaks
-func CleanupChannelPollingLocks() {
-	var activeChannelIds []int
-	DB.Model(&Channel{}).Pluck("id", &activeChannelIds)
-
-	activeChannelSet := make(map[int]bool)
-	for _, id := range activeChannelIds {
-		activeChannelSet[id] = true
-	}
-
-	channelRuntimeStates.Range(func(key, value interface{}) bool {
-		channelId := key.(int)
-		if !activeChannelSet[channelId] {
-			channelRuntimeStates.Delete(channelId)
+func pruneChannelRuntimeStates(active map[int]*Channel) {
+	channelRuntimeStates.Range(func(key, _ any) bool {
+		channelID, ok := key.(int)
+		if !ok || active[channelID] == nil {
+			channelRuntimeStates.Delete(key)
 		}
 		return true
 	})
+}
+
+// CleanupChannelPollingLocks removes runtime state for channels outside the
+// active immutable cache snapshot. Full cache refreshes call the same helper.
+func CleanupChannelPollingLocks() {
+	channelSyncLock.RLock()
+	defer channelSyncLock.RUnlock()
+	pruneChannelRuntimeStates(channelsIDM)
 }
 
 func handlerMultiKeyUpdate(channel *Channel, usingKey string, status int, reason string) {

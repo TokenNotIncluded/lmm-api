@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -15,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/syncx"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
@@ -362,6 +362,10 @@ func GetAllUsers(c *gin.Context) {
 		return
 	}
 	model.PopulateAdminPaymentRestrictions(users)
+	if err := model.PopulateAssistantConversationCounts(users, c.GetInt("id"), c.GetInt("role")); err != nil {
+		common.ApiError(c, err)
+		return
+	}
 
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(users)
@@ -394,6 +398,10 @@ func SearchUsers(c *gin.Context) {
 		return
 	}
 	model.PopulateAdminPaymentRestrictions(users)
+	if err := model.PopulateAssistantConversationCounts(users, c.GetInt("id"), c.GetInt("role")); err != nil {
+		common.ApiError(c, err)
+		return
+	}
 
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(users)
@@ -1461,46 +1469,7 @@ type topUpRequest struct {
 	Key string `json:"key"`
 }
 
-var topUpLocks sync.Map
-var topUpCreateLock sync.Mutex
-
-type topUpTryLock struct {
-	ch chan struct{}
-}
-
-func newTopUpTryLock() *topUpTryLock {
-	return &topUpTryLock{ch: make(chan struct{}, 1)}
-}
-
-func (l *topUpTryLock) TryLock() bool {
-	select {
-	case l.ch <- struct{}{}:
-		return true
-	default:
-		return false
-	}
-}
-
-func (l *topUpTryLock) Unlock() {
-	select {
-	case <-l.ch:
-	default:
-	}
-}
-
-func getTopUpLock(userID int) *topUpTryLock {
-	if v, ok := topUpLocks.Load(userID); ok {
-		return v.(*topUpTryLock)
-	}
-	topUpCreateLock.Lock()
-	defer topUpCreateLock.Unlock()
-	if v, ok := topUpLocks.Load(userID); ok {
-		return v.(*topUpTryLock)
-	}
-	l := newTopUpTryLock()
-	topUpLocks.Store(userID, l)
-	return l
-}
+var topUpLocks = syncx.NewKeyedTryLocker[int]()
 
 func TopUp(c *gin.Context) {
 	if !operation_setting.IsPaymentComplianceConfirmed() {
@@ -1509,12 +1478,12 @@ func TopUp(c *gin.Context) {
 	}
 
 	id := c.GetInt("id")
-	lock := getTopUpLock(id)
-	if !lock.TryLock() {
+	release, locked := topUpLocks.TryLock(id)
+	if !locked {
 		common.ApiErrorI18n(c, i18n.MsgUserTopUpProcessing)
 		return
 	}
-	defer lock.Unlock()
+	defer release()
 	req := topUpRequest{}
 	err := c.ShouldBindJSON(&req)
 	if err != nil {

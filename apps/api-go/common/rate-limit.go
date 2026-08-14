@@ -3,89 +3,72 @@ package common
 import (
 	"sync"
 	"time"
+
+	"github.com/QuantumNous/new-api/pkg/cachex"
 )
 
+const (
+	rateLimitMaxKeys  = 65_536
+	rateLimitMaxBytes = 8 << 20
+)
+
+type rateWindow struct {
+	Count     int
+	StartedAt time.Time
+}
+
+// InMemoryRateLimiter mirrors the fixed-window Redis limiter while keeping a
+// hard budget for key cardinality and bytes. Each key costs O(1) memory even
+// when an administrator configures a very large request limit.
 type InMemoryRateLimiter struct {
-	store              map[string]*[]int64
-	mutex              sync.Mutex
-	expirationDuration time.Duration
+	initOnce sync.Once
+	store    *cachex.ByteCache[rateWindow]
 }
 
-func (l *InMemoryRateLimiter) Init(expirationDuration time.Duration) {
-	if l.store == nil {
-		l.mutex.Lock()
-		if l.store == nil {
-			l.store = make(map[string]*[]int64)
-			l.expirationDuration = expirationDuration
-			if expirationDuration > 0 {
-				go l.clearExpiredItems()
-			}
-		}
-		l.mutex.Unlock()
-	}
+func (l *InMemoryRateLimiter) Init(_ time.Duration) {
+	l.initOnce.Do(func() {
+		l.store = cachex.NewByteCache[rateWindow](rateLimitMaxKeys, rateLimitMaxBytes, func(key string, _ rateWindow) int64 {
+			return int64(len(key) + 40)
+		})
+	})
 }
 
-func (l *InMemoryRateLimiter) clearExpiredItems() {
-	for {
-		time.Sleep(l.expirationDuration)
-		l.mutex.Lock()
-		now := time.Now().Unix()
-		for key := range l.store {
-			queue := l.store[key]
-			size := len(*queue)
-			if size == 0 || now-(*queue)[size-1] > int64(l.expirationDuration.Seconds()) {
-				delete(l.store, key)
-			}
-		}
-		l.mutex.Unlock()
-	}
-}
-
-// Request parameter duration's unit is seconds
+// Request records one request and reports whether it is within the limit.
+// The duration parameter is in seconds.
 func (l *InMemoryRateLimiter) Request(key string, maxRequestNum int, duration int64) bool {
-	l.mutex.Lock()
-	defer l.mutex.Unlock()
 	if maxRequestNum == 0 {
 		return true
 	}
-	// [old <-- new]
-	queue, ok := l.store[key]
-	now := time.Now().Unix()
-	if ok {
-		if len(*queue) < maxRequestNum {
-			*queue = append(*queue, now)
-			return true
-		} else {
-			if now-(*queue)[0] >= duration {
-				*queue = (*queue)[1:]
-				*queue = append(*queue, now)
-				return true
-			} else {
-				return false
-			}
-		}
-	} else {
-		// Grow with actual traffic instead of reserving an administrator-provided
-		// maximum up front. A large limit must not turn one request into a large
-		// allocation.
-		s := make([]int64, 0, 1)
-		l.store[key] = &s
-		*(l.store[key]) = append(*(l.store[key]), now)
+	if maxRequestNum < 0 || duration <= 0 {
+		return false
 	}
-	return true
+	l.Init(0)
+	now := time.Now()
+	window := time.Duration(duration) * time.Second
+	allowed := false
+	state, stored := l.store.Compute(key, window, func(current rateWindow, found bool) (rateWindow, bool) {
+		if !found || now.Sub(current.StartedAt) >= window {
+			current = rateWindow{StartedAt: now}
+		}
+		if current.Count < maxRequestNum {
+			current.Count++
+			allowed = true
+		}
+		return current, true
+	})
+	return stored && allowed && state.Count > 0
 }
 
 // Check reports whether a request would be allowed without recording it.
-// The duration parameter's unit is seconds.
+// The duration parameter is in seconds.
 func (l *InMemoryRateLimiter) Check(key string, maxRequestNum int, duration int64) bool {
-	l.mutex.Lock()
-	defer l.mutex.Unlock()
 	if maxRequestNum == 0 {
 		return true
 	}
-	queue, ok := l.store[key]
-	if !ok || len(*queue) < maxRequestNum {
-		return true
+	if maxRequestNum < 0 || duration <= 0 {
+		return false
 	}
-	return time.Now().Unix()-(*queue)[0] >= duration
+	l.Init(0)
+	state, found := l.store.Load(key)
+	return !found || time.Since(state.StartedAt) >= time.Duration(duration)*time.Second || state.Count < maxRequestNum
 }

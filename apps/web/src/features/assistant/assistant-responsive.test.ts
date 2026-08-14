@@ -33,6 +33,10 @@ const panelSource = readFileSync(
   new URL('./assistant-panel.tsx', import.meta.url),
   'utf8'
 )
+const consoleEditorialStyles = readFileSync(
+  new URL('../../styles/console-editorial.css', import.meta.url),
+  'utf8'
+)
 
 describe('assistant responsive presentation', () => {
   test('keeps the assistant in an overlay below the xl rail breakpoint', () => {
@@ -54,5 +58,28 @@ describe('assistant responsive presentation', () => {
     assert.match(launcherSource, /xl:hidden/)
     assert.match(launcherSource, /xl:flex/)
     assert.match(panelSource, /border-l xl:flex/)
+  })
+
+  test('moves the assistant textarea focus outline to its rounded shell', () => {
+    assert.match(panelSource, /assistant-prompt-input/)
+    assert.match(
+      consoleEditorialStyles,
+      /\.assistant-prompt-input:has\(\[data-slot='input-group-control'\]:focus-visible\)/
+    )
+    assert.ok(
+      consoleEditorialStyles.includes(
+        'outline: 2px solid var(--console-clay, var(--forge-clay-light));'
+      )
+    )
+    assert.ok(
+      consoleEditorialStyles.includes(
+        'outline-color: var(--console-clay, var(--forge-clay-dark));'
+      )
+    )
+    assert.ok(
+      consoleEditorialStyles.includes(
+        ".assistant-prompt-input [data-slot='input-group-control']:focus-visible {\n  outline: none;"
+      )
+    )
   })
 })

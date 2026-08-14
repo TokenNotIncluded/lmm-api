@@ -6,7 +6,6 @@ import (
 	stdjson "encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -143,7 +142,7 @@ func (p *GenericOAuthProvider) ExchangeToken(ctx context.Context, code string, c
 
 	logger.LogDebug(ctx, "[OAuth-Generic-%s] ExchangeToken response status: %d", p.config.Slug, res.StatusCode)
 
-	body, err := io.ReadAll(res.Body)
+	body, err := common.ReadResponseBody(res)
 	if err != nil {
 		logger.LogError(ctx, fmt.Sprintf("[OAuth-Generic-%s] ExchangeToken read body error: %s", p.config.Slug, err.Error()))
 		return nil, err
@@ -229,7 +228,7 @@ func (p *GenericOAuthProvider) GetUserInfo(ctx context.Context, token *OAuthToke
 		return nil, NewOAuthError(i18n.MsgOAuthGetUserErr, nil)
 	}
 
-	body, err := io.ReadAll(res.Body)
+	body, err := common.ReadResponseBody(res)
 	if err != nil {
 		logger.LogError(ctx, fmt.Sprintf("[OAuth-Generic-%s] GetUserInfo read body error: %s", p.config.Slug, err.Error()))
 		return nil, err

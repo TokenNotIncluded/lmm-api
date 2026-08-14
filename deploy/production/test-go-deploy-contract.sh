@@ -48,8 +48,9 @@ for literal in \
 	'discover_database_schema' \
 	'database_schema=%s' \
 	'"$PROBE_BINARY" request' \
-	'run_candidate_migration apply' \
-	'run_candidate_migration verify' \
+	'run_migration apply candidate-apply "$PROBE_BINARY"' \
+	'run_migration verify candidate-verify "$PROBE_BINARY"' \
+	'run_migration verify rollback-verify "$INSTALLED_BINARY"' \
   'harden_production_environment_config' \
   'SESSION_COOKIE_SECURE=true' \
   'SESSION_COOKIE_TRUSTED_URL=https://api.lmm.best,https://lmm.best' \

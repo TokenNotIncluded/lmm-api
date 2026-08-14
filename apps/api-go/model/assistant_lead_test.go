@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -28,23 +29,29 @@ func setupAssistantLeadTestDB(t *testing.T) *User {
 
 func TestClassifyAssistantIntent(t *testing.T) {
 	tests := map[string]string{
-		"请转人工客服":                             AssistantIntentHumanSupport,
-		"How do I create an API key?":        AssistantIntentAPIKey,
-		"Base URL 和模型 ID 是什么":                AssistantIntentAPIKey,
-		"Windows 安装 Claude Code 和 CC Switch": AssistantIntentClientSetup,
-		"macOS 怎样配置 cc-switch":               AssistantIntentClientSetup,
-		"怎样把 Base URL 配置进 cc-switch":         AssistantIntentClientSetup,
-		"开源挑战完成后怎么赠小费":                       AssistantIntentBounty,
-		"帮我计算 token 成本":                      AssistantIntentCost,
-		"哪个套餐最划算，有优惠吗":                       AssistantIntentPlanPurchase,
-		"L0 审核多久能到 L1":                       AssistantIntentOnboarding,
-		"请管理员帮我审核 L1":                        AssistantIntentOnboarding,
-		"我刚注册还是 L0，请一步一步说明如何申请 L1":           AssistantIntentOnboarding,
-		"我要给团队创建 API key 并设置分组":              AssistantIntentAPIKey,
-		"登录后遇到 502，如何联系管理员":                  AssistantIntentHumanSupport,
-		"如何发布开源挑战并提交真实 PR":                   AssistantIntentBounty,
-		"我想查看高频 API 的用量统计":                   AssistantIntentUsage,
-		"hello":                              AssistantIntentOther,
+		"请转人工客服":                                  AssistantIntentHumanSupport,
+		"How do I create an API key?":             AssistantIntentAPIKey,
+		"Base URL 和模型 ID 是什么":                     AssistantIntentAPIKey,
+		"Windows 安装 Claude Code 和 CC Switch":      AssistantIntentClientSetup,
+		"macOS 怎样配置 cc-switch":                    AssistantIntentClientSetup,
+		"怎样把 Base URL 配置进 cc-switch":              AssistantIntentClientSetup,
+		"开源挑战完成后怎么赠小费":                            AssistantIntentBounty,
+		"帮我计算 token 成本":                           AssistantIntentCost,
+		"GPT 5.6 SOL 的 pricing 是多少":               AssistantIntentCost,
+		"我是 L0，GPT 5.6 SOL 的价格是多少":                AssistantIntentCost,
+		"帮我算一下 17.5% 的折扣":                         AssistantIntentMath,
+		"请把当前推荐信润色得专业一些":                          AssistantIntentRecommendation,
+		"哪个套餐最划算，有优惠吗":                            AssistantIntentPlanPurchase,
+		"L0 审核多久能到 L1":                            AssistantIntentOnboarding,
+		"请管理员帮我审核 L1":                             AssistantIntentOnboarding,
+		"我刚注册还是 L0，请一步一步说明如何申请 L1":                AssistantIntentOnboarding,
+		"我要给团队创建 API key 并设置分组":                   AssistantIntentAPIKey,
+		"登录后遇到 502，如何联系管理员":                       AssistantIntentHumanSupport,
+		"如何发布开源挑战并提交真实 PR":                        AssistantIntentBounty,
+		"我想查看高频 API 的用量统计":                        AssistantIntentUsage,
+		"我这个月用了多少 token？":                         AssistantIntentUsage,
+		"How many tokens have I used this month?": AssistantIntentUsage,
+		"hello": AssistantIntentOther,
 	}
 	for message, expected := range tests {
 		assert.Equal(t, expected, ClassifyAssistantIntent(message), message)
@@ -60,6 +67,21 @@ func TestRecordAssistantIntentDoesNotPersistChatMessage(t *testing.T) {
 	assert.Equal(t, AssistantLeadSourceChat, lead.Source)
 	assert.Equal(t, AssistantIntentAPIKey, lead.Intent)
 	assert.Empty(t, lead.Message)
+}
+
+func TestAssistantAggregateSummariesAreRowBounded(t *testing.T) {
+	user := setupAssistantLeadTestDB(t)
+	for index := range assistantSummaryMaxRows + 5 {
+		require.NoError(t, DB.Create(&AssistantLead{
+			UserId: user.Id, Source: AssistantLeadSourceChat,
+			Intent: fmt.Sprintf("legacy-%03d", index), Status: AssistantLeadStatusObserved,
+			CreatedAt: 100,
+		}).Error)
+	}
+
+	rows, err := listAssistantIntents(context.Background(), 1, 200)
+	require.NoError(t, err)
+	assert.Len(t, rows, assistantSummaryMaxRows)
 }
 
 func TestAssistantHandoffRedactsSecretsAndIsIdempotent(t *testing.T) {

@@ -42,6 +42,9 @@ export function PresetSelector(props: PresetSelectorProps) {
   const { t } = useTranslation()
   const [selectedPreset, setSelectedPreset] = useState<string>('')
   const [baseUrl, setBaseUrl] = useState<string>('')
+  const selectedPresetDefinition = OAUTH_PRESETS.find(
+    (preset) => preset.key === selectedPreset
+  )
 
   const handlePresetChange = (presetKey: string) => {
     setSelectedPreset(presetKey)
@@ -72,8 +75,9 @@ export function PresetSelector(props: PresetSelectorProps) {
       shouldDirty: true,
     })
 
-    // Apply base URL if already entered
-    if (baseUrl) {
+    // Public providers such as Google already carry absolute endpoints.
+    // Self-hosted presets still compose their paths with the entered base URL.
+    if (!preset.needsBaseUrl || baseUrl) {
       applyEndpoints(preset, baseUrl)
     }
   }
@@ -92,6 +96,20 @@ export function PresetSelector(props: PresetSelectorProps) {
     preset: (typeof OAUTH_PRESETS)[number],
     url: string
   ) => {
+    if (!preset.needsBaseUrl) {
+      props.form.setValue(
+        'authorization_endpoint',
+        preset.authorization_endpoint,
+        { shouldDirty: true }
+      )
+      props.form.setValue('token_endpoint', preset.token_endpoint, {
+        shouldDirty: true,
+      })
+      props.form.setValue('user_info_endpoint', preset.user_info_endpoint, {
+        shouldDirty: true,
+      })
+      return
+    }
     const cleanUrl = url.replace(/\/+$/, '')
     props.form.setValue(
       'authorization_endpoint',
@@ -111,7 +129,13 @@ export function PresetSelector(props: PresetSelectorProps) {
   return (
     <SettingsControlGroup className='space-y-3 border-dashed'>
       <p className='text-sm font-medium'>{t('Quick Setup from Preset')}</p>
-      <div className='grid grid-cols-1 gap-3 sm:grid-cols-2'>
+      <div
+        className={
+          selectedPresetDefinition?.needsBaseUrl === false
+            ? 'grid grid-cols-1 gap-3'
+            : 'grid grid-cols-1 gap-3 sm:grid-cols-2'
+        }
+      >
         <div className='space-y-1.5'>
           <Label>{t('Preset Template')}</Label>
           <Select
@@ -136,14 +160,16 @@ export function PresetSelector(props: PresetSelectorProps) {
             </SelectContent>
           </Select>
         </div>
-        <div className='space-y-1.5'>
-          <Label>{t('Base URL')}</Label>
-          <Input
-            placeholder={t('https://your-server.example.com')}
-            value={baseUrl}
-            onChange={(e) => handleBaseUrlChange(e.target.value)}
-          />
-        </div>
+        {selectedPresetDefinition?.needsBaseUrl !== false ? (
+          <div className='space-y-1.5'>
+            <Label>{t('Base URL')}</Label>
+            <Input
+              placeholder={t('https://your-server.example.com')}
+              value={baseUrl}
+              onChange={(e) => handleBaseUrlChange(e.target.value)}
+            />
+          </div>
+        ) : null}
       </div>
     </SettingsControlGroup>
   )

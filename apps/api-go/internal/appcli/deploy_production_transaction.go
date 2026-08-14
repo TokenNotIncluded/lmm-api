@@ -60,12 +60,21 @@ func (runtime *productionRuntime) apply(ctx context.Context, workspace productio
 			return productionStatus{}, err
 		}
 	}
-	archivedEnvironment, err := runtime.validateBackupSet(ctx, workspace, options.BackupDir)
-	if err != nil {
-		return productionStatus{}, err
-	}
-	if err := validateBackupAttestation(options.BackupDir, workspace.id); err != nil {
-		return productionStatus{}, err
+	var archivedEnvironment []byte
+	var err error
+	if options.BackupDir != "" {
+		archivedEnvironment, err = runtime.validateBackupSet(ctx, workspace, options.BackupDir)
+		if err != nil {
+			return productionStatus{}, err
+		}
+		if err := validateBackupAttestation(options.BackupDir, workspace.id); err != nil {
+			return productionStatus{}, err
+		}
+	} else {
+		archivedEnvironment, err = readPrivateRegularFile(filepath.Join(runtime.paths.ConfigDir, "lmm-api-go.env"), 1<<20)
+		if err != nil {
+			return productionStatus{}, fmt.Errorf("read live environment for rollback state: %w", err)
+		}
 	}
 	if _, err := runtime.runner.Run(ctx, productionCommand{Name: "systemctl", Args: []string{"is-active", "--quiet", runtime.paths.Service}}); err != nil {
 		return productionStatus{}, errors.New("pre-upgrade lmm-api service is not active")
@@ -76,18 +85,28 @@ func (runtime *productionRuntime) apply(ctx context.Context, workspace productio
 	if _, err := runtime.runner.Run(ctx, productionCommand{Name: "pacman", Args: []string{"-Q", "lmm-api"}}); err == nil {
 		return productionStatus{}, errors.New("production still has the split lmm-api package; direct Go deployment only")
 	}
-	installedPackageOutput, err := runtime.runner.Run(ctx, productionCommand{Name: "pacman", Args: []string{"-Q", "lmm-api-go"}})
+	packageName, installedPackage, err := runtime.installedGoPackage(ctx)
 	if err != nil {
 		return productionStatus{}, fmt.Errorf("query installed Go package: %w", err)
 	}
-	installedPackage := strings.TrimSpace(string(installedPackageOutput))
 	rollbackIdentity, err := runtime.runner.Run(ctx, productionCommand{Name: "pacman", Args: []string{"-Qp", options.RollbackPackage}})
-	if err != nil || strings.TrimSpace(string(rollbackIdentity)) != installedPackage {
-		return productionStatus{}, errors.New("rollback package does not exactly match installed lmm-api-go")
+	if err != nil {
+		return productionStatus{}, errors.New("query rollback package identity")
+	}
+	rollbackName, _, parsedRollback, err := parseProductionPackageIdentity(rollbackIdentity)
+	if err != nil || rollbackName != packageName || parsedRollback != installedPackage {
+		return productionStatus{}, errors.New("rollback package does not exactly match the installed Go package")
 	}
 	candidateIdentity, err := runtime.runner.Run(ctx, productionCommand{Name: "pacman", Args: []string{"-Qp", options.Package}})
-	if err != nil || strings.TrimSpace(string(candidateIdentity)) != "lmm-api-go "+options.ExpectedVersion+"-1" {
+	if err != nil {
+		return productionStatus{}, errors.New("query candidate package identity")
+	}
+	candidateName, candidateVersion, _, err := parseProductionPackageIdentity(candidateIdentity)
+	if err != nil || candidateName != packageName || !productionPackageMatches(candidateVersion, options.ExpectedVersion) {
 		return productionStatus{}, errors.New("candidate package identity mismatch")
+	}
+	if err := runtime.verifyInstalledGoPackage(ctx, packageName, installedPackage); err != nil {
+		return productionStatus{}, fmt.Errorf("verify pre-upgrade Go package: %w", err)
 	}
 	probeVersion, err := runtime.runner.Run(ctx, productionCommand{Name: options.ProbeBinary, Args: []string{"version"}})
 	if err != nil || strings.TrimSpace(string(probeVersion)) != options.ExpectedVersion {
@@ -119,6 +138,13 @@ func (runtime *productionRuntime) apply(ctx context.Context, workspace productio
 	if err := runtime.probeFrontend(ctx, options.ProbeBinary, oldFrontendSHA256); err != nil {
 		return productionStatus{}, fmt.Errorf("pre-upgrade public frontend probe failed: %w", err)
 	}
+	frontendSHA256 := oldFrontendSHA256
+	if options.ActivateFrontend {
+		frontendSHA256, err = sha256File(filepath.Join(runtime.paths.PackagedFrontend, "index.html"))
+		if err != nil || frontendSHA256 != options.FrontendIndexSHA256 {
+			return productionStatus{}, errors.New("bundled frontend identity mismatch")
+		}
+	}
 	memoryExisted, memoryRestoreSHA256, environmentRestoreSHA256, err := runtime.saveRestoreState(workspace, archivedEnvironment)
 	if err != nil {
 		return productionStatus{}, err
@@ -143,17 +169,19 @@ func (runtime *productionRuntime) apply(ctx context.Context, workspace productio
 
 	deadline := utcSecond(runtime.now().Add(options.RollbackWindow))
 	manifest := productionManifest{
+		PackageName: packageName, PackageIdentity: candidateName + " " + candidateVersion,
 		Package: options.Package, PackageSHA256: options.PackageSHA256,
 		RollbackPackage: options.RollbackPackage, RollbackSHA256: options.RollbackSHA256,
 		ProbeBinary: options.ProbeBinary, ProbeBinarySHA256: options.ProbeBinarySHA256,
 		ExpectedVersion: options.ExpectedVersion, OldVersion: oldVersion,
-		FrontendIndexSHA256: options.FrontendIndexSHA256,
+		FrontendIndexSHA256: frontendSHA256,
 		OldFrontendRelease:  oldFrontendRelease, OldFrontendIndexSHA256: oldFrontendSHA256,
 		BackupDir: options.BackupDir, DatabaseSchema: databaseSchema, DeadlineUTC: deadline,
 		MemoryDropInExisted: memoryExisted, MemoryDropInRestoreSHA256: memoryRestoreSHA256,
 		EnvironmentRestoreSHA256: environmentRestoreSHA256,
 		NginxEdgeRestoreSHA256:   nginxEdgeRestoreSHA256,
 		PreserveEdgePolicy:       options.PreserveEdgePolicy,
+		ActivateFrontend:         options.ActivateFrontend,
 	}
 	if err := runtime.writeManifest(workspace, manifest); err != nil {
 		return productionStatus{}, fmt.Errorf("write deployment manifest: %w", err)
@@ -186,10 +214,19 @@ func (runtime *productionRuntime) apply(ctx context.Context, workspace productio
 	}); err != nil {
 		return productionStatus{}, err
 	}
-	if err := runtime.runMigration(ctx, manifest, "apply"); err != nil {
+	if err := runtime.runMigration(ctx, workspace, manifest, migrationRun{
+		name: "candidate-apply", binary: manifest.ProbeBinary, mode: "apply",
+	}); err != nil {
 		return productionStatus{}, err
 	}
-	if err := runtime.runMigration(ctx, manifest, "verify"); err != nil {
+	if err := runtime.runMigration(ctx, workspace, manifest, migrationRun{
+		name: "candidate-verify", binary: manifest.ProbeBinary, mode: "verify",
+	}); err != nil {
+		return productionStatus{}, err
+	}
+	if err := runtime.runMigration(ctx, workspace, manifest, migrationRun{
+		name: "rollback-verify", binary: runtime.paths.InstalledBinary, mode: "verify",
+	}); err != nil {
 		return productionStatus{}, err
 	}
 	if err := runtime.writeStatus(workspace, productionStatus{
@@ -220,14 +257,8 @@ func (runtime *productionRuntime) apply(ctx context.Context, workspace productio
 	if _, err := runtime.runner.Run(ctx, productionCommand{Name: "systemctl", Args: []string{"daemon-reload"}}); err != nil {
 		return productionStatus{}, fmt.Errorf("reload systemd after package installation: %w", err)
 	}
-	integrityOutput, err := runtime.runner.Run(ctx, productionCommand{
-		Name: "pacman", Args: []string{"-Qkk", "lmm-api-go"}, Env: append(os.Environ(), "LC_ALL=C"),
-	})
-	if err != nil {
-		return productionStatus{}, fmt.Errorf("verify installed package files: %w", err)
-	}
-	if !strings.Contains(string(integrityOutput), "0 altered files") {
-		return productionStatus{}, fmt.Errorf("installed package integrity is not clean: %s", strings.TrimSpace(string(integrityOutput)))
+	if err := runtime.verifyInstalledGoPackage(ctx, manifest.PackageName, manifest.PackageIdentity); err != nil {
+		return productionStatus{}, fmt.Errorf("verify installed candidate package: %w", err)
 	}
 	installedVersion, err := runtime.runner.Run(ctx, productionCommand{Name: runtime.paths.InstalledBinary, Args: []string{"version"}})
 	if err != nil || strings.TrimSpace(string(installedVersion)) != options.ExpectedVersion {
@@ -241,11 +272,13 @@ func (runtime *productionRuntime) apply(ctx context.Context, workspace productio
 	if _, err := runtime.runner.Run(ctx, productionCommand{Name: "systemctl", Args: []string{"enable", "--now", runtime.paths.Service}}); err != nil {
 		return productionStatus{}, fmt.Errorf("start candidate Go service: %w", err)
 	}
-	if err := executeFrontendDeploy(frontendDeployOptions{
-		Action: "publish", Root: runtime.paths.FrontendRoot, Source: runtime.paths.PackagedFrontend,
-		Release: options.ExpectedVersion, Keep: productionFrontendReleaseKeep,
-	}); err != nil {
-		return productionStatus{}, fmt.Errorf("publish packaged frontend: %w", err)
+	if manifest.ActivateFrontend {
+		if err := executeFrontendDeploy(frontendDeployOptions{
+			Action: "publish", Root: runtime.paths.FrontendRoot, Source: runtime.paths.PackagedFrontend,
+			Release: options.ExpectedVersion, Keep: productionFrontendReleaseKeep,
+		}); err != nil {
+			return productionStatus{}, fmt.Errorf("publish packaged frontend: %w", err)
+		}
 	}
 	restartBaseline, err := runtime.readServiceRestarts(ctx)
 	if err != nil {
@@ -256,7 +289,7 @@ func (runtime *productionRuntime) apply(ctx context.Context, workspace productio
 	if err := runtime.writeManifest(workspace, manifest); err != nil {
 		return productionStatus{}, err
 	}
-	if err := runtime.probeRelease(ctx, manifest, options.ExpectedVersion, options.FrontendIndexSHA256); err != nil {
+	if err := runtime.probeRelease(ctx, manifest, options.ExpectedVersion, manifest.FrontendIndexSHA256); err != nil {
 		return productionStatus{}, fmt.Errorf("candidate release probes failed: %w", err)
 	}
 	awaiting := productionStatus{
@@ -391,21 +424,34 @@ func (runtime *productionRuntime) rollback(ctx context.Context, workspace produc
 		return productionStatus{}, operationErr
 	}
 	_, _ = runtime.runner.Run(ctx, productionCommand{Name: "systemctl", Args: []string{"stop", runtime.paths.Service}})
-	rollbackFrontendIndex := filepath.Join(runtime.paths.FrontendRoot, "releases", manifest.OldFrontendRelease, "index.html")
-	rollbackFrontendSHA256, err := sha256File(rollbackFrontendIndex)
-	if err != nil || rollbackFrontendSHA256 != manifest.OldFrontendIndexSHA256 {
-		return fail(errors.New("previous frontend release changed after deployment was armed"))
-	}
-	if err := executeFrontendDeploy(frontendDeployOptions{
-		Action: "rollback", Root: runtime.paths.FrontendRoot, Release: manifest.OldFrontendRelease,
-		Keep: productionFrontendReleaseKeep,
-	}); err != nil {
-		return fail(fmt.Errorf("restore previous frontend: %w", err))
+	if manifest.ActivateFrontend {
+		rollbackFrontendIndex := filepath.Join(runtime.paths.FrontendRoot, "releases", manifest.OldFrontendRelease, "index.html")
+		rollbackFrontendSHA256, err := sha256File(rollbackFrontendIndex)
+		if err != nil || rollbackFrontendSHA256 != manifest.OldFrontendIndexSHA256 {
+			return fail(errors.New("previous frontend release changed after deployment was armed"))
+		}
+		if err := executeFrontendDeploy(frontendDeployOptions{
+			Action: "rollback", Root: runtime.paths.FrontendRoot, Release: manifest.OldFrontendRelease,
+			Keep: productionFrontendReleaseKeep,
+		}); err != nil {
+			return fail(fmt.Errorf("restore previous frontend: %w", err))
+		}
 	}
 	if _, err := runtime.runner.Run(ctx, productionCommand{
 		Name: "pacman", Args: []string{"-U", "--noconfirm", manifest.RollbackPackage}, Timeout: 5 * time.Minute,
 	}); err != nil {
 		return fail(fmt.Errorf("install rollback package: %w", err))
+	}
+	rollbackIdentity, err := runtime.runner.Run(ctx, productionCommand{Name: "pacman", Args: []string{"-Qp", manifest.RollbackPackage}})
+	if err != nil {
+		return fail(errors.New("query installed rollback package identity"))
+	}
+	rollbackName, _, parsedRollback, err := parseProductionPackageIdentity(rollbackIdentity)
+	if err != nil || rollbackName != manifest.PackageName {
+		return fail(errors.New("rollback package identity became invalid"))
+	}
+	if err := runtime.verifyInstalledGoPackage(ctx, rollbackName, parsedRollback); err != nil {
+		return fail(fmt.Errorf("verify installed rollback package: %w", err))
 	}
 	if err := runtime.restoreConfiguration(workspace, manifest); err != nil {
 		return fail(err)

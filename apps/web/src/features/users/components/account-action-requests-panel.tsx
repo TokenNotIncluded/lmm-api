@@ -126,7 +126,7 @@ export function AccountActionRequestsPanel() {
   )
 
   return (
-    <section className='bg-muted/10 border px-5 py-5 sm:px-6'>
+    <section className='border-border border-t pt-10'>
       <div className='flex flex-wrap items-center justify-between gap-3'>
         <div>
           <div className='flex items-center gap-2'>
@@ -165,12 +165,12 @@ export function AccountActionRequestsPanel() {
       ) : null}
 
       {requests.length > 0 ? (
-        <div className='mt-5 grid gap-3'>
+        <div className='mt-6'>
           {requests.map((request) => {
             const isReviewing = reviewing === request.id
             const isAppeal = request.kind === 'appeal'
             return (
-              <article key={request.id} className='bg-background border p-4'>
+              <article key={request.id} className='border-border border-b py-7'>
                 <div className='flex flex-wrap items-start justify-between gap-3'>
                   <div className='min-w-0'>
                     <div className='flex items-center gap-2'>
@@ -197,7 +197,7 @@ export function AccountActionRequestsPanel() {
                   </div>
                 </div>
 
-                <div className='bg-muted/20 mt-3 border p-3'>
+                <div className='mt-5 max-w-3xl'>
                   <p className='text-xs font-medium'>{t('Request reason')}</p>
                   <p className='text-muted-foreground mt-1 text-sm whitespace-pre-wrap'>
                     {request.reason}
@@ -209,7 +209,7 @@ export function AccountActionRequestsPanel() {
                 </div>
 
                 <Textarea
-                  className='mt-3'
+                  className='mt-5 max-w-3xl rounded-xl'
                   rows={2}
                   maxLength={2000}
                   aria-label={t('Administrator review note')}

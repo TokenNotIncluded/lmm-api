@@ -369,11 +369,10 @@ func (runtime *productionRuntime) currentPackage(ctx context.Context) (productio
 	}
 	var result productionPackageResult
 	err := runtime.withGlobalLock(ctx, func() error {
-		installedOutput, err := runtime.runner.Run(ctx, productionCommand{Name: "pacman", Args: []string{"-Q", "lmm-api-go"}})
+		packageName, installed, err := runtime.installedGoPackage(ctx)
 		if err != nil {
 			return fmt.Errorf("query installed Go package: %w", err)
 		}
-		installed := strings.TrimSpace(string(installedOutput))
 		type candidate struct {
 			path   string
 			source string
@@ -391,7 +390,7 @@ func (runtime *productionRuntime) currentPackage(ctx context.Context) (productio
 				return fmt.Errorf("read %s package directory: %w", root.source, err)
 			}
 			for _, entry := range entries {
-				if !entry.Type().IsRegular() || !strings.HasPrefix(entry.Name(), "lmm-api-go-") || !strings.Contains(entry.Name(), ".pkg.tar.") || strings.HasSuffix(entry.Name(), ".sig") {
+				if !entry.Type().IsRegular() || !strings.HasPrefix(entry.Name(), packageName+"-") || !strings.Contains(entry.Name(), ".pkg.tar.") || strings.HasSuffix(entry.Name(), ".sig") {
 					continue
 				}
 				path := filepath.Join(root.path, entry.Name())
@@ -409,7 +408,7 @@ func (runtime *productionRuntime) currentPackage(ctx context.Context) (productio
 			}
 		}
 		if len(candidates) == 0 {
-			return errors.New("no exact package for the installed lmm-api-go release is preserved")
+			return errors.New("no exact package for the installed Go release is preserved")
 		}
 		sort.Slice(candidates, func(i, j int) bool { return candidates[i].path < candidates[j].path })
 		firstDigest, err := sha256File(candidates[0].path)
@@ -422,7 +421,7 @@ func (runtime *productionRuntime) currentPackage(ctx context.Context) (productio
 				return err
 			}
 			if digest != firstDigest {
-				return errors.New("multiple different package files claim the installed lmm-api-go identity")
+				return errors.New("multiple different package files claim the installed Go package identity")
 			}
 		}
 		result = productionPackageResult{
@@ -450,13 +449,13 @@ func (runtime *productionRuntime) createBackup(ctx context.Context, options prod
 		if err := runtime.validateStagedFile(workspace, options.RollbackPackage, options.RollbackSHA256, "rollback package"); err != nil {
 			return err
 		}
-		installed, err := runtime.runner.Run(ctx, productionCommand{Name: "pacman", Args: []string{"-Q", "lmm-api-go"}})
+		packageName, installed, err := runtime.installedGoPackage(ctx)
 		if err != nil {
 			return fmt.Errorf("query installed Go package: %w", err)
 		}
 		rollbackIdentity, err := runtime.runner.Run(ctx, productionCommand{Name: "pacman", Args: []string{"-Qp", options.RollbackPackage}})
-		if err != nil || strings.TrimSpace(string(rollbackIdentity)) != strings.TrimSpace(string(installed)) {
-			return errors.New("rollback package does not exactly match installed lmm-api-go")
+		if err != nil || strings.TrimSpace(string(rollbackIdentity)) != installed {
+			return errors.New("rollback package does not exactly match the installed Go package")
 		}
 		if _, err := runtime.runner.Run(ctx, productionCommand{Name: "systemctl", Args: []string{"is-active", "--quiet", runtime.paths.Service}}); err != nil {
 			return errors.New("production Go service is not active before backup")
@@ -512,7 +511,7 @@ func (runtime *productionRuntime) createBackup(ctx context.Context, options prod
 		if err := copyRegularFile(options.RollbackPackage, filepath.Join(applicationStage, "rollback.package"), 0o600, true); err != nil {
 			return err
 		}
-		packageInfo, err := runtime.runner.Run(ctx, productionCommand{Name: "pacman", Args: []string{"-Qi", "lmm-api-go"}})
+		packageInfo, err := runtime.runner.Run(ctx, productionCommand{Name: "pacman", Args: []string{"-Qi", packageName}})
 		if err != nil {
 			return fmt.Errorf("capture installed package metadata: %w", err)
 		}

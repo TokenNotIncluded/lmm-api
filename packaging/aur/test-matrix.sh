@@ -12,6 +12,7 @@ readonly PACKAGES=(
   lmm-api-go-git
   lmm-api-rs-bin
   lmm-api-rs-git
+  lmm-api-web-bin
 )
 
 die() { printf 'test-aur-matrix: %s\n' "$*" >&2; exit 1; }
@@ -68,7 +69,7 @@ done
 contains_srcinfo lmm-api-rs-bin $'\tconflicts = lmm-api-rs-git'
 contains_srcinfo lmm-api-rs-git $'\tconflicts = lmm-api-rs-bin'
 
-for package in "${PACKAGES[@]}"; do
+for package in lmm-api-go lmm-api-go-bin lmm-api-go-git lmm-api-rs-bin lmm-api-rs-git; do
   for removed_core in lmm-api lmm-api-bin lmm-api-git; do
     contains_srcinfo "$package" $'\tconflicts = '"$removed_core"
   done
@@ -83,20 +84,40 @@ for package in lmm-api-go-bin lmm-api-rs-bin; do
     die "$package invokes a project compiler"
   fi
 done
+grep -Fq '_release_tag="go-v${pkgver}"' "$HERE/lmm-api-go-bin/PKGBUILD" ||
+  die 'Go binary package does not use the independent Go release tag'
+grep -Fq '.github/workflows/release-go.yml@refs/tags/${_release_tag}' \
+  "$HERE/lmm-api-go-bin/PKGBUILD" ||
+  die 'Go binary package does not verify the independent Go release identity'
+for package in lmm-api-web-bin; do
+  pkgbuild="$HERE/$package/PKGBUILD"
+  grep -Fq 'cosign verify-blob' "$pkgbuild" || die "$package lacks Sigstore verification"
+  grep -Fq 'sha256sum' "$pkgbuild" || die "$package lacks SHA-256 verification"
+  grep -Fq 'noextract=(' "$pkgbuild" || die "$package extracts before verification"
+  contains_srcinfo_prefix "$package" $'\tprovides = lmm-api-web'
+done
+grep -Fq 'systemctl reload nginx.service' "$HERE/lmm-api-web-bin/lmm-api-web-activate" ||
+  die 'web package activation does not reload nginx'
+if grep -Eq '(^|[[:space:]])curl([[:space:]]|$)' "$HERE/lmm-api-web-bin/lmm-api-web-activate"; then
+  die 'web package activation performs a network probe inside the package transaction'
+fi
+if grep -Eq 'systemctl (restart|reload) lmm-api' "$HERE/lmm-api-web-bin/lmm-api-web-activate"; then
+  die 'web package activation controls the backend service'
+fi
 contains_srcinfo lmm-api-go-git $'\tmakedepends = bun'
 contains_srcinfo lmm-api-go-git $'\tmakedepends = go>=1.25.1'
 contains_srcinfo lmm-api-go $'\tmakedepends = bun'
 contains_srcinfo lmm-api-go $'\tmakedepends = git'
 contains_srcinfo lmm-api-go $'\tmakedepends = go>=1.25.1'
-go_release_commit=3cdab7e7f7c5c5788fa1f9b904671da5ce379c1a
+go_release_commit=11217412480e81b58f96f2b9889bd317120ff8f0
 readonly go_release_commit
 grep -Fqx "_commit=$go_release_commit" "$HERE/lmm-api-go/PKGBUILD" ||
   die 'canonical Go package is not pinned to the reviewed direct-package revision'
 # Pull requests are checked out shallowly without tag refs. Keep the reviewed
 # package version as the deterministic fallback, while still validating the
 # derived value whenever the local checkout has the tag history available.
-readonly reviewed_go_release_pkgver=0.1.1.r376.g3cdab7e7f
-if go_release_description=$(git -C "$ROOT" describe --long --tags --abbrev=9 "$go_release_commit" 2>/dev/null); then
+readonly reviewed_go_release_pkgver=0.1.1.r490.g112174124
+if go_release_description=$(git -C "$ROOT" describe --long --tags --exclude='web-v*' --abbrev=9 "$go_release_commit" 2>/dev/null); then
   go_release_pkgver=$(printf '%s\n' "$go_release_description" | \
     sed -E 's/^v//; s/([^-]*-g)/r\1/; s/-/./g')
 else
@@ -173,4 +194,4 @@ done
 [[ ! -e $tmp/pkg-rs/usr/bin/lmm-api && ! -L $tmp/pkg-rs/usr/bin/lmm-api ]] ||
   die 'Rust package exposes the Go provider command'
 
-printf '%s\n' 'five-package direct-backend AUR matrix verified'
+printf '%s\n' 'six-package direct-backend and web AUR matrix verified'

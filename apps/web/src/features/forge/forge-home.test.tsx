@@ -165,6 +165,29 @@ async function renderHome(
         },
       }
     }
+    if (url === '/api/assistant/pre-conversation-presets') {
+      return {
+        data: {
+          success: true,
+          data: {
+            generation: 1_786_500_000,
+            version: 'generated-v1',
+            presets: [
+              {
+                id: 'generated_model_setup',
+                label: 'Model setup',
+                prompt: 'Configure a current model for my coding client.',
+              },
+              {
+                id: 'generated_cost_review',
+                label: 'Estimate cost',
+                prompt: 'Estimate the cost of my expected model usage.',
+              },
+            ],
+          },
+        },
+      }
+    }
     return { data: { success: true, data: [] } }
   }) as typeof api.get
 
@@ -228,6 +251,28 @@ afterEach(() => {
 after(() => domWindow.close())
 
 describe('ForgeHome assistant entry', () => {
+  test('animates server-generated prompts and stops when the visitor interacts', async () => {
+    const rendered = await renderHome(null)
+    const input = findMessageInput(rendered.container)
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 90))
+    })
+    assert.match(
+      input.placeholder,
+      /^C|^Co/,
+      'typewriter should start with the first server-generated prompt'
+    )
+
+    await act(async () => {
+      input.focus()
+      await flushEffects()
+    })
+    assert.equal(input.placeholder, 'Describe what you need...')
+
+    await unmountHome(rendered)
+  })
+
   test('queues onboarding with the message and redirects anonymous users to sign-in', async () => {
     const opened: Array<{
       autoSend: boolean

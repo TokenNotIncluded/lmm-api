@@ -329,6 +329,8 @@ func preActivationRouteAllowed(method string, path string) bool {
 		return method == http.MethodPost
 	case "/api/user/self":
 		return method == http.MethodGet || method == http.MethodPut || method == http.MethodDelete
+	case "/api/user/self/onboarding/todo":
+		return method == http.MethodGet
 	case "/api/user/passkey":
 		return method == http.MethodGet || method == http.MethodDelete
 	case "/api/user/sessions", "/api/user/oauth/bindings", "/api/user/2fa/status":

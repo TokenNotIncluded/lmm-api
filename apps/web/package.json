@@ -9,7 +9,7 @@
     "build": "rsbuild build",
     "bundle:check": "node scripts/check-initial-bundle.mjs",
     "build:check": "tsgo -b && rsbuild build",
-    "test": "bun test src",
+    "test": "bun scripts/test-serial.mjs",
     "typecheck": "tsgo -b",
     "lint": "oxlint -c .oxlintrc.json .",
     "lint:fix": "oxlint -c .oxlintrc.json . --fix",

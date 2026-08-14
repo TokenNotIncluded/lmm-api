@@ -779,8 +779,8 @@ func openSourceBountyTipNotificationQuery() *gorm.DB {
 		Joins("JOIN open_source_bounty_projects project ON project.id = tip.project_id")
 }
 
-func openSourceBountyNotificationQuery() *gorm.DB {
-	return DB.Table("open_source_bounty_ledgers AS notification").
+func openSourceBountyNotificationQuery(db *gorm.DB) *gorm.DB {
+	return db.Table("open_source_bounty_ledgers AS notification").
 		Select(`notification.id, notification.project_id, notification.challenge_id,
 			notification.user_id AS sender_user_id, sender.username AS sender_username,
 			notification.kind, project.title AS project_title, notification.quota, notification.note,
@@ -802,7 +802,7 @@ func ListOpenSourceBountyNotifications(recipientUserId int, limit int) ([]OpenSo
 		limit = 50
 	}
 	items := make([]OpenSourceBountyNotification, 0)
-	err := openSourceBountyNotificationQuery().
+	err := openSourceBountyNotificationQuery(DB).
 		Where("notification.kind IN ? AND notification.counterparty_user_id = ?", openSourceBountyNotificationKinds(), recipientUserId).
 		Order("notification.created_at DESC, notification.id DESC").Limit(limit).Scan(&items).Error
 	return items, err
@@ -906,6 +906,7 @@ func attachViewerChallenges(views []OpenSourceBountyProjectView, viewerUserId in
 }
 
 func ListOpenSourceBounties(viewerUserId int, page int, pageSize int) ([]OpenSourceBountyProjectView, int64, error) {
+	viewerUserId = openSourceBountyPrivateViewerId(viewerUserId)
 	if page < 1 {
 		page = 1
 	}
@@ -953,6 +954,7 @@ func ListOwnedOpenSourceBountiesFiltered(ownerUserId int, archived bool) ([]Open
 }
 
 func GetOpenSourceBountyDetail(viewerUserId int, projectId int) (*OpenSourceBountyProjectDetail, error) {
+	viewerUserId = openSourceBountyPrivateViewerId(viewerUserId)
 	var view OpenSourceBountyProjectView
 	if err := openSourceBountyProjectQuery().Where("p.id = ?", projectId).Scan(&view).Error; err != nil {
 		return nil, err
@@ -969,7 +971,7 @@ func GetOpenSourceBountyDetail(viewerUserId int, projectId int) (*OpenSourceBoun
 	}
 	detail := &OpenSourceBountyProjectDetail{Project: views[0], Challenges: []OpenSourceBountyChallengeView{}, Ledger: []OpenSourceBountyLedger{}}
 	if view.OwnerUserId == viewerUserId {
-		if err := openSourceBountyChallengeViewQuery().Where("c.project_id = ?", projectId).
+		if err := openSourceBountyChallengeViewQuery(DB).Where("c.project_id = ?", projectId).
 			Order("c.created_at DESC, c.id DESC").Scan(&detail.Challenges).Error; err != nil {
 			return nil, err
 		}
@@ -1009,8 +1011,8 @@ func attachOpenSourceBountyDisputes(views []OpenSourceBountyChallengeView) error
 	return nil
 }
 
-func openSourceBountyChallengeViewQuery() *gorm.DB {
-	return DB.Table("open_source_bounty_challenges AS c").
+func openSourceBountyChallengeViewQuery(db *gorm.DB) *gorm.DB {
+	return db.Table("open_source_bounty_challenges AS c").
 		Select(`c.*, participant.username AS participant_username, p.title AS project_title, p.repository_url, owner.username AS owner_username,
 			COALESCE((SELECT AVG(history.owner_rating_score) FROM open_source_bounty_challenges history WHERE history.participant_user_id = c.participant_user_id AND history.owner_rating_score > 0 AND history.owner_rating_overturned = false), 0) AS participant_rating_average,
 			(SELECT COUNT(*) FROM open_source_bounty_challenges history WHERE history.participant_user_id = c.participant_user_id AND history.owner_rating_score > 0 AND history.owner_rating_overturned = false) AS participant_rating_count,
@@ -1023,7 +1025,7 @@ func openSourceBountyChallengeViewQuery() *gorm.DB {
 
 func ListAcceptedOpenSourceBounties(participantUserId int) ([]OpenSourceBountyChallengeView, error) {
 	views := make([]OpenSourceBountyChallengeView, 0)
-	if err := openSourceBountyChallengeViewQuery().Where("c.participant_user_id = ?", participantUserId).
+	if err := openSourceBountyChallengeViewQuery(DB).Where("c.participant_user_id = ?", participantUserId).
 		Order("c.updated_at DESC, c.id DESC").Scan(&views).Error; err != nil {
 		return nil, err
 	}

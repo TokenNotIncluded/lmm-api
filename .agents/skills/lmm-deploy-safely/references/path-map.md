@@ -1,25 +1,27 @@
 # LMM deployment path map
 
-The installed package has one public operator entry point: `/usr/bin/lmm-api`.
-Use `lmm-api deploy ...` for deployment phases and `lmm-api serve` for the
-systemd service. Do not document or invoke a source-tree deployment helper or
-a second public CLI.
+The Go AUR package installs `/usr/bin/lmm-api-go` for operator commands and the
+byte-identical `/usr/bin/lmm-api` service entry. Use `lmm-api-go deploy ...`
+for deployment phases and verify systemd uses `/usr/bin/lmm-api serve`.
 
 ## Controller and package inputs
 
 | Purpose | Current path or entry point |
 | --- | --- |
-| Go artifact | `apps/api-go/out/lmm-api` |
+| Go artifact | `apps/api-go/out/lmm-api-go` |
 | Rust artifacts | `apps/api-rust/target/release/lmm-api-rs`, `lmm-db-migrate` |
 | Frontend build | `apps/web/dist` |
-| Local split-package builder | `packaging/local/lmm-api-split/build-local-package.sh` |
-| Local package output | `packaging/local/lmm-api-split/out` by default |
+| Go AUR recipe | `packaging/aur/lmm-api-go-bin` |
+| Web AUR recipe | `packaging/aur/lmm-api-web-bin` |
 | Persistent controller work | `${XDG_STATE_HOME:-$HOME/.local/state}/lmm-api/deploy-work/<deployment-id>` |
 | Durable controller backups | `$HOME/backup/lmm-api/<verified-host>/<deployment-id>` |
+| Read-only production pressure report | `.agents/skills/lmm-deploy-safely/scripts/resource-pressure-report.sh` |
 
-The local split package installs frontend files at
-`/usr/share/lmm-api/frontend-dist`. Deployment publishes immutable frontend
-releases through the installed CLI transaction.
+The direct Go package installs its bundled fallback frontend at
+`/usr/share/lmm-api-go/frontend-dist`; the independent web package publishes
+the active immutable tree under `/srv/lmm-api-frontend`. Read the installed
+package owner and release identity before choosing either path; never mix a
+bundled fallback with an independent frontend release.
 
 ## Historical parity oracle input
 
@@ -41,19 +43,20 @@ deployment backup, rollback, or retention requirements.
 
 | Purpose | Current path |
 | --- | --- |
-| Launcher and public CLI | `/usr/bin/lmm-api` |
-| Go backend | `/usr/lib/lmm-api/backends/go/lmm-api` |
-| Rust backend and migrator | `/usr/lib/lmm-api/backends/rs/` |
-| Backend selection | `/etc/lmm-api/backend.conf` |
-| Application environment | `/etc/lmm-api/lmm-api.env` |
+| Operator CLI | `/usr/bin/lmm-api-go` |
+| Service entry | `/usr/bin/lmm-api` (byte-identical Go binary) |
+| Application environment | `/etc/lmm-api-go/lmm-api-go.env` |
 | systemd unit | `/usr/lib/systemd/system/lmm-api.service` |
-| Runtime state | `/var/lib/lmm-api` via `StateDirectory=lmm-api` |
+| Runtime state | `/var/lib/lmm-api-go` via `StateDirectory=lmm-api-go` |
+| Bundled fallback frontend | `/usr/share/lmm-api-go/frontend-dist` |
+| Web package payload | `/usr/share/lmm-api-web/frontend-dist` |
+| Web activation tool | `/usr/lib/lmm-api-web/lmm-api-web-activate` |
 | Service port | `3000` |
 
-The AUR matrix consists of one core package (`lmm-api-bin` or `lmm-api-git`)
-and a Go and/or Rust provider package. Package installation does not
-authorize starting, restarting, enabling, or switching a service. The service
-unit invokes exactly `/usr/bin/lmm-api serve`.
+Production uses independent `lmm-api-go-bin` and `lmm-api-web-bin` packages.
+Rust has a separate ownership gate and is out of scope for a Go/Web update.
+Package discovery alone does not authorize a switch; the guarded transaction
+does. The service unit invokes exactly `/usr/bin/lmm-api serve`.
 
 Before using the transaction on an existing target, verify that the installed
 core really provides this launcher protocol. A legacy `/usr/bin/lmm-api` may be
@@ -66,13 +69,13 @@ guarded path before calling `deploy` phases.
 
 | Purpose | Current path or entry point |
 | --- | --- |
-| Controller entry point | `/usr/bin/lmm-api deploy production ...` |
+| Controller entry point | `/usr/bin/lmm-api-go deploy production ...` |
 | Target activator | Immutable payload under the marker-owned deployment workspace |
 | Default SSH alias | `ArchDmit` |
 | Required static hostname | `arch-dmit` |
 | Target work root | `/var/lib/lmm-api-go/deploy-work/<deployment-id>` (the service-managed path resolves under `/var/lib/private/lmm-api-go`) |
 | Target backup root | `/var/lib/lmm-api-go/deploy-backups/<deployment-id>` (the service-managed path resolves under `/var/lib/private/lmm-api-go`) |
-| Off-host backup root | `/home/arch/.local/state/lmm-api-production-backups/<deployment-id>` on `ArchCzy` |
+| Off-host backup root | `/home/arch/.local/state/lmm-api-production-backups/<deployment-id>` on the ArchCzy host through the case-sensitive SSH alias `archczy` |
 | Frontend release root | `/srv/lmm-api-frontend` |
 | Frontend releases | `/srv/lmm-api-frontend/releases/<version>` |
 | Active frontend | `/srv/lmm-api-frontend/current` |
@@ -83,10 +86,16 @@ The supported phases are `preflight`, `inspect`, `build`, `package`,
 default is read-only preflight. Remote mutation requires explicit execution,
 verified role/host identity, and current-turn authorization.
 
-The transaction is marker-owned and persistent. Before a switch it requires
-the role-appropriate target/controller/off-host backup set, checksum
-verification, encrypted secret-bearing controller and off-host archives, and
-a persistent ten-minute watchdog armed before switching. A switch ends in
+The pressure report is a separate read-only observer, not a deployment phase.
+Run it on `ArchDmit` with the exact `arch-dmit` hostname check; it does not
+install a timer, restart `lmm-api`, clear swap, or remove files. Its report
+uses the 20 GiB root / 951 MiB RAM production profile as a visible reference
+and includes the actual service cgroup memory and restart counters.
+
+The transaction is marker-owned and persistent. Backups are optional and are
+created only with explicit current-turn authorization and `--with-backups`.
+Every switch requires a checksum-verified rollback package, captured frontend
+and configuration restore state, and a persistent ten-minute watchdog. A switch ends in
 `AWAITING_CONFIRMATION`; only exact-release identity checks and explicit
 confirmation produce `CONFIRMED`. Automatic rollback never restores a
 database.
@@ -96,7 +105,8 @@ database.
 `deploy/backup/backup-sqlite-to-archczy.sh` is only for an explicitly verified
 SQLite source. It creates an online SQLite backup in a temporary directory and
 publishes a checksum pair to `/var/backups/lmm-api/sqlite/<instance>` on
-ArchCzy; it does not create a controller copy. Do not invoke it when the live
+the ArchCzy host via SSH alias `archczy`; it does not create a controller copy.
+Do not invoke it when the live
 service uses PostgreSQL.
 
 The live service may already use Go with PostgreSQL and dedicated Valkey after a
@@ -131,9 +141,11 @@ This mechanism owns internal probes only, not production business traffic.
 
 The controller workspace is a transaction workspace, not durable backup
 storage. Keep its marker and terminal status for audit, but remove exact
-`staging`, `tmp`, and cache children after `CONFIRMED` or `ROLLED_BACK` and
-after the controller, target, and off-host copies have passed checksum and
-decryption verification. Production target workspaces follow the same rule;
+`artifacts`, `staging`, `tmp`, and cache children after `CONFIRMED`, `ROLLED_BACK`, a
+controller-only pre-switch `VALIDATED`, or a verified pre-switch `ABORTED`
+state and,
+when backups were requested, after their checksum/decryption verification.
+Production target workspaces follow the same rule;
 the target backup root and off-host root are durable and must not be removed
 by workspace cleanup. Private directories are `0700`, manifests/status and
 encrypted archives are `0600`, and no secret-bearing plaintext may leave the
@@ -159,7 +171,15 @@ active release, latest-known-good snapshot, and any unconfirmed transaction.
 | database cutover | `/var/lib/lmm-api-cutover`, `/var/log/lmm-api-cutover` |
 
 These older mechanisms have independent retention. Do not broaden cleanup to
-`/tmp`, backup roots, release roots, or another deployment's workspace.
+`/tmp`, backup roots, release roots, application history, or another
+deployment's workspace.
+
+The controller state root is
+`${XDG_STATE_HOME:-$HOME/.local/state}/lmm-api`; a deployment-side directory
+named `states/api.lmm.best` is subject to the same marker and size rules. Keep
+only terminal markers/status files plus active operational state. Warn at
+256 MiB and stop new builds at 512 MiB or earlier when the filesystem gate is
+yellow; measure with `du -sx --bytes` before pruning exact terminal workspaces.
 
 ## Temporary-path findings
 

@@ -39,9 +39,11 @@ var (
 	ErrAssistantHistoryForbidden            = errors.New("assistant conversation is not visible to this account")
 	ErrAssistantConversationAlreadyArchived = errors.New("assistant conversation is already archived")
 	ErrAssistantConversationNotArchived     = errors.New("assistant conversation is not archived")
+	ErrAssistantConversationRestricted      = errors.New("assistant conversation is restricted")
 	ErrAssistantSecureCardNotFound          = errors.New("assistant secure card not found")
 	ErrAssistantSecureCardConsumed          = errors.New("assistant secure card has already been revealed")
 	ErrAssistantSecureCardExpired           = errors.New("assistant secure card has expired")
+	ErrAssistantTokenLimit                  = errors.New("assistant API key limit reached")
 
 	assistantHistoryAPIKeyPattern = regexp.MustCompile(`(?i)\b(?:sk|rk|pk|ak|tok|token|key|secret)[_-][a-z0-9._~+/-]{8,}\b`)
 	assistantHistoryJWTPattern    = regexp.MustCompile(`\beyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}\b`)
@@ -66,11 +68,35 @@ type AssistantConversation struct {
 	Title              string `json:"title" gorm:"type:varchar(255);not null"`
 	LastMessagePreview string `json:"last_message_preview" gorm:"type:varchar(512);not null"`
 	CreatedAt          int64  `json:"created_at" gorm:"not null;index"`
-	UpdatedAt          int64  `json:"updated_at" gorm:"not null;index:idx_assistant_conversation_user_updated,priority:2"`
+	UpdatedAt          int64  `json:"updated_at" gorm:"not null;index:idx_assistant_conversation_user_updated,priority:2;index:idx_assistant_conversation_updated"`
 	ArchivedAt         int64  `json:"archived_at" gorm:"not null;default:0;index"`
+	RestrictedAt       int64  `json:"restricted_at" gorm:"not null;default:0;index"`
+	RestrictionReason  string `json:"-" gorm:"type:varchar(64);not null;default:''"`
 }
 
 func (AssistantConversation) TableName() string { return "assistant_conversations" }
+
+const (
+	AssistantSecurityIncidentStatusOpen = "open"
+	AssistantSecurityIncidentCategory   = "high_confidence_abuse"
+)
+
+// AssistantSecurityIncident is the administrator-facing report for a
+// deterministically terminated assistant conversation. It deliberately keeps
+// only a digest; administrators inspect the already-redacted transcript under
+// the normal assistant-history role lattice.
+type AssistantSecurityIncident struct {
+	Id             int    `json:"id" gorm:"primaryKey"`
+	UserId         int    `json:"-" gorm:"not null;index"`
+	ConversationId int64  `json:"conversation_id" gorm:"not null;uniqueIndex"`
+	Category       string `json:"category" gorm:"type:varchar(64);not null;index"`
+	Status         string `json:"status" gorm:"type:varchar(24);not null;index"`
+	InputDigest    string `json:"-" gorm:"type:char(64);not null"`
+	CreatedAt      int64  `json:"created_at" gorm:"not null;index"`
+	UpdatedAt      int64  `json:"updated_at" gorm:"not null;index"`
+}
+
+func (AssistantSecurityIncident) TableName() string { return "assistant_security_incidents" }
 
 // AssistantHistoryMessage is deliberately limited to text that has passed
 // redactAssistantHistoryContent.  Secure values are represented by a card row
@@ -122,6 +148,7 @@ type AssistantConversationView struct {
 	CreatedAt          int64  `json:"created_at"`
 	UpdatedAt          int64  `json:"updated_at"`
 	ArchivedAt         int64  `json:"archived_at"`
+	RestrictedAt       int64  `json:"restricted_at"`
 	Owner              string `json:"owner"`
 	PrivacyNotice      string `json:"privacy_notice"`
 }
@@ -227,6 +254,30 @@ func assistantConversationTitle(value string) string {
 	return value
 }
 
+// UpdateAssistantConversationTitle stores an automatically summarized title
+// only on a conversation owned by the requesting user. The same redaction and
+// length boundary as fallback titles applies before persistence.
+func UpdateAssistantConversationTitle(userID int, conversationID int64, title string) error {
+	if userID <= 0 || conversationID <= 0 || strings.TrimSpace(title) == "" {
+		return gorm.ErrInvalidData
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockAssistantOwner(tx, userID); err != nil {
+			return err
+		}
+		result := tx.Model(&AssistantConversation{}).
+			Where("id = ? AND user_id = ?", conversationID, userID).
+			Update("title", assistantConversationTitle(title))
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return ErrAssistantConversationNotFound
+		}
+		return nil
+	})
+}
+
 func assistantConversationRank(user *User) (int, error) {
 	if user == nil || user.Id <= 0 {
 		return 0, gorm.ErrInvalidData
@@ -296,6 +347,9 @@ func PrepareAssistantConversation(userID int, conversationID int64, firstMessage
 		if err != nil {
 			return nil, err
 		}
+		if conversation.RestrictedAt > 0 {
+			return nil, ErrAssistantConversationRestricted
+		}
 		return &conversation, nil
 	}
 	now := common.GetTimestamp()
@@ -306,7 +360,133 @@ func PrepareAssistantConversation(userID int, conversationID int64, firstMessage
 		CreatedAt:          now,
 		UpdatedAt:          now,
 	}
-	if err := DB.Create(&conversation).Error; err != nil {
+	if err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockAssistantOwner(tx, userID); err != nil {
+			return err
+		}
+		return tx.Create(&conversation).Error
+	}); err != nil {
+		return nil, err
+	}
+	return &conversation, nil
+}
+
+// RecordAssistantSecurityRefusal persists one redacted refusal turn and
+// atomically restricts the conversation. Repeated reports for the same
+// conversation are idempotent and never duplicate the security incident.
+func RecordAssistantSecurityRefusal(userID int, conversationID int64, userContent, assistantContent, reason string) (int64, bool, error) {
+	if userID <= 0 || conversationID < 0 || strings.TrimSpace(userContent) == "" || strings.TrimSpace(assistantContent) == "" {
+		return 0, false, gorm.ErrInvalidData
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "security_policy"
+	}
+	if len(reason) > 64 {
+		reason = reason[:64]
+	}
+
+	var recordedConversationID int64
+	created := false
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockAssistantOwner(tx, userID); err != nil {
+			return err
+		}
+		var conversation AssistantConversation
+		if conversationID > 0 {
+			if err := lockForUpdate(tx).Where("id = ? AND user_id = ?", conversationID, userID).First(&conversation).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return ErrAssistantConversationNotFound
+				}
+				return err
+			}
+			if conversation.RestrictedAt > 0 {
+				recordedConversationID = conversation.Id
+				return nil
+			}
+		} else {
+			now := common.GetTimestamp()
+			conversation = AssistantConversation{
+				UserId:             userID,
+				Title:              assistantConversationTitle(userContent),
+				LastMessagePreview: assistantConversationTitle(assistantContent),
+				CreatedAt:          now,
+				UpdatedAt:          now,
+			}
+			if err := tx.Create(&conversation).Error; err != nil {
+				return err
+			}
+		}
+
+		recordedConversationID = conversation.Id
+		if _, err := appendAssistantHistoryMessageTx(tx, conversation.Id, AssistantHistoryRoleUser, userContent); err != nil {
+			return err
+		}
+		if _, err := appendAssistantHistoryMessageTx(tx, conversation.Id, AssistantHistoryRoleAssistant, assistantContent); err != nil {
+			return err
+		}
+		now := common.GetTimestamp()
+		if err := tx.Model(&conversation).Updates(map[string]any{
+			"last_message_preview": assistantConversationTitle(assistantContent),
+			"updated_at":           now,
+			"restricted_at":        now,
+			"restriction_reason":   reason,
+		}).Error; err != nil {
+			return err
+		}
+		redactedInput := redactAssistantHistoryBounded(userContent)
+		inputDigest := fmt.Sprintf("%x", sha256.Sum256([]byte(redactedInput)))
+		incident := AssistantSecurityIncident{
+			UserId:         userID,
+			ConversationId: conversation.Id,
+			Category:       AssistantSecurityIncidentCategory,
+			Status:         AssistantSecurityIncidentStatusOpen,
+			InputDigest:    inputDigest,
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		}
+		if err := tx.Create(&incident).Error; err != nil {
+			return err
+		}
+		created = true
+		return nil
+	})
+	return recordedConversationID, created, err
+}
+
+// FindRecentAssistantConversationForRetry finds a completed first-turn
+// conversation that a browser retry can safely resume.  The caller must only
+// use this for an explicit retry attempt; ordinary identical questions remain
+// independent conversations.  Matching is scoped to the owner, a short time
+// window, the redacted user message, and an existing assistant message so a
+// half-created conversation is never reused.
+func FindRecentAssistantConversationForRetry(userID int, firstMessage string, since time.Time) (*AssistantConversation, error) {
+	if userID <= 0 {
+		return nil, gorm.ErrInvalidData
+	}
+	firstMessage = redactAssistantHistoryBounded(firstMessage)
+	if strings.TrimSpace(firstMessage) == "" {
+		return nil, gorm.ErrInvalidData
+	}
+	if since.IsZero() {
+		since = time.Now().Add(-5 * time.Minute)
+	}
+
+	var conversation AssistantConversation
+	err := DB.Model(&AssistantConversation{}).
+		Joins("JOIN assistant_history_messages AS history ON history.conversation_id = assistant_conversations.id").
+		Where("assistant_conversations.user_id = ?", userID).
+		Where("assistant_conversations.archived_at = 0").
+		Where("assistant_conversations.updated_at >= ?", since.Unix()).
+		Where("history.role = ? AND history.content = ?", AssistantHistoryRoleUser, firstMessage).
+		Joins("JOIN assistant_history_messages AS assistant_history ON assistant_history.conversation_id = assistant_conversations.id").
+		Where("assistant_history.role = ?", AssistantHistoryRoleAssistant).
+		Order("assistant_conversations.updated_at DESC, assistant_conversations.id DESC").
+		First(&conversation).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
 		return nil, err
 	}
 	return &conversation, nil
@@ -398,6 +578,9 @@ func RecordAssistantConversationTurnForRequest(userID int, conversationID int64,
 	}
 	var recordedConversationID int64
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockAssistantOwner(tx, userID); err != nil {
+			return err
+		}
 		var conversation AssistantConversation
 		if conversationID > 0 {
 			if err := lockForUpdate(tx).Where("id = ? AND user_id = ?", conversationID, userID).First(&conversation).Error; err != nil {
@@ -405,6 +588,9 @@ func RecordAssistantConversationTurnForRequest(userID int, conversationID int64,
 					return ErrAssistantConversationNotFound
 				}
 				return err
+			}
+			if conversation.RestrictedAt > 0 {
+				return ErrAssistantConversationRestricted
 			}
 		} else {
 			now := common.GetTimestamp()
@@ -448,6 +634,53 @@ func RecordAssistantConversationTurn(userID int, conversationID int64, userConte
 	return err
 }
 
+// RecordAssistantConversationTurnForRetry keeps a browser replay idempotent.
+// Ordinary repeated questions still use RecordAssistantConversationTurn and
+// remain visible as distinct turns.
+func RecordAssistantConversationTurnForRetry(userID int, conversationID int64, userContent, assistantContent string) error {
+	if userID <= 0 || conversationID <= 0 {
+		return gorm.ErrInvalidData
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockAssistantOwner(tx, userID); err != nil {
+			return err
+		}
+		var conversation AssistantConversation
+		if err := lockForUpdate(tx).Where("id = ? AND user_id = ?", conversationID, userID).First(&conversation).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrAssistantConversationNotFound
+			}
+			return err
+		}
+		if conversation.RestrictedAt > 0 {
+			return ErrAssistantConversationRestricted
+		}
+		var recent []AssistantHistoryMessage
+		if err := tx.Where("conversation_id = ?", conversation.Id).
+			Where("role IN ?", []string{AssistantHistoryRoleUser, AssistantHistoryRoleAssistant}).
+			Order("sequence DESC").Limit(2).Find(&recent).Error; err != nil {
+			return err
+		}
+		if len(recent) == 2 &&
+			recent[0].Role == AssistantHistoryRoleAssistant &&
+			recent[1].Role == AssistantHistoryRoleUser &&
+			recent[1].Content == redactAssistantHistoryBounded(userContent) {
+			return nil
+		}
+		if _, err := appendAssistantHistoryMessageTx(tx, conversation.Id, AssistantHistoryRoleUser, userContent); err != nil {
+			return err
+		}
+		if _, err := appendAssistantHistoryMessageTx(tx, conversation.Id, AssistantHistoryRoleAssistant, assistantContent); err != nil {
+			return err
+		}
+		now := common.GetTimestamp()
+		return tx.Model(&conversation).Updates(map[string]any{
+			"last_message_preview": assistantConversationTitle(assistantContent),
+			"updated_at":           now,
+		}).Error
+	})
+}
+
 func setAssistantConversationArchived(userID int, conversationID int64, archived bool) (*AssistantConversation, error) {
 	if userID <= 0 || conversationID <= 0 {
 		return nil, ErrAssistantConversationNotFound
@@ -455,6 +688,9 @@ func setAssistantConversationArchived(userID int, conversationID int64, archived
 
 	var updated AssistantConversation
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockAssistantOwner(tx, userID); err != nil {
+			return err
+		}
 		var conversation AssistantConversation
 		if err := lockForUpdate(tx).
 			Where("id = ? AND user_id = ?", conversationID, userID).
@@ -529,11 +765,60 @@ func ListAssistantConversations(viewerUserID, ownerUserID int, limit int, archiv
 			CreatedAt:          conversation.CreatedAt,
 			UpdatedAt:          conversation.UpdatedAt,
 			ArchivedAt:         conversation.ArchivedAt,
+			RestrictedAt:       conversation.RestrictedAt,
 			Owner:              owner,
 			PrivacyNotice:      AssistantHistoryPrivacyNotice,
 		})
 	}
 	return views, nil
+}
+
+// PopulateAssistantConversationCounts adds visible transcript counts to user
+// management rows. Ordinary users may only receive their own count; an
+// administrator receives counts only for accounts with a strictly lower role.
+// Empty conversation shells are excluded to match the history list.
+func PopulateAssistantConversationCounts(users []*User, viewerUserID, viewerRole int) error {
+	authorizedUserIDs := make([]int, 0, len(users))
+	usersByID := make(map[int]*User, len(users))
+	for _, user := range users {
+		if user == nil {
+			continue
+		}
+		canView := user.Id == viewerUserID ||
+			(viewerRole >= common.RoleAdminUser && viewerRole > user.Role)
+		if !canView {
+			user.AssistantConversationCount = nil
+			continue
+		}
+		count := int64(0)
+		user.AssistantConversationCount = &count
+		authorizedUserIDs = append(authorizedUserIDs, user.Id)
+		usersByID[user.Id] = user
+	}
+	if len(authorizedUserIDs) == 0 {
+		return nil
+	}
+
+	type conversationCount struct {
+		UserID int   `gorm:"column:user_id"`
+		Count  int64 `gorm:"column:count"`
+	}
+	var counts []conversationCount
+	if err := DB.Table("assistant_conversations").
+		Select("assistant_conversations.user_id, COUNT(DISTINCT assistant_conversations.id) AS count").
+		Joins("JOIN assistant_history_messages ON assistant_history_messages.conversation_id = assistant_conversations.id").
+		Where("assistant_conversations.user_id IN ?", authorizedUserIDs).
+		Group("assistant_conversations.user_id").
+		Scan(&counts).Error; err != nil {
+		return err
+	}
+	for _, row := range counts {
+		if user := usersByID[row.UserID]; user != nil {
+			count := row.Count
+			user.AssistantConversationCount = &count
+		}
+	}
+	return nil
 }
 
 func GetAssistantConversationHistory(viewerUserID int, conversationID int64, limit int) (*AssistantConversationView, []AssistantHistoryMessageView, error) {
@@ -587,6 +872,7 @@ func GetAssistantConversationHistory(viewerUserID int, conversationID int64, lim
 		CreatedAt:          conversation.CreatedAt,
 		UpdatedAt:          conversation.UpdatedAt,
 		ArchivedAt:         conversation.ArchivedAt,
+		RestrictedAt:       conversation.RestrictedAt,
 		Owner:              owner,
 		PrivacyNotice:      AssistantHistoryPrivacyNotice,
 	}
@@ -692,6 +978,9 @@ func CreateAssistantSecureCard(ownerUserID int, conversationID int64, cardType, 
 		ExpiresAt:      time.Now().Add(assistantSecureCardDefaultLifetime).Unix(),
 	}
 	if err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockAssistantOwner(tx, ownerUserID); err != nil {
+			return err
+		}
 		if conversationID > 0 {
 			var conversation AssistantConversation
 			if err := lockForUpdate(tx).Where("id = ? AND user_id = ?", conversationID, ownerUserID).First(&conversation).Error; err != nil {
@@ -713,11 +1002,9 @@ func CreateAssistantSecureCard(ownerUserID int, conversationID int64, cardType, 
 	return card, nil
 }
 
-// InsertAssistantTokenAndCreateSecureCard keeps credential creation atomic:
-// either the user receives an opaque, owner-bound card or the token itself is
-// not created.  This prevents an unusable API key from being left behind when
-// secure-card storage is unavailable.
-func InsertAssistantTokenAndCreateSecureCard(token *Token, ownerUserID int, conversationID int64, summary, payload string) (*AssistantSecureCard, error) {
+// insertAssistantTokenAndCreateSecureCardTx writes a key and its opaque card
+// under the caller's transaction and owner lock.
+func insertAssistantTokenAndCreateSecureCardTx(tx *gorm.DB, token *Token, ownerUserID int, conversationID int64, summary, payload string, maxUserTokens int) (*AssistantSecureCard, error) {
 	if token == nil || token.UserId <= 0 || token.UserId != ownerUserID {
 		return nil, gorm.ErrInvalidData
 	}
@@ -740,37 +1027,91 @@ func InsertAssistantTokenAndCreateSecureCard(token *Token, ownerUserID int, conv
 		CreatedAt:      now,
 		ExpiresAt:      time.Now().Add(assistantSecureCardDefaultLifetime).Unix(),
 	}
-	err = DB.Transaction(func(tx *gorm.DB) error {
-		if conversationID > 0 {
-			var conversation AssistantConversation
-			if err := lockForUpdate(tx).Where("id = ? AND user_id = ?", conversationID, ownerUserID).First(&conversation).Error; err != nil {
-				if errors.Is(err, gorm.ErrRecordNotFound) {
-					return ErrAssistantConversationNotFound
-				}
-				return err
-			}
-			message, err := appendAssistantHistoryMessageTx(tx, conversationID, AssistantHistoryRoleCard, "")
-			if err != nil {
-				return err
-			}
-			card.MessageId = message.Id
-		}
-		if err := tx.Create(token).Error; err != nil {
-			return err
-		}
-		if err := tx.Model(&User{}).
-			Where("id = ? AND console_activated_at = ?", token.UserId, 0).
-			Update("console_activated_at", time.Now().Unix()).Error; err != nil {
-			return err
-		}
-		return tx.Create(card).Error
-	})
-	if err != nil {
+	if err := lockAssistantOwner(tx, ownerUserID); err != nil {
 		return nil, err
+	}
+	if maxUserTokens > 0 {
+		var count int64
+		if err := tx.Model(&Token{}).Where("user_id = ?", ownerUserID).Count(&count).Error; err != nil {
+			return nil, err
+		}
+		if count >= int64(maxUserTokens) {
+			return nil, ErrAssistantTokenLimit
+		}
+	}
+	if conversationID > 0 {
+		var conversation AssistantConversation
+		if err := lockForUpdate(tx).Where("id = ? AND user_id = ?", conversationID, ownerUserID).First(&conversation).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, ErrAssistantConversationNotFound
+			}
+			return nil, err
+		}
+		message, err := appendAssistantHistoryMessageTx(tx, conversationID, AssistantHistoryRoleCard, "")
+		if err != nil {
+			return nil, err
+		}
+		card.MessageId = message.Id
+	}
+	if err := tx.Create(token).Error; err != nil {
+		return nil, err
+	}
+	if err := tx.Model(&User{}).
+		Where("id = ? AND console_activated_at = ?", token.UserId, 0).
+		Update("console_activated_at", time.Now().Unix()).Error; err != nil {
+		return nil, err
+	}
+	if err := tx.Create(card).Error; err != nil {
+		return nil, err
+	}
+	return card, nil
+}
+
+func finalizeAssistantTokenCreation(token *Token) {
+	if token == nil {
+		return
 	}
 	if err := invalidateUserCache(token.UserId); err != nil {
 		common.SysLog("failed to invalidate user cache after assistant key creation: " + err.Error())
 	}
+}
+
+// InsertAssistantTokenAndCreateSecureCard keeps credential creation atomic:
+// either the user receives an opaque, owner-bound card or the token itself is
+// not created. This is also used by the direct key form, whose confirmation is
+// owned by that form rather than an assistant auth flow.
+func InsertAssistantTokenAndCreateSecureCard(token *Token, ownerUserID int, conversationID int64, summary, payload string) (*AssistantSecureCard, error) {
+	var card *AssistantSecureCard
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		card, err = insertAssistantTokenAndCreateSecureCardTx(tx, token, ownerUserID, conversationID, summary, payload, 0)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	finalizeAssistantTokenCreation(token)
+	return card, nil
+}
+
+// ConsumeAssistantKeyFlowAndCreateSecureCard binds the one-time browser
+// confirmation to credential creation in one transaction. A failed insert
+// rolls the flow consumption back, while a replay can never create a second
+// key. The generated credential is written only to the encrypted secure card.
+func ConsumeAssistantKeyFlowAndCreateSecureCard(flowToken string, match AuthFlowMatch, token *Token, ownerUserID int, conversationID int64, summary, payload string, maxUserTokens int) (*AssistantSecureCard, error) {
+	if match.Purpose != AuthFlowPurposeAssistantKey || match.UserId != ownerUserID || strings.TrimSpace(match.SessionId) == "" {
+		return nil, ErrAuthFlowInvalid
+	}
+	var card *AssistantSecureCard
+	_, err := ConsumeAuthFlowWithAction(flowToken, match, func(tx *gorm.DB, _ *AuthFlow) error {
+		var insertErr error
+		card, insertErr = insertAssistantTokenAndCreateSecureCardTx(tx, token, ownerUserID, conversationID, summary, payload, maxUserTokens)
+		return insertErr
+	})
+	if err != nil {
+		return nil, err
+	}
+	finalizeAssistantTokenCreation(token)
 	return card, nil
 }
 
@@ -808,6 +1149,9 @@ func RevealAssistantSecureCard(ownerUserID int, cardID string) (string, Assistan
 	var payload string
 	var view AssistantSecureCardView
 	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockAssistantOwner(tx, ownerUserID); err != nil {
+			return err
+		}
 		var card AssistantSecureCard
 		if err := lockForUpdate(tx).Where("id = ? AND owner_user_id = ?", cardID, ownerUserID).First(&card).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -826,7 +1170,10 @@ func RevealAssistantSecureCard(ownerUserID int, cardID string) (string, Assistan
 			return fmt.Errorf("decrypt assistant secure card: %w", err)
 		}
 		now := common.GetTimestamp()
-		if result := tx.Model(&card).Where("revealed_at = ?", 0).Update("revealed_at", now); result.Error != nil {
+		if result := tx.Model(&card).Where("revealed_at = ?", 0).Updates(map[string]any{
+			"revealed_at": now,
+			"ciphertext":  "",
+		}); result.Error != nil {
 			return result.Error
 		} else if result.RowsAffected != 1 {
 			return ErrAssistantSecureCardConsumed

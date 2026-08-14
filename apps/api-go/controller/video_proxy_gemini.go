@@ -2,7 +2,6 @@ package controller
 
 import (
 	"fmt"
-	"io"
 	"strconv"
 	"strings"
 
@@ -45,7 +44,7 @@ func getGeminiVideoURL(channel *model.Channel, task *model.Task, apiKey string) 
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := common.ReadResponseBody(resp)
 	if err != nil {
 		return "", fmt.Errorf("read task response failed: %w", err)
 	}
@@ -180,7 +179,7 @@ func getVertexVideoURL(channel *model.Channel, task *model.Task) (string, error)
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := common.ReadResponseBody(resp)
 	if err != nil {
 		return "", fmt.Errorf("read task response failed: %w", err)
 	}

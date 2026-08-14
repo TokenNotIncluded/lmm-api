@@ -24,7 +24,7 @@ import {
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useMemo, useState, type FormEvent } from 'react'
+import { Fragment, useMemo, useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -33,9 +33,11 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { toIntlLocale } from '@/i18n/languages'
 import { ROLE } from '@/lib/roles'
+import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
 
 import {
@@ -43,6 +45,7 @@ import {
   getAssistantConversationHistory,
   getAssistantConversationHistoryDetail,
   unarchiveAssistantConversation,
+  type AssistantConversationHistoryDetail,
   type AssistantConversationHistoryItem,
   type AssistantConversationHistoryMessage,
 } from './api'
@@ -65,7 +68,7 @@ function HistoryMessage(props: {
     )
   )
   return (
-    <div className='grid gap-1 rounded-md border px-3 py-2'>
+    <div className='grid gap-1 py-2'>
       <p className='text-muted-foreground text-[11px] font-medium'>
         {props.message.role === 'assistant' ? t('Service guide') : t('You')}
       </p>
@@ -102,33 +105,47 @@ function HistoryMessage(props: {
 export function AssistantHistory(props: {
   active: boolean
   onOpenConversation: (conversation: AssistantConversationHistoryItem) => void
+  ownerUser?: { id: number; username: string }
+  presentation?: 'cards' | 'rows'
+  limit?: number
 }) {
   const { t, i18n } = useTranslation()
   const queryClient = useQueryClient()
   const authUser = useAuthStore((state) => state.auth.user)
-  const canAudit =
-    (authUser?.role !== undefined && authUser.role >= ROLE.ADMIN) ||
-    (authUser?.trust_level_info?.level ?? 0) > 0
+  const canAudit = authUser?.role !== undefined && authUser.role >= ROLE.ADMIN
   const [scope, setScope] = useState<'self' | 'audit'>('self')
   const [auditUserIdInput, setAuditUserIdInput] = useState('')
   const [auditUserId, setAuditUserId] = useState<number | null>(null)
   const [auditInputError, setAuditInputError] = useState(false)
   const [filter, setFilter] = useState<'active' | 'archived'>('active')
   const showingArchived = filter === 'archived'
-  const effectiveScope = canAudit ? scope : 'self'
+  const fixedScope = props.ownerUser
+    ? props.ownerUser.id === authUser?.id
+      ? 'self'
+      : 'audit'
+    : null
+  const effectiveScope = fixedScope ?? (canAudit ? scope : 'self')
   const activeUserId =
-    effectiveScope === 'audit' ? (auditUserId ?? undefined) : undefined
+    effectiveScope === 'audit'
+      ? (props.ownerUser?.id ?? auditUserId ?? undefined)
+      : undefined
+  const historyLimit = props.limit
   const historyQuery = useQuery({
     queryKey: [
       'assistant-conversations',
       effectiveScope,
       activeUserId ?? null,
       filter,
+      ...(historyLimit === undefined ? [] : [historyLimit]),
     ],
     queryFn: () =>
-      getAssistantConversationHistory(showingArchived, activeUserId),
+      getAssistantConversationHistory(
+        showingArchived,
+        activeUserId,
+        historyLimit
+      ),
     enabled:
-      props.active && (effectiveScope === 'self' || auditUserId !== null),
+      props.active && (effectiveScope === 'self' || activeUserId !== undefined),
     staleTime: 30_000,
     retry: false,
   })
@@ -212,7 +229,7 @@ export function AssistantHistory(props: {
 
   return (
     <div className='grid gap-3'>
-      {canAudit ? (
+      {canAudit && !props.ownerUser ? (
         <div className='grid gap-3 rounded-lg border p-3'>
           <div className='flex flex-wrap gap-2'>
             <Button
@@ -266,12 +283,14 @@ export function AssistantHistory(props: {
           ) : null}
         </div>
       ) : null}
-      {effectiveScope === 'audit' && auditUserId !== null ? (
+      {effectiveScope === 'audit' && activeUserId !== undefined ? (
         <div className='grid gap-1 rounded-lg border p-3'>
           <p className='text-sm font-medium'>{t('User audit')}</p>
           <p className='text-muted-foreground text-xs leading-5'>
-            {t('Lower-access user conversation')} · {t('User ID')}:{' '}
-            {auditUserId}
+            {props.ownerUser?.username
+              ? `${props.ownerUser.username} · `
+              : `${t('Lower-access user conversation')} · `}
+            {t('User ID')}: {activeUserId}
           </p>
         </div>
       ) : null}
@@ -313,14 +332,14 @@ export function AssistantHistory(props: {
           <AlertTitle>{t('Conversation history')}</AlertTitle>
           <AlertDescription>{historyErrorDescription}</AlertDescription>
         </Alert>
-      ) : effectiveScope === 'audit' && auditUserId === null ? (
+      ) : effectiveScope === 'audit' && activeUserId === undefined ? (
         <p className='text-muted-foreground py-8 text-center text-sm leading-6'>
           {t('Enter a positive integer')}
         </p>
       ) : conversations.length === 0 ? (
         <p className='text-muted-foreground py-8 text-center text-sm leading-6'>
           {effectiveScope === 'audit'
-            ? `${t('No visible conversation history yet.')} · ${t('User ID')}: ${auditUserId}`
+            ? `${t('No visible conversation history yet.')} · ${t('User ID')}: ${activeUserId}`
             : t(
                 showingArchived
                   ? 'No archived conversations yet.'
@@ -328,83 +347,105 @@ export function AssistantHistory(props: {
               )}
         </p>
       ) : (
-        conversations.map((conversation) => {
-          const safePreview = redactAssistantMessageForDisplay(
-            conversation.last_message_preview,
-            t(
-              'Sensitive content is hidden and can only be accessed from a private card.'
-            )
-          ).content
-          const canManage =
-            effectiveScope === 'self' && conversation.owner === 'self'
-          const actionPending =
-            archiveMutation.isPending &&
-            archiveMutation.variables?.id === conversation.id
-          return (
-            <article
-              key={conversation.id}
-              className='grid min-w-0 gap-2 rounded-lg border p-3'
-            >
-              <div className='flex min-w-0 items-start justify-between gap-3'>
-                <div className='min-w-0'>
-                  <p className='text-sm font-medium'>
-                    {conversation.owner === 'self'
-                      ? t('Your conversation')
-                      : t('Lower-access user conversation')}
-                  </p>
-                  <p className='text-muted-foreground mt-0.5 text-xs'>
-                    {dateFormatter.format(
-                      new Date(conversation.updated_at * 1000)
-                    )}
-                  </p>
-                </div>
-                <div className='flex shrink-0 flex-wrap justify-end gap-2'>
-                  <Button
-                    type='button'
-                    variant='outline'
-                    size='sm'
-                    onClick={() => props.onOpenConversation(conversation)}
-                  >
-                    {t('View')}
-                  </Button>
-                  {canManage ? (
-                    <Button
-                      type='button'
-                      variant='ghost'
-                      size='sm'
-                      aria-label={t(
-                        showingArchived
-                          ? 'Restore conversation'
-                          : 'Archive conversation'
-                      )}
-                      disabled={actionPending}
-                      onClick={(event) => {
-                        event.stopPropagation()
-                        archiveMutation.mutate({
-                          id: conversation.id,
-                          archived: showingArchived,
-                        })
-                      }}
-                    >
-                      <HugeiconsIcon
-                        icon={
-                          showingArchived ? ArchiveRestoreIcon : Archive01Icon
+        <div
+          data-presentation={props.presentation ?? 'cards'}
+          data-testid='assistant-history-list'
+        >
+          {conversations.map((conversation, index) => {
+            const safePreview = redactAssistantMessageForDisplay(
+              conversation.last_message_preview,
+              t(
+                'Sensitive content is hidden and can only be accessed from a private card.'
+              )
+            ).content
+            const canManage =
+              effectiveScope === 'self' && conversation.owner === 'self'
+            const actionPending =
+              archiveMutation.isPending &&
+              archiveMutation.variables?.id === conversation.id
+            return (
+              <Fragment key={conversation.id}>
+                {props.presentation === 'rows' && index > 0 ? (
+                  <Separator />
+                ) : null}
+                <article
+                  className={cn(
+                    'grid min-w-0 gap-2',
+                    props.presentation === 'rows'
+                      ? 'py-4'
+                      : 'mb-3 rounded-lg border p-3 last:mb-0'
+                  )}
+                  data-testid='assistant-history-item'
+                >
+                  <div className='flex min-w-0 items-start justify-between gap-3'>
+                    <div className='min-w-0'>
+                      <p className='line-clamp-2 text-sm font-medium'>
+                        <span className='sr-only'>
+                          {conversation.owner === 'self'
+                            ? `${t('Your conversation')}: `
+                            : `${t('Lower-access user conversation')}: `}
+                        </span>
+                        {conversation.title}
+                      </p>
+                      <p className='text-muted-foreground mt-0.5 text-xs'>
+                        {dateFormatter.format(
+                          new Date(conversation.updated_at * 1000)
+                        )}
+                      </p>
+                    </div>
+                    <div className='flex shrink-0 flex-wrap justify-end gap-2'>
+                      <Button
+                        type='button'
+                        variant={
+                          props.presentation === 'rows' ? 'ghost' : 'outline'
                         }
-                        className='size-4'
-                        strokeWidth={2}
-                        aria-hidden='true'
-                      />
-                      {t(showingArchived ? 'Restore' : 'Archive')}
-                    </Button>
-                  ) : null}
-                </div>
-              </div>
-              <p className='text-muted-foreground line-clamp-2 text-xs leading-5'>
-                {safePreview}
-              </p>
-            </article>
-          )
-        })
+                        size='sm'
+                        onClick={() => props.onOpenConversation(conversation)}
+                      >
+                        {t('View')}
+                      </Button>
+                      {canManage ? (
+                        <Button
+                          type='button'
+                          variant='ghost'
+                          size='sm'
+                          aria-label={t(
+                            showingArchived
+                              ? 'Restore conversation'
+                              : 'Archive conversation'
+                          )}
+                          disabled={actionPending}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            archiveMutation.mutate({
+                              id: conversation.id,
+                              archived: showingArchived,
+                            })
+                          }}
+                        >
+                          <HugeiconsIcon
+                            icon={
+                              showingArchived
+                                ? ArchiveRestoreIcon
+                                : Archive01Icon
+                            }
+                            className='size-4'
+                            strokeWidth={2}
+                            aria-hidden='true'
+                          />
+                          {t(showingArchived ? 'Restore' : 'Archive')}
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                  <p className='text-muted-foreground line-clamp-2 text-xs leading-5'>
+                    {safePreview}
+                  </p>
+                </article>
+              </Fragment>
+            )
+          })}
+        </div>
       )}
     </div>
   )
@@ -412,6 +453,7 @@ export function AssistantHistory(props: {
 
 export function AssistantHistoryConversation(props: {
   conversation: AssistantConversationHistoryItem
+  onContinue?: (detail: AssistantConversationHistoryDetail) => void
 }) {
   const { t } = useTranslation()
   const historyQuery = useQuery({
@@ -449,18 +491,30 @@ export function AssistantHistoryConversation(props: {
   const conversation = historyQuery.data.conversation
   return (
     <div className='grid gap-3'>
-      <div>
-        <p className='text-sm font-medium'>
-          {conversation.owner === 'self'
-            ? t('Your conversation')
-            : t('Lower-access user conversation')}
-        </p>
-        {conversation.owner !== 'self' ? (
-          <p className='text-muted-foreground mt-1 text-xs leading-5'>
-            {t(
-              'This history is available because the account has a lower access level. Private cards remain visible only to their owner.'
-            )}
-          </p>
+      <div className='flex items-start justify-between gap-3'>
+        <div className='min-w-0'>
+          <p className='truncate text-sm font-medium'>{conversation.title}</p>
+          {conversation.owner !== 'self' ? (
+            <p className='text-muted-foreground mt-1 text-xs leading-5'>
+              {t(
+                'This history is available because the account has a lower access level. Private cards remain visible only to their owner.'
+              )}
+            </p>
+          ) : null}
+        </div>
+        {props.onContinue &&
+        conversation.owner === 'self' &&
+        conversation.archived_at === 0 &&
+        !conversation.restricted_at ? (
+          <Button
+            type='button'
+            variant='ghost'
+            size='sm'
+            className='shrink-0'
+            onClick={() => props.onContinue?.(historyQuery.data)}
+          >
+            {t('Continue')}
+          </Button>
         ) : null}
       </div>
       {historyQuery.data.messages.map((message) => (

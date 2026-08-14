@@ -9,9 +9,17 @@ stable service contract while the provider remains replaceable.
 | Go | `lmm-api-go` | `lmm-api-go-bin` | `lmm-api-go-git` | `/usr/bin/lmm-api` → `lmm-api-go` |
 | Rust | — | `lmm-api-rs-bin` | `lmm-api-rs-git` | `/usr/bin/lmm-api-rs` |
 
-The Go packages also install the built frontend, `lmm-api.service`, and the
-private `/etc/lmm-api-go/lmm-api-go.env` configuration file. The service runs
-`/usr/bin/lmm-api serve` through the provider symlink.
+The independent prebuilt frontend is `lmm-api-web-bin`. It publishes the
+verified static payload under `/srv/lmm-api-frontend`, atomically changes the
+`current` link, reloads nginx, verifies the public page, and rolls back the link
+if verification fails. It never restarts the backend service.
+
+The Go packages currently retain a bundled frontend for safe transition and
+legacy rollback compatibility. New production frontend releases use
+`lmm-api-web-bin`; after deployed-package activation contracts no longer rely
+on the bundled payload, it can be removed from Go packages in a separate
+release. The Go service runs `/usr/bin/lmm-api serve` through the provider
+symlink and keeps its private `/etc/lmm-api-go/lmm-api-go.env` configuration.
 
 Install the canonical source package with `paru -S lmm-api-go`. Use
 `lmm-api-go-bin` only when a matching signed GitHub release exists, or

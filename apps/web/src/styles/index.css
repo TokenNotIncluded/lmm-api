@@ -133,6 +133,12 @@ For commercial licensing, please contact support@quantumnous.com
     outline-offset: 3px;
   }
 
+  .auth-editorial .auth-field:focus-visible {
+    border-color: color-mix(in oklch, var(--art-clay) 62%, var(--input));
+    outline: 0;
+    box-shadow: 0 0 0 3px color-mix(in oklch, var(--art-clay) 18%, transparent);
+  }
+
   .shiki span {
     color: var(--shiki-light) !important;
     font-style: var(--shiki-light-font-style) !important;

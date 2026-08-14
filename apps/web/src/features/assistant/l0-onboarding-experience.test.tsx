@@ -80,6 +80,18 @@ const restrictedStatus = {
   funding: { mode: 'super_administrator' as const },
 }
 
+const generatedPresets = {
+  generation: 1_786_500_000,
+  version: 'generated-v1',
+  presets: [
+    {
+      id: 'generated_support',
+      label: 'Talk to support',
+      prompt: 'Please connect me with human support.',
+    },
+  ],
+}
+
 async function flushEffects() {
   await new Promise((resolve) => setTimeout(resolve, 25))
 }
@@ -186,6 +198,9 @@ describe('L0 onboarding assistant experience', () => {
 
   test('puts L0 onboarding and privacy guidance on the first assistant screen', async () => {
     api.get = (async (url: string) => {
+      if (url === '/api/assistant/pre-conversation-presets') {
+        return { data: { success: true, data: generatedPresets } }
+      }
       assert.equal(url, '/api/assistant/status')
       return { data: { success: true, data: restrictedStatus } }
     }) as typeof api.get
@@ -203,7 +218,7 @@ describe('L0 onboarding assistant experience', () => {
 
       assert.match(
         document.body.textContent ?? '',
-        /L0 accounts can browse challenges/
+        /Guidance for plans, setup, API keys, costs, and support\./
       )
       assert.equal(
         document.querySelector('[data-testid="assistant-onboarding-todo"]'),
@@ -229,16 +244,18 @@ describe('L0 onboarding assistant experience', () => {
 
       const textarea = document.querySelector<HTMLTextAreaElement>('textarea')
       assert.ok(textarea)
+      assert.equal(textarea.getAttribute('aria-label'), 'Ask AI assistant')
       assert.equal(textarea.required, true)
       assert.ok(textarea.minLength <= 0)
       assert.match(
         textarea.getAttribute('aria-describedby') ?? '',
         /assistant-privacy-notice/
       )
-      assert.match(
+      assert.doesNotMatch(
         textarea.getAttribute('aria-describedby') ?? '',
         /assistant-l0-input-hint/
       )
+      assert.match(document.body.textContent ?? '', /Talk to support/)
     } finally {
       await act(async () => rendered.root.unmount())
       rendered.queryClient.clear()
@@ -269,16 +286,7 @@ describe('L0 onboarding assistant experience', () => {
       assert.ok(submit)
       assert.equal(submit.disabled, false)
       assert.equal(textarea.getAttribute('aria-invalid'), 'false')
-      assert.equal(
-        document.querySelector('#assistant-l0-input-hint')?.textContent,
-        'Write a short explanation of what you want to build or why you need L1 access.'
-      )
-      assert.equal(
-        document
-          .querySelector('#assistant-l0-input-hint')
-          ?.getAttribute('role'),
-        'status'
-      )
+      assert.equal(document.querySelector('#assistant-l0-input-hint'), null)
 
       await setTextareaValue(textarea, '。')
       assert.equal(submit.disabled, true)

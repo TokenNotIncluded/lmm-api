@@ -54,7 +54,11 @@ import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Separator } from '@/components/ui/separator'
 import { getUserGroups } from '@/lib/api'
 
-import { createAssistantDefaultKey, type AssistantCreatedKey } from './api'
+import {
+  createAssistantDefaultKey,
+  type AssistantCreateKeyAction,
+  type AssistantCreatedKey,
+} from './api'
 import { AssistantPrivateCard } from './assistant-private-card'
 
 function ConnectionValue(props: { label: string; value: string }) {
@@ -97,16 +101,27 @@ export function AssistantKeyTool(props: {
   availableModels: string[]
   modelsLoading?: boolean
   developerAccessGranted: boolean
+  confirmationAction?: AssistantCreateKeyAction | null
   onKeyCreated?: () => void
   onContinueSetup: () => void
 }) {
   const { t } = useTranslation()
-  const [name, setName] = useState(t('AI assistant key'))
-  const [group, setGroup] = useState('auto')
+  const [name, setName] = useState(
+    props.confirmationAction?.name || t('AI assistant key')
+  )
+  const [group, setGroup] = useState(props.confirmationAction?.group || 'auto')
   const [selectedModel, setSelectedModel] = useState('')
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [created, setCreated] = useState<AssistantCreatedKey | null>(null)
+
+  useEffect(() => {
+    if (!props.confirmationAction) return
+    setName(props.confirmationAction.name)
+    setGroup(props.confirmationAction.group)
+    setConfirmOpen(false)
+    setCreated(null)
+  }, [props.confirmationAction])
   let model = '<MODEL_ID>'
   if (props.developerAccessGranted && props.availableModels.length > 0) {
     model = props.availableModels.includes(selectedModel)
@@ -150,7 +165,11 @@ export function AssistantKeyTool(props: {
     if (creating) return
     setCreating(true)
     try {
-      const result = await createAssistantDefaultKey(name.trim(), group.trim())
+      const result = await createAssistantDefaultKey(
+        name.trim(),
+        group.trim(),
+        props.confirmationAction?.confirmation_token
+      )
       setCreated(result)
       props.onKeyCreated?.()
       setConfirmOpen(false)

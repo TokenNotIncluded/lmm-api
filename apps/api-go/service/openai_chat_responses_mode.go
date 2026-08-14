@@ -2,15 +2,19 @@ package service
 
 import (
 	"regexp"
-	"sync"
 
+	"github.com/QuantumNous/new-api/pkg/cachex"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 )
 
 // Chat→Responses upgrade policy is host routing logic (it decides *whether*
 // to convert, reading host settings), so it lives here, not in relayconvert.
 
-var chatResponsesRegexCache sync.Map // map[string]*regexp.Regexp
+var chatResponsesRegexCache = cachex.NewByteCache[*regexp.Regexp](256, 256<<10, regexCacheWeight)
+
+func regexCacheWeight(pattern string, _ *regexp.Regexp) int64 {
+	return int64(len(pattern) + 256)
+}
 
 func matchAnyModelPattern(patterns []string, model string) bool {
 	if len(patterns) == 0 || model == "" {
@@ -28,9 +32,9 @@ func matchAnyModelPattern(patterns []string, model string) bool {
 				continue
 			}
 			re = compiled
-			chatResponsesRegexCache.Store(pattern, re)
+			chatResponsesRegexCache.Store(pattern, compiled)
 		}
-		if re.(*regexp.Regexp).MatchString(model) {
+		if re.MatchString(model) {
 			return true
 		}
 	}

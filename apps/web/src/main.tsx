@@ -29,6 +29,7 @@ import ReactDOM from 'react-dom/client'
 import { toast } from 'sonner'
 
 import { getStatus } from '@/lib/api'
+import { bindAuthCache } from '@/lib/auth-session'
 import { installBuildMetadata } from '@/lib/build-metadata'
 import { DEFAULT_LOGO } from '@/lib/constants'
 import { applyFaviconToDom } from '@/lib/dom-utils'
@@ -93,6 +94,7 @@ const queryClient = new QueryClient({
     },
   }),
 })
+bindAuthCache(queryClient)
 
 // Create a new router instance
 const router = createRouter({

@@ -195,6 +195,42 @@ func TestConcurrentColdPricingCallersReturnImmediatelyAndStartOneRefresh(t *test
 	}
 }
 
+func TestAsyncPricingRefreshKeepsLaunchDatabase(t *testing.T) {
+	preservePricingTestState(t)
+	first := openCacheTestDB(t, &Channel{}, &Ability{}, &Model{}, &Vendor{})
+	second := openCacheTestDB(t, &Channel{}, &Ability{}, &Model{}, &Vendor{})
+	common.MemoryCacheEnabled = false
+	if err := first.Create(&Ability{Group: "default", Model: "from-first", Enabled: true}).Error; err != nil {
+		t.Fatalf("insert first ability: %v", err)
+	}
+	if err := second.Create(&Ability{Group: "default", Model: "from-second", Enabled: true}).Error; err != nil {
+		t.Fatalf("insert second ability: %v", err)
+	}
+	DB = first
+	pricingCache.Store(nil)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	pricingContextHook = func() (context.Context, context.CancelFunc) {
+		close(started)
+		<-release
+		return context.WithCancel(context.Background())
+	}
+
+	if pricing := GetPricing(); pricing != nil {
+		t.Fatalf("cold pricing = %#v, want nil", pricing)
+	}
+	<-started
+	DB = second
+	close(release)
+	waitForPricingRefreshIdle(t)
+
+	snapshot := pricingCache.Load()
+	if snapshot == nil || len(snapshot.pricing) != 1 || snapshot.pricing[0].ModelName != "from-first" {
+		t.Fatalf("refresh did not retain launch database: %#v", snapshot)
+	}
+}
+
 func TestPricingVendorWriteHonorsCanceledRefreshContext(t *testing.T) {
 	preservePricingTestState(t)
 	db := openCacheTestDB(t, &Channel{}, &Ability{}, &Model{}, &Vendor{})
@@ -783,6 +819,115 @@ func TestChannelGettersAndStatusUpdatesUseDefensiveCopyOnWrite(t *testing.T) {
 	channelSyncLock.RUnlock()
 	if before == after || before.Status != common.ChannelStatusEnabled || after.Status != common.ChannelStatusManuallyDisabled {
 		t.Fatal("channel status update did not publish a copy-on-write channel")
+	}
+}
+
+func TestChannelSelectionUsesDistinctPriorityRetries(t *testing.T) {
+	preserveChannelTestState(t)
+	priorities := []int64{100, 10, 100, 50}
+	channelsIDM = make(map[int]*Channel, len(priorities))
+	ids := make([]int, len(priorities))
+	for index := range priorities {
+		id := index + 1
+		ids[index] = id
+		priority := priorities[index]
+		weight := uint(100)
+		channelsIDM[id] = &Channel{Id: id, Priority: &priority, Weight: &weight}
+	}
+	group2model2channels = map[string]map[string][]int{"default": {"model": ids}}
+	channel2advancedCustomConfig = map[int]*dto.AdvancedCustomConfig{}
+	channelCacheReady = true
+	common.MemoryCacheEnabled = true
+
+	for _, test := range []struct {
+		retry    int
+		priority int64
+	}{{-1, 100}, {0, 100}, {1, 50}, {2, 10}, {9, 10}} {
+		selected, err := GetRandomSatisfiedChannel("default", "model", test.retry, "")
+		if err != nil || selected == nil || selected.GetPriority() != test.priority {
+			t.Fatalf("retry=%d selected=%#v err=%v", test.retry, selected, err)
+		}
+	}
+}
+
+func TestOrdinaryChannelPathFilterReusesCandidateSlice(t *testing.T) {
+	preserveChannelTestState(t)
+	channels := []int{1, 2, 3}
+	channelsIDM = map[int]*Channel{
+		1: {Id: 1},
+		2: {Id: 2},
+		3: {Id: 3},
+	}
+	channel2advancedCustomConfig = map[int]*dto.AdvancedCustomConfig{}
+
+	filtered := filterChannelsByRequestPathAndModel(channels, "/v1/responses", "model")
+	if len(filtered) != len(channels) || &filtered[0] != &channels[0] {
+		t.Fatalf("ordinary route filter copied its unchanged input: %v", filtered)
+	}
+	if allocations := testing.AllocsPerRun(1000, func() {
+		_ = filterChannelsByRequestPathAndModel(channels, "/v1/responses", "model")
+	}); allocations != 0 {
+		t.Fatalf("ordinary route filter allocations=%f, want 0", allocations)
+	}
+}
+
+func TestMultiKeySelectionScansWithoutTemporaryIndexes(t *testing.T) {
+	preserveChannelTestState(t)
+	common.MemoryCacheEnabled = true
+	channel := &Channel{
+		Id: 99101, Key: "first\ndisabled\nthird", Keys: []string{"first", "disabled", "third"},
+		ChannelInfo: ChannelInfo{
+			IsMultiKey: true,
+			MultiKeyStatusList: map[int]int{
+				0: common.ChannelStatusEnabled,
+				1: common.ChannelStatusManuallyDisabled,
+				2: common.ChannelStatusEnabled,
+			},
+		},
+	}
+	channelRuntimeStates.Delete(channel.Id)
+	t.Cleanup(func() { channelRuntimeStates.Delete(channel.Id) })
+
+	for _, mode := range []constant.MultiKeyMode{
+		constant.MultiKeyModeRandom,
+		constant.MultiKeyModePolling,
+		"unknown",
+	} {
+		channel.ChannelInfo.MultiKeyMode = mode
+		for range 20 {
+			key, index, err := channel.GetNextEnabledKey()
+			if err != nil || key == "disabled" || index == 1 {
+				t.Fatalf("mode=%q key=%q index=%d err=%v", mode, key, index, err)
+			}
+		}
+	}
+
+	channel.ChannelInfo.MultiKeyMode = constant.MultiKeyModePolling
+	if allocations := testing.AllocsPerRun(1000, func() {
+		_, _, _ = channel.GetNextEnabledKey()
+	}); allocations != 0 {
+		t.Fatalf("polling multi-key selection allocations=%f, want 0", allocations)
+	}
+}
+
+func TestChannelRuntimeStatePrunesOrphansFromActiveSnapshot(t *testing.T) {
+	activeID := 99201
+	orphanID := 99202
+	channelRuntimeStates.Delete(activeID)
+	channelRuntimeStates.Delete(orphanID)
+	t.Cleanup(func() {
+		channelRuntimeStates.Delete(activeID)
+		channelRuntimeStates.Delete(orphanID)
+	})
+	getChannelRuntimeState(activeID, 0)
+	getChannelRuntimeState(orphanID, 0)
+
+	pruneChannelRuntimeStates(map[int]*Channel{activeID: {Id: activeID}})
+	if _, exists := channelRuntimeStates.Load(activeID); !exists {
+		t.Fatal("active channel runtime state was pruned")
+	}
+	if _, exists := channelRuntimeStates.Load(orphanID); exists {
+		t.Fatal("orphan channel runtime state was retained")
 	}
 }
 

@@ -307,11 +307,16 @@ func CreateBodyStorage(data []byte) (BodyStorage, error) {
 func CreateBodyStorageFromReader(reader io.Reader, contentLength int64, maxBytes int64) (BodyStorage, error) {
 	threshold := GetDiskCacheThresholdBytes()
 
-	// 如果启用了磁盘缓存且内容长度超过阈值，直接使用磁盘存储
+	// Unknown-length bodies go straight to disk when spill storage is enabled.
+	// Otherwise a chunked request could grow to maxBytes in the heap before the
+	// storage layer learns that it crossed the configured threshold.
+	diskCandidateSize := contentLength
+	if diskCandidateSize <= 0 {
+		diskCandidateSize = maxBytes
+	}
 	if IsDiskCacheEnabled() &&
-		contentLength > 0 &&
-		contentLength >= threshold &&
-		IsDiskCacheAvailable(contentLength) {
+		(contentLength <= 0 || contentLength >= threshold) &&
+		IsDiskCacheAvailable(diskCandidateSize) {
 		storage, err := newDiskStorageFromReader(reader, maxBytes, GetDiskCachePath())
 		if err != nil {
 			if IsRequestBodyTooLargeError(err) {

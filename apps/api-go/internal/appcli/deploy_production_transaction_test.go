@@ -15,20 +15,23 @@ import (
 )
 
 type fakeProductionRunner struct {
-	t                *testing.T
-	candidatePackage string
-	rollbackPackage  string
-	probeBinary      string
-	installedBinary  string
-	frontendRoot     string
-	oldVersion       string
-	newVersion       string
-	installedVersion string
-	serviceActive    bool
-	timerActive      bool
-	migrationFailure bool
-	failTimerEnable  bool
-	commands         []productionCommand
+	t                        *testing.T
+	candidatePackage         string
+	rollbackPackage          string
+	probeBinary              string
+	installedBinary          string
+	frontendRoot             string
+	oldVersion               string
+	newVersion               string
+	installedVersion         string
+	packageName              string
+	resolveProvides          bool
+	serviceActive            bool
+	timerActive              bool
+	migrationFailure         bool
+	rollbackMigrationFailure bool
+	failTimerEnable          bool
+	commands                 []productionCommand
 }
 
 func (runner *fakeProductionRunner) Run(_ context.Context, command productionCommand) ([]byte, error) {
@@ -47,6 +50,9 @@ func (runner *fakeProductionRunner) Run(_ context.Context, command productionCom
 		case "migrate":
 			if runner.migrationFailure && len(command.Args) > 1 && command.Args[1] == "--apply" {
 				return nil, errors.New("injected migration failure")
+			}
+			if runner.rollbackMigrationFailure && command.Name == runner.installedBinary {
+				return nil, errors.New("injected rollback compatibility failure")
 			}
 			return nil, nil
 		case "request":
@@ -148,21 +154,24 @@ func (runner *fakeProductionRunner) pacman(args []string) ([]byte, error) {
 		if args[1] == "lmm-api" {
 			return nil, errors.New("package not found")
 		}
-		return []byte("lmm-api-go " + runner.installedVersion + "-1\n"), nil
+		if args[1] != runner.packageName && !(runner.resolveProvides && runner.packageName == productionAURPackageName && args[1] == productionSourcePackageName) {
+			return nil, errors.New("package not found")
+		}
+		return []byte(runner.packageName + " " + runner.installedVersion + "-1\n"), nil
 	case "-Qp":
 		switch args[1] {
 		case runner.candidatePackage:
-			return []byte("lmm-api-go " + runner.newVersion + "-1\n"), nil
+			return []byte(runner.packageName + " " + runner.newVersion + "-1\n"), nil
 		case runner.rollbackPackage:
-			return []byte("lmm-api-go " + runner.oldVersion + "-1\n"), nil
+			return []byte(runner.packageName + " " + runner.oldVersion + "-1\n"), nil
 		}
 		if filepath.Base(args[1]) == filepath.Base(runner.candidatePackage) {
-			return []byte("lmm-api-go " + runner.newVersion + "-1\n"), nil
+			return []byte(runner.packageName + " " + runner.newVersion + "-1\n"), nil
 		}
 	case "-Qkk":
-		return []byte("0 altered files\n"), nil
+		return []byte(runner.packageName + ": 42 total files, 0 altered files\n"), nil
 	case "-Qi":
-		return []byte("Name : lmm-api-go\nVersion : " + runner.installedVersion + "-1\n"), nil
+		return []byte("Name : " + runner.packageName + "\nVersion : " + runner.installedVersion + "-1\n"), nil
 	case "-U":
 		path := args[len(args)-1]
 		if path == runner.candidatePackage {
@@ -267,7 +276,6 @@ func newProductionFixture(t *testing.T) productionFixture {
 		DropInDir:        filepath.Join(root, "systemd", "lmm-api.service.d"),
 		InstalledBinary:  filepath.Join(root, "usr", "bin", "lmm-api"),
 		PackagedFrontend: filepath.Join(root, "usr", "share", "lmm-api-go", "frontend-dist"),
-		MigrationWorkdir: filepath.Join(root, "var", "lib", "lmm-api-go"),
 		ReleasePackages:  filepath.Join(root, "var", "lib", "lmm-api-go", "release-packages"),
 		PackageCache:     filepath.Join(root, "var", "cache", "pacman", "pkg"),
 		RemovedPaths:     []string{filepath.Join(root, "usr", "bin", "lmm-api-go")},
@@ -279,7 +287,7 @@ func newProductionFixture(t *testing.T) productionFixture {
 	}
 	for _, directory := range []string{
 		paths.WorkRoot, paths.BackupRoot, filepath.Dir(paths.GlobalLock), paths.SystemdUnitRoot,
-		paths.ConfigDir, paths.DropInDir, filepath.Dir(paths.InstalledBinary), paths.MigrationWorkdir,
+		paths.ConfigDir, paths.DropInDir, filepath.Dir(paths.InstalledBinary),
 	} {
 		if err := os.MkdirAll(directory, 0o755); err != nil {
 			t.Fatal(err)
@@ -336,7 +344,8 @@ func newProductionFixture(t *testing.T) productionFixture {
 	runner := &fakeProductionRunner{
 		t: t, candidatePackage: candidate, rollbackPackage: rollbackPackage,
 		probeBinary: probe, installedBinary: paths.InstalledBinary, frontendRoot: paths.FrontendRoot,
-		oldVersion: oldVersion, newVersion: newVersion, installedVersion: oldVersion, serviceActive: true,
+		oldVersion: oldVersion, newVersion: newVersion, installedVersion: oldVersion,
+		packageName: productionSourcePackageName, serviceActive: true,
 	}
 	clock := time.Date(2026, 8, 10, 1, 0, 0, 0, time.UTC)
 	runtime := &productionRuntime{
@@ -355,7 +364,7 @@ func newProductionFixture(t *testing.T) productionFixture {
 		ProbeBinary: probe, ProbeBinarySHA256: mustHashFile(t, probe), ExpectedVersion: newVersion,
 		FrontendIndexSHA256: mustHashFile(t, filepath.Join(paths.PackagedFrontend, "index.html")),
 		BackupDir:           backupDir, RollbackWindow: 10 * time.Minute, ObservationWindow: 2 * time.Minute,
-		ManualConfirm: true,
+		ManualConfirm: true, ActivateFrontend: true,
 	}
 	return productionFixture{runtime: runtime, runner: runner, workspace: workspace, options: options, environment: environment, oldMemoryDropIn: oldMemory}
 }
@@ -419,6 +428,142 @@ func mustHashFile(t *testing.T, path string) string {
 	return digest
 }
 
+func TestProductionPackageIdentitySupportsSourceAndAURPackages(t *testing.T) {
+	for _, name := range []string{productionSourcePackageName, productionAURPackageName} {
+		for _, pkgrel := range []string{"1", "2", "1.1"} {
+			t.Run(name+"-"+pkgrel, func(t *testing.T) {
+				wantVersion := "0.1.5-" + pkgrel
+				gotName, version, identity, err := parseProductionPackageIdentity([]byte(name + " " + wantVersion + "\n"))
+				if err != nil || gotName != name || version != wantVersion || identity != name+" "+wantVersion {
+					t.Fatalf("identity=(%q, %q, %q) err=%v", gotName, version, identity, err)
+				}
+				if !productionPackageMatches(version, "0.1.5") {
+					t.Fatalf("package version %q did not match release", version)
+				}
+			})
+		}
+	}
+}
+
+func TestInstalledGoPackageDeduplicatesPacmanProvidesAlias(t *testing.T) {
+	fixture := newProductionFixture(t)
+	fixture.runner.packageName = productionAURPackageName
+	fixture.runner.resolveProvides = true
+
+	name, identity, err := fixture.runtime.installedGoPackage(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := productionAURPackageName + " " + fixture.runner.installedVersion + "-1"
+	if name != productionAURPackageName || identity != want {
+		t.Fatalf("installedGoPackage()=(%q, %q), want (%q, %q)", name, identity, productionAURPackageName, want)
+	}
+}
+
+func TestPackageIntegritySummaryIsExact(t *testing.T) {
+	name := productionAURPackageName
+	for _, test := range []struct {
+		name   string
+		output string
+		clean  bool
+	}{
+		{name: "clean", output: name + ": 42 total files, 0 altered files\n", clean: true},
+		{name: "modified backup is package-valid", output: "backup file: " + name + ": /etc/lmm-api-go/lmm-api-go.env (SHA256 checksum mismatch)\n" + name + ": 42 total files, 0 altered files\n", clean: true},
+		{name: "ten altered", output: name + ": 42 total files, 10 altered files\n"},
+		{name: "wrong package", output: productionSourcePackageName + ": 42 total files, 0 altered files\n"},
+		{name: "ambiguous summaries", output: name + ": 42 total files, 0 altered files\n" + name + ": 42 total files, 0 altered files\n"},
+		{name: "backup after summary", output: name + ": 42 total files, 0 altered files\nbackup file: " + name + ": /etc/lmm-api-go/lmm-api-go.env (SHA256 checksum mismatch)\n"},
+		{name: "other package backup", output: "backup file: " + productionSourcePackageName + ": /etc/lmm-api-go/lmm-api-go.env (SHA256 checksum mismatch)\n" + name + ": 42 total files, 0 altered files\n"},
+		{name: "missing total", output: name + ": total files, 0 altered files\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := packageIntegrityClean([]byte(test.output), name); got != test.clean {
+				t.Fatalf("packageIntegrityClean()=%v, want %v for %q", got, test.clean, test.output)
+			}
+		})
+	}
+}
+
+func TestNativeBackendUpgradeLeavesIndependentFrontendUntouched(t *testing.T) {
+	fixture := newProductionFixture(t)
+	fixture.runner.packageName = productionAURPackageName
+	fixture.options.ActivateFrontend = false
+	fixture.options.FrontendIndexSHA256 = ""
+
+	status, err := fixture.runtime.apply(context.Background(), fixture.workspace, fixture.options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Phase != "AWAITING_CONFIRMATION" {
+		t.Fatalf("status=%#v", status)
+	}
+	if current, err := currentFrontendRelease(fixture.runtime.paths.FrontendRoot); err != nil || current != fixture.runner.oldVersion {
+		t.Fatalf("frontend changed during backend-only upgrade: current=%q err=%v", current, err)
+	}
+	manifest, err := fixture.runtime.readManifest(fixture.workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.PackageName != productionAURPackageName ||
+		manifest.PackageIdentity != productionAURPackageName+" "+fixture.runner.newVersion+"-1" ||
+		manifest.ActivateFrontend {
+		t.Fatalf("manifest=%#v", manifest)
+	}
+	if manifest.FrontendIndexSHA256 != manifest.OldFrontendIndexSHA256 {
+		t.Fatalf("backend-only transaction changed frontend identity: %#v", manifest)
+	}
+}
+
+func TestNativeMigrationsUseReleaseScopedDisposableDirectories(t *testing.T) {
+	fixture := newProductionFixture(t)
+	if _, err := fixture.runtime.apply(context.Background(), fixture.workspace, fixture.options); err != nil {
+		t.Fatal(err)
+	}
+
+	wantRoot := filepath.Join(fixture.workspace.root, "tmp", "migrations")
+	want := map[string]struct {
+		binary string
+		mode   string
+	}{
+		"candidate-apply":  {binary: fixture.runner.probeBinary, mode: "apply"},
+		"candidate-verify": {binary: fixture.runner.probeBinary, mode: "verify"},
+		"rollback-verify":  {binary: fixture.runner.installedBinary, mode: "verify"},
+	}
+	seen := map[string]bool{}
+	rollbackVerifyIndex := -1
+	installIndex := -1
+	for index, command := range fixture.runner.commands {
+		if command.Name == "pacman" && len(command.Args) > 0 && command.Args[0] == "-U" && installIndex == -1 {
+			installIndex = index
+		}
+		if len(command.Args) != 2 || command.Args[0] != "migrate" {
+			continue
+		}
+		name := filepath.Base(command.Dir)
+		expected, ok := want[name]
+		if !ok || command.Name != expected.binary || command.Args[1] != "--"+expected.mode {
+			t.Fatalf("unexpected migration %s: %#v", name, command)
+		}
+		wantDir := filepath.Join(wantRoot, name)
+		if command.Dir != wantDir {
+			t.Fatalf("migration %s workdir=%q, want %q", name, command.Dir, wantDir)
+		}
+		if info, err := os.Stat(command.Dir); err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+			t.Fatalf("migration %s directory info=%v err=%v", name, info, err)
+		}
+		seen[name] = true
+		if name == "rollback-verify" {
+			rollbackVerifyIndex = index
+		}
+	}
+	if len(seen) != len(want) {
+		t.Fatalf("migration commands=%v", seen)
+	}
+	if rollbackVerifyIndex < 0 || installIndex < 0 || rollbackVerifyIndex > installIndex {
+		t.Fatalf("rollback verify index=%d package install index=%d", rollbackVerifyIndex, installIndex)
+	}
+}
+
 func TestNativeProductionApplyAndConfirmOwnReleaseState(t *testing.T) {
 	fixture := newProductionFixture(t)
 	status, err := fixture.runtime.apply(context.Background(), fixture.workspace, fixture.options)
@@ -432,7 +577,8 @@ func TestNativeProductionApplyAndConfirmOwnReleaseState(t *testing.T) {
 		t.Fatalf("frontend current=%q err=%v", current, err)
 	}
 	memory, err := os.ReadFile(filepath.Join(fixture.runtime.paths.DropInDir, productionMemoryFileName))
-	if err != nil || !strings.Contains(string(memory), "MemoryHigh=512M") {
+	if err != nil || !strings.Contains(string(memory), "MemoryHigh="+productionMemoryHigh) ||
+		!strings.Contains(string(memory), "Environment=GOMEMLIMIT="+productionGoMemoryLimit) {
 		t.Fatalf("hardened memory=%q err=%v", memory, err)
 	}
 	confirmed, err := fixture.runtime.confirm(context.Background(), fixture.workspace)
@@ -465,7 +611,7 @@ func TestNativeProductionFailureAfterArmingRestoresDirectGoRelease(t *testing.T)
 	fixture := newProductionFixture(t)
 	fixture.runner.migrationFailure = true
 	_, err := fixture.runtime.apply(context.Background(), fixture.workspace, fixture.options)
-	if err == nil || !strings.Contains(err.Error(), "migration apply") {
+	if err == nil || !strings.Contains(err.Error(), "migration candidate-apply") {
 		t.Fatalf("apply error=%v", err)
 	}
 	status, statusErr := fixture.runtime.readStatus(fixture.workspace)
@@ -488,6 +634,28 @@ func TestNativeProductionFailureAfterArmingRestoresDirectGoRelease(t *testing.T)
 	}
 	if _, err := os.Lstat(fixture.runtime.paths.TransactionLock); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("transaction lock was not released: %v", err)
+	}
+}
+
+func TestNativeProductionBlocksSchemaThatPreviousReleaseCannotRead(t *testing.T) {
+	fixture := newProductionFixture(t)
+	fixture.runner.rollbackMigrationFailure = true
+	_, err := fixture.runtime.apply(context.Background(), fixture.workspace, fixture.options)
+	if err == nil || !strings.Contains(err.Error(), "migration rollback-verify") {
+		t.Fatalf("apply error=%v", err)
+	}
+	status, statusErr := fixture.runtime.readStatus(fixture.workspace)
+	if statusErr != nil {
+		t.Fatal(statusErr)
+	}
+	if status.Phase != "ROLLED_BACK" || fixture.runner.installedVersion != fixture.runner.oldVersion {
+		t.Fatalf("rollback status=%#v installed=%s", status, fixture.runner.installedVersion)
+	}
+	for _, command := range fixture.runner.commands {
+		if command.Name == "pacman" && len(command.Args) > 0 && command.Args[0] == "-U" &&
+			command.Args[len(command.Args)-1] == fixture.options.Package {
+			t.Fatalf("candidate package was installed after rollback compatibility failed: %v", command.Args)
+		}
 	}
 }
 

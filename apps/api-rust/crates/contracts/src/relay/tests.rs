@@ -136,7 +136,13 @@ fn response_pair_preserves_text_reasoning_tools_finish_and_usage() {
     let mut responses_wire = openai_chat_response_to_responses(chat)
         .expect("Chat to Responses response conversion")
         .value;
-    let roundtrip = openai_responses_response_to_canonical(responses_wire.clone())
+    let mut roundtrip_wire = responses_wire.clone();
+    roundtrip_wire.max_output_tokens = None;
+    roundtrip_wire.parallel_tool_calls = None;
+    roundtrip_wire.store = None;
+    roundtrip_wire.temperature = None;
+    roundtrip_wire.top_p = None;
+    let roundtrip = openai_responses_response_to_canonical(roundtrip_wire)
         .expect("Responses response conversion")
         .value;
     assert_eq!(roundtrip.output, canonical.output);
@@ -146,7 +152,13 @@ fn response_pair_preserves_text_reasoning_tools_finish_and_usage() {
     let mut expected: ResponsesResponse =
         serde_json::from_str(&fixture("response", "openai", "openai_responses"))
             .expect("golden Responses response");
-    let golden = openai_responses_response_to_canonical(expected.clone())
+    let mut golden_wire = expected.clone();
+    golden_wire.max_output_tokens = None;
+    golden_wire.parallel_tool_calls = None;
+    golden_wire.store = None;
+    golden_wire.temperature = None;
+    golden_wire.top_p = None;
+    let golden = openai_responses_response_to_canonical(golden_wire)
         .expect("golden canonical response")
         .value;
     assert_eq!(golden.output, canonical.output);
@@ -1545,7 +1557,7 @@ fn responses_preflight_maps_every_known_builtin_and_future_tool_kind() {
         assert_eq!(error.feature, feature);
         assert_eq!(
             error.loss_code.as_deref(),
-            Some("LOSS_BUILTIN_TOOL").filter(|_| { kind != "future_tool_type" })
+            (kind != "future_tool_type").then_some("LOSS_BUILTIN_TOOL")
         );
         assert!(!error.retryable);
     }
@@ -1571,7 +1583,7 @@ fn responses_preflight_reports_each_state_field_at_its_source_path() {
         assert_eq!(error.feature, feature);
         assert_eq!(
             error.loss_code.as_deref(),
-            Some("LOSS_STATEFUL_CONTEXT").filter(|_| { field != "prompt" })
+            (field != "prompt").then_some("LOSS_STATEFUL_CONTEXT")
         );
         assert!(!error.retryable);
     }

@@ -23,8 +23,11 @@ import { QueryClient } from '@tanstack/react-query'
 
 import { useAuthStore, type AuthBundle } from '../stores/auth-store'
 import {
+  applyAuthBundle,
   applyAuthRotation,
+  bindAuthCache,
   bootstrapAuthentication,
+  clearAuthentication,
   clearAuthenticatedClientState,
   createRefreshRunner,
   isAuthBundle,
@@ -324,5 +327,54 @@ describe('authentication session coordination', () => {
       queryClient.getQueryData(['account', bundle.user.id]),
       undefined
     )
+  })
+
+  test('a rejected refresh clears the bound authenticated cache', async () => {
+    const queryClient = new QueryClient()
+    queryClient.setQueryData(['assistant-status'], {
+      developer_access_granted: true,
+    })
+    useAuthStore.getState().auth.setBundle(bundle)
+    const unbind = bindAuthCache(queryClient)
+
+    try {
+      const outcome = await createRefreshRunner({
+        request: async () => ({ status: 401 }),
+        getExpectedSID: () => bundle.session.sid,
+        parseBundle: () => null,
+        acceptBundle: () => undefined,
+        clear: (synchronizeTabs, bootstrapState) =>
+          clearAuthentication(synchronizeTabs, bootstrapState),
+        markTransient: () => undefined,
+        wait: async () => undefined,
+      })()
+
+      assert.deepEqual(outcome, { kind: 'anonymous' })
+      assert.equal(queryClient.getQueryCache().getAll().length, 0)
+      assert.equal(useAuthStore.getState().auth.user, null)
+    } finally {
+      unbind()
+    }
+  })
+
+  test('switching sessions cannot retain the previous account cache', () => {
+    const queryClient = new QueryClient()
+    const unbind = bindAuthCache(queryClient)
+
+    try {
+      applyAuthBundle(bundle, false)
+      queryClient.setQueryData(['account', bundle.user.id], bundle.user)
+      const nextBundle: AuthBundle = {
+        ...bundle,
+        access_token: 'next-token',
+        session: { ...bundle.session, sid: 'session-b' },
+        user: { ...bundle.user, id: 84, username: 'next-user' },
+      }
+      applyAuthBundle(nextBundle, false)
+
+      assert.equal(queryClient.getQueryCache().getAll().length, 0)
+    } finally {
+      unbind()
+    }
   })
 })

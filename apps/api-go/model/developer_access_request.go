@@ -10,25 +10,28 @@ import (
 )
 
 const (
-	DeveloperAccessRequestPending    = "pending"
-	DeveloperAccessRequestApproved   = "approved"
-	DeveloperAccessRequestRejected   = "rejected"
-	DeveloperAccessRequestSourceAI   = "assistant_recommendation"
-	DeveloperAccessRequestSourceOld  = "legacy"
-	minDeveloperAccessRequestReason  = 5
-	minDeveloperAccessReviewNote     = 2
-	minDeveloperAccessRecommendation = 20
-	maxDeveloperAccessRequestNote    = 2000
+	DeveloperAccessRequestPending         = "pending"
+	DeveloperAccessRequestApproved        = "approved"
+	DeveloperAccessRequestRejected        = "rejected"
+	DeveloperAccessRequestSourceAI        = "assistant_recommendation"
+	DeveloperAccessRequestSourceUser      = "user_edited"
+	DeveloperAccessRequestSourceAssistant = "assistant_request"
+	DeveloperAccessRequestSourceOld       = "legacy"
+	minDeveloperAccessRequestReason       = 5
+	minDeveloperAccessReviewNote          = 2
+	minDeveloperAccessRecommendation      = 20
+	maxDeveloperAccessRequestNote         = 2000
 )
 
 var (
-	ErrDeveloperAccessRequestNotFound        = errors.New("解锁申请不存在")
-	ErrDeveloperAccessRequestReviewed        = errors.New("解锁申请已经处理")
-	ErrDeveloperAccessRequestStatus          = errors.New("解锁申请状态无效")
-	ErrDeveloperAccessRequestReasonTooShort  = errors.New("解锁申请说明至少需要 5 个字符")
-	ErrDeveloperAccessRecommendationTooShort = errors.New("AI 推荐信至少需要 20 个字符")
-	ErrDeveloperAccessReviewNoteTooShort     = errors.New("管理员意见至少需要 2 个字符")
-	ErrDeveloperAccessRequestNoteTooLong     = errors.New("解锁申请说明不能超过 2000 个字符")
+	ErrDeveloperAccessRequestNotFound         = errors.New("解锁申请不存在")
+	ErrDeveloperAccessRequestReviewed         = errors.New("解锁申请已经处理")
+	ErrDeveloperAccessRequestStatus           = errors.New("解锁申请状态无效")
+	ErrDeveloperAccessRequestReasonTooShort   = errors.New("解锁申请说明至少需要 5 个字符")
+	ErrDeveloperAccessRecommendationTooShort  = errors.New("AI 推荐信至少需要 20 个字符")
+	ErrDeveloperAccessReviewNoteTooShort      = errors.New("管理员意见至少需要 2 个字符")
+	ErrDeveloperAccessRequestNoteTooLong      = errors.New("解锁申请说明不能超过 2000 个字符")
+	ErrDeveloperAccessRequestQueueUnavailable = errors.New("解锁申请队列暂时不可用")
 )
 
 // DeveloperAccessRequest records the non-payment path to L1 access. The
@@ -111,10 +114,8 @@ func GetDeveloperAccessRequest(userID int) (*DeveloperAccessRequest, error) {
 	return &request, nil
 }
 
-// reopenDeveloperAccessRequestForUserWithTx makes an explicit administrator L0
-// transition visible as a fresh application state without rewriting the
-// reviewed row. The previous approved request remains an audit record, while
-// the newest row is the one returned to the user and can be reviewed again.
+// reopenDeveloperAccessRequestForUserWithTx reopens the user's one letter when
+// an administrator explicitly returns the account to L0.
 func reopenDeveloperAccessRequestForUserWithTx(tx *gorm.DB, userID int) error {
 	var latest DeveloperAccessRequest
 	err := lockForUpdate(tx).Where("user_id = ?", userID).Order("id DESC").First(&latest).Error
@@ -128,29 +129,85 @@ func reopenDeveloperAccessRequestForUserWithTx(tx *gorm.DB, userID int) error {
 		return nil
 	}
 
-	source := latest.Source
-	if source == "" {
-		source = DeveloperAccessRequestSourceOld
-	}
-	return tx.Create(&DeveloperAccessRequest{
-		UserId:           userID,
-		Status:           DeveloperAccessRequestPending,
-		Source:           source,
-		Reason:           latest.Reason,
-		AIRecommendation: latest.AIRecommendation,
-		CreatedAt:        common.GetTimestamp(),
+	return tx.Model(&latest).Updates(map[string]interface{}{
+		"status":        DeveloperAccessRequestPending,
+		"admin_user_id": 0,
+		"admin_note":    "",
+		"reviewed_at":   0,
 	}).Error
 }
 
 func SubmitDeveloperAccessRequest(userID int, reason string) (*DeveloperAccessRequest, error) {
-	return submitDeveloperAccessRequest(userID, reason, "", DeveloperAccessRequestSourceOld)
+	return submitDeveloperAccessRequest(userID, reason, "", DeveloperAccessRequestSourceOld, false)
+}
+
+// SubmitAssistantDeveloperAccessRequest records a confirmed L1 request while
+// preserving any existing recommendation letter for the same user.
+func SubmitAssistantDeveloperAccessRequest(userID int, reason string) (*DeveloperAccessRequest, error) {
+	return submitDeveloperAccessRequest(userID, reason, "", DeveloperAccessRequestSourceAssistant, false)
+}
+
+// SubmitAssistantDeveloperAccessRequestWithoutRecommendation records the
+// user's explicit choice to remove the optional AI letter while retaining the
+// same single pending L1 request.
+func SubmitAssistantDeveloperAccessRequestWithoutRecommendation(userID int, reason string) (*DeveloperAccessRequest, error) {
+	return submitDeveloperAccessRequest(userID, reason, "", DeveloperAccessRequestSourceAssistant, true)
 }
 
 func SubmitAssistantDeveloperAccessRecommendation(userID int, reason string, recommendation string) (*DeveloperAccessRequest, error) {
-	return submitDeveloperAccessRequest(userID, reason, recommendation, DeveloperAccessRequestSourceAI)
+	return submitDeveloperAccessRequest(userID, reason, recommendation, DeveloperAccessRequestSourceAI, false)
 }
 
-func submitDeveloperAccessRequest(userID int, reason string, recommendation string, source string) (*DeveloperAccessRequest, error) {
+// SubmitUserEditedDeveloperAccessRecommendation updates the user's one shared
+// letter without falsely preserving AI provenance after a manual edit.
+func SubmitUserEditedDeveloperAccessRecommendation(userID int, reason string, recommendation string) (*DeveloperAccessRequest, error) {
+	return submitDeveloperAccessRequest(userID, reason, recommendation, DeveloperAccessRequestSourceUser, false)
+}
+
+// SubmitConfirmedAssistantDeveloperAccessRecommendation consumes the user's
+// one-time confirmation and writes their one shared recommendation letter in
+// the same transaction. A failed write leaves the confirmation reusable, and
+// a consumed confirmation can never create or update the administrator queue
+// a second time.
+func SubmitConfirmedAssistantDeveloperAccessRecommendation(token string, match AuthFlowMatch, userID int, reason string, recommendation string) (*DeveloperAccessRequest, error) {
+	if userID <= 0 {
+		return nil, gorm.ErrInvalidData
+	}
+	if match.Purpose != AuthFlowPurposeAssistantL1 || match.UserId != userID || strings.TrimSpace(match.SessionId) == "" {
+		return nil, ErrAuthFlowInvalid
+	}
+	normalizedReason, err := normalizeDeveloperAccessRequestReason(reason)
+	if err != nil {
+		return nil, err
+	}
+	normalizedRecommendation, err := normalizeDeveloperAccessRecommendation(recommendation)
+	if err != nil {
+		return nil, err
+	}
+
+	var request *DeveloperAccessRequest
+	_, err = ConsumeAuthFlowWithAction(token, match, func(tx *gorm.DB, _ *AuthFlow) error {
+		var submitErr error
+		request, submitErr = submitNormalizedDeveloperAccessRequestWithTx(
+			tx,
+			userID,
+			normalizedReason,
+			normalizedRecommendation,
+			DeveloperAccessRequestSourceAI,
+			false,
+		)
+		return submitErr
+	})
+	if err != nil {
+		if errors.Is(err, ErrAuthFlowInvalid) || errors.Is(err, ErrAuthFlowExpired) || errors.Is(err, ErrAuthFlowConsumed) {
+			return nil, err
+		}
+		return nil, errors.Join(ErrDeveloperAccessRequestQueueUnavailable, err)
+	}
+	return request, nil
+}
+
+func submitDeveloperAccessRequest(userID int, reason string, recommendation string, source string, clearRecommendation bool) (*DeveloperAccessRequest, error) {
 	if userID <= 0 {
 		return nil, gorm.ErrInvalidData
 	}
@@ -159,46 +216,94 @@ func submitDeveloperAccessRequest(userID int, reason string, recommendation stri
 		return nil, err
 	}
 	normalizedRecommendation := ""
-	if source == DeveloperAccessRequestSourceAI {
+	if source == DeveloperAccessRequestSourceAI || source == DeveloperAccessRequestSourceUser {
 		normalizedRecommendation, err = normalizeDeveloperAccessRecommendation(recommendation)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	var request DeveloperAccessRequest
+	var request *DeveloperAccessRequest
 	err = DB.Transaction(func(tx *gorm.DB) error {
-		// Lock the user row before checking for a pending request. This makes
-		// duplicate submissions from two browser tabs collapse to one request
-		// on databases that support row-level locks.
-		var user User
-		if err := lockForUpdate(tx).Where("id = ?", userID).First(&user).Error; err != nil {
-			return err
-		}
-		var pending DeveloperAccessRequest
-		findErr := tx.Where("user_id = ? AND status = ?", userID, DeveloperAccessRequestPending).
-			Order("id DESC").First(&pending).Error
-		if findErr == nil {
-			request = pending
-			return nil
-		}
-		if !errors.Is(findErr, gorm.ErrRecordNotFound) {
-			return findErr
-		}
-		request = DeveloperAccessRequest{
-			UserId:           userID,
-			Status:           DeveloperAccessRequestPending,
-			Source:           source,
-			Reason:           redactAssistantHandoffMessage(normalizedReason),
-			AIRecommendation: normalizedRecommendation,
-			CreatedAt:        common.GetTimestamp(),
-		}
-		return tx.Create(&request).Error
+		var submitErr error
+		request, submitErr = submitNormalizedDeveloperAccessRequestWithTx(
+			tx,
+			userID,
+			normalizedReason,
+			normalizedRecommendation,
+			source,
+			clearRecommendation,
+		)
+		return submitErr
 	})
 	if err != nil {
+		// Keep the database cause for diagnostics while giving HTTP callers a
+		// stable classification. They must not treat a failed queue write as a
+		// successful chat turn and should retry the same request instead.
+		return nil, errors.Join(ErrDeveloperAccessRequestQueueUnavailable, err)
+	}
+	return request, nil
+}
+
+func submitNormalizedDeveloperAccessRequestWithTx(tx *gorm.DB, userID int, normalizedReason string, normalizedRecommendation string, source string, clearRecommendation bool) (*DeveloperAccessRequest, error) {
+	// Lock the user row before checking for a pending request. This makes
+	// duplicate submissions from two browser tabs collapse to one request on
+	// databases that support row-level locks.
+	if err := lockAssistantOwner(tx, userID); err != nil {
 		return nil, err
 	}
-	return &request, nil
+	var pending DeveloperAccessRequest
+	findErr := tx.Where("user_id = ?", userID).Order("id DESC").First(&pending).Error
+	if findErr == nil {
+		if pending.Status == DeveloperAccessRequestApproved {
+			return nil, ErrDeveloperAccessRequestReviewed
+		}
+		// A user has one active recommendation letter. AI suggestions and
+		// manual edits update that same pending row instead of creating a
+		// second queue item or preserving conflicting copies.
+		updates := map[string]interface{}{
+			"reason":        redactAssistantHandoffMessage(normalizedReason),
+			"status":        DeveloperAccessRequestPending,
+			"admin_user_id": 0,
+			"admin_note":    "",
+			"reviewed_at":   0,
+		}
+		pending.Reason = updates["reason"].(string)
+		pending.Status = DeveloperAccessRequestPending
+		pending.AdminUserId = 0
+		pending.AdminNote = ""
+		pending.ReviewedAt = 0
+		if source == DeveloperAccessRequestSourceAI || source == DeveloperAccessRequestSourceUser {
+			updates["ai_recommendation"] = normalizedRecommendation
+			updates["source"] = source
+			pending.AIRecommendation = normalizedRecommendation
+			pending.Source = source
+		} else if clearRecommendation {
+			updates["ai_recommendation"] = ""
+			updates["source"] = DeveloperAccessRequestSourceAssistant
+			pending.AIRecommendation = ""
+			pending.Source = DeveloperAccessRequestSourceAssistant
+		}
+		if err := tx.Model(&pending).Updates(updates).Error; err != nil {
+			return nil, err
+		}
+		return &pending, nil
+	}
+	if !errors.Is(findErr, gorm.ErrRecordNotFound) {
+		return nil, findErr
+	}
+	request := &DeveloperAccessRequest{
+		UserId:           userID,
+		Status:           DeveloperAccessRequestPending,
+		Source:           source,
+		Reason:           redactAssistantHandoffMessage(normalizedReason),
+		AIRecommendation: normalizedRecommendation,
+		CreatedAt:        common.GetTimestamp(),
+	}
+	if err := tx.Create(request).Error; err != nil {
+		return nil, err
+	}
+	return request, nil
 }
 
 func ListDeveloperAccessRequests(status string, limit int) ([]DeveloperAccessRequestView, error) {
@@ -214,6 +319,12 @@ func ListDeveloperAccessRequests(status string, limit int) ([]DeveloperAccessReq
 			return nil, ErrDeveloperAccessRequestStatus
 		}
 		query = query.Where("request.status = ?", status)
+		if status == DeveloperAccessRequestPending {
+			// Legacy requests predate the single shared recommendation-letter
+			// workflow. Keep them as history, but never surface or approve them as
+			// actionable queue entries.
+			query = query.Where("request.source <> ?", DeveloperAccessRequestSourceOld)
+		}
 	}
 	var requests []DeveloperAccessRequestView
 	if err := query.Find(&requests).Error; err != nil {

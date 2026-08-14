@@ -3,9 +3,9 @@ package jimeng
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 
+	"github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -51,7 +51,7 @@ func responseJimeng2OpenAIImage(_ *gin.Context, response *ImageResponse, info *r
 // jimengImageHandler handles the Jimeng image generation response
 func jimengImageHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.Usage, *types.NewAPIError) {
 	var jimengResponse ImageResponse
-	responseBody, err := io.ReadAll(resp.Body)
+	responseBody, err := common.ReadResponseBody(resp)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
 	}

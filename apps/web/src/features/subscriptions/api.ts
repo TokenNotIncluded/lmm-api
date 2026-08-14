@@ -29,6 +29,7 @@ import type {
   SubscriptionResetResult,
   SubscriptionPayResponse,
   SubscriptionPayRequest,
+  WaffoPancakeSubscriptionPayRequest,
   SelfSubscriptionData,
 } from './types'
 
@@ -149,7 +150,7 @@ export async function paySubscriptionCreem(
 }
 
 export async function paySubscriptionWaffoPancake(
-  data: SubscriptionPayRequest
+  data: WaffoPancakeSubscriptionPayRequest
 ): Promise<SubscriptionPayResponse> {
   const res = await api.post('/api/subscription/waffo-pancake/pay', data)
   return res.data

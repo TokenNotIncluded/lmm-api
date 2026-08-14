@@ -295,6 +295,14 @@ export type ContentSettings = {
   AssistantSearchAPIKey: string
   AssistantSearchMCPTool: string
   AssistantSkills: string
+  AssistantReviewEnabled: boolean
+  AssistantReviewWindowDays: number
+  AssistantReviewIntervalHours: number
+  AssistantRetentionEnabled: boolean
+  AssistantActiveRetentionDays: number
+  AssistantArchivedRetentionDays: number
+  AssistantSecurityRetentionDays: number
+  AssistantRetentionIntervalHours: number
   DrawingEnabled: boolean
   MjNotifyEnabled: boolean
   MjAccountFilterEnabled: boolean

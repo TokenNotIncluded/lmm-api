@@ -40,6 +40,7 @@ import {
 } from '../constants'
 import type { User } from '../types'
 import { DataTableRowActions } from './data-table-row-actions'
+import { UserAssistantHistoryDialog } from './user-assistant-history-dialog'
 import { UserQuotaCell } from './user-quota-cell'
 import { UserTrustLevelCell } from './user-trust-level-cell'
 
@@ -273,6 +274,14 @@ export function useUsersColumns(): ColumnDef<User>[] {
       enableSorting: false,
       size: 150,
       meta: { mobileBadge: true, mobileOrder: 25 },
+    },
+    {
+      id: 'assistant_conversations',
+      header: t('Support conversations'),
+      cell: ({ row }) => <UserAssistantHistoryDialog user={row.original} />,
+      enableSorting: false,
+      size: 150,
+      meta: { mobileOrder: 26 },
     },
     {
       id: 'invite_info',

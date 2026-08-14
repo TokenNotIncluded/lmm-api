@@ -17,8 +17,41 @@ import (
 	"gorm.io/gorm"
 )
 
+func migrateUserAssistantData(t *testing.T) {
+	t.Helper()
+	require.NoError(t, DB.AutoMigrate(
+		&UnifiedTodoRead{},
+		&AssistantLead{},
+		&AssistantUserProfile{},
+		&AssistantMemory{},
+		&AdvancedSecurityEvent{},
+		&DeveloperAccessRequest{},
+		&AccountActionRequest{},
+		&L1OnboardingTodo{},
+		&PromptConversionRef{},
+		&PromptConversationRef{},
+		&AssistantConversation{},
+		&AssistantHistoryMessage{},
+		&AssistantSecureCard{},
+		&AssistantSecurityIncident{},
+		&AssistantNewUserGift{},
+	))
+	t.Cleanup(func() {
+		for _, table := range []string{
+			"unified_todo_reads", "assistant_leads", "assistant_user_profiles", "assistant_memories",
+			"advanced_security_events", "developer_access_requests", "account_action_requests", "l1_onboarding_todos",
+			"assistant_pre_conversation_conversion_attributions",
+			"assistant_pre_conversation_conversation_attributions", "assistant_history_messages",
+			"assistant_secure_cards", "assistant_security_incidents", "assistant_conversations", "assistant_new_user_gifts",
+		} {
+			DB.Exec("DELETE FROM " + table)
+		}
+	})
+}
+
 func TestHardDeleteUserFailsClosedWhenAuthFenceCannotPublish(t *testing.T) {
 	truncateTables(t)
+	migrateUserAssistantData(t)
 
 	user := User{Username: "hard-delete-user", Password: "password", TelegramId: "hard-delete-telegram"}
 	require.NoError(t, DB.Create(&user).Error)
@@ -75,6 +108,7 @@ func TestHardDeleteUserFailsClosedWhenAuthFenceCannotPublish(t *testing.T) {
 
 func TestHardDeleteUserPublishesTombstoneAndPurgesAuthenticationData(t *testing.T) {
 	truncateTables(t)
+	migrateUserAssistantData(t)
 	server := useUserCacheMiniRedis(t)
 
 	user := User{
@@ -99,6 +133,25 @@ func TestHardDeleteUserPublishesTombstoneAndPurgesAuthenticationData(t *testing.
 		TokenHash: "hard-delete-success-flow", Purpose: AuthFlowPurposeTwoFALogin,
 		UserId: user.Id, ExpiresAt: time.Now().Add(time.Minute),
 	}).Error)
+	viewer := User{Username: "hard-delete-viewer", Password: "password", Role: common.RoleAdminUser, AffCode: "hard-delete-viewer"}
+	require.NoError(t, DB.Create(&viewer).Error)
+	conversation := AssistantConversation{UserId: user.Id, Title: "private", LastMessagePreview: "private", CreatedAt: 1, UpdatedAt: 1}
+	require.NoError(t, DB.Create(&conversation).Error)
+	require.NoError(t, DB.Create(&AssistantHistoryMessage{ConversationId: conversation.Id, Sequence: 1, Role: AssistantHistoryRoleUser, Content: "private", CreatedAt: 1}).Error)
+	require.NoError(t, DB.Create(&AssistantSecureCard{Id: "hard-delete-card", OwnerUserId: user.Id, ConversationId: conversation.Id, Type: AssistantSecureCardTypeAPIKey, Summary: "private", Ciphertext: "encrypted", CreatedAt: 1, ExpiresAt: 2}).Error)
+	incident := AssistantSecurityIncident{UserId: user.Id, ConversationId: conversation.Id, Category: AssistantSecurityIncidentCategory, Status: AssistantSecurityIncidentStatusOpen, InputDigest: "digest", CreatedAt: 1, UpdatedAt: 1}
+	require.NoError(t, DB.Create(&incident).Error)
+	require.NoError(t, DB.Create(&UnifiedTodoRead{UserId: viewer.Id, Category: UnifiedTodoCategorySecurityIncident, ItemId: incident.Id, ReadAt: 1}).Error)
+	require.NoError(t, DB.Create(&PromptConversationRef{ConversationId: conversation.Id, PresetId: "preset", Generation: 1, Version: "v1", UpdatedAt: 1}).Error)
+	require.NoError(t, DB.Create(&AssistantLead{UserId: user.Id, Source: AssistantLeadSourceHandoff, Intent: AssistantIntentHumanSupport, Message: "private", Status: AssistantLeadStatusPending, CreatedAt: 1}).Error)
+	resolvedLead := AssistantLead{UserId: viewer.Id, Source: AssistantLeadSourceHandoff, Intent: AssistantIntentHumanSupport, Message: "other", Status: AssistantLeadStatusResolved, AdminUserId: user.Id, CreatedAt: 1, ResolvedAt: 1}
+	require.NoError(t, DB.Create(&resolvedLead).Error)
+	require.NoError(t, DB.Create(&AssistantMemory{UserId: user.Id, Title: "private", Content: "private", TagsJSON: "[]", Source: AssistantMemorySourceAssistant, Enabled: true, UpdatedBy: user.Id, CreatedAt: 1, UpdatedAt: 1}).Error)
+	require.NoError(t, DB.Create(&AssistantUserProfile{UserId: user.Id, ProfileKey: AssistantProfileNormal, TagsJSON: "[]", Strategy: "private", Source: AssistantProfileSourceAI, Enabled: true, UpdatedBy: user.Id, CreatedAt: 1, UpdatedAt: 1}).Error)
+	require.NoError(t, DB.Create(&AdvancedSecurityEvent{UserID: user.Id, Username: user.Username, CreatedAt: 1, RuleID: "private", Category: "private"}).Error)
+	require.NoError(t, DB.Create(&DeveloperAccessRequest{UserId: user.Id, Status: DeveloperAccessRequestPending, Source: DeveloperAccessRequestSourceAI, Reason: "private", CreatedAt: 1}).Error)
+	require.NoError(t, DB.Create(&AccountActionRequest{TargetUserId: user.Id, RequestedByUserId: user.Id, Kind: AccountActionKindDisable, Status: AccountActionStatusPending, Reason: "private", CreatedAt: 1}).Error)
+	require.NoError(t, DB.Create(&L1OnboardingTodo{UserId: user.Id, CreatedAt: 1, UpdatedAt: 1}).Error)
 	require.NoError(t, populateUserCache(user))
 	// Administrative hard deletion commonly targets an already soft-deleted
 	// user; the shared version increment must therefore query unscoped.
@@ -118,15 +171,64 @@ func TestHardDeleteUserPublishesTombstoneAndPurgesAuthenticationData(t *testing.
 		&UserSession{},
 		&AuthFlow{},
 		&ExternalIdentityClaim{},
+		&AssistantLead{},
+		&AssistantUserProfile{},
+		&AssistantMemory{},
+		&PromptConversationRef{},
+		&AssistantConversation{},
+		&AssistantHistoryMessage{},
+		&AssistantSecureCard{},
+		&AssistantSecurityIncident{},
+		&AdvancedSecurityEvent{},
+		&DeveloperAccessRequest{},
+		&L1OnboardingTodo{},
 	} {
-		require.NoError(t, DB.Unscoped().Model(record).Where("user_id = ?", user.Id).Count(&count).Error)
+		column := "user_id"
+		if _, ok := record.(*AssistantSecureCard); ok {
+			column = "owner_user_id"
+		}
+		if _, ok := record.(*PromptConversationRef); ok {
+			column = "conversation_id"
+		}
+		if _, ok := record.(*AssistantHistoryMessage); ok {
+			column = "conversation_id"
+		}
+		reference := any(user.Id)
+		if column == "conversation_id" {
+			reference = conversation.Id
+		}
+		require.NoError(t, DB.Unscoped().Model(record).Where(column+" = ?", reference).Count(&count).Error)
 		assert.Zero(t, count)
 	}
+	require.NoError(t, DB.Model(&AccountActionRequest{}).Where("target_user_id = ? OR requested_by_user_id = ?", user.Id, user.Id).Count(&count).Error)
+	assert.Zero(t, count)
+	require.NoError(t, DB.Model(&UnifiedTodoRead{}).Where("category = ? AND item_id = ?", UnifiedTodoCategorySecurityIncident, incident.Id).Count(&count).Error)
+	assert.Zero(t, count)
+	require.NoError(t, DB.First(&resolvedLead, resolvedLead.Id).Error)
+	assert.Zero(t, resolvedLead.AdminUserId)
 	assert.False(t, server.Exists(getUserAuthFenceKey(user.Id)))
 	committed, err := common.RDB.Get(t.Context(), getUserAuthVersionKey(user.Id)).Result()
 	require.NoError(t, err)
 	assert.Equal(t, "2", committed)
 	assert.False(t, server.Exists(getUserCacheKey(user.Id)))
+}
+
+func TestSoftDeleteUserPurgesPrivateAssistantState(t *testing.T) {
+	truncateTables(t)
+	migrateUserAssistantData(t)
+	user := User{Username: "soft-delete-assistant", Password: "password", AffCode: "soft-delete-assistant", AuthVersion: 1}
+	require.NoError(t, DB.Create(&user).Error)
+	require.NoError(t, DB.Create(&AssistantMemory{
+		UserId: user.Id, Title: "private", Content: "private", TagsJSON: "[]",
+		Source: AssistantMemorySourceAssistant, Enabled: true, UpdatedBy: user.Id, CreatedAt: 1, UpdatedAt: 1,
+	}).Error)
+	require.NoError(t, user.Delete())
+
+	var count int64
+	require.NoError(t, DB.Unscoped().Model(&User{}).Where("id = ?", user.Id).Count(&count).Error)
+	assert.EqualValues(t, 1, count)
+	require.NoError(t, DB.Model(&AssistantMemory{}).Where("user_id = ?", user.Id).Count(&count).Error)
+	assert.Zero(t, count)
 }
 
 func TestIncrementFailedAttemptsCountsConcurrentFailures(t *testing.T) {

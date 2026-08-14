@@ -32,6 +32,8 @@ var auditContentTemplates = map[string]string{
 	"assistant.admin_config_apply":  "Applied assistant administrator configuration (${keys})",
 	"assistant.admin_pricing_apply": "Applied assistant model pricing for ${model_id} (${mode})",
 	"assistant.user_profile_update": "Updated internal assistant profile for user ${target_user_id} (enabled: ${enabled}, tags: ${tags_count})",
+	"assistant.user_memory_update":  "Updated assistant memory skill for user ${target_user_id} (memory: ${memory_id}, enabled: ${enabled})",
+	"assistant.user_memory_delete":  "Deleted assistant memory skill for user ${target_user_id} (memory: ${memory_id})",
 
 	"channel.create":             "Created channel ${name} (type ${type}, count ${count})",
 	"channel.update":             "Updated channel ${name} (ID: ${id})",

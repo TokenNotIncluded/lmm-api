@@ -8,6 +8,7 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -50,6 +51,20 @@ func GetLiveness(c *gin.Context) {
 		"live":    true,
 		"message": "",
 	})
+}
+
+func getPublicPreviewModelIDs() []string {
+	if model.DB == nil {
+		return []string{}
+	}
+	modelIDs := make([]string, 0)
+	if err := model.DB.Model(&model.Ability{}).
+		Where(&model.Ability{Group: "default", Enabled: true}).
+		Distinct("model").Pluck("model", &modelIDs).Error; err != nil {
+		return []string{}
+	}
+	sort.Strings(modelIDs)
+	return modelIDs
 }
 
 func GetStatus(c *gin.Context) {
@@ -112,6 +127,7 @@ func GetStatus(c *gin.Context) {
 		"password_login_enabled":        common.PasswordLoginEnabled,
 		"password_register_enabled":     common.PasswordRegisterEnabled,
 		"default_use_auto_group":        setting.DefaultUseAutoGroup,
+		"preview_model_ids":             getPublicPreviewModelIDs(),
 		"backend_capabilities": gin.H{
 			"bounty_notifications":    true,
 			"bounty_challenge_cancel": true,
@@ -150,7 +166,7 @@ func GetStatus(c *gin.Context) {
 		"passkey_allow_insecure":      passkeySetting.AllowInsecureOrigin,
 		"passkey_user_verification":   passkeySetting.UserVerification,
 		"passkey_attachment":          passkeySetting.AttachmentPreference,
-		"setup":                       constant.Setup,
+		"setup":                       constant.IsSetup(),
 		"user_agreement_enabled":      system_setting.UserAgreementPublished(),
 		"privacy_policy_enabled":      system_setting.PrivacyPolicyPublished(),
 		"checkin_enabled":             operation_setting.GetCheckinSetting().Enabled,

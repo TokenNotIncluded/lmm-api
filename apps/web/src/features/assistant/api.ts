@@ -36,6 +36,12 @@ type AssistantChatPayload = {
   }
   message?: string
   lmm_assistant_action?: unknown
+  lmm_assistant_policy?: unknown
+  lmm_assistant_history?: {
+    conversation_id?: unknown
+    privacy_notice?: unknown
+    restricted?: unknown
+  }
 }
 
 export type AssistantChatMessage = {
@@ -67,6 +73,18 @@ function waitForAssistantRetry(delayMs: number): Promise<void> {
 
 export type AssistantFundingStatus = {
   mode: 'super_administrator'
+}
+
+export type AssistantPreConversationPreset = {
+  id: string
+  prompt: string
+  label?: string
+}
+
+export type AssistantPreConversationPresets = {
+  generation: number
+  version: string
+  presets: AssistantPreConversationPreset[]
 }
 
 export type AssistantStatus = {
@@ -113,6 +131,36 @@ export type L1OnboardingTodo = {
   completed_at?: number
 }
 
+export type AssistantJourneyStepId =
+  | 'ask_ai'
+  | 'get_recommendation'
+  | 'create_api_key'
+  | 'install_client'
+  | 'configure_client'
+  | 'first_api_call'
+  | 'earn_ai_gift'
+  | 'accept_bounty'
+
+export type AssistantJourney = {
+  main: Array<{
+    id: AssistantJourneyStepId
+    status: 'pending' | 'completed' | 'failed'
+  }>
+  side: Array<{
+    id: AssistantJourneyStepId
+    status: 'pending' | 'completed' | 'failed'
+  }>
+}
+
+export type AssistantNewUserGift = {
+  amount_cents: number
+  quota: number
+  status: 'offered' | 'claimed' | 'declined'
+  reason: string
+  created_at: number
+  claimed_at: number
+}
+
 export type AssistantL1RecommendationAction = {
   type: 'l1_recommendation'
   user_statement: string
@@ -126,6 +174,15 @@ export type AssistantAccountDisableAction = {
   target_username: string
   reason: string
   confirmation_token: string
+}
+
+export type AssistantCreateKeyAction = {
+  type: 'create_key'
+  confirmation_token: string
+  requires_confirmation: true
+  expires_in_seconds: number
+  name: string
+  group: string
 }
 
 export type AssistantAdminConfigPreview = {
@@ -164,6 +221,7 @@ export type AssistantAdminChangeAction =
 export type AssistantAction =
   | AssistantL1RecommendationAction
   | AssistantAccountDisableAction
+  | AssistantCreateKeyAction
   | AssistantAdminChangeAction
 
 export type AssistantCreatedKey = {
@@ -202,6 +260,7 @@ export type AssistantConversationHistorySummary = {
   created_at: number
   updated_at: number
   archived_at: number
+  restricted_at?: number
   owner: 'self' | 'lower_level_user'
   privacy_notice: string
 }
@@ -247,6 +306,8 @@ export type AssistantIntent =
   | 'api_key'
   | 'client_setup'
   | 'cost'
+  | 'math'
+  | 'recommendation'
   | 'bounty'
   | 'usage'
   | 'models'
@@ -281,6 +342,8 @@ export type AssistantReply = {
   content: string
   intent?: AssistantIntent
   action?: AssistantAction
+  conversationId?: number
+  restricted?: boolean
 }
 
 export type AssistantPlanOffers = {
@@ -303,6 +366,8 @@ const ASSISTANT_INTENTS = new Set<AssistantIntent>([
   'api_key',
   'client_setup',
   'cost',
+  'math',
+  'recommendation',
   'bounty',
   'usage',
   'models',
@@ -433,6 +498,29 @@ export function parseAssistantAction(
   }
 
   if (
+    action.type === 'create_key' &&
+    action.requires_confirmation === true &&
+    typeof action.expires_in_seconds === 'number' &&
+    Number.isInteger(action.expires_in_seconds) &&
+    action.expires_in_seconds > 0 &&
+    typeof action.name === 'string' &&
+    typeof action.group === 'string'
+  ) {
+    const name = action.name.trim()
+    const group = action.group.trim()
+    if (name && group) {
+      return {
+        type: 'create_key',
+        confirmation_token: confirmationToken,
+        requires_confirmation: true,
+        expires_in_seconds: action.expires_in_seconds,
+        name,
+        group,
+      }
+    }
+  }
+
+  if (
     action.type === 'l1_recommendation' &&
     typeof action.user_statement === 'string' &&
     typeof action.recommendation === 'string'
@@ -515,7 +603,9 @@ export function buildAssistantConversation(
 
 export async function sendAssistantMessage(
   message: string,
-  history: AssistantChatMessage[] = []
+  history: AssistantChatMessage[] = [],
+  conversationId?: number,
+  presetId?: string
 ): Promise<AssistantReply> {
   const normalizedMessage =
     redactAssistantMessageForRequest(message).content.trim()
@@ -529,7 +619,14 @@ export async function sendAssistantMessage(
     try {
       response = await api.post<AssistantChatPayload>(
         '/api/assistant/chat',
-        { message: normalizedMessage, messages },
+        {
+          message: normalizedMessage,
+          messages,
+          ...(conversationId && conversationId > 0
+            ? { conversation_id: conversationId }
+            : {}),
+          ...(presetId ? { preset_id: presetId } : {}),
+        },
         {
           skipBusinessError: true,
           skipErrorHandler: true,
@@ -550,11 +647,46 @@ export async function sendAssistantMessage(
     }
   }
   if (!response) throw new Error('Assistant request did not complete')
-  return {
+  const responseConversationId =
+    response.data.lmm_assistant_history?.conversation_id
+  const conversationRestricted =
+    response.data.lmm_assistant_history?.restricted === true ||
+    response.data.lmm_assistant_policy === 'security_refusal' ||
+    response.data.lmm_assistant_policy === 'conversation_restricted'
+  const reply: AssistantReply = {
     content: parseAssistantReply(response.data),
     intent: parseAssistantIntent(response.headers['x-lmm-assistant-intent']),
     action: parseAssistantAction(response.data.lmm_assistant_action),
   }
+  if (conversationRestricted) reply.restricted = true
+  if (
+    typeof responseConversationId === 'number' &&
+    Number.isSafeInteger(responseConversationId) &&
+    responseConversationId > 0
+  ) {
+    reply.conversationId = responseConversationId
+  }
+  return reply
+}
+
+export async function getAssistantPreConversationPresets(): Promise<AssistantPreConversationPresets> {
+  const response = await api.get<
+    AssistantAPIResponse<AssistantPreConversationPresets>
+  >('/api/assistant/pre-conversation-presets')
+  return requireAssistantData(
+    response.data,
+    'Unable to load assistant conversation starters'
+  )
+}
+
+export async function recordAssistantPreConversationPresetClick(
+  presetId: string
+): Promise<void> {
+  await api.post(
+    `/api/assistant/pre-conversation-presets/${encodeURIComponent(presetId)}/click`,
+    undefined,
+    { skipBusinessError: true, skipErrorHandler: true }
+  )
 }
 
 export async function submitAssistantAccountDisableRequest(input: {
@@ -662,11 +794,19 @@ export async function getAssistantUsageData(
 
 export async function createAssistantDefaultKey(
   name: string,
-  group: string
+  group: string,
+  confirmationToken?: string
 ): Promise<AssistantCreatedKey> {
   const response = await api.post<AssistantAPIResponse<AssistantCreatedKey>>(
     '/api/assistant/tools/create-key',
-    { confirmed: true, name, group },
+    {
+      confirmed: true,
+      name,
+      group,
+      ...(confirmationToken
+        ? { confirmation_token: confirmationToken }
+        : undefined),
+    },
     { skipBusinessError: true, skipErrorHandler: true }
   )
   return requireAssistantData(response.data, 'Unable to create API key')
@@ -682,6 +822,45 @@ export async function getL1OnboardingTodo(): Promise<L1OnboardingTodo> {
     }
   )
   return requireAssistantData(response.data, 'Unable to load setup checklist')
+}
+
+export async function getAssistantJourney(): Promise<AssistantJourney> {
+  const response = await api.get<AssistantAPIResponse<AssistantJourney>>(
+    '/api/assistant/journey',
+    {
+      disableDuplicate: true,
+      skipBusinessError: true,
+      skipErrorHandler: true,
+    }
+  )
+  return requireAssistantData(response.data, 'Unable to load task progress')
+}
+
+export async function getAssistantNewUserGift(): Promise<AssistantNewUserGift | null> {
+  const response = await api.get<
+    AssistantAPIResponse<AssistantNewUserGift | null>
+  >('/api/assistant/new-user-gift', {
+    disableDuplicate: true,
+    skipBusinessError: true,
+    skipErrorHandler: true,
+  })
+  return requireAssistantData(response.data, 'Unable to load welcome gift')
+}
+
+export async function claimAssistantNewUserGift(): Promise<{
+  gift: AssistantNewUserGift
+  already_claimed: boolean
+}> {
+  const response = await api.post<
+    AssistantAPIResponse<{
+      gift: AssistantNewUserGift
+      already_claimed: boolean
+    }>
+  >('/api/assistant/new-user-gift/claim', undefined, {
+    skipBusinessError: true,
+    skipErrorHandler: true,
+  })
+  return requireAssistantData(response.data, 'Unable to claim welcome gift')
 }
 
 export async function revealAssistantPrivateCard(id: string): Promise<string> {
@@ -705,11 +884,15 @@ export async function revealAssistantPrivateCard(id: string): Promise<string> {
 
 export async function getAssistantConversationHistory(
   archived = false,
-  ownerUserId?: number
+  ownerUserId?: number,
+  limit?: number
 ): Promise<AssistantConversationHistory> {
-  const params: { archived?: true; user_id?: number } = {}
+  const params: { archived?: true; user_id?: number; limit?: number } = {}
   if (archived) params.archived = true
   if (ownerUserId !== undefined) params.user_id = ownerUserId
+  if (typeof limit === 'number' && Number.isSafeInteger(limit) && limit > 0) {
+    params.limit = Math.min(limit, 100)
+  }
   const response = await api.get<
     AssistantAPIResponse<AssistantConversationHistory>
   >('/api/assistant/conversations', {

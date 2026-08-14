@@ -1,7 +1,6 @@
 package claude
 
 import (
-	"io"
 	"net/http"
 	"strings"
 
@@ -275,7 +274,7 @@ func ClaudeHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayI
 		ResponseText: strings.Builder{},
 		Usage:        &dto.Usage{},
 	}
-	responseBody, err := io.ReadAll(resp.Body)
+	responseBody, err := common.ReadResponseBody(resp)
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeBadResponseBody)
 	}

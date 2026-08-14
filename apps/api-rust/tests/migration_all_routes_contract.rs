@@ -87,7 +87,7 @@ const TEST_INSTANCE_COMPOSED_MODULES: &[(&str, &str)] = &[
 /// Some migration modules provide a production dependency boundary rather
 /// than owning an HTTP route constructor. They still need a direct integration
 /// test so they cannot silently disappear from the migration inventory.
-const ADAPTER_ONLY_MODULES: &[&str] = &["relay_anthropic_gemini_postgres"];
+const ADAPTER_ONLY_MODULES: &[&str] = &["relay_anthropic_gemini_postgres", "sse"];
 
 #[test]
 fn every_migration_route_module_should_have_a_router_integration_test() {

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -130,12 +131,13 @@ func buildXunfeiAuthUrl(hostUrl string, apiKey, apiSecret string) string {
 
 func xunfeiStreamHandler(c *gin.Context, textRequest dto.GeneralOpenAIRequest, appId string, apiSecret string, apiKey string) (*dto.Usage, *types.NewAPIError) {
 	domain, authUrl := getXunfeiAuthUrl(c, apiKey, apiSecret, textRequest.Model)
-	dataChan, stopChan, err := xunfeiMakeRequest(textRequest, domain, authUrl, appId)
+	dataChan, doneChan, err := xunfeiMakeRequest(c, textRequest, domain, authUrl, appId)
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeDoRequestFailed)
 	}
 	helper.SetEventStreamHeaders(c)
 	var usage dto.Usage
+	var responseErr error
 	c.Stream(func(w io.Writer) bool {
 		select {
 		case xunfeiResponse := <-dataChan:
@@ -150,17 +152,22 @@ func xunfeiStreamHandler(c *gin.Context, textRequest dto.GeneralOpenAIRequest, a
 			}
 			c.Render(-1, common.CustomEvent{Data: "data: " + string(jsonResponse)})
 			return true
-		case <-stopChan:
-			c.Render(-1, common.CustomEvent{Data: "data: [DONE]"})
+		case responseErr = <-doneChan:
+			if responseErr == nil {
+				c.Render(-1, common.CustomEvent{Data: "data: [DONE]"})
+			}
 			return false
 		}
 	})
+	if responseErr != nil {
+		return nil, types.NewError(responseErr, types.ErrorCodeBadResponseBody)
+	}
 	return &usage, nil
 }
 
 func xunfeiHandler(c *gin.Context, textRequest dto.GeneralOpenAIRequest, appId string, apiSecret string, apiKey string) (*dto.Usage, *types.NewAPIError) {
 	domain, authUrl := getXunfeiAuthUrl(c, apiKey, apiSecret, textRequest.Model)
-	dataChan, stopChan, err := xunfeiMakeRequest(textRequest, domain, authUrl, appId)
+	dataChan, doneChan, err := xunfeiMakeRequest(c, textRequest, domain, authUrl, appId)
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeDoRequestFailed)
 	}
@@ -178,7 +185,11 @@ func xunfeiHandler(c *gin.Context, textRequest dto.GeneralOpenAIRequest, appId s
 			usage.PromptTokens += xunfeiResponse.Payload.Usage.Text.PromptTokens
 			usage.CompletionTokens += xunfeiResponse.Payload.Usage.Text.CompletionTokens
 			usage.TotalTokens += xunfeiResponse.Payload.Usage.Text.TotalTokens
-		case stop = <-stopChan:
+		case responseErr := <-doneChan:
+			if responseErr != nil {
+				return nil, types.NewError(responseErr, types.ErrorCodeBadResponseBody)
+			}
+			stop = true
 		}
 	}
 	if len(xunfeiResponse.Payload.Choices.Text) == 0 {
@@ -200,7 +211,7 @@ func xunfeiHandler(c *gin.Context, textRequest dto.GeneralOpenAIRequest, appId s
 	return &usage, nil
 }
 
-func xunfeiMakeRequest(textRequest dto.GeneralOpenAIRequest, domain, authUrl, appId string) (chan XunfeiChatResponse, chan bool, error) {
+func xunfeiMakeRequest(c *gin.Context, textRequest dto.GeneralOpenAIRequest, domain, authUrl, appId string) (chan XunfeiChatResponse, chan error, error) {
 	d := websocket.Dialer{
 		HandshakeTimeout: 5 * time.Second,
 	}
@@ -208,6 +219,11 @@ func xunfeiMakeRequest(textRequest dto.GeneralOpenAIRequest, domain, authUrl, ap
 	if err != nil || resp.StatusCode != 101 {
 		return nil, nil, err
 	}
+	responseByteLimit := int64(common.GetContextKeyInt(c, constant.ContextKeyResponseByteLimit))
+	if responseByteLimit <= 0 {
+		responseByteLimit = common.ResponseBodyLimit()
+	}
+	conn.SetReadLimit(responseByteLimit)
 
 	data := requestOpenAI2Xunfei(textRequest, appId, domain)
 	err = conn.WriteJSON(data)
@@ -216,21 +232,36 @@ func xunfeiMakeRequest(textRequest dto.GeneralOpenAIRequest, domain, authUrl, ap
 	}
 
 	dataChan := make(chan XunfeiChatResponse)
-	stopChan := make(chan bool)
+	doneChan := make(chan error, 1)
 	go func() {
+		var responseErr error
 		defer func() {
-			conn.Close()
+			_ = conn.Close()
+			doneChan <- responseErr
 		}()
+		remaining := responseByteLimit
 		for {
-			_, msg, err := conn.ReadMessage()
-			if err != nil {
-				common.SysLog("error reading stream response: " + err.Error())
+			if remaining <= 0 {
+				responseErr = common.ErrLimitExceeded
 				break
 			}
+			conn.SetReadLimit(remaining)
+			_, msg, err := conn.ReadMessage()
+			if err != nil {
+				if errors.Is(err, websocket.ErrReadLimit) {
+					responseErr = common.ErrLimitExceeded
+				} else {
+					responseErr = fmt.Errorf("read websocket response: %w", err)
+				}
+				common.SysLog("error reading stream response: " + responseErr.Error())
+				break
+			}
+			remaining -= int64(len(msg))
 			var response XunfeiChatResponse
 			err = json.Unmarshal(msg, &response)
 			if err != nil {
-				common.SysLog("error unmarshalling stream response: " + err.Error())
+				responseErr = fmt.Errorf("unmarshal websocket response: %w", err)
+				common.SysLog("error unmarshalling stream response: " + responseErr.Error())
 				break
 			}
 			dataChan <- response
@@ -241,10 +272,9 @@ func xunfeiMakeRequest(textRequest dto.GeneralOpenAIRequest, domain, authUrl, ap
 				break
 			}
 		}
-		stopChan <- true
 	}()
 
-	return dataChan, stopChan, nil
+	return dataChan, doneChan, nil
 }
 
 func apiVersion2domain(apiVersion string) string {

@@ -1,3 +1,7 @@
+// The public structured error retains protocol/path metadata by value. Boxing
+// it would be an API-breaking representation change across every converter.
+#![allow(clippy::result_large_err)]
+
 //! Typed conversions for OpenAI Chat Completions and OpenAI Responses.
 //!
 //! Legacy provenance:

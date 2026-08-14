@@ -34,7 +34,12 @@ func setupManageUserTestDB(t *testing.T) *gorm.DB {
 	model.DB, model.LOG_DB = db, db
 	require.NoError(t, db.AutoMigrate(
 		&model.User{}, &model.UserSession{}, &model.Log{}, &model.CasbinRule{}, &model.AuthzRole{},
-		&model.TopUp{}, &model.DeveloperAccessRequest{},
+		&model.TopUp{}, &model.DeveloperAccessRequest{}, &model.UnifiedTodoRead{},
+		&model.AccountActionRequest{}, &model.L1OnboardingTodo{}, &model.AdvancedSecurityEvent{},
+		&model.AssistantLead{}, &model.AssistantUserProfile{}, &model.AssistantMemory{},
+		&model.PromptConversionRef{}, &model.PromptConversationRef{}, &model.AssistantConversation{}, &model.AssistantHistoryMessage{},
+		&model.AssistantSecureCard{}, &model.AssistantSecurityIncident{},
+		&model.AssistantNewUserGift{},
 	))
 
 	t.Cleanup(func() {
@@ -208,9 +213,10 @@ func TestManageUserTrustLevelL0ClearsApprovedDeveloperAccessAndAllowsReapproval(
 	latestRequest := performDeveloperAccessRequest(t, user.Id)
 	assert.Equal(t, model.DeveloperAccessRequestPending, latestRequest["status"])
 	assert.NotEqual(t, model.DeveloperAccessRequestApproved, latestRequest["status"])
-	var history model.DeveloperAccessRequest
-	require.NoError(t, db.First(&history, approved.Id).Error)
-	assert.Equal(t, model.DeveloperAccessRequestApproved, history.Status)
+	assert.Equal(t, approved.Id, int(latestRequest["id"].(float64)))
+	var requestCount int64
+	require.NoError(t, db.Model(&model.DeveloperAccessRequest{}).Where("user_id = ?", user.Id).Count(&requestCount).Error)
+	assert.EqualValues(t, 1, requestCount)
 
 	reopened, err := model.SubmitAssistantDeveloperAccessRecommendation(
 		user.Id,
@@ -283,9 +289,10 @@ func TestManageUserResetOnboardingToL0(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, latestRequest)
 	assert.Equal(t, model.DeveloperAccessRequestPending, latestRequest.Status)
-	var historicalRequest model.DeveloperAccessRequest
-	require.NoError(t, db.First(&historicalRequest, approvedRequest.Id).Error)
-	assert.Equal(t, model.DeveloperAccessRequestApproved, historicalRequest.Status)
+	assert.Equal(t, approvedRequest.Id, latestRequest.Id)
+	var requestCount int64
+	require.NoError(t, db.Model(&model.DeveloperAccessRequest{}).Where("user_id = ?", user.Id).Count(&requestCount).Error)
+	assert.EqualValues(t, 1, requestCount)
 	trust, err := model.GetTrustLevelInfoForUser(&updated)
 	require.NoError(t, err)
 	assert.Equal(t, model.TrustLevelMinUser, trust.Level)

@@ -140,6 +140,14 @@ func InitOptionMap() {
 	common.OptionMap[setting.AssistantSearchAPIKeyOptionKey] = assistantSettings.SearchAPIKey
 	common.OptionMap[setting.AssistantSearchMCPToolOptionKey] = assistantSettings.SearchMCPTool
 	common.OptionMap[setting.AssistantSkillsOptionKey] = assistantSettings.Skills
+	common.OptionMap[setting.AssistantReviewEnabledOptionKey] = strconv.FormatBool(assistantSettings.ReviewEnabled)
+	common.OptionMap[setting.AssistantReviewWindowDaysOptionKey] = strconv.Itoa(assistantSettings.ReviewWindowDays)
+	common.OptionMap[setting.AssistantReviewIntervalHoursOptionKey] = strconv.Itoa(assistantSettings.ReviewIntervalHours)
+	common.OptionMap[setting.AssistantRetentionEnabledOptionKey] = strconv.FormatBool(assistantSettings.RetentionEnabled)
+	common.OptionMap[setting.AssistantActiveRetentionDaysOptionKey] = strconv.Itoa(assistantSettings.ActiveRetentionDays)
+	common.OptionMap[setting.AssistantArchivedRetentionDaysOptionKey] = strconv.Itoa(assistantSettings.ArchivedRetentionDays)
+	common.OptionMap[setting.AssistantSecurityRetentionDaysOptionKey] = strconv.Itoa(assistantSettings.SecurityRetentionDays)
+	common.OptionMap[setting.AssistantRetentionIntervalHoursOptionKey] = strconv.Itoa(assistantSettings.RetentionIntervalHours)
 	common.OptionMap["AutoGroups"] = setting.AutoGroups2JsonString()
 	common.OptionMap["DefaultUseAutoGroup"] = strconv.FormatBool(setting.DefaultUseAutoGroup)
 	common.OptionMap["MaxTokenAutoGroups"] = strconv.Itoa(setting.GetMaxTokenAutoGroups())
@@ -277,12 +285,16 @@ func UpdateOption(key string, value string) error {
 		Key: key,
 	}
 	// https://gorm.io/docs/update.html#Save-All-Fields
-	DB.FirstOrCreate(&option, Option{Key: key})
+	if err := DB.FirstOrCreate(&option, Option{Key: key}).Error; err != nil {
+		return err
+	}
 	option.Value = value
 	// Save is a combination function.
 	// If save value does not contain primary key, it will execute Create,
 	// otherwise it will execute Update (with all fields).
-	DB.Save(&option)
+	if err := DB.Save(&option).Error; err != nil {
+		return err
+	}
 	// Update OptionMap
 	return updateOptionMap(key, value)
 }
@@ -520,6 +532,10 @@ func updateOptionMap(key string, value string) (err error) {
 			setting.SetAssistantAgentLoopEnabled(boolValue)
 		case setting.AssistantCacheEnabledOptionKey:
 			setting.SetAssistantCacheEnabled(boolValue)
+		case setting.AssistantReviewEnabledOptionKey:
+			setting.SetAssistantReviewEnabled(boolValue)
+		case setting.AssistantRetentionEnabledOptionKey:
+			setting.SetAssistantRetentionEnabled(boolValue)
 		}
 	}
 	switch key {
@@ -568,6 +584,18 @@ func updateOptionMap(key string, value string) (err error) {
 		err = setting.UpdateAssistantSearchMCPTool(value)
 	case setting.AssistantSkillsOptionKey:
 		err = setting.UpdateAssistantSkills(value)
+	case setting.AssistantReviewWindowDaysOptionKey:
+		err = setting.UpdateAssistantReviewWindowDays(value)
+	case setting.AssistantReviewIntervalHoursOptionKey:
+		err = setting.UpdateAssistantReviewIntervalHours(value)
+	case setting.AssistantActiveRetentionDaysOptionKey:
+		err = setting.UpdateAssistantActiveRetentionDays(value)
+	case setting.AssistantArchivedRetentionDaysOptionKey:
+		err = setting.UpdateAssistantArchivedRetentionDays(value)
+	case setting.AssistantSecurityRetentionDaysOptionKey:
+		err = setting.UpdateAssistantSecurityRetentionDays(value)
+	case setting.AssistantRetentionIntervalHoursOptionKey:
+		err = setting.UpdateAssistantRetentionIntervalHours(value)
 	case "AutoGroups":
 		err = setting.UpdateAutoGroupsByJsonString(value)
 	case "MaxTokenAutoGroups":

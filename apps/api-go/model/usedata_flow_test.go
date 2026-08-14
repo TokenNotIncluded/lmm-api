@@ -1,6 +1,7 @@
 package model
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -190,4 +191,55 @@ func TestLogQuotaDataSplitsRowsByUseGroupTokenChannelAndNode(t *testing.T) {
 	require.Equal(t, 60, rows[0].TokenUsed)
 	require.Equal(t, "default", rows[1].UseGroup)
 	require.Equal(t, 25, rows[1].Quota)
+}
+
+func TestQuotaDataMergeIsBoundedAndStillAggregatesKnownKeys(t *testing.T) {
+	cache := make(map[string]*QuotaData)
+	first := &QuotaData{UserID: 1, Username: "alice", ModelName: "model-a", Count: 1, Quota: 10, TokenUsed: 2}
+	second := &QuotaData{UserID: 2, Username: "bob", ModelName: "model-b", Count: 1}
+	third := &QuotaData{UserID: 3, Username: "carol", ModelName: "model-c", Count: 1}
+
+	require.True(t, mergeQuotaData(cache, first, 2))
+	require.True(t, mergeQuotaData(cache, second, 2))
+	require.True(t, mergeQuotaData(cache, &QuotaData{UserID: 1, Username: "alice", ModelName: "model-a", Count: 2, Quota: 5, TokenUsed: 3}, 2))
+	require.False(t, mergeQuotaData(cache, third, 2))
+	require.Len(t, cache, 2)
+	require.Equal(t, 3, cache[quotaDataKey(first)].Count)
+	require.Equal(t, 15, cache[quotaDataKey(first)].Quota)
+	require.Equal(t, 5, cache[quotaDataKey(first)].TokenUsed)
+}
+
+func TestQuotaDataConcurrentFlushPreservesCounts(t *testing.T) {
+	truncateTables(t)
+	CacheQuotaDataLock.Lock()
+	CacheQuotaData = make(map[string]*QuotaData)
+	quotaDataDropped = 0
+	CacheQuotaDataLock.Unlock()
+
+	var workers sync.WaitGroup
+	for worker := 0; worker < 8; worker++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for index := 0; index < 100; index++ {
+				LogQuotaData(QuotaDataLogParams{
+					UserID: 1, Username: "alice", ModelName: "model-a", CreatedAt: 3601,
+					UseGroup: "default", TokenID: 1, ChannelID: 1, NodeName: "node-a", Quota: 1, TokenUsed: 1,
+				})
+			}
+		}()
+	}
+	for range 4 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			SaveQuotaDataCache()
+		}()
+	}
+	workers.Wait()
+	SaveQuotaDataCache()
+
+	var count int64
+	require.NoError(t, DB.Model(&QuotaData{}).Select("COALESCE(SUM(count), 0)").Scan(&count).Error)
+	require.Equal(t, int64(800), count)
 }

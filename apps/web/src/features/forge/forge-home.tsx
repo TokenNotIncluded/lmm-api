@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { ArrowRight01Icon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
+import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { type FormEvent, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -29,6 +30,7 @@ import {
   InputGroupButton,
   InputGroupInput,
 } from '@/components/ui/input-group'
+import { getAssistantPreConversationPresets } from '@/features/assistant/api'
 import { requestAssistantSend } from '@/features/assistant/assistant-events'
 import { redactAssistantMessageForRequest } from '@/features/assistant/assistant-message-safety'
 import { getAssistantPromptValidation } from '@/features/assistant/assistant-prompt-validation'
@@ -38,6 +40,7 @@ import { useAuthStore } from '@/stores/auth-store'
 
 import { ChallengeList } from './challenge-list'
 import { ForgePublicShell } from './forge-public-shell'
+import { useTypewriterPlaceholder } from './use-typewriter-placeholder'
 
 export function ForgeHome() {
   const { t } = useTranslation()
@@ -45,8 +48,21 @@ export function ForgeHome() {
   const user = useAuthStore((state) => state.auth.user)
   const { status } = useStatus()
   const [message, setMessage] = useState('')
+  const [messageFocused, setMessageFocused] = useState(false)
   const assistantEnabled = status?.assistant?.enabled !== false
   const messageInvalid = getAssistantPromptValidation(message).invalid
+  const preConversationPresetsQuery = useQuery({
+    queryKey: ['assistant-pre-conversation-presets'],
+    queryFn: getAssistantPreConversationPresets,
+    enabled: assistantEnabled,
+    staleTime: 5 * 60_000,
+    retry: false,
+  })
+  const animatedPlaceholder = useTypewriterPlaceholder(
+    preConversationPresetsQuery.data?.presets.map((preset) => preset.prompt) ??
+      [],
+    message.length === 0 && !messageFocused
+  )
 
   const submitMessage = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
@@ -70,24 +86,24 @@ export function ForgeHome() {
   }
 
   return (
-    <ForgePublicShell minimalNav>
+    <ForgePublicShell>
       <main>
         <section
           aria-labelledby='forge-home-title'
           className='border-border border-b'
         >
-          <div className='mx-auto grid min-h-[min(46rem,calc(100svh-5rem))] max-w-5xl content-center gap-12 px-5 py-16 md:px-10 md:py-24'>
+          <div className='mx-auto grid max-w-5xl content-center gap-12 px-6 py-14 md:min-h-[min(46rem,calc(100dvh-5rem))] md:px-10 md:py-24'>
             <div className='max-w-3xl'>
               <p className='text-muted-foreground mb-5 text-sm'>
                 {t('Developer-friendly AI gateway')}
               </p>
               <h1
                 id='forge-home-title'
-                className='mb-7 max-w-3xl font-serif text-5xl leading-[1.02] font-normal tracking-tight md:text-7xl'
+                className='mb-7 max-w-3xl font-serif text-4xl leading-[1.02] font-normal tracking-tight sm:text-5xl md:text-7xl'
               >
                 LMM Forge
               </h1>
-              <p className='text-muted-foreground max-w-2xl text-lg leading-8 md:text-xl'>
+              <p className='text-muted-foreground max-w-2xl text-base leading-7 sm:text-lg sm:leading-8 md:text-xl'>
                 {t(
                   'A semi-public-interest AI gateway for high-quality, transparent access.'
                 )}
@@ -103,13 +119,17 @@ export function ForgeHome() {
               <label className='sr-only' htmlFor='forge-home-message'>
                 {t('Tell us what you want to do')}
               </label>
-              <InputGroup className='has-[[data-slot=input-group-control]:focus-visible]:border-foreground/50 h-12 rounded-sm has-[[data-slot=input-group-control]:focus-visible]:ring-0'>
+              <InputGroup className='has-[[data-slot=input-group-control]:focus-visible]:border-foreground/50 h-12 rounded-xl has-[[data-slot=input-group-control]:focus-visible]:ring-0'>
                 <InputGroupInput
                   id='forge-home-message'
                   value={message}
                   onChange={(event) => setMessage(event.target.value)}
+                  onFocus={() => setMessageFocused(true)}
+                  onBlur={() => setMessageFocused(false)}
                   className='focus-visible:!outline-none'
-                  placeholder={t('Describe what you need...')}
+                  placeholder={
+                    animatedPlaceholder || t('Describe what you need...')
+                  }
                   maxLength={4000}
                 />
                 <InputGroupAddon align='inline-end' className='pr-1'>
@@ -117,7 +137,7 @@ export function ForgeHome() {
                     type='submit'
                     variant='default'
                     size='sm'
-                    className='h-10 rounded-sm px-3'
+                    className='h-10 rounded-lg px-3'
                     disabled={
                       !message.trim() || messageInvalid || !assistantEnabled
                     }

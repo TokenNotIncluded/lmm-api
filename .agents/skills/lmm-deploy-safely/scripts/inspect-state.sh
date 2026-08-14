@@ -119,12 +119,106 @@ read_backend_selection() {
   printf '%s\n' "${found:-unknown}"
 }
 
+read_kv_token() {
+  local file=$1 key=$2 token value=''
+  local found=false
+
+  while IFS= read -r token; do
+    [[ $token == "$key="* ]] || continue
+    [[ $found == false ]] || return 1
+    found=true
+    value=${token#*=}
+  done < <(tr '[:space:]' '\n' < "$file")
+  [[ $value =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$ ]] || return 1
+  printf '%s\n' "$value"
+}
+
+read_cutover_state() {
+  local engine=$1
+  local boundary journal verification
+  local file
+  local boundary_transaction boundary_schema boundary_revision
+  local journal_transaction journal_schema journal_revision journal_phase
+  local verify_transaction verify_schema
+
+  [[ $engine == postgres ]] || {
+    printf 'not_required\n'
+    return
+  }
+  boundary=$(rooted /var/lib/lmm-api-cutover/pg-write-boundary)
+  journal=$(rooted /var/lib/lmm-api-cutover/cutover-journal)
+  verification=$(rooted /var/log/lmm-api-cutover/post-cutover-verify.json)
+  for file in "$boundary" "$journal" "$verification"; do
+    [[ -f $file && ! -L $file ]] || {
+      printf 'missing\n'
+      return
+    }
+  done
+  command -v jq >/dev/null 2>&1 || {
+    printf 'unverified\n'
+    return
+  }
+
+  boundary_transaction=$(read_kv_token "$boundary" transaction) || {
+    printf 'invalid\n'
+    return
+  }
+  boundary_schema=$(read_kv_token "$boundary" schema) || {
+    printf 'invalid\n'
+    return
+  }
+  boundary_revision=$(read_kv_token "$boundary" revision) || {
+    printf 'invalid\n'
+    return
+  }
+  journal_transaction=$(read_kv_token "$journal" transaction) || {
+    printf 'invalid\n'
+    return
+  }
+  journal_schema=$(read_kv_token "$journal" schema) || {
+    printf 'invalid\n'
+    return
+  }
+  journal_revision=$(read_kv_token "$journal" revision) || {
+    printf 'invalid\n'
+    return
+  }
+  journal_phase=$(read_kv_token "$journal" phase) || {
+    printf 'invalid\n'
+    return
+  }
+  verify_transaction=$(jq -er 'select(
+      .status == "verified" and
+      .database_engine == "postgresql" and
+      .historical_migration_verified == true
+    ) | .transaction | strings' "$verification" 2>/dev/null) || {
+    printf 'invalid\n'
+    return
+  }
+  verify_schema=$(jq -er '.schema | strings' "$verification" 2>/dev/null) || {
+    printf 'invalid\n'
+    return
+  }
+
+  if [[ $journal_phase == COMPLETE &&
+        $boundary_transaction == "$journal_transaction" &&
+        $boundary_transaction == "$verify_transaction" &&
+        $boundary_schema == "$journal_schema" &&
+        $boundary_schema == "$verify_schema" &&
+        $boundary_revision == "$journal_revision" ]]; then
+    printf 'verified\n'
+  else
+    printf 'invalid\n'
+  fi
+}
+
 classify_database() {
   local file line value engine
   local seen_sqlite=false
   local seen_postgres=false
   local seen_mysql=false
   local -a files=(
+    "$(rooted /etc/lmm-api-go/lmm-api-go.env)"
     "$(rooted /etc/lmm-api/lmm-api.env)"
     "$(rooted /etc/lmm-api-rs/lmm-api.env)"
     "$(rooted /etc/lmm-api-rs/config.env)"
@@ -280,7 +374,13 @@ esac
 
 root_prefix=$(validate_root_prefix "$root_prefix")
 if [[ -z $observed_host ]]; then
-  observed_host=$(hostname -s)
+  if command -v hostname >/dev/null 2>&1; then
+    observed_host=$(hostname -s)
+  elif [[ -f $(rooted /etc/hostname) ]]; then
+    observed_host=$(<"$(rooted /etc/hostname)")
+  else
+    die 'cannot determine observed hostname'
+  fi
 fi
 validate_host "$observed_host"
 if [[ -n $expected_host ]]; then
@@ -299,23 +399,29 @@ backend_selection=$(read_backend_selection "$(rooted /etc/lmm-api/backend.conf)"
 package_id=$(package_identity)
 service=$(service_state)
 frontend_release=$(safe_release_identity "$(rooted /srv/lmm-api-frontend/current)")
+cutover_state=$(read_cutover_state "$db_engine")
 
 declare -a keys=(
   role observed_host expected_host host_match db_engine backend_selection package_identity service_state
   launcher_present selector_present backend_config_present app_config_present service_unit_present
   go_backend_present rust_backend_present frontend_root_present frontend_current_present
-  frontend_release deploy_work_root_present staging_root_present backup_root_present
+  frontend_release cutover_state pg_write_boundary_present cutover_journal_present
+  post_cutover_verify_present deploy_work_root_present staging_root_present backup_root_present
 )
 declare -a values=(
   "$role" "$observed_host" "${expected_host:-none}" "$host_match" "$db_engine" "$backend_selection" "$package_id" "$service"
-  "$(present "$(rooted /usr/bin/lmm-api)")" "$(present "$(rooted /usr/bin/lmm-api-select)")" \
-  "$(present "$(rooted /etc/lmm-api/backend.conf)")" "$(present "$(rooted /etc/lmm-api/lmm-api.env)")" \
+  "$(present "$(rooted /usr/bin/lmm-api-go)")" "$(present "$(rooted /usr/bin/lmm-api-select)")" \
+  "$(present "$(rooted /etc/lmm-api/backend.conf)")" "$(present "$(rooted /etc/lmm-api-go/lmm-api-go.env)")" \
   "$(present "$(rooted /usr/lib/systemd/system/lmm-api.service)")" \
-  "$(present "$(rooted /usr/lib/lmm-api/backends/go/lmm-api)")" \
+  "$(present "$(rooted /usr/bin/lmm-api)")" \
   "$(present "$(rooted /usr/lib/lmm-api/backends/rs/lmm-api-rs)")" \
   "$(present "$(rooted /srv/lmm-api-frontend)")" "$(present "$(rooted /srv/lmm-api-frontend/current)")" \
-  "$frontend_release" "$(present "$(rooted /var/lib/lmm-api/deploy-work)")" \
-  "$(present "$(rooted /var/lib/lmm-api/deploy-staging)")" "$(present "$(rooted /var/lib/lmm-api/deploy-backups)")"
+  "$frontend_release" "$cutover_state" \
+  "$(present "$(rooted /var/lib/lmm-api-cutover/pg-write-boundary)")" \
+  "$(present "$(rooted /var/lib/lmm-api-cutover/cutover-journal)")" \
+  "$(present "$(rooted /var/log/lmm-api-cutover/post-cutover-verify.json)")" \
+  "$(present "$(rooted /var/lib/lmm-api-go/deploy-work)")" \
+  "$(present "$(rooted /var/lib/lmm-api-go/deploy-staging)")" "$(present "$(rooted /var/lib/lmm-api-go/deploy-backups)")"
 )
 
 if [[ $format == kv ]]; then
@@ -333,3 +439,4 @@ fi
 
 [[ $host_match == true ]] || exit 3
 [[ $db_engine != disagreement ]] || exit 4
+[[ $cutover_state == verified || $cutover_state == not_required ]] || exit 4

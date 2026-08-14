@@ -979,6 +979,20 @@ For commercial licensing, please contact support@quantumnous.com
   outline-offset: 3px;
 }
 
+.assistant-prompt-input:has([data-slot='input-group-control']:focus-visible) {
+  outline: 2px solid var(--console-clay, var(--forge-clay-light));
+  outline-offset: 3px;
+}
+
+.dark
+  .assistant-prompt-input:has([data-slot='input-group-control']:focus-visible) {
+  outline-color: var(--console-clay, var(--forge-clay-dark));
+}
+
+.assistant-prompt-input [data-slot='input-group-control']:focus-visible {
+  outline: none;
+}
+
 .console-editorial .console-info-panel {
   border: 1px solid color-mix(in oklch, var(--console-info) 44%, transparent);
   background: color-mix(in oklch, var(--console-info) 14%, var(--background));
@@ -1099,6 +1113,22 @@ For commercial licensing, please contact support@quantumnous.com
   ) {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
+}
+
+/* The assistant header is intentionally translucent. Keep its blur bounded
+ * and lower on narrow screens so the fixed surface remains inexpensive. */
+@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  .console-editorial .assistant-glass-surface {
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+  }
+
+  @media (min-width: 640px) {
+    .console-editorial .assistant-glass-surface {
+      -webkit-backdrop-filter: blur(18px);
+      backdrop-filter: blur(18px);
+    }
+  }
 }
 
 .setup-editorial {

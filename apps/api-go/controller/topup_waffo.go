@@ -3,7 +3,6 @@ package controller
 import (
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -356,7 +355,7 @@ func WaffoWebhook(c *gin.Context) {
 		return
 	}
 
-	bodyBytes, err := io.ReadAll(c.Request.Body)
+	bodyBytes, err := common.ReadAllLimit(c.Request.Body, common.GetAnonymousRequestBodyLimitBytes())
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo webhook 读取请求体失败 path=%q client_ip=%s error=%q", c.Request.RequestURI, c.ClientIP(), err.Error()))
 		c.AbortWithStatus(http.StatusBadRequest)

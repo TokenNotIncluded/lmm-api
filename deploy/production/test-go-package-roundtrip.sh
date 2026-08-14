@@ -98,7 +98,9 @@ if "${query_args[@]}" -Q lmm-api >/dev/null 2>&1; then
   exit 1
 fi
 [[ $("${query_args[@]}" -Q lmm-api-go 2>/dev/null) == "lmm-api-go $candidate_version-1" ]]
-[[ -x $pacman_root/usr/bin/lmm-api-go && ! -e $pacman_root/usr/bin/lmm-api ]]
+[[ -x $pacman_root/usr/bin/lmm-api-go ]]
+[[ -L $pacman_root/usr/bin/lmm-api ]]
+[[ $(readlink -- "$pacman_root/usr/bin/lmm-api") == lmm-api-go ]]
 [[ $(stat -c '%a' "$pacman_root/etc/lmm-api-go") == 700 ]]
 [[ $(stat -c '%a' "$pacman_root/etc/lmm-api-go/lmm-api-go.env") == 600 ]]
 

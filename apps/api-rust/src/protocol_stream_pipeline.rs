@@ -1180,11 +1180,10 @@ impl StreamSession {
         &mut self,
         event: &CanonicalStreamEvent,
     ) -> Result<(), TypedStreamFailure> {
-        let result = match self.state.as_mut() {
+        match self.state.as_mut() {
             Some(state) => state.apply(event),
             None => Err(TypedStreamFailure::InvalidTransition),
-        };
-        result
+        }
     }
 
     fn stage_failure(&self, failure: TypedStreamFailure) -> StreamProcessError {

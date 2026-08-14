@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -181,7 +180,7 @@ func StripeWebhook(c *gin.Context) {
 		return
 	}
 
-	payload, err := io.ReadAll(c.Request.Body)
+	payload, err := common.ReadAllLimit(c.Request.Body, common.GetAnonymousRequestBodyLimitBytes())
 	if err != nil {
 		logger.LogError(ctx, fmt.Sprintf("Stripe webhook 读取请求体失败 path=%q client_ip=%s error=%q", c.Request.RequestURI, c.ClientIP(), err.Error()))
 		c.AbortWithStatus(http.StatusServiceUnavailable)

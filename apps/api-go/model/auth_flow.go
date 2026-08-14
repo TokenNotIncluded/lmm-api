@@ -24,6 +24,7 @@ const (
 	AuthFlowPurposeTelegramAssertion = "telegram_assertion"
 	AuthFlowPurposeAssistantL1       = "assistant_l1_recommendation"
 	AuthFlowPurposeAssistantAdmin    = "assistant_admin_change"
+	AuthFlowPurposeAssistantKey      = "assistant_key_creation"
 	AuthFlowIntentLogin              = "login"
 	AuthFlowIntentBind               = "bind"
 	AuthFlowTokenBytes               = 32

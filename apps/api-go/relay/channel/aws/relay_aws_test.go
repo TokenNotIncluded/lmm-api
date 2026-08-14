@@ -12,9 +12,11 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	appconstant "github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream"
 	"github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream/eventstreamapi"
@@ -180,6 +182,32 @@ func TestDoAwsClientRequest_AppliesRuntimeHeaderOverrideToAnthropicBeta(t *testi
 	values, ok := anthropicBeta.([]any)
 	require.True(t, ok)
 	require.Equal(t, []any{"computer-use-2025-01-24"}, values)
+}
+
+func TestNewAwsClientAppliesResponseBudget(t *testing.T) {
+	service.InitHttpClient()
+	gin.SetMode(gin.TestMode)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusOK)
+		writer.(http.Flusher).Flush()
+		_, _ = io.WriteString(writer, "12345")
+	}))
+	defer server.Close()
+
+	ginContext := newAwsTestContext(httptest.NewRecorder(), context.Background())
+	common.SetContextKey(ginContext, appconstant.ContextKeyResponseByteLimit, 4)
+	info := newAwsTestRelayInfo()
+	info.ApiKey = "access-key|secret-key|us-east-1"
+	client, err := newAwsClient(ginContext, info)
+	require.NoError(t, err)
+	request, err := http.NewRequest(http.MethodGet, server.URL, nil)
+	require.NoError(t, err)
+
+	response, err := client.Options().HTTPClient.Do(request)
+	require.NoError(t, err)
+	body, err := io.ReadAll(response.Body)
+	assert.ErrorIs(t, err, common.ErrLimitExceeded)
+	assert.Equal(t, "1234", string(body))
 }
 
 func TestNewAwsInvokeContextInheritsParent(t *testing.T) {

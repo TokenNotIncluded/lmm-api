@@ -51,6 +51,7 @@ export const api = axios.create({
 
 const inFlightGet = new Map<string, Promise<unknown>>()
 const originalGet = api.get.bind(api)
+const refreshBeforeSeconds = 60
 
 api.get = ((url: string, config: ApiRequestConfig = {}) => {
   if (config.disableDuplicate) return originalGet(url, config)
@@ -141,8 +142,34 @@ api.interceptors.response.use(
   }
 )
 
-api.interceptors.request.use((config) => {
-  const accessToken = useAuthStore.getState().auth.accessToken
+api.interceptors.request.use(async (config) => {
+  let auth = useAuthStore.getState().auth
+  const now = Math.floor(Date.now() / 1000)
+  const needsRefresh =
+    !config.skipAuthRefresh &&
+    Boolean(auth.user && auth.session) &&
+    (!auth.accessToken ||
+      !auth.accessExpiresAt ||
+      auth.accessExpiresAt <= now + refreshBeforeSeconds)
+
+  if (needsRefresh) {
+    const outcome = await refreshAuthentication()
+    auth = useAuthStore.getState().auth
+    if (outcome.kind === 'anonymous' || outcome.kind === 'out_of_sync') {
+      redirectToSignIn()
+      throw new Error(t('Session expired!'))
+    }
+    if (
+      outcome.kind === 'transient_error' &&
+      (!auth.accessToken ||
+        !auth.accessExpiresAt ||
+        auth.accessExpiresAt <= now)
+    ) {
+      throw new Error(t('Request failed'), { cause: outcome.error })
+    }
+  }
+
+  const accessToken = auth.accessToken
   if (accessToken) {
     config.headers.Authorization = `Bearer ${accessToken}`
   }

@@ -2,7 +2,6 @@ package controller
 
 import (
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -19,7 +18,9 @@ import (
 )
 
 type WaffoPancakePayRequest struct {
-	Amount int64 `json:"amount"`
+	Amount           int64  `json:"amount"`
+	CheckoutRegion   string `json:"checkout_region"`
+	CheckoutLanguage string `json:"checkout_language"`
 }
 
 func RequestWaffoPancakeAmount(c *gin.Context) {
@@ -424,6 +425,8 @@ func RequestWaffoPancakePay(c *gin.Context) {
 		BuyerEmail:              getWaffoPancakeBuyerEmail(user),
 		ExpiresInSeconds:        &expiresInSeconds,
 		OrderMerchantExternalID: tradeNo,
+		CheckoutRegion:          req.CheckoutRegion,
+		CheckoutLanguage:        req.CheckoutLanguage,
 	})
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 创建结账会话失败 user_id=%d trade_no=%s error=%q", id, tradeNo, err.Error()))
@@ -467,7 +470,7 @@ func WaffoPancakeWebhook(c *gin.Context) {
 		return
 	}
 
-	bodyBytes, err := io.ReadAll(c.Request.Body)
+	bodyBytes, err := common.ReadAllLimit(c.Request.Body, common.GetAnonymousRequestBodyLimitBytes())
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake webhook 读取请求体失败 path=%q client_ip=%s error=%q", c.Request.RequestURI, c.ClientIP(), err.Error()))
 		c.String(http.StatusBadRequest, "bad request")

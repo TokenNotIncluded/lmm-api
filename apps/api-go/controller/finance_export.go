@@ -2,11 +2,12 @@ package controller
 
 import (
 	"archive/zip"
-	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -22,8 +23,8 @@ const (
 	// Keep a generous one-year upper bound while retaining a hard server-side
 	// limit. The UI accepts an exact datetime range; this bound prevents an
 	// accidental all-history export from exhausting the log database.
-	financeExportMaxWindow     = 365 * 24 * 60 * 60
-	financeExportMaxRows       = 200_000
+	financeExportMaxWindow = 365 * 24 * 60 * 60
+	financeExportMaxRows   = 200_000
 )
 
 // FinanceExport is deliberately an allowlisted projection. Never add a
@@ -403,10 +404,6 @@ func loadFinanceExportBundle(start, end int64) (financeExportBundle, error) {
 	return bundle, nil
 }
 
-func jsonFinanceFile(value any) ([]byte, error) {
-	return json.MarshalIndent(value, "", "  ")
-}
-
 func decodeFinanceOption(value string) any {
 	var decoded any
 	if err := json.Unmarshal([]byte(value), &decoded); err == nil {
@@ -453,151 +450,117 @@ func applyFinanceUserRatios(users []financeUserExport, options map[string]string
 	}
 }
 
-func financeExportFiles(bundle financeExportBundle) (map[string][]byte, error) {
-	manifest, err := jsonFinanceFile(bundle.Manifest)
-	if err != nil {
-		return nil, err
-	}
-	options, err := jsonFinanceFile(bundle.Options)
-	if err != nil {
-		return nil, err
-	}
-	modelPrices, err := jsonFinanceFile(map[string]any{
-		"model_prices":            decodeFinanceOption(bundle.Options["ModelPrice"]),
-		"model_ratios":            decodeFinanceOption(bundle.Options["ModelRatio"]),
-		"completion_ratios":       decodeFinanceOption(bundle.Options["CompletionRatio"]),
-		"cache_ratios":            decodeFinanceOption(bundle.Options["CacheRatio"]),
-		"create_cache_ratios":     decodeFinanceOption(bundle.Options["CreateCacheRatio"]),
-		"image_ratios":            decodeFinanceOption(bundle.Options["ImageRatio"]),
-		"audio_ratios":            decodeFinanceOption(bundle.Options["AudioRatio"]),
-		"audio_completion_ratios": decodeFinanceOption(bundle.Options["AudioCompletionRatio"]),
-		"tool_prices":             decodeFinanceOption(bundle.Options["tool_price_setting.prices"]),
-		"billing_modes":           decodeFinanceOption(bundle.Options["billing_setting.billing_mode"]),
-		"billing_expressions":     decodeFinanceOption(bundle.Options["billing_setting.billing_expr"]),
-	})
-	if err != nil {
-		return nil, err
-	}
-	effectivePricing, err := jsonFinanceFile(bundle.EffectivePricing)
-	if err != nil {
-		return nil, err
-	}
-	users, err := jsonFinanceFile(bundle.Users)
-	if err != nil {
-		return nil, err
-	}
-	channels, err := jsonFinanceFile(bundle.Channels)
-	if err != nil {
-		return nil, err
-	}
-	plans, err := jsonFinanceFile(bundle.Plans)
-	if err != nil {
-		return nil, err
-	}
-	topups, err := jsonFinanceFile(bundle.TopUps)
-	if err != nil {
-		return nil, err
-	}
-	orders, err := jsonFinanceFile(bundle.SubscriptionOrders)
-	if err != nil {
-		return nil, err
-	}
-	usage, err := jsonFinanceFile(bundle.Usage)
-	if err != nil {
-		return nil, err
-	}
-	ledger, err := jsonFinanceFile(bundle.BountyLedger)
-	if err != nil {
-		return nil, err
-	}
-	checkins, err := jsonFinanceFile(bundle.Checkins)
-	if err != nil {
-		return nil, err
-	}
-	redemptions, err := jsonFinanceFile(bundle.Redemptions)
-	if err != nil {
-		return nil, err
-	}
-	userSubscriptions, err := jsonFinanceFile(bundle.UserSubscriptions)
-	if err != nil {
-		return nil, err
-	}
-	return map[string][]byte{
-		"manifest.json":                manifest,
-		"financial-options.json":       options,
-		"model-prices-and-ratios.json": modelPrices,
-		"effective-model-pricing.json": effectivePricing,
-		"users-balances.json":          users,
-		"channels-pricing.json":        channels,
-		"subscription-plans.json":      plans,
-		"topups.json":                  topups,
-		"subscription-orders.json":     orders,
-		"usage-billing-records.json":   usage,
-		"bounty-ledger.json":           ledger,
-		"checkins.json":                checkins,
-		"redemptions.json":             redemptions,
-		"user-subscriptions.json":      userSubscriptions,
-	}, nil
+type financeDocument struct {
+	Name  string
+	Value any
 }
 
-func financeExportText(files map[string][]byte) []byte {
-	var buffer bytes.Buffer
-	buffer.WriteString("LMM Finance Analysis Export\n")
-	buffer.WriteString("========================================\n\n")
-	for _, name := range []string{
-		"manifest.json",
-		"financial-options.json",
-		"model-prices-and-ratios.json",
-		"effective-model-pricing.json",
-		"users-balances.json",
-		"channels-pricing.json",
-		"subscription-plans.json",
-		"topups.json",
-		"subscription-orders.json",
-		"usage-billing-records.json",
-		"bounty-ledger.json",
-		"checkins.json",
-		"redemptions.json",
-		"user-subscriptions.json",
-	} {
-		buffer.WriteString("## ")
-		buffer.WriteString(name)
-		buffer.WriteString("\n")
-		buffer.Write(files[name])
-		buffer.WriteString("\n\n")
+func financeDocuments(bundle financeExportBundle) []financeDocument {
+	return []financeDocument{
+		{Name: "manifest.json", Value: bundle.Manifest},
+		{Name: "financial-options.json", Value: bundle.Options},
+		{Name: "model-prices-and-ratios.json", Value: map[string]any{
+			"model_prices":            decodeFinanceOption(bundle.Options["ModelPrice"]),
+			"model_ratios":            decodeFinanceOption(bundle.Options["ModelRatio"]),
+			"completion_ratios":       decodeFinanceOption(bundle.Options["CompletionRatio"]),
+			"cache_ratios":            decodeFinanceOption(bundle.Options["CacheRatio"]),
+			"create_cache_ratios":     decodeFinanceOption(bundle.Options["CreateCacheRatio"]),
+			"image_ratios":            decodeFinanceOption(bundle.Options["ImageRatio"]),
+			"audio_ratios":            decodeFinanceOption(bundle.Options["AudioRatio"]),
+			"audio_completion_ratios": decodeFinanceOption(bundle.Options["AudioCompletionRatio"]),
+			"tool_prices":             decodeFinanceOption(bundle.Options["tool_price_setting.prices"]),
+			"billing_modes":           decodeFinanceOption(bundle.Options["billing_setting.billing_mode"]),
+			"billing_expressions":     decodeFinanceOption(bundle.Options["billing_setting.billing_expr"]),
+		}},
+		{Name: "effective-model-pricing.json", Value: bundle.EffectivePricing},
+		{Name: "users-balances.json", Value: bundle.Users},
+		{Name: "channels-pricing.json", Value: bundle.Channels},
+		{Name: "subscription-plans.json", Value: bundle.Plans},
+		{Name: "topups.json", Value: bundle.TopUps},
+		{Name: "subscription-orders.json", Value: bundle.SubscriptionOrders},
+		{Name: "usage-billing-records.json", Value: bundle.Usage},
+		{Name: "bounty-ledger.json", Value: bundle.BountyLedger},
+		{Name: "checkins.json", Value: bundle.Checkins},
+		{Name: "redemptions.json", Value: bundle.Redemptions},
+		{Name: "user-subscriptions.json", Value: bundle.UserSubscriptions},
 	}
-	return buffer.Bytes()
 }
 
-func writeFinanceZip(c *gin.Context, files map[string][]byte) error {
+func writeFinanceJSON(writer io.Writer, value any) error {
+	reflected := reflect.ValueOf(value)
+	if reflected.IsValid() && (reflected.Kind() == reflect.Slice || reflected.Kind() == reflect.Array) &&
+		!(reflected.Kind() == reflect.Slice && reflected.Type().Elem().Kind() == reflect.Uint8) {
+		if reflected.Kind() == reflect.Slice && reflected.IsNil() {
+			_, err := io.WriteString(writer, "null\n")
+			return err
+		}
+		return writeFinanceArray(writer, reflected)
+	}
+	encoder := json.NewEncoder(writer)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(value)
+}
+
+// writeFinanceArray streams one row at a time. encoding/json otherwise builds
+// the full slice in memory before its first write, which can duplicate a large
+// usage export inside the API process.
+func writeFinanceArray(writer io.Writer, rows reflect.Value) error {
+	if _, err := io.WriteString(writer, "["); err != nil {
+		return err
+	}
+	encoder := json.NewEncoder(writer)
+	for index := 0; index < rows.Len(); index++ {
+		separator := "\n"
+		if index > 0 {
+			separator = ",\n"
+		}
+		if _, err := io.WriteString(writer, separator); err != nil {
+			return err
+		}
+		if err := encoder.Encode(rows.Index(index).Interface()); err != nil {
+			return err
+		}
+	}
+	_, err := io.WriteString(writer, "]\n")
+	return err
+}
+
+func writeFinanceText(c *gin.Context, documents []financeDocument) error {
+	c.Header("Content-Type", "text/plain; charset=utf-8")
+	c.Header("Cache-Control", "no-store")
+	c.Header("X-Content-Type-Options", "nosniff")
+	c.Status(http.StatusOK)
+	if _, err := io.WriteString(c.Writer, "LMM Finance Analysis Export\n========================================\n\n"); err != nil {
+		return err
+	}
+	for _, document := range documents {
+		if _, err := io.WriteString(c.Writer, "## "+document.Name+"\n"); err != nil {
+			return err
+		}
+		if err := writeFinanceJSON(c.Writer, document.Value); err != nil {
+			return err
+		}
+		if _, err := io.WriteString(c.Writer, "\n"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeFinanceZip(c *gin.Context, documents []financeDocument) error {
 	filename := fmt.Sprintf("lmm-finance-export-%s.zip", time.Now().UTC().Format("20060102-150405"))
 	c.Header("Content-Type", "application/zip")
 	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	c.Header("Cache-Control", "no-store")
 	c.Header("X-Content-Type-Options", "nosniff")
 	writer := zip.NewWriter(c.Writer)
-	for _, name := range []string{
-		"manifest.json",
-		"financial-options.json",
-		"model-prices-and-ratios.json",
-		"effective-model-pricing.json",
-		"users-balances.json",
-		"channels-pricing.json",
-		"subscription-plans.json",
-		"topups.json",
-		"subscription-orders.json",
-		"usage-billing-records.json",
-		"bounty-ledger.json",
-		"checkins.json",
-		"redemptions.json",
-		"user-subscriptions.json",
-	} {
-		entry, err := writer.Create(name)
+	for _, document := range documents {
+		entry, err := writer.Create(document.Name)
 		if err != nil {
 			_ = writer.Close()
 			return err
 		}
-		if _, err := entry.Write(files[name]); err != nil {
+		if err := writeFinanceJSON(entry, document.Value); err != nil {
 			_ = writer.Close()
 			return err
 		}
@@ -623,11 +586,7 @@ func ExportFinancialData(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	files, err := financeExportFiles(bundle)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
+	documents := financeDocuments(bundle)
 	model.RecordOperationAuditLog(
 		c.GetInt("id"),
 		"Financial analysis export generated",
@@ -643,10 +602,10 @@ func ExportFinancialData(c *gin.Context) {
 		nil,
 	)
 	if format == "text" {
-		c.Data(http.StatusOK, "text/plain; charset=utf-8", financeExportText(files))
+		_ = writeFinanceText(c, documents)
 		return
 	}
-	if err := writeFinanceZip(c, files); err != nil {
+	if err := writeFinanceZip(c, documents); err != nil {
 		// Headers may already be committed; only log the failure instead of
 		// attempting to write a second JSON response.
 		return

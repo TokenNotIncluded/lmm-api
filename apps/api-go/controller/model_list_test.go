@@ -34,6 +34,18 @@ type userModelsResponse struct {
 	Data    []string `json:"data"`
 }
 
+func TestPublicPreviewModelIDsUseEnabledDefaultGroupModels(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	require.NoError(t, db.Create(&[]model.Ability{
+		{Group: "default", Model: "zeta-real-model", ChannelId: 1, Enabled: true},
+		{Group: "default", Model: "alpha-real-model", ChannelId: 2, Enabled: true},
+		{Group: "default", Model: "disabled-model", ChannelId: 3, Enabled: false},
+		{Group: "private", Model: "private-model", ChannelId: 4, Enabled: true},
+	}).Error)
+
+	require.Equal(t, []string{"alpha-real-model", "zeta-real-model"}, getPublicPreviewModelIDs())
+}
+
 func setupModelListControllerTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 

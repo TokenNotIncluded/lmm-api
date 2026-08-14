@@ -49,6 +49,20 @@ for (const key of [
     value: domWindow[key],
   })
 }
+Object.defineProperties(globalThis, {
+  requestAnimationFrame: {
+    configurable: true,
+    value: (callback: FrameRequestCallback) => setTimeout(() => callback(0), 0),
+  },
+  cancelAnimationFrame: {
+    configurable: true,
+    value: (handle: number) => clearTimeout(handle),
+  },
+  getComputedStyle: {
+    configurable: true,
+    value: domWindow.getComputedStyle.bind(domWindow),
+  },
+})
 
 const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')

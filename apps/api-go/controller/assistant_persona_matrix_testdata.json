@@ -6,9 +6,10 @@
       "username": "build-master",
       "email": "tech@example.com",
       "access_level": "L0",
-      "payment_methods_hidden": false
+      "payment_methods_hidden": false,
+      "interlocutor_assessed": true
     },
-    "message": "我技术很强，讨厌法币付款，想自建、看开源源码，先给我准确的 Base URL 和模型 ID。",
+    "message": "我技术很强，讨厌付款，不想使用法币支付，想自建、看开源源码，先给我准确的 Base URL 和模型 ID。",
     "expected": {
       "profile": "technical_cost_sensitive",
       "signals": ["cost_sensitive_technical_language", "l0_access"],
@@ -23,6 +24,11 @@
       "security": {
         "high_confidence_abuse": false,
         "authorized_security_test": false
+      },
+      "payment_offer_state": "none",
+      "tools": {
+        "allowed": ["get_service_facts", "calculate_math", "calculate_cost", "get_account_access", "get_l1_recommendation", "get_available_models", "get_model_pricing", "get_bounty_guide", "prepare_new_user_gift", "search_web", "get_setup_guide", "prepare_l1_recommendation", "request_human_support", "recall_memory", "remember_memory", "remember_profile_skill"],
+        "denied": ["assess_l0_interlocutor", "get_plan_offers", "request_create_key", "get_usage_summary"]
       }
     }
   },
@@ -33,9 +39,10 @@
       "username": "new-client-user",
       "email": "buyer@gmail.com",
       "access_level": "L0",
-      "payment_methods_hidden": false
+      "payment_methods_hidden": false,
+      "interlocutor_assessed": true
     },
-    "message": "我不太懂技术，想用 Claude Code，请一步一步教我在 Windows 上配置稳定方案。",
+    "message": "我不太懂技术，也愿意付费，但还没决定用途和金额，请一步一步教我从哪里开始。",
     "expected": {
       "profile": "guided_buyer",
       "signals": ["guided_setup_language", "l0_access"],
@@ -50,6 +57,11 @@
       "security": {
         "high_confidence_abuse": false,
         "authorized_security_test": false
+      },
+      "payment_offer_state": "needs_details",
+      "tools": {
+        "allowed": ["get_service_facts", "calculate_math", "calculate_cost", "get_account_access", "get_l1_recommendation", "get_available_models", "get_model_pricing", "get_bounty_guide", "prepare_new_user_gift", "search_web", "get_setup_guide", "prepare_l1_recommendation", "request_human_support", "recall_memory", "remember_memory", "remember_profile_skill"],
+        "denied": ["assess_l0_interlocutor", "get_plan_offers", "request_create_key", "get_usage_summary"]
       }
     }
   },
@@ -60,7 +72,8 @@
       "username": "coupon-hunter",
       "email": "coupon@mailinator.com",
       "access_level": "L0",
-      "payment_methods_hidden": true
+      "payment_methods_hidden": true,
+      "interlocutor_assessed": true
     },
     "message": "有没有优惠码或免费额度？我想用临时邮箱注册多个账号参加活动。",
     "expected": {
@@ -77,6 +90,11 @@
       "security": {
         "high_confidence_abuse": false,
         "authorized_security_test": false
+      },
+      "payment_offer_state": "blocked",
+      "tools": {
+        "allowed": ["get_service_facts", "calculate_math", "calculate_cost", "get_account_access", "get_l1_recommendation", "get_available_models", "get_model_pricing", "get_bounty_guide", "search_web", "get_setup_guide", "prepare_l1_recommendation", "request_human_support", "recall_memory", "remember_memory", "remember_profile_skill"],
+        "denied": ["assess_l0_interlocutor", "get_plan_offers", "request_create_key", "get_usage_summary"]
       }
     }
   },
@@ -104,6 +122,11 @@
       "security": {
         "high_confidence_abuse": true,
         "authorized_security_test": false
+      },
+      "payment_offer_state": "blocked",
+      "tools": {
+		"allowed": ["get_service_facts", "calculate_math", "calculate_cost", "get_account_access", "get_l1_recommendation", "get_available_models", "get_model_pricing", "get_bounty_guide", "search_web", "get_setup_guide", "prepare_l1_recommendation", "request_human_support", "recall_memory", "remember_memory", "remember_profile_skill"],
+		"denied": ["assess_l0_interlocutor", "get_plan_offers", "request_create_key", "get_admin_server_config"]
       }
     }
   },
@@ -132,17 +155,57 @@
       "security": {
         "high_confidence_abuse": false,
         "authorized_security_test": false
+      },
+      "payment_offer_state": "none",
+      "tools": {
+        "allowed": ["get_service_facts", "calculate_math", "calculate_cost", "get_account_access", "get_l1_recommendation", "get_available_models", "get_model_pricing", "get_plan_offers", "get_invitation_rewards", "get_bounty_guide", "get_usage_summary", "search_web", "get_setup_guide", "prepare_l1_recommendation", "request_create_key", "request_human_support", "recall_memory", "remember_memory", "remember_profile_skill"],
+        "denied": ["assess_l0_interlocutor", "get_admin_server_config", "prepare_admin_config_change", "get_admin_channels", "prepare_admin_channel_change", "prepare_admin_pricing_change"]
       }
     }
   },
   {
     "id": "F",
-    "label": "privacy-sensitive-user",
+    "label": "enterprise-stability-operator",
+    "user": {
+      "username": "enterprise-operator",
+      "email": "ops@company.example",
+      "access_level": "L2",
+      "developer_access_granted": true,
+      "payment_methods_hidden": false,
+      "interlocutor_assessed": true
+    },
+    "message": "我们是企业用户，关心生产稳定性、可用性、并发、延迟、SLA 和监控告警，价格不是首要问题。",
+    "expected": {
+      "profile": "production_operator",
+      "signals": ["operations_language"],
+      "welcome_contains": ["reliability", "observability", "do not upsell"],
+      "context": {
+        "masked_email": "op***s@company.example",
+        "email_domain": "company.example",
+        "email_category": "custom",
+        "access_level": "L2",
+        "payment_methods_hidden": false
+      },
+      "security": {
+        "high_confidence_abuse": false,
+        "authorized_security_test": false
+      },
+      "payment_offer_state": "none",
+      "tools": {
+        "allowed": ["get_service_facts", "calculate_math", "calculate_cost", "get_account_access", "get_l1_recommendation", "get_available_models", "get_model_pricing", "get_plan_offers", "get_invitation_rewards", "get_bounty_guide", "get_usage_summary", "search_web", "get_setup_guide", "prepare_l1_recommendation", "request_create_key", "request_human_support", "recall_memory", "remember_memory", "remember_profile_skill"],
+        "denied": ["assess_l0_interlocutor", "get_admin_server_config", "prepare_admin_config_change", "get_admin_channels", "prepare_admin_channel_change", "prepare_admin_pricing_change"]
+      }
+    }
+  },
+  {
+    "id": "G",
+    "label": "privacy-conscious-user",
     "user": {
       "username": "privacy-first",
       "email": "person@proton.me",
       "access_level": "L1",
-      "payment_methods_hidden": false
+      "payment_methods_hidden": false,
+      "interlocutor_assessed": true
     },
     "message": "我不想暴露多余个人信息，请说明数据最小化、数据保留和删除方式。",
     "expected": {
@@ -159,17 +222,23 @@
       "security": {
         "high_confidence_abuse": false,
         "authorized_security_test": false
+      },
+      "payment_offer_state": "none",
+      "tools": {
+        "allowed": ["get_service_facts", "calculate_math", "calculate_cost", "get_account_access", "get_l1_recommendation", "get_available_models", "get_model_pricing", "get_bounty_guide", "search_web", "get_setup_guide", "prepare_l1_recommendation", "request_human_support", "recall_memory", "remember_memory", "remember_profile_skill"],
+        "denied": ["assess_l0_interlocutor", "get_plan_offers", "request_create_key", "get_usage_summary", "get_admin_server_config"]
       }
     }
   },
   {
-    "id": "G",
+    "id": "G-mobile",
     "label": "mobile-accessibility-user",
     "user": {
       "username": "mobile-user",
       "email": "mobile@duck.com",
       "access_level": "L1",
-      "payment_methods_hidden": false
+      "payment_methods_hidden": false,
+      "interlocutor_assessed": true
     },
     "message": "我主要用手机，页面需要大字体和屏幕阅读器支持，怎么操作？",
     "expected": {
@@ -186,6 +255,11 @@
       "security": {
         "high_confidence_abuse": false,
         "authorized_security_test": false
+      },
+      "payment_offer_state": "none",
+      "tools": {
+        "allowed": ["get_service_facts", "calculate_math", "calculate_cost", "get_account_access", "get_l1_recommendation", "get_available_models", "get_model_pricing", "get_bounty_guide", "search_web", "get_setup_guide", "prepare_l1_recommendation", "request_human_support", "recall_memory", "remember_memory", "remember_profile_skill"],
+        "denied": ["assess_l0_interlocutor", "get_plan_offers", "request_create_key", "get_usage_summary", "get_admin_server_config"]
       }
     }
   },
@@ -214,6 +288,11 @@
       "security": {
         "high_confidence_abuse": false,
         "authorized_security_test": false
+      },
+      "payment_offer_state": "none",
+      "tools": {
+        "allowed": ["get_service_facts", "calculate_math", "calculate_cost", "get_account_access", "get_l1_recommendation", "get_available_models", "get_model_pricing", "get_plan_offers", "get_invitation_rewards", "get_bounty_guide", "get_usage_summary", "search_web", "get_setup_guide", "prepare_l1_recommendation", "request_create_key", "request_human_support", "recall_memory", "remember_memory", "remember_profile_skill"],
+        "denied": ["assess_l0_interlocutor", "get_admin_server_config", "prepare_admin_config_change", "get_admin_channels", "prepare_admin_channel_change", "prepare_admin_pricing_change"]
       }
     }
   },
@@ -242,6 +321,11 @@
       "security": {
         "high_confidence_abuse": false,
         "authorized_security_test": true
+      },
+      "payment_offer_state": "none",
+      "tools": {
+        "allowed": ["get_service_facts", "calculate_math", "calculate_cost", "get_account_access", "get_l1_recommendation", "get_available_models", "get_model_pricing", "get_plan_offers", "get_invitation_rewards", "get_bounty_guide", "get_usage_summary", "search_web", "get_setup_guide", "prepare_l1_recommendation", "request_create_key", "request_human_support", "recall_memory", "remember_memory", "remember_profile_skill"],
+        "denied": ["assess_l0_interlocutor", "get_admin_server_config", "prepare_admin_config_change", "get_admin_channels", "prepare_admin_channel_change", "prepare_admin_pricing_change"]
       }
     }
   }

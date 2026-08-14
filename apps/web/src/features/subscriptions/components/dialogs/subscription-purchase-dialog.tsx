@@ -36,6 +36,11 @@ import {
 import { Separator } from '@/components/ui/separator'
 import { useSystemConfig } from '@/hooks/use-system-config'
 import { formatQuota } from '@/lib/format'
+import {
+  getDefaultWaffoPancakeCheckoutRegion,
+  getWaffoPancakeCheckoutLanguage,
+  type WaffoPancakeCheckoutRegion,
+} from '@/lib/waffo-pancake-checkout'
 import { DEFAULT_CURRENCY_CONFIG } from '@/stores/system-config-store'
 
 import {
@@ -69,10 +74,12 @@ interface Props {
 }
 
 export function SubscriptionPurchaseDialog(props: Props) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const { currency } = useSystemConfig()
   const [paying, setPaying] = useState(false)
   const [selectedEpayMethod, setSelectedEpayMethod] = useState('')
+  const [waffoPancakeCheckoutRegionOverride, setWaffoPancakeCheckoutRegion] =
+    useState<WaffoPancakeCheckoutRegion | null>(null)
 
   useEffect(() => {
     if (props.open && props.epayMethods && props.epayMethods.length > 0) {
@@ -92,6 +99,12 @@ export function SubscriptionPurchaseDialog(props: Props) {
   const hasEpay =
     props.enableOnlineTopUp && (props.epayMethods || []).length > 0
   const hasAnyPayment = hasStripe || hasCreem || hasWaffoPancake || hasEpay
+  const interfaceLanguage = i18n.resolvedLanguage || i18n.language
+  const waffoPancakeCheckoutRegion =
+    waffoPancakeCheckoutRegionOverride ??
+    getDefaultWaffoPancakeCheckoutRegion(interfaceLanguage)
+  const waffoPancakeCheckoutLanguage =
+    getWaffoPancakeCheckoutLanguage(interfaceLanguage)
   const selectedEpayMethodLabel =
     (props.epayMethods || []).find((m) => m.type === selectedEpayMethod)
       ?.name ||
@@ -163,7 +176,11 @@ export function SubscriptionPurchaseDialog(props: Props) {
   const handlePayWaffoPancake = async () => {
     setPaying(true)
     try {
-      const res = await paySubscriptionWaffoPancake({ plan_id: plan.id })
+      const res = await paySubscriptionWaffoPancake({
+        plan_id: plan.id,
+        checkout_region: waffoPancakeCheckoutRegion,
+        checkout_language: waffoPancakeCheckoutLanguage,
+      })
       if (res.message === 'success' && res.data?.checkout_url) {
         toast.success(t('Redirecting to payment page...'))
         window.location.href = res.data.checkout_url
@@ -400,6 +417,50 @@ export function SubscriptionPurchaseDialog(props: Props) {
                     Waffo Pancake
                   </Button>
                 )}
+              </div>
+            )}
+            {hasWaffoPancake && (
+              <div className='max-w-[320px] min-w-0 space-y-1.5'>
+                <label
+                  htmlFor='subscription-waffo-pancake-checkout-region'
+                  className='text-muted-foreground text-xs font-medium tracking-wider uppercase'
+                >
+                  {t('Waffo Pancake checkout region')}
+                </label>
+                <p className='text-muted-foreground text-xs leading-5'>
+                  {t(
+                    'China locks the checkout to the China billing market. Global lets you choose your billing region in checkout.'
+                  )}
+                </p>
+                <Select
+                  items={[
+                    { value: 'china', label: t('China') },
+                    { value: 'global', label: t('Global') },
+                  ]}
+                  value={waffoPancakeCheckoutRegion}
+                  onValueChange={(value) => {
+                    if (value === 'china' || value === 'global') {
+                      setWaffoPancakeCheckoutRegion(value)
+                    }
+                  }}
+                >
+                  <SelectTrigger
+                    id='subscription-waffo-pancake-checkout-region'
+                    className='w-full max-w-[320px] min-w-0'
+                  >
+                    <SelectValue>
+                      {waffoPancakeCheckoutRegion === 'china'
+                        ? t('China')
+                        : t('Global')}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent alignItemWithTrigger={false}>
+                    <SelectGroup>
+                      <SelectItem value='china'>{t('China')}</SelectItem>
+                      <SelectItem value='global'>{t('Global')}</SelectItem>
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
               </div>
             )}
             {hasEpay && (

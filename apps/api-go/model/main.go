@@ -90,7 +90,7 @@ func CheckSetupForStartup(allowMigrationWrite bool) error {
 	if err := verifySetupState(); err != nil {
 		return err
 	}
-	constant.Setup = true
+	constant.SetSetup(true)
 	return nil
 }
 
@@ -128,15 +128,15 @@ func checkSetup() {
 			if err != nil {
 				common.SysLog("failed to create setup record: " + err.Error())
 			}
-			constant.Setup = true
+			constant.SetSetup(true)
 		} else {
 			common.SysLog("system is not initialized and no root user exists")
-			constant.Setup = false
+			constant.SetSetup(false)
 		}
 	} else {
 		// Setup record exists, system is initialized
 		common.SysLog("system is already initialized at: " + time.Unix(setup.InitializedAt, 0).String())
-		constant.Setup = true
+		constant.SetSetup(true)
 	}
 }
 
@@ -343,8 +343,9 @@ func mainMigrationModels() []interface{} {
 		&SubscriptionOrder{}, &UserSubscription{}, &SubscriptionPreConsumeRecord{}, &CustomOAuthProvider{},
 		&UserOAuthBinding{}, &PerfMetric{}, &SystemInstance{}, &SystemTask{}, &SystemTaskLock{},
 		&CasbinRule{}, &AuthzRole{}, &PersonalAccessIP{},
-		&AssistantLead{}, &AssistantProfileBucket{}, &AssistantUserProfile{}, &AssistantFirstQuestionStat{}, &AssistantConversation{}, &AssistantHistoryMessage{}, &AssistantSecureCard{}, &AdvancedSecurityEvent{},
+		&AssistantLead{}, &AssistantProfileBucket{}, &AssistantUserProfile{}, &AssistantMemory{}, &AssistantFirstQuestionStat{}, &PromptPresetRow{}, &PromptPresetStat{}, &PromptConversionRef{}, &PromptConversationRef{}, &AssistantConversation{}, &AssistantHistoryMessage{}, &AssistantSecureCard{}, &AssistantSecurityIncident{}, &AssistantNewUserGift{}, &AssistantGiftRiskMemory{}, &AdvancedSecurityEvent{},
 		&ViolationFeeState{}, &ViolationFeeRecord{}, &ViolationFeeAppeal{},
+		&FinanceLedgerEntry{}, &FinancePaymentMethod{},
 		&ReleaseNote{}, &ReleaseNoteRead{}, &UnifiedTodoRead{}, &L1OnboardingTodo{},
 	}
 }
@@ -372,6 +373,9 @@ func migrateDB() error {
 		return err
 	}
 	if err := InitializeExistingUsersL1Backfill(); err != nil {
+		return err
+	}
+	if err := migrateOpenSourceBountyMCPTokenAuthVersions(); err != nil {
 		return err
 	}
 	if err := InitializeExternalIdentityClaims(); err != nil {
@@ -434,6 +438,8 @@ func migrateDBFast() error {
 		{&OpenSourceBountyRESTOperation{}, "OpenSourceBountyRESTOperation"},
 		{&SubscriptionOrder{}, "SubscriptionOrder"},
 		{&UserSubscription{}, "UserSubscription"},
+		{&FinanceLedgerEntry{}, "FinanceLedgerEntry"},
+		{&FinancePaymentMethod{}, "FinancePaymentMethod"},
 		{&SubscriptionPreConsumeRecord{}, "SubscriptionPreConsumeRecord"},
 		{&CustomOAuthProvider{}, "CustomOAuthProvider"},
 		{&UserOAuthBinding{}, "UserOAuthBinding"},
@@ -445,10 +451,16 @@ func migrateDBFast() error {
 		{&AssistantLead{}, "AssistantLead"},
 		{&AssistantProfileBucket{}, "AssistantProfileBucket"},
 		{&AssistantUserProfile{}, "AssistantUserProfile"},
+		{&AssistantMemory{}, "AssistantMemory"},
 		{&AssistantFirstQuestionStat{}, "AssistantFirstQuestionStat"},
+		{&PromptPresetRow{}, "PromptPresetRow"},
+		{&PromptPresetStat{}, "PromptPresetStat"},
+		{&PromptConversionRef{}, "PromptConversionRef"},
+		{&PromptConversationRef{}, "PromptConversationRef"},
 		{&AssistantConversation{}, "AssistantConversation"},
 		{&AssistantHistoryMessage{}, "AssistantHistoryMessage"},
 		{&AssistantSecureCard{}, "AssistantSecureCard"},
+		{&AssistantSecurityIncident{}, "AssistantSecurityIncident"},
 		{&AdvancedSecurityEvent{}, "AdvancedSecurityEvent"},
 		{&ReleaseNote{}, "ReleaseNote"},
 		{&ReleaseNoteRead{}, "ReleaseNoteRead"},
@@ -488,6 +500,9 @@ func migrateDBFast() error {
 		return err
 	}
 	if err := InitializeExistingUsersL1Backfill(); err != nil {
+		return err
+	}
+	if err := migrateOpenSourceBountyMCPTokenAuthVersions(); err != nil {
 		return err
 	}
 	if err := InitializeExternalIdentityClaims(); err != nil {

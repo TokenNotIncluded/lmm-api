@@ -67,4 +67,15 @@ describe('server error message mapping', () => {
       expected.TELEGRAM_BIND_INTERNAL_ERROR
     )
   })
+
+  test('maps an expired AI recommendation to a recoverable edit path', () => {
+    assert.match(
+      getServerErrorMessageKey({
+        response: {
+          data: { code: 'DEVELOPER_ACCESS_AI_CONFIRMATION_INVALID' },
+        },
+      }) ?? '',
+      /continue editing it yourself/
+    )
+  })
 })

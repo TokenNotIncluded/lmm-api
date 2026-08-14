@@ -57,7 +57,7 @@ func palmStreamHandler(c *gin.Context, resp *http.Response) (*types.NewAPIError,
 	dataChan := make(chan string)
 	stopChan := make(chan bool)
 	go func() {
-		responseBody, err := io.ReadAll(resp.Body)
+		responseBody, err := common.ReadResponseBody(resp)
 		if err != nil {
 			common.SysLog("error reading stream response: " + err.Error())
 			stopChan <- true
@@ -102,7 +102,7 @@ func palmStreamHandler(c *gin.Context, resp *http.Response) (*types.NewAPIError,
 }
 
 func palmHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
-	responseBody, err := io.ReadAll(resp.Body)
+	responseBody, err := common.ReadResponseBody(resp)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
 	}

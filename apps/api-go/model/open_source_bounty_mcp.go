@@ -20,13 +20,14 @@ const (
 )
 
 type OpenSourceBountyMCPToken struct {
-	Id         int    `json:"id"`
-	UserId     int    `json:"user_id" gorm:"not null;uniqueIndex"`
-	TokenHash  string `json:"-" gorm:"type:char(64);not null;uniqueIndex"`
-	TokenHint  string `json:"token_hint" gorm:"type:varchar(24);not null"`
-	CreatedAt  int64  `json:"created_at" gorm:"bigint;not null"`
-	UpdatedAt  int64  `json:"updated_at" gorm:"bigint;not null"`
-	LastUsedAt int64  `json:"last_used_at" gorm:"bigint;not null;default:0"`
+	Id              int    `json:"id"`
+	UserId          int    `json:"user_id" gorm:"not null;uniqueIndex"`
+	UserAuthVersion int64  `json:"-" gorm:"bigint;not null;default:0"`
+	TokenHash       string `json:"-" gorm:"type:char(64);not null;uniqueIndex"`
+	TokenHint       string `json:"token_hint" gorm:"type:varchar(24);not null"`
+	CreatedAt       int64  `json:"created_at" gorm:"bigint;not null"`
+	UpdatedAt       int64  `json:"updated_at" gorm:"bigint;not null"`
+	LastUsedAt      int64  `json:"last_used_at" gorm:"bigint;not null;default:0"`
 }
 
 func (OpenSourceBountyMCPToken) TableName() string { return "open_source_bounty_mcp_tokens" }
@@ -96,12 +97,9 @@ func OpenSourceBountyMCPPayloadHash(value any) (string, error) {
 }
 
 func RotateOpenSourceBountyMCPToken(userId int) (string, *OpenSourceBountyMCPToken, error) {
-	if userId <= 0 {
-		return "", nil, bountyError("OPEN_SOURCE_BOUNTY_MCP_FORBIDDEN", "invalid MCP token owner")
-	}
-	var user User
-	if err := DB.Select("id", "status").Where("id = ? AND deleted_at IS NULL", userId).First(&user).Error; err != nil || user.Status != common.UserStatusEnabled {
-		return "", nil, bountyError("OPEN_SOURCE_BOUNTY_MCP_FORBIDDEN", "MCP token owner is unavailable")
+	authVersion, err := openSourceBountyDeveloperAuthVersion(userId)
+	if err != nil {
+		return "", nil, bountyError("OPEN_SOURCE_BOUNTY_MCP_FORBIDDEN", "developer access is required to create an MCP token")
 	}
 
 	for attempt := 0; attempt < 3; attempt++ {
@@ -112,14 +110,14 @@ func RotateOpenSourceBountyMCPToken(userId int) (string, *OpenSourceBountyMCPTok
 		now := common.GetTimestamp()
 		hint := token[:len(openSourceBountyMCPTokenPrefix)] + "••••" + token[len(token)-8:]
 		record := OpenSourceBountyMCPToken{
-			UserId: userId, TokenHash: openSourceBountyMCPTokenHash(token), TokenHint: hint,
+			UserId: userId, UserAuthVersion: authVersion, TokenHash: openSourceBountyMCPTokenHash(token), TokenHint: hint,
 			CreatedAt: now, UpdatedAt: now,
 		}
 		err = DB.Clauses(clause.OnConflict{
 			Columns: []clause.Column{{Name: "user_id"}},
 			DoUpdates: clause.Assignments(map[string]any{
 				"token_hash": record.TokenHash, "token_hint": record.TokenHint,
-				"updated_at": now, "last_used_at": 0,
+				"user_auth_version": authVersion, "updated_at": now, "last_used_at": 0,
 			}),
 		}).Create(&record).Error
 		if err == nil {
@@ -136,6 +134,9 @@ func RotateOpenSourceBountyMCPToken(userId int) (string, *OpenSourceBountyMCPTok
 }
 
 func GetOpenSourceBountyMCPTokenStatus(userId int) (*OpenSourceBountyMCPTokenStatus, error) {
+	if err := RequireOpenSourceBountyDeveloperAccess(userId); err != nil {
+		return nil, bountyError("OPEN_SOURCE_BOUNTY_MCP_FORBIDDEN", "developer access is required to inspect an MCP token")
+	}
 	var token OpenSourceBountyMCPToken
 	err := DB.Where("user_id = ?", userId).First(&token).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -151,6 +152,9 @@ func GetOpenSourceBountyMCPTokenStatus(userId int) (*OpenSourceBountyMCPTokenSta
 }
 
 func RevokeOpenSourceBountyMCPToken(userId int) error {
+	if err := RequireOpenSourceBountyDeveloperAccess(userId); err != nil {
+		return bountyError("OPEN_SOURCE_BOUNTY_MCP_FORBIDDEN", "developer access is required to revoke an MCP token")
+	}
 	return DB.Where("user_id = ?", userId).Delete(&OpenSourceBountyMCPToken{}).Error
 }
 
@@ -161,10 +165,13 @@ func VerifyOpenSourceBountyMCPToken(rawToken string) (int, error) {
 	var token OpenSourceBountyMCPToken
 	err := DB.Table("open_source_bounty_mcp_tokens AS token").
 		Select("token.*").
-		Joins("JOIN users AS token_user ON token_user.id = token.user_id AND token_user.deleted_at IS NULL AND token_user.status = ?", common.UserStatusEnabled).
+		Joins("JOIN users AS token_user ON token_user.id = token.user_id AND token_user.deleted_at IS NULL AND token_user.status = ? AND token_user.auth_version = token.user_auth_version", common.UserStatusEnabled).
 		Where("token.token_hash = ?", openSourceBountyMCPTokenHash(rawToken)).
 		First(&token).Error
 	if err != nil {
+		return 0, bountyError("OPEN_SOURCE_BOUNTY_MCP_INVALID_TOKEN", "invalid MCP token")
+	}
+	if err := RequireOpenSourceBountyDeveloperAccess(token.UserId); err != nil {
 		return 0, bountyError("OPEN_SOURCE_BOUNTY_MCP_INVALID_TOKEN", "invalid MCP token")
 	}
 	now := common.GetTimestamp()

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -125,7 +124,7 @@ func (p *GitHubProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*O
 
 	// Check for non-200 status codes before attempting to decode
 	if res.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(res.Body)
+		body, _ := common.ReadResponseBody(res)
 		bodyStr := string(body)
 		if len(bodyStr) > 500 {
 			bodyStr = bodyStr[:500] + "..."

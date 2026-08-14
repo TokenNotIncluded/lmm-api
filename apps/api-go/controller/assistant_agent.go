@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,18 +8,25 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"regexp"
+	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/internal/agent"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/syncx"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
+	"github.com/expr-lang/expr"
 	"github.com/gin-gonic/gin"
 )
 
@@ -28,56 +34,72 @@ const (
 	assistantToolArgumentsMaxBytes        = 16 * 1024
 	assistantToolCallsPerTurn             = 4
 	assistantAgentDefaultTimeout          = 45 * time.Second
+	assistantUpstreamMaxAttempts          = 3
+	assistantUpstreamRetryBaseDelay       = 200 * time.Millisecond
 	assistantRecommendationTTL            = 30 * time.Minute
 	minDeveloperAccessReasonRunes         = 5
 	minDeveloperAccessRecommendationRunes = 20
 	maxDeveloperAccessDraftRunes          = 2000
 	assistantInterlocutorAssessmentTool   = "assess_l0_interlocutor"
+	assistantMathExpressionMaxBytes       = 512
+	assistantMathVariablesMax             = 32
+	assistantConversationTitleMaxRunes    = 60
+	assistantUpstreamRequestMaxBytes      = 768 << 10
+	assistantUpstreamResponseMaxBytes     = 256 << 10
+	assistantToolResultMaxBytes           = 64 << 10
+	assistantAgentContextMaxBytes         = 512 << 10
+	assistantAgentMaxConcurrent           = 16
+)
+
+var (
+	assistantMathExpressionPattern = regexp.MustCompile(`^[0-9A-Za-z_+\-*/%^().,\s]+$`)
+	assistantMathVariablePattern   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,31}$`)
+	assistantModelReferencePattern = regexp.MustCompile(`(?i)\b(?:gpt|claude|gemini|deepseek|qwen|llama|mistral|kimi|glm)[a-z0-9._:/-]*\b`)
+	assistantAgentLimiter          = syncx.NewLimiter(assistantAgentMaxConcurrent)
+	assistantTools                 = sync.OnceValue(buildAssistantTools)
 )
 
 type assistantL1RecommendationDraft struct {
-	UserStatement  string `json:"user_statement"`
-	Recommendation string `json:"recommendation"`
+	UserStatement    string `json:"user_statement"`
+	Recommendation   string `json:"recommendation"`
+	PresetId         string `json:"preset_id,omitempty"`
+	PresetGeneration int64  `json:"preset_generation,omitempty"`
+	PresetVersion    string `json:"preset_version,omitempty"`
 }
 
-type assistantOpenAIToolDefinition struct {
-	Type     string                      `json:"type"`
-	Function assistantOpenAIToolFunction `json:"function"`
-}
+type assistantOpenAIToolDefinition = agent.Tool
+type assistantOpenAIToolFunction = agent.Function
+type assistantOpenAIToolCall = agent.Call
+type assistantOpenAIToolCallFunction = agent.CallFunction
+type assistantOpenAIResponse = agent.Response
+type assistantOpenAIResponseChoice = agent.Choice
+type assistantOpenAIResponseMessage = agent.ResponseMessage
 
-type assistantOpenAIToolFunction struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	Parameters  map[string]any `json:"parameters"`
-}
+type toolSetKey uint8
 
-type assistantOpenAIToolCall struct {
-	ID       string                          `json:"id"`
-	Type     string                          `json:"type"`
-	Function assistantOpenAIToolCallFunction `json:"function"`
-}
+const (
+	toolAssessment toolSetKey = 1 << iota
+	toolTitle
+	toolAdmin
+	toolRoot
+	toolDeveloper
+	toolOffers
+	toolGift
+)
 
-type assistantOpenAIToolCallFunction struct {
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
-}
-
-type assistantOpenAIResponse struct {
-	Choices []assistantOpenAIResponseChoice `json:"choices"`
-}
-
-type assistantOpenAIResponseChoice struct {
-	Message assistantOpenAIResponseMessage `json:"message"`
-}
-
-type assistantOpenAIResponseMessage struct {
-	Role      string                    `json:"role"`
-	Content   json.RawMessage           `json:"content"`
-	ToolCalls []assistantOpenAIToolCall `json:"tool_calls"`
+var assistantToolSets [1 << 7]struct {
+	once  sync.Once
+	tools []assistantOpenAIToolDefinition
 }
 
 func assistantToolDefinitions() []assistantOpenAIToolDefinition {
-	return []assistantOpenAIToolDefinition{
+	return assistantTools()
+}
+
+// buildAssistantTools creates one immutable catalogue. Request handling only
+// filters this snapshot; it never rebuilds the nested JSON schemas per step.
+func buildAssistantTools() []assistantOpenAIToolDefinition {
+	definitions := []assistantOpenAIToolDefinition{
 		{
 			Type: "function",
 			Function: assistantOpenAIToolFunction{
@@ -116,9 +138,33 @@ func assistantToolDefinitions() []assistantOpenAIToolDefinition {
 		{
 			Type: "function",
 			Function: assistantOpenAIToolFunction{
+				Name:        "set_conversation_title",
+				Description: "Set a short automatic title for this new conversation. Summarize the user's actual task in 3-8 specific words, in the user's language. Never use a greeting, generic label, secret, or complete sentence.",
+				Parameters: objectSchema(map[string]any{
+					"title": map[string]any{"type": "string", "minLength": 2, "maxLength": assistantConversationTitleMaxRunes},
+				}, []string{"title"}),
+			},
+		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
 				Name:        "get_service_facts",
 				Description: "Return the current public connection facts for this LMM console. Use this before explaining Base URL, compatible client endpoints, or where to manage private API keys.",
 				Parameters:  emptyObjectSchema(),
+			},
+		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
+				Name:        "calculate_math",
+				Description: "Evaluate arithmetic exactly instead of doing mental math. Use this for every calculation, including percentages, discounts, ratios, averages, projections, unit conversions expressed as factors, and intermediate arithmetic in a multi-step task. Operators: +, -, *, /, %, ^ or **. Functions: abs, sqrt, cbrt, pow, exp, ln, log10, sin, cos, tan, asin, acos, atan, atan2, hypot, floor, ceil, round, trunc, min, max, percent, clamp. Constants: pi and e. Supply named numeric variables when that makes the expression auditable.",
+				Parameters: objectSchema(map[string]any{
+					"expression": map[string]any{"type": "string", "minLength": 1, "maxLength": assistantMathExpressionMaxBytes},
+					"variables": map[string]any{
+						"type":                 "object",
+						"additionalProperties": map[string]any{"type": "number"},
+					},
+				}, []string{"expression"}),
 			},
 		},
 		{
@@ -140,6 +186,14 @@ func assistantToolDefinitions() []assistantOpenAIToolDefinition {
 			Function: assistantOpenAIToolFunction{
 				Name:        "get_account_access",
 				Description: "Read the signed-in user's non-secret access state, such as trust level and whether developer features are unlocked.",
+				Parameters:  emptyObjectSchema(),
+			},
+		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
+				Name:        "get_l1_recommendation",
+				Description: "Read the signed-in user's one current L1 access recommendation letter and review status. Call this before discussing, drafting, polishing, replacing, or removing the in-console recommendation. This is the authoritative shared letter visible to the user and administrators.",
 				Parameters:  emptyObjectSchema(),
 			},
 		},
@@ -189,6 +243,17 @@ func assistantToolDefinitions() []assistantOpenAIToolDefinition {
 		{
 			Type: "function",
 			Function: assistantOpenAIToolFunction{
+				Name:        "prepare_new_user_gift",
+				Description: "For an eligible L0 new user only, make their one lifetime welcome-gift decision after at least two substantive user turns. Judge demonstrated clarity, coherent follow-up, concrete legitimate use, and constructive engagement from the complete conversation. Choose an integer 0-1000 US cents. Zero is a valid final decision and consumes the opportunity. Do not reward demands for money, self-reported expertise alone, promotions, referrals, multiple accounts, automation, or unsafe behavior. The server enforces eligibility and one-time issuance; never promise an amount before this tool succeeds.",
+				Parameters: objectSchema(map[string]any{
+					"amount_cents": map[string]any{"type": "integer", "minimum": 0, "maximum": 1000},
+					"reason":       map[string]any{"type": "string", "minLength": 2, "maxLength": 240},
+				}, []string{"amount_cents", "reason"}),
+			},
+		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
 				Name:        "get_usage_summary",
 				Description: "Summarize the signed-in user's historical consume calls by model and group. Use this for usage statistics instead of exposing raw logs.",
 				Parameters: objectSchema(map[string]any{
@@ -210,19 +275,19 @@ func assistantToolDefinitions() []assistantOpenAIToolDefinition {
 			Type: "function",
 			Function: assistantOpenAIToolFunction{
 				Name:        "get_setup_guide",
-				Description: "Return verified platform-specific install commands and gateway configuration for Claude Code, CC Switch, Claude Desktop, Codex, and compatible clients. Use this instead of guessing client capabilities or endpoint formats.",
+				Description: "Return verified platform-specific install commands and gateway configuration for Claude Code, CC Switch, Claude Desktop, Codex, and compatible clients. model_id must be an exact value returned by get_available_models for this account; use this tool instead of guessing client capabilities, models, or endpoint formats.",
 				Parameters: objectSchema(map[string]any{
 					"platform": map[string]any{"type": "string", "enum": []string{"windows", "linux", "macos"}},
 					"topic":    map[string]any{"type": "string", "enum": []string{"claude-code", "cc-switch", "claude-desktop", "chatgpt-client", "codex", "cursor", "open-webui", "other-openai-compatible"}},
 					"model_id": map[string]any{"type": "string", "minLength": 1, "maxLength": 200},
-				}, []string{"platform", "topic"}),
+				}, []string{"platform", "topic", "model_id"}),
 			},
 		},
 		{
 			Type: "function",
 			Function: assistantOpenAIToolFunction{
 				Name:        "prepare_l1_recommendation",
-				Description: "Prepare an administrator recommendation for a concrete L0 user after a substantive onboarding conversation. This does not submit or approve anything; the user must explicitly confirm the draft in the UI.",
+				Description: "Prepare a new or revised draft of the signed-in L0 user's one shared administrator recommendation after a substantive conversation. For an edit, use the current letter returned by get_l1_recommendation and the full conversation. Never use this tool to remove a letter. This does not submit, update, delete, or approve anything; the user must explicitly confirm the draft in the UI.",
 				Parameters: objectSchema(map[string]any{
 					"user_statement": map[string]any{"type": "string", "minLength": 5, "maxLength": 2000},
 					"recommendation": map[string]any{"type": "string", "minLength": 20, "maxLength": 2000},
@@ -250,6 +315,14 @@ func assistantToolDefinitions() []assistantOpenAIToolDefinition {
 					"action":         map[string]any{"type": "string", "enum": []string{"support", "disable_account"}},
 					"target_user_id": map[string]any{"type": "integer", "minimum": 1},
 				}, []string{"message"}),
+			},
+		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
+				Name:        "get_admin_assistant_review",
+				Description: "For an administrator only, read the latest privacy-minimized automatic assistant review. It contains bounded aggregate intent, profile, preset-conversion, support-queue, and security-follow-up signals; it never contains transcripts, user identities, or per-user memory. Use it before proposing changes to AssistantSkills.",
+				Parameters:  emptyObjectSchema(),
 			},
 		},
 		{
@@ -314,6 +387,7 @@ func assistantToolDefinitions() []assistantOpenAIToolDefinition {
 			},
 		},
 	}
+	return append(definitions, assistantSkillTools()...)
 }
 
 // assistantToolDefinitionsForContext keeps the model's tool catalogue aligned
@@ -321,14 +395,50 @@ func assistantToolDefinitions() []assistantOpenAIToolDefinition {
 // second line of defence, but an L0 model should not be invited to speculate
 // about administrator tools or account-specific pricing in the first place.
 func assistantToolDefinitionsForContext(userContext assistantUserContext) []assistantOpenAIToolDefinition {
-	all := assistantToolDefinitions()
-	definitions := make([]assistantOpenAIToolDefinition, 0, len(all))
-	for _, definition := range all {
-		if assistantToolAllowedForContext(definition.Function.Name, userContext) {
-			definitions = append(definitions, definition)
+	set := &assistantToolSets[keyForTools(userContext)]
+	set.once.Do(func() {
+		all := assistantToolDefinitions()
+		set.tools = make([]assistantOpenAIToolDefinition, 0, len(all))
+		for _, definition := range all {
+			if assistantToolAllowedForContext(definition.Function.Name, userContext) {
+				set.tools = append(set.tools, definition)
+			}
 		}
+	})
+	return set.tools
+}
+
+func keyForTools(context assistantUserContext) toolSetKey {
+	var key toolSetKey
+	if assistantL0InterlocutorAssessmentRequired(context) {
+		key |= toolAssessment
 	}
-	return definitions
+	if context.ConversationTitleNeeded {
+		key |= toolTitle
+	}
+	if context.AdministratorMode {
+		key |= toolAdmin
+	}
+	if context.AccessLevel == "ROOT" {
+		key |= toolRoot
+	}
+	if context.DeveloperAccessGranted {
+		key |= toolDeveloper
+	}
+	if assistantPaymentOfferStateForContext(context) == assistantPaymentOfferReady {
+		key |= toolOffers
+	}
+	if assistantNewUserGiftToolAllowed(context) {
+		key |= toolGift
+	}
+	return key
+}
+
+func assistantNewUserGiftToolAllowed(context assistantUserContext) bool {
+	if context.AdministratorMode || context.DeveloperAccessGranted || context.AccessLevel != "L0" {
+		return false
+	}
+	return context.CustomerProfile != assistantProfilePromotion && context.CustomerProfile != assistantProfileSecurityRisk
 }
 
 func assistantToolAllowedForContext(name string, userContext assistantUserContext) bool {
@@ -338,20 +448,40 @@ func assistantToolAllowedForContext(name string, userContext assistantUserContex
 	if name == assistantInterlocutorAssessmentTool {
 		return false
 	}
+	if name == "set_conversation_title" {
+		return userContext.ConversationTitleNeeded
+	}
+	if name == "prepare_new_user_gift" {
+		return assistantNewUserGiftToolAllowed(userContext)
+	}
 	if userContext.AdministratorMode {
+		if userContext.AccessLevel != "ROOT" {
+			switch name {
+			case "get_admin_server_config", "prepare_admin_config_change", "prepare_admin_pricing_change":
+				return false
+			}
+		}
 		return true
 	}
 	if userContext.DeveloperAccessGranted {
-		return name != "get_admin_server_config" &&
+		return name != "get_admin_assistant_review" &&
+			name != "get_admin_server_config" &&
 			name != "prepare_admin_config_change" &&
 			name != "get_admin_channels" &&
 			name != "prepare_admin_channel_change" &&
 			name != "prepare_admin_pricing_change"
 	}
+	if isAssistantSkillTool(name) {
+		return true
+	}
 	switch name {
 	case "get_service_facts",
+		"calculate_math",
 		"calculate_cost",
 		"get_account_access",
+		"get_l1_recommendation",
+		"get_available_models",
+		"get_model_pricing",
 		"get_bounty_guide",
 		"search_web",
 		"get_setup_guide",
@@ -377,15 +507,212 @@ func assistantL0InterlocutorAssessmentRequired(_ assistantUserContext) bool {
 	return false
 }
 
+func assistantToolExecutionAllowedForContext(name string, userContext assistantUserContext) bool {
+	if name == "get_plan_offers" && !userContext.AdministratorMode && !userContext.DeveloperAccessGranted {
+		// Let the read-only plan tool return the deterministic payment-intent or
+		// restriction result. It does not expose offers or checkout unless its own
+		// policy gate reaches ready.
+		return true
+	}
+	return assistantToolAllowedForContext(name, userContext)
+}
+
 func assistantToolChoiceForContext(userContext assistantUserContext) any {
-	// Some otherwise tool-capable upstreams reject a named/forced function
-	// choice while accepting the OpenAI-compatible automatic mode. During an
-	// unassessed L0 turn the catalogue is already reduced to the single safe
-	// assessment tool and the system prompt instructs the model to use it, so a
-	// forced choice adds no authorization boundary and only harms compatibility.
-	// If the upstream answers directly, returning that low-risk answer is safer
-	// than making the whole L0 assistant unavailable.
+	name := ""
+	if userContext.ConversationTitleNeeded {
+		name = "set_conversation_title"
+	} else {
+		switch userContext.Intent {
+		case model.AssistantIntentCost, model.AssistantIntentModels:
+			name = "get_available_models"
+		case model.AssistantIntentMath:
+			name = "calculate_math"
+		case model.AssistantIntentAPIKey, model.AssistantIntentClientSetup:
+			name = "get_service_facts"
+		case model.AssistantIntentOnboarding:
+			name = "get_account_access"
+		case model.AssistantIntentRecommendation:
+			name = "get_l1_recommendation"
+		case model.AssistantIntentUsage:
+			name = "get_usage_summary"
+		case model.AssistantIntentInvitation:
+			name = "get_invitation_rewards"
+		case model.AssistantIntentBounty:
+			name = "get_bounty_guide"
+		}
+	}
+	if name != "" && assistantToolAllowedForContext(name, userContext) {
+		return map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name": name,
+			},
+		}
+	}
 	return "auto"
+}
+
+// assistantReadChain returns the smallest deterministic read chain
+// needed to answer compound fact requests. A model remains responsible for
+// the tool arguments, but it cannot skip live service/model/price reads and
+// replace them with an advertisement or a guessed value.
+func assistantReadChain(userContext assistantUserContext) []string {
+	text := strings.ToLower(strings.TrimSpace(userContext.LatestUserRequest))
+	if text == "" {
+		return nil
+	}
+	tools := make([]string, 0, 3)
+	if assistantTextContainsAny(text,
+		"base url", "base_url", "服务地址", "接口地址", "endpoint", "端点",
+	) {
+		tools = append(tools, "get_service_facts")
+	}
+	if userContext.Intent == model.AssistantIntentCost ||
+		userContext.Intent == model.AssistantIntentModels ||
+		assistantTextContainsAny(text, "模型", "model id", "model_id", "available model") {
+		tools = append(tools, "get_available_models")
+	}
+	if userContext.Intent == model.AssistantIntentCost && assistantModelReferencePattern.MatchString(text) {
+		tools = append(tools, "get_model_pricing")
+	}
+	return tools
+}
+
+func assistantNextRead(userContext assistantUserContext, calledTools, successfulTools map[string]bool) (string, bool) {
+	for _, name := range assistantReadChain(userContext) {
+		if !calledTools[name] {
+			return name, false
+		}
+		if !successfulTools[name] {
+			// A failed authoritative read must not be bypassed by a later tool.
+			// Stop forcing the chain and let the final answer report the failure.
+			return "", true
+		}
+	}
+	return "", false
+}
+
+func assistantRecommendationWorkflowRequired(userContext assistantUserContext) bool {
+	return userContext.Intent == model.AssistantIntentRecommendation &&
+		userContext.RecommendationAction != assistantRecommendationActionNone
+}
+
+func assistantCreateKeyWorkflowRequired(userContext assistantUserContext) bool {
+	return userContext.DeveloperAccessGranted && userContext.CreateKeyAction != assistantCreateKeyActionNone
+}
+
+func assistantNeedsReadChain(userContext assistantUserContext) bool {
+	return len(assistantReadChain(userContext)) > 1
+}
+
+func assistantReadChainSteps(userContext assistantUserContext) int {
+	if !assistantNeedsReadChain(userContext) {
+		return 0
+	}
+	steps := len(assistantReadChain(userContext)) + 1 // reads, then final answer
+	if userContext.ConversationTitleNeeded {
+		steps++
+	}
+	return steps
+}
+
+func assistantRecommendationWorkflowMinSteps(userContext assistantUserContext) int {
+	if !assistantRecommendationWorkflowRequired(userContext) {
+		return 0
+	}
+	steps := 2 // read the current letter, then produce a final answer
+	if userContext.RecommendationAction == assistantRecommendationActionRevise &&
+		!userContext.DeveloperAccessGranted &&
+		strings.EqualFold(strings.TrimSpace(userContext.AccessLevel), "L0") {
+		steps++ // prepare the confirmation-gated revision draft
+	}
+	if userContext.ConversationTitleNeeded {
+		steps++
+	}
+	return steps
+}
+
+func assistantCreateKeyWorkflowMinSteps(userContext assistantUserContext) int {
+	if !assistantCreateKeyWorkflowRequired(userContext) {
+		return 0
+	}
+	steps := 2 // prepare the confirmation or group-choice result, then answer
+	if userContext.CreateKeyAction == assistantCreateKeyActionRequest {
+		steps++ // read live service facts before preparing key creation
+	}
+	if userContext.ConversationTitleNeeded {
+		steps++
+	}
+	return steps
+}
+
+func assistantToolChoiceForAgentStep(userContext assistantUserContext, calledTools map[string]bool, successfulTools map[string]bool) any {
+	choice := assistantToolChoiceForContext(userContext)
+	if userContext.ConversationTitleNeeded {
+		return choice
+	}
+	if assistantCreateKeyWorkflowRequired(userContext) {
+		if userContext.CreateKeyAction == assistantCreateKeyActionRequest && !calledTools["get_service_facts"] {
+			return assistantNamedToolChoice("get_service_facts")
+		}
+		if userContext.CreateKeyAction == assistantCreateKeyActionRequest && !successfulTools["get_service_facts"] {
+			return "none"
+		}
+		if !calledTools["request_create_key"] {
+			return assistantNamedToolChoice("request_create_key")
+		}
+		return "none"
+	}
+	if !assistantRecommendationWorkflowRequired(userContext) {
+		if name, failed := assistantNextRead(userContext, calledTools, successfulTools); name != "" && assistantToolAllowedForContext(name, userContext) {
+			return assistantNamedToolChoice(name)
+		} else if failed {
+			return "none"
+		}
+		if forcedName := assistantNamedToolChoiceName(choice); forcedName != "" && calledTools[forcedName] {
+			return "auto"
+		}
+		return choice
+	}
+
+	if !calledTools["get_l1_recommendation"] {
+		return assistantNamedToolChoice("get_l1_recommendation")
+	}
+	if !successfulTools["get_l1_recommendation"] {
+		return "none"
+	}
+	if userContext.RecommendationAction == assistantRecommendationActionRemove {
+		return "none"
+	}
+	if userContext.DeveloperAccessGranted || !strings.EqualFold(strings.TrimSpace(userContext.AccessLevel), "L0") {
+		return "none"
+	}
+	if !successfulTools["prepare_l1_recommendation"] {
+		return assistantNamedToolChoice("prepare_l1_recommendation")
+	}
+	return "none"
+}
+
+func assistantNamedToolChoice(name string) any {
+	return map[string]any{
+		"type": "function",
+		"function": map[string]any{
+			"name": strings.TrimSpace(name),
+		},
+	}
+}
+
+func assistantNamedToolChoiceName(choice any) string {
+	object, ok := choice.(map[string]any)
+	if !ok {
+		return ""
+	}
+	function, ok := object["function"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	name, _ := function["name"].(string)
+	return strings.TrimSpace(name)
 }
 
 func emptyObjectSchema() map[string]any {
@@ -409,7 +736,7 @@ func objectSchema(properties map[string]any, required []string) map[string]any {
 }
 
 func setAssistantRelayRequest(c *gin.Context, request assistantOpenAIRequest) error {
-	payload, err := common.Marshal(request)
+	payload, err := common.MarshalLimit(request, assistantUpstreamRequestMaxBytes)
 	if err != nil {
 		return err
 	}
@@ -420,6 +747,7 @@ func setAssistantRelayRequest(c *gin.Context, request assistantOpenAIRequest) er
 		return err
 	}
 	c.Set(common.KeyBodyStorage, storage)
+	common.SetContextKey(c, constant.ContextKeyResponseByteLimit, assistantUpstreamResponseMaxBytes)
 	c.Set("assistant_request", true)
 	c.Request.Body = io.NopCloser(storage)
 	c.Request.ContentLength = int64(len(payload))
@@ -433,7 +761,8 @@ func setAssistantRelayRequest(c *gin.Context, request assistantOpenAIRequest) er
 type assistantRelayRecorder struct {
 	gin.ResponseWriter
 	header      http.Header
-	body        bytes.Buffer
+	body        *common.LimitBuffer
+	writeErr    error
 	status      int
 	wroteHeader bool
 }
@@ -442,6 +771,7 @@ func newAssistantRelayRecorder(writer gin.ResponseWriter) *assistantRelayRecorde
 	return &assistantRelayRecorder{
 		ResponseWriter: writer,
 		header:         make(http.Header),
+		body:           common.NewLimitBuffer(assistantUpstreamResponseMaxBytes),
 	}
 }
 
@@ -465,12 +795,28 @@ func (r *assistantRelayRecorder) WriteHeaderNow() {
 
 func (r *assistantRelayRecorder) Write(data []byte) (int, error) {
 	r.WriteHeaderNow()
-	return r.body.Write(data)
+	if r.writeErr != nil {
+		return len(data), nil
+	}
+	written, err := r.body.Write(data)
+	if err != nil {
+		r.writeErr = err
+		return len(data), nil
+	}
+	return written, nil
 }
 
 func (r *assistantRelayRecorder) WriteString(data string) (int, error) {
 	r.WriteHeaderNow()
-	return r.body.WriteString(data)
+	if r.writeErr != nil {
+		return len(data), nil
+	}
+	written, err := r.body.WriteString(data)
+	if err != nil {
+		r.writeErr = err
+		return len(data), nil
+	}
+	return written, nil
 }
 
 func (r *assistantRelayRecorder) Flush() {
@@ -510,10 +856,87 @@ func relayAssistantTurn(c *gin.Context, request assistantOpenAIRequest, rootRequ
 	}()
 
 	Relay(c, types.RelayFormatOpenAI)
-	return recorder.Status(), append([]byte(nil), recorder.body.Bytes()...), nil
+	if recorder.writeErr != nil {
+		return recorder.Status(), nil, recorder.writeErr
+	}
+	return recorder.Status(), recorder.body.Bytes(), nil
+}
+
+func assistantRetryableUpstreamStatus(status int) bool {
+	switch status {
+	case http.StatusRequestTimeout, http.StatusTooEarly, http.StatusTooManyRequests:
+		return true
+	default:
+		return status >= http.StatusInternalServerError && status <= 599
+	}
+}
+
+func assistantUpstreamRetryDelay(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	// Keep the retry budget short enough for an interactive chat while still
+	// spreading a burst across the provider's recovery window.
+	delay := assistantUpstreamRetryBaseDelay * time.Duration(1<<(attempt-1))
+	if delay > 1500*time.Millisecond {
+		return 1500 * time.Millisecond
+	}
+	return delay
+}
+
+// relayAssistantTurnWithRetry retries only the model call. Tool calls are
+// executed after a successful response, so a provider timeout cannot repeat a
+// key/configuration preparation action. The outer browser retry has the same
+// property because all assistant writes are confirmation-gated or idempotent.
+func relayAssistantTurnWithRetry(c *gin.Context, request assistantOpenAIRequest, rootRequestID string, step int) (int, []byte, error) {
+	var status int
+	var body []byte
+	for attempt := 1; attempt <= assistantUpstreamMaxAttempts; attempt++ {
+		status, body, err := relayAssistantTurn(c, request, rootRequestID, step)
+		if err != nil {
+			return status, body, err
+		}
+		if status >= http.StatusOK && status < http.StatusMultipleChoices {
+			response, parseErr := parseAssistantResponse(body)
+			if parseErr == nil && len(response.Choices) > 0 {
+				return status, body, nil
+			}
+			// A malformed/empty successful provider response is treated as a
+			// transient upstream failure and receives the same bounded retry.
+			if attempt == assistantUpstreamMaxAttempts {
+				return status, body, nil
+			}
+		} else if !assistantRetryableUpstreamStatus(status) || attempt == assistantUpstreamMaxAttempts {
+			return status, body, nil
+		}
+
+		timer := time.NewTimer(assistantUpstreamRetryDelay(attempt))
+		select {
+		case <-c.Request.Context().Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return http.StatusRequestTimeout, nil, c.Request.Context().Err()
+		case <-timer.C:
+		}
+	}
+	return status, body, nil
+}
+
+var relayAssistantAgentTurn = relayAssistantTurnWithRetry
+
+func assistantContextBytes(messages []assistantOpenAIMessage) int {
+	return agent.Bytes(messages)
 }
 
 func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conversation []assistantOpenAIMessage) {
+	release, acquired := assistantAgentLimiter.TryAcquire()
+	if !acquired {
+		writeAssistantError(c, http.StatusServiceUnavailable, "ASSISTANT_BUSY", errors.New("AI assistant is busy; retry shortly"))
+		return
+	}
+	defer release()
+
 	timeout := time.Duration(settings.TimeoutSeconds) * time.Second
 	if timeout < 5*time.Second {
 		timeout = assistantAgentDefaultTimeout
@@ -533,24 +956,49 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 		c.Set(common.RequestIdKey, rootRequestID)
 	}
 
+	userContext := assistantUserContextFromGin(c)
 	messages := make([]assistantOpenAIMessage, 1, len(conversation)+1)
-	messages[0] = assistantOpenAIMessage{Role: "system", Content: buildAssistantSystemPrompt(settings, assistantUserContextFromGin(c))}
+	messages[0] = assistantOpenAIMessage{Role: "system", Content: assistantPrompt(c, settings, userContext)}
 	messages = append(messages, conversation...)
+	if assistantContextBytes(messages) > assistantAgentContextMaxBytes {
+		writeAssistantError(c, http.StatusRequestEntityTooLarge, "ASSISTANT_CONTEXT_TOO_LARGE", errors.New("assistant context exceeded its byte budget"))
+		return
+	}
 	maxSteps := settings.MaxSteps
 	if maxSteps < 1 {
 		maxSteps = 1
 	}
-	forceL0Assessment := assistantL0InterlocutorAssessmentRequired(assistantUserContextFromGin(c))
+	forceL0Assessment := assistantL0InterlocutorAssessmentRequired(userContext)
+	forceRecommendationWorkflow := assistantRecommendationWorkflowRequired(userContext)
+	forceCreateKeyWorkflow := assistantCreateKeyWorkflowRequired(userContext)
+	forceReadChain := assistantNeedsReadChain(userContext)
 	if forceL0Assessment && maxSteps < 2 {
 		maxSteps = 2
 	}
+	if minimum := assistantRecommendationWorkflowMinSteps(userContext); maxSteps < minimum {
+		maxSteps = minimum
+	}
+	if minimum := assistantCreateKeyWorkflowMinSteps(userContext); maxSteps < minimum {
+		maxSteps = minimum
+	}
+	if minimum := assistantReadChainSteps(userContext); maxSteps < minimum {
+		maxSteps = minimum
+	}
 	if !settings.AgentLoopEnabled {
-		if !forceL0Assessment {
+		if !forceL0Assessment && !forceRecommendationWorkflow && !forceCreateKeyWorkflow && !forceReadChain {
 			maxSteps = 1
 		}
 	}
 	cacheKey := c.GetString("assistant_cache_key")
-	usedTool := false
+	usedCacheSensitiveTool := false
+	agentEnabled := maxSteps > 1 && (settings.AgentLoopEnabled || forceL0Assessment || forceRecommendationWorkflow || forceCreateKeyWorkflow || forceReadChain)
+	var tools []assistantOpenAIToolDefinition
+	var calledTools, successfulTools map[string]bool
+	if agentEnabled {
+		tools = assistantToolDefinitionsForContext(userContext)
+		calledTools = make(map[string]bool)
+		successfulTools = make(map[string]bool)
+	}
 
 	for step := 0; step < maxSteps; step++ {
 		request := assistantOpenAIRequest{
@@ -562,13 +1010,12 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 		}
 		// Reserve the last turn for a final natural-language answer. This
 		// makes MaxSteps a hard bound while ensuring a tool call can finish.
-		if (settings.AgentLoopEnabled || assistantL0InterlocutorAssessmentRequired(assistantUserContextFromGin(c))) && step < maxSteps-1 {
-			userContext := assistantUserContextFromGin(c)
-			request.Tools = assistantToolDefinitionsForContext(userContext)
-			request.ToolChoice = assistantToolChoiceForContext(userContext)
+		if agentEnabled && step < maxSteps-1 {
+			request.Tools = tools
+			request.ToolChoice = assistantToolChoiceForAgentStep(userContext, calledTools, successfulTools)
 		}
 
-		status, body, err := relayAssistantTurn(c, request, rootRequestID, step)
+		status, body, err := relayAssistantAgentTurn(c, request, rootRequestID, step)
 		if err != nil {
 			writeAssistantError(c, http.StatusInternalServerError, "ASSISTANT_REQUEST_BUILD_FAILED", errors.New("failed to build assistant request"))
 			return
@@ -584,20 +1031,27 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 			return
 		}
 		message := response.Choices[0].Message
+		if forceRecommendationWorkflow || forceCreateKeyWorkflow || forceReadChain {
+			requiredTool := assistantNamedToolChoiceName(request.ToolChoice)
+			if requiredTool != "" && (len(message.ToolCalls) != 1 || strings.TrimSpace(message.ToolCalls[0].Function.Name) != requiredTool) {
+				writeAssistantError(c, http.StatusBadGateway, "ASSISTANT_REQUIRED_TOOL_MISSING", errors.New("assistant did not follow the required tool workflow"))
+				return
+			}
+		}
 		if len(message.ToolCalls) == 0 {
 			normalizedBody, normalizeErr := normalizeAssistantClientResponse(c, body)
 			if normalizeErr != nil {
 				writeAssistantUpstreamError(c, "ASSISTANT_EMPTY_UPSTREAM_RESPONSE", "AI assistant upstream returned no usable answer")
 				return
 			}
-			if !usedTool && cacheKey != "" {
-				storeAssistantCachedResponse(settings, cacheKey, status, normalizedBody)
+			if !usedCacheSensitiveTool && cacheKey != "" {
+				storeAssistantCachedResponse(settings, cacheKey, status, normalizedBody, c.GetString(assistantConversationTitleDraftKey))
 				c.Header("X-LMM-Assistant-Cache", "STORE")
 			}
 			c.Data(status, "application/json; charset=utf-8", normalizedBody)
 			return
 		}
-		if !settings.AgentLoopEnabled || step >= maxSteps-1 {
+		if (!settings.AgentLoopEnabled && !forceL0Assessment && !forceRecommendationWorkflow && !forceCreateKeyWorkflow && !forceReadChain) || step >= maxSteps-1 {
 			writeAssistantError(c, http.StatusBadGateway, "ASSISTANT_AGENT_MAX_STEPS", errors.New("assistant agent reached its step limit before producing a final answer"))
 			return
 		}
@@ -611,12 +1065,28 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 			Content:   assistantResponseContent(message.Content),
 			ToolCalls: message.ToolCalls,
 		})
-		usedTool = true
 		for index, call := range message.ToolCalls {
+			toolName := strings.TrimSpace(call.Function.Name)
+			calledTools[toolName] = true
+			if toolName != "set_conversation_title" {
+				usedCacheSensitiveTool = true
+			}
 			result := executeAssistantTool(c, call)
-			resultJSON, marshalErr := json.Marshal(result)
+			if c.IsAborted() {
+				return
+			}
+			resultJSON, marshalErr := common.MarshalLimit(result, assistantToolResultMaxBytes)
+			if ok, _ := result["ok"].(bool); ok {
+				successfulTools[toolName] = true
+			}
+			if toolName == "set_conversation_title" {
+				// The title tool updates the Gin context. Keep this loop's local
+				// policy snapshot in sync so the next step advances to the task
+				// tool instead of forcing the title again.
+				userContext = assistantUserContextFromGin(c)
+			}
 			if marshalErr != nil {
-				resultJSON = []byte(`{"ok":false,"error":"failed to encode tool result"}`)
+				resultJSON = []byte(`{"ok":false,"error":"tool result exceeded its byte budget"}`)
 			}
 			callID := strings.TrimSpace(call.ID)
 			if callID == "" {
@@ -628,48 +1098,21 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 				ToolCallID: callID,
 			})
 		}
+		if assistantContextBytes(messages) > assistantAgentContextMaxBytes {
+			writeAssistantError(c, http.StatusBadGateway, "ASSISTANT_CONTEXT_TOO_LARGE", errors.New("assistant tool context exceeded its byte budget"))
+			return
+		}
 	}
 
 	writeAssistantError(c, http.StatusBadGateway, "ASSISTANT_AGENT_MAX_STEPS", errors.New("assistant agent reached its step limit"))
 }
 
 func parseAssistantResponse(body []byte) (assistantOpenAIResponse, error) {
-	var response assistantOpenAIResponse
-	if len(body) == 0 {
-		return response, errors.New("empty assistant response")
-	}
-	if err := json.Unmarshal(body, &response); err != nil {
-		return response, err
-	}
-	return response, nil
+	return agent.Parse(body)
 }
 
 func assistantResponseContent(raw json.RawMessage) string {
-	if len(raw) == 0 || string(raw) == "null" {
-		return ""
-	}
-	var text string
-	if json.Unmarshal(raw, &text) == nil {
-		return text
-	}
-	var textParts []string
-	if json.Unmarshal(raw, &textParts) == nil {
-		return strings.Join(textParts, "")
-	}
-	var parts []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	}
-	if json.Unmarshal(raw, &parts) == nil {
-		var builder strings.Builder
-		for _, part := range parts {
-			if part.Type == "text" || part.Type == "output_text" || part.Type == "" {
-				builder.WriteString(part.Text)
-			}
-		}
-		return builder.String()
-	}
-	return ""
+	return agent.Text(raw)
 }
 
 // normalizeAssistantClientResponse is the only provider-to-browser response
@@ -754,6 +1197,17 @@ func assistantDeveloperCapabilityRequired(userID int, capability string) (map[st
 func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[string]any {
 	actorUserID := assistantActorUserID(c)
 	name := strings.TrimSpace(call.Function.Name)
+	if c != nil {
+		if rawContext, exists := c.Get(assistantUserContextKey); exists {
+			if userContext, ok := rawContext.(assistantUserContext); ok && !assistantToolExecutionAllowedForContext(name, userContext) {
+				return map[string]any{
+					"ok":     false,
+					"status": "tool_not_allowed",
+					"error":  "this assistant action is not available for the current account state",
+				}
+			}
+		}
+	}
 	arguments := strings.TrimSpace(call.Function.Arguments)
 	if arguments == "" {
 		arguments = "{}"
@@ -765,10 +1219,15 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 	if err := json.Unmarshal([]byte(arguments), &input); err != nil {
 		return map[string]any{"ok": false, "error": "tool arguments must be valid JSON"}
 	}
+	if result, handled := runSkillTool(name, actorUserID, input); handled {
+		return result
+	}
 
 	switch name {
 	case assistantInterlocutorAssessmentTool:
 		return executeAssistantInterlocutorAssessmentTool(c, input)
+	case "set_conversation_title":
+		return executeAssistantConversationTitleTool(c, input)
 	case "get_service_facts":
 		rootURL := strings.TrimRight(system_setting.ServerAddress, "/")
 		baseURL := rootURL
@@ -787,19 +1246,17 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 			"key_management_path":      "/keys",
 			"write_actions":            "require explicit confirmation in the UI",
 		}
+	case "calculate_math":
+		return executeAssistantMathTool(input)
 	case "calculate_cost":
 		return executeAssistantCostTool(input)
 	case "get_account_access":
 		return executeAssistantAccountTool(actorUserID)
+	case "get_l1_recommendation":
+		return executeAssistantL1RecommendationStateTool(c, actorUserID)
 	case "get_available_models":
-		if result, blocked := assistantDeveloperCapabilityRequired(actorUserID, "model availability"); blocked {
-			return result
-		}
 		return executeAssistantModelsTool(actorUserID)
 	case "get_model_pricing":
-		if result, blocked := assistantDeveloperCapabilityRequired(actorUserID, "model pricing"); blocked {
-			return result
-		}
 		return executeAssistantModelPricingTool(actorUserID, input)
 	case "get_plan_offers":
 		userContext := assistantUserContextFromGin(c)
@@ -815,15 +1272,8 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 			}
 			return executeAssistantPlanOffersTool(actorUserID)
 		}
-		if !userContext.DeveloperAccessGranted && assistantPaymentOfferStateForContext(userContext) != assistantPaymentOfferReady {
-			if assistantPaymentOfferStateForContext(userContext) == assistantPaymentOfferBlocked {
-				return map[string]any{
-					"ok":        false,
-					"status":    "payment_restricted",
-					"error":     "payment channels are unavailable for this account",
-					"next_step": "Continue with the available account or administrator support options.",
-				}
-			}
+		paymentOfferState := assistantPaymentOfferStateForContext(userContext)
+		if !userContext.DeveloperAccessGranted && paymentOfferState != assistantPaymentOfferReady && paymentOfferState != assistantPaymentOfferBlocked {
 			return map[string]any{
 				"ok":        false,
 				"status":    "payment_intent_required",
@@ -831,15 +1281,8 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 				"next_step": "Ask for the intended use, approximate amount, or preferred payment method.",
 			}
 		}
-		if !userContext.DeveloperAccessGranted && userContext.PaymentMethodsHidden {
-			return map[string]any{
-				"ok":     false,
-				"status": "payment_restricted",
-				"error":  "payment channels are unavailable for this account",
-			}
-		}
 		if !userContext.DeveloperAccessGranted {
-			return executeAssistantPlanOffersToolWithL0PaymentIntent(actorUserID)
+			return executeAssistantPlanOffersTool(actorUserID)
 		}
 		if result, blocked := assistantDeveloperCapabilityRequired(actorUserID, "plan offers"); blocked {
 			return result
@@ -852,6 +1295,8 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 		return executeAssistantInvitationTool(actorUserID)
 	case "get_bounty_guide":
 		return executeAssistantBountyTool()
+	case "prepare_new_user_gift":
+		return executeAssistantNewUserGiftTool(c, actorUserID, input)
 	case "get_usage_summary":
 		if result, blocked := assistantDeveloperCapabilityRequired(actorUserID, "usage statistics"); blocked {
 			return result
@@ -860,14 +1305,22 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 	case "search_web":
 		return executeAssistantSearchTool(c, input)
 	case "get_setup_guide":
-		return executeAssistantSetupTool(input)
+		return executeAssistantSetupTool(actorUserID, input)
 	case "prepare_l1_recommendation":
+		if assistantUserContextFromGin(c).RecommendationAction == assistantRecommendationActionRemove {
+			return map[string]any{
+				"ok":      false,
+				"status":  "removal_requires_user_ui",
+				"error":   "AI cannot remove or replace a recommendation for a removal request",
+				"message": "Tell the user to clear the visible Recommendation letter field and choose Save changes in the existing UI.",
+			}
+		}
 		return executeAssistantL1RecommendationTool(c, actorUserID, input)
 	case "request_create_key":
 		if c == nil {
 			return map[string]any{"ok": false, "error": "signed-in account is unavailable"}
 		}
-		return executeAssistantCreateKeyRequestTool(actorUserID, input)
+		return executeAssistantCreateKeyRequestTool(c, actorUserID, input)
 	case "request_human_support":
 		message := strings.TrimSpace(inputString(input, "message"))
 		messageLength := len([]rune(message))
@@ -891,6 +1344,8 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 		}
 	case "get_admin_server_config":
 		return executeAssistantAdminConfigTool(c, actorUserID)
+	case "get_admin_assistant_review":
+		return executeAssistantReviewTool(actorUserID)
 	case "prepare_admin_config_change":
 		return executeAssistantAdminConfigChangeTool(c, actorUserID, input)
 	case "get_admin_channels":
@@ -902,6 +1357,66 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 	default:
 		return map[string]any{"ok": false, "error": "unknown assistant tool"}
 	}
+}
+
+func executeAssistantConversationTitleTool(c *gin.Context, input map[string]any) map[string]any {
+	if c == nil || !assistantUserContextFromGin(c).ConversationTitleNeeded {
+		return map[string]any{"ok": false, "error": "this conversation does not need an automatic title"}
+	}
+	title := strings.TrimSpace(inputString(input, "title"))
+	if title == "" {
+		return map[string]any{"ok": false, "error": "a conversation title is required"}
+	}
+	runes := []rune(model.RedactAssistantHistoryContent(title))
+	if len(runes) > assistantConversationTitleMaxRunes {
+		runes = runes[:assistantConversationTitleMaxRunes]
+	}
+	title = strings.TrimSpace(string(runes))
+	if title == "" {
+		return map[string]any{"ok": false, "error": "the conversation title became empty after safety filtering"}
+	}
+	c.Set(assistantConversationTitleDraftKey, title)
+	userContext := assistantUserContextFromGin(c)
+	userContext.ConversationTitleNeeded = false
+	c.Set(assistantUserContextKey, userContext)
+	return map[string]any{"ok": true, "title": title}
+}
+
+func executeAssistantL1RecommendationStateTool(c *gin.Context, userID int) map[string]any {
+	if userID <= 0 {
+		return map[string]any{"ok": false, "error": "signed-in account is unavailable"}
+	}
+	request, err := model.GetDeveloperAccessRequest(userID)
+	if err != nil {
+		return map[string]any{"ok": false, "error": "the current recommendation could not be loaded"}
+	}
+	if request == nil {
+		result := map[string]any{
+			"ok":             true,
+			"status":         "none",
+			"recommendation": "",
+			"next_step":      "Use the conversation context to prepare the user's one L1 recommendation when requested.",
+		}
+		if assistantUserContextFromGin(c).RecommendationAction == assistantRecommendationActionRemove {
+			result["next_step"] = "Tell the user there is no recommendation letter to remove. Do not call prepare_l1_recommendation."
+		}
+		return result
+	}
+	result := map[string]any{
+		"ok":                      true,
+		"status":                  request.Status,
+		"source":                  request.Source,
+		"user_statement":          request.Reason,
+		"recommendation":          request.AIRecommendation,
+		"administrator_note":      request.AdminNote,
+		"is_single_shared_letter": true,
+		"next_step":               "For an AI edit, prepare a revised draft of this same letter and require UI confirmation before replacing it.",
+	}
+	if assistantUserContextFromGin(c).RecommendationAction == assistantRecommendationActionRemove {
+		result["next_step"] = "Do not call prepare_l1_recommendation and do not change the administrator queue. Tell the user to clear the visible Recommendation letter field in the existing UI and choose Save changes; that direct user action remains explicitly confirmed."
+		result["removal_requires_user_ui"] = true
+	}
+	return result
 }
 
 func executeAssistantInterlocutorAssessmentTool(c *gin.Context, input map[string]any) map[string]any {
@@ -1078,10 +1593,16 @@ func executeAssistantL1RecommendationTool(c *gin.Context, userID int, input map[
 	if len([]rune(recommendation)) < minDeveloperAccessRecommendationRunes || len([]rune(recommendation)) > maxDeveloperAccessDraftRunes {
 		return map[string]any{"ok": false, "status": "recommendation_invalid", "error": "AI recommendation must contain 20 to 2000 characters"}
 	}
-	payload, err := json.Marshal(assistantL1RecommendationDraft{
+	draft := assistantL1RecommendationDraft{
 		UserStatement:  statement,
 		Recommendation: recommendation,
-	})
+	}
+	if attribution, ok := promptPresetRef(c); ok {
+		draft.PresetId = attribution.PresetId
+		draft.PresetGeneration = attribution.Generation
+		draft.PresetVersion = attribution.Version
+	}
+	payload, err := json.Marshal(draft)
 	if err != nil {
 		return map[string]any{"ok": false, "error": "AI recommendation could not be prepared"}
 	}
@@ -1137,6 +1658,71 @@ func executeAssistantCostTool(input map[string]any) map[string]any {
 	}
 }
 
+func executeAssistantMathTool(input map[string]any) map[string]any {
+	expression := strings.TrimSpace(inputString(input, "expression"))
+	if expression == "" {
+		return map[string]any{"ok": false, "error": "a math expression is required"}
+	}
+	if len(expression) > assistantMathExpressionMaxBytes || !assistantMathExpressionPattern.MatchString(expression) {
+		return map[string]any{"ok": false, "error": "expression contains unsupported characters or is too long"}
+	}
+
+	environment := map[string]any{
+		"pi":  math.Pi,
+		"e":   math.E,
+		"abs": math.Abs, "sqrt": math.Sqrt, "cbrt": math.Cbrt,
+		"pow": math.Pow, "exp": math.Exp, "ln": math.Log, "log10": math.Log10,
+		"sin": math.Sin, "cos": math.Cos, "tan": math.Tan,
+		"asin": math.Asin, "acos": math.Acos, "atan": math.Atan, "atan2": math.Atan2,
+		"hypot": math.Hypot, "floor": math.Floor, "ceil": math.Ceil,
+		"round": math.Round, "trunc": math.Trunc, "min": math.Min, "max": math.Max,
+		"percent": func(value float64) float64 { return value / 100 },
+		"clamp": func(value, minimum, maximum float64) float64 {
+			return math.Min(math.Max(value, minimum), maximum)
+		},
+	}
+	variables := map[string]float64{}
+	if rawVariables, exists := input["variables"]; exists {
+		variableMap, ok := rawVariables.(map[string]any)
+		if !ok || len(variableMap) > assistantMathVariablesMax {
+			return map[string]any{"ok": false, "error": "variables must be an object with at most 32 numeric entries"}
+		}
+		for name := range variableMap {
+			if !assistantMathVariablePattern.MatchString(name) {
+				return map[string]any{"ok": false, "error": "variable names must be simple ASCII identifiers"}
+			}
+			if _, reserved := environment[name]; reserved {
+				return map[string]any{"ok": false, "error": "variable name conflicts with a math function or constant"}
+			}
+			value, ok := inputNumber(variableMap, name)
+			if !ok {
+				return map[string]any{"ok": false, "error": "all variables must be finite numbers"}
+			}
+			variables[name] = value
+			environment[name] = value
+		}
+	}
+
+	program, err := expr.Compile(expression, expr.Env(environment), expr.AsFloat64())
+	if err != nil {
+		return map[string]any{"ok": false, "error": "invalid math expression"}
+	}
+	output, err := expr.Run(program, environment)
+	if err != nil {
+		return map[string]any{"ok": false, "error": "math expression could not be evaluated"}
+	}
+	result, ok := output.(float64)
+	if !ok || math.IsNaN(result) || math.IsInf(result, 0) {
+		return map[string]any{"ok": false, "error": "math result is not a finite number"}
+	}
+	return map[string]any{
+		"ok":         true,
+		"expression": expression,
+		"variables":  variables,
+		"result":     result,
+	}
+}
+
 func executeAssistantModelsTool(userID int) map[string]any {
 	if userID <= 0 {
 		return map[string]any{"ok": false, "error": "signed-in account is unavailable"}
@@ -1150,11 +1736,17 @@ func executeAssistantModelsTool(userID int) map[string]any {
 		return map[string]any{"ok": false, "error": "developer access could not be loaded"}
 	}
 	if !access.Granted {
+		models := getPublicPreviewModelIDs()
 		return map[string]any{
-			"ok":        false,
-			"status":    "l1_required",
-			"error":     "L1 access is required to view model availability",
-			"next_step": "Ask the user to continue the L1 onboarding conversation and submit an administrator recommendation.",
+			"ok":                           true,
+			"status":                       "public_preview",
+			"model_ids":                    models,
+			"model_list_path":              "/pricing",
+			"availability_scope":           "public_preview_not_account_entitlement",
+			"developer_access_granted":     false,
+			"account_model_access_locked":  true,
+			"preview_matches_live_catalog": true,
+			"next_step":                    "Answer with these exact preview IDs. Explain that L1 is required to use them, but do not claim that the models are unknown.",
 		}
 	}
 	if user.Role >= common.RoleAdminUser {
@@ -1227,17 +1819,14 @@ func executeAssistantModelPricingTool(userID int, input map[string]any) map[stri
 	if err != nil {
 		return map[string]any{"ok": false, "error": "developer access could not be loaded"}
 	}
-	if !access.Granted {
-		return map[string]any{
-			"ok":        false,
-			"status":    "l1_required",
-			"error":     "L1 access is required to view model pricing",
-			"next_step": "Ask the user to continue the L1 onboarding conversation and submit an administrator recommendation.",
-		}
-	}
+	previewOnly := !access.Granted
 	usableGroups := service.GetUserUsableGroups(user.Group)
 	if isAdministrator {
 		usableGroups = assistantAdminConfiguredGroups()
+	} else if previewOnly {
+		usableGroups = map[string]string{
+			"default": setting.GetUsableGroupDescription("default"),
+		}
 	}
 	requestedGroup := inputString(input, "group")
 	if requestedGroup != "" {
@@ -1263,6 +1852,14 @@ func executeAssistantModelPricingTool(userID int, input map[string]any) map[stri
 		break
 	}
 	if selected == nil {
+		if previewOnly {
+			return map[string]any{
+				"ok":        false,
+				"status":    "model_not_in_public_preview",
+				"error":     "the exact model ID is not in the current public preview",
+				"next_step": "Call get_available_models and answer with the exact public preview IDs instead of guessing.",
+			}
+		}
 		return map[string]any{
 			"ok":        false,
 			"status":    "model_unavailable",
@@ -1282,9 +1879,15 @@ func executeAssistantModelPricingTool(userID int, input map[string]any) map[stri
 		groupIDs = append(groupIDs, groupID)
 	}
 	sort.Strings(groupIDs)
-	trust, err := model.GetTrustLevelInfoForUserBase(user)
-	if err != nil {
-		return map[string]any{"ok": false, "error": "trust-level pricing could not be loaded"}
+	trustLevel := 0
+	trustDiscountRatio := 1.0
+	if !previewOnly {
+		trust, trustErr := model.GetTrustLevelInfoForUserBase(user)
+		if trustErr != nil {
+			return map[string]any{"ok": false, "error": "trust-level pricing could not be loaded"}
+		}
+		trustLevel = trust.Level
+		trustDiscountRatio = trust.DiscountRatio
 	}
 	configuredRatios := ratio_setting.GetGroupRatioCopy()
 	prices := make([]map[string]any, 0, len(groupIDs))
@@ -1293,15 +1896,15 @@ func executeAssistantModelPricingTool(userID int, input map[string]any) map[stri
 		if !configured {
 			baseGroupRatio = 1
 		}
-		if override, ok := ratio_setting.GetGroupGroupRatio(user.Group, groupID); ok {
+		if override, ok := ratio_setting.GetGroupGroupRatio(user.Group, groupID); ok && !previewOnly {
 			baseGroupRatio = override
 		}
-		groupRatio := baseGroupRatio * trust.DiscountRatio
+		groupRatio := baseGroupRatio * trustDiscountRatio
 		entry := map[string]any{
 			"group":                groupID,
 			"group_description":    usableGroups[groupID],
 			"base_group_ratio":     baseGroupRatio,
-			"trust_discount_ratio": trust.DiscountRatio,
+			"trust_discount_ratio": trustDiscountRatio,
 			"group_ratio":          groupRatio,
 		}
 		if selected.QuotaType == 0 && selected.BillingMode != "tiered_expr" {
@@ -1322,31 +1925,31 @@ func executeAssistantModelPricingTool(userID int, input map[string]any) map[stri
 	if len(prices) == 0 {
 		return map[string]any{"ok": false, "error": "no usable pricing group was found for this model"}
 	}
+	pricingScope := "assistant_account"
+	calculationInstruction := "The returned USD prices already include the routing-group ratio and the live trust-level discount. Pass group_ratio=1 to calculate_cost so neither multiplier is applied twice."
+	if previewOnly {
+		pricingScope = "public_preview_reference"
+		calculationInstruction = "The returned USD reference prices include the public default-group ratio and no account-specific discount. Pass group_ratio=1 to calculate_cost and explain that L1 access is still required to use the model."
+	}
 
 	return map[string]any{
-		"ok":                       true,
-		"model_id":                 selected.ModelName,
-		"trust_level":              trust.Level,
-		"trust_discount_ratio":     trust.DiscountRatio,
-		"quota_type":               selected.QuotaType,
-		"billing_mode":             selected.BillingMode,
-		"billing_expression":       selected.BillingExpr,
-		"prices":                   prices,
-		"supported_endpoint_types": selected.SupportedEndpointTypes,
-		"administrator_scope":      isAdministrator,
-		"calculation_instruction":  "The returned USD prices already include the routing-group ratio and the live trust-level discount. Pass group_ratio=1 to calculate_cost so neither multiplier is applied twice.",
+		"ok":                          true,
+		"model_id":                    selected.ModelName,
+		"trust_level":                 trustLevel,
+		"trust_discount_ratio":        trustDiscountRatio,
+		"quota_type":                  selected.QuotaType,
+		"billing_mode":                selected.BillingMode,
+		"billing_expression":          selected.BillingExpr,
+		"prices":                      prices,
+		"supported_endpoint_types":    selected.SupportedEndpointTypes,
+		"administrator_scope":         isAdministrator,
+		"pricing_scope":               pricingScope,
+		"account_model_access_locked": previewOnly,
+		"calculation_instruction":     calculationInstruction,
 	}
 }
 
 func executeAssistantPlanOffersTool(userID int) map[string]any {
-	return executeAssistantPlanOffersToolWithAccess(userID, false)
-}
-
-func executeAssistantPlanOffersToolWithL0PaymentIntent(userID int) map[string]any {
-	return executeAssistantPlanOffersToolWithAccess(userID, true)
-}
-
-func executeAssistantPlanOffersToolWithAccess(userID int, allowL0PaymentIntent bool) map[string]any {
 	if userID <= 0 {
 		return map[string]any{"ok": false, "error": "signed-in account is unavailable"}
 	}
@@ -1359,33 +1962,25 @@ func executeAssistantPlanOffersToolWithAccess(userID int, allowL0PaymentIntent b
 		return map[string]any{"ok": false, "error": "developer access could not be loaded"}
 	}
 	complianceConfirmed := operation_setting.IsPaymentComplianceConfirmed()
-	paymentRestricted := model.IsPaymentRestricted(user)
+	checkoutAvailable := paymentGatewayAvailabilityForUser(user, complianceConfirmed, time.Now()).hasPayment()
+	paymentHidden := model.IsPaymentRestricted(user) && !checkoutAvailable
 	result := map[string]any{
-		"ok":                           access.Granted,
+		"ok":                           true,
 		"developer_access_granted":     access.Granted,
-		"read_only":                    false,
-		"checkout_available":           (access.Granted || allowL0PaymentIntent) && complianceConfirmed && !paymentRestricted,
-		"payment_hidden":               !(access.Granted || allowL0PaymentIntent) || paymentRestricted,
+		"read_only":                    !checkoutAvailable,
+		"checkout_available":           checkoutAvailable,
+		"payment_hidden":               paymentHidden,
 		"plans":                        []SubscriptionPlanDTO{},
 		"topup_discounts":              map[int]float64{},
-		"payment_compliance_confirmed": (access.Granted || allowL0PaymentIntent) && complianceConfirmed,
+		"payment_compliance_confirmed": complianceConfirmed,
 	}
-	if !access.Granted && !allowL0PaymentIntent {
-		result["error"] = "L1 access is required to view plans and top-up discounts"
-		result["next_step"] = "Ask the user to submit an administrator L1 access request from the onboarding assistant."
-		return result
-	}
-	if paymentRestricted {
-		result["ok"] = access.Granted
+	if paymentHidden {
 		result["message"] = "Payment channels are unavailable for this account; do not direct the user to checkout."
-		if !access.Granted {
-			result["status"] = "payment_restricted"
-			return result
-		}
-	}
-	if !complianceConfirmed {
-		result["message"] = "Current plan offers are unavailable until payment compliance is confirmed."
-		return result
+		result["status"] = "payment_restricted"
+	} else if !complianceConfirmed {
+		result["message"] = "Current plan offers are view-only until payment compliance is confirmed."
+	} else if !checkoutAvailable {
+		result["message"] = "Current plan offers are view-only because no eligible checkout method is available."
 	}
 	if model.DB == nil {
 		return map[string]any{"ok": false, "error": "subscription plans are temporarily unavailable"}
@@ -1400,12 +1995,11 @@ func executeAssistantPlanOffersToolWithAccess(userID int, allowL0PaymentIntent b
 		planValues = append(planValues, SubscriptionPlanDTO{Plan: plan})
 	}
 	discountValues := make(map[int]float64, len(operation_setting.GetPaymentSetting().AmountDiscount))
-	if !paymentRestricted {
+	if !paymentHidden {
 		for amount, multiplier := range operation_setting.GetPaymentSetting().AmountDiscount {
 			discountValues[amount] = multiplier
 		}
 	}
-	result["ok"] = true
 	result["plans"] = planValues
 	result["topup_discounts"] = discountValues
 	return result
@@ -1573,7 +2167,7 @@ func quotePowerShellLiteral(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }
 
-func executeAssistantSetupTool(input map[string]any) map[string]any {
+func executeAssistantSetupTool(userID int, input map[string]any) map[string]any {
 	platform := strings.ToLower(strings.TrimSpace(inputString(input, "platform")))
 	topic := strings.ToLower(strings.TrimSpace(inputString(input, "topic")))
 	if platform != "windows" && platform != "linux" && platform != "macos" {
@@ -1592,18 +2186,64 @@ func executeAssistantSetupTool(input map[string]any) map[string]any {
 	}
 	clientModel := strings.TrimSpace(inputString(input, "model_id"))
 	if clientModel == "" {
-		clientModel = "<MODEL_ID_FROM_GET_AVAILABLE_MODELS>"
+		return map[string]any{
+			"ok":        false,
+			"status":    "model_required",
+			"error":     "an exact model ID is required",
+			"next_step": "Call get_available_models and use one exact model_ids value.",
+		}
+	}
+	modelsResult := executeAssistantModelsTool(userID)
+	if ok, _ := modelsResult["ok"].(bool); !ok {
+		return modelsResult
+	}
+	modelIDs, ok := modelsResult["model_ids"].([]string)
+	if !ok || !slices.Contains(modelIDs, clientModel) {
+		status := "model_unavailable"
+		if modelsResult["status"] == "public_preview" {
+			status = "model_not_in_public_preview"
+		}
+		return map[string]any{
+			"ok":                  false,
+			"status":              status,
+			"error":               "the requested model ID is not available in the signed-in account catalog",
+			"available_model_ids": modelIDs,
+			"next_step":           "Use one exact available_model_ids value; do not guess or rewrite the model ID.",
+		}
+	}
+	accountModelAccessLocked, _ := modelsResult["account_model_access_locked"].(bool)
+	developerAccessGranted := !accountModelAccessLocked
+	if reportedAccess, reported := modelsResult["developer_access_granted"].(bool); reported {
+		developerAccessGranted = reportedAccess
+	}
+	securityNote := "Create the key in this console, never paste an existing secret into chat, and test with a newly opened terminal or client session."
+	credentialStep := "Create an API key in this console and replace only the <YOUR_API_KEY> placeholder."
+	credentialPhrase := "a newly created API key"
+	testStep := "Send a short test request after configuring the client."
+	if accountModelAccessLocked {
+		securityNote = "API key creation and authenticated requests remain locked until L1 approval. You can install the client and review the placeholder configuration now without creating or sharing a key."
+		credentialStep = "Keep the <YOUR_API_KEY> placeholder while access is locked; after L1 approval, create a key in this console and replace only that placeholder."
+		credentialPhrase = "the <YOUR_API_KEY> placeholder (replace it with a new key only after L1 approval)"
+		testStep = "After L1 approval and key creation, open a new client session and send a short test request."
+	}
+	lockedAwareStep := func(unlocked, locked string) string {
+		if accountModelAccessLocked {
+			return locked
+		}
+		return unlocked
 	}
 
 	result := map[string]any{
-		"ok":              true,
-		"platform":        platform,
-		"topic":           topic,
-		"service_root":    rootURL,
-		"openai_base_url": openAIBaseURL,
-		"client_model_id": clientModel,
-		"api_key":         "<YOUR_API_KEY>",
-		"security_note":   "Create the key in this console, never paste an existing secret into chat, and test with a newly opened terminal or client session.",
+		"ok":                          true,
+		"platform":                    platform,
+		"topic":                       topic,
+		"service_root":                rootURL,
+		"openai_base_url":             openAIBaseURL,
+		"client_model_id":             clientModel,
+		"api_key":                     "<YOUR_API_KEY>",
+		"developer_access_granted":    developerAccessGranted,
+		"account_model_access_locked": accountModelAccessLocked,
+		"security_note":               securityNote,
 	}
 
 	switch topic {
@@ -1621,8 +2261,8 @@ func executeAssistantSetupTool(input map[string]any) map[string]any {
 		result["endpoint_format"] = "Anthropic Messages; use the service root without /v1"
 		result["steps"] = []string{
 			"Install Claude Code with the command returned by this tool, then run claude --version.",
-			"Create an API key in this console and replace only the <YOUR_API_KEY> placeholder.",
-			"Apply the returned environment variables in a terminal opened for the project, then run claude.",
+			credentialStep,
+			lockedAwareStep("Apply the returned environment variables in a terminal opened for the project, then run claude.", testStep),
 		}
 		result["official_docs"] = "https://code.claude.com/docs/en/setup"
 	case "cc-switch":
@@ -1644,8 +2284,8 @@ func executeAssistantSetupTool(input map[string]any) map[string]any {
 		result["endpoint_format"] = "Anthropic Messages; use the service root without /v1"
 		result["steps"] = []string{
 			"Install CC Switch only from its official site or GitHub Releases.",
-			"Select Claude, add a Custom provider, and enter the returned service root, model ID, and a newly created API key.",
-			"Save and enable the provider, open a new terminal, and send a short test with Claude Code.",
+			"Select Claude, add a Custom provider, and enter the returned service root, model ID, and " + credentialPhrase + ".",
+			lockedAwareStep("Save and enable the provider, open a new terminal, and send a short test with Claude Code.", testStep),
 		}
 		result["official_docs"] = "https://github.com/farion1231/cc-switch"
 	case "claude-desktop":
@@ -1682,8 +2322,8 @@ func executeAssistantSetupTool(input map[string]any) map[string]any {
 		result["endpoint_format"] = "OpenAI Responses API; use the /v1 Base URL"
 		result["steps"] = []string{
 			"Install Codex, then create the user-level ~/.codex/config.toml with the returned provider configuration.",
-			"Set LMM_API_KEY in the current shell without writing the key into config.toml.",
-			"Run codex in a project directory and verify the provider and model shown by /status.",
+			lockedAwareStep("Set LMM_API_KEY in the current shell without writing the key into config.toml.", credentialStep),
+			lockedAwareStep("Run codex in a project directory and verify the provider and model shown by /status.", testStep),
 		}
 		result["official_docs"] = "https://developers.openai.com/codex/cli"
 		result["config_reference"] = "https://developers.openai.com/codex/config-reference"
@@ -1691,23 +2331,23 @@ func executeAssistantSetupTool(input map[string]any) map[string]any {
 		result["endpoint_format"] = "OpenAI-compatible; use the /v1 Base URL only if the installed Cursor version exposes a custom Base URL"
 		result["steps"] = []string{
 			"Open Cursor Settings and check whether the installed version exposes a custom OpenAI-compatible Base URL.",
-			"If supported, enter the returned /v1 Base URL, exact model ID, and a newly created API key.",
+			"If supported, enter the returned /v1 Base URL, exact model ID, and " + credentialPhrase + ".",
 			"If the setting is absent, do not assume the official client can use this gateway; choose CC Switch or another compatible client.",
 		}
 	case "open-webui":
 		result["endpoint_format"] = "OpenAI-compatible; use the /v1 Base URL"
 		result["steps"] = []string{
 			"Open Open WebUI administrator settings and add an OpenAI-compatible connection.",
-			"Enter the returned /v1 Base URL and a newly created API key, then refresh the model list.",
-			"Select the exact returned model ID and send a short test request.",
+			"Enter the returned /v1 Base URL and " + credentialPhrase + ", then refresh the model list.",
+			lockedAwareStep("Select the exact returned model ID and send a short test request.", testStep),
 		}
 		result["official_docs"] = "https://docs.openwebui.com/getting-started/quick-start/connect-a-provider/starting-with-openai-compatible/"
 	case "other-openai-compatible":
 		result["endpoint_format"] = "OpenAI-compatible; use the /v1 Base URL"
 		result["steps"] = []string{
 			"Confirm that the client explicitly supports a custom OpenAI-compatible Base URL.",
-			"Enter the returned /v1 Base URL, exact model ID, and a newly created API key.",
-			"Send a short test and verify that the client uses a route supported by this service.",
+			"Enter the returned /v1 Base URL, exact model ID, and " + credentialPhrase + ".",
+			lockedAwareStep("Send a short test and verify that the client uses a route supported by this service.", testStep),
 		}
 	}
 	return result

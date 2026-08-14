@@ -1,17 +1,19 @@
 package baidu
 
 import (
+	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/pkg/cachex"
+	"github.com/QuantumNous/new-api/pkg/syncx"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -24,7 +26,16 @@ import (
 
 // https://cloud.baidu.com/doc/WENXINWORKSHOP/s/flfmc9do2
 
-var baiduTokenStore sync.Map
+var (
+	baiduTokenStore = cachex.NewByteCache[BaiduAccessToken](256, 512<<10, func(key string, token BaiduAccessToken) int64 {
+		return int64(len(key) + len(token.AccessToken) + len(token.Error) + len(token.ErrorDescription) + 64)
+	})
+	baiduTokenGate = syncx.NewKeyedGate(64)
+)
+
+func baiduTokenKey(apiKey string) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(apiKey)))
+}
 
 func requestOpenAI2Baidu(request dto.GeneralOpenAIRequest) *BaiduChatRequest {
 	baiduRequest := BaiduChatRequest{
@@ -140,7 +151,7 @@ func baiduStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 
 func baiduHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*types.NewAPIError, *dto.Usage) {
 	var baiduResponse BaiduChatResponse
-	responseBody, err := io.ReadAll(resp.Body)
+	responseBody, err := common.ReadResponseBody(resp)
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeBadResponseBody), nil
 	}
@@ -165,7 +176,7 @@ func baiduHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respon
 
 func baiduEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*types.NewAPIError, *dto.Usage) {
 	var baiduResponse BaiduEmbeddingResponse
-	responseBody, err := io.ReadAll(resp.Body)
+	responseBody, err := common.ReadResponseBody(resp)
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeBadResponseBody), nil
 	}
@@ -189,16 +200,16 @@ func baiduEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *ht
 }
 
 func getBaiduAccessToken(apiKey string) (string, error) {
-	if val, ok := baiduTokenStore.Load(apiKey); ok {
-		var accessToken BaiduAccessToken
-		if accessToken, ok = val.(BaiduAccessToken); ok {
-			// soon this will expire
-			if time.Now().Add(time.Hour).After(accessToken.ExpiresAt) {
-				go func() {
-					_, _ = getBaiduAccessTokenHelper(apiKey)
-				}()
-			}
-			return accessToken.AccessToken, nil
+	key := baiduTokenKey(apiKey)
+	if token, ok := baiduTokenStore.Load(key); ok && time.Now().Add(time.Hour).Before(token.ExpiresAt) {
+		return token.AccessToken, nil
+	}
+
+	release, acquired := baiduTokenGate.Acquire(context.Background(), key)
+	if acquired {
+		defer release()
+		if token, ok := baiduTokenStore.Load(key); ok && time.Now().Add(time.Hour).Before(token.ExpiresAt) {
+			return token.AccessToken, nil
 		}
 	}
 	accessToken, err := getBaiduAccessTokenHelper(apiKey)
@@ -241,6 +252,6 @@ func getBaiduAccessTokenHelper(apiKey string) (*BaiduAccessToken, error) {
 		return nil, errors.New("getBaiduAccessTokenHelper get empty access token")
 	}
 	accessToken.ExpiresAt = time.Now().Add(time.Duration(accessToken.ExpiresIn) * time.Second)
-	baiduTokenStore.Store(apiKey, accessToken)
+	baiduTokenStore.SetWithTTL(baiduTokenKey(apiKey), accessToken, time.Until(accessToken.ExpiresAt))
 	return &accessToken, nil
 }

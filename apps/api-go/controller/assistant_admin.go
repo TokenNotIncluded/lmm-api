@@ -86,6 +86,9 @@ var assistantAdminConfigAllowlist = map[string]string{
 	"AssistantSearchURL":                            "Assistant search endpoint",
 	"AssistantSearchMCPTool":                        "Assistant MCP search tool name",
 	"AssistantSkills":                               "Assistant skills and playbooks",
+	"AssistantReviewEnabled":                        "Enable automatic assistant review",
+	"AssistantReviewWindowDays":                     "Assistant review window in days",
+	"AssistantReviewIntervalHours":                  "Assistant review interval in hours",
 	"ServerAddress":                                 "Public service address",
 	"WorkerUrl":                                     "Worker service URL",
 	"CustomCallbackAddress":                         "Payment callback address",
@@ -1210,6 +1213,30 @@ func executeAssistantAdminConfigTool(c *gin.Context, userID int) map[string]any 
 		"configurable_settings":      settings,
 		"sensitive_settings_omitted": true,
 		"write_rule":                 "Use prepare_admin_config_change, then wait for explicit UI confirmation.",
+	}
+}
+
+func executeAssistantReviewTool(userID int) map[string]any {
+	if _, err := assistantAdminUser(userID); err != nil {
+		return map[string]any{"ok": false, "error": err.Error()}
+	}
+	task, err := model.GetLatestSystemTask(model.SystemTaskTypeAssistantReview)
+	if err != nil {
+		return map[string]any{"ok": false, "error": "automatic assistant review is unavailable"}
+	}
+	if task == nil {
+		return map[string]any{"ok": true, "status": "not_run", "review": nil}
+	}
+	if task.Status != model.SystemTaskStatusSucceeded {
+		return map[string]any{"ok": true, "status": task.Status, "review": nil, "updated_at": task.UpdatedAt}
+	}
+	review := model.AssistantReview{}
+	if err := json.Unmarshal([]byte(task.Result), &review); err != nil {
+		return map[string]any{"ok": false, "error": "automatic assistant review result is invalid"}
+	}
+	return map[string]any{
+		"ok": true, "status": task.Status, "updated_at": task.UpdatedAt,
+		"privacy_scope": "aggregate_only", "review": review,
 	}
 }
 

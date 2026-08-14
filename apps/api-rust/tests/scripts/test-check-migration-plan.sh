@@ -104,10 +104,20 @@ awk -F '\t' -v evidence="$fully_verified_evidence" 'BEGIN { OFS=FS }
 ' "$gate" >"$approved_gate"
 
 approved_review="$runtime/approved-api-token-review.tsv"
-{
-  cat "$repo_root/apps/api-rust/tests/fixtures/routes/integration-review.tsv"
-  printf 'GET\t/api/token/\tlmm_api_rs::migration_routes::api_token\taccepted listener differential\taccepted PostgreSQL evidence\taccepted Valkey evidence\tapproved\tfixture only; does not change the checked-in ledger\n'
-} >"$approved_review"
+awk -F '\t' 'BEGIN { OFS=FS }
+  NR == 1 { print; next }
+  !changed && $1 == "GET" && $2 == "/api/token/" {
+    $3="lmm_api_rs::migration_routes::api_token"
+    $4="accepted listener differential"
+    $5="accepted PostgreSQL evidence"
+    $6="accepted Valkey evidence"
+    $7="approved"
+    $8="fixture only; does not change the checked-in ledger"
+    changed=1
+  }
+  { print }
+  END { if (!changed) exit 1 }
+' "$repo_root/apps/api-rust/tests/fixtures/routes/integration-review.tsv" >"$approved_review"
 if ! MIGRATION_GATE_PATH="$approved_gate" MIGRATION_INTEGRATION_REVIEW_PATH="$approved_review" bash "$checker" >/dev/null; then
   echo "migration gate checker rejected a fully evidenced independently approved Rust-owned route" >&2
   exit 1
@@ -135,10 +145,21 @@ if MIGRATION_GATE_PATH="$missing_approval_evidence_gate" \
 fi
 
 method_mismatch_review="$runtime/approval-method-mismatch.tsv"
-{
-  cat "$repo_root/apps/api-rust/tests/fixtures/routes/integration-review.tsv"
-  printf 'POST\t/api/token/\tlmm_api_rs::migration_routes::api_token\taccepted listener differential\taccepted PostgreSQL evidence\taccepted Valkey evidence\tapproved\tfixture only\n'
-} >"$method_mismatch_review"
+awk -F '\t' 'BEGIN { OFS=FS }
+  NR == 1 { print; next }
+  !changed && $1 == "GET" && $2 == "/api/token/" {
+    $1="PATCH"
+    $3="lmm_api_rs::migration_routes::api_token"
+    $4="accepted listener differential"
+    $5="accepted PostgreSQL evidence"
+    $6="accepted Valkey evidence"
+    $7="approved"
+    $8="fixture only"
+    changed=1
+  }
+  { print }
+  END { if (!changed) exit 1 }
+' "$repo_root/apps/api-rust/tests/fixtures/routes/integration-review.tsv" >"$method_mismatch_review"
 if MIGRATION_GATE_PATH="$approved_gate" MIGRATION_INTEGRATION_REVIEW_PATH="$method_mismatch_review" bash "$checker" >/dev/null 2>&1; then
   echo "migration gate checker accepted an approval with a mismatched method" >&2
   exit 1
@@ -187,37 +208,37 @@ if rg -n 'auth route is not allowed|mounted models aliases must stay blocked' "$
   exit 1
 fi
 
-invalid_gate="$runtime/blocked-route-claims-compile-credit.tsv"
-awk -F '\t' 'BEGIN { OFS=FS }
-  NR == 1 { print; next }
-  !changed && $9 == "blocked-sol-stop" {
-    $4="verified"
-    changed=1
-  }
-  { print }
-  END { if (!changed) exit 1 }
-' "$gate" >"$invalid_gate"
+if awk -F '\t' 'NR > 1 && $9 == "blocked-sol-stop" { found=1 } END { exit !found }' "$gate"; then
+  invalid_gate="$runtime/blocked-route-claims-compile-credit.tsv"
+  awk -F '\t' 'BEGIN { OFS=FS }
+    NR == 1 { print; next }
+    !changed && $9 == "blocked-sol-stop" {
+      $4="verified"
+      changed=1
+    }
+    { print }
+  ' "$gate" >"$invalid_gate"
 
-if MIGRATION_GATE_PATH="$invalid_gate" bash "$checker" >/dev/null 2>&1; then
-  echo "migration gate checker accepted compile credit on a blocked route" >&2
-  exit 1
-fi
+  if MIGRATION_GATE_PATH="$invalid_gate" bash "$checker" >/dev/null 2>&1; then
+    echo "migration gate checker accepted compile credit on a blocked route" >&2
+    exit 1
+  fi
 
-invalid_blocked_set_gate="$runtime/incomplete-blocked-route-set.tsv"
-awk -F '\t' 'BEGIN { OFS=FS }
-  NR == 1 { print; next }
-  !changed && $9 == "blocked-sol-stop" {
-    $6="unverified"
-    $9="mounted-unverified"
-    changed=1
-  }
-  { print }
-  END { if (!changed) exit 1 }
-' "$gate" >"$invalid_blocked_set_gate"
+  invalid_blocked_set_gate="$runtime/incomplete-blocked-route-set.tsv"
+  awk -F '\t' 'BEGIN { OFS=FS }
+    NR == 1 { print; next }
+    !changed && $9 == "blocked-sol-stop" {
+      $6="unverified"
+      $9="mounted-unverified"
+      changed=1
+    }
+    { print }
+  ' "$gate" >"$invalid_blocked_set_gate"
 
-if MIGRATION_GATE_PATH="$invalid_blocked_set_gate" bash "$checker" >/dev/null 2>&1; then
-  echo "migration gate checker accepted an incomplete blocked route set" >&2
-  exit 1
+  if MIGRATION_GATE_PATH="$invalid_blocked_set_gate" bash "$checker" >/dev/null 2>&1; then
+    echo "migration gate checker accepted an incomplete blocked route set" >&2
+    exit 1
+  fi
 fi
 
 invalid_review="$runtime/obsolete-logout-review.tsv"

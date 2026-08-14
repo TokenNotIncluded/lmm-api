@@ -6,6 +6,7 @@ import (
 	"math"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -14,7 +15,11 @@ import (
 	"github.com/QuantumNous/new-api/setting/perf_metrics_setting"
 )
 
+const hotBucketMaxEntries = 16_384
+
 var hotBuckets sync.Map
+var hotBucketCount atomic.Int64
+var hotBucketDropped atomic.Uint64
 
 // seriesSchema is a stable client cache/schema marker. Do not change it when
 // hiding fields or making response-only privacy hardening changes.
@@ -71,9 +76,38 @@ func Record(sample Sample) {
 		group:    sample.Group,
 		bucketTs: bucketStart(time.Now().Unix()),
 	}
-	actual, _ := hotBuckets.LoadOrStore(key, &atomicBucket{})
-	actual.(*atomicBucket).add(sample)
+	if bucket, ok := loadHotBucket(key, hotBucketMaxEntries); ok {
+		bucket.add(sample)
+	}
 	recordRedis(key, sample)
+}
+
+func loadHotBucket(key bucketKey, limit int64) (*atomicBucket, bool) {
+	if value, ok := hotBuckets.Load(key); ok {
+		return value.(*atomicBucket), true
+	}
+	for {
+		count := hotBucketCount.Load()
+		if count >= limit {
+			hotBucketDropped.Add(1)
+			return nil, false
+		}
+		if hotBucketCount.CompareAndSwap(count, count+1) {
+			break
+		}
+	}
+	candidate := &atomicBucket{}
+	actual, loaded := hotBuckets.LoadOrStore(key, candidate)
+	if loaded {
+		hotBucketCount.Add(-1)
+	}
+	return actual.(*atomicBucket), true
+}
+
+func deleteHotBucket(key any) {
+	if _, loaded := hotBuckets.LoadAndDelete(key); loaded {
+		hotBucketCount.Add(-1)
+	}
 }
 
 func Query(params QueryParams) (QueryResult, error) {

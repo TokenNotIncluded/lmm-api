@@ -662,10 +662,11 @@ impl Tool {
 }
 
 /// Selection policy for tools on an envelope.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ToolChoice {
     /// Let the provider choose whether to call a tool.
+    #[default]
     Auto,
     /// Disable tool calls.
     None,
@@ -681,12 +682,6 @@ pub enum ToolChoice {
         /// Original provider choice value.
         raw: JsonData,
     },
-}
-
-impl Default for ToolChoice {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 /// Generation controls which have stable cross-provider semantics.
@@ -2241,7 +2236,7 @@ mod tests {
         assert!(matches!(
             mismatched_envelope.validate(),
             Err(IrValidationError::InvalidItemShape { reason, .. })
-                if reason == "ordinary_item_cannot_carry_function"
+                if reason == "tool_result_requires_one_result_function"
         ));
     }
 
@@ -2278,13 +2273,13 @@ mod tests {
     #[test]
     fn merge_failure_restores_both_items() {
         let mut left = text_item("left");
-        left.parts[0].opaque = Some(OpaqueProviderState {
+        left.push_part(Part::opaque(OpaqueProviderState {
             provider: String::new(),
             kind: "thought_signature".to_owned(),
             raw: JsonData::String("sig".to_owned()),
             provenance: OpaqueStateProvenance::Authentic,
             model: None,
-        });
+        }));
         let right = text_item("right");
         let mut envelope = Envelope::new(Protocol::Gemini, "gemini-test");
         envelope.items.push(left);

@@ -310,6 +310,35 @@ function assistantReply(content: string) {
   }
 }
 
+function preConversationPresets() {
+  return {
+    generation: now,
+    version: 'persona-fixture-v1',
+    presets: [
+      {
+        id: 'models-and-pricing',
+        label: 'Browse models and pricing',
+        prompt: 'Show me the available model IDs and their current prices.',
+      },
+      {
+        id: 'client-setup',
+        label: 'Connect my client',
+        prompt: 'Help me connect my current AI client step by step.',
+      },
+      {
+        id: 'l1-access',
+        label: 'Request L1 access',
+        prompt: 'Help me prepare one clear recommendation for L1 access.',
+      },
+      {
+        id: 'bounty',
+        label: 'Explore open-source bounties',
+        prompt: 'Show me how to join an open-source bounty challenge.',
+      },
+    ],
+  }
+}
+
 function readAuditUserId(config: InternalAxiosRequestConfig, url: URL): number {
   const raw =
     (config.params as { user_id?: unknown } | undefined)?.user_id ??
@@ -434,6 +463,15 @@ const debugAdapter: AxiosAdapter = async (config) => {
         },
       })
     )
+  }
+  if (method === 'GET' && path === '/api/assistant/pre-conversation-presets') {
+    return response(config, envelope(preConversationPresets()))
+  }
+  if (
+    method === 'POST' &&
+    /^\/api\/assistant\/pre-conversation-presets\/[^/]+\/click$/.test(path)
+  ) {
+    return response(config, envelope(null))
   }
   if (method === 'POST' && path === '/api/assistant/chat') {
     const body = parseRequestBody(config) as { message?: string }

@@ -97,7 +97,7 @@ func SubmitDeveloperAccessRequest(c *gin.Context) {
 		return
 	}
 	if !input.Confirmed {
-		developerAccessRequestError(c, http.StatusUnprocessableEntity, "DEVELOPER_ACCESS_CONFIRMATION_REQUIRED", "explicit confirmation of the AI recommendation is required")
+		developerAccessRequestError(c, http.StatusUnprocessableEntity, "DEVELOPER_ACCESS_CONFIRMATION_REQUIRED", "explicit confirmation is required before sending the request to an administrator")
 		return
 	}
 	sessionID := strings.TrimSpace(c.GetString("session_id"))
@@ -105,29 +105,70 @@ func SubmitDeveloperAccessRequest(c *gin.Context) {
 		developerAccessRequestError(c, http.StatusForbidden, "DEVELOPER_ACCESS_SESSION_REQUIRED", "a browser login session is required")
 		return
 	}
-	flow, err := model.ConsumeAuthFlow(input.ConfirmationToken, model.AuthFlowMatch{
-		Purpose:   model.AuthFlowPurposeAssistantL1,
-		UserId:    user.Id,
-		SessionId: sessionID,
-	})
-	if err != nil {
-		if errors.Is(err, model.ErrAuthFlowInvalid) || errors.Is(err, model.ErrAuthFlowExpired) || errors.Is(err, model.ErrAuthFlowConsumed) {
-			developerAccessRequestError(c, http.StatusUnprocessableEntity, "DEVELOPER_ACCESS_AI_CONFIRMATION_INVALID", "AI recommendation confirmation is invalid or expired; continue the conversation to prepare a new one")
+	var request *model.DeveloperAccessRequest
+	var presetAttribution *model.PromptPresetRef
+	if strings.TrimSpace(input.AIRecommendation) == "" && strings.TrimSpace(input.ConfirmationToken) == "" {
+		// The no-AI path is deliberately first-class: the request enters the
+		// same administrator queue with only the user's redacted statement.
+		// This is not an approval and does not unlock L1.
+		request, err = model.SubmitAssistantDeveloperAccessRequestWithoutRecommendation(user.Id, input.Reason)
+	} else if strings.TrimSpace(input.ConfirmationToken) != "" {
+		if strings.TrimSpace(input.AIRecommendation) == "" {
+			developerAccessRequestError(c, http.StatusUnprocessableEntity, "DEVELOPER_ACCESS_AI_CONFIRMATION_INVALID", "AI recommendation confirmation is incomplete; continue the conversation to prepare a new one")
 			return
 		}
-		common.ApiError(c, err)
-		return
+		// Validate the short-lived draft before atomically consuming its one-time
+		// token and writing the user's one shared recommendation letter.
+		flow, flowErr := model.GetAuthFlow(input.ConfirmationToken, model.AuthFlowMatch{
+			Purpose:   model.AuthFlowPurposeAssistantL1,
+			UserId:    user.Id,
+			SessionId: sessionID,
+		})
+		if flowErr != nil {
+			if errors.Is(flowErr, model.ErrAuthFlowInvalid) || errors.Is(flowErr, model.ErrAuthFlowExpired) || errors.Is(flowErr, model.ErrAuthFlowConsumed) {
+				developerAccessRequestError(c, http.StatusUnprocessableEntity, "DEVELOPER_ACCESS_AI_CONFIRMATION_INVALID", "AI recommendation confirmation is invalid or expired; continue the conversation to prepare a new one")
+				return
+			}
+			common.ApiError(c, flowErr)
+			return
+		}
+		var draft assistantL1RecommendationDraft
+		if json.Unmarshal([]byte(flow.Payload), &draft) != nil {
+			developerAccessRequestError(c, http.StatusUnprocessableEntity, "DEVELOPER_ACCESS_AI_CONFIRMATION_MISMATCH", "AI recommendation draft is invalid")
+			return
+		}
+		if draft.PresetId != "" && draft.PresetVersion != "" {
+			presetAttribution = &model.PromptPresetRef{
+				PresetId: draft.PresetId, Generation: draft.PresetGeneration, Version: draft.PresetVersion,
+			}
+		}
+		request, err = model.SubmitConfirmedAssistantDeveloperAccessRecommendation(
+			input.ConfirmationToken,
+			model.AuthFlowMatch{
+				Purpose:   model.AuthFlowPurposeAssistantL1,
+				UserId:    user.Id,
+				SessionId: sessionID,
+			},
+			user.Id,
+			input.Reason,
+			input.AIRecommendation,
+		)
+		if errors.Is(err, model.ErrAuthFlowInvalid) || errors.Is(err, model.ErrAuthFlowExpired) || errors.Is(err, model.ErrAuthFlowConsumed) {
+			developerAccessRequestError(c, http.StatusUnprocessableEntity, "DEVELOPER_ACCESS_AI_CONFIRMATION_INVALID", "AI recommendation confirmation is invalid, expired, or already used")
+			return
+		}
+	} else {
+		// The signed-in user may edit the one shared recommendation letter
+		// directly. AI drafts use a token for their first confirmation; later
+		// human edits update the same pending row without creating another one.
+		request, err = model.SubmitUserEditedDeveloperAccessRecommendation(user.Id, input.Reason, input.AIRecommendation)
 	}
-	var draft assistantL1RecommendationDraft
-	if json.Unmarshal([]byte(flow.Payload), &draft) != nil ||
-		strings.TrimSpace(input.Reason) != draft.UserStatement ||
-		strings.TrimSpace(input.AIRecommendation) != draft.Recommendation {
-		developerAccessRequestError(c, http.StatusUnprocessableEntity, "DEVELOPER_ACCESS_AI_CONFIRMATION_MISMATCH", "AI recommendation does not match the confirmed draft")
-		return
-	}
-	request, err := model.SubmitAssistantDeveloperAccessRecommendation(user.Id, draft.UserStatement, draft.Recommendation)
 	if err != nil {
 		switch {
+		case errors.Is(err, model.ErrDeveloperAccessRequestQueueUnavailable):
+			c.Header("Retry-After", "2")
+			developerAccessRequestError(c, http.StatusServiceUnavailable, "DEVELOPER_ACCESS_QUEUE_UNAVAILABLE", "L1 申请暂时无法进入待处理队列，请使用相同内容重试")
+			return
 		case errors.Is(err, model.ErrDeveloperAccessRequestReasonTooShort):
 			developerAccessRequestError(c, http.StatusUnprocessableEntity, "DEVELOPER_ACCESS_REASON_TOO_SHORT", err.Error())
 			return
@@ -140,6 +181,11 @@ func SubmitDeveloperAccessRequest(c *gin.Context) {
 		}
 		common.ApiError(c, err)
 		return
+	}
+	if presetAttribution != nil {
+		if statErr := model.CountPresetRecommendation(*presetAttribution, request.Id); statErr != nil {
+			common.SysError("failed to record assistant preset recommendation for request " + strconv.Itoa(request.Id))
+		}
 	}
 	common.ApiSuccess(c, toDeveloperAccessRequestSelfResponse(request))
 }
@@ -187,6 +233,9 @@ func reviewDeveloperAccessRequest(c *gin.Context, approve bool) {
 		return
 	}
 	if approve {
+		if statErr := model.CountPresetApproval(requestID); statErr != nil && !errors.Is(statErr, gorm.ErrRecordNotFound) {
+			common.SysError("failed to record assistant preset approval for request " + strconv.Itoa(requestID))
+		}
 		model.RecordLog(c.GetInt("id"), model.LogTypeSystem, "approved developer access request "+strconv.Itoa(requestID))
 	} else {
 		model.RecordLog(c.GetInt("id"), model.LogTypeSystem, "rejected developer access request "+strconv.Itoa(requestID))

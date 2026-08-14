@@ -10,16 +10,18 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/pkg/cachex"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 )
 
 // shardedRoundTripper fans requests for each origin across N independent
 // transports so each origin can keep N reusable HTTP/2 connections.
 type shardedRoundTripper struct {
-	shards   []http.RoundTripper
-	n        uint32
-	policy   HTTPTransportPolicy
-	counters sync.Map // origin -> *atomic.Uint32
+	shards    []http.RoundTripper
+	n         uint32
+	policy    HTTPTransportPolicy
+	countOnce sync.Once
+	counters  *cachex.ByteCache[*atomic.Uint32]
 }
 
 func newShardedRoundTripper(policy HTTPTransportPolicy, factory func() *http.Transport) *shardedRoundTripper {
@@ -35,9 +37,10 @@ func newShardedRoundTripper(policy HTTPTransportPolicy, factory func() *http.Tra
 		shards[i] = transport
 	}
 	return &shardedRoundTripper{
-		shards: shards,
-		n:      uint32(n),
-		policy: policy,
+		shards:   shards,
+		n:        uint32(n),
+		policy:   policy,
+		counters: newShardCounters(),
 	}
 }
 
@@ -52,9 +55,19 @@ func (s *shardedRoundTripper) pickShard(origin string) uint32 {
 	if s.n <= 1 {
 		return 0
 	}
+	s.countOnce.Do(func() {
+		if s.counters == nil {
+			s.counters = newShardCounters()
+		}
+	})
 	counterAny, _ := s.counters.LoadOrStore(origin, &atomic.Uint32{})
-	counter := counterAny.(*atomic.Uint32)
-	return (counter.Add(1) - 1) % s.n
+	return (counterAny.Add(1) - 1) % s.n
+}
+
+func newShardCounters() *cachex.ByteCache[*atomic.Uint32] {
+	return cachex.NewByteCache[*atomic.Uint32](512, 128<<10, func(origin string, _ *atomic.Uint32) int64 {
+		return int64(len(origin) + 16)
+	})
 }
 
 func (s *shardedRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {

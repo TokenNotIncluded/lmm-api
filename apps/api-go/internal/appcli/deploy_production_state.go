@@ -30,7 +30,7 @@ const (
 	productionCommandTimeout       = 2 * time.Minute
 	productionProbeTimeout         = 8 * time.Second
 	productionProbeAttempts        = 45
-	productionTransactionFormat    = 1
+	productionTransactionFormat    = 3
 	productionStatusFormat         = 1
 	productionFrontendReleaseKeep  = 3
 	productionTransactionMarker    = "deployment.env"
@@ -39,6 +39,8 @@ const (
 	productionStatusFilename       = "status.json"
 	productionProbeTokenFilename   = "probe-token"
 	productionConfigRestoreDirname = "config-restore"
+	productionSourcePackageName    = "lmm-api-go"
+	productionAURPackageName       = "lmm-api-go-bin"
 )
 
 var (
@@ -46,6 +48,7 @@ var (
 	productionVersionPattern = regexp.MustCompile(`^[0-9][0-9A-Za-z._+]*$`)
 	productionSHA256Pattern  = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	productionReasonPattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+	productionPkgrelPattern  = regexp.MustCompile(`^[1-9][0-9]*(?:\.[0-9]+)?$`)
 )
 
 type productionPaths struct {
@@ -61,7 +64,6 @@ type productionPaths struct {
 	EdgeAssetRoot    string
 	InstalledBinary  string
 	PackagedFrontend string
-	MigrationWorkdir string
 	ReleasePackages  string
 	PackageCache     string
 	RemovedPaths     []string
@@ -86,7 +88,6 @@ func defaultProductionPaths() productionPaths {
 		EdgeAssetRoot:    defaultEdgeAssetRoot,
 		InstalledBinary:  "/usr/bin/lmm-api",
 		PackagedFrontend: "/usr/share/lmm-api-go/frontend-dist",
-		MigrationWorkdir: "/var/lib/lmm-api-go",
 		ReleasePackages:  "/var/lib/lmm-api-go/release-packages",
 		PackageCache:     "/var/cache/pacman/pkg",
 		RemovedPaths: []string{
@@ -193,12 +194,15 @@ type productionTransactionOptions struct {
 	ObservationWindow   time.Duration
 	ManualConfirm       bool
 	PreserveEdgePolicy  bool
+	ActivateFrontend    bool
 	Reason              string
 }
 
 type productionManifest struct {
 	Format                    int       `json:"format"`
 	DeploymentID              string    `json:"deployment_id"`
+	PackageName               string    `json:"package_name"`
+	PackageIdentity           string    `json:"package_identity"`
 	Package                   string    `json:"package"`
 	PackageSHA256             string    `json:"package_sha256"`
 	RollbackPackage           string    `json:"rollback_package"`
@@ -220,6 +224,96 @@ type productionManifest struct {
 	EnvironmentRestoreSHA256  string    `json:"environment_restore_sha256"`
 	NginxEdgeRestoreSHA256    string    `json:"nginx_edge_restore_sha256,omitempty"`
 	PreserveEdgePolicy        bool      `json:"preserve_edge_policy,omitempty"`
+	ActivateFrontend          bool      `json:"activate_bundled_frontend,omitempty"`
+}
+
+func parseProductionPackageIdentity(output []byte) (name, version, identity string, err error) {
+	fields := strings.Fields(string(output))
+	if len(fields) != 2 {
+		return "", "", "", errors.New("invalid package identity")
+	}
+	name, version = fields[0], fields[1]
+	if name != productionAURPackageName && name != productionSourcePackageName {
+		return "", "", "", fmt.Errorf("unsupported Go package %q", name)
+	}
+	separator := strings.LastIndexByte(version, '-')
+	if separator <= 0 || !productionVersionPattern.MatchString(version[:separator]) ||
+		!productionPkgrelPattern.MatchString(version[separator+1:]) {
+		return "", "", "", errors.New("invalid Go package version")
+	}
+	return name, version, name + " " + version, nil
+}
+
+func productionPackageMatches(version, release string) bool {
+	separator := strings.LastIndexByte(version, '-')
+	return separator > 0 && version[:separator] == release &&
+		productionPkgrelPattern.MatchString(version[separator+1:])
+}
+
+func (runtime *productionRuntime) installedGoPackage(ctx context.Context) (name, identity string, err error) {
+	seen := make(map[string]struct{}, 1)
+	for _, candidate := range []string{productionAURPackageName, productionSourcePackageName} {
+		output, queryErr := runtime.runner.Run(ctx, productionCommand{Name: "pacman", Args: []string{"-Q", candidate}})
+		if queryErr != nil {
+			continue
+		}
+		parsedName, _, parsedIdentity, parseErr := parseProductionPackageIdentity(output)
+		if parseErr != nil {
+			return "", "", errors.New("installed Go package identity is invalid")
+		}
+		if _, duplicate := seen[parsedIdentity]; duplicate {
+			continue
+		}
+		seen[parsedIdentity] = struct{}{}
+		if identity != "" {
+			return "", "", errors.New("multiple Go packages are installed")
+		}
+		name, identity = parsedName, parsedIdentity
+	}
+	if identity == "" {
+		return "", "", errors.New("installed Go package was not found")
+	}
+	return name, identity, nil
+}
+
+func (runtime *productionRuntime) verifyInstalledGoPackage(ctx context.Context, name, identity string) error {
+	installed, err := runtime.runner.Run(ctx, productionCommand{Name: "pacman", Args: []string{"-Q", name}})
+	if err != nil || strings.TrimSpace(string(installed)) != identity {
+		return errors.New("installed Go package identity mismatch")
+	}
+	integrity, err := runtime.runner.Run(ctx, productionCommand{
+		Name: "pacman", Args: []string{"-Qkk", name}, Env: append(os.Environ(), "LC_ALL=C"),
+	})
+	if err != nil || !packageIntegrityClean(integrity, name) {
+		return errors.New("installed Go package integrity check failed")
+	}
+	return nil
+}
+
+func packageIntegrityClean(output []byte, name string) bool {
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	backupPrefix := "backup file: " + name + ": "
+	summaryPrefix := name + ": "
+	summarySuffix := " total files, 0 altered files"
+	summaryFound := false
+	for _, line := range lines {
+		if line == "" || strings.ContainsRune(line, '\r') || summaryFound {
+			return false
+		}
+		if strings.HasPrefix(line, backupPrefix) && len(line) > len(backupPrefix) {
+			continue
+		}
+		if len(line) < len(summaryPrefix)+len(summarySuffix) ||
+			!strings.HasPrefix(line, summaryPrefix) || !strings.HasSuffix(line, summarySuffix) {
+			return false
+		}
+		total := line[len(summaryPrefix) : len(line)-len(summarySuffix)]
+		if _, err := strconv.ParseUint(total, 10, 64); err != nil {
+			return false
+		}
+		summaryFound = true
+	}
+	return summaryFound
 }
 
 type productionStatus struct {
@@ -292,21 +386,22 @@ func parseProductionTransactionOptions(action string, args []string, stderr io.W
 	flags.StringVar(&options.Workspace, "workspace", "", "marker-owned target deployment workspace")
 	switch action {
 	case "apply":
-		flags.StringVar(&options.Package, "package", "", "candidate lmm-api-go package")
+		flags.StringVar(&options.Package, "package", "", "candidate Go backend package")
 		flags.StringVar(&options.PackageSHA256, "package-sha256", "", "candidate package SHA-256")
-		flags.StringVar(&options.RollbackPackage, "rollback-package", "", "captured installed lmm-api-go package")
+		flags.StringVar(&options.RollbackPackage, "rollback-package", "", "captured installed Go backend package")
 		flags.StringVar(&options.RollbackSHA256, "rollback-sha256", "", "rollback package SHA-256")
-		flags.StringVar(&options.ProbeBinary, "probe-binary", "", "candidate lmm-api-go binary used for migration and probes")
+		flags.StringVar(&options.ProbeBinary, "probe-binary", "", "candidate Go backend binary used for migration and probes")
 		flags.StringVar(&options.ProbeBinarySHA256, "probe-binary-sha256", "", "probe binary SHA-256")
 		flags.StringVar(&options.ExpectedVersion, "expected-version", "", "candidate release version")
-		flags.StringVar(&options.FrontendIndexSHA256, "frontend-index-sha256", "", "candidate index.html SHA-256")
-		flags.StringVar(&options.BackupDir, "backup-dir", "", "verified target backup directory")
+		flags.StringVar(&options.FrontendIndexSHA256, "frontend-index-sha256", "", "bundled frontend index.html SHA-256 (required with --activate-bundled-frontend)")
+		flags.StringVar(&options.BackupDir, "backup-dir", "", "optional verified target backup directory")
 		rollbackSeconds := int(options.RollbackWindow / time.Second)
 		observationSeconds := int(options.ObservationWindow / time.Second)
 		flags.IntVar(&rollbackSeconds, "rollback-seconds", rollbackSeconds, "automatic rollback window (600-1800)")
 		flags.IntVar(&observationSeconds, "observation-seconds", observationSeconds, "stability observation window (120-360)")
 		flags.BoolVar(&options.ManualConfirm, "manual-confirm", false, "leave a healthy release awaiting an explicit confirm command")
 		flags.BoolVar(&options.PreserveEdgePolicy, "preserve-edge-policy", false, "preserve the active nginx edge policy instead of installing package defaults")
+		flags.BoolVar(&options.ActivateFrontend, "activate-bundled-frontend", false, "publish the frontend bundled in the Go package (legacy combined release only)")
 		if err := flags.Parse(args); err != nil {
 			return productionTransactionOptions{}, err
 		}
@@ -341,8 +436,7 @@ func parseProductionTransactionOptions(action string, args []string, stderr io.W
 			"--package": options.Package, "--package-sha256": options.PackageSHA256,
 			"--rollback-package": options.RollbackPackage, "--rollback-sha256": options.RollbackSHA256,
 			"--probe-binary": options.ProbeBinary, "--probe-binary-sha256": options.ProbeBinarySHA256,
-			"--expected-version": options.ExpectedVersion, "--frontend-index-sha256": options.FrontendIndexSHA256,
-			"--backup-dir": options.BackupDir,
+			"--expected-version": options.ExpectedVersion,
 		} {
 			if value == "" {
 				return productionTransactionOptions{}, fmt.Errorf("%s is required", label)
@@ -350,9 +444,14 @@ func parseProductionTransactionOptions(action string, args []string, stderr io.W
 		}
 		if !productionSHA256Pattern.MatchString(options.PackageSHA256) ||
 			!productionSHA256Pattern.MatchString(options.RollbackSHA256) ||
-			!productionSHA256Pattern.MatchString(options.ProbeBinarySHA256) ||
-			!productionSHA256Pattern.MatchString(options.FrontendIndexSHA256) {
+			!productionSHA256Pattern.MatchString(options.ProbeBinarySHA256) {
 			return productionTransactionOptions{}, errors.New("all SHA-256 values must be 64 lowercase hexadecimal characters")
+		}
+		if options.ActivateFrontend && !productionSHA256Pattern.MatchString(options.FrontendIndexSHA256) {
+			return productionTransactionOptions{}, errors.New("--frontend-index-sha256 is required with --activate-bundled-frontend")
+		}
+		if options.FrontendIndexSHA256 != "" && !productionSHA256Pattern.MatchString(options.FrontendIndexSHA256) {
+			return productionTransactionOptions{}, errors.New("invalid --frontend-index-sha256")
 		}
 		if !productionVersionPattern.MatchString(options.ExpectedVersion) {
 			return productionTransactionOptions{}, errors.New("invalid --expected-version")
@@ -365,13 +464,20 @@ func parseProductionTransactionOptions(action string, args []string, stderr io.W
 		}
 		for label, value := range map[string]*string{
 			"--package": &options.Package, "--rollback-package": &options.RollbackPackage,
-			"--probe-binary": &options.ProbeBinary, "--backup-dir": &options.BackupDir,
+			"--probe-binary": &options.ProbeBinary,
 		} {
 			clean, err := cleanAbsoluteNonRoot(*value)
 			if err != nil {
 				return productionTransactionOptions{}, fmt.Errorf("invalid %s: %w", label, err)
 			}
 			*value = clean
+		}
+		if options.BackupDir != "" {
+			clean, err := cleanAbsoluteNonRoot(options.BackupDir)
+			if err != nil {
+				return productionTransactionOptions{}, fmt.Errorf("invalid --backup-dir: %w", err)
+			}
+			options.BackupDir = clean
 		}
 	}
 	if action == "rollback" && !productionReasonPattern.MatchString(options.Reason) {
@@ -573,6 +679,14 @@ func (runtime *productionRuntime) validateManifest(workspace productionWorkspace
 	if !productionVersionPattern.MatchString(manifest.ExpectedVersion) || !productionVersionPattern.MatchString(manifest.OldVersion) {
 		return errors.New("deployment manifest contains an invalid version")
 	}
+	if manifest.PackageName != productionAURPackageName && manifest.PackageName != productionSourcePackageName {
+		return errors.New("deployment manifest contains an unsupported package name")
+	}
+	packageName, packageVersion, packageIdentity, err := parseProductionPackageIdentity([]byte(manifest.PackageIdentity))
+	if err != nil || packageName != manifest.PackageName || packageIdentity != manifest.PackageIdentity ||
+		!productionPackageMatches(packageVersion, manifest.ExpectedVersion) {
+		return errors.New("deployment manifest contains an invalid package identity")
+	}
 	for _, digest := range []string{
 		manifest.PackageSHA256, manifest.RollbackSHA256, manifest.ProbeBinarySHA256,
 		manifest.FrontendIndexSHA256, manifest.OldFrontendIndexSHA256, manifest.EnvironmentRestoreSHA256,
@@ -588,7 +702,7 @@ func (runtime *productionRuntime) validateManifest(workspace productionWorkspace
 			return fmt.Errorf("deployment manifest %s escapes staging", label)
 		}
 	}
-	if manifest.BackupDir != filepath.Join(runtime.paths.BackupRoot, workspace.id) {
+	if manifest.BackupDir != "" && manifest.BackupDir != filepath.Join(runtime.paths.BackupRoot, workspace.id) {
 		return errors.New("deployment manifest backup path is not release-scoped")
 	}
 	if !releaseIDPattern.MatchString(manifest.OldFrontendRelease) || !isDatabaseSchema(manifest.DatabaseSchema) {

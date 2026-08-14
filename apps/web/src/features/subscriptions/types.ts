@@ -18,6 +18,11 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { z } from 'zod'
 
+import type {
+  WaffoPancakeCheckoutLanguage,
+  WaffoPancakeCheckoutRegion,
+} from '@/lib/waffo-pancake-checkout'
+
 // ============================================================================
 // Subscription Plan Schema & Types
 // ============================================================================
@@ -92,6 +97,12 @@ export interface PlanPayload {
 export interface SubscriptionPayRequest {
   plan_id: number
   payment_method?: string
+}
+
+export interface WaffoPancakeSubscriptionPayRequest {
+  plan_id: number
+  checkout_region?: WaffoPancakeCheckoutRegion
+  checkout_language?: WaffoPancakeCheckoutLanguage
 }
 
 export interface SubscriptionPayResponse {

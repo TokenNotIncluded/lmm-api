@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
+	appconstant "github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
@@ -85,4 +87,47 @@ func TestDoRequestReturnsUpstreamRedirectWithoutFollowing(t *testing.T) {
 	}
 
 	assert.Equal(t, originalRedirectPolicy, reflect.ValueOf(sharedClient.CheckRedirect).Pointer(), "the cached client must not be mutated")
+}
+
+func TestDoRequestLimitsUnknownLengthResponseBeforeAdapter(t *testing.T) {
+	service.InitHttpClient()
+	gin.SetMode(gin.TestMode)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		_, _ = io.WriteString(w, "12345")
+	}))
+	defer server.Close()
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/relay", nil)
+	common.SetContextKey(ctx, appconstant.ContextKeyResponseByteLimit, 4)
+	req, err := http.NewRequest(http.MethodGet, server.URL, nil)
+	require.NoError(t, err)
+	resp, err := doRequest(ctx, req, &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}})
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	assert.ErrorIs(t, err, common.ErrLimitExceeded)
+	assert.Equal(t, "1234", string(body))
+}
+
+func TestDoRequestRejectsKnownOversizeResponseBeforeRead(t *testing.T) {
+	service.InitHttpClient()
+	gin.SetMode(gin.TestMode)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "5")
+		_, _ = io.WriteString(w, "12345")
+	}))
+	defer server.Close()
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/relay", nil)
+	common.SetContextKey(ctx, appconstant.ContextKeyResponseByteLimit, 4)
+	req, err := http.NewRequest(http.MethodGet, server.URL, nil)
+	require.NoError(t, err)
+	resp, err := doRequest(ctx, req, &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}})
+	assert.Nil(t, resp)
+	assert.ErrorIs(t, err, common.ErrLimitExceeded)
 }

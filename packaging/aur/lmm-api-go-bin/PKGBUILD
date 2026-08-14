@@ -1,7 +1,7 @@
-# Maintainer: LIghtJUNction
+# Maintainer: LIghtJUNction <lightjunction.me@gmail.com>
 
 pkgname=lmm-api-go-bin
-pkgver=0.1.0
+pkgver=0.1.10
 pkgrel=1
 pkgdesc='LMM API Go backend, native CLI, systemd service, and web frontend (prebuilt)'
 arch=('x86_64' 'aarch64')
@@ -18,7 +18,7 @@ conflicts=('lmm-api' 'lmm-api-bin' 'lmm-api-git' 'lmm-api-go' 'lmm-api-go-git')
 backup=('etc/lmm-api-go/lmm-api-go.env')
 options=('!strip')
 
-_release_tag="v${pkgver}"
+_release_tag="go-v${pkgver}"
 _artifact="lmm-api-go-${pkgver}-linux"
 _release_base="${url}/releases/download/${_release_tag}"
 source_x86_64=(
@@ -32,8 +32,16 @@ source_aarch64=(
   "${_artifact}-arm64.tar.gz.sigstore.json::${_release_base}/${_artifact}-arm64.tar.gz.sigstore.json"
 )
 noextract=("${_artifact}-amd64.tar.gz" "${_artifact}-arm64.tar.gz")
-sha256sums_x86_64=('SKIP' 'SKIP' 'SKIP')
-sha256sums_aarch64=('SKIP' 'SKIP' 'SKIP')
+sha256sums_x86_64=(
+  '492179b16f744932a7ea55c87845d1a206e46b208334c24736d3381bb6a6bc59'
+  '19b366a7158b59645b66d63e78f718736bab7bba3701759bc81a3e172c2c9d89'
+  '57abfbefedb14c0930420f4f5c8444bd45767830b21392667f715d894b187a56'
+)
+sha256sums_aarch64=(
+  '284a43f850450fc71a01721561252de2d552168591d5a65c7a1b3545d280b3de'
+  '59114a3fa46751b26cb7b598714d49d711f1d26e25214ac3755f0d47ed12b594'
+  'a7a4e347ca65312905f48f095fa25436b215e149a90593a6f645499b2941dbf2'
+)
 
 case "${CARCH}" in
   x86_64) _release_arch=amd64 ;;
@@ -52,7 +60,7 @@ prepare() {
   cosign verify-blob \
     --bundle "${archive}.sigstore.json" \
     --certificate-identity \
-      "${url}/.github/workflows/release.yml@refs/tags/${_release_tag}" \
+      "${url}/.github/workflows/release-go.yml@refs/tags/${_release_tag}" \
     --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
     "${archive}"
   bsdtar -xf "${archive}"
@@ -66,7 +74,8 @@ package() {
   ln -s lmm-api-go "${pkgdir}/usr/bin/lmm-api"
   install -Dm0644 "${bundle}/lmm-api.service" \
     "${pkgdir}/usr/lib/systemd/system/lmm-api.service"
-  install -Dm0600 "${bundle}/lmm-api-go.env" \
+  install -d -m0700 "${pkgdir}/etc/lmm-api-go"
+  install -m0600 "${bundle}/lmm-api-go.env" \
     "${pkgdir}/etc/lmm-api-go/lmm-api-go.env"
 
   install -d -m0755 "${pkgdir}/usr/share/lmm-api-go/frontend-dist"

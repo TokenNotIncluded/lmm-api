@@ -121,12 +121,9 @@ export function GettingStarted() {
   }
 
   if (!onboarding.activationComplete) {
-    const l0PresetPrompts = [
-      t('What can I do while access is under review?'),
-      t('How will you use the platform?'),
-      t('I need human support'),
-      t('Tell the AI assistant what you want to do'),
-    ]
+    let assistantAction = t('Start with AI assistant')
+    if (accessRequest?.status === 'pending') assistantAction = t('Continue')
+    if (accessRequest?.status === 'rejected') assistantAction = t('Revise')
 
     return (
       <SectionPageLayout>
@@ -134,13 +131,13 @@ export function GettingStarted() {
           {t('Getting started')}
         </SectionPageLayout.Title>
         <SectionPageLayout.Content>
-          <div className='mx-auto flex w-full max-w-2xl flex-col pb-10 sm:pb-14'>
+          <div className='mx-auto flex w-full max-w-2xl flex-col pb-12 sm:pb-16'>
             <section
-              className='border px-4 py-5 sm:px-6 sm:py-7'
+              className='px-1 py-8 sm:px-2 sm:py-12'
               data-testid='l0-conversation'
             >
-              <div className='space-y-2' role='log' aria-live='polite'>
-                <h2 className='text-lg font-medium'>{t('How can I help?')}</h2>
+              <div className='grid gap-3' role='log' aria-live='polite'>
+                <h2 className='text-2xl font-medium'>{t('How can I help?')}</h2>
                 <p className='text-muted-foreground text-sm leading-6'>
                   {t(
                     'L0 accounts can browse challenges and ask the AI assistant to request L1 access.'
@@ -148,128 +145,64 @@ export function GettingStarted() {
                 </p>
               </div>
 
-              {accessRequest?.status === 'pending' ? (
-                <div className='border-border/70 mt-5 border-t pt-4 text-sm leading-6'>
-                  <p className='font-medium'>
-                    {t('AI recommendation submitted')}
-                  </p>
-                  <p className='text-muted-foreground mt-1 text-xs'>
-                    {t('Pending review')}
-                  </p>
-                  <p className='text-muted-foreground mt-2'>
-                    {t(
-                      'Your request is waiting for an administrator. Only an administrator can approve L1 access.'
-                    )}
-                  </p>
-                  {accessRequest.reason ? (
-                    <p className='text-muted-foreground mt-2 whitespace-pre-wrap'>
-                      {accessRequest.reason}
+              <Separator className='my-8' />
+              <div className='grid gap-3 text-sm leading-6'>
+                {accessRequest?.status === 'pending' ? (
+                  <div className='grid gap-1' data-testid='l0-pending-request'>
+                    <p className='font-medium'>
+                      {accessRequest.ai_recommendation
+                        ? t('AI recommendation submitted')
+                        : t('Access request submitted')}
                     </p>
-                  ) : null}
-                  {accessRequest.ai_recommendation ? (
-                    <p className='text-muted-foreground mt-2 whitespace-pre-wrap'>
-                      {accessRequest.ai_recommendation}
+                    <p className='text-muted-foreground text-xs'>
+                      {t('Pending review')}
                     </p>
-                  ) : null}
-                  <Button
-                    type='button'
-                    variant='ghost'
-                    size='sm'
-                    className='mt-2'
-                    onClick={() => requestAssistantOpen('onboarding')}
-                  >
-                    {t('Continue')}
-                  </Button>
-                </div>
-              ) : null}
-
-              {accessRequest?.status === 'rejected' ? (
-                <div className='border-border/70 mt-5 border-t pt-4 text-sm leading-6'>
-                  <p className='text-destructive font-medium'>
-                    {t('Access request rejected')}
-                  </p>
-                  <p className='text-muted-foreground mt-1'>
-                    {t('Your previous unlock request was not approved.')}
-                  </p>
-                  {accessRequest.admin_note ? (
-                    <p className='mt-2 whitespace-pre-wrap'>
-                      {accessRequest.admin_note}
+                  </div>
+                ) : null}
+                {accessRequest?.status === 'rejected' ? (
+                  <div className='grid gap-1'>
+                    <p className='text-destructive font-medium'>
+                      {t('Access request rejected')}
                     </p>
-                  ) : null}
-                  <Button
-                    type='button'
-                    variant='outline'
-                    size='sm'
-                    className='mt-3'
-                    onClick={() => requestAssistantOpen('onboarding')}
-                  >
-                    {t('Revise')}
-                  </Button>
-                </div>
-              ) : null}
-
-              {accessRequest?.status === 'approved' ? (
-                <div className='border-border/70 mt-5 border-t pt-4 text-sm leading-6'>
-                  <p className='font-medium'>{t('Access request approved')}</p>
-                  <p className='text-muted-foreground mt-1'>
-                    {t(
-                      'Your developer access is active. Continue setup to create a key and connect your client.'
-                    )}
-                  </p>
-                  {accessRequest.admin_note ? (
-                    <p className='text-muted-foreground mt-2 whitespace-pre-wrap'>
-                      {accessRequest.admin_note}
+                    {accessRequest.admin_note ? (
+                      <p className='text-muted-foreground whitespace-pre-wrap'>
+                        {accessRequest.admin_note}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+                {accessRequest?.status === 'approved' ? (
+                  <div className='grid gap-1'>
+                    <p className='font-medium'>
+                      {t('Access request approved')}
                     </p>
-                  ) : null}
+                    <p className='text-muted-foreground'>
+                      {t(
+                        'Your developer access is active. Continue setup to create a key and connect your client.'
+                      )}
+                    </p>
+                  </div>
+                ) : null}
+                {requestLoaded && accessRequest?.status === 'approved' ? (
                   <Button
                     type='button'
                     size='sm'
-                    className='mt-3'
+                    className='w-fit'
                     onClick={() => void continueAfterApproval()}
                   >
                     {t('Continue setup')}
                   </Button>
-                </div>
-              ) : null}
-
-              <div className='border-border/70 mt-6 border-t pt-4'>
-                <p className='text-muted-foreground mb-3 text-xs'>
-                  {t(
-                    'Choose a common question or ask anything about using LMM.'
-                  )}
-                </p>
-                <div className='flex flex-wrap gap-2'>
-                  {l0PresetPrompts.map((preset) => (
-                    <Button
-                      key={preset}
-                      type='button'
-                      variant='outline'
-                      size='sm'
-                      className='h-auto min-h-8 text-left whitespace-normal'
-                      onClick={() => requestAssistantOpen('onboarding', preset)}
-                    >
-                      {preset}
-                    </Button>
-                  ))}
-                </div>
-                <form className='mt-4 flex gap-2' onSubmit={submitPrompt}>
-                  <Input
-                    value={prompt}
-                    onChange={(event) => setPrompt(event.target.value)}
-                    maxLength={4000}
-                    className='h-10 min-w-0 flex-1'
-                    placeholder={t('Tell the AI assistant what you need')}
-                    aria-label={t('Tell the AI assistant what you need')}
-                  />
-                  <Button type='submit' size='sm' disabled={!prompt.trim()}>
-                    {t('Send')}
+                ) : (
+                  <Button
+                    type='button'
+                    variant='link'
+                    size='sm'
+                    className='w-fit px-0'
+                    onClick={() => requestAssistantOpen('onboarding')}
+                  >
+                    {assistantAction}
                   </Button>
-                </form>
-                <p className='text-muted-foreground mt-3 text-xs leading-5'>
-                  {t(
-                    'Do not send personal information, passwords, API keys, or credentials in chat. Site-issued credentials such as API keys are shown in a shielded private card and are kept out of the assistant context.'
-                  )}
-                </p>
+                )}
               </div>
             </section>
           </div>

@@ -22,10 +22,12 @@ import {
   Bug,
   Compass,
   CreditCard,
+  ChartNoAxesCombined,
   FileText,
   Key,
   LayoutDashboard,
   LifeBuoy,
+  ListChecks,
   ListTodo,
   Medal,
   MessageSquare,
@@ -72,6 +74,11 @@ export function useSidebarData(): SidebarData {
               url: '/open-source-bounties',
               icon: Compass,
             },
+            {
+              title: t('To-dos'),
+              url: '/todos',
+              icon: ListChecks,
+            },
           ],
         },
       ],
@@ -105,6 +112,11 @@ export function useSidebarData(): SidebarData {
         id: 'chat',
         title: t('Chat'),
         items: [
+          {
+            title: t('Chat management'),
+            url: '/chat-management',
+            icon: MessageSquare,
+          },
           {
             title: t('Chat'),
             icon: MessageSquare,
@@ -164,6 +176,11 @@ export function useSidebarData(): SidebarData {
             url: '/support',
             icon: LifeBuoy,
           },
+          {
+            title: t('To-dos'),
+            url: '/todos',
+            icon: ListChecks,
+          },
         ],
       },
       {
@@ -194,6 +211,11 @@ export function useSidebarData(): SidebarData {
             title: t('Subscriptions'),
             url: '/subscriptions',
             icon: CreditCard,
+          },
+          {
+            title: t('Cost control'),
+            url: '/finance',
+            icon: ChartNoAxesCombined,
           },
           {
             title: t('System Info'),

@@ -29,6 +29,22 @@ create_archive() {
   printf '{}\n' > "$work/${artifact}.tar.gz.sigstore.json"
 }
 
+# Published binary packages pin the immutable release asset hashes. The
+# makepkg smoke test builds deliberately tiny local fixtures, so give only the
+# temporary PKGBUILD a matching checksum array instead of weakening the real
+# package back to SKIP.
+pin_fixture_hashes() {
+  local pkgbuild=$1 sums=$2 source hash
+  shift 2
+  [[ $sums =~ ^sha256sums(_[[:alnum:]_]+)?$ ]] || die "invalid checksum array: $sums"
+  printf '\n%s=(\n' "$sums" >> "$pkgbuild"
+  for source in "$@"; do
+    hash=$(sha256sum "$source")
+    printf "  '%s'\n" "${hash%% *}" >> "$pkgbuild"
+  done
+  printf ')\n' >> "$pkgbuild"
+}
+
 build_package() {
   local package=$1
   shift
@@ -44,7 +60,9 @@ build_package() {
 }
 
 go_work="$tmp/lmm-api-go-bin"
-go_artifact=lmm-api-go-0.1.2-linux-amd64
+go_pkgver=$(awk -F= '$1 == "pkgver" { print $2; exit }' "$HERE/lmm-api-go-bin/PKGBUILD")
+[[ $go_pkgver =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "invalid Go binary pkgver: $go_pkgver"
+go_artifact="lmm-api-go-${go_pkgver}-linux-amd64"
 go_bundle="$go_work/stage/$go_artifact"
 mkdir -p "$go_bundle/frontend-dist"
 cp "$HERE/lmm-api-go-bin/PKGBUILD" "$go_work/"
@@ -54,6 +72,10 @@ printf '<!doctype html>\n' > "$go_bundle/frontend-dist/index.html"
 cp "$SHARED/lmm-api.service" "$SHARED/lmm-api-go.env" "$go_bundle/"
 add_metadata "$go_bundle"
 create_archive "$go_work" "$go_artifact"
+pin_fixture_hashes "$go_work/PKGBUILD" sha256sums_x86_64 \
+  "$go_work/${go_artifact}.tar.gz" \
+  "$go_work/${go_artifact}.tar.gz.sha256" \
+  "$go_work/${go_artifact}.tar.gz.sigstore.json"
 build_package lmm-api-go-bin \
   usr/bin/lmm-api-go \
   usr/bin/lmm-api \
@@ -61,8 +83,43 @@ build_package lmm-api-go-bin \
   etc/lmm-api-go/lmm-api-go.env \
   usr/share/lmm-api-go/frontend-dist/index.html
 
+web_work="$tmp/lmm-api-web-bin"
+web_pkgver=$(awk -F= '$1 == "pkgver" { print $2; exit }' "$HERE/lmm-api-web-bin/PKGBUILD")
+[[ $web_pkgver =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "invalid web binary pkgver: $web_pkgver"
+mkdir -p "$web_work/stage/dist"
+cp "$HERE/lmm-api-web-bin/PKGBUILD" \
+  "$HERE/lmm-api-web-bin/lmm-api-web.install" \
+  "$web_work/"
+cp "$HERE/lmm-api-web-bin/lmm-api-web-activate" \
+  "$web_work/lmm-api-web-activate"
+printf '<!doctype html>\n' >"$web_work/stage/dist/index.html"
+cp "$HERE/lmm-api-web-bin/lmm-api-web-activate" "$web_work/stage/"
+cp "$HERE/../../deploy/frontend-release.sh" "$web_work/stage/frontend-release.sh"
+chmod 0755 "$web_work/stage/lmm-api-web-activate" "$web_work/stage/frontend-release.sh"
+add_metadata "$web_work/stage"
+web_artifact="lmm-api-web-${web_pkgver}"
+tar -czf "$web_work/${web_artifact}.tar.gz" -C "$web_work/stage" \
+  dist lmm-api-web-activate frontend-release.sh \
+  LICENSE NOTICE THIRD-PARTY-LICENSES.md REVISION
+(cd "$web_work" && sha256sum "${web_artifact}.tar.gz" >"${web_artifact}.tar.gz.sha256")
+printf '{}\n' >"$web_work/${web_artifact}.tar.gz.sigstore.json"
+pin_fixture_hashes "$web_work/PKGBUILD" sha256sums \
+  "$web_work/${web_artifact}.tar.gz" \
+  "$web_work/${web_artifact}.tar.gz.sha256" \
+  "$web_work/${web_artifact}.tar.gz.sigstore.json" \
+  "$web_work/lmm-api-web-activate"
+build_package lmm-api-web-bin \
+  usr/share/lmm-api-web/frontend-dist/index.html \
+  usr/lib/lmm-api-web/lmm-api-web-activate \
+  usr/lib/lmm-api-web/frontend-release.sh \
+  usr/share/licenses/lmm-api-web-bin/LICENSE \
+  usr/share/doc/lmm-api-web-bin/REVISION \
+  .INSTALL
+
 rs_work="$tmp/lmm-api-rs-bin"
-rs_artifact=lmm-api-rs-0.1.2-linux-amd64
+rs_pkgver=$(awk -F= '$1 == "pkgver" { print $2; exit }' "$HERE/lmm-api-rs-bin/PKGBUILD")
+[[ $rs_pkgver =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "invalid Rust binary pkgver: $rs_pkgver"
+rs_artifact="lmm-api-rs-${rs_pkgver}-linux-amd64"
 rs_bundle="$rs_work/stage/$rs_artifact"
 mkdir -p "$rs_bundle"
 cp "$HERE/lmm-api-rs-bin/PKGBUILD" "$rs_work/"
@@ -72,6 +129,10 @@ for binary in lmm-api-rs lmm-db-migrate; do
 done
 add_metadata "$rs_bundle"
 create_archive "$rs_work" "$rs_artifact"
+pin_fixture_hashes "$rs_work/PKGBUILD" sha256sums \
+  "$rs_work/${rs_artifact}.tar.gz" \
+  "$rs_work/${rs_artifact}.tar.gz.sha256" \
+  "$rs_work/${rs_artifact}.tar.gz.sigstore.json"
 build_package lmm-api-rs-bin usr/bin/lmm-api-rs usr/bin/lmm-db-migrate
 
 printf '%s\n' 'prebuilt direct-backend AUR packages built with makepkg'

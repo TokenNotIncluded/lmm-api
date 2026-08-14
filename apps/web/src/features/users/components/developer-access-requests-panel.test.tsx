@@ -104,7 +104,7 @@ afterEach(() => {
 after(() => domWindow.close())
 
 describe('DeveloperAccessRequestsPanel', () => {
-  test('requires an administrator reply before reviewing an AI recommendation', async () => {
+  test('requires an administrator reply before reviewing each user recommendation letter', async () => {
     api.get = (async (url: string) => {
       assert.equal(url, '/api/developer-access/requests')
       return {
@@ -125,6 +125,34 @@ describe('DeveloperAccessRequestsPanel', () => {
               reviewed_at: 0,
               username: 'test-user',
               email: 'test@example.test',
+            },
+            {
+              id: 18,
+              user_id: 9,
+              status: 'pending',
+              reason: 'I want to connect a local test client.',
+              source: 'assistant_request',
+              ai_recommendation: '',
+              admin_user_id: 0,
+              admin_note: '',
+              created_at: 1_786_400_001,
+              reviewed_at: 0,
+              username: 'manual-user',
+              email: 'manual@example.test',
+            },
+            {
+              id: 19,
+              user_id: 10,
+              status: 'pending',
+              reason: 'Obsolete legacy request.',
+              source: 'legacy',
+              ai_recommendation: '',
+              admin_user_id: 0,
+              admin_note: '',
+              created_at: 1_786_400_002,
+              reviewed_at: 0,
+              username: 'legacy-user',
+              email: 'legacy@example.test',
             },
           ],
         },
@@ -154,14 +182,18 @@ describe('DeveloperAccessRequestsPanel', () => {
         () => document.body.textContent?.includes('test-user') === true,
         'AI recommendation did not render'
       )
-      assert.match(document.body.textContent ?? '', /AI access recommendations/)
-      assert.match(
-        document.body.textContent ?? '',
-        /I will use Claude Code for private development\./
-      )
+      assert.match(document.body.textContent ?? '', /L1 access requests/)
       assert.match(
         document.body.textContent ?? '',
         /Recommend L1 because the user supplied a concrete use case\./
+      )
+      assert.match(document.body.textContent ?? '', /manual-user/)
+      assert.match(document.body.textContent ?? '', /Direct request/)
+      assert.doesNotMatch(document.body.textContent ?? '', /legacy-user/)
+      assert.doesNotMatch(document.body.textContent ?? '', /Legacy request/)
+      assert.match(
+        document.body.textContent ?? '',
+        /I want to connect a local test client\./
       )
 
       const textarea = document.querySelector('textarea')

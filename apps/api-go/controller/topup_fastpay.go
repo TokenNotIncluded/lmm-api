@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -322,7 +321,7 @@ type FastPayNotifyPayload struct {
 }
 
 func readFastPayNotifyPayload(c *gin.Context) (FastPayNotifyPayload, []byte, error) {
-	bodyBytes, err := io.ReadAll(c.Request.Body)
+	bodyBytes, err := common.ReadAllLimit(c.Request.Body, common.GetAnonymousRequestBodyLimitBytes())
 	if err != nil || len(bytes.TrimSpace(bodyBytes)) == 0 {
 		return FastPayNotifyPayload{}, nil, fmt.Errorf("empty callback body")
 	}

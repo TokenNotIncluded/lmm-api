@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -331,14 +332,11 @@ func dialAssistantSearchProviderAddress(ctx context.Context, network, address st
 }
 
 func readAssistantSearchResponse(body io.Reader) ([]byte, error) {
-	data, err := io.ReadAll(io.LimitReader(body, assistantSearchMaxResponseBytes+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(data) > assistantSearchMaxResponseBytes {
+	data, err := common.ReadAllLimit(body, assistantSearchMaxResponseBytes)
+	if errors.Is(err, common.ErrLimitExceeded) {
 		return nil, errors.New("search provider response is too large")
 	}
-	return data, nil
+	return data, err
 }
 
 type assistantSearchResponseLimitTransport struct {

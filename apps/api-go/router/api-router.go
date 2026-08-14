@@ -18,6 +18,14 @@ func SetApiRouter(router *gin.Engine) {
 	apiRouter.Use(middleware.BodyStorageCleanup()) // 清理请求体存储
 	apiRouter.Use(middleware.GlobalAPIRateLimit())
 	apiRouter.Use(middleware.ConsoleAccessGate())
+	// Bounty routes have their own L1 boundary and a deliberately public board.
+	// Keep them outside ConsoleAccessGate so L0 callers can browse public data
+	// and receive redacted empty private feeds without a page-wide 404.
+	openSourceBountyApiRouter := router.Group("/api")
+	openSourceBountyApiRouter.Use(middleware.RouteTag("api"))
+	openSourceBountyApiRouter.Use(gzip.Gzip(gzip.DefaultCompression))
+	openSourceBountyApiRouter.Use(middleware.BodyStorageCleanup())
+	openSourceBountyApiRouter.Use(middleware.GlobalAPIRateLimit())
 	anonymousRequestBodyLimit := middleware.AnonymousRequestBodyLimit()
 	{
 		apiRouter.GET("/setup", controller.GetSetup)
@@ -206,6 +214,10 @@ func SetApiRouter(router *gin.Engine) {
 				adminRoute.GET("/:id", controller.GetUser)
 				adminRoute.GET("/:id/assistant-profile", controller.AdminGetAssistantUserProfile)
 				adminRoute.PUT("/:id/assistant-profile", controller.AdminUpdateAssistantUserProfile)
+				adminRoute.GET("/:id/assistant-memories", controller.AdminListMemories)
+				adminRoute.POST("/:id/assistant-memories", middleware.CriticalRateLimit(), controller.AdminCreateMemory)
+				adminRoute.PUT("/:id/assistant-memories/:memoryId", middleware.CriticalRateLimit(), controller.AdminUpdateMemory)
+				adminRoute.DELETE("/:id/assistant-memories/:memoryId", middleware.CriticalRateLimit(), controller.AdminDeleteMemory)
 				adminRoute.POST("/", controller.CreateUser)
 				adminRoute.POST("/manage", controller.ManageUser)
 				adminRoute.PUT("/", controller.UpdateUser)
@@ -381,17 +393,17 @@ func SetApiRouter(router *gin.Engine) {
 			redemptionRoute.DELETE("/:id", controller.DeleteRedemption)
 		}
 
-		openSourceBountyPublicRoute := apiRouter.Group("/open-source-bounties")
+		openSourceBountyPublicRoute := openSourceBountyApiRouter.Group("/open-source-bounties")
 		openSourceBountyPublicRoute.Use(middleware.TryUserAuth())
 		{
 			openSourceBountyPublicRoute.GET("", controller.ListOpenSourceBounties)
 			openSourceBountyPublicRoute.GET("/projects/:id", controller.GetOpenSourceBounty)
+			openSourceBountyPublicRoute.GET("/config", controller.GetOpenSourceBountyConfig)
 		}
 
-		openSourceBountyRoute := apiRouter.Group("/open-source-bounties")
-		openSourceBountyRoute.Use(middleware.UserAuth())
+		openSourceBountyRoute := openSourceBountyApiRouter.Group("/open-source-bounties")
+		openSourceBountyRoute.Use(middleware.UserAuth(), requireOpenSourceBountyDeveloperAccess())
 		{
-			openSourceBountyRoute.GET("/config", controller.GetOpenSourceBountyConfig)
 			openSourceBountyRoute.GET("/mcp-token", middleware.DisableCache(), controller.GetOpenSourceBountyMCPToken)
 			openSourceBountyRoute.POST("/mcp-token", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.RotateOpenSourceBountyMCPToken)
 			openSourceBountyRoute.DELETE("/mcp-token", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.RevokeOpenSourceBountyMCPToken)
@@ -435,6 +447,14 @@ func SetApiRouter(router *gin.Engine) {
 		financeRoute.Use(middleware.AdminAuth(), middleware.DisableCache())
 		{
 			financeRoute.GET("/export", controller.ExportFinancialData)
+			financeRoute.GET("/overview", controller.GetFinanceOverview)
+			financeRoute.GET("/users", controller.GetFinanceUsers)
+			financeRoute.GET("/users/:user_id", controller.GetFinanceUser)
+			financeRoute.GET("/entries", controller.ListFinanceEntries)
+			financeRoute.POST("/entries", controller.CreateFinanceEntry)
+			financeRoute.POST("/entries/:entry_id/reverse", controller.ReverseFinanceEntry)
+			financeRoute.GET("/payment-methods", controller.ListFinancePaymentMethods)
+			financeRoute.PUT("/payment-methods/:method", controller.UpdateFinancePaymentMethod)
 		}
 		logRoute.GET("/self", middleware.UserAuth(), controller.GetUserLogs)
 		logRoute.GET("/self/search", middleware.UserAuth(), middleware.SearchRateLimit(), controller.SearchUserLogs)

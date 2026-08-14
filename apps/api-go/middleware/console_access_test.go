@@ -25,6 +25,7 @@ func TestPreActivationRouteMatrixKeepsChallengesReadOnly(t *testing.T) {
 		{http.MethodGet, "/api/security/policy"},
 		{http.MethodGet, "/api/security/stats"},
 		{http.MethodGet, "/api/release-notes/latest"},
+		{http.MethodGet, "/api/user/self/onboarding/todo"},
 		{http.MethodPost, "/api/release-notes/7/read"},
 		{http.MethodPut, "/api/user/self"},
 		{http.MethodPost, "/api/user/passkey/register/begin"},
@@ -57,6 +58,7 @@ func TestPreActivationRouteMatrixKeepsChallengesReadOnly(t *testing.T) {
 		{http.MethodGet, "/api/user/checkin"},
 		{http.MethodPost, "/api/user/checkin"},
 		{http.MethodGet, "/api/user/developer-access/unknown"},
+		{http.MethodPatch, "/api/user/self/onboarding/todo"},
 		{http.MethodGet, "/api/models"},
 		{http.MethodGet, "/api/channel"},
 		{http.MethodGet, "/api/pricing"},
@@ -165,6 +167,7 @@ func TestConsoleAccessGateKeepsPublicAccountAndBountyRoutesReachable(t *testing.
 		{http.MethodGet, "/api/subscription/epay/return"},
 		{http.MethodPost, "/api/subscription/epay/return"},
 		{http.MethodPost, "/api/subscription/fastpay/notify"},
+		{http.MethodGet, "/api/user/self/onboarding/todo"},
 	} {
 		router := gin.New()
 		router.Use(ConsoleAccessGate())

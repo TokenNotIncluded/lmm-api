@@ -168,7 +168,7 @@ impl RolloutFlag {
 }
 
 /// One deterministic rollout switch and its canary percentage.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FlagConfig {
     /// Whether the switch is eligible for rollout.
@@ -178,16 +178,6 @@ pub struct FlagConfig {
     /// Dimension-specific overrides, ordered by declaration for stable ties.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub overrides: Vec<FlagOverride>,
-}
-
-impl Default for FlagConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            canary_basis_points: 0,
-            overrides: Vec::new(),
-        }
-    }
 }
 
 impl FlagConfig {
@@ -1208,6 +1198,12 @@ impl<'a> LocalRequest<'a> {
         self.body.len()
     }
 
+    /// Returns whether the local request body is empty.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.body.is_empty()
+    }
+
     /// Provides the body only to the local converter implementation.
     pub const fn as_bytes(&self) -> &'a [u8] {
         self.body
@@ -1714,6 +1710,7 @@ impl Error for RolloutConfigError {}
 pub type RolloutFeature = RelayFeature;
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
     use std::{

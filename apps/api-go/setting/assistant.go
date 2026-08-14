@@ -14,20 +14,28 @@ const (
 	AssistantModelOptionKey   = "AssistantModel"
 	// AssistantWeeklyCreditUSDOptionKey is retained only so older consoles can
 	// read and submit their retired field without affecting runtime funding.
-	AssistantWeeklyCreditUSDOptionKey  = "AssistantWeeklyCreditUSD"
-	AssistantAgentLoopEnabledOptionKey = "AssistantAgentLoopEnabled"
-	AssistantMaxStepsOptionKey         = "AssistantMaxSteps"
-	AssistantTimeoutSecondsOptionKey   = "AssistantTimeoutSeconds"
-	AssistantCacheEnabledOptionKey     = "AssistantCacheEnabled"
-	AssistantCacheTTLMinutesOptionKey  = "AssistantCacheTTLMinutes"
-	AssistantPersonaOptionKey          = "AssistantPersona"
-	AssistantSystemPromptOptionKey     = "AssistantSystemPrompt"
-	AssistantSearchProviderOptionKey   = "AssistantSearchProvider"
-	AssistantSearchURLOptionKey        = "AssistantSearchURL"
-	AssistantSearchAPIKeyOptionKey     = "AssistantSearchAPIKey"
-	AssistantSearchMCPToolOptionKey    = "AssistantSearchMCPTool"
-	AssistantSkillsOptionKey           = "AssistantSkills"
-	DefaultAssistantModel              = "deepseek-v4-flash"
+	AssistantWeeklyCreditUSDOptionKey        = "AssistantWeeklyCreditUSD"
+	AssistantAgentLoopEnabledOptionKey       = "AssistantAgentLoopEnabled"
+	AssistantMaxStepsOptionKey               = "AssistantMaxSteps"
+	AssistantTimeoutSecondsOptionKey         = "AssistantTimeoutSeconds"
+	AssistantCacheEnabledOptionKey           = "AssistantCacheEnabled"
+	AssistantCacheTTLMinutesOptionKey        = "AssistantCacheTTLMinutes"
+	AssistantPersonaOptionKey                = "AssistantPersona"
+	AssistantSystemPromptOptionKey           = "AssistantSystemPrompt"
+	AssistantSearchProviderOptionKey         = "AssistantSearchProvider"
+	AssistantSearchURLOptionKey              = "AssistantSearchURL"
+	AssistantSearchAPIKeyOptionKey           = "AssistantSearchAPIKey"
+	AssistantSearchMCPToolOptionKey          = "AssistantSearchMCPTool"
+	AssistantSkillsOptionKey                 = "AssistantSkills"
+	AssistantReviewEnabledOptionKey          = "AssistantReviewEnabled"
+	AssistantReviewWindowDaysOptionKey       = "AssistantReviewWindowDays"
+	AssistantReviewIntervalHoursOptionKey    = "AssistantReviewIntervalHours"
+	AssistantRetentionEnabledOptionKey       = "AssistantRetentionEnabled"
+	AssistantActiveRetentionDaysOptionKey    = "AssistantActiveRetentionDays"
+	AssistantArchivedRetentionDaysOptionKey  = "AssistantArchivedRetentionDays"
+	AssistantSecurityRetentionDaysOptionKey  = "AssistantSecurityRetentionDays"
+	AssistantRetentionIntervalHoursOptionKey = "AssistantRetentionIntervalHours"
+	DefaultAssistantModel                    = "deepseek-v4-flash"
 )
 
 type AssistantSearchProvider string
@@ -45,39 +53,55 @@ const (
 )
 
 type AssistantSettings struct {
-	Enabled          bool
-	Model            string
-	AgentLoopEnabled bool
-	MaxSteps         int
-	TimeoutSeconds   int
-	CacheEnabled     bool
-	CacheTTLMinutes  int
-	Persona          string
-	SystemPrompt     string
-	SearchProvider   AssistantSearchProvider
-	SearchURL        string
-	SearchAPIKey     string
-	SearchMCPTool    string
-	Skills           string
+	Enabled                bool
+	Model                  string
+	AgentLoopEnabled       bool
+	MaxSteps               int
+	TimeoutSeconds         int
+	CacheEnabled           bool
+	CacheTTLMinutes        int
+	Persona                string
+	SystemPrompt           string
+	SearchProvider         AssistantSearchProvider
+	SearchURL              string
+	SearchAPIKey           string
+	SearchMCPTool          string
+	Skills                 string
+	ReviewEnabled          bool
+	ReviewWindowDays       int
+	ReviewIntervalHours    int
+	RetentionEnabled       bool
+	ActiveRetentionDays    int
+	ArchivedRetentionDays  int
+	SecurityRetentionDays  int
+	RetentionIntervalHours int
 }
 
 var (
 	assistantSettingsMutex sync.RWMutex
 	assistantSettings      = AssistantSettings{
-		Enabled:          true,
-		Model:            DefaultAssistantModel,
-		AgentLoopEnabled: true,
-		MaxSteps:         6,
-		TimeoutSeconds:   45,
-		CacheEnabled:     true,
-		CacheTTLMinutes:  1440,
-		Persona:          "",
-		SystemPrompt:     "",
-		SearchProvider:   DefaultAssistantSearchProvider,
-		SearchURL:        "",
-		SearchAPIKey:     "",
-		SearchMCPTool:    "",
-		Skills:           "",
+		Enabled:                true,
+		Model:                  DefaultAssistantModel,
+		AgentLoopEnabled:       true,
+		MaxSteps:               6,
+		TimeoutSeconds:         45,
+		CacheEnabled:           true,
+		CacheTTLMinutes:        1440,
+		Persona:                "",
+		SystemPrompt:           "",
+		SearchProvider:         DefaultAssistantSearchProvider,
+		SearchURL:              "",
+		SearchAPIKey:           "",
+		SearchMCPTool:          "",
+		Skills:                 "",
+		ReviewEnabled:          true,
+		ReviewWindowDays:       30,
+		ReviewIntervalHours:    24,
+		RetentionEnabled:       true,
+		ActiveRetentionDays:    90,
+		ArchivedRetentionDays:  30,
+		SecurityRetentionDays:  180,
+		RetentionIntervalHours: 24,
 	}
 )
 
@@ -205,8 +229,59 @@ func UpdateAssistantSkills(value string) error {
 	return updateAssistantText(&assistantSettings.Skills, value, 12000, "assistant skills must be at most 12000 characters")
 }
 
+func SetAssistantReviewEnabled(enabled bool) {
+	assistantSettingsMutex.Lock()
+	defer assistantSettingsMutex.Unlock()
+	assistantSettings.ReviewEnabled = enabled
+}
+
+func UpdateAssistantReviewWindowDays(value string) error {
+	return updateAssistantNumber(&assistantSettings.ReviewWindowDays, value, 1, 90, "assistant review window must be between 1 and 90 days")
+}
+
+func UpdateAssistantReviewIntervalHours(value string) error {
+	return updateAssistantNumber(&assistantSettings.ReviewIntervalHours, value, 1, 168, "assistant review interval must be between 1 and 168 hours")
+}
+
+func SetAssistantRetentionEnabled(enabled bool) {
+	assistantSettingsMutex.Lock()
+	defer assistantSettingsMutex.Unlock()
+	assistantSettings.RetentionEnabled = enabled
+}
+
+func updateAssistantNumber(target *int, value string, minimum, maximum int, message string) error {
+	number, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || number < minimum || number > maximum {
+		return errors.New(message)
+	}
+	assistantSettingsMutex.Lock()
+	defer assistantSettingsMutex.Unlock()
+	*target = number
+	return nil
+}
+
+func UpdateAssistantActiveRetentionDays(value string) error {
+	return updateAssistantNumber(&assistantSettings.ActiveRetentionDays, value, 7, 3650, "assistant active retention must be between 7 and 3650 days")
+}
+
+func UpdateAssistantArchivedRetentionDays(value string) error {
+	return updateAssistantNumber(&assistantSettings.ArchivedRetentionDays, value, 1, 3650, "assistant archived retention must be between 1 and 3650 days")
+}
+
+func UpdateAssistantSecurityRetentionDays(value string) error {
+	return updateAssistantNumber(&assistantSettings.SecurityRetentionDays, value, 30, 3650, "assistant security retention must be between 30 and 3650 days")
+}
+
+func UpdateAssistantRetentionIntervalHours(value string) error {
+	return updateAssistantNumber(&assistantSettings.RetentionIntervalHours, value, 1, 168, "assistant retention interval must be between 1 and 168 hours")
+}
+
 func ValidateAssistantOption(key string, value string) error {
 	switch key {
+	case AssistantReviewEnabledOptionKey:
+		if _, err := strconv.ParseBool(strings.TrimSpace(value)); err != nil {
+			return errors.New("assistant review enabled must be a boolean")
+		}
 	case AssistantModelOptionKey:
 		model := strings.TrimSpace(value)
 		if model == "" {
@@ -256,6 +331,26 @@ func ValidateAssistantOption(key string, value string) error {
 		if len([]rune(strings.TrimSpace(value))) > 12000 {
 			return errors.New("assistant skills must be at most 12000 characters")
 		}
+	case AssistantReviewWindowDaysOptionKey:
+		return validateAssistantNumber(value, 1, 90, "assistant review window must be between 1 and 90 days")
+	case AssistantReviewIntervalHoursOptionKey:
+		return validateAssistantNumber(value, 1, 168, "assistant review interval must be between 1 and 168 hours")
+	case AssistantActiveRetentionDaysOptionKey:
+		return validateAssistantNumber(value, 7, 3650, "assistant active retention must be between 7 and 3650 days")
+	case AssistantArchivedRetentionDaysOptionKey:
+		return validateAssistantNumber(value, 1, 3650, "assistant archived retention must be between 1 and 3650 days")
+	case AssistantSecurityRetentionDaysOptionKey:
+		return validateAssistantNumber(value, 30, 3650, "assistant security retention must be between 30 and 3650 days")
+	case AssistantRetentionIntervalHoursOptionKey:
+		return validateAssistantNumber(value, 1, 168, "assistant retention interval must be between 1 and 168 hours")
+	}
+	return nil
+}
+
+func validateAssistantNumber(value string, minimum, maximum int, message string) error {
+	number, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || number < minimum || number > maximum {
+		return errors.New(message)
 	}
 	return nil
 }

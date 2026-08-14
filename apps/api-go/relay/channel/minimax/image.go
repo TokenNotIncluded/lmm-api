@@ -2,7 +2,6 @@ package minimax
 
 import (
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -176,7 +175,7 @@ func responseMiniMax2OpenAIImage(response *MiniMaxImageResponse, info *relaycomm
 }
 
 func miniMaxImageHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (*dto.Usage, *types.NewAPIError) {
-	responseBody, err := io.ReadAll(resp.Body)
+	responseBody, err := common.ReadResponseBody(resp)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
 	}

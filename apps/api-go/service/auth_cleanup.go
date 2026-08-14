@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -9,6 +10,11 @@ import (
 )
 
 const authArtifactCleanupInterval = time.Hour
+
+const (
+	secureCardScrubBatchSize  = 200
+	secureCardScrubMaxBatches = 20
+)
 
 // StartAuthArtifactCleanup removes expired dashboard Sessions and old
 // one-time authentication flows. Only the master instance performs cleanup.
@@ -47,5 +53,19 @@ func cleanupAuthArtifacts() {
 	}
 	if err := model.DeleteExpiredAuthFlows(now); err != nil {
 		common.SysError("failed to delete expired authentication flows: " + err.Error())
+	}
+	// A minimal test database or a node still completing its first migration
+	// may not have assistant storage yet. The next hourly pass will pick it up.
+	if model.DB.Migrator().HasTable(&model.AssistantSecureCard{}) {
+		for batch := 0; batch < secureCardScrubMaxBatches; batch++ {
+			count, err := model.ScrubExpiredAssistantSecureCards(context.Background(), now.Unix(), secureCardScrubBatchSize)
+			if err != nil {
+				common.SysError("failed to scrub expired assistant secure cards: " + err.Error())
+				break
+			}
+			if count < secureCardScrubBatchSize {
+				break
+			}
+		}
 	}
 }

@@ -5,8 +5,8 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
-	"sync"
 
+	"github.com/QuantumNous/new-api/relaykit/internal/cachex"
 	"github.com/QuantumNous/new-api/relaykit/types"
 )
 
@@ -279,12 +279,11 @@ func matchAdvancedCustomRouteModel(models []string, model string) bool {
 // matching runs on the request hot path (distributor affinity, ability filtering,
 // channel cache filtering, adaptor resolve), so patterns must not be recompiled per
 // request. Invalid patterns are cached as nil to avoid recompiling them as well.
-var advancedCustomModelRegexCache sync.Map // pattern string -> *regexp.Regexp (nil when invalid)
+var advancedCustomModelRegexCache = cachex.NewFixedMap[string, *regexp.Regexp](512)
 
 func compileAdvancedCustomModelRegex(pattern string) *regexp.Regexp {
 	if cached, ok := advancedCustomModelRegexCache.Load(pattern); ok {
-		re, _ := cached.(*regexp.Regexp)
-		return re
+		return cached
 	}
 	re, err := regexp.Compile(pattern)
 	if err != nil {

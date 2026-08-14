@@ -56,13 +56,14 @@ use lmm_contracts::relay::{
     ResponsesResponse, ResponsesStreamSnapshot, Role, SemanticBillingUsage, SemanticUsage,
     TokenUsage, Tool, ToolChoice, canonical_request_to_claude,
     canonical_request_to_gemini_for_model, canonical_request_to_openai_chat,
-    canonical_response_to_claude, canonical_response_to_gemini, claude_request_to_canonical,
-    claude_response_to_canonical, claude_stream_to_semantic_events,
-    gemini_request_to_canonical_for_model, gemini_response_to_canonical_for_model,
-    gemini_stream_to_canonical, openai_chat_request_to_canonical,
-    openai_chat_response_to_canonical, openai_responses_request_to_canonical,
-    openai_responses_response_to_canonical, openai_stream_to_canonical,
-    preflight_openai_responses_request_to_openai_chat, protocols, responses_stream_to_canonical,
+    canonical_request_to_openai_responses, canonical_response_to_claude,
+    canonical_response_to_gemini, claude_request_to_canonical, claude_response_to_canonical,
+    claude_stream_to_semantic_events, gemini_request_to_canonical_for_model,
+    gemini_response_to_canonical_for_model, gemini_stream_to_canonical,
+    openai_chat_request_to_canonical, openai_chat_response_to_canonical,
+    openai_responses_request_to_canonical, openai_responses_response_to_canonical,
+    openai_stream_to_canonical, preflight_openai_responses_request_to_openai_chat, protocols,
+    responses_stream_to_canonical,
 };
 
 const CHAT_REQUEST: &str = r#"{
@@ -144,8 +145,11 @@ const CHAT_STREAM: &str = r#"{
 const RESPONSES_STREAM: &str = r#"{
   "events":[
     {"Type":"response.created","Payload":{"type":"response.created","response":{"id":"responses-stream","object":"response","status":"in_progress","model":"responses-test","output":[]}}},
-    {"Type":"response.output_text.delta","Payload":{"type":"response.output_text.delta","delta":"ab"}},
-    {"Type":"response.completed","Payload":{"type":"response.completed","response":{"id":"responses-stream","object":"response","status":"completed","model":"responses-test","output":[],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}}}
+    {"Type":"response.output_item.added","Payload":{"type":"response.output_item.added","item":{"type":"message","id":"responses-stream_msg_0","status":"in_progress","role":"assistant","content":[]},"output_index":0}},
+    {"Type":"response.output_text.delta","Payload":{"type":"response.output_text.delta","delta":"ab","output_index":0,"content_index":0,"item_id":"responses-stream_msg_0"}},
+    {"Type":"response.output_text.done","Payload":{"type":"response.output_text.done","text":"ab","output_index":0,"content_index":0,"item_id":"responses-stream_msg_0"}},
+    {"Type":"response.output_item.done","Payload":{"type":"response.output_item.done","item":{"type":"message","id":"responses-stream_msg_0","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ab"}]},"output_index":0}},
+    {"Type":"response.completed","Payload":{"type":"response.completed","response":{"id":"responses-stream","object":"response","status":"completed","model":"responses-test","output":[{"type":"message","id":"responses-stream_msg_0","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ab"}]}],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}}}
   ],
   "usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}
 }"#;
@@ -309,6 +313,81 @@ fn request_conformance_preserves_order_ids_and_provider_signatures() {
                 |part| matches!(part, CanonicalContent::ToolCall { id, .. } if id == "call-claude")
             )
     );
+}
+
+#[test]
+fn responses_request_round_trip_preserves_input_tool_order_and_fields() {
+    let source: OpenAiResponsesRequest = serde_json::from_str(
+        r#"{
+          "model":"responses-order",
+          "input":[
+            {"role":"user","content":"hello"},
+            {"type":"function_call","call_id":"call-order","name":"lookup","arguments":"{\"q\":\"x\"}"},
+            {"type":"function_call_output","call_id":"call-order","output":{"ok":true}}
+          ],
+          "tools":[{"type":"function","name":"lookup","description":"lookup tool","parameters":{"type":"object","properties":{"q":{"type":"string"}}},"strict":true}]
+        }"#,
+    )
+    .expect("ordered Responses request");
+    let canonical =
+        openai_responses_request_to_canonical(source).expect("Responses request conversion");
+    assert!(matches!(
+        canonical.value.messages.as_slice(),
+        [
+            message,
+            call,
+            result,
+        ] if message.role == Role::User
+            && matches!(message.parts.as_slice(), [CanonicalContent::Text { text }] if text == "hello")
+            && call.role == Role::Assistant
+            && matches!(call.parts.as_slice(), [CanonicalContent::ToolCall { id, name, arguments }] if id == "call-order" && name == "lookup" && arguments == "{\"q\":\"x\"}")
+            && result.role == Role::Tool
+            && matches!(result.parts.as_slice(), [CanonicalContent::ToolResult { id, output, .. }] if id == "call-order" && *output == JsonData::Object([("ok".to_owned(), JsonData::Bool(true))].into_iter().collect()))
+    ));
+
+    let round_trip = canonical_request_to_openai_responses(canonical.value)
+        .expect("Responses request round trip");
+    let items = match round_trip.value.input.expect("Responses input") {
+        lmm_contracts::relay::ResponsesInput::Items(items) => items,
+        lmm_contracts::relay::ResponsesInput::String(_)
+        | lmm_contracts::relay::ResponsesInput::Json(_) => panic!("Responses input was flattened"),
+    };
+    // The canonical model keeps the assistant call as a separate message;
+    // the Responses encoder therefore emits one structural assistant item
+    // before the standalone function_call item.  The call/result items and
+    // their relative order remain exact.
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| item.kind.as_deref())
+            .collect::<Vec<_>>(),
+        vec![
+            None,
+            None,
+            Some("function_call"),
+            Some("function_call_output")
+        ]
+    );
+    assert_eq!(items[0].role.as_deref(), Some("user"));
+    assert!(matches!(
+        items[0].content.as_ref(),
+        Some(lmm_contracts::relay::StringOrParts::String(text)) if text == "hello"
+    ));
+    assert_eq!(items[2].call_id.as_deref(), Some("call-order"));
+    assert_eq!(items[2].name.as_deref(), Some("lookup"));
+    assert_eq!(items[2].arguments.as_deref(), Some("{\"q\":\"x\"}"));
+    assert_eq!(items[3].call_id.as_deref(), Some("call-order"));
+    assert_eq!(
+        items[3].output,
+        Some(JsonData::Object(
+            [("ok".to_owned(), JsonData::Bool(true))]
+                .into_iter()
+                .collect()
+        ))
+    );
+    assert_eq!(round_trip.value.tools.len(), 1);
+    assert_eq!(round_trip.value.tools[0].name.as_deref(), Some("lookup"));
+    assert_eq!(round_trip.value.tools[0].strict, Some(true));
 }
 
 #[test]
@@ -1722,6 +1801,54 @@ fn stream_session_decision_and_telemetry_follow_rollout_and_fail_closed() {
 }
 
 #[test]
+fn same_protocol_sse_unknown_event_and_bom_bytes_are_raw_passthrough() {
+    let registry = validated_current_registry().expect("current registry validates");
+    let scope = RouteOwnershipScope {
+        source: Protocol::OpenAi,
+        target: Protocol::OpenAi,
+        stream: true,
+    };
+    let rollout = ProtocolRolloutControl::default().snapshot();
+    let mut session = compile_stream_session(StreamSessionSpec::new(
+        "qa-same-protocol-raw",
+        Protocol::OpenAi,
+        Protocol::OpenAi,
+        "gpt-test",
+        &registry,
+        &rollout,
+        &OwnershipEvidence::closed(scope),
+    ))
+    .expect("same-protocol stream admits native raw passthrough");
+    assert!(session.decision().is_raw_passthrough());
+    assert!(session.plan().is_none());
+
+    let input = b"\xef\xbb\xbfevent: future_event\r\ndata: first\r\ndata: second\r\nx-provider-extension: opaque\r\n\r\n";
+    let mut parser = SseFrameParser::new(input.len());
+    let mut frames = Vec::new();
+    for chunk in input.chunks(2) {
+        frames.extend(parser.feed(chunk).expect("split SSE feed"));
+    }
+    frames.extend(parser.finish().expect("SSE EOF"));
+    assert_eq!(frames.len(), 1);
+    let frame = &frames[0];
+    assert_eq!(frame.raw, input);
+    assert_eq!(frame.event_name(), Some("future_event"));
+    assert_eq!(frame.data(), "first\nsecond");
+    assert_eq!(frame.unknown_fields.len(), 1);
+    assert_eq!(frame.unknown_fields[0], "x-provider-extension");
+    assert!(frame.has_unrepresentable_metadata());
+
+    let output = session
+        .process_frame(frame)
+        .expect("raw frame does not enter typed conversion");
+    assert!(matches!(
+        output,
+        StreamFrameOutput::RawPassthrough { bytes } if bytes == input
+    ));
+    session.complete();
+}
+
+#[test]
 fn rollout_feature_flags_select_deterministically_and_fail_closed() {
     let context = RolloutContext::new(
         "qa-rollout-stable-key",
@@ -3036,4 +3163,774 @@ fn typed_mutation_and_provider_types_are_reachable_from_public_api() {
     let media_part = Part::media(media);
     assert_eq!(media_part.kind, PartKind::Media);
     assert!(!Feature::all().is_empty());
+}
+
+#[test]
+#[ignore = "fixed-duration fuzz harness; run explicitly in QA"]
+fn fixed_duration_sse_fuzz_is_panic_free() {
+    const INITIAL_SEED: u64 = 0x8f3c_1a27_d4e5_b609;
+    const MAX_INPUT_BYTES: usize = 4096;
+    const MAX_FRAME_BYTES: usize = 512;
+    const MAX_FRAMES: usize = 64;
+
+    fn next_xorshift(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
+    let seconds = std::env::var("LMM_FUZZ_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(1)
+        .max(1)
+        .min(30);
+    let deadline = Instant::now() + Duration::from_secs(seconds);
+    let mut seed = INITIAL_SEED;
+    let mut iterations = 0_u64;
+
+    while Instant::now() < deadline {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let frame_count = (next_xorshift(&mut seed) % 16 + 1) as usize;
+            let mut input = Vec::with_capacity(MAX_INPUT_BYTES);
+            for frame_index in 0..frame_count {
+                let mode = (next_xorshift(&mut seed) % 4) as usize;
+                let prefix = match mode {
+                    0 => b"event: future\ndata: {\"ok\":true}\n".as_slice(),
+                    1 => b"data: [DONE]\n".as_slice(),
+                    2 => b": heartbeat\nunknown: extension\ndata: value\n".as_slice(),
+                    _ => b"data: ".as_slice(),
+                };
+                input.extend_from_slice(prefix);
+                let suffix_len = (next_xorshift(&mut seed) % 96) as usize;
+                for _ in 0..suffix_len {
+                    let byte = (next_xorshift(&mut seed) >> 56) as u8;
+                    input.push(match byte % 8 {
+                        0 => b'{',
+                        1 => b'}',
+                        2 => b'[',
+                        3 => b']',
+                        4 => b':',
+                        _ => b'a' + (byte % 26),
+                    });
+                }
+                if frame_index + 1 < frame_count || next_xorshift(&mut seed) & 1 == 0 {
+                    input.extend_from_slice(b"\n\n");
+                }
+            }
+            if input.len() > MAX_INPUT_BYTES {
+                input.truncate(MAX_INPUT_BYTES);
+            }
+            assert!(input.len() <= MAX_INPUT_BYTES);
+
+            let mut parser = SseFrameParser::new(MAX_FRAME_BYTES);
+            let mut frames = Vec::new();
+            let mut offset = 0_usize;
+            while offset < input.len() {
+                let width = (next_xorshift(&mut seed) % 64 + 1) as usize;
+                let end = offset.saturating_add(width).min(input.len());
+                match parser.feed(&input[offset..end]) {
+                    Ok(new_frames) => frames.extend(new_frames),
+                    Err(_) => break,
+                }
+                assert!(parser.buffered_frame_bytes() <= MAX_FRAME_BYTES);
+                assert!(frames.len() <= MAX_FRAMES);
+                offset = end;
+            }
+            let _ = parser.finish();
+            assert!(parser.buffered_frame_bytes() <= MAX_FRAME_BYTES);
+            assert!(frames.len() <= MAX_FRAMES);
+
+            for parsed in [
+                parse_sse_frames(&input, MAX_FRAME_BYTES),
+                parse_sse_frames_lenient(&input, MAX_FRAME_BYTES),
+                parse_sse_frames_rejecting_unterminated(&input, MAX_FRAME_BYTES),
+            ] {
+                if let Ok(parsed) = parsed {
+                    assert!(parsed.len() <= MAX_FRAMES);
+                    let _ = json_events_from_frames(&parsed);
+                    for frame in parsed {
+                        if let Ok(snapshot) =
+                            serde_json::from_str::<OpenAiStreamSnapshot>(&frame.data)
+                        {
+                            let _ = openai_stream_to_canonical(&snapshot);
+                        }
+                        if let Ok(snapshot) =
+                            serde_json::from_str::<ResponsesStreamSnapshot>(&frame.data)
+                        {
+                            let _ = responses_stream_to_canonical(&snapshot);
+                        }
+                        if let Ok(snapshot) =
+                            serde_json::from_str::<ClaudeStreamSnapshot>(&frame.data)
+                        {
+                            let _ = claude_stream_to_semantic_events(&snapshot);
+                        }
+                        if let Ok(snapshot) =
+                            serde_json::from_str::<GeminiStreamSnapshot>(&frame.data)
+                        {
+                            let _ = gemini_stream_to_canonical(&snapshot, "fuzz-model");
+                        }
+                    }
+                }
+            }
+        }));
+        assert!(
+            result.is_ok(),
+            "fixed SSE fuzz panic: seed={seed:#x}, iteration={iterations}"
+        );
+        iterations = iterations.saturating_add(1);
+    }
+
+    eprintln!(
+        "fixed SSE fuzz complete: initial_seed={INITIAL_SEED:#x}, final_seed={seed:#x}, iterations={iterations}"
+    );
+    assert!(
+        iterations > 0,
+        "fixed SSE fuzz did not execute an iteration"
+    );
+}
+
+#[test]
+#[ignore = "fixed-duration JSON conversion fuzz harness; run explicitly in QA"]
+fn fixed_duration_json_conversion_fuzz_is_panic_free() {
+    const INITIAL_SEED: u64 = 0x5d7a_91c3_24ef_0861;
+    const MAX_INPUT_BYTES: usize = 8192;
+    const MAX_ITERATIONS: u64 = 1_000_000;
+
+    fn next_xorshift(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
+    let seconds = std::env::var("LMM_FUZZ_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(1)
+        .max(1)
+        .min(30);
+    let deadline = Instant::now() + Duration::from_secs(seconds);
+    let mut seed = INITIAL_SEED;
+    let mut iterations = 0_u64;
+
+    while Instant::now() < deadline && iterations < MAX_ITERATIONS {
+        let template = match next_xorshift(&mut seed) % 9 {
+            0 => serde_json::json!({
+                "model": "fuzz-model",
+                "messages": []
+            }),
+            1 => serde_json::json!({
+                "model": "fuzz-model",
+                "messages": [{"role": "user", "content": "x"}],
+                "tools": [{
+                    "type": "function",
+                    "function": {
+                        "name": "lookup",
+                        "parameters": {"type": "object"}
+                    }
+                }]
+            }),
+            2 => serde_json::json!({
+                "model": "fuzz-model",
+                "input": "x",
+                "tools": [{
+                    "type": "function",
+                    "name": "lookup",
+                    "parameters": {"type": "object"}
+                }]
+            }),
+            3 => serde_json::json!({
+                "model": "fuzz-model",
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "x"}],
+                "tools": [{
+                    "name": "lookup",
+                    "input_schema": {"type": "object"}
+                }]
+            }),
+            4 => serde_json::json!({
+                "contents": [{"role": "user", "parts": [{"text": "x"}]}],
+                "tools": [{
+                    "functionDeclarations": [{
+                        "name": "lookup",
+                        "parameters": {"type": "object"}
+                    }]
+                }]
+            }),
+            5 => serde_json::json!({
+                "id": "fuzz",
+                "model": "fuzz-model",
+                "object": "chat.completion",
+                "created": 0,
+                "choices": []
+            }),
+            6 => serde_json::json!({
+                "id": "fuzz",
+                "object": "response",
+                "created_at": 0,
+                "status": "completed",
+                "model": "fuzz-model",
+                "output": []
+            }),
+            7 => serde_json::json!({
+                "id": "fuzz",
+                "type": "message",
+                "role": "assistant",
+                "model": "fuzz-model",
+                "content": []
+            }),
+            _ => serde_json::json!({"candidates": []}),
+        };
+        let mut input = serde_json::to_vec(&template).expect("JSON fuzz template");
+
+        match next_xorshift(&mut seed) % 3 {
+            0 => {}
+            1 => {
+                let suffix_len = (next_xorshift(&mut seed) % 128) as usize;
+                for _ in 0..suffix_len {
+                    let byte = (next_xorshift(&mut seed) >> 56) as u8;
+                    input.push(match byte % 8 {
+                        0 => b'{',
+                        1 => b'}',
+                        2 => b'[',
+                        3 => b']',
+                        4 => b':',
+                        5 => b',',
+                        _ => b'a' + (byte % 26),
+                    });
+                }
+            }
+            _ => {
+                let cut = (next_xorshift(&mut seed) as usize) % (input.len() + 1);
+                input.truncate(cut);
+            }
+        }
+        if input.len() > MAX_INPUT_BYTES {
+            input.truncate(MAX_INPUT_BYTES);
+        }
+        assert!(input.len() <= MAX_INPUT_BYTES);
+
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            if let Ok(request) = serde_json::from_slice::<OpenAiChatRequest>(&input) {
+                if let Ok(converted) = openai_chat_request_to_canonical(request) {
+                    let _ = canonical_request_to_openai_responses(converted.value);
+                }
+            }
+            if let Ok(request) = serde_json::from_slice::<OpenAiResponsesRequest>(&input) {
+                if let Ok(converted) = openai_responses_request_to_canonical(request) {
+                    let _ = canonical_request_to_openai_chat(converted.value);
+                }
+            }
+            if let Ok(request) = serde_json::from_slice::<ClaudeRequest>(&input) {
+                if let Ok(converted) = claude_request_to_canonical(request) {
+                    let _ = canonical_request_to_claude(converted.value);
+                }
+            }
+            if let Ok(request) = serde_json::from_slice::<GeminiRequest>(&input) {
+                if let Ok(converted) = gemini_request_to_canonical_for_model(request, "fuzz-model")
+                {
+                    let _ =
+                        canonical_request_to_gemini_for_model(converted.value, "fuzz-model", false);
+                }
+            }
+
+            if let Ok(response) = serde_json::from_slice::<OpenAiChatResponse>(&input) {
+                let _ = openai_chat_response_to_canonical(response);
+            }
+            if let Ok(response) = serde_json::from_slice::<ResponsesResponse>(&input) {
+                let _ = openai_responses_response_to_canonical(response);
+            }
+            if let Ok(response) = serde_json::from_slice::<ClaudeResponse>(&input) {
+                let _ = claude_response_to_canonical(response);
+            }
+            if let Ok(response) = serde_json::from_slice::<GeminiResponse>(&input) {
+                let _ = gemini_response_to_canonical_for_model(response, "fuzz-model");
+            }
+        }));
+        assert!(
+            result.is_ok(),
+            "fixed JSON conversion fuzz panic: seed={seed:#x}, iteration={iterations}"
+        );
+        iterations = iterations.saturating_add(1);
+    }
+
+    eprintln!(
+        "fixed JSON conversion fuzz complete: initial_seed={INITIAL_SEED:#x}, final_seed={seed:#x}, iterations={iterations}"
+    );
+    assert!(
+        iterations > 0,
+        "fixed JSON conversion fuzz did not execute an iteration"
+    );
+}
+
+#[test]
+#[ignore = "fixed-duration Claude stream state-machine fuzz harness; run explicitly in QA"]
+fn fixed_duration_claude_stream_state_machine_fuzz_is_panic_free() {
+    const INITIAL_SEED: u64 = 0xa7f2_4c91_6e03_b58d;
+    const MAX_EVENTS: usize = 64;
+    const MAX_BYTES: usize = 4096;
+    const MAX_ITERATIONS: u64 = 1_000_000;
+
+    fn next_xorshift(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
+    let seconds = std::env::var("LMM_FUZZ_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(1)
+        .max(1)
+        .min(30);
+    let deadline = Instant::now() + Duration::from_secs(seconds);
+    let source: serde_json::Value =
+        serde_json::from_str(CLAUDE_STREAM).expect("Claude event corpus");
+    let templates = source
+        .get("events")
+        .and_then(serde_json::Value::as_array)
+        .expect("Claude event corpus array");
+    assert!(!templates.is_empty());
+
+    let mut seed = INITIAL_SEED;
+    let mut iterations = 0_u64;
+    while Instant::now() < deadline && iterations < MAX_ITERATIONS {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let event_count = (next_xorshift(&mut seed) % (MAX_EVENTS as u64 + 1)) as usize;
+            let mut events = Vec::with_capacity(event_count);
+            for event_index in 0..event_count {
+                let template_index =
+                    (next_xorshift(&mut seed) as usize) % templates.len();
+                let event = match next_xorshift(&mut seed) % 9 {
+                    0 => templates[template_index].clone(),
+                    1 => serde_json::json!({
+                        "type": "message_start",
+                        "message": {
+                            "id": format!("fuzz-{event_index}"),
+                            "type": "message",
+                            "role": "assistant",
+                            "model": "fuzz-model",
+                            "content": []
+                        }
+                    }),
+                    2 => serde_json::json!({
+                        "type": "content_block_start",
+                        "index": event_index,
+                        "content_block": {
+                            "type": "thinking",
+                            "thinking": "",
+                            "signature": format!("sig-{}", next_xorshift(&mut seed) % 32)
+                        }
+                    }),
+                    3 => serde_json::json!({
+                        "type": "content_block_delta",
+                        "index": event_index,
+                        "delta": {
+                            "type": "thinking_delta",
+                            "thinking": format!("plan-{}", next_xorshift(&mut seed) % 32)
+                        }
+                    }),
+                    4 => serde_json::json!({
+                        "type": "content_block_delta",
+                        "index": event_index,
+                        "delta": {
+                            "type": "signature_delta",
+                            "signature": format!("sig-{}", next_xorshift(&mut seed) % 32)
+                        }
+                    }),
+                    5 => serde_json::json!({
+                        "type": "content_block_stop",
+                        "index": event_index
+                    }),
+                    6 => serde_json::json!({
+                        "type": "message_delta",
+                        "delta": {
+                            "stop_reason": if next_xorshift(&mut seed) & 1 == 0 {
+                                "end_turn"
+                            } else {
+                                "tool_use"
+                            }
+                        }
+                    }),
+                    7 => serde_json::json!({"type": "message_stop"}),
+                    _ => serde_json::json!({
+                        "type": format!(
+                            "future_event_{}",
+                            next_xorshift(&mut seed) % 32
+                        ),
+                        "provider_field": next_xorshift(&mut seed)
+                    }),
+                };
+                events.push(event);
+            }
+            assert!(events.len() <= MAX_EVENTS);
+
+            let document = serde_json::json!({
+                "events": events,
+                "usage": {
+                    "input_tokens": next_xorshift(&mut seed) % 32,
+                    "output_tokens": next_xorshift(&mut seed) % 32
+                }
+            });
+            let mut bytes = serde_json::to_vec(&document).expect("Claude fuzz serialization");
+            if bytes.len() > MAX_BYTES {
+                bytes.truncate(MAX_BYTES);
+            }
+            assert!(bytes.len() <= MAX_BYTES);
+
+            let prefix_len = if bytes.is_empty() {
+                0
+            } else {
+                (next_xorshift(&mut seed) as usize) % (bytes.len() + 1)
+            };
+            for candidate in [bytes.as_slice(), &bytes[..prefix_len]] {
+                if let Ok(snapshot) = serde_json::from_slice::<ClaudeStreamSnapshot>(candidate) {
+                    let _ = claude_stream_to_semantic_events(&snapshot);
+                }
+            }
+        }));
+        assert!(
+            result.is_ok(),
+            "Claude stream state fuzz panic: seed={seed:#x}, iteration={iterations}"
+        );
+        iterations = iterations.saturating_add(1);
+    }
+
+    eprintln!(
+        "Claude stream state fuzz complete: initial_seed={INITIAL_SEED:#x}, final_seed={seed:#x}, iterations={iterations}"
+    );
+    assert!(
+        iterations > 0,
+        "Claude stream state fuzz did not execute an iteration"
+    );
+}
+
+#[test]
+#[ignore = "fixed-duration tool-schema fuzz harness; run explicitly in QA"]
+fn fixed_duration_tool_schema_conversion_fuzz_is_panic_free() {
+    const INITIAL_SEED: u64 = 0x1d4c_8f72_a903_e6b5;
+    const MAX_INPUT_BYTES: usize = 4096;
+    const MAX_SCHEMA_DEPTH: usize = 6;
+    const MAX_SCHEMA_NODES: usize = 63;
+    const MAX_TOOLS: usize = 8;
+    const MAX_ITERATIONS: u64 = 1_000_000;
+
+    fn next_xorshift(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
+    fn schema_value(
+        state: &mut u64,
+        depth: usize,
+        nodes_left: &mut usize,
+        forced_kind: Option<u8>,
+    ) -> serde_json::Value {
+        if *nodes_left == 0 {
+            return serde_json::Value::Null;
+        }
+        *nodes_left -= 1;
+        let kind = forced_kind.unwrap_or_else(|| (next_xorshift(state) % 6) as u8);
+        if depth >= MAX_SCHEMA_DEPTH {
+            return match kind % 4 {
+                0 => serde_json::Value::String(format!("s{:x}", next_xorshift(state) & 0xff)),
+                1 => {
+                    serde_json::Value::Number(serde_json::Number::from(next_xorshift(state) % 1000))
+                }
+                2 => serde_json::Value::Bool(next_xorshift(state) & 1 == 0),
+                _ => serde_json::Value::Null,
+            };
+        }
+
+        match kind {
+            0 => {
+                let mut object = serde_json::Map::new();
+                let count = (next_xorshift(state) % 3) as usize;
+                for index in 0..count {
+                    if *nodes_left == 0 {
+                        break;
+                    }
+                    object.insert(
+                        format!("k{index}"),
+                        schema_value(state, depth + 1, nodes_left, None),
+                    );
+                }
+                serde_json::Value::Object(object)
+            }
+            1 => {
+                let count = (next_xorshift(state) % 3) as usize;
+                let mut array = Vec::with_capacity(count);
+                for _ in 0..count {
+                    if *nodes_left == 0 {
+                        break;
+                    }
+                    array.push(schema_value(state, depth + 1, nodes_left, None));
+                }
+                serde_json::Value::Array(array)
+            }
+            2 => serde_json::Value::String(format!(
+                "s{:x}",
+                next_xorshift(state) & 0xffff
+            )),
+            3 => serde_json::Value::Number(serde_json::Number::from(
+                next_xorshift(state) % 1000,
+            )),
+            4 => serde_json::Value::Bool(next_xorshift(state) & 1 == 0),
+            _ => serde_json::Value::Null,
+        }
+    }
+
+    let seconds = std::env::var("LMM_FUZZ_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(1)
+        .max(1)
+        .min(30);
+    let deadline = Instant::now() + Duration::from_secs(seconds);
+    let mut seed = INITIAL_SEED;
+    let mut iterations = 0_u64;
+
+    while Instant::now() < deadline && iterations < MAX_ITERATIONS {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let tool_count = (next_xorshift(&mut seed) % MAX_TOOLS as u64 + 1) as usize;
+            let mut schemas = Vec::with_capacity(tool_count);
+            for tool_index in 0..tool_count {
+                let mut nodes_left = MAX_SCHEMA_NODES;
+                schemas.push(schema_value(
+                    &mut seed,
+                    0,
+                    &mut nodes_left,
+                    Some((tool_index % 6) as u8),
+                ));
+            }
+            assert!(schemas.len() <= MAX_TOOLS);
+
+            let chat = serde_json::json!({
+                "model": "fuzz-schema",
+                "messages": [],
+                "tools": schemas.iter().enumerate().map(|(tool_index, schema)| {
+                    serde_json::json!({
+                        "type": "function",
+                        "function": {
+                            "name": format!("lookup_{tool_index}"),
+                            "parameters": schema.clone()
+                        }
+                    })
+                }).collect::<Vec<_>>()
+            });
+            let claude = serde_json::json!({
+                "model": "fuzz-schema",
+                "max_tokens": 128,
+                "messages": [],
+                "tools": schemas.iter().enumerate().map(|(tool_index, schema)| {
+                    serde_json::json!({
+                        "name": format!("lookup_{tool_index}"),
+                        "input_schema": schema.clone()
+                    })
+                }).collect::<Vec<_>>()
+            });
+            let gemini = serde_json::json!({
+                "contents": [],
+                "tools": [{
+                    "functionDeclarations": schemas.iter().enumerate().map(|(tool_index, schema)| {
+                        serde_json::json!({
+                            "name": format!("lookup_{tool_index}"),
+                            "parameters": schema.clone()
+                        })
+                    }).collect::<Vec<_>>()
+                }]
+            });
+            let responses = serde_json::json!({
+                "model": "fuzz-schema",
+                "input": [],
+                "tools": schemas.iter().enumerate().map(|(tool_index, schema)| {
+                    serde_json::json!({
+                        "type": "function",
+                        "name": format!("lookup_{tool_index}"),
+                        "parameters": schema.clone()
+                    })
+                }).collect::<Vec<_>>()
+            });
+
+            let documents = vec![
+                serde_json::to_vec(&chat).expect("Chat schema serialization"),
+                serde_json::to_vec(&claude).expect("Claude schema serialization"),
+                serde_json::to_vec(&gemini).expect("Gemini schema serialization"),
+                serde_json::to_vec(&responses).expect("Responses schema serialization"),
+            ];
+            for (document_index, mut input) in documents.into_iter().enumerate() {
+                match next_xorshift(&mut seed) % 3 {
+                    0 => {}
+                    1 => {
+                        let suffix_len = (next_xorshift(&mut seed) % 96) as usize;
+                        for _ in 0..suffix_len {
+                            let byte = (next_xorshift(&mut seed) >> 56) as u8;
+                            input.push(match byte % 8 {
+                                0 => b'{',
+                                1 => b'}',
+                                2 => b'[',
+                                3 => b']',
+                                4 => b':',
+                                5 => b',',
+                                _ => b'a' + (byte % 26),
+                            });
+                        }
+                    }
+                    _ => {
+                        let cut = (next_xorshift(&mut seed) as usize) % (input.len() + 1);
+                        input.truncate(cut);
+                    }
+                }
+                if input.len() > MAX_INPUT_BYTES {
+                    input.truncate(MAX_INPUT_BYTES);
+                }
+                assert!(input.len() <= MAX_INPUT_BYTES);
+
+                match document_index {
+                    0 => {
+                        if let Ok(request) =
+                            serde_json::from_slice::<OpenAiChatRequest>(&input)
+                        {
+                            let _ = openai_chat_request_to_canonical(request);
+                        }
+                    }
+                    1 => {
+                        if let Ok(request) = serde_json::from_slice::<ClaudeRequest>(&input) {
+                            let _ = claude_request_to_canonical(request);
+                        }
+                    }
+                    2 => {
+                        if let Ok(request) = serde_json::from_slice::<GeminiRequest>(&input) {
+                            let _ =
+                                gemini_request_to_canonical_for_model(request, "fuzz-schema");
+                        }
+                    }
+                    _ => {
+                        if let Ok(request) =
+                            serde_json::from_slice::<OpenAiResponsesRequest>(&input)
+                        {
+                            let _ = openai_responses_request_to_canonical(request);
+                        }
+                    }
+                }
+            }
+        }));
+        assert!(
+            result.is_ok(),
+            "tool schema fuzz panic: seed={seed:#x}, iteration={iterations}"
+        );
+        iterations = iterations.saturating_add(1);
+    }
+
+    eprintln!(
+        "tool schema fuzz complete: initial_seed={INITIAL_SEED:#x}, final_seed={seed:#x}, iterations={iterations}"
+    );
+    assert!(
+        iterations > 0,
+        "tool schema fuzz did not execute an iteration"
+    );
+}
+
+#[test]
+#[ignore = "fixed-duration observer/parser race harness; run explicitly in QA"]
+fn fixed_duration_observer_and_parser_race_is_panic_free() {
+    const INITIAL_SEED: u64 = 0xc31b_5e79_04a2_d6f8;
+    const WORKER_COUNT: usize = 4;
+    const MAX_ITERATIONS_PER_WORKER: u64 = 1_000_000;
+    const MAX_INPUT_BYTES: usize = 128;
+    const MAX_FRAME_BYTES: usize = 64;
+    const MAX_FRAMES: usize = 8;
+
+    fn next_xorshift(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
+    let seconds = std::env::var("LMM_FUZZ_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(1)
+        .max(1)
+        .min(30);
+    let deadline = Instant::now() + Duration::from_secs(seconds);
+    let observer = Arc::new(ConversionObserver::with_max_series(8));
+    let mut handles = Vec::with_capacity(WORKER_COUNT);
+
+    for worker_index in 0..WORKER_COUNT {
+        let observer = Arc::clone(&observer);
+        let worker_seed = INITIAL_SEED ^ (worker_index as u64).wrapping_mul(0x9e37_79b9);
+        handles.push(thread::spawn(move || {
+            catch_unwind(AssertUnwindSafe(|| {
+                let labels =
+                    MetricLabels::native_raw(Protocol::OpenAi, true, ConversionResult::Success);
+                let mut seed = worker_seed;
+                let mut iterations = 0_u64;
+
+                while Instant::now() < deadline && iterations < MAX_ITERATIONS_PER_WORKER {
+                    let input: &[u8] = if next_xorshift(&mut seed) & 1 == 0 {
+                        b"data: chunk\n\n"
+                    } else {
+                        b"event: update\r\ndata: chunk\r\n\r\n"
+                    };
+                    assert!(input.len() <= MAX_INPUT_BYTES);
+
+                    let mut parser = SseFrameParser::new(MAX_FRAME_BYTES);
+                    let mut offset = 0_usize;
+                    while offset < input.len() {
+                        let width = (next_xorshift(&mut seed) % 8 + 1) as usize;
+                        let end = offset.saturating_add(width).min(input.len());
+                        let frames = parser
+                            .feed(&input[offset..end])
+                            .expect("race harness SSE input is valid");
+                        assert!(frames.len() <= MAX_FRAMES);
+                        assert!(parser.buffered_frame_bytes() <= MAX_FRAME_BYTES);
+                        offset = end;
+                    }
+                    let _ = parser.finish();
+                    assert!(parser.buffered_frame_bytes() <= MAX_FRAME_BYTES);
+
+                    observer.record_events(labels, 1);
+                    if next_xorshift(&mut seed) & 15 == 0 {
+                        assert!(observer.snapshot().samples.len() <= 8);
+                    }
+                    iterations = iterations.saturating_add(1);
+                }
+
+                (iterations, seed)
+            }))
+        }));
+    }
+
+    let mut total_iterations = 0_u64;
+    for (worker_index, handle) in handles.into_iter().enumerate() {
+        let result = handle.join().expect("race harness worker joined");
+        match result {
+            Ok((iterations, final_seed)) => {
+                total_iterations = total_iterations.saturating_add(iterations);
+                eprintln!(
+                    "observer/parser race worker complete: worker={worker_index}, final_seed={final_seed:#x}, iterations={iterations}"
+                );
+            }
+            Err(_) => panic!(
+                "observer/parser race panic: worker={worker_index}, initial_seed={:#x}",
+                INITIAL_SEED ^ (worker_index as u64).wrapping_mul(0x9e37_79b9)
+            ),
+        }
+    }
+
+    assert!(total_iterations > 0, "race harness executed no iterations");
+    let snapshot = observer.snapshot();
+    let event_total = snapshot
+        .samples
+        .iter()
+        .find(|sample| sample.metric == MetricKind::ConversionEventsTotal)
+        .map_or(0, |sample| sample.value);
+    assert_eq!(event_total, total_iterations);
 }

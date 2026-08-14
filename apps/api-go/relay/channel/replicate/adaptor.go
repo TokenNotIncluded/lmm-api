@@ -180,7 +180,7 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 		return nil, types.NewError(errors.New("replicate adaptor: empty response"), types.ErrorCodeBadResponse)
 	}
 
-	responseBody, err := io.ReadAll(resp.Body)
+	responseBody, err := common.ReadResponseBody(resp)
 	if err != nil {
 		return nil, types.NewError(err, types.ErrorCodeReadResponseBodyFailed)
 	}
@@ -484,7 +484,7 @@ func uploadFileFromForm(c *gin.Context, info *relaycommon.RelayInfo, fieldCandid
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := common.ReadResponseBody(resp)
 	if err != nil {
 		return "", fmt.Errorf("replicate adaptor: read upload response failed: %w", err)
 	}

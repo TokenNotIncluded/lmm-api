@@ -2,15 +2,17 @@ package zhipu
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/pkg/cachex"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -27,13 +29,18 @@ import (
 // https://open.bigmodel.cn/api/paas/v3/model-api/chatglm_std/invoke
 // https://open.bigmodel.cn/api/paas/v3/model-api/chatglm_std/sse-invoke
 
-var zhipuTokens sync.Map
+var zhipuTokens = cachex.NewByteCache[zhipuTokenData](256, 1<<20, func(key string, token zhipuTokenData) int64 {
+	return int64(len(key) + len(token.Token) + 32)
+})
 var expSeconds int64 = 24 * 3600
 
+func zhipuTokenKey(apiKey string) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(apiKey)))
+}
+
 func getZhipuToken(apikey string) string {
-	data, ok := zhipuTokens.Load(apikey)
-	if ok {
-		tokenData := data.(zhipuTokenData)
+	key := zhipuTokenKey(apikey)
+	if tokenData, ok := zhipuTokens.Load(key); ok {
 		if time.Now().Before(tokenData.ExpiryTime) {
 			return tokenData.Token
 		}
@@ -69,10 +76,10 @@ func getZhipuToken(apikey string) string {
 		return ""
 	}
 
-	zhipuTokens.Store(apikey, zhipuTokenData{
+	zhipuTokens.SetWithTTL(key, zhipuTokenData{
 		Token:      tokenString,
 		ExpiryTime: expiryTime,
-	})
+	}, time.Until(expiryTime))
 
 	return tokenString
 }
@@ -224,7 +231,7 @@ func zhipuStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 
 func zhipuHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	var zhipuResponse ZhipuResponse
-	responseBody, err := io.ReadAll(resp.Body)
+	responseBody, err := common.ReadResponseBody(resp)
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
 	}

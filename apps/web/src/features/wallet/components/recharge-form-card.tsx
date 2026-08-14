@@ -45,6 +45,14 @@ import {
   InputGroupInput,
 } from '@/components/ui/input-group'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { TitledCard } from '@/components/ui/titled-card'
@@ -56,6 +64,10 @@ import {
 } from '@/components/ui/tooltip'
 import { usesDedicatedPaymentPricing } from '@/lib/payment-pricing'
 import { cn } from '@/lib/utils'
+import {
+  getDefaultWaffoPancakeCheckoutRegion,
+  type WaffoPancakeCheckoutRegion,
+} from '@/lib/waffo-pancake-checkout'
 
 import {
   getPaymentIcon,
@@ -108,6 +120,10 @@ interface RechargeFormCardProps {
   onOpenBilling?: () => void
   onCreemProductSelect?: (product: CreemProduct) => void
   onWaffoMethodSelect?: (method: WaffoPayMethod, index: number) => void
+  waffoPancakeCheckoutRegion?: WaffoPancakeCheckoutRegion
+  onWaffoPancakeCheckoutRegionChange?: (
+    region: WaffoPancakeCheckoutRegion
+  ) => void
   neutralMode?: boolean
 }
 
@@ -135,10 +151,14 @@ export function RechargeFormCard({
   onOpenBilling,
   onCreemProductSelect,
   onWaffoMethodSelect,
+  waffoPancakeCheckoutRegion,
+  onWaffoPancakeCheckoutRegionChange,
   neutralMode = false,
 }: RechargeFormCardProps) {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const [localAmount, setLocalAmount] = useState(topupAmount.toString())
+  const [localWaffoPancakeRegionOverride, setLocalWaffoPancakeRegion] =
+    useState<WaffoPancakeCheckoutRegion | null>(null)
 
   useEffect(() => {
     // Empty string must survive, otherwise the field can never be cleared
@@ -203,9 +223,25 @@ export function RechargeFormCard({
       ? formatSettlementAmount(amount, settlementUnit.label)
       : formatPaymentAmount(amount)
   const pancakeCurrencySupported = isWaffoPancakeCurrencySupported()
+  const interfaceLanguage = i18n.resolvedLanguage || i18n.language
+  const effectiveWaffoPancakeCheckoutRegion =
+    waffoPancakeCheckoutRegion ??
+    localWaffoPancakeRegionOverride ??
+    getDefaultWaffoPancakeCheckoutRegion(interfaceLanguage)
   const hasConfiguredPancakeMethod = (topupInfo?.pay_methods ?? []).some(
     (method) => isWaffoPancakePayment(method.type)
   )
+  const canChooseWaffoPancakeRegion =
+    topupInfo?.enable_waffo_pancake_topup === true &&
+    hasConfiguredPancakeMethod &&
+    pancakeCurrencySupported &&
+    !!onWaffoPancakeCheckoutRegionChange
+
+  const handleWaffoPancakeCheckoutRegionChange = (value: string | null) => {
+    if (value !== 'china' && value !== 'global') return
+    setLocalWaffoPancakeRegion(value)
+    onWaffoPancakeCheckoutRegionChange?.(value)
+  }
   const selectedPresetPricing = (() => {
     if (selectedPreset === null) return null
     const preset = presetAmounts.find((item) => item.value === selectedPreset)
@@ -670,6 +706,48 @@ export function RechargeFormCard({
                         )}
                       </AlertDescription>
                     </Alert>
+                  )}
+                  {canChooseWaffoPancakeRegion && (
+                    <div className='mt-3 max-w-[320px] min-w-0 space-y-1.5 sm:mt-4'>
+                      <Label
+                        htmlFor='waffo-pancake-checkout-region'
+                        className='text-muted-foreground text-xs font-medium tracking-wider uppercase'
+                      >
+                        {t('Waffo Pancake checkout region')}
+                      </Label>
+                      <p className='text-muted-foreground text-xs leading-5'>
+                        {t(
+                          'China locks the checkout to the China billing market. Global lets you choose your billing region in checkout.'
+                        )}
+                      </p>
+                      <Select
+                        items={[
+                          { value: 'china', label: t('China') },
+                          { value: 'global', label: t('Global') },
+                        ]}
+                        value={effectiveWaffoPancakeCheckoutRegion}
+                        onValueChange={handleWaffoPancakeCheckoutRegionChange}
+                      >
+                        <SelectTrigger
+                          id='waffo-pancake-checkout-region'
+                          className='w-full max-w-[320px] min-w-0'
+                        >
+                          <SelectValue>
+                            {effectiveWaffoPancakeCheckoutRegion === 'china'
+                              ? t('China')
+                              : t('Global')}
+                          </SelectValue>
+                        </SelectTrigger>
+                        <SelectContent alignItemWithTrigger={false}>
+                          <SelectGroup>
+                            <SelectItem value='china'>{t('China')}</SelectItem>
+                            <SelectItem value='global'>
+                              {t('Global')}
+                            </SelectItem>
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    </div>
                   )}
                   {topupInfo?.enable_waffo_pancake_topup &&
                     hasConfiguredPancakeMethod &&

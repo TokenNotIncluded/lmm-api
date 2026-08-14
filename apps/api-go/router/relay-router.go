@@ -10,6 +10,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const assistantRequestMaxBytes = 64 << 10
+
 func SetRelayRouter(router *gin.Engine) {
 	router.Use(middleware.CORS())
 	router.Use(middleware.DecompressRequestMiddleware())
@@ -66,6 +68,14 @@ func SetRelayRouter(router *gin.Engine) {
 	{
 		playgroundRouter.POST("/chat/completions", controller.Playground)
 	}
+	assistantPresetRouter := router.Group("/api/assistant/pre-conversation-presets")
+	assistantPresetRouter.Use(middleware.RouteTag("api"))
+	assistantPresetRouter.Use(middleware.SystemPerformanceCheck())
+	assistantPresetRouter.Use(middleware.TryUserAuth())
+	{
+		assistantPresetRouter.GET("", controller.GetPromptPresets)
+		assistantPresetRouter.POST("/:id/click", middleware.CriticalRateLimit(), controller.CountPromptPresetClick)
+	}
 	assistantRouter := router.Group("/api/assistant")
 	assistantRouter.Use(middleware.RouteTag("relay"))
 	assistantRouter.Use(middleware.SystemPerformanceCheck())
@@ -73,7 +83,10 @@ func SetRelayRouter(router *gin.Engine) {
 	{
 		assistantRouter.GET("/status", controller.GetAssistantStatus)
 		assistantRouter.GET("/offers", controller.GetAssistantPlanOffers)
-		assistantRouter.POST("/chat", middleware.UserCriticalRateLimit("assistant"), controller.PrepareAssistantRequest, middleware.Distribute(), controller.AssistantChat)
+		assistantRouter.GET("/journey", middleware.DisableCache(), controller.GetAssistantJourney)
+		assistantRouter.GET("/new-user-gift", middleware.DisableCache(), controller.GetAssistantNewUserGift)
+		assistantRouter.POST("/new-user-gift/claim", middleware.UserCriticalRateLimit("assistant-new-user-gift"), middleware.DisableCache(), controller.ClaimAssistantNewUserGift)
+		assistantRouter.POST("/chat", middleware.UserCriticalRateLimit("assistant"), middleware.RequestBodyLimit(assistantRequestMaxBytes), controller.PrepareAssistantRequest, middleware.Distribute(), controller.AssistantChat)
 		assistantRouter.GET("/conversations", middleware.DisableCache(), controller.ListAssistantConversations)
 		assistantRouter.GET("/conversations/:id", middleware.DisableCache(), controller.GetAssistantConversationHistory)
 		assistantRouter.POST("/conversations/:id/archive", middleware.DisableCache(), controller.ArchiveAssistantConversation)
@@ -104,6 +117,8 @@ func SetRelayRouter(router *gin.Engine) {
 		assistantAdminRouter.GET("/first-questions", middleware.DisableCache(), controller.AdminGetAssistantFirstQuestionSummary)
 		assistantAdminRouter.GET("/profiles", controller.AdminGetAssistantProfileSummary)
 		assistantAdminRouter.GET("/funding", controller.AdminGetAssistantFundingSummary)
+		assistantAdminRouter.GET("/review", middleware.DisableCache(), controller.AdminGetAssistantReview)
+		assistantAdminRouter.POST("/review/run", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.AdminRunAssistantReview)
 	}
 	relayV1Router := router.Group("/v1")
 	relayV1Router.Use(middleware.RouteTag("relay"))

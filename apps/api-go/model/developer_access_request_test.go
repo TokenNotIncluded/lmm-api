@@ -32,7 +32,7 @@ func TestAssistantDeveloperAccessRecommendationApprovalUnlocksL1WithoutPayment(t
 	assert.Equal(t, DeveloperAccessRequestSourceAI, request.Source)
 	assert.NotEmpty(t, request.AIRecommendation)
 
-	// Repeated submissions are idempotent while the first request is pending.
+	// Repeated submissions edit the user's one pending recommendation letter.
 	repeated, err := SubmitAssistantDeveloperAccessRecommendation(
 		user.Id,
 		"a second browser tab should not replace the original reason",
@@ -40,8 +40,8 @@ func TestAssistantDeveloperAccessRecommendationApprovalUnlocksL1WithoutPayment(t
 	)
 	require.NoError(t, err)
 	assert.Equal(t, request.Id, repeated.Id)
-	assert.Equal(t, request.Reason, repeated.Reason)
-	assert.Equal(t, request.AIRecommendation, repeated.AIRecommendation)
+	assert.Equal(t, "a second browser tab should not replace the original reason", repeated.Reason)
+	assert.Equal(t, "A second recommendation should not replace the original pending recommendation.", repeated.AIRecommendation)
 	assert.Equal(t, DeveloperAccessRequestSourceAI, repeated.Source)
 
 	pending, err := ListDeveloperAccessRequests(DeveloperAccessRequestPending, 10)
@@ -65,6 +65,76 @@ func TestAssistantDeveloperAccessRecommendationApprovalUnlocksL1WithoutPayment(t
 
 	_, err = ReviewDeveloperAccessRequest(99, request.Id, true, "duplicate")
 	assert.ErrorIs(t, err, ErrDeveloperAccessRequestReviewed)
+}
+
+func TestAssistantDeveloperAccessRecommendationCanBeCleared(t *testing.T) {
+	db := setupConsoleActivationTestDB(t)
+	require.NoError(t, db.AutoMigrate(&DeveloperAccessRequest{}))
+	user := User{Username: "clear-recommendation-user", Password: "password", Role: common.RoleCommonUser}
+	require.NoError(t, db.Create(&user).Error)
+
+	request, err := SubmitAssistantDeveloperAccessRecommendation(
+		user.Id,
+		"I use the relay for a concrete coding workflow.",
+		"Recommend L1 because the user described a concrete coding workflow.",
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, request.AIRecommendation)
+
+	cleared, err := SubmitAssistantDeveloperAccessRequestWithoutRecommendation(user.Id, request.Reason)
+	require.NoError(t, err)
+	assert.Equal(t, request.Id, cleared.Id)
+	assert.Empty(t, cleared.AIRecommendation)
+	assert.Equal(t, DeveloperAccessRequestSourceAssistant, cleared.Source)
+}
+
+func TestUserEditKeepsOneRecommendationWithoutClaimingAIProvenance(t *testing.T) {
+	db := setupConsoleActivationTestDB(t)
+	require.NoError(t, db.AutoMigrate(&DeveloperAccessRequest{}))
+	user := User{Username: "user-edited-recommendation", Password: "password", Role: common.RoleCommonUser}
+	require.NoError(t, db.Create(&user).Error)
+
+	draft, err := SubmitAssistantDeveloperAccessRecommendation(
+		user.Id,
+		"I have a concrete coding integration to build.",
+		"The AI recommends access for the user's concrete coding integration.",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, DeveloperAccessRequestSourceAI, draft.Source)
+
+	edited, err := SubmitUserEditedDeveloperAccessRecommendation(
+		user.Id,
+		"I have a concrete coding integration to build.",
+		"I edited the recommendation to accurately describe my concrete coding integration.",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, draft.Id, edited.Id)
+	assert.Equal(t, DeveloperAccessRequestSourceUser, edited.Source)
+	assert.Contains(t, edited.AIRecommendation, "I edited")
+}
+
+func TestPendingLegacyDeveloperAccessRequestsAreRetiredFromTheQueue(t *testing.T) {
+	db := setupConsoleActivationTestDB(t)
+	require.NoError(t, db.AutoMigrate(&DeveloperAccessRequest{}))
+	legacyUser := User{Username: "legacy-request-user", Password: "password", Role: common.RoleCommonUser, AffCode: "legacy-request"}
+	currentUser := User{Username: "current-request-user", Password: "password", Role: common.RoleCommonUser, AffCode: "current-request"}
+	require.NoError(t, db.Create(&legacyUser).Error)
+	require.NoError(t, db.Create(&currentUser).Error)
+	now := common.GetTimestamp()
+	require.NoError(t, db.Create(&[]DeveloperAccessRequest{
+		{UserId: legacyUser.Id, Status: DeveloperAccessRequestPending, Source: DeveloperAccessRequestSourceOld, Reason: "obsolete request", CreatedAt: now},
+		{UserId: currentUser.Id, Status: DeveloperAccessRequestPending, Source: DeveloperAccessRequestSourceAssistant, Reason: "current request", CreatedAt: now + 1},
+	}).Error)
+
+	pending, err := ListDeveloperAccessRequests(DeveloperAccessRequestPending, 10)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	assert.Equal(t, currentUser.Id, pending[0].UserId)
+
+	// Retirement is non-destructive: the old row remains available as history.
+	all, err := ListDeveloperAccessRequests("", 10)
+	require.NoError(t, err)
+	require.Len(t, all, 2)
 }
 
 func TestAssistantDeveloperAccessRecommendationRejectionDoesNotActivate(t *testing.T) {

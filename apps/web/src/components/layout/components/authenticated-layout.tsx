@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useRouterState } from '@tanstack/react-router'
+
 import { AccessRestrictionNotice } from '@/components/access-restriction-notice'
 import { AnimatedOutlet } from '@/components/page-transition'
 import { SkipToMain } from '@/components/skip-to-main'
@@ -40,13 +42,17 @@ export function AuthenticatedLayout(props: AuthenticatedLayoutProps) {
   const defaultOpen = getCookie('sidebar_state') !== 'false'
   const user = useAuthStore((state) => state.auth.user)
   const consoleActivated = isConsoleActivated(user)
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  })
+  const assistantPage = pathname === '/getting-started'
 
   return (
     <LayoutProvider>
       <SearchProvider>
         <SidebarProvider
           defaultOpen={defaultOpen}
-          className='console-editorial h-svh min-h-0 flex-col overflow-hidden'
+          className='console-editorial h-dvh min-h-0 flex-col overflow-hidden'
         >
           <SkipToMain />
           <AppHeader
@@ -54,16 +60,23 @@ export function AuthenticatedLayout(props: AuthenticatedLayoutProps) {
             showSearch={consoleActivated}
           />
           <div className='flex min-h-0 w-full min-w-0 flex-1 basis-0 flex-col flex-nowrap md:flex-row'>
-            <AppSidebar />
+            {assistantPage ? null : <AppSidebar />}
             <SidebarInset
               className={cn(
                 '@container/content',
-                'min-h-0 min-w-0 flex-1 basis-0 overflow-hidden pb-[calc(4.5rem+env(safe-area-inset-bottom))] md:pb-16 xl:pb-0'
+                'min-h-0 min-w-0 flex-1 basis-0 overflow-hidden',
+                assistantPage
+                  ? 'pb-0'
+                  : 'pb-[calc(4.5rem+env(safe-area-inset-bottom))] md:pb-16 xl:pb-0'
               )}
             >
-              {props.children ?? <AnimatedOutlet />}
+              {assistantPage ? (
+                <AssistantLauncher page />
+              ) : (
+                (props.children ?? <AnimatedOutlet />)
+              )}
             </SidebarInset>
-            <AssistantLauncher />
+            {assistantPage ? null : <AssistantLauncher />}
           </div>
           <AccessRestrictionNotice className='shrink-0' />
           <ReleaseNoteDialog />

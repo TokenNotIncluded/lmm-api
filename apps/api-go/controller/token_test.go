@@ -100,6 +100,7 @@ func migrateTokenControllerTestDB(t *testing.T, db *gorm.DB) {
 	t.Helper()
 
 	if err := db.AutoMigrate(
+		&model.User{},
 		&model.Token{},
 		&model.AssistantConversation{},
 		&model.AssistantHistoryMessage{},

@@ -4,6 +4,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/QuantumNous/new-api/pkg/sysinfo"
 	"github.com/shirou/gopsutil/cpu"
 	"github.com/shirou/gopsutil/mem"
 )
@@ -61,8 +62,10 @@ func updateSystemStatus() {
 	}
 
 	// Memory
-	memInfo, err := mem.VirtualMemory()
+	processMemory, err := sysinfo.ReadProcessMemory()
 	if err == nil {
+		status.MemoryUsage = processMemory.UsedPercent()
+	} else if memInfo, hostErr := mem.VirtualMemory(); hostErr == nil {
 		status.MemoryUsage = memInfo.UsedPercent
 	}
 

@@ -140,6 +140,15 @@ export function CheckinCalendarCard({
 
   const doCheckin = useCallback(
     async (token?: string) => {
+      if (!token && turnstileEnabled) {
+        if (!turnstileSiteKey) {
+          toast.error(t('Turnstile is enabled but site key is empty.'))
+          return
+        }
+        setTurnstileModalVisible(true)
+        return
+      }
+
       setCheckinLoading(true)
       try {
         const res = await performCheckin(token)
@@ -169,8 +178,20 @@ export function CheckinCalendarCard({
         setCheckinLoading(false)
       }
     },
-    [refetch, shouldTriggerTurnstile, t, turnstileSiteKey]
+    [refetch, shouldTriggerTurnstile, t, turnstileEnabled, turnstileSiteKey]
   )
+
+  const handleCheckinClick = useCallback(() => {
+    if (turnstileEnabled) {
+      if (!turnstileSiteKey) {
+        toast.error(t('Turnstile is enabled but site key is empty.'))
+        return
+      }
+      setTurnstileModalVisible(true)
+      return
+    }
+    void doCheckin()
+  }, [doCheckin, t, turnstileEnabled, turnstileSiteKey])
 
   const handlePrevMonth = () => {
     setCurrentMonth(
@@ -272,7 +293,8 @@ export function CheckinCalendarCard({
             key={turnstileWidgetKey}
             siteKey={turnstileSiteKey}
             onVerify={(token) => {
-              doCheckin(token)
+              const normalizedToken = token.trim()
+              if (normalizedToken) void doCheckin(normalizedToken)
             }}
             onExpire={() => {
               setTurnstileWidgetKey((v) => v + 1)
@@ -334,7 +356,7 @@ export function CheckinCalendarCard({
               </div>
             </button>
             <Button
-              onClick={() => doCheckin()}
+              onClick={handleCheckinClick}
               disabled={checkinLoading || checkedToday}
               size='sm'
               className='w-full shrink-0 sm:w-auto'

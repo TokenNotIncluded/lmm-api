@@ -20,6 +20,11 @@ For commercial licensing, please contact support@quantumnous.com
 // Wallet Type Definitions
 // ============================================================================
 
+import type {
+  WaffoPancakeCheckoutLanguage,
+  WaffoPancakeCheckoutRegion,
+} from '@/lib/waffo-pancake-checkout'
+
 /**
  * Generic API response
  */
@@ -220,6 +225,10 @@ export interface WaffoPaymentRequest {
 export interface WaffoPancakePaymentRequest {
   /** Topup amount */
   amount: number
+  /** Waffo Pancake checkout region selected by the user or derived from locale */
+  checkout_region?: WaffoPancakeCheckoutRegion
+  /** Waffo Pancake checkout language derived from the interface locale */
+  checkout_language?: WaffoPancakeCheckoutLanguage
 }
 
 /**

@@ -35,6 +35,14 @@ export const assistantSettingsSchema = z.object({
   AssistantSearchAPIKey: z.string().max(512),
   AssistantSearchMCPTool: z.string().max(128),
   AssistantSkills: z.string().max(12000),
+  AssistantReviewEnabled: z.boolean(),
+  AssistantReviewWindowDays: z.number().int().min(1).max(90),
+  AssistantReviewIntervalHours: z.number().int().min(1).max(168),
+  AssistantRetentionEnabled: z.boolean(),
+  AssistantActiveRetentionDays: z.number().int().min(7).max(3650),
+  AssistantArchivedRetentionDays: z.number().int().min(1).max(3650),
+  AssistantSecurityRetentionDays: z.number().int().min(30).max(3650),
+  AssistantRetentionIntervalHours: z.number().int().min(1).max(168),
 })
 
 export type AssistantSettingsFormValues = z.infer<

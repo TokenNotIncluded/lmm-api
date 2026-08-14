@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"gorm.io/gorm"
 )
 
 // 简化的供应商映射规则
@@ -73,7 +74,7 @@ var defaultVendorIcons = map[string]string{
 }
 
 // initDefaultVendorMapping 简化的默认供应商映射
-func initDefaultVendorMapping(ctx context.Context, metaMap map[string]*Model, vendorMap map[int]*Vendor, enableAbilities []AbilityWithChannel) error {
+func initDefaultVendorMapping(ctx context.Context, db *gorm.DB, metaMap map[string]*Model, vendorMap map[int]*Vendor, enableAbilities []AbilityWithChannel) error {
 	for _, ability := range enableAbilities {
 		modelName := ability.Model
 		if _, exists := metaMap[modelName]; exists {
@@ -85,7 +86,7 @@ func initDefaultVendorMapping(ctx context.Context, metaMap map[string]*Model, ve
 		modelLower := strings.ToLower(modelName)
 		for pattern, vendorName := range defaultVendorRules {
 			if strings.Contains(modelLower, pattern) {
-				createdVendorID, err := getOrCreateVendor(ctx, vendorName, vendorMap)
+				createdVendorID, err := getOrCreateVendor(ctx, db, vendorName, vendorMap)
 				if err != nil {
 					return err
 				}
@@ -106,7 +107,7 @@ func initDefaultVendorMapping(ctx context.Context, metaMap map[string]*Model, ve
 }
 
 // 查找或创建供应商
-func getOrCreateVendor(ctx context.Context, vendorName string, vendorMap map[int]*Vendor) (int, error) {
+func getOrCreateVendor(ctx context.Context, db *gorm.DB, vendorName string, vendorMap map[int]*Vendor) (int, error) {
 	// 查找现有供应商
 	for id, vendor := range vendorMap {
 		if vendor.Name == vendorName {
@@ -127,7 +128,7 @@ func getOrCreateVendor(ctx context.Context, vendorName string, vendorMap map[int
 	if pricingVendorHook != nil {
 		pricingVendorHook()
 	}
-	if err := DB.WithContext(ctx).Create(newVendor).Error; err != nil {
+	if err := db.WithContext(ctx).Create(newVendor).Error; err != nil {
 		return 0, fmt.Errorf("create default vendor %q: %w", vendorName, err)
 	}
 

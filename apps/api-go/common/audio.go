@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/QuantumNous/new-api/constant"
+
 	"github.com/abema/go-mp4"
 	"github.com/go-audio/aiff"
 	"github.com/go-audio/wav"
@@ -315,7 +317,11 @@ func getAACDuration(r io.ReadSeeker) (float64, error) {
 	}
 
 	// 读取整个文件内容
-	data, err := io.ReadAll(r)
+	maxAudioMB := constant.MaxFileDownloadMB
+	if maxAudioMB <= 0 {
+		maxAudioMB = 64
+	}
+	data, err := ReadAllLimit(r, int64(maxAudioMB)<<20)
 	if err != nil {
 		return 0, errors.Wrap(err, "failed to read aac file")
 	}

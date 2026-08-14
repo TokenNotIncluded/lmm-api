@@ -1,3 +1,7 @@
+// RelayConvertError intentionally preserves structured conversion context by
+// value; boxing it here would only move the same public API cost downstream.
+#![allow(clippy::result_large_err)]
+
 //! OpenAI Chat Completions and Responses relay HTTP boundary.
 //!
 //! The service behind this boundary owns token authentication, channel

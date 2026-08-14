@@ -8,6 +8,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -19,37 +20,41 @@ type assistantUserProfileAdminRequest struct {
 	Enabled    bool     `json:"enabled"`
 }
 
-func assistantUserProfileTarget(c *gin.Context) (*model.User, bool) {
+func adminSkillScope(c *gin.Context) (service.UserSkills, int, bool) {
+	if c.GetInt("role") < common.RoleAdminUser {
+		writeAssistantError(c, http.StatusForbidden, "ASSISTANT_PROFILE_FORBIDDEN", model.ErrAssistantHistoryForbidden)
+		return service.UserSkills{}, 0, false
+	}
 	targetID, err := strconv.Atoi(strings.TrimSpace(c.Param("id")))
 	if err != nil || targetID <= 0 {
 		writeAssistantError(c, http.StatusBadRequest, "ASSISTANT_PROFILE_INVALID_USER", errors.New("invalid user id"))
-		return nil, false
+		return service.UserSkills{}, 0, false
 	}
-	target, err := model.GetUserById(targetID, false)
+	scope, err := service.OpenSkills(c.GetInt("id"), targetID)
 	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			common.ApiError(c, err)
-			return nil, false
+		if errors.Is(err, model.ErrAssistantHistoryForbidden) {
+			writeAssistantError(c, http.StatusForbidden, "ASSISTANT_PROFILE_FORBIDDEN", err)
+			return service.UserSkills{}, 0, false
+		}
+		if errors.Is(err, model.ErrAssistantConversationNotFound) {
+			writeAssistantError(c, http.StatusNotFound, "ASSISTANT_PROFILE_USER_NOT_FOUND", err)
+			return service.UserSkills{}, 0, false
 		}
 		common.ApiError(c, err)
-		return nil, false
+		return service.UserSkills{}, 0, false
 	}
-	if !canManageTargetRole(c.GetInt("role"), target.Role) {
-		writeAssistantError(c, http.StatusForbidden, "ASSISTANT_PROFILE_FORBIDDEN", errors.New("administrator cannot manage a user at the same or higher role"))
-		return nil, false
-	}
-	return target, true
+	return scope, targetID, true
 }
 
 // AdminGetAssistantUserProfile is intentionally mounted below the AdminAuth
 // user-management router. There is no self/user-facing equivalent: profile
 // tags and handling strategies are internal moderation metadata.
 func AdminGetAssistantUserProfile(c *gin.Context) {
-	if _, ok := assistantUserProfileTarget(c); !ok {
+	scope, _, ok := adminSkillScope(c)
+	if !ok {
 		return
 	}
-	targetID, _ := strconv.Atoi(c.Param("id"))
-	profile, err := model.GetAssistantUserProfile(targetID)
+	profile, err := scope.Profile()
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -58,7 +63,7 @@ func AdminGetAssistantUserProfile(c *gin.Context) {
 }
 
 func AdminUpdateAssistantUserProfile(c *gin.Context) {
-	target, ok := assistantUserProfileTarget(c)
+	scope, targetID, ok := adminSkillScope(c)
 	if !ok {
 		return
 	}
@@ -67,14 +72,9 @@ func AdminUpdateAssistantUserProfile(c *gin.Context) {
 		common.ApiError(c, errors.New("invalid assistant profile payload"))
 		return
 	}
-	profile, err := model.UpsertAssistantUserProfile(
-		target.Id,
-		c.GetInt("id"),
-		request.ProfileKey,
-		request.Tags,
-		request.Strategy,
-		request.Enabled,
-	)
+	profile, err := scope.SetProfile(service.ProfileDraft{
+		Key: request.ProfileKey, Tags: request.Tags, Strategy: request.Strategy, Enabled: request.Enabled,
+	})
 	if err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, gorm.ErrInvalidData) {
@@ -87,7 +87,7 @@ func AdminUpdateAssistantUserProfile(c *gin.Context) {
 	// Never place tags or strategy text in the audit params. The audit records
 	// that the internal policy changed without turning an admin note into a
 	// second copy of potentially sensitive data.
-	recordManageAuditFor(c, target.Id, "assistant.user_profile_update", map[string]interface{}{
+	recordManageAuditFor(c, targetID, "assistant.user_profile_update", map[string]interface{}{
 		"profile_key":    profile.ProfileKey,
 		"enabled":        profile.Enabled,
 		"tags_count":     len(model.AssistantUserProfileTags(profile)),
