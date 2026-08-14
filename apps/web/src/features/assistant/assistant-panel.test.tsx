@@ -494,6 +494,11 @@ describe('AssistantPanel', () => {
           '[data-testid="assistant-preset-prompts"]'
         )
         assert.ok(presets)
+        assert.equal(presets.getAttribute('role'), 'group')
+        assert.equal(
+          presets.getAttribute('aria-label'),
+          'Choose a topic or write a message.'
+        )
         assert.match(presets.className, /flex-nowrap/)
         assert.match(presets.className, /overflow-x-auto/)
         assert.match(presets.className, /sm:flex-wrap/)

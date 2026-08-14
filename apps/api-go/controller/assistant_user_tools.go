@@ -132,14 +132,29 @@ func resolveAssistantUserTarget(c *gin.Context, actorUserID int, input map[strin
 			if total == 0 || len(users) == 0 {
 				return nil, map[string]any{"ok": false, "status": "target_not_found", "error": "target user was not found"}
 			}
-			if total > 1 {
-				candidates := make([]map[string]any, 0, len(users))
-				for _, candidate := range users {
+			// SearchUsers intentionally has no caller-role filter because the
+			// normal administrator list is allowed to return a broad dataset.
+			// Assistant target lookup must apply the role lattice before any
+			// candidate identity reaches the model or browser.  In particular, a
+			// lower-level administrator must not learn usernames or roles of peer
+			// or higher-level administrators from an ambiguous substring search.
+			manageableUsers := make([]*model.User, 0, len(users))
+			for _, candidate := range users {
+				if candidate != nil && (candidate.Id == actor.Id || canManageTargetRole(actor.Role, candidate.Role)) {
+					manageableUsers = append(manageableUsers, candidate)
+				}
+			}
+			if len(manageableUsers) == 0 {
+				return nil, map[string]any{"ok": false, "status": "target_forbidden", "error": "the target is outside the administrator's permitted role scope"}
+			}
+			if len(manageableUsers) > 1 {
+				candidates := make([]map[string]any, 0, len(manageableUsers))
+				for _, candidate := range manageableUsers {
 					candidates = append(candidates, assistantSafeUserIdentity(candidate))
 				}
 				return nil, map[string]any{"ok": false, "status": "target_ambiguous", "error": "more than one user matches; ask for a username or numeric ID", "candidates": candidates}
 			}
-			target = users[0]
+			target = manageableUsers[0]
 		}
 	}
 

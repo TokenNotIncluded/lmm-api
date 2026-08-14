@@ -105,27 +105,36 @@ func normalizeFinanceEntry(entry *FinanceLedgerEntry) error {
 // AppendFinanceLedgerEntry creates one immutable row. Idempotency keys make
 // webhook/backfill retries safe and return the original row on replay.
 func AppendFinanceLedgerEntry(entry *FinanceLedgerEntry) (*FinanceLedgerEntry, error) {
+	persisted, _, err := AppendFinanceLedgerEntryIfNew(entry)
+	return persisted, err
+}
+
+// AppendFinanceLedgerEntryIfNew is the same idempotent append operation, but
+// also reports whether this call inserted the row. Webhook handlers use the
+// flag to suppress duplicate side effects (for example, user-facing refund
+// logs) when a provider retries an already recorded event.
+func AppendFinanceLedgerEntryIfNew(entry *FinanceLedgerEntry) (*FinanceLedgerEntry, bool, error) {
 	if err := normalizeFinanceEntry(entry); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if entry.IdempotencyKey != "" {
 		var existing FinanceLedgerEntry
 		if err := DB.Where("idempotency_key = ?", entry.IdempotencyKey).First(&existing).Error; err == nil {
-			return &existing, nil
+			return &existing, false, nil
 		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, err
+			return nil, false, err
 		}
 	}
 	if err := DB.Create(entry).Error; err != nil {
 		if entry.IdempotencyKey != "" {
 			var existing FinanceLedgerEntry
 			if lookupErr := DB.Where("idempotency_key = ?", entry.IdempotencyKey).First(&existing).Error; lookupErr == nil {
-				return &existing, nil
+				return &existing, false, nil
 			}
 		}
-		return nil, err
+		return nil, false, err
 	}
-	return entry, nil
+	return entry, true, nil
 }
 
 // ReverseFinanceLedgerEntry appends a compensating row and never mutates the

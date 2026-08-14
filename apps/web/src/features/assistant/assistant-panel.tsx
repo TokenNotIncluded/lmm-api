@@ -594,6 +594,7 @@ function AssistantPresetPrompts(props: {
   return (
     <div
       className='mb-2 flex max-w-full flex-nowrap gap-2 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible sm:pb-0'
+      role='group'
       aria-label={t('Choose a topic or write a message.')}
       data-testid='assistant-preset-prompts'
     >

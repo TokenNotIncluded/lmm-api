@@ -690,7 +690,7 @@ func handleWaffoPancakeRefundEvent(c *gin.Context, event *service.WaffoPancakeWe
 	if providerEventID == "" {
 		return fmt.Errorf("refund event has no stable id")
 	}
-	_, err = model.AppendFinanceLedgerEntry(&model.FinanceLedgerEntry{
+	_, created, err := model.AppendFinanceLedgerEntryIfNew(&model.FinanceLedgerEntry{
 		EntryType:       model.FinanceEntryRevenue,
 		Category:        "refund",
 		AmountMicros:    amountMicros,
@@ -708,6 +708,9 @@ func handleWaffoPancakeRefundEvent(c *gin.Context, event *service.WaffoPancakeWe
 	})
 	if err != nil {
 		return err
+	}
+	if !created {
+		return nil
 	}
 	model.RecordLog(userID, model.LogTypeRefund, fmt.Sprintf("Waffo Pancake refund.succeeded trade_no=%s refund_id=%s amount=%s %s", tradeNo, event.Data.RefundTicketMerchantExternalID, event.Data.Amount, strings.ToUpper(strings.TrimSpace(event.Data.Currency))))
 	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo Pancake 退款已记账 trade_no=%s user_id=%d amount_micros=%d refund_id=%s", tradeNo, userID, amountMicros, event.Data.RefundTicketMerchantExternalID))

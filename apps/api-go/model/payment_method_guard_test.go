@@ -7,6 +7,7 @@ import (
 	"github.com/LIghtJUNction/api.lmm.best/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func insertUserForPaymentGuardTest(t *testing.T, id int, quota int) {
@@ -156,6 +157,47 @@ func TestCompleteSubscriptionOrder_RejectsMismatchedPaymentProvider(t *testing.T
 
 	topUp := GetTopUpByTradeNo("sub-guard-order")
 	assert.Nil(t, topUp)
+}
+
+func TestUpsertSubscriptionTopUpPersistsPaymentProviderOnTopUpMirror(t *testing.T) {
+	truncateTables(t)
+
+	order := &SubscriptionOrder{
+		UserId:          204,
+		Money:           9.99,
+		TradeNo:         "sub-waffo-provider",
+		PaymentMethod:   PaymentMethodWaffoPancake,
+		PaymentProvider: PaymentProviderWaffoPancake,
+		Status:          common.TopUpStatusPending,
+		CreateTime:      time.Now().Unix(),
+	}
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		return upsertSubscriptionTopUpTx(tx, order)
+	}))
+	topUp := GetTopUpByTradeNo("sub-waffo-provider")
+	require.NotNil(t, topUp)
+	assert.Equal(t, PaymentProviderWaffoPancake, topUp.PaymentProvider)
+	assert.Equal(t, PaymentMethodWaffoPancake, topUp.PaymentMethod)
+
+	// A pre-existing legacy mirror with no provider should be backfilled, but a
+	// mirror bound to another provider must never be overwritten.
+	require.NoError(t, DB.Model(topUp).Update("payment_provider", "").Error)
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		return upsertSubscriptionTopUpTx(tx, order)
+	}))
+	topUp = GetTopUpByTradeNo("sub-waffo-provider")
+	require.NotNil(t, topUp)
+	assert.Equal(t, PaymentProviderWaffoPancake, topUp.PaymentProvider)
+
+	require.NoError(t, DB.Model(topUp).Update("payment_provider", PaymentProviderStripe).Error)
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		return upsertSubscriptionTopUpTx(tx, order)
+	})
+	require.ErrorIs(t, err, ErrPaymentMethodMismatch)
+	var mirrors []TopUp
+	require.NoError(t, DB.Where("trade_no = ?", "sub-waffo-provider").Find(&mirrors).Error)
+	assert.Len(t, mirrors, 1)
+	assert.Equal(t, PaymentProviderStripe, mirrors[0].PaymentProvider)
 }
 
 func TestExpireSubscriptionOrder_RejectsMismatchedPaymentProvider(t *testing.T) {
