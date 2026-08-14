@@ -127,7 +127,7 @@ var topicRules = []topicRule{
 	{Topic: "模型价格", Terms: []string{"价格", "单价", "price", "pricing"}},
 	{Topic: "费用估算", Terms: []string{"费用", "成本", "计费", "cost", "billing", "estimate"}},
 	{Topic: "套餐折扣", Terms: []string{"套餐", "折扣", "优惠", "discount", "plan"}},
-	{Topic: "新用户礼包", Terms: []string{"新用户礼包", "新手奖励", "新用户奖励", "新人礼包", "welcome gift", "new-user gift"}},
+	{Topic: "新用户礼包", Terms: []string{"新用户礼包", "新手礼包", "新手奖励", "新用户奖励", "新人礼包", "新人福利", "新手福利", "welcome gift", "welcome bonus", "new-user gift", "new user bonus"}},
 	{Topic: "开源悬赏", Terms: []string{"开源", "悬赏", "bounty", "challenge"}},
 	{Topic: "提交证据", Terms: []string{"pull request", "提交", "证据", "evidence"}},
 	{Topic: "人工支持", Terms: []string{"人工", "客服", "管理员", "support", "administrator"}},

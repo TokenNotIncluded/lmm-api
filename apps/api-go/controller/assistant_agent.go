@@ -764,7 +764,8 @@ func assistantPublicActivityQuestion(text string) bool {
 func assistantNewUserGiftRequest(text string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(text))
 	return assistantTextContainsAny(normalized,
-		"新用户礼包", "新手礼包", "新手奖励", "新用户奖励", "新人礼包", "welcome gift", "new-user gift",
+		"新用户礼包", "新手礼包", "新手奖励", "新用户奖励", "新人礼包", "新人福利", "新手福利",
+		"welcome gift", "welcome bonus", "new-user gift", "new user bonus",
 		"免费额度", "赠送额度", "送我额度", "刀额度", "美元额度", "美金额度", "free credit", "welcome credit",
 	)
 }

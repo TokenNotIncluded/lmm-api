@@ -43,6 +43,8 @@ func TestClassifyAssistantIntent(t *testing.T) {
 		"请把当前推荐信润色得专业一些":                          AssistantIntentRecommendation,
 		"哪个套餐最划算，有优惠吗":                            AssistantIntentPlanPurchase,
 		"怎么领取新手奖励礼包":                              AssistantIntentInvitation,
+		"我想申请新人福利":                                AssistantIntentInvitation,
+		"How do I claim the new user bonus?":      AssistantIntentInvitation,
 		"How do I earn the welcome gift?":         AssistantIntentInvitation,
 		"L0 审核多久能到 L1":                            AssistantIntentOnboarding,
 		"请管理员帮我审核 L1":                             AssistantIntentOnboarding,
