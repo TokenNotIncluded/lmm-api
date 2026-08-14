@@ -98,6 +98,9 @@ for package in lmm-api-web-bin; do
 done
 grep -Fq 'systemctl reload nginx.service' "$HERE/lmm-api-web-bin/lmm-api-web-activate" ||
   die 'web package activation does not reload nginx'
+if grep -Eq '(^|[[:space:]])curl([[:space:]]|$)' "$HERE/lmm-api-web-bin/lmm-api-web-activate"; then
+  die 'web package activation performs a network probe inside the package transaction'
+fi
 if grep -Eq 'systemctl (restart|reload) lmm-api' "$HERE/lmm-api-web-bin/lmm-api-web-activate"; then
   die 'web package activation controls the backend service'
 fi
