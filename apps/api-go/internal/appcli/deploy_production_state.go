@@ -251,15 +251,20 @@ func productionPackageMatches(version, release string) bool {
 }
 
 func (runtime *productionRuntime) installedGoPackage(ctx context.Context) (name, identity string, err error) {
+	seen := make(map[string]struct{}, 1)
 	for _, candidate := range []string{productionAURPackageName, productionSourcePackageName} {
 		output, queryErr := runtime.runner.Run(ctx, productionCommand{Name: "pacman", Args: []string{"-Q", candidate}})
 		if queryErr != nil {
 			continue
 		}
 		parsedName, _, parsedIdentity, parseErr := parseProductionPackageIdentity(output)
-		if parseErr != nil || parsedName != candidate {
+		if parseErr != nil {
 			return "", "", errors.New("installed Go package identity is invalid")
 		}
+		if _, duplicate := seen[parsedIdentity]; duplicate {
+			continue
+		}
+		seen[parsedIdentity] = struct{}{}
 		if identity != "" {
 			return "", "", errors.New("multiple Go packages are installed")
 		}

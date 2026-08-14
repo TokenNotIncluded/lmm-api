@@ -25,6 +25,7 @@ type fakeProductionRunner struct {
 	newVersion               string
 	installedVersion         string
 	packageName              string
+	resolveProvides          bool
 	serviceActive            bool
 	timerActive              bool
 	migrationFailure         bool
@@ -150,7 +151,10 @@ func (runner *fakeProductionRunner) pacman(args []string) ([]byte, error) {
 	}
 	switch args[0] {
 	case "-Q":
-		if args[1] == "lmm-api" || args[1] != runner.packageName {
+		if args[1] == "lmm-api" {
+			return nil, errors.New("package not found")
+		}
+		if args[1] != runner.packageName && !(runner.resolveProvides && runner.packageName == productionAURPackageName && args[1] == productionSourcePackageName) {
 			return nil, errors.New("package not found")
 		}
 		return []byte(runner.packageName + " " + runner.installedVersion + "-1\n"), nil
@@ -438,6 +442,21 @@ func TestProductionPackageIdentitySupportsSourceAndAURPackages(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestInstalledGoPackageDeduplicatesPacmanProvidesAlias(t *testing.T) {
+	fixture := newProductionFixture(t)
+	fixture.runner.packageName = productionAURPackageName
+	fixture.runner.resolveProvides = true
+
+	name, identity, err := fixture.runtime.installedGoPackage(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := productionAURPackageName + " " + fixture.runner.installedVersion + "-1"
+	if name != productionAURPackageName || identity != want {
+		t.Fatalf("installedGoPackage()=(%q, %q), want (%q, %q)", name, identity, productionAURPackageName, want)
 	}
 }
 
