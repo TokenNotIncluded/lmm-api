@@ -40,6 +40,11 @@ export interface ApiResponse<T = unknown> {
 export type TopupInfoResponse = ApiResponse<TopupInfo>
 export type RedemptionResponse = ApiResponse<number>
 export type AmountResponse = ApiResponse<string>
+export type DiscountCodeResponse = ApiResponse<{
+  code: string
+  discount_percent: number
+  min_amount: number
+}>
 export type PaymentResponse = ApiResponse<Record<string, unknown>> & {
   url?: string
 }
@@ -207,6 +212,8 @@ export interface PaymentRequest {
   amount: number
   /** Payment method identifier */
   payment_method: string
+  /** Optional administrator-issued percentage discount code. */
+  discount_code?: string
 }
 
 /**
@@ -217,6 +224,7 @@ export interface WaffoPaymentRequest {
   amount: number
   /** Optional server-side Waffo payment method index */
   pay_method_index?: number
+  discount_code?: string
 }
 
 /**
@@ -229,6 +237,7 @@ export interface WaffoPancakePaymentRequest {
   checkout_region?: WaffoPancakeCheckoutRegion
   /** Waffo Pancake checkout language derived from the interface locale */
   checkout_language?: WaffoPancakeCheckoutLanguage
+  discount_code?: string
 }
 
 /**
@@ -239,6 +248,8 @@ export interface AmountRequest {
   amount: number
   /** Gateway selected for a regular Epay amount calculation. */
   payment_method?: string
+  /** Optional administrator-issued percentage discount code. */
+  discount_code?: string
 }
 
 /**

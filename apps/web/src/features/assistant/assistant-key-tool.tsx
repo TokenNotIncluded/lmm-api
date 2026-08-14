@@ -53,6 +53,7 @@ import { Label } from '@/components/ui/label'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Separator } from '@/components/ui/separator'
 import { getUserGroups } from '@/lib/api'
+import { buildCCSwitchProviderURL } from '@/lib/cc-switch-deep-link'
 
 import {
   createAssistantDefaultKey,
@@ -183,6 +184,24 @@ export function AssistantKeyTool(props: {
     }
   }
 
+  const importToCCSwitch = (apiKey: string) => {
+    if (model === '<MODEL_ID>' || typeof window === 'undefined') return
+    const serviceRoot = props.baseUrl
+      .replace(/\/v1\/?$/, '')
+      .replace(/\/+$/, '')
+    const normalizedKey = apiKey.startsWith('sk-') ? apiKey : `sk-${apiKey}`
+    const url = buildCCSwitchProviderURL({
+      app: 'claude',
+      name: 'LMM',
+      endpoint: serviceRoot,
+      apiKey: normalizedKey,
+      models: { model },
+      homepage: serviceRoot,
+      enabled: true,
+    })
+    window.open(url, '_blank')
+  }
+
   if (created) {
     return (
       <Card size='sm' className='border-success/40 bg-success/5'>
@@ -211,6 +230,9 @@ export function AssistantKeyTool(props: {
           <AssistantPrivateCard
             card={created.card}
             onContinue={props.onContinueSetup}
+            onImportToCCSwitch={
+              model === '<MODEL_ID>' ? undefined : importToCCSwitch
+            }
           />
         </CardContent>
       </Card>

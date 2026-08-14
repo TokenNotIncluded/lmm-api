@@ -409,27 +409,19 @@ func (s *responsesWSSession) prepareCall(create responsesWSCreateRequest, commit
 			return nil, nil, types.NewError(fmt.Errorf("user sensitive words detected: %s", strings.Join(words, ", ")), types.ErrorCodeSensitiveWordsDetected, types.ErrOptionWithSkipRetry())
 		}
 	}
-	if setting.ShouldCheckAdvancedSecurityPrompt() && meta != nil {
-		advancedSecuritySettings := setting.GetAdvancedSecuritySettings()
-		matches := service.CheckAdvancedSecurityText(meta.CombineText)
-		if len(matches) > 0 {
-			matchIDs := make([]string, 0, len(matches))
-			for _, match := range matches {
+	if setting.ShouldCheckAdvancedSecurityPrompt() {
+		securityText := dto.SecurityTextForRequest(&req)
+		evaluation := service.EvaluateAdvancedSecurityText(s.c, relayInfo, securityText)
+		if len(evaluation.Matches) > 0 {
+			matchIDs := make([]string, 0, len(evaluation.Matches))
+			for _, match := range evaluation.Matches {
 				matchIDs = append(matchIDs, match.RuleID)
 			}
 			logger.LogWarn(s.c, fmt.Sprintf("advanced security rules matched: %s", strings.Join(matchIDs, ", ")))
-			decision := appmodel.AdvancedSecurityDecisionAudited
-			if advancedSecuritySettings.Action == setting.AdvancedSecurityActionBlock {
-				decision = appmodel.AdvancedSecurityDecisionBlocked
-			}
-			service.RecordAdvancedSecurityDetection(s.c, relayInfo, meta.CombineText, matches, decision)
-			if decision == appmodel.AdvancedSecurityDecisionBlocked {
-				return nil, nil, types.NewErrorWithStatusCode(
-					errors.New("prompt blocked by advanced security guardrail"),
-					types.ErrorCodeAdvancedSecurity,
-					http.StatusBadRequest,
-					types.ErrOptionWithSkipRetry(),
-				)
+			if evaluation.Blocked() {
+				apiErr := service.NewAdvancedSecurityAPIError()
+				apiErr.SetMessage(common.MessageWithRequestId(apiErr.Error(), relayInfo.RequestId))
+				return nil, nil, apiErr
 			}
 		}
 	}

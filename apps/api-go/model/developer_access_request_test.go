@@ -12,7 +12,7 @@ import (
 
 func TestAssistantDeveloperAccessRecommendationApprovalUnlocksL1WithoutPayment(t *testing.T) {
 	db := setupConsoleActivationTestDB(t)
-	require.NoError(t, db.AutoMigrate(&DeveloperAccessRequest{}))
+	require.NoError(t, db.AutoMigrate(&DeveloperAccessRequest{}, &DeveloperAccessRecommendationArchive{}))
 
 	user := User{
 		Username: "unlock-request-user",
@@ -62,6 +62,12 @@ func TestAssistantDeveloperAccessRecommendationApprovalUnlocksL1WithoutPayment(t
 	require.NoError(t, err)
 	assert.True(t, access.Granted)
 	assert.False(t, access.PaidActivationComplete)
+	archives, err := ListDeveloperAccessRecommendationArchives(user.Id, 10)
+	require.NoError(t, err)
+	require.Len(t, archives, 1)
+	assert.Equal(t, request.Id, archives[0].RequestId)
+	assert.Equal(t, approved.AIRecommendation, archives[0].Recommendation)
+	assert.Equal(t, approved.AdminUserId, archives[0].AdminUserId)
 
 	_, err = ReviewDeveloperAccessRequest(99, request.Id, true, "duplicate")
 	assert.ErrorIs(t, err, ErrDeveloperAccessRequestReviewed)
@@ -69,7 +75,7 @@ func TestAssistantDeveloperAccessRecommendationApprovalUnlocksL1WithoutPayment(t
 
 func TestAssistantDeveloperAccessRecommendationCanBeCleared(t *testing.T) {
 	db := setupConsoleActivationTestDB(t)
-	require.NoError(t, db.AutoMigrate(&DeveloperAccessRequest{}))
+	require.NoError(t, db.AutoMigrate(&DeveloperAccessRequest{}, &DeveloperAccessRecommendationArchive{}))
 	user := User{Username: "clear-recommendation-user", Password: "password", Role: common.RoleCommonUser}
 	require.NoError(t, db.Create(&user).Error)
 

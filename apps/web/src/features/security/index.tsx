@@ -269,6 +269,28 @@ function PolicyMetadata({ policy }: { policy: SecurityPolicy }) {
               {displayValue(policy.reference_effective_date, t)}
             </dd>
           </div>
+          <div>
+            <dt className='text-muted-foreground'>{t('Advanced Security')}</dt>
+            <dd className='mt-1'>
+              {policy.enforcement.enabled ? t('Enabled') : t('Disabled')}
+            </dd>
+          </div>
+          <div>
+            <dt className='text-muted-foreground'>
+              {t('Inspect prompts before upstream')}
+            </dt>
+            <dd className='mt-1'>
+              {policy.enforcement.on_prompt ? t('Enabled') : t('Disabled')}
+            </dd>
+          </div>
+          <div className='sm:col-span-2'>
+            <dt className='text-muted-foreground'>{t('Response action')}</dt>
+            <dd className='mt-1'>
+              {policy.enforcement.action === 'block'
+                ? t('Block matching requests')
+                : t('Audit matches without blocking')}
+            </dd>
+          </div>
           <div className='sm:col-span-2'>
             <dt className='text-muted-foreground'>{t('Reference')}</dt>
             <dd className='mt-1'>

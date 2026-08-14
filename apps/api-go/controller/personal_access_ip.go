@@ -143,10 +143,14 @@ func CheckPersonalAccessIPPolicy(c *gin.Context) {
 		personalAccessIPPolicyError(c, http.StatusForbidden, "INTERNAL_ONLY", "internal policy endpoint")
 		return
 	}
-	// Non-CN requests are allowed without a dashboard session. This lets the
-	// same server-level auth_request stay cheap and side-effect free for the
-	// rest of the world; only the CN branch needs to inspect the account.
-	if strings.TrimSpace(c.GetHeader("X-LMM-CN-Source")) != "1" {
+	// The edge policy is always wired, but the administrator can disable the
+	// enforcement (or choose another country set) from System Settings. This
+	// keeps the decision in Go and avoids an Nginx/app configuration split.
+	edgeCountry := strings.ToUpper(strings.TrimSpace(c.GetHeader("X-LMM-Edge-Country")))
+	if edgeCountry == "" && strings.TrimSpace(c.GetHeader("X-LMM-CN-Source")) == "1" {
+		edgeCountry = "CN"
+	}
+	if !common.IsRegionBlocked(edgeCountry) {
 		c.Status(http.StatusNoContent)
 		return
 	}

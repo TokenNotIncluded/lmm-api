@@ -63,7 +63,7 @@ export function useWaffoPancakePayment() {
       topupAmount: number,
       checkoutOptions?: Pick<
         WaffoPancakePaymentRequest,
-        'checkout_region' | 'checkout_language'
+        'checkout_region' | 'checkout_language' | 'discount_code'
       >
     ) => {
       setProcessing(true)
@@ -78,6 +78,9 @@ export function useWaffoPancakePayment() {
           checkout_language:
             checkoutOptions?.checkout_language ??
             getWaffoPancakeCheckoutLanguage(interfaceLanguage),
+          ...(checkoutOptions?.discount_code
+            ? { discount_code: checkoutOptions.discount_code }
+            : {}),
         })
 
         if (isApiSuccess(response)) {

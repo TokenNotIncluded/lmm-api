@@ -48,6 +48,7 @@ func SetApiRouter(router *gin.Engine) {
 			securityRoute.GET("/policy", controller.GetPublicSecurityPolicy)
 			securityRoute.GET("/stats", controller.GetPublicSecurityStats)
 		}
+		apiRouter.PUT("/security/admin/settings", middleware.RootAuth(), middleware.DisableCache(), controller.UpdateAdvancedSecuritySettings)
 		securityAdminRoute := apiRouter.Group("/security/admin")
 		securityAdminRoute.Use(middleware.AdminAuth())
 		{
@@ -166,6 +167,7 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.GET("/aff", controller.GetAffCode)
 				selfRoute.GET("/topup/info", controller.GetTopUpInfo)
 				selfRoute.GET("/topup/self", controller.GetUserTopUps)
+				selfRoute.POST("/discount-code/validate", middleware.DisableCache(), controller.ValidateDiscountCode)
 				selfRoute.POST("/topup", middleware.CriticalRateLimit(), controller.TopUp)
 				selfRoute.POST("/pay", middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.RequestEpay)
 				selfRoute.POST("/fastpay/pay", middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.RequestFastPay)
@@ -212,6 +214,7 @@ func SetApiRouter(router *gin.Engine) {
 				adminRoute.DELETE("/:id/oauth/bindings/:provider_id", controller.UnbindCustomOAuthByAdmin)
 				adminRoute.DELETE("/:id/bindings/:binding_type", controller.AdminClearUserBinding)
 				adminRoute.GET("/:id", controller.GetUser)
+				adminRoute.GET("/:id/developer-access/archives", middleware.DisableCache(), controller.ListUserDeveloperAccessRecommendationArchives)
 				adminRoute.GET("/:id/assistant-profile", controller.AdminGetAssistantUserProfile)
 				adminRoute.PUT("/:id/assistant-profile", controller.AdminUpdateAssistantUserProfile)
 				adminRoute.GET("/:id/assistant-memories", controller.AdminListMemories)
@@ -391,6 +394,17 @@ func SetApiRouter(router *gin.Engine) {
 			redemptionRoute.PUT("/", controller.UpdateRedemption)
 			redemptionRoute.DELETE("/invalid", controller.DeleteInvalidRedemption)
 			redemptionRoute.DELETE("/:id", controller.DeleteRedemption)
+		}
+
+		discountCodeRoute := apiRouter.Group("/discount-code")
+		discountCodeRoute.Use(middleware.AdminAuth())
+		{
+			discountCodeRoute.GET("/", controller.GetAllDiscountCodes)
+			discountCodeRoute.GET("/search", controller.SearchDiscountCodes)
+			discountCodeRoute.GET("/:id", controller.GetDiscountCode)
+			discountCodeRoute.POST("/", controller.AddDiscountCode)
+			discountCodeRoute.PUT("/", controller.UpdateDiscountCode)
+			discountCodeRoute.DELETE("/:id", controller.DeleteDiscountCode)
 		}
 
 		openSourceBountyPublicRoute := openSourceBountyApiRouter.Group("/open-source-bounties")

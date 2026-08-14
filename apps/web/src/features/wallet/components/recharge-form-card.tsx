@@ -113,6 +113,11 @@ interface RechargeFormCardProps {
   onRedemptionCodeChange: (code: string) => void
   onRedeem: () => void
   redeeming: boolean
+  discountCode?: string
+  onDiscountCodeChange?: (code: string) => void
+  onApplyDiscount?: () => void
+  discountApplying?: boolean
+  discountPercent?: number | null
   topupLink?: string
   loading?: boolean
   error?: Error | null
@@ -144,6 +149,11 @@ export function RechargeFormCard({
   onRedemptionCodeChange,
   onRedeem,
   redeeming,
+  discountCode = '',
+  onDiscountCodeChange,
+  onApplyDiscount,
+  discountApplying = false,
+  discountPercent,
   topupLink,
   loading,
   error,
@@ -941,6 +951,62 @@ export function RechargeFormCard({
             )}
           </AlertDescription>
         </Alert>
+      ) : null}
+
+      {!neutralMode && hasConfigurableTopup ? (
+        <div className='flex flex-col gap-3 pt-4 sm:pt-6'>
+          <Separator />
+          <div className='flex items-center gap-2'>
+            <IconBadge tone='success' size='xs'>
+              <HugeiconsIcon icon={GiftIcon} strokeWidth={2} />
+            </IconBadge>
+            <Label
+              htmlFor='discount-code'
+              className='text-muted-foreground text-xs font-medium tracking-wider uppercase'
+            >
+              {t('Discount code')}
+            </Label>
+          </div>
+          <div className='grid grid-cols-[minmax(0,1fr)_auto] gap-2'>
+            <Input
+              id='discount-code'
+              value={discountCode}
+              onChange={(e) => onDiscountCodeChange?.(e.target.value)}
+              placeholder={t('Enter your discount code')}
+              className='h-9 min-w-0 uppercase'
+              autoComplete='off'
+              maxLength={64}
+            />
+            <Button
+              onClick={onApplyDiscount}
+              disabled={discountApplying || !discountCode.trim()}
+              variant='outline'
+              className='h-9 px-4'
+            >
+              {discountApplying && (
+                <HugeiconsIcon
+                  icon={Loading03Icon}
+                  className='animate-spin'
+                  data-icon='inline-start'
+                />
+              )}
+              {t('Apply')}
+            </Button>
+          </div>
+          {discountPercent !== null && discountPercent !== undefined ? (
+            <p className='text-success text-xs'>
+              {t('Discount applied: {{percent}}% off', {
+                percent: discountPercent,
+              })}
+            </p>
+          ) : (
+            <p className='text-muted-foreground text-xs'>
+              {t(
+                'A valid discount code is applied at checkout and cannot be combined with another code.'
+              )}
+            </p>
+          )}
+        </div>
       ) : null}
     </TitledCard>
   )

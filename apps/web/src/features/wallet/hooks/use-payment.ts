@@ -66,8 +66,19 @@ const defaultPaymentAmountCalculators: PaymentAmountCalculators = {
 export async function requestPaymentAmount(
   topupAmount: number,
   paymentType: string,
-  calculators: PaymentAmountCalculators = defaultPaymentAmountCalculators
+  discountCodeOrCalculators: string | PaymentAmountCalculators = '',
+  providedCalculators?: PaymentAmountCalculators
 ): Promise<number> {
+  // Keep the old third-argument calculators form working for callers outside
+  // the wallet while allowing the wallet to pass a discount code.
+  const discountCode =
+    typeof discountCodeOrCalculators === 'string'
+      ? discountCodeOrCalculators
+      : ''
+  const calculators =
+    typeof discountCodeOrCalculators === 'string'
+      ? (providedCalculators ?? defaultPaymentAmountCalculators)
+      : discountCodeOrCalculators
   const usesRegularCalculator =
     !isStripePayment(paymentType) &&
     !isWaffoPayment(paymentType) &&
@@ -82,8 +93,15 @@ export async function requestPaymentAmount(
   }
 
   const request = usesRegularCalculator
-    ? { amount: topupAmount, payment_method: paymentType }
-    : { amount: topupAmount }
+    ? {
+        amount: topupAmount,
+        payment_method: paymentType,
+        ...(discountCode ? { discount_code: discountCode } : {}),
+      }
+    : {
+        amount: topupAmount,
+        ...(discountCode ? { discount_code: discountCode } : {}),
+      }
   const response = await calculator(request)
   if (!isApiSuccess(response) || !response.data) {
     return 0
@@ -100,7 +118,7 @@ export function usePayment() {
 
   // Calculate payment amount
   const calculatePaymentAmount = useCallback(
-    async (topupAmount: number, paymentType: string) => {
+    async (topupAmount: number, paymentType: string, discountCode = '') => {
       if (localPreview) {
         setAmount(topupAmount)
         return topupAmount
@@ -110,7 +128,8 @@ export function usePayment() {
         setCalculating(true)
         const calculatedAmount = await requestPaymentAmount(
           topupAmount,
-          paymentType
+          paymentType,
+          discountCode
         )
         setAmount(calculatedAmount)
         return calculatedAmount
@@ -126,7 +145,7 @@ export function usePayment() {
 
   // Process payment
   const processPayment = useCallback(
-    async (topupAmount: number, paymentType: string) => {
+    async (topupAmount: number, paymentType: string, discountCode = '') => {
       if (localPreview) {
         toast.info(
           i18next.t(
@@ -148,10 +167,12 @@ export function usePayment() {
           ? await requestStripePayment({
               amount,
               payment_method: 'stripe',
+              ...(discountCode ? { discount_code: discountCode } : {}),
             })
           : await requestPayment({
               amount,
               payment_method: paymentType,
+              ...(discountCode ? { discount_code: discountCode } : {}),
             })
 
         if (!isApiSuccess(response)) {

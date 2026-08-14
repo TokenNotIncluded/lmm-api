@@ -42,6 +42,7 @@ type AssistantChatPayload = {
     privacy_notice?: unknown
     restricted?: unknown
   }
+  lmm_assistant_tools?: unknown
 }
 
 export type AssistantChatMessage = {
@@ -218,11 +219,70 @@ export type AssistantAdminChangeAction =
   | AssistantAdminConfigChangeAction
   | AssistantAdminPricingChangeAction
 
+export type AssistantNavigationPath =
+  | '/'
+  | '/getting-started'
+  | '/pricing'
+  | '/wallet'
+  | '/usage-logs/common'
+  | '/usage-logs/drawing'
+  | '/usage-logs/task'
+  | '/keys'
+  | '/profile'
+  | '/support'
+  | '/open-source-bounties'
+  | '/users'
+
+export type AssistantNavigationAction = {
+  type: 'navigate'
+  path: AssistantNavigationPath
+  query: Record<string, string | number | boolean>
+}
+
+type AssistantUserTargetAction = {
+  requires_confirmation: true
+  target_user_id: number
+  target_username: string
+  target_display_name: string
+  target_role: number
+  target_group: string
+  target_is_self: boolean
+}
+
+export type AssistantUserPasswordChangeAction = AssistantUserTargetAction & {
+  type: 'user_password_change'
+}
+
+export type AssistantUserOAuthUnbindAction = AssistantUserTargetAction & {
+  type: 'user_oauth_unbind'
+  provider: string
+  provider_kind: 'built_in' | 'custom'
+  provider_label: string
+}
+
+export type AssistantUserAccountAction = AssistantUserTargetAction & {
+  type: 'user_account_action'
+  action: 'disable' | 'delete'
+}
+
+export type AssistantUserAction =
+  | AssistantUserPasswordChangeAction
+  | AssistantUserOAuthUnbindAction
+  | AssistantUserAccountAction
+
+export type AssistantToolTrace = {
+  name: string
+  status: 'output-available' | 'output-error' | 'approval-requested'
+  input?: Record<string, string | number | boolean>
+}
+
 export type AssistantAction =
   | AssistantL1RecommendationAction
   | AssistantAccountDisableAction
   | AssistantCreateKeyAction
   | AssistantAdminChangeAction
+  | AssistantNavigationAction
+  | AssistantUserAction
 
 export type AssistantCreatedKey = {
   id: number
@@ -344,6 +404,7 @@ export type AssistantReply = {
   action?: AssistantAction
   conversationId?: number
   restricted?: boolean
+  tools?: AssistantToolTrace[]
 }
 
 export type AssistantPlanOffers = {
@@ -408,11 +469,202 @@ export function parseAssistantIntent(
   return ASSISTANT_INTENTS.has(intent) ? intent : undefined
 }
 
+const ASSISTANT_NAVIGATION_PATHS = new Set<AssistantNavigationPath>([
+  '/',
+  '/getting-started',
+  '/pricing',
+  '/wallet',
+  '/usage-logs/common',
+  '/usage-logs/drawing',
+  '/usage-logs/task',
+  '/keys',
+  '/profile',
+  '/support',
+  '/open-source-bounties',
+  '/users',
+])
+
+const ASSISTANT_NAVIGATION_QUERY_KEYS: Record<
+  AssistantNavigationPath,
+  readonly string[]
+> = {
+  '/': [],
+  '/getting-started': [],
+  '/pricing': [],
+  '/wallet': [],
+  '/usage-logs/common': ['username'],
+  '/usage-logs/drawing': ['username'],
+  '/usage-logs/task': ['username'],
+  '/keys': [],
+  '/profile': [],
+  '/support': [],
+  '/open-source-bounties': [],
+  '/users': ['filter', 'l0Only'],
+}
+
+function parseAssistantNavigationAction(
+  action: Record<string, unknown>
+): AssistantNavigationAction | undefined {
+  if (action.type !== 'navigate' || typeof action.path !== 'string') {
+    return undefined
+  }
+  const path = action.path.trim() as AssistantNavigationPath
+  if (!ASSISTANT_NAVIGATION_PATHS.has(path)) return undefined
+  const queryValue = action.query
+  const query: Record<string, string | number | boolean> = {}
+  if (queryValue !== undefined) {
+    if (!queryValue || typeof queryValue !== 'object') return undefined
+    const allowedKeys = ASSISTANT_NAVIGATION_QUERY_KEYS[path]
+    for (const [key, value] of Object.entries(
+      queryValue as Record<string, unknown>
+    )) {
+      if (!allowedKeys.includes(key)) return undefined
+      if (
+        typeof value !== 'string' &&
+        typeof value !== 'number' &&
+        typeof value !== 'boolean'
+      ) {
+        return undefined
+      }
+      if (typeof value === 'string' && value.trim().length > 200) {
+        return undefined
+      }
+      if (typeof value === 'number' && !Number.isFinite(value)) {
+        return undefined
+      }
+      query[key] = typeof value === 'string' ? value.trim() : value
+    }
+  }
+  return { type: 'navigate', path, query }
+}
+
+function parseAssistantUserAction(
+  action: Record<string, unknown>
+): AssistantUserAction | undefined {
+  if (
+    'password' in action ||
+    'new_password' in action ||
+    'current_password' in action ||
+    'api_key' in action ||
+    'access_token' in action
+  ) {
+    return undefined
+  }
+  if (
+    action.requires_confirmation !== true ||
+    typeof action.target_user_id !== 'number' ||
+    !Number.isInteger(action.target_user_id) ||
+    action.target_user_id < 1 ||
+    typeof action.target_username !== 'string' ||
+    typeof action.target_display_name !== 'string' ||
+    typeof action.target_role !== 'number' ||
+    !Number.isInteger(action.target_role) ||
+    typeof action.target_group !== 'string' ||
+    typeof action.target_is_self !== 'boolean'
+  ) {
+    return undefined
+  }
+  const targetUsername = action.target_username.trim()
+  const targetDisplayName = action.target_display_name.trim()
+  const targetGroup = action.target_group.trim()
+  if (!targetUsername || !targetGroup) return undefined
+  const target = {
+    requires_confirmation: true as const,
+    target_user_id: action.target_user_id,
+    target_username: targetUsername,
+    target_display_name: targetDisplayName,
+    target_role: action.target_role,
+    target_group: targetGroup,
+    target_is_self: action.target_is_self,
+  }
+  if (action.type === 'user_password_change') {
+    return { type: action.type, ...target }
+  }
+  if (
+    action.type === 'user_oauth_unbind' &&
+    (action.provider_kind === 'built_in' ||
+      action.provider_kind === 'custom') &&
+    typeof action.provider === 'string' &&
+    typeof action.provider_label === 'string'
+  ) {
+    const provider = action.provider.trim()
+    const providerLabel = action.provider_label.trim()
+    if (!provider || !providerLabel) return undefined
+    return {
+      type: action.type,
+      ...target,
+      provider,
+      provider_kind: action.provider_kind,
+      provider_label: providerLabel,
+    }
+  }
+  if (
+    action.type === 'user_account_action' &&
+    (action.action === 'disable' || action.action === 'delete')
+  ) {
+    return { type: action.type, ...target, action: action.action }
+  }
+  return undefined
+}
+
+export function parseAssistantToolTraces(value: unknown): AssistantToolTrace[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .slice(0, 12)
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null
+      const trace = item as Record<string, unknown>
+      if (
+        typeof trace.name !== 'string' ||
+        !['output-available', 'output-error', 'approval-requested'].includes(
+          trace.status as string
+        )
+      ) {
+        return null
+      }
+      const name = trace.name.trim()
+      if (!name || name.length > 80) return null
+      let input: AssistantToolTrace['input']
+      if (trace.input !== undefined) {
+        if (!trace.input || typeof trace.input !== 'object') return null
+        input = {}
+        for (const [key, rawValue] of Object.entries(
+          trace.input as Record<string, unknown>
+        )) {
+          if (
+            typeof rawValue !== 'string' &&
+            typeof rawValue !== 'number' &&
+            typeof rawValue !== 'boolean'
+          ) {
+            return null
+          }
+          if (typeof rawValue === 'string' && rawValue.length > 200) {
+            return null
+          }
+          if (typeof rawValue === 'number' && !Number.isFinite(rawValue)) {
+            return null
+          }
+          input[key] = rawValue
+        }
+      }
+      return {
+        name,
+        status: trace.status as AssistantToolTrace['status'],
+        ...(input && Object.keys(input).length > 0 ? { input } : {}),
+      }
+    })
+    .filter((trace): trace is AssistantToolTrace => trace !== null)
+}
+
 export function parseAssistantAction(
   value: unknown
 ): AssistantAction | undefined {
   if (!value || typeof value !== 'object') return undefined
   const action = value as Record<string, unknown>
+  const navigation = parseAssistantNavigationAction(action)
+  if (navigation) return navigation
+  const userAction = parseAssistantUserAction(action)
+  if (userAction) return userAction
   const confirmationToken =
     typeof action.confirmation_token === 'string'
       ? action.confirmation_token.trim()
@@ -647,6 +899,7 @@ export async function sendAssistantMessage(
     }
   }
   if (!response) throw new Error('Assistant request did not complete')
+  const tools = parseAssistantToolTraces(response.data.lmm_assistant_tools)
   const responseConversationId =
     response.data.lmm_assistant_history?.conversation_id
   const conversationRestricted =
@@ -657,6 +910,7 @@ export async function sendAssistantMessage(
     content: parseAssistantReply(response.data),
     intent: parseAssistantIntent(response.headers['x-lmm-assistant-intent']),
     action: parseAssistantAction(response.data.lmm_assistant_action),
+    ...(tools.length > 0 ? { tools } : {}),
   }
   if (conversationRestricted) reply.restricted = true
   if (
@@ -687,6 +941,82 @@ export async function recordAssistantPreConversationPresetClick(
     undefined,
     { skipBusinessError: true, skipErrorHandler: true }
   )
+}
+
+export async function executeAssistantUserAction(
+  action: AssistantUserAction,
+  input: { currentPassword?: string; newPassword?: string }
+): Promise<{ selfDeleted: boolean }> {
+  const skipOptions = {
+    skipBusinessError: true,
+    skipErrorHandler: true,
+  } as const
+  if (action.type === 'user_password_change') {
+    const password = input.newPassword ?? ''
+    if (action.target_is_self) {
+      const response = await api.put<AssistantAPIResponse<unknown>>(
+        '/api/user/self',
+        { original_password: input.currentPassword ?? '', password },
+        { ...skipOptions, acceptAuthRotation: true }
+      )
+      requireAssistantData(response.data, 'Unable to change the password')
+    } else {
+      const response = await api.put<AssistantAPIResponse<unknown>>(
+        '/api/user/',
+        {
+          id: action.target_user_id,
+          username: action.target_username,
+          display_name: action.target_display_name,
+          role: action.target_role,
+          group: action.target_group,
+          password,
+        },
+        skipOptions
+      )
+      requireAssistantData(response.data, 'Unable to change the password')
+    }
+    return { selfDeleted: false }
+  }
+  if (action.type === 'user_oauth_unbind') {
+    const base = action.target_is_self
+      ? '/api/user'
+      : `/api/user/${action.target_user_id}`
+    const path =
+      action.provider_kind === 'custom'
+        ? `${base}/oauth/bindings/${encodeURIComponent(action.provider)}`
+        : `${base}/bindings/${encodeURIComponent(action.provider)}`
+    const response = await api.delete<AssistantAPIResponse<unknown>>(
+      path,
+      skipOptions
+    )
+    requireAssistantData(response.data, 'Unable to unbind the OAuth login')
+    return { selfDeleted: false }
+  }
+  if (action.target_is_self) {
+    if (action.action !== 'delete') {
+      throw new Error(
+        'This account action is not available for the current user'
+      )
+    }
+    const response = await api.delete<AssistantAPIResponse<unknown>>(
+      '/api/user/self',
+      { ...skipOptions }
+    )
+    requireAssistantData(response.data, 'Unable to delete the account')
+    return { selfDeleted: true }
+  }
+  const response = await api.post<AssistantAPIResponse<unknown>>(
+    '/api/user/manage',
+    { id: action.target_user_id, action: action.action },
+    skipOptions
+  )
+  requireAssistantData(
+    response.data,
+    action.action === 'delete'
+      ? 'Unable to delete the user'
+      : 'Unable to disable the user'
+  )
+  return { selfDeleted: false }
 }
 
 export async function submitAssistantAccountDisableRequest(input: {

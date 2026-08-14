@@ -115,6 +115,8 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 					"type":  "error",
 					"error": newAPIError.ToClaudeError(),
 				})
+			case types.RelayFormatGemini:
+				c.JSON(newAPIError.StatusCode, newAPIError.ToGeminiError())
 			default:
 				c.JSON(newAPIError.StatusCode, gin.H{
 					"error": newAPIError.ToOpenAIError(),
@@ -142,11 +144,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
 	needAdvancedSecurityCheck := setting.ShouldCheckAdvancedSecurityPrompt()
-	advancedSecuritySettings := setting.GetAdvancedSecuritySettings()
 	needCountToken := constant.CountToken
 	// Avoid building huge CombineText (strings.Join) when token counting and sensitive check are both disabled.
 	var meta *types.TokenCountMeta
-	if needSensitiveCheck || needAdvancedSecurityCheck || needCountToken {
+	if needSensitiveCheck || needCountToken {
 		meta = request.GetTokenCountMeta()
 	} else {
 		meta = fastTokenCountMetaForPricing(request)
@@ -169,26 +170,17 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 	}
 
-	if needAdvancedSecurityCheck && meta != nil {
-		matches := service.CheckAdvancedSecurityText(meta.CombineText)
-		if len(matches) > 0 {
-			matchIDs := make([]string, 0, len(matches))
-			for _, match := range matches {
+	if needAdvancedSecurityCheck {
+		securityText := dto.SecurityTextForRequest(request)
+		evaluation := service.EvaluateAdvancedSecurityText(c, relayInfo, securityText)
+		if len(evaluation.Matches) > 0 {
+			matchIDs := make([]string, 0, len(evaluation.Matches))
+			for _, match := range evaluation.Matches {
 				matchIDs = append(matchIDs, match.RuleID)
 			}
 			logger.LogWarn(c, fmt.Sprintf("advanced security rules matched: %s", strings.Join(matchIDs, ", ")))
-			decision := model.AdvancedSecurityDecisionAudited
-			if advancedSecuritySettings.Action == setting.AdvancedSecurityActionBlock {
-				decision = model.AdvancedSecurityDecisionBlocked
-			}
-			service.RecordAdvancedSecurityDetection(c, relayInfo, meta.CombineText, matches, decision)
-			if decision == model.AdvancedSecurityDecisionBlocked {
-				newAPIError = types.NewErrorWithStatusCode(
-					errors.New("prompt blocked by advanced security guardrail"),
-					types.ErrorCodeAdvancedSecurity,
-					http.StatusBadRequest,
-					types.ErrOptionWithSkipRetry(),
-				)
+			if evaluation.Blocked() {
+				newAPIError = service.NewAdvancedSecurityAPIError()
 				return
 			}
 		}
@@ -242,6 +234,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
 		relayInfo.RetryIndex = retryParam.GetRetry()
+		common.SetContextKey(c, constant.ContextKeyUpstreamChannelFailure, false)
+		common.SetContextKey(c, constant.ContextKeyUpstreamCapabilityMismatch, false)
+		common.SetContextKey(c, constant.ContextKeyUpstreamUnsupportedParameter, false)
 		channel, channelErr := getChannel(c, relayInfo, retryParam)
 		if channelErr != nil {
 			logger.LogError(c, channelErr.Error())
@@ -293,6 +288,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 		newAPIError = service.NormalizeViolationFeeError(newAPIError)
 		relayInfo.LastError = newAPIError
+		if service.ShouldExcludeChannelForRetry(c, newAPIError) {
+			retryParam.ExcludeChannel(channel.Id)
+		}
 
 		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
 
@@ -423,15 +421,23 @@ func RelayMidjourney(c *gin.Context) {
 	log.Println(mjErr)
 	if mjErr != nil {
 		statusCode := http.StatusBadRequest
+		errorType := "upstream_error"
 		if mjErr.Code == 30 {
 			mjErr.Result = "当前分组负载已饱和，请稍后再试，或升级账户以提升服务质量。"
 			statusCode = http.StatusTooManyRequests
 		}
-		c.JSON(statusCode, gin.H{
+		if mjErr.Description == string(types.ErrorCodeAdvancedSecurity) {
+			errorType = "new_api_error"
+		}
+		response := gin.H{
 			"description": fmt.Sprintf("%s %s", mjErr.Description, mjErr.Result),
-			"type":        "upstream_error",
+			"type":        errorType,
 			"code":        mjErr.Code,
-		})
+		}
+		if mjErr.Description == string(types.ErrorCodeAdvancedSecurity) {
+			response["error_code"] = mjErr.Description
+		}
+		c.JSON(statusCode, response)
 		channelId := c.GetInt("channel_id")
 		logger.LogError(c, fmt.Sprintf("relay error (channel #%d, status code %d): %s", channelId, statusCode, fmt.Sprintf("%s %s", mjErr.Description, mjErr.Result)))
 	}

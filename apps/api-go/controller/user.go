@@ -1144,6 +1144,18 @@ func CreateUser(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserCannotCreateHigherLevel)
 		return
 	}
+	// Give administrators a useful validation error instead of exposing a
+	// database-specific users_username_key violation. The unique index remains
+	// the final race-safe guard inside the transaction below.
+	exists, err := model.CheckUserExistOrDeleted(user.Username, "")
+	if err != nil {
+		common.ApiErrorI18n(c, i18n.MsgDatabaseError)
+		return
+	}
+	if exists {
+		common.ApiErrorI18n(c, i18n.MsgUserExists)
+		return
+	}
 	// Even for admin users, we cannot fully trust them!
 	cleanUser := model.User{
 		Username:    user.Username,
@@ -1160,6 +1172,10 @@ func CreateUser(c *gin.Context) {
 		authzTouched = touched
 		return err
 	}); err != nil {
+		if isUsernameConflictError(err) {
+			common.ApiErrorI18n(c, i18n.MsgUserExists)
+			return
+		}
 		common.ApiError(c, err)
 		return
 	}
@@ -1180,6 +1196,16 @@ func CreateUser(c *gin.Context) {
 		"message": "",
 	})
 	return
+}
+
+func isUsernameConflictError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "users_username_key") ||
+		strings.Contains(message, "username") &&
+			(strings.Contains(message, "unique") || strings.Contains(message, "duplicate"))
 }
 
 func updateAdminPermissionsForUserInTx(c *gin.Context, tx *gorm.DB, userID int, userRole int, permissions map[string]map[string]bool) (bool, error) {

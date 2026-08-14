@@ -160,9 +160,9 @@ func SetAdvancedSecurityOnPrompt(enabled bool) {
 }
 
 func UpdateAdvancedSecurityAction(value string) error {
-	action := strings.ToLower(strings.TrimSpace(value))
-	if action != AdvancedSecurityActionBlock && action != AdvancedSecurityActionAudit {
-		return fmt.Errorf("advanced security action must be %q or %q", AdvancedSecurityActionBlock, AdvancedSecurityActionAudit)
+	action, err := normalizeAdvancedSecurityAction(value)
+	if err != nil {
+		return err
 	}
 
 	advancedSecuritySettingsMu.Lock()
@@ -183,10 +183,51 @@ func UpdateAdvancedSecurityRules(value string) error {
 	return nil
 }
 
+// ApplyAdvancedSecuritySettings validates and swaps the complete guardrail
+// configuration under one lock. Callers that persist the four related option
+// keys together can therefore avoid exposing a partially updated runtime
+// policy to concurrent requests.
+func ApplyAdvancedSecuritySettings(enabled, onPrompt bool, actionValue, rulesValue string) error {
+	action, err := normalizeAdvancedSecurityAction(actionValue)
+	if err != nil {
+		return err
+	}
+	ruleSet, err := ParseAdvancedSecurityRules(rulesValue)
+	if err != nil {
+		return err
+	}
+
+	advancedSecuritySettingsMu.Lock()
+	defer advancedSecuritySettingsMu.Unlock()
+	advancedSecuritySettings = AdvancedSecuritySettings{
+		Enabled:  enabled,
+		OnPrompt: onPrompt,
+		Action:   action,
+		RuleSet:  ruleSet,
+	}
+	return nil
+}
+
+func normalizeAdvancedSecurityAction(value string) (string, error) {
+	action := strings.ToLower(strings.TrimSpace(value))
+	if action != AdvancedSecurityActionBlock && action != AdvancedSecurityActionAudit {
+		return "", fmt.Errorf("advanced security action must be %q or %q", AdvancedSecurityActionBlock, AdvancedSecurityActionAudit)
+	}
+	return action, nil
+}
+
 func ShouldCheckAdvancedSecurityPrompt() bool {
 	advancedSecuritySettingsMu.RLock()
 	defer advancedSecuritySettingsMu.RUnlock()
-	return advancedSecuritySettings.Enabled && advancedSecuritySettings.OnPrompt && len(advancedSecuritySettings.RuleSet.Rules) > 0
+	if !advancedSecuritySettings.Enabled || !advancedSecuritySettings.OnPrompt {
+		return false
+	}
+	for _, rule := range advancedSecuritySettings.RuleSet.Rules {
+		if rule.Enabled && len(rule.Patterns) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func AdvancedSecurityRulesToJSONString() string {

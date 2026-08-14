@@ -21,6 +21,27 @@ type OpenAIError struct {
 type ClaudeError struct {
 	Type    string `json:"type,omitempty"`
 	Message string `json:"message,omitempty"`
+	Code    string `json:"code,omitempty"`
+}
+
+// GeminiErrorResponse follows the Google APIs error envelope used by native
+// Gemini clients. ErrorInfo carries the stable gateway code without forcing
+// clients to parse the human-readable message.
+type GeminiErrorResponse struct {
+	Error GeminiError `json:"error"`
+}
+
+type GeminiError struct {
+	Code    int                 `json:"code"`
+	Message string              `json:"message"`
+	Status  string              `json:"status"`
+	Details []GeminiErrorDetail `json:"details,omitempty"`
+}
+
+type GeminiErrorDetail struct {
+	Type   string `json:"@type"`
+	Reason string `json:"reason"`
+	Domain string `json:"domain"`
 }
 
 type ErrorType string
@@ -240,6 +261,7 @@ func (e *NewAPIError) ToClaudeError() ClaudeError {
 			result = ClaudeError{
 				Message: e.Error(),
 				Type:    fmt.Sprintf("%v", openAIError.Code),
+				Code:    string(e.errorCode),
 			}
 		}
 	case ErrorTypeClaudeError:
@@ -249,8 +271,12 @@ func (e *NewAPIError) ToClaudeError() ClaudeError {
 	default:
 		result = ClaudeError{
 			Message: e.Error(),
-			Type:    string(e.errorType),
+			Type:    claudeErrorTypeForHTTPStatus(e.StatusCode),
+			Code:    string(e.errorCode),
 		}
+	}
+	if result.Code == "" && e.errorCode != "" {
+		result.Code = string(e.errorCode)
 	}
 	if e.errorCode != ErrorCodeCountTokenFailed {
 		result.Message = kitutil.MaskSensitiveInfo(result.Message)
@@ -259,6 +285,74 @@ func (e *NewAPIError) ToClaudeError() ClaudeError {
 		result.Message = string(e.errorType)
 	}
 	return result
+}
+
+func claudeErrorTypeForHTTPStatus(statusCode int) string {
+	switch statusCode {
+	case http.StatusBadRequest:
+		return "invalid_request_error"
+	case http.StatusUnauthorized:
+		return "authentication_error"
+	case http.StatusForbidden:
+		return "permission_error"
+	case http.StatusNotFound:
+		return "not_found_error"
+	case http.StatusTooManyRequests:
+		return "rate_limit_error"
+	case 529:
+		return "overloaded_error"
+	default:
+		if statusCode >= http.StatusInternalServerError {
+			return "api_error"
+		}
+		return "invalid_request_error"
+	}
+}
+
+func (e *NewAPIError) ToGeminiError() GeminiErrorResponse {
+	statusCode := e.StatusCode
+	if statusCode == 0 {
+		statusCode = http.StatusInternalServerError
+	}
+	result := GeminiErrorResponse{
+		Error: GeminiError{
+			Code:    statusCode,
+			Message: e.ToOpenAIError().Message,
+			Status:  geminiStatusForHTTPStatus(statusCode),
+		},
+	}
+	if e.errorCode != "" {
+		result.Error.Details = []GeminiErrorDetail{{
+			Type:   "type.googleapis.com/google.rpc.ErrorInfo",
+			Reason: string(e.errorCode),
+			Domain: "api.lmm.best",
+		}}
+	}
+	return result
+}
+
+func geminiStatusForHTTPStatus(statusCode int) string {
+	switch statusCode {
+	case http.StatusBadRequest:
+		return "INVALID_ARGUMENT"
+	case http.StatusUnauthorized:
+		return "UNAUTHENTICATED"
+	case http.StatusForbidden:
+		return "PERMISSION_DENIED"
+	case http.StatusNotFound:
+		return "NOT_FOUND"
+	case http.StatusConflict:
+		return "ABORTED"
+	case http.StatusTooManyRequests:
+		return "RESOURCE_EXHAUSTED"
+	case http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return "UNAVAILABLE"
+	default:
+		if statusCode >= http.StatusInternalServerError {
+			return "INTERNAL"
+		}
+		return "UNKNOWN"
+	}
 }
 
 type NewAPIErrorOptions func(*NewAPIError)

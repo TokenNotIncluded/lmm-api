@@ -45,7 +45,7 @@ func TestAssistantL1RequestIsQueuedBeforeOptionalRecommendation(t *testing.T) {
 
 func TestAssistantL1QueueEnrichmentAndApprovalIsOneDurableFlow(t *testing.T) {
 	db := setupConsoleActivationTestDB(t)
-	require.NoError(t, db.AutoMigrate(&DeveloperAccessRequest{}))
+	require.NoError(t, db.AutoMigrate(&DeveloperAccessRequest{}, &DeveloperAccessRecommendationArchive{}))
 
 	user := User{
 		Username: "assistant-l1-flow-user",

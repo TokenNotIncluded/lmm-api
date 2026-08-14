@@ -69,6 +69,11 @@ const policyResponse = {
     reference_effective_date: '2025-09-15',
     reference_url: 'https://www.anthropic.com/legal/aup',
     alignment: 'Local public adaptation',
+    enforcement: {
+      enabled: true,
+      on_prompt: true,
+      action: 'block',
+    },
     risk_categories: [
       {
         id: 'privacy_identity',
@@ -180,6 +185,8 @@ describe('SecurityContent', () => {
       const content = rendered.container.textContent ?? ''
 
       assert.match(content, /Privacy and identity rights/)
+      assert.match(content, /Advanced Security/)
+      assert.match(content, /Block matching requests/)
       assert.match(content, /17/)
       assert.match(content, /11/)
       assert.match(content, /violation_fee\.grok\.csam/)

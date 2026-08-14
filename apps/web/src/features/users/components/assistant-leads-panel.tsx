@@ -419,13 +419,16 @@ export function AssistantLeadsPanel() {
       )
     }
     return (
-      <div className='min-w-0' data-testid='assistant-resolved-task-list'>
+      <div
+        className='max-h-[32rem] min-w-0 overflow-y-auto pr-1'
+        data-testid='assistant-resolved-task-list'
+      >
         {resolved.map((handoff) => {
           const createdAt = new Date(handoff.created_at * 1000)
           return (
             <article
               key={handoff.id}
-              className='border-border min-w-0 overflow-hidden border-b py-7'
+              className='border-border min-w-0 overflow-hidden border-b py-4 last:border-b-0'
               data-testid={`assistant-resolved-task-${handoff.id}`}
             >
               <div className='flex min-w-0 flex-col gap-2 sm:flex-row sm:items-start sm:justify-between'>

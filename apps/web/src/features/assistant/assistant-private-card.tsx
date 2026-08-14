@@ -30,11 +30,13 @@ import { revealAssistantPrivateCard, type AssistantPrivateCard } from './api'
 export function AssistantPrivateCard(props: {
   card: AssistantPrivateCard
   onContinue: () => void
+  onImportToCCSwitch?: (secret: string) => void | Promise<void>
 }) {
   const { t } = useTranslation()
   const secretRef = useRef('')
   const [viewing, setViewing] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [importing, setImporting] = useState(false)
 
   const getSecret = async (): Promise<string | null> => {
     if (secretRef.current) return secretRef.current
@@ -74,6 +76,20 @@ export function AssistantPrivateCard(props: {
     setViewing(false)
   }
 
+  const importToCCSwitch = async () => {
+    if (!props.onImportToCCSwitch || importing) return
+    setImporting(true)
+    try {
+      const secret = await getSecret()
+      if (!secret) return
+      await props.onImportToCCSwitch(secret)
+      secretRef.current = ''
+      setViewing(false)
+    } finally {
+      setImporting(false)
+    }
+  }
+
   return (
     <div
       className='border-success/40 bg-success/5 grid gap-3 rounded-lg border p-3'
@@ -106,12 +122,31 @@ export function AssistantPrivateCard(props: {
         </code>
       ) : null}
       <div className='flex flex-wrap gap-2'>
+        {props.onImportToCCSwitch ? (
+          <Button
+            type='button'
+            variant='outline'
+            size='sm'
+            onClick={() => void importToCCSwitch()}
+            disabled={loading || importing}
+          >
+            {importing ? (
+              <HugeiconsIcon
+                icon={Loading03Icon}
+                className='mr-1 animate-spin'
+                strokeWidth={2}
+                aria-hidden='true'
+              />
+            ) : null}
+            {t('Import to CC Switch')}
+          </Button>
+        ) : null}
         <Button
           type='button'
           variant='outline'
           size='sm'
           onClick={() => void copySecret()}
-          disabled={loading}
+          disabled={loading || importing}
         >
           {loading ? (
             <HugeiconsIcon
@@ -138,7 +173,7 @@ export function AssistantPrivateCard(props: {
             variant='outline'
             size='sm'
             onClick={() => void showSecret()}
-            disabled={loading}
+            disabled={loading || importing}
           >
             {t('Show securely')}
           </Button>

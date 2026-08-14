@@ -27,6 +27,8 @@ type TopUp struct {
 	TradeNo               string  `json:"trade_no" gorm:"unique;type:varchar(255);index"`
 	PaymentMethod         string  `json:"payment_method" gorm:"type:varchar(50)"`
 	PaymentProvider       string  `json:"payment_provider" gorm:"type:varchar(50);default:'';uniqueIndex:idx_topup_provider_event,priority:1;uniqueIndex:idx_topup_provider_transaction,priority:1"`
+	DiscountCodeId        int     `json:"discount_code_id,omitempty" gorm:"index"`
+	DiscountPercent       int     `json:"discount_percent,omitempty"`
 	ProviderProductId     string  `json:"provider_product_id" gorm:"type:varchar(255);not null;default:''"`
 	ProviderStoreId       string  `json:"provider_store_id" gorm:"type:varchar(255);not null;default:''"`
 	ProviderEventId       *string `json:"provider_event_id,omitempty" gorm:"type:varchar(255);uniqueIndex:idx_topup_provider_event,priority:2"`
@@ -436,6 +438,16 @@ func completeExternalTopUpOnDB(db *gorm.DB, settlement ExternalTopUpSettlement) 
 			}
 			if result.RowsAffected != 1 {
 				return gorm.ErrRecordNotFound
+			}
+			if completed.DiscountCodeId > 0 {
+				// Usage is counted only after the payment and quota credit have
+				// committed. A deleted/legacy code does not invalidate a valid
+				// payment, but any database error remains transactional.
+				if err := tx.Model(&DiscountCode{}).
+					Where("id = ?", completed.DiscountCodeId).
+					UpdateColumn("used_count", gorm.Expr("used_count + ?", 1)).Error; err != nil {
+					return err
+				}
 			}
 			return nil
 		})

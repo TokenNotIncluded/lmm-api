@@ -46,6 +46,7 @@ import { Route as AuthenticatedChatChatIdRouteImport } from './routes/_authentic
 import { Route as AuthenticatedDashboardIndexRouteImport } from './routes/_authenticated/dashboard/index'
 import { Route as AuthenticatedDashboardSectionRouteImport } from './routes/_authenticated/dashboard/$section'
 import { Route as AuthenticatedDeveloperAccessIndexRouteImport } from './routes/_authenticated/developer-access/index'
+import { Route as AuthenticatedDiscountCodesIndexRouteImport } from './routes/_authenticated/discount-codes/index'
 import { Route as AuthenticatedErrorsErrorRouteImport } from './routes/_authenticated/errors/$error'
 import { Route as AuthenticatedFinanceIndexRouteImport } from './routes/_authenticated/finance/index'
 import { Route as AuthenticatedGettingStartedIndexRouteImport } from './routes/_authenticated/getting-started/index'
@@ -269,6 +270,12 @@ const AuthenticatedDeveloperAccessIndexRoute =
   AuthenticatedDeveloperAccessIndexRouteImport.update({
     id: '/developer-access/',
     path: '/developer-access/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedDiscountCodesIndexRoute =
+  AuthenticatedDiscountCodesIndexRouteImport.update({
+    id: '/discount-codes/',
+    path: '/discount-codes/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
 const AuthenticatedErrorsErrorRoute =
@@ -517,6 +524,7 @@ export interface FileRoutesByFullPath {
   '/chat-management/': typeof AuthenticatedChatManagementIndexRoute
   '/dashboard/': typeof AuthenticatedDashboardIndexRoute
   '/developer-access/': typeof AuthenticatedDeveloperAccessIndexRoute
+  '/discount-codes/': typeof AuthenticatedDiscountCodesIndexRoute
   '/finance/': typeof AuthenticatedFinanceIndexRoute
   '/getting-started/': typeof AuthenticatedGettingStartedIndexRoute
   '/keys/': typeof AuthenticatedKeysIndexRoute
@@ -588,6 +596,7 @@ export interface FileRoutesByTo {
   '/chat-management': typeof AuthenticatedChatManagementIndexRoute
   '/dashboard': typeof AuthenticatedDashboardIndexRoute
   '/developer-access': typeof AuthenticatedDeveloperAccessIndexRoute
+  '/discount-codes': typeof AuthenticatedDiscountCodesIndexRoute
   '/finance': typeof AuthenticatedFinanceIndexRoute
   '/getting-started': typeof AuthenticatedGettingStartedIndexRoute
   '/keys': typeof AuthenticatedKeysIndexRoute
@@ -663,6 +672,7 @@ export interface FileRoutesById {
   '/_authenticated/chat-management/': typeof AuthenticatedChatManagementIndexRoute
   '/_authenticated/dashboard/': typeof AuthenticatedDashboardIndexRoute
   '/_authenticated/developer-access/': typeof AuthenticatedDeveloperAccessIndexRoute
+  '/_authenticated/discount-codes/': typeof AuthenticatedDiscountCodesIndexRoute
   '/_authenticated/finance/': typeof AuthenticatedFinanceIndexRoute
   '/_authenticated/getting-started/': typeof AuthenticatedGettingStartedIndexRoute
   '/_authenticated/keys/': typeof AuthenticatedKeysIndexRoute
@@ -737,6 +747,7 @@ export interface FileRouteTypes {
     | '/chat-management/'
     | '/dashboard/'
     | '/developer-access/'
+    | '/discount-codes/'
     | '/finance/'
     | '/getting-started/'
     | '/keys/'
@@ -808,6 +819,7 @@ export interface FileRouteTypes {
     | '/chat-management'
     | '/dashboard'
     | '/developer-access'
+    | '/discount-codes'
     | '/finance'
     | '/getting-started'
     | '/keys'
@@ -882,6 +894,7 @@ export interface FileRouteTypes {
     | '/_authenticated/chat-management/'
     | '/_authenticated/dashboard/'
     | '/_authenticated/developer-access/'
+    | '/_authenticated/discount-codes/'
     | '/_authenticated/finance/'
     | '/_authenticated/getting-started/'
     | '/_authenticated/keys/'
@@ -1199,6 +1212,13 @@ declare module '@tanstack/react-router' {
       path: '/developer-access'
       fullPath: '/developer-access/'
       preLoaderRoute: typeof AuthenticatedDeveloperAccessIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/discount-codes/': {
+      id: '/_authenticated/discount-codes/'
+      path: '/discount-codes'
+      fullPath: '/discount-codes/'
+      preLoaderRoute: typeof AuthenticatedDiscountCodesIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/errors/$error': {
@@ -1546,6 +1566,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedChatManagementIndexRoute: typeof AuthenticatedChatManagementIndexRoute
   AuthenticatedDashboardIndexRoute: typeof AuthenticatedDashboardIndexRoute
   AuthenticatedDeveloperAccessIndexRoute: typeof AuthenticatedDeveloperAccessIndexRoute
+  AuthenticatedDiscountCodesIndexRoute: typeof AuthenticatedDiscountCodesIndexRoute
   AuthenticatedFinanceIndexRoute: typeof AuthenticatedFinanceIndexRoute
   AuthenticatedGettingStartedIndexRoute: typeof AuthenticatedGettingStartedIndexRoute
   AuthenticatedKeysIndexRoute: typeof AuthenticatedKeysIndexRoute
@@ -1578,6 +1599,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedDashboardIndexRoute: AuthenticatedDashboardIndexRoute,
   AuthenticatedDeveloperAccessIndexRoute:
     AuthenticatedDeveloperAccessIndexRoute,
+  AuthenticatedDiscountCodesIndexRoute: AuthenticatedDiscountCodesIndexRoute,
   AuthenticatedFinanceIndexRoute: AuthenticatedFinanceIndexRoute,
   AuthenticatedGettingStartedIndexRoute: AuthenticatedGettingStartedIndexRoute,
   AuthenticatedKeysIndexRoute: AuthenticatedKeysIndexRoute,

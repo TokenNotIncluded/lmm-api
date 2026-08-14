@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import type { TFunction } from 'i18next'
 import { useEffect, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
@@ -44,6 +45,7 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 
+import { updateAdvancedSecuritySettings } from '../api'
 import {
   SettingsForm,
   SettingsSwitchContent,
@@ -51,7 +53,6 @@ import {
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
-import { useUpdateOption } from '../hooks/use-update-option'
 
 const STARTER_RULE_SET = {
   version: 1,
@@ -267,7 +268,21 @@ export function AdvancedSecuritySection({
   defaultValues,
 }: AdvancedSecuritySectionProps) {
   const { t } = useTranslation()
-  const updateOption = useUpdateOption()
+  const queryClient = useQueryClient()
+  const updateSettings = useMutation({
+    mutationFn: updateAdvancedSecuritySettings,
+    onSuccess: (response) => {
+      if (response.success) {
+        queryClient.invalidateQueries({ queryKey: ['system-options'] })
+        toast.success(t('Setting updated successfully'))
+      } else {
+        toast.error(response.message || t('Failed to update setting'))
+      }
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || t('Failed to update setting'))
+    },
+  })
   const advancedSecuritySchema = createAdvancedSecuritySchema(t)
   const [saveState, setSaveState] = useState<'idle' | 'saved' | 'error'>('idle')
   const baselineRef = useRef({
@@ -306,44 +321,25 @@ export function AdvancedSecuritySection({
   const onSubmit = async (values: AdvancedSecurityFormValues) => {
     const normalizedRules = normalizeRules(values.AdvancedSecurityRules)
     const baseline = baselineRef.current
-    const updates: Array<{
-      key: string
-      value: string | boolean
-    }> = []
-
-    if (values.AdvancedSecurityEnabled !== baseline.enabled) {
-      updates.push({
-        key: 'AdvancedSecurityEnabled',
-        value: values.AdvancedSecurityEnabled,
-      })
-    }
-    if (values.AdvancedSecurityOnPromptEnabled !== baseline.onPrompt) {
-      updates.push({
-        key: 'AdvancedSecurityOnPromptEnabled',
-        value: values.AdvancedSecurityOnPromptEnabled,
-      })
-    }
-    if (values.AdvancedSecurityAction !== baseline.action) {
-      updates.push({
-        key: 'AdvancedSecurityAction',
-        value: values.AdvancedSecurityAction,
-      })
-    }
-    if (normalizedRules !== baseline.rules) {
-      updates.push({ key: 'AdvancedSecurityRules', value: normalizedRules })
-    }
-
-    if (updates.length === 0) {
+    if (
+      values.AdvancedSecurityEnabled === baseline.enabled &&
+      values.AdvancedSecurityOnPromptEnabled === baseline.onPrompt &&
+      values.AdvancedSecurityAction === baseline.action &&
+      normalizedRules === baseline.rules
+    ) {
       toast.info(t('No changes to save'))
       return
     }
 
     setSaveState('idle')
     try {
-      const responses = await Promise.all(
-        updates.map((update) => updateOption.mutateAsync(update))
-      )
-      if (!responses.every((response) => response.success)) {
+      const response = await updateSettings.mutateAsync({
+        enabled: values.AdvancedSecurityEnabled,
+        on_prompt: values.AdvancedSecurityOnPromptEnabled,
+        action: values.AdvancedSecurityAction,
+        rules: JSON.parse(normalizedRules),
+      })
+      if (!response.success) {
         setSaveState('error')
         return
       }
@@ -370,7 +366,7 @@ export function AdvancedSecuritySection({
         <SettingsForm onSubmit={form.handleSubmit(onSubmit)}>
           <SettingsPageFormActions
             onSave={form.handleSubmit(onSubmit)}
-            isSaving={updateOption.isPending}
+            isSaving={updateSettings.isPending}
             saveLabel='Save advanced security'
           />
 

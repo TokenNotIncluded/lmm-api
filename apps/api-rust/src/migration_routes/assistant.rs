@@ -742,6 +742,8 @@ Current service connection facts:\n\
 - Once the L0 user has provided enough concrete information, call prepare_l1_recommendation. The user must explicitly confirm that draft in the UI before it is sent. Only an administrator can approve or reject it; never claim that the assistant granted L1.\n\
 - When get_account_access reports a pending or reviewed L1 request, accurately relay its status and the administrator's note. A rejection is feedback for another conversation, not permission to activate the account.\n\
 - Use the service root without /v1 for Anthropic-compatible clients such as Claude Code, and use the /v1 Base URL for OpenAI-compatible clients.\n\
+- CC Switch supports one-click provider import through the ccswitch://v1/import deep-link protocol. Never say that CC Switch has no import link, and do not make manual field entry the default. For Claude, the generated link uses resource=provider, app=claude, the service root without /v1, the exact client model ID, and the newly created API key.\n\
+- API keys must never enter the assistant context or chat transcript. After the user confirms key creation, use the shielded private card's Import to CC Switch action (or the CC Switch action for that key on /keys) to construct and open the real link in the browser; show manual values only as a fallback.\n\
 - The official ChatGPT app does not accept a custom API Base URL or this service's API key. Recommend CC Switch or another compatible API client when the user wants to use this service.\n\
 - Write actions require explicit confirmation in the UI. Explain the next step clearly and never hide a charge or a permission change.",
     );
@@ -2277,6 +2279,57 @@ fn tool_result(result: Value) -> AssistantToolOutcome {
     }
 }
 
+fn input_for_trace(arguments: &str) -> Map<String, Value> {
+    serde_json::from_str::<Value>(arguments.trim())
+        .ok()
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default()
+}
+
+fn assistant_tool_trace(
+    call: &AssistantOpenAiToolCall,
+    input: &Map<String, Value>,
+    result: &Value,
+) -> Value {
+    const SAFE_KEYS: [&str; 12] = [
+        "action",
+        "days",
+        "group",
+        "identifier",
+        "model_id",
+        "page",
+        "platform",
+        "provider",
+        "query",
+        "section",
+        "target_user_id",
+        "topic",
+    ];
+    let safe_input = SAFE_KEYS
+        .into_iter()
+        .filter_map(|key| {
+            let value = input.get(key)?;
+            if value.is_string() || value.is_number() || value.is_boolean() {
+                Some((key.to_owned(), value.clone()))
+            } else {
+                None
+            }
+        })
+        .collect::<Map<_, _>>();
+    let status = if result.get("ok").and_then(Value::as_bool) == Some(false) {
+        "output-error"
+    } else if result.get("status").and_then(Value::as_str) == Some("confirmation_required") {
+        "approval-requested"
+    } else {
+        "output-available"
+    };
+    json!({
+        "name": call.function.name.trim(),
+        "status": status,
+        "input": safe_input,
+    })
+}
+
 fn input_string(input: &Map<String, Value>, key: &str) -> String {
     input
         .get(key)
@@ -2291,6 +2344,366 @@ fn input_number(input: &Map<String, Value>, key: &str) -> Option<f64> {
         .get(key)
         .and_then(Value::as_f64)
         .filter(|n| n.is_finite())
+}
+
+#[derive(Clone, Debug)]
+struct AssistantTargetUser {
+    id: i64,
+    username: String,
+    display_name: String,
+    role: i64,
+    status: i64,
+    email: String,
+    group: String,
+    quota: i64,
+    used_quota: i64,
+    request_count: i64,
+    created_at: i64,
+    last_login_at: i64,
+    oauth: BTreeMap<String, bool>,
+}
+
+async fn assistant_target_user(
+    state: &AssistantReadState,
+    actor: &DashboardUserView,
+    input: &Map<String, Value>,
+) -> Result<AssistantTargetUser, String> {
+    let identifier = input_string(input, "identifier");
+    let requested_id = input
+        .get("user_id")
+        .and_then(Value::as_i64)
+        .filter(|id| *id > 0)
+        .or_else(|| identifier.parse::<i64>().ok().filter(|id| *id > 0));
+    let is_admin = actor.role >= ADMIN_ROLE;
+    if !is_admin {
+        let is_self_identifier = identifier.is_empty()
+            || identifier == actor.id.to_string()
+            || identifier.eq_ignore_ascii_case(&actor.username)
+            || (!actor.email.is_empty() && identifier.eq_ignore_ascii_case(&actor.email));
+        if requested_id.is_some_and(|id| id != actor.id) || !is_self_identifier {
+            return Err("regular users may inspect or manage only their own account".to_owned());
+        }
+    }
+    let requested_id = if is_admin {
+        requested_id.or(Some(actor.id))
+    } else {
+        Some(actor.id)
+    };
+    let row = sqlx::query(
+        r#"SELECT id::BIGINT AS id, COALESCE(username, '') AS username,
+                  COALESCE(display_name, '') AS display_name,
+                  COALESCE(role, 1)::BIGINT AS role,
+                  COALESCE(status, 1)::BIGINT AS status,
+                  COALESCE(email, '') AS email,
+                  COALESCE("group", 'default') AS "group",
+                  COALESCE(quota, 0)::BIGINT AS quota,
+                  COALESCE(used_quota, 0)::BIGINT AS used_quota,
+                  COALESCE(request_count, 0)::BIGINT AS request_count,
+                  COALESCE(created_at, 0)::BIGINT AS created_at,
+                  COALESCE(last_login_at, 0)::BIGINT AS last_login_at,
+                  COALESCE(github_id, '') AS github_id,
+                  COALESCE(discord_id, '') AS discord_id,
+                  COALESCE(oidc_id, '') AS oidc_id,
+                  COALESCE(wechat_id, '') AS wechat_id,
+                  COALESCE(telegram_id, '') AS telegram_id,
+                  COALESCE(linux_do_id, '') AS linux_do_id
+           FROM users
+          WHERE deleted_at IS NULL
+            AND (($1::BIGINT IS NOT NULL AND id = $1)
+              OR (NULLIF($2, '') IS NOT NULL AND (username = $2 OR email = $2)))
+          ORDER BY id
+          LIMIT 1"#,
+    )
+    .bind(requested_id)
+    .bind(&identifier)
+    .fetch_optional(&state.pg)
+    .await
+    .map_err(|_| "user account could not be loaded".to_owned())?
+    .ok_or_else(|| "the requested user could not be found".to_owned())?;
+    let target = AssistantTargetUser {
+        id: row
+            .try_get("id")
+            .map_err(|_| "user account could not be loaded")?,
+        username: row
+            .try_get("username")
+            .map_err(|_| "user account could not be loaded")?,
+        display_name: row
+            .try_get("display_name")
+            .map_err(|_| "user account could not be loaded")?,
+        role: row
+            .try_get("role")
+            .map_err(|_| "user account could not be loaded")?,
+        status: row
+            .try_get("status")
+            .map_err(|_| "user account could not be loaded")?,
+        email: row
+            .try_get("email")
+            .map_err(|_| "user account could not be loaded")?,
+        group: row
+            .try_get("group")
+            .map_err(|_| "user account could not be loaded")?,
+        quota: row
+            .try_get("quota")
+            .map_err(|_| "user account could not be loaded")?,
+        used_quota: row
+            .try_get("used_quota")
+            .map_err(|_| "user account could not be loaded")?,
+        request_count: row
+            .try_get("request_count")
+            .map_err(|_| "user account could not be loaded")?,
+        created_at: row
+            .try_get("created_at")
+            .map_err(|_| "user account could not be loaded")?,
+        last_login_at: row
+            .try_get("last_login_at")
+            .map_err(|_| "user account could not be loaded")?,
+        oauth: [
+            ("github", "github_id"),
+            ("discord", "discord_id"),
+            ("oidc", "oidc_id"),
+            ("wechat", "wechat_id"),
+            ("telegram", "telegram_id"),
+            ("linuxdo", "linux_do_id"),
+        ]
+        .into_iter()
+        .map(|(provider, column)| {
+            (
+                provider.to_owned(),
+                row.try_get::<String, _>(column)
+                    .map(|value| !value.trim().is_empty())
+                    .unwrap_or(false),
+            )
+        })
+        .collect(),
+    };
+    if target.id != actor.id && (!is_admin || target.role >= actor.role) {
+        return Err("administrators may target only permitted lower-role users".to_owned());
+    }
+    Ok(target)
+}
+
+fn assistant_target_action(target: &AssistantTargetUser, actor: &DashboardUserView) -> Value {
+    json!({
+        "requires_confirmation": true,
+        "target_user_id": target.id,
+        "target_username": target.username,
+        "target_display_name": target.display_name,
+        "target_role": target.role,
+        "target_group": target.group,
+        "target_is_self": target.id == actor.id,
+    })
+}
+
+async fn assistant_user_overview_tool(
+    state: &AssistantReadState,
+    actor: &DashboardUserView,
+    input: &Map<String, Value>,
+) -> Value {
+    let target = match assistant_target_user(state, actor, input).await {
+        Ok(target) => target,
+        Err(error) => return json!({"ok": false, "error": error}),
+    };
+    let custom_oauth_count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*)::BIGINT FROM user_oauth_bindings WHERE user_id = $1",
+    )
+    .bind(target.id)
+    .fetch_one(&state.pg)
+    .await
+    .unwrap_or_default();
+    let oauth = target
+        .oauth
+        .iter()
+        .filter_map(|(provider, bound)| bound.then_some(provider.clone()))
+        .collect::<Vec<_>>();
+    json!({
+        "ok": true,
+        "user": {
+            "id": target.id,
+            "username": target.username,
+            "display_name": target.display_name,
+            "email": target.email,
+            "role": target.role,
+            "status": if target.status == 1 { "enabled" } else { "disabled" },
+            "group": target.group,
+            "quota": target.quota,
+            "used_quota": target.used_quota,
+            "request_count": target.request_count,
+            "created_at": target.created_at,
+            "last_login_at": target.last_login_at,
+            "oauth_providers": oauth,
+            "custom_oauth_binding_count": custom_oauth_count,
+        },
+        "privacy": "Passwords, API keys, access tokens, OAuth subject IDs, session IDs, and raw request content are omitted.",
+    })
+}
+
+async fn assistant_user_usage_tool(
+    state: &AssistantReadState,
+    actor: &DashboardUserView,
+    input: &Map<String, Value>,
+) -> Value {
+    let target = match assistant_target_user(state, actor, input).await {
+        Ok(target) => target,
+        Err(error) => return json!({"ok": false, "error": error}),
+    };
+    assistant_usage_tool(state, target.id, input).await
+}
+
+async fn assistant_navigation_tool(
+    state: &AssistantReadState,
+    actor: &DashboardUserView,
+    input: &Map<String, Value>,
+) -> AssistantToolOutcome {
+    let page = input_string(input, "page");
+    let path = match page.as_str() {
+        "home" => "/".to_owned(),
+        "getting-started" => "/getting-started".to_owned(),
+        "pricing" => "/pricing".to_owned(),
+        "wallet" => "/wallet".to_owned(),
+        "usage-logs" => format!(
+            "/usage-logs/{}",
+            match input_string(input, "section").as_str() {
+                "drawing" => "drawing",
+                "task" => "task",
+                _ => "common",
+            }
+        ),
+        "keys" => "/keys".to_owned(),
+        "profile" => "/profile".to_owned(),
+        "support" => "/support".to_owned(),
+        "open-source-bounties" => "/open-source-bounties".to_owned(),
+        "users" if actor.role >= ADMIN_ROLE => "/users".to_owned(),
+        "users" => {
+            return tool_result(
+                json!({"ok":false,"error":"the users page is available only to administrators"}),
+            );
+        }
+        _ => {
+            return tool_result(json!({"ok":false,"error":"page is not allowlisted"}));
+        }
+    };
+    let identifier = input_string(input, "identifier");
+    let mut query = Map::new();
+    if !identifier.is_empty() {
+        let target = match assistant_target_user(
+            state,
+            actor,
+            &Map::from_iter([(String::from("identifier"), Value::String(identifier))]),
+        )
+        .await
+        {
+            Ok(target) => target,
+            Err(error) => return tool_result(json!({"ok":false,"error":error})),
+        };
+        if path == "/users" {
+            query.insert("filter".to_owned(), Value::String(target.username));
+            query.insert("l0Only".to_owned(), Value::Bool(false));
+        } else if path.starts_with("/usage-logs/") {
+            query.insert("username".to_owned(), Value::String(target.username));
+        }
+    }
+    let action = json!({"type":"navigate","path":path,"query":query});
+    AssistantToolOutcome {
+        result: json!({"ok":true,"status":"completed","page":page,"path":action["path"],"query":action["query"]}),
+        action: Some(action),
+    }
+}
+
+async fn assistant_user_action_tool(
+    state: &AssistantReadState,
+    actor: &DashboardUserView,
+    input: &Map<String, Value>,
+) -> AssistantToolOutcome {
+    let action_name = input_string(input, "action");
+    let target = match assistant_target_user(state, actor, input).await {
+        Ok(target) => target,
+        Err(error) => return tool_result(json!({"ok":false,"error":error})),
+    };
+    let target_action = assistant_target_action(&target, actor);
+    match action_name.as_str() {
+        "bind_oauth" => {
+            if target.id != actor.id {
+                return tool_result(
+                    json!({"ok":false,"error":"OAuth binding must be completed by the target user in their own session"}),
+                );
+            }
+            return AssistantToolOutcome {
+                result: json!({"ok":true,"status":"completed","message":"Open the profile page and complete OAuth binding in the user's own authenticated session."}),
+                action: Some(json!({"type":"navigate","path":"/profile","query":{}})),
+            };
+        }
+        "change_password" => {
+            let mut action = target_action;
+            action["type"] = Value::String("user_password_change".to_owned());
+            return AssistantToolOutcome {
+                result: json!({"ok":true,"status":"confirmation_required","action":"change_password","message":"Ask the user to enter the password only in the secure confirmation card."}),
+                action: Some(action),
+            };
+        }
+        "disable" => {
+            if target.id == actor.id {
+                return tool_result(
+                    json!({"ok":false,"error":"users cannot disable their own account through the assistant"}),
+                );
+            }
+            let mut action = target_action;
+            action["type"] = Value::String("user_account_action".to_owned());
+            action["action"] = Value::String("disable".to_owned());
+            return AssistantToolOutcome {
+                result: json!({"ok":true,"status":"confirmation_required","action":"disable","message":"Review the target account and explicitly confirm disabling it."}),
+                action: Some(action),
+            };
+        }
+        "delete" => {
+            let mut action = target_action;
+            action["type"] = Value::String("user_account_action".to_owned());
+            action["action"] = Value::String("delete".to_owned());
+            return AssistantToolOutcome {
+                result: json!({"ok":true,"status":"confirmation_required","action":"delete","message":"Review the target account and explicitly confirm deletion."}),
+                action: Some(action),
+            };
+        }
+        "unbind_oauth" => {}
+        _ => return tool_result(json!({"ok":false,"error":"unsupported user action"})),
+    }
+    let provider = input_string(input, "provider").to_ascii_lowercase();
+    if provider.is_empty() {
+        return tool_result(json!({"ok":false,"error":"an OAuth provider is required"}));
+    }
+    let (provider_value, provider_kind, provider_label) = match provider.as_str() {
+        "github" | "discord" | "oidc" | "wechat" | "telegram" | "linuxdo" => {
+            (provider.clone(), "built_in", provider.clone())
+        }
+        value if value.starts_with("custom:") => {
+            let id = value.trim_start_matches("custom:").parse::<i64>().ok();
+            let Some(id) = id.filter(|id| *id > 0) else {
+                return tool_result(
+                    json!({"ok":false,"error":"custom OAuth provider ID is invalid"}),
+                );
+            };
+            let label = sqlx::query_scalar::<_, String>(
+                "SELECT COALESCE(NULLIF(name, ''), NULLIF(slug, ''), '') FROM custom_oauth_providers WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_optional(&state.pg)
+            .await
+            .ok()
+            .flatten()
+            .filter(|label| !label.is_empty())
+            .unwrap_or_else(|| format!("Custom OAuth provider #{id}"));
+            (provider, "custom", label)
+        }
+        _ => return tool_result(json!({"ok":false,"error":"OAuth provider is not allowlisted"})),
+    };
+    let mut action = target_action;
+    action["type"] = Value::String("user_oauth_unbind".to_owned());
+    action["provider"] = Value::String(provider_value);
+    action["provider_kind"] = Value::String(provider_kind.to_owned());
+    action["provider_label"] = Value::String(provider_label);
+    AssistantToolOutcome {
+        result: json!({"ok":true,"status":"confirmation_required","action":"unbind_oauth","message":"Review the OAuth binding and explicitly confirm unbinding it."}),
+        action: Some(action),
+    }
 }
 
 fn assistant_service_facts(settings: &AssistantSettingsView) -> Value {
@@ -2310,6 +2723,13 @@ fn assistant_service_facts(settings: &AssistantSettingsView) -> Value {
         "client_model_instruction": "Call get_available_models and use an exact model_ids value; the assistant's own model is not a client default.",
         "api_keys_are_private": true,
         "key_management_path": "/keys",
+        "cc_switch_import": {
+            "supported": true,
+            "protocol": "ccswitch://v1/import",
+            "application": "claude",
+            "requires_private_api_key": true,
+            "ui_action": "Import to CC Switch"
+        },
         "write_actions": "require explicit confirmation in the UI",
     })
 }
@@ -3228,6 +3648,34 @@ fn assistant_setup_tool(settings: &AssistantSettingsView, input: &Map<String, Va
             });
             result["endpoint_format"] =
                 Value::String("Anthropic Messages; use the service root without /v1".to_owned());
+            result["cc_switch_import"] = json!({
+                "supported": true,
+                "protocol": "ccswitch://v1/import",
+                "resource": "provider",
+                "application": "claude",
+                "endpoint": root,
+                "model": model,
+                "api_key": "<PRIVATE_API_KEY>",
+                "link_parameters": {
+                    "resource": "provider",
+                    "app": "claude",
+                    "name": "LMM",
+                    "endpoint": root,
+                    "apiKey": "<PRIVATE_API_KEY>",
+                    "model": model,
+                    "homepage": root,
+                    "enabled": true
+                },
+                "build_instructions": "After the user confirms and creates a key, the assistant UI replaces <PRIVATE_API_KEY> client-side and opens the CC Switch import confirmation. Never print the completed URL or ask the user to paste the key into chat.",
+            });
+            result["steps"] = json!([
+                "Install CC Switch from the official GitHub Releases page, or use the macOS Homebrew command returned by this tool.",
+                "Create or select an API key in this console; the key stays in a shielded private card.",
+                "Use Import to CC Switch from that private card (or the key's CC Switch action on /keys). The UI constructs the ccswitch:// link and CC Switch shows an import confirmation.",
+                "Confirm the import, enable the Claude provider, then open a new terminal and send a short Claude Code test message."
+            ]);
+            result["official_releases"] =
+                Value::String("https://github.com/farion1231/cc-switch/releases".to_owned());
             result["official_docs"] =
                 Value::String("https://github.com/farion1231/cc-switch".to_owned());
         }
@@ -5149,6 +5597,40 @@ mod tests {
         );
     }
 
+    #[test]
+    fn assistant_setup_tool_should_describe_cc_switch_deep_link_import() {
+        let settings = AssistantSettingsView {
+            server_address: "https://api.example.com/".to_owned(),
+            ..AssistantSettingsView::default()
+        };
+        let input = serde_json::from_value::<Map<String, Value>>(json!({
+            "platform": "windows",
+            "topic": "cc-switch",
+            "model_id": "deepseek-v4-flash",
+        }))
+        .expect("setup input");
+
+        let result = assistant_setup_tool(&settings, &input);
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["service_root"], "https://api.example.com");
+        assert_eq!(result["cc_switch_import"]["supported"], true);
+        assert_eq!(
+            result["cc_switch_import"]["protocol"],
+            "ccswitch://v1/import"
+        );
+        assert_eq!(
+            result["cc_switch_import"]["endpoint"],
+            "https://api.example.com"
+        );
+        assert_eq!(
+            result["official_releases"],
+            "https://github.com/farion1231/cc-switch/releases"
+        );
+        assert!(result["steps"]
+            .as_array()
+            .is_some_and(|steps| steps.iter().any(|step| step == "Use Import to CC Switch from that private card (or the key's CC Switch action on /keys). The UI constructs the ccswitch:// link and CC Switch shows an import confirmation.")));
+    }
+
     #[tokio::test]
     async fn assistant_chat_should_own_model_prompt_billing_and_intent() {
         let upstream_body = json!({
@@ -5216,6 +5698,11 @@ mod tests {
             request["messages"][0]["content"]
                 .as_str()
                 .is_some_and(|prompt| prompt.contains("Never ask for or repeat passwords"))
+        );
+        assert!(
+            request["messages"][0]["content"]
+                .as_str()
+                .is_some_and(|prompt| prompt.contains("ccswitch://v1/import"))
         );
         assert!(request.get("tools").is_none());
     }

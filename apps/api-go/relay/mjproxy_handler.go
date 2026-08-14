@@ -561,16 +561,11 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 	}
 
 	if setting.ShouldCheckAdvancedSecurityPrompt() && strings.TrimSpace(midjRequest.Prompt) != "" {
-		matches := service.CheckAdvancedSecurityText(midjRequest.Prompt)
-		if len(matches) > 0 {
-			decision := model.AdvancedSecurityDecisionAudited
-			if setting.GetAdvancedSecuritySettings().Action == setting.AdvancedSecurityActionBlock {
-				decision = model.AdvancedSecurityDecisionBlocked
-			}
-			service.RecordAdvancedSecurityDetection(c, relayInfo, midjRequest.Prompt, matches, decision)
-			if decision == model.AdvancedSecurityDecisionBlocked {
-				return service.MidjourneyErrorWrapper(constant.MjRequestError, "advanced_security_guardrail")
-			}
+		evaluation := service.EvaluateAdvancedSecurityText(c, relayInfo, midjRequest.Prompt)
+		if evaluation.Blocked() {
+			response := service.MidjourneyErrorWrapper(constant.MjRequestError, "advanced_security_guardrail")
+			response.Result = common.MessageWithRequestId(service.AdvancedSecurityBlockedMessage, c.GetString(common.RequestIdKey))
+			return response
 		}
 	}
 

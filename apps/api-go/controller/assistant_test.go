@@ -88,6 +88,7 @@ func TestPrepareAssistantRequestOwnsModelAndPrompt(t *testing.T) {
 	require.Len(t, captured.Messages, 2)
 	assert.Equal(t, "system", captured.Messages[0].Role)
 	assert.Contains(t, captured.Messages[0].Content, "Never ask for or repeat passwords")
+	assert.Contains(t, captured.Messages[0].Content, "connection details tool")
 	assert.Contains(t, captured.Messages[0].Content, "https://api.example.com\n")
 	assert.Contains(t, captured.Messages[0].Content, "https://api.example.com/v1")
 	assert.Contains(t, captured.Messages[0].Content, "server-owned-model")
@@ -1180,7 +1181,7 @@ func TestAssistantPricingEndpointAppliesTrustDiscountToGroupRatios(t *testing.T)
 func TestAssistantAgentToolsExposeSafeAndConfirmationGatedActions(t *testing.T) {
 	c, _ := createAssistantKeyTestContext(t, "assistant-tool-user")
 	definitions := assistantToolDefinitions()
-	require.Len(t, definitions, 28)
+	require.Len(t, definitions, 32)
 	names := make(map[string]bool, len(definitions))
 	for _, definition := range definitions {
 		names[definition.Function.Name] = true
@@ -1198,6 +1199,10 @@ func TestAssistantAgentToolsExposeSafeAndConfirmationGatedActions(t *testing.T) 
 	assert.True(t, names["get_bounty_guide"])
 	assert.True(t, names["prepare_new_user_gift"])
 	assert.True(t, names["get_usage_summary"])
+	assert.True(t, names["navigate_to_page"])
+	assert.True(t, names["get_user_overview"])
+	assert.True(t, names["get_user_usage_summary"])
+	assert.True(t, names["prepare_user_action"])
 	assert.True(t, names["search_web"])
 	assert.True(t, names["get_setup_guide"])
 	assert.True(t, names["prepare_l1_recommendation"])
@@ -1817,6 +1822,19 @@ func TestAssistantSetupToolReturnsExactEndpointFormatsAndClientLimits(t *testing
 	})
 	assert.Equal(t, false, withoutModel["ok"])
 	assert.Equal(t, "model_required", withoutModel["status"])
+
+	ccSwitch := executeAssistantSetupTool(user.Id, map[string]any{
+		"platform": "windows",
+		"topic":    "cc-switch",
+		"model_id": "claude-sonnet-4-5",
+	})
+	ccSwitchImport, ok := ccSwitch["cc_switch_import"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, true, ccSwitchImport["supported"])
+	assert.Equal(t, "ccswitch://v1/import", ccSwitchImport["protocol"])
+	assert.Equal(t, "https://api.example.com", ccSwitchImport["endpoint"])
+	assert.Equal(t, "https://github.com/farion1231/cc-switch/releases", ccSwitch["official_releases"])
+	assert.Contains(t, ccSwitch["steps"], "Use Import to CC Switch from that private card (or the key's CC Switch action on /keys). The UI constructs the ccswitch:// link and CC Switch shows an import confirmation.")
 
 	chatGPT := executeAssistantSetupTool(user.Id, map[string]any{
 		"platform": "macos",

@@ -4,11 +4,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"net/http"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/gin-gonic/gin"
 )
@@ -24,16 +27,30 @@ type AdvancedSecurityMatch struct {
 	Pattern     string
 }
 
+const AdvancedSecurityBlockedMessage = "prompt blocked by advanced security guardrail"
+
+type AdvancedSecurityEvaluation struct {
+	Matches  []AdvancedSecurityMatch
+	Decision string
+}
+
+func (evaluation AdvancedSecurityEvaluation) Blocked() bool {
+	return evaluation.Decision == model.AdvancedSecurityDecisionBlocked
+}
+
 // CheckAdvancedSecurityText applies the configured literal rule library with
 // the shared Aho-Corasick matcher. It is intentionally separate from the
 // legacy sensitive-word check so operators can tune either mechanism without
 // changing the other one's behavior.
 func CheckAdvancedSecurityText(text string) []AdvancedSecurityMatch {
-	if !setting.ShouldCheckAdvancedSecurityPrompt() || strings.TrimSpace(text) == "" {
+	return checkAdvancedSecurityTextWithSettings(text, setting.GetAdvancedSecuritySettings())
+}
+
+func checkAdvancedSecurityTextWithSettings(text string, settings setting.AdvancedSecuritySettings) []AdvancedSecurityMatch {
+	if !settings.Enabled || !settings.OnPrompt || strings.TrimSpace(text) == "" {
 		return nil
 	}
 
-	settings := setting.GetAdvancedSecuritySettings()
 	patterns := make([]string, 0)
 	seenPatterns := make(map[string]struct{})
 	for _, rule := range settings.RuleSet.Rules {
@@ -89,6 +106,33 @@ func CheckAdvancedSecurityText(text string) []AdvancedSecurityMatch {
 		}
 	}
 	return matches
+}
+
+// EvaluateAdvancedSecurityText performs matching, resolves the configured
+// block/audit action, and records the result through one shared path. Keeping
+// those steps together prevents protocol-specific relays from drifting apart.
+func EvaluateAdvancedSecurityText(c *gin.Context, relayInfo *relaycommon.RelayInfo, text string) AdvancedSecurityEvaluation {
+	settings := setting.GetAdvancedSecuritySettings()
+	matches := checkAdvancedSecurityTextWithSettings(text, settings)
+	if len(matches) == 0 {
+		return AdvancedSecurityEvaluation{}
+	}
+
+	decision := model.AdvancedSecurityDecisionAudited
+	if settings.Action == setting.AdvancedSecurityActionBlock {
+		decision = model.AdvancedSecurityDecisionBlocked
+	}
+	RecordAdvancedSecurityDetection(c, relayInfo, text, matches, decision)
+	return AdvancedSecurityEvaluation{Matches: matches, Decision: decision}
+}
+
+func NewAdvancedSecurityAPIError() *types.NewAPIError {
+	return types.NewErrorWithStatusCode(
+		errors.New(AdvancedSecurityBlockedMessage),
+		types.ErrorCodeAdvancedSecurity,
+		http.StatusBadRequest,
+		types.ErrOptionWithSkipRetry(),
+	)
 }
 
 // RecordAdvancedSecurityDetection persists one row per matched rule. The

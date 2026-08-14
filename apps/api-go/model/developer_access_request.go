@@ -393,6 +393,11 @@ func ReviewDeveloperAccessRequest(adminUserID int, requestID int, approve bool, 
 		request.AdminUserId = adminUserID
 		request.AdminNote = normalizedNote
 		request.ReviewedAt = now
+		if approve {
+			if err := archiveApprovedDeveloperAccessRecommendation(tx, request); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	if err != nil {

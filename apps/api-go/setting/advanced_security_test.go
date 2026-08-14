@@ -1,6 +1,9 @@
 package setting
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestParseAdvancedSecurityRulesNormalizesAndValidates(t *testing.T) {
 	ruleSet, err := ParseAdvancedSecurityRules(`{
@@ -66,6 +69,40 @@ func TestAdvancedSecuritySettingsUpdates(t *testing.T) {
 	}
 }
 
+func TestApplyAdvancedSecuritySettingsSwapsCompletePolicy(t *testing.T) {
+	original := GetAdvancedSecuritySettings()
+	t.Cleanup(func() {
+		_ = ApplyAdvancedSecuritySettings(
+			original.Enabled,
+			original.OnPrompt,
+			original.Action,
+			AdvancedSecurityRulesToJSONStringForTest(original.RuleSet),
+		)
+	})
+
+	err := ApplyAdvancedSecuritySettings(
+		true,
+		true,
+		AdvancedSecurityActionAudit,
+		`[{"id":"disabled","enabled":false,"patterns":["needle"]}]`,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ShouldCheckAdvancedSecurityPrompt() {
+		t.Fatal("disabled-only rule set should not enable prompt scanning")
+	}
+
+	beforeInvalid := GetAdvancedSecuritySettings()
+	if err := ApplyAdvancedSecuritySettings(false, false, "invalid", `[{"id":"other","enabled":true,"patterns":["other"]}]`); err == nil {
+		t.Fatal("expected invalid action to be rejected")
+	}
+	afterInvalid := GetAdvancedSecuritySettings()
+	if afterInvalid.Enabled != beforeInvalid.Enabled || afterInvalid.OnPrompt != beforeInvalid.OnPrompt || afterInvalid.Action != beforeInvalid.Action || len(afterInvalid.RuleSet.Rules) != len(beforeInvalid.RuleSet.Rules) {
+		t.Fatalf("invalid policy partially changed runtime settings: before=%+v after=%+v", beforeInvalid, afterInvalid)
+	}
+}
+
 func TestAdvancedSecurityRiskCategoryCatalogMatchesPolicyLayers(t *testing.T) {
 	counts := make(map[string]int)
 	for _, category := range GetAdvancedSecurityRiskCategories() {
@@ -90,9 +127,9 @@ func TestAdvancedSecurityRiskCategoryCatalogMatchesPolicyLayers(t *testing.T) {
 
 func AdvancedSecurityRulesToJSONStringForTest(ruleSet AdvancedSecurityRuleSet) string {
 	// Keep test cleanup independent of the current global state.
-	encoded := `{"version":1,"rules":[]}`
-	if len(ruleSet.Rules) == 1 && ruleSet.Rules[0].ID == "test" {
-		encoded = `{"version":1,"rules":[{"id":"test","name":"test","category":"custom","enabled":true,"patterns":["needle"]}]}`
+	encoded, err := json.Marshal(ruleSet)
+	if err != nil {
+		return `{"version":1,"rules":[]}`
 	}
-	return encoded
+	return string(encoded)
 }

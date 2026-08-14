@@ -88,6 +88,9 @@ import {
   type AssistantCreateKeyAction,
   type AssistantAdminChangeAction,
   type AssistantL1RecommendationAction,
+  type AssistantNavigationAction,
+  type AssistantToolTrace,
+  type AssistantUserAction,
 } from './api'
 import {
   getAssistantAccountAccessState,
@@ -124,19 +127,25 @@ import { AssistantOnboardingTodo } from './assistant-onboarding-todo'
 import { AssistantPlanTool } from './assistant-plan-tool'
 import { getAssistantPromptValidation } from './assistant-prompt-validation'
 import { AssistantSetupTool } from './assistant-setup-tool'
+import { AssistantToolCalls } from './assistant-tool-calls'
 import { AssistantUsageTool } from './assistant-usage-tool'
+import { AssistantUserActionTool } from './assistant-user-action-tool'
 
 type AssistantActionPath =
+  | '/'
   | '/getting-started'
   | '/pricing'
   | '/wallet'
   | '/usage-logs'
   | '/keys'
+  | '/profile'
   | '/open-source-bounties'
   | '/support'
+  | '/users'
 
 type AssistantAction =
   | { kind: 'route'; label: string; to: AssistantActionPath }
+  | { kind: 'navigation'; label: string; href: string }
   | { kind: 'email'; label: string; href: string }
   | {
       kind: 'tool'
@@ -156,6 +165,7 @@ type ConversationEntry = {
   id: string
   role: 'user' | 'assistant'
   content: string
+  tools?: AssistantToolTrace[]
   action?: AssistantAction
   adminChange?: AssistantAdminChangeAction
   error?: boolean
@@ -165,6 +175,28 @@ type ConversationEntry = {
     history: AssistantChatMessage[]
     presetId?: string
   }
+}
+
+function assistantNavigationHref(action: AssistantNavigationAction): string {
+  const entries = Object.entries(action.query)
+  if (entries.length === 0) return action.path
+  const query = new URLSearchParams()
+  for (const [key, value] of entries) query.set(key, String(value))
+  return `${action.path}?${query.toString()}`
+}
+
+function assistantNavigationLabel(
+  action: AssistantNavigationAction,
+  translate: (key: string) => string
+): string {
+  if (action.path === '/users' && action.query.filter) {
+    return translate('Locate user')
+  }
+  if (action.path.startsWith('/usage-logs')) {
+    return translate('Open usage logs')
+  }
+  if (action.path === '/profile') return translate('Open account bindings')
+  return translate('Open page')
 }
 
 type AssistantPanelMode = 'mobile' | 'page' | 'rail'
@@ -331,6 +363,20 @@ function AssistantActionButton(props: {
     )
   }
   if (action.kind === 'email') {
+    return (
+      <Button variant='outline' render={<a href={action.href} />}>
+        {action.label}
+        <HugeiconsIcon
+          icon={ArrowRight01Icon}
+          strokeWidth={2}
+          data-icon='inline-end'
+          aria-hidden='true'
+        />
+      </Button>
+    )
+  }
+
+  if (action.kind === 'navigation') {
     return (
       <Button variant='outline' render={<a href={action.href} />}>
         {action.label}
@@ -877,6 +923,8 @@ export function AssistantPanel(props: {
     useState<AssistantAccountDisableAction | null>(null)
   const [keyCreationAction, setKeyCreationAction] =
     useState<AssistantCreateKeyAction | null>(null)
+  const [userActionDraft, setUserActionDraft] =
+    useState<AssistantUserAction | null>(null)
   const [historyView, setHistoryView] = useState<
     'list' | AssistantConversationHistoryItem | null
   >(null)
@@ -1044,6 +1092,7 @@ export function AssistantPanel(props: {
     setRecommendationDraft(null)
     setAccountDisableDraft(null)
     setKeyCreationAction(null)
+    setUserActionDraft(null)
   }, [])
 
   const clearTransientCards = useCallback(() => {
@@ -1183,6 +1232,12 @@ export function AssistantPanel(props: {
         reply.action?.type === 'admin_pricing_change'
           ? reply.action
           : undefined
+      const userAction =
+        reply.action?.type === 'user_password_change' ||
+        reply.action?.type === 'user_oauth_unbind' ||
+        reply.action?.type === 'user_account_action'
+          ? reply.action
+          : undefined
       let suggestedAction: AssistantAction | undefined
       const restrictedTargetAllowed =
         accountAccessState === 'restricted' &&
@@ -1204,11 +1259,23 @@ export function AssistantPanel(props: {
         setRecommendationDraft(null)
         setAccountDisableDraft(null)
         setKeyCreationAction(null)
+        setUserActionDraft(null)
         setActiveTool(null)
         suggestedAction = undefined
+      } else if (reply.action?.type === 'navigate') {
+        setRecommendationDraft(null)
+        setAccountDisableDraft(null)
+        setUserActionDraft(null)
+        setActiveTool(null)
+        suggestedAction = {
+          kind: 'navigation',
+          label: assistantNavigationLabel(reply.action, t),
+          href: assistantNavigationHref(reply.action),
+        }
       } else if (reply.action?.type === 'l1_recommendation') {
         setRecommendationDraft(reply.action)
         setAccountDisableDraft(null)
+        setUserActionDraft(null)
         setActiveTool('activation')
         suggestedAction = {
           kind: 'tool',
@@ -1219,14 +1286,39 @@ export function AssistantPanel(props: {
         setAccountDisableDraft(reply.action)
         setRecommendationDraft(null)
         setKeyCreationAction(null)
+        setUserActionDraft(null)
         setActiveTool(null)
         suggestedAction = undefined
       } else if (reply.action?.type === 'create_key') {
         setKeyCreationAction(reply.action)
         setRecommendationDraft(null)
         setAccountDisableDraft(null)
+        setUserActionDraft(null)
         setActiveTool('key')
         suggestedAction = undefined
+      } else if (userAction) {
+        setRecommendationDraft(null)
+        setAccountDisableDraft(null)
+        setKeyCreationAction(null)
+        setUserActionDraft(userAction)
+        setActiveTool(null)
+        suggestedAction = undefined
+      }
+      if (
+        accountAccessState === 'restricted' &&
+        isExplicitAssistantL1Request(message) &&
+        !adminChange &&
+        !userAction &&
+        reply.action?.type !== 'account_disable_request' &&
+        reply.action?.type !== 'navigate' &&
+        reply.action?.type !== 'create_key'
+      ) {
+        setActiveTool('activation')
+        suggestedAction ??= {
+          kind: 'tool',
+          label: t('Submit for administrator review'),
+          tool: 'activation',
+        }
       }
       setEntries((current) => [
         ...current,
@@ -1234,6 +1326,7 @@ export function AssistantPanel(props: {
           id: nanoid(),
           role: 'assistant',
           content: safeReply.content,
+          tools: reply.tools,
           action: suggestedAction,
           adminChange,
         },
@@ -1563,6 +1656,9 @@ export function AssistantPanel(props: {
                             {entry.content}
                           </p>
                         )}
+                        {entry.tools?.length ? (
+                          <AssistantToolCalls traces={entry.tools} />
+                        ) : null}
                         {entry.adminChange ? (
                           <AssistantAdminChangeTool
                             action={entry.adminChange}
@@ -1676,6 +1772,12 @@ export function AssistantPanel(props: {
                         onSubmitted={() => setAccountDisableDraft(null)}
                       />
                     ) : null}
+                    {userActionDraft ? (
+                      <AssistantUserActionTool
+                        action={userActionDraft}
+                        onCompleted={() => setUserActionDraft(null)}
+                      />
+                    ) : null}
                     {activeTool === 'cost' && accountAccessConfirmed ? (
                       <AssistantCostTool
                         developerAccessGranted={developerAccessGranted}
@@ -1710,6 +1812,7 @@ export function AssistantPanel(props: {
                       />
                     ) : null}
                   </div>
+
                   <div className='grid gap-3 pt-1'>
                     <Separator />
                     <Button

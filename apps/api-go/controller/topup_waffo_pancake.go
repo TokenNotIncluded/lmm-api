@@ -19,6 +19,7 @@ import (
 
 type WaffoPancakePayRequest struct {
 	Amount           int64  `json:"amount"`
+	DiscountCode     string `json:"discount_code,omitempty"`
 	CheckoutRegion   string `json:"checkout_region"`
 	CheckoutLanguage string `json:"checkout_language"`
 }
@@ -48,7 +49,12 @@ func RequestWaffoPancakeAmount(c *gin.Context) {
 		return
 	}
 
-	payMoney := getWaffoPancakePayMoney(req.Amount, group)
+	payMoneyDecimal, _, err := applyDiscountCodeQuote(getWaffoPancakePayMoneyDecimal(req.Amount, group), req.Amount, req.DiscountCode)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "优惠码无效"})
+		return
+	}
+	payMoney := payMoneyDecimal.InexactFloat64()
 	if payMoney <= 0.01 {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
 		return
@@ -58,6 +64,10 @@ func RequestWaffoPancakeAmount(c *gin.Context) {
 }
 
 func getWaffoPancakePayMoney(amount int64, group string) float64 {
+	return getWaffoPancakePayMoneyDecimal(amount, group).InexactFloat64()
+}
+
+func getWaffoPancakePayMoneyDecimal(amount int64, group string) decimal.Decimal {
 	dAmount := decimal.NewFromInt(amount)
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
 		dAmount = dAmount.Div(decimal.NewFromFloat(common.QuotaPerUnit))
@@ -78,7 +88,7 @@ func getWaffoPancakePayMoney(amount int64, group string) float64 {
 		Mul(decimal.NewFromFloat(topupGroupRatio)).
 		Mul(decimal.NewFromFloat(discount))
 
-	return payMoney.InexactFloat64()
+	return payMoney
 }
 
 func normalizeWaffoPancakeTopUpAmount(amount int64) int64 {
@@ -378,7 +388,12 @@ func RequestWaffoPancakePay(c *gin.Context) {
 		return
 	}
 
-	payMoney := getWaffoPancakePayMoney(req.Amount, group)
+	payMoneyDecimal, discountCode, err := applyDiscountCodeQuote(getWaffoPancakePayMoneyDecimal(req.Amount, group), req.Amount, req.DiscountCode)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "优惠码无效"})
+		return
+	}
+	payMoney := payMoneyDecimal.InexactFloat64()
 	if payMoney < 0.01 {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
 		return
@@ -405,6 +420,8 @@ func RequestWaffoPancakePay(c *gin.Context) {
 		PaymentProvider:      model.PaymentProviderWaffoPancake,
 		ProviderProductId:    strings.TrimSpace(setting.WaffoPancakeProductID),
 		ProviderStoreId:      strings.TrimSpace(setting.WaffoPancakeStoreID),
+		DiscountCodeId:       discountCodeID(discountCode),
+		DiscountPercent:      discountPercent(discountCode),
 		CreateTime:           time.Now().Unix(),
 		Status:               common.TopUpStatusPending,
 	}

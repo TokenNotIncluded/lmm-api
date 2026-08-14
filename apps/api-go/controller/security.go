@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"bytes"
 	"errors"
 	"strconv"
 	"strings"
@@ -51,6 +52,42 @@ func GetAdminSecurityPolicy(c *gin.Context) {
 		Rules:        adminRules,
 		ViolationFee: violationFeeSettingsDTO(),
 	})
+}
+
+type advancedSecuritySettingsUpdateRequest struct {
+	Enabled  *bool             `json:"enabled"`
+	OnPrompt *bool             `json:"on_prompt"`
+	Action   string            `json:"action"`
+	Rules    common.RawMessage `json:"rules"`
+}
+
+// UpdateAdvancedSecuritySettings commits the complete guardrail policy in one
+// operation so a failed field cannot leave the other fields partially saved.
+func UpdateAdvancedSecuritySettings(c *gin.Context) {
+	var request advancedSecuritySettingsUpdateRequest
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
+		common.ApiErrorMsg(c, "invalid advanced security settings payload")
+		return
+	}
+	rules := bytes.TrimSpace(request.Rules)
+	if request.Enabled == nil || request.OnPrompt == nil || strings.TrimSpace(request.Action) == "" || len(rules) == 0 || (rules[0] != '{' && rules[0] != '[') {
+		common.ApiErrorMsg(c, "enabled, on_prompt, action, and rules are required")
+		return
+	}
+	action := strings.ToLower(strings.TrimSpace(request.Action))
+	if err := model.UpdateAdvancedSecurityOptions(*request.Enabled, *request.OnPrompt, action, string(rules)); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "advanced_security.settings_update", map[string]interface{}{
+		"keys": []string{
+			setting.AdvancedSecurityEnabledOptionKey,
+			setting.AdvancedSecurityOnPromptOptionKey,
+			setting.AdvancedSecurityActionOptionKey,
+			setting.AdvancedSecurityRulesOptionKey,
+		},
+	})
+	common.ApiSuccess(c, nil)
 }
 
 func GetPublicSecurityStats(c *gin.Context) {
@@ -190,9 +227,14 @@ func buildPublicSecurityPolicy() dto.PublicSecurityPolicy {
 		ReferenceEffectiveDate: setting.AdvancedSecurityPolicyReferenceDate,
 		ReferenceURL:           setting.AdvancedSecurityPolicyReferenceURL,
 		Alignment:              "Anthropic public Usage Policy risk areas, adapted for this relay; not an official equivalent",
-		RiskCategories:         categoryDTOs,
-		Rules:                  publicRules,
-		ViolationFees:          violationFees,
+		Enforcement: dto.SecuritySettings{
+			Enabled:  settings.Enabled,
+			OnPrompt: settings.OnPrompt,
+			Action:   settings.Action,
+		},
+		RiskCategories: categoryDTOs,
+		Rules:          publicRules,
+		ViolationFees:  violationFees,
 	}
 }
 

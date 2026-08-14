@@ -33,3 +33,33 @@ func TestToOpenAIErrorMasksUsefulFallbackMessage(t *testing.T) {
 
 	require.Equal(t, "upstream rejected api_key:***", openAIError.Message)
 }
+
+func TestAdvancedSecurityErrorKeepsStableCodeForClaude(t *testing.T) {
+	err := NewErrorWithStatusCode(
+		errors.New("prompt blocked by advanced security guardrail"),
+		ErrorCodeAdvancedSecurity,
+		http.StatusBadRequest,
+	)
+
+	claudeError := err.ToClaudeError()
+
+	require.Equal(t, "invalid_request_error", claudeError.Type)
+	require.Equal(t, string(ErrorCodeAdvancedSecurity), claudeError.Code)
+	require.Contains(t, claudeError.Message, "prompt blocked")
+}
+
+func TestAdvancedSecurityErrorUsesNativeGeminiEnvelope(t *testing.T) {
+	err := NewErrorWithStatusCode(
+		errors.New("prompt blocked by advanced security guardrail"),
+		ErrorCodeAdvancedSecurity,
+		http.StatusBadRequest,
+	)
+
+	geminiError := err.ToGeminiError()
+
+	require.Equal(t, http.StatusBadRequest, geminiError.Error.Code)
+	require.Equal(t, "INVALID_ARGUMENT", geminiError.Error.Status)
+	require.Contains(t, geminiError.Error.Message, "prompt blocked")
+	require.Len(t, geminiError.Error.Details, 1)
+	require.Equal(t, string(ErrorCodeAdvancedSecurity), geminiError.Error.Details[0].Reason)
+}

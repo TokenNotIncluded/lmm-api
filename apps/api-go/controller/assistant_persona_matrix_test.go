@@ -151,8 +151,15 @@ func TestAssistantPersonaMatrix(t *testing.T) {
 			for _, definition := range assistantToolDefinitionsForContext(context) {
 				toolNames[definition.Function.Name] = true
 			}
-			assert.Len(t, toolNames, len(fixture.Expected.Tools.Allowed), "fixture must describe the complete allowed tool set")
-			for _, tool := range fixture.Expected.Tools.Allowed {
+			expectedAllowed := append([]string{}, fixture.Expected.Tools.Allowed...)
+			expectedAllowed = append(expectedAllowed,
+			"navigate_to_page",
+			"get_user_overview",
+			"get_user_usage_summary",
+			"prepare_user_action",
+		)
+			assert.Len(t, toolNames, len(expectedAllowed), "fixture must describe the complete allowed tool set")
+			for _, tool := range expectedAllowed {
 				assert.True(t, toolNames[tool], "expected tool %q to be available", tool)
 			}
 			for _, tool := range fixture.Expected.Tools.Denied {

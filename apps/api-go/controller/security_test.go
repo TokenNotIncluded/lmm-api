@@ -23,6 +23,8 @@ func TestSecurityPolicySeparatesPublicAndAdminRuleDetails(t *testing.T) {
 	})
 
 	setting.SetAdvancedSecurityEnabled(true)
+	setting.SetAdvancedSecurityOnPrompt(true)
+	require.NoError(t, setting.UpdateAdvancedSecurityAction(setting.AdvancedSecurityActionBlock))
 	require.NoError(t, setting.UpdateAdvancedSecurityRules(`[{"id":"prompt-injection","name":"Prompt injection","category":"prompt_injection","enabled":true,"patterns":["do not publish this matcher"]}]`))
 
 	publicRecorder := httptest.NewRecorder()
@@ -46,6 +48,11 @@ func TestSecurityPolicySeparatesPublicAndAdminRuleDetails(t *testing.T) {
 	var payload struct {
 		Data struct {
 			Public struct {
+				Enforcement struct {
+					Enabled  bool   `json:"enabled"`
+					OnPrompt bool   `json:"on_prompt"`
+					Action   string `json:"action"`
+				} `json:"enforcement"`
 				Rules []struct {
 					Patterns []string `json:"patterns"`
 				} `json:"rules"`
@@ -56,6 +63,9 @@ func TestSecurityPolicySeparatesPublicAndAdminRuleDetails(t *testing.T) {
 		} `json:"data"`
 	}
 	require.NoError(t, json.Unmarshal(adminRecorder.Body.Bytes(), &payload))
+	assert.True(t, payload.Data.Public.Enforcement.Enabled)
+	assert.True(t, payload.Data.Public.Enforcement.OnPrompt)
+	assert.Equal(t, setting.AdvancedSecurityActionBlock, payload.Data.Public.Enforcement.Action)
 	require.Len(t, payload.Data.Public.Rules, 1)
 	assert.Empty(t, payload.Data.Public.Rules[0].Patterns)
 	require.Len(t, payload.Data.Rules, 1)

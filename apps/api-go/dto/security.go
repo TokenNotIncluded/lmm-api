@@ -62,6 +62,7 @@ type PublicSecurityPolicy struct {
 	ReferenceEffectiveDate string                     `json:"reference_effective_date"`
 	ReferenceURL           string                     `json:"reference_url"`
 	Alignment              string                     `json:"alignment"`
+	Enforcement            SecuritySettings           `json:"enforcement"`
 	RiskCategories         []SecurityRiskCategory     `json:"risk_categories"`
 	Rules                  []SecurityRuleSummary      `json:"rules"`
 	ViolationFees          []SecurityViolationFeeRule `json:"violation_fees"`

@@ -43,7 +43,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 import {
   detectAssistantSetupPlatform,
-  getCCSwitchClaudeProviderJSON,
   getCCSwitchInstallGuide,
   getClaudeInstallCommand,
   getClaudeSessionCommand,
@@ -293,6 +292,14 @@ export function AssistantSetupTool(props: {
                   )}
                 </div>
               )}
+              <Alert>
+                <AlertTitle>{t('CC Switch one-click import')}</AlertTitle>
+                <AlertDescription>
+                  {t(
+                    "After L1 approval and API key creation, the assistant can build a private ccswitch:// import link for you. It opens CC Switch's confirmation dialog, so you do not need to enter provider fields manually."
+                  )}
+                </AlertDescription>
+              </Alert>
               <div className='flex flex-wrap gap-2'>
                 <OfficialLink
                   href={CC_SWITCH_RELEASES}
@@ -377,7 +384,6 @@ export function AssistantSetupTool(props: {
     ? selectedModel
     : (props.availableModels[0] ?? '<MODEL_ID>')
   const sessionCommand = getClaudeSessionCommand(platform, props.rootUrl, model)
-  const ccSwitchConfig = getCCSwitchClaudeProviderJSON(props.rootUrl, model)
   const openAICompatibleConfig = getOpenAICompatibleClientJSON(
     props.openAIBaseUrl,
     model
@@ -535,46 +541,44 @@ export function AssistantSetupTool(props: {
                 )}
               </div>
             )}
+            <Alert>
+              <AlertTitle>{t('CC Switch one-click import')}</AlertTitle>
+              <AlertDescription>
+                {t(
+                  'Create an API key first, then use Import to CC Switch in the shielded private card. The browser builds the link from the selected model and service root; the key never enters assistant chat.'
+                )}
+              </AlertDescription>
+            </Alert>
             <ol className='grid gap-3' aria-label={t('CC Switch setup steps')}>
               <SetupStep
                 number={1}
-                title={t('Open the Claude provider panel')}
+                title={t('Open the official CC Switch app')}
                 description={t(
-                  'Launch CC Switch, select Claude in the app switcher, then click the add button.'
+                  'Install and launch CC Switch from the official release or package.'
                 )}
               />
               <SetupStep
                 number={2}
-                title={t('Add a custom provider')}
+                title={t('Create or select an API key')}
                 description={t(
-                  'Choose Custom, enter a recognizable name, and paste the endpoint and API key shown below.'
+                  "Use Create API key below, or use the key's CC Switch action on the /keys page."
                 )}
               />
               <SetupStep
                 number={3}
-                title={t('Save and enable it')}
+                title={t('Build the import link')}
                 description={t(
-                  'Save the provider, click Enable on its card, then start or restart Claude Code.'
+                  'Click Import to CC Switch in the private card. CC Switch opens a confirmation dialog; review and confirm it.'
                 )}
               />
               <SetupStep
                 number={4}
-                title={t('Verify with a new terminal')}
+                title={t('Enable and test Claude Code')}
                 description={t(
                   'Run claude in a new terminal and send a short test message. If first-run login appears, enable Skip Claude Code first-run confirmation in CC Switch settings.'
                 )}
               />
             </ol>
-            <div className='rounded-lg border px-3'>
-              <ConnectionValue label={t('Application')} value='Claude' />
-              <ConnectionValue label={t('Endpoint')} value={props.rootUrl} />
-              <ConnectionValue label={t('API key')} value='<YOUR_API_KEY>' />
-              <ConnectionValue label={t('Primary Model')} value={model} />
-            </div>
-            <CodeSnippet
-              label={t('Custom Claude provider JSON')}
-              value={ccSwitchConfig}
-            />
             <div className='flex flex-wrap gap-2'>
               <OfficialLink
                 href={CC_SWITCH_RELEASES}

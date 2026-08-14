@@ -53,6 +53,11 @@ export type SecurityPolicy = {
   reference_effective_date: string
   reference_url: string
   alignment: string
+  enforcement: {
+    enabled: boolean
+    on_prompt: boolean
+    action: 'block' | 'audit'
+  }
   risk_categories: SecurityRiskCategory[]
   rules: SecurityRuleSummary[]
   violation_fees: SecurityViolationFeeRule[]

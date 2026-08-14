@@ -336,7 +336,7 @@ func mainMigrationModels() []interface{} {
 		&PasskeyCredential{}, &Option{}, &Redemption{}, &Ability{}, &Log{}, &Midjourney{},
 		&TopUp{}, &QuotaData{}, &Task{}, &Model{}, &Vendor{}, &PrefillGroup{}, &Setup{}, &TwoFA{},
 		&TwoFABackupCode{}, &Checkin{}, &Gift{}, &GiftClaim{}, &OpenSourceBountyProject{}, &OpenSourceBountyChallenge{},
-		&DeveloperAccessRequest{},
+		&DeveloperAccessRequest{}, &DeveloperAccessRecommendationArchive{},
 		&AccountActionRequest{},
 		&OpenSourceBountyLedger{}, &OpenSourceBountyDispute{}, &OpenSourceBountyMCPToken{},
 		&OpenSourceBountyMCPConfirmation{}, &OpenSourceBountyMCPOperation{}, &OpenSourceBountyRESTOperation{},
@@ -361,6 +361,9 @@ func migrateDB() error {
 
 	err := DB.AutoMigrate(mainMigrationModels()...)
 	if err != nil {
+		return err
+	}
+	if err := BackfillDeveloperAccessRecommendationArchives(); err != nil {
 		return err
 	}
 	if err := migrateOpenSourceBountyChallengeRetryIndex(); err != nil {
@@ -411,6 +414,7 @@ func migrateDBFast() error {
 		{&PasskeyCredential{}, "PasskeyCredential"},
 		{&Option{}, "Option"},
 		{&Redemption{}, "Redemption"},
+		{&DiscountCode{}, "DiscountCode"},
 		{&Ability{}, "Ability"},
 		{&Log{}, "Log"},
 		{&Midjourney{}, "Midjourney"},
@@ -429,6 +433,7 @@ func migrateDBFast() error {
 		{&OpenSourceBountyProject{}, "OpenSourceBountyProject"},
 		{&OpenSourceBountyChallenge{}, "OpenSourceBountyChallenge"},
 		{&DeveloperAccessRequest{}, "DeveloperAccessRequest"},
+		{&DeveloperAccessRecommendationArchive{}, "DeveloperAccessRecommendationArchive"},
 		{&AccountActionRequest{}, "AccountActionRequest"},
 		{&OpenSourceBountyLedger{}, "OpenSourceBountyLedger"},
 		{&OpenSourceBountyDispute{}, "OpenSourceBountyDispute"},
@@ -489,6 +494,9 @@ func migrateDBFast() error {
 		if err != nil {
 			return err
 		}
+	}
+	if err := BackfillDeveloperAccessRecommendationArchives(); err != nil {
+		return err
 	}
 	if err := migrateOpenSourceBountyChallengeRetryIndex(); err != nil {
 		return err

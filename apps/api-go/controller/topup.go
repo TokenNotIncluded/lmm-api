@@ -391,11 +391,13 @@ func getTopupUserGroup(id int) (string, error) {
 type EpayRequest struct {
 	Amount        float64 `json:"amount"`
 	PaymentMethod string  `json:"payment_method"`
+	DiscountCode  string  `json:"discount_code,omitempty"`
 }
 
 type AmountRequest struct {
 	Amount        int64  `json:"amount"`
 	PaymentMethod string `json:"payment_method"`
+	DiscountCode  string `json:"discount_code,omitempty"`
 }
 
 func GetEpayClient() *epay.Client {
@@ -546,7 +548,7 @@ func getMinTopup() int64 {
 
 func RequestEpay(c *gin.Context) {
 	var req EpayRequest
-	if err := parsePayRequest(c, &req.Amount, &req.PaymentMethod); err != nil {
+	if err := parsePayRequest(c, &req.Amount, &req.PaymentMethod, &req.DiscountCode); err != nil {
 		logger.LogWarn(c.Request.Context(), fmt.Sprintf("Epay 参数解包失败 error=%q", err.Error()))
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("参数错误: %s", err.Error())})
 		return
@@ -562,6 +564,7 @@ func RequestEpay(c *gin.Context) {
 		// dispatch and its global-Price quote before ePay method validation.
 		c.Set("parsed_amount", req.Amount)
 		c.Set("parsed_payment_method", fastPayMethod)
+		c.Set("parsed_discount_code", req.DiscountCode)
 		RequestFastPay(c)
 		return
 	}
@@ -578,7 +581,7 @@ func RequestEpay(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
 		return
 	}
-	payMoney, err := quoteTopUp(int64Amount, group, req.PaymentMethod)
+	payMoney, discountCode, err := quoteTopUpWithDiscount(int64Amount, group, req.PaymentMethod, req.DiscountCode)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "支付方式配置无效"})
 		return
@@ -628,6 +631,8 @@ func RequestEpay(c *gin.Context) {
 		TradeNo:              tradeNo,
 		PaymentMethod:        req.PaymentMethod,
 		PaymentProvider:      model.PaymentProviderEpay,
+		DiscountCodeId:       discountCodeID(discountCode),
+		DiscountPercent:      discountPercent(discountCode),
 		CreateTime:           time.Now().Unix(),
 		Status:               common.TopUpStatusPending,
 	}
@@ -839,9 +844,9 @@ func RequestAmount(c *gin.Context) {
 		// Older clients did not send payment_method to the quote endpoint.
 		// Keep their global Price behavior while new clients use the selected
 		// payment method's server-authoritative settlement price.
-		payMoney = quoteTopUpWithPricing(req.Amount, group, decimal.NewFromFloat(operation_setting.Price), decimal.NewFromInt(1))
+		payMoney, _, err = quoteLegacyTopUpWithDiscount(req.Amount, group, req.DiscountCode)
 	} else {
-		payMoney, err = quoteTopUp(req.Amount, group, req.PaymentMethod)
+		payMoney, _, err = quoteTopUpWithDiscount(req.Amount, group, req.PaymentMethod, req.DiscountCode)
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{"message": "error", "data": "支付方式配置无效"})
 			return

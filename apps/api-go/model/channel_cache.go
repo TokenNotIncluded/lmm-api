@@ -186,9 +186,17 @@ func SyncChannelCache(frequency int) {
 }
 
 func GetRandomSatisfiedChannel(group string, model string, retry int, requestPath string) (*Channel, error) {
+	return GetRandomSatisfiedChannelExcluding(group, model, retry, requestPath, nil)
+}
+
+// GetRandomSatisfiedChannelExcluding is the request-scoped variant of channel
+// selection. Exclusions are used after an upstream failure so a retry cannot
+// immediately select the same unhealthy/capability-mismatched channel. The
+// caller owns the map and it is never persisted to the channel cache.
+func GetRandomSatisfiedChannelExcluding(group string, model string, retry int, requestPath string, excluded map[int]struct{}) (*Channel, error) {
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		return GetChannel(group, model, retry, requestPath)
+		return GetChannelExcluding(group, model, retry, requestPath, excluded)
 	}
 
 	channelSyncLock.RLock()
@@ -204,6 +212,15 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 	if len(channels) == 0 {
 		normalizedModel := ratio_setting.FormatMatchingModelName(model)
 		channels = filterChannelsByRequestPathAndModel(group2model2channels[group][normalizedModel], requestPath, model)
+	}
+	if len(excluded) > 0 {
+		filtered := make([]int, 0, len(channels))
+		for _, channelID := range channels {
+			if _, skip := excluded[channelID]; !skip {
+				filtered = append(filtered, channelID)
+			}
+		}
+		channels = filtered
 	}
 
 	if len(channels) == 0 {

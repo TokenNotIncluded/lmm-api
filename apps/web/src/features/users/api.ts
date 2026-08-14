@@ -52,6 +52,23 @@ export type DeveloperAccessRequestAdmin = {
   email: string
 }
 
+export type DeveloperAccessRecommendationArchive = {
+  id: number
+  user_id: number
+  request_id: number
+  source:
+    | 'assistant_recommendation'
+    | 'user_edited'
+    | 'assistant_request'
+    | 'legacy'
+  reason: string
+  recommendation: string
+  admin_user_id: number
+  admin_note: string
+  approved_at: number
+  created_at: number
+}
+
 type DeveloperAccessRequestListResponse = ApiResponse<
   DeveloperAccessRequestAdmin[]
 >
@@ -72,6 +89,15 @@ export async function reviewDeveloperAccessRequest(
 ): Promise<ApiResponse<DeveloperAccessRequestAdmin>> {
   const res = await api.post(`/api/developer-access/requests/${id}/${action}`, {
     note,
+  })
+  return res.data
+}
+
+export async function listDeveloperAccessRecommendationArchives(
+  userId: number
+): Promise<ApiResponse<DeveloperAccessRecommendationArchive[]>> {
+  const res = await api.get(`/api/user/${userId}/developer-access/archives`, {
+    params: { limit: 50 },
   })
   return res.data
 }

@@ -2,6 +2,7 @@ package openai
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
@@ -60,6 +61,22 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 				if err != nil {
 					errChan <- fmt.Errorf("error unmarshalling message: %v", err)
 					return
+				}
+
+				securityText := dto.SecurityTextFromRealtimeJSON(message)
+				evaluation := service.EvaluateAdvancedSecurityText(c, info, securityText)
+				if len(evaluation.Matches) > 0 {
+					matchIDs := make([]string, 0, len(evaluation.Matches))
+					for _, match := range evaluation.Matches {
+						matchIDs = append(matchIDs, match.RuleID)
+					}
+					logger.LogWarn(c, fmt.Sprintf("advanced security rules matched in realtime event: %s", strings.Join(matchIDs, ", ")))
+				}
+				if evaluation.Blocked() {
+					apiErr := service.NewAdvancedSecurityAPIError()
+					apiErr.SetMessage(common.MessageWithRequestId(apiErr.Error(), info.RequestId))
+					helper.WssError(c, clientConn, apiErr.ToOpenAIError())
+					continue
 				}
 
 				if realtimeEvent.Type == dto.RealtimeEventTypeSessionUpdate {

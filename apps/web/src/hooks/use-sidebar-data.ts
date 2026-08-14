@@ -208,6 +208,11 @@ export function useSidebarData(): SidebarData {
             icon: Ticket,
           },
           {
+            title: t('Discount Codes'),
+            url: '/discount-codes',
+            icon: Ticket,
+          },
+          {
             title: t('Subscriptions'),
             url: '/subscriptions',
             icon: CreditCard,

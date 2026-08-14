@@ -33,6 +33,7 @@ const assistantClientActionKey = "assistant_client_action"
 const assistantConversationTitleNeededKey = "assistant_conversation_title_needed"
 const assistantConversationTitleDraftKey = "assistant_conversation_title_draft"
 const assistantPromptKey = "assistant_system_prompt"
+const assistantClientToolsKey = "assistant_client_tools"
 const assistantAttemptHeader = "X-LMM-Assistant-Attempt"
 const assistantRetryConversationWindow = 5 * time.Minute
 

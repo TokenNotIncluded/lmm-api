@@ -264,6 +264,58 @@ func buildAssistantTools() []assistantOpenAIToolDefinition {
 		{
 			Type: "function",
 			Function: assistantOpenAIToolFunction{
+				Name:        "navigate_to_page",
+				Description: "Navigate the signed-in user to one allowlisted page inside this LMM console. Use this when the user asks to open, jump to, or locate something. For the users or usage-log page, identifier may be a username, email, or numeric user ID; regular users may only target themselves and administrators may only target users in their permitted scope.",
+				Parameters: objectSchema(map[string]any{
+					"page": map[string]any{
+						"type": "string",
+						"enum": []string{"home", "getting-started", "pricing", "wallet", "usage-logs", "keys", "profile", "support", "open-source-bounties", "users"},
+					},
+					"identifier": map[string]any{"type": "string", "maxLength": 200},
+					"query":      map[string]any{"type": "string", "maxLength": 200},
+					"section":    map[string]any{"type": "string", "enum": []string{"common", "drawing", "task"}},
+				}, []string{"page"}),
+			},
+		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
+				Name:        "get_user_overview",
+				Description: "Read a sanitized account overview. With no target, read the signed-in user's own account. An administrator may provide a username, email, or numeric ID for a permitted lower-role user. Never returns passwords, access tokens, OAuth subject IDs, or raw request content.",
+				Parameters: objectSchema(map[string]any{
+					"user_id":    map[string]any{"type": "integer", "minimum": 1},
+					"identifier": map[string]any{"type": "string", "maxLength": 200},
+				}, nil),
+			},
+		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
+				Name:        "get_user_usage_summary",
+				Description: "Analyze aggregate usage for the signed-in user, or for a permitted target when the caller is an administrator. Returns totals and model/group aggregates only, never raw logs or request content.",
+				Parameters: objectSchema(map[string]any{
+					"user_id":    map[string]any{"type": "integer", "minimum": 1},
+					"identifier": map[string]any{"type": "string", "maxLength": 200},
+					"days":       map[string]any{"type": "integer", "minimum": 1, "maximum": 90},
+				}, nil),
+			},
+		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
+				Name:        "prepare_user_action",
+				Description: "Prepare a confirmation card for a safe user-account action. Supported actions are change_password, bind_oauth, unbind_oauth, disable, and delete. Never pass a password or secret to this tool. Regular users can act only on themselves; administrators can act only on permitted lower-role targets. OAuth binding is interactive and must be completed by the target user in their own session.",
+				Parameters: objectSchema(map[string]any{
+					"action":     map[string]any{"type": "string", "enum": []string{"change_password", "bind_oauth", "unbind_oauth", "disable", "delete"}},
+					"user_id":    map[string]any{"type": "integer", "minimum": 1},
+					"identifier": map[string]any{"type": "string", "maxLength": 200},
+					"provider":   map[string]any{"type": "string", "maxLength": 120},
+				}, []string{"action"}),
+			},
+		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
 				Name:        "search_web",
 				Description: "Search the administrator-configured web search API for current software installation or platform information. If no search API is configured, report that limitation.",
 				Parameters: objectSchema(map[string]any{
@@ -482,6 +534,10 @@ func assistantToolAllowedForContext(name string, userContext assistantUserContex
 		"get_l1_recommendation",
 		"get_available_models",
 		"get_model_pricing",
+		"navigate_to_page",
+		"get_user_overview",
+		"get_user_usage_summary",
+		"prepare_user_action",
 		"get_bounty_guide",
 		"search_web",
 		"get_setup_guide",
@@ -994,6 +1050,7 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 	agentEnabled := maxSteps > 1 && (settings.AgentLoopEnabled || forceL0Assessment || forceRecommendationWorkflow || forceCreateKeyWorkflow || forceReadChain)
 	var tools []assistantOpenAIToolDefinition
 	var calledTools, successfulTools map[string]bool
+	toolTraces := make([]assistantToolTrace, 0, assistantToolCallsPerTurn)
 	if agentEnabled {
 		tools = assistantToolDefinitionsForContext(userContext)
 		calledTools = make(map[string]bool)
@@ -1088,6 +1145,8 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 			if marshalErr != nil {
 				resultJSON = []byte(`{"ok":false,"error":"tool result exceeded its byte budget"}`)
 			}
+			toolTraces = append(toolTraces, buildAssistantToolTrace(call, result))
+			c.Set(assistantClientToolsKey, toolTraces)
 			callID := strings.TrimSpace(call.ID)
 			if callID == "" {
 				callID = fmt.Sprintf("assistant-call-%d-%d", step+1, index+1)
@@ -1139,6 +1198,11 @@ func normalizeAssistantClientResponse(c *gin.Context, body []byte) ([]byte, erro
 		}
 		if action, exists := c.Get(assistantClientActionKey); exists {
 			payload["lmm_assistant_action"] = action
+		}
+		if tools, exists := c.Get(assistantClientToolsKey); exists {
+			if traces, ok := tools.([]assistantToolTrace); ok && len(traces) > 0 {
+				payload["lmm_assistant_tools"] = traces
+			}
 		}
 	}
 	return json.Marshal(payload)
@@ -1244,7 +1308,14 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 			"client_model_instruction": "Call get_available_models and use an exact model_ids value; the assistant's own model is not a client default.",
 			"api_keys_are_private":     true,
 			"key_management_path":      "/keys",
-			"write_actions":            "require explicit confirmation in the UI",
+			"cc_switch_import": map[string]any{
+				"supported":                true,
+				"protocol":                 "ccswitch://v1/import",
+				"application":              "claude",
+				"requires_private_api_key": true,
+				"ui_action":                "Import to CC Switch",
+			},
+			"write_actions": "require explicit confirmation in the UI",
 		}
 	case "calculate_math":
 		return executeAssistantMathTool(input)
@@ -1254,6 +1325,14 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 		return executeAssistantAccountTool(actorUserID)
 	case "get_l1_recommendation":
 		return executeAssistantL1RecommendationStateTool(c, actorUserID)
+	case "navigate_to_page":
+		return executeAssistantNavigateTool(c, actorUserID, input)
+	case "get_user_overview":
+		return executeAssistantUserOverviewTool(c, actorUserID, input)
+	case "get_user_usage_summary":
+		return executeAssistantUserUsageTool(c, actorUserID, input)
+	case "prepare_user_action":
+		return executeAssistantPrepareUserActionTool(c, actorUserID, input)
 	case "get_available_models":
 		return executeAssistantModelsTool(actorUserID)
 	case "get_model_pricing":
@@ -2284,9 +2363,32 @@ func executeAssistantSetupTool(userID int, input map[string]any) map[string]any 
 		result["endpoint_format"] = "Anthropic Messages; use the service root without /v1"
 		result["steps"] = []string{
 			"Install CC Switch only from its official site or GitHub Releases.",
+			"Create or select an API key in this console; the key stays in a shielded private card.",
+			"Use Import to CC Switch from that private card (or the key's CC Switch action on /keys). The UI constructs the ccswitch:// link and CC Switch shows an import confirmation.",
 			"Select Claude, add a Custom provider, and enter the returned service root, model ID, and " + credentialPhrase + ".",
-			lockedAwareStep("Save and enable the provider, open a new terminal, and send a short test with Claude Code.", testStep),
+			lockedAwareStep("Confirm the import or save and enable the provider, then open a new terminal and send a short test with Claude Code.", testStep),
 		}
+		result["cc_switch_import"] = map[string]any{
+			"supported":   true,
+			"protocol":    "ccswitch://v1/import",
+			"resource":    "provider",
+			"application": "claude",
+			"endpoint":    rootURL,
+			"model":       clientModel,
+			"api_key":     "<PRIVATE_API_KEY>",
+			"link_parameters": map[string]any{
+				"resource": "provider",
+				"app":      "claude",
+				"name":     "LMM",
+				"endpoint": rootURL,
+				"apiKey":   "<PRIVATE_API_KEY>",
+				"model":    clientModel,
+				"homepage": rootURL,
+				"enabled":  true,
+			},
+			"build_instructions": "After the user confirms and creates a key, the assistant UI replaces <PRIVATE_API_KEY> client-side and opens the CC Switch import confirmation. Never print the completed URL or ask the user to paste the key into chat.",
+		}
+		result["official_releases"] = "https://github.com/farion1231/cc-switch/releases"
 		result["official_docs"] = "https://github.com/farion1231/cc-switch"
 	case "claude-desktop":
 		result["direct_custom_gateway_supported"] = false

@@ -59,6 +59,8 @@ func InitOptionMap() {
 	common.OptionMap["EmailDomainRestrictionEnabled"] = strconv.FormatBool(common.EmailDomainRestrictionEnabled)
 	common.OptionMap["EmailAliasRestrictionEnabled"] = strconv.FormatBool(common.EmailAliasRestrictionEnabled)
 	common.OptionMap["EmailDomainWhitelist"] = strings.Join(common.EmailDomainWhitelist, ",")
+	common.OptionMap[common.RegionAccessPolicyEnabledOptionKey] = strconv.FormatBool(common.IsRegionAccessPolicyEnabled())
+	common.OptionMap[common.RegionBlockedCountryCodesOptionKey] = common.RegionBlockedCountryCodesString()
 	common.OptionMap["SMTPServer"] = ""
 	common.OptionMap["SMTPFrom"] = ""
 	common.OptionMap["SMTPPort"] = strconv.Itoa(common.SMTPPort)
@@ -379,6 +381,60 @@ func UpdateOptionsBulk(values map[string]string) error {
 	return nil
 }
 
+// UpdateAdvancedSecurityOptions persists and applies the four guardrail
+// settings as a unit. Database readers see one transaction, while request
+// handlers see one runtime settings swap instead of four intermediate states.
+func UpdateAdvancedSecurityOptions(enabled, onPrompt bool, action, rules string) error {
+	values := map[string]string{
+		setting.AdvancedSecurityEnabledOptionKey:  strconv.FormatBool(enabled),
+		setting.AdvancedSecurityOnPromptOptionKey: strconv.FormatBool(onPrompt),
+		setting.AdvancedSecurityActionOptionKey:   action,
+		setting.AdvancedSecurityRulesOptionKey:    rules,
+	}
+	keys := []string{
+		setting.AdvancedSecurityRulesOptionKey,
+		setting.AdvancedSecurityActionOptionKey,
+		setting.AdvancedSecurityOnPromptOptionKey,
+		setting.AdvancedSecurityEnabledOptionKey,
+	}
+	for _, key := range keys {
+		if err := validateOptionValue(key, values[key]); err != nil {
+			return err
+		}
+	}
+
+	if err := DB.Transaction(func(tx *gorm.DB) error {
+		for _, key := range keys {
+			option := Option{Key: key}
+			if err := tx.FirstOrCreate(&option, Option{Key: key}).Error; err != nil {
+				return err
+			}
+			option.Value = values[key]
+			if err := tx.Save(&option).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	// Validation above makes this deterministic after the transaction. Keeping
+	// the setter defensive prevents future validation/runtime drift.
+	if err := setting.ApplyAdvancedSecuritySettings(enabled, onPrompt, action, rules); err != nil {
+		return err
+	}
+	common.OptionMapRWMutex.Lock()
+	if common.OptionMap == nil {
+		common.OptionMap = make(map[string]string)
+	}
+	for _, key := range keys {
+		common.OptionMap[key] = values[key]
+	}
+	common.OptionMapRWMutex.Unlock()
+	return nil
+}
+
 func updateOptionMap(key string, value string) (err error) {
 	// Legacy model-specific Grok violation options are intentionally ignored.
 	// The active policy is now operation_setting's provider-agnostic group
@@ -454,6 +510,8 @@ func updateOptionMap(key string, value string) (err error) {
 			common.EmailDomainRestrictionEnabled = boolValue
 		case "EmailAliasRestrictionEnabled":
 			common.EmailAliasRestrictionEnabled = boolValue
+		case common.RegionAccessPolicyEnabledOptionKey:
+			common.SetRegionAccessPolicyEnabled(boolValue)
 		case "AutomaticDisableChannelEnabled":
 			common.AutomaticDisableChannelEnabled = boolValue
 		case "AutomaticEnableChannelEnabled":
@@ -541,6 +599,8 @@ func updateOptionMap(key string, value string) (err error) {
 	switch key {
 	case "EmailDomainWhitelist":
 		common.EmailDomainWhitelist = strings.Split(value, ",")
+	case common.RegionBlockedCountryCodesOptionKey:
+		err = common.SetRegionBlockedCountryCodes(value)
 	case "SMTPServer":
 		common.SMTPServer = value
 	case "SMTPPort":

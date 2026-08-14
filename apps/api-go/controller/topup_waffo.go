@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
+	"github.com/shopspring/decimal"
 	"github.com/thanhpk/randstr"
 	waffo "github.com/waffo-com/waffo-go"
 	"github.com/waffo-com/waffo-go/config"
@@ -86,6 +87,10 @@ func formatWaffoAmount(amount float64, currency string) string {
 // Waffo only accepts USD, so this function handles the conversion from different
 // display types (USD/CNY/TOKENS) to the actual USD amount to charge.
 func getWaffoPayMoney(amount float64, group string) float64 {
+	return getWaffoPayMoneyDecimal(amount, group).InexactFloat64()
+}
+
+func getWaffoPayMoneyDecimal(amount float64, group string) decimal.Decimal {
 	originalAmount := amount
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
 		amount = amount / common.QuotaPerUnit
@@ -100,11 +105,15 @@ func getWaffoPayMoney(amount float64, group string) float64 {
 			discount = ds
 		}
 	}
-	return amount * setting.WaffoUnitPrice * topupGroupRatio * discount
+	return decimal.NewFromFloat(amount).
+		Mul(decimal.NewFromFloat(setting.WaffoUnitPrice)).
+		Mul(decimal.NewFromFloat(topupGroupRatio)).
+		Mul(decimal.NewFromFloat(discount))
 }
 
 type WaffoPayRequest struct {
 	Amount         int64  `json:"amount"`
+	DiscountCode   string `json:"discount_code,omitempty"`
 	PayMethodIndex *int   `json:"pay_method_index"` // 服务端支付方式列表的索引，nil 表示由 Waffo 自动选择
 	PayMethodType  string `json:"pay_method_type"`  // Deprecated: 兼容旧前端，优先使用 pay_method_index
 	PayMethodName  string `json:"pay_method_name"`  // Deprecated: 兼容旧前端，优先使用 pay_method_index
@@ -136,7 +145,12 @@ func RequestWaffoAmount(c *gin.Context) {
 		return
 	}
 
-	payMoney := getWaffoPayMoney(float64(req.Amount), group)
+	payMoneyDecimal, _, err := applyDiscountCodeQuote(getWaffoPayMoneyDecimal(float64(req.Amount), group), req.Amount, req.DiscountCode)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "优惠码无效"})
+		return
+	}
+	payMoney := payMoneyDecimal.InexactFloat64()
 	if payMoney <= 0.01 {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
 		return
@@ -213,7 +227,12 @@ func RequestWaffoPay(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
 		return
 	}
-	payMoney := getWaffoPayMoney(float64(req.Amount), group)
+	payMoneyDecimal, discountCode, err := applyDiscountCodeQuote(getWaffoPayMoneyDecimal(float64(req.Amount), group), req.Amount, req.DiscountCode)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "优惠码无效"})
+		return
+	}
+	payMoney := payMoneyDecimal.InexactFloat64()
 	if payMoney < 0.01 {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
 		return
@@ -244,6 +263,8 @@ func RequestWaffoPay(c *gin.Context) {
 		TradeNo:              merchantOrderId,
 		PaymentMethod:        model.PaymentMethodWaffo,
 		PaymentProvider:      model.PaymentProviderWaffo,
+		DiscountCodeId:       discountCodeID(discountCode),
+		DiscountPercent:      discountPercent(discountCode),
 		CreateTime:           time.Now().Unix(),
 		Status:               common.TopUpStatusPending,
 	}

@@ -39,6 +39,7 @@ import type {
   WaffoPaymentResponse,
   WaffoPancakePaymentRequest,
   WaffoPancakePaymentResponse,
+  DiscountCodeResponse,
 } from './types'
 
 // ============================================================================
@@ -74,6 +75,18 @@ export async function redeemTopupCode(
   request: RedemptionRequest
 ): Promise<RedemptionResponse> {
   const res = await api.post('/api/user/topup', request)
+  return res.data
+}
+
+/** Validate a discount code without reserving or consuming it. */
+export async function validateDiscountCode(request: {
+  code: string
+  amount: number
+  payment_method?: string
+}): Promise<DiscountCodeResponse> {
+  const res = await api.post('/api/user/discount-code/validate', request, {
+    skipBusinessError: true,
+  } as Record<string, unknown>)
   return res.data
 }
 

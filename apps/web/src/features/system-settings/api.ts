@@ -27,6 +27,7 @@ import type {
   SystemOptionsResponse,
   SystemTaskListResponse,
   SystemTaskResponse,
+  UpdateAdvancedSecuritySettingsRequest,
   UpdateOptionRequest,
   UpdateOptionResponse,
   UpstreamChannelsResponse,
@@ -60,6 +61,15 @@ export async function updateDynamicPricingSetting(
   return res.data
 }
 
+export async function updateAdvancedSecuritySettings(
+  request: UpdateAdvancedSecuritySettingsRequest
+) {
+  const res = await api.put<UpdateOptionResponse>(
+    '/api/security/admin/settings',
+    request
+  )
+  return res.data
+}
 export async function confirmPaymentCompliance() {
   const res = await api.post<ConfirmPaymentComplianceResponse>(
     '/api/option/payment_compliance',

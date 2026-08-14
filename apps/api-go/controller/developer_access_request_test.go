@@ -19,7 +19,7 @@ func setupDeveloperAccessRequestControllerTest(t *testing.T) (*model.User, *gin.
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	db := setupTokenControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}, &model.DeveloperAccessRequest{}, &model.AuthFlow{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}, &model.DeveloperAccessRequest{}, &model.DeveloperAccessRecommendationArchive{}, &model.AuthFlow{}))
 	user := &model.User{
 		Username: "developer-access-controller-user",
 		Password: "password",
@@ -35,6 +35,38 @@ func setupDeveloperAccessRequestControllerTest(t *testing.T) (*model.User, *gin.
 		SubmitDeveloperAccessRequest(c)
 	})
 	return user, engine
+}
+
+func TestListUserDeveloperAccessRecommendationArchivesEnforcesRoleBoundary(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.DeveloperAccessRequest{}, &model.DeveloperAccessRecommendationArchive{}))
+	viewer := &model.User{Username: "archive-admin", AffCode: "archive-admin", Password: "password", Role: common.RoleAdminUser, Status: common.UserStatusEnabled}
+	target := &model.User{Username: "archive-target", AffCode: "archive-target", Password: "password", Role: common.RoleCommonUser, Status: common.UserStatusEnabled}
+	peer := &model.User{Username: "archive-peer", AffCode: "archive-peer", Password: "password", Role: common.RoleAdminUser, Status: common.UserStatusEnabled}
+	require.NoError(t, db.Create(viewer).Error)
+	require.NoError(t, db.Create(target).Error)
+	require.NoError(t, db.Create(peer).Error)
+	require.NoError(t, db.Create(&model.DeveloperAccessRecommendationArchive{
+		UserId: target.Id, RequestId: 4, Source: model.DeveloperAccessRequestSourceAI,
+		Reason: "concrete integration", Recommendation: "Approved for a concrete integration.",
+		AdminUserId: viewer.Id, AdminNote: "approved", ApprovedAt: 20, CreatedAt: 20,
+	}).Error)
+
+	engine := gin.New()
+	engine.GET("/:id/developer-access/archives", func(c *gin.Context) {
+		c.Set("id", viewer.Id)
+		c.Set("role", viewer.Role)
+		ListUserDeveloperAccessRecommendationArchives(c)
+	})
+
+	response := httptest.NewRecorder()
+	engine.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/"+strconv.Itoa(target.Id)+"/developer-access/archives", nil))
+	assert.Equal(t, http.StatusOK, response.Code)
+	assert.Contains(t, response.Body.String(), "Approved for a concrete integration.")
+
+	response = httptest.NewRecorder()
+	engine.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/"+strconv.Itoa(peer.Id)+"/developer-access/archives", nil))
+	assert.Equal(t, http.StatusForbidden, response.Code)
 }
 
 func TestSubmitDeveloperAccessRequestRequiresConfirmedAIRecommendation(t *testing.T) {

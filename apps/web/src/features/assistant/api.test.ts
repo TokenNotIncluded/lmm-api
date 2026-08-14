@@ -29,6 +29,7 @@ import {
   parseAssistantAction,
   parseAssistantIntent,
   parseAssistantReply,
+  parseAssistantToolTraces,
   sendAssistantMessage,
   type AssistantChatMessage,
   unarchiveAssistantConversation,
@@ -181,6 +182,100 @@ describe('assistant response parsing', () => {
           next: { mode: 'ratio', value: 0.8 },
         },
       }
+    )
+  })
+
+  test('accepts only allowlisted navigation and confirmation-gated user actions', () => {
+    assert.deepEqual(
+      parseAssistantAction({
+        type: 'navigate',
+        path: '/users',
+        query: { filter: 'alice', l0Only: false },
+      }),
+      {
+        type: 'navigate',
+        path: '/users',
+        query: { filter: 'alice', l0Only: false },
+      }
+    )
+    assert.equal(
+      parseAssistantAction({
+        type: 'navigate',
+        path: 'https://example.com',
+        query: {},
+      }),
+      undefined
+    )
+    assert.deepEqual(
+      parseAssistantAction({
+        type: 'user_password_change',
+        requires_confirmation: true,
+        target_user_id: 7,
+        target_username: 'alice',
+        target_display_name: 'Alice',
+        target_role: 1,
+        target_group: 'default',
+        target_is_self: false,
+      }),
+      {
+        type: 'user_password_change',
+        requires_confirmation: true,
+        target_user_id: 7,
+        target_username: 'alice',
+        target_display_name: 'Alice',
+        target_role: 1,
+        target_group: 'default',
+        target_is_self: false,
+      }
+    )
+    assert.equal(
+      parseAssistantAction({
+        type: 'user_password_change',
+        requires_confirmation: true,
+        target_user_id: 7,
+        target_username: 'alice',
+        target_display_name: 'Alice',
+        target_role: 1,
+        target_group: 'default',
+        target_is_self: false,
+        password: 'should-never-be-accepted',
+      }),
+      undefined
+    )
+  })
+
+  test('keeps tool traces bounded and accepts only scalar safe input', () => {
+    assert.deepEqual(
+      parseAssistantToolTraces([
+        {
+          name: 'get_user_overview',
+          status: 'output-available',
+          input: { identifier: 'alice', user_id: 7 },
+          output: { email: 'must-not-be-forwarded' },
+        },
+        {
+          name: 'get_user_usage_summary',
+          status: 'output-error',
+          input: { days: 30 },
+        },
+        {
+          name: 'bad',
+          status: 'output-available',
+          input: { nested: { secret: 'x' } },
+        },
+      ]),
+      [
+        {
+          name: 'get_user_overview',
+          status: 'output-available',
+          input: { identifier: 'alice', user_id: 7 },
+        },
+        {
+          name: 'get_user_usage_summary',
+          status: 'output-error',
+          input: { days: 30 },
+        },
+      ]
     )
   })
 })

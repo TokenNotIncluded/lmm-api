@@ -135,7 +135,7 @@ describe('AssistantSetupTool', () => {
       container.textContent ?? '',
       /CC-Switch-v\{version\}-Windows\.msi/
     )
-    assert.match(container.textContent ?? '', /ANTHROPIC_AUTH_TOKEN/)
+    assert.match(container.textContent ?? '', /CC Switch one-click import/)
 
     await act(async () => {
       findButton('Claude Desktop').click()
@@ -261,7 +261,7 @@ describe('AssistantSetupTool', () => {
       container.textContent ?? '',
       /CC-Switch-v\{version\}-Windows\.msi/
     )
-    assert.doesNotMatch(container.textContent ?? '', /ANTHROPIC_AUTH_TOKEN/)
+    assert.match(container.textContent ?? '', /CC Switch one-click import/)
 
     await act(async () => {
       findButton('Unlock L1 access').click()

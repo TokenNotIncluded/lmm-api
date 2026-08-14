@@ -32,6 +32,7 @@ import {
 } from '@/lib/waffo-pancake-checkout'
 import { useAuthStore } from '@/stores/auth-store'
 
+import { isApiSuccess, validateDiscountCode } from './api'
 import { AffiliateRewardsCard } from './components/affiliate-rewards-card'
 import { BillingHistoryDialog } from './components/dialogs/billing-history-dialog'
 import { CreemConfirmDialog } from './components/dialogs/creem-confirm-dialog'
@@ -92,6 +93,10 @@ export function Wallet(props: WalletProps) {
   const [transferDialogOpen, setTransferDialogOpen] = useState(false)
   const [billingDialogOpen, setBillingDialogOpen] = useState(false)
   const [redemptionCode, setRedemptionCode] = useState('')
+  const [discountCode, setDiscountCode] = useState('')
+  const [appliedDiscountCode, setAppliedDiscountCode] = useState('')
+  const [discountPercent, setDiscountPercent] = useState<number | null>(null)
+  const [discountApplying, setDiscountApplying] = useState(false)
   const [creemDialogOpen, setCreemDialogOpen] = useState(false)
   const [selectedCreemProduct, setSelectedCreemProduct] =
     useState<CreemProduct | null>(null)
@@ -219,9 +224,14 @@ export function Wallet(props: WalletProps) {
       setTopupAmount(minTopup)
 
       // Calculate initial payment amount with default payment type
-      calculatePaymentAmount(minTopup, defaultPaymentType)
+      calculatePaymentAmount(minTopup, defaultPaymentType, appliedDiscountCode)
     }
-  }, [topupInfo, topupAvailability, calculatePaymentAmount])
+  }, [
+    topupInfo,
+    topupAvailability,
+    calculatePaymentAmount,
+    appliedDiscountCode,
+  ])
 
   // Get current payment type (selected or default)
   const getCurrentPaymentType = useCallback(() => {
@@ -233,7 +243,9 @@ export function Wallet(props: WalletProps) {
     setTopupAmount(preset.value)
     setSelectedPreset(preset.value)
     const paymentType = getCurrentPaymentType()
-    if (paymentType) calculatePaymentAmount(preset.value, paymentType)
+    if (paymentType) {
+      calculatePaymentAmount(preset.value, paymentType, appliedDiscountCode)
+    }
   }
 
   // Handle topup amount change
@@ -241,7 +253,9 @@ export function Wallet(props: WalletProps) {
     setTopupAmount(amount)
     setSelectedPreset(null)
     const paymentType = getCurrentPaymentType()
-    if (paymentType) calculatePaymentAmount(amount, paymentType)
+    if (paymentType) {
+      calculatePaymentAmount(amount, paymentType, appliedDiscountCode)
+    }
   }
 
   // Handle payment method selection
@@ -267,7 +281,11 @@ export function Wallet(props: WalletProps) {
       }
 
       // Calculate payment amount and show confirmation dialog
-      await calculatePaymentAmount(topupAmount, method.type)
+      await calculatePaymentAmount(
+        topupAmount,
+        method.type,
+        appliedDiscountCode
+      )
       setConfirmDialogOpen(true)
     } finally {
       setPaymentLoading(null)
@@ -309,7 +327,8 @@ export function Wallet(props: WalletProps) {
       {
         checkout_region: waffoPancakeCheckoutRegion,
         checkout_language: waffoPancakeCheckoutLanguage,
-      }
+      },
+      appliedDiscountCode
     )
 
     if (success) {
@@ -335,6 +354,41 @@ export function Wallet(props: WalletProps) {
     if (success) {
       setRedemptionCode('')
       await refreshWalletUser()
+    }
+  }
+
+  const handleApplyDiscount = async () => {
+    const code = discountCode.trim()
+    if (!code) {
+      setAppliedDiscountCode('')
+      setDiscountPercent(null)
+      return
+    }
+    setDiscountApplying(true)
+    try {
+      const result = await validateDiscountCode({
+        code,
+        amount: topupAmount,
+        payment_method: getCurrentPaymentType() || undefined,
+      })
+      if (!isApiSuccess(result) || !result.data) {
+        toast.error(result.message || t('Discount code is invalid'))
+        return
+      }
+      setAppliedDiscountCode(result.data.code)
+      setDiscountCode(result.data.code)
+      setDiscountPercent(result.data.discount_percent)
+      const paymentType = getCurrentPaymentType()
+      if (paymentType) {
+        await calculatePaymentAmount(topupAmount, paymentType, result.data.code)
+      }
+      toast.success(
+        t('Discount applied: {{percent}}% off', {
+          percent: result.data.discount_percent,
+        })
+      )
+    } finally {
+      setDiscountApplying(false)
     }
   }
 
@@ -397,7 +451,11 @@ export function Wallet(props: WalletProps) {
     setPaymentLoading(loadingKey)
 
     try {
-      await calculatePaymentAmount(topupAmount, PAYMENT_TYPES.WAFFO)
+      await calculatePaymentAmount(
+        topupAmount,
+        PAYMENT_TYPES.WAFFO,
+        appliedDiscountCode
+      )
       setConfirmDialogOpen(true)
     } finally {
       setPaymentLoading(null)
@@ -454,6 +512,20 @@ export function Wallet(props: WalletProps) {
                   onRedemptionCodeChange={setRedemptionCode}
                   onRedeem={handleRedeem}
                   redeeming={redeeming}
+                  discountCode={discountCode}
+                  onDiscountCodeChange={(value) => {
+                    setDiscountCode(value)
+                    if (
+                      appliedDiscountCode &&
+                      value.trim() !== appliedDiscountCode
+                    ) {
+                      setAppliedDiscountCode('')
+                      setDiscountPercent(null)
+                    }
+                  }}
+                  onApplyDiscount={handleApplyDiscount}
+                  discountApplying={discountApplying}
+                  discountPercent={discountPercent}
                   topupLink={topupInfo?.topup_link}
                   loading={topupLoading}
                   error={topupError}

@@ -115,6 +115,13 @@ export type DynamicPricingSettingUpdate = {
   channel_costs: Record<string, number>
 }
 
+export type UpdateAdvancedSecuritySettingsRequest = {
+  enabled: boolean
+  on_prompt: boolean
+  action: 'block' | 'audit'
+  rules: unknown
+}
+
 export type ConfirmPaymentComplianceResponse = {
   success: boolean
   message: string
@@ -472,6 +479,8 @@ export type OperationsSettings = {
   DefaultCollapseSidebar: boolean
   DemoSiteEnabled: boolean
   SelfUseModeEnabled: boolean
+  RegionAccessPolicyEnabled: boolean
+  RegionBlockedCountryCodes: string
   QuotaRemindThreshold: string
   SMTPServer: string
   SMTPPort: string

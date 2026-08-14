@@ -54,7 +54,7 @@ export function useWaffoPayment() {
   const [processing, setProcessing] = useState(false)
 
   const processWaffoPayment = useCallback(
-    async (topupAmount: number, payMethodIndex?: number) => {
+    async (topupAmount: number, payMethodIndex?: number, discountCode = '') => {
       let checkout: ReturnType<typeof reservePaymentCheckout> | null = null
 
       try {
@@ -63,6 +63,7 @@ export function useWaffoPayment() {
         const response = await requestWaffoPayment({
           amount: Math.floor(topupAmount),
           pay_method_index: payMethodIndex,
+          ...(discountCode ? { discount_code: discountCode } : {}),
         })
 
         if (isApiSuccess(response)) {

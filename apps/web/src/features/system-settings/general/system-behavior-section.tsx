@@ -26,8 +26,10 @@ import {
   FormControl,
   FormDescription,
   FormField,
+  FormItem,
   FormLabel,
 } from '@/components/ui/form'
+import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 
 import {
@@ -44,6 +46,8 @@ const behaviorSchema = z.object({
   DefaultCollapseSidebar: z.boolean(),
   DemoSiteEnabled: z.boolean(),
   SelfUseModeEnabled: z.boolean(),
+  RegionAccessPolicyEnabled: z.boolean(),
+  RegionBlockedCountryCodes: z.string().trim().min(2),
 })
 
 type BehaviorFormValues = z.infer<typeof behaviorSchema>
@@ -143,6 +147,52 @@ export function SystemBehaviorSection({
                   />
                 </FormControl>
               </SettingsSwitchItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name='RegionAccessPolicyEnabled'
+            render={({ field }) => (
+              <SettingsSwitchItem>
+                <SettingsSwitchContent>
+                  <FormLabel>{t('Regional access policy')}</FormLabel>
+                  <FormDescription>
+                    {t(
+                      'Require the edge policy to check blocked countries before requests reach the application.'
+                    )}
+                  </FormDescription>
+                </SettingsSwitchContent>
+                <FormControl>
+                  <Switch
+                    checked={field.value}
+                    onCheckedChange={field.onChange}
+                  />
+                </FormControl>
+              </SettingsSwitchItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name='RegionBlockedCountryCodes'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('Blocked country codes')}</FormLabel>
+                <FormControl>
+                  <Input
+                    {...field}
+                    placeholder='CN'
+                    autoComplete='off'
+                    spellCheck={false}
+                  />
+                </FormControl>
+                <FormDescription>
+                  {t(
+                    'Comma-separated two-letter ISO codes, for example CN,US. Disable the policy to allow every region.'
+                  )}
+                </FormDescription>
+              </FormItem>
             )}
           />
         </SettingsForm>

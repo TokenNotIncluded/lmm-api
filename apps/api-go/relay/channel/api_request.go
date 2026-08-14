@@ -487,6 +487,7 @@ func keepUpstreamRedirectResponse(_ *http.Request, _ []*http.Request) error {
 }
 
 func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http.Response, error) {
+	resetUpstreamCompatibilityMarkers(c)
 	client, err := service.GetHttpClientWithProxySettings(info.ChannelSetting.Proxy, info.ChannelSetting)
 	if err != nil {
 		return nil, fmt.Errorf("new proxy http client failed: %w", err)
@@ -535,6 +536,14 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	}
 	if resp == nil {
 		return nil, errors.New("resp is nil")
+	}
+	resp, err = maybeRetryOpenAICompatibilityError(c, &relayClient, req, info, resp)
+	if err != nil {
+		logger.LogError(c, "compatibility retry failed: "+err.Error())
+		return nil, err
+	}
+	if resp == nil {
+		return nil, errors.New("compatibility retry returned a nil response")
 	}
 	if limit := common2.GetContextKeyInt(c, appconstant.ContextKeyResponseByteLimit); limit > 0 {
 		if err := common2.LimitResponseBody(resp, int64(limit)); err != nil {

@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
+	"github.com/shopspring/decimal"
 	"github.com/stripe/stripe-go/v81"
 	"github.com/stripe/stripe-go/v81/checkout/session"
 	stripeprice "github.com/stripe/stripe-go/v81/price"
@@ -31,6 +32,7 @@ type StripePayRequest struct {
 	Amount int64 `json:"amount"`
 	// PaymentMethod specifies the payment method (e.g., "stripe").
 	PaymentMethod string `json:"payment_method"`
+	DiscountCode  string `json:"discount_code,omitempty"`
 	// SuccessURL is the optional custom URL to redirect after successful payment.
 	// If empty, defaults to the server's console log page.
 	SuccessURL string `json:"success_url,omitempty"`
@@ -59,7 +61,8 @@ func (*StripeAdaptor) RequestAmount(c *gin.Context, req *StripePayRequest) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
 		return
 	}
-	expectedAmountMicros, err := stripeTopUpQuoteMicros(req.Amount, group)
+	payMoney, _, err := applyDiscountCodeQuote(decimal.NewFromFloat(getStripePayMoney(float64(req.Amount), group)), req.Amount, req.DiscountCode)
+	expectedAmountMicros, err := monetaryStringToMicros(payMoney.StringFixed(2))
 	if err != nil || expectedAmountMicros <= 10_000 {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
 		return
@@ -108,7 +111,8 @@ func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
 		return
 	}
-	expectedAmountMicros, err := stripeTopUpQuoteMicros(req.Amount, group)
+	payMoney, discountCode, err := applyDiscountCodeQuote(decimal.NewFromFloat(getStripePayMoney(float64(req.Amount), group)), req.Amount, req.DiscountCode)
+	expectedAmountMicros, err := monetaryStringToMicros(payMoney.StringFixed(2))
 	if err != nil || expectedAmountMicros <= 10_000 {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
 		return
@@ -134,6 +138,8 @@ func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
 		TradeNo:              referenceId,
 		PaymentMethod:        model.PaymentMethodStripe,
 		PaymentProvider:      model.PaymentProviderStripe,
+		DiscountCodeId:       discountCodeID(discountCode),
+		DiscountPercent:      discountPercent(discountCode),
 		CreateTime:           time.Now().Unix(),
 		Status:               common.TopUpStatusPending,
 	}

@@ -249,6 +249,24 @@ describe('AssistantKeyTool', () => {
     )
     assert.equal(continued, 0)
 
+    let openedUrl = ''
+    Object.defineProperty(domWindow, 'open', {
+      configurable: true,
+      value: (url: string) => {
+        openedUrl = url
+        return null
+      },
+    })
+
+    await act(async () => {
+      findButton('Import to CC Switch').click()
+      await flushEffects()
+    })
+    assert.equal(
+      openedUrl,
+      'ccswitch://v1/import?resource=provider&app=claude&name=LMM&endpoint=https%3A%2F%2Fapi.example.test&apiKey=sk-created-by-test&model=claude-sonnet-4-5&homepage=https%3A%2F%2Fapi.example.test&enabled=true'
+    )
+
     await act(async () => {
       findButton('Show securely').click()
       await flushEffects()

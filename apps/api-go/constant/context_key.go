@@ -40,6 +40,14 @@ const (
 	ContextKeyChannelMultiKeyIndex     ContextKey = "channel_multi_key_index"
 	ContextKeyChannelKey               ContextKey = "channel_key"
 
+	// These request-scoped markers let relay selection distinguish an upstream
+	// capability/availability failure from an application error. They are used
+	// only for the current request; they never mutate the channel's persisted
+	// status.
+	ContextKeyUpstreamChannelFailure       ContextKey = "upstream_channel_failure"
+	ContextKeyUpstreamCapabilityMismatch   ContextKey = "upstream_capability_mismatch"
+	ContextKeyUpstreamUnsupportedParameter ContextKey = "upstream_unsupported_parameter"
+
 	ContextKeyAutoGroup           ContextKey = "auto_group"
 	ContextKeyAutoGroupIndex      ContextKey = "auto_group_index"
 	ContextKeyAutoGroupRetryIndex ContextKey = "auto_group_retry_index"

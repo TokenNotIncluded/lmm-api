@@ -292,21 +292,15 @@ func checkAdvancedSecurityTaskPrompt(c *gin.Context, info *relaycommon.RelayInfo
 	if !ok || strings.TrimSpace(prompt) == "" {
 		return nil
 	}
-	matches := service.CheckAdvancedSecurityText(prompt)
-	if len(matches) == 0 {
+	evaluation := service.EvaluateAdvancedSecurityText(c, info, prompt)
+	if len(evaluation.Matches) == 0 {
 		return nil
 	}
-
-	decision := model.AdvancedSecurityDecisionAudited
-	if setting.GetAdvancedSecuritySettings().Action == setting.AdvancedSecurityActionBlock {
-		decision = model.AdvancedSecurityDecisionBlocked
-	}
-	service.RecordAdvancedSecurityDetection(c, info, prompt, matches, decision)
-	if decision != model.AdvancedSecurityDecisionBlocked {
+	if !evaluation.Blocked() {
 		return nil
 	}
 	return service.TaskErrorWrapperLocal(
-		errors.New("prompt blocked by advanced security guardrail"),
+		errors.New(common.MessageWithRequestId(service.AdvancedSecurityBlockedMessage, c.GetString(common.RequestIdKey))),
 		"advanced_security_guardrail",
 		http.StatusBadRequest,
 	)

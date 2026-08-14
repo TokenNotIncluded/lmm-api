@@ -203,6 +203,43 @@ func ListDeveloperAccessRequests(c *gin.Context) {
 	common.ApiSuccess(c, requests)
 }
 
+// ListUserDeveloperAccessRecommendationArchives is an optional user-management
+// view. It keeps the same strict role boundary as other cross-user admin data:
+// an administrator may inspect a lower-role user, but never a peer or a
+// higher-role administrator.
+func ListUserDeveloperAccessRecommendationArchives(c *gin.Context) {
+	userID, err := strconv.Atoi(c.Param("id"))
+	if err != nil || userID <= 0 {
+		developerAccessRequestError(c, http.StatusBadRequest, "DEVELOPER_ACCESS_INVALID_ID", "invalid user id")
+		return
+	}
+	target, err := model.GetUserById(userID, false)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			developerAccessRequestError(c, http.StatusNotFound, "DEVELOPER_ACCESS_USER_NOT_FOUND", "user was not found")
+			return
+		}
+		common.ApiError(c, err)
+		return
+	}
+	if !canManageTargetRole(c.GetInt("role"), target.Role) {
+		developerAccessRequestError(c, http.StatusForbidden, "DEVELOPER_ACCESS_ARCHIVE_FORBIDDEN", "you cannot view this user's recommendation archive")
+		return
+	}
+	limit := 50
+	if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
+		if parsed, parseErr := strconv.Atoi(raw); parseErr == nil {
+			limit = parsed
+		}
+	}
+	archives, err := model.ListDeveloperAccessRecommendationArchives(userID, limit)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, archives)
+}
+
 func reviewDeveloperAccessRequest(c *gin.Context, approve bool) {
 	requestID, err := strconv.Atoi(c.Param("id"))
 	if err != nil || requestID <= 0 {
