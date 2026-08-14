@@ -2704,14 +2704,15 @@ fn deterministic_sse_boundaries_are_bounded_and_panic_free() {
             let _ = parser.finish();
             assert!(frames.len() <= MAX_FRAMES);
 
-            for parsed in [
+            for frames in [
                 parse_sse_frames(&input, MAX_FRAME_BYTES),
                 parse_sse_frames_lenient(&input, MAX_FRAME_BYTES),
                 parse_sse_frames_rejecting_unterminated(&input, MAX_FRAME_BYTES),
-            ] {
-                if let Ok(frames) = parsed {
-                    assert!(frames.len() <= MAX_FRAMES);
-                }
+            ]
+            .into_iter()
+            .flatten()
+            {
+                assert!(frames.len() <= MAX_FRAMES);
             }
         }));
         assert!(
@@ -3184,8 +3185,7 @@ fn fixed_duration_sse_fuzz_is_panic_free() {
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(1)
-        .max(1)
-        .min(30);
+        .clamp(1, 30);
     let deadline = Instant::now() + Duration::from_secs(seconds);
     let mut seed = INITIAL_SEED;
     let mut iterations = 0_u64;
@@ -3246,31 +3246,29 @@ fn fixed_duration_sse_fuzz_is_panic_free() {
                 parse_sse_frames(&input, MAX_FRAME_BYTES),
                 parse_sse_frames_lenient(&input, MAX_FRAME_BYTES),
                 parse_sse_frames_rejecting_unterminated(&input, MAX_FRAME_BYTES),
-            ] {
-                if let Ok(parsed) = parsed {
-                    assert!(parsed.len() <= MAX_FRAMES);
-                    let _ = json_events_from_frames(&parsed);
-                    for frame in parsed {
-                        if let Ok(snapshot) =
-                            serde_json::from_str::<OpenAiStreamSnapshot>(&frame.data)
-                        {
-                            let _ = openai_stream_to_canonical(&snapshot);
-                        }
-                        if let Ok(snapshot) =
-                            serde_json::from_str::<ResponsesStreamSnapshot>(&frame.data)
-                        {
-                            let _ = responses_stream_to_canonical(&snapshot);
-                        }
-                        if let Ok(snapshot) =
-                            serde_json::from_str::<ClaudeStreamSnapshot>(&frame.data)
-                        {
-                            let _ = claude_stream_to_semantic_events(&snapshot);
-                        }
-                        if let Ok(snapshot) =
-                            serde_json::from_str::<GeminiStreamSnapshot>(&frame.data)
-                        {
-                            let _ = gemini_stream_to_canonical(&snapshot, "fuzz-model");
-                        }
+            ]
+            .into_iter()
+            .flatten()
+            {
+                assert!(parsed.len() <= MAX_FRAMES);
+                let _ = json_events_from_frames(&parsed);
+                for frame in parsed {
+                    if let Ok(snapshot) = serde_json::from_str::<OpenAiStreamSnapshot>(&frame.data)
+                    {
+                        let _ = openai_stream_to_canonical(&snapshot);
+                    }
+                    if let Ok(snapshot) =
+                        serde_json::from_str::<ResponsesStreamSnapshot>(&frame.data)
+                    {
+                        let _ = responses_stream_to_canonical(&snapshot);
+                    }
+                    if let Ok(snapshot) = serde_json::from_str::<ClaudeStreamSnapshot>(&frame.data)
+                    {
+                        let _ = claude_stream_to_semantic_events(&snapshot);
+                    }
+                    if let Ok(snapshot) = serde_json::from_str::<GeminiStreamSnapshot>(&frame.data)
+                    {
+                        let _ = gemini_stream_to_canonical(&snapshot, "fuzz-model");
                     }
                 }
             }
@@ -3309,8 +3307,7 @@ fn fixed_duration_json_conversion_fuzz_is_panic_free() {
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(1)
-        .max(1)
-        .min(30);
+        .clamp(1, 30);
     let deadline = Instant::now() + Duration::from_secs(seconds);
     let mut seed = INITIAL_SEED;
     let mut iterations = 0_u64;
@@ -3484,8 +3481,7 @@ fn fixed_duration_claude_stream_state_machine_fuzz_is_panic_free() {
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(1)
-        .max(1)
-        .min(30);
+        .clamp(1, 30);
     let deadline = Instant::now() + Duration::from_secs(seconds);
     let source: serde_json::Value =
         serde_json::from_str(CLAUDE_STREAM).expect("Claude event corpus");
@@ -3683,8 +3679,7 @@ fn fixed_duration_tool_schema_conversion_fuzz_is_panic_free() {
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(1)
-        .max(1)
-        .min(30);
+        .clamp(1, 30);
     let deadline = Instant::now() + Duration::from_secs(seconds);
     let mut seed = INITIAL_SEED;
     let mut iterations = 0_u64;
@@ -3848,8 +3843,7 @@ fn fixed_duration_observer_and_parser_race_is_panic_free() {
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(1)
-        .max(1)
-        .min(30);
+        .clamp(1, 30);
     let deadline = Instant::now() + Duration::from_secs(seconds);
     let observer = Arc::new(ConversionObserver::with_max_series(8));
     let mut handles = Vec::with_capacity(WORKER_COUNT);
