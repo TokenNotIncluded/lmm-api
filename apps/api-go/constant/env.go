@@ -20,6 +20,12 @@ var ErrorLogEnabled bool
 var TaskQueryLimit int
 var TaskTimeoutMinutes int
 
+// TaskPollingConcurrency caps simultaneous provider polling workers.
+var TaskPollingConcurrency int
+
+// SystemTaskHistoryKeep is the number of terminal rows retained per task type.
+var SystemTaskHistoryKeep int
+
 // temporary variable for sora patch, will be removed in future
 var TaskPricePatches []string
 

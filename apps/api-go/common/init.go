@@ -201,6 +201,18 @@ func initConstantEnv() {
 	constant.TaskQueryLimit = GetEnvOrDefault("TASK_QUERY_LIMIT", 1000)
 	// 异步任务超时时间（分钟），超过此时间未完成的任务将被标记为失败并退款。0 表示禁用。
 	constant.TaskTimeoutMinutes = GetEnvOrDefault("TASK_TIMEOUT_MINUTES", 1440)
+	// Provider polling is I/O-bound, but an unbounded goroutine per channel can
+	// retain large task/adaptor buffers during an upstream incident.
+	constant.TaskPollingConcurrency = GetEnvOrDefault("TASK_POLLING_CONCURRENCY", 8)
+	if constant.TaskPollingConcurrency <= 0 {
+		constant.TaskPollingConcurrency = 1
+	}
+	// Keep terminal scheduler history bounded per type. Active work is always
+	// retained; non-positive values fall back to the safe default.
+	constant.SystemTaskHistoryKeep = GetEnvOrDefault("SYSTEM_TASK_HISTORY_KEEP", 100)
+	if constant.SystemTaskHistoryKeep <= 0 {
+		constant.SystemTaskHistoryKeep = 100
+	}
 
 	soraPatchStr := GetEnvOrDefaultString("TASK_PRICE_PATCH", "")
 	if soraPatchStr != "" {

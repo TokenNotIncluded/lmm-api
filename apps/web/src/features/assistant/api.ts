@@ -219,6 +219,10 @@ export type AssistantAdminConfigChangeAction = {
   confirmation_token: string
   requires_confirmation: true
   expires_in_seconds: number
+  scope?: 'user_skills' | 'channel'
+  target_user_id?: number
+  channel_id?: number
+  channel_name?: string
   changes: AssistantAdminConfigPreview[]
 }
 
@@ -753,11 +757,43 @@ export function parseAssistantAction(
         (change): change is AssistantAdminConfigPreview => change !== null
       )
     if (changes.length === action.changes.length && changes.length > 0) {
+      const scope =
+        action.scope === 'user_skills' || action.scope === 'channel'
+          ? action.scope
+          : undefined
+      const targetUserID =
+        typeof action.target_user_id === 'number' &&
+        Number.isInteger(action.target_user_id) &&
+        action.target_user_id > 0
+          ? action.target_user_id
+          : undefined
+      const channelID =
+        typeof action.channel_id === 'number' &&
+        Number.isInteger(action.channel_id) &&
+        action.channel_id > 0
+          ? action.channel_id
+          : undefined
+      const channelName =
+        typeof action.channel_name === 'string'
+          ? action.channel_name.trim()
+          : ''
+      if (
+        (action.scope !== undefined && scope === undefined) ||
+        (action.target_user_id !== undefined && targetUserID === undefined) ||
+        (action.channel_id !== undefined && channelID === undefined) ||
+        (action.channel_name !== undefined && !channelName)
+      ) {
+        return undefined
+      }
       return {
         type: 'admin_config_change',
         confirmation_token: confirmationToken,
         requires_confirmation: true,
         expires_in_seconds: action.expires_in_seconds,
+        ...(scope ? { scope } : {}),
+        ...(targetUserID ? { target_user_id: targetUserID } : {}),
+        ...(channelID ? { channel_id: channelID } : {}),
+        ...(channelName ? { channel_name: channelName } : {}),
         changes,
       }
     }

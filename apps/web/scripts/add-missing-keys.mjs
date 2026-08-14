@@ -84,6 +84,7 @@ const newKeys = {
     'The administrator marked this request resolved.':
       'The administrator marked this request resolved.',
     'Administrator note': 'Administrator note',
+    'User skills': 'User skills',
     'Security reviews': 'Security reviews',
     'assistant.security_review': 'Assistant security review',
   },
@@ -143,6 +144,7 @@ const newKeys = {
     'The administrator marked this request resolved.':
       '管理员已将此申请标记为已解决。',
     'Administrator note': '管理员意见',
+    'User skills': '用户技能',
     'Security reviews': '安全巡检',
     'assistant.security_review': '助手安全巡检',
   },
@@ -202,6 +204,7 @@ const newKeys = {
     'The administrator marked this request resolved.':
       '管理員已將此申請標記為已解決。',
     'Administrator note': '管理員備註',
+    'User skills': '使用者技能',
     'Security reviews': '安全巡檢',
     'assistant.security_review': '助手安全巡檢',
   },
@@ -266,6 +269,7 @@ const newKeys = {
     'The administrator marked this request resolved.':
       'L’administrateur a marqué cette demande comme résolue.',
     'Administrator note': 'Note de l’administrateur',
+    'User skills': 'Compétences utilisateur',
     'Security reviews': 'Revues de sécurité',
     'assistant.security_review': 'Revue de sécurité de l’assistant',
   },
@@ -326,6 +330,7 @@ const newKeys = {
     'The administrator marked this request resolved.':
       '管理者がこの申請を解決済みにしました。',
     'Administrator note': '管理者メモ',
+    'User skills': 'ユーザースキル',
     'Security reviews': 'セキュリティレビュー',
     'assistant.security_review': 'アシスタントのセキュリティレビュー',
   },
@@ -388,6 +393,7 @@ const newKeys = {
     'The administrator marked this request resolved.':
       'Администратор отметил этот запрос как решённый.',
     'Administrator note': 'Заметка администратора',
+    'User skills': 'Навыки пользователя',
     'Security reviews': 'Проверки безопасности',
     'assistant.security_review': 'Проверка безопасности ассистента',
   },
@@ -448,6 +454,7 @@ const newKeys = {
     'The administrator marked this request resolved.':
       'Quản trị viên đã đánh dấu yêu cầu này là đã giải quyết.',
     'Administrator note': 'Ghi chú của quản trị viên',
+    'User skills': 'Kỹ năng người dùng',
     'Security reviews': 'Đánh giá bảo mật',
     'assistant.security_review': 'Đánh giá bảo mật của trợ lý',
   },

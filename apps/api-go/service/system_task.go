@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/constant"
 	"github.com/LIghtJUNction/api.lmm.best/logger"
 	"github.com/LIghtJUNction/api.lmm.best/model"
 
@@ -23,8 +24,9 @@ const (
 
 	// systemTaskSchedulerInterval throttles how often the scheduler/stale-lock
 	// pass runs, independent of how often the runner wakes to claim tasks.
-	systemTaskSchedulerInterval = 15 * time.Second
-	systemTaskStaleLockInterval = 30 * time.Second
+	systemTaskSchedulerInterval    = 15 * time.Second
+	systemTaskStaleLockInterval    = 30 * time.Second
+	systemTaskHistoryPruneInterval = time.Hour
 )
 
 // SystemTaskHandler executes a claimed task of a specific type. Run owns the
@@ -47,8 +49,10 @@ type ScheduledSystemTaskHandler interface {
 }
 
 var (
-	systemTaskHandlersMu sync.RWMutex
-	systemTaskHandlers   = map[string]SystemTaskHandler{}
+	systemTaskHandlersMu       sync.RWMutex
+	systemTaskHandlers         = map[string]SystemTaskHandler{}
+	systemTaskMaintenanceMu    sync.Mutex
+	lastSystemTaskHistoryPrune int64
 )
 
 // RegisterSystemTaskHandler registers a handler keyed by its Type(). It must be
@@ -262,6 +266,7 @@ func runSystemTaskClaimPass(runnerID string) {
 // the per-type lock guarantees only one runner executes the task.
 func runSystemTaskScheduler() {
 	now := common.GetTimestamp()
+	pruneSystemTaskHistory(now)
 	handlers := registeredSystemTaskHandlers()
 	scheduledHandlers := make([]ScheduledSystemTaskHandler, 0, len(handlers))
 	taskTypes := make([]string, 0, len(handlers))
@@ -298,6 +303,34 @@ func runSystemTaskScheduler() {
 			}
 			logger.LogWarn(context.Background(), fmt.Sprintf("system task scheduler create failed: type=%s err=%v", scheduled.Type(), err))
 			continue
+		}
+	}
+}
+
+// pruneSystemTaskHistory applies one bounded retention policy to every
+// registered task type. It runs outside individual handlers so short-interval
+// polling jobs cannot grow the system_tasks table without limit.
+func pruneSystemTaskHistory(now int64) {
+	keep := constant.SystemTaskHistoryKeep
+	if keep <= 0 {
+		// Embedded callers may not run common.InitEnv. A bounded default keeps
+		// scheduler tests and local runners safe without disabling pruning.
+		keep = 100
+	}
+	systemTaskMaintenanceMu.Lock()
+	defer systemTaskMaintenanceMu.Unlock()
+	if lastSystemTaskHistoryPrune != 0 && now-lastSystemTaskHistoryPrune < int64(systemTaskHistoryPruneInterval.Seconds()) {
+		return
+	}
+	lastSystemTaskHistoryPrune = now
+	seen := make(map[string]struct{})
+	for _, handler := range registeredSystemTaskHandlers() {
+		if _, ok := seen[handler.Type()]; ok {
+			continue
+		}
+		seen[handler.Type()] = struct{}{}
+		if err := model.PruneTaskHistory(handler.Type(), keep); err != nil {
+			logger.LogWarn(context.Background(), fmt.Sprintf("system task history prune failed: type=%s err=%v", handler.Type(), err))
 		}
 	}
 }

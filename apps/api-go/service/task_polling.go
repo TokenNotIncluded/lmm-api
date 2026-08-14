@@ -19,7 +19,6 @@ import (
 	relaycommon "github.com/LIghtJUNction/api.lmm.best/relay/common"
 	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
 
-	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/samber/lo"
 )
 
@@ -355,22 +354,42 @@ func UpdateVideoTasks(ctx context.Context, platform constant.TaskPlatform, taskC
 	}
 	sort.Ints(channelIDs)
 
-	var wg sync.WaitGroup
-	for _, channelId := range channelIDs {
-		taskIds := taskChannelM[channelId]
-		if len(taskIds) == 0 {
-			continue
-		}
-		taskIds = append([]string(nil), taskIds...)
-
-		wg.Add(1)
-		gopool.Go(func() {
-			defer wg.Done()
-			if err := updateVideoTasks(ctx, platform, channelId, taskIds, taskM); err != nil {
-				logger.LogError(ctx, fmt.Sprintf("Channel #%d failed to update video async tasks: %s", channelId, err.Error()))
-			}
-		})
+	workerCount := constant.TaskPollingConcurrency
+	if workerCount <= 0 {
+		// Tests and embedded callers may not run common.InitEnv; retain the
+		// production default instead of silently serialising all channels.
+		workerCount = 8
 	}
+	if workerCount > len(channelIDs) {
+		workerCount = len(channelIDs)
+	}
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for worker := 0; worker < workerCount; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for channelId := range jobs {
+				if ctx.Err() != nil {
+					continue
+				}
+				taskIds := append([]string(nil), taskChannelM[channelId]...)
+				if err := updateVideoTasks(ctx, platform, channelId, taskIds, taskM); err != nil {
+					logger.LogError(ctx, fmt.Sprintf("Channel #%d failed to update video async tasks: %s", channelId, err.Error()))
+				}
+			}
+		}()
+	}
+	for _, channelId := range channelIDs {
+		select {
+		case jobs <- channelId:
+		case <-ctx.Done():
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	close(jobs)
 	wg.Wait()
 	if ctx.Err() != nil {
 		return ctx.Err()

@@ -108,6 +108,34 @@ export function AssistantAdminChangeTool(props: {
         </CardDescription>
       </CardHeader>
       <CardContent className='grid gap-3'>
+        {props.action.type === 'admin_config_change' &&
+        (props.action.scope ||
+          props.action.target_user_id ||
+          props.action.channel_id) ? (
+          <div className='text-muted-foreground border-border/70 grid gap-1 border-b pb-3 text-xs'>
+            <p>
+              {t('Scope')}:{' '}
+              {props.action.scope === 'user_skills'
+                ? t('User skills')
+                : props.action.scope === 'channel'
+                  ? t('Channel')
+                  : '—'}
+            </p>
+            {props.action.target_user_id ? (
+              <p>
+                {t('Target')} {t('User')} #{props.action.target_user_id}
+              </p>
+            ) : null}
+            {props.action.channel_id ? (
+              <p>
+                {t('Target')} {t('Channel')} #{props.action.channel_id}
+                {props.action.channel_name
+                  ? ` · ${props.action.channel_name}`
+                  : ''}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
         {props.action.type === 'admin_pricing_change' ? (
           <div className='grid gap-2'>
             <p className='text-sm font-medium'>

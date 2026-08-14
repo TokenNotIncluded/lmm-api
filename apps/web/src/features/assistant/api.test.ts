@@ -192,6 +192,61 @@ describe('assistant response parsing', () => {
         ],
       }
     )
+    assert.deepEqual(
+      parseAssistantAction({
+        type: 'admin_config_change',
+        confirmation_token: 'scoped-token',
+        requires_confirmation: true,
+        expires_in_seconds: 600,
+        scope: 'channel',
+        channel_id: 42,
+        channel_name: 'GPT-Pro',
+        changes: [
+          {
+            key: 'channel.model',
+            label: 'Model',
+            old_value: 'old-model',
+            new_value: 'new-model',
+          },
+        ],
+      }),
+      {
+        type: 'admin_config_change',
+        confirmation_token: 'scoped-token',
+        requires_confirmation: true,
+        expires_in_seconds: 600,
+        scope: 'channel',
+        channel_id: 42,
+        channel_name: 'GPT-Pro',
+        changes: [
+          {
+            key: 'channel.model',
+            label: 'Model',
+            old_value: 'old-model',
+            new_value: 'new-model',
+          },
+        ],
+      }
+    )
+    assert.equal(
+      parseAssistantAction({
+        type: 'admin_config_change',
+        confirmation_token: 'scoped-token',
+        requires_confirmation: true,
+        expires_in_seconds: 600,
+        scope: 'channel',
+        channel_id: 0,
+        changes: [
+          {
+            key: 'channel.model',
+            label: 'Model',
+            old_value: 'old-model',
+            new_value: 'new-model',
+          },
+        ],
+      }),
+      undefined
+    )
     assert.equal(
       parseAssistantAction({
         type: 'admin_config_change',
