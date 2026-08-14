@@ -9,27 +9,26 @@
 //  2. CostEMA is updated from the measured upstream cost (USD per 1M tokens)
 //     with an exponential moving average (AlphaLoad).
 //  3. C = EffectiveCost(routeCost, CostEMA): the effective unit cost used as
-//     the anchor for the factor. The cost floor is enforced here by never
-//     letting C drop below the smoothed actual upstream cost.
+//     the anchor for the factor, including the configured cost-floor factor.
 //  4. raw = RawLoad(...) measures how far the window exceeded the TPM/RPM /
 //     cost-rate targets; LoadEMA smooths it.
 //  5. heat = Heat(LoadEMA, deadzone, gamma) maps excess load to [0,1] with a
 //     deadzone (small fluctuations produce no heat) and a non-linear shaping
 //     exponent.
-//  6. target = DynamicMultiplier(C, maxFactor, heat): the desired multiplier
-//     in [1, maxFactor], i.e. the supply-demand premium on top of the
-//     configured price.
+//  6. target = DynamicMultiplier(C, basePrice, maxFactor, heat): the desired
+//     multiplier in [1, maxFactor], taking the larger of the cost floor and
+//     the supply-demand premium.
 //  7. smoothed = NextMultiplier(...): an asymmetric EMA so the factor rises
 //     fast (AlphaUp) but falls slowly (AlphaDown).
 //  8. final = EnforceBounds(...): per-tick step clamps (MaxStepUp /
 //     MaxStepDown) and the absolute range [1, maxFactor].
 //
-// Design: cost floor (the price never undercuts the upstream cost) plus a
-// supply-demand premium (excess load raises the multiplier), moved with an
-// asymmetric EMA and step clamps for smooth, bounded changes. Revenue is
-// deliberately never used as a load input: charging more under load would
-// feed back into higher measured revenue and could spiral. Only token/request
-// volume and upstream cost drive the factor.
+// Design: cost floor (the price never undercuts the upstream cost scaled by
+// CostFloorFactor) plus a supply-demand premium (excess load raises the
+// multiplier), moved with an asymmetric EMA and step clamps for smooth,
+// bounded changes. Revenue is deliberately never used as a load input:
+// charging more under load would feed back into higher measured revenue and
+// could spiral. Only token/request volume and upstream cost drive the factor.
 //
 // All functions are pure: they take explicit inputs and return values, with
 // no I/O and no access to global state. Per-model target overrides
@@ -58,14 +57,17 @@ type ModelState struct {
 
 // TickInput carries the per-tick window measurements for one model.
 type TickInput struct {
-	Model                 string
-	WindowTokens          float64 // total tokens in the window
-	WindowRequests        float64
-	WindowUpstreamCostUSD float64 // sum of tokens×channel cost / 1M across the window, USD
-	WindowMinutes         float64
-	CheapCost             float64 // USD per 1M tokens of the cheapest route; 0 = unknown
-	BackupCost            float64 // USD per 1M tokens of the failover route; 0 = unknown
-	Now                   int64   // unix seconds of this tick
+	Model                  string
+	WindowTokens           float64 // priced tokens in the window
+	WindowRequests         float64 // requests on priced channels
+	WindowUpstreamCostUSD  float64 // sum of tokens×channel cost / 1M across the window, USD
+	WindowMinutes          float64
+	CheapCost              float64 // USD per 1M tokens of the cheapest route; 0 = unknown
+	BackupCost             float64 // USD per 1M tokens of the failover route; 0 = unknown
+	WindowUnpricedTokens   float64 // traffic on channels without a configured cost
+	WindowUnpricedRequests float64 // requests on channels without a configured cost
+	BasePriceUSDPerMillion float64 // reference price used by the cost floor; 0 = 1.0
+	Now                    int64   // unix seconds of this tick
 }
 
 // ComputeRouteCost returns the expected upstream unit cost (USD per 1M
@@ -82,13 +84,25 @@ func ComputeRouteCost(cheapCost, backupCost, failoverProb float64) float64 {
 	return cheapCost + p*(backupCost-cheapCost)
 }
 
-// EffectiveCost returns the effective unit cost C anchoring the factor:
-// the larger of the expected route cost and the smoothed actual upstream
-// cost, so C never undercuts what we actually pay (cost floor). floorFactor
-// is part of the engine's public signature; the floor itself is realized by
-// this max, and the factor-level bounds are applied in EnforceBounds.
+// EffectiveCost returns the effective unit cost C anchoring the factor: the
+// larger of the expected route cost and the smoothed actual upstream cost,
+// scaled by floorFactor. Costs are USD per 1M tokens. A non-positive or
+// non-finite floorFactor is treated as 1.0 so pure callers fail safe.
 func EffectiveCost(routeCost, costEMA, floorFactor float64) float64 {
-	return math.Max(routeCost, costEMA)
+	anchor := 0.0
+	if isFinitePositive(routeCost) {
+		anchor = math.Max(anchor, routeCost)
+	}
+	if isFinitePositive(costEMA) {
+		anchor = math.Max(anchor, costEMA)
+	}
+	if anchor <= 0 {
+		return 0
+	}
+	if !isFinitePositive(floorFactor) || floorFactor < 1 {
+		floorFactor = 1
+	}
+	return anchor * floorFactor
 }
 
 // RawLoad measures how far the window exceeded the configured targets,
@@ -149,18 +163,28 @@ func Heat(load, deadzone, gamma float64) float64 {
 	return math.Pow(x, gamma)
 }
 
-// DynamicMultiplier turns the effective cost C and the current heat into the
-// desired multiplier applied to the configured price: 1 + (maxFactor-1)×heat.
-// With heat in [0,1] the result is in [1, maxFactor]. If the cost is unknown
-// or not positive (feature off for this model), it returns 1.0 (base price).
-func DynamicMultiplier(cost float64, maxFactor, heat float64) float64 {
-	if cost <= 0 {
+// DynamicMultiplier turns the effective cost C and current heat into the
+// desired multiplier applied to the configured base price. The target is the
+// larger of the cost-floor multiplier C/basePrice and the load premium
+// 1+(maxFactor-1)×heat, capped at maxFactor. A non-positive cost produces the
+// neutral multiplier; a non-positive base price falls back to 1 USD per 1M.
+func DynamicMultiplier(cost, basePrice float64, maxFactor, heat float64) float64 {
+	if !isFinitePositive(cost) {
 		return 1.0
+	}
+	if !isFinitePositive(basePrice) {
+		basePrice = 1.0
 	}
 	if maxFactor < 1 {
 		maxFactor = 1
 	}
-	return 1 + (maxFactor-1)*heat
+	if !isFinite(heat) {
+		heat = 0
+	}
+	heat = math.Max(0, math.Min(1, heat))
+	costMultiplier := cost / basePrice
+	loadMultiplier := 1 + (maxFactor-1)*heat
+	return math.Max(1, math.Min(maxFactor, math.Max(costMultiplier, loadMultiplier)))
 }
 
 // EnforceBounds applies the per-tick movement clamps and the absolute range
@@ -168,14 +192,29 @@ func DynamicMultiplier(cost float64, maxFactor, heat float64) float64 {
 // and at least prev×(1-maxStepDown); a non-positive prev means the first
 // tick, where no step clamp is applied. The result is then clamped into
 // [1.0, maxFactor]. If the cost is unknown or not positive, it returns 1.0.
-// floorFactor is part of the engine's public signature; the cost floor is
-// enforced upstream via EffectiveCost.
+// floorFactor remains in the signature for callers that build the full
+// pipeline; EffectiveCost has already applied it before this function runs.
 func EnforceBounds(mult, prevMult float64, cost float64, floorFactor, maxFactor, maxStepUp, maxStepDown float64) float64 {
-	if cost <= 0 {
+	if !isFinitePositive(cost) {
 		return 1.0
+	}
+	if !isFinite(mult) {
+		mult = 1.0
 	}
 	if maxFactor < 1 {
 		maxFactor = 1
+	}
+	if !isFinite(maxStepUp) || maxStepUp < 0 {
+		maxStepUp = 0
+	}
+	if !isFinite(maxStepDown) || maxStepDown < 0 {
+		maxStepDown = 0
+	}
+	if maxStepUp > 1 {
+		maxStepUp = 1
+	}
+	if maxStepDown > 1 {
+		maxStepDown = 1
 	}
 	if prevMult > 0 {
 		if mult > prevMult*(1+maxStepUp) {
@@ -186,6 +225,38 @@ func EnforceBounds(mult, prevMult float64, cost float64, floorFactor, maxFactor,
 		}
 	}
 	return math.Max(1.0, math.Min(maxFactor, mult))
+}
+
+// ClampState sanitizes state loaded from Redis or supplied by an integration
+// boundary. Invalid EMA values are cleared, and Factor is always kept inside
+// [1, maxFactor]. It intentionally does not alter UpdatedAt.
+func ClampState(state *ModelState, maxFactor float64) {
+	if state == nil {
+		return
+	}
+	if !isFinite(state.LoadEMA) || state.LoadEMA < 0 {
+		state.LoadEMA = 0
+	}
+	if !isFinite(state.CostEMA) || state.CostEMA < 0 {
+		state.CostEMA = 0
+	}
+	if !isFinitePositive(maxFactor) || maxFactor < 1 {
+		maxFactor = 1
+	}
+	if !isFinite(state.Factor) || state.Factor < 1 {
+		state.Factor = 1
+	}
+	if state.Factor > maxFactor {
+		state.Factor = maxFactor
+	}
+}
+
+func isFinite(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0)
+}
+
+func isFinitePositive(value float64) bool {
+	return value > 0 && isFinite(value)
 }
 
 // NextMultiplier applies an asymmetric EMA toward the target multiplier:
@@ -211,22 +282,41 @@ func NextMultiplier(prev float64, target float64, alphaUp, alphaDown float64) fl
 // it passes. If the raw load exceeds 1.0 the caller may log a warning; the
 // engine only computes.
 //
-// No-cost-signal ticks: when this tick carries no upstream cost information
-// at all (CheapCost <= 0 AND BackupCost <= 0 AND WindowUpstreamCostUSD <= 0),
-// the model is treated as having lost its cost configuration (e.g. the admin
-// removed the channel_costs entries mid-run). The state is reset to the base
-// price immediately: CostEMA and Factor are cleared to 0/1.0, UpdatedAt is
-// set, and 1.0 is returned without evolving the EMA. This is deliberate: a
-// stale warm CostEMA would otherwise keep the multiplier elevated even though
-// the feature no longer has any cost signal for this model, so prices must
-// fall back to the configured base.
+// No-cost-signal ticks with non-zero unpriced traffic reset to the base price:
+// the model has traffic but no trustworthy cost anchor. A genuinely idle
+// model, by contrast, follows the decay path below so stale high factors do
+// not survive zero-traffic windows indefinitely.
 func Tick(state *ModelState, in TickInput, s dynamic_pricing_setting.DynamicPricingSetting) float64 {
 	if state == nil {
 		return 1.0
 	}
+	if err := s.Validate(); err != nil {
+		state.LoadEMA = 0
+		state.CostEMA = 0
+		state.Factor = 1.0
+		state.UpdatedAt = in.Now
+		return 1.0
+	}
+	ClampState(state, s.MaxFactor)
 
-	// No cost signal this tick: admin config-change scenario, fall back to
-	// base price immediately (see doc comment above).
+	// No traffic is an explicit zero-load sample. Decay both EMAs and the
+	// factor toward the neutral price, subject to the same downward step clamp
+	// used by normal ticks. This is what makes stale high factors fall when a
+	// model has no rows in the current window.
+	if in.WindowTokens <= 0 && in.WindowRequests <= 0 &&
+		in.WindowUnpricedTokens <= 0 && in.WindowUnpricedRequests <= 0 {
+		state.LoadEMA = UpdateLoadEMA(state.LoadEMA, 0, s.AlphaLoad)
+		state.CostEMA = UpdateLoadEMA(state.CostEMA, 0, s.AlphaLoad)
+		smoothed := NextMultiplier(state.Factor, 1.0, s.AlphaUp, s.AlphaDown)
+		state.Factor = EnforceBounds(smoothed, state.Factor, 1.0, s.CostFloorFactor,
+			s.MaxFactor, s.MaxStepUp, s.MaxStepDown)
+		state.UpdatedAt = in.Now
+		return state.Factor
+	}
+
+	// Non-zero traffic without a configured cost is not safe to price from. Do
+	// not let a warm CostEMA keep charging a model whose only observed channels
+	// are unpriced.
 	if in.CheapCost <= 0 && in.BackupCost <= 0 && in.WindowUpstreamCostUSD <= 0 {
 		state.CostEMA = 0
 		state.Factor = 1.0
@@ -267,7 +357,7 @@ func Tick(state *ModelState, in TickInput, s dynamic_pricing_setting.DynamicPric
 
 	// (g,h) heat and desired multiplier.
 	heat := Heat(state.LoadEMA, s.LoadDeadzone, s.HeatGamma)
-	target := DynamicMultiplier(C, s.MaxFactor, heat)
+	target := DynamicMultiplier(C, in.BasePriceUSDPerMillion, s.MaxFactor, heat)
 
 	// (i,j) asymmetric EMA plus step clamps and absolute bounds.
 	smoothed := NextMultiplier(state.Factor, target, s.AlphaUp, s.AlphaDown)

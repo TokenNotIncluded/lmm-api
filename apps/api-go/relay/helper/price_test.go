@@ -118,6 +118,49 @@ func TestModelPriceHelperTieredUsesPreloadedRequestInput(t *testing.T) {
 	require.Equal(t, common.QuotaPerUnit, info.TieredBillingSnapshot.QuotaPerUnit)
 }
 
+func TestModelPriceHelperTieredIncludesDynamicMultiplier(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	saved := map[string]string{}
+	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
+		saved[key] = value
+		return nil
+	}))
+	dpCfg := config.GlobalConfig.Get("dynamic_pricing_setting").(*dynamic_pricing_setting.DynamicPricingSetting)
+	oldDP := dynamic_pricing_setting.GetSetting()
+	t.Cleanup(func() {
+		dynamic_pricing.SetState("tiered-dynamic-model", &dynamic_pricing.ModelState{Factor: 1})
+		*dpCfg = oldDP
+		require.NoError(t, config.GlobalConfig.LoadFromDB(saved))
+	})
+
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+		"billing_setting.billing_mode":    `{"tiered-dynamic-model":"tiered_expr"}`,
+		"billing_setting.billing_expr":    `{"tiered-dynamic-model":"tier(\"base\", p * 2)"}`,
+		"group_ratio_setting.group_ratio": `{"default":1}`,
+	}))
+	dpCfg.Enabled = true
+	dynamic_pricing.SetState("tiered-dynamic-model", &dynamic_pricing.ModelState{Factor: 2})
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Set("group", "default")
+	info := &relaycommon.RelayInfo{
+		OriginModelName: "tiered-dynamic-model",
+		UserGroup:       "default",
+		UsingGroup:      "default",
+		BillingRequestInput: &billingexpr.RequestInput{
+			Body: []byte(`{}`),
+		},
+	}
+
+	priceData, err := ModelPriceHelper(ctx, info, 1000, &types.TokenCountMeta{})
+	require.NoError(t, err)
+	// p*2 = 2000; 2000 / 1e6 * 500000 = 1000, then dynamic 2x = 2000.
+	require.Equal(t, 2000, priceData.QuotaToPreConsume)
+	require.Equal(t, 2.0, priceData.OtherRatios()["dynamic_pricing"])
+	require.Equal(t, 2000, info.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
+}
+
 func TestModelPriceHelperTieredPreConsumeMaxTokensFallback(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

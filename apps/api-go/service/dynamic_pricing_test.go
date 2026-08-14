@@ -116,12 +116,13 @@ func TestRunDynamicPricingTick(t *testing.T) {
 	require.True(t, approxEq(st.Factor, 1.1, 1e-9), "m1 Factor = %v, want 1.1 (first-tick step-up clamp)", st.Factor)
 	require.True(t, st.UpdatedAt >= before && st.UpdatedAt <= after, "m1 UpdatedAt = %d outside [%d, %d]", st.UpdatedAt, before, after)
 
-	// m2: tokens=7e5 (ch3 tokens excluded from cost), cost=0.2+0.54=0.74,
-	// unit cost=0.74e6/7e5; raw load=7e5/5/1e5=1.4.
+	// m2: total tokens=7e5, but only 5e5 priced tokens (ch3 is unknown),
+	// cost=0.2+0.54=0.74, unit cost=0.74e6/5e5; raw load uses only the
+	// priced denominator and is therefore 1.0.
 	st, ok = dynamic_pricing.GetState("m2")
 	require.True(t, ok, "m2 state missing")
-	require.True(t, approxEq(st.LoadEMA, 1.4, 1e-9), "m2 LoadEMA = %v, want 1.4", st.LoadEMA)
-	require.True(t, approxEq(st.CostEMA, 0.74e6/7e5, 1e-6), "m2 CostEMA = %v, want %v", st.CostEMA, 0.74e6/7e5)
+	require.True(t, approxEq(st.LoadEMA, 1.0, 1e-9), "m2 LoadEMA = %v, want 1.0", st.LoadEMA)
+	require.True(t, approxEq(st.CostEMA, 0.74e6/5e5, 1e-6), "m2 CostEMA = %v, want %v", st.CostEMA, 0.74e6/5e5)
 	require.True(t, approxEq(st.Factor, 1.1, 1e-9), "m2 Factor = %v, want 1.1 (first-tick step-up clamp)", st.Factor)
 
 	// m3: no configured cost -> factor stays at base price.
@@ -162,6 +163,8 @@ func TestAggregateDynamicPricingWindow(t *testing.T) {
 	m2 := perModel["m2"]
 	require.NotNil(t, m2)
 	require.True(t, approxEq(m2.tokens, 700000, 1e-9), "m2 tokens = %v", m2.tokens)
+	require.True(t, approxEq(m2.pricedTokens, 500000, 1e-9), "m2 pricedTokens = %v", m2.pricedTokens)
+	require.True(t, approxEq(m2.unpricedTokens, 200000, 1e-9), "m2 unpricedTokens = %v", m2.unpricedTokens)
 	require.True(t, approxEq(m2.costUSD, 0.2+0.54, 1e-9), "m2 costUSD = %v, want 0.74", m2.costUSD)
 	require.True(t, approxEq(m2.cheap, 1.0, 1e-9), "m2 cheap = %v, want 1.0", m2.cheap)
 	require.True(t, approxEq(m2.backup, 1.8, 1e-9), "m2 backup = %v, want 1.8", m2.backup)
@@ -185,4 +188,22 @@ func TestRunDynamicPricingTickDisabled(t *testing.T) {
 	if _, ok := dynamic_pricing.GetState("m-disabled"); ok {
 		t.Fatal("tick must be a no-op while the feature is disabled")
 	}
+}
+
+func TestRunDynamicPricingTickDecaysModelsWithNoTraffic(t *testing.T) {
+	setupDynamicPricingTestDB(t)
+	dynamic_pricing.SetState("m-stale", &dynamic_pricing.ModelState{
+		LoadEMA: 1.5,
+		CostEMA: 2.0,
+		Factor:  2.5,
+	})
+
+	runDynamicPricingTick()
+
+	state, ok := dynamic_pricing.GetState("m-stale")
+	require.True(t, ok, "stale model state missing")
+	require.Less(t, state.Factor, 2.5, "zero-traffic tick must decay the factor")
+	require.Greater(t, state.Factor, 1.0, "zero-traffic decay should be gradual")
+	require.Less(t, state.LoadEMA, 1.5, "zero-traffic tick must decay load EMA")
+	require.Less(t, state.CostEMA, 2.0, "zero-traffic tick must decay cost EMA")
 }

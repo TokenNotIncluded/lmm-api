@@ -16,22 +16,23 @@ func approxEqual(a, b, eps float64) bool {
 // config package registers, so Tick tests are deterministic.
 func defaultSetting() dynamic_pricing_setting.DynamicPricingSetting {
 	return dynamic_pricing_setting.DynamicPricingSetting{
-		Enabled:             true,
-		TickIntervalSeconds: 60,
-		WindowMinutes:       5,
-		TargetTPM:           100000,
-		TargetRPM:           60,
-		TargetCostRate:      1.0,
-		AlphaLoad:           0.3,
-		AlphaUp:             0.30,
-		AlphaDown:           0.05,
-		CostFloorFactor:     1.2,
-		MaxFactor:           3.0,
-		LoadDeadzone:        0.4,
-		HeatGamma:           2.0,
-		MaxStepUp:           0.10,
-		MaxStepDown:         0.03,
-		FailoverProbability: 0.15,
+		Enabled:                true,
+		TickIntervalSeconds:    60,
+		WindowMinutes:          5,
+		TargetTPM:              100000,
+		TargetRPM:              60,
+		TargetCostRate:         1.0,
+		BasePriceUSDPerMillion: 1.0,
+		AlphaLoad:              0.3,
+		AlphaUp:                0.30,
+		AlphaDown:              0.05,
+		CostFloorFactor:        1.2,
+		MaxFactor:              3.0,
+		LoadDeadzone:           0.4,
+		HeatGamma:              2.0,
+		MaxStepUp:              0.10,
+		MaxStepDown:            0.03,
+		FailoverProbability:    0.15,
 	}
 }
 
@@ -165,11 +166,21 @@ func TestDynamicMultiplier(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := DynamicMultiplier(tt.cost, tt.maxFactor, tt.heat)
+			got := DynamicMultiplier(tt.cost, 1.0, tt.maxFactor, tt.heat)
 			if !approxEqual(got, tt.want, eps) {
 				t.Errorf("DynamicMultiplier(%v, %v, %v) = %v, want %v", tt.cost, tt.maxFactor, tt.heat, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDynamicMultiplierCostFloorTracksBasePrice(t *testing.T) {
+	// With no load heat, the desired factor is still driven by actual cost:
+	// C=1.2 over a $1 base is 1.2x, while C=2.4 is 2.4x.
+	low := DynamicMultiplier(1.2, 1.0, 3.0, 0)
+	high := DynamicMultiplier(2.4, 1.0, 3.0, 0)
+	if !approxEqual(low, 1.2, eps) || !approxEqual(high, 2.4, eps) {
+		t.Fatalf("DynamicMultiplier cost floor = (%v, %v), want (1.2, 2.4)", low, high)
 	}
 }
 
@@ -242,10 +253,10 @@ func TestEffectiveCost(t *testing.T) {
 		costEMA   float64
 		want      float64
 	}{
-		{"picks route cost when above EMA", 1.15, 0.5, 1.15},
-		{"picks EMA when above route cost", 1.15, 2.0, 2.0},
-		{"equal values", 1.15, 1.15, 1.15},
-		{"zero EMA falls back to route cost", 1.15, 0, 1.15},
+		{"picks route cost when above EMA", 1.15, 0.5, 1.38},
+		{"picks EMA when above route cost", 1.15, 2.0, 2.4},
+		{"equal values", 1.15, 1.15, 1.38},
+		{"zero EMA falls back to route cost", 1.15, 0, 1.38},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -398,6 +409,55 @@ func TestTickNoCostSignalResetsWarmState(t *testing.T) {
 	}
 }
 
+func TestTickZeroTrafficDecaysWarmState(t *testing.T) {
+	s := defaultSetting()
+	state := &ModelState{CostEMA: 2.0, LoadEMA: 1.5, Factor: 2.5, UpdatedAt: 0}
+	in := TickInput{Model: "test-model", WindowMinutes: 5, Now: 1700000000}
+
+	got := Tick(state, in, s)
+	if got >= 2.5 || got <= 1.0 {
+		t.Fatalf("Tick(zero traffic) = %v, want a gradual decay in (1.0, 2.5)", got)
+	}
+	if state.LoadEMA >= 1.5 || state.CostEMA >= 2.0 {
+		t.Fatalf("zero-traffic EMAs did not decay: load=%v cost=%v", state.LoadEMA, state.CostEMA)
+	}
+}
+
+func TestTickCostChangesFactor(t *testing.T) {
+	s := defaultSetting()
+	s.TargetTPM = 0
+	s.TargetRPM = 0
+	s.TargetCostRate = 0
+	s.AlphaLoad = 1
+	s.AlphaUp = 1
+	s.AlphaDown = 1
+	s.MaxStepUp = 1
+	s.MaxStepDown = 1
+
+	state := &ModelState{Factor: 1.0}
+	lowCost := TickInput{
+		Model: "test-model", WindowTokens: 1e6, WindowUpstreamCostUSD: 1.0,
+		WindowMinutes: 5, CheapCost: 1.0, BasePriceUSDPerMillion: 1.0, Now: 1,
+	}
+	highCost := lowCost
+	highCost.WindowUpstreamCostUSD = 2.0
+	highCost.CheapCost = 2.0
+
+	low := Tick(state, lowCost, s)
+	high := Tick(state, highCost, s)
+	if !approxEqual(low, 1.2, eps) || !approxEqual(high, 2.4, eps) {
+		t.Fatalf("cost-sensitive Tick factors = (%v, %v), want (1.2, 2.4)", low, high)
+	}
+}
+
+func TestClampStateSanitizesRestoredValues(t *testing.T) {
+	state := &ModelState{LoadEMA: math.NaN(), CostEMA: math.Inf(1), Factor: 99}
+	ClampState(state, 3)
+	if state.LoadEMA != 0 || state.CostEMA != 0 || state.Factor != 3 {
+		t.Fatalf("ClampState = %+v, want zero EMAs and factor 3", state)
+	}
+}
+
 func TestTickRisingFasterThanFalling(t *testing.T) {
 	s := defaultSetting()
 
@@ -501,11 +561,11 @@ func TestComputeRouteCostAndTickCombined(t *testing.T) {
 		t.Fatalf("ComputeRouteCost(1, 2, 0.15) = %v, want 1.15", routeCost)
 	}
 	// EffectiveCost picks the larger anchor in both directions (pure fn).
-	if got := EffectiveCost(routeCost, 0.5, s.CostFloorFactor); !approxEqual(got, 1.15, eps) {
-		t.Errorf("EffectiveCost(1.15, 0.5) = %v, want 1.15 (route cost above EMA)", got)
+	if got := EffectiveCost(routeCost, 0.5, s.CostFloorFactor); !approxEqual(got, 1.38, eps) {
+		t.Errorf("EffectiveCost(1.15, 0.5) = %v, want 1.38 (route cost above EMA, floor factor applied)", got)
 	}
-	if got := EffectiveCost(routeCost, 2.5, s.CostFloorFactor); !approxEqual(got, 2.5, eps) {
-		t.Errorf("EffectiveCost(1.15, 2.5) = %v, want 2.5 (EMA above route cost)", got)
+	if got := EffectiveCost(routeCost, 2.5, s.CostFloorFactor); !approxEqual(got, 3.0, eps) {
+		t.Errorf("EffectiveCost(1.15, 2.5) = %v, want 3.0 (EMA above route cost, floor factor applied)", got)
 	}
 
 	// NOTE: Tick does not write C back into CostEMA; it smooths CostEMA from

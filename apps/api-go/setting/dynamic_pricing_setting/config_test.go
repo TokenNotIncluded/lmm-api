@@ -1,6 +1,9 @@
 package dynamic_pricing_setting
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 // saveSettingSnapshot deep-copies the package-global setting (GetSetting
 // returns copies of ChannelCosts/PerModel via lo.Assign) and restores the
@@ -59,5 +62,49 @@ func TestGetModelTargets(t *testing.T) {
 	tpm, rpm, costRate = GetModelTargets("override-all-zero")
 	if tpm != 100000 || rpm != 60 || costRate != 1.0 {
 		t.Fatalf("GetModelTargets(all-zero override) = (%v, %v, %v), want (100000, 60, 1.0)", tpm, rpm, costRate)
+	}
+}
+
+func TestGetModelBasePrice(t *testing.T) {
+	saveSettingSnapshot(t)
+	dynamicPricingSetting.BasePriceUSDPerMillion = 2.5
+	dynamicPricingSetting.PerModel = map[string]ModelPricingOverride{
+		"custom": {BasePriceUSDPerMillion: 5},
+	}
+
+	if got := GetModelBasePrice("inherit"); got != 2.5 {
+		t.Fatalf("GetModelBasePrice(inherit) = %v, want 2.5", got)
+	}
+	if got := GetModelBasePrice("custom"); got != 5 {
+		t.Fatalf("GetModelBasePrice(custom) = %v, want 5", got)
+	}
+}
+
+func TestValidateRejectsUnsafePricingControls(t *testing.T) {
+	valid := GetSetting()
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("default setting should validate: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*DynamicPricingSetting)
+	}{
+		{"max factor NaN", func(s *DynamicPricingSetting) { s.MaxFactor = math.NaN() }},
+		{"alpha out of range", func(s *DynamicPricingSetting) { s.AlphaLoad = 1.1 }},
+		{"step below zero", func(s *DynamicPricingSetting) { s.MaxStepDown = -0.1 }},
+		{"negative channel cost", func(s *DynamicPricingSetting) { s.ChannelCosts = map[string]float64{"1": -1} }},
+		{"infinite model base price", func(s *DynamicPricingSetting) {
+			s.PerModel = map[string]ModelPricingOverride{"m": {BasePriceUSDPerMillion: math.Inf(1)}}
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setting := valid
+			tt.mutate(&setting)
+			if err := setting.Validate(); err == nil {
+				t.Fatal("Validate returned nil for unsafe setting")
+			}
+		})
 	}
 }

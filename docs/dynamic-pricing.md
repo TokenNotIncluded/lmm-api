@@ -20,16 +20,16 @@ The feature is implemented in three layers:
 At a high level the factor is the product of two ideas:
 
 1. **Cost floor.** The multiplier never lets the effective price undercut
-   what the upstream actually costs. The anchor cost `C` is the larger of the
-   expected route cost (cheap channel + failover premium) and the smoothed
-   measured unit cost of recent traffic.
+   `cost_floor_factor × upstream cost`. The anchor cost `C` is the larger of
+   the expected route cost (cheap channel + failover premium) and the smoothed
+   measured unit cost of recent traffic, then scaled by `cost_floor_factor`.
 2. **Supply–demand premium.** Excess load above configured targets (tokens,
    requests, or upstream cost rate) raises the multiplier, shaped by a
    deadzone and a non-linear exponent, capped at `max_factor`, and moved with
    an asymmetric EMA plus per-tick step clamps.
 
-The multiplier is read once per request on the billing path (see the
-[Pricing integration caveat](#known-limitations--out-of-scope)) and applied as an extra ratio
+The multiplier is read once per request on the billing path (see
+[Pricing integration](#known-limitations--out-of-scope)) and applied as an extra ratio
 (`dynamic_pricing`) on top of the normal model price. Revenue is deliberately
 never used as a load input (see [Design rationale](#design-rationale)).
 
@@ -57,15 +57,15 @@ following steps, exactly in this order:
    `costUSD × 1e6 / tokens`) is smoothed with an EMA using `alpha_load`. If
    the window carried no tokens, the previous EMA is kept.
 
-3. **Effective cost** — the anchor for the factor, never below what we pay:
+3. **Effective cost** — the anchor for the factor, never below the configured
+   cost floor:
 
    ```
-   C = max(C_route, EMA(actual unit cost))
+   C = max(C_route, EMA(actual unit cost)) × cost_floor_factor
    ```
 
-   This is the cost floor. `cost_floor_factor` is carried in the engine's
-   public signature but is **not** multiplied into `C` by the current
-   implementation (see the [configuration table](#configuration)).
+   Costs are USD per 1M tokens. `C` is compared with the model's configured
+   `base_price_usd_per_million` to produce a price multiplier.
 
 4. **Raw load** — how far the window exceeded the targets, the maximum over
    the dimensions whose target is positive:
@@ -92,11 +92,14 @@ following steps, exactly in this order:
 7. **Target multiplier**:
 
    ```
-   target = 1 + (max_factor − 1) × heat
+   cost_factor = C / base_price_usd_per_million
+   load_factor = 1 + (max_factor − 1) × heat
+   target = clamp(max(cost_factor, load_factor), 1, max_factor)
    ```
 
-   In `[1, max_factor]`. If the effective cost is unknown/not positive
-   (feature off for this model), the target is `1.0` (base price).
+   In `[1, max_factor]`. If the effective cost is unknown/not positive, the
+   target is `1.0` (base price). A zero base-price setting uses the safe
+   reference value `$1 / 1M tokens` for backwards compatibility.
 
 8. **Asymmetric EMA** toward the target — `alpha_up` when the factor must
    rise, `alpha_down` when it must fall. As a pure function a non-positive
@@ -112,13 +115,17 @@ following steps, exactly in this order:
    (`EnforceBounds` still skips the clamp when called as a pure function
    with a non-positive `prev`.)
 
-**No-cost-signal tick.** When a tick carries no upstream cost information at
-all (`cheap ≤ 0` AND `backup ≤ 0` AND window cost `≤ 0`) — e.g. the admin
-removed the `channel_costs` entries mid-run — the model is treated as having
-lost its cost configuration: `Tick` resets `CostEMA = 0` and `Factor = 1.0`,
-sets `updated_at`, and returns `1.0` immediately. A stale warm `CostEMA`
-must never keep the multiplier elevated once there is no cost signal to
-anchor it, so prices fall back to the configured base.
+**No-cost-signal tick.** When a non-empty tick carries no upstream cost
+information (`cheap ≤ 0`, `backup ≤ 0`, and window cost `≤ 0`) — e.g. the
+admin removed the `channel_costs` entries mid-run — the model is treated as
+having lost its cost configuration: `Tick` resets `CostEMA = 0` and
+`Factor = 1.0`, sets `updated_at`, and returns `1.0` immediately. A stale warm
+`CostEMA` must never keep the multiplier elevated once there is no cost signal
+to anchor it, so prices fall back to the configured base.
+
+For a genuinely idle model, the ticker sends an explicit zero-load sample
+instead of resetting it. Its load/cost EMAs and factor then decay gradually
+toward the base price, so a high factor cannot persist after traffic stops.
 
 The persisted state per model is `{load_ema, cost_ema, factor, updated_at}`.
 
@@ -154,23 +161,24 @@ key is `dynamic_pricing_setting.<field>` (for example
 | DB key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `dynamic_pricing_setting.enabled` | bool | `false` | Master switch. The tick is a no-op while disabled (re-checked per tick, no restart needed). |
-| `dynamic_pricing_setting.tick_interval_seconds` | int | `60` | Sleep between ticks. Re-read every iteration; non-positive values fall back to 60 s. |
+| `dynamic_pricing_setting.tick_interval_seconds` | int | `60` | Sleep between ticks. Re-read every iteration; it must be positive. An invalid configuration sleeps at the 60 s fallback but skips the tick. |
 | `dynamic_pricing_setting.window_minutes` | int | `5` | Sliding window length; consume logs in `[now−window, now]` are aggregated per tick. Must be positive or the tick is skipped. |
 | `dynamic_pricing_setting.target_tpm` | float | `100000` | Tokens-per-minute target; one load dimension. |
 | `dynamic_pricing_setting.target_rpm` | float | `60` | Requests-per-minute target; one load dimension. |
 | `dynamic_pricing_setting.target_cost_rate` | float | `1.0` | Upstream-cost rate target, USD per minute; one load dimension. |
+| `dynamic_pricing_setting.base_price_usd_per_million` | float | `1.0` | Reference price in USD per 1M tokens used to convert the upstream cost floor into a multiplier. Zero falls back to `1.0`. |
 | `dynamic_pricing_setting.alpha_load` | float | `0.3` | EMA smoothing for raw load (and for the measured unit cost). First sample is taken directly (cold start). |
 | `dynamic_pricing_setting.alpha_up` | float | `0.30` | Asymmetric-EMA alpha used when the factor must rise. |
 | `dynamic_pricing_setting.alpha_down` | float | `0.05` | Asymmetric-EMA alpha used when the factor must fall. |
-| `dynamic_pricing_setting.cost_floor_factor` | float | `1.2` | Declared cost-floor scale. Currently carried through the engine's public signature but **not applied** — the floor is realized by `max(C_route, costEMA)` without scaling. Reserved for future use; do not rely on it changing behavior. |
+| `dynamic_pricing_setting.cost_floor_factor` | float | `1.2` | Multiplies the effective upstream cost before it is compared with the model base price. Must be finite and at least `1`. |
 | `dynamic_pricing_setting.max_factor` | float | `3.0` | Absolute ceiling for the multiplier; the absolute range is `[1, max_factor]`. |
-| `dynamic_pricing_setting.load_deadzone` | float | `0.4` | Load at or below this fraction of target produces no heat. Invalid values (outside `[0,1)`) default to 0. |
-| `dynamic_pricing_setting.heat_gamma` | float | `2.0` | Non-linear shaping exponent on heat; values `< 1` default to 1. |
+| `dynamic_pricing_setting.load_deadzone` | float | `0.4` | Load at or below this fraction of target produces no heat. It must be finite and in `[0,1)`. |
+| `dynamic_pricing_setting.heat_gamma` | float | `2.0` | Non-linear shaping exponent on heat; it must be finite and at least `1`. |
 | `dynamic_pricing_setting.max_step_up` | float | `0.10` | Per-tick upward clamp: `mult ≤ prev × (1 + 0.10)`. |
 | `dynamic_pricing_setting.max_step_down` | float | `0.03` | Per-tick downward clamp: `mult ≥ prev × (1 − 0.03)`. |
-| `dynamic_pricing_setting.failover_probability` | float | `0.15` | Expected probability of failing over to the backup channel, used in the route cost; clamped to `[0,1]`. No effect when the backup cost is unknown or ≤ cheap. |
+| `dynamic_pricing_setting.failover_probability` | float | `0.15` | Expected probability of failing over to the backup channel, used in the route cost; it must be finite and in `[0,1]`. No effect when the backup cost is unknown or ≤ cheap. |
 | `dynamic_pricing_setting.channel_costs` | map (JSON) | `{}` | Upstream cost in USD per 1M tokens keyed by channel ID (string keys, e.g. `{"12":1.8}`). Empty means no costs configured. |
-| `dynamic_pricing_setting.per_model` | map (JSON) | `{}` | Per-model overrides of the three load targets, e.g. `{"gpt-5":{"target_tpm":50000}}`. A zero override field (or an absent model) inherits the global target; all-zero override == no override. |
+| `dynamic_pricing_setting.per_model` | map (JSON) | `{}` | Per-model overrides of the three load targets and optional `base_price_usd_per_million`, e.g. `{"gpt-5":{"target_tpm":50000,"base_price_usd_per_million":8}}`. A zero override field (or an absent model) inherits the global value. |
 
 ### How keys are applied
 
@@ -193,8 +201,9 @@ Two caveats on the update plumbing:
   the multiplier itself (it is read live per request, not cached), but there
   is no generic settings UI guaranteed to render these fields — the API is the
   integration point.
-- `cost_floor_factor` is accepted and stored but, as noted above, is not
-  applied by the current engine.
+- Invalid numeric controls, restored factors outside `[1, max_factor]`, and
+  non-finite channel costs fail closed: the tick is skipped or the state is
+  reset to a safe neutral value.
 
 ## Status API
 
@@ -213,6 +222,7 @@ Two caveats on the update plumbing:
       "target_tpm": 100000,
       "target_rpm": 60,
       "target_cost_rate": 1.0,
+      "base_price_usd_per_million": 1.0,
       "alpha_load": 0.3,
       "alpha_up": 0.30,
       "alpha_down": 0.05,
@@ -265,30 +275,19 @@ exists (`perf_metrics` table via `perf_metrics_setting`), but the dynamic
 pricing ticker currently reads the raw consume-log table only; wiring it to a
 dedicated aggregation source is future work.
 
-**Models without channel-cost config are not priced up.** Channels without a
-`channel_costs` entry (or with cost `≤ 0`) are excluded from the upstream-cost
-calculation and from cheap/backup route selection. A model whose channels all
-lack configured costs is *still ticked* whenever it appears in the window, but
-its tick carries no cost signal, so the [no-cost-signal rule](#no-cost-signal-tick)
-applies: `Tick` resets the factor to `1.0` (base price). The multiplier never
-rises above base for such a model — but the reset also means a single
-unconfigured window erases a warm factor (see the
-[churn caveat](#churn-caveat-transient-unconfigured-windows-reset-a-warm-factor)).
+**Mixed channel windows use priced traffic only.** Channels without a
+`channel_costs` entry (or with cost `≤ 0`) are excluded from the priced token
+and request denominators, upstream-cost calculation, and cheap/backup route
+selection. Their traffic is tracked separately. This prevents a large
+unconfigured channel from diluting the cost rate calculated from configured
+channels. If a window contains only unpriced traffic, the model falls back to
+the base price.
 
-**Churn caveat: transient unconfigured windows reset a warm factor.** The
-no-cost-signal reset cannot distinguish "the admin removed the `channel_costs`
-entries" from "this window happened to be served only by channels that have no
-configured cost". A single window served entirely by unconfigured channels
-hard-resets the model's factor to `1.0` even if it was warm, and the premium
-then re-climbs from there at at most `+max_step_up` per tick (default `+10%`).
-If a dynamically-priced model may be served by unconfigured channels (e.g.
-via auto-failover or mixed routing), configure `channel_costs` for **all**
-channels that can serve it, or accept occasional resets to base price.
-
-**Zero-traffic models are not ticked.** The tick only iterates `(model,
-channel)` rows present in the window; a model with no consume logs in the
-window keeps its last state untouched (and has no state at all after a fresh
-start).
+**Zero-traffic models decay.** The ticker iterates models already held in
+memory even when the current window has no consume rows. Each such model gets
+a zero-load sample, so its factor and EMAs move down under the configured
+step/EMA controls. Redis state is also clamped to the current absolute factor
+range when restored.
 
 **Load above target only warns.** When `load_ema > 1.0` the ticker logs a
 warning; dynamic pricing never rejects or sheds traffic (see limitations).
@@ -302,23 +301,13 @@ warning; dynamic pricing never rejects or sheds traffic (see limitations).
 - **No frontend panel yet.** There is no admin UI for this feature; the
   status API (`/api/dynamic_pricing/status`) is the integration point, and
   configuration is done through the options API / settings keys.
-- **Pricing integration caveat.** The multiplier is injected into both the
-  token-based pre-consume and the per-call settlement paths as an extra ratio
-  (`dynamic_pricing`) on `OtherRatios`, so pre-consume and post-consume stay
-  consistent. **Exception:** when a task adaptor's `AdjustBillingOnSubmit`
-  returns adjusted ratios, the caller replaces the entire ratio map
-  (`ReplaceOtherRatios`), which drops the `dynamic_pricing` ratio from that
-  call's final settlement.
-- **Tiered-expression models bypass the multiplier.** Models billed via a
-  tiered expression (`billing_mode = tiered_expr`) are priced by
-  `modelPriceHelperTiered`, which returns before `ModelPriceHelper`'s
-  `dynamic_pricing` ratio injection; they therefore never receive the dynamic
-  multiplier (verified in `relay/helper/price.go`: the tiered path constructs
-  its own `PriceData` from the expression result and never calls
-  `dynamic_pricing.GetMultiplier`). Only models billed by fixed price
-  (`model_price`) or ratio (`model_ratio`) are multiplied.
-- **`cost_floor_factor` is reserved, not applied** (see configuration).
-- **Per-model overrides cover only the three load targets**; the shaping
+- **Pricing integration.** The multiplier is captured as an extra
+  `dynamic_pricing` ratio for fixed-price, ratio, per-call, and tiered
+  pre-consume paths. Audio/realtime settlement and tiered post-settlement use
+  the same captured ratio. Task submit-time ratio replacement merges the
+  captured dynamic ratio instead of dropping it.
+- **Per-model overrides cover the three load targets and the reference base
+  price**; the shaping
   parameters (deadzone, gamma, alphas, clamps, `max_factor`,
   `failover_probability`) are global.
 
@@ -332,14 +321,15 @@ Assume a model routed through two channels with configured costs
 C_route = 1.0 + 0.15 × (1.8 − 1.0) = 1.12
 ```
 
-Assume the smoothed measured unit cost stays at or below `1.12`, so the cost
-floor does not bind: `C = 1.12`. With the defaults `max_factor = 3.0`,
-`load_deadzone = 0.4`, `heat_gamma = 2.0`, the steady-state multiplier
-(`target = 1 + (3−1) × heat`) at a given load `L` is:
+Assume the smoothed measured unit cost stays at or below `1.12`. With the
+default `cost_floor_factor = 1.2`, `base_price_usd_per_million = 1.0`,
+`max_factor = 3.0`, `load_deadzone = 0.4`, and `heat_gamma = 2.0`, the
+effective cost is `C = 1.344` and the steady-state multiplier is
+`max(1.344, 1 + (3−1) × heat)` at a given load `L`:
 
 | Load `L` | `x = (L − 0.4) / (1 − 0.4)` | `heat = x²` | Multiplier |
 | --- | --- | --- | --- |
-| 40% (0.4) | 0 | 0 | **1.00×** |
+| 40% (0.4) | 0 | 0 | **1.34×** |
 | 70% (0.7) | 0.5 | 0.25 | **1.50×** |
 | 90% (0.9) | 0.833… | 0.694… | **2.39×** |
 | 100% (1.0) | 1 | 1 | **3.00×** |

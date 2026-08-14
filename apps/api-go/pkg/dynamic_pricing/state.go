@@ -22,6 +22,7 @@ package dynamic_pricing
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -111,7 +112,11 @@ func GetMultiplier(model string) float64 {
 		f = st.Factor
 	}
 	statesMu.RUnlock()
-	if f > 0 {
+	if f >= 1 && !math.IsNaN(f) && !math.IsInf(f, 0) {
+		maxFactor := dynamic_pricing_setting.GetMaxFactor()
+		if f > maxFactor {
+			return maxFactor
+		}
 		return f
 	}
 	return 1.0
@@ -135,6 +140,11 @@ func LoadFromRedis(model string) (*ModelState, bool) {
 		common.SysError(fmt.Sprintf("dynamic_pricing: unmarshal state for model %s: %s", model, err.Error()))
 		return nil, false
 	}
+	setting := dynamic_pricing_setting.GetSetting()
+	if err := setting.Validate(); err != nil {
+		return nil, false
+	}
+	ClampState(&st, setting.MaxFactor)
 	SetState(model, &st)
 	// Return a defensive copy: the stored pointer must only be mutated under
 	// SetState (the ticker does Tick on the returned value before the next

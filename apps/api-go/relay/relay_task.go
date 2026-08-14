@@ -247,6 +247,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	// 11. 提交后计费调整：让适配器根据上游实际返回调整 OtherRatios
 	finalQuota := info.PriceData.Quota
 	if adjustedRatios := adaptor.AdjustBillingOnSubmit(info, taskData); len(adjustedRatios) > 0 {
+		adjustedRatios = preserveDynamicPricingRatio(info, adjustedRatios)
 		if adjustedQuota, ok := recalcQuotaFromRatios(info, adjustedRatios); ok {
 			// 基于调整后的 ratios 重新计算 quota
 			finalQuota = adjustedQuota
@@ -322,6 +323,7 @@ func taskPromptFromContext(c *gin.Context) (string, bool) {
 // recalcQuotaFromRatios 根据 adjustedRatios 重新计算 quota。
 // 公式: baseQuota × ∏(ratio) — 其中 baseQuota 是不含 OtherRatios 的基础额度。
 func recalcQuotaFromRatios(info *relaycommon.RelayInfo, ratios map[string]float64) (int, bool) {
+	ratios = preserveDynamicPricingRatio(info, ratios)
 	// 从 PriceData 获取不含 OtherRatios 的基础价格
 	baseQuota := info.PriceData.RemoveOtherRatiosFromFloat(float64(info.PriceData.Quota))
 	priceData := info.PriceData
@@ -333,6 +335,24 @@ func recalcQuotaFromRatios(info *relaycommon.RelayInfo, ratios map[string]float6
 	quota, clamp := common.QuotaFromFloatChecked(result)
 	noteTaskQuotaClamp(info, clamp)
 	return quota, true
+}
+
+// preserveDynamicPricingRatio keeps the multiplier captured before the task
+// was sent upstream. Task adaptors commonly return only their submit-time
+// dimensions (for example duration or size); replacing the whole map without
+// this merge would silently drop the dynamic price from final settlement.
+func preserveDynamicPricingRatio(info *relaycommon.RelayInfo, ratios map[string]float64) map[string]float64 {
+	merged := make(map[string]float64, len(ratios)+1)
+	for key, ratio := range ratios {
+		merged[key] = ratio
+	}
+	if info == nil {
+		return merged
+	}
+	if dynamicRatio, ok := info.PriceData.OtherRatios()["dynamic_pricing"]; ok {
+		merged["dynamic_pricing"] = dynamicRatio
+	}
+	return merged
 }
 
 // noteTaskQuotaClamp records the first quota saturation event onto the task's

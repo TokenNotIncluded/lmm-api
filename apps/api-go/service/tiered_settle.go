@@ -113,6 +113,9 @@ func refreshTieredBillingGroup(relayInfo *relaycommon.RelayInfo) (*billingexpr.B
 	if err != nil {
 		return nil, err
 	}
+	scaledQuota, clamp := applyDynamicPricingToQuota(relayInfo, estimatedQuota)
+	noteQuotaClamp(relayInfo, clamp)
+	estimatedQuota = scaledQuota
 	snap.GroupRatio = groupRatio
 	snap.EstimatedQuotaAfterGroup = estimatedQuota
 	return snap, nil
@@ -185,5 +188,10 @@ func TryTieredSettle(relayInfo *relaycommon.RelayInfo, params billingexpr.TokenP
 	// (text, audio, WSS) consumes the returned quota. First non-nil wins.
 	noteQuotaClamp(relayInfo, tr.Clamp)
 
-	return true, tr.ActualQuotaAfterGroup, &tr
+	quota = tr.ActualQuotaAfterGroup
+	scaledQuota, clamp := applyDynamicPricingToQuota(relayInfo, quota)
+	noteQuotaClamp(relayInfo, clamp)
+	quota = scaledQuota
+
+	return true, quota, &tr
 }

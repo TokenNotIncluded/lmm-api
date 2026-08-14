@@ -12,6 +12,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
+	"github.com/QuantumNous/new-api/setting/dynamic_pricing_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	hosttypes "github.com/QuantumNous/new-api/types"
@@ -164,8 +165,8 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 	// 动态定价：在预扣与结算两个路径之前注入倍率，使 pre-consume 与 post-consume 一致。
 	// 两条计费分支的预扣额度计算都必须发生在此注入之后，确保 ratio-billed
 	// (非 usePrice) 模型的 pre-consume 同样包含动态倍率。
-	if mult := dynamic_pricing.GetMultiplier(info.OriginModelName); mult != 1.0 {
-		priceData.AddOtherRatio("dynamic_pricing", mult)
+	if dynamic_pricing_setting.IsEnabled() {
+		priceData.AddOtherRatio("dynamic_pricing", dynamic_pricing.GetMultiplier(info.OriginModelName))
 	}
 	if !freeModel {
 		if usePrice {
@@ -254,8 +255,8 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (hostt
 	// 动态定价：按次计费同样应用模型倍率。注入必须位于 Quota 写入之前，
 	// 这样 priceData 额度的所有下游使用（relay_task 的预扣按 OtherRatios 折算、
 	// task_billing 的差额结算）都能看到该倍率。
-	if mult := dynamic_pricing.GetMultiplier(info.OriginModelName); mult != 1.0 {
-		priceData.AddOtherRatio("dynamic_pricing", mult)
+	if dynamic_pricing_setting.IsEnabled() {
+		priceData.AddOtherRatio("dynamic_pricing", dynamic_pricing.GetMultiplier(info.OriginModelName))
 	}
 
 	// 预扣额度（基础额度，不含 OtherRatios；下游统一按 OtherRatios 折算，
@@ -354,6 +355,16 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptT
 		FreeModel:         freeModel,
 		GroupRatioInfo:    groupRatioInfo,
 		QuotaToPreConsume: preConsumedQuota,
+	}
+	if dynamic_pricing_setting.IsEnabled() {
+		mult := dynamic_pricing.GetMultiplier(info.OriginModelName)
+		priceData.AddOtherRatio("dynamic_pricing", mult)
+		quota, err := common.QuotaFromFloatStrict(float64(preConsumedQuota) * mult)
+		if err != nil {
+			return hosttypes.PriceData{}, err
+		}
+		priceData.QuotaToPreConsume = quota
+		snapshot.EstimatedQuotaAfterGroup = quota
 	}
 
 	logger.LogDebug(c, "model_price_helper_tiered result: model=%s preConsume=%d quotaBeforeGroup=%.2f groupRatio=%.2f tier=%s", info.OriginModelName, preConsumedQuota, quotaBeforeGroup, groupRatioInfo.GroupRatio, trace.MatchedTier)

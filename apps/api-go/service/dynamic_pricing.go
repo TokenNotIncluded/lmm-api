@@ -53,12 +53,16 @@ type dynamicPricingWindowRow struct {
 // rows, plus the cheap/backup route costs derived from the configured channel
 // costs of the channels seen in the window.
 type dynamicPricingModelWindow struct {
-	tokens       float64
-	requests     float64
-	costUSD      float64         // sum of tokens×configured channel cost / 1e6, USD
-	cheap        float64         // cheapest configured cost among the model's channels in window; 0 = unknown
-	backup       float64         // second-cheapest configured cost; 0 = none
-	channelCosts map[int]float64 // configured cost per channel, deduped
+	tokens           float64
+	requests         float64
+	pricedTokens     float64         // tokens from channels with a configured cost
+	pricedRequests   float64         // requests from channels with a configured cost
+	unpricedTokens   float64         // tokens from channels without a configured cost
+	unpricedRequests float64         // requests from channels without a configured cost
+	costUSD          float64         // sum of priced tokens×configured cost / 1e6, USD
+	cheap            float64         // cheapest configured cost among the model's channels in window; 0 = unknown
+	backup           float64         // second-cheapest configured cost; 0 = none
+	channelCosts     map[int]float64 // configured cost per channel, deduped
 }
 
 // StartDynamicPricingTicker launches the background pricing ticker
@@ -107,6 +111,10 @@ func runDynamicPricingTick() {
 	if !s.Enabled {
 		return
 	}
+	if err := s.Validate(); err != nil {
+		common.SysError(fmt.Sprintf("dynamic pricing: invalid configuration: %s", err.Error()))
+		return
+	}
 	if s.WindowMinutes <= 0 {
 		common.SysLog("dynamic pricing: window_minutes must be positive, tick skipped")
 		return
@@ -126,9 +134,29 @@ func runDynamicPricingTick() {
 		return
 	}
 	perModel := aggregateDynamicPricingWindow(rows)
-	for modelName, mw := range perModel {
+	modelNames := make(map[string]struct{}, len(perModel))
+	for modelName := range perModel {
+		modelNames[modelName] = struct{}{}
+	}
+	// Tick models already in memory even when the current window has no rows.
+	// This provides a zero-load sample so stale factors decay instead of
+	// remaining elevated forever after traffic stops.
+	for _, modelName := range dynamic_pricing.AllModels() {
+		modelNames[modelName] = struct{}{}
+	}
+	orderedModels := make([]string, 0, len(modelNames))
+	for modelName := range modelNames {
+		orderedModels = append(orderedModels, modelName)
+	}
+	sort.Strings(orderedModels)
+	for _, modelName := range orderedModels {
+		mw := perModel[modelName]
+		if mw == nil {
+			mw = &dynamicPricingModelWindow{}
+		}
 		// Resolve per-model target overrides into the tick's setting snapshot.
 		s.TargetTPM, s.TargetRPM, s.TargetCostRate = dynamic_pricing_setting.GetModelTargets(modelName)
+		s.BasePriceUSDPerMillion = dynamic_pricing_setting.GetModelBasePrice(modelName)
 
 		// Cold start: in-memory state, then Redis persistence, then fresh.
 		// A fresh state seeds Factor=1.0 so the very first tick is clamped by
@@ -144,16 +172,20 @@ func runDynamicPricingTick() {
 				state = &dynamic_pricing.ModelState{Factor: 1.0}
 			}
 		}
+		dynamic_pricing.ClampState(state, s.MaxFactor)
 
 		in := dynamic_pricing.TickInput{
-			Model:                 modelName,
-			WindowTokens:          mw.tokens,
-			WindowRequests:        mw.requests,
-			WindowUpstreamCostUSD: mw.costUSD,
-			WindowMinutes:         windowMinutes,
-			CheapCost:             mw.cheap,
-			BackupCost:            mw.backup,
-			Now:                   now,
+			Model:                  modelName,
+			WindowTokens:           mw.pricedTokens,
+			WindowRequests:         mw.pricedRequests,
+			WindowUpstreamCostUSD:  mw.costUSD,
+			WindowMinutes:          windowMinutes,
+			CheapCost:              mw.cheap,
+			BackupCost:             mw.backup,
+			WindowUnpricedTokens:   mw.unpricedTokens,
+			WindowUnpricedRequests: mw.unpricedRequests,
+			BasePriceUSDPerMillion: s.BasePriceUSDPerMillion,
+			Now:                    now,
 		}
 		dynamic_pricing.Tick(state, in, s)
 		dynamic_pricing.SetState(modelName, state)
@@ -196,8 +228,12 @@ func aggregateDynamicPricingWindow(rows []dynamicPricingWindowRow) map[string]*d
 
 		cost, ok := dynamic_pricing_setting.GetChannelCost(row.ChannelId)
 		if !ok || cost <= 0 {
-			continue // channel without configured cost: tokens excluded from cost
+			mw.unpricedTokens += float64(row.Tokens)
+			mw.unpricedRequests += float64(row.Requests)
+			continue // channel without configured cost: excluded from priced load/cost
 		}
+		mw.pricedTokens += float64(row.Tokens)
+		mw.pricedRequests += float64(row.Requests)
 		mw.costUSD += float64(row.Tokens) / 1e6 * cost
 		if _, seen := mw.channelCosts[row.ChannelId]; !seen {
 			mw.channelCosts[row.ChannelId] = cost
