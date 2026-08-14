@@ -355,6 +355,19 @@ export function UserAuthForm({
       >
         {hasAlternativeLogin && alternativeLoginMethods}
 
+        {hasAlternativeLogin && passwordLoginEnabled ? (
+          <div className='relative py-0.5' aria-hidden='true'>
+            <div className='absolute inset-0 flex items-center'>
+              <span className='w-full border-t' />
+            </div>
+            <div className='relative flex justify-center text-xs'>
+              <span className='bg-background text-muted-foreground px-3'>
+                {t('Or')}
+              </span>
+            </div>
+          </div>
+        ) : null}
+
         {passwordLoginEnabled && (
           <>
             {/* Username Field */}
