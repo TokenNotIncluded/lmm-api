@@ -2113,6 +2113,14 @@ func TestAssistantGiftRequestUsesOneTimeDecisionToolForL1(t *testing.T) {
 		assert.Equal(t, []string{"prepare_new_user_gift"}, assistantReadChain(context), message)
 		assert.True(t, assistantNewUserGiftWorkflowRequired(context), message)
 	}
+
+	// A new user may ask for the amount without saying “礼包” or “福利”.
+	// This still must use the live, one-time gift decision workflow rather than
+	// letting the model invent an amount in a normal answer.
+	context.LatestUserRequest = "那我作为一个新用户，你希望给我多少额度"
+	assert.Equal(t, []string{"prepare_new_user_gift"}, assistantReadChain(context))
+	assert.True(t, assistantNewUserGiftWorkflowRequired(context))
+	assert.False(t, assistantNewUserGiftRequest("新用户的账户额度在哪里查看"))
 }
 
 func TestAssistantGiftWorkflowCarriesIntoSubstantiveFollowUp(t *testing.T) {

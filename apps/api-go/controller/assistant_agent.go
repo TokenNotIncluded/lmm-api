@@ -763,11 +763,22 @@ func assistantPublicActivityQuestion(text string) bool {
 
 func assistantNewUserGiftRequest(text string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(text))
-	return assistantTextContainsAny(normalized,
+	if assistantTextContainsAny(normalized,
 		"新用户礼包", "新用户福利", "新手礼包", "新手奖励", "新用户奖励", "新人礼包", "新人福利", "新手福利",
 		"welcome gift", "welcome bonus", "new-user gift", "new user gift", "new user bonus",
 		"免费额度", "赠送额度", "送我额度", "刀额度", "美元额度", "美金额度", "free credit", "welcome credit",
-	)
+	) {
+		return true
+	}
+	// Users often ask about the amount without naming the gift, for example
+	// “作为一个新用户，你希望给我多少额度”. Keep this narrow: a new-user
+	// marker plus a credit/amount term and an explicit request must be present,
+	// so ordinary quota, pricing, or account-balance questions do not enter the
+	// one-time reward workflow by accident.
+	hasNewUserMarker := assistantTextContainsAny(normalized, "新用户", "新手", "新人", "new user", "new-user", "welcome")
+	hasCreditTerm := assistantTextContainsAny(normalized, "额度", "credit", "credits")
+	hasRequestTerm := assistantTextContainsAny(normalized, "多少", "给我", "送我", "发我", "领", "how much", "can i get", "what amount")
+	return hasNewUserMarker && hasCreditTerm && hasRequestTerm
 }
 
 // assistantReadChain returns the smallest deterministic read chain

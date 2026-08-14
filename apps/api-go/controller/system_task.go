@@ -68,15 +68,15 @@ func GetCurrentSystemTask(c *gin.Context) {
 func ListSystemTasks(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.Query("limit"))
 
-	tasks, err := model.ListSystemTasks(limit)
+	tasks, err := model.ListSystemTaskSummaries(limit)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
 
-	responses := make([]model.SystemTaskResponse, 0, len(tasks))
+	responses := make([]model.SystemTaskSummaryResponse, 0, len(tasks))
 	for _, task := range tasks {
-		responses = append(responses, task.ToResponse())
+		responses = append(responses, task.ToSummaryResponse())
 	}
 
 	c.JSON(http.StatusOK, gin.H{

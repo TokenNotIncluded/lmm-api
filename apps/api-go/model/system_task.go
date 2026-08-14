@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/json"
 	"errors"
 	"unicode/utf8"
 
@@ -66,6 +67,25 @@ type SystemTaskResponse struct {
 	Payload   any              `json:"payload"`
 	State     any              `json:"state"`
 	Result    any              `json:"result"`
+	Error     string           `json:"error"`
+	LockedBy  string           `json:"locked_by"`
+	CreatedAt int64            `json:"created_at"`
+	UpdatedAt int64            `json:"updated_at"`
+}
+
+// SystemTaskSummaryResponse is the bounded representation used by the task
+// history list. Payloads and results are implementation details of individual
+// handlers and may each be as large as systemTaskJSONMaxBytes. Returning them
+// for every row lets an otherwise harmless list request retain tens of
+// megabytes of JSON in the Go heap. The list only needs progress, so expose a
+// small state projection and leave the full representation to GetSystemTask.
+type SystemTaskSummaryResponse struct {
+	ID        int64            `json:"id"`
+	TaskID    string           `json:"task_id"`
+	Type      string           `json:"type"`
+	Status    SystemTaskStatus `json:"status"`
+	ActiveKey *string          `json:"active_key,omitempty"`
+	State     any              `json:"state,omitempty"`
 	Error     string           `json:"error"`
 	LockedBy  string           `json:"locked_by"`
 	CreatedAt int64            `json:"created_at"`
@@ -193,6 +213,22 @@ func ListSystemTasks(limit int) ([]*SystemTask, error) {
 	}
 	var tasks []*SystemTask
 	err := DB.Order("id desc").Limit(limit).Find(&tasks).Error
+	return tasks, err
+}
+
+// ListSystemTaskSummaries loads only fields needed by the root task history
+// panel. Keeping payload/result out of the SELECT is important because both
+// are bounded per row, not per list response.
+func ListSystemTaskSummaries(limit int) ([]*SystemTask, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	var tasks []*SystemTask
+	err := DB.Select("id, task_id, type, status, active_key, CASE WHEN LENGTH(state) <= ? THEN state ELSE '' END AS state, error, locked_by, created_at, updated_at", systemTaskSummaryStateMaxBytes).
+		Order("id desc").Limit(limit).Find(&tasks).Error
 	return tasks, err
 }
 
@@ -463,6 +499,33 @@ func (task *SystemTask) ToResponse() SystemTaskResponse {
 		CreatedAt: task.CreatedAt,
 		UpdatedAt: task.UpdatedAt,
 	}
+}
+
+// ToSummaryResponse intentionally projects state to progress only. A handler
+// may write arbitrary bounded JSON state, but the list endpoint must not
+// deserialize that entire value for every historical row.
+func (task *SystemTask) ToSummaryResponse() SystemTaskSummaryResponse {
+	return SystemTaskSummaryResponse{
+		ID: task.ID, TaskID: task.TaskID, Type: task.Type, Status: task.Status,
+		ActiveKey: task.ActiveKey, State: decodeSystemTaskProgress(task.State),
+		Error: task.Error, LockedBy: task.LockedBy,
+		CreatedAt: task.CreatedAt, UpdatedAt: task.UpdatedAt,
+	}
+}
+
+const systemTaskSummaryStateMaxBytes = 16 << 10
+
+func decodeSystemTaskProgress(data string) any {
+	if len(data) == 0 || len(data) > systemTaskSummaryStateMaxBytes {
+		return nil
+	}
+	var state struct {
+		Progress *int `json:"progress"`
+	}
+	if err := json.Unmarshal([]byte(data), &state); err != nil || state.Progress == nil {
+		return nil
+	}
+	return map[string]int{"progress": *state.Progress}
 }
 
 func activeSystemTaskStatuses() []string {

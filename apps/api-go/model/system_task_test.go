@@ -407,3 +407,49 @@ func TestTaskHistoryPrune(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, reloaded)
 }
+
+func TestListSystemTaskSummariesOmitsLargePayloadAndResult(t *testing.T) {
+	truncateTables(t)
+	large := strings.Repeat("x", systemTaskJSONMaxBytes-1)
+	taskID, err := GenerateSystemTaskID()
+	require.NoError(t, err)
+	require.NoError(t, DB.Create(&SystemTask{
+		TaskID:  taskID,
+		Type:    SystemTaskTypeAssistantReview,
+		Status:  SystemTaskStatusSucceeded,
+		Payload: large,
+		State:   `{"progress":42,"detail":"not returned by the list"}`,
+		Result:  large,
+	}).Error)
+
+	tasks, err := ListSystemTaskSummaries(20)
+	require.NoError(t, err)
+	require.Len(t, tasks, 1)
+	assert.Empty(t, tasks[0].Payload)
+	assert.Empty(t, tasks[0].Result)
+	summary := tasks[0].ToSummaryResponse()
+	assert.Equal(t, map[string]int{"progress": 42}, summary.State)
+}
+
+func TestSystemTaskSummarySkipsOversizedState(t *testing.T) {
+	task := &SystemTask{State: `{"progress":42,"detail":"` + strings.Repeat("x", systemTaskSummaryStateMaxBytes) + `"}`}
+	summary := task.ToSummaryResponse()
+	assert.Nil(t, summary.State)
+}
+
+func TestListSystemTaskSummariesDoesNotSelectOversizedState(t *testing.T) {
+	truncateTables(t)
+	taskID, err := GenerateSystemTaskID()
+	require.NoError(t, err)
+	require.NoError(t, DB.Create(&SystemTask{
+		TaskID: taskID,
+		Type:   SystemTaskTypeAssistantReview,
+		Status: SystemTaskStatusSucceeded,
+		State:  `{"progress":42,"detail":"` + strings.Repeat("x", systemTaskSummaryStateMaxBytes) + `"}`,
+	}).Error)
+
+	tasks, err := ListSystemTaskSummaries(20)
+	require.NoError(t, err)
+	require.Len(t, tasks, 1)
+	assert.Empty(t, tasks[0].State)
+}

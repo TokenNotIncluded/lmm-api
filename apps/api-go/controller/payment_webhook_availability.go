@@ -87,11 +87,16 @@ func isWaffoPancakeTopUpEnabled() bool {
 }
 
 func isWaffoPancakeWebhookConfigured() bool {
-	return isWaffoPancakeTopUpEnabled()
+	// Webhooks must remain available after new checkouts are disabled or the
+	// active product is rotated. Existing orders can still complete or emit a
+	// refund, and neither path needs the current product id. Keep the
+	// checkout-only product requirement in isWaffoPancakeTopUpEnabled.
+	merchantID, privateKey := service.WaffoPancakeCredentials()
+	return merchantID != "" && privateKey != ""
 }
 
 func isWaffoPancakeWebhookEnabled() bool {
-	return isWaffoPancakeTopUpEnabled()
+	return isPaymentComplianceConfirmed() && isWaffoPancakeWebhookConfigured()
 }
 
 func isEpayTopUpEnabled() bool {
