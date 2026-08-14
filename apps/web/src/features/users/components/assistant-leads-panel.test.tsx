@@ -183,6 +183,20 @@ describe('AssistantLeadsPanel', () => {
           },
         }
       }
+      if (url === '/api/assistant/admin/first-questions') {
+        return {
+          data: {
+            success: true,
+            data: [
+              {
+                question: 'How do I configure the API?',
+                count: 12,
+                last_asked_at: 1_786_400_000,
+              },
+            ],
+          },
+        }
+      }
       if (url === '/api/assistant/admin/funding') {
         return {
           data: {
@@ -292,6 +306,11 @@ describe('AssistantLeadsPanel', () => {
       await flushQueries()
     })
     assert.match(container.textContent ?? '', /36 questions in 30 days/)
+    assert.match(container.textContent ?? '', /Top first questions/)
+    assert.match(
+      container.textContent ?? '',
+      /How do I configure the API?.*12/s
+    )
     assert.match(container.textContent ?? '', /6 profile signals in 30 days/)
     assert.match(container.textContent ?? '', /Math calculation: 3/)
     assert.match(container.textContent ?? '', /Recommendation letter: 5/)

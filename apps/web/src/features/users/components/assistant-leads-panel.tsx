@@ -55,12 +55,14 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import {
+  getAssistantFirstQuestionSummary,
   getAssistantFundingSummary,
   getAssistantIntentSummary,
   getAssistantProfileSummary,
   listAssistantHandoffs,
   resolveAssistantHandoff,
   type AssistantHandoff,
+  type AssistantFirstQuestionSummary,
   type AssistantIntentSummary,
   type AssistantProfileSummary,
 } from '@/features/assistant/api'
@@ -76,9 +78,14 @@ const RESOLVED_HANDOFFS_QUERY_KEY = [
 ] as const
 const INTENT_SUMMARY_QUERY_KEY = ['assistant-admin-intents', 30] as const
 const PROFILE_SUMMARY_QUERY_KEY = ['assistant-admin-profiles', 30] as const
+const FIRST_QUESTION_SUMMARY_QUERY_KEY = [
+  'assistant-admin-first-questions',
+  30,
+] as const
 const FUNDING_SUMMARY_QUERY_KEY = ['assistant-admin-funding', 30] as const
 const EMPTY_INTENTS: AssistantIntentSummary[] = []
 const EMPTY_PROFILES: AssistantProfileSummary[] = []
+const EMPTY_FIRST_QUESTIONS: AssistantFirstQuestionSummary[] = []
 
 const INTENT_LABELS: Record<string, string> = {
   onboarding: 'Onboarding and L1',
@@ -184,6 +191,12 @@ export function AssistantLeadsPanel() {
     staleTime: 30_000,
     retry: false,
   })
+  const firstQuestionsQuery = useQuery({
+    queryKey: FIRST_QUESTION_SUMMARY_QUERY_KEY,
+    queryFn: () => getAssistantFirstQuestionSummary(30),
+    staleTime: 30_000,
+    retry: false,
+  })
   const fundingQuery = useQuery({
     queryKey: FUNDING_SUMMARY_QUERY_KEY,
     queryFn: () => getAssistantFundingSummary(30),
@@ -195,6 +208,7 @@ export function AssistantLeadsPanel() {
   const resolved = resolvedQuery.data ?? []
   const intents = intentsQuery.data ?? EMPTY_INTENTS
   const profiles = profilesQuery.data ?? EMPTY_PROFILES
+  const firstQuestions = firstQuestionsQuery.data ?? EMPTY_FIRST_QUESTIONS
   const funding = fundingQuery.data
   const numberFormatter = useMemo(
     () => new Intl.NumberFormat(intlLocale),
@@ -277,7 +291,12 @@ export function AssistantLeadsPanel() {
   // when a mixed-version deployment does not expose their endpoints yet.
   const requiredQueries = [pendingQuery, resolvedQuery]
   if (requiredQueries.some((query) => isNotFound(query.error))) return null
-  const queries = [...requiredQueries, profilesQuery, fundingQuery]
+  const queries = [
+    ...requiredQueries,
+    profilesQuery,
+    firstQuestionsQuery,
+    fundingQuery,
+  ]
 
   const firstError = queries.find(
     (query) => query.isError && !isNotFound(query.error)
@@ -593,6 +612,55 @@ export function AssistantLeadsPanel() {
     )
   }
 
+  const renderFirstQuestionInsights = () => {
+    if (firstQuestionsQuery.isLoading) {
+      return (
+        <div className='mt-3 space-y-3' aria-hidden='true'>
+          {[1, 2, 3].map((key) => (
+            <Skeleton key={key} className='h-8 w-full' />
+          ))}
+        </div>
+      )
+    }
+    if (firstQuestionsQuery.isError && !isNotFound(firstQuestionsQuery.error)) {
+      return (
+        <p className='text-muted-foreground mt-3 text-sm'>
+          {t('Unable to load first-question insights')}
+        </p>
+      )
+    }
+    if (firstQuestions.length === 0) {
+      return (
+        <p className='text-muted-foreground mt-3 text-sm'>
+          {t('No first-question data yet')}
+        </p>
+      )
+    }
+    return (
+      <ol
+        className='divide-border/70 mt-3 divide-y'
+        data-testid='assistant-first-question-list'
+      >
+        {firstQuestions.map((item, index) => (
+          <li
+            key={`${item.question}-${item.last_asked_at}`}
+            className='flex min-w-0 items-start gap-3 py-3 first:pt-0 last:pb-0'
+          >
+            <span className='text-muted-foreground w-5 shrink-0 pt-0.5 text-xs tabular-nums'>
+              {index + 1}
+            </span>
+            <p className='min-w-0 flex-1 text-sm break-words'>
+              {item.question}
+            </p>
+            <Badge variant='secondary' className='shrink-0 tabular-nums'>
+              {numberFormatter.format(item.count)}
+            </Badge>
+          </li>
+        ))}
+      </ol>
+    )
+  }
+
   const renderInsights = () => (
     <div
       className='grid min-w-0 gap-3 sm:grid-cols-2'
@@ -612,6 +680,16 @@ export function AssistantLeadsPanel() {
           {t('Privacy-minimized profile signals for the last 30 days.')}
         </p>
         {renderProfileInsights()}
+      </section>
+
+      <section className='min-w-0 rounded-lg border p-3 sm:col-span-2 sm:p-4'>
+        <h3 className='text-sm font-medium'>{t('Top first questions')}</h3>
+        <p className='text-muted-foreground mt-1 text-xs'>
+          {t(
+            'Privacy-minimized real-user first questions counted from the first turn in the last 30 days.'
+          )}
+        </p>
+        {renderFirstQuestionInsights()}
       </section>
 
       <section className='min-w-0 rounded-lg border p-3 sm:col-span-2 sm:p-4'>

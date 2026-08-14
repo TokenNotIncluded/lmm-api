@@ -2202,7 +2202,7 @@ describe('AssistantPanel', () => {
             {
               message: {
                 content:
-                  '## Claude Code\n\n1. Install the client.\n2. Set the Base URL to `/v1`.\n\n**Keep your key private.**',
+                  '## Claude Code\n\n1. Install the client.\n2. Set the Base URL to `/v1`.\n\n```bash\ngit clone https://github.com/example/project.git\ncd project\n```\n\n**Keep your key private.**',
               },
             },
           ],
@@ -2239,6 +2239,8 @@ describe('AssistantPanel', () => {
       assert.ok(document.querySelector('h2'))
       assert.equal(document.querySelectorAll('ol > li').length, 2)
       assert.ok(document.querySelector('code'))
+      assert.ok(document.querySelector('.cm-content'))
+      assert.equal(document.querySelector('.cm-lineNumbers'), null)
       assert.ok(document.querySelector('strong'))
       assert.equal(document.querySelector('script'), null)
     } finally {

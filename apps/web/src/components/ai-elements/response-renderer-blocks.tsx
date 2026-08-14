@@ -152,7 +152,6 @@ export function renderCodeBlock(node: CodeBlockNode, key: string): ReactNode {
       key={key}
       language={language}
       maxExpandedLines={44}
-      showLineNumbers
       showToolbar
       title={language}
     >

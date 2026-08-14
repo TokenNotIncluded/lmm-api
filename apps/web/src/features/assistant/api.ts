@@ -385,6 +385,12 @@ export type AssistantProfileSummary = {
   count: number
 }
 
+export type AssistantFirstQuestionSummary = {
+  question: string
+  count: number
+  last_asked_at: number
+}
+
 export type AssistantFundingSummary = {
   start_timestamp: number
   end_timestamp: number
@@ -1349,6 +1355,22 @@ export async function getAssistantProfileSummary(
     skipErrorHandler: true,
   })
   return requireAssistantData(response.data, 'Unable to load profile summary')
+}
+
+export async function getAssistantFirstQuestionSummary(
+  days = 30
+): Promise<AssistantFirstQuestionSummary[]> {
+  const response = await api.get<
+    AssistantAPIResponse<AssistantFirstQuestionSummary[]>
+  >('/api/assistant/admin/first-questions', {
+    params: { days },
+    skipBusinessError: true,
+    skipErrorHandler: true,
+  })
+  return requireAssistantData(
+    response.data,
+    'Unable to load first-question summary'
+  )
 }
 
 export async function getAssistantFundingSummary(

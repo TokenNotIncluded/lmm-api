@@ -421,6 +421,12 @@ const todoTranslations = {
       'Assistant support history and insights',
     'Unable to load intent insights': 'Unable to load intent insights',
     'Unable to load profile insights': 'Unable to load profile insights',
+    'Unable to load first-question insights':
+      'Unable to load first-question insights',
+    'No first-question data yet': 'No first-question data yet',
+    'Top first questions': 'Top first questions',
+    'Privacy-minimized real-user first questions counted from the first turn in the last 30 days.':
+      'Privacy-minimized real-user first questions counted from the first turn in the last 30 days.',
     'Unable to load AI usage and cost': 'Unable to load AI usage and cost',
     'No recent usage': 'No recent usage',
     'Remaining quota units': 'Remaining quota units',
@@ -475,6 +481,11 @@ const todoTranslations = {
     'Assistant support history and insights': 'AI 客服历史与洞察',
     'Unable to load intent insights': '无法加载意图洞察',
     'Unable to load profile insights': '无法加载画像洞察',
+    'Unable to load first-question insights': '无法加载首轮提问洞察',
+    'No first-question data yet': '暂无首轮提问数据',
+    'Top first questions': '首轮提问前十',
+    'Privacy-minimized real-user first questions counted from the first turn in the last 30 days.':
+      '最近 30 天按真实用户首轮提问统计的隐私最小化数据。',
     'Unable to load AI usage and cost': '无法加载 AI 用量与成本',
     'No recent usage': '暂无近期用量',
     'Remaining quota units': '剩余额度单位',
@@ -526,6 +537,11 @@ const todoTranslations = {
     'Assistant support history and insights': 'AI 客服歷史與洞察',
     'Unable to load intent insights': '無法載入意圖洞察',
     'Unable to load profile insights': '無法載入使用者輪廓洞察',
+    'Unable to load first-question insights': '無法載入首輪提問洞察',
+    'No first-question data yet': '暫無首輪提問資料',
+    'Top first questions': '首輪提問前十',
+    'Privacy-minimized real-user first questions counted from the first turn in the last 30 days.':
+      '最近 30 天按真實使用者首輪提問統計的隱私最小化資料。',
     'Unable to load AI usage and cost': '無法載入 AI 用量與成本',
     'No recent usage': '暫無近期用量',
     'Remaining quota units': '剩餘額度單位',
@@ -578,6 +594,12 @@ const todoTranslations = {
       'Historique et analyses du support IA',
     'Unable to load intent insights': 'Impossible de charger les intentions',
     'Unable to load profile insights': 'Impossible de charger les profils',
+    'Unable to load first-question insights':
+      'Impossible de charger les premières questions',
+    'No first-question data yet': 'Aucune première question pour le moment',
+    'Top first questions': 'Top 10 des premières questions',
+    'Privacy-minimized real-user first questions counted from the first turn in the last 30 days.':
+      'Premières questions réelles, minimisées pour la confidentialité, comptées au premier tour sur les 30 derniers jours.',
     'Unable to load AI usage and cost':
       'Impossible de charger l’usage et le coût IA',
     'No recent usage': 'Aucun usage récent',
@@ -634,6 +656,12 @@ const todoTranslations = {
     'Assistant support history and insights': 'AI サポート履歴と分析',
     'Unable to load intent insights': '意図分析を読み込めません',
     'Unable to load profile insights': 'プロフィール分析を読み込めません',
+    'Unable to load first-question insights':
+      '最初の質問の分析を読み込めません',
+    'No first-question data yet': '最初の質問データはまだありません',
+    'Top first questions': '最初の質問トップ10',
+    'Privacy-minimized real-user first questions counted from the first turn in the last 30 days.':
+      '過去30日間の実ユーザーの最初の質問を、初回ターンからプライバシー最小化して集計しています。',
     'Unable to load AI usage and cost': 'AI 使用量とコストを読み込めません',
     'No recent usage': '最近の使用履歴はありません',
     'Remaining quota units': '残りのクォータ単位',
@@ -691,6 +719,12 @@ const todoTranslations = {
       'Не удалось загрузить аналитику намерений',
     'Unable to load profile insights':
       'Не удалось загрузить аналитику профилей',
+    'Unable to load first-question insights':
+      'Не удалось загрузить аналитику первых вопросов',
+    'No first-question data yet': 'Данных первых вопросов пока нет',
+    'Top first questions': 'Топ-10 первых вопросов',
+    'Privacy-minimized real-user first questions counted from the first turn in the last 30 days.':
+      'Первые вопросы реальных пользователей с минимизацией данных за последние 30 дней.',
     'Unable to load AI usage and cost':
       'Не удалось загрузить расходы и использование ИИ',
     'No recent usage': 'Недавнего использования нет',
@@ -746,6 +780,12 @@ const todoTranslations = {
     'Assistant support history and insights': 'Lịch sử và thông tin hỗ trợ AI',
     'Unable to load intent insights': 'Không thể tải thông tin ý định',
     'Unable to load profile insights': 'Không thể tải thông tin hồ sơ',
+    'Unable to load first-question insights':
+      'Không thể tải thông tin câu hỏi đầu tiên',
+    'No first-question data yet': 'Chưa có dữ liệu câu hỏi đầu tiên',
+    'Top first questions': 'Top 10 câu hỏi đầu tiên',
+    'Privacy-minimized real-user first questions counted from the first turn in the last 30 days.':
+      'Câu hỏi đầu tiên của người dùng thật, tối giản dữ liệu riêng tư, được đếm từ lượt đầu trong 30 ngày qua.',
     'Unable to load AI usage and cost': 'Không thể tải mức dùng và chi phí AI',
     'No recent usage': 'Chưa có mức dùng gần đây',
     'Remaining quota units': 'Đơn vị hạn mức còn lại',

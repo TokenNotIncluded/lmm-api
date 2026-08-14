@@ -2279,6 +2279,11 @@ fn tool_result(result: Value) -> AssistantToolOutcome {
     }
 }
 
+// These helpers describe the planned cross-version admin tool surface. They
+// remain intentionally dormant in the Rust compatibility route until the Go
+// implementation is exposed here; keep them out of the clippy gate without
+// changing the public tool contract.
+#[allow(dead_code)]
 fn input_for_trace(arguments: &str) -> Map<String, Value> {
     serde_json::from_str::<Value>(arguments.trim())
         .ok()
@@ -2286,6 +2291,7 @@ fn input_for_trace(arguments: &str) -> Map<String, Value> {
         .unwrap_or_default()
 }
 
+#[allow(dead_code)]
 fn assistant_tool_trace(
     call: &AssistantOpenAiToolCall,
     input: &Map<String, Value>,
@@ -2346,6 +2352,7 @@ fn input_number(input: &Map<String, Value>, key: &str) -> Option<f64> {
         .filter(|n| n.is_finite())
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 struct AssistantTargetUser {
     id: i64,
@@ -2363,6 +2370,7 @@ struct AssistantTargetUser {
     oauth: BTreeMap<String, bool>,
 }
 
+#[allow(dead_code)]
 async fn assistant_target_user(
     state: &AssistantReadState,
     actor: &DashboardUserView,
@@ -2482,6 +2490,7 @@ async fn assistant_target_user(
     Ok(target)
 }
 
+#[allow(dead_code)]
 fn assistant_target_action(target: &AssistantTargetUser, actor: &DashboardUserView) -> Value {
     json!({
         "requires_confirmation": true,
@@ -2494,6 +2503,7 @@ fn assistant_target_action(target: &AssistantTargetUser, actor: &DashboardUserVi
     })
 }
 
+#[allow(dead_code)]
 async fn assistant_user_overview_tool(
     state: &AssistantReadState,
     actor: &DashboardUserView,
@@ -2537,6 +2547,7 @@ async fn assistant_user_overview_tool(
     })
 }
 
+#[allow(dead_code)]
 async fn assistant_user_usage_tool(
     state: &AssistantReadState,
     actor: &DashboardUserView,
@@ -2549,6 +2560,7 @@ async fn assistant_user_usage_tool(
     assistant_usage_tool(state, target.id, input).await
 }
 
+#[allow(dead_code)]
 async fn assistant_navigation_tool(
     state: &AssistantReadState,
     actor: &DashboardUserView,
@@ -2609,6 +2621,7 @@ async fn assistant_navigation_tool(
     }
 }
 
+#[allow(dead_code)]
 async fn assistant_user_action_tool(
     state: &AssistantReadState,
     actor: &DashboardUserView,
