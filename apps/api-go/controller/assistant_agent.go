@@ -54,7 +54,10 @@ const (
 var (
 	assistantMathExpressionPattern = regexp.MustCompile(`^[0-9A-Za-z_+\-*/%^().,\s]+$`)
 	assistantMathVariablePattern   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,31}$`)
-	assistantModelReferencePattern = regexp.MustCompile(`(?i)\b(?:gpt|claude|gemini|deepseek|qwen|llama|mistral|kimi|glm)[a-z0-9._:/-]*\b`)
+	// Require a model-like suffix after the provider family. Without this
+	// boundary, ordinary phrases such as “Claude Code” look like a model ID and
+	// unnecessarily force a catalog read on every client-setup question.
+	assistantModelReferencePattern = regexp.MustCompile(`(?i)\b(?:gpt|claude|gemini|deepseek|qwen|llama|mistral|kimi|glm|codex)(?:[-._:/][a-z0-9]+|[0-9])[a-z0-9._:/-]*\b`)
 	assistantAgentLimiter          = syncx.NewLimiter(assistantAgentMaxConcurrent)
 	assistantTools                 = sync.OnceValue(buildAssistantTools)
 )
@@ -708,6 +711,13 @@ func assistantToolChoiceForContext(userContext assistantUserContext) any {
 			}
 		}
 	}
+	// A bare exact model ID (for example “gpt-5.6-sol 能用吗？”) may not
+	// contain the words “model” or “模型”, so deterministic intent
+	// classification can leave it as `other`. It still must be checked against
+	// the live catalog before the model makes an availability claim.
+	if name == "" && assistantModelReferencePattern.MatchString(userContext.LatestUserRequest) {
+		name = "get_available_models"
+	}
 	if name == "" && assistantExplicitImageRequest(userContext.LatestUserRequest) {
 		name = "prepare_image_generation"
 	}
@@ -813,8 +823,11 @@ func assistantReadChain(userContext assistantUserContext) []string {
 	}
 	if userContext.Intent == model.AssistantIntentCost ||
 		userContext.Intent == model.AssistantIntentModels ||
-		assistantTextContainsAny(text, "模型", "model id", "model_id", "available model") {
-		tools = append(tools, "get_available_models")
+		assistantTextContainsAny(text, "模型", "model id", "model_id", "available model") ||
+		assistantModelReferencePattern.MatchString(text) {
+		if !slices.Contains(tools, "get_available_models") {
+			tools = append(tools, "get_available_models")
+		}
 	}
 	if userContext.Intent == model.AssistantIntentCost && assistantModelReferencePattern.MatchString(text) {
 		tools = append(tools, "get_model_pricing")

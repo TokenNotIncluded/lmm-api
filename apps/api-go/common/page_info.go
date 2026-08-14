@@ -57,21 +57,27 @@ func GetPageQuery(c *gin.Context) *PageInfo {
 		}
 	}
 
-	if pageInfo.PageSize == 0 {
+	if pageInfo.PageSize <= 0 {
 		// 兼容
 		pageSize, _ := strconv.Atoi(c.Query("ps"))
-		if pageSize != 0 {
+		if pageSize > 0 {
 			pageInfo.PageSize = pageSize
 		}
-		if pageInfo.PageSize == 0 {
+		if pageInfo.PageSize <= 0 {
 			pageSize, _ = strconv.Atoi(c.Query("size")) // token page
-			if pageSize != 0 {
+			if pageSize > 0 {
 				pageInfo.PageSize = pageSize
 			}
 		}
-		if pageInfo.PageSize == 0 {
+		if pageInfo.PageSize <= 0 {
 			pageInfo.PageSize = ItemsPerPage
 		}
+	}
+	// GORM treats Limit(-1) as an instruction to remove the LIMIT clause.
+	// Reject non-positive aliases before they reach any paginated query so an
+	// attacker cannot turn a normal list endpoint into an unbounded read.
+	if pageInfo.PageSize <= 0 {
+		pageInfo.PageSize = 1
 	}
 
 	if pageInfo.PageSize > 100 {

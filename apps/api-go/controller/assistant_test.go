@@ -1443,6 +1443,84 @@ func TestAssistantSingleModelQuestionForcesLiveReadWhenAgentLoopIsOff(t *testing
 	assert.Equal(t, "get_available_models", assistantNamedToolChoiceName(assistantToolChoiceForAgentStep(context, map[string]bool{}, map[string]bool{})))
 }
 
+func TestAssistantPersonaMatrixKeepsLiveFactsAndProfileRouting(t *testing.T) {
+	tests := []struct {
+		name      string
+		message   string
+		profile   assistantCustomerProfile
+		firstTool string
+		readChain []string
+	}{
+		{
+			name:      "A technical no payment",
+			message:   "我技术很强，讨厌中转站，也不愿意为法币付款。",
+			profile:   assistantProfileTechnical,
+			firstTool: "",
+		},
+		{
+			name:      "B guided client setup",
+			message:   "我不太懂技术，想在 Windows 上配置 Claude Code。",
+			profile:   assistantProfileGuided,
+			firstTool: "get_service_facts",
+		},
+		{
+			name:      "E daily check-in",
+			message:   "本网站有没有签到活动？",
+			profile:   assistantProfileL0Applicant,
+			firstTool: "get_service_facts",
+			readChain: []string{"get_service_facts"},
+		},
+		{
+			name:      "F exact model availability",
+			message:   "gpt-5.6-sol 能用吗？",
+			profile:   assistantProfileL0Applicant,
+			firstTool: "get_available_models",
+			readChain: []string{"get_available_models"},
+		},
+		{
+			name:      "G enterprise operations",
+			message:   "我们公司关心生产稳定性、并发和 SLA。",
+			profile:   assistantProfileOperator,
+			firstTool: "",
+		},
+		{
+			name:      "promotion seeker",
+			message:   "我用临时邮箱注册，只想领取免费额度。",
+			profile:   assistantProfilePromotion,
+			firstTool: "",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			context := assistantUserContext{
+				AccessLevel:       "L0",
+				CustomerProfile:   test.profile,
+				LatestUserRequest: test.message,
+				Intent:            model.ClassifyAssistantIntent(test.message),
+			}
+			profile, _ := classifyAssistantCustomerProfile(context, test.message)
+			assert.Equal(t, test.profile, profile)
+			assert.Equal(t, test.firstTool, assistantNamedToolChoiceName(assistantToolChoiceForContext(context)))
+			if test.readChain != nil {
+				assert.Equal(t, test.readChain, assistantReadChain(context))
+			}
+		})
+	}
+}
+
+func TestAssistantExactModelReferenceForcesLiveCatalogRead(t *testing.T) {
+	context := assistantUserContext{
+		AccessLevel:       "L0",
+		LatestUserRequest: "gpt-5.6-sol 能用吗？",
+		Intent:            model.ClassifyAssistantIntent("gpt-5.6-sol 能用吗？"),
+	}
+
+	assert.Equal(t, model.AssistantIntentOther, context.Intent)
+	assert.Equal(t, "get_available_models", assistantNamedToolChoiceName(assistantToolChoiceForContext(context)))
+	assert.Equal(t, []string{"get_available_models"}, assistantReadChain(context))
+}
+
 func TestAssistantAgentLoopOffExecutesSingleLiveModelRead(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Ability{}, &model.TopUp{}))

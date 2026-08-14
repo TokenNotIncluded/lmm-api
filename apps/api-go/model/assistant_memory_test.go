@@ -1,6 +1,7 @@
 package model
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/LIghtJUNction/api.lmm.best/common"
@@ -48,4 +49,35 @@ func TestAssistantMemoryRedactsSecretsAndUpdatesSameTitle(t *testing.T) {
 	var count int64
 	require.NoError(t, db.Model(&AssistantMemory{}).Where("user_id = ?", user.Id).Count(&count).Error)
 	assert.EqualValues(t, 1, count)
+}
+
+func TestAssistantMemoryViewsRedactLegacyRows(t *testing.T) {
+	db := setupConsoleActivationTestDB(t)
+	require.NoError(t, db.AutoMigrate(&AssistantMemory{}))
+	user := User{Username: "memory-legacy-redaction", Password: "password", Role: common.RoleCommonUser, AffCode: "memory-legacy-redaction"}
+	require.NoError(t, db.Create(&user).Error)
+	legacy := AssistantMemory{
+		UserId:  user.Id,
+		Title:   "Legacy password: hunter2",
+		Content: "Contact old.user@example.com with key=sk_legacy_secret_123456 and card 4111 1111 1111 1111.",
+		TagsJSON: `[
+  "api_key: sk_legacy_tag_secret",
+  "legacy"
+]`,
+		Source:  AssistantMemorySourceAssistant,
+		Enabled: true,
+	}
+	require.NoError(t, db.Create(&legacy).Error)
+
+	views, err := ListMemories(user.Id, true)
+	require.NoError(t, err)
+	require.Len(t, views, 1)
+	view := views[0]
+	serialized := view.Title + "\n" + view.Content + "\n" + strings.Join(view.Tags, ",")
+	for _, secret := range []string{"hunter2", "old.user@example.com", "sk_legacy_secret_123456", "sk_legacy_tag_secret", "4111 1111 1111 1111"} {
+		assert.NotContains(t, serialized, secret)
+	}
+	assert.Contains(t, serialized, "[REDACTED]")
+	assert.Contains(t, serialized, "[REDACTED_EMAIL]")
+	assert.Contains(t, serialized, "[REDACTED_CARD]")
 }

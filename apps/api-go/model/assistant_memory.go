@@ -132,13 +132,44 @@ func (memory AssistantMemory) Tags() []string {
 	if json.Unmarshal([]byte(memory.TagsJSON), &tags) != nil {
 		return []string{}
 	}
-	return tags
+	// Rows written by older versions may not have gone through the current
+	// memory normalizer.  Reuse the write-time boundary when serializing them
+	// so a legacy tag cannot leak a credential into the assistant or admin UI.
+	normalized, err := normalizeMemoryTags(tags)
+	if err != nil {
+		return []string{}
+	}
+	return normalized
+}
+
+func safeStoredMemoryText(value string, limit int) string {
+	if normalized, err := normalizeMemoryText(value, limit); err == nil {
+		return normalized
+	}
+	// Keep malformed legacy rows readable but bounded.  The important property
+	// here is that redaction happens even when the old value exceeds today's
+	// validation limit or contains control characters.
+	value = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf) {
+			return -1
+		}
+		return r
+	}, strings.TrimSpace(value))
+	value = strings.Join(strings.Fields(value), " ")
+	value = RedactAssistantHistoryContent(value)
+	runes := []rune(value)
+	if len(runes) > limit {
+		return string(runes[:limit])
+	}
+	return value
 }
 
 func (memory AssistantMemory) View() AssistantMemoryView {
 	return AssistantMemoryView{
-		Id: memory.Id, Title: memory.Title, Content: memory.Content,
-		Tags: memory.Tags(), Source: memory.Source, Enabled: memory.Enabled,
+		Id:      memory.Id,
+		Title:   safeStoredMemoryText(memory.Title, AssistantMemoryMaxTitleRunes),
+		Content: safeStoredMemoryText(memory.Content, AssistantMemoryMaxContentRunes),
+		Tags:    memory.Tags(), Source: memory.Source, Enabled: memory.Enabled,
 		CreatedAt: memory.CreatedAt, UpdatedAt: memory.UpdatedAt,
 	}
 }
