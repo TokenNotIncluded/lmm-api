@@ -62,10 +62,12 @@ export function AssistantActivationTool(props: {
   const queryClient = useQueryClient()
   const [loading, setLoading] = useState(false)
   const [manualReason, setManualReason] = useState('')
+  const [manualRequestEditing, setManualRequestEditing] = useState(false)
   const [letter, setLetter] = useState<string | null>(null)
   const [pendingLetterEditing, setPendingLetterEditing] = useState(false)
   const [pendingLetterDraft, setPendingLetterDraft] = useState('')
   const initializedLetterKey = useRef('')
+  const initializedRevisionKey = useRef('')
 
   const requestQueryKey = ['assistant-developer-access-request'] as const
   const requestQuery = useQuery({
@@ -91,6 +93,14 @@ export function AssistantActivationTool(props: {
         initializedLetterKey.current = key
         setLetter(props.recommendationDraft.recommendation)
       }
+      if (
+        request?.status === 'pending' &&
+        initializedRevisionKey.current !== key
+      ) {
+        initializedRevisionKey.current = key
+        setPendingLetterDraft(props.recommendationDraft.recommendation)
+        setPendingLetterEditing(true)
+      }
       return
     }
     if (request?.status === 'pending') {
@@ -115,6 +125,7 @@ export function AssistantActivationTool(props: {
         confirmation_token: draft.confirmation_token,
         confirmed: true,
       })
+      initializedRevisionKey.current = `draft:${draft.confirmation_token}`
       queryClient.setQueryData(requestQueryKey, submitted)
       props.onSubmitted?.(submitted)
       toast.success(t('Unlock request submitted'))
@@ -309,7 +320,7 @@ export function AssistantActivationTool(props: {
   const draft = props.recommendationDraft
 
   return (
-    <section className='grid min-w-0 gap-4 py-4'>
+    <section className='grid min-w-0 gap-3 py-3'>
       <h3 className='text-sm font-medium'>
         {draft ? t('Confirm AI recommendation') : t('Unlock L1 with AI')}
       </h3>
@@ -360,7 +371,8 @@ export function AssistantActivationTool(props: {
               : t('Confirm and send to administrator')}
           </Button>
         </div>
-      ) : (
+      ) : null}
+      {!draft && manualRequestEditing ? (
         <div className='grid gap-3'>
           <Textarea
             value={manualReason}
@@ -391,7 +403,18 @@ export function AssistantActivationTool(props: {
               : t('Submit for administrator review')}
           </Button>
         </div>
-      )}
+      ) : null}
+      {!draft && !manualRequestEditing ? (
+        <Button
+          type='button'
+          variant='link'
+          size='sm'
+          className='w-fit px-0'
+          onClick={() => setManualRequestEditing(true)}
+        >
+          {t('Write request myself')}
+        </Button>
+      ) : null}
     </section>
   )
 }

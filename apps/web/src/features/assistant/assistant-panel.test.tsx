@@ -2058,6 +2058,16 @@ describe('AssistantPanel', () => {
         )
       )
 
+      assert.equal(
+        document.querySelector(
+          'textarea[placeholder="Explain what you want to build and why you need L1 access."]'
+        ),
+        null
+      )
+      await act(async () => {
+        findButton('Write request myself').click()
+        await flushEffects()
+      })
       assert.ok(
         document.querySelector(
           'textarea[placeholder="Explain what you want to build and why you need L1 access."]'

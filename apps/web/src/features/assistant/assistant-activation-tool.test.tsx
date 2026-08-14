@@ -211,15 +211,23 @@ afterEach(() => {
 after(() => domWindow.close())
 
 describe('AssistantActivationTool', () => {
-  test('shows a direct request fallback when no AI recommendation exists', async () => {
+  test('keeps the direct request fallback collapsed until requested', async () => {
     api.get = (async () => ({
       data: { success: true, data: null },
     })) as typeof api.get
 
     const rendered = await renderTool()
     try {
-      assert.ok(document.querySelector('textarea'))
+      assert.equal(document.querySelector('textarea'), null)
       assert.equal(document.querySelector('a[href="/wallet"]'), null)
+      assert.ok(findButton('Write request myself'))
+
+      await act(async () => {
+        findButton('Write request myself').click()
+        await flushEffects()
+      })
+
+      assert.ok(document.querySelector('textarea'))
       assert.match(
         document.body.textContent ?? '',
         /without an AI recommendation/
@@ -243,6 +251,10 @@ describe('AssistantActivationTool', () => {
 
     const rendered = await renderTool()
     try {
+      await act(async () => {
+        findButton('Write request myself').click()
+        await flushEffects()
+      })
       const textarea = document.querySelector<HTMLTextAreaElement>('textarea')
       assert.ok(textarea)
       await setTextareaValue(textarea, 'I need L1 for a small test client.')
@@ -314,6 +326,57 @@ describe('AssistantActivationTool', () => {
         /AI recommendation submitted · Pending review/
       )
       assert.equal(document.querySelector('textarea'), null)
+    } finally {
+      await unmount(rendered)
+    }
+  })
+
+  test('applies an AI revision to the one pending recommendation after confirmation', async () => {
+    api.get = (async () => ({
+      data: { success: true, data: pendingRequest },
+    })) as typeof api.get
+    let submittedBody: unknown
+    api.post = (async (url: string, data: unknown) => {
+      assert.equal(url, '/api/user/developer-access/request')
+      submittedBody = data
+      return {
+        data: {
+          success: true,
+          data: {
+            ...pendingRequest,
+            ai_recommendation: recommendationDraft.recommendation,
+          },
+        },
+      }
+    }) as typeof api.post
+
+    const rendered = await renderTool({ recommendationDraft })
+    try {
+      await waitForCondition(
+        () =>
+          document.querySelector<HTMLTextAreaElement>('textarea')?.value ===
+          recommendationDraft.recommendation,
+        'AI revision was not opened for confirmation'
+      )
+
+      await act(async () => {
+        findButton('Save changes').click()
+        await flushEffects()
+      })
+      await waitForCondition(
+        () => submittedBody !== undefined,
+        'AI revision was not submitted'
+      )
+      assert.deepEqual(submittedBody, {
+        reason: recommendationDraft.recommendation,
+        ai_recommendation: recommendationDraft.recommendation,
+        confirmation_token: recommendationDraft.confirmation_token,
+        confirmed: true,
+      })
+      assert.match(
+        document.body.textContent ?? '',
+        /AI recommendation submitted · Pending review/
+      )
     } finally {
       await unmount(rendered)
     }
@@ -534,6 +597,10 @@ describe('AssistantActivationTool', () => {
 
       const rendered = await renderTool()
       try {
+        await act(async () => {
+          findButton('Write request myself').click()
+          await flushEffects()
+        })
         const textarea = document.querySelector<HTMLTextAreaElement>('textarea')
         assert.ok(textarea)
         await setTextareaValue(textarea, 'I need L1 for a small test client.')
@@ -580,7 +647,7 @@ describe('AssistantActivationTool', () => {
 
     const rendered = await renderTool()
     try {
-      assert.ok(document.querySelector('textarea'))
+      assert.equal(document.querySelector('textarea'), null)
       assert.match(document.body.textContent ?? '', /Previous request rejected/)
       assert.match(
         document.body.textContent ?? '',
@@ -590,6 +657,7 @@ describe('AssistantActivationTool', () => {
         document.body.textContent ?? '',
         /Continue the conversation and address the administrator feedback/
       )
+      assert.ok(findButton('Write request myself'))
     } finally {
       await unmount(rendered)
     }

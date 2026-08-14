@@ -24,7 +24,6 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
-import { Textarea } from '@/components/ui/textarea'
 import {
   peekQueuedAssistantRequest,
   requestAssistantOpen,
@@ -36,11 +35,7 @@ import {
 } from '@/lib/console-activation'
 import { useAuthStore } from '@/stores/auth-store'
 
-import {
-  getDeveloperAccessRequest,
-  submitDeveloperAccessRequest,
-  type DeveloperAccessRequest,
-} from './api'
+import { getDeveloperAccessRequest, type DeveloperAccessRequest } from './api'
 import { claimOnboardingAssistantPrompt } from './pending-review-assistant'
 import { useAuthUserRefresh } from './use-auth-user-refresh'
 
@@ -55,11 +50,6 @@ export function GettingStarted() {
   const [accessRequest, setAccessRequest] =
     useState<DeveloperAccessRequest | null>(null)
   const [requestLoaded, setRequestLoaded] = useState(false)
-  const [directReason, setDirectReason] = useState('')
-  const [directRequestError, setDirectRequestError] = useState<string | null>(
-    null
-  )
-  const [directRequestSubmitting, setDirectRequestSubmitting] = useState(false)
 
   useEffect(() => {
     if (onboarding.stage !== 'activate') {
@@ -124,31 +114,6 @@ export function GettingStarted() {
     requestAssistantOpen('onboarding', message)
   }
 
-  const submitDirectRequest = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    const reason = directReason.trim()
-    if (directRequestSubmitting || reason.length < 5) return
-
-    setDirectRequestSubmitting(true)
-    setDirectRequestError(null)
-    try {
-      const submitted = await submitDeveloperAccessRequest({
-        reason,
-        confirmed: true,
-      })
-      setAccessRequest(submitted)
-      setDirectReason('')
-    } catch (error) {
-      setDirectRequestError(
-        error instanceof Error
-          ? error.message
-          : t('Unable to submit unlock request')
-      )
-    } finally {
-      setDirectRequestSubmitting(false)
-    }
-  }
-
   const continueAfterApproval = async () => {
     const refreshedUser = await refreshUser()
     if (refreshedUser?.developer_access_granted !== true) return
@@ -156,12 +121,9 @@ export function GettingStarted() {
   }
 
   if (!onboarding.activationComplete) {
-    const l0PresetPrompts = [
-      t('What can I do while access is under review?'),
-      t('How will you use the platform?'),
-      t('I need human support'),
-      t('Tell the AI assistant what you want to do'),
-    ]
+    let assistantAction = t('Start with AI assistant')
+    if (accessRequest?.status === 'pending') assistantAction = t('Continue')
+    if (accessRequest?.status === 'rejected') assistantAction = t('Revise')
 
     return (
       <SectionPageLayout>
@@ -169,13 +131,13 @@ export function GettingStarted() {
           {t('Getting started')}
         </SectionPageLayout.Title>
         <SectionPageLayout.Content>
-          <div className='mx-auto flex w-full max-w-2xl flex-col pb-10 sm:pb-14'>
+          <div className='mx-auto flex w-full max-w-2xl flex-col pb-12 sm:pb-16'>
             <section
-              className='border px-4 py-5 sm:px-6 sm:py-7'
+              className='px-1 py-8 sm:px-2 sm:py-12'
               data-testid='l0-conversation'
             >
-              <div className='space-y-2' role='log' aria-live='polite'>
-                <h2 className='text-lg font-medium'>{t('How can I help?')}</h2>
+              <div className='grid gap-3' role='log' aria-live='polite'>
+                <h2 className='text-2xl font-medium'>{t('How can I help?')}</h2>
                 <p className='text-muted-foreground text-sm leading-6'>
                   {t(
                     'L0 accounts can browse challenges and ask the AI assistant to request L1 access.'
@@ -183,192 +145,64 @@ export function GettingStarted() {
                 </p>
               </div>
 
-              {accessRequest?.status === 'pending' ? (
-                <div
-                  className='border-border/70 mt-5 border-t pt-4 text-sm leading-6'
-                  data-testid='l0-pending-request'
-                >
-                  <p className='font-medium'>
-                    {accessRequest.ai_recommendation
-                      ? t('AI recommendation submitted')
-                      : t('Access request submitted')}
-                  </p>
-                  <p className='text-muted-foreground mt-1 text-xs'>
-                    {t('Pending review')}
-                  </p>
-                  <p className='text-muted-foreground mt-2'>
-                    {t(
-                      'Your request is waiting for an administrator. Only an administrator can approve L1 access.'
-                    )}
-                  </p>
-                  {accessRequest.reason ? (
-                    <p className='text-muted-foreground mt-2 whitespace-pre-wrap'>
-                      {accessRequest.reason}
+              <Separator className='my-8' />
+              <div className='grid gap-3 text-sm leading-6'>
+                {accessRequest?.status === 'pending' ? (
+                  <div className='grid gap-1' data-testid='l0-pending-request'>
+                    <p className='font-medium'>
+                      {accessRequest.ai_recommendation
+                        ? t('AI recommendation submitted')
+                        : t('Access request submitted')}
                     </p>
-                  ) : null}
-                  {accessRequest.ai_recommendation ? (
-                    <p className='text-muted-foreground mt-2 whitespace-pre-wrap'>
-                      {accessRequest.ai_recommendation}
+                    <p className='text-muted-foreground text-xs'>
+                      {t('Pending review')}
                     </p>
-                  ) : null}
-                  <Button
-                    type='button'
-                    variant='ghost'
-                    size='sm'
-                    className='mt-2'
-                    onClick={() => requestAssistantOpen('onboarding')}
-                  >
-                    {t('Continue')}
-                  </Button>
-                </div>
-              ) : null}
-
-              {accessRequest?.status === 'rejected' ? (
-                <div className='border-border/70 mt-5 border-t pt-4 text-sm leading-6'>
-                  <p className='text-destructive font-medium'>
-                    {t('Access request rejected')}
-                  </p>
-                  <p className='text-muted-foreground mt-1'>
-                    {t('Your previous unlock request was not approved.')}
-                  </p>
-                  {accessRequest.admin_note ? (
-                    <p className='mt-2 whitespace-pre-wrap'>
-                      {accessRequest.admin_note}
+                  </div>
+                ) : null}
+                {accessRequest?.status === 'rejected' ? (
+                  <div className='grid gap-1'>
+                    <p className='text-destructive font-medium'>
+                      {t('Access request rejected')}
                     </p>
-                  ) : null}
-                  <Button
-                    type='button'
-                    variant='outline'
-                    size='sm'
-                    className='mt-3'
-                    onClick={() => requestAssistantOpen('onboarding')}
-                  >
-                    {t('Revise')}
-                  </Button>
-                </div>
-              ) : null}
-
-              {accessRequest?.status === 'approved' ? (
-                <div className='border-border/70 mt-5 border-t pt-4 text-sm leading-6'>
-                  <p className='font-medium'>{t('Access request approved')}</p>
-                  <p className='text-muted-foreground mt-1'>
-                    {t(
-                      'Your developer access is active. Continue setup to create a key and connect your client.'
-                    )}
-                  </p>
-                  {accessRequest.admin_note ? (
-                    <p className='text-muted-foreground mt-2 whitespace-pre-wrap'>
-                      {accessRequest.admin_note}
+                    {accessRequest.admin_note ? (
+                      <p className='text-muted-foreground whitespace-pre-wrap'>
+                        {accessRequest.admin_note}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+                {accessRequest?.status === 'approved' ? (
+                  <div className='grid gap-1'>
+                    <p className='font-medium'>
+                      {t('Access request approved')}
                     </p>
-                  ) : null}
+                    <p className='text-muted-foreground'>
+                      {t(
+                        'Your developer access is active. Continue setup to create a key and connect your client.'
+                      )}
+                    </p>
+                  </div>
+                ) : null}
+                {requestLoaded && accessRequest?.status === 'approved' ? (
                   <Button
                     type='button'
                     size='sm'
-                    className='mt-3'
+                    className='w-fit'
                     onClick={() => void continueAfterApproval()}
                   >
                     {t('Continue setup')}
                   </Button>
-                </div>
-              ) : null}
-
-              {requestLoaded &&
-              accessRequest?.status !== 'pending' &&
-              accessRequest?.status !== 'approved' ? (
-                <section
-                  className='border-border/70 mt-5 border-t pt-4'
-                  data-testid='l0-direct-access-request'
-                >
-                  <h3 className='text-sm font-semibold'>
-                    {t('Unlock L1 access')}
-                  </h3>
-                  <p className='text-muted-foreground mt-1 text-sm leading-6'>
-                    {t(
-                      'You can submit for administrator review without an AI recommendation. The recommendation only gives the reviewer more context; it never decides access.'
-                    )}
-                  </p>
-                  <form
-                    className='mt-3 grid gap-3'
-                    onSubmit={submitDirectRequest}
+                ) : (
+                  <Button
+                    type='button'
+                    variant='link'
+                    size='sm'
+                    className='w-fit px-0'
+                    onClick={() => requestAssistantOpen('onboarding')}
                   >
-                    <Textarea
-                      value={directReason}
-                      onChange={(event) => {
-                        setDirectReason(event.target.value)
-                        if (directRequestError) setDirectRequestError(null)
-                      }}
-                      placeholder={t(
-                        'Explain what you want to build and why you need L1 access.'
-                      )}
-                      maxLength={2000}
-                      minLength={5}
-                      rows={4}
-                      required
-                      aria-label={t('L1 access request explanation')}
-                      data-testid='l0-direct-access-request-input'
-                      disabled={directRequestSubmitting}
-                    />
-                    {directRequestError ? (
-                      <p className='text-destructive text-sm' role='alert'>
-                        {directRequestError}
-                      </p>
-                    ) : null}
-                    <Button
-                      type='submit'
-                      variant='outline'
-                      className='w-full sm:w-fit'
-                      disabled={
-                        directRequestSubmitting ||
-                        directReason.trim().length < 5
-                      }
-                      data-testid='l0-direct-access-request-submit'
-                    >
-                      {directRequestSubmitting
-                        ? t('Submitting...')
-                        : t('Submit for administrator review')}
-                    </Button>
-                  </form>
-                </section>
-              ) : null}
-
-              <div className='border-border/70 mt-6 border-t pt-4'>
-                <p className='text-muted-foreground mb-3 text-xs'>
-                  {t(
-                    'Choose a common question or ask anything about using LMM.'
-                  )}
-                </p>
-                <div className='flex flex-wrap gap-2'>
-                  {l0PresetPrompts.map((preset) => (
-                    <Button
-                      key={preset}
-                      type='button'
-                      variant='outline'
-                      size='sm'
-                      className='h-auto min-h-8 text-left whitespace-normal'
-                      onClick={() => requestAssistantOpen('onboarding', preset)}
-                    >
-                      {preset}
-                    </Button>
-                  ))}
-                </div>
-                <form className='mt-4 flex gap-2' onSubmit={submitPrompt}>
-                  <Input
-                    value={prompt}
-                    onChange={(event) => setPrompt(event.target.value)}
-                    maxLength={4000}
-                    className='h-10 min-w-0 flex-1'
-                    placeholder={t('Tell the AI assistant what you need')}
-                    aria-label={t('Tell the AI assistant what you need')}
-                  />
-                  <Button type='submit' size='sm' disabled={!prompt.trim()}>
-                    {t('Send')}
+                    {assistantAction}
                   </Button>
-                </form>
-                <p className='text-muted-foreground mt-3 text-xs leading-5'>
-                  {t(
-                    'Do not send personal information, passwords, API keys, or credentials in chat. Site-issued credentials such as API keys are shown in a shielded private card and are kept out of the assistant context.'
-                  )}
-                </p>
+                )}
               </div>
             </section>
           </div>

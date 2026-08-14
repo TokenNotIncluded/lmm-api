@@ -234,7 +234,7 @@ describe('getting started access boundaries', () => {
     await unmountPage(l1Page)
   })
 
-  test('offers only the access conversation to L0', async () => {
+  test('uses one assistant entry without a second composer or hard-coded presets', async () => {
     const opened: Array<string | undefined> = []
     const messages: Array<string | undefined> = []
     const unsubscribe = subscribeToAssistantOpen((request) => {
@@ -242,24 +242,25 @@ describe('getting started access boundaries', () => {
       messages.push(request.message)
     })
     const page = await renderPage()
+    await act(flushEffects)
 
-    const question = [...page.container.querySelectorAll('button')].find(
-      (button) =>
-        button.textContent?.includes(
-          'What can I do while access is under review?'
-        )
+    const start = [...page.container.querySelectorAll('button')].find(
+      (button) => button.textContent?.includes('Start with AI assistant')
     )
-    assert.ok(question)
+    assert.ok(start)
     await act(async () => {
-      question.click()
+      start.click()
       await flushEffects()
     })
 
     assert.deepEqual(opened, ['onboarding'])
-    assert.deepEqual(messages, ['What can I do while access is under review?'])
-
-    assert.deepEqual(opened, ['onboarding'])
-    assert.deepEqual(messages, ['What can I do while access is under review?'])
+    assert.deepEqual(messages, [undefined])
+    assert.equal(
+      page.container.textContent?.includes(
+        'What can I do while access is under review?'
+      ),
+      false
+    )
     assert.equal(
       page.container.textContent?.includes('Which option is the best value?'),
       false
@@ -268,7 +269,7 @@ describe('getting started access boundaries', () => {
       page.container.textContent?.includes('How is request cost calculated?'),
       false
     )
-    assert.ok(page.container.querySelector('input'))
+    assert.equal(page.container.querySelector('input'), null)
     await unmountPage(page)
     unsubscribe()
   })
@@ -305,7 +306,7 @@ describe('getting started access boundaries', () => {
     unsubscribe()
   })
 
-  test('shows the submitted statement and AI recommendation while review is pending', async () => {
+  test('keeps a pending recommendation to one compact status line', async () => {
     const page = await renderPage(
       false,
       { data: { success: true, data: [] } },
@@ -332,19 +333,19 @@ describe('getting started access boundaries', () => {
       page.container.textContent?.includes(
         'I am building a small Claude Code integration.'
       ),
-      true
+      false
     )
     assert.equal(
       page.container.textContent?.includes(
         'Recommend L1 for a documented development use case.'
       ),
-      true
+      false
     )
     assert.equal(page.container.querySelector('[role="progressbar"]'), null)
     await unmountPage(page)
   })
 
-  test('keeps a direct L1 application path visible without an AI recommendation', async () => {
+  test('routes a direct L1 application through the single assistant surface', async () => {
     const page = await renderPage(
       false,
       { data: { success: true, data: [] } },
@@ -352,22 +353,15 @@ describe('getting started access boundaries', () => {
       { id: 9904 }
     )
 
-    assert.ok(
-      page.container.querySelector('[data-testid="l0-direct-access-request"]')
+    assert.equal(
+      page.container.querySelector('[data-testid="l0-direct-access-request"]'),
+      null
     )
+    assert.equal(page.container.querySelector('textarea'), null)
     assert.ok(
-      page.container.querySelector(
-        '[data-testid="l0-direct-access-request-input"]'
+      [...page.container.querySelectorAll('button')].find((button) =>
+        button.textContent?.includes('Start with AI assistant')
       )
-    )
-    const submit = page.container.querySelector<HTMLButtonElement>(
-      '[data-testid="l0-direct-access-request-submit"]'
-    )
-    assert.ok(submit)
-    assert.equal(submit.disabled, true)
-    assert.match(
-      page.container.textContent ?? '',
-      /without an AI recommendation/
     )
     await unmountPage(page)
   })
