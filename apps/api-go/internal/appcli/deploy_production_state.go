@@ -279,10 +279,36 @@ func (runtime *productionRuntime) verifyInstalledGoPackage(ctx context.Context, 
 	integrity, err := runtime.runner.Run(ctx, productionCommand{
 		Name: "pacman", Args: []string{"-Qkk", name}, Env: append(os.Environ(), "LC_ALL=C"),
 	})
-	if err != nil || !strings.Contains(string(integrity), "0 altered files") {
+	if err != nil || !packageIntegrityClean(integrity, name) {
 		return errors.New("installed Go package integrity check failed")
 	}
 	return nil
+}
+
+func packageIntegrityClean(output []byte, name string) bool {
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	backupPrefix := "backup file: " + name + ": "
+	summaryPrefix := name + ": "
+	summarySuffix := " total files, 0 altered files"
+	summaryFound := false
+	for _, line := range lines {
+		if line == "" || strings.ContainsRune(line, '\r') || summaryFound {
+			return false
+		}
+		if strings.HasPrefix(line, backupPrefix) && len(line) > len(backupPrefix) {
+			continue
+		}
+		if len(line) < len(summaryPrefix)+len(summarySuffix) ||
+			!strings.HasPrefix(line, summaryPrefix) || !strings.HasSuffix(line, summarySuffix) {
+			return false
+		}
+		total := line[len(summaryPrefix) : len(line)-len(summarySuffix)]
+		if _, err := strconv.ParseUint(total, 10, 64); err != nil {
+			return false
+		}
+		summaryFound = true
+	}
+	return summaryFound
 }
 
 type productionStatus struct {

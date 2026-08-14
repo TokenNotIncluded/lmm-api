@@ -127,6 +127,9 @@ flock -w 120 9 || die 'another Go deployment holds the global lock'
 
 write_status() {
   local value=$1 temporary=$status_file.$$.new
+  if [[ ${LMM_DEPLOY_TEST_MODE:-0} == 1 && ${LMM_TEST_FAIL_ROLLED_BACK_STATUS:-0} == 1 && $value == ROLLED_BACK\ * ]]; then
+    return 87
+  fi
   printf '%s\n' "$value" >"$temporary"
   chmod 0600 "$temporary"
   mv -Tf -- "$temporary" "$status_file"
@@ -140,8 +143,10 @@ status_word() {
 
 manifest_value() {
   local key=$1 value
-  value=$(awk -F= -v key="$key" '$1 == key { count += 1; value = substr($0, index($0, "=") + 1) } END { if (count == 1) print value; else exit 2 }' "$manifest") || \
+  if ! value=$(awk -F= -v key="$key" '$1 == key { count += 1; value = substr($0, index($0, "=") + 1) } END { if (count == 1) print value; else exit 2 }' "$manifest"); then
     die "deployment manifest is missing or ambiguous: $key"
+    return $?
+  fi
   printf '%s' "$value"
 }
 
@@ -161,15 +166,44 @@ active_environment_file() {
 
 go_package_record() {
   local archive=$1 record name version extra
-  record=$(pacman -Qp "$archive") || die 'could not read Go package identity'
+  if ! record=$(pacman -Qp "$archive"); then
+    die 'could not read Go package identity'
+    return $?
+  fi
   read -r name version extra <<<"$record"
-  [[ -z ${extra:-} && $version =~ ^[0-9][0-9A-Za-z._+]*-[1-9][0-9]*(\.[0-9]+)?$ ]] || \
+  if [[ -n ${extra:-} || ! $version =~ ^[0-9][0-9A-Za-z._+]*-[1-9][0-9]*(\.[0-9]+)?$ ]]; then
     die 'invalid Go package identity'
+    return $?
+  fi
   case $name in
     "$SOURCE_PACKAGE"|"$AUR_PACKAGE") ;;
-    *) die "unsupported Go package: $name" ;;
+    *) die "unsupported Go package: $name"; return $? ;;
   esac
   printf '%s %s\n' "$name" "$version"
+}
+
+package_integrity_clean() {
+  local package=$1 output=$2 line summary total found=0
+  while IFS= read -r line; do
+    [[ -n $line && $line != *$'\r'* && $found == 0 ]] || return 1
+    if [[ $line == "backup file: $package: "?* ]]; then
+      continue
+    fi
+    summary=${line#"$package: "}
+    [[ $summary != "$line" ]] || return 1
+    total=${summary%" total files, 0 altered files"}
+    [[ $summary == "$total total files, 0 altered files" && $total =~ ^[0-9]+$ ]] || return 1
+    found=1
+  done <<<"$output"
+  [[ $found == 1 ]]
+}
+
+verify_installed_package() {
+  local package=$1 expected=$2 actual summary
+  actual=$(pacman -Q "$package") || return $?
+  [[ $actual == "$expected" ]] || return 1
+  summary=$(LC_ALL=C pacman -Qkk "$package") || return $?
+  package_integrity_clean "$package" "$summary"
 }
 
 load_package_layout() {
@@ -370,10 +404,13 @@ restore_direct_environment_config() {
   local source=$1 destination temporary
   destination=$NEW_CONFIG_DIR/lmm-api-go.env
   temporary=$destination.$$.new
-  [[ -f $source && ! -L $source ]] || die 'restored Go environment file is missing or unsafe'
-  install -d -m0700 "$NEW_CONFIG_DIR"
-  install -m0600 "$source" "$temporary"
-  mv -Tf -- "$temporary" "$destination"
+  if [[ ! -f $source || -L $source ]]; then
+    die 'restored Go environment file is missing or unsafe'
+    return $?
+  fi
+  install -d -m0700 "$NEW_CONFIG_DIR" || return $?
+  install -m0600 "$source" "$temporary" || return $?
+  mv -Tf -- "$temporary" "$destination" || return $?
 }
 
 harden_production_environment_config() {
@@ -440,17 +477,32 @@ run_migration() {
 }
 
 disable_rollback_timer() {
-  systemctl disable --now "$timer_unit" >/dev/null 2>&1 || true
+  systemctl disable --now "$timer_unit" >/dev/null 2>&1 || return 1
   systemctl reset-failed "$timer_unit" >/dev/null 2>&1 || true
+  ! systemctl is-active --quiet "$timer_unit" 2>/dev/null
 }
 
 release_transaction_lock() {
   local lock_marker=$TRANSACTION_LOCK/deployment.env
-  if [[ -d $TRANSACTION_LOCK && ! -L $TRANSACTION_LOCK && -f $lock_marker && ! -L $lock_marker ]] && \
-     grep -Fqx "deployment_id=$deployment_id" "$lock_marker"; then
-    rm -f -- "$lock_marker"
-    rmdir -- "$TRANSACTION_LOCK"
+  [[ ${LMM_DEPLOY_TEST_MODE:-0} != 1 || ${LMM_TEST_FAIL_ROLLBACK_UNLOCK:-0} != 1 ]] || return 88
+  if [[ ! -e $TRANSACTION_LOCK && ! -L $TRANSACTION_LOCK ]]; then
+    return 0
   fi
+  [[ -d $TRANSACTION_LOCK && ! -L $TRANSACTION_LOCK && -f $lock_marker && ! -L $lock_marker ]] || return 1
+  grep -Fqx "deployment_id=$deployment_id" "$lock_marker" || return 1
+  rm -f -- "$lock_marker" || return $?
+  rmdir -- "$TRANSACTION_LOCK" || return $?
+}
+
+cleanup_probe_token() {
+  [[ ${LMM_DEPLOY_TEST_MODE:-0} != 1 || ${LMM_TEST_FAIL_ROLLBACK_PROBE_CLEANUP:-0} != 1 ]] || return 86
+  rm -f -- "$probe_token"
+}
+
+finalize_transaction() {
+  cleanup_probe_token || return $?
+  release_transaction_lock || return $?
+  disable_rollback_timer
 }
 
 cleanup_failed_prearm() {
@@ -459,9 +511,12 @@ cleanup_failed_prearm() {
   current=$(status_word)
   case $current in
     ROLLED_BACK|CONFIRMED) return 0 ;;
+    ROLLBACK_FAILED) return 0 ;;
     ARMED|MIGRATING|DEPLOYING|AWAITING_CONFIRMATION|ROLLING_BACK)
       if systemctl is-active --quiet "$timer_unit" 2>/dev/null; then
-        perform_rollback "activation-exit-$rc" || true
+        if ! perform_rollback "activation-exit-$rc"; then
+          printf 'activate-go-release: automatic rollback failed; watchdog remains armed\n' >&2
+        fi
       fi
       return 0
       ;;
@@ -476,50 +531,82 @@ cleanup_failed_prearm() {
   fi
 }
 
+rollback_failed() {
+  local reason=$1 step=$2 rc=$3
+  write_status "ROLLBACK_FAILED reason=$reason step=$step rc=$rc" || true
+  return "$rc"
+}
+
+rollback_step() {
+  local reason=$1 step=$2 rc
+  shift 2
+  "$@" && return 0
+  rc=$?
+  rollback_failed "$reason" "$step" "$rc"
+}
+
 perform_rollback() {
-  local reason=$1 old_frontend config_restore
+  local reason=$1 old_frontend config_restore rc
   if [[ $(status_word) == CONFIRMED ]]; then
     return 0
   fi
-  write_status "ROLLING_BACK $reason"
-  old_frontend=$(manifest_value old_frontend_release)
+  write_status "ROLLING_BACK $reason" || return $?
+  old_frontend=$(manifest_value old_frontend_release) || {
+    rc=$?; rollback_failed "$reason" manifest-old-frontend "$rc"; return $?
+  }
   config_restore=$state_dir/config-restore
   systemctl disable --now "$NEW_SERVICE" >/dev/null 2>&1 || true
   if [[ -d $FRONTEND_ROOT/releases/$old_frontend ]]; then
-    "$FRONTEND_RELEASE_SCRIPT" rollback --root "$FRONTEND_ROOT" --release "$old_frontend" --keep 3
+    rollback_step "$reason" frontend "$FRONTEND_RELEASE_SCRIPT" rollback \
+      --root "$FRONTEND_ROOT" --release "$old_frontend" --keep 3 || return $?
   fi
   if [[ $ROLLBACK_LAYOUT == split ]]; then
-    pacman -U --noconfirm "$ROLLBACK_CORE" "$ROLLBACK_GO"
-    install -d -m0700 "$OLD_CONFIG_DIR"
-    install -m0600 "$config_restore/lmm-api/lmm-api.env" "$OLD_CONFIG_DIR/lmm-api.env"
-    install -m0644 "$config_restore/lmm-api/backend.conf" "$OLD_CONFIG_DIR/backend.conf"
+    rollback_step "$reason" package-install pacman -U --noconfirm "$ROLLBACK_CORE" "$ROLLBACK_GO" || return $?
+    rollback_step "$reason" config-directory install -d -m0700 "$OLD_CONFIG_DIR" || return $?
+    rollback_step "$reason" config-environment install -m0600 \
+      "$config_restore/lmm-api/lmm-api.env" "$OLD_CONFIG_DIR/lmm-api.env" || return $?
+    rollback_step "$reason" config-backend install -m0644 \
+      "$config_restore/lmm-api/backend.conf" "$OLD_CONFIG_DIR/backend.conf" || return $?
   else
-    pacman -U --noconfirm "$ROLLBACK_GO"
-    restore_direct_environment_config "$config_restore/lmm-api-go/lmm-api-go.env"
+    rollback_step "$reason" package-install pacman -U --noconfirm "$ROLLBACK_GO" || return $?
+    rollback_step "$reason" config-environment restore_direct_environment_config \
+      "$config_restore/lmm-api-go/lmm-api-go.env" || return $?
     if uses_legacy_direct_layout; then
-      remove_owned_new_dropins
+      rollback_step "$reason" service-dropins remove_owned_new_dropins || return $?
     fi
   fi
-  [[ $(pacman -Q "$ROLLBACK_PACKAGE_NAME") == "$(go_package_record "$ROLLBACK_GO")" ]] || \
-    die 'rolled-back Go package identity mismatch'
-  pacman -Qkk "$ROLLBACK_PACKAGE_NAME" >/dev/null
-  systemctl daemon-reload
-  systemctl enable --now "$(old_service)"
-  PROBE_BINARY=$(manifest_value probe_binary)
-  OLD_VERSION=$(manifest_value old_version)
-  FRONTEND_INDEX_SHA256=$(manifest_value old_frontend_index_sha256)
-  probe_release "$OLD_VERSION" "$FRONTEND_INDEX_SHA256"
-  disable_rollback_timer
-  rm -f -- "$probe_token"
-  write_status "ROLLED_BACK $OLD_VERSION $reason"
-  release_transaction_lock
+  rollback_step "$reason" package-integrity verify_installed_package \
+    "$ROLLBACK_PACKAGE_NAME" "$ROLLBACK_PACKAGE_NAME $ROLLBACK_PACKAGE_VERSION" || return $?
+  rollback_step "$reason" daemon-reload systemctl daemon-reload || return $?
+  rollback_step "$reason" service-start systemctl enable --now "$(old_service)" || return $?
+  PROBE_BINARY=$(manifest_value probe_binary) || {
+    rc=$?; rollback_failed "$reason" manifest-probe-binary "$rc"; return $?
+  }
+  OLD_VERSION=$(manifest_value old_version) || {
+    rc=$?; rollback_failed "$reason" manifest-old-version "$rc"; return $?
+  }
+  FRONTEND_INDEX_SHA256=$(manifest_value old_frontend_index_sha256) || {
+    rc=$?; rollback_failed "$reason" manifest-frontend-checksum "$rc"; return $?
+  }
+  rollback_step "$reason" release-probe probe_release "$OLD_VERSION" "$FRONTEND_INDEX_SHA256" || return $?
+  rollback_step "$reason" probe-cleanup cleanup_probe_token || return $?
+  write_status "ROLLED_BACK $OLD_VERSION $reason" || {
+    rc=$?; rollback_failed "$reason" terminal-status "$rc"; return $?
+  }
+  finalize_transaction
 }
 
 activation_error() {
-  local rc=$? failure_line=${BASH_LINENO[0]:-unknown}
+  local rc=$? failure_line=${BASH_LINENO[0]:-unknown} rollback_rc
   trap - ERR
   if [[ $(status_word) != CONFIRMED ]]; then
-    perform_rollback "activation-error-line-$failure_line" || true
+    if perform_rollback "activation-error-line-$failure_line"; then
+      :
+    else
+      rollback_rc=$?
+      printf 'activate-go-release: rollback failed after activation error\n' >&2
+      exit "$rollback_rc"
+    fi
   fi
   exit "$rc"
 }
@@ -579,8 +666,8 @@ case $ACTION in
     load_package_layout
     [[ ${CANDIDATE_PACKAGE_VERSION%-*} == "$EXPECTED_VERSION" ]] || die 'candidate package identity mismatch'
     [[ ${ROLLBACK_PACKAGE_VERSION%-*} == "$OLD_VERSION" ]] || die 'Go rollback package version mismatch'
-    [[ $(go_package_record "$ROLLBACK_GO") == "$(pacman -Q "$ROLLBACK_PACKAGE_NAME")" ]] || die 'Go rollback package identity mismatch'
-    pacman -Qkk "$ROLLBACK_PACKAGE_NAME" >/dev/null
+    verify_installed_package "$ROLLBACK_PACKAGE_NAME" "$ROLLBACK_PACKAGE_NAME $ROLLBACK_PACKAGE_VERSION" || \
+      die 'Go rollback package identity or integrity mismatch'
     if [[ $ROLLBACK_LAYOUT == split ]]; then
       [[ $(pacman -Qp "$ROLLBACK_CORE") == "$(pacman -Q lmm-api)" ]] || die 'core rollback package identity mismatch'
       systemctl is-active --quiet "$(old_service)" || die 'pre-cutover service is not active'
@@ -695,9 +782,8 @@ EOF
     fi
     harden_production_environment_config
     systemctl daemon-reload
-    [[ $(pacman -Q "$CANDIDATE_PACKAGE_NAME") == "$(go_package_record "$PACKAGE")" ]] || \
-      die 'installed candidate package identity mismatch'
-    pacman -Qkk "$CANDIDATE_PACKAGE_NAME" >/dev/null
+    verify_installed_package "$CANDIDATE_PACKAGE_NAME" "$CANDIDATE_PACKAGE_NAME $CANDIDATE_PACKAGE_VERSION" || \
+      die 'installed candidate package identity or integrity mismatch'
     [[ $("$INSTALLED_BINARY" version) == "$EXPECTED_VERSION" ]] || die 'installed binary version mismatch'
     for removed in "$REMOVED_SELECTOR" "$REMOVED_PROVIDER_ROOT" "$REMOVED_LEGACY_SERVICE"; do
       [[ ! -e $removed && ! -L $removed ]] || die "removed split-architecture path remains: $removed"
@@ -718,27 +804,27 @@ EOF
   rollback)
     load_manifest
     case $(status_word) in
-      CONFIRMED) exit 0 ;;
-      ROLLED_BACK) exit 0 ;;
-		PREPARED|ARMED|MIGRATING|DEPLOYING|AWAITING_CONFIRMATION|ROLLING_BACK) ;;
+      CONFIRMED|ROLLED_BACK) finalize_transaction; exit $? ;;
+		PREPARED|ARMED|MIGRATING|DEPLOYING|AWAITING_CONFIRMATION|ROLLING_BACK|ROLLBACK_FAILED) ;;
       *) die 'rollback state is not eligible' ;;
     esac
     perform_rollback watchdog-deadline
     ;;
   confirm)
     load_manifest
+    if [[ $(status_word) == CONFIRMED ]]; then
+      finalize_transaction
+      exit $?
+    fi
     [[ $(status_word) == AWAITING_CONFIRMATION ]] || die 'deployment is not awaiting confirmation'
     systemctl is-active --quiet "$NEW_SERVICE" || die 'new service is not active'
     probe_release "$EXPECTED_VERSION" "$FRONTEND_INDEX_SHA256" || die 'final native CLI probes failed'
-    write_status "CONFIRMED version=$EXPECTED_VERSION"
-    disable_rollback_timer
-    systemctl stop "$rollback_unit" >/dev/null 2>&1 || true
+    cleanup_probe_token || die 'probe token cleanup failed before confirmation'
+    systemctl stop "$rollback_unit" >/dev/null 2>&1 || die 'rollback service could not be stopped before confirmation'
     systemctl reset-failed "$rollback_unit" >/dev/null 2>&1 || true
-    if systemctl is-active --quiet "$timer_unit" || systemctl is-active --quiet "$rollback_unit"; then
-      die 'rollback units remain active after confirmation'
-    fi
-    rm -f -- "$probe_token"
-    release_transaction_lock
+    ! systemctl is-active --quiet "$rollback_unit" || die 'rollback service remains active before confirmation'
+    write_status "CONFIRMED version=$EXPECTED_VERSION"
+    finalize_transaction
     printf 'confirmed=%s\nrollback_timer=%s\n' "$EXPECTED_VERSION" "$timer_unit"
     ;;
 esac

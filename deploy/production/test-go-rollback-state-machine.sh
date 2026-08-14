@@ -45,11 +45,17 @@ case $command in
     ;;
   enable)
     file=$(state_file "$unit")
+    if [[ ${LMM_TEST_FAIL_ROLLBACK_START:-0} == 1 && -f $LMM_TEST_SERVICE_STATE/rollback.attempted ]]; then
+      exit 89
+    fi
     : >"$file.enabled"
     [[ " $* " != *' --now '* ]] || : >"$file.active"
     ;;
   disable)
     file=$(state_file "$unit")
+    if [[ ${LMM_TEST_FAIL_ROLLBACK_TIMER_DISABLE:-0} == 1 && $unit == *.timer ]]; then
+      exit 89
+    fi
     rm -f -- "$file.enabled"
     [[ " $* " != *' --now '* ]] || rm -f -- "$file.active"
     ;;
@@ -128,7 +134,17 @@ case $1 in
       *) exit 93 ;;
     esac
     ;;
-  -Qkk) ;;
+  -Qkk)
+    printf 'backup file: %s: /etc/lmm-api-go/lmm-api-go.env (SHA256 checksum mismatch)\n' "$2"
+    if [[ ${LMM_TEST_FAIL_ROLLBACK_QKK:-0} == 1 && -f $LMM_TEST_SERVICE_STATE/rollback.attempted ]]; then
+      if [[ ${LMM_TEST_ROLLBACK_QKK_STOPS_TIMER:-0} == 1 ]]; then
+        rm -f -- "$LMM_TEST_SERVICE_STATE/timer.active"
+      fi
+      printf '%s: 42 total files, 10 altered files\n' "$2"
+    else
+      printf '%s: 42 total files, 0 altered files\n' "$2"
+    fi
+    ;;
   -Rdd)
     shift
     [[ ${1:-} == --noconfirm ]] || exit 94
@@ -165,6 +181,8 @@ case $1 in
         ln -s -- /run/unsafe "$LMM_DEPLOY_TEST_OLD_CONFIG_DIR/injected-link"
       fi
     elif [[ $# == 1 && ${1##*/} == rollback-go.pkg.tar.zst && $LMM_TEST_PREVIOUS_LAYOUT == direct ]]; then
+      [[ ${LMM_TEST_FAIL_ROLLBACK_INSTALL:-0} != 1 ]] || exit 88
+      : >"$LMM_TEST_SERVICE_STATE/rollback.attempted"
       printf '%s\n' "$LMM_TEST_OLD_VERSION" >"$LMM_TEST_SERVICE_STATE/version"
       printf '%s\n' "$LMM_TEST_OLD_PKGREL" >"$LMM_TEST_SERVICE_STATE/pkgrel"
       rm -f -- "$LMM_TEST_SERVICE_STATE/new.installed" "$LMM_DEPLOY_TEST_CANONICAL_LAUNCHER" \
@@ -177,6 +195,8 @@ case $1 in
         install -Dm0644 "$LMM_TEST_LEGACY_SERVICE_SOURCE" "$LMM_DEPLOY_TEST_REMOVED_LEGACY_SERVICE"
       fi
     elif (($# == 2)); then
+      [[ ${LMM_TEST_FAIL_ROLLBACK_INSTALL:-0} != 1 ]] || exit 88
+      : >"$LMM_TEST_SERVICE_STATE/rollback.attempted"
       printf '%s\n' "$LMM_TEST_OLD_VERSION" >"$LMM_TEST_SERVICE_STATE/version"
       printf '%s\n' "$LMM_TEST_OLD_PKGREL" >"$LMM_TEST_SERVICE_STATE/pkgrel"
       rm -f -- "$LMM_TEST_SERVICE_STATE/new.installed"
@@ -219,6 +239,10 @@ done
 version=$(<"$LMM_TEST_SERVICE_STATE/version")
 status=200
 if [[ ${LMM_TEST_FAIL_NEW:-0} == 1 && $version == "$LMM_TEST_NEW_VERSION" ]]; then
+  status=503
+fi
+if [[ ${LMM_TEST_FAIL_ROLLBACK_PROBE:-0} == 1 && -f $LMM_TEST_SERVICE_STATE/rollback.attempted && \
+      $version == "$LMM_TEST_OLD_VERSION" ]]; then
   status=503
 fi
 case $request_path in
@@ -549,5 +573,82 @@ grep -Fq 'ROLLED_BACK' "$aur_direct_rollback_workspace/state/status" || fail 'AU
 [[ -f $LMM_DEPLOY_TEST_NEW_DROPIN_DIR/50-memory.conf ]] || \
   fail 'AUR Go rollback removed the existing lmm-api.service drop-ins'
 export LMM_TEST_NEW_PKGREL=1
+
+assert_failed_rollback() {
+  local id=$1 injection=$2 step=$3 timer=${4:-active} workspace
+  setup_case "$id" direct lmm-api-go-bin
+  workspace=$CASE_WORKSPACE
+  install -d -m0700 "$LMM_DEPLOY_TEST_TRANSACTION_LOCK"
+  printf 'deployment_id=%s\n' "$id" >"$LMM_DEPLOY_TEST_TRANSACTION_LOCK/deployment.env"
+  export LMM_TEST_FAIL_NEW=1
+  export "$injection=1"
+  if activate_case "$workspace" >"$tmp/activate-$id.out" 2>"$tmp/activate-$id.err"; then
+    fail "$id unexpectedly succeeded"
+  fi
+  unset LMM_TEST_FAIL_NEW "$injection"
+  grep -Fq 'ROLLBACK_FAILED' "$workspace/state/status" || fail "$id was not marked ROLLBACK_FAILED"
+  grep -Fq "step=$step" "$workspace/state/status" || fail "$id did not record failing step $step"
+  [[ -f $LMM_DEPLOY_TEST_TRANSACTION_LOCK/deployment.env ]] || fail "$id released the transaction lock"
+  if [[ $timer == active ]]; then
+    [[ -f $LMM_TEST_SERVICE_STATE/timer.active ]] || fail "$id disarmed the rollback watchdog"
+  else
+    [[ ! -e $LMM_TEST_SERVICE_STATE/timer.active ]] || fail "$id retained an unexpectedly active watchdog"
+  fi
+}
+
+assert_retryable_finalization() {
+  local id=$1 injection=$2 workspace
+  setup_case "$id" direct lmm-api-go-bin
+  workspace=$CASE_WORKSPACE
+  install -d -m0700 "$LMM_DEPLOY_TEST_TRANSACTION_LOCK"
+  printf 'deployment_id=%s\n' "$id" >"$LMM_DEPLOY_TEST_TRANSACTION_LOCK/deployment.env"
+  export LMM_TEST_FAIL_NEW=1
+  export "$injection=1"
+  if activate_case "$workspace" >"$tmp/activate-$id.out" 2>"$tmp/activate-$id.err"; then
+    fail "$id unexpectedly succeeded"
+  fi
+  unset LMM_TEST_FAIL_NEW "$injection"
+  grep -Fq 'ROLLED_BACK' "$workspace/state/status" || fail "$id did not persist the terminal rollback"
+  [[ -f $LMM_TEST_SERVICE_STATE/timer.active ]] || fail "$id left no retry path for finalization"
+  "$workspace/staging/activate-go-release.sh" rollback --workspace "$workspace"
+  grep -Fq 'ROLLED_BACK' "$workspace/state/status" || fail "$id lost its terminal rollback state"
+  [[ ! -e $LMM_DEPLOY_TEST_TRANSACTION_LOCK ]] || fail "$id retry did not release the transaction lock"
+  [[ ! -e $LMM_TEST_SERVICE_STATE/timer.active ]] || fail "$id retry did not disarm the watchdog"
+}
+
+assert_retryable_confirmation() {
+  local id=$1 injection=$2 workspace
+  setup_case "$id" direct lmm-api-go-bin
+  workspace=$CASE_WORKSPACE
+  install -d -m0700 "$LMM_DEPLOY_TEST_TRANSACTION_LOCK"
+  printf 'deployment_id=%s\n' "$id" >"$LMM_DEPLOY_TEST_TRANSACTION_LOCK/deployment.env"
+  activate_case "$workspace" >"$tmp/activate-$id.out"
+  export "$injection=1"
+  if "$workspace/staging/activate-go-release.sh" confirm --workspace "$workspace" \
+      >"$tmp/confirm-$id.out" 2>"$tmp/confirm-$id.err"; then
+    fail "$id unexpectedly finalized"
+  fi
+  unset "$injection"
+  grep -Fq 'CONFIRMED' "$workspace/state/status" || fail "$id did not persist confirmation"
+  [[ -f $LMM_TEST_SERVICE_STATE/timer.active ]] || fail "$id left no retry path for confirmation"
+  "$workspace/staging/activate-go-release.sh" rollback --workspace "$workspace"
+  [[ ! -e $LMM_DEPLOY_TEST_TRANSACTION_LOCK ]] || fail "$id retry did not release the transaction lock"
+  [[ ! -e $LMM_TEST_SERVICE_STATE/timer.active ]] || fail "$id retry did not disarm the watchdog"
+}
+
+assert_failed_rollback rollback-install-failure LMM_TEST_FAIL_ROLLBACK_INSTALL package-install
+assert_failed_rollback rollback-integrity-failure LMM_TEST_FAIL_ROLLBACK_QKK package-integrity
+assert_failed_rollback rollback-start-failure LMM_TEST_FAIL_ROLLBACK_START service-start
+assert_failed_rollback rollback-probe-failure LMM_TEST_FAIL_ROLLBACK_PROBE release-probe
+assert_failed_rollback rollback-probe-cleanup-failure LMM_TEST_FAIL_ROLLBACK_PROBE_CLEANUP probe-cleanup
+assert_failed_rollback rollback-terminal-status-failure LMM_TEST_FAIL_ROLLED_BACK_STATUS terminal-status
+export LMM_TEST_ROLLBACK_QKK_STOPS_TIMER=1
+assert_failed_rollback rollback-integrity-stopped-timer LMM_TEST_FAIL_ROLLBACK_QKK package-integrity inactive
+unset LMM_TEST_ROLLBACK_QKK_STOPS_TIMER
+
+assert_retryable_finalization rollback-unlock-finalization LMM_TEST_FAIL_ROLLBACK_UNLOCK
+assert_retryable_finalization rollback-timer-finalization LMM_TEST_FAIL_ROLLBACK_TIMER_DISABLE
+assert_retryable_confirmation confirm-unlock-finalization LMM_TEST_FAIL_ROLLBACK_UNLOCK
+assert_retryable_confirmation confirm-timer-finalization LMM_TEST_FAIL_ROLLBACK_TIMER_DISABLE
 
 printf 'Go rollback and confirmation state machine verified\n'

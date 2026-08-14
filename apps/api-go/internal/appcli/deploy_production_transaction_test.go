@@ -165,7 +165,7 @@ func (runner *fakeProductionRunner) pacman(args []string) ([]byte, error) {
 			return []byte(runner.packageName + " " + runner.newVersion + "-1\n"), nil
 		}
 	case "-Qkk":
-		return []byte("0 altered files\n"), nil
+		return []byte(runner.packageName + ": 42 total files, 0 altered files\n"), nil
 	case "-Qi":
 		return []byte("Name : " + runner.packageName + "\nVersion : " + runner.installedVersion + "-1\n"), nil
 	case "-U":
@@ -438,6 +438,30 @@ func TestProductionPackageIdentitySupportsSourceAndAURPackages(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestPackageIntegritySummaryIsExact(t *testing.T) {
+	name := productionAURPackageName
+	for _, test := range []struct {
+		name   string
+		output string
+		clean  bool
+	}{
+		{name: "clean", output: name + ": 42 total files, 0 altered files\n", clean: true},
+		{name: "modified backup is package-valid", output: "backup file: " + name + ": /etc/lmm-api-go/lmm-api-go.env (SHA256 checksum mismatch)\n" + name + ": 42 total files, 0 altered files\n", clean: true},
+		{name: "ten altered", output: name + ": 42 total files, 10 altered files\n"},
+		{name: "wrong package", output: productionSourcePackageName + ": 42 total files, 0 altered files\n"},
+		{name: "ambiguous summaries", output: name + ": 42 total files, 0 altered files\n" + name + ": 42 total files, 0 altered files\n"},
+		{name: "backup after summary", output: name + ": 42 total files, 0 altered files\nbackup file: " + name + ": /etc/lmm-api-go/lmm-api-go.env (SHA256 checksum mismatch)\n"},
+		{name: "other package backup", output: "backup file: " + productionSourcePackageName + ": /etc/lmm-api-go/lmm-api-go.env (SHA256 checksum mismatch)\n" + name + ": 42 total files, 0 altered files\n"},
+		{name: "missing total", output: name + ": total files, 0 altered files\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := packageIntegrityClean([]byte(test.output), name); got != test.clean {
+				t.Fatalf("packageIntegrityClean()=%v, want %v for %q", got, test.clean, test.output)
+			}
+		})
 	}
 }
 
