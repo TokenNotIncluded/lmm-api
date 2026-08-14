@@ -665,7 +665,8 @@ func PrepareAssistantRequest(c *gin.Context) {
 		Temperature: 0.2,
 		MaxTokens:   900,
 	}
-	if (settings.AgentLoopEnabled && settings.MaxSteps > 1) || assistantRecommendationWorkflowRequired(userContext) {
+	if (settings.AgentLoopEnabled && settings.MaxSteps > 1) ||
+		assistantRecommendationWorkflowRequired(userContext) || assistantLiveReadRequired(userContext) {
 		request.Tools = assistantToolDefinitionsForContext(userContext)
 		request.ToolChoice = assistantToolChoiceForAgentStep(userContext, nil, nil)
 	}

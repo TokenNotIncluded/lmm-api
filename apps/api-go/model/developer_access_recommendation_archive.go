@@ -1,7 +1,6 @@
 package model
 
 import (
-	"errors"
 	"strings"
 
 	"gorm.io/gorm"
@@ -22,6 +21,11 @@ type DeveloperAccessRecommendationArchive struct {
 	AdminNote      string `json:"admin_note" gorm:"type:text"`
 	ApprovedAt     int64  `json:"approved_at" gorm:"not null;index"`
 	CreatedAt      int64  `json:"created_at" gorm:"not null"`
+}
+
+type recommendationArchiveIdentity struct {
+	requestID  int
+	approvedAt int64
 }
 
 func (DeveloperAccessRecommendationArchive) TableName() string {
@@ -70,26 +74,32 @@ func archiveApprovedDeveloperAccessRecommendation(tx *gorm.DB, request Developer
 // uses the immutable approval timestamp so a later re-approval of a reopened
 // request receives its own snapshot.
 func BackfillDeveloperAccessRecommendationArchives() error {
-	var requests []DeveloperAccessRequest
-	if err := DB.Where("status = ? AND TRIM(ai_recommendation) <> ''", DeveloperAccessRequestApproved).
-		Find(&requests).Error; err != nil {
-		return err
-	}
+	const batchSize = 200
 	return DB.Transaction(func(tx *gorm.DB) error {
-		for _, request := range requests {
-			var existing DeveloperAccessRecommendationArchive
-			err := tx.Where("request_id = ? AND approved_at = ?", request.Id, request.ReviewedAt).
-				First(&existing).Error
-			if err == nil {
-				continue
-			}
-			if !errors.Is(err, gorm.ErrRecordNotFound) {
-				return err
-			}
-			if err := archiveApprovedDeveloperAccessRecommendation(tx, request); err != nil {
-				return err
-			}
-		}
-		return nil
+		var requests []DeveloperAccessRequest
+		return tx.Where("status = ? AND TRIM(ai_recommendation) <> ''", DeveloperAccessRequestApproved).
+			FindInBatches(&requests, batchSize, func(batchTx *gorm.DB, _ int) error {
+				requestIDs := make([]int, 0, len(requests))
+				for _, request := range requests {
+					requestIDs = append(requestIDs, request.Id)
+				}
+				var existing []DeveloperAccessRecommendationArchive
+				if err := batchTx.Where("request_id IN ?", requestIDs).Find(&existing).Error; err != nil {
+					return err
+				}
+				existingKeys := make(map[recommendationArchiveIdentity]struct{}, len(existing))
+				for _, archive := range existing {
+					existingKeys[recommendationArchiveIdentity{requestID: archive.RequestId, approvedAt: archive.ApprovedAt}] = struct{}{}
+				}
+				for _, request := range requests {
+					if _, exists := existingKeys[recommendationArchiveIdentity{requestID: request.Id, approvedAt: request.ReviewedAt}]; exists {
+						continue
+					}
+					if err := archiveApprovedDeveloperAccessRecommendation(batchTx, request); err != nil {
+						return err
+					}
+				}
+				return nil
+			}).Error
 	})
 }

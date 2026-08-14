@@ -74,3 +74,34 @@ func TestRecordAdvancedSecurityEventsRejectsInvalidDecision(t *testing.T) {
 	})
 	assert.Error(t, err)
 }
+
+func TestPurgeAdvancedSecurityEventsBeforeUsesBoundedBatches(t *testing.T) {
+	db := setupConsoleActivationTestDB(t)
+	require.NoError(t, db.AutoMigrate(&AdvancedSecurityEvent{}))
+	rows := make([]AdvancedSecurityEvent, 0, 401)
+	for index := 0; index < 401; index++ {
+		rows = append(rows, AdvancedSecurityEvent{
+			CreatedAt:   int64(index + 1),
+			RequestID:   "request",
+			RuleID:      "rule",
+			Category:    "category",
+			Decision:    AdvancedSecurityDecisionAudited,
+			InputDigest: "digest",
+		})
+	}
+	require.NoError(t, db.Create(&rows).Error)
+
+	var removed int64
+	for {
+		batch, err := PurgeAdvancedSecurityEventsBefore(context.Background(), 402, 200)
+		require.NoError(t, err)
+		if batch == 0 {
+			break
+		}
+		removed += batch
+	}
+	assert.EqualValues(t, 401, removed)
+	var remaining int64
+	require.NoError(t, db.Model(&AdvancedSecurityEvent{}).Count(&remaining).Error)
+	assert.Zero(t, remaining)
+}

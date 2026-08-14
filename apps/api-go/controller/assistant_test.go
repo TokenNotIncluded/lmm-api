@@ -1328,6 +1328,50 @@ func TestAssistantL0ModelToolReturnsRealPublicPreviewIDs(t *testing.T) {
 	assert.Equal(t, "tool_not_allowed", denied["status"])
 }
 
+func TestAssistantL0ModelToolDoesNotUseAbilityFallbackWhenPricingUnavailable(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Ability{}, &model.TopUp{}))
+	previousPricing := getPricingCache
+	getPricingCache = func() []model.Pricing { return nil }
+	t.Cleanup(func() { getPricingCache = previousPricing })
+	user := model.User{
+		Username: "assistant-preview-unready",
+		Password: "password",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+		Group:    "default",
+	}
+	require.NoError(t, db.Create(&user).Error)
+	require.NoError(t, db.Create(&model.Ability{
+		Group: "default", Model: "stale-ability-model", ChannelId: 1, Enabled: true,
+	}).Error)
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Set("id", user.Id)
+	c.Set(assistantUserContextKey, assistantUserContext{AccessLevel: "L0"})
+
+	result := executeAssistantTool(c, assistantOpenAIToolCall{
+		Function: assistantOpenAIToolCallFunction{Name: "get_available_models"},
+	})
+
+	assert.Equal(t, false, result["ok"])
+	assert.Equal(t, "catalog_unavailable", result["status"])
+	assert.Equal(t, "live_pricing_catalog", result["catalog_source"])
+	assert.NotContains(t, result, "model_ids")
+}
+
+func TestAssistantSingleModelQuestionForcesLiveReadWhenAgentLoopIsOff(t *testing.T) {
+	context := assistantUserContext{
+		AccessLevel:       "L0",
+		Intent:            model.AssistantIntentModels,
+		LatestUserRequest: "查看账户可用的准确模型 ID",
+	}
+
+	assert.True(t, assistantLiveReadRequired(context))
+	assert.Equal(t, 2, assistantReadChainSteps(context))
+	assert.Equal(t, "get_available_models", assistantNamedToolChoiceName(assistantToolChoiceForAgentStep(context, map[string]bool{}, map[string]bool{})))
+}
+
 func TestAssistantAgentToolCatalogueMatchesAccessLevel(t *testing.T) {
 	l0 := assistantToolDefinitionsForContext(assistantUserContext{AccessLevel: "L0"})
 	l0Names := make(map[string]bool, len(l0))
@@ -1778,6 +1822,14 @@ func TestAssistantAgentRejectsSkippedRecommendationRead(t *testing.T) {
 func TestAssistantSetupToolReturnsExactEndpointFormatsAndClientLimits(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Ability{}, &model.TopUp{}))
+	previousPricing := getPricingCache
+	getPricingCache = func() []model.Pricing {
+		return []model.Pricing{
+			{ModelName: "claude-sonnet-4-5", EnableGroup: []string{"default"}},
+			{ModelName: "gpt-5.6-codex", EnableGroup: []string{"default"}},
+		}
+	}
+	t.Cleanup(func() { getPricingCache = previousPricing })
 	levelZero := 0
 	user := model.User{
 		Username:           "assistant-setup-preview",
@@ -1920,6 +1972,11 @@ func TestAssistantGiftRequestUsesOneTimeDecisionToolForL1(t *testing.T) {
 func TestAssistantSetupToolShellQuotesConfiguredValues(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Ability{}, &model.TopUp{}))
+	previousPricing := getPricingCache
+	getPricingCache = func() []model.Pricing {
+		return []model.Pricing{{ModelName: "claude-$(touch /tmp/model-pwned)'suffix", EnableGroup: []string{"default"}}}
+	}
+	t.Cleanup(func() { getPricingCache = previousPricing })
 	levelZero := 0
 	maliciousModelID := "claude-$(touch /tmp/model-pwned)'suffix"
 	user := model.User{
@@ -1958,6 +2015,11 @@ func TestAssistantSetupToolShellQuotesConfiguredValues(t *testing.T) {
 func TestAssistantSetupToolRejectsUnavailableModel(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Ability{}, &model.TopUp{}))
+	previousPricing := getPricingCache
+	getPricingCache = func() []model.Pricing {
+		return []model.Pricing{{ModelName: "gpt-5.6-sol", EnableGroup: []string{"default"}}}
+	}
+	t.Cleanup(func() { getPricingCache = previousPricing })
 	levelZero := 0
 	user := model.User{
 		Username:           "assistant-setup-reject",

@@ -54,33 +54,22 @@ func GetLiveness(c *gin.Context) {
 }
 
 func getPublicPreviewModelIDs() []string {
-	if model.DB == nil {
-		return []string{}
-	}
-	modelIDs := make([]string, 0)
-	if err := model.DB.Model(&model.Ability{}).
-		Where(&model.Ability{Group: "default", Enabled: true}).
-		Distinct("model").Pluck("model", &modelIDs).Error; err != nil {
-		return []string{}
-	}
-	sort.Strings(modelIDs)
-	return modelIDs
+	// The public status payload and the assistant must share the same live
+	// catalog. Keeping a separate ability-table preview would silently omit
+	// models that are enabled in other groups or newly published in pricing.
+	return getPublicCatalogModelIDs()
 }
 
 // getPublicCatalogModelIDs mirrors the live pricing catalog rather than the
 // small default-group preview. L0 users still cannot call these models, but
 // the assistant must not present a stale/truncated list when explaining the
-// catalog or helping choose a client model. The ability table remains a
-// startup/degraded-mode fallback while pricing is warming.
+// catalog or helping choose a client model. An empty result is intentional:
+// callers must report that the live catalog is not ready instead of silently
+// substituting a potentially incomplete ability snapshot.
 func getPublicCatalogModelIDs() []string {
 	modelIDs := make(map[string]struct{})
 	for _, pricing := range getPricingCache() {
 		if name := strings.TrimSpace(pricing.ModelName); name != "" {
-			modelIDs[name] = struct{}{}
-		}
-	}
-	if len(modelIDs) == 0 {
-		for _, name := range getPublicPreviewModelIDs() {
 			modelIDs[name] = struct{}{}
 		}
 	}

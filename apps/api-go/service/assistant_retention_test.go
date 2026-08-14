@@ -48,6 +48,7 @@ func TestAssistantRetentionHandlerDeletesInBatchesAndFinishesTask(t *testing.T) 
 		&model.AssistantHistoryMessage{},
 		&model.AssistantSecureCard{},
 		&model.AssistantSecurityIncident{},
+		&model.AdvancedSecurityEvent{},
 		&model.UnifiedTodoRead{},
 	))
 	t.Cleanup(func() {
@@ -56,6 +57,7 @@ func TestAssistantRetentionHandlerDeletesInBatchesAndFinishesTask(t *testing.T) 
 		model.DB.Exec("DELETE FROM assistant_secure_cards")
 		model.DB.Exec("DELETE FROM assistant_history_messages")
 		model.DB.Exec("DELETE FROM assistant_conversations")
+		model.DB.Exec("DELETE FROM advanced_security_events")
 	})
 
 	for index := range 3 {
@@ -75,6 +77,11 @@ func TestAssistantRetentionHandlerDeletesInBatchesAndFinishesTask(t *testing.T) 
 			CreatedAt:      1,
 		}).Error)
 	}
+	require.NoError(t, model.DB.Create(&[]model.AdvancedSecurityEvent{
+		{CreatedAt: 1, RequestID: "old-request-1", RuleID: "rule", Category: "category", Decision: model.AdvancedSecurityDecisionAudited},
+		{CreatedAt: 1, RequestID: "old-request-2", RuleID: "rule", Category: "category", Decision: model.AdvancedSecurityDecisionBlocked},
+		{CreatedAt: 11, RequestID: "new-request", RuleID: "rule", Category: "category", Decision: model.AdvancedSecurityDecisionAudited},
+	}).Error)
 
 	payload := AssistantRetentionPayload{
 		AssistantRetentionCutoffs: model.AssistantRetentionCutoffs{
@@ -100,8 +107,13 @@ func TestAssistantRetentionHandlerDeletesInBatchesAndFinishesTask(t *testing.T) 
 	require.NoError(t, stored.DecodeState(&state))
 	assert.EqualValues(t, 3, state.Conversations)
 	assert.EqualValues(t, 3, state.Messages)
+	assert.EqualValues(t, 2, state.SecurityEvents)
 	assert.Equal(t, 100, state.Progress)
 	var remaining int64
 	require.NoError(t, model.DB.Model(&model.AssistantConversation{}).Count(&remaining).Error)
 	assert.Zero(t, remaining)
+	require.NoError(t, model.DB.Model(&model.AdvancedSecurityEvent{}).Where("created_at < ?", 10).Count(&remaining).Error)
+	assert.Zero(t, remaining)
+	require.NoError(t, model.DB.Model(&model.AdvancedSecurityEvent{}).Where("created_at >= ?", 10).Count(&remaining).Error)
+	assert.EqualValues(t, 1, remaining)
 }

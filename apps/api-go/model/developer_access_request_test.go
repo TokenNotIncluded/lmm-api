@@ -94,6 +94,38 @@ func TestAssistantDeveloperAccessRecommendationCanBeCleared(t *testing.T) {
 	assert.Equal(t, DeveloperAccessRequestSourceAssistant, cleared.Source)
 }
 
+func TestRecommendationArchiveBackfillIsBatchedAndIdempotent(t *testing.T) {
+	db := setupConsoleActivationTestDB(t)
+	require.NoError(t, db.AutoMigrate(&DeveloperAccessRequest{}, &DeveloperAccessRecommendationArchive{}))
+
+	const total = 401
+	requests := make([]DeveloperAccessRequest, 0, total)
+	for index := 0; index < total; index++ {
+		approvedAt := int64(1_700_000_000 + index)
+		requests = append(requests, DeveloperAccessRequest{
+			UserId:           index + 1,
+			Status:           DeveloperAccessRequestApproved,
+			Source:           DeveloperAccessRequestSourceAI,
+			Reason:           "a concrete integration request",
+			AIRecommendation: "the user described a concrete integration workflow",
+			AdminUserId:      99,
+			AdminNote:        "approved",
+			CreatedAt:        approvedAt,
+			ReviewedAt:       approvedAt,
+		})
+	}
+	require.NoError(t, db.Create(&requests).Error)
+
+	require.NoError(t, BackfillDeveloperAccessRecommendationArchives())
+	var count int64
+	require.NoError(t, db.Model(&DeveloperAccessRecommendationArchive{}).Count(&count).Error)
+	assert.EqualValues(t, total, count)
+
+	require.NoError(t, BackfillDeveloperAccessRecommendationArchives())
+	require.NoError(t, db.Model(&DeveloperAccessRecommendationArchive{}).Count(&count).Error)
+	assert.EqualValues(t, total, count)
+}
+
 func TestUserEditKeepsOneRecommendationWithoutClaimingAIProvenance(t *testing.T) {
 	db := setupConsoleActivationTestDB(t)
 	require.NoError(t, db.AutoMigrate(&DeveloperAccessRequest{}))

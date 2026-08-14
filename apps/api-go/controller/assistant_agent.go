@@ -772,8 +772,16 @@ func assistantNeedsReadChain(userContext assistantUserContext) bool {
 	return len(assistantReadChain(userContext)) > 1
 }
 
+// assistantLiveReadRequired keeps authoritative catalog/activity reads on the
+// agent path even when the optional multi-step loop is disabled. A single
+// model-ID question still needs one live tool call; otherwise the configured
+// model can answer from stale training data.
+func assistantLiveReadRequired(userContext assistantUserContext) bool {
+	return len(assistantReadChain(userContext)) > 0
+}
+
 func assistantReadChainSteps(userContext assistantUserContext) int {
-	if !assistantNeedsReadChain(userContext) {
+	if !assistantLiveReadRequired(userContext) {
 		return 0
 	}
 	steps := len(assistantReadChain(userContext)) + 1 // reads, then final answer
@@ -1163,7 +1171,7 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 	forceImageGenerationWorkflow := assistantImageGenerationWorkflowRequired(userContext)
 	forcePublicActivityWorkflow := assistantPublicActivityWorkflowRequired(userContext)
 	forceNewUserGiftWorkflow := assistantNewUserGiftWorkflowRequired(userContext)
-	forceReadChain := assistantNeedsReadChain(userContext)
+	forceReadChain := assistantLiveReadRequired(userContext)
 	if forceL0Assessment && maxSteps < 2 {
 		maxSteps = 2
 	}
@@ -1987,6 +1995,15 @@ func executeAssistantModelsTool(userID int) map[string]any {
 	}
 	if !access.Granted {
 		models := getPublicCatalogModelIDs()
+		if len(models) == 0 {
+			return map[string]any{
+				"ok":             false,
+				"status":         "catalog_unavailable",
+				"error":          "the live public model catalog is temporarily unavailable",
+				"catalog_source": "live_pricing_catalog",
+				"next_step":      "Tell the user the live catalog is warming and do not guess or substitute model IDs.",
+			}
+		}
 		return map[string]any{
 			"ok":                           true,
 			"status":                       "public_preview",
