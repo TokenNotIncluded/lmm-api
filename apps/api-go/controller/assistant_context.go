@@ -77,9 +77,8 @@ var (
 		"summarize", "summary", "rewrite", "paraphrase", "translate", "essay", "paper", "research", "algorithm", "experiment", "theory",
 	}
 	assistantPromotionTerms = []string{
-		"薅羊毛", "羊毛", "白嫖", "优惠码", "免费额度", "免费礼包", "新用户礼包", "新人福利", "新手福利", "新手奖励",
-		"领取奖励", "领取礼包", "送额度", "赠送额度", "免费试用", "批量注册", "多个账号", "多账号", "临时邮箱", "一次性邮箱",
-		"coupon", "discount", "free credits", "free trial", "welcome gift", "new user bonus", "referral",
+		"薅羊毛", "羊毛", "白嫖", "优惠码", "免费额度", "免费试用", "批量注册", "多个账号", "多账号", "临时邮箱", "一次性邮箱",
+		"coupon", "discount", "free credits", "free trial", "referral",
 		"multiple accounts", "temporary email", "disposable email",
 	}
 )

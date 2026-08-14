@@ -497,6 +497,47 @@ func TestPrepareAssistantRequestRecommendationEditBypassesCachedAnswer(t *testin
 	assert.NotContains(t, response.Body.String(), "stale cached answer")
 }
 
+func TestPrepareAssistantRequestGiftBypassesCachedAnswer(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.AssistantLead{}, &model.AssistantProfileBucket{}, &model.AssistantFirstQuestionStat{}))
+	withAssistantSettings(t, true, "assistant-gift-cache-bypass-model")
+	original := setting.GetAssistantSettings()
+	setting.SetAssistantCacheEnabled(true)
+	require.NoError(t, setting.UpdateAssistantCacheTTLMinutes("10"))
+	t.Cleanup(func() {
+		setting.SetAssistantCacheEnabled(original.CacheEnabled)
+		_ = setting.UpdateAssistantCacheTTLMinutes(strconv.Itoa(original.CacheTTLMinutes))
+	})
+
+	message := "申请新人福利（缓存回放测试）"
+	settings := setting.GetAssistantSettings()
+	context := assistantUserContextForRequest(42, message)
+	require.True(t, assistantNewUserGiftWorkflowRequired(context))
+	key := assistantCacheKey(settings, []assistantOpenAIMessage{{Role: "user", Content: message}}, context)
+	require.NotEmpty(t, key)
+	storeAssistantCachedResponse(settings, key, http.StatusOK, []byte(`{"choices":[{"message":{"role":"assistant","content":"stale cached gift answer"}}]}`))
+
+	downstreamCalls := 0
+	engine := gin.New()
+	engine.POST("/api/assistant/chat", func(c *gin.Context) {
+		c.Set("id", 42)
+		PrepareAssistantRequest(c)
+	}, func(c *gin.Context) {
+		downstreamCalls++
+		c.Status(http.StatusNoContent)
+	})
+	request := httptest.NewRequest(http.MethodPost, "/api/assistant/chat", strings.NewReader(`{"message":"`+message+`"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	engine.ServeHTTP(response, request)
+
+	assert.Equal(t, http.StatusNoContent, response.Code)
+	assert.Empty(t, response.Header().Get("X-LMM-Assistant-Cache"))
+	assert.Equal(t, 1, downstreamCalls)
+	assert.NotContains(t, response.Body.String(), "stale cached gift answer")
+}
+
 func TestPrepareAssistantRequestRejectsUnsafeOrOversizedConversation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	withAssistantSettings(t, true, "assistant-model")

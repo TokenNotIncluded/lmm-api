@@ -807,7 +807,7 @@ export function AssistantLeadsPanel() {
           className='min-w-0 border-t pt-4'
           data-testid='assistant-secondary-workspace'
         >
-          <Tabs defaultValue='resolved' className='min-w-0'>
+          <Tabs defaultValue='insights' className='min-w-0'>
             <TabsList className='border-border flex h-auto w-full max-w-full flex-wrap justify-start gap-6 overflow-hidden rounded-none border-b bg-transparent p-0'>
               <TabsTrigger
                 className='min-w-0 rounded-none border-0 bg-transparent px-0 py-3 text-center text-xs whitespace-normal shadow-none sm:flex-none sm:text-sm'

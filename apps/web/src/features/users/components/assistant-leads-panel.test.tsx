@@ -294,6 +294,10 @@ describe('AssistantLeadsPanel', () => {
       container.textContent ?? '',
       /Privacy-minimized request.*I need help configuring Claude Code\./s
     )
+    assert.doesNotMatch(
+      container.textContent ?? '',
+      /resolved-user|Configuration confirmed\./
+    )
     assert.equal(
       container
         .querySelector('#assistant-support-note-1')

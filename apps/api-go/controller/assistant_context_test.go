@@ -741,6 +741,20 @@ func TestAssistantL0ApplicantWelcomeStrategyDoesNotAskWhetherNew(t *testing.T) {
 	assert.NotContains(t, strategy, "ask whether they are new to AI")
 }
 
+func TestAssistantLegitimateGiftRequestKeepsGiftWorkflowAvailable(t *testing.T) {
+	for _, message := range []string{
+		"申请新人福利",
+		"我想领取新手福利",
+		"我想申请新用户福利",
+		"How do I claim the new user gift?",
+	} {
+		context := assistantUserContextForRequest(0, message)
+		assert.NotEqual(t, assistantProfilePromotion, context.CustomerProfile, message)
+		assert.True(t, assistantNewUserGiftWorkflowRequired(context), message)
+		assert.Equal(t, "prepare_new_user_gift", assistantNamedToolChoiceName(assistantToolChoiceForContext(context)), message)
+	}
+}
+
 func TestAssistantL0WelcomeStrategyPreservesProfileSpecialization(t *testing.T) {
 	tests := []struct {
 		profile assistantCustomerProfile

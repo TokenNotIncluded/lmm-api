@@ -610,11 +610,12 @@ func PrepareAssistantRequest(c *gin.Context) {
 		}
 	}
 	cacheKey := assistantCacheKey(settings, conversation, userContext)
-	if assistantRecommendationWorkflowRequired(userContext) || assistantCreateKeyWorkflowRequired(userContext) {
+	if assistantRecommendationWorkflowRequired(userContext) || assistantCreateKeyWorkflowRequired(userContext) || assistantNewUserGiftWorkflowRequired(userContext) {
 		// Recommendation edits depend on the current shared letter and can create
 		// a new confirmation draft. Key creation also returns a short-lived,
-		// session-bound confirmation. Never let a cached natural-language response
-		// bypass either deterministic workflow.
+		// session-bound confirmation. A gift decision is one-time and its durable
+		// eligibility may change after another request. Never let a cached
+		// natural-language response bypass any of these deterministic workflows.
 		cacheKey = ""
 	}
 	if cacheKey != "" {
