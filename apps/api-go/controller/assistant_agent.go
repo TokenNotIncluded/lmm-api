@@ -149,7 +149,7 @@ func buildAssistantTools() []assistantOpenAIToolDefinition {
 			Type: "function",
 			Function: assistantOpenAIToolFunction{
 				Name:        "get_service_facts",
-				Description: "Return the current public connection facts for this LMM console. Use this before explaining Base URL, compatible client endpoints, or where to manage private API keys.",
+				Description: "Return current public connection facts and enabled console activities for this LMM console. Use this before explaining Base URL, compatible client endpoints, private API-key management, check-in, rewards, or other site features; never infer a feature from memory.",
 				Parameters:  emptyObjectSchema(),
 			},
 		},
@@ -244,7 +244,7 @@ func buildAssistantTools() []assistantOpenAIToolDefinition {
 			Type: "function",
 			Function: assistantOpenAIToolFunction{
 				Name:        "prepare_new_user_gift",
-				Description: "For an eligible L0 new user only, make their one lifetime welcome-gift decision after at least two substantive user turns. Judge demonstrated clarity, coherent follow-up, concrete legitimate use, and constructive engagement from the complete conversation. Choose an integer 0-1000 US cents. Zero is a valid final decision and consumes the opportunity. Do not reward demands for money, self-reported expertise alone, promotions, referrals, multiple accounts, automation, or unsafe behavior. The server enforces eligibility and one-time issuance; never promise an amount before this tool succeeds.",
+				Description: "For an eligible signed-in user who has not used their one lifetime welcome-gift opportunity, make the decision after at least two substantive user turns. This includes users who have already reached L1; access level does not erase an unused opportunity. Judge demonstrated clarity, coherent follow-up, concrete legitimate use, and constructive engagement from the complete conversation. Choose an integer 0-1000 US cents. Zero is a valid final decision and consumes the opportunity. Do not reward demands for money, self-reported expertise alone, promotions, referrals, multiple accounts, automation, or unsafe behavior. The server enforces eligibility and one-time issuance; never promise an amount before this tool succeeds.",
 				Parameters: objectSchema(map[string]any{
 					"amount_cents": map[string]any{"type": "integer", "minimum": 0, "maximum": 1000},
 					"reason":       map[string]any{"type": "string", "minLength": 2, "maxLength": 240},
@@ -531,7 +531,12 @@ func keyForTools(context assistantUserContext) toolSetKey {
 }
 
 func assistantNewUserGiftToolAllowed(context assistantUserContext) bool {
-	if context.AdministratorMode || context.DeveloperAccessGranted || context.AccessLevel != "L0" {
+	// An unused opportunity survives L0 -> L1 upgrades. Deterministic server
+	// checks still reject disabled/disposable/abusive accounts and the unique
+	// gift row makes the decision one-time. Keep the existing high-risk and
+	// promotion guard at the tool boundary so the assistant does not invite a
+	// known-abusive conversation into a reward flow.
+	if context.AdministratorMode {
 		return false
 	}
 	return context.CustomerProfile != assistantProfilePromotion && context.CustomerProfile != assistantProfileSecurityRisk
@@ -626,6 +631,10 @@ func assistantToolChoiceForContext(userContext assistantUserContext) any {
 	name := ""
 	if userContext.ConversationTitleNeeded {
 		name = "set_conversation_title"
+	} else if assistantPublicActivityQuestion(userContext.LatestUserRequest) {
+		name = "get_service_facts"
+	} else if assistantNewUserGiftRequest(userContext.LatestUserRequest) {
+		name = "prepare_new_user_gift"
 	} else {
 		switch userContext.Intent {
 		case model.AssistantIntentCost, model.AssistantIntentModels:
@@ -660,6 +669,21 @@ func assistantToolChoiceForContext(userContext assistantUserContext) any {
 	return "auto"
 }
 
+func assistantPublicActivityQuestion(text string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(text))
+	return assistantTextContainsAny(normalized,
+		"签到", "打卡", "每日奖励", "奖励活动", "网站活动", "check in", "check-in", "daily check", "daily reward", "site activity", "site feature",
+	)
+}
+
+func assistantNewUserGiftRequest(text string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(text))
+	return assistantTextContainsAny(normalized,
+		"新用户礼包", "新手礼包", "新手奖励", "新用户奖励", "新人礼包", "welcome gift", "new-user gift",
+		"免费额度", "赠送额度", "送我额度", "刀额度", "美元额度", "美金额度", "free credit", "welcome credit",
+	)
+}
+
 // assistantReadChain returns the smallest deterministic read chain
 // needed to answer compound fact requests. A model remains responsible for
 // the tool arguments, but it cannot skip live service/model/price reads and
@@ -670,10 +694,18 @@ func assistantReadChain(userContext assistantUserContext) []string {
 		return nil
 	}
 	tools := make([]string, 0, 3)
+	if assistantPublicActivityQuestion(text) {
+		tools = append(tools, "get_service_facts")
+	}
+	if assistantNewUserGiftRequest(text) && assistantNewUserGiftToolAllowed(userContext) {
+		tools = append(tools, "prepare_new_user_gift")
+	}
 	if assistantTextContainsAny(text,
 		"base url", "base_url", "服务地址", "接口地址", "endpoint", "端点",
 	) {
-		tools = append(tools, "get_service_facts")
+		if !slices.Contains(tools, "get_service_facts") {
+			tools = append(tools, "get_service_facts")
+		}
 	}
 	if userContext.Intent == model.AssistantIntentCost ||
 		userContext.Intent == model.AssistantIntentModels ||
@@ -707,6 +739,33 @@ func assistantRecommendationWorkflowRequired(userContext assistantUserContext) b
 
 func assistantCreateKeyWorkflowRequired(userContext assistantUserContext) bool {
 	return userContext.DeveloperAccessGranted && userContext.CreateKeyAction != assistantCreateKeyActionNone
+}
+
+func assistantPublicActivityWorkflowRequired(userContext assistantUserContext) bool {
+	return assistantPublicActivityQuestion(userContext.LatestUserRequest) &&
+		assistantToolAllowedForContext("get_service_facts", userContext)
+}
+
+func assistantNewUserGiftWorkflowRequired(userContext assistantUserContext) bool {
+	return assistantNewUserGiftRequest(userContext.LatestUserRequest) &&
+		assistantNewUserGiftToolAllowed(userContext)
+}
+
+func assistantLiveActivityWorkflowMinSteps(userContext assistantUserContext) int {
+	steps := 1 // final answer
+	if assistantPublicActivityWorkflowRequired(userContext) {
+		steps++
+	}
+	if assistantNewUserGiftWorkflowRequired(userContext) {
+		steps++
+	}
+	if steps == 1 {
+		return 0
+	}
+	if userContext.ConversationTitleNeeded {
+		steps++
+	}
+	return steps
 }
 
 func assistantNeedsReadChain(userContext assistantUserContext) bool {
@@ -776,6 +835,22 @@ func assistantToolChoiceForAgentStep(userContext assistantUserContext, calledToo
 			return assistantNamedToolChoice("prepare_image_generation")
 		}
 		return "none"
+	}
+	if assistantPublicActivityWorkflowRequired(userContext) {
+		if !calledTools["get_service_facts"] {
+			return assistantNamedToolChoice("get_service_facts")
+		}
+		if !successfulTools["get_service_facts"] {
+			return "none"
+		}
+	}
+	if assistantNewUserGiftWorkflowRequired(userContext) {
+		if !calledTools["prepare_new_user_gift"] {
+			return assistantNamedToolChoice("prepare_new_user_gift")
+		}
+		if !successfulTools["prepare_new_user_gift"] {
+			return "none"
+		}
 	}
 	if !assistantRecommendationWorkflowRequired(userContext) {
 		if name, failed := assistantNextRead(userContext, calledTools, successfulTools); name != "" && assistantToolAllowedForContext(name, userContext) {
@@ -1086,6 +1161,8 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 	forceRecommendationWorkflow := assistantRecommendationWorkflowRequired(userContext)
 	forceCreateKeyWorkflow := assistantCreateKeyWorkflowRequired(userContext)
 	forceImageGenerationWorkflow := assistantImageGenerationWorkflowRequired(userContext)
+	forcePublicActivityWorkflow := assistantPublicActivityWorkflowRequired(userContext)
+	forceNewUserGiftWorkflow := assistantNewUserGiftWorkflowRequired(userContext)
 	forceReadChain := assistantNeedsReadChain(userContext)
 	if forceL0Assessment && maxSteps < 2 {
 		maxSteps = 2
@@ -1099,17 +1176,20 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 	if minimum := assistantImageGenerationWorkflowMinSteps(userContext); maxSteps < minimum {
 		maxSteps = minimum
 	}
+	if minimum := assistantLiveActivityWorkflowMinSteps(userContext); maxSteps < minimum {
+		maxSteps = minimum
+	}
 	if minimum := assistantReadChainSteps(userContext); maxSteps < minimum {
 		maxSteps = minimum
 	}
 	if !settings.AgentLoopEnabled {
-		if !forceL0Assessment && !forceRecommendationWorkflow && !forceCreateKeyWorkflow && !forceImageGenerationWorkflow && !forceReadChain {
+		if !forceL0Assessment && !forceRecommendationWorkflow && !forceCreateKeyWorkflow && !forceImageGenerationWorkflow && !forcePublicActivityWorkflow && !forceNewUserGiftWorkflow && !forceReadChain {
 			maxSteps = 1
 		}
 	}
 	cacheKey := c.GetString("assistant_cache_key")
 	usedCacheSensitiveTool := false
-	agentEnabled := maxSteps > 1 && (settings.AgentLoopEnabled || forceL0Assessment || forceRecommendationWorkflow || forceCreateKeyWorkflow || forceImageGenerationWorkflow || forceReadChain)
+	agentEnabled := maxSteps > 1 && (settings.AgentLoopEnabled || forceL0Assessment || forceRecommendationWorkflow || forceCreateKeyWorkflow || forceImageGenerationWorkflow || forcePublicActivityWorkflow || forceNewUserGiftWorkflow || forceReadChain)
 	var tools []assistantOpenAIToolDefinition
 	var calledTools, successfulTools map[string]bool
 	toolTraces := make([]assistantToolTrace, 0, assistantToolCallsPerTurn)
@@ -1150,7 +1230,7 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 			return
 		}
 		message := response.Choices[0].Message
-		if forceRecommendationWorkflow || forceCreateKeyWorkflow || forceImageGenerationWorkflow || forceReadChain {
+		if forceRecommendationWorkflow || forceCreateKeyWorkflow || forceImageGenerationWorkflow || forcePublicActivityWorkflow || forceNewUserGiftWorkflow || forceReadChain {
 			requiredTool := assistantNamedToolChoiceName(request.ToolChoice)
 			if requiredTool != "" && (len(message.ToolCalls) != 1 || strings.TrimSpace(message.ToolCalls[0].Function.Name) != requiredTool) {
 				writeAssistantError(c, http.StatusBadGateway, "ASSISTANT_REQUIRED_TOOL_MISSING", errors.New("assistant did not follow the required tool workflow"))
@@ -1170,7 +1250,7 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 			c.Data(status, "application/json; charset=utf-8", normalizedBody)
 			return
 		}
-		if (!settings.AgentLoopEnabled && !forceL0Assessment && !forceRecommendationWorkflow && !forceCreateKeyWorkflow && !forceImageGenerationWorkflow && !forceReadChain) || step >= maxSteps-1 {
+		if (!settings.AgentLoopEnabled && !forceL0Assessment && !forceRecommendationWorkflow && !forceCreateKeyWorkflow && !forceImageGenerationWorkflow && !forcePublicActivityWorkflow && !forceNewUserGiftWorkflow && !forceReadChain) || step >= maxSteps-1 {
 			writeAssistantError(c, http.StatusBadGateway, "ASSISTANT_AGENT_MAX_STEPS", errors.New("assistant agent reached its step limit before producing a final answer"))
 			return
 		}
@@ -1363,6 +1443,24 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 		} else {
 			baseURL += "/v1"
 		}
+		checkinSetting := operation_setting.GetCheckinSetting()
+		checkinFacts := map[string]any{
+			"enabled":         checkinSetting.Enabled,
+			"page_path":       "/profile",
+			"status_endpoint": "/api/user/checkin",
+			"frequency":       "once_per_day",
+			"reward_type":     "random_quota",
+		}
+		if checkinSetting.Enabled {
+			checkinFacts["base_min_quota"] = checkinSetting.MinQuota
+			checkinFacts["base_max_quota"] = checkinSetting.MaxQuota
+		}
+		keyGroupOptions := []assistantKeyGroupOption(nil)
+		if actorUserID > 0 {
+			if user, userErr := model.GetUserCache(actorUserID); userErr == nil && user != nil {
+				keyGroupOptions = getAssistantKeyGroupOptions(user.Group)
+			}
+		}
 		return map[string]any{
 			"ok":                       true,
 			"service_root":             rootURL,
@@ -1370,6 +1468,11 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 			"client_model_instruction": "Call get_available_models and use an exact model_ids value; the assistant's own model is not a client default.",
 			"api_keys_are_private":     true,
 			"key_management_path":      "/keys",
+			"key_group_options":        keyGroupOptions,
+			"group_catalog_source":     "live_user_usable_groups",
+			"activities": map[string]any{
+				"daily_checkin": checkinFacts,
+			},
 			"cc_switch_import": map[string]any{
 				"supported":                true,
 				"protocol":                 "ccswitch://v1/import",
@@ -1883,7 +1986,7 @@ func executeAssistantModelsTool(userID int) map[string]any {
 		return map[string]any{"ok": false, "error": "developer access could not be loaded"}
 	}
 	if !access.Granted {
-		models := getPublicPreviewModelIDs()
+		models := getPublicCatalogModelIDs()
 		return map[string]any{
 			"ok":                           true,
 			"status":                       "public_preview",
@@ -1893,7 +1996,8 @@ func executeAssistantModelsTool(userID int) map[string]any {
 			"developer_access_granted":     false,
 			"account_model_access_locked":  true,
 			"preview_matches_live_catalog": true,
-			"next_step":                    "Answer with these exact preview IDs. Explain that L1 is required to use them, but do not claim that the models are unknown.",
+			"catalog_source":               "live_pricing_catalog",
+			"next_step":                    "Answer with these exact live catalog IDs. Explain that L1 is required to use them, but do not claim that the models are unknown.",
 		}
 	}
 	if user.Role >= common.RoleAdminUser {

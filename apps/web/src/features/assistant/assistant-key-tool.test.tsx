@@ -21,6 +21,8 @@ import { after, afterEach, describe, test } from 'node:test'
 
 import { Window } from 'happy-dom'
 
+import type { AssistantCreateKeyAction } from './api'
+
 const domWindow = new Window({ url: 'https://console.example.test/' })
 for (const key of [
   'window',
@@ -67,7 +69,6 @@ const { createInstance } = await import('i18next')
 const { I18nextProvider, initReactI18next } = await import('react-i18next')
 const { api } = await import('@/lib/api')
 const { AssistantKeyTool } = await import('./assistant-key-tool')
-import type { AssistantCreateKeyAction } from './api'
 
 const originalPost = api.post
 const originalGet = api.get
@@ -95,7 +96,8 @@ async function flushEffects() {
 async function renderTool(
   developerAccessGranted: boolean,
   onContinueSetup = () => {},
-  confirmationAction?: AssistantCreateKeyAction
+  confirmationAction?: AssistantCreateKeyAction,
+  autoConfirm = false
 ): Promise<RenderedTool> {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -109,6 +111,7 @@ async function renderTool(
             availableModels={['claude-sonnet-4-5']}
             developerAccessGranted={developerAccessGranted}
             confirmationAction={confirmationAction}
+            autoConfirm={autoConfirm}
             onContinueSetup={onContinueSetup}
           />
         </I18nextProvider>
@@ -332,6 +335,55 @@ describe('AssistantKeyTool', () => {
       group: 'GPT-Auto',
       confirmation_token: 'preview-token',
     })
+    await unmount(rendered)
+  })
+
+  test('confirms an affirmative chat reply through the pending action', async () => {
+    let posted: unknown
+    api.post = (async (_url: string, data: unknown) => {
+      posted = data
+      return {
+        data: {
+          success: true,
+          data: {
+            id: 11,
+            name: 'chat-created',
+            group: 'GPT-Pro',
+            expired_time: -1,
+            card: { id: 'card-11', label: 'Private API key' },
+          },
+        },
+      }
+    }) as typeof api.post
+    const rendered = await renderTool(
+      true,
+      () => {},
+      {
+        type: 'create_key',
+        confirmation_token: 'chat-token',
+        requires_confirmation: true,
+        expires_in_seconds: 600,
+        name: 'chat-created',
+        group: 'GPT-Pro',
+      },
+      true
+    )
+
+    await act(async () => {
+      await flushEffects()
+    })
+    assert.deepEqual(posted, {
+      confirmed: true,
+      name: 'chat-created',
+      group: 'GPT-Pro',
+      confirmation_token: 'chat-token',
+    })
+    assert.match(rendered.container.textContent ?? '', /API key created/)
+    assert.ok(
+      rendered.container.querySelector('[data-testid="assistant-private-card"]')
+    )
+    assert.doesNotMatch(rendered.container.textContent ?? '', /sk-/)
+
     await unmount(rendered)
   })
 })

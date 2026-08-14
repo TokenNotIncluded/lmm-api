@@ -79,6 +79,21 @@ func TestAssistantNewUserGiftIsOneTimeAndClaimIsIdempotent(t *testing.T) {
 	assert.Equal(t, gift.Quota, stored.Quota)
 }
 
+func TestAssistantGiftOpportunitySurvivesL1AndOlderAccounts(t *testing.T) {
+	db := setupAssistantGiftTestDB(t)
+	levelOne := TrustLevelMinUser + 1
+	user := newAssistantGiftUser(t, db, "l1-gift-user", "l1-gift@example.com")
+	require.NoError(t, db.Model(&User{}).Where("id = ?", user.Id).Updates(map[string]any{
+		"created_at":           time.Now().Add(-365 * 24 * time.Hour).Unix(),
+		"trust_level_override": levelOne,
+	}).Error)
+
+	gift, created, err := DecideAssistantNewUserGift(user.Id, 9, 100, "An L1 user with an unused welcome-gift opportunity.", 2, 52, "198.51.100.22")
+	require.NoError(t, err)
+	assert.True(t, created)
+	assert.Equal(t, AssistantGiftOffered, gift.Status)
+}
+
 func TestAssistantNewUserGiftRejectsIneligibleOrShallowDecisions(t *testing.T) {
 	db := setupAssistantGiftTestDB(t)
 	user := newAssistantGiftUser(t, db, "shallow-gift-user", "shallow@example.com")

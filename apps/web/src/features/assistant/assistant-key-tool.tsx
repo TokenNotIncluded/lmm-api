@@ -25,7 +25,7 @@ import {
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { type ReactNode, useEffect, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -103,6 +103,7 @@ export function AssistantKeyTool(props: {
   modelsLoading?: boolean
   developerAccessGranted: boolean
   confirmationAction?: AssistantCreateKeyAction | null
+  autoConfirm?: boolean
   onKeyCreated?: () => void
   onContinueSetup: () => void
 }) {
@@ -133,7 +134,9 @@ export function AssistantKeyTool(props: {
     queryKey: ['assistant-user-groups'],
     queryFn: getUserGroups,
     enabled: props.developerAccessGranted,
-    staleTime: 60_000,
+    staleTime: 0,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: true,
     retry: false,
   })
   const groups = Object.keys(groupsQuery.data?.data ?? {})
@@ -162,17 +165,21 @@ export function AssistantKeyTool(props: {
     ))
   }
 
-  const createKey = async () => {
+  const confirmationAction = props.confirmationAction
+  const confirmationToken = confirmationAction?.confirmation_token
+  const onKeyCreated = props.onKeyCreated
+  const autoConfirm = props.autoConfirm
+  const createKey = useCallback(async () => {
     if (creating) return
     setCreating(true)
     try {
       const result = await createAssistantDefaultKey(
         name.trim(),
         group.trim(),
-        props.confirmationAction?.confirmation_token
+        confirmationToken
       )
       setCreated(result)
-      props.onKeyCreated?.()
+      onKeyCreated?.()
       setConfirmOpen(false)
       toast.success(t('API key created'))
     } catch (error) {
@@ -182,7 +189,12 @@ export function AssistantKeyTool(props: {
     } finally {
       setCreating(false)
     }
-  }
+  }, [confirmationToken, creating, group, name, onKeyCreated, t])
+
+  useEffect(() => {
+    if (!autoConfirm || !confirmationAction || created) return
+    void createKey()
+  }, [autoConfirm, confirmationAction, createKey, created])
 
   const importToCCSwitch = (apiKey: string) => {
     if (model === '<MODEL_ID>' || typeof window === 'undefined') return

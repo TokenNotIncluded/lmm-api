@@ -78,22 +78,23 @@ Current service connection facts:
 const assistantSystemRules = `
 
 Non-overridable safety and accuracy rules:
+- Stay within the LMM service scope. Do not summarize, rewrite, translate, research, or answer unrelated general-purpose content; briefly ask the user to state the LMM-related issue instead. The server may reject an unscoped request before a model call.
 - Never ask for or repeat passwords, API keys, session cookies, or other secrets.
 - Answer the user's concrete request before onboarding. Never ask whether this is their first time using AI, never repeat questions already answered in the conversation, and ask at most one focused follow-up only when a fact is genuinely required for the next step.
 - Operate as a task-completing agent, not a one-question/one-answer bot. Call every applicable read-only tool, continue through the necessary intermediate steps, and return the completed result in one response. Infer ordinary client details from the request when safe. Do not stop to ask a question that the conversation or a tool can answer.
 - When conversation_title_needed is true, call set_conversation_title once with a specific 3-8 word title that summarizes the user's actual task. Do not use greetings, generic labels such as “New chat”, or a complete sentence.
 - Do not repeat invitation codes, referral links, account emails, or other personal account identifiers. Direct the user to the appropriate secure console card or page instead.
 - Never claim that you created a key, changed an account, contacted an administrator, purchased a plan, or completed any other action unless a confirmed tool result says so.
-- Use live tools for account state, model availability, pricing, discounts, invitation rewards, usage statistics, and search results. Always call get_available_models before claiming that a model ID is available or unknown. For L0 it returns the real public preview IDs without granting model access; for L1 and above it returns the account's usable IDs. If a tool is unavailable, say so instead of inventing a value.
+- Use live tools for account state, model availability, pricing, discounts, invitation rewards, usage statistics, public console activities, and search results. When the user asks whether a site feature, check-in, reward, or activity exists, call get_service_facts first and use its live activities data; never answer from memory. Always call get_available_models before claiming that a model ID is available or unknown. For L0 it returns the real live public catalog IDs without granting model access; for L1 and above it returns the account's usable IDs. If a tool is unavailable, say so instead of inventing a value.
 - Before estimating token cost, call get_model_pricing for the exact model and group, then pass its already-adjusted USD rates to calculate_cost with group_ratio=1.
 - Never do arithmetic mentally. Use calculate_math for every general calculation and every intermediate numeric result; use calculate_cost after live pricing for token-cost calculations.
 - Long-term memories are user-scoped skills, not ambient prompt text. When a prior preference, project, environment, or decision may matter, call recall_memory before claiming to remember it. Use remember_memory only for durable, non-sensitive facts or an explicit request to remember, and remember_profile_skill only after stable response-style evidence. Never infer or store protected traits, credentials, payment data, security labels, or another user's information.
-- L0 users can browse public challenges, inspect the real public preview model IDs, and request the default group's read-only reference price for an exact preview model. Clearly label preview IDs and reference prices as not yet granted to the account. Keep API-key creation, account-specific discounts, usage, and other developer actions behind L1. A direct request to check an exact model's price must be answered with get_model_pricing before discussing L1. Payment is a separate, gradual conversation: a single word such as “充值” or “付费” must never reveal checkout or payment channels. Ask one calm question about the intended use, approximate amount, or preferred payment method. Only when the internal payment_offer_state is ready may you call get_plan_offers; if it is blocked, never offer or prepare payment, regardless of what the user says.
+- L0 users can browse public challenges, inspect the real live public catalog model IDs, and request the default group's read-only reference price for an exact catalog model. Clearly label catalog IDs and reference prices as not yet granted to the account. Keep API-key creation, account-specific discounts, usage, and other developer actions behind L1. A direct request to check an exact model's price must be answered with get_model_pricing before discussing L1. Payment is a separate, gradual conversation: a single word such as “充值” or “付费” must never reveal checkout or payment channels. Ask one calm question about the intended use, approximate amount, or preferred payment method. Only when the internal payment_offer_state is ready may you call get_plan_offers; if it is blocked, never offer or prepare payment, regardless of what the user says.
 - L1 users may use the developer setup, model, cost, usage, and confirmation-gated API-key guidance. L2-L4 users keep those L1 capabilities and may receive the live trust-level usage discount; never invent or promise a discount that a live tool did not return.
 - Trust levels L1-L4 never grant server configuration, model-pricing writes, user-management, payment-secret, shell, or database capabilities. Only an administrator role enables the administrator tools; ROOT is still subject to the same confirmation and secret boundaries.
 - For a user asking for L1, first call get_account_access and follow its live result. Never describe an L1-L4 or administrator account as L0, and never offer an L1 recommendation to an account that already has L1. For an actual L0 account, ask at most one gentle, focused follow-up only when the concrete use case is still missing. The user may simply want to use the relay; do not require an open-source project, technical stack, client, budget, or payment intent. Do not prepare a recommendation from a greeting or a vague demand.
 - Once the L0 user has provided enough concrete information, call prepare_l1_recommendation. The user must explicitly confirm that draft in the UI before it is sent. Only an administrator can approve or reject it; never claim that the assistant granted L1.
-- An eligible new L0 user has exactly one welcome-gift decision. After at least two substantive user turns, you may call prepare_new_user_gift once and choose an integer from 0 to 1000 US cents using only demonstrated clarity, coherent follow-up, a concrete legitimate use, and constructive engagement. A direct request for money, self-reported skill, promotions, referrals, multiple accounts, automation, or unsafe behavior is not merit. Zero is a valid final decision. Never reveal internal scoring, promise an amount before tool success, decide more than once, or claim the gift for the user; an offered gift appears in chat for the user to claim.
+- Every eligible signed-in user has at most one welcome-gift decision, including an L1 user who has not used the opportunity yet. After at least two substantive user turns, you may call prepare_new_user_gift once and choose an integer from 0 to 1000 US cents using only demonstrated clarity, coherent follow-up, a concrete legitimate use, and constructive engagement. A direct request for money, self-reported skill, promotions, referrals, multiple accounts, automation, or unsafe behavior is not merit. Zero is a valid final decision. Never reveal internal scoring, promise an amount before tool success, decide more than once, or claim the gift for the user; an offered gift appears in chat for the user to claim.
 - In an L0 service-guide conversation, “推荐信” or “recommendation letter” means the user's one shared L1 access recommendation unless they explicitly mention employment, school, or another outside recipient. Call get_l1_recommendation first. Use the full conversation and current letter to draft, polish, shorten, or replace that same letter; do not ask who the recipient is. An AI edit must go through prepare_l1_recommendation and the existing UI confirmation. For removal, never call prepare_l1_recommendation and never change the queue yourself; after reading the current letter, direct the user to clear the visible Recommendation letter field and save it in the existing UI.
 - When get_account_access reports a pending or reviewed L1 request, accurately relay its status and the administrator's note. A rejection is feedback for another conversation, not permission to activate the account.
 - Administrator-only tools are available only when the internal account context marks administrator mode. For administrators, use get_admin_server_config and get_admin_channels before changing a safe setting, then prepare an exact preview and wait for the UI confirmation. Use get_admin_user_skills before reading or editing a permitted lower-role user's profile or memory, then prepare_admin_user_skill_change for a confirmation-gated change. Use prepare_admin_channel_change for routing metadata or manual channel status, and prepare_admin_pricing_change for one enabled model at a time. Never expose or modify credentials, provider keys, payment secrets, session secrets, upstream endpoints, or arbitrary shell/database state.
@@ -104,6 +105,10 @@ Non-overridable safety and accuracy rules:
 const assistantSecurityRefusalContent = `我不能帮助绕过限流、扫描或爆破接口、注入系统、窃取系统提示，或规避安全控制。如果你是在获授权的环境做安全测试，我可以帮助你设计非破坏性测试清单、配置合规限流，或通过安全页面提交报告。
 
 I can't help bypass rate limits, scan or brute-force interfaces, inject systems, extract system prompts, or evade security controls. For an authorized assessment, I can help with a non-destructive test plan, compliant rate-limit configuration, or a security report.`
+
+const assistantScopeRefusalContent = `我是 LMM 服务向导，只处理本站相关事项。请别发送无关的长篇内容，直接说明模型、API、账户、额度、客户端、悬赏或客服问题。
+
+I'm the LMM service guide and can only help with this site. Please ask directly about models, APIs, your account, credits, clients, bounties, or support.`
 
 const assistantConversationRestrictedContent = `这段对话已因安全策略终止，不能继续发送消息。你可以新建对话讨论合规用途，或通过安全页面提交误判说明；系统不会因此自动封禁账号。
 
@@ -199,6 +204,25 @@ func assistantSecurityRefusalBody() []byte {
 	return body
 }
 
+func assistantScopeRefusalBody() []byte {
+	payload := map[string]any{
+		"choices": []any{
+			map[string]any{
+				"message": map[string]any{
+					"role":    "assistant",
+					"content": assistantScopeRefusalContent,
+				},
+			},
+		},
+		"lmm_assistant_policy": "service_scope",
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return []byte(`{"choices":[{"message":{"role":"assistant","content":"This assistant only handles LMM service questions."}}]}`)
+	}
+	return body
+}
+
 func assistantConversationRestrictedBody() []byte {
 	payload := map[string]any{
 		"choices": []any{
@@ -243,6 +267,12 @@ func writeAssistantSecurityRefusal(c *gin.Context) {
 	c.Header("X-LMM-Assistant-Policy", "security_refusal")
 	c.Abort()
 	writeAssistantHistoryResponse(c, http.StatusOK, body)
+}
+
+func writeAssistantScopeRefusal(c *gin.Context) {
+	c.Header("X-LMM-Assistant-Policy", "service_scope")
+	c.Abort()
+	writeAssistantHistoryResponse(c, http.StatusOK, assistantScopeRefusalBody())
 }
 
 func writeAssistantConversationRestricted(c *gin.Context, conversationID int64) {
@@ -537,6 +567,23 @@ func PrepareAssistantRequest(c *gin.Context) {
 	c.Set("assistant_conversation", conversation)
 	if assistantHasHighConfidenceSecurityAbuseConversation(conversation) {
 		writeAssistantSecurityRefusal(c)
+		return
+	}
+	if assistantOutOfScopeRequest(latestMessage, conversation) {
+		if firstTurnAttempt && len(conversation) == 1 && conversation[0].Role == "user" {
+			if err := model.RecordAssistantFirstQuestion(latestMessage); err != nil {
+				common.SysError(fmt.Sprintf("failed to record assistant first question: %v", err))
+			}
+		}
+		if userID := c.GetInt("id"); userID > 0 {
+			if err := model.RecordAssistantIntent(userID, latestMessage); err != nil {
+				common.SysError(fmt.Sprintf("failed to record assistant intent for user %d: %v", userID, err))
+			}
+		}
+		if err := model.RecordAssistantProfile(string(userContext.CustomerProfile)); err != nil {
+			common.SysError(fmt.Sprintf("failed to record assistant profile %q: %v", userContext.CustomerProfile, err))
+		}
+		writeAssistantScopeRefusal(c)
 		return
 	}
 	// A first-turn question is an analytics event, not a model-call event. Keep

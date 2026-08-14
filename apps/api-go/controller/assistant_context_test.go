@@ -68,6 +68,50 @@ func TestAssistantAgentForcesTaskToolsBeforeAnswering(t *testing.T) {
 	})))
 }
 
+func TestAssistantOutOfScopeRequestStopsGenericWritingBeforeModelCall(t *testing.T) {
+	tests := []struct {
+		name         string
+		message      string
+		conversation []assistantOpenAIMessage
+		want         bool
+	}{
+		{
+			name:    "research summary",
+			message: "帮我总结简化下面这篇关于 OFDR 激光相位误差的研究论文",
+			want:    true,
+		},
+		{
+			name:    "long pasted research document",
+			message: "帮我总结简化一下下面的内容：V17 建立了相位恢复模型，V22 进行了 Monte Carlo 验证。",
+			want:    true,
+		},
+		{
+			name:    "site pricing summary",
+			message: "帮我总结本站当前模型价格和可用分组",
+			want:    false,
+		},
+		{
+			name:    "service follow-up",
+			message: "继续",
+			conversation: []assistantOpenAIMessage{
+				{Role: "user", Content: "我想配置 API key 和模型"},
+				{Role: "assistant", Content: "可以帮你查看分组和模型"},
+			},
+			want: false,
+		},
+		{
+			name:    "greeting",
+			message: "你好",
+			want:    false,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, assistantOutOfScopeRequest(test.message, test.conversation))
+		})
+	}
+}
+
 func TestAssistantCreateKeyRequestRequiresAStandaloneKeyTerm(t *testing.T) {
 	tests := []struct {
 		name    string

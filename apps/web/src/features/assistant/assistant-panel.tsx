@@ -181,6 +181,13 @@ type ConversationEntry = {
   }
 }
 
+function isAssistantKeyConfirmationMessage(message: string) {
+  const normalized = message.trim().toLowerCase()
+  return /^(是|好|可以|确认|确认创建|创建|没问题|yes|y|ok|okay|confirm|go ahead|proceed)[！!。.]?$/.test(
+    normalized
+  )
+}
+
 function assistantNavigationHref(action: AssistantNavigationAction): string {
   const entries = Object.entries(action.query)
   if (entries.length === 0) return action.path
@@ -927,6 +934,9 @@ export function AssistantPanel(props: {
     useState<AssistantAccountDisableAction | null>(null)
   const [keyCreationAction, setKeyCreationAction] =
     useState<AssistantCreateKeyAction | null>(null)
+  const [autoConfirmKeyToken, setAutoConfirmKeyToken] = useState<string | null>(
+    null
+  )
   const [userActionDraft, setUserActionDraft] =
     useState<AssistantUserAction | null>(null)
   const [historyView, setHistoryView] = useState<
@@ -1096,6 +1106,7 @@ export function AssistantPanel(props: {
     setRecommendationDraft(null)
     setAccountDisableDraft(null)
     setKeyCreationAction(null)
+    setAutoConfirmKeyToken(null)
     setUserActionDraft(null)
   }, [])
 
@@ -1414,7 +1425,9 @@ export function AssistantPanel(props: {
         t('Please enter a message other than a single punctuation mark.')
       )
     }
-    clearTransientCards()
+    const pendingKeyConfirmation =
+      keyCreationAction !== null && isAssistantKeyConfirmationMessage(message)
+    if (!pendingKeyConfirmation) clearTransientCards()
     const safeMessage = redactAssistantMessageForRequest(message)
     if (!hasAssistantMessageSubstantialMeaning(safeMessage.content)) {
       setEntries((current) => [
@@ -1447,6 +1460,12 @@ export function AssistantPanel(props: {
           ]
         : []),
     ])
+    if (pendingKeyConfirmation && keyCreationAction) {
+      setAutoConfirmKeyToken(keyCreationAction.confirmation_token)
+      setActiveTool('key')
+      setSelectedPreConversationPresetId(null)
+      return
+    }
     const presetId = selectedPreConversationPresetId ?? undefined
     setSelectedPreConversationPresetId(null)
     await requestAssistantReply(safeMessage.content, history, presetId)
@@ -1731,9 +1750,7 @@ export function AssistantPanel(props: {
                       </MessageContent>
                     </Message>
                   ) : null}
-                  <AssistantNewUserGift
-                    enabled={accountAccessState === 'restricted'}
-                  />
+                  <AssistantNewUserGift enabled={accountAccessConfirmed} />
                   <div
                     ref={activeToolRegionRef}
                     className='grid gap-5 outline-none'
@@ -1755,7 +1772,12 @@ export function AssistantPanel(props: {
                         modelsLoading={connectionModelsQuery.isLoading}
                         developerAccessGranted={developerAccessGranted}
                         confirmationAction={keyCreationAction}
+                        autoConfirm={
+                          autoConfirmKeyToken ===
+                          keyCreationAction?.confirmation_token
+                        }
                         onKeyCreated={() => {
+                          setAutoConfirmKeyToken(null)
                           setKeyCreationAction(null)
                           if (authUser) {
                             void queryClient.invalidateQueries({

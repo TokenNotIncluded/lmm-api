@@ -55,6 +55,18 @@ var (
 		"i want to pay", "i want to purchase", "i want to subscribe", "i will subscribe", "i'll subscribe",
 		"ready to subscribe", "how to top up", "how do i pay", "buy a plan",
 	}
+	assistantServiceScopeTerms = []string{
+		"lmm", "本站", "这个网站", "网站", "服务", "账户", "账号", "用户", "钱包", "余额", "额度",
+		"api", "密钥", "令牌", "模型", "价格", "费用", "计费", "充值", "套餐", "订阅", "优惠", "折扣",
+		"礼包", "奖励", "邀请", "签到", "打卡", "推荐信", "l1", "l0", "管理员", "客服", "工单",
+		"开源", "悬赏", "挑战", "任务", "客户端", "配置", "登录", "注册", "调用", "对话", "聊天",
+		"个人资料", "profile", "/profile", "/keys", "api.lmm.best", "绘图", "图像", "图片", "image",
+		"安全", "渠道", "分组", "group", "base url", "endpoint", "token", "cc switch", "claude code",
+	}
+	assistantGenericTaskTerms = []string{
+		"总结", "简化", "摘要", "概括", "改写", "润色", "翻译", "写一篇", "写作", "论文", "研究", "算法", "实验", "理论",
+		"summarize", "summary", "rewrite", "paraphrase", "translate", "essay", "paper", "research", "algorithm", "experiment", "theory",
+	}
 )
 
 type assistantCustomerProfile string
@@ -377,6 +389,63 @@ func assistantUserContextForRequest(userID int, message string, conversation ...
 	sort.Strings(context.PaymentRestrictionCauses)
 	sort.Strings(context.ProfileSignals)
 	return context
+}
+
+func assistantLooksLikeGreeting(text string) bool {
+	text = strings.ToLower(strings.TrimSpace(text))
+	return assistantTextContainsAny(text, "你好", "您好", "嗨", "hello", "hi", "hey", "help", "帮助") && utf8.RuneCountInString(text) <= 32
+}
+
+func assistantHasServiceScopeAnchor(text string) bool {
+	text = strings.ToLower(strings.TrimSpace(text))
+	return assistantTextContainsAny(text, assistantServiceScopeTerms...)
+}
+
+func assistantConversationHasServiceScopeAnchor(conversation []assistantOpenAIMessage) bool {
+	for _, message := range conversation {
+		if assistantHasServiceScopeAnchor(message.Content) {
+			return true
+		}
+	}
+	return false
+}
+
+// assistantOutOfScopeRequest is a conservative product boundary for the
+// built-in service guide. It blocks generic writing/research requests before
+// they reach the configured model, while preserving short greetings and any
+// request tied to the site's account, API, model, reward, support, or setup
+// surfaces. This is intentionally deterministic so an unrelated long paste
+// cannot consume assistant budget or enter a reward/recommendation workflow.
+func assistantOutOfScopeRequest(message string, conversation []assistantOpenAIMessage) bool {
+	text := strings.ToLower(strings.TrimSpace(message))
+	if text == "" || assistantLooksLikeGreeting(text) {
+		return false
+	}
+	if model.ClassifyAssistantIntent(text) != model.AssistantIntentOther {
+		return false
+	}
+	genericTask := assistantTextContainsAny(text, assistantGenericTaskTerms...)
+	if assistantHasServiceScopeAnchor(text) || assistantConversationHasServiceScopeAnchor(conversation) {
+		prefix := text
+		if runes := []rune(prefix); len(runes) > 160 {
+			prefix = string(runes[:160])
+		}
+		requestLead := prefix
+		if cut := strings.IndexAny(requestLead, ":：\n。！？!?；;"); cut >= 0 {
+			requestLead = requestLead[:cut]
+		}
+		// A quoted/pasted document may contain incidental site words. A generic
+		// task at the start still remains outside the service guide unless the
+		// user's own request names a site capability in that prefix.
+		if assistantTextContainsAny(prefix, assistantGenericTaskTerms...) && !assistantHasServiceScopeAnchor(requestLead) {
+			return true
+		}
+		return false
+	}
+	// Keep the boundary conservative for short, ambiguous follow-ups. A
+	// generic writing/research verb or a long unscoped paste is enough to stop
+	// the model; a short unknown phrase can still receive a concise guide reply.
+	return genericTask || utf8.RuneCountInString(text) > 240
 }
 
 func classifyAssistantRecommendationAction(message string) assistantRecommendationAction {

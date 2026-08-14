@@ -67,6 +67,31 @@ func getPublicPreviewModelIDs() []string {
 	return modelIDs
 }
 
+// getPublicCatalogModelIDs mirrors the live pricing catalog rather than the
+// small default-group preview. L0 users still cannot call these models, but
+// the assistant must not present a stale/truncated list when explaining the
+// catalog or helping choose a client model. The ability table remains a
+// startup/degraded-mode fallback while pricing is warming.
+func getPublicCatalogModelIDs() []string {
+	modelIDs := make(map[string]struct{})
+	for _, pricing := range getPricingCache() {
+		if name := strings.TrimSpace(pricing.ModelName); name != "" {
+			modelIDs[name] = struct{}{}
+		}
+	}
+	if len(modelIDs) == 0 {
+		for _, name := range getPublicPreviewModelIDs() {
+			modelIDs[name] = struct{}{}
+		}
+	}
+	result := make([]string, 0, len(modelIDs))
+	for name := range modelIDs {
+		result = append(result, name)
+	}
+	sort.Strings(result)
+	return result
+}
+
 func GetStatus(c *gin.Context) {
 	if err := cacheReadinessError(); err != nil {
 		ensureCachesWarmAsync()

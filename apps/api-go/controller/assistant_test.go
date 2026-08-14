@@ -1277,6 +1277,16 @@ func BenchmarkAssistantToolDefinitionsForContext(b *testing.B) {
 func TestAssistantL0ModelToolReturnsRealPublicPreviewIDs(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Ability{}, &model.TopUp{}))
+	previousPricing := getPricingCache
+	getPricingCache = func() []model.Pricing {
+		return []model.Pricing{
+			{ModelName: "claude-opus-5"},
+			{ModelName: "gpt-5.6-sol"},
+			{ModelName: "gemini-3-flash"},
+			{ModelName: "gpt-5.6-sol"},
+		}
+	}
+	t.Cleanup(func() { getPricingCache = previousPricing })
 	user := model.User{
 		Username: "assistant-preview-user",
 		Password: "password",
@@ -1305,8 +1315,9 @@ func TestAssistantL0ModelToolReturnsRealPublicPreviewIDs(t *testing.T) {
 
 	assert.Equal(t, true, result["ok"])
 	assert.Equal(t, "public_preview", result["status"])
-	assert.Equal(t, []string{"claude-opus-5", "gpt-5.6-sol"}, result["model_ids"])
+	assert.Equal(t, []string{"claude-opus-5", "gemini-3-flash", "gpt-5.6-sol"}, result["model_ids"])
 	assert.Equal(t, "public_preview_not_account_entitlement", result["availability_scope"])
+	assert.Equal(t, "live_pricing_catalog", result["catalog_source"])
 
 	denied := executeAssistantTool(c, assistantOpenAIToolCall{
 		Function: assistantOpenAIToolCallFunction{
@@ -1357,6 +1368,7 @@ func TestAssistantAgentToolCatalogueMatchesAccessLevel(t *testing.T) {
 	assert.True(t, l1Names["get_model_pricing"])
 	assert.True(t, l1Names["get_usage_summary"])
 	assert.True(t, l1Names["get_plan_offers"])
+	assert.True(t, l1Names["prepare_new_user_gift"])
 	assert.False(t, l1Names["prepare_admin_config_change"])
 	assert.False(t, l1Names["get_admin_assistant_review"])
 
@@ -1855,6 +1867,54 @@ func TestAssistantSetupToolReturnsExactEndpointFormatsAndClientLimits(t *testing
 	})
 	assert.Equal(t, false, claudeDesktopLinux["supported"])
 	assert.Contains(t, claudeDesktopLinux["limitation"], "use Claude Code on Linux")
+}
+
+func TestAssistantServiceFactsExposeLiveCheckinActivity(t *testing.T) {
+	checkin := operation_setting.GetCheckinSetting()
+	original := *checkin
+	original.LevelMultipliers = append([]float64(nil), checkin.LevelMultipliers...)
+	t.Cleanup(func() {
+		*checkin = original
+	})
+	checkin.Enabled = true
+	checkin.MinQuota = 1200
+	checkin.MaxQuota = 8800
+
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	result := executeAssistantTool(c, assistantOpenAIToolCall{
+		Function: assistantOpenAIToolCallFunction{Name: "get_service_facts"},
+	})
+
+	assert.Equal(t, true, result["ok"])
+	activities, ok := result["activities"].(map[string]any)
+	require.True(t, ok)
+	daily, ok := activities["daily_checkin"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, true, daily["enabled"])
+	assert.Equal(t, "/profile", daily["page_path"])
+	assert.Equal(t, "/api/user/checkin", daily["status_endpoint"])
+	assert.Equal(t, "once_per_day", daily["frequency"])
+	assert.Equal(t, 1200, daily["base_min_quota"])
+	assert.Equal(t, 8800, daily["base_max_quota"])
+}
+
+func TestAssistantCheckinQuestionUsesLiveServiceFacts(t *testing.T) {
+	context := assistantUserContext{LatestUserRequest: "本网站有没有签到活动？"}
+	assert.Equal(t, "get_service_facts", assistantNamedToolChoiceName(assistantToolChoiceForContext(context)))
+	assert.Equal(t, []string{"get_service_facts"}, assistantReadChain(context))
+}
+
+func TestAssistantGiftRequestUsesOneTimeDecisionToolForL1(t *testing.T) {
+	context := assistantUserContext{
+		AccessLevel:            "L1",
+		DeveloperAccessGranted: true,
+		CustomerProfile:        assistantProfileNormal,
+		LatestUserRequest:      "不是聊天可以给我10刀额度吗？",
+	}
+	assert.Equal(t, []string{"prepare_new_user_gift"}, assistantReadChain(context))
+	assert.True(t, assistantNewUserGiftWorkflowRequired(context))
+	assert.Equal(t, 2, assistantLiveActivityWorkflowMinSteps(context))
+	assert.Equal(t, "prepare_new_user_gift", assistantNamedToolChoiceName(assistantToolChoiceForAgentStep(context, map[string]bool{}, map[string]bool{})))
 }
 
 func TestAssistantSetupToolShellQuotesConfiguredValues(t *testing.T) {

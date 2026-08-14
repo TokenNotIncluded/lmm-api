@@ -17,7 +17,6 @@ const (
 	AssistantGiftClaimed  = "claimed"
 	AssistantGiftDeclined = "declined"
 	assistantGiftMaxCents = 1000
-	assistantGiftMaxAge   = 30 * 24 * time.Hour
 	assistantGiftRiskAge  = 30 * 24 * time.Hour
 	assistantGiftIPLimit  = 3
 )
@@ -100,16 +99,7 @@ func DecideAssistantNewUserGift(userID int, conversationID int64, amountCents in
 	if err := DB.Select("id", "email", "role", "status", "created_at", "last_api_activity_at", "trust_level_override", "console_activated_at").First(&user, "id = ?", userID).Error; err != nil {
 		return nil, false, err
 	}
-	now := time.Now()
-	created := time.Unix(user.CreatedAt, 0)
-	if user.Role != common.RoleCommonUser || user.Status != common.UserStatusEnabled || user.CreatedAt <= 0 || created.After(now) || now.Sub(created) > assistantGiftMaxAge || strings.TrimSpace(user.Email) == "" || IsDisposableEmail(user.Email) {
-		return nil, false, ErrAssistantGiftIneligible
-	}
-	access, err := GetFreshUserAccessSnapshot(&user)
-	if err != nil {
-		return nil, false, err
-	}
-	if access.DeveloperAccess.Granted || access.TrustLevel.Level > TrustLevelMinUser {
+	if user.Role != common.RoleCommonUser || user.Status != common.UserStatusEnabled || strings.TrimSpace(user.Email) == "" || IsDisposableEmail(user.Email) {
 		return nil, false, ErrAssistantGiftIneligible
 	}
 	identityHash, networkHash, err := assistantGiftRiskKeys(user.Email, clientIP)
