@@ -962,12 +962,42 @@ func assistantNamedToolChoiceName(choice any) string {
 	if !ok {
 		return ""
 	}
+	if name, ok := object["name"].(string); ok {
+		return strings.TrimSpace(name)
+	}
 	function, ok := object["function"].(map[string]any)
 	if !ok {
 		return ""
 	}
 	name, _ := function["name"].(string)
 	return strings.TrimSpace(name)
+}
+
+func assistantResponsesToolChoice(choice any) (any, bool) {
+	object, ok := choice.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	if choiceType, _ := object["type"].(string); strings.TrimSpace(choiceType) != "function" {
+		return nil, false
+	}
+	name, _ := object["name"].(string)
+	if strings.TrimSpace(name) == "" {
+		if function, ok := object["function"].(map[string]any); ok {
+			name, _ = function["name"].(string)
+		}
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, false
+	}
+	return map[string]any{"type": "function", "name": name}, true
+}
+
+func assistantToolChoiceNameRequired(body []byte) bool {
+	text := strings.ToLower(string(body))
+	return strings.Contains(text, "tool_choice.name") &&
+		strings.Contains(text, "missing_required_parameter")
 }
 
 func emptyObjectSchema() map[string]any {
@@ -1144,10 +1174,15 @@ func assistantUpstreamRetryDelay(attempt int) time.Duration {
 // key/configuration preparation action. The outer browser retry has the same
 // property because all assistant writes are confirmation-gated or idempotent.
 func relayAssistantTurnWithRetry(c *gin.Context, request assistantOpenAIRequest, rootRequestID string, step int) (int, []byte, error) {
+	return relayAssistantTurnWithRetryUsing(c, request, rootRequestID, step, relayAssistantTurn)
+}
+
+func relayAssistantTurnWithRetryUsing(c *gin.Context, request assistantOpenAIRequest, rootRequestID string, step int, turn func(*gin.Context, assistantOpenAIRequest, string, int) (int, []byte, error)) (int, []byte, error) {
 	var status int
 	var body []byte
+	responsesToolChoiceFallbackUsed := false
 	for attempt := 1; attempt <= assistantUpstreamMaxAttempts; attempt++ {
-		status, body, err := relayAssistantTurn(c, request, rootRequestID, step)
+		status, body, err := turn(c, request, rootRequestID, step)
 		if err != nil {
 			return status, body, err
 		}
@@ -1160,6 +1195,17 @@ func relayAssistantTurnWithRetry(c *gin.Context, request assistantOpenAIRequest,
 			// transient upstream failure and receives the same bounded retry.
 			if attempt == assistantUpstreamMaxAttempts {
 				return status, body, nil
+			}
+		} else if assistantToolChoiceNameRequired(body) && !responsesToolChoiceFallbackUsed {
+			if fallback, ok := assistantResponsesToolChoice(request.ToolChoice); ok {
+				// A few OpenAI-compatible Responses gateways expose the chat
+				// endpoint but validate tool_choice using the Responses shape:
+				// {"type":"function","name":"..."}. Retry once with that
+				// shape instead of burning the normal retry budget on the same
+				// invalid request.
+				request.ToolChoice = fallback
+				responsesToolChoiceFallbackUsed = true
+				continue
 			}
 		} else if !assistantRetryableUpstreamStatus(status) || attempt == assistantUpstreamMaxAttempts {
 			return status, body, nil

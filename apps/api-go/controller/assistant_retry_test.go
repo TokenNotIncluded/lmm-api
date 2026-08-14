@@ -99,6 +99,37 @@ func TestAssistantRelayRetryPolicyStopsWhenAttemptBudgetIsExhausted(t *testing.T
 	assert.False(t, service.ShouldRetryRelayError(c, apiErr, 0))
 }
 
+func TestAssistantRelayRetryAdaptsResponsesToolChoiceShape(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/assistant/chat", nil)
+	request := assistantOpenAIRequest{ToolChoice: assistantNamedToolChoice("get_service_facts")}
+	choices := make([]any, 0, 2)
+	calls := 0
+
+	status, _, err := relayAssistantTurnWithRetryUsing(c, request, "assistant-tool-choice-fallback", 0,
+		func(_ *gin.Context, req assistantOpenAIRequest, _ string, _ int) (int, []byte, error) {
+			calls++
+			choices = append(choices, req.ToolChoice)
+			if calls == 1 {
+				return http.StatusBadGateway, []byte(`{"error":{"message":"[ObjectParam] [tool_choice.name] [missing_required_parameter]"}}`), nil
+			}
+			return http.StatusOK, []byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`), nil
+		})
+
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusOK, status)
+	assert.Equal(t, 2, calls)
+	require.Len(t, choices, 2)
+	assert.Equal(t, "get_service_facts", assistantNamedToolChoiceName(choices[0]))
+	assert.Equal(t, "get_service_facts", assistantNamedToolChoiceName(choices[1]))
+	second, ok := choices[1].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "function", second["type"])
+	assert.Equal(t, "get_service_facts", second["name"])
+	assert.NotContains(t, second, "function")
+}
+
 func TestAssistantRetryRejectsInvalidInputBeforePersistentWrites(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := setupTokenControllerTestDB(t)
