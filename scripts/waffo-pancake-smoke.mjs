@@ -6,11 +6,23 @@ import {
   WaffoPancakeError,
   WebhookEventType,
 } from '@waffo/pancake-ts'
+import { resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 const DEFAULT_PRODUCT_NAME = 'LMM Forge test checkout'
 const DEFAULT_STORE_NAME = 'LMM Forge test store'
 const DEFAULT_AMOUNT = '1.00'
 const TEST_CARD = '4576750000000110'
+
+// Keep the smoke runner's managed webhook subscription aligned with every
+// provider event that the Go webhook endpoint can settle or audit. Without
+// the refund events, a seemingly successful `--configure-webhook` setup
+// would silently miss refund notifications.
+export const WAFFO_PANCAKE_WEBHOOK_EVENTS = Object.freeze([
+  WebhookEventType.OrderCompleted,
+  WebhookEventType.RefundSucceeded,
+  WebhookEventType.RefundFailed,
+])
 
 function fail(message) {
   throw new Error(message)
@@ -166,7 +178,7 @@ async function configureWebhook(client, storeId, webhookUrl) {
     storeId,
     channel: 'http',
     url: webhookUrl,
-    events: [WebhookEventType.OrderCompleted],
+    events: WAFFO_PANCAKE_WEBHOOK_EVENTS,
     testMode: true,
   })
   console.log(`Registered Test webhook ${result.webhook.id} for ${webhookUrl}`)
@@ -219,7 +231,12 @@ async function main() {
   }, null, 2))
 }
 
-main().catch((error) => {
-  console.error(`Waffo Pancake smoke failed: ${summarizeError(error)}`)
-  process.exitCode = 1
-})
+const invokedPath = process.argv[1]
+  ? pathToFileURL(resolve(process.argv[1])).href
+  : ''
+if (import.meta.url === invokedPath) {
+  main().catch((error) => {
+    console.error(`Waffo Pancake smoke failed: ${summarizeError(error)}`)
+    process.exitCode = 1
+  })
+}
