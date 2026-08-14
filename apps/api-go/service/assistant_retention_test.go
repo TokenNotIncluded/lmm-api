@@ -51,6 +51,7 @@ func TestAssistantRetentionHandlerDeletesInBatchesAndFinishesTask(t *testing.T) 
 		&model.AssistantSecureCard{},
 		&model.AssistantSecurityIncident{},
 		&model.AdvancedSecurityEvent{},
+		&model.AssistantGiftRiskMemory{},
 		&model.UnifiedTodoRead{},
 	))
 	t.Cleanup(func() {
@@ -62,6 +63,7 @@ func TestAssistantRetentionHandlerDeletesInBatchesAndFinishesTask(t *testing.T) 
 		model.DB.Exec("DELETE FROM assistant_history_messages")
 		model.DB.Exec("DELETE FROM assistant_conversations")
 		model.DB.Exec("DELETE FROM advanced_security_events")
+		model.DB.Exec("DELETE FROM assistant_gift_risk_memories")
 	})
 	require.NoError(t, model.DB.Create(&[]model.AssistantLead{
 		{UserId: 100, Source: model.AssistantLeadSourceChat, Intent: model.AssistantIntentAPIKey, Status: model.AssistantLeadStatusObserved, CreatedAt: 1},
@@ -98,6 +100,12 @@ func TestAssistantRetentionHandlerDeletesInBatchesAndFinishesTask(t *testing.T) 
 		{CreatedAt: 1, RequestID: "old-request-2", RuleID: "rule", Category: "category", Decision: model.AdvancedSecurityDecisionBlocked},
 		{CreatedAt: 11, RequestID: "new-request", RuleID: "rule", Category: "category", Decision: model.AdvancedSecurityDecisionAudited},
 	}).Error)
+	require.NoError(t, model.DB.Create(&[]model.AssistantGiftRiskMemory{
+		{KeyHash: "old-network-1", Kind: "network", DecisionCount: 1, WindowStartedAt: 1, UpdatedAt: 1},
+		{KeyHash: "old-network-2", Kind: "network", DecisionCount: 2, WindowStartedAt: 2, UpdatedAt: 2},
+		{KeyHash: "new-network", Kind: "network", DecisionCount: 1, WindowStartedAt: 11, UpdatedAt: 11},
+		{KeyHash: "old-identity", Kind: "identity", DecisionCount: 1, WindowStartedAt: 1, UpdatedAt: 1},
+	}).Error)
 
 	payload := AssistantRetentionPayload{
 		AssistantRetentionCutoffs: model.AssistantRetentionCutoffs{
@@ -126,6 +134,7 @@ func TestAssistantRetentionHandlerDeletesInBatchesAndFinishesTask(t *testing.T) 
 	assert.EqualValues(t, 2, state.IntentLeads)
 	assert.EqualValues(t, 2, state.ProfileAudits)
 	assert.EqualValues(t, 2, state.SecurityEvents)
+	assert.EqualValues(t, 2, state.GiftRiskMemory)
 	assert.Equal(t, 100, state.Progress)
 	var remaining int64
 	require.NoError(t, model.DB.Model(&model.AssistantConversation{}).Count(&remaining).Error)
@@ -141,5 +150,11 @@ func TestAssistantRetentionHandlerDeletesInBatchesAndFinishesTask(t *testing.T) 
 	require.NoError(t, model.DB.Model(&model.AssistantUserProfileAudit{}).Where("source = ? AND created_at < ?", model.AssistantProfileSourceAI, 10).Count(&remaining).Error)
 	assert.Zero(t, remaining)
 	require.NoError(t, model.DB.Model(&model.AssistantUserProfileAudit{}).Where("source = ?", model.AssistantProfileSourceAdmin).Count(&remaining).Error)
+	assert.EqualValues(t, 1, remaining)
+	require.NoError(t, model.DB.Model(&model.AssistantGiftRiskMemory{}).Where("kind = ? AND updated_at < ?", "network", 10).Count(&remaining).Error)
+	assert.Zero(t, remaining)
+	require.NoError(t, model.DB.Model(&model.AssistantGiftRiskMemory{}).Where("key_hash = ?", "new-network").Count(&remaining).Error)
+	assert.EqualValues(t, 1, remaining)
+	require.NoError(t, model.DB.Model(&model.AssistantGiftRiskMemory{}).Where("key_hash = ?", "old-identity").Count(&remaining).Error)
 	assert.EqualValues(t, 1, remaining)
 }

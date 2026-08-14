@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -150,4 +151,34 @@ func TestAssistantGiftGlobalRiskMemoryBlocksAliasesAndBulkNetworks(t *testing.T)
 		assert.NotContains(t, memory.KeyHash, "example.com")
 		assert.NotContains(t, memory.KeyHash, "203.0.113")
 	}
+}
+
+func TestPurgeAssistantGiftNetworkRiskBeforeIsBoundedAndPreservesIdentity(t *testing.T) {
+	db := setupAssistantGiftTestDB(t)
+	require.NoError(t, db.Create(&[]AssistantGiftRiskMemory{
+		{KeyHash: "old-network-1", Kind: assistantGiftRiskNetwork, DecisionCount: 1, WindowStartedAt: 1, UpdatedAt: 1},
+		{KeyHash: "old-network-2", Kind: assistantGiftRiskNetwork, DecisionCount: 2, WindowStartedAt: 2, UpdatedAt: 2},
+		{KeyHash: "new-network", Kind: assistantGiftRiskNetwork, DecisionCount: 1, WindowStartedAt: 11, UpdatedAt: 11},
+		{KeyHash: "old-identity", Kind: assistantGiftRiskIdentity, DecisionCount: 1, WindowStartedAt: 1, UpdatedAt: 1},
+	}).Error)
+
+	removed, err := PurgeAssistantGiftNetworkRiskBefore(context.Background(), 10, 1)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, removed)
+	removed, err = PurgeAssistantGiftNetworkRiskBefore(context.Background(), 10, 1)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, removed)
+	removed, err = PurgeAssistantGiftNetworkRiskBefore(context.Background(), 10, 1)
+	require.NoError(t, err)
+	assert.Zero(t, removed)
+
+	var memories []AssistantGiftRiskMemory
+	require.NoError(t, db.Find(&memories).Error)
+	require.Len(t, memories, 2)
+	byKey := make(map[string]AssistantGiftRiskMemory, len(memories))
+	for _, memory := range memories {
+		byKey[memory.KeyHash] = memory
+	}
+	assert.Equal(t, assistantGiftRiskIdentity, byKey["old-identity"].Kind)
+	assert.Equal(t, assistantGiftRiskNetwork, byKey["new-network"].Kind)
 }

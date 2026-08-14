@@ -1521,6 +1521,118 @@ for (const [locale, translations] of Object.entries(aiProfileTranslations)) {
   Object.assign(newKeys[locale], translations)
 }
 
+const assistantAndSecurityTranslations = {
+  en: {
+    'Please enter a message.': 'Please enter a message.',
+    'Please enter a message other than a single punctuation mark.':
+      'Please enter a message other than a single punctuation mark.',
+    'The request is already in the administrator queue. An AI recommendation is optional and may be added after you continue the conversation.':
+      'The request is already in the administrator queue. An AI recommendation is optional and may be added after you continue the conversation.',
+    'You can submit for administrator review without an AI recommendation. The recommendation only gives the reviewer more context; it never decides access.':
+      'You can submit for administrator review without an AI recommendation. The recommendation only gives the reviewer more context; it never decides access.',
+    'Bind an email, enable 2FA, or set up a Passkey in your profile to unlock sensitive operations.':
+      'Bind an email, enable 2FA, or set up a Passkey in your profile to unlock sensitive operations.',
+    'Enter the code from your authenticator app or a backup code.':
+      'Enter the code from your authenticator app or a backup code.',
+    'Enter verification code or backup code':
+      'Enter verification code or backup code',
+  },
+  zh: {
+    'Please enter a message.': '请输入消息。',
+    'Please enter a message other than a single punctuation mark.':
+      '请输入不只是单个标点符号的消息。',
+    'The request is already in the administrator queue. An AI recommendation is optional and may be added after you continue the conversation.':
+      '该申请已在管理员队列中。你可以继续对话，之后再补充 AI 推荐信；推荐信是可选的。',
+    'You can submit for administrator review without an AI recommendation. The recommendation only gives the reviewer more context; it never decides access.':
+      '你可以不附带 AI 推荐信，直接提交管理员审核。推荐信只为审核者提供更多背景，不会决定是否通过。',
+    'Bind an email, enable 2FA, or set up a Passkey in your profile to unlock sensitive operations.':
+      '请在个人资料中绑定邮箱、启用双重身份验证或设置 Passkey，以解锁敏感操作。',
+    'Enter the code from your authenticator app or a backup code.':
+      '请输入身份验证器应用中的代码或备用代码。',
+    'Enter verification code or backup code': '请输入验证码或备用代码',
+  },
+  'zh-TW': {
+    'Please enter a message.': '請輸入訊息。',
+    'Please enter a message other than a single punctuation mark.':
+      '請輸入不只是單一標點符號的訊息。',
+    'The request is already in the administrator queue. An AI recommendation is optional and may be added after you continue the conversation.':
+      '此申請已在管理員佇列中。你可以繼續對話，之後再補充 AI 推薦信；推薦信為選填。',
+    'You can submit for administrator review without an AI recommendation. The recommendation only gives the reviewer more context; it never decides access.':
+      '你可以不附帶 AI 推薦信，直接提交管理員審核。推薦信只提供更多背景，不會決定是否核准。',
+    'Bind an email, enable 2FA, or set up a Passkey in your profile to unlock sensitive operations.':
+      '請在個人資料中綁定電子郵件、啟用雙重驗證或設定 Passkey，以解鎖敏感操作。',
+    'Enter the code from your authenticator app or a backup code.':
+      '請輸入驗證器應用程式中的代碼或備用代碼。',
+    'Enter verification code or backup code': '請輸入驗證碼或備用代碼',
+  },
+  fr: {
+    'Please enter a message.': 'Saisissez un message.',
+    'Please enter a message other than a single punctuation mark.':
+      'Saisissez un message autre qu’un simple signe de ponctuation.',
+    'The request is already in the administrator queue. An AI recommendation is optional and may be added after you continue the conversation.':
+      'La demande est déjà dans la file d’attente de l’administrateur. Une recommandation IA est facultative et peut être ajoutée après la poursuite de la conversation.',
+    'You can submit for administrator review without an AI recommendation. The recommendation only gives the reviewer more context; it never decides access.':
+      'Vous pouvez soumettre la demande à l’administrateur sans recommandation IA. Celle-ci apporte du contexte au réviseur, mais ne décide jamais de l’accès.',
+    'Bind an email, enable 2FA, or set up a Passkey in your profile to unlock sensitive operations.':
+      'Associez un e-mail, activez la 2FA ou configurez une Passkey dans votre profil pour débloquer les opérations sensibles.',
+    'Enter the code from your authenticator app or a backup code.':
+      'Saisissez le code de votre application d’authentification ou un code de secours.',
+    'Enter verification code or backup code':
+      'Saisissez le code de vérification ou de secours',
+  },
+  ja: {
+    'Please enter a message.': 'メッセージを入力してください。',
+    'Please enter a message other than a single punctuation mark.':
+      '句読点1文字だけではないメッセージを入力してください。',
+    'The request is already in the administrator queue. An AI recommendation is optional and may be added after you continue the conversation.':
+      '申請はすでに管理者キューに入っています。AI 推薦文は任意で、会話を続けた後に追加できます。',
+    'You can submit for administrator review without an AI recommendation. The recommendation only gives the reviewer more context; it never decides access.':
+      'AI 推薦文なしで管理者審査に提出できます。推薦文は審査の参考情報であり、アクセス可否を決めるものではありません。',
+    'Bind an email, enable 2FA, or set up a Passkey in your profile to unlock sensitive operations.':
+      'プロフィールでメールアドレスを連携し、2FA を有効にするか Passkey を設定すると、機密操作を利用できます。',
+    'Enter the code from your authenticator app or a backup code.':
+      '認証アプリのコードまたはバックアップコードを入力してください。',
+    'Enter verification code or backup code':
+      '確認コードまたはバックアップコードを入力してください',
+  },
+  ru: {
+    'Please enter a message.': 'Введите сообщение.',
+    'Please enter a message other than a single punctuation mark.':
+      'Введите сообщение, состоящее не только из одного знака препинания.',
+    'The request is already in the administrator queue. An AI recommendation is optional and may be added after you continue the conversation.':
+      'Запрос уже находится в очереди администратора. Рекомендация ИИ необязательна и может быть добавлена после продолжения диалога.',
+    'You can submit for administrator review without an AI recommendation. The recommendation only gives the reviewer more context; it never decides access.':
+      'Можно отправить запрос администратору без рекомендации ИИ. Рекомендация лишь даёт проверяющему дополнительный контекст и не определяет доступ.',
+    'Bind an email, enable 2FA, or set up a Passkey in your profile to unlock sensitive operations.':
+      'Привяжите электронную почту, включите 2FA или настройте Passkey в профиле, чтобы разблокировать чувствительные операции.',
+    'Enter the code from your authenticator app or a backup code.':
+      'Введите код из приложения-аутентификатора или резервный код.',
+    'Enter verification code or backup code':
+      'Введите код подтверждения или резервный код',
+  },
+  vi: {
+    'Please enter a message.': 'Vui lòng nhập tin nhắn.',
+    'Please enter a message other than a single punctuation mark.':
+      'Vui lòng nhập tin nhắn không chỉ gồm một dấu câu.',
+    'The request is already in the administrator queue. An AI recommendation is optional and may be added after you continue the conversation.':
+      'Yêu cầu đã nằm trong hàng đợi quản trị viên. Đề xuất AI là tùy chọn và có thể được thêm sau khi bạn tiếp tục cuộc trò chuyện.',
+    'You can submit for administrator review without an AI recommendation. The recommendation only gives the reviewer more context; it never decides access.':
+      'Bạn có thể gửi yêu cầu để quản trị viên xét duyệt mà không cần đề xuất AI. Đề xuất chỉ cung cấp thêm ngữ cảnh và không quyết định quyền truy cập.',
+    'Bind an email, enable 2FA, or set up a Passkey in your profile to unlock sensitive operations.':
+      'Hãy liên kết email, bật 2FA hoặc thiết lập Passkey trong hồ sơ để mở khóa các thao tác nhạy cảm.',
+    'Enter the code from your authenticator app or a backup code.':
+      'Nhập mã từ ứng dụng xác thực hoặc mã dự phòng.',
+    'Enter verification code or backup code':
+      'Nhập mã xác minh hoặc mã dự phòng',
+  },
+}
+
+for (const [locale, translations] of Object.entries(
+  assistantAndSecurityTranslations
+)) {
+  Object.assign(newKeys[locale], translations)
+}
+
 for (const [locale, translations] of Object.entries(todoTranslations)) {
   Object.assign(newKeys[locale], translations)
 }

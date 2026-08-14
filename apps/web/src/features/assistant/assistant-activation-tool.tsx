@@ -141,7 +141,10 @@ export function AssistantActivationTool(props: {
     setLoading(true)
     try {
       const submitted = await submitDeveloperAccessRequest({
-        reason: recommendation,
+        // Keep the user's concrete use case separate from the AI-written
+        // letter. Administrators need the former as the durable request
+        // rationale; editing the letter must never overwrite it.
+        reason: draft.user_statement.trim(),
         ai_recommendation: recommendation,
         confirmation_token: draft.confirmation_token,
         confirmed: true,
@@ -170,7 +173,10 @@ export function AssistantActivationTool(props: {
       const submitted = await submitDeveloperAccessRequest(
         recommendation
           ? {
-              reason: recommendation,
+              // Revisions change the shared letter only. Preserve the
+              // original user rationale so an editor cannot accidentally
+              // turn the queue's reason into recommendation prose.
+              reason: request.reason,
               ai_recommendation: recommendation,
               confirmation_token: confirmationToken,
               confirmed: true,

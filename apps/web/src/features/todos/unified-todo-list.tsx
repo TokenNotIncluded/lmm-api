@@ -25,6 +25,7 @@ import {
   type TodoCategory,
   type TodoItem,
 } from './api'
+import { todoItemHasDestination } from './todo-navigation'
 
 const CATEGORY_LABELS: Record<TodoCategory, string> = {
   all: 'All',
@@ -193,11 +194,7 @@ export function UnifiedTodoList() {
             const applicantId = detailNumber(item, 'user_id')
             const applicantEmail = detailString(item, 'email')
             const title = t(ITEM_LABELS[item.title] ?? 'Notification')
-            const canOpen =
-              Boolean(detailNumber(item, 'project_id')) ||
-              ((item.category === 'security_incident' ||
-                item.category === 'developer_access') &&
-                Boolean(detailString(item, 'username')))
+            const canOpen = todoItemHasDestination(item)
             return (
               <button
                 key={item.id}

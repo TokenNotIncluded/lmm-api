@@ -317,7 +317,7 @@ describe('AssistantActivationTool', () => {
         'Recommendation was not submitted'
       )
       assert.deepEqual(submittedBody, {
-        reason: recommendationDraft.recommendation,
+        reason: recommendationDraft.user_statement,
         ai_recommendation: recommendationDraft.recommendation,
         confirmation_token: recommendationDraft.confirmation_token,
         confirmed: true,
@@ -370,7 +370,7 @@ describe('AssistantActivationTool', () => {
         'AI revision was not submitted'
       )
       assert.deepEqual(submittedBody, {
-        reason: recommendationDraft.recommendation,
+        reason: pendingRequest.reason,
         ai_recommendation: recommendationDraft.recommendation,
         confirmation_token: recommendationDraft.confirmation_token,
         confirmed: true,
@@ -514,13 +514,13 @@ describe('AssistantActivationTool', () => {
       )
 
       assert.deepEqual(submittedBodies[0], {
-        reason: recommendationDraft.recommendation,
+        reason: pendingRequest.reason,
         ai_recommendation: recommendationDraft.recommendation,
         confirmation_token: recommendationDraft.confirmation_token,
         confirmed: true,
       })
       assert.deepEqual(submittedBodies[1], {
-        reason: 'A manually revised recommendation that remains editable.',
+        reason: pendingRequest.reason,
         ai_recommendation:
           'A manually revised recommendation that remains editable.',
         confirmation_token: undefined,
@@ -583,7 +583,7 @@ describe('AssistantActivationTool', () => {
         'Recovered manual edit was not submitted'
       )
       assert.deepEqual(submittedBodies[1], {
-        reason: recommendationDraft.recommendation,
+        reason: pendingRequest.reason,
         ai_recommendation: recommendationDraft.recommendation,
         confirmation_token: undefined,
         confirmed: true,

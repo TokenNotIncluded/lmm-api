@@ -1,0 +1,62 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
+/*
+Copyright (C) 2026 LIghtJUNction
+*/
+import assert from 'node:assert/strict'
+import { describe, test } from 'node:test'
+
+import { todoItemHasDestination } from './todo-navigation'
+
+function item(
+  category: 'open_source_bounty' | 'security_review' | 'developer_access',
+  details: Record<string, unknown> = {}
+) {
+  return {
+    id: `${category}:1`,
+    source_id: 1,
+    category,
+    type: 'test',
+    title: 'test',
+    summary: 'test',
+    read: false,
+    created_at: 1,
+    updated_at: 1,
+    details,
+  } as const
+}
+
+describe('unified todo destinations', () => {
+  test('advertises security review navigation even without a user or project id', () => {
+    assert.equal(todoItemHasDestination(item('security_review')), true)
+  })
+
+  test('keeps destination affordances tied to available navigation data', () => {
+    assert.equal(todoItemHasDestination(item('open_source_bounty')), false)
+    assert.equal(
+      todoItemHasDestination(item('open_source_bounty', { project_id: 12 })),
+      true
+    )
+    assert.equal(
+      todoItemHasDestination(item('developer_access', { username: 'alice' })),
+      true
+    )
+    assert.equal(todoItemHasDestination(item('developer_access')), false)
+  })
+})

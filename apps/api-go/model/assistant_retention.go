@@ -23,6 +23,7 @@ type AssistantRetentionDeleteResult struct {
 	IntentLeads    int64 `json:"intent_leads"`
 	ProfileAudits  int64 `json:"profile_audits"`
 	SecurityEvents int64 `json:"security_events"`
+	GiftRiskMemory int64 `json:"gift_risk_memory"`
 }
 
 func NormalizeAssistantRetentionBatchSize(batchSize int) int {
@@ -164,6 +165,34 @@ func PurgeAdvancedSecurityEventsBefore(ctx context.Context, cutoff int64, batchS
 	}
 	deleted := DB.WithContext(ctx).Where("id IN ? AND created_at < ?", ids, cutoff).
 		Delete(&AdvancedSecurityEvent{})
+	return deleted.RowsAffected, deleted.Error
+}
+
+// PurgeAssistantGiftNetworkRiskBefore removes stale network risk counters in
+// bounded batches. Network counters roll over after assistantGiftRiskAge, so a
+// row older than the retention cutoff cannot contribute to a future decision.
+// Identity counters are intentionally retained forever: they enforce the
+// one-opportunity rule across accounts and must not be removed by retention.
+// The timestamp predicate is repeated on delete so a concurrent gift decision
+// that refreshed a selected row is never lost.
+func PurgeAssistantGiftNetworkRiskBefore(ctx context.Context, cutoff int64, batchSize int) (int64, error) {
+	if cutoff <= 0 {
+		return 0, gorm.ErrInvalidData
+	}
+	batchSize = NormalizeAssistantRetentionBatchSize(batchSize)
+	var keyHashes []string
+	if err := DB.WithContext(ctx).Model(&AssistantGiftRiskMemory{}).
+		Where("kind = ? AND updated_at < ?", assistantGiftRiskNetwork, cutoff).
+		Order("updated_at ASC, key_hash ASC").Limit(batchSize).Pluck("key_hash", &keyHashes).Error; err != nil {
+		return 0, err
+	}
+	if len(keyHashes) == 0 {
+		return 0, nil
+	}
+	deleted := DB.WithContext(ctx).Where(
+		"key_hash IN ? AND kind = ? AND updated_at < ?",
+		keyHashes, assistantGiftRiskNetwork, cutoff,
+	).Delete(&AssistantGiftRiskMemory{})
 	return deleted.RowsAffected, deleted.Error
 }
 
