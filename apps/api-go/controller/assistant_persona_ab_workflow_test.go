@@ -73,6 +73,137 @@ func TestPersonaABPolicyChain(t *testing.T) {
 	}
 }
 
+func TestPersonaABClassificationLanguageMatrix(t *testing.T) {
+	tests := []struct {
+		name         string
+		message      string
+		wantProfile  assistantCustomerProfile
+		wantPayment  assistantPaymentOfferState
+		wantSignal   string
+		rejectSignal string
+	}{
+		{
+			name:        "A Chinese refusal without legacy keywords",
+			message:     "我痛恨中转站，绝不会花钱，也拒绝付款，只考虑本地部署。",
+			wantProfile: assistantProfileTechnical,
+			wantPayment: assistantPaymentOfferNone,
+			wantSignal:  "cost_sensitive_technical_language",
+		},
+		{
+			name:        "A English payment refusal",
+			message:     "I hate paying, reject fiat, and will self host.",
+			wantProfile: assistantProfileTechnical,
+			wantPayment: assistantPaymentOfferNone,
+			wantSignal:  "cost_sensitive_technical_language",
+		},
+		{
+			name:        "B low technical confidence beats stability operator",
+			message:     "我技术不好，急需稳定性，也愿意付费，请给我清楚的操作方法。",
+			wantProfile: assistantProfileGuided,
+			wantPayment: assistantPaymentOfferNeedsDetails,
+			wantSignal:  "guided_setup_language",
+		},
+		{
+			name:        "B beginner asks for detailed guidance",
+			message:     "我是小白，需要详细指导，愿意为使用体验付费。",
+			wantProfile: assistantProfileGuided,
+			wantPayment: assistantPaymentOfferNeedsDetails,
+			wantSignal:  "guided_setup_language",
+		},
+		{
+			name:         "generic technical noun is not cost sensitivity",
+			message:      "技术文档在哪里？",
+			wantProfile:  assistantProfileL0Applicant,
+			wantPayment:  assistantPaymentOfferNone,
+			wantSignal:   "l0_access",
+			rejectSignal: "cost_sensitive_technical_language",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			context := assistantUserContextForRequest(0, test.message)
+			assert.Equal(t, test.wantProfile, context.CustomerProfile)
+			assert.Equal(t, test.wantPayment, context.PaymentOfferState)
+			assert.Contains(t, context.ProfileSignals, test.wantSignal)
+			if test.rejectSignal != "" {
+				assert.NotContains(t, context.ProfileSignals, test.rejectSignal)
+			}
+		})
+	}
+}
+
+func TestPersonaABLatestExplicitPaymentIntentWins(t *testing.T) {
+	tests := []struct {
+		name         string
+		conversation []assistantOpenAIMessage
+		latest       string
+		want         assistantPaymentOfferState
+	}{
+		{
+			name: "A later chooses a paid API plan",
+			conversation: []assistantOpenAIMessage{
+				{Role: "user", Content: "我拒绝付款，只想免费自建。"},
+				{Role: "assistant", Content: "我会按免费自建约束回答。"},
+				{Role: "user", Content: "我改变主意了，我要付费，用于 API 项目。"},
+			},
+			latest: "我改变主意了，我要付费，用于 API 项目。",
+			want:   assistantPaymentOfferReady,
+		},
+		{
+			name: "B later withdraws payment intent",
+			conversation: []assistantOpenAIMessage{
+				{Role: "user", Content: "我要付费，用于 Claude Code。"},
+				{Role: "assistant", Content: "我可以读取当前方案。"},
+				{Role: "user", Content: "我改主意了，不想付费。"},
+			},
+			latest: "我改主意了，不想付费。",
+			want:   assistantPaymentOfferNone,
+		},
+		{
+			name: "positive reversal within one message",
+			conversation: []assistantOpenAIMessage{
+				{Role: "user", Content: "以前不想付费，现在我要付费，用于 API。"},
+			},
+			latest: "以前不想付费，现在我要付费，用于 API。",
+			want:   assistantPaymentOfferReady,
+		},
+		{
+			name: "negative reversal within one message",
+			conversation: []assistantOpenAIMessage{
+				{Role: "user", Content: "本来我要付费用于 API，现在不想付费。"},
+			},
+			latest: "本来我要付费用于 API，现在不想付费。",
+			want:   assistantPaymentOfferNone,
+		},
+		{
+			name: "follow-up detail completes current payment episode",
+			conversation: []assistantOpenAIMessage{
+				{Role: "user", Content: "我想充值。"},
+				{Role: "assistant", Content: "请说明用途或预计额度。"},
+				{Role: "user", Content: "用于 Claude Code。"},
+			},
+			latest: "用于 Claude Code。",
+			want:   assistantPaymentOfferReady,
+		},
+		{
+			name: "technical payload is not payment language",
+			conversation: []assistantOpenAIMessage{
+				{Role: "user", Content: "请解释这个 JSON payload。"},
+			},
+			latest: "请解释这个 JSON payload。",
+			want:   assistantPaymentOfferNone,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			context := assistantUserContextForRequest(0, test.latest, test.conversation)
+			assert.Equal(t, test.want, context.PaymentOfferState)
+		})
+	}
+}
+
 func TestPersonaAAgentChain(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := setupTokenControllerTestDB(t)

@@ -107,6 +107,7 @@ export function AssistantHistory(props: {
   onOpenConversation: (conversation: AssistantConversationHistoryItem) => void
   ownerUser?: { id: number; username: string }
   presentation?: 'cards' | 'rows'
+  limit?: number
 }) {
   const { t, i18n } = useTranslation()
   const queryClient = useQueryClient()
@@ -128,15 +129,21 @@ export function AssistantHistory(props: {
     effectiveScope === 'audit'
       ? (props.ownerUser?.id ?? auditUserId ?? undefined)
       : undefined
+  const historyLimit = props.limit
   const historyQuery = useQuery({
     queryKey: [
       'assistant-conversations',
       effectiveScope,
       activeUserId ?? null,
       filter,
+      ...(historyLimit === undefined ? [] : [historyLimit]),
     ],
     queryFn: () =>
-      getAssistantConversationHistory(showingArchived, activeUserId),
+      getAssistantConversationHistory(
+        showingArchived,
+        activeUserId,
+        historyLimit
+      ),
     enabled:
       props.active && (effectiveScope === 'self' || activeUserId !== undefined),
     staleTime: 30_000,

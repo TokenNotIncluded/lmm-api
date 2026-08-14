@@ -24,8 +24,31 @@ var (
 	assistantUsernameSecretPattern = regexp.MustCompile(`(?i)(password|passwd|api[ _-]?key|access[ _-]?token|refresh[ _-]?token|secret|credential|密码|密钥|令牌)\s*[:=：]\s*\S+`)
 	assistantUsernameAPIKeyPattern = regexp.MustCompile(`(?i)\b(?:sk|rk|pk)-[a-z0-9][a-z0-9._-]{5,}\b`)
 	assistantUsernameBearerPattern = regexp.MustCompile(`(?i)\bbearer\s+[a-z0-9._~+/-]{8,}=*`)
+	assistantPaymentPayWordPattern = regexp.MustCompile(`(?i)\bpay\b`)
 	assistantPaymentAmountPattern  = regexp.MustCompile(`(?:\d+(?:\.\d+)?\s*(?:元|块|人民币|美元|美金|usd|rmb|cny|刀|\$|¥|￥)|预算|每月|一个月|月均|预计额度|金额|额度)`)
 	assistantPaymentNumberPattern  = regexp.MustCompile(`\d+(?:\.\d+)?`)
+
+	assistantNegativePaymentTerms = []string{
+		"不想付费", "不想付款", "不想支付", "不充值", "不要充值", "拒绝充值", "绝不充值",
+		"不愿意付费", "不要付费", "不要付款", "不要支付", "拒绝付费", "拒绝付款", "拒绝支付",
+		"不会付费", "不会付款", "不会支付", "不会花钱", "绝不付费", "绝不付款", "绝不支付",
+		"绝不会付费", "绝不会付款", "绝不会支付", "绝不会花钱", "不花钱",
+		"讨厌付款", "讨厌付费", "讨厌支付", "付款就生气", "付费就生气",
+		"讨厌法币", "不想使用法币", "不接受法币", "拒绝法币", "只接受免费", "免费使用",
+		"do not want to pay", "don't want to pay", "do not pay", "don't pay", "refuse to pay",
+		"never pay", "won't pay", "won’t pay", "will not pay", "hate paying", "hate payment",
+		"no payment", "no fiat", "reject fiat", "free only",
+	}
+	assistantPaymentLanguageTerms = []string{
+		"充值", "充值额度", "充值余额", "充值账户", "付费", "付款", "支付", "购买套餐", "买套餐", "买额度", "购买额度",
+		"top up", "top-up", "topup", "subscribe", "subscription", "purchase", "payment",
+	}
+	assistantPaymentPurchaseIntentTerms = []string{
+		"我要充值", "想充值", "准备充值", "打算充值", "需要充值", "我要付费", "想付费", "准备付费", "打算付费",
+		"我要付款", "想付款", "准备付款", "打算付款", "我要支付", "想支付", "准备支付", "打算支付",
+		"购买套餐", "买套餐", "购买额度", "买额度", "如何充值", "怎么充值", "怎样充值", "我要购买",
+		"i want to pay", "i want to purchase", "i want to subscribe", "how to top up", "how do i pay", "buy a plan",
+	}
 )
 
 type assistantCustomerProfile string
@@ -35,6 +58,8 @@ type assistantPaymentOfferState string
 type assistantRecommendationAction string
 
 type assistantCreateKeyAction string
+
+type assistantPaymentStance uint8
 
 const (
 	assistantPaymentOfferNone         assistantPaymentOfferState = "none"
@@ -53,6 +78,12 @@ const (
 	assistantCreateKeyActionNone        assistantCreateKeyAction = ""
 	assistantCreateKeyActionRequest     assistantCreateKeyAction = "request"
 	assistantCreateKeyActionSelectGroup assistantCreateKeyAction = "select_group"
+)
+
+const (
+	assistantPaymentStanceNone assistantPaymentStance = iota
+	assistantPaymentStanceNegative
+	assistantPaymentStanceInterested
 )
 
 const (
@@ -277,7 +308,7 @@ func assistantUserContextForRequest(userID int, message string, conversation ...
 	if userID <= 0 {
 		context.CustomerProfile, context.ProfileSignals = classifyAssistantCustomerProfile(context, userText)
 		context.WelcomeStrategy = assistantWelcomeStrategyForContext(context)
-		context.PaymentOfferState = assistantPaymentOfferStateForText(context, userText)
+		context.PaymentOfferState = assistantPaymentOfferStateForContextAndConversation(context, message, conversation...)
 		return context
 	}
 
@@ -285,7 +316,7 @@ func assistantUserContextForRequest(userID int, message string, conversation ...
 	if err != nil || user == nil {
 		context.CustomerProfile, context.ProfileSignals = classifyAssistantCustomerProfile(context, userText)
 		context.WelcomeStrategy = assistantWelcomeStrategyForContext(context)
-		context.PaymentOfferState = assistantPaymentOfferStateForText(context, userText)
+		context.PaymentOfferState = assistantPaymentOfferStateForContextAndConversation(context, message, conversation...)
 		return context
 	}
 
@@ -335,7 +366,7 @@ func assistantUserContextForRequest(userID int, message string, conversation ...
 
 	context.CustomerProfile, context.ProfileSignals = classifyAssistantCustomerProfile(context, userText)
 	context.WelcomeStrategy = assistantWelcomeStrategyForContext(context)
-	context.PaymentOfferState = assistantPaymentOfferStateForText(context, userText)
+	context.PaymentOfferState = assistantPaymentOfferStateForContextAndConversation(context, message, conversation...)
 	sort.Strings(context.AuthProviders)
 	sort.Strings(context.PaymentRestrictionCauses)
 	sort.Strings(context.ProfileSignals)
@@ -397,6 +428,10 @@ func classifyAssistantCreateKeyAction(message string, conversations ...[]assista
 }
 
 func assistantUserText(latestMessage string, conversations ...[]assistantOpenAIMessage) string {
+	return strings.Join(assistantUserMessages(latestMessage, conversations...), "\n")
+}
+
+func assistantUserMessages(latestMessage string, conversations ...[]assistantOpenAIMessage) []string {
 	messages := make([]string, 0, 4)
 	if len(conversations) > 0 {
 		for _, message := range conversations[0] {
@@ -409,7 +444,7 @@ func assistantUserText(latestMessage string, conversations ...[]assistantOpenAIM
 	if len(messages) == 0 || strings.TrimSpace(messages[len(messages)-1]) != strings.TrimSpace(latestMessage) {
 		messages = append(messages, latestMessage)
 	}
-	return strings.Join(messages, "\n")
+	return messages
 }
 
 func assistantPaymentOfferStateForContext(context assistantUserContext) assistantPaymentOfferState {
@@ -420,18 +455,8 @@ func assistantPaymentOfferStateForContext(context assistantUserContext) assistan
 }
 
 func assistantPaymentOfferStateForContextAndConversation(context assistantUserContext, latestMessage string, conversations ...[]assistantOpenAIMessage) assistantPaymentOfferState {
-	messages := make([]string, 0, 1)
-	if len(conversations) > 0 {
-		for _, message := range conversations[0] {
-			if message.Role == "user" {
-				messages = append(messages, message.Content)
-			}
-		}
-	}
-	if len(messages) == 0 {
-		messages = append(messages, latestMessage)
-	}
-	return assistantPaymentOfferStateForText(context, strings.Join(messages, "\n"))
+	text := assistantLatestPaymentDecisionText(assistantUserMessages(latestMessage, conversations...))
+	return assistantPaymentOfferStateForText(context, text)
 }
 
 func assistantPaymentOfferStateForText(context assistantUserContext, text string) assistantPaymentOfferState {
@@ -439,31 +464,83 @@ func assistantPaymentOfferStateForText(context assistantUserContext, text string
 		return assistantPaymentOfferBlocked
 	}
 	text = strings.ToLower(strings.TrimSpace(text))
-	if assistantTextContainsAny(text,
-		"不想付费", "不想付款", "不想支付", "不充值", "不愿意付费", "讨厌付款", "讨厌支付",
-		"讨厌法币", "不想使用法币", "不接受法币", "拒绝法币", "只接受免费", "免费使用",
-		"do not want to pay", "don't want to pay", "no fiat", "reject fiat", "free only",
-	) {
+	if assistantHasNegativePaymentIntent(text) {
 		return assistantPaymentOfferNone
 	}
-	if !assistantTextContainsAny(text,
-		"充值", "充值额度", "充值余额", "充值账户", "付费", "付款", "支付", "购买套餐", "买套餐", "买额度", "购买额度",
-		"top up", "top-up", "topup", "subscribe", "subscription", "purchase", "pay", "payment",
-	) {
+	if !assistantHasPaymentLanguage(text) {
 		return assistantPaymentOfferNone
 	}
-	if !assistantTextContainsAny(text,
-		"我要充值", "想充值", "准备充值", "打算充值", "需要充值", "我要付费", "想付费", "准备付费", "打算付费",
-		"我要付款", "想付款", "准备付款", "打算付款", "我要支付", "想支付", "准备支付", "打算支付",
-		"购买套餐", "买套餐", "购买额度", "买额度", "如何充值", "怎么充值", "怎样充值", "我要购买",
-		"i want to pay", "i want to purchase", "i want to subscribe", "how to top up", "how do i pay", "buy a plan",
-	) {
+	if !assistantTextContainsAny(text, assistantPaymentPurchaseIntentTerms...) {
 		return assistantPaymentOfferNeedsDetails
 	}
 	if !assistantPaymentOfferHasKeyDetail(text) {
 		return assistantPaymentOfferNeedsDetails
 	}
 	return assistantPaymentOfferReady
+}
+
+func assistantHasNegativePaymentIntent(text string) bool {
+	return assistantTextContainsAny(strings.ToLower(strings.TrimSpace(text)), assistantNegativePaymentTerms...)
+}
+
+func assistantHasPaymentLanguage(text string) bool {
+	text = strings.ToLower(strings.TrimSpace(text))
+	return assistantTextContainsAny(text, assistantPaymentLanguageTerms...) || assistantPaymentPayWordPattern.MatchString(text)
+}
+
+func assistantLatestPaymentDecisionText(messages []string) string {
+	anchorMessage, anchorOffset := -1, 0
+	for index, message := range messages {
+		if stance, offset := assistantLatestPaymentStance(message); stance != assistantPaymentStanceNone {
+			anchorMessage, anchorOffset = index, offset
+		}
+	}
+	if anchorMessage < 0 {
+		return strings.Join(messages, "\n")
+	}
+	messages = slices.Clone(messages[anchorMessage:])
+	messages[0] = messages[0][anchorOffset:]
+	return strings.Join(messages, "\n")
+}
+
+func assistantLatestPaymentStance(text string) (assistantPaymentStance, int) {
+	text = strings.ToLower(text)
+	negativeStart, negativeEnd := assistantLastTermRange(text, assistantNegativePaymentTerms)
+	purchaseStart, _ := assistantLastTermRange(text, assistantPaymentPurchaseIntentTerms)
+	if purchaseStart >= 0 && (negativeStart < 0 || purchaseStart >= negativeEnd) {
+		return assistantPaymentStanceInterested, purchaseStart
+	}
+	if negativeStart >= 0 {
+		return assistantPaymentStanceNegative, negativeStart
+	}
+	languageStart := assistantLastPaymentLanguageIndex(text)
+	if languageStart >= 0 {
+		return assistantPaymentStanceInterested, languageStart
+	}
+	return assistantPaymentStanceNone, 0
+}
+
+func assistantLastTermRange(text string, terms []string) (int, int) {
+	start, end := -1, -1
+	for _, term := range terms {
+		index := strings.LastIndex(text, strings.ToLower(term))
+		if index < 0 {
+			continue
+		}
+		if termEnd := index + len(term); index > start || (index == start && termEnd > end) {
+			start, end = index, termEnd
+		}
+	}
+	return start, end
+}
+
+func assistantLastPaymentLanguageIndex(text string) int {
+	start, _ := assistantLastTermRange(text, assistantPaymentLanguageTerms)
+	matches := assistantPaymentPayWordPattern.FindAllStringIndex(text, -1)
+	if len(matches) > 0 && matches[len(matches)-1][0] > start {
+		return matches[len(matches)-1][0]
+	}
+	return start
 }
 
 func assistantPaymentOfferHasKeyDetail(text string) bool {
@@ -677,10 +754,10 @@ func classifyAssistantCustomerProfile(context assistantUserContext, message stri
 	if assistantTextContainsAny(text, "企业", "公司", "团队", "采购", "合规", "审计", "business", "enterprise", "company", "team", "procurement", "compliance") {
 		signals = append(signals, "enterprise_language")
 	}
-	if assistantTextContainsAny(text, "不想付费", "没钱", "讨厌付款", "不充值", "免费", "自建", "源码", "开源", "技术", "free", "hate paying", "self host", "open source") {
+	if assistantHasCostSensitiveTechnicalLanguage(text) {
 		signals = append(signals, "cost_sensitive_technical_language")
 	}
-	if assistantTextContainsAny(text, "不会", "怎么配置", "怎么用", "教程", "一步一步", "帮我配置", "need help", "how do i", "step by step", "not technical") {
+	if assistantHasGuidedSetupLanguage(text) {
 		signals = append(signals, "guided_setup_language")
 	}
 	if assistantTextContainsAny(text, "隐私", "数据最小化", "不想暴露", "数据保留", "删除我的数据", "gdpr", "privacy", "data retention", "tracking") {
@@ -722,6 +799,25 @@ func classifyAssistantCustomerProfile(context assistantUserContext, message stri
 	default:
 		return assistantProfileUnknown, signals
 	}
+}
+
+func assistantHasCostSensitiveTechnicalLanguage(text string) bool {
+	return assistantHasNegativePaymentIntent(text) || assistantTextContainsAny(
+		text,
+		"没钱", "免费", "自建", "源码", "开源", "free", "self host", "open source",
+		"讨厌中转站", "讨厌中转", "不想用中转站", "不想用中转", "拒绝中转站", "拒绝中转",
+		"不要中转站", "不要中转", "不用中转站", "不用中转", "no relay", "hate relays", "reject relay",
+	)
+}
+
+func assistantHasGuidedSetupLanguage(text string) bool {
+	return assistantTextContainsAny(
+		text,
+		"不会配置", "不会使用", "不会操作", "怎么配置", "怎么用", "教程", "一步一步", "帮我配置", "手把手", "带我操作",
+		"技术不好", "技术不太好", "不懂技术", "不太懂技术", "不熟悉技术", "没有技术基础", "没技术基础",
+		"新手", "小白", "需要详细指导", "详细指导",
+		"need help", "how do i", "step by step", "not technical", "not very technical", "beginner", "newbie",
+	)
 }
 
 func assistantTextContainsAny(text string, terms ...string) bool {

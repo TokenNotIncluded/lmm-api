@@ -53,6 +53,7 @@ import {
   sideDrawerContentClassName,
   sideDrawerHeaderClassName,
 } from '@/components/drawer-layout'
+import { LmmBrandMark } from '@/components/lmm-brand-mark'
 import {
   Alert,
   AlertAction,
@@ -72,7 +73,6 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
-import { LmmBrandMark } from '@/components/lmm-brand-mark'
 
 import {
   getAssistantAvailableModels,
@@ -1525,9 +1525,7 @@ export function AssistantPanel(props: {
                       </p>
                     </div>
                   )}
-                  {classicLayout ? (
-                    <AssistantClassicWelcome />
-                  ) : null}
+                  {classicLayout ? <AssistantClassicWelcome /> : null}
                 </div>
               ) : (
                 <>
@@ -1866,13 +1864,13 @@ export function AssistantPanel(props: {
     }
 
     return (
-    <aside
-      id='ai-assistant-panel'
-      className={cn(
-        'bg-background hidden min-h-0 w-[min(28vw,30rem)] max-w-full min-w-0 shrink-0 flex-col border-l xl:flex',
-        classicLayout && 'bg-muted/20'
-      )}
-      data-layout={classicLayout ? 'classic' : 'modern'}
+      <aside
+        id='ai-assistant-panel'
+        className={cn(
+          'bg-background hidden min-h-0 w-[min(28vw,30rem)] max-w-full min-w-0 shrink-0 flex-col border-l xl:flex',
+          classicLayout && 'bg-muted/20'
+        )}
+        data-layout={classicLayout ? 'classic' : 'modern'}
         aria-label={t('Service guide')}
       >
         {panelContent}

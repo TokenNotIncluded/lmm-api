@@ -884,11 +884,15 @@ export async function revealAssistantPrivateCard(id: string): Promise<string> {
 
 export async function getAssistantConversationHistory(
   archived = false,
-  ownerUserId?: number
+  ownerUserId?: number,
+  limit?: number
 ): Promise<AssistantConversationHistory> {
-  const params: { archived?: true; user_id?: number } = {}
+  const params: { archived?: true; user_id?: number; limit?: number } = {}
   if (archived) params.archived = true
   if (ownerUserId !== undefined) params.user_id = ownerUserId
+  if (typeof limit === 'number' && Number.isSafeInteger(limit) && limit > 0) {
+    params.limit = Math.min(limit, 100)
+  }
   const response = await api.get<
     AssistantAPIResponse<AssistantConversationHistory>
   >('/api/assistant/conversations', {
