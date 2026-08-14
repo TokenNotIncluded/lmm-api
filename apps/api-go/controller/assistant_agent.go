@@ -467,6 +467,25 @@ func buildAssistantTools() []assistantOpenAIToolDefinition {
 		{
 			Type: "function",
 			Function: assistantOpenAIToolFunction{
+				Name:        "get_admin_model_inventory",
+				Description: "For an administrator only, read the live enabled model IDs, configured routing groups, and the bounded list of model IDs referenced by channels but missing metadata. This is read-only and omits provider secrets.",
+				Parameters:  emptyObjectSchema(),
+			},
+		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
+				Name:        "prepare_admin_model_sync",
+				Description: "For a root administrator only, prepare a confirmation-gated import of exact missing model metadata from the live upstream catalog. Call get_admin_model_inventory first, then pass model_ids only when needed. This never writes immediately; the UI must show the exact models/vendors and the administrator must confirm.",
+				Parameters: objectSchema(map[string]any{
+					"model_ids": map[string]any{"type": "array", "maxItems": assistantAdminMaxModelSyncItems, "items": map[string]any{"type": "string", "maxLength": assistantAdminMaxModelNameRunes}},
+					"locale":    map[string]any{"type": "string", "enum": []string{"en", "zh-CN", "zh-TW", "ja"}},
+				}, nil),
+			},
+		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
 				Name:        "prepare_admin_pricing_change",
 				Description: "For an administrator only, prepare an exact preview for one enabled model's pricing. Use ratio for token pricing or fixed_request for a per-request price; optional completion, cache, image, and audio ratios update the same exact model. This never applies a change; the administrator must confirm the preview in the UI.",
 				Parameters: objectSchema(map[string]any{
@@ -561,7 +580,7 @@ func assistantToolAllowedForContext(name string, userContext assistantUserContex
 	if userContext.AdministratorMode {
 		if userContext.AccessLevel != "ROOT" {
 			switch name {
-			case "get_admin_server_config", "prepare_admin_config_change", "prepare_admin_pricing_change":
+			case "get_admin_server_config", "prepare_admin_config_change", "prepare_admin_pricing_change", "prepare_admin_model_sync":
 				return false
 			}
 		}
@@ -571,6 +590,8 @@ func assistantToolAllowedForContext(name string, userContext assistantUserContex
 		return name != "get_admin_assistant_review" &&
 			name != "get_admin_server_config" &&
 			name != "prepare_admin_config_change" &&
+			name != "get_admin_model_inventory" &&
+			name != "prepare_admin_model_sync" &&
 			name != "get_admin_channels" &&
 			name != "prepare_admin_channel_change" &&
 			name != "prepare_admin_pricing_change" &&
@@ -1653,6 +1674,10 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 		}
 	case "get_admin_server_config":
 		return executeAssistantAdminConfigTool(c, actorUserID)
+	case "get_admin_model_inventory":
+		return executeAssistantAdminModelInventoryTool(actorUserID)
+	case "prepare_admin_model_sync":
+		return executeAssistantAdminModelSyncTool(c, actorUserID, input)
 	case "get_admin_assistant_review":
 		return executeAssistantReviewTool(actorUserID)
 	case "get_admin_user_skills":

@@ -106,6 +106,8 @@ export type AssistantStatus = {
     usage_discount?: boolean
     admin_config?: boolean
     admin_pricing?: boolean
+    admin_model_inventory?: boolean
+    admin_model_sync?: boolean
   }
 }
 
@@ -228,9 +230,32 @@ export type AssistantAdminPricingChangeAction = {
   pricing: AssistantAdminPricingPreview
 }
 
+export type AssistantAdminModelSyncPreview = {
+  model_id: string
+  vendor: string
+  status: number
+}
+
+export type AssistantAdminModelSyncAction = {
+  type: 'admin_model_sync'
+  confirmation_token: string
+  requires_confirmation: true
+  expires_in_seconds: number
+  models: AssistantAdminModelSyncPreview[]
+  vendors?: Array<{
+    name: string
+    description?: string
+    icon?: string
+    status: number
+  }>
+  locale: string
+  source_digest: string
+}
+
 export type AssistantAdminChangeAction =
   | AssistantAdminConfigChangeAction
   | AssistantAdminPricingChangeAction
+  | AssistantAdminModelSyncAction
 
 export type AssistantNavigationPath =
   | '/'
@@ -768,6 +793,87 @@ export function parseAssistantAction(
             next: pricing.next as Record<string, unknown>,
           },
         }
+      }
+    }
+  }
+
+  if (
+    action.type === 'admin_model_sync' &&
+    action.requires_confirmation === true &&
+    typeof action.expires_in_seconds === 'number' &&
+    Number.isInteger(action.expires_in_seconds) &&
+    action.expires_in_seconds > 0 &&
+    Array.isArray(action.models) &&
+    typeof action.locale === 'string' &&
+    typeof action.source_digest === 'string'
+  ) {
+    const models = action.models
+      .map((item) => {
+        if (!item || typeof item !== 'object') return null
+        const model = item as Record<string, unknown>
+        if (
+          typeof model.model_id !== 'string' ||
+          typeof model.vendor !== 'string' ||
+          typeof model.status !== 'number' ||
+          !Number.isInteger(model.status)
+        ) {
+          return null
+        }
+        const modelId = model.model_id.trim()
+        const vendor = model.vendor.trim()
+        return modelId
+          ? { model_id: modelId, vendor, status: model.status }
+          : null
+      })
+      .filter((item): item is AssistantAdminModelSyncPreview => item !== null)
+    const locale = action.locale.trim()
+    const sourceDigest = action.source_digest.trim().toLowerCase()
+    const vendors = Array.isArray(action.vendors)
+      ? action.vendors
+          .map((item) => {
+            if (!item || typeof item !== 'object') return null
+            const vendor = item as Record<string, unknown>
+            if (
+              typeof vendor.name !== 'string' ||
+              typeof vendor.status !== 'number' ||
+              !Number.isInteger(vendor.status)
+            ) {
+              return null
+            }
+            const name = vendor.name.trim()
+            return name
+              ? {
+                  name,
+                  ...(typeof vendor.description === 'string'
+                    ? { description: vendor.description.trim() }
+                    : {}),
+                  ...(typeof vendor.icon === 'string'
+                    ? { icon: vendor.icon.trim() }
+                    : {}),
+                  status: vendor.status,
+                }
+              : null
+          })
+          .filter((item) => item !== null)
+      : []
+    if (
+      models.length === action.models.length &&
+      models.length > 0 &&
+      (action.vendors === undefined ||
+        action.vendors === null ||
+        (Array.isArray(action.vendors) &&
+          vendors.length === action.vendors.length)) &&
+      /^[0-9a-f]{64}$/.test(sourceDigest)
+    ) {
+      return {
+        type: 'admin_model_sync',
+        confirmation_token: confirmationToken,
+        requires_confirmation: true,
+        expires_in_seconds: action.expires_in_seconds,
+        models,
+        ...(vendors.length ? { vendors } : {}),
+        locale,
+        source_digest: sourceDigest,
       }
     }
   }

@@ -31,6 +31,7 @@ const (
 	assistantAdminPricingChangeKind   = "pricing"
 	assistantAdminChannelChangeKind   = "channel"
 	assistantAdminUserSkillChangeKind = "user_skill"
+	assistantAdminModelSyncChangeKind = "model_sync"
 	assistantAdminChangeLifetime      = 10 * time.Minute
 	assistantAdminMaxConfigChanges    = 16
 	assistantAdminMaxChannelChanges   = 12
@@ -277,6 +278,7 @@ type assistantAdminChangePayload struct {
 	Channel        *assistantAdminChannelChange   `json:"channel,omitempty"`
 	Pricing        *assistantAdminPricingChange   `json:"pricing,omitempty"`
 	UserSkill      *assistantAdminUserSkillChange `json:"user_skill,omitempty"`
+	ModelSync      *assistantAdminModelSyncChange `json:"model_sync,omitempty"`
 }
 
 type assistantAdminChannelChange struct {
@@ -2173,6 +2175,11 @@ func applyAssistantAdminChange(c *gin.Context, payload assistantAdminChangePaylo
 			return errors.New("administrator user skill change is empty")
 		}
 		return applyAssistantAdminUserSkillChange(c.GetInt("id"), *payload.UserSkill)
+	case assistantAdminModelSyncChangeKind:
+		if payload.ModelSync == nil {
+			return errors.New("administrator model sync change is empty")
+		}
+		return applyAssistantAdminModelSync(*payload.ModelSync)
 	default:
 		return errors.New("unknown administrator assistant change")
 	}
@@ -2212,7 +2219,7 @@ func ApplyAssistantAdminChange(c *gin.Context) {
 		writeAssistantError(c, http.StatusInternalServerError, "ASSISTANT_ADMIN_CHANGE_INVALID", errors.New("administrator preview could not be decoded"))
 		return
 	}
-	if payload.Kind == assistantAdminConfigChangeKind || payload.Kind == assistantAdminPricingChangeKind {
+	if payload.Kind == assistantAdminConfigChangeKind || payload.Kind == assistantAdminPricingChangeKind || payload.Kind == assistantAdminModelSyncChangeKind {
 		if _, err := assistantRootUser(user.Id); err != nil {
 			writeAssistantError(c, http.StatusForbidden, "ASSISTANT_ROOT_REQUIRED", err)
 			return
@@ -2247,6 +2254,12 @@ func ApplyAssistantAdminChange(c *gin.Context) {
 			"target_user_id": payload.UserSkill.TargetUserID,
 			"operation":      payload.UserSkill.Operation,
 			"fields":         fields,
+		})
+	} else if payload.Kind == assistantAdminModelSyncChangeKind && payload.ModelSync != nil {
+		recordManageAudit(c, "assistant.admin_model_sync_apply", map[string]interface{}{
+			"locale":        payload.ModelSync.Locale,
+			"model_count":   len(payload.ModelSync.Models),
+			"source_digest": payload.ModelSync.SourceDigest,
 		})
 	} else {
 		keys := make([]string, 0, len(payload.ConfigChanges))

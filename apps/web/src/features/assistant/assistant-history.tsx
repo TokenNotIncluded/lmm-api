@@ -118,6 +118,7 @@ export function AssistantHistory(props: {
   const [auditUserId, setAuditUserId] = useState<number | null>(null)
   const [auditInputError, setAuditInputError] = useState(false)
   const [filter, setFilter] = useState<'active' | 'archived'>('active')
+  const [search, setSearch] = useState('')
   const showingArchived = filter === 'archived'
   const fixedScope = props.ownerUser
     ? props.ownerUser.id === authUser?.id
@@ -184,7 +185,19 @@ export function AssistantHistory(props: {
       }),
     [i18n.language]
   )
-  const conversations = historyQuery.data?.conversations ?? []
+  const conversations = useMemo(
+    () => historyQuery.data?.conversations ?? [],
+    [historyQuery.data?.conversations]
+  )
+  const visibleConversations = useMemo(() => {
+    const query = search.trim().toLocaleLowerCase()
+    if (!query) return conversations
+    return conversations.filter((conversation) =>
+      `${conversation.title} ${conversation.last_message_preview}`
+        .toLocaleLowerCase()
+        .includes(query)
+    )
+  }, [conversations, search])
   const status = assistantHistoryErrorStatus(historyQuery.error)
 
   const selectSelfScope = () => {
@@ -228,10 +241,10 @@ export function AssistantHistory(props: {
           : t('Unable to load conversation history. Try again.')
 
   return (
-    <div className='grid gap-3'>
+    <div className='grid gap-6 py-2 sm:gap-8'>
       {canAudit && !props.ownerUser ? (
-        <div className='grid gap-3 rounded-lg border p-3'>
-          <div className='flex flex-wrap gap-2'>
+        <div className='grid gap-5 border-b pb-6'>
+          <div className='flex flex-wrap gap-3'>
             <Button
               type='button'
               variant={effectiveScope === 'self' ? 'secondary' : 'outline'}
@@ -252,11 +265,11 @@ export function AssistantHistory(props: {
             </Button>
           </div>
           {effectiveScope === 'audit' ? (
-            <form className='grid gap-2' onSubmit={submitAuditUserId}>
+            <form className='grid max-w-lg gap-3' onSubmit={submitAuditUserId}>
               <Label htmlFor='assistant-history-audit-user-id'>
                 {t('User ID')}
               </Label>
-              <div className='flex flex-wrap gap-2 sm:flex-nowrap'>
+              <div className='flex gap-3'>
                 <Input
                   id='assistant-history-audit-user-id'
                   value={auditUserIdInput}
@@ -284,7 +297,7 @@ export function AssistantHistory(props: {
         </div>
       ) : null}
       {effectiveScope === 'audit' && activeUserId !== undefined ? (
-        <div className='grid gap-1 rounded-lg border p-3'>
+        <div className='grid gap-1 border-b pb-5'>
           <p className='text-sm font-medium'>{t('User audit')}</p>
           <p className='text-muted-foreground text-xs leading-5'>
             {props.ownerUser?.username
@@ -294,25 +307,34 @@ export function AssistantHistory(props: {
           </p>
         </div>
       ) : null}
-      <div className='flex flex-wrap gap-2'>
-        <Button
-          type='button'
-          variant={showingArchived ? 'outline' : 'secondary'}
-          size='sm'
-          aria-pressed={!showingArchived}
-          onClick={() => setFilter('active')}
-        >
-          {t('Active conversations')}
-        </Button>
-        <Button
-          type='button'
-          variant={showingArchived ? 'secondary' : 'outline'}
-          size='sm'
-          aria-pressed={showingArchived}
-          onClick={() => setFilter('archived')}
-        >
-          {t('Archived conversations')}
-        </Button>
+      <div className='flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between'>
+        <div className='flex flex-wrap gap-3'>
+          <Button
+            type='button'
+            variant={showingArchived ? 'outline' : 'secondary'}
+            size='sm'
+            aria-pressed={!showingArchived}
+            onClick={() => setFilter('active')}
+          >
+            {t('Active conversations')}
+          </Button>
+          <Button
+            type='button'
+            variant={showingArchived ? 'secondary' : 'outline'}
+            size='sm'
+            aria-pressed={showingArchived}
+            onClick={() => setFilter('archived')}
+          >
+            {t('Archived conversations')}
+          </Button>
+        </div>
+        <Input
+          className='w-full sm:max-w-xs'
+          aria-label={t('Search')}
+          placeholder={t('Search')}
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+        />
       </div>
       {historyQuery.isLoading ? (
         <div
@@ -336,22 +358,24 @@ export function AssistantHistory(props: {
         <p className='text-muted-foreground py-8 text-center text-sm leading-6'>
           {t('Enter a positive integer')}
         </p>
-      ) : conversations.length === 0 ? (
+      ) : visibleConversations.length === 0 ? (
         <p className='text-muted-foreground py-8 text-center text-sm leading-6'>
-          {effectiveScope === 'audit'
-            ? `${t('No visible conversation history yet.')} · ${t('User ID')}: ${activeUserId}`
-            : t(
-                showingArchived
-                  ? 'No archived conversations yet.'
-                  : 'No active conversations yet.'
-              )}
+          {search.trim()
+            ? t('No matching results')
+            : effectiveScope === 'audit'
+              ? `${t('No visible conversation history yet.')} · ${t('User ID')}: ${activeUserId}`
+              : t(
+                  showingArchived
+                    ? 'No archived conversations yet.'
+                    : 'No active conversations yet.'
+                )}
         </p>
       ) : (
         <div
           data-presentation={props.presentation ?? 'cards'}
           data-testid='assistant-history-list'
         >
-          {conversations.map((conversation, index) => {
+          {visibleConversations.map((conversation, index) => {
             const safePreview = redactAssistantMessageForDisplay(
               conversation.last_message_preview,
               t(

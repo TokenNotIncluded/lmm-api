@@ -226,6 +226,28 @@ describe('assistant response parsing', () => {
         },
       }
     )
+    assert.deepEqual(
+      parseAssistantAction({
+        type: 'admin_model_sync',
+        confirmation_token: ' model-sync-token ',
+        requires_confirmation: true,
+        expires_in_seconds: 600,
+        locale: 'zh-CN',
+        source_digest: 'a'.repeat(64),
+        models: [{ model_id: 'gpt-5.6-sol', vendor: 'OpenAI', status: 1 }],
+        vendors: [{ name: 'OpenAI', description: 'model provider', status: 1 }],
+      }),
+      {
+        type: 'admin_model_sync',
+        confirmation_token: 'model-sync-token',
+        requires_confirmation: true,
+        expires_in_seconds: 600,
+        locale: 'zh-CN',
+        source_digest: 'a'.repeat(64),
+        models: [{ model_id: 'gpt-5.6-sol', vendor: 'OpenAI', status: 1 }],
+        vendors: [{ name: 'OpenAI', description: 'model provider', status: 1 }],
+      }
+    )
   })
 
   test('accepts only allowlisted navigation and confirmation-gated user actions', () => {

@@ -97,7 +97,9 @@ export function AssistantAdminChangeTool(props: {
           />
           {props.action.type === 'admin_pricing_change'
             ? t('Model pricing change')
-            : t('Administrator configuration change')}
+            : props.action.type === 'admin_model_sync'
+              ? t('Add missing models')
+              : t('Administrator configuration change')}
         </CardTitle>
         <CardDescription>
           {t(
@@ -125,6 +127,35 @@ export function AssistantAdminChangeTool(props: {
                 </p>
               </div>
             </div>
+          </div>
+        ) : props.action.type === 'admin_model_sync' ? (
+          <div className='border-border/70 bg-background/70 grid gap-3 border p-3'>
+            <div className='text-muted-foreground text-xs'>
+              {t('Upstream catalog')}: {props.action.locale || t('default')}
+            </div>
+            <div className='grid gap-2'>
+              {props.action.models.map((model) => (
+                <div
+                  className='flex items-baseline justify-between gap-3 border-b pb-2 last:border-b-0 last:pb-0'
+                  key={model.model_id}
+                >
+                  <span className='text-sm font-medium break-all'>
+                    {model.model_id}
+                  </span>
+                  <span className='text-muted-foreground shrink-0 text-xs'>
+                    {model.vendor || t('Unassigned vendor')}
+                  </span>
+                </div>
+              ))}
+            </div>
+            {props.action.vendors?.length ? (
+              <div className='border-border/70 grid gap-2 border-t pt-3'>
+                <p className='text-muted-foreground text-xs'>{t('Vendor')}</p>
+                <p className='text-sm'>
+                  {props.action.vendors.map((vendor) => vendor.name).join(', ')}
+                </p>
+              </div>
+            ) : null}
           </div>
         ) : (
           <div className='border-border/70 bg-background/70 grid gap-2 border p-3'>

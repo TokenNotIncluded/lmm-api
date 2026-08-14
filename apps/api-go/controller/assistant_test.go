@@ -1181,7 +1181,7 @@ func TestAssistantPricingEndpointAppliesTrustDiscountToGroupRatios(t *testing.T)
 func TestAssistantAgentToolsExposeSafeAndConfirmationGatedActions(t *testing.T) {
 	c, _ := createAssistantKeyTestContext(t, "assistant-tool-user")
 	definitions := assistantToolDefinitions()
-	require.Len(t, definitions, 36)
+	require.Len(t, definitions, 38)
 	names := make(map[string]bool, len(definitions))
 	for _, definition := range definitions {
 		names[definition.Function.Name] = true
@@ -1214,6 +1214,8 @@ func TestAssistantAgentToolsExposeSafeAndConfirmationGatedActions(t *testing.T) 
 	assert.True(t, names["prepare_admin_config_change"])
 	assert.True(t, names["get_admin_channels"])
 	assert.True(t, names["prepare_admin_channel_change"])
+	assert.True(t, names["get_admin_model_inventory"])
+	assert.True(t, names["prepare_admin_model_sync"])
 	assert.True(t, names["prepare_admin_pricing_change"])
 	assert.True(t, names["get_admin_user_skills"])
 	assert.True(t, names["prepare_admin_user_skill_change"])
@@ -1486,11 +1488,13 @@ func TestAssistantAgentToolCatalogueMatchesAccessLevel(t *testing.T) {
 	for _, definition := range admin {
 		adminNames[definition.Function.Name] = true
 	}
-	assert.Len(t, adminNames, len(assistantToolDefinitions())-6)
+	assert.Len(t, adminNames, len(assistantToolDefinitions())-7)
 	assert.True(t, adminNames["get_admin_assistant_review"])
 	assert.False(t, adminNames["get_admin_server_config"])
 	assert.False(t, adminNames["prepare_admin_config_change"])
 	assert.False(t, adminNames["prepare_admin_pricing_change"])
+	assert.True(t, adminNames["get_admin_model_inventory"])
+	assert.False(t, adminNames["prepare_admin_model_sync"])
 
 	root := assistantToolDefinitionsForContext(assistantUserContext{
 		AccessLevel:            "ROOT",
@@ -1505,6 +1509,8 @@ func TestAssistantAgentToolCatalogueMatchesAccessLevel(t *testing.T) {
 	assert.True(t, rootNames["get_admin_server_config"])
 	assert.True(t, rootNames["prepare_admin_config_change"])
 	assert.True(t, rootNames["prepare_admin_pricing_change"])
+	assert.True(t, rootNames["get_admin_model_inventory"])
+	assert.True(t, rootNames["prepare_admin_model_sync"])
 }
 
 func TestAssistantPaymentOffersUseProgressiveGateAndKeepRestrictions(t *testing.T) {

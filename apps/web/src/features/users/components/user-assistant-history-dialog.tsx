@@ -69,7 +69,7 @@ export function UserAssistantHistoryDialog(props: { user: User }) {
         <MessageSquareText aria-hidden='true' />
         {count.toLocaleString()}
       </Button>
-      <DialogContent className='flex max-h-[min(52rem,calc(100svh-2rem))] min-h-0 flex-col sm:max-w-3xl'>
+      <DialogContent className='flex max-h-[min(52rem,calc(100svh-2rem))] min-h-0 w-[calc(100%-1rem)] flex-col sm:max-w-4xl'>
         <DialogHeader>
           <DialogTitle>{t('Support conversations')}</DialogTitle>
           <DialogDescription>
@@ -95,6 +95,7 @@ export function UserAssistantHistoryDialog(props: { user: User }) {
             <AssistantHistory
               active={open}
               ownerUser={{ id: props.user.id, username: props.user.username }}
+              presentation='rows'
               onOpenConversation={setConversation}
             />
           )}

@@ -1249,7 +1249,8 @@ export function AssistantPanel(props: {
       )
       const adminChange =
         reply.action?.type === 'admin_config_change' ||
-        reply.action?.type === 'admin_pricing_change'
+        reply.action?.type === 'admin_pricing_change' ||
+        reply.action?.type === 'admin_model_sync'
           ? reply.action
           : undefined
       const imageAction =
