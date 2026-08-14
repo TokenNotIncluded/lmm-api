@@ -240,7 +240,11 @@ describe('AssistantPlanTool', () => {
     )
     assert.ok(rendered.container.querySelector('#assistant-expected-credit'))
     assert.ok(rendered.container.querySelector('#assistant-topup-credit'))
-    assert.ok(rendered.container.querySelector('a[href="/wallet"]'))
+    const checkoutLink =
+      rendered.container.querySelector<HTMLAnchorElement>('a[href="/wallet"]')
+    assert.ok(checkoutLink)
+    assert.match(checkoutLink.className, /w-full/)
+    assert.match(checkoutLink.className, /sm:w-auto/)
     assert.doesNotMatch(rendered.container.textContent ?? '', /Read-only/)
     assert.doesNotMatch(
       rendered.container.textContent ?? '',

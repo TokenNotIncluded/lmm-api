@@ -383,7 +383,11 @@ export function AssistantPlanTool(props: {
   let checkoutContent: ReactNode
   if (checkoutAvailable) {
     checkoutContent = (
-      <Button variant='outline' render={<Link to='/wallet' />}>
+      <Button
+        variant='outline'
+        className='w-full justify-center sm:w-auto'
+        render={<Link to='/wallet' />}
+      >
         {t('Review plans and exact checkout prices')}
         <HugeiconsIcon
           icon={ArrowRight01Icon}
