@@ -153,11 +153,11 @@ func TestAssistantPersonaMatrix(t *testing.T) {
 			}
 			expectedAllowed := append([]string{}, fixture.Expected.Tools.Allowed...)
 			expectedAllowed = append(expectedAllowed,
-			"navigate_to_page",
-			"get_user_overview",
-			"get_user_usage_summary",
-			"prepare_user_action",
-		)
+				"navigate_to_page",
+				"get_user_overview",
+				"get_user_usage_summary",
+				"prepare_user_action",
+			)
 			assert.Len(t, toolNames, len(expectedAllowed), "fixture must describe the complete allowed tool set")
 			for _, tool := range expectedAllowed {
 				assert.True(t, toolNames[tool], "expected tool %q to be available", tool)
