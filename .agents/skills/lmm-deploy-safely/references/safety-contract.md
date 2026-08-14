@@ -209,6 +209,8 @@ green.
   release roots, unresolved variables, tildes, globs, symlinks, and paths not
   owned by the marker.
 - Preview cleanup before execution.
+- Remove release artifacts together with staging, temporary files, and build
+  caches; durable releases and rollback packages belong outside deploy-work.
 - Never implement “clear tmp” as a broad directory deletion. Identify and
   remove only stale, inactive, marker-owned LMM deployment workspaces.
 - Re-run disk/inode/RAM/swap, service state, PostgreSQL/Valkey readiness, and

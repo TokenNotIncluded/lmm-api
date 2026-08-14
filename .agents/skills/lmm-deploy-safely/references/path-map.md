@@ -139,7 +139,7 @@ This mechanism owns internal probes only, not production business traffic.
 
 The controller workspace is a transaction workspace, not durable backup
 storage. Keep its marker and terminal status for audit, but remove exact
-`staging`, `tmp`, and cache children after `CONFIRMED`, `ROLLED_BACK`, a
+`artifacts`, `staging`, `tmp`, and cache children after `CONFIRMED`, `ROLLED_BACK`, a
 controller-only pre-switch `VALIDATED`, or a verified pre-switch `ABORTED`
 state and,
 when backups were requested, after their checksum/decryption verification.

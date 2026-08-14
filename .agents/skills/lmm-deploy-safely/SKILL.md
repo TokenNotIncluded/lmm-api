@@ -408,8 +408,9 @@ Preview first. Never clean a broad temp
 directory, backup root, release root, unresolved variable, glob, symlink, or
 another deployment's workspace.
 
-For production, a terminal workspace must not retain package staging or build
-caches: remove only its exact `staging`, `tmp`, and cache children after the
+For production, a terminal workspace must not retain release artifacts,
+package staging, or build caches: remove only its exact `artifacts`, `staging`,
+`tmp`, and cache children after the
 durable terminal status and, when requested, backup verification. Retain the marker and
 status as a small audit record. A scheduled cleanup may prune only terminal,
 inactive workspaces older than 24 hours, oldest first, and must stop before the
