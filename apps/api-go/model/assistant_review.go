@@ -21,6 +21,19 @@ type AssistantReviewAction struct {
 	Count int64  `json:"count"`
 }
 
+// AssistantSecurityReview contains only windowed counters and bounded
+// category/rule aggregates. It deliberately excludes request IDs, user IDs,
+// usernames, digests, prompts, and matcher patterns.
+type AssistantSecurityReview struct {
+	TotalMatches     int64                        `json:"total_matches"`
+	BlockedMatches   int64                        `json:"blocked_matches"`
+	AuditedMatches   int64                        `json:"audited_matches"`
+	AffectedRequests int64                        `json:"affected_requests"`
+	AffectedUsers    int64                        `json:"affected_users"`
+	ByCategory       []AdvancedSecurityStatBucket `json:"by_category"`
+	ByRule           []AdvancedSecurityStatBucket `json:"by_rule"`
+}
+
 // AssistantReview is aggregate-only. It deliberately excludes user IDs,
 // questions, transcripts, email addresses, profile strategies, and memory.
 type AssistantReview struct {
@@ -32,6 +45,7 @@ type AssistantReview struct {
 	Presets          []AssistantPresetReview   `json:"presets"`
 	CurrentSupport   int64                     `json:"current_pending_support"`
 	CurrentIncidents int64                     `json:"current_open_security_incidents"`
+	Security         AssistantSecurityReview   `json:"security"`
 	Actions          []AssistantReviewAction   `json:"actions"`
 }
 
@@ -67,6 +81,9 @@ func reviewActions(review AssistantReview) []AssistantReviewAction {
 	}
 	if review.CurrentIncidents > 0 {
 		actions = append(actions, AssistantReviewAction{Code: "review_security_incidents", Count: review.CurrentIncidents})
+	}
+	if review.Security.TotalMatches > 0 {
+		actions = append(actions, AssistantReviewAction{Code: "review_security_events", Count: review.Security.TotalMatches})
 	}
 
 	var profiles, unknown int64
@@ -128,6 +145,22 @@ func BuildAssistantReview(ctx context.Context, start, end int64) (AssistantRevie
 	}
 	if review.CurrentIncidents, err = reviewCount(ctx, &AssistantSecurityIncident{}, "status = ?", AssistantSecurityIncidentStatusOpen); err != nil {
 		return AssistantReview{}, err
+	}
+	securityStats, err := GetAdvancedSecurityStats(AdvancedSecurityEventFilter{
+		StartTimestamp: start,
+		EndTimestamp:   end,
+	})
+	if err != nil {
+		return AssistantReview{}, err
+	}
+	review.Security = AssistantSecurityReview{
+		TotalMatches:     securityStats.TotalMatches,
+		BlockedMatches:   securityStats.BlockedMatches,
+		AuditedMatches:   securityStats.AuditedMatches,
+		AffectedRequests: securityStats.AffectedRequests,
+		AffectedUsers:    securityStats.AffectedUsers,
+		ByCategory:       trimReview(securityStats.ByCategory),
+		ByRule:           trimReview(securityStats.ByRule),
 	}
 	review.Actions = reviewActions(review)
 	return review, nil

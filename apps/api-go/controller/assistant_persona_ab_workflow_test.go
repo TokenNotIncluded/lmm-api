@@ -161,6 +161,26 @@ func TestPersonaABLatestExplicitPaymentIntentWins(t *testing.T) {
 			want:   assistantPaymentOfferNone,
 		},
 		{
+			name: "later subscription choice overrides refusal",
+			conversation: []assistantOpenAIMessage{
+				{Role: "user", Content: "我拒绝付款，只想先了解。"},
+				{Role: "assistant", Content: "好的，我不会展示付费方案。"},
+				{Role: "user", Content: "我改主意了，还是订阅吧，每月 20 美元。"},
+			},
+			latest: "我改主意了，还是订阅吧，每月 20 美元。",
+			want:   assistantPaymentOfferReady,
+		},
+		{
+			name: "later natural purchase cancellation wins",
+			conversation: []assistantOpenAIMessage{
+				{Role: "user", Content: "我要购买套餐，用于 API 项目。"},
+				{Role: "assistant", Content: "我可以读取当前方案。"},
+				{Role: "user", Content: "算了，我先不买了。"},
+			},
+			latest: "算了，我先不买了。",
+			want:   assistantPaymentOfferNone,
+		},
+		{
 			name: "positive reversal within one message",
 			conversation: []assistantOpenAIMessage{
 				{Role: "user", Content: "以前不想付费，现在我要付费，用于 API。"},

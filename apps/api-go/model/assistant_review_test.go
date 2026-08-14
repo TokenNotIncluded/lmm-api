@@ -12,7 +12,7 @@ import (
 
 func TestReviewAggregates(t *testing.T) {
 	user := setupAssistantLeadTestDB(t)
-	require.NoError(t, DB.AutoMigrate(&PromptPresetStat{}, &AssistantSecurityIncident{}))
+	require.NoError(t, DB.AutoMigrate(&PromptPresetStat{}, &AssistantSecurityIncident{}, &AdvancedSecurityEvent{}))
 
 	require.NoError(t, DB.Create(&AssistantProfileBucket{Profile: AssistantProfileUnknown, BucketStart: 100, Count: 5}).Error)
 	require.NoError(t, DB.Create(&AssistantProfileBucket{Profile: AssistantProfileTechnical, BucketStart: 100, Count: 2}).Error)
@@ -33,11 +33,27 @@ func TestReviewAggregates(t *testing.T) {
 		UserId: user.Id, ConversationId: 99, Category: AssistantSecurityIncidentCategory,
 		Status: AssistantSecurityIncidentStatusOpen, InputDigest: strings.Repeat("a", 64), CreatedAt: 100, UpdatedAt: 100,
 	}).Error)
+	require.NoError(t, DB.Create(&AdvancedSecurityEvent{
+		CreatedAt: 100, RequestID: "request-in-window", UserID: user.Id, Username: user.Username,
+		Decision: AdvancedSecurityDecisionBlocked, RuleID: "prompt-injection", Category: "prompt_injection",
+		InputDigest: "digest-in-window", PatternDigest: "pattern-in-window",
+	}).Error)
+	require.NoError(t, DB.Create(&AdvancedSecurityEvent{
+		CreatedAt: 300, RequestID: "request-outside-window", UserID: user.Id, Username: user.Username,
+		Decision: AdvancedSecurityDecisionAudited, RuleID: "outside", Category: "outside",
+	}).Error)
 
 	review, err := BuildAssistantReview(context.Background(), 1, 200)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, review.CurrentSupport)
 	assert.EqualValues(t, 1, review.CurrentIncidents)
+	assert.EqualValues(t, 1, review.Security.TotalMatches)
+	assert.EqualValues(t, 1, review.Security.BlockedMatches)
+	assert.EqualValues(t, 0, review.Security.AuditedMatches)
+	assert.EqualValues(t, 1, review.Security.AffectedRequests)
+	assert.EqualValues(t, 1, review.Security.AffectedUsers)
+	assert.Equal(t, []AdvancedSecurityStatBucket{{Key: "prompt_injection", Count: 1}}, review.Security.ByCategory)
+	assert.Equal(t, []AdvancedSecurityStatBucket{{Key: "prompt-injection", Count: 1}}, review.Security.ByRule)
 	require.Len(t, review.Presets, 1)
 	assert.EqualValues(t, 10, review.Presets[0].Clicks)
 	assert.EqualValues(t, 5, review.Profiles[0].Count)
@@ -49,6 +65,7 @@ func TestReviewAggregates(t *testing.T) {
 	assert.ElementsMatch(t, []string{
 		"review_support_queue",
 		"review_security_incidents",
+		"review_security_events",
 		"improve_profile_classification",
 		"improve_pre_conversation_prompts",
 		"review_recommendation_quality",
@@ -58,6 +75,8 @@ func TestReviewAggregates(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, string(encoded), "private support text")
 	assert.NotContains(t, string(encoded), user.Email)
+	assert.NotContains(t, string(encoded), "request-in-window")
+	assert.NotContains(t, string(encoded), "digest-in-window")
 	assert.Less(t, len(encoded), 16*1024)
 }
 

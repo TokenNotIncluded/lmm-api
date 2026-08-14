@@ -38,14 +38,19 @@ func TestReviewTask(t *testing.T) {
 	truncate(t)
 	require.NoError(t, model.DB.AutoMigrate(
 		&model.AssistantLead{}, &model.AssistantProfileBucket{}, &model.PromptPresetStat{},
-		&model.AssistantSecurityIncident{},
+		&model.AssistantSecurityIncident{}, &model.AdvancedSecurityEvent{},
 	))
 	t.Cleanup(func() {
 		model.DB.Exec("DELETE FROM assistant_security_incidents")
 		model.DB.Exec("DELETE FROM assistant_pre_conversation_preset_stats")
 		model.DB.Exec("DELETE FROM assistant_profile_buckets")
 		model.DB.Exec("DELETE FROM assistant_leads")
+		model.DB.Exec("DELETE FROM advanced_security_events")
 	})
+	require.NoError(t, model.DB.Create(&model.AdvancedSecurityEvent{
+		CreatedAt: 50, RequestID: "review-request", UserID: 42,
+		Decision: model.AdvancedSecurityDecisionBlocked, RuleID: "review-rule", Category: "review-category",
+	}).Error)
 
 	payload := AssistantReviewPayload{WindowStart: 1, WindowEnd: 100}
 	task, err := model.CreateSystemTask(model.SystemTaskTypeAssistantReview, payload, nil)
@@ -59,5 +64,6 @@ func TestReviewTask(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, model.SystemTaskStatusSucceeded, stored.Status)
 	assert.Contains(t, stored.Result, `"window_start":1`)
+	assert.Contains(t, stored.Result, `"review_security_events"`)
 	assert.Less(t, len(stored.Result), 16*1024)
 }

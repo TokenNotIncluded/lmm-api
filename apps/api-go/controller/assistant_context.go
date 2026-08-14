@@ -30,6 +30,8 @@ var (
 
 	assistantNegativePaymentTerms = []string{
 		"不想付费", "不想付款", "不想支付", "不充值", "不要充值", "拒绝充值", "绝不充值",
+		"不用充值了", "先不充值", "暂时不充值", "不想订阅", "不订阅", "不要订阅", "拒绝订阅", "取消订阅",
+		"不买了", "先不买", "暂时不买",
 		"不愿意付费", "不要付费", "不要付款", "不要支付", "拒绝付费", "拒绝付款", "拒绝支付",
 		"不会付费", "不会付款", "不会支付", "不会花钱", "绝不付费", "绝不付款", "绝不支付",
 		"绝不会付费", "绝不会付款", "绝不会支付", "绝不会花钱", "不花钱",
@@ -37,17 +39,20 @@ var (
 		"讨厌法币", "不想使用法币", "不接受法币", "拒绝法币", "只接受免费", "免费使用",
 		"do not want to pay", "don't want to pay", "do not pay", "don't pay", "refuse to pay",
 		"never pay", "won't pay", "won’t pay", "will not pay", "hate paying", "hate payment",
-		"no payment", "no fiat", "reject fiat", "free only",
+		"no payment", "no fiat", "reject fiat", "free only", "do not subscribe", "don't subscribe",
+		"will not subscribe", "won't subscribe", "cancel my subscription", "not buying", "will not buy", "won't buy",
 	}
 	assistantPaymentLanguageTerms = []string{
-		"充值", "充值额度", "充值余额", "充值账户", "付费", "付款", "支付", "购买套餐", "买套餐", "买额度", "购买额度",
+		"充值", "充值额度", "充值余额", "充值账户", "付费", "付款", "支付", "订阅", "购买套餐", "买套餐", "买额度", "购买额度",
 		"top up", "top-up", "topup", "subscribe", "subscription", "purchase", "payment",
 	}
 	assistantPaymentPurchaseIntentTerms = []string{
 		"我要充值", "想充值", "准备充值", "打算充值", "需要充值", "我要付费", "想付费", "准备付费", "打算付费",
 		"我要付款", "想付款", "准备付款", "打算付款", "我要支付", "想支付", "准备支付", "打算支付",
+		"我要订阅", "想订阅", "准备订阅", "打算订阅", "决定订阅", "还是订阅", "订阅吧",
 		"购买套餐", "买套餐", "购买额度", "买额度", "如何充值", "怎么充值", "怎样充值", "我要购买",
-		"i want to pay", "i want to purchase", "i want to subscribe", "how to top up", "how do i pay", "buy a plan",
+		"i want to pay", "i want to purchase", "i want to subscribe", "i will subscribe", "i'll subscribe",
+		"ready to subscribe", "how to top up", "how do i pay", "buy a plan",
 	}
 )
 
@@ -883,6 +888,8 @@ func assistantHasHighConfidenceSecurityAbuse(message string) bool {
 		"盗取",
 		"窃取 system prompt",
 		"提取 system prompt",
+		"获取 system prompt",
+		"泄露 system prompt",
 		"忽略 system prompt",
 		"忽略系统提示",
 		"brute force",
@@ -890,6 +897,8 @@ func assistantHasHighConfidenceSecurityAbuse(message string) bool {
 		"ignore previous",
 		"extract system prompt",
 		"steal system prompt",
+		"reveal system prompt",
+		"get system prompt",
 	)
 	if strongAbuse {
 		// A quoted finding may contain the abuse marker while asking for a
@@ -901,8 +910,27 @@ func assistantHasHighConfidenceSecurityAbuse(message string) bool {
 			"给我步骤",
 			"操作步骤",
 			"详细步骤",
+			"如何提取",
+			"怎么提取",
+			"怎样提取",
+			"怎么才能提取",
+			"教我提取",
+			"如何窃取",
+			"怎么窃取",
+			"如何绕过",
+			"怎么绕过",
 			"step-by-step",
 			"tell me how to extract",
+			"show me how to extract",
+			"how do i extract",
+			"how can i extract",
+			"how to steal",
+			"how do i steal",
+			"how can i steal",
+			"how to bypass",
+			"how do i bypass",
+			"how can i bypass",
+			"how to jailbreak",
 			"tell me how",
 			"give me steps",
 		)
