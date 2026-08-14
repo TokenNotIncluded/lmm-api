@@ -4,6 +4,9 @@
   "workspaces": {
     "": {
       "name": "api.lmm.best",
+      "devDependencies": {
+        "@waffo/pancake-ts": "0.9.0",
+      },
     },
     "apps/web": {
       "name": "@lmm/web",
@@ -990,6 +993,8 @@
     "@visactor/vutils": ["@visactor/vutils@1.0.23", "", { "dependencies": { "@turf/helpers": "^6.5.0", "@turf/invariant": "^6.5.0", "eventemitter3": "^4.0.7" } }, "sha512-M8SLqgdHhKN8QmQKTWD1gzEaHptpIV9pvMYvC6+VeOsqYvZZ6UdhSCAAczTYVo+m/uwcEC2JHSUspbrs8rzlRQ=="],
 
     "@visactor/vutils-extension": ["@visactor/vutils-extension@2.1.4", "", { "dependencies": { "@visactor/vdataset": "~1.0.23", "@visactor/vutils": "~1.0.23" } }, "sha512-gyTxhrTN0Ybzis4FsHniTNQSKo9GWLT2f+0du3E6wEDQ/PijNRS6onkY3HyBXZbsnJlvk/sMZUqrtVJi3cTvzg=="],
+
+    "@waffo/pancake-ts": ["@waffo/pancake-ts@0.9.0", "", {}, "sha512-DanYjKaihOXJlpYdbPUrsiYNQnK5Tbe+rlFF9kndsme2EBE6EKiV3uJ4EbagkLlD9LAlaOS8lFdnjiW6PQcHYg=="],
 
     "@workflow/serde": ["@workflow/serde@4.1.0", "", {}, "sha512-pav4F2BoirECWR7Nf1TKt+2eETcBj7jj4cBefQ8VXQCA6NPkaKeLfj/zMgi+3zYV5ZIBT4GuUiphsj0/b9hPQQ=="],
 

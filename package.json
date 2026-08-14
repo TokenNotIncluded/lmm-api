@@ -27,7 +27,8 @@
     "lint:rust": "cargo clippy --manifest-path apps/api-rust/Cargo.toml --locked --workspace --all-targets --all-features -- -D warnings",
     "typecheck:go": "cd apps/api-go && go test -run '^$' ./...",
     "typecheck:web": "bun run --filter @lmm/web typecheck",
-    "typecheck:rust": "cargo check --manifest-path apps/api-rust/Cargo.toml --locked --workspace --all-targets"
+    "typecheck:rust": "cargo check --manifest-path apps/api-rust/Cargo.toml --locked --workspace --all-targets",
+    "waffo:pancake:smoke": "node scripts/waffo-pancake-smoke.mjs"
   },
   "overrides": {
     "brace-expansion": "2.1.1",
@@ -41,5 +42,8 @@
     "postcss": "8.5.15",
     "qs": "6.15.2",
     "uuid": "14.0.0"
+  },
+  "devDependencies": {
+    "@waffo/pancake-ts": "0.9.0"
   }
 }

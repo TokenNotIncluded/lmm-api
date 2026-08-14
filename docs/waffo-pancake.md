@@ -1,6 +1,6 @@
 # Waffo Pancake（测试环境）
 
-当前 Go 后端使用官方 `github.com/waffo-com/waffo-pancake-sdk-go` 完成服务端集成。不要把 `@waffo/pancake-ts` 放进 Web bundle：Waffo 的私钥只能留在服务端。
+当前 Go 后端使用官方 `github.com/waffo-com/waffo-pancake-sdk-go` 完成服务端集成。仓库根目录另外安装官方 `@waffo/pancake-ts`，仅供服务端 smoke runner 使用；不要把它放进 Web bundle：Waffo 的私钥只能留在服务端。
 
 ## 配置
 
@@ -12,6 +12,30 @@ export WAFFO_PRIVATE_KEY='API Key 对应的 RSA 私钥 PEM'
 ```
 
 `WAFFO_MERCHANT_ID` 不是 `storeId`。Store/Product ID 是运行时配置：可以在管理员的 Waffo Pancake 配置中从 Dashboard 选择，或使用后端的 pair/catalog 路由创建/保存。
+
+## 官方 TypeScript SDK smoke 流程
+
+先在 Dashboard → API & Development 顶部复制 **Merchant ID**，再在 API Keys 创建并下载 **Test** API Key 的 RSA 私钥。两者只通过环境变量注入：
+
+```sh
+export WAFFO_PANCAKE_ENV=test
+export WAFFO_MERCHANT_ID='MER_...'
+export WAFFO_PRIVATE_KEY='-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----'
+bun run waffo:pancake:smoke -- --webhook-url \
+  'https://api.lmm.best/api/waffo-pancake/webhook/test' \
+  --configure-webhook
+```
+
+Runner 使用 `@waffo/pancake-ts`，遵守多店铺/多商品不猜选的规则；没有店铺或只有一个店铺时才会自动创建/选择。它只创建测试收银台，不调用 `.publish()`，避免把测试商品提升到生产。命令会输出一次性 checkout URL、订单业务号和测试卡 `4576750000000110`（未来有效期、三位 CVC）。完成托管收银台后，Waffo 应向 `/api/waffo-pancake/webhook/test` 发送签名的 `order.completed`；Go 端会验签、按业务订单号结算并保持重复投递幂等。
+
+如果 Dashboard 已有测试商品，可显式传入 `--store-id` 与 `--product-id`，不会创建临时资源：
+
+```sh
+bun run waffo:pancake:smoke -- \
+  --store-id 'STO_...' --product-id 'PROD_...' --buyer-email 'you@example.com'
+```
+
+没有 Merchant ID/私钥时不能执行真实 checkout 或伪造 webhook 验证；请使用 Test API Key 注入环境后再运行上述命令，切勿把私钥提交到仓库或聊天记录。
 
 ## 端点
 
@@ -39,4 +63,3 @@ export WAFFO_PRIVATE_KEY='API Key 对应的 RSA 私钥 PEM'
 cd apps/api-go
 go test ./service ./controller -run 'WaffoPancake|PaymentWebhook' -count=1
 ```
-
