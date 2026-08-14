@@ -282,9 +282,12 @@ func runServer() {
 
 func buildListenAddress(bindAddress, port string) (string, error) {
 	if bindAddress == "" {
-		// Preserve the historical public default when no explicit bind address is
-		// configured.
-		return ":" + port, nil
+		// Keep the application private by default. The production regional gate
+		// runs at Nginx; a public fallback listener would let callers bypass its
+		// GeoIP and account-aware policy whenever the environment is incomplete.
+		// Deployments that intentionally expose the application can still opt in
+		// with an explicit LMM_API_BIND_ADDRESS.
+		return net.JoinHostPort("127.0.0.1", port), nil
 	}
 	bindAddress = strings.TrimSpace(bindAddress)
 	if bindAddress == "" {

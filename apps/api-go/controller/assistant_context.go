@@ -854,29 +854,11 @@ func assistantHasHighConfidenceSecurityAbuse(message string) bool {
 		return false
 	}
 
-	// Quoted reports and explicit defensive work remain available. Merely
-	// claiming authorization is not enough to neutralize an otherwise direct
-	// prompt-theft or brute-force request.
-	if assistantTextContainsAny(text, "安全报告", "漏洞报告", "引用日志", "报告中", "security report", "vulnerability report", "quoted log") {
-		return false
-	}
-	strongAbuse := assistantTextContainsAny(
-		text,
-		"爆破",
-		"盗取",
-		"窃取 system prompt",
-		"提取 system prompt",
-		"忽略 system prompt",
-		"忽略系统提示",
-		"brute force",
-		"jailbreak",
-		"ignore previous",
-		"extract system prompt",
-		"steal system prompt",
-	)
-	if strongAbuse {
-		return true
-	}
+	// Defensive reports remain available, but merely wrapping a direct attack in
+	// the words "security report" must not disable the deterministic guard.
+	// A report marker is context, not authorization; the actual abuse and
+	// defensive signals below still decide the outcome.
+	reportContext := assistantTextContainsAny(text, "安全报告", "漏洞报告", "引用日志", "报告中", "security report", "vulnerability report", "quoted log")
 	defensiveContext := assistantTextContainsAny(
 		text,
 		"防止",
@@ -895,6 +877,40 @@ func assistantHasHighConfidenceSecurityAbuse(message string) bool {
 		"non-destructive",
 		"report a finding",
 	)
+	strongAbuse := assistantTextContainsAny(
+		text,
+		"爆破",
+		"盗取",
+		"窃取 system prompt",
+		"提取 system prompt",
+		"忽略 system prompt",
+		"忽略系统提示",
+		"brute force",
+		"jailbreak",
+		"ignore previous",
+		"extract system prompt",
+		"steal system prompt",
+	)
+	if strongAbuse {
+		// A quoted finding may contain the abuse marker while asking for a
+		// remediation, but an explicit request for attack instructions must
+		// remain blocked even when it is wrapped in a report label.
+		instructionRequest := assistantTextContainsAny(
+			text,
+			"具体步骤",
+			"给我步骤",
+			"操作步骤",
+			"详细步骤",
+			"step-by-step",
+			"tell me how to extract",
+			"tell me how",
+			"give me steps",
+		)
+		if !(reportContext && defensiveContext && !instructionRequest) {
+			return true
+		}
+		return false
+	}
 	if defensiveContext {
 		return false
 	}

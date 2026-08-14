@@ -65,6 +65,32 @@ type MemoryInput struct {
 	Enabled bool
 }
 
+// NormalizeMemoryInput validates and canonicalizes a memory before it crosses
+// the model boundary.  Callers that prepare a confirmation preview can use
+// the same rules as the write path without creating a database row.
+func NormalizeMemoryInput(input MemoryInput) (MemoryInput, error) {
+	if input.ID < 0 {
+		return MemoryInput{}, gorm.ErrInvalidData
+	}
+	if input.Source != AssistantMemorySourceAssistant && input.Source != AssistantMemorySourceAdmin {
+		return MemoryInput{}, ErrAssistantMemoryInvalid
+	}
+	var err error
+	input.Title, err = normalizeMemoryText(input.Title, AssistantMemoryMaxTitleRunes)
+	if err != nil {
+		return MemoryInput{}, err
+	}
+	input.Content, err = normalizeMemoryText(input.Content, AssistantMemoryMaxContentRunes)
+	if err != nil {
+		return MemoryInput{}, err
+	}
+	input.Tags, err = normalizeMemoryTags(input.Tags)
+	if err != nil {
+		return MemoryInput{}, err
+	}
+	return input, nil
+}
+
 func normalizeMemoryText(value string, limit int) (string, error) {
 	value = strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) || unicode.In(r, unicode.Cf) {
@@ -118,22 +144,11 @@ func (memory AssistantMemory) View() AssistantMemoryView {
 }
 
 func SaveMemory(ownerUserID, updatedBy int, input MemoryInput) (*AssistantMemory, error) {
-	if ownerUserID <= 0 || updatedBy <= 0 || input.ID < 0 {
+	if ownerUserID <= 0 || updatedBy <= 0 {
 		return nil, gorm.ErrInvalidData
 	}
-	if input.Source != AssistantMemorySourceAssistant && input.Source != AssistantMemorySourceAdmin {
-		return nil, ErrAssistantMemoryInvalid
-	}
 	var err error
-	input.Title, err = normalizeMemoryText(input.Title, AssistantMemoryMaxTitleRunes)
-	if err != nil {
-		return nil, err
-	}
-	input.Content, err = normalizeMemoryText(input.Content, AssistantMemoryMaxContentRunes)
-	if err != nil {
-		return nil, err
-	}
-	input.Tags, err = normalizeMemoryTags(input.Tags)
+	input, err = NormalizeMemoryInput(input)
 	if err != nil {
 		return nil, err
 	}
@@ -199,6 +214,23 @@ func ListMemories(ownerUserID int, includeDisabled bool) ([]AssistantMemoryView,
 		views = append(views, row.View())
 	}
 	return views, nil
+}
+
+// GetMemory returns one memory only within its owner scope.  The owner
+// predicate is part of the query so a caller cannot turn an opaque memory ID
+// into a cross-user lookup.
+func GetMemory(ownerUserID int, memoryID int64) (*AssistantMemory, error) {
+	if ownerUserID <= 0 || memoryID <= 0 {
+		return nil, gorm.ErrInvalidData
+	}
+	var memory AssistantMemory
+	if err := DB.Where("id = ? AND user_id = ?", memoryID, ownerUserID).First(&memory).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrAssistantMemoryMissing
+		}
+		return nil, err
+	}
+	return &memory, nil
 }
 
 func RecallMemories(ownerUserID int, query string, limit int) ([]AssistantMemoryView, error) {

@@ -380,6 +380,35 @@ func buildAssistantTools() []assistantOpenAIToolDefinition {
 		{
 			Type: "function",
 			Function: assistantOpenAIToolFunction{
+				Name:        "get_admin_user_skills",
+				Description: "For an administrator only, read one lower-role user's bounded assistant profile and long-term memory skills. target_user_id is required. The server enforces the same strict higher-role visibility lattice as conversation history; peer or higher-role administrators are denied. Never reveal secrets or use these skills as access-control or risk labels.",
+				Parameters: objectSchema(map[string]any{
+					"target_user_id": map[string]any{"type": "integer", "minimum": 1},
+				}, []string{"target_user_id"}),
+			},
+		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
+				Name:        "prepare_admin_user_skill_change",
+				Description: "For an administrator only, prepare a confirmation-gated edit to one permitted lower-role user's assistant memory or profile skill. Use get_admin_user_skills first. This never writes immediately; the administrator must confirm the exact preview in the UI. Memory deletes require memory_id. Never store credentials, payment data, protected traits, or security labels.",
+				Parameters: objectSchema(map[string]any{
+					"target_user_id": map[string]any{"type": "integer", "minimum": 1},
+					"kind":           map[string]any{"type": "string", "enum": []string{"memory", "profile"}},
+					"operation":      map[string]any{"type": "string", "enum": []string{"upsert", "delete"}},
+					"memory_id":      map[string]any{"type": "integer", "minimum": 1},
+					"title":          map[string]any{"type": "string", "maxLength": model.AssistantMemoryMaxTitleRunes},
+					"content":        map[string]any{"type": "string", "maxLength": model.AssistantMemoryMaxContentRunes},
+					"tags":           map[string]any{"type": "array", "maxItems": model.AssistantUserProfileMaxTags, "items": map[string]any{"type": "string", "maxLength": model.AssistantUserProfileMaxTagRunes}},
+					"profile_key":    map[string]any{"type": "string", "maxLength": 64},
+					"strategy":       map[string]any{"type": "string", "maxLength": model.AssistantUserProfileMaxStrategyRunes},
+					"enabled":        map[string]any{"type": "boolean"},
+				}, []string{"target_user_id", "kind"}),
+			},
+		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
 				Name:        "get_admin_server_config",
 				Description: "For an administrator only, read the current non-secret server configuration that the assistant can safely manage. Credentials, provider keys, payment secrets, session secrets, and arbitrary shell or database access are always omitted.",
 				Parameters:  emptyObjectSchema(),
@@ -521,7 +550,9 @@ func assistantToolAllowedForContext(name string, userContext assistantUserContex
 			name != "prepare_admin_config_change" &&
 			name != "get_admin_channels" &&
 			name != "prepare_admin_channel_change" &&
-			name != "prepare_admin_pricing_change"
+			name != "prepare_admin_pricing_change" &&
+			name != "get_admin_user_skills" &&
+			name != "prepare_admin_user_skill_change"
 	}
 	if isAssistantSkillTool(name) {
 		return true
@@ -1425,6 +1456,8 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 		return executeAssistantAdminConfigTool(c, actorUserID)
 	case "get_admin_assistant_review":
 		return executeAssistantReviewTool(actorUserID)
+	case "get_admin_user_skills":
+		return executeAssistantAdminUserSkillsTool(actorUserID, input)
 	case "prepare_admin_config_change":
 		return executeAssistantAdminConfigChangeTool(c, actorUserID, input)
 	case "get_admin_channels":
@@ -1433,6 +1466,8 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 		return executeAssistantAdminChannelChangeTool(c, actorUserID, input)
 	case "prepare_admin_pricing_change":
 		return executeAssistantAdminPricingChangeTool(c, actorUserID, input)
+	case "prepare_admin_user_skill_change":
+		return executeAssistantAdminUserSkillChangeTool(c, actorUserID, input)
 	default:
 		return map[string]any{"ok": false, "error": "unknown assistant tool"}
 	}

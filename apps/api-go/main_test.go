@@ -14,9 +14,9 @@ func TestBuildListenAddress(t *testing.T) {
 		wantErr     string
 	}{
 		{
-			name: "unset preserves all-interface default",
+			name: "unset keeps the application listener private",
 			port: "3000",
-			want: ":3000",
+			want: "127.0.0.1:3000",
 		},
 		{
 			name:        "IPv4 loopback",

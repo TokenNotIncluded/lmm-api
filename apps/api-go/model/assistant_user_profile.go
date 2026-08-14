@@ -80,6 +80,32 @@ type ProfileInput struct {
 	Enabled  bool
 }
 
+// NormalizeProfileInput validates and canonicalizes a profile without
+// touching the database.  Confirmation-based callers use this helper to
+// preview exactly the value that SaveProfile will persist.
+func NormalizeProfileInput(input ProfileInput) (ProfileInput, error) {
+	if input.Source != AssistantProfileSourceAI && input.Source != AssistantProfileSourceAdmin {
+		return ProfileInput{}, ErrAssistantProfileKey
+	}
+	profileKey, err := NormalizeAssistantProfileKey(input.Key)
+	if err != nil {
+		return ProfileInput{}, err
+	}
+	strategy, err := NormalizeAssistantProfileStrategy(input.Strategy)
+	if err != nil {
+		return ProfileInput{}, err
+	}
+	tags, err := NormalizeAssistantProfileTags(input.Tags)
+	if err != nil {
+		return ProfileInput{}, err
+	}
+	if profileKey == "" {
+		input.Enabled = false
+	}
+	input.Key, input.Strategy, input.Tags = profileKey, strategy, tags
+	return input, nil
+}
+
 func (AssistantUserProfile) TableName() string { return "assistant_user_profiles" }
 
 func validAssistantProfileKeys() map[string]struct{} {
@@ -222,24 +248,12 @@ func SaveProfile(userID, updatedBy int, input ProfileInput) (*AssistantUserProfi
 	if userID <= 0 || updatedBy <= 0 {
 		return nil, gorm.ErrInvalidData
 	}
-	if input.Source != AssistantProfileSourceAI && input.Source != AssistantProfileSourceAdmin {
-		return nil, ErrAssistantProfileKey
-	}
-	profileKey, err := NormalizeAssistantProfileKey(input.Key)
+	var err error
+	input, err = NormalizeProfileInput(input)
 	if err != nil {
 		return nil, err
 	}
-	strategy, err := NormalizeAssistantProfileStrategy(input.Strategy)
-	if err != nil {
-		return nil, err
-	}
-	if profileKey == "" {
-		input.Enabled = false
-	}
-	tags, err := NormalizeAssistantProfileTags(input.Tags)
-	if err != nil {
-		return nil, err
-	}
+	profileKey, strategy, tags := input.Key, input.Strategy, input.Tags
 	tagsJSON, err := json.Marshal(tags)
 	if err != nil {
 		return nil, err

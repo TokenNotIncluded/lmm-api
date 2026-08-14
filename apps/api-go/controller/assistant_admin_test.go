@@ -399,6 +399,85 @@ func TestAssistantConfigChangesRequireRootAdministrator(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, applyRecorder.Code)
 }
 
+func TestAssistantAdminUserSkillsUseStrictScopeAndOneTimeConfirmation(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(
+		&model.User{}, &model.AuthFlow{}, &model.AssistantMemory{},
+		&model.AssistantUserProfile{}, &model.Log{},
+	))
+	admin := model.User{
+		Username: "assistant-skill-admin", Password: "password",
+		Role: common.RoleAdminUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "skill-admin-aff",
+	}
+	peer := model.User{
+		Username: "assistant-skill-peer", Password: "password",
+		Role: common.RoleAdminUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "skill-peer-aff",
+	}
+	target := model.User{
+		Username: "assistant-skill-target", Password: "password",
+		Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "skill-target-aff",
+	}
+	require.NoError(t, db.Create(&admin).Error)
+	require.NoError(t, db.Create(&peer).Error)
+	require.NoError(t, db.Create(&target).Error)
+	_, err := model.SaveMemory(target.Id, target.Id, model.MemoryInput{
+		Title: "editor preference", Content: "prefers concise diffs", Tags: []string{"style"},
+		Source: model.AssistantMemorySourceAssistant, Enabled: true,
+	})
+	require.NoError(t, err)
+
+	read := executeAssistantAdminUserSkillsTool(admin.Id, map[string]any{"target_user_id": float64(target.Id)})
+	assert.Equal(t, true, read["ok"])
+	assert.Equal(t, target.Id, read["target_user_id"])
+	memories, ok := read["memories"].([]model.AssistantMemoryView)
+	require.True(t, ok)
+	require.Len(t, memories, 1)
+	assert.Equal(t, "editor preference", memories[0].Title)
+
+	peerRead := executeAssistantAdminUserSkillsTool(peer.Id, map[string]any{"target_user_id": float64(admin.Id)})
+	assert.Equal(t, false, peerRead["ok"])
+	assert.Equal(t, "target_forbidden", peerRead["status"])
+
+	previewContext, _ := gin.CreateTestContext(httptest.NewRecorder())
+	previewContext.Set("id", admin.Id)
+	previewContext.Set("session_id", "assistant-skill-session")
+	preview := executeAssistantAdminUserSkillChangeTool(previewContext, admin.Id, map[string]any{
+		"target_user_id": float64(target.Id), "kind": "memory", "operation": "upsert",
+		"memory_id": float64(memories[0].Id), "title": "editor preference",
+		"content": "prefers small, concise diffs", "tags": []any{"style"}, "enabled": true,
+	})
+	assert.Equal(t, true, preview["ok"])
+	assert.Equal(t, "confirmation_required", preview["status"])
+	action, ok := previewContext.Get(assistantClientActionKey)
+	require.True(t, ok)
+	actionMap, ok := action.(map[string]any)
+	require.True(t, ok)
+	token, ok := actionMap["confirmation_token"].(string)
+	require.True(t, ok)
+	require.NotEmpty(t, token)
+
+	applyContext, _ := gin.CreateTestContext(httptest.NewRecorder())
+	applyContext.Request = httptest.NewRequest(http.MethodPost, "/api/assistant/admin/apply", strings.NewReader(`{"confirmed":true,"confirmation_token":"`+token+`"}`))
+	applyContext.Request.Header.Set("Content-Type", "application/json")
+	applyContext.Set("id", admin.Id)
+	applyContext.Set("session_id", "assistant-skill-session")
+	ApplyAssistantAdminChange(applyContext)
+	assert.Equal(t, http.StatusOK, applyContext.Writer.Status())
+
+	updated, err := model.GetMemory(target.Id, memories[0].Id)
+	require.NoError(t, err)
+	assert.Equal(t, "prefers small, concise diffs", updated.Content)
+
+	replayRecorder := httptest.NewRecorder()
+	replayContext, _ := gin.CreateTestContext(replayRecorder)
+	replayContext.Request = httptest.NewRequest(http.MethodPost, "/api/assistant/admin/apply", strings.NewReader(`{"confirmed":true,"confirmation_token":"`+token+`"}`))
+	replayContext.Request.Header.Set("Content-Type", "application/json")
+	replayContext.Set("id", admin.Id)
+	replayContext.Set("session_id", "assistant-skill-session")
+	ApplyAssistantAdminChange(replayContext)
+	assert.Equal(t, http.StatusUnprocessableEntity, replayRecorder.Code)
+}
+
 func float64Pointer(value float64) *float64 {
 	return &value
 }

@@ -15,6 +15,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/config"
@@ -26,14 +27,17 @@ import (
 )
 
 const (
-	assistantAdminConfigChangeKind  = "config"
-	assistantAdminPricingChangeKind = "pricing"
-	assistantAdminChannelChangeKind = "channel"
-	assistantAdminChangeLifetime    = 10 * time.Minute
-	assistantAdminMaxConfigChanges  = 16
-	assistantAdminMaxChannelChanges = 12
-	assistantAdminMaxChannelRows    = 1000
-	assistantAdminMaxValueRunes     = 12_000
+	assistantAdminConfigChangeKind    = "config"
+	assistantAdminPricingChangeKind   = "pricing"
+	assistantAdminChannelChangeKind   = "channel"
+	assistantAdminUserSkillChangeKind = "user_skill"
+	assistantAdminChangeLifetime      = 10 * time.Minute
+	assistantAdminMaxConfigChanges    = 16
+	assistantAdminMaxChannelChanges   = 12
+	assistantAdminMaxChannelRows      = 1000
+	assistantAdminMaxValueRunes       = 12_000
+	assistantAdminMaxUserSkillChanges = 8
+	assistantAdminMaxSkillMemoryViews = 32
 )
 
 // These are deliberately non-secret configuration surfaces.  Credentials,
@@ -267,17 +271,46 @@ type assistantAdminPricingState struct {
 }
 
 type assistantAdminChangePayload struct {
-	Kind           string                       `json:"kind"`
-	ConfigChanges  map[string]string            `json:"config_changes,omitempty"`
-	ConfigExpected map[string]string            `json:"config_expected,omitempty"`
-	Channel        *assistantAdminChannelChange `json:"channel,omitempty"`
-	Pricing        *assistantAdminPricingChange `json:"pricing,omitempty"`
+	Kind           string                         `json:"kind"`
+	ConfigChanges  map[string]string              `json:"config_changes,omitempty"`
+	ConfigExpected map[string]string              `json:"config_expected,omitempty"`
+	Channel        *assistantAdminChannelChange   `json:"channel,omitempty"`
+	Pricing        *assistantAdminPricingChange   `json:"pricing,omitempty"`
+	UserSkill      *assistantAdminUserSkillChange `json:"user_skill,omitempty"`
 }
 
 type assistantAdminChannelChange struct {
 	ChannelID int               `json:"channel_id"`
 	Changes   map[string]string `json:"changes"`
 	Expected  map[string]string `json:"expected"`
+}
+
+// assistantAdminUserSkillChange is stored only inside a short-lived,
+// session-bound auth flow. It never comes from the browser during apply; the
+// server rehydrates and validates this exact preview again before writing.
+type assistantAdminUserSkillChange struct {
+	TargetUserID int                          `json:"target_user_id"`
+	Operation    string                       `json:"operation"`
+	Memory       *assistantAdminMemoryChange  `json:"memory,omitempty"`
+	Profile      *assistantAdminProfileChange `json:"profile,omitempty"`
+}
+
+type assistantAdminMemoryChange struct {
+	ID                int64    `json:"id,omitempty"`
+	ExpectedUpdatedAt int64    `json:"expected_updated_at,omitempty"`
+	Title             string   `json:"title"`
+	Content           string   `json:"content"`
+	Tags              []string `json:"tags"`
+	Enabled           bool     `json:"enabled"`
+}
+
+type assistantAdminProfileChange struct {
+	ExpectedUpdatedAt int64    `json:"expected_updated_at,omitempty"`
+	Exists            bool     `json:"exists"`
+	ProfileKey        string   `json:"profile_key"`
+	Tags              []string `json:"tags"`
+	Strategy          string   `json:"strategy"`
+	Enabled           bool     `json:"enabled"`
 }
 
 type assistantAdminConfigPreview struct {
@@ -1312,6 +1345,272 @@ func executeAssistantAdminChannelsTool(userID int) map[string]any {
 	}
 }
 
+func assistantAdminTargetUserID(input map[string]any) (int, error) {
+	value, ok := inputNumber(input, "target_user_id")
+	if !ok || value < 1 || value > 2_147_483_647 || math.Trunc(value) != value {
+		return 0, errors.New("target_user_id must be a positive integer")
+	}
+	return int(value), nil
+}
+
+func assistantAdminSkillEnabled(input map[string]any, defaultValue bool) (bool, error) {
+	raw, exists := input["enabled"]
+	if !exists {
+		return defaultValue, nil
+	}
+	enabled, ok := raw.(bool)
+	if !ok {
+		return false, errors.New("enabled must be a boolean")
+	}
+	return enabled, nil
+}
+
+func assistantAdminMemoryPreview(memory *model.AssistantMemory) []assistantAdminConfigPreview {
+	if memory == nil {
+		return nil
+	}
+	return []assistantAdminConfigPreview{
+		{Key: "memory.title", Label: "Memory title", OldValue: memory.Title},
+		{Key: "memory.content", Label: "Memory content", OldValue: memory.Content},
+		{Key: "memory.tags", Label: "Memory tags", OldValue: memory.TagsJSON},
+		{Key: "memory.enabled", Label: "Memory enabled", OldValue: strconv.FormatBool(memory.Enabled)},
+	}
+}
+
+func assistantAdminProfilePreview(profile *model.AssistantUserProfile) []assistantAdminConfigPreview {
+	if profile == nil {
+		return nil
+	}
+	view := model.AssistantUserProfileViewOf(profile)
+	tags, _ := json.Marshal(view.Tags)
+	return []assistantAdminConfigPreview{
+		{Key: "profile.profile_key", Label: "Profile key", OldValue: view.ProfileKey},
+		{Key: "profile.tags", Label: "Profile tags", OldValue: string(tags)},
+		{Key: "profile.strategy", Label: "Profile strategy", OldValue: view.Strategy},
+		{Key: "profile.enabled", Label: "Profile enabled", OldValue: strconv.FormatBool(view.Enabled)},
+	}
+}
+
+// executeAssistantAdminUserSkillsTool exposes only the selected user's
+// bounded, redacted skill state. OpenSkills applies the same strict role
+// lattice used by conversation history: an admin may inspect a lower-role
+// user, but a peer or higher-role admin is denied.
+func executeAssistantAdminUserSkillsTool(userID int, input map[string]any) map[string]any {
+	if _, err := assistantAdminUser(userID); err != nil {
+		return map[string]any{"ok": false, "error": err.Error()}
+	}
+	targetID, err := assistantAdminTargetUserID(input)
+	if err != nil {
+		return map[string]any{"ok": false, "error": err.Error()}
+	}
+	scope, err := service.OpenSkills(userID, targetID)
+	if err != nil {
+		return map[string]any{"ok": false, "status": "target_forbidden", "error": "the target user's skills are outside the administrator's permitted scope"}
+	}
+	memories, err := scope.Memories(true)
+	if err != nil {
+		return map[string]any{"ok": false, "error": "user memory skills could not be loaded"}
+	}
+	truncated := len(memories) > assistantAdminMaxSkillMemoryViews
+	if truncated {
+		memories = memories[:assistantAdminMaxSkillMemoryViews]
+	}
+	profile, err := scope.Profile()
+	if err != nil {
+		return map[string]any{"ok": false, "error": "user profile skill could not be loaded"}
+	}
+	return map[string]any{
+		"ok":                        true,
+		"target_user_id":            targetID,
+		"owner_scope":               "higher_role_administrator_only",
+		"profile":                   model.AssistantUserProfileViewOf(profile),
+		"memories":                  memories,
+		"memories_truncated":        truncated,
+		"sensitive_values_redacted": true,
+		"write_rule":                "Use prepare_admin_user_skill_change, then wait for explicit UI confirmation.",
+	}
+}
+
+func assistantAdminMemoryChangeInput(input map[string]any, scope service.UserSkills, ownerID int) (*assistantAdminMemoryChange, []assistantAdminConfigPreview, error) {
+	operation := strings.ToLower(inputString(input, "operation"))
+	if operation == "" {
+		operation = "upsert"
+	}
+	if operation != "upsert" && operation != "delete" {
+		return nil, nil, errors.New("memory operation must be upsert or delete")
+	}
+	var memoryID int64
+	if value, supplied := inputNumber(input, "memory_id"); supplied {
+		if value < 1 || value > math.MaxInt64 || math.Trunc(value) != value {
+			return nil, nil, errors.New("memory_id must be a positive integer")
+		}
+		memoryID = int64(value)
+	}
+	if operation == "delete" && memoryID <= 0 {
+		return nil, nil, errors.New("memory_id is required to delete a memory")
+	}
+	if operation == "delete" {
+		memory, err := model.GetMemory(ownerID, memoryID)
+		if err != nil {
+			return nil, nil, err
+		}
+		change := &assistantAdminMemoryChange{ID: memory.Id, ExpectedUpdatedAt: memory.UpdatedAt, Enabled: memory.Enabled}
+		preview := assistantAdminMemoryPreview(memory)
+		for index := range preview {
+			preview[index].NewValue = "[deleted]"
+		}
+		return change, preview, nil
+	}
+	tags, ok := stringList(input, "tags", model.AssistantMemoryMaxTags)
+	if !ok {
+		return nil, nil, errors.New("memory tags are invalid")
+	}
+	enabled, err := assistantAdminSkillEnabled(input, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	normalized, err := model.NormalizeMemoryInput(model.MemoryInput{
+		ID: memoryID, Title: inputString(input, "title"), Content: inputString(input, "content"),
+		Tags: tags, Source: model.AssistantMemorySourceAdmin, Enabled: enabled,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	var current *model.AssistantMemory
+	if memoryID > 0 {
+		current, err = model.GetMemory(ownerID, memoryID)
+		if err != nil {
+			return nil, nil, err
+		}
+	} else {
+		memories, listErr := scope.Memories(true)
+		if listErr != nil {
+			return nil, nil, listErr
+		}
+		for _, candidate := range memories {
+			if candidate.Title == normalized.Title {
+				return nil, nil, errors.New("a memory with this title already exists; provide memory_id to update it")
+			}
+		}
+	}
+	change := &assistantAdminMemoryChange{
+		ID: memoryID, Title: normalized.Title, Content: normalized.Content,
+		Tags: normalized.Tags, Enabled: normalized.Enabled,
+	}
+	if current != nil {
+		change.ExpectedUpdatedAt = current.UpdatedAt
+	}
+	tagsJSON, _ := json.Marshal(normalized.Tags)
+	preview := assistantAdminMemoryPreview(current)
+	preview = append(preview,
+		assistantAdminConfigPreview{Key: "memory.title", Label: "Memory title", NewValue: normalized.Title},
+		assistantAdminConfigPreview{Key: "memory.content", Label: "Memory content", NewValue: normalized.Content},
+		assistantAdminConfigPreview{Key: "memory.tags", Label: "Memory tags", NewValue: string(tagsJSON)},
+		assistantAdminConfigPreview{Key: "memory.enabled", Label: "Memory enabled", NewValue: strconv.FormatBool(normalized.Enabled)},
+	)
+	if current == nil {
+		for index := range preview[:len(preview)-4] {
+			preview[index].OldValue = "—"
+		}
+	}
+	return change, preview, nil
+}
+
+func executeAssistantAdminUserSkillChangeTool(c *gin.Context, userID int, input map[string]any) map[string]any {
+	if _, err := assistantAdminUser(userID); err != nil {
+		return map[string]any{"ok": false, "error": err.Error()}
+	}
+	targetID, err := assistantAdminTargetUserID(input)
+	if err != nil {
+		return map[string]any{"ok": false, "error": err.Error()}
+	}
+	scope, err := service.OpenSkills(userID, targetID)
+	if err != nil {
+		return map[string]any{"ok": false, "status": "target_forbidden", "error": "the target user's skills are outside the administrator's permitted scope"}
+	}
+	kind := strings.ToLower(inputString(input, "kind"))
+	if kind != "memory" && kind != "profile" {
+		return map[string]any{"ok": false, "error": "skill kind must be memory or profile"}
+	}
+	change := assistantAdminUserSkillChange{TargetUserID: targetID, Operation: strings.ToLower(inputString(input, "operation"))}
+	var preview []assistantAdminConfigPreview
+	if kind == "memory" {
+		memoryChange, memoryPreview, memoryErr := assistantAdminMemoryChangeInput(input, scope, targetID)
+		if memoryErr != nil {
+			return map[string]any{"ok": false, "error": memoryErr.Error()}
+		}
+		if change.Operation == "" {
+			change.Operation = "upsert"
+		}
+		change.Memory = memoryChange
+		preview = memoryPreview
+	} else {
+		if change.Operation == "" {
+			change.Operation = "upsert"
+		}
+		if change.Operation != "upsert" {
+			return map[string]any{"ok": false, "error": "profile operation must be upsert"}
+		}
+		tags, tagsOK := stringList(input, "tags", model.AssistantUserProfileMaxTags)
+		if !tagsOK {
+			return map[string]any{"ok": false, "error": "profile tags are invalid"}
+		}
+		enabled, enabledErr := assistantAdminSkillEnabled(input, true)
+		if enabledErr != nil {
+			return map[string]any{"ok": false, "error": enabledErr.Error()}
+		}
+		normalized, normalizeErr := model.NormalizeProfileInput(model.ProfileInput{
+			Key: inputString(input, "profile_key"), Tags: tags, Strategy: inputString(input, "strategy"),
+			Source: model.AssistantProfileSourceAdmin, Enabled: enabled,
+		})
+		if normalizeErr != nil {
+			return map[string]any{"ok": false, "error": normalizeErr.Error()}
+		}
+		current, profileErr := scope.Profile()
+		if profileErr != nil {
+			return map[string]any{"ok": false, "error": "user profile skill could not be loaded"}
+		}
+		change.Profile = &assistantAdminProfileChange{
+			ProfileKey: normalized.Key, Tags: normalized.Tags, Strategy: normalized.Strategy, Enabled: normalized.Enabled,
+		}
+		if current != nil {
+			change.Profile.Exists = true
+			change.Profile.ExpectedUpdatedAt = current.UpdatedAt
+		}
+		profilePreview := assistantAdminProfilePreview(current)
+		encodedTags, _ := json.Marshal(normalized.Tags)
+		profilePreview = append(profilePreview,
+			assistantAdminConfigPreview{Key: "profile.profile_key", Label: "Profile key", NewValue: normalized.Key},
+			assistantAdminConfigPreview{Key: "profile.tags", Label: "Profile tags", NewValue: string(encodedTags)},
+			assistantAdminConfigPreview{Key: "profile.strategy", Label: "Profile strategy", NewValue: normalized.Strategy},
+			assistantAdminConfigPreview{Key: "profile.enabled", Label: "Profile enabled", NewValue: strconv.FormatBool(normalized.Enabled)},
+		)
+		if current == nil {
+			for index := range profilePreview[:len(profilePreview)-4] {
+				profilePreview[index].OldValue = "—"
+			}
+		}
+		preview = profilePreview
+	}
+	change.Operation = strings.ToLower(change.Operation)
+	payload := assistantAdminChangePayload{Kind: assistantAdminUserSkillChangeKind, UserSkill: &change}
+	token, err := createAssistantAdminFlow(c, userID, payload)
+	if err != nil {
+		return map[string]any{"ok": false, "error": "administrator browser session is required to prepare a user skill change"}
+	}
+	action := map[string]any{
+		"type": "admin_config_change", "scope": "user_skills", "target_user_id": targetID,
+		"confirmation_token": token, "requires_confirmation": true,
+		"expires_in_seconds": int(assistantAdminChangeLifetime / time.Second), "changes": preview,
+	}
+	c.Set(assistantClientActionKey, action)
+	return map[string]any{
+		"ok": true, "status": "confirmation_required", "action": "admin_user_skill_change",
+		"target_user_id": targetID, "changes": preview,
+		"next_step": "Show the exact user-skill preview and ask the administrator to confirm in the UI.",
+	}
+}
+
 func executeAssistantAdminChannelChangeTool(c *gin.Context, userID int, input map[string]any) map[string]any {
 	if _, err := assistantAdminUser(userID); err != nil {
 		return map[string]any{"ok": false, "error": err.Error()}
@@ -1732,6 +2031,87 @@ func applyAssistantAdminChannelChange(change assistantAdminChannelChange) error 
 	return nil
 }
 
+func applyAssistantAdminUserSkillChange(actorUserID int, change assistantAdminUserSkillChange) error {
+	if change.TargetUserID <= 0 || change.Operation == "" {
+		return errors.New("administrator user skill preview is invalid; prepare it again")
+	}
+	scope, err := service.OpenSkills(actorUserID, change.TargetUserID)
+	if err != nil {
+		return errors.New("the target user's skills are outside the administrator's permitted scope")
+	}
+	switch change.Operation {
+	case "delete":
+		if change.Memory == nil || change.Memory.ID <= 0 {
+			return errors.New("administrator memory deletion preview is invalid")
+		}
+		current, err := model.GetMemory(change.TargetUserID, change.Memory.ID)
+		if err != nil {
+			return err
+		}
+		if current.UpdatedAt != change.Memory.ExpectedUpdatedAt {
+			return errors.New("user memory changed after the preview; prepare it again")
+		}
+		return scope.Forget(change.Memory.ID)
+	case "upsert":
+		if change.Memory != nil {
+			normalized, err := model.NormalizeMemoryInput(model.MemoryInput{
+				ID: change.Memory.ID, Title: change.Memory.Title, Content: change.Memory.Content,
+				Tags: change.Memory.Tags, Source: model.AssistantMemorySourceAdmin, Enabled: change.Memory.Enabled,
+			})
+			if err != nil {
+				return err
+			}
+			if normalized.ID > 0 {
+				current, err := model.GetMemory(change.TargetUserID, normalized.ID)
+				if err != nil {
+					return err
+				}
+				if current.UpdatedAt != change.Memory.ExpectedUpdatedAt {
+					return errors.New("user memory changed after the preview; prepare it again")
+				}
+			} else {
+				memories, err := scope.Memories(true)
+				if err != nil {
+					return err
+				}
+				for _, memory := range memories {
+					if memory.Title == normalized.Title {
+						return errors.New("a memory with this title already exists; prepare an update with memory_id")
+					}
+				}
+			}
+			_, err = scope.SetMemory(service.MemoryDraft{
+				ID: normalized.ID, Title: normalized.Title, Content: normalized.Content,
+				Tags: normalized.Tags, Enabled: normalized.Enabled,
+			})
+			return err
+		}
+		if change.Profile == nil {
+			return errors.New("administrator user skill preview is empty")
+		}
+		current, err := scope.Profile()
+		if err != nil {
+			return err
+		}
+		if (current != nil) != change.Profile.Exists || (current != nil && current.UpdatedAt != change.Profile.ExpectedUpdatedAt) {
+			return errors.New("user profile skill changed after the preview; prepare it again")
+		}
+		normalized, err := model.NormalizeProfileInput(model.ProfileInput{
+			Key: change.Profile.ProfileKey, Tags: change.Profile.Tags, Strategy: change.Profile.Strategy,
+			Source: model.AssistantProfileSourceAdmin, Enabled: change.Profile.Enabled,
+		})
+		if err != nil {
+			return err
+		}
+		_, err = scope.SetProfile(service.ProfileDraft{
+			Key: normalized.Key, Tags: normalized.Tags, Strategy: normalized.Strategy, Enabled: normalized.Enabled,
+		})
+		return err
+	default:
+		return errors.New("administrator user skill operation is invalid")
+	}
+}
+
 func applyAssistantAdminChange(c *gin.Context, payload assistantAdminChangePayload) error {
 	switch payload.Kind {
 	case assistantAdminConfigChangeKind:
@@ -1788,6 +2168,11 @@ func applyAssistantAdminChange(c *gin.Context, payload assistantAdminChangePaylo
 			return errors.New("administrator channel change is empty")
 		}
 		return applyAssistantAdminChannelChange(*payload.Channel)
+	case assistantAdminUserSkillChangeKind:
+		if payload.UserSkill == nil {
+			return errors.New("administrator user skill change is empty")
+		}
+		return applyAssistantAdminUserSkillChange(c.GetInt("id"), *payload.UserSkill)
 	default:
 		return errors.New("unknown administrator assistant change")
 	}
@@ -1852,6 +2237,16 @@ func ApplyAssistantAdminChange(c *gin.Context) {
 		recordManageAudit(c, "assistant.admin_channel_apply", map[string]interface{}{
 			"channel_id": payload.Channel.ChannelID,
 			"fields":     fields,
+		})
+	} else if payload.Kind == assistantAdminUserSkillChangeKind && payload.UserSkill != nil {
+		fields := []string{"user_skill"}
+		if payload.UserSkill.Memory != nil {
+			fields = []string{"memory"}
+		}
+		recordManageAudit(c, "assistant.admin_user_skill_apply", map[string]interface{}{
+			"target_user_id": payload.UserSkill.TargetUserID,
+			"operation":      payload.UserSkill.Operation,
+			"fields":         fields,
 		})
 	} else {
 		keys := make([]string, 0, len(payload.ConfigChanges))
