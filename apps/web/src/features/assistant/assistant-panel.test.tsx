@@ -144,7 +144,8 @@ async function renderPanel(
     initialMessage: string
     autoSendRequestId: string
     onAutoSendConsumed?: (requestId: string) => void
-  }
+  },
+  onOpenChange: (open: boolean) => void = () => {}
 ) {
   useAuthStore.getState().auth.setUser(user)
   const queryClient = new QueryClient({
@@ -161,7 +162,7 @@ async function renderPanel(
             initialMessage={handoff?.initialMessage}
             autoSendRequestId={handoff?.autoSendRequestId}
             onAutoSendConsumed={handoff?.onAutoSendConsumed}
-            onOpenChange={() => {}}
+            onOpenChange={onOpenChange}
           />
         </I18nextProvider>
       </QueryClientProvider>
@@ -417,6 +418,62 @@ describe('AssistantPanel', () => {
       assert.match(
         sheetContent.textContent ?? '',
         /Your assistant conversations are not private/
+      )
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
+  test('returns to the conversation after closing mobile history', async () => {
+    api.get = (async (url: string) => {
+      if (url === '/api/assistant/status') {
+        return { data: { success: true, data: assistantStatus } }
+      }
+      assert.equal(url, '/api/assistant/conversations')
+      return {
+        data: {
+          success: true,
+          data: {
+            conversations: [
+              {
+                id: 91,
+                title: 'Mobile history thread',
+                last_message_preview: 'A saved conversation',
+                owner: 'self',
+                created_at: 1_786_400_000,
+                updated_at: 1_786_400_001,
+              },
+            ],
+          },
+        },
+      }
+    }) as typeof api.get
+
+    const rendered = await renderPanel()
+    try {
+      await act(async () => {
+        findButton('Conversation history').click()
+        await flushEffects()
+      })
+      assert.ok(
+        document.querySelector('[data-testid="assistant-history-list"]')
+      )
+      assert.ok(findButton('Back to conversation'))
+
+      const closeButton = document.querySelector<HTMLButtonElement>(
+        '[data-slot="sheet-close"]'
+      )
+      assert.ok(closeButton)
+      await act(async () => {
+        closeButton.click()
+        await flushEffects()
+      })
+
+      assert.ok(findButton('Conversation history'))
+      assert.equal(
+        document.querySelector('[data-testid="assistant-history-list"]'),
+        null
       )
     } finally {
       await act(async () => rendered.root.unmount())

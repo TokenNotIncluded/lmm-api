@@ -1223,6 +1223,10 @@ export function AssistantPanel(props: {
   )
 
   const handleOpenChange = (open: boolean) => {
+    // Closing the mobile sheet should always return to the conversation on
+    // the next open. Keep the conversation and active tool state intact, but
+    // do not reopen a stale history list/detail view over it.
+    if (!open && mode === 'mobile') setHistoryView(null)
     props.onOpenChange(open)
   }
 
