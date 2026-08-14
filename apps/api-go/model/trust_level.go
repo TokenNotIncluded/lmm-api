@@ -1,11 +1,12 @@
 package model
 
 import (
-	"sync"
+	"strconv"
 	"sync/atomic"
 	"time"
 
 	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/pkg/cachex"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )
@@ -18,6 +19,11 @@ const (
 
 	trustLevelDecayPeriod = 90 * 24 * time.Hour
 	trustAggregateTTL     = time.Minute
+	// Trust aggregates are a read-through optimization. Keep their process
+	// footprint bounded even when an installation sees a large number of users;
+	// eviction only causes a fresh aggregate query on the next access.
+	paidTopUpAggregateCacheMaxEntries = 16_384
+	paidTopUpAggregateCacheMaxBytes   = 2 << 20
 )
 
 var trustLevelThresholds = [...]float64{0, 0, 100, 500, 2000}
@@ -138,14 +144,20 @@ type UserAccessSnapshot struct {
 }
 
 type cachedPaidTopUpAggregate struct {
-	value     paidTopUpAggregate
-	expiresAt time.Time
+	value paidTopUpAggregate
 }
 
-var paidTopUpAggregateCache = struct {
-	sync.RWMutex
-	values map[int]cachedPaidTopUpAggregate
-}{values: make(map[int]cachedPaidTopUpAggregate)}
+var paidTopUpAggregateCache = cachex.NewByteCache[cachedPaidTopUpAggregate](
+	paidTopUpAggregateCacheMaxEntries,
+	paidTopUpAggregateCacheMaxBytes,
+	func(key string, _ cachedPaidTopUpAggregate) int64 {
+		return int64(len(key) + 48)
+	},
+)
+
+func paidTopUpAggregateCacheKey(userID int) string {
+	return strconv.Itoa(userID)
+}
 
 func automaticTrustLevel(paidAmount float64, activationComplete bool) int {
 	if !activationComplete {
@@ -259,9 +271,6 @@ func getPaidTopUpAggregates(userIDs []int) (map[int]paidTopUpAggregate, error) {
 	result := make(map[int]paidTopUpAggregate, len(userIDs))
 	missing := make([]int, 0, len(userIDs))
 	seen := make(map[int]struct{}, len(userIDs))
-	now := time.Now()
-
-	paidTopUpAggregateCache.RLock()
 	for _, userID := range userIDs {
 		if userID <= 0 {
 			continue
@@ -270,13 +279,12 @@ func getPaidTopUpAggregates(userIDs []int) (map[int]paidTopUpAggregate, error) {
 			continue
 		}
 		seen[userID] = struct{}{}
-		if cached, ok := paidTopUpAggregateCache.values[userID]; ok && now.Before(cached.expiresAt) {
+		if cached, ok := paidTopUpAggregateCache.Load(paidTopUpAggregateCacheKey(userID)); ok {
 			result[userID] = cached.value
 			continue
 		}
 		missing = append(missing, userID)
 	}
-	paidTopUpAggregateCache.RUnlock()
 
 	if len(missing) == 0 {
 		return result, nil
@@ -289,16 +297,15 @@ func getPaidTopUpAggregates(userIDs []int) (map[int]paidTopUpAggregate, error) {
 	if err != nil {
 		return nil, err
 	}
-	paidTopUpAggregateCache.Lock()
 	for _, userID := range missing {
 		aggregate := fresh[userID]
 		result[userID] = aggregate
-		paidTopUpAggregateCache.values[userID] = cachedPaidTopUpAggregate{
-			value:     aggregate,
-			expiresAt: now.Add(trustAggregateTTL),
-		}
+		paidTopUpAggregateCache.SetWithTTL(
+			paidTopUpAggregateCacheKey(userID),
+			cachedPaidTopUpAggregate{value: aggregate},
+			trustAggregateTTL,
+		)
 	}
-	paidTopUpAggregateCache.Unlock()
 	return result, nil
 }
 
@@ -379,9 +386,7 @@ func creditedQuotaToUSDMicros(creditedQuota float64) int64 {
 }
 
 func invalidatePaidTopUpAggregate(userID int) {
-	paidTopUpAggregateCache.Lock()
-	delete(paidTopUpAggregateCache.values, userID)
-	paidTopUpAggregateCache.Unlock()
+	paidTopUpAggregateCache.Delete(paidTopUpAggregateCacheKey(userID))
 }
 
 // InvalidatePaidTopUpAggregate clears the bounded discount aggregate cache

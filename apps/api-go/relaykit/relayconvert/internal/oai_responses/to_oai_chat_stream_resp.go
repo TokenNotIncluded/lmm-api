@@ -29,8 +29,8 @@ type ResponsesToChatStreamState struct {
 	outputIndexToKey           map[int]string
 	itemIDToKey                map[string]string
 	callIDToKey                map[string]string
-	pendingArgsByOutputIndex   map[int]string
-	pendingArgsByItemID        map[string]string
+	pendingArgsByOutputIndex   map[int]*strings.Builder
+	pendingArgsByItemID        map[string]*strings.Builder
 	usageText                  strings.Builder
 }
 
@@ -39,7 +39,7 @@ type responsesStreamTool struct {
 	CallID     string
 	ItemID     string
 	Name       string
-	Arguments  string
+	Arguments  strings.Builder
 	Index      int
 	Sent       bool
 	NameSent   bool
@@ -56,9 +56,18 @@ func NewResponsesToChatStreamState(model string, includeUsage bool) *ResponsesTo
 		outputIndexToKey:         make(map[int]string),
 		itemIDToKey:              make(map[string]string),
 		callIDToKey:              make(map[string]string),
-		pendingArgsByOutputIndex: make(map[int]string),
-		pendingArgsByItemID:      make(map[string]string),
+		pendingArgsByOutputIndex: make(map[int]*strings.Builder),
+		pendingArgsByItemID:      make(map[string]*strings.Builder),
 	}
+}
+
+func appendPendingArguments[K comparable](pending map[K]*strings.Builder, key K, delta string) {
+	builder := pending[key]
+	if builder == nil {
+		builder = &strings.Builder{}
+		pending[key] = builder
+	}
+	builder.WriteString(delta)
 }
 
 func (s *ResponsesToChatStreamState) UsageText() string {
@@ -223,7 +232,8 @@ func (s *ResponsesToChatStreamState) toolItem(event *dto.ResponsesStreamResponse
 	}
 	args := event.Item.ArgumentsString()
 	if args != "" {
-		tool.Arguments = args
+		tool.Arguments.Reset()
+		tool.Arguments.WriteString(args)
 	}
 	return s.toolDelta(tool, "")
 }
@@ -235,13 +245,13 @@ func (s *ResponsesToChatStreamState) toolArgumentsDelta(event *dto.ResponsesStre
 	tool := s.findToolForEvent(event)
 	if tool == nil {
 		if event.OutputIndex != nil {
-			s.pendingArgsByOutputIndex[*event.OutputIndex] += event.Delta
+			appendPendingArguments(s.pendingArgsByOutputIndex, *event.OutputIndex, event.Delta)
 		} else if itemID := strings.TrimSpace(event.ItemID); itemID != "" {
-			s.pendingArgsByItemID[itemID] += event.Delta
+			appendPendingArguments(s.pendingArgsByItemID, itemID, event.Delta)
 		}
 		return nil
 	}
-	tool.Arguments += event.Delta
+	tool.Arguments.WriteString(event.Delta)
 	return s.toolDelta(tool, event.Delta)
 }
 
@@ -294,16 +304,16 @@ func (s *ResponsesToChatStreamState) ensureToolForEvent(event *dto.ResponsesStre
 
 	if event.OutputIndex != nil {
 		s.outputIndexToKey[*event.OutputIndex] = key
-		if pending := s.pendingArgsByOutputIndex[*event.OutputIndex]; pending != "" {
-			tool.Arguments += pending
+		if pending := s.pendingArgsByOutputIndex[*event.OutputIndex]; pending != nil {
+			tool.Arguments.WriteString(pending.String())
 			delete(s.pendingArgsByOutputIndex, *event.OutputIndex)
 		}
 	}
 	if itemID := responseStreamEventItemID(event); itemID != "" {
 		tool.ItemID = itemID
 		s.itemIDToKey[itemID] = key
-		if pending := s.pendingArgsByItemID[itemID]; pending != "" {
-			tool.Arguments += pending
+		if pending := s.pendingArgsByItemID[itemID]; pending != nil {
+			tool.Arguments.WriteString(pending.String())
 			delete(s.pendingArgsByItemID, itemID)
 		}
 	}
@@ -367,16 +377,16 @@ func (s *ResponsesToChatStreamState) ensureFallbackToolForEvent(event *dto.Respo
 	}
 	if event.OutputIndex != nil {
 		s.outputIndexToKey[*event.OutputIndex] = key
-		if pending := s.pendingArgsByOutputIndex[*event.OutputIndex]; pending != "" {
-			tool.Arguments += pending
+		if pending := s.pendingArgsByOutputIndex[*event.OutputIndex]; pending != nil {
+			tool.Arguments.WriteString(pending.String())
 			delete(s.pendingArgsByOutputIndex, *event.OutputIndex)
 		}
 	}
 	if itemID := responseStreamEventItemID(event); itemID != "" {
 		tool.ItemID = itemID
 		s.itemIDToKey[itemID] = key
-		if pending := s.pendingArgsByItemID[itemID]; pending != "" {
-			tool.Arguments += pending
+		if pending := s.pendingArgsByItemID[itemID]; pending != nil {
+			tool.Arguments.WriteString(pending.String())
 			delete(s.pendingArgsByItemID, itemID)
 		}
 	}
@@ -389,8 +399,9 @@ func (s *ResponsesToChatStreamState) toolDelta(tool *responsesStreamTool, explic
 	}
 
 	argsDelta := explicitDelta
-	if argsDelta == "" && len(tool.Arguments) > tool.ArgsSentAt {
-		argsDelta = tool.Arguments[tool.ArgsSentAt:]
+	arguments := tool.Arguments.String()
+	if argsDelta == "" && len(arguments) > tool.ArgsSentAt {
+		argsDelta = arguments[tool.ArgsSentAt:]
 	}
 	if tool.Sent && argsDelta == "" && (tool.Name == "" || tool.NameSent) {
 		return nil
@@ -502,13 +513,17 @@ func (s *ResponsesToChatStreamState) flushAllPendingTools() []dto.ChatCompletion
 		if strings.HasPrefix(key, "output:") {
 			var outputIndex int
 			if _, err := fmt.Sscanf(key, "output:%d", &outputIndex); err == nil {
-				tool.Arguments += s.pendingArgsByOutputIndex[outputIndex]
+				if pending := s.pendingArgsByOutputIndex[outputIndex]; pending != nil {
+					tool.Arguments.WriteString(pending.String())
+				}
 				delete(s.pendingArgsByOutputIndex, outputIndex)
 			}
 		}
 		if strings.HasPrefix(key, "item:") {
 			itemID := strings.TrimPrefix(key, "item:")
-			tool.Arguments += s.pendingArgsByItemID[itemID]
+			if pending := s.pendingArgsByItemID[itemID]; pending != nil {
+				tool.Arguments.WriteString(pending.String())
+			}
 			delete(s.pendingArgsByItemID, itemID)
 		}
 		chunks = append(chunks, s.toolDelta(tool, "")...)
@@ -559,8 +574,8 @@ type ResponsesBufferedAccumulator struct {
 	tools                []*responsesBufferedTool
 	outputIndexToToolIdx map[int]int
 	itemIDToToolIdx      map[string]int
-	pendingByOutputIndex map[int]string
-	pendingByItemID      map[string]string
+	pendingByOutputIndex map[int]*strings.Builder
+	pendingByItemID      map[string]*strings.Builder
 }
 
 type responsesBufferedTool struct {
@@ -574,8 +589,8 @@ func NewResponsesBufferedAccumulator() *ResponsesBufferedAccumulator {
 	return &ResponsesBufferedAccumulator{
 		outputIndexToToolIdx: make(map[int]int),
 		itemIDToToolIdx:      make(map[string]int),
-		pendingByOutputIndex: make(map[int]string),
-		pendingByItemID:      make(map[string]string),
+		pendingByOutputIndex: make(map[int]*strings.Builder),
+		pendingByItemID:      make(map[string]*strings.Builder),
 	}
 }
 
@@ -602,9 +617,9 @@ func (a *ResponsesBufferedAccumulator) ProcessEvent(event *dto.ResponsesStreamRe
 			return
 		}
 		if event.OutputIndex != nil {
-			a.pendingByOutputIndex[*event.OutputIndex] += event.Delta
+			appendPendingArguments(a.pendingByOutputIndex, *event.OutputIndex, event.Delta)
 		} else if itemID := strings.TrimSpace(event.ItemID); itemID != "" {
-			a.pendingByItemID[itemID] += event.Delta
+			appendPendingArguments(a.pendingByItemID, itemID, event.Delta)
 		}
 	}
 }
@@ -666,15 +681,15 @@ func (a *ResponsesBufferedAccumulator) ensureTool(event *dto.ResponsesStreamResp
 	a.tools = append(a.tools, tool)
 	if event.OutputIndex != nil {
 		a.outputIndexToToolIdx[*event.OutputIndex] = idx
-		if pending := a.pendingByOutputIndex[*event.OutputIndex]; pending != "" {
-			tool.Arguments.WriteString(pending)
+		if pending := a.pendingByOutputIndex[*event.OutputIndex]; pending != nil {
+			tool.Arguments.WriteString(pending.String())
 			delete(a.pendingByOutputIndex, *event.OutputIndex)
 		}
 	}
 	if tool.ItemID != "" {
 		a.itemIDToToolIdx[tool.ItemID] = idx
-		if pending := a.pendingByItemID[tool.ItemID]; pending != "" {
-			tool.Arguments.WriteString(pending)
+		if pending := a.pendingByItemID[tool.ItemID]; pending != nil {
+			tool.Arguments.WriteString(pending.String())
 			delete(a.pendingByItemID, tool.ItemID)
 		}
 	}

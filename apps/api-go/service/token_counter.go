@@ -359,17 +359,17 @@ func CountTokenInput(input any, model string) int {
 	case string:
 		return CountTextToken(v, model)
 	case []string:
-		text := ""
+		var text strings.Builder
 		for _, s := range v {
-			text += s
+			text.WriteString(s)
 		}
-		return CountTextToken(text, model)
+		return CountTextToken(text.String(), model)
 	case []interface{}:
-		text := ""
+		var text strings.Builder
 		for _, item := range v {
-			text += fmt.Sprintf("%v", item)
+			text.WriteString(fmt.Sprintf("%v", item))
 		}
-		return CountTextToken(text, model)
+		return CountTextToken(text.String(), model)
 	}
 	return CountTokenInput(fmt.Sprintf("%v", input), model)
 }
