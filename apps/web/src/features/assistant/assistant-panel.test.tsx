@@ -1969,8 +1969,7 @@ describe('AssistantPanel', () => {
         )
       )
       assert.deepEqual(submittedRecommendation, {
-        reason:
-          'Recommend L1 because the user identified a specific client and purpose.',
+        reason: 'I will connect Claude Code for private work.',
         ai_recommendation:
           'Recommend L1 because the user identified a specific client and purpose.',
         confirmation_token: 'assistant-confirmation-token',
