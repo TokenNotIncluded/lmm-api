@@ -22,6 +22,8 @@ import { api } from '@/lib/api'
 // controller/topup_waffo_pancake.go: empty body creds make the backend
 // fall back to persisted OptionMap values, so returning admins don't
 // have to re-paste the private key (stripped from GET /api/option/).
+// The catalog probe intentionally uses POST: private keys must never appear
+// in query strings, which are commonly retained by browser/proxy logs.
 
 export interface CatalogProduct {
   id: string
@@ -64,9 +66,12 @@ export async function listWaffoPancakeCatalog(
   merchantID: string,
   privateKey: string
 ): Promise<CatalogResponse> {
-  const res = await api.get<CatalogResponse>(
+  const res = await api.post<CatalogResponse>(
     '/api/option/waffo-pancake/catalog',
-    { params: { merchant_id: merchantID, private_key: privateKey } }
+    {
+      merchant_id: merchantID,
+      private_key: privateKey,
+    }
   )
   return res.data
 }

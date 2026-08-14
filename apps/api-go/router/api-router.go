@@ -313,7 +313,11 @@ func SetApiRouter(router *gin.Engine) {
 			optionRoute.GET("/channel_affinity_cache", controller.GetChannelAffinityCacheStats)
 			optionRoute.DELETE("/channel_affinity_cache", controller.ClearChannelAffinityCache)
 			optionRoute.POST("/rest_model_ratio", controller.ResetModelRatio)
-			optionRoute.GET("/waffo-pancake/catalog", controller.ListWaffoPancakeCatalog)
+			// Credentials must never travel in a query string: URLs are routinely
+			// copied into access logs, browser history, and tracing systems. The
+			// catalog probe accepts an optional JSON body and otherwise resolves
+			// the server-side WAFFO_* credentials.
+			optionRoute.POST("/waffo-pancake/catalog", controller.ListWaffoPancakeCatalog)
 			optionRoute.POST("/waffo-pancake/pair", controller.CreateWaffoPancakePair)
 			optionRoute.POST("/waffo-pancake/save", controller.SaveWaffoPancake)
 			optionRoute.POST("/waffo-pancake/subscription-product", controller.CreateWaffoPancakeSubscriptionProduct)
