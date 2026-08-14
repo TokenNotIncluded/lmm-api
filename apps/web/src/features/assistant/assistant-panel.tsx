@@ -788,7 +788,7 @@ function AssistantPanelHeader(props: {
         </SheetDescription>
         <Button
           type='button'
-          variant='outline'
+          variant='ghost'
           size='sm'
           className='mt-2 self-start'
           onClick={

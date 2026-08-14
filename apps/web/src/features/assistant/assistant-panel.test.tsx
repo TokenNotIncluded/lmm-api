@@ -409,6 +409,11 @@ describe('AssistantPanel', () => {
       assert.match(sheetContent.className, /rounded-none/)
       assert.ok(sheetContent.querySelector('[data-slot="sheet-close"]'))
       assert.ok(sheetContent.querySelector('textarea'))
+      const historyButton = [...sheetContent.querySelectorAll('button')].find(
+        (button) => button.textContent?.includes('Conversation history')
+      )
+      assert.ok(historyButton)
+      assert.doesNotMatch(historyButton.className, /border-border/)
       assert.match(
         sheetContent.textContent ?? '',
         /Your assistant conversations are not private/
