@@ -458,6 +458,39 @@ func ResolveWaffoPancakeRefundTradeNo(event *WaffoPancakeWebhookEvent) (string, 
 	if topUp == nil || topUp.PaymentProvider != model.PaymentProviderWaffoPancake {
 		return "", fmt.Errorf("waffo pancake refund order not found for tradeNo=%s", tradeNo)
 	}
+	// Refunds bypass CompleteExternalTopUp, so repeat its store binding here.
+	// A merchant may have multiple Waffo stores; a signed event for another
+	// store must never be allowed to mutate this order's finance history. Keep
+	// the empty-order exception for legacy rows that predate store evidence.
+	if expectedStore := strings.TrimSpace(topUp.ProviderStoreId); expectedStore != "" &&
+		strings.TrimSpace(event.StoreID) != expectedStore {
+		return "", fmt.Errorf(
+			"waffo pancake refund store mismatch for tradeNo=%s: expected=%q actual=%q",
+			tradeNo,
+			expectedStore,
+			strings.TrimSpace(event.StoreID),
+		)
+	}
+	if topUp.ProviderTransactionId != nil {
+		expectedTransaction := strings.TrimSpace(*topUp.ProviderTransactionId)
+		if expectedTransaction != "" && strings.TrimSpace(event.Data.OrderID) != expectedTransaction {
+			return "", fmt.Errorf(
+				"waffo pancake refund transaction mismatch for tradeNo=%s: expected=%q actual=%q",
+				tradeNo,
+				expectedTransaction,
+				strings.TrimSpace(event.Data.OrderID),
+			)
+		}
+	}
+	if expectedCurrency := strings.ToUpper(strings.TrimSpace(topUp.SettlementCurrency)); expectedCurrency != "" &&
+		strings.ToUpper(strings.TrimSpace(event.Data.Currency)) != expectedCurrency {
+		return "", fmt.Errorf(
+			"waffo pancake refund currency mismatch for tradeNo=%s: expected=%q actual=%q",
+			tradeNo,
+			expectedCurrency,
+			strings.ToUpper(strings.TrimSpace(event.Data.Currency)),
+		)
+	}
 	actualIdentity := strings.TrimSpace(event.Data.MerchantProvidedBuyerIdentity)
 	if actualIdentity != "" {
 		expectedIdentity := WaffoPancakeBuyerIdentityFromUserID(topUp.UserId)
@@ -716,6 +749,73 @@ type WaffoPancakeCatalog struct {
 	Stores []WaffoPancakeCatalogStore `json:"stores"`
 }
 
+type waffoPancakeStoresQuery struct {
+	Stores []WaffoPancakeCatalogStore `json:"stores"`
+}
+
+type waffoPancakeProductsQuery struct {
+	OnetimeProducts []WaffoPancakeCatalogProduct `json:"onetimeProducts"`
+}
+
+func listWaffoPancakeCatalogWithClient(ctx context.Context, client *pancake.Client) (*WaffoPancakeCatalog, error) {
+	storesResponse, err := pancake.GraphQLQuery[waffoPancakeStoresQuery](ctx, client, pancake.GraphQLParams{
+		Query: `query {
+			stores {
+				id
+				name
+				status
+				prodEnabled
+			}
+		}`,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("query Waffo Pancake stores: %w", err)
+	}
+	if len(storesResponse.Errors) > 0 {
+		return nil, fmt.Errorf("waffo pancake stores query returned %d errors: %s",
+			len(storesResponse.Errors), storesResponse.Errors[0].Message)
+	}
+
+	stores := storesResponse.Data.Stores
+	for i := range stores {
+		storeID := strings.TrimSpace(stores[i].ID)
+		if storeID == "" {
+			continue
+		}
+		productsResponse, err := pancake.GraphQLQuery[waffoPancakeProductsQuery](ctx, client, pancake.GraphQLParams{
+			Query: `query ($storeId: String!) {
+				onetimeProducts(filter: { storeId: { eq: $storeId }, status: { eq: "active" } }) {
+					id
+					name
+					status
+				}
+			}`,
+			Variables: map[string]any{"storeId": storeID},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("query Waffo Pancake products for store %s: %w", storeID, err)
+		}
+		if len(productsResponse.Errors) > 0 {
+			return nil, fmt.Errorf("waffo pancake products query for store %s returned %d errors: %s",
+				storeID, len(productsResponse.Errors), productsResponse.Errors[0].Message)
+		}
+		stores[i].OnetimeProducts = productsResponse.Data.OnetimeProducts
+	}
+
+	// Drop non-active products defensively as well as at the GraphQL filter,
+	// because providers may return legacy rows or ignore an unsupported filter.
+	for i := range stores {
+		active := stores[i].OnetimeProducts[:0]
+		for _, product := range stores[i].OnetimeProducts {
+			if strings.EqualFold(strings.TrimSpace(product.Status), "active") {
+				active = append(active, product)
+			}
+		}
+		stores[i].OnetimeProducts = active
+	}
+	return &WaffoPancakeCatalog{Stores: stores}, nil
+}
+
 // ListWaffoPancakeCatalog queries Pancake's GraphQL `stores` for the
 // merchant's stores + onetime products. A successful call also proves
 // the supplied credentials authenticate (doubles as a credential probe).
@@ -724,46 +824,5 @@ func ListWaffoPancakeCatalog(ctx context.Context, merchantID, privateKey string)
 	if err != nil {
 		return nil, err
 	}
-
-	type queryShape struct {
-		Stores []WaffoPancakeCatalogStore `json:"stores"`
-	}
-	// `limit: 100` because the API returns a single store when limit is
-	// omitted, even for multi-store merchants. Bump to paginated fetches
-	// (via `offset`) if real catalogs ever cross the cap.
-	resp, err := pancake.GraphQLQuery[queryShape](ctx, client, pancake.GraphQLParams{
-		Query: `query {
-			stores(limit: 100) {
-				id
-				name
-				status
-				prodEnabled
-				onetimeProducts {
-					id
-					name
-					status
-				}
-			}
-		}`,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("query Waffo Pancake catalog: %w", err)
-	}
-	if len(resp.Errors) > 0 {
-		return nil, fmt.Errorf("waffo pancake catalog query returned %d errors: %s",
-			len(resp.Errors), resp.Errors[0].Message)
-	}
-	// Drop non-active products. Operators should only see items they can
-	// actually bind without later hitting "product unavailable" at checkout.
-	stores := resp.Data.Stores
-	for i := range stores {
-		active := stores[i].OnetimeProducts[:0]
-		for _, p := range stores[i].OnetimeProducts {
-			if strings.EqualFold(strings.TrimSpace(p.Status), "active") {
-				active = append(active, p)
-			}
-		}
-		stores[i].OnetimeProducts = active
-	}
-	return &WaffoPancakeCatalog{Stores: stores}, nil
+	return listWaffoPancakeCatalogWithClient(ctx, client)
 }
