@@ -1714,6 +1714,17 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 		if checkinSetting.Enabled {
 			checkinFacts["base_min_quota"] = checkinSetting.MinQuota
 			checkinFacts["base_max_quota"] = checkinSetting.MaxQuota
+			if actorUserID > 0 {
+				if rewardRange, err := model.GetUserCheckinRewardRange(actorUserID); err == nil {
+					checkinFacts["trust_level"] = rewardRange.TrustLevel
+					checkinFacts["reward_multiplier"] = rewardRange.Multiplier
+					checkinFacts["min_quota"] = rewardRange.MinQuota
+					checkinFacts["max_quota"] = rewardRange.MaxQuota
+				}
+				if checkedInToday, err := model.HasCheckedInToday(actorUserID); err == nil {
+					checkinFacts["checked_in_today"] = checkedInToday
+				}
+			}
 		}
 		keyGroupOptions := []assistantKeyGroupOption(nil)
 		if actorUserID > 0 {

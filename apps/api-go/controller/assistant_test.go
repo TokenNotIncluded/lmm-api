@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/LIghtJUNction/api.lmm.best/common"
@@ -2178,6 +2179,16 @@ func TestAssistantSetupToolReturnsExactEndpointFormatsAndClientLimits(t *testing
 }
 
 func TestAssistantServiceFactsExposeLiveCheckinActivity(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.Checkin{}))
+	user := model.User{
+		Username: "assistant-checkin-facts",
+		Password: "password",
+		Role:     common.RoleAdminUser,
+		Status:   common.UserStatusEnabled,
+		Group:    "default",
+	}
+	require.NoError(t, db.Create(&user).Error)
 	checkin := operation_setting.GetCheckinSetting()
 	original := *checkin
 	original.LevelMultipliers = append([]float64(nil), checkin.LevelMultipliers...)
@@ -2189,6 +2200,7 @@ func TestAssistantServiceFactsExposeLiveCheckinActivity(t *testing.T) {
 	checkin.MaxQuota = 8800
 
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Set("id", user.Id)
 	result := executeAssistantTool(c, assistantOpenAIToolCall{
 		Function: assistantOpenAIToolCallFunction{Name: "get_service_facts"},
 	})
@@ -2204,6 +2216,25 @@ func TestAssistantServiceFactsExposeLiveCheckinActivity(t *testing.T) {
 	assert.Equal(t, "once_per_day", daily["frequency"])
 	assert.Equal(t, 1200, daily["base_min_quota"])
 	assert.Equal(t, 8800, daily["base_max_quota"])
+	assert.Equal(t, 5, daily["trust_level"])
+	assert.Equal(t, 1.0, daily["reward_multiplier"])
+	assert.Equal(t, 1200, daily["min_quota"])
+	assert.Equal(t, 8800, daily["max_quota"])
+	assert.Equal(t, false, daily["checked_in_today"])
+
+	require.NoError(t, db.Create(&model.Checkin{
+		UserId:       user.Id,
+		CheckinDate:  time.Now().Format("2006-01-02"),
+		QuotaAwarded: 1200,
+	}).Error)
+	result = executeAssistantTool(c, assistantOpenAIToolCall{
+		Function: assistantOpenAIToolCallFunction{Name: "get_service_facts"},
+	})
+	activities, ok = result["activities"].(map[string]any)
+	require.True(t, ok)
+	daily, ok = activities["daily_checkin"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, true, daily["checked_in_today"])
 }
 
 func TestAssistantCheckinQuestionUsesLiveServiceFacts(t *testing.T) {
