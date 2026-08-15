@@ -742,6 +742,16 @@ func TestAssistantPromptKeepsAccountContextInternal(t *testing.T) {
 	assert.Contains(t, prompt, "Trust levels L1-L4 never grant server configuration")
 }
 
+func TestAssistantPromptDoesNotInventModelKnowledgeCutoff(t *testing.T) {
+	prompt := buildAssistantSystemPrompt(setting.GetAssistantSettings(), assistantUserContext{
+		UserID:      42,
+		AccessLevel: "L1",
+	})
+	assert.Contains(t, prompt, "never invent a training-data cutoff")
+	assert.Contains(t, prompt, "generic system/UI knowledge date")
+	assert.Contains(t, prompt, "verified cutoff metadata")
+}
+
 func TestAssistantPaymentOfferStateRequiresProgressiveIntent(t *testing.T) {
 	tests := []struct {
 		name         string
