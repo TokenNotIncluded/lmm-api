@@ -1,6 +1,7 @@
 package xunfei
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -97,4 +98,40 @@ func TestXunfeiResponseBudgetPreservesValidMessages(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, responses, 2)
 	assert.Equal(t, "second", responses[1].Payload.Choices.Text[0].Content)
+}
+
+func TestXunfeiProducerStopsWhenRequestIsCanceled(t *testing.T) {
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		connection, err := upgrader.Upgrade(writer, request, nil)
+		if err != nil {
+			return
+		}
+		defer connection.Close()
+		if _, _, err := connection.ReadMessage(); err != nil {
+			return
+		}
+		// Let the producer reach its channel send after the caller has
+		// canceled the request. A blocked send here would leak the goroutine.
+		_ = connection.WriteMessage(websocket.TextMessage, marshalXunfeiTestResponse(t, "pending", 2))
+	}))
+	defer server.Close()
+
+	requestContext, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	gin.SetMode(gin.TestMode)
+	ginContext, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ginContext.Request = httptest.NewRequest(http.MethodPost, "/", nil).WithContext(requestContext)
+	common.SetContextKey(ginContext, appconstant.ContextKeyResponseByteLimit, 1024)
+	authURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	_, doneChan, err := xunfeiMakeRequest(ginContext, dto.GeneralOpenAIRequest{}, "general", authURL, "app")
+	require.NoError(t, err)
+	cancel()
+
+	select {
+	case responseErr := <-doneChan:
+		assert.NoError(t, responseErr)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for canceled Xunfei producer")
+	}
 }
