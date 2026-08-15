@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -28,13 +29,31 @@ func parseFlowQuotaTimeRange(c *gin.Context) (int64, int64, bool) {
 	return startTimestamp, endTimestamp, true
 }
 
+func parseQuotaTimeRange(c *gin.Context) (int64, int64, bool) {
+	return parseFlowQuotaTimeRange(c)
+}
+
+func respondQuotaDataError(c *gin.Context, err error) {
+	if errors.Is(err, model.ErrQuotaDataResultTooLarge) {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{
+			"success": false,
+			"message": "查询结果过大，请缩短时间范围后重试",
+			"code":    "QUOTA_DATA_RESULT_TOO_LARGE",
+		})
+		return
+	}
+	common.ApiError(c, err)
+}
+
 func GetAllQuotaDates(c *gin.Context) {
-	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
-	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
+	startTimestamp, endTimestamp, ok := parseQuotaTimeRange(c)
+	if !ok {
+		return
+	}
 	username := c.Query("username")
 	dates, err := model.GetAllQuotaDates(startTimestamp, endTimestamp, username)
 	if err != nil {
-		common.ApiError(c, err)
+		respondQuotaDataError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -46,11 +65,13 @@ func GetAllQuotaDates(c *gin.Context) {
 }
 
 func GetQuotaDatesByUser(c *gin.Context) {
-	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
-	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
+	startTimestamp, endTimestamp, ok := parseQuotaTimeRange(c)
+	if !ok {
+		return
+	}
 	dates, err := model.GetQuotaDataGroupByUser(startTimestamp, endTimestamp)
 	if err != nil {
-		common.ApiError(c, err)
+		respondQuotaDataError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -62,8 +83,10 @@ func GetQuotaDatesByUser(c *gin.Context) {
 
 func GetUserQuotaDates(c *gin.Context) {
 	userId := c.GetInt("id")
-	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
-	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
+	startTimestamp, endTimestamp, ok := parseQuotaTimeRange(c)
+	if !ok {
+		return
+	}
 	// 判断时间跨度是否超过 1 个月
 	if endTimestamp-startTimestamp > 2592000 {
 		c.JSON(http.StatusOK, gin.H{
@@ -74,7 +97,7 @@ func GetUserQuotaDates(c *gin.Context) {
 	}
 	dates, err := model.GetQuotaDataByUserId(userId, startTimestamp, endTimestamp)
 	if err != nil {
-		common.ApiError(c, err)
+		respondQuotaDataError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -93,7 +116,7 @@ func GetAllFlowQuotaDates(c *gin.Context) {
 	username := c.Query("username")
 	dates, err := model.GetFlowQuotaData(startTimestamp, endTimestamp, username, 0, c.GetInt("role"))
 	if err != nil {
-		common.ApiError(c, err)
+		respondQuotaDataError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -119,7 +142,7 @@ func GetUserFlowQuotaDates(c *gin.Context) {
 	}
 	dates, err := model.GetFlowQuotaData(startTimestamp, endTimestamp, "", userId, common.RoleCommonUser)
 	if err != nil {
-		common.ApiError(c, err)
+		respondQuotaDataError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{

@@ -72,6 +72,25 @@ var quotaDataFlushLock sync.Mutex
 var quotaDataDropped int64
 var quotaDataFlushWake = make(chan struct{}, 1)
 
+// quotaDataMaxQueryRows bounds the number of grouped rows materialized for a
+// dashboard request. A missing time range must never turn a UI read into an
+// unbounded historical export, and a very high-cardinality grouping should
+// fail closed before JSON encoding amplifies the allocation.
+const quotaDataMaxQueryRows = 100_000
+
+var ErrQuotaDataResultTooLarge = errors.New("quota data result exceeds safety limit")
+
+func quotaDataQueryLimit(query *gorm.DB) *gorm.DB {
+	return query.Limit(quotaDataMaxQueryRows + 1)
+}
+
+func checkQuotaDataQueryRows(rows []*QuotaData) error {
+	if len(rows) > quotaDataMaxQueryRows {
+		return ErrQuotaDataResultTooLarge
+	}
+	return nil
+}
+
 func quotaDataKey(quotaData *QuotaData) string {
 	return fmt.Sprintf("%d\x00%s\x00%s\x00%d\x00%s\x00%d\x00%d\x00%s",
 		quotaData.UserID,
@@ -212,32 +231,41 @@ func persistQuotaData(quotaData *QuotaData) error {
 func GetQuotaDataByUsername(username string, startTime int64, endTime int64) (quotaData []*QuotaData, err error) {
 	var quotaDatas []*QuotaData
 	// 从quota_data表中查询数据
-	err = DB.Table("quota_data").
+	err = quotaDataQueryLimit(DB.Table("quota_data").
 		Select("user_id, username, model_name, created_at, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used").
 		Where("username = ? and created_at >= ? and created_at <= ?", username, startTime, endTime).
-		Group("user_id, username, model_name, created_at").
+		Group("user_id, username, model_name, created_at")).
 		Find(&quotaDatas).Error
+	if err == nil {
+		err = checkQuotaDataQueryRows(quotaDatas)
+	}
 	return quotaDatas, err
 }
 
 func GetQuotaDataByUserId(userId int, startTime int64, endTime int64) (quotaData []*QuotaData, err error) {
 	var quotaDatas []*QuotaData
 	// 从quota_data表中查询数据
-	err = DB.Table("quota_data").
+	err = quotaDataQueryLimit(DB.Table("quota_data").
 		Select("user_id, username, model_name, created_at, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used").
 		Where("user_id = ? and created_at >= ? and created_at <= ?", userId, startTime, endTime).
-		Group("user_id, username, model_name, created_at").
+		Group("user_id, username, model_name, created_at")).
 		Find(&quotaDatas).Error
+	if err == nil {
+		err = checkQuotaDataQueryRows(quotaDatas)
+	}
 	return quotaDatas, err
 }
 
 func GetQuotaDataGroupByUser(startTime int64, endTime int64) (quotaData []*QuotaData, err error) {
 	var quotaDatas []*QuotaData
-	err = DB.Table("quota_data").
+	err = quotaDataQueryLimit(DB.Table("quota_data").
 		Select("username, created_at, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used").
 		Where("created_at >= ? and created_at <= ?", startTime, endTime).
-		Group("username, created_at").
+		Group("username, created_at")).
 		Find(&quotaDatas).Error
+	if err == nil {
+		err = checkQuotaDataQueryRows(quotaDatas)
+	}
 	return quotaDatas, err
 }
 
@@ -249,6 +277,9 @@ func GetAllQuotaDates(startTime int64, endTime int64, username string) (quotaDat
 	// 从quota_data表中查询数据
 	// only select model_name, sum(count) as count, sum(quota) as quota, model_name, created_at from quota_data group by model_name, created_at;
 	//err = DB.Table("quota_data").Where("created_at >= ? and created_at <= ?", startTime, endTime).Find(&quotaDatas).Error
-	err = DB.Table("quota_data").Select("model_name, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used, created_at").Where("created_at >= ? and created_at <= ?", startTime, endTime).Group("model_name, created_at").Find(&quotaDatas).Error
+	err = quotaDataQueryLimit(DB.Table("quota_data").Select("model_name, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used, created_at").Where("created_at >= ? and created_at <= ?", startTime, endTime).Group("model_name, created_at")).Find(&quotaDatas).Error
+	if err == nil {
+		err = checkQuotaDataQueryRows(quotaDatas)
+	}
 	return quotaDatas, err
 }

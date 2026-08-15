@@ -47,9 +47,13 @@ func getSelfFlowQuotaData(startTime int64, endTime int64, userID int) ([]*FlowQu
 		Where("user_id = ?", userID).
 		Group("token_id, use_group, model_name").
 		Order("quota DESC").
+		Limit(quotaDataMaxQueryRows + 1).
 		Find(&rows).Error
 	if err != nil {
 		return nil, err
+	}
+	if len(rows) > quotaDataMaxQueryRows {
+		return nil, ErrQuotaDataResultTooLarge
 	}
 	return rows, fillFlowTokenNames(rows)
 }
@@ -64,9 +68,13 @@ func getAdminFlowQuotaData(startTime int64, endTime int64, username string) ([]*
 	err := query.
 		Group("user_id, username, use_group, model_name, channel_id").
 		Order("quota DESC").
+		Limit(quotaDataMaxQueryRows + 1).
 		Find(&rows).Error
 	if err != nil {
 		return nil, err
+	}
+	if len(rows) > quotaDataMaxQueryRows {
+		return nil, ErrQuotaDataResultTooLarge
 	}
 	return rows, fillFlowChannelNames(rows)
 }
@@ -81,9 +89,13 @@ func getRootFlowQuotaData(startTime int64, endTime int64, username string) ([]*F
 	err := query.
 		Group("user_id, username, node_name, token_id, use_group, model_name, channel_id").
 		Order("quota DESC").
+		Limit(quotaDataMaxQueryRows + 1).
 		Find(&rows).Error
 	if err != nil {
 		return nil, err
+	}
+	if len(rows) > quotaDataMaxQueryRows {
+		return nil, ErrQuotaDataResultTooLarge
 	}
 	if err := fillFlowTokenNames(rows); err != nil {
 		return rows, err
