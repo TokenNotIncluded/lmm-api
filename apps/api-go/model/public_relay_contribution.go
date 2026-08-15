@@ -29,6 +29,10 @@ const (
 	PublicRelayRejected     = "rejected"
 	PublicRelayReportOpen   = "open"
 	PublicRelayReportClosed = "closed"
+	// Public relay routing is a user preference view, not an unbounded export.
+	// Keep the largest list that the preference API accepts in memory even when
+	// the approved pool grows to millions of rows.
+	publicRelayRoutingMaxItems = 200
 )
 
 var (
@@ -350,7 +354,7 @@ func ListPublicRelayRouting(userID int) ([]PublicRelayRoutingItem, string, error
 		orderPos[id] = index
 	}
 	var items []PublicRelayContribution
-	if err := DB.Where("status = ? AND "+commonGroupCol+" = ? AND channel_id > 0", PublicRelayApproved, group).Order("rating_average DESC, rating_count DESC, updated_at DESC, id DESC").Find(&items).Error; err != nil {
+	if err := DB.Where("status = ? AND "+commonGroupCol+" = ? AND channel_id > 0", PublicRelayApproved, group).Order("rating_average DESC, rating_count DESC, updated_at DESC, id DESC").Limit(publicRelayRoutingMaxItems).Find(&items).Error; err != nil {
 		return nil, group, err
 	}
 	sort.SliceStable(items, func(i, j int) bool {
@@ -381,13 +385,30 @@ func UpdatePublicRelayRouting(userID int, group string, disabled, ordered []int)
 		return ErrPublicRelayInvalidInput
 	}
 	group = strings.TrimSpace(group)
-	valid := make(map[int]struct{})
-	var contributions []PublicRelayContribution
-	if err := DB.Where("status = ? AND "+commonGroupCol+" = ? AND channel_id > 0", PublicRelayApproved, group).Find(&contributions).Error; err != nil {
-		return err
+	// Validate only the IDs submitted by this request. Loading every approved
+	// contribution just to build a membership set made a preference update
+	// scale with the entire public pool.
+	candidateIDs := make([]int, 0, len(disabled)+len(ordered))
+	seenCandidates := make(map[int]struct{}, len(disabled)+len(ordered))
+	for _, id := range append(append([]int{}, disabled...), ordered...) {
+		if id > 0 {
+			if _, exists := seenCandidates[id]; !exists {
+				seenCandidates[id] = struct{}{}
+				candidateIDs = append(candidateIDs, id)
+			}
+		}
 	}
-	for _, item := range contributions {
-		valid[item.ChannelId] = struct{}{}
+	valid := make(map[int]struct{}, len(candidateIDs))
+	if len(candidateIDs) > 0 {
+		var validIDs []int
+		if err := DB.Model(&PublicRelayContribution{}).
+			Where("status = ? AND "+commonGroupCol+" = ? AND channel_id > 0 AND channel_id IN ?", PublicRelayApproved, group, candidateIDs).
+			Pluck("channel_id", &validIDs).Error; err != nil {
+			return err
+		}
+		for _, id := range validIDs {
+			valid[id] = struct{}{}
+		}
 	}
 	sanitize := func(ids []int) []int {
 		seen := make(map[int]struct{}, len(ids))

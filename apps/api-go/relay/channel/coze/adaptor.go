@@ -1,6 +1,7 @@
 package coze
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,11 +14,24 @@ import (
 	"github.com/LIghtJUNction/api.lmm.best/relay/common"
 	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
 	"github.com/LIghtJUNction/api.lmm.best/relaykit/types"
+	"github.com/LIghtJUNction/api.lmm.best/service"
 
 	"github.com/gin-gonic/gin"
 )
 
 type Adaptor struct {
+}
+
+const (
+	cozePollInterval = time.Second
+	cozeMaxPolls     = 120
+)
+
+func cozeRequestContext(c *gin.Context) context.Context {
+	if c != nil && c.Request != nil {
+		return c.Request.Context()
+	}
+	return context.Background()
 }
 
 func (a *Adaptor) ConvertGeminiRequest(*gin.Context, *common.RelayInfo, *dto.GeminiChatRequest) (any, error) {
@@ -74,6 +88,7 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *common.RelayInfo, requestBody 
 	if err != nil {
 		return nil, err
 	}
+	defer service.CloseResponseBodyGracefully(resp)
 	// 解析 resp
 	var cozeResponse CozeChatResponse
 	respBody, err := corecommon.ReadResponseBody(resp)
@@ -87,7 +102,7 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *common.RelayInfo, requestBody 
 	c.Set("coze_conversation_id", cozeResponse.Data.ConversationId)
 	c.Set("coze_chat_id", cozeResponse.Data.Id)
 	// 轮询检查消息是否完成
-	for {
+	for poll := 0; poll < cozeMaxPolls; poll++ {
 		err, isComplete := checkIfChatComplete(a, c, info)
 		if err != nil {
 			return nil, err
@@ -96,7 +111,18 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *common.RelayInfo, requestBody 
 				break
 			}
 		}
-		time.Sleep(time.Second * 1)
+		if poll == cozeMaxPolls-1 {
+			return nil, fmt.Errorf("coze chat polling timed out after %d attempts", cozeMaxPolls)
+		}
+		timer := time.NewTimer(cozePollInterval)
+		select {
+		case <-cozeRequestContext(c).Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return nil, cozeRequestContext(c).Err()
+		case <-timer.C:
+		}
 	}
 	// 发送获取消息请求
 	return getChatDetail(a, c, info)

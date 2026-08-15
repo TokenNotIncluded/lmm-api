@@ -25,6 +25,13 @@ type UserRankingTotal struct {
 	TotalTokens int64 `json:"total_tokens"`
 }
 
+// compatibilityUserRankingLimit bounds the legacy slice-returning helper.
+// Public leaderboard reads use IterateUserRankingRows and retain a top-N
+// window themselves; callers of this older compatibility API should not be
+// able to materialize every grouped user when the table reaches millions of
+// participants.
+const compatibilityUserRankingLimit = 100
+
 // UserRankingRow is a single database-aggregated usage row enriched with the
 // small public user projection needed by the leaderboard. It is consumed as a
 // cursor so callers never materialize every active user in a long window.
@@ -73,7 +80,8 @@ func GetUserRankingTotals(startTime int64, endTime int64) ([]UserRankingTotal, e
 		Where("user_id > 0").
 		Group("user_id").
 		Having("COALESCE(SUM(count), 0) > 0 OR COALESCE(SUM(token_used), 0) > 0").
-		Order("total_tokens DESC, requests DESC")
+		Order("total_tokens DESC, requests DESC").
+		Limit(compatibilityUserRankingLimit)
 	query = applyRankingQuotaTimeRange(query, startTime, endTime)
 	return rows, query.Find(&rows).Error
 }

@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/setting/operation_setting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -46,4 +47,35 @@ func TestPublicRelayTipsRemainPendingUntilWithdrawal(t *testing.T) {
 	assert.Equal(t, tipQuota, withdrawn)
 	require.NoError(t, db.First(&afterTipOwner, owner.Id).Error)
 	assert.Equal(t, int(tipQuota), afterTipOwner.Quota)
+}
+
+func TestPublicRelayRoutingBoundsPoolAndPreferenceValidation(t *testing.T) {
+	db := setupConsoleActivationTestDB(t)
+	require.NoError(t, db.AutoMigrate(&PublicRelayContribution{}, &PublicRelayPreference{}))
+	previousGroup := operation_setting.GetPublicRelaySetting().Group
+	operation_setting.GetPublicRelaySetting().Group = "FREE"
+	t.Cleanup(func() { operation_setting.GetPublicRelaySetting().Group = previousGroup })
+
+	owner := User{Username: "relay-routing-owner", Password: "password", AffCode: "relay-routing-owner-aff"}
+	require.NoError(t, db.Create(&owner).Error)
+	for index := 0; index < publicRelayRoutingMaxItems+25; index++ {
+		require.NoError(t, db.Create(&PublicRelayContribution{
+			UserId: owner.Id, ContributorEmail: "owner@example.com", Name: "relay",
+			BaseURL: "https://relay.example.com", Group: "FREE", Status: PublicRelayApproved,
+			ChannelId: index + 1, CreatedAt: int64(index + 1), UpdatedAt: int64(index + 1),
+		}).Error)
+	}
+
+	items, group, err := ListPublicRelayRouting(owner.Id)
+	require.NoError(t, err)
+	assert.Equal(t, "FREE", group)
+	assert.Len(t, items, publicRelayRoutingMaxItems)
+
+	// Preference validation only checks the submitted IDs; it must not load the
+	// entire approved pool to construct a membership set.
+	require.NoError(t, UpdatePublicRelayRouting(owner.Id, "FREE", []int{1}, []int{2}))
+	disabled, ordered, err := GetPublicRelayRoutingPreference(owner.Id, "FREE")
+	require.NoError(t, err)
+	assert.Equal(t, []int{1}, disabled)
+	assert.Equal(t, []int{2}, ordered)
 }

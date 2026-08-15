@@ -1,6 +1,7 @@
 package coze
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -67,6 +68,24 @@ func TestCheckIfChatCompletePreservesValidResponse(t *testing.T) {
 	assert.Equal(t, 3, context.GetInt("coze_token_count"))
 	assert.Equal(t, 2, context.GetInt("coze_output_count"))
 	assert.Equal(t, 1, context.GetInt("coze_input_count"))
+}
+
+func TestCheckIfChatCompleteHonorsRequestCancellation(t *testing.T) {
+	service.InitHttpClient()
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		<-request.Context().Done()
+	}))
+	defer server.Close()
+
+	requestContext, cancel := context.WithCancel(context.Background())
+	ginContext := newCozeResponseLimitTestContext(t, 1024)
+	ginContext.Request = httptest.NewRequest(http.MethodPost, "/relay", nil).WithContext(requestContext)
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelBaseUrl: server.URL}}
+	cancel()
+
+	err, complete := checkIfChatComplete(&Adaptor{}, ginContext, info)
+	assert.False(t, complete)
+	assert.ErrorIs(t, err, context.Canceled)
 }
 
 func TestGetChatDetailRejectsKnownOversizeResponse(t *testing.T) {
