@@ -1415,15 +1415,33 @@ func BenchmarkAssistantToolDefinitionsForContext(b *testing.B) {
 	}
 }
 
+func withAssistantModelRatios(t *testing.T, modelNames ...string) {
+	t.Helper()
+	previousModelRatios := ratio_setting.ModelRatio2JSONString()
+	ratioValues := make(map[string]float64, len(modelNames))
+	for _, modelName := range modelNames {
+		ratioValues[modelName] = 1
+	}
+	ratioJSON, err := common.Marshal(ratioValues)
+	require.NoError(t, err)
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(string(ratioJSON)))
+	t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(previousModelRatios)) })
+}
+
 func TestAssistantL0ModelToolReturnsRealPublicPreviewIDs(t *testing.T) {
+	withSelfUseModeDisabled(t)
 	db := setupTokenControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Ability{}, &model.TopUp{}))
+	previousModelRatios := ratio_setting.ModelRatio2JSONString()
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"claude-opus-5":1,"gpt-5.6-sol":1,"gemini-3-flash":1}`))
+	t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(previousModelRatios)) })
 	previousPricing := getPricingCache
 	getPricingCache = func() []model.Pricing {
 		return []model.Pricing{
 			{ModelName: "claude-opus-5", EnableGroup: []string{"default"}},
 			{ModelName: "gpt-5.6-sol", EnableGroup: []string{"default"}},
 			{ModelName: "gemini-3-flash", EnableGroup: []string{"all"}},
+			{ModelName: "unpriced-public-model", EnableGroup: []string{"default"}},
 			{ModelName: "private-vip", EnableGroup: []string{"vip"}},
 			{ModelName: "gpt-5.6-sol", EnableGroup: []string{"default"}},
 		}
@@ -1460,6 +1478,7 @@ func TestAssistantL0ModelToolReturnsRealPublicPreviewIDs(t *testing.T) {
 	assert.Equal(t, []string{"claude-opus-5", "gemini-3-flash", "gpt-5.6-sol"}, result["model_ids"])
 	assert.Equal(t, "public_preview_not_account_entitlement", result["availability_scope"])
 	assert.Equal(t, "live_pricing_catalog", result["catalog_source"])
+	assert.NotContains(t, result["model_ids"], "unpriced-public-model")
 
 	denied := executeAssistantTool(c, assistantOpenAIToolCall{
 		Function: assistantOpenAIToolCallFunction{
@@ -1468,6 +1487,39 @@ func TestAssistantL0ModelToolReturnsRealPublicPreviewIDs(t *testing.T) {
 	})
 	assert.Equal(t, false, denied["ok"])
 	assert.Equal(t, "tool_not_allowed", denied["status"])
+}
+
+func TestAssistantModelsToolUsesModelListBillingPredicate(t *testing.T) {
+	withSelfUseModeDisabled(t)
+	db := setupModelListControllerTestDB(t)
+	previousModelRatios := ratio_setting.ModelRatio2JSONString()
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"assistant-priced-model":1}`))
+	t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(previousModelRatios)) })
+
+	user := model.User{
+		Username:           "assistant-model-billing-filter",
+		Password:           "password",
+		Role:               common.RoleCommonUser,
+		Status:             common.UserStatusEnabled,
+		Group:              "default",
+		ConsoleActivatedAt: 1,
+	}
+	require.NoError(t, db.Create(&user).Error)
+	require.NoError(t, db.Create(&[]model.Ability{
+		{Group: "default", Model: "assistant-priced-model", ChannelId: 1, Enabled: true},
+		{Group: "default", Model: "assistant-unpriced-model", ChannelId: 1, Enabled: true},
+	}).Error)
+
+	assistantResult := executeAssistantModelsTool(user.Id)
+	assert.Equal(t, true, assistantResult["ok"])
+	assert.Equal(t, []string{"assistant-priced-model"}, assistantResult["model_ids"])
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	ctx.Set("id", user.Id)
+	ListModels(ctx, constant.ChannelTypeOpenAI)
+	assert.Equal(t, map[string]struct{}{"assistant-priced-model": {}}, decodeListModelsResponse(t, recorder))
 }
 
 func TestAssistantL0ModelToolDoesNotUseAbilityFallbackWhenPricingUnavailable(t *testing.T) {
@@ -1593,6 +1645,7 @@ func TestAssistantExactModelReferenceForcesLiveCatalogRead(t *testing.T) {
 }
 
 func TestAssistantAgentLoopOffExecutesSingleLiveModelRead(t *testing.T) {
+	withAssistantModelRatios(t, "gpt-5.6-sol")
 	db := setupTokenControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Ability{}, &model.TopUp{}))
 	previousPricing := getPricingCache
@@ -2125,6 +2178,7 @@ func TestAssistantAgentRejectsSkippedRecommendationRead(t *testing.T) {
 }
 
 func TestAssistantSetupToolReturnsExactEndpointFormatsAndClientLimits(t *testing.T) {
+	withAssistantModelRatios(t, "claude-sonnet-4-5", "gpt-5.6-codex")
 	db := setupTokenControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Ability{}, &model.TopUp{}))
 	previousPricing := getPricingCache
@@ -2350,6 +2404,8 @@ func TestAssistantExplicitHumanHandoffUsesConfirmationTool(t *testing.T) {
 }
 
 func TestAssistantSetupToolShellQuotesConfiguredValues(t *testing.T) {
+	maliciousModelID := "claude-$(touch /tmp/model-pwned)'suffix"
+	withAssistantModelRatios(t, maliciousModelID)
 	db := setupTokenControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Ability{}, &model.TopUp{}))
 	previousPricing := getPricingCache
@@ -2358,7 +2414,6 @@ func TestAssistantSetupToolShellQuotesConfiguredValues(t *testing.T) {
 	}
 	t.Cleanup(func() { getPricingCache = previousPricing })
 	levelZero := 0
-	maliciousModelID := "claude-$(touch /tmp/model-pwned)'suffix"
 	user := model.User{
 		Username:           "assistant-setup-quoting",
 		Password:           "password",
@@ -2393,6 +2448,7 @@ func TestAssistantSetupToolShellQuotesConfiguredValues(t *testing.T) {
 }
 
 func TestAssistantSetupToolRejectsUnavailableModel(t *testing.T) {
+	withAssistantModelRatios(t, "gpt-5.6-sol")
 	db := setupTokenControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Ability{}, &model.TopUp{}))
 	previousPricing := getPricingCache

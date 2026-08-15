@@ -327,6 +327,7 @@ func TestPersonaABLatestExplicitPaymentIntentWins(t *testing.T) {
 }
 
 func TestPersonaAAgentChain(t *testing.T) {
+	withAssistantModelRatios(t, "gpt-5.6-sol")
 	gin.SetMode(gin.TestMode)
 	db := setupTokenControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(

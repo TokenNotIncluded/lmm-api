@@ -35,13 +35,18 @@ type userModelsResponse struct {
 }
 
 func TestPublicPreviewModelIDsUseLivePricingCatalog(t *testing.T) {
+	withSelfUseModeDisabled(t)
 	setupModelListControllerTestDB(t)
+	previousModelRatios := ratio_setting.ModelRatio2JSONString()
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"alpha-real-model":1,"zeta-real-model":1}`))
+	t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(previousModelRatios)) })
 	previousPricing := getPricingCache
 	getPricingCache = func() []model.Pricing {
 		return []model.Pricing{
 			{ModelName: "private-vip-model", EnableGroup: []string{"vip"}},
 			{ModelName: "zeta-real-model", EnableGroup: []string{"all"}},
 			{ModelName: "alpha-real-model", EnableGroup: []string{"default"}},
+			{ModelName: "unpriced-public-model", EnableGroup: []string{"default"}},
 			{ModelName: "zeta-real-model", EnableGroup: []string{"default"}},
 		}
 	}

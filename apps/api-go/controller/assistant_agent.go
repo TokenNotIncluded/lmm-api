@@ -2389,8 +2389,9 @@ func executeAssistantModelsTool(userID int) map[string]any {
 	if err != nil {
 		return map[string]any{"ok": false, "error": "developer access could not be loaded"}
 	}
+	acceptUnsetRatioModel := modelListAcceptsUnsetRatioModel(userID)
 	if !access.Granted {
-		models := getPublicCatalogModelIDs()
+		models := getPublicCatalogModelIDsForUser(userID)
 		if len(models) == 0 {
 			return map[string]any{
 				"ok":             false,
@@ -2426,7 +2427,7 @@ func executeAssistantModelsTool(userID int) map[string]any {
 		}
 		modelSet := make(map[string]struct{}, len(pricing))
 		for _, candidate := range pricing {
-			if strings.TrimSpace(candidate.ModelName) != "" {
+			if strings.TrimSpace(candidate.ModelName) != "" && modelListIncludesModel(candidate.ModelName, acceptUnsetRatioModel) {
 				modelSet[candidate.ModelName] = struct{}{}
 			}
 		}
@@ -2476,6 +2477,13 @@ func executeAssistantModelsTool(userID int) map[string]any {
 			"next_step": "Retry the live model inventory; do not infer that no models are enabled.",
 		}
 	}
+	filteredModels := make([]string, 0, len(models))
+	for _, modelID := range models {
+		if modelListIncludesModel(modelID, acceptUnsetRatioModel) {
+			filteredModels = append(filteredModels, modelID)
+		}
+	}
+	models = filteredModels
 	sort.Strings(models)
 	return map[string]any{
 		"ok":                        true,

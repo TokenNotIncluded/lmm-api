@@ -60,6 +60,10 @@ func getPublicPreviewModelIDs() []string {
 	return getPublicCatalogModelIDs()
 }
 
+func getPublicCatalogModelIDsForUser(userID int) []string {
+	return getPublicCatalogModelIDsWithBillingPolicy(modelListAcceptsUnsetRatioModel(userID))
+}
+
 // getPublicCatalogModelIDs mirrors the live public pricing catalog. The
 // assistant's L0 pricing tool intentionally exposes only the default-group
 // reference price, so models that are enabled exclusively in a private group
@@ -69,13 +73,17 @@ func getPublicPreviewModelIDs() []string {
 // not ready instead of silently substituting a potentially incomplete ability
 // snapshot.
 func getPublicCatalogModelIDs() []string {
+	return getPublicCatalogModelIDsWithBillingPolicy(false)
+}
+
+func getPublicCatalogModelIDsWithBillingPolicy(acceptUnsetRatioModel bool) []string {
 	modelIDs := make(map[string]struct{})
 	for _, pricing := range getPricingCache() {
 		if !common.StringsContains(pricing.EnableGroup, "default") &&
 			!common.StringsContains(pricing.EnableGroup, "all") {
 			continue
 		}
-		if name := strings.TrimSpace(pricing.ModelName); name != "" {
+		if name := strings.TrimSpace(pricing.ModelName); name != "" && modelListIncludesModel(name, acceptUnsetRatioModel) {
 			modelIDs[name] = struct{}{}
 		}
 	}
