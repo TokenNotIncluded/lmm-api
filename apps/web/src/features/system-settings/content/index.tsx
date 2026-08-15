@@ -55,6 +55,7 @@ const defaultContentSettings: ContentSettings = {
   AssistantSearchAPIKey: '',
   AssistantSearchMCPTool: '',
   AssistantSkills: '',
+  AssistantSkillFiles: '[]',
   AssistantReviewEnabled: true,
   AssistantReviewWindowDays: 30,
   AssistantReviewIntervalHours: 24,

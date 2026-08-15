@@ -158,7 +158,7 @@ func GetChannel(group string, model string, retry int, requestPath string) (*Cha
 // GetChannelExcluding selects from the database-backed channel list while
 // omitting request-scoped failed channels. It mirrors the cache selector's
 // priority and weighted selection semantics without changing persisted state.
-func GetChannelExcluding(group string, model string, retry int, requestPath string, excluded map[int]struct{}) (*Channel, error) {
+func GetChannelExcluding(group string, model string, retry int, requestPath string, excluded map[int]struct{}, preferred ...[]int) (*Channel, error) {
 	var abilities []Ability
 
 	var err error
@@ -211,6 +211,19 @@ func GetChannelExcluding(group string, model string, retry int, requestPath stri
 			}
 		}
 		abilities = filtered
+	}
+	if len(preferred) > 0 {
+		for _, preferredID := range preferred[0] {
+			for _, ability := range abilities {
+				if ability.ChannelId == preferredID {
+					channel := Channel{Id: preferredID}
+					if err := DB.First(&channel, "id = ?", preferredID).Error; err != nil {
+						return nil, err
+					}
+					return &channel, nil
+				}
+			}
+		}
 	}
 	channel := Channel{}
 	if len(abilities) > 0 {

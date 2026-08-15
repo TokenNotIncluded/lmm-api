@@ -120,6 +120,7 @@ const CONTENT_SECTIONS = [
           AssistantSearchAPIKey: settings.AssistantSearchAPIKey,
           AssistantSearchMCPTool: settings.AssistantSearchMCPTool,
           AssistantSkills: settings.AssistantSkills,
+          AssistantSkillFiles: settings.AssistantSkillFiles,
           AssistantReviewEnabled: settings.AssistantReviewEnabled,
           AssistantReviewWindowDays: settings.AssistantReviewWindowDays,
           AssistantReviewIntervalHours: settings.AssistantReviewIntervalHours,

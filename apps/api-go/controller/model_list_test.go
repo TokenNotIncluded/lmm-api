@@ -39,9 +39,10 @@ func TestPublicPreviewModelIDsUseLivePricingCatalog(t *testing.T) {
 	previousPricing := getPricingCache
 	getPricingCache = func() []model.Pricing {
 		return []model.Pricing{
-			{ModelName: "zeta-real-model"},
-			{ModelName: "alpha-real-model"},
-			{ModelName: "zeta-real-model"},
+			{ModelName: "private-vip-model", EnableGroup: []string{"vip"}},
+			{ModelName: "zeta-real-model", EnableGroup: []string{"all"}},
+			{ModelName: "alpha-real-model", EnableGroup: []string{"default"}},
+			{ModelName: "zeta-real-model", EnableGroup: []string{"default"}},
 		}
 	}
 	t.Cleanup(func() { getPricingCache = previousPricing })

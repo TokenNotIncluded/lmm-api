@@ -1,8 +1,10 @@
 package setting
 
 import (
+	"encoding/json"
 	"net"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -149,6 +151,38 @@ func TestAssistantSearchPublicIPPolicy(t *testing.T) {
 		ip := net.ParseIP(testCase.address)
 		if got := IsAssistantSearchPublicIP(ip); got != testCase.public {
 			t.Fatalf("IsAssistantSearchPublicIP(%q) = %t, want %t", testCase.address, got, testCase.public)
+		}
+	}
+}
+
+func TestAssistantSkillFilesAreBoundedDeterministicAndSecretSafe(t *testing.T) {
+	raw, err := json.Marshal([]AssistantSkillFile{
+		{Path: "skills/z-last/SKILL.md", Content: "---\nname: z-last\ndescription: Last skill\n---\nlast", Enabled: false},
+		{Path: "skills/a-first/SKILL.md", Content: "---\nname: a-first\ndescription: First skill\n---\nfirst", Enabled: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := NormalizeAssistantSkillFiles(string(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 || files[0].Path != "skills/a-first/SKILL.md" || files[1].Path != "skills/z-last/SKILL.md" {
+		t.Fatalf("skill files were not sorted deterministically: %+v", files)
+	}
+	prompt := AssistantSkillPromptForFiles(files)
+	if prompt == "" || !strings.Contains(prompt, "first") || strings.Contains(prompt, "last") {
+		t.Fatalf("unexpected enabled-skill prompt: %q", prompt)
+	}
+
+	invalid := []string{
+		`[{"path":"../secret/SKILL.md","content":"---\nname: secret\ndescription: x\n---\nx","enabled":true}]`,
+		`[{"path":"skills/key/SKILL.md","content":"---\nname: key\ndescription: x\n---\nAPI key: abc123","enabled":true}]`,
+		`[{"path":"skills/a/SKILL.md","content":"---\nname: a\ndescription: x\n---\nx","enabled":true},{"path":"skills/a/SKILL.md","content":"---\nname: a\ndescription: y\n---\ny","enabled":true}]`,
+	}
+	for _, value := range invalid {
+		if _, err := NormalizeAssistantSkillFiles(value); err == nil {
+			t.Fatalf("expected invalid skill file payload to be rejected: %s", value)
 		}
 	}
 }

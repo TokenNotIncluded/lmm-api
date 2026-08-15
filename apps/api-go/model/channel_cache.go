@@ -193,10 +193,10 @@ func GetRandomSatisfiedChannel(group string, model string, retry int, requestPat
 // selection. Exclusions are used after an upstream failure so a retry cannot
 // immediately select the same unhealthy/capability-mismatched channel. The
 // caller owns the map and it is never persisted to the channel cache.
-func GetRandomSatisfiedChannelExcluding(group string, model string, retry int, requestPath string, excluded map[int]struct{}) (*Channel, error) {
+func GetRandomSatisfiedChannelExcluding(group string, model string, retry int, requestPath string, excluded map[int]struct{}, preferred ...[]int) (*Channel, error) {
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		return GetChannelExcluding(group, model, retry, requestPath, excluded)
+		return GetChannelExcluding(group, model, retry, requestPath, excluded, preferred...)
 	}
 
 	channelSyncLock.RLock()
@@ -274,6 +274,15 @@ func GetRandomSatisfiedChannelExcluding(group string, model string, retry int, r
 	}
 	if targetCount == 0 {
 		return nil, fmt.Errorf("no channel found, group: %s, model: %s, priority: %d", group, model, targetPriority)
+	}
+	if len(preferred) > 0 {
+		for _, preferredID := range preferred[0] {
+			for _, channelID := range channels {
+				if channelID == preferredID && channelsIDM[channelID].GetPriority() == targetPriority {
+					return cloneChannel(channelsIDM[channelID]), nil
+				}
+			}
+		}
 	}
 
 	// smoothing factor and adjustment

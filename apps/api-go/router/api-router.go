@@ -462,6 +462,35 @@ func SetApiRouter(router *gin.Engine) {
 			openSourceBountyRoute.POST("/challenges/:challenge_id/rate-owner", controller.RateOpenSourceBountyOwner)
 			openSourceBountyRoute.POST("/challenges/:challenge_id/disputes", middleware.CriticalRateLimit(), controller.OpenOpenSourceBountyDispute)
 		}
+
+		publicRelayPublicRoute := openSourceBountyApiRouter.Group("/public-relays")
+		publicRelayPublicRoute.Use(middleware.TryUserAuth())
+		{
+			publicRelayPublicRoute.GET("", controller.ListPublicRelayContributions)
+			publicRelayPublicRoute.GET("/config", controller.GetPublicRelayConfig)
+			publicRelayPublicRoute.GET("/:id/reviews", controller.ListPublicRelayReviews)
+		}
+		publicRelayUserRoute := openSourceBountyApiRouter.Group("/public-relays")
+		publicRelayUserRoute.Use(middleware.UserAuth())
+		{
+			publicRelayUserRoute.POST("", middleware.CriticalRateLimit(), middleware.RequestBodyLimit(16<<10), controller.CreatePublicRelayContribution)
+			publicRelayUserRoute.GET("/mine", controller.ListMyPublicRelayContributions)
+			publicRelayUserRoute.GET("/routing", controller.GetPublicRelayRouting)
+			publicRelayUserRoute.PUT("/routing", middleware.CriticalRateLimit(), middleware.RequestBodyLimit(8<<10), controller.UpdatePublicRelayRouting)
+			publicRelayUserRoute.POST("/:id/report", middleware.CriticalRateLimit(), middleware.RequestBodyLimit(8<<10), controller.ReportPublicRelayContribution)
+			publicRelayUserRoute.POST("/:id/review", middleware.CriticalRateLimit(), middleware.RequestBodyLimit(8<<10), controller.RatePublicRelay)
+			publicRelayUserRoute.POST("/:id/tip", middleware.CriticalRateLimit(), middleware.RequestBodyLimit(4<<10), controller.TipPublicRelay)
+			publicRelayUserRoute.POST("/:id/withdraw", middleware.CriticalRateLimit(), middleware.RequestBodyLimit(4<<10), controller.WithdrawPublicRelayContributionReward)
+		}
+		publicRelayAdminRoute := openSourceBountyApiRouter.Group("/public-relays/admin")
+		publicRelayAdminRoute.Use(middleware.AdminAuth())
+		{
+			publicRelayAdminRoute.GET("", controller.ListAdminPublicRelayContributions)
+			publicRelayAdminRoute.POST("/:id/review", middleware.CriticalRateLimit(), middleware.RequestBodyLimit(8<<10), controller.ReviewAdminPublicRelayContribution)
+			publicRelayAdminRoute.POST("/:id/link-channel/:channel_id", middleware.CriticalRateLimit(), controller.LinkAdminPublicRelayChannel)
+			publicRelayAdminRoute.GET("/reports", controller.ListAdminPublicRelayReports)
+			publicRelayAdminRoute.POST("/reports/:id/review", middleware.CriticalRateLimit(), middleware.RequestBodyLimit(8<<10), controller.ReviewAdminPublicRelayReport)
+		}
 		logRoute := apiRouter.Group("/log")
 		logRoute.GET("/", middleware.AdminAuth(), controller.GetAllLogs)
 		logRoute.GET("/stat", middleware.AdminAuth(), controller.GetLogsStat)

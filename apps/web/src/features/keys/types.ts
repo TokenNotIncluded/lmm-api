@@ -94,6 +94,7 @@ export interface ApiKeyFormData {
   group: string
   auto_groups: string[]
   cross_group_retry: boolean
+  group_warning_confirmations?: number
 }
 
 export interface TokenAutoGroupsConfig {

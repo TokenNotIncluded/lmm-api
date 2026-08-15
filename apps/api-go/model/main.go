@@ -348,6 +348,7 @@ func mainMigrationModels() []interface{} {
 		&ViolationFeeState{}, &ViolationFeeRecord{}, &ViolationFeeAppeal{},
 		&FinanceLedgerEntry{}, &FinancePaymentMethod{},
 		&ReleaseNote{}, &ReleaseNoteRead{}, &UnifiedTodoRead{}, &L1OnboardingTodo{},
+		&PublicRelayContribution{}, &PublicRelayReport{}, &PublicRelayTip{}, &PublicRelayReview{}, &PublicRelayPreference{},
 	}
 }
 
@@ -474,6 +475,11 @@ func migrateDBFast() error {
 		{&ReleaseNoteRead{}, "ReleaseNoteRead"},
 		{&UnifiedTodoRead{}, "UnifiedTodoRead"},
 		{&L1OnboardingTodo{}, "L1OnboardingTodo"},
+		{&PublicRelayContribution{}, "PublicRelayContribution"},
+		{&PublicRelayReport{}, "PublicRelayReport"},
+		{&PublicRelayTip{}, "PublicRelayTip"},
+		{&PublicRelayReview{}, "PublicRelayReview"},
+		{&PublicRelayPreference{}, "PublicRelayPreference"},
 	}
 	// 动态计算migration数量，确保errChan缓冲区足够大
 	errChan := make(chan error, len(migrations))

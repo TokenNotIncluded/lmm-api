@@ -134,6 +134,7 @@ const createGroupSchema = (t: Translate) =>
     MaxTokenAutoGroups: positiveIntegerSchema(t('Enter a positive integer')),
     DefaultUseAutoGroup: z.boolean(),
     GroupSpecialUsableGroup: createJsonStringField(t),
+    GroupWarnings: createJsonStringField(t),
   })
 
 type ModelFormValues = z.infer<ReturnType<typeof createModelSchema>>
@@ -211,6 +212,7 @@ export function RatioSettingsCard({
     GroupSpecialUsableGroup: normalizeJsonString(
       groupDefaults.GroupSpecialUsableGroup
     ),
+    GroupWarnings: normalizeJsonString(groupDefaults.GroupWarnings),
   })
   const modelSchema = useMemo(() => createModelSchema(t), [t])
   const groupSchema = useMemo(() => createGroupSchema(t), [t])
@@ -248,6 +250,7 @@ export function RatioSettingsCard({
       GroupSpecialUsableGroup: formatJsonForTextarea(
         groupDefaults.GroupSpecialUsableGroup
       ),
+      GroupWarnings: formatJsonForTextarea(groupDefaults.GroupWarnings),
     },
   })
 
@@ -298,6 +301,7 @@ export function RatioSettingsCard({
       GroupSpecialUsableGroup: normalizeJsonString(
         groupDefaults.GroupSpecialUsableGroup
       ),
+      GroupWarnings: normalizeJsonString(groupDefaults.GroupWarnings),
     }
 
     groupForm.reset({
@@ -311,6 +315,7 @@ export function RatioSettingsCard({
       GroupSpecialUsableGroup: formatJsonForTextarea(
         groupDefaults.GroupSpecialUsableGroup
       ),
+      GroupWarnings: formatJsonForTextarea(groupDefaults.GroupWarnings),
     })
   }, [groupDefaults, groupForm])
 
@@ -370,12 +375,14 @@ export function RatioSettingsCard({
         GroupSpecialUsableGroup: normalizeJsonString(
           values.GroupSpecialUsableGroup
         ),
+        GroupWarnings: normalizeJsonString(values.GroupWarnings),
       }
 
       // Map form field names to API keys (most are 1:1, except GroupSpecialUsableGroup)
       const apiKeyMap: Record<string, string> = {
         GroupSpecialUsableGroup:
           'group_ratio_setting.group_special_usable_group',
+        GroupWarnings: 'group_ratio_setting.group_warnings',
       }
 
       const updates = (

@@ -73,6 +73,7 @@ type GroupFormValues = {
   MaxTokenAutoGroups: number
   DefaultUseAutoGroup: boolean
   GroupSpecialUsableGroup: string
+  GroupWarnings: string
 }
 
 type GroupRatioFormProps = {
@@ -212,6 +213,32 @@ export const GroupRatioForm = memo(function GroupRatioForm({
               onChange={(value) =>
                 handleFieldChange('GroupSpecialUsableGroup', value)
               }
+            />
+
+            <FormField
+              control={form.control}
+              name='GroupWarnings'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Group warnings')}</FormLabel>
+                  <FormControl>
+                    <JsonCodeEditor
+                      value={field.value}
+                      onChange={field.onChange}
+                      name={field.name}
+                      onBlur={field.onBlur}
+                      textareaRef={field.ref}
+                      heightClassName='h-40 min-h-40 max-h-40'
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Configure per-group warnings as JSON. Each entry may set enabled, message, mode (modal, banner, or inline), and confirmations from 1 to 3. Modal is the default.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
             />
 
             <FormField
@@ -413,6 +440,32 @@ export const GroupRatioForm = memo(function GroupRatioForm({
                   <FormDescription>
                     {t(
                       'Nested JSON defining per-group rules for adding (+:), removing (-:), or appending usable groups.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='GroupWarnings'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Group warnings')}</FormLabel>
+                  <FormControl>
+                    <JsonCodeEditor
+                      value={field.value}
+                      onChange={field.onChange}
+                      name={field.name}
+                      onBlur={field.onBlur}
+                      textareaRef={field.ref}
+                      heightClassName='h-40 min-h-40 max-h-40'
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Configure per-group warnings and acknowledgement count (1–3). Use modal for the most prominent warning.'
                     )}
                   </FormDescription>
                   <FormMessage />

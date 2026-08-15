@@ -35,6 +35,7 @@ export const assistantSettingsSchema = z.object({
   AssistantSearchAPIKey: z.string().max(512),
   AssistantSearchMCPTool: z.string().max(128),
   AssistantSkills: z.string().max(12000),
+  AssistantSkillFiles: z.string().max(400000),
   AssistantReviewEnabled: z.boolean(),
   AssistantReviewWindowDays: z.number().int().min(1).max(90),
   AssistantReviewIntervalHours: z.number().int().min(1).max(168),

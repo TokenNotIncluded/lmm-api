@@ -302,6 +302,7 @@ export type ContentSettings = {
   AssistantSearchAPIKey: string
   AssistantSearchMCPTool: string
   AssistantSkills: string
+  AssistantSkillFiles: string
   AssistantReviewEnabled: boolean
   AssistantReviewWindowDays: number
   AssistantReviewIntervalHours: number
@@ -363,6 +364,7 @@ export type ModelSettings = {
   MaxTokenAutoGroups: number
   DefaultUseAutoGroup: boolean
   'group_ratio_setting.group_special_usable_group': string
+  'group_ratio_setting.group_warnings': string
   RetryTimes: number
   ChannelDisableThreshold: string
   AutomaticDisableChannelEnabled: boolean
@@ -419,6 +421,7 @@ export type BillingSettings = {
   MaxTokenAutoGroups: number
   DefaultUseAutoGroup: boolean
   'group_ratio_setting.group_special_usable_group': string
+  'group_ratio_setting.group_warnings': string
   PayAddress: string
   EpayId: string
   EpayKey: string

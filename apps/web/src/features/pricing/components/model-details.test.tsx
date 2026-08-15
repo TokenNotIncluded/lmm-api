@@ -1,0 +1,169 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+*/
+import assert from 'node:assert/strict'
+import { after, afterEach, describe, test } from 'node:test'
+
+import { Window } from 'happy-dom'
+
+const domWindow = new Window({ url: 'https://console.example.test/pricing' })
+domWindow.document.write(
+  '<!doctype html><html><head></head><body></body></html>'
+)
+Object.defineProperty(domWindow.document, 'compatMode', {
+  configurable: true,
+  value: 'CSS1Compat',
+})
+for (const key of [
+  'window',
+  'document',
+  'navigator',
+  'history',
+  'location',
+  'HTMLElement',
+  'HTMLButtonElement',
+  'HTMLInputElement',
+  'SVGElement',
+  'customElements',
+  'Node',
+  'Element',
+  'Event',
+  'MouseEvent',
+  'PointerEvent',
+  'FocusEvent',
+  'CustomEvent',
+  'MutationObserver',
+  'ResizeObserver',
+  'requestAnimationFrame',
+  'cancelAnimationFrame',
+  'getComputedStyle',
+  'scrollTo',
+] as const) {
+  Object.defineProperty(globalThis, key, {
+    configurable: true,
+    value: domWindow[key],
+  })
+}
+Object.defineProperty(globalThis, 'matchMedia', {
+  configurable: true,
+  value: (media: string) => ({
+    matches: false,
+    media,
+    onchange: null,
+    addEventListener() {},
+    removeEventListener() {},
+    addListener() {},
+    removeListener() {},
+    dispatchEvent() {
+      return false
+    },
+  }),
+})
+
+const { act } = await import('react')
+const { createRoot } = await import('react-dom/client')
+const { QueryClient, QueryClientProvider } =
+  await import('@tanstack/react-query')
+const { createInstance } = await import('i18next')
+const { I18nextProvider, initReactI18next } = await import('react-i18next')
+const { api } = await import('@/lib/api')
+const { ModelDetailsContent } = await import('./model-details')
+
+const originalGet = api.get
+const reactTestGlobals = globalThis as typeof globalThis & {
+  IS_REACT_ACT_ENVIRONMENT?: boolean
+}
+reactTestGlobals.IS_REACT_ACT_ENVIRONMENT = true
+
+const i18n = createInstance()
+await i18n.use(initReactI18next).init({
+  lng: 'en',
+  resources: { en: { translation: {} } },
+})
+
+async function flushEffects() {
+  await new Promise((resolve) => setTimeout(resolve, 20))
+}
+
+async function renderModelDetails() {
+  api.get = (async (url: string) => {
+    assert.equal(url, '/api/perf-metrics')
+    return { data: { data: { groups: [] } } }
+  }) as typeof api.get
+
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  const container = document.createElement('div')
+  document.body.append(container)
+  const root = createRoot(container)
+  await act(async () => {
+    root.render(
+      <QueryClientProvider client={queryClient}>
+        <I18nextProvider i18n={i18n}>
+          <ModelDetailsContent
+            model={{
+              id: 1,
+              model_name: 'free-model',
+              quota_type: 0,
+              model_ratio: 1,
+              completion_ratio: 1,
+              enable_groups: ['free'],
+            }}
+            groupRatio={{ free: 0 }}
+            usableGroup={{ free: { desc: 'Free group', ratio: 0 } }}
+            endpointMap={{}}
+            autoGroups={[]}
+            priceRate={1}
+            usdExchangeRate={1}
+            tokenUnit='M'
+          />
+        </I18nextProvider>
+      </QueryClientProvider>
+    )
+    await flushEffects()
+  })
+  return { container, queryClient, root }
+}
+
+async function unmount(
+  rendered: Awaited<ReturnType<typeof renderModelDetails>>
+) {
+  await act(async () => rendered.root.unmount())
+  rendered.queryClient.clear()
+  rendered.container.remove()
+}
+
+afterEach(() => {
+  api.get = originalGet
+  document.body.replaceChildren()
+})
+
+after(() => domWindow.close())
+
+describe('ModelDetails group pricing', () => {
+  test('renders a configured zero group ratio as zero', async () => {
+    const rendered = await renderModelDetails()
+
+    assert.match(rendered.container.textContent ?? '', /0x/)
+    assert.doesNotMatch(
+      rendered.container.textContent ?? '',
+      /free-model[\s\S]*1x/i
+    )
+
+    await unmount(rendered)
+  })
+})

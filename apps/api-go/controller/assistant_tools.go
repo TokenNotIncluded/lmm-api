@@ -16,15 +16,17 @@ import (
 	"github.com/LIghtJUNction/api.lmm.best/service"
 	"github.com/LIghtJUNction/api.lmm.best/setting"
 	"github.com/LIghtJUNction/api.lmm.best/setting/operation_setting"
+	"github.com/LIghtJUNction/api.lmm.best/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 )
 
 type assistantCreateKeyInput struct {
-	Confirmed         bool   `json:"confirmed"`
-	ConfirmationToken string `json:"confirmation_token"`
-	Name              string `json:"name"`
-	Group             string `json:"group"`
-	ConversationID    int64  `json:"conversation_id"`
+	Confirmed                 bool   `json:"confirmed"`
+	ConfirmationToken         string `json:"confirmation_token"`
+	Name                      string `json:"name"`
+	Group                     string `json:"group"`
+	ConversationID            int64  `json:"conversation_id"`
+	GroupWarningConfirmations int    `json:"group_warning_confirmations"`
 }
 
 type assistantCreateKeyDraft struct {
@@ -36,10 +38,11 @@ type assistantCreateKeyDraft struct {
 const assistantKeyConfirmationTTL = 10 * time.Minute
 
 type assistantKeyGroupOption struct {
-	ID            string   `json:"id"`
-	Description   string   `json:"description"`
-	Automatic     bool     `json:"automatic"`
-	RoutingGroups []string `json:"routing_groups,omitempty"`
+	ID            string                      `json:"id"`
+	Description   string                      `json:"description"`
+	Automatic     bool                        `json:"automatic"`
+	RoutingGroups []string                    `json:"routing_groups,omitempty"`
+	Warning       *ratio_setting.GroupWarning `json:"warning,omitempty"`
 }
 
 type assistantHandoffInput struct {
@@ -145,9 +148,16 @@ func getAssistantKeyGroupOptions(userGroup string) []assistantKeyGroupOption {
 		})
 	}
 	for _, groupID := range groupIDs {
+		warning, hasWarning := ratio_setting.GetGroupWarning(groupID)
+		var warningPtr *ratio_setting.GroupWarning
+		if hasWarning {
+			warningCopy := warning
+			warningPtr = &warningCopy
+		}
 		options = append(options, assistantKeyGroupOption{
 			ID:          groupID,
 			Description: usableGroups[groupID],
+			Warning:     warningPtr,
 		})
 	}
 	return options
@@ -196,6 +206,21 @@ func executeAssistantCreateKeyRequestTool(c *gin.Context, userID int, input map[
 			"status":           "invalid_group",
 			"error":            "the selected group is not available for this account",
 			"available_groups": options,
+		}
+	}
+	if warning, hasWarning := ratio_setting.GetGroupWarning(group); hasWarning {
+		accepted, _ := input["accept_group_warning"].(bool)
+		if !accepted {
+			return map[string]any{
+				"ok":                     true,
+				"status":                 "group_warning_required",
+				"action":                 "create_key",
+				"requested_name":         name,
+				"requested_group":        group,
+				"warning":                warning,
+				"required_confirmations": warning.Confirmations,
+				"message":                "Show this group warning and ask the user to explicitly accept it before preparing key creation.",
+			}
 		}
 	}
 	sessionID := strings.TrimSpace(c.GetString("session_id"))
@@ -309,6 +334,10 @@ func CreateAssistantDefaultKey(c *gin.Context) {
 	}
 	if group == "auto" && len(service.GetUserAutoGroup(user.Group)) == 0 {
 		writeAssistantError(c, http.StatusUnprocessableEntity, "ASSISTANT_INVALID_GROUP", errors.New("automatic routing is not available for this account"))
+		return
+	}
+	if warning, hasWarning := ratio_setting.GetGroupWarning(group); hasWarning && input.GroupWarningConfirmations != warning.Confirmations {
+		writeAssistantError(c, http.StatusUnprocessableEntity, "GROUP_WARNING_CONFIRMATION_REQUIRED", errors.New(warning.Message))
 		return
 	}
 	if !requireAssistantConfirmation(c, input.Confirmed) {

@@ -20,7 +20,13 @@ type RetryParam struct {
 	// deliberately request-scoped so a transient 503 or a capability mismatch
 	// does not permanently disable a channel for unrelated users.
 	ExcludedChannelIDs map[int]struct{}
-	resetNextTry       bool
+	// PublicRelayOrder is request-scoped user preference for the administrator
+	// published pool. It never changes persisted channel priority.
+	PublicRelayOrder    []int
+	publicRelayLoaded   map[string]bool
+	publicRelayDisabled map[string]map[int]struct{}
+	publicRelayOrders   map[string][]int
+	resetNextTry        bool
 }
 
 func (p *RetryParam) GetRetry() int {
@@ -57,6 +63,46 @@ func (p *RetryParam) ExcludeChannel(channelID int) {
 		p.ExcludedChannelIDs = make(map[int]struct{})
 	}
 	p.ExcludedChannelIDs[channelID] = struct{}{}
+}
+
+func (p *RetryParam) publicRelaySelection(group string) (map[int]struct{}, []int) {
+	if p == nil || p.Ctx == nil || group == "" {
+		return nil, nil
+	}
+	if p.publicRelayLoaded == nil {
+		p.publicRelayLoaded = make(map[string]bool)
+		p.publicRelayDisabled = make(map[string]map[int]struct{})
+		p.publicRelayOrders = make(map[string][]int)
+	}
+	if !p.publicRelayLoaded[group] {
+		p.publicRelayLoaded[group] = true
+		userID := common.GetContextKeyInt(p.Ctx, constant.ContextKeyUserId)
+		if userID == 0 {
+			userID = p.Ctx.GetInt("id")
+		}
+		if userID > 0 {
+			disabled, ordered, err := model.PublicRelayDisabledChannels(userID, group)
+			if err == nil {
+				p.publicRelayDisabled[group] = disabled
+				p.publicRelayOrders[group] = ordered
+			}
+		}
+	}
+	return p.publicRelayDisabled[group], p.publicRelayOrders[group]
+}
+
+func mergeExcluded(base, extra map[int]struct{}) map[int]struct{} {
+	if len(extra) == 0 {
+		return base
+	}
+	merged := make(map[int]struct{}, len(base)+len(extra))
+	for id := range base {
+		merged[id] = struct{}{}
+	}
+	for id := range extra {
+		merged[id] = struct{}{}
+	}
+	return merged
 }
 
 // CacheGetRandomSatisfiedChannel tries to get a random channel that satisfies the requirements.
@@ -129,7 +175,8 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			}
 			logger.LogDebug(param.Ctx, "Auto selecting group: %s, priorityRetry: %d", autoGroup, priorityRetry)
 
-			channel, _ = model.GetRandomSatisfiedChannelExcluding(autoGroup, param.ModelName, priorityRetry, param.RequestPath, param.ExcludedChannelIDs)
+			disabled, ordered := param.publicRelaySelection(autoGroup)
+			channel, _ = model.GetRandomSatisfiedChannelExcluding(autoGroup, param.ModelName, priorityRetry, param.RequestPath, mergeExcluded(param.ExcludedChannelIDs, disabled), ordered)
 			if channel == nil {
 				// Current group has no available channel for this model, try next group
 				// 当前分组没有该模型的可用渠道，尝试下一个分组
@@ -167,7 +214,8 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			break
 		}
 	} else {
-		channel, err = model.GetRandomSatisfiedChannelExcluding(param.TokenGroup, param.ModelName, param.GetRetry(), param.RequestPath, param.ExcludedChannelIDs)
+		disabled, ordered := param.publicRelaySelection(param.TokenGroup)
+		channel, err = model.GetRandomSatisfiedChannelExcluding(param.TokenGroup, param.ModelName, param.GetRetry(), param.RequestPath, mergeExcluded(param.ExcludedChannelIDs, disabled), ordered)
 		if err != nil {
 			return nil, param.TokenGroup, err
 		}

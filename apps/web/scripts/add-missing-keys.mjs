@@ -87,6 +87,10 @@ const newKeys = {
     'User skills': 'User skills',
     'Security reviews': 'Security reviews',
     'assistant.security_review': 'Assistant security review',
+    'Group warning': 'Group warning',
+    'Confirmation {{current}} of {{total}}':
+      'Confirmation {{current}} of {{total}}',
+    'I understand, continue': 'I understand, continue',
   },
   zh: {
     'Cost control': '成本控制',
@@ -147,6 +151,9 @@ const newKeys = {
     'User skills': '用户技能',
     'Security reviews': '安全巡检',
     'assistant.security_review': '助手安全巡检',
+    'Group warning': '分组警告',
+    'Confirmation {{current}} of {{total}}': '第 {{current}}/{{total}} 次确认',
+    'I understand, continue': '我已了解，继续',
   },
   'zh-TW': {
     'Cost control': '成本控制',
@@ -1528,6 +1535,252 @@ for (const [locale, translations] of Object.entries(aiProfileTranslations)) {
   Object.assign(newKeys[locale], translations)
 }
 
+const channelMarketplaceTranslations = {
+  en: {
+    'Channel marketplace': 'Channel marketplace',
+    'Share a channel': 'Share a channel',
+    'All channels': 'All channels',
+    'My channels': 'My channels',
+    Review: 'Review',
+    'Public group': 'Public group',
+    'Public channel group': 'Public channel group',
+    'Every submission is reviewed before it is listed.':
+      'Every submission is reviewed before it is listed.',
+    'The contributor account email is shown publicly.':
+      'The contributor account email is shown publicly.',
+    'All approved shared channels use this administrator-configured group.':
+      'All approved shared channels use this administrator-configured group.',
+    'Submission sent for review': 'Submission sent for review',
+    'Report sent to administrators': 'Report sent to administrators',
+    'Report channel': 'Report channel',
+    Report: 'Report',
+    'Close report': 'Close report',
+    'Open reports': 'Open reports',
+    'Send report': 'Send report',
+    'Reason for reporting': 'Reason for reporting',
+    'Review note (required when rejecting)':
+      'Review note (required when rejecting)',
+    'Comma-separated model IDs': 'Comma-separated model IDs',
+    'No approved channels yet.': 'No approved channels yet.',
+    'You have not uploaded a channel yet.':
+      'You have not shared a channel yet.',
+    'No description': 'No description',
+    'The channel is assigned to the administrator-configured public group and is reviewed before publication. Do not submit credentials.':
+      'The channel is assigned to the administrator-configured public group and is reviewed before publication. Do not submit credentials.',
+    '{{count}} submissions waiting for review':
+      '{{count}} submissions waiting for review',
+    'Tell administrators what should be checked. The report will not immediately disable the channel.':
+      'Tell administrators what should be checked. The report will not immediately disable the channel.',
+  },
+  zh: {
+    'Channel marketplace': '渠道市场',
+    'Share a channel': '分享渠道',
+    'All channels': '所有渠道',
+    'My channels': '我的渠道',
+    Review: '审核',
+    'Public group': '公开分组',
+    'Public channel group': '公开渠道分组',
+    'Every submission is reviewed before it is listed.':
+      '所有提交都要审核通过后才会展示。',
+    'The contributor account email is shown publicly.':
+      '分享者的账号邮箱会公开显示。',
+    'All approved shared channels use this administrator-configured group.':
+      '所有通过审核的分享渠道都使用此管理员配置的分组。',
+    'Submission sent for review': '已提交审核',
+    'Report sent to administrators': '举报已发送给管理员',
+    'Report channel': '举报渠道',
+    Report: '举报',
+    'Close report': '关闭举报',
+    'Open reports': '待处理举报',
+    'Send report': '发送举报',
+    'Reason for reporting': '举报原因',
+    'Review note (required when rejecting)': '审核备注（拒绝时必填）',
+    'Comma-separated model IDs': '用逗号分隔模型 ID',
+    'No approved channels yet.': '暂时没有已审核渠道。',
+    'You have not uploaded a channel yet.': '你还没有分享渠道。',
+    'No description': '暂无说明',
+    'The channel is assigned to the administrator-configured public group and is reviewed before publication. Do not submit credentials.':
+      '渠道会被分配到管理员配置的公开分组，审核通过后才会发布。请勿提交凭据。',
+    '{{count}} submissions waiting for review': '{{count}} 个提交等待审核',
+    'Tell administrators what should be checked. The report will not immediately disable the channel.':
+      '请告诉管理员需要检查什么。举报不会立即停用渠道。',
+  },
+  'zh-TW': {
+    'Channel marketplace': '渠道市集',
+    'Share a channel': '分享渠道',
+    'All channels': '所有渠道',
+    'My channels': '我的渠道',
+    Review: '審核',
+    'Public group': '公開分組',
+    'Public channel group': '公開渠道分組',
+    'Every submission is reviewed before it is listed.':
+      '所有提交都會在審核通過後才會顯示。',
+    'The contributor account email is shown publicly.':
+      '分享者的帳戶電子郵件會公開顯示。',
+    'All approved shared channels use this administrator-configured group.':
+      '所有通過審核的分享渠道都使用管理員設定的分組。',
+    'Submission sent for review': '已提交審核',
+    'Report sent to administrators': '舉報已送給管理員',
+    'Report channel': '舉報渠道',
+    Report: '舉報',
+    'Close report': '關閉舉報',
+    'Open reports': '待處理舉報',
+    'Send report': '送出舉報',
+    'Reason for reporting': '舉報原因',
+    'Review note (required when rejecting)': '審核備註（拒絕時必填）',
+    'Comma-separated model IDs': '以逗號分隔模型 ID',
+    'No approved channels yet.': '目前沒有已審核渠道。',
+    'You have not uploaded a channel yet.': '你尚未分享渠道。',
+    'No description': '暫無說明',
+    'The channel is assigned to the administrator-configured public group and is reviewed before publication. Do not submit credentials.':
+      '渠道會被分配至管理員設定的公開分組，審核通過後才會發布。請勿提交憑證。',
+    '{{count}} submissions waiting for review': '{{count}} 個提交等待審核',
+    'Tell administrators what should be checked. The report will not immediately disable the channel.':
+      '請告訴管理員需要檢查什麼。舉報不會立即停用渠道。',
+  },
+  fr: {
+    'Channel marketplace': 'Marché des canaux',
+    'Share a channel': 'Partager un canal',
+    'All channels': 'Tous les canaux',
+    'My channels': 'Mes canaux',
+    Review: 'Révision',
+    'Public group': 'Groupe public',
+    'Public channel group': 'Groupe de canaux publics',
+    'Every submission is reviewed before it is listed.':
+      'Chaque soumission est vérifiée avant sa publication.',
+    'The contributor account email is shown publicly.':
+      'L’adresse e-mail du contributeur est affichée publiquement.',
+    'All approved shared channels use this administrator-configured group.':
+      'Tous les canaux partagés approuvés utilisent ce groupe configuré par l’administrateur.',
+    'Submission sent for review': 'Soumission envoyée pour révision',
+    'Report sent to administrators': 'Signalement envoyé aux administrateurs',
+    'Report channel': 'Signaler un canal',
+    Report: 'Signaler',
+    'Close report': 'Fermer le signalement',
+    'Open reports': 'Signalements ouverts',
+    'Send report': 'Envoyer le signalement',
+    'Reason for reporting': 'Motif du signalement',
+    'Review note (required when rejecting)':
+      'Note de révision (obligatoire en cas de refus)',
+    'Comma-separated model IDs':
+      'Identifiants de modèles séparés par des virgules',
+    'No approved channels yet.': 'Aucun canal approuvé pour le moment.',
+    'You have not uploaded a channel yet.':
+      'Vous n’avez pas encore partagé de canal.',
+    'No description': 'Aucune description',
+    'The channel is assigned to the administrator-configured public group and is reviewed before publication. Do not submit credentials.':
+      'Le canal utilise le groupe public configuré par l’administrateur et est vérifié avant publication. Ne fournissez pas d’identifiants.',
+    '{{count}} submissions waiting for review':
+      '{{count}} soumissions en attente de révision',
+    'Tell administrators what should be checked. The report will not immediately disable the channel.':
+      'Indiquez aux administrateurs ce qui doit être vérifié. Le signalement ne désactivera pas immédiatement le canal.',
+  },
+  ja: {
+    'Channel marketplace': 'チャンネルマーケット',
+    'Share a channel': 'チャンネルを共有',
+    'All channels': 'すべてのチャンネル',
+    'My channels': '自分のチャンネル',
+    Review: '審査',
+    'Public group': '公開グループ',
+    'Public channel group': '公開チャンネルグループ',
+    'Every submission is reviewed before it is listed.':
+      'すべての投稿は審査後に掲載されます。',
+    'The contributor account email is shown publicly.':
+      '共有者のアカウントメールアドレスは公開表示されます。',
+    'All approved shared channels use this administrator-configured group.':
+      '承認された共有チャンネルはすべて管理者が設定したグループを使用します。',
+    'Submission sent for review': '審査に送信しました',
+    'Report sent to administrators': '管理者に報告しました',
+    'Report channel': 'チャンネルを報告',
+    Report: '報告',
+    'Close report': '報告を閉じる',
+    'Open reports': '未処理の報告',
+    'Send report': '報告を送信',
+    'Reason for reporting': '報告理由',
+    'Review note (required when rejecting)': '審査メモ（却下時は必須）',
+    'Comma-separated model IDs': 'モデル ID をカンマで区切って入力',
+    'No approved channels yet.': '承認済みのチャンネルはまだありません。',
+    'You have not uploaded a channel yet.':
+      'まだチャンネルを共有していません。',
+    'No description': '説明なし',
+    'The channel is assigned to the administrator-configured public group and is reviewed before publication. Do not submit credentials.':
+      'チャンネルは管理者設定の公開グループに割り当てられ、掲載前に審査されます。認証情報は送信しないでください。',
+    '{{count}} submissions waiting for review':
+      '{{count}} 件の投稿が審査待ちです',
+    'Tell administrators what should be checked. The report will not immediately disable the channel.':
+      '確認してほしい点を管理者に伝えてください。報告しても直ちにチャンネルは無効になりません。',
+  },
+  ru: {
+    'Channel marketplace': 'Каталог каналов',
+    'Share a channel': 'Поделиться каналом',
+    'All channels': 'Все каналы',
+    'My channels': 'Мои каналы',
+    Review: 'Проверка',
+    'Public group': 'Публичная группа',
+    'Public channel group': 'Группа публичных каналов',
+    'Every submission is reviewed before it is listed.':
+      'Каждая заявка проверяется перед публикацией.',
+    'The contributor account email is shown publicly.':
+      'Электронная почта автора отображается публично.',
+    'All approved shared channels use this administrator-configured group.':
+      'Все одобренные каналы используют группу, настроенную администратором.',
+    'Submission sent for review': 'Заявка отправлена на проверку',
+    'Report sent to administrators': 'Жалоба отправлена администраторам',
+    'Report channel': 'Пожаловаться на канал',
+    Report: 'Пожаловаться',
+    'Close report': 'Закрыть жалобу',
+    'Open reports': 'Открытые жалобы',
+    'Send report': 'Отправить жалобу',
+    'Reason for reporting': 'Причина жалобы',
+    'Review note (required when rejecting)':
+      'Заметка проверки (обязательна при отклонении)',
+    'Comma-separated model IDs': 'Идентификаторы моделей через запятую',
+    'No approved channels yet.': 'Одобренных каналов пока нет.',
+    'You have not uploaded a channel yet.': 'Вы ещё не поделились каналом.',
+    'No description': 'Без описания',
+    'The channel is assigned to the administrator-configured public group and is reviewed before publication. Do not submit credentials.':
+      'Канал получает публичную группу, настроенную администратором, и проверяется перед публикацией. Не отправляйте учётные данные.',
+    '{{count}} submissions waiting for review': 'Заявок на проверке: {{count}}',
+    'Tell administrators what should be checked. The report will not immediately disable the channel.':
+      'Укажите администраторам, что нужно проверить. Жалоба не отключит канал немедленно.',
+  },
+  vi: {
+    'Channel marketplace': 'Chợ kênh',
+    'Share a channel': 'Chia sẻ kênh',
+    'All channels': 'Tất cả kênh',
+    'My channels': 'Kênh của tôi',
+    Review: 'Xét duyệt',
+    'Public group': 'Nhóm công khai',
+    'Public channel group': 'Nhóm kênh công khai',
+    'Every submission is reviewed before it is listed.':
+      'Mọi đề xuất đều được xét duyệt trước khi hiển thị.',
+    'The contributor account email is shown publicly.':
+      'Email tài khoản của người chia sẻ sẽ được hiển thị công khai.',
+    'All approved shared channels use this administrator-configured group.':
+      'Mọi kênh được duyệt đều dùng nhóm do quản trị viên cấu hình.',
+    'Submission sent for review': 'Đã gửi đề xuất để xét duyệt',
+    'Report sent to administrators': 'Đã gửi báo cáo cho quản trị viên',
+    'Report channel': 'Báo cáo kênh',
+    Report: 'Báo cáo',
+    'Close report': 'Đóng báo cáo',
+    'Open reports': 'Báo cáo đang mở',
+    'Send report': 'Gửi báo cáo',
+    'Reason for reporting': 'Lý do báo cáo',
+    'Review note (required when rejecting)':
+      'Ghi chú xét duyệt (bắt buộc khi từ chối)',
+    'Comma-separated model IDs': 'ID model, phân tách bằng dấu phẩy',
+    'No approved channels yet.': 'Chưa có kênh nào được duyệt.',
+    'You have not uploaded a channel yet.': 'Bạn chưa chia sẻ kênh nào.',
+    'No description': 'Không có mô tả',
+    'The channel is assigned to the administrator-configured public group and is reviewed before publication. Do not submit credentials.':
+      'Kênh được gán vào nhóm công khai do quản trị viên cấu hình và được xét duyệt trước khi đăng. Không gửi thông tin xác thực.',
+    '{{count}} submissions waiting for review':
+      '{{count}} đề xuất đang chờ xét duyệt',
+    'Tell administrators what should be checked. The report will not immediately disable the channel.':
+      'Cho quản trị viên biết cần kiểm tra điều gì. Báo cáo sẽ không vô hiệu hóa kênh ngay lập tức.',
+  },
+}
+
 const assistantAndSecurityTranslations = {
   en: {
     'Sensitive details are hidden until confirmation and remain visible only to you.':
@@ -1720,6 +1973,227 @@ const assistantAndSecurityTranslations = {
 
 for (const [locale, translations] of Object.entries(
   assistantAndSecurityTranslations
+)) {
+  Object.assign(newKeys[locale], translations)
+}
+
+for (const [locale, translations] of Object.entries(
+  channelMarketplaceTranslations
+)) {
+  Object.assign(newKeys[locale], translations)
+}
+
+// Routing/review strings are kept in one small shared vocabulary so every
+// locale gets a complete key set even when a new marketplace control ships.
+// The Chinese copy is overridden below; other locales intentionally fall back
+// to the stable English label until a native translation is supplied.
+const channelRoutingFallback = {
+  'Channel routing': 'Channel routing',
+  'Configure your own public pool. It affects only your requests; administrator routing priority remains unchanged.':
+    'Configure your own public pool. It affects only your requests; administrator routing priority remains unchanged.',
+  'Save routing': 'Save routing',
+  Disabled: 'Disabled',
+  Enabled: 'Enabled',
+  'Move up': 'Move up',
+  'Move down': 'Move down',
+  'No linked public channels yet.': 'No linked public channels yet.',
+  'Top rated': 'Top rated',
+  'Recently updated': 'Recently updated',
+  'Most models': 'Most models',
+  'No models listed': 'No models listed',
+  'Review channel': 'Review channel',
+  Rating: 'Rating',
+  'Write a comment (optional)': 'Write a comment (optional)',
+  'Recent comments': 'Recent comments',
+  'No reviews yet.': 'No reviews yet.',
+  'Submit review': 'Submit review',
+  'Review submitted': 'Review submitted',
+  'Routing preferences saved': 'Routing preferences saved',
+  'Tip contributor': 'Tip contributor',
+  'Use your balance to thank this contributor. Tips are transferred immediately and cannot be reversed.':
+    'Use your balance to thank this contributor. Tips are transferred immediately and cannot be reversed.',
+  'Tip amount': 'Tip amount',
+  'Custom tip amount': 'Custom tip amount',
+  'Message (optional)': 'Message (optional)',
+  'Leave a short thank-you message': 'Leave a short thank-you message',
+  'Send tip': 'Send tip',
+  'Tip sent': 'Tip sent',
+  Tips: 'Tips',
+  'Withdraw tips': 'Withdraw tips',
+  'Tips withdrawn': 'Tips withdrawn',
+  'Move available tips into your balance. Choose the group you want to use for future requests.':
+    'Move available tips into your balance. Choose the group you want to use for future requests.',
+  'Target group': 'Target group',
+  'Select a group': 'Select a group',
+  Withdraw: 'Withdraw',
+  'Group warning': 'Group warning',
+  'Confirmation {{current}} of {{total}}':
+    'Confirmation {{current}} of {{total}}',
+  'I understand, continue': 'I understand, continue',
+}
+for (const locale of Object.keys(newKeys)) {
+  Object.assign(newKeys[locale], channelRoutingFallback)
+}
+Object.assign(newKeys.zh, {
+  'Channel routing': '渠道路由',
+  'Configure your own public pool. It affects only your requests; administrator routing priority remains unchanged.':
+    '配置你自己的公开渠道池，只影响你的请求，不会改变管理员设置的全局路由优先级。',
+  'Save routing': '保存路由',
+  Disabled: '已禁用',
+  Enabled: '已启用',
+  'Move up': '上移',
+  'Move down': '下移',
+  'No linked public channels yet.': '还没有已关联的公开渠道。',
+  'Top rated': '评分最高',
+  'Recently updated': '最近更新',
+  'Most models': '模型最多',
+  'No models listed': '未列出模型',
+  'Review channel': '评价渠道',
+  Rating: '评分',
+  'Write a comment (optional)': '写下评论（可选）',
+  'Recent comments': '最近评论',
+  'No reviews yet.': '暂无评论。',
+  'Submit review': '提交评价',
+  'Review submitted': '评价已提交',
+  'Routing preferences saved': '路由偏好已保存',
+  'Tip contributor': '打赏分享者',
+  'Use your balance to thank this contributor. Tips are transferred immediately and cannot be reversed.':
+    '使用你的余额感谢分享者。打赏会立即转账，且无法撤回。',
+  'Tip amount': '打赏金额',
+  'Custom tip amount': '自定义金额',
+  'Message (optional)': '留言（可选）',
+  'Leave a short thank-you message': '写一句感谢的话',
+  'Send tip': '发送打赏',
+  'Tip sent': '打赏已发送',
+  Tips: '打赏收入',
+  'Withdraw tips': '提取打赏',
+  'Tips withdrawn': '打赏已提取',
+  'Move available tips into your balance. Choose the group you want to use for future requests.':
+    '将可用打赏转入你的余额，并选择之后使用的分组。',
+  'Target group': '目标分组',
+  'Select a group': '选择分组',
+  Withdraw: '提取',
+  'Group warning': '分组警告',
+  'Confirmation {{current}} of {{total}}': '第 {{current}}/{{total}} 次确认',
+  'I understand, continue': '我已了解，继续',
+})
+
+const platformSkillTranslations = {
+  en: {
+    'Platform skill files': 'Platform skill files',
+    'These are bounded virtual files shared by the platform assistant. They never grant filesystem or tool permissions.':
+      'These are bounded virtual files shared by the platform assistant. They never grant filesystem or tool permissions.',
+    'Add file': 'Add file',
+    'No platform skill files yet.': 'No platform skill files yet.',
+    Off: 'Off',
+    'Skill file path': 'Skill file path',
+    'Delete skill file': 'Delete skill file',
+    'Skill file content': 'Skill file content',
+    'Use this platform skill': 'Use this platform skill',
+    'Maximum 32 files / 32000 characters total':
+      'Maximum 32 files / 32000 characters total',
+    'Add a file to edit a platform skill.':
+      'Add a file to edit a platform skill.',
+  },
+  zh: {
+    'Platform skill files': '平台技能文件',
+    'These are bounded virtual files shared by the platform assistant. They never grant filesystem or tool permissions.':
+      '这些是平台助手共享的受限虚拟文件，不会授予文件系统或工具权限。',
+    'Add file': '添加文件',
+    'No platform skill files yet.': '暂时没有平台技能文件。',
+    Off: '停用',
+    'Skill file path': '技能文件路径',
+    'Delete skill file': '删除技能文件',
+    'Skill file content': '技能文件内容',
+    'Use this platform skill': '启用此平台技能',
+    'Maximum 32 files / 32000 characters total':
+      '最多 32 个文件 / 总计 32000 个字符',
+    'Add a file to edit a platform skill.': '添加文件后即可编辑平台技能。',
+  },
+  'zh-TW': {
+    'Platform skill files': '平台技能檔案',
+    'These are bounded virtual files shared by the platform assistant. They never grant filesystem or tool permissions.':
+      '這些是平台助手共用的受限虛擬檔案，不會授予檔案系統或工具權限。',
+    'Add file': '新增檔案',
+    'No platform skill files yet.': '目前沒有平台技能檔案。',
+    Off: '停用',
+    'Skill file path': '技能檔案路徑',
+    'Delete skill file': '刪除技能檔案',
+    'Skill file content': '技能檔案內容',
+    'Use this platform skill': '啟用此平台技能',
+    'Maximum 32 files / 32000 characters total':
+      '最多 32 個檔案 / 共 32000 個字元',
+    'Add a file to edit a platform skill.': '新增檔案後即可編輯平台技能。',
+  },
+  fr: {
+    'Platform skill files': 'Fichiers de compétences de la plateforme',
+    'These are bounded virtual files shared by the platform assistant. They never grant filesystem or tool permissions.':
+      "Ces fichiers virtuels limités sont partagés par l'assistant de la plateforme. Ils n'accordent aucun accès aux fichiers ni aux outils.",
+    'Add file': 'Ajouter un fichier',
+    'No platform skill files yet.':
+      "Aucun fichier de compétence pour l'instant.",
+    Off: 'Désactivé',
+    'Skill file path': 'Chemin du fichier de compétence',
+    'Delete skill file': 'Supprimer le fichier de compétence',
+    'Skill file content': 'Contenu du fichier de compétence',
+    'Use this platform skill': 'Utiliser cette compétence',
+    'Maximum 32 files / 32000 characters total':
+      'Maximum 32 fichiers / 32000 caractères au total',
+    'Add a file to edit a platform skill.':
+      'Ajoutez un fichier pour modifier une compétence.',
+  },
+  ja: {
+    'Platform skill files': 'プラットフォームスキルファイル',
+    'These are bounded virtual files shared by the platform assistant. They never grant filesystem or tool permissions.':
+      'プラットフォーム助手が共有する上限付きの仮想ファイルです。ファイルシステムやツールの権限は付与しません。',
+    'Add file': 'ファイルを追加',
+    'No platform skill files yet.':
+      'プラットフォームスキルファイルはまだありません。',
+    Off: '無効',
+    'Skill file path': 'スキルファイルのパス',
+    'Delete skill file': 'スキルファイルを削除',
+    'Skill file content': 'スキルファイルの内容',
+    'Use this platform skill': 'このプラットフォームスキルを使用',
+    'Maximum 32 files / 32000 characters total':
+      '最大 32 ファイル / 合計 32000 文字',
+    'Add a file to edit a platform skill.':
+      'ファイルを追加するとスキルを編集できます。',
+  },
+  ru: {
+    'Platform skill files': 'Файлы навыков платформы',
+    'These are bounded virtual files shared by the platform assistant. They never grant filesystem or tool permissions.':
+      'Это ограниченные виртуальные файлы общего помощника платформы. Они не дают доступа к файлам или инструментам.',
+    'Add file': 'Добавить файл',
+    'No platform skill files yet.': 'Файлов навыков платформы пока нет.',
+    Off: 'Выкл.',
+    'Skill file path': 'Путь к файлу навыка',
+    'Delete skill file': 'Удалить файл навыка',
+    'Skill file content': 'Содержимое файла навыка',
+    'Use this platform skill': 'Использовать этот навык',
+    'Maximum 32 files / 32000 characters total':
+      'Не более 32 файлов / 32000 символов всего',
+    'Add a file to edit a platform skill.':
+      'Добавьте файл, чтобы изменить навык платформы.',
+  },
+  vi: {
+    'Platform skill files': 'Tệp kỹ năng nền tảng',
+    'These are bounded virtual files shared by the platform assistant. They never grant filesystem or tool permissions.':
+      'Đây là các tệp ảo có giới hạn được trợ lý nền tảng dùng chung. Chúng không cấp quyền tệp hoặc công cụ.',
+    'Add file': 'Thêm tệp',
+    'No platform skill files yet.': 'Chưa có tệp kỹ năng nền tảng.',
+    Off: 'Tắt',
+    'Skill file path': 'Đường dẫn tệp kỹ năng',
+    'Delete skill file': 'Xóa tệp kỹ năng',
+    'Skill file content': 'Nội dung tệp kỹ năng',
+    'Use this platform skill': 'Dùng kỹ năng nền tảng này',
+    'Maximum 32 files / 32000 characters total':
+      'Tối đa 32 tệp / tổng cộng 32000 ký tự',
+    'Add a file to edit a platform skill.':
+      'Thêm tệp để chỉnh sửa kỹ năng nền tảng.',
+  },
+}
+for (const [locale, translations] of Object.entries(
+  platformSkillTranslations
 )) {
   Object.assign(newKeys[locale], translations)
 }

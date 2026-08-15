@@ -76,6 +76,11 @@ export function useSidebarData(): SidebarData {
               icon: Compass,
             },
             {
+              title: t('Channel marketplace'),
+              url: '/public-relay',
+              icon: Radio,
+            },
+            {
               title: t('To-dos'),
               url: '/todos',
               icon: ListChecks,
@@ -96,6 +101,11 @@ export function useSidebarData(): SidebarData {
             title: t('Open-source bounties'),
             url: '/open-source-bounties',
             icon: Bug,
+          },
+          {
+            title: t('Channel marketplace'),
+            url: '/public-relay',
+            icon: Radio,
           },
           {
             title: t('Challenges'),

@@ -244,6 +244,15 @@ func UpdateOption(c *gin.Context) {
 			})
 			return
 		}
+	case "group_ratio_setting.group_warnings":
+		err = ratio_setting.CheckGroupWarnings(option.Value.(string))
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
 	case "gemini.safety_settings":
 		err = model_setting.ValidateGeminiSafetySettings(option.Value.(string))
 		if err != nil {

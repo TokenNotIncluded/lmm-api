@@ -580,6 +580,24 @@ func appendAssistantHistoryMessageTx(tx *gorm.DB, conversationID int64, role, co
 	return message, nil
 }
 
+// assistantHistoryContentBytesExpression keeps the SQL-side storage budget in
+// the same units as Go's len(string): UTF-8 bytes, not Unicode code points.
+// SQLite's LENGTH(text) counts characters, while PostgreSQL/MySQL expose an
+// explicit byte-length function.  The expression is static and selected from
+// the configured dialect; it is never built from user input.
+func assistantHistoryContentBytesExpression() string {
+	switch common.MainDatabaseType() {
+	case common.DatabaseTypePostgreSQL, common.DatabaseTypeMySQL:
+		return "OCTET_LENGTH(content)"
+	case common.DatabaseTypeSQLite:
+		return "LENGTH(CAST(content AS BLOB))"
+	case common.DatabaseTypeClickHouse:
+		return "length(content)"
+	default:
+		return "LENGTH(content)"
+	}
+}
+
 // trimAssistantHistoryTx keeps active conversations within a small, explicit
 // storage budget.  It runs inside the owner's transaction, so a concurrent
 // turn cannot observe or create an inconsistent sequence.  Only the oldest
@@ -600,7 +618,7 @@ func trimAssistantHistoryTx(tx *gorm.DB, conversationID int64) error {
 		Bytes int64 `gorm:"column:bytes"`
 	}
 	if err := tx.Model(&AssistantHistoryMessage{}).
-		Select("COALESCE(SUM(LENGTH(content)), 0) AS bytes").
+		Select("COALESCE(SUM("+assistantHistoryContentBytesExpression()+"), 0) AS bytes").
 		Where("conversation_id = ?", conversationID).
 		Scan(&totals).Error; err != nil {
 		return err

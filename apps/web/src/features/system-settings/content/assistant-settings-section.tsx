@@ -17,10 +17,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useEffect } from 'react'
+import { FileText, Plus, Trash2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 
+import { Button } from '@/components/ui/button'
 import {
   Form,
   FormControl,
@@ -59,6 +61,213 @@ import {
   assistantSettingsSchema,
   type AssistantSettingsFormValues,
 } from './assistant-settings-schema'
+
+type AssistantSkillFile = {
+  path: string
+  content: string
+  enabled: boolean
+}
+
+function parseSkillFiles(value: string): AssistantSkillFile[] {
+  try {
+    const parsed = JSON.parse(value) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .filter((item): item is AssistantSkillFile => {
+        if (!item || typeof item !== 'object') return false
+        const candidate = item as Record<string, unknown>
+        return (
+          typeof candidate.path === 'string' &&
+          typeof candidate.content === 'string' &&
+          typeof candidate.enabled === 'boolean'
+        )
+      })
+      .sort((left, right) => left.path.localeCompare(right.path))
+  } catch {
+    return []
+  }
+}
+
+function AssistantSkillFilesEditor(props: {
+  value: string
+  disabled: boolean
+  onChange: (value: string) => void
+}) {
+  const { t } = useTranslation()
+  const [selectedPath, setSelectedPath] = useState<string | null>(null)
+  const files = parseSkillFiles(props.value)
+  const selected = Math.max(
+    files.findIndex((file) => file.path === selectedPath),
+    0
+  )
+  const selectedFile = files[selected]
+  const filePaths = files.map((file) => file.path).join('\u0000')
+
+  useEffect(() => {
+    if (files.length === 0) {
+      setSelectedPath(null)
+      return
+    }
+    if (!selectedPath || !files.some((file) => file.path === selectedPath)) {
+      setSelectedPath(files[0].path)
+    }
+  }, [filePaths, files, selectedPath])
+
+  const updateFiles = (next: AssistantSkillFile[]) => {
+    props.onChange(
+      JSON.stringify(next.sort((a, b) => a.path.localeCompare(b.path)))
+    )
+  }
+
+  const addFile = () => {
+    const existing = new Set(files.map((file) => file.path))
+    let index = files.length + 1
+    let path = `skills/skill-${index}/SKILL.md`
+    while (existing.has(path)) {
+      index += 1
+      path = `skills/skill-${index}/SKILL.md`
+    }
+    updateFiles([
+      ...files,
+      {
+        path,
+        content: `---\nname: skill-${index}\ndescription: Describe one bounded workflow.\n---\n\n# New platform skill\n\nDescribe one bounded workflow here.`,
+        enabled: true,
+      },
+    ])
+    setSelectedPath(path)
+  }
+
+  const updateSelected = (changes: Partial<AssistantSkillFile>) => {
+    if (!selectedFile) return
+    updateFiles(
+      files.map((file, index) =>
+        index === selected ? { ...file, ...changes } : file
+      )
+    )
+  }
+
+  const removeSelected = () => {
+    if (!selectedFile) return
+    const next = files.filter((_, index) => index !== selected)
+    updateFiles(next)
+    setSelectedPath(next[Math.min(selected, next.length - 1)]?.path ?? null)
+  }
+
+  return (
+    <div className='space-y-3'>
+      <div className='flex items-start justify-between gap-3'>
+        <div>
+          <p className='text-sm font-medium'>{t('Platform skill files')}</p>
+          <p className='text-muted-foreground mt-1 text-sm'>
+            {t(
+              'These are bounded virtual files shared by the platform assistant. They never grant filesystem or tool permissions.'
+            )}
+          </p>
+        </div>
+        <Button
+          type='button'
+          variant='outline'
+          size='sm'
+          onClick={addFile}
+          disabled={props.disabled || files.length >= 32}
+        >
+          <Plus className='mr-1.5 h-4 w-4' />
+          {t('Add file')}
+        </Button>
+      </div>
+
+      <div className='border-border/60 grid min-h-64 overflow-hidden rounded-lg border md:grid-cols-[13rem_1fr]'>
+        <div className='bg-muted/20 border-border/60 space-y-1 border-b p-2 md:border-r md:border-b-0'>
+          {files.length === 0 ? (
+            <p className='text-muted-foreground px-2 py-5 text-sm'>
+              {t('No platform skill files yet.')}
+            </p>
+          ) : (
+            files.map((file, index) => (
+              <button
+                key={file.path}
+                type='button'
+                className={`flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors ${index === selected ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/50'}`}
+                onClick={() => setSelectedPath(file.path)}
+                disabled={props.disabled}
+              >
+                <FileText className='h-4 w-4 shrink-0' />
+                <span className='truncate'>
+                  {file.path.replace(/^skills\//, '')}
+                </span>
+                {!file.enabled && (
+                  <span className='text-muted-foreground ml-auto text-xs'>
+                    {t('Off')}
+                  </span>
+                )}
+              </button>
+            ))
+          )}
+        </div>
+
+        <div className='space-y-3 p-3'>
+          {selectedFile ? (
+            <>
+              <div className='flex items-center gap-2'>
+                <Input
+                  value={selectedFile.path}
+                  onChange={(event) =>
+                    updateSelected({ path: event.target.value })
+                  }
+                  disabled={props.disabled}
+                  aria-label={t('Skill file path')}
+                  autoComplete='off'
+                />
+                <Button
+                  type='button'
+                  variant='ghost'
+                  size='icon'
+                  onClick={removeSelected}
+                  disabled={props.disabled}
+                  aria-label={t('Delete skill file')}
+                >
+                  <Trash2 className='h-4 w-4' />
+                </Button>
+              </div>
+              <Textarea
+                value={selectedFile.content}
+                onChange={(event) =>
+                  updateSelected({ content: event.target.value })
+                }
+                disabled={props.disabled}
+                rows={9}
+                maxLength={12000}
+                className='font-mono text-sm'
+                aria-label={t('Skill file content')}
+              />
+              <div className='flex items-center justify-between gap-3'>
+                <label className='text-muted-foreground flex items-center gap-2 text-sm'>
+                  <input
+                    type='checkbox'
+                    checked={selectedFile.enabled}
+                    onChange={(event) =>
+                      updateSelected({ enabled: event.target.checked })
+                    }
+                    disabled={props.disabled}
+                  />
+                  {t('Use this platform skill')}
+                </label>
+                <span className='text-muted-foreground text-xs'>
+                  {t('Maximum 32 files / 32000 characters total')}
+                </span>
+              </div>
+            </>
+          ) : (
+            <p className='text-muted-foreground py-10 text-sm'>
+              {t('Add a file to edit a platform skill.')}
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
 
 export function AssistantSettingsSection(props: {
   defaultValues: AssistantSettingsFormValues
@@ -400,6 +609,23 @@ export function AssistantSettingsSection(props: {
                       'Give the agent reusable guidance for platform setup and support workflows.'
                     )}
                   </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='AssistantSkillFiles'
+              render={({ field }) => (
+                <FormItem>
+                  <FormControl>
+                    <AssistantSkillFilesEditor
+                      value={field.value}
+                      disabled={!enabled}
+                      onChange={field.onChange}
+                    />
+                  </FormControl>
                   <FormMessage />
                 </FormItem>
               )}

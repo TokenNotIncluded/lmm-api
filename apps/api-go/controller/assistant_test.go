@@ -1421,10 +1421,11 @@ func TestAssistantL0ModelToolReturnsRealPublicPreviewIDs(t *testing.T) {
 	previousPricing := getPricingCache
 	getPricingCache = func() []model.Pricing {
 		return []model.Pricing{
-			{ModelName: "claude-opus-5"},
-			{ModelName: "gpt-5.6-sol"},
-			{ModelName: "gemini-3-flash"},
-			{ModelName: "gpt-5.6-sol"},
+			{ModelName: "claude-opus-5", EnableGroup: []string{"default"}},
+			{ModelName: "gpt-5.6-sol", EnableGroup: []string{"default"}},
+			{ModelName: "gemini-3-flash", EnableGroup: []string{"all"}},
+			{ModelName: "private-vip", EnableGroup: []string{"vip"}},
+			{ModelName: "gpt-5.6-sol", EnableGroup: []string{"default"}},
 		}
 	}
 	t.Cleanup(func() { getPricingCache = previousPricing })
@@ -2571,4 +2572,22 @@ func TestAssistantPromptIsBuiltOncePerRequest(t *testing.T) {
 	}); allocations != 0 {
 		t.Fatalf("reused prompt allocations=%f, want 0", allocations)
 	}
+}
+
+func TestAssistantPlatformSkillFilesStaySeparateFromUserContext(t *testing.T) {
+	settings := setting.GetAssistantSettings()
+	settings.Skills = "legacy platform guidance"
+	settings.SkillFiles = []setting.AssistantSkillFile{{
+		Path: "skills/platform.md", Content: "Use the live catalog first.", Enabled: true,
+	}}
+	prompt := buildAssistantSystemPrompt(settings, assistantUserContext{
+		UserID: 42, ManualProfileEnabled: true, ManualProfileStrategy: "user-only response style",
+	})
+	assert.Contains(t, prompt, "Use the live catalog first.")
+	assert.NotContains(t, prompt, "legacy platform guidance")
+	assert.Contains(t, prompt, "user-only response style")
+
+	encoded, err := json.Marshal(assistantUserContext{UserID: 42, ManualProfileStrategy: "user-only response style"})
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), "Use the live catalog first.")
 }

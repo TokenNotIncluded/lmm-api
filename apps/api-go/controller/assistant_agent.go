@@ -399,10 +399,11 @@ func buildAssistantTools() []assistantOpenAIToolDefinition {
 			Type: "function",
 			Function: assistantOpenAIToolFunction{
 				Name:        "request_create_key",
-				Description: "Prepare creation of an API key. First call without a group to load the signed-in user's live group choices, then ask the user to choose one exact group. Only after that choice may you request explicit confirmation; never claim a key was created from this tool.",
+				Description: "Prepare creation of an API key. First call without a group to load the signed-in user's live group choices, then ask the user to choose one exact group. If that group has a configured warning, show it and set accept_group_warning=true only after the user explicitly accepts it. Only after that choice may you request explicit confirmation; never claim a key was created from this tool.",
 				Parameters: objectSchema(map[string]any{
-					"name":  map[string]any{"type": "string", "maxLength": 50},
-					"group": map[string]any{"type": "string", "maxLength": 64},
+					"name":                 map[string]any{"type": "string", "maxLength": 50},
+					"group":                map[string]any{"type": "string", "maxLength": 64},
+					"accept_group_warning": map[string]any{"type": "boolean"},
 				}, nil),
 			},
 		},

@@ -91,6 +91,7 @@ var assistantAdminConfigAllowlist = map[string]string{
 	"AssistantSearchURL":                            "Assistant search endpoint",
 	"AssistantSearchMCPTool":                        "Assistant MCP search tool name",
 	"AssistantSkills":                               "Assistant skills and playbooks",
+	"AssistantSkillFiles":                           "Administrator-managed platform skill files",
 	"AssistantReviewEnabled":                        "Enable automatic assistant review",
 	"AssistantReviewWindowDays":                     "Assistant review window in days",
 	"AssistantReviewIntervalHours":                  "Assistant review interval in hours",

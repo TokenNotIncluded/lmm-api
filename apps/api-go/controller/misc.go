@@ -60,15 +60,21 @@ func getPublicPreviewModelIDs() []string {
 	return getPublicCatalogModelIDs()
 }
 
-// getPublicCatalogModelIDs mirrors the live pricing catalog rather than the
-// small default-group preview. L0 users still cannot call these models, but
-// the assistant must not present a stale/truncated list when explaining the
-// catalog or helping choose a client model. An empty result is intentional:
-// callers must report that the live catalog is not ready instead of silently
-// substituting a potentially incomplete ability snapshot.
+// getPublicCatalogModelIDs mirrors the live public pricing catalog. The
+// assistant's L0 pricing tool intentionally exposes only the default-group
+// reference price, so models that are enabled exclusively in a private group
+// must not be advertised here: otherwise the assistant would list a model and
+// then be unable to quote its reference price. The all group is public too.
+// An empty result is intentional: callers must report that the live catalog is
+// not ready instead of silently substituting a potentially incomplete ability
+// snapshot.
 func getPublicCatalogModelIDs() []string {
 	modelIDs := make(map[string]struct{})
 	for _, pricing := range getPricingCache() {
+		if !common.StringsContains(pricing.EnableGroup, "default") &&
+			!common.StringsContains(pricing.EnableGroup, "all") {
+			continue
+		}
 		if name := strings.TrimSpace(pricing.ModelName); name != "" {
 			modelIDs[name] = struct{}{}
 		}

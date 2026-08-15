@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import {
   ArrowLeft01Icon,
+  ArrowRight01Icon,
   CheckmarkCircle02Icon,
   GitPullRequestIcon,
   LinkSquare02Icon,
@@ -169,8 +170,26 @@ export function ChallengeDetailPage(props: ChallengeDetailPageProps) {
     )
   } else if (user && !developerAccessGranted) {
     acceptanceAction = (
-      <div className='border-foreground border px-4 py-3 text-sm font-semibold'>
-        {t('L0 accounts can browse challenges in read-only mode.')}
+      <div className='border-foreground grid gap-3 border px-4 py-3'>
+        <p className='text-sm font-semibold'>
+          {t(
+            'L0 accounts can browse challenges and ask the AI assistant to request L1 access.'
+          )}
+        </p>
+        <Button
+          variant='outline'
+          size='sm'
+          className='w-full'
+          render={<Link to='/getting-started' />}
+        >
+          {t('Start with AI assistant')}
+          <HugeiconsIcon
+            icon={ArrowRight01Icon}
+            data-icon='inline-end'
+            strokeWidth={2}
+            aria-hidden='true'
+          />
+        </Button>
       </div>
     )
   } else if (user) {

@@ -382,7 +382,9 @@ func TestAssistantHistoryBoundsActiveConversationStorage(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	largeMessage := strings.Repeat("x", assistantHistoryMessageMaxRunes)
+	// Use a multibyte payload so the SQL-side byte budget is exercised rather
+	// than accidentally passing with a character count.
+	largeMessage := strings.Repeat("界", assistantHistoryMessageMaxRunes)
 	for turn := 0; turn < assistantHistoryConversationMaxMessages; turn += 2 {
 		require.NoError(t, RecordAssistantConversationTurn(
 			l0.Id,
@@ -399,7 +401,7 @@ func TestAssistantHistoryBoundsActiveConversationStorage(t *testing.T) {
 	assert.LessOrEqual(t, count, int64(assistantHistoryConversationMaxMessages))
 	var bytes int64
 	require.NoError(t, DB.Model(&AssistantHistoryMessage{}).
-		Select("COALESCE(SUM(LENGTH(content)), 0)").
+		Select("COALESCE(SUM("+assistantHistoryContentBytesExpression()+"), 0)").
 		Where("conversation_id = ?", conversation.Id).
 		Scan(&bytes).Error)
 	assert.LessOrEqual(t, bytes, int64(assistantHistoryConversationMaxBytes))

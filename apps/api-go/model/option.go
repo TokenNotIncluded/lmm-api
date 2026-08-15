@@ -143,6 +143,7 @@ func InitOptionMap() {
 	common.OptionMap[setting.AssistantSearchAPIKeyOptionKey] = assistantSettings.SearchAPIKey
 	common.OptionMap[setting.AssistantSearchMCPToolOptionKey] = assistantSettings.SearchMCPTool
 	common.OptionMap[setting.AssistantSkillsOptionKey] = assistantSettings.Skills
+	common.OptionMap[setting.AssistantSkillFilesOptionKey] = setting.AssistantSkillFilesJSON(assistantSettings.SkillFiles)
 	common.OptionMap[setting.AssistantReviewEnabledOptionKey] = strconv.FormatBool(assistantSettings.ReviewEnabled)
 	common.OptionMap[setting.AssistantReviewWindowDaysOptionKey] = strconv.Itoa(assistantSettings.ReviewWindowDays)
 	common.OptionMap[setting.AssistantReviewIntervalHoursOptionKey] = strconv.Itoa(assistantSettings.ReviewIntervalHours)
@@ -282,6 +283,16 @@ func validateOptionValue(key string, value string) error {
 	}
 	if key == "MaxTokenAutoGroups" {
 		return setting.ValidateMaxTokenAutoGroups(value)
+	}
+	if key == "public_relay_setting.group" {
+		group := strings.TrimSpace(value)
+		if group == "" || !ratio_setting.ContainsGroupRatio(group) {
+			return errors.New("public relay group must be an existing group")
+		}
+		return nil
+	}
+	if key == "group_ratio_setting.group_warnings" {
+		return ratio_setting.CheckGroupWarnings(value)
 	}
 	if key == operation_setting.ViolationFeeOptionKey+".policies" {
 		return operation_setting.ValidateViolationFeeSettingsJSON(`{"enabled":true,"policies":` + value + `}`)
@@ -677,6 +688,8 @@ func updateOptionMap(key string, value string) (err error) {
 		err = setting.UpdateAssistantSearchMCPTool(value)
 	case setting.AssistantSkillsOptionKey:
 		err = setting.UpdateAssistantSkills(value)
+	case setting.AssistantSkillFilesOptionKey:
+		err = setting.UpdateAssistantSkillFiles(value)
 	case setting.AssistantReviewWindowDaysOptionKey:
 		err = setting.UpdateAssistantReviewWindowDays(value)
 	case setting.AssistantReviewIntervalHoursOptionKey:
@@ -839,6 +852,8 @@ func updateOptionMap(key string, value string) (err error) {
 		err = ratio_setting.UpdateGroupRatioByJSONString(value)
 	case "GroupGroupRatio":
 		err = ratio_setting.UpdateGroupGroupRatioByJSONString(value)
+	case "group_ratio_setting.group_warnings":
+		err = ratio_setting.UpdateGroupWarningsByJSONString(value)
 	case "UserUsableGroups":
 		err = setting.UpdateUserUsableGroupsByJSONString(value)
 	case "CompletionRatio":

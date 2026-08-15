@@ -13,6 +13,7 @@ import (
 	"github.com/LIghtJUNction/api.lmm.best/service"
 	"github.com/LIghtJUNction/api.lmm.best/setting"
 	"github.com/LIghtJUNction/api.lmm.best/setting/operation_setting"
+	"github.com/LIghtJUNction/api.lmm.best/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -33,7 +34,8 @@ func (input *tokenAutoGroupsInput) UnmarshalJSON(data []byte) error {
 
 type tokenRequest struct {
 	model.Token
-	AutoGroups tokenAutoGroupsInput `json:"auto_groups"`
+	AutoGroups                tokenAutoGroupsInput `json:"auto_groups"`
+	GroupWarningConfirmations int                  `json:"group_warning_confirmations"`
 }
 
 type tokenResponse struct {
@@ -174,6 +176,25 @@ func GetTokenAutoGroups(c *gin.Context) {
 	})
 }
 
+func requireGroupWarningConfirmation(c *gin.Context, group string, confirmations int) bool {
+	warning, required := ratio_setting.GetGroupWarning(group)
+	if !required {
+		return true
+	}
+	if confirmations == warning.Confirmations {
+		return true
+	}
+	c.JSON(http.StatusUnprocessableEntity, gin.H{
+		"success":                false,
+		"code":                   "GROUP_WARNING_CONFIRMATION_REQUIRED",
+		"message":                warning.Message,
+		"warning":                warning,
+		"required_confirmations": warning.Confirmations,
+		"provided_confirmations": confirmations,
+	})
+	return false
+}
+
 func GetTokenKey(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	userId := c.GetInt("id")
@@ -304,6 +325,9 @@ func AddToken(c *gin.Context) {
 			return
 		}
 	} else {
+		if !requireGroupWarningConfirmation(c, token.Group, request.GroupWarningConfirmations) {
+			return
+		}
 		token.CrossGroupRetry = false
 		_ = token.SetAutoGroups(nil)
 	}
@@ -406,6 +430,9 @@ func UpdateToken(c *gin.Context) {
 		cleanToken.ModelLimits = token.ModelLimits
 		cleanToken.AllowIps = token.AllowIps
 		cleanToken.Group = token.Group
+		if !requireGroupWarningConfirmation(c, cleanToken.Group, request.GroupWarningConfirmations) {
+			return
+		}
 		cleanToken.CrossGroupRetry = token.CrossGroupRetry
 		if token.Group != "auto" {
 			cleanToken.CrossGroupRetry = false

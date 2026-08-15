@@ -48,6 +48,12 @@ export type ApiKeyGroupOption = {
   label: string
   desc?: string
   ratio?: number | string
+  warning?: {
+    enabled: boolean
+    message: string
+    mode: 'modal' | 'banner' | 'inline'
+    confirmations: number
+  }
 }
 
 type ApiKeyGroupComboboxProps = {

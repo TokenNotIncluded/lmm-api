@@ -35,6 +35,16 @@ import {
   sideDrawerSwitchItemClassName,
 } from '@/components/drawer-layout'
 import { MultiSelect } from '@/components/multi-select'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import {
   Collapsible,
@@ -169,6 +179,7 @@ export function ApiKeysMutateDrawer({
         label: key,
         desc: info.desc || key,
         ratio: info.ratio,
+        warning: info.warning,
       })),
     [groupsData]
   )
@@ -266,6 +277,16 @@ export function ApiKeysMutateDrawer({
     isUpdate && currentRow ? `update:${currentRow.id}` : 'create'
   const isFormInitialized = initializedTarget === formTarget
   const selectedGroup = form.watch('group')
+  const selectedGroupWarning = groups.find(
+    (item) =>
+      item.value.toLowerCase() === (selectedGroup || '').trim().toLowerCase()
+  )?.warning
+  const warningConfirmationsRequired = Math.min(
+    3,
+    Math.max(1, selectedGroupWarning?.confirmations || 1)
+  )
+  const [warningConfirmations, setWarningConfirmations] = useState(0)
+  const [warningOpen, setWarningOpen] = useState(false)
 
   // Correct group after groups load: if the form value is not in available groups, fall back
   useEffect(() => {
@@ -285,7 +306,21 @@ export function ApiKeysMutateDrawer({
     }
   }, [groups, form, selectedGroup])
 
-  const onSubmit = async (data: ApiKeyFormValues) => {
+  useEffect(() => {
+    setWarningConfirmations(0)
+    setWarningOpen(false)
+  }, [selectedGroup])
+
+  const saveApiKey = async (
+    data: ApiKeyFormValues,
+    confirmedWarningCount = warningConfirmations
+  ) => {
+    if (
+      selectedGroupWarning?.enabled &&
+      confirmedWarningCount !== warningConfirmationsRequired
+    ) {
+      return
+    }
     setIsSubmitting(true)
     try {
       const basePayload = transformFormDataToPayload(data)
@@ -294,6 +329,7 @@ export function ApiKeysMutateDrawer({
         const result = await updateApiKey({
           ...basePayload,
           id: currentRow.id,
+          group_warning_confirmations: confirmedWarningCount,
         })
         if (result.success) {
           toast.success(t(SUCCESS_MESSAGES.API_KEY_UPDATED))
@@ -310,6 +346,7 @@ export function ApiKeysMutateDrawer({
         for (let i = 0; i < count; i++) {
           const result = await createApiKey({
             ...basePayload,
+            group_warning_confirmations: confirmedWarningCount,
             name:
               i === 0 && data.name
                 ? data.name
@@ -340,8 +377,28 @@ export function ApiKeysMutateDrawer({
     }
   }
 
+  const onSubmit = async (data: ApiKeyFormValues) => {
+    if (
+      selectedGroupWarning?.enabled &&
+      warningConfirmations !== warningConfirmationsRequired
+    ) {
+      setWarningOpen(true)
+      return
+    }
+    await saveApiKey(data, warningConfirmations)
+  }
+
   const onInvalid: SubmitErrorHandler<ApiKeyFormValues> = () => {
     toast.error(t('Please fix the highlighted fields before saving'))
+  }
+
+  const confirmWarning = () => {
+    const next = warningConfirmations + 1
+    setWarningConfirmations(next)
+    if (next >= warningConfirmationsRequired) {
+      setWarningOpen(false)
+      void saveApiKey(form.getValues(), next)
+    }
   }
 
   const handleSetExpiry = (months: number, days: number, hours: number) => {
@@ -443,6 +500,44 @@ export function ApiKeysMutateDrawer({
                   </FormItem>
                 )}
               />
+
+              {selectedGroupWarning?.enabled &&
+              selectedGroupWarning.mode !== 'modal' &&
+              warningOpen ? (
+                <div
+                  role='alert'
+                  className={cn(
+                    'border-destructive/60 bg-destructive/10 text-destructive grid gap-3 rounded-lg border p-3 text-sm',
+                    selectedGroupWarning.mode === 'banner' &&
+                      'border-amber-500/70 bg-amber-500/10 text-amber-200'
+                  )}
+                >
+                  <p className='whitespace-pre-wrap'>
+                    {selectedGroupWarning.message}
+                  </p>
+                  <div className='flex flex-wrap items-center justify-between gap-2'>
+                    <span>
+                      {t('Confirmation {{current}} of {{total}}', {
+                        current: Math.min(
+                          warningConfirmations + 1,
+                          warningConfirmationsRequired
+                        ),
+                        total: warningConfirmationsRequired,
+                      })}
+                    </span>
+                    <Button
+                      type='button'
+                      size='sm'
+                      variant='outline'
+                      onClick={confirmWarning}
+                    >
+                      {warningConfirmations + 1 >= warningConfirmationsRequired
+                        ? t('I understand, continue')
+                        : t('Continue')}
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
 
               {selectedGroup === 'auto' && (
                 <FormField
@@ -767,6 +862,41 @@ export function ApiKeysMutateDrawer({
             {isSubmitting ? t('Saving...') : t('Save changes')}
           </Button>
         </SheetFooter>
+        <AlertDialog
+          open={warningOpen && selectedGroupWarning?.mode === 'modal'}
+          onOpenChange={setWarningOpen}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{t('Group warning')}</AlertDialogTitle>
+              <AlertDialogDescription className='whitespace-pre-wrap'>
+                {selectedGroupWarning?.message}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <p className='text-muted-foreground text-sm'>
+              {t('Confirmation {{current}} of {{total}}', {
+                current: Math.min(
+                  warningConfirmations + 1,
+                  warningConfirmationsRequired
+                ),
+                total: warningConfirmationsRequired,
+              })}
+            </p>
+            <AlertDialogFooter>
+              <AlertDialogCancel>{t('Cancel')}</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={(event) => {
+                  event.preventDefault()
+                  confirmWarning()
+                }}
+              >
+                {warningConfirmations + 1 >= warningConfirmationsRequired
+                  ? t('I understand, continue')
+                  : t('Continue')}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </SheetContent>
     </Sheet>
   )
