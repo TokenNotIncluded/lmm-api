@@ -937,6 +937,22 @@ func ListOwnedOpenSourceBounties(ownerUserId int) ([]OpenSourceBountyProjectView
 	return ListOwnedOpenSourceBountiesFiltered(ownerUserId, false)
 }
 
+// ListOwnedOpenSourceBountiesLimited is the bounded read used by the
+// assistant. The extra row lets the caller report truncation without
+// materializing an unbounded owner history.
+func ListOwnedOpenSourceBountiesLimited(ownerUserId int, limit int) ([]OpenSourceBountyProjectView, error) {
+	views := make([]OpenSourceBountyProjectView, 0)
+	query := openSourceBountyProjectQuery().Where("p.owner_user_id = ? AND p.archived_at = 0", ownerUserId).
+		Order("p.created_at DESC, p.id DESC")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	if err := query.Scan(&views).Error; err != nil {
+		return nil, err
+	}
+	return views, nil
+}
+
 // ListOwnedOpenSourceBountiesFiltered returns either active (default) or
 // archived owner projects. Keeping the filter in SQL prevents archived rows
 // from consuming pagination/list rendering capacity.
@@ -1027,6 +1043,26 @@ func ListAcceptedOpenSourceBounties(participantUserId int) ([]OpenSourceBountyCh
 	views := make([]OpenSourceBountyChallengeView, 0)
 	if err := openSourceBountyChallengeViewQuery(DB).Where("c.participant_user_id = ?", participantUserId).
 		Order("c.updated_at DESC, c.id DESC").Scan(&views).Error; err != nil {
+		return nil, err
+	}
+	if err := attachOpenSourceBountyDisputes(views); err != nil {
+		return nil, err
+	}
+	return views, nil
+}
+
+// ListAcceptedOpenSourceBountiesLimited is the bounded assistant read. The
+// extra row is retained so the presentation layer can mark the response as
+// truncated while keeping dispute enrichment bounded as well.
+func ListAcceptedOpenSourceBountiesLimited(participantUserId int, limit int) ([]OpenSourceBountyChallengeView, error) {
+	views := make([]OpenSourceBountyChallengeView, 0)
+	query := openSourceBountyChallengeViewQuery(DB).
+		Where("c.participant_user_id = ?", participantUserId).
+		Order("c.updated_at DESC, c.id DESC")
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	if err := query.Scan(&views).Error; err != nil {
 		return nil, err
 	}
 	if err := attachOpenSourceBountyDisputes(views); err != nil {

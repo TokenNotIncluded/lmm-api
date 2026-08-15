@@ -2828,7 +2828,7 @@ func executeAssistantBountyDataTool(userID int, input map[string]any) map[string
 		if !privateRead() {
 			return result
 		}
-		items, err := model.ListAcceptedOpenSourceBounties(userID)
+		items, err := model.ListAcceptedOpenSourceBountiesLimited(userID, assistantBountyReadMaxRows+1)
 		if err != nil {
 			return fail(err)
 		}
@@ -2838,7 +2838,7 @@ func executeAssistantBountyDataTool(userID int, input map[string]any) map[string
 		if !privateRead() {
 			return result
 		}
-		items, err := model.ListOwnedOpenSourceBounties(userID)
+		items, err := model.ListOwnedOpenSourceBountiesLimited(userID, assistantBountyReadMaxRows+1)
 		if err != nil {
 			return fail(err)
 		}
