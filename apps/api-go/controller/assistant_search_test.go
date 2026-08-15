@@ -197,6 +197,43 @@ func TestSelectAssistantMCPTool(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestAssistantMCPResultDataRejectsOversizedStructuredContent(t *testing.T) {
+	result := &mcp.CallToolResult{
+		StructuredContent: map[string]any{
+			"results": strings.Repeat("x", assistantSearchMaxResponseBytes),
+		},
+	}
+
+	value, err := assistantMCPResultData(result)
+	assert.Nil(t, value)
+	assert.Error(t, err)
+	assert.ErrorContains(t, err, "too large")
+}
+
+func TestAssistantMCPResultDataBoundsTextContent(t *testing.T) {
+	result := &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: strings.Repeat("x", assistantSearchMaxResponseBytes)},
+			&mcp.TextContent{Text: "second"},
+		},
+	}
+
+	value, err := assistantMCPResultData(result)
+	assert.Nil(t, value)
+	assert.Error(t, err)
+	assert.ErrorContains(t, err, "too large")
+}
+
+func TestAssistantMCPResultDataPreservesBoundedStructuredContent(t *testing.T) {
+	result := &mcp.CallToolResult{
+		StructuredContent: map[string]any{"results": []any{"one", "two"}},
+	}
+
+	value, err := assistantMCPResultData(result)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{"results": []any{"one", "two"}}, value)
+}
+
 type assistantSearchRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (roundTrip assistantSearchRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {

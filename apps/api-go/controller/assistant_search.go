@@ -517,11 +517,29 @@ func assistantMCPResultData(result *mcp.CallToolResult) (any, error) {
 		return nil, errors.New("MCP search tool returned an error")
 	}
 	if result.StructuredContent != nil {
-		return result.StructuredContent, nil
+		// The MCP SDK has already decoded the structured value, so returning it
+		// directly would let a provider-sized object survive until the agent
+		// marshals the tool result. Re-encode through the same hard response
+		// budget used by the regular HTTP search adapter before handing data to
+		// the agent. This keeps both the retained value and the eventual tool
+		// context bounded, including a structured array with a large number of
+		// entries.
+		bounded, err := common.MarshalLimit(result.StructuredContent, assistantSearchMaxResponseBytes)
+		if err != nil {
+			return nil, errors.New("MCP search result is too large")
+		}
+		var decoded any
+		if err := json.Unmarshal(bounded, &decoded); err != nil {
+			return nil, errors.New("MCP search result is invalid")
+		}
+		return decoded, nil
 	}
 	texts := make([]string, 0, len(result.Content))
 	for _, content := range result.Content {
 		if text, ok := content.(*mcp.TextContent); ok {
+			if len(text.Text) > assistantSearchMaxResponseBytes {
+				return nil, errors.New("MCP search result is too large")
+			}
 			texts = append(texts, text.Text)
 		}
 	}
@@ -535,5 +553,13 @@ func assistantMCPResultData(result *mcp.CallToolResult) (any, error) {
 		}
 		return texts[0], nil
 	}
-	return texts, nil
+	bounded, err := common.MarshalLimit(texts, assistantSearchMaxResponseBytes)
+	if err != nil {
+		return nil, errors.New("MCP search result is too large")
+	}
+	var decoded []string
+	if err := json.Unmarshal(bounded, &decoded); err != nil {
+		return nil, errors.New("MCP search result is invalid")
+	}
+	return decoded, nil
 }
