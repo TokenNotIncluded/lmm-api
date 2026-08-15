@@ -62,90 +62,57 @@ func GetUserUsageRankingsSnapshot(period string) (*UserUsageRankingsResponse, er
 
 	now := time.Now()
 	startTime, endTime := rankingTimeRange(config, now)
-	totals, err := model.GetUserRankingTotals(startTime, endTime)
-	if err != nil {
-		return nil, err
-	}
-
-	userIDs := make([]int, 0, len(totals))
-	for _, total := range totals {
-		userIDs = append(userIDs, total.UserID)
-	}
-	users, err := model.GetUsersForUsageRanking(userIDs)
-	if err != nil {
-		return nil, err
-	}
-
-	usersByID := make(map[int]*model.User, len(users))
-	for _, user := range users {
-		usersByID[user.Id] = user
-	}
-
-	candidates := make([]userUsageCandidate, 0, len(totals))
+	candidates := make([]userUsageCandidate, 0, rankingLeaderboardLimit)
 	var totalTokens int64
 	var totalRequests int64
 	participantCount := 0
 	anonymousParticipantCount := 0
 
-	for _, total := range totals {
-		user, ok := usersByID[total.UserID]
-		if !ok || user.Status != common.UserStatusEnabled {
-			continue
+	err = model.IterateUserRankingRows(startTime, endTime, func(row model.UserRankingRow) error {
+		if row.Status != common.UserStatusEnabled {
+			return nil
 		}
 
-		visibility := dto.NormalizeUsageLeaderboardVisibility(user.GetSetting().UsageLeaderboardVisibility)
+		visibility := dto.NormalizeUsageLeaderboardVisibility(
+			(&model.User{Setting: row.Setting}).GetSetting().UsageLeaderboardVisibility,
+		)
 		if visibility == dto.UsageLeaderboardVisibilityHidden {
-			continue
+			return nil
 		}
 
 		participantCount++
-		totalTokens += total.TotalTokens
-		totalRequests += total.Requests
+		totalTokens += row.TotalTokens
+		totalRequests += row.Requests
+		candidate := userUsageCandidate{
+			userID:   row.UserID,
+			requests: row.Requests,
+			tokens:   row.TotalTokens,
+		}
 
 		if visibility == dto.UsageLeaderboardVisibilityAnonymous {
 			anonymousParticipantCount++
 			// Anonymous visibility hides the user's name, not their independent
 			// ranking row. Keep each user's totals separate so one participant
 			// cannot make all anonymous usage appear as a single account.
-			candidates = append(candidates, userUsageCandidate{
-				userID:    user.Id,
-				anonymous: true,
-				requests:  total.Requests,
-				tokens:    total.TotalTokens,
-			})
-			continue
+			candidate.anonymous = true
+		} else {
+			name := strings.TrimSpace(row.DisplayName)
+			if name == "" {
+				name = strings.TrimSpace(row.Username)
+			}
+			if name == "" {
+				return nil
+			}
+			candidate.name = name
 		}
-
-		name := strings.TrimSpace(user.DisplayName)
-		if name == "" {
-			name = strings.TrimSpace(user.Username)
-		}
-		if name == "" {
-			continue
-		}
-		candidates = append(candidates, userUsageCandidate{
-			userID:   user.Id,
-			name:     name,
-			requests: total.Requests,
-			tokens:   total.TotalTokens,
-		})
+		retainUsageCandidate(&candidates, candidate)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
-	sort.SliceStable(candidates, func(i, j int) bool {
-		if candidates[i].tokens != candidates[j].tokens {
-			return candidates[i].tokens > candidates[j].tokens
-		}
-		if candidates[i].requests != candidates[j].requests {
-			return candidates[i].requests > candidates[j].requests
-		}
-		if candidates[i].anonymous != candidates[j].anonymous {
-			return !candidates[i].anonymous
-		}
-		if candidates[i].name != candidates[j].name {
-			return candidates[i].name < candidates[j].name
-		}
-		return candidates[i].userID < candidates[j].userID
-	})
+	sort.SliceStable(candidates, func(i, j int) bool { return userUsageCandidateBetter(candidates[i], candidates[j]) })
 
 	rows := make([]RankedUserUsage, 0, minInt(len(candidates), rankingLeaderboardLimit))
 	for index, candidate := range candidates {
@@ -175,4 +142,39 @@ func GetUserUsageRankingsSnapshot(period string) (*UserUsageRankingsResponse, er
 		AnonymousParticipantCount: anonymousParticipantCount,
 		Users:                     rows,
 	}, nil
+}
+
+func userUsageCandidateBetter(left, right userUsageCandidate) bool {
+	if left.tokens != right.tokens {
+		return left.tokens > right.tokens
+	}
+	if left.requests != right.requests {
+		return left.requests > right.requests
+	}
+	if left.anonymous != right.anonymous {
+		return !left.anonymous
+	}
+	if left.name != right.name {
+		return left.name < right.name
+	}
+	return left.userID < right.userID
+}
+
+// retainUsageCandidate keeps only the public leaderboard window. Its linear
+// scan is intentional: rankingLeaderboardLimit is small and fixed, while the
+// source may contain millions of users.
+func retainUsageCandidate(candidates *[]userUsageCandidate, candidate userUsageCandidate) {
+	if len(*candidates) < rankingLeaderboardLimit {
+		*candidates = append(*candidates, candidate)
+		return
+	}
+	worst := 0
+	for index := 1; index < len(*candidates); index++ {
+		if userUsageCandidateBetter((*candidates)[worst], (*candidates)[index]) {
+			worst = index
+		}
+	}
+	if userUsageCandidateBetter(candidate, (*candidates)[worst]) {
+		(*candidates)[worst] = candidate
+	}
 }
