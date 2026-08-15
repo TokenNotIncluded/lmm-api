@@ -114,17 +114,28 @@ function PaymentMethodRow({
           {method.method}
         </p>
       </div>
-      <label className='text-muted-foreground flex items-center gap-2 text-xs'>
-        <span className='sr-only'>{t('Include revenue')}</span>
-        <Switch
-          size='sm'
-          checked={method.enabled && method.include_revenue}
-          aria-label={`${t('Include revenue')}: ${method.label || method.method}`}
-          onCheckedChange={(checked) =>
-            onChange({ enabled: checked, include_revenue: checked })
-          }
-        />
-      </label>
+      <div className='text-muted-foreground flex flex-wrap items-center justify-end gap-x-3 gap-y-1 text-xs'>
+        <label className='flex items-center gap-2'>
+          <span>{t('Enable')}</span>
+          <Switch
+            size='sm'
+            checked={method.enabled}
+            aria-label={`${t('Enable')}: ${method.label || method.method}`}
+            onCheckedChange={(checked) => onChange({ enabled: checked })}
+          />
+        </label>
+        <label className='flex items-center gap-2'>
+          <span>{t('Include revenue')}</span>
+          <Switch
+            size='sm'
+            checked={method.include_revenue}
+            aria-label={`${t('Include revenue')}: ${method.label || method.method}`}
+            onCheckedChange={(checked) =>
+              onChange({ include_revenue: checked })
+            }
+          />
+        </label>
+      </div>
     </div>
   )
 }
