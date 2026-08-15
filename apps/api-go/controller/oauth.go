@@ -396,6 +396,9 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 	if !common.RegisterEnabled {
 		return nil, &OAuthRegistrationDisabledError{}
 	}
+	if common.IsRegistrationMethodDisabled(oauthRegistrationMethod(provider)) {
+		return nil, &OAuthRegistrationDisabledError{}
+	}
 	if err := publicRegistrationGateFailure(acceptedLegal); err != nil {
 		return nil, err
 	}
@@ -496,6 +499,23 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 	}
 
 	return user, nil
+}
+
+func oauthRegistrationMethod(provider oauth.Provider) string {
+	switch typed := provider.(type) {
+	case *oauth.GitHubProvider:
+		return "github"
+	case *oauth.DiscordProvider:
+		return "discord"
+	case *oauth.OIDCProvider:
+		return "oidc"
+	case *oauth.LinuxDOProvider:
+		return "linuxdo"
+	case *oauth.GenericOAuthProvider:
+		return "custom:" + typed.GetConfig().Slug
+	default:
+		return strings.ToLower(strings.TrimSpace(provider.GetName()))
+	}
 }
 
 // Error types for OAuth

@@ -103,6 +103,13 @@ func findOrCreateWeChatUser(c *gin.Context, wechatId string, acceptedLegal bool)
 		}
 	} else {
 		if common.RegisterEnabled {
+			if common.IsRegistrationMethodDisabled("wechat") {
+				c.JSON(http.StatusOK, gin.H{
+					"success": false,
+					"message": "管理员已关闭通过微信注册",
+				})
+				return nil, false
+			}
 			if !requirePublicRegistrationLegal(c, acceptedLegal) {
 				return nil, false
 			}

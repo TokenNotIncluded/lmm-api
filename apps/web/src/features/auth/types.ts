@@ -146,6 +146,7 @@ export interface SystemStatus {
     user_agreement_enabled?: boolean
     privacy_policy_enabled?: boolean
     oauth_register_enabled?: boolean
+    oauth_registration_disabled_methods?: string[]
     register_enabled?: boolean
     password_login_enabled?: boolean
     password_register_enabled?: boolean
@@ -193,6 +194,7 @@ export interface SystemStatus {
   user_agreement_enabled?: boolean
   privacy_policy_enabled?: boolean
   oauth_register_enabled?: boolean
+  oauth_registration_disabled_methods?: string[]
   register_enabled?: boolean
   password_login_enabled?: boolean
   password_register_enabled?: boolean

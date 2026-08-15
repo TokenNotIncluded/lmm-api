@@ -33,6 +33,7 @@ import {
 } from '@/components/ui/form'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { useStatus } from '@/hooks/use-status'
 
 import {
   SettingsForm,
@@ -47,6 +48,7 @@ import { useUpdateOption } from '../hooks/use-update-option'
 const basicAuthSchema = z.object({
   PasswordLoginEnabled: z.boolean(),
   PasswordRegisterEnabled: z.boolean(),
+  RegistrationDisabledMethods: z.string(),
   EmailVerificationEnabled: z.boolean(),
   RegisterEnabled: z.boolean(),
   EmailDomainRestrictionEnabled: z.boolean(),
@@ -63,10 +65,17 @@ type BasicAuthSectionProps = {
 export function BasicAuthSection({ defaultValues }: BasicAuthSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const { status } = useStatus()
 
   const formDefaults = useMemo<BasicAuthFormValues>(
     () => ({
       ...defaultValues,
+      RegistrationDisabledMethods:
+        defaultValues.RegistrationDisabledMethods.split(/[\n,\r]/)
+          .map((method) => method.trim().toLowerCase())
+          .filter(Boolean)
+          .sort()
+          .join(','),
       EmailDomainWhitelist: defaultValues.EmailDomainWhitelist.split(',')
         .map((domain) => domain.trim())
         .filter(Boolean)
@@ -95,6 +104,17 @@ export function BasicAuthSection({ defaultValues }: BasicAuthSectionProps) {
           .join(',')
         if (domains !== defaultValues.EmailDomainWhitelist) {
           updates.push({ key, value: domains })
+        }
+      } else if (key === 'RegistrationDisabledMethods') {
+        if (typeof value !== 'string') return
+        const methods = value
+          .split(/[\n,\r]/)
+          .map((method) => method.trim().toLowerCase())
+          .filter(Boolean)
+          .sort()
+          .join(',')
+        if (methods !== defaultValues.RegistrationDisabledMethods) {
+          updates.push({ key, value: methods })
         }
       } else if (value !== defaultValues[key as keyof typeof defaultValues]) {
         updates.push({ key, value })
@@ -175,6 +195,71 @@ export function BasicAuthSection({ defaultValues }: BasicAuthSectionProps) {
                 </FormControl>
               </SettingsSwitchItem>
             )}
+          />
+
+          <FormField
+            control={form.control}
+            name='RegistrationDisabledMethods'
+            render={({ field }) => {
+              const disabledMethods = new Set(
+                field.value
+                  .split(/[\n,\r]/)
+                  .map((method) => method.trim().toLowerCase())
+                  .filter(Boolean)
+              )
+              const methods = [
+                { id: 'github', label: t('GitHub') },
+                { id: 'discord', label: t('Discord') },
+                {
+                  id: 'oidc',
+                  label: status?.oidc_display_name?.trim() || 'OIDC',
+                },
+                { id: 'linuxdo', label: t('LinuxDO') },
+                { id: 'telegram', label: t('Telegram') },
+                { id: 'wechat', label: t('WeChat') },
+                ...(status?.custom_oauth_providers ?? []).map((provider) => ({
+                  id: `custom:${provider.slug}`,
+                  label: provider.name,
+                })),
+              ]
+
+              return (
+                <FormItem className='lg:col-span-2'>
+                  <FormLabel>{t('Registration channels')}</FormLabel>
+                  <FormDescription>
+                    {t(
+                      'Disable selected OAuth channels for new registrations only. Existing users can still sign in with them.'
+                    )}
+                  </FormDescription>
+                  <div className='grid gap-2 lg:grid-cols-2'>
+                    {methods.map((method) => (
+                      <SettingsSwitchItem key={method.id}>
+                        <SettingsSwitchContent>
+                          <FormLabel>{method.label}</FormLabel>
+                          <FormDescription>
+                            {t('Allow new accounts through {{method}}', {
+                              method: method.label,
+                            })}
+                          </FormDescription>
+                        </SettingsSwitchContent>
+                        <FormControl>
+                          <Switch
+                            checked={!disabledMethods.has(method.id)}
+                            onCheckedChange={(allowed) => {
+                              const next = new Set(disabledMethods)
+                              if (allowed) next.delete(method.id)
+                              else next.add(method.id)
+                              field.onChange(Array.from(next).sort().join(','))
+                            }}
+                          />
+                        </FormControl>
+                      </SettingsSwitchItem>
+                    ))}
+                  </div>
+                  <FormMessage />
+                </FormItem>
+              )
+            }}
           />
 
           <FormField

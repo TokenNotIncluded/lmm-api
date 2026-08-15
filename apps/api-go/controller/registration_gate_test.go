@@ -22,7 +22,7 @@ type registrationGateTestOAuthProvider struct {
 	existing *model.User
 }
 
-func (*registrationGateTestOAuthProvider) GetName() string { return "Registration Gate Test" }
+func (*registrationGateTestOAuthProvider) GetName() string { return "GitHub" }
 func (*registrationGateTestOAuthProvider) IsEnabled() bool { return true }
 func (*registrationGateTestOAuthProvider) ExchangeToken(context.Context, string, *gin.Context) (*oauth.OAuthToken, error) {
 	return &oauth.OAuthToken{}, nil
@@ -192,6 +192,44 @@ func TestOAuthFirstCreateUsesStateBoundConsentAndExistingLoginBypassesGate(t *te
 	require.NoError(t, err)
 	require.NotNil(t, user)
 	assert.Equal(t, 41, user.Id)
+}
+
+func TestOAuthRegistrationRestrictionBlocksNewAccountsButAllowsExistingLogin(t *testing.T) {
+	setupAuthFlowControllerTest(t)
+	setRegistrationGateTestState(t, "", "")
+
+	common.OptionMapRWMutex.Lock()
+	previous := ""
+	wasInitialized := common.OptionMap != nil
+	if common.OptionMap != nil {
+		previous = common.OptionMap[common.RegistrationDisabledMethodsOptionKey]
+	} else {
+		common.OptionMap = make(map[string]string)
+	}
+	common.OptionMap[common.RegistrationDisabledMethodsOptionKey] = "github"
+	common.OptionMapRWMutex.Unlock()
+	t.Cleanup(func() {
+		common.OptionMapRWMutex.Lock()
+		if wasInitialized {
+			common.OptionMap[common.RegistrationDisabledMethodsOptionKey] = previous
+		} else {
+			common.OptionMap = nil
+		}
+		common.OptionMapRWMutex.Unlock()
+	})
+
+	provider := &registrationGateTestOAuthProvider{}
+	oauthUser := &oauth.OAuthUser{ProviderUserID: "restricted-subject"}
+	user, err := findOrCreateOAuthUser(nil, provider, oauthUser, "", true)
+	var disabledErr *OAuthRegistrationDisabledError
+	require.ErrorAs(t, err, &disabledErr)
+	assert.Nil(t, user)
+
+	provider.existing = &model.User{Id: 42, Username: "existing-github", Status: common.UserStatusEnabled}
+	user, err = findOrCreateOAuthUser(nil, provider, oauthUser, "", false)
+	require.NoError(t, err)
+	require.NotNil(t, user)
+	assert.Equal(t, 42, user.Id)
 }
 
 func TestOAuthCallbackCannotSubstituteConsentForState(t *testing.T) {

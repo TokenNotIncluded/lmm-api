@@ -417,6 +417,7 @@ export function SignUpForm({
             onWeChatLogin={hasWeChatLogin ? handleOpenWeChatDialog : undefined}
             isWeChatLoading={isWeChatSubmitting}
             className='pt-2'
+            registrationOnly
           />
         )}
       </form>
