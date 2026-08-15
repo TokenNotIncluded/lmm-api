@@ -21,6 +21,8 @@ import test from 'node:test'
 import { WebhookEventType } from '@waffo/pancake-ts'
 
 import {
+  WAFFO_PANCAKE_ACTIVE_PRODUCTS_QUERY,
+  WAFFO_PANCAKE_STORES_QUERY,
   findMatchingTestWebhook,
   WAFFO_PANCAKE_WEBHOOK_EVENTS,
 } from './waffo-pancake-smoke.mjs'
@@ -46,4 +48,12 @@ test('smoke runner reuses the matching Test HTTP webhook instead of duplicating 
   assert.equal(findMatchingTestWebhook(webhooks, matching.url), matching)
   assert.equal(findMatchingTestWebhook(webhooks, 'https://missing.test/waffo'), undefined)
   assert.equal(findMatchingTestWebhook(webhooks, '  '), undefined)
+})
+
+test('smoke catalog queries use the supported root store and product fields', () => {
+  assert.match(WAFFO_PANCAKE_STORES_QUERY, /^query \{ stores \{ id name status \} \}$/)
+  assert.doesNotMatch(WAFFO_PANCAKE_STORES_QUERY, /onetimeProducts/)
+  assert.match(WAFFO_PANCAKE_ACTIVE_PRODUCTS_QUERY, /onetimeProducts\(filter:/)
+  assert.match(WAFFO_PANCAKE_ACTIVE_PRODUCTS_QUERY, /storeId: \{ eq: \$storeId \}/)
+  assert.match(WAFFO_PANCAKE_ACTIVE_PRODUCTS_QUERY, /status: \{ eq: "active" \}/)
 })

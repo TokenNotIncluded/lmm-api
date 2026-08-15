@@ -27,6 +27,13 @@ export const WAFFO_PANCAKE_WEBHOOK_EVENTS = Object.freeze([
   WebhookEventType.RefundFailed,
 ])
 
+export const WAFFO_PANCAKE_STORES_QUERY = 'query { stores { id name status } }'
+export const WAFFO_PANCAKE_ACTIVE_PRODUCTS_QUERY = `query ($storeId: String!) {
+  onetimeProducts(filter: { storeId: { eq: $storeId }, status: { eq: "active" } }) {
+    id name status
+  }
+}`
+
 function fail(message) {
   throw new Error(message)
 }
@@ -113,19 +120,23 @@ function summarizeError(error) {
 
 async function queryStores(client) {
   const result = await client.graphql.query({
-    query: `query {
-      stores(limit: 100) {
-        id
-        name
-        status
-        onetimeProducts { id name status }
-      }
-    }`,
+    query: WAFFO_PANCAKE_STORES_QUERY,
   })
   if (result.errors?.length) {
     fail(`unable to list Waffo stores: ${result.errors.map((e) => e.message).join('; ')}`)
   }
-  return result.data?.stores ?? []
+  const stores = result.data?.stores ?? []
+  for (const store of stores) {
+    const products = await client.graphql.query({
+      query: WAFFO_PANCAKE_ACTIVE_PRODUCTS_QUERY,
+      variables: { storeId: store.id },
+    })
+    if (products.errors?.length) {
+      fail(`unable to list Waffo products for ${store.id}: ${products.errors.map((e) => e.message).join('; ')}`)
+    }
+    store.onetimeProducts = products.data?.onetimeProducts ?? []
+  }
+  return stores
 }
 
 async function queryStoreWebhooks(client, storeId) {

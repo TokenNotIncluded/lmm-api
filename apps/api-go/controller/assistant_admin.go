@@ -123,6 +123,7 @@ var assistantAdminConfigAllowlist = map[string]string{
 	"WaffoUnitPrice":                                "Waffo unit price",
 	"WaffoMinTopUp":                                 "Waffo minimum top-up amount",
 	"WaffoPancakeReturnURL":                         "Waffo Pancake return URL",
+	"WaffoPancakeMerchantID":                        "Waffo Pancake merchant ID",
 	"WaffoPancakeStoreID":                           "Waffo Pancake public store ID",
 	"WaffoPancakeProductID":                         "Waffo Pancake public product ID",
 	"WaffoPancakeUnitPrice":                         "Waffo Pancake unit price",
@@ -162,6 +163,8 @@ var assistantAdminConfigAllowlist = map[string]string{
 	"AdvancedSecurityOnPromptEnabled":               "Apply advanced security rules to prompts",
 	"AdvancedSecurityAction":                        "Advanced security action",
 	"AdvancedSecurityRules":                         "Advanced security rule set",
+	"RegionAccessPolicyEnabled":                     "Enable regional access restrictions",
+	"RegionBlockedCountryCodes":                     "Blocked ISO country codes",
 	"LinuxDOMinimumTrustLevel":                      "Minimum LinuxDO trust level",
 	"QuotaRemindThreshold":                          "Quota reminder threshold",
 	"PreConsumedQuota":                              "Pre-consumed request quota",
@@ -893,7 +896,7 @@ func validateAssistantAdminConfigValue(key, value string) error {
 		return err
 	}
 	switch key {
-	case "AssistantEnabled", "AssistantAgentLoopEnabled", "AssistantCacheEnabled", "ModelRequestRateLimitEnabled", "DefaultUseAutoGroup", "DisplayInCurrencyEnabled", "DisplayTokenStatEnabled", "ExposeRatioEnabled", "DefaultCollapseSidebar", "PasswordLoginEnabled", "PasswordRegisterEnabled", "EmailVerificationEnabled", "RegisterEnabled", "GitHubOAuthEnabled", "LinuxDOOAuthEnabled", "WeChatAuthEnabled", "TelegramOAuthEnabled", "TurnstileCheckEnabled", "EmailDomainRestrictionEnabled", "EmailAliasRestrictionEnabled", "AutomaticDisableChannelEnabled", "AutomaticEnableChannelEnabled", "LogConsumeEnabled", "DrawingEnabled", "TaskEnabled", "DataExportEnabled", "CheckSensitiveEnabled", "CheckSensitiveOnPromptEnabled", "StopOnSensitiveEnabled", "SelfUseModeEnabled", "DemoSiteEnabled", "MjNotifyEnabled", "MjAccountFilterEnabled", "MjModeClearEnabled", "MjForwardUrlEnabled", "MjActionCheckSuccessEnabled", "WorkerAllowHttpImageRequestEnabled", "SMTPSSLEnabled", "SMTPStartTLSEnabled", "SMTPInsecureSkipVerify", "SMTPForceAuthLogin", "StripePromotionCodesEnabled", "CreemTestMode", "WaffoEnabled", "WaffoSandbox", "AdvancedSecurityEnabled", "AdvancedSecurityOnPromptEnabled":
+	case "AssistantEnabled", "AssistantAgentLoopEnabled", "AssistantCacheEnabled", "ModelRequestRateLimitEnabled", "DefaultUseAutoGroup", "DisplayInCurrencyEnabled", "DisplayTokenStatEnabled", "ExposeRatioEnabled", "DefaultCollapseSidebar", "PasswordLoginEnabled", "PasswordRegisterEnabled", "EmailVerificationEnabled", "RegisterEnabled", "GitHubOAuthEnabled", "LinuxDOOAuthEnabled", "WeChatAuthEnabled", "TelegramOAuthEnabled", "TurnstileCheckEnabled", "EmailDomainRestrictionEnabled", "EmailAliasRestrictionEnabled", "AutomaticDisableChannelEnabled", "AutomaticEnableChannelEnabled", "LogConsumeEnabled", "DrawingEnabled", "TaskEnabled", "DataExportEnabled", "CheckSensitiveEnabled", "CheckSensitiveOnPromptEnabled", "StopOnSensitiveEnabled", "SelfUseModeEnabled", "DemoSiteEnabled", "MjNotifyEnabled", "MjAccountFilterEnabled", "MjModeClearEnabled", "MjForwardUrlEnabled", "MjActionCheckSuccessEnabled", "WorkerAllowHttpImageRequestEnabled", "SMTPSSLEnabled", "SMTPStartTLSEnabled", "SMTPInsecureSkipVerify", "SMTPForceAuthLogin", "StripePromotionCodesEnabled", "CreemTestMode", "WaffoEnabled", "WaffoSandbox", "AdvancedSecurityEnabled", "AdvancedSecurityOnPromptEnabled", common.RegionAccessPolicyEnabledOptionKey:
 		if _, err := strconv.ParseBool(value); err != nil {
 			return errors.New("must be a boolean value")
 		}
@@ -925,9 +928,13 @@ func validateAssistantAdminConfigValue(key, value string) error {
 		if len([]rune(currency)) < 3 || len([]rune(currency)) > 8 {
 			return errors.New("Waffo currency must be between 3 and 8 characters")
 		}
-	case "SMTPServer", "SMTPFrom", "StripePriceId", "WaffoPancakeStoreID", "WaffoPancakeProductID":
+	case "SMTPServer", "SMTPFrom", "StripePriceId", "WaffoPancakeMerchantID", "WaffoPancakeStoreID", "WaffoPancakeProductID":
 		if len([]rune(value)) > 512 {
 			return errors.New("payment and SMTP settings must be at most 512 characters")
+		}
+	case common.RegionBlockedCountryCodesOptionKey:
+		if _, err := common.ParseRegionBlockedCountryCodes(value); err != nil {
+			return err
 		}
 	case "CreemProducts":
 		var products []map[string]any
