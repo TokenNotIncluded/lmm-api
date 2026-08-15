@@ -73,7 +73,14 @@ export function UserAssistantHistoryDialog(props: { user: User }) {
         <DialogHeader>
           <DialogTitle>{t('Support conversations')}</DialogTitle>
           <DialogDescription>
-            {props.user.username} · {t('User ID')}: {props.user.id}
+            <span className='block truncate'>
+              {props.user.display_name || props.user.username} · @
+              {props.user.username}
+              {props.user.email ? ` · ${props.user.email}` : ''}
+            </span>
+            <span className='mt-1 block text-xs'>
+              {t('User ID')}: {props.user.id} · {count.toLocaleString()}
+            </span>
           </DialogDescription>
         </DialogHeader>
         <div className='min-h-0 overflow-y-auto pr-1'>

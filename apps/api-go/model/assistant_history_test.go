@@ -298,6 +298,36 @@ func TestAssistantConversationArchiveIsOwnerOnlyAndListFilterPreservesHistory(t 
 	assert.Empty(t, archivedList)
 }
 
+func TestAssistantConversationCursorPaginatesAndBindsOwnerScope(t *testing.T) {
+	l0, _, _, _ := setupAssistantHistoryTestDB(t)
+	for index := 0; index < 3; index++ {
+		conversation := &AssistantConversation{
+			UserId:             l0.Id,
+			Title:              fmt.Sprintf("conversation-%d", index),
+			LastMessagePreview: "preview",
+			CreatedAt:          int64(index + 1),
+			UpdatedAt:          int64(index + 1),
+		}
+		require.NoError(t, DB.Create(conversation).Error)
+		require.NoError(t, RecordAssistantConversationTurn(l0.Id, conversation.Id, "question", "answer"))
+	}
+
+	first, err := ListAssistantConversationsPage(l0.Id, l0.Id, 2, false, "")
+	require.NoError(t, err)
+	assert.Len(t, first.Conversations, 2)
+	assert.NotEmpty(t, first.NextCursor)
+
+	second, err := ListAssistantConversationsPage(l0.Id, l0.Id, 2, false, first.NextCursor)
+	require.NoError(t, err)
+	assert.Len(t, second.Conversations, 1)
+	assert.Empty(t, second.NextCursor)
+	assert.NotEqual(t, first.Conversations[0].Id, second.Conversations[0].Id)
+	assert.NotEqual(t, first.Conversations[1].Id, second.Conversations[0].Id)
+
+	_, err = ListAssistantConversationsPage(l0.Id, l0.Id, 2, false, first.NextCursor+"tampered")
+	assert.ErrorIs(t, err, ErrAssistantHistoryInvalidCursor)
+}
+
 func TestAssistantConversationIsCreatedOnlyWithCompleteSuccessfulTurn(t *testing.T) {
 	l0, _, _, _ := setupAssistantHistoryTestDB(t)
 

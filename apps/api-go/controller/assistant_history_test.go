@@ -154,4 +154,15 @@ func TestListAssistantConversationsControllerFiltersArchivedExplicitly(t *testin
 	require.NoError(t, json.Unmarshal(listResponse.Body.Bytes(), &archivedEnvelope))
 	require.Len(t, archivedEnvelope.Data.Conversations, 1)
 	assert.Equal(t, archived.Id, archivedEnvelope.Data.Conversations[0].Id)
+
+	listContext, listResponse = assistantHistoryControllerContext(
+		t,
+		http.MethodGet,
+		"/api/assistant/conversations?cursor=invalid",
+		owner.Id,
+		0,
+	)
+	ListAssistantConversations(listContext)
+	assert.Equal(t, http.StatusBadRequest, listResponse.Code)
+	assert.Contains(t, listResponse.Body.String(), "ASSISTANT_HISTORY_INVALID_CURSOR")
 }

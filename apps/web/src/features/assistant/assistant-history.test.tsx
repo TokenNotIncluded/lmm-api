@@ -422,7 +422,15 @@ describe('AssistantHistory archive controls', () => {
   test('audits a positive user ID on submit, keeps lower-access records read-only, and restores self on switch back', async () => {
     setUser(10)
     const calls: Array<{ params?: Record<string, unknown> }> = []
-    api.get = (async (_url: string, config: unknown) => {
+    api.get = (async (url: string, config: unknown) => {
+      if (!url.includes('/api/assistant/conversations')) {
+        return {
+          data: {
+            success: true,
+            data: { items: [], total: 0, page: 1, page_size: 24 },
+          },
+        }
+      }
       const params = (
         config as { params?: Record<string, unknown> } | undefined
       )?.params
@@ -514,7 +522,15 @@ describe('AssistantHistory archive controls', () => {
   test('does not request while typing an invalid ID and gives field feedback', async () => {
     setUser(10)
     let getCalls = 0
-    api.get = (async () => {
+    api.get = (async (url: string) => {
+      if (!url.includes('/api/assistant/conversations')) {
+        return {
+          data: {
+            success: true,
+            data: { items: [], total: 0, page: 1, page_size: 24 },
+          },
+        }
+      }
       getCalls += 1
       return {
         data: {

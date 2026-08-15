@@ -57,8 +57,12 @@ func ListAssistantConversations(c *gin.Context) {
 			return
 		}
 	}
-	conversations, err := model.ListAssistantConversations(viewerUserID, ownerUserID, limit, archived)
+	page, err := model.ListAssistantConversationsPage(viewerUserID, ownerUserID, limit, archived, c.Query("cursor"))
 	if assistantHistoryVisibilityError(c, err) {
+		return
+	}
+	if errors.Is(err, model.ErrAssistantHistoryInvalidCursor) {
+		writeAssistantError(c, http.StatusBadRequest, "ASSISTANT_HISTORY_INVALID_CURSOR", errors.New("cursor is invalid or expired"))
 		return
 	}
 	if err != nil {
@@ -66,7 +70,8 @@ func ListAssistantConversations(c *gin.Context) {
 		return
 	}
 	common.ApiSuccess(c, gin.H{
-		"conversations":  conversations,
+		"conversations":  page.Conversations,
+		"next_cursor":    page.NextCursor,
 		"privacy_notice": model.AssistantHistoryPrivacyNotice,
 	})
 }

@@ -398,6 +398,7 @@ export type AssistantConversationHistoryItem =
 
 export type AssistantConversationHistory = {
   conversations: AssistantConversationHistorySummary[]
+  next_cursor?: string
   privacy_notice?: string
 }
 
@@ -1536,14 +1537,21 @@ export async function revealAssistantPrivateCard(id: string): Promise<string> {
 export async function getAssistantConversationHistory(
   archived = false,
   ownerUserId?: number,
-  limit?: number
+  limit?: number,
+  cursor?: string
 ): Promise<AssistantConversationHistory> {
-  const params: { archived?: true; user_id?: number; limit?: number } = {}
+  const params: {
+    archived?: true
+    user_id?: number
+    limit?: number
+    cursor?: string
+  } = {}
   if (archived) params.archived = true
   if (ownerUserId !== undefined) params.user_id = ownerUserId
   if (typeof limit === 'number' && Number.isSafeInteger(limit) && limit > 0) {
     params.limit = Math.min(limit, 100)
   }
+  if (cursor?.trim()) params.cursor = cursor.trim()
   const response = await api.get<
     AssistantAPIResponse<AssistantConversationHistory>
   >('/api/assistant/conversations', {

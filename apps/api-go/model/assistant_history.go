@@ -3,6 +3,7 @@ package model
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -48,6 +49,7 @@ var (
 	ErrAssistantConversationAlreadyArchived = errors.New("assistant conversation is already archived")
 	ErrAssistantConversationNotArchived     = errors.New("assistant conversation is not archived")
 	ErrAssistantConversationRestricted      = errors.New("assistant conversation is restricted")
+	ErrAssistantHistoryInvalidCursor        = errors.New("assistant history cursor is invalid")
 	ErrAssistantSecureCardNotFound          = errors.New("assistant secure card not found")
 	ErrAssistantSecureCardConsumed          = errors.New("assistant secure card has already been revealed")
 	ErrAssistantSecureCardExpired           = errors.New("assistant secure card has expired")
@@ -159,6 +161,71 @@ type AssistantConversationView struct {
 	RestrictedAt       int64  `json:"restricted_at"`
 	Owner              string `json:"owner"`
 	PrivacyNotice      string `json:"privacy_notice"`
+}
+
+// AssistantConversationHistoryPage is deliberately cursor based. Offset
+// pagination becomes increasingly expensive as a user's transcript list grows
+// and can repeat/skip rows while new conversations arrive.
+type AssistantConversationHistoryPage struct {
+	Conversations []AssistantConversationView `json:"conversations"`
+	NextCursor    string                      `json:"next_cursor,omitempty"`
+}
+
+type assistantConversationCursor struct {
+	Version   int   `json:"v"`
+	OwnerID   int   `json:"owner_id"`
+	Archived  bool  `json:"archived"`
+	UpdatedAt int64 `json:"updated_at"`
+	ID        int64 `json:"id"`
+}
+
+const assistantConversationCursorVersion = 1
+
+func assistantConversationCursorKey() []byte {
+	return []byte("assistant-history-cursor-v1:" + common.SessionSecret)
+}
+
+func encodeAssistantConversationCursor(ownerID int, archived bool, conversation AssistantConversation) (string, error) {
+	payload, err := json.Marshal(assistantConversationCursor{
+		Version:   assistantConversationCursorVersion,
+		OwnerID:   ownerID,
+		Archived:  archived,
+		UpdatedAt: conversation.UpdatedAt,
+		ID:        conversation.Id,
+	})
+	if err != nil {
+		return "", err
+	}
+	encodedPayload := base64.RawURLEncoding.EncodeToString(payload)
+	mac := hmac.New(sha256.New, assistantConversationCursorKey())
+	_, _ = mac.Write([]byte(encodedPayload))
+	encodedSignature := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return encodedPayload + "." + encodedSignature, nil
+}
+
+func decodeAssistantConversationCursor(value string, ownerID int, archived bool) (assistantConversationCursor, error) {
+	parts := strings.Split(value, ".")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return assistantConversationCursor{}, ErrAssistantHistoryInvalidCursor
+	}
+	mac := hmac.New(sha256.New, assistantConversationCursorKey())
+	_, _ = mac.Write([]byte(parts[0]))
+	signature, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil || !hmac.Equal(signature, mac.Sum(nil)) {
+		return assistantConversationCursor{}, ErrAssistantHistoryInvalidCursor
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return assistantConversationCursor{}, ErrAssistantHistoryInvalidCursor
+	}
+	var cursor assistantConversationCursor
+	if err := json.Unmarshal(payload, &cursor); err != nil ||
+		cursor.Version != assistantConversationCursorVersion ||
+		cursor.OwnerID != ownerID || cursor.Archived != archived ||
+		cursor.UpdatedAt <= 0 || cursor.ID <= 0 {
+		return assistantConversationCursor{}, ErrAssistantHistoryInvalidCursor
+	}
+	return cursor, nil
 }
 
 type AssistantHistoryMessageView struct {
@@ -823,23 +890,38 @@ func UnarchiveAssistantConversation(userID int, conversationID int64) (*Assistan
 	return setAssistantConversationArchived(userID, conversationID, false)
 }
 
-func ListAssistantConversations(viewerUserID, ownerUserID int, limit int, archived bool) ([]AssistantConversationView, error) {
+func ListAssistantConversationsPage(viewerUserID, ownerUserID int, limit int, archived bool, rawCursor string) (AssistantConversationHistoryPage, error) {
 	if err := AuthorizeAssistantHistoryViewer(viewerUserID, ownerUserID); err != nil {
-		return nil, err
+		return AssistantConversationHistoryPage{}, err
 	}
 	if limit <= 0 || limit > assistantHistoryPageMax {
 		limit = 30
+	}
+	var cursor assistantConversationCursor
+	if strings.TrimSpace(rawCursor) != "" {
+		var err error
+		cursor, err = decodeAssistantConversationCursor(strings.TrimSpace(rawCursor), ownerUserID, archived)
+		if err != nil {
+			return AssistantConversationHistoryPage{}, err
+		}
 	}
 	var conversations []AssistantConversation
 	archiveFilter := "archived_at = 0"
 	if archived {
 		archiveFilter = "archived_at <> 0"
 	}
-	if err := DB.Where("user_id = ?", ownerUserID).
+	query := DB.Where("user_id = ?", ownerUserID).
 		Where(archiveFilter).
-		Where("EXISTS (SELECT 1 FROM assistant_history_messages WHERE assistant_history_messages.conversation_id = assistant_conversations.id)").
-		Order("updated_at DESC, id DESC").Limit(limit).Find(&conversations).Error; err != nil {
-		return nil, err
+		Where("EXISTS (SELECT 1 FROM assistant_history_messages WHERE assistant_history_messages.conversation_id = assistant_conversations.id)")
+	if cursor.ID > 0 {
+		query = query.Where("(updated_at < ?) OR (updated_at = ? AND id < ?)", cursor.UpdatedAt, cursor.UpdatedAt, cursor.ID)
+	}
+	if err := query.Order("updated_at DESC, id DESC").Limit(limit + 1).Find(&conversations).Error; err != nil {
+		return AssistantConversationHistoryPage{}, err
+	}
+	hasMore := len(conversations) > limit
+	if hasMore {
+		conversations = conversations[:limit]
 	}
 	owner := "lower_level_user"
 	if viewerUserID == ownerUserID {
@@ -859,7 +941,25 @@ func ListAssistantConversations(viewerUserID, ownerUserID int, limit int, archiv
 			PrivacyNotice:      AssistantHistoryPrivacyNotice,
 		})
 	}
-	return views, nil
+	page := AssistantConversationHistoryPage{Conversations: views}
+	if hasMore && len(conversations) > 0 {
+		nextCursor, err := encodeAssistantConversationCursor(ownerUserID, archived, conversations[len(conversations)-1])
+		if err != nil {
+			return AssistantConversationHistoryPage{}, err
+		}
+		page.NextCursor = nextCursor
+	}
+	return page, nil
+}
+
+// ListAssistantConversations keeps the original model API for internal
+// callers while the HTTP endpoint uses the cursor-aware page variant.
+func ListAssistantConversations(viewerUserID, ownerUserID int, limit int, archived bool) ([]AssistantConversationView, error) {
+	page, err := ListAssistantConversationsPage(viewerUserID, ownerUserID, limit, archived, "")
+	if err != nil {
+		return nil, err
+	}
+	return page.Conversations, nil
 }
 
 // PopulateAssistantConversationCounts adds visible transcript counts to user
