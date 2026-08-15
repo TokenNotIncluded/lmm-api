@@ -258,10 +258,11 @@ func getAdvancedSecurityReviewStats(filter AdvancedSecurityEventFilter) (Advance
 		return stats, err
 	}
 	var groups []AdvancedSecurityStatBucket
+	groupColumn := query.Statement.Quote("group")
 	err := query.Session(&gorm.Session{}).
-		Select("\"group\" AS key, COUNT(*) AS count").
-		Where("\"group\" <> ''").
-		Group("\"group\"").
+		Select(groupColumn + " AS key, COUNT(*) AS count").
+		Where(groupColumn + " <> ''").
+		Group(groupColumn).
 		Order("count desc, key asc").
 		Limit(100).
 		Scan(&groups).Error
