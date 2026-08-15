@@ -10,7 +10,7 @@ import (
 func TestWaffoPancakeWebhookActionForEvent(t *testing.T) {
 	tests := map[string]WaffoPancakeWebhookAction{
 		"order.completed":                WaffoPancakeWebhookActionOrderCompleted,
-		"subscription.activated":         WaffoPancakeWebhookActionSubscriptionActivated,
+		"subscription.activated":         WaffoPancakeWebhookActionIgnore,
 		"subscription.payment_succeeded": WaffoPancakeWebhookActionSubscriptionPaymentSucceeded,
 		"refund.succeeded":               WaffoPancakeWebhookActionRefundSucceeded,
 		"refund.failed":                  WaffoPancakeWebhookActionRefundFailed,
@@ -20,6 +20,36 @@ func TestWaffoPancakeWebhookActionForEvent(t *testing.T) {
 	for eventType, expected := range tests {
 		t.Run(eventType, func(t *testing.T) {
 			require.Equal(t, expected, WaffoPancakeWebhookActionForEvent(eventType))
+		})
+	}
+}
+
+func TestValidateWaffoPancakeSubscriptionSettlement(t *testing.T) {
+	originalStoreID := setting.WaffoPancakeStoreID
+	t.Cleanup(func() { setting.WaffoPancakeStoreID = originalStoreID })
+	setting.WaffoPancakeStoreID = "victim-store"
+
+	valid := &WaffoPancakeWebhookEvent{
+		StoreID: "victim-store",
+		Data:    WaffoPancakeWebhookData{Amount: "99.00", Currency: "USD"},
+	}
+	require.NoError(t, validateWaffoPancakeSubscriptionSettlement(valid, 99))
+
+	tests := []struct {
+		name      string
+		storeID   string
+		amount    string
+		currency  string
+		wantError string
+	}{
+		{name: "cross merchant store", storeID: "attacker-store", amount: "99.00", currency: "USD", wantError: "store mismatch"},
+		{name: "underpayment", storeID: "victim-store", amount: "0.01", currency: "USD", wantError: "amount mismatch"},
+		{name: "wrong currency", storeID: "victim-store", amount: "99.00", currency: "EUR", wantError: "currency mismatch"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			event := &WaffoPancakeWebhookEvent{StoreID: tt.storeID, Data: WaffoPancakeWebhookData{Amount: tt.amount, Currency: tt.currency}}
+			require.ErrorContains(t, validateWaffoPancakeSubscriptionSettlement(event, 99), tt.wantError)
 		})
 	}
 }

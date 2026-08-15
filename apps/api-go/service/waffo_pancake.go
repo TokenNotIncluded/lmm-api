@@ -8,6 +8,7 @@ import (
 
 	"github.com/LIghtJUNction/api.lmm.best/model"
 	"github.com/LIghtJUNction/api.lmm.best/setting"
+	"github.com/shopspring/decimal"
 	pancake "github.com/waffo-com/waffo-pancake-sdk-go"
 )
 
@@ -157,8 +158,11 @@ func WaffoPancakeWebhookActionForEvent(eventType string) WaffoPancakeWebhookActi
 	switch strings.TrimSpace(eventType) {
 	case "order.completed":
 		return WaffoPancakeWebhookActionOrderCompleted
+	// Activation does not prove that the order was paid. Pancake checkout uses
+	// one-time products for plans, so only definitive payment events may settle
+	// the pending local order.
 	case "subscription.activated":
-		return WaffoPancakeWebhookActionSubscriptionActivated
+		return WaffoPancakeWebhookActionIgnore
 	case "subscription.payment_succeeded":
 		return WaffoPancakeWebhookActionSubscriptionPaymentSucceeded
 	case "refund.succeeded":
@@ -585,6 +589,9 @@ func ResolveWaffoPancakeSubscriptionTradeNo(event *WaffoPancakeWebhookEvent) (st
 	if order == nil || order.PaymentProvider != model.PaymentProviderWaffoPancake {
 		return "", fmt.Errorf("waffo pancake subscription order not found for tradeNo=%s", tradeNo)
 	}
+	if err := validateWaffoPancakeSubscriptionSettlement(event, order.Money); err != nil {
+		return "", fmt.Errorf("waffo pancake subscription settlement mismatch for tradeNo=%s: %w", tradeNo, err)
+	}
 	expectedIdentity := WaffoPancakeBuyerIdentityFromUserID(order.UserId)
 	actualIdentity := strings.TrimSpace(event.Data.MerchantProvidedBuyerIdentity)
 	if actualIdentity != expectedIdentity {
@@ -596,6 +603,26 @@ func ResolveWaffoPancakeSubscriptionTradeNo(event *WaffoPancakeWebhookEvent) (st
 		)
 	}
 	return tradeNo, nil
+}
+
+func validateWaffoPancakeSubscriptionSettlement(event *WaffoPancakeWebhookEvent, expectedAmount float64) error {
+	expectedStore := strings.TrimSpace(setting.WaffoPancakeStoreID)
+	actualStore := strings.TrimSpace(event.StoreID)
+	if expectedStore == "" || actualStore != expectedStore {
+		return fmt.Errorf("store mismatch: expected=%q actual=%q", expectedStore, actualStore)
+	}
+	if currency := strings.ToUpper(strings.TrimSpace(event.Data.Currency)); currency != "USD" {
+		return fmt.Errorf("currency mismatch: expected=%q actual=%q", "USD", currency)
+	}
+	actualAmount, err := decimal.NewFromString(strings.TrimSpace(event.Data.Amount))
+	if err != nil {
+		return fmt.Errorf("invalid amount: %w", err)
+	}
+	expected := decimal.NewFromFloat(expectedAmount).Round(2)
+	if !actualAmount.Equal(expected) {
+		return fmt.Errorf("amount mismatch: expected=%s actual=%s", expected.StringFixed(2), actualAmount.String())
+	}
+	return nil
 }
 
 // ResolveWaffoPancakeRefundSubscriptionTradeNo is the refund counterpart of
