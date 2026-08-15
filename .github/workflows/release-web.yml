@@ -40,7 +40,10 @@ jobs:
           set -euo pipefail
           revision=$(git rev-parse HEAD)
           [[ "$revision" == "$GITHUB_SHA" ]]
-          git merge-base --is-ancestor "$revision" "origin/$DEFAULT_BRANCH" || {
+          default_branch_ref="refs/remotes/origin/$DEFAULT_BRANCH"
+          git fetch --no-tags origin \
+            "refs/heads/$DEFAULT_BRANCH:$default_branch_ref"
+          git merge-base --is-ancestor "$revision" "${default_branch_ref}^{commit}" || {
             echo "$revision is not reachable from default branch $DEFAULT_BRANCH" >&2
             exit 1
           }
