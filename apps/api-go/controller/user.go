@@ -1507,6 +1507,15 @@ type topUpRequest struct {
 	Key string `json:"key"`
 }
 
+func redeemFailureLog(userID int, err error) string {
+	if err == nil {
+		return fmt.Sprintf("failed to redeem key for user %d", userID)
+	}
+	// Keep the error type for diagnostics without copying provider/database
+	// messages that could accidentally contain the submitted redemption key.
+	return fmt.Sprintf("failed to redeem key for user %d error_type=%T", userID, err)
+}
+
 var topUpLocks = syncx.NewKeyedTryLocker[int]()
 
 func TopUp(c *gin.Context) {
@@ -1532,7 +1541,7 @@ func TopUp(c *gin.Context) {
 	if err != nil {
 		// 不向用户暴露兑换失败的细分原因，避免攻击者根据错误类型判断兑换码状态。
 		common.ApiErrorI18n(c, i18n.MsgRedeemFailed)
-		logger.LogError(c, fmt.Sprintf("failed to redeem key %s for user %d: %s", req.Key, id, err.Error()))
+		logger.LogError(c, redeemFailureLog(id, err))
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{

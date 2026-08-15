@@ -1490,8 +1490,15 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 	forcePublicActivityWorkflow := assistantPublicActivityWorkflowRequired(userContext)
 	forceNewUserGiftWorkflow := assistantNewUserGiftWorkflowRequired(userContext)
 	forceHumanSupportWorkflow := assistantHumanSupportWorkflowRequired(userContext)
+	forceConversationTitle := userContext.ConversationTitleNeeded
 	forceReadChain := assistantLiveReadRequired(userContext)
 	if forceL0Assessment && maxSteps < 2 {
+		maxSteps = 2
+	}
+	if forceConversationTitle && maxSteps < 2 {
+		// A title is a real agent action, not optional model prose. Keep it
+		// available even when an administrator disables the general-purpose
+		// multi-step loop.
 		maxSteps = 2
 	}
 	if minimum := assistantRecommendationWorkflowMinSteps(userContext); maxSteps < minimum {
@@ -1513,13 +1520,13 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 		maxSteps = minimum
 	}
 	if !settings.AgentLoopEnabled {
-		if !forceL0Assessment && !forceRecommendationWorkflow && !forceCreateKeyWorkflow && !forceImageGenerationWorkflow && !forcePublicActivityWorkflow && !forceNewUserGiftWorkflow && !forceHumanSupportWorkflow && !forceReadChain {
+		if !forceL0Assessment && !forceConversationTitle && !forceRecommendationWorkflow && !forceCreateKeyWorkflow && !forceImageGenerationWorkflow && !forcePublicActivityWorkflow && !forceNewUserGiftWorkflow && !forceHumanSupportWorkflow && !forceReadChain {
 			maxSteps = 1
 		}
 	}
 	cacheKey := c.GetString("assistant_cache_key")
 	usedCacheSensitiveTool := false
-	agentEnabled := maxSteps > 1 && (settings.AgentLoopEnabled || forceL0Assessment || forceRecommendationWorkflow || forceCreateKeyWorkflow || forceImageGenerationWorkflow || forcePublicActivityWorkflow || forceNewUserGiftWorkflow || forceHumanSupportWorkflow || forceReadChain)
+	agentEnabled := maxSteps > 1 && (settings.AgentLoopEnabled || forceL0Assessment || forceConversationTitle || forceRecommendationWorkflow || forceCreateKeyWorkflow || forceImageGenerationWorkflow || forcePublicActivityWorkflow || forceNewUserGiftWorkflow || forceHumanSupportWorkflow || forceReadChain)
 	var tools []assistantOpenAIToolDefinition
 	var calledTools, successfulTools map[string]bool
 	toolTraces := make([]assistantToolTrace, 0, assistantToolCallsPerTurn)
@@ -1560,7 +1567,7 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 			return
 		}
 		message := response.Choices[0].Message
-		if forceRecommendationWorkflow || forceCreateKeyWorkflow || forceImageGenerationWorkflow || forcePublicActivityWorkflow || forceNewUserGiftWorkflow || forceHumanSupportWorkflow || forceReadChain {
+		if forceConversationTitle || forceRecommendationWorkflow || forceCreateKeyWorkflow || forceImageGenerationWorkflow || forcePublicActivityWorkflow || forceNewUserGiftWorkflow || forceHumanSupportWorkflow || forceReadChain {
 			requiredTool := assistantNamedToolChoiceName(request.ToolChoice)
 			if requiredTool != "" && (len(message.ToolCalls) != 1 || strings.TrimSpace(message.ToolCalls[0].Function.Name) != requiredTool) {
 				writeAssistantError(c, http.StatusBadGateway, "ASSISTANT_REQUIRED_TOOL_MISSING", errors.New("assistant did not follow the required tool workflow"))
@@ -1580,7 +1587,7 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 			c.Data(status, "application/json; charset=utf-8", normalizedBody)
 			return
 		}
-		if (!settings.AgentLoopEnabled && !forceL0Assessment && !forceRecommendationWorkflow && !forceCreateKeyWorkflow && !forceImageGenerationWorkflow && !forcePublicActivityWorkflow && !forceNewUserGiftWorkflow && !forceHumanSupportWorkflow && !forceReadChain) || step >= maxSteps-1 {
+		if (!settings.AgentLoopEnabled && !forceL0Assessment && !forceConversationTitle && !forceRecommendationWorkflow && !forceCreateKeyWorkflow && !forceImageGenerationWorkflow && !forcePublicActivityWorkflow && !forceNewUserGiftWorkflow && !forceHumanSupportWorkflow && !forceReadChain) || step >= maxSteps-1 {
 			writeAssistantError(c, http.StatusBadGateway, "ASSISTANT_AGENT_MAX_STEPS", errors.New("assistant agent reached its step limit before producing a final answer"))
 			return
 		}

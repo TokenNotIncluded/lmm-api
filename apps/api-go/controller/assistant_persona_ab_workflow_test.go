@@ -452,3 +452,42 @@ func TestPersonaBAgentChainKeepsGuidedStrategy(t *testing.T) {
 	assert.Equal(t, http.StatusOK, recorder.Code)
 	assert.Contains(t, recorder.Body.String(), "不会再重复询问")
 }
+
+func TestAssistantTitleWorkflowRunsWhenAgentLoopIsDisabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/assistant/chat", nil)
+	c.Set(assistantUserContextKey, assistantUserContext{
+		AccessLevel:             "L0",
+		ConversationTitleNeeded: true,
+	})
+
+	turn := 0
+	originalRelay := relayAssistantAgentTurn
+	relayAssistantAgentTurn = func(_ *gin.Context, request assistantOpenAIRequest, _ string, _ int) (int, []byte, error) {
+		turn++
+		switch turn {
+		case 1:
+			assert.Equal(t, "set_conversation_title", assistantNamedToolChoiceName(request.ToolChoice))
+			assert.NotEmpty(t, request.Tools)
+			return http.StatusOK, []byte(`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"title","type":"function","function":{"name":"set_conversation_title","arguments":"{\"title\":\"配置 API 密钥\"}"}}]}}]}`), nil
+		case 2:
+			assert.Nil(t, request.ToolChoice)
+			assert.Empty(t, request.Tools)
+			return http.StatusOK, []byte(`{"choices":[{"message":{"role":"assistant","content":"标题已生成。"}}]}`), nil
+		default:
+			return http.StatusInternalServerError, nil, nil
+		}
+	}
+	t.Cleanup(func() { relayAssistantAgentTurn = originalRelay })
+
+	runAssistantAgent(c, setting.AssistantSettings{
+		Model: "title-workflow-model", AgentLoopEnabled: false, MaxSteps: 1, TimeoutSeconds: 45,
+	}, []assistantOpenAIMessage{{Role: "user", Content: "帮我配置 API 密钥"}})
+
+	assert.Equal(t, 2, turn)
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "标题已生成")
+	assert.Equal(t, "配置 API 密钥", c.GetString(assistantConversationTitleDraftKey))
+}
