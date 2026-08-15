@@ -206,20 +206,27 @@ type financeUserSubscriptionExport struct {
 }
 
 type financeExportBundle struct {
-	Manifest           financeExportManifest
-	Options            map[string]string
-	EffectivePricing   []model.Pricing
-	Users              []financeUserExport
-	UserStream         func(io.Writer) error
-	Channels           []financeChannelExport
-	Plans              []financePlanExport
-	TopUps             []financeTopUpExport
-	SubscriptionOrders []financeSubscriptionOrderExport
-	Usage              []financeUsageExport
-	BountyLedger       []financeBountyLedgerExport
-	Checkins           []financeCheckinExport
-	Redemptions        []financeRedemptionExport
-	UserSubscriptions  []financeUserSubscriptionExport
+	Manifest                 financeExportManifest
+	Options                  map[string]string
+	EffectivePricing         []model.Pricing
+	Users                    []financeUserExport
+	UserStream               func(io.Writer) error
+	Channels                 []financeChannelExport
+	Plans                    []financePlanExport
+	TopUps                   []financeTopUpExport
+	TopUpsStream             func(io.Writer) error
+	SubscriptionOrders       []financeSubscriptionOrderExport
+	SubscriptionOrdersStream func(io.Writer) error
+	Usage                    []financeUsageExport
+	UsageStream              func(io.Writer) error
+	BountyLedger             []financeBountyLedgerExport
+	BountyLedgerStream       func(io.Writer) error
+	Checkins                 []financeCheckinExport
+	CheckinsStream           func(io.Writer) error
+	Redemptions              []financeRedemptionExport
+	RedemptionsStream        func(io.Writer) error
+	UserSubscriptions        []financeUserSubscriptionExport
+	UserSubscriptionsStream  func(io.Writer) error
 }
 
 func parseFinanceExportWindow(c *gin.Context) (int64, int64, error) {
@@ -282,6 +289,58 @@ var financeExportOptionKeys = map[string]struct{}{
 	"checkin_setting.level_multipliers": {},
 }
 
+// countFinanceExportRows keeps the manifest useful without materializing the
+// matching records in the request heap. The returned count is the number of
+// rows that will actually be exported; truncated reports that the database
+// contains more rows than the hard export cap.
+func countFinanceExportRows(query *gorm.DB) (int, bool, error) {
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return 0, false, err
+	}
+	if total > int64(financeExportMaxRows) {
+		return financeExportMaxRows, true, nil
+	}
+	return int(total), false, nil
+}
+
+// streamFinanceQueryJSON reads one database row at a time and writes it
+// immediately. In particular, it must not be replaced with Find(&slice): the
+// export endpoint is intentionally usable on installations with millions of
+// ledger/log rows.
+func streamFinanceQueryJSON[T any](writer io.Writer, query *gorm.DB) error {
+	if _, err := io.WriteString(writer, "["); err != nil {
+		return err
+	}
+	rows, err := query.Rows()
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	encoder := json.NewEncoder(writer)
+	wroteRow := false
+	for rows.Next() {
+		var value T
+		if err := query.ScanRows(rows, &value); err != nil {
+			return err
+		}
+		if wroteRow {
+			if _, err := io.WriteString(writer, ","); err != nil {
+				return err
+			}
+		}
+		if err := encoder.Encode(value); err != nil {
+			return err
+		}
+		wroteRow = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = io.WriteString(writer, "]\n")
+	return err
+}
+
 func loadFinanceExportBundle(start, end int64) (financeExportBundle, error) {
 	bundle := financeExportBundle{
 		Options: make(map[string]string),
@@ -339,17 +398,42 @@ func loadFinanceExportBundle(start, end int64) (financeExportBundle, error) {
 		Order("sort_order ASC, id ASC").Find(&bundle.Plans).Error; err != nil {
 		return bundle, err
 	}
-	if err := model.DB.Model(&model.TopUp{}).
-		Select("id", "user_id", "amount", "credited_quota", "expected_amount_micros", "settled_amount_micros", "settlement_currency", "money", "payment_method", "payment_provider", "create_time", "complete_time", "status").
-		Where("create_time >= ? AND create_time <= ?", start, end).
-		Order("create_time ASC, id ASC").Limit(financeExportMaxRows).Find(&bundle.TopUps).Error; err != nil {
+	topUpsBase := func() *gorm.DB {
+		return model.DB.Model(&model.TopUp{}).
+			Where("create_time >= ? AND create_time <= ?", start, end)
+	}
+	topUpsQuery := func() *gorm.DB {
+		return topUpsBase().
+			Select("id", "user_id", "amount", "credited_quota", "expected_amount_micros", "settled_amount_micros", "settlement_currency", "money", "payment_method", "payment_provider", "create_time", "complete_time", "status").
+			Order("create_time ASC, id ASC").Limit(financeExportMaxRows)
+	}
+	topUpsCount, topUpsTruncated, err := countFinanceExportRows(topUpsBase())
+	if err != nil {
 		return bundle, err
 	}
-	if err := model.DB.Model(&model.SubscriptionOrder{}).
-		Select("id", "user_id", "plan_id", "money", "payment_method", "payment_provider", "status", "create_time", "complete_time").
-		Where("create_time >= ? AND create_time <= ?", start, end).
-		Order("create_time ASC, id ASC").Limit(financeExportMaxRows).Find(&bundle.SubscriptionOrders).Error; err != nil {
+	bundle.Manifest.Rows["topups"] = topUpsCount
+	bundle.Manifest.Truncated["topups"] = topUpsTruncated
+	bundle.TopUpsStream = func(writer io.Writer) error {
+		return streamFinanceQueryJSON[financeTopUpExport](writer, topUpsQuery())
+	}
+
+	subscriptionOrdersBase := func() *gorm.DB {
+		return model.DB.Model(&model.SubscriptionOrder{}).
+			Where("create_time >= ? AND create_time <= ?", start, end)
+	}
+	subscriptionOrdersQuery := func() *gorm.DB {
+		return subscriptionOrdersBase().
+			Select("id", "user_id", "plan_id", "money", "payment_method", "payment_provider", "status", "create_time", "complete_time").
+			Order("create_time ASC, id ASC").Limit(financeExportMaxRows)
+	}
+	subscriptionOrdersCount, subscriptionOrdersTruncated, err := countFinanceExportRows(subscriptionOrdersBase())
+	if err != nil {
 		return bundle, err
+	}
+	bundle.Manifest.Rows["subscription_orders"] = subscriptionOrdersCount
+	bundle.Manifest.Truncated["subscription_orders"] = subscriptionOrdersTruncated
+	bundle.SubscriptionOrdersStream = func(writer io.Writer) error {
+		return streamFinanceQueryJSON[financeSubscriptionOrderExport](writer, subscriptionOrdersQuery())
 	}
 	usageTypes := []int{
 		model.LogTypeConsume,
@@ -358,34 +442,97 @@ func loadFinanceExportBundle(start, end int64) (financeExportBundle, error) {
 		model.LogTypeSystem,
 		model.LogTypeManage,
 	}
-	if err := model.LOG_DB.Model(&model.Log{}).
-		Select("id", "user_id", "created_at", "type", "username", "token_name", "model_name", "quota", "prompt_tokens", "completion_tokens", "use_time", "is_stream", "channel_id", "group").
-		Where("created_at >= ? AND created_at <= ? AND type IN ?", start, end, usageTypes).
-		Order("created_at ASC, id ASC").Limit(financeExportMaxRows).Find(&bundle.Usage).Error; err != nil {
+	usageBase := func() *gorm.DB {
+		return model.LOG_DB.Model(&model.Log{}).
+			Where("created_at >= ? AND created_at <= ? AND type IN ?", start, end, usageTypes)
+	}
+	usageQuery := func() *gorm.DB {
+		return usageBase().
+			Select("id", "user_id", "created_at", "type", "username", "token_name", "model_name", "quota", "prompt_tokens", "completion_tokens", "use_time", "is_stream", "channel_id", "group").
+			Order("created_at ASC, id ASC").Limit(financeExportMaxRows)
+	}
+	usageCount, usageTruncated, err := countFinanceExportRows(usageBase())
+	if err != nil {
 		return bundle, err
 	}
-	if err := model.DB.Model(&model.OpenSourceBountyLedger{}).
-		Select("id", "project_id", "challenge_id", "user_id", "counterparty_user_id", "kind", "quota", "note", "created_at").
-		Where("created_at >= ? AND created_at <= ?", start, end).
-		Order("created_at ASC, id ASC").Limit(financeExportMaxRows).Find(&bundle.BountyLedger).Error; err != nil {
+	bundle.Manifest.Rows["usage"] = usageCount
+	bundle.Manifest.Truncated["usage"] = usageTruncated
+	bundle.UsageStream = func(writer io.Writer) error {
+		return streamFinanceQueryJSON[financeUsageExport](writer, usageQuery())
+	}
+
+	bountyLedgerBase := func() *gorm.DB {
+		return model.DB.Model(&model.OpenSourceBountyLedger{}).
+			Where("created_at >= ? AND created_at <= ?", start, end)
+	}
+	bountyLedgerQuery := func() *gorm.DB {
+		return bountyLedgerBase().
+			Select("id", "project_id", "challenge_id", "user_id", "counterparty_user_id", "kind", "quota", "note", "created_at").
+			Order("created_at ASC, id ASC").Limit(financeExportMaxRows)
+	}
+	bountyLedgerCount, bountyLedgerTruncated, err := countFinanceExportRows(bountyLedgerBase())
+	if err != nil {
 		return bundle, err
 	}
-	if err := model.DB.Model(&model.Checkin{}).
-		Select("id", "user_id", "checkin_date", "quota_awarded", "created_at").
-		Where("created_at >= ? AND created_at <= ?", start, end).
-		Order("created_at ASC, id ASC").Limit(financeExportMaxRows).Find(&bundle.Checkins).Error; err != nil {
+	bundle.Manifest.Rows["bounty_ledger"] = bountyLedgerCount
+	bundle.Manifest.Truncated["bounty_ledger"] = bountyLedgerTruncated
+	bundle.BountyLedgerStream = func(writer io.Writer) error {
+		return streamFinanceQueryJSON[financeBountyLedgerExport](writer, bountyLedgerQuery())
+	}
+
+	checkinsBase := func() *gorm.DB {
+		return model.DB.Model(&model.Checkin{}).
+			Where("created_at >= ? AND created_at <= ?", start, end)
+	}
+	checkinsQuery := func() *gorm.DB {
+		return checkinsBase().
+			Select("id", "user_id", "checkin_date", "quota_awarded", "created_at").
+			Order("created_at ASC, id ASC").Limit(financeExportMaxRows)
+	}
+	checkinsCount, checkinsTruncated, err := countFinanceExportRows(checkinsBase())
+	if err != nil {
 		return bundle, err
 	}
-	if err := model.DB.Model(&model.Redemption{}).
-		Select("id", "user_id", "status", "name", "quota", "created_time", "redeemed_time", "used_user_id", "expired_time").
-		Where("deleted_at IS NULL").
-		Order("id ASC").Limit(financeExportMaxRows).Find(&bundle.Redemptions).Error; err != nil {
+	bundle.Manifest.Rows["checkins"] = checkinsCount
+	bundle.Manifest.Truncated["checkins"] = checkinsTruncated
+	bundle.CheckinsStream = func(writer io.Writer) error {
+		return streamFinanceQueryJSON[financeCheckinExport](writer, checkinsQuery())
+	}
+
+	redemptionsBase := func() *gorm.DB {
+		return model.DB.Model(&model.Redemption{}).Where("deleted_at IS NULL")
+	}
+	redemptionsQuery := func() *gorm.DB {
+		return redemptionsBase().
+			Select("id", "user_id", "status", "name", "quota", "created_time", "redeemed_time", "used_user_id", "expired_time").
+			Order("id ASC").Limit(financeExportMaxRows)
+	}
+	redemptionsCount, redemptionsTruncated, err := countFinanceExportRows(redemptionsBase())
+	if err != nil {
 		return bundle, err
 	}
-	if err := model.DB.Model(&model.UserSubscription{}).
-		Select("id", "user_id", "plan_id", "amount_total", "amount_used", "start_time", "end_time", "status", "source", "last_reset_time", "next_reset_time", "upgrade_group", "prev_user_group", "downgrade_group", "allow_wallet_overflow", "created_at", "updated_at").
-		Order("id ASC").Limit(financeExportMaxRows).Find(&bundle.UserSubscriptions).Error; err != nil {
+	bundle.Manifest.Rows["redemptions"] = redemptionsCount
+	bundle.Manifest.Truncated["redemptions"] = redemptionsTruncated
+	bundle.RedemptionsStream = func(writer io.Writer) error {
+		return streamFinanceQueryJSON[financeRedemptionExport](writer, redemptionsQuery())
+	}
+
+	userSubscriptionsBase := func() *gorm.DB {
+		return model.DB.Model(&model.UserSubscription{})
+	}
+	userSubscriptionsQuery := func() *gorm.DB {
+		return userSubscriptionsBase().
+			Select("id", "user_id", "plan_id", "amount_total", "amount_used", "start_time", "end_time", "status", "source", "last_reset_time", "next_reset_time", "upgrade_group", "prev_user_group", "downgrade_group", "allow_wallet_overflow", "created_at", "updated_at").
+			Order("id ASC").Limit(financeExportMaxRows)
+	}
+	userSubscriptionsCount, userSubscriptionsTruncated, err := countFinanceExportRows(userSubscriptionsBase())
+	if err != nil {
 		return bundle, err
+	}
+	bundle.Manifest.Rows["user_subscriptions"] = userSubscriptionsCount
+	bundle.Manifest.Truncated["user_subscriptions"] = userSubscriptionsTruncated
+	bundle.UserSubscriptionsStream = func(writer io.Writer) error {
+		return streamFinanceQueryJSON[financeUserSubscriptionExport](writer, userSubscriptionsQuery())
 	}
 
 	bundle.Manifest.Rows["options"] = len(bundle.Options)
@@ -393,20 +540,6 @@ func loadFinanceExportBundle(start, end int64) (financeExportBundle, error) {
 	bundle.Manifest.Rows["users"] = int(userCount)
 	bundle.Manifest.Rows["channels"] = len(bundle.Channels)
 	bundle.Manifest.Rows["plans"] = len(bundle.Plans)
-	bundle.Manifest.Rows["topups"] = len(bundle.TopUps)
-	bundle.Manifest.Rows["subscription_orders"] = len(bundle.SubscriptionOrders)
-	bundle.Manifest.Rows["usage"] = len(bundle.Usage)
-	bundle.Manifest.Rows["bounty_ledger"] = len(bundle.BountyLedger)
-	bundle.Manifest.Rows["checkins"] = len(bundle.Checkins)
-	bundle.Manifest.Rows["redemptions"] = len(bundle.Redemptions)
-	bundle.Manifest.Rows["user_subscriptions"] = len(bundle.UserSubscriptions)
-	bundle.Manifest.Truncated["topups"] = len(bundle.TopUps) == financeExportMaxRows
-	bundle.Manifest.Truncated["subscription_orders"] = len(bundle.SubscriptionOrders) == financeExportMaxRows
-	bundle.Manifest.Truncated["usage"] = len(bundle.Usage) == financeExportMaxRows
-	bundle.Manifest.Truncated["bounty_ledger"] = len(bundle.BountyLedger) == financeExportMaxRows
-	bundle.Manifest.Truncated["checkins"] = len(bundle.Checkins) == financeExportMaxRows
-	bundle.Manifest.Truncated["redemptions"] = len(bundle.Redemptions) == financeExportMaxRows
-	bundle.Manifest.Truncated["user_subscriptions"] = len(bundle.UserSubscriptions) == financeExportMaxRows
 	bundle.Manifest.Truncated["users"] = false
 	return bundle, nil
 }
@@ -528,13 +661,13 @@ func financeDocuments(bundle financeExportBundle) []financeDocument {
 		{Name: "users-balances.json", Value: bundle.Users, Write: bundle.UserStream},
 		{Name: "channels-pricing.json", Value: bundle.Channels},
 		{Name: "subscription-plans.json", Value: bundle.Plans},
-		{Name: "topups.json", Value: bundle.TopUps},
-		{Name: "subscription-orders.json", Value: bundle.SubscriptionOrders},
-		{Name: "usage-billing-records.json", Value: bundle.Usage},
-		{Name: "bounty-ledger.json", Value: bundle.BountyLedger},
-		{Name: "checkins.json", Value: bundle.Checkins},
-		{Name: "redemptions.json", Value: bundle.Redemptions},
-		{Name: "user-subscriptions.json", Value: bundle.UserSubscriptions},
+		{Name: "topups.json", Value: bundle.TopUps, Write: bundle.TopUpsStream},
+		{Name: "subscription-orders.json", Value: bundle.SubscriptionOrders, Write: bundle.SubscriptionOrdersStream},
+		{Name: "usage-billing-records.json", Value: bundle.Usage, Write: bundle.UsageStream},
+		{Name: "bounty-ledger.json", Value: bundle.BountyLedger, Write: bundle.BountyLedgerStream},
+		{Name: "checkins.json", Value: bundle.Checkins, Write: bundle.CheckinsStream},
+		{Name: "redemptions.json", Value: bundle.Redemptions, Write: bundle.RedemptionsStream},
+		{Name: "user-subscriptions.json", Value: bundle.UserSubscriptions, Write: bundle.UserSubscriptionsStream},
 	}
 }
 

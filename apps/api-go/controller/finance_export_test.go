@@ -3,13 +3,16 @@ package controller
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func financeExportTestContext(query string) *gin.Context {
@@ -165,6 +168,38 @@ func TestFinanceDocumentsCanStreamUsersWithoutMaterializingRows(t *testing.T) {
 	require.Equal(t, "users-balances.json", document.Name)
 	require.NoError(t, document.write(&output))
 	require.Equal(t, "[\n{\"user_id\":1}\n]\n", output.String())
+}
+
+type financeExportStreamTestRow struct {
+	ID    int    `json:"id" gorm:"column:id"`
+	Value string `json:"value" gorm:"column:value"`
+}
+
+func TestStreamFinanceQueryJSONReadsRowsIncrementally(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec("CREATE TABLE finance_export_stream_rows (id INTEGER PRIMARY KEY, value TEXT NOT NULL)").Error)
+	require.NoError(t, db.Exec("INSERT INTO finance_export_stream_rows (id, value) VALUES (1, 'first'), (2, 'second')").Error)
+
+	var output bytes.Buffer
+	query := db.Table("finance_export_stream_rows").Select("id", "value").Order("id ASC")
+	require.NoError(t, streamFinanceQueryJSON[financeExportStreamTestRow](&output, query))
+
+	var rows []financeExportStreamTestRow
+	require.NoError(t, json.Unmarshal(output.Bytes(), &rows))
+	require.Equal(t, []financeExportStreamTestRow{{ID: 1, Value: "first"}, {ID: 2, Value: "second"}}, rows)
+}
+
+func TestCountFinanceExportRowsReportsTheExportCapSeparately(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec("CREATE TABLE finance_export_count_rows (id INTEGER PRIMARY KEY)").Error)
+	require.NoError(t, db.Exec("INSERT INTO finance_export_count_rows (id) VALUES (1), (2)").Error)
+
+	count, truncated, err := countFinanceExportRows(db.Table("finance_export_count_rows"))
+	require.NoError(t, err)
+	require.Equal(t, 2, count)
+	require.False(t, truncated)
 }
 
 func TestWriteFinanceZipContainsStableFiles(t *testing.T) {
