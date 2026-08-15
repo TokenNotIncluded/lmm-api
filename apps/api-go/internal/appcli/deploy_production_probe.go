@@ -249,6 +249,15 @@ func actionableJournalLine(line string) bool {
 	if strings.Contains(trimmed, "upstream prematurely closed connection while reading upstream") {
 		return false
 	}
+	// A request that arrives while the guarded transaction is stopping and
+	// restarting the local Go service can briefly fail before the replacement
+	// listener is ready.  The subsequent local/public health probes are the
+	// authoritative gate; keep unrelated upstream refusals actionable.
+	if strings.Contains(trimmed, "connect() failed (111: Connection refused)") &&
+		strings.Contains(trimmed, "while connecting to upstream") &&
+		strings.Contains(trimmed, `upstream: "http://127.0.0.1:3000/`) {
+		return false
+	}
 	return true
 }
 

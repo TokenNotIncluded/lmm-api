@@ -19,8 +19,13 @@ func TestActionableJournalLineFiltersExpectedProxyDisconnects(t *testing.T) {
 			actionable: true,
 		},
 		{
-			name:       "real upstream failure",
-			line:       `nginx: connect() failed (111: Connection refused) while sending request to upstream`,
+			name:       "local Go listener refusal during restart",
+			line:       `2026/08/15 07:59:35 [error] 621262#621262: *605778 connect() failed (111: Connection refused) while connecting to upstream, client: 211.72.214.21, server: api.lmm.best, request: "GET /api/status HTTP/2.0", upstream: "http://127.0.0.1:3000/api/status", host: "api.lmm.best"`,
+			actionable: false,
+		},
+		{
+			name:       "unrelated upstream refusal",
+			line:       `nginx: connect() failed (111: Connection refused) while connecting to upstream, upstream: "http://127.0.0.1:9000/health"`,
 			actionable: true,
 		},
 		{
