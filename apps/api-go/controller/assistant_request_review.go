@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/LIghtJUNction/api.lmm.best/common"
 	"github.com/LIghtJUNction/api.lmm.best/constant"
@@ -29,6 +30,11 @@ const (
 	assistantReviewWorkerCount   = 2
 	assistantReviewTimeout       = 25 * time.Second
 	assistantReviewMaxContext    = 16 << 10
+	// The answer is queued separately from the conversation. Keep it bounded
+	// as well; otherwise a single long model response could occupy hundreds of
+	// KiB in every waiting job even though the reviewer only receives a small
+	// context window.
+	assistantReviewMaxAnswer = 16 << 10
 )
 
 type assistantRequestReviewJob struct {
@@ -173,7 +179,10 @@ func assistantReviewAnswer(body []byte) string {
 	if err != nil || len(response.Choices) == 0 {
 		return ""
 	}
-	return model.RedactAssistantHistoryContent(assistantResponseContent(response.Choices[0].Message.Content))
+	return truncateReviewBytes(
+		model.RedactAssistantHistoryContent(assistantResponseContent(response.Choices[0].Message.Content)),
+		assistantReviewMaxAnswer,
+	)
 }
 
 func assistantReviewConversation(messages []assistantOpenAIMessage) []assistantOpenAIMessage {
@@ -192,10 +201,10 @@ func assistantReviewConversation(messages []assistantOpenAIMessage) []assistantO
 		if content == "" || remaining <= 0 {
 			continue
 		}
-		if len([]byte(content)) > remaining {
-			content = string([]rune(content)[:minReviewRunes(content, remaining)])
+		if len(content) > remaining {
+			content = truncateReviewBytes(content, remaining)
 		}
-		remaining -= len([]byte(content))
+		remaining -= len(content)
 		reversed = append(reversed, assistantOpenAIMessage{Role: message.Role, Content: content})
 	}
 	result := make([]assistantOpenAIMessage, len(reversed))
@@ -205,19 +214,21 @@ func assistantReviewConversation(messages []assistantOpenAIMessage) []assistantO
 	return result
 }
 
-func minReviewRunes(value string, maxBytes int) int {
+func truncateReviewBytes(value string, maxBytes int) string {
 	if maxBytes <= 0 {
-		return 0
+		return ""
 	}
-	used := 0
-	for index, runeValue := range value {
-		next := len(string(runeValue))
-		if used+next > maxBytes {
-			return len([]rune(value[:index]))
-		}
-		used += next
+	if len(value) <= maxBytes {
+		return value
 	}
-	return len([]rune(value))
+	value = value[:maxBytes]
+	// Do not split a UTF-8 code point at the review boundary. The input is
+	// normally valid UTF-8, but the loop also makes malformed provider text
+	// fail closed rather than retaining an invalid suffix.
+	for len(value) > 0 && !utf8.ValidString(value) {
+		value = value[:len(value)-1]
+	}
+	return value
 }
 
 func enqueueAssistantRequestReview(c *gin.Context, settings setting.AssistantSettings, conversation []assistantOpenAIMessage, body []byte) {
@@ -319,15 +330,18 @@ func reviewPrompt(job assistantRequestReviewJob) (string, string) {
 		intensityInstruction = "按平台安全和滥用规则判断。"
 	}
 	system := "你是 LMM 平台的后台请求审查员。只输出一个 JSON 对象，不要 Markdown，不要复述原文。字段必须是：violation（布尔值）、abuse（布尔值）、rules（字符串数组）、explanation（字符串）。若 violation=false，rules 必须为空数组且 explanation 必须为空字符串；若 violation=true，指出可能触犯的规则，并说明是否属于滥用。" + intensityInstruction
-	var transcript strings.Builder
+	var user strings.Builder
+	user.Grow(len(job.Answer) + assistantReviewMaxContext + 128)
+	user.WriteString("请审查下面这次已脱敏的对话和助手答复。不要根据用户身份、邮箱、分组名称本身作判断。\n\n对话：\n")
 	for _, message := range job.Conversation {
-		transcript.WriteString(message.Role)
-		transcript.WriteString(": ")
-		transcript.WriteString(message.Content)
-		transcript.WriteByte('\n')
+		user.WriteString(message.Role)
+		user.WriteString(": ")
+		user.WriteString(message.Content)
+		user.WriteByte('\n')
 	}
-	user := "请审查下面这次已脱敏的对话和助手答复。不要根据用户身份、邮箱、分组名称本身作判断。\n\n对话：\n" + transcript.String() + "\n助手答复：\n" + job.Answer
-	return system, user
+	user.WriteString("\n助手答复：\n")
+	user.WriteString(job.Answer)
+	return system, user.String()
 }
 
 func runAssistantRequestReview(job assistantRequestReviewJob) error {

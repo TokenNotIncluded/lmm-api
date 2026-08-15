@@ -259,11 +259,13 @@ func getAdvancedSecurityReviewStats(filter AdvancedSecurityEventFilter) (Advance
 	}
 	var groups []AdvancedSecurityStatBucket
 	groupColumn := query.Statement.Quote("group")
+	bucketKey := query.Statement.Quote("key")
+	bucketCount := query.Statement.Quote("count")
 	err := query.Session(&gorm.Session{}).
-		Select(groupColumn + " AS key, COUNT(*) AS count").
+		Select(groupColumn + " AS " + bucketKey + ", COUNT(*) AS " + bucketCount).
 		Where(groupColumn + " <> ''").
 		Group(groupColumn).
-		Order("count desc, key asc").
+		Order(bucketCount + " desc, " + bucketKey + " asc").
 		Limit(100).
 		Scan(&groups).Error
 	stats.ByGroup = groups
@@ -324,11 +326,13 @@ func countDistinctAdvancedSecurityColumn(query *gorm.DB, column string, destinat
 
 func groupAdvancedSecurityStats(query *gorm.DB, column string) ([]AdvancedSecurityStatBucket, error) {
 	var rows []AdvancedSecurityStatBucket
+	bucketKey := query.Statement.Quote("key")
+	bucketCount := query.Statement.Quote("count")
 	err := query.Session(&gorm.Session{}).
-		Select(column + " AS key, COUNT(*) AS count").
+		Select(column + " AS " + bucketKey + ", COUNT(*) AS " + bucketCount).
 		Where(column + " <> ''").
 		Group(column).
-		Order("count desc, key asc").
+		Order(bucketCount + " desc, " + bucketKey + " asc").
 		Limit(100).
 		Scan(&rows).Error
 	return rows, err

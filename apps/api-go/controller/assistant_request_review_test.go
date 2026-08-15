@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/LIghtJUNction/api.lmm.best/common"
 	"github.com/LIghtJUNction/api.lmm.best/model"
@@ -63,6 +64,14 @@ func TestAssistantReviewConversationKeepsLatestTurnWithinBudget(t *testing.T) {
 	require.NotEmpty(t, bounded)
 	require.Equal(t, "user", bounded[len(bounded)-1].Role)
 	require.Equal(t, latest, bounded[len(bounded)-1].Content)
+}
+
+func TestAssistantReviewInputUsesByteBudgetWithoutSplittingUTF8(t *testing.T) {
+	value := strings.Repeat("界", assistantReviewMaxAnswer)
+	trimmed := truncateReviewBytes(value, assistantReviewMaxAnswer-1)
+	require.LessOrEqual(t, len(trimmed), assistantReviewMaxAnswer-1)
+	require.True(t, utf8.ValidString(trimmed))
+	require.Equal(t, 0, len(trimmed)%len("界"))
 }
 
 func TestAssistantReviewQueueDropIsCountedWithoutBlocking(t *testing.T) {
