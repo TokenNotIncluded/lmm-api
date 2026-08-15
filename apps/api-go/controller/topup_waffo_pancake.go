@@ -648,10 +648,17 @@ func WaffoPancakeWebhook(c *gin.Context) {
 		c.String(http.StatusOK, "OK")
 		return
 	}
-	wasPending := topUp.Status == common.TopUpStatusPending
-
 	LockOrder(tradeNo)
 	defer UnlockOrder(tradeNo)
+	// Re-read after taking the order lock. Two identical provider callbacks can
+	// otherwise both observe the old pending snapshot and create duplicate logs.
+	topUp = model.GetTopUpByTradeNo(tradeNo)
+	if topUp == nil {
+		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 充值订单在加锁后消失 trade_no=%s event_id=%s", tradeNo, event.ID))
+		c.String(http.StatusInternalServerError, "retry")
+		return
+	}
+	wasPending := topUp.Status == common.TopUpStatusPending
 
 	settledAmountMicros, err := monetaryStringToMicros(event.Data.Amount)
 	if err != nil {
