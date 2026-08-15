@@ -41,10 +41,24 @@ func GetAllEnableAbilityWithChannels() ([]AbilityWithChannel, error) {
 	return abilities, err
 }
 
-func GetGroupEnabledModels(group string) []string {
+// GetGroupEnabledModelsWithError returns the distinct enabled model IDs for a
+// group and preserves database failures for callers that must not turn an
+// unavailable catalog into a successful empty response.
+func GetGroupEnabledModelsWithError(group string) ([]string, error) {
 	var models []string
 	// Find distinct models
-	DB.Table("abilities").Where(commonGroupCol+" = ? and enabled = ?", group, true).Distinct("model").Pluck("model", &models)
+	err := DB.Table("abilities").Where(commonGroupCol+" = ? and enabled = ?", group, true).Distinct("model").Pluck("model", &models).Error
+	return models, err
+}
+
+// GetGroupEnabledModels preserves the historical best-effort API used by
+// routing paths that intentionally tolerate a missing catalog. New user-facing
+// catalog endpoints should use GetGroupEnabledModelsWithError instead.
+func GetGroupEnabledModels(group string) []string {
+	models, err := GetGroupEnabledModelsWithError(group)
+	if err != nil {
+		return nil
+	}
 	return models
 }
 

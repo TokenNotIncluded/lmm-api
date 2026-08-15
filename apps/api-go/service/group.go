@@ -106,17 +106,32 @@ func GetRequestAutoGroups(c *gin.Context, userGroup string) []string {
 	return FilterUserTokenAutoGroups(userGroup, groups)
 }
 
-// GetGroupsEnabledModels 按 groups 顺序获取各分组启用的模型并去重
-func GetGroupsEnabledModels(groups []string) []string {
+// GetGroupsEnabledModelsWithError 按 groups 顺序获取各分组启用的模型并去重。
+// 与 best-effort 路由 helper 分开，避免数据库异常被误报为空目录。
+func GetGroupsEnabledModelsWithError(groups []string) ([]string, error) {
 	seen := make(map[string]struct{})
 	models := make([]string, 0)
 	for _, group := range groups {
-		for _, modelName := range model.GetGroupEnabledModels(group) {
+		groupModels, err := model.GetGroupEnabledModelsWithError(group)
+		if err != nil {
+			return nil, err
+		}
+		for _, modelName := range groupModels {
 			if _, ok := seen[modelName]; !ok {
 				seen[modelName] = struct{}{}
 				models = append(models, modelName)
 			}
 		}
+	}
+	return models, nil
+}
+
+// GetGroupsEnabledModels preserves the historical best-effort API used by
+// routing paths that can retry or fall back when the catalog is unavailable.
+func GetGroupsEnabledModels(groups []string) []string {
+	models, err := GetGroupsEnabledModelsWithError(groups)
+	if err != nil {
+		return nil
 	}
 	return models
 }

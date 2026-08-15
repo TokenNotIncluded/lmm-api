@@ -2466,7 +2466,15 @@ func executeAssistantModelsTool(userID int) map[string]any {
 		groupNames = append(groupNames, group)
 	}
 	sort.Strings(groupNames)
-	models := service.GetGroupsEnabledModels(groupNames)
+	models, err := service.GetGroupsEnabledModelsWithError(groupNames)
+	if err != nil {
+		return map[string]any{
+			"ok":        false,
+			"status":    "catalog_unavailable",
+			"error":     "available models are temporarily unavailable while the model catalog is loading",
+			"next_step": "Retry the live model inventory; do not infer that no models are enabled.",
+		}
+	}
 	sort.Strings(models)
 	return map[string]any{
 		"ok":                        true,
