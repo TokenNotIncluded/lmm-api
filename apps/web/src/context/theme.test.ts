@@ -22,8 +22,8 @@ import { describe, test } from 'node:test'
 import { DEFAULT_THEME, resolveTheme } from './theme'
 
 describe('theme resolution', () => {
-  test('defaults to dark', () => {
-    assert.equal(DEFAULT_THEME, 'dark')
+  test('defaults to warm light', () => {
+    assert.equal(DEFAULT_THEME, 'light')
   })
 
   test('preserves explicit light and dark themes', () => {

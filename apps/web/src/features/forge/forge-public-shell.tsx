@@ -47,6 +47,9 @@ export function ForgePublicShell(props: ForgePublicShellProps) {
       siteName='LMM Forge'
       logo={<LmmBrandMark className='size-7' title='LMM Forge' />}
       navLinks={[
+        { title: 'Home', href: '/' },
+        { title: 'Model Square', href: '/pricing' },
+        { title: 'Guide', href: '/guide' },
         { title: 'Challenges', href: '/challenges' },
         ...(securityLink ? [securityLink] : []),
       ]}

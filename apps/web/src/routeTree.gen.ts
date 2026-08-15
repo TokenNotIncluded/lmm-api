@@ -34,6 +34,7 @@ import { Route as AuthenticatedSystemSettingsRouteRouteImport } from './routes/_
 import { Route as AboutIndexRouteImport } from './routes/about/index'
 import { Route as ChallengesIndexRouteImport } from './routes/challenges/index'
 import { Route as ChallengesChallengeIdRouteImport } from './routes/challenges/$challengeId'
+import { Route as GuideIndexRouteImport } from './routes/guide/index'
 import { Route as OauthProviderRouteImport } from './routes/oauth/$provider'
 import { Route as PricingIndexRouteImport } from './routes/pricing/index'
 import { Route as RankingsIndexRouteImport } from './routes/rankings/index'
@@ -207,6 +208,11 @@ const ChallengesIndexRoute = ChallengesIndexRouteImport.update({
 const ChallengesChallengeIdRoute = ChallengesChallengeIdRouteImport.update({
   id: '/challenges/$challengeId',
   path: '/challenges/$challengeId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const GuideIndexRoute = GuideIndexRouteImport.update({
+  id: '/guide/',
+  path: '/guide/',
   getParentRoute: () => rootRouteImport,
 } as any)
 const OauthProviderRoute = OauthProviderRouteImport.update({
@@ -524,6 +530,7 @@ export interface FileRoutesByFullPath {
   '/oauth/$provider': typeof OauthProviderRoute
   '/about/': typeof AboutIndexRoute
   '/challenges/': typeof ChallengesIndexRoute
+  '/guide/': typeof GuideIndexRoute
   '/pricing/': typeof PricingIndexRoute
   '/rankings/': typeof RankingsIndexRoute
   '/security/': typeof SecurityIndexRoute
@@ -598,6 +605,7 @@ export interface FileRoutesByTo {
   '/oauth/$provider': typeof OauthProviderRoute
   '/about': typeof AboutIndexRoute
   '/challenges': typeof ChallengesIndexRoute
+  '/guide': typeof GuideIndexRoute
   '/pricing': typeof PricingIndexRoute
   '/rankings': typeof RankingsIndexRoute
   '/security': typeof SecurityIndexRoute
@@ -676,6 +684,7 @@ export interface FileRoutesById {
   '/oauth/$provider': typeof OauthProviderRoute
   '/about/': typeof AboutIndexRoute
   '/challenges/': typeof ChallengesIndexRoute
+  '/guide/': typeof GuideIndexRoute
   '/pricing/': typeof PricingIndexRoute
   '/rankings/': typeof RankingsIndexRoute
   '/security/': typeof SecurityIndexRoute
@@ -753,6 +762,7 @@ export interface FileRouteTypes {
     | '/oauth/$provider'
     | '/about/'
     | '/challenges/'
+    | '/guide/'
     | '/pricing/'
     | '/rankings/'
     | '/security/'
@@ -827,6 +837,7 @@ export interface FileRouteTypes {
     | '/oauth/$provider'
     | '/about'
     | '/challenges'
+    | '/guide'
     | '/pricing'
     | '/rankings'
     | '/security'
@@ -904,6 +915,7 @@ export interface FileRouteTypes {
     | '/oauth/$provider'
     | '/about/'
     | '/challenges/'
+    | '/guide/'
     | '/pricing/'
     | '/rankings/'
     | '/security/'
@@ -972,6 +984,7 @@ export interface RootRouteChildren {
   OauthProviderRoute: typeof OauthProviderRoute
   AboutIndexRoute: typeof AboutIndexRoute
   ChallengesIndexRoute: typeof ChallengesIndexRoute
+  GuideIndexRoute: typeof GuideIndexRoute
   PricingIndexRoute: typeof PricingIndexRoute
   RankingsIndexRoute: typeof RankingsIndexRoute
   SecurityIndexRoute: typeof SecurityIndexRoute
@@ -1154,6 +1167,13 @@ declare module '@tanstack/react-router' {
       path: '/challenges/$challengeId'
       fullPath: '/challenges/$challengeId'
       preLoaderRoute: typeof ChallengesChallengeIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/guide/': {
+      id: '/guide/'
+      path: '/guide'
+      fullPath: '/guide/'
+      preLoaderRoute: typeof GuideIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/oauth/$provider': {
@@ -1684,6 +1704,7 @@ const rootRouteChildren: RootRouteChildren = {
   OauthProviderRoute: OauthProviderRoute,
   AboutIndexRoute: AboutIndexRoute,
   ChallengesIndexRoute: ChallengesIndexRoute,
+  GuideIndexRoute: GuideIndexRoute,
   PricingIndexRoute: PricingIndexRoute,
   RankingsIndexRoute: RankingsIndexRoute,
   SecurityIndexRoute: SecurityIndexRoute,

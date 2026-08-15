@@ -86,6 +86,110 @@ For commercial licensing, please contact support@quantumnous.com
   color: var(--foreground);
 }
 
+/* Clean console language: paper field, ink hierarchy, one warm accent. */
+.forge-kicker {
+  color: var(--forge-clay);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.forge-text-link {
+  color: var(--forge-ink);
+  text-decoration: underline;
+  text-decoration-color: color-mix(
+    in oklch,
+    var(--forge-clay) 72%,
+    transparent
+  );
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.28rem;
+  transition:
+    color 160ms ease,
+    text-decoration-color 160ms ease;
+}
+
+.forge-text-link:hover {
+  color: var(--forge-clay);
+  text-decoration-color: var(--forge-clay);
+}
+
+.forge-outline-button {
+  border-color: color-mix(in oklch, var(--forge-ink) 28%, transparent);
+  background: transparent;
+  color: var(--forge-ink);
+}
+
+.forge-outline-button:hover {
+  border-color: var(--forge-ink);
+  background: color-mix(in oklch, var(--forge-ink) 7%, transparent);
+}
+
+.forge-home-note {
+  border-top: 1px solid color-mix(in oklch, var(--forge-ink) 22%, transparent);
+  padding-top: 1.25rem;
+}
+
+.forge-note-rule {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .forge-home-note {
+    margin-top: -1rem;
+  }
+}
+
+@media (max-width: 420px) {
+  .forge-home-submit-label {
+    display: none;
+  }
+
+  .forge-home-hero [data-slot='input-group-button'] {
+    width: 2.5rem;
+    padding-inline: 0;
+  }
+}
+
+.forge-guide-section {
+  border-top: 1px solid color-mix(in oklch, var(--forge-ink) 18%, transparent);
+  padding-block: 1.5rem 1.75rem;
+}
+
+.forge-guide-section:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.forge-guide-note {
+  border-top: 1px solid color-mix(in oklch, var(--forge-ink) 22%, transparent);
+  padding-top: 1.25rem;
+}
+
+.forge-guide-code {
+  margin-top: 1.75rem;
+  overflow: hidden;
+  border: 1px solid color-mix(in oklch, var(--forge-ink) 22%, transparent);
+  background: color-mix(in oklch, var(--forge-ink) 5%, transparent);
+}
+
+.forge-guide-code > div {
+  border-color: color-mix(in oklch, var(--forge-ink) 16%, transparent);
+  color: color-mix(in oklch, var(--forge-ink) 62%, transparent);
+}
+
+.forge-guide-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--forge-ink);
+}
+
+.forge-guide-copy:hover {
+  color: var(--forge-clay);
+}
+
 .dark .forge-surface {
   --background: var(--forge-surface-dark);
   --foreground: var(--forge-foreground-dark);

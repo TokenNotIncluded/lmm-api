@@ -974,6 +974,75 @@ For commercial licensing, please contact support@quantumnous.com
   box-shadow: none;
 }
 
+/* Router-style console shell: a quiet paper canvas, one strong action colour,
+ * and navigation that reads like a table of contents instead of a card wall. */
+.console-editorial [data-slot='sidebar-container'] {
+  background: var(--sidebar);
+  border-inline-end: 1px solid var(--sidebar-border);
+}
+
+.console-editorial [data-slot='sidebar-inner'] {
+  padding-block: 0.75rem;
+}
+
+.console-editorial [data-slot='sidebar-menu-button'] {
+  min-height: 2.5rem;
+  border-radius: 0.55rem;
+  color: color-mix(in oklch, var(--sidebar-foreground) 72%, transparent);
+  transition:
+    background-color 140ms ease,
+    color 140ms ease;
+}
+
+.console-editorial [data-slot='sidebar-menu-button']:hover {
+  background: color-mix(in oklch, var(--sidebar-foreground) 6%, transparent);
+  color: var(--sidebar-foreground);
+}
+
+.console-editorial [data-slot='sidebar-menu-button'][data-active='true'] {
+  background: var(--sidebar-accent);
+  color: var(--sidebar-accent-foreground);
+  font-weight: 600;
+}
+
+.console-editorial [data-slot='sidebar-group-label'] {
+  padding-block: 0.85rem 0.45rem;
+  color: color-mix(in oklch, var(--sidebar-foreground) 48%, transparent);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+}
+
+.console-editorial > [data-slot='sidebar-inset'] > header,
+.console-editorial [data-slot='sidebar-inset'] > header {
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in oklch, var(--background) 94%, transparent);
+}
+
+.console-editorial [data-slot='sidebar-inset'] main {
+  background: var(--background);
+}
+
+.console-editorial :where([data-slot='button']) {
+  border-radius: 0.42rem;
+}
+
+.console-editorial :where(input, textarea, select) {
+  border-radius: 0.5rem;
+  background: color-mix(in oklch, var(--background) 88%, var(--card));
+}
+
+.console-editorial :where(table thead) {
+  border-bottom: 1px solid var(--border);
+}
+
+.console-editorial :where(table tbody tr) {
+  border-bottom: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
+}
+
+.console-editorial :where(table tbody tr:last-child) {
+  border-bottom: 0;
+}
+
 .console-editorial :where(a, button, input, textarea, select):focus-visible {
   outline: 2px solid var(--console-clay);
   outline-offset: 3px;

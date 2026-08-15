@@ -102,6 +102,7 @@ function makeRouter() {
     '/challenges',
     '/dashboard',
     '/getting-started',
+    '/guide',
     '/open-source-bounties',
     '/pricing',
     '/security',

@@ -90,69 +90,107 @@ export function ForgeHome() {
       <main>
         <section
           aria-labelledby='forge-home-title'
-          className='border-border border-b'
+          className='forge-home-hero border-border border-b'
         >
-          <div className='mx-auto grid max-w-5xl content-center gap-12 px-6 py-14 md:min-h-[min(46rem,calc(100dvh-5rem))] md:px-10 md:py-24'>
+          <div className='mx-auto grid max-w-6xl gap-14 px-6 py-20 md:min-h-[min(43rem,calc(100dvh-5rem))] md:grid-cols-[minmax(0,1.2fr)_minmax(18rem,0.7fr)] md:items-center md:px-10 md:py-24'>
             <div className='max-w-3xl'>
-              <p className='text-muted-foreground mb-5 text-sm'>
+              <p className='forge-kicker mb-6'>
                 {t('Developer-friendly AI gateway')}
               </p>
               <h1
                 id='forge-home-title'
-                className='mb-7 max-w-3xl font-serif text-4xl leading-[1.02] font-normal tracking-tight sm:text-5xl md:text-7xl'
+                className='mb-8 max-w-3xl font-serif text-5xl leading-[0.98] font-normal tracking-[-0.035em] sm:text-6xl md:text-8xl'
               >
                 LMM Forge
               </h1>
-              <p className='text-muted-foreground max-w-2xl text-base leading-7 sm:text-lg sm:leading-8 md:text-xl'>
+              <p className='text-foreground/70 max-w-2xl text-lg leading-8 sm:text-xl'>
                 {t(
                   'A semi-public-interest AI gateway for high-quality, transparent access.'
                 )}
               </p>
-              <p className='text-muted-foreground mt-3 max-w-2xl leading-7'>
+              <p className='text-muted-foreground mt-4 max-w-xl leading-7'>
                 {t(
-                  'Use the gateway for your own work, or browse public open-source challenges.'
+                  'Use one clear API for your work, connect a client, or explore public open-source challenges.'
                 )}
               </p>
+
+              <form className='mt-12 max-w-2xl' onSubmit={submitMessage}>
+                <label className='sr-only' htmlFor='forge-home-message'>
+                  {t('Tell us what you want to do')}
+                </label>
+                <InputGroup className='has-[[data-slot=input-group-control]:focus-visible]:border-foreground/50 h-12 rounded-xl has-[[data-slot=input-group-control]:focus-visible]:ring-0'>
+                  <InputGroupInput
+                    id='forge-home-message'
+                    value={message}
+                    onChange={(event) => setMessage(event.target.value)}
+                    onFocus={() => setMessageFocused(true)}
+                    onBlur={() => setMessageFocused(false)}
+                    className='focus-visible:!outline-none'
+                    placeholder={
+                      animatedPlaceholder || t('Describe what you need...')
+                    }
+                    maxLength={4000}
+                  />
+                  <InputGroupAddon align='inline-end' className='pr-1'>
+                    <InputGroupButton
+                      type='submit'
+                      variant='default'
+                      size='sm'
+                      className='h-10 rounded-lg px-3'
+                      disabled={
+                        !message.trim() || messageInvalid || !assistantEnabled
+                      }
+                    >
+                      <span className='forge-home-submit-label'>
+                        {t('Ask AI assistant')}
+                      </span>
+                      <HugeiconsIcon
+                        icon={ArrowRight01Icon}
+                        data-icon='inline-end'
+                        strokeWidth={2}
+                        aria-hidden='true'
+                      />
+                    </InputGroupButton>
+                  </InputGroupAddon>
+                </InputGroup>
+              </form>
+              <div className='mt-5 flex flex-wrap gap-x-6 gap-y-2 text-sm'>
+                <Link className='forge-text-link' to='/pricing'>
+                  {t('View model pricing')}
+                </Link>
+                <Link className='forge-text-link' to='/challenges'>
+                  {t('Browse open-source work')}
+                </Link>
+                <Link className='forge-text-link' to='/guide'>
+                  {t('Read the guide')}
+                </Link>
+              </div>
             </div>
 
-            <form className='max-w-2xl' onSubmit={submitMessage}>
-              <label className='sr-only' htmlFor='forge-home-message'>
-                {t('Tell us what you want to do')}
-              </label>
-              <InputGroup className='has-[[data-slot=input-group-control]:focus-visible]:border-foreground/50 h-12 rounded-xl has-[[data-slot=input-group-control]:focus-visible]:ring-0'>
-                <InputGroupInput
-                  id='forge-home-message'
-                  value={message}
-                  onChange={(event) => setMessage(event.target.value)}
-                  onFocus={() => setMessageFocused(true)}
-                  onBlur={() => setMessageFocused(false)}
-                  className='focus-visible:!outline-none'
-                  placeholder={
-                    animatedPlaceholder || t('Describe what you need...')
-                  }
-                  maxLength={4000}
-                />
-                <InputGroupAddon align='inline-end' className='pr-1'>
-                  <InputGroupButton
-                    type='submit'
-                    variant='default'
-                    size='sm'
-                    className='h-10 rounded-lg px-3'
-                    disabled={
-                      !message.trim() || messageInvalid || !assistantEnabled
-                    }
-                  >
-                    {t('Ask AI assistant')}
-                    <HugeiconsIcon
-                      icon={ArrowRight01Icon}
-                      data-icon='inline-end'
-                      strokeWidth={2}
-                      aria-hidden='true'
-                    />
-                  </InputGroupButton>
-                </InputGroupAddon>
-              </InputGroup>
-            </form>
+            <aside className='forge-home-note' aria-label={t('At a glance')}>
+              <div className='forge-note-rule' />
+              <p className='forge-kicker mb-5'>{t('At a glance')}</p>
+              <ul className='space-y-5 text-sm leading-6'>
+                <li>
+                  <strong className='font-medium'>{t('One endpoint')}</strong>
+                  <span className='text-muted-foreground mt-1 block'>
+                    {t('OpenAI and Anthropic-compatible routes.')}
+                  </span>
+                </li>
+                <li>
+                  <strong className='font-medium'>{t('Clear pricing')}</strong>
+                  <span className='text-muted-foreground mt-1 block'>
+                    {t('Choose the model and group before you spend.')}
+                  </span>
+                </li>
+                <li>
+                  <strong className='font-medium'>{t('Human review')}</strong>
+                  <span className='text-muted-foreground mt-1 block'>
+                    {t('Support and access requests stay auditable.')}
+                  </span>
+                </li>
+              </ul>
+            </aside>
           </div>
         </section>
 
@@ -160,22 +198,22 @@ export function ForgeHome() {
           aria-labelledby='forge-public-challenges-title'
           className='border-border border-b'
         >
-          <div className='mx-auto max-w-5xl px-5 py-12 md:px-10 md:py-16'>
-            <div className='mb-6 flex items-end justify-between gap-4'>
+          <div className='mx-auto max-w-6xl px-6 py-16 md:px-10 md:py-20'>
+            <div className='mb-8 flex items-end justify-between gap-4'>
               <div>
                 <p className='text-muted-foreground mb-2 text-sm'>
                   {t('Public challenges')}
                 </p>
                 <h2
                   id='forge-public-challenges-title'
-                  className='font-serif text-3xl font-normal md:text-4xl'
+                  className='font-serif text-3xl font-normal tracking-[-0.025em] md:text-4xl'
                 >
                   {t('Open-source challenges')}
                 </h2>
               </div>
               <Button
                 variant='outline'
-                className='shrink-0 rounded-sm'
+                className='forge-outline-button shrink-0 rounded-sm'
                 render={<Link to='/challenges' />}
               >
                 {t('Browse challenges')}
@@ -187,7 +225,7 @@ export function ForgeHome() {
                 />
               </Button>
             </div>
-            <p className='text-muted-foreground mb-5 text-sm'>
+            <p className='text-muted-foreground mb-7 max-w-xl text-sm leading-6'>
               {t('The public board is open to everyone.')}
             </p>
             <ChallengeList limit={3} showHeading={false} />

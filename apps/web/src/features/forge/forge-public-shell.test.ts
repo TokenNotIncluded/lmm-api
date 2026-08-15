@@ -26,10 +26,12 @@ const source = readFileSync(
 )
 
 describe('Forge public navigation', () => {
-  test('keeps the header limited to challenges and optional security', () => {
+  test('keeps the header focused on core discovery routes', () => {
+    assert.match(source, /title: 'Home'/)
+    assert.match(source, /title: 'Model Square'/)
+    assert.match(source, /title: 'Guide'/)
+    assert.match(source, /href: '\/guide'/)
     assert.match(source, /title: 'Challenges'/)
     assert.match(source, /securityLink/)
-    assert.doesNotMatch(source, /title: 'Pricing'/)
-    assert.doesNotMatch(source, /title: 'How it works'/)
   })
 })
