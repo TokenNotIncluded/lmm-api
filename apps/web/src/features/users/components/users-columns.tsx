@@ -30,7 +30,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import { formatCurrencyUSD, formatQuota, formatTimestamp } from '@/lib/format'
+import { formatQuota, formatTimestamp } from '@/lib/format'
 
 import {
   USER_STATUS,
@@ -250,8 +250,7 @@ export function useUsersColumns(): ColumnDef<User>[] {
             >
               <span>{formatQuota(summary?.quota ?? 0)}</span>
               <span className='text-muted-foreground text-xs'>
-                {summary?.orders ?? 0} ·{' '}
-                {formatCurrencyUSD((summary?.money_micros ?? 0) / 1_000_000)}
+                {summary?.orders ?? 0} {t('Top-up')}
               </span>
             </TooltipTrigger>
             <TooltipContent className='max-w-[320px]'>
@@ -268,8 +267,7 @@ export function useUsersColumns(): ColumnDef<User>[] {
                       .join(' · ')
                     return (
                       <p key={`${label}-${method.orders}`} className='text-xs'>
-                        {label || '—'}: {formatQuota(method.quota)} ·{' '}
-                        {formatCurrencyUSD(method.money_micros / 1_000_000)}
+                        {label || '—'}: {formatQuota(method.quota)}
                       </p>
                     )
                   })}
