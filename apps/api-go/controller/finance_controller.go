@@ -633,6 +633,29 @@ func financeUserHandler(c *gin.Context) {
 	common.ApiSuccess(c, view)
 }
 
+// parseFinanceEntryCursor reads the stable descending ledger cursor. Offset
+// pagination gets slower as the append-only table grows and can skip rows while
+// new entries arrive; the timestamp/id pair keeps adjacent pages deterministic.
+func parseFinanceEntryCursor(c *gin.Context) (occurredAt, entryID int64, err error) {
+	rawOccurredAt := strings.TrimSpace(c.Query("before_occurred_at"))
+	rawEntryID := strings.TrimSpace(c.Query("before_id"))
+	if rawOccurredAt == "" && rawEntryID == "" {
+		return 0, 0, nil
+	}
+	if rawOccurredAt == "" || rawEntryID == "" {
+		return 0, 0, errors.New("before_occurred_at and before_id must be provided together")
+	}
+	occurredAt, err = strconv.ParseInt(rawOccurredAt, 10, 64)
+	if err != nil || occurredAt <= 0 {
+		return 0, 0, errors.New("before_occurred_at must be a positive integer")
+	}
+	entryID, err = strconv.ParseInt(rawEntryID, 10, 64)
+	if err != nil || entryID <= 0 {
+		return 0, 0, errors.New("before_id must be a positive integer")
+	}
+	return occurredAt, entryID, nil
+}
+
 type financeEntryInput struct {
 	EntryType       string `json:"entry_type"`
 	Category        string `json:"category"`
@@ -693,7 +716,15 @@ func financeEntriesHandler(c *gin.Context) {
 	if limit > financeDashboardMaxEntries {
 		limit = financeDashboardMaxEntries
 	}
-	query := model.DB.Order("occurred_at desc, id desc").Limit(limit)
+	beforeOccurredAt, beforeID, err := parseFinanceEntryCursor(c)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	query := model.DB.Order("occurred_at desc, id desc").Limit(limit + 1)
+	if beforeOccurredAt > 0 {
+		query = query.Where("occurred_at < ? OR (occurred_at = ? AND id < ?)", beforeOccurredAt, beforeOccurredAt, beforeID)
+	}
 	if value := strings.TrimSpace(c.Query("entry_type")); value != "" {
 		query = query.Where("entry_type = ?", value)
 	}
@@ -702,7 +733,17 @@ func financeEntriesHandler(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	common.ApiSuccess(c, gin.H{"entries": entries})
+	hasMore := len(entries) > limit
+	if hasMore {
+		entries = entries[:limit]
+	}
+	page := gin.H{"entries": entries, "has_more": hasMore}
+	if hasMore && len(entries) > 0 {
+		last := entries[len(entries)-1]
+		page["next_before_occurred_at"] = last.OccurredAt
+		page["next_before_id"] = last.Id
+	}
+	common.ApiSuccess(c, page)
 }
 
 type financePaymentMethodInput struct {

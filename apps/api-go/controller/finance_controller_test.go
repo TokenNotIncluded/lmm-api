@@ -221,6 +221,72 @@ func TestFinanceHandlersRequireAdminRouteContractAndReturnUserDetail(t *testing.
 	require.Equal(t, int64(3_500_000), response.Data.RevenueMicros)
 }
 
+func TestParseFinanceEntryCursorRequiresStablePair(t *testing.T) {
+	newContext := func(path string) *gin.Context {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodGet, path, nil)
+		return c
+	}
+	c := newContext("/api/finance/entries?before_id=7")
+	_, _, err := parseFinanceEntryCursor(c)
+	require.Error(t, err)
+
+	c = newContext("/api/finance/entries?before_occurred_at=10&before_id=7")
+	occurredAt, entryID, err := parseFinanceEntryCursor(c)
+	require.NoError(t, err)
+	require.Equal(t, int64(10), occurredAt)
+	require.Equal(t, int64(7), entryID)
+}
+
+func TestFinanceEntriesUseStableCursorPages(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.FinanceLedgerEntry{}))
+	for index, occurredAt := range []int64{300, 200, 100} {
+		require.NoError(t, db.Create(&model.FinanceLedgerEntry{
+			EntryType: model.FinanceEntryExpense, Category: "test", AmountMicros: int64(index + 1),
+			Currency: model.FinanceCurrencyUSD, Direction: model.FinanceDirectionDebit,
+			SourceType: model.FinanceSourceManual, OccurredAt: occurredAt, CreatedAt: occurredAt,
+			CreatedBy: 1, IdempotencyKey: "finance-page-" + strconv.Itoa(index),
+		}).Error)
+	}
+
+	firstRecorder := httptest.NewRecorder()
+	first, _ := gin.CreateTestContext(firstRecorder)
+	first.Request = httptest.NewRequest(http.MethodGet, "/api/finance/entries?limit=2", nil)
+	ListFinanceEntries(first)
+	require.Equal(t, http.StatusOK, firstRecorder.Code)
+	var firstResponse struct {
+		Data struct {
+			Entries              []model.FinanceLedgerEntry `json:"entries"`
+			HasMore              bool                       `json:"has_more"`
+			NextBeforeOccurredAt int64                      `json:"next_before_occurred_at"`
+			NextBeforeID         int64                      `json:"next_before_id"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(firstRecorder.Body.Bytes(), &firstResponse))
+	require.Len(t, firstResponse.Data.Entries, 2)
+	require.True(t, firstResponse.Data.HasMore)
+	require.Equal(t, int64(200), firstResponse.Data.NextBeforeOccurredAt)
+	require.Equal(t, firstResponse.Data.Entries[1].Id, firstResponse.Data.NextBeforeID)
+
+	secondRecorder := httptest.NewRecorder()
+	second, _ := gin.CreateTestContext(secondRecorder)
+	second.Request = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/finance/entries?limit=2&before_occurred_at=%d&before_id=%d", firstResponse.Data.NextBeforeOccurredAt, firstResponse.Data.NextBeforeID), nil)
+	ListFinanceEntries(second)
+	require.Equal(t, http.StatusOK, secondRecorder.Code)
+	var secondResponse struct {
+		Data struct {
+			Entries []model.FinanceLedgerEntry `json:"entries"`
+			HasMore bool                       `json:"has_more"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(secondRecorder.Body.Bytes(), &secondResponse))
+	require.Len(t, secondResponse.Data.Entries, 1)
+	require.False(t, secondResponse.Data.HasMore)
+	require.Equal(t, int64(100), secondResponse.Data.Entries[0].OccurredAt)
+}
+
 func mustFinanceEntry(t *testing.T, key string) *model.FinanceLedgerEntry {
 	t.Helper()
 	var entry model.FinanceLedgerEntry
