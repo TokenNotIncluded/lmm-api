@@ -251,6 +251,28 @@ func TestDoTaskApiRequest_KeepsReplayableGetBody(t *testing.T) {
 	}
 }
 
+func TestDoTaskApiRequestPropagatesClientCancellation(t *testing.T) {
+	service.InitHttpClient()
+
+	requestContext, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	request := httptest.NewRequest(http.MethodPost, "/v1/video/generations", bytes.NewReader([]byte(`{"prompt":"cancel"}`)))
+	ctx.Request = request.WithContext(requestContext)
+
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{},
+	}
+	adaptor := &stubTaskAdaptor{baseURL: "http://127.0.0.1:1"}
+
+	_, err := DoTaskApiRequest(adaptor, ctx, info, bytes.NewReader([]byte(`{"prompt":"cancel"}`)))
+	require.Error(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
+}
+
 type h2ServerResult struct {
 	err           error
 	streamCount   int
