@@ -82,6 +82,7 @@ func GetState(model string) (*ModelState, bool) {
 // caller.
 func SetState(model string, st *ModelState) {
 	statesMu.Lock()
+	evictedModel := ""
 	if _, exists := states[model]; !exists && len(states) >= maxInMemoryStates {
 		// Evict the least recently updated entry. UpdatedAt is the tick time,
 		// so this is deterministic across normal ticker updates; nil/zero
@@ -99,6 +100,7 @@ func SetState(model string, st *ModelState) {
 		}
 		if oldestModel != "" {
 			delete(states, oldestModel)
+			evictedModel = oldestModel
 		}
 	}
 	states[model] = st
@@ -106,6 +108,11 @@ func SetState(model string, st *ModelState) {
 
 	if !redisAvailable() {
 		return
+	}
+	if evictedModel != "" {
+		if err := common.RedisDel(stateKey(evictedModel)); err != nil {
+			common.SysError(fmt.Sprintf("dynamic_pricing: delete evicted state for model %s: %s", evictedModel, err.Error()))
+		}
 	}
 	data, err := json.Marshal(st)
 	if err != nil {
