@@ -247,6 +247,15 @@ func executeAssistantAdminModelInventoryTool(userID int) map[string]any {
 		return map[string]any{"ok": false, "error": "missing model inventory is unavailable"}
 	}
 	pricing := getPricingCache()
+	if pricing == nil {
+		return map[string]any{
+			"ok":                  false,
+			"status":              "pricing_cache_unready",
+			"error":               "model inventory is temporarily unavailable while the pricing cache warms",
+			"pricing_cache_ready": false,
+			"next_step":           "Retry the model inventory after the live pricing cache is ready; do not infer that no models are enabled.",
+		}
+	}
 	modelIDs := make([]string, 0, len(pricing))
 	seen := make(map[string]struct{}, len(pricing))
 	for _, item := range pricing {
@@ -261,6 +270,15 @@ func executeAssistantAdminModelInventoryTool(userID int) map[string]any {
 		modelIDs = append(modelIDs, name)
 	}
 	sort.Strings(modelIDs)
+	if len(modelIDs) == 0 {
+		return map[string]any{
+			"ok":                  false,
+			"status":              "pricing_cache_empty",
+			"error":               "model inventory is temporarily unavailable because the pricing cache contains no usable model IDs",
+			"pricing_cache_ready": false,
+			"next_step":           "Check the live pricing/model configuration and retry; do not infer that no models are enabled.",
+		}
+	}
 	truncated := len(missing) > assistantAdminMaxModelSyncItems
 	if truncated {
 		missing = missing[:assistantAdminMaxModelSyncItems]

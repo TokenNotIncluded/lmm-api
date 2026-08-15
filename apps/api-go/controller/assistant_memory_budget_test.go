@@ -62,3 +62,17 @@ func TestAssistantRelayRequestSetsUpstreamResponseBudget(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, assistantUpstreamResponseMaxBytes, common.GetContextKeyInt(context, constant.ContextKeyResponseByteLimit))
 }
+
+func TestAssistantClientResponseKeepsNormalizedBodyWithinBudget(t *testing.T) {
+	// '<' is valid unescaped JSON input, but encoding/json expands it to
+	// "\\u003c" during normalization. The input fits the upstream budget while
+	// the normalized output would exceed it without the final boundary check.
+	body := []byte(`{"choices":[{"message":{"content":"` +
+		strings.Repeat("<", assistantUpstreamResponseMaxBytes/4) +
+		`"}}]}`)
+	assert.Less(t, len(body), assistantUpstreamResponseMaxBytes)
+
+	normalized, err := normalizeAssistantClientResponse(nil, body)
+	assert.Nil(t, normalized)
+	assert.ErrorIs(t, err, common.ErrLimitExceeded)
+}

@@ -53,6 +53,66 @@ func TestAssistantAdminConfigExposesNonSecretRuntimeControls(t *testing.T) {
 	require.Error(t, validateAssistantAdminConfigValue("TelegramOAuthEnabled", "enabled"))
 }
 
+func TestAssistantAdminModelInventoryRejectsUnreadyPricingCache(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}))
+	admin := model.User{
+		Username: "assistant-model-inventory-cache-unready",
+		Password: "password",
+		Role:     common.RoleAdminUser,
+		Status:   common.UserStatusEnabled,
+		Group:    "default",
+	}
+	require.NoError(t, db.Create(&admin).Error)
+
+	previousPricing := getPricingCache
+	getPricingCache = func() []model.Pricing { return nil }
+	t.Cleanup(func() { getPricingCache = previousPricing })
+
+	inventory := executeAssistantAdminModelInventoryTool(admin.Id)
+	assert.Equal(t, false, inventory["ok"])
+	assert.Equal(t, "pricing_cache_unready", inventory["status"])
+	assert.Equal(t, false, inventory["pricing_cache_ready"])
+	assert.NotContains(t, inventory, "model_ids")
+
+	models := executeAssistantModelsTool(admin.Id)
+	assert.Equal(t, false, models["ok"])
+	assert.Equal(t, "pricing_cache_unready", models["status"])
+	assert.Equal(t, false, models["pricing_cache_ready"])
+	assert.NotContains(t, models, "model_ids")
+}
+
+func TestAssistantAdminModelInventoryRejectsEmptyPricingCache(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}))
+	admin := model.User{
+		Username: "assistant-model-inventory-cache-empty",
+		Password: "password",
+		Role:     common.RoleAdminUser,
+		Status:   common.UserStatusEnabled,
+		Group:    "default",
+	}
+	require.NoError(t, db.Create(&admin).Error)
+
+	previousPricing := getPricingCache
+	getPricingCache = func() []model.Pricing {
+		return []model.Pricing{{ModelName: "  "}}
+	}
+	t.Cleanup(func() { getPricingCache = previousPricing })
+
+	inventory := executeAssistantAdminModelInventoryTool(admin.Id)
+	assert.Equal(t, false, inventory["ok"])
+	assert.Equal(t, "pricing_cache_empty", inventory["status"])
+	assert.Equal(t, false, inventory["pricing_cache_ready"])
+	assert.NotContains(t, inventory, "model_ids")
+
+	models := executeAssistantModelsTool(admin.Id)
+	assert.Equal(t, false, models["ok"])
+	assert.Equal(t, "pricing_cache_empty", models["status"])
+	assert.Equal(t, false, models["pricing_cache_ready"])
+	assert.NotContains(t, models, "model_ids")
+}
+
 func TestAssistantReviewToolReturnsAggregateResult(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.SystemTask{}, &model.SystemTaskLock{}))

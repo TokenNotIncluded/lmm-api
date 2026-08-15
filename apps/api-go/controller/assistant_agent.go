@@ -1684,7 +1684,12 @@ func normalizeAssistantClientResponse(c *gin.Context, body []byte) ([]byte, erro
 			}
 		}
 	}
-	return json.Marshal(payload)
+	// The upstream body is bounded before parsing, but JSON normalization can
+	// expand content again (for example, encoding/json escapes '<' as
+	// "\\u003c"). Keep the provider-to-browser boundary within the same
+	// retained-byte budget instead of allowing an expanded response to escape
+	// the relay limit.
+	return common.MarshalLimit(payload, assistantUpstreamResponseMaxBytes)
 }
 
 func writeAssistantUpstreamError(c *gin.Context, code, message string) {
@@ -2409,6 +2414,15 @@ func executeAssistantModelsTool(userID int) map[string]any {
 	}
 	if user.Role >= common.RoleAdminUser {
 		pricing := getPricingCache()
+		if pricing == nil {
+			return map[string]any{
+				"ok":                  false,
+				"status":              "pricing_cache_unready",
+				"error":               "available models are temporarily unavailable while the pricing cache warms",
+				"pricing_cache_ready": false,
+				"next_step":           "Retry the live model inventory after the pricing cache is ready; do not infer that no models are enabled.",
+			}
+		}
 		modelSet := make(map[string]struct{}, len(pricing))
 		for _, candidate := range pricing {
 			if strings.TrimSpace(candidate.ModelName) != "" {
@@ -2420,6 +2434,15 @@ func executeAssistantModelsTool(userID int) map[string]any {
 			models = append(models, modelID)
 		}
 		sort.Strings(models)
+		if len(models) == 0 {
+			return map[string]any{
+				"ok":                  false,
+				"status":              "pricing_cache_empty",
+				"error":               "available models are temporarily unavailable because the pricing cache contains no usable model IDs",
+				"pricing_cache_ready": false,
+				"next_step":           "Check the live pricing/model configuration and retry; do not infer that no models are enabled.",
+			}
+		}
 		groups := assistantAdminConfiguredGroups()
 		groupNames := make([]string, 0, len(groups))
 		for group := range groups {
