@@ -64,6 +64,8 @@ func SetApiRouter(router *gin.Engine) {
 			securityAdminRoute.GET("/stats", controller.GetAdminSecurityStats)
 			securityAdminRoute.GET("/events", controller.ListAdminSecurityEvents)
 			securityAdminRoute.GET("/ai-reviews", controller.ListAdminAssistantSecurityReviews)
+			securityAdminRoute.GET("/review-runs", controller.ListAdminAssistantReviewTasks)
+			securityAdminRoute.GET("/review-runs/:task_id", controller.GetAdminAssistantReviewTask)
 			securityAdminRoute.GET("/violation-fee-appeals", middleware.DisableCache(), controller.ListAdminViolationFeeAppeals)
 			securityAdminRoute.POST("/violation-fee-appeals/:id/:action", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.ReviewAdminViolationFeeAppeal)
 		}

@@ -289,6 +289,43 @@ func ListAdminAssistantSecurityReviews(c *gin.Context) {
 	})
 }
 
+// ListAdminAssistantReviewTasks is the narrow, read-only history endpoint for
+// Advanced Security. It is intentionally separate from /system-task, which
+// remains RootAuth because it contains unrelated operational task data.
+func ListAdminAssistantReviewTasks(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.Query("limit"))
+	tasks, err := model.ListAssistantReviewTaskSummaries(limit)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	responses := make([]model.SystemTaskSummaryResponse, 0, len(tasks))
+	for _, task := range tasks {
+		responses = append(responses, task.ToSummaryResponse())
+	}
+	common.ApiSuccess(c, responses)
+}
+
+// GetAdminAssistantReviewTask returns one assistant-review run, and never a
+// different system task even if a caller guesses its task ID.
+func GetAdminAssistantReviewTask(c *gin.Context) {
+	taskID := c.Param("task_id")
+	if taskID == "" {
+		common.ApiErrorMsg(c, "task id is required")
+		return
+	}
+	task, err := model.GetAssistantReviewTaskByTaskID(taskID)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if task == nil {
+		c.JSON(404, gin.H{"success": false, "message": "task not found"})
+		return
+	}
+	common.ApiSuccess(c, task.ToResponse())
+}
+
 func buildPublicSecurityPolicy() dto.PublicSecurityPolicy {
 	settings := setting.GetAdvancedSecuritySettings()
 	categories := setting.GetAdvancedSecurityRiskCategories()

@@ -24,7 +24,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { formatTimestampToDate } from '@/lib/format'
 
-import { getSystemTask, listSystemTasks } from '../api'
+import { getAssistantReviewRun, listAssistantReviewRuns } from '../api'
 import type { SystemTask } from '../types'
 import {
   getAdminAssistantReview,
@@ -627,7 +627,7 @@ export function SecurityAuditPanel() {
     : undefined
   const reviewHistoryQuery = useQuery({
     queryKey: ['admin-assistant-review-history'],
-    queryFn: () => listSystemTasks(30),
+    queryFn: () => listAssistantReviewRuns(30),
     retry: false,
     refetchOnWindowFocus: false,
     staleTime: 15_000,
@@ -654,7 +654,8 @@ export function SecurityAuditPanel() {
   }, [assistantReview?.task_id, reviewTasks, selectedReviewTaskId])
   const selectedReviewQuery = useQuery({
     queryKey: ['admin-assistant-review-task', selectedReviewTaskId],
-    queryFn: () => getSystemTask<AssistantReviewTask>(selectedReviewTaskId!),
+    queryFn: () =>
+      getAssistantReviewRun<AssistantReviewTask>(selectedReviewTaskId!),
     enabled: Boolean(selectedReviewTaskId),
     retry: false,
     refetchOnWindowFocus: false,
