@@ -458,8 +458,11 @@ func RequestWaffoPancakePay(c *gin.Context) {
 		BuyerEmail:              getWaffoPancakeBuyerEmail(user),
 		ExpiresInSeconds:        &expiresInSeconds,
 		OrderMerchantExternalID: tradeNo,
-		CheckoutRegion:          req.CheckoutRegion,
-		CheckoutLanguage:        req.CheckoutLanguage,
+		OrderMetadata: map[string]string{
+			service.WaffoPancakeOrderMetadataProductID: strings.TrimSpace(setting.WaffoPancakeProductID),
+		},
+		CheckoutRegion:   req.CheckoutRegion,
+		CheckoutLanguage: req.CheckoutLanguage,
 	})
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 创建结账会话失败 user_id=%d trade_no=%s error=%q", id, tradeNo, err.Error()))
@@ -634,6 +637,17 @@ func WaffoPancakeWebhook(c *gin.Context) {
 		c.String(http.StatusOK, "OK")
 		return
 	}
+	topUp := model.GetTopUpByTradeNo(tradeNo)
+	if err := validateWaffoPancakeTopUpEvent(event, topUp); err != nil {
+		logger.LogError(c.Request.Context(), fmt.Sprintf(
+			"Waffo Pancake webhook 充值订单证据不匹配 trade_no=%s event_id=%s order_id=%s client_ip=%s error=%q",
+			tradeNo, event.ID, event.Data.OrderID, c.ClientIP(), err.Error(),
+		))
+		// The event is signed but permanently belongs to a different product or
+		// store. A retry cannot repair that mismatch; acknowledge without credit.
+		c.String(http.StatusOK, "OK")
+		return
+	}
 
 	LockOrder(tradeNo)
 	defer UnlockOrder(tradeNo)
@@ -648,10 +662,6 @@ func WaffoPancakeWebhook(c *gin.Context) {
 	if providerEventId == "" {
 		providerEventId = event.EventID
 	}
-	// StoreID is bound below. The current Pancake webhook DTO exposes only
-	// ProductName, not the immutable product ID used at checkout. The order
-	// records the configured product ID, but callback product comparison remains
-	// unavailable until the provider includes that identifier in its signed event.
 	completed, err := model.CompleteExternalTopUp(model.ExternalTopUpSettlement{
 		TradeNo:               tradeNo,
 		PaymentProvider:       model.PaymentProviderWaffoPancake,
@@ -670,6 +680,29 @@ func WaffoPancakeWebhook(c *gin.Context) {
 
 	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo Pancake 充值成功 trade_no=%s user_id=%d quota=%d event_id=%s order_id=%s client_ip=%s", tradeNo, completed.UserId, completed.CreditedQuota, event.ID, event.Data.OrderID, c.ClientIP()))
 	c.String(http.StatusOK, "OK")
+}
+
+// validateWaffoPancakeTopUpEvent binds newly-created wallet checkouts to the
+// configured store and product. Waffo echoes order metadata in signed webhook
+// payloads, so a valid event for another product must not settle this order.
+// Older orders may not have metadata; those remain compatible, while any
+// metadata that is present is always checked.
+func validateWaffoPancakeTopUpEvent(event *service.WaffoPancakeWebhookEvent, topUp *model.TopUp) error {
+	if event == nil || topUp == nil {
+		return fmt.Errorf("missing top-up settlement evidence")
+	}
+	if expectedStore := strings.TrimSpace(topUp.ProviderStoreId); expectedStore != "" &&
+		strings.TrimSpace(event.StoreID) != expectedStore {
+		return fmt.Errorf("top-up store mismatch: expected=%q actual=%q", expectedStore, strings.TrimSpace(event.StoreID))
+	}
+	actualProduct, present := event.Data.OrderMetadata[service.WaffoPancakeOrderMetadataProductID]
+	if present && strings.TrimSpace(actualProduct) != "" {
+		expectedProduct := strings.TrimSpace(topUp.ProviderProductId)
+		if expectedProduct != "" && strings.TrimSpace(actualProduct) != expectedProduct {
+			return fmt.Errorf("top-up product metadata mismatch: expected=%q actual=%q", expectedProduct, strings.TrimSpace(actualProduct))
+		}
+	}
+	return nil
 }
 
 // validateWaffoPancakeSubscriptionEvent keeps a signed provider callback

@@ -128,6 +128,31 @@ async function queryStores(client) {
   return result.data?.stores ?? []
 }
 
+async function queryStoreWebhooks(client, storeId) {
+  const result = await client.graphql.query({
+    query: `query GetStoreWebhooks($storeId: String!) {
+      store(id: $storeId) {
+        storeWebhooks { id channel url events testMode }
+      }
+    }`,
+    variables: { storeId },
+  })
+  if (result.errors?.length) {
+    fail(`unable to list Waffo webhooks: ${result.errors.map((e) => e.message).join('; ')}`)
+  }
+  return result.data?.store?.storeWebhooks ?? []
+}
+
+export function findMatchingTestWebhook(webhooks, webhookUrl) {
+  const expectedURL = webhookUrl?.trim()
+  if (!expectedURL) return undefined
+  return (webhooks ?? []).find((webhook) =>
+    webhook?.channel === 'http' &&
+    webhook?.testMode === true &&
+    webhook?.url === expectedURL
+  )
+}
+
 async function ensureTestCatalog(client, args) {
   const requestedStore = args.store_id || process.env.WAFFO_PANCAKE_STORE_ID?.trim()
   const requestedProduct = args.product_id || process.env.WAFFO_PANCAKE_PRODUCT_ID?.trim()
@@ -177,6 +202,15 @@ async function ensureTestCatalog(client, args) {
 async function configureWebhook(client, storeId, webhookUrl) {
   if (!storeId) fail('--configure-webhook requires a resolvable store ID')
   if (!webhookUrl) fail('--configure-webhook requires --webhook-url')
+  const existing = findMatchingTestWebhook(await queryStoreWebhooks(client, storeId), webhookUrl)
+  if (existing) {
+    await client.webhooks.update({
+      id: existing.id,
+      events: WAFFO_PANCAKE_WEBHOOK_EVENTS,
+    })
+    console.log(`Updated existing Test webhook ${existing.id} for ${webhookUrl}`)
+    return
+  }
   const result = await client.webhooks.add({
     storeId,
     channel: 'http',

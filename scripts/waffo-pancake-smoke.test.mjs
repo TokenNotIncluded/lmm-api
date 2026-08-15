@@ -20,7 +20,10 @@ import test from 'node:test'
 
 import { WebhookEventType } from '@waffo/pancake-ts'
 
-import { WAFFO_PANCAKE_WEBHOOK_EVENTS } from './waffo-pancake-smoke.mjs'
+import {
+  findMatchingTestWebhook,
+  WAFFO_PANCAKE_WEBHOOK_EVENTS,
+} from './waffo-pancake-smoke.mjs'
 
 test('managed Test webhook subscribes to settlement, subscription, and refund events', () => {
   assert.deepEqual([...WAFFO_PANCAKE_WEBHOOK_EVENTS], [
@@ -30,4 +33,17 @@ test('managed Test webhook subscribes to settlement, subscription, and refund ev
     WebhookEventType.RefundSucceeded,
     WebhookEventType.RefundFailed,
   ])
+})
+
+test('smoke runner reuses the matching Test HTTP webhook instead of duplicating it', () => {
+  const matching = { id: 'existing', channel: 'http', url: 'https://example.test/waffo', testMode: true }
+  const webhooks = [
+    matching,
+    { id: 'prod', channel: 'http', url: matching.url, testMode: false },
+    { id: 'other-channel', channel: 'discord', url: matching.url, testMode: true },
+    { id: 'other-url', channel: 'http', url: 'https://other.test/waffo', testMode: true },
+  ]
+  assert.equal(findMatchingTestWebhook(webhooks, matching.url), matching)
+  assert.equal(findMatchingTestWebhook(webhooks, 'https://missing.test/waffo'), undefined)
+  assert.equal(findMatchingTestWebhook(webhooks, '  '), undefined)
 })
