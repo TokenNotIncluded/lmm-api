@@ -15,7 +15,7 @@ You should have received a copy of the GNU Affero General Public License
 along with this program. If not, see <https://www.gnu.org/licenses/>.
 */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { RotateCcw, ShieldAlert } from 'lucide-react'
+import { ChevronLeft, ChevronRight, RotateCcw, ShieldAlert } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -39,17 +39,24 @@ import {
 import { canViewUserAssistantHistory } from '../lib/assistant-history-access'
 import type { User } from '../types'
 
+const REVIEW_PAGE_SIZE = 20
+
 export function UserAssistantReviewDialog(props: { user: User }) {
   const { t } = useTranslation()
   const viewer = useAuthStore((state) => state.auth.user)
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
+  const [page, setPage] = useState(1)
   const count = props.user.assistant_violation_count ?? 0
   const canView = canViewUserAssistantHistory(viewer, props.user)
   const reviewsQuery = useQuery({
-    queryKey: ['assistant-request-reviews', props.user.id],
+    queryKey: ['assistant-request-reviews', props.user.id, page],
     queryFn: async () => {
-      const response = await listAssistantRequestReviews(props.user.id)
+      const response = await listAssistantRequestReviews(
+        props.user.id,
+        page,
+        REVIEW_PAGE_SIZE
+      )
       if (!response.success) {
         throw new Error(response.message || t('Unable to load review logs'))
       }
@@ -57,6 +64,10 @@ export function UserAssistantReviewDialog(props: { user: User }) {
     },
     enabled: open,
   })
+  const reviewData = reviewsQuery.data
+  const total = reviewData?.total ?? 0
+  const pageSize = Math.max(1, reviewData?.page_size ?? REVIEW_PAGE_SIZE)
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
   const resetMutation = useMutation({
     mutationFn: () => resetAssistantRequestReviewViolations(props.user.id),
     onSuccess: async (response) => {
@@ -73,17 +84,24 @@ export function UserAssistantReviewDialog(props: { user: User }) {
     onError: (error: Error) => toast.error(error.message),
   })
 
+  const handleOpenChange = (nextOpen: boolean) => {
+    setOpen(nextOpen)
+    if (nextOpen) {
+      setPage(1)
+    }
+  }
+
   if (!canView) {
     return <span className='text-muted-foreground'>—</span>
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <Button
         type='button'
         variant={count > 0 ? 'destructive' : 'outline'}
         size='sm'
-        onClick={() => setOpen(true)}
+        onClick={() => handleOpenChange(true)}
         aria-label={`${t('Violations')}: ${count}`}
       >
         <ShieldAlert aria-hidden='true' />
@@ -154,6 +172,49 @@ export function UserAssistantReviewDialog(props: { user: User }) {
             </article>
           ))}
         </div>
+        {reviewData && total > 0 && (
+          <div className='text-muted-foreground flex flex-wrap items-center justify-between gap-3 border-t pt-3 text-xs tabular-nums'>
+            <div className='flex flex-wrap gap-x-3 gap-y-1'>
+              <span>
+                {t('Total')}: {total.toLocaleString()}
+              </span>
+              {totalPages > 1 && (
+                <span>
+                  {t('Page {{page}} of {{total}}', {
+                    page,
+                    total: totalPages,
+                  })}
+                </span>
+              )}
+            </div>
+            {totalPages > 1 && (
+              <div className='flex items-center gap-1'>
+                <Button
+                  type='button'
+                  variant='outline'
+                  size='icon-sm'
+                  aria-label={t('Previous page')}
+                  onClick={() => setPage((current) => Math.max(1, current - 1))}
+                  disabled={page <= 1 || reviewsQuery.isFetching}
+                >
+                  <ChevronLeft aria-hidden='true' />
+                </Button>
+                <Button
+                  type='button'
+                  variant='outline'
+                  size='icon-sm'
+                  aria-label={t('Next page')}
+                  onClick={() =>
+                    setPage((current) => Math.min(totalPages, current + 1))
+                  }
+                  disabled={page >= totalPages || reviewsQuery.isFetching}
+                >
+                  <ChevronRight aria-hidden='true' />
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
         <DialogFooter>
           <Button
             type='button'

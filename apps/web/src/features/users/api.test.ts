@@ -24,6 +24,7 @@ import { api } from '@/lib/api'
 import {
   getAssistantUserProfile,
   getUsers,
+  listAssistantRequestReviews,
   searchUsers,
   updateAssistantUserProfile,
 } from './api'
@@ -135,6 +136,39 @@ describe('administrator assistant profile API', () => {
     } finally {
       api.get = originalGet
       api.put = originalPut
+    }
+  })
+})
+
+describe('administrator assistant review API', () => {
+  test('passes the requested review page and uses a 20-item default page', async () => {
+    const originalGet = api.get
+    let requestConfig: unknown
+    api.get = (async (url: string, config?: unknown) => {
+      assert.equal(url, '/api/assistant/admin/request-reviews')
+      requestConfig = config
+      return {
+        data: {
+          success: true,
+          data: {
+            items: [],
+            total: 0,
+            page: 2,
+            page_size: 20,
+            violation_count: 0,
+            reset_at: 0,
+          },
+        },
+      }
+    }) as typeof api.get
+
+    try {
+      await listAssistantRequestReviews(41, 2)
+      assert.deepEqual(requestConfig, {
+        params: { user_id: 41, page: 2, page_size: 20 },
+      })
+    } finally {
+      api.get = originalGet
     }
   })
 })

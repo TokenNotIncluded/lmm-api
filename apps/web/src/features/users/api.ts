@@ -181,10 +181,11 @@ export async function searchUsers(
 
 export async function listAssistantRequestReviews(
   userId: number,
-  pageSize = 100
+  page = 1,
+  pageSize = 20
 ): Promise<ApiResponse<AssistantRequestReviewListData>> {
   const res = await api.get('/api/assistant/admin/request-reviews', {
-    params: { user_id: userId, page_size: pageSize },
+    params: { user_id: userId, page, page_size: pageSize },
   })
   return res.data
 }
