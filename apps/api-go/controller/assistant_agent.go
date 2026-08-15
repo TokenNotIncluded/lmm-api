@@ -587,7 +587,7 @@ func assistantNewUserGiftToolAllowed(context assistantUserContext) bool {
 	// gift row makes the decision one-time. Keep the existing high-risk and
 	// promotion guard at the tool boundary so the assistant does not invite a
 	// known-abusive conversation into a reward flow.
-	if context.AdministratorMode {
+	if context.AdministratorMode || context.GiftRewardBlocked {
 		return false
 	}
 	return context.CustomerProfile != assistantProfilePromotion && context.CustomerProfile != assistantProfileSecurityRisk

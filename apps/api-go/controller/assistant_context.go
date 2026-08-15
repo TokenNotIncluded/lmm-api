@@ -180,6 +180,12 @@ type assistantUserContext struct {
 	// substantive follow-up turn. It is local workflow state and must never
 	// cross the model boundary or become durable user metadata.
 	NewUserGiftRequested bool `json:"-"`
+	// GiftRewardBlocked is derived from the complete current conversation, not
+	// just the latest turn. A user must not bypass the promotion/security guard
+	// by first asking for a gift with farming or abuse language and then
+	// rephrasing the next turn as an ordinary use case. This is request-local
+	// policy state and must never cross the model boundary.
+	GiftRewardBlocked bool `json:"-"`
 	// CustomerProfile is a local routing decision. The model receives only the
 	// neutral behavior strategy, never labels such as security_risk or
 	// promotion_seeker that could be repeated back to the user.
@@ -344,6 +350,7 @@ func assistantUserContextForRequest(userID int, message string, conversation ...
 	}
 	if userID <= 0 {
 		context.CustomerProfile, context.ProfileSignals = classifyAssistantCustomerProfile(context, userText)
+		context.GiftRewardBlocked = assistantGiftRewardRiskInConversation(context, conversation...)
 		context.WelcomeStrategy = assistantWelcomeStrategyForContext(context)
 		context.PaymentOfferState = assistantPaymentOfferStateForContextAndConversation(context, message, conversation...)
 		return context
@@ -352,6 +359,7 @@ func assistantUserContextForRequest(userID int, message string, conversation ...
 	user, err := model.GetUserById(userID, false)
 	if err != nil || user == nil {
 		context.CustomerProfile, context.ProfileSignals = classifyAssistantCustomerProfile(context, userText)
+		context.GiftRewardBlocked = assistantGiftRewardRiskInConversation(context, conversation...)
 		context.WelcomeStrategy = assistantWelcomeStrategyForContext(context)
 		context.PaymentOfferState = assistantPaymentOfferStateForContextAndConversation(context, message, conversation...)
 		return context
@@ -402,12 +410,34 @@ func assistantUserContextForRequest(userID int, message string, conversation ...
 	}
 
 	context.CustomerProfile, context.ProfileSignals = classifyAssistantCustomerProfile(context, userText)
+	context.GiftRewardBlocked = assistantGiftRewardRiskInConversation(context, conversation...)
 	context.WelcomeStrategy = assistantWelcomeStrategyForContext(context)
 	context.PaymentOfferState = assistantPaymentOfferStateForContextAndConversation(context, message, conversation...)
 	sort.Strings(context.AuthProviders)
 	sort.Strings(context.PaymentRestrictionCauses)
 	sort.Strings(context.ProfileSignals)
 	return context
+}
+
+// assistantGiftRewardRiskInConversation keeps the reward guard stable across
+// follow-up turns. The latest message is not sufficient: a promotion seeker
+// can otherwise ask for a gift, receive a refusal, and immediately rephrase
+// the request as a legitimate project. Only coarse local policy signals are
+// inspected; no transcript is persisted by this helper.
+func assistantGiftRewardRiskInConversation(context assistantUserContext, conversations ...[]assistantOpenAIMessage) bool {
+	if len(conversations) == 0 {
+		return false
+	}
+	for _, message := range conversations[0] {
+		if message.Role != "user" {
+			continue
+		}
+		profile, _ := classifyAssistantCustomerProfile(context, message.Content)
+		if profile == assistantProfilePromotion || profile == assistantProfileSecurityRisk {
+			return true
+		}
+	}
+	return false
 }
 
 // assistantRequestIntent keeps common natural-language price questions on the

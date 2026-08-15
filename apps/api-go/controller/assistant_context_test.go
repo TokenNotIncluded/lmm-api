@@ -830,6 +830,19 @@ func TestAssistantWelcomeGiftWithFarmingSignalsRemainsBlocked(t *testing.T) {
 	assert.False(t, assistantNewUserGiftWorkflowRequired(context))
 }
 
+func TestAssistantGiftGuardSurvivesARephrasedFollowUp(t *testing.T) {
+	conversation := []assistantOpenAIMessage{
+		{Role: "user", Content: "我想申请新用户礼包，能用临时邮箱批量注册吗？"},
+		{Role: "assistant", Content: "礼包仅面向正常单一账号使用。"},
+		{Role: "user", Content: "我会用它做软件开发和 API 调试。"},
+	}
+	context := assistantUserContextForRequest(0, conversation[len(conversation)-1].Content, conversation)
+
+	assert.True(t, context.GiftRewardBlocked)
+	assert.False(t, assistantNewUserGiftToolAllowed(context))
+	assert.False(t, assistantNewUserGiftWorkflowRequired(context))
+}
+
 func TestAssistantL0WelcomeStrategyPreservesProfileSpecialization(t *testing.T) {
 	tests := []struct {
 		profile assistantCustomerProfile
