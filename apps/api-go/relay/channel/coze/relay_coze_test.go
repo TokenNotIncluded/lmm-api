@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/LIghtJUNction/api.lmm.best/common"
@@ -83,4 +84,39 @@ func TestGetChatDetailRejectsKnownOversizeResponse(t *testing.T) {
 	assert.Nil(t, response)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, common.ErrLimitExceeded))
+}
+
+func TestCozeResponseTextBufferHonorsResponseBudget(t *testing.T) {
+	context := newCozeResponseLimitTestContext(t, 4)
+	buffer := newCozeResponseTextBuffer(context)
+
+	buffer.WriteString("abcdef")
+	buffer.WriteString("gh")
+
+	assert.Equal(t, "abcd", buffer.String())
+
+	unicodeBuffer := newCozeResponseTextBuffer(context)
+	unicodeBuffer.WriteString("ab€")
+	assert.Equal(t, "ab", unicodeBuffer.String())
+}
+
+func TestCozeChatStreamHandlerPreservesTerminalUsage(t *testing.T) {
+	context := newCozeResponseLimitTestContext(t, 4)
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "coze-test"}}
+	stream := strings.Join([]string{
+		"event: conversation.message.delta",
+		`data: {"content":"abcdef"}`,
+		"",
+		"event: conversation.chat.completed",
+		`data: {"usage":{"input_count":2,"output_count":3,"token_count":5}}`,
+		"",
+	}, "\n")
+
+	usage, apiErr := cozeChatStreamHandler(context, info, &http.Response{Body: io.NopCloser(strings.NewReader(stream))})
+
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+	assert.Equal(t, 2, usage.PromptTokens)
+	assert.Equal(t, 3, usage.CompletionTokens)
+	assert.Equal(t, 5, usage.TotalTokens)
 }

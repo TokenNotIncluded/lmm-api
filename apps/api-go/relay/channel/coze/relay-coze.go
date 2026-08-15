@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/LIghtJUNction/api.lmm.best/common"
 	appconstant "github.com/LIghtJUNction/api.lmm.best/constant"
@@ -97,12 +98,49 @@ func cozeChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Res
 	return &usage, nil
 }
 
+type cozeResponseTextBuffer struct {
+	builder strings.Builder
+	limit   int
+}
+
+func newCozeResponseTextBuffer(c *gin.Context) *cozeResponseTextBuffer {
+	limit := 0
+	if c != nil {
+		limit = common.GetContextKeyInt(c, appconstant.ContextKeyResponseByteLimit)
+	}
+	if limit <= 0 {
+		limit = int(common.ResponseBodyLimit())
+	}
+	return &cozeResponseTextBuffer{limit: limit}
+}
+
+func (b *cozeResponseTextBuffer) WriteString(value string) {
+	if b == nil || b.limit <= b.builder.Len() {
+		return
+	}
+	remaining := b.limit - b.builder.Len()
+	if len(value) > remaining {
+		for remaining > 0 && !utf8.RuneStart(value[remaining]) {
+			remaining--
+		}
+		value = value[:remaining]
+	}
+	b.builder.WriteString(value)
+}
+
+func (b *cozeResponseTextBuffer) String() string {
+	if b == nil {
+		return ""
+	}
+	return b.builder.String()
+}
+
 func cozeChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	scanner := helper.NewStreamScanner(resp.Body)
 	scanner.Split(bufio.ScanLines)
 	helper.SetEventStreamHeaders(c)
 	id := helper.GetResponseID(c)
-	var responseText string
+	responseText := newCozeResponseTextBuffer(c)
 
 	var currentEvent string
 	var currentData string
@@ -114,7 +152,7 @@ func cozeChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *ht
 		if line == "" {
 			if currentEvent != "" && currentData != "" {
 				// handle last event
-				handleCozeEvent(c, currentEvent, currentData, &responseText, usage, id, info)
+				handleCozeEvent(c, currentEvent, currentData, responseText, usage, id, info)
 				currentEvent = ""
 				currentData = ""
 			}
@@ -134,7 +172,7 @@ func cozeChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *ht
 
 	// Last event
 	if currentEvent != "" && currentData != "" {
-		handleCozeEvent(c, currentEvent, currentData, &responseText, usage, id, info)
+		handleCozeEvent(c, currentEvent, currentData, responseText, usage, id, info)
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -143,13 +181,13 @@ func cozeChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *ht
 	helper.Done(c)
 
 	if usage.TotalTokens == 0 {
-		usage = service.ResponseText2Usage(c, responseText, info.UpstreamModelName, c.GetInt("coze_input_count"))
+		usage = service.ResponseText2Usage(c, responseText.String(), info.UpstreamModelName, c.GetInt("coze_input_count"))
 	}
 
 	return usage, nil
 }
 
-func handleCozeEvent(c *gin.Context, event string, data string, responseText *string, usage *dto.Usage, id string, info *relaycommon.RelayInfo) {
+func handleCozeEvent(c *gin.Context, event string, data string, responseText *cozeResponseTextBuffer, usage *dto.Usage, id string, info *relaycommon.RelayInfo) {
 	switch event {
 	case "conversation.chat.completed":
 		// 将 data 解析为 CozeChatResponseData
@@ -184,7 +222,7 @@ func handleCozeEvent(c *gin.Context, event string, data string, responseText *st
 			return
 		}
 
-		*responseText += content
+		responseText.WriteString(content)
 
 		openaiResponse := dto.ChatCompletionsStreamResponse{
 			Id:      id,

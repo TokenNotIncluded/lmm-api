@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/LIghtJUNction/api.lmm.best/common"
 	appconstant "github.com/LIghtJUNction/api.lmm.best/constant"
@@ -54,11 +55,58 @@ type responsesWSErrorEvent struct {
 type responsesWSCallState struct {
 	info       *relaycommon.RelayInfo
 	usage      *dto.Usage
-	outputText strings.Builder
+	outputText responsesWSOutputTextBuffer
 	images     relaycommon.ImageGenerationCallCounter
 	commitRate middleware.ModelRequestRateLimitCommit
 	dataMu     sync.Mutex
 	finishing  bool
+}
+
+type responsesWSOutputTextBuffer struct {
+	builder strings.Builder
+	limit   int
+}
+
+func newResponsesWSOutputTextBuffer(c *gin.Context) responsesWSOutputTextBuffer {
+	limit := 0
+	if c != nil {
+		limit = common.GetContextKeyInt(c, appconstant.ContextKeyResponseByteLimit)
+	}
+	if limit <= 0 {
+		limit = int(common.ResponseBodyLimit())
+	}
+	return responsesWSOutputTextBuffer{limit: limit}
+}
+
+func (b *responsesWSOutputTextBuffer) WriteString(c *gin.Context, value string) {
+	if b.limit <= 0 {
+		*b = newResponsesWSOutputTextBuffer(c)
+	}
+	if b.limit <= b.builder.Len() {
+		return
+	}
+	remaining := b.limit - b.builder.Len()
+	if len(value) > remaining {
+		for remaining > 0 && !utf8.RuneStart(value[remaining]) {
+			remaining--
+		}
+		value = value[:remaining]
+	}
+	b.builder.WriteString(value)
+}
+
+func (b *responsesWSOutputTextBuffer) Len() int {
+	if b == nil {
+		return 0
+	}
+	return b.builder.Len()
+}
+
+func (b *responsesWSOutputTextBuffer) String() string {
+	if b == nil {
+		return ""
+	}
+	return b.builder.String()
 }
 
 type responsesWSSession struct {
@@ -448,7 +496,12 @@ func (s *responsesWSSession) prepareCall(create responsesWSCreateRequest, commit
 		}
 		return nil, nil, apiErr
 	}
-	return &responsesWSCallState{info: relayInfo, usage: &dto.Usage{}, commitRate: commitRate}, payload, nil
+	return &responsesWSCallState{
+		info:       relayInfo,
+		usage:      &dto.Usage{},
+		outputText: newResponsesWSOutputTextBuffer(s.c),
+		commitRate: commitRate,
+	}, payload, nil
 }
 
 func buildResponsesWSCreatePayload(c *gin.Context, relayInfo *relaycommon.RelayInfo, req dto.OpenAIResponsesRequest, generate common.RawMessage) ([]byte, *types.NewAPIError) {
@@ -693,7 +746,7 @@ func (s *responsesWSSession) observeUpstreamMessage(message []byte) {
 		terminal = true
 		success = responsesWSHasBillablePartialLocked(state)
 	case "response.output_text.delta":
-		state.outputText.WriteString(streamResponse.Delta)
+		state.outputText.WriteString(s.c, streamResponse.Delta)
 	case dto.ResponsesOutputTypeItemDone:
 		if streamResponse.Item != nil {
 			switch streamResponse.Item.Type {

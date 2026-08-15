@@ -167,6 +167,28 @@ func TestResponsesWSDisconnectAfterOutputSettlesPartialUsage(t *testing.T) {
 	assert.True(t, posted)
 }
 
+func TestResponsesWSOutputTextBufferHonorsResponseBudget(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	common.SetContextKey(c, appconstant.ContextKeyResponseByteLimit, 4)
+	state := &responsesWSCallState{
+		info:  &relaycommon.RelayInfo{},
+		usage: &dto.Usage{},
+	}
+	session := &responsesWSSession{c: c, current: state}
+
+	session.observeUpstreamMessage([]byte(`{"type":"response.output_text.delta","delta":"abcdef"}`))
+	session.observeUpstreamMessage([]byte(`{"type":"response.output_text.delta","delta":"gh"}`))
+
+	assert.Equal(t, 4, state.outputText.Len())
+	assert.Equal(t, "abcd", state.outputText.String())
+
+	unicodeState := &responsesWSCallState{info: &relaycommon.RelayInfo{}, usage: &dto.Usage{}}
+	unicodeSession := &responsesWSSession{c: c, current: unicodeState}
+	unicodeSession.observeUpstreamMessage([]byte(`{"type":"response.output_text.delta","delta":"ab€"}`))
+	assert.Equal(t, "ab", unicodeState.outputText.String())
+}
+
 func TestBuildResponsesWSErrorPayload(t *testing.T) {
 	payload, err := buildResponsesWSErrorPayload("evt", types.NewErrorWithStatusCode(
 		errors.New("model is required"), types.ErrorCodeInvalidRequest, http.StatusBadRequest,
