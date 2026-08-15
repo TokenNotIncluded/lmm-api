@@ -42,13 +42,14 @@ type Message struct {
 }
 
 type Request struct {
-	Model       string    `json:"model"`
-	Messages    []Message `json:"messages"`
-	Stream      bool      `json:"stream"`
-	Temperature float64   `json:"temperature"`
-	MaxTokens   int       `json:"max_tokens"`
-	Tools       []Tool    `json:"tools,omitempty"`
-	ToolChoice  any       `json:"tool_choice,omitempty"`
+	Model           string    `json:"model"`
+	Messages        []Message `json:"messages"`
+	Stream          bool      `json:"stream"`
+	Temperature     float64   `json:"temperature"`
+	MaxTokens       int       `json:"max_tokens"`
+	ReasoningEffort string    `json:"reasoning_effort,omitempty"`
+	Tools           []Tool    `json:"tools,omitempty"`
+	ToolChoice      any       `json:"tool_choice,omitempty"`
 }
 
 type Response struct {

@@ -26,6 +26,7 @@ type AssistantRetentionDeleteResult struct {
 	FirstQuestions int64 `json:"first_questions"`
 	SecurityEvents int64 `json:"security_events"`
 	GiftRiskMemory int64 `json:"gift_risk_memory"`
+	RequestReviews int64 `json:"request_reviews"`
 }
 
 func NormalizeAssistantRetentionBatchSize(batchSize int) int {
@@ -209,6 +210,33 @@ func PurgeAssistantGiftNetworkRiskBefore(ctx context.Context, cutoff int64, batc
 		"key_hash IN ? AND kind = ? AND updated_at < ?",
 		keyHashes, assistantGiftRiskNetwork, cutoff,
 	).Delete(&AssistantGiftRiskMemory{})
+	return deleted.RowsAffected, deleted.Error
+}
+
+// PurgeAssistantRequestReviewsBefore removes old sampled review rows in
+// bounded batches. Review rows contain redacted previews and verdicts, but
+// they still grow with sampled traffic and must follow the security retention
+// boundary rather than remain indefinitely.
+func PurgeAssistantRequestReviewsBefore(ctx context.Context, cutoff int64, batchSize int) (int64, error) {
+	if cutoff <= 0 {
+		return 0, gorm.ErrInvalidData
+	}
+	if !assistantReviewTablesAvailable(DB) {
+		return 0, nil
+	}
+	batchSize = NormalizeAssistantRetentionBatchSize(batchSize)
+	var ids []int64
+	if err := DB.WithContext(ctx).Model(&AssistantRequestReview{}).
+		Where("created_at < ?", cutoff).
+		Order("created_at ASC, id ASC").Limit(batchSize).Pluck("id", &ids).Error; err != nil {
+		return 0, err
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	deleted := DB.WithContext(ctx).
+		Where("id IN ? AND created_at < ?", ids, cutoff).
+		Delete(&AssistantRequestReview{})
 	return deleted.RowsAffected, deleted.Error
 }
 
