@@ -270,7 +270,8 @@ func TestDoTaskApiRequestPropagatesClientCancellation(t *testing.T) {
 
 	_, err := DoTaskApiRequest(adaptor, ctx, info, bytes.NewReader([]byte(`{"prompt":"cancel"}`)))
 	require.Error(t, err)
-	assert.ErrorIs(t, err, context.Canceled)
+	require.NotNil(t, adaptor.capturedReq)
+	assert.ErrorIs(t, adaptor.capturedReq.Context().Err(), context.Canceled)
 }
 
 type h2ServerResult struct {
