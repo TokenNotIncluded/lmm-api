@@ -16,7 +16,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const compatibilityErrorBodyLimit = 1 << 20
+const (
+	compatibilityErrorBodyLimit        = 1 << 20
+	compatibilityRetryRequestBodyLimit = 8 << 20
+)
 
 // openAIOptionalParameters is deliberately limited to optional top-level
 // request fields. We never remove messages, tools, images, or other semantic
@@ -151,11 +154,17 @@ func requestBodyWithoutParameter(req *http.Request, parameter string) ([]byte, b
 	if req == nil || req.GetBody == nil || strings.TrimSpace(parameter) == "" {
 		return nil, false, nil
 	}
+	// Compatibility retries are optional. Do not duplicate a large request
+	// body into the raw JSON, decoded map, and re-encoded retry payload: the
+	// normal relay path can still return the original upstream response.
+	if req.ContentLength > compatibilityRetryRequestBodyLimit {
+		return nil, false, nil
+	}
 	body, err := req.GetBody()
 	if err != nil {
 		return nil, false, err
 	}
-	original, readErr := io.ReadAll(body)
+	original, readErr := common2.ReadAllLimit(body, compatibilityRetryRequestBodyLimit)
 	_ = body.Close()
 	if readErr != nil {
 		return nil, false, readErr
@@ -168,7 +177,7 @@ func requestBodyWithoutParameter(req *http.Request, parameter string) ([]byte, b
 		return nil, false, nil
 	}
 	delete(payload, parameter)
-	updated, err := json.Marshal(payload)
+	updated, err := common2.MarshalLimit(payload, compatibilityRetryRequestBodyLimit)
 	if err != nil {
 		return nil, false, err
 	}

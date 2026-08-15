@@ -58,6 +58,37 @@ func TestRequestBodyWithoutParameterPreservesSemanticFields(t *testing.T) {
 	assert.Contains(t, string(body), "messages")
 }
 
+func TestRequestBodyWithoutParameterSkipsOversizedRetry(t *testing.T) {
+	req, err := http.NewRequest(
+		http.MethodPost,
+		"http://example.test/v1/chat/completions",
+		strings.NewReader(strings.Repeat("x", compatibilityRetryRequestBodyLimit+1)),
+	)
+	require.NoError(t, err)
+
+	body, changed, err := requestBodyWithoutParameter(req, "temperature")
+	require.NoError(t, err)
+	assert.False(t, changed)
+	assert.Nil(t, body)
+}
+
+func TestRequestBodyWithoutParameterBoundsUnknownLength(t *testing.T) {
+	req := &http.Request{
+		Method: http.MethodPost,
+		GetBody: func() (io.ReadCloser, error) {
+			return io.NopCloser(strings.NewReader(
+				strings.Repeat("x", compatibilityRetryRequestBodyLimit+1),
+			)), nil
+		},
+		ContentLength: -1,
+	}
+
+	body, changed, err := requestBodyWithoutParameter(req, "temperature")
+	assert.Error(t, err)
+	assert.False(t, changed)
+	assert.Nil(t, body)
+}
+
 func TestMaybeRetryOpenAICompatibilityErrorOmitsOnlyRejectedParameter(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	var mu sync.Mutex
