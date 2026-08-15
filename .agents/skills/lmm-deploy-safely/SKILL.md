@@ -53,8 +53,8 @@ marker-owned deployment directory:
 
 - controller default:
   `${XDG_STATE_HOME:-$HOME/.local/state}/lmm-api/deploy-work`
-- target default: `/var/lib/lmm-api-go/deploy-work` (resolved private state:
-  `/var/lib/private/lmm-api-go/deploy-work`)
+- target default: `/var/lib/lmm-api-go-deploy/work` (root-owned, outside the
+  service-writable StateDirectory)
 
 Export the emitted task-specific `TMPDIR`, `GOCACHE`, `GOMODCACHE`,
 `CARGO_TARGET_DIR`, and `BUN_INSTALL_CACHE_DIR` values for every build or
@@ -366,8 +366,8 @@ Use these exact, marker-owned paths; do not invent a per-run path under `/tmp`:
 | --- | --- | --- |
 | controller build/workspace | `${XDG_STATE_HOME:-$HOME/.local/state}/lmm-api/deploy-work/<deployment-id>` | keep the marker and final status; remove `staging`, `tmp`, and caches after terminal state |
 | controller durable backup | `$HOME/backup/lmm-api/<verified-host>/<deployment-id>` | encrypted controller copy, `manifest.env`, `SHA256SUMS`; never delete active/latest-known-good |
-| production target workspace | `/var/lib/lmm-api-go/deploy-work/<deployment-id>` (resolves below `/var/lib/private/lmm-api-go`) | keep only marker/status after confirmation; staging is disposable |
-| production target backup | `/var/lib/lmm-api-go/deploy-backups/<deployment-id>` (resolves below `/var/lib/private/lmm-api-go`) | root-only, checksum-verified target snapshot; retain the configured latest-known-good set |
+| production target workspace | `/var/lib/lmm-api-go-deploy/work/<deployment-id>` | root-only, outside the service-writable StateDirectory; keep only marker/status after confirmation |
+| production target backup | `/var/lib/lmm-api-go-deploy/backups/<deployment-id>` | root-only, checksum-verified target snapshot; retain the configured latest-known-good set |
 | off-host backup | `/home/arch/.local/state/lmm-api-production-backups/<deployment-id>` on the ArchCzy host (SSH alias `archczy`) | encrypted controller/off-host archives; verify checksum after transfer |
 
 The controller workspace is not a backup. When backups were requested, prove

@@ -3,7 +3,7 @@ set -Eeuo pipefail
 umask 077
 
 readonly EXPECTED_HOST=arch-dmit
-readonly ROOT=/var/lib/lmm-api-go/deploy-work
+readonly ROOT=/var/lib/lmm-api-go-deploy/work
 ENV_FILE=''
 
 die() { printf 'prepare-production-backup: %s\n' "$*" >&2; exit 2; }

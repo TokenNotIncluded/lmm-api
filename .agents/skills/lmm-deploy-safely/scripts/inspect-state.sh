@@ -420,8 +420,8 @@ declare -a values=(
   "$(present "$(rooted /var/lib/lmm-api-cutover/pg-write-boundary)")" \
   "$(present "$(rooted /var/lib/lmm-api-cutover/cutover-journal)")" \
   "$(present "$(rooted /var/log/lmm-api-cutover/post-cutover-verify.json)")" \
-  "$(present "$(rooted /var/lib/lmm-api-go/deploy-work)")" \
-  "$(present "$(rooted /var/lib/lmm-api-go/deploy-staging)")" "$(present "$(rooted /var/lib/lmm-api-go/deploy-backups)")"
+  "$(present "$(rooted /var/lib/lmm-api-go-deploy/work)")" \
+  "$(present "$(rooted /var/lib/lmm-api-go-deploy/staging)")" "$(present "$(rooted /var/lib/lmm-api-go-deploy/backups)")"
 )
 
 if [[ $format == kv ]]; then

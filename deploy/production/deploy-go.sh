@@ -62,7 +62,7 @@ release_controller_owned_transaction_lock() {
   ssh -o BatchMode=yes "$HOST" bash -s -- "$deployment_id" <<'REMOTE'
 set -Eeuo pipefail
 deployment_id=$1
-lock=/var/lib/lmm-api-go/deploy-transaction.lock
+lock=/var/lib/lmm-api-go-deploy/transaction.lock
 marker="$lock/deployment.env"
 [[ -d $lock && ! -L $lock && -f $marker && ! -L $marker ]]
 [[ $(stat -c '%U:%G:%a' "$lock") == root:root:700 ]]
@@ -126,14 +126,15 @@ done
 candidate_sha256=$(sha256sum "$candidate" | awk '{print $1}')
 [[ $(pacman -Qp "$candidate") == "lmm-api-go $release_version-1" ]] || die 'candidate package record mismatch'
 
-remote_workspace="/var/lib/lmm-api-go/deploy-work/$deployment_id"
+remote_workspace="/var/lib/lmm-api-go-deploy/work/$deployment_id"
 remote_stage="$remote_workspace/staging"
 ssh -o BatchMode=yes "$HOST" bash -s -- "$deployment_id" <<'REMOTE'
 set -Eeuo pipefail
 deployment_id=$1
-workspace="/var/lib/lmm-api-go/deploy-work/$deployment_id"
+workspace="/var/lib/lmm-api-go-deploy/work/$deployment_id"
 [[ $(hostnamectl --static) == arch-dmit ]]
 [[ ! -e $workspace && ! -L $workspace ]]
+install -d -o root -g root -m0700 /var/lib/lmm-api-go-deploy /var/lib/lmm-api-go-deploy/work
 install -d -m0700 "$workspace/staging"
 printf 'format=1\ndeployment_id=%s\nrole=target\n' "$deployment_id" >"$workspace/.lmm-deploy-workspace"
 chmod 0600 "$workspace/.lmm-deploy-workspace"
@@ -224,7 +225,7 @@ ssh -o BatchMode=yes "$HOST" chmod 0700 \
 remote_candidate="$remote_stage/${candidate##*/}"
 remote_core="$remote_stage/${rollback_core##*/}"
 remote_go="$remote_stage/${rollback_go##*/}"
-target_backup="/var/lib/lmm-api-go/deploy-backups/$deployment_id"
+target_backup="/var/lib/lmm-api-go-deploy/backups/$deployment_id"
 deploy_unit="lmm-api-go-deploy-$deployment_id"
 if ! ssh -o BatchMode=yes "$HOST" systemd-run \
   --unit="$deploy_unit" --collect --property=Type=oneshot --property=TimeoutStartSec=9min \

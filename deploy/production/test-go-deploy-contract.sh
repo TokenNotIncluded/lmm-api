@@ -61,6 +61,11 @@ for literal in \
   'release_transaction_lock'; do
   contains "$literal" "$here/activate-go-release.sh"
 done
+contains 'WORK_ROOT=/var/lib/lmm-api-go-deploy/work' "$here/activate-go-release.sh"
+contains 'assert_root_only_path "$WORKSPACE"' "$here/activate-go-release.sh"
+if rg -n '/var/lib/lmm-api-go/(deploy-work|deploy-backups|deploy-transaction)' "$here"; then
+  fail 'deployment control files remain below the backend-writable StateDirectory'
+fi
 if grep -Fq 'search_path=public' "$here/activate-go-release.sh" \
   "$repo/packaging/common/lmm-api/lmm-api.service"; then
   fail 'production activation or service unit still hard-codes the public schema'

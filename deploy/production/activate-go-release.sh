@@ -26,8 +26,8 @@ if [[ ${LMM_DEPLOY_TEST_MODE:-0} == 1 ]]; then
   TRANSACTION_LOCK=${LMM_DEPLOY_TEST_TRANSACTION_LOCK:?}
   PROBE_ATTEMPTS=${LMM_DEPLOY_TEST_PROBE_ATTEMPTS:-1}
 else
-  WORK_ROOT=/var/lib/lmm-api-go/deploy-work
-  BACKUP_ROOT=/var/lib/lmm-api-go/deploy-backups
+  WORK_ROOT=/var/lib/lmm-api-go-deploy/work
+  BACKUP_ROOT=/var/lib/lmm-api-go-deploy/backups
   LOCK_FILE=/run/lock/lmm-api-go-deploy.lock
   FRONTEND_ROOT=/srv/lmm-api-frontend
   SYSTEMD_UNIT_ROOT=/etc/systemd/system
@@ -41,7 +41,7 @@ else
   REMOVED_PROVIDER_ROOT=/usr/lib/lmm-api
   REMOVED_LEGACY_SERVICE=/usr/lib/systemd/system/lmm-api-go.service
   CANONICAL_LAUNCHER=/usr/bin/lmm-api
-  TRANSACTION_LOCK=/var/lib/lmm-api-go/deploy-transaction.lock
+  TRANSACTION_LOCK=/var/lib/lmm-api-go-deploy/transaction.lock
   PROBE_ATTEMPTS=45
 fi
 readonly WORK_ROOT BACKUP_ROOT LOCK_FILE FRONTEND_ROOT SYSTEMD_UNIT_ROOT
@@ -53,6 +53,26 @@ readonly TRANSACTION_LOCK
 die() { printf 'activate-go-release: %s\n' "$*" >&2; return 2; }
 is_sha256() { [[ $1 =~ ^[0-9a-f]{64}$ ]]; }
 is_id() { [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$ ]]; }
+
+# Deployment control paths must not be writable by the service account.  The
+# check walks every existing component so a symlink or writable parent cannot
+# redirect workspace/status/rollback state outside the operator-owned tree.
+assert_root_only_path() {
+  local path=$1 component=/ mode owner name required_owner=0
+  local -a components
+  if [[ ${LMM_DEPLOY_TEST_MODE:-0} == 1 ]]; then
+    required_owner=$EUID
+  fi
+  [[ $path == /* && $(realpath -e -- "$path") == "$path" ]] || die 'deployment path is not canonical'
+  IFS=/ read -ra components <<<"${path#/}"
+  for name in "${components[@]}"; do
+    component=${component%/}/$name
+    [[ ! -L $component ]] || die "deployment path contains a symlink: $component"
+    read -r owner mode < <(stat -c '%u %a' -- "$component")
+    [[ ( $owner == 0 || $owner == "$required_owner" ) && $mode =~ ^[0-7]{3,4}$ && $((8#$mode & 8#022)) == 0 ]] || \
+      die "deployment path component is not root-controlled: $component"
+  done
+}
 
 ACTION=${1:-}
 [[ -n $ACTION ]] && shift
@@ -106,6 +126,8 @@ case $ACTION in activate|rollback|confirm) ;; *) die 'first argument must be act
 observed_host=${LMM_DEPLOY_OBSERVED_HOST:-$(hostnamectl --static)}
 [[ $observed_host == "$EXPECTED_HOST" ]] || die 'production host identity mismatch'
 [[ $WORKSPACE == "$WORK_ROOT"/* && -d $WORKSPACE && ! -L $WORKSPACE ]] || die 'unsafe workspace'
+assert_root_only_path "$WORK_ROOT"
+assert_root_only_path "$WORKSPACE"
 deployment_id=${WORKSPACE##*/}
 is_id "$deployment_id" || die 'invalid deployment ID'
 marker=$WORKSPACE/.lmm-deploy-workspace

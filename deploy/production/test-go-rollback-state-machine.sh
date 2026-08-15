@@ -421,6 +421,15 @@ activate_case() {
 }
 
 CASE_WORKSPACE=''
+setup_case insecure-work-root
+insecure_workspace=$CASE_WORKSPACE
+chmod 0777 "$LMM_DEPLOY_TEST_WORK_ROOT"
+if activate_case "$insecure_workspace" >"$tmp/activate-insecure.out" 2>"$tmp/activate-insecure.err"; then
+  fail 'activation accepted a service-writable deployment root'
+fi
+grep -Fq 'deployment path component is not root-controlled' "$tmp/activate-insecure.err" || \
+  fail 'activation did not identify the unsafe deployment root'
+
 setup_case confirm-case
 confirm_workspace=$CASE_WORKSPACE
 activate_case "$confirm_workspace" >"$tmp/activate-confirm.out"

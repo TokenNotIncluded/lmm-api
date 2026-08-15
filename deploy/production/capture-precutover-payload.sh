@@ -10,7 +10,7 @@ if [[ ${LMM_DEPLOY_TEST_MODE:-0} == 1 ]]; then
   [[ $FILESYSTEM_ROOT == /* && -d $FILESYSTEM_ROOT && ! -L $FILESYSTEM_ROOT ]] || \
     { printf 'capture-precutover-payload: unsafe test filesystem root\n' >&2; exit 2; }
 else
-  WORK_ROOT=/var/lib/lmm-api-go/deploy-work
+  WORK_ROOT=/var/lib/lmm-api-go-deploy/work
   FILESYSTEM_ROOT=''
 fi
 readonly WORK_ROOT FILESYSTEM_ROOT

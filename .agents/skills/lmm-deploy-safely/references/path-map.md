@@ -73,8 +73,8 @@ guarded path before calling `deploy` phases.
 | Target activator | Immutable payload under the marker-owned deployment workspace |
 | Default SSH alias | `ArchDmit` |
 | Required static hostname | `arch-dmit` |
-| Target work root | `/var/lib/lmm-api-go/deploy-work/<deployment-id>` (the service-managed path resolves under `/var/lib/private/lmm-api-go`) |
-| Target backup root | `/var/lib/lmm-api-go/deploy-backups/<deployment-id>` (the service-managed path resolves under `/var/lib/private/lmm-api-go`) |
+| Target work root | `/var/lib/lmm-api-go-deploy/work/<deployment-id>` (root-owned, outside service state) |
+| Target backup root | `/var/lib/lmm-api-go-deploy/backups/<deployment-id>` (root-owned, outside service state) |
 | Off-host backup root | `/home/arch/.local/state/lmm-api-production-backups/<deployment-id>` on the ArchCzy host through the case-sensitive SSH alias `archczy` |
 | Frontend release root | `/srv/lmm-api-frontend` |
 | Frontend releases | `/srv/lmm-api-frontend/releases/<version>` |

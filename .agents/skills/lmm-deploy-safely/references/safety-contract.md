@@ -167,11 +167,11 @@ Canonical roots are fixed:
 
 - controller workspace: `${XDG_STATE_HOME:-$HOME/.local/state}/lmm-api/deploy-work/<deployment-id>`;
 - durable controller copy: `$HOME/backup/lmm-api/<verified-host>/<deployment-id>`;
-- production target workspace: `/var/lib/lmm-api-go/deploy-work/<deployment-id>`
-  (resolved private state is below `/var/lib/private/lmm-api-go`);
+- production target workspace: `/var/lib/lmm-api-go-deploy/work/<deployment-id>`
+  (root-owned and outside the service-writable StateDirectory);
 - guarded core target workspace: `/var/lib/lmm-api/deploy-work/<deployment-id>`
   when the installed core contract selects the guarded layout;
-- production target backup: `/var/lib/lmm-api-go/deploy-backups/<deployment-id>`;
+- production target backup: `/var/lib/lmm-api-go-deploy/backups/<deployment-id>`;
 - off-host copy: `/home/arch/.local/state/lmm-api-production-backups/<deployment-id>`
   on the ArchCzy host through SSH alias `archczy`.
 
