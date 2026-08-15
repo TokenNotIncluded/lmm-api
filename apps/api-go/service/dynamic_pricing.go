@@ -41,6 +41,11 @@ import (
 
 var dynamicPricingTickerOnce sync.Once
 
+// A single tick is intentionally bounded. If the database produces more
+// aggregate rows than this, the tick fails closed instead of applying prices
+// to an arbitrary prefix and pretending the result is complete.
+const dynamicPricingMaxWindowRows = 100_000
+
 // dynamicPricingWindowRow is one (model, channel) aggregate row from the
 // consume-log window.
 type dynamicPricingWindowRow struct {
@@ -210,7 +215,14 @@ func queryDynamicPricingWindow(startTimestamp, endTimestamp int64) ([]dynamicPri
 		Select("model_name, channel_id, COALESCE(SUM(prompt_tokens), 0) + COALESCE(SUM(completion_tokens), 0) AS tokens, COUNT(*) AS requests").
 		Where("type = ? AND created_at >= ? AND created_at <= ?", model.LogTypeConsume, startTimestamp, endTimestamp).
 		Group("model_name, channel_id").
+		Limit(dynamicPricingMaxWindowRows + 1).
 		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) > dynamicPricingMaxWindowRows {
+		return nil, fmt.Errorf("dynamic pricing window has more than %d model/channel rows", dynamicPricingMaxWindowRows)
+	}
 	return rows, err
 }
 

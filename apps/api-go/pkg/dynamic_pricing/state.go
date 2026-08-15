@@ -35,6 +35,12 @@ import (
 // plenty: it only needs to bridge a cold start of the pricing goroutine.
 const stateTTL = 24 * time.Hour
 
+// maxInMemoryStates prevents untrusted/high-cardinality model names from
+// turning the pricing cache into an unbounded process-wide map. The ticker
+// can reconstruct an evicted state from the current window (or Redis) on a
+// later pass, so eviction is preferable to retaining unbounded history.
+const maxInMemoryStates = 100_000
+
 // stateKey returns the Redis key for a model's persisted pricing state.
 func stateKey(model string) string {
 	return "dynamic_pricing:state:" + model
@@ -76,6 +82,25 @@ func GetState(model string) (*ModelState, bool) {
 // caller.
 func SetState(model string, st *ModelState) {
 	statesMu.Lock()
+	if _, exists := states[model]; !exists && len(states) >= maxInMemoryStates {
+		// Evict the least recently updated entry. UpdatedAt is the tick time,
+		// so this is deterministic across normal ticker updates; nil/zero
+		// entries are treated as oldest and are safe to discard first.
+		oldestModel := ""
+		var oldestAt int64
+		for candidate, candidateState := range states {
+			candidateAt := int64(0)
+			if candidateState != nil {
+				candidateAt = candidateState.UpdatedAt
+			}
+			if oldestModel == "" || candidateAt < oldestAt {
+				oldestModel, oldestAt = candidate, candidateAt
+			}
+		}
+		if oldestModel != "" {
+			delete(states, oldestModel)
+		}
+	}
 	states[model] = st
 	statesMu.Unlock()
 

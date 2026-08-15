@@ -1,6 +1,7 @@
 package dynamic_pricing
 
 import (
+	"fmt"
 	"sort"
 	"testing"
 
@@ -83,6 +84,25 @@ func TestSetStateReplacesAndDeleteNotSupported(t *testing.T) {
 	SetState(model, &ModelState{Factor: 3.0})
 	if got := GetMultiplier(model); got != 3.0 {
 		t.Fatalf("GetMultiplier after replace = %v, want 3.0", got)
+	}
+}
+
+func TestSetStateBoundsHighCardinalityModels(t *testing.T) {
+	disableRedis(t)
+	resetStatesForTest()
+
+	for i := 0; i < maxInMemoryStates+1; i++ {
+		SetState(fmt.Sprintf("model-%d", i), &ModelState{UpdatedAt: int64(i)})
+	}
+
+	statesMu.RLock()
+	count := len(states)
+	statesMu.RUnlock()
+	if count != maxInMemoryStates {
+		t.Fatalf("state count = %d, want bounded at %d", count, maxInMemoryStates)
+	}
+	if _, ok := GetState(fmt.Sprintf("model-%d", maxInMemoryStates)); !ok {
+		t.Fatal("newest model state was not retained")
 	}
 }
 
