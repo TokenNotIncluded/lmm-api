@@ -26,6 +26,7 @@ import { getAssistantOnboardingTodoSteps } from './assistant-onboarding-todo-sta
 export function AssistantOnboardingTodo(props: {
   userId: number
   enabled: boolean
+  presentation?: 'default' | 'compact'
   onOpenKey: () => void
   onOpenSetup: () => void
 }) {
@@ -45,6 +46,7 @@ export function AssistantOnboardingTodo(props: {
   const steps = getAssistantOnboardingTodoSteps(todoQuery.data)
   const completedCount = steps.filter((step) => step.complete).length
   const isComplete = todoQuery.data.status === 'completed'
+  const compact = props.presentation === 'compact'
   const labels: Record<L1OnboardingTodo['steps'][number]['id'], string> = {
     create_api_key: t('Create API key'),
     install_client: t('Install a client'),
@@ -55,8 +57,13 @@ export function AssistantOnboardingTodo(props: {
   return (
     <Card
       size='sm'
-      className='mx-3 mt-3 shrink-0 sm:mx-4'
+      className={
+        compact
+          ? 'mx-auto mt-2 w-full max-w-3xl shrink-0 rounded-none border-x-0 border-t-0 bg-transparent shadow-none sm:mt-3'
+          : 'mx-3 mt-3 shrink-0 sm:mx-4'
+      }
       data-testid='assistant-onboarding-todo'
+      data-presentation={compact ? 'compact' : 'default'}
     >
       <CardHeader className='gap-1.5 pb-3'>
         <div className='flex items-center justify-between gap-3'>
@@ -85,7 +92,11 @@ export function AssistantOnboardingTodo(props: {
           {t('Only verified account activity can complete these steps.')}
         </p>
       </CardHeader>
-      <CardContent className='grid gap-2 pt-0'>
+      <CardContent
+        className={
+          compact ? 'grid gap-2 pt-0 sm:grid-cols-2' : 'grid gap-2 pt-0'
+        }
+      >
         {steps.map((step) => {
           let action: (() => void) | undefined
           if (step.id === 'create_api_key') action = props.onOpenKey
