@@ -3,6 +3,7 @@ package controller
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -106,6 +107,10 @@ func SubscriptionRequestWaffoPancakePay(c *gin.Context) {
 		PriceSnapshot: &service.WaffoPancakePriceSnapshot{
 			Amount:      decimal.NewFromFloat(plan.PriceAmount).StringFixed(2),
 			TaxCategory: "saas",
+		},
+		OrderMetadata: map[string]string{
+			service.WaffoPancakeOrderMetadataProductID: strings.TrimSpace(plan.WaffoPancakeProductId),
+			service.WaffoPancakeOrderMetadataPlanID:    strconv.Itoa(plan.Id),
 		},
 		BuyerEmail:              getWaffoPancakeBuyerEmail(user),
 		ExpiresInSeconds:        &expiresInSeconds,

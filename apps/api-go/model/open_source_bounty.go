@@ -1052,36 +1052,42 @@ func AcceptOpenSourceBounty(participantUserId int, projectId int, rawGithubHandl
 		if project.OwnerUserId == participantUserId {
 			return bountyError("OPEN_SOURCE_BOUNTY_OWNER_CANNOT_ACCEPT", "bounty owner cannot accept their own challenge")
 		}
-		var previousAttempts []OpenSourceBountyChallenge
-		if err := lockForUpdate(tx).Where("project_id = ? AND participant_user_id = ?", projectId, participantUserId).
-			Order("id DESC").Find(&previousAttempts).Error; err != nil {
+		appealCutoff := common.GetTimestamp() - OpenSourceBountyAppealWindowSeconds
+		// Do not materialize every historical attempt for this user/project. A
+		// contributor can accumulate an arbitrary number of rejected attempts,
+		// and the old slice made acceptance memory grow with that history while
+		// issuing one dispute count query per rejected row. The state checks are
+		// equivalent when expressed as bounded existence queries.
+		var activeAttempts int64
+		if err := tx.Model(&OpenSourceBountyChallenge{}).
+			Where("project_id = ? AND participant_user_id = ? AND status IN ?", projectId, participantUserId,
+				[]string{OpenSourceBountyChallengeAccepted, OpenSourceBountyChallengeSubmitted, OpenSourceBountyChallengeApproved}).
+			Count(&activeAttempts).Error; err != nil {
 			return err
 		}
-		appealCutoff := common.GetTimestamp() - OpenSourceBountyAppealWindowSeconds
-		for _, attempt := range previousAttempts {
-			switch attempt.Status {
-			case OpenSourceBountyChallengeAccepted, OpenSourceBountyChallengeSubmitted, OpenSourceBountyChallengeApproved:
-				return bountyError("OPEN_SOURCE_BOUNTY_ALREADY_ACCEPTED", "this bounty already has an active or completed attempt")
-			case OpenSourceBountyChallengeRejected:
-				var openDisputes int64
-				if err := tx.Model(&OpenSourceBountyDispute{}).
-					Where("challenge_id = ? AND status = ?", attempt.Id, OpenSourceBountyDisputeOpen).
-					Count(&openDisputes).Error; err != nil {
-					return err
-				}
-				if openDisputes > 0 {
-					return bountyError("OPEN_SOURCE_BOUNTY_RETRY_PENDING", "wait until the rejected attempt's dispute is resolved or its seven-day appeal window ends")
-				}
-				var deniedDisputes int64
-				if err := tx.Model(&OpenSourceBountyDispute{}).
-					Where("challenge_id = ? AND status = ?", attempt.Id, OpenSourceBountyDisputeResolvedDenied).
-					Count(&deniedDisputes).Error; err != nil {
-					return err
-				}
-				if deniedDisputes == 0 && attempt.RejectedAt > appealCutoff {
-					return bountyError("OPEN_SOURCE_BOUNTY_RETRY_PENDING", "wait until the rejected attempt's dispute is resolved or its seven-day appeal window ends")
-				}
-			}
+		if activeAttempts > 0 {
+			return bountyError("OPEN_SOURCE_BOUNTY_ALREADY_ACCEPTED", "this bounty already has an active or completed attempt")
+		}
+
+		var retryPending int64
+		if err := tx.Model(&OpenSourceBountyChallenge{}).
+			Where(`project_id = ? AND participant_user_id = ? AND status = ? AND (
+				(
+					rejected_at > ? AND NOT EXISTS (
+					SELECT 1 FROM open_source_bounty_disputes resolved_dispute
+					WHERE resolved_dispute.challenge_id = open_source_bounty_challenges.id AND resolved_dispute.status = ?
+				)
+				) OR
+				EXISTS (
+					SELECT 1 FROM open_source_bounty_disputes dispute
+					WHERE dispute.challenge_id = open_source_bounty_challenges.id AND dispute.status = ?
+				)
+			)`, projectId, participantUserId, OpenSourceBountyChallengeRejected, appealCutoff, OpenSourceBountyDisputeResolvedDenied, OpenSourceBountyDisputeOpen).
+			Count(&retryPending).Error; err != nil {
+			return err
+		}
+		if retryPending > 0 {
+			return bountyError("OPEN_SOURCE_BOUNTY_RETRY_PENDING", "wait until the rejected attempt's dispute is resolved or its seven-day appeal window ends")
 		}
 		var occupied int64
 		if err := tx.Model(&OpenSourceBountyChallenge{}).Where(`project_id = ? AND (

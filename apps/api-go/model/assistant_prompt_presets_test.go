@@ -99,6 +99,7 @@ func TestPromptPresetValidationAndBoundedRefresh(t *testing.T) {
 	assert.Equal(t, "ai_recommendation", generated.Presets[0].Id)
 	assert.Contains(t, generated.Presets[0].Prompt, "推荐信")
 	require.GreaterOrEqual(t, len(generated.Presets), 2)
+	assert.Contains(t, promptPresetIDs(generated.Presets), "getting_started", "dynamic starters must retain an onboarding entry")
 	var pricing *PromptPreset
 	for index := range generated.Presets {
 		if generated.Presets[index].Id == "pricing_cost" {

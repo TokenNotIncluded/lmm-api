@@ -75,6 +75,16 @@ func TestBuildWaffoPancakeSDKCheckoutParamsLanguageAllowList(t *testing.T) {
 	require.Nil(t, invalid.Language)
 }
 
+func TestBuildWaffoPancakeSDKCheckoutParamsPreservesOrderMetadata(t *testing.T) {
+	sdkParams, err := buildWaffoPancakeSDKCheckoutParams(&WaffoPancakeCreateSessionParams{
+		ProductID:     "PROD_test",
+		BuyerIdentity: "new-api-user-1",
+		OrderMetadata: map[string]string{"lmm_product_id": "PROD_test", "lmm_plan_id": "42"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, map[string]string{"lmm_product_id": "PROD_test", "lmm_plan_id": "42"}, sdkParams.Metadata)
+}
+
 func TestResolveWaffoPancakeCheckoutRegionCannotSelectArbitraryCountry(t *testing.T) {
 	for _, value := range []string{"US", "CN", "DE", "china;country=US"} {
 		require.Equal(t, WaffoPancakeCheckoutRegionGlobal, ResolveWaffoPancakeCheckoutRegion(value, "zh-Hans"))

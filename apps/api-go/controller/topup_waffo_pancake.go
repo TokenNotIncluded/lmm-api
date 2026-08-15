@@ -3,6 +3,7 @@ package controller
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -580,6 +581,35 @@ func WaffoPancakeWebhook(c *gin.Context) {
 			c.String(http.StatusOK, "OK")
 			return
 		}
+		order := model.GetSubscriptionOrderByTradeNo(tradeNo)
+		if order == nil {
+			logger.LogError(c.Request.Context(), fmt.Sprintf(
+				"Waffo Pancake webhook 订阅订单消失 trade_no=%s event_id=%s order_id=%s client_ip=%s",
+				tradeNo, event.ID, event.Data.OrderID, c.ClientIP(),
+			))
+			c.String(http.StatusOK, "OK")
+			return
+		}
+		plan, planErr := model.GetSubscriptionPlanById(order.PlanId)
+		if planErr != nil {
+			logger.LogError(c.Request.Context(), fmt.Sprintf(
+				"Waffo Pancake webhook 订阅套餐读取失败 trade_no=%s plan_id=%d event_id=%s client_ip=%s error=%q",
+				tradeNo, order.PlanId, event.ID, c.ClientIP(), planErr.Error(),
+			))
+			c.String(http.StatusInternalServerError, "retry")
+			return
+		}
+		if validationErr := validateWaffoPancakeSubscriptionEvent(event, order, plan); validationErr != nil {
+			logger.LogError(c.Request.Context(), fmt.Sprintf(
+				"Waffo Pancake webhook 订阅证据不匹配 trade_no=%s plan_id=%d event_id=%s client_ip=%s error=%q",
+				tradeNo, order.PlanId, event.ID, c.ClientIP(), validationErr.Error(),
+			))
+			// The event is signed but permanently belongs to a different local
+			// order/product. Acknowledge it without granting the subscription;
+			// retrying cannot repair a provider/local evidence mismatch.
+			c.String(http.StatusOK, "OK")
+			return
+		}
 		LockOrder(tradeNo)
 		defer UnlockOrder(tradeNo)
 		if err := model.CompleteSubscriptionOrder(tradeNo, string(bodyBytes), model.PaymentProviderWaffoPancake, ""); err != nil {
@@ -640,6 +670,55 @@ func WaffoPancakeWebhook(c *gin.Context) {
 
 	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo Pancake 充值成功 trade_no=%s user_id=%d quota=%d event_id=%s order_id=%s client_ip=%s", tradeNo, completed.UserId, completed.CreditedQuota, event.ID, event.Data.OrderID, c.ClientIP()))
 	c.String(http.StatusOK, "OK")
+}
+
+// validateWaffoPancakeSubscriptionEvent keeps a signed provider callback
+// bound to the local subscription order. Signature verification authenticates
+// Waffo, but it does not prove that the event belongs to this plan or amount.
+// Product metadata is written into new checkout sessions and echoed by Waffo;
+// requiring it prevents a valid event for another product in the same merchant
+// from activating this local order.
+func validateWaffoPancakeSubscriptionEvent(event *service.WaffoPancakeWebhookEvent, order *model.SubscriptionOrder, plan *model.SubscriptionPlan) error {
+	if event == nil || order == nil || plan == nil {
+		return fmt.Errorf("missing subscription settlement evidence")
+	}
+	expectedCurrency := strings.ToUpper(strings.TrimSpace(plan.Currency))
+	if expectedCurrency == "" {
+		expectedCurrency = "USD"
+	}
+	actualCurrency := strings.ToUpper(strings.TrimSpace(event.Data.Currency))
+	if actualCurrency == "" || actualCurrency != expectedCurrency {
+		return fmt.Errorf("subscription currency mismatch: expected=%q actual=%q", expectedCurrency, actualCurrency)
+	}
+
+	expectedAmount, err := monetaryStringToMicros(formatWaffoPancakeAmount(order.Money))
+	if err != nil {
+		return fmt.Errorf("invalid local subscription amount: %w", err)
+	}
+	actualAmount, err := monetaryStringToMicros(event.Data.Amount)
+	if err != nil {
+		return fmt.Errorf("invalid provider subscription amount: %w", err)
+	}
+	if actualAmount != expectedAmount {
+		return fmt.Errorf("subscription amount mismatch: expected_micros=%d actual_micros=%d", expectedAmount, actualAmount)
+	}
+
+	// The global store setting is optional for plan-only configuration, but
+	// when present it is an additional signed store boundary. The product
+	// metadata check below remains mandatory either way.
+	if expectedStore := strings.TrimSpace(setting.WaffoPancakeStoreID); expectedStore != "" &&
+		strings.TrimSpace(event.StoreID) != expectedStore {
+		return fmt.Errorf("subscription store mismatch: expected=%q actual=%q", expectedStore, strings.TrimSpace(event.StoreID))
+	}
+	expectedProduct := strings.TrimSpace(plan.WaffoPancakeProductId)
+	actualProduct := strings.TrimSpace(event.Data.OrderMetadata[service.WaffoPancakeOrderMetadataProductID])
+	if expectedProduct == "" || actualProduct == "" || actualProduct != expectedProduct {
+		return fmt.Errorf("subscription product metadata mismatch: expected=%q actual=%q", expectedProduct, actualProduct)
+	}
+	if expectedPlan := strconv.Itoa(plan.Id); strings.TrimSpace(event.Data.OrderMetadata[service.WaffoPancakeOrderMetadataPlanID]) != expectedPlan {
+		return fmt.Errorf("subscription plan metadata mismatch: expected=%q actual=%q", expectedPlan, strings.TrimSpace(event.Data.OrderMetadata[service.WaffoPancakeOrderMetadataPlanID]))
+	}
+	return nil
 }
 
 // handleWaffoPancakeRefundEvent records a signed refund notification in the

@@ -72,12 +72,23 @@ type WaffoPancakeCreateSessionParams struct {
 	BuyerEmail              string
 	ExpiresInSeconds        *int
 	OrderMerchantExternalID string
+	// OrderMetadata is echoed by Waffo in signed webhook events.  Callers use
+	// it to bind a callback to the exact product/plan selected at checkout.
+	OrderMetadata map[string]string
 	// CheckoutRegion is the application-level china/global selector. It is
 	// translated to billingDetail by the service; Waffo has no region field.
 	CheckoutRegion string
 	// CheckoutLanguage is validated against Waffo's supported BCP 47 enum.
 	CheckoutLanguage string
 }
+
+// WaffoPancakeOrderMetadataProductID and WaffoPancakeOrderMetadataPlanID are
+// deliberately namespaced so provider/user-supplied metadata cannot be
+// mistaken for our settlement evidence.
+const (
+	WaffoPancakeOrderMetadataProductID = "lmm_product_id"
+	WaffoPancakeOrderMetadataPlanID    = "lmm_plan_id"
+)
 
 // WaffoPancakeCheckoutSession is the response of CreateWaffoPancakeCheckoutSession.
 // CheckoutURL already carries the `#token=...` fragment; Token / TokenExpiresAt
@@ -114,6 +125,8 @@ type WaffoPancakeWebhookData struct {
 	Amount                         string
 	TaxAmount                      string
 	ProductName                    string
+	OrderMetadata                  map[string]string
+	ProductMetadata                map[string]string
 	MerchantProvidedBuyerIdentity  string
 	PaymentID                      string
 	PaymentStatus                  string
@@ -302,6 +315,7 @@ func buildWaffoPancakeSDKCheckoutParams(params *WaffoPancakeCreateSessionParams)
 			BuyerEmail:              optionalString(params.BuyerEmail),
 			ExpiresInSeconds:        params.ExpiresInSeconds,
 			OrderMerchantExternalID: optionalString(params.OrderMerchantExternalID),
+			Metadata:                params.OrderMetadata,
 		},
 		BuyerIdentity: params.BuyerIdentity,
 	}
@@ -450,6 +464,8 @@ func VerifyConfiguredWaffoPancakeWebhook(payload string, signatureHeader string)
 			Amount:                         evt.Data.Amount,
 			TaxAmount:                      evt.Data.TaxAmount,
 			ProductName:                    evt.Data.ProductName,
+			OrderMetadata:                  evt.Data.OrderMetadata,
+			ProductMetadata:                evt.Data.ProductMetadata,
 			MerchantProvidedBuyerIdentity:  identity,
 			PaymentID:                      paymentID,
 			PaymentStatus:                  paymentStatus,

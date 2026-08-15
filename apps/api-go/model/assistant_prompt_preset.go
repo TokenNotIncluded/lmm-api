@@ -135,7 +135,10 @@ var topicRules = []topicRule{
 
 var promptCandidates = []promptCandidate{
 	{PromptPreset: PromptPreset{Id: "ai_recommendation", Label: "获取推荐信", Prompt: "请根据我的真实用途帮我准备并完善 L1 推荐信；先读取当前推荐信，信息足够后让我确认。"}, Intent: AssistantIntentRecommendation, Order: 0, Required: true},
-	{PromptPreset: PromptPreset{Id: "getting_started", Label: "快速开始", Prompt: "请根据我的实际目标直接说明你能替我完成什么，以及最短的开始方式。"}, Intent: AssistantIntentOnboarding, Order: 1},
+	// Keep one orientation entry in every generated starter set. Aggregate
+	// ranking may reorder the remaining slots, but removing the only
+	// “what can I do here?” entry leaves new users without a safe first step.
+	{PromptPreset: PromptPreset{Id: "getting_started", Label: "快速开始", Prompt: "请根据我的实际目标直接说明你能替我完成什么，以及最短的开始方式。"}, Intent: AssistantIntentOnboarding, Order: 1, Required: true},
 	{PromptPreset: PromptPreset{Id: "new_user_gift", Label: "领取新用户礼包", Prompt: "我想了解如何通过和 AI 助手交流，争取一次性新用户礼包；请说明规则和下一步。"}, Intent: AssistantIntentInvitation, Order: 2, Required: true},
 	{PromptPreset: PromptPreset{Id: "developer_access", Label: "开发者访问", Prompt: "我想使用 API，请说明当前账户可以做什么，以及如何申请开发者访问。"}, Intent: AssistantIntentOnboarding, Order: 3},
 	{PromptPreset: PromptPreset{Id: "client_setup", Label: "客户端配置", Prompt: "请帮我选择并配置兼容的客户端，我会补充操作系统和使用场景。"}, Intent: AssistantIntentClientSetup, Order: 4},
