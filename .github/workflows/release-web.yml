@@ -18,6 +18,7 @@ env:
 jobs:
   web:
     name: Test, build, sign, and publish web package
+    if: ${{ github.ref_protected }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
@@ -33,10 +34,16 @@ jobs:
 
       - name: Verify web release identity
         id: identity
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           revision=$(git rev-parse HEAD)
           [[ "$revision" == "$GITHUB_SHA" ]]
+          git merge-base --is-ancestor "$revision" "origin/$DEFAULT_BRANCH" || {
+            echo "$revision is not reachable from default branch $DEFAULT_BRANCH" >&2
+            exit 1
+          }
           version=${GITHUB_REF_NAME#web-v}
           [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
           [[ $(sed -n 's/^pkgver=//p' packaging/aur/lmm-api-web-bin/PKGBUILD) == "$version" ]]
