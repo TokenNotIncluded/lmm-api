@@ -30,18 +30,22 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { formatTimestamp } from '@/lib/format'
+import { useAuthStore } from '@/stores/auth-store'
 
 import {
   listAssistantRequestReviews,
   resetAssistantRequestReviewViolations,
 } from '../api'
+import { canViewUserAssistantHistory } from '../lib/assistant-history-access'
 import type { User } from '../types'
 
 export function UserAssistantReviewDialog(props: { user: User }) {
   const { t } = useTranslation()
+  const viewer = useAuthStore((state) => state.auth.user)
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
   const count = props.user.assistant_violation_count ?? 0
+  const canView = canViewUserAssistantHistory(viewer, props.user)
   const reviewsQuery = useQuery({
     queryKey: ['assistant-request-reviews', props.user.id],
     queryFn: async () => {
@@ -68,6 +72,10 @@ export function UserAssistantReviewDialog(props: { user: User }) {
     },
     onError: (error: Error) => toast.error(error.message),
   })
+
+  if (!canView) {
+    return <span className='text-muted-foreground'>—</span>
+  }
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>

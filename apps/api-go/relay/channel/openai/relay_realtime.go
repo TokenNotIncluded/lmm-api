@@ -30,8 +30,6 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 
 	clientClosed := make(chan struct{})
 	targetClosed := make(chan struct{})
-	sendChan := make(chan []byte, 100)
-	receiveChan := make(chan []byte, 100)
 	errChan := make(chan error, 2)
 
 	usage := &dto.RealtimeUsage{}
@@ -106,10 +104,6 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 					return
 				}
 
-				select {
-				case sendChan <- message:
-				default:
-				}
 			}
 		}
 	})
@@ -212,10 +206,6 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 					return
 				}
 
-				select {
-				case receiveChan <- message:
-				default:
-				}
 			}
 		}
 	})
