@@ -171,6 +171,9 @@ func TestValidateWaffoPancakeTopUpEventBindsStoreAndProductMetadata(t *testing.T
 		{name: "product", mutate: func(event *service.WaffoPancakeWebhookEvent) {
 			event.Data.OrderMetadata[service.WaffoPancakeOrderMetadataProductID] = "PROD_other"
 		}, want: "product metadata mismatch"},
+		{name: "empty product metadata", mutate: func(event *service.WaffoPancakeWebhookEvent) {
+			event.Data.OrderMetadata[service.WaffoPancakeOrderMetadataProductID] = ""
+		}, want: "product metadata mismatch"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -696,10 +696,15 @@ func validateWaffoPancakeTopUpEvent(event *service.WaffoPancakeWebhookEvent, top
 		return fmt.Errorf("top-up store mismatch: expected=%q actual=%q", expectedStore, strings.TrimSpace(event.StoreID))
 	}
 	actualProduct, present := event.Data.OrderMetadata[service.WaffoPancakeOrderMetadataProductID]
-	if present && strings.TrimSpace(actualProduct) != "" {
+	if present {
 		expectedProduct := strings.TrimSpace(topUp.ProviderProductId)
-		if expectedProduct != "" && strings.TrimSpace(actualProduct) != expectedProduct {
-			return fmt.Errorf("top-up product metadata mismatch: expected=%q actual=%q", expectedProduct, strings.TrimSpace(actualProduct))
+		actualProduct = strings.TrimSpace(actualProduct)
+		// A metadata key is signed evidence from a newly-created checkout. An
+		// empty value is not equivalent to a legacy payload with no key: reject
+		// it when the local order has a product binding, rather than silently
+		// accepting an unbound event.
+		if expectedProduct != "" && actualProduct != expectedProduct {
+			return fmt.Errorf("top-up product metadata mismatch: expected=%q actual=%q", expectedProduct, actualProduct)
 		}
 	}
 	return nil
