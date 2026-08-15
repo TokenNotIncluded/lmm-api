@@ -55,7 +55,7 @@ func TestAssistantAdminConfigExposesNonSecretRuntimeControls(t *testing.T) {
 
 func TestAssistantAdminModelInventoryRejectsUnreadyPricingCache(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.User{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Ability{}))
 	admin := model.User{
 		Username: "assistant-model-inventory-cache-unready",
 		Password: "password",
@@ -84,7 +84,7 @@ func TestAssistantAdminModelInventoryRejectsUnreadyPricingCache(t *testing.T) {
 
 func TestAssistantAdminModelInventoryRejectsEmptyPricingCache(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.User{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Ability{}))
 	admin := model.User{
 		Username: "assistant-model-inventory-cache-empty",
 		Password: "password",

@@ -65,10 +65,24 @@ func IsModelEnabledForGroup(group, model string) bool {
 	return err == nil && count > 0
 }
 
-func GetEnabledModels() []string {
+// GetEnabledModelsWithError returns the distinct model IDs referenced by
+// enabled abilities. Callers that use the result to make an availability or
+// synchronization decision should keep the database error instead of
+// treating an unavailable table as an empty catalog.
+func GetEnabledModelsWithError() ([]string, error) {
 	var models []string
 	// Find distinct models
-	DB.Table("abilities").Where("enabled = ?", true).Distinct("model").Pluck("model", &models)
+	err := DB.Table("abilities").Where("enabled = ?", true).Distinct("model").Pluck("model", &models).Error
+	return models, err
+}
+
+// GetEnabledModels preserves the historical best-effort API used by read-only
+// endpoints. New decision-making code should use GetEnabledModelsWithError.
+func GetEnabledModels() []string {
+	models, err := GetEnabledModelsWithError()
+	if err != nil {
+		return nil
+	}
 	return models
 }
 

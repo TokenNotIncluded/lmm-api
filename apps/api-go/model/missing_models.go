@@ -3,7 +3,10 @@ package model
 // GetMissingModels returns model names that are referenced in the system
 func GetMissingModels() ([]string, error) {
 	// 1. 获取所有已启用模型（去重）
-	models := GetEnabledModels()
+	models, err := GetEnabledModelsWithError()
+	if err != nil {
+		return nil, err
+	}
 	if len(models) == 0 {
 		return []string{}, nil
 	}
