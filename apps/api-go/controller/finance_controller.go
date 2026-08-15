@@ -26,7 +26,13 @@ const (
 	// rows after a batch has been processed.
 	financeDashboardBatchSize  = 1_000
 	financeDashboardMaxEntries = 100
+	// Payment methods are admin-visible metadata, not finance source rows. Keep
+	// discovery bounded and fail closed instead of returning a partial selector
+	// when malformed or unbounded historical values are present.
+	financeDashboardMaxPaymentMethods = 256
 )
+
+var errFinancePaymentMethodsLimit = errors.New("finance payment method discovery limit exceeded")
 
 type financeRange struct {
 	Start int64 `json:"start"`
@@ -306,6 +312,11 @@ func loadFinancePaymentMethods() ([]model.FinancePaymentMethod, map[string]model
 		byMethod[config.Method] = config
 	}
 	known := []string{model.PaymentProviderStripe, model.PaymentProviderCreem, model.PaymentProviderEpay, model.PaymentProviderFastPay, model.PaymentProviderWaffo, model.PaymentProviderWaffoPancake}
+	knownSet := make(map[string]struct{}, len(known))
+	for _, method := range known {
+		knownSet[method] = struct{}{}
+	}
+	observedSet := make(map[string]struct{}, financeDashboardMaxPaymentMethods)
 	// Discover methods from every financial source. Payment methods are not
 	// guaranteed to be stored in TopUp: subscription orders and manually
 	// imported/refund ledger rows may be the only evidence of a provider, and
@@ -315,30 +326,45 @@ func loadFinancePaymentMethods() ([]model.FinancePaymentMethod, map[string]model
 	// Keep discovery server-side DISTINCT: loading every historical payment row
 	// just to find a handful of method names would defeat the dashboard's memory
 	// bound.
-	appendObserved := func(query *gorm.DB) error {
+	appendObserved := func(source string, query *gorm.DB) error {
 		const normalizedMethod = "COALESCE(NULLIF(TRIM(payment_method), ''), NULLIF(TRIM(payment_provider), ''))"
-		var observed []string
+		observed := make([]string, 0, financeDashboardMaxPaymentMethods+1)
 		if err := query.
 			Where("payment_method <> '' OR payment_provider <> ''").
 			Distinct(normalizedMethod).
+			Order(normalizedMethod+" ASC").
+			Limit(financeDashboardMaxPaymentMethods+1).
 			Pluck(normalizedMethod, &observed).Error; err != nil {
 			return err
+		}
+		if len(observed) > financeDashboardMaxPaymentMethods {
+			return fmt.Errorf("%w: source=%s limit=%d", errFinancePaymentMethodsLimit, source, financeDashboardMaxPaymentMethods)
 		}
 		for _, method := range observed {
 			method = strings.TrimSpace(method)
 			if method != "" {
+				if _, exists := observedSet[method]; !exists {
+					if len(observedSet) >= financeDashboardMaxPaymentMethods {
+						return fmt.Errorf("%w: global limit=%d", errFinancePaymentMethodsLimit, financeDashboardMaxPaymentMethods)
+					}
+					observedSet[method] = struct{}{}
+				}
+				if _, exists := knownSet[method]; exists {
+					continue
+				}
 				known = append(known, method)
+				knownSet[method] = struct{}{}
 			}
 		}
 		return nil
 	}
-	if err := appendObserved(model.DB.Model(&model.TopUp{}).Select("payment_method, payment_provider")); err != nil {
+	if err := appendObserved("top_ups", model.DB.Model(&model.TopUp{}).Select("payment_method, payment_provider")); err != nil {
 		return nil, nil, err
 	}
-	if err := appendObserved(model.DB.Model(&model.SubscriptionOrder{}).Select("payment_method, payment_provider")); err != nil {
+	if err := appendObserved("subscription_orders", model.DB.Model(&model.SubscriptionOrder{}).Select("payment_method, payment_provider")); err != nil {
 		return nil, nil, err
 	}
-	if err := appendObserved(model.DB.Model(&model.FinanceLedgerEntry{}).Select("payment_method, payment_provider")); err != nil {
+	if err := appendObserved("finance_ledger_entries", model.DB.Model(&model.FinanceLedgerEntry{}).Select("payment_method, payment_provider")); err != nil {
 		return nil, nil, err
 	}
 	for _, method := range known {

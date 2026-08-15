@@ -101,6 +101,31 @@ func TestFinancePaymentMethodsDiscoverAllFinancialSources(t *testing.T) {
 	require.Contains(t, methodNames, "manual-wire")
 }
 
+func TestFinancePaymentMethodsRejectUnboundedDiscovery(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.TopUp{}, &model.SubscriptionOrder{}, &model.FinanceLedgerEntry{}, &model.FinancePaymentMethod{}))
+
+	entries := make([]model.FinanceLedgerEntry, financeDashboardMaxPaymentMethods+1)
+	for index := range entries {
+		entries[index] = model.FinanceLedgerEntry{
+			EntryType:      model.FinanceEntryExpense,
+			Category:       "external",
+			AmountMicros:   1,
+			Currency:       model.FinanceCurrencyUSD,
+			Direction:      model.FinanceDirectionDebit,
+			PaymentMethod:  fmt.Sprintf("abnormal-method-%03d", index),
+			SourceType:     model.FinanceSourceManual,
+			OccurredAt:     time.Now().Unix(),
+			CreatedBy:      1,
+			IdempotencyKey: fmt.Sprintf("finance-method-limit-%03d", index),
+		}
+	}
+	require.NoError(t, db.Create(&entries).Error)
+
+	_, _, err := loadFinancePaymentMethods()
+	require.ErrorIs(t, err, errFinancePaymentMethodsLimit)
+}
+
 func TestFinanceOverviewStreamsSourcesAcrossBatchBoundary(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}, &model.SubscriptionOrder{}, &model.Log{}, &model.FinanceLedgerEntry{}, &model.FinancePaymentMethod{}))
