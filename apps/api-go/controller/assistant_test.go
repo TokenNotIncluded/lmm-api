@@ -45,6 +45,34 @@ func withAssistantSettings(t *testing.T, enabled bool, modelID string) {
 	})
 }
 
+func TestAssistantRuntimeMetadataQuestionIsDeterministic(t *testing.T) {
+	for _, message := range []string{
+		"你是什么 AI，知识截止到什么时候？",
+		"What model are you running, and what is the training cutoff?",
+		"What's your model?",
+		"请告诉我模型名称",
+	} {
+		assert.True(t, assistantRuntimeMetadataQuestion(message), message)
+	}
+	modelID := strings.TrimSpace(setting.GetAssistantSettings().Model)
+	assert.False(t, assistantRuntimeMetadataQuestion("请查一下 "+modelID+" 的实时价格"))
+	assert.False(t, assistantRuntimeMetadataQuestion("what is the model name and price?"))
+
+	settings := setting.GetAssistantSettings()
+	body := assistantRuntimeMetadataBody(settings)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(body, &payload))
+	encoded := string(body)
+	assert.Equal(t, "runtime_metadata", payload["lmm_assistant_policy"])
+	routeModel := strings.TrimSpace(settings.Model)
+	if routeModel == "" {
+		routeModel = "not configured"
+	}
+	assert.Contains(t, encoded, routeModel)
+	assert.Contains(t, encoded, "没有提供可验证的训练数据或知识截止日期")
+	assert.NotContains(t, encoded, "训练截止日期：")
+}
+
 func TestPrepareAssistantRequestOwnsModelAndPrompt(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := setupTokenControllerTestDB(t)

@@ -30,7 +30,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import { formatQuota, formatTimestamp } from '@/lib/format'
+import { formatCurrencyUSD, formatQuota, formatTimestamp } from '@/lib/format'
 
 import {
   USER_STATUS,
@@ -169,6 +169,21 @@ export function useUsersColumns(): ColumnDef<User>[] {
       meta: { mobileTitle: true },
     },
     {
+      accessorKey: 'email',
+      header: t('Email'),
+      cell: ({ row }) => {
+        const email = row.original.email?.trim()
+        return (
+          <LongText className='max-w-[240px] text-sm'>
+            {email || t('No email provided')}
+          </LongText>
+        )
+      },
+      enableSorting: false,
+      size: 240,
+      meta: { mobileOrder: 15 },
+    },
+    {
       accessorKey: 'status',
       header: t('Status'),
       cell: ({ row }) => {
@@ -218,6 +233,54 @@ export function useUsersColumns(): ColumnDef<User>[] {
       size: 300,
       minSize: 260,
       meta: { mobileOrder: 40 },
+    },
+    {
+      id: 'topup_quota',
+      accessorFn: (row) => row.topup_summary?.quota ?? 0,
+      header: t('Top-up'),
+      cell: ({ row }) => {
+        const summary = row.original.topup_summary
+        const methods = summary?.methods ?? []
+        return (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <div className='flex min-w-[150px] cursor-help flex-col gap-0.5 text-sm' />
+              }
+            >
+              <span>{formatQuota(summary?.quota ?? 0)}</span>
+              <span className='text-muted-foreground text-xs'>
+                {summary?.orders ?? 0} ·{' '}
+                {formatCurrencyUSD((summary?.money_micros ?? 0) / 1_000_000)}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent className='max-w-[320px]'>
+              {methods.length === 0 ? (
+                <p className='text-xs'>{formatQuota(0)}</p>
+              ) : (
+                <div className='space-y-1'>
+                  {methods.map((method) => {
+                    const label = [
+                      method.method.trim(),
+                      method.provider?.trim(),
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')
+                    return (
+                      <p key={`${label}-${method.orders}`} className='text-xs'>
+                        {label || '—'}: {formatQuota(method.quota)} ·{' '}
+                        {formatCurrencyUSD(method.money_micros / 1_000_000)}
+                      </p>
+                    )
+                  })}
+                </div>
+              )}
+            </TooltipContent>
+          </Tooltip>
+        )
+      },
+      size: 170,
+      meta: { mobileOrder: 45 },
     },
     {
       accessorKey: 'group',

@@ -78,6 +78,22 @@ export const userSchema = z.object({
       updated_at: z.number(),
     })
     .optional(),
+  topup_summary: z
+    .object({
+      quota: z.number(),
+      money_micros: z.number(),
+      orders: z.number(),
+      methods: z.array(
+        z.object({
+          method: z.string(),
+          provider: z.string().optional(),
+          quota: z.number(),
+          money_micros: z.number(),
+          orders: z.number(),
+        })
+      ),
+    })
+    .optional(),
 })
 export type User = z.infer<typeof userSchema>
 
@@ -101,6 +117,7 @@ export type UserSortBy =
   | 'group'
   | 'created_at'
   | 'last_login_at'
+  | 'topup_quota'
 
 export type UserSortOrder = 'asc' | 'desc'
 

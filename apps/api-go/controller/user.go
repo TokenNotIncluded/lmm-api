@@ -370,6 +370,10 @@ func GetAllUsers(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	if err := model.PopulateUserTopups(users); err != nil {
+		common.ApiError(c, err)
+		return
+	}
 
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(users)
@@ -407,6 +411,10 @@ func SearchUsers(c *gin.Context) {
 		return
 	}
 	if err := model.PopulateAssistantUserProfiles(users, c.GetInt("id"), c.GetInt("role")); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if err := model.PopulateUserTopups(users); err != nil {
 		common.ApiError(c, err)
 		return
 	}

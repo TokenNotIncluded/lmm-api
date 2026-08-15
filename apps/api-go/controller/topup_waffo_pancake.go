@@ -648,6 +648,7 @@ func WaffoPancakeWebhook(c *gin.Context) {
 		c.String(http.StatusOK, "OK")
 		return
 	}
+	wasPending := topUp.Status == common.TopUpStatusPending
 
 	LockOrder(tradeNo)
 	defer UnlockOrder(tradeNo)
@@ -678,6 +679,15 @@ func WaffoPancakeWebhook(c *gin.Context) {
 		return
 	}
 
+	if wasPending {
+		model.RecordTopupLog(
+			completed.UserId,
+			fmt.Sprintf("Waffo Pancake充值成功，充值额度: %v，支付金额: %.2f", logger.FormatQuota(int(completed.CreditedQuota)), completed.Money),
+			c.ClientIP(),
+			completed.PaymentMethod,
+			model.PaymentMethodWaffoPancake,
+		)
+	}
 	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo Pancake 充值成功 trade_no=%s user_id=%d quota=%d event_id=%s order_id=%s client_ip=%s", tradeNo, completed.UserId, completed.CreditedQuota, event.ID, event.Data.OrderID, c.ClientIP()))
 	c.String(http.StatusOK, "OK")
 }

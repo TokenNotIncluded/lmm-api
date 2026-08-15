@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -19,13 +20,22 @@ import (
 
 const UserNameMaxLength = 20
 
-var userSortColumns = map[string]string{
-	"id":            "id",
-	"username":      "username",
-	"quota":         "quota",
-	"group":         "group",
-	"created_at":    "created_at",
-	"last_login_at": "last_login_at",
+type userSortColumn struct {
+	name       string
+	expression string
+}
+
+var userSortColumns = map[string]userSortColumn{
+	"id":            {name: "id"},
+	"username":      {name: "username"},
+	"quota":         {name: "quota"},
+	"group":         {name: "group"},
+	"created_at":    {name: "created_at"},
+	"last_login_at": {name: "last_login_at"},
+	"topup_quota": {
+		name:       "topup_quota",
+		expression: "COALESCE(user_topup_totals.credited_quota, 0)",
+	},
 }
 
 type UserSortOptions struct {
@@ -50,15 +60,24 @@ func NewUserSortOptions(sortBy string, sortOrder string) UserSortOptions {
 }
 
 func (options UserSortOptions) Apply(query *gorm.DB) *gorm.DB {
-	columnName, ok := userSortColumns[options.SortBy]
+	column, ok := userSortColumns[options.SortBy]
 	if !ok {
-		columnName = "id"
+		column = userSortColumns["id"]
 	}
-	q := query.Order(clause.OrderByColumn{
-		Column: clause.Column{Name: columnName},
-		Desc:   options.SortOrder != "asc",
-	})
-	if columnName != "id" {
+	var q *gorm.DB
+	if column.expression != "" {
+		direction := "ASC"
+		if options.SortOrder != "asc" {
+			direction = "DESC"
+		}
+		q = query.Order(clause.Expr{SQL: column.expression + " " + direction})
+	} else {
+		q = query.Order(clause.OrderByColumn{
+			Column: clause.Column{Name: column.name},
+			Desc:   options.SortOrder != "asc",
+		})
+	}
+	if column.name != "id" {
 		q = q.Order(clause.OrderByColumn{
 			Column: clause.Column{Name: "id"},
 			Desc:   true,
@@ -67,11 +86,112 @@ func (options UserSortOptions) Apply(query *gorm.DB) *gorm.DB {
 	return q
 }
 
+// UserTopupMethod is the successful credit a user received through one
+// payment method/provider pair. The values are populated only for
+// administrator-facing user lists.
+type UserTopupMethod struct {
+	Method      string `json:"method"`
+	Provider    string `json:"provider,omitempty"`
+	Quota       int64  `json:"quota"`
+	MoneyMicros int64  `json:"money_micros"`
+	Orders      int64  `json:"orders"`
+}
+
+type UserTopupSummary struct {
+	Quota       int64             `json:"quota"`
+	MoneyMicros int64             `json:"money_micros"`
+	Orders      int64             `json:"orders"`
+	Methods     []UserTopupMethod `json:"methods"`
+}
+
 func resolveUserSortOptions(sortOptions []UserSortOptions) UserSortOptions {
 	if len(sortOptions) == 0 {
 		return NewUserSortOptions("", "")
 	}
 	return sortOptions[0]
+}
+
+type userTopupAggregate struct {
+	UserID              int     `gorm:"column:user_id"`
+	PaymentMethod       string  `gorm:"column:payment_method"`
+	PaymentProvider     string  `gorm:"column:payment_provider"`
+	CreditedQuota       int64   `gorm:"column:credited_quota"`
+	Money               float64 `gorm:"column:money"`
+	SettledAmountMicros int64   `gorm:"column:settled_amount_micros"`
+	Orders              int64   `gorm:"column:orders"`
+}
+
+func userTopupTotals(tx *gorm.DB) *gorm.DB {
+	return tx.Model(&TopUp{}).
+		Select("user_id, COALESCE(SUM(credited_quota), 0) AS credited_quota").
+		Where("status = ?", common.TopUpStatusSuccess).
+		Group("user_id")
+}
+
+func joinUserTopupTotals(tx, query *gorm.DB) *gorm.DB {
+	return query.Joins(
+		"LEFT JOIN (?) AS user_topup_totals ON user_topup_totals.user_id = users.id",
+		userTopupTotals(tx),
+	)
+}
+
+// PopulateUserTopups adds one bounded aggregate query to an administrator
+// user list. It deliberately groups in SQL so the handler never loads every
+// historical payment row into memory.
+func PopulateUserTopups(users []*User) error {
+	if len(users) == 0 {
+		return nil
+	}
+	ids := make([]int, 0, len(users))
+	for _, user := range users {
+		if user == nil || user.Id <= 0 {
+			continue
+		}
+		ids = append(ids, user.Id)
+		user.TopupSummary = &UserTopupSummary{Methods: []UserTopupMethod{}}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+
+	var rows []userTopupAggregate
+	if err := DB.Model(&TopUp{}).
+		Select("user_id, payment_method, payment_provider, COALESCE(SUM(credited_quota), 0) AS credited_quota, COALESCE(SUM(money), 0) AS money, COALESCE(SUM(settled_amount_micros), 0) AS settled_amount_micros, COUNT(*) AS orders").
+		Where("status = ? AND user_id IN ?", common.TopUpStatusSuccess, ids).
+		Group("user_id, payment_method, payment_provider").
+		Order("user_id ASC, payment_method ASC, payment_provider ASC").
+		Scan(&rows).Error; err != nil {
+		return err
+	}
+
+	byID := make(map[int]*UserTopupSummary, len(ids))
+	for _, user := range users {
+		if user != nil && user.TopupSummary != nil {
+			byID[user.Id] = user.TopupSummary
+		}
+	}
+	for _, row := range rows {
+		summary := byID[row.UserID]
+		if summary == nil {
+			continue
+		}
+		moneyMicros := row.SettledAmountMicros
+		if moneyMicros <= 0 && row.Money > 0 {
+			moneyMicros = int64(math.Round(row.Money * 1_000_000))
+		}
+		method := UserTopupMethod{
+			Method:      strings.TrimSpace(row.PaymentMethod),
+			Provider:    strings.TrimSpace(row.PaymentProvider),
+			Quota:       row.CreditedQuota,
+			MoneyMicros: moneyMicros,
+			Orders:      row.Orders,
+		}
+		summary.Quota += method.Quota
+		summary.MoneyMicros += method.MoneyMicros
+		summary.Orders += method.Orders
+		summary.Methods = append(summary.Methods, method)
+	}
+	return nil
 }
 
 // User if you add sensitive fields, don't forget to clean them in setupLogin function.
@@ -123,6 +243,7 @@ type User struct {
 	// management handlers after the strict lower-role visibility check. It is
 	// never loaded by the normal user serializer or persisted with User.
 	AssistantProfile *AssistantUserProfileSummary `json:"assistant_profile,omitempty" gorm:"-:all"`
+	TopupSummary     *UserTopupSummary            `json:"topup_summary,omitempty" gorm:"-:all"`
 
 	ConsoleActivatedAt int64                      `json:"console_activated_at" gorm:"type:bigint;not null;default:0;column:console_activated_at"`
 	AuthVersion        int64                      `json:"-" gorm:"type:bigint;not null;default:1;column:auth_version"`
@@ -442,6 +563,7 @@ func GetAllUsers(pageInfo *common.PageInfo, onlyL0 bool, sortOptions ...UserSort
 	}()
 
 	query := tx.Unscoped().Model(&User{})
+	query = joinUserTopupTotals(tx, query)
 	if onlyL0 {
 		query = applyL0UserFilter(tx, query)
 	}
@@ -489,6 +611,7 @@ func SearchUsers(keyword string, group string, role *int, status *int, onlyL0 bo
 
 	// 构建基础查询
 	query := tx.Unscoped().Model(&User{})
+	query = joinUserTopupTotals(tx, query)
 	if onlyL0 {
 		query = applyL0UserFilter(tx, query)
 	}

@@ -243,6 +243,59 @@ func assistantConversationRestrictedBody() []byte {
 	return body
 }
 
+func assistantRuntimeMetadataQuestion(message string) bool {
+	text := strings.ToLower(strings.TrimSpace(message))
+	if text == "" {
+		return false
+	}
+	// Live catalog and pricing requests must stay on the model tools even when
+	// the user also says “model name”. Identity metadata must never swallow a
+	// request for an exact model's availability or price.
+	for _, phrase := range []string{
+		"价格", "多少钱", "可用", "目录", "price", "pricing", "available",
+		"availability", "catalog", "model id", "model_id", "model ids",
+	} {
+		if strings.Contains(text, phrase) {
+			return false
+		}
+	}
+	for _, phrase := range []string{
+		"你是什么ai", "你是谁", "你是什么模型", "模型名称", "模型型号",
+		"who are you", "what model", "what's your model", "what is your model", "which model", "model name",
+		"训练截止", "知识截止", "知识边界", "训练数据", "training cutoff",
+		"knowledge cutoff", "knowledge cut-off", "training data", "cutoff date",
+	} {
+		if strings.Contains(text, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+func assistantRuntimeMetadataBody(settings setting.AssistantSettings) []byte {
+	routeModel := strings.TrimSpace(settings.Model)
+	if routeModel == "" {
+		routeModel = "not configured"
+	}
+	content := fmt.Sprintf("我是 LMM 内置客服与技术助手。当前服务配置的内部路由模型标签是 `%s`，仅用于本站内部路由，不是可直接用于客户端的 API 模型 ID。\n\n平台没有提供可验证的训练数据或知识截止日期；我不会把系统提示或通用知识边界当作该模型的训练截止日期。可用模型和价格请以实时目录为准。", routeModel)
+	payload := map[string]any{
+		"choices": []any{
+			map[string]any{
+				"message": map[string]any{
+					"role":    "assistant",
+					"content": content,
+				},
+			},
+		},
+		"lmm_assistant_policy": "runtime_metadata",
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return []byte(`{"choices":[{"message":{"role":"assistant","content":"This assistant's verified runtime metadata is unavailable."}}]}`)
+	}
+	return body
+}
+
 func writeAssistantSecurityRefusal(c *gin.Context) {
 	body := assistantSecurityRefusalBody()
 	actorUserID := assistantActorUserID(c)
@@ -593,6 +646,28 @@ func PrepareAssistantRequest(c *gin.Context) {
 			common.SysError(fmt.Sprintf("failed to record assistant profile %q: %v", userContext.CustomerProfile, err))
 		}
 		writeAssistantScopeRefusal(c)
+		return
+	}
+	if assistantRuntimeMetadataQuestion(latestMessage) {
+		// Runtime identity and cutoff metadata are platform facts, not a model
+		// completion. Answer deterministically so an upstream model cannot turn a
+		// generic system knowledge boundary into an invented training cutoff.
+		if firstTurnAttempt && len(conversation) == 1 && conversation[0].Role == "user" {
+			if err := model.RecordAssistantFirstQuestion(latestMessage); err != nil {
+				common.SysError(fmt.Sprintf("failed to record assistant first question: %v", err))
+			}
+		}
+		if userID := c.GetInt("id"); userID > 0 {
+			if err := model.RecordAssistantIntent(userID, latestMessage); err != nil {
+				common.SysError(fmt.Sprintf("failed to record assistant intent for user %d: %v", userID, err))
+			}
+		}
+		if err := model.RecordAssistantProfile(string(userContext.CustomerProfile)); err != nil {
+			common.SysError(fmt.Sprintf("failed to record assistant profile %q: %v", userContext.CustomerProfile, err))
+		}
+		c.Header("X-LMM-Assistant-Policy", "runtime_metadata")
+		c.Abort()
+		writeAssistantHistoryResponse(c, http.StatusOK, assistantRuntimeMetadataBody(settings))
 		return
 	}
 	// Once the conversation contains enough substantive evidence, persist only
