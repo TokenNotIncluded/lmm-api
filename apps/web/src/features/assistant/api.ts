@@ -164,6 +164,19 @@ export type AssistantNewUserGift = {
   claimed_at: number
 }
 
+/**
+ * The server emits this lightweight action when the assistant has prepared a
+ * gift for the user to claim. It intentionally does not include quota or any
+ * private account fields; those remain available only through the signed-in
+ * gift endpoint.
+ */
+export type AssistantNewUserGiftAction = {
+  type: 'new_user_gift'
+  amount_cents: number
+  status: 'offered'
+  reason: string
+}
+
 export type AssistantL1RecommendationAction = {
   type: 'l1_recommendation'
   user_statement: string
@@ -332,6 +345,7 @@ export type AssistantAction =
   | AssistantAccountDisableAction
   | AssistantHumanSupportAction
   | AssistantCreateKeyAction
+  | AssistantNewUserGiftAction
   | AssistantImageGenerationAction
   | AssistantAdminChangeAction
   | AssistantNavigationAction
@@ -599,6 +613,31 @@ function parseAssistantNavigationAction(
   return { type: 'navigate', path, query }
 }
 
+function parseAssistantNewUserGiftAction(
+  action: Record<string, unknown>
+): AssistantNewUserGiftAction | undefined {
+  if (
+    action.type !== 'new_user_gift' ||
+    action.status !== 'offered' ||
+    typeof action.amount_cents !== 'number' ||
+    !Number.isInteger(action.amount_cents) ||
+    action.amount_cents < 1 ||
+    action.amount_cents > 1000 ||
+    typeof action.reason !== 'string'
+  ) {
+    return undefined
+  }
+  const reason = action.reason.trim()
+  const reasonRunes = [...reason].length
+  if (reasonRunes < 2 || reasonRunes > 240) return undefined
+  return {
+    type: 'new_user_gift',
+    amount_cents: action.amount_cents,
+    status: 'offered',
+    reason,
+  }
+}
+
 function parseAssistantUserAction(
   action: Record<string, unknown>
 ): AssistantUserAction | undefined {
@@ -724,6 +763,8 @@ export function parseAssistantAction(
   const action = value as Record<string, unknown>
   const navigation = parseAssistantNavigationAction(action)
   if (navigation) return navigation
+  const newUserGift = parseAssistantNewUserGiftAction(action)
+  if (newUserGift) return newUserGift
   const userAction = parseAssistantUserAction(action)
   if (userAction) return userAction
   const confirmationToken =

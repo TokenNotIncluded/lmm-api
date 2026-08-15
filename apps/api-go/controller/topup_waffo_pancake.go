@@ -688,6 +688,21 @@ func handleWaffoPancakeRefundEvent(c *gin.Context, event *service.WaffoPancakeWe
 
 	action := service.WaffoPancakeWebhookActionForEvent(event.NormalizedEventType())
 	if action == service.WaffoPancakeWebhookActionRefundFailed {
+		providerEventID := waffoPancakeRefundEventID(event)
+		if providerEventID == "" {
+			return fmt.Errorf("refund event has no stable id")
+		}
+		claimed, err := model.ClaimWaffoPancakeWebhookEvent(
+			model.PaymentProviderWaffoPancake,
+			providerEventID,
+			event.NormalizedEventType(),
+		)
+		if err != nil {
+			return fmt.Errorf("claim refund event: %w", err)
+		}
+		if !claimed {
+			return nil
+		}
 		reason := strings.TrimSpace(event.Data.RefundReason)
 		if len([]rune(reason)) > 200 {
 			reason = string([]rune(reason)[:200])
@@ -704,13 +719,7 @@ func handleWaffoPancakeRefundEvent(c *gin.Context, event *service.WaffoPancakeWe
 		}
 		return fmt.Errorf("invalid refund amount: %w", err)
 	}
-	providerEventID := strings.TrimSpace(event.ID)
-	if providerEventID == "" {
-		providerEventID = strings.TrimSpace(event.EventID)
-	}
-	if providerEventID == "" {
-		providerEventID = strings.TrimSpace(event.Data.RefundTicketMerchantExternalID)
-	}
+	providerEventID := waffoPancakeRefundEventID(event)
 	if providerEventID == "" {
 		return fmt.Errorf("refund event has no stable id")
 	}
@@ -739,4 +748,17 @@ func handleWaffoPancakeRefundEvent(c *gin.Context, event *service.WaffoPancakeWe
 	model.RecordLog(userID, model.LogTypeRefund, fmt.Sprintf("Waffo Pancake refund.succeeded trade_no=%s refund_id=%s amount=%s %s", tradeNo, event.Data.RefundTicketMerchantExternalID, event.Data.Amount, strings.ToUpper(strings.TrimSpace(event.Data.Currency))))
 	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo Pancake 退款已记账 trade_no=%s user_id=%d amount_micros=%d refund_id=%s", tradeNo, userID, amountMicros, event.Data.RefundTicketMerchantExternalID))
 	return nil
+}
+
+func waffoPancakeRefundEventID(event *service.WaffoPancakeWebhookEvent) string {
+	if event == nil {
+		return ""
+	}
+	if id := strings.TrimSpace(event.ID); id != "" {
+		return id
+	}
+	if id := strings.TrimSpace(event.EventID); id != "" {
+		return id
+	}
+	return strings.TrimSpace(event.Data.RefundTicketMerchantExternalID)
 }

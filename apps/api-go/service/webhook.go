@@ -23,6 +23,8 @@ type WebhookPayload struct {
 	Timestamp int64         `json:"timestamp"`
 }
 
+const webhookPayloadMaxBytes = 256 << 10
+
 // generateSignature 生成 webhook 签名
 func generateSignature(secret string, payload []byte) string {
 	h := hmac.New(sha256.New, []byte(secret))
@@ -30,15 +32,15 @@ func generateSignature(secret string, payload []byte) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// SendWebhookNotify 发送 webhook 通知
-func SendWebhookNotify(webhookURL string, secret string, data dto.Notify) error {
-	// 处理占位符
+func marshalWebhookPayload(data dto.Notify) ([]byte, error) {
+	// Preserve the existing placeholder expansion while keeping the serialized
+	// request body bounded. Notify values are internal today, but a bounded
+	// encoder also protects this shared path from a future large notification.
 	content := data.Content
 	for _, value := range data.Values {
 		content = fmt.Sprintf(content, value)
 	}
 
-	// 构建 webhook 负载
 	payload := WebhookPayload{
 		Type:      data.Type,
 		Title:     data.Title,
@@ -46,11 +48,15 @@ func SendWebhookNotify(webhookURL string, secret string, data dto.Notify) error 
 		Values:    data.Values,
 		Timestamp: time.Now().Unix(),
 	}
+	return common.MarshalLimit(payload, webhookPayloadMaxBytes)
+}
 
+// SendWebhookNotify 发送 webhook 通知
+func SendWebhookNotify(webhookURL string, secret string, data dto.Notify) error {
 	// 序列化负载
-	payloadBytes, err := common.Marshal(payload)
+	payloadBytes, err := marshalWebhookPayload(data)
 	if err != nil {
-		return fmt.Errorf("failed to marshal webhook payload: %v", err)
+		return fmt.Errorf("failed to marshal webhook payload: %w", err)
 	}
 
 	// 创建 HTTP 请求

@@ -516,6 +516,7 @@ func TestAssistantSecureCardScrubIsBoundedAndIdempotent(t *testing.T) {
 		{Id: "expired", OwnerUserId: l0.Id, Type: AssistantSecureCardTypeAPIKey, Summary: "expired", Ciphertext: "cipher-1", CreatedAt: 1, ExpiresAt: now - 1},
 		{Id: "revealed", OwnerUserId: l0.Id, Type: AssistantSecureCardTypeAPIKey, Summary: "revealed", Ciphertext: "cipher-2", CreatedAt: 2, ExpiresAt: now + 100, RevealedAt: now - 1},
 		{Id: "live", OwnerUserId: l0.Id, Type: AssistantSecureCardTypeAPIKey, Summary: "live", Ciphertext: "cipher-3", CreatedAt: 3, ExpiresAt: now + 100},
+		{Id: "linked", OwnerUserId: l0.Id, ConversationId: 99, Type: AssistantSecureCardTypeAPIKey, Summary: "linked", Ciphertext: "cipher-4", CreatedAt: 4, ExpiresAt: now - 1},
 	}
 	for index := range cards {
 		require.NoError(t, DB.Create(&cards[index]).Error)
@@ -526,15 +527,20 @@ func TestAssistantSecureCardScrubIsBoundedAndIdempotent(t *testing.T) {
 	assert.EqualValues(t, 1, count)
 	count, err = ScrubExpiredAssistantSecureCards(context.Background(), now, 10)
 	require.NoError(t, err)
-	assert.EqualValues(t, 1, count)
+	assert.EqualValues(t, 2, count)
 	count, err = ScrubExpiredAssistantSecureCards(context.Background(), now, 10)
 	require.NoError(t, err)
 	assert.Zero(t, count)
 
+	for _, id := range []string{"expired", "revealed"} {
+		var count int64
+		require.NoError(t, DB.Model(&AssistantSecureCard{}).Where("id = ?", id).Count(&count).Error)
+		assert.Zero(t, count, id)
+	}
 	for _, testCase := range []struct {
 		id       string
 		expected string
-	}{{"expired", ""}, {"revealed", ""}, {"live", "cipher-3"}} {
+	}{{"live", "cipher-3"}, {"linked", ""}} {
 		var stored AssistantSecureCard
 		require.NoError(t, DB.First(&stored, "id = ?", testCase.id).Error)
 		assert.Equal(t, testCase.expected, stored.Ciphertext)

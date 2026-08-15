@@ -126,7 +126,10 @@ func PurgeAssistantConversationsBefore(ctx context.Context, cutoffs AssistantRet
 }
 
 // ScrubExpiredAssistantSecureCards erases ciphertext while retaining harmless
-// card metadata for the transcript. It is bounded and safe to call repeatedly.
+// card metadata for conversation transcripts. Standalone cards (the direct
+// key-creation path has no conversation to display them in) are removed once
+// they can no longer be revealed. The selection is bounded and safe to call
+// repeatedly.
 func ScrubExpiredAssistantSecureCards(ctx context.Context, now int64, batchSize int) (int64, error) {
 	if now <= 0 {
 		return 0, gorm.ErrInvalidData
@@ -134,7 +137,7 @@ func ScrubExpiredAssistantSecureCards(ctx context.Context, now int64, batchSize 
 	batchSize = NormalizeAssistantRetentionBatchSize(batchSize)
 	var ids []string
 	if err := DB.WithContext(ctx).Model(&AssistantSecureCard{}).
-		Where("ciphertext <> '' AND (expires_at <= ? OR revealed_at > 0)", now).
+		Where("(ciphertext <> '' OR conversation_id = 0) AND (expires_at <= ? OR revealed_at > 0)", now).
 		Order("created_at ASC").Limit(batchSize).Pluck("id", &ids).Error; err != nil {
 		return 0, err
 	}
@@ -144,7 +147,18 @@ func ScrubExpiredAssistantSecureCards(ctx context.Context, now int64, batchSize 
 	updated := DB.WithContext(ctx).Model(&AssistantSecureCard{}).
 		Where("id IN ? AND ciphertext <> '' AND (expires_at <= ? OR revealed_at > 0)", ids, now).
 		Update("ciphertext", "")
-	return updated.RowsAffected, updated.Error
+	if updated.Error != nil {
+		return 0, updated.Error
+	}
+	deleted := DB.WithContext(ctx).
+		Where("id IN ? AND conversation_id = 0 AND (expires_at <= ? OR revealed_at > 0)", ids, now).
+		Delete(&AssistantSecureCard{})
+	if deleted.Error != nil {
+		return 0, deleted.Error
+	}
+	// Count rows selected rather than SQL statements affected: a standalone
+	// card is both scrubbed and deleted in this pass.
+	return int64(len(ids)), nil
 }
 
 // PurgeAdvancedSecurityEventsBefore removes old rule-match rows in bounded

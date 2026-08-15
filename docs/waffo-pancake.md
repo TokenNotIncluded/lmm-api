@@ -62,7 +62,11 @@ external ID 绑定本地订单；订阅事件只有 `WAFFO_PANCAKE_SUB-*` 订单
 2. webhook 收到并处理 `order.completed`（订阅首付对应
    `subscription.activated`），本地订单变为成功；
 3. 退款成功事件写入幂等的财务收入冲销记录；退款失败只记录审计，不扣用户额度；
-4. 重复投递不会重复记账。
+4. 重复投递不会重复记账或重复写入退款审计日志（包括 `refund.failed`）。
+
+失败退款事件收据默认保留 48 小时，并在接收后按批次清理；保留期不会低于
+SDK 默认的 45 分钟签名重放窗口。可通过
+`WAFFO_PANCAKE_WEBHOOK_RECEIPT_RETENTION_SECONDS` 延长保留期。
 
 退款不会自动从用户余额扣除。部分退款、余额已消费和多次退款需要单独的业务政策；当前实现先保证签名、身份绑定、可追溯和财务一致性。
 

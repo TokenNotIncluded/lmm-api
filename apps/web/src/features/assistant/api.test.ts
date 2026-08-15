@@ -118,6 +118,42 @@ describe('assistant response parsing', () => {
     )
   })
 
+  test('accepts the server-issued new-user gift action without private quota data', () => {
+    assert.deepEqual(
+      parseAssistantAction({
+        type: 'new_user_gift',
+        amount_cents: 625,
+        status: 'offered',
+        reason: '  Clear, constructive, and concrete engagement.  ',
+        quota: 3_125_000,
+      }),
+      {
+        type: 'new_user_gift',
+        amount_cents: 625,
+        status: 'offered',
+        reason: 'Clear, constructive, and concrete engagement.',
+      }
+    )
+    assert.equal(
+      parseAssistantAction({
+        type: 'new_user_gift',
+        amount_cents: 0,
+        status: 'offered',
+        reason: 'No gift this time.',
+      }),
+      undefined
+    )
+    assert.equal(
+      parseAssistantAction({
+        type: 'new_user_gift',
+        amount_cents: 625,
+        status: 'declined',
+        reason: 'No gift this time.',
+      }),
+      undefined
+    )
+  })
+
   test('accepts only a complete session-bound human-support confirmation', () => {
     assert.deepEqual(
       parseAssistantAction({

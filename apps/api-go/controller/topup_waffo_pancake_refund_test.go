@@ -26,7 +26,7 @@ func TestHandleWaffoPancakeRefundEventRecordsUserVisibleRefundLog(t *testing.T) 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			db := setupTokenControllerTestDB(t)
-			require.NoError(t, db.AutoMigrate(&model.TopUp{}, &model.Log{}, &model.FinanceLedgerEntry{}))
+			require.NoError(t, db.AutoMigrate(&model.TopUp{}, &model.Log{}, &model.FinanceLedgerEntry{}, &model.WaffoPancakeWebhookReceipt{}))
 			user := model.User{
 				Username: "pancake-refund-" + tt.name,
 				Password: "password",
@@ -200,4 +200,48 @@ func TestHandleWaffoPancakeRefundRejectsContradictoryStatus(t *testing.T) {
 	var logs []model.Log
 	require.NoError(t, db.Where("user_id = ? AND type = ?", user.Id, model.LogTypeRefund).Find(&logs).Error)
 	require.Empty(t, logs)
+}
+
+func TestHandleWaffoPancakeRefundFailedIsEventIdempotent(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}, &model.Log{}, &model.WaffoPancakeWebhookReceipt{}))
+	user := model.User{
+		Username: "pancake-refund-failed-idempotency",
+		Password: "password",
+		Status:   common.UserStatusEnabled,
+	}
+	require.NoError(t, db.Create(&user).Error)
+	tradeNo := "WAFFO_PANCAKE-refund-failed-idempotency"
+	require.NoError(t, db.Create(&model.TopUp{
+		UserId:          user.Id,
+		TradeNo:         tradeNo,
+		PaymentMethod:   model.PaymentMethodWaffoPancake,
+		PaymentProvider: model.PaymentProviderWaffoPancake,
+		Status:          common.TopUpStatusSuccess,
+		Money:           2.50,
+	}).Error)
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+	event := &service.WaffoPancakeWebhookEvent{
+		ID:        "evt-refund-failed-idempotency",
+		EventType: "refund.failed",
+		Data: service.WaffoPancakeWebhookData{
+			OrderMerchantExternalID:        tradeNo,
+			RefundTicketMerchantExternalID: "refund-failed-idempotency",
+			Currency:                       "USD",
+			RefundStatus:                   "failed",
+			RefundReason:                   "provider declined",
+		},
+	}
+
+	require.NoError(t, handleWaffoPancakeRefundEvent(ctx, event))
+	require.NoError(t, handleWaffoPancakeRefundEvent(ctx, event))
+
+	var receipts []model.WaffoPancakeWebhookReceipt
+	require.NoError(t, db.Where("provider = ? AND event_id = ?", model.PaymentProviderWaffoPancake, event.ID).Find(&receipts).Error)
+	require.Len(t, receipts, 1)
+	var logs []model.Log
+	require.NoError(t, db.Where("user_id = ? AND type = ?", user.Id, model.LogTypeRefund).Find(&logs).Error)
+	require.Len(t, logs, 1)
 }
