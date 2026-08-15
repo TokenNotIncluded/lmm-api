@@ -594,7 +594,7 @@ func validateAssistantAdminChannelValue(field, value string) error {
 			return errors.New("channel name and test model must be at most 255 characters")
 		}
 	case "weight":
-		weight, err := strconv.ParseUint(value, 10, 64)
+		weight, err := strconv.ParseUint(value, 10, strconv.IntSize)
 		if err != nil || weight > 1_000_000_000 {
 			return errors.New("weight must be a non-negative integer no greater than 1000000000")
 		}
@@ -1939,11 +1939,10 @@ func applyAssistantAdminChannelField(channel *model.Channel, field, value string
 	case "test_model":
 		channel.TestModel = common.GetPointer[string](value)
 	case "weight":
-		weight, err := strconv.ParseUint(value, 10, 64)
+		converted, err := parsePlatformUint(value)
 		if err != nil {
 			return false, err
 		}
-		converted := uint(weight)
 		channel.Weight = &converted
 	case "models":
 		channel.Models = value

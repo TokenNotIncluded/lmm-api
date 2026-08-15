@@ -27,7 +27,6 @@ const PRODUCT_FILES = {
   rustBinPkgbuild: 'packaging/aur/lmm-api-rs-bin/PKGBUILD',
   rustBinSrcinfo: 'packaging/aur/lmm-api-rs-bin/.SRCINFO',
 }
-
 function fail(message) {
   throw new Error(message)
 }
@@ -104,7 +103,46 @@ export function planVersion(currentValue, bump, explicitValue, tagValues = []) {
 }
 
 function visibleMarkdown(value) {
-  return value.replace(/<!--[^]*?-->/g, '').trim()
+  let visible = value
+  while (true) {
+    const start = visible.indexOf('<!--')
+    if (start === -1) break
+    const end = visible.indexOf('-->', start + 4)
+    visible = end === -1 ? visible.slice(0, start) : visible.slice(0, start) + visible.slice(end + 3)
+  }
+  return visible.trim()
+}
+
+const RELEASE_HEADER_PATTERN = /^## \[([0-9]+\.[0-9]+\.[0-9]+)\] - \d{4}-\d{2}-\d{2}\s*$/
+
+function hasReleaseHeader(content, version) {
+  return content.split('\n').some((line) => RELEASE_HEADER_PATTERN.exec(line)?.[1] === version)
+}
+
+function releaseSection(content, version) {
+  let offset = 0
+  for (const line of content.split('\n')) {
+    if (RELEASE_HEADER_PATTERN.exec(line)?.[1] === version) {
+      return sectionAt(content, offset, line.length)
+    }
+    offset += line.length + 1
+  }
+  fail(`missing release ${version} section in CHANGELOG.md`)
+}
+
+function sectionAt(content, headingStart, headingLength) {
+  const contentStart = headingStart + headingLength
+  const nextHeading = content.indexOf('\n## ', contentStart)
+  const referenceOffset = content.slice(contentStart).search(/\n\[[^\]]+\]:\s+\S+/)
+  const nextReference = referenceOffset === -1 ? -1 : contentStart + referenceOffset
+  const boundaries = [nextHeading, nextReference].filter((offset) => offset !== -1)
+  const contentEnd = boundaries.length ? Math.min(...boundaries) : content.length
+  return {
+    body: content.slice(contentStart, contentEnd).trim(),
+    contentEnd,
+    contentStart,
+    headingStart,
+  }
 }
 
 function section(content, headingPattern, description) {
@@ -140,7 +178,7 @@ export function finalizeChangelog(content, version, date, previousVersion) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00Z`))) {
     fail(`invalid release date: ${date}`)
   }
-  if (new RegExp(`^## \\[${version.replaceAll('.', '\\.')}\\] - `, 'm').test(content)) {
+  if (hasReleaseHeader(content, version)) {
     fail(`CHANGELOG.md already contains release ${version}`)
   }
 
@@ -177,12 +215,7 @@ export function finalizeChangelog(content, version, date, previousVersion) {
 
 export function extractReleaseNotes(content, version) {
   parseSemver(version)
-  const escaped = version.replaceAll('.', '\\.')
-  const release = section(
-    content,
-    new RegExp(`^## \\[${escaped}\\] - \\d{4}-\\d{2}-\\d{2}\\s*$`, 'm'),
-    `release ${version}`
-  )
+  const release = releaseSection(content, version)
   if (!visibleMarkdown(release.body)) fail(`CHANGELOG.md release ${version} is empty`)
   return release.body
 }

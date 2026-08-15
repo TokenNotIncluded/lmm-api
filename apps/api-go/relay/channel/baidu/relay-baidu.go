@@ -2,7 +2,6 @@ package baidu
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,7 +33,7 @@ var (
 )
 
 func baiduTokenKey(apiKey string) string {
-	return fmt.Sprintf("%x", sha256.Sum256([]byte(apiKey)))
+	return common.GenerateHMAC(apiKey)
 }
 
 func requestOpenAI2Baidu(request dto.GeneralOpenAIRequest) *BaiduChatRequest {

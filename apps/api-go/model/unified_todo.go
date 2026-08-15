@@ -328,7 +328,10 @@ func todoRefs(db *gorm.DB, userID, role int, category string, offset, limit int)
 	query := "SELECT source_id, category, updated_at FROM (" + strings.Join(parts, " UNION ALL ") +
 		") AS todo ORDER BY updated_at DESC, category ASC, source_id DESC LIMIT ? OFFSET ?"
 	args = append(args, limit, offset)
-	refs := make([]todoRef, 0, limit)
+	// `limit` is normalized at the public boundary, but keep this allocation
+	// independent of request data so a future caller cannot turn pagination into
+	// an unbounded memory reservation.
+	refs := make([]todoRef, 0, maxUnifiedTodoPageSize)
 	if err := db.Raw(query, args...).Scan(&refs).Error; err != nil {
 		return nil, err
 	}

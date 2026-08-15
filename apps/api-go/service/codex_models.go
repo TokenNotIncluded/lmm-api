@@ -17,6 +17,15 @@ const (
 	codexClientVersionCacheTTL = time.Hour
 )
 
+// Codex model discovery is an operator-facing integration with the ChatGPT
+// backend. Keep the request target drawn from a fixed set of official origins;
+// accepting an arbitrary channel URL here would turn the model-refresh action
+// into a server-side request forgery primitive.
+var codexModelOrigins = map[string]string{
+	"chatgpt.com":     "https://chatgpt.com",
+	"chat.openai.com": "https://chat.openai.com",
+}
+
 type codexClientVersionCache struct {
 	sync.Mutex
 	version   string
@@ -105,13 +114,9 @@ func FetchCodexModels(
 		return 0, nil, fmt.Errorf("nil oauth key")
 	}
 
-	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	accessToken := strings.TrimSpace(oauthKey.AccessToken)
 	accountID := strings.TrimSpace(oauthKey.AccountID)
 	clientVersion = strings.TrimSpace(clientVersion)
-	if baseURL == "" {
-		return 0, nil, fmt.Errorf("empty baseURL")
-	}
 	if accessToken == "" {
 		return 0, nil, fmt.Errorf("codex channel: access_token is required")
 	}
@@ -122,13 +127,10 @@ func FetchCodexModels(
 		return 0, nil, fmt.Errorf("codex channel: client_version is required")
 	}
 
-	modelsURL, err := url.Parse(baseURL + "/backend-api/codex/models")
+	modelsURL, err := codexModelsURL(baseURL, clientVersion)
 	if err != nil {
 		return 0, nil, err
 	}
-	query := modelsURL.Query()
-	query.Set("client_version", clientVersion)
-	modelsURL.RawQuery = query.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, modelsURL.String(), nil)
 	if err != nil {
@@ -176,4 +178,29 @@ func FetchCodexModels(
 		models = append(models, slug)
 	}
 	return resp.StatusCode, models, nil
+}
+
+func codexModelsURL(rawBaseURL, clientVersion string) (*url.URL, error) {
+	parsed, err := url.Parse(strings.TrimSpace(rawBaseURL))
+	if err != nil || parsed.User != nil || parsed.Fragment != "" || parsed.RawQuery != "" {
+		return nil, fmt.Errorf("invalid Codex baseURL")
+	}
+	if parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.Port() != "" {
+		return nil, fmt.Errorf("Codex baseURL must use an official HTTPS origin")
+	}
+	if parsed.Path != "" && parsed.Path != "/" {
+		return nil, fmt.Errorf("Codex baseURL must be an origin")
+	}
+	origin, ok := codexModelOrigins[strings.ToLower(parsed.Hostname())]
+	if !ok {
+		return nil, fmt.Errorf("Codex baseURL is not an official origin")
+	}
+	modelsURL, err := url.Parse(origin + "/backend-api/codex/models")
+	if err != nil {
+		return nil, err
+	}
+	query := modelsURL.Query()
+	query.Set("client_version", strings.TrimSpace(clientVersion))
+	modelsURL.RawQuery = query.Encode()
+	return modelsURL, nil
 }

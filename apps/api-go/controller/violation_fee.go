@@ -61,7 +61,7 @@ func ListAdminViolationFeeAppeals(c *gin.Context) {
 }
 
 func ReviewAdminViolationFeeAppeal(c *gin.Context) {
-	appealID, err := strconv.ParseUint(strings.TrimSpace(c.Param("id")), 10, 64)
+	appealID, err := parsePlatformUint(strings.TrimSpace(c.Param("id")))
 	if err != nil || appealID == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "code": "VIOLATION_FEE_APPEAL_INVALID_ID", "message": "申诉编号无效"})
 		return
@@ -79,12 +79,12 @@ func ReviewAdminViolationFeeAppeal(c *gin.Context) {
 		return
 	}
 	approve := action == "approve"
-	appeal, err := model.ReviewViolationFeeAppeal(c.GetInt("id"), uint(appealID), approve, input.Note)
+	appeal, err := model.ReviewViolationFeeAppeal(c.GetInt("id"), appealID, approve, input.Note)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	model.RecordLog(c.GetInt("id"), model.LogTypeSystem, "reviewed violation fee appeal "+strconv.FormatUint(appealID, 10))
+	model.RecordLog(c.GetInt("id"), model.LogTypeSystem, "reviewed violation fee appeal "+strconv.FormatUint(uint64(appealID), 10))
 	recordManageAuditFor(c, appeal.UserID, "security.violation_fee_appeal.review", map[string]interface{}{
 		"appeal_id": appeal.ID,
 		"approved":  approve,

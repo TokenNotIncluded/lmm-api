@@ -2,9 +2,7 @@ package zhipu
 
 import (
 	"bufio"
-	"crypto/sha256"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -35,7 +33,7 @@ var zhipuTokens = cachex.NewByteCache[zhipuTokenData](256, 1<<20, func(key strin
 var expSeconds int64 = 24 * 3600
 
 func zhipuTokenKey(apiKey string) string {
-	return fmt.Sprintf("%x", sha256.Sum256([]byte(apiKey)))
+	return common.GenerateHMAC(apiKey)
 }
 
 func getZhipuToken(apikey string) string {
