@@ -416,6 +416,18 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 			if modelRequest.Group == "" {
 				modelRequest.Group = queryGroup
 			}
+			// The image workbench sends the selected group in the query string.
+			// Move it into the same using-group context used by channel selection;
+			// setting only token_group here is too late and makes a valid image
+			// group fall back to the user's default group, often producing a 503
+			// even though the selected group has an image channel.
+			if modelRequest.Group != "" {
+				usingGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+				if !service.GroupInUserUsableGroups(usingGroup, modelRequest.Group) && modelRequest.Group != usingGroup {
+					return nil, false, errors.New("image request group is not available to this account")
+				}
+				common.SetContextKey(c, constant.ContextKeyUsingGroup, modelRequest.Group)
+			}
 		}
 		common.SetContextKey(c, constant.ContextKeyTokenGroup, modelRequest.Group)
 	}

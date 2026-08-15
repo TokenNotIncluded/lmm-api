@@ -44,6 +44,7 @@ import {
 import type { User, UserSortBy } from '../types'
 import { DataTableBulkActions } from './data-table-bulk-actions'
 import { useUsersColumns } from './users-columns'
+import { UsersMobileList } from './users-mobile-list'
 import { useUsers } from './users-provider'
 
 const route = getRouteApi('/_authenticated/users/')
@@ -56,6 +57,7 @@ const USER_SORTABLE_COLUMNS = new Set<UserSortBy>([
   'created_at',
   'last_login_at',
   'topup_quota',
+  'assistant_violations',
 ])
 
 function isDisabledUserRow(user: User) {
@@ -232,6 +234,17 @@ export function UsersTable() {
       )}
       skeletonKeyPrefix='users-skeleton'
       applyHeaderSize
+      mobile={
+        <UsersMobileList
+          table={table}
+          isLoading={isLoading}
+          isFetching={isFetching && !isLoading}
+          emptyTitle={t('No Users Found')}
+          emptyDescription={t(
+            'No users available. Try adjusting your search or filters.'
+          )}
+        />
+      }
       toolbarProps={{
         searchPlaceholder: t('Filter by username, name or email...'),
         searchDebounceMs: 500,

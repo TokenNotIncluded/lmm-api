@@ -41,6 +41,7 @@ import {
 import type { User } from '../types'
 import { DataTableRowActions } from './data-table-row-actions'
 import { UserAssistantHistoryDialog } from './user-assistant-history-dialog'
+import { UserAssistantReviewDialog } from './user-assistant-review-dialog'
 import { UserQuotaCell } from './user-quota-cell'
 import { UserTrustLevelCell } from './user-trust-level-cell'
 
@@ -392,6 +393,15 @@ export function useUsersColumns(): ColumnDef<User>[] {
       enableSorting: false,
       size: 150,
       meta: { mobileOrder: 26 },
+    },
+    {
+      id: 'assistant_violations',
+      accessorKey: 'assistant_violation_count',
+      header: t('Violations'),
+      cell: ({ row }) => <UserAssistantReviewDialog user={row.original} />,
+      enableSorting: true,
+      size: 130,
+      meta: { mobileOrder: 27 },
     },
     {
       id: 'invite_info',
