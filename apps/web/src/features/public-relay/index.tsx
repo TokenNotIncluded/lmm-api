@@ -117,6 +117,7 @@ export function PublicRelay() {
   const [sortMode, setSortMode] = useState<'rating' | 'recent' | 'models'>(
     'rating'
   )
+  const [activeTab, setActiveTab] = useState('all')
   const [routingDisabled, setRoutingDisabled] = useState<number[]>([])
   const [routingOrder, setRoutingOrder] = useState<number[]>([])
 
@@ -129,18 +130,22 @@ export function PublicRelay() {
     queryKey: ['public-relays', 'user-groups'],
     queryFn: getUserGroups,
     staleTime: 60_000,
+    enabled: activeTab === 'mine',
   })
   const allQuery = useQuery({
     queryKey: ['public-relays', 'all'],
     queryFn: listPublicRelays,
+    enabled: activeTab === 'all',
   })
   const mineQuery = useQuery({
     queryKey: ['public-relays', 'mine'],
     queryFn: listMyPublicRelays,
+    enabled: activeTab === 'mine',
   })
   const routingQuery = useQuery({
     queryKey: ['public-relays', 'routing'],
     queryFn: getPublicRelayRouting,
+    enabled: activeTab === 'routing',
   })
   const reviewsQuery = useQuery({
     queryKey: ['public-relays', 'reviews', reviewTarget?.id],
@@ -153,12 +158,12 @@ export function PublicRelay() {
   const adminQuery = useQuery({
     queryKey: ['public-relays', 'admin'],
     queryFn: () => listAdminPublicRelays('pending'),
-    enabled: isAdmin,
+    enabled: isAdmin && activeTab === 'review',
   })
   const reportsQuery = useQuery({
     queryKey: ['public-relays', 'reports'],
     queryFn: listAdminPublicRelayReports,
-    enabled: isAdmin,
+    enabled: isAdmin && activeTab === 'review',
   })
   const systemOptionsQuery = useQuery({
     queryKey: ['public-relays', 'system-options'],
@@ -487,7 +492,7 @@ export function PublicRelay() {
                 </Button>
               </div>
             ) : null}
-            <Tabs defaultValue='all'>
+            <Tabs value={activeTab} onValueChange={setActiveTab}>
               <TabsList>
                 <TabsTrigger value='routing'>
                   {t('Channel routing')}
