@@ -1939,10 +1939,16 @@ func applyAssistantAdminChannelField(channel *model.Channel, field, value string
 	case "test_model":
 		channel.TestModel = common.GetPointer[string](value)
 	case "weight":
-		converted, err := parsePlatformUint(value)
+		// Parse directly into the signed type used by validation so the value
+		// cannot pass through a wider unsigned integer before being stored.
+		weight, err := strconv.Atoi(value)
 		if err != nil {
 			return false, err
 		}
+		if weight < 0 {
+			return false, errors.New("weight must be non-negative")
+		}
+		converted := uint(weight)
 		channel.Weight = &converted
 	case "models":
 		channel.Models = value
