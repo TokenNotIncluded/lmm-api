@@ -152,6 +152,21 @@ func TestAssistantOutOfScopeRequestStopsGenericWritingBeforeModelCall(t *testing
 			want:    true,
 		},
 		{
+			name:    "unrelated creative writing",
+			message: "帮我写一首关于春天的诗",
+			want:    true,
+		},
+		{
+			name:    "unrelated code generation",
+			message: "帮我写一个 Python 脚本处理本地文件",
+			want:    true,
+		},
+		{
+			name:    "service script remains in scope",
+			message: "帮我写一个调用 API 的 Python 脚本",
+			want:    false,
+		},
+		{
 			name:    "site pricing summary",
 			message: "帮我总结本站当前模型价格和可用分组",
 			want:    false,

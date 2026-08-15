@@ -73,8 +73,8 @@ var (
 		"安全", "渠道", "分组", "group", "base url", "endpoint", "token", "cc switch", "claude code",
 	}
 	assistantGenericTaskTerms = []string{
-		"总结", "简化", "摘要", "概括", "改写", "润色", "翻译", "写一篇", "写作", "论文", "研究", "算法", "实验", "理论",
-		"summarize", "summary", "rewrite", "paraphrase", "translate", "essay", "paper", "research", "algorithm", "experiment", "theory",
+		"总结", "简化", "摘要", "概括", "改写", "润色", "翻译", "写一篇", "写一封", "写个", "写一首", "写诗", "诗歌", "小说", "歌词", "作文", "写代码", "编写代码", "生成代码", "写脚本", "python 脚本", "写作", "论文", "研究", "算法", "实验", "理论",
+		"summarize", "summary", "rewrite", "paraphrase", "translate", "write a poem", "write poetry", "write a song", "write an essay", "write code", "generate code", "write a script", "python script", "essay", "paper", "research", "algorithm", "experiment", "theory",
 	}
 	assistantPromotionTerms = []string{
 		"薅羊毛", "羊毛", "白嫖", "优惠码", "免费额度", "免费试用", "批量注册", "多个账号", "多账号", "临时邮箱", "一次性邮箱",
