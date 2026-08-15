@@ -41,6 +41,29 @@ describe('admin to-do page layout', () => {
     }
   })
 
+  test('keeps secondary admin panels collapsed and lazy by default', () => {
+    assert.match(
+      todosSource,
+      /<AdminTodoSection title=\{t\('Assistant support tasks'\)\}>/
+    )
+    assert.match(
+      todosSource,
+      /<AdminTodoSection title=\{t\('Account safety review'\)\}>/
+    )
+    assert.match(
+      todosSource,
+      /<AdminTodoSection title=\{t\('L1 access requests'\)\}>/
+    )
+    assert.match(
+      todosSource,
+      /const \[mounted, setMounted\] = useState\(false\)/
+    )
+    assert.match(
+      todosSource,
+      /\{mounted \? <div className='pt-5'>\{props.children\}<\/div> : null\}/
+    )
+  })
+
   test('uses the scrolling section layout', () => {
     assert.match(todosSource, /<SectionPageLayout>/)
     assert.doesNotMatch(todosSource, /<SectionPageLayout fixedContent>/)

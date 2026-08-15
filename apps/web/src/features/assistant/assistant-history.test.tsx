@@ -605,8 +605,10 @@ describe('AssistantHistory archive controls', () => {
   })
 
   test('keeps long assistant history messages usable on narrow screens', async () => {
-    const longMessage =
+    const longAssistantMessage =
       'https://console.example.test/history/this-is-a-very-long-assistant-message-without-spaces-that-must-remain-readable-on-mobile'
+    const longUserMessage =
+      'https://console.example.test/history/this-is-a-very-long-user-message-without-spaces-that-must-remain-readable-on-mobile'
     api.get = (async (url: string) => {
       assert.equal(url, '/api/assistant/conversations/1')
       return {
@@ -618,8 +620,14 @@ describe('AssistantHistory archive controls', () => {
               {
                 id: 101,
                 role: 'assistant' as const,
-                content: longMessage,
+                content: longAssistantMessage,
                 created_at: 1_786_400_002,
+              },
+              {
+                id: 102,
+                role: 'user' as const,
+                content: longUserMessage,
+                created_at: 1_786_400_003,
               },
             ],
             privacy_notice: 'Conversations are not private.',
@@ -630,14 +638,22 @@ describe('AssistantHistory archive controls', () => {
 
     const rendered = await renderHistoryConversation()
     try {
-      const response = [...rendered.container.querySelectorAll('div')].find(
+      const assistantResponse = [
+        ...rendered.container.querySelectorAll('div'),
+      ].find(
         (node) =>
-          node.textContent === longMessage &&
+          node.textContent === longAssistantMessage &&
           node.className.includes('break-words')
       )
-      assert.ok(response)
-      assert.match(response.className, /max-w-full/)
-      assert.match(response.className, /\[&_pre\]:overflow-x-auto/)
+      assert.ok(assistantResponse)
+      assert.match(assistantResponse.className, /max-w-full/)
+      assert.match(assistantResponse.className, /\[&_pre\]:overflow-x-auto/)
+
+      const userMessage = [...rendered.container.querySelectorAll('p')].find(
+        (node) => node.textContent === longUserMessage
+      )
+      assert.ok(userMessage)
+      assert.match(userMessage.className, /break-words/)
     } finally {
       await unmount(rendered)
     }

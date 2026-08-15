@@ -25,6 +25,7 @@ import {
   type TodoCategory,
   type TodoItem,
 } from './api'
+import { todoItemTitleKey } from './todo-labels'
 import { todoItemHasDestination } from './todo-navigation'
 
 const CATEGORY_LABELS: Record<TodoCategory, string> = {
@@ -35,18 +36,6 @@ const CATEGORY_LABELS: Record<TodoCategory, string> = {
   account_action: 'Account actions',
   security_incident: 'Security incidents',
   security_review: 'Security reviews',
-}
-
-const ITEM_LABELS: Record<string, string> = {
-  'open_source_bounty.challenge_submitted': 'Challenge submitted',
-  'open_source_bounty.tip_received': 'Tip received',
-  'open_source_bounty.reward_received': 'Reward received',
-  'open_source_bounty.dispute_reward_received': 'Dispute reward received',
-  'open_source_bounty.notification': 'Bounty notification',
-  'developer_access.request': 'Developer access request',
-  'account_action.request': 'Account action request',
-  'assistant.security_incident': 'Assistant safety incident',
-  'assistant.security_review': 'Assistant security review',
 }
 
 function detailString(item: TodoItem, key: string) {
@@ -193,7 +182,7 @@ export function UnifiedTodoList() {
             }
             const applicantId = detailNumber(item, 'user_id')
             const applicantEmail = detailString(item, 'email')
-            const title = t(ITEM_LABELS[item.title] ?? 'Notification')
+            const title = t(todoItemTitleKey(item.title))
             const canOpen = todoItemHasDestination(item)
             return (
               <button

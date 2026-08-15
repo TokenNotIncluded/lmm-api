@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
@@ -41,13 +42,49 @@ export function Todos() {
           <UnifiedTodoList />
           {isAdmin ? (
             <>
-              <AssistantLeadsPanel />
-              <AccountActionRequestsPanel />
-              <DeveloperAccessRequestsPanel />
+              <AdminTodoSection title={t('Assistant support tasks')}>
+                <AssistantLeadsPanel />
+              </AdminTodoSection>
+              <AdminTodoSection title={t('Account safety review')}>
+                <AccountActionRequestsPanel />
+              </AdminTodoSection>
+              <AdminTodoSection title={t('L1 access requests')}>
+                <DeveloperAccessRequestsPanel />
+              </AdminTodoSection>
             </>
           ) : null}
         </div>
       </SectionPageLayout.Content>
     </SectionPageLayout>
+  )
+}
+
+function AdminTodoSection(props: { title: string; children: ReactNode }) {
+  const [expanded, setExpanded] = useState(false)
+  const [mounted, setMounted] = useState(false)
+
+  return (
+    <details
+      className='border-border border-t py-5'
+      open={expanded}
+      onToggle={(event) => {
+        const open = event.currentTarget.open
+        setExpanded(open)
+        if (open) setMounted(true)
+      }}
+    >
+      <summary className='text-foreground cursor-pointer list-none text-sm font-medium [&::-webkit-details-marker]:hidden'>
+        <span className='inline-flex items-center gap-2'>
+          <span
+            aria-hidden='true'
+            className='text-muted-foreground inline-block text-xs'
+          >
+            ›
+          </span>
+          {props.title}
+        </span>
+      </summary>
+      {mounted ? <div className='pt-5'>{props.children}</div> : null}
+    </details>
   )
 }

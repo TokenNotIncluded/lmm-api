@@ -22,6 +22,7 @@ Copyright (C) 2026 LIghtJUNction
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
+import { todoItemTitleKey } from './todo-labels'
 import { todoItemHasDestination } from './todo-navigation'
 
 function item(
@@ -43,6 +44,14 @@ function item(
 }
 
 describe('unified todo destinations', () => {
+  test('uses the locale key for assistant security reviews', () => {
+    assert.equal(
+      todoItemTitleKey('assistant.security_review'),
+      'assistant.security_review'
+    )
+    assert.equal(todoItemTitleKey('unknown.todo'), 'Notification')
+  })
+
   test('advertises security review navigation even without a user or project id', () => {
     assert.equal(todoItemHasDestination(item('security_review')), true)
   })

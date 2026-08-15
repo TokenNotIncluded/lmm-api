@@ -86,6 +86,34 @@ func TestAssistantNaturalSpacedModelPriceQuestionUsesLivePricingChain(t *testing
 	}
 }
 
+func TestAssistantUnknownProviderModelPriceQuestionUsesLivePricingChain(t *testing.T) {
+	for _, question := range []string{
+		"minimax-m3 价格是多少？",
+		"grok-4.6 的报价",
+		"mimo-v2.5-pro 多少钱？",
+		"seed-2.1-pro price please",
+	} {
+		context := assistantUserContextForRequest(0, question)
+
+		assert.Equal(t, model.AssistantIntentCost, context.Intent, question)
+		assert.Equal(t, []string{"get_available_models", "get_model_pricing"}, assistantReadChain(context), question)
+	}
+
+	assert.False(t, assistantHasModelReference("我想配置 Claude Code"))
+}
+
+func TestAssistantLiveCatalogModelReferenceRemainsProviderAgnostic(t *testing.T) {
+	previousPricing := getPricingCache
+	getPricingCache = func() []model.Pricing {
+		return []model.Pricing{{ModelName: "future9model", EnableGroup: []string{"default"}}}
+	}
+	t.Cleanup(func() { getPricingCache = previousPricing })
+
+	context := assistantUserContextForRequest(0, "future9model 多少钱？")
+	assert.Equal(t, model.AssistantIntentCost, context.Intent)
+	assert.Equal(t, []string{"get_available_models", "get_model_pricing"}, assistantReadChain(context))
+}
+
 func TestAssistantOutOfScopeRequestStopsGenericWritingBeforeModelCall(t *testing.T) {
 	tests := []struct {
 		name         string

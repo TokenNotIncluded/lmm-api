@@ -80,7 +80,7 @@ function HistoryMessage(props: {
           {safeMessage.content}
         </Response>
       ) : props.message.role !== 'secure_card' && safeMessage.content ? (
-        <p className='text-sm leading-6 whitespace-pre-wrap'>
+        <p className='text-sm leading-6 break-words whitespace-pre-wrap'>
           {safeMessage.content}
         </p>
       ) : null}

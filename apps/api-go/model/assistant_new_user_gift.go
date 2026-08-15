@@ -1,6 +1,8 @@
 package model
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"math"
 	"net"
@@ -65,7 +67,21 @@ func AssistantGiftErrorCode(err error) string {
 const (
 	assistantGiftRiskIdentity = "identity"
 	assistantGiftRiskNetwork  = "network"
+	assistantGiftRiskKeyID    = "assistant-gift-risk-v1"
 )
+
+// AssistantGiftRiskKey keeps the HMAC key used by the global gift-risk
+// ledger in the database. CryptoSecret is normally shared by all nodes, but
+// its development fallback is process-local and changes after a restart. A
+// persisted key makes the identity/network dedupe boundary independent of
+// process lifetime while keeping raw identifiers out of the database.
+type AssistantGiftRiskKey struct {
+	Id        string `json:"-" gorm:"primaryKey;type:varchar(64)"`
+	Secret    string `json:"-" gorm:"type:varchar(255);not null"`
+	CreatedAt int64  `json:"-" gorm:"not null"`
+}
+
+func (AssistantGiftRiskKey) TableName() string { return "assistant_gift_risk_keys" }
 
 // AssistantGiftRiskMemory is the privacy-minimized global fraud ledger for
 // welcome gifts. KeyHash is an HMAC of either a provider-aware email identity
@@ -143,11 +159,6 @@ func DecideAssistantNewUserGift(userID int, conversationID int64, amountCents in
 	if user.Role != common.RoleCommonUser || user.Status != common.UserStatusEnabled || strings.TrimSpace(user.Email) == "" || IsDisposableEmail(user.Email) {
 		return nil, false, assistantGiftError("account_not_eligible", ErrAssistantGiftIneligible)
 	}
-	identityHash, networkHash, err := assistantGiftRiskKeys(user.Email, clientIP)
-	if err != nil {
-		return nil, false, assistantGiftError("risk_check_unavailable", ErrAssistantGiftIneligible)
-	}
-
 	quota := int(math.Round(float64(amountCents) * common.QuotaPerUnit / 100))
 	if quota < 0 || (amountCents > 0 && quota <= 0) {
 		return nil, false, assistantGiftError("invalid_decision", ErrAssistantGiftInvalid)
@@ -166,7 +177,7 @@ func DecideAssistantNewUserGift(userID int, conversationID int64, amountCents in
 		CreatedAt:      common.GetTimestamp(),
 	}
 	createdDecision := false
-	err = DB.Transaction(func(tx *gorm.DB) error {
+	err := DB.Transaction(func(tx *gorm.DB) error {
 		if err := lockAssistantOwner(tx, userID); err != nil {
 			return err
 		}
@@ -178,6 +189,14 @@ func DecideAssistantNewUserGift(userID int, conversationID int64, amountCents in
 		}
 		if !errors.Is(existingErr, gorm.ErrRecordNotFound) {
 			return existingErr
+		}
+		riskSecret, err := getAssistantGiftRiskSecret(tx)
+		if err != nil {
+			return assistantGiftError("risk_check_unavailable", ErrAssistantGiftIneligible)
+		}
+		identityHash, networkHash, err := assistantGiftRiskKeysWithSecret(riskSecret, user.Email, clientIP)
+		if err != nil {
+			return assistantGiftError("risk_check_unavailable", ErrAssistantGiftIneligible)
 		}
 		nowTimestamp := common.GetTimestamp()
 		if err := reserveAssistantGiftRisk(tx, identityHash, assistantGiftRiskIdentity, nowTimestamp, 1, 0); err != nil {
@@ -204,14 +223,68 @@ func DecideAssistantNewUserGift(userID int, conversationID int64, amountCents in
 	return &gift, createdDecision, nil
 }
 
+// getAssistantGiftRiskSecret returns the installation-wide HMAC key. The
+// insert is conflict-safe so two instances bootstrapping the first gift at
+// the same time converge on one durable key. Existing deployments that have
+// configured CRYPTO_SECRET keep using that value when the row is first
+// created, preserving existing risk hashes during this migration.
+func getAssistantGiftRiskSecret(tx *gorm.DB) (string, error) {
+	if tx == nil {
+		return "", gorm.ErrInvalidData
+	}
+	var stored AssistantGiftRiskKey
+	if err := tx.Where("id = ?", assistantGiftRiskKeyID).First(&stored).Error; err == nil {
+		stored.Secret = strings.TrimSpace(stored.Secret)
+		if stored.Secret == "" {
+			return "", ErrAssistantGiftInvalid
+		}
+		return stored.Secret, nil
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", err
+	}
+
+	seed := strings.TrimSpace(common.CryptoSecret)
+	if seed == "" {
+		raw := make([]byte, 32)
+		if _, err := rand.Read(raw); err != nil {
+			return "", err
+		}
+		seed = hex.EncodeToString(raw)
+	}
+	candidate := AssistantGiftRiskKey{
+		Id:        assistantGiftRiskKeyID,
+		Secret:    seed,
+		CreatedAt: common.GetTimestamp(),
+	}
+	result := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&candidate)
+	if result.Error != nil {
+		return "", result.Error
+	}
+	if err := tx.Where("id = ?", assistantGiftRiskKeyID).First(&stored).Error; err != nil {
+		return "", err
+	}
+	stored.Secret = strings.TrimSpace(stored.Secret)
+	if stored.Secret == "" {
+		return "", ErrAssistantGiftInvalid
+	}
+	return stored.Secret, nil
+}
+
 func assistantGiftRiskKeys(email, clientIP string) (string, string, error) {
+	return assistantGiftRiskKeysWithSecret(common.CryptoSecret, email, clientIP)
+}
+
+func assistantGiftRiskKeysWithSecret(secret, email, clientIP string) (string, string, error) {
+	if strings.TrimSpace(secret) == "" {
+		return "", "", ErrAssistantGiftInvalid
+	}
 	identity := canonicalAssistantGiftEmail(email)
 	ip := net.ParseIP(strings.TrimSpace(clientIP))
 	if identity == "" || ip == nil {
 		return "", "", ErrAssistantGiftInvalid
 	}
-	return common.GenerateHMAC("assistant-gift-identity-v1:" + identity),
-		common.GenerateHMAC("assistant-gift-network-v1:" + ip.String()), nil
+	return common.GenerateHMACWithKey([]byte(secret), "assistant-gift-identity-v1:"+identity),
+		common.GenerateHMACWithKey([]byte(secret), "assistant-gift-network-v1:"+ip.String()), nil
 }
 
 func canonicalAssistantGiftEmail(email string) string {

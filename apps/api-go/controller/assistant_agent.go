@@ -58,8 +58,15 @@ var (
 	// boundary, ordinary phrases such as “Claude Code” look like a model ID and
 	// unnecessarily force a catalog read on every client-setup question.
 	assistantModelReferencePattern = regexp.MustCompile(`(?i)\b(?:gpt|claude|gemini|deepseek|qwen|llama|mistral|kimi|glm|codex)(?:(?:[-._:/][a-z0-9]+|[0-9])[a-z0-9._:/-]*|(?:\s+[a-z][a-z0-9._:/-]*){0,2}\s+[a-z0-9._:/-]*[0-9][a-z0-9._:/-]*(?:\s+[a-z0-9._:/-]+){0,3})\b`)
-	assistantAgentLimiter          = syncx.NewLimiter(assistantAgentMaxConcurrent)
-	assistantTools                 = sync.OnceValue(buildAssistantTools)
+	// Keep discovery open to newly configured providers. The live pricing
+	// catalog is the source of truth, so model-reference detection must not
+	// require adding every future provider to the allowlist above. This
+	// fallback recognizes compact IDs such as minimax-m3, grok-4.6,
+	// mimo-v2.5-pro, and seed-2.1-pro while still rejecting ordinary words
+	// such as “Claude Code”.
+	assistantGenericModelReferencePattern = regexp.MustCompile(`(?i)\b[a-z][a-z0-9]*(?:[-._][a-z0-9]*[0-9][a-z0-9]*(?:[-._][a-z0-9]+)*)+\b`)
+	assistantAgentLimiter                 = syncx.NewLimiter(assistantAgentMaxConcurrent)
+	assistantTools                        = sync.OnceValue(buildAssistantTools)
 )
 
 type assistantL1RecommendationDraft struct {
@@ -715,7 +722,7 @@ func assistantToolChoiceForContext(userContext assistantUserContext) any {
 	// contain the words “model” or “模型”, so deterministic intent
 	// classification can leave it as `other`. It still must be checked against
 	// the live catalog before the model makes an availability claim.
-	if name == "" && assistantModelReferencePattern.MatchString(userContext.LatestUserRequest) {
+	if name == "" && assistantHasModelReference(userContext.LatestUserRequest) {
 		name = "get_available_models"
 	}
 	if name == "" && assistantExplicitImageRequest(userContext.LatestUserRequest) {
@@ -730,6 +737,32 @@ func assistantToolChoiceForContext(userContext assistantUserContext) any {
 		}
 	}
 	return "auto"
+}
+
+// assistantHasModelReference keeps model discovery data-driven. The legacy
+// family pattern covers natural-language forms such as “GPT 5.6 SOL”; the
+// generic pattern and the live pricing snapshot cover any newly configured
+// provider without requiring a code change or an invented model ID.
+func assistantHasModelReference(text string) bool {
+	if assistantModelReferencePattern.MatchString(text) || assistantGenericModelReferencePattern.MatchString(text) {
+		return true
+	}
+	normalized := strings.ToLower(strings.TrimSpace(text))
+	if normalized == "" {
+		return false
+	}
+	for _, pricing := range getPricingCache() {
+		modelID := strings.ToLower(strings.TrimSpace(pricing.ModelName))
+		// Ignore labels that cannot be distinguished from ordinary prose. Exact
+		// catalog IDs with a version or separator are safe to match here.
+		if len(modelID) < 3 || !strings.ContainsAny(modelID, "0123456789-._:/") {
+			continue
+		}
+		if strings.Contains(normalized, modelID) {
+			return true
+		}
+	}
+	return false
 }
 
 // assistantBountyReadToolAllowed keeps the larger read tool out of unrelated
@@ -824,12 +857,12 @@ func assistantReadChain(userContext assistantUserContext) []string {
 	if userContext.Intent == model.AssistantIntentCost ||
 		userContext.Intent == model.AssistantIntentModels ||
 		assistantTextContainsAny(text, "模型", "model id", "model_id", "available model") ||
-		assistantModelReferencePattern.MatchString(text) {
+		assistantHasModelReference(text) {
 		if !slices.Contains(tools, "get_available_models") {
 			tools = append(tools, "get_available_models")
 		}
 	}
-	if userContext.Intent == model.AssistantIntentCost && assistantModelReferencePattern.MatchString(text) {
+	if userContext.Intent == model.AssistantIntentCost && assistantHasModelReference(text) {
 		tools = append(tools, "get_model_pricing")
 	}
 	if userContext.Intent == model.AssistantIntentBounty && assistantBountyReadRequest(text) {

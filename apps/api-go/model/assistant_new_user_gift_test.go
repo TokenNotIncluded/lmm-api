@@ -27,7 +27,7 @@ func setupAssistantGiftTestDB(t *testing.T) *gorm.DB {
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
 	DB = db
-	require.NoError(t, db.AutoMigrate(&User{}, &TopUp{}, &AssistantNewUserGift{}, &AssistantGiftRiskMemory{}))
+	require.NoError(t, db.AutoMigrate(&User{}, &TopUp{}, &AssistantNewUserGift{}, &AssistantGiftRiskKey{}, &AssistantGiftRiskMemory{}))
 	t.Cleanup(func() {
 		DB = previousDB
 		common.RedisEnabled = previousRedis
@@ -78,6 +78,32 @@ func TestAssistantNewUserGiftIsOneTimeAndClaimIsIdempotent(t *testing.T) {
 	assert.True(t, alreadyClaimed)
 	require.NoError(t, db.First(&stored, user.Id).Error)
 	assert.Equal(t, gift.Quota, stored.Quota)
+}
+
+func TestAssistantGiftRiskKeySurvivesCryptoSecretRotation(t *testing.T) {
+	db := setupAssistantGiftTestDB(t)
+	previousCryptoSecret := common.CryptoSecret
+	t.Cleanup(func() { common.CryptoSecret = previousCryptoSecret })
+	common.CryptoSecret = "gift-test-instance-a"
+
+	first := newAssistantGiftUser(t, db, "gift-rotation-first", "rotation.first+one@gmail.com")
+	_, _, err := DecideAssistantNewUserGift(first.Id, 1, 100, "A legitimate first conversation.", 2, 40, "198.51.100.30")
+	require.NoError(t, err)
+
+	// A restart or a second instance may have a different process-local
+	// CryptoSecret. The persisted installation key must keep the global
+	// identity ledger stable across that boundary.
+	common.CryptoSecret = "gift-test-instance-b"
+	alias := newAssistantGiftUser(t, db, "gift-rotation-alias", "rotationfirst+two@googlemail.com")
+	_, _, err = DecideAssistantNewUserGift(alias.Id, 2, 100, "The same mailbox under another alias.", 2, 40, "198.51.100.31")
+	assert.ErrorIs(t, err, ErrAssistantGiftAbuse)
+	assert.Equal(t, "identity_already_used", AssistantGiftErrorCode(err))
+
+	var keys []AssistantGiftRiskKey
+	require.NoError(t, db.Find(&keys).Error)
+	require.Len(t, keys, 1)
+	assert.Equal(t, assistantGiftRiskKeyID, keys[0].Id)
+	assert.Equal(t, "gift-test-instance-a", keys[0].Secret)
 }
 
 func TestAssistantGiftOpportunitySurvivesL1AndOlderAccounts(t *testing.T) {
