@@ -10,7 +10,6 @@ import { api } from '@/lib/api'
 
 import type {
   AdminSecurityPolicy,
-  AssistantReviewTask,
   SecurityAuditEnvelope,
   SecurityAuditAIReviewPage,
   SecurityAuditFilters,
@@ -23,15 +22,6 @@ export const ADMIN_SECURITY_STATS_ENDPOINT = '/api/security/admin/stats'
 export const ADMIN_SECURITY_EVENTS_ENDPOINT = '/api/security/admin/events'
 export const ADMIN_SECURITY_AI_REVIEWS_ENDPOINT =
   '/api/security/admin/ai-reviews'
-export const ADMIN_ASSISTANT_REVIEW_ENDPOINT = '/api/assistant/admin/review'
-
-export async function getAdminAssistantReview() {
-  const response = await api.get<SecurityAuditEnvelope<AssistantReviewTask>>(
-    ADMIN_ASSISTANT_REVIEW_ENDPOINT,
-    { skipBusinessError: true, skipErrorHandler: true }
-  )
-  return response.data
-}
 
 export async function getAdminSecurityPolicy() {
   const response = await api.get<SecurityAuditEnvelope<AdminSecurityPolicy>>(

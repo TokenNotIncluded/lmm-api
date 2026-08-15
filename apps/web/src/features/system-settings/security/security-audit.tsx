@@ -27,7 +27,6 @@ import { formatTimestampToDate } from '@/lib/format'
 import { getAssistantReviewRun, listAssistantReviewRuns } from '../api'
 import type { SystemTask } from '../types'
 import {
-  getAdminAssistantReview,
   getAdminSecurityPolicy,
   getAdminSecurityStats,
   listAdminSecurityAIReviews,
@@ -614,17 +613,7 @@ export function SecurityAuditPanel() {
     refetchOnWindowFocus: false,
     staleTime: 60_000,
   })
-  const assistantReviewQuery = useQuery({
-    queryKey: ['admin-assistant-review-latest'],
-    queryFn: getAdminAssistantReview,
-    retry: false,
-    refetchOnWindowFocus: false,
-    staleTime: 15_000,
-  })
   const policy = policyQuery.data?.success ? policyQuery.data.data : undefined
-  const assistantReview = assistantReviewQuery.data?.success
-    ? assistantReviewQuery.data.data
-    : undefined
   const reviewHistoryQuery = useQuery({
     queryKey: ['admin-assistant-review-history'],
     queryFn: () => listAssistantReviewRuns(30),
@@ -642,7 +631,7 @@ export function SecurityAuditPanel() {
   )
   useEffect(() => {
     if (reviewTasks.length === 0) {
-      setSelectedReviewTaskId(assistantReview?.task_id)
+      setSelectedReviewTaskId(undefined)
       return
     }
     if (
@@ -651,7 +640,7 @@ export function SecurityAuditPanel() {
     ) {
       setSelectedReviewTaskId(reviewTasks[0].task_id)
     }
-  }, [assistantReview?.task_id, reviewTasks, selectedReviewTaskId])
+  }, [reviewTasks, selectedReviewTaskId])
   const selectedReviewQuery = useQuery({
     queryKey: ['admin-assistant-review-task', selectedReviewTaskId],
     queryFn: () =>
@@ -663,9 +652,7 @@ export function SecurityAuditPanel() {
   })
   const selectedReviewTask = selectedReviewQuery.data?.success
     ? selectedReviewQuery.data.data
-    : selectedReviewTaskId === assistantReview?.task_id
-      ? assistantReview
-      : undefined
+    : undefined
   const protectedGroups = useMemo(() => getProtectedGroups(policy), [policy])
   const categories = useMemo(
     () =>
@@ -803,9 +790,7 @@ export function SecurityAuditPanel() {
       <AssistantReviewSummary
         task={selectedReviewTask}
         isLoading={
-          assistantReviewQuery.isLoading ||
-          reviewHistoryQuery.isLoading ||
-          selectedReviewQuery.isLoading
+          reviewHistoryQuery.isLoading || selectedReviewQuery.isLoading
         }
       />
       <AssistantReviewHistory
