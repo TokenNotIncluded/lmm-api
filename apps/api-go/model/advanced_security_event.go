@@ -123,7 +123,9 @@ type AdvancedSecurityEventFilter struct {
 	UserID         int
 	RuleID         string
 	Category       string
+	Group          string
 	Decision       string
+	Source         string
 	ModelName      string
 	Limit          int
 	Offset         int
@@ -142,6 +144,19 @@ type AdvancedSecurityStats struct {
 	AffectedUsers    int64
 	ByCategory       []AdvancedSecurityStatBucket
 	ByRule           []AdvancedSecurityStatBucket
+	AIReview         AdvancedSecurityReviewStats
+}
+
+// AdvancedSecurityReviewStats keeps the asynchronous assistant review lane
+// visible in the same security overview without mixing its verdicts into the
+// deterministic literal-rule counters above.
+type AdvancedSecurityReviewStats struct {
+	Total      int64
+	Completed  int64
+	Violations int64
+	Abuses     int64
+	Failed     int64
+	ByGroup    []AdvancedSecurityStatBucket
 }
 
 func ListAdvancedSecurityEvents(filter AdvancedSecurityEventFilter) ([]AdvancedSecurityEvent, int64, error) {
@@ -201,7 +216,57 @@ func GetAdvancedSecurityStats(filter AdvancedSecurityEventFilter) (AdvancedSecur
 	if err != nil {
 		return AdvancedSecurityStats{}, err
 	}
+	stats.AIReview, err = getAdvancedSecurityReviewStats(filter)
+	if err != nil {
+		return AdvancedSecurityStats{}, err
+	}
 	return stats, nil
+}
+
+func getAdvancedSecurityReviewStats(filter AdvancedSecurityEventFilter) (AdvancedSecurityReviewStats, error) {
+	stats := AdvancedSecurityReviewStats{}
+	if !assistantReviewTablesAvailable(DB) {
+		return stats, nil
+	}
+	query := DB.Model(&AssistantRequestReview{})
+	if filter.StartTimestamp > 0 {
+		query = query.Where("created_at >= ?", filter.StartTimestamp)
+	}
+	if filter.EndTimestamp > 0 {
+		query = query.Where("created_at <= ?", filter.EndTimestamp)
+	}
+	if filter.UserID > 0 {
+		query = query.Where("user_id = ?", filter.UserID)
+	}
+	if filter.Group != "" {
+		query = query.Where(map[string]any{"group": filter.Group})
+	}
+	if err := query.Count(&stats.Total).Error; err != nil {
+		return stats, err
+	}
+	completed := query.Session(&gorm.Session{}).Where("status = ?", AssistantRequestReviewStatusCompleted)
+	if err := completed.Count(&stats.Completed).Error; err != nil {
+		return stats, err
+	}
+	if err := completed.Session(&gorm.Session{}).Where("violation = ?", true).Count(&stats.Violations).Error; err != nil {
+		return stats, err
+	}
+	if err := completed.Session(&gorm.Session{}).Where("abuse = ?", true).Count(&stats.Abuses).Error; err != nil {
+		return stats, err
+	}
+	if err := query.Session(&gorm.Session{}).Where("status = ?", AssistantRequestReviewStatusFailed).Count(&stats.Failed).Error; err != nil {
+		return stats, err
+	}
+	var groups []AdvancedSecurityStatBucket
+	err := query.Session(&gorm.Session{}).
+		Select("\"group\" AS key, COUNT(*) AS count").
+		Where("\"group\" <> ''").
+		Group("\"group\"").
+		Order("count desc, key asc").
+		Limit(100).
+		Scan(&groups).Error
+	stats.ByGroup = groups
+	return stats, err
 }
 
 func advancedSecurityEventQuery(db *gorm.DB, filter AdvancedSecurityEventFilter) *gorm.DB {
@@ -221,8 +286,16 @@ func advancedSecurityEventQuery(db *gorm.DB, filter AdvancedSecurityEventFilter)
 	if filter.Category != "" {
 		query = query.Where("category = ?", filter.Category)
 	}
+	if filter.Group != "" {
+		// Use a map predicate so GORM quotes the column for PostgreSQL, where
+		// GROUP is a reserved keyword.
+		query = query.Where(map[string]any{"group": filter.Group})
+	}
 	if filter.Decision != "" {
 		query = query.Where("decision = ?", filter.Decision)
+	}
+	if filter.Source != "" {
+		query = query.Where("source = ?", filter.Source)
 	}
 	if filter.ModelName != "" {
 		query = query.Where("model_name = ?", filter.ModelName)

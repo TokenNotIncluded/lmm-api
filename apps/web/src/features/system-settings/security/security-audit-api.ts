@@ -1,0 +1,94 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+*/
+import { api } from '@/lib/api'
+
+import type {
+  AdminSecurityPolicy,
+  AssistantReviewTask,
+  SecurityAuditEnvelope,
+  SecurityAuditAIReviewPage,
+  SecurityAuditFilters,
+  SecurityAuditPage,
+  SecurityAuditStats,
+} from './security-audit-types'
+
+export const ADMIN_SECURITY_POLICY_ENDPOINT = '/api/security/admin/policy'
+export const ADMIN_SECURITY_STATS_ENDPOINT = '/api/security/admin/stats'
+export const ADMIN_SECURITY_EVENTS_ENDPOINT = '/api/security/admin/events'
+export const ADMIN_SECURITY_AI_REVIEWS_ENDPOINT =
+  '/api/security/admin/ai-reviews'
+export const ADMIN_ASSISTANT_REVIEW_ENDPOINT = '/api/assistant/admin/review'
+
+export async function getAdminAssistantReview() {
+  const response = await api.get<SecurityAuditEnvelope<AssistantReviewTask>>(
+    ADMIN_ASSISTANT_REVIEW_ENDPOINT,
+    { skipBusinessError: true, skipErrorHandler: true }
+  )
+  return response.data
+}
+
+export async function getAdminSecurityPolicy() {
+  const response = await api.get<SecurityAuditEnvelope<AdminSecurityPolicy>>(
+    ADMIN_SECURITY_POLICY_ENDPOINT,
+    { skipBusinessError: true, skipErrorHandler: true }
+  )
+  return response.data
+}
+
+export async function getAdminSecurityStats(
+  filters: Omit<SecurityAuditFilters, 'page' | 'page_size'> = {}
+) {
+  const response = await api.get<SecurityAuditEnvelope<SecurityAuditStats>>(
+    ADMIN_SECURITY_STATS_ENDPOINT,
+    {
+      params: compactFilters(filters),
+      skipBusinessError: true,
+      skipErrorHandler: true,
+    }
+  )
+  return response.data
+}
+
+export async function listAdminSecurityEvents(filters: SecurityAuditFilters) {
+  const response = await api.get<SecurityAuditEnvelope<SecurityAuditPage>>(
+    ADMIN_SECURITY_EVENTS_ENDPOINT,
+    {
+      params: compactFilters(filters),
+      skipBusinessError: true,
+      skipErrorHandler: true,
+    }
+  )
+  return response.data
+}
+
+export async function listAdminSecurityAIReviews(
+  filters: SecurityAuditFilters
+) {
+  const response = await api.get<
+    SecurityAuditEnvelope<SecurityAuditAIReviewPage>
+  >(ADMIN_SECURITY_AI_REVIEWS_ENDPOINT, {
+    params: compactFilters(filters),
+    skipBusinessError: true,
+    skipErrorHandler: true,
+  })
+  return response.data
+}
+
+function compactFilters(
+  filters: Partial<SecurityAuditFilters>
+): Record<string, string | number> {
+  const params: Record<string, string | number> = {}
+  if (filters.page) params.p = filters.page
+  if (filters.page_size) params.page_size = filters.page_size
+  if (filters.category) params.category = filters.category
+  if (filters.group) params.group = filters.group
+  if (filters.decision) params.decision = filters.decision
+  if (filters.source) params.source = filters.source
+  return params
+}

@@ -315,6 +315,46 @@ function PolicyMetadata({ policy }: { policy: SecurityPolicy }) {
   )
 }
 
+function ProtectedGroupsSummary({ policy }: { policy: SecurityPolicy }) {
+  const { t } = useTranslation()
+  const groups = Array.from(
+    new Set(
+      (policy.protected_groups ?? [])
+        .map((group) => group.trim())
+        .filter(Boolean)
+    )
+  ).sort()
+
+  return (
+    <div className='border-border/70 space-y-3 rounded-xl border p-5'>
+      <div className='flex items-start gap-3'>
+        <ShieldCheck className='text-muted-foreground mt-0.5 size-5 shrink-0' />
+        <div>
+          <h3 className='font-medium'>{t('Protected groups')}</h3>
+          <p className='text-muted-foreground mt-1 text-sm leading-6'>
+            {t(
+              'Only explicitly listed groups are covered by advanced security rules; rules do not apply globally.'
+            )}
+          </p>
+        </div>
+      </div>
+      {groups.length > 0 ? (
+        <div className='flex flex-wrap gap-2'>
+          {groups.map((group) => (
+            <Badge key={group} variant='outline' className='font-mono text-xs'>
+              {group}
+            </Badge>
+          ))}
+        </div>
+      ) : (
+        <p className='text-muted-foreground text-sm'>
+          {t('No protected groups are published yet.')}
+        </p>
+      )}
+    </div>
+  )
+}
+
 function RiskCategories({
   categories,
 }: {
@@ -562,6 +602,7 @@ function PolicyPanel({
   return (
     <div className='space-y-8'>
       <PolicyMetadata policy={policy} />
+      <ProtectedGroupsSummary policy={policy} />
 
       <section
         aria-labelledby='security-categories-title'

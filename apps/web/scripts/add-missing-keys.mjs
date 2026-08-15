@@ -27,6 +27,22 @@ function stableStringify(obj) {
 
 const newKeys = {
   en: {
+    Guide: 'Guide',
+    'View model pricing': 'View model pricing',
+    'Browse open-source work': 'Browse open-source work',
+    'Read the guide': 'Read the guide',
+    'At a glance': 'At a glance',
+    'One endpoint': 'One endpoint',
+    'OpenAI and Anthropic-compatible routes.':
+      'OpenAI and Anthropic-compatible routes.',
+    'Clear pricing': 'Clear pricing',
+    'Choose the model and group before you spend.':
+      'Choose the model and group before you spend.',
+    'Human review': 'Human review',
+    'Support and access requests stay auditable.':
+      'Support and access requests stay auditable.',
+    'Use one clear API for your work, connect a client, or explore public open-source challenges.':
+      'Use one clear API for your work, connect a client, or explore public open-source challenges.',
     'Cost control': 'Cost control',
     'Financial overview': 'Financial overview',
     Expenses: 'Expenses',
@@ -87,12 +103,54 @@ const newKeys = {
     'User skills': 'User skills',
     'Security reviews': 'Security reviews',
     'assistant.security_review': 'Assistant security review',
+    'Security audit details': 'Security audit details',
+    'Audit data is available to administrators only.':
+      'Audit data is available to administrators only.',
+    'Review results from deterministic rules and asynchronous AI audits. Prompt text, previews, matcher patterns, and credentials are never shown here.':
+      'Review results from deterministic rules and asynchronous AI audits. Prompt text, previews, matcher patterns, and credentials are never shown here.',
+    'Protected groups': 'Protected groups',
+    'Only groups listed by an enabled rule are included. Rules do not apply globally.':
+      'Only groups listed by an enabled rule are included. Rules do not apply globally.',
+    'No groups are currently covered by enabled advanced security rules.':
+      'No groups are currently covered by enabled advanced security rules.',
+    'Only explicitly listed groups are covered by advanced security rules; rules do not apply globally.':
+      'Only explicitly listed groups are covered by advanced security rules; rules do not apply globally.',
+    'No protected groups are published yet.':
+      'No protected groups are published yet.',
+    'Deterministic rule': 'Deterministic rule',
+    'All categories': 'All categories',
+    'All groups': 'All groups',
+    'All decisions': 'All decisions',
+    'All sources': 'All sources',
+    Violation: 'Violation',
+    Clear: 'Clear',
+    Reviews: 'Reviews',
+    Abuse: 'Abuse',
+    Occurred: 'Occurred',
+    'Review source': 'Review source',
+    'No security audit events match the current filters.':
+      'No security audit events match the current filters.',
     'Group warning': 'Group warning',
     'Confirmation {{current}} of {{total}}':
       'Confirmation {{current}} of {{total}}',
     'I understand, continue': 'I understand, continue',
   },
   zh: {
+    Guide: '接入指南',
+    'View model pricing': '查看模型价格',
+    'Browse open-source work': '浏览开源任务',
+    'Read the guide': '阅读接入指南',
+    'At a glance': '快速了解',
+    'One endpoint': '一个接口',
+    'OpenAI and Anthropic-compatible routes.':
+      '兼容 OpenAI 与 Anthropic 的接口。',
+    'Clear pricing': '价格透明',
+    'Choose the model and group before you spend.':
+      '先选择模型和分组，再开始使用。',
+    'Human review': '人工审核',
+    'Support and access requests stay auditable.': '支持与访问申请都可追溯。',
+    'Use one clear API for your work, connect a client, or explore public open-source challenges.':
+      '用一个清晰的 API 完成工作、连接客户端，或探索公开的开源任务。',
     'Cost control': '成本控制',
     'Financial overview': '财务概览',
     Expenses: '支出',
@@ -151,11 +209,51 @@ const newKeys = {
     'User skills': '用户技能',
     'Security reviews': '安全巡检',
     'assistant.security_review': '助手安全巡检',
+    'Security audit details': '安全审计详情',
+    'Audit data is available to administrators only.': '审计数据仅管理员可见。',
+    'Review results from deterministic rules and asynchronous AI audits. Prompt text, previews, matcher patterns, and credentials are never shown here.':
+      '查看确定性规则和异步 AI 审计结果。此处不会显示提示词、预览、匹配模式或凭证。',
+    'Protected groups': '受保护分组',
+    'Only groups listed by an enabled rule are included. Rules do not apply globally.':
+      '仅启用规则列出的分组会受到保护；规则不会全局生效。',
+    'No groups are currently covered by enabled advanced security rules.':
+      '当前没有分组受到已启用高级安全规则保护。',
+    'Only explicitly listed groups are covered by advanced security rules; rules do not apply globally.':
+      '只有明确列出的分组会受到高级安全规则保护；规则不会全局生效。',
+    'No protected groups are published yet.': '暂未公布受保护分组。',
+    'Deterministic rule': '确定性规则',
+    'All categories': '全部分类',
+    'All groups': '全部分组',
+    'All decisions': '全部决策',
+    'All sources': '全部来源',
+    Violation: '违规',
+    Clear: '通过',
+    Reviews: '次审计',
+    Abuse: '滥用',
+    Occurred: '发生时间',
+    'Review source': '审计来源',
+    'No security audit events match the current filters.':
+      '没有符合当前筛选条件的安全审计事件。',
     'Group warning': '分组警告',
     'Confirmation {{current}} of {{total}}': '第 {{current}}/{{total}} 次确认',
     'I understand, continue': '我已了解，继续',
   },
   'zh-TW': {
+    Guide: '接入指南',
+    'View model pricing': '查看模型價格',
+    'Browse open-source work': '瀏覽開源任務',
+    'Read the guide': '閱讀接入指南',
+    'At a glance': '快速了解',
+    'One endpoint': '一個介面',
+    'OpenAI and Anthropic-compatible routes.':
+      '相容 OpenAI 與 Anthropic 的介面。',
+    'Clear pricing': '價格透明',
+    'Choose the model and group before you spend.':
+      '先選擇模型和分組，再開始使用。',
+    'Human review': '人工審核',
+    'Support and access requests stay auditable.': '支援與存取申請都可追溯。',
+    'Use one clear API for your work, connect a client, or explore public open-source challenges.':
+      '用一個清晰的 API 完成工作、連接客戶端，或探索公開的開源任務。',
     'Cost control': '成本控制',
     'Financial overview': '財務概覽',
     Expenses: '支出',
@@ -214,8 +312,49 @@ const newKeys = {
     'User skills': '使用者技能',
     'Security reviews': '安全巡檢',
     'assistant.security_review': '助手安全巡檢',
+    'Security audit details': '安全稽核詳情',
+    'Audit data is available to administrators only.': '稽核資料僅管理員可見。',
+    'Review results from deterministic rules and asynchronous AI audits. Prompt text, previews, matcher patterns, and credentials are never shown here.':
+      '檢視確定性規則與非同步 AI 稽核結果。此處不會顯示提示文字、預覽、比對模式或憑證。',
+    'Protected groups': '受保護分組',
+    'Only groups listed by an enabled rule are included. Rules do not apply globally.':
+      '僅啟用規則列出的分組會受到保護；規則不會全域套用。',
+    'No groups are currently covered by enabled advanced security rules.':
+      '目前沒有分組受到已啟用的進階安全規則保護。',
+    'Only explicitly listed groups are covered by advanced security rules; rules do not apply globally.':
+      '只有明確列出的分組會受到進階安全規則保護；規則不會全域套用。',
+    'No protected groups are published yet.': '尚未公布受保護分組。',
+    'Deterministic rule': '確定性規則',
+    'All categories': '全部分類',
+    'All groups': '全部分組',
+    'All decisions': '全部決策',
+    'All sources': '全部來源',
+    Violation: '違規',
+    Clear: '通過',
+    Reviews: '次稽核',
+    Abuse: '濫用',
+    Occurred: '發生時間',
+    'Review source': '稽核來源',
+    'No security audit events match the current filters.':
+      '沒有符合目前篩選條件的安全稽核事件。',
   },
   fr: {
+    Guide: 'Guide',
+    'View model pricing': 'Voir les tarifs des modèles',
+    'Browse open-source work': 'Parcourir les projets open source',
+    'Read the guide': 'Lire le guide',
+    'At a glance': 'En bref',
+    'One endpoint': 'Un seul endpoint',
+    'OpenAI and Anthropic-compatible routes.':
+      'Routes compatibles avec OpenAI et Anthropic.',
+    'Clear pricing': 'Tarifs clairs',
+    'Choose the model and group before you spend.':
+      'Choisissez le modèle et le groupe avant de dépenser.',
+    'Human review': 'Relecture humaine',
+    'Support and access requests stay auditable.':
+      'Le support et les demandes d’accès restent auditables.',
+    'Use one clear API for your work, connect a client, or explore public open-source challenges.':
+      'Utilisez une API claire, connectez un client ou explorez des projets open source.',
     'Cost control': 'Contrôle des coûts',
     'Financial overview': 'Aperçu financier',
     Expenses: 'Dépenses',
@@ -279,8 +418,50 @@ const newKeys = {
     'User skills': 'Compétences utilisateur',
     'Security reviews': 'Revues de sécurité',
     'assistant.security_review': 'Revue de sécurité de l’assistant',
+    'Security audit details': 'Détails de l’audit de sécurité',
+    'Audit data is available to administrators only.':
+      'Les données d’audit sont réservées aux administrateurs.',
+    'Review results from deterministic rules and asynchronous AI audits. Prompt text, previews, matcher patterns, and credentials are never shown here.':
+      'Consultez les résultats des règles déterministes et des audits IA asynchrones. Les prompts, aperçus, motifs et identifiants ne sont jamais affichés ici.',
+    'Protected groups': 'Groupes protégés',
+    'Only groups listed by an enabled rule are included. Rules do not apply globally.':
+      'Seuls les groupes listés par une règle active sont inclus ; les règles ne sont pas globales.',
+    'No groups are currently covered by enabled advanced security rules.':
+      'Aucun groupe n’est actuellement couvert par les règles de sécurité avancées actives.',
+    'Only explicitly listed groups are covered by advanced security rules; rules do not apply globally.':
+      'Seuls les groupes explicitement listés sont couverts par les règles avancées ; elles ne sont pas globales.',
+    'No protected groups are published yet.': 'Aucun groupe protégé publié.',
+    'Deterministic rule': 'Règle déterministe',
+    'All categories': 'Toutes les catégories',
+    'All groups': 'Tous les groupes',
+    'All decisions': 'Toutes les décisions',
+    'All sources': 'Toutes les sources',
+    Violation: 'Violation',
+    Clear: 'Aucun problème',
+    Reviews: 'audits',
+    Abuse: 'Abus',
+    Occurred: 'Date',
+    'Review source': 'Source de l’audit',
+    'No security audit events match the current filters.':
+      'Aucun événement d’audit de sécurité ne correspond aux filtres actuels.',
   },
   ja: {
+    Guide: 'ガイド',
+    'View model pricing': 'モデル料金を見る',
+    'Browse open-source work': 'オープンソースの仕事を見る',
+    'Read the guide': 'ガイドを読む',
+    'At a glance': '概要',
+    'One endpoint': 'ひとつのエンドポイント',
+    'OpenAI and Anthropic-compatible routes.':
+      'OpenAI と Anthropic に対応したルート。',
+    'Clear pricing': '明確な料金',
+    'Choose the model and group before you spend.':
+      '利用前にモデルとグループを選べます。',
+    'Human review': '人による確認',
+    'Support and access requests stay auditable.':
+      'サポートとアクセス申請を監査可能に保ちます。',
+    'Use one clear API for your work, connect a client, or explore public open-source challenges.':
+      'ひとつの API で作業し、クライアントを接続し、公開オープンソースの課題を探せます。',
     'Cost control': 'コスト管理',
     'Financial overview': '財務概要',
     Expenses: '支出',
@@ -340,8 +521,51 @@ const newKeys = {
     'User skills': 'ユーザースキル',
     'Security reviews': 'セキュリティレビュー',
     'assistant.security_review': 'アシスタントのセキュリティレビュー',
+    'Security audit details': 'セキュリティ監査の詳細',
+    'Audit data is available to administrators only.':
+      '監査データは管理者のみ利用できます。',
+    'Review results from deterministic rules and asynchronous AI audits. Prompt text, previews, matcher patterns, and credentials are never shown here.':
+      '決定論的ルールと非同期 AI 監査の結果を確認します。プロンプト、プレビュー、照合パターン、認証情報は表示されません。',
+    'Protected groups': '保護対象グループ',
+    'Only groups listed by an enabled rule are included. Rules do not apply globally.':
+      '有効なルールに記載されたグループだけが対象です。ルールは全体には適用されません。',
+    'No groups are currently covered by enabled advanced security rules.':
+      '現在、有効な高度なセキュリティルールの対象グループはありません。',
+    'Only explicitly listed groups are covered by advanced security rules; rules do not apply globally.':
+      '明示的に記載されたグループだけが高度なセキュリティルールの対象です。全体には適用されません。',
+    'No protected groups are published yet.':
+      '保護対象グループはまだ公開されていません。',
+    'Deterministic rule': '決定論的ルール',
+    'All categories': 'すべてのカテゴリ',
+    'All groups': 'すべてのグループ',
+    'All decisions': 'すべての判定',
+    'All sources': 'すべてのソース',
+    Violation: '違反',
+    Clear: '問題なし',
+    Reviews: '件の監査',
+    Abuse: '悪用',
+    Occurred: '発生日時',
+    'Review source': '監査ソース',
+    'No security audit events match the current filters.':
+      '現在のフィルターに一致するセキュリティ監査イベントはありません。',
   },
   ru: {
+    Guide: 'Руководство',
+    'View model pricing': 'Посмотреть цены моделей',
+    'Browse open-source work': 'Открытые проекты',
+    'Read the guide': 'Открыть руководство',
+    'At a glance': 'Коротко',
+    'One endpoint': 'Одна точка доступа',
+    'OpenAI and Anthropic-compatible routes.':
+      'Маршруты, совместимые с OpenAI и Anthropic.',
+    'Clear pricing': 'Понятные цены',
+    'Choose the model and group before you spend.':
+      'Выберите модель и группу до начала расходов.',
+    'Human review': 'Проверка человеком',
+    'Support and access requests stay auditable.':
+      'Поддержка и запросы доступа остаются проверяемыми.',
+    'Use one clear API for your work, connect a client, or explore public open-source challenges.':
+      'Используйте единый API, подключайте клиент или изучайте открытые проекты.',
     'Cost control': 'Контроль затрат',
     'Financial overview': 'Финансовый обзор',
     Expenses: 'Расходы',
@@ -403,8 +627,51 @@ const newKeys = {
     'User skills': 'Навыки пользователя',
     'Security reviews': 'Проверки безопасности',
     'assistant.security_review': 'Проверка безопасности ассистента',
+    'Security audit details': 'Подробности аудита безопасности',
+    'Audit data is available to administrators only.':
+      'Данные аудита доступны только администраторам.',
+    'Review results from deterministic rules and asynchronous AI audits. Prompt text, previews, matcher patterns, and credentials are never shown here.':
+      'Результаты детерминированных правил и асинхронных проверок ИИ. Промпты, превью, шаблоны и учётные данные здесь не отображаются.',
+    'Protected groups': 'Защищённые группы',
+    'Only groups listed by an enabled rule are included. Rules do not apply globally.':
+      'Включаются только группы из активных правил; правила не применяются глобально.',
+    'No groups are currently covered by enabled advanced security rules.':
+      'Сейчас ни одна группа не покрыта активными расширенными правилами безопасности.',
+    'Only explicitly listed groups are covered by advanced security rules; rules do not apply globally.':
+      'Расширенные правила применяются только к явно указанным группам и не глобальны.',
+    'No protected groups are published yet.':
+      'Защищённые группы пока не опубликованы.',
+    'Deterministic rule': 'Детерминированное правило',
+    'All categories': 'Все категории',
+    'All groups': 'Все группы',
+    'All decisions': 'Все решения',
+    'All sources': 'Все источники',
+    Violation: 'Нарушение',
+    Clear: 'Нарушений нет',
+    Reviews: 'проверок',
+    Abuse: 'Злоупотребление',
+    Occurred: 'Время',
+    'Review source': 'Источник проверки',
+    'No security audit events match the current filters.':
+      'Нет событий аудита безопасности, соответствующих текущим фильтрам.',
   },
   vi: {
+    Guide: 'Hướng dẫn',
+    'View model pricing': 'Xem giá mô hình',
+    'Browse open-source work': 'Xem dự án mã nguồn mở',
+    'Read the guide': 'Đọc hướng dẫn',
+    'At a glance': 'Tổng quan nhanh',
+    'One endpoint': 'Một endpoint',
+    'OpenAI and Anthropic-compatible routes.':
+      'Các route tương thích với OpenAI và Anthropic.',
+    'Clear pricing': 'Giá rõ ràng',
+    'Choose the model and group before you spend.':
+      'Chọn model và nhóm trước khi phát sinh chi phí.',
+    'Human review': 'Đánh giá thủ công',
+    'Support and access requests stay auditable.':
+      'Hỗ trợ và yêu cầu truy cập luôn có thể kiểm tra.',
+    'Use one clear API for your work, connect a client, or explore public open-source challenges.':
+      'Dùng một API rõ ràng, kết nối client hoặc khám phá dự án mã nguồn mở.',
     'Cost control': 'Kiểm soát chi phí',
     'Financial overview': 'Tổng quan tài chính',
     Expenses: 'Chi phí',
@@ -464,6 +731,32 @@ const newKeys = {
     'User skills': 'Kỹ năng người dùng',
     'Security reviews': 'Đánh giá bảo mật',
     'assistant.security_review': 'Đánh giá bảo mật của trợ lý',
+    'Security audit details': 'Chi tiết kiểm tra bảo mật',
+    'Audit data is available to administrators only.':
+      'Dữ liệu kiểm tra chỉ dành cho quản trị viên.',
+    'Review results from deterministic rules and asynchronous AI audits. Prompt text, previews, matcher patterns, and credentials are never shown here.':
+      'Xem kết quả từ quy tắc xác định và kiểm tra AI không đồng bộ. Nội dung prompt, bản xem trước, mẫu khớp và thông tin xác thực không được hiển thị.',
+    'Protected groups': 'Nhóm được bảo vệ',
+    'Only groups listed by an enabled rule are included. Rules do not apply globally.':
+      'Chỉ các nhóm được liệt kê trong quy tắc đang bật mới được áp dụng; quy tắc không áp dụng toàn cục.',
+    'No groups are currently covered by enabled advanced security rules.':
+      'Hiện chưa có nhóm nào được các quy tắc bảo mật nâng cao đang bật bảo vệ.',
+    'Only explicitly listed groups are covered by advanced security rules; rules do not apply globally.':
+      'Chỉ các nhóm được nêu rõ mới được quy tắc bảo mật nâng cao bảo vệ; quy tắc không áp dụng toàn cục.',
+    'No protected groups are published yet.': 'Chưa công bố nhóm được bảo vệ.',
+    'Deterministic rule': 'Quy tắc xác định',
+    'All categories': 'Tất cả danh mục',
+    'All groups': 'Tất cả nhóm',
+    'All decisions': 'Tất cả quyết định',
+    'All sources': 'Tất cả nguồn',
+    Violation: 'Vi phạm',
+    Clear: 'Không vi phạm',
+    Reviews: 'lượt kiểm tra',
+    Abuse: 'Lạm dụng',
+    Occurred: 'Thời điểm',
+    'Review source': 'Nguồn kiểm tra',
+    'No security audit events match the current filters.':
+      'Không có sự kiện kiểm tra bảo mật phù hợp với bộ lọc hiện tại.',
   },
 }
 
@@ -2199,6 +2492,534 @@ for (const [locale, translations] of Object.entries(
 }
 
 for (const [locale, translations] of Object.entries(todoTranslations)) {
+  Object.assign(newKeys[locale], translations)
+}
+
+const drawingLayoutTranslations = {
+  en: {
+    'Be specific about the subject, mood, and style.':
+      'Be specific about the subject, mood, and style.',
+    'Generated images': 'Generated images',
+    'Describe an image, choose a group, and generate a preview.':
+      'Describe an image, choose a group, and generate a preview.',
+    'Search by username, name, or email': 'Search by username, name, or email',
+  },
+  zh: {
+    'Be specific about the subject, mood, and style.':
+      '可以补充主体、氛围和风格，让结果更贴近你的想法。',
+    'Generated images': '生成结果',
+    'Describe an image, choose a group, and generate a preview.':
+      '描述图片，选择分组，然后生成预览。',
+    'Search by username, name, or email': '按用户名、姓名或邮箱搜索',
+  },
+  'zh-TW': {
+    'Be specific about the subject, mood, and style.':
+      '可以補充主體、氛圍和風格，讓結果更貼近你的想法。',
+    'Generated images': '生成結果',
+    'Describe an image, choose a group, and generate a preview.':
+      '描述圖片、選擇分組，然後生成預覽。',
+    'Search by username, name, or email': '按使用者名稱、姓名或電子郵件搜尋',
+  },
+  fr: {
+    'Be specific about the subject, mood, and style.':
+      'Précisez le sujet, l’ambiance et le style.',
+    'Generated images': 'Images générées',
+    'Describe an image, choose a group, and generate a preview.':
+      'Décrivez une image, choisissez un groupe, puis générez un aperçu.',
+    'Search by username, name, or email':
+      "Rechercher par nom d'utilisateur, nom ou e-mail",
+  },
+  ja: {
+    'Be specific about the subject, mood, and style.':
+      '被写体、雰囲気、スタイルを具体的に指定してください。',
+    'Generated images': '生成結果',
+    'Describe an image, choose a group, and generate a preview.':
+      '画像を説明し、グループを選んでプレビューを生成します。',
+    'Search by username, name, or email':
+      'ユーザー名、氏名、メールアドレスで検索',
+  },
+  ru: {
+    'Be specific about the subject, mood, and style.':
+      'Уточните объект, настроение и стиль.',
+    'Generated images': 'Созданные изображения',
+    'Describe an image, choose a group, and generate a preview.':
+      'Опишите изображение, выберите группу и создайте предварительный просмотр.',
+    'Search by username, name, or email':
+      'Поиск по имени пользователя, имени или электронной почте',
+  },
+  vi: {
+    'Be specific about the subject, mood, and style.':
+      'Hãy nêu rõ chủ thể, không khí và phong cách.',
+    'Generated images': 'Ảnh đã tạo',
+    'Describe an image, choose a group, and generate a preview.':
+      'Mô tả hình ảnh, chọn nhóm rồi tạo bản xem trước.',
+    'Search by username, name, or email':
+      'Tìm theo tên người dùng, tên hoặc email',
+  },
+}
+for (const [locale, translations] of Object.entries(
+  drawingLayoutTranslations
+)) {
+  Object.assign(newKeys[locale], translations)
+}
+
+const registrationChannelTranslations = {
+  en: {
+    'Registration channels': 'Registration channels',
+    'Disable selected OAuth channels for new registrations only. Existing users can still sign in with them.':
+      'Disable selected OAuth channels for new registrations only. Existing users can still sign in with them.',
+    'Allow new accounts through {{method}}':
+      'Allow new accounts through {{method}}',
+  },
+  zh: {
+    'Registration channels': '注册渠道',
+    'Disable selected OAuth channels for new registrations only. Existing users can still sign in with them.':
+      '仅对新注册停用所选 OAuth 渠道，现有用户仍可使用这些渠道登录。',
+    'Allow new accounts through {{method}}': '允许通过 {{method}} 创建新账号',
+  },
+  'zh-TW': {
+    'Registration channels': '註冊管道',
+    'Disable selected OAuth channels for new registrations only. Existing users can still sign in with them.':
+      '僅對新註冊停用所選 OAuth 管道，現有使用者仍可使用這些管道登入。',
+    'Allow new accounts through {{method}}': '允許透過 {{method}} 建立新帳號',
+  },
+  fr: {
+    'Registration channels': "Canaux d'inscription",
+    'Disable selected OAuth channels for new registrations only. Existing users can still sign in with them.':
+      'Désactiver les canaux OAuth sélectionnés uniquement pour les nouvelles inscriptions. Les comptes existants peuvent toujours s’y connecter.',
+    'Allow new accounts through {{method}}':
+      'Autoriser la création de comptes via {{method}}',
+  },
+  ja: {
+    'Registration channels': '登録チャネル',
+    'Disable selected OAuth channels for new registrations only. Existing users can still sign in with them.':
+      '選択した OAuth チャネルを新規登録にのみ無効化します。既存ユーザーは引き続きこれらのチャネルでログインできます。',
+    'Allow new accounts through {{method}}':
+      '{{method}} で新しいアカウントを作成可能',
+  },
+  ru: {
+    'Registration channels': 'Каналы регистрации',
+    'Disable selected OAuth channels for new registrations only. Existing users can still sign in with them.':
+      'Отключает выбранные OAuth-каналы только для новых регистраций. Существующие пользователи по-прежнему могут входить через них.',
+    'Allow new accounts through {{method}}':
+      'Разрешить создание новых аккаунтов через {{method}}',
+  },
+  vi: {
+    'Registration channels': 'Kênh đăng ký',
+    'Disable selected OAuth channels for new registrations only. Existing users can still sign in with them.':
+      'Tắt các kênh OAuth đã chọn chỉ đối với đăng ký mới. Người dùng hiện tại vẫn có thể đăng nhập bằng các kênh này.',
+    'Allow new accounts through {{method}}':
+      'Cho phép tạo tài khoản mới qua {{method}}',
+  },
+}
+for (const [locale, translations] of Object.entries(
+  registrationChannelTranslations
+)) {
+  Object.assign(newKeys[locale], translations)
+}
+
+const reasoningEffortTranslations = {
+  en: {
+    'Auto (model default)': 'Auto (model default)',
+    'None (no reasoning)': 'None (no reasoning)',
+    Low: 'Low',
+    Medium: 'Medium',
+    High: 'High',
+    'Controls the default reasoning hint sent with assistant requests. Auto lets each model use its native default.':
+      'Controls the default reasoning hint sent with assistant requests. Auto lets each model use its native default.',
+  },
+  zh: {
+    'Auto (model default)': '自动（使用模型默认值）',
+    'None (no reasoning)': '无（不启用思考）',
+    Low: '低',
+    Medium: '中',
+    High: '高',
+    'Controls the default reasoning hint sent with assistant requests. Auto lets each model use its native default.':
+      '控制助手请求的默认思考提示。自动模式会使用每个模型的原生默认值。',
+  },
+  'zh-TW': {
+    'Auto (model default)': '自動（使用模型預設值）',
+    'None (no reasoning)': '無（不啟用推理）',
+    Low: '低',
+    Medium: '中',
+    High: '高',
+    'Controls the default reasoning hint sent with assistant requests. Auto lets each model use its native default.':
+      '控制助手請求的預設推理提示。自動模式會使用每個模型的原生預設值。',
+  },
+  fr: {
+    'Auto (model default)': 'Automatique (valeur du modèle)',
+    'None (no reasoning)': 'Aucun (sans raisonnement)',
+    Low: 'Faible',
+    Medium: 'Moyen',
+    High: 'Élevé',
+    'Controls the default reasoning hint sent with assistant requests. Auto lets each model use its native default.':
+      'Contrôle l’indication de raisonnement par défaut des requêtes. Le mode automatique utilise la valeur native de chaque modèle.',
+  },
+  ja: {
+    'Auto (model default)': '自動（モデルの既定値）',
+    'None (no reasoning)': 'なし（推論しない）',
+    Low: '低',
+    Medium: '中',
+    High: '高',
+    'Controls the default reasoning hint sent with assistant requests. Auto lets each model use its native default.':
+      'アシスタント要求に送る既定の推論ヒントを制御します。自動では各モデルの既定値を使用します。',
+  },
+  ru: {
+    'Auto (model default)': 'Авто (настройка модели)',
+    'None (no reasoning)': 'Нет (без рассуждений)',
+    Low: 'Низкая',
+    Medium: 'Средняя',
+    High: 'Высокая',
+    'Controls the default reasoning hint sent with assistant requests. Auto lets each model use its native default.':
+      'Задаёт подсказку для рассуждений в запросах помощника. Режим «Авто» использует значение модели.',
+  },
+  vi: {
+    'Auto (model default)': 'Tự động (mặc định của mô hình)',
+    'None (no reasoning)': 'Không (không suy luận)',
+    Low: 'Thấp',
+    Medium: 'Trung bình',
+    High: 'Cao',
+    'Controls the default reasoning hint sent with assistant requests. Auto lets each model use its native default.':
+      'Điều khiển gợi ý suy luận mặc định trong yêu cầu trợ lý. Tự động sẽ dùng mặc định gốc của từng mô hình.',
+  },
+}
+for (const [locale, translations] of Object.entries(
+  reasoningEffortTranslations
+)) {
+  Object.assign(newKeys[locale], translations)
+}
+
+const requestReviewTranslations = {
+  en: {
+    Violations: 'Violations',
+    'Assistant review logs': 'Assistant review logs',
+    'Current violations': 'Current violations',
+    'Unable to load review logs': 'Unable to load review logs',
+    'Unable to reset violations': 'Unable to reset violations',
+    'Violation count reset': 'Violation count reset',
+    'No sampled reviews': 'No sampled reviews',
+    Violation: 'Violation',
+    'No violation': 'No violation',
+    'Possible abuse': 'Possible abuse',
+    'Default group': 'Default group',
+    Rules: 'Rules',
+    Explanation: 'Explanation',
+    'Request preview': 'Request preview',
+    'Resetting...': 'Resetting...',
+    'Reset count': 'Reset count',
+    'Per-request review probability (%)': 'Per-request review probability (%)',
+    '0 disables sampled reviews. 1.0 means roughly one percent; reviews run in the background and never delay the response.':
+      '0 disables sampled reviews. 1.0 means roughly one percent; reviews run in the background and never delay the response.',
+    'Review model': 'Review model',
+    'Use an exact billable model ID. The default is deepseek-v4-flash.':
+      'Use an exact billable model ID. The default is deepseek-v4-flash.',
+    'Per-group review policies': 'Per-group review policies',
+    'Optional JSON keyed by routing group. Each value accepts probability 0–100 and intensity off, low, standard, or high. Unlisted groups use the global probability.':
+      'Optional JSON keyed by routing group. Each value accepts probability 0–100 and intensity off, low, standard, or high. Unlisted groups use the global probability.',
+  },
+  zh: {
+    Violations: '违规次数',
+    'Assistant review logs': '助手审查日志',
+    'Current violations': '当前违规次数',
+    'Unable to load review logs': '无法加载审查日志',
+    'Unable to reset violations': '无法重置违规次数',
+    'Violation count reset': '违规次数已重置',
+    'No sampled reviews': '暂无抽样审查记录',
+    Violation: '违规',
+    'No violation': '未发现违规',
+    'Possible abuse': '可能滥用',
+    'Default group': '默认分组',
+    Rules: '规则',
+    Explanation: '说明',
+    'Request preview': '请求摘要',
+    'Resetting...': '重置中……',
+    'Reset count': '重置计数',
+    'Per-request review probability (%)': '每请求审查概率（%）',
+    '0 disables sampled reviews. 1.0 means roughly one percent; reviews run in the background and never delay the response.':
+      '0 表示关闭抽样审查；1.0 约等于 1%。审查在后台运行，不会延迟响应。',
+    'Review model': '审查模型',
+    'Use an exact billable model ID. The default is deepseek-v4-flash.':
+      '填写准确且已计费的模型 ID，默认使用 deepseek-v4-flash。',
+    'Per-group review policies': '分组审查策略',
+    'Optional JSON keyed by routing group. Each value accepts probability 0–100 and intensity off, low, standard, or high. Unlisted groups use the global probability.':
+      '可选 JSON，键为路由分组。每项支持 0–100 的概率及 off、low、standard、high 强度；未列出的分组使用全局概率。',
+  },
+  'zh-TW': {
+    Violations: '違規次數',
+    'Assistant review logs': '助手審查日誌',
+    'Current violations': '目前違規次數',
+    'Unable to load review logs': '無法載入審查日誌',
+    'Unable to reset violations': '無法重置違規次數',
+    'Violation count reset': '違規次數已重置',
+    'No sampled reviews': '尚無抽樣審查記錄',
+    Violation: '違規',
+    'No violation': '未發現違規',
+    'Possible abuse': '可能濫用',
+    'Default group': '預設分組',
+    Rules: '規則',
+    Explanation: '說明',
+    'Request preview': '請求摘要',
+    'Resetting...': '重置中……',
+    'Reset count': '重置計數',
+    'Per-request review probability (%)': '每次請求審查機率（%）',
+    '0 disables sampled reviews. 1.0 means roughly one percent; reviews run in the background and never delay the response.':
+      '0 表示停用抽樣審查；1.0 約等於 1%。審查在背景執行，不會延遲回應。',
+    'Review model': '審查模型',
+    'Use an exact billable model ID. The default is deepseek-v4-flash.':
+      '請填寫準確且可計費的模型 ID，預設使用 deepseek-v4-flash。',
+    'Per-group review policies': '分組審查策略',
+    'Optional JSON keyed by routing group. Each value accepts probability 0–100 and intensity off, low, standard, or high. Unlisted groups use the global probability.':
+      '可選 JSON，鍵為路由分組。每項支援 0–100 的機率及 off、low、standard、high 強度；未列出的分組使用全域機率。',
+  },
+  fr: {
+    Violations: 'Infractions',
+    'Assistant review logs': 'Journaux de contrôle de l’assistant',
+    'Current violations': 'Infractions actuelles',
+    'Unable to load review logs': 'Impossible de charger les journaux',
+    'Unable to reset violations': 'Impossible de réinitialiser les infractions',
+    'Violation count reset': 'Compteur d’infractions réinitialisé',
+    'No sampled reviews': 'Aucun contrôle échantillonné',
+    Violation: 'Infraction',
+    'No violation': 'Aucune infraction',
+    'Possible abuse': 'Abus possible',
+    'Default group': 'Groupe par défaut',
+    Rules: 'Règles',
+    Explanation: 'Explication',
+    'Request preview': 'Aperçu de la requête',
+    'Resetting...': 'Réinitialisation…',
+    'Reset count': 'Réinitialiser le compteur',
+    'Per-request review probability (%)':
+      'Probabilité de contrôle par requête (%)',
+    '0 disables sampled reviews. 1.0 means roughly one percent; reviews run in the background and never delay the response.':
+      '0 désactive les contrôles échantillonnés. 1,0 correspond à environ 1 % ; ils s’exécutent en arrière-plan sans retarder la réponse.',
+    'Review model': 'Modèle de contrôle',
+    'Use an exact billable model ID. The default is deepseek-v4-flash.':
+      'Utilisez un identifiant de modèle facturable exact. La valeur par défaut est deepseek-v4-flash.',
+    'Per-group review policies': 'Politiques de contrôle par groupe',
+    'Optional JSON keyed by routing group. Each value accepts probability 0–100 and intensity off, low, standard, or high. Unlisted groups use the global probability.':
+      'JSON facultatif indexé par groupe de routage. Chaque valeur accepte une probabilité de 0 à 100 et une intensité off, low, standard ou high. Les groupes absents utilisent la probabilité globale.',
+  },
+  ja: {
+    Violations: '違反回数',
+    'Assistant review logs': 'アシスタント審査ログ',
+    'Current violations': '現在の違反回数',
+    'Unable to load review logs': '審査ログを読み込めません',
+    'Unable to reset violations': '違反回数をリセットできません',
+    'Violation count reset': '違反回数をリセットしました',
+    'No sampled reviews': '抽出審査の記録はありません',
+    Violation: '違反',
+    'No violation': '違反なし',
+    'Possible abuse': '不正利用の可能性',
+    'Default group': '既定のグループ',
+    Rules: 'ルール',
+    Explanation: '説明',
+    'Request preview': 'リクエスト概要',
+    'Resetting...': 'リセット中…',
+    'Reset count': '回数をリセット',
+    'Per-request review probability (%)': 'リクエストごとの審査確率（%）',
+    '0 disables sampled reviews. 1.0 means roughly one percent; reviews run in the background and never delay the response.':
+      '0 で抽出審査を無効にします。1.0 は約 1% です。審査はバックグラウンドで実行され、応答を遅延させません。',
+    'Review model': '審査モデル',
+    'Use an exact billable model ID. The default is deepseek-v4-flash.':
+      '課金対象の正確なモデル ID を指定します。既定値は deepseek-v4-flash です。',
+    'Per-group review policies': 'グループ別審査ポリシー',
+    'Optional JSON keyed by routing group. Each value accepts probability 0–100 and intensity off, low, standard, or high. Unlisted groups use the global probability.':
+      'ルーティンググループをキーにした任意の JSON です。確率 0～100 と強度 off、low、standard、high を指定できます。未指定のグループは全体の確率を使います。',
+  },
+  ru: {
+    Violations: 'Нарушения',
+    'Assistant review logs': 'Журналы проверки помощника',
+    'Current violations': 'Текущие нарушения',
+    'Unable to load review logs': 'Не удалось загрузить журналы',
+    'Unable to reset violations': 'Не удалось сбросить нарушения',
+    'Violation count reset': 'Счётчик нарушений сброшен',
+    'No sampled reviews': 'Выборочных проверок нет',
+    Violation: 'Нарушение',
+    'No violation': 'Нарушений нет',
+    'Possible abuse': 'Возможное злоупотребление',
+    'Default group': 'Группа по умолчанию',
+    Rules: 'Правила',
+    Explanation: 'Пояснение',
+    'Request preview': 'Предпросмотр запроса',
+    'Resetting...': 'Сброс…',
+    'Reset count': 'Сбросить счётчик',
+    'Per-request review probability (%)': 'Вероятность проверки запроса (%)',
+    '0 disables sampled reviews. 1.0 means roughly one percent; reviews run in the background and never delay the response.':
+      '0 отключает выборочные проверки. 1,0 означает примерно 1%; проверки выполняются в фоне и не задерживают ответ.',
+    'Review model': 'Модель проверки',
+    'Use an exact billable model ID. The default is deepseek-v4-flash.':
+      'Укажите точный идентификатор оплачиваемой модели. По умолчанию используется deepseek-v4-flash.',
+    'Per-group review policies': 'Политики проверки по группам',
+    'Optional JSON keyed by routing group. Each value accepts probability 0–100 and intensity off, low, standard, or high. Unlisted groups use the global probability.':
+      'Необязательный JSON с ключами групп маршрутизации. Для каждой записи задаются вероятность 0–100 и интенсивность off, low, standard или high. Для остальных групп используется общая вероятность.',
+  },
+  vi: {
+    Violations: 'Số lần vi phạm',
+    'Assistant review logs': 'Nhật ký kiểm duyệt trợ lý',
+    'Current violations': 'Số vi phạm hiện tại',
+    'Unable to load review logs': 'Không thể tải nhật ký kiểm duyệt',
+    'Unable to reset violations': 'Không thể đặt lại số lần vi phạm',
+    'Violation count reset': 'Đã đặt lại số lần vi phạm',
+    'No sampled reviews': 'Chưa có kiểm duyệt lấy mẫu',
+    Violation: 'Vi phạm',
+    'No violation': 'Không vi phạm',
+    'Possible abuse': 'Có thể lạm dụng',
+    'Default group': 'Nhóm mặc định',
+    Rules: 'Quy tắc',
+    Explanation: 'Giải thích',
+    'Request preview': 'Tóm tắt yêu cầu',
+    'Resetting...': 'Đang đặt lại…',
+    'Reset count': 'Đặt lại số lần',
+    'Per-request review probability (%)': 'Xác suất kiểm duyệt mỗi yêu cầu (%)',
+    '0 disables sampled reviews. 1.0 means roughly one percent; reviews run in the background and never delay the response.':
+      '0 tắt kiểm duyệt lấy mẫu. 1.0 tương đương khoảng 1%; kiểm duyệt chạy nền và không làm chậm phản hồi.',
+    'Review model': 'Model kiểm duyệt',
+    'Use an exact billable model ID. The default is deepseek-v4-flash.':
+      'Dùng đúng ID model có tính phí. Mặc định là deepseek-v4-flash.',
+    'Per-group review policies': 'Chính sách kiểm duyệt theo nhóm',
+    'Optional JSON keyed by routing group. Each value accepts probability 0–100 and intensity off, low, standard, or high. Unlisted groups use the global probability.':
+      'JSON tùy chọn với khóa là nhóm định tuyến. Mỗi mục nhận xác suất 0–100 và cường độ off, low, standard hoặc high. Nhóm chưa liệt kê dùng xác suất toàn cục.',
+  },
+}
+
+for (const [locale, translations] of Object.entries(
+  requestReviewTranslations
+)) {
+  Object.assign(newKeys[locale], translations)
+}
+
+const assistantReviewSummaryTranslations = {
+  en: {
+    'No completed assistant review is available yet.':
+      'No completed assistant review is available yet.',
+    Profiles: 'Profiles',
+    'Pending support': 'Pending support',
+    'Clicks / conversations / approvals': 'Clicks / conversations / approvals',
+    Commerce: 'Commerce',
+    'Chat users': 'Chat users',
+    'Paid users': 'Paid users',
+    'Conversion rate': 'Conversion rate',
+    Refunds: 'Refunds',
+    'Security audit': 'Security audit',
+    Matches: 'Matches',
+    'This run contains aggregate assistant metrics only. Detailed security and commerce sections will appear after the backend update.':
+      'This run contains aggregate assistant metrics only. Detailed security and commerce sections will appear after the backend update.',
+    assistant_review: 'Assistant review',
+    Decision: 'Decision',
+  },
+  zh: {
+    'No completed assistant review is available yet.': '暂无已完成的 AI 复盘。',
+    Profiles: '用户画像',
+    'Pending support': '待处理客服',
+    'Clicks / conversations / approvals': '点击 / 对话 / 推荐信 / 批准',
+    Commerce: '业务转化',
+    'Chat users': '对话用户',
+    'Paid users': '付费用户',
+    'Conversion rate': '转化率',
+    Refunds: '退款',
+    'Security audit': '安全审查',
+    Matches: '匹配数',
+    'This run contains aggregate assistant metrics only. Detailed security and commerce sections will appear after the backend update.':
+      '本次复盘目前只有聚合指标；后端升级后会显示更详细的安全与业务数据。',
+    assistant_review: 'AI 复盘',
+    Decision: '判定',
+  },
+  'zh-TW': {
+    'No completed assistant review is available yet.': '尚無已完成的 AI 複盤。',
+    Profiles: '使用者畫像',
+    'Pending support': '待處理客服',
+    'Clicks / conversations / approvals': '點擊 / 對話 / 推薦信 / 核准',
+    Commerce: '業務轉化',
+    'Chat users': '對話使用者',
+    'Paid users': '付費使用者',
+    'Conversion rate': '轉化率',
+    Refunds: '退款',
+    'Security audit': '安全稽核',
+    Matches: '匹配數',
+    'This run contains aggregate assistant metrics only. Detailed security and commerce sections will appear after the backend update.':
+      '本次複盤目前只有彙總指標；後端升級後會顯示更詳細的安全與業務資料。',
+    assistant_review: 'AI 複盤',
+    Decision: '判定',
+  },
+  fr: {
+    'No completed assistant review is available yet.':
+      'Aucune revue de l’assistant terminée pour le moment.',
+    Profiles: 'Profils',
+    'Pending support': 'Support en attente',
+    'Clicks / conversations / approvals': 'Clics / conversations / validations',
+    Commerce: 'Activité commerciale',
+    'Chat users': 'Utilisateurs du chat',
+    'Paid users': 'Utilisateurs payants',
+    'Conversion rate': 'Taux de conversion',
+    Refunds: 'Remboursements',
+    'Security audit': 'Audit de sécurité',
+    Matches: 'Correspondances',
+    'This run contains aggregate assistant metrics only. Detailed security and commerce sections will appear after the backend update.':
+      'Cette revue ne contient que des indicateurs agrégés ; les détails sécurité et commerce apparaîtront après la mise à jour du backend.',
+    assistant_review: 'Revue de l’assistant',
+    Decision: 'Décision',
+  },
+  ja: {
+    'No completed assistant review is available yet.':
+      '完了したアシスタントレビューはまだありません。',
+    Profiles: 'ユーザープロファイル',
+    'Pending support': '対応待ちサポート',
+    'Clicks / conversations / approvals': 'クリック / 会話 / 推薦 / 承認',
+    Commerce: '利用・購入状況',
+    'Chat users': 'チャット利用者',
+    'Paid users': '有料利用者',
+    'Conversion rate': '転換率',
+    Refunds: '返金',
+    'Security audit': 'セキュリティ監査',
+    Matches: '一致数',
+    'This run contains aggregate assistant metrics only. Detailed security and commerce sections will appear after the backend update.':
+      '今回のレビューは集計指標のみです。バックエンド更新後にセキュリティと利用状況の詳細が表示されます。',
+    assistant_review: 'アシスタントレビュー',
+    Decision: '判定',
+  },
+  ru: {
+    'No completed assistant review is available yet.':
+      'Завершённых проверок помощника пока нет.',
+    Profiles: 'Профили',
+    'Pending support': 'Ожидающая поддержка',
+    'Clicks / conversations / approvals':
+      'Клики / диалоги / рекомендации / одобрения',
+    Commerce: 'Коммерция',
+    'Chat users': 'Пользователи чата',
+    'Paid users': 'Платящие пользователи',
+    'Conversion rate': 'Конверсия',
+    Refunds: 'Возвраты',
+    'Security audit': 'Аудит безопасности',
+    Matches: 'Совпадения',
+    'This run contains aggregate assistant metrics only. Detailed security and commerce sections will appear after the backend update.':
+      'Эта проверка содержит только агрегированные показатели; подробности безопасности и коммерции появятся после обновления backend.',
+    assistant_review: 'Проверка помощника',
+    Decision: 'Решение',
+  },
+  vi: {
+    'No completed assistant review is available yet.':
+      'Chưa có phiên đánh giá trợ lý nào hoàn tất.',
+    Profiles: 'Hồ sơ',
+    'Pending support': 'Hỗ trợ đang chờ',
+    'Clicks / conversations / approvals':
+      'Lượt nhấp / hội thoại / đề xuất / phê duyệt',
+    Commerce: 'Thương mại',
+    'Chat users': 'Người dùng trò chuyện',
+    'Paid users': 'Người dùng trả phí',
+    'Conversion rate': 'Tỷ lệ chuyển đổi',
+    Refunds: 'Hoàn tiền',
+    'Security audit': 'Kiểm toán bảo mật',
+    Matches: 'Lượt khớp',
+    'This run contains aggregate assistant metrics only. Detailed security and commerce sections will appear after the backend update.':
+      'Lần đánh giá này chỉ có chỉ số tổng hợp; chi tiết bảo mật và thương mại sẽ xuất hiện sau khi backend được cập nhật.',
+    assistant_review: 'Đánh giá trợ lý',
+    Decision: 'Kết luận',
+  },
+}
+
+for (const [locale, translations] of Object.entries(
+  assistantReviewSummaryTranslations
+)) {
   Object.assign(newKeys[locale], translations)
 }
 

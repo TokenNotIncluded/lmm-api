@@ -58,6 +58,7 @@ export type SecurityPolicy = {
     on_prompt: boolean
     action: 'block' | 'audit'
   }
+  protected_groups?: string[]
   risk_categories: SecurityRiskCategory[]
   rules: SecurityRuleSummary[]
   violation_fees: SecurityViolationFeeRule[]

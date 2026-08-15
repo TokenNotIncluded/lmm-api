@@ -3,6 +3,7 @@ package controller
 import (
 	"bytes"
 	"errors"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -163,6 +164,66 @@ func ListAdminSecurityEvents(c *gin.Context) {
 	common.ApiSuccess(c, pageInfo)
 }
 
+// ListAdminAssistantSecurityReviews exposes the asynchronous AI-review lane
+// through Advanced Security. It returns bounded security metadata only; raw
+// request/response previews remain behind the assistant-history ACL.
+func ListAdminAssistantSecurityReviews(c *gin.Context) {
+	filter, err := parseAdvancedSecurityEventFilter(c, false)
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	pageInfo := common.GetPageQuery(c)
+	violationsOnly := strings.EqualFold(strings.TrimSpace(c.Query("violations_only")), "true") || filter.Decision == "violation"
+	clearOnly := filter.Decision == "clear"
+	rows, total, err := model.ListAssistantRequestReviewsForSecurity(model.AssistantRequestReviewFilter{
+		StartTimestamp: filter.StartTimestamp,
+		EndTimestamp:   filter.EndTimestamp,
+		UserID:         filter.UserID,
+		Group:          filter.Group,
+		ViolationsOnly: violationsOnly,
+		ClearOnly:      clearOnly,
+		Limit:          pageInfo.GetPageSize(),
+		Offset:         pageInfo.GetStartIdx(),
+	})
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	items := make([]dto.AdvancedSecurityAIReview, 0, len(rows))
+	actorRole := c.GetInt("role")
+	actorID := c.GetInt("id")
+	for _, row := range rows {
+		item := dto.AdvancedSecurityAIReview{
+			ID: row.ID, CreatedAt: row.CreatedAt, RequestID: row.RequestID,
+			UserID: row.UserID, Group: row.Group, ReviewModel: row.ReviewModel,
+			Intensity: row.Intensity, Status: row.Status, Violation: row.Violation,
+			Abuse: row.Abuse, Rules: row.Rules,
+		}
+		canSeeExplanation := actorRole >= common.RoleRootUser || row.UserID == actorID
+		if !canSeeExplanation && row.UserID > 0 {
+			if target, targetErr := model.GetUserById(row.UserID, false); targetErr == nil {
+				canSeeExplanation = canManageTargetRole(actorRole, target.Role)
+			}
+		}
+		if canSeeExplanation {
+			item.Explanation = row.Explanation
+		} else {
+			item.RequestID = ""
+			item.UserID = 0
+			item.Rules = nil
+		}
+		items = append(items, item)
+	}
+	common.ApiSuccess(c, gin.H{
+		"items":     items,
+		"total":     total,
+		"page":      pageInfo.GetPage(),
+		"page_size": pageInfo.GetPageSize(),
+		"available": model.AssistantRequestReviewTablesAvailable(),
+	})
+}
+
 func buildPublicSecurityPolicy() dto.PublicSecurityPolicy {
 	settings := setting.GetAdvancedSecuritySettings()
 	categories := setting.GetAdvancedSecurityRiskCategories()
@@ -233,10 +294,35 @@ func buildPublicSecurityPolicy() dto.PublicSecurityPolicy {
 			OnPrompt: settings.OnPrompt,
 			Action:   settings.Action,
 		},
-		RiskCategories: categoryDTOs,
-		Rules:          publicRules,
-		ViolationFees:  violationFees,
+		ProtectedGroups: advancedSecurityProtectedGroups(settings),
+		RiskCategories:  categoryDTOs,
+		Rules:           publicRules,
+		ViolationFees:   violationFees,
 	}
+}
+
+func advancedSecurityProtectedGroups(settings setting.AdvancedSecuritySettings) []string {
+	if !settings.Enabled {
+		return []string{}
+	}
+	seen := make(map[string]struct{})
+	for _, rule := range settings.RuleSet.Rules {
+		if !rule.Enabled {
+			continue
+		}
+		for _, group := range rule.Groups {
+			group = strings.TrimSpace(group)
+			if group != "" {
+				seen[group] = struct{}{}
+			}
+		}
+	}
+	groups := make([]string, 0, len(seen))
+	for group := range seen {
+		groups = append(groups, group)
+	}
+	sort.Strings(groups)
+	return groups
 }
 
 func violationFeeSettingsDTO() dto.SecurityViolationFeeSettings {
@@ -276,6 +362,15 @@ func buildSecurityStatsDTO(stats model.AdvancedSecurityStats, start, end int64, 
 		result.ByRule = make([]dto.SecurityStatBucket, 0, len(stats.ByRule))
 		for _, bucket := range stats.ByRule {
 			result.ByRule = append(result.ByRule, dto.SecurityStatBucket{Key: bucket.Key, Count: bucket.Count})
+		}
+		result.AIReview = &dto.AISecurityReviewStats{
+			Total: stats.AIReview.Total, Completed: stats.AIReview.Completed,
+			Violations: stats.AIReview.Violations, Abuses: stats.AIReview.Abuses,
+			Failed:  stats.AIReview.Failed,
+			ByGroup: make([]dto.SecurityStatBucket, 0, len(stats.AIReview.ByGroup)),
+		}
+		for _, bucket := range stats.AIReview.ByGroup {
+			result.AIReview.ByGroup = append(result.AIReview.ByGroup, dto.SecurityStatBucket{Key: bucket.Key, Count: bucket.Count})
 		}
 	}
 	return result
@@ -327,10 +422,12 @@ func parseAdvancedSecurityEventFilter(c *gin.Context, includePaging bool) (model
 	}
 	filter.RuleID = strings.TrimSpace(c.Query("rule_id"))
 	filter.Category = strings.ToLower(strings.TrimSpace(c.Query("category")))
+	filter.Group = strings.TrimSpace(c.Query("group"))
+	filter.Source = strings.ToLower(strings.TrimSpace(c.Query("source")))
 	filter.ModelName = strings.TrimSpace(c.Query("model_name"))
 	filter.Decision = strings.ToLower(strings.TrimSpace(c.Query("decision")))
-	if filter.Decision != "" && filter.Decision != model.AdvancedSecurityDecisionBlocked && filter.Decision != model.AdvancedSecurityDecisionAudited {
-		return filter, errors.New("decision must be blocked or audited")
+	if filter.Decision != "" && filter.Decision != model.AdvancedSecurityDecisionBlocked && filter.Decision != model.AdvancedSecurityDecisionAudited && filter.Decision != "violation" && filter.Decision != "clear" {
+		return filter, errors.New("decision must be blocked, audited, violation, or clear")
 	}
 	if includePaging {
 		pageInfo := common.GetPageQuery(c)

@@ -58,14 +58,18 @@ type SecurityViolationFeeSettings struct {
 }
 
 type PublicSecurityPolicy struct {
-	PolicyVersion          string                     `json:"policy_version"`
-	ReferenceEffectiveDate string                     `json:"reference_effective_date"`
-	ReferenceURL           string                     `json:"reference_url"`
-	Alignment              string                     `json:"alignment"`
-	Enforcement            SecuritySettings           `json:"enforcement"`
-	RiskCategories         []SecurityRiskCategory     `json:"risk_categories"`
-	Rules                  []SecurityRuleSummary      `json:"rules"`
-	ViolationFees          []SecurityViolationFeeRule `json:"violation_fees"`
+	PolicyVersion          string           `json:"policy_version"`
+	ReferenceEffectiveDate string           `json:"reference_effective_date"`
+	ReferenceURL           string           `json:"reference_url"`
+	Alignment              string           `json:"alignment"`
+	Enforcement            SecuritySettings `json:"enforcement"`
+	// ProtectedGroups is the explicit union of groups covered by enabled
+	// rules.  It is safe to publish because it contains no matcher text or
+	// request/user data and makes the group boundary visible to operators.
+	ProtectedGroups []string                   `json:"protected_groups"`
+	RiskCategories  []SecurityRiskCategory     `json:"risk_categories"`
+	Rules           []SecurityRuleSummary      `json:"rules"`
+	ViolationFees   []SecurityViolationFeeRule `json:"violation_fees"`
 }
 
 type SecuritySettings struct {
@@ -94,15 +98,28 @@ type SecurityStatBucket struct {
 }
 
 type SecurityStats struct {
-	StartTimestamp   int64                `json:"start_timestamp"`
-	EndTimestamp     int64                `json:"end_timestamp"`
-	TotalMatches     int64                `json:"total_matches"`
-	BlockedMatches   int64                `json:"blocked_matches"`
-	AuditedMatches   int64                `json:"audited_matches"`
-	AffectedRequests int64                `json:"affected_requests"`
-	AffectedUsers    int64                `json:"affected_users"`
-	ByCategory       []SecurityStatBucket `json:"by_category"`
-	ByRule           []SecurityStatBucket `json:"by_rule,omitempty"`
+	StartTimestamp   int64                  `json:"start_timestamp"`
+	EndTimestamp     int64                  `json:"end_timestamp"`
+	TotalMatches     int64                  `json:"total_matches"`
+	BlockedMatches   int64                  `json:"blocked_matches"`
+	AuditedMatches   int64                  `json:"audited_matches"`
+	AffectedRequests int64                  `json:"affected_requests"`
+	AffectedUsers    int64                  `json:"affected_users"`
+	ByCategory       []SecurityStatBucket   `json:"by_category"`
+	ByRule           []SecurityStatBucket   `json:"by_rule,omitempty"`
+	AIReview         *AISecurityReviewStats `json:"ai_review,omitempty"`
+}
+
+// AISecurityReviewStats summarizes the asynchronous assistant review lane.
+// It is deliberately separate from literal-rule match counts so the two
+// detection mechanisms are not presented as if they were the same signal.
+type AISecurityReviewStats struct {
+	Total      int64                `json:"total"`
+	Completed  int64                `json:"completed"`
+	Violations int64                `json:"violations"`
+	Abuses     int64                `json:"abuses"`
+	Failed     int64                `json:"failed"`
+	ByGroup    []SecurityStatBucket `json:"by_group,omitempty"`
 }
 
 type AdvancedSecurityEvent struct {
@@ -127,4 +144,23 @@ type AdvancedSecurityEvent struct {
 	PatternDigest string `json:"pattern_digest"`
 	InputDigest   string `json:"input_digest"`
 	MatchCount    int    `json:"match_count"`
+}
+
+// AdvancedSecurityAIReview is a safe, administrator-facing projection of an
+// asynchronous AI review.  It intentionally omits request/response previews;
+// the explanation and rule labels are already bounded and redacted at write
+// time, while raw conversation content belongs in the separate history ACL.
+type AdvancedSecurityAIReview struct {
+	ID          int64    `json:"id"`
+	CreatedAt   int64    `json:"created_at"`
+	RequestID   string   `json:"request_id,omitempty"`
+	UserID      int      `json:"user_id,omitempty"`
+	Group       string   `json:"group"`
+	ReviewModel string   `json:"review_model"`
+	Intensity   string   `json:"intensity"`
+	Status      string   `json:"status"`
+	Violation   bool     `json:"violation"`
+	Abuse       bool     `json:"abuse"`
+	Rules       []string `json:"rules,omitempty"`
+	Explanation string   `json:"explanation,omitempty"`
 }

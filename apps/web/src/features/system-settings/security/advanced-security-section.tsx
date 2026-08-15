@@ -53,6 +53,7 @@ import {
 } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
+import { SecurityAuditPanel } from './security-audit'
 
 const STARTER_RULE_SET = {
   version: 1,
@@ -552,6 +553,7 @@ export function AdvancedSecuritySection({
           />
         </SettingsForm>
       </Form>
+      <SecurityAuditPanel />
     </SettingsSection>
   )
 }

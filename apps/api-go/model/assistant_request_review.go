@@ -59,6 +59,20 @@ type AssistantRequestReviewView struct {
 	Rules []string `json:"rules"`
 }
 
+// AssistantRequestReviewFilter is the narrow, administrator-facing filter
+// used by the Advanced Security page. It intentionally has no text-search
+// fields so the endpoint cannot become a bulk transcript export.
+type AssistantRequestReviewFilter struct {
+	StartTimestamp int64
+	EndTimestamp   int64
+	UserID         int
+	Group          string
+	ViolationsOnly bool
+	ClearOnly      bool
+	Limit          int
+	Offset         int
+}
+
 func boundedAssistantReviewText(value string, limit int) string {
 	value = strings.TrimSpace(value)
 	if limit <= 0 {
@@ -169,6 +183,58 @@ func ListAssistantRequestReviews(userID int, violationsOnly bool, offset, limit 
 	return views, total, nil
 }
 
+// ListAssistantRequestReviewsForSecurity returns bounded rows for the unified
+// Advanced Security view. The controller projects these rows to metadata and
+// never serializes request/response previews.
+func ListAssistantRequestReviewsForSecurity(filter AssistantRequestReviewFilter) ([]AssistantRequestReviewView, int64, error) {
+	if DB == nil {
+		return nil, 0, errors.New("database is not initialized")
+	}
+	if !assistantReviewTablesAvailable(DB) {
+		return []AssistantRequestReviewView{}, 0, nil
+	}
+	limit := filter.Limit
+	if limit <= 0 || limit > AssistantRequestReviewPageMax {
+		limit = AssistantRequestReviewPageMax
+	}
+	offset := filter.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	query := DB.Model(&AssistantRequestReview{})
+	if filter.StartTimestamp > 0 {
+		query = query.Where("created_at >= ?", filter.StartTimestamp)
+	}
+	if filter.EndTimestamp > 0 {
+		query = query.Where("created_at <= ?", filter.EndTimestamp)
+	}
+	if filter.UserID > 0 {
+		query = query.Where("user_id = ?", filter.UserID)
+	}
+	if filter.Group != "" {
+		query = query.Where(map[string]any{"group": filter.Group})
+	}
+	if filter.ViolationsOnly {
+		query = query.Where("violation = ?", true)
+	}
+	if filter.ClearOnly {
+		query = query.Where("violation = ?", false)
+	}
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var rows []AssistantRequestReview
+	if err := query.Order("created_at DESC, id DESC").Offset(offset).Limit(limit).Find(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	views := make([]AssistantRequestReviewView, 0, len(rows))
+	for _, row := range rows {
+		views = append(views, AssistantRequestReviewView{AssistantRequestReview: row, Rules: row.Rules()})
+	}
+	return views, total, nil
+}
+
 func ResetAssistantReviewViolations(userID int, now int64) error {
 	if DB == nil || userID <= 0 {
 		return errors.New("assistant review user is invalid")
@@ -235,6 +301,13 @@ func assistantReviewTablesAvailable(tx *gorm.DB) bool {
 		return false
 	}
 	return tx.Migrator().HasTable(&AssistantRequestReview{}) && tx.Migrator().HasTable(&AssistantReviewReset{})
+}
+
+// AssistantRequestReviewTablesAvailable lets bounded admin projections tell
+// the UI whether per-request records are present in this deployment. It does
+// not expose schema details or allow callers to bypass the normal ACL.
+func AssistantRequestReviewTablesAvailable() bool {
+	return assistantReviewTablesAvailable(DB)
 }
 
 func PopulateAssistantReviewViolationCounts(users []*User) error {

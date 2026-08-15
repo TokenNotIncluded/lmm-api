@@ -74,6 +74,7 @@ const policyResponse = {
       on_prompt: true,
       action: 'block',
     },
+    protected_groups: ['default'],
     risk_categories: [
       {
         id: 'privacy_identity',
@@ -186,6 +187,7 @@ describe('SecurityContent', () => {
 
       assert.match(content, /Privacy and identity rights/)
       assert.match(content, /Advanced Security/)
+      assert.match(content, /default/)
       assert.match(content, /Block matching requests/)
       assert.match(content, /17/)
       assert.match(content, /11/)
