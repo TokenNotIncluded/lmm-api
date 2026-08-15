@@ -26,6 +26,11 @@ const (
 	// rows after a batch has been processed.
 	financeDashboardBatchSize  = 1_000
 	financeDashboardMaxEntries = 100
+	// User-level finance details are a bounded top-user view, not a complete
+	// export. Keep the accumulator from retaining one object per source row on
+	// large installations; totals continue to be updated independently.
+	financeDashboardMaxUserMetrics     = 100_000
+	financeDashboardMaxMethodUserPairs = 200_000
 	// Payment methods are admin-visible metadata, not finance source rows. Keep
 	// discovery bounded and fail closed instead of returning a partial selector
 	// when malformed or unbounded historical values are present.
@@ -77,32 +82,37 @@ type financeTokenMetric struct {
 }
 
 type financeOverview struct {
-	Range           financeRange                 `json:"range"`
-	Currency        string                       `json:"currency"`
-	RevenueMicros   int64                        `json:"revenue_micros"`
-	ExpenseMicros   int64                        `json:"expense_micros"`
-	ProfitMicros    int64                        `json:"profit_micros"`
-	RevenueByMethod []financeMethodMetric        `json:"revenue_by_method"`
-	ExpenseByMethod []financeMethodMetric        `json:"expense_by_method"`
-	Tokens          financeTokenMetric           `json:"tokens"`
-	Daily           []financeDailyMetric         `json:"daily"`
-	Users           []financeUserMetric          `json:"users"`
-	PaymentMethods  []model.FinancePaymentMethod `json:"payment_methods"`
-	SourcesBounded  bool                         `json:"sources_bounded"`
+	Range                     financeRange                 `json:"range"`
+	Currency                  string                       `json:"currency"`
+	RevenueMicros             int64                        `json:"revenue_micros"`
+	ExpenseMicros             int64                        `json:"expense_micros"`
+	ProfitMicros              int64                        `json:"profit_micros"`
+	RevenueByMethod           []financeMethodMetric        `json:"revenue_by_method"`
+	ExpenseByMethod           []financeMethodMetric        `json:"expense_by_method"`
+	Tokens                    financeTokenMetric           `json:"tokens"`
+	Daily                     []financeDailyMetric         `json:"daily"`
+	Users                     []financeUserMetric          `json:"users"`
+	PaymentMethods            []model.FinancePaymentMethod `json:"payment_methods"`
+	SourcesBounded            bool                         `json:"sources_bounded"`
+	UserMetricsComplete       bool                         `json:"user_metrics_complete"`
+	UserMetricsLimit          int                          `json:"user_metrics_limit"`
+	MethodUserMetricsComplete bool                         `json:"method_user_metrics_complete"`
+	MethodUserMetricsLimit    int                          `json:"method_user_metrics_limit"`
 }
 
 type financeAccumulator struct {
-	overview    financeOverview
-	methods     map[string]*financeMethodMetric
-	expenses    map[string]*financeMethodMetric
-	daily       map[string]*financeDailyMetric
-	users       map[int]*financeUserMetric
-	methodUsers map[string]map[int]struct{}
+	overview        financeOverview
+	methods         map[string]*financeMethodMetric
+	expenses        map[string]*financeMethodMetric
+	daily           map[string]*financeDailyMetric
+	users           map[int]*financeUserMetric
+	methodUsers     map[string]map[int]struct{}
+	methodUserPairs int
 }
 
 func newFinanceAccumulator(start, end int64, paymentMethods []model.FinancePaymentMethod) *financeAccumulator {
 	return &financeAccumulator{
-		overview: financeOverview{Range: financeRange{Start: start, End: end}, Currency: model.FinanceCurrencyUSD, PaymentMethods: paymentMethods, SourcesBounded: true},
+		overview: financeOverview{Range: financeRange{Start: start, End: end}, Currency: model.FinanceCurrencyUSD, PaymentMethods: paymentMethods, SourcesBounded: true, UserMetricsComplete: true, UserMetricsLimit: financeDashboardMaxUserMetrics, MethodUserMetricsComplete: true, MethodUserMetricsLimit: financeDashboardMaxMethodUserPairs},
 		methods:  make(map[string]*financeMethodMetric), expenses: make(map[string]*financeMethodMetric), daily: make(map[string]*financeDailyMetric), users: make(map[int]*financeUserMetric), methodUsers: make(map[string]map[int]struct{}),
 	}
 }
@@ -123,10 +133,36 @@ func (a *financeAccumulator) userMetric(userID int) *financeUserMetric {
 	}
 	metric := a.users[userID]
 	if metric == nil {
+		if len(a.users) >= financeDashboardMaxUserMetrics {
+			a.overview.UserMetricsComplete = false
+			return nil
+		}
 		metric = &financeUserMetric{UserID: userID}
 		a.users[userID] = metric
 	}
 	return metric
+}
+
+func (a *financeAccumulator) addMethodUser(key string, userID int) {
+	if userID <= 0 {
+		return
+	}
+	users := a.methodUsers[key]
+	if users != nil {
+		if _, exists := users[userID]; exists {
+			return
+		}
+	}
+	if a.methodUserPairs >= financeDashboardMaxMethodUserPairs {
+		a.overview.MethodUserMetricsComplete = false
+		return
+	}
+	if users == nil {
+		users = make(map[int]struct{})
+		a.methodUsers[key] = users
+	}
+	users[userID] = struct{}{}
+	a.methodUserPairs++
 }
 
 func (a *financeAccumulator) addRevenue(method, provider string, amount, timestamp int64, userID int) {
@@ -142,10 +178,7 @@ func (a *financeAccumulator) addRevenue(method, provider string, amount, timesta
 	metric.AmountMicros += amount
 	metric.Orders++
 	if userID > 0 {
-		if a.methodUsers[key] == nil {
-			a.methodUsers[key] = make(map[int]struct{})
-		}
-		a.methodUsers[key][userID] = struct{}{}
+		a.addMethodUser(key, userID)
 		if user := a.userMetric(userID); user != nil {
 			user.RevenueMicros += amount
 		}

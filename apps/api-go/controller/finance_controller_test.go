@@ -312,6 +312,54 @@ func TestFinanceEntriesUseStableCursorPages(t *testing.T) {
 	require.Equal(t, int64(100), secondResponse.Data.Entries[0].OccurredAt)
 }
 
+func TestFinanceAccumulatorBoundsUserMetricsWithoutDroppingTotals(t *testing.T) {
+	accumulator := newFinanceAccumulator(0, 24*60*60, nil)
+	for userID := 1; userID <= financeDashboardMaxUserMetrics+1; userID++ {
+		accumulator.addRevenue("stripe", "stripe", 1, 0, userID)
+	}
+
+	require.Len(t, accumulator.users, financeDashboardMaxUserMetrics)
+	require.Equal(t, int64(financeDashboardMaxUserMetrics+1), accumulator.overview.RevenueMicros)
+
+	view := accumulator.finish()
+	require.Equal(t, int64(financeDashboardMaxUserMetrics+1), view.RevenueMicros)
+	require.False(t, view.UserMetricsComplete)
+	require.Equal(t, financeDashboardMaxUserMetrics, view.UserMetricsLimit)
+	require.Len(t, view.Users, financeDashboardMaxEntries)
+	encoded, err := json.Marshal(view)
+	require.NoError(t, err)
+	var metadata struct {
+		UserMetricsComplete bool `json:"user_metrics_complete"`
+		UserMetricsLimit    int  `json:"user_metrics_limit"`
+	}
+	require.NoError(t, json.Unmarshal(encoded, &metadata))
+	require.False(t, metadata.UserMetricsComplete)
+	require.Equal(t, financeDashboardMaxUserMetrics, metadata.UserMetricsLimit)
+}
+
+func TestFinanceAccumulatorBoundsMethodUserPairs(t *testing.T) {
+	accumulator := newFinanceAccumulator(0, 24*60*60, nil)
+	for userID := 1; userID <= financeDashboardMaxMethodUserPairs+1; userID++ {
+		accumulator.addMethodUser("stripe\\x00stripe", userID)
+	}
+
+	require.Equal(t, financeDashboardMaxMethodUserPairs, accumulator.methodUserPairs)
+	require.Len(t, accumulator.methodUsers["stripe\\x00stripe"], financeDashboardMaxMethodUserPairs)
+
+	view := accumulator.finish()
+	require.False(t, view.MethodUserMetricsComplete)
+	require.Equal(t, financeDashboardMaxMethodUserPairs, view.MethodUserMetricsLimit)
+	encoded, err := json.Marshal(view)
+	require.NoError(t, err)
+	var metadata struct {
+		MethodUserMetricsComplete bool `json:"method_user_metrics_complete"`
+		MethodUserMetricsLimit    int  `json:"method_user_metrics_limit"`
+	}
+	require.NoError(t, json.Unmarshal(encoded, &metadata))
+	require.False(t, metadata.MethodUserMetricsComplete)
+	require.Equal(t, financeDashboardMaxMethodUserPairs, metadata.MethodUserMetricsLimit)
+}
+
 func mustFinanceEntry(t *testing.T, key string) *model.FinanceLedgerEntry {
 	t.Helper()
 	var entry model.FinanceLedgerEntry
