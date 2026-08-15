@@ -150,6 +150,10 @@ func CheckPersonalAccessIPPolicy(c *gin.Context) {
 	if edgeCountry == "" && strings.TrimSpace(c.GetHeader("X-LMM-CN-Source")) == "1" {
 		edgeCountry = "CN"
 	}
+	if common.IsRegionAccessPolicyEnabled() && edgeCountry == "" {
+		personalAccessIPPolicyError(c, http.StatusForbidden, "POLICY_UNAVAILABLE", "edge region could not be determined")
+		return
+	}
 	if !common.IsRegionBlocked(edgeCountry) {
 		c.Status(http.StatusNoContent)
 		return

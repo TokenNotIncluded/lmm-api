@@ -235,6 +235,14 @@ func runServer() {
 		common.FatalLog("failed to configure HTTP listen address: " + err.Error())
 		return
 	}
+	if err := regionalBindPolicy(
+		common.IsRegionAccessPolicyEnabled(),
+		os.Getenv("LMM_API_BIND_ADDRESS"),
+		listenAddress,
+	); err != nil {
+		common.FatalLog("failed to configure regional access policy: " + err.Error())
+		return
+	}
 	localAcceptance, err := localAcceptancePolicy(
 		os.Getenv("LMM_LOCAL_ACCEPTANCE"),
 		os.Getenv("LMM_API_BIND_ADDRESS"),
@@ -298,6 +306,25 @@ func buildListenAddress(bindAddress, port string) (string, error) {
 	}
 
 	return net.JoinHostPort(bindAddress, port), nil
+}
+
+// regionalBindPolicy keeps the application private whenever the edge region
+// policy is enabled. Otherwise a deployment can accidentally expose port
+// 3000 directly and bypass Nginx's GeoIP decision entirely.
+func regionalBindPolicy(policyEnabled bool, configuredBindAddress, listenAddress string) error {
+	if !policyEnabled {
+		return nil
+	}
+
+	configured := strings.TrimSpace(configuredBindAddress)
+	if configured != "" && !isExactLoopbackHost(configured) {
+		return fmt.Errorf("regional access policy requires LMM_API_BIND_ADDRESS to be exactly 127.0.0.1 or ::1")
+	}
+	host, _, err := net.SplitHostPort(listenAddress)
+	if err != nil || !isExactLoopbackHost(host) {
+		return fmt.Errorf("regional access policy requires the final HTTP listen address to be loopback")
+	}
+	return nil
 }
 
 func localAcceptancePolicy(flagValue, configuredBindAddress, listenAddress string) (bool, error) {

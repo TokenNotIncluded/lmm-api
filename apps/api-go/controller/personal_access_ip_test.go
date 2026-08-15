@@ -35,7 +35,7 @@ func TestPersonalAccessIPPolicyMarksOnlyDeniedRequests(t *testing.T) {
 		assert.Equal(t, accessPolicyDenied, recorder.Header().Get(accessPolicyResultHeader))
 	})
 
-	t.Run("non-CN request passes without denial marker", func(t *testing.T) {
+	t.Run("unknown edge country fails closed", func(t *testing.T) {
 		recorder := httptest.NewRecorder()
 		context, _ := gin.CreateTestContext(recorder)
 		context.Request = httptest.NewRequest(http.MethodGet, "/internal/access-ip-policy", nil)
@@ -43,8 +43,8 @@ func TestPersonalAccessIPPolicyMarksOnlyDeniedRequests(t *testing.T) {
 
 		CheckPersonalAccessIPPolicy(context)
 
-		assert.Equal(t, http.StatusNoContent, context.Writer.Status())
-		assert.Empty(t, recorder.Header().Get(accessPolicyResultHeader))
+		assert.Equal(t, http.StatusForbidden, context.Writer.Status())
+		assert.Equal(t, accessPolicyDenied, recorder.Header().Get(accessPolicyResultHeader))
 	})
 
 	t.Run("public peer cannot spoof edge headers", func(t *testing.T) {
