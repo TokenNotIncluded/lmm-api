@@ -384,6 +384,18 @@ describe('assistant response parsing', () => {
     assert.deepEqual(
       parseAssistantAction({
         type: 'navigate',
+        path: '/models',
+        query: {},
+      }),
+      {
+        type: 'navigate',
+        path: '/models',
+        query: {},
+      }
+    )
+    assert.deepEqual(
+      parseAssistantAction({
+        type: 'navigate',
         path: '/users',
         query: { filter: 'alice', l0Only: false },
       }),

@@ -292,6 +292,7 @@ export type AssistantNavigationPath =
   | '/usage-logs/task'
   | '/keys'
   | '/drawing'
+  | '/models'
   | '/profile'
   | '/support'
   | '/open-source-bounties'
@@ -552,6 +553,7 @@ const ASSISTANT_NAVIGATION_PATHS = new Set<AssistantNavigationPath>([
   '/usage-logs/task',
   '/keys',
   '/drawing',
+  '/models',
   '/profile',
   '/support',
   '/open-source-bounties',
@@ -571,6 +573,7 @@ const ASSISTANT_NAVIGATION_QUERY_KEYS: Record<
   '/usage-logs/task': ['username'],
   '/keys': [],
   '/drawing': [],
+  '/models': [],
   '/profile': [],
   '/support': [],
   '/open-source-bounties': [],

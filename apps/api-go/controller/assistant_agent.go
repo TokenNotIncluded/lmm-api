@@ -303,7 +303,7 @@ func buildAssistantTools() []assistantOpenAIToolDefinition {
 				Parameters: objectSchema(map[string]any{
 					"page": map[string]any{
 						"type": "string",
-						"enum": []string{"home", "getting-started", "pricing", "wallet", "usage-logs", "keys", "drawing", "profile", "support", "open-source-bounties", "users"},
+						"enum": []string{"home", "getting-started", "pricing", "wallet", "usage-logs", "keys", "drawing", "models", "profile", "support", "open-source-bounties", "users"},
 					},
 					"identifier": map[string]any{"type": "string", "maxLength": 200},
 					"query":      map[string]any{"type": "string", "maxLength": 200},

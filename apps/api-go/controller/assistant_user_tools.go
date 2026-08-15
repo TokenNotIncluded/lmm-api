@@ -243,6 +243,7 @@ func executeAssistantNavigateTool(c *gin.Context, actorUserID int, input map[str
 		"wallet":               "/wallet",
 		"keys":                 "/keys",
 		"drawing":              "/drawing",
+		"models":               "/models",
 		"profile":              "/profile",
 		"support":              "/support",
 		"open-source-bounties": "/open-source-bounties",
@@ -254,6 +255,13 @@ func executeAssistantNavigateTool(c *gin.Context, actorUserID int, input map[str
 			return map[string]any{"ok": false, "status": "target_forbidden", "error": "the users page is available only to administrators"}
 		}
 		path = "/users"
+		ok = true
+	}
+	if page == "models" {
+		actor, err := model.GetUserById(actorUserID, false)
+		if err != nil || actor.Role < common.RoleAdminUser {
+			return map[string]any{"ok": false, "status": "target_forbidden", "error": "the models page is available only to administrators"}
+		}
 		ok = true
 	}
 	if page == "usage-logs" {
