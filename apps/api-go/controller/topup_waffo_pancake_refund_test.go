@@ -3,11 +3,13 @@ package controller
 import (
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/LIghtJUNction/api.lmm.best/common"
 	"github.com/LIghtJUNction/api.lmm.best/model"
 	"github.com/LIghtJUNction/api.lmm.best/service"
+	"github.com/LIghtJUNction/api.lmm.best/setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -67,22 +69,38 @@ func TestHandleWaffoPancakeRefundEventRecordsUserVisibleRefundLog(t *testing.T) 
 }
 
 func TestHandleWaffoPancakeSubscriptionRefundIsLedgerIdempotent(t *testing.T) {
+	originalStoreID := setting.WaffoPancakeStoreID
+	setting.WaffoPancakeStoreID = "store-current"
+	t.Cleanup(func() { setting.WaffoPancakeStoreID = originalStoreID })
+
 	db := setupTokenControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.SubscriptionOrder{}, &model.Log{}, &model.FinanceLedgerEntry{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.SubscriptionPlan{}, &model.SubscriptionOrder{}, &model.Log{}, &model.FinanceLedgerEntry{}))
 	user := model.User{
 		Username: "pancake-subscription-refund",
 		Password: "password",
 		Status:   common.UserStatusEnabled,
 	}
 	require.NoError(t, db.Create(&user).Error)
+	plan := model.SubscriptionPlan{
+		// This order represents a legacy checkout: the plan exists, but the
+		// provider refund has no StoreID or order metadata.
+		Id:                    987653,
+		Title:                 "Legacy refund plan",
+		PriceAmount:           2.50,
+		Currency:              "USD",
+		WaffoPancakeProductId: "product-legacy-refund",
+		Enabled:               true,
+	}
+	require.NoError(t, db.Create(&plan).Error)
 	tradeNo := "WAFFO_PANCAKE_SUB-1-refund"
 	require.NoError(t, db.Create(&model.SubscriptionOrder{
 		UserId:          user.Id,
+		PlanId:          plan.Id,
 		TradeNo:         tradeNo,
 		PaymentMethod:   model.PaymentMethodWaffoPancake,
 		PaymentProvider: model.PaymentProviderWaffoPancake,
 		Status:          common.TopUpStatusSuccess,
-		Money:           2.50,
+		Money:           plan.PriceAmount,
 	}).Error)
 
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -112,6 +130,85 @@ func TestHandleWaffoPancakeSubscriptionRefundIsLedgerIdempotent(t *testing.T) {
 	var logs []model.Log
 	require.NoError(t, db.Where("user_id = ? AND type = ?", user.Id, model.LogTypeRefund).Find(&logs).Error)
 	require.Len(t, logs, 1)
+}
+
+func TestHandleWaffoPancakeSubscriptionRefundRejectsMismatchedMetadata(t *testing.T) {
+	originalStoreID := setting.WaffoPancakeStoreID
+	setting.WaffoPancakeStoreID = "store-subscription-refund"
+	t.Cleanup(func() { setting.WaffoPancakeStoreID = originalStoreID })
+
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.SubscriptionPlan{}, &model.SubscriptionOrder{}, &model.Log{}, &model.FinanceLedgerEntry{}))
+	user := model.User{
+		Username: "pancake-subscription-refund-binding",
+		Password: "password",
+		Status:   common.UserStatusEnabled,
+	}
+	require.NoError(t, db.Create(&user).Error)
+	plan := model.SubscriptionPlan{
+		// Keep this ID outside the range used by other temporary test databases;
+		// subscription plans are cached by ID across tests.
+		Id:                    987654,
+		Title:                 "Refund binding plan",
+		PriceAmount:           4,
+		Currency:              "USD",
+		WaffoPancakeProductId: "product-subscription-refund",
+		Enabled:               true,
+	}
+	require.NoError(t, db.Create(&plan).Error)
+	tradeNo := "WAFFO_PANCAKE_SUB-refund-binding"
+	require.NoError(t, db.Create(&model.SubscriptionOrder{
+		UserId:          user.Id,
+		PlanId:          plan.Id,
+		TradeNo:         tradeNo,
+		PaymentMethod:   model.PaymentMethodWaffoPancake,
+		PaymentProvider: model.PaymentProviderWaffoPancake,
+		Status:          common.TopUpStatusSuccess,
+		Money:           plan.PriceAmount,
+	}).Error)
+
+	tests := []struct {
+		name   string
+		mutate func(*service.WaffoPancakeWebhookEvent)
+		want   string
+	}{
+		{name: "store", mutate: func(event *service.WaffoPancakeWebhookEvent) { event.StoreID = "store-other" }, want: "store mismatch"},
+		{name: "currency", mutate: func(event *service.WaffoPancakeWebhookEvent) { event.Data.Currency = "EUR" }, want: "currency mismatch"},
+		{name: "product", mutate: func(event *service.WaffoPancakeWebhookEvent) {
+			event.Data.OrderMetadata[service.WaffoPancakeOrderMetadataProductID] = "product-other"
+		}, want: "product metadata mismatch"},
+		{name: "plan", mutate: func(event *service.WaffoPancakeWebhookEvent) {
+			event.Data.OrderMetadata[service.WaffoPancakeOrderMetadataPlanID] = "987655"
+		}, want: "plan metadata mismatch"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+			event := &service.WaffoPancakeWebhookEvent{
+				ID:        "evt-subscription-refund-binding-" + tt.name,
+				EventType: "refund.succeeded",
+				StoreID:   "store-subscription-refund",
+				Data: service.WaffoPancakeWebhookData{
+					OrderMerchantExternalID:        tradeNo,
+					RefundTicketMerchantExternalID: "refund-subscription-binding-" + tt.name,
+					Amount:                         "1.00",
+					Currency:                       "USD",
+					OrderMetadata: map[string]string{
+						service.WaffoPancakeOrderMetadataProductID: plan.WaffoPancakeProductId,
+						service.WaffoPancakeOrderMetadataPlanID:    strconv.Itoa(plan.Id),
+					},
+				},
+			}
+			tt.mutate(event)
+
+			err := handleWaffoPancakeRefundEvent(ctx, event)
+			require.ErrorContains(t, err, tt.want)
+			var entries []model.FinanceLedgerEntry
+			require.NoError(t, db.Where("source_type = ?", model.FinanceSourceRefund).Find(&entries).Error)
+			require.Empty(t, entries)
+		})
+	}
 }
 
 func TestHandleWaffoPancakeRefundRejectsDifferentStore(t *testing.T) {

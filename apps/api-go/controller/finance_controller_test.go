@@ -175,6 +175,30 @@ func TestFinanceLedgerIsAppendOnlyAndReversalIsExactlyOnce(t *testing.T) {
 	require.ErrorIs(t, err, model.ErrFinanceAlreadyReversed)
 }
 
+func TestFinanceOverviewSubtractsCreditDirectionExpenseReversal(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}, &model.SubscriptionOrder{}, &model.Log{}, &model.FinanceLedgerEntry{}, &model.FinancePaymentMethod{}))
+	user := model.User{Username: "finance-reversal", Password: "password", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "finance-reversal"}
+	require.NoError(t, db.Create(&user).Error)
+	now := time.Now().Unix()
+	entry, err := model.AppendFinanceLedgerEntry(&model.FinanceLedgerEntry{
+		EntryType: model.FinanceEntryExpense, Category: "hosting", AmountMicros: 2_500_000,
+		Currency: model.FinanceCurrencyUSD, Direction: model.FinanceDirectionDebit,
+		SourceType: model.FinanceSourceManual, UserId: &user.Id, OccurredAt: now - 20,
+		CreatedBy: user.Id, IdempotencyKey: "finance-reversal-expense",
+	})
+	require.NoError(t, err)
+	_, err = model.ReverseFinanceLedgerEntry(entry.Id, user.Id, now-10)
+	require.NoError(t, err)
+
+	view, err := buildFinanceOverview(now-100, now+1, 0, "")
+	require.NoError(t, err)
+	require.Equal(t, int64(0), view.ExpenseMicros)
+	require.Equal(t, int64(0), view.ProfitMicros)
+	require.Len(t, view.Users, 1)
+	require.Equal(t, int64(0), view.Users[0].ExpenseMicros)
+}
+
 func TestFinanceHandlersRequireAdminRouteContractAndReturnUserDetail(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}, &model.SubscriptionOrder{}, &model.Log{}, &model.FinanceLedgerEntry{}, &model.FinancePaymentMethod{}))

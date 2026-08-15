@@ -149,7 +149,15 @@ func (a *financeAccumulator) addRevenue(method, provider string, amount, timesta
 }
 
 func (a *financeAccumulator) addExpense(category, method, provider string, amount, timestamp int64, userID int) {
-	if amount <= 0 {
+	a.addExpenseDelta(category, method, provider, amount, timestamp, userID)
+}
+
+// addExpenseDelta applies a signed ledger delta. Normal expense entries are
+// positive, while a credit-direction reversal must remove the original cost
+// from the dashboard. Keeping the signed update in one helper makes every
+// aggregate (method, user, daily, and total) follow the ledger direction.
+func (a *financeAccumulator) addExpenseDelta(category, method, provider string, amount, timestamp int64, userID int) {
+	if amount == 0 {
 		return
 	}
 	key := strings.TrimSpace(category) + "\x00" + strings.TrimSpace(method) + "\x00" + strings.TrimSpace(provider)
@@ -556,7 +564,11 @@ func buildFinanceOverview(start, end int64, userFilter int, methodFilter string)
 				a.addExpense("revenue_reversal", entry.PaymentMethod, entry.PaymentProvider, entry.AmountMicros, entry.OccurredAt, derefFinanceUser(entry.UserId))
 			}
 		} else if entry.EntryType == model.FinanceEntryExpense || entry.EntryType == model.FinanceEntryTokenCost {
-			a.addExpense(entry.Category, entry.PaymentMethod, entry.PaymentProvider, entry.AmountMicros, entry.OccurredAt, derefFinanceUser(entry.UserId))
+			amount := entry.AmountMicros
+			if entry.Direction == model.FinanceDirectionCredit {
+				amount = -amount
+			}
+			a.addExpenseDelta(entry.Category, entry.PaymentMethod, entry.PaymentProvider, amount, entry.OccurredAt, derefFinanceUser(entry.UserId))
 		}
 		return nil
 	}); err != nil {

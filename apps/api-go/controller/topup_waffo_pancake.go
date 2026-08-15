@@ -749,6 +749,9 @@ func handleWaffoPancakeRefundEvent(c *gin.Context, event *service.WaffoPancakeWe
 		if order == nil {
 			return fmt.Errorf("refund subscription order disappeared trade_no=%s", tradeNo)
 		}
+		if err := validateWaffoPancakeSubscriptionRefundEvent(event, order); err != nil {
+			return err
+		}
 		userID, status = order.UserId, order.Status
 	} else {
 		tradeNo, err = service.ResolveWaffoPancakeRefundTradeNo(event)
@@ -826,6 +829,70 @@ func handleWaffoPancakeRefundEvent(c *gin.Context, event *service.WaffoPancakeWe
 	}
 	model.RecordLog(userID, model.LogTypeRefund, fmt.Sprintf("Waffo Pancake refund.succeeded trade_no=%s refund_id=%s amount=%s %s", tradeNo, event.Data.RefundTicketMerchantExternalID, event.Data.Amount, strings.ToUpper(strings.TrimSpace(event.Data.Currency))))
 	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo Pancake 退款已记账 trade_no=%s user_id=%d amount_micros=%d refund_id=%s", tradeNo, userID, amountMicros, event.Data.RefundTicketMerchantExternalID))
+	return nil
+}
+
+// validateWaffoPancakeSubscriptionRefundEvent keeps a signed refund bound to
+// the same merchant store, currency, and product as the local subscription
+// order. Refund events carry the original order metadata, but they are not
+// themselves sufficient evidence that the refund belongs to this plan: the
+// external trade number is the lookup key and must be supplemented with the
+// immutable checkout facts before recording finance data.
+func validateWaffoPancakeSubscriptionRefundEvent(event *service.WaffoPancakeWebhookEvent, order *model.SubscriptionOrder) error {
+	if event == nil || order == nil {
+		return fmt.Errorf("missing subscription refund settlement evidence")
+	}
+	actualStore := strings.TrimSpace(event.StoreID)
+	actualProduct, productMetadataPresent := event.Data.OrderMetadata[service.WaffoPancakeOrderMetadataProductID]
+	actualPlan, planMetadataPresent := event.Data.OrderMetadata[service.WaffoPancakeOrderMetadataPlanID]
+	metadataPresent := productMetadataPresent || planMetadataPresent
+	// Older refund payloads (and orders created before checkout metadata was
+	// introduced) do not carry StoreID or OrderMetadata. Keep those payloads
+	// processable, but never ignore a contradictory value when the provider
+	// does send one. New payloads with either binding field are validated below.
+	if expectedStore := strings.TrimSpace(setting.WaffoPancakeStoreID); expectedStore != "" &&
+		(actualStore != "" || metadataPresent) && actualStore != expectedStore {
+		return fmt.Errorf("subscription refund store mismatch: expected=%q actual=%q", expectedStore, strings.TrimSpace(event.StoreID))
+	}
+	plan, err := model.GetSubscriptionPlanById(order.PlanId)
+	if err != nil || plan == nil {
+		if metadataPresent && err != nil {
+			return fmt.Errorf("subscription refund plan could not be loaded: %w", err)
+		}
+		if metadataPresent {
+			return fmt.Errorf("subscription refund plan could not be loaded")
+		}
+		// The plan may have been removed after a legacy order was settled. The
+		// trade number and (when supplied) buyer identity were already bound by
+		// ResolveWaffoPancakeRefundSubscriptionTradeNo, so retain compatibility.
+		return nil
+	}
+	expectedCurrency := strings.ToUpper(strings.TrimSpace(plan.Currency))
+	if expectedCurrency == "" {
+		expectedCurrency = "USD"
+	}
+	actualCurrency := strings.ToUpper(strings.TrimSpace(event.Data.Currency))
+	if actualCurrency != "" && actualCurrency != expectedCurrency {
+		return fmt.Errorf("subscription refund currency mismatch: expected=%q actual=%q", expectedCurrency, actualCurrency)
+	}
+	if !metadataPresent {
+		return nil
+	}
+	if actualCurrency == "" {
+		return fmt.Errorf("subscription refund currency mismatch: expected=%q actual=%q", expectedCurrency, actualCurrency)
+	}
+	expectedProduct := strings.TrimSpace(plan.WaffoPancakeProductId)
+	if expectedProduct == "" {
+		return fmt.Errorf("subscription refund product is not configured")
+	}
+	actualProduct = strings.TrimSpace(actualProduct)
+	if !productMetadataPresent || actualProduct != expectedProduct {
+		return fmt.Errorf("subscription refund product metadata mismatch: expected=%q actual=%q", expectedProduct, actualProduct)
+	}
+	actualPlan = strings.TrimSpace(actualPlan)
+	if expectedPlan := strconv.Itoa(plan.Id); !planMetadataPresent || actualPlan != expectedPlan {
+		return fmt.Errorf("subscription refund plan metadata mismatch: expected=%q actual=%q", expectedPlan, actualPlan)
+	}
 	return nil
 }
 
