@@ -106,6 +106,7 @@ type WaffoPancakeWebhookEvent struct {
 type WaffoPancakeWebhookData struct {
 	// OrderID = Pancake ORD_* (logs); OrderMerchantExternalID = our trade_no (lookup).
 	OrderID                        string
+	OrderStatus                    string
 	OrderMerchantExternalID        string
 	RefundTicketMerchantExternalID string
 	BuyerEmail                     string
@@ -153,6 +154,43 @@ func WaffoPancakeWebhookActionForEvent(eventType string) WaffoPancakeWebhookActi
 		return WaffoPancakeWebhookActionRefundFailed
 	default:
 		return WaffoPancakeWebhookActionIgnore
+	}
+}
+
+// ValidateWaffoPancakeWebhookEvent checks the status fields that Pancake
+// includes in signed payment payloads. A signature proves that Pancake sent
+// the payload, but it does not make contradictory fields safe to process: a
+// refund.succeeded event must not carry refundStatus=failed, for example.
+// Older payloads may omit optional status fields, so empty values remain
+// accepted for backwards compatibility.
+func ValidateWaffoPancakeWebhookEvent(event *WaffoPancakeWebhookEvent) error {
+	if event == nil {
+		return fmt.Errorf("missing webhook event")
+	}
+	check := func(field, actual, expected string) error {
+		actual = strings.TrimSpace(actual)
+		if actual != "" && !strings.EqualFold(actual, expected) {
+			return fmt.Errorf("webhook %s mismatch: expected %q actual %q", field, expected, actual)
+		}
+		return nil
+	}
+
+	switch WaffoPancakeWebhookActionForEvent(event.EventType) {
+	case WaffoPancakeWebhookActionOrderCompleted:
+		if err := check("orderStatus", event.Data.OrderStatus, "completed"); err != nil {
+			return err
+		}
+		return check("paymentStatus", event.Data.PaymentStatus, "succeeded")
+	case WaffoPancakeWebhookActionSubscriptionActivated:
+		return check("orderStatus", event.Data.OrderStatus, "active")
+	case WaffoPancakeWebhookActionSubscriptionPaymentSucceeded:
+		return check("paymentStatus", event.Data.PaymentStatus, "succeeded")
+	case WaffoPancakeWebhookActionRefundSucceeded:
+		return check("refundStatus", event.Data.RefundStatus, "succeeded")
+	case WaffoPancakeWebhookActionRefundFailed:
+		return check("refundStatus", event.Data.RefundStatus, "failed")
+	default:
+		return nil
 	}
 }
 
@@ -391,6 +429,10 @@ func VerifyConfiguredWaffoPancakeWebhook(payload string, signatureHeader string)
 	if evt.Data.Total != nil {
 		total = *evt.Data.Total
 	}
+	orderStatus := ""
+	if evt.Data.OrderStatus != nil {
+		orderStatus = *evt.Data.OrderStatus
+	}
 	return &WaffoPancakeWebhookEvent{
 		ID:        evt.ID,
 		Timestamp: evt.Timestamp,
@@ -400,6 +442,7 @@ func VerifyConfiguredWaffoPancakeWebhook(payload string, signatureHeader string)
 		Mode:      string(evt.Mode),
 		Data: WaffoPancakeWebhookData{
 			OrderID:                        evt.Data.OrderID,
+			OrderStatus:                    orderStatus,
 			OrderMerchantExternalID:        externalID,
 			RefundTicketMerchantExternalID: refundExternalID,
 			BuyerEmail:                     evt.Data.BuyerEmail,

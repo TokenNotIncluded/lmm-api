@@ -527,6 +527,17 @@ func WaffoPancakeWebhook(c *gin.Context) {
 		c.String(http.StatusOK, "OK")
 		return
 	}
+	if err := service.ValidateWaffoPancakeWebhookEvent(event); err != nil {
+		logger.LogError(c.Request.Context(), fmt.Sprintf(
+			"Waffo Pancake webhook 状态字段不一致 event_type=%s event_id=%s order_id=%s client_ip=%s error=%q",
+			event.EventType, event.ID, event.Data.OrderID, c.ClientIP(), err.Error(),
+		))
+		// The signature is valid, but the provider payload is permanently
+		// contradictory. A retry would deliver the same event, so acknowledge it
+		// without mutating local payment state.
+		c.String(http.StatusOK, "OK")
+		return
+	}
 
 	eventType := event.NormalizedEventType()
 	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo Pancake webhook 验签成功 event_type=%s event_id=%s order_id=%s client_ip=%s", eventType, event.ID, event.Data.OrderID, c.ClientIP()))
@@ -640,6 +651,9 @@ func WaffoPancakeWebhook(c *gin.Context) {
 func handleWaffoPancakeRefundEvent(c *gin.Context, event *service.WaffoPancakeWebhookEvent) error {
 	if event == nil {
 		return fmt.Errorf("missing refund event")
+	}
+	if err := service.ValidateWaffoPancakeWebhookEvent(event); err != nil {
+		return err
 	}
 	rawTradeNo := strings.TrimSpace(event.Data.OrderMerchantExternalID)
 	isSubscription := strings.HasPrefix(rawTradeNo, "WAFFO_PANCAKE_SUB-")

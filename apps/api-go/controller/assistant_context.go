@@ -1010,7 +1010,16 @@ func classifyAssistantCustomerProfile(context assistantUserContext, message stri
 	if context.PaymentMethodsHidden {
 		signals = append(signals, "payment_methods_hidden")
 	}
-	if assistantTextContainsAny(text, assistantPromotionTerms...) {
+	promotionLanguage := assistantTextContainsAny(text, assistantPromotionTerms...)
+	// "免费额度"/"free credits" overlaps with the site's welcome-gift
+	// wording. Do not classify a clear, otherwise clean welcome-gift request as
+	// promotion farming merely because the user names the reward's form. Keep
+	// all stronger farming signals (coupon/referral/multiple accounts,
+	// disposable mail, etc.) as hard promotion signals.
+	if promotionLanguage && assistantExplicitWelcomeGiftRequest(text) && !assistantGiftPromotionConflict(text) {
+		promotionLanguage = false
+	}
+	if promotionLanguage {
 		signals = append(signals, "promotion_language")
 	}
 	if assistantTextContainsAny(text,

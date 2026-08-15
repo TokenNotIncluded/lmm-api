@@ -159,3 +159,45 @@ func TestHandleWaffoPancakeRefundRejectsDifferentStore(t *testing.T) {
 	require.NoError(t, db.Where("user_id = ? AND type = ?", user.Id, model.LogTypeRefund).Find(&logs).Error)
 	require.Empty(t, logs)
 }
+
+func TestHandleWaffoPancakeRefundRejectsContradictoryStatus(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}, &model.Log{}, &model.FinanceLedgerEntry{}))
+	user := model.User{
+		Username: "pancake-refund-status-binding",
+		Password: "password",
+		Status:   common.UserStatusEnabled,
+	}
+	require.NoError(t, db.Create(&user).Error)
+	tradeNo := "WAFFO_PANCAKE-status-binding"
+	require.NoError(t, db.Create(&model.TopUp{
+		UserId:          user.Id,
+		TradeNo:         tradeNo,
+		PaymentMethod:   model.PaymentMethodWaffoPancake,
+		PaymentProvider: model.PaymentProviderWaffoPancake,
+		Status:          common.TopUpStatusSuccess,
+		Money:           2.50,
+	}).Error)
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+	err := handleWaffoPancakeRefundEvent(ctx, &service.WaffoPancakeWebhookEvent{
+		ID:        "evt-refund-status-binding",
+		EventType: "refund.succeeded",
+		Data: service.WaffoPancakeWebhookData{
+			OrderMerchantExternalID:        tradeNo,
+			RefundTicketMerchantExternalID: "refund-status-binding",
+			Amount:                         "2.50",
+			Currency:                       "USD",
+			RefundStatus:                   "failed",
+		},
+	})
+	require.ErrorContains(t, err, "refundStatus mismatch")
+
+	var entries []model.FinanceLedgerEntry
+	require.NoError(t, db.Where("source_type = ?", model.FinanceSourceRefund).Find(&entries).Error)
+	require.Empty(t, entries)
+	var logs []model.Log
+	require.NoError(t, db.Where("user_id = ? AND type = ?", user.Id, model.LogTypeRefund).Find(&logs).Error)
+	require.Empty(t, logs)
+}

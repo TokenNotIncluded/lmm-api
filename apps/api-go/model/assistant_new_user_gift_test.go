@@ -121,6 +121,26 @@ func TestAssistantGiftOpportunitySurvivesL1AndOlderAccounts(t *testing.T) {
 	assert.Equal(t, AssistantGiftOffered, gift.Status)
 }
 
+func TestAssistantNewUserGiftClaimDoesNotConsumeGiftForDisabledUser(t *testing.T) {
+	db := setupAssistantGiftTestDB(t)
+	user := newAssistantGiftUser(t, db, "disabled-gift-user", "disabled-gift@example.com")
+	gift, created, err := DecideAssistantNewUserGift(user.Id, 10, 250, "A legitimate use before the account was disabled.", 2, 40, "198.51.100.24")
+	require.NoError(t, err)
+	assert.True(t, created)
+
+	require.NoError(t, db.Model(&User{}).Where("id = ?", user.Id).Update("status", common.UserStatusDisabled).Error)
+	_, alreadyClaimed, err := ClaimAssistantNewUserGift(user.Id)
+	assert.ErrorIs(t, err, ErrAssistantGiftUnavailable)
+	assert.False(t, alreadyClaimed)
+
+	var storedGift AssistantNewUserGift
+	require.NoError(t, db.First(&storedGift, gift.Id).Error)
+	assert.Equal(t, AssistantGiftOffered, storedGift.Status)
+	var stored User
+	require.NoError(t, db.First(&stored, user.Id).Error)
+	assert.Zero(t, stored.Quota)
+}
+
 func TestAssistantNewUserGiftRejectsIneligibleOrShallowDecisions(t *testing.T) {
 	db := setupAssistantGiftTestDB(t)
 	user := newAssistantGiftUser(t, db, "shallow-gift-user", "shallow@example.com")

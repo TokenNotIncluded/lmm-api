@@ -804,6 +804,30 @@ func assistantPublicActivityQuestion(text string) bool {
 	)
 }
 
+// assistantExplicitWelcomeGiftRequest distinguishes the site's one-time
+// welcome-gift workflow from generic requests for free credits. "免费额度"
+// is also a common, legitimate way to describe the welcome gift, so it must
+// not by itself turn an otherwise eligible user into the promotion-abuse
+// profile. Stronger farming signals (multiple accounts, disposable mail,
+// coupons, referrals, etc.) still remain promotion signals below.
+func assistantExplicitWelcomeGiftRequest(text string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(text))
+	return assistantTextContainsAny(normalized,
+		"新用户礼包", "新用户福利", "新手礼包", "新手奖励", "新用户奖励", "新人礼包", "新人福利", "新手福利",
+		"welcome gift", "welcome bonus", "new-user gift", "new user gift", "new user bonus",
+	)
+}
+
+func assistantGiftPromotionConflict(text string) bool {
+	// Keep the overlapping "free credit" terms out of this list. They are
+	// allowed when attached to an explicit welcome-gift request; every other
+	// promotion signal continues to block the reward workflow.
+	return assistantTextContainsAny(text,
+		"薅羊毛", "羊毛", "白嫖", "只想", "只要", "优惠码", "免费试用", "批量注册", "多个账号", "多账号", "临时邮箱", "一次性邮箱",
+		"coupon", "discount", "free trial", "referral", "multiple accounts", "temporary email", "disposable email", "only want", "just want",
+	)
+}
+
 func assistantNewUserGiftRequest(text string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(text))
 	if assistantTextContainsAny(normalized,

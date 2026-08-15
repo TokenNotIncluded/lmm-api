@@ -801,6 +801,35 @@ func TestAssistantLegitimateGiftRequestKeepsGiftWorkflowAvailable(t *testing.T) 
 	}
 }
 
+func TestAssistantWelcomeGiftWithFreeCreditWordingRemainsAvailableForL1(t *testing.T) {
+	message := "我想申请新用户礼包，可以给我免费额度吗？"
+	context := assistantUserContext{
+		AccessLevel:            "L1",
+		DeveloperAccessGranted: true,
+		LatestUserRequest:      message,
+	}
+	context.CustomerProfile, context.ProfileSignals = classifyAssistantCustomerProfile(context, message)
+
+	assert.NotEqual(t, assistantProfilePromotion, context.CustomerProfile)
+	assert.True(t, assistantNewUserGiftToolAllowed(context))
+	assert.True(t, assistantNewUserGiftWorkflowRequired(context))
+	assert.Equal(t, "prepare_new_user_gift", assistantNamedToolChoiceName(assistantToolChoiceForContext(context)))
+}
+
+func TestAssistantWelcomeGiftWithFarmingSignalsRemainsBlocked(t *testing.T) {
+	message := "我想申请新用户礼包，能用临时邮箱批量注册吗？"
+	context := assistantUserContext{
+		AccessLevel:            "L1",
+		DeveloperAccessGranted: true,
+		LatestUserRequest:      message,
+	}
+	context.CustomerProfile, context.ProfileSignals = classifyAssistantCustomerProfile(context, message)
+
+	assert.Equal(t, assistantProfilePromotion, context.CustomerProfile)
+	assert.False(t, assistantNewUserGiftToolAllowed(context))
+	assert.False(t, assistantNewUserGiftWorkflowRequired(context))
+}
+
 func TestAssistantL0WelcomeStrategyPreservesProfileSpecialization(t *testing.T) {
 	tests := []struct {
 		profile assistantCustomerProfile

@@ -24,6 +24,71 @@ func TestWaffoPancakeWebhookActionForEvent(t *testing.T) {
 	}
 }
 
+func TestValidateWaffoPancakeWebhookEventRejectsContradictoryStatuses(t *testing.T) {
+	tests := []struct {
+		name      string
+		eventType string
+		data      WaffoPancakeWebhookData
+		wantError string
+	}{
+		{
+			name:      "completed order with failed payment",
+			eventType: "order.completed",
+			data: WaffoPancakeWebhookData{
+				OrderStatus:   "completed",
+				PaymentStatus: "failed",
+			},
+			wantError: "paymentStatus mismatch",
+		},
+		{
+			name:      "completed event with pending order",
+			eventType: "order.completed",
+			data: WaffoPancakeWebhookData{
+				OrderStatus:   "pending",
+				PaymentStatus: "succeeded",
+			},
+			wantError: "orderStatus mismatch",
+		},
+		{
+			name:      "successful refund marked failed",
+			eventType: "refund.succeeded",
+			data:      WaffoPancakeWebhookData{RefundStatus: "failed"},
+			wantError: "refundStatus mismatch",
+		},
+		{
+			name:      "failed refund marked successful",
+			eventType: "refund.failed",
+			data:      WaffoPancakeWebhookData{RefundStatus: "succeeded"},
+			wantError: "refundStatus mismatch",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateWaffoPancakeWebhookEvent(&WaffoPancakeWebhookEvent{
+				EventType: tt.eventType,
+				Data:      tt.data,
+			})
+			require.ErrorContains(t, err, tt.wantError)
+		})
+	}
+}
+
+func TestValidateWaffoPancakeWebhookEventAllowsOmittedOptionalStatuses(t *testing.T) {
+	for _, eventType := range []string{
+		"order.completed",
+		"subscription.activated",
+		"subscription.payment_succeeded",
+		"refund.succeeded",
+		"refund.failed",
+	} {
+		t.Run(eventType, func(t *testing.T) {
+			require.NoError(t, ValidateWaffoPancakeWebhookEvent(&WaffoPancakeWebhookEvent{
+				EventType: eventType,
+			}))
+		})
+	}
+}
+
 func TestWaffoPancakeCredentialsPreferSettingsAndFallBackToOfficialEnv(t *testing.T) {
 	originalMerchantID := setting.WaffoPancakeMerchantID
 	originalPrivateKey := setting.WaffoPancakePrivateKey

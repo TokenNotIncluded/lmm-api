@@ -371,8 +371,18 @@ func ClaimAssistantNewUserGift(userID int) (*AssistantNewUserGift, bool, error) 
 		if gift.Status != AssistantGiftOffered || gift.AmountCents <= 0 || gift.Quota <= 0 {
 			return ErrAssistantGiftUnavailable
 		}
-		if err := tx.Model(&User{}).Where("id = ?", userID).Update("quota", gorm.Expr("quota + ?", gift.Quota)).Error; err != nil {
-			return err
+		result := tx.Model(&User{}).
+			Where("id = ? AND status = ?", userID, common.UserStatusEnabled).
+			Update("quota", gorm.Expr("quota + ?", gift.Quota))
+		if result.Error != nil {
+			return result.Error
+		}
+		// Do not consume the durable gift row when the authenticated account was
+		// disabled or removed between issuing and claiming the gift. Without the
+		// affected-row check the transaction could mark the gift claimed while
+		// no quota was actually credited, making a legitimate retry impossible.
+		if result.RowsAffected != 1 {
+			return ErrAssistantGiftUnavailable
 		}
 		gift.Status = AssistantGiftClaimed
 		gift.ClaimedAt = common.GetTimestamp()

@@ -49,6 +49,11 @@ bun run waffo:pancake:smoke -- \
 external ID 绑定本地订单；订阅事件只有 `WAFFO_PANCAKE_SUB-*` 订单会进入
 订阅结算路径，普通钱包订单收到订阅事件只确认、不改余额。
 
+验签后还会检查载荷中有值的状态字段：`order.completed` 要求
+`orderStatus=completed`、`paymentStatus=succeeded`，退款事件的
+`refundStatus` 必须与事件类型一致。字段缺失仍兼容旧载荷；签名有效但状态
+自相矛盾的事件会记录错误并确认，不会入账，也不会因为同一份坏载荷反复重试。
+
 ## 测试卡与验收
 
 测试模式使用 Visa `4576 7500 0000 0110`，任意未来有效期和三位 CVC。成功后应看到：
