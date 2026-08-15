@@ -50,6 +50,7 @@ func TestAssistantAdminConfigExposesNonSecretRuntimeControls(t *testing.T) {
 	require.Error(t, validateAssistantAdminConfigValue(common.RegionAccessPolicyEnabledOptionKey, "enabled"))
 	require.Error(t, validateAssistantAdminConfigValue(common.RegionBlockedCountryCodesOptionKey, "CN;US"))
 	require.NoError(t, validateAssistantAdminConfigValue("WaffoPancakeMerchantID", "merchant-from-dashboard"))
+	require.Error(t, validateAssistantAdminConfigValue("TelegramOAuthEnabled", "enabled"))
 }
 
 func TestAssistantReviewToolReturnsAggregateResult(t *testing.T) {
