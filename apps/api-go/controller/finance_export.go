@@ -25,6 +25,10 @@ const (
 	// accidental all-history export from exhausting the log database.
 	financeExportMaxWindow = 365 * 24 * 60 * 60
 	financeExportMaxRows   = 200_000
+	// User exports are streamed in small primary-key batches. Unlike the
+	// time-windowed ledgers, the user snapshot is intentionally complete, so
+	// it has no row cap; this is the memory bound rather than a data-loss cap.
+	financeExportUserBatchSize = 1_000
 )
 
 // FinanceExport is deliberately an allowlisted projection. Never add a
@@ -206,6 +210,7 @@ type financeExportBundle struct {
 	Options            map[string]string
 	EffectivePricing   []model.Pricing
 	Users              []financeUserExport
+	UserStream         func(io.Writer) error
 	Channels           []financeChannelExport
 	Plans              []financePlanExport
 	TopUps             []financeTopUpExport
@@ -314,12 +319,13 @@ func loadFinanceExportBundle(start, end int64) (financeExportBundle, error) {
 	}
 	bundle.EffectivePricing = model.GetPricing()
 
-	if err := model.DB.Model(&model.User{}).
-		Select("id", "username", "role", "status", "group", "quota", "used_quota", "aff_quota", "aff_history", "request_count", "created_at", "last_api_activity_at", "trust_level_override").
-		Order("id ASC").Find(&bundle.Users).Error; err != nil {
+	var userCount int64
+	if err := model.DB.Model(&model.User{}).Count(&userCount).Error; err != nil {
 		return bundle, err
 	}
-	applyFinanceUserRatios(bundle.Users, bundle.Options)
+	bundle.UserStream = func(writer io.Writer) error {
+		return streamFinanceUsersJSON(writer, bundle.Options)
+	}
 	if err := model.DB.Model(&model.Channel{}).
 		Select("id", "type", "status", "name", "weight", "created_time", "test_time", "response_time", "base_url", "balance", "balance_updated_time", "models", "model_mapping", "group", "used_quota", "priority", "auto_ban", "tag").
 		Order("id ASC").Find(&bundle.Channels).Error; err != nil {
@@ -384,7 +390,7 @@ func loadFinanceExportBundle(start, end int64) (financeExportBundle, error) {
 
 	bundle.Manifest.Rows["options"] = len(bundle.Options)
 	bundle.Manifest.Rows["effective_model_pricing"] = len(bundle.EffectivePricing)
-	bundle.Manifest.Rows["users"] = len(bundle.Users)
+	bundle.Manifest.Rows["users"] = int(userCount)
 	bundle.Manifest.Rows["channels"] = len(bundle.Channels)
 	bundle.Manifest.Rows["plans"] = len(bundle.Plans)
 	bundle.Manifest.Rows["topups"] = len(bundle.TopUps)
@@ -401,6 +407,7 @@ func loadFinanceExportBundle(start, end int64) (financeExportBundle, error) {
 	bundle.Manifest.Truncated["checkins"] = len(bundle.Checkins) == financeExportMaxRows
 	bundle.Manifest.Truncated["redemptions"] = len(bundle.Redemptions) == financeExportMaxRows
 	bundle.Manifest.Truncated["user_subscriptions"] = len(bundle.UserSubscriptions) == financeExportMaxRows
+	bundle.Manifest.Truncated["users"] = false
 	return bundle, nil
 }
 
@@ -450,9 +457,54 @@ func applyFinanceUserRatios(users []financeUserExport, options map[string]string
 	}
 }
 
+// streamFinanceUsersJSON writes the complete user snapshot without retaining
+// all user rows in the request heap. A million users therefore costs roughly
+// one batch, not a million-row slice plus JSON copies.
+func streamFinanceUsersJSON(writer io.Writer, options map[string]string) error {
+	if _, err := io.WriteString(writer, "["); err != nil {
+		return err
+	}
+	encoder := json.NewEncoder(writer)
+	lastID := 0
+	wroteRow := false
+	for {
+		rows := make([]financeUserExport, 0, financeExportUserBatchSize)
+		query := model.DB.Model(&model.User{}).
+			Select("id", "username", "role", "status", "group", "quota", "used_quota", "aff_quota", "aff_history", "request_count", "created_at", "last_api_activity_at", "trust_level_override").
+			Where("id > ?", lastID).
+			Order("id ASC").
+			Limit(financeExportUserBatchSize)
+		if err := query.Find(&rows).Error; err != nil {
+			return err
+		}
+		if len(rows) == 0 {
+			break
+		}
+		applyFinanceUserRatios(rows, options)
+		for index := range rows {
+			if wroteRow {
+				if _, err := io.WriteString(writer, ","); err != nil {
+					return err
+				}
+			}
+			if err := encoder.Encode(rows[index]); err != nil {
+				return err
+			}
+			wroteRow = true
+		}
+		lastID = rows[len(rows)-1].ID
+		if len(rows) < financeExportUserBatchSize {
+			break
+		}
+	}
+	_, err := io.WriteString(writer, "]\n")
+	return err
+}
+
 type financeDocument struct {
 	Name  string
 	Value any
+	Write func(io.Writer) error
 }
 
 func financeDocuments(bundle financeExportBundle) []financeDocument {
@@ -473,7 +525,7 @@ func financeDocuments(bundle financeExportBundle) []financeDocument {
 			"billing_expressions":     decodeFinanceOption(bundle.Options["billing_setting.billing_expr"]),
 		}},
 		{Name: "effective-model-pricing.json", Value: bundle.EffectivePricing},
-		{Name: "users-balances.json", Value: bundle.Users},
+		{Name: "users-balances.json", Value: bundle.Users, Write: bundle.UserStream},
 		{Name: "channels-pricing.json", Value: bundle.Channels},
 		{Name: "subscription-plans.json", Value: bundle.Plans},
 		{Name: "topups.json", Value: bundle.TopUps},
@@ -484,6 +536,13 @@ func financeDocuments(bundle financeExportBundle) []financeDocument {
 		{Name: "redemptions.json", Value: bundle.Redemptions},
 		{Name: "user-subscriptions.json", Value: bundle.UserSubscriptions},
 	}
+}
+
+func (document financeDocument) write(writer io.Writer) error {
+	if document.Write != nil {
+		return document.Write(writer)
+	}
+	return writeFinanceJSON(writer, document.Value)
 }
 
 func writeFinanceJSON(writer io.Writer, value any) error {
@@ -537,7 +596,7 @@ func writeFinanceText(c *gin.Context, documents []financeDocument) error {
 		if _, err := io.WriteString(c.Writer, "## "+document.Name+"\n"); err != nil {
 			return err
 		}
-		if err := writeFinanceJSON(c.Writer, document.Value); err != nil {
+		if err := document.write(c.Writer); err != nil {
 			return err
 		}
 		if _, err := io.WriteString(c.Writer, "\n"); err != nil {
@@ -560,7 +619,7 @@ func writeFinanceZip(c *gin.Context, documents []financeDocument) error {
 			_ = writer.Close()
 			return err
 		}
-		if err := writeFinanceJSON(entry, document.Value); err != nil {
+		if err := document.write(entry); err != nil {
 			_ = writer.Close()
 			return err
 		}

@@ -153,6 +153,20 @@ func TestFinanceExportTextHasStableSectionOrder(t *testing.T) {
 	require.True(t, strings.Index(text, "users-balances.json") < strings.Index(text, "usage-billing-records.json"))
 }
 
+func TestFinanceDocumentsCanStreamUsersWithoutMaterializingRows(t *testing.T) {
+	bundle := financeExportBundle{
+		UserStream: func(writer io.Writer) error {
+			_, err := io.WriteString(writer, "[\n{\"user_id\":1}\n]\n")
+			return err
+		},
+	}
+	var output bytes.Buffer
+	document := financeDocuments(bundle)[4]
+	require.Equal(t, "users-balances.json", document.Name)
+	require.NoError(t, document.write(&output))
+	require.Equal(t, "[\n{\"user_id\":1}\n]\n", output.String())
+}
+
 func TestWriteFinanceZipContainsStableFiles(t *testing.T) {
 	documents := []financeDocument{
 		{Name: "manifest.json", Value: "manifest"},
