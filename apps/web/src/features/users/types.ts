@@ -70,6 +70,7 @@ export const userSchema = z.object({
   linux_do_gamification_score: z.number().optional(),
   linux_do_score_updated_at: z.number().optional(),
   assistant_conversation_count: z.number().optional(),
+  assistant_violation_count: z.number().optional(),
   assistant_profile: z
     .object({
       profile_key: z.string(),
@@ -118,6 +119,7 @@ export type UserSortBy =
   | 'created_at'
   | 'last_login_at'
   | 'topup_quota'
+  | 'assistant_violations'
 
 export type UserSortOrder = 'asc' | 'desc'
 
@@ -150,6 +152,35 @@ export interface SearchUsersParams {
   page_size?: number
   sort_by?: UserSortBy
   sort_order?: UserSortOrder
+}
+
+export interface AssistantRequestReviewAdmin {
+  id: number
+  user_id: number
+  conversation_id: number
+  request_id: string
+  group: string
+  review_model: string
+  intensity: string
+  status: string
+  violation: boolean
+  abuse: boolean
+  rules: string[]
+  explanation: string
+  request_preview: string
+  response_preview: string
+  error_message: string
+  created_at: number
+  updated_at: number
+}
+
+export interface AssistantRequestReviewListData {
+  items: AssistantRequestReviewAdmin[]
+  total: number
+  page: number
+  page_size: number
+  violation_count: number
+  reset_at: number
 }
 
 export interface UserFormData {

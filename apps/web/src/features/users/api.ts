@@ -31,6 +31,7 @@ import type {
   ApiResponse,
   AccountActionRequestAdmin,
   AccountActionRequestStatus,
+  AssistantRequestReviewListData,
 } from './types'
 
 export type DeveloperAccessRequestAdmin = {
@@ -175,6 +176,27 @@ export async function searchUsers(
   if (sort_by) queryParams.set('sort_by', sort_by)
   if (sort_order) queryParams.set('sort_order', sort_order)
   const res = await api.get(`/api/user/search?${queryParams.toString()}`)
+  return res.data
+}
+
+export async function listAssistantRequestReviews(
+  userId: number,
+  pageSize = 100
+): Promise<ApiResponse<AssistantRequestReviewListData>> {
+  const res = await api.get('/api/assistant/admin/request-reviews', {
+    params: { user_id: userId, page_size: pageSize },
+  })
+  return res.data
+}
+
+export async function resetAssistantRequestReviewViolations(
+  userId: number
+): Promise<
+  ApiResponse<{ user_id: number; violation_count: number; reset_at: number }>
+> {
+  const res = await api.post(
+    `/api/assistant/admin/users/${userId}/request-reviews/reset`
+  )
   return res.data
 }
 
