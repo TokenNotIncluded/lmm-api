@@ -1785,6 +1785,25 @@ func TestAssistantPaymentOffersUseProgressiveGateAndKeepRestrictions(t *testing.
 	assert.Equal(t, true, ready["ok"])
 	assert.Equal(t, false, ready["read_only"])
 	assert.Equal(t, true, ready["checkout_available"])
+	// The browser endpoint has no request-local assistant payment gate. It may
+	// show the same public plans, but must not expose checkout to an L0 session.
+	response := httptest.NewRecorder()
+	browserContext, _ := gin.CreateTestContext(response)
+	browserContext.Request = httptest.NewRequest(http.MethodGet, "/api/assistant/offers", nil)
+	browserContext.Set("id", user.Id)
+	GetAssistantPlanOffers(browserContext)
+	assert.Equal(t, http.StatusOK, response.Code)
+	var browserPayload struct {
+		Success bool `json:"success"`
+		Data    struct {
+			ReadOnly          bool `json:"read_only"`
+			CheckoutAvailable bool `json:"checkout_available"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &browserPayload))
+	assert.True(t, browserPayload.Success)
+	assert.True(t, browserPayload.Data.ReadOnly)
+	assert.False(t, browserPayload.Data.CheckoutAvailable)
 	operation_setting.PayAddress = ""
 	withoutGateway := executeAssistantTool(readyContext, assistantOpenAIToolCall{Function: assistantOpenAIToolCallFunction{Name: "get_plan_offers"}})
 	assert.Equal(t, true, withoutGateway["ok"])

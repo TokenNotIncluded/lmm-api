@@ -90,7 +90,27 @@ func GetAssistantPlanOffers(c *gin.Context) {
 	if !requireAssistantBrowserSession(c) {
 		return
 	}
-	common.ApiSuccess(c, executeAssistantPlanOffersTool(c.GetInt("id")))
+	userID := c.GetInt("id")
+	result := executeAssistantPlanOffersTool(userID)
+	if ok, _ := result["ok"].(bool); ok {
+		// The chat tool has a request-local payment-intent gate. A standalone
+		// browser GET has no such proof, so an L0 session may inspect current
+		// plans but must never turn this endpoint into a checkout bypass.
+		if _, granted, err := getAssistantDeveloperAccess(userID); err != nil {
+			writeAssistantError(c, http.StatusServiceUnavailable, "ASSISTANT_PERMISSION_STATE_UNAVAILABLE", errors.New("assistant permission state unavailable"))
+			return
+		} else if !granted {
+			result["read_only"] = true
+			result["checkout_available"] = false
+			if _, restricted := result["status"]; !restricted {
+				result["status"] = "l1_required"
+			}
+			if _, hidden := result["payment_hidden"]; !hidden {
+				result["message"] = "Plan offers are view-only until L1 access is approved."
+			}
+		}
+	}
+	common.ApiSuccess(c, result)
 }
 
 func getAssistantDeveloperAccess(userID int) (*model.UserBase, bool, error) {
