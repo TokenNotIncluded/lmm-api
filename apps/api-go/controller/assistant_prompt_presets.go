@@ -63,6 +63,12 @@ func loadPromptPresetRef(c *gin.Context, conversationId int64) {
 	attribution, err := model.ConversationPreset(conversationId)
 	if err == nil && attribution != nil {
 		c.Set(promptPresetRefKey, *attribution)
+		// A transport retry can be the first successful response after the
+		// initial upstream attempt failed. Count it, while the model-level
+		// conversation attribution keeps ordinary replays idempotent.
+		if c.GetBool("assistant_history_replay") {
+			c.Set(promptPresetCountKey, true)
+		}
 	}
 }
 

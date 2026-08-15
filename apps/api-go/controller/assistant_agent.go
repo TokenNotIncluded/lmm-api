@@ -65,6 +65,11 @@ var (
 	// mimo-v2.5-pro, and seed-2.1-pro while still rejecting ordinary words
 	// such as “Claude Code”.
 	assistantGenericModelReferencePattern = regexp.MustCompile(`(?i)\b[a-z][a-z0-9]*(?:[-._][a-z0-9]*[0-9][a-z0-9]*(?:[-._][a-z0-9]+)*)+\b`)
+	// A live catalog may also contain stable, non-versioned IDs such as
+	// "codex-auto-review". Keep those discoverable without cloning the full
+	// pricing snapshot for ordinary prose that merely contains a number or a
+	// hyphenated phrase.
+	assistantCatalogModelCandidatePattern = regexp.MustCompile(`(?i)\b(?:[a-z][a-z0-9]*[0-9][a-z0-9]*|[a-z][a-z0-9]*(?:[-._:/][a-z0-9]+)+)\b`)
 	assistantAgentLimiter                 = syncx.NewLimiter(assistantAgentMaxConcurrent)
 	assistantTools                        = sync.OnceValue(buildAssistantTools)
 )
@@ -751,6 +756,12 @@ func assistantHasModelReference(text string) bool {
 	if normalized == "" {
 		return false
 	}
+	// Most assistant turns are ordinary prose. Avoid cloning the complete live
+	// pricing snapshot unless the text contains a model-like token. Keep this
+	// gate provider-agnostic so stable IDs without digits remain discoverable.
+	if !assistantCatalogModelCandidatePattern.MatchString(normalized) {
+		return false
+	}
 	for _, pricing := range getPricingCache() {
 		modelID := strings.ToLower(strings.TrimSpace(pricing.ModelName))
 		// Ignore labels that cannot be distinguished from ordinary prose. Exact
@@ -858,6 +869,7 @@ func assistantReadChain(userContext assistantUserContext) []string {
 		return nil
 	}
 	tools := make([]string, 0, 3)
+	hasModelReference := assistantHasModelReference(text)
 	if userContext.Intent == model.AssistantIntentRecommendation {
 		// Recommendation is a single shared, user-visible document. Read the
 		// authoritative current row before answering even for a plain “show my
@@ -881,12 +893,12 @@ func assistantReadChain(userContext assistantUserContext) []string {
 	if userContext.Intent == model.AssistantIntentCost ||
 		userContext.Intent == model.AssistantIntentModels ||
 		assistantTextContainsAny(text, "模型", "model id", "model_id", "available model") ||
-		assistantHasModelReference(text) {
+		hasModelReference {
 		if !slices.Contains(tools, "get_available_models") {
 			tools = append(tools, "get_available_models")
 		}
 	}
-	if userContext.Intent == model.AssistantIntentCost && assistantHasModelReference(text) {
+	if userContext.Intent == model.AssistantIntentCost && hasModelReference {
 		tools = append(tools, "get_model_pricing")
 	}
 	if userContext.Intent == model.AssistantIntentBounty && assistantBountyReadRequest(text) {

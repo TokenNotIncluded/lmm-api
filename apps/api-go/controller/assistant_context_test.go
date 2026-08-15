@@ -105,13 +105,33 @@ func TestAssistantUnknownProviderModelPriceQuestionUsesLivePricingChain(t *testi
 func TestAssistantLiveCatalogModelReferenceRemainsProviderAgnostic(t *testing.T) {
 	previousPricing := getPricingCache
 	getPricingCache = func() []model.Pricing {
-		return []model.Pricing{{ModelName: "future9model", EnableGroup: []string{"default"}}}
+		return []model.Pricing{
+			{ModelName: "future9model", EnableGroup: []string{"default"}},
+			{ModelName: "codex-auto-review", EnableGroup: []string{"default"}},
+		}
 	}
 	t.Cleanup(func() { getPricingCache = previousPricing })
 
 	context := assistantUserContextForRequest(0, "future9model 多少钱？")
 	assert.Equal(t, model.AssistantIntentCost, context.Intent)
 	assert.Equal(t, []string{"get_available_models", "get_model_pricing"}, assistantReadChain(context))
+
+	nonVersioned := assistantUserContextForRequest(0, "codex-auto-review 多少钱？")
+	assert.Equal(t, model.AssistantIntentCost, nonVersioned.Intent)
+	assert.Equal(t, []string{"get_available_models", "get_model_pricing"}, assistantReadChain(nonVersioned))
+}
+
+func TestAssistantOrdinaryTurnSkipsPricingSnapshotClone(t *testing.T) {
+	previousPricing := getPricingCache
+	called := 0
+	getPricingCache = func() []model.Pricing {
+		called++
+		return []model.Pricing{{ModelName: "future9model", EnableGroup: []string{"default"}}}
+	}
+	t.Cleanup(func() { getPricingCache = previousPricing })
+
+	assert.False(t, assistantHasModelReference("请帮我总结今天的工作"))
+	assert.Zero(t, called)
 }
 
 func TestAssistantOutOfScopeRequestStopsGenericWritingBeforeModelCall(t *testing.T) {

@@ -66,6 +66,21 @@ func promptPresetIDs(presets []PromptPreset) map[string]struct{} {
 	return ids
 }
 
+func TestCountPresetConversationIsIdempotent(t *testing.T) {
+	setupPromptPresetTestDB(t)
+	attribution := PromptPresetRef{PresetId: "ai_recommendation", Generation: 1, Version: PromptPresetVersion}
+
+	require.NoError(t, CountPresetConversation(attribution, 37))
+	require.NoError(t, CountPresetConversation(attribution, 37))
+
+	var stat PromptPresetStat
+	require.NoError(t, DB.Where("preset_id = ?", attribution.PresetId).First(&stat).Error)
+	assert.EqualValues(t, 1, stat.ConversationCount)
+	var refs int64
+	require.NoError(t, DB.Model(&PromptConversationRef{}).Where("conversation_id = ?", 37).Count(&refs).Error)
+	assert.EqualValues(t, 1, refs)
+}
+
 func TestPromptPresetValidationAndBoundedRefresh(t *testing.T) {
 	setupPromptPresetTestDB(t)
 

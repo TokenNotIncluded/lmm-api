@@ -76,17 +76,25 @@ func CountPresetConversation(attribution PromptPresetRef, conversationId int64) 
 		return gorm.ErrInvalidData
 	}
 	return DB.Transaction(func(tx *gorm.DB) error {
-		if err := countPresetTx(tx, attribution, presetConversation); err != nil {
-			return err
-		}
 		row := PromptConversationRef{
 			ConversationId: conversationId, PresetId: attribution.PresetId, Generation: attribution.Generation,
 			Version: attribution.Version, UpdatedAt: common.GetTimestamp(),
 		}
-		return tx.Clauses(clause.OnConflict{
+		// The conversation attribution is the idempotency boundary. A response
+		// can be replayed after the server has already persisted the turn, and
+		// concurrent workers can finish the same request together; neither case
+		// should inflate the aggregate conversion count.
+		result := tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "conversation_id"}},
-			DoUpdates: clause.AssignmentColumns([]string{"preset_id", "generation", "version", "updated_at"}),
-		}).Create(&row).Error
+			DoNothing: true,
+		}).Create(&row)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return nil
+		}
+		return countPresetTx(tx, attribution, presetConversation)
 	})
 }
 
