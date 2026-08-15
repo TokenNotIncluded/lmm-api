@@ -213,13 +213,29 @@ func xunfeiHandler(c *gin.Context, textRequest dto.GeneralOpenAIRequest, appId s
 }
 
 func xunfeiMakeRequest(c *gin.Context, textRequest dto.GeneralOpenAIRequest, domain, authUrl, appId string) (chan XunfeiChatResponse, chan error, error) {
+	requestContext := context.Background()
+	if c != nil && c.Request != nil {
+		requestContext = c.Request.Context()
+	}
 	d := websocket.Dialer{
 		HandshakeTimeout: 5 * time.Second,
 	}
-	conn, resp, err := d.Dial(authUrl, nil)
-	if err != nil || resp.StatusCode != 101 {
+	conn, resp, err := d.DialContext(requestContext, authUrl, nil)
+	if err != nil {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
 		return nil, nil, err
 	}
+	if resp == nil || resp.StatusCode != 101 {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		return nil, nil, fmt.Errorf("unexpected Xunfei websocket status")
+	}
+	stopOnCancel := context.AfterFunc(requestContext, func() {
+		_ = conn.Close()
+	})
 	responseByteLimit := int64(common.GetContextKeyInt(c, constant.ContextKeyResponseByteLimit))
 	if responseByteLimit <= 0 {
 		responseByteLimit = common.ResponseBodyLimit()
@@ -229,18 +245,17 @@ func xunfeiMakeRequest(c *gin.Context, textRequest dto.GeneralOpenAIRequest, dom
 	data := requestOpenAI2Xunfei(textRequest, appId, domain)
 	err = conn.WriteJSON(data)
 	if err != nil {
+		stopOnCancel()
+		_ = conn.Close()
 		return nil, nil, err
 	}
 
 	dataChan := make(chan XunfeiChatResponse)
 	doneChan := make(chan error, 1)
-	requestContext := context.Background()
-	if c != nil && c.Request != nil {
-		requestContext = c.Request.Context()
-	}
 	go func() {
 		var responseErr error
 		defer func() {
+			stopOnCancel()
 			_ = conn.Close()
 			doneChan <- responseErr
 		}()
@@ -253,7 +268,9 @@ func xunfeiMakeRequest(c *gin.Context, textRequest dto.GeneralOpenAIRequest, dom
 			conn.SetReadLimit(remaining)
 			_, msg, err := conn.ReadMessage()
 			if err != nil {
-				if errors.Is(err, websocket.ErrReadLimit) {
+				if requestContext.Err() != nil {
+					responseErr = requestContext.Err()
+				} else if errors.Is(err, websocket.ErrReadLimit) {
 					responseErr = common.ErrLimitExceeded
 				} else {
 					responseErr = fmt.Errorf("read websocket response: %w", err)

@@ -130,8 +130,41 @@ func TestXunfeiProducerStopsWhenRequestIsCanceled(t *testing.T) {
 
 	select {
 	case responseErr := <-doneChan:
-		assert.NoError(t, responseErr)
+		assert.ErrorIs(t, responseErr, context.Canceled)
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for canceled Xunfei producer")
+	}
+}
+
+func TestXunfeiIdleReaderStopsWhenRequestIsCanceled(t *testing.T) {
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		connection, err := upgrader.Upgrade(writer, request, nil)
+		if err != nil {
+			return
+		}
+		defer connection.Close()
+		_, _, _ = connection.ReadMessage()
+		// Do not send a frame: the reader must be interrupted by cancellation,
+		// rather than waiting forever in ReadMessage.
+		<-request.Context().Done()
+	}))
+	defer server.Close()
+
+	requestContext, cancel := context.WithCancel(context.Background())
+	gin.SetMode(gin.TestMode)
+	ginContext, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ginContext.Request = httptest.NewRequest(http.MethodPost, "/", nil).WithContext(requestContext)
+	common.SetContextKey(ginContext, appconstant.ContextKeyResponseByteLimit, 1024)
+	authURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	_, doneChan, err := xunfeiMakeRequest(ginContext, dto.GeneralOpenAIRequest{}, "general", authURL, "app")
+	require.NoError(t, err)
+	cancel()
+
+	select {
+	case responseErr := <-doneChan:
+		assert.ErrorIs(t, responseErr, context.Canceled)
+	case <-time.After(1 * time.Second):
+		t.Fatal("timed out waiting for idle Xunfei reader")
 	}
 }
