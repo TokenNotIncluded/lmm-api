@@ -617,6 +617,13 @@ func (channel *Channel) GetWeight() int {
 	if channel.Weight == nil {
 		return 0
 	}
+	// Weight is persisted as uint for compatibility with the database schema,
+	// while the routing and cache APIs use int. Guard the narrowing conversion
+	// so a corrupted or externally imported value cannot wrap on any platform.
+	maxInt := uint(^uint(0) >> 1)
+	if *channel.Weight > maxInt {
+		return int(maxInt)
+	}
 	return int(*channel.Weight)
 }
 
