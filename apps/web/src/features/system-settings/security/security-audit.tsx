@@ -8,7 +8,7 @@ the Free Software Foundation, either version 3 of the License, or
 */
 import { useQuery } from '@tanstack/react-query'
 import { ChevronLeft, ChevronRight, Filter, ShieldCheck } from 'lucide-react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Badge } from '@/components/ui/badge'
@@ -24,6 +24,8 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { formatTimestampToDate } from '@/lib/format'
 
+import { getSystemTask, listSystemTasks } from '../api'
+import type { SystemTask } from '../types'
 import {
   getAdminAssistantReview,
   getAdminSecurityPolicy,
@@ -55,7 +57,7 @@ function shortIdentifier(value: string | undefined): string {
 }
 
 function getProtectedGroups(policy: AdminSecurityPolicy | undefined): string[] {
-  if (!policy) return []
+  if (!policy || !policy.settings.enabled) return []
   return Array.from(
     new Set(
       policy.rules
@@ -388,6 +390,81 @@ function AssistantReviewSummary({
   )
 }
 
+function AssistantReviewHistory({
+  tasks,
+  selectedTaskId,
+  onSelect,
+  isLoading,
+}: {
+  tasks: SystemTask[]
+  selectedTaskId?: string
+  onSelect: (taskId: string) => void
+  isLoading: boolean
+}) {
+  const { t } = useTranslation()
+  const reviewTasks = tasks.filter((task) => task.type === 'assistant_review')
+
+  return (
+    <section className='border-border/70 space-y-3 border-y py-4'>
+      <div className='flex items-baseline justify-between gap-3'>
+        <h3 className='text-sm font-medium'>
+          {t('Automatic review')} · {t('System task records')}
+        </h3>
+        <span className='text-muted-foreground text-xs tabular-nums'>
+          {reviewTasks.length.toLocaleString()}
+        </span>
+      </div>
+      {isLoading ? (
+        <div className='space-y-2'>
+          {Array.from({ length: 3 }, (_, index) => (
+            <Skeleton key={index} className='h-10 w-full' />
+          ))}
+        </div>
+      ) : reviewTasks.length === 0 ? (
+        <p className='text-muted-foreground text-xs leading-5'>
+          {t('No completed assistant review is available yet.')}
+        </p>
+      ) : (
+        <div className='divide-border/70 divide-y'>
+          {reviewTasks.map((task) => {
+            const selected = task.task_id === selectedTaskId
+            return (
+              <button
+                key={task.task_id}
+                type='button'
+                className='hover:bg-muted/40 focus-visible:ring-ring flex w-full items-center justify-between gap-3 py-3 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-offset-2'
+                aria-pressed={selected}
+                onClick={() => onSelect(task.task_id)}
+              >
+                <span className='min-w-0'>
+                  <span className='flex items-center gap-2 text-xs font-medium'>
+                    <span
+                      className={
+                        selected
+                          ? 'bg-foreground size-1.5 rounded-full'
+                          : 'bg-muted-foreground/40 size-1.5 rounded-full'
+                      }
+                      aria-hidden='true'
+                    />
+                    {t(task.status)}
+                  </span>
+                  <span className='text-muted-foreground mt-1 block truncate text-[11px]'>
+                    {formatTimestampToDate(task.updated_at)} ·{' '}
+                    {shortIdentifier(task.task_id)}
+                  </span>
+                </span>
+                <span className='text-muted-foreground shrink-0 text-xs'>
+                  {selected ? t('Current') : t('View')}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </section>
+  )
+}
+
 function ProtectedGroups({ policy }: { policy?: AdminSecurityPolicy }) {
   const { t } = useTranslation()
   const groups = getProtectedGroups(policy)
@@ -526,6 +603,9 @@ export function SecurityAuditPanel() {
   const { t } = useTranslation()
   const [filters, setFilters] = useState<AuditFilterState>({})
   const [page, setPage] = useState(1)
+  const [selectedReviewTaskId, setSelectedReviewTaskId] = useState<
+    string | undefined
+  >()
 
   const policyQuery = useQuery({
     queryKey: ['admin-security-policy'],
@@ -545,6 +625,46 @@ export function SecurityAuditPanel() {
   const assistantReview = assistantReviewQuery.data?.success
     ? assistantReviewQuery.data.data
     : undefined
+  const reviewHistoryQuery = useQuery({
+    queryKey: ['admin-assistant-review-history'],
+    queryFn: () => listSystemTasks(30),
+    retry: false,
+    refetchOnWindowFocus: false,
+    staleTime: 15_000,
+  })
+  const reviewTasks = useMemo(
+    () =>
+      (reviewHistoryQuery.data?.success
+        ? (reviewHistoryQuery.data.data ?? [])
+        : []
+      ).filter((task) => task.type === 'assistant_review'),
+    [reviewHistoryQuery.data]
+  )
+  useEffect(() => {
+    if (reviewTasks.length === 0) {
+      setSelectedReviewTaskId(assistantReview?.task_id)
+      return
+    }
+    if (
+      !selectedReviewTaskId ||
+      !reviewTasks.some((task) => task.task_id === selectedReviewTaskId)
+    ) {
+      setSelectedReviewTaskId(reviewTasks[0].task_id)
+    }
+  }, [assistantReview?.task_id, reviewTasks, selectedReviewTaskId])
+  const selectedReviewQuery = useQuery({
+    queryKey: ['admin-assistant-review-task', selectedReviewTaskId],
+    queryFn: () => getSystemTask<AssistantReviewTask>(selectedReviewTaskId!),
+    enabled: Boolean(selectedReviewTaskId),
+    retry: false,
+    refetchOnWindowFocus: false,
+    staleTime: 15_000,
+  })
+  const selectedReviewTask = selectedReviewQuery.data?.success
+    ? selectedReviewQuery.data.data
+    : selectedReviewTaskId === assistantReview?.task_id
+      ? assistantReview
+      : undefined
   const protectedGroups = useMemo(() => getProtectedGroups(policy), [policy])
   const categories = useMemo(
     () =>
@@ -680,8 +800,18 @@ export function SecurityAuditPanel() {
 
       <MetricStrip stats={stats} isLoading={statsQuery.isLoading} />
       <AssistantReviewSummary
-        task={assistantReview}
-        isLoading={assistantReviewQuery.isLoading}
+        task={selectedReviewTask}
+        isLoading={
+          assistantReviewQuery.isLoading ||
+          reviewHistoryQuery.isLoading ||
+          selectedReviewQuery.isLoading
+        }
+      />
+      <AssistantReviewHistory
+        tasks={reviewTasks}
+        selectedTaskId={selectedReviewTaskId}
+        onSelect={setSelectedReviewTaskId}
+        isLoading={reviewHistoryQuery.isLoading}
       />
       <ProtectedGroups policy={policy} />
 
@@ -743,7 +873,12 @@ export function SecurityAuditPanel() {
             ))}
           </div>
         ) : events.length > 0 ? (
-          events.map((event) => <AuditRow key={event.id} event={event} />)
+          events.map((event) => (
+            <AuditRow
+              key={`${event.source ?? 'unknown'}:${event.id}`}
+              event={event}
+            />
+          ))
         ) : (
           <p className='text-muted-foreground border-border/60 border-y py-8 text-center text-sm'>
             {aiRecordsUnavailable

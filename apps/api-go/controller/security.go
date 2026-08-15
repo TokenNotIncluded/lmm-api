@@ -133,9 +133,12 @@ func ListAdminSecurityEvents(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	actorRole := c.GetInt("role")
+	actorID := c.GetInt("id")
+	roles := securityEventTargetRoles(events, actorRole, actorID)
 	items := make([]dto.AdvancedSecurityEvent, 0, len(events))
 	for _, event := range events {
-		items = append(items, dto.AdvancedSecurityEvent{
+		item := dto.AdvancedSecurityEvent{
 			ID:            event.ID,
 			CreatedAt:     event.CreatedAt,
 			RequestID:     event.RequestID,
@@ -157,11 +160,71 @@ func ListAdminSecurityEvents(c *gin.Context) {
 			PatternDigest: event.PatternDigest,
 			InputDigest:   event.InputDigest,
 			MatchCount:    event.MatchCount,
-		})
+		}
+		if !canRevealSecurityEvent(event.UserID, actorRole, actorID, roles) {
+			// Keep aggregate security facts usable while removing identity,
+			// routing, and digest fields belonging to a peer or higher-level
+			// administrator. This mirrors assistant-history hierarchy rules.
+			item.RequestID = ""
+			item.UserID = 0
+			item.Username = ""
+			item.TokenID = 0
+			item.ChannelID = 0
+			item.ModelName = ""
+			item.Group = ""
+			item.Endpoint = ""
+			item.RuleID = ""
+			item.RuleName = ""
+			item.PatternDigest = ""
+			item.InputDigest = ""
+		}
+		items = append(items, item)
 	}
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(items)
 	common.ApiSuccess(c, pageInfo)
+}
+
+func securityEventTargetRoles(events []model.AdvancedSecurityEvent, actorRole, actorID int) map[int]int {
+	roles := make(map[int]int)
+	if actorRole >= common.RoleRootUser || model.DB == nil {
+		return roles
+	}
+	ids := make([]int, 0, len(events))
+	seen := make(map[int]struct{}, len(events))
+	for _, event := range events {
+		if event.UserID <= 0 || event.UserID == actorID {
+			continue
+		}
+		if _, ok := seen[event.UserID]; ok {
+			continue
+		}
+		seen[event.UserID] = struct{}{}
+		ids = append(ids, event.UserID)
+	}
+	if len(ids) == 0 {
+		return roles
+	}
+	var rows []struct {
+		ID   int `gorm:"column:id"`
+		Role int `gorm:"column:role"`
+	}
+	if err := model.DB.Model(&model.User{}).
+		Select("id, role").Where("id IN ?", ids).Find(&rows).Error; err != nil {
+		return roles
+	}
+	for _, row := range rows {
+		roles[row.ID] = row.Role
+	}
+	return roles
+}
+
+func canRevealSecurityEvent(userID, actorRole, actorID int, targetRoles map[int]int) bool {
+	if userID <= 0 || userID == actorID || actorRole >= common.RoleRootUser {
+		return true
+	}
+	targetRole, ok := targetRoles[userID]
+	return ok && canManageTargetRole(actorRole, targetRole)
 }
 
 // ListAdminAssistantSecurityReviews exposes the asynchronous AI-review lane
@@ -180,7 +243,9 @@ func ListAdminAssistantSecurityReviews(c *gin.Context) {
 		StartTimestamp: filter.StartTimestamp,
 		EndTimestamp:   filter.EndTimestamp,
 		UserID:         filter.UserID,
+		Category:       filter.Category,
 		Group:          filter.Group,
+		Decision:       filter.Decision,
 		ViolationsOnly: violationsOnly,
 		ClearOnly:      clearOnly,
 		Limit:          pageInfo.GetPageSize(),

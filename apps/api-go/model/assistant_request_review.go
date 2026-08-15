@@ -66,7 +66,9 @@ type AssistantRequestReviewFilter struct {
 	StartTimestamp int64
 	EndTimestamp   int64
 	UserID         int
+	Category       string
 	Group          string
+	Decision       string
 	ViolationsOnly bool
 	ClearOnly      bool
 	Limit          int
@@ -211,14 +213,20 @@ func ListAssistantRequestReviewsForSecurity(filter AssistantRequestReviewFilter)
 	if filter.UserID > 0 {
 		query = query.Where("user_id = ?", filter.UserID)
 	}
+	if filter.Category != "" && filter.Category != "assistant_review" {
+		query = query.Where("1 = 0")
+	}
 	if filter.Group != "" {
 		query = query.Where(map[string]any{"group": filter.Group})
 	}
-	if filter.ViolationsOnly {
+	if filter.Decision != "" && filter.Decision != "violation" && filter.Decision != "clear" {
+		query = query.Where("1 = 0")
+	}
+	if filter.ViolationsOnly || filter.Decision == "violation" {
 		query = query.Where("violation = ?", true)
 	}
-	if filter.ClearOnly {
-		query = query.Where("violation = ?", false)
+	if filter.ClearOnly || filter.Decision == "clear" {
+		query = query.Where("status = ? AND violation = ?", AssistantRequestReviewStatusCompleted, false)
 	}
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
