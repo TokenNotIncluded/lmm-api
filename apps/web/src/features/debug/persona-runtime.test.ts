@@ -43,6 +43,7 @@ const { api } = await import('@/lib/http-client')
 const { refreshAuthentication } = await import('@/lib/auth-session')
 const { useAuthStore } = await import('@/stores/auth-store')
 const {
+  DEBUG_PERSONA_IDS,
   getActiveDebugPersona,
   installPersonaDebugRuntime,
   resetPersonaDebugRuntime,
@@ -94,6 +95,81 @@ describe('persona debug runtime', () => {
       '/api/assistant/pre-conversation-presets/models-and-pricing/click'
     )
     assert.deepEqual(click.data, { success: true, data: null })
+  })
+
+  test('covers guided, normal, and operator fixtures across journey and gift routes', async () => {
+    installPersonaDebugRuntime()
+    assert.deepEqual(DEBUG_PERSONA_IDS, ['l0', 'b', 'e', 'f', 'l1', 'admin'])
+
+    for (const fixture of [
+      {
+        id: 'b',
+        username: 'debug_b_guided_buyer',
+        access: false,
+        trust: 0,
+        group: 'default',
+      },
+      {
+        id: 'e',
+        username: 'debug_e_normal_user',
+        access: true,
+        trust: 1,
+        group: 'default',
+      },
+      {
+        id: 'f',
+        username: 'debug_f_enterprise_operator',
+        access: true,
+        trust: 2,
+        group: 'enterprise',
+      },
+    ] as const) {
+      setActiveDebugPersona(fixture.id)
+
+      const user = await api.get('/api/user/self')
+      assert.equal(user.data.data.username, fixture.username)
+      assert.equal(user.data.data.developer_access_granted, fixture.access)
+      assert.equal(user.data.data.trust_level_info.level, fixture.trust)
+      assert.equal(user.data.data.group, fixture.group)
+
+      const groups = await api.get('/api/user/self/groups')
+      assert.deepEqual(Object.keys(groups.data.data), [fixture.group])
+
+      if (fixture.access) {
+        assert.equal((await api.get('/api/token/')).status, 200)
+      } else {
+        assert.equal((await api.get('/api/token/')).status, 403)
+      }
+
+      const journey = await api.get('/api/assistant/journey')
+      assert.equal(journey.data.success, true)
+      assert.equal(journey.data.data.main.length, 6)
+      assert.equal(journey.data.data.side.length, 2)
+      assert.equal(
+        journey.data.data.main.filter(
+          (step: { status: string }) => step.status === 'pending'
+        ).length,
+        fixture.access ? 0 : 5
+      )
+      assert.equal(
+        journey.data.data.side[0].status,
+        fixture.id === 'b' ? 'pending' : 'completed'
+      )
+    }
+
+    setActiveDebugPersona('b')
+    const gift = await api.get('/api/assistant/new-user-gift')
+    assert.equal(gift.data.data.status, 'offered')
+    const claim = await api.post('/api/assistant/new-user-gift/claim')
+    assert.equal(claim.data.data.gift.status, 'claimed')
+
+    setActiveDebugPersona('e')
+    assert.equal(
+      (await api.get('/api/assistant/new-user-gift')).data.data,
+      null
+    )
+    const history = await api.get('/api/assistant/conversations')
+    assert.equal(history.data.data.conversations.length, 1)
   })
 
   test('returns lower-access conversation fixtures without raw secrets', async () => {

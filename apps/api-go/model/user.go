@@ -36,6 +36,10 @@ var userSortColumns = map[string]userSortColumn{
 		name:       "topup_quota",
 		expression: "COALESCE(user_topup_totals.credited_quota, 0)",
 	},
+	"assistant_violations": {
+		name:       "assistant_violations",
+		expression: "COALESCE(assistant_review_violation_totals.violation_count, 0)",
+	},
 }
 
 type UserSortOptions struct {
@@ -122,9 +126,14 @@ type userTopupAggregate struct {
 }
 
 func userTopupTotals(tx *gorm.DB) *gorm.DB {
+	creditedQuotaExpression, creditedQuotaArgs := positiveNormalizedCreditedQuotaSQL()
 	return tx.Model(&TopUp{}).
-		Select("user_id, COALESCE(SUM(credited_quota), 0) AS credited_quota").
+		Select("user_id, COALESCE(SUM("+creditedQuotaExpression+"), 0) AS credited_quota", creditedQuotaArgs...).
 		Where("status = ?", common.TopUpStatusSuccess).
+		// Subscription completion mirrors have no credited quota or amount. Keep
+		// this aggregate independent of the optional subscription table so user
+		// list queries remain usable during partial migrations.
+		Where("(credited_quota <> 0 OR amount <> 0)").
 		Group("user_id")
 }
 
@@ -132,6 +141,13 @@ func joinUserTopupTotals(tx, query *gorm.DB) *gorm.DB {
 	return query.Joins(
 		"LEFT JOIN (?) AS user_topup_totals ON user_topup_totals.user_id = users.id",
 		userTopupTotals(tx),
+	)
+}
+
+func joinAssistantReviewViolationTotals(tx, query *gorm.DB) *gorm.DB {
+	return query.Joins(
+		"LEFT JOIN (?) AS assistant_review_violation_totals ON assistant_review_violation_totals.user_id = users.id",
+		AssistantReviewViolationTotals(tx),
 	)
 }
 
@@ -155,9 +171,11 @@ func PopulateUserTopups(users []*User) error {
 	}
 
 	var rows []userTopupAggregate
+	creditedQuotaExpression, creditedQuotaArgs := positiveNormalizedCreditedQuotaSQL()
 	if err := DB.Model(&TopUp{}).
-		Select("user_id, payment_method, payment_provider, COALESCE(SUM(credited_quota), 0) AS credited_quota, COALESCE(SUM(money), 0) AS money, COALESCE(SUM(settled_amount_micros), 0) AS settled_amount_micros, COUNT(*) AS orders").
+		Select("user_id, payment_method, payment_provider, COALESCE(SUM("+creditedQuotaExpression+"), 0) AS credited_quota, COALESCE(SUM(money), 0) AS money, COALESCE(SUM(settled_amount_micros), 0) AS settled_amount_micros, COUNT(*) AS orders", creditedQuotaArgs...).
 		Where("status = ? AND user_id IN ?", common.TopUpStatusSuccess, ids).
+		Where("(credited_quota <> 0 OR amount <> 0)").
 		Group("user_id, payment_method, payment_provider").
 		Order("user_id ASC, payment_method ASC, payment_provider ASC").
 		Scan(&rows).Error; err != nil {
@@ -239,6 +257,7 @@ type User struct {
 	AdminLinuxDOGamificationScore *float64        `json:"linux_do_gamification_score,omitempty" gorm:"-:all"`
 	AdminLinuxDOScoreUpdatedAt    int64           `json:"linux_do_score_updated_at,omitempty" gorm:"-:all"`
 	AssistantConversationCount    *int64          `json:"assistant_conversation_count,omitempty" gorm:"-:all"`
+	AssistantViolationCount       *int64          `json:"assistant_violation_count,omitempty" gorm:"-:all"`
 	// AssistantProfile is populated only by administrator-facing user
 	// management handlers after the strict lower-role visibility check. It is
 	// never loaded by the normal user serializer or persisted with User.
@@ -564,6 +583,9 @@ func GetAllUsers(pageInfo *common.PageInfo, onlyL0 bool, sortOptions ...UserSort
 
 	query := tx.Unscoped().Model(&User{})
 	query = joinUserTopupTotals(tx, query)
+	if assistantReviewTablesAvailable(tx) {
+		query = joinAssistantReviewViolationTotals(tx, query)
+	}
 	if onlyL0 {
 		query = applyL0UserFilter(tx, query)
 	}
@@ -612,6 +634,9 @@ func SearchUsers(keyword string, group string, role *int, status *int, onlyL0 bo
 	// 构建基础查询
 	query := tx.Unscoped().Model(&User{})
 	query = joinUserTopupTotals(tx, query)
+	if assistantReviewTablesAvailable(tx) {
+		query = joinAssistantReviewViolationTotals(tx, query)
+	}
 	if onlyL0 {
 		query = applyL0UserFilter(tx, query)
 	}
@@ -1390,16 +1415,6 @@ func ValidateAccessToken(token string) (*User, error) {
 
 // GetUserQuota gets quota from Redis first, falls back to DB if needed
 func GetUserQuota(id int, fromDB bool) (quota int, err error) {
-	defer func() {
-		// Update Redis cache asynchronously on successful DB read
-		if shouldUpdateRedis(fromDB, err) {
-			gopool.Go(func() {
-				if err := updateUserQuotaCache(id, quota); err != nil {
-					common.SysLog("failed to update user quota cache: " + err.Error())
-				}
-			})
-		}
-	}()
 	if !fromDB && common.RedisEnabled {
 		quota, err := getUserQuotaCache(id)
 		if err == nil {
@@ -1407,7 +1422,6 @@ func GetUserQuota(id int, fromDB bool) (quota int, err error) {
 		}
 		// Don't return error - fall through to DB
 	}
-	fromDB = true
 	err = DB.Model(&User{}).Where("id = ?", id).Select("quota").Find(&quota).Error
 	if err != nil {
 		return 0, err
@@ -1576,6 +1590,20 @@ func UpdateUserUsedQuotaAndRequestCount(id int, quota int) {
 		return
 	}
 	updateUserUsedQuotaAndRequestCount(id, quota, 1)
+}
+
+// UpdateUserUsedQuota adjusts accumulated usage without incrementing the
+// request counter. Refunds and asynchronous final settlements use this path
+// so usage totals remain reversible while request volume stays factual.
+func UpdateUserUsedQuota(id int, quota int) {
+	if common.BatchUpdateEnabled {
+		addNewRecord(BatchUpdateTypeUsedQuota, id, quota)
+		return
+	}
+	if err := DB.Model(&User{}).Where("id = ?", id).
+		Update("used_quota", gorm.Expr("used_quota + ?", quota)).Error; err != nil {
+		common.SysLog("failed to update user used quota: " + err.Error())
+	}
 }
 
 func updateUserUsedQuotaAndRequestCount(id int, quota int, count int) {

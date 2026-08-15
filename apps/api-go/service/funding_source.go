@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"time"
 
 	"github.com/LIghtJUNction/api.lmm.best/model"
@@ -26,6 +27,11 @@ type FundingSource interface {
 // WalletFunding — 钱包资金来源实现
 // ---------------------------------------------------------------------------
 
+// ErrInsufficientWalletQuota indicates an atomic reserve failure. No wallet
+// quota is changed when this error is returned, so billing policy can safely
+// fall back to a subscription source.
+var ErrInsufficientWalletQuota = errors.New("wallet quota insufficient")
+
 type WalletFunding struct {
 	userId   int
 	consumed int // 实际预扣的用户额度
@@ -37,8 +43,12 @@ func (w *WalletFunding) PreConsume(amount int) error {
 	if amount <= 0 {
 		return nil
 	}
-	if err := model.DecreaseUserQuota(w.userId, amount, false); err != nil {
+	reserved, err := model.TryReserveUserQuota(w.userId, amount)
+	if err != nil {
 		return err
+	}
+	if !reserved {
+		return ErrInsufficientWalletQuota
 	}
 	w.consumed = amount
 	return nil

@@ -131,6 +131,19 @@ func userSessionCacheDeadline() time.Time {
 }
 
 func CreateUserSession(session *UserSession) error {
+	return createUserSession(session, 0, 0, 0, false)
+}
+
+// CreateUserSessionWithLimits performs the session quota check and insert in
+// one transaction while holding the user's row lock. Keeping the count and
+// insert together prevents concurrent login requests (or multiple API
+// instances) from all observing the same remaining slot and exceeding the
+// active/issuance limits.
+func CreateUserSessionWithLimits(session *UserSession, activeLimit, issuanceLimit, issuanceAfter int64) error {
+	return createUserSession(session, activeLimit, issuanceLimit, issuanceAfter, true)
+}
+
+func createUserSession(session *UserSession, activeLimit, issuanceLimit, issuanceAfter int64, verifyUser bool) error {
 	now := time.Now().Unix()
 	if session == nil || session.SID == "" || session.UserID <= 0 || session.UserAuthVersion <= 0 || session.RefreshHash == "" || session.ExpiresAt <= now {
 		return ErrUserSessionInvalid
@@ -151,7 +164,44 @@ func CreateUserSession(session *UserSession) error {
 		session.CreatedAt = now
 	}
 	cacheDeadline := userSessionCacheDeadline()
-	if err := DB.Create(session).Error; err != nil {
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if verifyUser {
+			// Re-read the authoritative user row under the same transaction.
+			// This closes the gap between the service's cache check and session
+			// issuance when a password/security mutation races with login.
+			var user User
+			if err := lockForUpdate(tx).Select("id", "status", "auth_version").Where("id = ?", session.UserID).First(&user).Error; err != nil {
+				return err
+			}
+			if user.Status != common.UserStatusEnabled || user.AuthVersion != session.UserAuthVersion {
+				return ErrUserSessionInvalid
+			}
+		}
+		if activeLimit > 0 {
+			var activeCount int64
+			if err := tx.Model(&UserSession{}).
+				Where("user_id = ? AND status = ? AND expires_at > ?", session.UserID, UserSessionStatusActive, now).
+				Count(&activeCount).Error; err != nil {
+				return err
+			}
+			if activeCount >= activeLimit {
+				return ErrUserSessionLimit
+			}
+		}
+		if issuanceLimit > 0 && issuanceAfter > 0 {
+			var issuanceCount int64
+			if err := tx.Model(&UserSession{}).
+				Where("user_id = ? AND created_at > ?", session.UserID, issuanceAfter).
+				Count(&issuanceCount).Error; err != nil {
+				return err
+			}
+			if issuanceCount >= issuanceLimit {
+				return ErrUserSessionIssuanceLimit
+			}
+		}
+		return tx.Create(session).Error
+	})
+	if err != nil {
 		return err
 	}
 	if err := writeUserSessionCache(session.cacheEntry(), cacheDeadline); err != nil {

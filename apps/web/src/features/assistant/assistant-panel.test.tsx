@@ -454,7 +454,12 @@ describe('AssistantPanel', () => {
     try {
       await act(async () => {
         findButton('Conversation history').click()
-        await flushEffects()
+        await waitForCondition(
+          () =>
+            document.querySelector('[data-testid="assistant-history-list"]') !==
+            null,
+          'mobile history did not open'
+        )
       })
       assert.ok(
         document.querySelector('[data-testid="assistant-history-list"]')
@@ -509,6 +514,15 @@ describe('AssistantPanel', () => {
       assert.ok(
         document.querySelector('[data-testid="assistant-classic-welcome"]')
       )
+      assert.ok(
+        document.querySelector('[data-testid="assistant-classic-header"]')
+      )
+      assert.match(
+        document.querySelector<HTMLElement>(
+          '[data-testid="assistant-classic-header"]'
+        )?.className ?? '',
+        /bg-\[#343541\]/
+      )
       assert.equal(
         window.localStorage.getItem('lmm-assistant-layout'),
         'classic'
@@ -523,6 +537,36 @@ describe('AssistantPanel', () => {
         await flushEffects()
       })
       assert.equal(panel.dataset.layout, 'modern')
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
+  test('keeps the classic workspace distinct on a narrow assistant sheet', async () => {
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/assistant/status')
+      return { data: { success: true, data: assistantStatus } }
+    }) as typeof api.get
+    window.localStorage.setItem('lmm-assistant-layout', 'classic')
+
+    const rendered = await renderPanel(undefined, 'mobile')
+    try {
+      const panel = document.querySelector<HTMLElement>('#ai-assistant-panel')
+      assert.ok(panel)
+      assert.equal(panel.dataset.layout, 'classic')
+      assert.ok(
+        document.querySelector('[data-testid="assistant-classic-header"]')
+      )
+      assert.equal(
+        document.querySelector('[data-testid="assistant-classic-sidebar"]'),
+        null
+      )
+      const composer = document.querySelector<HTMLElement>(
+        '[data-testid="assistant-prompt-form"] [data-slot="input-group"]'
+      )
+      assert.ok(composer)
+      assert.match(composer.className, /bg-\[#40414f\]/)
     } finally {
       await act(async () => rendered.root.unmount())
       rendered.queryClient.clear()

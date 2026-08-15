@@ -35,6 +35,7 @@ const assistantConversationTitleDraftKey = "assistant_conversation_title_draft"
 const assistantPromptKey = "assistant_system_prompt"
 const assistantClientToolsKey = "assistant_client_tools"
 const assistantAttemptHeader = "X-LMM-Assistant-Attempt"
+const assistantActorGroupKey = "assistant_actor_group"
 const assistantRetryConversationWindow = 5 * time.Minute
 
 func assistantRequestAttempt(c *gin.Context) int {
@@ -125,6 +126,17 @@ type assistantChatInput struct {
 
 type assistantOpenAIMessage = agent.Message
 type assistantOpenAIRequest = agent.Request
+
+func assistantReasoningEffort(settings setting.AssistantSettings) string {
+	effort := strings.ToLower(strings.TrimSpace(settings.ReasoningEffort))
+	if effort == "" || effort == setting.DefaultAssistantReasoningEffort {
+		return ""
+	}
+	if !setting.IsAssistantReasoningEffort(effort) {
+		return ""
+	}
+	return effort
+}
 
 func buildAssistantSystemPrompt(settings setting.AssistantSettings, contexts ...assistantUserContext) string {
 	rootURL := strings.TrimRight(system_setting.ServerAddress, "/")
@@ -564,6 +576,17 @@ func PrepareAssistantRequest(c *gin.Context) {
 	}
 	actorUserID := c.GetInt("id")
 	if actorUserID > 0 {
+		actorGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
+		if actorGroup == "" {
+			if actor, actorErr := model.GetUserById(actorUserID, false); actorErr == nil && actor != nil {
+				actorGroup = actor.Group
+			}
+		}
+		if actorGroup != "" {
+			c.Set(assistantActorGroupKey, actorGroup)
+		}
+	}
+	if actorUserID > 0 {
 		c.Set("assistant_history_latest_message", latestMessage)
 		resolvedConversationID := input.ConversationID
 		retryAttempt := assistantRequestAttempt(c) > 1
@@ -758,11 +781,12 @@ func PrepareAssistantRequest(c *gin.Context) {
 	requestMessages[0] = assistantOpenAIMessage{Role: "system", Content: systemPrompt}
 	requestMessages = append(requestMessages, conversation...)
 	request := assistantOpenAIRequest{
-		Model:       settings.Model,
-		Messages:    requestMessages,
-		Stream:      false,
-		Temperature: 0.2,
-		MaxTokens:   900,
+		Model:           settings.Model,
+		Messages:        requestMessages,
+		Stream:          false,
+		Temperature:     0.2,
+		MaxTokens:       900,
+		ReasoningEffort: assistantReasoningEffort(settings),
 	}
 	if (settings.AgentLoopEnabled && settings.MaxSteps > 1) ||
 		assistantRecommendationWorkflowRequired(userContext) || assistantLiveReadRequired(userContext) {
@@ -837,6 +861,10 @@ func AssistantChat(c *gin.Context) {
 	if !recorder.Written() {
 		return
 	}
+	// The sampled policy review is intentionally enqueued after the model turn
+	// has completed. It has a bounded, parallel worker pool and never delays the
+	// response or exposes its result to the caller.
+	enqueueAssistantRequestReview(c, settings, conversationMessages, recorder.body.Bytes())
 	copyAssistantClientHeaders(originalWriter.Header(), recorder.Header())
 	writeAssistantHistoryResponse(c, recorder.Status(), recorder.body.Bytes())
 }
@@ -881,8 +909,9 @@ func GetAssistantStatus(c *gin.Context) {
 	accessLevel := trustLevelLabel(trust.Level)
 	developerAccessGranted := access.Granted
 	common.ApiSuccess(c, gin.H{
-		"enabled": settings.Enabled,
-		"model":   settings.Model,
+		"enabled":          settings.Enabled,
+		"model":            settings.Model,
+		"reasoning_effort": settings.ReasoningEffort,
 		"funding": gin.H{
 			"mode": "super_administrator",
 		},

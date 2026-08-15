@@ -56,11 +56,16 @@ func getAssistantResponseCache() *cachex.HybridCache[assistantCachedResponse] {
 	assistantResponseCacheOnce.Do(func() {
 		assistantResponseCache = cachex.NewHybridCache[assistantCachedResponse](cachex.HybridCacheConfig[assistantCachedResponse]{
 			Namespace: cachex.Namespace(assistantResponseCacheNamespace),
-			Redis:     common.RDB,
-			RedisEnabled: func() bool {
-				return common.RedisEnabled && common.RDB != nil
-			},
-			RedisCodec: cachex.JSONCodec[assistantCachedResponse]{},
+			// Keep assistant response caching local and bounded.  A Redis-backed
+			// response cache would bypass the byte/entry limits below because
+			// HybridCache intentionally treats Redis as an unbounded shared store;
+			// every unique user question could otherwise accumulate indefinitely.
+			// These responses are user-scoped and short-lived, so a per-process
+			// cache miss is safer than turning Redis into an unbounded transcript
+			// store.
+			Redis:        nil,
+			RedisEnabled: func() bool { return false },
+			RedisCodec:   cachex.JSONCodec[assistantCachedResponse]{},
 			MemoryStore: func() cachex.MemoryCache[assistantCachedResponse] {
 				return cachex.NewByteCache[assistantCachedResponse](
 					assistantCacheMaxEntries,

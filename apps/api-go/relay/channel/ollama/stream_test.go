@@ -21,12 +21,14 @@ func TestOllamaChatHandlerNonStreamToolCalls(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	tests := []struct {
-		name string
-		raw  string
+		name   string
+		raw    string
+		wantID string
 	}{
 		{
-			name: "compact json per-line parse path",
-			raw:  `{"model":"llama3.1","created_at":"2026-05-27T12:00:00Z","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"get_weather","arguments":{"city":"Paris","days":0}}}]},"done":true,"done_reason":"stop","prompt_eval_count":5,"eval_count":7}`,
+			name:   "compact json per-line parse path",
+			raw:    `{"model":"llama3.1","created_at":"2026-05-27T12:00:00Z","message":{"role":"assistant","content":"","tool_calls":[{"id":"call_upstream","function":{"name":"get_weather","arguments":{"city":"Paris","days":0}}}]},"done":true,"done_reason":"stop","prompt_eval_count":5,"eval_count":7}`,
+			wantID: "call_upstream",
 		},
 		{
 			name: "pretty json fallback parse path",
@@ -53,6 +55,7 @@ func TestOllamaChatHandlerNonStreamToolCalls(t *testing.T) {
   "prompt_eval_count": 5,
   "eval_count": 7
 }`,
+			wantID: "call_0",
 		},
 	}
 
@@ -82,7 +85,7 @@ func TestOllamaChatHandlerNonStreamToolCalls(t *testing.T) {
 			var toolCalls []dto.ToolCallResponse
 			require.NoError(t, common.Unmarshal(out.Choices[0].Message.ToolCalls, &toolCalls))
 			require.Len(t, toolCalls, 1)
-			assert.NotEmpty(t, toolCalls[0].ID)
+			assert.Equal(t, tt.wantID, toolCalls[0].ID)
 			assert.Equal(t, "function", toolCalls[0].Type)
 			assert.Equal(t, "get_weather", toolCalls[0].Function.Name)
 			assert.Nil(t, toolCalls[0].Index)
@@ -93,4 +96,38 @@ func TestOllamaChatHandlerNonStreamToolCalls(t *testing.T) {
 			assert.Equal(t, float64(0), args["days"])
 		})
 	}
+}
+
+func TestOpenAIChatToOllamaPreservesReasoningAndToolContext(t *testing.T) {
+	reasoning := "planning"
+	toolMessage := dto.Message{Role: "tool", Content: "Paris", ToolCallId: "call_weather"}
+	assistantMessage := dto.Message{
+		Role:             "assistant",
+		Content:          "",
+		ReasoningContent: &reasoning,
+	}
+	assistantMessage.SetToolCalls([]dto.ToolCallRequest{{
+		ID:   "call_weather",
+		Type: "function",
+		Function: dto.FunctionRequest{
+			Name:      "get_weather",
+			Arguments: `{"city":"Paris"}`,
+		},
+	}})
+
+	request, err := openAIChatToOllamaChat(nil, &dto.GeneralOpenAIRequest{
+		Model: "llama3.1",
+		Messages: []dto.Message{
+			assistantMessage,
+			toolMessage,
+		},
+		ReasoningEffort: "high",
+	})
+	require.NoError(t, err)
+	require.Len(t, request.Messages, 2)
+	assert.Equal(t, "call_weather", request.Messages[0].ToolCalls[0].ID)
+	assert.Equal(t, `"planning"`, string(request.Messages[0].Thinking))
+	assert.Equal(t, "call_weather", request.Messages[1].ToolCallID)
+	assert.Equal(t, "get_weather", request.Messages[1].ToolName)
+	assert.Equal(t, `"high"`, string(request.Think))
 }

@@ -49,6 +49,9 @@ import {
 
 const PERSONA_LABELS: Record<DebugPersonaId, string> = {
   l0: 'L0 newcomer',
+  b: 'B · Guided buyer',
+  e: 'E · Normal user',
+  f: 'F · Enterprise operator',
   l1: 'L1 developer',
   admin: 'Administrator',
 }

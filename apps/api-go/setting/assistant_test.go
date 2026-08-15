@@ -16,23 +16,30 @@ func TestAssistantDefaultsAndValidation(t *testing.T) {
 	if settings.Model != DefaultAssistantModel {
 		t.Fatalf("unexpected default model: %q", settings.Model)
 	}
+	if settings.ReasoningEffort != DefaultAssistantReasoningEffort {
+		t.Fatalf("unexpected default reasoning effort: %q", settings.ReasoningEffort)
+	}
 	if !settings.AgentLoopEnabled || settings.MaxSteps != 6 || settings.TimeoutSeconds != 45 || !settings.CacheEnabled || settings.CacheTTLMinutes != 1440 {
 		t.Fatalf("unexpected assistant runtime defaults: %+v", settings)
 	}
 	if !settings.RetentionEnabled || settings.ActiveRetentionDays != 90 || settings.ArchivedRetentionDays != 30 || settings.SecurityRetentionDays != 180 || settings.RetentionIntervalHours != 24 {
 		t.Fatalf("unexpected assistant retention defaults: %+v", settings)
 	}
-	if !settings.ReviewEnabled || settings.ReviewWindowDays != 30 || settings.ReviewIntervalHours != 24 {
+	if !settings.ReviewEnabled || settings.ReviewWindowDays != 30 || settings.ReviewIntervalHours != 24 || settings.ReviewProbability != 0 || settings.ReviewModel != DefaultAssistantReviewModel || len(settings.ReviewGroupPolicies) != 0 {
 		t.Fatalf("unexpected assistant review defaults: %+v", settings)
 	}
 
 	invalid := map[string]string{
 		AssistantModelOptionKey:                  " ",
+		AssistantReasoningEffortOptionKey:        "extreme",
 		AssistantMaxStepsOptionKey:               "13",
 		AssistantTimeoutSecondsOptionKey:         "4",
 		AssistantCacheTTLMinutesOptionKey:        "10081",
 		AssistantReviewWindowDaysOptionKey:       "0",
 		AssistantReviewIntervalHoursOptionKey:    "169",
+		AssistantReviewProbabilityOptionKey:      "100.1",
+		AssistantReviewModelOptionKey:            " ",
+		AssistantReviewGroupPoliciesOptionKey:    `{"default":{"probability":1,"intensity":"unknown"}}`,
 		AssistantActiveRetentionDaysOptionKey:    "6",
 		AssistantArchivedRetentionDaysOptionKey:  "0",
 		AssistantSecurityRetentionDaysOptionKey:  "29",
@@ -53,6 +60,7 @@ func TestAssistantSettingsUpdates(t *testing.T) {
 	t.Cleanup(func() {
 		SetAssistantEnabled(original.Enabled)
 		_ = UpdateAssistantModel(original.Model)
+		_ = UpdateAssistantReasoningEffort(original.ReasoningEffort)
 		SetAssistantAgentLoopEnabled(original.AgentLoopEnabled)
 		_ = UpdateAssistantMaxSteps(strconv.Itoa(original.MaxSteps))
 		_ = UpdateAssistantTimeoutSeconds(strconv.Itoa(original.TimeoutSeconds))
@@ -61,6 +69,9 @@ func TestAssistantSettingsUpdates(t *testing.T) {
 		SetAssistantReviewEnabled(original.ReviewEnabled)
 		_ = UpdateAssistantReviewWindowDays(strconv.Itoa(original.ReviewWindowDays))
 		_ = UpdateAssistantReviewIntervalHours(strconv.Itoa(original.ReviewIntervalHours))
+		_ = UpdateAssistantReviewProbability(strconv.FormatFloat(original.ReviewProbability, 'f', -1, 64))
+		_ = UpdateAssistantReviewModel(original.ReviewModel)
+		_ = UpdateAssistantReviewGroupPolicies(AssistantReviewGroupPoliciesJSON(original.ReviewGroupPolicies))
 		SetAssistantRetentionEnabled(original.RetentionEnabled)
 		_ = UpdateAssistantActiveRetentionDays(strconv.Itoa(original.ActiveRetentionDays))
 		_ = UpdateAssistantArchivedRetentionDays(strconv.Itoa(original.ArchivedRetentionDays))
@@ -70,6 +81,9 @@ func TestAssistantSettingsUpdates(t *testing.T) {
 
 	SetAssistantEnabled(false)
 	if err := UpdateAssistantModel(" custom-model "); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateAssistantReasoningEffort("HIGH"); err != nil {
 		t.Fatal(err)
 	}
 	SetAssistantAgentLoopEnabled(false)
@@ -90,6 +104,15 @@ func TestAssistantSettingsUpdates(t *testing.T) {
 	if err := UpdateAssistantReviewIntervalHours("6"); err != nil {
 		t.Fatal(err)
 	}
+	if err := UpdateAssistantReviewProbability("1.0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateAssistantReviewModel("review-model"); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateAssistantReviewGroupPolicies(`{"free":{"probability":0,"intensity":"off"},"premium":{"probability":25,"intensity":"high"}}`); err != nil {
+		t.Fatal(err)
+	}
 	SetAssistantRetentionEnabled(false)
 	if err := UpdateAssistantActiveRetentionDays("120"); err != nil {
 		t.Fatal(err)
@@ -105,7 +128,7 @@ func TestAssistantSettingsUpdates(t *testing.T) {
 	}
 
 	settings := GetAssistantSettings()
-	if settings.Enabled || settings.Model != "custom-model" || settings.AgentLoopEnabled || settings.MaxSteps != 9 || settings.TimeoutSeconds != 60 || settings.CacheEnabled || settings.CacheTTLMinutes != 30 || settings.ReviewEnabled || settings.ReviewWindowDays != 14 || settings.ReviewIntervalHours != 6 || settings.RetentionEnabled || settings.ActiveRetentionDays != 120 || settings.ArchivedRetentionDays != 45 || settings.SecurityRetentionDays != 365 || settings.RetentionIntervalHours != 12 {
+	if settings.Enabled || settings.Model != "custom-model" || settings.ReasoningEffort != "high" || settings.AgentLoopEnabled || settings.MaxSteps != 9 || settings.TimeoutSeconds != 60 || settings.CacheEnabled || settings.CacheTTLMinutes != 30 || settings.ReviewEnabled || settings.ReviewWindowDays != 14 || settings.ReviewIntervalHours != 6 || settings.ReviewProbability != 1 || settings.ReviewModel != "review-model" || settings.ReviewGroupPolicies["premium"].Intensity != "high" || settings.RetentionEnabled || settings.ActiveRetentionDays != 120 || settings.ArchivedRetentionDays != 45 || settings.SecurityRetentionDays != 365 || settings.RetentionIntervalHours != 12 {
 		t.Fatalf("unexpected updated settings: %+v", settings)
 	}
 }

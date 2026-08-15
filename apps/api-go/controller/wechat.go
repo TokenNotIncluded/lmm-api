@@ -172,21 +172,15 @@ func WeChatBind(c *gin.Context) {
 		})
 		return
 	}
-	user := model.User{
-		Id: c.GetInt("id"),
-	}
-	if user.Id == 0 {
+	userID := c.GetInt("id")
+	if userID == 0 {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "未登录"})
 		return
 	}
-	err = user.FillUserById()
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	user.WeChatId = wechatId
-	err = user.Update(false)
-	if err != nil {
+	// Update only the binding column. A full user snapshot can overwrite a
+	// concurrent role, status, group, or quota change made while the OAuth
+	// provider request was in flight.
+	if err := model.UpdateUserBindColumn(userID, "wechat_id", wechatId); err != nil {
 		common.ApiError(c, err)
 		return
 	}

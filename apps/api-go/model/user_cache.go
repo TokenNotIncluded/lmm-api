@@ -150,12 +150,15 @@ func cacheGetUserBase(userId int) (*UserBase, error) {
 	return &userCache, nil
 }
 
-// Add atomic quota operations using hash fields
+// Quota deltas are applied through guarded Lua in quota_reserve.go.  A cache
+// miss is intentionally a no-op: the database mutation remains authoritative
+// and the next cache read will hydrate the complete user hash.
 func cacheIncrUserQuota(userId int, delta int64) error {
 	if !common.RedisEnabled {
 		return nil
 	}
-	return common.RedisHIncrBy(getUserCacheKey(userId), "Quota", delta)
+	_, err := cacheApplyUserQuotaDelta(userId, delta)
+	return err
 }
 
 func cacheDecrUserQuota(userId int, delta int64) error {

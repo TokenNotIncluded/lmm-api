@@ -134,6 +134,8 @@ func SetRelayRouter(router *gin.Engine) {
 		assistantAdminRouter.GET("/funding", controller.AdminGetAssistantFundingSummary)
 		assistantAdminRouter.GET("/review", middleware.DisableCache(), controller.AdminGetAssistantReview)
 		assistantAdminRouter.POST("/review/run", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.AdminRunAssistantReview)
+		assistantAdminRouter.GET("/request-reviews", middleware.DisableCache(), controller.AdminListAssistantRequestReviews)
+		assistantAdminRouter.POST("/users/:user_id/request-reviews/reset", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.AdminResetAssistantRequestReviewViolations)
 	}
 	relayV1Router := router.Group("/v1")
 	relayV1Router.Use(middleware.RouteTag("relay"))

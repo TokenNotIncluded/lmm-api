@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -272,29 +273,11 @@ func GetTokenById(id int) (*Token, error) {
 		return nil, errors.New("id 为空！")
 	}
 	token := Token{Id: id}
-	var err error = nil
-	err = DB.First(&token, "id = ?", id).Error
-	if shouldUpdateRedis(true, err) {
-		gopool.Go(func() {
-			if err := cacheSetToken(token); err != nil {
-				common.SysLog("failed to update user status cache: " + err.Error())
-			}
-		})
-	}
+	err := DB.First(&token, "id = ?", id).Error
 	return &token, err
 }
 
 func GetTokenByKey(key string, fromDB bool) (token *Token, err error) {
-	defer func() {
-		// Update Redis cache asynchronously on successful DB read
-		if shouldUpdateRedis(fromDB, err) && token != nil {
-			gopool.Go(func() {
-				if err := cacheSetToken(*token); err != nil {
-					common.SysLog("failed to update user status cache: " + err.Error())
-				}
-			})
-		}
-	}()
 	if !fromDB && common.RedisEnabled {
 		// Try Redis first
 		token, err := cacheGetTokenByKey(key)
@@ -303,9 +286,18 @@ func GetTokenByKey(key string, fromDB bool) (token *Token, err error) {
 		}
 		// Don't return error - fall through to DB
 	}
-	fromDB = true
-	err = DB.Where(commonKeyCol+" = ?", key).First(&token).Error
-	return token, err
+	token = &Token{}
+	if err = DB.Where(commonKeyCol+" = ?", key).First(token).Error; err != nil {
+		return nil, err
+	}
+	if common.RedisEnabled {
+		// Only hydrate a cold cache. An existing hash may contain a newer quota
+		// after an atomic reserve, so a DB snapshot must never overwrite it.
+		if _, cacheErr := cacheInitToken(*token); cacheErr != nil {
+			common.SysLog("failed to init token cache: " + cacheErr.Error())
+		}
+	}
+	return token, nil
 }
 
 func (token *Token) Insert() error {
@@ -316,47 +308,48 @@ func (token *Token) Insert() error {
 
 // Update Make sure your token's fields is completed, because this will update non-zero values
 func (token *Token) Update() (err error) {
+	if cacheErr := invalidateTokenCacheForMutation(token.Key); cacheErr != nil {
+		common.SysLog("failed to invalidate token cache before update: " + cacheErr.Error())
+	}
 	err = DB.Model(token).Select("name", "status", "expired_time", "remain_quota", "unlimited_quota",
 		"model_limits_enabled", "model_limits", "allow_ips", "group", "cross_group_retry", "auto_groups").Updates(token).Error
-	if shouldUpdateRedis(true, err) {
-		if cacheErr := cacheSetToken(*token); cacheErr != nil {
-			common.SysLog("failed to update token cache: " + cacheErr.Error())
-			if deleteErr := cacheDeleteToken(token.Key); deleteErr != nil {
-				common.SysLog("failed to invalidate token cache after update: " + deleteErr.Error())
-			}
+	if err != nil {
+		// The database did not change; do not leave a successful-mutation fence
+		// behind and make subsequent reads fail closed for its whole TTL.
+		if common.RedisEnabled && common.RDB != nil && token.Key != "" {
+			_ = common.RDB.Del(context.Background(), getTokenCacheFenceKey(token.Key)).Err()
 		}
+		return err
+	}
+	if cacheErr := refreshTokenCacheAfterMutation(token.Key); cacheErr != nil {
+		common.SysLog("failed to refresh token cache after update: " + cacheErr.Error())
 	}
 	return err
 }
 
 func (token *Token) SelectUpdate() (err error) {
-	defer func() {
-		if shouldUpdateRedis(true, err) {
-			gopool.Go(func() {
-				err := cacheSetToken(*token)
-				if err != nil {
-					common.SysLog("failed to update token cache: " + err.Error())
-				}
-			})
-		}
-	}()
+	if cacheErr := invalidateTokenCacheForMutation(token.Key); cacheErr != nil {
+		common.SysLog("failed to invalidate token cache before status update: " + cacheErr.Error())
+	}
 	// This can update zero values
-	return DB.Model(token).Select("accessed_time", "status").Updates(token).Error
+	err = DB.Model(token).Select("accessed_time", "status").Updates(token).Error
+	if err != nil {
+		if common.RedisEnabled && common.RDB != nil && token.Key != "" {
+			_ = common.RDB.Del(context.Background(), getTokenCacheFenceKey(token.Key)).Err()
+		}
+		return err
+	}
+	if cacheErr := refreshTokenCacheAfterMutation(token.Key); cacheErr != nil {
+		common.SysLog("failed to refresh token cache after status update: " + cacheErr.Error())
+	}
+	return nil
 }
 
 func (token *Token) Delete() (err error) {
-	defer func() {
-		if shouldUpdateRedis(true, err) {
-			gopool.Go(func() {
-				err := cacheDeleteToken(token.Key)
-				if err != nil {
-					common.SysLog("failed to delete token cache: " + err.Error())
-				}
-			})
-		}
-	}()
-	err = DB.Delete(token).Error
-	return err
+	if cacheErr := invalidateTokenCacheForMutation(token.Key); cacheErr != nil {
+		common.SysLog("failed to invalidate token cache before delete: " + cacheErr.Error())
+	}
+	return DB.Delete(token).Error
 }
 
 func (token *Token) IsModelLimitsEnabled() bool {
@@ -408,8 +401,7 @@ func IncreaseTokenQuota(tokenId int, key string, quota int) (err error) {
 	}
 	if common.RedisEnabled {
 		gopool.Go(func() {
-			err := cacheIncrTokenQuota(key, int64(quota))
-			if err != nil {
+			if _, err := cacheApplyTokenQuotaDelta(tokenId, key, int64(quota)); err != nil {
 				common.SysLog("failed to increase token quota: " + err.Error())
 			}
 		})
@@ -438,8 +430,7 @@ func DecreaseTokenQuota(id int, key string, quota int) (err error) {
 	}
 	if common.RedisEnabled {
 		gopool.Go(func() {
-			err := cacheDecrTokenQuota(key, int64(quota))
-			if err != nil {
+			if _, err := cacheApplyTokenQuotaDelta(id, key, int64(-quota)); err != nil {
 				common.SysLog("failed to decrease token quota: " + err.Error())
 			}
 		})
@@ -493,11 +484,9 @@ func BatchDeleteTokens(ids []int, userId int) (int, error) {
 	}
 
 	if common.RedisEnabled {
-		gopool.Go(func() {
-			for _, t := range tokens {
-				_ = cacheDeleteToken(t.Key)
-			}
-		})
+		if err := invalidateTokensCache(tokens); err != nil {
+			common.SysLog("failed to invalidate token cache before batch delete: " + err.Error())
+		}
 	}
 
 	return len(tokens), nil
@@ -540,7 +529,7 @@ func invalidateTokensCache(tokens []Token) error {
 		if t.Key == "" {
 			continue
 		}
-		if err := cacheDeleteToken(t.Key); err != nil && firstErr == nil {
+		if err := invalidateTokenCacheForMutation(t.Key); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}

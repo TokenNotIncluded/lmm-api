@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/i18n"
 	"github.com/LIghtJUNction/api.lmm.best/model"
 	"github.com/LIghtJUNction/api.lmm.best/service"
 	"github.com/LIghtJUNction/api.lmm.best/setting"
@@ -566,6 +567,86 @@ func AdminRunAssistantReview(c *gin.Context) {
 		return
 	}
 	common.ApiSuccess(c, task.ToResponse())
+}
+
+func AdminListAssistantRequestReviews(c *gin.Context) {
+	userID, err := strconv.Atoi(strings.TrimSpace(c.Query("user_id")))
+	if err != nil || userID <= 0 {
+		writeAssistantError(c, http.StatusBadRequest, "ASSISTANT_REVIEW_USER_INVALID", errors.New("user_id must be a positive integer"))
+		return
+	}
+	target, err := model.GetUserById(userID, false)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if target.Id != c.GetInt("id") && !canManageTargetRole(c.GetInt("role"), target.Role) {
+		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionSameLevel)
+		return
+	}
+	page := 1
+	if raw := strings.TrimSpace(c.Query("page")); raw != "" {
+		page, err = strconv.Atoi(raw)
+		if err != nil || page < 1 {
+			writeAssistantError(c, http.StatusBadRequest, "ASSISTANT_REVIEW_PAGE_INVALID", errors.New("page must be a positive integer"))
+			return
+		}
+	}
+	limit := model.AssistantRequestReviewPageMax
+	if raw := strings.TrimSpace(c.Query("page_size")); raw != "" {
+		limit, err = strconv.Atoi(raw)
+		if err != nil || limit < 1 || limit > model.AssistantRequestReviewPageMax {
+			writeAssistantError(c, http.StatusBadRequest, "ASSISTANT_REVIEW_PAGE_SIZE_INVALID", errors.New("page_size must be between 1 and 100"))
+			return
+		}
+	}
+	violationsOnly := strings.EqualFold(strings.TrimSpace(c.Query("violations_only")), "true")
+	rows, total, err := model.ListAssistantRequestReviews(userID, violationsOnly, (page-1)*limit, limit)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	count, err := model.AssistantReviewViolationCount(userID)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	resetAt, err := model.AssistantReviewResetAt(userID)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, gin.H{
+		"items": rows, "total": total, "page": page, "page_size": limit,
+		"violation_count": count, "reset_at": resetAt,
+		// Queue saturation is process-wide and intentionally read-only. Expose
+		// the bounded review coverage counters to administrators so dropped
+		// samples are visible without delaying user requests.
+		"queue_stats": assistantReviewQueueStatsSnapshot(),
+	})
+}
+
+func AdminResetAssistantRequestReviewViolations(c *gin.Context) {
+	userID, err := strconv.Atoi(strings.TrimSpace(c.Param("user_id")))
+	if err != nil || userID <= 0 {
+		writeAssistantError(c, http.StatusBadRequest, "ASSISTANT_REVIEW_USER_INVALID", errors.New("user_id must be a positive integer"))
+		return
+	}
+	target, err := model.GetUserById(userID, false)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if target.Id != c.GetInt("id") && !canManageTargetRole(c.GetInt("role"), target.Role) {
+		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionSameLevel)
+		return
+	}
+	now := common.GetTimestamp()
+	if err := model.ResetAssistantReviewViolations(userID, now); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, gin.H{"user_id": userID, "violation_count": 0, "reset_at": now})
 }
 
 func AdminGetAssistantFundingSummary(c *gin.Context) {

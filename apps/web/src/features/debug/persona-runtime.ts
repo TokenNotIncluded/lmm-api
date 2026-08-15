@@ -31,7 +31,7 @@ import { api } from '@/lib/http-client'
 import { ROLE } from '@/lib/roles'
 import type { AuthBundle, AuthUser, TrustLevelInfo } from '@/stores/auth-store'
 
-export const DEBUG_PERSONA_IDS = ['l0', 'l1', 'admin'] as const
+export const DEBUG_PERSONA_IDS = ['l0', 'b', 'e', 'f', 'l1', 'admin'] as const
 export type DebugPersonaId = (typeof DEBUG_PERSONA_IDS)[number]
 
 type MockConversation = {
@@ -117,6 +117,66 @@ const DEBUG_USERS: Record<DebugPersonaId, AuthUser> = {
       stage: 'complete',
     },
   },
+  b: {
+    id: 1003,
+    username: 'debug_b_guided_buyer',
+    display_name: 'B · Guided buyer',
+    email: 'b-buyer@debug.invalid',
+    role: ROLE.USER,
+    status: 1,
+    group: 'default',
+    quota: 0,
+    used_quota: 0,
+    request_count: 3,
+    developer_access_granted: false,
+    trust_level_info: trustLevel(0),
+    onboarding: {
+      activation_complete: false,
+      credential_complete: false,
+      first_request_complete: false,
+      stage: 'activate',
+    },
+  },
+  e: {
+    id: 1004,
+    username: 'debug_e_normal_user',
+    display_name: 'E · Normal user',
+    email: 'e-user@debug.invalid',
+    role: ROLE.USER,
+    status: 1,
+    group: 'default',
+    quota: 750_000,
+    used_quota: 190_000,
+    request_count: 88,
+    developer_access_granted: true,
+    trust_level_info: trustLevel(1),
+    onboarding: {
+      activation_complete: true,
+      credential_complete: true,
+      first_request_complete: true,
+      stage: 'complete',
+    },
+  },
+  f: {
+    id: 1005,
+    username: 'debug_f_enterprise_operator',
+    display_name: 'F · Enterprise operator',
+    email: 'f-operator@debug.invalid',
+    role: ROLE.USER,
+    status: 1,
+    group: 'enterprise',
+    quota: 2_000_000,
+    used_quota: 340_000,
+    request_count: 120,
+    developer_access_granted: true,
+    trust_level_info: trustLevel(2),
+    onboarding: {
+      activation_complete: true,
+      credential_complete: true,
+      first_request_complete: true,
+      stage: 'complete',
+    },
+  },
   admin: {
     id: 1099,
     username: 'debug_administrator',
@@ -180,6 +240,71 @@ function initialConversations(): MockConversation[] {
           role: 'assistant',
           content: 'Open the setup guide and select your client platform.',
           created_at: now - 7_140,
+        },
+      ],
+    },
+    {
+      id: 8103,
+      userId: DEBUG_USERS.b.id,
+      title: 'Need a guided client setup',
+      preview: 'I need a stable API and step-by-step setup help.',
+      createdAt: now - 10_800,
+      messages: [
+        {
+          id: 9301,
+          role: 'user',
+          content: 'I need a stable API and step-by-step setup help.',
+          created_at: now - 10_800,
+        },
+        {
+          id: 9302,
+          role: 'assistant',
+          content: 'I will guide you through one setup step at a time.',
+          created_at: now - 10_740,
+        },
+      ],
+    },
+    {
+      id: 8104,
+      userId: DEBUG_USERS.f.id,
+      title: 'Enterprise stability review',
+      preview: 'We need predictable latency and an operational setup.',
+      createdAt: now - 14_400,
+      messages: [
+        {
+          id: 9401,
+          role: 'user',
+          content: 'We need predictable latency and an operational setup.',
+          created_at: now - 14_400,
+        },
+        {
+          id: 9402,
+          role: 'assistant',
+          content:
+            'I will focus on reliability, routing, and operational checks.',
+          created_at: now - 14_340,
+        },
+      ],
+    },
+    {
+      id: 8105,
+      userId: DEBUG_USERS.e.id,
+      title: 'Compare available model routes',
+      preview: 'Which model route should I use for a document workflow?',
+      createdAt: now - 18_000,
+      messages: [
+        {
+          id: 9501,
+          role: 'user',
+          content: 'Which model route should I use for a document workflow?',
+          created_at: now - 18_000,
+        },
+        {
+          id: 9502,
+          role: 'assistant',
+          content:
+            'Compare the live model catalog and choose the route by task.',
+          created_at: now - 17_940,
         },
       ],
     },
@@ -416,24 +541,32 @@ const debugAdapter: AxiosAdapter = async (config) => {
     return response(config, envelope(['gpt-5-mini', 'claude-sonnet']))
   }
   if (method === 'GET' && path === '/api/user/self/groups') {
+    const group = activeUser().group || 'default'
     return response(
       config,
-      envelope({ default: { desc: 'Default', ratio: 1 } })
+      envelope({
+        [group]: {
+          desc: group === 'enterprise' ? 'Enterprise' : 'Default',
+          ratio: 1,
+        },
+      })
     )
   }
   if (method === 'GET' && path === '/api/uptime/status') {
     return response(config, envelope([]))
   }
   if (method === 'GET' && path === '/api/token/') {
+    const developerAccessGranted =
+      activeUser().developer_access_granted === true
     return response(
       config,
-      state.activePersona === 'l0'
+      !developerAccessGranted
         ? { success: false, message: 'Developer access required' }
         : {
             success: true,
             data: { items: [], total: 0, page: 1, page_size: 10 },
           },
-      state.activePersona === 'l0' ? 403 : 200
+      !developerAccessGranted ? 403 : 200
     )
   }
   if (method === 'GET' && (path === '/api/data/self' || path === '/api/data')) {
@@ -466,6 +599,70 @@ const debugAdapter: AxiosAdapter = async (config) => {
   }
   if (method === 'GET' && path === '/api/assistant/pre-conversation-presets') {
     return response(config, envelope(preConversationPresets()))
+  }
+  if (method === 'GET' && path === '/api/assistant/journey') {
+    const access = activeUser().developer_access_granted === true
+    return response(
+      config,
+      envelope({
+        main: [
+          { id: 'ask_ai', status: 'completed' },
+          {
+            id: 'get_recommendation',
+            status: access ? 'completed' : 'pending',
+          },
+          { id: 'create_api_key', status: access ? 'completed' : 'pending' },
+          { id: 'install_client', status: access ? 'completed' : 'pending' },
+          { id: 'configure_client', status: access ? 'completed' : 'pending' },
+          { id: 'first_api_call', status: access ? 'completed' : 'pending' },
+        ],
+        side: [
+          {
+            id: 'earn_ai_gift',
+            status:
+              activeUser().id === DEBUG_USERS.b.id ? 'pending' : 'completed',
+          },
+          { id: 'accept_bounty', status: 'pending' },
+        ],
+      })
+    )
+  }
+  if (method === 'GET' && path === '/api/assistant/new-user-gift') {
+    const offered = activeUser().id === DEBUG_USERS.b.id
+    return response(
+      config,
+      envelope(
+        offered
+          ? {
+              amount_cents: 300,
+              quota: 3_000_000,
+              status: 'offered',
+              reason: 'Fixture: guided, concrete onboarding conversation.',
+              created_at: now,
+              claimed_at: 0,
+            }
+          : null
+      )
+    )
+  }
+  if (method === 'POST' && path === '/api/assistant/new-user-gift/claim') {
+    if (activeUser().id !== DEBUG_USERS.b.id) {
+      rejectRequest(config, 404, 'Welcome gift is unavailable')
+    }
+    return response(
+      config,
+      envelope({
+        gift: {
+          amount_cents: 300,
+          quota: 3_000_000,
+          status: 'claimed',
+          reason: 'Fixture: guided, concrete onboarding conversation.',
+          created_at: now,
+          claimed_at: now,
+        },
+        already_claimed: false,
+      })
+    )
   }
   if (
     method === 'POST' &&
