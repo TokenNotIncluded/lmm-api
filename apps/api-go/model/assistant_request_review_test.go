@@ -4,8 +4,29 @@ import (
 	"context"
 	"testing"
 
+	"github.com/LIghtJUNction/api.lmm.best/common"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCanViewAssistantReviewViolationsUsesStrictRoleBoundary(t *testing.T) {
+	owner := &User{Id: 10, Role: common.RoleAdminUser}
+	tests := []struct {
+		name   string
+		viewer int
+		role   int
+		want   bool
+	}{
+		{name: "owner", viewer: 10, role: common.RoleCommonUser, want: true},
+		{name: "ordinary other user", viewer: 11, role: common.RoleCommonUser, want: false},
+		{name: "lower administrator", viewer: 11, role: common.RoleAdminUser, want: false},
+		{name: "root can inspect lower administrator", viewer: 11, role: common.RoleRootUser, want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, canViewAssistantReviewViolations(test.viewer, test.role, owner))
+		})
+	}
+}
 
 func TestPurgeAssistantRequestReviewsBeforeIsBounded(t *testing.T) {
 	setupConsoleActivationTestDB(t)

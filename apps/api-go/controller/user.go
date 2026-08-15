@@ -374,6 +374,10 @@ func GetAllUsers(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	if err := model.PopulateAssistantReviewViolationCountsForViewer(users, c.GetInt("id"), c.GetInt("role")); err != nil {
+		common.ApiError(c, err)
+		return
+	}
 
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(users)
@@ -418,6 +422,10 @@ func SearchUsers(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	if err := model.PopulateAssistantReviewViolationCountsForViewer(users, c.GetInt("id"), c.GetInt("role")); err != nil {
+		common.ApiError(c, err)
+		return
+	}
 
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(users)
@@ -454,6 +462,10 @@ func GetUser(c *gin.Context) {
 	user.AdminPermissions = authz.Capabilities(user.Id, user.Role)
 	model.PopulateAdminPaymentRestriction(user)
 	if err := model.PopulateAssistantUserProfiles([]*model.User{user}, c.GetInt("id"), myRole); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if err := model.PopulateAssistantReviewViolationCountsForViewer([]*model.User{user}, c.GetInt("id"), myRole); err != nil {
 		common.ApiError(c, err)
 		return
 	}

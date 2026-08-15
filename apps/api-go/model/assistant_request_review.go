@@ -324,36 +324,54 @@ func AssistantRequestReviewTablesAvailable() bool {
 	return assistantReviewTablesAvailable(DB)
 }
 
-func PopulateAssistantReviewViolationCounts(users []*User) error {
+func canViewAssistantReviewViolations(viewerUserID, viewerRole int, user *User) bool {
+	if user == nil || user.Id <= 0 || viewerUserID <= 0 {
+		return false
+	}
+	if viewerUserID == user.Id {
+		return true
+	}
+	return viewerRole >= common.RoleAdminUser && viewerRole > user.Role
+}
+
+// PopulateAssistantReviewViolationCountsForViewer attaches counts only to
+// accounts the viewer may inspect. Keeping the ACL in the projection layer is
+// important: hiding the button in the web UI must not be the only protection.
+func PopulateAssistantReviewViolationCountsForViewer(users []*User, viewerUserID, viewerRole int) error {
 	if len(users) == 0 {
 		return nil
 	}
+	authorizedIDs := make([]int, 0, len(users))
 	if !assistantReviewTablesAvailable(DB) {
 		for _, user := range users {
-			if user != nil {
+			if canViewAssistantReviewViolations(viewerUserID, viewerRole, user) {
 				zero := int64(0)
 				user.AssistantViolationCount = &zero
+			} else if user != nil {
+				user.AssistantViolationCount = nil
 			}
 		}
 		return nil
 	}
-	ids := make([]int, 0, len(users))
 	for _, user := range users {
-		if user == nil || user.Id <= 0 {
+		if !canViewAssistantReviewViolations(viewerUserID, viewerRole, user) {
+			if user != nil {
+				user.AssistantViolationCount = nil
+			}
 			continue
 		}
-		ids = append(ids, user.Id)
+		authorizedIDs = append(authorizedIDs, user.Id)
 		zero := int64(0)
 		user.AssistantViolationCount = &zero
 	}
-	if len(ids) == 0 {
+	if len(authorizedIDs) == 0 {
 		return nil
 	}
 	var rows []struct {
 		UserID         int   `gorm:"column:user_id"`
 		ViolationCount int64 `gorm:"column:violation_count"`
 	}
-	query := AssistantReviewViolationTotals(DB).Where("assistant_request_reviews.user_id IN ?", ids)
+	query := AssistantReviewViolationTotals(DB).Where("assistant_request_reviews.user_id IN ?", authorizedIDs)
 	if err := query.Scan(&rows).Error; err != nil {
 		return err
 	}
@@ -368,4 +386,10 @@ func PopulateAssistantReviewViolationCounts(users []*User) error {
 		}
 	}
 	return nil
+}
+
+// PopulateAssistantReviewViolationCounts is retained for internal callers
+// that do not have viewer context. Without that context it must fail closed.
+func PopulateAssistantReviewViolationCounts(users []*User) error {
+	return PopulateAssistantReviewViolationCountsForViewer(users, 0, 0)
 }
