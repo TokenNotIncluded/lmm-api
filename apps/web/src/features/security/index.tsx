@@ -25,6 +25,7 @@ import {
   ListChecks,
   ShieldCheck,
 } from 'lucide-react'
+import { lazy, Suspense } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -40,6 +41,8 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { ForgePublicShell } from '@/features/forge/forge-public-shell'
 import { toIntlLocale } from '@/i18n/languages'
 import { formatNumber, formatTimestampToDate } from '@/lib/format'
+import { ROLE } from '@/lib/roles'
+import { useAuthStore } from '@/stores/auth-store'
 
 import {
   SECURITY_POLICY_ENDPOINT,
@@ -55,6 +58,12 @@ import type {
   SecurityStatsBucket,
   SecurityViolationFeeRule,
 } from './types'
+
+const SecurityAuditPanel = lazy(() =>
+  import('@/features/system-settings/security/security-audit').then(
+    ({ SecurityAuditPanel: panel }) => ({ default: panel })
+  )
+)
 
 const DETECTION_PRINCIPLES = [
   {
@@ -649,6 +658,9 @@ function PolicyPanel({
 
 export function SecurityContent() {
   const { t } = useTranslation()
+  const isAdministrator = useAuthStore(
+    (state) => (state.auth.user?.role ?? ROLE.GUEST) >= ROLE.ADMIN
+  )
   const policyQuery = useQuery({
     queryKey: ['security-policy'],
     queryFn: getSecurityPolicy,
@@ -695,6 +707,29 @@ export function SecurityContent() {
             )}
           </AlertDescription>
         </Alert>
+
+        {isAdministrator ? (
+          <Suspense
+            fallback={
+              <section
+                className='border-border/70 border-t pt-6'
+                aria-labelledby='security-audit-loading-title'
+              >
+                <h2
+                  id='security-audit-loading-title'
+                  className='font-serif text-3xl font-normal tracking-tight'
+                >
+                  {t('Security audit details')}
+                </h2>
+                <p className='text-muted-foreground mt-2 text-sm'>
+                  {t('Loading...')}
+                </p>
+              </section>
+            }
+          >
+            <SecurityAuditPanel />
+          </Suspense>
+        ) : null}
 
         <p className='text-muted-foreground max-w-3xl text-xs leading-5'>
           {t(

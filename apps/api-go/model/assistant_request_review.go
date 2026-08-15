@@ -175,13 +175,7 @@ func ListAssistantRequestReviews(userID int, violationsOnly bool, offset, limit 
 		return nil, 0, err
 	}
 	var rows []AssistantRequestReview
-	// The security projection never needs the retained request/response
-	// previews or failure text. Do not load those columns into Go memory for a
-	// paginated admin list; the user-scoped history endpoint remains the only
-	// path that can request them.
-	groupColumn := query.Statement.Quote("group")
-	rowQuery := query.Select("id, user_id, conversation_id, request_id, " + groupColumn + ", review_model, intensity, status, violation, abuse, rules_json, explanation, created_at, updated_at")
-	if err := rowQuery.Order("created_at DESC, id DESC").Offset(offset).Limit(limit).Find(&rows).Error; err != nil {
+	if err := query.Order("created_at DESC, id DESC").Offset(offset).Limit(limit).Find(&rows).Error; err != nil {
 		return nil, 0, err
 	}
 	views := make([]AssistantRequestReviewView, 0, len(rows))
@@ -239,7 +233,13 @@ func ListAssistantRequestReviewsForSecurity(filter AssistantRequestReviewFilter)
 		return nil, 0, err
 	}
 	var rows []AssistantRequestReview
-	if err := query.Order("created_at DESC, id DESC").Offset(offset).Limit(limit).Find(&rows).Error; err != nil {
+	// The security projection never needs the retained request/response
+	// previews or failure text. Do not load those columns into Go memory for a
+	// paginated admin list; the user-scoped history endpoint above remains the
+	// only path that can request them.
+	groupColumn := query.Statement.Quote("group")
+	rowQuery := query.Select("id, user_id, conversation_id, request_id, " + groupColumn + ", review_model, intensity, status, violation, abuse, rules_json, explanation, created_at, updated_at")
+	if err := rowQuery.Order("created_at DESC, id DESC").Offset(offset).Limit(limit).Find(&rows).Error; err != nil {
 		return nil, 0, err
 	}
 	views := make([]AssistantRequestReviewView, 0, len(rows))
