@@ -765,6 +765,23 @@ func TestAssistantPaymentOfferStateRequiresProgressiveIntent(t *testing.T) {
 	assert.Equal(t, assistantPaymentOfferReady, assistantPaymentOfferStateForContext(assistantUserContext{PaymentOfferState: assistantPaymentOfferReady}))
 }
 
+func TestAssistantReadyPlanPurchaseForcesLiveOffers(t *testing.T) {
+	ready := assistantUserContextForRequest(0, "我要购买套餐，用于 API 项目。")
+
+	assert.Equal(t, model.AssistantIntentPlanPurchase, ready.Intent)
+	assert.Equal(t, assistantPaymentOfferReady, ready.PaymentOfferState)
+	assert.Equal(t, "get_plan_offers", assistantNamedToolChoiceName(assistantToolChoiceForContext(ready)))
+	assert.Equal(t, []string{"get_plan_offers"}, assistantReadChain(ready))
+	assert.Equal(t, "get_plan_offers", assistantNamedToolChoiceName(assistantToolChoiceForAgentStep(ready, nil, nil)))
+
+	needsDetails := assistantUserContextForRequest(0, "我想购买套餐")
+	assert.Equal(t, model.AssistantIntentPlanPurchase, needsDetails.Intent)
+	assert.Equal(t, assistantPaymentOfferNeedsDetails, needsDetails.PaymentOfferState)
+	assert.NotEqual(t, "get_plan_offers", assistantNamedToolChoiceName(assistantToolChoiceForContext(needsDetails)))
+	assert.Empty(t, assistantReadChain(needsDetails))
+	assert.NotEqual(t, "get_plan_offers", assistantNamedToolChoiceName(assistantToolChoiceForAgentStep(needsDetails, nil, nil)))
+}
+
 func TestAssistantPaymentOfferStateDoesNotSerializeFinancialOrRiskDetails(t *testing.T) {
 	context := assistantUserContext{
 		UserID:                   42,

@@ -64,7 +64,7 @@ function HistoryMessage(props: {
   const safeMessage = redactAssistantMessageForDisplay(
     props.message.content,
     t(
-      'Sensitive content is hidden and can only be accessed from a private card.'
+      'Sensitive details are hidden until confirmation and remain visible only to you.'
     )
   )
   return (
@@ -97,7 +97,7 @@ function HistoryMessage(props: {
             .filter(Boolean)
             .join('、') ||
             t(
-              'Sensitive content is hidden and can only be accessed from a private card.'
+              'Sensitive details are hidden until confirmation and remain visible only to you.'
             )}
         </div>
       ) : null}
@@ -382,7 +382,7 @@ export function AssistantHistory(props: {
             const safePreview = redactAssistantMessageForDisplay(
               conversation.last_message_preview,
               t(
-                'Sensitive content is hidden and can only be accessed from a private card.'
+                'Sensitive details are hidden until confirmation and remain visible only to you.'
               )
             ).content
             const canManage =
@@ -525,7 +525,7 @@ export function AssistantHistoryConversation(props: {
           {conversation.owner !== 'self' ? (
             <p className='text-muted-foreground mt-1 text-xs leading-5'>
               {t(
-                'This history is available because the account has a lower access level. Private cards remain visible only to their owner.'
+                'This history is available because the account has a lower access level. Credential details remain visible only to their owner.'
               )}
             </p>
           ) : null}

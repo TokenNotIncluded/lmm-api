@@ -229,7 +229,7 @@ export function AssistantKeyTool(props: {
           </CardTitle>
           <CardDescription>
             {t(
-              'The credential is protected in a private card and is never added to chat history.'
+              'The credential is shown only after confirmation and is never added to chat history.'
             )}
           </CardDescription>
         </CardHeader>

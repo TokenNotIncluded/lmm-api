@@ -1151,7 +1151,7 @@ export function AssistantPanel(props: {
           const safeMessage = redactAssistantMessageForDisplay(
             message.content,
             t(
-              'Sensitive content is hidden and can only be accessed from a private card.'
+              'Sensitive details are hidden until confirmation and remain visible only to you.'
             )
           )
           return [
@@ -1248,7 +1248,7 @@ export function AssistantPanel(props: {
       const safeReply = redactAssistantMessageForDisplay(
         reply.content,
         t(
-          'Sensitive content is hidden and can only be accessed from a private card.'
+          'Sensitive details are hidden until confirmation and remain visible only to you.'
         )
       )
       const suggestedTarget = getAssistantPresetForIntent(reply.intent)
@@ -1589,7 +1589,7 @@ export function AssistantPanel(props: {
             </p>
             <p className='break-words'>
               {t(
-                'Do not send personal information, passwords, API keys, or credentials in chat. Site-issued credentials such as API keys are shown in a shielded private card and are kept out of the assistant context.'
+                'Do not send personal information, passwords, API keys, or credentials in chat. Site-issued credentials are shown only after your explicit confirmation, remain visible only to you, and stay out of the assistant context.'
               )}
             </p>
             <p className='break-words'>

@@ -1530,6 +1530,18 @@ for (const [locale, translations] of Object.entries(aiProfileTranslations)) {
 
 const assistantAndSecurityTranslations = {
   en: {
+    'Sensitive details are hidden until confirmation and remain visible only to you.':
+      'Sensitive details are hidden until confirmation and remain visible only to you.',
+    'Do not send personal information, passwords, API keys, or credentials in chat. Site-issued credentials are shown only after your explicit confirmation, remain visible only to you, and stay out of the assistant context.':
+      'Do not send personal information, passwords, API keys, or credentials in chat. Site-issued credentials are shown only after your explicit confirmation, remain visible only to you, and stay out of the assistant context.',
+    'This history is available because the account has a lower access level. Credential details remain visible only to their owner.':
+      'This history is available because the account has a lower access level. Credential details remain visible only to their owner.',
+    'The credential is shown only after confirmation and is never added to chat history.':
+      'The credential is shown only after confirmation and is never added to chat history.',
+    'Create an API key first, then confirm the CC Switch import. The browser builds the link from the selected model and service root; the key never enters assistant chat.':
+      'Create an API key first, then confirm the CC Switch import. The browser builds the link from the selected model and service root; the key never enters assistant chat.',
+    'Click Import to CC Switch, then review and confirm the import dialog.':
+      'Click Import to CC Switch, then review and confirm the import dialog.',
     'Please enter a message.': 'Please enter a message.',
     'Please enter a message other than a single punctuation mark.':
       'Please enter a message other than a single punctuation mark.',
@@ -1545,6 +1557,18 @@ const assistantAndSecurityTranslations = {
       'Enter verification code or backup code',
   },
   zh: {
+    'Sensitive details are hidden until confirmation and remain visible only to you.':
+      '敏感信息已隐藏，确认后仅向你显示，并且只对你可见。',
+    'Do not send personal information, passwords, API keys, or credentials in chat. Site-issued credentials are shown only after your explicit confirmation, remain visible only to you, and stay out of the assistant context.':
+      '请勿在聊天中发送个人信息、密码、API 密钥或凭证。本站凭证仅在你明确确认后向你显示，只对你可见，并且不会进入助手上下文。',
+    'This history is available because the account has a lower access level. Credential details remain visible only to their owner.':
+      '由于该账号等级较低，你可以查看此历史；凭证详情仍仅对其所有者可见。',
+    'The credential is shown only after confirmation and is never added to chat history.':
+      '凭证仅在确认后显示，绝不会加入聊天记录。',
+    'Create an API key first, then confirm the CC Switch import. The browser builds the link from the selected model and service root; the key never enters assistant chat.':
+      '请先创建 API 密钥，然后确认导入 CC Switch。浏览器会根据所选模型和服务根地址生成链接，密钥不会进入助手对话。',
+    'Click Import to CC Switch, then review and confirm the import dialog.':
+      '点击“导入 CC Switch”，然后检查并确认导入对话框。',
     'Please enter a message.': '请输入消息。',
     'Please enter a message other than a single punctuation mark.':
       '请输入不只是单个标点符号的消息。',
@@ -1559,6 +1583,18 @@ const assistantAndSecurityTranslations = {
     'Enter verification code or backup code': '请输入验证码或备用代码',
   },
   'zh-TW': {
+    'Sensitive details are hidden until confirmation and remain visible only to you.':
+      '敏感資訊已隱藏，確認後僅向你顯示，且只有你可見。',
+    'Do not send personal information, passwords, API keys, or credentials in chat. Site-issued credentials are shown only after your explicit confirmation, remain visible only to you, and stay out of the assistant context.':
+      '請勿在聊天中傳送個人資料、密碼、API 金鑰或憑證。本站憑證僅在你明確確認後向你顯示，只有你可見，且不會進入助理上下文。',
+    'This history is available because the account has a lower access level. Credential details remain visible only to their owner.':
+      '因該帳號等級較低，你可以查看此歷史；憑證詳情仍僅對其擁有者可見。',
+    'The credential is shown only after confirmation and is never added to chat history.':
+      '憑證僅在確認後顯示，絕不會加入聊天記錄。',
+    'Create an API key first, then confirm the CC Switch import. The browser builds the link from the selected model and service root; the key never enters assistant chat.':
+      '請先建立 API 金鑰，然後確認匯入 CC Switch。瀏覽器會根據所選模型和服務根網址產生連結，金鑰不會進入助理對話。',
+    'Click Import to CC Switch, then review and confirm the import dialog.':
+      '點擊「匯入 CC Switch」，然後檢查並確認匯入對話框。',
     'Please enter a message.': '請輸入訊息。',
     'Please enter a message other than a single punctuation mark.':
       '請輸入不只是單一標點符號的訊息。',
@@ -1573,6 +1609,18 @@ const assistantAndSecurityTranslations = {
     'Enter verification code or backup code': '請輸入驗證碼或備用代碼',
   },
   fr: {
+    'Sensitive details are hidden until confirmation and remain visible only to you.':
+      'Les informations sensibles sont masquées jusqu’à confirmation et restent visibles uniquement pour vous.',
+    'Do not send personal information, passwords, API keys, or credentials in chat. Site-issued credentials are shown only after your explicit confirmation, remain visible only to you, and stay out of the assistant context.':
+      'N’envoyez pas d’informations personnelles, de mots de passe, de clés API ou d’identifiants dans le chat. Les identifiants fournis par le site ne sont affichés qu’après votre confirmation explicite, restent visibles uniquement pour vous et restent hors du contexte de l’assistant.',
+    'This history is available because the account has a lower access level. Credential details remain visible only to their owner.':
+      'Cet historique est disponible car le compte a un niveau d’accès inférieur. Les détails d’identification restent visibles uniquement par leur propriétaire.',
+    'The credential is shown only after confirmation and is never added to chat history.':
+      'L’identifiant n’est affiché qu’après confirmation et n’est jamais ajouté à l’historique du chat.',
+    'Create an API key first, then confirm the CC Switch import. The browser builds the link from the selected model and service root; the key never enters assistant chat.':
+      'Créez d’abord une clé API, puis confirmez l’importation dans CC Switch. Le navigateur construit le lien avec le modèle et la racine du service sélectionnés ; la clé n’entre jamais dans le chat de l’assistant.',
+    'Click Import to CC Switch, then review and confirm the import dialog.':
+      'Cliquez sur « Importer dans CC Switch », puis vérifiez et confirmez la boîte de dialogue d’importation.',
     'Please enter a message.': 'Saisissez un message.',
     'Please enter a message other than a single punctuation mark.':
       'Saisissez un message autre qu’un simple signe de ponctuation.',
@@ -1588,6 +1636,18 @@ const assistantAndSecurityTranslations = {
       'Saisissez le code de vérification ou de secours',
   },
   ja: {
+    'Sensitive details are hidden until confirmation and remain visible only to you.':
+      '機密情報は確認するまで非表示で、確認後もあなたにだけ表示されます。',
+    'Do not send personal information, passwords, API keys, or credentials in chat. Site-issued credentials are shown only after your explicit confirmation, remain visible only to you, and stay out of the assistant context.':
+      'チャットに個人情報、パスワード、API キー、認証情報を送信しないでください。サイトが発行する認証情報は明示的な確認後にのみ表示され、あなたにだけ表示され、アシスタントのコンテキストには入りません。',
+    'This history is available because the account has a lower access level. Credential details remain visible only to their owner.':
+      'この履歴はアカウントのアクセスレベルが低いため表示されています。認証情報の詳細は所有者だけに表示されます。',
+    'The credential is shown only after confirmation and is never added to chat history.':
+      '認証情報は確認後にのみ表示され、チャット履歴には追加されません。',
+    'Create an API key first, then confirm the CC Switch import. The browser builds the link from the selected model and service root; the key never enters assistant chat.':
+      'まず API キーを作成し、CC Switch へのインポートを確認してください。ブラウザーが選択したモデルとサービスルートからリンクを作成し、キーがアシスタントのチャットに入ることはありません。',
+    'Click Import to CC Switch, then review and confirm the import dialog.':
+      '「CC Switch にインポート」をクリックし、インポート確認ダイアログを確認して承認してください。',
     'Please enter a message.': 'メッセージを入力してください。',
     'Please enter a message other than a single punctuation mark.':
       '句読点1文字だけではないメッセージを入力してください。',
@@ -1603,6 +1663,18 @@ const assistantAndSecurityTranslations = {
       '確認コードまたはバックアップコードを入力してください',
   },
   ru: {
+    'Sensitive details are hidden until confirmation and remain visible only to you.':
+      'Чувствительные данные скрыты до подтверждения и после него видны только вам.',
+    'Do not send personal information, passwords, API keys, or credentials in chat. Site-issued credentials are shown only after your explicit confirmation, remain visible only to you, and stay out of the assistant context.':
+      'Не отправляйте в чат личные данные, пароли, API-ключи или учётные данные. Выданные сайтом учётные данные показываются только после явного подтверждения, видны только вам и не попадают в контекст помощника.',
+    'This history is available because the account has a lower access level. Credential details remain visible only to their owner.':
+      'Эта история доступна из-за более низкого уровня доступа аккаунта. Сведения об учётных данных видны только их владельцу.',
+    'The credential is shown only after confirmation and is never added to chat history.':
+      'Учётные данные показываются только после подтверждения и никогда не добавляются в историю чата.',
+    'Create an API key first, then confirm the CC Switch import. The browser builds the link from the selected model and service root; the key never enters assistant chat.':
+      'Сначала создайте API-ключ, затем подтвердите импорт в CC Switch. Браузер создаёт ссылку на основе выбранной модели и корня сервиса; ключ никогда не попадает в чат помощника.',
+    'Click Import to CC Switch, then review and confirm the import dialog.':
+      'Нажмите «Импорт в CC Switch», затем проверьте и подтвердите диалог импорта.',
     'Please enter a message.': 'Введите сообщение.',
     'Please enter a message other than a single punctuation mark.':
       'Введите сообщение, состоящее не только из одного знака препинания.',
@@ -1618,6 +1690,18 @@ const assistantAndSecurityTranslations = {
       'Введите код подтверждения или резервный код',
   },
   vi: {
+    'Sensitive details are hidden until confirmation and remain visible only to you.':
+      'Thông tin nhạy cảm được ẩn cho đến khi xác nhận và chỉ hiển thị với bạn.',
+    'Do not send personal information, passwords, API keys, or credentials in chat. Site-issued credentials are shown only after your explicit confirmation, remain visible only to you, and stay out of the assistant context.':
+      'Không gửi thông tin cá nhân, mật khẩu, API key hoặc thông tin xác thực trong cuộc trò chuyện. Thông tin xác thực do trang cấp chỉ hiển thị sau khi bạn xác nhận rõ ràng, chỉ bạn có thể xem và không đi vào ngữ cảnh của trợ lý.',
+    'This history is available because the account has a lower access level. Credential details remain visible only to their owner.':
+      'Lịch sử này khả dụng vì tài khoản có cấp truy cập thấp hơn. Chi tiết thông tin xác thực chỉ hiển thị với chủ sở hữu.',
+    'The credential is shown only after confirmation and is never added to chat history.':
+      'Thông tin xác thực chỉ hiển thị sau khi xác nhận và không bao giờ được thêm vào lịch sử trò chuyện.',
+    'Create an API key first, then confirm the CC Switch import. The browser builds the link from the selected model and service root; the key never enters assistant chat.':
+      'Trước tiên hãy tạo API key, sau đó xác nhận việc nhập vào CC Switch. Trình duyệt tạo liên kết từ model và URL gốc của dịch vụ đã chọn; key không bao giờ đi vào cuộc trò chuyện với trợ lý.',
+    'Click Import to CC Switch, then review and confirm the import dialog.':
+      'Nhấp vào Nhập vào CC Switch, sau đó kiểm tra và xác nhận hộp thoại nhập.',
     'Please enter a message.': 'Vui lòng nhập tin nhắn.',
     'Please enter a message other than a single punctuation mark.':
       'Vui lòng nhập tin nhắn không chỉ gồm một dấu câu.',

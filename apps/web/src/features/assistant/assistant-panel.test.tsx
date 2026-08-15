@@ -1635,7 +1635,7 @@ describe('AssistantPanel', () => {
         waitForCondition(
           () =>
             document.body.textContent?.includes(
-              'Private cards remain visible only to their owner'
+              'Credential details remain visible only to their owner'
             ) === true,
           'Assistant history detail did not render'
         )

@@ -693,6 +693,10 @@ func assistantToolChoiceForContext(userContext assistantUserContext) any {
 	name := ""
 	if userContext.ConversationTitleNeeded {
 		name = "set_conversation_title"
+	} else if assistantPlanOfferWorkflowRequired(userContext) {
+		// A ready, explicit purchase request must read the live offers before
+		// the model can answer from stale plan context or invent a price.
+		name = "get_plan_offers"
 	} else if assistantHumanSupportRequest(userContext.LatestUserRequest) {
 		name = "request_human_support"
 	} else if assistantPublicActivityQuestion(userContext.LatestUserRequest) {
@@ -870,6 +874,11 @@ func assistantReadChain(userContext assistantUserContext) []string {
 	}
 	tools := make([]string, 0, 3)
 	hasModelReference := assistantHasModelReference(text)
+	if assistantPlanOfferWorkflowRequired(userContext) {
+		// Keep this first: plan offers are a live, read-only fact source and
+		// must be loaded before the final answer for an explicit ready purchase.
+		tools = append(tools, "get_plan_offers")
+	}
 	if userContext.Intent == model.AssistantIntentRecommendation {
 		// Recommendation is a single shared, user-visible document. Read the
 		// authoritative current row before answering even for a plain “show my
@@ -928,6 +937,12 @@ func assistantRecommendationWorkflowRequired(userContext assistantUserContext) b
 
 func assistantCreateKeyWorkflowRequired(userContext assistantUserContext) bool {
 	return userContext.DeveloperAccessGranted && userContext.CreateKeyAction != assistantCreateKeyActionNone
+}
+
+func assistantPlanOfferWorkflowRequired(userContext assistantUserContext) bool {
+	return userContext.Intent == model.AssistantIntentPlanPurchase &&
+		assistantPaymentOfferStateForContext(userContext) == assistantPaymentOfferReady &&
+		assistantToolAllowedForContext("get_plan_offers", userContext)
 }
 
 func assistantPublicActivityWorkflowRequired(userContext assistantUserContext) bool {

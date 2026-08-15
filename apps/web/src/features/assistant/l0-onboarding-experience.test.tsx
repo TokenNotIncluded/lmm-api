@@ -236,6 +236,14 @@ describe('L0 onboarding assistant experience', () => {
         document.body.textContent ?? '',
         /passwords, API keys, or credentials/
       )
+      assert.match(
+        document.body.textContent ?? '',
+        /shown only after your explicit confirmation, remain visible only to you/
+      )
+      assert.doesNotMatch(
+        document.body.textContent ?? '',
+        /shielded private card|private card/
+      )
       assert.ok(
         document.querySelector(
           'button:not([aria-label="Submit"]):not([data-testid="assistant-collapse"])'

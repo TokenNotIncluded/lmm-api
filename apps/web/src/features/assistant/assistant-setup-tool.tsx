@@ -545,7 +545,7 @@ export function AssistantSetupTool(props: {
               <AlertTitle>{t('CC Switch one-click import')}</AlertTitle>
               <AlertDescription>
                 {t(
-                  'Create an API key first, then use Import to CC Switch in the shielded private card. The browser builds the link from the selected model and service root; the key never enters assistant chat.'
+                  'Create an API key first, then confirm the CC Switch import. The browser builds the link from the selected model and service root; the key never enters assistant chat.'
                 )}
               </AlertDescription>
             </Alert>
@@ -568,7 +568,7 @@ export function AssistantSetupTool(props: {
                 number={3}
                 title={t('Build the import link')}
                 description={t(
-                  'Click Import to CC Switch in the private card. CC Switch opens a confirmation dialog; review and confirm it.'
+                  'Click Import to CC Switch, then review and confirm the import dialog.'
                 )}
               />
               <SetupStep
