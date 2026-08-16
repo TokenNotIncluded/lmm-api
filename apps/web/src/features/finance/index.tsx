@@ -407,16 +407,36 @@ export function Finance() {
             />
             <Metric
               label={t('Profit')}
-              value={money(overview?.profit_micros ?? 0)}
-              tone={
-                (overview?.profit_micros ?? 0) >= 0 ? 'positive' : 'negative'
+              value={
+                overview?.cost_attribution === 'unavailable_for_payment_method'
+                  ? '—'
+                  : money(overview?.profit_micros ?? 0)
               }
-              detail={`${t('Profit margin')}: ${overview?.revenue_micros ? Math.round((overview.profit_micros / overview.revenue_micros) * 100 * 10) / 10 : 0}%`}
+              tone={
+                overview?.cost_attribution === 'unavailable_for_payment_method'
+                  ? undefined
+                  : (overview?.profit_micros ?? 0) >= 0
+                    ? 'positive'
+                    : 'negative'
+              }
+              detail={
+                overview?.cost_attribution === 'unavailable_for_payment_method'
+                  ? t('Profit is unavailable for a payment-method filter')
+                  : `${t('Profit margin')}: ${overview?.revenue_micros ? Math.round((overview.profit_micros / overview.revenue_micros) * 100 * 10) / 10 : 0}%`
+              }
             />
             <Metric
               label={t('Token economy')}
-              value={compact(overview?.tokens.total_tokens ?? 0)}
-              detail={`${compact(overview?.tokens.requests ?? 0)} ${t('Requests').toLowerCase()}`}
+              value={
+                overview?.cost_attribution === 'unavailable_for_payment_method'
+                  ? '—'
+                  : compact(overview?.tokens.total_tokens ?? 0)
+              }
+              detail={
+                overview?.cost_attribution === 'unavailable_for_payment_method'
+                  ? t('Usage is unavailable for a payment-method filter')
+                  : `${compact(overview?.tokens.requests ?? 0)} ${t('Requests').toLowerCase()}`
+              }
             />
           </div>
 

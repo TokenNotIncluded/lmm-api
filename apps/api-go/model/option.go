@@ -273,6 +273,9 @@ func validateOptionValue(key string, value string) error {
 	if key == setting.AssistantModelOptionKey && !IsModelEnabledForGroup("default", strings.TrimSpace(value)) {
 		return errors.New("assistant model is not enabled in the default group; choose a live model from the model list")
 	}
+	if key == setting.AssistantReviewModelOptionKey && !IsModelEnabledForGroup("default", strings.TrimSpace(value)) {
+		return errors.New("assistant review model is not enabled in the default group; choose a live model from the model list")
+	}
 	if err := setting.ValidateAdvancedSecurityOption(key, value); err != nil {
 		return err
 	}

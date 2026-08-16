@@ -69,6 +69,7 @@ export interface FinanceOverview {
   net_revenue_micros: number
   expense_micros: number
   profit_micros: number
+  cost_attribution?: 'complete' | 'unavailable_for_payment_method'
   revenue_by_method: FinanceMethodMetric[]
   refund_by_method: FinanceMethodMetric[]
   expense_by_method: FinanceMethodMetric[]

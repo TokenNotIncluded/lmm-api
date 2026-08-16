@@ -1,4 +1,3 @@
-import assert from 'node:assert/strict'
 /*
 Copyright (C) 2026 LIghtJUNction
 
@@ -7,6 +6,7 @@ it under the terms of the GNU Affero General Public License as
 published by the Free Software Foundation, either version 3 of the
 License, or (at your option) any later version.
 */
+import assert from 'node:assert/strict'
 import { after, test } from 'node:test'
 
 import { Window } from 'happy-dom'

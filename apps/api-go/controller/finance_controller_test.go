@@ -50,6 +50,35 @@ func TestFinanceOverviewAggregatesPaymentMethodsUsersAndTokenCost(t *testing.T) 
 	require.Equal(t, int64(10_000_000), stripeView.RevenueMicros)
 }
 
+func TestFinanceOverviewDoesNotAttributeUsageCostToPaymentMethod(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}, &model.SubscriptionOrder{}, &model.Log{}, &model.FinanceLedgerEntry{}, &model.FinancePaymentMethod{}))
+	now := time.Now().Unix()
+	users := []model.User{
+		{Username: "finance-method-a", Password: "password", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "finance-method-a"},
+		{Username: "finance-method-b", Password: "password", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "finance-method-b"},
+	}
+	require.NoError(t, db.Create(&users).Error)
+	require.NoError(t, db.Create(&[]model.TopUp{
+		{UserId: users[0].Id, TradeNo: "finance-method-stripe", Money: 10, Status: common.TopUpStatusSuccess, PaymentMethod: "stripe", PaymentProvider: "stripe", CompleteTime: now - 10},
+		{UserId: users[1].Id, TradeNo: "finance-method-creem", Money: 20, Status: common.TopUpStatusSuccess, PaymentMethod: "creem", PaymentProvider: "creem", CompleteTime: now - 9},
+	}).Error)
+	require.NoError(t, db.Create(&[]model.Log{
+		{UserId: users[0].Id, CreatedAt: now - 8, Type: model.LogTypeConsume, PromptTokens: 100, CompletionTokens: 100, Other: `{"model_price":0.10}`},
+		{UserId: users[1].Id, CreatedAt: now - 7, Type: model.LogTypeConsume, PromptTokens: 200, CompletionTokens: 200, Other: `{"model_price":0.10}`},
+	}).Error)
+
+	view, err := buildFinanceOverview(now-100, now+1, 0, "stripe")
+	require.NoError(t, err)
+	require.Equal(t, "unavailable_for_payment_method", view.CostAttribution)
+	require.Equal(t, int64(0), view.Tokens.TotalTokens)
+	require.Equal(t, int64(0), view.ExpenseMicros)
+	require.Equal(t, int64(10_000_000), view.RevenueMicros)
+	require.Equal(t, int64(10_000_000), view.ProfitMicros, "the numeric profit is only the attributable subset; the response flag prevents treating it as platform profit")
+	require.Len(t, view.Users, 1)
+	require.Equal(t, users[0].Id, view.Users[0].UserID)
+}
+
 func TestFinanceOverviewDoesNotDoubleCountSubscriptionTopUpMirror(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}, &model.SubscriptionOrder{}, &model.Log{}, &model.FinanceLedgerEntry{}, &model.FinancePaymentMethod{}))

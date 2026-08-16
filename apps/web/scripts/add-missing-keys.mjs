@@ -3260,6 +3260,10 @@ const weeklyDiscountTranslations = {
     'Discount code copied': 'Discount code copied',
     'Weekly recharge discount': 'Weekly recharge discount',
     'One claim per UTC week': 'One claim per UTC week',
+    'Profit is unavailable for a payment-method filter':
+      'Profit is unavailable for a payment-method filter',
+    'Usage is unavailable for a payment-method filter':
+      'Usage is unavailable for a payment-method filter',
   },
   fr: {
     'Weekly discount claimed': 'Remise hebdomadaire réclamée',
@@ -3271,6 +3275,10 @@ const weeklyDiscountTranslations = {
     'Discount code copied': 'Code promo copié',
     'Weekly recharge discount': 'Remise de recharge hebdomadaire',
     'One claim per UTC week': 'Une réclamation par semaine UTC',
+    'Profit is unavailable for a payment-method filter':
+      'Le bénéfice est indisponible avec un filtre de moyen de paiement',
+    'Usage is unavailable for a payment-method filter':
+      "L'utilisation est indisponible avec un filtre de moyen de paiement",
   },
   ja: {
     'Weekly discount claimed': '毎週割引を受け取りました',
@@ -3281,6 +3289,10 @@ const weeklyDiscountTranslations = {
     'Discount code copied': '割引コードをコピーしました',
     'Weekly recharge discount': '毎週のチャージ割引',
     'One claim per UTC week': 'UTC週ごとに1回まで',
+    'Profit is unavailable for a payment-method filter':
+      '支払方法フィルター使用時は利益を表示できません',
+    'Usage is unavailable for a payment-method filter':
+      '支払方法フィルター使用時は使用量を表示できません',
   },
   ru: {
     'Weekly discount claimed': 'Еженедельная скидка получена',
@@ -3292,6 +3304,10 @@ const weeklyDiscountTranslations = {
     'Discount code copied': 'Код скидки скопирован',
     'Weekly recharge discount': 'Еженедельная скидка на пополнение',
     'One claim per UTC week': 'Один раз за неделю UTC',
+    'Profit is unavailable for a payment-method filter':
+      'При фильтре по способу оплаты прибыль недоступна',
+    'Usage is unavailable for a payment-method filter':
+      'При фильтре по способу оплаты использование недоступно',
   },
   vi: {
     'Weekly discount claimed': 'Đã nhận ưu đãi hàng tuần',
@@ -3302,6 +3318,10 @@ const weeklyDiscountTranslations = {
     'Discount code copied': 'Đã sao chép mã giảm giá',
     'Weekly recharge discount': 'Ưu đãi nạp tiền hàng tuần',
     'One claim per UTC week': 'Mỗi tuần UTC chỉ nhận một lần',
+    'Profit is unavailable for a payment-method filter':
+      'Không thể tính lợi nhuận khi lọc theo phương thức thanh toán',
+    'Usage is unavailable for a payment-method filter':
+      'Không thể xác định mức sử dụng khi lọc theo phương thức thanh toán',
   },
   'zh-TW': {
     'Weekly discount claimed': '每週優惠已領取',
@@ -3312,6 +3332,10 @@ const weeklyDiscountTranslations = {
     'Discount code copied': '優惠碼已複製',
     'Weekly recharge discount': '每週充值折扣',
     'One claim per UTC week': '每個 UTC 週限領一次',
+    'Profit is unavailable for a payment-method filter':
+      '套用付款方式篩選時無法提供利潤',
+    'Usage is unavailable for a payment-method filter':
+      '套用付款方式篩選時無法提供用量',
   },
   zh: {
     'Weekly discount claimed': '每周优惠已领取',
@@ -3322,6 +3346,10 @@ const weeklyDiscountTranslations = {
     'Discount code copied': '优惠码已复制',
     'Weekly recharge discount': '每周充值折扣',
     'One claim per UTC week': '每个 UTC 周限领一次',
+    'Profit is unavailable for a payment-method filter':
+      '按支付方式筛选时无法计算利润',
+    'Usage is unavailable for a payment-method filter':
+      '按支付方式筛选时无法归因用量',
   },
 }
 

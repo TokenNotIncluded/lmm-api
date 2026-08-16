@@ -17,6 +17,15 @@ func TestValidateOptionValueRejectsInvalidMaxTokenAutoGroups(t *testing.T) {
 	require.NoError(t, validateOptionValue("MaxTokenAutoGroups", "999999"))
 }
 
+func TestValidateOptionValueRejectsUnavailableAssistantReviewModel(t *testing.T) {
+	db := setupConsoleActivationTestDB(t)
+	require.NoError(t, db.AutoMigrate(&Ability{}))
+	require.NoError(t, db.Create(&Ability{Group: "default", Model: "review-live", Enabled: true, ChannelId: 1}).Error)
+
+	require.NoError(t, validateOptionValue("AssistantReviewModel", "review-live"))
+	require.Error(t, validateOptionValue("AssistantReviewModel", "review-missing"))
+}
+
 func TestValidateRegionPolicyOptions(t *testing.T) {
 	for _, value := range []string{"", "1", "yes", "TRUE", "False"} {
 		t.Run("enabled/"+value, func(t *testing.T) {

@@ -86,21 +86,26 @@ type financeTokenMetric struct {
 }
 
 type financeOverview struct {
-	Range            financeRange                 `json:"range"`
-	Currency         string                       `json:"currency"`
-	RevenueMicros    int64                        `json:"revenue_micros"`
-	RefundMicros     int64                        `json:"refund_micros"`
-	NetRevenueMicros int64                        `json:"net_revenue_micros"`
-	ExpenseMicros    int64                        `json:"expense_micros"`
-	ProfitMicros     int64                        `json:"profit_micros"`
-	RevenueByMethod  []financeMethodMetric        `json:"revenue_by_method"`
-	RefundByMethod   []financeMethodMetric        `json:"refund_by_method"`
-	ExpenseByMethod  []financeMethodMetric        `json:"expense_by_method"`
-	Tokens           financeTokenMetric           `json:"tokens"`
-	Daily            []financeDailyMetric         `json:"daily"`
-	Users            []financeUserMetric          `json:"users"`
-	PaymentMethods   []model.FinancePaymentMethod `json:"payment_methods"`
-	SourcesBounded   bool                         `json:"sources_bounded"`
+	Range            financeRange `json:"range"`
+	Currency         string       `json:"currency"`
+	RevenueMicros    int64        `json:"revenue_micros"`
+	RefundMicros     int64        `json:"refund_micros"`
+	NetRevenueMicros int64        `json:"net_revenue_micros"`
+	ExpenseMicros    int64        `json:"expense_micros"`
+	ProfitMicros     int64        `json:"profit_micros"`
+	// Token usage is recorded independently from payment receipts. Once a
+	// payment-method filter is applied, historical usage cannot be attributed
+	// to that method unless the request log carries an explicit source, so the
+	// dashboard must not silently fold all usage cost into one method's profit.
+	CostAttribution string                       `json:"cost_attribution"`
+	RevenueByMethod []financeMethodMetric        `json:"revenue_by_method"`
+	RefundByMethod  []financeMethodMetric        `json:"refund_by_method"`
+	ExpenseByMethod []financeMethodMetric        `json:"expense_by_method"`
+	Tokens          financeTokenMetric           `json:"tokens"`
+	Daily           []financeDailyMetric         `json:"daily"`
+	Users           []financeUserMetric          `json:"users"`
+	PaymentMethods  []model.FinancePaymentMethod `json:"payment_methods"`
+	SourcesBounded  bool                         `json:"sources_bounded"`
 	// Users is an intentionally bounded ranking. Keep this explicit so an
 	// administrator does not mistake the first page for a complete user list.
 	UserMetricsTruncated      bool `json:"user_metrics_truncated"`
@@ -128,6 +133,7 @@ func newFinanceAccumulator(start, end int64, paymentMethods []model.FinancePayme
 		overview: financeOverview{
 			Range:                     financeRange{Start: start, End: end},
 			Currency:                  model.FinanceCurrencyUSD,
+			CostAttribution:           "complete",
 			PaymentMethods:            paymentMethods,
 			SourcesBounded:            true,
 			UserMetricsComplete:       true,
@@ -682,6 +688,12 @@ func buildFinanceOverview(start, end int64, userFilter int, methodFilter string)
 		return financeOverview{}, err
 	}
 	a := newFinanceAccumulator(start, end, methods)
+	if methodFilter != "" {
+		// Usage logs do not retain a payment-method dimension. Excluding them is
+		// safer than attributing every user's token cost to the selected method;
+		// the response explicitly tells callers that profit is incomplete.
+		a.overview.CostAttribution = "unavailable_for_payment_method"
+	}
 	// Completing a subscription creates a TopUp mirror with the same trade_no
 	// so the existing wallet/order paths keep their historical semantics. The
 	// subscription order is the financial source of truth, however; excluding
@@ -751,6 +763,9 @@ func buildFinanceOverview(start, end int64, userFilter int, methodFilter string)
 		tx = tx.Where("user_id = ?", userFilter)
 	}
 	if err := iterateFinanceLogSource(tx.Select("id, user_id, created_at, request_id, type, prompt_tokens, completion_tokens, other"), func(log model.Log) error {
+		if methodFilter != "" {
+			return nil
+		}
 		other, _ := common.StrToMap(log.Other)
 		if !financeUsageIsCountable(other) {
 			return nil
