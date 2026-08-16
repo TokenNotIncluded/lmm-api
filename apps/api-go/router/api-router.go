@@ -13,6 +13,9 @@ import (
 
 const (
 	waffoPancakeMutationRequestMaxBytes = 16 << 10
+	// Self updates only contain profile fields and console preferences. Keep the
+	// decoded request bounded before UpdateSelf streams it into a map.
+	userSelfMutationRequestMaxBytes = 16 << 10
 	// Token mutation payloads contain only bounded metadata (name, group,
 	// optional model/IP limits, or at most 100 IDs).  Keep these key-management
 	// endpoints from handing an unbounded JSON stream to encoding/json.
@@ -165,7 +168,7 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.POST("/account-action-requests", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.SubmitAccountActionRequest)
 				selfRoute.GET("/violation-fees", middleware.DisableCache(), controller.ListSelfViolationFeeRecords)
 				selfRoute.POST("/violation-fee-appeals", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.SubmitViolationFeeAppeal)
-				selfRoute.PUT("/self", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.UpdateSelf)
+				selfRoute.PUT("/self", middleware.CriticalRateLimit(), middleware.DisableCache(), middleware.DecompressRequestMiddleware(), middleware.RequestBodyLimit(userSelfMutationRequestMaxBytes), controller.UpdateSelf)
 				selfRoute.DELETE("/self", controller.DeleteSelf)
 				selfRoute.GET("/token", middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit("access-token"), middleware.DisableCache(), controller.GenerateAccessToken)
 				selfRoute.GET("/passkey", controller.PasskeyStatus)
