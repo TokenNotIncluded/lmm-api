@@ -9,7 +9,10 @@ the Free Software Foundation, either version 3 of the License, or
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
-import { getDiscountCodeAvailability } from './availability'
+import {
+  getDiscountCodeAvailability,
+  parseDiscountCodeMaxUses,
+} from './availability'
 
 const now = 1_786_400_000
 
@@ -50,5 +53,15 @@ describe('discount code availability', () => {
       ),
       'disabled'
     )
+  })
+
+  test('accepts only safe whole-number usage limits', () => {
+    assert.equal(parseDiscountCodeMaxUses('0'), 0)
+    assert.equal(parseDiscountCodeMaxUses('25'), 25)
+    assert.equal(parseDiscountCodeMaxUses(' 3 '), 3)
+    assert.equal(parseDiscountCodeMaxUses(''), undefined)
+    assert.equal(parseDiscountCodeMaxUses('-1'), undefined)
+    assert.equal(parseDiscountCodeMaxUses('1.5'), undefined)
+    assert.equal(parseDiscountCodeMaxUses('9007199254740992'), undefined)
   })
 })

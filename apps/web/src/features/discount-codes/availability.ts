@@ -25,3 +25,15 @@ export function getDiscountCodeAvailability(
   if (code.expired_time > 0 && code.expired_time < now) return 'expired'
   return 'active'
 }
+
+/**
+ * Zero is the server's explicit unlimited sentinel. Reject blank, fractional,
+ * and unsafe values before sending a value to the int64-backed API.
+ */
+export function parseDiscountCodeMaxUses(value: string): number | undefined {
+  const normalized = value.trim()
+  if (!/^\d+$/.test(normalized)) return undefined
+
+  const maxUses = Number(normalized)
+  return Number.isSafeInteger(maxUses) ? maxUses : undefined
+}

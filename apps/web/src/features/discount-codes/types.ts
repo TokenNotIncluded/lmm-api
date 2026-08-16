@@ -15,6 +15,8 @@ export interface DiscountCode {
   min_amount: number
   status: number
   used_count: number
+  /** 0 means this administrator code has no usage cap. */
+  max_uses: number
   created_by: number
   created_time: number
   updated_time: number
@@ -41,6 +43,7 @@ export interface DiscountCodeInput {
   name: string
   discount_percent: number
   min_amount: number
+  max_uses: number
   starts_time: number
   expired_time: number
   status?: number

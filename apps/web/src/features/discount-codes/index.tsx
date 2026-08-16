@@ -38,6 +38,7 @@ import {
 import {
   DISCOUNT_CODE_ENABLED_STATUS,
   getDiscountCodeAvailability,
+  parseDiscountCodeMaxUses,
 } from './availability'
 import type { DiscountCode, DiscountCodeInput } from './types'
 
@@ -48,6 +49,7 @@ type FormState = {
   name: string
   discount_percent: string
   min_amount: string
+  max_uses: string
   starts_time: string
   expired_time: string
 }
@@ -57,6 +59,7 @@ const emptyForm: FormState = {
   name: '',
   discount_percent: '10',
   min_amount: '0',
+  max_uses: '0',
   starts_time: '',
   expired_time: '',
 }
@@ -81,6 +84,7 @@ function formFromRow(row?: DiscountCode): FormState {
     name: row.name,
     discount_percent: String(row.discount_percent),
     min_amount: String(row.min_amount),
+    max_uses: String(row.max_uses),
     starts_time: toDateInput(row.starts_time),
     expired_time: toDateInput(row.expired_time),
   }
@@ -178,14 +182,16 @@ export function DiscountCodes() {
   })
 
   const isSaving = saveMutation.isPending
+  const maxUses = parseDiscountCodeMaxUses(form.max_uses)
   const canSave = useMemo(
     () =>
       form.code.trim().length >= 3 &&
       form.name.trim().length > 0 &&
       Number(form.discount_percent) >= 1 &&
       Number(form.discount_percent) <= 99 &&
-      Number(form.min_amount) >= 0,
-    [form]
+      Number(form.min_amount) >= 0 &&
+      maxUses !== undefined,
+    [form, maxUses]
   )
 
   const openCreate = () => {
@@ -201,12 +207,13 @@ export function DiscountCodes() {
   }
 
   const submit = () => {
-    if (!canSave) return
+    if (!canSave || maxUses === undefined) return
     saveMutation.mutate({
       code: form.code.trim().toUpperCase(),
       name: form.name.trim(),
       discount_percent: Number(form.discount_percent),
       min_amount: Math.max(0, Math.floor(Number(form.min_amount))),
+      max_uses: maxUses,
       starts_time: toTimestamp(form.starts_time),
       expired_time: toTimestamp(form.expired_time),
     })
@@ -276,7 +283,10 @@ export function DiscountCodes() {
                       <div className='font-mono font-medium'>{row.code}</div>
                       <div className='truncate'>{row.name}</div>
                       <div>{row.discount_percent}%</div>
-                      <div>{row.used_count}</div>
+                      <div className='tabular-nums'>
+                        {row.used_count} /{' '}
+                        {row.max_uses > 0 ? row.max_uses : t('No maximum')}
+                      </div>
                       <div className='flex items-center gap-2'>
                         <Switch
                           size='sm'
@@ -442,6 +452,28 @@ export function DiscountCodes() {
                   }
                 />
               </div>
+            </div>
+            <div className='grid gap-2'>
+              <Label htmlFor='discount-form-max-uses'>
+                {t('Purchase Limit')}
+              </Label>
+              <Input
+                id='discount-form-max-uses'
+                type='number'
+                min='0'
+                step='1'
+                value={form.max_uses}
+                onChange={(event) =>
+                  setForm((state) => ({
+                    ...state,
+                    max_uses: event.target.value,
+                  }))
+                }
+                aria-invalid={maxUses === undefined}
+              />
+              <p className='text-muted-foreground text-xs'>
+                {t('0 means unlimited')}
+              </p>
             </div>
             <div className='grid grid-cols-2 gap-4'>
               <div className='grid gap-2'>
