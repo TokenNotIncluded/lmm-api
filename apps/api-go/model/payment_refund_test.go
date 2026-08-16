@@ -8,11 +8,13 @@
 package model
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/LIghtJUNction/api.lmm.best/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestApplyWaffoPancakeRefundAccumulatesSubscriptionPartialRefunds(t *testing.T) {
@@ -73,4 +75,71 @@ func TestApplyWaffoPancakeRefundRejectsMissingWalletOrder(t *testing.T) {
 	var entries []FinanceLedgerEntry
 	require.NoError(t, db.Find(&entries).Error)
 	assert.Empty(t, entries)
+}
+
+func TestApplyWaffoPancakeRefundRejectsWalletNegativeBalanceAndKeepsEventRetryable(t *testing.T) {
+	db := setupConsoleActivationTestDB(t)
+	require.NoError(t, db.AutoMigrate(&User{}, &TopUp{}, &FinanceLedgerEntry{}))
+
+	user := User{
+		Username: "refund-wallet-insufficient",
+		Password: "password",
+		Status:   common.UserStatusEnabled,
+		Quota:    10,
+	}
+	require.NoError(t, db.Create(&user).Error)
+	tradeNo := "refund-wallet-insufficient"
+	require.NoError(t, db.Create(&TopUp{
+		UserId:              user.Id,
+		TradeNo:             tradeNo,
+		PaymentProvider:     PaymentProviderWaffoPancake,
+		PaymentMethod:       PaymentMethodWaffoPancake,
+		Status:              common.TopUpStatusSuccess,
+		CreditedQuota:       100_000,
+		SettledAmountMicros: 10_000_000,
+		Money:               10,
+	}).Error)
+
+	result, err := ApplyWaffoPancakeRefund(
+		tradeNo, false, 2_500_000, FinanceCurrencyUSD,
+		"refund-wallet-insufficient-event", PaymentMethodWaffoPancake,
+		PaymentProviderWaffoPancake, "test refund", user.Id,
+	)
+	assert.Zero(t, result)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrRefundWalletQuotaInsufficient), err)
+	assert.ErrorContains(t, err, "user_id=")
+	assert.ErrorContains(t, err, "required_quota=25000")
+
+	var refreshedUser User
+	require.NoError(t, db.First(&refreshedUser, user.Id).Error)
+	assert.Equal(t, 10, refreshedUser.Quota, "insufficient balance must not become negative")
+	var refreshedTopUp TopUp
+	require.NoError(t, db.Where("trade_no = ?", tradeNo).First(&refreshedTopUp).Error)
+	assert.Zero(t, refreshedTopUp.RefundedAmountMicros)
+	assert.Zero(t, refreshedTopUp.RefundedQuota)
+	var entries []FinanceLedgerEntry
+	require.NoError(t, db.Where("source_type = ?", FinanceSourceRefund).Find(&entries).Error)
+	assert.Empty(t, entries, "failed debit must not commit a ledger row")
+
+	// After reconciliation, the exact same provider event can be retried and
+	// is applied once because the failed transaction left no idempotency row.
+	require.NoError(t, db.Model(&User{}).Where("id = ?", user.Id).Update("quota", 30_000).Error)
+	result, err = ApplyWaffoPancakeRefund(
+		tradeNo, false, 2_500_000, FinanceCurrencyUSD,
+		"refund-wallet-insufficient-event", PaymentMethodWaffoPancake,
+		PaymentProviderWaffoPancake, "test refund", user.Id,
+	)
+	require.NoError(t, err)
+	assert.True(t, result.Created)
+	assert.Equal(t, int64(25_000), result.QuotaDebited)
+	assert.Equal(t, user.Id, result.UserID)
+	assert.Equal(t, 5_000, getUserQuotaForRefundTest(t, db, user.Id))
+}
+
+func getUserQuotaForRefundTest(t *testing.T, db *gorm.DB, userID int) int {
+	t.Helper()
+	var quota int
+	require.NoError(t, db.Model(&User{}).Where("id = ?", userID).Select("quota").Scan(&quota).Error)
+	return quota
 }

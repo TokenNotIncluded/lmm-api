@@ -20,6 +20,13 @@ import (
 	"gorm.io/gorm"
 )
 
+// ErrRefundWalletQuotaInsufficient is returned when a wallet refund would
+// make the user's spendable quota negative. The enclosing transaction is
+// rolled back so the provider can retry after an administrator reconciles
+// the account; the refund is never silently recorded as only partially
+// applied.
+var ErrRefundWalletQuotaInsufficient = errors.New("refund wallet quota insufficient")
+
 // PaymentRefundResult describes the durable effects of one provider refund.
 // Created is false for a replayed event; QuotaDebited remains useful when a
 // legacy event was recorded before wallet reversal was implemented.
@@ -103,9 +110,20 @@ func ApplyWaffoPancakeRefund(
 					refundQuota = proportionalRefundDelta(creditedQuota, paidMicros, topUp.RefundedQuota, topUp.RefundedAmountMicros, appliedAmount)
 				}
 				if refundQuota > 0 {
-					if err := tx.Model(&User{}).Where("id = ?", topUp.UserId).
-						Update("quota", gorm.Expr("quota - ?", refundQuota)).Error; err != nil {
-						return err
+					// Refunds must never silently create a negative wallet. Keep
+					// the balance predicate in the same atomic UPDATE as the
+					// debit: a concurrent spend or stale refund cannot turn a
+					// successful provider refund into an untracked debt. Returning
+					// an error rolls back the cumulative refund and ledger rows,
+					// allowing the webhook provider to retry after reconciliation.
+					debit := tx.Model(&User{}).
+						Where("id = ? AND quota >= ?", topUp.UserId, refundQuota).
+						Update("quota", gorm.Expr("quota - ?", refundQuota))
+					if debit.Error != nil {
+						return debit.Error
+					}
+					if debit.RowsAffected != 1 {
+						return fmt.Errorf("%w: user_id=%d trade_no=%s required_quota=%d", ErrRefundWalletQuotaInsufficient, topUp.UserId, tradeNo, refundQuota)
 					}
 					result.QuotaDebited = refundQuota
 				}
