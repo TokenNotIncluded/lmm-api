@@ -23,6 +23,66 @@ type RegistrationSetting =
   | 'password_register_enabled'
   | 'oauth_register_enabled'
 
+function hasText(value: string | undefined): boolean {
+  return Boolean(value?.trim())
+}
+
+/**
+ * OAuth flags are not sufficient to launch a provider. The login handlers
+ * intentionally return early when a required credential is missing, so do
+ * not advertise those providers as clickable entry points in that state.
+ */
+export function isOAuthProviderConfigured(
+  status: SystemStatus | null | undefined,
+  method: string
+): boolean {
+  if (!status) return false
+
+  const normalizedMethod = method.trim().toLowerCase()
+  switch (normalizedMethod) {
+    case 'wechat':
+      return status.wechat_login === true
+    case 'github':
+      return status.github_oauth === true && hasText(status.github_client_id)
+    case 'discord':
+      return status.discord_oauth === true && hasText(status.discord_client_id)
+    case 'oidc':
+      return (
+        status.oidc_enabled === true &&
+        hasText(status.oidc_authorization_endpoint) &&
+        hasText(status.oidc_client_id)
+      )
+    case 'linuxdo':
+      return status.linuxdo_oauth === true && hasText(status.linuxdo_client_id)
+    case 'telegram':
+      return status.telegram_oauth === true && hasText(status.telegram_bot_name)
+    default:
+      if (!normalizedMethod.startsWith('custom:')) return false
+      {
+        const slug = normalizedMethod.slice('custom:'.length)
+        return (status.custom_oauth_providers ?? []).some(
+          (provider) =>
+            provider.slug.trim().toLowerCase() === slug &&
+            hasText(provider.authorization_endpoint) &&
+            hasText(provider.client_id)
+        )
+      }
+  }
+}
+
+export function hasOAuthLoginProvider(
+  status: SystemStatus | null | undefined
+): boolean {
+  return (
+    ['wechat', 'github', 'discord', 'oidc', 'linuxdo', 'telegram'].some(
+      (method) => isOAuthProviderConfigured(status, method)
+    ) ||
+    (status?.custom_oauth_providers ?? []).some((provider) =>
+      isOAuthProviderConfigured(status, `custom:${provider.slug}`)
+    )
+  )
+}
+
 function readRegistrationSetting(
   status: SystemStatus | null | undefined,
   key: RegistrationSetting
@@ -86,15 +146,29 @@ export function hasOAuthRegistrationProvider(
   const disabled = getDisabledOAuthRegistrationMethods(status)
   const isAllowed = (method: string) => !disabled.has(method)
 
-  if (status.wechat_login && isAllowed('wechat')) return true
-  if (status.github_oauth && isAllowed('github')) return true
-  if (status.discord_oauth && isAllowed('discord')) return true
-  if (status.oidc_enabled && isAllowed('oidc')) return true
-  if (status.linuxdo_oauth && isAllowed('linuxdo')) return true
-  if (status.telegram_oauth && isAllowed('telegram')) return true
+  if (isOAuthProviderConfigured(status, 'wechat') && isAllowed('wechat')) {
+    return true
+  }
+  if (isOAuthProviderConfigured(status, 'github') && isAllowed('github')) {
+    return true
+  }
+  if (isOAuthProviderConfigured(status, 'discord') && isAllowed('discord')) {
+    return true
+  }
+  if (isOAuthProviderConfigured(status, 'oidc') && isAllowed('oidc')) {
+    return true
+  }
+  if (isOAuthProviderConfigured(status, 'linuxdo') && isAllowed('linuxdo')) {
+    return true
+  }
+  if (isOAuthProviderConfigured(status, 'telegram') && isAllowed('telegram')) {
+    return true
+  }
 
-  return (status.custom_oauth_providers ?? []).some((provider) =>
-    isAllowed(`custom:${provider.slug.trim().toLowerCase()}`)
+  return (status.custom_oauth_providers ?? []).some(
+    (provider) =>
+      isOAuthProviderConfigured(status, `custom:${provider.slug}`) &&
+      isAllowed(`custom:${provider.slug.trim().toLowerCase()}`)
   )
 }
 

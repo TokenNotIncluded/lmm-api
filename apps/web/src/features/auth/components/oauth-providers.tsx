@@ -31,6 +31,10 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
 import { useOAuthLogin } from '../hooks/use-oauth-login'
+import {
+  getDisabledOAuthRegistrationMethods,
+  isOAuthProviderConfigured,
+} from '../lib/registration'
 import type { SystemStatus } from '../types'
 import { TelegramLoginDialog } from './telegram-login-dialog'
 
@@ -95,17 +99,17 @@ export function OAuthProviders({
   } = useOAuthLogin(status, redirectTo, acceptedLegal)
 
   const providerButtons: ProviderButton[] = []
-  const disabledRegistrationMethods = new Set(
-    registrationOnly
-      ? (status?.oauth_registration_disabled_methods ??
-          status?.data?.oauth_registration_disabled_methods ??
-          [])
-      : []
-  )
+  const disabledRegistrationMethods = registrationOnly
+    ? getDisabledOAuthRegistrationMethods(status)
+    : new Set<string>()
   const registrationAllowed = (method: string) =>
     !disabledRegistrationMethods.has(method)
 
-  if (status?.wechat_login && onWeChatLogin && registrationAllowed('wechat')) {
+  if (
+    isOAuthProviderConfigured(status, 'wechat') &&
+    onWeChatLogin &&
+    registrationAllowed('wechat')
+  ) {
     providerButtons.push({
       key: 'wechat',
       label: t('Continue with WeChat'),
@@ -116,7 +120,10 @@ export function OAuthProviders({
     })
   }
 
-  if (status?.github_oauth && registrationAllowed('github')) {
+  if (
+    isOAuthProviderConfigured(status, 'github') &&
+    registrationAllowed('github')
+  ) {
     providerButtons.push({
       key: 'github',
       label: githubButtonText || t('Continue with GitHub'),
@@ -127,7 +134,10 @@ export function OAuthProviders({
     })
   }
 
-  if (status?.discord_oauth && registrationAllowed('discord')) {
+  if (
+    isOAuthProviderConfigured(status, 'discord') &&
+    registrationAllowed('discord')
+  ) {
     providerButtons.push({
       key: 'discord',
       label: t('Continue with Discord'),
@@ -137,8 +147,11 @@ export function OAuthProviders({
     })
   }
 
-  if (status?.oidc_enabled && registrationAllowed('oidc')) {
-    const oidcDisplayName = status.oidc_display_name?.trim() || 'OIDC'
+  if (
+    isOAuthProviderConfigured(status, 'oidc') &&
+    registrationAllowed('oidc')
+  ) {
+    const oidcDisplayName = status?.oidc_display_name?.trim() || 'OIDC'
     providerButtons.push({
       key: 'oidc',
       label: t('Continue with {{name}}', {
@@ -149,7 +162,10 @@ export function OAuthProviders({
     })
   }
 
-  if (status?.linuxdo_oauth && registrationAllowed('linuxdo')) {
+  if (
+    isOAuthProviderConfigured(status, 'linuxdo') &&
+    registrationAllowed('linuxdo')
+  ) {
     providerButtons.push({
       key: 'linuxdo',
       label: t('Continue with LinuxDO'),
@@ -159,7 +175,10 @@ export function OAuthProviders({
     })
   }
 
-  if (status?.telegram_oauth && registrationAllowed('telegram')) {
+  if (
+    isOAuthProviderConfigured(status, 'telegram') &&
+    registrationAllowed('telegram')
+  ) {
     providerButtons.push({
       key: 'telegram',
       label: t('Continue with Telegram'),
@@ -173,7 +192,12 @@ export function OAuthProviders({
   const customProviders = status?.custom_oauth_providers
   if (customProviders && customProviders.length > 0) {
     for (const provider of customProviders) {
-      if (!registrationAllowed(`custom:${provider.slug}`)) continue
+      if (
+        !isOAuthProviderConfigured(status, `custom:${provider.slug}`) ||
+        !registrationAllowed(`custom:${provider.slug}`)
+      ) {
+        continue
+      }
       const google = featureGoogle && isGoogleProvider(provider)
       providerButtons.push({
         key: `custom-${provider.slug}`,

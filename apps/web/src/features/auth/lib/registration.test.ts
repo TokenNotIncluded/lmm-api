@@ -19,6 +19,7 @@ import { describe, test } from 'node:test'
 
 import {
   getDisabledOAuthRegistrationMethods,
+  hasOAuthLoginProvider,
   hasOAuthRegistrationProvider,
   hasRegistrationMethod,
   isPasswordRegistrationEnabled,
@@ -44,6 +45,7 @@ describe('registration availability', () => {
       register_enabled: true,
       password_register_enabled: false,
       github_oauth: true,
+      github_client_id: 'client',
     }
 
     assert.equal(isPasswordRegistrationEnabled(status), false)
@@ -78,6 +80,7 @@ describe('registration availability', () => {
   test('does not block existing login when OAuth registration is disabled', () => {
     const status = {
       github_oauth: true,
+      github_client_id: 'client',
       oauth_registration_disabled_methods: ['github'],
     }
 
@@ -86,5 +89,40 @@ describe('registration availability', () => {
     // not affect the login path.
     assert.equal(hasOAuthRegistrationProvider(status), false)
     assert.equal(isRegistrationEnabled(status), true)
+  })
+
+  test('does not advertise OAuth flags that cannot launch a provider', () => {
+    const status = {
+      github_oauth: true,
+      discord_oauth: true,
+      oidc_enabled: true,
+      linuxdo_oauth: true,
+      telegram_oauth: true,
+      custom_oauth_providers: [
+        {
+          id: 1,
+          name: 'Company SSO',
+          slug: 'company-sso',
+          icon: '',
+          client_id: '',
+          authorization_endpoint: '',
+          scopes: '',
+        },
+      ],
+    }
+
+    assert.equal(hasOAuthLoginProvider(status), false)
+    assert.equal(hasOAuthRegistrationProvider(status), false)
+  })
+
+  test('keeps login available while registration policy filters a configured provider', () => {
+    const status = {
+      github_oauth: true,
+      github_client_id: 'client',
+      oauth_registration_disabled_methods: ['github'],
+    }
+
+    assert.equal(hasOAuthLoginProvider(status), true)
+    assert.equal(hasOAuthRegistrationProvider(status), false)
   })
 })
