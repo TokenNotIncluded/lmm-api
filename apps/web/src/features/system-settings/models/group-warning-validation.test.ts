@@ -34,6 +34,7 @@ describe('group warning validation', () => {
       { free: { enabled: true } },
       { free: { enabled: true, message: 42 } },
       { free: { mode: 'toast' } },
+      { free: { confirmations: 0 } },
       { free: { confirmations: 4 } },
       { ' ': { enabled: false } },
     ]) {

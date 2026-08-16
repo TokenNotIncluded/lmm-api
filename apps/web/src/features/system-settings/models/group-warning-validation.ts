@@ -46,7 +46,7 @@ export function isValidGroupWarnings(value: unknown): boolean {
       confirmations === undefined ||
       (typeof confirmations === 'number' &&
         Number.isInteger(confirmations) &&
-        confirmations >= 0 &&
+        confirmations >= 1 &&
         confirmations <= 3)
     )
   })
