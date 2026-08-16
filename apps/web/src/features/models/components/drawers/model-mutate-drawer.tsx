@@ -972,6 +972,12 @@ export function ModelMutateDrawer({
                         keyLabel='Endpoint Type'
                         valueLabel='Configuration'
                         valueType='any'
+                        example={`{
+  "openai": {
+    "path": "/v1/chat/completions",
+    "method": "POST"
+  }
+}`}
                         emptyMessage={t(
                           'No endpoints configured. Switch to JSON mode or add rows to define endpoints.'
                         )}

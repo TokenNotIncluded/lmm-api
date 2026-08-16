@@ -38,6 +38,12 @@ func TestFinanceOverviewAggregatesPaymentMethodsUsersAndTokenCost(t *testing.T) 
 	require.Equal(t, int64(30), view.Tokens.EstimatedCostMicros)
 	require.Len(t, view.RevenueByMethod, 2)
 	require.Len(t, view.Users, 2)
+	byUsername := make(map[string]financeUserMetric, len(view.Users))
+	for _, metric := range view.Users {
+		byUsername[metric.Username] = metric
+	}
+	require.Equal(t, users[0].Id, byUsername["finance-a"].UserID)
+	require.Equal(t, users[1].Id, byUsername["finance-b"].UserID)
 
 	stripeView, err := buildFinanceOverview(now-100, now+1, 0, "stripe")
 	require.NoError(t, err)
@@ -70,6 +76,78 @@ func TestFinanceOverviewDoesNotDoubleCountSubscriptionTopUpMirror(t *testing.T) 
 	require.Equal(t, int64(1), view.RevenueByMethod[0].Orders)
 	require.Len(t, view.Users, 1)
 	require.Equal(t, int64(10_000_000), view.Users[0].RevenueMicros)
+}
+
+func TestFinanceOverviewExcludesInternalCreditsAndSubtractsRefunds(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}, &model.SubscriptionOrder{}, &model.Log{}, &model.FinanceLedgerEntry{}, &model.FinancePaymentMethod{}))
+	now := time.Now().Unix()
+	user := model.User{Username: "finance-refund", Password: "password", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "finance-refund"}
+	require.NoError(t, db.Create(&user).Error)
+	require.NoError(t, db.Create(&[]model.TopUp{
+		{UserId: user.Id, TradeNo: "finance-paid", Money: 10, SettledAmountMicros: 10_000_000, Status: common.TopUpStatusSuccess, PaymentMethod: model.PaymentMethodStripe, PaymentProvider: model.PaymentProviderStripe, CompleteTime: now - 20},
+		{UserId: user.Id, TradeNo: "finance-linuxdo", Money: 100, Status: common.TopUpStatusSuccess, PaymentMethod: "epay", PaymentProvider: model.PaymentProviderEpay, CompleteTime: now - 19},
+	}).Error)
+	_, err := model.AppendFinanceLedgerEntry(&model.FinanceLedgerEntry{
+		EntryType: model.FinanceEntryRevenue, Category: model.FinanceSourceRefund, AmountMicros: 2_000_000,
+		Currency: model.FinanceCurrencyUSD, Direction: model.FinanceDirectionDebit, PaymentMethod: model.PaymentMethodStripe,
+		PaymentProvider: model.PaymentProviderStripe, UserId: &user.Id, SourceType: model.FinanceSourceRefund,
+		SourceId: "refund-finance", OccurredAt: now - 10, CreatedBy: user.Id, IdempotencyKey: "finance-refund-1",
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.Create(&[]model.Log{
+		{UserId: user.Id, CreatedAt: now - 5, Type: model.LogTypeConsume, PromptTokens: 100, CompletionTokens: 100, Other: `{"model_price":0.01,"billing_source":"wallet"}`},
+		{UserId: user.Id, CreatedAt: now - 4, Type: model.LogTypeConsume, PromptTokens: 900, CompletionTokens: 900, Other: `{"model_price":0.01,"billing_source":"linuxdo"}`},
+	}).Error)
+
+	view, err := buildFinanceOverview(now-100, now+1, 0, "")
+	require.NoError(t, err)
+	require.Equal(t, int64(10_000_000), view.RevenueMicros)
+	require.Equal(t, int64(2_000_000), view.RefundMicros)
+	require.Equal(t, int64(8_000_000), view.NetRevenueMicros)
+	require.Equal(t, int64(2), view.ExpenseMicros)
+	require.Equal(t, int64(7_999_998), view.ProfitMicros)
+	require.Equal(t, int64(200), view.Tokens.TotalTokens)
+	for _, method := range view.RevenueByMethod {
+		require.NotEqual(t, "epay", method.Method)
+	}
+}
+
+func TestFinanceOverviewSortsRefundUsersAndExcludesNonUSDCurrency(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}, &model.SubscriptionOrder{}, &model.Log{}, &model.FinanceLedgerEntry{}, &model.FinancePaymentMethod{}))
+	now := time.Now().Unix()
+	users := []model.User{
+		{Username: "finance-small-revenue", Password: "password", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "finance-small-revenue"},
+		{Username: "finance-refund-only", Password: "password", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "finance-refund-only"},
+	}
+	require.NoError(t, db.Create(&users).Error)
+	require.NoError(t, db.Create(&[]model.TopUp{
+		{UserId: users[0].Id, TradeNo: "finance-usd-topup", Money: 1, SettledAmountMicros: 1_000_000, SettlementCurrency: "USD", Status: common.TopUpStatusSuccess, PaymentMethod: model.PaymentMethodStripe, PaymentProvider: model.PaymentProviderStripe, CompleteTime: now - 20},
+		{UserId: users[0].Id, TradeNo: "finance-eur-topup", Money: 100, SettledAmountMicros: 100_000_000, SettlementCurrency: "EUR", Status: common.TopUpStatusSuccess, PaymentMethod: model.PaymentMethodStripe, PaymentProvider: model.PaymentProviderStripe, CompleteTime: now - 19},
+	}).Error)
+	_, err := model.AppendFinanceLedgerEntry(&model.FinanceLedgerEntry{
+		EntryType: model.FinanceEntryRevenue, Category: model.FinanceSourceRefund, AmountMicros: 2_000_000,
+		Currency: model.FinanceCurrencyUSD, Direction: model.FinanceDirectionDebit, PaymentMethod: model.PaymentMethodStripe,
+		PaymentProvider: model.PaymentProviderStripe, UserId: &users[1].Id, SourceType: model.FinanceSourceRefund,
+		SourceId: "finance-refund-only", OccurredAt: now - 10, CreatedBy: users[1].Id, IdempotencyKey: "finance-refund-only-1",
+	})
+	require.NoError(t, err)
+
+	view, err := buildFinanceOverview(now-100, now+1, 0, "")
+	require.NoError(t, err)
+	require.Equal(t, int64(1_000_000), view.RevenueMicros)
+	require.Equal(t, int64(2_000_000), view.RefundMicros)
+	require.Len(t, view.Users, 2)
+	require.Equal(t, users[1].Id, view.Users[0].UserID, "refund activity must participate in bounded user ranking")
+	require.Equal(t, int64(2_000_000), view.Users[0].RefundMicros)
+
+	accumulator := newFinanceAccumulator(now-100, now+1, nil)
+	for userID := 1; userID <= financeDashboardMaxEntries+1; userID++ {
+		accumulator.addRevenue("stripe", "stripe", 1, now-1, userID)
+	}
+	bounded := accumulator.finish()
+	require.True(t, bounded.UserMetricsTruncated)
 }
 
 func TestFinancePaymentMethodsDiscoverAllFinancialSources(t *testing.T) {
@@ -124,6 +202,54 @@ func TestFinancePaymentMethodsRejectUnboundedDiscovery(t *testing.T) {
 
 	_, _, err := loadFinancePaymentMethods()
 	require.ErrorIs(t, err, errFinancePaymentMethodsLimit)
+}
+
+func TestFinanceAccumulatorBoundsUserMetricsWithoutDroppingTotals(t *testing.T) {
+	accumulator := newFinanceAccumulator(0, 24*60*60, nil)
+	for userID := 1; userID <= financeDashboardMaxUserMetrics+1; userID++ {
+		accumulator.addRevenue("stripe", "stripe", 1, 0, userID)
+	}
+
+	require.Len(t, accumulator.users, financeDashboardMaxUserMetrics)
+	require.Equal(t, int64(financeDashboardMaxUserMetrics+1), accumulator.overview.RevenueMicros)
+
+	view := accumulator.finish()
+	require.Equal(t, int64(financeDashboardMaxUserMetrics+1), view.RevenueMicros)
+	require.False(t, view.UserMetricsComplete)
+	require.Equal(t, financeDashboardMaxUserMetrics, view.UserMetricsLimit)
+	require.Len(t, view.Users, financeDashboardMaxEntries)
+	encoded, err := json.Marshal(view)
+	require.NoError(t, err)
+	var metadata struct {
+		UserMetricsComplete bool `json:"user_metrics_complete"`
+		UserMetricsLimit    int  `json:"user_metrics_limit"`
+	}
+	require.NoError(t, json.Unmarshal(encoded, &metadata))
+	require.False(t, metadata.UserMetricsComplete)
+	require.Equal(t, financeDashboardMaxUserMetrics, metadata.UserMetricsLimit)
+}
+
+func TestFinanceAccumulatorBoundsMethodUserPairs(t *testing.T) {
+	accumulator := newFinanceAccumulator(0, 24*60*60, nil)
+	for userID := 1; userID <= financeDashboardMaxMethodUserPairs+1; userID++ {
+		accumulator.addMethodUser("stripe\x00stripe", userID)
+	}
+
+	require.Equal(t, financeDashboardMaxMethodUserPairs, accumulator.methodUserPairs)
+	require.Len(t, accumulator.methodUsers["stripe\x00stripe"], financeDashboardMaxMethodUserPairs)
+
+	view := accumulator.finish()
+	require.False(t, view.MethodUserMetricsComplete)
+	require.Equal(t, financeDashboardMaxMethodUserPairs, view.MethodUserMetricsLimit)
+	encoded, err := json.Marshal(view)
+	require.NoError(t, err)
+	var metadata struct {
+		MethodUserMetricsComplete bool `json:"method_user_metrics_complete"`
+		MethodUserMetricsLimit    int  `json:"method_user_metrics_limit"`
+	}
+	require.NoError(t, json.Unmarshal(encoded, &metadata))
+	require.False(t, metadata.MethodUserMetricsComplete)
+	require.Equal(t, financeDashboardMaxMethodUserPairs, metadata.MethodUserMetricsLimit)
 }
 
 func TestFinanceOverviewStreamsSourcesAcrossBatchBoundary(t *testing.T) {
@@ -310,60 +436,6 @@ func TestFinanceEntriesUseStableCursorPages(t *testing.T) {
 	require.Len(t, secondResponse.Data.Entries, 1)
 	require.False(t, secondResponse.Data.HasMore)
 	require.Equal(t, int64(100), secondResponse.Data.Entries[0].OccurredAt)
-}
-
-func TestFinanceAccumulatorBoundsUserMetricsWithoutDroppingTotals(t *testing.T) {
-	accumulator := newFinanceAccumulator(0, 24*60*60, nil)
-	for userID := 1; userID <= financeDashboardMaxUserMetrics+1; userID++ {
-		accumulator.addRevenue("stripe", "stripe", 1, 0, userID)
-	}
-
-	require.Len(t, accumulator.users, financeDashboardMaxUserMetrics)
-	require.Equal(t, int64(financeDashboardMaxUserMetrics+1), accumulator.overview.RevenueMicros)
-
-	view := accumulator.finish()
-	require.Equal(t, int64(financeDashboardMaxUserMetrics+1), view.RevenueMicros)
-	require.False(t, view.UserMetricsComplete)
-	require.Equal(t, financeDashboardMaxUserMetrics, view.UserMetricsLimit)
-	require.Equal(t, financeDashboardMaxEntries, view.UserLimit)
-	require.True(t, view.UsersTruncated)
-	require.Len(t, view.Users, financeDashboardMaxEntries)
-	encoded, err := json.Marshal(view)
-	require.NoError(t, err)
-	var metadata struct {
-		UserMetricsComplete bool `json:"user_metrics_complete"`
-		UserMetricsLimit    int  `json:"user_metrics_limit"`
-		UserLimit           int  `json:"user_limit"`
-		UsersTruncated      bool `json:"users_truncated"`
-	}
-	require.NoError(t, json.Unmarshal(encoded, &metadata))
-	require.False(t, metadata.UserMetricsComplete)
-	require.Equal(t, financeDashboardMaxUserMetrics, metadata.UserMetricsLimit)
-	require.Equal(t, financeDashboardMaxEntries, metadata.UserLimit)
-	require.True(t, metadata.UsersTruncated)
-}
-
-func TestFinanceAccumulatorBoundsMethodUserPairs(t *testing.T) {
-	accumulator := newFinanceAccumulator(0, 24*60*60, nil)
-	for userID := 1; userID <= financeDashboardMaxMethodUserPairs+1; userID++ {
-		accumulator.addMethodUser("stripe\\x00stripe", userID)
-	}
-
-	require.Equal(t, financeDashboardMaxMethodUserPairs, accumulator.methodUserPairs)
-	require.Len(t, accumulator.methodUsers["stripe\\x00stripe"], financeDashboardMaxMethodUserPairs)
-
-	view := accumulator.finish()
-	require.False(t, view.MethodUserMetricsComplete)
-	require.Equal(t, financeDashboardMaxMethodUserPairs, view.MethodUserMetricsLimit)
-	encoded, err := json.Marshal(view)
-	require.NoError(t, err)
-	var metadata struct {
-		MethodUserMetricsComplete bool `json:"method_user_metrics_complete"`
-		MethodUserMetricsLimit    int  `json:"method_user_metrics_limit"`
-	}
-	require.NoError(t, json.Unmarshal(encoded, &metadata))
-	require.False(t, metadata.MethodUserMetricsComplete)
-	require.Equal(t, financeDashboardMaxMethodUserPairs, metadata.MethodUserMetricsLimit)
 }
 
 func mustFinanceEntry(t *testing.T, key string) *model.FinanceLedgerEntry {

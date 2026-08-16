@@ -68,6 +68,7 @@ export function UnifiedTodoList() {
   })
 
   const openItem = async (item: TodoItem) => {
+    if (!todoItemHasDestination(item)) return
     if (!item.read) await markOne.mutateAsync(item)
     const projectId = detailNumber(item, 'project_id')
     if (projectId) {
@@ -103,6 +104,16 @@ export function UnifiedTodoList() {
           },
         })
       }
+      return
+    }
+    if (item.category === 'account_action') {
+      await navigate({
+        to: '/todos',
+        search: {
+          todo: 'account_action',
+          request: item.source_id,
+        },
+      })
     }
   }
 

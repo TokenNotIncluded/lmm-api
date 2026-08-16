@@ -54,8 +54,57 @@ export type JsonCodeEditorProps = Omit<
   disabled?: boolean
   heightClassName?: string
   placeholder?: string
+  /** A complete, safe-to-share JSON example shown below the editor. */
+  example?: string
   ariaLabel?: string
   'data-form-root'?: string
+}
+
+export function JsonExample({
+  example,
+  disabled = false,
+  onUseExample,
+}: {
+  example: string
+  disabled?: boolean
+  onUseExample: (example: string) => void
+}) {
+  const { t } = useTranslation()
+
+  return (
+    <details className='bg-muted/20 rounded-lg border px-3 py-2 text-xs'>
+      <summary className='text-muted-foreground cursor-pointer font-medium select-none'>
+        {t('Example')}
+      </summary>
+      <div className='mt-2 space-y-2'>
+        <pre className='bg-background/70 text-muted-foreground max-h-40 overflow-auto rounded-md p-2 font-mono whitespace-pre-wrap'>
+          {example}
+        </pre>
+        <Button
+          type='button'
+          variant='outline'
+          size='sm'
+          className='h-7 text-xs'
+          onClick={() => onUseExample(example)}
+          disabled={disabled}
+        >
+          {t('Fill Template')}
+        </Button>
+      </div>
+    </details>
+  )
+}
+
+function validJsonExample(value?: string) {
+  if (!value?.trim()) {
+    return undefined
+  }
+  try {
+    JSON.parse(value)
+    return value
+  } catch {
+    return undefined
+  }
 }
 
 export function JsonCodeEditor({
@@ -67,6 +116,7 @@ export function JsonCodeEditor({
   disabled,
   heightClassName = 'h-56 min-h-56 max-h-56',
   placeholder,
+  example,
   ariaLabel,
   className,
   id,
@@ -76,6 +126,7 @@ export function JsonCodeEditor({
   ...rootProps
 }: JsonCodeEditorProps) {
   const { t } = useTranslation()
+  const resolvedExample = example ?? validJsonExample(placeholder)
   const mountRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<Yace | null>(null)
   const latestValueRef = useRef(value)
@@ -330,6 +381,13 @@ export function JsonCodeEditor({
           className='json-code-editor-yace text-foreground h-full font-mono text-xs leading-5'
         />
       </div>
+      {resolvedExample && (
+        <JsonExample
+          example={resolvedExample}
+          disabled={disabled}
+          onUseExample={onChange}
+        />
+      )}
     </div>
   )
 }

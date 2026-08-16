@@ -102,13 +102,6 @@ database.
 
 ## Existing database and cutover state
 
-`deploy/backup/backup-sqlite-to-archczy.sh` is only for an explicitly verified
-SQLite source. It creates an online SQLite backup in a temporary directory and
-publishes a checksum pair to `/var/backups/lmm-api/sqlite/<instance>` on
-the ArchCzy host via SSH alias `archczy`; it does not create a controller copy.
-Do not invoke it when the live
-service uses PostgreSQL.
-
 The live service may already use Go with PostgreSQL and dedicated Valkey after a
 historical cutover. Inspect the running process environment, active listeners,
 `/var/lib/lmm-api-cutover`, and `/var/log/lmm-api-cutover` together. A historical

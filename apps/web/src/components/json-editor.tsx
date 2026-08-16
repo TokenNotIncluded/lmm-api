@@ -20,7 +20,7 @@ import { Code, Table, Plus, Trash2 } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { JsonCodeEditor } from '@/components/json-code-editor'
+import { JsonCodeEditor, JsonExample } from '@/components/json-code-editor'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
@@ -34,6 +34,8 @@ type JsonEditorProps = {
   valueLabel?: string
   emptyMessage?: string
   template?: Record<string, unknown>
+  /** A complete, safe-to-share JSON example for both editor modes. */
+  example?: string
   valueType?: 'string' | 'number' | 'any'
 }
 
@@ -70,6 +72,7 @@ export function JsonEditor({
   valueLabel,
   emptyMessage,
   template,
+  example,
   valueType = 'string',
 }: JsonEditorProps) {
   const { t } = useTranslation()
@@ -79,6 +82,8 @@ export function JsonEditor({
   const resolvedValuePlaceholder = valuePlaceholder ?? t('Value')
   const resolvedKeyLabel = keyLabel ?? t('Key')
   const resolvedValueLabel = valueLabel ?? t('Value')
+  const resolvedExample =
+    example ?? (template ? JSON.stringify(template, null, 2) : undefined)
   const [mode, setMode] = useState<'visual' | 'json'>('visual')
   const [rows, setRows] = useState<EditorRow[]>(() => parseJsonRows(value))
   const [jsonValue, setJsonValue] = useState(value)
@@ -162,9 +167,8 @@ export function JsonEditor({
     parseJsonToRows(newJson)
   }
 
-  const handleFillTemplate = () => {
-    if (!template) return
-    const templateJson = JSON.stringify(template, null, 2)
+  const handleUseExample = (exampleJson: string) => {
+    const templateJson = exampleJson
     setJsonValue(templateJson)
     onChange(templateJson)
     parseJsonToRows(templateJson)
@@ -207,18 +211,6 @@ export function JsonEditor({
               </>
             )}
           </Button>
-          {template && (
-            <Button
-              type='button'
-              variant='link'
-              size='sm'
-              className='h-auto p-0'
-              onClick={handleFillTemplate}
-              disabled={disabled}
-            >
-              {t('Fill Template')}
-            </Button>
-          )}
         </div>
       </div>
 
@@ -282,14 +274,20 @@ export function JsonEditor({
             <Plus className='mr-2 h-4 w-4' />
             {t('Add Row')}
           </Button>
+          {resolvedExample && (
+            <JsonExample
+              example={resolvedExample}
+              disabled={disabled}
+              onUseExample={handleUseExample}
+            />
+          )}
         </div>
       ) : (
         <JsonCodeEditor
           value={jsonValue}
           onChange={handleJsonChange}
-          placeholder={
-            template ? JSON.stringify(template, null, 2) : '{"key": "value"}'
-          }
+          placeholder={resolvedExample ?? '{"key": "value"}'}
+          example={resolvedExample}
           disabled={disabled}
           ariaLabel={t('JSON')}
         />

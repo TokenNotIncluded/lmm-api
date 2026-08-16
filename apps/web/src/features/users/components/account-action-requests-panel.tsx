@@ -26,7 +26,7 @@ function isNotFound(error: unknown): boolean {
   )
 }
 
-export function AccountActionRequestsPanel() {
+export function AccountActionRequestsPanel(props: { focusRequestId?: number }) {
   const { t, i18n } = useTranslation()
   const [requests, setRequests] = useState<AccountActionRequestAdmin[]>([])
   const [loading, setLoading] = useState(true)
@@ -63,6 +63,18 @@ export function AccountActionRequestsPanel() {
   useEffect(() => {
     void loadRequests()
   }, [loadRequests])
+
+  useEffect(() => {
+    if (
+      props.focusRequestId === undefined ||
+      loading ||
+      typeof document === 'undefined'
+    )
+      return
+    document
+      .getElementById(`account-action-request-${props.focusRequestId}`)
+      ?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }, [loading, props.focusRequestId, requests])
 
   const review = async (
     request: AccountActionRequestAdmin,
@@ -170,7 +182,11 @@ export function AccountActionRequestsPanel() {
             const isReviewing = reviewing === request.id
             const isAppeal = request.kind === 'appeal'
             return (
-              <article key={request.id} className='border-border border-b py-7'>
+              <article
+                key={request.id}
+                id={`account-action-request-${request.id}`}
+                className='border-border border-b py-7'
+              >
                 <div className='flex flex-wrap items-start justify-between gap-3'>
                   <div className='min-w-0'>
                     <div className='flex items-center gap-2'>

@@ -21,11 +21,15 @@ import (
 // applyDiscountCodeQuote layers a discount code on top of the existing
 // amount/group/payment pricing. The server re-runs this exact calculation at
 // checkout, so the browser can only preview a price and never set the amount.
-func applyDiscountCodeQuote(base decimal.Decimal, amount int64, rawCode string) (decimal.Decimal, *model.DiscountCode, error) {
+func applyDiscountCodeQuote(base decimal.Decimal, amount int64, rawCode string, userIDs ...int) (decimal.Decimal, *model.DiscountCode, error) {
 	if strings.TrimSpace(rawCode) == "" {
 		return base, nil, nil
 	}
-	code, err := model.ValidateDiscountCode(rawCode, amount, common.GetTimestamp())
+	userID := 0
+	if len(userIDs) > 0 {
+		userID = userIDs[0]
+	}
+	code, err := model.ValidateDiscountCodeForUser(rawCode, amount, common.GetTimestamp(), userID)
 	if err != nil {
 		return decimal.Zero, nil, err
 	}
@@ -47,17 +51,17 @@ func discountPercent(code *model.DiscountCode) int {
 	return code.DiscountPercent
 }
 
-func quoteTopUpWithDiscount(amount int64, group, paymentMethod, rawCode string) (decimal.Decimal, *model.DiscountCode, error) {
+func quoteTopUpWithDiscount(amount int64, group, paymentMethod, rawCode string, userIDs ...int) (decimal.Decimal, *model.DiscountCode, error) {
 	base, err := quoteTopUp(amount, group, paymentMethod)
 	if err != nil {
 		return decimal.Zero, nil, err
 	}
-	return applyDiscountCodeQuote(base, amount, rawCode)
+	return applyDiscountCodeQuote(base, amount, rawCode, userIDs...)
 }
 
-func quoteLegacyTopUpWithDiscount(amount int64, group, rawCode string) (decimal.Decimal, *model.DiscountCode, error) {
+func quoteLegacyTopUpWithDiscount(amount int64, group, rawCode string, userIDs ...int) (decimal.Decimal, *model.DiscountCode, error) {
 	base := quoteTopUpWithPricing(amount, group, decimal.NewFromFloat(operationPrice()), decimal.NewFromInt(1))
-	return applyDiscountCodeQuote(base, amount, rawCode)
+	return applyDiscountCodeQuote(base, amount, rawCode, userIDs...)
 }
 
 // operationPrice is kept as a tiny seam for tests and to avoid duplicating

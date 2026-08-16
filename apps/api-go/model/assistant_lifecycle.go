@@ -53,6 +53,19 @@ func deleteUserAssistantData(tx *gorm.DB, userID int) error {
 			return err
 		}
 	}
+	// These tables were added after the original assistant lifecycle fixtures;
+	// tolerate an older test/installation schema while deleting them whenever
+	// the current migration has created them.
+	if tx.Migrator().HasTable(&AssistantWeeklyDiscount{}) {
+		if err := tx.Unscoped().Where("user_id = ?", userID).Delete(&AssistantWeeklyDiscount{}).Error; err != nil {
+			return err
+		}
+	}
+	if tx.Migrator().HasTable(&DiscountCode{}) {
+		if err := tx.Unscoped().Where("owner_user_id = ?", userID).Delete(&DiscountCode{}).Error; err != nil {
+			return err
+		}
+	}
 	// A deleted administrator must not remain as the apparent resolver of
 	// another user's support request.
 	for _, record := range []any{&AssistantLead{}, &DeveloperAccessRequest{}, &AccountActionRequest{}} {

@@ -127,6 +127,7 @@ func InitOptionMap() {
 	assistantSettings := setting.GetAssistantSettings()
 	common.OptionMap[setting.AssistantEnabledOptionKey] = strconv.FormatBool(assistantSettings.Enabled)
 	common.OptionMap[setting.AssistantModelOptionKey] = assistantSettings.Model
+	common.OptionMap[setting.AssistantReasoningEffortOptionKey] = assistantSettings.ReasoningEffort
 	common.OptionMap[setting.AssistantWeeklyCreditUSDOptionKey] = "0"
 	common.OptionMap[setting.AssistantAgentLoopEnabledOptionKey] = strconv.FormatBool(assistantSettings.AgentLoopEnabled)
 	common.OptionMap[setting.AssistantMaxStepsOptionKey] = strconv.Itoa(assistantSettings.MaxSteps)
@@ -144,6 +145,9 @@ func InitOptionMap() {
 	common.OptionMap[setting.AssistantReviewEnabledOptionKey] = strconv.FormatBool(assistantSettings.ReviewEnabled)
 	common.OptionMap[setting.AssistantReviewWindowDaysOptionKey] = strconv.Itoa(assistantSettings.ReviewWindowDays)
 	common.OptionMap[setting.AssistantReviewIntervalHoursOptionKey] = strconv.Itoa(assistantSettings.ReviewIntervalHours)
+	common.OptionMap[setting.AssistantReviewProbabilityOptionKey] = strconv.FormatFloat(assistantSettings.ReviewProbability, 'f', -1, 64)
+	common.OptionMap[setting.AssistantReviewModelOptionKey] = assistantSettings.ReviewModel
+	common.OptionMap[setting.AssistantReviewGroupPoliciesOptionKey] = setting.AssistantReviewGroupPoliciesJSON(assistantSettings.ReviewGroupPolicies)
 	common.OptionMap[setting.AssistantRetentionEnabledOptionKey] = strconv.FormatBool(assistantSettings.RetentionEnabled)
 	common.OptionMap[setting.AssistantActiveRetentionDaysOptionKey] = strconv.Itoa(assistantSettings.ActiveRetentionDays)
 	common.OptionMap[setting.AssistantArchivedRetentionDaysOptionKey] = strconv.Itoa(assistantSettings.ArchivedRetentionDays)
@@ -295,6 +299,9 @@ func validateOptionValue(key string, value string) error {
 	if key == "group_ratio_setting.group_warnings" {
 		return ratio_setting.CheckGroupWarnings(value)
 	}
+	if key == "GroupGroupRatio" {
+		return ratio_setting.CheckGroupGroupRatio(value)
+	}
 	if key == operation_setting.ViolationFeeOptionKey+".policies" {
 		return operation_setting.ValidateViolationFeeSettingsJSON(`{"enabled":true,"policies":` + value + `}`)
 	}
@@ -348,14 +355,13 @@ func ValidateOptionValue(key, value string) error {
 	return validateOptionValue(key, value)
 }
 
-// UpdateOptionsBulk persists multiple key/value pairs in a single database
-// transaction, then dispatches them through updateOptionMap in one pass. If
-// any DB write fails the whole transaction rolls back and no in-memory state
-// is touched — safe for callers that must commit a set of related options
-// atomically (e.g. payment gateway binding).
-func UpdateOptionsBulk(values map[string]string) error {
+// ValidateOptionValues checks a related set of option writes without
+// persisting them. Dynamic-pricing fields are validated as one candidate
+// configuration so an import cannot pass each field in isolation while the
+// resulting configuration is unsafe.
+func ValidateOptionValues(values map[string]string) error {
 	if len(values) == 0 {
-		return nil
+		return errors.New("at least one option is required")
 	}
 	dynamicValues := make(map[string]string)
 	for key, value := range values {
@@ -371,6 +377,21 @@ func UpdateOptionsBulk(values map[string]string) error {
 		if err := dynamic_pricing_setting.ValidateOptionValues(dynamicValues); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// UpdateOptionsBulk persists multiple key/value pairs in a single database
+// transaction, then dispatches them through updateOptionMap in one pass. If
+// any DB write fails the whole transaction rolls back and no in-memory state
+// is touched — safe for callers that must commit a set of related options
+// atomically (e.g. payment gateway binding).
+func UpdateOptionsBulk(values map[string]string) error {
+	if len(values) == 0 {
+		return nil
+	}
+	if err := ValidateOptionValues(values); err != nil {
+		return err
 	}
 	keys := make([]string, 0, len(values))
 	for key := range values {
@@ -669,6 +690,8 @@ func updateOptionMap(key string, value string) (err error) {
 		err = setting.UpdateChatsByJsonString(value)
 	case setting.AssistantModelOptionKey:
 		err = setting.UpdateAssistantModel(value)
+	case setting.AssistantReasoningEffortOptionKey:
+		err = setting.UpdateAssistantReasoningEffort(value)
 	case setting.AssistantMaxStepsOptionKey:
 		err = setting.UpdateAssistantMaxSteps(value)
 	case setting.AssistantTimeoutSecondsOptionKey:
@@ -695,6 +718,12 @@ func updateOptionMap(key string, value string) (err error) {
 		err = setting.UpdateAssistantReviewWindowDays(value)
 	case setting.AssistantReviewIntervalHoursOptionKey:
 		err = setting.UpdateAssistantReviewIntervalHours(value)
+	case setting.AssistantReviewProbabilityOptionKey:
+		err = setting.UpdateAssistantReviewProbability(value)
+	case setting.AssistantReviewModelOptionKey:
+		err = setting.UpdateAssistantReviewModel(value)
+	case setting.AssistantReviewGroupPoliciesOptionKey:
+		err = setting.UpdateAssistantReviewGroupPolicies(value)
 	case setting.AssistantActiveRetentionDaysOptionKey:
 		err = setting.UpdateAssistantActiveRetentionDays(value)
 	case setting.AssistantArchivedRetentionDaysOptionKey:

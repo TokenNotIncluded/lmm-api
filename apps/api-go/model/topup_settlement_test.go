@@ -99,6 +99,23 @@ func TestCompleteExternalTopUpAtomicallyPersistsEvidenceAndCreditsQuota(t *testi
 	assert.Equal(t, settlement.StripeCustomer, reloadedUser.StripeCustomer)
 }
 
+func TestCompleteExternalTopUpRejectsWalletQuotaOverflow(t *testing.T) {
+	db := setupExternalTopUpSettlementDB(t, 1)
+	user, topUp, settlement := createSettlementFixture(t, db, "wallet-overflow")
+	require.NoError(t, db.Model(&User{}).Where("id = ?", user.Id).
+		Update("quota", common.MaxQuota-500).Error)
+
+	_, err := CompleteExternalTopUp(settlement)
+	require.ErrorIs(t, err, ErrTopUpQuotaLimitExceeded)
+
+	var reloadedTopUp TopUp
+	require.NoError(t, db.First(&reloadedTopUp, topUp.Id).Error)
+	assert.Equal(t, common.TopUpStatusPending, reloadedTopUp.Status)
+	var reloadedUser User
+	require.NoError(t, db.First(&reloadedUser, user.Id).Error)
+	assert.Equal(t, common.MaxQuota-500, reloadedUser.Quota)
+}
+
 func TestCompleteExternalTopUpRollsBackOrderWhenUserCreditFails(t *testing.T) {
 	db := setupExternalTopUpSettlementDB(t, 1)
 	user, topUp, settlement := createSettlementFixture(t, db, "credit-rollback")

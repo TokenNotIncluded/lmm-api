@@ -106,6 +106,7 @@ func UpdateDiscountCode(c *gin.Context) {
 		current.Name = strings.TrimSpace(input.Name)
 		current.DiscountPercent = input.DiscountPercent
 		current.MinAmount = input.MinAmount
+		current.MaxUses = input.MaxUses
 		current.StartsTime = input.StartsTime
 		current.ExpiredTime = input.ExpiredTime
 		if err := validateDiscountCodeInput(current); err != nil {
@@ -149,7 +150,7 @@ func ValidateDiscountCode(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	row, err := model.ValidateDiscountCode(req.Code, req.Amount, common.GetTimestamp())
+	row, err := model.ValidateDiscountCodeForUser(req.Code, req.Amount, common.GetTimestamp(), c.GetInt("id"))
 	if err != nil {
 		common.ApiErrorMsg(c, discountCodeErrorMessage(err))
 		return
@@ -165,6 +166,9 @@ func validateDiscountCodeInput(code *model.DiscountCode) error {
 	if strings.TrimSpace(code.Name) == "" || len([]rune(code.Name)) > 120 {
 		return errors.New("优惠码名称不能为空且不能超过 120 个字符")
 	}
+	if err := model.ValidateDiscountCodeMaxUses(code.MaxUses); err != nil {
+		return err
+	}
 	return model.ValidateDiscountCodeDefinition(code.Code, code.DiscountPercent, code.MinAmount, code.StartsTime, code.ExpiredTime)
 }
 
@@ -178,6 +182,8 @@ func discountCodeErrorMessage(err error) string {
 		return "优惠码已过期"
 	case errors.Is(err, model.ErrDiscountCodeMinimum):
 		return "当前充值金额未达到优惠码最低金额"
+	case errors.Is(err, model.ErrDiscountCodeExhausted):
+		return "优惠码使用次数已达上限"
 	default:
 		return "优惠码无效"
 	}

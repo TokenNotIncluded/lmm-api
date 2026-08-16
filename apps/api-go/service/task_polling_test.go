@@ -436,7 +436,9 @@ func TestRunTaskPollingOnceDoesNotRefundHistoricalFailedTask(t *testing.T) {
 	task.TaskID = "historical_failed_already_refunded"
 	task.Status = model.TaskStatusFailure
 	task.Progress = "100%"
-	task.SubmitTime = time.Now().Add(-90 * 24 * time.Hour).Unix()
+	// Rows from before the refund rollout remain explicitly legacy and are not
+	// retroactively refunded by the reconciliation sweep.
+	task.SubmitTime = model.TaskRefundLegacyCutoff - 1
 	task.UpdatedAt = time.Now().Add(-time.Minute).Unix()
 	require.NoError(t, model.DB.Create(task).Error)
 

@@ -26,7 +26,11 @@ import { todoItemTitleKey } from './todo-labels'
 import { todoItemHasDestination } from './todo-navigation'
 
 function item(
-  category: 'open_source_bounty' | 'security_review' | 'developer_access',
+  category:
+    | 'open_source_bounty'
+    | 'security_review'
+    | 'developer_access'
+    | 'account_action',
   details: Record<string, unknown> = {}
 ) {
   return {
@@ -67,5 +71,6 @@ describe('unified todo destinations', () => {
       true
     )
     assert.equal(todoItemHasDestination(item('developer_access')), false)
+    assert.equal(todoItemHasDestination(item('account_action')), true)
   })
 })

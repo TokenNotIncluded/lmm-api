@@ -202,6 +202,11 @@ export function ClaudeSettingsCard({ defaultValues }: ClaudeSettingsCardProps) {
                     name={field.name}
                     onBlur={field.onBlur}
                     textareaRef={field.ref}
+                    example={`{
+  "claude-opus-5": {
+    "anthropic-beta": ["context-1m-2025-08-07"]
+  }
+}`}
                     aria-invalid={Boolean(
                       form.formState.errors.claude?.model_headers_settings
                     )}
@@ -230,6 +235,10 @@ export function ClaudeSettingsCard({ defaultValues }: ClaudeSettingsCardProps) {
                     name={field.name}
                     onBlur={field.onBlur}
                     textareaRef={field.ref}
+                    example={`{
+  "default": 8192,
+  "claude-sonnet-4-6": 8192
+}`}
                     aria-invalid={Boolean(
                       form.formState.errors.claude?.default_max_tokens
                     )}

@@ -53,7 +53,9 @@ import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 import {
+  ASSISTANT_REASONING_EFFORTS,
   ASSISTANT_SEARCH_PROVIDERS,
+  type AssistantReasoningEffort,
   type AssistantSearchProvider,
 } from '../types'
 import { safeNumberFieldProps } from '../utils/numeric-field'
@@ -312,6 +314,13 @@ export function AssistantSettingsSection(props: {
       'Connect to an MCP server over Streamable HTTP from the server.'
     ),
   }
+  const reasoningEffortLabels: Record<AssistantReasoningEffort, string> = {
+    auto: t('Auto (model default)'),
+    none: t('None (no reasoning)'),
+    low: t('Low'),
+    medium: t('Medium'),
+    high: t('High'),
+  }
 
   return (
     <SettingsSection title={t('AI assistant settings')}>
@@ -347,7 +356,7 @@ export function AssistantSettingsSection(props: {
             )}
           />
 
-          <div className='grid gap-6'>
+          <div className='grid gap-6 md:grid-cols-2'>
             <FormField
               control={form.control}
               name='AssistantModel'
@@ -365,6 +374,48 @@ export function AssistantSettingsSection(props: {
                   <FormDescription>
                     {t(
                       'Model ID used for assistant conversations. Token usage is charged to the enabled super administrator account.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='AssistantReasoningEffort'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Reasoning Effort')}</FormLabel>
+                  <Select
+                    value={field.value}
+                    onValueChange={(value) => {
+                      if (
+                        typeof value === 'string' &&
+                        (
+                          ASSISTANT_REASONING_EFFORTS as readonly string[]
+                        ).includes(value)
+                      ) {
+                        field.onChange(value as AssistantReasoningEffort)
+                      }
+                    }}
+                  >
+                    <FormControl>
+                      <SelectTrigger className='w-full' disabled={!enabled}>
+                        <SelectValue />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent alignItemWithTrigger={false}>
+                      {ASSISTANT_REASONING_EFFORTS.map((effort) => (
+                        <SelectItem key={effort} value={effort}>
+                          {reasoningEffortLabels[effort]}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <FormDescription>
+                    {t(
+                      'Controls the default reasoning hint sent with assistant requests. Auto lets each model use its native default.'
                     )}
                   </FormDescription>
                   <FormMessage />
@@ -856,6 +907,83 @@ export function AssistantSettingsSection(props: {
                 )}
               />
             </div>
+
+            <div className='grid gap-5 border-t pt-5 sm:grid-cols-2'>
+              <FormField
+                control={form.control}
+                name='AssistantReviewProbability'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>
+                      {t('Per-request review probability (%)')}
+                    </FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        min={0}
+                        max={100}
+                        step={0.1}
+                        {...safeNumberFieldProps(field)}
+                        disabled={!reviewEnabled}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        '0 disables sampled reviews. 1.0 means roughly one percent; reviews run in the background and never delay the response.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='AssistantReviewModel'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Review model')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder='deepseek-v4-flash'
+                        {...field}
+                        disabled={!reviewEnabled}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'Use an exact billable model ID. The default is deepseek-v4-flash.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
+
+            <FormField
+              control={form.control}
+              name='AssistantReviewGroupPolicies'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Per-group review policies')}</FormLabel>
+                  <FormControl>
+                    <Textarea
+                      {...field}
+                      className='min-h-28 font-mono text-xs'
+                      placeholder='{"group-name":{"probability":1,"intensity":"standard"}}'
+                      disabled={!reviewEnabled}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Optional JSON keyed by routing group. Each value accepts probability 0–100 and intensity off, low, standard, or high. Unlisted groups use the global probability.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
           </div>
 
           <div className='grid gap-5 border-t pt-6'>

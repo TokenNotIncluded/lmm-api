@@ -95,9 +95,13 @@ function Metric({
 function PaymentMethodRow({
   method,
   onChange,
+  onView,
+  viewing,
 }: {
   method: FinancePaymentMethod
   onChange: (value: Partial<FinancePaymentMethod>) => void
+  onView: () => void
+  viewing: boolean
 }) {
   const { t } = useTranslation()
   return (
@@ -107,9 +111,16 @@ function PaymentMethodRow({
         aria-hidden='true'
       />
       <div className='min-w-0 flex-1'>
-        <p className='truncate text-sm font-medium'>
+        <Button
+          type='button'
+          variant='link'
+          size='sm'
+          className='h-auto max-w-full justify-start px-0 py-0 text-left text-sm font-medium'
+          aria-pressed={viewing}
+          onClick={onView}
+        >
           {method.label || method.method}
-        </p>
+        </Button>
         <p className='text-muted-foreground truncate text-xs'>
           {method.method}
         </p>
@@ -140,23 +151,31 @@ function PaymentMethodRow({
   )
 }
 
-function UserRow({ user, days }: { user: FinanceUserMetric; days: number }) {
+function UserRow({
+  user,
+  days,
+  paymentMethod,
+}: {
+  user: FinanceUserMetric
+  days: number
+  paymentMethod?: string
+}) {
   const { t } = useTranslation()
+  const title = user.display_name || user.username || `#${user.user_id}`
   return (
     <Link
       to='/finance'
-      search={{ user_id: user.user_id }}
+      search={{ user_id: user.user_id, payment_method: paymentMethod }}
       className='group flex items-center gap-3 py-3'
     >
       <span className='bg-muted text-muted-foreground flex size-8 shrink-0 items-center justify-center rounded-full text-xs'>
         {String(user.user_id).slice(-2)}
       </span>
       <span className='min-w-0 flex-1'>
-        <span className='block truncate text-sm font-medium'>
-          #{user.user_id}
-        </span>
+        <span className='block truncate text-sm font-medium'>{title}</span>
         <span className='text-muted-foreground block text-xs'>
-          {compact(user.token_units)} tokens · {user.requests}{' '}
+          {user.username && user.display_name ? `${user.username} · ` : ''}#
+          {user.user_id} · {compact(user.token_units)} tokens · {user.requests}{' '}
           {t('Requests').toLowerCase()}
         </span>
       </span>
@@ -170,14 +189,23 @@ function UserRow({ user, days }: { user: FinanceUserMetric; days: number }) {
   )
 }
 
-function UserDetail({ userId, days }: { userId: number; days: number }) {
+function UserDetail({
+  userId,
+  days,
+  paymentMethod,
+}: {
+  userId: number
+  days: number
+  paymentMethod?: string
+}) {
   const { t } = useTranslation()
   const navigate = useNavigate()
   const query = useQuery({
-    queryKey: ['finance-user', userId, days],
-    queryFn: () => getFinanceUser(userId, days),
+    queryKey: ['finance-user', userId, days, paymentMethod],
+    queryFn: () => getFinanceUser(userId, days, paymentMethod),
   })
   const overview = query.data?.data
+  const user = overview?.users?.[0]
   let detailContent: ReactNode
   if (query.isLoading) {
     detailContent = (
@@ -208,13 +236,21 @@ function UserDetail({ userId, days }: { userId: number; days: number }) {
         <div>
           <p className='text-muted-foreground text-xs'>{t('User spending')}</p>
           <h3 id='finance-user-detail' className='mt-1 text-lg font-semibold'>
-            #{userId}
+            {user?.display_name || user?.username || `#${userId}`}
           </h3>
+          <p className='text-muted-foreground mt-1 text-xs'>
+            {user?.username || `#${userId}`}
+          </p>
         </div>
         <Button
           variant='ghost'
           size='sm'
-          onClick={() => void navigate({ to: '/finance' })}
+          onClick={() =>
+            void navigate({
+              to: '/finance',
+              search: { payment_method: paymentMethod },
+            })
+          }
         >
           <ArrowLeft data-icon='inline-start' aria-hidden='true' />
           {t('Back')}
@@ -229,17 +265,22 @@ export function Finance() {
   const { t } = useTranslation()
   const search = route.useSearch()
   const queryClient = useQueryClient()
+  const navigate = route.useNavigate()
   const [days, setDays] = useState<(typeof WINDOWS)[number]>(30)
-  const [paymentMethod, setPaymentMethod] = useState('')
   const [expenseOpen, setExpenseOpen] = useState(false)
   const [expenseAmount, setExpenseAmount] = useState('')
   const [expenseCategory, setExpenseCategory] = useState('')
   const [expenseNote, setExpenseNote] = useState('')
   const overviewQuery = useQuery({
-    queryKey: ['finance-overview', days, paymentMethod],
-    queryFn: () => getFinanceOverview(days, paymentMethod || undefined),
+    queryKey: ['finance-overview', days, search.payment_method],
+    queryFn: () => getFinanceOverview(days, search.payment_method),
   })
   const overview = overviewQuery.data?.data
+  const selectedPaymentMethod = search.payment_method
+  const selectedPaymentMethodLabel =
+    overview?.payment_methods.find(
+      (method) => method.method === selectedPaymentMethod
+    )?.label || selectedPaymentMethod
   const expenseMutation = useMutation({
     mutationFn: () =>
       createFinanceExpense({
@@ -264,6 +305,7 @@ export function Finance() {
         ...item,
         label: item.date.slice(5),
         revenue: item.revenue_micros / 1_000_000,
+        refund: (item.refund_micros ?? 0) / 1_000_000,
         expense: item.expense_micros / 1_000_000,
       })),
     [overview?.daily]
@@ -318,21 +360,27 @@ export function Finance() {
                   {t(`Past ${window} days`)}
                 </Button>
               ))}
-              <select
-                value={paymentMethod}
-                onChange={(event) => setPaymentMethod(event.target.value)}
-                className='border-input bg-background text-foreground h-8 rounded-md border px-2 text-xs'
-                aria-label={t('Payment method')}
-              >
-                <option value=''>
-                  {t('Payment method')} · {t('All')}
-                </option>
-                {(overview?.payment_methods ?? []).map((method) => (
-                  <option key={method.method} value={method.method}>
-                    {method.label || method.method}
-                  </option>
-                ))}
-              </select>
+              {selectedPaymentMethod ? (
+                <div className='text-muted-foreground flex items-center gap-1 text-xs'>
+                  <span className='max-w-32 truncate'>
+                    {t('Payment method')}: {selectedPaymentMethodLabel}
+                  </span>
+                  <Button
+                    type='button'
+                    variant='link'
+                    size='sm'
+                    className='h-auto px-1 py-0 text-xs'
+                    onClick={() =>
+                      void navigate({
+                        to: '/finance',
+                        search: { user_id: undefined },
+                      })
+                    }
+                  >
+                    {t('Clear filters')}
+                  </Button>
+                </div>
+              ) : null}
             </div>
           </div>
 
@@ -344,7 +392,14 @@ export function Finance() {
           <div className='divide-border/70 grid border-y sm:grid-cols-2 sm:divide-x lg:grid-cols-4'>
             <Metric
               label={t('Revenue')}
-              value={money(overview?.revenue_micros ?? 0)}
+              value={money(
+                overview?.net_revenue_micros ?? overview?.revenue_micros ?? 0
+              )}
+              detail={
+                (overview?.refund_micros ?? 0) > 0
+                  ? `${t('Refund')}: ${money(overview?.refund_micros ?? 0)}`
+                  : undefined
+              }
             />
             <Metric
               label={t('Expenses')}
@@ -395,12 +450,12 @@ export function Finance() {
                       >
                         <stop
                           offset='5%'
-                          stopColor='hsl(var(--chart-1))'
+                          stopColor='var(--chart-1)'
                           stopOpacity={0.24}
                         />
                         <stop
                           offset='95%'
-                          stopColor='hsl(var(--chart-1))'
+                          stopColor='var(--chart-1)'
                           stopOpacity={0}
                         />
                       </linearGradient>
@@ -413,20 +468,17 @@ export function Finance() {
                       >
                         <stop
                           offset='5%'
-                          stopColor='hsl(var(--chart-2))'
+                          stopColor='var(--chart-2)'
                           stopOpacity={0.18}
                         />
                         <stop
                           offset='95%'
-                          stopColor='hsl(var(--chart-2))'
+                          stopColor='var(--chart-2)'
                           stopOpacity={0}
                         />
                       </linearGradient>
                     </defs>
-                    <CartesianGrid
-                      vertical={false}
-                      stroke='hsl(var(--border) / .45)'
-                    />
+                    <CartesianGrid vertical={false} stroke='var(--border)' />
                     <XAxis
                       dataKey='label'
                       axisLine={false}
@@ -442,22 +494,34 @@ export function Finance() {
                     <Tooltip
                       formatter={(value, name) => [
                         `$${Number(value).toFixed(2)}`,
-                        name === 'revenue' ? t('Revenue') : t('Expenses'),
+                        name === 'revenue'
+                          ? t('Revenue')
+                          : name === 'refund'
+                            ? t('Refund')
+                            : t('Expenses'),
                       ]}
                     />
                     <Area
                       type='monotone'
                       dataKey='revenue'
-                      stroke='hsl(var(--chart-1))'
+                      stroke='var(--chart-1)'
                       fill='url(#finance-revenue)'
                       strokeWidth={2}
                     />
                     <Area
                       type='monotone'
                       dataKey='expense'
-                      stroke='hsl(var(--chart-2))'
+                      stroke='var(--chart-2)'
                       fill='url(#finance-expense)'
                       strokeWidth={2}
+                    />
+                    <Area
+                      type='monotone'
+                      dataKey='refund'
+                      stroke='var(--destructive)'
+                      fill='none'
+                      strokeWidth={2}
+                      strokeDasharray='4 4'
                     />
                   </AreaChart>
                 </ResponsiveContainer>
@@ -480,6 +544,16 @@ export function Finance() {
                     key={method.method}
                     method={method}
                     onChange={(value) => void updateMethod(method, value)}
+                    onView={() =>
+                      void navigate({
+                        to: '/finance',
+                        search: {
+                          user_id: undefined,
+                          payment_method: method.method,
+                        },
+                      })
+                    }
+                    viewing={selectedPaymentMethod === method.method}
                   />
                 ))}
                 {(overview?.payment_methods ?? []).length === 0 ? (
@@ -506,15 +580,6 @@ export function Finance() {
                   <p className='text-muted-foreground mt-1 text-xs'>
                     {t('View user')}
                   </p>
-                  {overview &&
-                  (overview.users_truncated ||
-                    !overview.user_metrics_complete) ? (
-                    <p className='text-muted-foreground mt-1 text-xs'>
-                      {t('Only the top {{limit}} users are shown', {
-                        limit: overview.user_limit,
-                      })}
-                    </p>
-                  ) : null}
                 </div>
                 <span className='text-muted-foreground text-xs'>
                   {t('Requests')}: {compact(overview?.tokens.requests ?? 0)}
@@ -522,7 +587,12 @@ export function Finance() {
               </div>
               <div className='mt-2 divide-y'>
                 {(overview?.users ?? []).slice(0, 10).map((user) => (
-                  <UserRow key={user.user_id} user={user} days={days} />
+                  <UserRow
+                    key={user.user_id}
+                    user={user}
+                    days={days}
+                    paymentMethod={selectedPaymentMethod}
+                  />
                 ))}
                 {(overview?.users ?? []).length === 0 ? (
                   <p className='text-muted-foreground py-4 text-sm'>
@@ -588,7 +658,11 @@ export function Finance() {
           </div>
 
           {search.user_id ? (
-            <UserDetail userId={search.user_id} days={days} />
+            <UserDetail
+              userId={search.user_id}
+              days={days}
+              paymentMethod={selectedPaymentMethod}
+            />
           ) : null}
         </div>
       </SectionPageLayout.Content>

@@ -3937,6 +3937,10 @@ export function ChannelMutateDrawer({
                                         placeholder={t(
                                           'Override request parameters. Cannot override stream parameter.'
                                         )}
+                                        example={`{
+  "temperature": 0.7,
+  "max_tokens": 1000
+}`}
                                       />
                                     </FormControl>
                                     <FormMessage />
@@ -4021,6 +4025,9 @@ export function ChannelMutateDrawer({
                                         placeholder={t(
                                           'Enter JSON to override request headers'
                                         )}
+                                        example={`{
+  "X-Client-Request-Id": "{request_id}"
+}`}
                                         heightClassName='h-40 min-h-40 max-h-40'
                                       />
                                     </FormControl>

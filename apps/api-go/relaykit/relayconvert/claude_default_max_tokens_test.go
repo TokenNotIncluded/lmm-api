@@ -83,6 +83,17 @@ func TestClaudeDefaultMaxTokensPresence(t *testing.T) {
 	}
 }
 
+func TestOpenAIChatRequestToClaudeMessagesOmitsEmptyTools(t *testing.T) {
+	maxTokens := uint(16)
+	got, err := OpenAIChatRequestToClaudeMessages(context.Background(), &convmeta.Values{}, dto.GeneralOpenAIRequest{
+		Model:     "claude-test",
+		MaxTokens: &maxTokens,
+		Messages:  []dto.Message{{Role: "user", Content: "hello"}},
+	})
+	require.NoError(t, err)
+	assert.Nil(t, got.Tools)
+}
+
 // The thinking adapter's max_tokens floor is an injection path of its own: a
 // "-thinking" request without max_tokens must keep converting even when no
 // DefaultMaxTokens hook is configured.

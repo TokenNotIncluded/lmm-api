@@ -53,6 +53,8 @@ export function Pricing() {
     endpointMap,
     autoGroups,
     isLoading,
+    error,
+    refetch,
     priceRate,
     usdExchangeRate,
   } = usePricingData()
@@ -120,6 +122,8 @@ export function Pricing() {
           searchQuery={searchInput}
           hasActiveFilters={hasActiveFilters}
           onClearFilters={handleClearAll}
+          error={error}
+          onRetry={refetch}
         />
       )
     }

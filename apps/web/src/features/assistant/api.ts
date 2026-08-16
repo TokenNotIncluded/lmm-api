@@ -177,6 +177,23 @@ export type AssistantNewUserGiftAction = {
   reason: string
 }
 
+export type AssistantWeeklyDiscount = {
+  discount_percent: number
+  status: 'offered' | 'claimed' | 'declined'
+  reason: string
+  week_start: number
+  created_at: number
+  claimed_at?: number
+  code?: string
+}
+
+export type AssistantWeeklyDiscountAction = {
+  type: 'weekly_discount'
+  discount_percent: number
+  status: 'offered'
+  reason: string
+}
+
 export type AssistantL1RecommendationAction = {
   type: 'l1_recommendation'
   user_statement: string
@@ -347,6 +364,7 @@ export type AssistantAction =
   | AssistantHumanSupportAction
   | AssistantCreateKeyAction
   | AssistantNewUserGiftAction
+  | AssistantWeeklyDiscountAction
   | AssistantImageGenerationAction
   | AssistantAdminChangeAction
   | AssistantNavigationAction
@@ -642,6 +660,31 @@ function parseAssistantNewUserGiftAction(
   }
 }
 
+function parseAssistantWeeklyDiscountAction(
+  action: Record<string, unknown>
+): AssistantWeeklyDiscountAction | undefined {
+  if (
+    action.type !== 'weekly_discount' ||
+    action.status !== 'offered' ||
+    typeof action.discount_percent !== 'number' ||
+    !Number.isInteger(action.discount_percent) ||
+    action.discount_percent < 1 ||
+    action.discount_percent > 10 ||
+    typeof action.reason !== 'string'
+  ) {
+    return undefined
+  }
+  const reason = action.reason.trim()
+  const reasonRunes = [...reason].length
+  if (reasonRunes < 2 || reasonRunes > 240) return undefined
+  return {
+    type: 'weekly_discount',
+    discount_percent: action.discount_percent,
+    status: 'offered',
+    reason,
+  }
+}
+
 function parseAssistantUserAction(
   action: Record<string, unknown>
 ): AssistantUserAction | undefined {
@@ -769,6 +812,8 @@ export function parseAssistantAction(
   if (navigation) return navigation
   const newUserGift = parseAssistantNewUserGiftAction(action)
   if (newUserGift) return newUserGift
+  const weeklyDiscount = parseAssistantWeeklyDiscountAction(action)
+  if (weeklyDiscount) return weeklyDiscount
   const userAction = parseAssistantUserAction(action)
   if (userAction) return userAction
   const confirmationToken =
@@ -1513,6 +1558,33 @@ export async function claimAssistantNewUserGift(): Promise<{
     skipErrorHandler: true,
   })
   return requireAssistantData(response.data, 'Unable to claim welcome gift')
+}
+
+export async function getAssistantWeeklyDiscount(): Promise<AssistantWeeklyDiscount | null> {
+  const response = await api.get<
+    AssistantAPIResponse<AssistantWeeklyDiscount | null>
+  >('/api/assistant/weekly-discount', {
+    disableDuplicate: true,
+    skipBusinessError: true,
+    skipErrorHandler: true,
+  })
+  return requireAssistantData(response.data, 'Unable to load weekly discount')
+}
+
+export async function claimAssistantWeeklyDiscount(): Promise<{
+  discount: AssistantWeeklyDiscount
+  already_claimed: boolean
+}> {
+  const response = await api.post<
+    AssistantAPIResponse<{
+      discount: AssistantWeeklyDiscount
+      already_claimed: boolean
+    }>
+  >('/api/assistant/weekly-discount/claim', undefined, {
+    skipBusinessError: true,
+    skipErrorHandler: true,
+  })
+  return requireAssistantData(response.data, 'Unable to claim weekly discount')
 }
 
 export async function revealAssistantPrivateCard(id: string): Promise<string> {

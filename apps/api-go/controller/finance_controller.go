@@ -57,6 +57,7 @@ type financeMethodMetric struct {
 type financeDailyMetric struct {
 	Date          string `json:"date"`
 	RevenueMicros int64  `json:"revenue_micros"`
+	RefundMicros  int64  `json:"refund_micros"`
 	ExpenseMicros int64  `json:"expense_micros"`
 	ProfitMicros  int64  `json:"profit_micros"`
 	TokenUnits    int64  `json:"token_units"`
@@ -64,12 +65,15 @@ type financeDailyMetric struct {
 }
 
 type financeUserMetric struct {
-	UserID          int   `json:"user_id"`
-	RevenueMicros   int64 `json:"revenue_micros"`
-	ExpenseMicros   int64 `json:"expense_micros"`
-	TokenCostMicros int64 `json:"token_cost_micros"`
-	TokenUnits      int64 `json:"token_units"`
-	Requests        int64 `json:"requests"`
+	UserID          int    `json:"user_id"`
+	Username        string `json:"username,omitempty"`
+	DisplayName     string `json:"display_name,omitempty"`
+	RevenueMicros   int64  `json:"revenue_micros"`
+	RefundMicros    int64  `json:"refund_micros"`
+	ExpenseMicros   int64  `json:"expense_micros"`
+	TokenCostMicros int64  `json:"token_cost_micros"`
+	TokenUnits      int64  `json:"token_units"`
+	Requests        int64  `json:"requests"`
 }
 
 type financeTokenMetric struct {
@@ -82,29 +86,36 @@ type financeTokenMetric struct {
 }
 
 type financeOverview struct {
-	Range                     financeRange                 `json:"range"`
-	Currency                  string                       `json:"currency"`
-	RevenueMicros             int64                        `json:"revenue_micros"`
-	ExpenseMicros             int64                        `json:"expense_micros"`
-	ProfitMicros              int64                        `json:"profit_micros"`
-	RevenueByMethod           []financeMethodMetric        `json:"revenue_by_method"`
-	ExpenseByMethod           []financeMethodMetric        `json:"expense_by_method"`
-	Tokens                    financeTokenMetric           `json:"tokens"`
-	Daily                     []financeDailyMetric         `json:"daily"`
-	Users                     []financeUserMetric          `json:"users"`
-	UserLimit                 int                          `json:"user_limit"`
-	UsersTruncated            bool                         `json:"users_truncated"`
-	PaymentMethods            []model.FinancePaymentMethod `json:"payment_methods"`
-	SourcesBounded            bool                         `json:"sources_bounded"`
-	UserMetricsComplete       bool                         `json:"user_metrics_complete"`
-	UserMetricsLimit          int                          `json:"user_metrics_limit"`
-	MethodUserMetricsComplete bool                         `json:"method_user_metrics_complete"`
-	MethodUserMetricsLimit    int                          `json:"method_user_metrics_limit"`
+	Range            financeRange                 `json:"range"`
+	Currency         string                       `json:"currency"`
+	RevenueMicros    int64                        `json:"revenue_micros"`
+	RefundMicros     int64                        `json:"refund_micros"`
+	NetRevenueMicros int64                        `json:"net_revenue_micros"`
+	ExpenseMicros    int64                        `json:"expense_micros"`
+	ProfitMicros     int64                        `json:"profit_micros"`
+	RevenueByMethod  []financeMethodMetric        `json:"revenue_by_method"`
+	RefundByMethod   []financeMethodMetric        `json:"refund_by_method"`
+	ExpenseByMethod  []financeMethodMetric        `json:"expense_by_method"`
+	Tokens           financeTokenMetric           `json:"tokens"`
+	Daily            []financeDailyMetric         `json:"daily"`
+	Users            []financeUserMetric          `json:"users"`
+	PaymentMethods   []model.FinancePaymentMethod `json:"payment_methods"`
+	SourcesBounded   bool                         `json:"sources_bounded"`
+	// Users is an intentionally bounded ranking. Keep this explicit so an
+	// administrator does not mistake the first page for a complete user list.
+	UserMetricsTruncated      bool `json:"user_metrics_truncated"`
+	UserMetricsComplete       bool `json:"user_metrics_complete"`
+	UserMetricsLimit          int  `json:"user_metrics_limit"`
+	MethodUserMetricsComplete bool `json:"method_user_metrics_complete"`
+	MethodUserMetricsLimit    int  `json:"method_user_metrics_limit"`
 }
 
 type financeAccumulator struct {
 	overview        financeOverview
+	start           int64
+	end             int64
 	methods         map[string]*financeMethodMetric
+	refunds         map[string]*financeMethodMetric
 	expenses        map[string]*financeMethodMetric
 	daily           map[string]*financeDailyMetric
 	users           map[int]*financeUserMetric
@@ -114,8 +125,18 @@ type financeAccumulator struct {
 
 func newFinanceAccumulator(start, end int64, paymentMethods []model.FinancePaymentMethod) *financeAccumulator {
 	return &financeAccumulator{
-		overview: financeOverview{Range: financeRange{Start: start, End: end}, Currency: model.FinanceCurrencyUSD, PaymentMethods: paymentMethods, SourcesBounded: true, UserMetricsComplete: true, UserMetricsLimit: financeDashboardMaxUserMetrics, UserLimit: financeDashboardMaxEntries, MethodUserMetricsComplete: true, MethodUserMetricsLimit: financeDashboardMaxMethodUserPairs},
-		methods:  make(map[string]*financeMethodMetric), expenses: make(map[string]*financeMethodMetric), daily: make(map[string]*financeDailyMetric), users: make(map[int]*financeUserMetric), methodUsers: make(map[string]map[int]struct{}),
+		overview: financeOverview{
+			Range:                     financeRange{Start: start, End: end},
+			Currency:                  model.FinanceCurrencyUSD,
+			PaymentMethods:            paymentMethods,
+			SourcesBounded:            true,
+			UserMetricsComplete:       true,
+			UserMetricsLimit:          financeDashboardMaxUserMetrics,
+			MethodUserMetricsComplete: true,
+			MethodUserMetricsLimit:    financeDashboardMaxMethodUserPairs,
+		},
+		start: start, end: end,
+		methods: make(map[string]*financeMethodMetric), refunds: make(map[string]*financeMethodMetric), expenses: make(map[string]*financeMethodMetric), daily: make(map[string]*financeDailyMetric), users: make(map[int]*financeUserMetric), methodUsers: make(map[string]map[int]struct{}),
 	}
 }
 
@@ -218,6 +239,27 @@ func (a *financeAccumulator) addExpenseDelta(category, method, provider string, 
 	a.dailyMetric(timestamp).ExpenseMicros += amount
 }
 
+func (a *financeAccumulator) addRefund(method, provider string, amount, timestamp int64, userID int) {
+	if amount <= 0 {
+		return
+	}
+	key := strings.TrimSpace(method) + "\x00" + strings.TrimSpace(provider)
+	metric := a.refunds[key]
+	if metric == nil {
+		metric = &financeMethodMetric{Method: strings.TrimSpace(method), Provider: strings.TrimSpace(provider), Category: model.FinanceSourceRefund}
+		a.refunds[key] = metric
+	}
+	metric.AmountMicros += amount
+	metric.Orders++
+	a.overview.RefundMicros += amount
+	a.dailyMetric(timestamp).RefundMicros += amount
+	if userID > 0 {
+		if user := a.userMetric(userID); user != nil {
+			user.RefundMicros += amount
+		}
+	}
+}
+
 func (a *financeAccumulator) addUsage(userID int, timestamp int64, prompt, completion int, estimatedCost int64, priced bool) {
 	if prompt < 0 {
 		prompt = 0
@@ -255,8 +297,19 @@ func (a *financeAccumulator) finish() financeOverview {
 	for _, metric := range a.expenses {
 		a.overview.ExpenseByMethod = append(a.overview.ExpenseByMethod, *metric)
 	}
+	for _, metric := range a.refunds {
+		a.overview.RefundByMethod = append(a.overview.RefundByMethod, *metric)
+	}
+	// Keep a stable daily series even when a window has no transactions. This
+	// lets the chart communicate "zero activity" instead of rendering an empty
+	// plot with no dates.
+	day := time.Unix(a.start, 0).UTC()
+	day = time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, time.UTC)
+	for ts := day.Unix(); ts < a.end; ts += 24 * 60 * 60 {
+		a.dailyMetric(ts)
+	}
 	for _, metric := range a.daily {
-		metric.ProfitMicros = metric.RevenueMicros - metric.ExpenseMicros
+		metric.ProfitMicros = metric.RevenueMicros - metric.RefundMicros - metric.ExpenseMicros
 		a.overview.Daily = append(a.overview.Daily, *metric)
 	}
 	for _, metric := range a.users {
@@ -268,16 +321,65 @@ func (a *financeAccumulator) finish() financeOverview {
 	sort.Slice(a.overview.ExpenseByMethod, func(i, j int) bool {
 		return a.overview.ExpenseByMethod[i].AmountMicros > a.overview.ExpenseByMethod[j].AmountMicros
 	})
+	sort.Slice(a.overview.RefundByMethod, func(i, j int) bool {
+		return a.overview.RefundByMethod[i].AmountMicros > a.overview.RefundByMethod[j].AmountMicros
+	})
 	sort.Slice(a.overview.Daily, func(i, j int) bool { return a.overview.Daily[i].Date < a.overview.Daily[j].Date })
 	sort.Slice(a.overview.Users, func(i, j int) bool {
-		return a.overview.Users[i].ExpenseMicros+a.overview.Users[i].RevenueMicros > a.overview.Users[j].ExpenseMicros+a.overview.Users[j].RevenueMicros
+		left := a.overview.Users[i]
+		right := a.overview.Users[j]
+		leftActivity := left.ExpenseMicros + left.RevenueMicros + left.RefundMicros
+		rightActivity := right.ExpenseMicros + right.RevenueMicros + right.RefundMicros
+		if leftActivity != rightActivity {
+			return leftActivity > rightActivity
+		}
+		// Map iteration order is intentionally unspecified. Use the stable user
+		// id as a tie-breaker so the bounded top-N view does not flicker between
+		// requests when users have the same financial activity.
+		return left.UserID < right.UserID
 	})
-	if len(a.overview.Users) > a.overview.UserLimit {
-		a.overview.UsersTruncated = true
-		a.overview.Users = a.overview.Users[:a.overview.UserLimit]
+	if len(a.overview.Users) > financeDashboardMaxEntries {
+		a.overview.UserMetricsTruncated = true
+		a.overview.Users = a.overview.Users[:financeDashboardMaxEntries]
 	}
-	a.overview.ProfitMicros = a.overview.RevenueMicros - a.overview.ExpenseMicros
+	a.overview.NetRevenueMicros = a.overview.RevenueMicros - a.overview.RefundMicros
+	a.overview.ProfitMicros = a.overview.NetRevenueMicros - a.overview.ExpenseMicros
 	return a.overview
+}
+
+// attachFinanceUserLabels enriches the bounded aggregates without retaining
+// full User rows while payment and usage sources are scanned.
+func attachFinanceUserLabels(view *financeOverview) error {
+	if view == nil || len(view.Users) == 0 {
+		return nil
+	}
+	ids := make([]int, 0, len(view.Users))
+	for _, metric := range view.Users {
+		ids = append(ids, metric.UserID)
+	}
+	type userLabel struct {
+		ID          int    `gorm:"column:id"`
+		Username    string `gorm:"column:username"`
+		DisplayName string `gorm:"column:display_name"`
+	}
+	labels := make([]userLabel, 0, len(ids))
+	if err := model.DB.Model(&model.User{}).
+		Select("id, username, display_name").
+		Where("id IN ?", ids).
+		Find(&labels).Error; err != nil {
+		return err
+	}
+	byID := make(map[int]userLabel, len(labels))
+	for _, label := range labels {
+		byID[label.ID] = label
+	}
+	for index := range view.Users {
+		if label, ok := byID[view.Users[index].UserID]; ok {
+			view.Users[index].Username = label.Username
+			view.Users[index].DisplayName = label.DisplayName
+		}
+	}
+	return nil
 }
 
 func parseFinanceDashboardRange(c *gin.Context) (int64, int64, error) {
@@ -301,7 +403,11 @@ func parseFinanceDashboardRange(c *gin.Context) (int64, int64, error) {
 }
 
 func financeMethodFromTopUp(topUp model.TopUp) (string, string) {
-	method, provider := strings.TrimSpace(topUp.PaymentMethod), strings.TrimSpace(topUp.PaymentProvider)
+	return financeNormalizePaymentSource(topUp.PaymentMethod, topUp.PaymentProvider)
+}
+
+func financeNormalizePaymentSource(methodValue, providerValue string) (string, string) {
+	method, provider := strings.TrimSpace(methodValue), strings.TrimSpace(providerValue)
 	if method == "" {
 		method = provider
 	}
@@ -318,6 +424,19 @@ func financeMicrosFromFloat(value float64) int64 {
 	return int64(math.Round(value * 1_000_000))
 }
 
+func financeUsageIsCountable(other map[string]interface{}) bool {
+	if other == nil {
+		return true
+	}
+	source, _ := other["billing_source"].(string)
+	switch strings.ToLower(strings.TrimSpace(source)) {
+	case "gift", "bonus", "checkin", "invite", "bounty", "linuxdo", "linux_do", "linuxdo_credit", "internal":
+		return false
+	default:
+		return true
+	}
+}
+
 func financeTopUpAmount(topUp model.TopUp) int64 {
 	if topUp.SettledAmountMicros > 0 {
 		return topUp.SettledAmountMicros
@@ -328,11 +447,23 @@ func financeTopUpAmount(topUp model.TopUp) int64 {
 	return financeMicrosFromFloat(topUp.Money)
 }
 
-func financePaymentMethodAllowed(method string, configs map[string]model.FinancePaymentMethod) bool {
-	if method == model.PaymentMethodBalance || method == model.PaymentProviderBalance {
+// The dashboard's monetary unit is explicitly USD. Empty currency is kept
+// compatible with historical rows that predate settlement_currency; a known
+// non-USD settlement must not be silently presented as USD without an
+// exchange-rate policy.
+func financeSettlementCurrencyAllowed(currency string) bool {
+	currency = strings.ToUpper(strings.TrimSpace(currency))
+	return currency == "" || currency == model.FinanceCurrencyUSD
+}
+
+func financePaymentMethodAllowed(method, provider string, configs map[string]model.FinancePaymentMethod) bool {
+	if !model.IsFinancialPaymentSource(method, provider) {
 		return false
 	}
 	config, ok := configs[method]
+	if !ok {
+		config, ok = configs[provider]
+	}
 	return !ok || (config.Enabled && config.IncludeRevenue)
 }
 
@@ -517,12 +648,20 @@ func iterateFinanceLogSource(base *gorm.DB, visit func(model.Log) error) error {
 func financeSourceCursor[T any](row T, timestampColumn string) (int64, int64) {
 	switch value := any(row).(type) {
 	case model.TopUp:
-		if timestampColumn == "complete_time" {
-			return value.CompleteTime, int64(value.Id)
+		if timestampColumn == financeCompletionTimestamp {
+			timestamp := value.CompleteTime
+			if timestamp <= 0 {
+				timestamp = value.CreateTime
+			}
+			return timestamp, int64(value.Id)
 		}
 	case model.SubscriptionOrder:
-		if timestampColumn == "complete_time" {
-			return value.CompleteTime, int64(value.Id)
+		if timestampColumn == financeCompletionTimestamp {
+			timestamp := value.CompleteTime
+			if timestamp <= 0 {
+				timestamp = value.CreateTime
+			}
+			return timestamp, int64(value.Id)
 		}
 	case model.FinanceLedgerEntry:
 		if timestampColumn == "occurred_at" {
@@ -531,6 +670,11 @@ func financeSourceCursor[T any](row T, timestampColumn string) (int64, int64) {
 	}
 	return 0, 0
 }
+
+// Some historical successful orders have no completion timestamp. Treat their
+// creation time as the effective settlement time consistently for filtering,
+// ordering, and display instead of silently dropping them from finance views.
+const financeCompletionTimestamp = "COALESCE(NULLIF(complete_time, 0), create_time)"
 
 func buildFinanceOverview(start, end int64, userFilter int, methodFilter string) (financeOverview, error) {
 	methods, configMap, err := loadFinancePaymentMethods()
@@ -542,21 +686,28 @@ func buildFinanceOverview(start, end int64, userFilter int, methodFilter string)
 	// so the existing wallet/order paths keep their historical semantics. The
 	// subscription order is the financial source of truth, however; excluding
 	// its mirror here prevents one payment from being counted twice.
-	tx := model.DB.Where("status = ? AND complete_time >= ? AND complete_time < ?", common.TopUpStatusSuccess, start, end).
+	tx := model.DB.Where("status = ? AND "+financeCompletionTimestamp+" >= ? AND "+financeCompletionTimestamp+" < ?", common.TopUpStatusSuccess, start, end).
 		Where(`NOT EXISTS (
 			SELECT 1 FROM subscription_orders AS subscription_order
 			WHERE subscription_order.trade_no = top_ups.trade_no
 			  AND subscription_order.status = ?
 		)`, common.TopUpStatusSuccess)
+	// FinanceOverview is a USD view; exclude known non-USD settlements rather
+	// than treating their native minor units as USD. Empty values are legacy
+	// rows and remain compatible with the historical USD assumption.
+	tx = tx.Where("(settlement_currency IS NULL OR settlement_currency = '' OR UPPER(settlement_currency) = ?)", model.FinanceCurrencyUSD)
 	if userFilter > 0 {
 		tx = tx.Where("user_id = ?", userFilter)
 	}
-	if err := iterateFinanceSource[model.TopUp](tx.Select("id, user_id, expected_amount_micros, settled_amount_micros, money, payment_method, payment_provider, create_time, complete_time, status"), "complete_time", func(topUp model.TopUp) error {
+	if err := iterateFinanceSource[model.TopUp](tx.Select("id, user_id, expected_amount_micros, settled_amount_micros, settlement_currency, money, payment_method, payment_provider, create_time, complete_time, status"), financeCompletionTimestamp, func(topUp model.TopUp) error {
 		method, provider := financeMethodFromTopUp(topUp)
+		if !financeSettlementCurrencyAllowed(topUp.SettlementCurrency) {
+			return nil
+		}
 		if methodFilter != "" && method != methodFilter {
 			return nil
 		}
-		if !financePaymentMethodAllowed(method, configMap) {
+		if !financePaymentMethodAllowed(method, provider, configMap) {
 			return nil
 		}
 		timestamp := topUp.CompleteTime
@@ -568,11 +719,11 @@ func buildFinanceOverview(start, end int64, userFilter int, methodFilter string)
 	}); err != nil {
 		return financeOverview{}, err
 	}
-	tx = model.DB.Where("status = ? AND complete_time >= ? AND complete_time < ?", common.TopUpStatusSuccess, start, end)
+	tx = model.DB.Where("status = ? AND "+financeCompletionTimestamp+" >= ? AND "+financeCompletionTimestamp+" < ?", common.TopUpStatusSuccess, start, end)
 	if userFilter > 0 {
 		tx = tx.Where("user_id = ?", userFilter)
 	}
-	if err := iterateFinanceSource[model.SubscriptionOrder](tx.Select("id, user_id, money, payment_method, payment_provider, create_time, complete_time, status"), "complete_time", func(order model.SubscriptionOrder) error {
+	if err := iterateFinanceSource[model.SubscriptionOrder](tx.Select("id, user_id, money, payment_method, payment_provider, create_time, complete_time, status"), financeCompletionTimestamp, func(order model.SubscriptionOrder) error {
 		method, provider := strings.TrimSpace(order.PaymentMethod), strings.TrimSpace(order.PaymentProvider)
 		if method == "" {
 			method = provider
@@ -583,7 +734,7 @@ func buildFinanceOverview(start, end int64, userFilter int, methodFilter string)
 		if methodFilter != "" && method != methodFilter {
 			return nil
 		}
-		if !financePaymentMethodAllowed(method, configMap) {
+		if !financePaymentMethodAllowed(method, provider, configMap) {
 			return nil
 		}
 		timestamp := order.CompleteTime
@@ -601,6 +752,9 @@ func buildFinanceOverview(start, end int64, userFilter int, methodFilter string)
 	}
 	if err := iterateFinanceLogSource(tx.Select("id, user_id, created_at, request_id, type, prompt_tokens, completion_tokens, other"), func(log model.Log) error {
 		other, _ := common.StrToMap(log.Other)
+		if !financeUsageIsCountable(other) {
+			return nil
+		}
 		price, priced := 0.0, false
 		if raw, ok := other["model_price"].(float64); ok && raw > 0 {
 			price, priced = raw, true
@@ -611,19 +765,29 @@ func buildFinanceOverview(start, end int64, userFilter int, methodFilter string)
 	}); err != nil {
 		return financeOverview{}, err
 	}
-	tx = model.DB.Where("occurred_at >= ? AND occurred_at < ?", start, end)
+	tx = model.DB.Where("occurred_at >= ? AND occurred_at < ? AND currency = ?", start, end, model.FinanceCurrencyUSD)
 	if userFilter > 0 {
 		tx = tx.Where("user_id = ?", userFilter)
 	}
 	if methodFilter != "" {
-		tx = tx.Where("payment_method = ?", methodFilter)
+		tx = tx.Where("COALESCE(NULLIF(TRIM(payment_method), ''), NULLIF(TRIM(payment_provider), '')) = ?", methodFilter)
 	}
 	if err := iterateFinanceSource[model.FinanceLedgerEntry](tx.Select("id, entry_type, category, amount_micros, currency, direction, payment_method, payment_provider, user_id, source_type, source_id, token_units, occurred_at, created_at, created_by, reversal_of_id"), "occurred_at", func(entry model.FinanceLedgerEntry) error {
 		if entry.EntryType == model.FinanceEntryRevenue {
+			method, provider := financeNormalizePaymentSource(entry.PaymentMethod, entry.PaymentProvider)
+			if method == "" {
+				return nil
+			}
 			if entry.Direction == model.FinanceDirectionCredit {
-				a.addRevenue(entry.PaymentMethod, entry.PaymentProvider, entry.AmountMicros, entry.OccurredAt, derefFinanceUser(entry.UserId))
+				if !financePaymentMethodAllowed(method, provider, configMap) {
+					return nil
+				}
+				a.addRevenue(method, provider, entry.AmountMicros, entry.OccurredAt, derefFinanceUser(entry.UserId))
 			} else {
-				a.addExpense("revenue_reversal", entry.PaymentMethod, entry.PaymentProvider, entry.AmountMicros, entry.OccurredAt, derefFinanceUser(entry.UserId))
+				if !financePaymentMethodAllowed(method, provider, configMap) {
+					return nil
+				}
+				a.addRefund(method, provider, entry.AmountMicros, entry.OccurredAt, derefFinanceUser(entry.UserId))
 			}
 		} else if entry.EntryType == model.FinanceEntryExpense || entry.EntryType == model.FinanceEntryTokenCost {
 			amount := entry.AmountMicros
@@ -636,7 +800,11 @@ func buildFinanceOverview(start, end int64, userFilter int, methodFilter string)
 	}); err != nil {
 		return financeOverview{}, err
 	}
-	return a.finish(), nil
+	view := a.finish()
+	if err := attachFinanceUserLabels(&view); err != nil {
+		return financeOverview{}, err
+	}
+	return view, nil
 }
 
 func derefFinanceUser(value *int) int {
@@ -673,14 +841,7 @@ func financeUsersHandler(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	common.ApiSuccess(c, gin.H{
-		"range":                 view.Range,
-		"users":                 view.Users,
-		"user_limit":            view.UserLimit,
-		"users_truncated":       view.UsersTruncated,
-		"user_metrics_complete": view.UserMetricsComplete,
-		"user_metrics_limit":    view.UserMetricsLimit,
-	})
+	common.ApiSuccess(c, gin.H{"range": view.Range, "users": view.Users})
 }
 
 func financeUserHandler(c *gin.Context) {

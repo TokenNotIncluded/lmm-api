@@ -3250,6 +3250,87 @@ for (const [locale, translations] of Object.entries(
   Object.assign(newKeys[locale], translations)
 }
 
+const weeklyDiscountTranslations = {
+  en: {
+    'Weekly discount claimed': 'Weekly discount claimed',
+    'Unable to claim weekly discount': 'Unable to claim weekly discount',
+    "This week's decision is used": "This week's decision is used",
+    'Claim discount code': 'Claim discount code',
+    'Code hidden': 'Code hidden',
+    'Discount code copied': 'Discount code copied',
+    'Weekly recharge discount': 'Weekly recharge discount',
+    'One claim per UTC week': 'One claim per UTC week',
+  },
+  fr: {
+    'Weekly discount claimed': 'Remise hebdomadaire réclamée',
+    'Unable to claim weekly discount':
+      'Impossible de réclamer la remise hebdomadaire',
+    "This week's decision is used": 'La décision de cette semaine est utilisée',
+    'Claim discount code': 'Réclamer le code promo',
+    'Code hidden': 'Code masqué',
+    'Discount code copied': 'Code promo copié',
+    'Weekly recharge discount': 'Remise de recharge hebdomadaire',
+    'One claim per UTC week': 'Une réclamation par semaine UTC',
+  },
+  ja: {
+    'Weekly discount claimed': '毎週割引を受け取りました',
+    'Unable to claim weekly discount': '毎週割引を受け取れません',
+    "This week's decision is used": '今週の判定は使用済みです',
+    'Claim discount code': '割引コードを受け取る',
+    'Code hidden': 'コードは非表示です',
+    'Discount code copied': '割引コードをコピーしました',
+    'Weekly recharge discount': '毎週のチャージ割引',
+    'One claim per UTC week': 'UTC週ごとに1回まで',
+  },
+  ru: {
+    'Weekly discount claimed': 'Еженедельная скидка получена',
+    'Unable to claim weekly discount':
+      'Не удалось получить еженедельную скидку',
+    "This week's decision is used": 'Решение этой недели уже использовано',
+    'Claim discount code': 'Получить код скидки',
+    'Code hidden': 'Код скрыт',
+    'Discount code copied': 'Код скидки скопирован',
+    'Weekly recharge discount': 'Еженедельная скидка на пополнение',
+    'One claim per UTC week': 'Один раз за неделю UTC',
+  },
+  vi: {
+    'Weekly discount claimed': 'Đã nhận ưu đãi hàng tuần',
+    'Unable to claim weekly discount': 'Không thể nhận ưu đãi hàng tuần',
+    "This week's decision is used": 'Đã dùng quyết định của tuần này',
+    'Claim discount code': 'Nhận mã giảm giá',
+    'Code hidden': 'Mã đang ẩn',
+    'Discount code copied': 'Đã sao chép mã giảm giá',
+    'Weekly recharge discount': 'Ưu đãi nạp tiền hàng tuần',
+    'One claim per UTC week': 'Mỗi tuần UTC chỉ nhận một lần',
+  },
+  'zh-TW': {
+    'Weekly discount claimed': '每週優惠已領取',
+    'Unable to claim weekly discount': '無法領取每週優惠',
+    "This week's decision is used": '本週評估已使用',
+    'Claim discount code': '領取優惠碼',
+    'Code hidden': '優惠碼暫不可見',
+    'Discount code copied': '優惠碼已複製',
+    'Weekly recharge discount': '每週充值折扣',
+    'One claim per UTC week': '每個 UTC 週限領一次',
+  },
+  zh: {
+    'Weekly discount claimed': '每周优惠已领取',
+    'Unable to claim weekly discount': '无法领取每周优惠',
+    "This week's decision is used": '本周评估已使用',
+    'Claim discount code': '领取优惠码',
+    'Code hidden': '优惠码暂不可见',
+    'Discount code copied': '优惠码已复制',
+    'Weekly recharge discount': '每周充值折扣',
+    'One claim per UTC week': '每个 UTC 周限领一次',
+  },
+}
+
+for (const [locale, translations] of Object.entries(
+  weeklyDiscountTranslations
+)) {
+  Object.assign(newKeys[locale], translations)
+}
+
 async function main() {
   let totalAdded = 0
   for (const [locale, translations] of Object.entries(newKeys)) {

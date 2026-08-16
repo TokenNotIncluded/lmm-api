@@ -38,6 +38,15 @@ import { SettingsForm } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
+
+const CHAT_SETTINGS_EXAMPLE = JSON.stringify(
+  [
+    { ChatGPT: 'https://chat.openai.com' },
+    { 'Example client': 'https://example.com/chat' },
+  ],
+  null,
+  2
+)
 import { ChatSettingsVisualEditor } from './chat-settings-visual-editor'
 import { formatJsonForEditor, normalizeJsonString } from './utils'
 
@@ -178,6 +187,7 @@ export function ChatSettingsSection({
                         name={field.name}
                         onBlur={field.onBlur}
                         textareaRef={field.ref}
+                        example={CHAT_SETTINGS_EXAMPLE}
                         placeholder={t(
                           '[{"ChatGPT":"https://chat.openai.com"},{"Lobe Chat":"https://chat-preview.lobehub.com/?settings={...}"}]'
                         )}

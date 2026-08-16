@@ -601,9 +601,9 @@ describe('AssistantPanel', () => {
           presets.getAttribute('aria-label'),
           'Choose a topic or write a message.'
         )
-        assert.match(presets.className, /flex-nowrap/)
-        assert.match(presets.className, /overflow-x-auto/)
-        assert.match(presets.className, /sm:flex-wrap/)
+        assert.match(presets.className, /flex-wrap/)
+        assert.doesNotMatch(presets.className, /flex-nowrap/)
+        assert.doesNotMatch(presets.className, /overflow-x-auto/)
         assert.ok(findButton('Talk to support'))
         assert.match(document.body.textContent ?? '', /Configure my client/)
 

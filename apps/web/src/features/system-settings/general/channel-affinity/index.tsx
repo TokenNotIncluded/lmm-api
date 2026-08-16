@@ -118,6 +118,8 @@ function serializeRules(rules: AffinityRule[]): string {
   return JSON.stringify(rules.map(({ id: _, ...rest }) => rest))
 }
 
+const RULES_JSON_EXAMPLE = JSON.stringify([RULE_TEMPLATES.codexCli], null, 2)
+
 interface Props {
   defaultValues: ChannelAffinitySettings
 }
@@ -668,6 +670,7 @@ export function ChannelAffinitySection(props: Props) {
               id='channel-affinity-rules-json'
               value={jsonText}
               onChange={setJsonText}
+              example={RULES_JSON_EXAMPLE}
               heightClassName='h-[300px] min-h-[300px] max-h-[300px]'
             />
           </div>

@@ -254,6 +254,10 @@ export function GeminiSettingsCard({ defaultValues }: GeminiSettingsCardProps) {
                     name={field.name}
                     onBlur={field.onBlur}
                     textareaRef={field.ref}
+                    example={`{
+  "default": "OFF",
+  "HARM_CATEGORY_HARASSMENT": "BLOCK_MEDIUM_AND_ABOVE"
+}`}
                     aria-invalid={Boolean(
                       form.formState.errors.gemini?.safety_settings
                     )}
@@ -282,6 +286,10 @@ export function GeminiSettingsCard({ defaultValues }: GeminiSettingsCardProps) {
                     name={field.name}
                     onBlur={field.onBlur}
                     textareaRef={field.ref}
+                    example={`{
+  "default": "v1beta",
+  "gemini-2.5-pro": "v1beta"
+}`}
                     aria-invalid={Boolean(
                       form.formState.errors.gemini?.version_settings
                     )}

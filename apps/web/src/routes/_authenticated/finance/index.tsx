@@ -25,6 +25,7 @@ import { useAuthStore } from '@/stores/auth-store'
 
 const financeSearchSchema = z.object({
   user_id: z.number().int().positive().optional().catch(undefined),
+  payment_method: z.string().trim().min(1).max(64).optional().catch(undefined),
 })
 
 export const Route = createFileRoute('/_authenticated/finance/')({

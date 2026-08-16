@@ -146,3 +146,11 @@ func QuotaFromDecimalChecked(d decimal.Decimal) (int, *QuotaClamp) {
 	f, _ := d.Round(0).Float64()
 	return saturateQuota(f, "QuotaFromDecimal")
 }
+
+// QuotaFromDecimalStrict rejects values outside the database quota domain
+// instead of silently saturating them. Payment settlement paths use this
+// variant so an oversized credit cannot be converted into a misleading
+// max-balance grant.
+func QuotaFromDecimalStrict(d decimal.Decimal) (int, error) {
+	return strictQuota(QuotaFromDecimalChecked(d))
+}

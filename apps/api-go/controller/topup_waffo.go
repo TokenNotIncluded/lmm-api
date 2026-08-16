@@ -149,7 +149,7 @@ func RequestWaffoAmount(c *gin.Context) {
 		return
 	}
 
-	payMoneyDecimal, _, err := applyDiscountCodeQuote(getWaffoPayMoneyDecimal(float64(req.Amount), group), req.Amount, req.DiscountCode)
+	payMoneyDecimal, _, err := applyDiscountCodeQuote(getWaffoPayMoneyDecimal(float64(req.Amount), group), req.Amount, req.DiscountCode, id)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "优惠码无效"})
 		return
@@ -231,7 +231,7 @@ func RequestWaffoPay(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
 		return
 	}
-	payMoneyDecimal, discountCode, err := applyDiscountCodeQuote(getWaffoPayMoneyDecimal(float64(req.Amount), group), req.Amount, req.DiscountCode)
+	payMoneyDecimal, discountCode, err := applyDiscountCodeQuote(getWaffoPayMoneyDecimal(float64(req.Amount), group), req.Amount, req.DiscountCode, id)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "优惠码无效"})
 		return
@@ -247,6 +247,9 @@ func RequestWaffoPay(c *gin.Context) {
 	paymentRequestId := merchantOrderId
 
 	amount, creditedQuota := topUpOrderAmounts(req.Amount)
+	if !requireTopUpCreditCapacity(c, id, creditedQuota) {
+		return
+	}
 	currency := getWaffoCurrency()
 	paymentAmount := formatWaffoAmount(payMoney, currency)
 	expectedAmountMicros, err := monetaryStringToMicros(paymentAmount)

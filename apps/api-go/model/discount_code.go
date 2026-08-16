@@ -26,29 +26,38 @@ const (
 var discountCodePattern = regexp.MustCompile(`^[A-Z0-9][A-Z0-9_-]{2,63}$`)
 
 var (
-	ErrDiscountCodeNotFound = errors.New("discount code was not found")
-	ErrDiscountCodeInactive = errors.New("discount code is inactive")
-	ErrDiscountCodeExpired  = errors.New("discount code has expired")
-	ErrDiscountCodeMinimum  = errors.New("discount code minimum amount was not met")
+	ErrDiscountCodeNotFound  = errors.New("discount code was not found")
+	ErrDiscountCodeInactive  = errors.New("discount code is inactive")
+	ErrDiscountCodeExpired   = errors.New("discount code has expired")
+	ErrDiscountCodeMinimum   = errors.New("discount code minimum amount was not met")
+	ErrDiscountCodeExhausted = errors.New("discount code usage limit was reached")
 )
 
 // DiscountCode is an administrator-managed percentage discount.  The code is
 // intentionally separate from Redemption: redemption codes grant quota while
 // discount codes only reduce the settlement amount of a purchase.
 type DiscountCode struct {
-	Id              int            `json:"id"`
-	Code            string         `json:"code" gorm:"type:varchar(64);uniqueIndex"`
-	Name            string         `json:"name" gorm:"type:varchar(120);index"`
-	DiscountPercent int            `json:"discount_percent"`
-	MinAmount       int64          `json:"min_amount" gorm:"not null;default:0"`
-	Status          int            `json:"status" gorm:"not null;default:1;index"`
-	UsedCount       int64          `json:"used_count" gorm:"not null;default:0"`
-	CreatedBy       int            `json:"created_by" gorm:"index"`
-	CreatedTime     int64          `json:"created_time" gorm:"not null;index"`
-	UpdatedTime     int64          `json:"updated_time" gorm:"not null"`
-	StartsTime      int64          `json:"starts_time" gorm:"not null;default:0"`
-	ExpiredTime     int64          `json:"expired_time" gorm:"not null;default:0"`
-	DeletedAt       gorm.DeletedAt `json:"-" gorm:"index"`
+	Id   int    `json:"id"`
+	Code string `json:"code" gorm:"type:varchar(64);uniqueIndex"`
+	Name string `json:"name" gorm:"type:varchar(120);index"`
+	// OwnerUserID is non-zero only for a private assistant-issued code. It is
+	// intentionally hidden from all API responses; the checkout validator uses
+	// it to keep a weekly reward from becoming a transferable public coupon.
+	OwnerUserID     int   `json:"-" gorm:"index"`
+	DiscountPercent int   `json:"discount_percent"`
+	MinAmount       int64 `json:"min_amount" gorm:"not null;default:0"`
+	Status          int   `json:"status" gorm:"not null;default:1;index"`
+	UsedCount       int64 `json:"used_count" gorm:"not null;default:0"`
+	// MaxUses is zero for an unlimited administrator code. Private assistant
+	// rewards set it to one so a weekly reward cannot be reused for multiple
+	// purchases after it has been claimed.
+	MaxUses     int64          `json:"max_uses" gorm:"not null;default:0"`
+	CreatedBy   int            `json:"created_by" gorm:"index"`
+	CreatedTime int64          `json:"created_time" gorm:"not null;index"`
+	UpdatedTime int64          `json:"updated_time" gorm:"not null"`
+	StartsTime  int64          `json:"starts_time" gorm:"not null;default:0"`
+	ExpiredTime int64          `json:"expired_time" gorm:"not null;default:0"`
+	DeletedAt   gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
 func NormalizeDiscountCode(value string) string {
@@ -67,6 +76,13 @@ func ValidateDiscountCodeDefinition(code string, percent int, minAmount, startsT
 	}
 	if startsTime < 0 || expiredTime < 0 || (startsTime > 0 && expiredTime > 0 && expiredTime <= startsTime) {
 		return errors.New("invalid discount code validity window")
+	}
+	return nil
+}
+
+func ValidateDiscountCodeMaxUses(maxUses int64) error {
+	if maxUses < 0 {
+		return errors.New("maximum discount code uses cannot be negative")
 	}
 	return nil
 }
@@ -124,6 +140,14 @@ func GetDiscountCodeByValue(value string) (*DiscountCode, error) {
 // ValidateDiscountCode checks only the current purchase eligibility.  It does
 // not reserve usage; usage is counted atomically when the payment settles.
 func ValidateDiscountCode(value string, amount int64, now int64) (*DiscountCode, error) {
+	return ValidateDiscountCodeForUser(value, amount, now, 0)
+}
+
+// ValidateDiscountCodeForUser applies the same public discount rules and, for
+// private assistant-issued codes, additionally requires the authenticated
+// owner. userID=0 is reserved for administrator/public validation and cannot
+// use a private code.
+func ValidateDiscountCodeForUser(value string, amount int64, now int64, userID int) (*DiscountCode, error) {
 	row, err := GetDiscountCodeByValue(value)
 	if err != nil {
 		return nil, err
@@ -139,6 +163,12 @@ func ValidateDiscountCode(value string, amount int64, now int64) (*DiscountCode,
 	}
 	if amount < row.MinAmount {
 		return nil, ErrDiscountCodeMinimum
+	}
+	if row.OwnerUserID != 0 && row.OwnerUserID != userID {
+		return nil, ErrDiscountCodeNotFound
+	}
+	if row.MaxUses > 0 && row.UsedCount >= row.MaxUses {
+		return nil, ErrDiscountCodeExhausted
 	}
 	return row, nil
 }
@@ -159,6 +189,7 @@ func (code *DiscountCode) Update() error {
 		"discount_percent": code.DiscountPercent,
 		"min_amount":       code.MinAmount,
 		"status":           code.Status,
+		"max_uses":         code.MaxUses,
 		"starts_time":      code.StartsTime,
 		"expired_time":     code.ExpiredTime,
 		"updated_time":     code.UpdatedTime,

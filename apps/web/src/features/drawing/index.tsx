@@ -2,14 +2,18 @@
 Copyright (C) 2026 LIghtJUNction
 */
 import { useQuery } from '@tanstack/react-query'
-import { ImageIcon, RefreshCw } from 'lucide-react'
-import { useMemo, useState, type ReactNode } from 'react'
+import { ImageIcon, RefreshCw, Sparkles } from 'lucide-react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import {
+  Alert,
+  AlertAction,
+  AlertDescription,
+  AlertTitle,
+} from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -19,6 +23,10 @@ import { api } from '@/lib/api'
 import { getAssistantStatus } from '../assistant/api'
 import { getPricing } from '../pricing/api'
 import type { PricingModel } from '../pricing/types'
+import {
+  getDrawingRequestErrorKind,
+  getDrawingRequestStatus,
+} from './error-state'
 
 type ImageResult = {
   url?: string
@@ -45,6 +53,53 @@ function imageSource(image: ImageResult): string | undefined {
 function modelSupportsGroup(model: PricingModel, group: string): boolean {
   return (
     model.enable_groups.includes('all') || model.enable_groups.includes(group)
+  )
+}
+
+function DrawingQueryErrorAlert(props: {
+  title: string
+  error: unknown
+  onRetry: () => void | Promise<unknown>
+}) {
+  const { t } = useTranslation()
+  const kind = getDrawingRequestErrorKind(props.error)
+  const status = getDrawingRequestStatus(props.error)
+  let description: string
+  switch (kind) {
+    case 'unauthenticated':
+      description = t('Session expired!')
+      break
+    case 'forbidden':
+      description = t('No permission to perform this action')
+      break
+    case 'unavailable':
+      description = t('Please try again later.')
+      break
+    case 'network':
+      description = t('Network connection failed or server not responding')
+      break
+    default:
+      description = t('Request failed')
+  }
+
+  return (
+    <Alert variant={kind === 'forbidden' ? 'default' : 'destructive'}>
+      <AlertTitle>{props.title}</AlertTitle>
+      <AlertDescription>
+        {description}
+        {status !== null ? ` (HTTP ${status})` : ''}
+      </AlertDescription>
+      <AlertAction>
+        <Button
+          type='button'
+          size='sm'
+          variant='outline'
+          onClick={props.onRetry}
+        >
+          {t('Retry')}
+        </Button>
+      </AlertAction>
+    </Alert>
   )
 }
 
@@ -120,6 +175,67 @@ export function Drawing() {
     pricingQuery.data?.usable_group?.[selectedGroup]?.desc
   const accessGranted = accessQuery.data?.developer_access_granted === true
 
+  const sizePresets = useMemo(() => {
+    const defaults = [{ value: '', label: t('Default') }]
+    if (selectedModel === 'dall-e-2' || selectedModel === 'dall-e') {
+      return [
+        ...defaults,
+        ...['256x256', '512x512', '1024x1024'].map((value) => ({
+          value,
+          label: value,
+        })),
+      ]
+    }
+    if (selectedModel === 'dall-e-3') {
+      return [
+        ...defaults,
+        ...['1024x1024', '1024x1792', '1792x1024'].map((value) => ({
+          value,
+          label: value,
+        })),
+      ]
+    }
+    return [
+      ...defaults,
+      ...['1024x1024', '1024x1536', '1536x1024'].map((value) => ({
+        value,
+        label: value,
+      })),
+    ]
+  }, [selectedModel, t])
+
+  const qualityPresets = useMemo(() => {
+    const defaults = [{ value: '', label: t('Default') }]
+    if (selectedModel === 'dall-e-3') {
+      return [
+        ...defaults,
+        ...['standard', 'hd'].map((value) => ({ value, label: value })),
+      ]
+    }
+    if (selectedModel === 'gpt-image-1') {
+      return [
+        ...defaults,
+        ...['auto', 'low', 'medium', 'high'].map((value) => ({
+          value,
+          label: value,
+        })),
+      ]
+    }
+    return [
+      ...defaults,
+      ...['standard', 'hd'].map((value) => ({ value, label: value })),
+    ]
+  }, [selectedModel, t])
+
+  useEffect(() => {
+    setSize((current) =>
+      sizePresets.some((option) => option.value === current) ? current : ''
+    )
+    setQuality((current) =>
+      qualityPresets.some((option) => option.value === current) ? current : ''
+    )
+  }, [qualityPresets, sizePresets])
+
   const generate = async () => {
     const cleanPrompt = prompt.trim()
     if (generating || !cleanPrompt || !selectedGroup || !selectedModel) return
@@ -173,6 +289,14 @@ export function Drawing() {
         <Skeleton className='h-32 w-full sm:col-span-2' />
       </div>
     )
+  } else if (accessQuery.isError) {
+    content = (
+      <DrawingQueryErrorAlert
+        title={t('Failed to load')}
+        error={accessQuery.error}
+        onRetry={() => accessQuery.refetch()}
+      />
+    )
   } else if (!accessGranted) {
     content = (
       <Alert>
@@ -184,11 +308,26 @@ export function Drawing() {
         </AlertDescription>
       </Alert>
     )
-  } else if (
-    pricingQuery.isError ||
-    groupsQuery.isError ||
-    groups.length === 0
-  ) {
+  } else if (pricingQuery.isError || groupsQuery.isError) {
+    content = (
+      <div className='grid gap-3'>
+        {pricingQuery.isError ? (
+          <DrawingQueryErrorAlert
+            title={t('Failed to load playground models')}
+            error={pricingQuery.error}
+            onRetry={() => pricingQuery.refetch()}
+          />
+        ) : null}
+        {groupsQuery.isError ? (
+          <DrawingQueryErrorAlert
+            title={t('Failed to load playground groups')}
+            error={groupsQuery.error}
+            onRetry={() => groupsQuery.refetch()}
+          />
+        ) : null}
+      </div>
+    )
+  } else if (groups.length === 0) {
     content = (
       <Alert variant='destructive'>
         <AlertTitle>{t('Image catalog unavailable')}</AlertTitle>
@@ -197,122 +336,176 @@ export function Drawing() {
             'No image-capable model and routing group is currently available.'
           )}
         </AlertDescription>
+        <AlertAction>
+          <Button
+            type='button'
+            size='sm'
+            variant='outline'
+            onClick={() => {
+              void Promise.all([pricingQuery.refetch(), groupsQuery.refetch()])
+            }}
+          >
+            {t('Retry')}
+          </Button>
+        </AlertAction>
       </Alert>
     )
   } else {
     content = (
-      <div className='grid gap-10 lg:grid-cols-[minmax(18rem,24rem)_minmax(0,1fr)]'>
+      <div className='grid gap-12 lg:grid-cols-[minmax(20rem,0.85fr)_minmax(0,1.15fr)] lg:gap-16'>
         <section
-          className='grid content-start gap-5'
+          className='grid content-start gap-7'
           aria-labelledby='drawing-prompt'
         >
-          <div className='grid gap-2'>
-            <Label htmlFor='drawing-prompt'>{t('Describe an image')}</Label>
+          <div className='grid gap-3'>
+            <div className='flex items-center gap-2'>
+              <Sparkles
+                className='text-muted-foreground size-4'
+                aria-hidden='true'
+              />
+              <Label htmlFor='drawing-prompt'>{t('Describe an image')}</Label>
+            </div>
             <Textarea
               id='drawing-prompt'
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
               placeholder={t('Describe what you want to see...')}
               maxLength={2000}
-              rows={7}
+              rows={10}
+              className='min-h-56 resize-y'
             />
-            <p className='text-muted-foreground text-xs'>
-              {prompt.length}/2000
-            </p>
+            <div className='text-muted-foreground flex justify-between text-xs'>
+              <span>
+                {t('Be specific about the subject, mood, and style.')}
+              </span>
+              <span>{prompt.length}/2000</span>
+            </div>
           </div>
-          <div className='grid gap-2'>
-            <Label htmlFor='drawing-group'>{t('Routing group')}</Label>
-            <NativeSelect
-              id='drawing-group'
-              value={selectedGroup}
-              onChange={(event) => setGroup(event.target.value)}
-            >
-              {groups.map((item) => (
-                <NativeSelectOption key={item} value={item}>
-                  {item}
-                  {item === selectedGroup && groupDescription
-                    ? ` · ${groupDescription}`
-                    : ''}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
-            <p className='text-muted-foreground text-xs'>
+          <div className='grid gap-4 sm:grid-cols-2'>
+            <div className='grid gap-2'>
+              <Label htmlFor='drawing-group'>{t('Routing group')}</Label>
+              <NativeSelect
+                id='drawing-group'
+                value={selectedGroup}
+                onChange={(event) => setGroup(event.target.value)}
+              >
+                {groups.map((item) => (
+                  <NativeSelectOption key={item} value={item}>
+                    {item}
+                    {item === selectedGroup && groupDescription
+                      ? ` · ${groupDescription}`
+                      : ''}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            </div>
+            <div className='grid gap-2'>
+              <Label htmlFor='drawing-model'>{t('Image model')}</Label>
+              <NativeSelect
+                id='drawing-model'
+                value={selectedModel}
+                onChange={(event) => setModel(event.target.value)}
+              >
+                {modelsForGroup.map((item) => (
+                  <NativeSelectOption
+                    key={item.model_name}
+                    value={item.model_name}
+                  >
+                    {item.model_name}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            </div>
+            <p className='text-muted-foreground text-xs sm:col-span-2'>
               {t('Billing follows the selected group configuration.')}
             </p>
           </div>
-          <div className='grid gap-2'>
-            <Label htmlFor='drawing-model'>{t('Image model')}</Label>
-            <NativeSelect
-              id='drawing-model'
-              value={selectedModel}
-              onChange={(event) => setModel(event.target.value)}
-            >
-              {modelsForGroup.map((item) => (
-                <NativeSelectOption
-                  key={item.model_name}
-                  value={item.model_name}
-                >
-                  {item.model_name}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
-          </div>
-          <div className='grid grid-cols-2 gap-3'>
+          <div className='grid gap-4 sm:grid-cols-2'>
             <div className='grid gap-2'>
               <Label htmlFor='drawing-size'>{t('Size (optional)')}</Label>
-              <Input
+              <NativeSelect
                 id='drawing-size'
                 value={size}
                 onChange={(event) => setSize(event.target.value)}
-                placeholder='1024x1024'
-                maxLength={32}
-              />
+              >
+                {sizePresets.map((option) => (
+                  <NativeSelectOption
+                    key={option.value || 'default'}
+                    value={option.value}
+                  >
+                    {option.label}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
             </div>
             <div className='grid gap-2'>
-              <Label htmlFor='drawing-count'>{t('Images')}</Label>
+              <Label htmlFor='drawing-quality'>{t('Quality (optional)')}</Label>
               <NativeSelect
-                id='drawing-count'
-                value={count}
-                onChange={(event) => setCount(event.target.value)}
+                id='drawing-quality'
+                value={quality}
+                onChange={(event) => setQuality(event.target.value)}
               >
-                {[1, 2, 3, 4].map((value) => (
-                  <NativeSelectOption key={value} value={String(value)}>
-                    {value}
+                {qualityPresets.map((option) => (
+                  <NativeSelectOption
+                    key={option.value || 'default'}
+                    value={option.value}
+                  >
+                    {option.label}
                   </NativeSelectOption>
                 ))}
               </NativeSelect>
             </div>
           </div>
-          <div className='grid gap-2'>
-            <Label htmlFor='drawing-quality'>{t('Quality (optional)')}</Label>
-            <Input
-              id='drawing-quality'
-              value={quality}
-              onChange={(event) => setQuality(event.target.value)}
-              maxLength={32}
-            />
+          <div className='grid gap-2 sm:max-w-40'>
+            <Label htmlFor='drawing-count'>{t('Images')}</Label>
+            <NativeSelect
+              id='drawing-count'
+              value={count}
+              onChange={(event) => setCount(event.target.value)}
+            >
+              {[1, 2, 3, 4].map((value) => (
+                <NativeSelectOption key={value} value={String(value)}>
+                  {value}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
           </div>
-          {error ? <p className='text-destructive text-sm'>{error}</p> : null}
-          <Button
-            type='button'
-            className='w-full sm:w-auto'
-            onClick={() => void generate()}
-            disabled={generating || !prompt.trim() || !selectedModel}
-          >
-            {generating ? (
-              <RefreshCw
-                className='mr-2 size-4 animate-spin'
-                aria-hidden='true'
-              />
-            ) : (
-              <ImageIcon className='mr-2 size-4' aria-hidden='true' />
-            )}
-            {generating ? t('Generating...') : t('Generate image')}
-          </Button>
+          <div className='flex flex-col gap-3 sm:flex-row sm:items-center'>
+            <Button
+              type='button'
+              className='h-11 w-full sm:w-auto sm:min-w-48'
+              onClick={() => void generate()}
+              disabled={generating || !prompt.trim() || !selectedModel}
+            >
+              {generating ? (
+                <RefreshCw
+                  className='mr-2 size-4 animate-spin'
+                  aria-hidden='true'
+                />
+              ) : (
+                <ImageIcon className='mr-2 size-4' aria-hidden='true' />
+              )}
+              {generating ? t('Generating...') : t('Generate image')}
+            </Button>
+            {error ? <p className='text-destructive text-sm'>{error}</p> : null}
+          </div>
         </section>
-        <section className='min-w-0' aria-live='polite'>
+        <section className='min-w-0 lg:border-l lg:pl-12' aria-live='polite'>
+          <div className='mb-5 flex items-baseline justify-between gap-4'>
+            <div>
+              <p className='text-muted-foreground text-xs tracking-[0.16em] uppercase'>
+                {t('Preview')}
+              </p>
+              <h2 className='mt-1 text-lg'>{t('Generated images')}</h2>
+            </div>
+            {results.length > 0 ? (
+              <span className='text-muted-foreground text-xs'>
+                {results.length} · {selectedModel}
+              </span>
+            ) : null}
+          </div>
           {results.length > 0 ? (
-            <div className='grid gap-5 sm:grid-cols-2'>
+            <div className='grid gap-6 sm:grid-cols-2'>
               {results.map((image) => {
                 const src = imageSource(image)
                 if (!src) return null
@@ -337,8 +530,19 @@ export function Drawing() {
               })}
             </div>
           ) : (
-            <div className='text-muted-foreground flex min-h-72 items-center justify-center text-center text-sm'>
-              {t('Your generated images will appear here.')}
+            <div className='bg-muted/5 text-muted-foreground flex min-h-56 flex-col items-center justify-center border border-dashed px-8 text-center sm:min-h-72 lg:min-h-[30rem]'>
+              <ImageIcon
+                className='mb-4 size-8 opacity-50'
+                aria-hidden='true'
+              />
+              <p className='text-sm'>
+                {t('Your generated images will appear here.')}
+              </p>
+              <p className='mt-2 max-w-sm text-xs leading-5'>
+                {t(
+                  'Describe an image, choose a group, and generate a preview.'
+                )}
+              </p>
             </div>
           )}
         </section>

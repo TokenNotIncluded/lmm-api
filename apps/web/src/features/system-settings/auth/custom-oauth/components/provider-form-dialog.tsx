@@ -613,6 +613,12 @@ export function ProviderFormDialog(props: ProviderFormDialogProps) {
                       placeholder={t(
                         'Optional JSON policy to restrict access based on user info fields'
                       )}
+                      example={`{
+  "logic": "and",
+  "conditions": [
+    { "field": "email", "op": "eq", "value": "team@example.com" }
+  ]
+}`}
                       heightClassName='h-40 min-h-40 max-h-40'
                     />
                   </FormControl>

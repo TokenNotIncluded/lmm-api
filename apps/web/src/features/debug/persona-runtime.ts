@@ -464,6 +464,31 @@ function preConversationPresets() {
   }
 }
 
+function personaTodoPage(category = 'all') {
+  const categories = [
+    'security_incident',
+    'security_review',
+    'open_source_bounty_review',
+    'open_source_bounty',
+    'developer_access',
+    'account_action',
+  ].map((key) => ({ key, total: 0, unread: 0 }))
+
+  return {
+    items: [],
+    page: 1,
+    page_size: 50,
+    total: 0,
+    category,
+    unread_count: 0,
+    total_unread_count: 0,
+    unread_by_category: Object.fromEntries(
+      categories.map(({ key }) => [key, 0])
+    ),
+    categories,
+  }
+}
+
 function readAuditUserId(config: InternalAxiosRequestConfig, url: URL): number {
   const raw =
     (config.params as { user_id?: unknown } | undefined)?.user_id ??
@@ -735,6 +760,15 @@ const debugAdapter: AxiosAdapter = async (config) => {
   }
   if (method === 'GET' && path === '/api/user/developer-access/request') {
     return response(config, envelope(null))
+  }
+  if (method === 'GET' && path === '/api/todos') {
+    return response(
+      config,
+      envelope(personaTodoPage(url.searchParams.get('category') || 'all'))
+    )
+  }
+  if (method === 'POST' && path === '/api/todos/read') {
+    return response(config, envelope({ marked: 0 }))
   }
 
   throw new Error(`${BLOCKED_DEBUG_REQUEST}: ${method} ${path}`)

@@ -133,6 +133,7 @@ import { AssistantSetupTool } from './assistant-setup-tool'
 import { AssistantToolCalls } from './assistant-tool-calls'
 import { AssistantUsageTool } from './assistant-usage-tool'
 import { AssistantUserActionTool } from './assistant-user-action-tool'
+import { AssistantWeeklyDiscount } from './assistant-weekly-discount'
 
 type AssistantActionPath =
   | '/'
@@ -648,7 +649,7 @@ function AssistantPresetPrompts(props: {
 
   return (
     <div
-      className='mb-2 flex max-w-full flex-nowrap gap-2 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible sm:pb-0'
+      className='mb-2 flex max-w-full flex-wrap gap-2 pb-1'
       role='group'
       aria-label={t('Choose a topic or write a message.')}
       data-testid='assistant-preset-prompts'
@@ -1610,6 +1611,9 @@ export function AssistantPanel(props: {
         queryKey: ['assistant-new-user-gift'],
       })
       await queryClient.invalidateQueries({
+        queryKey: ['assistant-weekly-discount'],
+      })
+      await queryClient.invalidateQueries({
         queryKey: ['assistant-conversations'],
       })
     } catch {
@@ -2014,6 +2018,7 @@ export function AssistantPanel(props: {
                     </Message>
                   ) : null}
                   <AssistantNewUserGift enabled={accountAccessConfirmed} />
+                  <AssistantWeeklyDiscount enabled={accountAccessConfirmed} />
                   <div
                     ref={activeToolRegionRef}
                     className={cn(

@@ -11,6 +11,7 @@ import (
 	"github.com/LIghtJUNction/api.lmm.best/service"
 	"github.com/LIghtJUNction/api.lmm.best/setting"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -66,6 +67,56 @@ func TestHandleWaffoPancakeRefundEventRecordsUserVisibleRefundLog(t *testing.T) 
 			require.Contains(t, logs[0].Content, tt.wantText)
 		})
 	}
+}
+
+func TestHandleWaffoPancakeRefundReversesWalletQuotaExactlyOnce(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}, &model.Log{}, &model.FinanceLedgerEntry{}))
+	user := model.User{
+		Username: "pancake-refund-wallet",
+		Password: "password",
+		Status:   common.UserStatusEnabled,
+		Quota:    100_000,
+	}
+	require.NoError(t, db.Create(&user).Error)
+	tradeNo := "WAFFO_PANCAKE-wallet-refund"
+	require.NoError(t, db.Create(&model.TopUp{
+		UserId:              user.Id,
+		TradeNo:             tradeNo,
+		Amount:              100,
+		CreditedQuota:       100_000,
+		SettledAmountMicros: 10_000_000,
+		PaymentMethod:       model.PaymentMethodWaffoPancake,
+		PaymentProvider:     model.PaymentProviderWaffoPancake,
+		Status:              common.TopUpStatusSuccess,
+		Money:               10,
+	}).Error)
+
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+	event := &service.WaffoPancakeWebhookEvent{
+		ID:        "evt-refund-wallet",
+		EventType: "refund.succeeded",
+		Data: service.WaffoPancakeWebhookData{
+			OrderMerchantExternalID:        tradeNo,
+			RefundTicketMerchantExternalID: "refund-wallet",
+			Amount:                         "2.50",
+			Currency:                       "USD",
+		},
+	}
+	require.NoError(t, handleWaffoPancakeRefundEvent(ctx, event))
+	require.NoError(t, handleWaffoPancakeRefundEvent(ctx, event))
+
+	var refreshed model.User
+	require.NoError(t, db.First(&refreshed, user.Id).Error)
+	assert.Equal(t, 75_000, refreshed.Quota)
+	var topUp model.TopUp
+	require.NoError(t, db.Where("trade_no = ?", tradeNo).First(&topUp).Error)
+	assert.Equal(t, int64(2_500_000), topUp.RefundedAmountMicros)
+	assert.Equal(t, int64(25_000), topUp.RefundedQuota)
+	var entries []model.FinanceLedgerEntry
+	require.NoError(t, db.Where("source_type = ?", model.FinanceSourceRefund).Find(&entries).Error)
+	require.Len(t, entries, 1)
 }
 
 func TestHandleWaffoPancakeSubscriptionRefundIsLedgerIdempotent(t *testing.T) {

@@ -16,6 +16,28 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+/*
+Copyright (C) 2026 LIghtJUNction
+*/
+import { Link } from '@tanstack/react-router'
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import { Code2, Eye, HelpCircle } from 'lucide-react'
 import { memo, useCallback, useMemo, useState, type ReactNode } from 'react'
 import type { UseFormReturn } from 'react-hook-form'
@@ -82,6 +104,18 @@ type GroupRatioFormProps = {
   isSaving: boolean
 }
 
+const GROUP_RATIO_EXAMPLE = '{\n  "default": 1,\n  "premium": 1.2\n}'
+const TOPUP_GROUP_RATIO_EXAMPLE = '{\n  "default": 1,\n  "premium": 1.1\n}'
+const USABLE_GROUPS_EXAMPLE =
+  '{\n  "default": "Standard access",\n  "premium": "Premium access"\n}'
+const GROUP_GROUP_RATIO_EXAMPLE =
+  '{\n  "premium": {\n    "default": 1,\n    "premium": 1\n  }\n}'
+const AUTO_GROUPS_EXAMPLE = '[\n  "default",\n  "premium"\n]'
+const SPECIAL_USABLE_GROUP_EXAMPLE =
+  '{\n  "premium": {\n    "+:default": "Standard access",\n    "-:legacy": ""\n  }\n}'
+const GROUP_WARNINGS_EXAMPLE =
+  '{\n  "free": {\n    "enabled": true,\n    "message": "This group is community-operated. Do not send secrets.",\n    "mode": "modal",\n    "confirmations": 3\n  }\n}'
+
 export const GroupRatioForm = memo(function GroupRatioForm({
   form,
   onSave,
@@ -133,6 +167,18 @@ export const GroupRatioForm = memo(function GroupRatioForm({
   return (
     <div className='space-y-6'>
       <div className='flex flex-wrap justify-end gap-2'>
+        <Button
+          variant='outline'
+          size='sm'
+          render={
+            <Link
+              to='/system-settings/models/$section'
+              params={{ section: 'dynamic-group-multiplier' }}
+            />
+          }
+        >
+          {t('Dynamic Pricing')}
+        </Button>
         <Button variant='outline' size='sm' onClick={() => setGuideOpen(true)}>
           <HelpCircle className='mr-2 h-4 w-4' />
           {t('Usage guide')}
@@ -220,7 +266,17 @@ export const GroupRatioForm = memo(function GroupRatioForm({
               name='GroupWarnings'
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>{t('Group warnings')}</FormLabel>
+                  <div className='flex flex-wrap items-center justify-between gap-2'>
+                    <FormLabel>{t('Group warnings')}</FormLabel>
+                    <Button
+                      type='button'
+                      variant='ghost'
+                      size='sm'
+                      onClick={() => field.onChange(GROUP_WARNINGS_EXAMPLE)}
+                    >
+                      {t('Use recommended preset')}
+                    </Button>
+                  </div>
                   <FormControl>
                     <JsonCodeEditor
                       value={field.value}
@@ -228,12 +284,13 @@ export const GroupRatioForm = memo(function GroupRatioForm({
                       name={field.name}
                       onBlur={field.onBlur}
                       textareaRef={field.ref}
+                      example={GROUP_WARNINGS_EXAMPLE}
                       heightClassName='h-40 min-h-40 max-h-40'
                     />
                   </FormControl>
                   <FormDescription>
                     {t(
-                      'Configure per-group warnings as JSON. Each entry may set enabled, message, mode (modal, banner, or inline), and confirmations from 1 to 3. Modal is the default.'
+                      'Configure per-group warnings as JSON. Use the recommended preset as a safe starting point, then edit each group. Each entry may set enabled, message, mode (modal, banner, or inline), and confirmations from 1 to 3. Modal is the default.'
                     )}
                   </FormDescription>
                   <FormMessage />
@@ -279,6 +336,7 @@ export const GroupRatioForm = memo(function GroupRatioForm({
                       name={field.name}
                       onBlur={field.onBlur}
                       textareaRef={field.ref}
+                      example={GROUP_RATIO_EXAMPLE}
                     />
                   </FormControl>
                   <FormDescription>
@@ -304,6 +362,7 @@ export const GroupRatioForm = memo(function GroupRatioForm({
                       name={field.name}
                       onBlur={field.onBlur}
                       textareaRef={field.ref}
+                      example={TOPUP_GROUP_RATIO_EXAMPLE}
                       heightClassName='h-40 min-h-40 max-h-40'
                     />
                   </FormControl>
@@ -331,6 +390,7 @@ export const GroupRatioForm = memo(function GroupRatioForm({
                       name={field.name}
                       onBlur={field.onBlur}
                       textareaRef={field.ref}
+                      example={USABLE_GROUPS_EXAMPLE}
                       heightClassName='h-40 min-h-40 max-h-40'
                     />
                   </FormControl>
@@ -357,6 +417,7 @@ export const GroupRatioForm = memo(function GroupRatioForm({
                       name={field.name}
                       onBlur={field.onBlur}
                       textareaRef={field.ref}
+                      example={GROUP_GROUP_RATIO_EXAMPLE}
                     />
                   </FormControl>
                   <FormDescription>
@@ -384,6 +445,7 @@ export const GroupRatioForm = memo(function GroupRatioForm({
                       name={field.name}
                       onBlur={field.onBlur}
                       textareaRef={field.ref}
+                      example={AUTO_GROUPS_EXAMPLE}
                       heightClassName='h-40 min-h-40 max-h-40'
                     />
                   </FormControl>
@@ -435,6 +497,7 @@ export const GroupRatioForm = memo(function GroupRatioForm({
                       name={field.name}
                       onBlur={field.onBlur}
                       textareaRef={field.ref}
+                      example={SPECIAL_USABLE_GROUP_EXAMPLE}
                     />
                   </FormControl>
                   <FormDescription>
@@ -460,6 +523,7 @@ export const GroupRatioForm = memo(function GroupRatioForm({
                       name={field.name}
                       onBlur={field.onBlur}
                       textareaRef={field.ref}
+                      example={GROUP_WARNINGS_EXAMPLE}
                       heightClassName='h-40 min-h-40 max-h-40'
                     />
                   </FormControl>

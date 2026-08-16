@@ -17,13 +17,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 /* eslint-disable react-refresh/only-export-components */
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ColumnDef } from '@tanstack/react-table'
 import {
   AlertTriangle,
   ChevronDown,
   ChevronRight,
   ListOrdered,
+  ShieldCheck,
   Shuffle,
   SlidersHorizontal,
 } from 'lucide-react'
@@ -46,6 +47,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { getSecurityPolicy } from '@/features/security/api'
 import { toIntlLocale } from '@/i18n/languages'
 import {
   formatCurrencyFromUSD,
@@ -550,6 +552,22 @@ export function useChannelsColumns(
 ): ColumnDef<Channel>[] {
   const { t, i18n } = useTranslation()
   const { sensitiveVisible } = useChannels()
+  const securityPolicyQuery = useQuery({
+    queryKey: ['security-policy'],
+    queryFn: getSecurityPolicy,
+    retry: false,
+    refetchOnWindowFocus: false,
+    staleTime: 60_000,
+  })
+  const protectedGroups = useMemo(
+    () =>
+      new Set(
+        (securityPolicyQuery.data?.data?.protected_groups ?? [])
+          .map((group) => group.trim())
+          .filter(Boolean)
+      ),
+    [securityPolicyQuery.data?.data?.protected_groups]
+  )
   const enableSelection = options.enableSelection ?? true
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
   // The column definitions only depend on the translation function, the active
@@ -666,6 +684,22 @@ export function useChannelsColumns(
                     className='font-medium'
                     maxWidth='max-w-full'
                   />
+                  {parseGroupsList(channel.group).some((group) =>
+                    protectedGroups.has(group)
+                  ) ? (
+                    <TooltipProvider delay={200}>
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <ShieldCheck className='text-success h-3.5 w-3.5 shrink-0' />
+                          }
+                        />
+                        <TooltipContent side='top'>
+                          {t('Protected access')}
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  ) : null}
                   {isPassThrough && (
                     <TooltipProvider delay={100}>
                       <Tooltip>
@@ -1186,6 +1220,6 @@ export function useChannelsColumns(
         meta: { pinned: 'right' as const },
       },
     ],
-    [enableSelection, t, locale, sensitiveVisible]
+    [enableSelection, t, locale, sensitiveVisible, protectedGroups]
   )
 }

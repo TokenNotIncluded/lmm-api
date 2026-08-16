@@ -158,6 +158,9 @@ func TestAssistantPersonaMatrix(t *testing.T) {
 				"get_user_usage_summary",
 				"prepare_user_action",
 			)
+			if assistantWeeklyDiscountToolAllowed(context) {
+				expectedAllowed = append(expectedAllowed, "prepare_weekly_discount")
+			}
 			assert.Len(t, toolNames, len(expectedAllowed), "fixture must describe the complete allowed tool set")
 			for _, tool := range expectedAllowed {
 				assert.True(t, toolNames[tool], "expected tool %q to be available", tool)

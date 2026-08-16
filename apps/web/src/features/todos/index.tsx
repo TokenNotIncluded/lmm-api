@@ -16,7 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useState, type ReactNode } from 'react'
+import { useSearch } from '@tanstack/react-router'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
@@ -30,9 +31,12 @@ import { UnifiedTodoList } from './unified-todo-list'
 
 export function Todos() {
   const { t } = useTranslation()
+  const search = useSearch({ from: '/_authenticated/todos/' })
   const isAdmin = useAuthStore(
     (state) => (state.auth.user?.role ?? 0) >= ROLE.ADMIN
   )
+  const focusAccountActionId =
+    search.todo === 'account_action' ? search.request : undefined
 
   return (
     <SectionPageLayout>
@@ -45,8 +49,13 @@ export function Todos() {
               <AdminTodoSection title={t('Assistant support tasks')}>
                 <AssistantLeadsPanel />
               </AdminTodoSection>
-              <AdminTodoSection title={t('Account safety review')}>
-                <AccountActionRequestsPanel />
+              <AdminTodoSection
+                title={t('Account safety review')}
+                initiallyExpanded={focusAccountActionId !== undefined}
+              >
+                <AccountActionRequestsPanel
+                  focusRequestId={focusAccountActionId}
+                />
               </AdminTodoSection>
               <AdminTodoSection title={t('L1 access requests')}>
                 <DeveloperAccessRequestsPanel />
@@ -59,9 +68,20 @@ export function Todos() {
   )
 }
 
-function AdminTodoSection(props: { title: string; children: ReactNode }) {
-  const [expanded, setExpanded] = useState(false)
-  const [mounted, setMounted] = useState(false)
+function AdminTodoSection(props: {
+  title: string
+  children: ReactNode
+  initiallyExpanded?: boolean
+}) {
+  const [expanded, setExpanded] = useState(props.initiallyExpanded ?? false)
+  const [mounted, setMounted] = useState(props.initiallyExpanded ?? false)
+
+  useEffect(() => {
+    if (props.initiallyExpanded) {
+      setExpanded(true)
+      setMounted(true)
+    }
+  }, [props.initiallyExpanded])
 
   return (
     <details

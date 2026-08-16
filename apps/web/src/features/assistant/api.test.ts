@@ -154,6 +154,32 @@ describe('assistant response parsing', () => {
     )
   })
 
+  test('accepts only a bounded weekly discount offer', () => {
+    assert.deepEqual(
+      parseAssistantAction({
+        type: 'weekly_discount',
+        discount_percent: 8,
+        status: 'offered',
+        reason: 'Clear, useful, and constructive work this week.',
+      }),
+      {
+        type: 'weekly_discount',
+        discount_percent: 8,
+        status: 'offered',
+        reason: 'Clear, useful, and constructive work this week.',
+      }
+    )
+    assert.equal(
+      parseAssistantAction({
+        type: 'weekly_discount',
+        discount_percent: 11,
+        status: 'offered',
+        reason: 'Too large.',
+      }),
+      undefined
+    )
+  })
+
   test('accepts only a complete session-bound human-support confirmation', () => {
     assert.deepEqual(
       parseAssistantAction({

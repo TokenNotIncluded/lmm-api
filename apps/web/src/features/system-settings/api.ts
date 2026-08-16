@@ -44,6 +44,20 @@ export async function updateSystemOption(request: UpdateOptionRequest) {
   return res.data
 }
 
+export async function validateSystemOptions(values: Record<string, string>) {
+  const res = await api.post<UpdateOptionResponse>('/api/option/validate', {
+    values,
+  })
+  return res.data
+}
+
+export async function updateSystemOptions(values: Record<string, string>) {
+  const res = await api.post<UpdateOptionResponse>('/api/option/bulk', {
+    values,
+  })
+  return res.data
+}
+
 export async function getDynamicPricingStatus() {
   const res = await api.get<DynamicPricingStatusResponse>(
     '/api/dynamic_pricing/status'

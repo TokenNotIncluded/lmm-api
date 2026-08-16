@@ -16,19 +16,52 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Search } from 'lucide-react'
+import { CircleAlert, Search } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import {
+  Alert,
+  AlertAction,
+  AlertDescription,
+  AlertTitle,
+} from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 
 export interface EmptyStateProps {
   searchQuery?: string
   hasActiveFilters: boolean
   onClearFilters: () => void
+  error?: unknown
+  onRetry?: () => void | Promise<unknown>
 }
 
 export function EmptyState(props: EmptyStateProps) {
   const { t } = useTranslation()
+
+  if (props.error) {
+    return (
+      <Alert variant='destructive' className='my-2'>
+        <CircleAlert aria-hidden='true' />
+        <AlertTitle>{t('Failed to load enabled models')}</AlertTitle>
+        <AlertDescription>
+          {t('Please retry or refresh the page.')}
+        </AlertDescription>
+        {props.onRetry ? (
+          <AlertAction>
+            <Button
+              type='button'
+              size='sm'
+              variant='outline'
+              onClick={() => void props.onRetry?.()}
+            >
+              {t('Retry')}
+            </Button>
+          </AlertAction>
+        ) : null}
+      </Alert>
+    )
+  }
+
   const hasSearch = Boolean(props.searchQuery?.trim())
 
   return (

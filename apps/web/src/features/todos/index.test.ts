@@ -36,7 +36,7 @@ describe('admin to-do page layout', () => {
       'AccountActionRequestsPanel',
       'DeveloperAccessRequestsPanel',
     ]) {
-      assert.match(todosSource, new RegExp(`<${panel} \\/>`))
+      assert.match(todosSource, new RegExp(`<${panel}[^>]*\\/>`))
       assert.doesNotMatch(usersSource, new RegExp(`<${panel} \\/>`))
     }
   })
@@ -46,9 +46,10 @@ describe('admin to-do page layout', () => {
       todosSource,
       /<AdminTodoSection title=\{t\('Assistant support tasks'\)\}>/
     )
+    assert.match(todosSource, /title=\{t\('Account safety review'\)\}/)
     assert.match(
       todosSource,
-      /<AdminTodoSection title=\{t\('Account safety review'\)\}>/
+      /initiallyExpanded=\{focusAccountActionId !== undefined\}/
     )
     assert.match(
       todosSource,
@@ -56,7 +57,7 @@ describe('admin to-do page layout', () => {
     )
     assert.match(
       todosSource,
-      /const \[mounted, setMounted\] = useState\(false\)/
+      /const \[mounted, setMounted\] = useState\(props\.initiallyExpanded \?\? false\)/
     )
     assert.match(
       todosSource,

@@ -272,6 +272,11 @@ export function DynamicPricingSection({
 
   return (
     <SettingsSection title={t('Dynamic Group Multiplier')}>
+      <p className='text-muted-foreground mb-4 text-sm'>
+        {t(
+          'This page controls live channel-cost pricing. Static per-group ratios and group warnings are configured in Billing → Group Pricing.'
+        )}
+      </p>
       <div className='grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(20rem,0.7fr)]'>
         <Form {...form}>
           <SettingsForm onSubmit={form.handleSubmit(onSubmit)}>

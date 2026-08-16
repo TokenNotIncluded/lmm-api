@@ -41,6 +41,7 @@ func withAssistantSettings(t *testing.T, enabled bool, modelID string) {
 	t.Cleanup(func() {
 		setting.SetAssistantEnabled(original.Enabled)
 		_ = setting.UpdateAssistantModel(original.Model)
+		_ = setting.UpdateAssistantReasoningEffort(original.ReasoningEffort)
 		loadAssistantBillingUser = originalBillingLoader
 	})
 }
@@ -78,6 +79,7 @@ func TestPrepareAssistantRequestOwnsModelAndPrompt(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.AssistantLead{}, &model.AssistantProfileBucket{}, &model.AssistantFirstQuestionStat{}))
 	withAssistantSettings(t, true, "server-owned-model")
+	require.NoError(t, setting.UpdateAssistantReasoningEffort("high"))
 	originalServerAddress := system_setting.ServerAddress
 	system_setting.ServerAddress = "https://api.example.com/"
 	t.Cleanup(func() { system_setting.ServerAddress = originalServerAddress })
@@ -113,6 +115,7 @@ func TestPrepareAssistantRequestOwnsModelAndPrompt(t *testing.T) {
 	assert.Equal(t, 987, capturedBillingUserID)
 	assert.Equal(t, 42, capturedActorUserID)
 	assert.Equal(t, "server-owned-model", captured.Model)
+	assert.Equal(t, "high", captured.ReasoningEffort)
 	assert.False(t, captured.Stream)
 	require.Len(t, captured.Messages, 2)
 	assert.Equal(t, "system", captured.Messages[0].Role)
@@ -1101,6 +1104,9 @@ func TestAssistantPlanOffersKeepLinuxDOPaymentHiddenForL1(t *testing.T) {
 func TestAssistantModelPricingUsesAccountGroupsAndLiveRates(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}))
+	previousModelRatios := ratio_setting.ModelRatio2JSONString()
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"priced-model":1}`))
+	t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(previousModelRatios)) })
 	user := model.User{
 		Username:           "assistant-pricing-user",
 		Password:           "password",
@@ -1118,6 +1124,9 @@ func TestAssistantModelPricingUsesAccountGroupsAndLiveRates(t *testing.T) {
 			ModelRatio:      1.5,
 			CompletionRatio: 2,
 			EnableGroup:     []string{"default"},
+		}, {
+			ModelName:   "unpriced-public-model",
+			EnableGroup: []string{"default"},
 		}}
 	}
 	t.Cleanup(func() { getPricingCache = originalGetPricing })
@@ -1173,6 +1182,9 @@ func TestAssistantModelPricingUsesAccountGroupsAndLiveRates(t *testing.T) {
 	require.Len(t, l0Prices, 1)
 	assert.Equal(t, 3.0, l0Prices[0]["input_usd_per_million"])
 	assert.Equal(t, 6.0, l0Prices[0]["output_usd_per_million"])
+	unpriced := executeAssistantModelPricingTool(l0User.Id, map[string]any{"model_id": "unpriced-public-model"})
+	assert.Equal(t, false, unpriced["ok"])
+	assert.Equal(t, "model_not_in_public_preview", unpriced["status"])
 
 	missing := executeAssistantModelPricingTool(user.Id, map[string]any{})
 	assert.Equal(t, "model_required", missing["status"])
@@ -1255,7 +1267,7 @@ func TestAssistantPricingEndpointAppliesTrustDiscountToGroupRatios(t *testing.T)
 func TestAssistantAgentToolsExposeSafeAndConfirmationGatedActions(t *testing.T) {
 	c, _ := createAssistantKeyTestContext(t, "assistant-tool-user")
 	definitions := assistantToolDefinitions()
-	require.Len(t, definitions, 39)
+	require.Len(t, definitions, 40)
 	names := make(map[string]bool, len(definitions))
 	for _, definition := range definitions {
 		names[definition.Function.Name] = true
@@ -1273,6 +1285,7 @@ func TestAssistantAgentToolsExposeSafeAndConfirmationGatedActions(t *testing.T) 
 	assert.True(t, names["get_bounty_guide"])
 	assert.True(t, names["get_bounty_data"])
 	assert.True(t, names["prepare_new_user_gift"])
+	assert.True(t, names["prepare_weekly_discount"])
 	assert.True(t, names["get_usage_summary"])
 	assert.True(t, names["navigate_to_page"])
 	assert.True(t, names["prepare_image_generation"])
@@ -1758,9 +1771,9 @@ func TestAssistantAgentToolCatalogueMatchesAccessLevel(t *testing.T) {
 	for _, definition := range admin {
 		adminNames[definition.Function.Name] = true
 	}
-	// get_bounty_data is topic-gated and is not included until the request is
-	// classified as an open-source bounty read.
-	assert.Len(t, adminNames, len(assistantToolDefinitions())-8)
+	// get_bounty_data is topic-gated and the weekly discount is a user reward;
+	// neither is included for an administrator catalogue.
+	assert.False(t, adminNames["prepare_weekly_discount"])
 	assert.True(t, adminNames["get_admin_assistant_review"])
 	assert.False(t, adminNames["get_admin_server_config"])
 	assert.False(t, adminNames["prepare_admin_config_change"])
@@ -1777,7 +1790,7 @@ func TestAssistantAgentToolCatalogueMatchesAccessLevel(t *testing.T) {
 	for _, definition := range root {
 		rootNames[definition.Function.Name] = true
 	}
-	assert.Len(t, rootNames, len(assistantToolDefinitions())-4)
+	assert.False(t, rootNames["prepare_weekly_discount"])
 	assert.True(t, rootNames["get_admin_server_config"])
 	assert.True(t, rootNames["prepare_admin_config_change"])
 	assert.True(t, rootNames["prepare_admin_pricing_change"])

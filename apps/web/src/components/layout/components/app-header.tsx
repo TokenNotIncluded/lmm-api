@@ -89,6 +89,11 @@ type AppHeaderProps = {
    */
   showConfigDrawer?: boolean
   /**
+   * Whether to show the sidebar trigger
+   * @default true
+   */
+  showSidebarTrigger?: boolean
+  /**
    * Whether to show profile dropdown
    * @default true
    */
@@ -103,6 +108,7 @@ export function AppHeader({
   rightContent,
   showNotifications = true,
   showConfigDrawer = true,
+  showSidebarTrigger = true,
   showProfileDropdown = true,
 }: AppHeaderProps) {
   // Prioritize dynamically generated links from backend
@@ -114,7 +120,7 @@ export function AppHeader({
   const notifications = useNotifications()
 
   return (
-    <Header>
+    <Header showSidebarTrigger={showSidebarTrigger}>
       <SystemBrand variant='inline' />
 
       {leftContent ? (

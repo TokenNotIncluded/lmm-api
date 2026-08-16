@@ -110,6 +110,9 @@ func (*CreemAdaptor) RequestPay(c *gin.Context, req *CreemPayRequest) {
 
 	id := c.GetInt("id")
 	user, _ := model.GetUserById(id, false)
+	if !requireTopUpCreditCapacity(c, id, selectedProduct.Quota) {
+		return
+	}
 	expectedAmountMicros, err := monetaryFloatToMicros(selectedProduct.Price)
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Creem 产品金额无效 user_id=%d product_id=%s error=%q", id, selectedProduct.ProductId, err.Error()))

@@ -20,6 +20,10 @@ const (
 	// optional model/IP limits, or at most 100 IDs).  Keep these key-management
 	// endpoints from handing an unbounded JSON stream to encoding/json.
 	tokenMutationRequestMaxBytes = 16 << 10
+	// Raw configuration imports are intentionally larger than ordinary option
+	// writes, but remain bounded before decoding to keep the root-only editor
+	// from becoming an unbounded heap allocation.
+	rawOptionMutationRequestMaxBytes = 512 << 10
 )
 
 func SetApiRouter(router *gin.Engine) {
@@ -163,7 +167,7 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.GET("/onboarding/todo", middleware.DisableCache(), controller.GetL1OnboardingTodo)
 				selfRoute.PATCH("/onboarding/todo", middleware.DisableCache(), controller.PatchL1OnboardingTodo)
 				selfRoute.GET("/developer-access/request", controller.GetDeveloperAccessRequest)
-				selfRoute.POST("/developer-access/request", middleware.CriticalRateLimit(), controller.SubmitDeveloperAccessRequest)
+				selfRoute.POST("/developer-access/request", middleware.CriticalRateLimit(), middleware.DecompressRequestMiddleware(), middleware.RequestBodyLimit(userSelfMutationRequestMaxBytes), controller.SubmitDeveloperAccessRequest)
 				selfRoute.GET("/account-action-requests/appeal", middleware.DisableCache(), controller.GetAccountAppeal)
 				selfRoute.POST("/account-action-requests", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.SubmitAccountActionRequest)
 				selfRoute.GET("/violation-fees", middleware.DisableCache(), controller.ListSelfViolationFeeRecords)
@@ -318,6 +322,8 @@ func SetApiRouter(router *gin.Engine) {
 		{
 			optionRoute.GET("/", controller.GetOptions)
 			optionRoute.PUT("/", controller.UpdateOption)
+			optionRoute.POST("/validate", middleware.RequestBodyLimit(rawOptionMutationRequestMaxBytes), controller.ValidateOptions)
+			optionRoute.POST("/bulk", middleware.RequestBodyLimit(rawOptionMutationRequestMaxBytes), controller.UpdateOptionsBulk)
 			optionRoute.GET("/project-update", controller.GetProjectUpdate)
 			optionRoute.POST("/payment_compliance", controller.ConfirmPaymentCompliance)
 			optionRoute.GET("/channel_affinity_cache", controller.GetChannelAffinityCacheStats)

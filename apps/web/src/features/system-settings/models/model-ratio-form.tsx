@@ -138,6 +138,11 @@ function ModelJsonTextareaField(props: {
   label: string
   description: string
 }) {
+  const example =
+    props.name === 'ModelPrice'
+      ? '{\n  "model-id": 0.00001\n}'
+      : '{\n  "model-id": 1\n}'
+
   return (
     <FormField
       control={props.form.control}
@@ -152,6 +157,7 @@ function ModelJsonTextareaField(props: {
               name={field.name}
               onBlur={field.onBlur}
               textareaRef={field.ref}
+              example={example}
             />
           </FormControl>
           <FormDescription className='text-xs leading-5'>

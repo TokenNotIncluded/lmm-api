@@ -308,6 +308,25 @@ func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {
 	return tasks
 }
 
+// GetUnrefundedFailedTasks returns failed tasks whose non-zero quota marks a
+// pending refund. Legacy tasks are excluded before LIMIT so old rows cannot
+// starve current refund reconciliation.
+func GetUnrefundedFailedTasks(updatedBefore int64, limit int) []*Task {
+	if limit <= 0 {
+		return nil
+	}
+	var tasks []*Task
+	err := DB.Where("status = ?", TaskStatusFailure).
+		Where("quota != ?", 0).
+		Where("updated_at <= ?", updatedBefore).
+		Where("(submit_time <= ? OR submit_time >= ?)", 0, TaskRefundLegacyCutoff).
+		Order("id").Limit(limit).Find(&tasks).Error
+	if err != nil {
+		return nil
+	}
+	return tasks
+}
+
 func GetAllUnFinishSyncTasks(limit int) []*Task {
 	var tasks []*Task
 	var err error
@@ -342,6 +361,21 @@ func HasUnfinishedSyncTasks() bool {
 		Where("status != ?", TaskStatusSuccess).
 		Limit(1).
 		Pluck("id", &id).Error
+	return err == nil && id != 0
+}
+
+// HasTaskPollingWork keeps the scheduler alive for both active polling and
+// failed tasks whose refunds still need reconciliation.
+func HasTaskPollingWork() bool {
+	if HasUnfinishedSyncTasks() {
+		return true
+	}
+	var id int64
+	err := DB.Model(&Task{}).
+		Where("status = ?", TaskStatusFailure).
+		Where("quota != ?", 0).
+		Where("(submit_time <= ? OR submit_time >= ?)", 0, TaskRefundLegacyCutoff).
+		Limit(1).Pluck("id", &id).Error
 	return err == nil && id != 0
 }
 
@@ -420,6 +454,36 @@ func (Task *Task) Update() error {
 
 func (t *Task) UpdateQuota() error {
 	return DB.Model(t).Update("quota", t.Quota).Error
+}
+
+// ClaimQuotaForRefund atomically clears an expected marker. Only the caller
+// that wins this compare-and-swap may perform the external refund.
+func ClaimQuotaForRefund(id int64, expectedQuota int) (bool, error) {
+	if id <= 0 || expectedQuota == 0 {
+		return false, nil
+	}
+	result := DB.Model(&Task{}).
+		Where("id = ? AND quota = ?", id, expectedQuota).
+		Update("quota", 0)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
+}
+
+// RestoreQuotaAfterFailedRefund returns a marker only if no other process has
+// claimed it since the failed attempt.
+func RestoreQuotaAfterFailedRefund(id int64, quota int) (bool, error) {
+	if id <= 0 || quota == 0 {
+		return false, nil
+	}
+	result := DB.Model(&Task{}).
+		Where("id = ? AND quota = ?", id, 0).
+		Update("quota", quota)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
 }
 
 // UpdateWithStatus performs a conditional UPDATE guarded by fromStatus (CAS).

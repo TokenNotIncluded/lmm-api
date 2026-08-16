@@ -34,6 +34,7 @@ export interface FinanceMethodMetric {
 export interface FinanceDailyMetric {
   date: string
   revenue_micros: number
+  refund_micros: number
   expense_micros: number
   profit_micros: number
   token_units: number
@@ -42,7 +43,10 @@ export interface FinanceDailyMetric {
 
 export interface FinanceUserMetric {
   user_id: number
+  username?: string
+  display_name?: string
   revenue_micros: number
+  refund_micros: number
   expense_micros: number
   token_cost_micros: number
   token_units: number
@@ -61,9 +65,12 @@ export interface FinanceOverview {
   range: { start: number; end: number }
   currency: string
   revenue_micros: number
+  refund_micros: number
+  net_revenue_micros: number
   expense_micros: number
   profit_micros: number
   revenue_by_method: FinanceMethodMetric[]
+  refund_by_method: FinanceMethodMetric[]
   expense_by_method: FinanceMethodMetric[]
   tokens: {
     prompt_tokens: number
@@ -75,10 +82,6 @@ export interface FinanceOverview {
   }
   daily: FinanceDailyMetric[]
   users: FinanceUserMetric[]
-  user_limit: number
-  users_truncated: boolean
-  user_metrics_complete: boolean
-  user_metrics_limit: number
   payment_methods: FinancePaymentMethod[]
   sources_bounded: boolean
 }
@@ -126,10 +129,14 @@ export async function getFinanceOverview(days = 30, paymentMethod?: string) {
   return response.data
 }
 
-export async function getFinanceUser(userId: number, days = 30) {
+export async function getFinanceUser(
+  userId: number,
+  days = 30,
+  paymentMethod?: string
+) {
   const response = await api.get<FinanceEnvelope<FinanceOverview>>(
     `/api/finance/users/${userId}`,
-    { params: rangeParams(days) }
+    { params: rangeParams(days, paymentMethod) }
   )
   return response.data
 }

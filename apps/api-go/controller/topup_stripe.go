@@ -61,7 +61,7 @@ func (*StripeAdaptor) RequestAmount(c *gin.Context, req *StripePayRequest) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
 		return
 	}
-	payMoney, _, err := applyDiscountCodeQuote(decimal.NewFromFloat(getStripePayMoney(float64(req.Amount), group)), req.Amount, req.DiscountCode)
+	payMoney, _, err := applyDiscountCodeQuote(decimal.NewFromFloat(getStripePayMoney(float64(req.Amount), group)), req.Amount, req.DiscountCode, id)
 	expectedAmountMicros, err := monetaryStringToMicros(payMoney.StringFixed(2))
 	if err != nil || expectedAmountMicros <= 10_000 {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
@@ -111,10 +111,14 @@ func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
 		return
 	}
-	payMoney, discountCode, err := applyDiscountCodeQuote(decimal.NewFromFloat(getStripePayMoney(float64(req.Amount), group)), req.Amount, req.DiscountCode)
+	payMoney, discountCode, err := applyDiscountCodeQuote(decimal.NewFromFloat(getStripePayMoney(float64(req.Amount), group)), req.Amount, req.DiscountCode, id)
 	expectedAmountMicros, err := monetaryStringToMicros(payMoney.StringFixed(2))
 	if err != nil || expectedAmountMicros <= 10_000 {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
+		return
+	}
+	amount, creditedQuota := topUpOrderAmounts(req.Amount)
+	if !requireTopUpCreditCapacity(c, id, creditedQuota) {
 		return
 	}
 	reference := fmt.Sprintf("new-api-ref-%d-%d-%s", user.Id, time.Now().UnixMilli(), randstr.String(4))
@@ -126,8 +130,6 @@ func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "拉起支付失败"})
 		return
 	}
-	amount, creditedQuota := topUpOrderAmounts(req.Amount)
-
 	topUp := &model.TopUp{
 		UserId:               id,
 		Amount:               amount,

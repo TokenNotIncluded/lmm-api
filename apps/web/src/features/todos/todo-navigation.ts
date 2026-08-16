@@ -35,6 +35,7 @@ export function todoItemHasDestination(item: TodoItem) {
   return (
     detailNumber(item, 'project_id') !== undefined ||
     item.category === 'security_review' ||
+    (item.category === 'account_action' && item.source_id > 0) ||
     ((item.category === 'security_incident' ||
       item.category === 'developer_access') &&
       Boolean(detailString(item, 'username')))

@@ -90,7 +90,7 @@ type assistantOpenAIResponse = agent.Response
 type assistantOpenAIResponseChoice = agent.Choice
 type assistantOpenAIResponseMessage = agent.ResponseMessage
 
-type toolSetKey uint8
+type toolSetKey uint16
 
 const (
 	toolAssessment toolSetKey = 1 << iota
@@ -100,10 +100,11 @@ const (
 	toolDeveloper
 	toolOffers
 	toolGift
+	toolWeeklyDiscount
 	toolBounty
 )
 
-var assistantToolSets [1 << 8]struct {
+var assistantToolSets [1 << 9]struct {
 	once  sync.Once
 	tools []assistantOpenAIToolDefinition
 }
@@ -283,6 +284,17 @@ func buildAssistantTools() []assistantOpenAIToolDefinition {
 					"amount_cents": map[string]any{"type": "integer", "minimum": 0, "maximum": 1000},
 					"reason":       map[string]any{"type": "string", "minLength": 2, "maxLength": 240},
 				}, []string{"amount_cents", "reason"}),
+			},
+		},
+		{
+			Type: "function",
+			Function: assistantOpenAIToolFunction{
+				Name:        "prepare_weekly_discount",
+				Description: "For a signed-in non-administrator user, evaluate one weekly recharge discount after at least two substantive user turns. Choose an integer from 0 to 10 percent based only on the clarity, continuity, and legitimate usefulness of this week's conversation. Zero is a valid decision. The server stores at most one decision per UTC week; an offered discount appears in chat and is claimed by the user, never by the assistant.",
+				Parameters: objectSchema(map[string]any{
+					"discount_percent": map[string]any{"type": "integer", "minimum": 0, "maximum": 10},
+					"reason":           map[string]any{"type": "string", "minLength": 2, "maxLength": 240},
+				}, []string{"discount_percent", "reason"}),
 			},
 		},
 		{
@@ -581,6 +593,9 @@ func keyForTools(context assistantUserContext) toolSetKey {
 	if assistantNewUserGiftToolAllowed(context) {
 		key |= toolGift
 	}
+	if assistantWeeklyDiscountToolAllowed(context) {
+		key |= toolWeeklyDiscount
+	}
 	if assistantBountyReadToolAllowed(context) {
 		key |= toolBounty
 	}
@@ -599,6 +614,14 @@ func assistantNewUserGiftToolAllowed(context assistantUserContext) bool {
 	return context.CustomerProfile != assistantProfilePromotion && context.CustomerProfile != assistantProfileSecurityRisk
 }
 
+func assistantWeeklyDiscountToolAllowed(context assistantUserContext) bool {
+	// The weekly reward is deliberately separate from the one-time welcome
+	// gift: a normal promotion question is not itself abuse. Keep the hard
+	// security boundary and administrator separation, while letting the model
+	// judge conversation quality on the server-backed weekly record.
+	return !context.AdministratorMode && context.CustomerProfile != assistantProfileSecurityRisk
+}
+
 func assistantToolAllowedForContext(name string, userContext assistantUserContext) bool {
 	if assistantL0InterlocutorAssessmentRequired(userContext) {
 		return name == assistantInterlocutorAssessmentTool
@@ -611,6 +634,9 @@ func assistantToolAllowedForContext(name string, userContext assistantUserContex
 	}
 	if name == "prepare_new_user_gift" {
 		return assistantNewUserGiftToolAllowed(userContext)
+	}
+	if name == "prepare_weekly_discount" {
+		return assistantWeeklyDiscountToolAllowed(userContext)
 	}
 	if name == "prepare_image_generation" {
 		return common.DrawingEnabled && userContext.DeveloperAccessGranted
@@ -704,6 +730,8 @@ func assistantToolChoiceForContext(userContext assistantUserContext) any {
 		name = "get_service_facts"
 	} else if assistantNewUserGiftRequest(userContext.LatestUserRequest) {
 		name = "prepare_new_user_gift"
+	} else if assistantWeeklyDiscountRequest(userContext.LatestUserRequest) {
+		name = "prepare_weekly_discount"
 	} else {
 		switch userContext.Intent {
 		case model.AssistantIntentCost, model.AssistantIntentModels:
@@ -864,6 +892,14 @@ func assistantNewUserGiftRequest(text string) bool {
 	return hasNewUserMarker && hasCreditTerm && hasRequestTerm
 }
 
+func assistantWeeklyDiscountRequest(text string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(text))
+	return assistantTextContainsAny(normalized,
+		"优惠码", "折扣码", "充值折扣", "每周优惠", "每周折扣", "本周优惠",
+		"weekly discount", "weekly coupon", "recharge discount", "discount code",
+	)
+}
+
 // assistantReadChain returns the smallest deterministic read chain
 // needed to answer compound fact requests. A model remains responsible for
 // the tool arguments, but it cannot skip live service/model/price reads and
@@ -892,6 +928,9 @@ func assistantReadChain(userContext assistantUserContext) []string {
 	}
 	if (assistantNewUserGiftRequest(text) || userContext.NewUserGiftRequested) && assistantNewUserGiftToolAllowed(userContext) {
 		tools = append(tools, "prepare_new_user_gift")
+	}
+	if (assistantWeeklyDiscountRequest(text) || userContext.WeeklyDiscountRequested) && assistantWeeklyDiscountToolAllowed(userContext) {
+		tools = append(tools, "prepare_weekly_discount")
 	}
 	if assistantTextContainsAny(text,
 		"base url", "base_url", "服务地址", "接口地址", "endpoint", "端点",
@@ -956,6 +995,11 @@ func assistantNewUserGiftWorkflowRequired(userContext assistantUserContext) bool
 		assistantNewUserGiftToolAllowed(userContext)
 }
 
+func assistantWeeklyDiscountWorkflowRequired(userContext assistantUserContext) bool {
+	return (assistantWeeklyDiscountRequest(userContext.LatestUserRequest) || userContext.WeeklyDiscountRequested) &&
+		assistantWeeklyDiscountToolAllowed(userContext)
+}
+
 func assistantHumanSupportWorkflowRequired(userContext assistantUserContext) bool {
 	return assistantHumanSupportRequest(userContext.LatestUserRequest) &&
 		assistantToolAllowedForContext("request_human_support", userContext)
@@ -978,6 +1022,9 @@ func assistantLiveActivityWorkflowMinSteps(userContext assistantUserContext) int
 		steps++
 	}
 	if assistantNewUserGiftWorkflowRequired(userContext) {
+		steps++
+	}
+	if assistantWeeklyDiscountWorkflowRequired(userContext) {
 		steps++
 	}
 	if steps == 1 {
@@ -1077,6 +1124,14 @@ func assistantToolChoiceForAgentStep(userContext assistantUserContext, calledToo
 			return assistantNamedToolChoice("get_service_facts")
 		}
 		if !successfulTools["get_service_facts"] {
+			return "none"
+		}
+	}
+	if assistantWeeklyDiscountWorkflowRequired(userContext) {
+		if !calledTools["prepare_weekly_discount"] {
+			return assistantNamedToolChoice("prepare_weekly_discount")
+		}
+		if !successfulTools["prepare_weekly_discount"] {
 			return "none"
 		}
 	}
@@ -1490,6 +1545,7 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 	forceImageGenerationWorkflow := assistantImageGenerationWorkflowRequired(userContext)
 	forcePublicActivityWorkflow := assistantPublicActivityWorkflowRequired(userContext)
 	forceNewUserGiftWorkflow := assistantNewUserGiftWorkflowRequired(userContext)
+	forceWeeklyDiscountWorkflow := assistantWeeklyDiscountWorkflowRequired(userContext)
 	forceHumanSupportWorkflow := assistantHumanSupportWorkflowRequired(userContext)
 	forceConversationTitle := userContext.ConversationTitleNeeded
 	forceReadChain := assistantLiveReadRequired(userContext)
@@ -1521,13 +1577,13 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 		maxSteps = minimum
 	}
 	if !settings.AgentLoopEnabled {
-		if !forceL0Assessment && !forceConversationTitle && !forceRecommendationWorkflow && !forceCreateKeyWorkflow && !forceImageGenerationWorkflow && !forcePublicActivityWorkflow && !forceNewUserGiftWorkflow && !forceHumanSupportWorkflow && !forceReadChain {
+		if !forceL0Assessment && !forceConversationTitle && !forceRecommendationWorkflow && !forceCreateKeyWorkflow && !forceImageGenerationWorkflow && !forcePublicActivityWorkflow && !forceNewUserGiftWorkflow && !forceWeeklyDiscountWorkflow && !forceHumanSupportWorkflow && !forceReadChain {
 			maxSteps = 1
 		}
 	}
 	cacheKey := c.GetString("assistant_cache_key")
 	usedCacheSensitiveTool := false
-	agentEnabled := maxSteps > 1 && (settings.AgentLoopEnabled || forceL0Assessment || forceConversationTitle || forceRecommendationWorkflow || forceCreateKeyWorkflow || forceImageGenerationWorkflow || forcePublicActivityWorkflow || forceNewUserGiftWorkflow || forceHumanSupportWorkflow || forceReadChain)
+	agentEnabled := maxSteps > 1 && (settings.AgentLoopEnabled || forceL0Assessment || forceConversationTitle || forceRecommendationWorkflow || forceCreateKeyWorkflow || forceImageGenerationWorkflow || forcePublicActivityWorkflow || forceNewUserGiftWorkflow || forceWeeklyDiscountWorkflow || forceHumanSupportWorkflow || forceReadChain)
 	var tools []assistantOpenAIToolDefinition
 	var calledTools, successfulTools map[string]bool
 	toolTraces := make([]assistantToolTrace, 0, assistantToolCallsPerTurn)
@@ -1539,11 +1595,12 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 
 	for step := 0; step < maxSteps; step++ {
 		request := assistantOpenAIRequest{
-			Model:       settings.Model,
-			Messages:    messages,
-			Stream:      false,
-			Temperature: 0.2,
-			MaxTokens:   900,
+			Model:           settings.Model,
+			Messages:        messages,
+			Stream:          false,
+			Temperature:     0.2,
+			MaxTokens:       900,
+			ReasoningEffort: assistantReasoningEffort(settings),
 		}
 		// Reserve the last turn for a final natural-language answer. This
 		// makes MaxSteps a hard bound while ensuring a tool call can finish.
@@ -1568,7 +1625,7 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 			return
 		}
 		message := response.Choices[0].Message
-		if forceConversationTitle || forceRecommendationWorkflow || forceCreateKeyWorkflow || forceImageGenerationWorkflow || forcePublicActivityWorkflow || forceNewUserGiftWorkflow || forceHumanSupportWorkflow || forceReadChain {
+		if forceConversationTitle || forceRecommendationWorkflow || forceCreateKeyWorkflow || forceImageGenerationWorkflow || forcePublicActivityWorkflow || forceNewUserGiftWorkflow || forceWeeklyDiscountWorkflow || forceHumanSupportWorkflow || forceReadChain {
 			requiredTool := assistantNamedToolChoiceName(request.ToolChoice)
 			if requiredTool != "" && (len(message.ToolCalls) != 1 || strings.TrimSpace(message.ToolCalls[0].Function.Name) != requiredTool) {
 				writeAssistantError(c, http.StatusBadGateway, "ASSISTANT_REQUIRED_TOOL_MISSING", errors.New("assistant did not follow the required tool workflow"))
@@ -1588,7 +1645,7 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 			c.Data(status, "application/json; charset=utf-8", normalizedBody)
 			return
 		}
-		if (!settings.AgentLoopEnabled && !forceL0Assessment && !forceConversationTitle && !forceRecommendationWorkflow && !forceCreateKeyWorkflow && !forceImageGenerationWorkflow && !forcePublicActivityWorkflow && !forceNewUserGiftWorkflow && !forceHumanSupportWorkflow && !forceReadChain) || step >= maxSteps-1 {
+		if (!settings.AgentLoopEnabled && !forceL0Assessment && !forceConversationTitle && !forceRecommendationWorkflow && !forceCreateKeyWorkflow && !forceImageGenerationWorkflow && !forcePublicActivityWorkflow && !forceNewUserGiftWorkflow && !forceWeeklyDiscountWorkflow && !forceHumanSupportWorkflow && !forceReadChain) || step >= maxSteps-1 {
 			writeAssistantError(c, http.StatusBadGateway, "ASSISTANT_AGENT_MAX_STEPS", errors.New("assistant agent reached its step limit before producing a final answer"))
 			return
 		}
@@ -1911,6 +1968,8 @@ func executeAssistantTool(c *gin.Context, call assistantOpenAIToolCall) map[stri
 		return executeAssistantBountyDataTool(actorUserID, input)
 	case "prepare_new_user_gift":
 		return executeAssistantNewUserGiftTool(c, actorUserID, input)
+	case "prepare_weekly_discount":
+		return executeAssistantWeeklyDiscountTool(c, actorUserID, input)
 	case "prepare_image_generation":
 		return executeAssistantImageGenerationTool(c, actorUserID, input)
 	case "get_usage_summary":
@@ -2530,6 +2589,17 @@ func executeAssistantModelPricingTool(userID int, input map[string]any) map[stri
 	if requestedGroup != "" {
 		if _, ok := usableGroups[requestedGroup]; !ok {
 			return map[string]any{"ok": false, "status": "invalid_group", "error": "the requested group is not available for this account"}
+		}
+	}
+	// Public preview pricing must use the same billable-model predicate as the
+	// public catalog.  A pricing-cache row without a configured model ratio is
+	// not a free model and must never be exposed as a zero-dollar reference.
+	if previewOnly && !modelListIncludesModel(modelID, false) {
+		return map[string]any{
+			"ok":        false,
+			"status":    "model_not_in_public_preview",
+			"error":     "the exact model ID is not in the current public preview",
+			"next_step": "Call get_available_models and answer with the exact public preview IDs instead of guessing.",
 		}
 	}
 

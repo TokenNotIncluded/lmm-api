@@ -26,6 +26,7 @@ import { PerformanceSection } from '../maintenance/performance-section'
 import { UpdateCheckerSection } from '../maintenance/update-checker-section'
 import type { OperationsSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
+import { RawJsonConfigurationSection } from './raw-json-configuration-section'
 
 const OPERATIONS_SECTIONS = [
   {
@@ -134,6 +135,11 @@ const OPERATIONS_SECTIONS = [
     id: 'finance-export',
     titleKey: 'Financial data export',
     build: () => <FinanceExportSection />,
+  },
+  {
+    id: 'raw-json',
+    titleKey: 'Raw JSON Configuration',
+    build: () => <RawJsonConfigurationSection />,
   },
   {
     id: 'update-checker',

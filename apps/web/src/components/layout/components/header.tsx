@@ -21,7 +21,16 @@ import { cn } from '@/lib/utils'
 
 type HeaderProps = React.HTMLAttributes<HTMLElement>
 
-export function Header({ className, children, ...props }: HeaderProps) {
+type HeaderLayoutProps = HeaderProps & {
+  showSidebarTrigger?: boolean
+}
+
+export function Header({
+  className,
+  children,
+  showSidebarTrigger = true,
+  ...props
+}: HeaderLayoutProps) {
   return (
     <header
       className={cn(
@@ -31,7 +40,9 @@ export function Header({ className, children, ...props }: HeaderProps) {
       {...props}
     >
       <div className='flex h-full items-center gap-1.5 px-2 sm:gap-2 sm:px-3'>
-        <SidebarTrigger variant='ghost' className='size-8' />
+        {showSidebarTrigger ? (
+          <SidebarTrigger variant='ghost' className='size-8' />
+        ) : null}
         {children}
       </div>
     </header>

@@ -3,6 +3,7 @@ package controller
 import (
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -119,6 +120,68 @@ func GetOptions(c *gin.Context) {
 type OptionUpdateRequest struct {
 	Key   string `json:"key"`
 	Value any    `json:"value"`
+}
+
+type OptionValuesRequest struct {
+	Values map[string]string `json:"values"`
+}
+
+func decodeOptionValues(c *gin.Context) (map[string]string, bool) {
+	var request OptionValuesRequest
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil || len(request.Values) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "values must be a non-empty JSON object",
+		})
+		return nil, false
+	}
+	if len(request.Values) > 128 {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{
+			"success": false,
+			"message": "too many option values",
+		})
+		return nil, false
+	}
+	return request.Values, true
+}
+
+// ValidateOptions runs the same server-side validation used by bulk option
+// writes, without changing the database or runtime state. The raw JSON
+// settings editor calls this before presenting its final save confirmation.
+func ValidateOptions(c *gin.Context) {
+	values, ok := decodeOptionValues(c)
+	if !ok {
+		return
+	}
+	if err := model.ValidateOptionValues(values); err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
+}
+
+// UpdateOptionsBulk validates and persists a related set of option writes as
+// one database transaction. Values are never included in the management
+// audit record because some option families may contain sensitive material.
+func UpdateOptionsBulk(c *gin.Context) {
+	values, ok := decodeOptionValues(c)
+	if !ok {
+		return
+	}
+	if err := model.UpdateOptionsBulk(values); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	recordManageAudit(c, "option.bulk_update", map[string]interface{}{"keys": keys})
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
 }
 
 func UpdateOption(c *gin.Context) {

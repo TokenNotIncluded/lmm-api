@@ -108,6 +108,7 @@ const CONTENT_SECTIONS = [
         defaultValues={{
           AssistantEnabled: settings.AssistantEnabled,
           AssistantModel: settings.AssistantModel,
+          AssistantReasoningEffort: settings.AssistantReasoningEffort,
           AssistantAgentLoopEnabled: settings.AssistantAgentLoopEnabled,
           AssistantMaxSteps: settings.AssistantMaxSteps,
           AssistantTimeoutSeconds: settings.AssistantTimeoutSeconds,
@@ -124,6 +125,9 @@ const CONTENT_SECTIONS = [
           AssistantReviewEnabled: settings.AssistantReviewEnabled,
           AssistantReviewWindowDays: settings.AssistantReviewWindowDays,
           AssistantReviewIntervalHours: settings.AssistantReviewIntervalHours,
+          AssistantReviewProbability: settings.AssistantReviewProbability,
+          AssistantReviewModel: settings.AssistantReviewModel,
+          AssistantReviewGroupPolicies: settings.AssistantReviewGroupPolicies,
           AssistantRetentionEnabled: settings.AssistantRetentionEnabled,
           AssistantActiveRetentionDays: settings.AssistantActiveRetentionDays,
           AssistantArchivedRetentionDays:

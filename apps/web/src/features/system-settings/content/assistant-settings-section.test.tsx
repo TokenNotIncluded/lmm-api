@@ -78,6 +78,7 @@ await i18n.use(initReactI18next).init({
 const baseValues = {
   AssistantEnabled: true,
   AssistantModel: 'deepseek-v4-flash',
+  AssistantReasoningEffort: 'auto',
   AssistantAgentLoopEnabled: true,
   AssistantMaxSteps: 6,
   AssistantTimeoutSeconds: 45,
@@ -94,6 +95,9 @@ const baseValues = {
   AssistantReviewEnabled: true,
   AssistantReviewWindowDays: 30,
   AssistantReviewIntervalHours: 24,
+  AssistantReviewProbability: 0,
+  AssistantReviewModel: 'deepseek-v4-flash',
+  AssistantReviewGroupPolicies: '{}',
   AssistantRetentionEnabled: true,
   AssistantActiveRetentionDays: 90,
   AssistantArchivedRetentionDays: 30,

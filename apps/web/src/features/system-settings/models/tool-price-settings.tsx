@@ -370,6 +370,7 @@ export const ToolPriceSettings = memo(function ToolPriceSettings({
           <JsonCodeEditor
             value={jsonText}
             onChange={handleJsonChange}
+            example={JSON.stringify(DEFAULT_PRICES, null, 2)}
             heightClassName='h-72 min-h-72 max-h-72'
             aria-invalid={Boolean(jsonError)}
           />

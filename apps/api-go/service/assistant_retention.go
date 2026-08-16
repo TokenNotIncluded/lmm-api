@@ -206,6 +206,25 @@ func (assistantRetentionHandler) Run(ctx context.Context, task *model.SystemTask
 			return
 		}
 	}
+	for {
+		if err := ctx.Err(); err != nil {
+			failSystemTask(task, runnerID, err)
+			return
+		}
+		deleted, err := model.PurgeAssistantRequestReviewsBefore(ctx, payload.RestrictedBefore, payload.BatchSize)
+		if err != nil {
+			failSystemTask(task, runnerID, err)
+			return
+		}
+		if deleted == 0 {
+			break
+		}
+		state.RequestReviews += deleted
+		if err := model.UpdateSystemTaskState(task.TaskID, runnerID, state); err != nil {
+			logSystemTaskLockError(ctx, task, err)
+			return
+		}
+	}
 
 	state.Progress = 100
 	if err := model.UpdateSystemTaskState(task.TaskID, runnerID, state); err != nil {

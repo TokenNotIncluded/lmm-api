@@ -19,11 +19,13 @@ For commercial licensing, please contact support@quantumnous.com
 package controller
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/model"
 	"github.com/LIghtJUNction/api.lmm.best/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
@@ -121,6 +123,25 @@ func requirePaymentMethodTopUpWithinLimit(c *gin.Context, paymentType string, am
 
 func requirePaymentMethodCreditedQuotaWithinLimit(c *gin.Context, paymentType string, quota int64) bool {
 	return requirePaymentMethodUSDWithinLimit(c, paymentType, creditedQuotaUSD(quota))
+}
+
+// requireTopUpCreditCapacity rejects a checkout before contacting a payment
+// provider when the user's wallet cannot represent the resulting balance.
+// Settlement repeats this check atomically, because the balance can change
+// while a checkout is open.
+func requireTopUpCreditCapacity(c *gin.Context, userID int, creditedQuota int64) bool {
+	err := model.ValidateTopUpQuotaCapacity(userID, creditedQuota)
+	if err == nil {
+		return true
+	}
+	message := "充值额度无效"
+	if errors.Is(err, model.ErrTopUpQuotaLimitExceeded) {
+		message = "充值后余额将超过账户额度上限"
+	} else if errors.Is(err, model.ErrInvalidTopUpQuota) {
+		message = "充值额度超出系统可表示范围"
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "error", "data": message})
+	return false
 }
 
 func requirePaymentMethodUSDWithinLimit(c *gin.Context, paymentType string, amount decimal.Decimal) bool {

@@ -58,6 +58,7 @@ export function AuthenticatedLayout(props: AuthenticatedLayoutProps) {
           <AppHeader
             showTopNav={consoleActivated}
             showSearch={consoleActivated}
+            showSidebarTrigger={!assistantPage}
           />
           <div className='flex min-h-0 w-full min-w-0 flex-1 basis-0 flex-col flex-nowrap md:flex-row'>
             {assistantPage ? null : <AppSidebar />}

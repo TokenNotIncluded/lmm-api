@@ -18,11 +18,15 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import * as z from 'zod'
 
-import { ASSISTANT_SEARCH_PROVIDERS } from '../types'
+import {
+  ASSISTANT_REASONING_EFFORTS,
+  ASSISTANT_SEARCH_PROVIDERS,
+} from '../types'
 
 export const assistantSettingsSchema = z.object({
   AssistantEnabled: z.boolean(),
   AssistantModel: z.string().trim().min(1).max(128),
+  AssistantReasoningEffort: z.enum(ASSISTANT_REASONING_EFFORTS),
   AssistantAgentLoopEnabled: z.boolean(),
   AssistantMaxSteps: z.number().int().min(1).max(12),
   AssistantTimeoutSeconds: z.number().int().min(5).max(120),
@@ -39,6 +43,9 @@ export const assistantSettingsSchema = z.object({
   AssistantReviewEnabled: z.boolean(),
   AssistantReviewWindowDays: z.number().int().min(1).max(90),
   AssistantReviewIntervalHours: z.number().int().min(1).max(168),
+  AssistantReviewProbability: z.number().min(0).max(100),
+  AssistantReviewModel: z.string().trim().min(1).max(128),
+  AssistantReviewGroupPolicies: z.string().max(20000),
   AssistantRetentionEnabled: z.boolean(),
   AssistantActiveRetentionDays: z.number().int().min(7).max(3650),
   AssistantArchivedRetentionDays: z.number().int().min(1).max(3650),

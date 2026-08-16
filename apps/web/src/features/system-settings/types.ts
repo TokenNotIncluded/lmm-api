@@ -212,6 +212,17 @@ export const ASSISTANT_SEARCH_PROVIDERS = [
   'mcp_streamable_http',
 ] as const
 
+export const ASSISTANT_REASONING_EFFORTS = [
+  'auto',
+  'none',
+  'low',
+  'medium',
+  'high',
+] as const
+
+export type AssistantReasoningEffort =
+  (typeof ASSISTANT_REASONING_EFFORTS)[number]
+
 export type AssistantSearchProvider =
   (typeof ASSISTANT_SEARCH_PROVIDERS)[number]
 
@@ -291,6 +302,7 @@ export type ContentSettings = {
   Chats: string
   AssistantEnabled: boolean
   AssistantModel: string
+  AssistantReasoningEffort: AssistantReasoningEffort
   AssistantAgentLoopEnabled: boolean
   AssistantMaxSteps: number
   AssistantTimeoutSeconds: number
@@ -307,6 +319,9 @@ export type ContentSettings = {
   AssistantReviewEnabled: boolean
   AssistantReviewWindowDays: number
   AssistantReviewIntervalHours: number
+  AssistantReviewProbability: number
+  AssistantReviewModel: string
+  AssistantReviewGroupPolicies: string
   AssistantRetentionEnabled: boolean
   AssistantActiveRetentionDays: number
   AssistantArchivedRetentionDays: number

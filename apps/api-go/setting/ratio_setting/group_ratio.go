@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/LIghtJUNction/api.lmm.best/common"
@@ -152,17 +153,20 @@ func UpdateGroupWarningsByJSONString(jsonStr string) error {
 	if err := json.Unmarshal([]byte(jsonStr), &raw); err != nil {
 		return err
 	}
+	if raw == nil {
+		return errors.New("group warnings must be a JSON object")
+	}
 	normalized := make(map[string]GroupWarning, len(raw))
 	for group, warning := range raw {
-		group = strings.TrimSpace(group)
-		if group == "" || len([]rune(group)) > 64 {
-			return fmt.Errorf("group warning keys must be non-empty and at most 64 characters")
+		trimmedGroup := strings.TrimSpace(group)
+		if err := validateGroupKey(trimmedGroup, "group warning"); err != nil {
+			return err
 		}
 		clean, err := normalizeGroupWarning(warning)
 		if err != nil {
-			return fmt.Errorf("group %q: %w", group, err)
+			return fmt.Errorf("group %q: %w", trimmedGroup, err)
 		}
-		normalized[group] = clean
+		normalized[trimmedGroup] = clean
 	}
 	return types.LoadFromJsonString(groupWarningMap, string(mustMarshalGroupWarnings(normalized)))
 }
@@ -180,9 +184,12 @@ func CheckGroupWarnings(jsonStr string) error {
 	if err := json.Unmarshal([]byte(jsonStr), &raw); err != nil {
 		return err
 	}
+	if raw == nil {
+		return errors.New("group warnings must be a JSON object")
+	}
 	for group, warning := range raw {
-		if strings.TrimSpace(group) == "" {
-			return errors.New("group warning keys must not be empty")
+		if err := validateGroupKey(group, "group warning"); err != nil {
+			return err
 		}
 		if _, err := normalizeGroupWarning(warning); err != nil {
 			return fmt.Errorf("group %q: %w", group, err)
@@ -234,7 +241,61 @@ func GroupGroupRatio2JSONString() string {
 }
 
 func UpdateGroupGroupRatioByJSONString(jsonStr string) error {
-	return types.LoadFromJsonString(groupGroupRatioMap, jsonStr)
+	parsed, err := parseGroupGroupRatio(jsonStr)
+	if err != nil {
+		return err
+	}
+	// Parse and validate before replacing the live map. RWMap's generic JSON
+	// loader clears the map before decoding, which would otherwise turn a
+	// malformed admin edit into an empty runtime policy.
+	groupGroupRatioMap.Clear()
+	groupGroupRatioMap.AddAll(parsed)
+	return nil
+}
+
+func validateGroupKey(group, kind string) error {
+	trimmed := strings.TrimSpace(group)
+	if trimmed == "" {
+		return fmt.Errorf("%s keys must not be empty", kind)
+	}
+	if len([]rune(trimmed)) > 64 {
+		return fmt.Errorf("%s keys must be at most 64 characters", kind)
+	}
+	return nil
+}
+
+func parseGroupGroupRatio(jsonStr string) (map[string]map[string]float64, error) {
+	var raw map[string]map[string]float64
+	if err := json.Unmarshal([]byte(jsonStr), &raw); err != nil {
+		return nil, err
+	}
+	if raw == nil {
+		return nil, errors.New("group group ratio must be a JSON object")
+	}
+	for userGroup, ratios := range raw {
+		if err := validateGroupKey(userGroup, "group group ratio"); err != nil {
+			return nil, err
+		}
+		if ratios == nil {
+			return nil, fmt.Errorf("group group ratio %q must contain a JSON object", userGroup)
+		}
+		for usingGroup, ratio := range ratios {
+			if err := validateGroupKey(usingGroup, "group group ratio"); err != nil {
+				return nil, err
+			}
+			if ratio < 0 || math.IsNaN(ratio) || math.IsInf(ratio, 0) {
+				return nil, fmt.Errorf("group group ratio %q[%q] must be finite and non-negative", userGroup, usingGroup)
+			}
+		}
+	}
+	return raw, nil
+}
+
+// CheckGroupGroupRatio validates the nested per-user-group multiplier map
+// without changing the live configuration.
+func CheckGroupGroupRatio(jsonStr string) error {
+	_, err := parseGroupGroupRatio(jsonStr)
+	return err
 }
 
 func CheckGroupRatio(jsonStr string) error {

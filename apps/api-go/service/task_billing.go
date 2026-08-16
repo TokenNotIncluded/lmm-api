@@ -168,17 +168,38 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool 
 	if quota == 0 {
 		return true
 	}
+	claimed, err := model.ClaimQuotaForRefund(task.ID, quota)
+	if err != nil {
+		logger.LogError(ctx, fmt.Sprintf("领取退款标记失败 task %s: %s", task.TaskID, err.Error()))
+		return false
+	}
+	if !claimed {
+		// Another worker already claimed or completed this refund. Treat it as
+		// handled so the caller does not apply a second wallet adjustment.
+		return true
+	}
+	task.Quota = 0
 
 	// 1. 退还资金来源（钱包或订阅）
 	if err := taskAdjustFunding(task, -quota); err != nil {
-		logger.LogWarn(ctx, fmt.Sprintf("退还资金来源失败 task %s: %s", task.TaskID, err.Error()))
+		restored, restoreErr := model.RestoreQuotaAfterFailedRefund(task.ID, quota)
+		task.Quota = quota
+		if restoreErr != nil || !restored {
+			logger.LogError(ctx, fmt.Sprintf("退还资金来源失败且无法恢复退款标记 task %s: %v", task.TaskID, err))
+		} else {
+			logger.LogWarn(ctx, fmt.Sprintf("退还资金来源失败 task %s: %s", task.TaskID, err.Error()))
+		}
 		return false
 	}
 
 	// 2. 退还令牌额度
 	taskAdjustTokenQuota(ctx, task, -quota)
 
-	// 3. 记录日志
+	// 3. 回减预扣时累计的用户和渠道用量，请求次数保持不变。
+	model.UpdateUserUsedQuota(task.UserId, -quota)
+	model.UpdateChannelUsedQuota(task.ChannelId, -quota)
+
+	// 4. 记录日志
 	other := taskBillingOther(task)
 	other["task_id"] = task.TaskID
 	other["reason"] = reason
@@ -194,12 +215,9 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool 
 		Other:     other,
 	})
 
-	// 4. 资金退款完成后再清除持久化标记。
-	// 回写失败必须显式告警，避免漏掉潜在的重复退款风险。
-	task.Quota = 0
-	if err := task.UpdateQuota(); err != nil {
-		logger.LogError(ctx, fmt.Sprintf("退款成功但清除 task quota 失败 task %s: %s", task.TaskID, err.Error()))
-	}
+	// The quota marker was claimed atomically before the funding adjustment, so
+	// a retry cannot refund the same task twice even if the process exits after
+	// the wallet update.
 	return true
 }
 
@@ -247,11 +265,13 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 	if quotaDelta > 0 {
 		logType = model.LogTypeConsume
 		logQuota = quotaDelta
-		model.UpdateUserUsedQuotaAndRequestCount(task.UserId, quotaDelta)
+		model.UpdateUserUsedQuota(task.UserId, quotaDelta)
 		model.UpdateChannelUsedQuota(task.ChannelId, quotaDelta)
 	} else {
 		logType = model.LogTypeRefund
 		logQuota = -quotaDelta
+		model.UpdateUserUsedQuota(task.UserId, quotaDelta)
+		model.UpdateChannelUsedQuota(task.ChannelId, quotaDelta)
 	}
 	other := taskBillingOther(task)
 	other["task_id"] = task.TaskID

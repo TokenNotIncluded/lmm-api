@@ -59,6 +59,8 @@ await i18next.use(initReactI18next).init({
         'Copied to clipboard': 'Copied to clipboard',
         'Failed to copy': 'Failed to copy',
         'Format JSON': 'Format JSON',
+        Example: 'Example',
+        'Fill Template': 'Fill Template',
       },
     },
   },
@@ -174,6 +176,29 @@ describe('JsonCodeEditor component', () => {
     assert.ok(formatButton)
     await act(async () => formatButton.click())
     assert.deepEqual(changes, ['{\n  "model": {\n    "ratio": 2\n  }\n}'])
+
+    await unmountEditor(rendered)
+  })
+
+  test('shows a safe example and fills it without changing the editor contract', async () => {
+    const changes: string[] = []
+    const example = '{\n  "default": 1\n}'
+    const rendered = await renderEditor({
+      value: '',
+      onChange: (value) => changes.push(value),
+      example,
+    })
+
+    const details = rendered.container.querySelector('details')
+    assert.ok(details)
+    assert.equal(details.textContent?.includes(example), true)
+    const fillButton = [...details.querySelectorAll('button')].find((button) =>
+      button.textContent?.includes('Fill Template')
+    )
+    assert.ok(fillButton)
+
+    await act(async () => fillButton.click())
+    assert.deepEqual(changes, [example])
 
     await unmountEditor(rendered)
   })

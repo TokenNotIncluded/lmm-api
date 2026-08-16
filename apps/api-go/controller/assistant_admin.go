@@ -212,6 +212,7 @@ var assistantAdminConfigModuleAllowlist = map[string]string{
 	"qwen":                     "Qwen adapter",
 	"quota_setting":            "Quota behavior",
 	"group_ratio_setting":      "Group routing ratios",
+	"dynamic_pricing_setting":  "Dynamic pricing",
 	"token_setting":            "Token behavior",
 	"tool_price_setting":       "Tool pricing",
 }
@@ -364,7 +365,14 @@ func assistantAdminSafeConfigField(key string) (string, bool) {
 	}
 	if parts[0] == "group_ratio_setting" {
 		switch field {
-		case "group_ratio", "group_group_ratio", "group_special_usable_group":
+		case "group_ratio", "group_group_ratio", "group_special_usable_group", "group_warnings":
+		default:
+			return "", false
+		}
+	}
+	if parts[0] == "dynamic_pricing_setting" {
+		switch field {
+		case "enabled", "min_factor", "base_price_usd_per_million", "cost_floor_factor", "max_factor", "channel_costs":
 		default:
 			return "", false
 		}
@@ -839,12 +847,35 @@ func assistantAdminConfigChanges(input map[string]any) (map[string]string, error
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", key, err)
 		}
-		if err := validateAssistantAdminConfigValue(key, normalized); err != nil {
-			return nil, fmt.Errorf("%s: %w", key, err)
+		if !strings.HasPrefix(key, "dynamic_pricing_setting.") {
+			if err := validateAssistantAdminConfigValue(key, normalized); err != nil {
+				return nil, fmt.Errorf("%s: %w", key, err)
+			}
 		}
 		result[key] = normalized
 	}
+	if hasAssistantAdminDynamicPricingChange(result) {
+		if err := model.ValidateOptionValues(result); err != nil {
+			return nil, fmt.Errorf("dynamic pricing: %w", err)
+		}
+	}
 	return result, nil
+}
+
+func hasAssistantAdminDynamicPricingChange(values map[string]string) bool {
+	for key := range values {
+		if strings.HasPrefix(key, "dynamic_pricing_setting.") {
+			return true
+		}
+	}
+	return false
+}
+
+func validateAssistantAdminDynamicPricingChange(values map[string]string) error {
+	if !hasAssistantAdminDynamicPricingChange(values) {
+		return nil
+	}
+	return model.ValidateOptionValues(values)
 }
 
 func validateAssistantAdminConfigDependencies(key, value string) error {
@@ -1002,6 +1033,16 @@ func validateAssistantAdminConfigValue(key, value string) error {
 		if err := ratio_setting.CheckGroupRatio(value); err != nil {
 			return err
 		}
+	case "group_ratio_setting.group_warnings":
+		if err := ratio_setting.CheckGroupWarnings(value); err != nil {
+			return err
+		}
+	case "dynamic_pricing_setting.enabled", "dynamic_pricing_setting.min_factor", "dynamic_pricing_setting.base_price_usd_per_million", "dynamic_pricing_setting.cost_floor_factor", "dynamic_pricing_setting.max_factor", "dynamic_pricing_setting.channel_costs":
+		// The model-level validator above checks the field shape. Related
+		// dynamic-pricing fields are validated together before a preview is
+		// issued, so enabling the feature can include its channel costs in the
+		// same atomic change.
+		return nil
 	case "group_ratio_setting.group_ratio":
 		var ratios map[string]float64
 		if err := json.Unmarshal([]byte(value), &ratios); err != nil || len(ratios) > assistantAdminMaxChannelRows {
@@ -2146,9 +2187,15 @@ func applyAssistantAdminChange(c *gin.Context, payload assistantAdminChangePaylo
 				return errors.New("administrator configuration changed after the preview; prepare it again")
 			}
 		}
+		if err := validateAssistantAdminDynamicPricingChange(payload.ConfigChanges); err != nil {
+			return err
+		}
 		for key, value := range payload.ConfigChanges {
 			if _, allowed := assistantAdminConfigLabel(key); !allowed {
 				return errors.New("administrator configuration contains an unavailable key")
+			}
+			if strings.HasPrefix(key, "dynamic_pricing_setting.") {
+				continue
 			}
 			if err := validateAssistantAdminConfigValue(key, value); err != nil {
 				return fmt.Errorf("%s: %w", key, err)

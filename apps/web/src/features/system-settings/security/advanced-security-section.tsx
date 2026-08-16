@@ -536,6 +536,7 @@ export function AdvancedSecuritySection({
                     onBlur={field.onBlur}
                     textareaRef={field.ref}
                     placeholder={EMPTY_RULE_SET}
+                    example={STARTER_RULE_SET_JSON}
                     heightClassName='h-80 min-h-80 max-h-80'
                     aria-invalid={Boolean(
                       form.formState.errors.AdvancedSecurityRules

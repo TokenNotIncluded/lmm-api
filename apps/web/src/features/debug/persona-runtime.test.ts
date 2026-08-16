@@ -97,6 +97,15 @@ describe('persona debug runtime', () => {
     assert.deepEqual(click.data, { success: true, data: null })
   })
 
+  test('serves the sidebar todo badge from the isolated fixture', async () => {
+    installPersonaDebugRuntime()
+
+    const todos = await api.get('/api/todos?category=all&p=1&page_size=50')
+    assert.equal(todos.data.success, true)
+    assert.equal(todos.data.data.total_unread_count, 0)
+    assert.deepEqual(todos.data.data.items, [])
+  })
+
   test('covers guided, normal, and operator fixtures across journey and gift routes', async () => {
     installPersonaDebugRuntime()
     assert.deepEqual(DEBUG_PERSONA_IDS, ['l0', 'b', 'e', 'f', 'l1', 'admin'])

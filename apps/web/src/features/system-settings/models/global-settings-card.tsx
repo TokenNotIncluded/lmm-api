@@ -224,6 +224,7 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
                     name={field.name}
                     onBlur={field.onBlur}
                     textareaRef={field.ref}
+                    example={thinkingBlacklistExample}
                     placeholder={`${t('Example:')}\n${thinkingBlacklistExample}`}
                     heightClassName='h-32 min-h-32 max-h-32'
                   />
@@ -274,6 +275,7 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
                       name={field.name}
                       onBlur={field.onBlur}
                       textareaRef={field.ref}
+                      example={chatToResponsesPolicyExample}
                       placeholder={`${t('Example (specific channels):')}\n${chatToResponsesPolicyExample}\n\n${t('Example (all channels):')}\n${chatToResponsesPolicyAllChannelsExample}`}
                     />
                   </FormControl>

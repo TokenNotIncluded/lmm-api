@@ -460,7 +460,17 @@ export function RuleEditorDialog(props: Props) {
                   })
                 }}
                 textareaRef={paramOverrideTemplateField.ref}
-                placeholder='{"operations": [...]}'
+                placeholder='{"operations":[...]}'
+                example={`{
+  "operations": [
+    {
+      "mode": "set",
+      "path": "temperature",
+      "value": 0.7,
+      "conditions": [{ "path": "model", "mode": "prefix", "value": "gpt-" }]
+    }
+  ]
+}`}
                 heightClassName='h-40 min-h-40 max-h-40'
               />
             </div>

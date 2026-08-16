@@ -180,6 +180,9 @@ type assistantUserContext struct {
 	// substantive follow-up turn. It is local workflow state and must never
 	// cross the model boundary or become durable user metadata.
 	NewUserGiftRequested bool `json:"-"`
+	// WeeklyDiscountRequested carries a pending weekly reward request across a
+	// substantive follow-up turn without exposing it to the model context.
+	WeeklyDiscountRequested bool `json:"-"`
 	// GiftRewardBlocked is derived from the complete current conversation, not
 	// just the latest turn. A user must not bypass the promotion/security guard
 	// by first asking for a gift with farming or abuse language and then
@@ -338,15 +341,16 @@ func assistantSafeAuthProviders(providers []string) []string {
 func assistantUserContextForRequest(userID int, message string, conversation ...[]assistantOpenAIMessage) assistantUserContext {
 	userText := assistantUserText(message, conversation...)
 	context := assistantUserContext{
-		UserID:               userID,
-		AccessLevel:          "L0",
-		AccessReviewStatus:   "unknown",
-		CustomerProfile:      assistantProfileUnknown,
-		Intent:               assistantRequestIntent(message),
-		LatestUserRequest:    message,
-		RecommendationAction: classifyAssistantRecommendationAction(message),
-		CreateKeyAction:      classifyAssistantCreateKeyAction(message, conversation...),
-		NewUserGiftRequested: assistantNewUserGiftRequest(message) || assistantPendingNewUserGiftRequest(userID, conversation...),
+		UserID:                  userID,
+		AccessLevel:             "L0",
+		AccessReviewStatus:      "unknown",
+		CustomerProfile:         assistantProfileUnknown,
+		Intent:                  assistantRequestIntent(message),
+		LatestUserRequest:       message,
+		RecommendationAction:    classifyAssistantRecommendationAction(message),
+		CreateKeyAction:         classifyAssistantCreateKeyAction(message, conversation...),
+		NewUserGiftRequested:    assistantNewUserGiftRequest(message) || assistantPendingNewUserGiftRequest(userID, conversation...),
+		WeeklyDiscountRequested: assistantWeeklyDiscountRequest(message) || assistantPendingWeeklyDiscountRequest(userID, conversation...),
 	}
 	if userID <= 0 {
 		context.CustomerProfile, context.ProfileSignals = classifyAssistantCustomerProfile(context, userText)
@@ -482,6 +486,29 @@ func assistantPendingNewUserGiftRequest(userID int, conversations ...[]assistant
 	}
 	gift, err := model.GetAssistantNewUserGift(userID)
 	return err == nil && gift == nil
+}
+
+func assistantConversationHasWeeklyDiscountRequest(conversations ...[]assistantOpenAIMessage) bool {
+	if len(conversations) == 0 {
+		return false
+	}
+	for _, message := range conversations[0] {
+		if message.Role == "user" && assistantWeeklyDiscountRequest(message.Content) {
+			return true
+		}
+	}
+	return false
+}
+
+func assistantPendingWeeklyDiscountRequest(userID int, conversations ...[]assistantOpenAIMessage) bool {
+	if !assistantConversationHasWeeklyDiscountRequest(conversations...) {
+		return false
+	}
+	if userID <= 0 {
+		return true
+	}
+	reward, err := model.GetAssistantWeeklyDiscount(userID)
+	return err == nil && reward == nil
 }
 
 func assistantLooksLikeGreeting(text string) bool {

@@ -50,6 +50,8 @@ const (
 
 var (
 	ErrPaymentEvidenceConflict = errors.New("payment evidence conflict")
+	ErrInvalidTopUpQuota       = errors.New("invalid top-up quota")
+	ErrTopUpQuotaLimitExceeded = errors.New("top-up quota limit exceeded")
 	settlementLockShards       [64]sync.Mutex
 )
 
@@ -421,7 +423,7 @@ func completeExternalTopUpOnDB(db *gorm.DB, settlement ExternalTopUpSettlement) 
 				completed.PaymentMethod = settlement.PaymentMethod
 			}
 
-			userUpdates := map[string]interface{}{"quota": gorm.Expr("quota + ?", quota)}
+			userUpdates := map[string]interface{}{}
 			if settlement.StripeCustomer != "" {
 				userUpdates["stripe_customer"] = settlement.StripeCustomer
 			}
@@ -434,21 +436,27 @@ func completeExternalTopUpOnDB(db *gorm.DB, settlement ExternalTopUpSettlement) 
 					userUpdates["email"] = settlement.CustomerEmail
 				}
 			}
-			result = tx.Model(&User{}).Where("id = ?", completed.UserId).Updates(userUpdates)
-			if result.Error != nil {
-				return result.Error
-			}
-			if result.RowsAffected != 1 {
-				return gorm.ErrRecordNotFound
+			if err := creditTopUpQuota(tx, completed.UserId, quota, userUpdates); err != nil {
+				return err
 			}
 			if completed.DiscountCodeId > 0 {
 				// Usage is counted only after the payment and quota credit have
 				// committed. A deleted/legacy code does not invalidate a valid
 				// payment, but any database error remains transactional.
-				if err := tx.Model(&DiscountCode{}).
-					Where("id = ?", completed.DiscountCodeId).
-					UpdateColumn("used_count", gorm.Expr("used_count + ?", 1)).Error; err != nil {
-					return err
+				usage := tx.Model(&DiscountCode{}).
+					Where("id = ? AND (max_uses = 0 OR used_count < max_uses)", completed.DiscountCodeId).
+					UpdateColumn("used_count", gorm.Expr("used_count + ?", 1))
+				if usage.Error != nil {
+					return usage.Error
+				}
+				if usage.RowsAffected == 0 {
+					var exists int64
+					if err := tx.Model(&DiscountCode{}).Where("id = ?", completed.DiscountCodeId).Count(&exists).Error; err != nil {
+						return err
+					}
+					if exists > 0 {
+						return ErrDiscountCodeExhausted
+					}
 				}
 			}
 			return nil
@@ -501,6 +509,34 @@ var linuxDOCreditPaymentMethods = []string{
 	"linuxdo_credit",
 }
 
+// IsFinancialPaymentSource distinguishes cash/card gateways from internal
+// credits. LinuxDO points are persisted through the ePay adapter for
+// compatibility, but they are not revenue and must not enter the finance
+// dashboard.
+func IsFinancialPaymentSource(method, provider string) bool {
+	method = strings.ToLower(strings.TrimSpace(method))
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if method == PaymentMethodBalance || provider == PaymentProviderBalance {
+		return false
+	}
+	if provider == PaymentProviderEpay {
+		for _, internalMethod := range linuxDOCreditPaymentMethods {
+			if method == internalMethod {
+				return false
+			}
+		}
+	}
+	switch method {
+	case "gift", "bonus", "checkin", "invite", "bounty", "linuxdo", "linux_do", "linuxdo_credit", "internal", "admin":
+		return false
+	}
+	switch provider {
+	case "gift", "bonus", "checkin", "invite", "bounty", "linuxdo", "linux_do", "linuxdo_credit", "internal", "admin":
+		return false
+	}
+	return true
+}
+
 var (
 	ErrPaymentMethodMismatch = errors.New("payment method mismatch")
 	ErrTopUpNotFound         = errors.New("topup not found")
@@ -511,6 +547,63 @@ func (topUp *TopUp) Insert() error {
 	var err error
 	err = DB.Create(topUp).Error
 	return err
+}
+
+func topUpQuotaMaxCurrent(creditedQuota int64) (int64, error) {
+	if creditedQuota <= 0 || creditedQuota >= int64(common.MaxQuota) {
+		return 0, ErrInvalidTopUpQuota
+	}
+	return int64(common.MaxQuota) - 1 - creditedQuota, nil
+}
+
+// ValidateTopUpQuotaCapacity performs the cheap pre-payment check. Settlement
+// repeats the same predicate atomically because the wallet may change while a
+// checkout is open.
+func ValidateTopUpQuotaCapacity(userId int, creditedQuota int64) error {
+	maxCurrentQuota, err := topUpQuotaMaxCurrent(creditedQuota)
+	if err != nil {
+		return err
+	}
+	var user User
+	if err := DB.Select("quota").Where("id = ?", userId).First(&user).Error; err != nil {
+		return err
+	}
+	if int64(user.Quota) > maxCurrentQuota {
+		return ErrTopUpQuotaLimitExceeded
+	}
+	return nil
+}
+
+// creditTopUpQuota applies the wallet ceiling and the increment in one SQL
+// update. This closes the race where two payment callbacks both pass a
+// separate balance read before crediting the same account.
+func creditTopUpQuota(tx *gorm.DB, userId int, creditedQuota int64, updates map[string]interface{}) error {
+	maxCurrentQuota, err := topUpQuotaMaxCurrent(creditedQuota)
+	if err != nil {
+		return err
+	}
+	updateFields := make(map[string]interface{}, len(updates)+1)
+	for key, value := range updates {
+		updateFields[key] = value
+	}
+	updateFields["quota"] = gorm.Expr("quota + ?", creditedQuota)
+	result := tx.Model(&User{}).
+		Where("id = ? AND quota <= ?", userId, maxCurrentQuota).
+		Updates(updateFields)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 1 {
+		return nil
+	}
+	var count int64
+	if err := tx.Model(&User{}).Where("id = ?", userId).Count(&count).Error; err != nil {
+		return err
+	}
+	if count == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return ErrTopUpQuotaLimitExceeded
 }
 
 func (topUp *TopUp) Update() error {
@@ -737,7 +830,7 @@ func Recharge(referenceId string, customerId string, callerIp string) (err error
 			return err
 		}
 
-		err = tx.Model(&User{}).Where("id = ?", topUp.UserId).Updates(map[string]interface{}{"stripe_customer": customerId, "quota": gorm.Expr("quota + ?", quota)}).Error
+		err = creditTopUpQuota(tx, topUp.UserId, quota, map[string]interface{}{"stripe_customer": customerId})
 		if err != nil {
 			return err
 		}
@@ -959,7 +1052,7 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 		}
 
 		// 增加用户额度（立即写库，保持一致性）
-		if err := tx.Model(&User{}).Where("id = ?", topUp.UserId).Update("quota", gorm.Expr("quota + ?", quotaToAdd)).Error; err != nil {
+		if err := creditTopUpQuota(tx, topUp.UserId, int64(quotaToAdd), nil); err != nil {
 			return err
 		}
 
@@ -1018,9 +1111,7 @@ func RechargeCreem(referenceId string, customerEmail string, customerName string
 		}
 
 		// 构建更新字段，优先使用邮箱，如果邮箱为空则使用用户名
-		updateFields := map[string]interface{}{
-			"quota": gorm.Expr("quota + ?", quota),
-		}
+		updateFields := map[string]interface{}{}
 
 		// 如果有客户邮箱，尝试更新用户邮箱（仅当用户邮箱为空时）
 		if customerEmail != "" {
@@ -1037,7 +1128,7 @@ func RechargeCreem(referenceId string, customerEmail string, customerName string
 			}
 		}
 
-		err = tx.Model(&User{}).Where("id = ?", topUp.UserId).Updates(updateFields).Error
+		err = creditTopUpQuota(tx, topUp.UserId, quota, updateFields)
 		if err != nil {
 			return err
 		}
@@ -1099,7 +1190,7 @@ func RechargeWaffo(tradeNo string, callerIp string) (err error) {
 			return err
 		}
 
-		if err := tx.Model(&User{}).Where("id = ?", topUp.UserId).Update("quota", gorm.Expr("quota + ?", quotaToAdd)).Error; err != nil {
+		if err := creditTopUpQuota(tx, topUp.UserId, int64(quotaToAdd), nil); err != nil {
 			return err
 		}
 
@@ -1162,7 +1253,7 @@ func RechargeWaffoPancake(tradeNo string) (err error) {
 			return err
 		}
 
-		if err := tx.Model(&User{}).Where("id = ?", topUp.UserId).Update("quota", gorm.Expr("quota + ?", quotaToAdd)).Error; err != nil {
+		if err := creditTopUpQuota(tx, topUp.UserId, int64(quotaToAdd), nil); err != nil {
 			return err
 		}
 
