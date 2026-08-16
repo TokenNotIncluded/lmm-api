@@ -115,6 +115,50 @@ func GetPerfMetricsSummaryBucketsAll(startTs int64, endTs int64, groups []string
 	return summaries, err
 }
 
+// IteratePerfMetricsSummaryBucketsAll keeps the database aggregation contract
+// of GetPerfMetricsSummaryBucketsAll while letting callers consume a cursor.
+// The summary endpoint builds its own model projection, so materializing every
+// model/time bucket first needlessly doubles the peak heap on large catalogs.
+func IteratePerfMetricsSummaryBucketsAll(startTs int64, endTs int64, groups []string, visit func(PerfMetricSummaryBucket) error) error {
+	if visit == nil {
+		return gorm.ErrInvalidData
+	}
+	query := DB.Model(&PerfMetric{}).
+		Select("model_name, bucket_ts, SUM(request_count) as request_count, SUM(success_count) as success_count, SUM(total_latency_ms) as total_latency_ms, SUM(output_tokens) as output_tokens, SUM(generation_ms) as generation_ms").
+		Where("bucket_ts >= ? AND bucket_ts <= ?", startTs, endTs)
+	if groups != nil {
+		if len(groups) == 0 {
+			return nil
+		}
+		query = query.Where(commonGroupCol+" IN ?", groups)
+	}
+	rows, err := query.Group("model_name, bucket_ts").
+		Having("SUM(request_count) > 0").
+		Order("bucket_ts ASC").Rows()
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var summary PerfMetricSummaryBucket
+		if err := rows.Scan(
+			&summary.ModelName,
+			&summary.BucketTs,
+			&summary.RequestCount,
+			&summary.SuccessCount,
+			&summary.TotalLatencyMs,
+			&summary.OutputTokens,
+			&summary.GenerationMs,
+		); err != nil {
+			return err
+		}
+		if err := visit(summary); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
 func DeletePerfMetricsBefore(cutoffTs int64) error {
 	if cutoffTs <= 0 {
 		return nil

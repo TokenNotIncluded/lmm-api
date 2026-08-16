@@ -167,14 +167,9 @@ func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
 	startTs := endTs - int64(hours)*3600
 	allowedGroups := allowedGroupSet(groups)
 
-	rows, err := model.GetPerfMetricsSummaryBucketsAll(startTs, endTs, groups)
-	if err != nil {
-		return SummaryAllResult{}, err
-	}
-
 	totals := map[string]counters{}
 	modelBuckets := map[string]map[int64]counters{}
-	for _, row := range rows {
+	visit := func(row model.PerfMetricSummaryBucket) error {
 		value := counters{
 			requestCount:   row.RequestCount,
 			successCount:   row.SuccessCount,
@@ -184,6 +179,10 @@ func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
 		}
 		mergeModelTotals(totals, row.ModelName, value)
 		mergeModelBucket(modelBuckets, row.ModelName, row.BucketTs, value)
+		return nil
+	}
+	if err := model.IteratePerfMetricsSummaryBucketsAll(startTs, endTs, groups, visit); err != nil {
+		return SummaryAllResult{}, err
 	}
 
 	hotBuckets.Range(func(key, value any) bool {
