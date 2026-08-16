@@ -23,6 +23,12 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { SectionPageLayout } from '@/components/layout'
+import {
+  Alert,
+  AlertAction,
+  AlertDescription,
+  AlertTitle,
+} from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -94,6 +100,29 @@ const sortLabels = {
   recent: 'Recently updated',
   models: 'Most models',
 } as const
+
+function PublicRelayLoadError(props: {
+  onRetry: () => void | Promise<unknown>
+}) {
+  const { t } = useTranslation()
+
+  return (
+    <Alert variant='destructive'>
+      <AlertTitle>{t('Failed to load')}</AlertTitle>
+      <AlertDescription>{t('Please try again later.')}</AlertDescription>
+      <AlertAction>
+        <Button
+          type='button'
+          size='sm'
+          variant='outline'
+          onClick={() => void props.onRetry()}
+        >
+          {t('Retry')}
+        </Button>
+      </AlertAction>
+    </Alert>
+  )
+}
 
 export function PublicRelay() {
   const { t } = useTranslation()
@@ -518,7 +547,11 @@ export function PublicRelay() {
                     {t('Save routing')}
                   </Button>
                 </div>
-                {orderedRoutingItems.length ? (
+                {routingQuery.isError ? (
+                  <PublicRelayLoadError
+                    onRetry={() => routingQuery.refetch()}
+                  />
+                ) : orderedRoutingItems.length ? (
                   orderedRoutingItems.map((item, index) => (
                     <div
                       key={item.channel_id}
@@ -584,7 +617,9 @@ export function PublicRelay() {
                     </Button>
                   ))}
                 </div>
-                {sortedAllItems.length ? (
+                {allQuery.isError ? (
+                  <PublicRelayLoadError onRetry={() => allQuery.refetch()} />
+                ) : sortedAllItems.length ? (
                   sortedAllItems.map((item) => renderRelay(item))
                 ) : (
                   <p className='text-muted-foreground py-12 text-center'>
@@ -593,7 +628,9 @@ export function PublicRelay() {
                 )}
               </TabsContent>
               <TabsContent value='mine' className='mt-3'>
-                {mineItems.length ? (
+                {mineQuery.isError ? (
+                  <PublicRelayLoadError onRetry={() => mineQuery.refetch()} />
+                ) : mineItems.length ? (
                   mineItems.map((item) => renderRelay(item, true))
                 ) : (
                   <p className='text-muted-foreground py-12 text-center'>

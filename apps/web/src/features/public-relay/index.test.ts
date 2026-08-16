@@ -28,4 +28,19 @@ describe('public relay sharing entry point', () => {
       /<Button type='button' onClick=\{\(\) => setSubmitOpen\(true\)\}>/
     )
   })
+
+  test('does not render a failed public relay query as an empty channel list', () => {
+    assert.match(
+      source,
+      /routingQuery\.isError[\s\S]*<PublicRelayLoadError[\s\S]*routingQuery\.refetch/
+    )
+    assert.match(
+      source,
+      /allQuery\.isError[\s\S]*<PublicRelayLoadError[\s\S]*allQuery\.refetch/
+    )
+    assert.match(
+      source,
+      /mineQuery\.isError[\s\S]*<PublicRelayLoadError[\s\S]*mineQuery\.refetch/
+    )
+  })
 })

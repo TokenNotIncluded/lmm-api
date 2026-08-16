@@ -387,6 +387,7 @@ export function Drawing() {
               <NativeSelect
                 id='drawing-group'
                 value={selectedGroup}
+                className='w-full'
                 onChange={(event) => setGroup(event.target.value)}
               >
                 {groups.map((item) => (
@@ -404,6 +405,7 @@ export function Drawing() {
               <NativeSelect
                 id='drawing-model'
                 value={selectedModel}
+                className='w-full'
                 onChange={(event) => setModel(event.target.value)}
               >
                 {modelsForGroup.map((item) => (
@@ -426,6 +428,7 @@ export function Drawing() {
               <NativeSelect
                 id='drawing-size'
                 value={size}
+                className='w-full'
                 onChange={(event) => setSize(event.target.value)}
               >
                 {sizePresets.map((option) => (
@@ -443,6 +446,7 @@ export function Drawing() {
               <NativeSelect
                 id='drawing-quality'
                 value={quality}
+                className='w-full'
                 onChange={(event) => setQuality(event.target.value)}
               >
                 {qualityPresets.map((option) => (
@@ -461,6 +465,7 @@ export function Drawing() {
             <NativeSelect
               id='drawing-count'
               value={count}
+              className='w-full'
               onChange={(event) => setCount(event.target.value)}
             >
               {[1, 2, 3, 4].map((value) => (
