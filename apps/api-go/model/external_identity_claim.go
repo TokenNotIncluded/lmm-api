@@ -12,6 +12,8 @@ import (
 
 const ExternalIdentityProviderTelegram = "telegram"
 
+const externalIdentityBackfillBatchSize = 1000
+
 var ErrExternalIdentityAlreadyClaimed = errors.New("external identity is already claimed")
 
 // ExternalIdentityClaim is the durable ownership record for an identity issued
@@ -87,17 +89,16 @@ func releaseAllExternalIdentitiesWithTx(tx *gorm.DB, userId int) error {
 // claim table is migrated. Existing duplicate ownership fails migration rather
 // than preserving an ambiguous login identity.
 func InitializeExternalIdentityClaims() error {
-	var users []User
-	if err := DB.Unscoped().Select("id", "telegram_id").
-		Where("telegram_id <> ?", "").Find(&users).Error; err != nil {
-		return err
-	}
 	return DB.Transaction(func(tx *gorm.DB) error {
-		for _, user := range users {
-			if err := ClaimExternalIdentityWithTx(tx, ExternalIdentityProviderTelegram, user.TelegramId, user.Id); err != nil {
-				return fmt.Errorf("backfill Telegram identity for user %d: %w", user.Id, err)
+		var users []User
+		return tx.Unscoped().Select("id", "telegram_id").
+			Where("telegram_id <> ?", "").FindInBatches(&users, externalIdentityBackfillBatchSize, func(batchTx *gorm.DB, _ int) error {
+			for _, user := range users {
+				if err := ClaimExternalIdentityWithTx(batchTx, ExternalIdentityProviderTelegram, user.TelegramId, user.Id); err != nil {
+					return fmt.Errorf("backfill Telegram identity for user %d: %w", user.Id, err)
+				}
 			}
-		}
-		return nil
+			return nil
+		}).Error
 	})
 }
