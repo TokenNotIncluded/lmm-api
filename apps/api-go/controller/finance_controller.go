@@ -839,7 +839,14 @@ func financeOverviewHandler(c *gin.Context) {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
 		return
 	}
-	userID, _ := strconv.Atoi(strings.TrimSpace(c.Query("user_id")))
+	userID := 0
+	if rawUserID := strings.TrimSpace(c.Query("user_id")); rawUserID != "" {
+		userID, err = strconv.Atoi(rawUserID)
+		if err != nil || userID <= 0 {
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid user_id"})
+			return
+		}
+	}
 	method := strings.TrimSpace(c.Query("payment_method"))
 	view, err := buildFinanceOverview(start, end, userID, method)
 	if err != nil {

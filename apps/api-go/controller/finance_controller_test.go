@@ -427,6 +427,21 @@ func TestFinanceHandlersRequireAdminRouteContractAndReturnUserDetail(t *testing.
 	require.Equal(t, int64(3_500_000), response.Data.RevenueMicros)
 }
 
+func TestFinanceOverviewRejectsInvalidUserFilter(t *testing.T) {
+	for _, rawUserID := range []string{"abc", "0", "-1"} {
+		t.Run(rawUserID, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodGet, "/api/finance/overview?user_id="+rawUserID, nil)
+
+			GetFinanceOverview(c)
+
+			require.Equal(t, http.StatusBadRequest, recorder.Code)
+			require.Contains(t, recorder.Body.String(), "invalid user_id")
+		})
+	}
+}
+
 func TestParseFinanceEntryCursorRequiresStablePair(t *testing.T) {
 	newContext := func(path string) *gin.Context {
 		recorder := httptest.NewRecorder()
