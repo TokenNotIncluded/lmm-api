@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Link, useLocation } from '@tanstack/react-router'
-import { ExternalLink, Loader2, ChevronRight } from 'lucide-react'
+import { ExternalLink, Loader2, ChevronRight, RefreshCw } from 'lucide-react'
 import { useMemo, useCallback, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -156,7 +156,13 @@ function DropdownPresetItem({
  */
 export function ChatPresetsItem({ item }: { item: NavChatPresets }) {
   const { t } = useTranslation()
-  const { chatPresets, serverAddress } = useChatPresets()
+  const {
+    chatPresets,
+    serverAddress,
+    loading: presetsLoading,
+    error: presetsError,
+    retry: retryPresets,
+  } = useChatPresets()
   const { state, isMobile, setOpenMobile } = useSidebar()
   const href = useLocation({ select: (location) => location.href })
   const [loadingPresetId, setLoadingPresetId] = useState<string | null>(null)
@@ -220,9 +226,28 @@ export function ChatPresetsItem({ item }: { item: NavChatPresets }) {
 
   const normalizedHref = normalizeHref(href)
 
-  // Don't render if no visible presets
+  // Keep the entry visible while status is loading or unavailable. A hidden
+  // entry makes a transient status failure look like a missing feature.
   if (visiblePresets.length === 0) {
-    return null
+    return (
+      <SidebarMenuItem>
+        <SidebarMenuButton
+          onClick={() => {
+            if (presetsError && !presetsLoading) void retryPresets()
+          }}
+          disabled={!presetsError || presetsLoading}
+          tooltip={presetsError ? t('Retry') : item.title}
+        >
+          {item.icon && <item.icon className='h-4 w-4 shrink-0' />}
+          <span className='min-w-0 flex-1 truncate'>{item.title}</span>
+          {presetsLoading ? (
+            <Loader2 className='h-4 w-4 shrink-0 animate-spin' />
+          ) : presetsError ? (
+            <RefreshCw className='h-4 w-4 shrink-0' />
+          ) : null}
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+    )
   }
 
   // Collapsed state on non-mobile - render dropdown menu

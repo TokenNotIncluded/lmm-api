@@ -67,8 +67,11 @@ function extractChats(status: SystemStatus | null): RawChatConfig {
 export function useChatPresets(): {
   chatPresets: ChatPreset[]
   serverAddress: string
+  loading: boolean
+  error: Error | null
+  retry: () => Promise<unknown>
 } {
-  const { status } = useStatus()
+  const { status, loading, error, refetch } = useStatus()
 
   const serverAddress = useMemo(() => extractServerAddress(status), [status])
 
@@ -80,5 +83,9 @@ export function useChatPresets(): {
   return {
     chatPresets,
     serverAddress,
+    loading,
+    error:
+      error instanceof Error ? error : error ? new Error(String(error)) : null,
+    retry: () => refetch(),
   }
 }

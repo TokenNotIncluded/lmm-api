@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Link, createFileRoute, redirect } from '@tanstack/react-router'
-import { Loader2, MessageCircleWarning } from 'lucide-react'
+import { Loader2, MessageCircleWarning, RefreshCw } from 'lucide-react'
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -66,6 +66,7 @@ function ChatRouteComponent() {
     isPending,
     isError,
     error,
+    refetch: retryActiveKey,
   } = useActiveChatKey(Boolean(preset && requiresActiveKey))
 
   const iframeSrc = useMemo(() => {
@@ -138,6 +139,25 @@ function ChatRouteComponent() {
         <Alert variant='destructive' className='max-w-xl'>
           <AlertTitle>{t('Unable to open chat')}</AlertTitle>
           <AlertDescription>{message}</AlertDescription>
+          <div className='mt-4 flex flex-wrap gap-2'>
+            <Button
+              type='button'
+              variant='outline'
+              size='sm'
+              onClick={() => void retryActiveKey()}
+              disabled={isPending}
+            >
+              <RefreshCw
+                className={
+                  isPending ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'
+                }
+              />
+              {t('Retry')}
+            </Button>
+            <Button variant='outline' size='sm' render={<Link to='/keys' />}>
+              {t('API keys')}
+            </Button>
+          </div>
         </Alert>
       </div>
     )
