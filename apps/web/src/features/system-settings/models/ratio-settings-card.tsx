@@ -37,6 +37,7 @@ import {
   changedGroupRatioOptions,
   type GroupRatioOptionValues,
 } from './group-ratio-option-values'
+import { isValidGroupWarnings } from './group-warning-validation'
 import { ModelRatioForm } from './model-ratio-form'
 import { ToolPriceSettings } from './tool-price-settings'
 import { UpstreamRatioSync } from './upstream-ratio-sync'
@@ -138,7 +139,9 @@ const createGroupSchema = (t: Translate) =>
     MaxTokenAutoGroups: positiveIntegerSchema(t('Enter a positive integer')),
     DefaultUseAutoGroup: z.boolean(),
     GroupSpecialUsableGroup: createJsonStringField(t),
-    GroupWarnings: createJsonStringField(t),
+    GroupWarnings: createJsonStringField(t, {
+      predicate: isValidGroupWarnings,
+    }),
   })
 
 type ModelFormValues = z.infer<ReturnType<typeof createModelSchema>>
