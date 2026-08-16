@@ -68,10 +68,10 @@ describe('registration availability', () => {
       oauth_registration_disabled_methods: ['GITHUB', 'custom:company-sso'],
     }
 
-    assert.deepEqual(
-      [...getDisabledOAuthRegistrationMethods(status)].sort(),
-      ['custom:company-sso', 'github']
-    )
+    assert.deepEqual([...getDisabledOAuthRegistrationMethods(status)].sort(), [
+      'custom:company-sso',
+      'github',
+    ])
     assert.equal(hasOAuthRegistrationProvider(status), false)
   })
 

@@ -541,8 +541,7 @@ export function SubscriptionPlansCard({
                 : !paymentUnavailable &&
                   ((enableStripe && !!plan.stripe_price_id) ||
                     (enableCreem && !!plan.creem_product_id) ||
-                    (enableWaffoPancake &&
-                      !!plan.waffo_pancake_product_id) ||
+                    (enableWaffoPancake && !!plan.waffo_pancake_product_id) ||
                     (enableOnlineTopUp && epayMethods.length > 0))
               const canPurchase =
                 plan.allow_balance_pay !== false || hasPlanCheckout

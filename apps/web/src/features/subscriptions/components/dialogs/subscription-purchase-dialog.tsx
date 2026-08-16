@@ -125,10 +125,9 @@ export function SubscriptionPurchaseDialog(props: Props) {
     props.paymentMethods,
     props.epayMethods
   )
-  const hasEpay =
-    (hasAuthoritativePaymentCatalog
-      ? availableEpayMethods.length > 0
-      : props.enableOnlineTopUp && availableEpayMethods.length > 0)
+  const hasEpay = hasAuthoritativePaymentCatalog
+    ? availableEpayMethods.length > 0
+    : props.enableOnlineTopUp && availableEpayMethods.length > 0
   const hasAnyPayment = hasStripe || hasCreem || hasWaffoPancake || hasEpay
   const interfaceLanguage = i18n.resolvedLanguage || i18n.language
   const waffoPancakeCheckoutRegion =
@@ -137,8 +136,7 @@ export function SubscriptionPurchaseDialog(props: Props) {
   const waffoPancakeCheckoutLanguage =
     getWaffoPancakeCheckoutLanguage(interfaceLanguage)
   const selectedEpayMethodLabel =
-    availableEpayMethods.find((m) => m.type === selectedEpayMethod)
-      ?.name ||
+    availableEpayMethods.find((m) => m.type === selectedEpayMethod)?.name ||
     selectedEpayMethod ||
     t('Select payment method')
   const totalAmount = Number(plan.total_amount || 0)
@@ -529,7 +527,9 @@ export function SubscriptionPurchaseDialog(props: Props) {
             {!hasAnyPayment && !allowBalancePay && (
               <Alert variant='destructive'>
                 <AlertDescription>
-                  {t('No payment methods available. Please contact administrator.')}
+                  {t(
+                    'No payment methods available. Please contact administrator.'
+                  )}
                 </AlertDescription>
               </Alert>
             )}
