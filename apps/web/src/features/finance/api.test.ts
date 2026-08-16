@@ -6,7 +6,12 @@ import { describe, test } from 'node:test'
 
 import { api } from '@/lib/api'
 
-import { getFinanceEntries, getFinanceOverview, getFinanceUser } from './api'
+import {
+  getFinanceEntries,
+  getFinanceOverview,
+  getFinanceUser,
+  updateFinancePaymentMethod,
+} from './api'
 
 describe('finance payment-method filters', () => {
   test('keeps a selected payment method through overview and user drill-down requests', async () => {
@@ -59,5 +64,22 @@ test('passes payment, user, and cursor filters to bounded ledger entries', async
     assert.equal(params?.before_id, 9)
   } finally {
     api.get = originalGet
+  }
+})
+
+test('preserves a rejected payment-method update for visible caller feedback', async () => {
+  const originalPut = api.put
+  api.put = (async () => ({
+    data: { success: false, message: 'Payment method is locked' },
+  })) as typeof api.put
+
+  try {
+    const response = await updateFinancePaymentMethod('waffo_pancake', {
+      include_revenue: false,
+    })
+    assert.equal(response.success, false)
+    assert.equal(response.message, 'Payment method is locked')
+  } finally {
+    api.put = originalPut
   }
 })

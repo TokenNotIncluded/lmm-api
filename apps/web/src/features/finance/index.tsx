@@ -35,6 +35,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import { toast } from 'sonner'
 
 import { SectionPageLayout } from '@/components/layout'
 import { Button } from '@/components/ui/button'
@@ -515,8 +516,21 @@ export function Finance() {
     method: FinancePaymentMethod,
     value: Partial<FinancePaymentMethod>
   ) => {
-    await updateFinancePaymentMethod(method.method, value)
-    await queryClient.invalidateQueries({ queryKey: ['finance-overview'] })
+    try {
+      const response = await updateFinancePaymentMethod(method.method, value)
+      if (!response.success) {
+        throw new Error(
+          response.message || t('Unable to update payment method')
+        )
+      }
+      await queryClient.invalidateQueries({ queryKey: ['finance-overview'] })
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : t('Unable to update payment method')
+      )
+    }
   }
 
   const openLedger = (
