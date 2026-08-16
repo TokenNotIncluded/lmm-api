@@ -35,7 +35,11 @@ func DecompressRequestMiddleware() gin.HandlerFunc {
 		}
 		maxBytes := int64(maxMB) << 20
 
-		origBody := c.Request.Body
+		// Bound the compressed stream before handing it to a decoder. The
+		// post-decompression wrapper below still protects against expansion,
+		// while this prevents arbitrarily large compressed member streams from
+		// being read even when their decoded output is small.
+		origBody := http.MaxBytesReader(c.Writer, c.Request.Body, maxBytes)
 		wrapMaxBytes := func(body io.ReadCloser) io.ReadCloser {
 			return http.MaxBytesReader(c.Writer, body, maxBytes)
 		}
