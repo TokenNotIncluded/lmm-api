@@ -16,7 +16,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { getRouteApi, Link, useNavigate } from '@tanstack/react-router'
 import { ArrowLeft, ReceiptText, RefreshCw, WalletCards } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
@@ -286,16 +291,27 @@ function LedgerEntriesDialog({
   const { t } = useTranslation()
   const [userIDText, setUserIDText] = useState('')
   const userID = Number.parseInt(userIDText, 10)
-  const query = useQuery({
+  const query = useInfiniteQuery({
     queryKey: ['finance-ledger-entries', days, paymentMethod, userIDText],
-    queryFn: () =>
+    queryFn: ({ pageParam }) =>
       getFinanceEntries(days, {
         paymentMethod,
         userId: Number.isSafeInteger(userID) && userID > 0 ? userID : undefined,
+        beforeOccurredAt: pageParam.occurredAt || undefined,
+        beforeId: pageParam.id || undefined,
       }),
+    initialPageParam: { occurredAt: 0, id: 0 },
+    getNextPageParam: (lastPage) => {
+      const occurredAt = lastPage.data?.next_before_occurred_at
+      const id = lastPage.data?.next_before_id
+      return lastPage.data?.has_more && occurredAt && id
+        ? { occurredAt, id }
+        : undefined
+    },
     enabled: open,
   })
-  const entries = query.data?.data.entries ?? []
+  const entries =
+    query.data?.pages.flatMap((page) => page.data?.entries ?? []) ?? []
   const title = paymentMethodLabel || paymentMethod || t('Append-only ledger')
 
   return (
@@ -330,9 +346,20 @@ function LedgerEntriesDialog({
             </p>
           ) : null}
           {query.isError ? (
-            <p className='text-destructive py-8 text-sm'>
-              {t('Unable to load data')}
-            </p>
+            <div className='flex flex-col items-start gap-3 py-8'>
+              <p className='text-destructive text-sm'>
+                {t('Unable to load data')}
+              </p>
+              <Button
+                type='button'
+                variant='outline'
+                size='sm'
+                onClick={() => void query.refetch()}
+                disabled={query.isFetching}
+              >
+                {query.isFetching ? t('Loading...') : t('Retry')}
+              </Button>
+            </div>
           ) : null}
           {!query.isLoading && !query.isError && entries.length === 0 ? (
             <p className='text-muted-foreground py-8 text-sm'>{t('No data')}</p>
@@ -340,6 +367,19 @@ function LedgerEntriesDialog({
           {entries.map((entry) => (
             <LedgerEntryRow key={entry.id} entry={entry} />
           ))}
+          {query.hasNextPage ? (
+            <div className='flex justify-center border-t py-4'>
+              <Button
+                type='button'
+                variant='ghost'
+                size='sm'
+                disabled={query.isFetchingNextPage}
+                onClick={() => void query.fetchNextPage()}
+              >
+                {query.isFetchingNextPage ? t('Loading...') : t('More')}
+              </Button>
+            </div>
+          ) : null}
         </div>
       </DialogContent>
     </Dialog>
