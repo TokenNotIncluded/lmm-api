@@ -17,7 +17,7 @@ func RelayPanicRecover() gin.HandlerFunc {
 				common.SysLog(fmt.Sprintf("stacktrace from panic: %s", string(debug.Stack())))
 				c.JSON(http.StatusInternalServerError, gin.H{
 					"error": gin.H{
-						"message": fmt.Sprintf("Panic detected, error: %v. Please report it at https://github.com/LIghtJUNction/api.lmm.best/issues", err),
+						"message": "The server encountered an internal error. Please try again or contact support.",
 						"type":    "new_api_panic",
 					},
 				})
