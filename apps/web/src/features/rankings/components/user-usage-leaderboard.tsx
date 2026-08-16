@@ -31,6 +31,8 @@ type UserUsageLeaderboardProps = {
   data?: UserUsageRankingsSnapshot
   isLoading: boolean
   error?: unknown
+  open: boolean
+  onOpenChange: (open: boolean) => void
 }
 
 export function UserUsageLeaderboard(props: UserUsageLeaderboardProps) {
@@ -39,7 +41,8 @@ export function UserUsageLeaderboard(props: UserUsageLeaderboardProps) {
 
   return (
     <Collapsible
-      defaultOpen={false}
+      open={props.open}
+      onOpenChange={props.onOpenChange}
       className='border-foreground/25 border-t-2 border-b py-6 md:py-8'
     >
       <div className='flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between'>

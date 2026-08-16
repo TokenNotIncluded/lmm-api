@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useNavigate, useSearch } from '@tanstack/react-router'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { PageTransition } from '@/components/page-transition'
@@ -40,6 +41,7 @@ export function Rankings() {
   const { t } = useTranslation()
   const search = useSearch({ from: '/rankings/' })
   const navigate = useNavigate()
+  const [userLeaderboardOpen, setUserLeaderboardOpen] = useState(false)
 
   const period: RankingPeriod = VALID_PERIODS.has(
     search.period as RankingPeriod
@@ -48,7 +50,10 @@ export function Rankings() {
     : 'week'
 
   const rankingsQuery = useRankings(period)
-  const userUsageRankingsQuery = useUserUsageRankings(period)
+  const userUsageRankingsQuery = useUserUsageRankings(
+    period,
+    userLeaderboardOpen
+  )
   const snapshot = rankingsQuery.data?.data
 
   const handlePeriodChange = (next: RankingPeriod) => {
@@ -68,6 +73,8 @@ export function Rankings() {
             data={userUsageRankingsQuery.data?.data}
             isLoading={userUsageRankingsQuery.isLoading}
             error={userUsageRankingsQuery.error}
+            open={userLeaderboardOpen}
+            onOpenChange={setUserLeaderboardOpen}
           />
 
           {rankingsQuery.isLoading ? (
