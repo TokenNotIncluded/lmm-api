@@ -136,6 +136,31 @@ describe('console activation boundary', () => {
     assert.equal(getAuthenticatedLandingRoute(nonAdmin), '/dashboard')
   })
 
+  test('falls back when either effective sidebar module layer hides the selected page', () => {
+    const account = user({
+      developer_access_granted: true,
+      sidebar_modules: JSON.stringify({
+        modules: { console: { detail: false } },
+        preferences: { default_route: '/dashboard/overview' },
+      }),
+    })
+    const adminHidden = user({
+      developer_access_granted: true,
+      sidebar_modules: JSON.stringify({
+        modules: {},
+        preferences: { default_route: '/dashboard/overview' },
+      }),
+    })
+
+    assert.equal(getAuthenticatedLandingRoute(account, {}), '/dashboard')
+    assert.equal(
+      getAuthenticatedLandingRoute(adminHidden, {
+        console: { enabled: true, detail: false },
+      }),
+      '/dashboard'
+    )
+  })
+
   test('lands only explicitly granted complete accounts in the dashboard', () => {
     assert.equal(
       getAuthenticatedLandingRoute(

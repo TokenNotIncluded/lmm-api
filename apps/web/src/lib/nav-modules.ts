@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { getStatus } from '@/lib/api'
+import { isSidebarModuleEnabledByModules } from '@/lib/sidebar-preferences'
 
 export type ModuleAccess = { enabled: boolean; requireAuth: boolean }
 
@@ -160,6 +161,11 @@ function getCachedStatus(): Record<string, unknown> | null {
   }
 }
 
+/** The cached, administrator-controlled sidebar configuration, if present. */
+export function getCachedSidebarModulesAdmin(): unknown {
+  return getCachedStatus()?.SidebarModulesAdmin
+}
+
 function cacheStatus(status: Record<string, unknown> | null): void {
   try {
     if (typeof window !== 'undefined' && status) {
@@ -197,23 +203,9 @@ export function isSidebarModuleEnabled(
   section: string,
   module: string
 ): boolean {
-  const status = getCachedStatus()
-  if (!status) return true
-
-  const raw = status.SidebarModulesAdmin
-  if (!raw || String(raw).trim() === '') return true
-
-  try {
-    const parsed = JSON.parse(String(raw)) as Record<
-      string,
-      Record<string, boolean>
-    >
-    const sectionConfig = parsed[section]
-    if (!sectionConfig) return true
-    if (sectionConfig.enabled === false) return false
-    if (sectionConfig[module] === false) return false
-    return true
-  } catch {
-    return true
-  }
+  return isSidebarModuleEnabledByModules(
+    section,
+    module,
+    getCachedSidebarModulesAdmin()
+  )
 }

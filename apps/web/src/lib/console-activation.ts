@@ -18,9 +18,11 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import type { AuthUser, OnboardingStage } from '@/stores/auth-store'
 
+import { getCachedSidebarModulesAdmin } from './nav-modules'
 import { ROLE } from './roles'
 import {
   isSidebarRouteHidden,
+  isSidebarRouteEnabledByModules,
   parseSidebarUserSettings,
   SIDEBAR_DEFAULT_PREFERENCES,
   SIDEBAR_DEFAULT_ROUTE_ALLOWLIST,
@@ -131,14 +133,20 @@ export function isConsoleActivated(user: AuthUser | null | undefined): boolean {
 }
 
 export function getAuthenticatedLandingRoute(
-  user: AuthUser | null | undefined
+  user: AuthUser | null | undefined,
+  sidebarModulesAdmin: unknown = getCachedSidebarModulesAdmin()
 ): string {
   // Administrator approval is the access boundary.  The remaining setup
   // checklist is guidance for an already-enabled account and must not trap a
   // newly approved L1 user on the L0 welcome page.
   if (!getOnboardingState(user).activationComplete) return '/getting-started'
 
-  const settings = parseSidebarUserSettings(user?.sidebar_modules)
+  // Keep the login redirect aligned with the rendered sidebar. Accounts that
+  // cannot edit sidebar settings do not have an effective user overlay.
+  const settings =
+    user?.permissions?.sidebar_settings === false
+      ? null
+      : parseSidebarUserSettings(user?.sidebar_modules)
   const requested = settings?.preferences.default_route
   const role = user?.role ?? ROLE.GUEST
   const adminOnlyRoutes = new Set([
@@ -161,6 +169,8 @@ export function getAuthenticatedLandingRoute(
       requested,
       settings?.preferences ?? SIDEBAR_DEFAULT_PREFERENCES
     ) &&
+    isSidebarRouteEnabledByModules(requested, sidebarModulesAdmin) &&
+    isSidebarRouteEnabledByModules(requested, settings?.modules) &&
     (!adminOnlyRoutes.has(requested) || role >= ROLE.ADMIN) &&
     (!superAdminOnlyRoutes.has(requested) || role === ROLE.SUPER_ADMIN)
 

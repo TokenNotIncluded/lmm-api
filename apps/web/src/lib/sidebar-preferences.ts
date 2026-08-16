@@ -187,6 +187,82 @@ export const SIDEBAR_ROUTE_SECTION: Readonly<Record<string, string>> = {
   '/system-settings/site': 'admin',
 }
 
+/**
+ * Maps a selectable landing page to the same configuration switch used by
+ * the sidebar. Routes without an entry are intentionally configuration-free.
+ */
+export const SIDEBAR_ROUTE_MODULE: Readonly<
+  Record<string, { section: string; module: string }>
+> = {
+  '/dashboard': { section: 'console', module: 'detail' },
+  '/dashboard/overview': { section: 'console', module: 'detail' },
+  '/dashboard/models': { section: 'console', module: 'detail' },
+  '/chat-management': { section: 'chat', module: 'chat' },
+  '/keys': { section: 'console', module: 'token' },
+  '/drawing': { section: 'console', module: 'midjourney' },
+  '/usage-logs/common': { section: 'console', module: 'log' },
+  '/usage-logs/task': { section: 'console', module: 'task' },
+  '/wallet': { section: 'personal', module: 'topup' },
+  '/profile': { section: 'personal', module: 'personal' },
+  '/open-source-bounties': { section: 'personal', module: 'personal' },
+  '/public-relay': { section: 'personal', module: 'personal' },
+  '/channels': { section: 'admin', module: 'channel' },
+  '/models/metadata': { section: 'admin', module: 'models' },
+  '/users': { section: 'admin', module: 'user' },
+  '/redemption-codes': { section: 'admin', module: 'redemption' },
+  '/subscriptions': { section: 'admin', module: 'subscription' },
+  '/finance': { section: 'admin', module: 'finance' },
+  '/system-info': { section: 'admin', module: 'setting' },
+  '/system-settings/site': { section: 'admin', module: 'setting' },
+}
+
+function parseSidebarModuleConfig(
+  value: unknown
+): Record<string, Record<string, unknown>> | null {
+  if (typeof value === 'string') {
+    try {
+      return parseSidebarModuleConfig(JSON.parse(value))
+    } catch {
+      return null
+    }
+  }
+  if (!isRecord(value)) return null
+
+  const result: Record<string, Record<string, unknown>> = {}
+  for (const [section, sectionValue] of Object.entries(value)) {
+    if (isRecord(sectionValue)) result[section] = sectionValue
+  }
+  return result
+}
+
+/**
+ * Returns whether a configured sidebar route remains enabled by a module
+ * layer. It intentionally treats missing or malformed configuration as
+ * non-restrictive, matching the sidebar's backwards-compatible behaviour.
+ * Only explicit `false` closes a section or module.
+ */
+export function isSidebarRouteEnabledByModules(
+  route: string,
+  value: unknown
+): boolean {
+  const mapping = SIDEBAR_ROUTE_MODULE[route]
+  if (!mapping) return true
+
+  return isSidebarModuleEnabledByModules(mapping.section, mapping.module, value)
+}
+
+/** Pure module-layer check shared by route and legacy section/module callers. */
+export function isSidebarModuleEnabledByModules(
+  sectionName: string,
+  moduleName: string,
+  value: unknown
+): boolean {
+  const config = parseSidebarModuleConfig(value)
+  const section = config?.[sectionName]
+  if (!section) return true
+  return section.enabled !== false && section[moduleName] !== false
+}
+
 export function isSidebarRouteHidden(
   route: string,
   preferences: SidebarPreferences

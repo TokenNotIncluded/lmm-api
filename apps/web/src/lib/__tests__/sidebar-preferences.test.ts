@@ -10,6 +10,7 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
 import {
+  isSidebarRouteEnabledByModules,
   parseSidebarUserSettings,
   resolveSidebarDefaultRoute,
   serializeSidebarUserSettings,
@@ -87,5 +88,21 @@ describe('sidebar preferences', () => {
       ),
       '/dashboard'
     )
+  })
+
+  test('uses explicit false as the only module-layer visibility override', () => {
+    assert.equal(
+      isSidebarRouteEnabledByModules('/dashboard/overview', {
+        console: { enabled: true, detail: false },
+      }),
+      false
+    )
+    assert.equal(
+      isSidebarRouteEnabledByModules('/dashboard/overview', {
+        console: { enabled: true },
+      }),
+      true
+    )
+    assert.equal(isSidebarRouteEnabledByModules('/profile', '{bad json'), true)
   })
 })
