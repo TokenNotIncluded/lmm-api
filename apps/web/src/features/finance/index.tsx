@@ -66,6 +66,7 @@ import {
   paymentMethodSummary,
   type PaymentMethodSummary,
 } from './payment-method-metrics'
+import { userNetRevenueMicros } from './user-finance-metrics'
 
 const route = getRouteApi('/_authenticated/finance/')
 const WINDOWS = [7, 30, 90] as const
@@ -197,6 +198,10 @@ function UserRow({
 }) {
   const { t } = useTranslation()
   const title = user.display_name || user.username || `#${user.user_id}`
+  const netRevenueMicros = userNetRevenueMicros(
+    user.revenue_micros,
+    user.refund_micros
+  )
   return (
     <Link
       to='/finance'
@@ -216,9 +221,13 @@ function UserRow({
       </span>
       <span className='text-right'>
         <span className='block text-sm font-medium'>
-          {money(user.expense_micros)}
+          {money(netRevenueMicros)}
         </span>
-        <span className='text-muted-foreground block text-xs'>{days}d</span>
+        <span className='text-muted-foreground block text-xs'>
+          {user.refund_micros > 0
+            ? `${t('Refund')}: ${money(-user.refund_micros)}`
+            : `${days}d`}
+        </span>
       </span>
     </Link>
   )
@@ -243,6 +252,10 @@ function UserDetail({
   })
   const overview = query.data?.data
   const user = overview?.users?.[0]
+  const netRevenueMicros = userNetRevenueMicros(
+    overview?.revenue_micros ?? 0,
+    overview?.refund_micros ?? 0
+  )
   let detailContent: ReactNode
   if (query.isLoading) {
     detailContent = (
@@ -251,7 +264,15 @@ function UserDetail({
   } else if (overview) {
     detailContent = (
       <div className='mt-5 grid gap-4 sm:grid-cols-3'>
-        <Metric label={t('Expenses')} value={money(overview.expense_micros)} />
+        <Metric
+          label={t('User spending')}
+          value={money(netRevenueMicros)}
+          detail={
+            overview.refund_micros > 0
+              ? `${t('Revenue')}: ${money(overview.revenue_micros)} · ${t('Refund')}: ${money(overview.refund_micros)}`
+              : undefined
+          }
+        />
         <Metric
           label={t('Tokens')}
           value={compact(overview.tokens.total_tokens)}
