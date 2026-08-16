@@ -438,8 +438,15 @@ func GetChannelsByTag(tag string, idSort bool, selectAll bool, sortOptions ...Ch
 	return channels, err
 }
 
-func SearchChannels(keyword string, group string, model string, idSort bool, sortOptions ...ChannelSortOptions) ([]*Channel, error) {
-	var channels []*Channel
+const channelSearchMaxPageSize = 100
+
+type ChannelSearchPage struct {
+	Channels   []*Channel
+	Total      int64
+	TypeCounts map[int64]int64
+}
+
+func searchChannelsQuery(keyword string, group string, model string) *gorm.DB {
 	modelsCol := "`models`"
 
 	// 如果是 PostgreSQL，使用双引号
@@ -453,8 +460,6 @@ func SearchChannels(keyword string, group string, model string, idSort bool, sor
 		baseURLCol = `"base_url"`
 	}
 
-	order := resolveChannelSortOptions(idSort, sortOptions)
-
 	// 构造基础查询
 	baseQuery := DB.Model(&Channel{}).Omit("key")
 
@@ -462,13 +467,71 @@ func SearchChannels(keyword string, group string, model string, idSort bool, sor
 	whereClause := "(id = ? OR name LIKE ? OR " + commonKeyCol + " = ? OR " + baseURLCol + " LIKE ?) AND " + modelsCol + " LIKE ?"
 	args := []any{common.String2Int(keyword), "%" + keyword + "%", keyword, "%" + keyword + "%", "%" + model + "%"}
 	baseQuery = ApplyChannelGroupFilter(baseQuery.Where(whereClause, args...), group)
+	return baseQuery
+}
 
-	// 执行查询
-	err := order.Apply(baseQuery).Find(&channels).Error
+// SearchChannelsPage searches channels with all filters applied by SQL before
+// pagination. TypeCounts intentionally reflects the status/group/model search
+// set before the optional type filter, matching the channel UI's filter counts.
+func SearchChannelsPage(keyword string, group string, model string, statusFilter int, typeFilter int, startIdx int, pageSize int, idSort bool, sortOptions ...ChannelSortOptions) (ChannelSearchPage, error) {
+	if startIdx < 0 {
+		startIdx = 0
+	}
+	if pageSize <= 0 {
+		pageSize = common.ItemsPerPage
+	}
+	if pageSize > channelSearchMaxPageSize {
+		pageSize = channelSearchMaxPageSize
+	}
+
+	baseQuery := searchChannelsQuery(keyword, group, model)
+	if statusFilter == common.ChannelStatusEnabled {
+		baseQuery = baseQuery.Where("status = ?", common.ChannelStatusEnabled)
+	} else if statusFilter == 0 {
+		baseQuery = baseQuery.Where("status != ?", common.ChannelStatusEnabled)
+	}
+
+	result := ChannelSearchPage{TypeCounts: make(map[int64]int64)}
+	var typeRows []struct {
+		Type  int64 `gorm:"column:type"`
+		Count int64 `gorm:"column:count"`
+	}
+	if err := baseQuery.Session(&gorm.Session{}).
+		Select("type, COUNT(*) AS count").
+		Group("type").
+		Scan(&typeRows).Error; err != nil {
+		return ChannelSearchPage{}, err
+	}
+	for _, row := range typeRows {
+		result.TypeCounts[row.Type] = row.Count
+	}
+
+	dataQuery := baseQuery
+	if typeFilter >= 0 {
+		dataQuery = dataQuery.Where("type = ?", typeFilter)
+	}
+	if err := dataQuery.Session(&gorm.Session{}).Count(&result.Total).Error; err != nil {
+		return ChannelSearchPage{}, err
+	}
+
+	options := resolveChannelSortOptions(idSort, sortOptions)
+	if err := options.Apply(dataQuery).
+		Offset(startIdx).
+		Limit(pageSize).
+		Find(&result.Channels).Error; err != nil {
+		return ChannelSearchPage{}, err
+	}
+	return result, nil
+}
+
+// SearchChannels is retained for internal callers that need a bounded search
+// result without pagination metadata.
+func SearchChannels(keyword string, group string, model string, idSort bool, sortOptions ...ChannelSortOptions) ([]*Channel, error) {
+	result, err := SearchChannelsPage(keyword, group, model, -1, -1, 0, channelSearchMaxPageSize, idSort, sortOptions...)
 	if err != nil {
 		return nil, err
 	}
-	return channels, nil
+	return result.Channels, nil
 }
 
 func GetChannelById(id int, selectAll bool) (*Channel, error) {
