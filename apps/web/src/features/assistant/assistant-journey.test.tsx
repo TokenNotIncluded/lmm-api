@@ -224,4 +224,32 @@ describe('assistant game-style progress', () => {
       await unmount(rendered)
     }
   })
+
+  test('keeps a retry path visible when the welcome gift status cannot load', async () => {
+    let attempts = 0
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/assistant/new-user-gift')
+      attempts++
+      throw new Error('temporary failure')
+    }) as typeof api.get
+
+    const rendered = await render(<AssistantNewUserGift enabled />)
+    try {
+      const error = rendered.container.querySelector<HTMLElement>(
+        '[data-testid="assistant-new-user-gift-error"]'
+      )
+      assert.ok(error)
+      assert.match(error.textContent ?? '', /Failed to load/)
+
+      const retry = error.querySelector<HTMLButtonElement>('button')
+      assert.ok(retry)
+      await act(async () => {
+        retry.click()
+        await flushQueries()
+      })
+      assert.equal(attempts, 2)
+    } finally {
+      await unmount(rendered)
+    }
+  })
 })

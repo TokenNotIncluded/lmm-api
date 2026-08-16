@@ -29,7 +29,28 @@ export function AssistantNewUserGift(props: { enabled: boolean }) {
     retry: false,
   })
   const gift = giftQuery.data
-  if (!props.enabled || !gift) return null
+  if (!props.enabled) return null
+
+  if (giftQuery.isError && !gift) {
+    return (
+      <section
+        className='border-border/60 my-2 flex flex-wrap items-center justify-between gap-3 border-y px-1 py-4 sm:px-4'
+        data-testid='assistant-new-user-gift-error'
+      >
+        <p className='text-muted-foreground text-sm'>{t('Failed to load')}</p>
+        <Button
+          type='button'
+          size='sm'
+          variant='outline'
+          onClick={() => void giftQuery.refetch()}
+        >
+          {t('Retry')}
+        </Button>
+      </section>
+    )
+  }
+
+  if (!gift) return null
 
   const giftTitle =
     gift.status === 'declined' ? t('No gift this time') : t('New-user gift')
