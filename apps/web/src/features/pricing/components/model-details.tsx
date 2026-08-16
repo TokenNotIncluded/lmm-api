@@ -536,9 +536,9 @@ function ModelHeader(props: { model: PricingModel }) {
 
   return (
     <header className='pb-4'>
-      <div className='flex items-center gap-2.5'>
+      <div className='flex min-w-0 items-start gap-2.5'>
         {modelIcon}
-        <h1 className='font-mono text-xl font-bold tracking-tight sm:text-2xl'>
+        <h1 className='min-w-0 flex-1 font-mono text-xl leading-tight font-bold tracking-tight [overflow-wrap:anywhere] sm:text-2xl'>
           {model.model_name}
         </h1>
         <CopyButton

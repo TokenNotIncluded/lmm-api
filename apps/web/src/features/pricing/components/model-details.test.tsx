@@ -98,7 +98,7 @@ async function flushEffects() {
   await new Promise((resolve) => setTimeout(resolve, 20))
 }
 
-async function renderModelDetails() {
+async function renderModelDetails(modelName = 'free-model') {
   api.get = (async (url: string) => {
     assert.equal(url, '/api/perf-metrics')
     return { data: { data: { groups: [] } } }
@@ -117,7 +117,7 @@ async function renderModelDetails() {
           <ModelDetailsContent
             model={{
               id: 1,
-              model_name: 'free-model',
+              model_name: modelName,
               quota_type: 0,
               model_ratio: 1,
               completion_ratio: 1,
@@ -163,6 +163,21 @@ describe('ModelDetails group pricing', () => {
       rendered.container.textContent ?? '',
       /free-model[\s\S]*1x/i
     )
+
+    await unmount(rendered)
+  })
+
+  test('wraps long model IDs inside the narrow detail header', async () => {
+    const modelName =
+      'provider/model-with-a-very-long-identifier-that-must-remain-readable-on-mobile'
+    const rendered = await renderModelDetails(modelName)
+
+    const title = rendered.container.querySelector('h1')
+    assert.ok(title)
+    assert.equal(title.textContent, modelName)
+    assert.match(title.className, /min-w-0/)
+    assert.match(title.className, /flex-1/)
+    assert.match(title.className, /\[overflow-wrap:anywhere\]/)
 
     await unmount(rendered)
   })

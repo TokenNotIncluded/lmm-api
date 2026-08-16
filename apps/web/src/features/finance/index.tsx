@@ -24,7 +24,7 @@ import {
 } from '@tanstack/react-query'
 import { getRouteApi, Link, useNavigate } from '@tanstack/react-router'
 import { ArrowLeft, ReceiptText, RefreshCw, WalletCards } from 'lucide-react'
-import { useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Area,
@@ -60,6 +60,7 @@ import {
   type FinancePaymentMethod,
   type FinanceUserMetric,
 } from './api'
+import { financeLedgerUserFilter } from './ledger-user-filter'
 
 const route = getRouteApi('/_authenticated/finance/')
 const WINDOWS = [7, 30, 90] as const
@@ -207,10 +208,12 @@ function UserDetail({
   userId,
   days,
   paymentMethod,
+  onViewLedger,
 }: {
   userId: number
   days: number
   paymentMethod?: string
+  onViewLedger: () => void
 }) {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -246,29 +249,38 @@ function UserDetail({
   }
   return (
     <section className='border-t pt-6' aria-labelledby='finance-user-detail'>
-      <div className='flex items-center justify-between gap-3'>
-        <div>
+      <div className='flex flex-wrap items-start justify-between gap-3'>
+        <div className='min-w-0'>
           <p className='text-muted-foreground text-xs'>{t('User spending')}</p>
-          <h3 id='finance-user-detail' className='mt-1 text-lg font-semibold'>
+          <h3
+            id='finance-user-detail'
+            className='mt-1 truncate text-lg font-semibold'
+          >
             {user?.display_name || user?.username || `#${userId}`}
           </h3>
           <p className='text-muted-foreground mt-1 text-xs'>
             {user?.username || `#${userId}`}
           </p>
         </div>
-        <Button
-          variant='ghost'
-          size='sm'
-          onClick={() =>
-            void navigate({
-              to: '/finance',
-              search: { payment_method: paymentMethod },
-            })
-          }
-        >
-          <ArrowLeft data-icon='inline-start' aria-hidden='true' />
-          {t('Back')}
-        </Button>
+        <div className='flex shrink-0 items-center gap-1'>
+          <Button variant='ghost' size='sm' onClick={onViewLedger}>
+            <ReceiptText data-icon='inline-start' aria-hidden='true' />
+            {t('Append-only ledger')}
+          </Button>
+          <Button
+            variant='ghost'
+            size='sm'
+            onClick={() =>
+              void navigate({
+                to: '/finance',
+                search: { payment_method: paymentMethod },
+              })
+            }
+          >
+            <ArrowLeft data-icon='inline-start' aria-hidden='true' />
+            {t('Back')}
+          </Button>
+        </div>
       </div>
       {detailContent}
     </section>
@@ -281,15 +293,22 @@ function LedgerEntriesDialog({
   days,
   paymentMethod,
   paymentMethodLabel,
+  initialUserID,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   days: number
   paymentMethod?: string
   paymentMethodLabel?: string
+  initialUserID?: number
 }) {
   const { t } = useTranslation()
-  const [userIDText, setUserIDText] = useState('')
+  const [userIDText, setUserIDText] = useState(() =>
+    financeLedgerUserFilter(initialUserID)
+  )
+  useEffect(() => {
+    if (open) setUserIDText(financeLedgerUserFilter(initialUserID))
+  }, [initialUserID, open])
   const userID = Number.parseInt(userIDText, 10)
   const query = useInfiniteQuery({
     queryKey: ['finance-ledger-entries', days, paymentMethod, userIDText],
@@ -429,6 +448,7 @@ export function Finance() {
   const [ledgerPaymentMethod, setLedgerPaymentMethod] = useState<string>()
   const [ledgerPaymentMethodLabel, setLedgerPaymentMethodLabel] =
     useState<string>()
+  const [ledgerUserID, setLedgerUserID] = useState<number>()
   const [expenseAmount, setExpenseAmount] = useState('')
   const [expenseCategory, setExpenseCategory] = useState('')
   const [expenseNote, setExpenseNote] = useState('')
@@ -478,6 +498,17 @@ export function Finance() {
   ) => {
     await updateFinancePaymentMethod(method.method, value)
     await queryClient.invalidateQueries({ queryKey: ['finance-overview'] })
+  }
+
+  const openLedger = (
+    paymentMethod?: string,
+    paymentMethodLabel?: string,
+    userID?: number
+  ) => {
+    setLedgerPaymentMethod(paymentMethod)
+    setLedgerPaymentMethodLabel(paymentMethodLabel)
+    setLedgerUserID(userID)
+    setLedgerOpen(true)
   }
 
   return (
@@ -726,9 +757,7 @@ export function Finance() {
                     method={method}
                     onChange={(value) => void updateMethod(method, value)}
                     onView={() => {
-                      setLedgerPaymentMethod(method.method)
-                      setLedgerPaymentMethodLabel(method.label || method.method)
-                      setLedgerOpen(true)
+                      openLedger(method.method, method.label || method.method)
                       void navigate({
                         to: '/finance',
                         search: {
@@ -846,6 +875,13 @@ export function Finance() {
               userId={search.user_id}
               days={days}
               paymentMethod={selectedPaymentMethod}
+              onViewLedger={() =>
+                openLedger(
+                  selectedPaymentMethod,
+                  selectedPaymentMethodLabel,
+                  search.user_id
+                )
+              }
             />
           ) : null}
           <LedgerEntriesDialog
@@ -854,6 +890,7 @@ export function Finance() {
             days={days}
             paymentMethod={ledgerPaymentMethod}
             paymentMethodLabel={ledgerPaymentMethodLabel}
+            initialUserID={ledgerUserID}
           />
         </div>
       </SectionPageLayout.Content>
