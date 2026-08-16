@@ -23,8 +23,8 @@ import (
 )
 
 const (
-	InitialScannerBufferSize    = 64 << 10  // 64KB (64*1024)
-	DefaultMaxScannerBufferSize = 128 << 20 // 64MB (64*1024*1024) default SSE buffer size
+	InitialScannerBufferSize    = 64 << 10 // 64KB (64*1024)
+	DefaultMaxScannerBufferSize = 32 << 20 // 32MiB default SSE buffer size
 	DefaultPingInterval         = 10 * time.Second
 	// streamWriteTimeout bounds a single blocked write to a slow client so the
 	// unconditional wg.Wait() in cleanup can always finish. Without it, a slow
@@ -34,10 +34,17 @@ const (
 )
 
 func getScannerBufferSize() int {
+	bufferSize := DefaultMaxScannerBufferSize
 	if constant.StreamScannerMaxBufferMB > 0 {
-		return constant.StreamScannerMaxBufferMB << 20
+		bufferSize = constant.StreamScannerMaxBufferMB << 20
 	}
-	return DefaultMaxScannerBufferSize
+	// Keep the per-line scanner budget aligned with the shared upstream
+	// response budget. Otherwise a single SSE line could bypass the normal
+	// response limit and retain a much larger buffer in every relay request.
+	if responseLimit := common.ResponseBodyLimit(); responseLimit > 0 && int64(bufferSize) > responseLimit {
+		return int(responseLimit)
+	}
+	return bufferSize
 }
 
 func NewStreamScanner(reader io.Reader) *bufio.Scanner {
@@ -196,7 +203,9 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		})
 	}
 
-	dataChan := make(chan string, 10)
+	// Keep only one parsed event queued. A slow client still applies backpressure
+	// to the scanner, but cannot cause many large SSE strings to accumulate.
+	dataChan := make(chan string, 1)
 
 	wg.Add(1)
 	gopool.Go(func() {
