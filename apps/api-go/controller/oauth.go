@@ -255,6 +255,8 @@ func HandleOAuth(c *gin.Context) {
 			common.ApiErrorI18n(c, i18n.MsgUserRegisterDisabled)
 		case *OAuthEmailAlreadyTakenError:
 			common.ApiErrorI18n(c, i18n.MsgUserEmailAlreadyTaken)
+		case *OAuthEmailVerificationRequiredError:
+			common.ApiErrorI18n(c, i18n.MsgOAuthEmailVerificationRequired)
 		default:
 			common.ApiError(c, err)
 		}
@@ -402,6 +404,9 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 	if err := publicRegistrationGateFailure(acceptedLegal); err != nil {
 		return nil, err
 	}
+	if common.EmailVerificationEnabled && (oauthUser == nil || !oauthUser.EmailVerified) {
+		return nil, &OAuthEmailVerificationRequiredError{}
+	}
 
 	// Set up new user
 	user.Username = provider.GetProviderPrefix() + strconv.Itoa(model.GetMaxUserId()+1)
@@ -535,6 +540,16 @@ type OAuthEmailAlreadyTakenError struct{}
 
 func (e *OAuthEmailAlreadyTakenError) Error() string {
 	return "email is already in use"
+}
+
+// OAuthEmailVerificationRequiredError is returned when strict email
+// verification is enabled but the provider did not attest the address.
+// Existing OAuth identities are returned before this check, so enabling the
+// setting never locks existing users out of login.
+type OAuthEmailVerificationRequiredError struct{}
+
+func (e *OAuthEmailVerificationRequiredError) Error() string {
+	return "oauth provider did not provide a verified email address"
 }
 
 // handleOAuthError handles OAuth errors and returns translated message

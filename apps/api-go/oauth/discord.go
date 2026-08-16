@@ -33,9 +33,11 @@ type discordOAuthResponse struct {
 }
 
 type discordUser struct {
-	UID  string `json:"id"`
-	ID   string `json:"username"`
-	Name string `json:"global_name"`
+	UID      string `json:"id"`
+	ID       string `json:"username"`
+	Name     string `json:"global_name"`
+	Email    string `json:"email"`
+	Verified bool   `json:"verified"`
 }
 
 func (p *DiscordProvider) GetName() string {
@@ -151,6 +153,8 @@ func (p *DiscordProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*
 		ProviderUserID: discordUser.UID,
 		Username:       discordUser.ID,
 		DisplayName:    discordUser.Name,
+		Email:          discordUser.Email,
+		EmailVerified:  discordUser.Verified && strings.TrimSpace(discordUser.Email) != "",
 	}, nil
 }
 

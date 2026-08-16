@@ -232,6 +232,36 @@ func TestOAuthRegistrationRestrictionBlocksNewAccountsButAllowsExistingLogin(t *
 	assert.Equal(t, 42, user.Id)
 }
 
+func TestOAuthEmailVerificationBlocksUnattestedNewAccountsButNotExistingLogin(t *testing.T) {
+	setupAuthFlowControllerTest(t)
+	setRegistrationGateTestState(t, "terms", "privacy")
+	common.EmailVerificationEnabled = true
+	provider := &registrationGateTestOAuthProvider{}
+	oauthUser := &oauth.OAuthUser{
+		ProviderUserID: "email-gate-new",
+		Email:          "new@example.com",
+	}
+
+	user, err := findOrCreateOAuthUser(nil, provider, oauthUser, "", true)
+	var verificationErr *OAuthEmailVerificationRequiredError
+	require.ErrorAs(t, err, &verificationErr)
+	assert.Nil(t, user)
+	var count int64
+	require.NoError(t, model.DB.Model(&model.User{}).Count(&count).Error)
+	assert.Zero(t, count)
+
+	oauthUser.EmailVerified = true
+	user, err = findOrCreateOAuthUser(nil, provider, oauthUser, "", true)
+	require.NoError(t, err)
+	require.NotNil(t, user)
+	assert.Equal(t, "new@example.com", user.Email)
+
+	provider.existing = &model.User{Id: 43, Username: "existing-oauth", Status: common.UserStatusEnabled}
+	existing, err := findOrCreateOAuthUser(nil, provider, &oauth.OAuthUser{ProviderUserID: "existing-email-gate"}, "", false)
+	require.NoError(t, err)
+	assert.Equal(t, 43, existing.Id)
+}
+
 func TestOAuthCallbackCannotSubstituteConsentForState(t *testing.T) {
 	provider := setupAuthFlowControllerTest(t)
 	setRegistrationGateTestState(t, "terms", "privacy")
@@ -282,6 +312,36 @@ func TestWeChatFirstCreateGatesWhileExistingIdentityLoginBypasses(t *testing.T) 
 	assert.Nil(t, user)
 	assert.Equal(t, http.StatusServiceUnavailable, newRecorder.Code)
 	assert.Equal(t, registrationLegalUnavailableCode, decodeRegistrationGateResponse(t, newRecorder).Code)
+	var count int64
+	require.NoError(t, db.Model(&model.User{}).Count(&count).Error)
+	assert.EqualValues(t, 1, count)
+}
+
+func TestWeChatEmailVerificationBlocksOnlyNewAccounts(t *testing.T) {
+	db := setupManageUserTestDB(t)
+	setRegistrationGateTestState(t, "terms", "privacy")
+	common.EmailVerificationEnabled = true
+	existing := model.User{
+		Username: "existing-wechat-email", Password: "password", WeChatId: "wechat-email-existing",
+		Role: common.RoleCommonUser, Status: common.UserStatusEnabled,
+	}
+	require.NoError(t, db.Create(&existing).Error)
+
+	existingRecorder := httptest.NewRecorder()
+	existingContext, _ := gin.CreateTestContext(existingRecorder)
+	user, ok := findOrCreateWeChatUser(existingContext, existing.WeChatId, false)
+	require.True(t, ok)
+	require.NotNil(t, user)
+	assert.Equal(t, existing.Id, user.Id)
+
+	newRecorder := httptest.NewRecorder()
+	newContext, _ := gin.CreateTestContext(newRecorder)
+	newContext.Request = httptest.NewRequest(http.MethodGet, "/api/wechat", nil)
+	user, ok = findOrCreateWeChatUser(newContext, "wechat-email-new", true)
+	assert.False(t, ok)
+	assert.Nil(t, user)
+	assert.Equal(t, http.StatusOK, newRecorder.Code)
+	assert.Contains(t, newRecorder.Body.String(), "email")
 	var count int64
 	require.NoError(t, db.Model(&model.User{}).Count(&count).Error)
 	assert.EqualValues(t, 1, count)

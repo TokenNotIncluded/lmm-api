@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/i18n"
 	"github.com/LIghtJUNction/api.lmm.best/model"
 
 	"github.com/gin-gonic/gin"
@@ -111,6 +112,13 @@ func findOrCreateWeChatUser(c *gin.Context, wechatId string, acceptedLegal bool)
 				return nil, false
 			}
 			if !requirePublicRegistrationLegal(c, acceptedLegal) {
+				return nil, false
+			}
+			// WeChat's login assertion does not provide an email address. When
+			// strict verification is enabled, it cannot create a new account;
+			// existing identities were handled above and can still sign in.
+			if common.EmailVerificationEnabled {
+				common.ApiErrorI18n(c, i18n.MsgOAuthEmailVerificationRequired)
 				return nil, false
 			}
 			user.Username = "wechat_" + strconv.Itoa(model.GetMaxUserId()+1)

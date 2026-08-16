@@ -35,6 +35,7 @@ type oidcOAuthResponse struct {
 type oidcUser struct {
 	OpenID            string `json:"sub"`
 	Email             string `json:"email"`
+	EmailVerified     bool   `json:"email_verified"`
 	Name              string `json:"name"`
 	PreferredUsername string `json:"preferred_username"`
 	Picture           string `json:"picture"`
@@ -156,6 +157,7 @@ func (p *OIDCProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*OAu
 		Username:       oidcUser.PreferredUsername,
 		DisplayName:    oidcUser.Name,
 		Email:          oidcUser.Email,
+		EmailVerified:  oidcUser.EmailVerified,
 	}, nil
 }
 

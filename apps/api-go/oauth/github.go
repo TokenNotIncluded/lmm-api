@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/LIghtJUNction/api.lmm.best/common"
@@ -34,6 +35,12 @@ type gitHubUser struct {
 	Login string `json:"login"` // GitHub username (can be changed by user)
 	Name  string `json:"name"`
 	Email string `json:"email"`
+}
+
+type gitHubEmail struct {
+	Email    string `json:"email"`
+	Primary  bool   `json:"primary"`
+	Verified bool   `json:"verified"`
 }
 
 func (p *GitHubProvider) GetName() string {
@@ -148,15 +155,60 @@ func (p *GitHubProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*O
 	logger.LogDebug(ctx, "[OAuth-GitHub] GetUserInfo success: id=%d, login=%s, name=%s, email=%s",
 		githubUser.Id, githubUser.Login, githubUser.Name, githubUser.Email)
 
+	email := githubUser.Email
+	emailVerified := false
+	if common.EmailVerificationEnabled {
+		if verifiedEmail, ok := p.fetchVerifiedEmail(ctx, token); ok {
+			email = verifiedEmail
+			emailVerified = true
+		}
+	}
+
 	return &OAuthUser{
 		ProviderUserID: strconv.FormatInt(githubUser.Id, 10), // Use numeric ID as primary identifier
 		Username:       githubUser.Login,
 		DisplayName:    githubUser.Name,
-		Email:          githubUser.Email,
+		Email:          email,
+		EmailVerified:  emailVerified,
 		Extra: map[string]any{
 			"legacy_id": githubUser.Login, // Store login for migration from old accounts
 		},
 	}, nil
+}
+
+func (p *GitHubProvider) fetchVerifiedEmail(ctx context.Context, token *OAuthToken) (string, bool) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/user/emails", nil)
+	if err != nil {
+		return "", false
+	}
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token.AccessToken))
+	req.Header.Set("Accept", "application/vnd.github+json")
+	res, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		logger.LogWarn(ctx, fmt.Sprintf("[OAuth-GitHub] verified email lookup failed: %s", err.Error()))
+		return "", false
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		logger.LogWarn(ctx, fmt.Sprintf("[OAuth-GitHub] verified email lookup returned status=%d", res.StatusCode))
+		return "", false
+	}
+	var emails []gitHubEmail
+	if err := json.NewDecoder(res.Body).Decode(&emails); err != nil {
+		logger.LogWarn(ctx, fmt.Sprintf("[OAuth-GitHub] verified email lookup decode failed: %s", err.Error()))
+		return "", false
+	}
+	for _, email := range emails {
+		if email.Primary && email.Verified && strings.TrimSpace(email.Email) != "" {
+			return email.Email, true
+		}
+	}
+	for _, email := range emails {
+		if email.Verified && strings.TrimSpace(email.Email) != "" {
+			return email.Email, true
+		}
+	}
+	return "", false
 }
 
 func (p *GitHubProvider) IsUserIDTaken(providerUserID string) bool {
