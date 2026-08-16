@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { getRouteApi, Link, useNavigate } from '@tanstack/react-router'
-import { ArrowLeft, RefreshCw, WalletCards } from 'lucide-react'
+import { ArrowLeft, ReceiptText, RefreshCw, WalletCards } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
@@ -33,6 +33,13 @@ import {
 
 import { SectionPageLayout } from '@/components/layout'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
@@ -40,8 +47,10 @@ import { cn } from '@/lib/utils'
 
 import {
   createFinanceExpense,
+  getFinanceEntries,
   getFinanceOverview,
   getFinanceUser,
+  type FinanceLedgerEntry,
   updateFinancePaymentMethod,
   type FinancePaymentMethod,
   type FinanceUserMetric,
@@ -261,6 +270,114 @@ function UserDetail({
   )
 }
 
+function LedgerEntriesDialog({
+  open,
+  onOpenChange,
+  days,
+  paymentMethod,
+  paymentMethodLabel,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  days: number
+  paymentMethod?: string
+  paymentMethodLabel?: string
+}) {
+  const { t } = useTranslation()
+  const [userIDText, setUserIDText] = useState('')
+  const userID = Number.parseInt(userIDText, 10)
+  const query = useQuery({
+    queryKey: ['finance-ledger-entries', days, paymentMethod, userIDText],
+    queryFn: () =>
+      getFinanceEntries(days, {
+        paymentMethod,
+        userId: Number.isSafeInteger(userID) && userID > 0 ? userID : undefined,
+      }),
+    enabled: open,
+  })
+  const entries = query.data?.data.entries ?? []
+  const title = paymentMethodLabel || paymentMethod || t('Append-only ledger')
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className='flex max-h-[min(44rem,calc(100svh-2rem))] w-[calc(100%-1rem)] max-w-2xl flex-col gap-0 p-0 sm:max-w-2xl'>
+        <DialogHeader className='border-b px-5 py-4 pr-12'>
+          <DialogTitle className='flex items-center gap-2 text-base'>
+            <ReceiptText className='size-4' aria-hidden='true' />
+            {title}
+          </DialogTitle>
+          <DialogDescription className='mt-1 text-xs leading-5'>
+            {t(
+              'Ledger entries are limited to durable ledger events. Use Financial overview for reconciled revenue.'
+            )}
+          </DialogDescription>
+        </DialogHeader>
+        <div className='border-b px-5 py-3'>
+          <Input
+            value={userIDText}
+            inputMode='numeric'
+            placeholder={t('User ID')}
+            aria-label={t('User ID')}
+            onChange={(event) =>
+              setUserIDText(event.target.value.replace(/\D/g, ''))
+            }
+          />
+        </div>
+        <div className='min-h-0 overflow-y-auto px-5'>
+          {query.isLoading ? (
+            <p className='text-muted-foreground py-8 text-sm'>
+              {t('Loading...')}
+            </p>
+          ) : null}
+          {query.isError ? (
+            <p className='text-destructive py-8 text-sm'>
+              {t('Unable to load data')}
+            </p>
+          ) : null}
+          {!query.isLoading && !query.isError && entries.length === 0 ? (
+            <p className='text-muted-foreground py-8 text-sm'>{t('No data')}</p>
+          ) : null}
+          {entries.map((entry) => (
+            <LedgerEntryRow key={entry.id} entry={entry} />
+          ))}
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function LedgerEntryRow({ entry }: { entry: FinanceLedgerEntry }) {
+  const { t } = useTranslation()
+  const isCredit = entry.direction > 0
+  return (
+    <div className='flex items-start justify-between gap-4 border-b py-4 last:border-b-0'>
+      <div className='min-w-0'>
+        <p className='truncate text-sm font-medium'>
+          {entry.category || entry.source_type}
+        </p>
+        <p className='text-muted-foreground mt-1 truncate text-xs'>
+          {entry.payment_method || entry.payment_provider || '—'} ·{' '}
+          {entry.user_id ? `${t('User ID')} #${entry.user_id}` : '—'}
+        </p>
+        <p className='text-muted-foreground mt-1 text-xs'>
+          {new Date(entry.occurred_at * 1000).toLocaleString()}
+        </p>
+      </div>
+      <p
+        className={cn(
+          'shrink-0 text-sm font-medium tabular-nums',
+          isCredit
+            ? 'text-emerald-600 dark:text-emerald-400'
+            : 'text-rose-600 dark:text-rose-400'
+        )}
+      >
+        {isCredit ? '+' : '-'}
+        {money(entry.amount_micros, entry.currency)}
+      </p>
+    </div>
+  )
+}
+
 export function Finance() {
   const { t } = useTranslation()
   const search = route.useSearch()
@@ -268,6 +385,10 @@ export function Finance() {
   const navigate = route.useNavigate()
   const [days, setDays] = useState<(typeof WINDOWS)[number]>(30)
   const [expenseOpen, setExpenseOpen] = useState(false)
+  const [ledgerOpen, setLedgerOpen] = useState(false)
+  const [ledgerPaymentMethod, setLedgerPaymentMethod] = useState<string>()
+  const [ledgerPaymentMethodLabel, setLedgerPaymentMethodLabel] =
+    useState<string>()
   const [expenseAmount, setExpenseAmount] = useState('')
   const [expenseCategory, setExpenseCategory] = useState('')
   const [expenseNote, setExpenseNote] = useState('')
@@ -564,7 +685,10 @@ export function Finance() {
                     key={method.method}
                     method={method}
                     onChange={(value) => void updateMethod(method, value)}
-                    onView={() =>
+                    onView={() => {
+                      setLedgerPaymentMethod(method.method)
+                      setLedgerPaymentMethodLabel(method.label || method.method)
+                      setLedgerOpen(true)
                       void navigate({
                         to: '/finance',
                         search: {
@@ -572,7 +696,7 @@ export function Finance() {
                           payment_method: method.method,
                         },
                       })
-                    }
+                    }}
                     viewing={selectedPaymentMethod === method.method}
                   />
                 ))}
@@ -684,6 +808,13 @@ export function Finance() {
               paymentMethod={selectedPaymentMethod}
             />
           ) : null}
+          <LedgerEntriesDialog
+            open={ledgerOpen}
+            onOpenChange={setLedgerOpen}
+            days={days}
+            paymentMethod={ledgerPaymentMethod}
+            paymentMethodLabel={ledgerPaymentMethodLabel}
+          />
         </div>
       </SectionPageLayout.Content>
     </SectionPageLayout>

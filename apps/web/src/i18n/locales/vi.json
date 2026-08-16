@@ -3402,6 +3402,7 @@
     "Leave empty to use username": "Để trống để sử dụng tên người dùng",
     "Leave the final split empty as the fallback for models not matched above.": "Để nhánh cuối trống làm dự phòng cho các model chưa khớp ở trên.",
     "Leave this empty only for the final fallback split; it catches client models not matched above.": "Chỉ để trống cho nhánh dự phòng cuối cùng; nhánh này nhận các model client chưa khớp ở trên.",
+    "Ledger entries are limited to durable ledger events. Use Financial overview for reconciled revenue.": "Các mục chỉ gồm sự kiện sổ cái đã được lưu bền vững. Hãy dùng Tổng quan tài chính cho doanh thu đã đối soát.",
     "Left to Right": "Trái sang phải",
     "Legacy account restrictions": "Giới hạn tài khoản cũ",
     "Legacy Format (JSON Object)": "Định dạng cũ (đối tượng JSON)",

@@ -3402,6 +3402,7 @@
     "Leave empty to use username": "Laissez vide pour utiliser le nom d'utilisateur",
     "Leave the final split empty as the fallback for models not matched above.": "Laissez la dernière répartition vide comme solution de secours pour les modèles non appariés plus haut.",
     "Leave this empty only for the final fallback split; it catches client models not matched above.": "Laissez vide uniquement pour la dernière branche de repli ; elle reçoit les modèles client non associés plus haut.",
+    "Ledger entries are limited to durable ledger events. Use Financial overview for reconciled revenue.": "Les écritures se limitent aux événements durables du grand livre. Utilisez la vue financière pour les revenus rapprochés.",
     "Left to Right": "De gauche à droite",
     "Legacy account restrictions": "Restrictions de compte existantes",
     "Legacy Format (JSON Object)": "Ancien format (objet JSON)",

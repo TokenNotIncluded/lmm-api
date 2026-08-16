@@ -106,6 +106,15 @@ export interface FinanceLedgerEntry {
   reversal_of_id?: number
 }
 
+export interface FinanceLedgerEntriesPage {
+  scope: 'append_only_ledger'
+  range: { start: number; end: number }
+  entries: FinanceLedgerEntry[]
+  has_more: boolean
+  next_before_occurred_at?: number
+  next_before_id?: number
+}
+
 interface FinanceEnvelope<T> {
   success: boolean
   data: T
@@ -138,6 +147,28 @@ export async function getFinanceUser(
   const response = await api.get<FinanceEnvelope<FinanceOverview>>(
     `/api/finance/users/${userId}`,
     { params: rangeParams(days, paymentMethod) }
+  )
+  return response.data
+}
+
+export async function getFinanceEntries(
+  days = 30,
+  input: {
+    paymentMethod?: string
+    userId?: number
+    beforeOccurredAt?: number
+    beforeId?: number
+  } = {}
+) {
+  const params = rangeParams(days, input.paymentMethod)
+  if (input.userId) params.user_id = input.userId
+  if (input.beforeOccurredAt && input.beforeId) {
+    params.before_occurred_at = input.beforeOccurredAt
+    params.before_id = input.beforeId
+  }
+  const response = await api.get<FinanceEnvelope<FinanceLedgerEntriesPage>>(
+    '/api/finance/entries',
+    { params }
   )
   return response.data
 }

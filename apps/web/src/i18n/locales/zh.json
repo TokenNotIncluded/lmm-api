@@ -3402,6 +3402,7 @@
     "Leave empty to use username": "留空以使用用户名",
     "Leave the final split empty as the fallback for models not matched above.": "将最后一个分流留空作为兜底，用于匹配前面未命中的模型。",
     "Leave this empty only for the final fallback split; it catches client models not matched above.": "只有最后一个兜底分流可以留空；它会匹配前面未命中的客户端模型。",
+    "Ledger entries are limited to durable ledger events. Use Financial overview for reconciled revenue.": "账本明细仅包含已持久化的账本事件。请以财务概览的对账收入为准。",
     "Left to Right": "从左到右",
     "Legacy account restrictions": "旧版账号限制",
     "Legacy Format (JSON Object)": "旧格式（JSON 对象）",

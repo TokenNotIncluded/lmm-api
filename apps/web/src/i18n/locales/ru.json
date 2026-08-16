@@ -3402,6 +3402,7 @@
     "Leave empty to use username": "Оставьте пустым, чтобы использовать имя пользователя",
     "Leave the final split empty as the fallback for models not matched above.": "Оставьте последний маршрут пустым как резервный для моделей, не совпавших выше.",
     "Leave this empty only for the final fallback split; it catches client models not matched above.": "Оставляйте пустым только последнюю резервную ветку; она принимает модели клиента, не совпавшие выше.",
+    "Ledger entries are limited to durable ledger events. Use Financial overview for reconciled revenue.": "Записи ограничены устойчивыми событиями журнала. Для сверенных доходов используйте финансовый обзор.",
     "Left to Right": "Слева направо",
     "Legacy account restrictions": "Прежние ограничения аккаунта",
     "Legacy Format (JSON Object)": "Старый формат (JSON-объект)",

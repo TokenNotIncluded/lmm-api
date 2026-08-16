@@ -3402,6 +3402,7 @@
     "Leave empty to use username": "Leave empty to use username",
     "Leave the final split empty as the fallback for models not matched above.": "Leave the final split empty as the fallback for models not matched above.",
     "Leave this empty only for the final fallback split; it catches client models not matched above.": "Leave this empty only for the final fallback split; it catches client models not matched above.",
+    "Ledger entries are limited to durable ledger events. Use Financial overview for reconciled revenue.": "Ledger entries are limited to durable ledger events. Use Financial overview for reconciled revenue.",
     "Left to Right": "Left to Right",
     "Legacy account restrictions": "Legacy account restrictions",
     "Legacy Format (JSON Object)": "Legacy Format (JSON Object)",

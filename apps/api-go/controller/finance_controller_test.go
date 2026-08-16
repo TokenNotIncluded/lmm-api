@@ -422,7 +422,8 @@ func TestParseFinanceEntryCursorRequiresStablePair(t *testing.T) {
 func TestFinanceEntriesUseStableCursorPages(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.FinanceLedgerEntry{}))
-	for index, occurredAt := range []int64{300, 200, 100} {
+	now := time.Now().Unix()
+	for index, occurredAt := range []int64{now - 30, now - 20, now - 10} {
 		require.NoError(t, db.Create(&model.FinanceLedgerEntry{
 			EntryType: model.FinanceEntryExpense, Category: "test", AmountMicros: int64(index + 1),
 			Currency: model.FinanceCurrencyUSD, Direction: model.FinanceDirectionDebit,
@@ -447,7 +448,7 @@ func TestFinanceEntriesUseStableCursorPages(t *testing.T) {
 	require.NoError(t, json.Unmarshal(firstRecorder.Body.Bytes(), &firstResponse))
 	require.Len(t, firstResponse.Data.Entries, 2)
 	require.True(t, firstResponse.Data.HasMore)
-	require.Equal(t, int64(200), firstResponse.Data.NextBeforeOccurredAt)
+	require.Equal(t, now-20, firstResponse.Data.NextBeforeOccurredAt)
 	require.Equal(t, firstResponse.Data.Entries[1].Id, firstResponse.Data.NextBeforeID)
 
 	secondRecorder := httptest.NewRecorder()
@@ -464,7 +465,51 @@ func TestFinanceEntriesUseStableCursorPages(t *testing.T) {
 	require.NoError(t, json.Unmarshal(secondRecorder.Body.Bytes(), &secondResponse))
 	require.Len(t, secondResponse.Data.Entries, 1)
 	require.False(t, secondResponse.Data.HasMore)
-	require.Equal(t, int64(100), secondResponse.Data.Entries[0].OccurredAt)
+	require.Equal(t, now-30, secondResponse.Data.Entries[0].OccurredAt)
+}
+
+func TestFinanceEntriesFilterLedgerScopeByMethodRangeAndUser(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}, &model.FinanceLedgerEntry{}))
+	users := []model.User{
+		{Username: "finance-entry-a", Password: "password", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "finance-entry-a"},
+		{Username: "finance-entry-b", Password: "password", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "finance-entry-b"},
+	}
+	require.NoError(t, db.Create(&users).Error)
+	now := time.Now().Unix()
+	for _, entry := range []model.FinanceLedgerEntry{
+		{EntryType: model.FinanceEntryRevenue, Category: model.FinanceSourceRefund, AmountMicros: 100, Currency: model.FinanceCurrencyUSD, Direction: model.FinanceDirectionDebit, PaymentMethod: model.PaymentMethodStripe, PaymentProvider: model.PaymentProviderStripe, UserId: &users[0].Id, SourceType: model.FinanceSourceRefund, SourceId: "stripe-refund-a", OccurredAt: now - 20, CreatedAt: now - 20, CreatedBy: 1, IdempotencyKey: "finance-entry-stripe-a"},
+		{EntryType: model.FinanceEntryRevenue, Category: model.FinanceSourceRefund, AmountMicros: 200, Currency: model.FinanceCurrencyUSD, Direction: model.FinanceDirectionDebit, PaymentMethod: model.PaymentMethodStripe, PaymentProvider: model.PaymentProviderStripe, UserId: &users[1].Id, SourceType: model.FinanceSourceRefund, SourceId: "stripe-refund-b", OccurredAt: now - 30, CreatedAt: now - 30, CreatedBy: 1, IdempotencyKey: "finance-entry-stripe-b"},
+		{EntryType: model.FinanceEntryRevenue, Category: model.FinanceSourceRefund, AmountMicros: 300, Currency: model.FinanceCurrencyUSD, Direction: model.FinanceDirectionDebit, PaymentMethod: model.PaymentMethodCreem, PaymentProvider: model.PaymentProviderCreem, UserId: &users[0].Id, SourceType: model.FinanceSourceRefund, SourceId: "creem-refund-a", OccurredAt: now - 40, CreatedAt: now - 40, CreatedBy: 1, IdempotencyKey: "finance-entry-creem-a"},
+		{EntryType: model.FinanceEntryRevenue, Category: model.FinanceSourceRefund, AmountMicros: 400, Currency: model.FinanceCurrencyUSD, Direction: model.FinanceDirectionDebit, PaymentMethod: model.PaymentMethodStripe, PaymentProvider: model.PaymentProviderStripe, UserId: &users[0].Id, SourceType: model.FinanceSourceRefund, SourceId: "stripe-refund-old", OccurredAt: now - 200, CreatedAt: now - 200, CreatedBy: 1, IdempotencyKey: "finance-entry-stripe-old"},
+	} {
+		require.NoError(t, db.Create(&entry).Error)
+	}
+	// A settled TopUp is intentionally not returned by the append-only ledger
+	// endpoint. This prevents the detail UI from implying it contains every
+	// payment receipt before providers write revenue ledger rows consistently.
+	require.NoError(t, db.Create(&model.TopUp{UserId: users[0].Id, TradeNo: "finance-entry-topup", Money: 9, Status: common.TopUpStatusSuccess, PaymentMethod: model.PaymentMethodStripe, PaymentProvider: model.PaymentProviderStripe, CompleteTime: now - 20}).Error)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/finance/entries?start_timestamp=%d&end_timestamp=%d&payment_method=stripe&user_id=%d", now-100, now, users[0].Id), nil)
+	ListFinanceEntries(c)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Scope   string                     `json:"scope"`
+			Range   financeRange               `json:"range"`
+			Entries []model.FinanceLedgerEntry `json:"entries"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+	require.True(t, response.Success)
+	require.Equal(t, "append_only_ledger", response.Data.Scope)
+	require.Equal(t, now-100, response.Data.Range.Start)
+	require.Equal(t, now, response.Data.Range.End)
+	require.Len(t, response.Data.Entries, 1)
+	require.Equal(t, "stripe-refund-a", response.Data.Entries[0].SourceId)
 }
 
 func mustFinanceEntry(t *testing.T, key string) *model.FinanceLedgerEntry {

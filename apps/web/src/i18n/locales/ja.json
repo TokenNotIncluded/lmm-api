@@ -3402,6 +3402,7 @@
     "Leave empty to use username": "ユーザー名を使用するには空のままにしてください",
     "Leave the final split empty as the fallback for models not matched above.": "上のルールに一致しないモデル用のフォールバックとして、最後の分岐を空にします。",
     "Leave this empty only for the final fallback split; it catches client models not matched above.": "空にできるのは最後のフォールバック分岐だけです。上の分岐で一致しないクライアントモデルを受けます。",
+    "Ledger entries are limited to durable ledger events. Use Financial overview for reconciled revenue.": "台帳明細には永続化された台帳イベントのみが含まれます。照合済み収益は財務概要で確認してください。",
     "Left to Right": "左から右",
     "Legacy account restrictions": "従来のアカウント制限",
     "Legacy Format (JSON Object)": "旧形式（JSONオブジェクト）",

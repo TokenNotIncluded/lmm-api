@@ -966,9 +966,34 @@ func financeEntriesHandler(c *gin.Context) {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
 		return
 	}
+	start, end, err := parseFinanceDashboardRange(c)
+	if err != nil {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+	userID := 0
+	if rawUserID := strings.TrimSpace(c.Query("user_id")); rawUserID != "" {
+		userID, err = strconv.Atoi(rawUserID)
+		if err != nil || userID <= 0 {
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid user_id"})
+			return
+		}
+	}
+	method := strings.TrimSpace(c.Query("payment_method"))
+	if len(method) > 64 {
+		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid payment_method"})
+		return
+	}
 	query := model.DB.Order("occurred_at desc, id desc").Limit(limit + 1)
+	query = query.Where("occurred_at >= ? AND occurred_at < ?", start, end)
 	if beforeOccurredAt > 0 {
 		query = query.Where("occurred_at < ? OR (occurred_at = ? AND id < ?)", beforeOccurredAt, beforeOccurredAt, beforeID)
+	}
+	if userID > 0 {
+		query = query.Where("user_id = ?", userID)
+	}
+	if method != "" {
+		query = query.Where("COALESCE(NULLIF(TRIM(payment_method), ''), NULLIF(TRIM(payment_provider), '')) = ?", method)
 	}
 	if value := strings.TrimSpace(c.Query("entry_type")); value != "" {
 		query = query.Where("entry_type = ?", value)
@@ -982,7 +1007,17 @@ func financeEntriesHandler(c *gin.Context) {
 	if hasMore {
 		entries = entries[:limit]
 	}
-	page := gin.H{"entries": entries, "has_more": hasMore}
+	// A payment receipt is not currently appended to this table for every
+	// provider. Keep the boundary explicit: this endpoint is for durable
+	// ledger events such as refunds, manual expenses, and reversals, not a
+	// complete list of settled payments. The overview remains the source for
+	// reconciled revenue totals across TopUp and subscription records.
+	page := gin.H{
+		"scope":    "append_only_ledger",
+		"range":    financeRange{Start: start, End: end},
+		"entries":  entries,
+		"has_more": hasMore,
+	}
 	if hasMore && len(entries) > 0 {
 		last := entries[len(entries)-1]
 		page["next_before_occurred_at"] = last.OccurredAt

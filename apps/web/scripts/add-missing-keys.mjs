@@ -85,6 +85,8 @@ const newKeys = {
       'Write actions need your confirmation',
     'Unable to load data': 'Unable to load data',
     'Append-only ledger': 'Append-only ledger',
+    'Ledger entries are limited to durable ledger events. Use Financial overview for reconciled revenue.':
+      'Ledger entries are limited to durable ledger events. Use Financial overview for reconciled revenue.',
     'Unable to load archive': 'Unable to load archive',
     'View L1 recommendation archive': 'View L1 recommendation archive',
     'L1 recommendation archive': 'L1 recommendation archive',
@@ -192,6 +194,8 @@ const newKeys = {
     'Write actions need your confirmation': '写入操作需要你的确认',
     'Unable to load data': '无法加载数据',
     'Append-only ledger': '仅追加记账',
+    'Ledger entries are limited to durable ledger events. Use Financial overview for reconciled revenue.':
+      '账本明细仅包含已持久化的账本事件。请以财务概览的对账收入为准。',
     'Unable to load archive': '无法加载归档',
     'View L1 recommendation archive': '查看 L1 推荐信归档',
     'L1 recommendation archive': 'L1 推荐信归档',
@@ -295,6 +299,8 @@ const newKeys = {
     'Write actions need your confirmation': '寫入操作需要你的確認',
     'Unable to load data': '無法載入資料',
     'Append-only ledger': '僅追加記帳',
+    'Ledger entries are limited to durable ledger events. Use Financial overview for reconciled revenue.':
+      '帳本明細僅包含已持久化的帳本事件。請以財務概覽的對帳收入為準。',
     'Unable to load archive': '無法載入歸檔',
     'View L1 recommendation archive': '查看 L1 推薦信歸檔',
     'L1 recommendation archive': 'L1 推薦信歸檔',
@@ -398,6 +404,8 @@ const newKeys = {
       'Les actions d’écriture nécessitent votre confirmation',
     'Unable to load data': 'Impossible de charger les données',
     'Append-only ledger': 'Grand livre en ajout uniquement',
+    'Ledger entries are limited to durable ledger events. Use Financial overview for reconciled revenue.':
+      'Les écritures se limitent aux événements durables du grand livre. Utilisez la vue financière pour les revenus rapprochés.',
     'Unable to load archive': 'Impossible de charger les archives',
     'View L1 recommendation archive': 'Voir les archives de recommandations L1',
     'L1 recommendation archive': 'Archives de recommandations L1',
@@ -503,6 +511,8 @@ const newKeys = {
     'Write actions need your confirmation': '書き込み操作には確認が必要です',
     'Unable to load data': 'データを読み込めません',
     'Append-only ledger': '追記専用台帳',
+    'Ledger entries are limited to durable ledger events. Use Financial overview for reconciled revenue.':
+      '台帳明細には永続化された台帳イベントのみが含まれます。照合済み収益は財務概要で確認してください。',
     'Unable to load archive': 'アーカイブを読み込めません',
     'View L1 recommendation archive': 'L1 推薦文アーカイブを表示',
     'L1 recommendation archive': 'L1 推薦文アーカイブ',
@@ -608,6 +618,8 @@ const newKeys = {
       'Для изменений нужно ваше подтверждение',
     'Unable to load data': 'Не удалось загрузить данные',
     'Append-only ledger': 'Журнал только для добавления',
+    'Ledger entries are limited to durable ledger events. Use Financial overview for reconciled revenue.':
+      'Записи ограничены устойчивыми событиями журнала. Для сверенных доходов используйте финансовый обзор.',
     'Unable to load archive': 'Не удалось загрузить архив',
     'View L1 recommendation archive': 'Открыть архив рекомендаций L1',
     'L1 recommendation archive': 'Архив рекомендаций L1',
@@ -713,6 +725,8 @@ const newKeys = {
     'Write actions need your confirmation': 'Thao tác ghi cần bạn xác nhận',
     'Unable to load data': 'Không thể tải dữ liệu',
     'Append-only ledger': 'Sổ cái chỉ được ghi thêm',
+    'Ledger entries are limited to durable ledger events. Use Financial overview for reconciled revenue.':
+      'Các mục chỉ gồm sự kiện sổ cái đã được lưu bền vững. Hãy dùng Tổng quan tài chính cho doanh thu đã đối soát.',
     'Unable to load archive': 'Không thể tải kho lưu trữ',
     'View L1 recommendation archive': 'Xem kho lưu trữ đề xuất L1',
     'L1 recommendation archive': 'Kho lưu trữ đề xuất L1',
