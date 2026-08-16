@@ -12,6 +12,11 @@ import (
 )
 
 const (
+	// Wallet checkout and quote payloads contain only an amount, payment method,
+	// optional discount code, or provider-specific selector. Bound them before
+	// Gin decodes JSON so an authenticated client cannot grow the heap with an
+	// arbitrary request body.
+	topUpMutationRequestMaxBytes        = 16 << 10
 	waffoPancakeMutationRequestMaxBytes = 16 << 10
 	// Subscription preference and checkout requests only contain plan IDs,
 	// payment-method selectors, and redirect-free metadata. Bound the entire
@@ -193,15 +198,15 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.GET("/aff", controller.GetAffCode)
 				selfRoute.GET("/topup/info", controller.GetTopUpInfo)
 				selfRoute.GET("/topup/self", controller.GetUserTopUps)
-				selfRoute.POST("/discount-code/validate", middleware.DisableCache(), controller.ValidateDiscountCode)
-				selfRoute.POST("/topup", middleware.CriticalRateLimit(), controller.TopUp)
-				selfRoute.POST("/pay", middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.RequestEpay)
-				selfRoute.POST("/amount", middleware.PaymentMethodAccessGate(), controller.RequestAmount)
-				selfRoute.POST("/stripe/pay", middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.RequestStripePay)
-				selfRoute.POST("/stripe/amount", middleware.PaymentMethodAccessGate(), controller.RequestStripeAmount)
-				selfRoute.POST("/creem/pay", middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.RequestCreemPay)
-				selfRoute.POST("/waffo/amount", middleware.PaymentMethodAccessGate(), controller.RequestWaffoAmount)
-				selfRoute.POST("/waffo/pay", middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.RequestWaffoPay)
+				selfRoute.POST("/discount-code/validate", middleware.RequestBodyLimit(topUpMutationRequestMaxBytes), middleware.DisableCache(), controller.ValidateDiscountCode)
+				selfRoute.POST("/topup", middleware.RequestBodyLimit(topUpMutationRequestMaxBytes), middleware.CriticalRateLimit(), controller.TopUp)
+				selfRoute.POST("/pay", middleware.RequestBodyLimit(topUpMutationRequestMaxBytes), middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.RequestEpay)
+				selfRoute.POST("/amount", middleware.RequestBodyLimit(topUpMutationRequestMaxBytes), middleware.PaymentMethodAccessGate(), controller.RequestAmount)
+				selfRoute.POST("/stripe/pay", middleware.RequestBodyLimit(topUpMutationRequestMaxBytes), middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.RequestStripePay)
+				selfRoute.POST("/stripe/amount", middleware.RequestBodyLimit(topUpMutationRequestMaxBytes), middleware.PaymentMethodAccessGate(), controller.RequestStripeAmount)
+				selfRoute.POST("/creem/pay", middleware.RequestBodyLimit(topUpMutationRequestMaxBytes), middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.RequestCreemPay)
+				selfRoute.POST("/waffo/amount", middleware.RequestBodyLimit(topUpMutationRequestMaxBytes), middleware.PaymentMethodAccessGate(), controller.RequestWaffoAmount)
+				selfRoute.POST("/waffo/pay", middleware.RequestBodyLimit(topUpMutationRequestMaxBytes), middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.RequestWaffoPay)
 				selfRoute.POST("/waffo-pancake/amount", middleware.RequestBodyLimit(waffoPancakeMutationRequestMaxBytes), middleware.PaymentMethodAccessGate(), controller.RequestWaffoPancakeAmount)
 				selfRoute.POST("/waffo-pancake/pay", middleware.RequestBodyLimit(waffoPancakeMutationRequestMaxBytes), middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.RequestWaffoPancakePay)
 				selfRoute.POST("/aff_transfer", middleware.UserCriticalRateLimit("aff-transfer"), controller.TransferAffQuota)
