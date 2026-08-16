@@ -105,6 +105,7 @@ export function SubscriptionPlansCard({
   const [billingPreference, setBillingPreference] =
     useState('subscription_first')
   const [loading, setLoading] = useState(true)
+  const [plansError, setPlansError] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
 
   const [purchaseOpen, setPurchaseOpen] = useState(false)
@@ -131,9 +132,13 @@ export function SubscriptionPlansCard({
       const res = await getPublicPlans()
       if (res.success) {
         setPlans(res.data || [])
+        setPlansError(false)
+      } else {
+        setPlansError(true)
       }
     } catch {
       setPlans([])
+      setPlansError(true)
     }
   }, [])
 
@@ -164,7 +169,7 @@ export function SubscriptionPlansCard({
   const handleRefresh = async () => {
     setRefreshing(true)
     try {
-      await fetchSelfSubscription()
+      await Promise.all([fetchPlans(), fetchSelfSubscription()])
     } finally {
       setRefreshing(false)
     }
@@ -191,7 +196,7 @@ export function SubscriptionPlansCard({
 
   const hasActive = activeSubscriptions.length > 0
   const hasAny = allSubscriptions.length > 0
-  const isAvailable = loading || plans.length > 0 || hasAny
+  const isAvailable = loading || plansError || plans.length > 0 || hasAny
   const disablePref = !hasActive
   const isSubPref =
     billingPreference === 'subscription_first' ||
@@ -255,7 +260,7 @@ export function SubscriptionPlansCard({
     )
   }
 
-  if (plans.length === 0 && !hasAny) {
+  if (plans.length === 0 && !hasAny && !plansError) {
     return null
   }
 
@@ -524,7 +529,25 @@ export function SubscriptionPlansCard({
         </div>
 
         {/* Available plans grid */}
-        {plans.length > 0 ? (
+        {plansError ? (
+          <div className='flex flex-col items-center gap-3 py-6 text-center'>
+            <p className='text-muted-foreground text-sm'>
+              {t('Failed to load')}
+            </p>
+            <Button
+              type='button'
+              variant='outline'
+              size='sm'
+              onClick={() => void handleRefresh()}
+              disabled={refreshing}
+            >
+              <RefreshCw
+                className={cn('h-3.5 w-3.5', refreshing && 'animate-spin')}
+              />
+              {t('Retry')}
+            </Button>
+          </div>
+        ) : plans.length > 0 ? (
           <div className='grid grid-cols-1 gap-3 2xl:grid-cols-2 2xl:gap-4'>
             {plans.map((p, index) => {
               const plan = p?.plan
