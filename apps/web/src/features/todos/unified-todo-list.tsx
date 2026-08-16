@@ -78,7 +78,10 @@ export function UnifiedTodoList() {
       return
     }
     if (item.category === 'security_review') {
-      await navigate({ to: '/system-settings/security' })
+      await navigate({
+        to: '/system-settings/security/$section',
+        params: { section: 'advanced-security' },
+      })
       return
     }
     if (
