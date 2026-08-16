@@ -143,7 +143,6 @@ func SetApiRouter(router *gin.Engine) {
 			//userRoute.POST("/tokenlog", middleware.CriticalRateLimit(), controller.TokenLog)
 			userRoute.POST("/epay/notify", anonymousRequestBodyLimit, controller.EpayNotify)
 			userRoute.GET("/epay/notify", controller.EpayNotify)
-			userRoute.POST("/fastpay/notify", anonymousRequestBodyLimit, controller.FastPayNotify)
 			userRoute.GET("/groups", controller.GetUserGroups)
 
 			selfRoute := userRoute.Group("/")
@@ -181,7 +180,6 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.POST("/discount-code/validate", middleware.DisableCache(), controller.ValidateDiscountCode)
 				selfRoute.POST("/topup", middleware.CriticalRateLimit(), controller.TopUp)
 				selfRoute.POST("/pay", middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.RequestEpay)
-				selfRoute.POST("/fastpay/pay", middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.RequestFastPay)
 				selfRoute.POST("/amount", middleware.PaymentMethodAccessGate(), controller.RequestAmount)
 				selfRoute.POST("/stripe/pay", middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.RequestStripePay)
 				selfRoute.POST("/stripe/amount", middleware.PaymentMethodAccessGate(), controller.RequestStripeAmount)
@@ -285,7 +283,6 @@ func SetApiRouter(router *gin.Engine) {
 			subscriptionRoute.PUT("/self/preference", controller.UpdateSubscriptionPreference)
 			subscriptionRoute.POST("/balance/pay", middleware.PaymentAccessGate(), middleware.CriticalRateLimit(), controller.SubscriptionRequestBalancePay)
 			subscriptionRoute.POST("/epay/pay", middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.SubscriptionRequestEpay)
-			subscriptionRoute.POST("/fastpay/pay", middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.SubscriptionRequestFastPay)
 			subscriptionRoute.POST("/stripe/pay", middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.SubscriptionRequestStripePay)
 			subscriptionRoute.POST("/creem/pay", middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.SubscriptionRequestCreemPay)
 			subscriptionRoute.POST("/waffo-pancake/pay", middleware.RequestBodyLimit(waffoPancakeMutationRequestMaxBytes), middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.SubscriptionRequestWaffoPancakePay)
@@ -313,7 +310,6 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/subscription/epay/notify", controller.SubscriptionEpayNotify)
 		apiRouter.GET("/subscription/epay/return", controller.SubscriptionEpayReturn)
 		apiRouter.POST("/subscription/epay/return", anonymousRequestBodyLimit, controller.SubscriptionEpayReturn)
-		apiRouter.POST("/subscription/fastpay/notify", anonymousRequestBodyLimit, controller.SubscriptionFastPayNotify)
 		optionRoute := apiRouter.Group("/option")
 		optionRoute.Use(middleware.RootAuth())
 		{

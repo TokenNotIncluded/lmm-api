@@ -487,7 +487,6 @@ const (
 	PaymentProviderWaffo        = "waffo"
 	PaymentProviderWaffoPancake = "waffo_pancake"
 	PaymentProviderBalance      = "balance"
-	PaymentProviderFastPay      = "fastpay"
 )
 
 // LinuxDO Credit is not a fiat payment. The current ePay adapter persists it
@@ -569,11 +568,11 @@ func positiveNormalizedCreditedQuotaSQL() (string, []interface{}) {
 		"WHEN payment_provider IN ? OR payment_method IN ? OR (COALESCE(payment_provider, '') = '' AND payment_method IN ?) THEN amount * ? " +
 		"ELSE 0 END"
 	return expression, []interface{}{
-		[]string{PaymentProviderEpay, PaymentProviderStripe, PaymentProviderCreem, PaymentProviderFastPay, PaymentProviderWaffo, PaymentProviderWaffoPancake},
+		[]string{PaymentProviderEpay, PaymentProviderStripe, PaymentProviderCreem, PaymentProviderWaffo, PaymentProviderWaffoPancake},
 		[]string{PaymentMethodStripe, PaymentMethodCreem, PaymentMethodWaffo, PaymentMethodWaffoPancake, "alipay", "wxpay"},
 		PaymentProviderCreem,
 		PaymentMethodCreem,
-		[]string{PaymentProviderEpay, PaymentProviderStripe, PaymentProviderFastPay, PaymentProviderWaffo, PaymentProviderWaffoPancake},
+		[]string{PaymentProviderEpay, PaymentProviderStripe, PaymentProviderWaffo, PaymentProviderWaffoPancake},
 		[]string{PaymentMethodStripe, PaymentMethodWaffo, PaymentMethodWaffoPancake},
 		[]string{"alipay", "wxpay"},
 		common.QuotaPerUnit,
@@ -631,7 +630,6 @@ func normalizedTopUpCreditedQuota(topUp *TopUp) int64 {
 		return topUp.Amount
 	case topUp.PaymentProvider == PaymentProviderEpay,
 		topUp.PaymentProvider == PaymentProviderStripe,
-		topUp.PaymentProvider == PaymentProviderFastPay,
 		topUp.PaymentProvider == PaymentProviderWaffo,
 		topUp.PaymentProvider == PaymentProviderWaffoPancake,
 		topUp.PaymentMethod == PaymentMethodStripe,
@@ -649,7 +647,7 @@ func knownExternalTopUpSource(topUp *TopUp) bool {
 		return false
 	}
 	switch topUp.PaymentProvider {
-	case PaymentProviderEpay, PaymentProviderStripe, PaymentProviderCreem, PaymentProviderFastPay, PaymentProviderWaffo, PaymentProviderWaffoPancake:
+	case PaymentProviderEpay, PaymentProviderStripe, PaymentProviderCreem, PaymentProviderWaffo, PaymentProviderWaffoPancake:
 		return true
 	}
 	if strings.TrimSpace(topUp.PaymentProvider) != "" {

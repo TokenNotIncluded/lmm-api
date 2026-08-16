@@ -151,23 +151,18 @@ func TestFreshPaidTopUpAggregateNormalizesProviderWriterSemantics(t *testing.T) 
 			expected: 100,
 		},
 		{
-			name:     "fastpay platform amount",
-			topUp:    TopUp{UserId: 103, TradeNo: "fastpay-canonical", Amount: 100, CreditedQuota: int64(common.QuotaPerUnit) * 100, Money: 100, Status: common.TopUpStatusSuccess, PaymentProvider: PaymentProviderFastPay},
-			expected: 100,
-		},
-		{
 			name:     "waffo platform amount",
-			topUp:    TopUp{UserId: 104, TradeNo: "waffo-canonical", Amount: 100, CreditedQuota: int64(common.QuotaPerUnit) * 100, Money: 100, Status: common.TopUpStatusSuccess, PaymentProvider: PaymentProviderWaffo},
+			topUp:    TopUp{UserId: 103, TradeNo: "waffo-canonical", Amount: 100, CreditedQuota: int64(common.QuotaPerUnit) * 100, Money: 100, Status: common.TopUpStatusSuccess, PaymentProvider: PaymentProviderWaffo},
 			expected: 100,
 		},
 		{
 			name:     "waffo pancake platform amount",
-			topUp:    TopUp{UserId: 105, TradeNo: "waffo-pancake-canonical", Amount: 100, CreditedQuota: int64(common.QuotaPerUnit) * 100, Money: 100, Status: common.TopUpStatusSuccess, PaymentProvider: PaymentProviderWaffoPancake},
+			topUp:    TopUp{UserId: 104, TradeNo: "waffo-pancake-canonical", Amount: 100, CreditedQuota: int64(common.QuotaPerUnit) * 100, Money: 100, Status: common.TopUpStatusSuccess, PaymentProvider: PaymentProviderWaffoPancake},
 			expected: 100,
 		},
 		{
 			name:     "creem quota amount",
-			topUp:    TopUp{UserId: 106, TradeNo: "creem-canonical", Amount: int64(common.QuotaPerUnit) * 100, CreditedQuota: int64(common.QuotaPerUnit) * 100, Money: 100, Status: common.TopUpStatusSuccess, PaymentProvider: PaymentProviderCreem},
+			topUp:    TopUp{UserId: 105, TradeNo: "creem-canonical", Amount: int64(common.QuotaPerUnit) * 100, CreditedQuota: int64(common.QuotaPerUnit) * 100, Money: 100, Status: common.TopUpStatusSuccess, PaymentProvider: PaymentProviderCreem},
 			expected: 100,
 		},
 	}

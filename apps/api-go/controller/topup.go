@@ -334,7 +334,7 @@ func paymentGatewayAvailabilityForUser(user *model.User, complianceConfirmed boo
 		case model.PaymentMethodStripe, model.PaymentMethodCreem, model.PaymentMethodWaffo, model.PaymentMethodWaffoPancake:
 			continue
 		}
-		if isEpayTopUpEnabled() || (isFastPayTopUpEnabled() && isSupportedFastPayMethod(paymentType)) {
+		if isEpayTopUpEnabled() {
 			availability.Online = true
 			break
 		}
@@ -417,6 +417,61 @@ func GetEpayClient() *epay.Client {
 var positiveDecimalPattern = regexp.MustCompile(`^[0-9]+(?:\.[0-9]+)?$`)
 var nonNegativeDecimalPattern = regexp.MustCompile(`^[0-9]+(?:\.[0-9]+)?$`)
 var settlementUnitPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,16}$`)
+
+func parsePayRequest(c *gin.Context, amount *float64, paymentMethod, discountCode *string) error {
+	if value, exists := c.Get("parsed_amount"); exists {
+		if parsed, ok := value.(float64); ok && parsed > 0 {
+			*amount = parsed
+		}
+	}
+	if value, exists := c.Get("parsed_payment_method"); exists {
+		if parsed, ok := value.(string); ok && parsed != "" {
+			*paymentMethod = parsed
+		}
+	}
+	if value, exists := c.Get("parsed_discount_code"); exists {
+		if parsed, ok := value.(string); ok {
+			*discountCode = parsed
+		}
+	}
+	if *amount > 0 && *paymentMethod != "" {
+		return nil
+	}
+
+	var request struct {
+		Amount        float64 `json:"amount" form:"amount"`
+		PaymentMethod string  `json:"payment_method" form:"payment_method"`
+		DiscountCode  string  `json:"discount_code" form:"discount_code"`
+	}
+	_ = c.ShouldBind(&request)
+	if *amount <= 0 && request.Amount > 0 {
+		*amount = request.Amount
+	}
+	if *paymentMethod == "" && request.PaymentMethod != "" {
+		*paymentMethod = request.PaymentMethod
+	}
+	if *discountCode == "" && request.DiscountCode != "" {
+		*discountCode = request.DiscountCode
+	}
+	if *amount <= 0 {
+		if raw := c.PostForm("amount"); raw != "" {
+			*amount, _ = strconv.ParseFloat(raw, 64)
+		} else if raw := c.Query("amount"); raw != "" {
+			*amount, _ = strconv.ParseFloat(raw, 64)
+		}
+	}
+	if *paymentMethod == "" {
+		if value := c.PostForm("payment_method"); value != "" {
+			*paymentMethod = value
+		} else if value := c.Query("payment_method"); value != "" {
+			*paymentMethod = value
+		}
+	}
+	if *amount <= 0 {
+		return fmt.Errorf("amount is required and must be > 0")
+	}
+	return nil
+}
 
 func getPayMethod(paymentMethod string) (map[string]string, error) {
 	enabled, err := configuredPaymentMethodEnabled(paymentMethod)
@@ -559,15 +614,6 @@ func RequestEpay(c *gin.Context) {
 		return
 	}
 
-	if fastPayMethod, useFastPay := resolveFastPayMethod(req.PaymentMethod); useFastPay {
-		// FAST methods are deliberately outside PayMethods. Preserve the legacy
-		// dispatch and its global-Price quote before ePay method validation.
-		c.Set("parsed_amount", req.Amount)
-		c.Set("parsed_payment_method", fastPayMethod)
-		c.Set("parsed_discount_code", req.DiscountCode)
-		RequestFastPay(c)
-		return
-	}
 	if !requirePaymentMethodAvailable(c, req.PaymentMethod) {
 		return
 	}

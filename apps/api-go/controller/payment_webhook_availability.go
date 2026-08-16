@@ -148,21 +148,3 @@ func isEpayWebhookConfigured() bool {
 func isEpayWebhookEnabled() bool {
 	return isEpayTopUpEnabled()
 }
-
-func isFastPayTopUpEnabled() bool {
-	if !isPaymentComplianceConfirmed() {
-		return false
-	}
-	return isFastPayWebhookConfigured()
-}
-
-func isFastPayWebhookConfigured() bool {
-	return strings.TrimSpace(setting.FastPayAddress) != "" &&
-		strings.TrimSpace(setting.FastPayMerchantNo) != "" &&
-		strings.TrimSpace(setting.FastPayShopNo) != "" &&
-		strings.TrimSpace(setting.FastPayApiSecret) != ""
-}
-
-func isFastPayWebhookEnabled() bool {
-	return isFastPayTopUpEnabled()
-}

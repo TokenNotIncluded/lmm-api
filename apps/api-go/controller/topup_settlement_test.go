@@ -86,12 +86,6 @@ func TestMonetaryMicrosConversionsAreExact(t *testing.T) {
 	assert.EqualValues(t, 1_234_000_000, micros)
 }
 
-func TestFastPaySettlementUsesSignedPayAmount(t *testing.T) {
-	micros, err := fastPaySettlementMicros(FastPayNotifyPayload{Amount: "99.00", PayAmount: "12.34"})
-	require.NoError(t, err)
-	assert.EqualValues(t, 12_340_000, micros)
-}
-
 func TestStripeQuoteAndCheckoutLineItemUseSameCanonicalAmount(t *testing.T) {
 	previousDisplayType := operation_setting.GetGeneralSetting().QuotaDisplayType
 	previousQuotaPerUnit := common.QuotaPerUnit

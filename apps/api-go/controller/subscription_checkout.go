@@ -50,10 +50,10 @@ func subscriptionPaymentMethods(user *model.User, plan *model.SubscriptionPlan, 
 		strings.TrimSpace(plan.WaffoPancakeProductId) != "" &&
 			strings.TrimSpace(merchantID) != "" && strings.TrimSpace(privateKey) != "")
 
-	// Generic ePay/FAST methods are selected by their configured type. They do
+	// Generic ePay methods are selected by their configured type. They do
 	// not need a product ID on the plan because the plan amount is sent as the
 	// checkout amount.
-	genericGatewayAvailable := isEpayTopUpEnabled() || isFastPayTopUpEnabled()
+	genericGatewayAvailable := isEpayTopUpEnabled()
 	if genericGatewayAvailable {
 		seen := make(map[string]struct{}, len(methods))
 		for _, method := range methods {
@@ -67,7 +67,7 @@ func subscriptionPaymentMethods(user *model.User, plan *model.SubscriptionPlan, 
 				continue
 			}
 			if _, ok := seen[method]; ok ||
-				(!isEpayTopUpEnabled() && !isSupportedFastPayMethod(method)) ||
+				!isEpayTopUpEnabled() ||
 				!isPaymentMethodAvailableForUser(user, method, now) {
 				continue
 			}

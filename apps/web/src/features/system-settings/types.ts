@@ -426,10 +426,6 @@ export type BillingSettings = {
   PayAddress: string
   EpayId: string
   EpayKey: string
-  FastPayAddress: string
-  FastPayMerchantNo: string
-  FastPayShopNo: string
-  FastPayApiSecret: string
   Price: number
   MinTopUp: number
   CustomCallbackAddress: string

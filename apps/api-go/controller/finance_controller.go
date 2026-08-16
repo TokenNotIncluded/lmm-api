@@ -347,7 +347,7 @@ func loadFinancePaymentMethods() ([]model.FinancePaymentMethod, map[string]model
 		seen[config.Method] = true
 		byMethod[config.Method] = config
 	}
-	known := []string{model.PaymentProviderStripe, model.PaymentProviderCreem, model.PaymentProviderEpay, model.PaymentProviderFastPay, model.PaymentProviderWaffo, model.PaymentProviderWaffoPancake}
+	known := []string{model.PaymentProviderStripe, model.PaymentProviderCreem, model.PaymentProviderEpay, model.PaymentProviderWaffo, model.PaymentProviderWaffoPancake}
 	knownSet := make(map[string]struct{}, len(known))
 	for _, method := range known {
 		knownSet[method] = struct{}{}

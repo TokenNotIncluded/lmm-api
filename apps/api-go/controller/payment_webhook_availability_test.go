@@ -8,6 +8,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func preservePaymentGatewaySettings(t *testing.T) {
+	t.Helper()
+	originalPayAddress := operation_setting.PayAddress
+	originalEpayID := operation_setting.EpayId
+	originalEpayKey := operation_setting.EpayKey
+	originalPayMethods := operation_setting.PayMethods
+	t.Cleanup(func() {
+		operation_setting.PayAddress = originalPayAddress
+		operation_setting.EpayId = originalEpayID
+		operation_setting.EpayKey = originalEpayKey
+		operation_setting.PayMethods = originalPayMethods
+	})
+}
+
 func confirmPaymentComplianceForTest(t *testing.T) {
 	t.Helper()
 	paymentSetting := operation_setting.GetPaymentSetting()
@@ -184,27 +198,4 @@ func TestEpayWebhookEnabledRequiresTopUpAndWebhookConfig(t *testing.T) {
 
 	operation_setting.PayMethods = nil
 	require.False(t, isEpayWebhookEnabled())
-}
-
-func TestFastPayWebhookEnabledRequiresShopNo(t *testing.T) {
-	confirmPaymentComplianceForTest(t)
-	originalAddress := setting.FastPayAddress
-	originalMerchantNo := setting.FastPayMerchantNo
-	originalShopNo := setting.FastPayShopNo
-	originalAPISecret := setting.FastPayApiSecret
-	t.Cleanup(func() {
-		setting.FastPayAddress = originalAddress
-		setting.FastPayMerchantNo = originalMerchantNo
-		setting.FastPayShopNo = originalShopNo
-		setting.FastPayApiSecret = originalAPISecret
-	})
-
-	setting.FastPayAddress = "https://fastpay.example.com/fastpay-server"
-	setting.FastPayMerchantNo = "M123"
-	setting.FastPayShopNo = ""
-	setting.FastPayApiSecret = "fastpay_secret"
-	require.False(t, isFastPayWebhookEnabled())
-
-	setting.FastPayShopNo = "S123"
-	require.True(t, isFastPayWebhookEnabled())
 }

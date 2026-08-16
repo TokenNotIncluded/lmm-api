@@ -360,8 +360,6 @@ func publicSubscriptionCallbackRoute(method string, path string) bool {
 	switch path {
 	case "/api/subscription/epay/notify", "/api/subscription/epay/return":
 		return method == http.MethodGet || method == http.MethodPost
-	case "/api/subscription/fastpay/notify":
-		return method == http.MethodPost
 	default:
 		return false
 	}

@@ -33,7 +33,6 @@ func TestPreActivationRouteMatrixKeepsChallengesReadOnly(t *testing.T) {
 		{http.MethodPost, "/api/subscription/epay/notify"},
 		{http.MethodGet, "/api/subscription/epay/return"},
 		{http.MethodPost, "/api/subscription/epay/return"},
-		{http.MethodPost, "/api/subscription/fastpay/notify"},
 	}
 	for _, request := range allowed {
 		assert.True(t, preActivationRouteAllowed(request.method, request.path), "%s %s", request.method, request.path)
@@ -64,7 +63,6 @@ func TestPreActivationRouteMatrixKeepsChallengesReadOnly(t *testing.T) {
 		{http.MethodGet, "/api/pricing"},
 		{http.MethodGet, "/api/subscription/plans"},
 		{http.MethodPost, "/api/subscription/balance/pay"},
-		{http.MethodGet, "/api/subscription/fastpay/notify"},
 		{http.MethodGet, "/api/usage"},
 		{http.MethodPost, "/api/subscription/admin/plans"},
 		{http.MethodGet, "/api/open-source-bounties-probe"},
@@ -166,7 +164,6 @@ func TestConsoleAccessGateKeepsPublicAccountAndBountyRoutesReachable(t *testing.
 		{http.MethodPost, "/api/subscription/epay/notify"},
 		{http.MethodGet, "/api/subscription/epay/return"},
 		{http.MethodPost, "/api/subscription/epay/return"},
-		{http.MethodPost, "/api/subscription/fastpay/notify"},
 		{http.MethodGet, "/api/user/self/onboarding/todo"},
 	} {
 		router := gin.New()
