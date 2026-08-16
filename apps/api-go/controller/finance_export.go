@@ -212,7 +212,9 @@ type financeExportBundle struct {
 	Users                    []financeUserExport
 	UserStream               func(io.Writer) error
 	Channels                 []financeChannelExport
+	ChannelsStream           func(io.Writer) error
 	Plans                    []financePlanExport
+	PlansStream              func(io.Writer) error
 	TopUps                   []financeTopUpExport
 	TopUpsStream             func(io.Writer) error
 	SubscriptionOrders       []financeSubscriptionOrderExport
@@ -385,18 +387,40 @@ func loadFinanceExportBundle(start, end int64) (financeExportBundle, error) {
 	bundle.UserStream = func(writer io.Writer) error {
 		return streamFinanceUsersJSON(writer, bundle.Options)
 	}
-	if err := model.DB.Model(&model.Channel{}).
-		Select("id", "type", "status", "name", "weight", "created_time", "test_time", "response_time", "base_url", "balance", "balance_updated_time", "models", "model_mapping", "group", "used_quota", "priority", "auto_ban", "tag").
-		Order("id ASC").Find(&bundle.Channels).Error; err != nil {
+	channelsBase := func() *gorm.DB {
+		return model.DB.Model(&model.Channel{})
+	}
+	channelsQuery := func() *gorm.DB {
+		return channelsBase().
+			Select("id", "type", "status", "name", "weight", "created_time", "test_time", "response_time", "base_url", "balance", "balance_updated_time", "models", "model_mapping", "group", "used_quota", "priority", "auto_ban", "tag").
+			Order("id ASC").Limit(financeExportMaxRows)
+	}
+	channelCount, channelTruncated, err := countFinanceExportRows(channelsBase())
+	if err != nil {
 		return bundle, err
 	}
-	for index := range bundle.Channels {
-		bundle.Channels[index].BaseURL = sanitizeFinanceBaseURL(bundle.Channels[index].BaseURL)
+	bundle.Manifest.Rows["channels"] = channelCount
+	bundle.Manifest.Truncated["channels"] = channelTruncated
+	bundle.ChannelsStream = func(writer io.Writer) error {
+		return streamFinanceChannelsJSON(writer, channelsQuery())
 	}
-	if err := model.DB.Model(&model.SubscriptionPlan{}).
-		Select("id", "title", "subtitle", "price_amount", "currency", "duration_unit", "duration_value", "custom_seconds", "enabled", "sort_order", "allow_balance_pay", "allow_wallet_overflow", "max_purchase_per_user", "upgrade_group", "downgrade_group", "total_amount", "quota_reset_period", "quota_reset_custom_seconds", "created_at", "updated_at").
-		Order("sort_order ASC, id ASC").Find(&bundle.Plans).Error; err != nil {
+
+	plansBase := func() *gorm.DB {
+		return model.DB.Model(&model.SubscriptionPlan{})
+	}
+	plansQuery := func() *gorm.DB {
+		return plansBase().
+			Select("id", "title", "subtitle", "price_amount", "currency", "duration_unit", "duration_value", "custom_seconds", "enabled", "sort_order", "allow_balance_pay", "allow_wallet_overflow", "max_purchase_per_user", "upgrade_group", "downgrade_group", "total_amount", "quota_reset_period", "quota_reset_custom_seconds", "created_at", "updated_at").
+			Order("sort_order ASC, id ASC").Limit(financeExportMaxRows)
+	}
+	planCount, planTruncated, err := countFinanceExportRows(plansBase())
+	if err != nil {
 		return bundle, err
+	}
+	bundle.Manifest.Rows["plans"] = planCount
+	bundle.Manifest.Truncated["plans"] = planTruncated
+	bundle.PlansStream = func(writer io.Writer) error {
+		return streamFinanceQueryJSON[financePlanExport](writer, plansQuery())
 	}
 	topUpsBase := func() *gorm.DB {
 		return model.DB.Model(&model.TopUp{}).
@@ -538,8 +562,6 @@ func loadFinanceExportBundle(start, end int64) (financeExportBundle, error) {
 	bundle.Manifest.Rows["options"] = len(bundle.Options)
 	bundle.Manifest.Rows["effective_model_pricing"] = len(bundle.EffectivePricing)
 	bundle.Manifest.Rows["users"] = int(userCount)
-	bundle.Manifest.Rows["channels"] = len(bundle.Channels)
-	bundle.Manifest.Rows["plans"] = len(bundle.Plans)
 	bundle.Manifest.Truncated["users"] = false
 	return bundle, nil
 }
@@ -634,6 +656,42 @@ func streamFinanceUsersJSON(writer io.Writer, options map[string]string) error {
 	return err
 }
 
+// streamFinanceChannelsJSON keeps channel credentials out of the heap while
+// preserving the same URL redaction used by the former slice export.
+func streamFinanceChannelsJSON(writer io.Writer, query *gorm.DB) error {
+	if _, err := io.WriteString(writer, "["); err != nil {
+		return err
+	}
+	rows, err := query.Rows()
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	encoder := json.NewEncoder(writer)
+	wroteRow := false
+	for rows.Next() {
+		var value financeChannelExport
+		if err := query.ScanRows(rows, &value); err != nil {
+			return err
+		}
+		value.BaseURL = sanitizeFinanceBaseURL(value.BaseURL)
+		if wroteRow {
+			if _, err := io.WriteString(writer, ","); err != nil {
+				return err
+			}
+		}
+		if err := encoder.Encode(value); err != nil {
+			return err
+		}
+		wroteRow = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = io.WriteString(writer, "]\n")
+	return err
+}
+
 type financeDocument struct {
 	Name  string
 	Value any
@@ -659,8 +717,8 @@ func financeDocuments(bundle financeExportBundle) []financeDocument {
 		}},
 		{Name: "effective-model-pricing.json", Value: bundle.EffectivePricing},
 		{Name: "users-balances.json", Value: bundle.Users, Write: bundle.UserStream},
-		{Name: "channels-pricing.json", Value: bundle.Channels},
-		{Name: "subscription-plans.json", Value: bundle.Plans},
+		{Name: "channels-pricing.json", Value: bundle.Channels, Write: bundle.ChannelsStream},
+		{Name: "subscription-plans.json", Value: bundle.Plans, Write: bundle.PlansStream},
 		{Name: "topups.json", Value: bundle.TopUps, Write: bundle.TopUpsStream},
 		{Name: "subscription-orders.json", Value: bundle.SubscriptionOrders, Write: bundle.SubscriptionOrdersStream},
 		{Name: "usage-billing-records.json", Value: bundle.Usage, Write: bundle.UsageStream},

@@ -190,6 +190,20 @@ func TestStreamFinanceQueryJSONReadsRowsIncrementally(t *testing.T) {
 	require.Equal(t, []financeExportStreamTestRow{{ID: 1, Value: "first"}, {ID: 2, Value: "second"}}, rows)
 }
 
+func TestStreamFinanceChannelsJSONRedactsURLs(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.Exec("CREATE TABLE finance_export_channels (id INTEGER PRIMARY KEY, name TEXT, base_url TEXT)").Error)
+	require.NoError(t, db.Exec("INSERT INTO finance_export_channels (id, name, base_url) VALUES (1, 'primary', 'https://user:secret@example.com/v1?token=hidden')").Error)
+
+	var output bytes.Buffer
+	query := db.Table("finance_export_channels").Select("id", "name", "base_url").Order("id ASC")
+	require.NoError(t, streamFinanceChannelsJSON(&output, query))
+	require.Contains(t, output.String(), `"base_url":"https://example.com"`)
+	require.NotContains(t, output.String(), "secret")
+	require.NotContains(t, output.String(), "token=hidden")
+}
+
 func TestCountFinanceExportRowsReportsTheExportCapSeparately(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
