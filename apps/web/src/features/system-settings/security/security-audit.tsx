@@ -7,6 +7,7 @@ the Free Software Foundation, either version 3 of the License, or
 (at your option) any later version.
 */
 import { useQuery } from '@tanstack/react-query'
+import { Link } from '@tanstack/react-router'
 import { ChevronLeft, ChevronRight, Filter, ShieldCheck } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -39,6 +40,10 @@ import type {
   SecurityAuditEvent,
   SecurityAuditFilters,
 } from './security-audit-types'
+import {
+  securityAuditTotalPages,
+  securityAuditUserFilter,
+} from './security-audit-utils'
 
 const PAGE_SIZE = 20
 const ALL = '__all__'
@@ -537,6 +542,7 @@ function FilterSelect({
 
 function AuditRow({ event }: { event: SecurityAuditEvent }) {
   const { t } = useTranslation()
+  const userFilter = securityAuditUserFilter(event)
   const isAiReview =
     event.source === 'ai_review' || event.source === 'assistant_review'
   const title =
@@ -565,6 +571,29 @@ function AuditRow({ event }: { event: SecurityAuditEvent }) {
           <p className='text-muted-foreground mt-1 line-clamp-2 text-xs leading-5'>
             {event.explanation}
           </p>
+        ) : null}
+        {userFilter ? (
+          <Link
+            to='/users'
+            search={{
+              page: 1,
+              pageSize: undefined,
+              filter: userFilter,
+              status: [],
+              role: [],
+              group: '',
+              l0Only: false,
+            }}
+            className='text-muted-foreground hover:text-foreground mt-1 inline-flex max-w-full truncate text-xs underline-offset-4 hover:underline'
+            title={t('View user in user management')}
+          >
+            {event.username?.trim()
+              ? `@${event.username.trim()}`
+              : `#${event.user_id}`}
+            {event.username?.trim() && event.user_id
+              ? ` · #${event.user_id}`
+              : ''}
+          </Link>
         ) : null}
       </div>
       <div className='min-w-0'>
@@ -730,13 +759,12 @@ export function SecurityAuditPanel() {
     )
   }, [aiPageData?.items, pageData?.items])
   const totalItems = (pageData?.total ?? 0) + (aiPageData?.total ?? 0)
-  const activeStreams =
-    (!filters.source || filters.source !== 'ai_review' ? 1 : 0) +
-    (!filters.source || filters.source === 'ai_review' ? 1 : 0)
-  const totalPages = Math.max(
-    1,
-    Math.ceil(totalItems / (PAGE_SIZE * Math.max(1, activeStreams)))
-  )
+  const totalPages = securityAuditTotalPages({
+    source: filters.source,
+    deterministicTotal: pageData?.total ?? 0,
+    aiReviewTotal: aiPageData?.total ?? 0,
+    pageSize: PAGE_SIZE,
+  })
   const setFilter = (key: keyof AuditFilterState, value: string) => {
     setPage(1)
     setFilters((previous) => ({
