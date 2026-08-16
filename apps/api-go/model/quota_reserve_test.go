@@ -34,3 +34,28 @@ func TestQuotaReserveFallsBackToConditionalDatabaseBalance(t *testing.T) {
 	require.NoError(t, DB.First(&stored, user.Id).Error)
 	require.Equal(t, 40, stored.Quota)
 }
+
+func TestPersistUserQuotaDeltaBypassesBatchBufferForReservations(t *testing.T) {
+	truncateTables(t)
+	previousBatchUpdateEnabled := common.BatchUpdateEnabled
+	common.BatchUpdateEnabled = true
+	t.Cleanup(func() { common.BatchUpdateEnabled = previousBatchUpdateEnabled })
+
+	user := User{
+		Username: "quota-reservation-durable",
+		Password: "password",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+		Quota:    100,
+	}
+	require.NoError(t, DB.Create(&user).Error)
+
+	// Redis-backed TryReserveUserQuota reaches this helper after the cache
+	// reservation succeeds. It must not leave the matching database debit in
+	// the process-local batch buffer.
+	require.NoError(t, persistUserQuotaDelta(user.Id, -60))
+
+	var stored User
+	require.NoError(t, DB.First(&stored, user.Id).Error)
+	require.Equal(t, 40, stored.Quota)
+}

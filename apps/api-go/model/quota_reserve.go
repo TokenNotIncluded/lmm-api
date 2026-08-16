@@ -112,10 +112,10 @@ func cacheApplyTokenQuotaDelta(id int, key string, delta int64) (cacheQuotaResul
 }
 
 func persistUserQuotaDelta(id int, delta int) error {
-	if common.BatchUpdateEnabled {
-		addNewRecord(BatchUpdateTypeUserQuota, id, delta)
-		return nil
-	}
+	// A successful reservation authorizes work immediately.  Unlike usage
+	// counters, it must survive a process restart before the batch updater
+	// runs; otherwise Redis can retain the reservation while the database loses
+	// its matching debit (and a later refund can no longer be reconciled).
 	result := DB.Model(&User{}).Where("id = ?", id).Update("quota", gorm.Expr("quota + ?", delta))
 	if result.Error != nil {
 		return result.Error
