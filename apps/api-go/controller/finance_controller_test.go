@@ -379,6 +379,32 @@ func TestFinanceOverviewSubtractsCreditDirectionExpenseReversal(t *testing.T) {
 	require.Equal(t, int64(0), view.Users[0].ExpenseMicros)
 }
 
+func TestFinanceOverviewIncludesLegacyLowercaseUSDLedgerRows(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.TopUp{}, &model.SubscriptionOrder{}, &model.Log{}, &model.FinanceLedgerEntry{}, &model.FinancePaymentMethod{}))
+	now := time.Now().Unix()
+	// Direct imports and old versions could persist currency without the
+	// append-path normalizer. A lowercase USD row is still a USD financial
+	// event and must remain visible in the administrator dashboard.
+	require.NoError(t, db.Create(&model.FinanceLedgerEntry{
+		EntryType:      model.FinanceEntryExpense,
+		Category:       "legacy-hosting",
+		AmountMicros:   1_250_000,
+		Currency:       "usd",
+		Direction:      model.FinanceDirectionDebit,
+		SourceType:     model.FinanceSourceManual,
+		OccurredAt:     now - 1,
+		CreatedAt:      now - 1,
+		CreatedBy:      1,
+		IdempotencyKey: "finance-legacy-lowercase-usd",
+	}).Error)
+
+	view, err := buildFinanceOverview(now-10, now+1, 0, "")
+	require.NoError(t, err)
+	require.Equal(t, int64(1_250_000), view.ExpenseMicros)
+	require.Equal(t, int64(-1_250_000), view.ProfitMicros)
+}
+
 func TestFinanceHandlersRequireAdminRouteContractAndReturnUserDetail(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}, &model.SubscriptionOrder{}, &model.Log{}, &model.FinanceLedgerEntry{}, &model.FinancePaymentMethod{}))

@@ -114,3 +114,19 @@ func TestAdvancedSecuritySettingsRejectOversizedPolicyBeforeAuthentication(t *te
 
 	require.Equal(t, http.StatusRequestEntityTooLarge, response.Code)
 }
+
+func TestCompactOAuthRoutesRejectOversizedJSONBeforeAuthentication(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	SetApiRouter(engine)
+	body := `{"provider":"` + strings.Repeat("x", compactOAuthRequestMaxBytes) + `"}`
+
+	for _, path := range []string{"/api/oauth/state", "/api/oauth/wechat/bind", "/api/oauth/telegram/bind/start"} {
+		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		response := httptest.NewRecorder()
+
+		engine.ServeHTTP(response, request)
+
+		require.Equalf(t, http.StatusRequestEntityTooLarge, response.Code, "path=%s", path)
+	}
+}

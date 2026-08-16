@@ -59,6 +59,7 @@ import {
   isPaymentMethodCurrencySupported,
   dispatchSelectedPayment,
 } from './lib'
+import { discountAfterAmountChange } from './lib/discount-state'
 import type {
   UserWalletData,
   PaymentMethod,
@@ -242,21 +243,39 @@ export function Wallet(props: WalletProps) {
 
   // Handle preset selection
   const handleSelectPreset = (preset: PresetAmount) => {
+    const nextDiscount = discountAfterAmountChange(
+      { code: appliedDiscountCode, percent: discountPercent },
+      topupAmount,
+      preset.value
+    )
     setTopupAmount(preset.value)
     setSelectedPreset(preset.value)
+    if (nextDiscount.code !== appliedDiscountCode) {
+      setAppliedDiscountCode(nextDiscount.code)
+      setDiscountPercent(nextDiscount.percent)
+    }
     const paymentType = getCurrentPaymentType()
     if (paymentType) {
-      calculatePaymentAmount(preset.value, paymentType, appliedDiscountCode)
+      calculatePaymentAmount(preset.value, paymentType, nextDiscount.code)
     }
   }
 
   // Handle topup amount change
   const handleTopupAmountChange = (amount: number) => {
+    const nextDiscount = discountAfterAmountChange(
+      { code: appliedDiscountCode, percent: discountPercent },
+      topupAmount,
+      amount
+    )
     setTopupAmount(amount)
     setSelectedPreset(null)
+    if (nextDiscount.code !== appliedDiscountCode) {
+      setAppliedDiscountCode(nextDiscount.code)
+      setDiscountPercent(nextDiscount.percent)
+    }
     const paymentType = getCurrentPaymentType()
     if (paymentType) {
-      calculatePaymentAmount(amount, paymentType, appliedDiscountCode)
+      calculatePaymentAmount(amount, paymentType, nextDiscount.code)
     }
   }
 

@@ -780,7 +780,11 @@ func buildFinanceOverview(start, end int64, userFilter int, methodFilter string)
 	}); err != nil {
 		return financeOverview{}, err
 	}
-	tx = model.DB.Where("occurred_at >= ? AND occurred_at < ? AND currency = ?", start, end, model.FinanceCurrencyUSD)
+	// Older/manual ledger rows may have bypassed normalizeFinanceEntry and
+	// persisted the otherwise equivalent lowercase spelling (for example,
+	// "usd"). The dashboard is explicitly a USD view, so compare the stored
+	// value canonically instead of silently dropping those financial events.
+	tx = model.DB.Where("occurred_at >= ? AND occurred_at < ? AND UPPER(TRIM(currency)) = ?", start, end, model.FinanceCurrencyUSD)
 	if userFilter > 0 {
 		tx = tx.Where("user_id = ?", userFilter)
 	}

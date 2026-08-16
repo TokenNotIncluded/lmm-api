@@ -29,6 +29,10 @@ const (
 	// optional model/IP limits, or at most 100 IDs).  Keep these key-management
 	// endpoints from handing an unbounded JSON stream to encoding/json.
 	tokenMutationRequestMaxBytes = 16 << 10
+	// OAuth state and legacy provider binding payloads contain only short
+	// provider/intent/affiliate or verification-code fields. Keep these compact
+	// mutations below the much larger anonymous request ceiling.
+	compactOAuthRequestMaxBytes = 16 << 10
 	// Raw configuration imports are intentionally larger than ordinary option
 	// writes, but remain bounded before decoding to keep the root-only editor
 	// from becoming an unbounded heap allocation.
@@ -121,16 +125,16 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/reset_password", middleware.CriticalRateLimit(), middleware.TurnstileCheck(), controller.SendPasswordResetEmail)
 		apiRouter.POST("/user/reset", middleware.CriticalRateLimit(), anonymousRequestBodyLimit, controller.ResetPassword)
 		// OAuth routes - specific routes must come before :provider wildcard
-		apiRouter.POST("/oauth/state", middleware.CriticalRateLimit(), middleware.DisableCache(), middleware.TryUserAuth(), anonymousRequestBodyLimit, controller.GenerateOAuthCode)
+		apiRouter.POST("/oauth/state", middleware.RequestBodyLimit(compactOAuthRequestMaxBytes), middleware.CriticalRateLimit(), middleware.DisableCache(), middleware.TryUserAuth(), controller.GenerateOAuthCode)
 		// Email/code binding is a compact JSON mutation. Bound it before auth so
 		// an authenticated caller cannot make encoding/json grow the heap with an
 		// arbitrarily long string field.
 		apiRouter.POST("/oauth/email/bind", middleware.RequestBodyLimit(userSelfMutationRequestMaxBytes), middleware.UserAuth(), middleware.CriticalRateLimit(), controller.EmailBind)
 		// Non-standard OAuth (WeChat, Telegram) - keep original routes
 		apiRouter.GET("/oauth/wechat", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.WeChatAuth)
-		apiRouter.POST("/oauth/wechat/bind", middleware.UserAuth(), middleware.CriticalRateLimit(), controller.WeChatBind)
+		apiRouter.POST("/oauth/wechat/bind", middleware.RequestBodyLimit(compactOAuthRequestMaxBytes), middleware.UserAuth(), middleware.CriticalRateLimit(), controller.WeChatBind)
 		apiRouter.GET("/oauth/telegram/login", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.TelegramLogin)
-		apiRouter.POST("/oauth/telegram/bind/start", middleware.UserAuth(), middleware.CriticalRateLimit(), middleware.DisableCache(), controller.TelegramBindStart)
+		apiRouter.POST("/oauth/telegram/bind/start", middleware.RequestBodyLimit(compactOAuthRequestMaxBytes), middleware.UserAuth(), middleware.CriticalRateLimit(), middleware.DisableCache(), controller.TelegramBindStart)
 		apiRouter.GET("/oauth/telegram/bind/:flow_token", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.TelegramBind)
 		// Standard OAuth providers (GitHub, Discord, OIDC, LinuxDO) - unified route
 		apiRouter.GET("/oauth/:provider", middleware.CriticalRateLimit(), middleware.DisableCache(), middleware.TryUserAuth(), controller.HandleOAuth)
