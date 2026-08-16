@@ -61,7 +61,10 @@ import {
   type FinancePaymentMethod,
   type FinanceUserMetric,
 } from './api'
-import { financeLedgerUserFilter } from './ledger-user-filter'
+import {
+  financeLedgerUserFilter,
+  financeLedgerUserSearch,
+} from './ledger-user-filter'
 import {
   paymentMethodSummary,
   type PaymentMethodSummary,
@@ -449,6 +452,7 @@ function LedgerEntriesDialog({
 function LedgerEntryRow({ entry }: { entry: FinanceLedgerEntry }) {
   const { t } = useTranslation()
   const isCredit = entry.direction > 0
+  const userSearch = financeLedgerUserSearch(entry.user_id)
   return (
     <div className='flex items-start justify-between gap-4 border-b py-4 last:border-b-0'>
       <div className='min-w-0'>
@@ -457,7 +461,18 @@ function LedgerEntryRow({ entry }: { entry: FinanceLedgerEntry }) {
         </p>
         <p className='text-muted-foreground mt-1 truncate text-xs'>
           {entry.payment_method || entry.payment_provider || '—'} ·{' '}
-          {entry.user_id ? `${t('User ID')} #${entry.user_id}` : '—'}
+          {userSearch ? (
+            <Link
+              to='/users'
+              search={userSearch}
+              className='hover:text-foreground underline-offset-4 hover:underline'
+              title={t('View user in user management')}
+            >
+              {t('User ID')} #{userSearch.filter}
+            </Link>
+          ) : (
+            '—'
+          )}
         </p>
         <p className='text-muted-foreground mt-1 text-xs'>
           {new Date(entry.occurred_at * 1000).toLocaleString()}

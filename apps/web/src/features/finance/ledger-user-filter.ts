@@ -13,3 +13,21 @@ export function financeLedgerUserFilter(userId?: number) {
     ? String(userId)
     : ''
 }
+
+/**
+ * Financial audit links must opt out of the user page's L0-only default. A
+ * payment or refund can belong to any account level.
+ */
+export function financeLedgerUserSearch(userId?: number) {
+  const filter = financeLedgerUserFilter(userId)
+  if (!filter) return undefined
+  return {
+    page: 1,
+    pageSize: undefined,
+    filter,
+    status: [],
+    role: [],
+    group: '',
+    l0Only: false,
+  }
+}

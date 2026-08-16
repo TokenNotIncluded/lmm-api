@@ -9,7 +9,10 @@ the Free Software Foundation, either version 3 of the License, or
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
-import { financeLedgerUserFilter } from './ledger-user-filter'
+import {
+  financeLedgerUserFilter,
+  financeLedgerUserSearch,
+} from './ledger-user-filter'
 
 describe('finance ledger user filter', () => {
   test('only pre-fills the ledger with a positive integer user id', () => {
@@ -18,5 +21,18 @@ describe('finance ledger user filter', () => {
     assert.equal(financeLedgerUserFilter(0), '')
     assert.equal(financeLedgerUserFilter(-1), '')
     assert.equal(financeLedgerUserFilter(1.5), '')
+  })
+
+  test('opens the user audit without the default L0-only restriction', () => {
+    assert.deepEqual(financeLedgerUserSearch(42), {
+      page: 1,
+      pageSize: undefined,
+      filter: '42',
+      status: [],
+      role: [],
+      group: '',
+      l0Only: false,
+    })
+    assert.equal(financeLedgerUserSearch(0), undefined)
   })
 })
