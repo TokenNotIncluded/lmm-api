@@ -20,6 +20,7 @@ import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 
 import { Sidebar, SidebarContent, SidebarRail } from '@/components/ui/sidebar'
 import { useLayout } from '@/context/layout-provider'
+import { useSidebarDensity } from '@/hooks/use-sidebar-config'
 import { useSidebarView } from '@/hooks/use-sidebar-view'
 import { MOTION_TRANSITION, MOTION_VARIANTS } from '@/lib/motion'
 
@@ -46,11 +47,16 @@ import { SidebarViewHeader } from './sidebar-view-header'
  */
 export function AppSidebar() {
   const { collapsible, variant } = useLayout()
+  const density = useSidebarDensity()
   const { key, view, navGroups } = useSidebarView()
   const shouldReduce = useReducedMotion()
 
   return (
-    <Sidebar collapsible={collapsible} variant={variant}>
+    <Sidebar
+      collapsible={collapsible}
+      variant={variant}
+      data-sidebar-density={density}
+    >
       {view && <SidebarViewHeader view={view} />}
 
       <SidebarContent className='py-2'>

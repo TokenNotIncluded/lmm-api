@@ -18,6 +18,14 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import type { AuthUser, OnboardingStage } from '@/stores/auth-store'
 
+import { ROLE } from './roles'
+import {
+  isSidebarRouteHidden,
+  parseSidebarUserSettings,
+  SIDEBAR_DEFAULT_PREFERENCES,
+  SIDEBAR_DEFAULT_ROUTE_ALLOWLIST,
+} from './sidebar-preferences'
+
 const ONBOARDING_STAGES = new Set<OnboardingStage>([
   'activate',
   'credential',
@@ -124,13 +132,39 @@ export function isConsoleActivated(user: AuthUser | null | undefined): boolean {
 
 export function getAuthenticatedLandingRoute(
   user: AuthUser | null | undefined
-): '/dashboard' | '/getting-started' {
+): string {
   // Administrator approval is the access boundary.  The remaining setup
   // checklist is guidance for an already-enabled account and must not trap a
   // newly approved L1 user on the L0 welcome page.
-  return getOnboardingState(user).activationComplete
-    ? '/dashboard'
-    : '/getting-started'
+  if (!getOnboardingState(user).activationComplete) return '/getting-started'
+
+  const settings = parseSidebarUserSettings(user?.sidebar_modules)
+  const requested = settings?.preferences.default_route
+  const role = user?.role ?? ROLE.GUEST
+  const adminOnlyRoutes = new Set([
+    '/channels',
+    '/models/metadata',
+    '/users',
+    '/redemption-codes',
+    '/discount-codes',
+    '/subscriptions',
+    '/finance',
+  ])
+  const superAdminOnlyRoutes = new Set([
+    '/system-info',
+    '/system-settings/site',
+  ])
+  const allowed =
+    typeof requested === 'string' &&
+    SIDEBAR_DEFAULT_ROUTE_ALLOWLIST.has(requested) &&
+    !isSidebarRouteHidden(
+      requested,
+      settings?.preferences ?? SIDEBAR_DEFAULT_PREFERENCES
+    ) &&
+    (!adminOnlyRoutes.has(requested) || role >= ROLE.ADMIN) &&
+    (!superAdminOnlyRoutes.has(requested) || role === ROLE.SUPER_ADMIN)
+
+  return allowed ? requested : '/dashboard'
 }
 
 export function isContributorRoute(pathname: string): boolean {

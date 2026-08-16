@@ -994,6 +994,23 @@ For commercial licensing, please contact support@quantumnous.com
     color 140ms ease;
 }
 
+[data-slot='sidebar'][data-sidebar-density='compact']
+  [data-slot='sidebar-menu-button'] {
+  min-height: 2rem;
+  padding-block: 0.35rem;
+  font-size: 0.8125rem;
+}
+
+[data-slot='sidebar'][data-sidebar-density='compact']
+  [data-slot='sidebar-group-label'] {
+  padding-block: 0.5rem 0.25rem;
+}
+
+[data-slot='sidebar'][data-sidebar-density='compact']
+  [data-slot='sidebar-menu'] {
+  gap: 0.125rem;
+}
+
 .console-editorial [data-slot='sidebar-menu-button']:hover {
   background: color-mix(in oklch, var(--sidebar-foreground) 6%, transparent);
   color: var(--sidebar-foreground);

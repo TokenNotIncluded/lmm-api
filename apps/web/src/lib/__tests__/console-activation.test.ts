@@ -98,6 +98,44 @@ describe('console activation boundary', () => {
     assert.equal(getAuthenticatedLandingRoute(account), '/dashboard')
   })
 
+  test('uses a valid visible user-selected landing page after activation', () => {
+    const account = user({
+      developer_access_granted: true,
+      sidebar_modules: JSON.stringify({
+        modules: {},
+        preferences: {
+          default_route: '/profile',
+          hidden_sections: [],
+        },
+      }),
+    })
+
+    assert.equal(getAuthenticatedLandingRoute(account), '/profile')
+  })
+
+  test('falls back when the selected page is hidden or outside the role', () => {
+    const hidden = user({
+      developer_access_granted: true,
+      sidebar_modules: JSON.stringify({
+        modules: {},
+        preferences: {
+          default_route: '/profile',
+          hidden: ['/profile'],
+        },
+      }),
+    })
+    const nonAdmin = user({
+      developer_access_granted: true,
+      sidebar_modules: JSON.stringify({
+        modules: {},
+        preferences: { default_route: '/users' },
+      }),
+    })
+
+    assert.equal(getAuthenticatedLandingRoute(hidden), '/dashboard')
+    assert.equal(getAuthenticatedLandingRoute(nonAdmin), '/dashboard')
+  })
+
   test('lands only explicitly granted complete accounts in the dashboard', () => {
     assert.equal(
       getAuthenticatedLandingRoute(

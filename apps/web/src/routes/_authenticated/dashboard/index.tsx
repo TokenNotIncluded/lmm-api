@@ -19,9 +19,17 @@ For commercial licensing, please contact support@quantumnous.com
 import { createFileRoute, redirect } from '@tanstack/react-router'
 
 import { DASHBOARD_DEFAULT_SECTION } from '@/features/dashboard/section-registry'
+import { getAuthenticatedLandingRoute } from '@/lib/console-activation'
+import { useAuthStore } from '@/stores/auth-store'
 
 export const Route = createFileRoute('/_authenticated/dashboard/')({
   beforeLoad: () => {
+    const preferred = getAuthenticatedLandingRoute(
+      useAuthStore.getState().auth.user
+    )
+    if (preferred !== '/dashboard') {
+      throw redirect({ href: preferred })
+    }
     throw redirect({
       to: '/dashboard/$section',
       params: { section: DASHBOARD_DEFAULT_SECTION },

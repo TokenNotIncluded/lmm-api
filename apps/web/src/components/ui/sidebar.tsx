@@ -185,6 +185,9 @@ function Sidebar({
 }) {
   const { t } = useTranslation()
   const { isMobile, state, openMobile, setOpenMobile } = useSidebar()
+  const density = (props as { 'data-sidebar-density'?: string })[
+    'data-sidebar-density'
+  ]
 
   if (collapsible === 'none') {
     return (
@@ -208,6 +211,7 @@ function Sidebar({
           dir={dir}
           data-sidebar='sidebar'
           data-slot='sidebar'
+          data-sidebar-density={density}
           data-mobile='true'
           className='bg-sidebar text-sidebar-foreground w-(--sidebar-width) p-0 [&>button]:hidden'
           style={
@@ -237,6 +241,7 @@ function Sidebar({
       data-variant={variant}
       data-side={side}
       data-slot='sidebar'
+      data-sidebar-density={density}
     >
       {/* This is what handles the sidebar gap on desktop */}
       <div

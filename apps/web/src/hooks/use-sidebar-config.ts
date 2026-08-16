@@ -20,6 +20,13 @@ import { useMemo } from 'react'
 
 import type { NavGroup, NavItem } from '@/components/layout/types'
 import { useStatus } from '@/hooks/use-status'
+import {
+  parseSidebarUserSettings,
+  SIDEBAR_DEFAULT_PREFERENCES,
+  type SidebarDensity,
+  type SidebarPreferences,
+  type SidebarUserSettings,
+} from '@/lib/sidebar-preferences'
 import { useAuthStore } from '@/stores/auth-store'
 
 type SidebarSectionConfig = {
@@ -29,9 +36,9 @@ type SidebarSectionConfig = {
 
 type SidebarModulesAdminConfig = Record<string, SidebarSectionConfig>
 
-// User-layer config is shape-identical to admin, but may be null
-// to signal "no narrowing" (empty/invalid/legacy users).
-type SidebarModulesUserConfig = SidebarModulesAdminConfig | null
+// User-layer config is a narrower overlay. Legacy section-only JSON is
+// normalized by parseSidebarUserConfig so existing accounts keep working.
+type SidebarModulesUserConfig = SidebarUserSettings | null
 
 /**
  * Default sidebar modules configuration
@@ -99,7 +106,9 @@ const URL_TO_CONFIG_MAP: Record<string, { section: string; module: string }> = {
   '/dashboard/overview': { section: 'console', module: 'detail' },
   '/dashboard/models': { section: 'console', module: 'detail' },
   '/dashboard/users': { section: 'console', module: 'detail' },
+  '/chat-management': { section: 'chat', module: 'chat' },
   '/keys': { section: 'console', module: 'token' },
+  '/drawing': { section: 'console', module: 'midjourney' },
   '/usage-logs': { section: 'console', module: 'log' },
   '/usage-logs/common': { section: 'console', module: 'log' },
   '/usage-logs/drawing': { section: 'console', module: 'midjourney' },
@@ -149,16 +158,21 @@ function parseSidebarConfig(
 function parseUserSidebarConfig(
   value: string | null | undefined
 ): SidebarModulesUserConfig {
-  if (!value || value.trim() === '') {
-    return null
-  }
-  try {
-    const parsed = JSON.parse(value) as SidebarModulesAdminConfig
-    if (!parsed || typeof parsed !== 'object') return null
-    return parsed
-  } catch {
-    return null
-  }
+  return parseSidebarUserSettings(value)
+}
+
+function getNavItemKey(item: NavItem): string | null {
+  if ('type' in item && item.type === 'chat-presets') return 'chat-presets'
+  if ('url' in item && item.url) return String(item.url)
+  return null
+}
+
+function isUserItemHidden(
+  item: NavItem,
+  userConfig: SidebarModulesUserConfig
+): boolean {
+  const key = getNavItemKey(item)
+  return Boolean(key && userConfig?.preferences.hidden.includes(key))
 }
 
 /**
@@ -187,7 +201,7 @@ function isModuleEnabled(
 
   if (!userConfig) return true
 
-  const userSection = userConfig[section]
+  const userSection = userConfig.modules[section]
   if (!userSection) return true
   if (userSection.enabled === false) return false
   return userSection[module] !== false
@@ -207,7 +221,7 @@ function isNavItemVisible(
     const adminAllowed = Boolean(adminChat?.enabled && adminChat.chat === true)
     if (!adminAllowed) return false
     if (!userConfig) return true
-    const userChat = userConfig.chat
+    const userChat = userConfig.modules.chat
     if (!userChat) return true
     if (userChat.enabled === false) return false
     return userChat.chat !== false
@@ -224,8 +238,10 @@ function isNavItemVisible(
   // Handle collapsible type (with sub-items)
   if ('items' in item && item.items) {
     // If has sub-items, show this collapsible item if at least one sub-item is visible
-    return item.items.some((subItem) =>
-      isModuleEnabled(subItem.url as string, adminConfig, userConfig)
+    return item.items.some(
+      (subItem) =>
+        !isUserItemHidden(subItem as NavItem, userConfig) &&
+        isModuleEnabled(subItem.url as string, adminConfig, userConfig)
     )
   }
 
@@ -237,15 +253,18 @@ function isNavItemVisible(
  */
 function filterNavItems(
   items: NavItem[],
+  sectionKey: string,
   adminConfig: SidebarModulesAdminConfig,
   userConfig: SidebarModulesUserConfig
 ): NavItem[] {
-  return items
+  const filtered = items
     .map((item) => {
       // If collapsible item, also filter its sub-items
       if ('items' in item && item.items) {
-        const filteredSubItems = item.items.filter((subItem) =>
-          isModuleEnabled(subItem.url as string, adminConfig, userConfig)
+        const filteredSubItems = item.items.filter(
+          (subItem) =>
+            !isUserItemHidden(subItem as NavItem, userConfig) &&
+            isModuleEnabled(subItem.url as string, adminConfig, userConfig)
         )
 
         return {
@@ -255,7 +274,47 @@ function filterNavItems(
       }
       return item
     })
-    .filter((item) => isNavItemVisible(item, adminConfig, userConfig))
+    .filter(
+      (item) =>
+        !isUserItemHidden(item, userConfig) &&
+        isNavItemVisible(item, adminConfig, userConfig)
+    )
+
+  const order = userConfig?.preferences.module_order[sectionKey]
+  if (!order?.length) return filtered
+
+  const rank = new Map(order.map((key, index) => [key, index]))
+  return filtered
+    .map((item, index) => ({ item, index }))
+    .sort((left, right) => {
+      const leftRank = rank.get(getNavItemKey(left.item) ?? '')
+      const rightRank = rank.get(getNavItemKey(right.item) ?? '')
+      return (
+        (leftRank ?? order.length + left.index) -
+        (rightRank ?? order.length + right.index)
+      )
+    })
+    .map(({ item }) => item)
+}
+
+function orderNavGroups(
+  groups: NavGroup[],
+  preferences: SidebarPreferences
+): NavGroup[] {
+  const order = preferences.section_order
+  if (!order.length) return groups
+  const rank = new Map(order.map((key, index) => [key, index]))
+  return groups
+    .map((group, index) => ({ group, index }))
+    .sort((left, right) => {
+      const leftRank = rank.get(left.group.id ?? '')
+      const rightRank = rank.get(right.group.id ?? '')
+      return (
+        (leftRank ?? order.length + left.index) -
+        (rightRank ?? order.length + right.index)
+      )
+    })
+    .map(({ group }) => group)
 }
 
 /**
@@ -303,13 +362,35 @@ export function useSidebarConfig(navGroups: NavGroup[]): NavGroup[] {
       navGroups
         .map((group) => ({
           ...group,
-          items: filterNavItems(group.items, adminConfig, userConfig),
+          items: filterNavItems(
+            group.items,
+            group.id ?? group.title,
+            adminConfig,
+            userConfig
+          ),
         }))
-        .filter((group) => group.items.length > 0), // Only show navigation groups with visible items
+        .filter(
+          (group) =>
+            !userConfig?.preferences.hidden_sections.includes(
+              group.id ?? group.title
+            ) && group.items.length > 0
+        ), // Only show navigation groups with visible items
     [navGroups, adminConfig, userConfig]
   )
 
-  return filteredNavGroups
+  return orderNavGroups(
+    filteredNavGroups,
+    userConfig?.preferences ?? SIDEBAR_DEFAULT_PREFERENCES
+  )
+}
+
+export function useSidebarDensity(): SidebarDensity {
+  const { auth } = useAuthStore()
+  const userConfig =
+    auth?.user?.permissions?.sidebar_settings === false
+      ? null
+      : parseUserSidebarConfig(auth?.user?.sidebar_modules)
+  return userConfig?.preferences.density ?? 'comfortable'
 }
 
 /**
