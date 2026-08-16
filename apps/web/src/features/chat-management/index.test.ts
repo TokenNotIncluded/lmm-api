@@ -28,4 +28,9 @@ describe('chat management responsive history', () => {
     assert.match(source, /!selected && 'hidden lg:block'/)
     assert.match(source, /data-testid='chat-management-back'/)
   })
+
+  test('uses the server-bounded history page instead of requesting 100 rows', () => {
+    assert.doesNotMatch(source, /limit=\{100\}/)
+    assert.match(source, /<AssistantHistory\s+active\s+presentation='rows'/)
+  })
 })

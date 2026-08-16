@@ -96,9 +96,13 @@ func refreshChannelCache() error {
 			}
 		}
 	}
-	var abilities []*Ability
-	if err := tx.Find(&abilities).Error; err != nil {
-		err = fmt.Errorf("load abilities: %w", err)
+	// Only the group names are needed to initialize the routing index. Loading
+	// every ability row here made a cache refresh retain a duplicate in-memory
+	// copy of the full ability table, which is particularly expensive for a
+	// large channel/model catalog.
+	var abilityGroups []string
+	if err := tx.Model(&Ability{}).Distinct("group").Pluck("group", &abilityGroups).Error; err != nil {
+		err = fmt.Errorf("load ability groups: %w", err)
 		recordChannelCacheRefreshError(err)
 		return err
 	}
@@ -107,9 +111,9 @@ func refreshChannelCache() error {
 		recordChannelCacheRefreshError(err)
 		return err
 	}
-	groups := make(map[string]bool)
-	for _, ability := range abilities {
-		groups[ability.Group] = true
+	groups := make(map[string]bool, len(abilityGroups))
+	for _, group := range abilityGroups {
+		groups[group] = true
 	}
 	newGroup2model2channels := make(map[string]map[string][]int)
 	for group := range groups {

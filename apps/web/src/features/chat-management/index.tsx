@@ -86,7 +86,6 @@ export function ChatManagement() {
             </div>
             <AssistantHistory
               active
-              limit={100}
               presentation='rows'
               onOpenConversation={setSelected}
             />
