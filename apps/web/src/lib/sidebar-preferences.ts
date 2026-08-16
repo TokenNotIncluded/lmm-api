@@ -138,6 +138,7 @@ export const SIDEBAR_DEFAULT_ROUTE_ALLOWLIST = new Set([
   '/challenges',
   '/rankings',
   '/chat-management',
+  '/dashboard/overview',
   '/dashboard/models',
   '/keys',
   '/drawing',
