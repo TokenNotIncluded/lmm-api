@@ -315,6 +315,44 @@ describe('AssistantHistory archive controls', () => {
     }
   })
 
+  test('offers a retry action for transient list and detail failures', async () => {
+    let calls = 0
+    api.get = (async () => {
+      calls += 1
+      throw Object.assign(new Error('temporary failure'), {
+        response: { status: 503 },
+      })
+    }) as typeof api.get
+
+    const rendered = await renderHistory()
+    try {
+      assert.equal(calls, 1)
+      assert.ok(findButton('Retry'))
+      await act(async () => {
+        findButton('Retry').click()
+        await flushEffects()
+      })
+      await act(flushEffects)
+      assert.equal(calls, 2)
+    } finally {
+      await unmount(rendered)
+    }
+
+    const detailRendered = await renderHistoryConversation()
+    try {
+      assert.equal(calls, 3)
+      assert.ok(findButton('Retry'))
+      await act(async () => {
+        findButton('Retry').click()
+        await flushEffects()
+      })
+      await act(flushEffects)
+      assert.equal(calls, 4)
+    } finally {
+      await unmount(detailRendered)
+    }
+  })
+
   test('restores an archived owner conversation and refreshes the current list', async () => {
     let archivedList = true
     let getCalls = 0

@@ -37,7 +37,12 @@ import { toast } from 'sonner'
 
 import { Response } from '@/components/ai-elements/response'
 import { LmmBrandMark } from '@/components/lmm-brand-mark'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import {
+  Alert,
+  AlertAction,
+  AlertDescription,
+  AlertTitle,
+} from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -333,6 +338,7 @@ export function AssistantHistory(props: {
         : status === 404
           ? t('This conversation no longer exists or is unavailable.')
           : t('Unable to load conversation history. Try again.')
+  const historyCanRetry = status !== 400 && status !== 403 && status !== 404
 
   return (
     <div className='grid gap-6 py-2 sm:gap-8'>
@@ -553,6 +559,19 @@ export function AssistantHistory(props: {
           />
           <AlertTitle>{t('Conversation history')}</AlertTitle>
           <AlertDescription>{historyErrorDescription}</AlertDescription>
+          {historyCanRetry ? (
+            <AlertAction>
+              <Button
+                type='button'
+                variant='outline'
+                size='sm'
+                onClick={() => void historyQuery.refetch()}
+                disabled={historyQuery.isFetching}
+              >
+                {historyQuery.isFetching ? t('Loading...') : t('Retry')}
+              </Button>
+            </AlertAction>
+          ) : null}
         </Alert>
       ) : effectiveScope === 'audit' && activeUserId === undefined ? (
         <p className='text-muted-foreground py-8 text-center text-sm leading-6'>
@@ -745,6 +764,19 @@ export function AssistantHistoryConversation(props: {
         <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} aria-hidden='true' />
         <AlertTitle>{t('Conversation history')}</AlertTitle>
         <AlertDescription>{description}</AlertDescription>
+        {status !== 403 && status !== 404 ? (
+          <AlertAction>
+            <Button
+              type='button'
+              variant='outline'
+              size='sm'
+              onClick={() => void historyQuery.refetch()}
+              disabled={historyQuery.isFetching}
+            >
+              {historyQuery.isFetching ? t('Loading...') : t('Retry')}
+            </Button>
+          </AlertAction>
+        ) : null}
       </Alert>
     )
   }
