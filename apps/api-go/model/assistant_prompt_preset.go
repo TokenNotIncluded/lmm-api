@@ -127,6 +127,7 @@ var topicRules = []topicRule{
 	{Topic: "模型价格", Terms: []string{"价格", "单价", "price", "pricing"}},
 	{Topic: "费用估算", Terms: []string{"费用", "成本", "计费", "cost", "billing", "estimate"}},
 	{Topic: "套餐折扣", Terms: []string{"套餐", "折扣", "优惠", "discount", "plan"}},
+	{Topic: "本周充值优惠", Terms: []string{"本周优惠", "本周折扣", "充值优惠", "优惠码", "weekly discount", "weekly coupon"}},
 	{Topic: "新用户礼包", Terms: []string{"新用户礼包", "新用户福利", "新手礼包", "新手奖励", "新用户奖励", "新人礼包", "新人福利", "新手福利", "welcome gift", "welcome bonus", "new-user gift", "new user gift", "new user bonus"}},
 	{Topic: "开源悬赏", Terms: []string{"开源", "悬赏", "bounty", "challenge"}},
 	{Topic: "提交证据", Terms: []string{"pull request", "提交", "证据", "evidence"}},
@@ -140,6 +141,7 @@ var promptCandidates = []promptCandidate{
 	// “what can I do here?” entry leaves new users without a safe first step.
 	{PromptPreset: PromptPreset{Id: "getting_started", Label: "快速开始", Prompt: "请根据我的实际目标直接说明你能替我完成什么，以及最短的开始方式。"}, Intent: AssistantIntentOnboarding, Order: 1, Required: true},
 	{PromptPreset: PromptPreset{Id: "new_user_gift", Label: "领取新用户礼包", Prompt: "我想了解如何通过和 AI 助手交流，争取一次性新用户礼包；请说明规则和下一步。"}, Intent: AssistantIntentInvitation, Order: 2, Required: true},
+	{PromptPreset: PromptPreset{Id: "weekly_discount", Label: "本周充值优惠", Prompt: "我想了解如何通过本周与 AI 助手的有效交流，争取一次充值优惠码；请说明规则和下一步。"}, Intent: AssistantIntentPlanPurchase, Order: 3, Required: true},
 	{PromptPreset: PromptPreset{Id: "developer_access", Label: "开发者访问", Prompt: "我想使用 API，请说明当前账户可以做什么，以及如何申请开发者访问。"}, Intent: AssistantIntentOnboarding, Order: 3},
 	{PromptPreset: PromptPreset{Id: "client_setup", Label: "客户端配置", Prompt: "请帮我选择并配置兼容的客户端，我会补充操作系统和使用场景。"}, Intent: AssistantIntentClientSetup, Order: 4},
 	{PromptPreset: PromptPreset{Id: "pricing_cost", Label: "费用估算", Prompt: "请先解释计费方式，再根据我的模型和用量估算成本。"}, Intent: AssistantIntentCost, Order: 4},

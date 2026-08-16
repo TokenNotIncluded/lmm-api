@@ -44,6 +44,7 @@ const { I18nextProvider, initReactI18next } = await import('react-i18next')
 const { api } = await import('@/lib/api')
 const { AssistantJourneyProgress } = await import('./assistant-journey')
 const { AssistantNewUserGift } = await import('./assistant-new-user-gift')
+const { AssistantWeeklyDiscount } = await import('./assistant-weekly-discount')
 
 const originalGet = api.get
 const originalPost = api.post
@@ -240,6 +241,37 @@ describe('assistant game-style progress', () => {
       )
       assert.ok(error)
       assert.match(error.textContent ?? '', /Failed to load/)
+
+      const retry = error.querySelector<HTMLButtonElement>('button')
+      assert.ok(retry)
+      await act(async () => {
+        retry.click()
+        await flushQueries()
+      })
+      assert.equal(attempts, 2)
+    } finally {
+      await unmount(rendered)
+    }
+  })
+
+  test('keeps a low-interruption retry path when weekly discount status cannot load', async () => {
+    let attempts = 0
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/assistant/weekly-discount')
+      attempts++
+      throw new Error('temporary failure')
+    }) as typeof api.get
+
+    const rendered = await render(<AssistantWeeklyDiscount enabled />)
+    try {
+      const error = rendered.container.querySelector<HTMLElement>(
+        '[data-testid="assistant-weekly-discount-error"]'
+      )
+      assert.ok(error)
+      assert.match(
+        error.textContent ?? '',
+        /Unable to load current top-up discounts/
+      )
 
       const retry = error.querySelector<HTMLButtonElement>('button')
       assert.ok(retry)

@@ -76,6 +76,8 @@ func generatePromptPreset(candidate promptCandidate, topicCounts map[string]int6
 		prompt = fmt.Sprintf("请围绕%s帮我选择安全的配置方案，并按步骤说明需要核对的信息。", focus)
 	case AssistantIntentCost:
 		prompt = fmt.Sprintf("请结合%s解释计费方式，并给出一份可复核的费用估算方法。", focus)
+	case AssistantIntentPlanPurchase:
+		prompt = fmt.Sprintf("请围绕%s说明本周充值优惠码的规则，并告诉我如何通过有效交流争取本周一次折扣；不要提前承诺折扣。", focus)
 	case AssistantIntentAPIKey:
 		prompt = fmt.Sprintf("请围绕%s说明安全连接 API 的步骤、必要参数和常见错误。", focus)
 	case AssistantIntentModels:

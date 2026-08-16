@@ -29,6 +29,16 @@ func TestPromptPresetFallbackAndAggregateAttribution(t *testing.T) {
 	assert.Equal(t, "ai_recommendation", set.Presets[0].Id)
 	assert.Contains(t, set.Presets[0].Prompt, "推荐信")
 	assert.Contains(t, promptPresetIDs(set.Presets), "new_user_gift")
+	assert.Contains(t, promptPresetIDs(set.Presets), "weekly_discount")
+	var weekly *PromptPreset
+	for index := range set.Presets {
+		if set.Presets[index].Id == "weekly_discount" {
+			weekly = &set.Presets[index]
+			break
+		}
+	}
+	require.NotNil(t, weekly)
+	assert.Contains(t, weekly.Prompt, "充值优惠码")
 	assert.NotEmpty(t, set.Presets[0].Prompt)
 
 	attribution, err := ResolvePromptPreset(set.Presets[0].Id, set.Presets[0].Prompt)
@@ -100,17 +110,33 @@ func TestPromptPresetValidationAndBoundedRefresh(t *testing.T) {
 	assert.Contains(t, generated.Presets[0].Prompt, "推荐信")
 	require.GreaterOrEqual(t, len(generated.Presets), 2)
 	assert.Contains(t, promptPresetIDs(generated.Presets), "getting_started", "dynamic starters must retain an onboarding entry")
-	var pricing *PromptPreset
-	for index := range generated.Presets {
-		if generated.Presets[index].Id == "pricing_cost" {
-			pricing = &generated.Presets[index]
+	// The four required starters intentionally fill the bounded generated set.
+	// Keep validating the existing pricing template directly so its privacy
+	// guarantees remain covered even though it is not selected in this set.
+	var pricingCandidate promptCandidate
+	for _, candidate := range promptCandidates {
+		if candidate.Id == "pricing_cost" {
+			pricingCandidate = candidate
 			break
 		}
 	}
-	require.NotNil(t, pricing)
+	pricingPreset, ok := generatePromptPreset(pricingCandidate, map[string]int64{"费用估算": 1}, presetStats{})
+	require.True(t, ok)
+	pricing := &pricingPreset
 	assert.Contains(t, pricing.Prompt, "费用")
 	assert.NotContains(t, pricing.Prompt, "alice")
 	assert.NotContains(t, pricing.Prompt, "secret")
+	var weekly *PromptPreset
+	for index := range generated.Presets {
+		if generated.Presets[index].Id == "weekly_discount" {
+			weekly = &generated.Presets[index]
+			break
+		}
+	}
+	require.NotNil(t, weekly)
+	assert.Contains(t, weekly.Prompt, "充值优惠码")
+	assert.NotContains(t, weekly.Prompt, "alice")
+	assert.NotContains(t, weekly.Prompt, "secret")
 	assert.Contains(t, promptPresetIDs(generated.Presets), "new_user_gift")
 
 	for range presetGenerations + 2 {

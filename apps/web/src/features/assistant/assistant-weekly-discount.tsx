@@ -30,7 +30,30 @@ export function AssistantWeeklyDiscount(props: { enabled: boolean }) {
     retry: false,
   })
   const discount = discountQuery.data
-  if (!props.enabled || !discount) return null
+  if (!props.enabled) return null
+
+  if (discountQuery.isError && !discount) {
+    return (
+      <section
+        className='border-border/60 my-2 flex flex-wrap items-center justify-between gap-3 border-y px-1 py-3 sm:px-4'
+        data-testid='assistant-weekly-discount-error'
+      >
+        <p className='text-muted-foreground text-xs'>
+          {t('Unable to load current top-up discounts')}
+        </p>
+        <Button
+          type='button'
+          size='sm'
+          variant='outline'
+          onClick={() => void discountQuery.refetch()}
+        >
+          {t('Retry')}
+        </Button>
+      </section>
+    )
+  }
+
+  if (!discount) return null
 
   const claim = async () => {
     if (claiming || discount.status !== 'offered') return
