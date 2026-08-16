@@ -541,6 +541,7 @@ var (
 	ErrPaymentMethodMismatch = errors.New("payment method mismatch")
 	ErrTopUpNotFound         = errors.New("topup not found")
 	ErrTopUpStatusInvalid    = errors.New("topup status invalid")
+	ErrRefundAmountInvalid   = errors.New("refund amount conflicts with settled topup")
 )
 
 func (topUp *TopUp) Insert() error {
@@ -630,6 +631,26 @@ func GetTopUpByTradeNo(tradeNo string) *TopUp {
 		return nil
 	}
 	return topUp
+}
+
+// GetTopUpByProviderTransaction resolves a provider's durable payment
+// transaction identifier back to the original local top-up. Webhook handlers
+// must still validate the resulting order status before changing balances.
+func GetTopUpByProviderTransaction(paymentProvider, providerTransactionID string) (*TopUp, error) {
+	paymentProvider = strings.TrimSpace(paymentProvider)
+	providerTransactionID = strings.TrimSpace(providerTransactionID)
+	if DB == nil || paymentProvider == "" || providerTransactionID == "" {
+		return nil, ErrTopUpNotFound
+	}
+	var topUp TopUp
+	err := DB.Where("payment_provider = ? AND provider_transaction_id = ?", paymentProvider, providerTransactionID).First(&topUp).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrTopUpNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &topUp, nil
 }
 
 // HasSuccessfulPaidTopUp reports whether the account has completed at least

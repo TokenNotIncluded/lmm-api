@@ -101,7 +101,7 @@ func ApplyPaymentRefund(
 				if paidMicros > 0 && !alreadyApplied {
 					remaining := paidMicros - topUp.RefundedAmountMicros
 					if remaining < 0 || appliedAmount > remaining {
-						return fmt.Errorf("refund exceeds settled top-up amount")
+						return fmt.Errorf("%w: refund exceeds settled top-up amount", ErrRefundAmountInvalid)
 					}
 				}
 				creditedQuota := normalizedTopUpCreditedQuota(&topUp)
@@ -156,7 +156,7 @@ func ApplyPaymentRefund(
 			if paidMicros > 0 && !alreadyApplied {
 				remaining := paidMicros - order.RefundedAmountMicros
 				if remaining < 0 || appliedAmount > remaining {
-					return fmt.Errorf("refund exceeds settled subscription amount")
+					return fmt.Errorf("%w: refund exceeds settled subscription amount", ErrRefundAmountInvalid)
 				}
 			}
 			if order.UserSubscriptionId > 0 && !alreadyApplied {

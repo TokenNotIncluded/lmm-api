@@ -223,6 +223,8 @@ func StripeWebhook(c *gin.Context) {
 		processErr = sessionAsyncPaymentSucceeded(ctx, event, callerIp)
 	case stripe.EventTypeCheckoutSessionAsyncPaymentFailed:
 		processErr = sessionAsyncPaymentFailed(ctx, event, callerIp)
+	case stripe.EventTypeRefundCreated, stripe.EventTypeRefundUpdated:
+		processErr = stripeTopUpRefundSucceeded(ctx, event, callerIp)
 	default:
 		logger.LogInfo(ctx, fmt.Sprintf("Stripe webhook 忽略事件 event_type=%s client_ip=%s", string(event.Type), callerIp))
 	}
@@ -248,7 +250,66 @@ func stripeWebhookRetryable(err error) bool {
 		!errors.Is(err, model.ErrTopUpNotFound) &&
 		!errors.Is(err, model.ErrTopUpStatusInvalid) &&
 		!errors.Is(err, model.ErrPaymentEvidenceConflict) &&
-		!errors.Is(err, model.ErrPaymentMethodMismatch)
+		!errors.Is(err, model.ErrPaymentMethodMismatch) &&
+		!errors.Is(err, model.ErrRefundAmountInvalid)
+}
+
+// stripeTopUpRefundSucceeded handles only one-time wallet top-ups. It binds a
+// signed Refund object's payment intent to the immutable transaction evidence
+// recorded when the original checkout settled. Subscription refunds require a
+// separate durable transaction binding and are deliberately not inferred here.
+func stripeTopUpRefundSucceeded(ctx context.Context, event stripe.Event, callerIP string) error {
+	if event.Data == nil || len(event.Data.Raw) == 0 {
+		return fmt.Errorf("%w: Stripe refund event has no object", model.ErrPaymentEvidenceConflict)
+	}
+	var refund stripe.Refund
+	if err := common.Unmarshal(event.Data.Raw, &refund); err != nil {
+		return fmt.Errorf("%w: decode Stripe refund: %v", model.ErrPaymentEvidenceConflict, err)
+	}
+	if refund.Status != stripe.RefundStatusSucceeded {
+		logger.LogInfo(ctx, fmt.Sprintf("Stripe 退款未成功，忽略资金回冲 event_type=%s refund_id=%s refund_status=%s client_ip=%s", event.Type, refund.ID, refund.Status, callerIP))
+		return nil
+	}
+	if refund.PaymentIntent == nil || strings.TrimSpace(refund.PaymentIntent.ID) == "" || strings.TrimSpace(refund.ID) == "" {
+		return fmt.Errorf("%w: Stripe successful refund lacks payment intent or refund id", model.ErrPaymentEvidenceConflict)
+	}
+	paymentIntentID := strings.TrimSpace(refund.PaymentIntent.ID)
+	topUp, err := model.GetTopUpByProviderTransaction(model.PaymentProviderStripe, paymentIntentID)
+	if err != nil {
+		return err
+	}
+	if topUp.Status != common.TopUpStatusSuccess {
+		return model.ErrTopUpStatusInvalid
+	}
+	currency := strings.ToUpper(strings.TrimSpace(topUp.SettlementCurrency))
+	refundCurrency := strings.ToUpper(strings.TrimSpace(string(refund.Currency)))
+	if currency == "" || refundCurrency == "" || currency != refundCurrency {
+		return fmt.Errorf("%w: Stripe refund currency does not match original settlement", model.ErrPaymentEvidenceConflict)
+	}
+	amountMicros, err := minorCurrencyUnitsToMicros(refund.Amount, currency)
+	if err != nil || amountMicros <= 0 {
+		return fmt.Errorf("%w: invalid Stripe refund amount", model.ErrPaymentEvidenceConflict)
+	}
+
+	refundResult, err := model.ApplyPaymentRefund(
+		topUp.TradeNo,
+		false,
+		amountMicros,
+		currency,
+		strings.TrimSpace(refund.ID),
+		model.PaymentMethodStripe,
+		model.PaymentProviderStripe,
+		fmt.Sprintf("Stripe refund.succeeded trade_no=%s refund_id=%s", topUp.TradeNo, refund.ID),
+		topUp.UserId,
+	)
+	if err != nil {
+		return err
+	}
+	if refundResult.Created {
+		model.RecordLog(topUp.UserId, model.LogTypeRefund, fmt.Sprintf("Stripe refund.succeeded trade_no=%s refund_id=%s amount=%d", topUp.TradeNo, refund.ID, refund.Amount))
+	}
+	logger.LogInfo(ctx, fmt.Sprintf("Stripe 退款已记账 trade_no=%s user_id=%d refund_id=%s amount_micros=%d quota_debited=%d client_ip=%s", topUp.TradeNo, topUp.UserId, refund.ID, amountMicros, refundResult.QuotaDebited, callerIP))
+	return nil
 }
 
 func sessionCompleted(ctx context.Context, event stripe.Event, callerIp string) error {
