@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useQuery } from '@tanstack/react-query'
 import {
   Activity,
   Box,
@@ -44,6 +45,7 @@ import {
 import { useTranslation } from 'react-i18next'
 
 import type { SidebarData } from '@/components/layout/types'
+import { getTodos } from '@/features/todos/api'
 import { isConsoleActivated } from '@/lib/console-activation'
 import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
@@ -57,6 +59,17 @@ import { useAuthStore } from '@/stores/auth-store'
 export function useSidebarData(): SidebarData {
   const { t } = useTranslation()
   const user = useAuthStore((state) => state.auth.user)
+  const todosQuery = useQuery({
+    queryKey: ['todos', 'all'],
+    queryFn: () => getTodos('all'),
+    enabled: Boolean(user),
+    staleTime: 30_000,
+    retry: false,
+  })
+  const todoBadge =
+    (todosQuery.data?.total_unread_count ?? 0) > 0
+      ? String(todosQuery.data?.total_unread_count)
+      : undefined
 
   if (!isConsoleActivated(user)) {
     return {
@@ -76,6 +89,11 @@ export function useSidebarData(): SidebarData {
               icon: Compass,
             },
             {
+              title: t('Model Square'),
+              url: '/pricing',
+              icon: Box,
+            },
+            {
               title: t('Channel marketplace'),
               url: '/public-relay',
               icon: Radio,
@@ -84,6 +102,7 @@ export function useSidebarData(): SidebarData {
               title: t('To-dos'),
               url: '/todos',
               icon: ListChecks,
+              badge: todoBadge,
             },
           ],
         },
@@ -196,6 +215,7 @@ export function useSidebarData(): SidebarData {
             title: t('To-dos'),
             url: '/todos',
             icon: ListChecks,
+            badge: todoBadge,
           },
         ],
       },

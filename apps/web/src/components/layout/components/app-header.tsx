@@ -124,9 +124,14 @@ export function AppHeader({
       {rightContent ?? (
         <div className='ms-auto flex items-center gap-1 sm:gap-2'>
           {showTopNav && (
-            <div className='me-1 hidden lg:block'>
-              <TopNav links={links} aria-label={t('Header navigation')} />
-            </div>
+            <>
+              <div className='me-1 hidden lg:block'>
+                <TopNav links={links} aria-label={t('Header navigation')} />
+              </div>
+              <div className='me-1 lg:hidden'>
+                <TopNav links={links} aria-label={t('Header navigation')} />
+              </div>
+            </>
           )}
           {showSearch && <Search />}
           {showNotifications && (
