@@ -23,7 +23,10 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
 import { todoItemTitleKey } from './todo-labels'
-import { todoItemHasDestination } from './todo-navigation'
+import {
+  todoItemHasDestination,
+  todoSecurityReviewDestination,
+} from './todo-navigation'
 
 function item(
   category:
@@ -57,7 +60,9 @@ describe('unified todo destinations', () => {
   })
 
   test('advertises security review navigation even without a user or project id', () => {
-    assert.equal(todoItemHasDestination(item('security_review')), true)
+    const review = item('security_review')
+    assert.equal(todoItemHasDestination(review), true)
+    assert.equal(todoSecurityReviewDestination(review), '/security')
   })
 
   test('keeps destination affordances tied to actionable notification data', () => {

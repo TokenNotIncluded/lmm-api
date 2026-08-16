@@ -41,3 +41,14 @@ export function todoItemHasDestination(item: TodoItem) {
       Boolean(detailString(item, 'username')))
   )
 }
+
+/**
+ * Security-review notifications must lead to the audit timeline, not the
+ * configuration form. The timeline is where the reviewed requests and their
+ * explanations are available to an administrator.
+ */
+export function todoSecurityReviewDestination(item: TodoItem) {
+  return item.category === 'security_review'
+    ? ('/security' as const)
+    : undefined
+}

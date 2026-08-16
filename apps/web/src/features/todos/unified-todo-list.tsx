@@ -26,7 +26,10 @@ import {
   type TodoItem,
 } from './api'
 import { todoItemTitleKey } from './todo-labels'
-import { todoItemHasDestination } from './todo-navigation'
+import {
+  todoItemHasDestination,
+  todoSecurityReviewDestination,
+} from './todo-navigation'
 
 const CATEGORY_LABELS: Record<TodoCategory, string> = {
   all: 'All',
@@ -79,10 +82,10 @@ export function UnifiedTodoList() {
       })
       return
     }
-    if (item.category === 'security_review') {
+    const securityReviewDestination = todoSecurityReviewDestination(item)
+    if (securityReviewDestination) {
       await navigate({
-        to: '/system-settings/security/$section',
-        params: { section: 'advanced-security' },
+        to: securityReviewDestination,
       })
       return
     }
