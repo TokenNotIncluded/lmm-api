@@ -61,3 +61,16 @@ func TestTokenMutationRoutesRejectOversizedJSONBeforeBinding(t *testing.T) {
 
 	require.Equal(t, http.StatusRequestEntityTooLarge, response.Code)
 }
+
+func TestEmailBindRouteRejectsOversizedJSONBeforeAuthentication(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	SetApiRouter(engine)
+	body := `{"email":"` + strings.Repeat("x", userSelfMutationRequestMaxBytes) + `"}`
+	request := httptest.NewRequest(http.MethodPost, "/api/oauth/email/bind", strings.NewReader(body))
+	response := httptest.NewRecorder()
+
+	engine.ServeHTTP(response, request)
+
+	require.Equal(t, http.StatusRequestEntityTooLarge, response.Code)
+}
