@@ -217,12 +217,15 @@ type SubscriptionOrder struct {
 	PlanId int     `json:"plan_id" gorm:"index"`
 	Money  float64 `json:"money"`
 
-	TradeNo         string `json:"trade_no" gorm:"unique;type:varchar(255);index"`
-	PaymentMethod   string `json:"payment_method" gorm:"type:varchar(50)"`
-	PaymentProvider string `json:"payment_provider" gorm:"type:varchar(50);default:''"`
-	Status          string `json:"status"`
-	CreateTime      int64  `json:"create_time"`
-	CompleteTime    int64  `json:"complete_time"`
+	TradeNo              string `json:"trade_no" gorm:"unique;type:varchar(255);index"`
+	PaymentMethod        string `json:"payment_method" gorm:"type:varchar(50)"`
+	PaymentProvider      string `json:"payment_provider" gorm:"type:varchar(50);default:''"`
+	UserSubscriptionId   int    `json:"user_subscription_id" gorm:"index;default:0"`
+	RefundedAmountMicros int64  `json:"refunded_amount_micros" gorm:"not null;default:0"`
+	RefundedQuota        int64  `json:"refunded_quota" gorm:"not null;default:0"`
+	Status               string `json:"status"`
+	CreateTime           int64  `json:"create_time"`
+	CompleteTime         int64  `json:"complete_time"`
 
 	ProviderPayload string `json:"provider_payload" gorm:"type:text"`
 }
@@ -610,6 +613,7 @@ func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedP
 		if err := upsertSubscriptionTopUpTx(tx, &order); err != nil {
 			return err
 		}
+		order.UserSubscriptionId = subscription.Id
 		order.Status = common.TopUpStatusSuccess
 		order.CompleteTime = common.GetTimestamp()
 		if providerPayload != "" {

@@ -776,12 +776,10 @@ func validateWaffoPancakeSubscriptionEvent(event *service.WaffoPancakeWebhookEve
 	return nil
 }
 
-// handleWaffoPancakeRefundEvent records a signed refund notification in the
-// append-only finance ledger. It deliberately does not debit user quota: a
-// refund can be partial or arrive after quota has been spent, so an automatic
-// wallet reversal needs a separate, user-facing policy and idempotent balance
-// settlement. The ledger entry is enough to make the notification durable and
-// visible to the finance dashboard without silently changing balances.
+// handleWaffoPancakeRefundEvent records a signed refund notification and
+// reverses the value granted by the original order. The model transaction
+// makes the ledger row, cumulative refund amount, and wallet/subscription
+// adjustment one idempotent operation.
 func handleWaffoPancakeRefundEvent(c *gin.Context, event *service.WaffoPancakeWebhookEvent) error {
 	if event == nil {
 		return fmt.Errorf("missing refund event")
@@ -860,30 +858,25 @@ func handleWaffoPancakeRefundEvent(c *gin.Context, event *service.WaffoPancakeWe
 	if providerEventID == "" {
 		return fmt.Errorf("refund event has no stable id")
 	}
-	_, created, err := model.AppendFinanceLedgerEntryIfNew(&model.FinanceLedgerEntry{
-		EntryType:       model.FinanceEntryRevenue,
-		Category:        "refund",
-		AmountMicros:    amountMicros,
-		Currency:        strings.ToUpper(strings.TrimSpace(event.Data.Currency)),
-		Direction:       model.FinanceDirectionDebit,
-		PaymentMethod:   model.PaymentMethodWaffoPancake,
-		PaymentProvider: model.PaymentProviderWaffoPancake,
-		UserId:          &userID,
-		SourceType:      model.FinanceSourceRefund,
-		SourceId:        providerEventID,
-		Note:            fmt.Sprintf("Waffo Pancake refund.succeeded trade_no=%s order_id=%s refund_id=%s", tradeNo, event.Data.OrderID, event.Data.RefundTicketMerchantExternalID),
-		OccurredAt:      time.Now().Unix(),
-		CreatedBy:       userID,
-		IdempotencyKey:  "waffo:pancake:refund:" + providerEventID,
-	})
+	refundResult, err := model.ApplyWaffoPancakeRefund(
+		tradeNo,
+		isSubscription,
+		amountMicros,
+		strings.ToUpper(strings.TrimSpace(event.Data.Currency)),
+		providerEventID,
+		model.PaymentMethodWaffoPancake,
+		model.PaymentProviderWaffoPancake,
+		fmt.Sprintf("Waffo Pancake refund.succeeded trade_no=%s order_id=%s refund_id=%s", tradeNo, event.Data.OrderID, event.Data.RefundTicketMerchantExternalID),
+		userID,
+	)
 	if err != nil {
 		return err
 	}
-	if !created {
+	if !refundResult.Created {
 		return nil
 	}
 	model.RecordLog(userID, model.LogTypeRefund, fmt.Sprintf("Waffo Pancake refund.succeeded trade_no=%s refund_id=%s amount=%s %s", tradeNo, event.Data.RefundTicketMerchantExternalID, event.Data.Amount, strings.ToUpper(strings.TrimSpace(event.Data.Currency))))
-	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo Pancake 退款已记账 trade_no=%s user_id=%d amount_micros=%d refund_id=%s", tradeNo, userID, amountMicros, event.Data.RefundTicketMerchantExternalID))
+	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo Pancake 退款已记账 trade_no=%s user_id=%d amount_micros=%d quota_debited=%d refund_id=%s", tradeNo, userID, amountMicros, refundResult.QuotaDebited, event.Data.RefundTicketMerchantExternalID))
 	return nil
 }
 

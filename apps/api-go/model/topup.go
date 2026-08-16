@@ -24,6 +24,8 @@ type TopUp struct {
 	SettledAmountMicros   int64   `json:"settled_amount_micros" gorm:"not null;default:0"`
 	SettlementCurrency    string  `json:"settlement_currency" gorm:"type:varchar(16);not null;default:''"`
 	Money                 float64 `json:"money"`
+	RefundedAmountMicros  int64   `json:"refunded_amount_micros" gorm:"not null;default:0"`
+	RefundedQuota         int64   `json:"refunded_quota" gorm:"not null;default:0"`
 	TradeNo               string  `json:"trade_no" gorm:"unique;type:varchar(255);index"`
 	PaymentMethod         string  `json:"payment_method" gorm:"type:varchar(50)"`
 	PaymentProvider       string  `json:"payment_provider" gorm:"type:varchar(50);default:'';uniqueIndex:idx_topup_provider_event,priority:1;uniqueIndex:idx_topup_provider_transaction,priority:1"`
