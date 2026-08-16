@@ -545,16 +545,14 @@ export function SubscriptionPurchaseDialog(props: Props) {
                 </Button>
               </div>
             )}
-            {!hasAnyPayment && !allowBalancePay && (
-              <Alert variant='destructive'>
-                <AlertDescription>
-                  {t(
-                    'No payment methods available. Please contact administrator.'
-                  )}
-                </AlertDescription>
-              </Alert>
-            )}
           </div>
+        )}
+        {!hasAnyPayment && (!allowBalancePay || insufficientBalance) && (
+          <Alert variant='destructive'>
+            <AlertDescription>
+              {t('No payment methods available. Please contact administrator.')}
+            </AlertDescription>
+          </Alert>
         )}
       </div>
     </Dialog>

@@ -91,6 +91,8 @@ type DialogOptions = {
   enableWaffoPancake?: boolean
   enableOnlineTopUp?: boolean
   epayMethods?: Array<{ type: string; name?: string }>
+  paymentMethods?: string[]
+  userQuota?: number
   onCheckoutStarted?: () => void
 }
 
@@ -119,7 +121,8 @@ async function renderDialog(options: DialogOptions = {}): Promise<Rendered> {
           enableWaffoPancake={options.enableWaffoPancake}
           enableOnlineTopUp={options.enableOnlineTopUp}
           epayMethods={options.epayMethods}
-          userQuota={0}
+          paymentMethods={options.paymentMethods}
+          userQuota={options.userQuota ?? 0}
           onCheckoutStarted={options.onCheckoutStarted}
         />
       </I18nextProvider>
@@ -315,6 +318,26 @@ describe('subscription purchase checkout', () => {
           (button) => button.textContent?.trim() === 'Waffo Pancake'
         )
       )
+    } finally {
+      await unmount(rendered)
+    }
+  })
+
+  test('explains when no external payment method can cover an insufficient balance', async () => {
+    const rendered = await renderDialog({
+      enableStripe: true,
+      paymentMethods: [],
+      userQuota: 0,
+    })
+    try {
+      assert.match(
+        document.body.textContent ?? '',
+        /No payment methods available\. Please contact administrator\./
+      )
+      const balanceButton = [...document.querySelectorAll('button')].find(
+        (button) => button.textContent?.trim() === 'Pay with Balance'
+      )
+      assert.equal(balanceButton?.disabled, true)
     } finally {
       await unmount(rendered)
     }
