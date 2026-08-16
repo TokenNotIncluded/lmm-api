@@ -17,6 +17,7 @@ for (const key of [
   'navigator',
   'HTMLElement',
   'HTMLSelectElement',
+  'HTMLTextAreaElement',
   'SVGElement',
   'Node',
   'Element',
@@ -44,6 +45,7 @@ const { api } = await import('@/lib/api')
 const { Drawing } = await import('./index')
 
 const originalGet = api.get
+const originalPost = api.post
 const reactTestGlobals = globalThis as typeof globalThis & {
   IS_REACT_ACT_ENVIRONMENT?: boolean
 }
@@ -95,6 +97,19 @@ async function waitForCondition(
   throw new Error(failureMessage)
 }
 
+async function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
+  const setValue = Object.getOwnPropertyDescriptor(
+    HTMLTextAreaElement.prototype,
+    'value'
+  )?.set
+  assert.ok(setValue)
+  await act(async () => {
+    setValue.call(textarea, value)
+    textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    await flushEffects()
+  })
+}
+
 async function renderDrawing() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -118,6 +133,7 @@ async function renderDrawing() {
 
 afterEach(() => {
   api.get = originalGet
+  api.post = originalPost
   document.body.replaceChildren()
 })
 
@@ -171,6 +187,79 @@ describe('Drawing mobile controls', () => {
         assert.match(wrapper.className, /\bw-full\b/)
         assert.doesNotMatch(wrapper.className, /\bw-fit\b/)
       }
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
+  test('surfaces an error and keeps generation available when no preview is usable', async () => {
+    api.get = (async (url: string) => {
+      if (url === '/api/assistant/status') {
+        return {
+          data: {
+            success: true,
+            data: {
+              enabled: true,
+              model: 'assistant-test',
+              developer_access_granted: true,
+              funding: { mode: 'super_administrator' },
+            },
+          },
+        }
+      }
+      if (url === '/api/pricing') return { data: pricing }
+      if (url === '/api/user/self/groups') {
+        return {
+          data: {
+            success: true,
+            data: pricing.usable_group,
+          },
+        }
+      }
+      throw new Error(`unexpected GET ${url}`)
+    }) as typeof api.get
+    let postCalls = 0
+    api.post = (async (url: string) => {
+      postCalls += 1
+      assert.equal(url, '/pg/images/generations?group=mobile-image-group')
+      return {
+        data: {
+          data: [{ url: '  ', b64_json: '\n', revised_prompt: 'No source' }],
+        },
+      }
+    }) as typeof api.post
+
+    const rendered = await renderDrawing()
+    try {
+      await act(
+        async () =>
+          await waitForCondition(
+            () => rendered.container.querySelectorAll('select').length === 5,
+            'drawing controls did not render'
+          )
+      )
+      const textarea = rendered.container.querySelector('textarea')
+      assert.ok(textarea)
+      await setTextareaValue(textarea, 'A quiet mountain lake at sunrise')
+
+      const generateButton = [
+        ...rendered.container.querySelectorAll('button'),
+      ].find((button) => button.textContent?.includes('Generate image'))
+      assert.ok(generateButton)
+      assert.equal(generateButton.disabled, false)
+      await act(async () => {
+        generateButton.click()
+        await flushEffects()
+      })
+
+      assert.equal(postCalls, 1)
+      assert.match(
+        rendered.container.textContent ?? '',
+        /No images were returned/
+      )
+      assert.equal(rendered.container.querySelectorAll('figure').length, 0)
+      assert.ok(generateButton.disabled === false)
     } finally {
       await act(async () => rendered.root.unmount())
       rendered.queryClient.clear()

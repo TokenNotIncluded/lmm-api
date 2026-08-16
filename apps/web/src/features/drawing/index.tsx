@@ -261,8 +261,11 @@ export function Drawing() {
             t('Unable to generate the image')
         )
       }
-      setResults(response.data.data)
-      if (response.data.data.length === 0) {
+      const usableResults = response.data.data.filter(
+        (image) => imageSource(image) !== undefined
+      )
+      setResults(usableResults)
+      if (usableResults.length === 0) {
         setError(t('No images were returned'))
       }
     } catch (cause) {
