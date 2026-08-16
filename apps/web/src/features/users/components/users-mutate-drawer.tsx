@@ -116,6 +116,7 @@ export function UsersMutateDrawer({
   const { data: groupsData } = useQuery({
     queryKey: ['groups'],
     queryFn: getGroups,
+    enabled: open,
     staleTime: 5 * 60 * 1000,
   })
 
@@ -125,6 +126,7 @@ export function UsersMutateDrawer({
   const { data: permissionCatalog = EMPTY_PERMISSION_CATALOG } = useQuery({
     queryKey: ['admin-permission-catalog'],
     queryFn: getPermissionCatalog,
+    enabled: open,
     staleTime: 5 * 60 * 1000,
   })
 
