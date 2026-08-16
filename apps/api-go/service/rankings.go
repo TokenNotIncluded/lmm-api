@@ -141,7 +141,10 @@ type vendorAggregate struct {
 	icon           string
 	totalTokens    int64
 	previousTokens int64
-	models         map[string]struct{}
+	// currentTotals is grouped by model_name, so a distinct model set is not
+	// needed to calculate the vendor's model count. Keeping only the count
+	// avoids retaining one map entry per model when the catalog grows large.
+	modelsCount    int
 	topModel       string
 	topModelTokens int64
 }
@@ -386,7 +389,7 @@ func buildRankedVendors(currentTotals []model.RankingQuotaTotal, previousTotals 
 		modelMeta := modelMeta(item.ModelName, meta)
 		agg := ensureVendorAggregate(aggregates, modelMeta)
 		agg.totalTokens += item.TotalTokens
-		agg.models[item.ModelName] = struct{}{}
+		agg.modelsCount++
 		if item.TotalTokens > agg.topModelTokens {
 			agg.topModel = item.ModelName
 			agg.topModelTokens = item.TotalTokens
@@ -413,7 +416,7 @@ func buildRankedVendors(currentTotals []model.RankingQuotaTotal, previousTotals 
 			TotalTokens: agg.totalTokens,
 			Share:       rankingShare(agg.totalTokens, totalTokens),
 			GrowthPct:   growth,
-			ModelsCount: len(agg.models),
+			ModelsCount: agg.modelsCount,
 			TopModel:    agg.topModel,
 		})
 	}
@@ -437,9 +440,8 @@ func ensureVendorAggregate(aggregates map[string]*vendorAggregate, meta rankingM
 	agg, ok := aggregates[name]
 	if !ok {
 		agg = &vendorAggregate{
-			name:   name,
-			icon:   meta.vendorIcon,
-			models: make(map[string]struct{}),
+			name: name,
+			icon: meta.vendorIcon,
 		}
 		aggregates[name] = agg
 	}

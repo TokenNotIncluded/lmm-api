@@ -106,3 +106,24 @@ func TestRankedModelLimitAndMoverSelectionPreserveResults(t *testing.T) {
 	require.Equal(t, legacyMovers, selectedMovers)
 	require.Equal(t, legacyDroppers, selectedDroppers)
 }
+
+func TestRankedVendorsCountsGroupedModelsWithoutRetainingModelSet(t *testing.T) {
+	totals := []model.RankingQuotaTotal{
+		{ModelName: "alpha", TotalTokens: 30},
+		{ModelName: "beta", TotalTokens: 20},
+		{ModelName: "gamma", TotalTokens: 10},
+	}
+	meta := map[string]rankingModelMeta{
+		"alpha": {vendor: "vendor-a"},
+		"beta":  {vendor: "vendor-a"},
+		"gamma": {vendor: "vendor-b"},
+	}
+
+	rows := buildRankedVendors(totals, nil, 60, meta, false)
+	require.Len(t, rows, 2)
+	require.Equal(t, "vendor-a", rows[0].Vendor)
+	require.Equal(t, 2, rows[0].ModelsCount)
+	require.Equal(t, "alpha", rows[0].TopModel)
+	require.Equal(t, "vendor-b", rows[1].Vendor)
+	require.Equal(t, 1, rows[1].ModelsCount)
+}
