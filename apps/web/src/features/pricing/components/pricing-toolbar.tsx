@@ -305,6 +305,36 @@ export function PricingToolbar(props: PricingToolbarProps) {
               onClearFilters={props.onClearFilters}
               className='border-0 bg-transparent p-0 shadow-none'
             />
+            <div className='border-border space-y-4 border-t pt-4 sm:hidden'>
+              <div className='space-y-2'>
+                <p className='text-muted-foreground text-xs font-medium'>
+                  {t('Price display mode')}
+                </p>
+                <SegmentedControl
+                  options={[
+                    { value: 'standard', label: t('Standard') },
+                    { value: 'recharge', label: t('Recharge') },
+                  ]}
+                  value={props.showRechargePrice ? 'recharge' : 'standard'}
+                  onChange={handleRechargePriceChange}
+                  ariaLabel={t('Price display mode')}
+                />
+              </div>
+              <div className='space-y-2'>
+                <p className='text-muted-foreground text-xs font-medium'>
+                  {t('Token unit')}
+                </p>
+                <SegmentedControl
+                  options={[
+                    { value: 'M', label: '/1M' },
+                    { value: 'K', label: '/1K' },
+                  ]}
+                  value={props.tokenUnit}
+                  onChange={handleTokenUnitChange}
+                  ariaLabel={t('Token unit')}
+                />
+              </div>
+            </div>
           </div>
         </SheetContent>
       </Sheet>
