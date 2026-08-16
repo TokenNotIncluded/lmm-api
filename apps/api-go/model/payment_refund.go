@@ -36,11 +36,11 @@ type PaymentRefundResult struct {
 	Created      bool
 }
 
-// ApplyWaffoPancakeRefund atomically records a signed refund and reverses the
-// wallet/subscription value that the original order granted. The provider
+// ApplyPaymentRefund atomically records a verified provider refund and reverses
+// the wallet/subscription value that the original order granted. The provider
 // event id is the idempotency boundary, while the order's cumulative fields
 // make partial refunds safe across multiple events.
-func ApplyWaffoPancakeRefund(
+func ApplyPaymentRefund(
 	tradeNo string,
 	isSubscription bool,
 	amountMicros int64,
@@ -236,6 +236,25 @@ func ApplyWaffoPancakeRefund(
 		InvalidatePaidTopUpAggregate(result.UserID)
 	}
 	return result, nil
+}
+
+// ApplyWaffoPancakeRefund is retained for existing callers. New provider
+// handlers must call ApplyPaymentRefund after verifying their own webhook.
+func ApplyWaffoPancakeRefund(
+	tradeNo string,
+	isSubscription bool,
+	amountMicros int64,
+	currency string,
+	providerEventID string,
+	paymentMethod string,
+	paymentProvider string,
+	note string,
+	actorID int,
+) (PaymentRefundResult, error) {
+	return ApplyPaymentRefund(
+		tradeNo, isSubscription, amountMicros, currency, providerEventID,
+		paymentMethod, paymentProvider, note, actorID,
+	)
 }
 
 func moneyToMicros(value float64) int64 {

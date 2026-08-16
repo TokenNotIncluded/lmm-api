@@ -429,10 +429,107 @@ func WaffoWebhook(c *gin.Context) {
 		}
 		logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo webhook 验签并解析成功 event_type=%s merchant_order_id=%s order_status=%s client_ip=%s", event.EventType, payload.Result.MerchantOrderID, payload.Result.OrderStatus, c.ClientIP()))
 		handleWaffoPayment(c, wh, &payload.Result.PaymentNotificationResult)
+	case core.EventRefund:
+		var payload core.RefundNotification
+		if err := common.Unmarshal(bodyBytes, &payload); err != nil {
+			logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo 退款回调载荷解析失败 event_type=%s client_ip=%s error=%q", event.EventType, c.ClientIP(), err.Error()))
+			sendWaffoWebhookResponse(c, wh, false, "invalid refund payload")
+			return
+		}
+		handleWaffoRefund(c, wh, payload.Result)
 	default:
 		logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo webhook 忽略事件 event_type=%s client_ip=%s", event.EventType, c.ClientIP()))
 		sendWaffoWebhookResponse(c, wh, true, "")
 	}
+}
+
+func waffoRefundEventID(result *core.RefundNotificationResult) string {
+	if result == nil {
+		return ""
+	}
+	for _, value := range []string{
+		result.AcquiringRefundOrderID,
+		result.RefundRequestID,
+		result.MerchantRefundOrderID,
+	} {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+// handleWaffoRefund applies only final, signed refund notifications. The
+// original payment request ID is the local trade number because checkout
+// creation sets paymentRequestId and merchantOrderId to the same value.
+func handleWaffoRefund(c *gin.Context, wh *core.WebhookHandler, result *core.RefundNotificationResult) {
+	if result == nil {
+		logger.LogWarn(c.Request.Context(), fmt.Sprintf("Waffo 退款回调缺少结果 client_ip=%s", c.ClientIP()))
+		sendWaffoWebhookResponse(c, wh, false, "missing refund result")
+		return
+	}
+
+	status := strings.TrimSpace(result.RefundStatus)
+	tradeNo := strings.TrimSpace(result.OrigPaymentRequestID)
+	if status != core.RefundStatusPartiallyRefunded && status != core.RefundStatusFullyRefunded {
+		logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo 退款未成功，忽略资金回冲 trade_no=%s refund_status=%s client_ip=%s", tradeNo, status, c.ClientIP()))
+		sendWaffoWebhookResponse(c, wh, true, "")
+		return
+	}
+	if tradeNo == "" {
+		logger.LogWarn(c.Request.Context(), fmt.Sprintf("Waffo 成功退款缺少原支付单号 refund_id=%s client_ip=%s", waffoRefundEventID(result), c.ClientIP()))
+		sendWaffoWebhookResponse(c, wh, false, "missing original payment id")
+		return
+	}
+	refundEventID := waffoRefundEventID(result)
+	if refundEventID == "" {
+		logger.LogWarn(c.Request.Context(), fmt.Sprintf("Waffo 成功退款缺少稳定退款标识 trade_no=%s client_ip=%s", tradeNo, c.ClientIP()))
+		sendWaffoWebhookResponse(c, wh, false, "missing refund id")
+		return
+	}
+	amountMicros, err := monetaryStringToMicros(result.RefundAmount)
+	if err != nil || amountMicros <= 0 {
+		logger.LogWarn(c.Request.Context(), fmt.Sprintf("Waffo 退款金额无效 trade_no=%s refund_id=%s client_ip=%s", tradeNo, refundEventID, c.ClientIP()))
+		sendWaffoWebhookResponse(c, wh, false, "invalid refund amount")
+		return
+	}
+
+	// Bind the event to an already-settled local Waffo top-up before using any
+	// refund fields. Currency is read from the original local settlement, not
+	// from the callback's user-facing display field.
+	topUp := model.GetTopUpByTradeNo(tradeNo)
+	if topUp == nil || topUp.PaymentProvider != model.PaymentProviderWaffo || topUp.Status != common.TopUpStatusSuccess {
+		logger.LogWarn(c.Request.Context(), fmt.Sprintf("Waffo 退款原订单不匹配 trade_no=%s refund_id=%s client_ip=%s", tradeNo, refundEventID, c.ClientIP()))
+		sendWaffoWebhookResponse(c, wh, false, "refund order mismatch")
+		return
+	}
+	currency := strings.TrimSpace(topUp.SettlementCurrency)
+	if currency == "" {
+		logger.LogWarn(c.Request.Context(), fmt.Sprintf("Waffo 退款原订单缺少结算币种 trade_no=%s refund_id=%s client_ip=%s", tradeNo, refundEventID, c.ClientIP()))
+		sendWaffoWebhookResponse(c, wh, false, "missing settlement currency")
+		return
+	}
+	refundResult, err := model.ApplyPaymentRefund(
+		tradeNo,
+		false,
+		amountMicros,
+		currency,
+		refundEventID,
+		model.PaymentMethodWaffo,
+		model.PaymentProviderWaffo,
+		fmt.Sprintf("Waffo refund.succeeded trade_no=%s refund_id=%s", tradeNo, refundEventID),
+		topUp.UserId,
+	)
+	if err != nil {
+		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo 退款处理失败 trade_no=%s refund_id=%s client_ip=%s error=%q", tradeNo, refundEventID, c.ClientIP(), err.Error()))
+		sendWaffoWebhookResponse(c, wh, false, "refund processing failed")
+		return
+	}
+	if refundResult.Created {
+		model.RecordLog(topUp.UserId, model.LogTypeRefund, fmt.Sprintf("Waffo refund.succeeded trade_no=%s refund_id=%s amount=%s", tradeNo, refundEventID, result.RefundAmount))
+	}
+	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo 退款已记账 trade_no=%s user_id=%d refund_id=%s amount_micros=%d quota_debited=%d", tradeNo, topUp.UserId, refundEventID, amountMicros, refundResult.QuotaDebited))
+	sendWaffoWebhookResponse(c, wh, true, "")
 }
 
 // handleWaffoPayment 处理支付完成通知
