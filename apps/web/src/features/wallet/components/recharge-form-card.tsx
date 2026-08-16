@@ -121,6 +121,7 @@ interface RechargeFormCardProps {
   topupLink?: string
   loading?: boolean
   error?: Error | null
+  onRetry?: () => void | Promise<void>
   priceRatio?: number
   onOpenBilling?: () => void
   onCreemProductSelect?: (product: CreemProduct) => void
@@ -157,6 +158,7 @@ export function RechargeFormCard({
   topupLink,
   loading,
   error,
+  onRetry,
   priceRatio = 1,
   onOpenBilling,
   onCreemProductSelect,
@@ -339,6 +341,18 @@ export function RechargeFormCard({
               'Payment availability could not be verified. Contact support before attempting to add funds.'
             )}
           </AlertDescription>
+          {onRetry ? (
+            <Button
+              type='button'
+              variant='outline'
+              size='sm'
+              className='mt-3'
+              onClick={() => void onRetry()}
+              disabled={loading}
+            >
+              {t('Retry')}
+            </Button>
+          ) : null}
         </Alert>
       </TitledCard>
     )

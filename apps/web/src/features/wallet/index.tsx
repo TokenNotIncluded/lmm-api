@@ -113,6 +113,7 @@ export function Wallet(props: WalletProps) {
     presetAmounts,
     loading: topupLoading,
     error: topupError,
+    refetch: refetchTopupInfo,
   } = useTopupInfo()
   const topupAvailability = useMemo(
     () => getTopupAvailability(topupInfo),
@@ -529,6 +530,7 @@ export function Wallet(props: WalletProps) {
                   topupLink={topupInfo?.topup_link}
                   loading={topupLoading}
                   error={topupError}
+                  onRetry={refetchTopupInfo}
                   priceRatio={(status?.price as number) || 1}
                   onOpenBilling={() => setBillingDialogOpen(true)}
                   onCreemProductSelect={handleCreemProductSelect}

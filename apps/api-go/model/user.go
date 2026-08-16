@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
 
@@ -35,6 +34,10 @@ var userSortColumns = map[string]userSortColumn{
 	"topup_quota": {
 		name:       "topup_quota",
 		expression: "COALESCE(user_topup_totals.credited_quota, 0)",
+	},
+	"topup_money": {
+		name:       "topup_money",
+		expression: "COALESCE(user_topup_totals.money_micros, 0)",
 	},
 	"assistant_violations": {
 		name:       "assistant_violations",
@@ -116,19 +119,31 @@ func resolveUserSortOptions(sortOptions []UserSortOptions) UserSortOptions {
 }
 
 type userTopupAggregate struct {
-	UserID              int     `gorm:"column:user_id"`
-	PaymentMethod       string  `gorm:"column:payment_method"`
-	PaymentProvider     string  `gorm:"column:payment_provider"`
-	CreditedQuota       int64   `gorm:"column:credited_quota"`
-	Money               float64 `gorm:"column:money"`
-	SettledAmountMicros int64   `gorm:"column:settled_amount_micros"`
-	Orders              int64   `gorm:"column:orders"`
+	UserID          int    `gorm:"column:user_id"`
+	PaymentMethod   string `gorm:"column:payment_method"`
+	PaymentProvider string `gorm:"column:payment_provider"`
+	CreditedQuota   int64  `gorm:"column:credited_quota"`
+	MoneyMicros     int64  `gorm:"column:money_micros"`
+	Orders          int64  `gorm:"column:orders"`
+}
+
+// userTopupMoneyMicrosSQL prefers the immutable settlement amount recorded by
+// a provider. Historical successful rows predate that column, so retain their
+// stored money amount as a per-row fallback instead of allowing one settled
+// payment to mask older rows in the same payment-method aggregate.
+func userTopupMoneyMicrosSQL(db *gorm.DB) string {
+	legacyMoneyMicros := "CAST(ROUND(money * 1000000) AS BIGINT)"
+	if db != nil && db.Dialector != nil && db.Dialector.Name() == "mysql" {
+		legacyMoneyMicros = "CAST(ROUND(money * 1000000) AS SIGNED)"
+	}
+	return "CASE WHEN settled_amount_micros > 0 THEN settled_amount_micros WHEN money > 0 THEN " + legacyMoneyMicros + " ELSE 0 END"
 }
 
 func userTopupTotals(tx *gorm.DB) *gorm.DB {
 	creditedQuotaExpression, creditedQuotaArgs := positiveNormalizedCreditedQuotaSQL()
+	moneyMicrosExpression := userTopupMoneyMicrosSQL(tx)
 	return tx.Model(&TopUp{}).
-		Select("user_id, COALESCE(SUM("+creditedQuotaExpression+"), 0) AS credited_quota", creditedQuotaArgs...).
+		Select("user_id, COALESCE(SUM("+creditedQuotaExpression+"), 0) AS credited_quota, COALESCE(SUM("+moneyMicrosExpression+"), 0) AS money_micros", creditedQuotaArgs...).
 		Where("status = ?", common.TopUpStatusSuccess).
 		// Subscription completion mirrors have no credited quota or amount. Keep
 		// this aggregate independent of the optional subscription table so user
@@ -172,8 +187,9 @@ func PopulateUserTopups(users []*User) error {
 
 	var rows []userTopupAggregate
 	creditedQuotaExpression, creditedQuotaArgs := positiveNormalizedCreditedQuotaSQL()
+	moneyMicrosExpression := userTopupMoneyMicrosSQL(DB)
 	if err := DB.Model(&TopUp{}).
-		Select("user_id, payment_method, payment_provider, COALESCE(SUM("+creditedQuotaExpression+"), 0) AS credited_quota, COALESCE(SUM(money), 0) AS money, COALESCE(SUM(settled_amount_micros), 0) AS settled_amount_micros, COUNT(*) AS orders", creditedQuotaArgs...).
+		Select("user_id, payment_method, payment_provider, COALESCE(SUM("+creditedQuotaExpression+"), 0) AS credited_quota, COALESCE(SUM("+moneyMicrosExpression+"), 0) AS money_micros, COUNT(*) AS orders", creditedQuotaArgs...).
 		Where("status = ? AND user_id IN ?", common.TopUpStatusSuccess, ids).
 		Where("(credited_quota <> 0 OR amount <> 0)").
 		Group("user_id, payment_method, payment_provider").
@@ -193,15 +209,11 @@ func PopulateUserTopups(users []*User) error {
 		if summary == nil {
 			continue
 		}
-		moneyMicros := row.SettledAmountMicros
-		if moneyMicros <= 0 && row.Money > 0 {
-			moneyMicros = int64(math.Round(row.Money * 1_000_000))
-		}
 		method := UserTopupMethod{
 			Method:      strings.TrimSpace(row.PaymentMethod),
 			Provider:    strings.TrimSpace(row.PaymentProvider),
 			Quota:       row.CreditedQuota,
-			MoneyMicros: moneyMicros,
+			MoneyMicros: row.MoneyMicros,
 			Orders:      row.Orders,
 		}
 		summary.Quota += method.Quota

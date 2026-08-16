@@ -31,6 +31,7 @@ import {
   EmptyTitle,
 } from '@/components/ui/empty'
 import { Skeleton } from '@/components/ui/skeleton'
+import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 import { formatQuota } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
@@ -175,10 +176,12 @@ function UserMobileRow({ row }: { row: Row<User> }) {
         </MobileMetric>
         <MobileMetric label={t('Top-up')}>
           <div className='truncate tabular-nums'>
-            {formatQuota(topup?.quota ?? 0)}
-            <span className='text-muted-foreground ml-1 text-xs'>
-              · {topup?.orders ?? 0}
-            </span>
+            {formatBillingCurrencyFromUSD(
+              (topup?.money_micros ?? 0) / 1_000_000
+            )}
+          </div>
+          <div className='text-muted-foreground mt-0.5 truncate text-xs tabular-nums'>
+            {formatQuota(topup?.quota ?? 0)} · {topup?.orders ?? 0}
           </div>
         </MobileMetric>
       </div>

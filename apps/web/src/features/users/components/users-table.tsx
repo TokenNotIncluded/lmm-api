@@ -57,6 +57,7 @@ const USER_SORTABLE_COLUMNS = new Set<UserSortBy>([
   'created_at',
   'last_login_at',
   'topup_quota',
+  'topup_money',
   'assistant_violations',
 ])
 

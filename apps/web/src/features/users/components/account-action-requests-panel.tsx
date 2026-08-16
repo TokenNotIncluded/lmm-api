@@ -69,8 +69,9 @@ export function AccountActionRequestsPanel(props: { focusRequestId?: number }) {
       props.focusRequestId === undefined ||
       loading ||
       typeof document === 'undefined'
-    )
+    ) {
       return
+    }
     document
       .getElementById(`account-action-request-${props.focusRequestId}`)
       ?.scrollIntoView({ block: 'center', behavior: 'smooth' })

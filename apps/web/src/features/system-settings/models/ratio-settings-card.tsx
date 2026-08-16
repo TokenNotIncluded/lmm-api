@@ -27,12 +27,16 @@ import * as z from 'zod'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
-import { resetModelRatios } from '../api'
+import { resetModelRatios, updateSystemOptions } from '../api'
 import { SettingsPageTitleStatusPortal } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 import { positiveIntegerSchema } from '../utils/numeric-field'
 import { GroupRatioForm } from './group-ratio-form'
+import {
+  changedGroupRatioOptions,
+  type GroupRatioOptionValues,
+} from './group-ratio-option-values'
 import { ModelRatioForm } from './model-ratio-form'
 import { ToolPriceSettings } from './tool-price-settings'
 import { UpstreamRatioSync } from './upstream-ratio-sync'
@@ -179,6 +183,23 @@ export function RatioSettingsCard({
     },
     onError: (error: Error) => {
       toast.error(error.message || t('Failed to reset model ratios'))
+    },
+  })
+
+  const groupUpdateMutation = useMutation({
+    mutationFn: async (values: Record<string, string>) => {
+      const response = await updateSystemOptions(values)
+      if (!response.success) {
+        throw new Error(response.message || t('Failed to update setting'))
+      }
+      return response
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['system-options'] })
+      toast.success(t('Setting updated successfully'))
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || t('Failed to update setting'))
     },
   })
 
@@ -364,7 +385,7 @@ export function RatioSettingsCard({
 
   const saveGroupRatios = useCallback(
     async (values: GroupFormValues) => {
-      const normalized = {
+      const normalized: GroupRatioOptionValues = {
         GroupRatio: normalizeJsonString(values.GroupRatio),
         TopupGroupRatio: normalizeJsonString(values.TopupGroupRatio),
         UserUsableGroups: normalizeJsonString(values.UserUsableGroups),
@@ -378,26 +399,19 @@ export function RatioSettingsCard({
         GroupWarnings: normalizeJsonString(values.GroupWarnings),
       }
 
-      // Map form field names to API keys (most are 1:1, except GroupSpecialUsableGroup)
-      const apiKeyMap: Record<string, string> = {
-        GroupSpecialUsableGroup:
-          'group_ratio_setting.group_special_usable_group',
-        GroupWarnings: 'group_ratio_setting.group_warnings',
-      }
-
-      const updates = (
-        Object.keys(normalized) as Array<keyof typeof normalized>
-      ).filter(
-        (key) => normalized[key] !== groupNormalizedDefaults.current[key]
+      const updates = changedGroupRatioOptions(
+        normalized,
+        groupNormalizedDefaults.current
       )
-
-      for (const key of updates) {
-        const apiKey = apiKeyMap[key] || key
-        await updateOption.mutateAsync({ key: apiKey, value: normalized[key] })
+      if (Object.keys(updates).length === 0) {
+        toast.info(t('No changes to save'))
+        return
       }
+
+      await groupUpdateMutation.mutateAsync(updates)
       groupNormalizedDefaults.current = normalized
     },
-    [updateOption]
+    [groupUpdateMutation, t]
   )
 
   const handleResetRatios = useCallback(() => {
@@ -445,7 +459,7 @@ export function RatioSettingsCard({
         <GroupRatioForm
           form={groupForm}
           onSave={saveGroupRatios}
-          isSaving={updateOption.isPending}
+          isSaving={groupUpdateMutation.isPending}
         />
       )
     }

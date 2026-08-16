@@ -65,6 +65,70 @@ func TestSearchUsersSortsBeforePagination(t *testing.T) {
 	assert.Equal(t, []int{21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40}, collectUserIDs(users))
 }
 
+func TestUserListsSortByActualTopUpMoney(t *testing.T) {
+	truncateTables(t)
+	insertUsersForPaginationTest(t, 4)
+
+	fixtures := []TopUp{
+		{
+			UserId:          2,
+			TradeNo:         "user-topup-money-legacy",
+			Amount:          1,
+			CreditedQuota:   int64(common.QuotaPerUnit),
+			Money:           2,
+			Status:          common.TopUpStatusSuccess,
+			PaymentMethod:   PaymentMethodStripe,
+			PaymentProvider: PaymentProviderStripe,
+		},
+		{
+			UserId:              3,
+			TradeNo:             "user-topup-money-settled",
+			Amount:              1,
+			CreditedQuota:       int64(common.QuotaPerUnit),
+			Money:               999,
+			SettledAmountMicros: 5_000_000,
+			Status:              common.TopUpStatusSuccess,
+			PaymentMethod:       PaymentMethodStripe,
+			PaymentProvider:     PaymentProviderStripe,
+		},
+		{
+			UserId:              4,
+			TradeNo:             "user-topup-money-mixed-settled",
+			Amount:              1,
+			CreditedQuota:       int64(common.QuotaPerUnit),
+			Money:               999,
+			SettledAmountMicros: 4_000_000,
+			Status:              common.TopUpStatusSuccess,
+			PaymentMethod:       PaymentMethodStripe,
+			PaymentProvider:     PaymentProviderStripe,
+		},
+		{
+			UserId:          4,
+			TradeNo:         "user-topup-money-mixed-legacy",
+			Amount:          1,
+			CreditedQuota:   int64(common.QuotaPerUnit),
+			Money:           3,
+			Status:          common.TopUpStatusSuccess,
+			PaymentMethod:   PaymentMethodStripe,
+			PaymentProvider: PaymentProviderStripe,
+		},
+	}
+	require.NoError(t, DB.Create(&fixtures).Error)
+
+	users, total, err := GetAllUsers(
+		&common.PageInfo{Page: 1, PageSize: 4},
+		false,
+		NewUserSortOptions("topup_money", "desc"),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, int64(4), total)
+	assert.Equal(t, []int{4, 3, 2, 1}, collectUserIDs(users))
+	require.NoError(t, PopulateUserTopups(users))
+	assert.EqualValues(t, 7_000_000, users[0].TopupSummary.MoneyMicros)
+	assert.EqualValues(t, 5_000_000, users[1].TopupSummary.MoneyMicros)
+	assert.EqualValues(t, 2_000_000, users[2].TopupSummary.MoneyMicros)
+}
+
 func TestUserListsFilterL0BeforePagination(t *testing.T) {
 	truncateTables(t)
 	for userID := 1; userID <= 8; userID++ {

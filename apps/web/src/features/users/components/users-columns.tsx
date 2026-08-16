@@ -30,6 +30,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 import { formatQuota, formatTimestamp } from '@/lib/format'
 
 import {
@@ -280,6 +281,54 @@ export function useUsersColumns(): ColumnDef<User>[] {
       },
       size: 170,
       meta: { mobileOrder: 45 },
+    },
+    {
+      id: 'topup_money',
+      accessorFn: (row) => row.topup_summary?.money_micros ?? 0,
+      header: t('Top-up amount'),
+      cell: ({ row }) => {
+        const summary = row.original.topup_summary
+        const methods = summary?.methods ?? []
+        return (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <div className='flex min-w-[130px] cursor-help flex-col gap-0.5 text-sm tabular-nums' />
+              }
+            >
+              {formatBillingCurrencyFromUSD(
+                (summary?.money_micros ?? 0) / 1_000_000
+              )}
+            </TooltipTrigger>
+            <TooltipContent className='max-w-[320px]'>
+              {methods.length === 0 ? (
+                <p className='text-xs'>{formatBillingCurrencyFromUSD(0)}</p>
+              ) : (
+                <div className='space-y-1'>
+                  {methods.map((method) => {
+                    const label = [
+                      method.method.trim(),
+                      method.provider?.trim(),
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')
+                    return (
+                      <p key={`${label}-${method.orders}`} className='text-xs'>
+                        {label || '—'}:{' '}
+                        {formatBillingCurrencyFromUSD(
+                          method.money_micros / 1_000_000
+                        )}
+                      </p>
+                    )
+                  })}
+                </div>
+              )}
+            </TooltipContent>
+          </Tooltip>
+        )
+      },
+      size: 150,
+      meta: { mobileOrder: 46 },
     },
     {
       accessorKey: 'group',

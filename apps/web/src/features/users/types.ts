@@ -119,6 +119,7 @@ export type UserSortBy =
   | 'created_at'
   | 'last_login_at'
   | 'topup_quota'
+  | 'topup_money'
   | 'assistant_violations'
 
 export type UserSortOrder = 'asc' | 'desc'
