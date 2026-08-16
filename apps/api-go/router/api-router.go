@@ -13,6 +13,10 @@ import (
 
 const (
 	waffoPancakeMutationRequestMaxBytes = 16 << 10
+	// Subscription preference and checkout requests only contain plan IDs,
+	// payment-method selectors, and redirect-free metadata. Bound the entire
+	// authenticated subscription surface before any ShouldBindJSON call.
+	subscriptionMutationRequestMaxBytes = 16 << 10
 	// Self updates only contain profile fields and console preferences. Keep the
 	// decoded request bounded before UpdateSelf streams it into a map.
 	userSelfMutationRequestMaxBytes = 16 << 10
@@ -288,7 +292,7 @@ func SetApiRouter(router *gin.Engine) {
 
 		// Subscription billing (plans, purchase, admin management)
 		subscriptionRoute := apiRouter.Group("/subscription")
-		subscriptionRoute.Use(middleware.UserAuth())
+		subscriptionRoute.Use(middleware.RequestBodyLimit(subscriptionMutationRequestMaxBytes), middleware.UserAuth())
 		{
 			subscriptionRoute.GET("/plans", controller.GetSubscriptionPlans)
 			subscriptionRoute.GET("/self", controller.GetSubscriptionSelf)

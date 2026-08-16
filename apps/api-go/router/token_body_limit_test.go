@@ -15,7 +15,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestTokenMutationRoutesRejectOversizedJSONBeforeBinding(t *testing.T) {
+func TestProtectedMutationRoutesRejectOversizedJSONBeforeBinding(t *testing.T) {
 	previousDB := model.DB
 	previousRedisEnabled := common.RedisEnabled
 	previousMainDatabaseType, previousLogDatabaseType := common.MainDatabaseType(), common.LogDatabaseType()
@@ -60,6 +60,15 @@ func TestTokenMutationRoutesRejectOversizedJSONBeforeBinding(t *testing.T) {
 	engine.ServeHTTP(response, request)
 
 	require.Equal(t, http.StatusRequestEntityTooLarge, response.Code)
+
+	subscriptionBody := `{"plan_id":1,"padding":"` + strings.Repeat("x", subscriptionMutationRequestMaxBytes) + `"}`
+	subscriptionRequest := httptest.NewRequest(http.MethodPost, "/api/subscription/balance/pay", strings.NewReader(subscriptionBody))
+	subscriptionRequest.Header.Set("Authorization", "Bearer "+accessToken)
+	subscriptionResponse := httptest.NewRecorder()
+
+	engine.ServeHTTP(subscriptionResponse, subscriptionRequest)
+
+	require.Equal(t, http.StatusRequestEntityTooLarge, subscriptionResponse.Code)
 }
 
 func TestEmailBindRouteRejectsOversizedJSONBeforeAuthentication(t *testing.T) {
