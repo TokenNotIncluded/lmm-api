@@ -3,6 +3,7 @@
 package perfmetrics
 
 import (
+	"errors"
 	"sync"
 	"testing"
 )
@@ -124,5 +125,23 @@ func TestMergeModelBucketRetainsOnlyRecentSuccessRateBuckets(t *testing.T) {
 	rates := recentSuccessRates(buckets, recentSuccessRateBucketLimit)
 	if len(rates) != recentSuccessRateBucketLimit || rates[0] != 0 || rates[1] != 100 || rates[2] != 0 {
 		t.Fatalf("recent success rates=%v, want [0 100 0]", rates)
+	}
+}
+
+func TestMergeModelSummaryRejectsExcessModelsBeforeAllocation(t *testing.T) {
+	totals := map[string]counters{}
+	modelBuckets := map[string]map[int64]counters{}
+	value := counters{requestCount: 1, successCount: 1}
+
+	for _, name := range []string{"first", "second"} {
+		if err := mergeModelSummary(totals, modelBuckets, name, 1, value, 2); err != nil {
+			t.Fatalf("merge %q: %v", name, err)
+		}
+	}
+	if err := mergeModelSummary(totals, modelBuckets, "third", 1, value, 2); !errors.Is(err, ErrPerformanceSummaryTooManyModels) {
+		t.Fatalf("third model error=%v, want model safety limit", err)
+	}
+	if len(totals) != 2 || len(modelBuckets) != 2 {
+		t.Fatalf("maps grew past limit: totals=%d buckets=%d", len(totals), len(modelBuckets))
 	}
 }

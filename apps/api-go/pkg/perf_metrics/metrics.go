@@ -2,6 +2,7 @@ package perfmetrics
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -17,6 +18,9 @@ import (
 
 const hotBucketMaxEntries = 16_384
 const recentSuccessRateBucketLimit = 3
+const performanceSummaryMaxModels = 100_000
+
+var ErrPerformanceSummaryTooManyModels = errors.New("performance summary exceeds model safety limit")
 
 var hotBuckets sync.Map
 var hotBucketCount atomic.Int64
@@ -178,15 +182,24 @@ func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
 			outputTokens:   row.OutputTokens,
 			generationMs:   row.GenerationMs,
 		}
-		mergeModelTotals(totals, row.ModelName, value)
-		mergeModelBucket(modelBuckets, row.ModelName, row.BucketTs, value)
-		return nil
+		return mergeModelSummary(
+			totals,
+			modelBuckets,
+			row.ModelName,
+			row.BucketTs,
+			value,
+			performanceSummaryMaxModels,
+		)
 	}
 	if err := model.IteratePerfMetricsSummaryBucketsAll(startTs, endTs, groups, visit); err != nil {
 		return SummaryAllResult{}, err
 	}
 
+	var summaryErr error
 	hotBuckets.Range(func(key, value any) bool {
+		if summaryErr != nil {
+			return false
+		}
 		k := key.(bucketKey)
 		if k.bucketTs < startTs || k.bucketTs > endTs {
 			return true
@@ -200,10 +213,19 @@ func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
 		if snap.requestCount == 0 {
 			return true
 		}
-		mergeModelTotals(totals, k.model, snap)
-		mergeModelBucket(modelBuckets, k.model, k.bucketTs, snap)
-		return true
+		summaryErr = mergeModelSummary(
+			totals,
+			modelBuckets,
+			k.model,
+			k.bucketTs,
+			snap,
+			performanceSummaryMaxModels,
+		)
+		return summaryErr == nil
 	})
+	if summaryErr != nil {
+		return SummaryAllResult{}, summaryErr
+	}
 
 	models := make([]ModelSummary, 0, len(totals))
 	for name, total := range totals {
@@ -245,6 +267,25 @@ func mergeModelTotals(totals map[string]counters, modelName string, value counte
 	current.outputTokens += value.outputTokens
 	current.generationMs += value.generationMs
 	totals[modelName] = current
+}
+
+func mergeModelSummary(
+	totals map[string]counters,
+	modelBuckets map[string]map[int64]counters,
+	modelName string,
+	bucketTs int64,
+	value counters,
+	maxModels int,
+) error {
+	if value.requestCount == 0 {
+		return nil
+	}
+	if _, exists := totals[modelName]; !exists && len(totals) >= maxModels {
+		return ErrPerformanceSummaryTooManyModels
+	}
+	mergeModelTotals(totals, modelName, value)
+	mergeModelBucket(modelBuckets, modelName, bucketTs, value)
+	return nil
 }
 
 func mergeModelBucket(modelBuckets map[string]map[int64]counters, modelName string, bucketTs int64, value counters) {
