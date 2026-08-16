@@ -61,6 +61,10 @@ import {
   type FinanceUserMetric,
 } from './api'
 import { financeLedgerUserFilter } from './ledger-user-filter'
+import {
+  paymentMethodSummary,
+  type PaymentMethodSummary,
+} from './payment-method-metrics'
 
 const route = getRouteApi('/_authenticated/finance/')
 const WINDOWS = [7, 30, 90] as const
@@ -109,11 +113,15 @@ function Metric({
 
 function PaymentMethodRow({
   method,
+  summary,
+  currency,
   onChange,
   onView,
   viewing,
 }: {
   method: FinancePaymentMethod
+  summary: PaymentMethodSummary
+  currency: string
   onChange: (value: Partial<FinancePaymentMethod>) => void
   onView: () => void
   viewing: boolean
@@ -139,6 +147,17 @@ function PaymentMethodRow({
         <p className='text-muted-foreground truncate text-xs'>
           {method.method}
         </p>
+        {summary.revenueMicros !== 0 || summary.refundMicros !== 0 ? (
+          <p className='text-muted-foreground mt-1 text-xs tabular-nums'>
+            {t('Revenue')}: {money(summary.revenueMicros, currency)}
+            {summary.refundMicros > 0
+              ? ` · ${t('Refund')}: ${money(summary.refundMicros, currency)}`
+              : ''}
+            {summary.refundMicros > 0
+              ? ` = ${money(summary.netRevenueMicros, currency)}`
+              : ''}
+          </p>
+        ) : null}
       </div>
       <div className='text-muted-foreground flex flex-wrap items-center justify-end gap-x-3 gap-y-1 text-xs'>
         <label className='flex items-center gap-2'>
@@ -755,6 +774,12 @@ export function Finance() {
                   <PaymentMethodRow
                     key={method.method}
                     method={method}
+                    summary={paymentMethodSummary(
+                      method.method,
+                      overview?.revenue_by_method,
+                      overview?.refund_by_method
+                    )}
+                    currency={overview?.currency ?? 'USD'}
                     onChange={(value) => void updateMethod(method, value)}
                     onView={() => {
                       openLedger(method.method, method.label || method.method)

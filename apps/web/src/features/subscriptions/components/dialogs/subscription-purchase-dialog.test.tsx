@@ -88,8 +88,10 @@ type Rendered = {
 
 type DialogOptions = {
   enableStripe?: boolean
+  enableWaffoPancake?: boolean
   enableOnlineTopUp?: boolean
   epayMethods?: Array<{ type: string; name?: string }>
+  onCheckoutStarted?: () => void
 }
 
 async function renderDialog(options: DialogOptions = {}): Promise<Rendered> {
@@ -102,11 +104,23 @@ async function renderDialog(options: DialogOptions = {}): Promise<Rendered> {
         <SubscriptionPurchaseDialog
           open
           onOpenChange={() => undefined}
-          plan={plan}
+          plan={
+            options.enableWaffoPancake
+              ? {
+                  ...plan,
+                  plan: {
+                    ...plan.plan,
+                    waffo_pancake_product_id: 'pancake-mobile-starter',
+                  },
+                }
+              : plan
+          }
           enableStripe={options.enableStripe ?? true}
+          enableWaffoPancake={options.enableWaffoPancake}
           enableOnlineTopUp={options.enableOnlineTopUp}
           epayMethods={options.epayMethods}
           userQuota={0}
+          onCheckoutStarted={options.onCheckoutStarted}
         />
       </I18nextProvider>
     )
@@ -259,6 +273,48 @@ describe('subscription purchase checkout', () => {
           fields: { pid: 'subscription-7', sign: 'signed' },
         },
       ])
+    } finally {
+      await unmount(rendered)
+    }
+  })
+
+  test('keeps the subscription dialog open for an invalid Pancake checkout URL', async () => {
+    let checkoutStarted = 0
+    api.post = (async (url) => {
+      assert.equal(url, '/api/subscription/waffo-pancake/pay')
+      return {
+        data: {
+          success: true,
+          message: 'success',
+          data: { checkout_url: 'javascript:alert(1)' },
+        },
+      }
+    }) as typeof api.post
+
+    const rendered = await renderDialog({
+      enableStripe: false,
+      enableWaffoPancake: true,
+      onCheckoutStarted: () => {
+        checkoutStarted += 1
+      },
+    })
+    try {
+      const pancakeButton = [...document.querySelectorAll('button')].find(
+        (button) => button.textContent?.trim() === 'Waffo Pancake'
+      )
+      assert.ok(pancakeButton)
+
+      await act(async () => {
+        pancakeButton.click()
+        await flushEffects()
+      })
+
+      assert.equal(checkoutStarted, 0)
+      assert.ok(
+        [...document.querySelectorAll('button')].some(
+          (button) => button.textContent?.trim() === 'Waffo Pancake'
+        )
+      )
     } finally {
       await unmount(rendered)
     }

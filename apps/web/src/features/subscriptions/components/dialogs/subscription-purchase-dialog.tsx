@@ -36,6 +36,7 @@ import {
 import { Separator } from '@/components/ui/separator'
 import {
   cancelPaymentCheckout,
+  isSafeHttpCheckoutUrl,
   redirectToPaymentCheckout,
   reservePaymentCheckout,
   submitPaymentForm,
@@ -236,6 +237,10 @@ export function SubscriptionPurchaseDialog(props: Props) {
         checkout_language: waffoPancakeCheckoutLanguage,
       })
       if (res.message === 'success' && res.data?.checkout_url) {
+        if (!isSafeHttpCheckoutUrl(res.data.checkout_url)) {
+          toast.error(t('Invalid payment redirect URL'))
+          return
+        }
         props.onCheckoutStarted?.()
         toast.success(t('Redirecting to payment page...'))
         window.location.href = res.data.checkout_url
