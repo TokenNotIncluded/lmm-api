@@ -16,6 +16,7 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 
 import { claimAssistantWeeklyDiscount, getAssistantWeeklyDiscount } from './api'
+import { copyAssistantText } from './assistant-clipboard'
 
 export function AssistantWeeklyDiscount(props: { enabled: boolean }) {
   const { t } = useTranslation()
@@ -76,9 +77,16 @@ export function AssistantWeeklyDiscount(props: { enabled: boolean }) {
             type='button'
             size='sm'
             variant='outline'
-            onClick={() => {
-              void navigator.clipboard?.writeText(discount.code ?? '')
-              toast.success(t('Discount code copied'))
+            onClick={async () => {
+              const copied = await copyAssistantText(
+                discount.code ?? '',
+                navigator.clipboard
+              )
+              if (copied) {
+                toast.success(t('Discount code copied'))
+              } else {
+                toast.error(t('Copy failed'))
+              }
             }}
           >
             {t('Copy')}
