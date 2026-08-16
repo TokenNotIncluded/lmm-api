@@ -369,6 +369,9 @@ func UpdateUserSetting(userId int, setting dto.UserSetting) error {
 	if userId == 0 {
 		return errors.New("id 为空！")
 	}
+	if err := dto.ValidateSidebarModules(setting.SidebarModules); err != nil {
+		return err
+	}
 	settingBytes, err := common.Marshal(setting)
 	if err != nil {
 		return err

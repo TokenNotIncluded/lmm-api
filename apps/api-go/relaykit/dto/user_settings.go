@@ -1,6 +1,10 @@
 package dto
 
-import "strings"
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+)
 
 type UserSetting struct {
 	NotifyType                       string  `json:"notify_type,omitempty"`                          // QuotaWarningType 额度预警类型
@@ -19,6 +23,86 @@ type UserSetting struct {
 	BillingPreference                string  `json:"billing_preference,omitempty"`                   // BillingPreference 扣费策略（订阅/钱包）
 	Language                         string  `json:"language,omitempty"`                             // Language 用户语言偏好 (zh, en)
 	UsageLeaderboardVisibility       string  `json:"usage_leaderboard_visibility,omitempty"`         // 用户使用排行榜展示方式
+}
+
+const SidebarModulesMaxBytes = 16 * 1024
+
+// ValidateSidebarModules bounds the user-controlled navigation preference
+// blob before it reaches the users.setting column or the settings cache.
+// Legacy section-only objects remain valid; the versioned envelope only gets
+// lightweight shape checks here. Visibility and role checks stay in the web
+// router and sidebar, never in this persistence guard.
+func ValidateSidebarModules(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	if len([]byte(value)) > SidebarModulesMaxBytes {
+		return fmt.Errorf("sidebar modules exceed %d bytes", SidebarModulesMaxBytes)
+	}
+
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(value), &object); err != nil || object == nil {
+		return fmt.Errorf("sidebar modules must be a JSON object")
+	}
+
+	if raw, ok := object["modules"]; ok {
+		if err := requireJSONObject(raw, "modules"); err != nil {
+			return err
+		}
+	}
+	if raw, ok := object["preferences"]; ok {
+		var preferences map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &preferences); err != nil || preferences == nil {
+			return fmt.Errorf("sidebar preferences must be a JSON object")
+		}
+		if density, ok := preferences["density"]; ok {
+			var value string
+			if err := json.Unmarshal(density, &value); err != nil || (value != "compact" && value != "comfortable") {
+				return fmt.Errorf("sidebar density is invalid")
+			}
+		}
+		if route, ok := preferences["default_route"]; ok {
+			var value string
+			if err := json.Unmarshal(route, &value); err != nil || !isInternalSidebarRoute(value) {
+				return fmt.Errorf("sidebar default route is invalid")
+			}
+		}
+		for _, key := range []string{"section_order", "hidden_sections", "hidden"} {
+			if raw, ok := preferences[key]; ok {
+				if err := requireJSONArray(raw, "sidebar "+key); err != nil {
+					return err
+				}
+			}
+		}
+		if raw, ok := preferences["module_order"]; ok {
+			if err := requireJSONObject(raw, "sidebar module_order"); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func requireJSONObject(raw json.RawMessage, name string) error {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil || object == nil {
+		return fmt.Errorf("%s must be a JSON object", name)
+	}
+	return nil
+}
+
+func requireJSONArray(raw json.RawMessage, name string) error {
+	var values []json.RawMessage
+	if err := json.Unmarshal(raw, &values); err != nil || values == nil {
+		return fmt.Errorf("%s must be a JSON array", name)
+	}
+	return nil
+}
+
+func isInternalSidebarRoute(value string) bool {
+	return value == "" || (strings.HasPrefix(value, "/") && !strings.HasPrefix(value, "//") && !strings.Contains(value, "\\"))
 }
 
 const (

@@ -967,10 +967,14 @@ func UpdateSelf(c *gin.Context) {
 		// 获取当前用户设置
 		currentSetting := user.GetSetting()
 
-		// 更新sidebar_modules字段
-		if sidebarModulesStr, ok := sidebarModules.(string); ok {
-			currentSetting.SidebarModules = sidebarModulesStr
+		// 更新 sidebar_modules 字段；拒绝非字符串和超大/畸形 JSON，避免把用户偏好
+		// 当作不受限的持久化 blob 写入设置和缓存。
+		sidebarModulesStr, ok := sidebarModules.(string)
+		if !ok || dto.ValidateSidebarModules(sidebarModulesStr) != nil {
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
 		}
+		currentSetting.SidebarModules = sidebarModulesStr
 
 		if err := model.UpdateUserSetting(user.Id, currentSetting); err != nil {
 			common.ApiErrorI18n(c, i18n.MsgUpdateFailed)
