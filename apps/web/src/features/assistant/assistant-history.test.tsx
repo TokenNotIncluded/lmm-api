@@ -327,6 +327,11 @@ describe('AssistantHistory archive controls', () => {
     const rendered = await renderHistory()
     try {
       assert.equal(calls, 1)
+      assert.ok(
+        rendered.container.querySelector(
+          '[data-testid="assistant-history-retry"]'
+        )
+      )
       assert.ok(findButton('Retry'))
       await act(async () => {
         findButton('Retry').click()
@@ -341,6 +346,11 @@ describe('AssistantHistory archive controls', () => {
     const detailRendered = await renderHistoryConversation()
     try {
       assert.equal(calls, 3)
+      assert.ok(
+        detailRendered.container.querySelector(
+          '[data-testid="assistant-history-detail-retry"]'
+        )
+      )
       assert.ok(findButton('Retry'))
       await act(async () => {
         findButton('Retry').click()

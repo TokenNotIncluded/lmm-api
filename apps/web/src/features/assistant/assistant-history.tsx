@@ -249,7 +249,13 @@ export function AssistantHistory(props: {
           variables.archived
             ? 'Unable to restore conversation. Try again.'
             : 'Unable to archive conversation. Try again.'
-        )
+        ),
+        {
+          action: {
+            label: t('Retry'),
+            onClick: () => archiveMutation.mutate(variables),
+          },
+        }
       )
     },
   })
@@ -560,11 +566,13 @@ export function AssistantHistory(props: {
           <AlertTitle>{t('Conversation history')}</AlertTitle>
           <AlertDescription>{historyErrorDescription}</AlertDescription>
           {historyCanRetry ? (
-            <AlertAction>
+            <AlertAction className='static col-span-full mt-2 flex justify-end sm:absolute sm:top-2 sm:right-2 sm:col-auto sm:mt-0'>
               <Button
                 type='button'
                 variant='outline'
                 size='sm'
+                data-testid='assistant-history-retry'
+                aria-label={t('Retry')}
                 onClick={() => void historyQuery.refetch()}
                 disabled={historyQuery.isFetching}
               >
@@ -765,11 +773,13 @@ export function AssistantHistoryConversation(props: {
         <AlertTitle>{t('Conversation history')}</AlertTitle>
         <AlertDescription>{description}</AlertDescription>
         {status !== 403 && status !== 404 ? (
-          <AlertAction>
+          <AlertAction className='static col-span-full mt-2 flex justify-end sm:absolute sm:top-2 sm:right-2 sm:col-auto sm:mt-0'>
             <Button
               type='button'
               variant='outline'
               size='sm'
+              data-testid='assistant-history-detail-retry'
+              aria-label={t('Retry')}
               onClick={() => void historyQuery.refetch()}
               disabled={historyQuery.isFetching}
             >
