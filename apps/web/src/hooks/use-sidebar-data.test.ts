@@ -22,9 +22,12 @@ const source = readFileSync(
 
 describe('authenticated sidebar discovery', () => {
   test('keeps the model square reachable from the activated mobile sidebar', () => {
-    const activatedGeneralSection = source.match(
-      /id: 'general',[\s\S]*?\n      },\n      {\n        id: 'personal'/
-    )?.[0]
+    const generalStart = source.indexOf("id: 'general'")
+    const personalStart = source.indexOf("id: 'personal'", generalStart)
+    const activatedGeneralSection =
+      generalStart >= 0 && personalStart > generalStart
+        ? source.slice(generalStart, personalStart)
+        : ''
 
     assert.ok(activatedGeneralSection)
     assert.match(activatedGeneralSection, /title: t\('Model Square'\)/)
