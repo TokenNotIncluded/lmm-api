@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/LIghtJUNction/api.lmm.best/model"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -150,8 +151,9 @@ type vendorAggregate struct {
 }
 
 var (
-	rankingCacheMu sync.Mutex
-	rankingCache   = map[string]rankingCacheItem{}
+	rankingCacheMu    sync.Mutex
+	rankingCache      = map[string]rankingCacheItem{}
+	rankingBuildGroup singleflight.Group
 )
 
 func GetRankingsSnapshot(period string) (*RankingsResponse, error) {
@@ -168,19 +170,34 @@ func GetRankingsSnapshot(period string) (*RankingsResponse, error) {
 	}
 	rankingCacheMu.Unlock()
 
-	data, err := buildRankingsSnapshot(config, now)
+	result, err, _ := rankingBuildGroup.Do(config.id, func() (any, error) {
+		// Re-check after joining the group. Another request may have filled the
+		// cache while this caller was waiting for the build slot.
+		buildNow := time.Now()
+		rankingCacheMu.Lock()
+		if item, ok := rankingCache[config.id]; ok && buildNow.Before(item.expiresAt) {
+			rankingCacheMu.Unlock()
+			return item.data, nil
+		}
+		rankingCacheMu.Unlock()
+
+		data, err := buildRankingsSnapshot(config, buildNow)
+		if err != nil {
+			return nil, err
+		}
+
+		rankingCacheMu.Lock()
+		rankingCache[config.id] = rankingCacheItem{
+			expiresAt: buildNow.Add(rankingCacheTTL),
+			data:      data,
+		}
+		rankingCacheMu.Unlock()
+		return data, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	rankingCacheMu.Lock()
-	rankingCache[config.id] = rankingCacheItem{
-		expiresAt: now.Add(rankingCacheTTL),
-		data:      data,
-	}
-	rankingCacheMu.Unlock()
-
-	return data, nil
+	return result.(*RankingsResponse), nil
 }
 
 func rankingConfig(period string) (rankingPeriodConfig, error) {
