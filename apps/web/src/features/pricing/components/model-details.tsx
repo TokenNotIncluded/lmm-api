@@ -29,6 +29,7 @@ import {
   Maximize2,
   Sparkles,
   Timer,
+  WalletCards,
 } from 'lucide-react'
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -536,19 +537,30 @@ function ModelHeader(props: { model: PricingModel }) {
 
   return (
     <header className='pb-4'>
-      <div className='flex min-w-0 items-start gap-2.5'>
+      <div className='flex min-w-0 flex-wrap items-start gap-2.5'>
         {modelIcon}
-        <h1 className='min-w-0 flex-1 font-mono text-xl leading-tight font-bold tracking-tight [overflow-wrap:anywhere] sm:text-2xl'>
+        <h1 className='min-w-0 flex-1 basis-[10rem] font-mono text-xl leading-tight font-bold tracking-tight [overflow-wrap:anywhere] sm:text-2xl'>
           {model.model_name}
         </h1>
-        <CopyButton
-          value={model.model_name || ''}
-          className='size-6'
-          iconClassName='size-3'
-          tooltip={t('Copy model name')}
-          successTooltip={t('Copied!')}
-          aria-label={t('Copy model name')}
-        />
+        <div className='flex shrink-0 items-center gap-1.5'>
+          <Button
+            variant='outline'
+            size='sm'
+            className='min-h-11 gap-1.5 px-2.5 text-xs sm:min-h-7 sm:px-2'
+            render={<a href='/wallet' aria-label={t('Add Funds')} />}
+          >
+            <WalletCards className='size-3.5' aria-hidden='true' />
+            {t('Add Funds')}
+          </Button>
+          <CopyButton
+            value={model.model_name || ''}
+            className='size-6'
+            iconClassName='size-3'
+            tooltip={t('Copy model name')}
+            successTooltip={t('Copied!')}
+            aria-label={t('Copy model name')}
+          />
+        </div>
       </div>
       <div className='mt-1 flex flex-wrap items-center gap-1.5 text-xs'>
         {model.vendor_name && (

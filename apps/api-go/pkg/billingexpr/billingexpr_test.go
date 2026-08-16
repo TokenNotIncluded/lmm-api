@@ -247,6 +247,55 @@ func TestRequestProbeMultipleRulesMultiply(t *testing.T) {
 	}
 }
 
+func TestRequestRuleTraceIsSideChannelOnly(t *testing.T) {
+	expr := `(param("service_tier") == "fast" ? 2 : 1) * (has(header("anthropic-beta"), "fast-mode") ? 2.5 : 1) * p`
+	request := billingexpr.RequestInput{
+		Headers: map[string]string{"Anthropic-Beta": "fast-mode-2026-02-01"},
+		Body:    []byte(`{"service_tier":"fast"}`),
+	}
+	cost, trace, err := billingexpr.RunExprWithRequest(expr, billingexpr.TokenParams{P: 100}, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if math.Abs(cost-500) > 1e-6 {
+		t.Fatalf("cost = %f, want 500", cost)
+	}
+	if len(trace.RequestRules) != 2 {
+		t.Fatalf("request rule count = %d, want 2", len(trace.RequestRules))
+	}
+	for i, rule := range trace.RequestRules {
+		if !rule.Matched {
+			t.Errorf("request rule %d was not marked matched", i)
+		}
+		if rule.Multiplier <= 1 || rule.Cond == "" {
+			t.Errorf("request rule %d metadata = %#v, want condition and multiplier", i, rule)
+		}
+	}
+
+	coldCost, coldTrace, err := billingexpr.RunExprWithRequest(expr, billingexpr.TokenParams{P: 100}, billingexpr.RequestInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if math.Abs(coldCost-100) > 1e-6 {
+		t.Fatalf("cold cost = %f, want 100", coldCost)
+	}
+	if len(coldTrace.RequestRules) != 2 {
+		t.Fatalf("cold request rule count = %d, want 2", len(coldTrace.RequestRules))
+	}
+	for i, rule := range coldTrace.RequestRules {
+		if rule.Matched {
+			t.Errorf("request rule %d unexpectedly matched without request data", i)
+		}
+	}
+}
+
+func TestRequestRuleTraceRejectsReservedIdentifiers(t *testing.T) {
+	_, _, err := billingexpr.RunExpr(`_trace(0, true, 2)`, billingexpr.TokenParams{})
+	if err == nil {
+		t.Fatal("expected reserved trace identifier to be rejected")
+	}
+}
+
 func TestCeilFloor(t *testing.T) {
 	cost, _, err := billingexpr.RunExpr("ceil(p / 1000) * 0.5", billingexpr.TokenParams{P: 1500})
 	if err != nil {

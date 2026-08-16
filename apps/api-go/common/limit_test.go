@@ -26,6 +26,20 @@ func TestLimitBufferNeverGrowsPastBudget(t *testing.T) {
 	assert.ErrorIs(t, err, ErrLimitExceeded)
 	assert.Equal(t, 4, buffer.Len())
 	assert.Equal(t, "four", string(buffer.Bytes()))
+	assert.LessOrEqual(t, cap(buffer.data), 4)
+}
+
+func TestLimitBufferCapacityStaysWithinBudgetAcrossGrowth(t *testing.T) {
+	buffer := NewLimitBuffer(17)
+	for range 17 {
+		_, err := buffer.Write([]byte{'x'})
+		require.NoError(t, err)
+	}
+
+	assert.Equal(t, 17, buffer.Len())
+	assert.LessOrEqual(t, cap(buffer.data), 17)
+	_, err := buffer.Write([]byte{'!'})
+	assert.ErrorIs(t, err, ErrLimitExceeded)
 }
 
 func TestReadAllLimitRejectsOverflow(t *testing.T) {

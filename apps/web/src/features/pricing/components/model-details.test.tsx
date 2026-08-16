@@ -155,6 +155,16 @@ afterEach(() => {
 after(() => domWindow.close())
 
 describe('ModelDetails group pricing', () => {
+  test('offers a direct add-funds path from the mobile-friendly detail header', async () => {
+    const rendered = await renderModelDetails()
+
+    const addFundsLink = rendered.container.querySelector('a[href="/wallet"]')
+    assert.ok(addFundsLink)
+    assert.equal(addFundsLink.textContent?.includes('Add Funds'), true)
+
+    await unmount(rendered)
+  })
+
   test('renders a configured zero group ratio as zero', async () => {
     const rendered = await renderModelDetails()
 

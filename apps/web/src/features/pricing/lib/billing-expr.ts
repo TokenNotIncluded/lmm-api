@@ -226,6 +226,14 @@ export type RequestCondition = TimeCondition | ParamHeaderCondition
 export type RequestRuleGroup = {
   conditions: RequestCondition[]
   multiplier: string
+  conditionText?: string
+  matched?: boolean
+}
+
+export type RequestRuleTrace = {
+  cond: string
+  multiplier: number
+  matched: boolean
 }
 
 export type TierCondition = {
@@ -479,9 +487,14 @@ function tryParseRuleGroupFactor(part: string): RequestRuleGroup | null {
   const m = part.match(/^\((.+) \? ([\d.eE+-]+) : 1\)$/s)
   if (!m) return null
 
-  const conditionStr = m[1]
-  const multiplier = m[2]
+  const conditions = tryParseRequestConditions(m[1])
+  if (!conditions) return null
+  return { conditions, multiplier: m[2] }
+}
 
+function tryParseRequestConditions(
+  conditionStr: string
+): RequestCondition[] | null {
   const andParts = splitTopLevelAnd(conditionStr)
   const conditions: RequestCondition[] = []
   for (const ap of andParts) {
@@ -489,8 +502,21 @@ function tryParseRuleGroupFactor(part: string): RequestRuleGroup | null {
     if (!cond) return null
     conditions.push(cond)
   }
-  if (conditions.length === 0) return null
-  return { conditions, multiplier }
+  return conditions.length > 0 ? conditions : null
+}
+
+export function requestRuleGroupsFromTrace(
+  requestRules: RequestRuleTrace[]
+): RequestRuleGroup[] {
+  return requestRules.map((rule) => {
+    const conditionText = rule.cond.trim()
+    return {
+      conditions: tryParseRequestConditions(conditionText) || [],
+      multiplier: String(rule.multiplier),
+      conditionText,
+      matched: rule.matched,
+    }
+  })
 }
 
 export function tryParseRequestRuleExpr(

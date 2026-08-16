@@ -18,8 +18,8 @@ var ErrLimitExceeded = errors.New("byte limit exceeded")
 // LimitBuffer is an io.Writer whose retained memory never exceeds Limit.
 // Once full it rejects the write without growing its backing slice.
 type LimitBuffer struct {
-	buffer bytes.Buffer
-	limit  int
+	data  []byte
+	limit int
 }
 
 func NewLimitBuffer(limit int) *LimitBuffer {
@@ -29,23 +29,49 @@ func NewLimitBuffer(limit int) *LimitBuffer {
 	return &LimitBuffer{limit: limit}
 }
 
-func (b *LimitBuffer) Write(data []byte) (int, error) {
-	if len(data) > b.limit-b.buffer.Len() {
-		return 0, ErrLimitExceeded
+func (b *LimitBuffer) reserve(size int) ([]byte, error) {
+	if size < 0 || size > b.limit-len(b.data) {
+		return nil, ErrLimitExceeded
 	}
-	return b.buffer.Write(data)
+	start := len(b.data)
+	end := start + size
+	if cap(b.data) < end {
+		newCap := cap(b.data) * 2
+		if newCap < end {
+			newCap = end
+		}
+		if newCap > b.limit {
+			newCap = b.limit
+		}
+		next := make([]byte, start, newCap)
+		copy(next, b.data)
+		b.data = next
+	}
+	b.data = b.data[:end]
+	return b.data[start:end], nil
+}
+
+func (b *LimitBuffer) Write(data []byte) (int, error) {
+	destination, err := b.reserve(len(data))
+	if err != nil {
+		return 0, err
+	}
+	copy(destination, data)
+	return len(data), nil
 }
 
 func (b *LimitBuffer) WriteString(data string) (int, error) {
-	if len(data) > b.limit-b.buffer.Len() {
-		return 0, ErrLimitExceeded
+	destination, err := b.reserve(len(data))
+	if err != nil {
+		return 0, err
 	}
-	return b.buffer.WriteString(data)
+	copy(destination, data)
+	return len(data), nil
 }
 
-func (b *LimitBuffer) Bytes() []byte { return b.buffer.Bytes() }
-func (b *LimitBuffer) Len() int      { return b.buffer.Len() }
-func (b *LimitBuffer) Reset()        { b.buffer.Reset() }
+func (b *LimitBuffer) Bytes() []byte { return b.data }
+func (b *LimitBuffer) Len() int      { return len(b.data) }
+func (b *LimitBuffer) Reset()        { b.data = b.data[:0] }
 
 // ReadAllLimit reads at most limit bytes and reports overflow distinctly.
 func ReadAllLimit(reader io.Reader, limit int64) ([]byte, error) {
