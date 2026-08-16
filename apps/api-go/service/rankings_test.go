@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -64,4 +65,44 @@ func TestRankingBucketSummaryPreservesHistoryProjection(t *testing.T) {
 	legacyVendors := buildVendorShareHistory(buckets, vendors, 555, meta, config)
 	streamedVendors := buildVendorShareHistoryFromSummary(summary, vendors, 555, config)
 	require.Equal(t, legacyVendors, streamedVendors)
+}
+
+func TestRankedModelLimitAndMoverSelectionPreserveResults(t *testing.T) {
+	totals := make([]model.RankingQuotaTotal, 30)
+	previousRanks := make(map[string]int, len(totals))
+	previousTokens := make(map[string]int64, len(totals))
+	for idx := range totals {
+		name := fmt.Sprintf("m%02d", idx)
+		totals[idx] = model.RankingQuotaTotal{ModelName: name, TotalTokens: int64(1000 - idx)}
+		previousRanks[name] = idx + 1
+		previousTokens[name] = int64(1000 - idx)
+	}
+	// Seven models share the same positive delta. Their different growth
+	// values exercise the secondary ordering while the result remains capped.
+	for idx := 0; idx < 7; idx++ {
+		name := fmt.Sprintf("m%02d", idx)
+		previousRanks[name] = idx + 10
+		previousTokens[name] = int64((idx + 1) * 100)
+	}
+	// Nine models share the same negative delta and exercise the dropper path.
+	for idx := 7; idx < 16; idx++ {
+		name := fmt.Sprintf("m%02d", idx)
+		previousRanks[name] = idx - 6
+		previousTokens[name] = int64((idx - 6) * 100)
+	}
+
+	meta := make(map[string]rankingModelMeta, len(totals))
+	for _, item := range totals {
+		meta[item.ModelName] = rankingModelMeta{vendor: "test"}
+	}
+	totalTokens := sumRankingTokens(totals)
+	legacyModels := buildRankedModels(totals, totalTokens, previousRanks, previousTokens, meta, true)
+	legacyMovers, legacyDroppers := buildRankingMovers(legacyModels)
+	limitedModels := buildRankedModelsLimit(totals, totalTokens, previousRanks, previousTokens, meta, true, rankingLeaderboardLimit)
+	selectedMovers, selectedDroppers := buildRankingMoversFromTotals(totals, previousRanks, previousTokens, meta, true)
+
+	require.Len(t, limitedModels, rankingLeaderboardLimit)
+	require.Equal(t, legacyModels[:rankingLeaderboardLimit], limitedModels)
+	require.Equal(t, legacyMovers, selectedMovers)
+	require.Equal(t, legacyDroppers, selectedDroppers)
 }

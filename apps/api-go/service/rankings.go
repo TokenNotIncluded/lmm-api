@@ -216,7 +216,7 @@ func buildRankingsSnapshot(config rankingPeriodConfig, now time.Time) (*Rankings
 	previousRankByModel := rankingRankMap(previousTotals)
 	previousTokensByModel := rankingTokenMap(previousTotals)
 
-	rankedModels := buildRankedModels(currentTotals, totalTokens, previousRankByModel, previousTokensByModel, meta, config.hasPrevious)
+	rankedModels := buildRankedModelsLimit(currentTotals, totalTokens, previousRankByModel, previousTokensByModel, meta, config.hasPrevious, rankingLeaderboardLimit)
 	vendors := buildRankedVendors(currentTotals, previousTotals, totalTokens, meta, config.hasPrevious)
 	bucketSummary, err := collectRankingBucketSummary(startTime, endTime, config.bucketSize, currentTotals, vendors, meta)
 	if err != nil {
@@ -224,10 +224,10 @@ func buildRankingsSnapshot(config rankingPeriodConfig, now time.Time) (*Rankings
 	}
 	modelHistory := buildModelHistoryFromSummary(bucketSummary, currentTotals, meta, config)
 	vendorHistory := buildVendorShareHistoryFromSummary(bucketSummary, vendors, totalTokens, config)
-	movers, droppers := buildRankingMovers(rankedModels)
+	movers, droppers := buildRankingMoversFromTotals(currentTotals, previousRankByModel, previousTokensByModel, meta, config.hasPrevious)
 
 	return &RankingsResponse{
-		Models:             limitRankedModels(rankedModels, rankingLeaderboardLimit),
+		Models:             rankedModels,
 		Vendors:            vendors,
 		TopMovers:          movers,
 		TopDroppers:        droppers,
@@ -340,29 +340,44 @@ func collectRankingBucketSummary(startTime int64, endTime int64, bucketSize int6
 func buildRankedModels(totals []model.RankingQuotaTotal, totalTokens int64, previousRanks map[string]int, previousTokens map[string]int64, meta map[string]rankingModelMeta, showGrowth bool) []RankedModel {
 	rows := make([]RankedModel, 0, len(totals))
 	for idx, item := range totals {
-		modelMeta := modelMeta(item.ModelName, meta)
-		var previousRank *int
-		if rank, ok := previousRanks[item.ModelName]; ok {
-			rankCopy := rank
-			previousRank = &rankCopy
-		}
-		growth := 0.0
-		if showGrowth {
-			growth = rankingGrowthPct(item.TotalTokens, previousTokens[item.ModelName])
-		}
-		rows = append(rows, RankedModel{
-			Rank:         idx + 1,
-			PreviousRank: previousRank,
-			ModelName:    item.ModelName,
-			Vendor:       modelMeta.vendor,
-			VendorIcon:   modelMeta.vendorIcon,
-			Category:     "all",
-			TotalTokens:  item.TotalTokens,
-			Share:        rankingShare(item.TotalTokens, totalTokens),
-			GrowthPct:    growth,
-		})
+		rows = append(rows, rankedModelRow(item, idx+1, totalTokens, previousRanks, previousTokens, meta, showGrowth))
 	}
 	return rows
+}
+
+func buildRankedModelsLimit(totals []model.RankingQuotaTotal, totalTokens int64, previousRanks map[string]int, previousTokens map[string]int64, meta map[string]rankingModelMeta, showGrowth bool, limit int) []RankedModel {
+	if limit <= 0 || len(totals) <= limit {
+		return buildRankedModels(totals, totalTokens, previousRanks, previousTokens, meta, showGrowth)
+	}
+	rows := make([]RankedModel, 0, limit)
+	for idx := 0; idx < limit; idx++ {
+		rows = append(rows, rankedModelRow(totals[idx], idx+1, totalTokens, previousRanks, previousTokens, meta, showGrowth))
+	}
+	return rows
+}
+
+func rankedModelRow(item model.RankingQuotaTotal, rank int, totalTokens int64, previousRanks map[string]int, previousTokens map[string]int64, meta map[string]rankingModelMeta, showGrowth bool) RankedModel {
+	modelMeta := modelMeta(item.ModelName, meta)
+	var previousRank *int
+	if previous, ok := previousRanks[item.ModelName]; ok {
+		rankCopy := previous
+		previousRank = &rankCopy
+	}
+	growth := 0.0
+	if showGrowth {
+		growth = rankingGrowthPct(item.TotalTokens, previousTokens[item.ModelName])
+	}
+	return RankedModel{
+		Rank:         rank,
+		PreviousRank: previousRank,
+		ModelName:    item.ModelName,
+		Vendor:       modelMeta.vendor,
+		VendorIcon:   modelMeta.vendorIcon,
+		Category:     "all",
+		TotalTokens:  item.TotalTokens,
+		Share:        rankingShare(item.TotalTokens, totalTokens),
+		GrowthPct:    growth,
+	}
 }
 
 func buildRankedVendors(currentTotals []model.RankingQuotaTotal, previousTotals []model.RankingQuotaTotal, totalTokens int64, meta map[string]rankingModelMeta, showGrowth bool) []RankedVendor {
@@ -664,6 +679,89 @@ func buildRankingMovers(models []RankedModel) ([]RankingMover, []RankingMover) {
 		return droppers[i].RankDelta < droppers[j].RankDelta
 	})
 	return limitRankingMovers(movers, rankingMoverLimit), limitRankingMovers(droppers, rankingMoverLimit)
+}
+
+// buildRankingMoversFromTotals computes the same ranking deltas as
+// buildRankingMovers without allocating a RankedModel for every model. The
+// selector retains only the fixed-size result set; currentTotals is already
+// ordered by the database, so the model's index is its current rank.
+func buildRankingMoversFromTotals(totals []model.RankingQuotaTotal, previousRanks map[string]int, previousTokens map[string]int64, meta map[string]rankingModelMeta, showGrowth bool) ([]RankingMover, []RankingMover) {
+	movers := make([]RankingMover, 0, rankingMoverLimit)
+	droppers := make([]RankingMover, 0, rankingMoverLimit)
+	for idx, item := range totals {
+		previousRank, ok := previousRanks[item.ModelName]
+		if !ok {
+			continue
+		}
+		currentRank := idx + 1
+		delta := previousRank - currentRank
+		if delta == 0 {
+			continue
+		}
+		modelMeta := modelMeta(item.ModelName, meta)
+		growth := 0.0
+		if showGrowth {
+			growth = rankingGrowthPct(item.TotalTokens, previousTokens[item.ModelName])
+		}
+		row := RankingMover{
+			ModelName:   item.ModelName,
+			Vendor:      modelMeta.vendor,
+			VendorIcon:  modelMeta.vendorIcon,
+			RankDelta:   delta,
+			CurrentRank: currentRank,
+			GrowthPct:   growth,
+		}
+		if delta > 0 {
+			retainRankingMover(&movers, row, false)
+		} else {
+			retainRankingMover(&droppers, row, true)
+		}
+	}
+	sort.Slice(movers, func(i, j int) bool {
+		if movers[i].RankDelta == movers[j].RankDelta {
+			return movers[i].GrowthPct > movers[j].GrowthPct
+		}
+		return movers[i].RankDelta > movers[j].RankDelta
+	})
+	sort.Slice(droppers, func(i, j int) bool {
+		if droppers[i].RankDelta == droppers[j].RankDelta {
+			return droppers[i].GrowthPct < droppers[j].GrowthPct
+		}
+		return droppers[i].RankDelta < droppers[j].RankDelta
+	})
+	return movers, droppers
+}
+
+func retainRankingMover(rows *[]RankingMover, candidate RankingMover, ascending bool) {
+	if len(*rows) < rankingMoverLimit {
+		*rows = append(*rows, candidate)
+		return
+	}
+	worst := 0
+	for idx := 1; idx < len(*rows); idx++ {
+		if rankingMoverBetter((*rows)[worst], (*rows)[idx], ascending) {
+			worst = idx
+		}
+	}
+	if rankingMoverBetter(candidate, (*rows)[worst], ascending) {
+		(*rows)[worst] = candidate
+	}
+}
+
+func rankingMoverBetter(left RankingMover, right RankingMover, ascending bool) bool {
+	if left.RankDelta != right.RankDelta {
+		if ascending {
+			return left.RankDelta < right.RankDelta
+		}
+		return left.RankDelta > right.RankDelta
+	}
+	if left.GrowthPct != right.GrowthPct {
+		if ascending {
+			return left.GrowthPct < right.GrowthPct
+		}
+		return left.GrowthPct > right.GrowthPct
+	}
+	return false
 }
 
 func sortedRankingBuckets(bucketSet map[int64]struct{}) []int64 {
