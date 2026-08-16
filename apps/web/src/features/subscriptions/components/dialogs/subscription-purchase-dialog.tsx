@@ -34,6 +34,11 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
+import {
+  cancelPaymentCheckout,
+  redirectToPaymentCheckout,
+  reservePaymentCheckout,
+} from '@/features/wallet/lib'
 import { useSystemConfig } from '@/hooks/use-system-config'
 import { formatQuota } from '@/lib/format'
 import {
@@ -158,15 +163,22 @@ export function SubscriptionPurchaseDialog(props: Props) {
     (props.purchaseCount || 0) >= (props.purchaseLimit || 0)
 
   const handlePayStripe = async () => {
+    let checkout: ReturnType<typeof reservePaymentCheckout> | null = null
     setPaying(true)
     try {
+      checkout = reservePaymentCheckout()
       const res = await paySubscriptionStripe({ plan_id: plan.id })
       if (res.message === 'success' && res.data?.pay_link) {
+        if (!redirectToPaymentCheckout(checkout, res.data.pay_link)) {
+          cancelPaymentCheckout(checkout)
+          toast.error(t('Invalid payment redirect URL'))
+          return
+        }
         props.onCheckoutStarted?.()
-        window.open(res.data.pay_link, '_blank')
         toast.success(t('Payment page opened'))
         props.onOpenChange(false)
       } else {
+        cancelPaymentCheckout(checkout)
         toast.error(
           res.message && res.message !== 'success'
             ? res.message
@@ -174,6 +186,7 @@ export function SubscriptionPurchaseDialog(props: Props) {
         )
       }
     } catch {
+      if (checkout) cancelPaymentCheckout(checkout)
       toast.error(t('Payment request failed'))
     } finally {
       setPaying(false)
@@ -181,15 +194,22 @@ export function SubscriptionPurchaseDialog(props: Props) {
   }
 
   const handlePayCreem = async () => {
+    let checkout: ReturnType<typeof reservePaymentCheckout> | null = null
     setPaying(true)
     try {
+      checkout = reservePaymentCheckout()
       const res = await paySubscriptionCreem({ plan_id: plan.id })
       if (res.message === 'success' && res.data?.checkout_url) {
+        if (!redirectToPaymentCheckout(checkout, res.data.checkout_url)) {
+          cancelPaymentCheckout(checkout)
+          toast.error(t('Invalid payment redirect URL'))
+          return
+        }
         props.onCheckoutStarted?.()
-        window.open(res.data.checkout_url, '_blank')
         toast.success(t('Payment page opened'))
         props.onOpenChange(false)
       } else {
+        cancelPaymentCheckout(checkout)
         toast.error(
           res.message && res.message !== 'success'
             ? res.message
@@ -197,6 +217,7 @@ export function SubscriptionPurchaseDialog(props: Props) {
         )
       }
     } catch {
+      if (checkout) cancelPaymentCheckout(checkout)
       toast.error(t('Payment request failed'))
     } finally {
       setPaying(false)

@@ -68,8 +68,8 @@ export function UnifiedTodoList() {
   })
 
   const openItem = async (item: TodoItem) => {
-    if (!todoItemHasDestination(item)) return
     if (!item.read) await markOne.mutateAsync(item)
+    if (!todoItemHasDestination(item)) return
     const projectId = detailNumber(item, 'project_id')
     if (projectId) {
       await navigate({
