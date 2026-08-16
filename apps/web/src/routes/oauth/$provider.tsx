@@ -177,12 +177,7 @@ function OAuthCallback() {
 
     const safeNavigate = (
       target: unknown,
-      fallback:
-        | '/open-source-bounties'
-        | '/workspace'
-        | '/dashboard'
-        | '/getting-started'
-        | '/sign-in' = '/open-source-bounties'
+      fallback: string = '/open-source-bounties'
     ) => {
       const href =
         sanitizeAuthRedirect(target, window.location.origin) ?? fallback
