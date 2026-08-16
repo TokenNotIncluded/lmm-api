@@ -20,14 +20,65 @@ import { Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 
 import { useStatus } from '@/hooks/use-status'
+import { isLocalPreview } from '@/lib/local-preview'
 
 import { AuthLayout } from '../auth-layout'
 import { TermsFooter } from '../components/terms-footer'
+import {
+  hasRegistrationMethod,
+  isRegistrationEnabled,
+} from '../lib/registration'
 import { SignUpForm } from './components/sign-up-form'
 
 export function SignUp() {
   const { t } = useTranslation()
-  const { status } = useStatus()
+  const { status, error, capabilitiesReady } = useStatus()
+  const localPreview = isLocalPreview()
+
+  // Do not render a registration form from an old localStorage status. The
+  // server is authoritative, and registration must fail closed until its live
+  // status has been read. Local preview intentionally has no server status.
+  if (!localPreview && !capabilitiesReady && !error) {
+    return (
+      <AuthLayout>
+        <p className='text-muted-foreground text-center text-sm'>
+          {t('Loading registration settings...')}
+        </p>
+      </AuthLayout>
+    )
+  }
+
+  const registrationEnabled =
+    localPreview || (capabilitiesReady && isRegistrationEnabled(status))
+  const hasAvailableMethod =
+    localPreview || (capabilitiesReady && hasRegistrationMethod(status))
+
+  if (!registrationEnabled || !hasAvailableMethod) {
+    return (
+      <AuthLayout>
+        <div className='w-full space-y-4 text-center sm:text-left'>
+          <h2 className='text-2xl font-semibold tracking-tight'>
+            {t('Registration is currently unavailable')}
+          </h2>
+          <p className='text-muted-foreground text-sm sm:text-base'>
+            {t(
+              'New account registration is disabled or no registration method is available.'
+            )}
+          </p>
+          <p className='text-muted-foreground text-sm sm:text-base'>
+            {t('Already have an account?')}{' '}
+            <Link
+              to='/sign-in'
+              className='hover:text-primary font-medium underline underline-offset-4'
+            >
+              {t('Sign in')}
+            </Link>
+            .
+          </p>
+        </div>
+      </AuthLayout>
+    )
+  }
 
   return (
     <AuthLayout>
