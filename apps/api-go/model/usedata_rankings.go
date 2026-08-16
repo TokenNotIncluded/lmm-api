@@ -73,6 +73,42 @@ func GetRankingQuotaBuckets(startTime int64, endTime int64, bucketSize int64) ([
 	return rows, err
 }
 
+// IterateRankingQuotaBuckets keeps the database aggregation semantics of
+// GetRankingQuotaBuckets while avoiding a Go slice containing every
+// model/time-bucket pair. Public ranking history only needs a small projection
+// of those rows, so callers can consume the ordered result incrementally.
+func IterateRankingQuotaBuckets(startTime int64, endTime int64, bucketSize int64, visit func(RankingQuotaBucket) error) error {
+	if DB == nil || visit == nil {
+		return gorm.ErrInvalidData
+	}
+	if bucketSize <= 0 {
+		bucketSize = 3600
+	}
+	bucketExpr := rankingBucketExpr(bucketSize)
+	query := DB.Table("quota_data").
+		Select(fmt.Sprintf("model_name, %s as bucket, sum(token_used) as tokens", bucketExpr)).
+		Where("model_name <> ''").
+		Group(fmt.Sprintf("model_name, %s", bucketExpr)).
+		Having("sum(token_used) > 0").
+		Order("bucket ASC")
+	query = applyRankingQuotaTimeRange(query, startTime, endTime)
+	rows, err := query.Rows()
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var row RankingQuotaBucket
+		if err := rows.Scan(&row.ModelName, &row.Bucket, &row.Tokens); err != nil {
+			return err
+		}
+		if err := visit(row); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
 func GetUserRankingTotals(startTime int64, endTime int64) ([]UserRankingTotal, error) {
 	var rows []UserRankingTotal
 	query := DB.Table("quota_data").

@@ -119,6 +119,23 @@ type rankingModelMeta struct {
 	vendorIcon string
 }
 
+// rankingBucketSummary is the bounded projection used by ranking history.
+// The database may return one row per model and time bucket, but the public
+// response only contains the top history models/vendors plus Others. Keeping
+// that projection while consuming the query cursor prevents model cardinality
+// from determining the Go heap size.
+type rankingBucketSummary struct {
+	buckets    map[int64]*rankingBucketAggregate
+	topModels  map[string]struct{}
+	topVendors map[string]struct{}
+}
+
+type rankingBucketAggregate struct {
+	total        int64
+	modelSeries  map[string]int64
+	vendorSeries map[string]int64
+}
+
 type vendorAggregate struct {
 	name           string
 	icon           string
@@ -184,10 +201,6 @@ func buildRankingsSnapshot(config rankingPeriodConfig, now time.Time) (*Rankings
 	if err != nil {
 		return nil, err
 	}
-	currentBuckets, err := model.GetRankingQuotaBuckets(startTime, endTime, config.bucketSize)
-	if err != nil {
-		return nil, err
-	}
 
 	var previousTotals []model.RankingQuotaTotal
 	if config.hasPrevious {
@@ -205,8 +218,12 @@ func buildRankingsSnapshot(config rankingPeriodConfig, now time.Time) (*Rankings
 
 	rankedModels := buildRankedModels(currentTotals, totalTokens, previousRankByModel, previousTokensByModel, meta, config.hasPrevious)
 	vendors := buildRankedVendors(currentTotals, previousTotals, totalTokens, meta, config.hasPrevious)
-	modelHistory := buildModelHistory(currentBuckets, currentTotals, meta, config)
-	vendorHistory := buildVendorShareHistory(currentBuckets, vendors, totalTokens, meta, config)
+	bucketSummary, err := collectRankingBucketSummary(startTime, endTime, config.bucketSize, currentTotals, vendors, meta)
+	if err != nil {
+		return nil, err
+	}
+	modelHistory := buildModelHistoryFromSummary(bucketSummary, currentTotals, meta, config)
+	vendorHistory := buildVendorShareHistoryFromSummary(bucketSummary, vendors, totalTokens, config)
 	movers, droppers := buildRankingMovers(rankedModels)
 
 	return &RankingsResponse{
@@ -258,6 +275,66 @@ func modelMeta(modelName string, meta map[string]rankingModelMeta) rankingModelM
 		return item
 	}
 	return rankingModelMeta{vendor: rankingUnknownVendor}
+}
+
+func newRankingBucketSummary(totals []model.RankingQuotaTotal, vendors []RankedVendor) *rankingBucketSummary {
+	summary := &rankingBucketSummary{
+		buckets:    make(map[int64]*rankingBucketAggregate),
+		topModels:  make(map[string]struct{}, minInt(len(totals), rankingHistoryLimit)),
+		topVendors: make(map[string]struct{}, minInt(len(vendors), rankingVendorLimit)),
+	}
+	for idx, item := range totals {
+		if idx >= rankingHistoryLimit {
+			break
+		}
+		summary.topModels[item.ModelName] = struct{}{}
+	}
+	for idx, item := range vendors {
+		if idx >= rankingVendorLimit {
+			break
+		}
+		summary.topVendors[item.Vendor] = struct{}{}
+	}
+	return summary
+}
+
+func (summary *rankingBucketSummary) add(item model.RankingQuotaBucket, meta map[string]rankingModelMeta) {
+	if summary == nil {
+		return
+	}
+	aggregate, ok := summary.buckets[item.Bucket]
+	if !ok {
+		aggregate = &rankingBucketAggregate{
+			modelSeries:  make(map[string]int64, len(summary.topModels)+1),
+			vendorSeries: make(map[string]int64, len(summary.topVendors)+1),
+		}
+		summary.buckets[item.Bucket] = aggregate
+	}
+	aggregate.total += item.Tokens
+
+	modelName := item.ModelName
+	if _, ok := summary.topModels[modelName]; !ok {
+		modelName = rankingOthersLabel
+	}
+	aggregate.modelSeries[modelName] += item.Tokens
+
+	vendorName := modelMeta(item.ModelName, meta).vendor
+	if _, ok := summary.topVendors[vendorName]; !ok {
+		vendorName = rankingOthersLabel
+	}
+	aggregate.vendorSeries[vendorName] += item.Tokens
+}
+
+func collectRankingBucketSummary(startTime int64, endTime int64, bucketSize int64, totals []model.RankingQuotaTotal, vendors []RankedVendor, meta map[string]rankingModelMeta) (*rankingBucketSummary, error) {
+	summary := newRankingBucketSummary(totals, vendors)
+	err := model.IterateRankingQuotaBuckets(startTime, endTime, bucketSize, func(item model.RankingQuotaBucket) error {
+		summary.add(item, meta)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return summary, nil
 }
 
 func buildRankedModels(totals []model.RankingQuotaTotal, totalTokens int64, previousRanks map[string]int, previousTokens map[string]int64, meta map[string]rankingModelMeta, showGrowth bool) []RankedModel {
@@ -357,6 +434,84 @@ func ensureVendorAggregate(aggregates map[string]*vendorAggregate, meta rankingM
 	return agg
 }
 
+func buildModelHistoryFromSummary(summary *rankingBucketSummary, totals []model.RankingQuotaTotal, meta map[string]rankingModelMeta, config rankingPeriodConfig) ModelHistorySeries {
+	models := make([]ModelHistoryModel, 0, minInt(len(totals), rankingHistoryLimit)+1)
+	otherTotal := int64(0)
+	for idx, item := range totals {
+		if idx < rankingHistoryLimit {
+			modelMeta := modelMeta(item.ModelName, meta)
+			models = append(models, ModelHistoryModel{Name: item.ModelName, Vendor: modelMeta.vendor, Total: item.TotalTokens})
+			continue
+		}
+		otherTotal += item.TotalTokens
+	}
+	if otherTotal > 0 {
+		models = append(models, ModelHistoryModel{Name: rankingOthersLabel, Vendor: "Various", Total: otherTotal})
+	}
+
+	if summary == nil {
+		return ModelHistorySeries{Models: models}
+	}
+	sortedBuckets := sortedRankingSummaryBuckets(summary.buckets)
+	points := make([]ModelHistoryPoint, 0, len(sortedBuckets)*len(models))
+	for _, bucket := range sortedBuckets {
+		aggregate := summary.buckets[bucket]
+		for _, historyModel := range models {
+			tokens := aggregate.modelSeries[historyModel.Name]
+			if tokens <= 0 {
+				continue
+			}
+			points = append(points, ModelHistoryPoint{
+				Ts:     rankingBucketTs(bucket),
+				Label:  rankingBucketLabel(bucket, config),
+				Model:  historyModel.Name,
+				Vendor: historyModel.Vendor,
+				Tokens: tokens,
+			})
+		}
+	}
+
+	return ModelHistorySeries{Points: points, Models: models, Buckets: len(sortedBuckets)}
+}
+
+func buildVendorShareHistoryFromSummary(summary *rankingBucketSummary, vendors []RankedVendor, totalTokens int64, config rankingPeriodConfig) VendorShareSeries {
+	vendorRows := make([]VendorShareVendor, 0, minInt(len(vendors), rankingVendorLimit)+1)
+	otherTotal := int64(0)
+	for idx, vendor := range vendors {
+		if idx < rankingVendorLimit {
+			vendorRows = append(vendorRows, VendorShareVendor{Name: vendor.Vendor, Total: vendor.TotalTokens, Share: vendor.Share})
+			continue
+		}
+		otherTotal += vendor.TotalTokens
+	}
+	if otherTotal > 0 {
+		vendorRows = append(vendorRows, VendorShareVendor{Name: rankingOthersLabel, Total: otherTotal, Share: rankingShare(otherTotal, totalTokens)})
+	}
+
+	if summary == nil {
+		return VendorShareSeries{Vendors: vendorRows}
+	}
+	sortedBuckets := sortedRankingSummaryBuckets(summary.buckets)
+	points := make([]VendorSharePoint, 0, len(sortedBuckets)*len(vendorRows))
+	for _, bucket := range sortedBuckets {
+		aggregate := summary.buckets[bucket]
+		for _, vendor := range vendorRows {
+			tokens := aggregate.vendorSeries[vendor.Name]
+			if tokens <= 0 {
+				continue
+			}
+			points = append(points, VendorSharePoint{
+				Ts:     rankingBucketTs(bucket),
+				Label:  rankingBucketLabel(bucket, config),
+				Vendor: vendor.Name,
+				Share:  rankingShare(tokens, aggregate.total),
+				Tokens: tokens,
+			})
+		}
+	}
+
+	return VendorShareSeries{Points: points, Vendors: vendorRows, Buckets: len(sortedBuckets)}
+}
 func buildModelHistory(buckets []model.RankingQuotaBucket, totals []model.RankingQuotaTotal, meta map[string]rankingModelMeta, config rankingPeriodConfig) ModelHistorySeries {
 	topModels := make(map[string]struct{})
 	models := make([]ModelHistoryModel, 0, minInt(len(totals), rankingHistoryLimit)+1)
@@ -512,6 +667,17 @@ func buildRankingMovers(models []RankedModel) ([]RankingMover, []RankingMover) {
 }
 
 func sortedRankingBuckets(bucketSet map[int64]struct{}) []int64 {
+	buckets := make([]int64, 0, len(bucketSet))
+	for bucket := range bucketSet {
+		buckets = append(buckets, bucket)
+	}
+	sort.Slice(buckets, func(i, j int) bool {
+		return buckets[i] < buckets[j]
+	})
+	return buckets
+}
+
+func sortedRankingSummaryBuckets(bucketSet map[int64]*rankingBucketAggregate) []int64 {
 	buckets := make([]int64, 0, len(bucketSet))
 	for bucket := range bucketSet {
 		buckets = append(buckets, bucket)
