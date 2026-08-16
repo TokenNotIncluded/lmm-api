@@ -1477,6 +1477,7 @@
     "Confirmation required": "Confirmation required",
     "Confirmed at {{time}} by user #{{userId}}": "Confirmed at {{time}} by user #{{userId}}",
     "Confirmed payment compliance": "Confirmed payment compliance",
+    "Confirming subscription payment…": "Confirming subscription payment…",
     "Conflict": "Conflict",
     "Connect": "Connect",
     "Connect through OpenAI, Claude, Gemini, and other compatible API routes": "Connect through OpenAI, Claude, Gemini, and other compatible API routes",

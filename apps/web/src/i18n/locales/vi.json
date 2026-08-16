@@ -1477,6 +1477,7 @@
     "Confirmation required": "Cần xác nhận",
     "Confirmed at {{time}} by user #{{userId}}": "Được xác nhận lúc {{time}} bởi người dùng #{{userId}}",
     "Confirmed payment compliance": "Đã xác nhận tuân thủ thanh toán",
+    "Confirming subscription payment…": "Đang xác nhận thanh toán gói đăng ký…",
     "Conflict": "Xung đột",
     "Connect": "Kết nối",
     "Connect through OpenAI, Claude, Gemini, and other compatible API routes": "Kết nối qua OpenAI, Claude, Gemini và các tuyến API tương thích khác",

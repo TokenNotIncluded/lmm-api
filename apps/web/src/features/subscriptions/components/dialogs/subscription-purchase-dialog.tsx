@@ -83,6 +83,7 @@ interface Props {
   purchaseCount?: number
   userQuota?: number
   onPurchaseSuccess?: () => void | Promise<void>
+  onCheckoutStarted?: () => void
 }
 
 export function SubscriptionPurchaseDialog(props: Props) {
@@ -161,6 +162,7 @@ export function SubscriptionPurchaseDialog(props: Props) {
     try {
       const res = await paySubscriptionStripe({ plan_id: plan.id })
       if (res.message === 'success' && res.data?.pay_link) {
+        props.onCheckoutStarted?.()
         window.open(res.data.pay_link, '_blank')
         toast.success(t('Payment page opened'))
         props.onOpenChange(false)
@@ -183,6 +185,7 @@ export function SubscriptionPurchaseDialog(props: Props) {
     try {
       const res = await paySubscriptionCreem({ plan_id: plan.id })
       if (res.message === 'success' && res.data?.checkout_url) {
+        props.onCheckoutStarted?.()
         window.open(res.data.checkout_url, '_blank')
         toast.success(t('Payment page opened'))
         props.onOpenChange(false)
@@ -211,6 +214,7 @@ export function SubscriptionPurchaseDialog(props: Props) {
         checkout_language: waffoPancakeCheckoutLanguage,
       })
       if (res.message === 'success' && res.data?.checkout_url) {
+        props.onCheckoutStarted?.()
         toast.success(t('Redirecting to payment page...'))
         window.location.href = res.data.checkout_url
       } else {
@@ -257,6 +261,7 @@ export function SubscriptionPurchaseDialog(props: Props) {
           form.appendChild(input)
         })
         document.body.appendChild(form)
+        props.onCheckoutStarted?.()
         form.submit()
         document.body.removeChild(form)
         toast.success(t('Payment initiated'))

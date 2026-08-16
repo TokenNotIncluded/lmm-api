@@ -547,6 +547,7 @@ export function Wallet(props: WalletProps) {
                 <SubscriptionPlansCard
                   topupInfo={topupInfo}
                   onAvailabilityChange={handleSubscriptionAvailabilityChange}
+                  userId={user?.id}
                   userQuota={user?.quota}
                   onPurchaseSuccess={refreshWalletUser}
                 />

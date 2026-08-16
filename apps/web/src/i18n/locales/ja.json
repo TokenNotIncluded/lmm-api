@@ -1477,6 +1477,7 @@
     "Confirmation required": "確認が必要です",
     "Confirmed at {{time}} by user #{{userId}}": "ユーザー #{{userId}} が {{time}} に確認しました",
     "Confirmed payment compliance": "支払いコンプライアンスを確認しました",
+    "Confirming subscription payment…": "サブスクリプションの支払いを確認しています…",
     "Conflict": "競合",
     "Connect": "接続",
     "Connect through OpenAI, Claude, Gemini, and other compatible API routes": "OpenAI、Claude、Gemini、その他の互換APIルートから接続",

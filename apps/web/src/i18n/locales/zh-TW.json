@@ -1477,6 +1477,7 @@
     "Confirmation required": "需要確認",
     "Confirmed at {{time}} by user #{{userId}}": "用戶 #{{userId}} 於 {{time}} 確認",
     "Confirmed payment compliance": "確認支付合規",
+    "Confirming subscription payment…": "正在確認訂閱付款…",
     "Conflict": "矛盾",
     "Connect": "連接",
     "Connect through OpenAI, Claude, Gemini, and other compatible API routes": "透過 OpenAI、Claude、Gemini 以及其他兼容 API 路由接入",

@@ -1477,6 +1477,7 @@
     "Confirmation required": "Требуется подтверждение",
     "Confirmed at {{time}} by user #{{userId}}": "Подтверждено {{time}} пользователем #{{userId}}",
     "Confirmed payment compliance": "Соответствие платежа подтверждено",
+    "Confirming subscription payment…": "Подтверждаем оплату подписки…",
     "Conflict": "Противоречие",
     "Connect": "Подключение",
     "Connect through OpenAI, Claude, Gemini, and other compatible API routes": "Подключайтесь через OpenAI, Claude, Gemini и другие совместимые API-маршруты",
