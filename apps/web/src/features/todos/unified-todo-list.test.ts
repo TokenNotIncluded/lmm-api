@@ -60,17 +60,15 @@ describe('unified todo destinations', () => {
     assert.equal(todoItemHasDestination(item('security_review')), true)
   })
 
-  test('keeps destination affordances tied to available navigation data', () => {
+  test('keeps destination affordances tied to actionable notification data', () => {
     assert.equal(todoItemHasDestination(item('open_source_bounty')), false)
     assert.equal(
       todoItemHasDestination(item('open_source_bounty', { project_id: 12 })),
       true
     )
-    assert.equal(
-      todoItemHasDestination(item('developer_access', { username: 'alice' })),
-      true
-    )
-    assert.equal(todoItemHasDestination(item('developer_access')), false)
+    // The request ID is enough for an administrator to open the review panel;
+    // resolving a user profile first would hide the actionable approve/reject UI.
+    assert.equal(todoItemHasDestination(item('developer_access')), true)
     assert.equal(todoItemHasDestination(item('account_action')), true)
   })
 })

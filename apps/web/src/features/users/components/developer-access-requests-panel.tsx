@@ -21,7 +21,9 @@ import {
   type DeveloperAccessRequestAdmin,
 } from '../api'
 
-export function DeveloperAccessRequestsPanel() {
+export function DeveloperAccessRequestsPanel(props: {
+  focusRequestId?: number
+}) {
   const { t } = useTranslation()
   const [requests, setRequests] = useState<DeveloperAccessRequestAdmin[]>([])
   const [loading, setLoading] = useState(true)
@@ -62,6 +64,19 @@ export function DeveloperAccessRequestsPanel() {
   useEffect(() => {
     void loadRequests()
   }, [loadRequests])
+
+  useEffect(() => {
+    if (
+      props.focusRequestId === undefined ||
+      loading ||
+      typeof document === 'undefined'
+    ) {
+      return
+    }
+    document
+      .getElementById(`developer-access-request-${props.focusRequestId}`)
+      ?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }, [loading, props.focusRequestId, requests])
 
   const review = async (
     request: DeveloperAccessRequestAdmin,
@@ -180,7 +195,10 @@ function RequestCard(props: {
   }
 
   return (
-    <article className='border-border border-b py-7'>
+    <article
+      id={`developer-access-request-${request.id}`}
+      className='border-border border-b py-7'
+    >
       <div className='flex flex-wrap items-start justify-between gap-3'>
         <div className='min-w-0'>
           <p className='font-medium'>{request.username}</p>

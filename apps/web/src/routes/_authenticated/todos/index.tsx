@@ -21,10 +21,15 @@ import z from 'zod'
 
 import { Todos } from '@/features/todos'
 
+export const todosSearchSchema = z.object({
+  todo: z
+    .enum(['account_action', 'developer_access'])
+    .optional()
+    .catch(undefined),
+  request: z.number().int().positive().optional().catch(undefined),
+})
+
 export const Route = createFileRoute('/_authenticated/todos/')({
-  validateSearch: z.object({
-    todo: z.enum(['account_action']).optional().catch(undefined),
-    request: z.number().int().positive().optional().catch(undefined),
-  }),
+  validateSearch: todosSearchSchema,
   component: Todos,
 })

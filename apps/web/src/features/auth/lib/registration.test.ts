@@ -125,4 +125,16 @@ describe('registration availability', () => {
     assert.equal(hasOAuthLoginProvider(status), true)
     assert.equal(hasOAuthRegistrationProvider(status), false)
   })
+
+  test('does not advertise sign-up when every registration method is disabled', () => {
+    const status = {
+      register_enabled: true,
+      password_register_enabled: false,
+      oauth_register_enabled: false,
+      github_oauth: true,
+      github_client_id: 'client',
+    }
+
+    assert.equal(hasRegistrationMethod(status), false)
+  })
 })

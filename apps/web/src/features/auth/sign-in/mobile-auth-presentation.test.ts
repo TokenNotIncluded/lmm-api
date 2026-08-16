@@ -29,6 +29,7 @@ describe('mobile sign-in presentation', () => {
       new URL('./components/user-auth-form.tsx', import.meta.url),
       'utf8'
     )
+    const signIn = readFileSync(new URL('./index.tsx', import.meta.url), 'utf8')
 
     assert.match(authLayout, /h-dvh/)
     assert.match(authLayout, /lg:absolute/)
@@ -46,5 +47,6 @@ describe('mobile sign-in presentation', () => {
     assert.match(form, /hasAlternativeLogin && passwordLoginEnabled/)
     assert.match(form, /\{t\('Or'\)\}/)
     assert.match(form, /auth-field h-11 rounded-xl/)
+    assert.match(signIn, /hasRegistrationMethod\(status\)/)
   })
 })

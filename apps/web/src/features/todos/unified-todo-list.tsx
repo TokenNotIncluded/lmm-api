@@ -53,6 +53,7 @@ export function UnifiedTodoList() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const user = useAuthStore((state) => state.auth.user)
+  const isAdmin = (user?.role ?? 0) >= ROLE.ADMIN
   const [category, setCategory] = useState<TodoCategory>('all')
   const query = useQuery({
     queryKey: ['todos', category],
@@ -85,10 +86,18 @@ export function UnifiedTodoList() {
       })
       return
     }
-    if (
-      item.category === 'security_incident' ||
-      item.category === 'developer_access'
-    ) {
+    if (item.category === 'developer_access') {
+      if (!isAdmin) return
+      await navigate({
+        to: '/todos',
+        search: {
+          todo: 'developer_access',
+          request: item.source_id,
+        },
+      })
+      return
+    }
+    if (item.category === 'security_incident') {
       const username = detailString(item, 'username')
       if (username) {
         await navigate({
@@ -197,7 +206,9 @@ export function UnifiedTodoList() {
             const applicantId = detailNumber(item, 'user_id')
             const applicantEmail = detailString(item, 'email')
             const title = t(todoItemTitleKey(item.title))
-            const canOpen = todoItemHasDestination(item)
+            const canOpen =
+              todoItemHasDestination(item) &&
+              (item.category !== 'developer_access' || isAdmin)
             return (
               <button
                 key={item.id}

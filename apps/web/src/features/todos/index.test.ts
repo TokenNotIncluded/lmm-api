@@ -51,9 +51,10 @@ describe('admin to-do page layout', () => {
       todosSource,
       /initiallyExpanded=\{focusAccountActionId !== undefined\}/
     )
+    assert.match(todosSource, /title=\{t\('L1 access requests'\)\}/)
     assert.match(
       todosSource,
-      /<AdminTodoSection title=\{t\('L1 access requests'\)\}>/
+      /initiallyExpanded=\{focusDeveloperAccessId !== undefined\}/
     )
     assert.match(
       todosSource,

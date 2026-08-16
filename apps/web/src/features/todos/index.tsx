@@ -37,6 +37,8 @@ export function Todos() {
   )
   const focusAccountActionId =
     search.todo === 'account_action' ? search.request : undefined
+  const focusDeveloperAccessId =
+    search.todo === 'developer_access' ? search.request : undefined
 
   return (
     <SectionPageLayout>
@@ -57,8 +59,13 @@ export function Todos() {
                   focusRequestId={focusAccountActionId}
                 />
               </AdminTodoSection>
-              <AdminTodoSection title={t('L1 access requests')}>
-                <DeveloperAccessRequestsPanel />
+              <AdminTodoSection
+                title={t('L1 access requests')}
+                initiallyExpanded={focusDeveloperAccessId !== undefined}
+              >
+                <DeveloperAccessRequestsPanel
+                  focusRequestId={focusDeveloperAccessId}
+                />
               </AdminTodoSection>
             </>
           ) : null}
