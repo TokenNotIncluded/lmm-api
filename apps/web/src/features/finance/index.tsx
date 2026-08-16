@@ -506,6 +506,15 @@ export function Finance() {
                   <p className='text-muted-foreground mt-1 text-xs'>
                     {t('View user')}
                   </p>
+                  {overview &&
+                  (overview.users_truncated ||
+                    !overview.user_metrics_complete) ? (
+                    <p className='text-muted-foreground mt-1 text-xs'>
+                      {t('Only the top {{limit}} users are shown', {
+                        limit: overview.user_limit,
+                      })}
+                    </p>
+                  ) : null}
                 </div>
                 <span className='text-muted-foreground text-xs'>
                   {t('Requests')}: {compact(overview?.tokens.requests ?? 0)}

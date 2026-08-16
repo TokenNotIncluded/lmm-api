@@ -4239,6 +4239,7 @@
     "Only successful requests": "Chỉ các yêu cầu thành công",
     "Only successful requests count toward this limit.": "Chỉ những yêu cầu thành công mới được tính vào giới hạn này.",
     "Only the last {{value}} log files will be retained; the rest will be deleted.": "Chỉ giữ lại {{value}} tệp nhật ký gần nhất; phần còn lại sẽ bị xóa.",
+    "Only the top {{limit}} users are shown": "Chỉ hiển thị {{limit}} người dùng có mức chi tiêu cao nhất",
     "Only verified account activity can complete these steps.": "Chỉ hoạt động tài khoản đã xác minh mới có thể hoàn thành các bước này.",
     "Only you and authorized administrators can view this request. Obvious secrets are redacted before storage and display.": "Chỉ bạn và quản trị viên được ủy quyền mới có thể xem yêu cầu này. Các thông tin bí mật rõ ràng sẽ được ẩn trước khi lưu trữ và hiển thị.",
     "Only you can see this address. It is used for access matching and is not shown to other users.": "Chỉ bạn có thể xem địa chỉ này. Địa chỉ chỉ dùng để đối chiếu quyền truy cập và không hiển thị cho người dùng khác.",

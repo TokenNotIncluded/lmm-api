@@ -92,6 +92,8 @@ type financeOverview struct {
 	Tokens                    financeTokenMetric           `json:"tokens"`
 	Daily                     []financeDailyMetric         `json:"daily"`
 	Users                     []financeUserMetric          `json:"users"`
+	UserLimit                 int                          `json:"user_limit"`
+	UsersTruncated            bool                         `json:"users_truncated"`
 	PaymentMethods            []model.FinancePaymentMethod `json:"payment_methods"`
 	SourcesBounded            bool                         `json:"sources_bounded"`
 	UserMetricsComplete       bool                         `json:"user_metrics_complete"`
@@ -112,7 +114,7 @@ type financeAccumulator struct {
 
 func newFinanceAccumulator(start, end int64, paymentMethods []model.FinancePaymentMethod) *financeAccumulator {
 	return &financeAccumulator{
-		overview: financeOverview{Range: financeRange{Start: start, End: end}, Currency: model.FinanceCurrencyUSD, PaymentMethods: paymentMethods, SourcesBounded: true, UserMetricsComplete: true, UserMetricsLimit: financeDashboardMaxUserMetrics, MethodUserMetricsComplete: true, MethodUserMetricsLimit: financeDashboardMaxMethodUserPairs},
+		overview: financeOverview{Range: financeRange{Start: start, End: end}, Currency: model.FinanceCurrencyUSD, PaymentMethods: paymentMethods, SourcesBounded: true, UserMetricsComplete: true, UserMetricsLimit: financeDashboardMaxUserMetrics, UserLimit: financeDashboardMaxEntries, MethodUserMetricsComplete: true, MethodUserMetricsLimit: financeDashboardMaxMethodUserPairs},
 		methods:  make(map[string]*financeMethodMetric), expenses: make(map[string]*financeMethodMetric), daily: make(map[string]*financeDailyMetric), users: make(map[int]*financeUserMetric), methodUsers: make(map[string]map[int]struct{}),
 	}
 }
@@ -270,8 +272,9 @@ func (a *financeAccumulator) finish() financeOverview {
 	sort.Slice(a.overview.Users, func(i, j int) bool {
 		return a.overview.Users[i].ExpenseMicros+a.overview.Users[i].RevenueMicros > a.overview.Users[j].ExpenseMicros+a.overview.Users[j].RevenueMicros
 	})
-	if len(a.overview.Users) > 100 {
-		a.overview.Users = a.overview.Users[:100]
+	if len(a.overview.Users) > a.overview.UserLimit {
+		a.overview.UsersTruncated = true
+		a.overview.Users = a.overview.Users[:a.overview.UserLimit]
 	}
 	a.overview.ProfitMicros = a.overview.RevenueMicros - a.overview.ExpenseMicros
 	return a.overview
@@ -670,7 +673,14 @@ func financeUsersHandler(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	common.ApiSuccess(c, gin.H{"range": view.Range, "users": view.Users})
+	common.ApiSuccess(c, gin.H{
+		"range":                 view.Range,
+		"users":                 view.Users,
+		"user_limit":            view.UserLimit,
+		"users_truncated":       view.UsersTruncated,
+		"user_metrics_complete": view.UserMetricsComplete,
+		"user_metrics_limit":    view.UserMetricsLimit,
+	})
 }
 
 func financeUserHandler(c *gin.Context) {

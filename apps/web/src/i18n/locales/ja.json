@@ -4239,6 +4239,7 @@
     "Only successful requests": "成功したリクエストのみ",
     "Only successful requests count toward this limit.": "成功したリクエストのみがこの制限にカウントされます。",
     "Only the last {{value}} log files will be retained; the rest will be deleted.": "最新の{{value}}個のログファイルのみ保持され、残りは削除されます。",
+    "Only the top {{limit}} users are shown": "支出上位 {{limit}} ユーザーのみ表示しています",
     "Only verified account activity can complete these steps.": "確認済みのアカウント操作だけが手順を完了できます。",
     "Only you and authorized administrators can view this request. Obvious secrets are redacted before storage and display.": "このリクエストを閲覧できるのは、あなたと許可された管理者だけです。明らかな秘密情報は保存・表示前に伏せ字になります。",
     "Only you can see this address. It is used for access matching and is not shown to other users.": "このアドレスを見られるのはあなただけです。アクセス照合にのみ使用され、他のユーザーには表示されません。",

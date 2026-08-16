@@ -325,16 +325,22 @@ func TestFinanceAccumulatorBoundsUserMetricsWithoutDroppingTotals(t *testing.T) 
 	require.Equal(t, int64(financeDashboardMaxUserMetrics+1), view.RevenueMicros)
 	require.False(t, view.UserMetricsComplete)
 	require.Equal(t, financeDashboardMaxUserMetrics, view.UserMetricsLimit)
+	require.Equal(t, financeDashboardMaxEntries, view.UserLimit)
+	require.True(t, view.UsersTruncated)
 	require.Len(t, view.Users, financeDashboardMaxEntries)
 	encoded, err := json.Marshal(view)
 	require.NoError(t, err)
 	var metadata struct {
 		UserMetricsComplete bool `json:"user_metrics_complete"`
 		UserMetricsLimit    int  `json:"user_metrics_limit"`
+		UserLimit           int  `json:"user_limit"`
+		UsersTruncated      bool `json:"users_truncated"`
 	}
 	require.NoError(t, json.Unmarshal(encoded, &metadata))
 	require.False(t, metadata.UserMetricsComplete)
 	require.Equal(t, financeDashboardMaxUserMetrics, metadata.UserMetricsLimit)
+	require.Equal(t, financeDashboardMaxEntries, metadata.UserLimit)
+	require.True(t, metadata.UsersTruncated)
 }
 
 func TestFinanceAccumulatorBoundsMethodUserPairs(t *testing.T) {

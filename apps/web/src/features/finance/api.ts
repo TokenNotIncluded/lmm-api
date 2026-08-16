@@ -75,6 +75,10 @@ export interface FinanceOverview {
   }
   daily: FinanceDailyMetric[]
   users: FinanceUserMetric[]
+  user_limit: number
+  users_truncated: boolean
+  user_metrics_complete: boolean
+  user_metrics_limit: number
   payment_methods: FinancePaymentMethod[]
   sources_bounded: boolean
 }

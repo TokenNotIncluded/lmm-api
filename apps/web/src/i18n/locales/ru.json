@@ -4239,6 +4239,7 @@
     "Only successful requests": "Только успешные запросы",
     "Only successful requests count toward this limit.": "Только успешные запросы учитываются в этом лимите.",
     "Only the last {{value}} log files will be retained; the rest will be deleted.": "Будут сохранены только последние {{value}} файлов журналов; остальные будут удалены.",
+    "Only the top {{limit}} users are shown": "Показаны только {{limit}} пользователей с наибольшими расходами",
     "Only verified account activity can complete these steps.": "Только подтверждённые действия аккаунта могут завершить эти шаги.",
     "Only you and authorized administrators can view this request. Obvious secrets are redacted before storage and display.": "Эту заявку можете видеть только вы и уполномоченные администраторы. Явные секреты удаляются перед сохранением и отображением.",
     "Only you can see this address. It is used for access matching and is not shown to other users.": "Этот адрес виден только вам. Он используется для проверки доступа и не показывается другим пользователям.",
