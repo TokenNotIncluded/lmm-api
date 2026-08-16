@@ -46,6 +46,7 @@ const { SubscriptionPurchaseDialog } =
 
 const originalPost = api.post
 const originalOpen = domWindow.open
+const originalFormSubmit = domWindow.HTMLFormElement.prototype.submit
 const reactTestGlobals = globalThis as typeof globalThis & {
   IS_REACT_ACT_ENVIRONMENT?: boolean
 }
@@ -85,7 +86,13 @@ type Rendered = {
   root: ReturnType<typeof createRoot>
 }
 
-async function renderDialog(): Promise<Rendered> {
+type DialogOptions = {
+  enableStripe?: boolean
+  enableOnlineTopUp?: boolean
+  epayMethods?: Array<{ type: string; name?: string }>
+}
+
+async function renderDialog(options: DialogOptions = {}): Promise<Rendered> {
   const container = document.createElement('div')
   document.body.append(container)
   const root = createRoot(container)
@@ -96,7 +103,9 @@ async function renderDialog(): Promise<Rendered> {
           open
           onOpenChange={() => undefined}
           plan={plan}
-          enableStripe
+          enableStripe={options.enableStripe ?? true}
+          enableOnlineTopUp={options.enableOnlineTopUp}
+          epayMethods={options.epayMethods}
           userQuota={0}
         />
       </I18nextProvider>
@@ -114,6 +123,7 @@ async function unmount(rendered: Rendered) {
 afterEach(() => {
   api.post = originalPost
   domWindow.open = originalOpen
+  domWindow.HTMLFormElement.prototype.submit = originalFormSubmit
   document.body.replaceChildren()
 })
 
@@ -168,6 +178,87 @@ describe('subscription purchase checkout', () => {
       assert.equal(openCalls[0]?.[2], 'noopener,noreferrer')
       assert.equal(popup.location.href, 'https://pay.example.test/stripe')
       assert.equal(popup.opener, null)
+    } finally {
+      await unmount(rendered)
+    }
+  })
+
+  test('reserves an ePay checkout before the async request on mobile', async () => {
+    const events: string[] = []
+    const popup = {
+      closed: false,
+      opener: {} as Window | null,
+      close: () => undefined,
+      focus: () => undefined,
+      location: { href: '' },
+    }
+    const openCalls: Array<[string, string, string]> = []
+    const formSubmissions: Array<{
+      action: string
+      target: string
+      fields: Record<string, string>
+    }> = []
+    domWindow.open = ((url: string, target: string, features: string) => {
+      events.push('reserve')
+      openCalls.push([url, target, features])
+      return popup as unknown as Window
+    }) as typeof domWindow.open
+    domWindow.HTMLFormElement.prototype.submit = function () {
+      events.push('submit')
+      const fields: Record<string, string> = {}
+      for (const input of this.querySelectorAll('input')) {
+        fields[input.name] = input.value
+      }
+      formSubmissions.push({
+        action: this.action,
+        target: this.target,
+        fields,
+      })
+    }
+    api.post = (async (url) => {
+      events.push(`request:${url}`)
+      return {
+        data: {
+          success: true,
+          message: 'success',
+          url: 'https://pay.example.test/epay',
+          data: { pid: 'subscription-7', sign: 'signed' },
+        },
+      }
+    }) as typeof api.post
+
+    const rendered = await renderDialog({
+      enableStripe: false,
+      enableOnlineTopUp: true,
+      epayMethods: [{ type: 'alipay', name: 'Alipay' }],
+    })
+    try {
+      const payButton = [...document.querySelectorAll('button')].find(
+        (button) => button.textContent?.trim() === 'Pay'
+      )
+      assert.ok(payButton)
+
+      await act(async () => {
+        payButton.click()
+        await flushEffects()
+      })
+
+      assert.deepEqual(events, [
+        'reserve',
+        'request:/api/subscription/epay/pay',
+        'submit',
+      ])
+      assert.equal(openCalls.length, 1)
+      assert.equal(openCalls[0]?.[0], 'about:blank')
+      assert.match(openCalls[0]?.[1] ?? '', /^payment_checkout_/)
+      assert.equal(openCalls[0]?.[2], 'noopener,noreferrer')
+      assert.deepEqual(formSubmissions, [
+        {
+          action: 'https://pay.example.test/epay',
+          target: openCalls[0]?.[1],
+          fields: { pid: 'subscription-7', sign: 'signed' },
+        },
+      ])
     } finally {
       await unmount(rendered)
     }

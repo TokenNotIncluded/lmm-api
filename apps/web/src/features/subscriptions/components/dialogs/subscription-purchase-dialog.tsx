@@ -38,6 +38,7 @@ import {
   cancelPaymentCheckout,
   redirectToPaymentCheckout,
   reservePaymentCheckout,
+  submitPaymentForm,
 } from '@/features/wallet/lib'
 import { useSystemConfig } from '@/hooks/use-system-config'
 import { formatQuota } from '@/lib/format'
@@ -252,42 +253,30 @@ export function SubscriptionPurchaseDialog(props: Props) {
     }
   }
 
-  const isSafari =
-    typeof navigator !== 'undefined' &&
-    /^((?!chrome|android).)*safari/i.test(navigator.userAgent)
-
   const handlePayEpay = async () => {
     if (!selectedEpayMethod) {
       toast.error(t('Please select a payment method'))
       return
     }
+    let checkout: ReturnType<typeof reservePaymentCheckout> | null = null
     setPaying(true)
     try {
+      checkout = reservePaymentCheckout()
       const res = await paySubscriptionEpay({
         plan_id: plan.id,
         payment_method: selectedEpayMethod,
       })
       if (res.message === 'success' && res.url) {
-        const form = document.createElement('form')
-        form.action = res.url
-        form.method = 'POST'
-        if (!isSafari) {
-          form.target = '_blank'
+        if (!submitPaymentForm(res.url, res.data || {}, checkout.target)) {
+          cancelPaymentCheckout(checkout)
+          toast.error(t('Invalid payment redirect URL'))
+          return
         }
-        Object.entries(res.data || {}).forEach(([key, value]) => {
-          const input = document.createElement('input')
-          input.type = 'hidden'
-          input.name = key
-          input.value = String(value)
-          form.appendChild(input)
-        })
-        document.body.appendChild(form)
         props.onCheckoutStarted?.()
-        form.submit()
-        document.body.removeChild(form)
         toast.success(t('Payment initiated'))
         props.onOpenChange(false)
       } else {
+        cancelPaymentCheckout(checkout)
         toast.error(
           res.message && res.message !== 'success'
             ? res.message
@@ -295,6 +284,7 @@ export function SubscriptionPurchaseDialog(props: Props) {
         )
       }
     } catch {
+      if (checkout) cancelPaymentCheckout(checkout)
       toast.error(t('Payment request failed'))
     } finally {
       setPaying(false)

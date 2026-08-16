@@ -540,11 +540,19 @@ function FilterSelect({
   )
 }
 
-function AuditRow({ event }: { event: SecurityAuditEvent }) {
+export function AuditRow({ event }: { event: SecurityAuditEvent }) {
   const { t } = useTranslation()
   const userFilter = securityAuditUserFilter(event)
   const isAiReview =
     event.source === 'ai_review' || event.source === 'assistant_review'
+  const hasDetails = Boolean(
+    event.explanation ||
+    event.request_id ||
+    event.rule_id ||
+    event.rule_version ||
+    event.endpoint ||
+    event.review_model
+  )
   const title =
     isAiReview && event.review_model
       ? `${sourceLabel(event.source, t)} · ${event.review_model}`
@@ -594,6 +602,56 @@ function AuditRow({ event }: { event: SecurityAuditEvent }) {
               ? ` · #${event.user_id}`
               : ''}
           </Link>
+        ) : null}
+        {hasDetails ? (
+          <details className='text-muted-foreground mt-2 text-xs leading-5'>
+            <summary className='hover:text-foreground cursor-pointer underline-offset-4 hover:underline'>
+              {t('View details')}
+            </summary>
+            <dl className='border-border/60 mt-2 grid gap-x-3 gap-y-1 border-l pl-3 sm:grid-cols-[auto_minmax(0,1fr)]'>
+              {event.explanation ? (
+                <>
+                  <dt>{t('Explanation')}</dt>
+                  <dd className='text-foreground break-words'>
+                    {event.explanation}
+                  </dd>
+                </>
+              ) : null}
+              {event.request_id ? (
+                <>
+                  <dt>{t('Request ID')}</dt>
+                  <dd className='text-foreground font-mono break-all'>
+                    {event.request_id}
+                  </dd>
+                </>
+              ) : null}
+              {event.rule_id ? (
+                <>
+                  <dt>{t('Rule')}</dt>
+                  <dd className='text-foreground font-mono break-all'>
+                    {event.rule_id}
+                    {event.rule_version ? ` · ${event.rule_version}` : ''}
+                  </dd>
+                </>
+              ) : null}
+              {event.endpoint ? (
+                <>
+                  <dt>{t('Endpoint')}</dt>
+                  <dd className='text-foreground font-mono break-all'>
+                    {event.endpoint}
+                  </dd>
+                </>
+              ) : null}
+              {event.review_model ? (
+                <>
+                  <dt>{t('Review model')}</dt>
+                  <dd className='text-foreground font-mono break-all'>
+                    {event.review_model}
+                  </dd>
+                </>
+              ) : null}
+            </dl>
+          </details>
         ) : null}
       </div>
       <div className='min-w-0'>
