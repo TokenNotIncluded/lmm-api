@@ -645,6 +645,17 @@ describe('wallet payment clarity', () => {
     assert.equal(pageText.includes('$1 USD'), true)
     assert.equal(pageText.includes('$0.15 USD'), true)
     assert.equal(pageText.includes('Alipay'), true)
+    const confirmationContent = document.querySelector(
+      '[data-slot="alert-dialog-content"]'
+    )
+    assert.equal(
+      confirmationContent?.classList.contains('max-h-[calc(100dvh-2rem)]'),
+      true
+    )
+    assert.equal(
+      confirmationContent?.classList.contains('overflow-y-auto'),
+      true
+    )
 
     await unmount(rendered)
   })

@@ -25,6 +25,12 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { SideDrawerSection } from '@/components/drawer-layout'
+import {
+  Alert,
+  AlertAction,
+  AlertDescription,
+  AlertTitle,
+} from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -76,15 +82,20 @@ export function AssistantUserProfileEditor({
     enabled: open && userId > 0,
     staleTime: 0,
   })
+  const profile = profileQuery.data?.success
+    ? profileQuery.data.data
+    : undefined
+  const profileUnavailable =
+    profileQuery.isError || (profileQuery.isFetched && !profile)
+  const editorDisabled = profileQuery.isLoading || profileUnavailable
 
   useEffect(() => {
-    const profile = profileQuery.data?.data
     if (!profile) return
     setProfileKey(profile.profile_key)
     setTags(profile.tags.join(', '))
     setStrategy(profile.strategy)
     setEnabled(profile.enabled)
-  }, [profileQuery.data])
+  }, [profile])
 
   const save = async () => {
     setSaving(true)
@@ -128,9 +139,27 @@ export function AssistantUserProfileEditor({
             id='assistant-profile-enabled'
             checked={enabled}
             onCheckedChange={setEnabled}
+            disabled={editorDisabled}
           />
         </div>
       </div>
+
+      {profileUnavailable ? (
+        <Alert variant='destructive' data-testid='assistant-user-profile-error'>
+          <AlertTitle>{t('Failed to load')}</AlertTitle>
+          <AlertDescription>{t('Please try again later.')}</AlertDescription>
+          <AlertAction>
+            <Button
+              type='button'
+              size='sm'
+              variant='outline'
+              onClick={() => void profileQuery.refetch()}
+            >
+              {t('Retry')}
+            </Button>
+          </AlertAction>
+        </Alert>
+      ) : null}
 
       <div className='space-y-2'>
         <Label htmlFor='assistant-profile-key'>{t('Profile tag')}</Label>
@@ -141,6 +170,7 @@ export function AssistantUserProfileEditor({
           }))}
           value={profileKey}
           onValueChange={(value) => setProfileKey(value ?? '')}
+          disabled={editorDisabled}
         >
           <SelectTrigger id='assistant-profile-key'>
             <SelectValue placeholder={t('No manual profile')} />
@@ -162,6 +192,7 @@ export function AssistantUserProfileEditor({
           value={tags}
           onChange={(event) => setTags(event.target.value)}
           placeholder={t('Separate labels with commas')}
+          disabled={editorDisabled}
         />
       </div>
 
@@ -177,6 +208,7 @@ export function AssistantUserProfileEditor({
             'Describe how the assistant should respond to this user.'
           )}
           rows={4}
+          disabled={editorDisabled}
         />
         <p className='text-muted-foreground text-xs'>
           {t(
@@ -185,8 +217,18 @@ export function AssistantUserProfileEditor({
         </p>
       </div>
 
-      <Button type='button' variant='outline' onClick={save} disabled={saving}>
-        {saving ? t('Saving...') : t('Save profile strategy')}
+      <Button
+        type='button'
+        variant='outline'
+        onClick={save}
+        disabled={saving || editorDisabled}
+        data-testid='assistant-user-profile-save'
+      >
+        {saving
+          ? t('Saving...')
+          : profileQuery.isLoading
+            ? t('Loading')
+            : t('Save profile strategy')}
       </Button>
     </SideDrawerSection>
   )

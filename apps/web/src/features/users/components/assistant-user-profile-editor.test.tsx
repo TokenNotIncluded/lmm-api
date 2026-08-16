@@ -157,4 +157,71 @@ describe('AssistantUserProfileEditor', () => {
       container.remove()
     }
   })
+
+  test('does not allow an unavailable profile to be saved as an empty overwrite', async () => {
+    let attempts = 0
+    api.get = (async (url: string) => {
+      assert.equal(url, '/api/user/41/assistant-profile')
+      attempts++
+      return {
+        data: {
+          success: false,
+          message: 'temporarily unavailable',
+        },
+      }
+    }) as typeof api.get
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    const container = document.createElement('div')
+    document.body.append(container)
+    const root = createRoot(container)
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <I18nextProvider i18n={i18n}>
+            <AssistantUserProfileEditor userId={41} open />
+          </I18nextProvider>
+        </QueryClientProvider>
+      )
+      await flushEffects()
+    })
+
+    try {
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        if (
+          document.body.querySelector(
+            '[data-testid="assistant-user-profile-error"]'
+          )
+        ) {
+          break
+        }
+        await act(flushEffects)
+      }
+      const error = document.body.querySelector<HTMLElement>(
+        '[data-testid="assistant-user-profile-error"]'
+      )
+      assert.ok(error)
+      assert.match(error.textContent ?? '', /Failed to load/)
+
+      const save = document.body.querySelector<HTMLButtonElement>(
+        '[data-testid="assistant-user-profile-save"]'
+      )
+      assert.ok(save)
+      assert.equal(save.disabled, true)
+
+      const retry = error.querySelector<HTMLButtonElement>('button')
+      assert.ok(retry)
+      await act(async () => {
+        retry.click()
+        await flushEffects()
+      })
+      assert.equal(attempts, 2)
+    } finally {
+      await act(async () => root.unmount())
+      queryClient.clear()
+      container.remove()
+    }
+  })
 })
