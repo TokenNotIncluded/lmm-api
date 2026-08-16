@@ -66,6 +66,7 @@ export function AssistantActivationTool(props: {
   const [manualReason, setManualReason] = useState('')
   const [manualRequestEditing, setManualRequestEditing] = useState(false)
   const [letter, setLetter] = useState<string | null>(null)
+  const [draftEditSource, setDraftEditSource] = useState<'ai' | 'user'>('ai')
   const [pendingLetterEditing, setPendingLetterEditing] = useState(false)
   const [pendingLetterDraft, setPendingLetterDraft] = useState('')
   const [pendingEditSource, setPendingEditSource] = useState<'ai' | 'user'>(
@@ -97,6 +98,7 @@ export function AssistantActivationTool(props: {
       if (initializedLetterKey.current !== key) {
         initializedLetterKey.current = key
         setLetter(props.recommendationDraft.recommendation)
+        setDraftEditSource('ai')
       }
       if (
         request?.status === 'pending' &&
@@ -138,6 +140,8 @@ export function AssistantActivationTool(props: {
     if (loading || request?.status === 'pending' || !draft) return
     const recommendation = (letter ?? draft.recommendation).trim()
     if (recommendation.length < 20) return
+    const confirmationToken =
+      draftEditSource === 'ai' ? draft.confirmation_token : undefined
     setLoading(true)
     try {
       const submitted = await submitDeveloperAccessRequest({
@@ -146,7 +150,7 @@ export function AssistantActivationTool(props: {
         // rationale; editing the letter must never overwrite it.
         reason: draft.user_statement.trim(),
         ai_recommendation: recommendation,
-        confirmation_token: draft.confirmation_token,
+        confirmation_token: confirmationToken,
         confirmed: true,
       })
       initializedRevisionKey.current = `draft:${draft.confirmation_token}`
@@ -381,7 +385,10 @@ export function AssistantActivationTool(props: {
         <div className='grid min-w-0 gap-3'>
           <Textarea
             value={letter ?? draft.recommendation}
-            onChange={(event) => setLetter(event.target.value)}
+            onChange={(event) => {
+              setLetter(event.target.value)
+              if (draftEditSource === 'ai') setDraftEditSource('user')
+            }}
             maxLength={2000}
             rows={5}
             className='focus-visible:border-foreground/30 min-h-36 w-full resize-y text-base focus-visible:ring-0 sm:text-sm'

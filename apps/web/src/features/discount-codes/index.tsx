@@ -35,9 +35,12 @@ import {
   updateDiscountCode,
   updateDiscountCodeStatus,
 } from './api'
+import {
+  DISCOUNT_CODE_ENABLED_STATUS,
+  getDiscountCodeAvailability,
+} from './availability'
 import type { DiscountCode, DiscountCodeInput } from './types'
 
-const ENABLED = 1
 const DISABLED = 2
 
 type FormState = {
@@ -89,6 +92,22 @@ function formatDate(timestamp: number) {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(new Date(timestamp * 1000))
+}
+
+function availabilityLabel(
+  availability: ReturnType<typeof getDiscountCodeAvailability>,
+  t: ReturnType<typeof useTranslation>['t']
+) {
+  switch (availability) {
+    case 'active':
+      return t('Active')
+    case 'not_started':
+      return t('Not Started')
+    case 'expired':
+      return t('Expired')
+    default:
+      return t('Disabled')
+  }
 }
 
 export function DiscountCodes() {
@@ -230,14 +249,14 @@ export function DiscountCodes() {
               className='max-w-sm'
             />
             <div className='overflow-x-auto'>
-              <div className='min-w-[760px]'>
-                <div className='text-muted-foreground grid grid-cols-[1.3fr_1fr_.7fr_.8fr_1fr_1.2fr_auto] gap-4 border-b px-2 pb-3 text-xs tracking-wider uppercase'>
+              <div className='min-w-[900px]'>
+                <div className='text-muted-foreground grid grid-cols-[1.3fr_1fr_.7fr_.8fr_1fr_1.4fr_auto] gap-4 border-b px-2 pb-3 text-xs tracking-wider uppercase'>
                   <span>{t('Code')}</span>
                   <span>{t('Name')}</span>
                   <span>{t('Discount')}</span>
                   <span>{t('Used')}</span>
                   <span>{t('Status')}</span>
-                  <span>{t('Expires')}</span>
+                  <span>{t('Validity')}</span>
                   <span />
                 </div>
                 {query.isLoading ? (
@@ -251,7 +270,7 @@ export function DiscountCodes() {
                 ) : (
                   rows.map((row) => (
                     <div
-                      className='grid grid-cols-[1.3fr_1fr_.7fr_.8fr_1fr_1.2fr_auto] items-center gap-4 border-b px-2 py-4 text-sm last:border-b-0'
+                      className='grid grid-cols-[1.3fr_1fr_.7fr_.8fr_1fr_1.4fr_auto] items-center gap-4 border-b px-2 py-4 text-sm last:border-b-0'
                       key={row.id}
                     >
                       <div className='font-mono font-medium'>{row.code}</div>
@@ -261,23 +280,34 @@ export function DiscountCodes() {
                       <div className='flex items-center gap-2'>
                         <Switch
                           size='sm'
-                          checked={row.status === ENABLED}
+                          checked={row.status === DISCOUNT_CODE_ENABLED_STATUS}
                           aria-label={`${row.code} ${t('Enabled')}`}
                           onCheckedChange={(checked) =>
                             statusMutation.mutate({
                               id: row.id,
-                              status: checked ? ENABLED : DISABLED,
+                              status: checked
+                                ? DISCOUNT_CODE_ENABLED_STATUS
+                                : DISABLED,
                             })
                           }
                         />
                         <span className='text-muted-foreground text-xs'>
-                          {row.status === ENABLED
-                            ? t('Enabled')
-                            : t('Disabled')}
+                          {availabilityLabel(
+                            getDiscountCodeAvailability(row),
+                            t
+                          )}
                         </span>
                       </div>
-                      <div className='text-muted-foreground text-xs'>
-                        {formatDate(row.expired_time)}
+                      <div className='text-muted-foreground space-y-0.5 text-xs'>
+                        <p>
+                          {t('Starts')}: {formatDate(row.starts_time)}
+                        </p>
+                        <p>
+                          {t('Expires')}:{' '}
+                          {row.expired_time
+                            ? formatDate(row.expired_time)
+                            : t('Never expires')}
+                        </p>
                       </div>
                       <div className='flex justify-end gap-1'>
                         <Button

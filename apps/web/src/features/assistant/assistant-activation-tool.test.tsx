@@ -333,6 +333,46 @@ describe('AssistantActivationTool', () => {
     }
   })
 
+  test('switches an edited initial AI draft to the token-free manual path', async () => {
+    api.get = (async () => ({
+      data: { success: true, data: null },
+    })) as typeof api.get
+    let submittedBody: unknown
+    api.post = (async (url: string, data: unknown) => {
+      assert.equal(url, '/api/user/developer-access/request')
+      submittedBody = data
+      return { data: { success: true, data: pendingRequest } }
+    }) as typeof api.post
+
+    const rendered = await renderTool({ recommendationDraft })
+    try {
+      const textarea = document.querySelector<HTMLTextAreaElement>('textarea')
+      assert.ok(textarea)
+      await setTextareaValue(
+        textarea,
+        'A manually revised initial recommendation for my client.'
+      )
+
+      await act(async () => {
+        findButton('Confirm and send to administrator').click()
+        await flushEffects()
+      })
+      await waitForCondition(
+        () => submittedBody !== undefined,
+        'Edited recommendation was not submitted'
+      )
+      assert.deepEqual(submittedBody, {
+        reason: recommendationDraft.user_statement,
+        ai_recommendation:
+          'A manually revised initial recommendation for my client.',
+        confirmation_token: undefined,
+        confirmed: true,
+      })
+    } finally {
+      await unmount(rendered)
+    }
+  })
+
   test('applies an AI revision to the one pending recommendation after confirmation', async () => {
     api.get = (async () => ({
       data: { success: true, data: pendingRequest },
