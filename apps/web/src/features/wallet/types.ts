@@ -176,6 +176,12 @@ export interface TopupInfo {
   waffo_min_topup?: number
   /** Whether Waffo Pancake topup is enabled */
   enable_waffo_pancake_topup?: boolean
+  /** Whether plan-level Stripe checkout is enabled */
+  enable_stripe_subscription?: boolean
+  /** Whether plan-level Creem checkout is enabled */
+  enable_creem_subscription?: boolean
+  /** Whether plan-level Waffo Pancake checkout is enabled */
+  enable_waffo_pancake_subscription?: boolean
   /** Minimum topup amount for Waffo Pancake */
   waffo_pancake_min_topup?: number
   /** Whether redemption code usage is enabled */

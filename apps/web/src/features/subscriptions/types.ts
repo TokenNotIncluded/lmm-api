@@ -55,6 +55,8 @@ export type SubscriptionPlan = z.infer<typeof subscriptionPlanSchema>
 
 export interface PlanRecord {
   plan: SubscriptionPlan
+  /** Checkout methods authorized for this plan and signed-in user. */
+  payment_methods?: string[]
 }
 
 // ============================================================================

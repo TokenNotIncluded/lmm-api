@@ -56,7 +56,7 @@ func SubscriptionRequestEpay(c *gin.Context) {
 		SubscriptionRequestFastPay(c)
 		return
 	}
-	if !requirePaymentMethodAvailable(c, req.PaymentMethod) {
+	if !requireSubscriptionPaymentMethodAvailable(c, plan, req.PaymentMethod) {
 		return
 	}
 

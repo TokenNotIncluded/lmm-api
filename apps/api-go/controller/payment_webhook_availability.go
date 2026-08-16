@@ -21,6 +21,19 @@ func isStripeTopUpEnabled() bool {
 		strings.TrimSpace(setting.StripePriceId) != ""
 }
 
+// isStripeSubscriptionPaymentEnabled intentionally does not require the
+// global wallet top-up Price ID. Subscription plans carry their own Stripe
+// Price ID, so requiring the wallet product here hides otherwise valid
+// subscription checkout buttons.
+func isStripeSubscriptionPaymentEnabled() bool {
+	if !isPaymentComplianceConfirmed() {
+		return false
+	}
+	secret := strings.TrimSpace(setting.StripeApiSecret)
+	return (strings.HasPrefix(secret, "sk_") || strings.HasPrefix(secret, "rk_")) &&
+		strings.TrimSpace(setting.StripeWebhookSecret) != ""
+}
+
 func isStripeWebhookConfigured() bool {
 	return strings.TrimSpace(setting.StripeWebhookSecret) != ""
 }
@@ -37,6 +50,16 @@ func isCreemTopUpEnabled() bool {
 	return strings.TrimSpace(setting.CreemApiKey) != "" &&
 		products != "" &&
 		products != "[]"
+}
+
+// Subscription products are configured on each plan and therefore do not
+// depend on the global wallet top-up product catalog.
+func isCreemSubscriptionPaymentEnabled() bool {
+	if !isPaymentComplianceConfirmed() {
+		return false
+	}
+	return strings.TrimSpace(setting.CreemApiKey) != "" &&
+		(strings.TrimSpace(setting.CreemWebhookSecret) != "" || setting.CreemTestMode)
 }
 
 func isCreemWebhookConfigured() bool {
@@ -84,6 +107,16 @@ func isWaffoPancakeTopUpEnabled() bool {
 	return merchantID != "" &&
 		privateKey != "" &&
 		strings.TrimSpace(setting.WaffoPancakeProductID) != ""
+}
+
+// Pancake subscriptions use the product ID stored on the plan. The global
+// wallet product is unrelated and must not gate plan checkout.
+func isWaffoPancakeSubscriptionPaymentEnabled() bool {
+	if !isPaymentComplianceConfirmed() {
+		return false
+	}
+	merchantID, privateKey := service.WaffoPancakeCredentials()
+	return strings.TrimSpace(merchantID) != "" && strings.TrimSpace(privateKey) != ""
 }
 
 func isWaffoPancakeWebhookConfigured() bool {

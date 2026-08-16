@@ -40,10 +40,6 @@ func SubscriptionRequestCreemPay(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "参数错误"})
 		return
 	}
-	if !requirePaymentMethodAvailable(c, model.PaymentMethodCreem) {
-		return
-	}
-
 	plan, err := model.GetSubscriptionPlanById(req.PlanId)
 	if err != nil {
 		common.ApiError(c, err)
@@ -51,6 +47,9 @@ func SubscriptionRequestCreemPay(c *gin.Context) {
 	}
 	if !plan.Enabled {
 		common.ApiErrorMsg(c, "套餐未启用")
+		return
+	}
+	if !requireSubscriptionPaymentMethodAvailable(c, plan, model.PaymentMethodCreem) {
 		return
 	}
 	if plan.CreemProductId == "" {

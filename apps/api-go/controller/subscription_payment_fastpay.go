@@ -48,10 +48,6 @@ func SubscriptionRequestFastPay(c *gin.Context) {
 		common.ApiErrorMsg(c, "FAST 易支付仅支持支付宝或微信支付")
 		return
 	}
-	if !requirePaymentMethodAvailable(c, req.PaymentMethod) {
-		return
-	}
-
 	plan, err := model.GetSubscriptionPlanById(req.PlanId)
 	if err != nil {
 		common.ApiError(c, err)
@@ -63,6 +59,9 @@ func SubscriptionRequestFastPay(c *gin.Context) {
 	}
 	if plan.PriceAmount < 0.01 {
 		common.ApiErrorMsg(c, "套餐金额过低")
+		return
+	}
+	if !requireSubscriptionPaymentMethodAvailable(c, plan, req.PaymentMethod) {
 		return
 	}
 

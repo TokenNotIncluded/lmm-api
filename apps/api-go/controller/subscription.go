@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/LIghtJUNction/api.lmm.best/common"
 	"github.com/LIghtJUNction/api.lmm.best/model"
@@ -17,6 +18,12 @@ import (
 
 type SubscriptionPlanDTO struct {
 	Plan model.SubscriptionPlan `json:"plan"`
+	// PaymentMethods is the checkout catalog for this plan and current user.
+	// It is deliberately derived from the plan's provider product IDs and
+	// gateway credentials, rather than from wallet top-up products. A plan may
+	// be external-payment-only even when the operator has not configured a
+	// generic top-up product for that gateway.
+	PaymentMethods []string `json:"payment_methods"`
 }
 
 type BillingPreferenceRequest struct {
@@ -35,6 +42,12 @@ func GetSubscriptionPlans(c *gin.Context) {
 		return
 	}
 
+	user, err := model.GetUserById(c.GetInt("id"), false)
+	if err != nil || user == nil {
+		common.ApiErrorMsg(c, "获取用户信息失败")
+		return
+	}
+
 	var plans []model.SubscriptionPlan
 	if err := model.DB.Where("enabled = ?", true).Order("sort_order desc, id desc").Find(&plans).Error; err != nil {
 		common.ApiError(c, err)
@@ -44,7 +57,8 @@ func GetSubscriptionPlans(c *gin.Context) {
 	for _, p := range plans {
 		p.NormalizeDefaults()
 		result = append(result, SubscriptionPlanDTO{
-			Plan: p,
+			Plan:           p,
+			PaymentMethods: subscriptionPaymentMethods(user, &p, time.Now()),
 		})
 	}
 	common.ApiSuccess(c, result)

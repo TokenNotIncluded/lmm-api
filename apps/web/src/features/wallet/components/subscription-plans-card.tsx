@@ -110,9 +110,15 @@ export function SubscriptionPlansCard({
   const [purchaseOpen, setPurchaseOpen] = useState(false)
   const [selectedPlan, setSelectedPlan] = useState<PlanRecord | null>(null)
 
-  const enableStripe = !!topupInfo?.enable_stripe_topup
-  const enableCreem = !!topupInfo?.enable_creem_topup
-  const enableWaffoPancake = !!topupInfo?.enable_waffo_pancake_topup
+  // Plan checkout has its own product IDs. Fall back to the old top-up flags
+  // for older Go servers, but do not require a global wallet product.
+  const enableStripe =
+    topupInfo?.enable_stripe_subscription ?? !!topupInfo?.enable_stripe_topup
+  const enableCreem =
+    topupInfo?.enable_creem_subscription ?? !!topupInfo?.enable_creem_topup
+  const enableWaffoPancake =
+    topupInfo?.enable_waffo_pancake_subscription ??
+    !!topupInfo?.enable_waffo_pancake_topup
   const enableOnlineTopUp = !!topupInfo?.enable_online_topup
   const paymentUnavailable = topupInfo?.payment_available === false
   const epayMethods = useMemo(
@@ -529,6 +535,17 @@ export function SubscriptionPlansCard({
               const limit = Number(plan.max_purchase_per_user || 0)
               const count = planPurchaseCountMap.get(plan.id) || 0
               const reached = limit > 0 && count >= limit
+              const hasPlanPaymentCatalog = Array.isArray(p.payment_methods)
+              const hasPlanCheckout = hasPlanPaymentCatalog
+                ? (p.payment_methods?.length || 0) > 0
+                : !paymentUnavailable &&
+                  ((enableStripe && !!plan.stripe_price_id) ||
+                    (enableCreem && !!plan.creem_product_id) ||
+                    (enableWaffoPancake &&
+                      !!plan.waffo_pancake_product_id) ||
+                    (enableOnlineTopUp && epayMethods.length > 0))
+              const canPurchase =
+                plan.allow_balance_pay !== false || hasPlanCheckout
 
               const benefits = [
                 `${t('Validity Period')}: ${formatDuration(plan, t)}`,
@@ -544,7 +561,7 @@ export function SubscriptionPlansCard({
                   : null,
               ].filter(Boolean) as string[]
               const purchaseAction = (() => {
-                if (paymentUnavailable) {
+                if (!canPurchase) {
                   return (
                     <Tooltip>
                       <TooltipTrigger render={<div />}>
@@ -553,7 +570,9 @@ export function SubscriptionPlansCard({
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent>
-                        {t('Payment is unavailable for this account.')}
+                        {t(
+                          'No payment methods available. Please contact administrator.'
+                        )}
                       </TooltipContent>
                     </Tooltip>
                   )
@@ -663,6 +682,7 @@ export function SubscriptionPlansCard({
         enableWaffoPancake={enableWaffoPancake}
         enableOnlineTopUp={enableOnlineTopUp}
         epayMethods={epayMethods}
+        paymentMethods={selectedPlan?.payment_methods}
         userQuota={userQuota}
         onPurchaseSuccess={onPurchaseSuccess}
         purchaseLimit={

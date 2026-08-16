@@ -58,6 +58,16 @@ interface PaymentMethod {
   name?: string
 }
 
+function getPlanEpayMethods(
+  paymentMethods: string[] | undefined,
+  epayMethods: PaymentMethod[] | undefined
+): PaymentMethod[] {
+  if (!Array.isArray(paymentMethods)) return epayMethods || []
+  return (epayMethods || []).filter((method) =>
+    paymentMethods.includes(method.type)
+  )
+}
+
 interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -67,6 +77,8 @@ interface Props {
   enableWaffoPancake?: boolean
   enableOnlineTopUp?: boolean
   epayMethods?: PaymentMethod[]
+  /** Authoritative per-plan checkout catalog from /subscription/plans. */
+  paymentMethods?: string[]
   purchaseLimit?: number
   purchaseCount?: number
   userQuota?: number
@@ -82,22 +94,41 @@ export function SubscriptionPurchaseDialog(props: Props) {
     useState<WaffoPancakeCheckoutRegion | null>(null)
 
   useEffect(() => {
-    if (props.open && props.epayMethods && props.epayMethods.length > 0) {
-      setSelectedEpayMethod(props.epayMethods[0].type)
+    const availableEpayMethods = getPlanEpayMethods(
+      props.paymentMethods,
+      props.epayMethods
+    )
+    if (props.open && availableEpayMethods.length > 0) {
+      setSelectedEpayMethod(availableEpayMethods[0].type)
     } else if (!props.open) {
       setSelectedEpayMethod('')
     }
-  }, [props.open, props.epayMethods])
+  }, [props.open, props.paymentMethods, props.epayMethods])
 
   const plan = props.plan?.plan
   if (!plan) return null
 
-  const hasStripe = props.enableStripe && !!plan.stripe_price_id
-  const hasCreem = props.enableCreem && !!plan.creem_product_id
-  const hasWaffoPancake =
-    props.enableWaffoPancake && !!plan.waffo_pancake_product_id
+  const hasAuthoritativePaymentCatalog = Array.isArray(props.paymentMethods)
+  const paymentMethods = hasAuthoritativePaymentCatalog
+    ? props.paymentMethods || []
+    : []
+  const hasStripe = hasAuthoritativePaymentCatalog
+    ? paymentMethods.includes('stripe')
+    : props.enableStripe && !!plan.stripe_price_id
+  const hasCreem = hasAuthoritativePaymentCatalog
+    ? paymentMethods.includes('creem')
+    : props.enableCreem && !!plan.creem_product_id
+  const hasWaffoPancake = hasAuthoritativePaymentCatalog
+    ? paymentMethods.includes('waffo_pancake')
+    : props.enableWaffoPancake && !!plan.waffo_pancake_product_id
+  const availableEpayMethods = getPlanEpayMethods(
+    props.paymentMethods,
+    props.epayMethods
+  )
   const hasEpay =
-    props.enableOnlineTopUp && (props.epayMethods || []).length > 0
+    (hasAuthoritativePaymentCatalog
+      ? availableEpayMethods.length > 0
+      : props.enableOnlineTopUp && availableEpayMethods.length > 0)
   const hasAnyPayment = hasStripe || hasCreem || hasWaffoPancake || hasEpay
   const interfaceLanguage = i18n.resolvedLanguage || i18n.language
   const waffoPancakeCheckoutRegion =
@@ -106,7 +137,7 @@ export function SubscriptionPurchaseDialog(props: Props) {
   const waffoPancakeCheckoutLanguage =
     getWaffoPancakeCheckoutLanguage(interfaceLanguage)
   const selectedEpayMethodLabel =
-    (props.epayMethods || []).find((m) => m.type === selectedEpayMethod)
+    availableEpayMethods.find((m) => m.type === selectedEpayMethod)
       ?.name ||
     selectedEpayMethod ||
     t('Select payment method')
@@ -466,7 +497,7 @@ export function SubscriptionPurchaseDialog(props: Props) {
             {hasEpay && (
               <div className='grid grid-cols-[minmax(0,1fr)_auto] gap-2'>
                 <Select
-                  items={(props.epayMethods || []).map((m) => ({
+                  items={availableEpayMethods.map((m) => ({
                     value: m.type,
                     label: m.name || m.type,
                   }))}
@@ -479,7 +510,7 @@ export function SubscriptionPurchaseDialog(props: Props) {
                   </SelectTrigger>
                   <SelectContent alignItemWithTrigger={false}>
                     <SelectGroup>
-                      {(props.epayMethods || []).map((m) => (
+                      {availableEpayMethods.map((m) => (
                         <SelectItem key={m.type} value={m.type}>
                           {m.name || m.type}
                         </SelectItem>
@@ -494,6 +525,13 @@ export function SubscriptionPurchaseDialog(props: Props) {
                   {t('Pay')}
                 </Button>
               </div>
+            )}
+            {!hasAnyPayment && !allowBalancePay && (
+              <Alert variant='destructive'>
+                <AlertDescription>
+                  {t('No payment methods available. Please contact administrator.')}
+                </AlertDescription>
+              </Alert>
             )}
           </div>
         )}
