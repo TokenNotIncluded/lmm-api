@@ -88,7 +88,7 @@ func (p *GitHubProvider) ExchangeToken(ctx context.Context, code string, c *gin.
 	logger.LogDebug(ctx, "[OAuth-GitHub] ExchangeToken response status: %d", res.StatusCode)
 
 	var oAuthResponse gitHubOAuthResponse
-	err = json.NewDecoder(res.Body).Decode(&oAuthResponse)
+	err = decodeOAuthJSON(res.Body, &oAuthResponse)
 	if err != nil {
 		logger.LogError(ctx, fmt.Sprintf("[OAuth-GitHub] ExchangeToken decode error: %s", err.Error()))
 		return nil, err
@@ -141,7 +141,7 @@ func (p *GitHubProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*O
 	}
 
 	var githubUser gitHubUser
-	err = json.NewDecoder(res.Body).Decode(&githubUser)
+	err = decodeOAuthJSON(res.Body, &githubUser)
 	if err != nil {
 		logger.LogError(ctx, fmt.Sprintf("[OAuth-GitHub] GetUserInfo decode error: %s", err.Error()))
 		return nil, err
@@ -194,7 +194,7 @@ func (p *GitHubProvider) fetchVerifiedEmail(ctx context.Context, token *OAuthTok
 		return "", false
 	}
 	var emails []gitHubEmail
-	if err := json.NewDecoder(res.Body).Decode(&emails); err != nil {
+	if err := decodeOAuthJSON(res.Body, &emails); err != nil {
 		logger.LogWarn(ctx, fmt.Sprintf("[OAuth-GitHub] verified email lookup decode failed: %s", err.Error()))
 		return "", false
 	}

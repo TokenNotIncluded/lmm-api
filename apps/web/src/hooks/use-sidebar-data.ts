@@ -169,6 +169,11 @@ export function useSidebarData(): SidebarData {
             icon: LayoutDashboard,
           },
           {
+            title: t('Model Square'),
+            url: '/pricing',
+            icon: Box,
+          },
+          {
             title: t('API Keys'),
             url: '/keys',
             icon: Key,

@@ -2,7 +2,6 @@ package oauth
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -86,7 +85,7 @@ func (p *DiscordProvider) ExchangeToken(ctx context.Context, code string, c *gin
 	logger.LogDebug(ctx, "[OAuth-Discord] ExchangeToken response status: %d", res.StatusCode)
 
 	var discordResponse discordOAuthResponse
-	err = json.NewDecoder(res.Body).Decode(&discordResponse)
+	err = decodeOAuthJSON(res.Body, &discordResponse)
 	if err != nil {
 		logger.LogError(ctx, fmt.Sprintf("[OAuth-Discord] ExchangeToken decode error: %s", err.Error()))
 		return nil, err
@@ -136,7 +135,7 @@ func (p *DiscordProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*
 	}
 
 	var discordUser discordUser
-	err = json.NewDecoder(res.Body).Decode(&discordUser)
+	err = decodeOAuthJSON(res.Body, &discordUser)
 	if err != nil {
 		logger.LogError(ctx, fmt.Sprintf("[OAuth-Discord] GetUserInfo decode error: %s", err.Error()))
 		return nil, err
