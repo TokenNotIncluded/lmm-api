@@ -78,7 +78,7 @@ export function BillingHistoryDialog({
     handlePageSizeChange,
     handleSearch,
     handleCompleteOrder,
-  } = useBillingHistory()
+  } = useBillingHistory({ enabled: open })
 
   const [confirmTradeNo, setConfirmTradeNo] = useState<string | null>(null)
   const { copyToClipboard, copiedText } = useCopyToClipboard({ notify: false })
