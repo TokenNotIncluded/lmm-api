@@ -71,6 +71,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
+import { isConsoleActivated } from '@/lib/console-activation'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -1837,7 +1838,7 @@ export function AssistantPanel(props: {
               <AssistantHistory
                 active={panelVisible}
                 presentation='rows'
-                showFullPageLink
+                showFullPageLink={isConsoleActivated(authUser)}
                 onOpenConversation={(conversation) =>
                   setHistoryView(conversation)
                 }

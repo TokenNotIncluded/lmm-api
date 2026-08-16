@@ -482,6 +482,56 @@ describe('AssistantPanel', () => {
     }
   })
 
+  test('does not expose the console-only chat management link to L0 history', async () => {
+    api.get = (async (url: string) => {
+      if (url === '/api/assistant/status') {
+        return { data: { success: true, data: assistantStatus } }
+      }
+      assert.equal(url, '/api/assistant/conversations')
+      return {
+        data: {
+          success: true,
+          data: {
+            conversations: [
+              {
+                id: 92,
+                title: 'L0 history thread',
+                last_message_preview: 'A saved conversation',
+                owner: 'self',
+                created_at: 1_786_400_000,
+                updated_at: 1_786_400_001,
+              },
+            ],
+          },
+        },
+      }
+    }) as typeof api.get
+
+    const rendered = await renderPanel(undefined, 'mobile', {
+      id: 7,
+      username: 'l0-user',
+      role: 1,
+      developer_access_granted: false,
+    })
+    try {
+      await act(async () => {
+        findButton('Conversation history').click()
+        await waitForCondition(
+          () =>
+            document.querySelector('[data-testid="assistant-history-list"]') !==
+            null,
+          'mobile history did not open'
+        )
+      })
+
+      assert.equal(document.querySelector('a[href="/chat-management"]'), null)
+      assert.doesNotMatch(document.body.textContent ?? '', /Chat management/)
+    } finally {
+      await act(async () => rendered.root.unmount())
+      rendered.queryClient.clear()
+    }
+  })
+
   test('switches the page assistant to the persisted classic layout', async () => {
     api.get = (async (url: string) => {
       assert.equal(url, '/api/assistant/status')
