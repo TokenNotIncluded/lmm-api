@@ -180,3 +180,16 @@ export function hasRegistrationMethod(
     hasOAuthRegistrationProvider(status)
   )
 }
+
+/**
+ * Registration links must wait for a live capability response. Cached status
+ * is useful for layout, but it must not advertise a sign-up path that the
+ * current server may have disabled.
+ */
+export function canOfferRegistration(
+  status: SystemStatus | null | undefined,
+  capabilitiesReady: boolean,
+  localPreview = false
+): boolean {
+  return localPreview || (capabilitiesReady && hasRegistrationMethod(status))
+}

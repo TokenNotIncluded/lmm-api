@@ -19,6 +19,7 @@ import { describe, test } from 'node:test'
 
 import {
   getDisabledOAuthRegistrationMethods,
+  canOfferRegistration,
   hasOAuthLoginProvider,
   hasOAuthRegistrationProvider,
   hasRegistrationMethod,
@@ -136,5 +137,13 @@ describe('registration availability', () => {
     }
 
     assert.equal(hasRegistrationMethod(status), false)
+  })
+
+  test('fails closed until live registration capabilities are confirmed', () => {
+    const status = { register_enabled: true, password_register_enabled: true }
+
+    assert.equal(canOfferRegistration(status, false), false)
+    assert.equal(canOfferRegistration(status, true), true)
+    assert.equal(canOfferRegistration(status, false, true), true)
   })
 })

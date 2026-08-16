@@ -47,9 +47,6 @@ describe('mobile sign-in presentation', () => {
     assert.match(form, /hasAlternativeLogin && passwordLoginEnabled/)
     assert.match(form, /\{t\('Or'\)\}/)
     assert.match(form, /auth-field h-11 rounded-xl/)
-    assert.match(
-      signIn,
-      /capabilitiesReady\s*&&\s*hasRegistrationMethod\(status\)/
-    )
+    assert.match(signIn, /canOfferRegistration\(status, capabilitiesReady\)/)
   })
 })

@@ -35,11 +35,22 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
+import { useStatus } from '@/hooks/use-status'
+import { isLocalPreview } from '@/lib/local-preview'
 
+import { canOfferRegistration } from '../auth/lib/registration'
 import { ForgePublicShell } from '../forge/forge-public-shell'
 
 export function PublicAccessPricing() {
   const { t } = useTranslation()
+  const { status, capabilitiesReady } = useStatus()
+  const canRegister = canOfferRegistration(
+    status,
+    capabilitiesReady,
+    isLocalPreview()
+  )
+  const accountPath = canRegister ? '/sign-up' : '/sign-in'
+  const accountLabel = canRegister ? t('Create account') : t('Sign in')
 
   return (
     <ForgePublicShell>
@@ -65,15 +76,17 @@ export function PublicAccessPricing() {
                 <Button
                   size='lg'
                   className='rounded-sm'
-                  render={<Link to='/sign-up' />}
+                  render={<Link to={accountPath} />}
                 >
-                  {t('Create account')}
-                  <HugeiconsIcon
-                    icon={ArrowRight01Icon}
-                    data-icon='inline-end'
-                    strokeWidth={2}
-                    aria-hidden='true'
-                  />
+                  {accountLabel}
+                  {canRegister ? (
+                    <HugeiconsIcon
+                      icon={ArrowRight01Icon}
+                      data-icon='inline-end'
+                      strokeWidth={2}
+                      aria-hidden='true'
+                    />
+                  ) : null}
                 </Button>
                 <Button
                   size='lg'
@@ -172,9 +185,9 @@ export function PublicAccessPricing() {
                   <Button
                     variant='outline'
                     className='w-full rounded-sm'
-                    render={<Link to='/sign-up' />}
+                    render={<Link to={accountPath} />}
                   >
-                    {t('Create account')}
+                    {accountLabel}
                   </Button>
                 </CardFooter>
               </Card>
@@ -196,9 +209,9 @@ export function PublicAccessPricing() {
                 <CardFooter className='bg-muted/60'>
                   <Button
                     className='w-full rounded-sm'
-                    render={<Link to='/sign-up' />}
+                    render={<Link to={accountPath} />}
                   >
-                    {t('Create account')}
+                    {accountLabel}
                   </Button>
                 </CardFooter>
               </Card>
@@ -219,9 +232,9 @@ export function PublicAccessPricing() {
                   <Button
                     variant='outline'
                     className='w-full rounded-sm'
-                    render={<Link to='/sign-up' />}
+                    render={<Link to={accountPath} />}
                   >
-                    {t('Create account')}
+                    {accountLabel}
                   </Button>
                 </CardFooter>
               </Card>
