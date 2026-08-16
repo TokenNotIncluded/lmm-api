@@ -68,7 +68,7 @@ export function SystemBrand(props: SystemBrandProps) {
         <div className='flex size-5 items-center justify-center'>
           <BrandLogo src={logo} className='size-full object-contain' />
         </div>
-        <span className='max-w-[12rem] truncate'>{name}</span>
+        <span className='hidden max-w-[12rem] truncate sm:inline'>{name}</span>
       </Link>
     )
   }

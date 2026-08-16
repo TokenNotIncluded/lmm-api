@@ -99,3 +99,30 @@ func TestHotBucketConcurrentLoadCountsOneEntry(t *testing.T) {
 		t.Fatalf("bucket count=%d, want 1", count)
 	}
 }
+
+func TestMergeModelBucketRetainsOnlyRecentSuccessRateBuckets(t *testing.T) {
+	modelBuckets := map[string]map[int64]counters{}
+	for ts := int64(1); ts <= 4; ts++ {
+		mergeModelBucket(modelBuckets, "model", ts, counters{
+			requestCount: 1,
+			successCount: ts % 2,
+		})
+	}
+
+	buckets := modelBuckets["model"]
+	if len(buckets) != recentSuccessRateBucketLimit {
+		t.Fatalf("bucket count=%d, want %d", len(buckets), recentSuccessRateBucketLimit)
+	}
+	if _, ok := buckets[1]; ok {
+		t.Fatal("oldest bucket was retained")
+	}
+	for ts := int64(2); ts <= 4; ts++ {
+		if _, ok := buckets[ts]; !ok {
+			t.Fatalf("recent bucket %d was dropped", ts)
+		}
+	}
+	rates := recentSuccessRates(buckets, recentSuccessRateBucketLimit)
+	if len(rates) != recentSuccessRateBucketLimit || rates[0] != 0 || rates[1] != 100 || rates[2] != 0 {
+		t.Fatalf("recent success rates=%v, want [0 100 0]", rates)
+	}
+}

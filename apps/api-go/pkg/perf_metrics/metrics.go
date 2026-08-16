@@ -16,6 +16,7 @@ import (
 )
 
 const hotBucketMaxEntries = 16_384
+const recentSuccessRateBucketLimit = 3
 
 var hotBuckets sync.Map
 var hotBucketCount atomic.Int64
@@ -220,7 +221,7 @@ func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
 			AvgLatencyMs:       avgLatency,
 			SuccessRate:        math.Round(successRate*100) / 100,
 			AvgTps:             math.Round(avgTps*100) / 100,
-			RecentSuccessRates: recentSuccessRates(modelBuckets[name], 3),
+			RecentSuccessRates: recentSuccessRates(modelBuckets[name], recentSuccessRateBucketLimit),
 			RequestCount:       total.requestCount,
 		})
 	}
@@ -262,6 +263,18 @@ func mergeModelBucket(modelBuckets map[string]map[int64]counters, modelName stri
 	current.outputTokens += value.outputTokens
 	current.generationMs += value.generationMs
 	modelBuckets[modelName][bucketTs] = current
+	if len(modelBuckets[modelName]) <= recentSuccessRateBucketLimit {
+		return
+	}
+	var oldest int64
+	first := true
+	for ts := range modelBuckets[modelName] {
+		if first || ts < oldest {
+			oldest = ts
+			first = false
+		}
+	}
+	delete(modelBuckets[modelName], oldest)
 }
 
 func recentSuccessRates(buckets map[int64]counters, limit int) []float64 {
