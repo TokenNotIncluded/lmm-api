@@ -46,6 +46,7 @@ import { DEFAULT_DISCOUNT_RATE, PAYMENT_TYPES } from './constants'
 import {
   useTopupInfo,
   usePayment,
+  isPositivePaymentAmount,
   useAffiliate,
   useRedemption,
   useCreemPayment,
@@ -282,11 +283,16 @@ export function Wallet(props: WalletProps) {
       }
 
       // Calculate payment amount and show confirmation dialog
-      await calculatePaymentAmount(
+      const calculatedAmount = await calculatePaymentAmount(
         topupAmount,
         method.type,
         appliedDiscountCode
       )
+      if (!isPositivePaymentAmount(calculatedAmount)) {
+        setSelectedPaymentMethod(undefined)
+        toast.error(t('Payment request failed'))
+        return
+      }
       setConfirmDialogOpen(true)
     } finally {
       setPaymentLoading(null)
@@ -452,11 +458,17 @@ export function Wallet(props: WalletProps) {
     setPaymentLoading(loadingKey)
 
     try {
-      await calculatePaymentAmount(
+      const calculatedAmount = await calculatePaymentAmount(
         topupAmount,
         PAYMENT_TYPES.WAFFO,
         appliedDiscountCode
       )
+      if (!isPositivePaymentAmount(calculatedAmount)) {
+        setSelectedPaymentMethod(undefined)
+        setSelectedWaffoMethodIndex(null)
+        toast.error(t('Payment request failed'))
+        return
+      }
       setConfirmDialogOpen(true)
     } finally {
       setPaymentLoading(null)

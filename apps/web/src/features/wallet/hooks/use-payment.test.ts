@@ -20,9 +20,16 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
 import { PAYMENT_TYPES } from '../constants'
-import { requestPaymentAmount } from './use-payment'
+import { isPositivePaymentAmount, requestPaymentAmount } from './use-payment'
 
 describe('payment amount routing', () => {
+  test('rejects missing, non-finite, and zero checkout amounts', () => {
+    assert.equal(isPositivePaymentAmount(undefined), false)
+    assert.equal(isPositivePaymentAmount(Number.NaN), false)
+    assert.equal(isPositivePaymentAmount(0), false)
+    assert.equal(isPositivePaymentAmount(0.01), true)
+  })
+
   test('sends the selected regular gateway to the amount endpoint', async () => {
     const requests: Array<{ amount: number; payment_method?: string }> = []
 
