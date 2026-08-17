@@ -39,6 +39,15 @@ export function LanguageSwitcher() {
   const { i18n, t } = useTranslation()
   const user = useAuthStore((s) => s.auth.user)
   const currentLanguage = normalizeInterfaceLanguage(i18n.language)
+  const currentLanguageLabel =
+    INTERFACE_LANGUAGE_OPTIONS.find((lang) => lang.code === currentLanguage)
+      ?.label ?? currentLanguage
+  const currentLanguageShortLabel =
+    currentLanguage === 'zhCN'
+      ? '中'
+      : currentLanguage === 'zhTW'
+        ? '繁'
+        : currentLanguage.toUpperCase()
   const handleChangeLanguage = useCallback(
     async (code: string) => {
       await i18n.changeLanguage(code)
@@ -56,9 +65,20 @@ export function LanguageSwitcher() {
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger
-        render={<Button variant='ghost' size='icon' className='h-9 w-9' />}
+        render={
+          <Button
+            variant='ghost'
+            size='icon'
+            className='h-9 w-9 gap-1.5 sm:w-auto sm:px-2'
+            aria-label={`${t('Change language')}: ${currentLanguageLabel}`}
+            title={`${t('Change language')}: ${currentLanguageLabel}`}
+          />
+        }
       >
         <Languages className='size-[1.2rem]' />
+        <span aria-hidden='true' className='hidden text-xs sm:inline'>
+          {currentLanguageShortLabel}
+        </span>
         <span className='sr-only'>{t('Change language')}</span>
       </DropdownMenuTrigger>
       <DropdownMenuContent align='end'>
