@@ -663,8 +663,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .with_console_access_gate(Arc::clone(&auth)),
         );
-        let open_source_bounties =
-            open_source_bounty_router(OpenSourceBountyState::new(pg.clone(), Arc::clone(&auth)));
+        let open_source_bounties = http::api_global_rate_limited_surface(
+            &app_state,
+            open_source_bounty_router(OpenSourceBountyState::new(pg.clone(), Arc::clone(&auth))),
+        );
         // OpenAI-compatible and media relay routes use the same PostgreSQL
         // token/channel authority as the rest of the normal listener.  Keep
         // the upstream client bounded and let each executor own its billing

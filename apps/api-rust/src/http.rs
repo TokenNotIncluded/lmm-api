@@ -1148,6 +1148,7 @@ mod tests {
         },
         migration_routes::{
             api_token::{ApiTokenHttpState, ApiTokenPrincipal, PgValkeyApiTokenService},
+            open_source_bounties::{OpenSourceBountyState, router as open_source_bounty_router},
             relay_anthropic_gemini::{
                 RelayBackend, RelayChannel, RelayFailure, RelayHttpState, RelayIdentity,
                 RelayOutcome, RelayProtocol, UpstreamReply, UpstreamRequest,
@@ -1524,6 +1525,14 @@ mod tests {
 
     fn models_state() -> ModelsHttpState {
         ModelsHttpState::new(Arc::new(UnavailableModels), "v0.0.0")
+    }
+
+    fn open_source_bounty_test_surface() -> Router {
+        let pg = PgPoolOptions::new()
+            .acquire_timeout(std::time::Duration::from_millis(10))
+            .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+            .expect("lazy PostgreSQL pool");
+        open_source_bounty_router(OpenSourceBountyState::new(pg, Arc::new(UnavailableAuth)))
     }
 
     #[tokio::test]
@@ -2444,6 +2453,64 @@ mod tests {
                 .as_slice(),
             ["203.0.113.10", "203.0.113.10", "203.0.113.10"]
         );
+    }
+
+    #[tokio::test]
+    async fn production_open_source_bounty_surface_is_rate_limited_and_public_get_remains_reachable()
+     {
+        let limiter = Arc::new(MockRateLimiter {
+            mode: MockLimitMode::Reject(23),
+            client_ips: Mutex::new(Vec::new()),
+        });
+        let state = state_with_rate_limiter(None, limiter.clone());
+        let extra = api_global_rate_limited_surface(&state, open_source_bounty_test_surface());
+        let app =
+            router_with_api_token_and_extra(state, auth_state(), models_state(), None, Some(extra));
+
+        let mut request = Request::get("/api/open-source-bounties/projects/not-an-id")
+            .header("x-forwarded-for", "203.0.113.11, 127.0.0.2")
+            .body(Body::empty())
+            .expect("public bounty request is valid");
+        request.extensions_mut().insert(ConnectInfo(
+            "127.0.0.1:12345"
+                .parse::<SocketAddr>()
+                .expect("test socket address is valid"),
+        ));
+
+        let response = app.oneshot(request).await.expect("router is infallible");
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(response.headers()[header::RETRY_AFTER], "23");
+        assert_eq!(
+            limiter
+                .client_ips
+                .lock()
+                .expect("test mutex is healthy")
+                .as_slice(),
+            ["203.0.113.11"]
+        );
+
+        let state = state_with_rate_limiter(None, Arc::new(AllowAllRateLimiter));
+        let extra = api_global_rate_limited_surface(&state, open_source_bounty_test_surface());
+        let app =
+            router_with_api_token_and_extra(state, auth_state(), models_state(), None, Some(extra));
+        let mut request = Request::get("/api/open-source-bounties/projects/not-an-id")
+            .body(Body::empty())
+            .expect("public bounty request is valid");
+        request.extensions_mut().insert(ConnectInfo(
+            "127.0.0.1:12345"
+                .parse::<SocketAddr>()
+                .expect("test socket address is valid"),
+        ));
+
+        let response = app.oneshot(request).await.expect("router is infallible");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value = serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("public bounty response is readable"),
+        )
+        .expect("public bounty response is JSON");
+        assert_eq!(body["code"], "OPEN_SOURCE_BOUNTY_INVALID_ID");
     }
 
     #[tokio::test]
