@@ -130,6 +130,17 @@ export function GettingStarted() {
         <SectionPageLayout.Title>
           {t('Getting started')}
         </SectionPageLayout.Title>
+        <SectionPageLayout.Actions>
+          <Button variant='ghost' size='sm' render={<Link to='/pricing' />}>
+            <HugeiconsIcon
+              icon={DashboardSquare01Icon}
+              strokeWidth={2}
+              data-icon='inline-start'
+              aria-hidden='true'
+            />
+            {t('Model Square')}
+          </Button>
+        </SectionPageLayout.Actions>
         <SectionPageLayout.Content>
           <div className='mx-auto flex w-full max-w-2xl flex-col pb-12 sm:pb-16'>
             <section

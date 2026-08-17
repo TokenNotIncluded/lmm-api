@@ -89,13 +89,18 @@ function makeRouter() {
     path: '/getting-started',
     component: GettingStarted,
   })
-  const emptyRoutes = ['/challenges', '/support', '/keys', '/dashboard'].map(
-    (path) =>
-      createRoute({
-        getParentRoute: () => rootRoute,
-        path,
-        component: () => null,
-      })
+  const emptyRoutes = [
+    '/challenges',
+    '/support',
+    '/keys',
+    '/dashboard',
+    '/pricing',
+  ].map((path) =>
+    createRoute({
+      getParentRoute: () => rootRoute,
+      path,
+      component: () => null,
+    })
   )
   return createRouter({
     routeTree: rootRoute.addChildren([gettingStartedRoute, ...emptyRoutes]),
@@ -191,6 +196,15 @@ afterEach(() => {
 after(() => domWindow.close())
 
 describe('getting started access boundaries', () => {
+  test('keeps the model square discoverable from the L0 onboarding page', async () => {
+    const page = await renderPage()
+    const modelSquare = page.container.querySelector('a[href="/pricing"]')
+
+    assert.ok(modelSquare)
+    assert.equal(modelSquare.textContent?.includes('Model Square'), true)
+    await unmountPage(page)
+  })
+
   test('opens the AI onboarding conversation once when an L0 user enters', async () => {
     const opened: Array<string | undefined> = []
     const unsubscribe = subscribeToAssistantOpen((request) =>
