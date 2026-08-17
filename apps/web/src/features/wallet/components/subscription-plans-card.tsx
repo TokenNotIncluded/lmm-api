@@ -487,7 +487,7 @@ export function SubscriptionPlansCard({
                 value={displayPref}
                 onValueChange={(v) => v !== null && handlePreferenceChange(v)}
               >
-                <SelectTrigger className='h-8 flex-1 text-xs sm:w-[140px] sm:flex-none'>
+                <SelectTrigger className='h-11 flex-1 text-xs sm:h-8 sm:w-[140px] sm:flex-none'>
                   <SelectValue>
                     {getBillingPreferenceLabel(displayPref, t)}
                   </SelectValue>
@@ -520,7 +520,7 @@ export function SubscriptionPlansCard({
               <Button
                 variant='ghost'
                 size='icon'
-                className='h-8 w-8'
+                className='size-11 sm:size-8'
                 onClick={handleRefresh}
                 disabled={refreshing}
               >
