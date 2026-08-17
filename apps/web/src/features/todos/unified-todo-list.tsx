@@ -157,8 +157,9 @@ export function UnifiedTodoList() {
             <button
               key={key}
               type='button'
+              aria-pressed={category === key}
               className={cn(
-                'text-muted-foreground hover:text-foreground py-1 text-sm transition-colors',
+                'text-muted-foreground hover:text-foreground flex min-h-11 items-center py-1 text-sm transition-colors',
                 category === key && 'text-foreground font-medium'
               )}
               onClick={() => setCategory(key)}

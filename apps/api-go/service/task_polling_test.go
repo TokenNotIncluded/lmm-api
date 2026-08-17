@@ -372,6 +372,73 @@ func TestUpdateVideoTasksMixedChannelSleepSettings(t *testing.T) {
 	assert.ElementsMatch(t, []string{"upstream_sleepy_1", "upstream_fast_1", "upstream_fast_2"}, adaptor.fetchedTaskIDs())
 }
 
+func TestUpdateVideoTasksMissingChannelFailsAndRefundsWithCAS(t *testing.T) {
+	truncate(t)
+
+	const (
+		userID       = 520
+		channelID    = 521
+		taskQuota    = 2400
+		initialQuota = 10_000
+		upstreamID   = "upstream_missing_channel"
+	)
+	seedUser(t, userID, initialQuota)
+	task := makeTask(userID, channelID, taskQuota, 0, BillingSourceWallet, 0)
+	task.TaskID = "task_missing_channel"
+	task.PrivateData.UpstreamTaskID = upstreamID
+	require.NoError(t, model.DB.Create(task).Error)
+
+	err := updateVideoTasks(context.Background(), constant.TaskPlatform("kling"), channelID, []string{upstreamID}, map[string]*model.Task{
+		upstreamID: task,
+	})
+	require.Error(t, err)
+
+	var reloaded model.Task
+	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
+	assert.Equal(t, model.TaskStatus(model.TaskStatusFailure), reloaded.Status)
+	assert.Equal(t, "100%", reloaded.Progress)
+	assert.NotZero(t, reloaded.FinishTime)
+	assert.Contains(t, reloaded.FailReason, "channel ID")
+	assert.Zero(t, reloaded.Quota)
+	assert.Equal(t, initialQuota+taskQuota, getUserQuota(t, userID))
+	assert.Equal(t, int64(1), countLogs(t))
+}
+
+func TestUpdateVideoTasksMissingChannelDoesNotOverwriteTerminalTask(t *testing.T) {
+	truncate(t)
+
+	const (
+		userID       = 522
+		channelID    = 523
+		taskQuota    = 2400
+		initialQuota = 10_000
+		upstreamID   = "upstream_missing_channel_terminal"
+	)
+	seedUser(t, userID, initialQuota)
+	task := makeTask(userID, channelID, taskQuota, 0, BillingSourceWallet, 0)
+	task.TaskID = "task_missing_channel_terminal"
+	task.PrivateData.UpstreamTaskID = upstreamID
+	require.NoError(t, model.DB.Create(task).Error)
+	// Simulate another poller winning the terminal transition after this
+	// process loaded its in-memory task but before it handles the cache error.
+	require.NoError(t, model.DB.Model(&model.Task{}).Where("id = ?", task.ID).Updates(map[string]any{
+		"status":   model.TaskStatusSuccess,
+		"progress": "100%",
+	}).Error)
+
+	err := updateVideoTasks(context.Background(), constant.TaskPlatform("kling"), channelID, []string{upstreamID}, map[string]*model.Task{
+		upstreamID: task,
+	})
+	require.Error(t, err)
+
+	var reloaded model.Task
+	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
+	assert.Equal(t, model.TaskStatus(model.TaskStatusSuccess), reloaded.Status)
+	assert.Equal(t, taskQuota, reloaded.Quota)
+	assert.Equal(t, initialQuota, getUserQuota(t, userID))
+	assert.Equal(t, int64(0), countLogs(t))
+}
+
 func TestUpdateSunoTasksStalePollsRefundExactlyOnce(t *testing.T) {
 	truncate(t)
 

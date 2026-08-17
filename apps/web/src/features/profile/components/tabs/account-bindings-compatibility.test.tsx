@@ -285,7 +285,9 @@ describe('legacy Go account binding compatibility', () => {
               {
                 provider_id: 42,
                 provider_name: 'Acme SSO',
-                external_id: 'acme-user-1',
+                provider_slug: 'acme-sso',
+                provider_icon: 'link',
+                provider_user_id: 'acme-user-1',
               },
             ],
           },

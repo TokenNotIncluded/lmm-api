@@ -159,6 +159,17 @@ describe('UnifiedTodoList interaction', () => {
 
     const rendered = await renderList()
     try {
+      const categoryButtons = [...rendered.container.querySelectorAll('button')]
+      const allCategory = categoryButtons.find((candidate) =>
+        candidate.textContent?.startsWith('All')
+      )
+      const bountyCategory = categoryButtons.find((candidate) =>
+        candidate.textContent?.startsWith('Bounty notifications')
+      )
+      assert.equal(allCategory?.getAttribute('aria-pressed'), 'true')
+      assert.equal(bountyCategory?.getAttribute('aria-pressed'), 'false')
+      assert.ok(allCategory?.classList.contains('min-h-11'))
+
       const row = [...rendered.container.querySelectorAll('button')].find(
         (candidate) =>
           candidate.textContent?.includes('A new comment needs your attention.')

@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
+import type { CustomOAuthBinding } from '@/lib/oauth'
 import type { LoginSession } from '@/stores/auth-store'
 
 import type {
@@ -186,11 +187,7 @@ export async function revokeOtherLoginSessions(): Promise<ApiResponse> {
 // Custom OAuth Binding APIs
 // ============================================================================
 
-export interface CustomOAuthBinding {
-  provider_id: number | string
-  provider_name: string
-  external_id?: string
-}
+export type { CustomOAuthBinding } from '@/lib/oauth'
 
 /**
  * Get current user's custom OAuth bindings
@@ -206,7 +203,7 @@ export async function getSelfOAuthBindings(): Promise<
  * Unbind a custom OAuth provider for current user
  */
 export async function unbindCustomOAuth(
-  providerId: string
+  providerId: number
 ): Promise<ApiResponse> {
   const res = await api.delete(`/api/user/oauth/bindings/${providerId}`)
   return res.data

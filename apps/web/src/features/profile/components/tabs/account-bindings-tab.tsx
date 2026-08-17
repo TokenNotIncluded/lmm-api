@@ -47,13 +47,14 @@ import {
   buildGitHubOAuthUrl,
   buildLinuxDOOAuthUrl,
   buildOIDCOAuthUrl,
+  indexCustomOAuthBindings,
+  type CustomOAuthBinding,
 } from '@/lib/oauth'
 
 import {
   getSelfOAuthBindings,
   unbindBuiltInOAuth,
   unbindCustomOAuth,
-  type CustomOAuthBinding,
 } from '../../api'
 import type { UserProfile, BindingItem } from '../../types'
 import { EmailBindDialog } from '../dialogs/email-bind-dialog'
@@ -89,7 +90,7 @@ interface OAuthBindingCallback {
 
 type UnbindTarget =
   | { kind: 'built-in'; label: string; bindingType: string }
-  | { kind: 'custom'; label: string; providerId: string }
+  | { kind: 'custom'; label: string; providerId: number }
 
 export function AccountBindingsTab({
   profile,
@@ -116,6 +117,10 @@ export function AccountBindingsTab({
   const customProviders = status?.custom_oauth_providers as
     | CustomOAuthProviderInfo[]
     | undefined
+  const customBindingsByProviderId = useMemo(
+    () => indexCustomOAuthBindings(customBindings),
+    [customBindings]
+  )
   const canUnbindBuiltInOAuth = getBackendCapabilities(status).self_oauth_unbind
 
   const fetchCustomBindings = useCallback(async () => {
@@ -533,9 +538,7 @@ export function AccountBindingsTab({
           </p>
           <div className='grid grid-cols-1 gap-2.5 sm:grid-cols-2 sm:gap-3'>
             {customProviders.map((provider) => {
-              const binding = customBindings.find(
-                (b) => String(b.provider_id) === String(provider.id)
-              )
+              const binding = customBindingsByProviderId.get(provider.id)
               const isBound = !!binding
               return (
                 <div
@@ -559,7 +562,7 @@ export function AccountBindingsTab({
                       </div>
                       <p className='text-muted-foreground truncate text-xs'>
                         {isBound
-                          ? binding?.external_id || t('Bound')
+                          ? binding?.provider_user_id || t('Bound')
                           : t('Not bound')}
                       </p>
                     </div>
@@ -573,7 +576,7 @@ export function AccountBindingsTab({
                         setUnbindTarget({
                           kind: 'custom',
                           label: binding.provider_name,
-                          providerId: String(binding.provider_id),
+                          providerId: binding.provider_id,
                         })
                       }
                     >

@@ -160,27 +160,23 @@ func RunTaskPollingOnce(ctx context.Context, report func(processed, total int)) 
 		summary.PlatformsScanned++
 		taskChannelM := make(map[int][]string)
 		taskM := make(map[string]*model.Task)
-		nullTaskIds := make([]int64, 0)
+		nullTasks := make([]*model.Task, 0)
 		for _, task := range tasks {
 			upstreamID := task.GetUpstreamTaskID()
 			if upstreamID == "" {
 				// 统计失败的未完成任务
-				nullTaskIds = append(nullTaskIds, task.ID)
+				nullTasks = append(nullTasks, task)
 				continue
 			}
 			taskM[upstreamID] = task
 			taskChannelM[task.ChannelId] = append(taskChannelM[task.ChannelId], upstreamID)
 		}
-		if len(nullTaskIds) > 0 {
-			summary.NullTasksFailed += len(nullTaskIds)
-			err := model.TaskBulkUpdateByID(nullTaskIds, map[string]any{
-				"status":   "FAILURE",
-				"progress": "100%",
-			})
-			if err != nil {
-				logger.LogError(ctx, fmt.Sprintf("Fix null task_id task error: %v", err))
-			} else {
-				logger.LogInfo(ctx, fmt.Sprintf("Fix null task_id task success: %v", nullTaskIds))
+		if len(nullTasks) > 0 {
+			summary.NullTasksFailed += len(nullTasks)
+			for _, task := range nullTasks {
+				if failTaskForPolling(ctx, task, "任务缺少上游任务 ID") {
+					logger.LogInfo(ctx, fmt.Sprintf("Fix null task_id task success: %d", task.ID))
+				}
 			}
 		}
 		if len(taskChannelM) == 0 {
@@ -436,20 +432,11 @@ func updateVideoTasks(ctx context.Context, platform constant.TaskPlatform, chann
 	}
 	cacheGetChannel, err := model.CacheGetChannel(channelId)
 	if err != nil {
-		// Collect DB primary key IDs for bulk update (taskIds are upstream IDs, not task_id column values)
-		var failedIDs []int64
+		failReason := fmt.Sprintf("Failed to get channel info, channel ID: %d", channelId)
 		for _, upstreamID := range taskIds {
-			if t, ok := taskM[upstreamID]; ok {
-				failedIDs = append(failedIDs, t.ID)
+			if task, ok := taskM[upstreamID]; ok {
+				failTaskForPolling(ctx, task, failReason)
 			}
-		}
-		errUpdate := model.TaskBulkUpdateByID(failedIDs, map[string]any{
-			"fail_reason": fmt.Sprintf("Failed to get channel info, channel ID: %d", channelId),
-			"status":      "FAILURE",
-			"progress":    "100%",
-		})
-		if errUpdate != nil {
-			common.SysLog(fmt.Sprintf("UpdateVideoTask error: %v", errUpdate))
 		}
 		return fmt.Errorf("CacheGetChannel failed: %w", err)
 	}
@@ -483,6 +470,37 @@ func updateVideoTasks(ctx context.Context, platform constant.TaskPlatform, chann
 		}
 	}
 	return nil
+}
+
+// failTaskForPolling performs a terminal failure transition through the same
+// per-task CAS used by normal polling. Billing must happen only after winning
+// that CAS: a bulk unconditional update could overwrite a concurrent success
+// and either leak the pre-consumed quota or refund it twice.
+func failTaskForPolling(ctx context.Context, task *model.Task, reason string) bool {
+	if task == nil || task.Status == model.TaskStatusFailure || task.Status == model.TaskStatusSuccess {
+		return false
+	}
+	previousStatus := task.Status
+	task.Status = model.TaskStatusFailure
+	task.Progress = "100%"
+	task.FailReason = reason
+	if task.FinishTime == 0 {
+		task.FinishTime = time.Now().Unix()
+	}
+
+	won, err := task.UpdateWithStatus(previousStatus)
+	if err != nil {
+		logger.LogError(ctx, fmt.Sprintf("failed to mark task %s as failed: %v", task.TaskID, err))
+		return false
+	}
+	if !won {
+		logger.LogInfo(ctx, fmt.Sprintf("task %s already transitioned, skip failure billing", task.TaskID))
+		return false
+	}
+	if task.Quota != 0 {
+		RefundTaskQuota(ctx, task, reason)
+	}
+	return true
 }
 
 func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *model.Channel, taskId string, taskM map[string]*model.Task) error {
