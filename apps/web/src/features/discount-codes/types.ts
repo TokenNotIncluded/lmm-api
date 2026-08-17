@@ -48,3 +48,13 @@ export interface DiscountCodeInput {
   expired_time: number
   status?: number
 }
+
+export interface DiscountCodeBatchInput {
+  name: string
+  count: number
+  discount_percent: number
+  min_amount: number
+  max_uses: number
+  starts_time: number
+  expired_time: number
+}

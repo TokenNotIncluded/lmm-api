@@ -11,6 +11,7 @@ import { api } from '@/lib/api'
 
 import type {
   DiscountCode,
+  DiscountCodeBatchInput,
   DiscountCodeInput,
   DiscountCodePage,
   DiscountCodeResponse,
@@ -40,6 +41,13 @@ export async function createDiscountCode(
   input: DiscountCodeInput
 ): Promise<DiscountCodeResponse<DiscountCode>> {
   const response = await api.post('/api/discount-code/', input)
+  return response.data
+}
+
+export async function createDiscountCodes(
+  input: DiscountCodeBatchInput
+): Promise<DiscountCodeResponse<DiscountCode[]>> {
+  const response = await api.post('/api/discount-code/batch', input)
   return response.data
 }
 

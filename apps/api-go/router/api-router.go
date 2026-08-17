@@ -463,6 +463,7 @@ func SetApiRouter(router *gin.Engine) {
 			discountCodeRoute.GET("/search", controller.SearchDiscountCodes)
 			discountCodeRoute.GET("/:id", controller.GetDiscountCode)
 			discountCodeRoute.POST("/", controller.AddDiscountCode)
+			discountCodeRoute.POST("/batch", controller.AddDiscountCodes)
 			discountCodeRoute.PUT("/", controller.UpdateDiscountCode)
 			discountCodeRoute.DELETE("/:id", controller.DeleteDiscountCode)
 		}

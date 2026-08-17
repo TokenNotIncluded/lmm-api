@@ -43,6 +43,21 @@ const TOOL_TITLE_KEYS: Record<string, string> = {
   calculate_cost: 'Calculate cost',
 }
 
+const TOOL_SUMMARY_KEYS: Record<string, string> = {
+  navigate_to_page: 'Navigation prepared',
+  get_user_overview: 'Account overview loaded',
+  get_user_usage_summary: 'Usage summary loaded',
+  prepare_user_action: 'User action prepared',
+  get_service_facts: 'Service facts loaded',
+  get_usage_summary: 'Usage summary loaded',
+  get_available_models: 'Available models loaded',
+  get_model_pricing: 'Model pricing loaded',
+  get_account_access: 'Account access loaded',
+  get_setup_guide: 'Setup guide loaded',
+  calculate_cost: 'Cost estimate calculated',
+  set_conversation_title: 'Conversation title updated',
+}
+
 function toolTitle(name: string): string {
   return TOOL_TITLE_KEYS[name] ?? name.replaceAll('_', ' ')
 }
@@ -61,21 +76,25 @@ export function AssistantToolCalls(props: { traces: AssistantToolTrace[] }) {
           : isApproval
             ? t('Waiting for confirmation')
             : t('Tool completed')
+        const summary = isError || isApproval
+          ? statusText
+          : t(TOOL_SUMMARY_KEYS[trace.name] ?? 'Tool completed')
         return (
           <Tool
             key={`${trace.name}-${index}`}
-            defaultOpen={false}
+            defaultOpen
             data-testid={`assistant-tool-${index}`}
           >
             <ToolHeader
               title={t(toolTitle(trace.name))}
               type={`tool-${trace.name}` as ToolUIPart['type']}
               state={trace.status}
+              summary={summary}
             />
             <ToolContent>
-              {trace.input ? <ToolInput input={trace.input} /> : null}
+              <ToolInput input={trace.input ?? {}} />
               <ToolOutput
-                output={isError ? undefined : statusText}
+                output={isError ? undefined : summary}
                 errorText={isError ? statusText : undefined}
               />
             </ToolContent>

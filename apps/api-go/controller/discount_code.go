@@ -84,6 +84,60 @@ func AddDiscountCode(c *gin.Context) {
 	common.ApiSuccess(c, input)
 }
 
+const discountCodeBatchMaxCount = 100
+
+type discountCodeBatchRequest struct {
+	Name            string `json:"name"`
+	Count           int    `json:"count"`
+	DiscountPercent int    `json:"discount_percent"`
+	MinAmount       int64  `json:"min_amount"`
+	MaxUses         int64  `json:"max_uses"`
+	StartsTime      int64  `json:"starts_time"`
+	ExpiredTime     int64  `json:"expired_time"`
+}
+
+func AddDiscountCodes(c *gin.Context) {
+	var request discountCodeBatchRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if request.Count < 1 || request.Count > discountCodeBatchMaxCount {
+		common.ApiErrorMsg(c, "优惠码数量必须在 1 到 100 之间")
+		return
+	}
+	startsTime := request.StartsTime
+	if startsTime <= 0 {
+		startsTime = common.GetTimestamp()
+	}
+	template := model.DiscountCode{
+		Name:            strings.TrimSpace(request.Name),
+		DiscountPercent: request.DiscountPercent,
+		MinAmount:       request.MinAmount,
+		MaxUses:         request.MaxUses,
+		StartsTime:      startsTime,
+		ExpiredTime:     request.ExpiredTime,
+		CreatedBy:       c.GetInt("id"),
+		Status:          model.DiscountCodeStatusEnabled,
+	}
+	if err := validateDiscountCodeBatchInput(&template); err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	codes, err := model.CreateDiscountCodes(template, request.Count)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "discount_code.batch_create", map[string]interface{}{
+		"name":             template.Name,
+		"count":            len(codes),
+		"discount_percent": template.DiscountPercent,
+		"max_uses":         template.MaxUses,
+	})
+	common.ApiSuccess(c, codes)
+}
+
 func UpdateDiscountCode(c *gin.Context) {
 	var input model.DiscountCode
 	if err := c.ShouldBindJSON(&input); err != nil {
@@ -163,13 +217,20 @@ func ValidateDiscountCode(c *gin.Context) {
 }
 
 func validateDiscountCodeInput(code *model.DiscountCode) error {
+	if err := validateDiscountCodeBatchInput(code); err != nil {
+		return err
+	}
+	return model.ValidateDiscountCodeDefinition(code.Code, code.DiscountPercent, code.MinAmount, code.StartsTime, code.ExpiredTime)
+}
+
+func validateDiscountCodeBatchInput(code *model.DiscountCode) error {
 	if strings.TrimSpace(code.Name) == "" || len([]rune(code.Name)) > 120 {
 		return errors.New("优惠码名称不能为空且不能超过 120 个字符")
 	}
 	if err := model.ValidateDiscountCodeMaxUses(code.MaxUses); err != nil {
 		return err
 	}
-	return model.ValidateDiscountCodeDefinition(code.Code, code.DiscountPercent, code.MinAmount, code.StartsTime, code.ExpiredTime)
+	return model.ValidateDiscountCodeTerms(code.DiscountPercent, code.MinAmount, code.StartsTime, code.ExpiredTime)
 }
 
 func discountCodeErrorMessage(err error) string {

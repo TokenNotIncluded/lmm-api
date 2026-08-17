@@ -8,7 +8,7 @@ the Free Software Foundation, either version 3 of the License, or
 */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
+import { Copy, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -29,7 +29,7 @@ import {
 import { Switch } from '@/components/ui/switch'
 
 import {
-  createDiscountCode,
+  createDiscountCodes,
   deleteDiscountCode,
   listDiscountCodes,
   updateDiscountCode,
@@ -40,13 +40,18 @@ import {
   getDiscountCodeAvailability,
   parseDiscountCodeMaxUses,
 } from './availability'
-import type { DiscountCode, DiscountCodeInput } from './types'
+import type {
+  DiscountCode,
+  DiscountCodeBatchInput,
+  DiscountCodeInput,
+} from './types'
 
 const DISABLED = 2
 
 type FormState = {
   code: string
   name: string
+  count: string
   discount_percent: string
   min_amount: string
   max_uses: string
@@ -57,9 +62,10 @@ type FormState = {
 const emptyForm: FormState = {
   code: '',
   name: '',
+  count: '1',
   discount_percent: '10',
   min_amount: '0',
-  max_uses: '0',
+  max_uses: '1',
   starts_time: '',
   expired_time: '',
 }
@@ -82,6 +88,7 @@ function formFromRow(row?: DiscountCode): FormState {
   return {
     code: row.code,
     name: row.name,
+    count: '1',
     discount_percent: String(row.discount_percent),
     min_amount: String(row.min_amount),
     max_uses: String(row.max_uses),
@@ -136,16 +143,26 @@ export function DiscountCodes() {
     queryClient.invalidateQueries({ queryKey: ['discount-codes'] })
 
   const saveMutation = useMutation({
-    mutationFn: async (input: DiscountCodeInput) =>
+    mutationFn: async (
+      input: DiscountCodeInput | DiscountCodeBatchInput
+    ) =>
       editing
-        ? updateDiscountCode({ ...input, id: editing.id })
-        : createDiscountCode(input),
+        ? updateDiscountCode({
+            ...(input as DiscountCodeInput),
+            id: editing.id,
+          })
+        : createDiscountCodes(input as DiscountCodeBatchInput),
     onSuccess: (result) => {
       if (!result.success) {
         toast.error(result.message || t('Unable to save discount code'))
         return
       }
-      toast.success(t('Discount code saved'))
+      const createdCount = Array.isArray(result.data) ? result.data.length : 0
+      toast.success(
+        editing
+          ? t('Discount code saved')
+          : t('Created {{count}} discount codes.', { count: createdCount })
+      )
       setSheetOpen(false)
       refresh()
     },
@@ -183,20 +200,27 @@ export function DiscountCodes() {
 
   const isSaving = saveMutation.isPending
   const maxUses = parseDiscountCodeMaxUses(form.max_uses)
+  const batchCount = Number(form.count)
   const canSave = useMemo(
     () =>
-      form.code.trim().length >= 3 &&
+      (editing
+        ? form.code.trim().length >= 3
+        : Number.isInteger(batchCount) && batchCount >= 1 && batchCount <= 100) &&
       form.name.trim().length > 0 &&
       Number(form.discount_percent) >= 1 &&
       Number(form.discount_percent) <= 99 &&
       Number(form.min_amount) >= 0 &&
       maxUses !== undefined,
-    [form, maxUses]
+    [batchCount, editing, form, maxUses]
   )
 
   const openCreate = () => {
     setEditing(undefined)
-    setForm(emptyForm)
+    setForm({
+      ...emptyForm,
+      starts_time: toDateInput(Math.floor(Date.now() / 1000)),
+      expired_time: '',
+    })
     setSheetOpen(true)
   }
 
@@ -208,15 +232,34 @@ export function DiscountCodes() {
 
   const submit = () => {
     if (!canSave || maxUses === undefined) return
+    if (editing) {
+      saveMutation.mutate({
+        code: form.code.trim().toUpperCase(),
+        name: form.name.trim(),
+        discount_percent: Number(form.discount_percent),
+        min_amount: Math.max(0, Math.floor(Number(form.min_amount))),
+        max_uses: maxUses,
+        starts_time: toTimestamp(form.starts_time),
+        expired_time: toTimestamp(form.expired_time),
+      })
+      return
+    }
     saveMutation.mutate({
-      code: form.code.trim().toUpperCase(),
       name: form.name.trim(),
+      count: batchCount,
       discount_percent: Number(form.discount_percent),
       min_amount: Math.max(0, Math.floor(Number(form.min_amount))),
       max_uses: maxUses,
       starts_time: toTimestamp(form.starts_time),
       expired_time: toTimestamp(form.expired_time),
     })
+  }
+
+  const copyCode = () => {
+    if (!form.code || !navigator.clipboard) return
+    void navigator.clipboard
+      .writeText(form.code)
+      .then(() => toast.success(t('Copied to clipboard')))
   }
 
   return (
@@ -391,21 +434,35 @@ export function DiscountCodes() {
             </SheetDescription>
           </SheetHeader>
           <div className='grid gap-5 px-5 py-6'>
-            <div className='grid gap-2'>
-              <Label htmlFor='discount-form-code'>{t('Code')}</Label>
-              <Input
-                id='discount-form-code'
-                value={form.code}
-                onChange={(event) =>
-                  setForm((state) => ({
-                    ...state,
-                    code: event.target.value.toUpperCase(),
-                  }))
-                }
-                maxLength={64}
-                autoComplete='off'
-              />
-            </div>
+            {editing ? (
+              <div className='grid gap-2'>
+                <Label htmlFor='discount-form-code'>{t('Code')}</Label>
+                <div className='flex gap-2'>
+                  <Input
+                    id='discount-form-code'
+                    value={form.code}
+                    readOnly
+                    className='font-mono tracking-wider'
+                    maxLength={64}
+                    autoComplete='off'
+                  />
+                  <Button
+                    type='button'
+                    variant='outline'
+                    size='icon'
+                    onClick={copyCode}
+                    disabled={!form.code}
+                    aria-label={t('Copy')}
+                    title={t('Copy')}
+                  >
+                    <Copy className='size-4' />
+                  </Button>
+                </div>
+                <p className='text-muted-foreground text-xs'>
+                  {t('Existing codes cannot be changed.')}
+                </p>
+              </div>
+            ) : null}
             <div className='grid gap-2'>
               <Label htmlFor='discount-form-name'>{t('Name')}</Label>
               <Input
@@ -417,6 +474,28 @@ export function DiscountCodes() {
                 maxLength={120}
               />
             </div>
+            {!editing ? (
+              <div className='grid gap-2'>
+                <Label htmlFor='discount-form-count'>{t('Quantity')}</Label>
+                <Input
+                  id='discount-form-count'
+                  type='number'
+                  min='1'
+                  max='100'
+                  step='1'
+                  value={form.count}
+                  onChange={(event) =>
+                    setForm((state) => ({
+                      ...state,
+                      count: event.target.value,
+                    }))
+                  }
+                />
+                <p className='text-muted-foreground text-xs'>
+                  {t('Number of discount codes to generate.')}
+                </p>
+              </div>
+            ) : null}
             <div className='grid grid-cols-2 gap-4'>
               <div className='grid gap-2'>
                 <Label htmlFor='discount-form-percent'>
@@ -455,7 +534,7 @@ export function DiscountCodes() {
             </div>
             <div className='grid gap-2'>
               <Label htmlFor='discount-form-max-uses'>
-                {t('Purchase Limit')}
+                {t('Usages per code')}
               </Label>
               <Input
                 id='discount-form-max-uses'
@@ -472,6 +551,7 @@ export function DiscountCodes() {
                 aria-invalid={maxUses === undefined}
               />
               <p className='text-muted-foreground text-xs'>
+                {t('Usage limit applies to each generated code.')}{' '}
                 {t('0 means unlimited')}
               </p>
             </div>
@@ -489,6 +569,9 @@ export function DiscountCodes() {
                     }))
                   }
                 />
+                <p className='text-muted-foreground text-xs'>
+                  {t('Leave empty for no expiration.')}
+                </p>
               </div>
               <div className='grid gap-2'>
                 <Label htmlFor='discount-form-expire'>{t('Expires')}</Label>

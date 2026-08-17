@@ -847,16 +847,33 @@ function AssistantPanelHeader(props: {
             type='button'
             variant='ghost'
             size='sm'
-            className='max-w-32 truncate px-2 text-[#c5c5d2] hover:bg-[#444654] hover:text-white sm:max-w-40'
+            className='max-w-10 shrink-0 gap-1 px-2 text-[#c5c5d2] hover:bg-[#444654] hover:text-white sm:max-w-40'
+            aria-label={
+              props.historyVisible
+                ? props.historyDetail
+                  ? t('Conversation history')
+                  : t('Back')
+                : t('Conversation history')
+            }
+            title={
+              props.historyVisible
+                ? props.historyDetail
+                  ? t('Conversation history')
+                  : t('Back')
+                : t('Conversation history')
+            }
             onClick={
               props.historyVisible ? props.onCloseHistory : props.onOpenHistory
             }
           >
-            {props.historyVisible
-              ? props.historyDetail
-                ? t('Conversation history')
-                : t('Back')
-              : t('Conversation history')}
+            <PanelLeft className='size-4 shrink-0' aria-hidden='true' />
+            <span className='hidden truncate md:inline'>
+              {props.historyVisible
+                ? props.historyDetail
+                  ? t('Conversation history')
+                  : t('Back')
+                : t('Conversation history')}
+            </span>
           </Button>
           <Button
             type='button'
@@ -864,6 +881,8 @@ function AssistantPanelHeader(props: {
             size='sm'
             className='text-[#c5c5d2] hover:bg-[#444654] hover:text-white'
             aria-pressed={props.classicLayout}
+            aria-label={t('Modern chat')}
+            title={t('Modern chat')}
             data-testid='assistant-layout-toggle'
             onClick={props.onToggleClassicLayout}
           >

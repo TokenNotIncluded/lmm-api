@@ -10,6 +10,8 @@ the Free Software Foundation, either version 3 of the License, or
 package model
 
 import (
+	"crypto/rand"
+	"encoding/base32"
 	"errors"
 	"regexp"
 	"strings"
@@ -68,6 +70,10 @@ func ValidateDiscountCodeDefinition(code string, percent int, minAmount, startsT
 	if !discountCodePattern.MatchString(NormalizeDiscountCode(code)) {
 		return errors.New("discount code must be 3-64 characters using A-Z, 0-9, _ or -")
 	}
+	return ValidateDiscountCodeTerms(percent, minAmount, startsTime, expiredTime)
+}
+
+func ValidateDiscountCodeTerms(percent int, minAmount, startsTime, expiredTime int64) error {
 	if percent <= 0 || percent >= 100 {
 		return errors.New("discount percent must be between 1 and 99")
 	}
@@ -78,6 +84,15 @@ func ValidateDiscountCodeDefinition(code string, percent int, minAmount, startsT
 		return errors.New("invalid discount code validity window")
 	}
 	return nil
+}
+
+func GenerateDiscountCode() (string, error) {
+	bytes := make([]byte, 10)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	code := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(bytes)
+	return "LMM-" + code, nil
 }
 
 func ValidateDiscountCodeMaxUses(maxUses int64) error {
@@ -178,6 +193,58 @@ func (code *DiscountCode) Insert() error {
 	code.CreatedTime = common.GetTimestamp()
 	code.UpdatedTime = code.CreatedTime
 	return DB.Create(code).Error
+}
+
+func CreateDiscountCodes(template DiscountCode, count int) ([]DiscountCode, error) {
+	if count <= 0 {
+		return nil, errors.New("discount code count must be positive")
+	}
+
+	tx := DB.Begin()
+	if tx.Error != nil {
+		return nil, tx.Error
+	}
+	created := make([]DiscountCode, 0, count)
+	now := common.GetTimestamp()
+
+	for index := 0; index < count; index++ {
+		var item DiscountCode
+		var lastErr error
+		for attempt := 0; attempt < 5; attempt++ {
+			code, err := GenerateDiscountCode()
+			if err != nil {
+				tx.Rollback()
+				return nil, err
+			}
+			candidate := template
+			candidate.Id = 0
+			candidate.Code = code
+			candidate.UsedCount = 0
+			candidate.CreatedTime = now
+			candidate.UpdatedTime = now
+			if err := tx.Create(&candidate).Error; err != nil {
+				lastErr = err
+				if !strings.Contains(strings.ToLower(err.Error()), "unique") {
+					tx.Rollback()
+					return nil, err
+				}
+				continue
+			}
+			item = candidate
+			lastErr = nil
+			break
+		}
+		if lastErr != nil {
+			tx.Rollback()
+			return nil, lastErr
+		}
+		created = append(created, item)
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return nil, err
+	}
+	return created, nil
 }
 
 func (code *DiscountCode) Update() error {

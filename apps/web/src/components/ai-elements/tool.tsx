@@ -60,18 +60,22 @@ export type ToolHeaderProps = {
   title?: string
   type: ToolUIPart['type']
   state: ExtendedToolState
+  summary?: string
   className?: string
 }
 
-const getStatusBadge = (status: ExtendedToolState) => {
+const getStatusBadge = (
+  status: ExtendedToolState,
+  translate: (key: string) => string
+) => {
   const labels: Record<ExtendedToolState, string> = {
-    'input-streaming': 'Pending',
-    'input-available': 'Running',
-    'approval-requested': 'Awaiting Approval',
-    'approval-responded': 'Responded',
-    'output-available': 'Completed',
-    'output-error': 'Error',
-    'output-denied': 'Denied',
+    'input-streaming': translate('Pending'),
+    'input-available': translate('Running'),
+    'approval-requested': translate('Awaiting Approval'),
+    'approval-responded': translate('Responded'),
+    'output-available': translate('Completed'),
+    'output-error': translate('Error'),
+    'output-denied': translate('Denied'),
   }
 
   const icons: Record<ExtendedToolState, ReactNode> = {
@@ -97,25 +101,38 @@ export const ToolHeader = ({
   title,
   type,
   state,
+  summary,
   ...props
-}: ToolHeaderProps) => (
-  <CollapsibleTrigger
-    className={cn(
-      'group flex w-full items-center justify-between gap-4 p-3',
-      className
-    )}
-    {...props}
-  >
-    <div className='flex items-center gap-2'>
-      <WrenchIcon className='text-muted-foreground size-4' />
-      <span className='text-sm font-medium'>
-        {title ?? type.split('-').slice(1).join('-')}
-      </span>
-      {getStatusBadge(state)}
-    </div>
-    <ChevronDownIcon className='text-muted-foreground size-4 transition-transform group-data-[panel-open]:rotate-180' />
-  </CollapsibleTrigger>
-)
+}: ToolHeaderProps) => {
+  const { t } = useTranslation()
+  return (
+    <CollapsibleTrigger
+      className={cn(
+        'group flex w-full items-center justify-between gap-4 p-3 text-left',
+        className
+      )}
+      {...props}
+    >
+      <div className='flex min-w-0 flex-1 items-start gap-2'>
+        <WrenchIcon className='text-muted-foreground mt-0.5 size-4 shrink-0' />
+        <div className='min-w-0'>
+          <div className='flex flex-wrap items-center gap-2'>
+            <span className='truncate text-sm font-medium'>
+              {title ?? type.split('-').slice(1).join('-')}
+            </span>
+            {getStatusBadge(state, t)}
+          </div>
+          {summary ? (
+            <p className='text-muted-foreground mt-1 truncate text-xs'>
+              {summary}
+            </p>
+          ) : null}
+        </div>
+      </div>
+      <ChevronDownIcon className='text-muted-foreground size-4 shrink-0 transition-transform group-data-[panel-open]:rotate-180' />
+    </CollapsibleTrigger>
+  )
+}
 
 export type ToolContentProps = ComponentProps<typeof CollapsibleContent>
 
@@ -135,14 +152,31 @@ export type ToolInputProps = ComponentProps<'div'> & {
 
 export const ToolInput = ({ className, input, ...props }: ToolInputProps) => {
   const { t } = useTranslation()
+  const entries = Object.entries(input ?? {})
   return (
     <div className={cn('space-y-2 overflow-hidden p-4', className)} {...props}>
       <h4 className='text-muted-foreground text-xs font-medium tracking-wide uppercase'>
         {t('Parameters')}
       </h4>
-      <div className='bg-muted/50 rounded-md'>
-        <CodeBlock code={JSON.stringify(input, null, 2)} language='json' />
-      </div>
+      {entries.length > 0 ? (
+        <dl className='bg-muted/50 divide-border grid gap-px overflow-hidden rounded-md divide-y'>
+          {entries.map(([key, value]) => (
+            <div
+              key={key}
+              className='grid gap-1 px-3 py-2 text-xs sm:grid-cols-[minmax(7rem,0.35fr)_minmax(0,1fr)] sm:gap-3'
+            >
+              <dt className='text-muted-foreground'>{key}</dt>
+              <dd className='min-w-0 break-words'>
+                {typeof value === 'string' ? value : String(value)}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      ) : (
+        <p className='bg-muted/50 text-muted-foreground rounded-md px-3 py-2 text-xs'>
+          {t('No parameters')}
+        </p>
+      )}
     </div>
   )
 }
@@ -158,6 +192,7 @@ export const ToolOutput = ({
   errorText,
   ...props
 }: ToolOutputProps) => {
+  const { t } = useTranslation()
   if (!(output || errorText)) {
     return null
   }
@@ -169,13 +204,13 @@ export const ToolOutput = ({
       <CodeBlock code={JSON.stringify(output, null, 2)} language='json' />
     )
   } else if (typeof output === 'string') {
-    Output = <CodeBlock code={output} language='json' />
+    Output = <p className='px-3 py-2 text-sm leading-5'>{output}</p>
   }
 
   return (
     <div className={cn('space-y-2 p-4', className)} {...props}>
       <h4 className='text-muted-foreground text-xs font-medium tracking-wide uppercase'>
-        {errorText ? 'Error' : 'Result'}
+        {errorText ? t('Error') : t('Result')}
       </h4>
       <div
         className={cn(
