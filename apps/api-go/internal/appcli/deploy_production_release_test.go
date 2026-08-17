@@ -2,10 +2,28 @@ package appcli
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+type productionPackageQueryRunner struct {
+	identities map[string]string
+}
+
+func (runner productionPackageQueryRunner) Run(_ context.Context, command productionCommand) ([]byte, error) {
+	if len(command.Args) == 0 {
+		return nil, errors.New("missing package query")
+	}
+	name := command.Args[len(command.Args)-1]
+	identity, ok := runner.identities[name]
+	if !ok {
+		return nil, errors.New("package not installed")
+	}
+	return []byte(identity + "\n"), nil
+}
 
 func validProductionReleaseArguments(root string) []string {
 	return []string{
@@ -70,5 +88,33 @@ func TestParseProductionReleaseRequiresAgeFilesOnlyWithBackups(t *testing.T) {
 	_, err := parseProductionReleaseOptions(arguments, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "required with --with-backups") {
 		t.Fatalf("backup input error=%v", err)
+	}
+}
+
+func TestRemoteGoPackageDeduplicatesPacmanProviderResolution(t *testing.T) {
+	identity := productionAURPackageName + " 0.1.19-1"
+	runtime := &productionReleaseRuntime{runner: productionPackageQueryRunner{identities: map[string]string{
+		productionAURPackageName:    identity,
+		productionSourcePackageName: identity,
+	}}}
+
+	got, err := runtime.remoteGoPackage(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != identity {
+		t.Fatalf("remoteGoPackage()=%q, want %q", got, identity)
+	}
+}
+
+func TestRemoteGoPackageRejectsDistinctInstalledPackages(t *testing.T) {
+	runtime := &productionReleaseRuntime{runner: productionPackageQueryRunner{identities: map[string]string{
+		productionAURPackageName:    productionAURPackageName + " 0.1.19-1",
+		productionSourcePackageName: productionSourcePackageName + " 0.1.19-1",
+	}}}
+
+	_, err := runtime.remoteGoPackage(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "multiple production Go packages") {
+		t.Fatalf("remoteGoPackage error=%v", err)
 	}
 }

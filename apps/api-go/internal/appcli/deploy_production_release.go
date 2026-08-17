@@ -436,6 +436,9 @@ func (runtime *productionReleaseRuntime) remoteGoPackage(ctx context.Context) (s
 			return "", errors.New("production Go package identity is invalid")
 		}
 		if installed != "" {
+			if installed == identity {
+				continue
+			}
 			return "", errors.New("multiple production Go packages are installed")
 		}
 		installed = identity
