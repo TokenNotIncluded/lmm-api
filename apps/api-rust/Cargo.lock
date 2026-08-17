@@ -1485,7 +1485,7 @@ checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
 
 [[package]]
 name = "lmm-api-rs"
-version = "0.1.0"
+version = "0.1.6"
 dependencies = [
  "async-trait",
  "axum",
@@ -1532,7 +1532,7 @@ dependencies = [
 
 [[package]]
 name = "lmm-application"
-version = "0.1.0"
+version = "0.1.6"
 dependencies = [
  "async-trait",
  "lmm-domain",
@@ -1542,7 +1542,7 @@ dependencies = [
 
 [[package]]
 name = "lmm-contracts"
-version = "0.1.0"
+version = "0.1.6"
 dependencies = [
  "serde",
  "serde_json",
@@ -1550,7 +1550,7 @@ dependencies = [
 
 [[package]]
 name = "lmm-db-migrate"
-version = "0.1.0"
+version = "0.1.6"
 dependencies = [
  "blake3",
  "chrono",
@@ -1567,11 +1567,11 @@ dependencies = [
 
 [[package]]
 name = "lmm-domain"
-version = "0.1.0"
+version = "0.1.6"
 
 [[package]]
 name = "lmm-observability"
-version = "0.1.0"
+version = "0.1.6"
 dependencies = [
  "tracing-subscriber",
 ]

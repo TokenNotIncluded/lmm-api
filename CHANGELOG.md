@@ -6,6 +6,13 @@ authenticated users then see it once after their next login.
 
 ## Unreleased
 
+<!-- Add user-facing or operational changes here before the next release. -->
+
+## [0.1.6] - 2026-08-17
+
+- Internal production metadata alignment for this release cycle.
+## [0.1.4] - 2026-08-17
+
 - Fixed PostgreSQL assistant-profile UPSERTs by qualifying the aggregate
   counter column; assistant chat requests no longer lose profile statistics
   with SQLSTATE 42702.
@@ -95,3 +102,7 @@ authenticated users then see it once after their next login.
 - Shell-only operator persona acceptance tests pass for technical, guided
   buyer, promotion, security, normal, mobile, privacy and screen-reader
   profiles.
+
+[Unreleased]: https://github.com/LIghtJUNction/api.lmm.best/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/LIghtJUNction/api.lmm.best/compare/v0.1.5...v0.1.6
+[0.1.4]: https://github.com/LIghtJUNction/api.lmm.best/compare/v0.1.3...v0.1.4

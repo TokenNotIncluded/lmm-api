@@ -13,7 +13,7 @@ resolver = "2"
 edition = "2024"
 license = "AGPL-3.0-or-later"
 rust-version = "1.85"
-version = "0.1.0"
+version = "0.1.6"
 
 [workspace.dependencies]
 async-trait = "0.1.89"

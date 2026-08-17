@@ -1,7 +1,7 @@
 # Maintainer: LMM API maintainers
 
 pkgname=lmm-api-go
-pkgver="${LMM_API_PKGVER:-0.1.0}"
+pkgver="${LMM_API_PKGVER:-0.1.6}"
 pkgrel="${LMM_API_PKGREL:-1}"
 pkgdesc='LMM API Go backend, native CLI, systemd service, and web frontend (local build)'
 arch=('x86_64')
