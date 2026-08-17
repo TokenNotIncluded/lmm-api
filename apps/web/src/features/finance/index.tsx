@@ -135,7 +135,7 @@ function PaymentMethodRow({
 }) {
   const { t } = useTranslation()
   return (
-    <div className='flex items-center gap-3 py-3'>
+    <div className='flex flex-wrap items-center gap-3 py-3 sm:flex-nowrap'>
       <WalletCards
         className='text-muted-foreground size-4 shrink-0'
         aria-hidden='true'
@@ -145,7 +145,7 @@ function PaymentMethodRow({
           type='button'
           variant='link'
           size='sm'
-          className='h-auto max-w-full justify-start px-0 py-0 text-left text-sm font-medium'
+          className='h-auto min-h-11 max-w-full justify-start px-0 py-0 text-left text-sm font-medium sm:min-h-0'
           aria-pressed={viewing}
           onClick={onView}
         >
@@ -166,8 +166,8 @@ function PaymentMethodRow({
           </p>
         ) : null}
       </div>
-      <div className='text-muted-foreground flex flex-wrap items-center justify-end gap-x-3 gap-y-1 text-xs'>
-        <label className='flex items-center gap-2'>
+      <div className='text-muted-foreground flex w-full flex-wrap items-center gap-x-3 gap-y-1 pl-7 text-xs sm:w-auto sm:shrink-0 sm:justify-end sm:pl-0'>
+        <label className='flex min-h-11 items-center gap-2 whitespace-nowrap sm:min-h-0'>
           <span>{t('Enable')}</span>
           <Switch
             size='sm'
@@ -176,7 +176,7 @@ function PaymentMethodRow({
             onCheckedChange={(checked) => onChange({ enabled: checked })}
           />
         </label>
-        <label className='flex items-center gap-2'>
+        <label className='flex min-h-11 items-center gap-2 whitespace-nowrap sm:min-h-0'>
           <span>{t('Include revenue')}</span>
           <Switch
             size='sm'
