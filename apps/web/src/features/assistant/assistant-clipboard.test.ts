@@ -12,6 +12,28 @@ import { describe, test } from 'node:test'
 import { copyAssistantText } from './assistant-clipboard'
 
 describe('assistant clipboard', () => {
+  test('waits for an asynchronous write before reporting success', async () => {
+    let releaseWrite: (() => void) | undefined
+    let settled = false
+    const copy = copyAssistantText('WEEKLY-20', {
+      writeText: () =>
+        new Promise<void>((resolve) => {
+          releaseWrite = resolve
+        }),
+    }).then((result) => {
+      settled = true
+      return result
+    })
+
+    await Promise.resolve()
+    assert.equal(settled, false)
+
+    const release = releaseWrite
+    assert.ok(release)
+    release()
+    assert.equal(await copy, true)
+  })
+
   test('only reports success after the platform clipboard resolves', async () => {
     const copied: string[] = []
     assert.equal(
