@@ -23,10 +23,13 @@ import (
 	"testing"
 
 	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/model"
 	"github.com/LIghtJUNction/api.lmm.best/setting/operation_setting"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestConfiguredPaymentMethodMaxTopUpUsesMostRestrictiveDuplicate(t *testing.T) {
@@ -116,4 +119,31 @@ func TestRequirePaymentMethodCreditedQuotaWithinLimit(t *testing.T) {
 		int64(6*common.QuotaPerUnit),
 	))
 	assert.Contains(t, response.Body.String(), "5")
+}
+
+func TestRequireTopUpAmountCapacityUsesStoredCreditConversion(t *testing.T) {
+	previousDB := model.DB
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.User{}))
+	model.DB = db
+	t.Cleanup(func() {
+		model.DB = previousDB
+		if sqlDB, dbErr := db.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	require.NoError(t, db.Create(&model.User{
+		Id:       7001,
+		Username: "topup-capacity-preview",
+		Quota:    common.MaxQuota - 1,
+		Status:   common.UserStatusEnabled,
+	}).Error)
+
+	gin.SetMode(gin.TestMode)
+	response := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(response)
+	assert.False(t, requireTopUpAmountCapacity(context, 7001, 1))
+	assert.Contains(t, response.Body.String(), "上限")
 }

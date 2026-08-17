@@ -381,6 +381,28 @@ func TestRefundTaskQuota_ZeroQuota(t *testing.T) {
 	assert.Equal(t, int64(0), countLogs(t))
 }
 
+func TestRefundTaskQuota_RejectsNegativeQuotaWithoutMutation(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 31, 31, 31
+	const initialUserQuota, initialTokenRemain, initialTokenUsed = 10_000, 5_000, 7
+	seedUser(t, userID, initialUserQuota)
+	seedToken(t, tokenID, userID, "sk-negative-refund", initialTokenRemain)
+	seedChannel(t, channelID)
+	require.NoError(t, model.DB.Model(&model.Token{}).Where("id = ?", tokenID).Update("used_quota", initialTokenUsed).Error)
+
+	task := makeTask(userID, channelID, -1_500, tokenID, BillingSourceWallet, 0)
+	require.NoError(t, model.DB.Create(task).Error)
+
+	assert.False(t, RefundTaskQuota(ctx, task, "malformed negative quota"))
+	assert.Equal(t, initialUserQuota, getUserQuota(t, userID))
+	assert.Equal(t, initialTokenRemain, getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, initialTokenUsed, getTokenUsedQuota(t, tokenID))
+	assert.Equal(t, -1_500, getTaskQuota(t, task.ID))
+	assert.Zero(t, countLogs(t))
+}
+
 func TestRefundTaskQuota_NoToken(t *testing.T) {
 	truncate(t)
 	ctx := context.Background()

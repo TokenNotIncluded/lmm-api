@@ -153,7 +153,10 @@ function UserMobileRow({ row }: { row: Row<User> }) {
                 {displayName}
               </div>
             )}
-            <div className='text-muted-foreground mt-1 truncate text-xs'>
+            <div
+              className='text-muted-foreground mt-1 text-xs [overflow-wrap:anywhere]'
+              title={email || t('No email provided')}
+            >
               {email || t('No email provided')}
             </div>
           </div>

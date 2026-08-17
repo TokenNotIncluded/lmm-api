@@ -144,6 +144,14 @@ func requireTopUpCreditCapacity(c *gin.Context, userID int, creditedQuota int64)
 	return false
 }
 
+// requireTopUpAmountCapacity applies the same wallet ceiling check to quote
+// endpoints as to checkout endpoints. Keeping the conversion here ensures a
+// preview uses exactly the credited quota that the eventual order stores.
+func requireTopUpAmountCapacity(c *gin.Context, userID int, amount int64) bool {
+	_, creditedQuota := topUpOrderAmounts(amount)
+	return requireTopUpCreditCapacity(c, userID, creditedQuota)
+}
+
 func requirePaymentMethodUSDWithinLimit(c *gin.Context, paymentType string, amount decimal.Decimal) bool {
 	minimum, minimumConfigured, err := configuredPaymentMethodMinTopUp(paymentType)
 	if err != nil {

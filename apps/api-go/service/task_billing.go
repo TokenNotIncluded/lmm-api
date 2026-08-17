@@ -165,6 +165,15 @@ func taskModelName(task *model.Task) string {
 // 返回资金来源是否已成功退还；失败时保留 quota，供显式重试或人工对账。
 func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool {
 	quota := task.Quota
+	if quota < 0 {
+		// A task quota is a pre-consumed amount and must never be negative. Do
+		// not pass malformed persisted data to the refund helpers: negating it
+		// would turn a supposed refund into an additional wallet/token charge.
+		// Keep the marker intact so the row remains visible to reconciliation and
+		// can be repaired explicitly instead of silently moving funds.
+		logger.LogError(ctx, fmt.Sprintf("拒绝负额度退款 task %s quota=%d", task.TaskID, quota))
+		return false
+	}
 	if quota == 0 {
 		return true
 	}

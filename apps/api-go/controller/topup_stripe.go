@@ -61,6 +61,9 @@ func (*StripeAdaptor) RequestAmount(c *gin.Context, req *StripePayRequest) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
 		return
 	}
+	if !requireTopUpAmountCapacity(c, id, req.Amount) {
+		return
+	}
 	payMoney, _, err := applyDiscountCodeQuote(decimal.NewFromFloat(getStripePayMoney(float64(req.Amount), group)), req.Amount, req.DiscountCode, id)
 	expectedAmountMicros, err := monetaryStringToMicros(payMoney.StringFixed(2))
 	if err != nil || expectedAmountMicros <= 10_000 {
