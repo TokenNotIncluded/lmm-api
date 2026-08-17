@@ -71,13 +71,13 @@ func (runner *fakeBuildRunner) Run(_ context.Context, command productionCommand)
 		if runtime.GOARCH == "arm64" {
 			architecture = "aarch64"
 		}
-		packagePath := filepath.Join(pkgdest, fmt.Sprintf("lmm-api-go-%s-1-%s.pkg.tar.zst", version, architecture))
+		packagePath := filepath.Join(pkgdest, fmt.Sprintf("%s-%s-1-%s.pkg.tar.zst", productionAURPackageName, version, architecture))
 		if err := os.WriteFile(packagePath, []byte("package"), 0o644); err != nil {
 			runner.t.Fatal(err)
 		}
 		return nil, nil
 	case "pacman":
-		return []byte("lmm-api-go " + runner.version + "-1\n"), nil
+		return []byte(productionAURPackageName + " " + runner.version + "-1\n"), nil
 	}
 	if strings.HasPrefix(command.Name, filepath.Clean(filepath.Join(filepath.Dir(command.Name), ".lmm-api-go."))) && len(command.Args) == 1 && command.Args[0] == "version" {
 		return []byte(runner.version + "\n"), nil

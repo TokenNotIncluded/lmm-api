@@ -408,7 +408,7 @@ func (buildRuntime *buildDeployRuntime) buildPackage(
 	if err != nil {
 		return "", "", err
 	}
-	prefix := "lmm-api-go-" + version + "-1-" + packageArchitecture + ".pkg.tar."
+	prefix := productionAURPackageName + "-" + version + "-1-" + packageArchitecture + ".pkg.tar."
 	var sourcePackage string
 	for _, entry := range entries {
 		if entry.Type().IsRegular() && strings.HasPrefix(entry.Name(), prefix) && !strings.HasSuffix(entry.Name(), ".sha256") {
@@ -433,7 +433,7 @@ func (buildRuntime *buildDeployRuntime) buildPackage(
 		return "", "", err
 	}
 	identity, err := buildRuntime.runner.Run(ctx, productionCommand{Name: "pacman", Args: []string{"-Qp", destination}})
-	if err != nil || strings.TrimSpace(string(identity)) != "lmm-api-go "+version+"-1" {
+	if err != nil || strings.TrimSpace(string(identity)) != productionAURPackageName+" "+version+"-1" {
 		return "", "", errors.New("built Arch package identity mismatch")
 	}
 	checksumPath := destination + ".sha256"
