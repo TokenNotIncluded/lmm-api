@@ -542,7 +542,7 @@ export function AssistantHistory(props: {
               render={<Link to='/chat-management' />}
             >
               <FolderOpen data-icon='inline-start' aria-hidden='true' />
-              {t('Chat management')}
+              {t('Conversation records')}
             </Button>
           ) : null}
           <Input

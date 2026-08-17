@@ -143,23 +143,16 @@ function buildSectionDefs(t: (key: string) => string): SectionDef[] {
     },
     {
       id: 'chat',
-      title: t('Chat'),
-      description: t('Chat links and conversation tools'),
+      title: t('Conversations'),
+      description: t('Conversation records and tools'),
       configSection: 'chat',
       requiresConsole: true,
       modules: [
         {
           id: '/chat-management',
           key: 'chat-management',
-          title: t('Chat management'),
+          title: t('Conversation records'),
           description: t('Review and manage conversations'),
-          config: { section: 'chat', key: 'chat' },
-        },
-        {
-          id: 'chat-presets',
-          key: 'chat-presets',
-          title: t('Chat'),
-          description: t('Open a chat session'),
           config: { section: 'chat', key: 'chat' },
         },
       ],
@@ -334,7 +327,7 @@ const DEFAULT_ROUTES: DefaultRouteDef[] = [
   { route: '/getting-started', title: 'Getting started' },
   {
     route: '/chat-management',
-    title: 'Chat management',
+    title: 'Conversation records',
     requiresConsole: true,
   },
   { route: '/keys', title: 'API Keys', requiresConsole: true },

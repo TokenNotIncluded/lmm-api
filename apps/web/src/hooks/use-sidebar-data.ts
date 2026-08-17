@@ -130,17 +130,12 @@ export function useSidebarData(): SidebarData {
       },
       {
         id: 'chat',
-        title: t('Chat'),
+        title: t('Conversations'),
         items: [
           {
-            title: t('Chat management'),
+            title: t('Conversation records'),
             url: '/chat-management',
             icon: MessageSquare,
-          },
-          {
-            title: t('Chat'),
-            icon: MessageSquare,
-            type: 'chat-presets',
           },
         ],
       },

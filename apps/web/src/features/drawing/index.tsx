@@ -2,7 +2,7 @@
 Copyright (C) 2026 LIghtJUNction
 */
 import { useQuery } from '@tanstack/react-query'
-import { ImageIcon, RefreshCw, Sparkles } from 'lucide-react'
+import { Check, ImageIcon, RefreshCw, Sparkles } from 'lucide-react'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -19,6 +19,7 @@ import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
+import { cn } from '@/lib/utils'
 
 import { getAssistantStatus } from '../assistant/api'
 import { getPricing } from '../pricing/api'
@@ -174,6 +175,29 @@ export function Drawing() {
     groupsQuery.data?.data?.[selectedGroup]?.desc ??
     pricingQuery.data?.usable_group?.[selectedGroup]?.desc
   const accessGranted = accessQuery.data?.developer_access_granted === true
+  const hasPrompt = prompt.trim().length > 0
+  const configurationReady = Boolean(selectedGroup && selectedModel)
+  const workflowIndex = results.length > 0 ? 3 : generating ? 2 : hasPrompt ? 1 : 0
+  const workflowSteps = [
+    {
+      label: t('Describe an image'),
+      detail: t('Be specific about the subject, mood, and style.'),
+    },
+    {
+      label: t('Generation setup'),
+      detail: t('Choose a route and output settings.'),
+    },
+    {
+      label: t('Generate image'),
+      detail: t('Billing follows the selected group configuration.'),
+    },
+    {
+      label: t('Preview'),
+      detail: t(
+        'Review the generated images here when the request finishes.'
+      ),
+    },
+  ]
 
   const sizePresets = useMemo(() => {
     const defaults = [{ value: '', label: t('Default') }]
@@ -355,207 +379,337 @@ export function Drawing() {
     )
   } else {
     content = (
-      <div className='grid gap-12 lg:grid-cols-[minmax(20rem,0.85fr)_minmax(0,1.15fr)] lg:gap-16'>
-        <section
-          className='grid content-start gap-7'
-          aria-labelledby='drawing-prompt'
+      <div className='grid gap-6 lg:grid-cols-[14rem_minmax(0,1fr)] lg:items-start lg:gap-8'>
+        <aside
+          className='border-border/70 bg-muted/10 rounded-2xl border p-4 lg:sticky lg:top-6'
+          aria-label={t('Workflow')}
         >
-          <div className='grid gap-3'>
-            <div className='flex items-center gap-2'>
-              <Sparkles
-                className='text-muted-foreground size-4'
-                aria-hidden='true'
-              />
-              <Label htmlFor='drawing-prompt'>{t('Describe an image')}</Label>
+          <div className='flex items-center justify-between gap-3'>
+            <span className='text-sm font-medium'>{t('Workflow')}</span>
+            <span className='text-muted-foreground text-xs tabular-nums'>
+              {workflowIndex + 1}/4
+            </span>
+          </div>
+          <ol className='mt-4 grid grid-cols-4 gap-2 lg:grid-cols-1 lg:gap-1'>
+            {workflowSteps.map((step, index) => {
+              const complete = index < workflowIndex
+              const current = index === workflowIndex
+              return (
+                <li
+                  key={step.label}
+                  aria-current={current ? 'step' : undefined}
+                  className={cn(
+                    'flex min-w-0 items-center gap-3 rounded-lg p-2 transition-colors lg:items-start',
+                    current && 'bg-primary/10 text-foreground',
+                    complete && !current && 'text-muted-foreground',
+                    !current && !complete && 'text-muted-foreground/60'
+                  )}
+                >
+                  <span
+                    className={cn(
+                      'border-border/80 flex size-7 shrink-0 items-center justify-center rounded-full border text-xs font-medium',
+                      current && 'border-primary bg-primary text-primary-foreground',
+                      complete && 'border-primary/30 bg-primary/10 text-primary'
+                    )}
+                  >
+                    {complete ? (
+                      <Check className='size-3.5' aria-hidden='true' />
+                    ) : (
+                      index + 1
+                    )}
+                  </span>
+                  <span className='hidden min-w-0 lg:block'>
+                    <span className='block truncate text-sm font-medium'>
+                      {step.label}
+                    </span>
+                    <span className='text-muted-foreground mt-0.5 block text-xs leading-4'>
+                      {step.detail}
+                    </span>
+                  </span>
+                </li>
+              )
+            })}
+          </ol>
+        </aside>
+
+        <div className='grid min-w-0 gap-6'>
+          <section
+            className='border-border/70 bg-card/30 rounded-2xl border p-5 sm:p-6'
+            aria-labelledby='drawing-prompt'
+          >
+            <div className='mb-5 flex items-start justify-between gap-4'>
+              <div>
+                <div className='text-muted-foreground mb-2 flex items-center gap-2 text-xs font-medium tracking-[0.14em] uppercase'>
+                  <Sparkles className='size-3.5' aria-hidden='true' />
+                  {t('Describe an image')}
+                </div>
+                <h2 id='drawing-prompt' className='text-lg font-medium'>
+                  {t('Prompt')}
+                </h2>
+              </div>
+              <span className='text-muted-foreground text-xs tabular-nums'>
+                {prompt.length}/2000
+              </span>
             </div>
             <Textarea
-              id='drawing-prompt'
+              id='drawing-prompt-input'
               value={prompt}
               onChange={(event) => setPrompt(event.target.value)}
               placeholder={t('Describe what you want to see...')}
               maxLength={2000}
-              rows={10}
-              className='min-h-56 resize-y'
+              rows={8}
+              className='min-h-48 resize-y'
+              aria-labelledby='drawing-prompt'
             />
-            <div className='text-muted-foreground flex justify-between text-xs'>
-              <span>
-                {t('Be specific about the subject, mood, and style.')}
-              </span>
-              <span>{prompt.length}/2000</span>
-            </div>
-          </div>
-          <div className='grid gap-4 sm:grid-cols-2'>
-            <div className='grid gap-2'>
-              <Label htmlFor='drawing-group'>{t('Routing group')}</Label>
-              <NativeSelect
-                id='drawing-group'
-                value={selectedGroup}
-                className='w-full'
-                onChange={(event) => setGroup(event.target.value)}
-              >
-                {groups.map((item) => (
-                  <NativeSelectOption key={item} value={item}>
-                    {item}
-                  </NativeSelectOption>
-                ))}
-              </NativeSelect>
-              {groupDescription ? (
-                <p className='text-muted-foreground text-xs leading-relaxed break-words'>
-                  {groupDescription}
+            <p className='text-muted-foreground mt-3 text-xs leading-5'>
+              {t('Be specific about the subject, mood, and style.')}
+            </p>
+          </section>
+
+          <section
+            className='border-border/70 bg-card/30 rounded-2xl border p-5 sm:p-6'
+            aria-labelledby='drawing-setup'
+          >
+            <div className='mb-5 flex items-start justify-between gap-4'>
+              <div>
+                <p className='text-muted-foreground mb-2 text-xs font-medium tracking-[0.14em] uppercase'>
+                  {t('Generation setup')}
                 </p>
+                <h2 id='drawing-setup' className='text-lg font-medium'>
+                  {t('Configure')}
+                </h2>
+              </div>
+              {configurationReady ? (
+                <span className='text-primary text-xs font-medium'>
+                  {t('Ready')}
+                </span>
               ) : null}
             </div>
-            <div className='grid gap-2'>
-              <Label htmlFor='drawing-model'>{t('Image model')}</Label>
-              <NativeSelect
-                id='drawing-model'
-                value={selectedModel}
-                className='w-full'
-                onChange={(event) => setModel(event.target.value)}
-              >
-                {modelsForGroup.map((item) => (
-                  <NativeSelectOption
-                    key={item.model_name}
-                    value={item.model_name}
+            <div className='grid gap-5 sm:grid-cols-2'>
+              <div className='grid gap-2'>
+                <Label htmlFor='drawing-group'>{t('Routing group')}</Label>
+                <NativeSelect
+                  id='drawing-group'
+                  value={selectedGroup}
+                  className='w-full'
+                  onChange={(event) => setGroup(event.target.value)}
+                >
+                  {groups.map((item) => (
+                    <NativeSelectOption key={item} value={item}>
+                      {item}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
+                {groupDescription ? (
+                  <p className='text-muted-foreground text-xs leading-relaxed break-words'>
+                    {groupDescription}
+                  </p>
+                ) : null}
+              </div>
+              <div className='grid gap-2'>
+                <Label htmlFor='drawing-model'>{t('Image model')}</Label>
+                <NativeSelect
+                  id='drawing-model'
+                  value={selectedModel}
+                  className='w-full'
+                  onChange={(event) => setModel(event.target.value)}
+                >
+                  {modelsForGroup.map((item) => (
+                    <NativeSelectOption
+                      key={item.model_name}
+                      value={item.model_name}
+                    >
+                      {item.model_name}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
+              </div>
+              <div className='grid gap-4 sm:grid-cols-2 sm:col-span-2'>
+                <div className='grid gap-2'>
+                  <Label htmlFor='drawing-size'>{t('Size (optional)')}</Label>
+                  <NativeSelect
+                    id='drawing-size'
+                    value={size}
+                    className='w-full'
+                    onChange={(event) => setSize(event.target.value)}
                   >
-                    {item.model_name}
-                  </NativeSelectOption>
-                ))}
-              </NativeSelect>
-            </div>
-            <p className='text-muted-foreground text-xs sm:col-span-2'>
-              {t('Billing follows the selected group configuration.')}
-            </p>
-          </div>
-          <div className='grid gap-4 sm:grid-cols-2'>
-            <div className='grid gap-2'>
-              <Label htmlFor='drawing-size'>{t('Size (optional)')}</Label>
-              <NativeSelect
-                id='drawing-size'
-                value={size}
-                className='w-full'
-                onChange={(event) => setSize(event.target.value)}
-              >
-                {sizePresets.map((option) => (
-                  <NativeSelectOption
-                    key={option.value || 'default'}
-                    value={option.value}
+                    {sizePresets.map((option) => (
+                      <NativeSelectOption
+                        key={option.value || 'default'}
+                        value={option.value}
+                      >
+                        {option.label}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                </div>
+                <div className='grid gap-2'>
+                  <Label htmlFor='drawing-quality'>
+                    {t('Quality (optional)')}
+                  </Label>
+                  <NativeSelect
+                    id='drawing-quality'
+                    value={quality}
+                    className='w-full'
+                    onChange={(event) => setQuality(event.target.value)}
                   >
-                    {option.label}
-                  </NativeSelectOption>
-                ))}
-              </NativeSelect>
+                    {qualityPresets.map((option) => (
+                      <NativeSelectOption
+                        key={option.value || 'default'}
+                        value={option.value}
+                      >
+                        {option.label}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                </div>
+              </div>
+              <div className='grid gap-2 sm:max-w-40'>
+                <Label htmlFor='drawing-count'>{t('Images')}</Label>
+                <NativeSelect
+                  id='drawing-count'
+                  value={count}
+                  className='w-full'
+                  onChange={(event) => setCount(event.target.value)}
+                >
+                  {[1, 2, 3, 4].map((value) => (
+                    <NativeSelectOption key={value} value={String(value)}>
+                      {value}
+                    </NativeSelectOption>
+                  ))}
+                </NativeSelect>
+              </div>
+              <p className='text-muted-foreground self-end text-xs leading-5 sm:col-span-2'>
+                {t('Billing follows the selected group configuration.')}
+              </p>
             </div>
-            <div className='grid gap-2'>
-              <Label htmlFor='drawing-quality'>{t('Quality (optional)')}</Label>
-              <NativeSelect
-                id='drawing-quality'
-                value={quality}
-                className='w-full'
-                onChange={(event) => setQuality(event.target.value)}
+            <div className='border-border/70 bg-muted/20 mt-6 flex flex-col gap-3 rounded-xl border p-4 sm:flex-row sm:items-center sm:justify-between'>
+              <div className='min-w-0'>
+                <p className='text-sm font-medium'>
+                  {generating
+                    ? t('Generation in progress...')
+                    : t('Ready to generate')}
+                </p>
+                <p className='text-muted-foreground mt-1 text-xs leading-5'>
+                  {hasPrompt
+                    ? t('Your request is ready to run.')
+                    : t('Complete the brief and choose a model to continue.')}
+                </p>
+              </div>
+              <Button
+                type='button'
+                className='h-11 w-full shrink-0 sm:w-auto sm:min-w-48'
+                onClick={() => void generate()}
+                disabled={
+                  generating || !prompt.trim() || !selectedGroup || !selectedModel
+                }
               >
-                {qualityPresets.map((option) => (
-                  <NativeSelectOption
-                    key={option.value || 'default'}
-                    value={option.value}
-                  >
-                    {option.label}
-                  </NativeSelectOption>
-                ))}
-              </NativeSelect>
+                {generating ? (
+                  <RefreshCw
+                    className='mr-2 size-4 animate-spin'
+                    aria-hidden='true'
+                  />
+                ) : (
+                  <ImageIcon className='mr-2 size-4' aria-hidden='true' />
+                )}
+                {generating ? t('Generating...') : t('Generate image')}
+              </Button>
             </div>
-          </div>
-          <div className='grid gap-2 sm:max-w-40'>
-            <Label htmlFor='drawing-count'>{t('Images')}</Label>
-            <NativeSelect
-              id='drawing-count'
-              value={count}
-              className='w-full'
-              onChange={(event) => setCount(event.target.value)}
-            >
-              {[1, 2, 3, 4].map((value) => (
-                <NativeSelectOption key={value} value={String(value)}>
-                  {value}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
-          </div>
-          <div className='flex flex-col gap-3 sm:flex-row sm:items-center'>
-            <Button
-              type='button'
-              className='h-11 w-full sm:w-auto sm:min-w-48'
-              onClick={() => void generate()}
-              disabled={generating || !prompt.trim() || !selectedModel}
-            >
-              {generating ? (
+          </section>
+
+          <section
+            className='border-border/70 bg-card/30 min-w-0 rounded-2xl border p-5 sm:p-6'
+            aria-live='polite'
+            aria-labelledby='drawing-output'
+          >
+            <div className='mb-5 flex items-baseline justify-between gap-4'>
+              <div>
+                <p className='text-muted-foreground mb-2 text-xs font-medium tracking-[0.14em] uppercase'>
+                  {t('Output review')}
+                </p>
+                <h2 id='drawing-output' className='text-lg font-medium'>
+                  {t('Generated images')}
+                </h2>
+              </div>
+              {results.length > 0 ? (
+                <span className='text-muted-foreground text-xs'>
+                  {results.length} · {selectedModel}
+                </span>
+              ) : null}
+            </div>
+            {error ? (
+              <Alert variant='destructive' className='mb-5'>
+                <AlertTitle>{t('Request failed')}</AlertTitle>
+                <AlertDescription>{error}</AlertDescription>
+                <AlertAction>
+                  <Button
+                    type='button'
+                    size='sm'
+                    variant='outline'
+                    onClick={() => void generate()}
+                    disabled={generating}
+                  >
+                    {t('Retry')}
+                  </Button>
+                </AlertAction>
+              </Alert>
+            ) : null}
+            {generating ? (
+              <div className='bg-muted/5 text-muted-foreground flex min-h-64 flex-col items-center justify-center border border-dashed px-8 text-center sm:min-h-80'>
                 <RefreshCw
-                  className='mr-2 size-4 animate-spin'
+                  className='text-primary mb-4 size-8 animate-spin'
                   aria-hidden='true'
                 />
-              ) : (
-                <ImageIcon className='mr-2 size-4' aria-hidden='true' />
-              )}
-              {generating ? t('Generating...') : t('Generate image')}
-            </Button>
-            {error ? <p className='text-destructive text-sm'>{error}</p> : null}
-          </div>
-        </section>
-        <section className='min-w-0 lg:border-l lg:pl-12' aria-live='polite'>
-          <div className='mb-5 flex items-baseline justify-between gap-4'>
-            <div>
-              <p className='text-muted-foreground text-xs tracking-[0.16em] uppercase'>
-                {t('Preview')}
-              </p>
-              <h2 className='mt-1 text-lg'>{t('Generated images')}</h2>
-            </div>
-            {results.length > 0 ? (
-              <span className='text-muted-foreground text-xs'>
-                {results.length} · {selectedModel}
-              </span>
-            ) : null}
-          </div>
-          {results.length > 0 ? (
-            <div className='grid gap-6 sm:grid-cols-2'>
-              {results.map((image) => {
-                const src = imageSource(image)
-                if (!src) return null
-                return (
-                  <figure
-                    className='min-w-0'
-                    key={image.url ?? image.b64_json ?? image.revised_prompt}
-                  >
-                    <img
-                      src={src}
-                      alt={image.revised_prompt || prompt}
-                      className='h-auto max-h-[38rem] w-full rounded-lg object-contain'
-                      loading='lazy'
-                    />
-                    {image.revised_prompt ? (
-                      <figcaption className='text-muted-foreground mt-2 text-xs leading-5'>
-                        {image.revised_prompt}
-                      </figcaption>
-                    ) : null}
-                  </figure>
-                )
-              })}
-            </div>
-          ) : (
-            <div className='bg-muted/5 text-muted-foreground flex min-h-56 flex-col items-center justify-center border border-dashed px-8 text-center sm:min-h-72 lg:min-h-[30rem]'>
-              <ImageIcon
-                className='mb-4 size-8 opacity-50'
-                aria-hidden='true'
-              />
-              <p className='text-sm'>
-                {t('Your generated images will appear here.')}
-              </p>
-              <p className='mt-2 max-w-sm text-xs leading-5'>
-                {t(
-                  'Describe an image, choose a group, and generate a preview.'
-                )}
-              </p>
-            </div>
-          )}
-        </section>
+                <p className='text-sm'>{t('Generation in progress...')}</p>
+                <p className='mt-2 max-w-sm text-xs leading-5'>
+                  {t('Your request is ready to run.')}
+                </p>
+              </div>
+            ) : results.length > 0 ? (
+              <div className='grid gap-6 sm:grid-cols-2'>
+                {results.map((image) => {
+                  const src = imageSource(image)
+                  if (!src) return null
+                  return (
+                    <figure
+                      className='min-w-0'
+                      key={image.url ?? image.b64_json ?? image.revised_prompt}
+                    >
+                      <img
+                        src={src}
+                        alt={image.revised_prompt || prompt}
+                        className='h-auto max-h-[38rem] w-full rounded-lg object-contain'
+                        loading='lazy'
+                      />
+                      {image.revised_prompt ? (
+                        <figcaption className='text-muted-foreground mt-2 text-xs leading-5'>
+                          {image.revised_prompt}
+                        </figcaption>
+                      ) : null}
+                    </figure>
+                  )
+                })}
+              </div>
+            ) : (
+              <div className='bg-muted/5 text-muted-foreground flex min-h-64 flex-col items-center justify-center border border-dashed px-8 text-center sm:min-h-80'>
+                <ImageIcon
+                  className='mb-4 size-8 opacity-50'
+                  aria-hidden='true'
+                />
+                <p className='text-sm'>
+                  {t('Your generated images will appear here.')}
+                </p>
+                <p className='mt-2 max-w-sm text-xs leading-5'>
+                  {hasPrompt
+                    ? t(
+                        'Review the generated images here when the request finishes.'
+                      )
+                    : t('Complete the brief and choose a model to continue.')}
+                </p>
+              </div>
+            )}
+          </section>
+        </div>
       </div>
     )
   }

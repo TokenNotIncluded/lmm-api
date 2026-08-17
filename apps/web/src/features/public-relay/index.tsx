@@ -30,6 +30,7 @@ import {
   AlertTitle,
 } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Dialog,
   DialogClose,
@@ -72,6 +73,11 @@ import {
 import type { PublicRelay } from './types'
 
 const emptyDraft = { name: '', base_url: '', models: '', description: '' }
+const emptyShareChecklist = {
+  noCredentials: false,
+  permission: false,
+  modelsVerified: false,
+}
 
 function formatDate(timestamp: number) {
   if (!timestamp) return '—'
@@ -135,6 +141,7 @@ export function PublicRelay() {
   const [tipTarget, setTipTarget] = useState<PublicRelay | null>(null)
   const [withdrawTarget, setWithdrawTarget] = useState<PublicRelay | null>(null)
   const [draft, setDraft] = useState(emptyDraft)
+  const [shareChecklist, setShareChecklist] = useState(emptyShareChecklist)
   const [reportReason, setReportReason] = useState('')
   const [reviewRating, setReviewRating] = useState(5)
   const [reviewComment, setReviewComment] = useState('')
@@ -232,11 +239,19 @@ export function PublicRelay() {
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ['public-relays'] })
   }
+  const handleSubmitOpenChange = (open: boolean) => {
+    setSubmitOpen(open)
+    if (!open) {
+      setDraft(emptyDraft)
+      setShareChecklist(emptyShareChecklist)
+    }
+  }
   const submitMutation = useMutation({
     mutationFn: submitPublicRelay,
     onSuccess: () => {
       setSubmitOpen(false)
       setDraft(emptyDraft)
+      setShareChecklist(emptyShareChecklist)
       invalidate()
       toast.success(t('Submission sent for review'))
     },
@@ -469,6 +484,29 @@ export function PublicRelay() {
     ;[next[index], next[target]] = [next[target], next[index]]
     setRoutingOrder(next)
   }
+
+  const shareModels = modelList(draft.models)
+  const shareReady = Boolean(
+    draft.name.trim() &&
+      draft.base_url.trim() &&
+      draft.description.trim() &&
+      shareModels.length > 0 &&
+      Object.values(shareChecklist).every(Boolean)
+  )
+  const shareChecklistItems: Array<[
+    keyof typeof emptyShareChecklist,
+    string,
+  ]> = [
+    [
+      'noCredentials',
+      t('I will not submit API keys or other credentials.'),
+    ],
+    ['permission', t('I have permission to share this endpoint.')],
+    [
+      'modelsVerified',
+      t('I have verified that the listed models are available.'),
+    ],
+  ]
 
   return (
     <>
@@ -722,62 +760,269 @@ export function PublicRelay() {
         </SectionPageLayout.Content>
       </SectionPageLayout>
 
-      <Dialog open={submitOpen} onOpenChange={setSubmitOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{t('Share a channel')}</DialogTitle>
-            <DialogDescription>
-              {t(
-                'The channel is assigned to the administrator-configured public group and is reviewed before publication. Do not submit credentials.'
-              )}
-            </DialogDescription>
+      <Dialog open={submitOpen} onOpenChange={handleSubmitOpenChange}>
+        <DialogContent className='flex max-h-[min(900px,calc(100vh-2rem))] max-w-5xl flex-col gap-0 overflow-hidden p-0'>
+          <DialogHeader className='border-border/70 shrink-0 border-b px-6 py-5'>
+            <div className='flex items-start gap-3'>
+              <div className='bg-primary/10 text-primary flex size-10 shrink-0 items-center justify-center rounded-xl'>
+                <ShieldCheck className='size-5' aria-hidden='true' />
+              </div>
+              <div className='min-w-0'>
+                <DialogTitle>{t('Share a channel')}</DialogTitle>
+                <DialogDescription className='mt-1 max-w-3xl'>
+                  {t(
+                    'The channel is assigned to the administrator-configured public group and is reviewed before publication. Do not submit credentials.'
+                  )}
+                </DialogDescription>
+              </div>
+            </div>
           </DialogHeader>
-          <div className='grid gap-4'>
-            <div className='grid gap-2'>
-              <Label>{t('Name')}</Label>
-              <Input
-                value={draft.name}
-                onChange={(event) =>
-                  setDraft({ ...draft, name: event.target.value })
-                }
-              />
-            </div>
-            <div className='grid gap-2'>
-              <Label>{t('Base URL')}</Label>
-              <Input
-                value={draft.base_url}
-                onChange={(event) =>
-                  setDraft({ ...draft, base_url: event.target.value })
-                }
-                placeholder='https://example.com/v1'
-              />
-            </div>
-            <div className='grid gap-2'>
-              <Label>{t('Models')}</Label>
-              <Input
-                value={draft.models}
-                onChange={(event) =>
-                  setDraft({ ...draft, models: event.target.value })
-                }
-                placeholder={t('Comma-separated model IDs')}
-              />
-            </div>
-            <div className='grid gap-2'>
-              <Label>{t('Description')}</Label>
-              <Textarea
-                value={draft.description}
-                onChange={(event) =>
-                  setDraft({ ...draft, description: event.target.value })
-                }
-              />
+
+          <div className='min-h-0 flex-1 overflow-y-auto'>
+            <div className='grid gap-8 p-6 lg:grid-cols-[12rem_minmax(0,1fr)]'>
+              <aside className='hidden lg:block'>
+                <p className='text-muted-foreground mb-3 text-xs font-medium tracking-[0.14em] uppercase'>
+                  {t('Share a channel')}
+                </p>
+                <nav className='grid gap-1 text-sm'>
+                  {[
+                    ['share-basic', t('Basic Information')],
+                    ['share-connection', t('Connection details')],
+                    ['share-models', t('Models')],
+                    ['share-description', t('Description')],
+                    ['share-security', t('Security')],
+                  ].map(([id, label]) => (
+                    <a
+                      key={id}
+                      href={`#${id}`}
+                      className='text-muted-foreground hover:bg-muted hover:text-foreground rounded-md px-3 py-2 transition-colors'
+                    >
+                      {label}
+                    </a>
+                  ))}
+                </nav>
+              </aside>
+
+              <div className='grid min-w-0 gap-5'>
+                <section
+                  id='share-basic'
+                  className='border-border/70 bg-card/30 rounded-xl border p-5'
+                >
+                  <div className='mb-5'>
+                    <h2 className='text-base font-medium tracking-tight'>
+                      {t('Basic Information')}
+                    </h2>
+                    <p className='text-muted-foreground mt-1 text-sm'>
+                      {t('Name')}, {t('Base URL')}, {t('Models')}
+                    </p>
+                  </div>
+                  <div className='grid gap-5 sm:grid-cols-2'>
+                    <div className='grid gap-2 sm:col-span-2'>
+                      <Label htmlFor='share-channel-name'>
+                        {t('Name')} <span className='text-destructive'>*</span>
+                      </Label>
+                      <Input
+                        id='share-channel-name'
+                        value={draft.name}
+                        onChange={(event) =>
+                          setDraft({ ...draft, name: event.target.value })
+                        }
+                        placeholder={t('For example, a reliable OpenAI-compatible endpoint')}
+                      />
+                    </div>
+                    <div className='border-border/70 bg-muted/20 flex items-center gap-3 rounded-lg border p-3 sm:col-span-2'>
+                      <ShieldCheck className='text-primary size-5 shrink-0' />
+                      <p className='text-muted-foreground text-sm leading-5'>
+                        {t(
+                          'Only public connection metadata is collected. API keys and other credentials are never requested.'
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                </section>
+
+                <section
+                  id='share-connection'
+                  className='border-border/70 bg-card/30 rounded-xl border p-5'
+                >
+                  <div className='mb-5'>
+                    <h2 className='text-base font-medium tracking-tight'>
+                      {t('Connection details')}
+                    </h2>
+                    <p className='text-muted-foreground mt-1 text-sm'>
+                      {t('Base URL')}
+                    </p>
+                  </div>
+                  <div className='grid gap-5 sm:grid-cols-2'>
+                    <div className='grid gap-2 sm:col-span-2'>
+                      <Label htmlFor='share-channel-base-url'>
+                        {t('Base URL')} <span className='text-destructive'>*</span>
+                      </Label>
+                      <Input
+                        id='share-channel-base-url'
+                        value={draft.base_url}
+                        onChange={(event) =>
+                          setDraft({ ...draft, base_url: event.target.value })
+                        }
+                        placeholder='https://example.com/v1'
+                      />
+                      <p className='text-muted-foreground text-xs leading-5'>
+                        {t(
+                          'Custom API base URL. Official providers use built-in addresses. Only fill this for third-party proxy sites or special endpoints. Do not add /v1 or trailing slash.'
+                        )}
+                      </p>
+                    </div>
+                    <div className='grid gap-2 sm:col-span-2'>
+                      <Label htmlFor='share-channel-group'>
+                        {t('Public group')}
+                      </Label>
+                      <Input
+                        id='share-channel-group'
+                        value={configQuery.data?.group ?? 'FREE'}
+                        readOnly
+                        aria-describedby='share-channel-group-help'
+                      />
+                      <p
+                        id='share-channel-group-help'
+                        className='text-muted-foreground text-xs leading-5'
+                      >
+                        {t(
+                          'All approved shared channels use this administrator-configured group.'
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                </section>
+
+                <section
+                  id='share-models'
+                  className='border-border/70 bg-card/30 rounded-xl border p-5'
+                >
+                  <div className='mb-5'>
+                    <h2 className='text-base font-medium tracking-tight'>
+                      {t('Models')}
+                    </h2>
+                    <p className='text-muted-foreground mt-1 text-sm'>
+                      {t('Use commas or new lines to separate model IDs.')}
+                    </p>
+                  </div>
+                  <div className='grid gap-3'>
+                    <Label htmlFor='share-channel-models'>
+                      {t('Models')} <span className='text-destructive'>*</span>
+                    </Label>
+                    <Textarea
+                      id='share-channel-models'
+                      rows={4}
+                      value={draft.models}
+                      onChange={(event) =>
+                        setDraft({ ...draft, models: event.target.value })
+                      }
+                      placeholder={t('Comma-separated model IDs')}
+                    />
+                    <div className='bg-muted/30 flex min-h-9 flex-wrap items-center gap-1.5 rounded-md p-2'>
+                      {shareModels.length ? (
+                        shareModels.map((model) => (
+                          <span
+                            key={model}
+                            className='bg-background text-muted-foreground rounded-md border px-2 py-1 text-xs'
+                          >
+                            {model}
+                          </span>
+                        ))
+                      ) : (
+                        <span className='text-muted-foreground text-xs'>
+                          {t('No models listed')}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </section>
+
+                <section
+                  id='share-description'
+                  className='border-border/70 bg-card/30 rounded-xl border p-5'
+                >
+                  <div className='mb-5'>
+                    <h2 className='text-base font-medium tracking-tight'>
+                      {t('Description')}
+                    </h2>
+                    <p className='text-muted-foreground mt-1 text-sm'>
+                      {t('Describe the endpoint, limits, and best use cases for other users.')}
+                    </p>
+                  </div>
+                  <div className='grid gap-2'>
+                    <Label htmlFor='share-channel-description'>
+                      {t('Description')} <span className='text-destructive'>*</span>
+                    </Label>
+                    <Textarea
+                      id='share-channel-description'
+                      rows={6}
+                      maxLength={1200}
+                      value={draft.description}
+                      onChange={(event) =>
+                        setDraft({ ...draft, description: event.target.value })
+                      }
+                      placeholder={t('Explain what makes this channel useful.')}
+                    />
+                    <div className='text-muted-foreground flex justify-end text-xs tabular-nums'>
+                      {draft.description.length}/1200
+                    </div>
+                  </div>
+                </section>
+
+                <section
+                  id='share-security'
+                  className='border-border/70 bg-card/30 rounded-xl border p-5'
+                >
+                  <div className='mb-5'>
+                    <h2 className='text-base font-medium tracking-tight'>
+                      {t('Security')}
+                    </h2>
+                    <p className='text-muted-foreground mt-1 text-sm leading-5'>
+                      {t(
+                        'The channel is assigned to the administrator-configured public group and is reviewed before publication. Do not submit credentials.'
+                      )}
+                    </p>
+                  </div>
+                  <div className='border-border/70 bg-muted/20 grid gap-3 rounded-lg border p-4'>
+                    {shareChecklistItems.map(([key, label]) => {
+                      const id = `share-check-${key}`
+                      return (
+                        <div key={key} className='flex items-start gap-3'>
+                          <Checkbox
+                            id={id}
+                            checked={shareChecklist[key]}
+                            onCheckedChange={(checked) =>
+                              setShareChecklist((current) => ({
+                                ...current,
+                                [key]: checked === true,
+                              }))
+                            }
+                            className='mt-0.5'
+                          />
+                          <Label
+                            htmlFor={id}
+                            className='cursor-pointer text-sm leading-5 font-normal'
+                          >
+                            {label}
+                          </Label>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </section>
+              </div>
             </div>
           </div>
-          <DialogFooter>
-            <DialogClose render={<Button variant='ghost' />}>
+
+          <DialogFooter className='border-border/70 shrink-0 border-t px-6 py-4'>
+            <DialogClose
+              render={<Button variant='ghost' disabled={submitMutation.isPending} />}
+            >
               {t('Cancel')}
             </DialogClose>
             <Button
-              disabled={submitMutation.isPending}
+              disabled={!shareReady || submitMutation.isPending}
               onClick={() => submitMutation.mutate(draft)}
             >
               {t('Submit for review')}

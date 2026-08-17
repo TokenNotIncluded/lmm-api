@@ -43,10 +43,10 @@ export function ChatManagement() {
       <div className='mx-auto grid w-full max-w-6xl gap-10 px-5 py-10 sm:px-8 lg:px-12'>
         <header className='grid gap-2'>
           <p className='text-muted-foreground text-xs tracking-[0.18em] uppercase'>
-            {t('Chat')}
+            {t('Conversations')}
           </p>
           <h1 className='text-2xl font-medium tracking-tight sm:text-3xl'>
-            {t('Chat management')}
+            {t('Conversation records')}
           </h1>
           <p className='text-muted-foreground max-w-2xl text-sm leading-6'>
             {t(
