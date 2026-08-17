@@ -1,6 +1,9 @@
 package controller
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -19,6 +22,48 @@ import (
 )
 
 const oauthAuthFlowTTL = 10 * time.Minute
+
+const oauthStateCookiePrefix = "lmm_oauth_state_"
+
+// oauthStateCookieName keeps concurrent provider logins independent while
+// avoiding user-controlled characters in the cookie name.
+func oauthStateCookieName(provider string) string {
+	digest := sha256.Sum256([]byte(provider))
+	return oauthStateCookiePrefix + hex.EncodeToString(digest[:8])
+}
+
+func setOAuthStateCookie(c *gin.Context, provider, state string) {
+	http.SetCookie(c.Writer, &http.Cookie{
+		Name:     oauthStateCookieName(provider),
+		Value:    state,
+		Path:     "/",
+		MaxAge:   int(oauthAuthFlowTTL / time.Second),
+		HttpOnly: true,
+		Secure:   common.SessionCookieSecure,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func clearOAuthStateCookie(c *gin.Context, provider string) {
+	http.SetCookie(c.Writer, &http.Cookie{
+		Name:     oauthStateCookieName(provider),
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		Expires:  time.Unix(1, 0),
+		HttpOnly: true,
+		Secure:   common.SessionCookieSecure,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func oauthStateCookieMatches(c *gin.Context, provider, state string) bool {
+	cookie, err := c.Request.Cookie(oauthStateCookieName(provider))
+	if err != nil || cookie.Value == "" || state == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(state)) == 1
+}
 
 type oauthStateRequest struct {
 	Provider      string `json:"provider"`
@@ -108,6 +153,7 @@ func GenerateOAuthCode(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	setOAuthStateCookie(c, request.Provider, state)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -137,6 +183,13 @@ func HandleOAuth(c *gin.Context) {
 		Provider: providerName,
 	})
 	if err != nil {
+		c.JSON(http.StatusForbidden, gin.H{
+			"success": false,
+			"message": i18n.T(c, i18n.MsgOAuthStateInvalid),
+		})
+		return
+	}
+	if pendingFlow.Intent == model.AuthFlowIntentLogin && !oauthStateCookieMatches(c, providerName, state) {
 		c.JSON(http.StatusForbidden, gin.H{
 			"success": false,
 			"message": i18n.T(c, i18n.MsgOAuthStateInvalid),
@@ -196,6 +249,7 @@ func HandleOAuth(c *gin.Context) {
 			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": i18n.T(c, i18n.MsgOAuthStateInvalid)})
 			return
 		}
+		clearOAuthStateCookie(c, providerName)
 		errorDescription := c.Query("error_description")
 		if errorDescription == "" {
 			errorDescription = errorCode
@@ -230,6 +284,7 @@ func HandleOAuth(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": i18n.T(c, i18n.MsgOAuthStateInvalid)})
 		return
 	}
+	clearOAuthStateCookie(c, providerName)
 
 	// 7. Find or create user
 	var payload oauthFlowPayload

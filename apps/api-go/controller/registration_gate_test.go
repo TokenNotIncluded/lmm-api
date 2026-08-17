@@ -273,7 +273,7 @@ func TestOAuthCallbackCannotSubstituteConsentForState(t *testing.T) {
 	require.NoError(t, err)
 	router := gin.New()
 	router.GET("/api/oauth/:provider", HandleOAuth)
-	request := httptest.NewRequest(http.MethodGet, "/api/oauth/auth-flow-test?state="+token+"&code=test&accepted_legal=true", nil)
+	request := newAuthFlowOAuthCallbackRequest(t, token, "&code=test&accepted_legal=true")
 	response := httptest.NewRecorder()
 
 	router.ServeHTTP(response, request)

@@ -73,6 +73,13 @@ func setupAuthFlowControllerTest(t *testing.T) *authFlowTestOAuthProvider {
 	return provider
 }
 
+func newAuthFlowOAuthCallbackRequest(t *testing.T, token, suffix string) *http.Request {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodGet, "/api/oauth/auth-flow-test?state="+token+suffix, nil)
+	request.AddCookie(&http.Cookie{Name: oauthStateCookieName("auth-flow-test"), Value: token})
+	return request
+}
+
 func TestGenerateOAuthCodeCarriesAffiliateInLoginFlow(t *testing.T) {
 	setupAuthFlowControllerTest(t)
 	recorder := httptest.NewRecorder()
@@ -91,6 +98,7 @@ func TestGenerateOAuthCodeCarriesAffiliateInLoginFlow(t *testing.T) {
 	}
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
 	require.True(t, response.Success)
+	assert.Contains(t, recorder.Header().Get("Set-Cookie"), oauthStateCookieName("auth-flow-test")+"="+response.Data.FlowToken)
 	flow, err := model.GetAuthFlow(response.Data.FlowToken, model.AuthFlowMatch{
 		Purpose: model.AuthFlowPurposeOAuth, Provider: "auth-flow-test", Intent: model.AuthFlowIntentLogin,
 	})
@@ -134,6 +142,28 @@ func TestGenerateOAuthCodeBindsFlowToAuthenticatedSession(t *testing.T) {
 	assert.Equal(t, "session-42", flow.SessionId)
 }
 
+func TestOAuthLoginRequiresBrowserStateCookie(t *testing.T) {
+	provider := setupAuthFlowControllerTest(t)
+	token, _, err := model.CreateAuthFlow(model.AuthFlowCreate{
+		Purpose: model.AuthFlowPurposeOAuth, Provider: "auth-flow-test", Intent: model.AuthFlowIntentLogin,
+		Payload: `{}`, ExpiresAt: time.Now().Add(time.Minute),
+	})
+	require.NoError(t, err)
+	router := gin.New()
+	router.GET("/api/oauth/:provider", HandleOAuth)
+	request := httptest.NewRequest(http.MethodGet, "/api/oauth/auth-flow-test?state="+token+"&code=test", nil)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	assert.Equal(t, http.StatusForbidden, response.Code)
+	assert.Zero(t, provider.exchangeCalls)
+	flow, err := model.GetAuthFlow(token, model.AuthFlowMatch{
+		Purpose: model.AuthFlowPurposeOAuth, Provider: "auth-flow-test", Intent: model.AuthFlowIntentLogin,
+	})
+	require.NoError(t, err)
+	assert.Nil(t, flow.ConsumedAt)
+}
+
 func TestOAuthLoginConsumesFlowOnlyAfterProviderIdentity(t *testing.T) {
 	provider := setupAuthFlowControllerTest(t)
 
@@ -157,7 +187,7 @@ func TestOAuthLoginConsumesFlowOnlyAfterProviderIdentity(t *testing.T) {
 
 			router := gin.New()
 			router.GET("/api/oauth/:provider", HandleOAuth)
-			request := httptest.NewRequest(http.MethodGet, "/api/oauth/auth-flow-test?state="+token+"&code=test", nil)
+			request := newAuthFlowOAuthCallbackRequest(t, token, "&code=test")
 			response := httptest.NewRecorder()
 			router.ServeHTTP(response, request)
 
@@ -182,7 +212,7 @@ func TestOAuthLoginConsumesFlowAfterProviderIdentityAndOnProviderError(t *testin
 	require.NoError(t, err)
 	router := gin.New()
 	router.GET("/api/oauth/:provider", HandleOAuth)
-	request := httptest.NewRequest(http.MethodGet, "/api/oauth/auth-flow-test?state="+successToken+"&code=test", nil)
+	request := newAuthFlowOAuthCallbackRequest(t, successToken, "&code=test")
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 	_, err = model.GetAuthFlow(successToken, model.AuthFlowMatch{Purpose: model.AuthFlowPurposeOAuth})
@@ -195,7 +225,7 @@ func TestOAuthLoginConsumesFlowAfterProviderIdentityAndOnProviderError(t *testin
 		Payload: `{}`, ExpiresAt: time.Now().Add(time.Minute),
 	})
 	require.NoError(t, err)
-	request = httptest.NewRequest(http.MethodGet, "/api/oauth/auth-flow-test?state="+providerErrorToken+"&error=access_denied", nil)
+	request = newAuthFlowOAuthCallbackRequest(t, providerErrorToken, "&error=access_denied")
 	response = httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 	_, err = model.GetAuthFlow(providerErrorToken, model.AuthFlowMatch{Purpose: model.AuthFlowPurposeOAuth})
@@ -220,7 +250,7 @@ func TestOAuthBindProviderErrorConsumesSessionBoundFlow(t *testing.T) {
 		c.Next()
 	})
 	router.GET("/api/oauth/:provider", HandleOAuth)
-	request := httptest.NewRequest(http.MethodGet, "/api/oauth/auth-flow-test?state="+flowToken+"&error=access_denied&error_description=cancelled", nil)
+	request := newAuthFlowOAuthCallbackRequest(t, flowToken, "&error=access_denied&error_description=cancelled")
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 
@@ -248,7 +278,7 @@ func TestOAuthBindCallbackValidatesServerSideSessionWithoutAuthorizationHeader(t
 
 	router := gin.New()
 	router.GET("/api/oauth/:provider", HandleOAuth)
-	request := httptest.NewRequest(http.MethodGet, "/api/oauth/auth-flow-test?state="+flowToken+"&error=access_denied", nil)
+	request := newAuthFlowOAuthCallbackRequest(t, flowToken, "&error=access_denied")
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 
@@ -279,7 +309,7 @@ func TestOAuthBindCallbackRejectsRevokedServerSideSession(t *testing.T) {
 
 	router := gin.New()
 	router.GET("/api/oauth/:provider", HandleOAuth)
-	request := httptest.NewRequest(http.MethodGet, "/api/oauth/auth-flow-test?state="+flowToken+"&error=access_denied", nil)
+	request := newAuthFlowOAuthCallbackRequest(t, flowToken, "&error=access_denied")
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
 
