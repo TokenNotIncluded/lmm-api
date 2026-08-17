@@ -254,14 +254,11 @@ func HandleOAuth(c *gin.Context) {
 			return
 		}
 		clearOAuthStateCookie(c, providerName)
-		errorDescription := c.Query("error_description")
-		if errorDescription == "" {
-			errorDescription = errorCode
-		}
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": errorDescription,
-		})
+		// OAuth error_description is provider-controlled query data. Do not echo
+		// it to the browser: a provider response (or a crafted callback) could
+		// otherwise expose internal details through the public callback endpoint.
+		common.SysLog(fmt.Sprintf("[OAuth] provider callback rejected: provider=%q", providerName))
+		common.ApiErrorI18n(c, i18n.MsgOAuthConnectFailed, providerParams(provider.GetName()))
 		return
 	}
 	if pendingFlow.Intent == model.AuthFlowIntentBind {

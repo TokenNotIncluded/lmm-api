@@ -234,6 +234,27 @@ func TestOAuthLoginConsumesFlowAfterProviderIdentityAndOnProviderError(t *testin
 	assert.Equal(t, 1, provider.userInfoCalls)
 }
 
+func TestOAuthCallbackDoesNotEchoProviderErrorDescription(t *testing.T) {
+	setupAuthFlowControllerTest(t)
+	state, _, err := model.CreateAuthFlow(model.AuthFlowCreate{
+		Purpose: model.AuthFlowPurposeOAuth, Provider: "auth-flow-test", Intent: model.AuthFlowIntentLogin,
+		ExpiresAt: time.Now().Add(time.Minute),
+	})
+	require.NoError(t, err)
+
+	router := gin.New()
+	router.GET("/api/oauth/:provider", HandleOAuth)
+	request := newAuthFlowOAuthCallbackRequest(t, state,
+		"&error=access_denied&error_description=provider%20database%20password")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	assert.Equal(t, http.StatusOK, response.Code)
+	assert.NotContains(t, response.Body.String(), "provider database password")
+	assert.NotContains(t, response.Body.String(), "access_denied")
+	assert.NotEmpty(t, response.Body.String())
+}
+
 func TestOAuthBindProviderErrorConsumesSessionBoundFlow(t *testing.T) {
 	provider := setupAuthFlowControllerTest(t)
 	flowToken, _, err := model.CreateAuthFlow(model.AuthFlowCreate{
