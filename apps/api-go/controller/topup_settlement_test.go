@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -67,6 +68,21 @@ func TestTopUpOrderAmountsUsesPlatformUnitsOutsideTokenMode(t *testing.T) {
 	storedAmount, creditedQuota := topUpOrderAmounts(25)
 	assert.EqualValues(t, 25, storedAmount)
 	assert.EqualValues(t, 12_500_000, creditedQuota)
+}
+
+func TestTopUpOrderAmountsRejectsInt64OverflowInTokenConversion(t *testing.T) {
+	previousDisplayType := operation_setting.GetGeneralSetting().QuotaDisplayType
+	previousQuotaPerUnit := common.QuotaPerUnit
+	operation_setting.GetGeneralSetting().QuotaDisplayType = operation_setting.QuotaDisplayTypeTokens
+	common.QuotaPerUnit = math.SmallestNonzeroFloat64
+	t.Cleanup(func() {
+		operation_setting.GetGeneralSetting().QuotaDisplayType = previousDisplayType
+		common.QuotaPerUnit = previousQuotaPerUnit
+	})
+
+	storedAmount, creditedQuota := topUpOrderAmounts(math.MaxInt64)
+	assert.Zero(t, storedAmount)
+	assert.Zero(t, creditedQuota)
 }
 
 func TestMonetaryMicrosConversionsAreExact(t *testing.T) {

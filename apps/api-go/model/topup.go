@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -722,11 +723,40 @@ func topUpPaidAmountMicros(topUp *TopUp) int64 {
 
 // StandardTopUpCreditedQuota converts an ePay/Stripe/FAST/Waffo display
 // amount into the exact quota that their completion paths grant.
-func StandardTopUpCreditedQuota(amount int64) int64 {
+func standardTopUpCreditedQuotaChecked(amount int64) (int64, error) {
 	if amount <= 0 {
+		return 0, nil
+	}
+	if common.QuotaPerUnit <= 0 || math.IsNaN(common.QuotaPerUnit) || math.IsInf(common.QuotaPerUnit, 0) {
+		return 0, ErrInvalidTopUpQuota
+	}
+
+	// Decimal.IntPart delegates to big.Int.Int64, which keeps only the low
+	// 64 bits when the integer does not fit. Check the arbitrary-precision
+	// integer first so an extreme admin multiplier can never wrap into a
+	// seemingly valid, small credit.
+	credited := decimal.NewFromInt(amount).Mul(decimal.NewFromFloat(common.QuotaPerUnit))
+	creditedInteger := credited.BigInt()
+	if !creditedInteger.IsInt64() {
+		return 0, ErrInvalidTopUpQuota
+	}
+	quota := creditedInteger.Int64()
+	if quota <= 0 {
+		return 0, ErrInvalidTopUpQuota
+	}
+	return quota, nil
+}
+
+// StandardTopUpCreditedQuota preserves the historical value-only API while
+// failing closed on invalid or unrepresentable conversions. Payment entry
+// points validate the returned value before creating an order, and settlement
+// paths reject zero as an invalid quota.
+func StandardTopUpCreditedQuota(amount int64) int64 {
+	quota, err := standardTopUpCreditedQuotaChecked(amount)
+	if err != nil {
 		return 0
 	}
-	return decimal.NewFromInt(amount).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).IntPart()
+	return quota
 }
 
 func normalizedTopUpCreditedQuota(topUp *TopUp) int64 {

@@ -3,6 +3,7 @@ package controller
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -96,12 +97,33 @@ func topUpOrderAmounts(requestedAmount int64) (storedAmount int64, creditedQuota
 		return 0, 0
 	}
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		storedAmount = decimal.NewFromInt(requestedAmount).
-			Div(decimal.NewFromFloat(common.QuotaPerUnit)).
-			IntPart()
+		if !validQuotaPerUnit() {
+			return 0, 0
+		}
+		var ok bool
+		storedAmount, ok = decimalInt64Truncated(
+			decimal.NewFromInt(requestedAmount).Div(decimal.NewFromFloat(common.QuotaPerUnit)),
+		)
+		if !ok {
+			return 0, 0
+		}
 		return storedAmount, requestedAmount
 	}
 	return requestedAmount, model.StandardTopUpCreditedQuota(requestedAmount)
+}
+
+func validQuotaPerUnit() bool {
+	return common.QuotaPerUnit > 0 && !math.IsNaN(common.QuotaPerUnit) && !math.IsInf(common.QuotaPerUnit, 0)
+}
+
+// decimalInt64Truncated keeps the existing truncation semantics while
+// checking the arbitrary-precision integer before converting it to int64.
+func decimalInt64Truncated(value decimal.Decimal) (int64, bool) {
+	integer := value.BigInt()
+	if !integer.IsInt64() {
+		return 0, false
+	}
+	return integer.Int64(), true
 }
 
 func monetaryMicrosToFloat(micros int64) float64 {
@@ -632,9 +654,16 @@ func quoteTopUpWithPricing(amount int64, group string, dPrice, dPaymentRatio dec
 func getMinTopup() int64 {
 	minTopup := operation_setting.MinTopUp
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
+		if !validQuotaPerUnit() {
+			return int64(common.MaxQuota)
+		}
 		dMinTopup := decimal.NewFromInt(int64(minTopup))
 		dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
-		minTopup = int(dMinTopup.Mul(dQuotaPerUnit).IntPart())
+		converted, ok := decimalInt64Truncated(dMinTopup.Mul(dQuotaPerUnit))
+		if !ok || converted < 0 || converted > int64(common.MaxQuota) {
+			return int64(common.MaxQuota)
+		}
+		minTopup = int(converted)
 	}
 	return int64(minTopup)
 }

@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"math"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -13,6 +14,23 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
+
+func TestStandardTopUpCreditedQuotaRejectsInt64OverflowWithoutWrapping(t *testing.T) {
+	previousQuotaPerUnit := common.QuotaPerUnit
+	t.Cleanup(func() { common.QuotaPerUnit = previousQuotaPerUnit })
+
+	common.QuotaPerUnit = 500_000
+	assert.EqualValues(t, 12_500_000, StandardTopUpCreditedQuota(25))
+
+	common.QuotaPerUnit = 1e19
+	quota, err := standardTopUpCreditedQuotaChecked(1)
+	assert.ErrorIs(t, err, ErrInvalidTopUpQuota)
+	assert.Zero(t, quota)
+	assert.Zero(t, StandardTopUpCreditedQuota(1))
+
+	common.QuotaPerUnit = math.Inf(1)
+	assert.Zero(t, StandardTopUpCreditedQuota(1))
+}
 
 func setupExternalTopUpSettlementDB(t *testing.T, maxOpenConnections int) *gorm.DB {
 	t.Helper()

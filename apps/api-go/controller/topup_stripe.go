@@ -613,9 +613,20 @@ func getStripePayMoney(amount float64, group string) float64 {
 }
 
 func getStripeMinTopup() int64 {
-	minTopup := setting.StripeMinTopUp
+	minTopup := int64(setting.StripeMinTopUp)
 	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		minTopup = minTopup * int(common.QuotaPerUnit)
+		if !validQuotaPerUnit() {
+			return int64(common.MaxQuota)
+		}
+		quotaPerUnit, ok := decimalInt64Truncated(decimal.NewFromFloat(common.QuotaPerUnit))
+		if !ok || quotaPerUnit < 0 {
+			return int64(common.MaxQuota)
+		}
+		converted, ok := decimalInt64Truncated(decimal.NewFromInt(minTopup).Mul(decimal.NewFromInt(quotaPerUnit)))
+		if !ok || converted < 0 || converted > int64(common.MaxQuota) {
+			return int64(common.MaxQuota)
+		}
+		minTopup = converted
 	}
-	return int64(minTopup)
+	return minTopup
 }
