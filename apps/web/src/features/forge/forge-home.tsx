@@ -136,7 +136,7 @@ export function ForgeHome() {
                       type='submit'
                       variant='default'
                       size='sm'
-                      className='h-10 rounded-lg px-3'
+                      className='h-11 rounded-lg px-3 sm:h-10'
                       disabled={
                         !message.trim() || messageInvalid || !assistantEnabled
                       }

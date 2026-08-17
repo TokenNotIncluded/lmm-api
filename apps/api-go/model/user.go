@@ -142,9 +142,8 @@ func userTopupMoneyMicrosSQL(db *gorm.DB) string {
 func userTopupTotals(tx *gorm.DB) *gorm.DB {
 	creditedQuotaExpression, creditedQuotaArgs := positiveNormalizedCreditedQuotaSQL()
 	moneyMicrosExpression := userTopupMoneyMicrosSQL(tx)
-	return tx.Model(&TopUp{}).
+	return successfulExternalPaidTopUpQuery(tx.Model(&TopUp{})).
 		Select("user_id, COALESCE(SUM("+creditedQuotaExpression+"), 0) AS credited_quota, COALESCE(SUM("+moneyMicrosExpression+"), 0) AS money_micros", creditedQuotaArgs...).
-		Where("status = ?", common.TopUpStatusSuccess).
 		// Subscription completion mirrors have no credited quota or amount. Keep
 		// this aggregate independent of the optional subscription table so user
 		// list queries remain usable during partial migrations.
@@ -188,9 +187,9 @@ func PopulateUserTopups(users []*User) error {
 	var rows []userTopupAggregate
 	creditedQuotaExpression, creditedQuotaArgs := positiveNormalizedCreditedQuotaSQL()
 	moneyMicrosExpression := userTopupMoneyMicrosSQL(DB)
-	if err := DB.Model(&TopUp{}).
+	if err := successfulExternalPaidTopUpQuery(DB.Model(&TopUp{})).
 		Select("user_id, payment_method, payment_provider, COALESCE(SUM("+creditedQuotaExpression+"), 0) AS credited_quota, COALESCE(SUM("+moneyMicrosExpression+"), 0) AS money_micros, COUNT(*) AS orders", creditedQuotaArgs...).
-		Where("status = ? AND user_id IN ?", common.TopUpStatusSuccess, ids).
+		Where("user_id IN ?", ids).
 		Where("(credited_quota <> 0 OR amount <> 0)").
 		Group("user_id, payment_method, payment_provider").
 		Order("user_id ASC, payment_method ASC, payment_provider ASC").

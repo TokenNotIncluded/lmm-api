@@ -133,6 +133,19 @@ func TestAdvancedSecuritySettingsRejectOversizedPolicyBeforeAuthentication(t *te
 	require.Equal(t, http.StatusRequestEntityTooLarge, response.Code)
 }
 
+func TestL1OnboardingProofRejectsOversizedJSONBeforeAuthentication(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	SetApiRouter(engine)
+	body := `{"step":"client_heartbeat","client":"` + strings.Repeat("x", userSelfMutationRequestMaxBytes) + `"}`
+	request := httptest.NewRequest(http.MethodPost, "/api/onboarding/todo/proof", strings.NewReader(body))
+	response := httptest.NewRecorder()
+
+	engine.ServeHTTP(response, request)
+
+	require.Equal(t, http.StatusRequestEntityTooLarge, response.Code)
+}
+
 func TestCompactOAuthRoutesRejectOversizedJSONBeforeAuthentication(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()

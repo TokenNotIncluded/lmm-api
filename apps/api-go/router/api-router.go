@@ -286,7 +286,11 @@ func SetApiRouter(router *gin.Engine) {
 			}
 		}
 		onboardingProofRoute := apiRouter.Group("/onboarding/todo")
-		onboardingProofRoute.Use(middleware.TokenAuth())
+		// Proof payloads contain only a step, client name, base URL, and group.
+		// Bound the body before API-key authentication and JSON decoding so an
+		// untrusted key holder cannot use this public proof endpoint to grow the
+		// request allocation without limit.
+		onboardingProofRoute.Use(middleware.RequestBodyLimit(userSelfMutationRequestMaxBytes), middleware.TokenAuth())
 		{
 			onboardingProofRoute.POST("/proof", middleware.DisableCache(), controller.PostL1OnboardingProof)
 		}

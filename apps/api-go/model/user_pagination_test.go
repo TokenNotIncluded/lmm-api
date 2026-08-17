@@ -129,6 +129,47 @@ func TestUserListsSortByActualTopUpMoney(t *testing.T) {
 	assert.EqualValues(t, 2_000_000, users[2].TopupSummary.MoneyMicros)
 }
 
+func TestUserTopupSummaryExcludesLinuxDOCredit(t *testing.T) {
+	truncateTables(t)
+	insertUsersForPaginationTest(t, 2)
+
+	require.NoError(t, DB.Create(&[]TopUp{
+		{
+			UserId:          1,
+			TradeNo:         "user-topup-linuxdo-credit",
+			Amount:          500,
+			CreditedQuota:   int64(common.QuotaPerUnit) * 500,
+			Money:           500,
+			Status:          common.TopUpStatusSuccess,
+			PaymentMethod:   "epay",
+			PaymentProvider: PaymentProviderEpay,
+		},
+		{
+			UserId:          2,
+			TradeNo:         "user-topup-real-money",
+			Amount:          10,
+			CreditedQuota:   int64(common.QuotaPerUnit) * 10,
+			Money:           10,
+			Status:          common.TopUpStatusSuccess,
+			PaymentMethod:   PaymentMethodStripe,
+			PaymentProvider: PaymentProviderStripe,
+		},
+	}).Error)
+
+	users, total, err := GetAllUsers(
+		&common.PageInfo{Page: 1, PageSize: 2},
+		false,
+		NewUserSortOptions("topup_money", "desc"),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), total)
+	assert.Equal(t, []int{2, 1}, collectUserIDs(users))
+	require.NoError(t, PopulateUserTopups(users))
+	assert.EqualValues(t, 10_000_000, users[0].TopupSummary.MoneyMicros)
+	assert.EqualValues(t, 0, users[1].TopupSummary.MoneyMicros)
+	assert.Empty(t, users[1].TopupSummary.Methods)
+}
+
 func TestUserListsFilterL0BeforePagination(t *testing.T) {
 	truncateTables(t)
 	for userID := 1; userID <= 8; userID++ {
