@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use axum::{
     Extension, Json, Router,
     body::Bytes,
-    extract::{RawQuery, Request, State},
+    extract::{DefaultBodyLimit, RawQuery, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -1435,6 +1435,7 @@ pub struct SystemConfigHttpState {
     pub authorizer: Arc<dyn SystemConfigAuthorizer>,
     pub project_update: Arc<dyn ProjectUpdateClient>,
     pub pancake: Arc<dyn WaffoPancakeGateway>,
+    anonymous_body_limit_bytes: usize,
     runtime_writer: Arc<dyn SystemConfigRuntimeWriter>,
     option_write_lock: Arc<Mutex<()>>,
     pub option_cache_ttl: Duration,
@@ -1457,6 +1458,7 @@ impl SystemConfigHttpState {
             authorizer,
             project_update,
             pancake,
+            anonymous_body_limit_bytes: 512 * 1024,
             runtime_writer: Arc::new(MissingSystemConfigRuntimeWriter),
             option_write_lock: Arc::new(Mutex::new(())),
             option_cache_ttl: Duration::from_secs(OPTIONS_CACHE_TTL_SECONDS),
@@ -1474,6 +1476,13 @@ impl SystemConfigHttpState {
         runtime_writer: Arc<dyn SystemConfigRuntimeWriter>,
     ) -> Self {
         self.runtime_writer = runtime_writer;
+        self
+    }
+
+    /// Sets the configured ceiling for the anonymous setup request body.
+    #[must_use]
+    pub const fn with_anonymous_body_limit_bytes(mut self, bytes: usize) -> Self {
+        self.anonymous_body_limit_bytes = bytes;
         self
     }
 
@@ -1517,9 +1526,14 @@ pub fn system_config_router(state: SystemConfigHttpState) -> Router {
             state.clone(),
             system_config_root_guard,
         ));
+    let setup = Router::new()
+        .route("/api/setup", get(get_setup).post(post_setup))
+        // `post_setup` consumes `Bytes`; the route layer must install the
+        // configured limit before Axum performs that extraction.
+        .layer(DefaultBodyLimit::max(state.anonymous_body_limit_bytes));
     Router::new()
         .merge(protected)
-        .route("/api/setup", get(get_setup).post(post_setup))
+        .merge(setup)
         .with_state(state)
 }
 

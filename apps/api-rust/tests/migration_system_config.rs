@@ -1,4 +1,4 @@
-use std::{env, net::SocketAddr, sync::Arc};
+use std::{env, net::SocketAddr, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use axum::{
@@ -339,6 +339,36 @@ async fn malformed_protected_payloads_keep_the_frozen_legacy_envelopes() {
         .expect("JSON response");
         assert_eq!(body, expected_body, "{uri}");
     }
+}
+
+#[tokio::test]
+async fn setup_route_rejects_body_above_configured_limit_before_database_access() {
+    let pool = PgPoolOptions::new()
+        .acquire_timeout(Duration::from_millis(10))
+        .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+        .expect("valid deferred PostgreSQL URL");
+    let valkey = redis::Client::open("redis://127.0.0.1:1/").expect("valid deferred Valkey URL");
+    let app = system_config_router(
+        SystemConfigHttpState::new(
+            pool,
+            valkey,
+            Arc::new(Denied),
+            Arc::new(Update),
+            Arc::new(Pancake),
+        )
+        .with_anonymous_body_limit_bytes(16),
+    );
+
+    let response = app
+        .oneshot(
+            Request::post("/api/setup")
+                .body(Body::from(vec![b'x'; 17]))
+                .expect("oversized setup request"),
+        )
+        .await
+        .expect("setup response");
+
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
 }
 
 #[tokio::test]

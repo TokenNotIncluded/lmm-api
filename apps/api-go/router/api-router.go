@@ -33,6 +33,19 @@ const (
 	// provider/intent/affiliate or verification-code fields. Keep these compact
 	// mutations below the much larger anonymous request ceiling.
 	compactOAuthRequestMaxBytes = 16 << 10
+	// Open-source bounty mutations carry bounded URLs, descriptions, notes, or
+	// dispute statements. The largest validated text field is 5 KiB, so keep
+	// the complete JSON envelope below 16 KiB before decoding it.
+	openSourceBountyMutationRequestMaxBytes = 16 << 10
+	// TOTP and generic security-proof requests contain only a method, scope,
+	// code, and optional flow token. Keep these authenticated mutations compact.
+	securityFactorMutationRequestMaxBytes = 4 << 10
+	// WebAuthn begin requests contain only a proof scope, while finish requests
+	// carry a browser-generated credential response. Leave finish responses more
+	// room for authenticator attestation data while remaining far below the
+	// anonymous 512 KiB ceiling.
+	passkeyBeginRequestMaxBytes  = 4 << 10
+	passkeyFinishRequestMaxBytes = 64 << 10
 	// Raw configuration imports are intentionally larger than ordinary option
 	// writes, but remain bounded before decoding to keep the root-only editor
 	// from becoming an unbounded heap allocation.
@@ -148,7 +161,7 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.POST("/waffo-pancake/webhook/:env", anonymousRequestBodyLimit, controller.WaffoPancakeWebhook)
 
 		// Universal secure verification routes
-		apiRouter.POST("/verify", middleware.UserAuth(), middleware.CriticalRateLimit(), middleware.DisableCache(), controller.UniversalVerify)
+		apiRouter.POST("/verify", middleware.UserAuth(), middleware.CriticalRateLimit(), middleware.DisableCache(), middleware.RequestBodyLimit(securityFactorMutationRequestMaxBytes), controller.UniversalVerify)
 		apiRouter.POST("/verify/email", middleware.UserAuth(), middleware.CriticalRateLimit(), middleware.EmailVerificationRateLimit(), middleware.DisableCache(), controller.SendSecurityEmailVerification)
 
 		userRoute := apiRouter.Group("/user")
@@ -194,10 +207,10 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.DELETE("/self", controller.DeleteSelf)
 				selfRoute.GET("/token", middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit("access-token"), middleware.DisableCache(), controller.GenerateAccessToken)
 				selfRoute.GET("/passkey", controller.PasskeyStatus)
-				selfRoute.POST("/passkey/register/begin", middleware.DisableCache(), controller.PasskeyRegisterBegin)
-				selfRoute.POST("/passkey/register/finish", middleware.DisableCache(), controller.PasskeyRegisterFinish)
-				selfRoute.POST("/passkey/verify/begin", middleware.DisableCache(), controller.PasskeyVerifyBegin)
-				selfRoute.POST("/passkey/verify/finish", middleware.DisableCache(), controller.PasskeyVerifyFinish)
+				selfRoute.POST("/passkey/register/begin", middleware.DisableCache(), middleware.RequestBodyLimit(passkeyBeginRequestMaxBytes), controller.PasskeyRegisterBegin)
+				selfRoute.POST("/passkey/register/finish", middleware.DisableCache(), middleware.RequestBodyLimit(passkeyFinishRequestMaxBytes), controller.PasskeyRegisterFinish)
+				selfRoute.POST("/passkey/verify/begin", middleware.DisableCache(), middleware.RequestBodyLimit(passkeyBeginRequestMaxBytes), controller.PasskeyVerifyBegin)
+				selfRoute.POST("/passkey/verify/finish", middleware.DisableCache(), middleware.RequestBodyLimit(passkeyFinishRequestMaxBytes), controller.PasskeyVerifyFinish)
 				selfRoute.DELETE("/passkey", middleware.DisableCache(), controller.PasskeyDelete)
 				selfRoute.GET("/aff", controller.GetAffCode)
 				selfRoute.GET("/topup/info", controller.GetTopUpInfo)
@@ -214,14 +227,14 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.POST("/waffo-pancake/amount", middleware.RequestBodyLimit(waffoPancakeMutationRequestMaxBytes), middleware.PaymentMethodAccessGate(), controller.RequestWaffoPancakeAmount)
 				selfRoute.POST("/waffo-pancake/pay", middleware.RequestBodyLimit(waffoPancakeMutationRequestMaxBytes), middleware.PaymentMethodAccessGate(), middleware.CriticalRateLimit(), controller.RequestWaffoPancakePay)
 				selfRoute.POST("/aff_transfer", middleware.RequestBodyLimit(topUpMutationRequestMaxBytes), middleware.UserCriticalRateLimit("aff-transfer"), controller.TransferAffQuota)
-				selfRoute.PUT("/setting", controller.UpdateUserSetting)
+				selfRoute.PUT("/setting", middleware.RequestBodyLimit(userSelfMutationRequestMaxBytes), controller.UpdateUserSetting)
 
 				// 2FA routes
 				selfRoute.GET("/2fa/status", controller.Get2FAStatus)
-				selfRoute.POST("/2fa/setup", middleware.DisableCache(), controller.Setup2FA)
-				selfRoute.POST("/2fa/enable", middleware.DisableCache(), controller.Enable2FA)
-				selfRoute.POST("/2fa/disable", middleware.DisableCache(), controller.Disable2FA)
-				selfRoute.POST("/2fa/backup_codes", middleware.DisableCache(), controller.RegenerateBackupCodes)
+				selfRoute.POST("/2fa/setup", middleware.DisableCache(), middleware.RequestBodyLimit(securityFactorMutationRequestMaxBytes), controller.Setup2FA)
+				selfRoute.POST("/2fa/enable", middleware.DisableCache(), middleware.RequestBodyLimit(securityFactorMutationRequestMaxBytes), controller.Enable2FA)
+				selfRoute.POST("/2fa/disable", middleware.DisableCache(), middleware.RequestBodyLimit(securityFactorMutationRequestMaxBytes), controller.Disable2FA)
+				selfRoute.POST("/2fa/backup_codes", middleware.DisableCache(), middleware.RequestBodyLimit(securityFactorMutationRequestMaxBytes), controller.RegenerateBackupCodes)
 
 				// Check-in routes
 				selfRoute.GET("/checkin", controller.GetCheckinStatus)
@@ -459,7 +472,7 @@ func SetApiRouter(router *gin.Engine) {
 			openSourceBountyRoute.GET("/mcp-token", middleware.DisableCache(), controller.GetOpenSourceBountyMCPToken)
 			openSourceBountyRoute.POST("/mcp-token", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.RotateOpenSourceBountyMCPToken)
 			openSourceBountyRoute.DELETE("/mcp-token", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.RevokeOpenSourceBountyMCPToken)
-			openSourceBountyRoute.POST("", controller.CreateOpenSourceBounty)
+			openSourceBountyRoute.POST("", middleware.RequestBodyLimit(openSourceBountyMutationRequestMaxBytes), controller.CreateOpenSourceBounty)
 			openSourceBountyRoute.GET("/mine", controller.ListOwnedOpenSourceBounties)
 			openSourceBountyRoute.GET("/accepted", controller.ListAcceptedOpenSourceBounties)
 			openSourceBountyRoute.GET("/notifications", middleware.DisableCache(), controller.ListOpenSourceBountyNotifications)
@@ -469,8 +482,8 @@ func SetApiRouter(router *gin.Engine) {
 			openSourceBountyRoute.POST("/tips/:tip_id/thank", controller.ThankOpenSourceBountyTip)
 			openSourceBountyRoute.GET("/disputes/mine", controller.ListMyOpenSourceBountyDisputes)
 			openSourceBountyRoute.GET("/disputes/admin", middleware.AdminAuth(), controller.ListAdminOpenSourceBountyDisputes)
-			openSourceBountyRoute.POST("/disputes/:dispute_id/resolve", middleware.AdminAuth(), middleware.CriticalRateLimit(), controller.ResolveOpenSourceBountyDispute)
-			openSourceBountyRoute.PUT("/projects/:id", controller.UpdateOpenSourceBounty)
+			openSourceBountyRoute.POST("/disputes/:dispute_id/resolve", middleware.AdminAuth(), middleware.CriticalRateLimit(), middleware.RequestBodyLimit(openSourceBountyMutationRequestMaxBytes), controller.ResolveOpenSourceBountyDispute)
+			openSourceBountyRoute.PUT("/projects/:id", middleware.RequestBodyLimit(openSourceBountyMutationRequestMaxBytes), controller.UpdateOpenSourceBounty)
 			openSourceBountyRoute.DELETE("/projects/:id", controller.DeleteOpenSourceBounty)
 			openSourceBountyRoute.POST("/projects/:id/publish", middleware.CriticalRateLimit(), controller.PublishOpenSourceBounty)
 			openSourceBountyRoute.POST("/projects/:id/pause", controller.PauseOpenSourceBounty)
@@ -478,15 +491,15 @@ func SetApiRouter(router *gin.Engine) {
 			openSourceBountyRoute.POST("/projects/:id/close", middleware.CriticalRateLimit(), controller.CloseOpenSourceBounty)
 			openSourceBountyRoute.POST("/projects/:id/archive", controller.ArchiveOpenSourceBounty)
 			openSourceBountyRoute.POST("/projects/:id/unarchive", controller.UnarchiveOpenSourceBounty)
-			openSourceBountyRoute.POST("/projects/:id/accept", controller.AcceptOpenSourceBounty)
-			openSourceBountyRoute.POST("/projects/:id/submit", controller.SubmitOpenSourceBountyChallenge)
+			openSourceBountyRoute.POST("/projects/:id/accept", middleware.RequestBodyLimit(openSourceBountyMutationRequestMaxBytes), controller.AcceptOpenSourceBounty)
+			openSourceBountyRoute.POST("/projects/:id/submit", middleware.RequestBodyLimit(openSourceBountyMutationRequestMaxBytes), controller.SubmitOpenSourceBountyChallenge)
 			openSourceBountyRoute.POST("/challenges/:challenge_id/withdraw", controller.WithdrawOpenSourceBountyChallenge)
 			openSourceBountyRoute.POST("/challenges/:challenge_id/cancel", controller.CancelOpenSourceBountyChallenge)
-			openSourceBountyRoute.POST("/challenges/:challenge_id/approve", middleware.CriticalRateLimit(), controller.ApproveOpenSourceBountyChallenge)
-			openSourceBountyRoute.POST("/challenges/:challenge_id/reject", controller.RejectOpenSourceBountyChallenge)
-			openSourceBountyRoute.POST("/challenges/:challenge_id/tip", middleware.CriticalRateLimit(), controller.TipOpenSourceBountyChallenge)
-			openSourceBountyRoute.POST("/challenges/:challenge_id/rate-owner", controller.RateOpenSourceBountyOwner)
-			openSourceBountyRoute.POST("/challenges/:challenge_id/disputes", middleware.CriticalRateLimit(), controller.OpenOpenSourceBountyDispute)
+			openSourceBountyRoute.POST("/challenges/:challenge_id/approve", middleware.CriticalRateLimit(), middleware.RequestBodyLimit(openSourceBountyMutationRequestMaxBytes), controller.ApproveOpenSourceBountyChallenge)
+			openSourceBountyRoute.POST("/challenges/:challenge_id/reject", middleware.RequestBodyLimit(openSourceBountyMutationRequestMaxBytes), controller.RejectOpenSourceBountyChallenge)
+			openSourceBountyRoute.POST("/challenges/:challenge_id/tip", middleware.CriticalRateLimit(), middleware.RequestBodyLimit(openSourceBountyMutationRequestMaxBytes), controller.TipOpenSourceBountyChallenge)
+			openSourceBountyRoute.POST("/challenges/:challenge_id/rate-owner", middleware.RequestBodyLimit(openSourceBountyMutationRequestMaxBytes), controller.RateOpenSourceBountyOwner)
+			openSourceBountyRoute.POST("/challenges/:challenge_id/disputes", middleware.CriticalRateLimit(), middleware.RequestBodyLimit(openSourceBountyMutationRequestMaxBytes), controller.OpenOpenSourceBountyDispute)
 		}
 
 		publicRelayPublicRoute := openSourceBountyApiRouter.Group("/public-relays")

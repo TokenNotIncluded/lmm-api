@@ -3990,10 +3990,10 @@ async fn required_viewer_id(
     state: &OpenSourceBountyState,
     headers: &HeaderMap,
 ) -> Result<i64, Response> {
-    match optional_viewer_id(state, headers).await? {
-        Some(viewer_id) => Ok(viewer_id),
-        None => Err(auth_failure(AuthErrorKind::Unauthorized)),
-    }
+    // Every non-discovery bounty route is a dashboard-console surface. Keep
+    // this compatibility-named helper delegated to the one durable access
+    // gate so a future private handler cannot accidentally accept L0 users.
+    required_developer_viewer_id(state, headers).await
 }
 
 async fn required_developer_viewer_id(
@@ -4055,15 +4055,18 @@ async fn required_admin_id(
 ) -> Result<i64, Response> {
     let token =
         authorization_token(headers).ok_or_else(|| auth_failure(AuthErrorKind::Unauthorized))?;
-    let user = state
+    let view = state
         .auth
-        .self_user(SecretString::from(token))
+        .self_user_view_for_optional(SecretString::from(token))
         .await
         .map_err(|error| auth_failure(error.kind))?;
-    if user.id <= 0 || user.status != ENABLED_USER_STATUS {
+    if view.id <= 0 || view.status != ENABLED_USER_STATUS {
         return Err(auth_failure(AuthErrorKind::Unauthorized));
     }
-    if user.role < ROLE_ADMIN {
+    if !view.developer_access_granted {
+        return Err(console_not_found());
+    }
+    if view.role < ROLE_ADMIN {
         return Err((
             StatusCode::FORBIDDEN,
             Json(FailureEnvelope {
@@ -4074,7 +4077,7 @@ async fn required_admin_id(
         )
             .into_response());
     }
-    Ok(user.id)
+    Ok(view.id)
 }
 
 fn project_select() -> &'static str {
@@ -5066,8 +5069,9 @@ async fn thank_tip(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{sync::Arc, time::Duration};
 
+    use async_trait::async_trait;
     use axum::{body::Body, http::Request};
     use base64::Engine;
     use secrecy::SecretString;
@@ -5079,7 +5083,122 @@ mod tests {
         NotificationQuery, OpenSourceBountyState, OwnedQuery, archive_status_is_final,
         challenge_priority, dashboard_token_candidate, parse_fee_rate_basis_points, router,
     };
-    use crate::auth::{AuthConfig, PgValkeyDashboardAuth};
+    use crate::auth::{
+        AuthBundle, AuthConfig, AuthError, AuthErrorKind, CriticalRateLimitOutcome, DashboardAuth,
+        DashboardSelfUserFacts, DashboardUser, DashboardUserView, LoginOutcome, LoginRequest,
+        LogoutRequest, LogoutResult, PgValkeyDashboardAuth, RequestMetadata, TwoFactorLoginRequest,
+    };
+
+    #[derive(Clone, Copy)]
+    struct StaticBountyAuth {
+        developer_access_granted: bool,
+    }
+
+    fn static_dashboard_user() -> DashboardUser {
+        DashboardUser {
+            id: 7,
+            username: "bounty-user".to_owned(),
+            display_name: "Bounty User".to_owned(),
+            role: 1,
+            status: 1,
+            email: "bounty@example.test".to_owned(),
+            github_id: String::new(),
+            discord_id: String::new(),
+            oidc_id: String::new(),
+            wechat_id: String::new(),
+            telegram_id: String::new(),
+            group: "default".to_owned(),
+            quota: 0,
+            used_quota: 0,
+            request_count: 0,
+            aff_code: String::new(),
+            aff_count: 0,
+            aff_quota: 0,
+            aff_history_quota: 0,
+            inviter_id: 0,
+            linux_do_id: String::new(),
+            setting: "{}".to_owned(),
+            stripe_customer: String::new(),
+            sidebar_modules: serde_json::json!({}),
+            permissions: serde_json::json!({}),
+        }
+    }
+
+    #[async_trait]
+    impl DashboardAuth for StaticBountyAuth {
+        async fn check_critical_rate_limit(
+            &self,
+            _: &str,
+        ) -> Result<CriticalRateLimitOutcome, AuthError> {
+            Ok(CriticalRateLimitOutcome::Allowed)
+        }
+
+        async fn login(
+            &self,
+            _: LoginRequest,
+            _: RequestMetadata,
+        ) -> Result<LoginOutcome, AuthError> {
+            Err(AuthError::new(AuthErrorKind::Unauthorized))
+        }
+
+        async fn login_2fa(
+            &self,
+            _: TwoFactorLoginRequest,
+            _: RequestMetadata,
+        ) -> Result<AuthBundle, AuthError> {
+            Err(AuthError::new(AuthErrorKind::Unauthorized))
+        }
+
+        async fn refresh(
+            &self,
+            _: SecretString,
+            _: Option<String>,
+            _: RequestMetadata,
+        ) -> Result<AuthBundle, AuthError> {
+            Err(AuthError::new(AuthErrorKind::Unauthorized))
+        }
+
+        async fn self_user(&self, _: SecretString) -> Result<DashboardUser, AuthError> {
+            Ok(static_dashboard_user())
+        }
+
+        async fn self_user_view_for_optional(
+            &self,
+            _: SecretString,
+        ) -> Result<DashboardUserView, AuthError> {
+            Ok(DashboardUserView::build(
+                static_dashboard_user(),
+                DashboardSelfUserFacts {
+                    paid_activation_complete: self.developer_access_granted,
+                    ..DashboardSelfUserFacts::default()
+                },
+            ))
+        }
+
+        async fn logout(&self, _: LogoutRequest) -> Result<LogoutResult, AuthError> {
+            Err(AuthError::new(AuthErrorKind::Unauthorized))
+        }
+
+        async fn generate_personal_access_token(
+            &self,
+            _: SecretString,
+        ) -> Result<String, AuthError> {
+            Err(AuthError::new(AuthErrorKind::Unauthorized))
+        }
+    }
+
+    fn access_test_router(developer_access_granted: bool) -> axum::Router {
+        let pg = PgPoolOptions::new()
+            .acquire_timeout(Duration::from_millis(10))
+            .connect_lazy("postgres://route-test:route-test@127.0.0.1:1/route_test")
+            .expect("lazy PostgreSQL pool");
+        router(OpenSourceBountyState::new(
+            pg,
+            Arc::new(StaticBountyAuth {
+                developer_access_granted,
+            }),
+        ))
+    }
 
     fn archive_test_router() -> axum::Router {
         let pg = PgPoolOptions::new()
@@ -5298,5 +5417,30 @@ mod tests {
             .expect("route response");
 
         assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn private_bounty_route_rejects_l0_and_reaches_handler_for_l1() {
+        let l0 = access_test_router(false)
+            .oneshot(
+                Request::post("/api/open-source-bounties/projects/not-an-id/publish")
+                    .header("authorization", "Bearer l0")
+                    .body(Body::empty())
+                    .expect("L0 request"),
+            )
+            .await
+            .expect("L0 response");
+        assert_eq!(l0.status(), axum::http::StatusCode::NOT_FOUND);
+
+        let l1 = access_test_router(true)
+            .oneshot(
+                Request::post("/api/open-source-bounties/projects/not-an-id/publish")
+                    .header("authorization", "Bearer l1")
+                    .body(Body::empty())
+                    .expect("L1 request"),
+            )
+            .await
+            .expect("L1 response");
+        assert_eq!(l1.status(), axum::http::StatusCode::OK);
     }
 }

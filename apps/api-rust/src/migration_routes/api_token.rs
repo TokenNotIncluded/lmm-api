@@ -35,6 +35,7 @@ const MAX_BATCH_KEYS: usize = 100;
 const MAX_TOKEN_NAME_BYTES: usize = 50;
 const DEFAULT_MAX_USER_TOKENS: i64 = 1_000;
 const DEFAULT_QUOTA_PER_UNIT: f64 = 500_000.0;
+const API_TOKEN_REQUEST_MAX_BYTES: usize = 512 * 1024;
 type HmacSha256 = Hmac<Sha256>;
 
 /// Set only by already-authenticated dashboard middleware.
@@ -88,7 +89,10 @@ pub fn api_token_router(state: ApiTokenHttpState) -> Router {
         .route("/api/token/batch/keys", post(batch_keys))
         .route("/api/token/{id}", get(detail).delete(remove))
         .route("/api/token/{id}/key", post(key))
-        .layer(DefaultBodyLimit::disable());
+        // Token mutation handlers intentionally extract raw `Bytes` to keep
+        // their legacy JSON error envelope. Keep that compatibility shape,
+        // but bound the allocation before extraction.
+        .layer(DefaultBodyLimit::max(API_TOKEN_REQUEST_MAX_BYTES));
     let router = if state.frozen_wire_errors {
         // The frozen 5418 router has no static auto-groups route, so its
         // dynamic `/:id` handler receives this path and returns the legacy
@@ -2665,6 +2669,37 @@ mod tests {
                 "{language:?}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn unmounted_http_router_rejects_oversized_bytes_before_decode() {
+        use axum::{
+            body::Body,
+            http::{Request, StatusCode},
+        };
+        use tower::ServiceExt;
+
+        let service = Arc::new(PgValkeyApiTokenService::new(
+            PgPool::connect_lazy("postgres://127.0.0.1:1/unused").expect("lazy pool"),
+            redis::Client::open("redis://127.0.0.1/").expect("Valkey URL"),
+        ));
+        let router = api_token_router(ApiTokenHttpState::new(service));
+        let response = router
+            .oneshot(
+                Request::post("/api/token/")
+                    .extension(ApiTokenPrincipal {
+                        user_id: 7,
+                        role: 1,
+                        preferred_language: None,
+                    })
+                    .header("content-type", "application/json")
+                    .body(Body::from(vec![b'x'; API_TOKEN_REQUEST_MAX_BYTES + 1]))
+                    .expect("oversized request"),
+            )
+            .await
+            .expect("router is infallible");
+
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 
     #[tokio::test]

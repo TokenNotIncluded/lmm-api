@@ -775,9 +775,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Arc::new(HttpProjectUpdateClient::new(project_update_client)),
                     Arc::new(pancake),
                 )
+                .with_anonymous_body_limit_bytes(config.auth_anonymous_body_limit_bytes)
                 .with_runtime_writer(runtime_options.clone()),
             )
         };
+        let system_config = http::api_global_rate_limited_surface(&app_state, system_config);
         let extra_surface = identity_profile
             .merge(identity_catalog)
             .merge(admin_catalog)

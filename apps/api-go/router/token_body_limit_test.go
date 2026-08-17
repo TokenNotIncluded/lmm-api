@@ -130,3 +130,92 @@ func TestCompactOAuthRoutesRejectOversizedJSONBeforeAuthentication(t *testing.T)
 		require.Equalf(t, http.StatusRequestEntityTooLarge, response.Code, "path=%s", path)
 	}
 }
+
+func TestAuthenticatedSecurityAndBountyMutationsRejectOversizedJSON(t *testing.T) {
+	db := setupOpenSourceBountyAccessRouterTest(t)
+	levelOne := model.TrustLevelMinUser + 1
+	userToken := "authenticated-mutation-limit-user"
+	adminToken := "authenticated-mutation-limit-admin"
+	users := []model.User{
+		{
+			Username: "authenticated-mutation-limit-user", Password: "password-placeholder",
+			AffCode: "authenticated-mutation-limit-user", Group: "default",
+			Role: common.RoleCommonUser, Status: common.UserStatusEnabled,
+			AccessToken: &userToken, TrustLevelOverride: &levelOne,
+		},
+		{
+			Username: "authenticated-mutation-limit-admin", Password: "password-placeholder",
+			AffCode: "authenticated-mutation-limit-admin", Group: "default",
+			Role: common.RoleAdminUser, Status: common.UserStatusEnabled,
+			AccessToken: &adminToken,
+		},
+	}
+	for index := range users {
+		require.NoError(t, db.Create(&users[index]).Error)
+	}
+
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	SetApiRouter(engine)
+
+	securityRoutes := []struct {
+		method string
+		path   string
+		limit  int
+		token  string
+	}{
+		{method: http.MethodPost, path: "/api/verify", limit: securityFactorMutationRequestMaxBytes, token: userToken},
+		{method: http.MethodPut, path: "/api/user/setting", limit: userSelfMutationRequestMaxBytes, token: userToken},
+		{method: http.MethodPost, path: "/api/user/passkey/register/begin", limit: passkeyBeginRequestMaxBytes, token: userToken},
+		{method: http.MethodPost, path: "/api/user/passkey/register/finish", limit: passkeyFinishRequestMaxBytes, token: userToken},
+		{method: http.MethodPost, path: "/api/user/passkey/verify/begin", limit: passkeyBeginRequestMaxBytes, token: userToken},
+		{method: http.MethodPost, path: "/api/user/passkey/verify/finish", limit: passkeyFinishRequestMaxBytes, token: userToken},
+		{method: http.MethodPost, path: "/api/user/2fa/setup", limit: securityFactorMutationRequestMaxBytes, token: userToken},
+		{method: http.MethodPost, path: "/api/user/2fa/enable", limit: securityFactorMutationRequestMaxBytes, token: userToken},
+		{method: http.MethodPost, path: "/api/user/2fa/disable", limit: securityFactorMutationRequestMaxBytes, token: userToken},
+		{method: http.MethodPost, path: "/api/user/2fa/backup_codes", limit: securityFactorMutationRequestMaxBytes, token: userToken},
+	}
+	for _, route := range securityRoutes {
+		t.Run(route.path, func(t *testing.T) {
+			body := `{"padding":"` + strings.Repeat("x", route.limit) + `"}`
+			request := httptest.NewRequest(route.method, route.path, strings.NewReader(body))
+			request.Header.Set("Authorization", "Bearer "+route.token)
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+
+			engine.ServeHTTP(response, request)
+
+			require.Equal(t, http.StatusRequestEntityTooLarge, response.Code)
+		})
+	}
+
+	bountyRoutes := []struct {
+		method string
+		path   string
+		token  string
+	}{
+		{method: http.MethodPost, path: "/api/open-source-bounties", token: userToken},
+		{method: http.MethodPut, path: "/api/open-source-bounties/projects/1", token: userToken},
+		{method: http.MethodPost, path: "/api/open-source-bounties/projects/1/accept", token: userToken},
+		{method: http.MethodPost, path: "/api/open-source-bounties/projects/1/submit", token: userToken},
+		{method: http.MethodPost, path: "/api/open-source-bounties/challenges/1/approve", token: userToken},
+		{method: http.MethodPost, path: "/api/open-source-bounties/challenges/1/reject", token: userToken},
+		{method: http.MethodPost, path: "/api/open-source-bounties/challenges/1/tip", token: userToken},
+		{method: http.MethodPost, path: "/api/open-source-bounties/challenges/1/rate-owner", token: userToken},
+		{method: http.MethodPost, path: "/api/open-source-bounties/challenges/1/disputes", token: userToken},
+		{method: http.MethodPost, path: "/api/open-source-bounties/disputes/1/resolve", token: adminToken},
+	}
+	for _, route := range bountyRoutes {
+		t.Run(route.path, func(t *testing.T) {
+			body := `{"padding":"` + strings.Repeat("x", openSourceBountyMutationRequestMaxBytes) + `"}`
+			request := httptest.NewRequest(route.method, route.path, strings.NewReader(body))
+			request.Header.Set("Authorization", "Bearer "+route.token)
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+
+			engine.ServeHTTP(response, request)
+
+			require.Equal(t, http.StatusRequestEntityTooLarge, response.Code)
+		})
+	}
+}
