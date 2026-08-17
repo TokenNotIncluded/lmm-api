@@ -10,6 +10,7 @@ import (
 	"github.com/LIghtJUNction/api.lmm.best/common"
 	"github.com/LIghtJUNction/api.lmm.best/i18n"
 	"github.com/LIghtJUNction/api.lmm.best/model"
+	"github.com/LIghtJUNction/api.lmm.best/service"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -136,6 +137,32 @@ func TestTelegramLoginStartPersistsBrowserBoundFlow(t *testing.T) {
 		Purpose: model.AuthFlowPurposeTelegramLogin, Provider: "telegram", Intent: model.AuthFlowIntentLogin,
 	})
 	require.NoError(t, err)
+}
+
+func TestOAuthBindRejectsLeakedStateWithoutBrowserCookie(t *testing.T) {
+	setupAuthFlowControllerTest(t)
+	user := &model.User{
+		Username: "oauth-bind-state-user", Password: "password-placeholder", Role: common.RoleCommonUser,
+		Status: common.UserStatusEnabled, Group: "default", AuthVersion: 1,
+	}
+	require.NoError(t, model.DB.Create(user).Error)
+	bundle, err := service.CreateLoginSession(user.Id, "password", "127.0.0.1", "oauth-bind-state-test")
+	require.NoError(t, err)
+	state, _, err := model.CreateAuthFlow(model.AuthFlowCreate{
+		Purpose: model.AuthFlowPurposeOAuth, Provider: "auth-flow-test", Intent: model.AuthFlowIntentBind,
+		UserId: user.Id, SessionId: bundle.Session.SID, ExpiresAt: time.Now().Add(time.Minute),
+	})
+	require.NoError(t, err)
+
+	router := gin.New()
+	router.GET("/api/oauth/:provider", HandleOAuth)
+	request := httptest.NewRequest(http.MethodGet, "/api/oauth/auth-flow-test?state="+state+"&error=access_denied", nil)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	assert.Equal(t, http.StatusForbidden, recorder.Code)
+	_, err = model.GetAuthFlow(state, model.AuthFlowMatch{Purpose: model.AuthFlowPurposeOAuth})
+	assert.NoError(t, err)
 }
 
 func TestTelegramLoginRejectsCallbackWithoutBrowserState(t *testing.T) {

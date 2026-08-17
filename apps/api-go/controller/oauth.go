@@ -189,7 +189,11 @@ func HandleOAuth(c *gin.Context) {
 		})
 		return
 	}
-	if pendingFlow.Intent == model.AuthFlowIntentLogin && !oauthStateCookieMatches(c, providerName, state) {
+	// Both login and binding callbacks must remain bound to the browser that
+	// started the flow. Bind flows also carry a server-side session reference,
+	// but that reference alone is a bearer capability if the state leaks through
+	// a provider redirect, history, or referrer.
+	if !oauthStateCookieMatches(c, providerName, state) {
 		c.JSON(http.StatusForbidden, gin.H{
 			"success": false,
 			"message": i18n.T(c, i18n.MsgOAuthStateInvalid),
