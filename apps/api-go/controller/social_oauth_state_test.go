@@ -110,6 +110,25 @@ func TestWeChatProviderErrorDoesNotEchoUpstreamMessage(t *testing.T) {
 	assert.NotEqual(t, providerMessage, response.Message)
 }
 
+func TestWeChatProviderResponseIsBounded(t *testing.T) {
+	previousAddress := common.WeChatServerAddress
+	previousToken := common.WeChatServerToken
+	provider := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"success":false,"message":"` + strings.Repeat("x", int(wechatProviderResponseMaxBytes)) + `"}`))
+	}))
+	common.WeChatServerAddress = provider.URL
+	common.WeChatServerToken = "wechat-test-token"
+	t.Cleanup(func() {
+		provider.Close()
+		common.WeChatServerAddress = previousAddress
+		common.WeChatServerToken = previousToken
+	})
+
+	_, err := getWeChatIdByCode("provider-code")
+	assert.ErrorIs(t, err, common.ErrLimitExceeded)
+}
+
 func TestTelegramLoginStartPersistsBrowserBoundFlow(t *testing.T) {
 	setupAuthFlowControllerTest(t)
 	previousEnabled := common.TelegramOAuthEnabled

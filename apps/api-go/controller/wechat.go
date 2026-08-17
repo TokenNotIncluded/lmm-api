@@ -21,6 +21,10 @@ type wechatLoginResponse struct {
 	Data    string `json:"data"`
 }
 
+// The WeChat identity response is a small fixed-shape JSON document. Keep
+// provider-controlled error text bounded before json.Decoder can buffer it.
+const wechatProviderResponseMaxBytes int64 = 64 << 10
+
 type wechatLoginStartRequest struct {
 	AcceptedLegal bool `json:"accepted_legal"`
 }
@@ -86,6 +90,9 @@ func getWeChatIdByCode(code string) (string, error) {
 		return "", err
 	}
 	defer httpResponse.Body.Close()
+	if err := common.LimitResponseBody(httpResponse, wechatProviderResponseMaxBytes); err != nil {
+		return "", err
+	}
 	var res wechatLoginResponse
 	err = common.DecodeJson(httpResponse.Body, &res)
 	if err != nil {

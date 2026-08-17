@@ -174,7 +174,7 @@ export function UnifiedTodoList() {
             type='button'
             variant='link'
             size='sm'
-            className='ml-auto h-auto px-0'
+            className='ml-auto h-auto min-h-11 px-0 sm:min-h-7'
             disabled={markAll.isPending}
             onClick={() => markAll.mutate()}
           >

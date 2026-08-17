@@ -169,6 +169,11 @@ describe('UnifiedTodoList interaction', () => {
       assert.equal(allCategory?.getAttribute('aria-pressed'), 'true')
       assert.equal(bountyCategory?.getAttribute('aria-pressed'), 'false')
       assert.ok(allCategory?.classList.contains('min-h-11'))
+      const markAll = [...rendered.container.querySelectorAll('button')].find(
+        (candidate) => candidate.textContent?.includes('Mark all as read')
+      )
+      assert.ok(markAll)
+      assert.ok(markAll.classList.contains('min-h-11'))
 
       const row = [...rendered.container.querySelectorAll('button')].find(
         (candidate) =>
