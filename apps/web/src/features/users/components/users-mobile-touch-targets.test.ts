@@ -31,5 +31,9 @@ describe('mobile user actions', () => {
       source('user-assistant-review-dialog.tsx'),
       /className='min-h-11 sm:min-h-7'/
     )
+    assert.match(
+      source('users-primary-buttons.tsx'),
+      /className='min-h-11 sm:min-h-7'/
+    )
   })
 })
