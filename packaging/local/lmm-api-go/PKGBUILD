@@ -1,6 +1,6 @@
 # Maintainer: LMM API maintainers
 
-pkgname=lmm-api-go
+pkgname=lmm-api-go-bin
 pkgver="${LMM_API_PKGVER:-0.1.6}"
 pkgrel="${LMM_API_PKGREL:-1}"
 pkgdesc='LMM API Go backend, native CLI, systemd service, and web frontend (local build)'
@@ -12,7 +12,8 @@ optdepends=(
   'postgresql: production database'
   'valkey: cache, rate limiting, and login sessions'
 )
-conflicts=('lmm-api' 'lmm-api-bin' 'lmm-api-git' 'lmm-api-go-bin' 'lmm-api-go-git')
+provides=('lmm-api-go')
+conflicts=('lmm-api' 'lmm-api-bin' 'lmm-api-git' 'lmm-api-go' 'lmm-api-go-git')
 backup=('etc/lmm-api-go/lmm-api-go.env')
 options=('!strip')
 source=(
