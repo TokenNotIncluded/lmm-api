@@ -202,17 +202,44 @@ export async function createOAuthFlow(
   throw new Error(res.data?.message || 'Failed to initialize OAuth')
 }
 
-// WeChat login by authorization code
-export async function wechatLoginByCode(code: string): Promise<ApiResponse> {
-  const res = await api.get('/api/oauth/wechat', { params: { code } })
+// Start a browser-bound WeChat login flow before submitting the provider code.
+export async function startWechatLogin(acceptedLegal = false): Promise<string> {
+  const res = await api.post(
+    '/api/oauth/wechat/start',
+    { accepted_legal: acceptedLegal },
+    { skipAuthRefresh: true }
+  )
+  if (res.data?.success && typeof res.data.data?.flow_token === 'string') {
+    return res.data.data.flow_token
+  }
+  throw new Error(res.data?.message || 'Failed to initialize WeChat login')
+}
+
+// WeChat login by authorization code and browser-bound state.
+export async function wechatLoginByCode(
+  code: string,
+  state: string
+): Promise<ApiResponse> {
+  const res = await api.get('/api/oauth/wechat', { params: { code, state } })
   return res.data
 }
 
+export async function startTelegramLogin(): Promise<string> {
+  const res = await api.post('/api/oauth/telegram/login/start', undefined, {
+    skipAuthRefresh: true,
+  })
+  if (res.data?.success && typeof res.data.data?.flow_token === 'string') {
+    return res.data.data.flow_token
+  }
+  throw new Error(res.data?.message || 'Failed to initialize Telegram login')
+}
+
 export async function telegramLogin(
-  authorization: TelegramAuthorization
+  authorization: TelegramAuthorization,
+  state: string
 ): Promise<ApiResponse> {
   const res = await api.get('/api/oauth/telegram/login', {
-    params: authorization,
+    params: { ...authorization, state },
     disableDuplicate: true,
     skipAuthRefresh: true,
     skipBusinessError: true,

@@ -40,7 +40,7 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { login, wechatLoginByCode } from '@/features/auth/api'
+import { login, startWechatLogin, wechatLoginByCode } from '@/features/auth/api'
 import { LegalConsent } from '@/features/auth/components/legal-consent'
 import { OAuthProviders } from '@/features/auth/components/oauth-providers'
 import { loginFormSchema } from '@/features/auth/constants'
@@ -70,6 +70,7 @@ export function UserAuthForm({
   const { t } = useTranslation()
   const [isLoading, setIsLoading] = useState(false)
   const [wechatCode, setWeChatCode] = useState('')
+  const [wechatFlowToken, setWeChatFlowToken] = useState('')
   const [agreedToLegal, setAgreedToLegal] = useState(false)
   const [passkeySupported, setPasskeySupported] = useState(false)
   const [isPasskeyLoading, setIsPasskeyLoading] = useState(false)
@@ -186,32 +187,42 @@ export function UserAuthForm({
     }
   }
 
-  const handleOpenWeChatDialog = () => {
+  const handleOpenWeChatDialog = async () => {
     if (requiresLegalConsent && !agreedToLegal) {
       toast.error(legalConsentErrorMessage)
       return
     }
 
-    setIsWeChatDialogOpen(true)
+    setIsWeChatSubmitting(true)
+    try {
+      const flowToken = await startWechatLogin(agreedToLegal)
+      setWeChatFlowToken(flowToken)
+      setIsWeChatDialogOpen(true)
+    } catch {
+      toast.error(loginFailedMessage)
+    } finally {
+      setIsWeChatSubmitting(false)
+    }
   }
 
   const handleWeChatDialogChange = (open: boolean) => {
     setIsWeChatDialogOpen(open)
     if (!open) {
       setWeChatCode('')
+      setWeChatFlowToken('')
       setIsWeChatSubmitting(false)
     }
   }
 
   async function handleWeChatLogin() {
-    if (!wechatCode.trim()) {
+    if (!wechatCode.trim() || !wechatFlowToken) {
       toast.error(t('Please enter the verification code'))
       return
     }
 
     setIsWeChatSubmitting(true)
     try {
-      const res = await wechatLoginByCode(wechatCode)
+      const res = await wechatLoginByCode(wechatCode, wechatFlowToken)
       if (res?.success && isAuthBundle(res.data)) {
         await handleLoginSuccess(res.data, redirectTo)
         toast.success(t('Signed in via WeChat'))

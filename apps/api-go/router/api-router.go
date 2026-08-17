@@ -144,8 +144,10 @@ func SetApiRouter(router *gin.Engine) {
 		// arbitrarily long string field.
 		apiRouter.POST("/oauth/email/bind", middleware.RequestBodyLimit(userSelfMutationRequestMaxBytes), middleware.UserAuth(), middleware.CriticalRateLimit(), controller.EmailBind)
 		// Non-standard OAuth (WeChat, Telegram) - keep original routes
+		apiRouter.POST("/oauth/wechat/start", middleware.RequestBodyLimit(compactOAuthRequestMaxBytes), middleware.CriticalRateLimit(), middleware.DisableCache(), middleware.TryUserAuth(), controller.WeChatAuthStart)
 		apiRouter.GET("/oauth/wechat", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.WeChatAuth)
 		apiRouter.POST("/oauth/wechat/bind", middleware.RequestBodyLimit(compactOAuthRequestMaxBytes), middleware.UserAuth(), middleware.CriticalRateLimit(), controller.WeChatBind)
+		apiRouter.POST("/oauth/telegram/login/start", middleware.RequestBodyLimit(compactOAuthRequestMaxBytes), middleware.CriticalRateLimit(), middleware.DisableCache(), middleware.TryUserAuth(), controller.TelegramLoginStart)
 		apiRouter.GET("/oauth/telegram/login", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.TelegramLogin)
 		apiRouter.POST("/oauth/telegram/bind/start", middleware.RequestBodyLimit(compactOAuthRequestMaxBytes), middleware.UserAuth(), middleware.CriticalRateLimit(), middleware.DisableCache(), controller.TelegramBindStart)
 		apiRouter.GET("/oauth/telegram/bind/:flow_token", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.TelegramBind)
@@ -182,6 +184,11 @@ func SetApiRouter(router *gin.Engine) {
 			userRoute.POST("/epay/notify", anonymousRequestBodyLimit, controller.EpayNotify)
 			userRoute.GET("/epay/notify", controller.EpayNotify)
 			userRoute.GET("/groups", controller.GetUserGroups)
+			// These self-service mutations accept bounded text fields. Keep the
+			// body ceiling ahead of authentication so oversized requests cannot
+			// consume auth work or reach JSON decoding.
+			userRoute.POST("/account-action-requests", middleware.CriticalRateLimit(), middleware.DisableCache(), middleware.DecompressRequestMiddleware(), middleware.RequestBodyLimit(userSelfMutationRequestMaxBytes), middleware.UserAuth(), controller.SubmitAccountActionRequest)
+			userRoute.POST("/violation-fee-appeals", middleware.CriticalRateLimit(), middleware.DisableCache(), middleware.DecompressRequestMiddleware(), middleware.RequestBodyLimit(userSelfMutationRequestMaxBytes), middleware.UserAuth(), controller.SubmitViolationFeeAppeal)
 
 			selfRoute := userRoute.Group("/")
 			selfRoute.Use(middleware.UserAuth())
@@ -200,9 +207,7 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.GET("/developer-access/request", controller.GetDeveloperAccessRequest)
 				selfRoute.POST("/developer-access/request", middleware.CriticalRateLimit(), middleware.DecompressRequestMiddleware(), middleware.RequestBodyLimit(userSelfMutationRequestMaxBytes), controller.SubmitDeveloperAccessRequest)
 				selfRoute.GET("/account-action-requests/appeal", middleware.DisableCache(), controller.GetAccountAppeal)
-				selfRoute.POST("/account-action-requests", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.SubmitAccountActionRequest)
 				selfRoute.GET("/violation-fees", middleware.DisableCache(), controller.ListSelfViolationFeeRecords)
-				selfRoute.POST("/violation-fee-appeals", middleware.CriticalRateLimit(), middleware.DisableCache(), controller.SubmitViolationFeeAppeal)
 				selfRoute.PUT("/self", middleware.CriticalRateLimit(), middleware.DisableCache(), middleware.DecompressRequestMiddleware(), middleware.RequestBodyLimit(userSelfMutationRequestMaxBytes), controller.UpdateSelf)
 				selfRoute.DELETE("/self", controller.DeleteSelf)
 				selfRoute.GET("/token", middleware.CriticalRateLimit(), middleware.UserCriticalRateLimit("access-token"), middleware.DisableCache(), controller.GenerateAccessToken)

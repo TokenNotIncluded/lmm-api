@@ -20,6 +20,7 @@ import { Link } from '@tanstack/react-router'
 import { useEffect } from 'react'
 
 import { AccessRestrictionNotice } from '@/components/access-restriction-notice'
+import { LanguageSwitcher } from '@/components/language-switcher'
 import { LmmBrandMark } from '@/components/lmm-brand-mark'
 import { ThemeSwitch } from '@/components/theme-switch'
 
@@ -50,7 +51,10 @@ export function AuthLayout({ children }: AuthLayoutProps) {
           <LmmBrandMark className='size-8' title='LMM Forge' />
           <h1 className='text-lg font-medium sm:text-xl'>LMM Forge</h1>
         </Link>
-        <ThemeSwitch />
+        <div className='flex items-center gap-1'>
+          <LanguageSwitcher />
+          <ThemeSwitch />
+        </div>
       </header>
       <div className='grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] lg:col-start-1 lg:h-full'>
         <div className='container min-h-0 overflow-y-auto lg:pt-24'>

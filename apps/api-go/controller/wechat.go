@@ -21,6 +21,54 @@ type wechatLoginResponse struct {
 	Data    string `json:"data"`
 }
 
+type wechatLoginStartRequest struct {
+	AcceptedLegal bool `json:"accepted_legal"`
+}
+
+// WeChatAuthStart creates browser-bound state before the code is submitted.
+// The WeChat verification code itself is not signed by this application, so
+// the state cookie and one-time AuthFlow are the only local CSRF boundary.
+func WeChatAuthStart(c *gin.Context) {
+	if !common.WeChatAuthEnabled {
+		c.JSON(http.StatusOK, gin.H{
+			"message": "管理员未开启通过微信登录以及注册",
+			"success": false,
+		})
+		return
+	}
+	var request wechatLoginStartRequest
+	if err := common.DecodeJson(c.Request.Body, &request); err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	payload, err := common.Marshal(oauthFlowPayload{AcceptedLegal: request.AcceptedLegal})
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	expiresAt := time.Now().Add(oauthAuthFlowTTL)
+	state, _, err := model.CreateAuthFlow(model.AuthFlowCreate{
+		Purpose:   model.AuthFlowPurposeWeChatLogin,
+		Provider:  "wechat",
+		Intent:    model.AuthFlowIntentLogin,
+		Payload:   string(payload),
+		ExpiresAt: expiresAt,
+	})
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	setOAuthStateCookie(c, "wechat", state)
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+		"data": gin.H{
+			"flow_token": state,
+			"expires_at": expiresAt.Unix(),
+		},
+	})
+}
+
 func getWeChatIdByCode(code string) (string, error) {
 	if code == "" {
 		return "", errors.New("无效的参数")
@@ -60,6 +108,14 @@ func WeChatAuth(c *gin.Context) {
 		})
 		return
 	}
+	state := c.Query("state")
+	if !oauthStateCookieMatches(c, "wechat", state) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"success": false,
+			"message": i18n.T(c, i18n.MsgOAuthStateInvalid),
+		})
+		return
+	}
 	code := c.Query("code")
 	wechatId, err := getWeChatIdByCode(code)
 	if err != nil {
@@ -69,7 +125,25 @@ func WeChatAuth(c *gin.Context) {
 		})
 		return
 	}
-	user, ok := findOrCreateWeChatUser(c, wechatId, c.Query("accepted_legal") == "true")
+	flow, err := model.ConsumeAuthFlow(state, model.AuthFlowMatch{
+		Purpose:  model.AuthFlowPurposeWeChatLogin,
+		Provider: "wechat",
+		Intent:   model.AuthFlowIntentLogin,
+	})
+	if err != nil {
+		c.JSON(http.StatusForbidden, gin.H{
+			"success": false,
+			"message": i18n.T(c, i18n.MsgOAuthStateInvalid),
+		})
+		return
+	}
+	clearOAuthStateCookie(c, "wechat")
+	var payload oauthFlowPayload
+	if err := common.UnmarshalJsonStr(flow.Payload, &payload); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	user, ok := findOrCreateWeChatUser(c, wechatId, payload.AcceptedLegal)
 	if !ok {
 		return
 	}

@@ -102,6 +102,24 @@ func TestEmailBindRouteRejectsOversizedJSONBeforeAuthentication(t *testing.T) {
 	require.Equal(t, http.StatusRequestEntityTooLarge, response.Code)
 }
 
+func TestSelfAccountActionMutationsRejectOversizedJSONBeforeAuthentication(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	SetApiRouter(engine)
+	body := `{"reason":"` + strings.Repeat("x", userSelfMutationRequestMaxBytes) + `"}`
+
+	for _, path := range []string{"/api/user/account-action-requests", "/api/user/violation-fee-appeals"} {
+		t.Run(path, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+			response := httptest.NewRecorder()
+
+			engine.ServeHTTP(response, request)
+
+			require.Equal(t, http.StatusRequestEntityTooLarge, response.Code)
+		})
+	}
+}
+
 func TestAdvancedSecuritySettingsRejectOversizedPolicyBeforeAuthentication(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()

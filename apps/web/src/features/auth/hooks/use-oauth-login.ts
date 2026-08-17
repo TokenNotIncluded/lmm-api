@@ -22,7 +22,12 @@ import { toast } from 'sonner'
 
 import { clearAuthentication, isAuthBundle } from '@/lib/api'
 
-import { createOAuthFlow, logout, telegramLogin } from '../api'
+import {
+  createOAuthFlow,
+  logout,
+  startTelegramLogin,
+  telegramLogin,
+} from '../api'
 import {
   buildGitHubOAuthUrl,
   buildDiscordOAuthUrl,
@@ -46,6 +51,7 @@ export function useOAuthLogin(
   const [isLoading, setIsLoading] = useState(false)
   const [isTelegramDialogOpen, setIsTelegramDialogOpen] = useState(false)
   const [isTelegramPending, setIsTelegramPending] = useState(false)
+  const [telegramFlowToken, setTelegramFlowToken] = useState('')
   const [githubButtonText, setGithubButtonText] = useState('')
   const [githubButtonDisabled, setGithubButtonDisabled] = useState(false)
   const githubTimeoutRef = useRef<NodeJS.Timeout | null>(null)
@@ -169,6 +175,8 @@ export function useOAuthLogin(
     setIsLoading(true)
     try {
       await resetSession()
+      const flowToken = await startTelegramLogin()
+      setTelegramFlowToken(flowToken)
       setIsTelegramDialogOpen(true)
     } catch {
       toast.error(
@@ -186,20 +194,34 @@ export function useOAuthLogin(
       return
     }
 
+    if (!telegramFlowToken) {
+      toast.error(t('Login failed'))
+      return
+    }
+
     setIsTelegramPending(true)
     try {
-      const response = await telegramLogin(authorization)
+      const response = await telegramLogin(authorization, telegramFlowToken)
       if (!response.success || !isAuthBundle(response.data)) {
         toast.error(t('Login failed'))
         return
       }
 
       setIsTelegramDialogOpen(false)
+      setTelegramFlowToken('')
       await handleLoginSuccess(response.data, redirectTo)
       toast.success(t('Welcome back!'))
     } catch {
       toast.error(t('Login failed'))
     } finally {
+      setIsTelegramPending(false)
+    }
+  }
+
+  const handleTelegramDialogChange = (open: boolean) => {
+    setIsTelegramDialogOpen(open)
+    if (!open) {
+      setTelegramFlowToken('')
       setIsTelegramPending(false)
     }
   }
@@ -244,7 +266,7 @@ export function useOAuthLogin(
     handleLinuxDOLogin,
     handleTelegramLogin,
     handleTelegramAuthorization,
-    setIsTelegramDialogOpen,
+    handleTelegramDialogChange,
     handleCustomOAuthLogin,
   }
 }

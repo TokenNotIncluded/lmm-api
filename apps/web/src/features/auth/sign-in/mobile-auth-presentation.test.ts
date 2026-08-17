@@ -34,6 +34,7 @@ describe('mobile sign-in presentation', () => {
     assert.match(authLayout, /h-dvh/)
     assert.match(authLayout, /lg:absolute/)
     assert.match(authLayout, /max-w-md/)
+    assert.match(authLayout, /<LanguageSwitcher \/>/)
     assert.match(providers, /IconGoogle/)
     assert.match(providers, /Continue with Google/)
     assert.match(providers, /t\('Or'\)/)

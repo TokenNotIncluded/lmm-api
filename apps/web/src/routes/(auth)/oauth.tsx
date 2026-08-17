@@ -40,7 +40,7 @@ function OAuthComponent() {
     ;(async () => {
       try {
         if (search?.provider === 'wechat' && search.code) {
-          const res = await wechatLoginByCode(search.code)
+          const res = await wechatLoginByCode(search.code, search.state ?? '')
           if (res?.success && isAuthBundle(res.data)) {
             applyAuthBundle(res.data)
             const target =

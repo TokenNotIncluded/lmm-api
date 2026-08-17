@@ -867,7 +867,13 @@ func financeUsersHandler(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	common.ApiSuccess(c, gin.H{"range": view.Range, "users": view.Users})
+	common.ApiSuccess(c, gin.H{
+		"range":                  view.Range,
+		"users":                  view.Users,
+		"user_metrics_complete":  view.UserMetricsComplete,
+		"user_metrics_truncated": view.UserMetricsTruncated,
+		"user_metrics_limit":     view.UserMetricsLimit,
+	})
 }
 
 func financeUserHandler(c *gin.Context) {

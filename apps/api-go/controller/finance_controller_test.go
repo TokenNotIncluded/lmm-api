@@ -427,6 +427,40 @@ func TestFinanceHandlersRequireAdminRouteContractAndReturnUserDetail(t *testing.
 	require.Equal(t, int64(3_500_000), response.Data.RevenueMicros)
 }
 
+func TestFinanceUsersExposeBoundedMetricsMetadata(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}, &model.SubscriptionOrder{}, &model.Log{}, &model.FinanceLedgerEntry{}, &model.FinancePaymentMethod{}))
+	user := model.User{Username: "finance-users-metadata", Password: "password", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "finance-users-metadata"}
+	require.NoError(t, db.Create(&user).Error)
+	now := time.Now().Unix()
+	require.NoError(t, db.Create(&model.TopUp{
+		UserId: user.Id, TradeNo: "finance-users-metadata-topup", Money: 1,
+		Status: common.TopUpStatusSuccess, PaymentMethod: model.PaymentMethodStripe,
+		PaymentProvider: model.PaymentProviderStripe, CompleteTime: now - 1,
+	}).Error)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/finance/users", nil)
+	GetFinanceUsers(c)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Users                []financeUserMetric `json:"users"`
+			UserMetricsComplete  bool                `json:"user_metrics_complete"`
+			UserMetricsTruncated bool                `json:"user_metrics_truncated"`
+			UserMetricsLimit     int                 `json:"user_metrics_limit"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+	require.True(t, response.Success)
+	require.Len(t, response.Data.Users, 1)
+	require.True(t, response.Data.UserMetricsComplete)
+	require.False(t, response.Data.UserMetricsTruncated)
+	require.Equal(t, financeDashboardMaxUserMetrics, response.Data.UserMetricsLimit)
+}
+
 func TestFinanceOverviewRejectsInvalidUserFilter(t *testing.T) {
 	for _, rawUserID := range []string{"abc", "0", "-1"} {
 		t.Run(rawUserID, func(t *testing.T) {

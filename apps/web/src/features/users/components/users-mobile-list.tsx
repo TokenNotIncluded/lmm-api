@@ -186,6 +186,36 @@ function UserMobileRow({ row }: { row: Row<User> }) {
           <div className='text-muted-foreground mt-0.5 truncate text-xs tabular-nums'>
             {formatQuota(topup?.quota ?? 0)} · {topup?.orders ?? 0}
           </div>
+          {topup?.methods && topup.methods.length > 0 ? (
+            <details className='mt-1 text-xs'>
+              <summary className='text-muted-foreground inline-flex min-h-11 cursor-pointer items-center py-2 underline decoration-dotted underline-offset-2'>
+                {t('Payment method')} · {topup.methods.length}
+              </summary>
+              <div className='border-muted-foreground/30 mt-1 space-y-1 border-l pl-2'>
+                {topup.methods.map((method) => {
+                  const label = [method.method.trim(), method.provider?.trim()]
+                    .filter(Boolean)
+                    .join(' · ')
+                  return (
+                    <div
+                      key={`${label}-${method.orders}`}
+                      className='flex min-w-0 items-baseline justify-between gap-2'
+                    >
+                      <span className='min-w-0 truncate'>{label || '—'}</span>
+                      <span className='shrink-0 text-right tabular-nums'>
+                        {formatBillingCurrencyFromUSD(
+                          method.money_micros / 1_000_000
+                        )}
+                        <span className='text-muted-foreground block text-[11px]'>
+                          {formatQuota(method.quota)} · {method.orders}
+                        </span>
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            </details>
+          ) : null}
         </MobileMetric>
       </div>
 

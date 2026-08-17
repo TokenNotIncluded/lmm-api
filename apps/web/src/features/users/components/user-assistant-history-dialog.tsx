@@ -63,6 +63,7 @@ export function UserAssistantHistoryDialog(props: { user: User }) {
         type='button'
         variant='outline'
         size='sm'
+        className='min-h-11 sm:min-h-7'
         onClick={() => setOpen(true)}
         aria-label={`${t('Support conversations')}: ${count}`}
       >

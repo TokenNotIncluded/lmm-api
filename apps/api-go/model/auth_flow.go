@@ -20,6 +20,8 @@ const (
 	AuthFlowPurposePasskeyLogin      = "passkey_login"
 	AuthFlowPurposePasskeyRegister   = "passkey_register"
 	AuthFlowPurposePasskeyStepUp     = "passkey_step_up"
+	AuthFlowPurposeWeChatLogin       = "wechat_login"
+	AuthFlowPurposeTelegramLogin     = "telegram_login"
 	AuthFlowPurposeTelegramBind      = "telegram_bind"
 	AuthFlowPurposeTelegramAssertion = "telegram_assertion"
 	AuthFlowPurposeAssistantL1       = "assistant_l1_recommendation"

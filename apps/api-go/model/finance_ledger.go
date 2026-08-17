@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LIghtJUNction/api.lmm.best/common"
 	"gorm.io/gorm"
 )
 
@@ -79,6 +80,14 @@ func normalizeFinanceEntry(entry *FinanceLedgerEntry) error {
 	entry.SourceId = strings.TrimSpace(entry.SourceId)
 	entry.Note = strings.TrimSpace(entry.Note)
 	entry.IdempotencyKey = strings.TrimSpace(entry.IdempotencyKey)
+	if entry.IdempotencyKey == "" {
+		// The database keeps this column unique so supplied keys can make
+		// webhook retries idempotent. An omitted key still means "no caller
+		// supplied idempotency", not "reuse the empty string": generating an
+		// internal key prevents the second unkeyed manual expense from failing
+		// on that unique index while preserving explicit-key replay semantics.
+		entry.IdempotencyKey = "finance:auto:" + common.NewRequestId()
+	}
 	if entry.Currency == "" {
 		entry.Currency = FinanceCurrencyUSD
 	}

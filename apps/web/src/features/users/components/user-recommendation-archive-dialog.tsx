@@ -76,6 +76,7 @@ export function UserRecommendationArchiveDialog(props: { user: User }) {
         type='button'
         variant='ghost'
         size='icon-sm'
+        className='size-11 sm:size-7'
         aria-label={t('View L1 recommendation archive')}
         onClick={() => setOpen(true)}
       >

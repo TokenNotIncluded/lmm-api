@@ -95,7 +95,7 @@ export function OAuthProviders({
     isTelegramDialogOpen,
     isTelegramPending,
     handleTelegramAuthorization,
-    setIsTelegramDialogOpen,
+    handleTelegramDialogChange,
   } = useOAuthLogin(status, redirectTo, acceptedLegal)
 
   const providerButtons: ProviderButton[] = []
@@ -279,7 +279,7 @@ export function OAuthProviders({
         open={isTelegramDialogOpen}
         botName={status?.telegram_bot_name ?? ''}
         pending={isTelegramPending}
-        onOpenChange={setIsTelegramDialogOpen}
+        onOpenChange={handleTelegramDialogChange}
         onAuthorization={handleTelegramAuthorization}
       />
     </>

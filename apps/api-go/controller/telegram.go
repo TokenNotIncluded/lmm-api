@@ -45,6 +45,39 @@ var (
 	errTelegramBindUserDisabled     = errors.New("telegram bind user is disabled")
 )
 
+// TelegramLoginStart creates a one-time browser-bound state for the legacy
+// Telegram widget. The widget signs its own fields, but it has no application
+// nonce, so the state cookie and AuthFlow close the login-CSRF gap.
+func TelegramLoginStart(c *gin.Context) {
+	if !common.TelegramOAuthEnabled {
+		c.JSON(http.StatusOK, gin.H{
+			"message": "管理员未开启通过 Telegram 登录以及注册",
+			"success": false,
+		})
+		return
+	}
+	expiresAt := time.Now().Add(telegramBindFlowTTL)
+	state, _, err := model.CreateAuthFlow(model.AuthFlowCreate{
+		Purpose:   model.AuthFlowPurposeTelegramLogin,
+		Provider:  "telegram",
+		Intent:    model.AuthFlowIntentLogin,
+		ExpiresAt: expiresAt,
+	})
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	setOAuthStateCookie(c, "telegram", state)
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+		"data": gin.H{
+			"flow_token": state,
+			"expires_at": expiresAt.Unix(),
+		},
+	})
+}
+
 func TelegramBindStart(c *gin.Context) {
 	if !common.TelegramOAuthEnabled {
 		c.JSON(http.StatusOK, gin.H{
@@ -242,7 +275,20 @@ func TelegramLogin(c *gin.Context) {
 		return
 	}
 	params := c.Request.URL.Query()
-	telegramId, err := verifyTelegramAuthorization(params, common.TelegramBotToken, time.Now())
+	state := strings.TrimSpace(params.Get("state"))
+	if !oauthStateCookieMatches(c, "telegram", state) {
+		c.JSON(http.StatusForbidden, gin.H{
+			"message": "无效的登录状态",
+			"success": false,
+		})
+		return
+	}
+	telegramParams := make(url.Values, len(params))
+	for key, values := range params {
+		telegramParams[key] = append([]string(nil), values...)
+	}
+	telegramParams.Del("state")
+	telegramId, err := verifyTelegramAuthorization(telegramParams, common.TelegramBotToken, time.Now())
 	if err != nil {
 		common.SysLog("TelegramLogin authorization failed: " + err.Error())
 		c.JSON(200, gin.H{
@@ -260,14 +306,31 @@ func TelegramLogin(c *gin.Context) {
 		})
 		return
 	}
-	if err := claimTelegramAuthorization(params, time.Now()); err != nil {
-		common.SysLog("TelegramLogin assertion replay rejected: " + err.Error())
+	assertion, assertionExpiresAt, err := telegramAuthorizationClaim(telegramParams, time.Now())
+	if err != nil {
+		common.SysLog("TelegramLogin authorization claim failed: " + err.Error())
 		c.JSON(http.StatusForbidden, gin.H{
-			"message": "该登录凭据已被使用",
+			"message": "无效的登录凭据",
 			"success": false,
 		})
 		return
 	}
+	_, err = model.ConsumeAuthFlowWithAction(state, model.AuthFlowMatch{
+		Purpose:  model.AuthFlowPurposeTelegramLogin,
+		Provider: "telegram",
+		Intent:   model.AuthFlowIntentLogin,
+	}, func(tx *gorm.DB, _ *model.AuthFlow) error {
+		return model.ClaimExternalAuthAssertionWithTx(tx, model.AuthFlowPurposeTelegramAssertion, assertion, assertionExpiresAt)
+	})
+	if err != nil {
+		common.SysLog("TelegramLogin assertion replay rejected: " + err.Error())
+		c.JSON(http.StatusForbidden, gin.H{
+			"message": "该登录状态或凭据已被使用",
+			"success": false,
+		})
+		return
+	}
+	clearOAuthStateCookie(c, "telegram")
 	setupLogin(&user, c)
 }
 

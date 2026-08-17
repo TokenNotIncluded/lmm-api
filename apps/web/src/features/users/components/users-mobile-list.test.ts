@@ -21,4 +21,11 @@ describe('UsersMobileList email presentation', () => {
     assert.match(source, /title=\{email \|\| t\('No email provided'\)\}/)
     assert.doesNotMatch(source, /mt-1 truncate text-xs/)
   })
+
+  test('exposes payment-method top-up details on touch devices', () => {
+    assert.match(source, /topup\.methods\.map\(\(method\)/)
+    assert.match(source, /formatBillingCurrencyFromUSD\(/)
+    assert.match(source, /formatQuota\(method\.quota\)/)
+    assert.match(source, /min-h-11 cursor-pointer/)
+  })
 })

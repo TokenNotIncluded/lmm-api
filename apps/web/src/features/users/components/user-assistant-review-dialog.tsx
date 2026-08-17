@@ -101,6 +101,7 @@ export function UserAssistantReviewDialog(props: { user: User }) {
         type='button'
         variant={count > 0 ? 'destructive' : 'outline'}
         size='sm'
+        className='min-h-11 sm:min-h-7'
         onClick={() => handleOpenChange(true)}
         aria-label={`${t('Violations')}: ${count}`}
       >

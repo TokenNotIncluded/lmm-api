@@ -150,6 +150,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
             <Button
               variant='ghost'
               size='icon-sm'
+              className='size-11 sm:size-7'
               onClick={handleEdit}
               aria-label={t('Edit')}
             />
