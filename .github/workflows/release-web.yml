@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'web-v*.*.*'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -18,7 +19,10 @@ env:
 jobs:
   web:
     name: Test, build, sign, and publish web package
-    if: ${{ github.ref_protected }}
+    # The identity step below is the security gate: it requires the tag to
+    # resolve to an immutable commit reachable from the default branch. GitHub
+    # does not mark ordinary release tags as protected, so ref_protected would
+    # silently skip every tag-triggered publication.
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:

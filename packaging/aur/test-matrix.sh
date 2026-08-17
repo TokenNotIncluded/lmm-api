@@ -104,6 +104,17 @@ fi
 if grep -Eq 'systemctl (restart|reload) lmm-api' "$HERE/lmm-api-web-bin/lmm-api-web-activate"; then
   die 'web package activation controls the backend service'
 fi
+web_release_workflow="$ROOT/.github/workflows/release-web.yml"
+[[ -f $web_release_workflow ]] || die 'web release workflow is missing'
+grep -Fq '  workflow_dispatch:' "$web_release_workflow" ||
+  die 'web release lacks a manual recovery trigger for an existing immutable tag'
+if grep -Fq 'if: ${{ github.ref_protected }}' "$web_release_workflow"; then
+  die 'web release is gated by ref_protected and tag pushes may silently skip publication'
+fi
+grep -Fq 'git merge-base --is-ancestor' "$web_release_workflow" ||
+  die 'web release lacks the default-branch ancestry gate'
+grep -Fq 'cosign sign-blob' "$web_release_workflow" ||
+  die 'web release does not sign its immutable artifact'
 contains_srcinfo lmm-api-go-git $'\tmakedepends = bun'
 contains_srcinfo lmm-api-go-git $'\tmakedepends = go>=1.25.1'
 contains_srcinfo lmm-api-go $'\tmakedepends = bun'
