@@ -396,12 +396,14 @@ export function Drawing() {
                 {groups.map((item) => (
                   <NativeSelectOption key={item} value={item}>
                     {item}
-                    {item === selectedGroup && groupDescription
-                      ? ` · ${groupDescription}`
-                      : ''}
                   </NativeSelectOption>
                 ))}
               </NativeSelect>
+              {groupDescription ? (
+                <p className='text-muted-foreground text-xs leading-relaxed break-words'>
+                  {groupDescription}
+                </p>
+              ) : null}
             </div>
             <div className='grid gap-2'>
               <Label htmlFor='drawing-model'>{t('Image model')}</Label>
