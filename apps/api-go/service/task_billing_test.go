@@ -444,6 +444,47 @@ func TestRefundTaskQuota_FundingFailureKeepsPendingMarker(t *testing.T) {
 	assert.Equal(t, int64(0), countLogs(t))
 }
 
+func TestRefundTaskQuota_PersistedIntentResumesWithoutDoubleRefund(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 6, 6, 6
+	const initialUserQuota, preConsumed, initialTokenRemain = 5000, 1200, 3000
+	seedUser(t, userID, initialUserQuota)
+	seedToken(t, tokenID, userID, "sk-persisted-refund", initialTokenRemain)
+	seedChannel(t, channelID)
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.Status = model.TaskStatusFailure
+	require.NoError(t, model.DB.Create(task).Error)
+
+	// Simulate a worker crash after writing the durable intent but before the
+	// side-effect transaction starts. The quota marker must remain visible.
+	preparedQuota, pending, err := model.PrepareTaskRefundIntent(task.ID, preConsumed)
+	require.NoError(t, err)
+	assert.True(t, pending)
+	assert.Equal(t, preConsumed, preparedQuota)
+	var pendingTask model.Task
+	require.NoError(t, model.DB.First(&pendingTask, task.ID).Error)
+	assert.Equal(t, preConsumed, pendingTask.Quota)
+	assert.Equal(t, model.TaskRefundStatusPending, pendingTask.RefundStatus)
+	assert.Equal(t, preConsumed, pendingTask.RefundQuota)
+
+	assert.True(t, RefundTaskQuota(ctx, task, "resume persisted refund"))
+	assert.Equal(t, initialUserQuota+preConsumed, getUserQuota(t, userID))
+	assert.Equal(t, initialTokenRemain+preConsumed, getTokenRemainQuota(t, tokenID))
+
+	// A replay from another poller observes COMPLETED and must not apply a
+	// second wallet/token increment or create a duplicate billing log.
+	var replay model.Task
+	require.NoError(t, model.DB.First(&replay, task.ID).Error)
+	assert.True(t, RefundTaskQuota(ctx, &replay, "replayed persisted refund"))
+	assert.Equal(t, initialUserQuota+preConsumed, getUserQuota(t, userID))
+	assert.Equal(t, initialTokenRemain+preConsumed, getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, int64(1), countLogs(t))
+	assert.Empty(t, model.GetUnrefundedFailedTasks(time.Now().Unix()+1, 10))
+}
+
 // ===========================================================================
 // RecalculateTaskQuota tests
 // ===========================================================================

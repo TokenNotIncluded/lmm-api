@@ -164,6 +164,9 @@ func taskModelName(task *model.Task) string {
 // 当异步任务失败时，将预扣的 quota 退还给用户（支持钱包和订阅），并退还令牌额度。
 // 返回资金来源是否已成功退还；失败时保留 quota，供显式重试或人工对账。
 func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool {
+	if task == nil {
+		return false
+	}
 	quota := task.Quota
 	if quota < 0 {
 		// A task quota is a pre-consumed amount and must never be negative. Do
@@ -174,41 +177,34 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool 
 		logger.LogError(ctx, fmt.Sprintf("拒绝负额度退款 task %s quota=%d", task.TaskID, quota))
 		return false
 	}
-	if quota == 0 {
+	if quota == 0 && task.RefundStatus != model.TaskRefundStatusPending {
 		return true
 	}
-	claimed, err := model.ClaimQuotaForRefund(task.ID, quota)
-	if err != nil {
-		logger.LogError(ctx, fmt.Sprintf("领取退款标记失败 task %s: %s", task.TaskID, err.Error()))
+	if task.ID <= 0 {
+		logger.LogError(ctx, fmt.Sprintf("拒绝未持久化任务退款 task %s", task.TaskID))
 		return false
 	}
-	if !claimed {
-		// Another worker already claimed or completed this refund. Treat it as
-		// handled so the caller does not apply a second wallet adjustment.
+
+	refundedQuota, applied, err := model.ApplyTaskRefund(task.ID, quota)
+	if err != nil {
+		logger.LogWarn(ctx, fmt.Sprintf("任务退款仍待重试 task %s: %s", task.TaskID, err.Error()))
+		return false
+	}
+	if refundedQuota == 0 {
 		return true
 	}
 	task.Quota = 0
-
-	// 1. 退还资金来源（钱包或订阅）
-	if err := taskAdjustFunding(task, -quota); err != nil {
-		restored, restoreErr := model.RestoreQuotaAfterFailedRefund(task.ID, quota)
-		task.Quota = quota
-		if restoreErr != nil || !restored {
-			logger.LogError(ctx, fmt.Sprintf("退还资金来源失败且无法恢复退款标记 task %s: %v", task.TaskID, err))
-		} else {
-			logger.LogWarn(ctx, fmt.Sprintf("退还资金来源失败 task %s: %s", task.TaskID, err.Error()))
-		}
-		return false
+	task.RefundQuota = refundedQuota
+	task.RefundStatus = model.TaskRefundStatusCompleted
+	if !applied {
+		// Another worker already committed this task's refund. Do not emit a
+		// duplicate billing log, but keep the caller's snapshot consistent.
+		return true
 	}
 
-	// 2. 退还令牌额度
-	taskAdjustTokenQuota(ctx, task, -quota)
-
-	// 3. 回减预扣时累计的用户和渠道用量，请求次数保持不变。
-	model.UpdateUserUsedQuota(task.UserId, -quota)
-	model.UpdateChannelUsedQuota(task.ChannelId, -quota)
-
-	// 4. 记录日志
+	// The durable transaction has already refunded the source, token, and
+	// reversible usage counters. Logging remains outside it because LOG_DB may
+	// be a separate database; a missing log can never cause a second refund.
 	other := taskBillingOther(task)
 	other["task_id"] = task.TaskID
 	other["reason"] = reason
@@ -224,9 +220,6 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool 
 		Other:     other,
 	})
 
-	// The quota marker was claimed atomically before the funding adjustment, so
-	// a retry cannot refund the same task twice even if the process exits after
-	// the wallet update.
 	return true
 }
 

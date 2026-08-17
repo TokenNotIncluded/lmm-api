@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"database/sql/driver"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/LIghtJUNction/api.lmm.best/common"
 	"github.com/LIghtJUNction/api.lmm.best/constant"
 	commonRelay "github.com/LIghtJUNction/api.lmm.best/relay/common"
 	"github.com/LIghtJUNction/api.lmm.best/relaykit/dto"
+	"gorm.io/gorm"
 )
 
 type TaskStatus string
@@ -41,6 +43,18 @@ const (
 	TaskStatusUnknown               = "UNKNOWN"
 )
 
+// TaskRefundStatus is persisted on the task so a process restart can resume a
+// refund without relying on an in-memory claim or on quota being non-zero.
+// Financial side effects are applied in one database transaction; there is
+// intentionally no long-lived "processing" state that could be ambiguous
+// after a crash.
+type TaskRefundStatus string
+
+const (
+	TaskRefundStatusPending   TaskRefundStatus = "PENDING"
+	TaskRefundStatusCompleted TaskRefundStatus = "COMPLETED"
+)
+
 // TaskRefundLegacyCutoff separates tasks created before timeout refunds were
 // introduced. Those legacy tasks are failed without an automatic refund.
 const TaskRefundLegacyCutoff int64 = 1771718400 // 2026-02-22 00:00:00 UTC
@@ -62,8 +76,14 @@ type Task struct {
 	StartTime  int64                 `json:"start_time" gorm:"index"`
 	FinishTime int64                 `json:"finish_time" gorm:"index"`
 	Progress   string                `json:"progress" gorm:"type:varchar(20);index"`
-	Properties Properties            `json:"properties" gorm:"type:json"`
-	Username   string                `json:"username,omitempty" gorm:"-"`
+	// RefundQuota keeps the original pre-consumed amount after Quota is cleared.
+	// RefundStatus is an explicit durable intent/state marker; both are hidden
+	// from task API responses because they are internal billing state.
+	RefundStatus TaskRefundStatus `json:"-" gorm:"type:varchar(16);default:'';index"`
+	RefundQuota  int              `json:"-" gorm:"default:0"`
+	RefundedAt   int64            `json:"-" gorm:"default:0"`
+	Properties   Properties       `json:"properties" gorm:"type:json"`
+	Username     string           `json:"username,omitempty" gorm:"-"`
 	// 禁止返回给用户，内部可能包含key等隐私信息
 	PrivateData TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
 	Data        json.RawMessage `json:"data" gorm:"type:json"`
@@ -317,7 +337,7 @@ func GetUnrefundedFailedTasks(updatedBefore int64, limit int) []*Task {
 	}
 	var tasks []*Task
 	err := DB.Where("status = ?", TaskStatusFailure).
-		Where("quota != ?", 0).
+		Where("(refund_status = ? OR (COALESCE(refund_status, '') = '' AND (quota != ? OR refund_quota != ?)))", TaskRefundStatusPending, 0, 0).
 		Where("updated_at <= ?", updatedBefore).
 		Where("(submit_time <= ? OR submit_time >= ?)", 0, TaskRefundLegacyCutoff).
 		Order("id").Limit(limit).Find(&tasks).Error
@@ -373,7 +393,7 @@ func HasTaskPollingWork() bool {
 	var id int64
 	err := DB.Model(&Task{}).
 		Where("status = ?", TaskStatusFailure).
-		Where("quota != ?", 0).
+		Where("(refund_status = ? OR (COALESCE(refund_status, '') = '' AND (quota != ? OR refund_quota != ?)))", TaskRefundStatusPending, 0, 0).
 		Where("(submit_time <= ? OR submit_time >= ?)", 0, TaskRefundLegacyCutoff).
 		Limit(1).Pluck("id", &id).Error
 	return err == nil && id != 0
@@ -484,6 +504,203 @@ func RestoreQuotaAfterFailedRefund(id int64, quota int) (bool, error) {
 		return false, result.Error
 	}
 	return result.RowsAffected > 0, nil
+}
+
+var ErrTaskRefundInvalid = errors.New("invalid task refund intent")
+
+// PrepareTaskRefundIntent durably records the amount that must be refunded.
+// It deliberately leaves Task.Quota untouched: a crash between this step and
+// ApplyPreparedTaskRefund therefore leaves an observable pending intent, not a
+// task that looks already refunded.
+func PrepareTaskRefundIntent(id int64, expectedQuota int) (int, bool, error) {
+	if id <= 0 || expectedQuota < 0 {
+		return 0, false, ErrTaskRefundInvalid
+	}
+
+	var quota int
+	var pending bool
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var task Task
+		if err := lockForUpdate(tx).Where("id = ?", id).First(&task).Error; err != nil {
+			return err
+		}
+		switch task.RefundStatus {
+		case TaskRefundStatusCompleted:
+			quota = task.RefundQuota
+			return nil
+		case TaskRefundStatusPending:
+			if task.RefundQuota <= 0 {
+				return ErrTaskRefundInvalid
+			}
+			quota = task.RefundQuota
+			pending = true
+			return nil
+		case "":
+			quota = task.RefundQuota
+			if quota == 0 {
+				quota = task.Quota
+			}
+			if quota == 0 {
+				return nil
+			}
+			if quota < 0 {
+				return ErrTaskRefundInvalid
+			}
+			// expectedQuota is a caller-side sanity check only. The locked row is
+			// authoritative so a stale poller cannot overwrite a newer intent.
+			if expectedQuota > 0 && task.Quota != expectedQuota && task.RefundQuota == 0 {
+				return ErrTaskRefundInvalid
+			}
+			result := tx.Model(&Task{}).
+				Where("id = ? AND (refund_status = '' OR refund_status IS NULL)", id).
+				Updates(map[string]interface{}{
+					"refund_status": TaskRefundStatusPending,
+					"refund_quota":  quota,
+					"updated_at":    common.GetTimestamp(),
+				})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				return gorm.ErrRecordNotFound
+			}
+			pending = true
+			return nil
+		default:
+			return ErrTaskRefundInvalid
+		}
+	})
+	return quota, pending, err
+}
+
+// ApplyPreparedTaskRefund applies a pending intent atomically with all
+// database-backed quota changes and the final task state. If the process dies,
+// the transaction either commits every change or rolls back, so retrying the
+// pending intent cannot double-refund the wallet.
+func ApplyPreparedTaskRefund(id int64) (int, bool, error) {
+	if id <= 0 {
+		return 0, false, ErrTaskRefundInvalid
+	}
+
+	var quota int
+	var applied bool
+	var userID int
+	var tokenKey string
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var task Task
+		if err := lockForUpdate(tx).Where("id = ?", id).First(&task).Error; err != nil {
+			return err
+		}
+		if task.RefundStatus == TaskRefundStatusCompleted {
+			quota = task.RefundQuota
+			return nil
+		}
+		if task.RefundStatus != TaskRefundStatusPending || task.RefundQuota <= 0 {
+			return ErrTaskRefundInvalid
+		}
+		quota = task.RefundQuota
+		userID = task.UserId
+
+		if task.PrivateData.BillingSource == "subscription" && task.PrivateData.SubscriptionId > 0 {
+			var subscription UserSubscription
+			if err := lockForUpdate(tx).
+				Where("id = ?", task.PrivateData.SubscriptionId).
+				First(&subscription).Error; err != nil {
+				return err
+			}
+			used := subscription.AmountUsed - int64(quota)
+			if used < 0 {
+				used = 0
+			}
+			if err := tx.Model(&UserSubscription{}).
+				Where("id = ?", subscription.Id).
+				Update("amount_used", used).Error; err != nil {
+				return err
+			}
+		} else if userID > 0 {
+			if err := tx.Model(&User{}).
+				Where("id = ?", userID).
+				Update("quota", gorm.Expr("quota + ?", quota)).Error; err != nil {
+				return err
+			}
+		}
+
+		if task.PrivateData.TokenId > 0 {
+			var token Token
+			err := tx.Select("id, key").Where("id = ?", task.PrivateData.TokenId).First(&token).Error
+			if err == nil {
+				tokenKey = token.Key
+				if err := tx.Model(&Token{}).Where("id = ?", token.Id).Updates(map[string]interface{}{
+					"remain_quota":  gorm.Expr("remain_quota + ?", quota),
+					"used_quota":    gorm.Expr("used_quota - ?", quota),
+					"accessed_time": common.GetTimestamp(),
+				}).Error; err != nil {
+					return err
+				}
+			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+		}
+
+		if userID > 0 {
+			if err := tx.Model(&User{}).Where("id = ?", userID).
+				Update("used_quota", gorm.Expr("used_quota - ?", quota)).Error; err != nil {
+				return err
+			}
+		}
+		if task.ChannelId > 0 {
+			if err := tx.Model(&Channel{}).Where("id = ?", task.ChannelId).
+				Update("used_quota", gorm.Expr("used_quota - ?", quota)).Error; err != nil {
+				return err
+			}
+		}
+
+		result := tx.Model(&Task{}).
+			Where("id = ? AND refund_status = ?", id, TaskRefundStatusPending).
+			Updates(map[string]interface{}{
+				"quota":         0,
+				"refund_status": TaskRefundStatusCompleted,
+				"refunded_at":   common.GetTimestamp(),
+				"updated_at":    common.GetTimestamp(),
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
+		applied = true
+		return nil
+	})
+	if err != nil || !applied {
+		return quota, false, err
+	}
+
+	// The database is authoritative. Invalidate cache snapshots only after the
+	// transaction commits; a cache failure cannot make the durable refund retry
+	// and double-apply.
+	if userID > 0 {
+		if cacheErr := invalidateUserCache(userID); cacheErr != nil {
+			common.SysLog("failed to invalidate refunded user cache: " + cacheErr.Error())
+		}
+	}
+	if tokenKey != "" {
+		if cacheErr := invalidateTokenCacheForMutation(tokenKey); cacheErr != nil {
+			common.SysLog("failed to invalidate refunded token cache: " + cacheErr.Error())
+		}
+	}
+	return quota, true, nil
+}
+
+// ApplyTaskRefund is the restart-safe refund entry point used by async task
+// reconciliation. The intent transaction is intentionally separate from the
+// effect transaction so a crash between them leaves a visible pending row.
+func ApplyTaskRefund(id int64, expectedQuota int) (int, bool, error) {
+	quota, pending, err := PrepareTaskRefundIntent(id, expectedQuota)
+	if err != nil || !pending {
+		return quota, false, err
+	}
+	return ApplyPreparedTaskRefund(id)
 }
 
 // UpdateWithStatus performs a conditional UPDATE guarded by fromStatus (CAS).

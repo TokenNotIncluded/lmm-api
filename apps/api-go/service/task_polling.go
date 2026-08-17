@@ -95,9 +95,9 @@ func sweepTimedOutTasks(ctx context.Context) {
 	}
 }
 
-// sweepUnrefundedFailedTasks retries funding refunds that could not complete
-// during the failure transition. ClaimQuotaForRefund makes this safe across
-// overlapping pollers and multiple instances.
+// sweepUnrefundedFailedTasks retries refunds whose durable intent is still
+// pending after a failure transition. The task refund state and transaction
+// lock make this safe across overlapping pollers and multiple instances.
 func sweepUnrefundedFailedTasks(ctx context.Context) {
 	updatedBefore := time.Now().Add(-refundReconciliationGracePeriod).Unix()
 	tasks := model.GetUnrefundedFailedTasks(updatedBefore, refundReconciliationLimit)
