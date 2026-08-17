@@ -1,6 +1,10 @@
 package controller
 
 import (
+	"bytes"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -8,8 +12,44 @@ import (
 	"github.com/LIghtJUNction/api.lmm.best/model"
 	"github.com/LIghtJUNction/api.lmm.best/setting"
 	"github.com/LIghtJUNction/api.lmm.best/setting/operation_setting"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/stripe/stripe-go/v81"
+	"github.com/stripe/stripe-go/v81/form"
 )
+
+type subscriptionStripeCheckoutBackend struct {
+	orderVisibleDuringCall bool
+}
+
+func (b *subscriptionStripeCheckoutBackend) Call(_ string, _ string, _ string, _ stripe.ParamsContainer, v stripe.LastResponseSetter) error {
+	checkout, ok := v.(*stripe.CheckoutSession)
+	if !ok {
+		return nil
+	}
+	var count int64
+	if err := model.DB.Model(&model.SubscriptionOrder{}).
+		Where("status = ?", common.TopUpStatusPending).Count(&count).Error; err == nil {
+		b.orderVisibleDuringCall = count > 0
+	}
+	checkout.ID = "cs_order_first_test"
+	checkout.URL = "https://checkout.example.test/cs_order_first_test"
+	return nil
+}
+
+func (*subscriptionStripeCheckoutBackend) CallStreaming(_ string, _ string, _ string, _ stripe.ParamsContainer, _ stripe.StreamingLastResponseSetter) error {
+	return nil
+}
+
+func (*subscriptionStripeCheckoutBackend) CallRaw(_ string, _ string, _ string, _ *form.Values, _ *stripe.Params, _ stripe.LastResponseSetter) error {
+	return nil
+}
+
+func (*subscriptionStripeCheckoutBackend) CallMultipart(_ string, _ string, _ string, _ string, _ *bytes.Buffer, _ *stripe.Params, _ stripe.LastResponseSetter) error {
+	return nil
+}
+
+func (*subscriptionStripeCheckoutBackend) SetMaxNetworkRetries(_ int64) {}
 
 func TestSubscriptionPaymentMethodsUsePlanStripeProductWithoutWalletProduct(t *testing.T) {
 	paymentSetting := operation_setting.GetPaymentSetting()
@@ -46,4 +86,54 @@ func TestSubscriptionPaymentMethodsUsePlanStripeProductWithoutWalletProduct(t *t
 	)
 
 	require.Equal(t, []string{model.PaymentMethodStripe}, methods)
+}
+
+func TestStripeSubscriptionPersistsOrderBeforeCreatingCheckout(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.SubscriptionPlan{}, &model.SubscriptionOrder{}))
+	confirmPaymentComplianceForTest(t)
+
+	originalAPISecret := setting.StripeApiSecret
+	originalWebhookSecret := setting.StripeWebhookSecret
+	originalBackend := stripe.GetBackend(stripe.APIBackend)
+	t.Cleanup(func() {
+		setting.StripeApiSecret = originalAPISecret
+		setting.StripeWebhookSecret = originalWebhookSecret
+		stripe.SetBackend(stripe.APIBackend, originalBackend)
+	})
+	setting.StripeApiSecret = "sk_test_order_first"
+	setting.StripeWebhookSecret = "whsec_order_first"
+	backend := &subscriptionStripeCheckoutBackend{}
+	stripe.SetBackend(stripe.APIBackend, backend)
+
+	user := model.User{
+		Username: "stripe-order-first-user",
+		Password: "password",
+		Email:    "stripe-order-first@example.test",
+		Role:     common.RoleCommonUser,
+		Status:   common.UserStatusEnabled,
+		Group:    "default",
+	}
+	require.NoError(t, db.Create(&user).Error)
+	plan := model.SubscriptionPlan{
+		Title:         "Order-first Stripe plan",
+		PriceAmount:   10,
+		Enabled:       true,
+		StripePriceId: "price_order_first",
+	}
+	require.NoError(t, db.Create(&plan).Error)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Set("id", user.Id)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/subscription/stripe/pay", bytes.NewBufferString(fmt.Sprintf(`{"plan_id":%d}`, plan.Id)))
+	c.Request.Header.Set("Content-Type", "application/json")
+	SubscriptionRequestStripePay(c)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "pay_link")
+	require.True(t, backend.orderVisibleDuringCall, "the provider must not receive a checkout request before the local order is durable")
+	var order model.SubscriptionOrder
+	require.NoError(t, db.Where("trade_no LIKE ?", "sub_ref_%").First(&order).Error)
+	require.Equal(t, common.TopUpStatusPending, order.Status)
 }

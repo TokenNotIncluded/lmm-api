@@ -127,10 +127,16 @@ func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
 	reference := fmt.Sprintf("new-api-ref-%d-%d-%s", user.Id, time.Now().UnixMilli(), randstr.String(4))
 	referenceId := "ref_" + common.Sha1([]byte(reference))
 
-	payLink, settlementCurrency, err := genStripeLink(referenceId, user.StripeCustomer, user.Email, expectedAmountMicros, req.SuccessURL, req.CancelURL)
+	configuredPrice, err := getStripeTopUpPrice()
 	if err != nil {
-		logger.LogError(c.Request.Context(), fmt.Sprintf("Stripe 创建 Checkout Session 失败 user_id=%d trade_no=%s amount=%d error=%q", id, referenceId, req.Amount, err.Error()))
+		logger.LogError(c.Request.Context(), fmt.Sprintf("Stripe 读取充值价格失败 user_id=%d trade_no=%s amount=%d error=%q", id, referenceId, req.Amount, err.Error()))
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "拉起支付失败"})
+		return
+	}
+	_, settlementCurrency, err := stripeTopUpLineItem(configuredPrice, expectedAmountMicros)
+	if err != nil {
+		logger.LogError(c.Request.Context(), fmt.Sprintf("Stripe 充值价格配置无效 user_id=%d trade_no=%s amount=%d error=%q", id, referenceId, req.Amount, err.Error()))
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "支付金额无效"})
 		return
 	}
 	topUp := &model.TopUp{
@@ -152,6 +158,15 @@ func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Stripe 创建充值订单失败 user_id=%d trade_no=%s amount=%d error=%q", id, referenceId, req.Amount, err.Error()))
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "创建订单失败"})
+		return
+	}
+	payLink, _, err := genStripeLinkWithPrice(referenceId, user.StripeCustomer, user.Email, expectedAmountMicros, req.SuccessURL, req.CancelURL, configuredPrice)
+	if err != nil {
+		// Keep the durable order pending: a transport error can happen after
+		// Stripe accepted the session request, in which case the webhook still
+		// needs a local order to settle the payment safely.
+		logger.LogError(c.Request.Context(), fmt.Sprintf("Stripe 创建 Checkout Session 失败 user_id=%d trade_no=%s amount=%d error=%q", id, referenceId, req.Amount, err.Error()))
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "拉起支付失败"})
 		return
 	}
 	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Stripe 充值订单创建成功 user_id=%d trade_no=%s amount=%d money=%.2f currency=%s", id, referenceId, req.Amount, topUp.Money, settlementCurrency))
@@ -502,15 +517,27 @@ func sessionExpired(ctx context.Context, event stripe.Event) error {
 //
 // Returns the checkout session URL or an error if the session creation fails.
 func genStripeLink(referenceId string, customerId string, email string, expectedAmountMicros int64, successURL string, cancelURL string) (string, string, error) {
+	configuredPrice, err := getStripeTopUpPrice()
+	if err != nil {
+		return "", "", err
+	}
+	return genStripeLinkWithPrice(referenceId, customerId, email, expectedAmountMicros, successURL, cancelURL, configuredPrice)
+}
+
+func getStripeTopUpPrice() (*stripe.Price, error) {
 	if !strings.HasPrefix(setting.StripeApiSecret, "sk_") && !strings.HasPrefix(setting.StripeApiSecret, "rk_") {
-		return "", "", fmt.Errorf("无效的Stripe API密钥")
+		return nil, fmt.Errorf("无效的Stripe API密钥")
 	}
 
 	stripe.Key = setting.StripeApiSecret
 	configuredPrice, err := stripeprice.Get(setting.StripePriceId, nil)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
+	return configuredPrice, nil
+}
+
+func genStripeLinkWithPrice(referenceId string, customerId string, email string, expectedAmountMicros int64, successURL string, cancelURL string, configuredPrice *stripe.Price) (string, string, error) {
 	lineItem, currency, err := stripeTopUpLineItem(configuredPrice, expectedAmountMicros)
 	if err != nil {
 		return "", "", err
