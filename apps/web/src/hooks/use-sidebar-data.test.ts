@@ -21,6 +21,31 @@ const source = readFileSync(
 )
 
 describe('authenticated sidebar discovery', () => {
+  test('keeps pre-activation links on publicly reachable surfaces', () => {
+    const onboardingStart = source.indexOf("id: 'onboarding'")
+    const activatedForgeStart = source.indexOf("id: 'forge'", onboardingStart)
+    const onboardingSection =
+      onboardingStart >= 0 && activatedForgeStart > onboardingStart
+        ? source.slice(onboardingStart, activatedForgeStart)
+        : ''
+
+    assert.ok(onboardingSection)
+    assert.match(onboardingSection, /title: t\('Challenges'\)/)
+    assert.match(onboardingSection, /url: '\/challenges'/)
+    assert.match(onboardingSection, /title: t\('Model Square'\)/)
+    assert.match(onboardingSection, /url: '\/pricing'/)
+    assert.doesNotMatch(
+      onboardingSection,
+      /url: '\/(open-source-bounties|public-relay|todos)'/
+    )
+  })
+
+  test('does not query todos before console activation', () => {
+    assert.match(source, /const consoleActivated = isConsoleActivated\(user\)/)
+    assert.match(source, /enabled: Boolean\(user\) && consoleActivated/)
+    assert.match(source, /if \(!consoleActivated\)/)
+  })
+
   test('keeps the model square reachable from the activated mobile sidebar', () => {
     const generalStart = source.indexOf("id: 'general'")
     const personalStart = source.indexOf("id: 'personal'", generalStart)

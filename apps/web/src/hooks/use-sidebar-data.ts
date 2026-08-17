@@ -59,10 +59,11 @@ import { useAuthStore } from '@/stores/auth-store'
 export function useSidebarData(): SidebarData {
   const { t } = useTranslation()
   const user = useAuthStore((state) => state.auth.user)
+  const consoleActivated = isConsoleActivated(user)
   const todosQuery = useQuery({
     queryKey: ['todos', 'all'],
     queryFn: () => getTodos('all'),
-    enabled: Boolean(user),
+    enabled: Boolean(user) && consoleActivated,
     staleTime: 30_000,
     retry: false,
   })
@@ -71,7 +72,7 @@ export function useSidebarData(): SidebarData {
       ? String(todosQuery.data?.total_unread_count)
       : undefined
 
-  if (!isConsoleActivated(user)) {
+  if (!consoleActivated) {
     return {
       navGroups: [
         {
@@ -84,25 +85,14 @@ export function useSidebarData(): SidebarData {
               icon: Compass,
             },
             {
-              title: t('Open-source bounties'),
-              url: '/open-source-bounties',
-              icon: Compass,
+              title: t('Challenges'),
+              url: '/challenges',
+              icon: Trophy,
             },
             {
               title: t('Model Square'),
               url: '/pricing',
               icon: Box,
-            },
-            {
-              title: t('Channel marketplace'),
-              url: '/public-relay',
-              icon: Radio,
-            },
-            {
-              title: t('To-dos'),
-              url: '/todos',
-              icon: ListChecks,
-              badge: todoBadge,
             },
           ],
         },
