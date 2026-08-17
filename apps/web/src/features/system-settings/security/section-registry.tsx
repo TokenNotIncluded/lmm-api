@@ -24,6 +24,7 @@ import type { SecuritySettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
 import { AdvancedSecuritySection } from './advanced-security-section'
 import { AntiRelaySection } from './anti-relay-section'
+import { GlobalIPWhitelistSection } from './global-ip-whitelist-section'
 
 const SECURITY_SECTIONS = [
   {
@@ -67,6 +68,18 @@ const SECURITY_SECTIONS = [
             settings.AdvancedSecurityOnPromptEnabled,
           AdvancedSecurityAction: settings.AdvancedSecurityAction,
           AdvancedSecurityRules: settings.AdvancedSecurityRules,
+        }}
+      />
+    ),
+  },
+  {
+    id: 'global-ip-whitelist',
+    titleKey: 'Global IP Whitelist',
+    build: (settings: SecuritySettings) => (
+      <GlobalIPWhitelistSection
+        defaultValues={{
+          GlobalIPWhitelistEnabled: settings.GlobalIPWhitelistEnabled,
+          GlobalIPWhitelistCIDRs: settings.GlobalIPWhitelistCIDRs,
         }}
       />
     ),

@@ -13,16 +13,18 @@ import { describe, test } from 'node:test'
 const source = readFileSync(new URL('./index.tsx', import.meta.url), 'utf8')
 
 describe('public relay sharing entry point', () => {
-  test('renders dialog portals outside the slot-only page layout', () => {
+  test('renders the complete channel drawer outside the slot-only page layout', () => {
     const layoutEnd = source.indexOf('</SectionPageLayout>')
-    const submitDialog = source.indexOf('<Dialog open={submitOpen}')
+    const submitDrawer = source.indexOf('<ChannelMutateDrawer')
 
     assert.notEqual(layoutEnd, -1)
-    assert.notEqual(submitDialog, -1)
+    assert.notEqual(submitDrawer, -1)
     assert.ok(
-      layoutEnd < submitDialog,
-      'the page layout must close before its controlled dialogs are rendered'
+      layoutEnd < submitDrawer,
+      'the page layout must close before its controlled drawer is rendered'
     )
+    assert.match(source, /<ChannelsProvider>/)
+    assert.match(source, /transformFormDataToCreatePayload/)
     assert.match(
       source,
       /<Button type='button' onClick=\{\(\) => setSubmitOpen\(true\)\}>/

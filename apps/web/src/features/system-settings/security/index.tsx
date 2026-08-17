@@ -42,6 +42,8 @@ const defaultSecuritySettings: SecuritySettings = {
   AntiRelayHTTPSOnlyEnabled: false,
   AntiRelayBlockedCIDRs: [],
   AntiRelayTrustedProxyCIDRs: ['127.0.0.1/32', '::1/128'],
+  GlobalIPWhitelistEnabled: false,
+  GlobalIPWhitelistCIDRs: [],
   'fetch_setting.enable_ssrf_protection': true,
   'fetch_setting.allow_private_ip': false,
   'fetch_setting.domain_filter_mode': false,

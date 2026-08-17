@@ -279,7 +279,8 @@ func todoRefs(db *gorm.DB, userID, role int, category string, offset, limit int)
 	}
 	if selected[UnifiedTodoCategorySecurityReview] && isAdmin {
 		add(`SELECT notice.id AS source_id, ? AS category, notice.updated_at AS updated_at
-			FROM assistant_security_review_notices AS notice`, UnifiedTodoCategorySecurityReview)
+			FROM assistant_security_review_notices AS notice
+			WHERE notice.id = (SELECT MAX(latest.id) FROM assistant_security_review_notices AS latest)`, UnifiedTodoCategorySecurityReview)
 	}
 	if selected[UnifiedTodoCategoryBountyReview] {
 		add(`SELECT challenge.id AS source_id, ? AS category, challenge.updated_at AS updated_at

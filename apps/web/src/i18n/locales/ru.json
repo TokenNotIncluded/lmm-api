@@ -7403,5 +7403,18 @@
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
     "Zoom": "Масштаб"
-  }
+  },
+  "Complete the full channel configuration below. The submission remains pending until an administrator approves it.": "Заполните полную конфигурацию канала ниже. Заявка останется на рассмотрении до одобрения администратором.",
+  "I confirm that these credentials are authorized for this shared channel.": "Я подтверждаю, что эти учетные данные разрешено использовать для общего канала.",
+  "Sharing information": "Информация для публикации",
+  "Add the public description and confirm that this channel can be shared.": "Добавьте публичное описание и подтвердите, что канал можно опубликовать.",
+  "This information is shown in the public channel market after approval.": "После одобрения эта информация появится в публичном каталоге каналов.",
+  "Global IP Whitelist": "Глобальный белый список IP",
+  "Global ingress allowlist": "Глобальный список разрешенного доступа",
+  "When enabled, every page and API request except health probes must come from an allowed client IP. Add your current public IP before enabling it.": "После включения все страницы и API-запросы, кроме проверок состояния, должны поступать с разрешенного IP. Сначала добавьте свой текущий публичный IP.",
+  "Enable global IP whitelist": "Включить глобальный белый список IP",
+  "Use trusted-proxy-aware client IP detection and reject all clients outside the list.": "Определяет IP клиента с учетом доверенных прокси и отклоняет клиентов вне списка.",
+  "Allowed client IPs / CIDRs": "Разрешенные IP клиентов / CIDR",
+  "Enter one IPv4, IPv6, or CIDR per line. Bare addresses are normalized to exact host prefixes.": "Укажите по одному IPv4, IPv6 или CIDR в строке. Одиночные адреса преобразуются в точные префиксы узлов.",
+  "At least one IP address or CIDR is required before enabling the whitelist.": "Перед включением белого списка необходимо указать хотя бы один IP-адрес или CIDR."
 }

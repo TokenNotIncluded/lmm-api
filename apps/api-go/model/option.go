@@ -219,6 +219,9 @@ func InitOptionMap() {
 	common.OptionMap[setting.AntiRelayHTTPSOnlyOptionKey] = strconv.FormatBool(antiRelaySettings.HTTPSOnly)
 	common.OptionMap[setting.AntiRelayBlockedCIDRsOptionKey] = setting.AntiRelayBlockedCIDRsToJSONString()
 	common.OptionMap[setting.AntiRelayTrustedProxyCIDRsOptionKey] = setting.AntiRelayTrustedProxyCIDRsToJSONString()
+	globalIPWhitelistSettings := setting.GetGlobalIPWhitelistSettings()
+	common.OptionMap[setting.GlobalIPWhitelistEnabledOptionKey] = strconv.FormatBool(globalIPWhitelistSettings.Enabled)
+	common.OptionMap[setting.GlobalIPWhitelistCIDRsOptionKey] = setting.GlobalIPWhitelistCIDRsToJSONString()
 	common.OptionMap["StreamCacheQueueLength"] = strconv.Itoa(setting.StreamCacheQueueLength)
 	common.OptionMap["AutomaticDisableKeywords"] = operation_setting.AutomaticDisableKeywordsToString()
 	common.OptionMap["AutomaticDisableStatusCodes"] = operation_setting.AutomaticDisableStatusCodesToString()
@@ -281,6 +284,9 @@ func validateOptionValue(key string, value string) error {
 		return err
 	}
 	if err := setting.ValidateAntiRelayOption(key, value); err != nil {
+		return err
+	}
+	if err := setting.ValidateGlobalIPWhitelistOption(key, value); err != nil {
 		return err
 	}
 	if key == operation_setting.ToolPriceOptionKey {
@@ -642,6 +648,8 @@ func updateOptionMap(key string, value string) (err error) {
 			setting.SetAntiRelayRejectProxyHeaders(boolValue)
 		case setting.AntiRelayHTTPSOnlyOptionKey:
 			setting.SetAntiRelayHTTPSOnly(boolValue)
+		case setting.GlobalIPWhitelistEnabledOptionKey:
+			setting.SetGlobalIPWhitelistEnabled(boolValue)
 		case "SMTPSSLEnabled":
 			common.SMTPSSLEnabled = boolValue
 		case "SMTPStartTLSEnabled":
@@ -918,6 +926,8 @@ func updateOptionMap(key string, value string) (err error) {
 		err = setting.UpdateAntiRelayBlockedCIDRs(value)
 	case setting.AntiRelayTrustedProxyCIDRsOptionKey:
 		err = setting.UpdateAntiRelayTrustedProxyCIDRs(value)
+	case setting.GlobalIPWhitelistCIDRsOptionKey:
+		err = setting.UpdateGlobalIPWhitelistCIDRs(value)
 	case "AutomaticDisableKeywords":
 		operation_setting.AutomaticDisableKeywordsFromString(value)
 	case "AutomaticDisableStatusCodes":

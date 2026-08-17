@@ -44,7 +44,9 @@ export function listMyPublicRelays() {
 }
 
 export function submitPublicRelay(
-  input: Pick<PublicRelay, 'name' | 'base_url' | 'models' | 'description'>
+  input: Pick<PublicRelay, 'name' | 'base_url' | 'models' | 'description'> & {
+    channel_config: unknown
+  }
 ) {
   return unwrap<PublicRelay>(api.post('/api/public-relays', input))
 }

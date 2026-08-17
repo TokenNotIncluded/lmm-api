@@ -7403,5 +7403,18 @@
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
     "Zoom": "Zoom"
-  }
+  },
+  "Complete the full channel configuration below. The submission remains pending until an administrator approves it.": "Complete the full channel configuration below. The submission remains pending until an administrator approves it.",
+  "I confirm that these credentials are authorized for this shared channel.": "I confirm that these credentials are authorized for this shared channel.",
+  "Sharing information": "Sharing information",
+  "Add the public description and confirm that this channel can be shared.": "Add the public description and confirm that this channel can be shared.",
+  "This information is shown in the public channel market after approval.": "This information is shown in the public channel market after approval.",
+  "Global IP Whitelist": "Global IP Whitelist",
+  "Global ingress allowlist": "Global ingress allowlist",
+  "When enabled, every page and API request except health probes must come from an allowed client IP. Add your current public IP before enabling it.": "When enabled, every page and API request except health probes must come from an allowed client IP. Add your current public IP before enabling it.",
+  "Enable global IP whitelist": "Enable global IP whitelist",
+  "Use trusted-proxy-aware client IP detection and reject all clients outside the list.": "Use trusted-proxy-aware client IP detection and reject all clients outside the list.",
+  "Allowed client IPs / CIDRs": "Allowed client IPs / CIDRs",
+  "Enter one IPv4, IPv6, or CIDR per line. Bare addresses are normalized to exact host prefixes.": "Enter one IPv4, IPv6, or CIDR per line. Bare addresses are normalized to exact host prefixes.",
+  "At least one IP address or CIDR is required before enabling the whitelist.": "At least one IP address or CIDR is required before enabling the whitelist."
 }

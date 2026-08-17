@@ -522,7 +522,7 @@ func SetApiRouter(router *gin.Engine) {
 		publicRelayUserRoute := openSourceBountyApiRouter.Group("/public-relays")
 		publicRelayUserRoute.Use(middleware.UserAuth())
 		{
-			publicRelayUserRoute.POST("", middleware.CriticalRateLimit(), middleware.RequestBodyLimit(16<<10), controller.CreatePublicRelayContribution)
+			publicRelayUserRoute.POST("", middleware.CriticalRateLimit(), middleware.RequestBodyLimit(256<<10), controller.CreatePublicRelayContribution)
 			publicRelayUserRoute.GET("/mine", controller.ListMyPublicRelayContributions)
 			publicRelayUserRoute.GET("/routing", controller.GetPublicRelayRouting)
 			publicRelayUserRoute.PUT("/routing", middleware.CriticalRateLimit(), middleware.RequestBodyLimit(8<<10), controller.UpdatePublicRelayRouting)

@@ -7403,5 +7403,18 @@
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
     "Zoom": "Zoom"
-  }
+  },
+  "Complete the full channel configuration below. The submission remains pending until an administrator approves it.": "Remplissez la configuration complète du canal ci-dessous. La soumission reste en attente jusqu’à son approbation par un administrateur.",
+  "I confirm that these credentials are authorized for this shared channel.": "Je confirme que ces identifiants sont autorisés pour ce canal partagé.",
+  "Sharing information": "Informations de partage",
+  "Add the public description and confirm that this channel can be shared.": "Ajoutez la description publique et confirmez que ce canal peut être partagé.",
+  "This information is shown in the public channel market after approval.": "Ces informations seront affichées sur le marché public des canaux après approbation.",
+  "Global IP Whitelist": "Liste blanche IP globale",
+  "Global ingress allowlist": "Liste d’accès globale",
+  "When enabled, every page and API request except health probes must come from an allowed client IP. Add your current public IP before enabling it.": "Une fois activée, chaque page et requête API, sauf les sondes de santé, doit provenir d’une IP autorisée. Ajoutez votre IP publique actuelle avant l’activation.",
+  "Enable global IP whitelist": "Activer la liste blanche IP globale",
+  "Use trusted-proxy-aware client IP detection and reject all clients outside the list.": "Détecte l’IP client en tenant compte des proxys de confiance et rejette tous les clients absents de la liste.",
+  "Allowed client IPs / CIDRs": "IP clientes / CIDR autorisés",
+  "Enter one IPv4, IPv6, or CIDR per line. Bare addresses are normalized to exact host prefixes.": "Saisissez une adresse IPv4, IPv6 ou un CIDR par ligne. Les adresses seules sont normalisées en préfixes d’hôte exacts.",
+  "At least one IP address or CIDR is required before enabling the whitelist.": "Au moins une adresse IP ou un CIDR est requis avant d’activer la liste blanche."
 }

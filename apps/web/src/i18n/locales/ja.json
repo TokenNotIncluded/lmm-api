@@ -7403,5 +7403,18 @@
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
     "Zoom": "ズーム"
-  }
+  },
+  "Complete the full channel configuration below. The submission remains pending until an administrator approves it.": "以下のチャンネル設定をすべて入力してください。管理者が承認するまで申請は保留状態になります。",
+  "I confirm that these credentials are authorized for this shared channel.": "これらの認証情報が、この共有チャンネルでの使用を許可されていることを確認します。",
+  "Sharing information": "共有情報",
+  "Add the public description and confirm that this channel can be shared.": "公開説明を追加し、このチャンネルを共有できることを確認してください。",
+  "This information is shown in the public channel market after approval.": "承認後、この情報は公開チャンネルマーケットに表示されます。",
+  "Global IP Whitelist": "グローバル IP 許可リスト",
+  "Global ingress allowlist": "グローバル受信許可リスト",
+  "When enabled, every page and API request except health probes must come from an allowed client IP. Add your current public IP before enabling it.": "有効にすると、ヘルスチェックを除くすべてのページと API リクエストが許可済み IP から送信される必要があります。有効化前に現在の公開 IP を追加してください。",
+  "Enable global IP whitelist": "グローバル IP 許可リストを有効化",
+  "Use trusted-proxy-aware client IP detection and reject all clients outside the list.": "信頼済みプロキシを考慮してクライアント IP を検出し、リスト外のクライアントを拒否します。",
+  "Allowed client IPs / CIDRs": "許可するクライアント IP / CIDR",
+  "Enter one IPv4, IPv6, or CIDR per line. Bare addresses are normalized to exact host prefixes.": "1 行に 1 つの IPv4、IPv6、または CIDR を入力してください。単一アドレスは正確なホストプレフィックスに正規化されます。",
+  "At least one IP address or CIDR is required before enabling the whitelist.": "許可リストを有効にする前に、少なくとも 1 つの IP アドレスまたは CIDR が必要です。"
 }

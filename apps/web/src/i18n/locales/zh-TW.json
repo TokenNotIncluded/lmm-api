@@ -7403,5 +7403,18 @@
     "Zhipu": "智譜",
     "Zhipu V4": "智譜 V4",
     "Zoom": "縮放"
-  }
+  },
+  "Complete the full channel configuration below. The submission remains pending until an administrator approves it.": "請完整填寫下方渠道設定。提交後將保持待審核狀態，直到管理員批准。",
+  "I confirm that these credentials are authorized for this shared channel.": "我確認這些憑證已獲授權用於此分享渠道。",
+  "Sharing information": "分享資訊",
+  "Add the public description and confirm that this channel can be shared.": "補充公開說明，並確認該渠道可以分享。",
+  "This information is shown in the public channel market after approval.": "審核通過後，此資訊會顯示在公開渠道市場中。",
+  "Global IP Whitelist": "全域 IP 白名單",
+  "Global ingress allowlist": "全域入口白名單",
+  "When enabled, every page and API request except health probes must come from an allowed client IP. Add your current public IP before enabling it.": "啟用後，除健康探針外，所有頁面和 API 請求都必須來自允許的用戶端 IP。啟用前請先新增你目前的公網 IP。",
+  "Enable global IP whitelist": "啟用全域 IP 白名單",
+  "Use trusted-proxy-aware client IP detection and reject all clients outside the list.": "使用可信代理感知的用戶端 IP 識別，並拒絕白名單之外的所有用戶端。",
+  "Allowed client IPs / CIDRs": "允許的用戶端 IP / CIDR",
+  "Enter one IPv4, IPv6, or CIDR per line. Bare addresses are normalized to exact host prefixes.": "每行填寫一個 IPv4、IPv6 或 CIDR。單個位址會自動規範為精確主機前綴。",
+  "At least one IP address or CIDR is required before enabling the whitelist.": "啟用白名單前至少需要填寫一個 IP 位址或 CIDR。"
 }

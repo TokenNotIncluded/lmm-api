@@ -10,6 +10,7 @@ the Free Software Foundation, either version 3 of the License, or
 package controller
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -24,10 +25,11 @@ import (
 )
 
 type publicRelayContributionInput struct {
-	Name        string `json:"name"`
-	BaseURL     string `json:"base_url"`
-	Models      string `json:"models"`
-	Description string `json:"description"`
+	Name          string          `json:"name"`
+	BaseURL       string          `json:"base_url"`
+	Models        string          `json:"models"`
+	Description   string          `json:"description"`
+	ChannelConfig json.RawMessage `json:"channel_config"`
 }
 
 type publicRelayReviewInput struct {
@@ -104,7 +106,7 @@ func CreatePublicRelayContribution(c *gin.Context) {
 		publicRelayError(c, http.StatusUnprocessableEntity, "PUBLIC_RELAY_EMAIL_REQUIRED", errors.New("a verified account email is required"))
 		return
 	}
-	item, err := model.CreatePublicRelayContribution(c.GetInt("id"), email, input.Name, input.BaseURL, input.Models, input.Description)
+	item, err := model.CreatePublicRelayContribution(c.GetInt("id"), email, input.Name, input.BaseURL, input.Models, input.Description, string(input.ChannelConfig))
 	if err != nil {
 		status, code := http.StatusUnprocessableEntity, "PUBLIC_RELAY_INVALID_REQUEST"
 		if errors.Is(err, model.ErrPublicRelayInvalidURL) {

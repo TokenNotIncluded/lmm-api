@@ -191,10 +191,21 @@ import {
   ChannelModelsSection,
 } from './sections'
 
+export type ChannelMutateDrawerSubmission = {
+  title: string
+  description: string
+  submitLabel: string
+  supplement?: React.ReactNode
+  isPending: boolean
+  disabled?: boolean
+  onSubmit: (data: ChannelFormValues) => Promise<void>
+}
+
 type ChannelMutateDrawerProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
   currentRow?: Channel | null
+  submission?: ChannelMutateDrawerSubmission
 }
 
 type ModelMappingGuardrail = {
@@ -607,6 +618,7 @@ export function ChannelMutateDrawer({
   open,
   onOpenChange,
   currentRow,
+  submission,
 }: ChannelMutateDrawerProps) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
@@ -1621,7 +1633,7 @@ export function ChannelMutateDrawer({
     onSuccess: handleSuccess,
   })
 
-  const isSubmitting = channelMutation.isPending
+  const isSubmitting = submission?.isPending ?? channelMutation.isPending
 
   // Submit handler
   const onSubmit = useCallback(
@@ -1722,6 +1734,10 @@ export function ChannelMutateDrawer({
         }
       }
 
+      if (submission) {
+        await submission.onSubmit(data)
+        return
+      }
       await channelMutation.mutateAsync(data)
     },
     [
@@ -1731,6 +1747,7 @@ export function ChannelMutateDrawer({
       confirmMissingModelMappings,
       confirmStatusCodeRisk,
       channelMutation,
+      submission,
       t,
     ]
   )
@@ -1871,20 +1888,22 @@ export function ChannelMutateDrawer({
                     <ChannelTypeLogo type={currentType} size={22} />
                   </IconBadge>
                   <span>
-                    {isEditing ? t('Edit Channel') : t('Create Channel')}
+                    {submission?.title ??
+                      (isEditing ? t('Edit Channel') : t('Create Channel'))}
                     <span className='text-muted-foreground ml-2 text-sm font-normal'>
                       {t(currentTypeLabel)}
                     </span>
                   </span>
                 </SheetTitle>
                 <SheetDescription className='mt-1'>
-                  {isEditing
-                    ? t(
-                        "Update channel configuration and click save when you're done."
-                      )
-                    : t(
-                        'Add a new channel by providing the necessary information.'
-                      )}
+                  {submission?.description ??
+                    (isEditing
+                      ? t(
+                          "Update channel configuration and click save when you're done."
+                        )
+                      : t(
+                          'Add a new channel by providing the necessary information.'
+                        ))}
                 </SheetDescription>
               </div>
               {!isEditing && (
@@ -1965,6 +1984,7 @@ export function ChannelMutateDrawer({
                     onNavigate={handleEditorNavNavigate}
                   />
                   <div className='flex min-w-0 flex-col gap-5'>
+                    {submission?.supplement}
                     {/* ── Basic Information ── */}
                     <div
                       id={CHANNEL_EDITOR_SECTION_IDS.identity}
@@ -4779,11 +4799,16 @@ export function ChannelMutateDrawer({
             >
               {t('Cancel')}
             </SheetClose>
-            <Button form='channel-form' type='submit' disabled={isSubmitting}>
+            <Button
+              form='channel-form'
+              type='submit'
+              disabled={isSubmitting || submission?.disabled}
+            >
               {isSubmitting && (
                 <Loader2 className='mr-2 h-4 w-4 animate-spin' />
               )}
-              {isEditing ? t('Update Channel') : t('Save changes')}
+              {submission?.submitLabel ??
+                (isEditing ? t('Update Channel') : t('Save changes'))}
             </Button>
           </SheetFooter>
         </SheetContent>

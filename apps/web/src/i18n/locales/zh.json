@@ -7403,5 +7403,18 @@
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
     "Zoom": "缩放"
-  }
+  },
+  "Complete the full channel configuration below. The submission remains pending until an administrator approves it.": "请完整填写下方渠道配置。提交后将保持待审核状态，直到管理员批准。",
+  "I confirm that these credentials are authorized for this shared channel.": "我确认这些凭证已获授权用于此分享渠道。",
+  "Sharing information": "分享信息",
+  "Add the public description and confirm that this channel can be shared.": "补充公开说明，并确认该渠道可以分享。",
+  "This information is shown in the public channel market after approval.": "审核通过后，此信息会显示在公开渠道市场中。",
+  "Global IP Whitelist": "全局 IP 白名单",
+  "Global ingress allowlist": "全局入口白名单",
+  "When enabled, every page and API request except health probes must come from an allowed client IP. Add your current public IP before enabling it.": "启用后，除健康探针外，所有页面和 API 请求都必须来自允许的客户端 IP。启用前请先添加你当前的公网 IP。",
+  "Enable global IP whitelist": "启用全局 IP 白名单",
+  "Use trusted-proxy-aware client IP detection and reject all clients outside the list.": "使用可信代理感知的客户端 IP 识别，并拒绝白名单之外的所有客户端。",
+  "Allowed client IPs / CIDRs": "允许的客户端 IP / CIDR",
+  "Enter one IPv4, IPv6, or CIDR per line. Bare addresses are normalized to exact host prefixes.": "每行填写一个 IPv4、IPv6 或 CIDR。单个地址会自动规范为精确主机前缀。",
+  "At least one IP address or CIDR is required before enabling the whitelist.": "启用白名单前至少需要填写一个 IP 地址或 CIDR。"
 }

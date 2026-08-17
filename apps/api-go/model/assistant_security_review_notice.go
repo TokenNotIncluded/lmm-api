@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	assistantSecurityReviewNoticeKeep = 30
+	assistantSecurityReviewNoticeKeep = 1
 	assistantSecurityReviewNoticeMax  = 100
 	assistantSecurityReviewBucketMax  = 20
 	assistantSecurityReviewKeyMax     = 128

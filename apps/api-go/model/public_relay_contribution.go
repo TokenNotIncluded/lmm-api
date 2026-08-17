@@ -44,15 +44,16 @@ var (
 	ErrPublicRelayGroupMismatch   = errors.New("channel is not in the configured public group")
 )
 
-// PublicRelayContribution is a user-submitted channel candidate. Credentials
-// are intentionally not accepted or stored here; an administrator provisions
-// the actual channel after review.
+// PublicRelayContribution is a user-submitted channel candidate. The complete
+// configuration is available only to the owner and administrators while the
+// public view remains strictly limited to the fields in PublicRelayView.
 type PublicRelayContribution struct {
 	Id               int     `json:"id" gorm:"primaryKey"`
 	UserId           int     `json:"user_id" gorm:"not null;index"`
 	ContributorEmail string  `json:"contributor_email" gorm:"type:varchar(255);not null"`
 	Name             string  `json:"name" gorm:"type:varchar(120);not null"`
 	BaseURL          string  `json:"base_url" gorm:"type:varchar(512);not null"`
+	ChannelConfig    string  `json:"channel_config,omitempty" gorm:"type:text;not null;default:''"`
 	Group            string  `json:"group" gorm:"type:varchar(64);not null;index"`
 	Models           string  `json:"models" gorm:"type:text"`
 	Description      string  `json:"description" gorm:"type:text"`
@@ -174,6 +175,9 @@ func (item *PublicRelayContribution) PublicView() PublicRelayView {
 
 func normalizePublicRelayURL(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme != "https" && parsed.Scheme != "http" || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {
 		return "", ErrPublicRelayInvalidURL
@@ -204,7 +208,39 @@ func normalizePublicRelayInput(name, baseURL, models, description string) (strin
 	return name, baseURL, models, description, nil
 }
 
-func CreatePublicRelayContribution(userID int, email, name, baseURL, models, description string) (*PublicRelayContribution, error) {
+func normalizePublicRelayChannelConfig(rawConfig, name, baseURL, models string) (string, error) {
+	rawConfig = strings.TrimSpace(rawConfig)
+	if rawConfig == "" || len(rawConfig) > 128<<10 {
+		return "", ErrPublicRelayInvalidInput
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(rawConfig), &envelope); err != nil {
+		return "", ErrPublicRelayInvalidInput
+	}
+	var channel struct {
+		Name    string `json:"name"`
+		BaseURL string `json:"base_url"`
+		Key     string `json:"key"`
+		Models  string `json:"models"`
+	}
+	if err := json.Unmarshal(envelope["channel"], &channel); err != nil {
+		return "", ErrPublicRelayInvalidInput
+	}
+	if strings.TrimSpace(channel.Name) != name || strings.TrimSpace(channel.Key) == "" || strings.TrimSpace(channel.Models) != models {
+		return "", ErrPublicRelayInvalidInput
+	}
+	configBaseURL, err := normalizePublicRelayURL(channel.BaseURL)
+	if err != nil || configBaseURL != baseURL {
+		return "", ErrPublicRelayInvalidInput
+	}
+	canonical, err := json.Marshal(envelope)
+	if err != nil {
+		return "", ErrPublicRelayInvalidInput
+	}
+	return string(canonical), nil
+}
+
+func CreatePublicRelayContribution(userID int, email, name, baseURL, models, description, channelConfig string) (*PublicRelayContribution, error) {
 	if userID <= 0 || strings.TrimSpace(email) == "" {
 		return nil, ErrPublicRelayInvalidInput
 	}
@@ -212,11 +248,15 @@ func CreatePublicRelayContribution(userID int, email, name, baseURL, models, des
 	if err != nil {
 		return nil, err
 	}
+	channelConfig, err = normalizePublicRelayChannelConfig(channelConfig, name, baseURL, models)
+	if err != nil {
+		return nil, err
+	}
 	now := common.GetTimestamp()
 	item := &PublicRelayContribution{
 		UserId: userID, ContributorEmail: strings.TrimSpace(email), Name: name,
 		BaseURL: baseURL, Group: operation_setting.GetPublicRelayGroup(), Models: models,
-		Description: description, Status: PublicRelayPending, CreatedAt: now, UpdatedAt: now,
+		Description: description, ChannelConfig: channelConfig, Status: PublicRelayPending, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := DB.Create(item).Error; err != nil {
 		return nil, err

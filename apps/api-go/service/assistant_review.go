@@ -19,6 +19,7 @@ type AssistantReviewPayload struct {
 const (
 	reviewBucket       = time.Hour
 	reviewHistoryLimit = 30
+	reviewNoticeLimit  = 1
 )
 
 type assistantReviewHandler struct{}
@@ -87,7 +88,7 @@ func (assistantReviewHandler) Run(ctx context.Context, task *model.SystemTask, r
 	if err := model.PruneTaskHistory(task.Type, reviewHistoryLimit); err != nil {
 		logSystemTaskLockError(ctx, task, err)
 	}
-	if err := model.PruneAssistantSecurityReviewNotices(reviewHistoryLimit); err != nil {
+	if err := model.PruneAssistantSecurityReviewNotices(reviewNoticeLimit); err != nil {
 		logSystemTaskLockError(ctx, task, err)
 	}
 }

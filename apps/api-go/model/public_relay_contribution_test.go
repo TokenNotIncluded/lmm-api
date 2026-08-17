@@ -10,6 +10,7 @@ the Free Software Foundation, either version 3 of the License, or
 package model
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/LIghtJUNction/api.lmm.best/common"
@@ -17,6 +18,41 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPublicRelayChannelConfigPreservesFullConfiguration(t *testing.T) {
+	raw := `{
+		"mode":"single",
+		"channel":{
+			"name":"shared relay",
+			"base_url":"",
+			"key":"secret-key",
+			"models":"model-a,model-b",
+			"model_mapping":"{\"model-a\":\"upstream-a\"}",
+			"setting":"{\"proxy\":\"enabled\"}"
+		}
+	}`
+
+	normalized, err := normalizePublicRelayChannelConfig(raw, "shared relay", "", "model-a,model-b")
+	require.NoError(t, err)
+	assert.Contains(t, normalized, `"model_mapping"`)
+	assert.Contains(t, normalized, `"setting"`)
+
+	_, err = normalizePublicRelayChannelConfig(`{
+		"channel":{"name":"shared relay","base_url":"","models":"model-a"}
+	}`, "shared relay", "", "model-a")
+	assert.ErrorIs(t, err, ErrPublicRelayInvalidInput)
+}
+
+func TestPublicRelayPublicViewDoesNotExposeChannelConfig(t *testing.T) {
+	item := PublicRelayContribution{
+		Name:          "shared relay",
+		ChannelConfig: `{"channel":{"key":"secret-key"}}`,
+	}
+	encoded, err := json.Marshal(item.PublicView())
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), "channel_config")
+	assert.NotContains(t, string(encoded), "secret-key")
+}
 
 func TestPublicRelayTipsRemainPendingUntilWithdrawal(t *testing.T) {
 	db := setupConsoleActivationTestDB(t)
