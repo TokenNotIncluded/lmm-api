@@ -258,6 +258,13 @@ func actionableJournalLine(line string) bool {
 		strings.Contains(trimmed, `upstream: "http://127.0.0.1:3000/`) {
 		return false
 	}
+	// nginx emits a companion auth_request 502 after the local access-policy
+	// upstream refuses a request during the guarded service restart. The
+	// native health probes below are authoritative once the listener returns.
+	if strings.Contains(trimmed, "auth request unexpected status: 502") &&
+		strings.Contains(trimmed, "while sending to client") {
+		return false
+	}
 	return true
 }
 

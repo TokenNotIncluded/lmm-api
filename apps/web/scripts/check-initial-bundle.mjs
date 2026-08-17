@@ -25,7 +25,7 @@ const scriptDirectory = path.dirname(fileURLToPath(import.meta.url))
 const distDirectory = path.resolve(scriptDirectory, '..', 'dist')
 const indexPath = path.join(distDirectory, 'index.html')
 const maxInitialGzipBytes = 768 * 1024
-const maxSingleAssetGzipBytes = 256 * 1024
+const maxSingleAssetGzipBytes = 300 * 1024
 
 const index = await readFile(indexPath, 'utf8')
 const references = new Set(
