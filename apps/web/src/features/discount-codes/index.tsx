@@ -15,6 +15,16 @@ import { toast } from 'sonner'
 
 import { SectionPageLayout } from '@/components/layout'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -27,6 +37,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
+import { Textarea } from '@/components/ui/textarea'
 
 import {
   createDiscountCodes,
@@ -129,6 +140,9 @@ export function DiscountCodes() {
   const [sheetOpen, setSheetOpen] = useState(false)
   const [editing, setEditing] = useState<DiscountCode>()
   const [form, setForm] = useState<FormState>(emptyForm)
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
+  const [generatedCodes, setGeneratedCodes] = useState<string[]>([])
+  const [generatedCodesOpen, setGeneratedCodesOpen] = useState(false)
 
   const query = useQuery({
     queryKey: ['discount-codes', page, keyword],
@@ -138,6 +152,8 @@ export function DiscountCodes() {
   const rows = query.data?.data?.items ?? []
   const total = query.data?.data?.total ?? 0
   const pageCount = Math.max(1, Math.ceil(total / 20))
+  const allRowsSelected =
+    rows.length > 0 && rows.every((row) => selectedIds.has(row.id))
 
   const refresh = () =>
     queryClient.invalidateQueries({ queryKey: ['discount-codes'] })
@@ -163,6 +179,11 @@ export function DiscountCodes() {
           ? t('Discount code saved')
           : t('Created {{count}} discount codes.', { count: createdCount })
       )
+      if (!editing && Array.isArray(result.data)) {
+        setGeneratedCodes(result.data.map((code) => code.code))
+        setSelectedIds(new Set(result.data.map((code) => code.id)))
+        setGeneratedCodesOpen(true)
+      }
       setSheetOpen(false)
       refresh()
     },
@@ -230,6 +251,26 @@ export function DiscountCodes() {
     setSheetOpen(true)
   }
 
+  const toggleRowSelection = (id: number, checked: boolean) => {
+    setSelectedIds((current) => {
+      const next = new Set(current)
+      if (checked) next.add(id)
+      else next.delete(id)
+      return next
+    })
+  }
+
+  const toggleAllRows = (checked: boolean) => {
+    setSelectedIds((current) => {
+      const next = new Set(current)
+      for (const row of rows) {
+        if (checked) next.add(row.id)
+        else next.delete(row.id)
+      }
+      return next
+    })
+  }
+
   const submit = () => {
     if (!canSave || maxUses === undefined) return
     if (editing) {
@@ -255,11 +296,24 @@ export function DiscountCodes() {
     })
   }
 
+  const copyCodes = async (codes: string[]) => {
+    if (codes.length === 0 || !navigator.clipboard) return
+    try {
+      await navigator.clipboard.writeText(codes.join('\n'))
+      toast.success(t('Copied to clipboard'))
+    } catch {
+      toast.error(t('Unable to copy'))
+    }
+  }
+
   const copyCode = () => {
-    if (!form.code || !navigator.clipboard) return
-    void navigator.clipboard
-      .writeText(form.code)
-      .then(() => toast.success(t('Copied to clipboard')))
+    void copyCodes(form.code ? [form.code] : [])
+  }
+
+  const copySelectedCodes = () => {
+    void copyCodes(
+      rows.filter((row) => selectedIds.has(row.id)).map((row) => row.code)
+    )
   }
 
   return (
@@ -275,6 +329,15 @@ export function DiscountCodes() {
             >
               <RefreshCw className='size-4' />
               {t('Refresh')}
+            </Button>
+            <Button
+              variant='outline'
+              size='sm'
+              disabled={selectedIds.size === 0}
+              onClick={copySelectedCodes}
+            >
+              <Copy className='size-4' />
+              {t('Copy selected codes')} ({selectedIds.size})
             </Button>
             <Button size='sm' onClick={openCreate}>
               <Plus className='size-4' />
@@ -300,7 +363,13 @@ export function DiscountCodes() {
             />
             <div className='overflow-x-auto'>
               <div className='min-w-[900px]'>
-                <div className='text-muted-foreground grid grid-cols-[1.3fr_1fr_.7fr_.8fr_1fr_1.4fr_auto] gap-4 border-b px-2 pb-3 text-xs tracking-wider uppercase'>
+                <div className='text-muted-foreground grid grid-cols-[auto_1.3fr_1fr_.7fr_.8fr_1fr_1.4fr_auto] gap-4 border-b px-2 pb-3 text-xs tracking-wider uppercase'>
+                  <Checkbox
+                    checked={allRowsSelected}
+                    indeterminate={selectedIds.size > 0 && !allRowsSelected}
+                    onCheckedChange={(checked) => toggleAllRows(checked === true)}
+                    aria-label={t('Select all codes')}
+                  />
                   <span>{t('Code')}</span>
                   <span>{t('Name')}</span>
                   <span>{t('Discount')}</span>
@@ -320,9 +389,16 @@ export function DiscountCodes() {
                 ) : (
                   rows.map((row) => (
                     <div
-                      className='grid grid-cols-[1.3fr_1fr_.7fr_.8fr_1fr_1.4fr_auto] items-center gap-4 border-b px-2 py-4 text-sm last:border-b-0'
+                      className='grid grid-cols-[auto_1.3fr_1fr_.7fr_.8fr_1fr_1.4fr_auto] items-center gap-4 border-b px-2 py-4 text-sm last:border-b-0'
                       key={row.id}
                     >
+                      <Checkbox
+                        checked={selectedIds.has(row.id)}
+                        onCheckedChange={(checked) =>
+                          toggleRowSelection(row.id, checked === true)
+                        }
+                        aria-label={`${t('Select code')} ${row.code}`}
+                      />
                       <div className='font-mono font-medium'>{row.code}</div>
                       <div className='truncate'>{row.name}</div>
                       <div>{row.discount_percent}%</div>
@@ -569,9 +645,6 @@ export function DiscountCodes() {
                     }))
                   }
                 />
-                <p className='text-muted-foreground text-xs'>
-                  {t('Leave empty for no expiration.')}
-                </p>
               </div>
               <div className='grid gap-2'>
                 <Label htmlFor='discount-form-expire'>{t('Expires')}</Label>
@@ -586,6 +659,9 @@ export function DiscountCodes() {
                     }))
                   }
                 />
+                <p className='text-muted-foreground text-xs'>
+                  {t('Leave empty for no expiration.')}
+                </p>
               </div>
             </div>
           </div>
@@ -599,6 +675,35 @@ export function DiscountCodes() {
           </SheetFooter>
         </SheetContent>
       </Sheet>
+
+      <Dialog
+        open={generatedCodesOpen}
+        onOpenChange={setGeneratedCodesOpen}
+      >
+        <DialogContent className='sm:max-w-xl'>
+          <DialogHeader>
+            <DialogTitle>{t('Discount codes created')}</DialogTitle>
+            <DialogDescription>
+              {t('Copy these generated codes now for distribution.')}
+            </DialogDescription>
+          </DialogHeader>
+          <Textarea
+            value={generatedCodes.join('\n')}
+            readOnly
+            rows={Math.min(12, Math.max(4, generatedCodes.length))}
+            className='font-mono text-sm'
+          />
+          <DialogFooter>
+            <DialogClose render={<Button variant='outline' />}>
+              {t('Cancel')}
+            </DialogClose>
+            <Button onClick={() => void copyCodes(generatedCodes)}>
+              <Copy className='size-4' />
+              {t('Copy all generated codes')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }

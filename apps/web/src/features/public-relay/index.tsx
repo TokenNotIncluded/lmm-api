@@ -779,8 +779,8 @@ export function PublicRelay() {
           </DialogHeader>
 
           <div className='min-h-0 flex-1 overflow-y-auto'>
-            <div className='grid gap-8 p-6 lg:grid-cols-[12rem_minmax(0,1fr)]'>
-              <aside className='hidden lg:block'>
+            <div className='grid gap-8 p-5 xl:grid-cols-[12rem_minmax(0,1fr)] sm:p-6'>
+              <aside className='hidden xl:block'>
                 <p className='text-muted-foreground mb-3 text-xs font-medium tracking-[0.14em] uppercase'>
                   {t('Share a channel')}
                 </p>
