@@ -140,7 +140,7 @@ func (runtime *productionRuntime) apply(ctx context.Context, workspace productio
 	}
 	frontendSHA256 := oldFrontendSHA256
 	if options.ActivateFrontend {
-		frontendSHA256, err = sha256File(filepath.Join(runtime.paths.PackagedFrontend, "index.html"))
+		frontendSHA256, err = runtime.candidateFrontendIndexSHA256(ctx, options.Package)
 		if err != nil || frontendSHA256 != options.FrontendIndexSHA256 {
 			return productionStatus{}, errors.New("bundled frontend identity mismatch")
 		}

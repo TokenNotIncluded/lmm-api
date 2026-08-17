@@ -21,6 +21,7 @@ type fakeProductionRunner struct {
 	probeBinary              string
 	installedBinary          string
 	frontendRoot             string
+	candidateFrontendIndex   string
 	oldVersion               string
 	newVersion               string
 	installedVersion         string
@@ -60,6 +61,11 @@ func (runner *fakeProductionRunner) Run(_ context.Context, command productionCom
 		}
 	}
 	switch base {
+	case "bsdtar":
+		if len(command.Args) != 3 || command.Args[0] != "-xOf" || command.Args[1] != runner.candidatePackage || command.Args[2] != productionPackagedFrontendIndex {
+			return nil, fmt.Errorf("unexpected bsdtar arguments: %v", command.Args)
+		}
+		return os.ReadFile(runner.candidateFrontendIndex)
 	case "pg_restore":
 		return []byte("archive ok\n"), nil
 	case "pg_dump":
@@ -344,7 +350,8 @@ func newProductionFixture(t *testing.T) productionFixture {
 	runner := &fakeProductionRunner{
 		t: t, candidatePackage: candidate, rollbackPackage: rollbackPackage,
 		probeBinary: probe, installedBinary: paths.InstalledBinary, frontendRoot: paths.FrontendRoot,
-		oldVersion: oldVersion, newVersion: newVersion, installedVersion: oldVersion,
+		candidateFrontendIndex: filepath.Join(paths.PackagedFrontend, "index.html"),
+		oldVersion:             oldVersion, newVersion: newVersion, installedVersion: oldVersion,
 		packageName: productionSourcePackageName, serviceActive: true,
 	}
 	clock := time.Date(2026, 8, 10, 1, 0, 0, 0, time.UTC)
