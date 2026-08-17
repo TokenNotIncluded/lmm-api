@@ -67,6 +67,48 @@ func TestWeChatLoginRejectsCallbackWithoutBrowserState(t *testing.T) {
 	assert.NotContains(t, recorder.Body.String(), "验证码错误或已过期")
 }
 
+func TestWeChatProviderErrorDoesNotEchoUpstreamMessage(t *testing.T) {
+	setupAuthFlowControllerTest(t)
+	previousEnabled := common.WeChatAuthEnabled
+	previousAddress := common.WeChatServerAddress
+	previousToken := common.WeChatServerToken
+	common.WeChatAuthEnabled = true
+	providerMessage := "upstream database password leaked"
+	provider := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"success":false,"message":"` + providerMessage + `"}`))
+	}))
+	common.WeChatServerAddress = provider.URL
+	common.WeChatServerToken = "wechat-test-token"
+	t.Cleanup(func() {
+		provider.Close()
+		common.WeChatAuthEnabled = previousEnabled
+		common.WeChatServerAddress = previousAddress
+		common.WeChatServerToken = previousToken
+	})
+
+	state, _, err := model.CreateAuthFlow(model.AuthFlowCreate{
+		Purpose: model.AuthFlowPurposeWeChatLogin, Provider: "wechat", Intent: model.AuthFlowIntentLogin,
+		ExpiresAt: time.Now().Add(time.Minute),
+	})
+	require.NoError(t, err)
+	router := gin.New()
+	router.GET("/api/oauth/wechat", WeChatAuth)
+	request := httptest.NewRequest(http.MethodGet, "/api/oauth/wechat?code=provider-code&state="+state, nil)
+	request.AddCookie(&http.Cookie{Name: oauthStateCookieName("wechat"), Value: state})
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.NotContains(t, recorder.Body.String(), providerMessage)
+	var response struct {
+		Message string `json:"message"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.NotEmpty(t, response.Message)
+	assert.NotEqual(t, providerMessage, response.Message)
+}
+
 func TestTelegramLoginStartPersistsBrowserBoundFlow(t *testing.T) {
 	setupAuthFlowControllerTest(t)
 	previousEnabled := common.TelegramOAuthEnabled

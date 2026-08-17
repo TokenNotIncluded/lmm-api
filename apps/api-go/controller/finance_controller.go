@@ -762,7 +762,7 @@ func buildFinanceOverview(start, end int64, userFilter int, methodFilter string)
 	if userFilter > 0 {
 		tx = tx.Where("user_id = ?", userFilter)
 	}
-	if err := iterateFinanceLogSource(tx.Select("id, user_id, created_at, request_id, type, prompt_tokens, completion_tokens, other"), func(log model.Log) error {
+	if err := iterateFinanceLogSource(tx.Select("id, user_id, created_at, request_id, type, quota, prompt_tokens, completion_tokens, other"), func(log model.Log) error {
 		if methodFilter != "" {
 			return nil
 		}
@@ -774,7 +774,16 @@ func buildFinanceOverview(start, end int64, userFilter int, methodFilter string)
 		if raw, ok := other["model_price"].(float64); ok && raw > 0 {
 			price, priced = raw, true
 		}
-		cost := int64(math.Round(price * float64(max(0, log.PromptTokens+log.CompletionTokens))))
+		totalTokens := max(0, log.PromptTokens+log.CompletionTokens)
+		cost := int64(math.Round(price * float64(totalTokens)))
+		// Fixed-price requests (for example image/MJ/task calls) legitimately
+		// have no token usage. Their consume log still carries the charged quota;
+		// use the recorded per-call model price only for those durable charges.
+		// A zero-quota log is left at zero so missing/failed usage cannot inflate
+		// the platform cost estimate.
+		if priced && totalTokens == 0 && log.Quota > 0 {
+			cost = financeMicrosFromFloat(price)
+		}
 		a.addUsage(log.UserId, log.CreatedAt, log.PromptTokens, log.CompletionTokens, cost, priced)
 		return nil
 	}); err != nil {

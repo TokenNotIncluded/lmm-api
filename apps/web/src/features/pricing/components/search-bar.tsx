@@ -72,7 +72,7 @@ export function SearchBar(props: SearchBarProps) {
             variant='ghost'
             size='icon'
             onClick={props.onClear}
-            className='text-muted-foreground/60 hover:text-foreground size-7'
+            className='text-muted-foreground/60 hover:text-foreground size-11 sm:size-7'
             aria-label={t('Clear search')}
           >
             <X className='size-4' />

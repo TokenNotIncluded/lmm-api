@@ -50,6 +50,32 @@ func TestFinanceOverviewAggregatesPaymentMethodsUsersAndTokenCost(t *testing.T) 
 	require.Equal(t, int64(10_000_000), stripeView.RevenueMicros)
 }
 
+func TestFinanceOverviewCountsChargedFixedPriceUsageWithoutTokens(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}, &model.SubscriptionOrder{}, &model.Log{}, &model.FinanceLedgerEntry{}, &model.FinancePaymentMethod{}))
+	now := time.Now().Unix()
+	user := model.User{Username: "finance-fixed-price", Password: "password", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AffCode: "finance-fixed-price"}
+	require.NoError(t, db.Create(&user).Error)
+	// Per-call requests such as image/MJ tasks have no token usage, but their
+	// consume log records both the charged quota and the fixed model price.
+	require.NoError(t, db.Create(&model.Log{
+		UserId: user.Id, CreatedAt: now - 5, Type: model.LogTypeConsume,
+		Quota: 50_000, ModelName: "mj_imagine", Other: `{"model_price":0.1}`,
+	}).Error)
+	require.NoError(t, db.Create(&model.Log{
+		UserId: user.Id, CreatedAt: now - 4, Type: model.LogTypeConsume,
+		Quota: 0, ModelName: "mj_imagine", Other: `{"model_price":0.1}`,
+	}).Error)
+
+	view, err := buildFinanceOverview(now-100, now+1, 0, "")
+	require.NoError(t, err)
+	require.Equal(t, int64(2), view.Tokens.Requests)
+	require.Equal(t, int64(0), view.Tokens.TotalTokens)
+	require.Equal(t, int64(100_000), view.Tokens.EstimatedCostMicros)
+	require.Equal(t, int64(100_000), view.ExpenseMicros)
+	require.Equal(t, int64(100_000), view.Users[0].TokenCostMicros)
+}
+
 func TestFinanceOverviewDoesNotAttributeUsageCostToPaymentMethod(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}, &model.SubscriptionOrder{}, &model.Log{}, &model.FinanceLedgerEntry{}, &model.FinancePaymentMethod{}))

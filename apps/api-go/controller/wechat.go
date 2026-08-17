@@ -100,6 +100,17 @@ func getWeChatIdByCode(code string) (string, error) {
 	return res.Data, nil
 }
 
+// writeWeChatProviderError keeps upstream diagnostics out of the public
+// response. The WeChat helper is an external service boundary and its message
+// may contain implementation details or provider-controlled text; retain it
+// only in server logs while returning the stable, localized OAuth error.
+func writeWeChatProviderError(c *gin.Context, err error) {
+	if err != nil {
+		common.SysLog("WeChat OAuth provider request failed: " + err.Error())
+	}
+	common.ApiErrorI18n(c, i18n.MsgOAuthGetUserErr)
+}
+
 func WeChatAuth(c *gin.Context) {
 	if !common.WeChatAuthEnabled {
 		c.JSON(http.StatusOK, gin.H{
@@ -119,10 +130,7 @@ func WeChatAuth(c *gin.Context) {
 	code := c.Query("code")
 	wechatId, err := getWeChatIdByCode(code)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"message": err.Error(),
-			"success": false,
-		})
+		writeWeChatProviderError(c, err)
 		return
 	}
 	flow, err := model.ConsumeAuthFlow(state, model.AuthFlowMatch{
@@ -248,10 +256,7 @@ func WeChatBind(c *gin.Context) {
 	code := req.Code
 	wechatId, err := getWeChatIdByCode(code)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"message": err.Error(),
-			"success": false,
-		})
+		writeWeChatProviderError(c, err)
 		return
 	}
 	if model.IsWeChatIdAlreadyTaken(wechatId) {
