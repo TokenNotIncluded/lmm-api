@@ -489,3 +489,42 @@ func TestCompleteExternalTopUpRejectsProductMismatchAndEvidenceReuse(t *testing.
 	require.NoError(t, db.First(&reloaded, secondTopUp.Id).Error)
 	assert.Equal(t, common.TopUpStatusPending, reloaded.Status)
 }
+
+func TestManualCompleteTopUpConsumesOneTimeDiscountCode(t *testing.T) {
+	db := setupExternalTopUpSettlementDB(t, 1)
+	previousLogDB := LOG_DB
+	previousRedisEnabled := common.RedisEnabled
+	LOG_DB = db
+	common.RedisEnabled = false
+	t.Cleanup(func() {
+		LOG_DB = previousLogDB
+		common.RedisEnabled = previousRedisEnabled
+	})
+	require.NoError(t, db.AutoMigrate(&DiscountCode{}, &Log{}))
+
+	code := DiscountCode{
+		Code:            "MANUAL-ONCE",
+		Status:          DiscountCodeStatusEnabled,
+		DiscountPercent: 10,
+		MaxUses:         1,
+	}
+	require.NoError(t, db.Create(&code).Error)
+	firstUser, firstTopUp, _ := createSettlementFixture(t, db, "manual-discount-one")
+	secondUser, secondTopUp, _ := createSettlementFixture(t, db, "manual-discount-two")
+	require.NoError(t, db.Model(&TopUp{}).Where("id IN ?", []int{firstTopUp.Id, secondTopUp.Id}).Update("discount_code_id", code.Id).Error)
+
+	require.NoError(t, ManualCompleteTopUp(firstTopUp.TradeNo, "127.0.0.1"))
+	var consumed DiscountCode
+	require.NoError(t, db.First(&consumed, code.Id).Error)
+	assert.EqualValues(t, 1, consumed.UsedCount)
+
+	assert.ErrorIs(t, ManualCompleteTopUp(secondTopUp.TradeNo, "127.0.0.1"), ErrDiscountCodeExhausted)
+	var pending TopUp
+	require.NoError(t, db.First(&pending, secondTopUp.Id).Error)
+	assert.Equal(t, common.TopUpStatusPending, pending.Status)
+	var reloadedFirstUser, reloadedSecondUser User
+	require.NoError(t, db.First(&reloadedFirstUser, firstUser.Id).Error)
+	require.NoError(t, db.First(&reloadedSecondUser, secondUser.Id).Error)
+	assert.Equal(t, 100+1_234, reloadedFirstUser.Quota)
+	assert.Equal(t, 100, reloadedSecondUser.Quota)
+}

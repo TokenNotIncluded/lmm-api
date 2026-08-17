@@ -625,6 +625,12 @@ func handleOAuthError(c *gin.Context, err error) {
 	case *oauth.TrustLevelError:
 		common.ApiErrorI18n(c, i18n.MsgOAuthTrustLevelLow)
 	default:
-		common.ApiError(c, err)
+		// Provider/network errors can contain response bodies, URLs, or other
+		// implementation details. Keep the diagnostic server-side and return a
+		// stable public message instead of reflecting the upstream error.
+		if err != nil {
+			common.SysLog("OAuth provider request failed: " + err.Error())
+		}
+		common.ApiErrorI18n(c, i18n.MsgOAuthConnectFailed)
 	}
 }

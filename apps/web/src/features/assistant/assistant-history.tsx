@@ -66,6 +66,9 @@ import {
 } from './api'
 import { redactAssistantMessageForDisplay } from './assistant-message-safety'
 
+const historyTouchTargetClassName = 'min-h-11 sm:min-h-7'
+const historyInputClassName = 'h-11 sm:h-8'
+
 function assistantHistoryErrorStatus(error: unknown): number | null {
   const status = (error as { response?: { status?: unknown } } | null)?.response
     ?.status
@@ -355,6 +358,7 @@ export function AssistantHistory(props: {
               type='button'
               variant={effectiveScope === 'self' ? 'secondary' : 'outline'}
               size='sm'
+              className={historyTouchTargetClassName}
               aria-pressed={effectiveScope === 'self'}
               onClick={selectSelfScope}
             >
@@ -364,6 +368,7 @@ export function AssistantHistory(props: {
               type='button'
               variant={effectiveScope === 'audit' ? 'secondary' : 'outline'}
               size='sm'
+              className={historyTouchTargetClassName}
               aria-pressed={effectiveScope === 'audit'}
               onClick={selectAuditScope}
             >
@@ -383,7 +388,7 @@ export function AssistantHistory(props: {
                   />
                   <Input
                     id='assistant-history-audit-search'
-                    className='pl-9'
+                    className={cn(historyInputClassName, 'pl-9')}
                     value={auditSearch}
                     onChange={(event) => {
                       setAuditSearch(event.target.value)
@@ -449,7 +454,7 @@ export function AssistantHistory(props: {
                 )}
               </div>
               <details className='text-sm'>
-                <summary className='text-muted-foreground cursor-pointer'>
+                <summary className='text-muted-foreground min-h-11 cursor-pointer py-2 sm:min-h-0 sm:py-0'>
                   {t('User ID')}
                 </summary>
                 <form
@@ -459,6 +464,7 @@ export function AssistantHistory(props: {
                   <div className='flex gap-3'>
                     <Input
                       id='assistant-history-audit-user-id'
+                      className={historyInputClassName}
                       value={auditUserIdInput}
                       onChange={(event) => {
                         setAuditUserIdInput(event.target.value)
@@ -474,7 +480,7 @@ export function AssistantHistory(props: {
                     <Button
                       type='submit'
                       variant='outline'
-                      className='shrink-0'
+                      className={cn(historyTouchTargetClassName, 'shrink-0')}
                     >
                       {t('View')}
                     </Button>
@@ -509,6 +515,7 @@ export function AssistantHistory(props: {
             type='button'
             variant={showingArchived ? 'outline' : 'secondary'}
             size='sm'
+            className={historyTouchTargetClassName}
             aria-pressed={!showingArchived}
             onClick={() => setFilter('active')}
           >
@@ -518,6 +525,7 @@ export function AssistantHistory(props: {
             type='button'
             variant={showingArchived ? 'secondary' : 'outline'}
             size='sm'
+            className={historyTouchTargetClassName}
             aria-pressed={showingArchived}
             onClick={() => setFilter('archived')}
           >
@@ -530,6 +538,7 @@ export function AssistantHistory(props: {
               type='button'
               variant='ghost'
               size='sm'
+              className={historyTouchTargetClassName}
               render={<Link to='/chat-management' />}
             >
               <FolderOpen data-icon='inline-start' aria-hidden='true' />
@@ -537,7 +546,7 @@ export function AssistantHistory(props: {
             </Button>
           ) : null}
           <Input
-            className='w-full sm:w-64'
+            className={cn(historyInputClassName, 'w-full sm:w-64')}
             aria-label={t('Search')}
             placeholder={t('Search')}
             value={search}
@@ -571,6 +580,7 @@ export function AssistantHistory(props: {
                 type='button'
                 variant='outline'
                 size='sm'
+                className={historyTouchTargetClassName}
                 data-testid='assistant-history-retry'
                 aria-label={t('Retry')}
                 onClick={() => void historyQuery.refetch()}
@@ -672,6 +682,7 @@ export function AssistantHistory(props: {
                                 : 'outline'
                             }
                             size='sm'
+                            className={historyTouchTargetClassName}
                             aria-label={`${t('View')} ${conversation.title}`}
                             onClick={() =>
                               props.onOpenConversation(conversation)
@@ -684,6 +695,7 @@ export function AssistantHistory(props: {
                               type='button'
                               variant='ghost'
                               size='sm'
+                              className={historyTouchTargetClassName}
                               aria-label={t(
                                 showingArchived
                                   ? 'Restore conversation'
@@ -725,6 +737,7 @@ export function AssistantHistory(props: {
                 type='button'
                 variant='ghost'
                 size='sm'
+                className={historyTouchTargetClassName}
                 disabled={historyQuery.isFetchingNextPage}
                 onClick={() => void historyQuery.fetchNextPage()}
               >
@@ -778,6 +791,7 @@ export function AssistantHistoryConversation(props: {
               type='button'
               variant='outline'
               size='sm'
+              className={historyTouchTargetClassName}
               data-testid='assistant-history-detail-retry'
               aria-label={t('Retry')}
               onClick={() => void historyQuery.refetch()}
@@ -816,7 +830,7 @@ export function AssistantHistoryConversation(props: {
               type='button'
               variant='outline'
               size='sm'
-              className='shrink-0'
+              className={cn(historyTouchTargetClassName, 'shrink-0')}
               onClick={() => props.onContinue?.(historyQuery.data)}
             >
               {t('Continue')}

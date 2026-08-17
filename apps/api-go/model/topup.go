@@ -246,6 +246,34 @@ func uniqueConstraintError(err error) bool {
 		strings.Contains(message, "duplicated key")
 }
 
+// consumeDiscountCodeUsage records a settled order's use of its discount code
+// in the same transaction as the wallet credit. Deleted/legacy codes are
+// tolerated for already-created orders, but an existing exhausted code must
+// fail closed so a one-time reward cannot be applied twice.
+func consumeDiscountCodeUsage(tx *gorm.DB, discountCodeID int) error {
+	if discountCodeID <= 0 {
+		return nil
+	}
+	usage := tx.Model(&DiscountCode{}).
+		Where("id = ? AND (max_uses = 0 OR used_count < max_uses)", discountCodeID).
+		UpdateColumn("used_count", gorm.Expr("used_count + ?", 1))
+	if usage.Error != nil {
+		return usage.Error
+	}
+	if usage.RowsAffected != 0 {
+		return nil
+	}
+
+	var exists int64
+	if err := tx.Model(&DiscountCode{}).Where("id = ?", discountCodeID).Count(&exists).Error; err != nil {
+		return err
+	}
+	if exists > 0 {
+		return ErrDiscountCodeExhausted
+	}
+	return nil
+}
+
 // CompleteExternalTopUp is the only external top-up settlement path. It binds
 // signed provider evidence, atomically transitions the order with a CAS, and
 // credits the user in the same database transaction.
@@ -440,25 +468,8 @@ func completeExternalTopUpOnDB(db *gorm.DB, settlement ExternalTopUpSettlement) 
 			if err := creditTopUpQuota(tx, completed.UserId, quota, userUpdates); err != nil {
 				return err
 			}
-			if completed.DiscountCodeId > 0 {
-				// Usage is counted only after the payment and quota credit have
-				// committed. A deleted/legacy code does not invalidate a valid
-				// payment, but any database error remains transactional.
-				usage := tx.Model(&DiscountCode{}).
-					Where("id = ? AND (max_uses = 0 OR used_count < max_uses)", completed.DiscountCodeId).
-					UpdateColumn("used_count", gorm.Expr("used_count + ?", 1))
-				if usage.Error != nil {
-					return usage.Error
-				}
-				if usage.RowsAffected == 0 {
-					var exists int64
-					if err := tx.Model(&DiscountCode{}).Where("id = ?", completed.DiscountCodeId).Count(&exists).Error; err != nil {
-						return err
-					}
-					if exists > 0 {
-						return ErrDiscountCodeExhausted
-					}
-				}
+			if err := consumeDiscountCodeUsage(tx, completed.DiscountCodeId); err != nil {
+				return err
 			}
 			return nil
 		})
@@ -1104,6 +1115,9 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 
 		// 增加用户额度（立即写库，保持一致性）
 		if err := creditTopUpQuota(tx, topUp.UserId, int64(quotaToAdd), nil); err != nil {
+			return err
+		}
+		if err := consumeDiscountCodeUsage(tx, topUp.DiscountCodeId); err != nil {
 			return err
 		}
 

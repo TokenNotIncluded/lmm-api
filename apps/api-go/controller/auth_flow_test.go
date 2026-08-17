@@ -255,6 +255,33 @@ func TestOAuthCallbackDoesNotEchoProviderErrorDescription(t *testing.T) {
 	assert.NotEmpty(t, response.Body.String())
 }
 
+func TestOAuthProviderRequestErrorDoesNotEchoRawError(t *testing.T) {
+	provider := setupAuthFlowControllerTest(t)
+	rawError := "provider database password and internal URL"
+	provider.exchangeErr = errors.New(rawError)
+	state, _, err := model.CreateAuthFlow(model.AuthFlowCreate{
+		Purpose: model.AuthFlowPurposeOAuth, Provider: "auth-flow-test", Intent: model.AuthFlowIntentLogin,
+		ExpiresAt: time.Now().Add(time.Minute),
+	})
+	require.NoError(t, err)
+
+	router := gin.New()
+	router.GET("/api/oauth/:provider", HandleOAuth)
+	request := newAuthFlowOAuthCallbackRequest(t, state, "&code=test")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	assert.Equal(t, http.StatusOK, response.Code)
+	assert.NotContains(t, response.Body.String(), rawError)
+	var body struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+	}
+	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &body))
+	assert.False(t, body.Success)
+	assert.NotEmpty(t, body.Message)
+}
+
 func TestOAuthBindProviderErrorConsumesSessionBoundFlow(t *testing.T) {
 	provider := setupAuthFlowControllerTest(t)
 	flowToken, _, err := model.CreateAuthFlow(model.AuthFlowCreate{
