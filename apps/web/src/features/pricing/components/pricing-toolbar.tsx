@@ -104,7 +104,7 @@ function SegmentedControl(props: {
     <div
       role='group'
       aria-label={props.ariaLabel}
-      className='bg-muted/60 inline-flex h-8 items-center rounded-lg border p-0.5'
+      className='bg-muted/60 inline-flex h-11 items-center rounded-lg border p-0.5 sm:h-8'
     >
       {props.options.map((option) => {
         const Icon = option.icon
@@ -117,7 +117,7 @@ function SegmentedControl(props: {
             aria-pressed={isActive}
             className={cn(
               'inline-flex h-full items-center justify-center rounded-md text-xs font-medium transition-all',
-              Icon && !option.label ? 'w-7' : 'gap-1.5 px-3',
+              Icon && !option.label ? 'w-11 sm:w-7' : 'gap-1.5 px-3',
               isActive
                 ? 'bg-primary text-primary-foreground'
                 : 'text-muted-foreground hover:text-foreground'
@@ -174,7 +174,7 @@ export function PricingToolbar(props: PricingToolbarProps) {
             variant='outline'
             size='sm'
             onClick={() => setMobileFiltersOpen(true)}
-            className='gap-1.5 xl:hidden'
+            className='h-11 gap-1.5 sm:h-7 xl:hidden'
           >
             <Filter className='size-4' />
             {t('Filter')}
@@ -227,7 +227,7 @@ export function PricingToolbar(props: PricingToolbarProps) {
                   type='button'
                   variant='outline'
                   size='sm'
-                  className='h-8 gap-1.5 px-3 text-xs'
+                  className='h-11 gap-1.5 px-3 text-xs sm:h-8'
                 />
               }
             >
@@ -239,7 +239,7 @@ export function PricingToolbar(props: PricingToolbarProps) {
                 <DropdownMenuItem
                   key={value}
                   onClick={() => props.onSortChange(value)}
-                  className='gap-2'
+                  className='min-h-11 gap-2 sm:min-h-8'
                 >
                   <Check
                     className={cn(

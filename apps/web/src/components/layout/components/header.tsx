@@ -41,7 +41,7 @@ export function Header({
     >
       <div className='flex h-full items-center gap-1.5 px-2 sm:gap-2 sm:px-3'>
         {showSidebarTrigger ? (
-          <SidebarTrigger variant='ghost' className='size-8' />
+          <SidebarTrigger variant='ghost' className='size-11 sm:size-8' />
         ) : null}
         {children}
       </div>

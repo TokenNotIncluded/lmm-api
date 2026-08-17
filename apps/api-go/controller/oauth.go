@@ -453,6 +453,9 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 	if !common.RegisterEnabled {
 		return nil, &OAuthRegistrationDisabledError{}
 	}
+	if !common.OAuthRegisterEnabled {
+		return nil, &OAuthRegistrationDisabledError{}
+	}
 	if common.IsRegistrationMethodDisabled(oauthRegistrationMethod(provider)) {
 		return nil, &OAuthRegistrationDisabledError{}
 	}

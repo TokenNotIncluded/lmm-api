@@ -27,6 +27,12 @@ import (
 // applied.
 var ErrRefundWalletQuotaInsufficient = errors.New("refund wallet quota insufficient")
 
+// ErrPaymentRefundOrderConflict is returned when a provider event id has
+// already been recorded for a different order (or with different immutable
+// payment facts). Reusing the provider idempotency key must never allow the
+// existing refund amount to be applied to another order.
+var ErrPaymentRefundOrderConflict = errors.New("payment refund event is bound to another order")
+
 // PaymentRefundResult describes the durable effects of one provider refund.
 // Created is false for a replayed event; QuotaDebited remains useful when a
 // legacy event was recorded before wallet reversal was implemented.
@@ -90,6 +96,9 @@ func ApplyPaymentRefund(
 					return fmt.Errorf("refund order is not a settled %s top-up", paymentProvider)
 				}
 				result.UserID = topUp.UserId
+				if ledgerExists && !refundLedgerBindsRequest(&ledger, tradeNo, providerEventID, paymentMethod, paymentProvider, currency, result.UserID) {
+					return ErrPaymentRefundOrderConflict
+				}
 				// Newer handlers update the cumulative fields in the same transaction
 				// as the ledger. An already-populated row therefore needs no second
 				// wallet debit when the provider retries the same event.
@@ -151,6 +160,9 @@ func ApplyPaymentRefund(
 				return fmt.Errorf("refund order is not a settled %s subscription", paymentProvider)
 			}
 			result.UserID = order.UserId
+			if ledgerExists && !refundLedgerBindsRequest(&ledger, tradeNo, providerEventID, paymentMethod, paymentProvider, currency, result.UserID) {
+				return ErrPaymentRefundOrderConflict
+			}
 			alreadyApplied := ledgerExists && order.RefundedAmountMicros > 0
 			paidMicros := moneyToMicros(order.Money)
 			if paidMicros > 0 && !alreadyApplied {
@@ -211,7 +223,7 @@ func ApplyPaymentRefund(
 				UserId:          &result.UserID,
 				SourceType:      FinanceSourceRefund,
 				SourceId:        providerEventID,
-				Note:            note,
+				Note:            bindRefundNote(note, tradeNo),
 				OccurredAt:      common.GetTimestamp(),
 				CreatedBy:       actorID,
 				IdempotencyKey:  idempotencyKey,
@@ -236,6 +248,63 @@ func ApplyPaymentRefund(
 		InvalidatePaidTopUpAggregate(result.UserID)
 	}
 	return result, nil
+}
+
+// bindRefundNote gives refund ledger rows a stable, order-specific binding
+// without requiring a schema migration. Existing handlers already include a
+// legacy "trade_no=<value>" token in their audit note, which is accepted by
+// refundNoteContainsTradeNo for backwards compatibility.
+func bindRefundNote(note, tradeNo string) string {
+	note = strings.TrimSpace(note)
+	if refundNoteContainsTradeNo(note, tradeNo) {
+		return note
+	}
+	marker := "refund_trade_no=" + tradeNo
+	if note == "" {
+		return marker
+	}
+	candidate := note + " " + marker
+	if len([]rune(candidate)) <= 500 {
+		return candidate
+	}
+	// The marker is the security-critical part. Keep it even if a caller's
+	// free-form note would otherwise overflow the ledger column.
+	return marker
+}
+
+func refundNoteContainsTradeNo(note, tradeNo string) bool {
+	if strings.TrimSpace(note) == "" || tradeNo == "" {
+		return false
+	}
+	for _, token := range strings.Fields(note) {
+		if token == "refund_trade_no="+tradeNo || token == "trade_no="+tradeNo {
+			return true
+		}
+	}
+	return false
+}
+
+func refundLedgerBindsRequest(
+	ledger *FinanceLedgerEntry,
+	tradeNo string,
+	providerEventID string,
+	paymentMethod string,
+	paymentProvider string,
+	currency string,
+	userID int,
+) bool {
+	if ledger == nil || ledger.SourceType != FinanceSourceRefund || ledger.SourceId != providerEventID {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(ledger.PaymentMethod), paymentMethod) ||
+		!strings.EqualFold(strings.TrimSpace(ledger.PaymentProvider), paymentProvider) ||
+		!strings.EqualFold(strings.TrimSpace(ledger.Currency), currency) {
+		return false
+	}
+	if ledger.UserId == nil || *ledger.UserId != userID {
+		return false
+	}
+	return refundNoteContainsTradeNo(ledger.Note, tradeNo)
 }
 
 // ApplyWaffoPancakeRefund is retained for existing callers. New provider

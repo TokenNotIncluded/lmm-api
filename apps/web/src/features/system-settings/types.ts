@@ -243,6 +243,7 @@ export function normalizeAssistantSearchProvider(
 export type AuthSettings = {
   PasswordLoginEnabled: boolean
   PasswordRegisterEnabled: boolean
+  OAuthRegisterEnabled: boolean
   RegistrationDisabledMethods: string
   EmailVerificationEnabled: boolean
   RegisterEnabled: boolean

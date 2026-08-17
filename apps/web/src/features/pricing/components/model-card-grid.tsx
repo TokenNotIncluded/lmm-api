@@ -104,7 +104,7 @@ export function ModelCardGrid(props: ModelCardGridProps) {
               size='sm'
               onClick={() => setPage((current) => Math.max(1, current - 1))}
               disabled={currentPage <= 1}
-              className='gap-1.5'
+              className='min-h-11 gap-1.5 sm:min-h-7'
             >
               <ChevronLeft className='size-4' />
               {t('Previous page')}
@@ -117,7 +117,7 @@ export function ModelCardGrid(props: ModelCardGridProps) {
                 setPage((current) => Math.min(totalPages, current + 1))
               }
               disabled={currentPage >= totalPages}
-              className='gap-1.5'
+              className='min-h-11 gap-1.5 sm:min-h-7'
             >
               {t('Next page')}
               <ChevronRight className='size-4' />

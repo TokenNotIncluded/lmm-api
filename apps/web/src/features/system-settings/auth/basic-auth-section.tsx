@@ -48,6 +48,7 @@ import { useUpdateOption } from '../hooks/use-update-option'
 const basicAuthSchema = z.object({
   PasswordLoginEnabled: z.boolean(),
   PasswordRegisterEnabled: z.boolean(),
+  OAuthRegisterEnabled: z.boolean(),
   RegistrationDisabledMethods: z.string(),
   EmailVerificationEnabled: z.boolean(),
   RegisterEnabled: z.boolean(),
@@ -185,6 +186,29 @@ export function BasicAuthSection({ defaultValues }: BasicAuthSectionProps) {
                   <FormLabel>{t('Password Registration')}</FormLabel>
                   <FormDescription>
                     {t('Allow registration with password')}
+                  </FormDescription>
+                </SettingsSwitchContent>
+                <FormControl>
+                  <Switch
+                    checked={field.value}
+                    onCheckedChange={field.onChange}
+                  />
+                </FormControl>
+              </SettingsSwitchItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name='OAuthRegisterEnabled'
+            render={({ field }) => (
+              <SettingsSwitchItem>
+                <SettingsSwitchContent>
+                  <FormLabel>{t('OAuth Registration')}</FormLabel>
+                  <FormDescription>
+                    {t(
+                      'Allow new accounts through OAuth providers. Existing users can still sign in.'
+                    )}
                   </FormDescription>
                 </SettingsSwitchContent>
                 <FormControl>

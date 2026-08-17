@@ -554,7 +554,7 @@ function ModelHeader(props: { model: PricingModel }) {
           </Button>
           <CopyButton
             value={model.model_name || ''}
-            className='size-6'
+            className='size-11 sm:size-6'
             iconClassName='size-3'
             tooltip={t('Copy model name')}
             successTooltip={t('Copied!')}

@@ -162,6 +162,12 @@ describe('ModelDetails group pricing', () => {
     assert.ok(addFundsLink)
     assert.equal(addFundsLink.textContent?.includes('Add Funds'), true)
 
+    const copyModelButton = rendered.container.querySelector(
+      '[aria-label="Copy model name"]'
+    )
+    assert.ok(copyModelButton)
+    assert.match(copyModelButton.className, /\bsize-11\b/)
+
     await unmount(rendered)
   })
 

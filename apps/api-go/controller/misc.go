@@ -155,6 +155,7 @@ func GetStatus(c *gin.Context) {
 		"register_enabled":                    common.RegisterEnabled,
 		"password_login_enabled":              common.PasswordLoginEnabled,
 		"password_register_enabled":           common.PasswordRegisterEnabled,
+		"oauth_register_enabled":              common.OAuthRegisterEnabled,
 		"oauth_registration_disabled_methods": registrationDisabledMethods,
 		"default_use_auto_group":              setting.DefaultUseAutoGroup,
 		"preview_model_ids":                   getPublicPreviewModelIDs(),

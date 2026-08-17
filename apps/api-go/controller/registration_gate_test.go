@@ -50,16 +50,19 @@ func setRegistrationGateTestState(t *testing.T, agreement, privacy string) {
 	originalSettings := *settings
 	originalRegisterEnabled := common.RegisterEnabled
 	originalPasswordRegisterEnabled := common.PasswordRegisterEnabled
+	originalOAuthRegisterEnabled := common.OAuthRegisterEnabled
 	originalEmailVerificationEnabled := common.EmailVerificationEnabled
 	settings.UserAgreement = agreement
 	settings.PrivacyPolicy = privacy
 	common.RegisterEnabled = true
 	common.PasswordRegisterEnabled = true
+	common.OAuthRegisterEnabled = true
 	common.EmailVerificationEnabled = false
 	t.Cleanup(func() {
 		*settings = originalSettings
 		common.RegisterEnabled = originalRegisterEnabled
 		common.PasswordRegisterEnabled = originalPasswordRegisterEnabled
+		common.OAuthRegisterEnabled = originalOAuthRegisterEnabled
 		common.EmailVerificationEnabled = originalEmailVerificationEnabled
 	})
 }
@@ -230,6 +233,21 @@ func TestOAuthRegistrationRestrictionBlocksNewAccountsButAllowsExistingLogin(t *
 	require.NoError(t, err)
 	require.NotNil(t, user)
 	assert.Equal(t, 42, user.Id)
+
+	common.OptionMapRWMutex.Lock()
+	common.OptionMap[common.RegistrationDisabledMethodsOptionKey] = ""
+	common.OptionMapRWMutex.Unlock()
+	common.OAuthRegisterEnabled = false
+	provider.existing = nil
+	user, err = findOrCreateOAuthUser(nil, provider, &oauth.OAuthUser{ProviderUserID: "global-switch-subject"}, "", true)
+	require.ErrorAs(t, err, &disabledErr)
+	assert.Nil(t, user)
+
+	provider.existing = &model.User{Id: 45, Username: "existing-global-switch", Status: common.UserStatusEnabled}
+	user, err = findOrCreateOAuthUser(nil, provider, &oauth.OAuthUser{ProviderUserID: "global-switch-subject"}, "", false)
+	require.NoError(t, err)
+	require.NotNil(t, user)
+	assert.Equal(t, 45, user.Id)
 }
 
 func TestOAuthEmailVerificationBlocksUnattestedNewAccountsButNotExistingLogin(t *testing.T) {
@@ -290,6 +308,7 @@ func TestOAuthCallbackCannotSubstituteConsentForState(t *testing.T) {
 func TestWeChatFirstCreateGatesWhileExistingIdentityLoginBypasses(t *testing.T) {
 	db := setupManageUserTestDB(t)
 	setRegistrationGateTestState(t, "", "")
+	common.OAuthRegisterEnabled = false
 	existing := model.User{
 		Username: "existing-wechat", Password: "password", WeChatId: "wechat-existing",
 		Role: common.RoleCommonUser, Status: common.UserStatusEnabled,
@@ -304,6 +323,16 @@ func TestWeChatFirstCreateGatesWhileExistingIdentityLoginBypasses(t *testing.T) 
 	assert.Equal(t, existing.Id, user.Id)
 	assert.Equal(t, http.StatusOK, existingRecorder.Code)
 	assert.Empty(t, existingRecorder.Body.String())
+
+	blockedRecorder := httptest.NewRecorder()
+	blockedContext, _ := gin.CreateTestContext(blockedRecorder)
+	user, ok = findOrCreateWeChatUser(blockedContext, "wechat-oauth-disabled", true)
+	assert.False(t, ok)
+	assert.Nil(t, user)
+	assert.Equal(t, http.StatusOK, blockedRecorder.Code)
+	assert.Contains(t, blockedRecorder.Body.String(), "OAuth")
+
+	common.OAuthRegisterEnabled = true
 
 	newRecorder := httptest.NewRecorder()
 	newContext, _ := gin.CreateTestContext(newRecorder)

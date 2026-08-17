@@ -137,6 +137,88 @@ func TestApplyWaffoPancakeRefundRejectsWalletNegativeBalanceAndKeepsEventRetryab
 	assert.Equal(t, 5_000, getUserQuotaForRefundTest(t, db, user.Id))
 }
 
+func TestApplyWaffoPancakeRefundBindsProviderEventToOriginalOrder(t *testing.T) {
+	db := setupConsoleActivationTestDB(t)
+	require.NoError(t, db.AutoMigrate(&User{}, &TopUp{}, &FinanceLedgerEntry{}))
+
+	firstUser := User{
+		Username: "refund-event-owner-one",
+		Password: "password",
+		Status:   common.UserStatusEnabled,
+		Quota:    100_000,
+		AffCode:  "refund-event-owner-one-aff",
+	}
+	secondUser := User{
+		Username: "refund-event-owner-two",
+		Password: "password",
+		Status:   common.UserStatusEnabled,
+		Quota:    100_000,
+		AffCode:  "refund-event-owner-two-aff",
+	}
+	require.NoError(t, db.Create(&firstUser).Error)
+	require.NoError(t, db.Create(&secondUser).Error)
+
+	createTopUp := func(userID int, tradeNo string) TopUp {
+		return TopUp{
+			UserId:              userID,
+			TradeNo:             tradeNo,
+			PaymentProvider:     PaymentProviderWaffoPancake,
+			PaymentMethod:       PaymentMethodWaffoPancake,
+			Status:              common.TopUpStatusSuccess,
+			CreditedQuota:       100_000,
+			SettledAmountMicros: 10_000_000,
+			Money:               10,
+		}
+	}
+	firstOrder := createTopUp(firstUser.Id, "refund-event-order-one")
+	secondOrder := createTopUp(secondUser.Id, "refund-event-order-two")
+	require.NoError(t, db.Create(&firstOrder).Error)
+	require.NoError(t, db.Create(&secondOrder).Error)
+
+	const providerEventID = "refund-event-reused-across-orders"
+	result, err := ApplyWaffoPancakeRefund(
+		firstOrder.TradeNo, false, 2_500_000, FinanceCurrencyUSD,
+		providerEventID, PaymentMethodWaffoPancake, PaymentProviderWaffoPancake,
+		"provider refund", firstUser.Id,
+	)
+	require.NoError(t, err)
+	assert.True(t, result.Created)
+	assert.Equal(t, int64(25_000), result.QuotaDebited)
+	assert.Equal(t, 75_000, getUserQuotaForRefundTest(t, db, firstUser.Id))
+
+	// A normal provider retry for the original order remains idempotent.
+	result, err = ApplyWaffoPancakeRefund(
+		firstOrder.TradeNo, false, 9_000_000, FinanceCurrencyUSD,
+		providerEventID, PaymentMethodWaffoPancake, PaymentProviderWaffoPancake,
+		"changed payload", firstUser.Id,
+	)
+	require.NoError(t, err)
+	assert.False(t, result.Created)
+	assert.Zero(t, result.QuotaDebited)
+	assert.Equal(t, 75_000, getUserQuotaForRefundTest(t, db, firstUser.Id))
+
+	// Reusing the same event id for another order must fail before any wallet
+	// or cumulative-refund update is committed.
+	result, err = ApplyWaffoPancakeRefund(
+		secondOrder.TradeNo, false, 2_500_000, FinanceCurrencyUSD,
+		providerEventID, PaymentMethodWaffoPancake, PaymentProviderWaffoPancake,
+		"provider refund", secondUser.Id,
+	)
+	assert.Zero(t, result)
+	require.ErrorIs(t, err, ErrPaymentRefundOrderConflict)
+	assert.Equal(t, 100_000, getUserQuotaForRefundTest(t, db, secondUser.Id))
+
+	var refreshedSecondOrder TopUp
+	require.NoError(t, db.First(&refreshedSecondOrder, secondOrder.Id).Error)
+	assert.Zero(t, refreshedSecondOrder.RefundedAmountMicros)
+	assert.Zero(t, refreshedSecondOrder.RefundedQuota)
+
+	var entries []FinanceLedgerEntry
+	require.NoError(t, db.Where("source_type = ?", FinanceSourceRefund).Find(&entries).Error)
+	require.Len(t, entries, 1)
+	assert.Contains(t, entries[0].Note, "refund_trade_no="+firstOrder.TradeNo)
+}
+
 func getUserQuotaForRefundTest(t *testing.T, db *gorm.DB, userID int) int {
 	t.Helper()
 	var quota int

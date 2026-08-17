@@ -26,6 +26,14 @@ const topNavSource = readFileSync(
   new URL('./top-nav.tsx', import.meta.url),
   'utf8'
 )
+const headerSource = readFileSync(
+  new URL('./header.tsx', import.meta.url),
+  'utf8'
+)
+const languageSwitcherSource = readFileSync(
+  new URL('../../language-switcher.tsx', import.meta.url),
+  'utf8'
+)
 
 describe('authenticated header responsive navigation', () => {
   test('keeps the dynamic navigation available below the desktop breakpoint', () => {
@@ -38,5 +46,12 @@ describe('authenticated header responsive navigation', () => {
   test('labels the compact navigation tray for touch and assistive users', () => {
     assert.match(topNavSource, /aria-label=\{t\('More'\)\}/)
     assert.match(topNavSource, /title=\{t\('More'\)\}/)
+  })
+
+  test('keeps the mobile navigation and language controls reachable', () => {
+    assert.match(headerSource, /className='size-11 sm:size-8'/)
+    assert.match(topNavSource, /className='size-11 lg:size-8'/)
+    assert.match(languageSwitcherSource, /className='h-11 w-11[\s\S]*sm:h-9/)
+    assert.match(languageSwitcherSource, /className='min-h-11 sm:min-h-8'/)
   })
 })

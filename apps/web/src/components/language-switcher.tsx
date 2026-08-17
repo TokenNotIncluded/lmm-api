@@ -69,7 +69,7 @@ export function LanguageSwitcher() {
           <Button
             variant='ghost'
             size='icon'
-            className='h-9 w-9 gap-1.5 sm:w-auto sm:px-2'
+            className='h-11 w-11 gap-1.5 sm:h-9 sm:w-auto sm:px-2'
             aria-label={`${t('Change language')}: ${currentLanguageLabel}`}
             title={`${t('Change language')}: ${currentLanguageLabel}`}
           />
@@ -86,6 +86,7 @@ export function LanguageSwitcher() {
           <DropdownMenuItem
             key={lang.code}
             onClick={() => handleChangeLanguage(lang.code)}
+            className='min-h-11 sm:min-h-8'
           >
             {lang.label}
             <Check

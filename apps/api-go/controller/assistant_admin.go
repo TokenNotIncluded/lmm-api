@@ -51,6 +51,7 @@ var assistantAdminConfigAllowlist = map[string]string{
 	"ImageDownloadPermission":                       "Image download permission level",
 	"PasswordLoginEnabled":                          "Enable password login",
 	"PasswordRegisterEnabled":                       "Enable password registration",
+	"OAuthRegisterEnabled":                          "Enable OAuth registration",
 	"EmailVerificationEnabled":                      "Require email verification",
 	"RegisterEnabled":                               "Enable new registrations",
 	"GitHubOAuthEnabled":                            "Enable GitHub OAuth",
@@ -932,7 +933,7 @@ func validateAssistantAdminConfigValue(key, value string) error {
 		return err
 	}
 	switch key {
-	case "AssistantEnabled", "AssistantAgentLoopEnabled", "AssistantCacheEnabled", "ModelRequestRateLimitEnabled", "DefaultUseAutoGroup", "DisplayInCurrencyEnabled", "DisplayTokenStatEnabled", "ExposeRatioEnabled", "DefaultCollapseSidebar", "PasswordLoginEnabled", "PasswordRegisterEnabled", "EmailVerificationEnabled", "RegisterEnabled", "GitHubOAuthEnabled", "LinuxDOOAuthEnabled", "WeChatAuthEnabled", "TelegramOAuthEnabled", "TurnstileCheckEnabled", "EmailDomainRestrictionEnabled", "EmailAliasRestrictionEnabled", "AutomaticDisableChannelEnabled", "AutomaticEnableChannelEnabled", "LogConsumeEnabled", "DrawingEnabled", "TaskEnabled", "DataExportEnabled", "CheckSensitiveEnabled", "CheckSensitiveOnPromptEnabled", "StopOnSensitiveEnabled", "SelfUseModeEnabled", "DemoSiteEnabled", "MjNotifyEnabled", "MjAccountFilterEnabled", "MjModeClearEnabled", "MjForwardUrlEnabled", "MjActionCheckSuccessEnabled", "WorkerAllowHttpImageRequestEnabled", "SMTPSSLEnabled", "SMTPStartTLSEnabled", "SMTPInsecureSkipVerify", "SMTPForceAuthLogin", "StripePromotionCodesEnabled", "CreemTestMode", "WaffoEnabled", "WaffoSandbox", "AdvancedSecurityEnabled", "AdvancedSecurityOnPromptEnabled", common.RegionAccessPolicyEnabledOptionKey:
+	case "AssistantEnabled", "AssistantAgentLoopEnabled", "AssistantCacheEnabled", "ModelRequestRateLimitEnabled", "DefaultUseAutoGroup", "DisplayInCurrencyEnabled", "DisplayTokenStatEnabled", "ExposeRatioEnabled", "DefaultCollapseSidebar", "PasswordLoginEnabled", "PasswordRegisterEnabled", "OAuthRegisterEnabled", "EmailVerificationEnabled", "RegisterEnabled", "GitHubOAuthEnabled", "LinuxDOOAuthEnabled", "WeChatAuthEnabled", "TelegramOAuthEnabled", "TurnstileCheckEnabled", "EmailDomainRestrictionEnabled", "EmailAliasRestrictionEnabled", "AutomaticDisableChannelEnabled", "AutomaticEnableChannelEnabled", "LogConsumeEnabled", "DrawingEnabled", "TaskEnabled", "DataExportEnabled", "CheckSensitiveEnabled", "CheckSensitiveOnPromptEnabled", "StopOnSensitiveEnabled", "SelfUseModeEnabled", "DemoSiteEnabled", "MjNotifyEnabled", "MjAccountFilterEnabled", "MjModeClearEnabled", "MjForwardUrlEnabled", "MjActionCheckSuccessEnabled", "WorkerAllowHttpImageRequestEnabled", "SMTPSSLEnabled", "SMTPStartTLSEnabled", "SMTPInsecureSkipVerify", "SMTPForceAuthLogin", "StripePromotionCodesEnabled", "CreemTestMode", "WaffoEnabled", "WaffoSandbox", "AdvancedSecurityEnabled", "AdvancedSecurityOnPromptEnabled", common.RegionAccessPolicyEnabledOptionKey:
 		if _, err := strconv.ParseBool(value); err != nil {
 			return errors.New("must be a boolean value")
 		}

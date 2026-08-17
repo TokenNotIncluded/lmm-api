@@ -61,6 +61,11 @@ var MaxRecentItems = 1000
 
 var PasswordLoginEnabled = true
 var PasswordRegisterEnabled = true
+
+// OAuthRegisterEnabled controls whether new accounts may be created through
+// OAuth providers. It is intentionally independent from OAuth login: existing
+// identities must remain able to sign in when this is disabled.
+var OAuthRegisterEnabled = true
 var EmailVerificationEnabled = false
 var GitHubOAuthEnabled = false
 var LinuxDOOAuthEnabled = false

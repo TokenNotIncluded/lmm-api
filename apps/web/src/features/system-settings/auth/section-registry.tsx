@@ -33,6 +33,7 @@ const AUTH_SECTIONS = [
         defaultValues={{
           PasswordLoginEnabled: settings.PasswordLoginEnabled,
           PasswordRegisterEnabled: settings.PasswordRegisterEnabled,
+          OAuthRegisterEnabled: settings.OAuthRegisterEnabled,
           RegistrationDisabledMethods: settings.RegistrationDisabledMethods,
           EmailVerificationEnabled: settings.EmailVerificationEnabled,
           RegisterEnabled: settings.RegisterEnabled,

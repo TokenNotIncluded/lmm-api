@@ -139,6 +139,18 @@ describe('registration availability', () => {
     assert.equal(hasRegistrationMethod(status), false)
   })
 
+  test('hides OAuth sign-up without hiding OAuth login', () => {
+    const status = {
+      register_enabled: true,
+      oauth_register_enabled: false,
+      github_oauth: true,
+      github_client_id: 'client',
+    }
+
+    assert.equal(hasOAuthRegistrationProvider(status), false)
+    assert.equal(hasOAuthLoginProvider(status), true)
+  })
+
   test('fails closed until live registration capabilities are confirmed', () => {
     const status = { register_enabled: true, password_register_enabled: true }
 

@@ -186,6 +186,8 @@ describe('Drawing mobile controls', () => {
         assert.ok(wrapper)
         assert.match(wrapper.className, /\bw-full\b/)
         assert.doesNotMatch(wrapper.className, /\bw-fit\b/)
+        assert.match(select.className, /\bh-11\b/)
+        assert.match(select.className, /\bsm:h-8\b/)
       }
     } finally {
       await act(async () => rendered.root.unmount())

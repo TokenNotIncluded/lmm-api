@@ -64,7 +64,7 @@ export function TopNav({ className, links, ...props }: TopNavProps) {
               <Button
                 size='icon'
                 variant='outline'
-                className='size-8'
+                className='size-11 lg:size-8'
                 aria-label={t('More')}
                 title={t('More')}
               />
@@ -97,6 +97,7 @@ export function TopNav({ className, links, ...props }: TopNavProps) {
                       </Link>
                     )
                   }
+                  className='min-h-11 sm:min-h-8'
                 />
               )
             )}
