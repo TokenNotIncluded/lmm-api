@@ -37,6 +37,7 @@ import {
 } from 'recharts'
 import { toast } from 'sonner'
 
+import { EmptyState } from '@/components/empty-state'
 import { SectionPageLayout } from '@/components/layout'
 import { Button } from '@/components/ui/button'
 import {
@@ -61,6 +62,7 @@ import {
   type FinancePaymentMethod,
   type FinanceUserMetric,
 } from './api'
+import { financeChartState } from './chart-state'
 import {
   financeLedgerUserFilter,
   financeLedgerUserSearch,
@@ -547,6 +549,11 @@ export function Finance() {
       })),
     [overview?.daily]
   )
+  const chartState = financeChartState({
+    hasError: overviewQuery.isError,
+    isLoading: overviewQuery.isLoading,
+    pointCount: chartData.length,
+  })
 
   const updateMethod = async (
     method: FinancePaymentMethod,
@@ -645,11 +652,6 @@ export function Finance() {
             </div>
           </div>
 
-          {overviewQuery.isError ? (
-            <p className='text-destructive text-sm'>
-              {t('Unable to load data')}
-            </p>
-          ) : null}
           <div className='divide-border/70 grid border-y sm:grid-cols-2 sm:divide-x lg:grid-cols-4'>
             <Metric
               label={t('Revenue')}
@@ -715,98 +717,117 @@ export function Finance() {
                   {money(overview?.tokens.estimated_cost_micros ?? 0)}
                 </span>
               </div>
-              <div className='h-64 min-h-0 w-full'>
-                <ResponsiveContainer width='100%' height='100%'>
-                  <AreaChart
-                    data={chartData}
-                    margin={{ top: 8, right: 8, left: -18, bottom: 0 }}
-                  >
-                    <defs>
-                      <linearGradient
-                        id='finance-revenue'
-                        x1='0'
-                        y1='0'
-                        x2='0'
-                        y2='1'
-                      >
-                        <stop
-                          offset='5%'
-                          stopColor='var(--chart-1)'
-                          stopOpacity={0.24}
-                        />
-                        <stop
-                          offset='95%'
-                          stopColor='var(--chart-1)'
-                          stopOpacity={0}
-                        />
-                      </linearGradient>
-                      <linearGradient
-                        id='finance-expense'
-                        x1='0'
-                        y1='0'
-                        x2='0'
-                        y2='1'
-                      >
-                        <stop
-                          offset='5%'
-                          stopColor='var(--chart-2)'
-                          stopOpacity={0.18}
-                        />
-                        <stop
-                          offset='95%'
-                          stopColor='var(--chart-2)'
-                          stopOpacity={0}
-                        />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid vertical={false} stroke='var(--border)' />
-                    <XAxis
-                      dataKey='label'
-                      axisLine={false}
-                      tickLine={false}
-                      tick={{ fontSize: 11 }}
-                    />
-                    <YAxis
-                      axisLine={false}
-                      tickLine={false}
-                      tick={{ fontSize: 11 }}
-                      tickFormatter={(value) => `$${value}`}
-                    />
-                    <Tooltip
-                      formatter={(value, name) => [
-                        `$${Number(value).toFixed(2)}`,
-                        name === 'revenue'
-                          ? t('Revenue')
-                          : name === 'refund'
-                            ? t('Refund')
-                            : t('Expenses'),
-                      ]}
-                    />
-                    <Area
-                      type='monotone'
-                      dataKey='revenue'
-                      stroke='var(--chart-1)'
-                      fill='url(#finance-revenue)'
-                      strokeWidth={2}
-                    />
-                    <Area
-                      type='monotone'
-                      dataKey='expense'
-                      stroke='var(--chart-2)'
-                      fill='url(#finance-expense)'
-                      strokeWidth={2}
-                    />
-                    <Area
-                      type='monotone'
-                      dataKey='refund'
-                      stroke='var(--destructive)'
-                      fill='none'
-                      strokeWidth={2}
-                      strokeDasharray='4 4'
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
+              {chartState === 'error' ? (
+                <div className='flex min-h-[300px] items-center justify-center'>
+                  <p role='alert' className='text-destructive text-sm'>
+                    {t('Unable to load data')}
+                  </p>
+                </div>
+              ) : chartState === 'loading' ? (
+                <div className='flex min-h-[300px] items-center justify-center'>
+                  <p className='text-muted-foreground text-sm'>
+                    {t('Loading...')}
+                  </p>
+                </div>
+              ) : chartState === 'empty' ? (
+                <EmptyState
+                  icon={ReceiptText}
+                  title={t('No financial activity in the selected period')}
+                />
+              ) : (
+                <div className='h-64 min-h-0 w-full'>
+                  <ResponsiveContainer width='100%' height='100%'>
+                    <AreaChart
+                      data={chartData}
+                      margin={{ top: 8, right: 8, left: -18, bottom: 0 }}
+                    >
+                      <defs>
+                        <linearGradient
+                          id='finance-revenue'
+                          x1='0'
+                          y1='0'
+                          x2='0'
+                          y2='1'
+                        >
+                          <stop
+                            offset='5%'
+                            stopColor='var(--chart-1)'
+                            stopOpacity={0.24}
+                          />
+                          <stop
+                            offset='95%'
+                            stopColor='var(--chart-1)'
+                            stopOpacity={0}
+                          />
+                        </linearGradient>
+                        <linearGradient
+                          id='finance-expense'
+                          x1='0'
+                          y1='0'
+                          x2='0'
+                          y2='1'
+                        >
+                          <stop
+                            offset='5%'
+                            stopColor='var(--chart-2)'
+                            stopOpacity={0.18}
+                          />
+                          <stop
+                            offset='95%'
+                            stopColor='var(--chart-2)'
+                            stopOpacity={0}
+                          />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid vertical={false} stroke='var(--border)' />
+                      <XAxis
+                        dataKey='label'
+                        axisLine={false}
+                        tickLine={false}
+                        tick={{ fontSize: 11 }}
+                      />
+                      <YAxis
+                        axisLine={false}
+                        tickLine={false}
+                        tick={{ fontSize: 11 }}
+                        tickFormatter={(value) => `$${value}`}
+                      />
+                      <Tooltip
+                        formatter={(value, name) => [
+                          `$${Number(value).toFixed(2)}`,
+                          name === 'revenue'
+                            ? t('Revenue')
+                            : name === 'refund'
+                              ? t('Refund')
+                              : t('Expenses'),
+                        ]}
+                      />
+                      <Area
+                        type='monotone'
+                        dataKey='revenue'
+                        stroke='var(--chart-1)'
+                        fill='url(#finance-revenue)'
+                        strokeWidth={2}
+                      />
+                      <Area
+                        type='monotone'
+                        dataKey='expense'
+                        stroke='var(--chart-2)'
+                        fill='url(#finance-expense)'
+                        strokeWidth={2}
+                      />
+                      <Area
+                        type='monotone'
+                        dataKey='refund'
+                        stroke='var(--destructive)'
+                        fill='none'
+                        strokeWidth={2}
+                        strokeDasharray='4 4'
+                      />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
             </section>
 
             <section aria-labelledby='finance-methods-heading'>
