@@ -159,9 +159,7 @@ export function DiscountCodes() {
     queryClient.invalidateQueries({ queryKey: ['discount-codes'] })
 
   const saveMutation = useMutation({
-    mutationFn: async (
-      input: DiscountCodeInput | DiscountCodeBatchInput
-    ) =>
+    mutationFn: async (input: DiscountCodeInput | DiscountCodeBatchInput) =>
       editing
         ? updateDiscountCode({
             ...(input as DiscountCodeInput),
@@ -226,7 +224,9 @@ export function DiscountCodes() {
     () =>
       (editing
         ? form.code.trim().length >= 3
-        : Number.isInteger(batchCount) && batchCount >= 1 && batchCount <= 100) &&
+        : Number.isInteger(batchCount) &&
+          batchCount >= 1 &&
+          batchCount <= 100) &&
       form.name.trim().length > 0 &&
       Number(form.discount_percent) >= 1 &&
       Number(form.discount_percent) <= 99 &&
@@ -367,7 +367,9 @@ export function DiscountCodes() {
                   <Checkbox
                     checked={allRowsSelected}
                     indeterminate={selectedIds.size > 0 && !allRowsSelected}
-                    onCheckedChange={(checked) => toggleAllRows(checked === true)}
+                    onCheckedChange={(checked) =>
+                      toggleAllRows(checked === true)
+                    }
                     aria-label={t('Select all codes')}
                   />
                   <span>{t('Code')}</span>
@@ -676,10 +678,7 @@ export function DiscountCodes() {
         </SheetContent>
       </Sheet>
 
-      <Dialog
-        open={generatedCodesOpen}
-        onOpenChange={setGeneratedCodesOpen}
-      >
+      <Dialog open={generatedCodesOpen} onOpenChange={setGeneratedCodesOpen}>
         <DialogContent className='sm:max-w-xl'>
           <DialogHeader>
             <DialogTitle>{t('Discount codes created')}</DialogTitle>

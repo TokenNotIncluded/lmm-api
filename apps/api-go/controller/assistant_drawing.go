@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -40,6 +41,8 @@ import (
 const (
 	assistantDrawingPromptMaxRunes = 2000
 	assistantDrawingMaxImages      = 4
+	assistantDrawingMaxReferences  = 8
+	assistantDrawingMaxImageBytes  = int64(10 << 20)
 )
 
 var assistantImageRequestPattern = regexp.MustCompile(`(?i)(?:绘图|画图|生成(?:一张|图片|图像)|帮我画|generate(?: an)? image|create(?: an)? image|draw(?: an)? image)`)
@@ -220,21 +223,19 @@ func executeAssistantImageGenerationTool(c *gin.Context, userID int, input map[s
 	}
 }
 
-// PlaygroundImage reuses the normal relay billing, routing and safety path,
-// but binds it to the authenticated browser user's selected group.
-func PlaygroundImage(c *gin.Context) {
+func playgroundImageUserAndGroup(c *gin.Context) (*model.UserBase, string, bool) {
 	if !common.DrawingEnabled {
 		c.JSON(http.StatusForbidden, gin.H{"error": gin.H{"message": "image generation is disabled"}})
-		return
+		return nil, "", false
 	}
 	if c.GetBool("use_access_token") {
 		c.JSON(http.StatusForbidden, gin.H{"error": gin.H{"message": "browser authentication is required"}})
-		return
+		return nil, "", false
 	}
 	user, err := model.GetUserCache(c.GetInt("id"))
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": gin.H{"message": "signed-in account is unavailable"}})
-		return
+		return nil, "", false
 	}
 	group := strings.TrimSpace(c.Query("group"))
 	if group == "" {
@@ -242,6 +243,40 @@ func PlaygroundImage(c *gin.Context) {
 	}
 	if _, ok := service.GetUserUsableGroups(user.Group)[group]; !ok {
 		c.JSON(http.StatusForbidden, gin.H{"error": gin.H{"message": "the selected image group is not available to this account"}})
+		return nil, "", false
+	}
+	return user, group, true
+}
+
+func preparePlaygroundImageRelay(c *gin.Context, user *model.UserBase, group, modelID, prompt string) bool {
+	modelID = strings.TrimSpace(modelID)
+	prompt = strings.TrimSpace(prompt)
+	if modelID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": "an exact image model is required"}})
+		return false
+	}
+	if !assistantDrawingModelAllowed(user.Group, group, modelID) {
+		c.JSON(http.StatusForbidden, gin.H{"error": gin.H{"message": "the selected image model is not available in this group"}})
+		return false
+	}
+	if prompt == "" || len([]rune(prompt)) > assistantDrawingPromptMaxRunes {
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": "image prompt must contain 1 to 2000 characters"}})
+		return false
+	}
+	user.WriteContext(c)
+	tempToken := &model.Token{UserId: user.Id, Name: "drawing-workbench", Group: group}
+	if err := middleware.SetupContextForToken(c, tempToken); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"message": "image routing context could not be prepared"}})
+		return false
+	}
+	return true
+}
+
+// PlaygroundImage reuses the normal relay billing, routing and safety path,
+// but binds it to the authenticated browser user's selected group.
+func PlaygroundImage(c *gin.Context) {
+	user, group, ok := playgroundImageUserAndGroup(c)
+	if !ok {
 		return
 	}
 	if c.Request.Body == nil {
@@ -258,22 +293,80 @@ func PlaygroundImage(c *gin.Context) {
 		Model  string `json:"model"`
 		Prompt string `json:"prompt"`
 	}
-	if err := json.Unmarshal(body, &request); err != nil || strings.TrimSpace(request.Model) == "" {
+	if err := json.Unmarshal(body, &request); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": "an exact image model is required"}})
 		return
 	}
-	if !assistantDrawingModelAllowed(user.Group, group, strings.TrimSpace(request.Model)) {
-		c.JSON(http.StatusForbidden, gin.H{"error": gin.H{"message": "the selected image model is not available in this group"}})
+	if !preparePlaygroundImageRelay(c, user, group, request.Model, request.Prompt) {
 		return
 	}
-	if strings.TrimSpace(request.Prompt) == "" || len([]rune(request.Prompt)) > assistantDrawingPromptMaxRunes {
-		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": "image prompt must contain 1 to 2000 characters"}})
+	Relay(c, types.RelayFormatOpenAIImage)
+}
+
+func validatePlaygroundReferenceImage(header *multipart.FileHeader) error {
+	if header == nil || header.Size <= 0 {
+		return errors.New("reference images must not be empty")
+	}
+	if header.Size > assistantDrawingMaxImageBytes {
+		return errors.New("each reference image must be 10 MB or smaller")
+	}
+	file, err := header.Open()
+	if err != nil {
+		return errors.New("a reference image could not be read")
+	}
+	defer file.Close()
+	sniff := make([]byte, 512)
+	n, err := file.Read(sniff)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return errors.New("a reference image could not be read")
+	}
+	contentType := http.DetectContentType(sniff[:n])
+	if !slices.Contains([]string{"image/jpeg", "image/png", "image/webp"}, contentType) {
+		return errors.New("reference images must be PNG, JPEG, or WebP")
+	}
+	return nil
+}
+
+func parsePlaygroundImageEditForm(c *gin.Context) (*multipart.Form, string, string, error) {
+	if c.ContentType() != gin.MIMEMultipartPOSTForm {
+		return nil, "", "", errors.New("image editing requires multipart form data")
+	}
+	form, err := common.ParseMultipartFormReusable(c)
+	if err != nil {
+		return nil, "", "", errors.New("image edit request could not be read")
+	}
+	values := url.Values(form.Value)
+	c.Request.MultipartForm = form
+	c.Request.PostForm = values
+	files := append([]*multipart.FileHeader{}, form.File["image"]...)
+	files = append(files, form.File["image[]"]...)
+	if len(files) == 0 || len(files) > assistantDrawingMaxReferences {
+		return form, "", "", errors.New("image editing requires between 1 and 8 reference images")
+	}
+	for _, header := range files {
+		if err := validatePlaygroundReferenceImage(header); err != nil {
+			return form, "", "", err
+		}
+	}
+	return form, values.Get("model"), values.Get("prompt"), nil
+}
+
+// PlaygroundImageEdit adds validated multi-image input to the browser
+// workbench while preserving the normal image relay and billing path.
+func PlaygroundImageEdit(c *gin.Context) {
+	user, group, ok := playgroundImageUserAndGroup(c)
+	if !ok {
 		return
 	}
-	user.WriteContext(c)
-	tempToken := &model.Token{UserId: user.Id, Name: "drawing-workbench", Group: group}
-	if err := middleware.SetupContextForToken(c, tempToken); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": gin.H{"message": "image routing context could not be prepared"}})
+	form, modelID, prompt, err := parsePlaygroundImageEditForm(c)
+	if form != nil {
+		defer form.RemoveAll()
+	}
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": err.Error()}})
+		return
+	}
+	if !preparePlaygroundImageRelay(c, user, group, modelID, prompt) {
 		return
 	}
 	Relay(c, types.RelayFormatOpenAIImage)

@@ -74,14 +74,15 @@ func SetRelayRouter(router *gin.Engine) {
 	{
 		playgroundRouter.POST("/chat/completions", controller.Playground)
 	}
-	// Keep the image body ceiling before Distribute reads the model/group
-	// envelope; image responses are still relayed through the normal billing
-	// path after the controller validates the dynamic catalog.
+	// Keep route-specific body ceilings before Distribute reads the model/group
+	// envelope. Editing accepts up to eight 10 MB reference images plus
+	// multipart overhead; both paths retain normal relay billing.
 	playgroundImageRouter := router.Group("/pg/images")
 	playgroundImageRouter.Use(middleware.RouteTag("relay"))
 	playgroundImageRouter.Use(middleware.SystemPerformanceCheck())
-	playgroundImageRouter.Use(middleware.UserAuth(), middleware.RequestBodyLimit(32<<10), middleware.Distribute())
-	playgroundImageRouter.POST("/generations", controller.PlaygroundImage)
+	playgroundImageRouter.Use(middleware.UserAuth())
+	playgroundImageRouter.POST("/generations", middleware.RequestBodyLimit(32<<10), middleware.Distribute(), controller.PlaygroundImage)
+	playgroundImageRouter.POST("/edits", middleware.RequestBodyLimit(82<<20), middleware.Distribute(), controller.PlaygroundImageEdit)
 	assistantPresetRouter := router.Group("/api/assistant/pre-conversation-presets")
 	assistantPresetRouter.Use(middleware.RouteTag("api"))
 	assistantPresetRouter.Use(middleware.SystemPerformanceCheck())

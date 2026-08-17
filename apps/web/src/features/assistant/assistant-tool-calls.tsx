@@ -76,9 +76,10 @@ export function AssistantToolCalls(props: { traces: AssistantToolTrace[] }) {
           : isApproval
             ? t('Waiting for confirmation')
             : t('Tool completed')
-        const summary = isError || isApproval
-          ? statusText
-          : t(TOOL_SUMMARY_KEYS[trace.name] ?? 'Tool completed')
+        const summary =
+          isError || isApproval
+            ? statusText
+            : t(TOOL_SUMMARY_KEYS[trace.name] ?? 'Tool completed')
         return (
           <Tool
             key={`${trace.name}-${index}`}

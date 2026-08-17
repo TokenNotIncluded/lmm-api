@@ -367,7 +367,7 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 	}
 	if strings.HasPrefix(c.Request.URL.Path, "/v1/images/generations") {
 		modelRequest.Model = common.GetStringIfEmpty(modelRequest.Model, "dall-e")
-	} else if strings.HasPrefix(c.Request.URL.Path, "/v1/images/edits") {
+	} else if strings.HasPrefix(c.Request.URL.Path, "/v1/images/edits") || strings.HasPrefix(c.Request.URL.Path, "/pg/images/edits") {
 		//modelRequest.Model = common.GetStringIfEmpty(c.PostForm("model"), "gpt-image-1")
 		contentType := c.ContentType()
 		if slices.Contains([]string{gin.MIMEPOSTForm, gin.MIMEMultipartPOSTForm}, contentType) {
@@ -399,7 +399,8 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 		}
 		c.Set("relay_mode", relayMode)
 	}
-	if strings.HasPrefix(c.Request.URL.Path, "/pg/chat/completions") || strings.HasPrefix(c.Request.URL.Path, "/pg/images/generations") {
+	isPlaygroundImageRequest := strings.HasPrefix(c.Request.URL.Path, "/pg/images/generations") || strings.HasPrefix(c.Request.URL.Path, "/pg/images/edits")
+	if strings.HasPrefix(c.Request.URL.Path, "/pg/chat/completions") || isPlaygroundImageRequest {
 		// Playground requests may carry their selected routing group in the
 		// body (chat compatibility) or the query (image workbench).
 		req, err := getModelFromRequest(c)
@@ -408,7 +409,7 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 		}
 		modelRequest.Model = req.Model
 		modelRequest.Group = req.Group
-		if strings.HasPrefix(c.Request.URL.Path, "/pg/images/generations") {
+		if isPlaygroundImageRequest {
 			queryGroup := strings.TrimSpace(c.Query("group"))
 			if queryGroup != "" && modelRequest.Group != "" && modelRequest.Group != queryGroup {
 				return nil, false, errors.New("image request group differs between query and body")

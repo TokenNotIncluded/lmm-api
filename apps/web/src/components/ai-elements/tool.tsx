@@ -159,7 +159,7 @@ export const ToolInput = ({ className, input, ...props }: ToolInputProps) => {
         {t('Parameters')}
       </h4>
       {entries.length > 0 ? (
-        <dl className='bg-muted/50 divide-border grid gap-px overflow-hidden rounded-md divide-y'>
+        <dl className='bg-muted/50 divide-border grid gap-px divide-y overflow-hidden rounded-md'>
           {entries.map(([key, value]) => (
             <div
               key={key}

@@ -2,8 +2,8 @@
 Copyright (C) 2026 LIghtJUNction
 */
 import { useQuery } from '@tanstack/react-query'
-import { ImageIcon, RefreshCw, Sparkles } from 'lucide-react'
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { ImageIcon, ImagePlus, RefreshCw, Sparkles, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
@@ -39,6 +39,17 @@ type ImageResponse = {
   error?: { message?: string }
   message?: string
 }
+
+type ReferenceImage = {
+  id: string
+  file: File
+  previewUrl: string
+}
+
+const maxReferenceImages = 8
+const maxReferenceImageBytes = 10 * 1024 * 1024
+const supportedReferenceImageTypes = ['image/jpeg', 'image/png', 'image/webp']
+const chineseImageOrdinals = ['一', '二', '三', '四', '五', '六', '七', '八']
 
 function isImageModel(model: PricingModel): boolean {
   return model.supported_endpoint_types?.includes('image-generation') === true
@@ -104,7 +115,7 @@ function DrawingQueryErrorAlert(props: {
 }
 
 export function Drawing() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const [prompt, setPrompt] = useState('')
   const [group, setGroup] = useState('')
   const [model, setModel] = useState('')
@@ -112,8 +123,11 @@ export function Drawing() {
   const [quality, setQuality] = useState('')
   const [count, setCount] = useState('1')
   const [results, setResults] = useState<ImageResult[]>([])
+  const [referenceImages, setReferenceImages] = useState<ReferenceImage[]>([])
   const [error, setError] = useState<string | null>(null)
   const [generating, setGenerating] = useState(false)
+  const referenceInputRef = useRef<HTMLInputElement>(null)
+  const previewUrlsRef = useRef(new Set<string>())
 
   const accessQuery = useQuery({
     queryKey: ['assistant-status'],
@@ -238,6 +252,76 @@ export function Drawing() {
     )
   }, [qualityPresets, sizePresets])
 
+  useEffect(
+    () => () => {
+      for (const previewUrl of previewUrlsRef.current) {
+        URL.revokeObjectURL(previewUrl)
+      }
+      previewUrlsRef.current.clear()
+    },
+    []
+  )
+
+  const referenceImageLabel = (index: number) => {
+    const language = i18n.resolvedLanguage ?? i18n.language
+    const ordinal = language.startsWith('zh')
+      ? (chineseImageOrdinals[index] ?? String(index + 1))
+      : String(index + 1)
+    return t('Reference image {{index}}', { index: ordinal })
+  }
+
+  const addReferenceImages = (files: FileList | null) => {
+    const selected = Array.from(files ?? [])
+    if (selected.length === 0) return
+    if (referenceImages.length + selected.length > maxReferenceImages) {
+      setError(
+        t('You can upload up to {{count}} reference images.', {
+          count: maxReferenceImages,
+        })
+      )
+      return
+    }
+    const unsupported = selected.find(
+      (file) => !supportedReferenceImageTypes.includes(file.type)
+    )
+    if (unsupported) {
+      setError(
+        t('{{name}} is not a supported image file.', {
+          name: unsupported.name,
+        })
+      )
+      return
+    }
+    const oversized = selected.find(
+      (file) => file.size > maxReferenceImageBytes
+    )
+    if (oversized) {
+      setError(
+        t('{{name}} exceeds the {{size}} MB limit.', {
+          name: oversized.name,
+          size: maxReferenceImageBytes / 1024 / 1024,
+        })
+      )
+      return
+    }
+    const additions = selected.map((file) => {
+      const previewUrl = URL.createObjectURL(file)
+      previewUrlsRef.current.add(previewUrl)
+      return { id: crypto.randomUUID(), file, previewUrl }
+    })
+    setReferenceImages((current) => [...current, ...additions])
+    setError(null)
+  }
+
+  const removeReferenceImage = (id: string) => {
+    const target = referenceImages.find((image) => image.id === id)
+    if (target) {
+      URL.revokeObjectURL(target.previewUrl)
+      previewUrlsRef.current.delete(target.previewUrl)
+    }
+    setReferenceImages((current) => current.filter((image) => image.id !== id))
+  }
+
   const generate = async () => {
     const cleanPrompt = prompt.trim()
     if (generating || !cleanPrompt || !selectedGroup || !selectedModel) return
@@ -245,17 +329,35 @@ export function Drawing() {
     setError(null)
     setResults([])
     try {
-      const response = await api.post<ImageResponse>(
-        `/pg/images/generations?group=${encodeURIComponent(selectedGroup)}`,
-        {
-          prompt: cleanPrompt,
-          model: selectedModel,
-          n: Number(count),
-          ...(size.trim() ? { size: size.trim() } : {}),
-          ...(quality.trim() ? { quality: quality.trim() } : {}),
-        },
-        { skipBusinessError: true, skipErrorHandler: true }
-      )
+      let response
+      if (referenceImages.length > 0) {
+        const form = new FormData()
+        form.append('prompt', cleanPrompt)
+        form.append('model', selectedModel)
+        form.append('n', count)
+        if (size.trim()) form.append('size', size.trim())
+        if (quality.trim()) form.append('quality', quality.trim())
+        for (const image of referenceImages) {
+          form.append('image', image.file, image.file.name)
+        }
+        response = await api.post<ImageResponse>(
+          `/pg/images/edits?group=${encodeURIComponent(selectedGroup)}`,
+          form,
+          { skipBusinessError: true, skipErrorHandler: true }
+        )
+      } else {
+        response = await api.post<ImageResponse>(
+          `/pg/images/generations?group=${encodeURIComponent(selectedGroup)}`,
+          {
+            prompt: cleanPrompt,
+            model: selectedModel,
+            n: Number(count),
+            ...(size.trim() ? { size: size.trim() } : {}),
+            ...(quality.trim() ? { quality: quality.trim() } : {}),
+          },
+          { skipBusinessError: true, skipErrorHandler: true }
+        )
+      }
       if (response.data.error || !Array.isArray(response.data.data)) {
         throw new Error(
           response.data.error?.message ||
@@ -370,7 +472,7 @@ export function Drawing() {
                 <Sparkles className='size-4' aria-hidden='true' />
               </div>
               <div className='min-w-0'>
-                <p className='text-white/45 text-[10px] font-medium tracking-[0.16em] uppercase'>
+                <p className='text-[10px] font-medium tracking-[0.16em] text-white/45 uppercase'>
                   {t('Canvas')}
                 </p>
                 <h2
@@ -384,10 +486,14 @@ export function Drawing() {
             <div className='flex shrink-0 items-center gap-2 text-xs'>
               <span className='rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-white/65'>
                 {generating
-                  ? t('Generating...')
+                  ? referenceImages.length > 0
+                    ? t('Editing...')
+                    : t('Generating...')
                   : results.length > 0
                     ? t('Preview')
-                    : t('Draft')}
+                    : referenceImages.length > 0
+                      ? t('Edit image')
+                      : t('Draft')}
               </span>
               {selectedGroup ? (
                 <span className='hidden rounded-full border border-white/10 px-2.5 py-1 text-white/45 sm:inline'>
@@ -439,7 +545,10 @@ export function Drawing() {
             ) : (
               <div className='max-w-md text-center text-white/55'>
                 <div className='mx-auto mb-5 flex size-16 items-center justify-center rounded-2xl border border-white/10 bg-white/5'>
-                  <ImageIcon className='size-7 text-white/35' aria-hidden='true' />
+                  <ImageIcon
+                    className='size-7 text-white/35'
+                    aria-hidden='true'
+                  />
                 </div>
                 <p className='text-sm text-white/75'>
                   {t('Your generated images will appear here.')}
@@ -449,7 +558,9 @@ export function Drawing() {
                     ? t(
                         'Review the generated images here when the request finishes.'
                       )
-                    : t('Describe an image, choose a group, and generate a preview.')}
+                    : t(
+                        'Describe an image, choose a group, and generate a preview.'
+                      )}
                 </p>
               </div>
             )}
@@ -461,7 +572,7 @@ export function Drawing() {
                 <Label htmlFor='drawing-prompt-input' className='text-white/80'>
                   {t('Prompt')}
                 </Label>
-                <span className='text-xs tabular-nums text-white/35'>
+                <span className='text-xs text-white/35 tabular-nums'>
                   {prompt.length}/2000
                 </span>
               </div>
@@ -507,6 +618,111 @@ export function Drawing() {
           </div>
 
           <div className='grid gap-5 p-5'>
+            <div className='grid gap-3'>
+              <div className='flex items-center justify-between gap-3'>
+                <Label htmlFor='drawing-reference-images'>
+                  {t('Reference images')}
+                </Label>
+                <span className='text-muted-foreground text-xs tabular-nums'>
+                  {referenceImages.length}/{maxReferenceImages}
+                </span>
+              </div>
+              <input
+                ref={referenceInputRef}
+                id='drawing-reference-images'
+                type='file'
+                accept={supportedReferenceImageTypes.join(',')}
+                multiple
+                disabled={generating}
+                className='sr-only'
+                onChange={(event) => {
+                  addReferenceImages(event.target.files)
+                  event.target.value = ''
+                }}
+              />
+              {referenceImages.length === 0 ? (
+                <Button
+                  type='button'
+                  variant='outline'
+                  className='text-muted-foreground hover:text-foreground h-24 border-dashed'
+                  disabled={generating}
+                  onClick={() => referenceInputRef.current?.click()}
+                >
+                  <ImagePlus className='mr-2 size-4' aria-hidden='true' />
+                  {t('Add reference images')}
+                </Button>
+              ) : (
+                <>
+                  <div className='grid grid-cols-2 gap-2'>
+                    {referenceImages.map((image, index) => {
+                      const label = referenceImageLabel(index)
+                      return (
+                        <figure
+                          key={image.id}
+                          className='group relative aspect-square min-w-0 overflow-hidden rounded-xl border bg-black/10'
+                          title={image.file.name}
+                        >
+                          <img
+                            src={image.previewUrl}
+                            alt={label}
+                            className='size-full object-cover'
+                          />
+                          <figcaption className='absolute bottom-1.5 left-1.5 rounded-md bg-black/75 px-2 py-1 text-[11px] font-medium text-white'>
+                            {label}
+                          </figcaption>
+                          <Button
+                            type='button'
+                            variant='secondary'
+                            size='icon'
+                            className='absolute top-1.5 right-1.5 size-7 rounded-full bg-black/75 text-white opacity-90 hover:bg-black'
+                            disabled={generating}
+                            aria-label={t('Remove {{name}}', { name: label })}
+                            onClick={() => removeReferenceImage(image.id)}
+                          >
+                            <X className='size-3.5' aria-hidden='true' />
+                          </Button>
+                        </figure>
+                      )
+                    })}
+                  </div>
+                  <Button
+                    type='button'
+                    variant='outline'
+                    size='sm'
+                    disabled={
+                      generating || referenceImages.length >= maxReferenceImages
+                    }
+                    onClick={() => referenceInputRef.current?.click()}
+                  >
+                    <ImagePlus className='mr-2 size-4' aria-hidden='true' />
+                    {t('Add reference images')}
+                  </Button>
+                </>
+              )}
+              <p className='text-muted-foreground text-xs leading-5'>
+                {t(
+                  'PNG, JPEG or WebP, up to {{count}} images and {{size}} MB each.',
+                  {
+                    count: maxReferenceImages,
+                    size: maxReferenceImageBytes / 1024 / 1024,
+                  }
+                )}
+              </p>
+              {referenceImages.length > 0 ? (
+                <div className='bg-muted/40 grid gap-1 rounded-lg border px-3 py-2 text-xs leading-5'>
+                  <span className='font-medium'>
+                    {t(
+                      'Reference images switch this request to image editing.'
+                    )}
+                  </span>
+                  <span className='text-muted-foreground'>
+                    {t(
+                      'Use the image labels in your prompt to describe how each reference should be used.'
+                    )}
+                  </span>
+                </div>
+              ) : null}
+            </div>
             <div className='grid gap-2'>
               <Label htmlFor='drawing-group'>{t('Routing group')}</Label>
               <NativeSelect
@@ -565,7 +781,9 @@ export function Drawing() {
                 </NativeSelect>
               </div>
               <div className='grid gap-2'>
-                <Label htmlFor='drawing-quality'>{t('Quality (optional)')}</Label>
+                <Label htmlFor='drawing-quality'>
+                  {t('Quality (optional)')}
+                </Label>
                 <NativeSelect
                   id='drawing-quality'
                   value={quality}
@@ -634,7 +852,13 @@ export function Drawing() {
               ) : (
                 <ImageIcon className='mr-2 size-4' aria-hidden='true' />
               )}
-              {generating ? t('Generating...') : t('Generate image')}
+              {generating
+                ? referenceImages.length > 0
+                  ? t('Editing...')
+                  : t('Generating...')
+                : referenceImages.length > 0
+                  ? t('Edit image')
+                  : t('Generate image')}
             </Button>
             <p className='text-muted-foreground text-center text-xs leading-5'>
               {t('Billing follows the selected group configuration.')}

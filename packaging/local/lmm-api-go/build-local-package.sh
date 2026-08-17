@@ -82,7 +82,7 @@ tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner \
     makepkg --force --nodeps --noconfirm --cleanbuild
 )
 
-matches=("$pkgdest/lmm-api-go-$pkgver-1-x86_64.pkg.tar."*)
+matches=("$pkgdest/lmm-api-go-bin-$pkgver-1-x86_64.pkg.tar."*)
 [[ ${#matches[@]} -eq 1 && -f ${matches[0]} ]] || die 'local lmm-api-go package was not produced exactly once'
 destination="$OUTPUT_DIR/${matches[0]##*/}"
 install -Dm0644 "${matches[0]}" "$destination"

@@ -91,19 +91,20 @@ fakeroot -- "${install_args[@]}" -U "$old_core" "$old_go" >/dev/null
 [[ $("${query_args[@]}" -Q lmm-api 2>/dev/null) == "lmm-api $old_core_version" ]]
 [[ $("${query_args[@]}" -Q lmm-api-go 2>/dev/null) == "lmm-api-go $old_go_version" ]]
 
-fakeroot -- "${install_args[@]}" -Rdd lmm-api >/dev/null
+fakeroot -- "${install_args[@]}" -Rdd lmm-api lmm-api-go >/dev/null
 fakeroot -- "${install_args[@]}" -U "$new_go" >/dev/null
 if "${query_args[@]}" -Q lmm-api >/dev/null 2>&1; then
   printf 'go-package-roundtrip: old core package remains installed\n' >&2
   exit 1
 fi
-[[ $("${query_args[@]}" -Q lmm-api-go 2>/dev/null) == "lmm-api-go $candidate_version-1" ]]
+[[ $("${query_args[@]}" -Q lmm-api-go-bin 2>/dev/null) == "lmm-api-go-bin $candidate_version-1" ]]
 [[ -x $pacman_root/usr/bin/lmm-api-go ]]
 [[ -L $pacman_root/usr/bin/lmm-api ]]
 [[ $(readlink -- "$pacman_root/usr/bin/lmm-api") == lmm-api-go ]]
 [[ $(stat -c '%a' "$pacman_root/etc/lmm-api-go") == 700 ]]
 [[ $(stat -c '%a' "$pacman_root/etc/lmm-api-go/lmm-api-go.env") == 600 ]]
 
+fakeroot -- "${install_args[@]}" -Rdd lmm-api-go-bin >/dev/null
 fakeroot -- "${install_args[@]}" -U "$old_core" "$old_go" >/dev/null
 [[ $("${query_args[@]}" -Q lmm-api 2>/dev/null) == "lmm-api $old_core_version" ]]
 [[ $("${query_args[@]}" -Q lmm-api-go 2>/dev/null) == "lmm-api-go $old_go_version" ]]
@@ -162,9 +163,11 @@ direct_query=(pacman "${direct_common[@]}")
 fakeroot -- "${direct_install[@]}" -U "$old_direct" >/dev/null
 [[ $("${direct_query[@]}" -Q lmm-api-go 2>/dev/null) == "lmm-api-go $old_go_version" ]]
 [[ $("$direct_pacman_root/usr/bin/lmm-api-go") == "${old_go_version%-1}" ]]
+fakeroot -- "${direct_install[@]}" -Rdd lmm-api-go >/dev/null
 fakeroot -- "${direct_install[@]}" -U "$new_go" >/dev/null
-[[ $("${direct_query[@]}" -Q lmm-api-go 2>/dev/null) == "lmm-api-go $candidate_version-1" ]]
+[[ $("${direct_query[@]}" -Q lmm-api-go-bin 2>/dev/null) == "lmm-api-go-bin $candidate_version-1" ]]
 [[ $("$direct_pacman_root/usr/bin/lmm-api-go") == "$candidate_version" ]]
+fakeroot -- "${direct_install[@]}" -Rdd lmm-api-go-bin >/dev/null
 fakeroot -- "${direct_install[@]}" -U "$old_direct" >/dev/null
 [[ $("${direct_query[@]}" -Q lmm-api-go 2>/dev/null) == "lmm-api-go $old_go_version" ]]
 if "${direct_query[@]}" -Q lmm-api >/dev/null 2>&1; then

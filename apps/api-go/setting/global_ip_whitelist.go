@@ -43,8 +43,8 @@ func GetGlobalIPWhitelistSettings() GlobalIPWhitelistSettings {
 	defer globalIPWhitelistMu.RUnlock()
 
 	settings := globalIPWhitelist
-	settings.CIDRs = append([]string(nil), globalIPWhitelist.CIDRs...)
-	settings.prefixes = append([]netip.Prefix(nil), globalIPWhitelist.prefixes...)
+	settings.CIDRs = append([]string{}, globalIPWhitelist.CIDRs...)
+	settings.prefixes = append([]netip.Prefix{}, globalIPWhitelist.prefixes...)
 	return settings
 }
 
