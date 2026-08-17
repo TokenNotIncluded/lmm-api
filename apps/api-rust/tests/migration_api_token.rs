@@ -558,7 +558,7 @@ async fn create_token_activation_is_one_time_and_transactional() {
 }
 
 #[tokio::test]
-async fn api_token_router_disables_axum_default_body_limit_for_legacy_handler() {
+async fn api_token_router_rejects_oversized_body_before_legacy_decode() {
     let padding = "x".repeat(2 * 1024 * 1024 + 1);
     let payload = format!(r#"{{"name":"oversized","padding":"{padding}"}}"#);
     let response = call_raw(
@@ -573,10 +573,7 @@ async fn api_token_router_disables_axum_default_body_limit_for_legacy_handler() 
         },
     )
     .await;
-    assert_eq!(response.status(), StatusCode::OK);
-    let value = body(response).await;
-    assert_eq!(value["success"], false);
-    assert_ne!(value["message"], "Failed to buffer the request body");
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
 }
 
 #[tokio::test]
