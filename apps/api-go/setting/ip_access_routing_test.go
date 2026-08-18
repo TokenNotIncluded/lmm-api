@@ -171,6 +171,14 @@ func TestIPAccessRoutingUsesFallbackWhenNoRuleMatches(t *testing.T) {
 	assert.Zero(t, line)
 }
 
+func TestIPAccessRoutingFailsClosedForUnavailableMatcherMetadata(t *testing.T) {
+	withIPAccessRoutingRules(t, "mac('02:42:ac:11:00:02') -> reject\nfallback: direct")
+
+	_, line, err := EvaluateIPAccessRoute(IPAccessRouteRequest{ClientIP: "203.0.113.8"})
+	require.ErrorContains(t, err, "required matcher metadata is unavailable")
+	assert.Equal(t, 1, line)
+}
+
 func TestParseIPAccessRoutingRulesValidatesDaedSubset(t *testing.T) {
 	valid := []string{
 		"dip(203.0.113.8) -> direct",

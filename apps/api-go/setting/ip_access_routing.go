@@ -38,12 +38,10 @@ const (
 )
 
 type IPAccessRouteRequest struct {
-	// ClientIP is the edge-observed client address. It remains the fallback
-	// value for dip() for backwards compatibility with the original IP access
-	// setting, which used dip() for the connecting address.
-	ClientIP string
-	// DestinationIP is optional edge metadata for native Daed dip() semantics.
-	DestinationIP   string
+	// ClientIP is the trusted edge-observed connecting address. The HTTP
+	// ingress policy intentionally maps both dip()/ip() and sip() to this
+	// value; destination-IP headers are never accepted from clients.
+	ClientIP        string
 	CountryCode     string
 	Domain          string
 	L4Protocol      string
@@ -645,10 +643,11 @@ func (rule ipAccessRouteRule) matches(request IPAccessRouteRequest, clientAddres
 			return false, err.Error()
 		}
 		// Some Daed predicates describe local packet metadata (for example
-		// pname/mac/dscp) that an HTTP edge cannot observe. Treat those
-		// predicates as a non-match rather than applying a guessed value.
+		// pname/mac/dscp) that an HTTP edge cannot observe. Never turn an
+		// unavailable condition into a match or silently fall through to a
+		// permissive fallback; the policy endpoint must fail closed instead.
 		if !known {
-			return false, ""
+			return false, "required matcher metadata is unavailable"
 		}
 		if condition.negated {
 			matched = !matched
@@ -664,13 +663,6 @@ func (condition ipAccessRouteCondition) matches(request IPAccessRouteRequest, cl
 	switch condition.kind {
 	case ipAccessConditionIP:
 		address := clientAddress
-		if condition.ipDirection == ipAccessIPDestination && strings.TrimSpace(request.DestinationIP) != "" {
-			parsed, err := netip.ParseAddr(strings.TrimSpace(request.DestinationIP))
-			if err != nil {
-				return false, true, errors.New("destination IP is unavailable or invalid")
-			}
-			address = parsed.Unmap()
-		}
 		matched := false
 		countryUnknown := false
 		for _, matcher := range condition.ipMatchers {

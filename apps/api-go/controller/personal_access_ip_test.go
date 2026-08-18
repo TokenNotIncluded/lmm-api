@@ -97,6 +97,25 @@ func TestIPAccessRoutingPolicyMarksOnlyDeniedRequests(t *testing.T) {
 		assert.Equal(t, http.StatusNoContent, context.Writer.Status())
 		assert.Empty(t, recorder.Header().Get(accessPolicyResultHeader))
 	})
+
+	t.Run("client supplied destination IP metadata cannot bypass a client rule", func(t *testing.T) {
+		require.NoError(t, setting.UpdateIPAccessRoutingRules("dip(203.0.113.8) -> reject\nfallback: direct"))
+		t.Cleanup(func() {
+			require.NoError(t, setting.UpdateIPAccessRoutingRules(setting.DefaultIPAccessRoutingRules))
+		})
+
+		recorder := httptest.NewRecorder()
+		context, _ := gin.CreateTestContext(recorder)
+		context.Request = httptest.NewRequest(http.MethodGet, "/internal/access-ip-policy", nil)
+		context.Request.RemoteAddr = "127.0.0.1:42000"
+		context.Request.Header.Set("X-Original-Client-IP", "203.0.113.8")
+		context.Request.Header.Set("X-LMM-Edge-Destination-IP", "198.51.100.9")
+
+		CheckIPAccessRoutingPolicy(context)
+
+		assert.Equal(t, http.StatusForbidden, context.Writer.Status())
+		assert.Equal(t, accessPolicyDenied, recorder.Header().Get(accessPolicyResultHeader))
+	})
 }
 
 func TestAccessPolicyErrorPageRequiresCapturedDenial(t *testing.T) {
