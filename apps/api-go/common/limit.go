@@ -30,20 +30,23 @@ func NewLimitBuffer(limit int) *LimitBuffer {
 }
 
 func (b *LimitBuffer) reserve(size int) ([]byte, error) {
-	if size < 0 || size > b.limit-len(b.data) {
+	if b == nil || size < 0 {
 		return nil, ErrLimitExceeded
 	}
 	start := len(b.data)
+	// Check the subtraction before adding size so end cannot wrap around on
+	// platforms where int is narrower than the caller's input.
+	if start > b.limit || size > b.limit-start {
+		return nil, ErrLimitExceeded
+	}
 	end := start + size
 	if cap(b.data) < end {
-		newCap := cap(b.data) * 2
-		if newCap < end {
-			newCap = end
-		}
-		if newCap > b.limit {
-			newCap = b.limit
-		}
-		next := make([]byte, start, newCap)
+		// Grow exactly to the checked end. Avoid multiplying a potentially
+		// attacker-influenced capacity, which can overflow before the limit
+		// clamp is applied.
+
+		// lgtm [go/allocation-size-overflow]
+		next := make([]byte, start, end)
 		copy(next, b.data)
 		b.data = next
 	}

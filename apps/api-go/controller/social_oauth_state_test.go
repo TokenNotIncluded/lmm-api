@@ -41,7 +41,9 @@ func TestWeChatLoginStartPersistsLegalConsentInBrowserBoundFlow(t *testing.T) {
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
 	require.True(t, response.Success)
 	require.NotEmpty(t, response.Data.FlowToken)
-	assert.Contains(t, recorder.Header().Get("Set-Cookie"), oauthStateCookieName("wechat")+"="+response.Data.FlowToken)
+	setCookie := recorder.Header().Get("Set-Cookie")
+	assert.Contains(t, setCookie, oauthStateCookieName("wechat")+"="+response.Data.FlowToken)
+	assert.Contains(t, setCookie, "; Secure")
 
 	flow, err := model.GetAuthFlow(response.Data.FlowToken, model.AuthFlowMatch{
 		Purpose: model.AuthFlowPurposeWeChatLogin, Provider: "wechat", Intent: model.AuthFlowIntentLogin,
@@ -73,6 +75,8 @@ func TestWeChatProviderErrorDoesNotEchoUpstreamMessage(t *testing.T) {
 	previousEnabled := common.WeChatAuthEnabled
 	previousAddress := common.WeChatServerAddress
 	previousToken := common.WeChatServerToken
+	previousValidator := validateWeChatProviderURL
+	previousClientFactory := newWeChatHTTPClient
 	common.WeChatAuthEnabled = true
 	providerMessage := "upstream database password leaked"
 	provider := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
@@ -81,11 +85,17 @@ func TestWeChatProviderErrorDoesNotEchoUpstreamMessage(t *testing.T) {
 	}))
 	common.WeChatServerAddress = provider.URL
 	common.WeChatServerToken = "wechat-test-token"
+	// The production validator rejects loopback addresses; this test server is
+	// intentionally local and exercises the response-redaction contract.
+	validateWeChatProviderURL = func(string) error { return nil }
+	newWeChatHTTPClient = func() *http.Client { return &http.Client{Timeout: 5 * time.Second} }
 	t.Cleanup(func() {
 		provider.Close()
 		common.WeChatAuthEnabled = previousEnabled
 		common.WeChatServerAddress = previousAddress
 		common.WeChatServerToken = previousToken
+		validateWeChatProviderURL = previousValidator
+		newWeChatHTTPClient = previousClientFactory
 	})
 
 	state, _, err := model.CreateAuthFlow(model.AuthFlowCreate{
@@ -113,20 +123,39 @@ func TestWeChatProviderErrorDoesNotEchoUpstreamMessage(t *testing.T) {
 func TestWeChatProviderResponseIsBounded(t *testing.T) {
 	previousAddress := common.WeChatServerAddress
 	previousToken := common.WeChatServerToken
+	previousValidator := validateWeChatProviderURL
+	previousClientFactory := newWeChatHTTPClient
 	provider := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")
 		_, _ = writer.Write([]byte(`{"success":false,"message":"` + strings.Repeat("x", int(wechatProviderResponseMaxBytes)) + `"}`))
 	}))
 	common.WeChatServerAddress = provider.URL
 	common.WeChatServerToken = "wechat-test-token"
+	validateWeChatProviderURL = func(string) error { return nil }
+	newWeChatHTTPClient = func() *http.Client { return &http.Client{Timeout: 5 * time.Second} }
 	t.Cleanup(func() {
 		provider.Close()
 		common.WeChatServerAddress = previousAddress
 		common.WeChatServerToken = previousToken
+		validateWeChatProviderURL = previousValidator
+		newWeChatHTTPClient = previousClientFactory
 	})
 
 	_, err := getWeChatIdByCode("provider-code")
 	assert.ErrorIs(t, err, common.ErrLimitExceeded)
+}
+
+func TestValidateWeChatProviderURLRejectsPrivateAndMalformedTargets(t *testing.T) {
+	for _, rawURL := range []string{
+		"http://127.0.0.1:8080",
+		"http://169.254.169.254/latest/meta-data",
+		"file:///etc/passwd",
+		"https://user:password@example.com",
+	} {
+		t.Run(rawURL, func(t *testing.T) {
+			assert.Error(t, validateWeChatProviderURL(rawURL))
+		})
+	}
 }
 
 func TestTelegramLoginStartPersistsBrowserBoundFlow(t *testing.T) {

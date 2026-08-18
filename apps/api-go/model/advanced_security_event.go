@@ -6,6 +6,7 @@ import (
 
 	"github.com/LIghtJUNction/api.lmm.best/common"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -290,9 +291,9 @@ func advancedSecurityEventQuery(db *gorm.DB, filter AdvancedSecurityEventFilter)
 		query = query.Where("category = ?", filter.Category)
 	}
 	if filter.Group != "" {
-		// Use a map predicate so GORM quotes the column for PostgreSQL, where
-		// GROUP is a reserved keyword.
-		query = query.Where(map[string]any{"group": filter.Group})
+		// clause.Column lets GORM quote GROUP for the active dialect while the
+		// value remains a bound query argument.
+		query = query.Where(clause.Eq{Column: clause.Column{Name: "group"}, Value: filter.Group})
 	}
 	if filter.Decision != "" {
 		query = query.Where("decision = ?", filter.Decision)

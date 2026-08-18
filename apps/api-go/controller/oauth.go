@@ -39,7 +39,9 @@ func setOAuthStateCookie(c *gin.Context, provider, state string) {
 		Path:     "/",
 		MaxAge:   int(oauthAuthFlowTTL / time.Second),
 		HttpOnly: true,
-		Secure:   common.SessionCookieSecure,
+		// OAuth state is a bearer CSRF token. It must never be sent over
+		// cleartext HTTP, even when other development cookies are relaxed.
+		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 	})
 }
@@ -52,7 +54,7 @@ func clearOAuthStateCookie(c *gin.Context, provider string) {
 		MaxAge:   -1,
 		Expires:  time.Unix(1, 0),
 		HttpOnly: true,
-		Secure:   common.SessionCookieSecure,
+		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 	})
 }
