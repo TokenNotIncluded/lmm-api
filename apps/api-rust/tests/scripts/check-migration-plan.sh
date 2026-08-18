@@ -41,7 +41,7 @@ awk -F '\t' '
     if ((method == "GET" && path == "/api/ratio_sync/channels") || (method == "POST" && path == "/api/ratio_sync/fetch")) return "root"
     if (method == "GET" && (path == "/api/data/flow/self" || path == "/api/data/self" || path == "/api/log/self" || path == "/api/log/self/search" || path == "/api/log/self/stat" || path == "/api/subscription/plans")) return "user"
     if (method == "GET" && path == "/api/log/token") return "token"
-    if (method == "POST" && (path == "/api/subscription/balance/pay" || path == "/api/subscription/creem/pay" || path == "/api/subscription/epay/pay" || path == "/api/subscription/fastpay/pay" || path == "/api/subscription/stripe/pay" || path == "/api/subscription/waffo-pancake/pay")) return "user"
+    if (method == "POST" && (path == "/api/subscription/balance/pay" || path == "/api/subscription/creem/pay" || path == "/api/subscription/epay/pay" || path == "/api/subscription/stripe/pay" || path == "/api/subscription/waffo-pancake/pay")) return "user"
     if ((method == "GET" || method == "POST") && path == "/api/subscription/epay/return") return "public"
     return ""
   }
@@ -75,7 +75,7 @@ awk -F '\t' '
     }
   }
   END {
-    if (NR != 357) { printf "expected 356 routes, got %d\n", NR - 1 > "/dev/stderr"; failed=1 }
+    if (NR != 353) { printf "expected 352 routes, got %d\n", NR - 1 > "/dev/stderr"; failed=1 }
     if (api_token_routes != 9) { printf "expected 9 exact API-token authorization rows, got %d\n", api_token_routes > "/dev/stderr"; failed=1 }
     exit failed
   }
@@ -507,4 +507,4 @@ awk -F '\t' '
   }
 ' <(tsv_without_crlf "$gate")
 
-echo "migration plan valid: 356 frozen legacy routes covered exactly; route ownership policy satisfied"
+echo "migration plan valid: 352 frozen legacy routes covered exactly; route ownership policy satisfied"

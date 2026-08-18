@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 
+import { Button } from '@/components/ui/button'
 import { useStatus } from '@/hooks/use-status'
 import { isLocalPreview } from '@/lib/local-preview'
 
@@ -32,7 +33,7 @@ import { SignUpForm } from './components/sign-up-form'
 
 export function SignUp() {
   const { t } = useTranslation()
-  const { status, error, capabilitiesReady } = useStatus()
+  const { status, error, capabilitiesReady, refetch } = useStatus()
   const localPreview = isLocalPreview()
 
   // Do not render a registration form from an old localStorage status. The
@@ -44,6 +45,40 @@ export function SignUp() {
         <p className='text-muted-foreground text-center text-sm'>
           {t('Loading registration settings...')}
         </p>
+      </AuthLayout>
+    )
+  }
+
+  if (!localPreview && error) {
+    return (
+      <AuthLayout>
+        <div className='w-full space-y-4 text-center sm:text-left'>
+          <h2 className='text-2xl font-semibold tracking-tight'>
+            {t('Unable to load registration settings')}
+          </h2>
+          <p className='text-muted-foreground text-sm sm:text-base'>
+            {t(
+              'The server did not return registration capabilities. Check your connection and try again.'
+            )}
+          </p>
+          <Button
+            type='button'
+            variant='outline'
+            onClick={() => void refetch()}
+          >
+            {t('Retry')}
+          </Button>
+          <p className='text-muted-foreground text-sm sm:text-base'>
+            {t('Already have an account?')}{' '}
+            <Link
+              to='/sign-in'
+              className='hover:text-primary font-medium underline underline-offset-4'
+            >
+              {t('Sign in')}
+            </Link>
+            .
+          </p>
+        </div>
       </AuthLayout>
     )
   }

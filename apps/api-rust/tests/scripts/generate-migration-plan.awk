@@ -14,7 +14,7 @@ function domain_for(path) {
   if (starts(path, "/api/oauth") || starts(path, "/api/passkey")) return "identity-auth"
   if (starts(path, "/api/token")) return "api-token"
   if (starts(path, "/api/channel")) return "channel"
-  if (starts(path, "/api/subscription") || path ~ /^\/api\/(stripe|creem|waffo|epay|fastpay)/ || starts(path, "/dashboard/billing")) return "billing"
+  if (starts(path, "/api/subscription") || path ~ /^\/api\/(stripe|creem|waffo|epay)/ || starts(path, "/dashboard/billing")) return "billing"
   if (starts(path, "/api/deployments")) return "deployment"
   if (starts(path, "/api/log") || starts(path, "/api/data") || starts(path, "/api/perf-metrics")) return "usage-audit"
   if (starts(path, "/api/option") || starts(path, "/api/system") || starts(path, "/api/setup")) return "system-config"
@@ -23,7 +23,7 @@ function domain_for(path) {
 
 function auth_for(path, domain) {
   if (path ~ /^\/api\/(status|notice|about|home_page_content|uptime\/status|user-agreement|privacy-policy|setup)$/) return "public"
-  if (path ~ /^\/api\/(stripe|creem|waffo|epay|fastpay).*\/webhook/ || path ~ /\/notify(\/|$)/) return "webhook"
+  if (path ~ /^\/api\/(stripe|creem|waffo|epay).*\/webhook/ || path ~ /\/notify(\/|$)/) return "webhook"
   # These legacy registrations deliberately bypass the broad domain defaults
   # below. Keep this table aligned with check-migration-plan.sh and the root
   # acceptance inventory: it records middleware ownership, not handler names.
@@ -35,7 +35,7 @@ function auth_for(path, domain) {
   if (path == "/pg/chat/completions") return "user"
   if (domain == "api-token") return "user"
   if (domain == "relay") return "token"
-  if (path ~ /^\/api\/user\/(login|register|reset|auth\/refresh|auth\/logout|passkey\/login|epay\/notify|fastpay\/notify)/) return "public"
+  if (path ~ /^\/api\/user\/(login|register|reset|auth\/refresh|auth\/logout|passkey\/login|epay\/notify)/) return "public"
   if (path ~ /^\/api\/(oauth|verification|reset_password)/) return "public-or-user"
   if (path ~ /^\/api\/(status\/test|option|system|setup\/migrate)/) return "admin"
   if (path ~ /^\/api\/user/ || path ~ /^\/api\/(subscription\/self|token\/self)/) return "user"

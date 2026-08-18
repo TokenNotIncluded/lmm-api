@@ -177,7 +177,7 @@ export const GroupRatioForm = memo(function GroupRatioForm({
             />
           }
         >
-          {t('Dynamic Pricing')}
+          {t('Dynamic Profit Pricing')}
         </Button>
         <Button variant='outline' size='sm' onClick={() => setGuideOpen(true)}>
           <HelpCircle className='mr-2 h-4 w-4' />
@@ -208,7 +208,7 @@ export const GroupRatioForm = memo(function GroupRatioForm({
             onClick={form.handleSubmit(onSave)}
             disabled={isSaving}
           >
-            {isSaving ? t('Saving...') : t('Save group ratios')}
+            {isSaving ? t('Saving...') : t('Save group pricing')}
           </Button>
         </SettingsPageActionsPortal>
         {editMode === 'visual' ? (
@@ -328,7 +328,7 @@ export const GroupRatioForm = memo(function GroupRatioForm({
               name='GroupRatio'
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>{t('Group ratios')}</FormLabel>
+                  <FormLabel>{t('Group cost multipliers')}</FormLabel>
                   <FormControl>
                     <JsonCodeEditor
                       value={field.value}
@@ -341,7 +341,7 @@ export const GroupRatioForm = memo(function GroupRatioForm({
                   </FormControl>
                   <FormDescription>
                     {t(
-                      'JSON map of group → ratio applied when the user selects the group explicitly.'
+                      'JSON map of group → cost multiplier used as the base for that billing group. Dynamic pricing adds the profit multiplier.'
                     )}
                   </FormDescription>
                   <FormMessage />
@@ -422,7 +422,7 @@ export const GroupRatioForm = memo(function GroupRatioForm({
                   </FormControl>
                   <FormDescription>
                     {t('Nested JSON: source group →')}{' '}
-                    {`{ targetGroup: ratio }`}{' '}
+                    {`{ targetGroup: costMultiplier }`}{' '}
                     {t(
                       'to override billing when a user in one group uses a token of another group.'
                     )}
@@ -609,7 +609,7 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
           <SheetTitle>{t('Group pricing usage guide')}</SheetTitle>
           <SheetDescription>
             {t(
-              'Understand how user groups, token groups, ratios, and special rules work together.'
+              'Understand how user groups, cost multipliers, profit pricing, and special rules work together.'
             )}
           </SheetDescription>
         </SheetHeader>
@@ -631,7 +631,7 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
                 </span>
                 {': '}
                 {t(
-                  'decides which channels are used and which base ratio applies.'
+                  'decides which channels are used and which base cost multiplier applies.'
                 )}
               </p>
               <p>
@@ -640,7 +640,7 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
                 </span>
                 {': '}
                 {t(
-                  'decides the top-up ratio, which groups the user can pick for tokens, and whether an override ratio applies.'
+                  'decides the top-up ratio, which groups the user can pick for tokens, and whether a cost override applies.'
                 )}
               </p>
             </div>
@@ -661,10 +661,10 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
               </li>
               <li>
                 <span className='text-foreground font-medium'>
-                  {t('Find the ratio.')}
+                  {t('Find the cost multiplier.')}
                 </span>{' '}
                 {t(
-                  'Look for a special ratio rule matching this user group and this billing group. If one exists, use its ratio. Otherwise use the billing group base ratio from the pricing table.'
+                  'Look for a special cost rule matching this user group and this billing group. If one exists, use its cost multiplier. Otherwise use the billing group base cost from the pricing table.'
                 )}
               </li>
               <li>
@@ -672,13 +672,13 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
                   {t('Charge.')}
                 </span>{' '}
                 {t(
-                  'Cost = model price × that one ratio. Nothing else from the group settings enters the formula.'
+                  'Final charge = model base cost × group cost multiplier × dynamic profit multiplier.'
                 )}
               </li>
             </ol>
             <p className='text-muted-foreground text-sm leading-6'>
               {t(
-                'Common pitfall: the user group base ratio is NOT a personal discount. It only applies when the user group itself is the billing group.'
+                'The group value is a cost basis, not a personal discount. Dynamic pricing supplies the profit multiplier separately.'
               )}
             </p>
           </section>
@@ -687,7 +687,7 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
             <h3 className='text-sm font-semibold'>{t('Worked example')}</h3>
             <p className='text-muted-foreground text-sm leading-6'>
               {t(
-                'The admin configured three groups and one special ratio rule:'
+                'The admin configured three groups and one special cost rule:'
               )}
             </p>
 
@@ -702,7 +702,7 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
                       {t('Group name')}
                     </th>
                     <th className='px-3 py-1.5 text-right font-medium'>
-                      {t('Ratio')}
+                      {t('Cost multiplier')}
                     </th>
                   </tr>
                 </thead>
@@ -725,10 +725,10 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
 
             <div className='overflow-hidden rounded-none border'>
               <div className='bg-muted/40 border-b px-3 py-1.5 text-xs font-medium'>
-                {t('Special ratio rules')}
+                {t('Special cost rules')}
               </div>
               <div className='p-3 text-sm leading-6'>
-                {t('Users of vip, when billed as premium, pay ratio')}{' '}
+                {t('Users of vip, when billed as premium, use cost multiplier')}{' '}
                 <span className='bg-primary/10 ring-primary/40 rounded px-1.5 py-0.5 font-semibold ring-1'>
                   0.3
                 </span>{' '}
@@ -757,12 +757,12 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
                   </GuideStepRow>
                   <GuideStepRow chip='2'>
                     {t(
-                      'There is a rule for vip billed as premium → use its ratio 0.3'
+                      'There is a rule for vip billed as premium → use its cost multiplier 0.3'
                     )}
                   </GuideStepRow>
                   <GuideStepRow chip='='>
                     <span className='text-foreground font-medium'>
-                      {t('Cost = 10 × 0.3 = 3')}
+                      {t('Cost basis = 10 × 0.3 = 3')}
                     </span>
                   </GuideStepRow>
                 </div>
@@ -780,12 +780,12 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
                   </GuideStepRow>
                   <GuideStepRow chip='2'>
                     {t(
-                      'No rule for vip billed as default → use the base ratio of default, 1.0 (the 0.8 of vip is not used)'
+                      'No rule for vip billed as default → use the base cost of default, 1.0 (the 0.8 of vip is not used)'
                     )}
                   </GuideStepRow>
                   <GuideStepRow chip='='>
                     <span className='text-foreground font-medium'>
-                      {t('Cost = 10 × 1.0 = 10')}
+                      {t('Cost basis = 10 × 1.0 = 10')}
                     </span>
                   </GuideStepRow>
                 </div>
@@ -803,12 +803,12 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
                   </GuideStepRow>
                   <GuideStepRow chip='2'>
                     {t(
-                      'No rule for vip billed as vip → use the base ratio of vip, 0.8'
+                      'No rule for vip billed as vip → use the base cost of vip, 0.8'
                     )}
                   </GuideStepRow>
                   <GuideStepRow chip='='>
                     <span className='text-foreground font-medium'>
-                      {t('Cost = 10 × 0.8 = 8')}
+                      {t('Cost basis = 10 × 0.8 = 8')}
                     </span>
                   </GuideStepRow>
                 </div>
@@ -822,11 +822,11 @@ function GroupPricingGuide({ open, onOpenChange }: GroupPricingGuideProps) {
               <AccordionContent className='space-y-3'>
                 <p className='text-muted-foreground text-sm leading-6'>
                   {t(
-                    'Use the pricing group table to manage the ratio and whether the group appears in the token creation dropdown.'
+                    'Use the pricing group table to manage the cost multiplier and whether the group appears in the token creation dropdown.'
                   )}
                 </p>
                 <GuideCodeBlock>
-                  {`${t('Group name')}   ${t('Ratio')}   ${t('User selectable')}   ${t('Description')}
+                  {`${t('Group name')}   ${t('Cost multiplier')}   ${t('User selectable')}   ${t('Description')}
 standard     1.0     ${t('Yes')}               ${t('Standard price')}
 premium      0.5     ${t('Yes')}               ${t('Premium plan, half price')}
 vip          0.5     ${t('No')}                ${t('Assigned by administrator only')}`}
@@ -857,11 +857,11 @@ vip          0.5     ${t('No')}                ${t('Assigned by administrator on
             </AccordionItem>
 
             <AccordionItem value='special-ratio'>
-              <AccordionTrigger>{t('Special ratio rules')}</AccordionTrigger>
+              <AccordionTrigger>{t('Special cost rules')}</AccordionTrigger>
               <AccordionContent className='space-y-3'>
                 <p className='text-muted-foreground text-sm leading-6'>
                   {t(
-                    'In JSON, the user group is the outer key and the billing group is the inner key. The example below means: vip users pay 0.8 when billed as standard, and 0.3 when billed as premium.'
+                    'In JSON, the user group is the outer key and the billing group is the inner key. The example below means: vip users use cost multiplier 0.8 when billed as standard, and 0.3 when billed as premium.'
                   )}
                 </p>
                 <GuideCodeBlock>{`{
@@ -872,7 +872,7 @@ vip          0.5     ${t('No')}                ${t('Assigned by administrator on
 }`}</GuideCodeBlock>
                 <p className='text-muted-foreground text-sm leading-6'>
                   {t(
-                    'Only configured combinations are overridden. All other calls keep the billing group base ratio.'
+                    'Only configured combinations are overridden. All other calls keep the billing group base cost multiplier.'
                   )}
                 </p>
               </AccordionContent>

@@ -19,9 +19,8 @@ use lmm_api_rs::{
         assistant::{AssistantRateLimitConfig, AssistantReadState, assistant_read_router},
         billing_payments::{
             DashboardBillingAuthorizer, PgBillingPaymentAccess, PgBillingRepository,
-            PgPaymentCompliance, SubscriptionBalancePayState, SubscriptionFastPayNotifyState,
-            ValkeyBillingCache, subscription_balance_pay_router,
-            subscription_fastpay_notify_router,
+            PgPaymentCompliance, SubscriptionBalancePayState, ValkeyBillingCache,
+            subscription_balance_pay_router,
         },
         billing_subscriptions::{
             BillingSubscriptionsState, router as billing_subscriptions_router,
@@ -584,13 +583,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .with_payment_access(Arc::new(PgBillingPaymentAccess::new(pg.clone()))),
             ),
         );
-        let subscription_fastpay_notify = http::api_global_rate_limited_surface(
-            &app_state,
-            subscription_fastpay_notify_router(
-                SubscriptionFastPayNotifyState::new(pg.clone(), valkey.clone()),
-                config.auth_anonymous_body_limit_bytes,
-            ),
-        );
         let kling_task_reads = kling_task_read_router(KlingTaskReadState::new(Arc::new(
             PgKlingTaskReadService::new(pg.clone(), Arc::clone(&models_service)),
         )));
@@ -809,7 +801,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .merge(user_rankings)
             .merge(gifts)
             .merge(subscription_balance_pay)
-            .merge(subscription_fastpay_notify)
             .merge(kling_task_reads)
             .merge(billing_subscriptions)
             .merge(billing_dashboard)

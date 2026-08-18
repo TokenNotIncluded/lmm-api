@@ -97,10 +97,9 @@ use lmm_api_rs::{
         missing_identity_checkin_aff::{
             IdentityCheckinAffState, PgValkeyCheckinEffects, router as identity_checkin_aff_router,
         },
-        missing_identity_epay_fast::{
-            Completion, CreateTopup, DisabledEpayGateway, DisabledFastPayGateway,
-            PaymentCompliance, PendingTopup, TopupAuthorizer, TopupError, TopupRepository,
-            UserTopupState, router as identity_epay_fast_router,
+        missing_identity_epay::{
+            Completion, CreateTopup, DisabledEpayGateway, PendingTopup, TopupAuthorizer,
+            TopupError, TopupRepository, UserTopupState, router as identity_epay_router,
         },
         missing_identity_stripe_creem::{
             DashboardStripeCreemAuthorizer, DisabledStripeCreemGateway, IdentityStripeCreemState,
@@ -410,12 +409,10 @@ pub fn safe_candidate_surface(
             pg.clone(),
             Arc::clone(&auth),
         )))
-        .merge(identity_epay_fast_router(UserTopupState::new(
+        .merge(identity_epay_router(UserTopupState::new(
             Arc::new(DashboardTopupAuthorizer::new(Arc::clone(&auth))),
             Arc::new(DenyTopupRepository),
             Arc::new(DisabledEpayGateway),
-            Arc::new(DisabledFastPayGateway),
-            Arc::new(DenyPaymentCompliance),
         )))
         .merge(identity_stripe_creem_router(IdentityStripeCreemState::new(
             Arc::new(PgStripeCreemStore::new(pg.clone())),
@@ -1994,14 +1991,6 @@ impl TopupRepository for DenyTopupRepository {
         _: &str,
     ) -> Result<Completion, TopupError> {
         Err(TopupError::ProviderFrozen)
-    }
-}
-
-struct DenyPaymentCompliance;
-#[async_trait]
-impl PaymentCompliance for DenyPaymentCompliance {
-    async fn is_confirmed(&self) -> Result<bool, TopupError> {
-        Ok(false)
     }
 }
 

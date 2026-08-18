@@ -1148,11 +1148,6 @@ fn topup_info_data_for_user(
         && nonempty(options, "StripeApiSecret")
         && nonempty(options, "StripeWebhookSecret")
         && nonempty(options, "StripePriceId");
-    let fastpay = compliant
-        && nonempty(options, "FastPayAddress")
-        && nonempty(options, "FastPayMerchantNo")
-        && nonempty(options, "FastPayShopNo")
-        && nonempty(options, "FastPayApiSecret");
     let mut pay_methods = if compliant {
         json_value(options, "PayMethods", default_pay_methods())
             .as_array()
@@ -1214,7 +1209,7 @@ fn topup_info_data_for_user(
         integer(options, "WaffoMinTopUp", 1),
     );
     let (payment_available, min_payment) =
-        neutral_topup_availability(options, epay || fastpay, stripe, creem, waffo, pancake);
+        neutral_topup_availability(options, epay, stripe, creem, waffo, pancake);
     let amount_options = payment_field(
         options,
         "amount_options",
@@ -1245,7 +1240,7 @@ fn topup_info_data_for_user(
         });
     }
     json!({
-        "enable_online_topup": epay || fastpay,
+        "enable_online_topup": epay,
         "developer_access_granted": true,
         "enable_stripe_topup": stripe,
         "enable_creem_topup": creem,
@@ -1862,10 +1857,6 @@ mod tests {
             ("PayAddress".into(), "https://epay.example".into()),
             ("EpayId".into(), "id".into()),
             ("EpayKey".into(), "key".into()),
-            ("FastPayAddress".into(), "https://fastpay.example".into()),
-            ("FastPayMerchantNo".into(), "merchant".into()),
-            ("FastPayShopNo".into(), "shop".into()),
-            ("FastPayApiSecret".into(), "secret".into()),
             ("StripeApiSecret".into(), "sk".into()),
             ("StripeWebhookSecret".into(), "whsec".into()),
             ("StripePriceId".into(), "price".into()),

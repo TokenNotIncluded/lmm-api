@@ -196,6 +196,8 @@ export type ChannelMutateDrawerSubmission = {
   description: string
   submitLabel: string
   supplement?: React.ReactNode
+  /** Lock the channel to an administrator-configured group for guided flows. */
+  fixedGroup?: string
   isPending: boolean
   disabled?: boolean
   onSubmit: (data: ChannelFormValues) => Promise<void>
@@ -728,6 +730,15 @@ export function ChannelMutateDrawer({
     resolver: zodResolver(channelFormSchema),
     defaultValues: CHANNEL_FORM_DEFAULT_VALUES,
   })
+
+  useEffect(() => {
+    const fixedGroup = submission?.fixedGroup?.trim()
+    if (!open || !fixedGroup) return
+    form.setValue('group', [fixedGroup], {
+      shouldDirty: false,
+      shouldValidate: true,
+    })
+  }, [form, open, submission?.fixedGroup])
 
   // Watch form values for conditional rendering
   const multiKeyMode = form.watch('multi_key_mode')
@@ -3611,7 +3622,18 @@ export function ChannelMutateDrawer({
                                     </FormDescription>
                                   </div>
                                   <FormControl>
-                                    {isLoadingGroups ? (
+                                    {submission?.fixedGroup?.trim() ? (
+                                      <div className='bg-muted/20 flex min-h-10 items-center justify-between gap-3 rounded-md border px-3 py-2'>
+                                        <span className='text-muted-foreground text-sm'>
+                                          {t(
+                                            'Fixed by channel sharing settings'
+                                          )}
+                                        </span>
+                                        <Badge variant='secondary'>
+                                          {submission.fixedGroup.trim()}
+                                        </Badge>
+                                      </div>
+                                    ) : isLoadingGroups ? (
                                       <Skeleton className='h-10 w-full' />
                                     ) : (
                                       <MultiSelect

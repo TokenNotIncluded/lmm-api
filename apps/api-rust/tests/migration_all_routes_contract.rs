@@ -62,7 +62,7 @@ const TEST_INSTANCE_COMPOSED_MODULES: &[(&str, &str)] = &[
         "missing_identity_checkin_aff",
         "identity_checkin_aff_router",
     ),
-    ("missing_identity_epay_fast", "identity_epay_fast_router"),
+    ("missing_identity_epay", "identity_epay_router"),
     (
         "missing_identity_stripe_creem",
         "identity_stripe_creem_router",

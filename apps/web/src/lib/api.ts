@@ -82,11 +82,23 @@ export async function getUserGroups(): Promise<{
 
 export async function getStatus() {
   const res = await api.get('/api/status', {
+    timeout: 10_000,
     // Capability probing is best-effort; callers render their own fallback.
     skipBusinessError: true,
     skipErrorHandler: true,
   })
-  return res.data?.data as Record<string, unknown>
+  return extractStatusData(res.data)
+}
+
+export function extractStatusData(payload: unknown): Record<string, unknown> {
+  const data =
+    typeof payload === 'object' && payload !== null && 'data' in payload
+      ? (payload as { data?: unknown }).data
+      : undefined
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new Error('Status response did not include capability data')
+  }
+  return data as Record<string, unknown>
 }
 
 export async function getNotice(): Promise<{

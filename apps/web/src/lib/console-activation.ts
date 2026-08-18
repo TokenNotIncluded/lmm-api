@@ -156,7 +156,6 @@ export function getAuthenticatedLandingRoute(
     '/redemption-codes',
     '/discount-codes',
     '/subscriptions',
-    '/finance',
   ])
   const superAdminOnlyRoutes = new Set([
     '/system-info',

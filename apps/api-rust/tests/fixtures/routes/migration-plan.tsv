@@ -180,8 +180,6 @@ POST	/api/subscription/epay/notify	github.com/QuantumNous/new-api/controller.Sub
 POST	/api/subscription/epay/pay	github.com/QuantumNous/new-api/controller.SubscriptionRequestEpay	billing	user	write	none	P1	lmm_api_rs::routes::billing	none
 GET	/api/subscription/epay/return	github.com/QuantumNous/new-api/controller.SubscriptionEpayReturn	billing	public	read	none	P1	lmm_api_rs::routes::billing	none
 POST	/api/subscription/epay/return	github.com/QuantumNous/new-api/controller.SubscriptionEpayReturn	billing	public	write	none	P1	lmm_api_rs::routes::billing	none
-POST	/api/subscription/fastpay/notify	github.com/QuantumNous/new-api/controller.SubscriptionFastPayNotify	billing	webhook	write	none	P1	lmm_api_rs::routes::billing	none
-POST	/api/subscription/fastpay/pay	github.com/QuantumNous/new-api/controller.SubscriptionRequestFastPay	billing	user	write	none	P1	lmm_api_rs::routes::billing	none
 GET	/api/subscription/plans	github.com/QuantumNous/new-api/controller.GetSubscriptionPlans	billing	user	read	none	P1	lmm_api_rs::routes::billing	none
 GET	/api/subscription/self	github.com/QuantumNous/new-api/controller.GetSubscriptionSelf	billing	user	read	none	P1	lmm_api_rs::routes::billing	none
 PUT	/api/subscription/self/preference	github.com/QuantumNous/new-api/controller.UpdateSubscriptionPreference	billing	user	write	none	P1	lmm_api_rs::routes::billing	none
@@ -234,8 +232,6 @@ POST	/api/user/checkin	github.com/QuantumNous/new-api/controller.DoCheckin	ident
 POST	/api/user/creem/pay	github.com/QuantumNous/new-api/controller.RequestCreemPay	identity-user	user	write	none	P1	lmm_api_rs::routes::identity_user	none
 GET	/api/user/epay/notify	github.com/QuantumNous/new-api/controller.EpayNotify	identity-user	webhook	read	none	P1	lmm_api_rs::routes::identity_user	none
 POST	/api/user/epay/notify	github.com/QuantumNous/new-api/controller.EpayNotify	identity-user	webhook	write	none	P1	lmm_api_rs::routes::identity_user	none
-POST	/api/user/fastpay/notify	github.com/QuantumNous/new-api/controller.FastPayNotify	identity-user	webhook	write	none	P1	lmm_api_rs::routes::identity_user	none
-POST	/api/user/fastpay/pay	github.com/QuantumNous/new-api/controller.RequestFastPay	identity-user	user	write	none	P1	lmm_api_rs::routes::identity_user	none
 GET	/api/user/groups	github.com/QuantumNous/new-api/controller.GetUserGroups	identity-user	public	read	none	P1	lmm_api_rs::routes::identity_user	none
 POST	/api/user/login	github.com/QuantumNous/new-api/controller.Login	identity-user	public	write	none	P1	lmm_api_rs::routes::identity_user	none
 POST	/api/user/login/2fa	github.com/QuantumNous/new-api/controller.Verify2FALogin	identity-user	public	write	none	P1	lmm_api_rs::routes::identity_user	none

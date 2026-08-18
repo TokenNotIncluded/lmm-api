@@ -25,6 +25,7 @@ describe('public relay sharing entry point', () => {
     )
     assert.match(source, /<ChannelsProvider>/)
     assert.match(source, /transformFormDataToCreatePayload/)
+    assert.match(source, /fixedGroup: configQuery\.data\?\.group \?\? ''/)
     assert.match(
       source,
       /<Button type='button' onClick=\{\(\) => setSubmitOpen\(true\)\}>/

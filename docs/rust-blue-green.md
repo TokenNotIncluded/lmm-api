@@ -5,7 +5,7 @@ This Arch Linux native deployment framework separates `lmm-api-rs` process rollo
 For production ownership, read the real-time result from
 `apps/api-rust/tests/fixtures/routes/migration-gate.tsv`.
 
-As of 2026-08-09, the working tree has 356 routes and all are still marked as Go owner. Entries that are only candidate mounts, unverified diffs, or blocked rows are not production approvals. Legacy status mismatch in gate checks also remains. Therefore, Rust candidates should never be described as having taken traffic or replaced Go.
+As of 2026-08-09, the working tree has 352 routes and all are still marked as Go owner. Entries that are only candidate mounts, unverified diffs, or blocked rows are not production approvals. Legacy status mismatch in gate checks also remains. Therefore, Rust candidates should never be described as having taken traffic or replaced Go.
 
 On 2026-08-01 in ArchDmit read-only verification, production traffic still came from Go using PostgreSQL and dedicated Valkey `127.0.0.1:6380`; Rust slot was not running. Nginx Rust upstream represented only internal probe routing.
 

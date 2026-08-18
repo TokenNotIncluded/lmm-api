@@ -207,7 +207,6 @@ fn router_with_authorizer(
             compliance,
         },
         BillingConfig {
-            fastpay_secret: Arc::from("fastpay-test-secret"),
             creem_webhook_secret: Arc::from("creem-test-secret"),
             wallet_url: Arc::from("https://console.example.test/wallet"),
             quota_per_unit: 1,
@@ -243,29 +242,6 @@ async fn payment_auth_precedes_malformed_json_rejection() {
     );
 }
 
-#[tokio::test]
-async fn subscription_fastpay_notify_router_exposes_only_the_public_post_callback() {
-    let pg = sqlx::postgres::PgPoolOptions::new()
-        .connect_lazy("postgres://route-test:route-test@127.0.0.1:1/route_test")
-        .expect("lazy PostgreSQL pool");
-    let valkey = redis::Client::open("redis://127.0.0.1:1").expect("lazy Valkey client");
-    let app = subscription_fastpay_notify_router(
-        SubscriptionFastPayNotifyState::new(pg, valkey),
-        512 * 1024,
-    );
-
-    let response = app
-        .oneshot(
-            Request::get("/api/subscription/fastpay/notify")
-                .body(Body::empty())
-                .expect("route request"),
-        )
-        .await
-        .expect("route response");
-
-    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
-}
-
 async fn body(response: Response) -> String {
     String::from_utf8(
         to_bytes(response.into_body(), usize::MAX)
@@ -286,11 +262,6 @@ fn creem_signature(body: &[u8]) -> String {
         .collect()
 }
 
-#[test]
-fn md5_hex_should_match_the_fastpay_legacy_digest() {
-    assert_eq!(md5_hex(b"abc"), "900150983cd24fb0d6963f7d28e17f72");
-}
-
 #[tokio::test]
 async fn frozen_checkout_rejects_before_creating_an_order_or_contacting_a_provider() {
     let repo = Arc::new(OrderCountingRepo(AtomicUsize::new(0)));
@@ -306,7 +277,6 @@ async fn frozen_checkout_rejects_before_creating_an_order_or_contacting_a_provid
             compliance: Arc::new(MutableCompliance(AtomicBool::new(true))),
         },
         BillingConfig {
-            fastpay_secret: Arc::from(""),
             creem_webhook_secret: Arc::from(""),
             wallet_url: Arc::from("/wallet"),
             quota_per_unit: 1,
@@ -361,75 +331,6 @@ async fn compliance_is_evaluated_at_request_time_not_from_a_startup_snapshot() {
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&body(response).await).expect("json response"),
         serde_json::json!({"success": false, "message": "payment compliance is required"})
-    );
-}
-
-#[tokio::test]
-async fn fastpay_notify_should_reject_an_invalid_signature_without_completion() {
-    let repo = Arc::new(MemoryRepo {
-        completions: Mutex::new(Vec::new()),
-        failures: Mutex::new(Vec::new()),
-    });
-    let response = router(Arc::clone(&repo))
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/subscription/fastpay/notify")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("outTradeNo=trade-1&status=SUCCESS&sign=invalid"))
-                .expect("request"),
-        )
-        .await
-        .expect("response");
-    assert_eq!(body(response).await, "fail");
-    assert!(repo.completions.lock().expect("completion lock").is_empty());
-}
-
-#[tokio::test]
-async fn fastpay_notify_should_reject_a_non_utf8_callback_without_completion() {
-    let repo = Arc::new(MemoryRepo {
-        completions: Mutex::new(Vec::new()),
-        failures: Mutex::new(Vec::new()),
-    });
-    let response = router(Arc::clone(&repo))
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/subscription/fastpay/notify")
-                .body(Body::from(vec![0xff, 0xfe]))
-                .expect("request"),
-        )
-        .await
-        .expect("response");
-    assert_eq!(body(response).await, "fail");
-    assert!(repo.completions.lock().expect("completion lock").is_empty());
-}
-
-#[tokio::test]
-async fn fastpay_notify_should_complete_only_the_signed_success_callback() {
-    let repo = Arc::new(MemoryRepo {
-        completions: Mutex::new(Vec::new()),
-        failures: Mutex::new(Vec::new()),
-    });
-    let signed = format!(
-        "outTradeNo=trade-1&status=SUCCESS&sign={}",
-        md5_hex(b"outTradeNo=trade-1&status=SUCCESS&key=fastpay-test-secret")
-    );
-    let response = router(Arc::clone(&repo))
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/subscription/fastpay/notify")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from(signed))
-                .expect("request"),
-        )
-        .await
-        .expect("response");
-    assert_eq!(body(response).await, "success");
-    assert_eq!(
-        repo.completions.lock().expect("completion lock").as_slice(),
-        [("trade-1".into(), "fastpay".into())]
     );
 }
 
@@ -619,7 +520,6 @@ async fn waffo_pancake_checkout_failure_should_mark_the_pending_order_failed() {
             compliance: Arc::new(MutableCompliance(AtomicBool::new(true))),
         },
         BillingConfig {
-            fastpay_secret: Arc::from("fastpay-test-secret"),
             creem_webhook_secret: Arc::from("creem-test-secret"),
             wallet_url: Arc::from("https://console.example.test/wallet"),
             quota_per_unit: 1,

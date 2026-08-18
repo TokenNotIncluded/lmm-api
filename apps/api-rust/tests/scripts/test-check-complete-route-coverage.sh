@@ -70,5 +70,5 @@ sed -i '$d' "$runtime/manifest.tsv"
 # backend build or listener starts during this self-test.
 COMPLETE_GO_MANIFEST="$repo_root/apps/api-rust/tests/fixtures/routes/legacy-go-routes.tsv" \
 COMPLETE_MCP_PATHS="$runtime/mcp.tsv" bash "$checker" >"$runtime/current-ledger-report.jsonl"
-grep -Fq '"total":356' "$runtime/current-ledger-report.jsonl" || fail 'current repository ledgers could not be checked'
+grep -Fq '"total":352' "$runtime/current-ledger-report.jsonl" || fail 'current repository ledgers could not be checked'
 echo 'complete route coverage self-test: passed'

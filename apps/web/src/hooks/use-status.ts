@@ -95,6 +95,8 @@ export function useStatus() {
       refetchOnReconnect: 'always',
       refetchInterval: 30_000,
       refetchIntervalInBackground: true,
+      retry: 1,
+      retryDelay: 1_000,
       // Cache expires after 30 minutes
       gcTime: 30 * 60 * 1000,
     })

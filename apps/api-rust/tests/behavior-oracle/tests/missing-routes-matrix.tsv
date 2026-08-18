@@ -37,8 +37,6 @@ external-gateway	POST	/api/ratio_sync/fetch	/api/ratio_sync/fetch	transport-anon
 external-gateway	GET	/api/user/epay/notify	/api/user/epay/notify	transport-anonymous	null
 external-gateway	POST	/api/user/epay/notify	/api/user/epay/notify	transport-anonymous	{}
 external-gateway	POST	/api/user/pay	/api/user/pay	transport-anonymous	{}
-external-gateway	POST	/api/user/fastpay/pay	/api/user/fastpay/pay	transport-anonymous	{}
-external-gateway	POST	/api/user/fastpay/notify	/api/user/fastpay/notify	transport-anonymous	{}
 external-gateway	POST	/api/user/stripe/amount	/api/user/stripe/amount	transport-anonymous	{}
 external-gateway	POST	/api/user/stripe/pay	/api/user/stripe/pay	transport-anonymous	{}
 external-gateway	POST	/api/user/creem/pay	/api/user/creem/pay	transport-anonymous	{}

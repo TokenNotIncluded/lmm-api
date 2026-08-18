@@ -1571,7 +1571,7 @@ WITH parsed AS (
         AND (settled_amount_micros > 0 OR (settled_amount_micros = 0 AND money > 0))
         AND (credited_quota > 0 OR amount > 0)
         AND (
-            payment_provider IN ('epay', 'stripe', 'creem', 'fastpay', 'waffo', 'waffo_pancake')
+            payment_provider IN ('epay', 'stripe', 'creem', 'waffo', 'waffo_pancake')
             OR (
                 payment_provider = ''
                 AND payment_method IN ('stripe', 'creem', 'waffo', 'waffo_pancake', 'alipay', 'wxpay')

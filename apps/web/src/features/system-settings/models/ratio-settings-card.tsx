@@ -429,7 +429,7 @@ export function RatioSettingsCard({
   const tabLabels: Record<RatioTabId, string> = {
     models: 'Model prices',
     'unset-models': 'Unset price models',
-    groups: 'Group ratios',
+    groups: 'Pricing groups',
     'tool-prices': 'Tool prices',
     'upstream-sync': 'Upstream price sync',
   }

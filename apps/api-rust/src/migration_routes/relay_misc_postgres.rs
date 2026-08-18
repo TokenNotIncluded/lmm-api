@@ -1587,7 +1587,7 @@ async fn trust_discount_ratio(pg: &PgPool, principal: &RelayPrincipal) -> f64 {
               OR (
                 COALESCE(amount,0)>0 AND (
                   COALESCE(payment_provider,'') IN
-                    ('epay','stripe','creem','fastpay','waffo','waffo_pancake')
+                    ('epay','stripe','creem','waffo','waffo_pancake')
                   OR (
                     COALESCE(payment_provider,'')=''
                     AND COALESCE(payment_method,'') IN

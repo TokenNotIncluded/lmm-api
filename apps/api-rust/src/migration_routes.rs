@@ -36,7 +36,7 @@ pub mod missing_control_ratio_sync;
 pub mod missing_control_tasks;
 pub mod missing_identity_catalog;
 pub mod missing_identity_checkin_aff;
-pub mod missing_identity_epay_fast;
+pub mod missing_identity_epay;
 pub mod missing_identity_stripe_creem;
 pub mod missing_identity_topup;
 pub mod missing_identity_waffo;

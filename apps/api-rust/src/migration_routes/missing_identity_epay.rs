@@ -1,4 +1,4 @@
-//! Legacy-compatible user top-up ePay and FAST payment routes.
+//! Legacy-compatible user top-up ePay routes.
 //!
 //! This slice deliberately keeps payment gateways behind explicit injected
 //! boundaries.  A listener which has not supplied verified provider adapters
@@ -27,10 +27,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 const EPAY: &str = "epay";
-const FASTPAY: &str = "fastpay";
 const TOPUP_BODY_LIMIT_BYTES: usize = 1_048_576;
 
-/// State for the legacy `/api/user/{pay,epay/notify,fastpay/*}` surface.
+/// State for the legacy `/api/user/{pay,epay/notify}` surface.
 ///
 /// There is intentionally no `Default`: constructing a router requires an
 /// authenticated identity boundary, an order store, and provider adapters.
@@ -39,8 +38,6 @@ pub struct UserTopupState {
     authorizer: Arc<dyn TopupAuthorizer>,
     repository: Arc<dyn TopupRepository>,
     epay: Arc<dyn EpayGateway>,
-    fastpay: Arc<dyn FastPayGateway>,
-    compliance: Arc<dyn PaymentCompliance>,
 }
 
 impl UserTopupState {
@@ -49,15 +46,11 @@ impl UserTopupState {
         authorizer: Arc<dyn TopupAuthorizer>,
         repository: Arc<dyn TopupRepository>,
         epay: Arc<dyn EpayGateway>,
-        fastpay: Arc<dyn FastPayGateway>,
-        compliance: Arc<dyn PaymentCompliance>,
     ) -> Self {
         Self {
             authorizer,
             repository,
             epay,
-            fastpay,
-            compliance,
         }
     }
 }
@@ -66,8 +59,6 @@ pub fn router(state: UserTopupState) -> Router {
     Router::new()
         .route("/api/user/epay/notify", get(epay_notify).post(epay_notify))
         .route("/api/user/pay", post(epay_pay))
-        .route("/api/user/fastpay/pay", post(fastpay_pay))
-        .route("/api/user/fastpay/notify", post(fastpay_notify))
         .with_state(state)
 }
 
@@ -171,17 +162,6 @@ pub struct PreparedEpay {
     pub checkout: Checkout,
 }
 
-/// The locally signed FAST checkout and the pending order it is bound to.
-///
-/// FAST signs the browser parameters before Go writes the pending order.  The
-/// Rust boundary retains that ordering so a checkout-construction failure
-/// cannot leave a payment-replayable order behind.
-#[derive(Clone, Debug)]
-pub struct PreparedFastPay {
-    pub order: PendingTopup,
-    pub checkout: Checkout,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Completion {
     Completed,
@@ -208,30 +188,6 @@ pub trait EpayGateway: Send + Sync {
     async fn verify(&self, fields: &EpayCallbackFields) -> Result<EpayCallback, TopupError>;
 }
 
-/// FAST has an equivalent local checkout/signature boundary.  Keeping a
-/// separate trait prevents a FAST secret from accidentally accepting ePay
-/// callbacks (or vice versa).
-#[async_trait]
-pub trait FastPayGateway: Send + Sync {
-    async fn available(&self) -> Result<(), TopupError>;
-    /// Builds the canonical, locally signed checkout before the repository
-    /// persists its matching pending order.  Older adapters that cannot prove
-    /// this ordering fail closed through the default implementation.
-    async fn prepare(&self, _: &QuotedTopup) -> Result<PreparedFastPay, TopupError> {
-        Err(TopupError::ProviderFrozen)
-    }
-    async fn begin(&self, order: &PendingTopup) -> Result<Checkout, TopupError>;
-    /// Verifies the provider signature over [`FastPayCallback::signature_fields`].
-    /// Implementations must not sign values reconstructed from untrusted raw
-    /// JSON because Go canonicalizes numeric JSON scalars before hashing.
-    async fn verify(&self, callback: &FastPayCallback) -> Result<bool, TopupError>;
-}
-
-#[async_trait]
-pub trait PaymentCompliance: Send + Sync {
-    async fn is_confirmed(&self) -> Result<bool, TopupError>;
-}
-
 /// Safe adapters for test instances and incomplete listener composition.
 /// They are not fakes: all financial operations fail before a write/network
 /// request, and all callbacks are rejected.
@@ -248,20 +204,6 @@ impl EpayGateway for DisabledEpayGateway {
         Err(TopupError::ProviderFrozen)
     }
 }
-pub struct DisabledFastPayGateway;
-#[async_trait]
-impl FastPayGateway for DisabledFastPayGateway {
-    async fn available(&self) -> Result<(), TopupError> {
-        Err(TopupError::ProviderFrozen)
-    }
-    async fn begin(&self, _: &PendingTopup) -> Result<Checkout, TopupError> {
-        Err(TopupError::ProviderFrozen)
-    }
-    async fn verify(&self, _: &FastPayCallback) -> Result<bool, TopupError> {
-        Err(TopupError::ProviderFrozen)
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct Checkout {
     pub url: String,
@@ -295,53 +237,6 @@ pub struct EpayCallback {
     pub trade_success: bool,
     pub trade_no: String,
     pub payment_method: String,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-pub struct FastPayCallback {
-    #[serde(rename = "merchantNo", default)]
-    pub merchant_no: String,
-    #[serde(rename = "orderNo", default)]
-    pub order_no: String,
-    #[serde(rename = "outTradeNo", default)]
-    pub out_trade_no: String,
-    #[serde(default)]
-    pub amount: Value,
-    #[serde(rename = "payAmount", default)]
-    pub pay_amount: Value,
-    #[serde(rename = "payType", default)]
-    pub pay_type: String,
-    #[serde(default)]
-    pub status: Value,
-    #[serde(rename = "payTime", default)]
-    pub pay_time: String,
-    #[serde(default)]
-    pub timestamp: Value,
-    #[serde(default)]
-    pub sign: String,
-}
-
-impl FastPayCallback {
-    /// Returns the exact provider field set which Go signs for a FAST callback.
-    ///
-    /// `encoding/json` unmarshals interface-backed JSON numbers as `float64`,
-    /// then `fmt.Sprintf("%v", value)` canonicalizes them before signature
-    /// verification.  Keeping that transformation here prevents a JSON spelling
-    /// such as `1.0` from being signed as a different value than Go uses.
-    #[must_use]
-    pub fn signature_fields(&self) -> BTreeMap<String, String> {
-        BTreeMap::from([
-            ("merchantNo".into(), self.merchant_no.clone()),
-            ("orderNo".into(), self.order_no.clone()),
-            ("outTradeNo".into(), self.out_trade_no.clone()),
-            ("amount".into(), callback_scalar(&self.amount)),
-            ("payAmount".into(), callback_scalar(&self.pay_amount)),
-            ("payType".into(), self.pay_type.clone()),
-            ("status".into(), callback_scalar(&self.status)),
-            ("payTime".into(), self.pay_time.clone()),
-            ("timestamp".into(), callback_scalar(&self.timestamp)),
-        ])
-    }
 }
 
 #[derive(Debug)]
@@ -385,55 +280,7 @@ async fn epay_pay(State(state): State<UserTopupState>, request: Request) -> Resp
     ) {
         return legacy_error("支付方式不存在");
     }
-    let explicit_fastpay = is_explicit_fastpay_method(&request.payment_method);
-    let use_fastpay = explicit_fastpay
-        || (state.fastpay.available().await.is_ok() && state.epay.available().await.is_err());
-    if use_fastpay {
-        // RequestEpay parses and validates the generic payment method before
-        // delegating to RequestFastPay, so this provider-specific compliance
-        // check intentionally follows that legacy routing decision.
-        if !matches!(state.compliance.is_confirmed().await, Ok(true)) {
-            return legacy_error(compliance_message(&parts.headers));
-        }
-        return create_fastpay_checkout(
-            &state,
-            user_id,
-            request.amount as i64,
-            normalize_fastpay_method(&request.payment_method),
-        )
-        .await;
-    }
     create_epay_checkout(
-        &state,
-        user_id,
-        request.amount as i64,
-        request.payment_method,
-    )
-    .await
-}
-
-async fn fastpay_pay(State(state): State<UserTopupState>, request: Request) -> Response {
-    let client_ip = critical_client_ip(&request);
-    let (parts, body) = request.into_parts();
-    let user_id = match state.authorizer.user_id(&parts.headers).await {
-        Ok(id) if id > 0 => id,
-        _ => return unauthorized(),
-    };
-    if let Some(response) = critical_rate_limit(&state, client_ip).await {
-        return response;
-    }
-    if !matches!(state.compliance.is_confirmed().await, Ok(true)) {
-        return legacy_error(compliance_message(&parts.headers));
-    }
-    let Some(body) = read_bounded_body(body).await else {
-        return legacy_error("参数错误: request body too large");
-    };
-    let mut request = match parse_pay(&parts.headers, &body, parts.uri.query()) {
-        Ok(v) => v,
-        Err(message) => return legacy_error(message),
-    };
-    request.payment_method = normalize_fastpay_method(&request.payment_method);
-    create_fastpay_checkout(
         &state,
         user_id,
         request.amount as i64,
@@ -460,41 +307,6 @@ async fn create_epay_checkout(
         return legacy_error("当前管理员未配置支付信息");
     }
     let prepared = match state.epay.prepare(&quote).await {
-        Ok(v) if prepared_order_matches(&v.order, &quote) => v,
-        Ok(_) | Err(_) => return legacy_error("拉起支付失败"),
-    };
-    if state
-        .repository
-        .insert_prepared_pending(prepared.order)
-        .await
-        .is_err()
-    {
-        return legacy_error("创建订单失败");
-    }
-    legacy_success(prepared.checkout.data, prepared.checkout.url)
-}
-
-async fn create_fastpay_checkout(
-    state: &UserTopupState,
-    user_id: i64,
-    requested_amount: i64,
-    payment_method: String,
-) -> Response {
-    if !matches!(payment_method.as_str(), "alipay" | "wxpay") {
-        return legacy_error("FAST 易支付仅支持支付宝或微信支付");
-    }
-    let quote = match quote_topup(state, user_id, requested_amount, payment_method, FASTPAY).await {
-        Ok(quote) => quote,
-        Err(QuoteFailure::Minimum(minimum)) => {
-            return legacy_error(format!("充值数量不能小于 {minimum}"));
-        }
-        Err(QuoteFailure::TooLow) => return legacy_error("充值金额过低"),
-        Err(QuoteFailure::Configuration) => return legacy_error("获取用户分组失败"),
-    };
-    if state.fastpay.available().await.is_err() {
-        return legacy_error("当前管理员未配置 FAST 易支付信息");
-    }
-    let prepared = match state.fastpay.prepare(&quote).await {
         Ok(v) if prepared_order_matches(&v.order, &quote) => v,
         Ok(_) | Err(_) => return legacy_error("拉起支付失败"),
     };
@@ -640,47 +452,6 @@ async fn epay_notify(State(state): State<UserTopupState>, request: Request) -> R
             .await;
     }
     plain("success")
-}
-
-async fn fastpay_notify(State(state): State<UserTopupState>, request: Request) -> Response {
-    let (parts, body) = request.into_parts();
-    let Some(body) = read_bounded_body(body).await else {
-        return plain("fail");
-    };
-    let callback = match parse_fastpay_callback(&parts.headers, &body) {
-        Some(v) => v,
-        None => return plain("fail"),
-    };
-    if !matches!(state.fastpay.verify(&callback).await, Ok(true)) {
-        return plain("fail");
-    }
-    if !matches!(callback_status(&callback.status).as_str(), "1" | "SUCCESS") {
-        return plain("fail");
-    }
-    let callback_body = String::from_utf8_lossy(&body);
-    if callback.out_trade_no.starts_with("SUBUSR") {
-        return match state
-            .repository
-            .complete_subscription(&callback.out_trade_no, FASTPAY, &callback_body)
-            .await
-        {
-            Ok(Completion::Completed | Completion::AlreadySucceeded) => plain("success"),
-            Ok(Completion::MissingOrWrongProvider) | Err(_) => plain("fail"),
-        };
-    }
-    match state
-        .repository
-        .complete(
-            &callback.out_trade_no,
-            FASTPAY,
-            nonempty(&callback.pay_type),
-            &callback_body,
-        )
-        .await
-    {
-        Ok(Completion::Completed | Completion::AlreadySucceeded) => plain("success"),
-        Ok(Completion::MissingOrWrongProvider) | Err(_) => plain("fail"),
-    }
 }
 
 #[derive(Clone)]
@@ -831,50 +602,6 @@ fn is_urlencoded(headers: &HeaderMap) -> bool {
         })
 }
 
-fn parse_strict_form(raw: &[u8]) -> Option<BTreeMap<String, String>> {
-    // url.ParseQuery reports any unescaped semicolon as an error. The Go
-    // handlers reject those callbacks before provider verification.
-    if raw.contains(&b';') {
-        return None;
-    }
-    let mut fields = BTreeMap::new();
-    for part in raw
-        .split(|byte| *byte == b'&')
-        .filter(|part| !part.is_empty())
-    {
-        let (key, value) = match part.iter().position(|byte| *byte == b'=') {
-            Some(index) => {
-                let (key, suffix) = part.split_at(index);
-                (key, &suffix[1..])
-            }
-            None => (part, &[] as &[u8]),
-        };
-        let key = percent_decode_strict(key)?;
-        let value = percent_decode_strict(value)?;
-        // url.Values.Get returns the first repeated value.
-        fields.entry(key).or_insert(value);
-    }
-    Some(fields)
-}
-
-fn percent_decode_strict(value: &[u8]) -> Option<String> {
-    let mut out = Vec::with_capacity(value.len());
-    let mut i = 0;
-    while i < value.len() {
-        match value[i] {
-            b'+' => out.push(b' '),
-            b'%' => {
-                let h = hex(*value.get(i + 1)?)?;
-                let l = hex(*value.get(i + 2)?)?;
-                out.push((h << 4) | l);
-                i += 2;
-            }
-            byte => out.push(byte),
-        }
-        i += 1;
-    }
-    String::from_utf8(out).ok()
-}
 fn parse_form(raw: &[u8]) -> BTreeMap<String, String> {
     String::from_utf8_lossy(raw)
         .split('&')
@@ -918,105 +645,6 @@ fn hex(b: u8) -> Option<u8> {
         _ => None,
     }
 }
-fn parse_fastpay_callback(headers: &HeaderMap, body: &[u8]) -> Option<FastPayCallback> {
-    if body.iter().all(u8::is_ascii_whitespace) {
-        return None;
-    }
-    let json_body = headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.to_ascii_lowercase().contains("application/json"))
-        || body.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'{');
-    if json_body {
-        serde_json::from_slice(body).ok()
-    } else {
-        let fields = parse_strict_form(body)?;
-        Some(FastPayCallback {
-            merchant_no: fields.get("merchantNo").cloned().unwrap_or_default(),
-            order_no: fields.get("orderNo").cloned().unwrap_or_default(),
-            out_trade_no: fields.get("outTradeNo").cloned().unwrap_or_default(),
-            amount: Value::String(fields.get("amount").cloned().unwrap_or_default()),
-            pay_amount: Value::String(fields.get("payAmount").cloned().unwrap_or_default()),
-            pay_type: fields.get("payType").cloned().unwrap_or_default(),
-            status: Value::String(fields.get("status").cloned().unwrap_or_default()),
-            pay_time: fields.get("payTime").cloned().unwrap_or_default(),
-            timestamp: Value::String(fields.get("timestamp").cloned().unwrap_or_default()),
-            sign: fields.get("sign").cloned().unwrap_or_default(),
-        })
-    }
-}
-fn callback_status(value: &Value) -> String {
-    callback_scalar(value)
-}
-fn callback_scalar(value: &Value) -> String {
-    match value {
-        Value::String(v) => v.clone(),
-        Value::Number(v) => go_float_scalar(v),
-        Value::Bool(v) => v.to_string(),
-        Value::Null => "<nil>".into(),
-        other => other.to_string(),
-    }
-}
-fn go_float_scalar(value: &serde_json::Number) -> String {
-    let Some(number) = value.as_f64() else {
-        return value.to_string();
-    };
-    let rendered = number.to_string();
-    let (mantissa, exponent) = match rendered.split_once(['e', 'E']) {
-        Some((mantissa, exponent)) => (
-            mantissa.to_owned(),
-            exponent.parse::<i32>().unwrap_or_default(),
-        ),
-        None => decimal_parts(&rendered),
-    };
-    // strconv.FormatFloat(value, 'g', -1, 64), used by fmt.Sprintf("%v"),
-    // switches to e notation below -4 and from +6 onward. This also forces
-    // JSON integers above 2^53 through f64 before signing, just like Go.
-    if !(-4..6).contains(&exponent) {
-        return format!("{mantissa}e{exponent:+03}");
-    }
-    rendered
-}
-
-fn decimal_parts(rendered: &str) -> (String, i32) {
-    let (negative, rendered) = rendered
-        .strip_prefix('-')
-        .map_or((false, rendered), |value| (true, value));
-    if rendered == "0" {
-        return (if negative { "-0" } else { "0" }.into(), 0);
-    }
-    let (whole, fraction) = rendered.split_once('.').unwrap_or((rendered, ""));
-    let digits = format!("{whole}{fraction}");
-    let first = digits.find(|character| character != '0').unwrap_or(0);
-    let mut significant = digits[first..].trim_end_matches('0').to_owned();
-    let exponent = if whole.trim_start_matches('0').is_empty() {
-        whole.len() as i32 - first as i32 - 1
-    } else {
-        whole.len() as i32 - 1
-    };
-    if significant.len() > 1 {
-        significant.insert(1, '.');
-    }
-    if negative {
-        significant.insert(0, '-');
-    }
-    (significant, exponent)
-}
-fn normalize_fastpay_method(method: &str) -> String {
-    let method = method.trim();
-    if method == "fastpay" {
-        String::new()
-    } else {
-        method.strip_prefix("fastpay_").unwrap_or(method).to_owned()
-    }
-}
-fn is_explicit_fastpay_method(method: &str) -> bool {
-    let method = method.trim();
-    method == "fastpay" || method.starts_with("fastpay_")
-}
-fn nonempty(value: &str) -> Option<&str> {
-    (!value.is_empty()).then_some(value)
-}
 fn fields_json(fields: &EpayCallbackFields) -> String {
     serde_json::to_string(
         &fields
@@ -1038,17 +666,6 @@ fn legacy_error(message: impl Into<String>) -> Response {
 }
 fn legacy_success(data: Value, url: String) -> Response {
     Json(json!({"message":"success","data":data,"url":url})).into_response()
-}
-fn compliance_message(headers: &HeaderMap) -> &'static str {
-    if headers
-        .get(header::ACCEPT_LANGUAGE)
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.to_ascii_lowercase().starts_with("zh"))
-    {
-        "支付、兑换码、订阅计划和邀请返利功能已禁用。管理员需先确认合规声明后方可启用。"
-    } else {
-        "Payment, redemption, subscription, and invitation reward features are disabled. The administrator must confirm compliance terms before enabling them."
-    }
 }
 fn unauthorized() -> Response {
     (
@@ -1123,30 +740,6 @@ mod tests {
         }
         async fn verify(&self, _: &EpayCallbackFields) -> Result<EpayCallback, TopupError> {
             Err(TopupError::ProviderFrozen)
-        }
-    }
-
-    struct NoopFastPay;
-
-    #[async_trait]
-    impl FastPayGateway for NoopFastPay {
-        async fn available(&self) -> Result<(), TopupError> {
-            Err(TopupError::ProviderFrozen)
-        }
-        async fn begin(&self, _: &PendingTopup) -> Result<Checkout, TopupError> {
-            Err(TopupError::ProviderFrozen)
-        }
-        async fn verify(&self, _: &FastPayCallback) -> Result<bool, TopupError> {
-            Err(TopupError::ProviderFrozen)
-        }
-    }
-
-    struct NoopCompliance;
-
-    #[async_trait]
-    impl PaymentCompliance for NoopCompliance {
-        async fn is_confirmed(&self) -> Result<bool, TopupError> {
-            Ok(false)
         }
     }
 
@@ -1360,8 +953,6 @@ mod tests {
                 verified,
                 calls: Arc::clone(&verify_calls),
             }),
-            Arc::new(NoopFastPay),
-            Arc::new(NoopCompliance),
         ));
         (router, verify_calls, completions)
     }
@@ -1388,8 +979,6 @@ mod tests {
                 events: Arc::clone(&events),
                 fail_prepare,
             }),
-            Arc::new(NoopFastPay),
-            Arc::new(NoopCompliance),
         ));
         (router, events, pending_writes)
     }
@@ -1460,11 +1049,9 @@ mod tests {
                 events: Arc::clone(&events),
                 fail_prepare: false,
             }),
-            Arc::new(NoopFastPay),
-            Arc::new(NoopCompliance),
         ));
 
-        for uri in ["/api/user/pay", "/api/user/fastpay/pay"] {
+        for uri in ["/api/user/pay"] {
             let mut request = Request::post(uri)
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(r#"{"amount":1,"payment_method":"alipay"}"#))
@@ -1619,14 +1206,12 @@ mod tests {
             Arc::new(RejectingAuthorizer),
             Arc::new(NoopRepository),
             Arc::new(NoopEpay),
-            Arc::new(NoopFastPay),
-            Arc::new(NoopCompliance),
         ))
     }
 
     #[tokio::test]
-    async fn epay_and_fastpay_public_http_methods_keep_their_auth_and_callback_contracts() {
-        for uri in ["/api/user/pay", "/api/user/fastpay/pay"] {
+    async fn epay_public_http_methods_keep_their_auth_and_callback_contracts() {
+        for uri in ["/api/user/pay"] {
             let response = app()
                 .oneshot(
                     Request::post(uri)
@@ -1654,7 +1239,6 @@ mod tests {
         for (method, uri) in [
             ("GET", "/api/user/epay/notify"),
             ("POST", "/api/user/epay/notify"),
-            ("POST", "/api/user/fastpay/notify"),
         ] {
             let response = app()
                 .oneshot(
@@ -1677,20 +1261,14 @@ mod tests {
 
     #[test]
     fn form_and_method_compatibility() {
-        let fields = parse_form(b"amount=12.9&payment_method=fastpay_wxpay");
+        let fields = parse_form(b"amount=12.9&payment_method=alipay");
         assert_eq!(fields["amount"], "12.9");
-        assert_eq!(normalize_fastpay_method(&fields["payment_method"]), "wxpay");
+        assert_eq!(fields["payment_method"], "alipay");
     }
     #[test]
     fn malformed_percent_encoding_does_not_panic() {
         assert_eq!(percent_decode("a%ZZ+b"), "a%ZZ b");
     }
-    #[test]
-    fn fastpay_status_preserves_legacy_string_forms() {
-        assert_eq!(callback_status(&json!(1)), "1");
-        assert_eq!(callback_status(&json!("SUCCESS")), "SUCCESS");
-    }
-
     #[test]
     fn strict_callback_form_rejects_semicolons_and_keeps_first_duplicate() {
         assert_eq!(
@@ -1705,29 +1283,5 @@ mod tests {
         let fields = parse_epay_query_fields(b"sign=%FF&bad=%ZZ&trade_no=order-1").unwrap();
         assert_eq!(fields.values()[b"sign".as_slice()], [0xff]);
         assert_eq!(fields.values()[b"trade_no".as_slice()], b"order-1");
-    }
-
-    #[test]
-    fn fastpay_signature_scalars_follow_go_float64_rendering() {
-        let callback = FastPayCallback {
-            amount: json!(1.0),
-            pay_amount: json!(1e-5),
-            status: json!(1),
-            timestamp: json!(1e6),
-            ..FastPayCallback::default()
-        };
-        let fields = callback.signature_fields();
-        assert_eq!(fields["amount"], "1");
-        assert_eq!(fields["payAmount"], "1e-05");
-        assert_eq!(fields["status"], "1");
-        assert_eq!(fields["timestamp"], "1e+06");
-        assert_eq!(
-            callback_scalar(&json!(9_007_199_254_740_993_u64)),
-            "9.007199254740992e+15"
-        );
-        assert_eq!(callback_scalar(&json!(-0.0)), "-0");
-        assert_eq!(callback_scalar(&json!(null)), "<nil>");
-        assert_eq!(callback_scalar(&json!(true)), "true");
-        assert_eq!(callback_scalar(&json!("01.00")), "01.00");
     }
 }
