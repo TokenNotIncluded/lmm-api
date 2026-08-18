@@ -221,6 +221,16 @@ jobs:
           cp -a frontend-dist/. "$bundle/frontend-dist/"
           cp packaging/common/lmm-api/lmm-api.service "$bundle/"
           cp packaging/common/lmm-api/lmm-api-go.env "$bundle/"
+          mkdir -p "$bundle/edge-policy/nginx"
+          cp deploy/nginx/http-map.conf \
+            deploy/nginx/lmm-api-locations.conf \
+            deploy/nginx/mime.types \
+            deploy/nginx/new-api.conf \
+            deploy/nginx/lmm-api-region-policy.conf \
+            "$bundle/edge-policy/nginx/"
+          cp packaging/common/lmm-api/geoip2-country-update.service \
+            packaging/common/lmm-api/geoip2-country-update.timer \
+            "$bundle/edge-policy/"
           cp LICENSE NOTICE THIRD-PARTY-LICENSES.md "$bundle/"
           printf '%s\n' "$RELEASE_REVISION" >"$bundle/REVISION"
           tar -czf "release-go/${artifact}.tar.gz" -C release-go "$artifact"
