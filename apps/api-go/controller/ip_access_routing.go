@@ -73,12 +73,26 @@ func CheckIPAccessRoutingPolicy(c *gin.Context) {
 			edgePort = 80
 		}
 	}
+	sourcePort, _ := strconv.Atoi(strings.TrimSpace(c.GetHeader("X-LMM-Edge-Source-Port")))
+	dscpRaw := strings.TrimSpace(c.GetHeader("X-LMM-Edge-DSCP"))
+	dscp, dscpErr := strconv.ParseInt(dscpRaw, 0, 8)
+	domain := strings.TrimSpace(c.GetHeader("X-LMM-Edge-Domain"))
+	if domain == "" {
+		domain = c.Request.Host
+	}
 
 	action, lineNumber, err := setting.EvaluateIPAccessRoute(setting.IPAccessRouteRequest{
 		ClientIP:        originalIP,
+		DestinationIP:   strings.TrimSpace(c.GetHeader("X-LMM-Edge-Destination-IP")),
 		CountryCode:     edgeCountry,
+		Domain:          domain,
 		L4Protocol:      "tcp",
 		DestinationPort: edgePort,
+		SourcePort:      sourcePort,
+		SourceMAC:       strings.TrimSpace(c.GetHeader("X-LMM-Edge-Source-MAC")),
+		ProcessName:     strings.TrimSpace(c.GetHeader("X-LMM-Edge-Process-Name")),
+		DSCP:            int(dscp),
+		DSCPSet:         dscpRaw != "" && dscpErr == nil,
 	})
 	if err != nil {
 		common.SysError("IP access routing evaluation failed: " + err.Error())

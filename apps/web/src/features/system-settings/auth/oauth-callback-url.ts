@@ -16,11 +16,28 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+/**
+ * Convert the address operators commonly paste into the settings field into
+ * an absolute URL. Browsers accept a bare host in an input, but OAuth
+ * callbacks, webhooks, and copied links need an explicit scheme.
+ */
+export function normalizeServerAddress(serverAddress: string): string {
+  const trimmed = serverAddress.trim()
+  if (!trimmed) return ''
+
+  const withoutTrailingSlashes = trimmed.replace(/\/+$/, '')
+  if (/^[a-z][a-z\d+.-]*:\/\//i.test(withoutTrailingSlashes)) {
+    return withoutTrailingSlashes
+  }
+
+  return `https://${withoutTrailingSlashes.replace(/^\/+/, '')}`
+}
+
 export function resolveOAuthSiteUrl(
   serverAddress: string,
   fallback: string
 ): string {
-  const normalized = serverAddress.trim().replace(/\/+$/, '')
+  const normalized = normalizeServerAddress(serverAddress)
   return normalized || fallback
 }
 

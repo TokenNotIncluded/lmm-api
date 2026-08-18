@@ -33,6 +33,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 
+import { normalizeServerAddress } from '../auth/oauth-callback-url'
 import { FormDirtyIndicator } from '../components/form-dirty-indicator'
 import { FormNavigationGuard } from '../components/form-navigation-guard'
 import {
@@ -75,7 +76,9 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
 
   const normalizedDefaults: SystemInfoFormValues = {
     SystemName: normalizeValue(defaultValues.SystemName),
-    ServerAddress: normalizeValue(defaultValues.ServerAddress),
+    ServerAddress: normalizeServerAddress(
+      normalizeValue(defaultValues.ServerAddress)
+    ),
     Logo: normalizeValue(defaultValues.Logo),
     Footer: normalizeValue(defaultValues.Footer),
     About: normalizeValue(defaultValues.About),
@@ -113,7 +116,7 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
         for (const [key, value] of Object.entries(changedFields)) {
           let v = normalizeValue(value)
           if (key === 'ServerAddress') {
-            v = v.replace(/\/+$/, '')
+            v = normalizeServerAddress(v)
           }
           await updateOption.mutateAsync({
             key,
@@ -162,7 +165,19 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
                   <FormItem>
                     <FormLabel>{t('Server Address')}</FormLabel>
                     <FormControl>
-                      <Input placeholder='https://yourdomain.com' {...field} />
+                      <Input
+                        placeholder='https://yourdomain.com'
+                        {...field}
+                        onBlur={(event) => {
+                          const normalized = normalizeServerAddress(
+                            event.currentTarget.value
+                          )
+                          if (normalized !== event.currentTarget.value) {
+                            field.onChange(normalized)
+                          }
+                          field.onBlur()
+                        }}
+                      />
                     </FormControl>
                     <FormDescription>
                       {t(

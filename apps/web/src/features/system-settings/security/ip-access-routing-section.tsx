@@ -116,7 +116,7 @@ export function IPAccessRoutingSection({ defaultValues }: Props) {
             <AlertTitle>{t('First matching rule wins')}</AlertTitle>
             <AlertDescription>
               {t(
-                'Rules run from top to bottom. direct allows the request, reject blocks it, and requests that match no rule are allowed.'
+                'Rules run from top to bottom; direct allows and reject blocks. Add fallback: direct or fallback: reject to set the default for unmatched requests; without it, unmatched requests use direct.'
               )}
             </AlertDescription>
           </Alert>
@@ -149,7 +149,7 @@ export function IPAccessRoutingSection({ defaultValues }: Props) {
                 </FormControl>
                 <FormDescription>
                   {t(
-                    'Use one daed-style rule per line. Supported matchers: dip(IP, CIDR, geoip:xx, geoip:private), l4proto(tcp), and dport(port). Use # for comments.'
+                    'Use Daed routing syntax. Matchers: domain/qname, dip/ip, sip, dport, sport, l4proto, ipversion, mac, pname, and dscp; supports ! negation, fallback, and direct/reject. Use # for comments.'
                   )}
                 </FormDescription>
                 <FormMessage />
