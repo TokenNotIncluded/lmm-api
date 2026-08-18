@@ -84,6 +84,12 @@ package() {
   find "${pkgdir}/usr/share/lmm-api-go/frontend-dist" -type d -exec chmod 0755 {} +
   find "${pkgdir}/usr/share/lmm-api-go/frontend-dist" -type f -exec chmod 0644 {} +
 
+  install -d -m0755 "${pkgdir}/usr/share/lmm-api-go/edge-policy"
+  cp -R --no-preserve=ownership,mode,timestamps -- "${bundle}/edge-policy/." \
+    "${pkgdir}/usr/share/lmm-api-go/edge-policy/"
+  find "${pkgdir}/usr/share/lmm-api-go/edge-policy" -type d -exec chmod 0755 {} +
+  find "${pkgdir}/usr/share/lmm-api-go/edge-policy" -type f -exec chmod 0644 {} +
+
   for file in LICENSE NOTICE THIRD-PARTY-LICENSES.md; do
     install -Dm0644 "${bundle}/${file}" "${pkgdir}/usr/share/licenses/${pkgname}/${file}"
   done
