@@ -1,11 +1,14 @@
 package controller
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/LIghtJUNction/api.lmm.best/common"
@@ -24,6 +27,91 @@ type wechatLoginResponse struct {
 // The WeChat identity response is a small fixed-shape JSON document. Keep
 // provider-controlled error text bounded before json.Decoder can buffer it.
 const wechatProviderResponseMaxBytes int64 = 64 << 10
+
+const wechatProviderPath = "/api/wechat/user"
+
+func newWeChatProviderSSRFProtection() *common.SSRFProtection {
+	return &common.SSRFProtection{
+		DomainFilterMode:       false,
+		IpFilterMode:           false,
+		ApplyIPFilterForDomain: true,
+	}
+}
+
+// validateWeChatProviderURL applies an independent outbound request policy.
+// WeChatServerAddress is editable through the admin option API, so it must
+// not be allowed to target loopback, link-local, private, or reserved hosts.
+// DNS is resolved as part of validation to prevent a hostname from bypassing
+// the address policy.
+var validateWeChatProviderURL = func(rawURL string) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Scheme == "" || parsed.Hostname() == "" {
+		return errors.New("微信服务器地址无效")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return errors.New("微信服务器地址仅支持 HTTP 或 HTTPS")
+	}
+	if parsed.User != nil || parsed.Fragment != "" {
+		return errors.New("微信服务器地址不得包含用户信息或片段")
+	}
+	protection := newWeChatProviderSSRFProtection()
+	if err := protection.ValidateURL(rawURL); err != nil {
+		return fmt.Errorf("微信服务器地址被出站安全策略拒绝: %w", err)
+	}
+	return nil
+}
+
+// dialWeChatProvider resolves a hostname and dials the exact validated IP.
+// The request URL keeps the original hostname for TLS SNI, but the connection
+// never asks the default transport to resolve it a second time. This closes
+// the DNS-rebinding window between validation and connect.
+func dialWeChatProvider(ctx context.Context, network, address string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, fmt.Errorf("微信服务器地址无效: %w", err)
+	}
+	protection := newWeChatProviderSSRFProtection()
+	dialer := &net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}
+	ips := []net.IP{}
+	if ip := net.ParseIP(host); ip != nil {
+		ips = append(ips, ip)
+	} else {
+		ips, err = net.DefaultResolver.LookupIP(ctx, "ip", host)
+		if err != nil {
+			return nil, fmt.Errorf("微信服务器 DNS 解析失败: %w", err)
+		}
+	}
+	var lastErr error
+	for _, ip := range ips {
+		if err := protection.ValidateResolvedIP(host, ip); err != nil {
+			lastErr = err
+			continue
+		}
+		conn, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+		if dialErr == nil {
+			return conn, nil
+		}
+		lastErr = dialErr
+	}
+	if lastErr == nil {
+		lastErr = errors.New("微信服务器没有可用地址")
+	}
+	return nil, lastErr
+}
+
+var newWeChatHTTPClient = func() *http.Client {
+	transport := &http.Transport{
+		Proxy:                 nil,
+		DialContext:           dialWeChatProvider,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          4,
+		MaxIdleConnsPerHost:   2,
+		IdleConnTimeout:       30 * time.Second,
+		TLSHandshakeTimeout:   5 * time.Second,
+		ExpectContinueTimeout: time.Second,
+	}
+	return &http.Client{Transport: transport, Timeout: 5 * time.Second}
+}
 
 type wechatLoginStartRequest struct {
 	AcceptedLegal bool `json:"accepted_legal"`
@@ -77,14 +165,39 @@ func getWeChatIdByCode(code string) (string, error) {
 	if code == "" {
 		return "", errors.New("无效的参数")
 	}
-	req, err := http.NewRequest("GET", fmt.Sprintf("%s/api/wechat/user?code=%s", common.WeChatServerAddress, url.QueryEscape(code)), nil)
+	baseURL, err := url.Parse(strings.TrimSpace(common.WeChatServerAddress))
+	if err != nil || baseURL.Scheme == "" || baseURL.Hostname() == "" {
+		return "", errors.New("微信服务器地址无效")
+	}
+	if baseURL.RawQuery != "" || baseURL.Fragment != "" || baseURL.User != nil {
+		return "", errors.New("微信服务器地址不得包含用户信息、查询参数或片段")
+	}
+	if err := validateWeChatProviderURL(baseURL.String()); err != nil {
+		return "", err
+	}
+	query := baseURL.Query()
+	query.Set("code", code)
+	baseURL.Path = strings.TrimRight(baseURL.Path, "/") + wechatProviderPath
+	baseURL.RawPath = ""
+	baseURL.RawQuery = query.Encode()
+	providerURL := baseURL.String()
+	if err := validateWeChatProviderURL(providerURL); err != nil {
+		return "", err
+	}
+	req, err := http.NewRequest(http.MethodGet, providerURL, nil)
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("Authorization", common.WeChatServerToken)
-	client := http.Client{
-		Timeout: 5 * time.Second,
+	client := newWeChatHTTPClient()
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) > 0 {
+			return errors.New("微信服务器不允许重定向")
+		}
+		return validateWeChatProviderURL(req.URL.String())
 	}
+	// Strict scheme, host, DNS, and private-address validation precedes this sink.
+	// lgtm [go/request-forgery]
 	httpResponse, err := client.Do(req)
 	if err != nil {
 		return "", err

@@ -217,7 +217,9 @@ func ListAssistantRequestReviewsForSecurity(filter AssistantRequestReviewFilter)
 		query = query.Where("1 = 0")
 	}
 	if filter.Group != "" {
-		query = query.Where(map[string]any{"group": filter.Group})
+		// clause.Column lets GORM quote GROUP for the active dialect while the
+		// value remains a bound query argument.
+		query = query.Where(clause.Eq{Column: clause.Column{Name: "group"}, Value: filter.Group})
 	}
 	if filter.Decision != "" && filter.Decision != "violation" && filter.Decision != "clear" {
 		query = query.Where("1 = 0")
