@@ -12,7 +12,9 @@ package setting
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
+	neturl "net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -36,10 +38,21 @@ const (
 )
 
 type IPAccessRouteRequest struct {
-	ClientIP        string
+	// ClientIP is the edge-observed client address. It remains the fallback
+	// value for dip() for backwards compatibility with the original IP access
+	// setting, which used dip() for the connecting address.
+	ClientIP string
+	// DestinationIP is optional edge metadata for native Daed dip() semantics.
+	DestinationIP   string
 	CountryCode     string
+	Domain          string
 	L4Protocol      string
 	DestinationPort int
+	SourcePort      int
+	SourceMAC       string
+	ProcessName     string
+	DSCP            int
+	DSCPSet         bool
 }
 
 type ipAccessMatcherKind uint8
@@ -48,29 +61,86 @@ const (
 	ipAccessMatcherPrefix ipAccessMatcherKind = iota
 	ipAccessMatcherCountry
 	ipAccessMatcherPrivate
+	ipAccessMatcherExternal
 )
 
 type ipAccessMatcher struct {
 	kind        ipAccessMatcherKind
 	prefix      netip.Prefix
 	countryCode string
+	external    string
+}
+
+type ipAccessIPDirection uint8
+
+const (
+	ipAccessIPDestination ipAccessIPDirection = iota
+	ipAccessIPSource
+)
+
+type ipAccessPortRange struct {
+	min int
+	max int
+}
+
+type ipAccessDomainMatcherKind uint8
+
+const (
+	ipAccessDomainSuffix ipAccessDomainMatcherKind = iota
+	ipAccessDomainFull
+	ipAccessDomainKeyword
+	ipAccessDomainRegex
+	ipAccessDomainGeoSite
+	ipAccessDomainExternal
+)
+
+type ipAccessDomainMatcher struct {
+	kind     ipAccessDomainMatcherKind
+	value    string
+	compiled *regexp.Regexp
+}
+
+type ipAccessConditionKind uint8
+
+const (
+	ipAccessConditionIP ipAccessConditionKind = iota
+	ipAccessConditionDomain
+	ipAccessConditionL4Protocol
+	ipAccessConditionPort
+	ipAccessConditionIPVersion
+	ipAccessConditionMAC
+	ipAccessConditionProcess
+	ipAccessConditionDSCP
+)
+
+type ipAccessRouteCondition struct {
+	kind        ipAccessConditionKind
+	negated     bool
+	ipDirection ipAccessIPDirection
+	ipMatchers  []ipAccessMatcher
+	domains     []ipAccessDomainMatcher
+	values      map[string]struct{}
+	ports       []ipAccessPortRange
+	ipVersions  map[int]struct{}
+	macs        map[string]struct{}
+	processes   map[string]struct{}
+	dscps       map[int]struct{}
 }
 
 type ipAccessRouteRule struct {
 	lineNumber int
 	action     IPAccessRouteAction
-	dip        []ipAccessMatcher
-	protocols  map[string]struct{}
-	ports      map[int]struct{}
+	conditions []ipAccessRouteCondition
 }
 
 type IPAccessRoutingPolicy struct {
-	source string
-	rules  []ipAccessRouteRule
+	source   string
+	rules    []ipAccessRouteRule
+	fallback IPAccessRouteAction
 }
 
 var (
-	ipAccessPredicatePattern = regexp.MustCompile(`^([a-z][a-z0-9_]*)\s*\((.*)\)$`)
+	ipAccessPredicatePattern = regexp.MustCompile(`^(!)?\s*([a-z][a-z0-9_]*)\s*\((.*)\)$`)
 	ipAccessRoutingMu        sync.RWMutex
 	ipAccessRoutingPolicy    = mustParseIPAccessRoutingPolicy(DefaultIPAccessRoutingRules)
 )
@@ -120,14 +190,30 @@ func ParseIPAccessRoutingRules(source string) (IPAccessRoutingPolicy, error) {
 		return IPAccessRoutingPolicy{}, errors.New("IP access routing rules must contain at least one rule")
 	}
 
-	policy := IPAccessRoutingPolicy{source: normalized}
+	policy := IPAccessRoutingPolicy{source: normalized, fallback: IPAccessRouteDirect}
+	fallbackSeen := false
 	for index, rawLine := range strings.Split(normalized, "\n") {
 		lineNumber := index + 1
 		if len(rawLine) > maxIPAccessRoutingLineBytes {
 			return IPAccessRoutingPolicy{}, fmt.Errorf("line %d: rule cannot exceed %d bytes", lineNumber, maxIPAccessRoutingLineBytes)
 		}
-		line := strings.TrimSpace(strings.SplitN(rawLine, "#", 2)[0])
+		line := strings.TrimSpace(stripIPAccessComment(rawLine))
 		if line == "" {
+			continue
+		}
+		if line == "routing {" || line == "}" {
+			continue
+		}
+		if strings.HasPrefix(strings.ToLower(line), "fallback:") {
+			if fallbackSeen {
+				return IPAccessRoutingPolicy{}, fmt.Errorf("line %d: duplicate fallback", lineNumber)
+			}
+			action, err := parseIPAccessAction(strings.TrimSpace(line[len("fallback:"):]), lineNumber)
+			if err != nil {
+				return IPAccessRoutingPolicy{}, err
+			}
+			policy.fallback = action
+			fallbackSeen = true
 			continue
 		}
 		if len(policy.rules) >= maxIPAccessRoutingRuleCount {
@@ -140,77 +226,214 @@ func ParseIPAccessRoutingRules(source string) (IPAccessRoutingPolicy, error) {
 		}
 		policy.rules = append(policy.rules, rule)
 	}
-	if len(policy.rules) == 0 {
+	if len(policy.rules) == 0 && !fallbackSeen {
 		return IPAccessRoutingPolicy{}, errors.New("IP access routing rules must contain at least one rule")
 	}
 	return policy, nil
 }
 
 func parseIPAccessRouteRule(line string, lineNumber int) (ipAccessRouteRule, error) {
-	parts := strings.Split(line, "->")
+	parts, err := splitIPAccessTopLevel(line, "->")
+	if err != nil {
+		return ipAccessRouteRule{}, fmt.Errorf("line %d: %w", lineNumber, err)
+	}
 	if len(parts) != 2 {
 		return ipAccessRouteRule{}, fmt.Errorf("line %d: expected conditions -> direct or reject", lineNumber)
 	}
 	conditions := strings.TrimSpace(parts[0])
-	action := IPAccessRouteAction(strings.TrimSpace(parts[1]))
 	if conditions == "" {
 		return ipAccessRouteRule{}, fmt.Errorf("line %d: at least one condition is required", lineNumber)
 	}
-	if action != IPAccessRouteDirect && action != IPAccessRouteReject {
-		return ipAccessRouteRule{}, fmt.Errorf("line %d: action must be direct or reject", lineNumber)
+	action, err := parseIPAccessAction(parts[1], lineNumber)
+	if err != nil {
+		return ipAccessRouteRule{}, err
 	}
 
-	rule := ipAccessRouteRule{lineNumber: lineNumber, action: action}
+	rule := ipAccessRouteRule{lineNumber: lineNumber, action: action, conditions: make([]ipAccessRouteCondition, 0)}
 	seenPredicates := make(map[string]struct{})
-	for _, rawCondition := range strings.Split(conditions, "&&") {
+	conditionParts, err := splitIPAccessTopLevel(conditions, "&&")
+	if err != nil {
+		return ipAccessRouteRule{}, fmt.Errorf("line %d: %w", lineNumber, err)
+	}
+	for _, rawCondition := range conditionParts {
 		condition := strings.TrimSpace(rawCondition)
 		match := ipAccessPredicatePattern.FindStringSubmatch(condition)
 		if match == nil {
 			return ipAccessRouteRule{}, fmt.Errorf("line %d: invalid condition %q", lineNumber, condition)
 		}
-		name := match[1]
+		name := strings.ToLower(match[2])
 		if _, exists := seenPredicates[name]; exists {
 			return ipAccessRouteRule{}, fmt.Errorf("line %d: duplicate %s() condition", lineNumber, name)
 		}
 		seenPredicates[name] = struct{}{}
-		arguments, err := parseIPAccessArguments(match[2], lineNumber, name)
+		arguments, err := parseIPAccessArguments(match[3], lineNumber, name)
 		if err != nil {
 			return ipAccessRouteRule{}, err
 		}
 
+		parsed := ipAccessRouteCondition{negated: match[1] == "!"}
 		switch name {
-		case "dip":
-			rule.dip, err = parseIPAccessDIPMatchers(arguments, lineNumber)
+		case "dip", "ip":
+			parsed.kind = ipAccessConditionIP
+			parsed.ipDirection = ipAccessIPDestination
+			parsed.ipMatchers, err = parseIPAccessDIPMatchers(arguments, lineNumber)
+		case "sip":
+			parsed.kind = ipAccessConditionIP
+			parsed.ipDirection = ipAccessIPSource
+			parsed.ipMatchers, err = parseIPAccessDIPMatchers(arguments, lineNumber)
+		case "domain", "qname":
+			parsed.kind = ipAccessConditionDomain
+			parsed.domains, err = parseIPAccessDomainMatchers(arguments, lineNumber)
 		case "l4proto":
-			rule.protocols, err = parseIPAccessProtocols(arguments, lineNumber)
-		case "dport":
-			rule.ports, err = parseIPAccessPorts(arguments, lineNumber)
-		case "domain", "pname":
-			err = fmt.Errorf("line %d: %s() is not available for inbound HTTP routing; use dip()", lineNumber, name)
+			parsed.kind = ipAccessConditionL4Protocol
+			parsed.values, err = parseIPAccessProtocols(arguments, lineNumber)
+		case "dport", "sport":
+			parsed.kind = ipAccessConditionPort
+			if name == "sport" {
+				parsed.ipDirection = ipAccessIPSource
+			}
+			parsed.ports, err = parseIPAccessPorts(arguments, lineNumber, name)
+		case "ipversion":
+			parsed.kind = ipAccessConditionIPVersion
+			parsed.ipVersions, err = parseIPAccessVersions(arguments, lineNumber)
+		case "mac":
+			parsed.kind = ipAccessConditionMAC
+			parsed.macs, err = parseIPAccessMACs(arguments, lineNumber)
+		case "pname":
+			parsed.kind = ipAccessConditionProcess
+			parsed.processes = make(map[string]struct{}, len(arguments))
+			for _, argument := range arguments {
+				parsed.processes[strings.ToLower(argument)] = struct{}{}
+			}
+		case "dscp":
+			parsed.kind = ipAccessConditionDSCP
+			parsed.dscps, err = parseIPAccessDSCPs(arguments, lineNumber)
 		default:
 			err = fmt.Errorf("line %d: unsupported condition %s()", lineNumber, name)
 		}
 		if err != nil {
 			return ipAccessRouteRule{}, err
 		}
-	}
-	if len(rule.dip) == 0 {
-		return ipAccessRouteRule{}, fmt.Errorf("line %d: every inbound routing rule must include dip()", lineNumber)
+		rule.conditions = append(rule.conditions, parsed)
 	}
 	return rule, nil
 }
 
+func parseIPAccessAction(raw string, lineNumber int) (IPAccessRouteAction, error) {
+	action := strings.ToLower(strings.TrimSpace(raw))
+	switch action {
+	case "direct", "must_direct", "must_rules", "direct(must)":
+		return IPAccessRouteDirect, nil
+	case "reject", "block":
+		return IPAccessRouteReject, nil
+	default:
+		return "", fmt.Errorf("line %d: action must be direct or reject (Daed aliases: must_direct, must_rules, block)", lineNumber)
+	}
+}
+
+func stripIPAccessComment(raw string) string {
+	var quote byte
+	escaped := false
+	for index := 0; index < len(raw); index++ {
+		char := raw[index]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if char == '\\' {
+				escaped = true
+				continue
+			}
+			if char == quote {
+				quote = 0
+			}
+			continue
+		}
+		if char == '\'' || char == '"' {
+			quote = char
+			continue
+		}
+		if char == '#' {
+			return raw[:index]
+		}
+	}
+	return raw
+}
+
+func splitIPAccessTopLevel(raw, separator string) ([]string, error) {
+	parts := make([]string, 0, 2)
+	start := 0
+	depth := 0
+	var quote byte
+	escaped := false
+	for index := 0; index < len(raw); index++ {
+		char := raw[index]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if char == '\\' {
+				escaped = true
+				continue
+			}
+			if char == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch char {
+		case '\'', '"':
+			quote = char
+		case '(':
+			depth++
+		case ')':
+			if depth == 0 {
+				return nil, errors.New("unexpected closing parenthesis")
+			}
+			depth--
+		}
+		if depth == 0 && strings.HasPrefix(raw[index:], separator) {
+			parts = append(parts, raw[start:index])
+			index += len(separator) - 1
+			start = index + 1
+		}
+	}
+	if quote != 0 {
+		return nil, errors.New("unterminated quoted value")
+	}
+	if depth != 0 {
+		return nil, errors.New("unbalanced parentheses")
+	}
+	parts = append(parts, raw[start:])
+	return parts, nil
+}
+
 func parseIPAccessArguments(raw string, lineNumber int, predicate string) ([]string, error) {
-	parts := strings.Split(raw, ",")
+	parts, err := splitIPAccessTopLevel(raw, ",")
+	if err != nil {
+		return nil, fmt.Errorf("line %d: %s() %w", lineNumber, predicate, err)
+	}
 	arguments := make([]string, 0, len(parts))
 	for _, part := range parts {
-		argument := strings.TrimSpace(part)
+		argument := trimIPAccessQuotes(strings.TrimSpace(part))
 		if argument == "" {
 			return nil, fmt.Errorf("line %d: %s() contains an empty value", lineNumber, predicate)
 		}
 		arguments = append(arguments, argument)
 	}
 	return arguments, nil
+}
+
+func trimIPAccessQuotes(value string) string {
+	if len(value) >= 2 {
+		first, last := value[0], value[len(value)-1]
+		if (first == '\'' || first == '"') && first == last {
+			return value[1 : len(value)-1]
+		}
+	}
+	return value
 }
 
 func parseIPAccessDIPMatchers(arguments []string, lineNumber int) ([]ipAccessMatcher, error) {
@@ -233,6 +456,10 @@ func parseIPAccessDIPMatchers(arguments []string, lineNumber int) ([]ipAccessMat
 			default:
 				return nil, fmt.Errorf("line %d: invalid geoip value %q; use geoip:xx or geoip:private", lineNumber, argument)
 			}
+		} else if strings.HasPrefix(lower, "ext:") {
+			matcher.kind = ipAccessMatcherExternal
+			matcher.external = argument[len("ext:"):]
+			canonical = "ext:" + strings.ToLower(matcher.external)
 		} else {
 			prefix, err := parseIPAccessPrefix(argument)
 			if err != nil {
@@ -246,6 +473,46 @@ func parseIPAccessDIPMatchers(arguments []string, lineNumber int) ([]ipAccessMat
 			continue
 		}
 		seen[canonical] = struct{}{}
+		matchers = append(matchers, matcher)
+	}
+	return matchers, nil
+}
+
+func parseIPAccessDomainMatchers(arguments []string, lineNumber int) ([]ipAccessDomainMatcher, error) {
+	matchers := make([]ipAccessDomainMatcher, 0, len(arguments))
+	for _, argument := range arguments {
+		kind := ipAccessDomainSuffix
+		value := strings.TrimSpace(argument)
+		if prefix, candidate, found := strings.Cut(value, ":"); found {
+			value = trimIPAccessQuotes(strings.TrimSpace(candidate))
+			switch strings.ToLower(strings.TrimSpace(prefix)) {
+			case "suffix":
+				kind = ipAccessDomainSuffix
+			case "full":
+				kind = ipAccessDomainFull
+			case "keyword":
+				kind = ipAccessDomainKeyword
+			case "regex":
+				kind = ipAccessDomainRegex
+			case "geosite":
+				kind = ipAccessDomainGeoSite
+			case "ext":
+				kind = ipAccessDomainExternal
+			default:
+				return nil, fmt.Errorf("line %d: unsupported domain matcher %q", lineNumber, prefix)
+			}
+		}
+		if value == "" {
+			return nil, fmt.Errorf("line %d: domain() contains an empty value", lineNumber)
+		}
+		matcher := ipAccessDomainMatcher{kind: kind, value: strings.ToLower(value)}
+		if kind == ipAccessDomainRegex {
+			compiled, err := regexp.Compile(value)
+			if err != nil {
+				return nil, fmt.Errorf("line %d: invalid domain regex: %w", lineNumber, err)
+			}
+			matcher.compiled = compiled
+		}
 		matchers = append(matchers, matcher)
 	}
 	return matchers, nil
@@ -274,24 +541,71 @@ func parseIPAccessProtocols(arguments []string, lineNumber int) (map[string]stru
 	protocols := make(map[string]struct{}, len(arguments))
 	for _, argument := range arguments {
 		protocol := strings.ToLower(argument)
-		if protocol != "tcp" {
-			return nil, fmt.Errorf("line %d: inbound HTTP routing supports only l4proto(tcp)", lineNumber)
+		if !regexp.MustCompile(`^[a-z][a-z0-9_-]*$`).MatchString(protocol) {
+			return nil, fmt.Errorf("line %d: invalid layer-4 protocol %q", lineNumber, argument)
 		}
 		protocols[protocol] = struct{}{}
 	}
 	return protocols, nil
 }
 
-func parseIPAccessPorts(arguments []string, lineNumber int) (map[int]struct{}, error) {
-	ports := make(map[int]struct{}, len(arguments))
+func parseIPAccessPorts(arguments []string, lineNumber int, predicate string) ([]ipAccessPortRange, error) {
+	ports := make([]ipAccessPortRange, 0, len(arguments))
 	for _, argument := range arguments {
-		port, err := strconv.Atoi(argument)
-		if err != nil || port < 1 || port > 65535 {
-			return nil, fmt.Errorf("line %d: destination ports must be integers between 1 and 65535", lineNumber)
+		bounds := strings.Split(strings.TrimSpace(argument), "-")
+		if len(bounds) > 2 || len(bounds) == 0 {
+			return nil, fmt.Errorf("line %d: %s ports must be integers or ranges between 1 and 65535", lineNumber, predicate)
 		}
-		ports[port] = struct{}{}
+		min, err := strconv.Atoi(strings.TrimSpace(bounds[0]))
+		if err != nil || min < 1 || min > 65535 {
+			return nil, fmt.Errorf("line %d: %s ports must be integers or ranges between 1 and 65535", lineNumber, predicate)
+		}
+		max := min
+		if len(bounds) == 2 {
+			max, err = strconv.Atoi(strings.TrimSpace(bounds[1]))
+			if err != nil || max < min || max > 65535 {
+				return nil, fmt.Errorf("line %d: %s ports must be integers or ranges between 1 and 65535", lineNumber, predicate)
+			}
+		}
+		ports = append(ports, ipAccessPortRange{min: min, max: max})
 	}
 	return ports, nil
+}
+
+func parseIPAccessVersions(arguments []string, lineNumber int) (map[int]struct{}, error) {
+	versions := make(map[int]struct{}, len(arguments))
+	for _, argument := range arguments {
+		version, err := strconv.Atoi(argument)
+		if err != nil || (version != 4 && version != 6) {
+			return nil, fmt.Errorf("line %d: ipversion must be 4 or 6", lineNumber)
+		}
+		versions[version] = struct{}{}
+	}
+	return versions, nil
+}
+
+func parseIPAccessMACs(arguments []string, lineNumber int) (map[string]struct{}, error) {
+	macs := make(map[string]struct{}, len(arguments))
+	for _, argument := range arguments {
+		mac, err := net.ParseMAC(argument)
+		if err != nil || len(mac) != 6 {
+			return nil, fmt.Errorf("line %d: mac() expects a six-byte MAC address", lineNumber)
+		}
+		macs[strings.ToLower(mac.String())] = struct{}{}
+	}
+	return macs, nil
+}
+
+func parseIPAccessDSCPs(arguments []string, lineNumber int) (map[int]struct{}, error) {
+	dscps := make(map[int]struct{}, len(arguments))
+	for _, argument := range arguments {
+		value, err := strconv.ParseInt(argument, 0, 8)
+		if err != nil || value < 0 || value > 63 {
+			return nil, fmt.Errorf("line %d: dscp must be an integer between 0 and 63", lineNumber)
+		}
+		dscps[int(value)] = struct{}{}
+	}
+	return dscps, nil
 }
 
 func EvaluateIPAccessRoute(request IPAccessRouteRequest) (IPAccessRouteAction, int, error) {
@@ -305,12 +619,15 @@ func EvaluateIPAccessRoute(request IPAccessRouteRequest) (IPAccessRouteAction, i
 		return "", 0, errors.New("edge country code is invalid")
 	}
 	protocol := strings.ToLower(strings.TrimSpace(request.L4Protocol))
+	request.ClientIP = address.String()
+	request.CountryCode = countryCode
+	request.L4Protocol = protocol
 
 	ipAccessRoutingMu.RLock()
 	policy := ipAccessRoutingPolicy
 	ipAccessRoutingMu.RUnlock()
 	for _, rule := range policy.rules {
-		matched, unknown := rule.matches(address, countryCode, protocol, request.DestinationPort)
+		matched, unknown := rule.matches(request, address)
 		if unknown != "" {
 			return "", rule.lineNumber, fmt.Errorf("line %d cannot be evaluated: %s", rule.lineNumber, unknown)
 		}
@@ -318,56 +635,182 @@ func EvaluateIPAccessRoute(request IPAccessRouteRequest) (IPAccessRouteAction, i
 			return rule.action, rule.lineNumber, nil
 		}
 	}
-	return IPAccessRouteDirect, 0, nil
+	return policy.fallback, 0, nil
 }
 
-func (rule ipAccessRouteRule) matches(address netip.Addr, countryCode, protocol string, port int) (bool, string) {
-	dipMatched := false
-	countryUnknown := false
-	for _, matcher := range rule.dip {
-		switch matcher.kind {
-		case ipAccessMatcherPrefix:
-			if matcher.prefix.Contains(address) {
-				dipMatched = true
-			}
-		case ipAccessMatcherCountry:
-			if countryCode == "" {
-				countryUnknown = true
-			} else if matcher.countryCode == countryCode {
-				dipMatched = true
-			}
-		case ipAccessMatcherPrivate:
-			if isIPAccessPrivate(address) {
-				dipMatched = true
-			}
+func (rule ipAccessRouteRule) matches(request IPAccessRouteRequest, clientAddress netip.Addr) (bool, string) {
+	for _, condition := range rule.conditions {
+		matched, known, err := condition.matches(request, clientAddress)
+		if err != nil {
+			return false, err.Error()
 		}
-		if dipMatched {
-			break
-		}
-	}
-	if !dipMatched {
-		if countryUnknown {
-			return false, "edge country is unavailable"
-		}
-		return false, ""
-	}
-	if len(rule.protocols) > 0 {
-		if protocol == "" {
-			return false, "layer-4 protocol is unavailable"
-		}
-		if _, matches := rule.protocols[protocol]; !matches {
+		// Some Daed predicates describe local packet metadata (for example
+		// pname/mac/dscp) that an HTTP edge cannot observe. Treat those
+		// predicates as a non-match rather than applying a guessed value.
+		if !known {
 			return false, ""
 		}
-	}
-	if len(rule.ports) > 0 {
-		if port < 1 || port > 65535 {
-			return false, "destination port is unavailable"
+		if condition.negated {
+			matched = !matched
 		}
-		if _, matches := rule.ports[port]; !matches {
+		if !matched {
 			return false, ""
 		}
 	}
 	return true, ""
+}
+
+func (condition ipAccessRouteCondition) matches(request IPAccessRouteRequest, clientAddress netip.Addr) (bool, bool, error) {
+	switch condition.kind {
+	case ipAccessConditionIP:
+		address := clientAddress
+		if condition.ipDirection == ipAccessIPDestination && strings.TrimSpace(request.DestinationIP) != "" {
+			parsed, err := netip.ParseAddr(strings.TrimSpace(request.DestinationIP))
+			if err != nil {
+				return false, true, errors.New("destination IP is unavailable or invalid")
+			}
+			address = parsed.Unmap()
+		}
+		matched := false
+		countryUnknown := false
+		for _, matcher := range condition.ipMatchers {
+			switch matcher.kind {
+			case ipAccessMatcherPrefix:
+				matched = matched || matcher.prefix.Contains(address)
+			case ipAccessMatcherCountry:
+				if request.CountryCode == "" {
+					countryUnknown = true
+				} else {
+					matched = matched || matcher.countryCode == request.CountryCode
+				}
+			case ipAccessMatcherPrivate:
+				matched = matched || isIPAccessPrivate(address)
+			case ipAccessMatcherExternal:
+				// Custom DAT files are valid Daed syntax but are not loaded by
+				// the HTTP edge. Keep the condition inert until such a source
+				// is explicitly provisioned.
+			}
+		}
+		if matched {
+			return true, true, nil
+		}
+		if countryUnknown {
+			return false, true, errors.New("edge country is unavailable")
+		}
+		for _, matcher := range condition.ipMatchers {
+			if matcher.kind == ipAccessMatcherExternal {
+				return false, false, nil
+			}
+		}
+		return false, true, nil
+	case ipAccessConditionDomain:
+		host := normalizeIPAccessDomain(request.Domain)
+		if host == "" {
+			return false, false, nil
+		}
+		unknown := false
+		for _, matcher := range condition.domains {
+			var matches bool
+			switch matcher.kind {
+			case ipAccessDomainSuffix:
+				matches = host == matcher.value || strings.HasSuffix(host, "."+matcher.value)
+			case ipAccessDomainFull:
+				matches = host == matcher.value
+			case ipAccessDomainKeyword:
+				matches = strings.Contains(host, matcher.value)
+			case ipAccessDomainRegex:
+				matches = matcher.compiled.MatchString(host)
+			case ipAccessDomainGeoSite, ipAccessDomainExternal:
+				unknown = true
+			}
+			if matches {
+				return true, true, nil
+			}
+		}
+		if unknown {
+			return false, false, nil
+		}
+		return false, true, nil
+	case ipAccessConditionL4Protocol:
+		if request.L4Protocol == "" {
+			return false, true, errors.New("layer-4 protocol is unavailable")
+		}
+		_, matched := condition.values[request.L4Protocol]
+		return matched, true, nil
+	case ipAccessConditionPort:
+		port := request.DestinationPort
+		if conditionPortIsSource(condition) {
+			port = request.SourcePort
+		}
+		if port < 1 || port > 65535 {
+			if conditionPortIsSource(condition) {
+				return false, true, errors.New("source port is unavailable")
+			}
+			return false, true, errors.New("destination port is unavailable")
+		}
+		for _, bounds := range condition.ports {
+			if port >= bounds.min && port <= bounds.max {
+				return true, true, nil
+			}
+		}
+		return false, true, nil
+	case ipAccessConditionIPVersion:
+		version := 6
+		if clientAddress.Is4() {
+			version = 4
+		}
+		_, matched := condition.ipVersions[version]
+		return matched, true, nil
+	case ipAccessConditionMAC:
+		mac := strings.TrimSpace(strings.ToLower(request.SourceMAC))
+		if mac == "" {
+			return false, false, nil
+		}
+		parsed, err := net.ParseMAC(mac)
+		if err != nil || len(parsed) != 6 {
+			return false, false, nil
+		}
+		_, matched := condition.macs[strings.ToLower(parsed.String())]
+		return matched, true, nil
+	case ipAccessConditionProcess:
+		process := strings.ToLower(strings.TrimSpace(request.ProcessName))
+		if process == "" {
+			return false, false, nil
+		}
+		_, matched := condition.processes[process]
+		return matched, true, nil
+	case ipAccessConditionDSCP:
+		if !request.DSCPSet && request.DSCP == 0 {
+			return false, false, nil
+		}
+		_, matched := condition.dscps[request.DSCP]
+		return matched, true, nil
+	default:
+		return false, false, nil
+	}
+}
+
+func conditionPortIsSource(condition ipAccessRouteCondition) bool {
+	// The parser stores source/destination port conditions in the same shape;
+	// the direction is encoded by the first value's sentinel in this compact
+	// policy representation. A source condition has no destination port list.
+	return condition.ipDirection == ipAccessIPSource
+}
+
+func normalizeIPAccessDomain(raw string) string {
+	host := strings.ToLower(strings.TrimSpace(raw))
+	if host == "" {
+		return ""
+	}
+	if strings.Contains(host, "://") {
+		if parsed, err := neturl.Parse(host); err == nil {
+			host = parsed.Hostname()
+		}
+	}
+	if host, _, err := net.SplitHostPort(host); err == nil {
+		return strings.TrimSuffix(host, ".")
+	}
+	return strings.TrimSuffix(host, ".")
 }
 
 func isIPAccessPrivate(address netip.Addr) bool {

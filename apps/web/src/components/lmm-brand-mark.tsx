@@ -26,7 +26,7 @@ type LmmBrandMarkProps = SVGProps<SVGSVGElement> & {
   title?: string
 }
 
-/** An abstract woven mark for the forge: two paths crossing into one system. */
+/** A compact angular monogram: an M-shaped forge frame over a hot base. */
 export function LmmBrandMark({
   className,
   title,
@@ -44,32 +44,39 @@ export function LmmBrandMark({
       {...props}
     >
       <rect
-        x='5'
-        y='5'
-        width='46'
-        height='46'
-        rx='16'
+        x='4'
+        y='4'
+        width='48'
+        height='48'
+        rx='14'
         fill='var(--forge-brand-mark-surface)'
-        stroke='var(--forge-brand-mark-ink)'
-        strokeWidth='2'
       />
       <path
-        d='M13 34c5-10 10-15 16-15 5 0 10 4 14 12'
+        d='M15 38V18l13 13 13-13v20'
         fill='none'
         stroke='var(--forge-brand-mark-ink)'
-        strokeWidth='4.5'
+        strokeWidth='4.25'
         strokeLinecap='round'
         strokeLinejoin='round'
       />
       <path
-        d='M13 22c5 10 10 15 16 15 5 0 10-4 14-12'
+        d='M16 41h24'
         fill='none'
         stroke='var(--forge-brand-mark-accent)'
-        strokeWidth='4.5'
+        strokeWidth='3.5'
         strokeLinecap='round'
-        strokeLinejoin='round'
       />
-      <circle cx='13' cy='28' r='3' fill='var(--forge-brand-mark-ink)' />
+      <rect
+        x='4.75'
+        y='4.75'
+        width='46.5'
+        height='46.5'
+        rx='13.25'
+        fill='none'
+        stroke='var(--forge-brand-mark-ink)'
+        strokeOpacity='0.16'
+        strokeWidth='1.5'
+      />
     </svg>
   )
 }

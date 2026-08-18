@@ -3368,14 +3368,16 @@ const ipAccessRoutingTranslations = {
       'Routing rules cannot exceed 16384 bytes.',
     'Routing rules are invalid.': 'Routing rules are invalid.',
     'First matching rule wins': 'First matching rule wins',
-    'Rules run from top to bottom. direct allows the request, reject blocks it, and requests that match no rule are allowed.':
-      'Rules run from top to bottom. direct allows the request, reject blocks it, and requests that match no rule are allowed.',
+    'Rules run from top to bottom; direct allows and reject blocks. Add fallback: direct or fallback: reject to set the default for unmatched requests; without it, unmatched requests use direct.':
+      'Rules run from top to bottom; direct allows and reject blocks. Add fallback: direct or fallback: reject to set the default for unmatched requests; without it, unmatched requests use direct.',
     'Keep management access first': 'Keep management access first',
     'Put direct rules for trusted management IPs above broad reject rules so you do not lock yourself out.':
       'Put direct rules for trusted management IPs above broad reject rules so you do not lock yourself out.',
     'Routing rules': 'Routing rules',
     'Use one daed-style rule per line. Supported matchers: dip(IP, CIDR, geoip:xx, geoip:private), l4proto(tcp), and dport(port). Use # for comments.':
       'Use one daed-style rule per line. Supported matchers: dip(IP, CIDR, geoip:xx, geoip:private), l4proto(tcp), and dport(port). Use # for comments.',
+    'Use Daed routing syntax. Matchers: domain/qname, dip/ip, sip, dport, sport, l4proto, ipversion, mac, pname, and dscp; supports ! negation, fallback, and direct/reject. Use # for comments.':
+      'Use Daed routing syntax. Matchers: domain/qname, dip/ip, sip, dport, sport, l4proto, ipversion, mac, pname, and dscp; supports ! negation, fallback, and direct/reject. Use # for comments.',
   },
   zh: {
     'IP & Region Routing': 'IP 与地区路由',
@@ -3383,14 +3385,16 @@ const ipAccessRoutingTranslations = {
     'Routing rules cannot exceed 16384 bytes.': '路由规则不能超过 16384 字节。',
     'Routing rules are invalid.': '路由规则无效。',
     'First matching rule wins': '首条匹配规则生效',
-    'Rules run from top to bottom. direct allows the request, reject blocks it, and requests that match no rule are allowed.':
-      '规则从上到下执行。direct 允许请求，reject 拒绝请求；未命中任何规则的请求默认允许。',
+    'Rules run from top to bottom; direct allows and reject blocks. Add fallback: direct or fallback: reject to set the default for unmatched requests; without it, unmatched requests use direct.':
+      '规则从上到下执行；direct 允许请求，reject 拒绝请求。可使用 fallback: direct 或 fallback: reject 设置未命中规则时的默认行为；未设置时默认 direct。',
     'Keep management access first': '先保留管理访问',
     'Put direct rules for trusted management IPs above broad reject rules so you do not lock yourself out.':
       '请将可信管理 IP 的 direct 规则放在宽泛的 reject 规则之前，避免把自己锁在系统外。',
     'Routing rules': '路由规则',
     'Use one daed-style rule per line. Supported matchers: dip(IP, CIDR, geoip:xx, geoip:private), l4proto(tcp), and dport(port). Use # for comments.':
       '每行填写一条 daed 风格规则。支持 dip(IP、CIDR、geoip:xx、geoip:private)、l4proto(tcp) 和 dport(port)；使用 # 添加注释。',
+    'Use Daed routing syntax. Matchers: domain/qname, dip/ip, sip, dport, sport, l4proto, ipversion, mac, pname, and dscp; supports ! negation, fallback, and direct/reject. Use # for comments.':
+      '使用 Daed 路由语法。支持 domain/qname、dip/ip、sip、dport、sport、l4proto、ipversion、mac、pname、dscp；支持 ! 取反、fallback 以及 direct/reject。使用 # 添加注释。',
   },
   'zh-TW': {
     'IP & Region Routing': 'IP 與地區路由',
@@ -3399,14 +3403,16 @@ const ipAccessRoutingTranslations = {
       '路由規則不能超過 16384 位元組。',
     'Routing rules are invalid.': '路由規則無效。',
     'First matching rule wins': '首條符合規則生效',
-    'Rules run from top to bottom. direct allows the request, reject blocks it, and requests that match no rule are allowed.':
-      '規則由上而下執行。direct 允許請求，reject 拒絕請求；未符合任何規則的請求預設允許。',
+    'Rules run from top to bottom; direct allows and reject blocks. Add fallback: direct or fallback: reject to set the default for unmatched requests; without it, unmatched requests use direct.':
+      '規則由上而下執行；direct 允許請求，reject 拒絕請求。可使用 fallback: direct 或 fallback: reject 設定未符合規則時的預設行為；未設定時預設 direct。',
     'Keep management access first': '先保留管理存取',
     'Put direct rules for trusted management IPs above broad reject rules so you do not lock yourself out.':
       '請將可信管理 IP 的 direct 規則放在廣泛的 reject 規則之前，避免將自己鎖在系統外。',
     'Routing rules': '路由規則',
     'Use one daed-style rule per line. Supported matchers: dip(IP, CIDR, geoip:xx, geoip:private), l4proto(tcp), and dport(port). Use # for comments.':
       '每行填寫一條 daed 風格規則。支援 dip(IP、CIDR、geoip:xx、geoip:private)、l4proto(tcp) 和 dport(port)；使用 # 加入註解。',
+    'Use Daed routing syntax. Matchers: domain/qname, dip/ip, sip, dport, sport, l4proto, ipversion, mac, pname, and dscp; supports ! negation, fallback, and direct/reject. Use # for comments.':
+      '使用 Daed 路由語法。支援 domain/qname、dip/ip、sip、dport、sport、l4proto、ipversion、mac、pname、dscp；支援 ! 取反、fallback 以及 direct/reject。使用 # 加入註解。',
   },
   fr: {
     'IP & Region Routing': 'Routage IP et régional',
@@ -3416,8 +3422,8 @@ const ipAccessRoutingTranslations = {
       'Les règles de routage ne peuvent pas dépasser 16 384 octets.',
     'Routing rules are invalid.': 'Les règles de routage sont invalides.',
     'First matching rule wins': 'La première règle correspondante s’applique',
-    'Rules run from top to bottom. direct allows the request, reject blocks it, and requests that match no rule are allowed.':
-      'Les règles sont évaluées de haut en bas. direct autorise la requête, reject la bloque et les requêtes sans correspondance sont autorisées.',
+    'Rules run from top to bottom; direct allows and reject blocks. Add fallback: direct or fallback: reject to set the default for unmatched requests; without it, unmatched requests use direct.':
+      'Les règles sont évaluées de haut en bas : direct autorise et reject bloque. Ajoutez fallback: direct ou fallback: reject pour définir le comportement par défaut des requêtes sans correspondance ; sans cela, la valeur par défaut est direct.',
     'Keep management access first':
       'Préserver d’abord l’accès d’administration',
     'Put direct rules for trusted management IPs above broad reject rules so you do not lock yourself out.':
@@ -3425,6 +3431,8 @@ const ipAccessRoutingTranslations = {
     'Routing rules': 'Règles de routage',
     'Use one daed-style rule per line. Supported matchers: dip(IP, CIDR, geoip:xx, geoip:private), l4proto(tcp), and dport(port). Use # for comments.':
       'Utilisez une règle de style daed par ligne. Prédicats pris en charge : dip(IP, CIDR, geoip:xx, geoip:private), l4proto(tcp) et dport(port). Utilisez # pour les commentaires.',
+    'Use Daed routing syntax. Matchers: domain/qname, dip/ip, sip, dport, sport, l4proto, ipversion, mac, pname, and dscp; supports ! negation, fallback, and direct/reject. Use # for comments.':
+      'Utilisez la syntaxe de routage Daed. Prédicats : domain/qname, dip/ip, sip, dport, sport, l4proto, ipversion, mac, pname et dscp ; la négation !, fallback et direct/reject sont pris en charge. Utilisez # pour les commentaires.',
   },
   ja: {
     'IP & Region Routing': 'IP・地域ルーティング',
@@ -3434,14 +3442,16 @@ const ipAccessRoutingTranslations = {
       'ルーティングルールは16384バイト以内にしてください。',
     'Routing rules are invalid.': 'ルーティングルールが無効です。',
     'First matching rule wins': '最初に一致したルールを適用',
-    'Rules run from top to bottom. direct allows the request, reject blocks it, and requests that match no rule are allowed.':
-      'ルールは上から順に評価されます。direct はリクエストを許可し、reject は拒否します。どのルールにも一致しないリクエストは許可されます。',
+    'Rules run from top to bottom; direct allows and reject blocks. Add fallback: direct or fallback: reject to set the default for unmatched requests; without it, unmatched requests use direct.':
+      'ルールは上から順に評価されます。direct は許可、reject は拒否です。未一致時の既定動作は fallback: direct または fallback: reject で指定でき、未指定時は direct になります。',
     'Keep management access first': '管理アクセスを先に確保',
     'Put direct rules for trusted management IPs above broad reject rules so you do not lock yourself out.':
       'ロックアウトを防ぐため、信頼済み管理IPの direct ルールを広範な reject ルールより上に配置してください。',
     'Routing rules': 'ルーティングルール',
     'Use one daed-style rule per line. Supported matchers: dip(IP, CIDR, geoip:xx, geoip:private), l4proto(tcp), and dport(port). Use # for comments.':
       '1行に1つの daed 形式ルールを記述します。対応条件は dip(IP, CIDR, geoip:xx, geoip:private)、l4proto(tcp)、dport(port) です。コメントには # を使用します。',
+    'Use Daed routing syntax. Matchers: domain/qname, dip/ip, sip, dport, sport, l4proto, ipversion, mac, pname, and dscp; supports ! negation, fallback, and direct/reject. Use # for comments.':
+      'Daed ルーティング構文を使用します。条件は domain/qname、dip/ip、sip、dport、sport、l4proto、ipversion、mac、pname、dscp に対応し、! の否定、fallback、direct/reject も使用できます。コメントには # を使います。',
   },
   ru: {
     'IP & Region Routing': 'Маршрутизация по IP и регионам',
@@ -3451,14 +3461,16 @@ const ipAccessRoutingTranslations = {
       'Правила маршрутизации не должны превышать 16 384 байта.',
     'Routing rules are invalid.': 'Правила маршрутизации недействительны.',
     'First matching rule wins': 'Применяется первое совпавшее правило',
-    'Rules run from top to bottom. direct allows the request, reject blocks it, and requests that match no rule are allowed.':
-      'Правила проверяются сверху вниз. direct разрешает запрос, reject блокирует его, а запросы без совпадений разрешаются.',
+    'Rules run from top to bottom; direct allows and reject blocks. Add fallback: direct or fallback: reject to set the default for unmatched requests; without it, unmatched requests use direct.':
+      'Правила проверяются сверху вниз: direct разрешает, а reject блокирует запрос. Для поведения при отсутствии совпадения используйте fallback: direct или fallback: reject; без него применяется direct.',
     'Keep management access first': 'Сначала сохраните административный доступ',
     'Put direct rules for trusted management IPs above broad reject rules so you do not lock yourself out.':
       'Поместите правила direct для доверенных административных IP-адресов выше общих правил reject, чтобы не заблокировать себе доступ.',
     'Routing rules': 'Правила маршрутизации',
     'Use one daed-style rule per line. Supported matchers: dip(IP, CIDR, geoip:xx, geoip:private), l4proto(tcp), and dport(port). Use # for comments.':
       'Указывайте по одному правилу в стиле daed на строку. Поддерживаются dip(IP, CIDR, geoip:xx, geoip:private), l4proto(tcp) и dport(port). Для комментариев используйте #.',
+    'Use Daed routing syntax. Matchers: domain/qname, dip/ip, sip, dport, sport, l4proto, ipversion, mac, pname, and dscp; supports ! negation, fallback, and direct/reject. Use # for comments.':
+      'Используйте синтаксис маршрутизации Daed. Поддерживаются условия domain/qname, dip/ip, sip, dport, sport, l4proto, ipversion, mac и pname, dscp, а также отрицание !, fallback и direct/reject. Для комментариев используйте #.',
   },
   vi: {
     'IP & Region Routing': 'Định tuyến IP và khu vực',
@@ -3468,14 +3480,16 @@ const ipAccessRoutingTranslations = {
       'Quy tắc định tuyến không được vượt quá 16384 byte.',
     'Routing rules are invalid.': 'Quy tắc định tuyến không hợp lệ.',
     'First matching rule wins': 'Áp dụng quy tắc khớp đầu tiên',
-    'Rules run from top to bottom. direct allows the request, reject blocks it, and requests that match no rule are allowed.':
-      'Quy tắc chạy từ trên xuống. direct cho phép yêu cầu, reject chặn yêu cầu; yêu cầu không khớp quy tắc nào sẽ được phép.',
+    'Rules run from top to bottom; direct allows and reject blocks. Add fallback: direct or fallback: reject to set the default for unmatched requests; without it, unmatched requests use direct.':
+      'Quy tắc được xét từ trên xuống; direct cho phép và reject chặn yêu cầu. Dùng fallback: direct hoặc fallback: reject để đặt hành vi mặc định khi không khớp; nếu bỏ qua thì mặc định là direct.',
     'Keep management access first': 'Ưu tiên giữ quyền truy cập quản trị',
     'Put direct rules for trusted management IPs above broad reject rules so you do not lock yourself out.':
       'Đặt quy tắc direct cho IP quản trị tin cậy phía trên các quy tắc reject rộng để tránh tự khóa quyền truy cập.',
     'Routing rules': 'Quy tắc định tuyến',
     'Use one daed-style rule per line. Supported matchers: dip(IP, CIDR, geoip:xx, geoip:private), l4proto(tcp), and dport(port). Use # for comments.':
       'Mỗi dòng dùng một quy tắc kiểu daed. Hỗ trợ dip(IP, CIDR, geoip:xx, geoip:private), l4proto(tcp) và dport(port). Dùng # cho chú thích.',
+    'Use Daed routing syntax. Matchers: domain/qname, dip/ip, sip, dport, sport, l4proto, ipversion, mac, pname, and dscp; supports ! negation, fallback, and direct/reject. Use # for comments.':
+      'Sử dụng cú pháp định tuyến Daed. Hỗ trợ các điều kiện domain/qname, dip/ip, sip, dport, sport, l4proto, ipversion, mac, pname và dscp; hỗ trợ phủ định !, fallback và direct/reject. Dùng # cho chú thích.',
   },
 }
 

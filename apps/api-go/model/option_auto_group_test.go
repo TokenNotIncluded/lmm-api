@@ -29,7 +29,7 @@ func TestValidateOptionValueRejectsUnavailableAssistantReviewModel(t *testing.T)
 
 func TestValidateIPAccessRoutingOptions(t *testing.T) {
 	require.NoError(t, validateOptionValue(setting.IPAccessRoutingRulesOptionKey, setting.DefaultIPAccessRoutingRules))
-	assert.Error(t, validateOptionValue(setting.IPAccessRoutingRulesOptionKey, "domain(example.com) -> direct"))
+	require.NoError(t, validateOptionValue(setting.IPAccessRoutingRulesOptionKey, "domain(example.com) -> direct"))
 	assert.Error(t, validateOptionValue(setting.IPAccessRoutingRulesOptionKey, "dip(geoip:china) -> reject"))
 	for key := range retiredIPAccessOptionKeys {
 		assert.ErrorContains(t, validateOptionValue(key, "false"), "retired")

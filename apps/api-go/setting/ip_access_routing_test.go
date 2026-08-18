@@ -125,12 +125,62 @@ dip(geoip:cn) -> reject
 	assert.Equal(t, 1, line)
 }
 
+func TestIPAccessRoutingSupportsAllTrafficRulePredicates(t *testing.T) {
+	withIPAccessRoutingRules(t, `
+domain(full:api.example.com) && sip(203.0.113.0/24) && sport(1000-2000) && l4proto(tcp) && dport(443) && ipversion(4) && mac('02:42:ac:11:00:02') && pname(curl) && dscp(0x4) -> reject
+fallback: direct
+`)
+
+	action, line, err := EvaluateIPAccessRoute(IPAccessRouteRequest{
+		ClientIP:        "203.0.113.8",
+		Domain:          "api.example.com",
+		L4Protocol:      "tcp",
+		DestinationPort: 443,
+		SourcePort:      1500,
+		SourceMAC:       "02:42:ac:11:00:02",
+		ProcessName:     "curl",
+		DSCP:            4,
+		DSCPSet:         true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, IPAccessRouteReject, action)
+	assert.Equal(t, 1, line)
+
+	action, line, err = EvaluateIPAccessRoute(IPAccessRouteRequest{
+		ClientIP:        "198.51.100.8",
+		Domain:          "api.example.com",
+		L4Protocol:      "tcp",
+		DestinationPort: 443,
+		SourcePort:      1500,
+		SourceMAC:       "02:42:ac:11:00:02",
+		ProcessName:     "curl",
+		DSCP:            4,
+		DSCPSet:         true,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, IPAccessRouteDirect, action)
+	assert.Zero(t, line)
+}
+
+func TestIPAccessRoutingUsesFallbackWhenNoRuleMatches(t *testing.T) {
+	withIPAccessRoutingRules(t, "fallback: reject")
+
+	action, line, err := EvaluateIPAccessRoute(IPAccessRouteRequest{ClientIP: "203.0.113.8"})
+	require.NoError(t, err)
+	assert.Equal(t, IPAccessRouteReject, action)
+	assert.Zero(t, line)
+}
+
 func TestParseIPAccessRoutingRulesValidatesDaedSubset(t *testing.T) {
 	valid := []string{
 		"dip(203.0.113.8) -> direct",
 		"dip(203.0.113.0/24, 2001:db8::/32) -> reject",
 		"dip(geoip:cn, geoip:private) && l4proto(tcp) && dport(80, 443) -> reject",
 		"# comment\ndip(::ffff:192.0.2.4) -> direct # inline comment",
+		"domain(example.com) && sip(192.0.2.0/24) && sport(1000-2000) -> direct",
+		"!domain(regex: '^ads\\\\.') && ipversion(4) && mac('02:42:ac:11:00:02') -> block",
+		"pname(NetworkManager) && dscp(0x4) && l4proto(udp) -> must_direct",
+		"routing {\nfallback: reject\ndip(geoip:private) -> direct\n}",
 	}
 	for _, rules := range valid {
 		_, err := ParseIPAccessRoutingRules(rules)
@@ -138,17 +188,14 @@ func TestParseIPAccessRoutingRulesValidatesDaedSubset(t *testing.T) {
 	}
 
 	invalid := map[string]string{
-		"":                                           "at least one rule",
-		"# comments only":                            "at least one rule",
-		"dip(geoip:china) -> reject":                 "invalid geoip",
-		"dip(not-an-ip) -> direct":                   "invalid dip value",
-		"dip(192.0.2.1) -> proxy":                    "action must be direct or reject",
-		"domain(example.com) -> direct":              "not available for inbound HTTP routing",
-		"pname(nginx) -> direct":                     "not available for inbound HTTP routing",
-		"l4proto(tcp) -> direct":                     "must include dip()",
-		"dip(192.0.2.1) && l4proto(udp) -> direct":   "supports only l4proto(tcp)",
-		"dip(192.0.2.1) && dport(0) -> direct":       "between 1 and 65535",
+		"":                                     "at least one rule",
+		"# comments only":                      "at least one rule",
+		"dip(geoip:china) -> reject":           "invalid geoip",
+		"dip(not-an-ip) -> direct":             "invalid dip value",
+		"dip(192.0.2.1) -> proxy":              "action must be direct or reject",
+		"dip(192.0.2.1) && dport(0) -> direct": "between 1 and 65535",
 		"dip(192.0.2.1) && dip(192.0.2.2) -> direct": "duplicate dip()",
+		"unknown(thing) -> direct":                   "unsupported condition",
 	}
 	for rules, message := range invalid {
 		_, err := ParseIPAccessRoutingRules(rules)

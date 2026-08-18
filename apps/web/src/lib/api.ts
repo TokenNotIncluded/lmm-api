@@ -83,6 +83,9 @@ export async function getUserGroups(): Promise<{
 export async function getStatus() {
   const res = await api.get('/api/status', {
     timeout: 10_000,
+    // Capability probing is public. An expired anonymous session must not
+    // trigger refresh/redirect logic before registration can render.
+    skipAuthRefresh: true,
     // Capability probing is best-effort; callers render their own fallback.
     skipBusinessError: true,
     skipErrorHandler: true,
