@@ -86,6 +86,7 @@ import {
   isWaffoPancakeCurrencySupported,
   isWaffoPancakePayment,
 } from '../lib'
+import { discountCodeSavings } from '../lib/discount-state'
 import type { TopupAvailability } from '../lib/payment'
 import type {
   PaymentMethod,
@@ -114,6 +115,7 @@ interface RechargeFormCardProps {
   onRedeem: () => void
   redeeming: boolean
   discountCode?: string
+  discountCodeFromUrl?: boolean
   onDiscountCodeChange?: (code: string) => void
   onApplyDiscount?: () => void
   discountApplying?: boolean
@@ -151,6 +153,7 @@ export function RechargeFormCard({
   onRedeem,
   redeeming,
   discountCode = '',
+  discountCodeFromUrl = false,
   onDiscountCodeChange,
   onApplyDiscount,
   discountApplying = false,
@@ -208,6 +211,10 @@ export function RechargeFormCard({
     ? paymentAmount / customDiscount
     : paymentAmount
   const customDiscountAmount = customOriginalPayment - paymentAmount
+  const discountCodeSavingAmount = discountCodeSavings(
+    paymentAmount,
+    discountPercent
+  )
   const defaultPaymentType = getDefaultPaymentType(topupInfo)
   const effectivePaymentMethod =
     selectedPaymentMethod ??
@@ -978,7 +985,9 @@ export function RechargeFormCard({
               htmlFor='discount-code'
               className='text-muted-foreground text-xs font-medium tracking-wider uppercase'
             >
-              {t('Discount code')}
+              {discountCodeFromUrl
+                ? t('Discount code from URL')
+                : t('Discount code')}
             </Label>
           </div>
           <div className='grid grid-cols-[minmax(0,1fr)_auto] gap-2'>
@@ -987,13 +996,20 @@ export function RechargeFormCard({
               value={discountCode}
               onChange={(e) => onDiscountCodeChange?.(e.target.value)}
               placeholder={t('Enter your discount code')}
-              className='h-9 min-w-0 uppercase'
+              readOnly={discountCodeFromUrl}
+              aria-readonly={discountCodeFromUrl}
+              className={cn(
+                'h-9 min-w-0 uppercase',
+                discountCodeFromUrl && 'bg-muted font-mono'
+              )}
               autoComplete='off'
               maxLength={64}
             />
             <Button
               onClick={onApplyDiscount}
-              disabled={discountApplying || !discountCode.trim()}
+              disabled={
+                discountCodeFromUrl || discountApplying || !discountCode.trim()
+              }
               variant='outline'
               className='h-9 px-4'
             >
@@ -1004,15 +1020,33 @@ export function RechargeFormCard({
                   data-icon='inline-start'
                 />
               )}
-              {t('Apply')}
+              {discountCodeFromUrl && discountPercent !== null
+                ? t('Applied')
+                : t('Apply')}
             </Button>
           </div>
-          {discountPercent !== null && discountPercent !== undefined ? (
-            <p className='text-success text-xs'>
-              {t('Discount applied: {{percent}}% off', {
-                percent: discountPercent,
-              })}
+          {discountCodeFromUrl ? (
+            <p className='text-muted-foreground text-xs'>
+              {t('This code came from the checkout link and cannot be edited.')}
             </p>
+          ) : null}
+          {discountPercent !== null && discountPercent !== undefined ? (
+            <div className='text-success flex flex-wrap items-center gap-x-3 gap-y-1 text-xs'>
+              <span>
+                {t('Discount applied: {{percent}}% off', {
+                  percent: discountPercent,
+                })}
+              </span>
+              {discountCodeSavingAmount > 0 ? (
+                <span className='font-medium'>
+                  {t('Discount code saves {{amount}}', {
+                    amount: formatSelectedPaymentAmount(
+                      discountCodeSavingAmount
+                    ),
+                  })}
+                </span>
+              ) : null}
+            </div>
           ) : (
             <p className='text-muted-foreground text-xs'>
               {t(
