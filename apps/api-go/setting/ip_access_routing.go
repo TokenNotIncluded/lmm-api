@@ -280,6 +280,10 @@ func parseIPAccessRouteRule(line string, lineNumber int) (ipAccessRouteRule, err
 			parsed.ipDirection = ipAccessIPSource
 			parsed.ipMatchers, err = parseIPAccessDIPMatchers(arguments, lineNumber)
 		case "domain", "qname":
+			if name == "qname" {
+				err = fmt.Errorf("line %d: qname() is a DNS-only Daed matcher and is unavailable for inbound HTTP routing", lineNumber)
+				break
+			}
 			parsed.kind = ipAccessConditionDomain
 			parsed.domains, err = parseIPAccessDomainMatchers(arguments, lineNumber)
 		case "l4proto":
@@ -295,17 +299,11 @@ func parseIPAccessRouteRule(line string, lineNumber int) (ipAccessRouteRule, err
 			parsed.kind = ipAccessConditionIPVersion
 			parsed.ipVersions, err = parseIPAccessVersions(arguments, lineNumber)
 		case "mac":
-			parsed.kind = ipAccessConditionMAC
-			parsed.macs, err = parseIPAccessMACs(arguments, lineNumber)
+			err = fmt.Errorf("line %d: mac() requires packet metadata unavailable to inbound HTTP routing", lineNumber)
 		case "pname":
-			parsed.kind = ipAccessConditionProcess
-			parsed.processes = make(map[string]struct{}, len(arguments))
-			for _, argument := range arguments {
-				parsed.processes[strings.ToLower(argument)] = struct{}{}
-			}
+			err = fmt.Errorf("line %d: pname() requires local-process metadata unavailable to inbound HTTP routing", lineNumber)
 		case "dscp":
-			parsed.kind = ipAccessConditionDSCP
-			parsed.dscps, err = parseIPAccessDSCPs(arguments, lineNumber)
+			err = fmt.Errorf("line %d: dscp() requires packet metadata unavailable to inbound HTTP routing", lineNumber)
 		default:
 			err = fmt.Errorf("line %d: unsupported condition %s()", lineNumber, name)
 		}
@@ -455,9 +453,7 @@ func parseIPAccessDIPMatchers(arguments []string, lineNumber int) ([]ipAccessMat
 				return nil, fmt.Errorf("line %d: invalid geoip value %q; use geoip:xx or geoip:private", lineNumber, argument)
 			}
 		} else if strings.HasPrefix(lower, "ext:") {
-			matcher.kind = ipAccessMatcherExternal
-			matcher.external = argument[len("ext:"):]
-			canonical = "ext:" + strings.ToLower(matcher.external)
+			return nil, fmt.Errorf("line %d: ext: IP matchers require a Daed DAT source unavailable to inbound HTTP routing", lineNumber)
 		} else {
 			prefix, err := parseIPAccessPrefix(argument)
 			if err != nil {
@@ -493,9 +489,9 @@ func parseIPAccessDomainMatchers(arguments []string, lineNumber int) ([]ipAccess
 			case "regex":
 				kind = ipAccessDomainRegex
 			case "geosite":
-				kind = ipAccessDomainGeoSite
+				return nil, fmt.Errorf("line %d: geosite domain matchers require a Daed geosite source unavailable to inbound HTTP routing", lineNumber)
 			case "ext":
-				kind = ipAccessDomainExternal
+				return nil, fmt.Errorf("line %d: ext domain matchers require a Daed DAT source unavailable to inbound HTTP routing", lineNumber)
 			default:
 				return nil, fmt.Errorf("line %d: unsupported domain matcher %q", lineNumber, prefix)
 			}

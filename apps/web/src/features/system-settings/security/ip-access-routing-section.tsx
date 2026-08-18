@@ -149,7 +149,7 @@ export function IPAccessRoutingSection({ defaultValues }: Props) {
                 </FormControl>
                 <FormDescription>
                   {t(
-                    'Use Daed routing syntax. Matchers: domain/qname, dip/ip, sip, dport, sport, l4proto, ipversion, mac, pname, and dscp; supports ! negation, fallback, and direct/reject. Use # for comments.'
+                    'Use one Daed-style rule per line. This HTTP edge supports domain(full/suffix/keyword/regex), dip/ip, sip, dport, sport, l4proto, ipversion, ! negation, fallback, and direct/reject. geosite/ext/qname/mac/pname/dscp need packet or DNS data and are rejected when saved. Use # for comments.'
                   )}
                 </FormDescription>
                 <FormMessage />

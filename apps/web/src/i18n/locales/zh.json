@@ -7041,6 +7041,7 @@
     "Use one available reset credit to refresh the current Codex usage windows.": "使用 1 次可用重置次数，刷新当前 Codex 用量窗口。",
     "Use one clear API for your work, connect a client, or explore public open-source challenges.": "用一个清晰的 API 完成工作、连接客户端，或探索公开的开源任务。",
     "Use one daed-style rule per line. Supported matchers: dip(IP, CIDR, geoip:xx, geoip:private), l4proto(tcp), and dport(port). Use # for comments.": "每行填写一条 daed 风格规则。支持 dip(IP、CIDR、geoip:xx、geoip:private)、l4proto(tcp) 和 dport(port)；使用 # 添加注释。",
+    "Use one Daed-style rule per line. This HTTP edge supports domain(full/suffix/keyword/regex), dip/ip, sip, dport, sport, l4proto, ipversion, ! negation, fallback, and direct/reject. geosite/ext/qname/mac/pname/dscp need packet or DNS data and are rejected when saved. Use # for comments.": "每行填写一条 Daed 风格规则。当前 HTTP 边缘支持 domain(full/suffix/keyword/regex)、dip/ip、sip、dport、sport、l4proto、ipversion、! 取反、fallback 以及 direct/reject。geosite/ext/qname/mac/pname/dscp 需要数据包或 DNS 数据，保存时会被拒绝。使用 # 添加注释。",
     "Use one personal token to let an AI publish, accept, verify, dispute, tip, rate, and settle bounties through /mcp.": "使用一个个人令牌即可让 AI 通过 /mcp 发布、接受、验证、争议、打赏、评价并结算悬赏。",
     "Use our unified OpenAI-compatible endpoint in your applications": "在应用中使用我们兼容 OpenAI 的统一接口",
     "Use Passkey or 2FA to confirm your identity before revealing this channel key.": "请使用 Passkey 或双重身份验证确认身份后再查看此渠道密钥。",

@@ -7041,6 +7041,7 @@
     "Use one available reset credit to refresh the current Codex usage windows.": "利用可能なリセット回数を1回使用して、現在の Codex 使用量ウィンドウを更新します。",
     "Use one clear API for your work, connect a client, or explore public open-source challenges.": "ひとつの API で作業し、クライアントを接続し、公開オープンソースの課題を探せます。",
     "Use one daed-style rule per line. Supported matchers: dip(IP, CIDR, geoip:xx, geoip:private), l4proto(tcp), and dport(port). Use # for comments.": "1行に1つの daed 形式ルールを記述します。対応条件は dip(IP, CIDR, geoip:xx, geoip:private)、l4proto(tcp)、dport(port) です。コメントには # を使用します。",
+    "Use one Daed-style rule per line. This HTTP edge supports domain(full/suffix/keyword/regex), dip/ip, sip, dport, sport, l4proto, ipversion, ! negation, fallback, and direct/reject. geosite/ext/qname/mac/pname/dscp need packet or DNS data and are rejected when saved. Use # for comments.": "1行に1つの Daed 形式ルールを記述します。この HTTP エッジは domain(full/suffix/keyword/regex)、dip/ip、sip、dport、sport、l4proto、ipversion、! の否定、fallback、direct/reject に対応します。geosite/ext/qname/mac/pname/dscp はパケットまたは DNS データが必要なため、保存時に拒否されます。コメントには # を使用します。",
     "Use one personal token to let an AI publish, accept, verify, dispute, tip, rate, and settle bounties through /mcp.": "1 つの個人トークンで、AI が /mcp 経由で報奨金の公開、受諾、検証、異議申し立て、チップ、評価、決済を行えます。",
     "Use our unified OpenAI-compatible endpoint in your applications": "アプリケーションでOpenAI互換の統一エンドポイントを使用",
     "Use Passkey or 2FA to confirm your identity before revealing this channel key.": "チャネルキーを表示する前に、Passkey または 2FA で本人確認を行ってください。",
