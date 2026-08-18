@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,19 +19,36 @@ func TestLoopbackPeerAcceptsOnlyLoopbackAddresses(t *testing.T) {
 	assert.False(t, loopbackPeer("not-an-address"))
 }
 
-func TestPersonalAccessIPPolicyMarksOnlyDeniedRequests(t *testing.T) {
-	gin.SetMode(gin.TestMode)
+func TestPersonalAccessIPCompatibilityEndpointIsRetired(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodGet, "/api/user/access-ip", nil)
 
-	t.Run("anonymous CN request is marked denied", func(t *testing.T) {
+	PersonalAccessIPRetired(context)
+
+	assert.Equal(t, http.StatusGone, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "PERSONAL_IP_ACCESS_RETIRED")
+}
+
+func TestIPAccessRoutingPolicyMarksOnlyDeniedRequests(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalRules := setting.GetIPAccessRoutingRules()
+	require.NoError(t, setting.UpdateIPAccessRoutingRules(setting.DefaultIPAccessRoutingRules))
+	t.Cleanup(func() {
+		require.NoError(t, setting.UpdateIPAccessRoutingRules(originalRules))
+	})
+
+	t.Run("China request is marked denied", func(t *testing.T) {
 		recorder := httptest.NewRecorder()
 		context, _ := gin.CreateTestContext(recorder)
 		context.Request = httptest.NewRequest(http.MethodGet, "/internal/access-ip-policy", nil)
 		context.Request.RemoteAddr = "127.0.0.1:42000"
 		context.Request.Header.Set("X-LMM-CN-Source", "1")
+		context.Request.Header.Set("X-Original-Client-IP", "203.0.113.8")
 
-		CheckPersonalAccessIPPolicy(context)
+		CheckIPAccessRoutingPolicy(context)
 
-		assert.Equal(t, http.StatusUnauthorized, context.Writer.Status())
+		assert.Equal(t, http.StatusForbidden, context.Writer.Status())
 		assert.Equal(t, accessPolicyDenied, recorder.Header().Get(accessPolicyResultHeader))
 	})
 
@@ -40,8 +57,9 @@ func TestPersonalAccessIPPolicyMarksOnlyDeniedRequests(t *testing.T) {
 		context, _ := gin.CreateTestContext(recorder)
 		context.Request = httptest.NewRequest(http.MethodGet, "/internal/access-ip-policy", nil)
 		context.Request.RemoteAddr = "127.0.0.1:42000"
+		context.Request.Header.Set("X-Original-Client-IP", "203.0.113.8")
 
-		CheckPersonalAccessIPPolicy(context)
+		CheckIPAccessRoutingPolicy(context)
 
 		assert.Equal(t, http.StatusForbidden, context.Writer.Status())
 		assert.Equal(t, accessPolicyDenied, recorder.Header().Get(accessPolicyResultHeader))
@@ -55,24 +73,26 @@ func TestPersonalAccessIPPolicyMarksOnlyDeniedRequests(t *testing.T) {
 		context.Request.Header.Set("X-LMM-Edge-Country", "US")
 		context.Request.Header.Set("X-LMM-CN-Source", "0")
 
-		CheckPersonalAccessIPPolicy(context)
+		CheckIPAccessRoutingPolicy(context)
 
 		assert.Equal(t, http.StatusForbidden, context.Writer.Status())
 		assert.Equal(t, accessPolicyDenied, recorder.Header().Get(accessPolicyResultHeader))
 	})
 
-	t.Run("disabled policy allows blocked country", func(t *testing.T) {
-		previous := common.IsRegionAccessPolicyEnabled()
-		common.SetRegionAccessPolicyEnabled(false)
-		t.Cleanup(func() { common.SetRegionAccessPolicyEnabled(previous) })
+	t.Run("specific direct rule overrides broader country rejection", func(t *testing.T) {
+		require.NoError(t, setting.UpdateIPAccessRoutingRules("dip(203.0.113.8) -> direct\ndip(geoip:cn) -> reject"))
+		t.Cleanup(func() {
+			require.NoError(t, setting.UpdateIPAccessRoutingRules(setting.DefaultIPAccessRoutingRules))
+		})
 
 		recorder := httptest.NewRecorder()
 		context, _ := gin.CreateTestContext(recorder)
 		context.Request = httptest.NewRequest(http.MethodGet, "/internal/access-ip-policy", nil)
 		context.Request.RemoteAddr = "127.0.0.1:42000"
 		context.Request.Header.Set("X-LMM-CN-Source", "1")
+		context.Request.Header.Set("X-Original-Client-IP", "203.0.113.8")
 
-		CheckPersonalAccessIPPolicy(context)
+		CheckIPAccessRoutingPolicy(context)
 
 		assert.Equal(t, http.StatusNoContent, context.Writer.Status())
 		assert.Empty(t, recorder.Header().Get(accessPolicyResultHeader))
@@ -106,11 +126,11 @@ func TestAccessPolicyErrorPageRequiresCapturedDenial(t *testing.T) {
 	require.Equal(t, http.StatusUnavailableForLegalReasons, status)
 	assert.Contains(t, response.Header().Get("Content-Type"), "text/html")
 	body := response.Body.String()
-	assert.Contains(t, body, "您所在地区暂不支持直接访问")
+	assert.Contains(t, body, "当前网络请求已被拒绝")
 	assert.Contains(t, body, "疑难解答")
 	assert.Contains(t, body, "203.0.113.42")
 	assert.Contains(t, body, "IPv4")
-	assert.Contains(t, body, "region_denied")
+	assert.Contains(t, body, "route_reject")
 	assert.NotContains(t, body, "符合条件的账号")
 
 	status, _ = request("127.0.0.1:42000", map[string]string{

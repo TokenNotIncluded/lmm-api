@@ -30,8 +30,6 @@ const defaultOperationsSettings: OperationsSettings = {
   DefaultCollapseSidebar: false,
   DemoSiteEnabled: false,
   SelfUseModeEnabled: false,
-  RegionAccessPolicyEnabled: true,
-  RegionBlockedCountryCodes: 'CN',
   QuotaRemindThreshold: '',
   SMTPServer: '',
   SMTPPort: '',

@@ -28,7 +28,6 @@ import type {
   DeleteAccountRequest,
   CheckinStatusResponse,
   CheckinResponse,
-  PersonalAccessIPPolicy,
   GiftItem,
   GiftClaimResponse,
 } from './types'
@@ -84,25 +83,6 @@ export async function deleteUserAccount(
   data?: DeleteAccountRequest
 ): Promise<ApiResponse> {
   const res = await api.delete('/api/user/self', { data })
-  return res.data
-}
-
-export async function getPersonalAccessIP(): Promise<
-  ApiResponse<PersonalAccessIPPolicy>
-> {
-  const res = await api.get('/api/user/access-ip')
-  return res.data
-}
-
-export async function setPersonalAccessIP(
-  ip: string
-): Promise<ApiResponse<PersonalAccessIPPolicy>> {
-  const res = await api.put('/api/user/access-ip', { ip })
-  return res.data
-}
-
-export async function deletePersonalAccessIP(): Promise<ApiResponse> {
-  const res = await api.delete('/api/user/access-ip')
   return res.data
 }
 

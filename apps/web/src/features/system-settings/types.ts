@@ -495,8 +495,6 @@ export type OperationsSettings = {
   DefaultCollapseSidebar: boolean
   DemoSiteEnabled: boolean
   SelfUseModeEnabled: boolean
-  RegionAccessPolicyEnabled: boolean
-  RegionBlockedCountryCodes: string
   QuotaRemindThreshold: string
   SMTPServer: string
   SMTPPort: string
@@ -543,8 +541,7 @@ export type SecuritySettings = {
   AntiRelayHTTPSOnlyEnabled: boolean
   AntiRelayBlockedCIDRs: string[]
   AntiRelayTrustedProxyCIDRs: string[]
-  GlobalIPWhitelistEnabled: boolean
-  GlobalIPWhitelistCIDRs: string[]
+  IPAccessRoutingRules: string
   'fetch_setting.enable_ssrf_protection': boolean
   'fetch_setting.allow_private_ip': boolean
   'fetch_setting.domain_filter_mode': boolean

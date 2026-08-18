@@ -51,8 +51,6 @@ function benefitLabel(code: string, t: (key: string) => string) {
       return t('Developer console access')
     case 'usage_discount':
       return t('Usage discount')
-    case 'personal_ip_allowlist':
-      return t('One personal IP allowlist entry')
     case 'standard_access':
       return t('Standard access')
     default:

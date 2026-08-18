@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/LIghtJUNction/api.lmm.best/common"
+	"github.com/LIghtJUNction/api.lmm.best/setting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -26,44 +27,42 @@ func TestValidateOptionValueRejectsUnavailableAssistantReviewModel(t *testing.T)
 	require.Error(t, validateOptionValue("AssistantReviewModel", "review-missing"))
 }
 
-func TestValidateRegionPolicyOptions(t *testing.T) {
-	for _, value := range []string{"", "1", "yes", "TRUE", "False"} {
-		t.Run("enabled/"+value, func(t *testing.T) {
-			assert.Error(t, validateOptionValue(common.RegionAccessPolicyEnabledOptionKey, value))
-		})
+func TestValidateIPAccessRoutingOptions(t *testing.T) {
+	require.NoError(t, validateOptionValue(setting.IPAccessRoutingRulesOptionKey, setting.DefaultIPAccessRoutingRules))
+	assert.Error(t, validateOptionValue(setting.IPAccessRoutingRulesOptionKey, "domain(example.com) -> direct"))
+	assert.Error(t, validateOptionValue(setting.IPAccessRoutingRulesOptionKey, "dip(geoip:china) -> reject"))
+	for key := range retiredIPAccessOptionKeys {
+		assert.ErrorContains(t, validateOptionValue(key, "false"), "retired")
 	}
-	for _, value := range []string{"true", "false"} {
-		t.Run("enabled/"+value, func(t *testing.T) {
-			require.NoError(t, validateOptionValue(common.RegionAccessPolicyEnabledOptionKey, value))
-		})
-	}
-
-	for _, value := range []string{"", "CN;US", "USA", "C"} {
-		t.Run("blocked-countries/"+value, func(t *testing.T) {
-			assert.Error(t, validateOptionValue(common.RegionBlockedCountryCodesOptionKey, value))
-		})
-	}
-	require.NoError(t, validateOptionValue(common.RegionBlockedCountryCodesOptionKey, " cn,US,CN "))
 }
 
-func TestUpdateOptionMapRejectsMalformedRegionPolicyWithoutMutation(t *testing.T) {
+func TestUpdateOptionMapRejectsMalformedIPAccessRoutingWithoutMutation(t *testing.T) {
 	previousOptions := common.OptionMap
-	previousEnabled := common.IsRegionAccessPolicyEnabled()
-	previousCodes := common.RegionBlockedCountryCodesString()
+	previousRules := setting.GetIPAccessRoutingRules()
 	common.OptionMap = map[string]string{}
-	common.SetRegionAccessPolicyEnabled(true)
-	_ = common.SetRegionBlockedCountryCodes("CN")
+	require.NoError(t, setting.UpdateIPAccessRoutingRules(setting.DefaultIPAccessRoutingRules))
 	t.Cleanup(func() {
 		common.OptionMap = previousOptions
-		common.SetRegionAccessPolicyEnabled(previousEnabled)
-		_ = common.SetRegionBlockedCountryCodes(previousCodes)
+		require.NoError(t, setting.UpdateIPAccessRoutingRules(previousRules))
 	})
 
-	assert.Error(t, updateOptionMap(common.RegionAccessPolicyEnabledOptionKey, "not-a-bool"))
-	assert.True(t, common.IsRegionAccessPolicyEnabled())
-	assert.NotContains(t, common.OptionMap, common.RegionAccessPolicyEnabledOptionKey)
+	assert.Error(t, updateOptionMap(setting.IPAccessRoutingRulesOptionKey, "not a route"))
+	assert.Equal(t, setting.DefaultIPAccessRoutingRules, setting.GetIPAccessRoutingRules())
+	assert.NotContains(t, common.OptionMap, setting.IPAccessRoutingRulesOptionKey)
+}
 
-	assert.Error(t, updateOptionMap(common.RegionBlockedCountryCodesOptionKey, "CN;US"))
-	assert.Equal(t, "CN", common.RegionBlockedCountryCodesString())
-	assert.NotContains(t, common.OptionMap, common.RegionBlockedCountryCodesOptionKey)
+func TestUpdateOptionMapIgnoresRetiredIPAccessOptions(t *testing.T) {
+	previousOptions := common.OptionMap
+	common.OptionMap = map[string]string{
+		"GlobalIPWhitelistEnabled":  "true",
+		"GlobalIPWhitelistCIDRs":    `["203.0.113.8"]`,
+		"RegionAccessPolicyEnabled": "true",
+		"RegionBlockedCountryCodes": "CN",
+	}
+	t.Cleanup(func() { common.OptionMap = previousOptions })
+
+	for key := range retiredIPAccessOptionKeys {
+		require.NoError(t, updateOptionMap(key, "legacy"))
+		assert.NotContains(t, common.OptionMap, key)
+	}
 }

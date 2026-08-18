@@ -71,15 +71,9 @@ func TestAssistantAdminConfigExposesSafeDynamicPricingAndGroupWarnings(t *testin
 
 func TestAssistantAdminConfigExposesNonSecretRuntimeControls(t *testing.T) {
 	labels := assistantAdminAvailableConfigLabels()
-	assert.Contains(t, labels, common.RegionAccessPolicyEnabledOptionKey)
-	assert.Contains(t, labels, common.RegionBlockedCountryCodesOptionKey)
 	assert.Contains(t, labels, "WaffoPancakeMerchantID")
 	assert.NotContains(t, labels, "WaffoPancakePrivateKey")
 
-	require.NoError(t, validateAssistantAdminConfigValue(common.RegionAccessPolicyEnabledOptionKey, "false"))
-	require.NoError(t, validateAssistantAdminConfigValue(common.RegionBlockedCountryCodesOptionKey, "cn,US,CN"))
-	require.Error(t, validateAssistantAdminConfigValue(common.RegionAccessPolicyEnabledOptionKey, "enabled"))
-	require.Error(t, validateAssistantAdminConfigValue(common.RegionBlockedCountryCodesOptionKey, "CN;US"))
 	require.NoError(t, validateAssistantAdminConfigValue("WaffoPancakeMerchantID", "merchant-from-dashboard"))
 	require.Error(t, validateAssistantAdminConfigValue("TelegramOAuthEnabled", "enabled"))
 }

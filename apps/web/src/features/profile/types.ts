@@ -29,15 +29,6 @@ export interface ApiResponse<T = unknown> {
   data?: T
 }
 
-export interface PersonalAccessIPPolicy {
-  ip: string
-  current_ip: string
-  current_ip_allowed: boolean
-  eligible: boolean
-  minimum_trust_level: number
-  production_cn_linkage: boolean
-}
-
 /**
  * User profile data
  */

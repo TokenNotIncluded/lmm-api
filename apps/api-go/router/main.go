@@ -20,7 +20,7 @@ func SetRouter(router *gin.Engine) error {
 	// These loopback-only routes are used by the package-managed Nginx edge
 	// policy. They intentionally sit outside the /api group so a policy check
 	// does not consume API rate-limit budget or the console discovery gate.
-	router.GET("/internal/access-ip-policy", middleware.TryUserAuth(), middleware.DisableCache(), controller.CheckPersonalAccessIPPolicy)
+	router.GET("/internal/access-ip-policy", middleware.DisableCache(), controller.CheckIPAccessRoutingPolicy)
 	router.GET("/internal/errors/access-policy", controller.GetAccessPolicyErrorPage)
 
 	SetApiRouter(router)
