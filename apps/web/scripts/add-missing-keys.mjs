@@ -4248,6 +4248,97 @@ for (const [locale, translations] of Object.entries(
   Object.assign(newKeys[locale], translations)
 }
 
+const discountLinkTranslations = {
+  en: {
+    Applied: 'Applied',
+    'Copy all generated links': 'Copy all generated links',
+    'Copy selected links': 'Copy selected links',
+    'Copy share link': 'Copy share link',
+    'Copy these generated links now for distribution.':
+      'Copy these generated links now for distribution.',
+    'Discount code from URL': 'Discount code from URL',
+    'Discount code saves {{amount}}': 'Discount code saves {{amount}}',
+    'This code came from the checkout link and cannot be edited.':
+      'This code came from the checkout link and cannot be edited.',
+  },
+  zh: {
+    Applied: '已应用',
+    'Copy all generated links': '复制全部生成链接',
+    'Copy selected links': '复制选中链接',
+    'Copy share link': '复制分享链接',
+    'Copy these generated links now for distribution.':
+      '复制以下生成的链接以便分发。',
+    'Discount code from URL': '来自 URL 的优惠码',
+    'Discount code saves {{amount}}': '优惠码已减免 {{amount}}',
+    'This code came from the checkout link and cannot be edited.':
+      '此优惠码来自结算链接，无法编辑。',
+  },
+  'zh-TW': {
+    Applied: '已套用',
+    'Copy all generated links': '複製全部產生的連結',
+    'Copy selected links': '複製選取的連結',
+    'Copy share link': '複製分享連結',
+    'Copy these generated links now for distribution.':
+      '複製以下產生的連結以便分發。',
+    'Discount code from URL': '來自 URL 的優惠碼',
+    'Discount code saves {{amount}}': '優惠碼已減免 {{amount}}',
+    'This code came from the checkout link and cannot be edited.':
+      '此優惠碼來自結帳連結，無法編輯。',
+  },
+  fr: {
+    Applied: 'Appliqué',
+    'Copy all generated links': 'Copier tous les liens générés',
+    'Copy selected links': 'Copier les liens sélectionnés',
+    'Copy share link': 'Copier le lien de partage',
+    'Copy these generated links now for distribution.':
+      'Copiez maintenant ces liens générés pour les distribuer.',
+    'Discount code from URL': 'Code promo depuis l’URL',
+    'Discount code saves {{amount}}': 'Le code promo économise {{amount}}',
+    'This code came from the checkout link and cannot be edited.':
+      'Ce code provient du lien de paiement et ne peut pas être modifié.',
+  },
+  ja: {
+    Applied: '適用済み',
+    'Copy all generated links': '生成したリンクをすべてコピー',
+    'Copy selected links': '選択したリンクをコピー',
+    'Copy share link': '共有リンクをコピー',
+    'Copy these generated links now for distribution.':
+      '配布用に生成したリンクをコピーしてください。',
+    'Discount code from URL': 'URL からの割引コード',
+    'Discount code saves {{amount}}': '割引コードの割引額: {{amount}}',
+    'This code came from the checkout link and cannot be edited.':
+      'このコードは決済リンクから提供されたため編集できません。',
+  },
+  ru: {
+    Applied: 'Применено',
+    'Copy all generated links': 'Копировать все созданные ссылки',
+    'Copy selected links': 'Копировать выбранные ссылки',
+    'Copy share link': 'Копировать ссылку для доступа',
+    'Copy these generated links now for distribution.':
+      'Скопируйте созданные ссылки для распространения.',
+    'Discount code from URL': 'Промокод из URL',
+    'Discount code saves {{amount}}': 'Промокод экономит {{amount}}',
+    'This code came from the checkout link and cannot be edited.':
+      'Этот код получен из ссылки оплаты и не может быть изменён.',
+  },
+  vi: {
+    Applied: 'Đã áp dụng',
+    'Copy all generated links': 'Sao chép tất cả liên kết đã tạo',
+    'Copy selected links': 'Sao chép các liên kết đã chọn',
+    'Copy share link': 'Sao chép liên kết chia sẻ',
+    'Copy these generated links now for distribution.':
+      'Sao chép các liên kết đã tạo để phân phối.',
+    'Discount code from URL': 'Mã giảm giá từ URL',
+    'Discount code saves {{amount}}': 'Mã giảm giá tiết kiệm {{amount}}',
+    'This code came from the checkout link and cannot be edited.':
+      'Mã này được cung cấp từ liên kết thanh toán và không thể chỉnh sửa.',
+  },
+}
+
+for (const [locale, translations] of Object.entries(discountLinkTranslations)) {
+  Object.assign(newKeys[locale], translations)
+}
+
 const registrationStatusTranslations = {
   en: {
     'Unable to load registration settings':

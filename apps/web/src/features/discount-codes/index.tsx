@@ -51,6 +51,7 @@ import {
   getDiscountCodeAvailability,
   parseDiscountCodeMaxUses,
 } from './availability'
+import { buildDiscountCodeLink } from './share-link'
 import type {
   DiscountCode,
   DiscountCodeBatchInput,
@@ -296,10 +297,12 @@ export function DiscountCodes() {
     })
   }
 
-  const copyCodes = async (codes: string[]) => {
+  const copyDiscountLinks = async (codes: string[]) => {
     if (codes.length === 0 || !navigator.clipboard) return
     try {
-      await navigator.clipboard.writeText(codes.join('\n'))
+      await navigator.clipboard.writeText(
+        codes.map((code) => buildDiscountCodeLink(code)).join('\n')
+      )
       toast.success(t('Copied to clipboard'))
     } catch {
       toast.error(t('Unable to copy'))
@@ -307,11 +310,11 @@ export function DiscountCodes() {
   }
 
   const copyCode = () => {
-    void copyCodes(form.code ? [form.code] : [])
+    void copyDiscountLinks(form.code ? [form.code] : [])
   }
 
   const copySelectedCodes = () => {
-    void copyCodes(
+    void copyDiscountLinks(
       rows.filter((row) => selectedIds.has(row.id)).map((row) => row.code)
     )
   }
@@ -337,7 +340,7 @@ export function DiscountCodes() {
               onClick={copySelectedCodes}
             >
               <Copy className='size-4' />
-              {t('Copy selected codes')} ({selectedIds.size})
+              {t('Copy selected links')} ({selectedIds.size})
             </Button>
             <Button size='sm' onClick={openCreate}>
               <Plus className='size-4' />
@@ -531,7 +534,7 @@ export function DiscountCodes() {
                     onClick={copyCode}
                     disabled={!form.code}
                     aria-label={t('Copy')}
-                    title={t('Copy')}
+                    title={t('Copy share link')}
                   >
                     <Copy className='size-4' />
                   </Button>
@@ -683,11 +686,13 @@ export function DiscountCodes() {
           <DialogHeader>
             <DialogTitle>{t('Discount codes created')}</DialogTitle>
             <DialogDescription>
-              {t('Copy these generated codes now for distribution.')}
+              {t('Copy these generated links now for distribution.')}
             </DialogDescription>
           </DialogHeader>
           <Textarea
-            value={generatedCodes.join('\n')}
+            value={generatedCodes
+              .map((code) => buildDiscountCodeLink(code))
+              .join('\n')}
             readOnly
             rows={Math.min(12, Math.max(4, generatedCodes.length))}
             className='font-mono text-sm'
@@ -696,9 +701,9 @@ export function DiscountCodes() {
             <DialogClose render={<Button variant='outline' />}>
               {t('Cancel')}
             </DialogClose>
-            <Button onClick={() => void copyCodes(generatedCodes)}>
+            <Button onClick={() => void copyDiscountLinks(generatedCodes)}>
               <Copy className='size-4' />
-              {t('Copy all generated codes')}
+              {t('Copy all generated links')}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -41,6 +41,7 @@ import {
   getPaymentIcon,
   getPaymentSettlementUnit,
 } from '../../lib'
+import { discountCodeSavings } from '../../lib/discount-state'
 import type { PaymentMethod } from '../../types'
 
 interface PaymentConfirmDialogProps {
@@ -53,6 +54,8 @@ interface PaymentConfirmDialogProps {
   calculating: boolean
   processing: boolean
   discountRate?: number
+  discountCode?: string
+  discountPercent?: number | null
   neutralMode?: boolean
 }
 
@@ -66,12 +69,15 @@ export function PaymentConfirmDialog({
   calculating,
   processing,
   discountRate = DEFAULT_DISCOUNT_RATE,
+  discountCode = '',
+  discountPercent = null,
   neutralMode = false,
 }: PaymentConfirmDialogProps) {
   const { t } = useTranslation()
   const hasDiscount = discountRate > 0 && discountRate < 1 && paymentAmount > 0
   const originalAmount = hasDiscount ? paymentAmount / discountRate : 0
   const discountAmount = hasDiscount ? originalAmount - paymentAmount : 0
+  const codeSavings = discountCodeSavings(paymentAmount, discountPercent)
   const settlementUnit = getPaymentSettlementUnit(paymentMethod)
   const formatSelectedPaymentAmount = (amount: number) =>
     settlementUnit
@@ -140,6 +146,21 @@ export function PaymentConfirmDialog({
                 <span className='text-muted-foreground'>{t('You save')}</span>
                 <Badge variant='secondary'>
                   {formatSelectedPaymentAmount(discountAmount)}
+                </Badge>
+              </div>
+            </div>
+          )}
+
+          {discountCode && codeSavings > 0 && !calculating && (
+            <div className='bg-primary/5 rounded-lg border p-3'>
+              <div className='flex items-center justify-between gap-3 text-sm'>
+                <span className='text-muted-foreground min-w-0'>
+                  {t('Discount code saves {{amount}}', {
+                    amount: formatSelectedPaymentAmount(codeSavings),
+                  })}
+                </span>
+                <Badge variant='secondary' className='shrink-0 font-mono'>
+                  {discountCode}
                 </Badge>
               </div>
             </div>
