@@ -51,6 +51,18 @@ package() {
     "${pkgdir}/usr/lib/systemd/system/geoip2-country-update.service"
   install -Dm0644 "${srcdir}/geoip2-country-update.timer" \
     "${pkgdir}/usr/lib/systemd/system/geoip2-country-update.timer"
+
+  install -d -m0755 "${pkgdir}/usr/share/lmm-api-go/edge-policy/nginx"
+  for file in http-map.conf lmm-api-locations.conf mime.types new-api.conf; do
+    install -Dm0644 "${srcdir}/nginx-${file}" \
+      "${pkgdir}/usr/share/lmm-api-go/edge-policy/nginx/${file}"
+  done
+  install -Dm0644 "${srcdir}/nginx-region-policy.conf" \
+    "${pkgdir}/usr/share/lmm-api-go/edge-policy/nginx/lmm-api-region-policy.conf"
+  install -Dm0644 "${srcdir}/geoip2-country-update.service" \
+    "${pkgdir}/usr/share/lmm-api-go/edge-policy/geoip2-country-update.service"
+  install -Dm0644 "${srcdir}/geoip2-country-update.timer" \
+    "${pkgdir}/usr/share/lmm-api-go/edge-policy/geoip2-country-update.timer"
   install -d -m0700 "${pkgdir}/etc/lmm-api-go"
   install -Dm0600 "${srcdir}/lmm-api-go.env" \
     "${pkgdir}/etc/lmm-api-go/lmm-api-go.env"
