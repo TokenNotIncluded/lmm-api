@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import {
   Bell,
+  Check,
   Eye,
   EyeOff,
   Loader2,
@@ -31,12 +32,14 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { PasswordInput } from '@/components/password-input'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { ROLE } from '@/lib/roles'
+import { cn } from '@/lib/utils'
 
 import { updateUserSettings } from '../../api'
 import {
@@ -433,14 +436,34 @@ export function NotificationTab({ profile, onUpdate }: NotificationTabProps) {
           >
             {USAGE_LEADERBOARD_VISIBILITY_OPTIONS.map((option) => {
               const Icon = option.icon
+              const isSelected =
+                normalizeUsageLeaderboardVisibility(
+                  settings.usage_leaderboard_visibility
+                ) === option.value
               return (
                 <ToggleGroupItem
                   key={option.value}
                   value={option.value}
-                  className='h-auto min-h-14 w-full gap-2 px-3 py-3 text-xs font-medium sm:min-h-16 sm:text-sm'
+                  aria-pressed={isSelected}
+                  className={cn(
+                    'h-auto min-h-14 w-full justify-between gap-2 px-3 py-3 text-xs font-medium transition-[transform,background-color,border-color,box-shadow] duration-150 active:scale-[0.99] sm:min-h-16 sm:text-sm',
+                    isSelected &&
+                      'border-primary bg-primary/10 text-primary shadow-sm ring-1 ring-primary/30 data-[state=on]:bg-primary/10'
+                  )}
                 >
-                  <Icon className='h-4 w-4 shrink-0' />
-                  <span className='truncate'>{t(option.label)}</span>
+                  <span className='flex min-w-0 items-center gap-2'>
+                    <Icon className='h-4 w-4 shrink-0' />
+                    <span className='truncate'>{t(option.label)}</span>
+                  </span>
+                  {isSelected ? (
+                    <Badge
+                      variant='secondary'
+                      className='shrink-0 gap-1 px-2 py-0.5 text-[11px] font-medium'
+                    >
+                      <Check className='size-3.5' aria-hidden='true' />
+                      {t('Current')}
+                    </Badge>
+                  ) : null}
                 </ToggleGroupItem>
               )
             })}
