@@ -83,7 +83,6 @@ func CheckIPAccessRoutingPolicy(c *gin.Context) {
 
 	action, lineNumber, err := setting.EvaluateIPAccessRoute(setting.IPAccessRouteRequest{
 		ClientIP:        originalIP,
-		DestinationIP:   strings.TrimSpace(c.GetHeader("X-LMM-Edge-Destination-IP")),
 		CountryCode:     edgeCountry,
 		Domain:          domain,
 		L4Protocol:      "tcp",

@@ -127,7 +127,7 @@ dip(geoip:cn) -> reject
 
 func TestIPAccessRoutingSupportsAllTrafficRulePredicates(t *testing.T) {
 	withIPAccessRoutingRules(t, `
-domain(full:api.example.com) && sip(203.0.113.0/24) && sport(1000-2000) && l4proto(tcp) && dport(443) && ipversion(4) && mac('02:42:ac:11:00:02') && pname(curl) && dscp(0x4) -> reject
+domain(full:api.example.com) && sip(203.0.113.0/24) && sport(1000-2000) && l4proto(tcp) && dport(443) && ipversion(4) -> reject
 fallback: direct
 `)
 
@@ -137,10 +137,6 @@ fallback: direct
 		L4Protocol:      "tcp",
 		DestinationPort: 443,
 		SourcePort:      1500,
-		SourceMAC:       "02:42:ac:11:00:02",
-		ProcessName:     "curl",
-		DSCP:            4,
-		DSCPSet:         true,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, IPAccessRouteReject, action)
@@ -152,10 +148,6 @@ fallback: direct
 		L4Protocol:      "tcp",
 		DestinationPort: 443,
 		SourcePort:      1500,
-		SourceMAC:       "02:42:ac:11:00:02",
-		ProcessName:     "curl",
-		DSCP:            4,
-		DSCPSet:         true,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, IPAccessRouteDirect, action)
@@ -178,8 +170,7 @@ func TestParseIPAccessRoutingRulesValidatesDaedSubset(t *testing.T) {
 		"dip(geoip:cn, geoip:private) && l4proto(tcp) && dport(80, 443) -> reject",
 		"# comment\ndip(::ffff:192.0.2.4) -> direct # inline comment",
 		"domain(example.com) && sip(192.0.2.0/24) && sport(1000-2000) -> direct",
-		"!domain(regex: '^ads\\\\.') && ipversion(4) && mac('02:42:ac:11:00:02') -> block",
-		"pname(NetworkManager) && dscp(0x4) && l4proto(udp) -> must_direct",
+		"!domain(regex: '^ads\\\\.') && ipversion(4) && l4proto(udp) -> must_direct",
 		"routing {\nfallback: reject\ndip(geoip:private) -> direct\n}",
 	}
 	for _, rules := range valid {
@@ -196,6 +187,13 @@ func TestParseIPAccessRoutingRulesValidatesDaedSubset(t *testing.T) {
 		"dip(192.0.2.1) && dport(0) -> direct": "between 1 and 65535",
 		"dip(192.0.2.1) && dip(192.0.2.2) -> direct": "duplicate dip()",
 		"unknown(thing) -> direct":                   "unsupported condition",
+		"qname(geosite:cn) -> direct":                "DNS-only",
+		"domain(geosite:cn) -> direct":               "geosite domain matchers",
+		"domain(ext:\"file:tag\") -> direct":         "ext domain matchers",
+		"dip(ext:\"file:tag\") -> direct":            "ext: IP matchers",
+		"mac('02:42:ac:11:00:02') -> direct":         "packet metadata",
+		"pname(curl) -> direct":                      "local-process metadata",
+		"dscp(0x4) -> direct":                        "packet metadata",
 	}
 	for rules, message := range invalid {
 		_, err := ParseIPAccessRoutingRules(rules)

@@ -41,6 +41,7 @@ const TOOL_TITLE_KEYS: Record<string, string> = {
   get_account_access: 'Read account access',
   get_setup_guide: 'Read setup guide',
   calculate_cost: 'Calculate cost',
+  set_conversation_title: 'Update conversation title',
 }
 
 const TOOL_SUMMARY_KEYS: Record<string, string> = {
@@ -71,19 +72,25 @@ export function AssistantToolCalls(props: { traces: AssistantToolTrace[] }) {
       {props.traces.map((trace, index) => {
         const isError = trace.status === 'output-error'
         const isApproval = trace.status === 'approval-requested'
+        const parameterCount = Object.keys(trace.input ?? {}).length
         const statusText = isError
           ? t('Tool failed')
           : isApproval
             ? t('Waiting for confirmation')
             : t('Tool completed')
+        const completedSummary = t(
+          TOOL_SUMMARY_KEYS[trace.name] ?? 'Tool completed'
+        )
         const summary =
           isError || isApproval
             ? statusText
-            : t(TOOL_SUMMARY_KEYS[trace.name] ?? 'Tool completed')
+            : parameterCount > 0
+              ? `${completedSummary} · ${t('{{count}} input parameters', { count: parameterCount })}`
+              : `${completedSummary} · ${t('No parameters')}`
         return (
           <Tool
             key={`${trace.name}-${index}`}
-            defaultOpen
+            defaultOpen={isError || isApproval}
             data-testid={`assistant-tool-${index}`}
           >
             <ToolHeader
@@ -94,10 +101,9 @@ export function AssistantToolCalls(props: { traces: AssistantToolTrace[] }) {
             />
             <ToolContent>
               <ToolInput input={trace.input ?? {}} />
-              <ToolOutput
-                output={isError ? undefined : summary}
-                errorText={isError ? statusText : undefined}
-              />
+              {isError ? (
+                <ToolOutput output={undefined} errorText={statusText} />
+              ) : null}
             </ToolContent>
           </Tool>
         )

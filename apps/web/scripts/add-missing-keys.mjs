@@ -3378,6 +3378,8 @@ const ipAccessRoutingTranslations = {
       'Use one daed-style rule per line. Supported matchers: dip(IP, CIDR, geoip:xx, geoip:private), l4proto(tcp), and dport(port). Use # for comments.',
     'Use Daed routing syntax. Matchers: domain/qname, dip/ip, sip, dport, sport, l4proto, ipversion, mac, pname, and dscp; supports ! negation, fallback, and direct/reject. Use # for comments.':
       'Use Daed routing syntax. Matchers: domain/qname, dip/ip, sip, dport, sport, l4proto, ipversion, mac, pname, and dscp; supports ! negation, fallback, and direct/reject. Use # for comments.',
+    'Use one Daed-style rule per line. This HTTP edge supports domain(full/suffix/keyword/regex), dip/ip, sip, dport, sport, l4proto, ipversion, ! negation, fallback, and direct/reject. geosite/ext/qname/mac/pname/dscp need packet or DNS data and are rejected when saved. Use # for comments.':
+      'Use one Daed-style rule per line. This HTTP edge supports domain(full/suffix/keyword/regex), dip/ip, sip, dport, sport, l4proto, ipversion, ! negation, fallback, and direct/reject. geosite/ext/qname/mac/pname/dscp need packet or DNS data and are rejected when saved. Use # for comments.',
   },
   zh: {
     'IP & Region Routing': 'IP 与地区路由',
@@ -3395,6 +3397,8 @@ const ipAccessRoutingTranslations = {
       '每行填写一条 daed 风格规则。支持 dip(IP、CIDR、geoip:xx、geoip:private)、l4proto(tcp) 和 dport(port)；使用 # 添加注释。',
     'Use Daed routing syntax. Matchers: domain/qname, dip/ip, sip, dport, sport, l4proto, ipversion, mac, pname, and dscp; supports ! negation, fallback, and direct/reject. Use # for comments.':
       '使用 Daed 路由语法。支持 domain/qname、dip/ip、sip、dport、sport、l4proto、ipversion、mac、pname、dscp；支持 ! 取反、fallback 以及 direct/reject。使用 # 添加注释。',
+    'Use one Daed-style rule per line. This HTTP edge supports domain(full/suffix/keyword/regex), dip/ip, sip, dport, sport, l4proto, ipversion, ! negation, fallback, and direct/reject. geosite/ext/qname/mac/pname/dscp need packet or DNS data and are rejected when saved. Use # for comments.':
+      '每行填写一条 Daed 风格规则。当前 HTTP 边缘支持 domain(full/suffix/keyword/regex)、dip/ip、sip、dport、sport、l4proto、ipversion、! 取反、fallback 以及 direct/reject。geosite/ext/qname/mac/pname/dscp 需要数据包或 DNS 数据，保存时会被拒绝。使用 # 添加注释。',
   },
   'zh-TW': {
     'IP & Region Routing': 'IP 與地區路由',
@@ -3413,6 +3417,8 @@ const ipAccessRoutingTranslations = {
       '每行填寫一條 daed 風格規則。支援 dip(IP、CIDR、geoip:xx、geoip:private)、l4proto(tcp) 和 dport(port)；使用 # 加入註解。',
     'Use Daed routing syntax. Matchers: domain/qname, dip/ip, sip, dport, sport, l4proto, ipversion, mac, pname, and dscp; supports ! negation, fallback, and direct/reject. Use # for comments.':
       '使用 Daed 路由語法。支援 domain/qname、dip/ip、sip、dport、sport、l4proto、ipversion、mac、pname、dscp；支援 ! 取反、fallback 以及 direct/reject。使用 # 加入註解。',
+    'Use one Daed-style rule per line. This HTTP edge supports domain(full/suffix/keyword/regex), dip/ip, sip, dport, sport, l4proto, ipversion, ! negation, fallback, and direct/reject. geosite/ext/qname/mac/pname/dscp need packet or DNS data and are rejected when saved. Use # for comments.':
+      '每行填寫一條 Daed 風格規則。目前 HTTP 邊緣支援 domain(full/suffix/keyword/regex)、dip/ip、sip、dport、sport、l4proto、ipversion、! 取反、fallback 以及 direct/reject。geosite/ext/qname/mac/pname/dscp 需要封包或 DNS 資料，儲存時會被拒絕。使用 # 加入註解。',
   },
   fr: {
     'IP & Region Routing': 'Routage IP et régional',
@@ -3433,6 +3439,8 @@ const ipAccessRoutingTranslations = {
       'Utilisez une règle de style daed par ligne. Prédicats pris en charge : dip(IP, CIDR, geoip:xx, geoip:private), l4proto(tcp) et dport(port). Utilisez # pour les commentaires.',
     'Use Daed routing syntax. Matchers: domain/qname, dip/ip, sip, dport, sport, l4proto, ipversion, mac, pname, and dscp; supports ! negation, fallback, and direct/reject. Use # for comments.':
       'Utilisez la syntaxe de routage Daed. Prédicats : domain/qname, dip/ip, sip, dport, sport, l4proto, ipversion, mac, pname et dscp ; la négation !, fallback et direct/reject sont pris en charge. Utilisez # pour les commentaires.',
+    'Use one Daed-style rule per line. This HTTP edge supports domain(full/suffix/keyword/regex), dip/ip, sip, dport, sport, l4proto, ipversion, ! negation, fallback, and direct/reject. geosite/ext/qname/mac/pname/dscp need packet or DNS data and are rejected when saved. Use # for comments.':
+      'Utilisez une règle Daed par ligne. Cette passerelle HTTP prend en charge domain(full/suffix/keyword/regex), dip/ip, sip, dport, sport, l4proto, ipversion, la négation !, fallback et direct/reject. geosite/ext/qname/mac/pname/dscp nécessitent des données de paquet ou DNS et sont refusés lors de l’enregistrement. Utilisez # pour les commentaires.',
   },
   ja: {
     'IP & Region Routing': 'IP・地域ルーティング',
@@ -3452,6 +3460,8 @@ const ipAccessRoutingTranslations = {
       '1行に1つの daed 形式ルールを記述します。対応条件は dip(IP, CIDR, geoip:xx, geoip:private)、l4proto(tcp)、dport(port) です。コメントには # を使用します。',
     'Use Daed routing syntax. Matchers: domain/qname, dip/ip, sip, dport, sport, l4proto, ipversion, mac, pname, and dscp; supports ! negation, fallback, and direct/reject. Use # for comments.':
       'Daed ルーティング構文を使用します。条件は domain/qname、dip/ip、sip、dport、sport、l4proto、ipversion、mac、pname、dscp に対応し、! の否定、fallback、direct/reject も使用できます。コメントには # を使います。',
+    'Use one Daed-style rule per line. This HTTP edge supports domain(full/suffix/keyword/regex), dip/ip, sip, dport, sport, l4proto, ipversion, ! negation, fallback, and direct/reject. geosite/ext/qname/mac/pname/dscp need packet or DNS data and are rejected when saved. Use # for comments.':
+      '1行に1つの Daed 形式ルールを記述します。この HTTP エッジは domain(full/suffix/keyword/regex)、dip/ip、sip、dport、sport、l4proto、ipversion、! の否定、fallback、direct/reject に対応します。geosite/ext/qname/mac/pname/dscp はパケットまたは DNS データが必要なため、保存時に拒否されます。コメントには # を使用します。',
   },
   ru: {
     'IP & Region Routing': 'Маршрутизация по IP и регионам',
@@ -3471,6 +3481,8 @@ const ipAccessRoutingTranslations = {
       'Указывайте по одному правилу в стиле daed на строку. Поддерживаются dip(IP, CIDR, geoip:xx, geoip:private), l4proto(tcp) и dport(port). Для комментариев используйте #.',
     'Use Daed routing syntax. Matchers: domain/qname, dip/ip, sip, dport, sport, l4proto, ipversion, mac, pname, and dscp; supports ! negation, fallback, and direct/reject. Use # for comments.':
       'Используйте синтаксис маршрутизации Daed. Поддерживаются условия domain/qname, dip/ip, sip, dport, sport, l4proto, ipversion, mac и pname, dscp, а также отрицание !, fallback и direct/reject. Для комментариев используйте #.',
+    'Use one Daed-style rule per line. This HTTP edge supports domain(full/suffix/keyword/regex), dip/ip, sip, dport, sport, l4proto, ipversion, ! negation, fallback, and direct/reject. geosite/ext/qname/mac/pname/dscp need packet or DNS data and are rejected when saved. Use # for comments.':
+      'Указывайте по одному правилу Daed на строку. Этот HTTP-шлюз поддерживает domain(full/suffix/keyword/regex), dip/ip, sip, dport, sport, l4proto, ipversion, отрицание !, fallback и direct/reject. Для geosite/ext/qname/mac/pname/dscp нужны данные пакетов или DNS, поэтому при сохранении они отклоняются. Для комментариев используйте #.',
   },
   vi: {
     'IP & Region Routing': 'Định tuyến IP và khu vực',
@@ -3490,6 +3502,8 @@ const ipAccessRoutingTranslations = {
       'Mỗi dòng dùng một quy tắc kiểu daed. Hỗ trợ dip(IP, CIDR, geoip:xx, geoip:private), l4proto(tcp) và dport(port). Dùng # cho chú thích.',
     'Use Daed routing syntax. Matchers: domain/qname, dip/ip, sip, dport, sport, l4proto, ipversion, mac, pname, and dscp; supports ! negation, fallback, and direct/reject. Use # for comments.':
       'Sử dụng cú pháp định tuyến Daed. Hỗ trợ các điều kiện domain/qname, dip/ip, sip, dport, sport, l4proto, ipversion, mac, pname và dscp; hỗ trợ phủ định !, fallback và direct/reject. Dùng # cho chú thích.',
+    'Use one Daed-style rule per line. This HTTP edge supports domain(full/suffix/keyword/regex), dip/ip, sip, dport, sport, l4proto, ipversion, ! negation, fallback, and direct/reject. geosite/ext/qname/mac/pname/dscp need packet or DNS data and are rejected when saved. Use # for comments.':
+      'Mỗi dòng dùng một quy tắc Daed. Edge HTTP này hỗ trợ domain(full/suffix/keyword/regex), dip/ip, sip, dport, sport, l4proto, ipversion, phủ định !, fallback và direct/reject. geosite/ext/qname/mac/pname/dscp cần dữ liệu gói tin hoặc DNS nên sẽ bị từ chối khi lưu. Dùng # cho chú thích.',
   },
 }
 
@@ -4396,6 +4410,36 @@ const registrationStatusTranslations = {
 
 for (const [locale, translations] of Object.entries(
   registrationStatusTranslations
+)) {
+  Object.assign(newKeys[locale], translations)
+}
+
+const legalConsentTranslations = {
+  en: { 'and the': 'and the' },
+  zh: { 'and the': '和' },
+  'zh-TW': { 'and the': '和' },
+  fr: { 'and the': 'et la' },
+  ja: { 'and the': 'および' },
+  ru: { 'and the': 'и' },
+  vi: { 'and the': 'và' },
+}
+
+for (const [locale, translations] of Object.entries(legalConsentTranslations)) {
+  Object.assign(newKeys[locale], translations)
+}
+
+const assistantToolTranslations = {
+  en: { '{{count}} input parameters': '{{count}} input parameters' },
+  zh: { '{{count}} input parameters': '{{count}} 个输入参数' },
+  'zh-TW': { '{{count}} input parameters': '{{count}} 個輸入參數' },
+  fr: { '{{count}} input parameters': '{{count}} paramètres d’entrée' },
+  ja: { '{{count}} input parameters': '入力パラメータ {{count}} 個' },
+  ru: { '{{count}} input parameters': 'Входные параметры: {{count}}' },
+  vi: { '{{count}} input parameters': '{{count}} tham số đầu vào' },
+}
+
+for (const [locale, translations] of Object.entries(
+  assistantToolTranslations
 )) {
   Object.assign(newKeys[locale], translations)
 }

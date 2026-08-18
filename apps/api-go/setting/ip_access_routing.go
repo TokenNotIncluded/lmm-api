@@ -38,12 +38,10 @@ const (
 )
 
 type IPAccessRouteRequest struct {
-	// ClientIP is the edge-observed client address. It remains the fallback
-	// value for dip() for backwards compatibility with the original IP access
-	// setting, which used dip() for the connecting address.
-	ClientIP string
-	// DestinationIP is optional edge metadata for native Daed dip() semantics.
-	DestinationIP   string
+	// ClientIP is the trusted edge-observed connecting address. The HTTP
+	// ingress policy intentionally maps both dip()/ip() and sip() to this
+	// value; destination-IP headers are never accepted from clients.
+	ClientIP        string
 	CountryCode     string
 	Domain          string
 	L4Protocol      string
@@ -282,6 +280,10 @@ func parseIPAccessRouteRule(line string, lineNumber int) (ipAccessRouteRule, err
 			parsed.ipDirection = ipAccessIPSource
 			parsed.ipMatchers, err = parseIPAccessDIPMatchers(arguments, lineNumber)
 		case "domain", "qname":
+			if name == "qname" {
+				err = fmt.Errorf("line %d: qname() is a DNS-only Daed matcher and is unavailable for inbound HTTP routing", lineNumber)
+				break
+			}
 			parsed.kind = ipAccessConditionDomain
 			parsed.domains, err = parseIPAccessDomainMatchers(arguments, lineNumber)
 		case "l4proto":
@@ -297,17 +299,11 @@ func parseIPAccessRouteRule(line string, lineNumber int) (ipAccessRouteRule, err
 			parsed.kind = ipAccessConditionIPVersion
 			parsed.ipVersions, err = parseIPAccessVersions(arguments, lineNumber)
 		case "mac":
-			parsed.kind = ipAccessConditionMAC
-			parsed.macs, err = parseIPAccessMACs(arguments, lineNumber)
+			err = fmt.Errorf("line %d: mac() requires packet metadata unavailable to inbound HTTP routing", lineNumber)
 		case "pname":
-			parsed.kind = ipAccessConditionProcess
-			parsed.processes = make(map[string]struct{}, len(arguments))
-			for _, argument := range arguments {
-				parsed.processes[strings.ToLower(argument)] = struct{}{}
-			}
+			err = fmt.Errorf("line %d: pname() requires local-process metadata unavailable to inbound HTTP routing", lineNumber)
 		case "dscp":
-			parsed.kind = ipAccessConditionDSCP
-			parsed.dscps, err = parseIPAccessDSCPs(arguments, lineNumber)
+			err = fmt.Errorf("line %d: dscp() requires packet metadata unavailable to inbound HTTP routing", lineNumber)
 		default:
 			err = fmt.Errorf("line %d: unsupported condition %s()", lineNumber, name)
 		}
@@ -457,9 +453,7 @@ func parseIPAccessDIPMatchers(arguments []string, lineNumber int) ([]ipAccessMat
 				return nil, fmt.Errorf("line %d: invalid geoip value %q; use geoip:xx or geoip:private", lineNumber, argument)
 			}
 		} else if strings.HasPrefix(lower, "ext:") {
-			matcher.kind = ipAccessMatcherExternal
-			matcher.external = argument[len("ext:"):]
-			canonical = "ext:" + strings.ToLower(matcher.external)
+			return nil, fmt.Errorf("line %d: ext: IP matchers require a Daed DAT source unavailable to inbound HTTP routing", lineNumber)
 		} else {
 			prefix, err := parseIPAccessPrefix(argument)
 			if err != nil {
@@ -495,9 +489,9 @@ func parseIPAccessDomainMatchers(arguments []string, lineNumber int) ([]ipAccess
 			case "regex":
 				kind = ipAccessDomainRegex
 			case "geosite":
-				kind = ipAccessDomainGeoSite
+				return nil, fmt.Errorf("line %d: geosite domain matchers require a Daed geosite source unavailable to inbound HTTP routing", lineNumber)
 			case "ext":
-				kind = ipAccessDomainExternal
+				return nil, fmt.Errorf("line %d: ext domain matchers require a Daed DAT source unavailable to inbound HTTP routing", lineNumber)
 			default:
 				return nil, fmt.Errorf("line %d: unsupported domain matcher %q", lineNumber, prefix)
 			}
@@ -645,10 +639,11 @@ func (rule ipAccessRouteRule) matches(request IPAccessRouteRequest, clientAddres
 			return false, err.Error()
 		}
 		// Some Daed predicates describe local packet metadata (for example
-		// pname/mac/dscp) that an HTTP edge cannot observe. Treat those
-		// predicates as a non-match rather than applying a guessed value.
+		// pname/mac/dscp) that an HTTP edge cannot observe. Never turn an
+		// unavailable condition into a match or silently fall through to a
+		// permissive fallback; the policy endpoint must fail closed instead.
 		if !known {
-			return false, ""
+			return false, "required matcher metadata is unavailable"
 		}
 		if condition.negated {
 			matched = !matched
@@ -664,13 +659,6 @@ func (condition ipAccessRouteCondition) matches(request IPAccessRouteRequest, cl
 	switch condition.kind {
 	case ipAccessConditionIP:
 		address := clientAddress
-		if condition.ipDirection == ipAccessIPDestination && strings.TrimSpace(request.DestinationIP) != "" {
-			parsed, err := netip.ParseAddr(strings.TrimSpace(request.DestinationIP))
-			if err != nil {
-				return false, true, errors.New("destination IP is unavailable or invalid")
-			}
-			address = parsed.Unmap()
-		}
 		matched := false
 		countryUnknown := false
 		for _, matcher := range condition.ipMatchers {
