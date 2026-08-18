@@ -71,7 +71,7 @@ type TrustLevelTier struct {
 
 var trustLevelBenefits = [...][]string{
 	{"standard_access"},
-	{"developer_access", "personal_ip_allowlist"},
+	{"developer_access"},
 	{"usage_discount"},
 	{"usage_discount"},
 	{"usage_discount"},

@@ -169,8 +169,6 @@ var assistantAdminConfigAllowlist = map[string]string{
 	"AdvancedSecurityOnPromptEnabled":               "Apply advanced security rules to prompts",
 	"AdvancedSecurityAction":                        "Advanced security action",
 	"AdvancedSecurityRules":                         "Advanced security rule set",
-	"RegionAccessPolicyEnabled":                     "Enable regional access restrictions",
-	"RegionBlockedCountryCodes":                     "Blocked ISO country codes",
 	"LinuxDOMinimumTrustLevel":                      "Minimum LinuxDO trust level",
 	"QuotaRemindThreshold":                          "Quota reminder threshold",
 	"PreConsumedQuota":                              "Pre-consumed request quota",
@@ -933,7 +931,7 @@ func validateAssistantAdminConfigValue(key, value string) error {
 		return err
 	}
 	switch key {
-	case "AssistantEnabled", "AssistantAgentLoopEnabled", "AssistantCacheEnabled", "ModelRequestRateLimitEnabled", "DefaultUseAutoGroup", "DisplayInCurrencyEnabled", "DisplayTokenStatEnabled", "ExposeRatioEnabled", "DefaultCollapseSidebar", "PasswordLoginEnabled", "PasswordRegisterEnabled", "OAuthRegisterEnabled", "EmailVerificationEnabled", "RegisterEnabled", "GitHubOAuthEnabled", "LinuxDOOAuthEnabled", "WeChatAuthEnabled", "TelegramOAuthEnabled", "TurnstileCheckEnabled", "EmailDomainRestrictionEnabled", "EmailAliasRestrictionEnabled", "AutomaticDisableChannelEnabled", "AutomaticEnableChannelEnabled", "LogConsumeEnabled", "DrawingEnabled", "TaskEnabled", "DataExportEnabled", "CheckSensitiveEnabled", "CheckSensitiveOnPromptEnabled", "StopOnSensitiveEnabled", "SelfUseModeEnabled", "DemoSiteEnabled", "MjNotifyEnabled", "MjAccountFilterEnabled", "MjModeClearEnabled", "MjForwardUrlEnabled", "MjActionCheckSuccessEnabled", "WorkerAllowHttpImageRequestEnabled", "SMTPSSLEnabled", "SMTPStartTLSEnabled", "SMTPInsecureSkipVerify", "SMTPForceAuthLogin", "StripePromotionCodesEnabled", "CreemTestMode", "WaffoEnabled", "WaffoSandbox", "AdvancedSecurityEnabled", "AdvancedSecurityOnPromptEnabled", common.RegionAccessPolicyEnabledOptionKey:
+	case "AssistantEnabled", "AssistantAgentLoopEnabled", "AssistantCacheEnabled", "ModelRequestRateLimitEnabled", "DefaultUseAutoGroup", "DisplayInCurrencyEnabled", "DisplayTokenStatEnabled", "ExposeRatioEnabled", "DefaultCollapseSidebar", "PasswordLoginEnabled", "PasswordRegisterEnabled", "OAuthRegisterEnabled", "EmailVerificationEnabled", "RegisterEnabled", "GitHubOAuthEnabled", "LinuxDOOAuthEnabled", "WeChatAuthEnabled", "TelegramOAuthEnabled", "TurnstileCheckEnabled", "EmailDomainRestrictionEnabled", "EmailAliasRestrictionEnabled", "AutomaticDisableChannelEnabled", "AutomaticEnableChannelEnabled", "LogConsumeEnabled", "DrawingEnabled", "TaskEnabled", "DataExportEnabled", "CheckSensitiveEnabled", "CheckSensitiveOnPromptEnabled", "StopOnSensitiveEnabled", "SelfUseModeEnabled", "DemoSiteEnabled", "MjNotifyEnabled", "MjAccountFilterEnabled", "MjModeClearEnabled", "MjForwardUrlEnabled", "MjActionCheckSuccessEnabled", "WorkerAllowHttpImageRequestEnabled", "SMTPSSLEnabled", "SMTPStartTLSEnabled", "SMTPInsecureSkipVerify", "SMTPForceAuthLogin", "StripePromotionCodesEnabled", "CreemTestMode", "WaffoEnabled", "WaffoSandbox", "AdvancedSecurityEnabled", "AdvancedSecurityOnPromptEnabled":
 		if _, err := strconv.ParseBool(value); err != nil {
 			return errors.New("must be a boolean value")
 		}
@@ -968,10 +966,6 @@ func validateAssistantAdminConfigValue(key, value string) error {
 	case "SMTPServer", "SMTPFrom", "StripePriceId", "WaffoPancakeMerchantID", "WaffoPancakeStoreID", "WaffoPancakeProductID":
 		if len([]rune(value)) > 512 {
 			return errors.New("payment and SMTP settings must be at most 512 characters")
-		}
-	case common.RegionBlockedCountryCodesOptionKey:
-		if _, err := common.ParseRegionBlockedCountryCodes(value); err != nil {
-			return err
 		}
 	case "CreemProducts":
 		var products []map[string]any

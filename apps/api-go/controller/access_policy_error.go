@@ -134,13 +134,13 @@ func accessPolicyErrorPage(language string, diagnostics accessPolicyErrorDetails
 		Diagnostics                accessPolicyErrorDetails
 	}{Language: language, Diagnostics: diagnostics}
 	if language == "en" {
-		templateData.Title = "Your region is not currently supported"
-		templateData.Message = "The edge detected that your current region is not supported for direct access, so this request was stopped by the regional access policy."
-		templateData.Hint = "This is not an account-level or login-status restriction. Switch to a supported network environment, or send the diagnostic details below to support if the region was detected incorrectly."
+		templateData.Title = "This network request was rejected"
+		templateData.Message = "The edge IP access router matched a reject rule and stopped this request before it reached the application."
+		templateData.Hint = "Try a permitted network path, or send the diagnostic details below to support if you believe the route decision is incorrect."
 		templateData.WhyTitle = "Why did I see this page?"
-		templateData.WhyDescription = "DNS and HTTPS have reached the lmm.best edge node successfully. The request was stopped at the regional policy layer, before the application was reached."
+		templateData.WhyDescription = "DNS and HTTPS reached the lmm.best edge successfully. An ordered IP or region route rule then returned reject."
 		templateData.TroubleshootingTitle = "Troubleshooting"
-		templateData.TroubleshootingDescription = "These details come from this request and help identify whether the exit IP or edge-region detection caused the block."
+		templateData.TroubleshootingDescription = "These details help identify the client IP, edge country, and route decision that caused the rejection."
 		templateData.ClientIPLabel = "Detected client IP"
 		templateData.IPVersionLabel = "IP version"
 		templateData.EdgeCountryLabel = "Edge region"
@@ -153,15 +153,15 @@ func accessPolicyErrorPage(language string, diagnostics accessPolicyErrorDetails
 		templateData.DiagnosticTextLabel = "Diagnostic details"
 		templateData.CopyHint = "Send the following diagnostic details to support. Do not include cookies or access tokens."
 		templateData.PrivacyNote = "Cookies, Authorization headers, and the full proxy chain are not shown. The client IP is displayed only so you can verify the network you are using."
-		templateData.Footer = "Regional access policy · lmm.best"
+		templateData.Footer = "IP access routing · lmm.best"
 	} else {
-		templateData.Title = "您所在地区暂不支持直接访问"
-		templateData.Message = "检测到您当前所在地区暂不支持直接访问，边缘访问策略已拦截本次请求。"
-		templateData.Hint = "这与账号等级或登录状态无关。请更换到受支持的网络环境；如果你认为地区判断有误，请将下方诊断信息提供给客服。"
+		templateData.Title = "当前网络请求已被拒绝"
+		templateData.Message = "边缘 IP 访问路由命中了 reject 规则，请求已在到达应用前被拦截。"
+		templateData.Hint = "请更换允许访问的网络路径；如果你认为路由判定有误，请将下方诊断信息提供给客服。"
 		templateData.WhyTitle = "为什么会看到这个页面？"
-		templateData.WhyDescription = "域名解析和 HTTPS 已经到达 lmm.best 边缘节点，说明基础连接正常；请求是在地区访问策略层被拦截，并非页面应用加载失败。"
+		templateData.WhyDescription = "域名解析和 HTTPS 已成功到达 lmm.best 边缘节点；随后有一条按顺序匹配的 IP 或地区路由规则返回了 reject。"
 		templateData.TroubleshootingTitle = "疑难解答"
-		templateData.TroubleshootingDescription = "以下信息来自当前请求，可帮助判断是出口 IP 还是边缘地区识别导致拦截。"
+		templateData.TroubleshootingDescription = "以下信息可帮助确认导致拒绝的出口 IP、边缘地区和路由判定。"
 		templateData.ClientIPLabel = "检测到的出口 IP"
 		templateData.IPVersionLabel = "IP 类型"
 		templateData.EdgeCountryLabel = "边缘地区判定"
@@ -174,7 +174,7 @@ func accessPolicyErrorPage(language string, diagnostics accessPolicyErrorDetails
 		templateData.DiagnosticTextLabel = "诊断信息"
 		templateData.CopyHint = "请将以下诊断信息提供给客服；不要附带 Cookie 或访问令牌。"
 		templateData.PrivacyNote = "页面不会显示 Cookie、Authorization 或完整代理链；出口 IP 仅用于你核对当前使用的网络。"
-		templateData.Footer = "地区访问策略提示 · lmm.best"
+		templateData.Footer = "IP 访问路由 · lmm.best"
 	}
 	template := template.Must(template.New("access-policy-error").Parse(pageTemplate))
 	var rendered strings.Builder
@@ -214,7 +214,7 @@ func accessPolicyErrorDiagnostics(c *gin.Context, requestID string) accessPolicy
 		browser = "unknown"
 	}
 	checkedAt := time.Now().UTC().Format(time.RFC3339)
-	policyDecision := "region_denied"
+	policyDecision := "route_reject"
 	reachability := "edge_reached"
 	diagnostics := accessPolicyErrorDetails{
 		ClientIP:       clientIP,

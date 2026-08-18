@@ -927,7 +927,6 @@ func GetAssistantStatus(c *gin.Context) {
 			"public_assistant":      true,
 			"account":               true,
 			"developer_tools":       developerAccessGranted,
-			"personal_ip_allowlist": isAdmin || trustLevel >= model.PersonalAccessIPMinTrustLevel,
 			"usage_discount":        isAdmin || trustLevel >= model.TrustLevelMinUser+2,
 			"admin_config":          isRoot,
 			"admin_pricing":         isRoot,

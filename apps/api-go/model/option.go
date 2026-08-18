@@ -23,6 +23,18 @@ type Option struct {
 	Value string `json:"value"`
 }
 
+var retiredIPAccessOptionKeys = map[string]struct{}{
+	"GlobalIPWhitelistEnabled":  {},
+	"GlobalIPWhitelistCIDRs":    {},
+	"RegionAccessPolicyEnabled": {},
+	"RegionBlockedCountryCodes": {},
+}
+
+func isRetiredIPAccessOptionKey(key string) bool {
+	_, retired := retiredIPAccessOptionKeys[key]
+	return retired
+}
+
 func AllOption() ([]*Option, error) {
 	var options []*Option
 	var err error
@@ -62,8 +74,6 @@ func InitOptionMap() {
 	common.OptionMap["EmailDomainRestrictionEnabled"] = strconv.FormatBool(common.EmailDomainRestrictionEnabled)
 	common.OptionMap["EmailAliasRestrictionEnabled"] = strconv.FormatBool(common.EmailAliasRestrictionEnabled)
 	common.OptionMap["EmailDomainWhitelist"] = strings.Join(common.EmailDomainWhitelist, ",")
-	common.OptionMap[common.RegionAccessPolicyEnabledOptionKey] = strconv.FormatBool(common.IsRegionAccessPolicyEnabled())
-	common.OptionMap[common.RegionBlockedCountryCodesOptionKey] = common.RegionBlockedCountryCodesString()
 	common.OptionMap["SMTPServer"] = ""
 	common.OptionMap["SMTPFrom"] = ""
 	common.OptionMap["SMTPPort"] = strconv.Itoa(common.SMTPPort)
@@ -219,9 +229,7 @@ func InitOptionMap() {
 	common.OptionMap[setting.AntiRelayHTTPSOnlyOptionKey] = strconv.FormatBool(antiRelaySettings.HTTPSOnly)
 	common.OptionMap[setting.AntiRelayBlockedCIDRsOptionKey] = setting.AntiRelayBlockedCIDRsToJSONString()
 	common.OptionMap[setting.AntiRelayTrustedProxyCIDRsOptionKey] = setting.AntiRelayTrustedProxyCIDRsToJSONString()
-	globalIPWhitelistSettings := setting.GetGlobalIPWhitelistSettings()
-	common.OptionMap[setting.GlobalIPWhitelistEnabledOptionKey] = strconv.FormatBool(globalIPWhitelistSettings.Enabled)
-	common.OptionMap[setting.GlobalIPWhitelistCIDRsOptionKey] = setting.GlobalIPWhitelistCIDRsToJSONString()
+	common.OptionMap[setting.IPAccessRoutingRulesOptionKey] = setting.GetIPAccessRoutingRules()
 	common.OptionMap["StreamCacheQueueLength"] = strconv.Itoa(setting.StreamCacheQueueLength)
 	common.OptionMap["AutomaticDisableKeywords"] = operation_setting.AutomaticDisableKeywordsToString()
 	common.OptionMap["AutomaticDisableStatusCodes"] = operation_setting.AutomaticDisableStatusCodesToString()
@@ -257,15 +265,11 @@ func SyncOptions(frequency int) {
 }
 
 func validateOptionValue(key string, value string) error {
+	if isRetiredIPAccessOptionKey(key) {
+		return errors.New("legacy IP access option is retired; use IPAccessRoutingRules")
+	}
 	if key == common.RegistrationDisabledMethodsOptionKey {
 		_, err := common.ParseRegistrationDisabledMethods(value)
-		return err
-	}
-	// Region enforcement is a security boundary rather than a presentation
-	// setting. Validate it here (instead of only in the generic controller) so
-	// assistant-admin bulk updates and other internal callers cannot persist a
-	// malformed value that silently disables the edge policy.
-	if err := validateRegionPolicyOption(key, value); err != nil {
 		return err
 	}
 	if dynamic_pricing_setting.IsOptionKey(key) {
@@ -286,7 +290,7 @@ func validateOptionValue(key string, value string) error {
 	if err := setting.ValidateAntiRelayOption(key, value); err != nil {
 		return err
 	}
-	if err := setting.ValidateGlobalIPWhitelistOption(key, value); err != nil {
+	if err := setting.ValidateIPAccessRoutingOption(key, value); err != nil {
 		return err
 	}
 	if key == operation_setting.ToolPriceOptionKey {
@@ -314,22 +318,6 @@ func validateOptionValue(key string, value string) error {
 	}
 	if key == operation_setting.ViolationFeeOptionKey+".policies" {
 		return operation_setting.ValidateViolationFeeSettingsJSON(`{"enabled":true,"policies":` + value + `}`)
-	}
-	return nil
-}
-
-func validateRegionPolicyOption(key, value string) error {
-	switch key {
-	case common.RegionAccessPolicyEnabledOptionKey:
-		// updateOptionMap intentionally treats only the exact string "true" as
-		// enabled. Keep validation equally strict so values such as "TRUE" or
-		// "1" cannot be accepted and then applied as false.
-		if value != "true" && value != "false" {
-			return errors.New("region access policy enabled must be true or false")
-		}
-	case common.RegionBlockedCountryCodesOptionKey:
-		_, err := common.ParseRegionBlockedCountryCodes(value)
-		return err
 	}
 	return nil
 }
@@ -506,10 +494,15 @@ func UpdateAdvancedSecurityOptions(enabled, onPrompt bool, action, rules string)
 }
 
 func updateOptionMap(key string, value string) (err error) {
-	// Reject malformed persisted region settings before touching OptionMap or
-	// runtime enforcement. This also makes startup fail closed for an invalid
-	// legacy row instead of interpreting it as "disabled".
-	if err := validateRegionPolicyOption(key, value); err != nil {
+	if isRetiredIPAccessOptionKey(key) {
+		common.OptionMapRWMutex.Lock()
+		delete(common.OptionMap, key)
+		common.OptionMapRWMutex.Unlock()
+		return nil
+	}
+	// Reject malformed persisted route rules before touching OptionMap or the
+	// active request-path policy.
+	if err := setting.ValidateIPAccessRoutingOption(key, value); err != nil {
 		return err
 	}
 	// Legacy model-specific Grok violation options are intentionally ignored.
@@ -588,8 +581,6 @@ func updateOptionMap(key string, value string) (err error) {
 			common.EmailDomainRestrictionEnabled = boolValue
 		case "EmailAliasRestrictionEnabled":
 			common.EmailAliasRestrictionEnabled = boolValue
-		case common.RegionAccessPolicyEnabledOptionKey:
-			common.SetRegionAccessPolicyEnabled(boolValue)
 		case "AutomaticDisableChannelEnabled":
 			common.AutomaticDisableChannelEnabled = boolValue
 		case "AutomaticEnableChannelEnabled":
@@ -648,8 +639,6 @@ func updateOptionMap(key string, value string) (err error) {
 			setting.SetAntiRelayRejectProxyHeaders(boolValue)
 		case setting.AntiRelayHTTPSOnlyOptionKey:
 			setting.SetAntiRelayHTTPSOnly(boolValue)
-		case setting.GlobalIPWhitelistEnabledOptionKey:
-			setting.SetGlobalIPWhitelistEnabled(boolValue)
 		case "SMTPSSLEnabled":
 			common.SMTPSSLEnabled = boolValue
 		case "SMTPStartTLSEnabled":
@@ -679,8 +668,6 @@ func updateOptionMap(key string, value string) (err error) {
 	switch key {
 	case "EmailDomainWhitelist":
 		common.EmailDomainWhitelist = strings.Split(value, ",")
-	case common.RegionBlockedCountryCodesOptionKey:
-		err = common.SetRegionBlockedCountryCodes(value)
 	case "SMTPServer":
 		common.SMTPServer = value
 	case "SMTPPort":
@@ -926,8 +913,8 @@ func updateOptionMap(key string, value string) (err error) {
 		err = setting.UpdateAntiRelayBlockedCIDRs(value)
 	case setting.AntiRelayTrustedProxyCIDRsOptionKey:
 		err = setting.UpdateAntiRelayTrustedProxyCIDRs(value)
-	case setting.GlobalIPWhitelistCIDRsOptionKey:
-		err = setting.UpdateGlobalIPWhitelistCIDRs(value)
+	case setting.IPAccessRoutingRulesOptionKey:
+		err = setting.UpdateIPAccessRoutingRules(value)
 	case "AutomaticDisableKeywords":
 		operation_setting.AutomaticDisableKeywordsFromString(value)
 	case "AutomaticDisableStatusCodes":

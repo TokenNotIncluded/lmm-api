@@ -38,8 +38,6 @@ const OPERATIONS_SECTIONS = [
           DefaultCollapseSidebar: settings.DefaultCollapseSidebar,
           DemoSiteEnabled: settings.DemoSiteEnabled,
           SelfUseModeEnabled: settings.SelfUseModeEnabled,
-          RegionAccessPolicyEnabled: settings.RegionAccessPolicyEnabled,
-          RegionBlockedCountryCodes: settings.RegionBlockedCountryCodes,
         }}
       />
     ),

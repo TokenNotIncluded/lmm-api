@@ -3373,12 +3373,309 @@ for (const [locale, translations] of Object.entries(
   Object.assign(newKeys[locale], translations)
 }
 
+const ipAccessRoutingTranslations = {
+  en: {
+    'IP & Region Routing': 'IP & Region Routing',
+    'At least one routing rule is required.':
+      'At least one routing rule is required.',
+    'Routing rules cannot exceed 16384 bytes.':
+      'Routing rules cannot exceed 16384 bytes.',
+    'Routing rules are invalid.': 'Routing rules are invalid.',
+    'First matching rule wins': 'First matching rule wins',
+    'Rules run from top to bottom. direct allows the request, reject blocks it, and requests that match no rule are allowed.':
+      'Rules run from top to bottom. direct allows the request, reject blocks it, and requests that match no rule are allowed.',
+    'Keep management access first': 'Keep management access first',
+    'Put direct rules for trusted management IPs above broad reject rules so you do not lock yourself out.':
+      'Put direct rules for trusted management IPs above broad reject rules so you do not lock yourself out.',
+    'Routing rules': 'Routing rules',
+    'Use one daed-style rule per line. Supported matchers: dip(IP, CIDR, geoip:xx, geoip:private), l4proto(tcp), and dport(port). Use # for comments.':
+      'Use one daed-style rule per line. Supported matchers: dip(IP, CIDR, geoip:xx, geoip:private), l4proto(tcp), and dport(port). Use # for comments.',
+  },
+  zh: {
+    'IP & Region Routing': 'IP 与地区路由',
+    'At least one routing rule is required.': '至少需要一条路由规则。',
+    'Routing rules cannot exceed 16384 bytes.': '路由规则不能超过 16384 字节。',
+    'Routing rules are invalid.': '路由规则无效。',
+    'First matching rule wins': '首条匹配规则生效',
+    'Rules run from top to bottom. direct allows the request, reject blocks it, and requests that match no rule are allowed.':
+      '规则从上到下执行。direct 允许请求，reject 拒绝请求；未命中任何规则的请求默认允许。',
+    'Keep management access first': '先保留管理访问',
+    'Put direct rules for trusted management IPs above broad reject rules so you do not lock yourself out.':
+      '请将可信管理 IP 的 direct 规则放在宽泛的 reject 规则之前，避免把自己锁在系统外。',
+    'Routing rules': '路由规则',
+    'Use one daed-style rule per line. Supported matchers: dip(IP, CIDR, geoip:xx, geoip:private), l4proto(tcp), and dport(port). Use # for comments.':
+      '每行填写一条 daed 风格规则。支持 dip(IP、CIDR、geoip:xx、geoip:private)、l4proto(tcp) 和 dport(port)；使用 # 添加注释。',
+  },
+  'zh-TW': {
+    'IP & Region Routing': 'IP 與地區路由',
+    'At least one routing rule is required.': '至少需要一條路由規則。',
+    'Routing rules cannot exceed 16384 bytes.':
+      '路由規則不能超過 16384 位元組。',
+    'Routing rules are invalid.': '路由規則無效。',
+    'First matching rule wins': '首條符合規則生效',
+    'Rules run from top to bottom. direct allows the request, reject blocks it, and requests that match no rule are allowed.':
+      '規則由上而下執行。direct 允許請求，reject 拒絕請求；未符合任何規則的請求預設允許。',
+    'Keep management access first': '先保留管理存取',
+    'Put direct rules for trusted management IPs above broad reject rules so you do not lock yourself out.':
+      '請將可信管理 IP 的 direct 規則放在廣泛的 reject 規則之前，避免將自己鎖在系統外。',
+    'Routing rules': '路由規則',
+    'Use one daed-style rule per line. Supported matchers: dip(IP, CIDR, geoip:xx, geoip:private), l4proto(tcp), and dport(port). Use # for comments.':
+      '每行填寫一條 daed 風格規則。支援 dip(IP、CIDR、geoip:xx、geoip:private)、l4proto(tcp) 和 dport(port)；使用 # 加入註解。',
+  },
+  fr: {
+    'IP & Region Routing': 'Routage IP et régional',
+    'At least one routing rule is required.':
+      'Au moins une règle de routage est requise.',
+    'Routing rules cannot exceed 16384 bytes.':
+      'Les règles de routage ne peuvent pas dépasser 16 384 octets.',
+    'Routing rules are invalid.': 'Les règles de routage sont invalides.',
+    'First matching rule wins': 'La première règle correspondante s’applique',
+    'Rules run from top to bottom. direct allows the request, reject blocks it, and requests that match no rule are allowed.':
+      'Les règles sont évaluées de haut en bas. direct autorise la requête, reject la bloque et les requêtes sans correspondance sont autorisées.',
+    'Keep management access first':
+      'Préserver d’abord l’accès d’administration',
+    'Put direct rules for trusted management IPs above broad reject rules so you do not lock yourself out.':
+      'Placez les règles direct des IP d’administration approuvées avant les règles reject générales afin de ne pas bloquer votre propre accès.',
+    'Routing rules': 'Règles de routage',
+    'Use one daed-style rule per line. Supported matchers: dip(IP, CIDR, geoip:xx, geoip:private), l4proto(tcp), and dport(port). Use # for comments.':
+      'Utilisez une règle de style daed par ligne. Prédicats pris en charge : dip(IP, CIDR, geoip:xx, geoip:private), l4proto(tcp) et dport(port). Utilisez # pour les commentaires.',
+  },
+  ja: {
+    'IP & Region Routing': 'IP・地域ルーティング',
+    'At least one routing rule is required.':
+      '少なくとも1つのルーティングルールが必要です。',
+    'Routing rules cannot exceed 16384 bytes.':
+      'ルーティングルールは16384バイト以内にしてください。',
+    'Routing rules are invalid.': 'ルーティングルールが無効です。',
+    'First matching rule wins': '最初に一致したルールを適用',
+    'Rules run from top to bottom. direct allows the request, reject blocks it, and requests that match no rule are allowed.':
+      'ルールは上から順に評価されます。direct はリクエストを許可し、reject は拒否します。どのルールにも一致しないリクエストは許可されます。',
+    'Keep management access first': '管理アクセスを先に確保',
+    'Put direct rules for trusted management IPs above broad reject rules so you do not lock yourself out.':
+      'ロックアウトを防ぐため、信頼済み管理IPの direct ルールを広範な reject ルールより上に配置してください。',
+    'Routing rules': 'ルーティングルール',
+    'Use one daed-style rule per line. Supported matchers: dip(IP, CIDR, geoip:xx, geoip:private), l4proto(tcp), and dport(port). Use # for comments.':
+      '1行に1つの daed 形式ルールを記述します。対応条件は dip(IP, CIDR, geoip:xx, geoip:private)、l4proto(tcp)、dport(port) です。コメントには # を使用します。',
+  },
+  ru: {
+    'IP & Region Routing': 'Маршрутизация по IP и регионам',
+    'At least one routing rule is required.':
+      'Требуется хотя бы одно правило маршрутизации.',
+    'Routing rules cannot exceed 16384 bytes.':
+      'Правила маршрутизации не должны превышать 16 384 байта.',
+    'Routing rules are invalid.': 'Правила маршрутизации недействительны.',
+    'First matching rule wins': 'Применяется первое совпавшее правило',
+    'Rules run from top to bottom. direct allows the request, reject blocks it, and requests that match no rule are allowed.':
+      'Правила проверяются сверху вниз. direct разрешает запрос, reject блокирует его, а запросы без совпадений разрешаются.',
+    'Keep management access first': 'Сначала сохраните административный доступ',
+    'Put direct rules for trusted management IPs above broad reject rules so you do not lock yourself out.':
+      'Поместите правила direct для доверенных административных IP-адресов выше общих правил reject, чтобы не заблокировать себе доступ.',
+    'Routing rules': 'Правила маршрутизации',
+    'Use one daed-style rule per line. Supported matchers: dip(IP, CIDR, geoip:xx, geoip:private), l4proto(tcp), and dport(port). Use # for comments.':
+      'Указывайте по одному правилу в стиле daed на строку. Поддерживаются dip(IP, CIDR, geoip:xx, geoip:private), l4proto(tcp) и dport(port). Для комментариев используйте #.',
+  },
+  vi: {
+    'IP & Region Routing': 'Định tuyến IP và khu vực',
+    'At least one routing rule is required.':
+      'Cần ít nhất một quy tắc định tuyến.',
+    'Routing rules cannot exceed 16384 bytes.':
+      'Quy tắc định tuyến không được vượt quá 16384 byte.',
+    'Routing rules are invalid.': 'Quy tắc định tuyến không hợp lệ.',
+    'First matching rule wins': 'Áp dụng quy tắc khớp đầu tiên',
+    'Rules run from top to bottom. direct allows the request, reject blocks it, and requests that match no rule are allowed.':
+      'Quy tắc chạy từ trên xuống. direct cho phép yêu cầu, reject chặn yêu cầu; yêu cầu không khớp quy tắc nào sẽ được phép.',
+    'Keep management access first': 'Ưu tiên giữ quyền truy cập quản trị',
+    'Put direct rules for trusted management IPs above broad reject rules so you do not lock yourself out.':
+      'Đặt quy tắc direct cho IP quản trị tin cậy phía trên các quy tắc reject rộng để tránh tự khóa quyền truy cập.',
+    'Routing rules': 'Quy tắc định tuyến',
+    'Use one daed-style rule per line. Supported matchers: dip(IP, CIDR, geoip:xx, geoip:private), l4proto(tcp), and dport(port). Use # for comments.':
+      'Mỗi dòng dùng một quy tắc kiểu daed. Hỗ trợ dip(IP, CIDR, geoip:xx, geoip:private), l4proto(tcp) và dport(port). Dùng # cho chú thích.',
+  },
+}
+
+for (const [locale, translations] of Object.entries(
+  ipAccessRoutingTranslations
+)) {
+  Object.assign(newKeys[locale], translations)
+}
+
+const remainingStaticKeyTranslations = {
+  en: {
+    'Add the public description and confirm that this channel can be shared.':
+      'Add the public description and confirm that this channel can be shared.',
+    Approve: 'Approve',
+    Canvas: 'Canvas',
+    'Community rankings': 'Community rankings',
+    'Complete the full channel configuration below. The submission remains pending until an administrator approves it.':
+      'Complete the full channel configuration below. The submission remains pending until an administrator approves it.',
+    'Configure per-group warnings and acknowledgement count (1–3). Use modal for the most prominent warning.':
+      'Configure per-group warnings and acknowledgement count (1–3). Use modal for the most prominent warning.',
+    Contributor: 'Contributor',
+    'I confirm that these credentials are authorized for this shared channel.':
+      'I confirm that these credentials are authorized for this shared channel.',
+    Inspector: 'Inspector',
+    'Settings saved': 'Settings saved',
+    'Sharing information': 'Sharing information',
+    'This information is shown in the public channel market after approval.':
+      'This information is shown in the public channel market after approval.',
+    'Top-up amount': 'Top-up amount',
+    'Unable to update payment method': 'Unable to update payment method',
+    'View user in user management': 'View user in user management',
+  },
+  zh: {
+    'Add the public description and confirm that this channel can be shared.':
+      '添加公开说明，并确认此渠道可以共享。',
+    Approve: '批准',
+    Canvas: '画布',
+    'Community rankings': '社区排名',
+    'Complete the full channel configuration below. The submission remains pending until an administrator approves it.':
+      '请在下方完成完整渠道配置。提交内容在管理员批准前将保持待审核状态。',
+    'Configure per-group warnings and acknowledgement count (1–3). Use modal for the most prominent warning.':
+      '为各分组配置警告和确认次数（1–3 次）。最醒目的警告请使用弹窗模式。',
+    Contributor: '贡献者',
+    'I confirm that these credentials are authorized for this shared channel.':
+      '我确认这些凭证已获授权用于此共享渠道。',
+    Inspector: '检查器',
+    'Settings saved': '设置已保存',
+    'Sharing information': '共享信息',
+    'This information is shown in the public channel market after approval.':
+      '批准后，此信息将显示在公开渠道市场中。',
+    'Top-up amount': '充值金额',
+    'Unable to update payment method': '无法更新支付方式',
+    'View user in user management': '在用户管理中查看用户',
+  },
+  'zh-TW': {
+    'Add the public description and confirm that this channel can be shared.':
+      '新增公開說明，並確認此渠道可以共享。',
+    Approve: '核准',
+    Canvas: '畫布',
+    'Community rankings': '社群排名',
+    'Complete the full channel configuration below. The submission remains pending until an administrator approves it.':
+      '請在下方完成完整渠道設定。提交內容在管理員核准前將維持待審核狀態。',
+    'Configure per-group warnings and acknowledgement count (1–3). Use modal for the most prominent warning.':
+      '為各分組設定警告和確認次數（1–3 次）。最醒目的警告請使用彈窗模式。',
+    Contributor: '貢獻者',
+    'I confirm that these credentials are authorized for this shared channel.':
+      '我確認這些憑證已獲授權用於此共享渠道。',
+    Inspector: '檢查器',
+    'Settings saved': '設定已儲存',
+    'Sharing information': '共享資訊',
+    'This information is shown in the public channel market after approval.':
+      '核准後，此資訊將顯示在公開渠道市場中。',
+    'Top-up amount': '充值金額',
+    'Unable to update payment method': '無法更新付款方式',
+    'View user in user management': '在使用者管理中查看使用者',
+  },
+  fr: {
+    'Add the public description and confirm that this channel can be shared.':
+      'Ajoutez la description publique et confirmez que ce canal peut être partagé.',
+    Approve: 'Approuver',
+    Canvas: 'Canevas',
+    'Community rankings': 'Classements de la communauté',
+    'Complete the full channel configuration below. The submission remains pending until an administrator approves it.':
+      'Renseignez toute la configuration du canal ci-dessous. La soumission reste en attente jusqu’à son approbation par un administrateur.',
+    'Configure per-group warnings and acknowledgement count (1–3). Use modal for the most prominent warning.':
+      'Configurez les avertissements par groupe et le nombre de confirmations (1 à 3). Utilisez le mode modal pour l’avertissement le plus visible.',
+    Contributor: 'Contributeur',
+    'I confirm that these credentials are authorized for this shared channel.':
+      'Je confirme que ces identifiants sont autorisés pour ce canal partagé.',
+    Inspector: 'Inspecteur',
+    'Settings saved': 'Paramètres enregistrés',
+    'Sharing information': 'Informations de partage',
+    'This information is shown in the public channel market after approval.':
+      'Ces informations apparaîtront sur le marché public des canaux après approbation.',
+    'Top-up amount': 'Montant de la recharge',
+    'Unable to update payment method':
+      'Impossible de mettre à jour le moyen de paiement',
+    'View user in user management':
+      'Voir l’utilisateur dans la gestion des utilisateurs',
+  },
+  ja: {
+    'Add the public description and confirm that this channel can be shared.':
+      '公開説明を追加し、このチャネルを共有できることを確認してください。',
+    Approve: '承認',
+    Canvas: 'キャンバス',
+    'Community rankings': 'コミュニティランキング',
+    'Complete the full channel configuration below. The submission remains pending until an administrator approves it.':
+      '以下のチャネル設定をすべて入力してください。管理者が承認するまで申請は保留状態になります。',
+    'Configure per-group warnings and acknowledgement count (1–3). Use modal for the most prominent warning.':
+      'グループごとの警告と確認回数（1～3回）を設定します。最も目立たせる警告にはモーダルを使用してください。',
+    Contributor: 'コントリビューター',
+    'I confirm that these credentials are authorized for this shared channel.':
+      'これらの認証情報がこの共有チャネルでの使用を許可されていることを確認します。',
+    Inspector: 'インスペクター',
+    'Settings saved': '設定を保存しました',
+    'Sharing information': '共有情報',
+    'This information is shown in the public channel market after approval.':
+      '承認後、この情報は公開チャネルマーケットに表示されます。',
+    'Top-up amount': 'チャージ金額',
+    'Unable to update payment method': '支払方法を更新できません',
+    'View user in user management': 'ユーザー管理でユーザーを表示',
+  },
+  ru: {
+    'Add the public description and confirm that this channel can be shared.':
+      'Добавьте публичное описание и подтвердите, что этот канал можно использовать совместно.',
+    Approve: 'Одобрить',
+    Canvas: 'Холст',
+    'Community rankings': 'Рейтинг сообщества',
+    'Complete the full channel configuration below. The submission remains pending until an administrator approves it.':
+      'Заполните полную конфигурацию канала ниже. Заявка останется на рассмотрении до одобрения администратором.',
+    'Configure per-group warnings and acknowledgement count (1–3). Use modal for the most prominent warning.':
+      'Настройте предупреждения для групп и число подтверждений (1–3). Для наиболее заметного предупреждения используйте модальное окно.',
+    Contributor: 'Участник',
+    'I confirm that these credentials are authorized for this shared channel.':
+      'Я подтверждаю, что эти учётные данные разрешено использовать для общего канала.',
+    Inspector: 'Инспектор',
+    'Settings saved': 'Настройки сохранены',
+    'Sharing information': 'Сведения для публикации',
+    'This information is shown in the public channel market after approval.':
+      'После одобрения эти сведения появятся в каталоге общедоступных каналов.',
+    'Top-up amount': 'Сумма пополнения',
+    'Unable to update payment method': 'Не удалось обновить способ оплаты',
+    'View user in user management': 'Открыть пользователя в разделе управления',
+  },
+  vi: {
+    'Add the public description and confirm that this channel can be shared.':
+      'Thêm mô tả công khai và xác nhận rằng kênh này có thể được chia sẻ.',
+    Approve: 'Phê duyệt',
+    Canvas: 'Khung vẽ',
+    'Community rankings': 'Xếp hạng cộng đồng',
+    'Complete the full channel configuration below. The submission remains pending until an administrator approves it.':
+      'Hoàn tất toàn bộ cấu hình kênh bên dưới. Nội dung gửi sẽ ở trạng thái chờ cho đến khi quản trị viên phê duyệt.',
+    'Configure per-group warnings and acknowledgement count (1–3). Use modal for the most prominent warning.':
+      'Cấu hình cảnh báo theo nhóm và số lần xác nhận (1–3). Dùng hộp thoại cho cảnh báo nổi bật nhất.',
+    Contributor: 'Người đóng góp',
+    'I confirm that these credentials are authorized for this shared channel.':
+      'Tôi xác nhận các thông tin xác thực này được phép dùng cho kênh chia sẻ.',
+    Inspector: 'Trình kiểm tra',
+    'Settings saved': 'Đã lưu cài đặt',
+    'Sharing information': 'Thông tin chia sẻ',
+    'This information is shown in the public channel market after approval.':
+      'Thông tin này sẽ hiển thị trên chợ kênh công khai sau khi được phê duyệt.',
+    'Top-up amount': 'Số tiền nạp',
+    'Unable to update payment method':
+      'Không thể cập nhật phương thức thanh toán',
+    'View user in user management':
+      'Xem người dùng trong phần quản lý người dùng',
+  },
+}
+
+for (const [locale, translations] of Object.entries(
+  remainingStaticKeyTranslations
+)) {
+  Object.assign(newKeys[locale], translations)
+}
+
 async function main() {
   let totalAdded = 0
   for (const [locale, translations] of Object.entries(newKeys)) {
     const filePath = path.join(LOCALES_DIR, `${locale}.json`)
     const json = JSON.parse(await fs.readFile(filePath, 'utf8'))
     let count = 0
+    if ('Routing rules cannot exceed 16384 characters.' in json.translation) {
+      delete json.translation['Routing rules cannot exceed 16384 characters.']
+      count++
+    }
     for (const [key, value] of Object.entries(translations)) {
       if (json.translation[key] !== value) {
         json.translation[key] = value

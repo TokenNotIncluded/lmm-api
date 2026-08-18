@@ -24,7 +24,7 @@ import type { SecuritySettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
 import { AdvancedSecuritySection } from './advanced-security-section'
 import { AntiRelaySection } from './anti-relay-section'
-import { GlobalIPWhitelistSection } from './global-ip-whitelist-section'
+import { IPAccessRoutingSection } from './ip-access-routing-section'
 
 const SECURITY_SECTIONS = [
   {
@@ -73,13 +73,12 @@ const SECURITY_SECTIONS = [
     ),
   },
   {
-    id: 'global-ip-whitelist',
-    titleKey: 'Global IP Whitelist',
+    id: 'ip-access-routing',
+    titleKey: 'IP & Region Routing',
     build: (settings: SecuritySettings) => (
-      <GlobalIPWhitelistSection
+      <IPAccessRoutingSection
         defaultValues={{
-          GlobalIPWhitelistEnabled: settings.GlobalIPWhitelistEnabled,
-          GlobalIPWhitelistCIDRs: settings.GlobalIPWhitelistCIDRs,
+          IPAccessRoutingRules: settings.IPAccessRoutingRules,
         }}
       />
     ),

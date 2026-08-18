@@ -102,7 +102,6 @@ export type AssistantStatus = {
     public_assistant?: boolean
     account?: boolean
     developer_tools?: boolean
-    personal_ip_allowlist?: boolean
     usage_discount?: boolean
     admin_config?: boolean
     admin_pricing?: boolean

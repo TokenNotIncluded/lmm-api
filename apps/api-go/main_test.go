@@ -284,29 +284,27 @@ func TestLocalAcceptancePolicy(t *testing.T) {
 	}
 }
 
-func TestRegionalBindPolicy(t *testing.T) {
+func TestEdgeAccessBindPolicy(t *testing.T) {
 	tests := []struct {
 		name           string
-		enabled        bool
 		configuredBind string
 		listenAddress  string
 		wantErr        bool
 	}{
-		{name: "disabled policy allows explicit public bind", configuredBind: "0.0.0.0", listenAddress: "0.0.0.0:3000"},
-		{name: "default bind remains private", enabled: true, listenAddress: "127.0.0.1:3000"},
-		{name: "loopback IPv6 remains private", enabled: true, configuredBind: "::1", listenAddress: "[::1]:3000"},
-		{name: "public configured bind is rejected", enabled: true, configuredBind: "0.0.0.0", listenAddress: "0.0.0.0:3000", wantErr: true},
-		{name: "public final bind is rejected", enabled: true, configuredBind: "127.0.0.1", listenAddress: "0.0.0.2:3000", wantErr: true},
-		{name: "malformed final address is rejected", enabled: true, configuredBind: "127.0.0.1", listenAddress: "127.0.0.1", wantErr: true},
+		{name: "default bind remains private", listenAddress: "127.0.0.1:3000"},
+		{name: "loopback IPv6 remains private", configuredBind: "::1", listenAddress: "[::1]:3000"},
+		{name: "public configured bind is rejected", configuredBind: "0.0.0.0", listenAddress: "0.0.0.0:3000", wantErr: true},
+		{name: "public final bind is rejected", configuredBind: "127.0.0.1", listenAddress: "0.0.0.2:3000", wantErr: true},
+		{name: "malformed final address is rejected", configuredBind: "127.0.0.1", listenAddress: "127.0.0.1", wantErr: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			err := regionalBindPolicy(test.enabled, test.configuredBind, test.listenAddress)
+			err := edgeAccessBindPolicy(test.configuredBind, test.listenAddress)
 			if test.wantErr && err == nil {
-				t.Fatal("regionalBindPolicy() error = nil, want error")
+				t.Fatal("edgeAccessBindPolicy() error = nil, want error")
 			}
 			if !test.wantErr && err != nil {
-				t.Fatalf("regionalBindPolicy() unexpected error: %v", err)
+				t.Fatalf("edgeAccessBindPolicy() unexpected error: %v", err)
 			}
 		})
 	}
