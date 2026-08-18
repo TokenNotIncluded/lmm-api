@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Disposable Go/Rust differential for the five legacy ePay/FAST route forms.
+# Disposable Go/Rust differential for the legacy ePay route forms.
 #
-# The runner is deliberately inert unless LMM_IDENTITY_EPAY_FAST_RUN=1.  A
+# The runner is deliberately inert unless LMM_IDENTITY_EPAY_RUN=1.  A
 # successful run owns its PostgreSQL 18 cluster, two password-protected
 # Valkey instances, a private Go network namespace, a loopback Rust listener,
 # and the provider mock below. It never accepts a production URL, DSN, secret,
@@ -15,21 +15,21 @@ legacy_root=${LMM_GO_ORACLE_ROOT:-}
 [[ $legacy_root == /* && -d $legacy_root && ! -L $legacy_root ]] || { echo 'LMM_GO_ORACLE_ROOT must be an absolute, non-symlink directory' >&2; exit 2; }
 legacy_root=$(realpath -e -- "$legacy_root")
 case "$legacy_root" in "$repo_root"|"$repo_root"/*) echo 'LMM_GO_ORACLE_ROOT must be external to the current repository' >&2; exit 2 ;; esac
-pg_port=${LMM_IDENTITY_EPAY_FAST_PG_PORT:-55472}
-go_port=${LMM_IDENTITY_EPAY_FAST_GO_PORT:-13072}
-rust_port=${LMM_IDENTITY_EPAY_FAST_RUST_PORT:-33072}
-go_valkey_port=${LMM_IDENTITY_EPAY_FAST_GO_VALKEY_PORT:-16472}
-rust_valkey_port=${LMM_IDENTITY_EPAY_FAST_RUST_VALKEY_PORT:-16473}
-provider_port=${LMM_IDENTITY_EPAY_FAST_PROVIDER_PORT:-18072}
-runtime_base=${LMM_IDENTITY_EPAY_FAST_RUNTIME_BASE:-/tmp}
+pg_port=${LMM_IDENTITY_EPAY_PG_PORT:-55472}
+go_port=${LMM_IDENTITY_EPAY_GO_PORT:-13072}
+rust_port=${LMM_IDENTITY_EPAY_RUST_PORT:-33072}
+go_valkey_port=${LMM_IDENTITY_EPAY_GO_VALKEY_PORT:-16472}
+rust_valkey_port=${LMM_IDENTITY_EPAY_RUST_VALKEY_PORT:-16473}
+provider_port=${LMM_IDENTITY_EPAY_PROVIDER_PORT:-18072}
+runtime_base=${LMM_IDENTITY_EPAY_RUNTIME_BASE:-/tmp}
 
 plan() {
   jq -cn \
-    --argjson routes '["POST /api/user/pay","GET /api/user/epay/notify","POST /api/user/epay/notify","POST /api/user/fastpay/pay","POST /api/user/fastpay/notify"]' \
-    '{test:"identity-epay-fast-provider-differential",mode:"plan-only",routes:$routes,isolated:{postgres_major:18,valkey_instances:2,go_network_namespace:"required",provider_mock:"loopback-only",inherited_environment:false,production_access:false},checks:["auth-before-parse","canonical-form-query","json-numeric-signature-scalars","pending-order-before-response","callback-replay-idempotency","wallet-and-quota-snapshots"],approval_credit:false}'
+    --argjson routes '["POST /api/user/pay","GET /api/user/epay/notify","POST /api/user/epay/notify"]' \
+    '{test:"identity-epay-provider-differential",mode:"plan-only",routes:$routes,isolated:{postgres_major:18,valkey_instances:2,go_network_namespace:"required",provider_mock:"loopback-only",inherited_environment:false,production_access:false},checks:["auth-before-parse","canonical-form-query","pending-order-before-response","callback-replay-idempotency","wallet-and-quota-snapshots"],approval_credit:false}'
 }
 
-if [[ ${LMM_IDENTITY_EPAY_FAST_RUN:-0} != 1 ]]; then
+if [[ ${LMM_IDENTITY_EPAY_RUN:-0} != 1 ]]; then
   plan
   exit 0
 fi
@@ -41,13 +41,13 @@ done
 [[ -d $legacy_root ]] || { echo "missing frozen Go source: $legacy_root" >&2; exit 1; }
 [[ -d $runtime_base && -w $runtime_base ]] || { echo "runtime base is not writable: $runtime_base" >&2; exit 1; }
 
-go_listener=${LMM_IDENTITY_EPAY_FAST_GO_LISTENER:-}
-rust_listener=${LMM_IDENTITY_EPAY_FAST_RUST_LISTENER:-}
-go_namespace_exec=${LMM_IDENTITY_EPAY_FAST_GO_NAMESPACE_EXEC:-}
-[[ -n $go_listener && -x $go_listener ]] || { echo "set executable LMM_IDENTITY_EPAY_FAST_GO_LISTENER" >&2; exit 2; }
-[[ -n $rust_listener && -x $rust_listener ]] || { echo "set executable LMM_IDENTITY_EPAY_FAST_RUST_LISTENER" >&2; exit 2; }
+go_listener=${LMM_IDENTITY_EPAY_GO_LISTENER:-}
+rust_listener=${LMM_IDENTITY_EPAY_RUST_LISTENER:-}
+go_namespace_exec=${LMM_IDENTITY_EPAY_GO_NAMESPACE_EXEC:-}
+[[ -n $go_listener && -x $go_listener ]] || { echo "set executable LMM_IDENTITY_EPAY_GO_LISTENER" >&2; exit 2; }
+[[ -n $rust_listener && -x $rust_listener ]] || { echo "set executable LMM_IDENTITY_EPAY_RUST_LISTENER" >&2; exit 2; }
 [[ -n $go_namespace_exec && -x $go_namespace_exec ]] || {
-  echo "refusing Go listener: it binds :PORT; set dedicated LMM_IDENTITY_EPAY_FAST_GO_NAMESPACE_EXEC" >&2
+  echo "refusing Go listener: it binds :PORT; set dedicated LMM_IDENTITY_EPAY_GO_NAMESPACE_EXEC" >&2
   exit 2
 }
 
@@ -64,15 +64,15 @@ for spec in \
   preflight_port "${spec%%:*}" "${spec##*:}"
 done
 
-runtime=$(mktemp -d "$runtime_base/lmm-identity-epay-fast.XXXXXX")
+runtime=$(mktemp -d "$runtime_base/lmm-identity-epay.XXXXXX")
 [[ $(stat -c %u "$runtime") == $(id -u) ]] || { echo "runtime directory owner mismatch" >&2; exit 1; }
 valkey_password=$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')
-go_database=lmm_identity_epay_fast_go
-rust_database=lmm_identity_epay_fast_rust
-go_schema=lmm_test_identity_epay_fast_go
-rust_schema=lmm_test_identity_epay_fast_rust
-go_role=lmm_test_identity_epay_fast_go
-rust_role=lmm_test_identity_epay_fast_rust
+go_database=lmm_identity_epay_go
+rust_database=lmm_identity_epay_rust
+go_schema=lmm_test_identity_epay_go
+rust_schema=lmm_test_identity_epay_rust
+go_role=lmm_test_identity_epay_go
+rust_role=lmm_test_identity_epay_rust
 go_pid=
 rust_pid=
 provider_pid=
@@ -90,12 +90,12 @@ cleanup() {
   done
   [[ -d $runtime/pg ]] && pg_ctl -D "$runtime/pg" -m fast -w stop >/dev/null 2>&1 || true
   case "$runtime" in
-    "$runtime_base"/lmm-identity-epay-fast.*) rm -rf "$runtime" ;;
+    "$runtime_base"/lmm-identity-epay.*) rm -rf "$runtime" ;;
     *) echo "refusing unexpected runtime path: $runtime" >&2 ;;
   esac
 }
 trap cleanup EXIT INT TERM
-trap 'echo "identity ePay/FAST differential failed at line $LINENO" >&2' ERR
+trap 'echo "identity ePay differential failed at line $LINENO" >&2' ERR
 
 wait_for_pid_http() {
   local pid=$1 url=$2
@@ -178,7 +178,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(200 if self.path == "/health" else 404); self.end_headers()
     def do_POST(self):
         self.record()
-        self.send_response(200 if self.path in ("/epay", "/fastpay") else 404); self.end_headers()
+        self.send_response(200 if self.path == "/epay" else 404); self.end_headers()
     def log_message(self, *_): pass
 socketserver.TCPServer(("127.0.0.1", int(os.environ["PROVIDER_PORT"])), Handler).serve_forever()
   ' >"$runtime/provider.log" 2>&1 & record_pid provider_pid "$!" || exit 1
@@ -197,7 +197,7 @@ env -i PATH="$PATH" HOME="$runtime" TMPDIR="$runtime" LANG=C \
 assert_owned_pid "$go_pid"
 env -i PATH="$PATH" HOME="$runtime" TMPDIR="$runtime" LANG=C \
   DATABASE_URL="$rust_dsn" VALKEY_URL="redis://:$valkey_password@127.0.0.1:$rust_valkey_port" \
-  LMM_RS_LISTEN_ADDR="127.0.0.1:$rust_port" LMM_RS_SLOT="identity-epay-fast-test" \
+  LMM_RS_LISTEN_ADDR="127.0.0.1:$rust_port" LMM_RS_SLOT="identity-epay-test" \
   LMM_SCHEMA_CONTRACT="$rust_schema" LMM_RS_TEST_INSTANCE=1 \
   LMM_TEST_PROVIDER_BASE_URL="http://127.0.0.1:$provider_port" LMM_TEST_PAYMENT_SECRET="$valkey_password" \
   "$rust_listener" >"$runtime/rust.log" 2>&1 & record_pid rust_pid "$!" || exit 1
@@ -219,6 +219,4 @@ compare() {
 # the listener-specific fixture command before this runner is approved.
 compare epay-get-malformed GET '/api/user/epay/notify?trade_no=order-1&sign=%ZZ'
 compare epay-post-malformed POST '/api/user/epay/notify' 'trade_no=order-1&sign=%'
-compare fastpay-invalid-sign POST '/api/user/fastpay/notify' '{"outTradeNo":"order-1","status":1,"sign":"invalid"}' application/json
-
-jq -cn '{test:"identity-epay-fast-provider-differential",routes:5,provider:"loopback-only",postgres_major:18,valkey_instances:2,negative_callback_matches:true,positive_checkout_and_replay:"listener-fixture-required",atomicity_delta:{go:"order and wallet are separate writes",rust:"repository completion must be one transaction",side_effect_equivalent:false},approval_credit:false,result:"not-approved"}'
+jq -cn '{test:"identity-epay-provider-differential",routes:3,provider:"loopback-only",postgres_major:18,valkey_instances:2,negative_callback_matches:true,positive_checkout_and_replay:"listener-fixture-required",atomicity_delta:{go:"order and wallet are separate writes",rust:"repository completion must be one transaction",side_effect_equivalent:false},approval_credit:false,result:"not-approved"}'

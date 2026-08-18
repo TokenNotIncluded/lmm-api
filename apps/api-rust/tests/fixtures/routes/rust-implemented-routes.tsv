@@ -26,7 +26,6 @@ POST	/api/gift/	lmm_api_rs::migration_routes::gifts::router
 PUT	/api/gift/:id	lmm_api_rs::migration_routes::gifts::router
 GET	/api/gift/claims	lmm_api_rs::migration_routes::gifts::router
 POST	/api/subscription/balance/pay	lmm_api_rs::migration_routes::billing_payments::subscription_balance_pay_router
-POST	/api/subscription/fastpay/notify	lmm_api_rs::migration_routes::billing_payments::subscription_fastpay_notify_router
 GET	/api/security/policy	lmm_api_rs::migration_routes::security_overview::router
 GET	/api/security/stats	lmm_api_rs::migration_routes::security_overview::router
 GET	/api/security/admin/policy	lmm_api_rs::migration_routes::security_overview::router

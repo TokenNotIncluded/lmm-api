@@ -672,7 +672,7 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
                 onClick={handleAutoGroupOptimize}
                 disabled={optimizationError !== null}
               >
-                {t('Optimize by effective ratio')}
+                {t('Optimize by effective cost')}
               </Button>
             </div>
             <div className='space-y-2'>
@@ -692,7 +692,7 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
                 <SelectContent alignItemWithTrigger={false}>
                   <SelectGroup>
                     <SelectItem value='__base_ratio__'>
-                      {t('Base billing ratios')}
+                      {t('Base cost multipliers')}
                     </SelectItem>
                     {registryNames.map((name) => (
                       <SelectItem key={name} value={name}>
@@ -705,7 +705,7 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
             </div>
             <p className='text-muted-foreground text-xs'>
               {t(
-                "Manual order is preserved until you use Optimize. This changes the global order for every user, but runtime assignment still filters each user's visible groups. Optimize uses base billing ratios by default; selecting a user group applies its exact special ratio overrides before sorting."
+                "Manual order is preserved until you use Optimize. This changes the global order for every user, but runtime assignment still filters each user's visible groups. Optimize uses base cost multipliers by default; selecting a user group applies its exact special cost overrides before sorting."
               )}
             </p>
             {optimizationError && (
@@ -877,7 +877,7 @@ function GroupPricingTable({
             <CardTitle>{t('Pricing groups')}</CardTitle>
             <CardDescription>
               {t(
-                'All group names live here. Ratio applies when calls are billed as this group; top-up ratio applies to users whose account is in this group. A top-up ratio and a payment channel price are independent multipliers.'
+                'Set the base cost multiplier for each routing group. Dynamic pricing adds the live profit multiplier on top; top-up ratio remains an independent balance multiplier.'
               )}
             </CardDescription>
           </div>
@@ -911,7 +911,7 @@ function GroupPricingTable({
               },
               {
                 id: 'ratio',
-                header: t('Ratio'),
+                header: t('Cost multiplier'),
                 className: 'w-28',
                 cell: (row) => (
                   <Input
@@ -1019,7 +1019,7 @@ function GroupPricingTable({
           {validation.hasInvalidRatio && (
             <p className='text-destructive text-sm'>
               {t(
-                'Ratios must be finite numbers greater than or equal to zero.'
+                'Cost multipliers must be finite numbers greater than or equal to zero.'
               )}
             </p>
           )}
@@ -1160,10 +1160,10 @@ function GroupOverrideRules({
   return (
     <Card className={sectionCardClassName}>
       <CardHeader className={sectionHeaderClassName}>
-        <CardTitle>{t('Special ratio rules')}</CardTitle>
+        <CardTitle>{t('Special cost rules')}</CardTitle>
         <CardDescription>
           {t(
-            'Each rule reads as a sentence: users of one group pay a special ratio when billed as another group. An exact user group plus billing group rule takes priority; otherwise the billing group base ratio applies. Top-up ratios and payment channel prices remain independent multipliers.'
+            'Each rule reads as a sentence: users of one group use a special cost multiplier when billed as another group. An exact user group plus billing group rule takes priority; otherwise the billing group base cost applies.'
           )}
         </CardDescription>
       </CardHeader>
@@ -1255,14 +1255,15 @@ function GroupOverrideRules({
                               },
                               {
                                 id: 'ratio',
-                                header: t('Ratio'),
+                                header: t('Cost multiplier'),
                                 cell: (override) => {
                                   const baseRatio = baseRatioByName.get(
                                     override.targetGroup
                                   )
                                   return (
                                     <span className='inline-flex items-center gap-1.5'>
-                                      {override.ratio ?? t('Invalid ratio')}
+                                      {override.ratio ??
+                                        t('Invalid cost multiplier')}
                                       {override.ratio !== null &&
                                         baseRatio !== undefined &&
                                         baseRatio !== override.ratio && (
@@ -1415,15 +1416,15 @@ function GroupOverrideDialog({
     <Dialog
       open={open}
       onOpenChange={onOpenChange}
-      title={editData ? t('Edit ratio override') : t('Add ratio override')}
+      title={editData ? t('Edit cost override') : t('Add cost override')}
       description={
         userGroup
           ? t(
-              'Configure a custom ratio for "{{userGroup}}" users when using a specific token group.',
+              'Configure a custom cost multiplier for "{{userGroup}}" users when using a specific token group.',
               { userGroup }
             )
           : t(
-              'Configure a custom ratio for when users use a specific token group.'
+              'Configure a custom cost multiplier for when users use a specific token group.'
             )
       }
       contentHeight='auto'
@@ -1454,7 +1455,7 @@ function GroupOverrideDialog({
           </p>
         </div>
         <div className='space-y-2'>
-          <Label>{t('Ratio')}</Label>
+          <Label>{t('Cost multiplier')}</Label>
           <Input
             type='number'
             min={0}
@@ -1475,7 +1476,7 @@ function GroupOverrideDialog({
             {baseRatio !== undefined
               ? t('(instead of {{ratio}})', { ratio: baseRatio })
               : t(
-                  'Multiplier applied when {{userGroup}} uses {{targetGroup}}',
+                  'Cost multiplier applied when {{userGroup}} uses {{targetGroup}}',
                   {
                     userGroup: userGroup || t('this user group'),
                     targetGroup: targetGroup || t('this token group'),
@@ -1606,7 +1607,9 @@ function GroupDetailSheet(props: GroupDetailSheetProps) {
               <h3 className='text-sm font-semibold'>{t('Overview')}</h3>
               <dl className='space-y-1.5 text-sm'>
                 <div className='flex justify-between'>
-                  <dt className='text-muted-foreground'>{t('Ratio')}</dt>
+                  <dt className='text-muted-foreground'>
+                    {t('Cost multiplier')}
+                  </dt>
                   <dd className='font-medium'>{detail.ratio ?? '-'}</dd>
                 </div>
                 <div className='flex justify-between'>

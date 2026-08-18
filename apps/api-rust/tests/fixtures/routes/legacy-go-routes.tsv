@@ -179,8 +179,6 @@ POST	/api/subscription/epay/notify	github.com/QuantumNous/new-api/controller.Sub
 POST	/api/subscription/epay/pay	github.com/QuantumNous/new-api/controller.SubscriptionRequestEpay
 GET	/api/subscription/epay/return	github.com/QuantumNous/new-api/controller.SubscriptionEpayReturn
 POST	/api/subscription/epay/return	github.com/QuantumNous/new-api/controller.SubscriptionEpayReturn
-POST	/api/subscription/fastpay/notify	github.com/QuantumNous/new-api/controller.SubscriptionFastPayNotify
-POST	/api/subscription/fastpay/pay	github.com/QuantumNous/new-api/controller.SubscriptionRequestFastPay
 GET	/api/subscription/plans	github.com/QuantumNous/new-api/controller.GetSubscriptionPlans
 GET	/api/subscription/self	github.com/QuantumNous/new-api/controller.GetSubscriptionSelf
 PUT	/api/subscription/self/preference	github.com/QuantumNous/new-api/controller.UpdateSubscriptionPreference
@@ -233,8 +231,6 @@ POST	/api/user/checkin	github.com/QuantumNous/new-api/controller.DoCheckin
 POST	/api/user/creem/pay	github.com/QuantumNous/new-api/controller.RequestCreemPay
 GET	/api/user/epay/notify	github.com/QuantumNous/new-api/controller.EpayNotify
 POST	/api/user/epay/notify	github.com/QuantumNous/new-api/controller.EpayNotify
-POST	/api/user/fastpay/notify	github.com/QuantumNous/new-api/controller.FastPayNotify
-POST	/api/user/fastpay/pay	github.com/QuantumNous/new-api/controller.RequestFastPay
 GET	/api/user/groups	github.com/QuantumNous/new-api/controller.GetUserGroups
 POST	/api/user/login	github.com/QuantumNous/new-api/controller.Login
 POST	/api/user/login/2fa	github.com/QuantumNous/new-api/controller.Verify2FALogin

@@ -292,13 +292,6 @@ function buildSectionDefs(t: (key: string) => string): SectionDef[] {
           config: { section: 'admin', key: 'subscription' },
         },
         {
-          id: '/finance',
-          key: 'finance',
-          title: t('Cost control'),
-          description: t('Review platform finances'),
-          config: { section: 'admin', key: 'finance' },
-        },
-        {
           id: '/system-info',
           key: 'system-info',
           title: t('System Info'),
@@ -383,12 +376,6 @@ const DEFAULT_ROUTES: DefaultRouteDef[] = [
   {
     route: '/subscriptions',
     title: 'Subscriptions',
-    requiredRole: ROLE.ADMIN,
-    requiresConsole: true,
-  },
-  {
-    route: '/finance',
-    title: 'Cost control',
     requiredRole: ROLE.ADMIN,
     requiresConsole: true,
   },

@@ -180,8 +180,6 @@ POST	/api/subscription/epay/notify	webhook
 POST	/api/subscription/epay/pay	user
 GET	/api/subscription/epay/return	public
 POST	/api/subscription/epay/return	public
-POST	/api/subscription/fastpay/notify	webhook
-POST	/api/subscription/fastpay/pay	user
 GET	/api/subscription/plans	user
 GET	/api/subscription/self	user
 PUT	/api/subscription/self/preference	user
@@ -234,8 +232,6 @@ POST	/api/user/checkin	user
 POST	/api/user/creem/pay	user
 GET	/api/user/epay/notify	webhook
 POST	/api/user/epay/notify	webhook
-POST	/api/user/fastpay/notify	webhook
-POST	/api/user/fastpay/pay	user
 GET	/api/user/groups	public
 POST	/api/user/login	public
 POST	/api/user/login/2fa	public

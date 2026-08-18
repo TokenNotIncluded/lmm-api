@@ -43,7 +43,6 @@ const newKeys = {
       'Support and access requests stay auditable.',
     'Use one clear API for your work, connect a client, or explore public open-source challenges.':
       'Use one clear API for your work, connect a client, or explore public open-source challenges.',
-    'Cost control': 'Cost control',
     'Financial overview': 'Financial overview',
     Expenses: 'Expenses',
     Profit: 'Profit',
@@ -153,7 +152,6 @@ const newKeys = {
     'Support and access requests stay auditable.': '支持与访问申请都可追溯。',
     'Use one clear API for your work, connect a client, or explore public open-source challenges.':
       '用一个清晰的 API 完成工作、连接客户端，或探索公开的开源任务。',
-    'Cost control': '成本控制',
     'Financial overview': '财务概览',
     Expenses: '支出',
     Profit: '利润',
@@ -258,7 +256,6 @@ const newKeys = {
     'Support and access requests stay auditable.': '支援與存取申請都可追溯。',
     'Use one clear API for your work, connect a client, or explore public open-source challenges.':
       '用一個清晰的 API 完成工作、連接客戶端，或探索公開的開源任務。',
-    'Cost control': '成本控制',
     'Financial overview': '財務概覽',
     Expenses: '支出',
     Profit: '利潤',
@@ -361,7 +358,6 @@ const newKeys = {
       'Le support et les demandes d’accès restent auditables.',
     'Use one clear API for your work, connect a client, or explore public open-source challenges.':
       'Utilisez une API claire, connectez un client ou explorez des projets open source.',
-    'Cost control': 'Contrôle des coûts',
     'Financial overview': 'Aperçu financier',
     Expenses: 'Dépenses',
     Profit: 'Bénéfice',
@@ -470,7 +466,6 @@ const newKeys = {
       'サポートとアクセス申請を監査可能に保ちます。',
     'Use one clear API for your work, connect a client, or explore public open-source challenges.':
       'ひとつの API で作業し、クライアントを接続し、公開オープンソースの課題を探せます。',
-    'Cost control': 'コスト管理',
     'Financial overview': '財務概要',
     Expenses: '支出',
     Profit: '利益',
@@ -576,7 +571,6 @@ const newKeys = {
       'Поддержка и запросы доступа остаются проверяемыми.',
     'Use one clear API for your work, connect a client, or explore public open-source challenges.':
       'Используйте единый API, подключайте клиент или изучайте открытые проекты.',
-    'Cost control': 'Контроль затрат',
     'Financial overview': 'Финансовый обзор',
     Expenses: 'Расходы',
     Profit: 'Прибыль',
@@ -684,7 +678,6 @@ const newKeys = {
       'Hỗ trợ và yêu cầu truy cập luôn có thể kiểm tra.',
     'Use one clear API for your work, connect a client, or explore public open-source challenges.':
       'Dùng một API rõ ràng, kết nối client hoặc khám phá dự án mã nguồn mở.',
-    'Cost control': 'Kiểm soát chi phí',
     'Financial overview': 'Tổng quan tài chính',
     Expenses: 'Chi phí',
     Profit: 'Lợi nhuận',
@@ -3065,7 +3058,6 @@ const sidebarPreferencesTranslations = {
     'Manage redemption codes': 'Manage redemption codes',
     'Manage discount codes': 'Manage discount codes',
     'Manage subscriptions': 'Manage subscriptions',
-    'Review platform finances': 'Review platform finances',
     'Inspect system information': 'Inspect system information',
     'Configure the service': 'Configure the service',
   },
@@ -3095,7 +3087,6 @@ const sidebarPreferencesTranslations = {
     'Manage redemption codes': '管理兑换码',
     'Manage discount codes': '管理优惠码',
     'Manage subscriptions': '管理订阅',
-    'Review platform finances': '查看平台财务',
     'Inspect system information': '查看系统信息',
     'Configure the service': '配置服务',
   },
@@ -3125,7 +3116,6 @@ const sidebarPreferencesTranslations = {
     'Manage redemption codes': '管理兌換碼',
     'Manage discount codes': '管理折扣碼',
     'Manage subscriptions': '管理訂閱',
-    'Review platform finances': '查看平台財務',
     'Inspect system information': '查看系統資訊',
     'Configure the service': '設定服務',
   },
@@ -3157,7 +3147,6 @@ const sidebarPreferencesTranslations = {
     'Manage redemption codes': 'Gérer les codes de rachat',
     'Manage discount codes': 'Gérer les codes promotionnels',
     'Manage subscriptions': 'Gérer les abonnements',
-    'Review platform finances': 'Voir les finances de la plateforme',
     'Inspect system information': 'Consulter les informations système',
     'Configure the service': 'Configurer le service',
   },
@@ -3188,7 +3177,6 @@ const sidebarPreferencesTranslations = {
     'Manage redemption codes': '引き換えコードを管理',
     'Manage discount codes': '割引コードを管理',
     'Manage subscriptions': 'サブスクリプションを管理',
-    'Review platform finances': 'プラットフォームの財務を確認',
     'Inspect system information': 'システム情報を確認',
     'Configure the service': 'サービスを設定',
   },
@@ -3221,7 +3209,6 @@ const sidebarPreferencesTranslations = {
     'Manage redemption codes': 'Управлять кодами погашения',
     'Manage discount codes': 'Управлять кодами скидок',
     'Manage subscriptions': 'Управлять подписками',
-    'Review platform finances': 'Просмотреть финансы платформы',
     'Inspect system information': 'Просмотреть сведения о системе',
     'Configure the service': 'Настроить сервис',
   },
@@ -3252,7 +3239,6 @@ const sidebarPreferencesTranslations = {
     'Manage redemption codes': 'Quản lý mã đổi thưởng',
     'Manage discount codes': 'Quản lý mã giảm giá',
     'Manage subscriptions': 'Quản lý gói đăng ký',
-    'Review platform finances': 'Xem tài chính nền tảng',
     'Inspect system information': 'Xem thông tin hệ thống',
     'Configure the service': 'Cấu hình dịch vụ',
   },
@@ -3662,6 +3648,649 @@ const remainingStaticKeyTranslations = {
 
 for (const [locale, translations] of Object.entries(
   remainingStaticKeyTranslations
+)) {
+  Object.assign(newKeys[locale], translations)
+}
+
+const pricingRedesignTranslations = {
+  en: {
+    'Dynamic Profit Pricing': 'Dynamic Profit Pricing',
+    'Group Pricing stores the base cost multiplier. This page computes the live profit multiplier on top of that cost.':
+      'Group Pricing stores the base cost multiplier. This page computes the live profit multiplier on top of that cost.',
+    'Enable dynamic profit pricing': 'Enable dynamic profit pricing',
+    'The final charge is the group cost multiplier multiplied by this dynamic profit multiplier.':
+      'The final charge is the group cost multiplier multiplied by this dynamic profit multiplier.',
+    'Minimum profit multiplier': 'Minimum profit multiplier',
+    'The profit multiplier never falls below this value while dynamic pricing is enabled.':
+      'The profit multiplier never falls below this value while dynamic pricing is enabled.',
+    'Dynamic profit ceiling': 'Dynamic profit ceiling',
+    'Caps the load-driven profit premium. Cost protection can still raise the effective multiplier when needed.':
+      'Caps the load-driven profit premium. Cost protection can still raise the effective multiplier when needed.',
+    'Reference model cost (USD / 1M tokens)':
+      'Reference model cost (USD / 1M tokens)',
+    'Use the model cost baseline used to compare upstream cost with the configured group cost multiplier.':
+      'Use the model cost baseline used to compare upstream cost with the configured group cost multiplier.',
+    'Cost protection margin': 'Cost protection margin',
+    'Known upstream cost is multiplied by this margin before the cost floor is compared with profit pricing.':
+      'Known upstream cost is multiplied by this margin before the cost floor is compared with profit pricing.',
+    'Live profit multiplier preview': 'Live profit multiplier preview',
+    'Current dynamic profit multiplier': 'Current dynamic profit multiplier',
+    'Cost × profit pricing preview': 'Cost × profit pricing preview',
+    'Group Pricing supplies the cost multiplier. Dynamic pricing supplies the profit multiplier. Final billing multiplies both.':
+      'Group Pricing supplies the cost multiplier. Dynamic pricing supplies the profit multiplier. Final billing multiplies both.',
+    Formula: 'Formula',
+    'Final billing = group cost × dynamic profit':
+      'Final billing = group cost × dynamic profit',
+    'Pricing group': 'Pricing group',
+    'Cost multiplier': 'Cost multiplier',
+    'Profit multiplier': 'Profit multiplier',
+    'Effective billing multiplier': 'Effective billing multiplier',
+    'No pricing groups configured': 'No pricing groups configured',
+    'Group cost multipliers': 'Group cost multipliers',
+    'JSON map of group → cost multiplier used as the base for that billing group. Dynamic pricing adds the profit multiplier.':
+      'JSON map of group → cost multiplier used as the base for that billing group. Dynamic pricing adds the profit multiplier.',
+    'Understand how user groups, cost multipliers, profit pricing, and special rules work together.':
+      'Understand how user groups, cost multipliers, profit pricing, and special rules work together.',
+    'decides which channels are used and which base cost multiplier applies.':
+      'decides which channels are used and which base cost multiplier applies.',
+    'decides the top-up ratio, which groups the user can pick for tokens, and whether a cost override applies.':
+      'decides the top-up ratio, which groups the user can pick for tokens, and whether a cost override applies.',
+    'Find the cost multiplier.': 'Find the cost multiplier.',
+    'Look for a special cost rule matching this user group and this billing group. If one exists, use its cost multiplier. Otherwise use the billing group base cost from the pricing table.':
+      'Look for a special cost rule matching this user group and this billing group. If one exists, use its cost multiplier. Otherwise use the billing group base cost from the pricing table.',
+    'Final charge = model base cost × group cost multiplier × dynamic profit multiplier.':
+      'Final charge = model base cost × group cost multiplier × dynamic profit multiplier.',
+    'The group value is a cost basis, not a personal discount. Dynamic pricing supplies the profit multiplier separately.':
+      'The group value is a cost basis, not a personal discount. Dynamic pricing supplies the profit multiplier separately.',
+    'Special cost rules': 'Special cost rules',
+    'Cost basis = 10 × 0.3 = 3': 'Cost basis = 10 × 0.3 = 3',
+    'Cost basis = 10 × 1.0 = 10': 'Cost basis = 10 × 1.0 = 10',
+    'Cost basis = 10 × 0.8 = 8': 'Cost basis = 10 × 0.8 = 8',
+    'Users of vip, when billed as premium, use cost multiplier':
+      'Users of vip, when billed as premium, use cost multiplier',
+    'No rule for vip billed as default → use the base cost of default, 1.0 (the 0.8 of vip is not used)':
+      'No rule for vip billed as default → use the base cost of default, 1.0 (the 0.8 of vip is not used)',
+    'No rule for vip billed as vip → use the base cost of vip, 0.8':
+      'No rule for vip billed as vip → use the base cost of vip, 0.8',
+    'Use the pricing group table to manage the cost multiplier and whether the group appears in the token creation dropdown.':
+      'Use the pricing group table to manage the cost multiplier and whether the group appears in the token creation dropdown.',
+    'In JSON, the user group is the outer key and the billing group is the inner key. The example below means: vip users use cost multiplier 0.8 when billed as standard, and 0.3 when billed as premium.':
+      'In JSON, the user group is the outer key and the billing group is the inner key. The example below means: vip users use cost multiplier 0.8 when billed as standard, and 0.3 when billed as premium.',
+    'Only configured combinations are overridden. All other calls keep the billing group base cost multiplier.':
+      'Only configured combinations are overridden. All other calls keep the billing group base cost multiplier.',
+    'Base cost multipliers': 'Base cost multipliers',
+    "Manual order is preserved until you use Optimize. This changes the global order for every user, but runtime assignment still filters each user's visible groups. Optimize uses base cost multipliers by default; selecting a user group applies its exact special cost overrides before sorting.":
+      "Manual order is preserved until you use Optimize. This changes the global order for every user, but runtime assignment still filters each user's visible groups. Optimize uses base cost multipliers by default; selecting a user group applies its exact special cost overrides before sorting.",
+    'Cost multipliers must be finite numbers greater than or equal to zero.':
+      'Cost multipliers must be finite numbers greater than or equal to zero.',
+    'Optimize by effective cost': 'Optimize by effective cost',
+    'Edit cost override': 'Edit cost override',
+    'Add cost override': 'Add cost override',
+    'Configure a custom cost multiplier for "{{userGroup}}" users when using a specific token group.':
+      'Configure a custom cost multiplier for "{{userGroup}}" users when using a specific token group.',
+    'Configure a custom cost multiplier for when users use a specific token group.':
+      'Configure a custom cost multiplier for when users use a specific token group.',
+    'Invalid cost multiplier': 'Invalid cost multiplier',
+    'Cost multiplier applied when {{userGroup}} uses {{targetGroup}}':
+      'Cost multiplier applied when {{userGroup}} uses {{targetGroup}}',
+    'Save group pricing': 'Save group pricing',
+    'Fixed by channel sharing settings': 'Fixed by channel sharing settings',
+  },
+  zh: {
+    'Dynamic Profit Pricing': '动态利润定价',
+    'Group Pricing stores the base cost multiplier. This page computes the live profit multiplier on top of that cost.':
+      '分组定价保存成本基准倍率；本页在成本之上计算实时利润倍率。',
+    'Enable dynamic profit pricing': '启用动态利润定价',
+    'The final charge is the group cost multiplier multiplied by this dynamic profit multiplier.':
+      '最终收费 = 分组成本倍率 × 动态利润倍率。',
+    'Minimum profit multiplier': '最低利润倍率',
+    'The profit multiplier never falls below this value while dynamic pricing is enabled.':
+      '启用动态定价后，利润倍率不会低于此值。',
+    'Dynamic profit ceiling': '动态利润上限',
+    'Caps the load-driven profit premium. Cost protection can still raise the effective multiplier when needed.':
+      '仅限制负载产生的利润溢价；成本保护需要时仍可提高最终倍率。',
+    'Reference model cost (USD / 1M tokens)':
+      '模型成本基准（美元 / 100 万 Token）',
+    'Use the model cost baseline used to compare upstream cost with the configured group cost multiplier.':
+      '用于将上游成本与分组成本倍率进行比较的模型成本基准。',
+    'Cost protection margin': '成本保护裕量',
+    'Known upstream cost is multiplied by this margin before the cost floor is compared with profit pricing.':
+      '已知上游成本先乘以该裕量，再与利润定价的成本底线比较。',
+    'Live profit multiplier preview': '实时利润倍率预览',
+    'Current dynamic profit multiplier': '当前动态利润倍率',
+    'Cost × profit pricing preview': '成本 × 利润定价预览',
+    'Group Pricing supplies the cost multiplier. Dynamic pricing supplies the profit multiplier. Final billing multiplies both.':
+      '分组定价提供成本倍率，动态定价提供利润倍率，最终收费将两者相乘。',
+    Formula: '公式',
+    'Final billing = group cost × dynamic profit':
+      '最终收费 = 分组成本 × 动态利润',
+    'Pricing group': '定价分组',
+    'Cost multiplier': '成本倍率',
+    'Profit multiplier': '利润倍率',
+    'Effective billing multiplier': '最终收费倍率',
+    'No pricing groups configured': '尚未配置定价分组',
+    'Group cost multipliers': '分组成本倍率',
+    'JSON map of group → cost multiplier used as the base for that billing group. Dynamic pricing adds the profit multiplier.':
+      '分组到成本倍率的 JSON 映射，作为该计费分组的成本基准；动态定价会叠加利润倍率。',
+    'Understand how user groups, cost multipliers, profit pricing, and special rules work together.':
+      '了解用户组、成本倍率、利润定价和特殊规则如何共同生效。',
+    'decides which channels are used and which base cost multiplier applies.':
+      '决定使用哪些渠道以及采用哪个成本基准倍率。',
+    'decides the top-up ratio, which groups the user can pick for tokens, and whether a cost override applies.':
+      '决定充值倍率、用户创建令牌时可选的分组，以及是否应用成本覆盖规则。',
+    'Find the cost multiplier.': '查找成本倍率。',
+    'Look for a special cost rule matching this user group and this billing group. If one exists, use its cost multiplier. Otherwise use the billing group base cost from the pricing table.':
+      '查找匹配用户组和计费组的特殊成本规则；若存在则使用其成本倍率，否则使用定价表中的计费组成本基准。',
+    'Final charge = model base cost × group cost multiplier × dynamic profit multiplier.':
+      '最终收费 = 模型基础成本 × 分组成本倍率 × 动态利润倍率。',
+    'The group value is a cost basis, not a personal discount. Dynamic pricing supplies the profit multiplier separately.':
+      '分组数值是成本基准，不是个人折扣；动态定价会单独提供利润倍率。',
+    'Special cost rules': '特殊成本规则',
+    'Cost basis = 10 × 0.3 = 3': '成本基准 = 10 × 0.3 = 3',
+    'Cost basis = 10 × 1.0 = 10': '成本基准 = 10 × 1.0 = 10',
+    'Cost basis = 10 × 0.8 = 8': '成本基准 = 10 × 0.8 = 8',
+    'Users of vip, when billed as premium, use cost multiplier':
+      'vip 用户按 premium 计费时使用成本倍率',
+    'No rule for vip billed as default → use the base cost of default, 1.0 (the 0.8 of vip is not used)':
+      'vip 按 default 计费没有特殊规则 → 使用 default 的成本基准 1.0（不会使用 vip 的 0.8）',
+    'No rule for vip billed as vip → use the base cost of vip, 0.8':
+      'vip 按 vip 计费没有特殊规则 → 使用 vip 的成本基准 0.8',
+    'Use the pricing group table to manage the cost multiplier and whether the group appears in the token creation dropdown.':
+      '使用定价分组表管理成本倍率，以及分组是否出现在令牌创建下拉框中。',
+    'In JSON, the user group is the outer key and the billing group is the inner key. The example below means: vip users use cost multiplier 0.8 when billed as standard, and 0.3 when billed as premium.':
+      'JSON 中外层键是用户组，内层键是计费组。下面示例表示：vip 用户按 standard 计费使用成本倍率 0.8，按 premium 计费使用 0.3。',
+    'Only configured combinations are overridden. All other calls keep the billing group base cost multiplier.':
+      '只有配置的组合会覆盖；其它请求继续使用计费组的成本基准倍率。',
+    'Base cost multipliers': '基础成本倍率',
+    "Manual order is preserved until you use Optimize. This changes the global order for every user, but runtime assignment still filters each user's visible groups. Optimize uses base cost multipliers by default; selecting a user group applies its exact special cost overrides before sorting.":
+      '在点击优化前会保留手动顺序。优化会改变所有用户的全局顺序，但运行时仍会过滤每个用户可见的分组；默认按基础成本倍率排序，选择用户组后会先应用其特殊成本覆盖。',
+    'Cost multipliers must be finite numbers greater than or equal to zero.':
+      '成本倍率必须是大于等于 0 的有限数字。',
+    'Optimize by effective cost': '按最终成本优化',
+    'Edit cost override': '编辑成本覆盖',
+    'Add cost override': '添加成本覆盖',
+    'Configure a custom cost multiplier for "{{userGroup}}" users when using a specific token group.':
+      '配置“{{userGroup}}”用户使用指定令牌组时的自定义成本倍率。',
+    'Configure a custom cost multiplier for when users use a specific token group.':
+      '配置用户使用指定令牌组时的自定义成本倍率。',
+    'Invalid cost multiplier': '成本倍率无效',
+    'Cost multiplier applied when {{userGroup}} uses {{targetGroup}}':
+      '{{userGroup}} 使用 {{targetGroup}} 时应用的成本倍率',
+    'Save group pricing': '保存分组定价',
+    'Fixed by channel sharing settings': '由渠道共享设置固定',
+  },
+  'zh-TW': {
+    'Dynamic Profit Pricing': '動態利潤定價',
+    'Group Pricing stores the base cost multiplier. This page computes the live profit multiplier on top of that cost.':
+      '分組定價儲存成本基準倍率；本頁在成本之上計算即時利潤倍率。',
+    'Enable dynamic profit pricing': '啟用動態利潤定價',
+    'The final charge is the group cost multiplier multiplied by this dynamic profit multiplier.':
+      '最終收費 = 分組成本倍率 × 動態利潤倍率。',
+    'Minimum profit multiplier': '最低利潤倍率',
+    'The profit multiplier never falls below this value while dynamic pricing is enabled.':
+      '啟用動態定價後，利潤倍率不會低於此值。',
+    'Dynamic profit ceiling': '動態利潤上限',
+    'Caps the load-driven profit premium. Cost protection can still raise the effective multiplier when needed.':
+      '僅限制負載產生的利潤溢價；成本保護需要時仍可提高最終倍率。',
+    'Reference model cost (USD / 1M tokens)':
+      '模型成本基準（美元 / 100 萬 Token）',
+    'Use the model cost baseline used to compare upstream cost with the configured group cost multiplier.':
+      '用於將上游成本與分組成本倍率比較的模型成本基準。',
+    'Cost protection margin': '成本保護裕量',
+    'Known upstream cost is multiplied by this margin before the cost floor is compared with profit pricing.':
+      '已知上游成本先乘以此裕量，再與利潤定價的成本底線比較。',
+    'Live profit multiplier preview': '即時利潤倍率預覽',
+    'Current dynamic profit multiplier': '目前動態利潤倍率',
+    'Cost × profit pricing preview': '成本 × 利潤定價預覽',
+    'Group Pricing supplies the cost multiplier. Dynamic pricing supplies the profit multiplier. Final billing multiplies both.':
+      '分組定價提供成本倍率，動態定價提供利潤倍率，最終收費會將兩者相乘。',
+    Formula: '公式',
+    'Final billing = group cost × dynamic profit':
+      '最終收費 = 分組成本 × 動態利潤',
+    'Pricing group': '定價分組',
+    'Cost multiplier': '成本倍率',
+    'Profit multiplier': '利潤倍率',
+    'Effective billing multiplier': '最終收費倍率',
+    'No pricing groups configured': '尚未設定定價分組',
+    'Group cost multipliers': '分組成本倍率',
+    'JSON map of group → cost multiplier used as the base for that billing group. Dynamic pricing adds the profit multiplier.':
+      '分組到成本倍率的 JSON 對映，作為該計費分組的成本基準；動態定價會疊加利潤倍率。',
+    'Understand how user groups, cost multipliers, profit pricing, and special rules work together.':
+      '了解使用者群組、成本倍率、利潤定價和特殊規則如何共同生效。',
+    'decides which channels are used and which base cost multiplier applies.':
+      '決定使用哪些渠道以及採用哪個成本基準倍率。',
+    'decides the top-up ratio, which groups the user can pick for tokens, and whether a cost override applies.':
+      '決定充值倍率、使用者建立 Token 時可選的分組，以及是否套用成本覆蓋規則。',
+    'Find the cost multiplier.': '尋找成本倍率。',
+    'Look for a special cost rule matching this user group and this billing group. If one exists, use its cost multiplier. Otherwise use the billing group base cost from the pricing table.':
+      '尋找符合使用者群組和計費群組的特殊成本規則；若存在則使用其成本倍率，否則使用定價表中的計費群組成本基準。',
+    'Final charge = model base cost × group cost multiplier × dynamic profit multiplier.':
+      '最終收費 = 模型基礎成本 × 分組成本倍率 × 動態利潤倍率。',
+    'The group value is a cost basis, not a personal discount. Dynamic pricing supplies the profit multiplier separately.':
+      '分組數值是成本基準，不是個人折扣；動態定價會另外提供利潤倍率。',
+    'Special cost rules': '特殊成本規則',
+    'Cost basis = 10 × 0.3 = 3': '成本基準 = 10 × 0.3 = 3',
+    'Cost basis = 10 × 1.0 = 10': '成本基準 = 10 × 1.0 = 10',
+    'Cost basis = 10 × 0.8 = 8': '成本基準 = 10 × 0.8 = 8',
+    'Users of vip, when billed as premium, use cost multiplier':
+      'vip 使用者按 premium 計費時使用成本倍率',
+    'No rule for vip billed as default → use the base cost of default, 1.0 (the 0.8 of vip is not used)':
+      'vip 按 default 計費沒有特殊規則 → 使用 default 的成本基準 1.0（不會使用 vip 的 0.8）',
+    'No rule for vip billed as vip → use the base cost of vip, 0.8':
+      'vip 按 vip 計費沒有特殊規則 → 使用 vip 的成本基準 0.8',
+    'Use the pricing group table to manage the cost multiplier and whether the group appears in the token creation dropdown.':
+      '使用定價分組表管理成本倍率，以及分組是否出現在 Token 建立下拉選單中。',
+    'In JSON, the user group is the outer key and the billing group is the inner key. The example below means: vip users use cost multiplier 0.8 when billed as standard, and 0.3 when billed as premium.':
+      'JSON 中外層鍵是使用者群組，內層鍵是計費群組。以下範例表示：vip 使用者按 standard 計費使用成本倍率 0.8，按 premium 計費使用 0.3。',
+    'Only configured combinations are overridden. All other calls keep the billing group base cost multiplier.':
+      '只有設定的組合會覆蓋；其他請求繼續使用計費群組的成本基準倍率。',
+    'Base cost multipliers': '基礎成本倍率',
+    "Manual order is preserved until you use Optimize. This changes the global order for every user, but runtime assignment still filters each user's visible groups. Optimize uses base cost multipliers by default; selecting a user group applies its exact special cost overrides before sorting.":
+      '在點擊最佳化前會保留手動順序。最佳化會改變所有使用者的全域順序，但執行時仍會過濾每個使用者可見的分組；預設按基礎成本倍率排序，選擇使用者群組後會先套用其特殊成本覆蓋。',
+    'Cost multipliers must be finite numbers greater than or equal to zero.':
+      '成本倍率必須是大於等於 0 的有限數字。',
+    'Optimize by effective cost': '按最終成本最佳化',
+    'Edit cost override': '編輯成本覆蓋',
+    'Add cost override': '新增成本覆蓋',
+    'Configure a custom cost multiplier for "{{userGroup}}" users when using a specific token group.':
+      '設定「{{userGroup}}」使用者使用指定 Token 群組時的自訂成本倍率。',
+    'Configure a custom cost multiplier for when users use a specific token group.':
+      '設定使用者使用指定 Token 群組時的自訂成本倍率。',
+    'Invalid cost multiplier': '成本倍率無效',
+    'Cost multiplier applied when {{userGroup}} uses {{targetGroup}}':
+      '{{userGroup}} 使用 {{targetGroup}} 時套用的成本倍率',
+    'Save group pricing': '儲存分組定價',
+    'Fixed by channel sharing settings': '由渠道共享設定固定',
+  },
+  fr: {
+    'Dynamic Profit Pricing': 'Tarification dynamique du profit',
+    'Group Pricing stores the base cost multiplier. This page computes the live profit multiplier on top of that cost.':
+      'La tarification par groupe conserve le coefficient de coût de base ; cette page calcule le coefficient de profit en temps réel.',
+    'Enable dynamic profit pricing':
+      'Activer la tarification dynamique du profit',
+    'The final charge is the group cost multiplier multiplied by this dynamic profit multiplier.':
+      'Le montant final est le coefficient de coût du groupe multiplié par le coefficient de profit dynamique.',
+    'Minimum profit multiplier': 'Coefficient de profit minimal',
+    'The profit multiplier never falls below this value while dynamic pricing is enabled.':
+      'Le coefficient de profit ne descend jamais sous cette valeur lorsque la tarification dynamique est active.',
+    'Dynamic profit ceiling': 'Plafond du profit dynamique',
+    'Caps the load-driven profit premium. Cost protection can still raise the effective multiplier when needed.':
+      'Limite la prime de profit liée à la charge ; la protection des coûts peut toutefois augmenter le coefficient effectif.',
+    'Reference model cost (USD / 1M tokens)':
+      'Coût de référence du modèle (USD / 1 M de tokens)',
+    'Use the model cost baseline used to compare upstream cost with the configured group cost multiplier.':
+      'Utilisez le coût de référence du modèle pour comparer le coût amont au coefficient de coût du groupe.',
+    'Cost protection margin': 'Marge de protection des coûts',
+    'Known upstream cost is multiplied by this margin before the cost floor is compared with profit pricing.':
+      'Le coût amont connu est multiplié par cette marge avant comparaison avec le plancher de coût.',
+    'Live profit multiplier preview':
+      'Aperçu du coefficient de profit en direct',
+    'Current dynamic profit multiplier':
+      'Coefficient de profit dynamique actuel',
+    'Cost × profit pricing preview': 'Aperçu coût × profit',
+    'Group Pricing supplies the cost multiplier. Dynamic pricing supplies the profit multiplier. Final billing multiplies both.':
+      'La tarification par groupe fournit le coût ; la tarification dynamique fournit le profit. La facturation finale multiplie les deux.',
+    Formula: 'Formule',
+    'Final billing = group cost × dynamic profit':
+      'Facturation finale = coût du groupe × profit dynamique',
+    'Pricing group': 'Groupe tarifaire',
+    'Cost multiplier': 'Coefficient de coût',
+    'Profit multiplier': 'Coefficient de profit',
+    'Effective billing multiplier': 'Coefficient de facturation effectif',
+    'No pricing groups configured': 'Aucun groupe tarifaire configuré',
+    'Group cost multipliers': 'Coefficients de coût des groupes',
+    'JSON map of group → cost multiplier used as the base for that billing group. Dynamic pricing adds the profit multiplier.':
+      'Carte JSON groupe → coefficient de coût utilisé comme base du groupe de facturation ; la tarification dynamique ajoute le profit.',
+    'Understand how user groups, cost multipliers, profit pricing, and special rules work together.':
+      'Comprenez le rôle des groupes utilisateurs, des coûts, du profit et des règles spéciales.',
+    'decides which channels are used and which base cost multiplier applies.':
+      'détermine les canaux utilisés et le coefficient de coût de base appliqué.',
+    'decides the top-up ratio, which groups the user can pick for tokens, and whether a cost override applies.':
+      'détermine le coefficient de recharge, les groupes disponibles pour les tokens et les éventuelles règles de coût.',
+    'Find the cost multiplier.': 'Trouver le coefficient de coût.',
+    'Look for a special cost rule matching this user group and this billing group. If one exists, use its cost multiplier. Otherwise use the billing group base cost from the pricing table.':
+      'Cherchez une règle de coût correspondant au groupe utilisateur et au groupe de facturation ; sinon utilisez le coût de base du groupe tarifaire.',
+    'Final charge = model base cost × group cost multiplier × dynamic profit multiplier.':
+      'Facturation finale = coût de base du modèle × coût du groupe × profit dynamique.',
+    'The group value is a cost basis, not a personal discount. Dynamic pricing supplies the profit multiplier separately.':
+      'La valeur du groupe est une base de coût, pas une remise personnelle ; le profit dynamique est séparé.',
+    'Special cost rules': 'Règles de coût spéciales',
+    'Cost basis = 10 × 0.3 = 3': 'Base de coût = 10 × 0,3 = 3',
+    'Cost basis = 10 × 1.0 = 10': 'Base de coût = 10 × 1,0 = 10',
+    'Cost basis = 10 × 0.8 = 8': 'Base de coût = 10 × 0,8 = 8',
+    'Users of vip, when billed as premium, use cost multiplier':
+      'Les utilisateurs vip facturés en premium utilisent le coefficient de coût',
+    'No rule for vip billed as default → use the base cost of default, 1.0 (the 0.8 of vip is not used)':
+      'Sans règle vip facturé en default → coût de base default, 1,0 (le 0,8 de vip ne s’applique pas)',
+    'No rule for vip billed as vip → use the base cost of vip, 0.8':
+      'Sans règle vip facturé en vip → coût de base vip, 0,8',
+    'Use the pricing group table to manage the cost multiplier and whether the group appears in the token creation dropdown.':
+      'Gérez le coefficient de coût et la visibilité du groupe dans la liste de création des tokens.',
+    'In JSON, the user group is the outer key and the billing group is the inner key. The example below means: vip users use cost multiplier 0.8 when billed as standard, and 0.3 when billed as premium.':
+      'Dans le JSON, le groupe utilisateur est la clé externe et le groupe de facturation la clé interne ; vip utilise 0,8 en standard et 0,3 en premium.',
+    'Only configured combinations are overridden. All other calls keep the billing group base cost multiplier.':
+      'Seules les combinaisons configurées sont remplacées ; les autres gardent le coût de base du groupe.',
+    'Base cost multipliers': 'Coefficients de coût de base',
+    "Manual order is preserved until you use Optimize. This changes the global order for every user, but runtime assignment still filters each user's visible groups. Optimize uses base cost multipliers by default; selecting a user group applies its exact special cost overrides before sorting.":
+      'L’ordre manuel est conservé jusqu’à l’optimisation. Celle-ci applique les remplacements de coût du groupe utilisateur avant le tri.',
+    'Cost multipliers must be finite numbers greater than or equal to zero.':
+      'Les coefficients de coût doivent être des nombres finis supérieurs ou égaux à zéro.',
+    'Optimize by effective cost': 'Optimiser par coût effectif',
+    'Edit cost override': 'Modifier le remplacement de coût',
+    'Add cost override': 'Ajouter un remplacement de coût',
+    'Configure a custom cost multiplier for "{{userGroup}}" users when using a specific token group.':
+      'Configurez un coefficient de coût personnalisé pour les utilisateurs « {{userGroup}} » avec un groupe de tokens donné.',
+    'Configure a custom cost multiplier for when users use a specific token group.':
+      'Configurez un coefficient de coût personnalisé pour un groupe de tokens donné.',
+    'Invalid cost multiplier': 'Coefficient de coût invalide',
+    'Cost multiplier applied when {{userGroup}} uses {{targetGroup}}':
+      'Coefficient appliqué quand {{userGroup}} utilise {{targetGroup}}',
+    'Save group pricing': 'Enregistrer la tarification des groupes',
+    'Fixed by channel sharing settings':
+      'Fixé par les paramètres de partage du canal',
+  },
+  ja: {
+    'Dynamic Profit Pricing': '動的利益価格設定',
+    'Group Pricing stores the base cost multiplier. This page computes the live profit multiplier on top of that cost.':
+      'グループ料金は基本コスト倍率を保存し、このページでその上にリアルタイム利益倍率を計算します。',
+    'Enable dynamic profit pricing': '動的利益価格設定を有効化',
+    'The final charge is the group cost multiplier multiplied by this dynamic profit multiplier.':
+      '最終料金はグループのコスト倍率と動的利益倍率の積です。',
+    'Minimum profit multiplier': '最小利益倍率',
+    'The profit multiplier never falls below this value while dynamic pricing is enabled.':
+      '動的料金設定中、利益倍率はこの値を下回りません。',
+    'Dynamic profit ceiling': '動的利益上限',
+    'Caps the load-driven profit premium. Cost protection can still raise the effective multiplier when needed.':
+      '負荷による利益プレミアムを制限します。コスト保護が必要な場合は実効倍率が上限を超えることがあります。',
+    'Reference model cost (USD / 1M tokens)':
+      'モデル基準コスト（USD / 100万トークン）',
+    'Use the model cost baseline used to compare upstream cost with the configured group cost multiplier.':
+      '上流コストとグループコスト倍率を比較するモデル基準コストです。',
+    'Cost protection margin': 'コスト保護マージン',
+    'Known upstream cost is multiplied by this margin before the cost floor is compared with profit pricing.':
+      '既知の上流コストにこのマージンを掛けて、利益料金のコスト下限と比較します。',
+    'Live profit multiplier preview': 'リアルタイム利益倍率プレビュー',
+    'Current dynamic profit multiplier': '現在の動的利益倍率',
+    'Cost × profit pricing preview': 'コスト × 利益料金プレビュー',
+    'Group Pricing supplies the cost multiplier. Dynamic pricing supplies the profit multiplier. Final billing multiplies both.':
+      'グループ料金がコスト倍率を、動的料金が利益倍率を提供し、最終請求では両方を掛け合わせます。',
+    Formula: '計算式',
+    'Final billing = group cost × dynamic profit':
+      '最終請求 = グループコスト × 動的利益',
+    'Pricing group': '料金グループ',
+    'Cost multiplier': 'コスト倍率',
+    'Profit multiplier': '利益倍率',
+    'Effective billing multiplier': '実効請求倍率',
+    'No pricing groups configured': '料金グループが設定されていません',
+    'Group cost multipliers': 'グループコスト倍率',
+    'JSON map of group → cost multiplier used as the base for that billing group. Dynamic pricing adds the profit multiplier.':
+      '請求グループの基準となるグループ→コスト倍率の JSON マップです。動的料金が利益倍率を加えます。',
+    'Understand how user groups, cost multipliers, profit pricing, and special rules work together.':
+      'ユーザーグループ、コスト倍率、利益料金、特殊ルールの連携を確認します。',
+    'decides which channels are used and which base cost multiplier applies.':
+      '使用するチャネルと適用する基本コスト倍率を決めます。',
+    'decides the top-up ratio, which groups the user can pick for tokens, and whether a cost override applies.':
+      'チャージ倍率、トークンで選べるグループ、コスト上書きの有無を決めます。',
+    'Find the cost multiplier.': 'コスト倍率を確認します。',
+    'Look for a special cost rule matching this user group and this billing group. If one exists, use its cost multiplier. Otherwise use the billing group base cost from the pricing table.':
+      'ユーザーグループと請求グループに一致する特殊コストルールを探し、なければ料金表の基本コストを使います。',
+    'Final charge = model base cost × group cost multiplier × dynamic profit multiplier.':
+      '最終請求 = モデル基本コスト × グループコスト倍率 × 動的利益倍率。',
+    'The group value is a cost basis, not a personal discount. Dynamic pricing supplies the profit multiplier separately.':
+      'グループ値はコスト基準であり個人割引ではありません。利益倍率は動的料金が別に提供します。',
+    'Special cost rules': '特殊コストルール',
+    'Cost basis = 10 × 0.3 = 3': 'コスト基準 = 10 × 0.3 = 3',
+    'Cost basis = 10 × 1.0 = 10': 'コスト基準 = 10 × 1.0 = 10',
+    'Cost basis = 10 × 0.8 = 8': 'コスト基準 = 10 × 0.8 = 8',
+    'Users of vip, when billed as premium, use cost multiplier':
+      'vip ユーザーが premium で請求される場合のコスト倍率',
+    'No rule for vip billed as default → use the base cost of default, 1.0 (the 0.8 of vip is not used)':
+      'vip を default で請求するルールがないため default の基本コスト 1.0 を使います（vip の 0.8 は使いません）。',
+    'No rule for vip billed as vip → use the base cost of vip, 0.8':
+      'vip を vip で請求するルールがないため vip の基本コスト 0.8 を使います。',
+    'Use the pricing group table to manage the cost multiplier and whether the group appears in the token creation dropdown.':
+      '料金グループ表でコスト倍率とトークン作成リストへの表示を管理します。',
+    'In JSON, the user group is the outer key and the billing group is the inner key. The example below means: vip users use cost multiplier 0.8 when billed as standard, and 0.3 when billed as premium.':
+      'JSON の外側キーはユーザーグループ、内側キーは請求グループです。例では vip が standard で 0.8、premium で 0.3 を使います。',
+    'Only configured combinations are overridden. All other calls keep the billing group base cost multiplier.':
+      '設定した組み合わせだけが上書きされ、その他は請求グループの基本コスト倍率を使います。',
+    'Base cost multipliers': '基本コスト倍率',
+    "Manual order is preserved until you use Optimize. This changes the global order for every user, but runtime assignment still filters each user's visible groups. Optimize uses base cost multipliers by default; selecting a user group applies its exact special cost overrides before sorting.":
+      '最適化するまで手動順序を保持します。最適化では基本コスト倍率を使い、ユーザーグループを選ぶと特殊コスト上書きを適用して並べ替えます。',
+    'Cost multipliers must be finite numbers greater than or equal to zero.':
+      'コスト倍率は 0 以上の有限数値である必要があります。',
+    'Optimize by effective cost': '実効コストで最適化',
+    'Edit cost override': 'コスト上書きを編集',
+    'Add cost override': 'コスト上書きを追加',
+    'Configure a custom cost multiplier for "{{userGroup}}" users when using a specific token group.':
+      '「{{userGroup}}」ユーザーが指定トークングループを使う際のカスタムコスト倍率を設定します。',
+    'Configure a custom cost multiplier for when users use a specific token group.':
+      '指定トークングループを使う場合のカスタムコスト倍率を設定します。',
+    'Invalid cost multiplier': '無効なコスト倍率',
+    'Cost multiplier applied when {{userGroup}} uses {{targetGroup}}':
+      '{{userGroup}} が {{targetGroup}} を使う場合のコスト倍率',
+    'Save group pricing': 'グループ料金を保存',
+    'Fixed by channel sharing settings': 'チャネル共有設定で固定',
+  },
+  ru: {
+    'Dynamic Profit Pricing': 'Динамическое ценообразование прибыли',
+    'Group Pricing stores the base cost multiplier. This page computes the live profit multiplier on top of that cost.':
+      'Групповая тарификация хранит базовый коэффициент затрат, а эта страница рассчитывает поверх него коэффициент прибыли в реальном времени.',
+    'Enable dynamic profit pricing': 'Включить динамическую прибыль',
+    'The final charge is the group cost multiplier multiplied by this dynamic profit multiplier.':
+      'Итоговая сумма равна коэффициенту затрат группы, умноженному на динамический коэффициент прибыли.',
+    'Minimum profit multiplier': 'Минимальный коэффициент прибыли',
+    'The profit multiplier never falls below this value while dynamic pricing is enabled.':
+      'При включённом динамическом ценообразовании коэффициент прибыли не опускается ниже этого значения.',
+    'Dynamic profit ceiling': 'Верхняя граница динамической прибыли',
+    'Caps the load-driven profit premium. Cost protection can still raise the effective multiplier when needed.':
+      'Ограничивает надбавку прибыли от нагрузки; защита затрат при необходимости может повысить итоговый коэффициент.',
+    'Reference model cost (USD / 1M tokens)':
+      'Базовая стоимость модели (USD / 1 млн токенов)',
+    'Use the model cost baseline used to compare upstream cost with the configured group cost multiplier.':
+      'Базовая стоимость модели для сравнения затрат upstream с коэффициентом затрат группы.',
+    'Cost protection margin': 'Запас защиты затрат',
+    'Known upstream cost is multiplied by this margin before the cost floor is compared with profit pricing.':
+      'Известная стоимость upstream умножается на этот запас перед сравнением с нижней границей цены.',
+    'Live profit multiplier preview': 'Предпросмотр прибыли в реальном времени',
+    'Current dynamic profit multiplier':
+      'Текущий динамический коэффициент прибыли',
+    'Cost × profit pricing preview': 'Предпросмотр: затраты × прибыль',
+    'Group Pricing supplies the cost multiplier. Dynamic pricing supplies the profit multiplier. Final billing multiplies both.':
+      'Групповая тарификация задаёт затраты, динамическая тарификация — прибыль; итоговая сумма перемножает оба коэффициента.',
+    Formula: 'Формула',
+    'Final billing = group cost × dynamic profit':
+      'Итоговая сумма = затраты группы × динамическая прибыль',
+    'Pricing group': 'Тарифная группа',
+    'Cost multiplier': 'Коэффициент затрат',
+    'Profit multiplier': 'Коэффициент прибыли',
+    'Effective billing multiplier': 'Итоговый коэффициент тарификации',
+    'No pricing groups configured': 'Тарифные группы не настроены',
+    'Group cost multipliers': 'Коэффициенты затрат групп',
+    'JSON map of group → cost multiplier used as the base for that billing group. Dynamic pricing adds the profit multiplier.':
+      'JSON-карта группа → коэффициент затрат, используемая как база группы тарификации; динамическая тарификация добавляет прибыль.',
+    'Understand how user groups, cost multipliers, profit pricing, and special rules work together.':
+      'Узнайте, как работают группы пользователей, затраты, прибыль и специальные правила.',
+    'decides which channels are used and which base cost multiplier applies.':
+      'определяет используемые каналы и базовый коэффициент затрат.',
+    'decides the top-up ratio, which groups the user can pick for tokens, and whether a cost override applies.':
+      'определяет коэффициент пополнения, доступные для токенов группы и применение переопределения затрат.',
+    'Find the cost multiplier.': 'Найдите коэффициент затрат.',
+    'Look for a special cost rule matching this user group and this billing group. If one exists, use its cost multiplier. Otherwise use the billing group base cost from the pricing table.':
+      'Найдите специальное правило для группы пользователя и группы тарификации; иначе используйте базовую стоимость группы из таблицы.',
+    'Final charge = model base cost × group cost multiplier × dynamic profit multiplier.':
+      'Итоговая сумма = базовая стоимость модели × затраты группы × динамическая прибыль.',
+    'The group value is a cost basis, not a personal discount. Dynamic pricing supplies the profit multiplier separately.':
+      'Значение группы — это база затрат, а не персональная скидка; коэффициент прибыли задаётся отдельно.',
+    'Special cost rules': 'Специальные правила затрат',
+    'Cost basis = 10 × 0.3 = 3': 'База затрат = 10 × 0,3 = 3',
+    'Cost basis = 10 × 1.0 = 10': 'База затрат = 10 × 1,0 = 10',
+    'Cost basis = 10 × 0.8 = 8': 'База затрат = 10 × 0,8 = 8',
+    'Users of vip, when billed as premium, use cost multiplier':
+      'Пользователи vip при тарификации premium используют коэффициент затрат',
+    'No rule for vip billed as default → use the base cost of default, 1.0 (the 0.8 of vip is not used)':
+      'Для vip в default нет правила → используется базовая стоимость default 1,0 (0,8 vip не используется).',
+    'No rule for vip billed as vip → use the base cost of vip, 0.8':
+      'Для vip в vip нет правила → используется базовая стоимость vip 0,8.',
+    'Use the pricing group table to manage the cost multiplier and whether the group appears in the token creation dropdown.':
+      'Управляйте коэффициентом затрат и видимостью группы в списке создания токена через таблицу тарифов.',
+    'In JSON, the user group is the outer key and the billing group is the inner key. The example below means: vip users use cost multiplier 0.8 when billed as standard, and 0.3 when billed as premium.':
+      'Во внешнем ключе JSON указана группа пользователя, во внутреннем — группа тарификации; vip использует 0,8 для standard и 0,3 для premium.',
+    'Only configured combinations are overridden. All other calls keep the billing group base cost multiplier.':
+      'Переопределяются только настроенные комбинации; остальные запросы используют базовый коэффициент группы.',
+    'Base cost multipliers': 'Базовые коэффициенты затрат',
+    "Manual order is preserved until you use Optimize. This changes the global order for every user, but runtime assignment still filters each user's visible groups. Optimize uses base cost multipliers by default; selecting a user group applies its exact special cost overrides before sorting.":
+      'Ручной порядок сохраняется до оптимизации. По умолчанию оптимизация сортирует по базовым затратам и перед сортировкой применяет специальные правила выбранной группы пользователя.',
+    'Cost multipliers must be finite numbers greater than or equal to zero.':
+      'Коэффициенты затрат должны быть конечными числами не меньше нуля.',
+    'Optimize by effective cost': 'Оптимизировать по эффективной стоимости',
+    'Edit cost override': 'Изменить переопределение затрат',
+    'Add cost override': 'Добавить переопределение затрат',
+    'Configure a custom cost multiplier for "{{userGroup}}" users when using a specific token group.':
+      'Настройте собственный коэффициент затрат для пользователей «{{userGroup}}» при использовании группы токена.',
+    'Configure a custom cost multiplier for when users use a specific token group.':
+      'Настройте собственный коэффициент затрат для выбранной группы токена.',
+    'Invalid cost multiplier': 'Недопустимый коэффициент затрат',
+    'Cost multiplier applied when {{userGroup}} uses {{targetGroup}}':
+      'Коэффициент затрат, когда {{userGroup}} использует {{targetGroup}}',
+    'Save group pricing': 'Сохранить тарифы групп',
+    'Fixed by channel sharing settings': 'Задано настройками общего канала',
+  },
+  vi: {
+    'Dynamic Profit Pricing': 'Định giá lợi nhuận động',
+    'Group Pricing stores the base cost multiplier. This page computes the live profit multiplier on top of that cost.':
+      'Định giá theo nhóm lưu hệ số chi phí cơ bản; trang này tính hệ số lợi nhuận theo thời gian thực trên chi phí đó.',
+    'Enable dynamic profit pricing': 'Bật định giá lợi nhuận động',
+    'The final charge is the group cost multiplier multiplied by this dynamic profit multiplier.':
+      'Phí cuối cùng bằng hệ số chi phí nhóm nhân với hệ số lợi nhuận động.',
+    'Minimum profit multiplier': 'Hệ số lợi nhuận tối thiểu',
+    'The profit multiplier never falls below this value while dynamic pricing is enabled.':
+      'Khi định giá động bật, hệ số lợi nhuận không thấp hơn giá trị này.',
+    'Dynamic profit ceiling': 'Mức trần lợi nhuận động',
+    'Caps the load-driven profit premium. Cost protection can still raise the effective multiplier when needed.':
+      'Giới hạn phần lợi nhuận do tải; bảo vệ chi phí vẫn có thể tăng hệ số hiệu dụng khi cần.',
+    'Reference model cost (USD / 1M tokens)':
+      'Chi phí cơ sở của model (USD / 1 triệu token)',
+    'Use the model cost baseline used to compare upstream cost with the configured group cost multiplier.':
+      'Chi phí cơ sở dùng để so sánh chi phí upstream với hệ số chi phí nhóm.',
+    'Cost protection margin': 'Biên bảo vệ chi phí',
+    'Known upstream cost is multiplied by this margin before the cost floor is compared with profit pricing.':
+      'Chi phí upstream đã biết được nhân với biên này trước khi so sánh với sàn chi phí.',
+    'Live profit multiplier preview': 'Xem trước hệ số lợi nhuận trực tiếp',
+    'Current dynamic profit multiplier': 'Hệ số lợi nhuận động hiện tại',
+    'Cost × profit pricing preview': 'Xem trước định giá chi phí × lợi nhuận',
+    'Group Pricing supplies the cost multiplier. Dynamic pricing supplies the profit multiplier. Final billing multiplies both.':
+      'Định giá nhóm cung cấp chi phí, định giá động cung cấp lợi nhuận; phí cuối cùng nhân cả hai hệ số.',
+    Formula: 'Công thức',
+    'Final billing = group cost × dynamic profit':
+      'Phí cuối = chi phí nhóm × lợi nhuận động',
+    'Pricing group': 'Nhóm định giá',
+    'Cost multiplier': 'Hệ số chi phí',
+    'Profit multiplier': 'Hệ số lợi nhuận',
+    'Effective billing multiplier': 'Hệ số tính phí hiệu dụng',
+    'No pricing groups configured': 'Chưa cấu hình nhóm định giá',
+    'Group cost multipliers': 'Hệ số chi phí nhóm',
+    'JSON map of group → cost multiplier used as the base for that billing group. Dynamic pricing adds the profit multiplier.':
+      'Bản đồ JSON nhóm → hệ số chi phí làm cơ sở cho nhóm tính phí; định giá động sẽ cộng phần lợi nhuận.',
+    'Understand how user groups, cost multipliers, profit pricing, and special rules work together.':
+      'Tìm hiểu nhóm người dùng, hệ số chi phí, lợi nhuận và quy tắc đặc biệt phối hợp như thế nào.',
+    'decides which channels are used and which base cost multiplier applies.':
+      'quyết định kênh được dùng và hệ số chi phí cơ bản áp dụng.',
+    'decides the top-up ratio, which groups the user can pick for tokens, and whether a cost override applies.':
+      'quyết định hệ số nạp, nhóm người dùng có thể chọn cho token và việc áp dụng ghi đè chi phí.',
+    'Find the cost multiplier.': 'Tìm hệ số chi phí.',
+    'Look for a special cost rule matching this user group and this billing group. If one exists, use its cost multiplier. Otherwise use the billing group base cost from the pricing table.':
+      'Tìm quy tắc chi phí khớp nhóm người dùng và nhóm tính phí; nếu không có thì dùng chi phí cơ bản trong bảng định giá.',
+    'Final charge = model base cost × group cost multiplier × dynamic profit multiplier.':
+      'Phí cuối = chi phí cơ sở model × hệ số chi phí nhóm × hệ số lợi nhuận động.',
+    'The group value is a cost basis, not a personal discount. Dynamic pricing supplies the profit multiplier separately.':
+      'Giá trị nhóm là cơ sở chi phí, không phải giảm giá cá nhân; hệ số lợi nhuận được định giá động cung cấp riêng.',
+    'Special cost rules': 'Quy tắc chi phí đặc biệt',
+    'Cost basis = 10 × 0.3 = 3': 'Cơ sở chi phí = 10 × 0,3 = 3',
+    'Cost basis = 10 × 1.0 = 10': 'Cơ sở chi phí = 10 × 1,0 = 10',
+    'Cost basis = 10 × 0.8 = 8': 'Cơ sở chi phí = 10 × 0,8 = 8',
+    'Users of vip, when billed as premium, use cost multiplier':
+      'Người dùng vip khi tính phí theo premium dùng hệ số chi phí',
+    'No rule for vip billed as default → use the base cost of default, 1.0 (the 0.8 of vip is not used)':
+      'Không có quy tắc vip theo default → dùng chi phí cơ bản default 1,0 (không dùng 0,8 của vip).',
+    'No rule for vip billed as vip → use the base cost of vip, 0.8':
+      'Không có quy tắc vip theo vip → dùng chi phí cơ bản vip 0,8.',
+    'Use the pricing group table to manage the cost multiplier and whether the group appears in the token creation dropdown.':
+      'Dùng bảng nhóm định giá để quản lý hệ số chi phí và việc nhóm có xuất hiện trong danh sách tạo token hay không.',
+    'In JSON, the user group is the outer key and the billing group is the inner key. The example below means: vip users use cost multiplier 0.8 when billed as standard, and 0.3 when billed as premium.':
+      'Trong JSON, khóa ngoài là nhóm người dùng và khóa trong là nhóm tính phí; ví dụ vip dùng 0,8 khi tính theo standard và 0,3 khi tính theo premium.',
+    'Only configured combinations are overridden. All other calls keep the billing group base cost multiplier.':
+      'Chỉ các tổ hợp được cấu hình mới bị ghi đè; các yêu cầu khác giữ hệ số chi phí cơ bản của nhóm.',
+    'Base cost multipliers': 'Hệ số chi phí cơ bản',
+    "Manual order is preserved until you use Optimize. This changes the global order for every user, but runtime assignment still filters each user's visible groups. Optimize uses base cost multipliers by default; selecting a user group applies its exact special cost overrides before sorting.":
+      'Thứ tự thủ công được giữ đến khi bạn tối ưu. Mặc định tối ưu theo hệ số chi phí cơ bản và áp dụng ghi đè chi phí của nhóm người dùng trước khi sắp xếp.',
+    'Cost multipliers must be finite numbers greater than or equal to zero.':
+      'Hệ số chi phí phải là số hữu hạn lớn hơn hoặc bằng 0.',
+    'Optimize by effective cost': 'Tối ưu theo chi phí hiệu dụng',
+    'Edit cost override': 'Sửa ghi đè chi phí',
+    'Add cost override': 'Thêm ghi đè chi phí',
+    'Configure a custom cost multiplier for "{{userGroup}}" users when using a specific token group.':
+      'Cấu hình hệ số chi phí tùy chỉnh cho người dùng “{{userGroup}}” khi dùng nhóm token cụ thể.',
+    'Configure a custom cost multiplier for when users use a specific token group.':
+      'Cấu hình hệ số chi phí tùy chỉnh khi người dùng dùng nhóm token cụ thể.',
+    'Invalid cost multiplier': 'Hệ số chi phí không hợp lệ',
+    'Cost multiplier applied when {{userGroup}} uses {{targetGroup}}':
+      'Hệ số chi phí áp dụng khi {{userGroup}} dùng {{targetGroup}}',
+    'Save group pricing': 'Lưu định giá nhóm',
+    'Fixed by channel sharing settings':
+      'Được cố định bởi cài đặt chia sẻ kênh',
+  },
+}
+
+for (const [locale, translations] of Object.entries(
+  pricingRedesignTranslations
+)) {
+  Object.assign(newKeys[locale], translations)
+}
+
+const registrationStatusTranslations = {
+  en: {
+    'Unable to load registration settings':
+      'Unable to load registration settings',
+    'The server did not return registration capabilities. Check your connection and try again.':
+      'The server did not return registration capabilities. Check your connection and try again.',
+  },
+  zh: {
+    'Unable to load registration settings': '无法加载注册配置',
+    'The server did not return registration capabilities. Check your connection and try again.':
+      '服务器没有返回注册能力配置，请检查网络后重试。',
+  },
+  'zh-TW': {
+    'Unable to load registration settings': '無法載入註冊設定',
+    'The server did not return registration capabilities. Check your connection and try again.':
+      '伺服器沒有返回註冊能力設定，請檢查網路後重試。',
+  },
+  fr: {
+    'Unable to load registration settings':
+      'Impossible de charger les paramètres d’inscription',
+    'The server did not return registration capabilities. Check your connection and try again.':
+      'Le serveur n’a pas renvoyé les capacités d’inscription. Vérifiez votre connexion et réessayez.',
+  },
+  ja: {
+    'Unable to load registration settings': '登録設定を読み込めません',
+    'The server did not return registration capabilities. Check your connection and try again.':
+      'サーバーから登録機能の情報が返りませんでした。接続を確認して再試行してください。',
+  },
+  ru: {
+    'Unable to load registration settings':
+      'Не удалось загрузить настройки регистрации',
+    'The server did not return registration capabilities. Check your connection and try again.':
+      'Сервер не вернул сведения о регистрации. Проверьте подключение и повторите попытку.',
+  },
+  vi: {
+    'Unable to load registration settings': 'Không thể tải cài đặt đăng ký',
+    'The server did not return registration capabilities. Check your connection and try again.':
+      'Máy chủ không trả về khả năng đăng ký. Hãy kiểm tra kết nối rồi thử lại.',
+  },
+}
+
+for (const [locale, translations] of Object.entries(
+  registrationStatusTranslations
 )) {
   Object.assign(newKeys[locale], translations)
 }

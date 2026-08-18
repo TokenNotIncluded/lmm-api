@@ -81,12 +81,33 @@ const schema = z.object({
 type DynamicPricingFormValues = z.infer<typeof schema>
 
 type DynamicPricingDefaults = {
+  GroupRatio: string
   'dynamic_pricing_setting.enabled': boolean
   'dynamic_pricing_setting.min_factor': number
   'dynamic_pricing_setting.base_price_usd_per_million': number
   'dynamic_pricing_setting.cost_floor_factor': number
   'dynamic_pricing_setting.max_factor': number
   'dynamic_pricing_setting.channel_costs': string
+}
+
+function parseGroupCostMultipliers(value: string): Record<string, number> {
+  try {
+    const parsed = JSON.parse(value) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {}
+    }
+    return Object.fromEntries(
+      Object.entries(parsed).filter(
+        (entry): entry is [string, number] =>
+          typeof entry[1] === 'number' &&
+          Number.isFinite(entry[1]) &&
+          entry[1] >= 0 &&
+          entry[0].trim() !== ''
+      )
+    )
+  } catch {
+    return {}
+  }
 }
 
 function parseChannelCosts(value: string): Record<string, number> {
@@ -168,6 +189,10 @@ export function DynamicPricingSection({
   const activeChannels = useMemo(
     () => status?.safety.channels ?? [],
     [status?.safety.channels]
+  )
+  const groupCostMultipliers = useMemo(
+    () => parseGroupCostMultipliers(defaultValues.GroupRatio),
+    [defaultValues.GroupRatio]
   )
 
   useEffect(() => {
@@ -271,10 +296,10 @@ export function DynamicPricingSection({
   const safetyReady = status?.safety.ready ?? false
 
   return (
-    <SettingsSection title={t('Dynamic Group Multiplier')}>
+    <SettingsSection title={t('Dynamic Profit Pricing')}>
       <p className='text-muted-foreground mb-4 text-sm'>
         {t(
-          'This page controls live channel-cost pricing. Static per-group ratios and group warnings are configured in Billing → Group Pricing.'
+          'Group Pricing stores the base cost multiplier. This page computes the live profit multiplier on top of that cost.'
         )}
       </p>
       <div className='grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(20rem,0.7fr)]'>
@@ -291,12 +316,10 @@ export function DynamicPricingSection({
               render={({ field }) => (
                 <SettingsSwitchItem>
                   <SettingsSwitchContent>
-                    <FormLabel>
-                      {t('Enable dynamic group multiplier')}
-                    </FormLabel>
+                    <FormLabel>{t('Enable dynamic profit pricing')}</FormLabel>
                     <FormDescription>
                       {t(
-                        'Applies the larger of your minimum multiplier, the live load multiplier, and the immediate known-cost floor.'
+                        'The final charge is the group cost multiplier multiplied by this dynamic profit multiplier.'
                       )}
                     </FormDescription>
                   </SettingsSwitchContent>
@@ -315,7 +338,7 @@ export function DynamicPricingSection({
               name='min_factor'
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>{t('Minimum multiplier')}</FormLabel>
+                  <FormLabel>{t('Minimum profit multiplier')}</FormLabel>
                   <FormControl>
                     <Input
                       type='number'
@@ -327,7 +350,7 @@ export function DynamicPricingSection({
                   </FormControl>
                   <FormDescription>
                     {t(
-                      'The live multiplier never falls below this value while the feature is enabled.'
+                      'The profit multiplier never falls below this value while dynamic pricing is enabled.'
                     )}
                   </FormDescription>
                   <FormMessage />
@@ -340,7 +363,7 @@ export function DynamicPricingSection({
               name='max_factor'
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>{t('Dynamic load ceiling')}</FormLabel>
+                  <FormLabel>{t('Dynamic profit ceiling')}</FormLabel>
                   <FormControl>
                     <Input
                       type='number'
@@ -352,7 +375,7 @@ export function DynamicPricingSection({
                   </FormControl>
                   <FormDescription>
                     {t(
-                      'Caps the load premium only. A known-cost floor may exceed it to avoid selling below configured cost.'
+                      'Caps the load-driven profit premium. Cost protection can still raise the effective multiplier when needed.'
                     )}
                   </FormDescription>
                   <FormMessage />
@@ -366,7 +389,7 @@ export function DynamicPricingSection({
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>
-                    {t('Reference selling price (USD / 1M tokens)')}
+                    {t('Reference model cost (USD / 1M tokens)')}
                   </FormLabel>
                   <FormControl>
                     <Input
@@ -379,7 +402,7 @@ export function DynamicPricingSection({
                   </FormControl>
                   <FormDescription>
                     {t(
-                      'Use the lowest effective selling price that this multiplier applies to; an overstated value weakens cost protection.'
+                      'Use the model cost baseline used to compare upstream cost with the configured group cost multiplier.'
                     )}
                   </FormDescription>
                   <FormMessage />
@@ -392,7 +415,7 @@ export function DynamicPricingSection({
               name='cost_floor_factor'
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>{t('Cost safety margin')}</FormLabel>
+                  <FormLabel>{t('Cost protection margin')}</FormLabel>
                   <FormControl>
                     <Input
                       type='number'
@@ -404,7 +427,7 @@ export function DynamicPricingSection({
                   </FormControl>
                   <FormDescription>
                     {t(
-                      'Known upstream cost is multiplied by this margin before the hard price floor is calculated.'
+                      'Known upstream cost is multiplied by this margin before the cost floor is compared with profit pricing.'
                     )}
                   </FormDescription>
                   <FormMessage />
@@ -416,7 +439,7 @@ export function DynamicPricingSection({
 
         <Card className='self-start'>
           <CardHeader>
-            <CardTitle>{t('Live multiplier preview')}</CardTitle>
+            <CardTitle>{t('Live profit multiplier preview')}</CardTitle>
             <CardDescription>
               {t('Automatically refreshes every 3 seconds.')}
             </CardDescription>
@@ -443,7 +466,7 @@ export function DynamicPricingSection({
           <CardContent className='space-y-4'>
             <div>
               <div className='text-muted-foreground text-xs font-medium tracking-wide uppercase'>
-                {t('Current effective multiplier')}
+                {t('Current dynamic profit multiplier')}
               </div>
               <div className='mt-1 text-3xl font-semibold tabular-nums'>
                 {factorText(currentFactors)}
@@ -476,6 +499,71 @@ export function DynamicPricingSection({
           </CardContent>
         </Card>
       </div>
+
+      <Card className='bg-muted/20 shadow-none'>
+        <CardHeader>
+          <CardTitle>{t('Cost × profit pricing preview')}</CardTitle>
+          <CardDescription>
+            {t(
+              'Group Pricing supplies the cost multiplier. Dynamic pricing supplies the profit multiplier. Final billing multiplies both.'
+            )}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className='space-y-4'>
+          <div className='bg-background rounded-md border px-3 py-2 text-sm'>
+            <span className='text-muted-foreground'>{t('Formula')}</span>{' '}
+            <span className='font-medium'>
+              {t('Final billing = group cost × dynamic profit')}
+            </span>
+          </div>
+          <div className='overflow-x-auto rounded-lg border'>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t('Pricing group')}</TableHead>
+                  <TableHead>{t('Cost multiplier')}</TableHead>
+                  <TableHead>{t('Profit multiplier')}</TableHead>
+                  <TableHead>{t('Effective billing multiplier')}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {Object.entries(groupCostMultipliers).length === 0 ? (
+                  <TableRow>
+                    <TableCell
+                      colSpan={4}
+                      className='text-muted-foreground text-center'
+                    >
+                      {t('No pricing groups configured')}
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  Object.entries(groupCostMultipliers)
+                    .sort(([left], [right]) => left.localeCompare(right))
+                    .map(([group, costMultiplier]) => {
+                      const profitMultiplier = status?.enabled
+                        ? status.preview_factor
+                        : 1
+                      return (
+                        <TableRow key={group}>
+                          <TableCell className='font-medium'>{group}</TableCell>
+                          <TableCell className='tabular-nums'>
+                            {costMultiplier.toFixed(3)}×
+                          </TableCell>
+                          <TableCell className='tabular-nums'>
+                            {profitMultiplier.toFixed(3)}×
+                          </TableCell>
+                          <TableCell className='font-semibold tabular-nums'>
+                            {(costMultiplier * profitMultiplier).toFixed(3)}×
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
 
       <div className='space-y-2'>
         <div>
@@ -559,7 +647,7 @@ export function DynamicPricingSection({
             <TableHeader>
               <TableRow>
                 <TableHead>{t('Model')}</TableHead>
-                <TableHead>{t('Effective')}</TableHead>
+                <TableHead>{t('Profit multiplier')}</TableHead>
                 <TableHead>{t('Cost floor')}</TableHead>
                 <TableHead>{t('Load EMA')}</TableHead>
                 <TableHead>{t('Cost EMA')}</TableHead>

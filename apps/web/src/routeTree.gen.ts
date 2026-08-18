@@ -50,7 +50,6 @@ import { Route as AuthenticatedDeveloperAccessIndexRouteImport } from './routes/
 import { Route as AuthenticatedDiscountCodesIndexRouteImport } from './routes/_authenticated/discount-codes/index'
 import { Route as AuthenticatedDrawingIndexRouteImport } from './routes/_authenticated/drawing/index'
 import { Route as AuthenticatedErrorsErrorRouteImport } from './routes/_authenticated/errors/$error'
-import { Route as AuthenticatedFinanceIndexRouteImport } from './routes/_authenticated/finance/index'
 import { Route as AuthenticatedGettingStartedIndexRouteImport } from './routes/_authenticated/getting-started/index'
 import { Route as AuthenticatedKeysIndexRouteImport } from './routes/_authenticated/keys/index'
 import { Route as AuthenticatedModelsIndexRouteImport } from './routes/_authenticated/models/index'
@@ -298,12 +297,6 @@ const AuthenticatedErrorsErrorRoute =
     path: '/errors/$error',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
-const AuthenticatedFinanceIndexRoute =
-  AuthenticatedFinanceIndexRouteImport.update({
-    id: '/finance/',
-    path: '/finance/',
-    getParentRoute: () => AuthenticatedRouteRoute,
-  } as any)
 const AuthenticatedGettingStartedIndexRoute =
   AuthenticatedGettingStartedIndexRouteImport.update({
     id: '/getting-started/',
@@ -547,7 +540,6 @@ export interface FileRoutesByFullPath {
   '/developer-access/': typeof AuthenticatedDeveloperAccessIndexRoute
   '/discount-codes/': typeof AuthenticatedDiscountCodesIndexRoute
   '/drawing/': typeof AuthenticatedDrawingIndexRoute
-  '/finance/': typeof AuthenticatedFinanceIndexRoute
   '/getting-started/': typeof AuthenticatedGettingStartedIndexRoute
   '/keys/': typeof AuthenticatedKeysIndexRoute
   '/models/': typeof AuthenticatedModelsIndexRoute
@@ -622,7 +614,6 @@ export interface FileRoutesByTo {
   '/developer-access': typeof AuthenticatedDeveloperAccessIndexRoute
   '/discount-codes': typeof AuthenticatedDiscountCodesIndexRoute
   '/drawing': typeof AuthenticatedDrawingIndexRoute
-  '/finance': typeof AuthenticatedFinanceIndexRoute
   '/getting-started': typeof AuthenticatedGettingStartedIndexRoute
   '/keys': typeof AuthenticatedKeysIndexRoute
   '/models': typeof AuthenticatedModelsIndexRoute
@@ -701,7 +692,6 @@ export interface FileRoutesById {
   '/_authenticated/developer-access/': typeof AuthenticatedDeveloperAccessIndexRoute
   '/_authenticated/discount-codes/': typeof AuthenticatedDiscountCodesIndexRoute
   '/_authenticated/drawing/': typeof AuthenticatedDrawingIndexRoute
-  '/_authenticated/finance/': typeof AuthenticatedFinanceIndexRoute
   '/_authenticated/getting-started/': typeof AuthenticatedGettingStartedIndexRoute
   '/_authenticated/keys/': typeof AuthenticatedKeysIndexRoute
   '/_authenticated/models/': typeof AuthenticatedModelsIndexRoute
@@ -779,7 +769,6 @@ export interface FileRouteTypes {
     | '/developer-access/'
     | '/discount-codes/'
     | '/drawing/'
-    | '/finance/'
     | '/getting-started/'
     | '/keys/'
     | '/models/'
@@ -854,7 +843,6 @@ export interface FileRouteTypes {
     | '/developer-access'
     | '/discount-codes'
     | '/drawing'
-    | '/finance'
     | '/getting-started'
     | '/keys'
     | '/models'
@@ -932,7 +920,6 @@ export interface FileRouteTypes {
     | '/_authenticated/developer-access/'
     | '/_authenticated/discount-codes/'
     | '/_authenticated/drawing/'
-    | '/_authenticated/finance/'
     | '/_authenticated/getting-started/'
     | '/_authenticated/keys/'
     | '/_authenticated/models/'
@@ -1281,13 +1268,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedErrorsErrorRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
-    '/_authenticated/finance/': {
-      id: '/_authenticated/finance/'
-      path: '/finance'
-      fullPath: '/finance/'
-      preLoaderRoute: typeof AuthenticatedFinanceIndexRouteImport
-      parentRoute: typeof AuthenticatedRouteRoute
-    }
     '/_authenticated/getting-started/': {
       id: '/_authenticated/getting-started/'
       path: '/getting-started'
@@ -1628,7 +1608,6 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedDeveloperAccessIndexRoute: typeof AuthenticatedDeveloperAccessIndexRoute
   AuthenticatedDiscountCodesIndexRoute: typeof AuthenticatedDiscountCodesIndexRoute
   AuthenticatedDrawingIndexRoute: typeof AuthenticatedDrawingIndexRoute
-  AuthenticatedFinanceIndexRoute: typeof AuthenticatedFinanceIndexRoute
   AuthenticatedGettingStartedIndexRoute: typeof AuthenticatedGettingStartedIndexRoute
   AuthenticatedKeysIndexRoute: typeof AuthenticatedKeysIndexRoute
   AuthenticatedModelsIndexRoute: typeof AuthenticatedModelsIndexRoute
@@ -1663,7 +1642,6 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
     AuthenticatedDeveloperAccessIndexRoute,
   AuthenticatedDiscountCodesIndexRoute: AuthenticatedDiscountCodesIndexRoute,
   AuthenticatedDrawingIndexRoute: AuthenticatedDrawingIndexRoute,
-  AuthenticatedFinanceIndexRoute: AuthenticatedFinanceIndexRoute,
   AuthenticatedGettingStartedIndexRoute: AuthenticatedGettingStartedIndexRoute,
   AuthenticatedKeysIndexRoute: AuthenticatedKeysIndexRoute,
   AuthenticatedModelsIndexRoute: AuthenticatedModelsIndexRoute,

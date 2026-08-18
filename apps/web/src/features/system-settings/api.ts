@@ -165,30 +165,3 @@ export async function fetchUpstreamRatios(request: FetchUpstreamRatiosRequest) {
   )
   return res.data
 }
-
-export type FinanceExportFormat = 'zip' | 'text'
-
-export interface FinanceExportRange {
-  start?: Date
-  end?: Date
-}
-
-export async function fetchFinanceExport(
-  format: FinanceExportFormat,
-  range?: FinanceExportRange
-) {
-  const params: Record<string, number | string> = { format }
-  if (range?.start) {
-    params.start_timestamp = Math.floor(range.start.getTime() / 1000)
-  }
-  if (range?.end) {
-    params.end_timestamp = Math.floor(range.end.getTime() / 1000)
-  }
-  return api.get<Blob>('/api/finance/export', {
-    params,
-    responseType: 'blob',
-    disableDuplicate: true,
-    skipBusinessError: true,
-    skipErrorHandler: true,
-  })
-}

@@ -8,16 +8,15 @@ use async_trait::async_trait;
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::{DefaultBodyLimit, RawQuery, Request, State, rejection::BytesRejection},
-    handler::Handler,
+    extract::{RawQuery, Request, State},
     http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
 use hmac::{Hmac, Mac};
-use secrecy::{ExposeSecret, SecretString};
-use serde::{Deserialize, Deserializer};
+use secrecy::SecretString;
+use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::Sha256;
 use sqlx::{PgPool, Row};
@@ -34,7 +33,6 @@ use crate::auth::{CriticalRateLimitOutcome, DashboardAuth};
 use crate::{ClientIpKey, RequestContext, legacy_empty_response};
 
 const EPAY: &str = "epay";
-const FASTPAY: &str = "fastpay";
 const STRIPE: &str = "stripe";
 const CREEM: &str = "creem";
 const WAFFO_PANCAKE: &str = "waffo_pancake";
@@ -152,7 +150,6 @@ impl BillingHttpState {
 
 #[derive(Clone, Debug)]
 pub struct BillingConfig {
-    pub fastpay_secret: Arc<str>,
     pub creem_webhook_secret: Arc<str>,
     pub wallet_url: Arc<str>,
     pub quota_per_unit: i64,
@@ -161,7 +158,6 @@ pub struct BillingConfig {
 impl Default for BillingConfig {
     fn default() -> Self {
         Self {
-            fastpay_secret: Arc::from(""),
             creem_webhook_secret: Arc::from(""),
             wallet_url: Arc::from("/wallet"),
             quota_per_unit: 0,
@@ -284,80 +280,6 @@ impl PaymentCompliance for DisabledPaymentCompliance {
     }
 }
 
-#[async_trait]
-trait FastPayNotifyConfigStore: Send + Sync {
-    async fn load_secret_if_configured(&self) -> Result<Option<SecretString>, BillingError>;
-}
-
-#[derive(Clone)]
-struct PgFastPayNotifyConfigStore {
-    pg: PgPool,
-}
-
-#[async_trait]
-impl FastPayNotifyConfigStore for PgFastPayNotifyConfigStore {
-    async fn load_secret_if_configured(&self) -> Result<Option<SecretString>, BillingError> {
-        let rows = sqlx::query(
-            "SELECT key, value FROM options WHERE key IN ('FastPayAddress', 'FastPayMerchantNo', 'FastPayShopNo', 'FastPayApiSecret', 'PayAddress', 'EpayId', 'EpayKey')",
-        )
-        .fetch_all(&self.pg)
-        .await
-        .map_err(|_| BillingError::Storage)?;
-        let mut values = BTreeMap::new();
-        for row in rows {
-            values.insert(
-                row.try_get::<String, _>("key")
-                    .map_err(|_| BillingError::Storage)?,
-                row.try_get::<String, _>("value")
-                    .map_err(|_| BillingError::Storage)?,
-            );
-        }
-        Ok(resolve_fastpay_secret(&values).map(SecretString::from))
-    }
-}
-
-/// Production state for the public subscription FastPay callback only.
-///
-/// Provider configuration is loaded from PostgreSQL for every callback, so an
-/// option update takes effect without restarting the Rust listener. Order
-/// completion remains transactional in PostgreSQL and cache invalidation stays
-/// best-effort after commit.
-#[derive(Clone)]
-pub struct SubscriptionFastPayNotifyState {
-    repository: Arc<dyn BillingRepository>,
-    cache: Arc<dyn BillingCache>,
-    config: Arc<dyn FastPayNotifyConfigStore>,
-}
-
-impl SubscriptionFastPayNotifyState {
-    #[must_use]
-    pub fn new(pg: PgPool, valkey: redis::Client) -> Self {
-        Self {
-            repository: Arc::new(PgBillingRepository::new(pg.clone())),
-            cache: Arc::new(ValkeyBillingCache::new(valkey)),
-            config: Arc::new(PgFastPayNotifyConfigStore { pg }),
-        }
-    }
-}
-
-/// Mounts only `POST /api/subscription/fastpay/notify`.
-///
-/// The caller must compose the normal API request boundary around this router.
-/// Passing zero disables the route-local body cap, matching Go's configuration
-/// semantics; positive values enforce the anonymous request-body limit.
-pub fn subscription_fastpay_notify_router(
-    state: SubscriptionFastPayNotifyState,
-    anonymous_body_limit_bytes: usize,
-) -> Router {
-    let router = with_subscription_fastpay_notify_route(Router::new(), subscription_fastpay_notify)
-        .with_state(state);
-    if anonymous_body_limit_bytes == 0 {
-        router.layer(DefaultBodyLimit::disable())
-    } else {
-        router.layer(DefaultBodyLimit::max(anonymous_body_limit_bytes))
-    }
-}
-
 /// Mounts only the PostgreSQL/Valkey-backed balance purchase route.
 ///
 /// The route deliberately has no provider or callback surface. The global
@@ -377,46 +299,33 @@ pub fn subscription_balance_pay_router(state: SubscriptionBalancePayState) -> Ro
 }
 
 pub fn billing_payments_router(state: BillingHttpState) -> Router {
-    let protected = with_subscription_fastpay_notify_route(
-        Router::new()
-            .route("/api/subscription/epay/pay", post(epay_pay))
-            .route("/api/subscription/fastpay/pay", post(fastpay_pay))
-            .route("/api/subscription/stripe/pay", post(stripe_pay))
-            .route("/api/subscription/creem/pay", post(creem_pay))
-            .route(
-                "/api/subscription/waffo-pancake/pay",
-                post(waffo_pancake_pay),
-            )
-            .route(BALANCE_PAY_PATH, post(balance_pay))
-            .route(
-                "/api/subscription/epay/notify",
-                get(epay_notify).post(epay_notify),
-            )
-            .route(
-                "/api/subscription/epay/return",
-                get(epay_return).post(epay_return),
-            ),
-        fastpay_notify,
-    )
-    .route("/api/stripe/webhook", post(stripe_webhook))
-    .route("/api/creem/webhook", post(creem_webhook))
-    // Go's UserAuth middleware runs before the JSON body is bound for
-    // every user-initiated payment. Callback/webhook routes remain
-    // intentionally outside this fence and use provider verification.
-    .route_layer(middleware::from_fn_with_state(
-        state.clone(),
-        billing_payment_auth_boundary,
-    ));
+    let protected = Router::new()
+        .route("/api/subscription/epay/pay", post(epay_pay))
+        .route("/api/subscription/stripe/pay", post(stripe_pay))
+        .route("/api/subscription/creem/pay", post(creem_pay))
+        .route(
+            "/api/subscription/waffo-pancake/pay",
+            post(waffo_pancake_pay),
+        )
+        .route(BALANCE_PAY_PATH, post(balance_pay))
+        .route(
+            "/api/subscription/epay/notify",
+            get(epay_notify).post(epay_notify),
+        )
+        .route(
+            "/api/subscription/epay/return",
+            get(epay_return).post(epay_return),
+        )
+        .route("/api/stripe/webhook", post(stripe_webhook))
+        .route("/api/creem/webhook", post(creem_webhook))
+        // Go's UserAuth middleware runs before the JSON body is bound for
+        // every user-initiated payment. Callback/webhook routes remain
+        // intentionally outside this fence and use provider verification.
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            billing_payment_auth_boundary,
+        ));
     protected.with_state(state)
-}
-
-fn with_subscription_fastpay_notify_route<S, H, T>(router: Router<S>, handler: H) -> Router<S>
-where
-    H: Handler<T, S>,
-    T: 'static,
-    S: Clone + Send + Sync + 'static,
-{
-    router.route("/api/subscription/fastpay/notify", post(handler))
 }
 
 fn is_user_payment_route(path: &str, method: &Method) -> bool {
@@ -424,7 +333,6 @@ fn is_user_payment_route(path: &str, method: &Method) -> bool {
         && matches!(
             path,
             "/api/subscription/epay/pay"
-                | "/api/subscription/fastpay/pay"
                 | "/api/subscription/stripe/pay"
                 | "/api/subscription/creem/pay"
                 | "/api/subscription/waffo-pancake/pay"
@@ -908,13 +816,6 @@ async fn epay_pay(
 ) -> Response {
     start_payment(state, headers, request, EPAY).await
 }
-async fn fastpay_pay(
-    State(state): State<BillingHttpState>,
-    headers: HeaderMap,
-    Json(request): Json<PayRequest>,
-) -> Response {
-    start_payment(state, headers, request, FASTPAY).await
-}
 async fn stripe_pay(
     State(state): State<BillingHttpState>,
     headers: HeaderMap,
@@ -1048,7 +949,7 @@ async fn start_payment(
     if state.checkout.ensure_available(provider).await.is_err() {
         return payment_error(StatusCode::OK, "拉起支付失败");
     }
-    let method = normalize_method(provider, &request.payment_method);
+    let method = normalize_method(&request.payment_method);
     let order = match state
         .repository
         .create_pending(CreateOrder {
@@ -1101,17 +1002,8 @@ async fn payment_compliance_allowed_for(compliance: &dyn PaymentCompliance) -> b
     }
 }
 
-fn normalize_method(provider: &str, method: &str) -> String {
-    if provider == FASTPAY {
-        let method = method.trim();
-        if method == "fastpay" {
-            String::new()
-        } else {
-            method.strip_prefix("fastpay_").unwrap_or(method).to_owned()
-        }
-    } else {
-        method.to_owned()
-    }
+fn normalize_method(method: &str) -> String {
+    method.to_owned()
 }
 
 async fn epay_notify(
@@ -1184,91 +1076,6 @@ async fn epay_return(
     {
         Ok(_) => redirect(&state.config.wallet_url, "success"),
         Err(_) => redirect(&state.config.wallet_url, "fail"),
-    }
-}
-
-async fn fastpay_notify(
-    State(state): State<BillingHttpState>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Response {
-    if !payment_compliance_allowed(&state).await {
-        return plain("fail");
-    }
-    complete_fastpay_notify(
-        state.repository.as_ref(),
-        state.cache.as_ref(),
-        &headers,
-        &body,
-        &state.config.fastpay_secret,
-    )
-    .await
-}
-
-async fn subscription_fastpay_notify(
-    State(state): State<SubscriptionFastPayNotifyState>,
-    headers: HeaderMap,
-    body: Result<Bytes, BytesRejection>,
-) -> Response {
-    let body = match body {
-        Ok(body) => body,
-        Err(error) => return error.status().into_response(),
-    };
-    let Some(callback) = parse_fastpay_notify(&headers, &body) else {
-        return plain("fail");
-    };
-    let secret = match state.config.load_secret_if_configured().await {
-        Ok(Some(secret)) => secret,
-        Ok(None) | Err(_) => return plain("fail"),
-    };
-    finish_fastpay_notify(
-        state.repository.as_ref(),
-        state.cache.as_ref(),
-        callback,
-        secret.expose_secret(),
-    )
-    .await
-}
-
-async fn complete_fastpay_notify(
-    repository: &dyn BillingRepository,
-    cache: &dyn BillingCache,
-    headers: &HeaderMap,
-    body: &[u8],
-    secret: &str,
-) -> Response {
-    let Some(callback) = parse_fastpay_notify(headers, body) else {
-        return plain("fail");
-    };
-    finish_fastpay_notify(repository, cache, callback, secret).await
-}
-
-async fn finish_fastpay_notify(
-    repository: &dyn BillingRepository,
-    cache: &dyn BillingCache,
-    callback: ParsedFastPayNotify<'_>,
-    secret: &str,
-) -> Response {
-    if secret.is_empty()
-        || callback.sign.is_empty()
-        || !fastpay_signature_valid(&callback.fields, &callback.sign, secret)
-        || !(callback.status == "1" || callback.status == "SUCCESS")
-        || callback.trade_no.is_empty()
-    {
-        return plain("fail");
-    }
-    match finish_with(
-        repository,
-        cache,
-        &callback.trade_no,
-        FASTPAY,
-        callback.raw,
-        Some(&callback.pay_type),
-    )
-    .await
-    {
-        Ok(_) => plain("success"),
-        Err(_) => plain("fail"),
     }
 }
 
@@ -1399,277 +1206,6 @@ async fn finish_with(
     Ok(result)
 }
 
-#[derive(Debug, Default, Deserialize)]
-struct FastPayNotifyPayload {
-    #[serde(
-        rename = "merchantNo",
-        default,
-        deserialize_with = "deserialize_go_string"
-    )]
-    merchant_no: String,
-    #[serde(
-        rename = "orderNo",
-        default,
-        deserialize_with = "deserialize_go_string"
-    )]
-    order_no: String,
-    #[serde(
-        rename = "outTradeNo",
-        default,
-        deserialize_with = "deserialize_go_string"
-    )]
-    out_trade_no: String,
-    #[serde(default)]
-    amount: Value,
-    #[serde(rename = "payAmount", default)]
-    pay_amount: Value,
-    #[serde(
-        rename = "payType",
-        default,
-        deserialize_with = "deserialize_go_string"
-    )]
-    pay_type: String,
-    #[serde(default)]
-    status: Value,
-    #[serde(
-        rename = "payTime",
-        default,
-        deserialize_with = "deserialize_go_string"
-    )]
-    pay_time: String,
-    #[serde(default)]
-    timestamp: Value,
-    #[serde(default, deserialize_with = "deserialize_go_string")]
-    sign: String,
-}
-
-impl FastPayNotifyPayload {
-    fn signature_fields(&self) -> BTreeMap<String, String> {
-        BTreeMap::from([
-            ("merchantNo".into(), self.merchant_no.clone()),
-            ("orderNo".into(), self.order_no.clone()),
-            ("outTradeNo".into(), self.out_trade_no.clone()),
-            ("amount".into(), fastpay_callback_scalar(&self.amount)),
-            (
-                "payAmount".into(),
-                fastpay_callback_scalar(&self.pay_amount),
-            ),
-            ("payType".into(), self.pay_type.clone()),
-            ("status".into(), fastpay_callback_scalar(&self.status)),
-            ("payTime".into(), self.pay_time.clone()),
-            ("timestamp".into(), fastpay_callback_scalar(&self.timestamp)),
-        ])
-    }
-}
-
-struct ParsedFastPayNotify<'a> {
-    raw: &'a str,
-    fields: BTreeMap<String, String>,
-    sign: String,
-    trade_no: String,
-    status: String,
-    pay_type: String,
-}
-
-fn parse_fastpay_notify<'a>(
-    headers: &HeaderMap,
-    body: &'a [u8],
-) -> Option<ParsedFastPayNotify<'a>> {
-    let raw = callback_body(body).ok()?;
-    if raw.trim().is_empty() {
-        return None;
-    }
-    let json_body = header_text(headers, "content-type")
-        .is_some_and(|value| value.to_ascii_lowercase().contains("application/json"))
-        || raw.trim_start().starts_with('{');
-    let payload = if json_body {
-        serde_json::from_str::<Value>(raw)
-            .ok()
-            .and_then(|value| serde_json::from_value::<FastPayNotifyPayload>(value).ok())?
-    } else {
-        let fields = parse_strict_fastpay_form(raw.as_bytes())?;
-        FastPayNotifyPayload {
-            merchant_no: fields.get("merchantNo").cloned().unwrap_or_default(),
-            order_no: fields.get("orderNo").cloned().unwrap_or_default(),
-            out_trade_no: fields.get("outTradeNo").cloned().unwrap_or_default(),
-            amount: Value::String(fields.get("amount").cloned().unwrap_or_default()),
-            pay_amount: Value::String(fields.get("payAmount").cloned().unwrap_or_default()),
-            pay_type: fields.get("payType").cloned().unwrap_or_default(),
-            status: Value::String(fields.get("status").cloned().unwrap_or_default()),
-            pay_time: fields.get("payTime").cloned().unwrap_or_default(),
-            timestamp: Value::String(fields.get("timestamp").cloned().unwrap_or_default()),
-            sign: fields.get("sign").cloned().unwrap_or_default(),
-        }
-    };
-    let fields = payload.signature_fields();
-    let status = fastpay_callback_scalar(&payload.status);
-    Some(ParsedFastPayNotify {
-        raw,
-        fields,
-        sign: payload.sign,
-        trade_no: payload.out_trade_no,
-        status,
-        pay_type: payload.pay_type,
-    })
-}
-
-fn deserialize_go_string<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    Option::<String>::deserialize(deserializer).map(Option::unwrap_or_default)
-}
-
-fn fastpay_callback_scalar(value: &Value) -> String {
-    match value {
-        Value::String(value) => value.clone(),
-        Value::Number(value) => go_float_scalar(value),
-        Value::Bool(value) => value.to_string(),
-        Value::Null => "<nil>".into(),
-        Value::Array(values) => format!(
-            "[{}]",
-            values
-                .iter()
-                .map(fastpay_callback_scalar)
-                .collect::<Vec<_>>()
-                .join(" ")
-        ),
-        Value::Object(values) => format!(
-            "map[{}]",
-            values
-                .iter()
-                .map(|(key, value)| format!("{key}:{}", fastpay_callback_scalar(value)))
-                .collect::<Vec<_>>()
-                .join(" ")
-        ),
-    }
-}
-
-fn go_float_scalar(value: &serde_json::Number) -> String {
-    let Some(number) = value.as_f64() else {
-        return value.to_string();
-    };
-    let rendered = number.to_string();
-    let (mantissa, exponent) = match rendered.split_once(['e', 'E']) {
-        Some((mantissa, exponent)) => (
-            mantissa.to_owned(),
-            exponent.parse::<i32>().unwrap_or_default(),
-        ),
-        None => decimal_parts(&rendered),
-    };
-    if !(-4..6).contains(&exponent) {
-        return format!("{mantissa}e{exponent:+03}");
-    }
-    rendered
-}
-
-fn decimal_parts(rendered: &str) -> (String, i32) {
-    let (negative, rendered) = rendered
-        .strip_prefix('-')
-        .map_or((false, rendered), |value| (true, value));
-    if rendered == "0" {
-        return (if negative { "-0" } else { "0" }.into(), 0);
-    }
-    let (whole, fraction) = rendered.split_once('.').unwrap_or((rendered, ""));
-    let digits = format!("{whole}{fraction}");
-    let first = digits.find(|character| character != '0').unwrap_or(0);
-    let mut significant = digits[first..].trim_end_matches('0').to_owned();
-    let exponent = if whole.trim_start_matches('0').is_empty() {
-        whole.len() as i32 - first as i32 - 1
-    } else {
-        whole.len() as i32 - 1
-    };
-    if significant.len() > 1 {
-        significant.insert(1, '.');
-    }
-    if negative {
-        significant.insert(0, '-');
-    }
-    (significant, exponent)
-}
-
-fn parse_strict_fastpay_form(raw: &[u8]) -> Option<BTreeMap<String, String>> {
-    if raw.contains(&b';') {
-        return None;
-    }
-    let mut fields = BTreeMap::new();
-    for part in raw
-        .split(|byte| *byte == b'&')
-        .filter(|part| !part.is_empty())
-    {
-        let (key, value) = match part.iter().position(|byte| *byte == b'=') {
-            Some(index) => {
-                let (key, suffix) = part.split_at(index);
-                (key, &suffix[1..])
-            }
-            None => (part, &[] as &[u8]),
-        };
-        let key = percent_decode_fastpay_form(key)?;
-        let value = percent_decode_fastpay_form(value)?;
-        fields.entry(key).or_insert(value);
-    }
-    Some(fields)
-}
-
-fn percent_decode_fastpay_form(value: &[u8]) -> Option<String> {
-    let mut output = Vec::with_capacity(value.len());
-    let mut index = 0;
-    while index < value.len() {
-        match value[index] {
-            b'+' => output.push(b' '),
-            b'%' => {
-                let high = hex_digit(*value.get(index + 1)?)?;
-                let low = hex_digit(*value.get(index + 2)?)?;
-                output.push((high << 4) | low);
-                index += 2;
-            }
-            byte => output.push(byte),
-        }
-        index += 1;
-    }
-    String::from_utf8(output).ok()
-}
-
-fn hex_digit(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
-}
-
-fn resolve_fastpay_secret(options: &BTreeMap<String, String>) -> Option<String> {
-    let pay_address = options.get("PayAddress").map_or("", String::as_str).trim();
-    let legacy_fastpay = pay_address.to_lowercase().contains("fastpay");
-    configured_value(options, "FastPayAddress")
-        .or_else(|| legacy_fastpay.then_some(pay_address))?;
-    configured_value(options, "FastPayMerchantNo").or_else(|| {
-        if legacy_fastpay {
-            configured_value(options, "EpayId")
-        } else {
-            None
-        }
-    })?;
-    configured_value(options, "FastPayShopNo")?;
-    let secret = configured_value(options, "FastPayApiSecret").or_else(|| {
-        if legacy_fastpay {
-            configured_value(options, "EpayKey")
-        } else {
-            None
-        }
-    })?;
-    Some(secret.to_owned())
-}
-
-fn configured_value<'a>(options: &'a BTreeMap<String, String>, key: &str) -> Option<&'a str> {
-    options
-        .get(key)
-        .map(String::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-}
-
 /// ePay uses `Request.PostForm` for POST callbacks and `URL.Query` for GET
 /// callbacks.  In particular, POST must never fall back to a query string:
 /// doing so could let malformed JSON complete an order from attacker-controlled
@@ -1720,23 +1256,6 @@ fn percent_decode(value: &str) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
-fn fastpay_signature_valid(
-    fields: &BTreeMap<String, String>,
-    provided: &str,
-    secret: &str,
-) -> bool {
-    let joined = fields
-        .iter()
-        .filter(|(key, value)| key.as_str() != "sign" && !value.is_empty())
-        .map(|(key, value)| format!("{key}={value}"))
-        .collect::<Vec<_>>()
-        .join("&");
-    let expected = md5_hex(format!("{joined}&key={secret}").as_bytes());
-    expected
-        .as_bytes()
-        .ct_eq(provided.to_ascii_lowercase().as_bytes())
-        .into()
-}
 fn hmac_sha256_valid(raw: &[u8], provided: &str, secret: &str) -> bool {
     let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(secret.as_bytes()) else {
         return false;
@@ -1752,7 +1271,7 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-// MD5 is retained only for FastPay legacy callback compatibility. New protocols use HMAC.
+// Legacy digest helper retained for compatibility with historical fixtures.
 pub fn md5_hex(input: &[u8]) -> String {
     let mut data = input.to_vec();
     let bits = (data.len() as u64) * 8;
@@ -2351,300 +1870,4 @@ fn balance_charge_decimal(money: &str, quota_per_unit: &str) -> Result<i64, Bill
         .ok_or(BillingError::Rejected)?
         / denominator;
     i64::try_from(charge).map_err(|_| BillingError::Rejected)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use axum::{
-        body::{Body, to_bytes},
-        http::Request,
-    };
-    use std::sync::Mutex;
-    use tower::ServiceExt;
-
-    #[derive(Clone)]
-    struct StaticFastPayConfig(Option<SecretString>);
-
-    #[async_trait]
-    impl FastPayNotifyConfigStore for StaticFastPayConfig {
-        async fn load_secret_if_configured(&self) -> Result<Option<SecretString>, BillingError> {
-            Ok(self.0.clone())
-        }
-    }
-
-    #[derive(Default)]
-    struct RecordingRepository(Mutex<Vec<(String, String, String)>>);
-
-    #[async_trait]
-    impl BillingRepository for RecordingRepository {
-        async fn create_pending(&self, _: CreateOrder) -> Result<PendingOrder, BillingError> {
-            Err(BillingError::Rejected)
-        }
-
-        async fn expire(&self, _: &str) -> Result<(), BillingError> {
-            Err(BillingError::Rejected)
-        }
-
-        async fn fail(&self, _: &str) -> Result<(), BillingError> {
-            Err(BillingError::Rejected)
-        }
-
-        async fn purchase_with_balance(
-            &self,
-            _: i64,
-            _: i64,
-            _: i64,
-        ) -> Result<Completion, BillingError> {
-            Err(BillingError::Rejected)
-        }
-
-        async fn complete(
-            &self,
-            trade_no: &str,
-            provider: &str,
-            _: &str,
-            method: Option<&str>,
-        ) -> Result<Completion, BillingError> {
-            self.0.lock().expect("completion lock").push((
-                trade_no.into(),
-                provider.into(),
-                method.unwrap_or_default().into(),
-            ));
-            Ok(Completion::Completed {
-                subscription_id: 11,
-                user_id: 22,
-                quota_charged: 0,
-                group_changed: false,
-            })
-        }
-    }
-
-    #[derive(Default)]
-    struct RecordingCache(Mutex<Vec<(i64, i64)>>);
-
-    #[async_trait]
-    impl BillingCache for RecordingCache {
-        async fn invalidate_completed_payment(
-            &self,
-            subscription_id: i64,
-            user_id: i64,
-            _: i64,
-            _: bool,
-        ) {
-            self.0
-                .lock()
-                .expect("cache lock")
-                .push((subscription_id, user_id));
-        }
-    }
-
-    fn test_notify_router(
-        repository: Arc<RecordingRepository>,
-        cache: Arc<RecordingCache>,
-        limit: usize,
-    ) -> Router {
-        subscription_fastpay_notify_router(
-            SubscriptionFastPayNotifyState {
-                repository,
-                cache,
-                config: Arc::new(StaticFastPayConfig(Some(SecretString::from("secret")))),
-            },
-            limit,
-        )
-    }
-
-    async fn response_body(response: Response) -> String {
-        String::from_utf8(
-            to_bytes(response.into_body(), usize::MAX)
-                .await
-                .expect("response body")
-                .to_vec(),
-        )
-        .expect("UTF-8 response")
-    }
-
-    #[test]
-    fn fastpay_json_scalars_should_match_go_float64_signing() {
-        let callback: FastPayNotifyPayload = serde_json::from_value(json!({
-            "amount": 1.0,
-            "payAmount": 1e-5,
-            "status": 1,
-            "timestamp": 1e6
-        }))
-        .expect("callback");
-
-        assert_eq!(
-            callback.signature_fields(),
-            BTreeMap::from([
-                ("amount".into(), "1".into()),
-                ("merchantNo".into(), "".into()),
-                ("orderNo".into(), "".into()),
-                ("outTradeNo".into(), "".into()),
-                ("payAmount".into(), "1e-05".into()),
-                ("payTime".into(), "".into()),
-                ("payType".into(), "".into()),
-                ("status".into(), "1".into()),
-                ("timestamp".into(), "1e+06".into()),
-            ])
-        );
-    }
-
-    #[test]
-    fn fastpay_form_should_keep_the_first_duplicate_value() {
-        let fields = parse_strict_fastpay_form(b"sign=first&sign=second&outTradeNo=trade-1")
-            .expect("valid form");
-
-        assert_eq!(fields["sign"], "first");
-    }
-
-    #[test]
-    fn fastpay_form_should_reject_an_unescaped_semicolon() {
-        assert!(parse_strict_fastpay_form(b"sign=valid;unexpected=value").is_none());
-    }
-
-    #[test]
-    fn fastpay_config_should_use_the_legacy_epay_fallback() {
-        let options = BTreeMap::from([
-            ("PayAddress".into(), " https://fastpay.example ".into()),
-            ("EpayId".into(), " merchant ".into()),
-            ("EpayKey".into(), " secret ".into()),
-            ("FastPayShopNo".into(), " shop ".into()),
-        ]);
-
-        assert_eq!(resolve_fastpay_secret(&options).as_deref(), Some("secret"));
-    }
-
-    #[test]
-    fn fastpay_config_should_require_the_shop_number() {
-        let options = BTreeMap::from([
-            ("FastPayAddress".into(), "https://fastpay.example".into()),
-            ("FastPayMerchantNo".into(), "merchant".into()),
-            ("FastPayApiSecret".into(), "secret".into()),
-        ]);
-
-        assert!(resolve_fastpay_secret(&options).is_none());
-    }
-
-    #[tokio::test]
-    async fn notify_router_should_complete_a_signed_numeric_json_callback() {
-        let repository = Arc::new(RecordingRepository::default());
-        let cache = Arc::new(RecordingCache::default());
-        let signing_input = b"amount=1&merchantNo=M&orderNo=O&outTradeNo=trade-1&payAmount=1e-05&payTime=T&payType=alipay&status=1&timestamp=1e+06&key=secret";
-        let body = json!({
-            "merchantNo": "M",
-            "orderNo": "O",
-            "outTradeNo": "trade-1",
-            "amount": 1.0,
-            "payAmount": 1e-5,
-            "payType": "alipay",
-            "status": 1,
-            "payTime": "T",
-            "timestamp": 1e6,
-            "sign": md5_hex(signing_input),
-        })
-        .to_string();
-        let response = test_notify_router(Arc::clone(&repository), Arc::clone(&cache), 4096)
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/subscription/fastpay/notify")
-                    .header("content-type", "application/json")
-                    .body(Body::from(body))
-                    .expect("request"),
-            )
-            .await
-            .expect("response");
-        let result = (
-            response_body(response).await,
-            repository.0.lock().expect("completion lock").clone(),
-            cache.0.lock().expect("cache lock").clone(),
-        );
-
-        assert_eq!(
-            result,
-            (
-                "success".into(),
-                vec![("trade-1".into(), "fastpay".into(), "alipay".into())],
-                vec![(11, 22)],
-            )
-        );
-    }
-
-    #[tokio::test]
-    async fn notify_router_should_reject_lowercase_success_status() {
-        let repository = Arc::new(RecordingRepository::default());
-        let cache = Arc::new(RecordingCache::default());
-        let sign = md5_hex(b"outTradeNo=trade-1&status=success&key=secret");
-        let response = test_notify_router(Arc::clone(&repository), cache, 4096)
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/subscription/fastpay/notify")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from(format!(
-                        "outTradeNo=trade-1&status=success&sign={sign}"
-                    )))
-                    .expect("request"),
-            )
-            .await
-            .expect("response");
-        let result = (
-            response_body(response).await,
-            repository.0.lock().expect("completion lock").len(),
-        );
-
-        assert_eq!(result, ("fail".into(), 0));
-    }
-
-    #[tokio::test]
-    async fn notify_router_should_return_an_empty_413_when_body_exceeds_the_limit() {
-        let repository = Arc::new(RecordingRepository::default());
-        let cache = Arc::new(RecordingCache::default());
-        let response = test_notify_router(repository, cache, 8)
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/subscription/fastpay/notify")
-                    .body(Body::from("123456789"))
-                    .expect("request"),
-            )
-            .await
-            .expect("response");
-        let result = (response.status(), response_body(response).await);
-
-        assert_eq!(result, (StatusCode::PAYLOAD_TOO_LARGE, String::new()));
-    }
-
-    #[tokio::test]
-    async fn notify_router_should_expose_only_the_post_method() {
-        let repository = Arc::new(RecordingRepository::default());
-        let cache = Arc::new(RecordingCache::default());
-        let response = test_notify_router(repository, cache, 4096)
-            .oneshot(
-                Request::builder()
-                    .method("GET")
-                    .uri("/api/subscription/fastpay/notify")
-                    .body(Body::empty())
-                    .expect("request"),
-            )
-            .await
-            .expect("response");
-
-        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
-    }
-
-    #[test]
-    fn balance_charge_should_preserve_decimal_ceil_semantics() {
-        assert_eq!(
-            balance_charge_decimal("1.000001", "1000000").expect("charge"),
-            1_000_001
-        );
-        assert_eq!(
-            balance_charge_decimal("0.01", "1234.5").expect("fractional factor"),
-            13
-        );
-        assert!(balance_charge_decimal("1", "0").is_err());
-        assert!(balance_charge_decimal("1", "not-a-number").is_err());
-    }
 }

@@ -92,7 +92,7 @@ describe('group ratio visual editor', () => {
 
     assert.equal(changes.length, 0)
     const optimizeButton = [...container.querySelectorAll('button')].find(
-      (button) => button.textContent === 'Optimize by effective ratio'
+      (button) => button.textContent === 'Optimize by effective cost'
     )
     assert.ok(optimizeButton)
 
@@ -131,7 +131,7 @@ describe('group ratio visual editor', () => {
       })
 
       const optimizeButton = [...container.querySelectorAll('button')].find(
-        (button) => button.textContent === 'Optimize by effective ratio'
+        (button) => button.textContent === 'Optimize by effective cost'
       )
       assert.ok(optimizeButton)
       assert.equal(optimizeButton.disabled, true)
@@ -169,7 +169,7 @@ describe('group ratio visual editor', () => {
     })
 
     const optimizeButton = [...container.querySelectorAll('button')].find(
-      (button) => button.textContent === 'Optimize by effective ratio'
+      (button) => button.textContent === 'Optimize by effective cost'
     )
     assert.ok(optimizeButton)
     assert.equal(optimizeButton.disabled, false)
@@ -230,7 +230,7 @@ describe('group ratio visual editor', () => {
     })
 
     const optimizeButton = [...container.querySelectorAll('button')].find(
-      (button) => button.textContent === 'Optimize by effective ratio'
+      (button) => button.textContent === 'Optimize by effective cost'
     )
     assert.ok(optimizeButton)
     await act(async () => {
@@ -271,7 +271,7 @@ describe('group ratio visual editor', () => {
     })
 
     const optimizeButton = [...container.querySelectorAll('button')].find(
-      (button) => button.textContent === 'Optimize by effective ratio'
+      (button) => button.textContent === 'Optimize by effective cost'
     )
     assert.ok(optimizeButton)
     assert.equal(optimizeButton.disabled, true)

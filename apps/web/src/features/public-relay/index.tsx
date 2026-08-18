@@ -769,7 +769,8 @@ export function PublicRelay() {
             ),
             submitLabel: t('Submit for review'),
             isPending: submitMutation.isPending,
-            disabled: !shareReady,
+            fixedGroup: configQuery.data?.group ?? '',
+            disabled: !shareReady || !configQuery.data?.group,
             onSubmit: async (values) => {
               const publicGroup = configQuery.data?.group ?? 'FREE'
               const channelConfig = transformFormDataToCreatePayload({

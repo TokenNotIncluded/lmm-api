@@ -154,7 +154,6 @@ export const SIDEBAR_DEFAULT_ROUTE_ALLOWLIST = new Set([
   '/redemption-codes',
   '/discount-codes',
   '/subscriptions',
-  '/finance',
   '/system-info',
   '/system-settings/site',
 ]) as ReadonlySet<string>
@@ -182,7 +181,6 @@ export const SIDEBAR_ROUTE_SECTION: Readonly<Record<string, string>> = {
   '/redemption-codes': 'admin',
   '/discount-codes': 'admin',
   '/subscriptions': 'admin',
-  '/finance': 'admin',
   '/system-info': 'admin',
   '/system-settings/site': 'admin',
 }
@@ -211,7 +209,6 @@ export const SIDEBAR_ROUTE_MODULE: Readonly<
   '/users': { section: 'admin', module: 'user' },
   '/redemption-codes': { section: 'admin', module: 'redemption' },
   '/subscriptions': { section: 'admin', module: 'subscription' },
-  '/finance': { section: 'admin', module: 'finance' },
   '/system-info': { section: 'admin', module: 'setting' },
   '/system-settings/site': { section: 'admin', module: 'setting' },
 }

@@ -92,10 +92,11 @@ const MODELS_SECTIONS = [
   },
   {
     id: 'dynamic-group-multiplier',
-    titleKey: 'Dynamic Group Multiplier',
+    titleKey: 'Dynamic Profit Pricing',
     build: (settings: ModelSettings) => (
       <DynamicPricingSection
         defaultValues={{
+          GroupRatio: settings.GroupRatio,
           'dynamic_pricing_setting.enabled':
             settings['dynamic_pricing_setting.enabled'],
           'dynamic_pricing_setting.min_factor':

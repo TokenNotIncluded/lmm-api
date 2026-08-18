@@ -26,7 +26,6 @@ POST	/api/gift/	apps/api-rust/src/main.rs:gifts
 PUT	/api/gift/:id	apps/api-rust/src/main.rs:gifts
 GET	/api/gift/claims	apps/api-rust/src/main.rs:gifts
 POST	/api/subscription/balance/pay	apps/api-rust/src/main.rs:subscription_balance_pay
-POST	/api/subscription/fastpay/notify	apps/api-rust/src/main.rs:subscription_fastpay_notify
 GET	/api/security/policy	apps/api-rust/src/main.rs:security_overview
 GET	/api/security/stats	apps/api-rust/src/main.rs:security_overview
 GET	/api/security/admin/policy	apps/api-rust/src/main.rs:security_overview

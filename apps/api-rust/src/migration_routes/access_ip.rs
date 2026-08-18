@@ -276,7 +276,7 @@ async fn paid_activation_complete(pg: &PgPool, user_id: i64) -> Result<bool, Acc
                   )
                   AND (credited_quota > 0 OR amount > 0)
                   AND (
-                      payment_provider IN ('epay', 'stripe', 'creem', 'fastpay', 'waffo', 'waffo_pancake')
+                      payment_provider IN ('epay', 'stripe', 'creem', 'waffo', 'waffo_pancake')
                       OR (
                           payment_provider = ''
                           AND payment_method IN ('stripe', 'creem', 'waffo', 'waffo_pancake', 'alipay', 'wxpay')

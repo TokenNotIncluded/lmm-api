@@ -30,7 +30,6 @@ test_instance="$repo_root/apps/api-rust/src/test_instance.rs"
 for adapter in \
   TestInstanceDisabledRatioSyncUpstream \
   DisabledEpayGateway \
-  DisabledFastPayGateway \
   DisabledStripeCreemGateway \
   DenyTopUpGateway \
   DenyWebhookAvailability \

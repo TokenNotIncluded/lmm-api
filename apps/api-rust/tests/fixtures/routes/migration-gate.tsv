@@ -180,8 +180,6 @@ POST	/api/subscription/epay/notify	absent	not-applicable	unmounted	not-applicabl
 POST	/api/subscription/epay/pay	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 GET	/api/subscription/epay/return	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 POST	/api/subscription/epay/return	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
-POST	/api/subscription/fastpay/notify	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	source=apps/api-rust/src/migration_routes/billing_payments.rs;mount=apps/api-rust/src/migration_routes/billing_payments.rs;listener=apps/api-rust/src/main.rs
-POST	/api/subscription/fastpay/pay	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 GET	/api/subscription/plans	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	source=apps/api-rust/src/migration_routes/billing_subscriptions.rs;mount=apps/api-rust/src/migration_routes/billing_subscriptions.rs
 GET	/api/subscription/self	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	source=apps/api-rust/src/migration_routes/billing_subscriptions.rs;mount=apps/api-rust/src/migration_routes/billing_subscriptions.rs
 PUT	/api/subscription/self/preference	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	source=apps/api-rust/src/migration_routes/billing_subscriptions.rs;mount=apps/api-rust/src/migration_routes/billing_subscriptions.rs
@@ -234,8 +232,6 @@ POST	/api/user/checkin	present	unverified	mounted	unverified	not-applicable	go	m
 POST	/api/user/creem/pay	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 GET	/api/user/epay/notify	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 POST	/api/user/epay/notify	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
-POST	/api/user/fastpay/notify	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
-POST	/api/user/fastpay/pay	absent	not-applicable	unmounted	not-applicable	not-applicable	go	legacy-go	frozen-go-only
 GET	/api/user/groups	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	source=apps/api-rust/src/migration_routes/missing_identity_catalog.rs;mount=apps/api-rust/src/migration_routes/missing_identity_catalog.rs;listener=apps/api-rust/src/main.rs
 POST	/api/user/login	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	source=apps/api-rust/src/auth/http.rs;mount=apps/api-rust/src/auth/http.rs
 POST	/api/user/login/2fa	present	unverified	mounted	unverified	not-applicable	go	mounted-unverified	apps/api-rust/src/migration_routes/identity_security.rs

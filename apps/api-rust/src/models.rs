@@ -493,7 +493,7 @@ const BASELINE_PAID_TOPUP_SQL: &str = r#"
           AND COALESCE(payment_method, '') <> 'balance'
           AND (
               COALESCE(payment_provider, '') IN
-                  ('epay', 'stripe', 'creem', 'fastpay', 'waffo', 'waffo_pancake')
+                  ('epay', 'stripe', 'creem', 'waffo', 'waffo_pancake')
               OR (
                   COALESCE(payment_provider, '') = ''
                   AND COALESCE(payment_method, '') IN
@@ -530,7 +530,7 @@ fn baseline_paid_topup_row_qualifies(
     }
     matches!(
         provider,
-        "epay" | "stripe" | "creem" | "fastpay" | "waffo" | "waffo_pancake"
+        "epay" | "stripe" | "creem" | "waffo" | "waffo_pancake"
     ) || (provider.is_empty()
         && matches!(
             method,

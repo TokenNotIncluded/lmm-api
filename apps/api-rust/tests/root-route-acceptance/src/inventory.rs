@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-const EXPECTED_ROUTE_COUNT: usize = 356;
+const EXPECTED_ROUTE_COUNT: usize = 352;
 const LEGACY_ROUTES: &str = include_str!("../../fixtures/routes/legacy-go-routes.tsv");
 const MIGRATION_PLAN: &str = include_str!("../../fixtures/routes/migration-plan.tsv");
 const PLAN_HEADER: &str = "method\tpath\tlegacy_handler\tdomain\tauth_scope\tdata_access\tstreaming\tpriority\tplanned_rust_module\tjob_dependency";
@@ -269,7 +269,7 @@ mod tests {
     #[test]
     fn frozen_inventory_and_auth_classes_cover_exactly_356_routes() {
         let routes = load_routes().expect("frozen route inventory is valid");
-        assert_eq!(routes.len(), 356);
+        assert_eq!(routes.len(), 352);
         assert_eq!(
             routes
                 .iter()
