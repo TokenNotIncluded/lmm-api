@@ -105,6 +105,7 @@ export const ToolHeader = ({
   ...props
 }: ToolHeaderProps) => {
   const { t } = useTranslation()
+  const toolIdentifier = type.startsWith('tool-') ? type.slice(5) : type
   return (
     <CollapsibleTrigger
       className={cn(
@@ -120,6 +121,9 @@ export const ToolHeader = ({
             <span className='truncate text-sm font-medium'>
               {title ?? type.split('-').slice(1).join('-')}
             </span>
+            <code className='text-muted-foreground max-w-full truncate rounded bg-black/5 px-1.5 py-0.5 text-[10px] dark:bg-white/10'>
+              {toolIdentifier}
+            </code>
             {getStatusBadge(state, t)}
           </div>
           {summary ? (
@@ -153,6 +157,13 @@ export type ToolInputProps = ComponentProps<'div'> & {
 export const ToolInput = ({ className, input, ...props }: ToolInputProps) => {
   const { t } = useTranslation()
   const entries = Object.entries(input ?? {})
+  const formatValue = (value: unknown) => {
+    if (typeof value === 'string') return value
+    if (typeof value === 'object' && value !== null) {
+      return JSON.stringify(value, null, 2)
+    }
+    return String(value)
+  }
   return (
     <div className={cn('space-y-2 overflow-hidden p-4', className)} {...props}>
       <h4 className='text-muted-foreground text-xs font-medium tracking-wide uppercase'>
@@ -166,8 +177,8 @@ export const ToolInput = ({ className, input, ...props }: ToolInputProps) => {
               className='grid gap-1 px-3 py-2 text-xs sm:grid-cols-[minmax(7rem,0.35fr)_minmax(0,1fr)] sm:gap-3'
             >
               <dt className='text-muted-foreground'>{key}</dt>
-              <dd className='min-w-0 break-words'>
-                {typeof value === 'string' ? value : String(value)}
+              <dd className='min-w-0 font-mono text-[11px] break-words whitespace-pre-wrap'>
+                {formatValue(value)}
               </dd>
             </div>
           ))}

@@ -4400,6 +4400,36 @@ for (const [locale, translations] of Object.entries(
   Object.assign(newKeys[locale], translations)
 }
 
+const legalConsentTranslations = {
+  en: { 'and the': 'and the' },
+  zh: { 'and the': '和' },
+  'zh-TW': { 'and the': '和' },
+  fr: { 'and the': 'et la' },
+  ja: { 'and the': 'および' },
+  ru: { 'and the': 'и' },
+  vi: { 'and the': 'và' },
+}
+
+for (const [locale, translations] of Object.entries(legalConsentTranslations)) {
+  Object.assign(newKeys[locale], translations)
+}
+
+const assistantToolTranslations = {
+  en: { '{{count}} input parameters': '{{count}} input parameters' },
+  zh: { '{{count}} input parameters': '{{count}} 个输入参数' },
+  'zh-TW': { '{{count}} input parameters': '{{count}} 個輸入參數' },
+  fr: { '{{count}} input parameters': '{{count}} paramètres d’entrée' },
+  ja: { '{{count}} input parameters': '入力パラメータ {{count}} 個' },
+  ru: { '{{count}} input parameters': 'Входные параметры: {{count}}' },
+  vi: { '{{count}} input parameters': '{{count}} tham số đầu vào' },
+}
+
+for (const [locale, translations] of Object.entries(
+  assistantToolTranslations
+)) {
+  Object.assign(newKeys[locale], translations)
+}
+
 async function main() {
   let totalAdded = 0
   for (const [locale, translations] of Object.entries(newKeys)) {
