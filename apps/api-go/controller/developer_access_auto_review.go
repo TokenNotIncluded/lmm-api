@@ -186,7 +186,7 @@ func runAssistantL1AutoReview(job assistantL1AutoReviewJob) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), assistantL1AutoReviewTimeout)
 	defer cancel()
-	reviewGroup, routeModel, routeErr := assistantConfiguredRoute(settings)
+	reviewGroup, routeModel, routeErr := assistantConfiguredRouteResolver(settings)
 	if routeErr != nil {
 		return routeErr
 	}
@@ -211,6 +211,13 @@ func runAssistantL1AutoReview(job assistantL1AutoReviewJob) error {
 	if len(notes) == 0 {
 		note = fmt.Sprintf("AI 自动审核通过（双审置信度均不低于 %.2f）。", assistantL1AutoReviewMinConfidence)
 	}
-	_, err = model.ReviewDeveloperAccessRequest(root.Id, request.Id, true, note)
+	if !setting.AssistantL1AutoApprovalUserAllowed(job.UserID) {
+		return nil
+	}
+	latest, err := model.GetDeveloperAccessRequest(job.UserID)
+	if err != nil || latest == nil || latest.Id != job.RequestID || latest.Status != model.DeveloperAccessRequestPending || latest.Reason != job.Reason || latest.AIRecommendation != job.Recommendation {
+		return nil
+	}
+	_, err = model.AutoApproveDeveloperAccessRequest(root.Id, request.Id, job.Reason, job.Recommendation, note)
 	return err
 }

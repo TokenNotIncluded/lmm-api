@@ -113,7 +113,7 @@ func GetStatus(c *gin.Context) {
 
 	passkeySetting := system_setting.GetPasskeySettings()
 	assistantSettings := setting.GetAssistantSettings()
-	assistantGroup, assistantModel, routeErr := assistantConfiguredRoute(assistantSettings)
+	assistantGroup, assistantModel, routeErr := assistantConfiguredRouteResolver(assistantSettings)
 	if routeErr != nil {
 		assistantModel = ""
 	}

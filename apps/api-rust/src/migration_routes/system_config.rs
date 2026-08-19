@@ -881,6 +881,10 @@ mod assistant_group_option_tests {
         assert!(validate_option_update("AssistantGroup", "premium", &options).is_ok());
         assert!(validate_option_update("AssistantGroup", "missing", &options).is_err());
         assert!(validate_option_update("AssistantGroup", "", &options).is_err());
+        assert!(validate_option_update("AssistantL1AutoApprovalUserIDs", "7,42", &options).is_ok());
+        assert!(
+            validate_option_update("AssistantL1AutoApprovalUserIDs", "7,nope", &options).is_err()
+        );
     }
 }
 
@@ -1922,6 +1926,7 @@ fn validate_option_update(
                 Err("assistant routing group must be an existing group".to_owned())
             }
         }
+        "AssistantL1AutoApprovalUserIDs" => validate_positive_id_list(value),
         "GroupRatio" => validate_nonnegative_json_number_map(value, "group ratio"),
         "gemini.safety_settings" => validate_gemini_safety_settings(value),
         "claude.default_max_tokens" => validate_nonnegative_json_integer_map(value),
@@ -1939,6 +1944,21 @@ fn validate_option_update(
 
 fn positive_option_value(value: &str) -> bool {
     value.trim().parse::<f64>().is_ok_and(|value| value > 0.0)
+}
+
+fn validate_positive_id_list(value: &str) -> Result<(), String> {
+    for token in value.split([',', '，', ' ', '\n', '\t']) {
+        let token = token.trim();
+        if token.is_empty() {
+            continue;
+        }
+        if !token.parse::<i64>().is_ok_and(|id| id > 0) {
+            return Err(
+                "assistant automatic approval user IDs must be positive integers".to_owned(),
+            );
+        }
+    }
+    Ok(())
 }
 
 fn parse_json_object(

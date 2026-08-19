@@ -27,8 +27,12 @@ func withAssistantSettings(t *testing.T, enabled bool, modelID string) {
 	t.Helper()
 	original := setting.GetAssistantSettings()
 	originalBillingLoader := loadAssistantBillingUser
+	originalRouteResolver := assistantConfiguredRouteResolver
 	setting.SetAssistantEnabled(enabled)
 	require.NoError(t, setting.UpdateAssistantModel(modelID))
+	assistantConfiguredRouteResolver = func(setting.AssistantSettings) (string, string, error) {
+		return "default", modelID, nil
+	}
 	loadAssistantBillingUser = func() (*model.User, error) {
 		return &model.User{
 			Id:       987,
@@ -43,7 +47,17 @@ func withAssistantSettings(t *testing.T, enabled bool, modelID string) {
 		_ = setting.UpdateAssistantModel(original.Model)
 		_ = setting.UpdateAssistantReasoningEffort(original.ReasoningEffort)
 		loadAssistantBillingUser = originalBillingLoader
+		assistantConfiguredRouteResolver = originalRouteResolver
 	})
+}
+
+func withAssistantRouteResolver(t *testing.T, modelID string) {
+	t.Helper()
+	original := assistantConfiguredRouteResolver
+	assistantConfiguredRouteResolver = func(setting.AssistantSettings) (string, string, error) {
+		return "default", modelID, nil
+	}
+	t.Cleanup(func() { assistantConfiguredRouteResolver = original })
 }
 
 func TestAssistantRuntimeMetadataQuestionIsDeterministic(t *testing.T) {
@@ -441,6 +455,7 @@ func TestPrepareAssistantRequestCacheHitSkipsDuplicateIntentWrite(t *testing.T) 
 	setting.SetAssistantCacheEnabled(true)
 	require.NoError(t, setting.UpdateAssistantModel("assistant-cache-test-model"))
 	require.NoError(t, setting.UpdateAssistantCacheTTLMinutes("10"))
+	withAssistantRouteResolver(t, "assistant-cache-test-model")
 	t.Cleanup(func() {
 		setting.SetAssistantEnabled(original.Enabled)
 		setting.SetAssistantCacheEnabled(original.CacheEnabled)

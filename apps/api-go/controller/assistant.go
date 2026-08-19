@@ -34,6 +34,8 @@ const assistantClientActionKey = "assistant_client_action"
 const assistantConversationTitleNeededKey = "assistant_conversation_title_needed"
 const assistantConversationTitleDraftKey = "assistant_conversation_title_draft"
 const assistantPromptKey = "assistant_system_prompt"
+const assistantRouteGroupContextKey = "assistant_route_group"
+const assistantRouteModelContextKey = "assistant_route_model"
 const assistantClientToolsKey = "assistant_client_tools"
 const assistantAttemptHeader = "X-LMM-Assistant-Attempt"
 const assistantActorGroupKey = "assistant_actor_group"
@@ -159,6 +161,10 @@ func assistantConfiguredRoute(settings setting.AssistantSettings) (string, strin
 	sort.Strings(models)
 	return group, strings.TrimSpace(models[0]), nil
 }
+
+// Kept as a narrow seam for controller contract tests; production always uses
+// assistantConfiguredRoute itself.
+var assistantConfiguredRouteResolver = assistantConfiguredRoute
 
 func buildAssistantSystemPrompt(settings setting.AssistantSettings, contexts ...assistantUserContext) string {
 	rootURL := strings.TrimRight(system_setting.ServerAddress, "/")
@@ -547,6 +553,14 @@ func PrepareAssistantRequest(c *gin.Context) {
 		writeAssistantError(c, http.StatusForbidden, "ASSISTANT_SESSION_REQUIRED", errors.New("AI assistant requires a browser login session"))
 		return
 	}
+	var routeErr error
+	settings.Group, settings.Model, routeErr = assistantConfiguredRouteResolver(settings)
+	if routeErr != nil {
+		writeAssistantError(c, http.StatusServiceUnavailable, "ASSISTANT_ROUTING_GROUP_UNAVAILABLE", routeErr)
+		return
+	}
+	c.Set(assistantRouteGroupContextKey, settings.Group)
+	c.Set(assistantRouteModelContextKey, settings.Model)
 
 	var input assistantChatInput
 	if err := common.UnmarshalBodyReusable(c, &input); err != nil {
@@ -835,10 +849,12 @@ func assistantMessageIsSinglePunctuation(message string) bool {
 
 func AssistantChat(c *gin.Context) {
 	settings := setting.GetAssistantSettings()
-	var routeErr error
-	settings.Group, settings.Model, routeErr = assistantConfiguredRoute(settings)
-	if routeErr != nil {
-		writeAssistantError(c, http.StatusServiceUnavailable, "ASSISTANT_ROUTING_GROUP_UNAVAILABLE", routeErr)
+	group, groupOK := c.Get(assistantRouteGroupContextKey)
+	modelID, modelOK := c.Get(assistantRouteModelContextKey)
+	settings.Group, groupOK = group.(string)
+	settings.Model, modelOK = modelID.(string)
+	if !groupOK || !modelOK || strings.TrimSpace(settings.Group) == "" || strings.TrimSpace(settings.Model) == "" {
+		writeAssistantError(c, http.StatusServiceUnavailable, "ASSISTANT_ROUTING_GROUP_UNAVAILABLE", errors.New("assistant route snapshot is unavailable"))
 		return
 	}
 	userId := c.GetInt("id")
@@ -906,7 +922,7 @@ func copyAssistantClientHeaders(destination, source http.Header) {
 func GetAssistantStatus(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	settings := setting.GetAssistantSettings()
-	assistantGroup, assistantModel, routeErr := assistantConfiguredRoute(settings)
+	assistantGroup, assistantModel, routeErr := assistantConfiguredRouteResolver(settings)
 	if routeErr != nil {
 		assistantModel = ""
 	}
