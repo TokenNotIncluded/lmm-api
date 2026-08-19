@@ -50,65 +50,88 @@ export function useStatus() {
     if (!user) return 'anonymous'
     return `user:${user.id}:docs:${user.permissions?.docs_access === true ? 1 : 0}`
   })
-  const { data, isFetchedAfterMount, isFetching, isLoading, error, refetch } =
-    useQuery({
-      queryKey: ['status', statusScope],
-      queryFn: async () => {
-        const rawStatus = await getStatus()
-        const status = rawStatus
-          ? normalizeBackendCapabilities(rawStatus as SystemStatus)
-          : null
-        try {
-          if (status) {
-            const { setConfig } = useSystemConfigStore.getState()
-            setConfig(
-              mapStatusDataToConfig(
-                status as Parameters<typeof mapStatusDataToConfig>[0]
-              )
+  const {
+    data,
+    dataUpdatedAt,
+    isFetchedAfterMount,
+    isLoading,
+    error,
+    refetch,
+  } = useQuery({
+    queryKey: ['status', statusScope],
+    queryFn: async () => {
+      const rawStatus = await getStatus()
+      const status = rawStatus
+        ? normalizeBackendCapabilities(rawStatus as SystemStatus)
+        : null
+      try {
+        if (status) {
+          const { setConfig } = useSystemConfigStore.getState()
+          setConfig(
+            mapStatusDataToConfig(
+              status as Parameters<typeof mapStatusDataToConfig>[0]
             )
-          }
-        } catch (err) {
-          if (import.meta.env.DEV) {
-            // eslint-disable-next-line no-console
-            console.warn(
-              '[useStatus] Failed to sync status to system config',
-              err
-            )
-          }
+          )
         }
-        // Save to localStorage
-        try {
-          if (typeof window !== 'undefined' && status) {
-            window.localStorage.setItem('status', JSON.stringify(status))
-          }
-        } catch {
-          /* empty */
+      } catch (err) {
+        if (import.meta.env.DEV) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            '[useStatus] Failed to sync status to system config',
+            err
+          )
         }
-        return status as SystemStatus | null
-      },
-      // Use localStorage data as initial data
-      placeholderData: getInitialStatus(),
-      // Capability decisions require a live response for this observer mount.
-      staleTime: 0,
-      refetchOnMount: 'always',
-      refetchOnWindowFocus: 'always',
-      refetchOnReconnect: 'always',
-      refetchInterval: 30_000,
-      refetchIntervalInBackground: true,
-      retry: 1,
-      retryDelay: 1_000,
-      // Cache expires after 30 minutes
-      gcTime: 30 * 60 * 1000,
-    })
+      }
+      // Save to localStorage
+      try {
+        if (typeof window !== 'undefined' && status) {
+          window.localStorage.setItem('status', JSON.stringify(status))
+        }
+      } catch {
+        /* empty */
+      }
+      return status as SystemStatus | null
+    },
+    // Use localStorage data as initial data
+    placeholderData: getInitialStatus(),
+    // The status payload is shared public capability data. Treat it as a
+    // short-lived snapshot instead of refetching on every focus event: a
+    // tab switch must not spend the global API rate-limit budget or leave
+    // registration waiting behind a burst of duplicate requests.
+    staleTime: 30_000,
+    // A live response must advance the query timestamp even when the server
+    // returns the same capability values; this distinguishes it from a
+    // pre-populated cache used for layout-only placeholders.
+    structuralSharing: false,
+    // A fresh page must verify capabilities even when another observer left
+    // a cached snapshot behind; this is the one intentional mount fetch.
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: true,
+    refetchInterval: 5 * 60_000,
+    refetchIntervalInBackground: false,
+    retry: 1,
+    retryDelay: 1_000,
+    // Cache expires after 30 minutes
+    gcTime: 30 * 60 * 1000,
+  })
 
+  // `dataUpdatedAt` is zero for placeholder/localStorage data and becomes
+  // non-zero after the server has answered at least once. Pair it with
+  // `isFetchedAfterMount` so a query pre-populated by another observer or a
+  // test cannot be mistaken for a live capability response. Keep a previously
+  // confirmed snapshot usable while a background refresh is transiently
+  // rate-limited or unavailable; otherwise the sign-up page regresses to an
+  // indefinite loading state even though it already has valid capabilities.
   const capabilitiesReady =
-    Boolean(data) && isFetchedAfterMount && !isFetching && !error
+    Boolean(data) && isFetchedAfterMount && dataUpdatedAt > 0
+  const liveError = capabilitiesReady ? null : error
 
   return {
     status: getCapabilitySafeStatus(data, capabilitiesReady),
     loading: isLoading,
     capabilitiesReady,
-    error,
+    error: liveError,
     refetch,
   }
 }

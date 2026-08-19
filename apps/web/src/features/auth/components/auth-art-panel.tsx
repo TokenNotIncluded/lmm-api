@@ -87,12 +87,8 @@ export function AuthArtPanel() {
 
   return (
     <aside className='bg-card text-card-foreground flex h-full flex-col overflow-hidden rounded-[1.75rem] border p-8 xl:p-10'>
-      <div className='flex items-center justify-between gap-4 text-xs font-semibold tracking-[0.14em] uppercase'>
+      <div className='flex items-center gap-4 text-xs font-semibold tracking-[0.14em] uppercase'>
         <span className='text-muted-foreground'>{t('LMM API Console')}</span>
-        <span className='text-success flex items-center gap-2 tracking-normal normal-case'>
-          <span className='bg-success size-2 rounded-full' aria-hidden='true' />
-          {t('Operational')}
-        </span>
       </div>
 
       <div className='my-auto max-w-2xl py-10'>
