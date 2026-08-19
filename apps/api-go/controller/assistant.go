@@ -144,21 +144,20 @@ func assistantReasoningEffort(settings setting.AssistantSettings) string {
 // a concrete model request. The group is the public control surface; model IDs
 // are selected from the live enabled catalog so a group can change its models
 // without requiring another assistant setting edit.
-func assistantConfiguredRoute(settings setting.AssistantSettings) (string, string) {
+func assistantConfiguredRoute(settings setting.AssistantSettings) (string, string, error) {
 	group := strings.TrimSpace(settings.Group)
 	if group == "" {
 		group = setting.DefaultAssistantGroup
 	}
 	models, err := model.GetGroupEnabledModelsWithError(group)
-	if err != nil || len(models) == 0 {
-		group = setting.DefaultAssistantGroup
-		models, _ = model.GetGroupEnabledModelsWithError(group)
+	if err != nil {
+		return group, "", fmt.Errorf("assistant routing group is unavailable: %w", err)
 	}
 	if len(models) == 0 {
-		return group, strings.TrimSpace(settings.Model)
+		return group, "", errors.New("assistant routing group has no enabled models")
 	}
 	sort.Strings(models)
-	return group, strings.TrimSpace(models[0])
+	return group, strings.TrimSpace(models[0]), nil
 }
 
 func buildAssistantSystemPrompt(settings setting.AssistantSettings, contexts ...assistantUserContext) string {
@@ -836,7 +835,12 @@ func assistantMessageIsSinglePunctuation(message string) bool {
 
 func AssistantChat(c *gin.Context) {
 	settings := setting.GetAssistantSettings()
-	settings.Group, settings.Model = assistantConfiguredRoute(settings)
+	var routeErr error
+	settings.Group, settings.Model, routeErr = assistantConfiguredRoute(settings)
+	if routeErr != nil {
+		writeAssistantError(c, http.StatusServiceUnavailable, "ASSISTANT_ROUTING_GROUP_UNAVAILABLE", routeErr)
+		return
+	}
 	userId := c.GetInt("id")
 	userCache, err := model.GetUserCache(userId)
 	if err != nil {
@@ -902,7 +906,10 @@ func copyAssistantClientHeaders(destination, source http.Header) {
 func GetAssistantStatus(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	settings := setting.GetAssistantSettings()
-	assistantGroup, assistantModel := assistantConfiguredRoute(settings)
+	assistantGroup, assistantModel, routeErr := assistantConfiguredRoute(settings)
+	if routeErr != nil {
+		assistantModel = ""
+	}
 	userID := c.GetInt("id")
 	user, err := model.GetUserCache(userID)
 	if err != nil {

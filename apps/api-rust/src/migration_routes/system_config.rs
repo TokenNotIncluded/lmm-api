@@ -867,6 +867,23 @@ mod protocol_rollout_runtime_tests {
     }
 }
 
+#[cfg(test)]
+mod assistant_group_option_tests {
+    use super::validate_option_update;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn assistant_group_must_exist_in_group_ratio() {
+        let options = BTreeMap::from([(
+            "GroupRatio".to_owned(),
+            r#"{"default":1,"premium":2}"#.to_owned(),
+        )]);
+        assert!(validate_option_update("AssistantGroup", "premium", &options).is_ok());
+        assert!(validate_option_update("AssistantGroup", "missing", &options).is_err());
+        assert!(validate_option_update("AssistantGroup", "", &options).is_err());
+    }
+}
+
 /// Server-validated identity used by configuration audit records.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SystemConfigIdentity {
@@ -1889,6 +1906,21 @@ fn validate_option_update(
                     .is_none_or(|value| value != "true") =>
         {
             Err("请先确认支付合规声明".to_owned())
+        }
+        "AssistantGroup" => {
+            let group = value.trim();
+            if group.is_empty() {
+                return Err("assistant routing group is required".to_owned());
+            }
+            let configured = options
+                .get("GroupRatio")
+                .ok_or_else(|| "assistant routing group catalog is unavailable".to_owned())?;
+            let groups = parse_json_object(configured, "group ratio")?;
+            if groups.contains_key(group) {
+                Ok(())
+            } else {
+                Err("assistant routing group must be an existing group".to_owned())
+            }
         }
         "GroupRatio" => validate_nonnegative_json_number_map(value, "group ratio"),
         "gemini.safety_settings" => validate_gemini_safety_settings(value),

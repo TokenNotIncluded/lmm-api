@@ -163,6 +163,9 @@ func runAssistantL1AutoReviewAgent(ctx context.Context, root *model.User, job as
 }
 
 func runAssistantL1AutoReview(job assistantL1AutoReviewJob) error {
+	if !setting.AssistantL1AutoApprovalUserAllowed(job.UserID) {
+		return nil
+	}
 	request, err := model.GetDeveloperAccessRequest(job.UserID)
 	if err != nil {
 		return err
@@ -183,7 +186,10 @@ func runAssistantL1AutoReview(job assistantL1AutoReviewJob) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), assistantL1AutoReviewTimeout)
 	defer cancel()
-	reviewGroup, routeModel := assistantConfiguredRoute(settings)
+	reviewGroup, routeModel, routeErr := assistantConfiguredRoute(settings)
+	if routeErr != nil {
+		return routeErr
+	}
 	reviewModels := []string{strings.TrimSpace(settings.ReviewModel), routeModel}
 	notes := make([]string, 0, len(reviewModels))
 	for index, reviewModel := range reviewModels {

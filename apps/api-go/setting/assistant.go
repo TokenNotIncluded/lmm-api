@@ -22,8 +22,9 @@ const (
 	// AssistantGroupOptionKey selects the routing group used by the built-in
 	// assistant. AssistantModel remains a legacy internal fallback for older
 	// clients; the settings UI no longer asks administrators to enter a model.
-	AssistantGroupOptionKey           = "AssistantGroup"
-	AssistantReasoningEffortOptionKey = "AssistantReasoningEffort"
+	AssistantGroupOptionKey                 = "AssistantGroup"
+	AssistantL1AutoApprovalUserIDsOptionKey = "AssistantL1AutoApprovalUserIDs"
+	AssistantReasoningEffortOptionKey       = "AssistantReasoningEffort"
 	// AssistantWeeklyCreditUSDOptionKey is retained only so older consoles can
 	// read and submit their retired field without affecting runtime funding.
 	AssistantWeeklyCreditUSDOptionKey        = "AssistantWeeklyCreditUSD"
@@ -53,6 +54,7 @@ const (
 	AssistantRetentionIntervalHoursOptionKey = "AssistantRetentionIntervalHours"
 	DefaultAssistantModel                    = "deepseek-v4-flash"
 	DefaultAssistantGroup                    = "default"
+	DefaultAssistantL1AutoApprovalUserIDs    = ""
 	DefaultAssistantReasoningEffort          = "auto"
 	DefaultAssistantReviewModel              = "deepseek-v4-flash"
 	AssistantReviewDefaultIntensity          = "standard"
@@ -97,6 +99,7 @@ type AssistantSettings struct {
 	Enabled                bool
 	Model                  string
 	Group                  string
+	L1AutoApprovalUserIDs  string
 	ReasoningEffort        string
 	AgentLoopEnabled       bool
 	MaxSteps               int
@@ -139,6 +142,7 @@ var (
 		Enabled:                true,
 		Model:                  DefaultAssistantModel,
 		Group:                  DefaultAssistantGroup,
+		L1AutoApprovalUserIDs:  DefaultAssistantL1AutoApprovalUserIDs,
 		ReasoningEffort:        DefaultAssistantReasoningEffort,
 		AgentLoopEnabled:       true,
 		MaxSteps:               6,
@@ -207,6 +211,57 @@ func UpdateAssistantGroup(value string) error {
 	defer assistantSettingsMutex.Unlock()
 	assistantSettings.Group = group
 	return nil
+}
+
+func NormalizeAssistantL1AutoApprovalUserIDs(value string) (string, error) {
+	parts := strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == '，' || unicode.IsSpace(r) })
+	ids := make([]int, 0, len(parts))
+	seen := make(map[int]struct{}, len(parts))
+	for _, part := range parts {
+		id, err := strconv.Atoi(strings.TrimSpace(part))
+		if err != nil || id <= 0 {
+			return "", errors.New("assistant automatic approval user IDs must be positive integers")
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+	values := make([]string, len(ids))
+	for index, id := range ids {
+		values[index] = strconv.Itoa(id)
+	}
+	result := strings.Join(values, ",")
+	if len(result) > 4000 {
+		return "", errors.New("assistant automatic approval user IDs must be at most 4000 characters")
+	}
+	return result, nil
+}
+
+func UpdateAssistantL1AutoApprovalUserIDs(value string) error {
+	normalized, err := NormalizeAssistantL1AutoApprovalUserIDs(value)
+	if err != nil {
+		return err
+	}
+	assistantSettingsMutex.Lock()
+	defer assistantSettingsMutex.Unlock()
+	assistantSettings.L1AutoApprovalUserIDs = normalized
+	return nil
+}
+
+func AssistantL1AutoApprovalUserAllowed(userID int) bool {
+	if userID <= 0 {
+		return false
+	}
+	settings := GetAssistantSettings()
+	for _, value := range strings.Split(settings.L1AutoApprovalUserIDs, ",") {
+		if parsed, err := strconv.Atoi(strings.TrimSpace(value)); err == nil && parsed == userID {
+			return true
+		}
+	}
+	return false
 }
 
 // UpdateAssistantReasoningEffort stores the provider-neutral effort hint used
@@ -674,6 +729,9 @@ func ValidateAssistantOption(key string, value string) error {
 		if len([]rune(group)) > 64 {
 			return errors.New("assistant routing group must be at most 64 characters")
 		}
+	case AssistantL1AutoApprovalUserIDsOptionKey:
+		_, err := NormalizeAssistantL1AutoApprovalUserIDs(value)
+		return err
 	case AssistantReasoningEffortOptionKey:
 		if !IsAssistantReasoningEffort(strings.TrimSpace(value)) {
 			return errors.New("assistant reasoning effort must be auto, none, low, medium, or high")
