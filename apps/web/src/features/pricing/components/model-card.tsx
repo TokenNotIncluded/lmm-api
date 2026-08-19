@@ -123,7 +123,7 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
     } else {
       priceSummary = (
         <span className='text-muted-foreground text-sm'>
-          {t('Dynamic Pricing')}
+          {t('Tiered pricing')}
         </span>
       )
     }

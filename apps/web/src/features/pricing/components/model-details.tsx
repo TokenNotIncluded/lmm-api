@@ -688,9 +688,7 @@ function PriceSection(props: {
             ))}
           </div>
         ) : (
-          <p className='text-muted-foreground text-sm'>
-            {t('Dynamic Pricing')}
-          </p>
+          <p className='text-muted-foreground text-sm'>{t('Tiered pricing')}</p>
         )}
         {dynamicSummary.secondaryEntries.length > 0 && (
           <div className='bg-muted/20 mt-3 rounded-lg border px-3 py-2.5'>

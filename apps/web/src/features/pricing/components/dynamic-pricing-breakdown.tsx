@@ -259,7 +259,7 @@ export function DynamicPricingBreakdown({
           </span>
           <div>
             <div className='text-foreground text-base font-medium'>
-              {t('Dynamic Pricing')}
+              {t('Tiered pricing')}
             </div>
             <div className='text-muted-foreground text-xs'>
               {t('Prices vary by usage tier and request conditions')}

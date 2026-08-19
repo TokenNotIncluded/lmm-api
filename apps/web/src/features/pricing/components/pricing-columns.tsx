@@ -146,7 +146,7 @@ export function usePricingColumns(
           if (primaryEntries.length === 0) {
             return (
               <span className='text-muted-foreground text-xs'>
-                {t('Dynamic Pricing')}
+                {t('Tiered pricing')}
               </span>
             )
           }
