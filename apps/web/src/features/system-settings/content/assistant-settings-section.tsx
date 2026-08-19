@@ -307,7 +307,7 @@ export function AssistantSettingsSection(props: {
   const groupsQuery = useQuery({
     queryKey: ['assistant-routing-groups'],
     queryFn: async () => {
-      const response = await api.get<{ data?: unknown }>('/api/user/groups')
+      const response = await api.get<{ data?: unknown }>('/api/group/')
       const groups = Array.isArray(response.data.data)
         ? response.data.data.filter(
             (group): group is string =>

@@ -139,6 +139,7 @@ func InitOptionMap() {
 	common.OptionMap[setting.AssistantEnabledOptionKey] = strconv.FormatBool(assistantSettings.Enabled)
 	common.OptionMap[setting.AssistantModelOptionKey] = assistantSettings.Model
 	common.OptionMap[setting.AssistantGroupOptionKey] = assistantSettings.Group
+	common.OptionMap[setting.AssistantL1AutoApprovalUserIDsOptionKey] = assistantSettings.L1AutoApprovalUserIDs
 	common.OptionMap[setting.AssistantReasoningEffortOptionKey] = assistantSettings.ReasoningEffort
 	common.OptionMap[setting.AssistantWeeklyCreditUSDOptionKey] = "0"
 	common.OptionMap[setting.AssistantAgentLoopEnabledOptionKey] = strconv.FormatBool(assistantSettings.AgentLoopEnabled)
@@ -697,6 +698,8 @@ func updateOptionMap(key string, value string) (err error) {
 		err = setting.UpdateAssistantModel(value)
 	case setting.AssistantGroupOptionKey:
 		err = setting.UpdateAssistantGroup(value)
+	case setting.AssistantL1AutoApprovalUserIDsOptionKey:
+		err = setting.UpdateAssistantL1AutoApprovalUserIDs(value)
 	case setting.AssistantReasoningEffortOptionKey:
 		err = setting.UpdateAssistantReasoningEffort(value)
 	case setting.AssistantMaxStepsOptionKey:

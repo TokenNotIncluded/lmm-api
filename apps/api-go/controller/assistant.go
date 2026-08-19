@@ -34,6 +34,8 @@ const assistantClientActionKey = "assistant_client_action"
 const assistantConversationTitleNeededKey = "assistant_conversation_title_needed"
 const assistantConversationTitleDraftKey = "assistant_conversation_title_draft"
 const assistantPromptKey = "assistant_system_prompt"
+const assistantRouteGroupContextKey = "assistant_route_group"
+const assistantRouteModelContextKey = "assistant_route_model"
 const assistantClientToolsKey = "assistant_client_tools"
 const assistantAttemptHeader = "X-LMM-Assistant-Attempt"
 const assistantActorGroupKey = "assistant_actor_group"
@@ -144,22 +146,25 @@ func assistantReasoningEffort(settings setting.AssistantSettings) string {
 // a concrete model request. The group is the public control surface; model IDs
 // are selected from the live enabled catalog so a group can change its models
 // without requiring another assistant setting edit.
-func assistantConfiguredRoute(settings setting.AssistantSettings) (string, string) {
+func assistantConfiguredRoute(settings setting.AssistantSettings) (string, string, error) {
 	group := strings.TrimSpace(settings.Group)
 	if group == "" {
 		group = setting.DefaultAssistantGroup
 	}
 	models, err := model.GetGroupEnabledModelsWithError(group)
-	if err != nil || len(models) == 0 {
-		group = setting.DefaultAssistantGroup
-		models, _ = model.GetGroupEnabledModelsWithError(group)
+	if err != nil {
+		return group, "", fmt.Errorf("assistant routing group is unavailable: %w", err)
 	}
 	if len(models) == 0 {
-		return group, strings.TrimSpace(settings.Model)
+		return group, "", errors.New("assistant routing group has no enabled models")
 	}
 	sort.Strings(models)
-	return group, strings.TrimSpace(models[0])
+	return group, strings.TrimSpace(models[0]), nil
 }
+
+// Kept as a narrow seam for controller contract tests; production always uses
+// assistantConfiguredRoute itself.
+var assistantConfiguredRouteResolver = assistantConfiguredRoute
 
 func buildAssistantSystemPrompt(settings setting.AssistantSettings, contexts ...assistantUserContext) string {
 	rootURL := strings.TrimRight(system_setting.ServerAddress, "/")
@@ -548,6 +553,14 @@ func PrepareAssistantRequest(c *gin.Context) {
 		writeAssistantError(c, http.StatusForbidden, "ASSISTANT_SESSION_REQUIRED", errors.New("AI assistant requires a browser login session"))
 		return
 	}
+	var routeErr error
+	settings.Group, settings.Model, routeErr = assistantConfiguredRouteResolver(settings)
+	if routeErr != nil {
+		writeAssistantError(c, http.StatusServiceUnavailable, "ASSISTANT_ROUTING_GROUP_UNAVAILABLE", routeErr)
+		return
+	}
+	c.Set(assistantRouteGroupContextKey, settings.Group)
+	c.Set(assistantRouteModelContextKey, settings.Model)
 
 	var input assistantChatInput
 	if err := common.UnmarshalBodyReusable(c, &input); err != nil {
@@ -836,7 +849,14 @@ func assistantMessageIsSinglePunctuation(message string) bool {
 
 func AssistantChat(c *gin.Context) {
 	settings := setting.GetAssistantSettings()
-	settings.Group, settings.Model = assistantConfiguredRoute(settings)
+	group, groupOK := c.Get(assistantRouteGroupContextKey)
+	modelID, modelOK := c.Get(assistantRouteModelContextKey)
+	settings.Group, groupOK = group.(string)
+	settings.Model, modelOK = modelID.(string)
+	if !groupOK || !modelOK || strings.TrimSpace(settings.Group) == "" || strings.TrimSpace(settings.Model) == "" {
+		writeAssistantError(c, http.StatusServiceUnavailable, "ASSISTANT_ROUTING_GROUP_UNAVAILABLE", errors.New("assistant route snapshot is unavailable"))
+		return
+	}
 	userId := c.GetInt("id")
 	userCache, err := model.GetUserCache(userId)
 	if err != nil {
@@ -902,7 +922,10 @@ func copyAssistantClientHeaders(destination, source http.Header) {
 func GetAssistantStatus(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	settings := setting.GetAssistantSettings()
-	assistantGroup, assistantModel := assistantConfiguredRoute(settings)
+	assistantGroup, assistantModel, routeErr := assistantConfiguredRouteResolver(settings)
+	if routeErr != nil {
+		assistantModel = ""
+	}
 	userID := c.GetInt("id")
 	user, err := model.GetUserCache(userID)
 	if err != nil {

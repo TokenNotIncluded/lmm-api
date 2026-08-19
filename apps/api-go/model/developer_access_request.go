@@ -26,6 +26,7 @@ const (
 var (
 	ErrDeveloperAccessRequestNotFound         = errors.New("解锁申请不存在")
 	ErrDeveloperAccessRequestReviewed         = errors.New("解锁申请已经处理")
+	ErrDeveloperAccessRequestChanged          = errors.New("解锁申请内容已经变化")
 	ErrDeveloperAccessRequestStatus           = errors.New("解锁申请状态无效")
 	ErrDeveloperAccessRequestReasonTooShort   = errors.New("解锁申请说明至少需要 5 个字符")
 	ErrDeveloperAccessRecommendationTooShort  = errors.New("AI 推荐信至少需要 20 个字符")
@@ -406,5 +407,59 @@ func ReviewDeveloperAccessRequest(adminUserID int, requestID int, approve bool, 
 	if approve {
 		_ = InvalidateUserCache(request.UserId)
 	}
+	return &request, nil
+}
+
+// AutoApproveDeveloperAccessRequest applies an automatic approval only when
+// the exact recommendation snapshot that was reviewed is still pending. The
+// row lock makes the final comparison and privilege change one transaction.
+func AutoApproveDeveloperAccessRequest(adminUserID, requestID int, expectedReason, expectedRecommendation, note string) (*DeveloperAccessRequest, error) {
+	if adminUserID <= 0 || requestID <= 0 {
+		return nil, gorm.ErrInvalidData
+	}
+	normalizedNote, err := normalizeDeveloperAccessReviewNote(note)
+	if err != nil {
+		return nil, err
+	}
+	var request DeveloperAccessRequest
+	err = DB.Transaction(func(tx *gorm.DB) error {
+		if err := lockForUpdate(tx).Where("id = ?", requestID).First(&request).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrDeveloperAccessRequestNotFound
+			}
+			return err
+		}
+		if request.Status != DeveloperAccessRequestPending {
+			return ErrDeveloperAccessRequestReviewed
+		}
+		if request.Reason != expectedReason || request.AIRecommendation != expectedRecommendation {
+			return ErrDeveloperAccessRequestChanged
+		}
+		result := tx.Model(&User{}).
+			Where("id = ?", request.UserId).
+			Updates(map[string]interface{}{"console_activated_at": time.Now().Unix(), "trust_level_override": nil})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return ErrDeveloperAccessRequestNotFound
+		}
+		now := common.GetTimestamp()
+		if err := tx.Model(&request).Updates(map[string]interface{}{
+			"status": DeveloperAccessRequestApproved, "admin_user_id": adminUserID,
+			"admin_note": normalizedNote, "reviewed_at": now,
+		}).Error; err != nil {
+			return err
+		}
+		request.Status = DeveloperAccessRequestApproved
+		request.AdminUserId = adminUserID
+		request.AdminNote = normalizedNote
+		request.ReviewedAt = now
+		return archiveApprovedDeveloperAccessRecommendation(tx, request)
+	})
+	if err != nil {
+		return nil, err
+	}
+	_ = InvalidateUserCache(request.UserId)
 	return &request, nil
 }

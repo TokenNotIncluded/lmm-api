@@ -867,6 +867,27 @@ mod protocol_rollout_runtime_tests {
     }
 }
 
+#[cfg(test)]
+mod assistant_group_option_tests {
+    use super::validate_option_update;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn assistant_group_must_exist_in_group_ratio() {
+        let options = BTreeMap::from([(
+            "GroupRatio".to_owned(),
+            r#"{"default":1,"premium":2}"#.to_owned(),
+        )]);
+        assert!(validate_option_update("AssistantGroup", "premium", &options).is_ok());
+        assert!(validate_option_update("AssistantGroup", "missing", &options).is_err());
+        assert!(validate_option_update("AssistantGroup", "", &options).is_err());
+        assert!(validate_option_update("AssistantL1AutoApprovalUserIDs", "7,42", &options).is_ok());
+        assert!(
+            validate_option_update("AssistantL1AutoApprovalUserIDs", "7,nope", &options).is_err()
+        );
+    }
+}
+
 /// Server-validated identity used by configuration audit records.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SystemConfigIdentity {
@@ -1890,6 +1911,22 @@ fn validate_option_update(
         {
             Err("请先确认支付合规声明".to_owned())
         }
+        "AssistantGroup" => {
+            let group = value.trim();
+            if group.is_empty() {
+                return Err("assistant routing group is required".to_owned());
+            }
+            let configured = options
+                .get("GroupRatio")
+                .ok_or_else(|| "assistant routing group catalog is unavailable".to_owned())?;
+            let groups = parse_json_object(configured, "group ratio")?;
+            if groups.contains_key(group) {
+                Ok(())
+            } else {
+                Err("assistant routing group must be an existing group".to_owned())
+            }
+        }
+        "AssistantL1AutoApprovalUserIDs" => validate_positive_id_list(value),
         "GroupRatio" => validate_nonnegative_json_number_map(value, "group ratio"),
         "gemini.safety_settings" => validate_gemini_safety_settings(value),
         "claude.default_max_tokens" => validate_nonnegative_json_integer_map(value),
@@ -1907,6 +1944,21 @@ fn validate_option_update(
 
 fn positive_option_value(value: &str) -> bool {
     value.trim().parse::<f64>().is_ok_and(|value| value > 0.0)
+}
+
+fn validate_positive_id_list(value: &str) -> Result<(), String> {
+    for token in value.split([',', '，', ' ', '\n', '\t']) {
+        let token = token.trim();
+        if token.is_empty() {
+            continue;
+        }
+        if !token.parse::<i64>().is_ok_and(|id| id > 0) {
+            return Err(
+                "assistant automatic approval user IDs must be positive integers".to_owned(),
+            );
+        }
+    }
+    Ok(())
 }
 
 fn parse_json_object(
