@@ -26,7 +26,7 @@ type LmmBrandMarkProps = SVGProps<SVGSVGElement> & {
   title?: string
 }
 
-/** A compact angular monogram: an M-shaped forge frame over a hot base. */
+/** A quiet angular monogram for the editorial Forge shell. */
 export function LmmBrandMark({
   className,
   title,
@@ -43,39 +43,20 @@ export function LmmBrandMark({
       className={cn('shrink-0', className)}
       {...props}
     >
-      <rect
-        x='4'
-        y='4'
-        width='48'
-        height='48'
-        rx='14'
-        fill='var(--forge-brand-mark-surface)'
-      />
       <path
-        d='M15 38V18l13 13 13-13v20'
+        d='M10 39V16l18 18 18-18v23'
         fill='none'
         stroke='var(--forge-brand-mark-ink)'
-        strokeWidth='4.25'
-        strokeLinecap='round'
+        strokeWidth='3.5'
+        strokeLinecap='square'
         strokeLinejoin='round'
       />
       <path
-        d='M16 41h24'
+        d='M12 45h32'
         fill='none'
         stroke='var(--forge-brand-mark-accent)'
-        strokeWidth='3.5'
-        strokeLinecap='round'
-      />
-      <rect
-        x='4.75'
-        y='4.75'
-        width='46.5'
-        height='46.5'
-        rx='13.25'
-        fill='none'
-        stroke='var(--forge-brand-mark-ink)'
-        strokeOpacity='0.16'
-        strokeWidth='1.5'
+        strokeWidth='2.5'
+        strokeLinecap='square'
       />
     </svg>
   )
