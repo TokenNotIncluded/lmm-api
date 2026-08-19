@@ -34,7 +34,8 @@ after(() => {
 })
 
 test('build metadata exposes the release revision from the build environment', async () => {
-  const { getBuildRevision } = await import('./build-metadata')
+  const { getBuildRevision, getBuildVersion } = await import('./build-metadata')
 
   assert.equal(getBuildRevision(), 'rv.0.1.1-test-build.2k6e8r7p')
+  assert.equal(getBuildVersion(), '0.1.1-test-build')
 })

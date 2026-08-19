@@ -168,3 +168,12 @@ export function installBuildMetadata(): void {
 export function getBuildRevision(): string {
   return computeBuildRevision()
 }
+
+/**
+ * Return the semantic version baked into the frontend bundle. This is kept
+ * separate from the diagnostic revision so the UI can show the independent
+ * Web release alongside the API version reported by the server.
+ */
+export function getBuildVersion(): string {
+  return readEnvRevision() || 'dev'
+}

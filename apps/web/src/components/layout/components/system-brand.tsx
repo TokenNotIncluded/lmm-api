@@ -27,6 +27,7 @@ import {
 } from '@/components/ui/sidebar'
 import { useStatus } from '@/hooks/use-status'
 import { useSystemConfig } from '@/hooks/use-system-config'
+import { getBuildVersion } from '@/lib/build-metadata'
 import { cn } from '@/lib/utils'
 
 type SystemBrandProps = {
@@ -53,8 +54,10 @@ export function SystemBrand(props: SystemBrandProps) {
 
   const variant = props.variant ?? 'sidebar'
   const name = status?.system_name || props.defaultName || 'LMM API'
-  const version =
+  const apiVersion =
     status?.version || props.defaultVersion || t('Unknown version')
+  const webVersion = getBuildVersion()
+  const version = `${t('API')} ${apiVersion} · ${t('Web')} ${webVersion}`
   if (variant === 'inline') {
     return (
       <Link

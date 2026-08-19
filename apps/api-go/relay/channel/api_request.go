@@ -320,6 +320,39 @@ func upstreamRequestContext(c *gin.Context) context.Context {
 	return context.Background()
 }
 
+// classifyUpstreamTransportError converts transport failures into stable
+// gateway semantics. A client disconnect is not an upstream failure and must
+// never trigger a retry; an upstream timeout/cancellation is retryable before
+// any response bytes have been sent, while an ordinary transport failure is a
+// bad-gateway error. The request-scoped channel-failure marker lets the outer
+// relay loop exclude the failed channel without persistently auto-banning it.
+func classifyUpstreamTransportError(c *gin.Context, err error) *types.NewAPIError {
+	if err == nil {
+		err = errors.New("upstream request failed")
+	}
+
+	clientCanceled := c != nil && c.Request != nil && c.Request.Context().Err() != nil
+	if clientCanceled {
+		common2.SetContextKey(c, appconstant.ContextKeyUpstreamChannelFailure, false)
+		return types.NewErrorWithStatusCode(
+			err,
+			types.ErrorCodeClientClosedRequest,
+			499,
+			types.ErrOptionWithSkipRetry(),
+			types.ErrOptionWithNoRecordErrorLog(),
+		)
+	}
+
+	common2.SetContextKey(c, appconstant.ContextKeyUpstreamChannelFailure, true)
+	if errors.Is(err, context.DeadlineExceeded) {
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeUpstreamTimeout, http.StatusGatewayTimeout)
+	}
+	if errors.Is(err, context.Canceled) {
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeUpstreamCanceled, http.StatusServiceUnavailable)
+	}
+	return types.NewErrorWithStatusCode(err, types.ErrorCodeUpstreamTransport, http.StatusBadGateway)
+}
+
 func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
 	fullRequestURL, err := a.GetRequestURL(info)
 	if err != nil {
@@ -543,7 +576,9 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	resp, err := relayClient.Do(req)
 	if err != nil {
 		logger.LogError(c, "do request failed: "+err.Error())
-		return nil, types.NewError(err, types.ErrorCodeDoRequestFailed, types.ErrOptionWithHideErrMsg("upstream error: do request failed"))
+		classified := classifyUpstreamTransportError(c, err)
+		classified.Err = fmt.Errorf("%s: %w", "upstream request failed", err)
+		return nil, classified
 	}
 	if resp == nil {
 		return nil, errors.New("resp is nil")
