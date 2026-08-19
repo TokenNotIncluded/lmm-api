@@ -60,6 +60,40 @@ func withAssistantRouteResolver(t *testing.T, modelID string) {
 	t.Cleanup(func() { assistantConfiguredRouteResolver = original })
 }
 
+func TestAssistantConfiguredRouteUsesTheConfiguredModelWithinTheSelectedGroup(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.Ability{}))
+	require.NoError(t, db.Create(&[]model.Ability{
+		{Group: "vip", Model: "vip-assistant-model", ChannelId: 1, Enabled: true},
+		{Group: "vip", Model: "another-model", ChannelId: 1, Enabled: true},
+	}).Error)
+
+	group, modelID, err := assistantConfiguredRoute(setting.AssistantSettings{
+		Group: "vip",
+		Model: "vip-assistant-model",
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, "vip", group)
+	assert.Equal(t, "vip-assistant-model", modelID)
+}
+
+func TestAssistantConfiguredRouteRejectsAStaleModelForTheSelectedGroup(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.Ability{}))
+	require.NoError(t, db.Create(&model.Ability{
+		Group: "vip", Model: "vip-live-model", ChannelId: 1, Enabled: true,
+	}).Error)
+
+	_, _, err := assistantConfiguredRoute(setting.AssistantSettings{
+		Group: "vip",
+		Model: "missing-model",
+	})
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "not enabled in routing group")
+}
+
 func TestAssistantRuntimeMetadataQuestionIsDeterministic(t *testing.T) {
 	for _, message := range []string{
 		"你是什么 AI，知识截止到什么时候？",

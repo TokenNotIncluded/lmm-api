@@ -142,10 +142,11 @@ func assistantReasoningEffort(settings setting.AssistantSettings) string {
 	return effort
 }
 
-// assistantConfiguredRoute turns the administrator-selected routing group into
-// a concrete model request. The group is the public control surface; model IDs
-// are selected from the live enabled catalog so a group can change its models
-// without requiring another assistant setting edit.
+// assistantConfiguredRoute turns the administrator-selected routing group and
+// model ID into a concrete model request. Both values are resolved against the
+// live enabled catalog so requests cannot silently escape the configured
+// group, and a stale model setting fails with an actionable configuration
+// error instead of being replaced by an unrelated model.
 func assistantConfiguredRoute(settings setting.AssistantSettings) (string, string, error) {
 	group := strings.TrimSpace(settings.Group)
 	if group == "" {
@@ -153,12 +154,21 @@ func assistantConfiguredRoute(settings setting.AssistantSettings) (string, strin
 	}
 	models, err := model.GetGroupEnabledModelsWithError(group)
 	if err != nil {
-		return group, "", fmt.Errorf("assistant routing group is unavailable: %w", err)
+		return group, "", errors.New("assistant model catalog is temporarily unavailable")
 	}
 	if len(models) == 0 {
 		return group, "", errors.New("assistant routing group has no enabled models")
 	}
 	sort.Strings(models)
+	configuredModel := strings.TrimSpace(settings.Model)
+	if configuredModel != "" {
+		for _, modelID := range models {
+			if modelID == configuredModel {
+				return group, configuredModel, nil
+			}
+		}
+		return group, "", fmt.Errorf("assistant model %q is not enabled in routing group %q", configuredModel, group)
+	}
 	return group, strings.TrimSpace(models[0]), nil
 }
 
@@ -923,7 +933,8 @@ func GetAssistantStatus(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	settings := setting.GetAssistantSettings()
 	assistantGroup, assistantModel, routeErr := assistantConfiguredRouteResolver(settings)
-	if routeErr != nil {
+	routeAvailable := routeErr == nil
+	if !routeAvailable {
 		assistantModel = ""
 	}
 	userID := c.GetInt("id")
@@ -952,6 +963,7 @@ func GetAssistantStatus(c *gin.Context) {
 		"enabled":          settings.Enabled,
 		"group":            assistantGroup,
 		"model":            assistantModel,
+		"route_available":  routeAvailable,
 		"reasoning_effort": settings.ReasoningEffort,
 		"funding": gin.H{
 			"mode": "super_administrator",

@@ -601,6 +601,7 @@ fn assistant_relay_error(
 struct AssistantSettingsView {
     enabled: bool,
     model: String,
+    group: String,
     agent_loop_enabled: bool,
     max_steps: i64,
     timeout_seconds: i64,
@@ -619,6 +620,7 @@ impl Default for AssistantSettingsView {
         Self {
             enabled: true,
             model: "deepseek-v4-flash".to_owned(),
+            group: "default".to_owned(),
             agent_loop_enabled: true,
             max_steps: 6,
             timeout_seconds: 45,
@@ -646,6 +648,11 @@ impl AssistantSettingsView {
                 .map(|value| value.trim())
                 .filter(|value| !value.is_empty() && value.len() <= 128)
                 .map_or(defaults.model, str::to_owned),
+            group: options
+                .get("AssistantGroup")
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty() && value.chars().count() <= 64)
+                .map_or(defaults.group, str::to_owned),
             agent_loop_enabled: options
                 .get("AssistantAgentLoopEnabled")
                 .map_or(defaults.agent_loop_enabled, |value| value == "true"),
@@ -754,6 +761,7 @@ Current service connection facts:\n\
 struct AssistantCacheFingerprint<'a> {
     version: &'static str,
     model: &'a str,
+    group: &'a str,
     system_prompt: String,
     agent_loop_enabled: bool,
     max_steps: i64,
@@ -776,6 +784,7 @@ fn assistant_cache_key(
     let fingerprint = AssistantCacheFingerprint {
         version: "assistant-cache-v1",
         model: &settings.model,
+        group: &settings.group,
         system_prompt: build_assistant_system_prompt(settings),
         agent_loop_enabled: settings.agent_loop_enabled,
         max_steps: settings.max_steps,
@@ -936,6 +945,7 @@ fn assistant_tool_definitions() -> Vec<Value> {
 #[async_trait]
 trait AssistantReadStore: Send + Sync {
     async fn settings(&self) -> Result<AssistantSettingsView, String>;
+    async fn assistant_model_ids(&self, group: &str) -> Result<Vec<String>, String>;
     async fn latest_handoff(&self, user_id: i64) -> Result<Option<AssistantLead>, String>;
     async fn list_handoffs(
         &self,
@@ -1016,7 +1026,7 @@ impl AssistantReadStore for PgAssistantReadStore {
     async fn settings(&self) -> Result<AssistantSettingsView, String> {
         let rows = sqlx::query(
             "SELECT key, value FROM options WHERE key IN \
-             ('AssistantEnabled', 'AssistantModel', 'AssistantAgentLoopEnabled', \
+             ('AssistantEnabled', 'AssistantModel', 'AssistantGroup', 'AssistantAgentLoopEnabled', \
               'AssistantMaxSteps', 'AssistantTimeoutSeconds', 'AssistantCacheEnabled', \
               'AssistantCacheTTLMinutes', 'ServerAddress', 'AssistantPersona', \
               'AssistantSystemPrompt', 'AssistantSearchURL', 'AssistantSearchAPIKey', \
@@ -1036,6 +1046,18 @@ impl AssistantReadStore for PgAssistantReadStore {
             .collect::<Result<HashMap<_, _>, sqlx::Error>>()
             .map_err(|error| error.to_string())?;
         Ok(AssistantSettingsView::from_options(&options))
+    }
+
+    async fn assistant_model_ids(&self, group: &str) -> Result<Vec<String>, String> {
+        sqlx::query_scalar::<_, String>(
+            r#"SELECT DISTINCT model FROM abilities
+               WHERE "group" = $1 AND COALESCE(enabled, TRUE) = TRUE
+               ORDER BY model"#,
+        )
+        .bind(group)
+        .fetch_all(&self.pg)
+        .await
+        .map_err(|error| error.to_string())
     }
 
     async fn latest_handoff(&self, user_id: i64) -> Result<Option<AssistantLead>, String> {
@@ -1611,6 +1633,7 @@ struct Envelope<T> {
 pub fn assistant_read_router(state: AssistantReadState) -> Router {
     Router::new()
         .route("/api/assistant/status", get(assistant_status))
+        .route("/api/assistant/models", get(assistant_models))
         .route("/api/assistant/offers", get(offers))
         .route("/api/assistant/chat", post(assistant_chat))
         .route(
@@ -1633,6 +1656,71 @@ struct AssistantPrincipal {
     credential: String,
 }
 
+async fn assistant_route(
+    state: &AssistantReadState,
+    settings: &AssistantSettingsView,
+) -> Result<(String, String), Response> {
+    let group = if settings.group.trim().is_empty() {
+        "default"
+    } else {
+        settings.group.trim()
+    };
+    let models = state.store.assistant_model_ids(group).await.map_err(|_| {
+        assistant_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "ASSISTANT_MODEL_CATALOG_UNAVAILABLE",
+            "assistant model catalog is temporarily unavailable",
+        )
+    })?;
+    if models.is_empty() {
+        return Err(assistant_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "ASSISTANT_ROUTING_GROUP_UNAVAILABLE",
+            "assistant routing group has no enabled models",
+        ));
+    }
+    let configured_model = settings.model.trim();
+    if !configured_model.is_empty() {
+        if models.iter().any(|model| model == configured_model) {
+            return Ok((group.to_owned(), configured_model.to_owned()));
+        }
+        return Err(assistant_error_owned(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "ASSISTANT_ROUTING_GROUP_UNAVAILABLE",
+            format!("assistant model is not enabled in routing group {group:?}"),
+        ));
+    }
+    Ok((group.to_owned(), models[0].clone()))
+}
+
+async fn assistant_models(
+    State(state): State<AssistantReadState>,
+    RawQuery(raw_query): RawQuery,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = authenticated_admin(&state, &headers).await {
+        return response;
+    }
+    let settings = match state.store.settings().await {
+        Ok(settings) => settings,
+        Err(error) => return api_error(error),
+    };
+    let requested_group = query_value(raw_query.as_deref(), "group");
+    let group = if requested_group.trim().is_empty() {
+        settings.group
+    } else {
+        requested_group.trim().to_owned()
+    };
+    match state.store.assistant_model_ids(&group).await {
+        Ok(models) => success(json!(models)),
+        Err(_) => assistant_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "ASSISTANT_MODEL_CATALOG_UNAVAILABLE",
+            "assistant model catalog is temporarily unavailable",
+        ),
+    }
+}
+
 async fn assistant_status(State(state): State<AssistantReadState>, headers: HeaderMap) -> Response {
     let principal = match authenticated_user(&state, &headers).await {
         Ok(principal) => principal,
@@ -1642,9 +1730,16 @@ async fn assistant_status(State(state): State<AssistantReadState>, headers: Head
         Ok(settings) => settings,
         Err(error) => return api_error(error),
     };
+    let (assistant_group, assistant_model, route_available) =
+        match assistant_route(&state, &settings).await {
+            Ok((group, model)) => (group, model, true),
+            Err(_) => (settings.group.clone(), String::new(), false),
+        };
     success(json!({
         "enabled": settings.enabled,
-        "model": settings.model,
+        "group": assistant_group,
+        "model": assistant_model,
+        "route_available": route_available,
         "funding": {
             "mode": "super_administrator",
         },
@@ -1699,7 +1794,7 @@ async fn assistant_chat(
             ));
         }
     }
-    let settings = match state.store.settings().await {
+    let mut settings = match state.store.settings().await {
         Ok(settings) => settings,
         Err(error) => return api_error(error),
     };
@@ -1724,6 +1819,12 @@ async fn assistant_chat(
             );
         }
     };
+    let (assistant_group, assistant_model) = match assistant_route(&state, &settings).await {
+        Ok(route) => route,
+        Err(response) => return response,
+    };
+    settings.group = assistant_group;
+    settings.model = assistant_model;
     let input = match assistant_chat_input(request).await {
         Ok(input) => input,
         Err(response) => return response,
@@ -2297,7 +2398,7 @@ fn assistant_tool_trace(
     input: &Map<String, Value>,
     result: &Value,
 ) -> Value {
-    const SAFE_KEYS: [&str; 12] = [
+    const SAFE_KEYS: [&str; 13] = [
         "action",
         "days",
         "group",
@@ -2309,6 +2410,7 @@ fn assistant_tool_trace(
         "query",
         "section",
         "target_user_id",
+        "title",
         "topic",
     ];
     let safe_input = SAFE_KEYS
@@ -5087,6 +5189,7 @@ mod tests {
     #[derive(Clone)]
     struct FixtureStore {
         settings: AssistantSettingsView,
+        assistant_model_ids: Option<Vec<String>>,
         latest: Option<AssistantLead>,
         handoffs: Vec<AssistantLeadView>,
         expected_handoff_status: &'static str,
@@ -5110,6 +5213,7 @@ mod tests {
         fn default() -> Self {
             Self {
                 settings: AssistantSettingsView::default(),
+                assistant_model_ids: None,
                 latest: None,
                 handoffs: Vec::new(),
                 expected_handoff_status: ASSISTANT_HANDOFF_PENDING,
@@ -5135,6 +5239,16 @@ mod tests {
     impl AssistantReadStore for FixtureStore {
         async fn settings(&self) -> Result<AssistantSettingsView, String> {
             Ok(self.settings.clone())
+        }
+
+        async fn assistant_model_ids(&self, group: &str) -> Result<Vec<String>, String> {
+            if group != self.settings.group {
+                return Ok(Vec::new());
+            }
+            Ok(self
+                .assistant_model_ids
+                .clone()
+                .unwrap_or_else(|| vec![self.settings.model.clone()]))
         }
 
         async fn latest_handoff(&self, _: i64) -> Result<Option<AssistantLead>, String> {
@@ -5595,7 +5709,9 @@ mod tests {
                 Some(&axum::http::HeaderValue::from_static(AUTH_VERSION)),
                 json!({
                     "enabled": false,
+                    "group": "default",
                     "model": "assistant-model",
+                    "route_available": true,
                     "funding": {"mode": "super_administrator"},
                     "developer_access_granted": false,
                     "agent": {
@@ -5654,11 +5770,13 @@ mod tests {
         let store = FixtureStore {
             settings: AssistantSettingsView {
                 model: "server-owned-model".to_owned(),
+                group: "vip".to_owned(),
                 server_address: "https://api.example.com/".to_owned(),
                 agent_loop_enabled: false,
                 cache_enabled: false,
                 ..AssistantSettingsView::default()
             },
+            assistant_model_ids: Some(vec!["server-owned-model".to_owned()]),
             billing_result: Some(Ok(AssistantBillingAccount {
                 id: 987,
                 group: "default".to_owned(),

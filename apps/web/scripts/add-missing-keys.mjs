@@ -4698,6 +4698,182 @@ for (const [locale, translations] of Object.entries(
   Object.assign(newKeys[locale], translations)
 }
 
+const assistantRoutingTranslations = {
+  en: {
+    'Select the routing group used by the assistant. Choose the exact model ID in the field beside it.':
+      'Select the routing group used by the assistant. Choose the exact model ID in the field beside it.',
+    'Assistant model ID': 'Assistant model ID',
+    'Select a model ID': 'Select a model ID',
+    'not enabled': 'not enabled',
+    'Unable to enumerate model IDs for this group. Check the live model catalog and try again.':
+      'Unable to enumerate model IDs for this group. Check the live model catalog and try again.',
+    'This group has no enabled model IDs.':
+      'This group has no enabled model IDs.',
+    'The assistant sends requests with this exact enabled model ID and the selected routing group.':
+      'The assistant sends requests with this exact enabled model ID and the selected routing group.',
+    'Assistant routing is unavailable': 'Assistant routing is unavailable',
+    'The selected assistant group or model ID is unavailable. Ask an administrator to choose an enabled group and exact model ID, then retry.':
+      'The selected assistant group or model ID is unavailable. Ask an administrator to choose an enabled group and exact model ID, then retry.',
+    'Assistant routing is unavailable. Check the configured group and model ID, then retry.':
+      'Assistant routing is unavailable. Check the configured group and model ID, then retry.',
+    'The assistant model catalog is temporarily unavailable. Check the model catalog and retry.':
+      'The assistant model catalog is temporarily unavailable. Check the model catalog and retry.',
+    'The assistant is busy right now. Please retry shortly.':
+      'The assistant is busy right now. Please retry shortly.',
+    'The AI assistant could not answer right now. Try again or contact support. (Error: {{code}}.)':
+      'The AI assistant could not answer right now. Try again or contact support. (Error: {{code}}.)',
+  },
+  zh: {
+    'Select the routing group used by the assistant. Choose the exact model ID in the field beside it.':
+      '选择助手使用的路由分组，再在旁边选择准确的模型 ID。',
+    'Assistant model ID': '助手模型 ID',
+    'Select a model ID': '选择模型 ID',
+    'not enabled': '未启用',
+    'Unable to enumerate model IDs for this group. Check the live model catalog and try again.':
+      '无法枚举该分组的模型 ID，请检查实时模型目录后重试。',
+    'This group has no enabled model IDs.': '该分组没有已启用的模型 ID。',
+    'The assistant sends requests with this exact enabled model ID and the selected routing group.':
+      '助手会使用这个准确的已启用模型 ID 和所选路由分组发送请求。',
+    'Assistant routing is unavailable': '助手路由不可用',
+    'The selected assistant group or model ID is unavailable. Ask an administrator to choose an enabled group and exact model ID, then retry.':
+      '所选助手分组或模型 ID 不可用，请让管理员选择已启用的分组和准确模型 ID 后重试。',
+    'Assistant routing is unavailable. Check the configured group and model ID, then retry.':
+      '助手路由不可用，请检查配置的分组和模型 ID 后重试。',
+    'The assistant model catalog is temporarily unavailable. Check the model catalog and retry.':
+      '助手模型目录暂时不可用，请检查模型目录后重试。',
+    'The assistant is busy right now. Please retry shortly.':
+      '助手当前繁忙，请稍后重试。',
+    'The AI assistant could not answer right now. Try again or contact support. (Error: {{code}}.)':
+      'AI 助手暂时无法回答，请重试或联系人工支持。（错误：{{code}}。）',
+  },
+  'zh-TW': {
+    'Select the routing group used by the assistant. Choose the exact model ID in the field beside it.':
+      '選擇助手使用的路由分組，再在旁邊選擇準確的模型 ID。',
+    'Assistant model ID': '助手模型 ID',
+    'Select a model ID': '選擇模型 ID',
+    'not enabled': '未啟用',
+    'Unable to enumerate model IDs for this group. Check the live model catalog and try again.':
+      '無法列出此分組的模型 ID，請檢查即時模型目錄後重試。',
+    'This group has no enabled model IDs.': '此分組沒有已啟用的模型 ID。',
+    'The assistant sends requests with this exact enabled model ID and the selected routing group.':
+      '助手會使用這個準確的已啟用模型 ID 與所選路由分組發送請求。',
+    'Assistant routing is unavailable': '助手路由不可用',
+    'The selected assistant group or model ID is unavailable. Ask an administrator to choose an enabled group and exact model ID, then retry.':
+      '所選助手分組或模型 ID 不可用，請讓管理員選擇已啟用的分組和準確模型 ID 後重試。',
+    'Assistant routing is unavailable. Check the configured group and model ID, then retry.':
+      '助手路由不可用，請檢查設定的分組和模型 ID 後重試。',
+    'The assistant model catalog is temporarily unavailable. Check the model catalog and retry.':
+      '助手模型目錄暫時不可用，請檢查模型目錄後重試。',
+    'The assistant is busy right now. Please retry shortly.':
+      '助手目前繁忙，請稍後重試。',
+    'The AI assistant could not answer right now. Try again or contact support. (Error: {{code}}.)':
+      'AI 助手暫時無法回答，請重試或聯絡人工支援。（錯誤：{{code}}。）',
+  },
+  fr: {
+    'Select the routing group used by the assistant. Choose the exact model ID in the field beside it.':
+      'Sélectionnez le groupe de routage de l’assistant, puis l’identifiant exact du modèle à côté.',
+    'Assistant model ID': 'Identifiant du modèle de l’assistant',
+    'Select a model ID': 'Sélectionner un identifiant de modèle',
+    'not enabled': 'non activé',
+    'Unable to enumerate model IDs for this group. Check the live model catalog and try again.':
+      'Impossible de lister les identifiants de modèle de ce groupe. Vérifiez le catalogue en direct et réessayez.',
+    'This group has no enabled model IDs.':
+      'Ce groupe ne possède aucun identifiant de modèle activé.',
+    'The assistant sends requests with this exact enabled model ID and the selected routing group.':
+      'L’assistant utilise cet identifiant de modèle activé exact et le groupe de routage sélectionné.',
+    'Assistant routing is unavailable': 'Routage de l’assistant indisponible',
+    'The selected assistant group or model ID is unavailable. Ask an administrator to choose an enabled group and exact model ID, then retry.':
+      'Le groupe ou l’identifiant de modèle sélectionné est indisponible. Demandez à un administrateur de choisir un groupe et un identifiant activés, puis réessayez.',
+    'Assistant routing is unavailable. Check the configured group and model ID, then retry.':
+      'Le routage de l’assistant est indisponible. Vérifiez le groupe et l’identifiant configurés, puis réessayez.',
+    'The assistant model catalog is temporarily unavailable. Check the model catalog and retry.':
+      'Le catalogue de modèles de l’assistant est temporairement indisponible. Vérifiez-le et réessayez.',
+    'The assistant is busy right now. Please retry shortly.':
+      'L’assistant est actuellement occupé. Réessayez dans un instant.',
+    'The AI assistant could not answer right now. Try again or contact support. (Error: {{code}}.)':
+      'L’assistant IA ne peut pas répondre pour le moment. Réessayez ou contactez l’assistance. (Erreur : {{code}}.)',
+  },
+  ja: {
+    'Select the routing group used by the assistant. Choose the exact model ID in the field beside it.':
+      'アシスタントが使用するルーティンググループを選び、隣で正確なモデル ID を選択してください。',
+    'Assistant model ID': 'アシスタントモデル ID',
+    'Select a model ID': 'モデル ID を選択',
+    'not enabled': '未有効',
+    'Unable to enumerate model IDs for this group. Check the live model catalog and try again.':
+      'このグループのモデル ID を列挙できません。ライブモデルカタログを確認して再試行してください。',
+    'This group has no enabled model IDs.':
+      'このグループには有効なモデル ID がありません。',
+    'The assistant sends requests with this exact enabled model ID and the selected routing group.':
+      'アシスタントは、選択したルーティンググループでこの有効なモデル ID に正確にリクエストを送信します。',
+    'Assistant routing is unavailable':
+      'アシスタントのルーティングを利用できません',
+    'The selected assistant group or model ID is unavailable. Ask an administrator to choose an enabled group and exact model ID, then retry.':
+      '選択したグループまたはモデル ID を利用できません。管理者に有効なグループと正確なモデル ID を選んでもらい、再試行してください。',
+    'Assistant routing is unavailable. Check the configured group and model ID, then retry.':
+      'アシスタントのルーティングを利用できません。設定したグループとモデル ID を確認して再試行してください。',
+    'The assistant model catalog is temporarily unavailable. Check the model catalog and retry.':
+      'アシスタントのモデルカタログを一時的に利用できません。カタログを確認して再試行してください。',
+    'The assistant is busy right now. Please retry shortly.':
+      'アシスタントは現在混み合っています。少し待ってから再試行してください。',
+    'The AI assistant could not answer right now. Try again or contact support. (Error: {{code}}.)':
+      'AI アシスタントは現在回答できません。再試行するかサポートにお問い合わせください。（エラー：{{code}}。）',
+  },
+  ru: {
+    'Select the routing group used by the assistant. Choose the exact model ID in the field beside it.':
+      'Выберите группу маршрутизации помощника, затем точный идентификатор модели рядом.',
+    'Assistant model ID': 'Идентификатор модели помощника',
+    'Select a model ID': 'Выберите идентификатор модели',
+    'not enabled': 'не включён',
+    'Unable to enumerate model IDs for this group. Check the live model catalog and try again.':
+      'Не удалось перечислить идентификаторы моделей этой группы. Проверьте актуальный каталог и повторите попытку.',
+    'This group has no enabled model IDs.':
+      'В этой группе нет включённых идентификаторов моделей.',
+    'The assistant sends requests with this exact enabled model ID and the selected routing group.':
+      'Помощник отправляет запросы с этим точным включённым идентификатором модели и выбранной группой маршрутизации.',
+    'Assistant routing is unavailable': 'Маршрутизация помощника недоступна',
+    'The selected assistant group or model ID is unavailable. Ask an administrator to choose an enabled group and exact model ID, then retry.':
+      'Выбранная группа или идентификатор модели недоступны. Попросите администратора выбрать включённые группу и точный идентификатор, затем повторите попытку.',
+    'Assistant routing is unavailable. Check the configured group and model ID, then retry.':
+      'Маршрутизация помощника недоступна. Проверьте настроенные группу и идентификатор модели, затем повторите попытку.',
+    'The assistant model catalog is temporarily unavailable. Check the model catalog and retry.':
+      'Каталог моделей помощника временно недоступен. Проверьте каталог и повторите попытку.',
+    'The assistant is busy right now. Please retry shortly.':
+      'Помощник сейчас занят. Повторите попытку чуть позже.',
+    'The AI assistant could not answer right now. Try again or contact support. (Error: {{code}}.)':
+      'ИИ-помощник сейчас не может ответить. Повторите попытку или обратитесь в поддержку. (Ошибка: {{code}}.)',
+  },
+  vi: {
+    'Select the routing group used by the assistant. Choose the exact model ID in the field beside it.':
+      'Chọn nhóm định tuyến cho trợ lý, sau đó chọn đúng model ID ở bên cạnh.',
+    'Assistant model ID': 'Model ID của trợ lý',
+    'Select a model ID': 'Chọn model ID',
+    'not enabled': 'chưa bật',
+    'Unable to enumerate model IDs for this group. Check the live model catalog and try again.':
+      'Không thể liệt kê model ID của nhóm này. Hãy kiểm tra danh mục model trực tiếp rồi thử lại.',
+    'This group has no enabled model IDs.':
+      'Nhóm này không có model ID nào đang bật.',
+    'The assistant sends requests with this exact enabled model ID and the selected routing group.':
+      'Trợ lý gửi yêu cầu bằng đúng model ID đang bật này và nhóm định tuyến đã chọn.',
+    'Assistant routing is unavailable': 'Định tuyến trợ lý không khả dụng',
+    'The selected assistant group or model ID is unavailable. Ask an administrator to choose an enabled group and exact model ID, then retry.':
+      'Nhóm hoặc model ID của trợ lý đã chọn không khả dụng. Hãy nhờ quản trị viên chọn nhóm và model ID đang bật rồi thử lại.',
+    'Assistant routing is unavailable. Check the configured group and model ID, then retry.':
+      'Định tuyến trợ lý không khả dụng. Hãy kiểm tra nhóm và model ID đã cấu hình rồi thử lại.',
+    'The assistant model catalog is temporarily unavailable. Check the model catalog and retry.':
+      'Danh mục model của trợ lý tạm thời không khả dụng. Hãy kiểm tra danh mục rồi thử lại.',
+    'The assistant is busy right now. Please retry shortly.':
+      'Trợ lý đang bận. Vui lòng thử lại sau ít phút.',
+    'The AI assistant could not answer right now. Try again or contact support. (Error: {{code}}.)':
+      'Trợ lý AI hiện không thể trả lời. Hãy thử lại hoặc liên hệ hỗ trợ. (Lỗi: {{code}}.)',
+  },
+}
+
+for (const [locale, translations] of Object.entries(
+  assistantRoutingTranslations
+)) {
+  Object.assign(newKeys[locale], translations)
+}
+
 async function main() {
   let totalAdded = 0
   for (const [locale, translations] of Object.entries(newKeys)) {

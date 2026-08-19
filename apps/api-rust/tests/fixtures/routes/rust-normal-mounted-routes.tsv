@@ -2,6 +2,7 @@
 GET	/api/assistant/admin/handoffs	apps/api-rust/src/main.rs:assistant_reads
 POST	/api/assistant/admin/handoffs/:id/resolve	apps/api-rust/src/main.rs:assistant_reads
 GET	/api/assistant/admin/intents	apps/api-rust/src/main.rs:assistant_reads
+GET	/api/assistant/models	apps/api-rust/src/main.rs:assistant_reads
 POST	/api/assistant/chat	apps/api-rust/src/main.rs:assistant_reads
 POST	/api/assistant/handoffs	apps/api-rust/src/main.rs:assistant_reads
 GET	/api/assistant/handoffs/self	apps/api-rust/src/main.rs:assistant_reads

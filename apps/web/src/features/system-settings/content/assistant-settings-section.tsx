@@ -72,6 +72,8 @@ type AssistantSkillFile = {
   enabled: boolean
 }
 
+const EMPTY_ASSISTANT_MODEL_IDS: string[] = []
+
 function parseSkillFiles(value: string): AssistantSkillFile[] {
   try {
     const parsed = JSON.parse(value) as unknown
@@ -288,10 +290,19 @@ export function AssistantSettingsSection(props: {
   }, [form, props.defaultValues])
 
   const onSubmit = async (values: AssistantSettingsFormValues) => {
-    const updates = Object.entries(values).filter(
-      ([key, value]) =>
-        value !== props.defaultValues[key as keyof AssistantSettingsFormValues]
-    )
+    const updates = Object.entries(values)
+      .filter(
+        ([key, value]) =>
+          value !==
+          props.defaultValues[key as keyof AssistantSettingsFormValues]
+      )
+      .sort(([left], [right]) => {
+        if (left === 'AssistantGroup') return -1
+        if (right === 'AssistantGroup') return 1
+        if (left === 'AssistantModel') return -1
+        if (right === 'AssistantModel') return 1
+        return 0
+      })
 
     for (const [key, value] of updates) {
       await updateOption.mutateAsync({ key, value })
@@ -304,6 +315,8 @@ export function AssistantSettingsSection(props: {
   const reviewEnabled = form.watch('AssistantReviewEnabled')
   const retentionEnabled = form.watch('AssistantRetentionEnabled')
   const searchProvider = form.watch('AssistantSearchProvider')
+  const selectedGroup = form.watch('AssistantGroup')
+  const selectedModel = form.watch('AssistantModel')
   const groupsQuery = useQuery({
     queryKey: ['assistant-routing-groups'],
     queryFn: async () => {
@@ -314,18 +327,74 @@ export function AssistantSettingsSection(props: {
               typeof group === 'string' && group.trim().length > 0
           )
         : []
-      return Array.from(new Set(groups)).sort((left, right) =>
+      return [...new Set(groups)].sort((left, right) =>
         left.localeCompare(right)
       )
     },
     staleTime: 60_000,
   })
-  const assistantGroups = Array.from(
-    new Set([
+  const assistantGroups = [
+    ...new Set([
       props.defaultValues.AssistantGroup || 'default',
       ...(groupsQuery.data ?? []),
-    ])
-  ).sort((left, right) => left.localeCompare(right))
+    ]),
+  ].sort((left, right) => left.localeCompare(right))
+  const assistantModelsQuery = useQuery({
+    queryKey: ['assistant-routing-models', selectedGroup],
+    queryFn: async () => {
+      const response = await api.get<{ data?: unknown }>(
+        '/api/assistant/models',
+        {
+          params: { group: selectedGroup },
+          skipBusinessError: true,
+          skipErrorHandler: true,
+        }
+      )
+      const models = Array.isArray(response.data.data)
+        ? response.data.data.filter(
+            (modelID): modelID is string =>
+              typeof modelID === 'string' && modelID.trim().length > 0
+          )
+        : []
+      return [...new Set(models)].sort((left, right) =>
+        left.localeCompare(right)
+      )
+    },
+    enabled: Boolean(selectedGroup),
+    staleTime: 60_000,
+    retry: false,
+  })
+  const assistantModels = assistantModelsQuery.data ?? EMPTY_ASSISTANT_MODEL_IDS
+  const assistantModelOptions = [
+    ...new Set([...assistantModels, selectedModel].filter(Boolean)),
+  ]
+  const selectedModelIsUnavailable =
+    Boolean(selectedModel) &&
+    !assistantModelsQuery.isLoading &&
+    !assistantModels.includes(selectedModel)
+
+  useEffect(() => {
+    if (
+      assistantModels.length === 0 ||
+      assistantModels.includes(selectedModel)
+    ) {
+      return
+    }
+    form.setValue('AssistantModel', assistantModels[0], {
+      shouldDirty: true,
+      shouldValidate: true,
+    })
+  }, [assistantModels, form, selectedModel])
+  let modelDescription = t(
+    'The assistant sends requests with this exact enabled model ID and the selected routing group.'
+  )
+  if (assistantModelsQuery.isError) {
+    modelDescription = t(
+      'Unable to enumerate model IDs for this group. Check the live model catalog and try again.'
+    )
+  } else if (assistantModels.length === 0 && !assistantModelsQuery.isLoading) {
+    modelDescription = t('This group has no enabled model IDs.')
+  }
   const searchProviderDescription: Record<AssistantSearchProvider, string> = {
     none: t('Disable assistant web search.'),
     exa: t('Uses the official Exa Search API from the server.'),
@@ -387,7 +456,16 @@ export function AssistantSettingsSection(props: {
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>{t('Routing group')}</FormLabel>
-                  <Select value={field.value} onValueChange={field.onChange}>
+                  <Select
+                    value={field.value}
+                    onValueChange={(value) => {
+                      field.onChange(value)
+                      form.setValue('AssistantModel', '', {
+                        shouldDirty: true,
+                        shouldValidate: true,
+                      })
+                    }}
+                  >
                     <FormControl>
                       <SelectTrigger
                         className='w-full'
@@ -397,18 +475,60 @@ export function AssistantSettingsSection(props: {
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent alignItemWithTrigger={false}>
-                      {assistantGroups.map((group) => (
-                        <SelectItem key={group} value={group}>
-                          {group}
-                        </SelectItem>
-                      ))}
+                      <SelectGroup>
+                        {assistantGroups.map((group) => (
+                          <SelectItem key={group} value={group}>
+                            {group}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
                     </SelectContent>
                   </Select>
                   <FormDescription>
                     {t(
-                      'The assistant uses this group and automatically chooses an enabled model from its live catalog.'
+                      'Select the routing group used by the assistant. Choose the exact model ID in the field beside it.'
                     )}
                   </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='AssistantModel'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Assistant model ID')}</FormLabel>
+                  <Select value={field.value} onValueChange={field.onChange}>
+                    <FormControl>
+                      <SelectTrigger
+                        className='w-full'
+                        disabled={
+                          !enabled ||
+                          assistantModelsQuery.isLoading ||
+                          assistantModelsQuery.isError ||
+                          assistantModels.length === 0
+                        }
+                      >
+                        <SelectValue placeholder={t('Select a model ID')} />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent alignItemWithTrigger={false}>
+                      <SelectGroup>
+                        {assistantModelOptions.map((modelID) => (
+                          <SelectItem key={modelID} value={modelID}>
+                            {modelID}
+                            {modelID === selectedModel &&
+                            selectedModelIsUnavailable
+                              ? ` · ${t('not enabled')}`
+                              : null}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  <FormDescription>{modelDescription}</FormDescription>
                   <FormMessage />
                 </FormItem>
               )}

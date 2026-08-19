@@ -54,3 +54,9 @@ func TestResolveAssistantUserTargetFiltersHigherRoleCandidates(t *testing.T) {
 	assert.Equal(t, manageable.Id, rootCandidates[0]["id"])
 	assert.Equal(t, higher.Id, rootCandidates[1]["id"])
 }
+
+func TestAssistantSafeToolInputPreservesConversationTitle(t *testing.T) {
+	input := assistantSafeToolInput(`{"title":"配置 API 密钥","secret":"must-not-leak"}`)
+
+	assert.Equal(t, map[string]any{"title": "配置 API 密钥"}, input)
+}
