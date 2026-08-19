@@ -166,6 +166,13 @@ printf '#!/bin/sh\n' > "$rs_bundle/lmm-db-migrate"
 chmod 0755 "$go_bundle/lmm-api-go" "$rs_bundle/lmm-api-rs" "$rs_bundle/lmm-db-migrate"
 printf '<!doctype html>\n' > "$go_bundle/frontend-dist/index.html"
 cp "$SHARED/lmm-api.service" "$SHARED/lmm-api-go.env" "$go_bundle/"
+mkdir -p "$go_bundle/edge-policy/nginx"
+for file in http-map.conf lmm-api-locations.conf mime.types new-api.conf lmm-api-region-policy.conf; do
+  printf 'fixture\n' > "$go_bundle/edge-policy/nginx/$file"
+done
+for file in geoip2-country-update.service geoip2-country-update.timer; do
+  printf 'fixture\n' > "$go_bundle/edge-policy/$file"
+done
 for bundle in "$go_bundle" "$rs_bundle"; do
   for file in LICENSE NOTICE THIRD-PARTY-LICENSES.md; do
     printf 'fixture\n' > "$bundle/$file"
@@ -197,6 +204,8 @@ for packaged_path in \
   pkg-go/usr/lib/systemd/system/lmm-api.service \
   pkg-go/etc/lmm-api-go/lmm-api-go.env \
   pkg-go/usr/share/lmm-api-go/frontend-dist/index.html \
+  pkg-go/usr/share/lmm-api-go/edge-policy/nginx/http-map.conf \
+  pkg-go/usr/share/lmm-api-go/edge-policy/geoip2-country-update.timer \
   pkg-rs/usr/bin/lmm-api-rs \
   pkg-rs/usr/bin/lmm-db-migrate; do
   [[ -f $tmp/$packaged_path ]] || die "mock package layout is missing $packaged_path"
