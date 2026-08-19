@@ -82,8 +82,11 @@ jobs:
 
       - name: Verify package activation contract
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends libarchive-tools
+          command -v bsdtar >/dev/null 2>&1 || {
+            echo "::error::bsdtar is required on the hosted runner"
+            exit 1
+          }
+          bsdtar --version | head -1
           TMPDIR="$RUNNER_TEMP" bash deploy/test-frontend-release.sh
           TMPDIR="$RUNNER_TEMP" bash packaging/aur/test-web-activation.sh
 

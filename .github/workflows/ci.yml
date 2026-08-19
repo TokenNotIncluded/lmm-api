@@ -97,7 +97,12 @@ jobs:
           bun run --filter @lmm/web bundle:check
 
       - name: Install production contract tools
-        run: sudo apt-get update && sudo apt-get install --yes libarchive-tools
+        run: |
+          command -v bsdtar >/dev/null 2>&1 || {
+            echo "::error::bsdtar is required on the hosted runner"
+            exit 1
+          }
+          bsdtar --version | head -1
 
       - name: Verify protected production deployment contract
         env:
@@ -169,8 +174,11 @@ jobs:
 
       - name: Install route coverage tooling
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes ripgrep
+          command -v rg >/dev/null 2>&1 || {
+            echo "::error::ripgrep is required on the hosted runner"
+            exit 1
+          }
+          rg --version | head -1
 
       - name: Set up pinned Rust toolchain
         run: |
@@ -208,8 +216,11 @@ jobs:
 
       - name: Install route coverage tooling
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes ripgrep
+          command -v rg >/dev/null 2>&1 || {
+            echo "::error::ripgrep is required on the hosted runner"
+            exit 1
+          }
+          rg --version | head -1
 
       - name: Run route coverage and fixture contracts
         id: route-coverage

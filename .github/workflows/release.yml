@@ -143,7 +143,12 @@ jobs:
           cache-dependency-path: apps/api-go/go.sum
 
       - name: Install parity tooling
-        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends ripgrep
+        run: |
+          command -v rg >/dev/null 2>&1 || {
+            echo "::error::ripgrep is required on the hosted runner"
+            exit 1
+          }
+          rg --version | head -1
 
       - name: Enforce Go and Rust alignment contracts
         run: |
@@ -193,8 +198,11 @@ jobs:
 
       - name: Verify protected frontend deployment contract
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends libarchive-tools
+          command -v bsdtar >/dev/null 2>&1 || {
+            echo "::error::bsdtar is required on the hosted runner"
+            exit 1
+          }
+          bsdtar --version | head -1
           TMPDIR="$RUNNER_TEMP" bash deploy/test-frontend-release.sh
 
       - name: Package web artifact
