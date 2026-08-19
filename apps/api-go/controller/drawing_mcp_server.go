@@ -145,6 +145,15 @@ func drawingMCPResolveInput(user *model.UserBase, input drawingMCPGenerateInput)
 	return input, nil
 }
 
+func drawingMCPConsumeConfirmation(userID int, operation *model.OpenSourceBountyMCPConfirmedOperation) error {
+	if operation == nil || operation.State == "" || operation.ToolName != "drawing.generate" || operation.PayloadHash == "" {
+		return errors.New("drawing confirmation is missing or invalid")
+	}
+	return model.ConsumeOpenSourceBountyMCPConfirmation(
+		userID, operation.ToolName, operation.PayloadHash, operation.State,
+	)
+}
+
 func registerDrawingMCPTools(server *mcp.Server) {
 	mcp.AddTool(server, drawingMCPTool(
 		"drawing.list_capabilities", "List drawing capabilities",
@@ -193,9 +202,12 @@ func registerDrawingMCPTools(server *mcp.Server) {
 			"Generate %d image(s) with model %q in group %q for prompt %q. This uses the selected group's normal quota and may incur charges. Continue?",
 			resolved.N, resolved.Model, resolved.Group, resolved.Prompt,
 		)
-		pending, _, err := bountyMCPConfirmedOperation(request, userID, "drawing.generate", confirmationPayload, message)
+		pending, operation, err := bountyMCPConfirmedOperation(request, userID, "drawing.generate", confirmationPayload, message)
 		if err != nil || pending != nil {
 			return pending, drawingMCPOutput{}, err
+		}
+		if err := drawingMCPConsumeConfirmation(userID, operation); err != nil {
+			return nil, drawingMCPOutput{}, err
 		}
 		result, err := executeDrawingMCPRelay(ctx, user, resolved)
 		if err != nil {
