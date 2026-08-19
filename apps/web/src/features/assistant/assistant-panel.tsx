@@ -77,6 +77,7 @@ import { useAuthStore } from '@/stores/auth-store'
 
 import {
   getAssistantAvailableModels,
+  getAssistantErrorInfo,
   getAssistantPreConversationPresets,
   getAssistantStatus,
   recordAssistantPreConversationPresetClick,
@@ -607,6 +608,55 @@ function AssistantAccountStatusNotice(props: {
   )
 }
 
+function AssistantRouteStatusNotice(props: { onRetry: () => void }) {
+  const { t } = useTranslation()
+  return (
+    <Alert variant='destructive' data-testid='assistant-route-unavailable'>
+      <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} aria-hidden='true' />
+      <AlertTitle>{t('Assistant routing is unavailable')}</AlertTitle>
+      <AlertDescription>
+        {t(
+          'The selected assistant group or model ID is unavailable. Ask an administrator to choose an enabled group and exact model ID, then retry.'
+        )}
+      </AlertDescription>
+      <AlertAction>
+        <Button variant='outline' size='sm' onClick={props.onRetry}>
+          {t('Retry')}
+        </Button>
+      </AlertAction>
+    </Alert>
+  )
+}
+
+function assistantFailureMessage(
+  error: unknown,
+  translate: ReturnType<typeof useTranslation>['t']
+) {
+  const { code } = getAssistantErrorInfo(error)
+  if (code === 'ASSISTANT_ROUTING_GROUP_UNAVAILABLE') {
+    return translate(
+      'Assistant routing is unavailable. Check the configured group and model ID, then retry.'
+    )
+  }
+  if (code === 'ASSISTANT_MODEL_CATALOG_UNAVAILABLE') {
+    return translate(
+      'The assistant model catalog is temporarily unavailable. Check the model catalog and retry.'
+    )
+  }
+  if (code === 'ASSISTANT_BUSY') {
+    return translate('The assistant is busy right now. Please retry shortly.')
+  }
+  if (code) {
+    return translate(
+      'The AI assistant could not answer right now. Try again or contact support. (Error: {{code}}.)',
+      { code }
+    )
+  }
+  return translate(
+    'The AI assistant could not answer right now. Try again or contact support.'
+  )
+}
+
 function AssistantPromptInputSync(props: {
   initialMessage?: string
   initialMessageRevision?: number
@@ -681,6 +731,7 @@ function AssistantPromptComposer(props: {
   classicLayout?: boolean
   restricted: boolean
   terminated: boolean
+  routeUnavailable: boolean
   sending: boolean
   onSubmit: (message: { text?: string }) => void | Promise<void>
 }) {
@@ -734,7 +785,9 @@ function AssistantPromptComposer(props: {
             required={props.restricted}
             aria-describedby={describedBy}
             aria-invalid={hasText ? validation.invalid : undefined}
-            disabled={props.sending || props.terminated}
+            disabled={
+              props.sending || props.terminated || props.routeUnavailable
+            }
             className={cn(
               'max-h-24 min-h-10 sm:max-h-32 sm:min-h-12',
               props.classicLayout && 'text-[#ececf1] placeholder:text-[#b5b5bd]'
@@ -752,7 +805,12 @@ function AssistantPromptComposer(props: {
           </span>
           <PromptInputSubmit
             status={props.sending ? 'submitted' : 'ready'}
-            disabled={props.sending || props.terminated || validation.invalid}
+            disabled={
+              props.sending ||
+              props.terminated ||
+              props.routeUnavailable ||
+              validation.invalid
+            }
             size='sm'
             className={
               props.classicLayout
@@ -1218,6 +1276,7 @@ export function AssistantPanel(props: {
   const accountAccessConfirmed =
     accountAccessState === 'granted' || accountAccessState === 'restricted'
   const developerAccessGranted = accountAccessState === 'granted'
+  const assistantRouteUnavailable = statusQuery.data?.route_available === false
   const preConversationPresetsQuery = useQuery({
     queryKey: ['assistant-pre-conversation-presets'],
     queryFn: getAssistantPreConversationPresets,
@@ -1636,7 +1695,7 @@ export function AssistantPanel(props: {
       await queryClient.invalidateQueries({
         queryKey: ['assistant-conversations'],
       })
-    } catch {
+    } catch (error) {
       const canSubmitWithoutAssistant =
         accountAccessState === 'restricted' &&
         isExplicitAssistantL1Request(message)
@@ -1663,9 +1722,7 @@ export function AssistantPanel(props: {
         {
           id: nanoid(),
           role: 'assistant',
-          content: t(
-            'The AI assistant could not answer right now. Try again or contact support.'
-          ),
+          content: assistantFailureMessage(error, t),
           error: true,
           retry: { message, history, presetId },
           action: errorAction,
@@ -1872,6 +1929,11 @@ export function AssistantPanel(props: {
         </Conversation>
       ) : (
         <>
+          {assistantRouteUnavailable ? (
+            <AssistantRouteStatusNotice
+              onRetry={() => void statusQuery.refetch()}
+            />
+          ) : null}
           {developerAccessGranted && authUser ? (
             <AssistantOnboardingTodo
               userId={authUser.id}
@@ -2234,6 +2296,7 @@ export function AssistantPanel(props: {
                   classicLayout={classicLayout}
                   restricted={accountAccessState === 'restricted'}
                   terminated={conversationRestricted}
+                  routeUnavailable={assistantRouteUnavailable}
                   sending={sending}
                   onSubmit={submitMessage}
                 />

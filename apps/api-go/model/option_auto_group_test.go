@@ -5,6 +5,7 @@ import (
 
 	"github.com/LIghtJUNction/api.lmm.best/common"
 	"github.com/LIghtJUNction/api.lmm.best/setting"
+	"github.com/LIghtJUNction/api.lmm.best/setting/ratio_setting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -30,6 +31,26 @@ func TestValidateOptionValueRejectsUnavailableAssistantReviewModel(t *testing.T)
 func TestValidateOptionValueAcceptsOnlyExistingAssistantGroup(t *testing.T) {
 	assert.NoError(t, validateOptionValue(setting.AssistantGroupOptionKey, "default"))
 	assert.Error(t, validateOptionValue(setting.AssistantGroupOptionKey, "missing-group"))
+}
+
+func TestValidateOptionValuesChecksAssistantModelAgainstCandidateGroup(t *testing.T) {
+	originalRatios := ratio_setting.GroupRatio2JSONString()
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"premium":1}`))
+	t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalRatios)) })
+	db := setupConsoleActivationTestDB(t)
+	require.NoError(t, db.AutoMigrate(&Ability{}))
+	require.NoError(t, db.Create(&Ability{
+		Group: "premium", Model: "premium-assistant-model", Enabled: true, ChannelId: 1,
+	}).Error)
+
+	require.NoError(t, ValidateOptionValues(map[string]string{
+		setting.AssistantGroupOptionKey: "premium",
+		setting.AssistantModelOptionKey: "premium-assistant-model",
+	}))
+	assert.Error(t, ValidateOptionValues(map[string]string{
+		setting.AssistantGroupOptionKey: "premium",
+		setting.AssistantModelOptionKey: "missing-model",
+	}))
 }
 
 func TestValidateIPAccessRoutingOptions(t *testing.T) {

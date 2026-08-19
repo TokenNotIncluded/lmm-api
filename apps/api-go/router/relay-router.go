@@ -97,6 +97,7 @@ func SetRelayRouter(router *gin.Engine) {
 	assistantRouter.Use(middleware.UserAuth())
 	{
 		assistantRouter.GET("/status", controller.GetAssistantStatus)
+		assistantRouter.GET("/models", middleware.AdminAuth(), controller.GetAssistantModels)
 		assistantRouter.GET("/offers", controller.GetAssistantPlanOffers)
 		assistantRouter.GET("/journey", middleware.DisableCache(), controller.GetAssistantJourney)
 		assistantRouter.GET("/new-user-gift", middleware.DisableCache(), controller.GetAssistantNewUserGift)

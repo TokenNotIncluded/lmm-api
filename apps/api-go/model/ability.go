@@ -46,8 +46,12 @@ func GetAllEnableAbilityWithChannels() ([]AbilityWithChannel, error) {
 // unavailable catalog into a successful empty response.
 func GetGroupEnabledModelsWithError(group string) ([]string, error) {
 	var models []string
+	groupColumn := commonGroupCol
+	if groupColumn == "" {
+		groupColumn = `"group"`
+	}
 	// Find distinct models
-	err := DB.Table("abilities").Where(commonGroupCol+" = ? and enabled = ?", group, true).Distinct("model").Pluck("model", &models).Error
+	err := DB.Table("abilities").Where(groupColumn+" = ? and enabled = ?", group, true).Distinct("model").Pluck("model", &models).Error
 	return models, err
 }
 
@@ -73,8 +77,12 @@ func IsModelEnabledForGroup(group, model string) bool {
 		return false
 	}
 	var count int64
+	groupColumn := commonGroupCol
+	if groupColumn == "" {
+		groupColumn = `"group"`
+	}
 	err := DB.Model(&Ability{}).
-		Where(commonGroupCol+" = ? AND model = ? AND enabled = ?", group, model, true).
+		Where(groupColumn+" = ? AND model = ? AND enabled = ?", group, model, true).
 		Count(&count).Error
 	return err == nil && count > 0
 }

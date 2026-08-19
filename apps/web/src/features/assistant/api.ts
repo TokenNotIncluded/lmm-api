@@ -33,7 +33,9 @@ type AssistantChatPayload = {
   }>
   error?: {
     message?: string
+    code?: string
   }
+  code?: string
   message?: string
   lmm_assistant_action?: unknown
   lmm_assistant_policy?: unknown
@@ -91,6 +93,8 @@ export type AssistantPreConversationPresets = {
 export type AssistantStatus = {
   enabled: boolean
   model: string
+  group?: string
+  route_available?: boolean
   funding: AssistantFundingStatus
   developer_access_granted: boolean
   access_level?: string
@@ -533,6 +537,38 @@ type AssistantAPIResponse<T> = {
   success: boolean
   data?: T
   message?: string
+}
+
+export type AssistantErrorInfo = {
+  code?: string
+  message?: string
+  status?: number
+}
+
+export function getAssistantErrorInfo(error: unknown): AssistantErrorInfo {
+  if (!error || typeof error !== 'object') {
+    return {}
+  }
+  const candidate = error as {
+    message?: unknown
+    response?: { status?: unknown; data?: unknown }
+  }
+  const responseData = candidate.response?.data
+  const payload =
+    responseData && typeof responseData === 'object'
+      ? (responseData as { code?: unknown; message?: unknown })
+      : undefined
+  return {
+    ...(typeof payload?.code === 'string' ? { code: payload.code } : {}),
+    ...(typeof payload?.message === 'string'
+      ? { message: payload.message }
+      : typeof candidate.message === 'string'
+        ? { message: candidate.message }
+        : {}),
+    ...(typeof candidate.response?.status === 'number'
+      ? { status: candidate.response.status }
+      : {}),
+  }
 }
 
 function requireAssistantData<T>(

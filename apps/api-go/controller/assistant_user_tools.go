@@ -44,7 +44,7 @@ func assistantSafeToolInput(arguments string) map[string]any {
 	allowed := map[string]struct{}{
 		"action": {}, "days": {}, "group": {}, "identifier": {}, "model_id": {},
 		"page": {}, "platform": {}, "provider": {}, "query": {}, "section": {},
-		"target_user_id": {}, "topic": {},
+		"target_user_id": {}, "title": {}, "topic": {},
 	}
 	result := make(map[string]any)
 	for key, value := range input {

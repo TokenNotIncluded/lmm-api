@@ -20,8 +20,8 @@ const (
 	AssistantEnabledOptionKey = "AssistantEnabled"
 	AssistantModelOptionKey   = "AssistantModel"
 	// AssistantGroupOptionKey selects the routing group used by the built-in
-	// assistant. AssistantModel remains a legacy internal fallback for older
-	// clients; the settings UI no longer asks administrators to enter a model.
+	// assistant. AssistantModel selects one exact enabled model ID within that
+	// group.
 	AssistantGroupOptionKey                 = "AssistantGroup"
 	AssistantL1AutoApprovalUserIDsOptionKey = "AssistantL1AutoApprovalUserIDs"
 	AssistantReasoningEffortOptionKey       = "AssistantReasoningEffort"

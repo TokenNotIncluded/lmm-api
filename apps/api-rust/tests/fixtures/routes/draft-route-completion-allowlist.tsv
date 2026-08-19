@@ -24,6 +24,7 @@ DELETE	/api/user/bindings/:binding_type	compatibility	apps/api-rust/src/migratio
 GET	/api/assistant/admin/handoffs	compatibility	apps/api-rust/src/migration_routes/assistant.rs	application route intentionally outside the frozen legacy migration inventory
 GET	/api/assistant/admin/intents	compatibility	apps/api-rust/src/migration_routes/assistant.rs	application route intentionally outside the frozen legacy migration inventory
 GET	/api/assistant/handoffs/self	compatibility	apps/api-rust/src/migration_routes/assistant.rs	application route intentionally outside the frozen legacy migration inventory
+GET	/api/assistant/models	compatibility	apps/api-rust/src/migration_routes/assistant.rs	application route intentionally outside the frozen legacy migration inventory
 GET	/api/assistant/offers	compatibility	apps/api-rust/src/migration_routes/assistant.rs	application route intentionally outside the frozen legacy migration inventory
 GET	/api/assistant/pricing	compatibility	apps/api-rust/src/migration_routes/missing_control_public.rs	application route intentionally outside the frozen legacy migration inventory
 GET	/api/assistant/status	compatibility	apps/api-rust/src/migration_routes/assistant.rs	application route intentionally outside the frozen legacy migration inventory

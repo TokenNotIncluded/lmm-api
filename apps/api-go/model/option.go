@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -280,8 +281,14 @@ func validateOptionValue(key string, value string) error {
 	if err := setting.ValidateAssistantOption(key, value); err != nil {
 		return err
 	}
-	if key == setting.AssistantModelOptionKey && !IsModelEnabledForGroup("default", strings.TrimSpace(value)) {
-		return errors.New("assistant model is not enabled in the default group; choose a live model from the model list")
+	if key == setting.AssistantModelOptionKey {
+		group := strings.TrimSpace(setting.GetAssistantSettings().Group)
+		if group == "" {
+			group = setting.DefaultAssistantGroup
+		}
+		if !IsModelEnabledForGroup(group, strings.TrimSpace(value)) {
+			return fmt.Errorf("assistant model is not enabled in the %s group; choose a live model from the model list", group)
+		}
 	}
 	if key == setting.AssistantGroupOptionKey && !ratio_setting.ContainsGroupRatio(strings.TrimSpace(value)) {
 		return errors.New("assistant routing group must be an existing group")
@@ -367,12 +374,35 @@ func ValidateOptionValues(values map[string]string) error {
 		return errors.New("at least one option is required")
 	}
 	dynamicValues := make(map[string]string)
+	assistantRouteChanged := false
 	for key, value := range values {
 		if dynamic_pricing_setting.IsOptionKey(key) {
 			dynamicValues[key] = value
 			continue
 		}
+		if key == setting.AssistantGroupOptionKey || key == setting.AssistantModelOptionKey {
+			assistantRouteChanged = true
+			continue
+		}
 		if err := validateOptionValue(key, value); err != nil {
+			return err
+		}
+	}
+	if assistantRouteChanged {
+		if value, ok := values[setting.AssistantGroupOptionKey]; ok {
+			if err := setting.ValidateAssistantOption(setting.AssistantGroupOptionKey, value); err != nil {
+				return err
+			}
+			if !ratio_setting.ContainsGroupRatio(strings.TrimSpace(value)) {
+				return errors.New("assistant routing group must be an existing group")
+			}
+		}
+		if value, ok := values[setting.AssistantModelOptionKey]; ok {
+			if err := setting.ValidateAssistantOption(setting.AssistantModelOptionKey, value); err != nil {
+				return err
+			}
+		}
+		if err := validateAssistantRouteValues(values); err != nil {
 			return err
 		}
 	}
@@ -380,6 +410,32 @@ func ValidateOptionValues(values map[string]string) error {
 		if err := dynamic_pricing_setting.ValidateOptionValues(dynamicValues); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// validateAssistantRouteValues validates the candidate group/model pair as a
+// unit. This matters when the settings page changes both fields at once: the
+// model must be checked against the proposed group, not the old in-memory one.
+func validateAssistantRouteValues(values map[string]string) error {
+	settings := setting.GetAssistantSettings()
+	group := strings.TrimSpace(settings.Group)
+	if value, ok := values[setting.AssistantGroupOptionKey]; ok {
+		group = strings.TrimSpace(value)
+	}
+	if group == "" {
+		group = setting.DefaultAssistantGroup
+	}
+	if !ratio_setting.ContainsGroupRatio(group) {
+		return errors.New("assistant routing group must be an existing group")
+	}
+
+	modelID := strings.TrimSpace(settings.Model)
+	if value, ok := values[setting.AssistantModelOptionKey]; ok {
+		modelID = strings.TrimSpace(value)
+	}
+	if modelID == "" || !IsModelEnabledForGroup(group, modelID) {
+		return fmt.Errorf("assistant model is not enabled in the %s group; choose a live model from the model list", group)
 	}
 	return nil
 }
