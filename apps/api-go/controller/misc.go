@@ -113,6 +113,7 @@ func GetStatus(c *gin.Context) {
 
 	passkeySetting := system_setting.GetPasskeySettings()
 	assistantSettings := setting.GetAssistantSettings()
+	assistantGroup, assistantModel := assistantConfiguredRoute(assistantSettings)
 	data := gin.H{
 		"version":                     common.Version,
 		"start_time":                  common.StartTime,
@@ -168,7 +169,8 @@ func GetStatus(c *gin.Context) {
 		},
 		"assistant": gin.H{
 			"enabled":      assistantSettings.Enabled,
-			"model":        assistantSettings.Model,
+			"group":        assistantGroup,
+			"model":        assistantModel,
 			"funding_mode": "super_administrator",
 		},
 

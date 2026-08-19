@@ -17,8 +17,12 @@ import (
 )
 
 const (
-	AssistantEnabledOptionKey         = "AssistantEnabled"
-	AssistantModelOptionKey           = "AssistantModel"
+	AssistantEnabledOptionKey = "AssistantEnabled"
+	AssistantModelOptionKey   = "AssistantModel"
+	// AssistantGroupOptionKey selects the routing group used by the built-in
+	// assistant. AssistantModel remains a legacy internal fallback for older
+	// clients; the settings UI no longer asks administrators to enter a model.
+	AssistantGroupOptionKey           = "AssistantGroup"
 	AssistantReasoningEffortOptionKey = "AssistantReasoningEffort"
 	// AssistantWeeklyCreditUSDOptionKey is retained only so older consoles can
 	// read and submit their retired field without affecting runtime funding.
@@ -48,6 +52,7 @@ const (
 	AssistantSecurityRetentionDaysOptionKey  = "AssistantSecurityRetentionDays"
 	AssistantRetentionIntervalHoursOptionKey = "AssistantRetentionIntervalHours"
 	DefaultAssistantModel                    = "deepseek-v4-flash"
+	DefaultAssistantGroup                    = "default"
 	DefaultAssistantReasoningEffort          = "auto"
 	DefaultAssistantReviewModel              = "deepseek-v4-flash"
 	AssistantReviewDefaultIntensity          = "standard"
@@ -91,6 +96,7 @@ const (
 type AssistantSettings struct {
 	Enabled                bool
 	Model                  string
+	Group                  string
 	ReasoningEffort        string
 	AgentLoopEnabled       bool
 	MaxSteps               int
@@ -132,6 +138,7 @@ var (
 	assistantSettings      = AssistantSettings{
 		Enabled:                true,
 		Model:                  DefaultAssistantModel,
+		Group:                  DefaultAssistantGroup,
 		ReasoningEffort:        DefaultAssistantReasoningEffort,
 		AgentLoopEnabled:       true,
 		MaxSteps:               6,
@@ -184,6 +191,21 @@ func UpdateAssistantModel(value string) error {
 	assistantSettingsMutex.Lock()
 	defer assistantSettingsMutex.Unlock()
 	assistantSettings.Model = model
+	return nil
+}
+
+func UpdateAssistantGroup(value string) error {
+	group := strings.TrimSpace(value)
+	if group == "" {
+		return errors.New("assistant routing group is required")
+	}
+	if len([]rune(group)) > 64 {
+		return errors.New("assistant routing group must be at most 64 characters")
+	}
+
+	assistantSettingsMutex.Lock()
+	defer assistantSettingsMutex.Unlock()
+	assistantSettings.Group = group
 	return nil
 }
 
@@ -643,6 +665,14 @@ func ValidateAssistantOption(key string, value string) error {
 		}
 		if len(model) > 128 {
 			return errors.New("assistant model must be at most 128 characters")
+		}
+	case AssistantGroupOptionKey:
+		group := strings.TrimSpace(value)
+		if group == "" {
+			return errors.New("assistant routing group is required")
+		}
+		if len([]rune(group)) > 64 {
+			return errors.New("assistant routing group must be at most 64 characters")
 		}
 	case AssistantReasoningEffortOptionKey:
 		if !IsAssistantReasoningEffort(strings.TrimSpace(value)) {

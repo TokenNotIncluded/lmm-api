@@ -775,6 +775,8 @@ const drawingTranslations = {
     'Describe an image': 'Describe an image',
     'Describe what you want to see...': 'Describe what you want to see...',
     'Routing group': 'Routing group',
+    'The assistant uses this group and automatically chooses an enabled model from its live catalog.':
+      'The assistant uses this group and automatically chooses an enabled model from its live catalog.',
     'Billing follows the selected group configuration.':
       'Billing follows the selected group configuration.',
     'Image model': 'Image model',
@@ -805,6 +807,8 @@ const drawingTranslations = {
     'Describe an image': '描述图片',
     'Describe what you want to see...': '描述你想看到的内容……',
     'Routing group': '路由分组',
+    'The assistant uses this group and automatically chooses an enabled model from its live catalog.':
+      '助手会使用此分组，并从实时目录中自动选择已启用的模型。',
     'Billing follows the selected group configuration.':
       '费用按所选分组配置结算。',
     'Image model': '图片模型',
@@ -834,6 +838,8 @@ const drawingTranslations = {
     'Describe an image': '描述圖片',
     'Describe what you want to see...': '描述你想看到的內容……',
     'Routing group': '路由分組',
+    'The assistant uses this group and automatically chooses an enabled model from its live catalog.':
+      '助手會使用此分組，並從即時目錄中自動選擇已啟用的模型。',
     'Billing follows the selected group configuration.':
       '費用依所選分組設定結算。',
     'Image model': '圖片模型',
@@ -863,6 +869,8 @@ const drawingTranslations = {
     'Describe an image': 'Décrire une image',
     'Describe what you want to see...': 'Décrivez ce que vous voulez voir…',
     'Routing group': 'Groupe de routage',
+    'The assistant uses this group and automatically chooses an enabled model from its live catalog.':
+      'L’assistant utilise ce groupe et choisit automatiquement un modèle activé dans le catalogue en temps réel.',
     'Billing follows the selected group configuration.':
       'La facturation suit la configuration du groupe choisi.',
     'Image model': 'Modèle d’image',
@@ -892,6 +900,8 @@ const drawingTranslations = {
     'Describe an image': '画像を説明',
     'Describe what you want to see...': '見たいものを説明してください…',
     'Routing group': 'ルーティンググループ',
+    'The assistant uses this group and automatically chooses an enabled model from its live catalog.':
+      'アシスタントはこのグループを使用し、リアルタイムのカタログから有効なモデルを自動選択します。',
     'Billing follows the selected group configuration.':
       '料金は選択したグループ設定に従います。',
     'Image model': '画像モデル',
@@ -922,6 +932,8 @@ const drawingTranslations = {
     'Describe an image': 'Опишите изображение',
     'Describe what you want to see...': 'Опишите, что хотите увидеть…',
     'Routing group': 'Группа маршрутизации',
+    'The assistant uses this group and automatically chooses an enabled model from its live catalog.':
+      'Ассистент использует эту группу и автоматически выбирает включённую модель из актуального каталога.',
     'Billing follows the selected group configuration.':
       'Расчёт выполняется по настройкам выбранной группы.',
     'Image model': 'Модель изображений',
@@ -952,6 +964,8 @@ const drawingTranslations = {
     'Describe an image': 'Mô tả hình ảnh',
     'Describe what you want to see...': 'Mô tả điều bạn muốn thấy…',
     'Routing group': 'Nhóm định tuyến',
+    'The assistant uses this group and automatically chooses an enabled model from its live catalog.':
+      'Trợ lý dùng nhóm này và tự động chọn một model đang bật từ danh mục trực tiếp.',
     'Billing follows the selected group configuration.':
       'Chi phí tuân theo cấu hình nhóm đã chọn.',
     'Image model': 'Model hình ảnh',
@@ -4569,6 +4583,99 @@ const drawingMcpTranslations = {
 }
 
 for (const [locale, translations] of Object.entries(drawingMcpTranslations)) {
+  Object.assign(newKeys[locale], translations)
+}
+
+const automaticReviewTranslations = {
+  en: {
+    'You can submit without an AI recommendation. The automatic review agent handles clear requests; uncertain cases remain available for human fallback.':
+      'You can submit without an AI recommendation. The automatic review agent handles clear requests; uncertain cases remain available for human fallback.',
+    'Your AI recommendation was submitted to the automatic review agent. L1 remains locked until automatic review approves it or human fallback completes.':
+      'Your AI recommendation was submitted to the automatic review agent. L1 remains locked until automatic review approves it or human fallback completes.',
+    'L0 access is restricted. Ask the assistant to prepare an L1 recommendation; after automatic review approval or human fallback, return here to create a key.':
+      'L0 access is restricted. Ask the assistant to prepare an L1 recommendation; after automatic review approval or human fallback, return here to create a key.',
+    'Connection values and API key creation unlock after automatic review approves L1; uncertain cases use human fallback.':
+      'Connection values and API key creation unlock after automatic review approves L1; uncertain cases use human fallback.',
+    'You can compare live plans and discounts now. Checkout and payment remain locked until automatic review approves L1 or human fallback completes.':
+      'You can compare live plans and discounts now. Checkout and payment remain locked until automatic review approves L1 or human fallback completes.',
+  },
+  zh: {
+    'You can submit without an AI recommendation. The automatic review agent handles clear requests; uncertain cases remain available for human fallback.':
+      '你可以不附带 AI 推荐信直接提交。自动审核 Agent 会处理证据清晰的申请；不确定的申请会保留给人工兜底。',
+    'Your AI recommendation was submitted to the automatic review agent. L1 remains locked until automatic review approves it or human fallback completes.':
+      'AI 推荐信已提交给自动审核 Agent。自动审核通过或人工兜底完成前，L1 仍保持锁定。',
+    'L0 access is restricted. Ask the assistant to prepare an L1 recommendation; after automatic review approval or human fallback, return here to create a key.':
+      'L0 无法使用此功能。请让助手准备 L1 推荐信；自动审核通过或人工兜底完成后，再回来创建密钥。',
+    'Connection values and API key creation unlock after automatic review approves L1; uncertain cases use human fallback.':
+      '自动审核通过 L1 后即可解锁连接信息和 API 密钥创建；不确定的申请会转人工兜底。',
+    'You can compare live plans and discounts now. Checkout and payment remain locked until automatic review approves L1 or human fallback completes.':
+      '你现在可以比较实时套餐和优惠；自动审核通过 L1 或人工兜底完成前，结算和支付仍保持锁定。',
+  },
+  'zh-TW': {
+    'You can submit without an AI recommendation. The automatic review agent handles clear requests; uncertain cases remain available for human fallback.':
+      '你可以不附帶 AI 推薦信直接提交。自動審核 Agent 會處理證據清楚的申請；不確定的申請會保留給人工兜底。',
+    'Your AI recommendation was submitted to the automatic review agent. L1 remains locked until automatic review approves it or human fallback completes.':
+      'AI 推薦信已提交給自動審核 Agent。自動審核通過或人工兜底完成前，L1 仍保持鎖定。',
+    'L0 access is restricted. Ask the assistant to prepare an L1 recommendation; after automatic review approval or human fallback, return here to create a key.':
+      'L0 無法使用此功能。請讓助手準備 L1 推薦信；自動審核通過或人工兜底完成後，再回來建立金鑰。',
+    'Connection values and API key creation unlock after automatic review approves L1; uncertain cases use human fallback.':
+      '自動審核通過 L1 後即可解鎖連線資訊和 API 金鑰建立；不確定的申請會轉人工兜底。',
+    'You can compare live plans and discounts now. Checkout and payment remain locked until automatic review approves L1 or human fallback completes.':
+      '你現在可以比較即時方案和優惠；自動審核通過 L1 或人工兜底完成前，結帳和付款仍保持鎖定。',
+  },
+  fr: {
+    'You can submit without an AI recommendation. The automatic review agent handles clear requests; uncertain cases remain available for human fallback.':
+      'Vous pouvez envoyer la demande sans recommandation IA. Les cas clairs sont traités automatiquement ; les cas incertains restent disponibles pour une revue humaine.',
+    'Your AI recommendation was submitted to the automatic review agent. L1 remains locked until automatic review approves it or human fallback completes.':
+      'Votre recommandation IA a été envoyée à la revue automatique. L1 reste verrouillé jusqu’à son approbation ou la fin de la revue humaine.',
+    'L0 access is restricted. Ask the assistant to prepare an L1 recommendation; after automatic review approval or human fallback, return here to create a key.':
+      'L’accès L0 est limité. Demandez une recommandation L1, puis créez une clé après la revue automatique ou humaine.',
+    'Connection values and API key creation unlock after automatic review approves L1; uncertain cases use human fallback.':
+      'Les informations de connexion et la création de clé se débloquent après l’approbation automatique de L1 ; les cas incertains passent en revue humaine.',
+    'You can compare live plans and discounts now. Checkout and payment remain locked until automatic review approves L1 or human fallback completes.':
+      'Vous pouvez comparer les offres actuelles ; le paiement reste verrouillé jusqu’à l’approbation automatique de L1 ou la revue humaine.',
+  },
+  ja: {
+    'You can submit without an AI recommendation. The automatic review agent handles clear requests; uncertain cases remain available for human fallback.':
+      'AI 推薦文なしで申請できます。明確な申請は自動審査が処理し、不確かな申請は人による審査に回せます。',
+    'Your AI recommendation was submitted to the automatic review agent. L1 remains locked until automatic review approves it or human fallback completes.':
+      'AI 推薦文を自動審査に送信しました。自動承認または人による審査が完了するまで L1 はロックされます。',
+    'L0 access is restricted. Ask the assistant to prepare an L1 recommendation; after automatic review approval or human fallback, return here to create a key.':
+      'L0 では利用できません。L1 推薦文を作成し、自動審査または人による審査の後にキーを作成してください。',
+    'Connection values and API key creation unlock after automatic review approves L1; uncertain cases use human fallback.':
+      '自動審査で L1 が承認されると接続情報と API キー作成が解放されます。不確かな申請は人による審査に回ります。',
+    'You can compare live plans and discounts now. Checkout and payment remain locked until automatic review approves L1 or human fallback completes.':
+      'プランと割引は比較できます。自動審査または人による審査が完了するまで決済はロックされます。',
+  },
+  ru: {
+    'You can submit without an AI recommendation. The automatic review agent handles clear requests; uncertain cases remain available for human fallback.':
+      'Заявку можно отправить без рекомендации ИИ. Ясные случаи обработает автоматическая проверка, а сомнительные останутся для человека.',
+    'Your AI recommendation was submitted to the automatic review agent. L1 remains locked until automatic review approves it or human fallback completes.':
+      'Рекомендация ИИ отправлена на автоматическую проверку. L1 останется заблокированным до одобрения или проверки человеком.',
+    'L0 access is restricted. Ask the assistant to prepare an L1 recommendation; after automatic review approval or human fallback, return here to create a key.':
+      'Для L0 доступ ограничен. Подготовьте рекомендацию L1 и создайте ключ после автоматической или человеческой проверки.',
+    'Connection values and API key creation unlock after automatic review approves L1; uncertain cases use human fallback.':
+      'Данные подключения и создание API-ключа откроются после автоматического одобрения L1; сомнительные случаи передаются человеку.',
+    'You can compare live plans and discounts now. Checkout and payment remain locked until automatic review approves L1 or human fallback completes.':
+      'Можно сравнить планы и скидки; оплата останется заблокирована до автоматического или человеческого одобрения L1.',
+  },
+  vi: {
+    'You can submit without an AI recommendation. The automatic review agent handles clear requests; uncertain cases remain available for human fallback.':
+      'Bạn có thể gửi yêu cầu mà không cần đề xuất AI. Agent tự động xử lý hồ sơ rõ ràng; hồ sơ chưa chắc chắn sẽ chuyển sang người xét duyệt.',
+    'Your AI recommendation was submitted to the automatic review agent. L1 remains locked until automatic review approves it or human fallback completes.':
+      'Đề xuất AI đã được gửi cho agent tự động. L1 vẫn khóa cho đến khi tự động duyệt hoặc xét duyệt thủ công hoàn tất.',
+    'L0 access is restricted. Ask the assistant to prepare an L1 recommendation; after automatic review approval or human fallback, return here to create a key.':
+      'L0 bị giới hạn. Hãy nhờ trợ lý chuẩn bị đề xuất L1 rồi tạo key sau khi tự động duyệt hoặc xét duyệt thủ công.',
+    'Connection values and API key creation unlock after automatic review approves L1; uncertain cases use human fallback.':
+      'Thông tin kết nối và tạo API key mở sau khi tự động duyệt L1; hồ sơ chưa chắc chắn sẽ chuyển sang người xét duyệt.',
+    'You can compare live plans and discounts now. Checkout and payment remain locked until automatic review approves L1 or human fallback completes.':
+      'Bạn có thể so sánh gói và ưu đãi; thanh toán vẫn khóa cho đến khi tự động duyệt L1 hoặc xét duyệt thủ công hoàn tất.',
+  },
+}
+
+for (const [locale, translations] of Object.entries(
+  automaticReviewTranslations
+)) {
   Object.assign(newKeys[locale], translations)
 }
 

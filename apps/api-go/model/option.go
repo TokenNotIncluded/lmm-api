@@ -138,6 +138,7 @@ func InitOptionMap() {
 	assistantSettings := setting.GetAssistantSettings()
 	common.OptionMap[setting.AssistantEnabledOptionKey] = strconv.FormatBool(assistantSettings.Enabled)
 	common.OptionMap[setting.AssistantModelOptionKey] = assistantSettings.Model
+	common.OptionMap[setting.AssistantGroupOptionKey] = assistantSettings.Group
 	common.OptionMap[setting.AssistantReasoningEffortOptionKey] = assistantSettings.ReasoningEffort
 	common.OptionMap[setting.AssistantWeeklyCreditUSDOptionKey] = "0"
 	common.OptionMap[setting.AssistantAgentLoopEnabledOptionKey] = strconv.FormatBool(assistantSettings.AgentLoopEnabled)
@@ -280,6 +281,9 @@ func validateOptionValue(key string, value string) error {
 	}
 	if key == setting.AssistantModelOptionKey && !IsModelEnabledForGroup("default", strings.TrimSpace(value)) {
 		return errors.New("assistant model is not enabled in the default group; choose a live model from the model list")
+	}
+	if key == setting.AssistantGroupOptionKey && !ratio_setting.ContainsGroupRatio(strings.TrimSpace(value)) {
+		return errors.New("assistant routing group must be an existing group")
 	}
 	if key == setting.AssistantReviewModelOptionKey && !IsModelEnabledForGroup("default", strings.TrimSpace(value)) {
 		return errors.New("assistant review model is not enabled in the default group; choose a live model from the model list")
@@ -691,6 +695,8 @@ func updateOptionMap(key string, value string) (err error) {
 		err = setting.UpdateChatsByJsonString(value)
 	case setting.AssistantModelOptionKey:
 		err = setting.UpdateAssistantModel(value)
+	case setting.AssistantGroupOptionKey:
+		err = setting.UpdateAssistantGroup(value)
 	case setting.AssistantReasoningEffortOptionKey:
 		err = setting.UpdateAssistantReasoningEffort(value)
 	case setting.AssistantMaxStepsOptionKey:

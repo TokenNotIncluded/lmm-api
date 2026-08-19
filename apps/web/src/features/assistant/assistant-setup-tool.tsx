@@ -212,7 +212,7 @@ export function AssistantSetupTool(props: {
             <AlertTitle>{t('Ask for L1 access')}</AlertTitle>
             <AlertDescription>
               {t(
-                'Connection values and API key creation unlock only after an administrator approves L1.'
+                'Connection values and API key creation unlock after automatic review approves L1; uncertain cases use human fallback.'
               )}
             </AlertDescription>
           </Alert>

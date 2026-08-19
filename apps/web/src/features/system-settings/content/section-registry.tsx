@@ -107,6 +107,7 @@ const CONTENT_SECTIONS = [
       <AssistantSettingsSection
         defaultValues={{
           AssistantEnabled: settings.AssistantEnabled,
+          AssistantGroup: settings.AssistantGroup,
           AssistantModel: settings.AssistantModel,
           AssistantReasoningEffort: settings.AssistantReasoningEffort,
           AssistantAgentLoopEnabled: settings.AssistantAgentLoopEnabled,

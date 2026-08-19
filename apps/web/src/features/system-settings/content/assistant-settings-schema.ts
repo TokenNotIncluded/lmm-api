@@ -25,6 +25,7 @@ import {
 
 export const assistantSettingsSchema = z.object({
   AssistantEnabled: z.boolean(),
+  AssistantGroup: z.string().trim().min(1).max(64),
   AssistantModel: z.string().trim().min(1).max(128),
   AssistantReasoningEffort: z.enum(ASSISTANT_REASONING_EFFORTS),
   AssistantAgentLoopEnabled: z.boolean(),

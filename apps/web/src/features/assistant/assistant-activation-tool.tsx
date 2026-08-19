@@ -424,7 +424,7 @@ export function AssistantActivationTool(props: {
           />
           <p className='text-muted-foreground text-xs leading-5'>
             {t(
-              'You can submit for administrator review without an AI recommendation. The recommendation only gives the reviewer more context; it never decides access.'
+              'You can submit without an AI recommendation. The automatic review agent handles clear requests; uncertain cases remain available for human fallback.'
             )}
           </p>
           <Button

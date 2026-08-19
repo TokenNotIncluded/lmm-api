@@ -530,42 +530,12 @@ func assistantConversationHasServiceScopeAnchor(conversation []assistantOpenAIMe
 	return false
 }
 
-// assistantOutOfScopeRequest is a conservative product boundary for the
-// built-in service guide. It blocks generic writing/research requests before
-// they reach the configured model, while preserving short greetings and any
-// request tied to the site's account, API, model, reward, support, or setup
-// surfaces. This is intentionally deterministic so an unrelated long paste
-// cannot consume assistant budget or enter a reward/recommendation workflow.
+// assistantOutOfScopeRequest is retained as a compatibility seam for older
+// callers. General technical and research requests are now allowed through the
+// assistant; security and secret boundaries are enforced by their dedicated
+// checks instead of a broad topic classifier.
 func assistantOutOfScopeRequest(message string, conversation []assistantOpenAIMessage) bool {
-	text := strings.ToLower(strings.TrimSpace(message))
-	if text == "" || assistantLooksLikeGreeting(text) {
-		return false
-	}
-	if model.ClassifyAssistantIntent(text) != model.AssistantIntentOther {
-		return false
-	}
-	genericTask := assistantTextContainsAny(text, assistantGenericTaskTerms...)
-	if assistantHasServiceScopeAnchor(text) || assistantConversationHasServiceScopeAnchor(conversation) {
-		prefix := text
-		if runes := []rune(prefix); len(runes) > 160 {
-			prefix = string(runes[:160])
-		}
-		requestLead := prefix
-		if cut := strings.IndexAny(requestLead, ":：\n。！？!?；;"); cut >= 0 {
-			requestLead = requestLead[:cut]
-		}
-		// A quoted/pasted document may contain incidental site words. A generic
-		// task at the start still remains outside the service guide unless the
-		// user's own request names a site capability in that prefix.
-		if assistantTextContainsAny(prefix, assistantGenericTaskTerms...) && !assistantHasServiceScopeAnchor(requestLead) {
-			return true
-		}
-		return false
-	}
-	// Keep the boundary conservative for short, ambiguous follow-ups. A
-	// generic writing/research verb or a long unscoped paste is enough to stop
-	// the model; a short unknown phrase can still receive a concise guide reply.
-	return genericTask || utf8.RuneCountInString(text) > 240
+	return false
 }
 
 func classifyAssistantRecommendationAction(message string) assistantRecommendationAction {

@@ -27,6 +27,11 @@ func TestValidateOptionValueRejectsUnavailableAssistantReviewModel(t *testing.T)
 	require.Error(t, validateOptionValue("AssistantReviewModel", "review-missing"))
 }
 
+func TestValidateOptionValueAcceptsOnlyExistingAssistantGroup(t *testing.T) {
+	assert.NoError(t, validateOptionValue(setting.AssistantGroupOptionKey, "default"))
+	assert.Error(t, validateOptionValue(setting.AssistantGroupOptionKey, "missing-group"))
+}
+
 func TestValidateIPAccessRoutingOptions(t *testing.T) {
 	require.NoError(t, validateOptionValue(setting.IPAccessRoutingRulesOptionKey, setting.DefaultIPAccessRoutingRules))
 	require.NoError(t, validateOptionValue(setting.IPAccessRoutingRulesOptionKey, "domain(example.com) -> direct"))

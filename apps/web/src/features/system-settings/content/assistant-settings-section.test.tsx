@@ -77,6 +77,7 @@ await i18n.use(initReactI18next).init({
 
 const baseValues = {
   AssistantEnabled: true,
+  AssistantGroup: 'default',
   AssistantModel: 'deepseek-v4-flash',
   AssistantReasoningEffort: 'auto',
   AssistantAgentLoopEnabled: true,

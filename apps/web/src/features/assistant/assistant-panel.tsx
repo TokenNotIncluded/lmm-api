@@ -2096,7 +2096,7 @@ export function AssistantPanel(props: {
                               id: nanoid(),
                               role: 'assistant',
                               content: t(
-                                'Your AI recommendation was sent to an administrator. L1 remains locked until the administrator approves it.'
+                                'Your AI recommendation was submitted to the automatic review agent. L1 remains locked until automatic review approves it or human fallback completes.'
                               ),
                             },
                           ])

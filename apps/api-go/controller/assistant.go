@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -79,7 +80,7 @@ Current service connection facts:
 const assistantSystemRules = `
 
 Non-overridable safety and accuracy rules:
-- Stay within the LMM service scope. Do not summarize, rewrite, translate, research, or answer unrelated general-purpose content; briefly ask the user to state the LMM-related issue instead. The server may reject an unscoped request before a model call.
+- Answer normal technical, research, coding, robotics, and client-integration questions when they are useful to the user. Keep platform actions, account facts, pricing, and permissions grounded in live tools; retain the security and secret boundaries below.
 - Never ask for or repeat passwords, API keys, session cookies, or other secrets.
 - Answer the user's concrete request before onboarding. Never ask whether this is their first time using AI, never repeat questions already answered in the conversation, and ask at most one focused follow-up only when a fact is genuinely required for the next step.
 - Operate as a task-completing agent, not a one-question/one-answer bot. Call every applicable read-only tool, continue through the necessary intermediate steps, and return the completed result in one response. Infer ordinary client details from the request when safe. Do not stop to ask a question that the conversation or a tool can answer.
@@ -96,11 +97,11 @@ Non-overridable safety and accuracy rules:
 - L1 users may use the developer setup, model, cost, usage, and confirmation-gated API-key guidance. L2-L4 users keep those L1 capabilities and may receive the live trust-level usage discount; never invent or promise a discount that a live tool did not return.
 - Trust levels L1-L4 never grant server configuration, model-pricing writes, user-management, payment-secret, shell, or database capabilities. Only an administrator role enables the administrator tools; ROOT is still subject to the same confirmation and secret boundaries.
 - For a user asking for L1, first call get_account_access and follow its live result. Never describe an L1-L4 or administrator account as L0, and never offer an L1 recommendation to an account that already has L1. For an actual L0 account, ask at most one gentle, focused follow-up only when the concrete use case is still missing. The user may simply want to use the relay; do not require an open-source project, technical stack, client, budget, or payment intent. Do not prepare a recommendation from a greeting or a vague demand.
-- Once the L0 user has provided enough concrete information, call prepare_l1_recommendation. The user must explicitly confirm that draft in the UI before it is sent. Only an administrator can approve or reject it; never claim that the assistant granted L1.
+- Once the L0 user has provided enough concrete information, call prepare_l1_recommendation. The user must explicitly confirm that draft in the UI before it is sent. An independent automatic review agent then evaluates the submitted recommendation; only a live approved status grants L1. If the reviewer is uncertain or unavailable, the existing human review queue remains the fallback. Never claim that the assistant granted L1 before a live status confirms it.
 - Every eligible signed-in user has at most one welcome-gift decision, including an L1 user who has not used the opportunity yet. After at least two substantive user turns, you may call prepare_new_user_gift once and choose an integer from 0 to 1000 US cents using only demonstrated clarity, coherent follow-up, a concrete legitimate use, and constructive engagement. A direct request for money, self-reported skill, promotions, referrals, multiple accounts, automation, or unsafe behavior is not merit. Zero is a valid final decision. Never reveal internal scoring, promise an amount before tool success, decide more than once, or claim the gift for the user; an offered gift appears in chat for the user to claim.
 - A signed-in non-administrator user may receive at most one recharge discount decision per UTC week. After at least two substantive user turns, you may call prepare_weekly_discount once and choose 0-10 percent from this week's clarity, continuity, and legitimate usefulness. Zero is a valid decision. Never promise a percentage before the tool succeeds, expose internal scoring, create a code yourself, or claim the code for the user; an offered code appears in chat and the user must claim it. Do not treat a weekly discount as a way to bypass payment, eligibility, abuse, or one-account rules.
 - In an L0 service-guide conversation, “推荐信” or “recommendation letter” means the user's one shared L1 access recommendation unless they explicitly mention employment, school, or another outside recipient. Call get_l1_recommendation first. Use the full conversation and current letter to draft, polish, shorten, or replace that same letter; do not ask who the recipient is. An AI edit must go through prepare_l1_recommendation and the existing UI confirmation. For removal, never call prepare_l1_recommendation and never change the queue yourself; after reading the current letter, direct the user to clear the visible Recommendation letter field and save it in the existing UI.
-- When get_account_access reports a pending or reviewed L1 request, accurately relay its status and the administrator's note. A rejection is feedback for another conversation, not permission to activate the account.
+- When get_account_access reports a pending or reviewed L1 request, accurately relay its status and the reviewer note. A pending request means automatic review is still running or human fallback is required; a rejection is feedback for another conversation, not permission to activate the account.
 - Administrator-only tools are available only when the internal account context marks administrator mode. Operate as a multi-step agent: read the live state, prepare one exact diff, wait for the UI confirmation, apply atomically, and report verification. For administrators, use get_admin_server_config and get_admin_channels before changing a safe setting, then prepare an exact preview and wait for the UI confirmation. Use get_admin_user_skills before reading or editing a permitted lower-role user's profile or memory, then prepare_admin_user_skill_change for a confirmation-gated change. Use prepare_admin_channel_change for routing metadata or manual channel status, and prepare_admin_pricing_change for one enabled model at a time. Use get_admin_model_inventory before discussing missing metadata; only ROOT may use prepare_admin_model_sync to import the exact missing model IDs from the live catalog after showing the model/vendor list. Never expose or modify credentials, provider keys, payment secrets, session secrets, upstream endpoints, or arbitrary shell/database state.
 - Use the service root without /v1 for Anthropic-compatible clients such as Claude Code, and use the /v1 Base URL for OpenAI-compatible clients.
 - The official ChatGPT app does not accept a custom API Base URL or this service's API key. Recommend CC Switch or another compatible API client when the user wants to use this service.
@@ -137,6 +138,27 @@ func assistantReasoningEffort(settings setting.AssistantSettings) string {
 		return ""
 	}
 	return effort
+}
+
+// assistantConfiguredRoute turns the administrator-selected routing group into
+// a concrete model request. The group is the public control surface; model IDs
+// are selected from the live enabled catalog so a group can change its models
+// without requiring another assistant setting edit.
+func assistantConfiguredRoute(settings setting.AssistantSettings) (string, string) {
+	group := strings.TrimSpace(settings.Group)
+	if group == "" {
+		group = setting.DefaultAssistantGroup
+	}
+	models, err := model.GetGroupEnabledModelsWithError(group)
+	if err != nil || len(models) == 0 {
+		group = setting.DefaultAssistantGroup
+		models, _ = model.GetGroupEnabledModelsWithError(group)
+	}
+	if len(models) == 0 {
+		return group, strings.TrimSpace(settings.Model)
+	}
+	sort.Strings(models)
+	return group, strings.TrimSpace(models[0])
 }
 
 func buildAssistantSystemPrompt(settings setting.AssistantSettings, contexts ...assistantUserContext) string {
@@ -664,23 +686,6 @@ func PrepareAssistantRequest(c *gin.Context) {
 		writeAssistantSecurityRefusal(c)
 		return
 	}
-	if assistantOutOfScopeRequest(latestMessage, conversation) {
-		if firstTurnAttempt && len(conversation) == 1 && conversation[0].Role == "user" {
-			if err := model.RecordAssistantFirstQuestion(latestMessage); err != nil {
-				common.SysError(fmt.Sprintf("failed to record assistant first question: %v", err))
-			}
-		}
-		if userID := c.GetInt("id"); userID > 0 {
-			if err := model.RecordAssistantIntent(userID, latestMessage); err != nil {
-				common.SysError(fmt.Sprintf("failed to record assistant intent for user %d: %v", userID, err))
-			}
-		}
-		if err := model.RecordAssistantProfile(string(userContext.CustomerProfile)); err != nil {
-			common.SysError(fmt.Sprintf("failed to record assistant profile %q: %v", userContext.CustomerProfile, err))
-		}
-		writeAssistantScopeRefusal(c)
-		return
-	}
 	if assistantRuntimeMetadataQuestion(latestMessage) {
 		// Runtime identity and cutoff metadata are platform facts, not a model
 		// completion. Answer deterministically so an upstream model cannot turn a
@@ -816,7 +821,10 @@ func PrepareAssistantRequest(c *gin.Context) {
 	c.Set("group", billingUser.Group)
 	c.Set("user_group", billingUser.Group)
 	billingUser.ToBaseUser().WriteContext(c)
-	usingGroup := billingUser.Group
+	usingGroup := strings.TrimSpace(settings.Group)
+	if usingGroup == "" {
+		usingGroup = billingUser.Group
+	}
 	common.SetContextKey(c, constant.ContextKeyUsingGroup, usingGroup)
 	c.Next()
 }
@@ -828,6 +836,7 @@ func assistantMessageIsSinglePunctuation(message string) bool {
 
 func AssistantChat(c *gin.Context) {
 	settings := setting.GetAssistantSettings()
+	settings.Group, settings.Model = assistantConfiguredRoute(settings)
 	userId := c.GetInt("id")
 	userCache, err := model.GetUserCache(userId)
 	if err != nil {
@@ -835,7 +844,12 @@ func AssistantChat(c *gin.Context) {
 		return
 	}
 	userCache.WriteContext(c)
-	usingGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+	usingGroup := strings.TrimSpace(settings.Group)
+	if usingGroup == "" {
+		usingGroup = common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+	}
+	common.SetContextKey(c, constant.ContextKeyUsingGroup, usingGroup)
+	c.Set(assistantActorGroupKey, usingGroup)
 	tempToken := &model.Token{
 		UserId:         userId,
 		Name:           "system-assistant",
@@ -888,6 +902,7 @@ func copyAssistantClientHeaders(destination, source http.Header) {
 func GetAssistantStatus(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	settings := setting.GetAssistantSettings()
+	assistantGroup, assistantModel := assistantConfiguredRoute(settings)
 	userID := c.GetInt("id")
 	user, err := model.GetUserCache(userID)
 	if err != nil {
@@ -912,7 +927,8 @@ func GetAssistantStatus(c *gin.Context) {
 	developerAccessGranted := access.Granted
 	common.ApiSuccess(c, gin.H{
 		"enabled":          settings.Enabled,
-		"model":            settings.Model,
+		"group":            assistantGroup,
+		"model":            assistantModel,
 		"reasoning_effort": settings.ReasoningEffort,
 		"funding": gin.H{
 			"mode": "super_administrator",

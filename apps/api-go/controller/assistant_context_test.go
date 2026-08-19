@@ -134,7 +134,7 @@ func TestAssistantOrdinaryTurnSkipsPricingSnapshotClone(t *testing.T) {
 	assert.Zero(t, called)
 }
 
-func TestAssistantOutOfScopeRequestStopsGenericWritingBeforeModelCall(t *testing.T) {
+func TestAssistantOutOfScopeRequestAllowsGeneralTechnicalWork(t *testing.T) {
 	tests := []struct {
 		name         string
 		message      string
@@ -144,22 +144,22 @@ func TestAssistantOutOfScopeRequestStopsGenericWritingBeforeModelCall(t *testing
 		{
 			name:    "research summary",
 			message: "帮我总结简化下面这篇关于 OFDR 激光相位误差的研究论文",
-			want:    true,
+			want:    false,
 		},
 		{
 			name:    "long pasted research document",
 			message: "帮我总结简化一下下面的内容：V17 建立了相位恢复模型，V22 进行了 Monte Carlo 验证。",
-			want:    true,
+			want:    false,
 		},
 		{
 			name:    "unrelated creative writing",
 			message: "帮我写一首关于春天的诗",
-			want:    true,
+			want:    false,
 		},
 		{
 			name:    "unrelated code generation",
 			message: "帮我写一个 Python 脚本处理本地文件",
-			want:    true,
+			want:    false,
 		},
 		{
 			name:    "service script remains in scope",

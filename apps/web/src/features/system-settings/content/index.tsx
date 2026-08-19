@@ -42,6 +42,7 @@ const defaultContentSettings: ContentSettings = {
   DataExportInterval: 5,
   Chats: '[]',
   AssistantEnabled: true,
+  AssistantGroup: 'default',
   AssistantModel: 'deepseek-v4-flash',
   AssistantReasoningEffort: 'auto',
   AssistantAgentLoopEnabled: true,
