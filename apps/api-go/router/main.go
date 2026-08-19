@@ -25,6 +25,7 @@ func SetRouter(router *gin.Engine) error {
 
 	SetApiRouter(router)
 	SetOpenSourceBountyMCPRouter(router)
+	SetDrawingMCPRouter(router)
 	SetDashboardRouter(router)
 	SetRelayRouter(router)
 	SetVideoRouter(router)
