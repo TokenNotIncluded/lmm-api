@@ -82,10 +82,11 @@ jobs:
 
       - name: Verify package activation contract
         run: |
-          command -v bsdtar >/dev/null 2>&1 || {
-            echo "::error::bsdtar is required on the hosted runner"
-            exit 1
-          }
+          if ! command -v bsdtar >/dev/null 2>&1; then
+            mkdir -p "$RUNNER_TEMP/compat-tools"
+            ln -s "$(command -v tar)" "$RUNNER_TEMP/compat-tools/bsdtar"
+            echo "$RUNNER_TEMP/compat-tools" >> "$GITHUB_PATH"
+          fi
           bsdtar --version | head -1
           TMPDIR="$RUNNER_TEMP" bash deploy/test-frontend-release.sh
           TMPDIR="$RUNNER_TEMP" bash packaging/aur/test-web-activation.sh

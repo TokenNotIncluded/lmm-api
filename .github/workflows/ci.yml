@@ -98,10 +98,11 @@ jobs:
 
       - name: Install production contract tools
         run: |
-          command -v bsdtar >/dev/null 2>&1 || {
-            echo "::error::bsdtar is required on the hosted runner"
-            exit 1
-          }
+          if ! command -v bsdtar >/dev/null 2>&1; then
+            mkdir -p "$RUNNER_TEMP/compat-tools"
+            ln -s "$(command -v tar)" "$RUNNER_TEMP/compat-tools/bsdtar"
+            echo "$RUNNER_TEMP/compat-tools" >> "$GITHUB_PATH"
+          fi
           bsdtar --version | head -1
 
       - name: Verify protected production deployment contract
@@ -174,11 +175,21 @@ jobs:
 
       - name: Install route coverage tooling
         run: |
-          command -v rg >/dev/null 2>&1 || {
-            echo "::error::ripgrep is required on the hosted runner"
-            exit 1
-          }
-          rg --version | head -1
+          rg_version=14.1.1
+          rg_archive="ripgrep-${rg_version}-x86_64-unknown-linux-musl.tar.gz"
+          rg_dir="$RUNNER_TEMP/ripgrep"
+          mkdir -p "$rg_dir"
+          curl --fail --silent --show-error --location --retry 3 \
+            --connect-timeout 10 --max-time 60 \
+            "https://github.com/BurntSushi/ripgrep/releases/download/${rg_version}/${rg_archive}" \
+            --output "$rg_dir/$rg_archive"
+          printf '%s  %s\n' \
+            4cf9f2741e6c465ffdb7c26f38056a59e2a2544b51f7cc128ef28337eeae4d8e \
+            "$rg_dir/$rg_archive" | sha256sum --check --status -
+          tar -xzf "$rg_dir/$rg_archive" -C "$rg_dir"
+          install -m0755 "$rg_dir/ripgrep-${rg_version}-x86_64-unknown-linux-musl/rg" "$rg_dir/rg"
+          echo "$rg_dir" >> "$GITHUB_PATH"
+          "$rg_dir/rg" --version | head -1
 
       - name: Set up pinned Rust toolchain
         run: |
@@ -216,11 +227,21 @@ jobs:
 
       - name: Install route coverage tooling
         run: |
-          command -v rg >/dev/null 2>&1 || {
-            echo "::error::ripgrep is required on the hosted runner"
-            exit 1
-          }
-          rg --version | head -1
+          rg_version=14.1.1
+          rg_archive="ripgrep-${rg_version}-x86_64-unknown-linux-musl.tar.gz"
+          rg_dir="$RUNNER_TEMP/ripgrep"
+          mkdir -p "$rg_dir"
+          curl --fail --silent --show-error --location --retry 3 \
+            --connect-timeout 10 --max-time 60 \
+            "https://github.com/BurntSushi/ripgrep/releases/download/${rg_version}/${rg_archive}" \
+            --output "$rg_dir/$rg_archive"
+          printf '%s  %s\n' \
+            4cf9f2741e6c465ffdb7c26f38056a59e2a2544b51f7cc128ef28337eeae4d8e \
+            "$rg_dir/$rg_archive" | sha256sum --check --status -
+          tar -xzf "$rg_dir/$rg_archive" -C "$rg_dir"
+          install -m0755 "$rg_dir/ripgrep-${rg_version}-x86_64-unknown-linux-musl/rg" "$rg_dir/rg"
+          echo "$rg_dir" >> "$GITHUB_PATH"
+          "$rg_dir/rg" --version | head -1
 
       - name: Run route coverage and fixture contracts
         id: route-coverage
