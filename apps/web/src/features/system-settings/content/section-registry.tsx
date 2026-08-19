@@ -25,7 +25,6 @@ import { ChatSettingsSection } from './chat-settings-section'
 import { DashboardSection } from './dashboard-section'
 import { DrawingSettingsSection } from './drawing-settings-section'
 import { FAQSection } from './faq-section'
-import { ReleaseNotesSection } from './release-notes-section'
 import { UptimeKumaSection } from './uptime-kuma-section'
 
 /**
@@ -64,11 +63,6 @@ const CONTENT_SECTIONS = [
         data={settings['console_setting.announcements']}
       />
     ),
-  },
-  {
-    id: 'release-notes',
-    titleKey: 'Version updates',
-    build: () => <ReleaseNotesSection />,
   },
   {
     id: 'api-info',
