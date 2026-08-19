@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery } from '@tanstack/react-query'
-import { FileText, Plus, Trash2 } from 'lucide-react'
+import { FileText, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
@@ -360,40 +360,35 @@ export function AssistantSettingsSection(props: {
         left.localeCompare(right)
       )
     },
-    enabled: Boolean(selectedGroup),
+    enabled: false,
     staleTime: 60_000,
     retry: false,
   })
   const assistantModels = assistantModelsQuery.data ?? EMPTY_ASSISTANT_MODEL_IDS
+  const assistantModelListLoaded = assistantModelsQuery.data !== undefined
   const assistantModelOptions = [
     ...new Set([...assistantModels, selectedModel].filter(Boolean)),
   ]
   const selectedModelIsUnavailable =
     Boolean(selectedModel) &&
-    !assistantModelsQuery.isLoading &&
+    assistantModelListLoaded &&
     !assistantModels.includes(selectedModel)
 
-  useEffect(() => {
-    if (
-      assistantModels.length === 0 ||
-      assistantModels.includes(selectedModel)
-    ) {
-      return
-    }
-    form.setValue('AssistantModel', assistantModels[0], {
-      shouldDirty: true,
-      shouldValidate: true,
-    })
-  }, [assistantModels, form, selectedModel])
   let modelDescription = t(
-    'The assistant sends requests with this exact enabled model ID and the selected routing group.'
+    'Choose a group, then click Get model list to load its enabled model IDs.'
   )
   if (assistantModelsQuery.isError) {
     modelDescription = t(
       'Unable to enumerate model IDs for this group. Check the live model catalog and try again.'
     )
-  } else if (assistantModels.length === 0 && !assistantModelsQuery.isLoading) {
+  } else if (assistantModelsQuery.isFetching) {
+    modelDescription = t('Loading model list...')
+  } else if (assistantModelListLoaded && assistantModels.length === 0) {
     modelDescription = t('This group has no enabled model IDs.')
+  } else if (assistantModelListLoaded) {
+    modelDescription = t(
+      'The assistant sends requests with this exact enabled model ID and the selected routing group.'
+    )
   }
   const searchProviderDescription: Record<AssistantSearchProvider, string> = {
     none: t('Disable assistant web search.'),
@@ -456,37 +451,63 @@ export function AssistantSettingsSection(props: {
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>{t('Routing group')}</FormLabel>
-                  <Select
-                    value={field.value}
-                    onValueChange={(value) => {
-                      field.onChange(value)
-                      form.setValue('AssistantModel', '', {
-                        shouldDirty: true,
-                        shouldValidate: true,
-                      })
-                    }}
-                  >
-                    <FormControl>
-                      <SelectTrigger
-                        className='w-full'
-                        disabled={!enabled || groupsQuery.isLoading}
-                      >
-                        <SelectValue placeholder={t('Select a group')} />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent alignItemWithTrigger={false}>
-                      <SelectGroup>
-                        {assistantGroups.map((group) => (
-                          <SelectItem key={group} value={group}>
-                            {group}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
+                  <div className='flex flex-col gap-2 sm:flex-row sm:items-center'>
+                    <Select
+                      value={field.value}
+                      onValueChange={(value) => {
+                        field.onChange(value)
+                        form.setValue('AssistantModel', '', {
+                          shouldDirty: true,
+                          shouldValidate: true,
+                        })
+                      }}
+                    >
+                      <FormControl>
+                        <SelectTrigger
+                          className='w-full sm:flex-1'
+                          disabled={!enabled || groupsQuery.isLoading}
+                        >
+                          <SelectValue placeholder={t('Select a group')} />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent alignItemWithTrigger={false}>
+                        <SelectGroup>
+                          {assistantGroups.map((group) => (
+                            <SelectItem key={group} value={group}>
+                              {group}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      type='button'
+                      variant='outline'
+                      className='w-full sm:w-auto'
+                      onClick={() => {
+                        void assistantModelsQuery.refetch()
+                      }}
+                      disabled={
+                        !enabled ||
+                        !selectedGroup ||
+                        assistantModelsQuery.isFetching
+                      }
+                      data-testid='assistant-get-model-list'
+                    >
+                      <RefreshCw
+                        data-icon='inline-start'
+                        className={
+                          assistantModelsQuery.isFetching
+                            ? 'animate-spin'
+                            : undefined
+                        }
+                      />
+                      <span>{t('Get model list')}</span>
+                    </Button>
+                  </div>
                   <FormDescription>
                     {t(
-                      'Select the routing group used by the assistant. Choose the exact model ID in the field beside it.'
+                      'Select the routing group used by the assistant, then get its enabled model IDs.'
                     )}
                   </FormDescription>
                   <FormMessage />
@@ -506,7 +527,8 @@ export function AssistantSettingsSection(props: {
                         className='w-full'
                         disabled={
                           !enabled ||
-                          assistantModelsQuery.isLoading ||
+                          !assistantModelListLoaded ||
+                          assistantModelsQuery.isFetching ||
                           assistantModelsQuery.isError ||
                           assistantModels.length === 0
                         }

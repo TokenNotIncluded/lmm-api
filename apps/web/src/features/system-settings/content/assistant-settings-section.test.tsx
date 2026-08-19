@@ -58,6 +58,7 @@ const { QueryClient, QueryClientProvider } =
   await import('@tanstack/react-query')
 const { createInstance } = await import('i18next')
 const { I18nextProvider, initReactI18next } = await import('react-i18next')
+const { api } = await import('@/lib/api')
 const { AssistantSettingsSection } =
   await import('./assistant-settings-section')
 const { assistantSettingsSchema } = await import('./assistant-settings-schema')
@@ -149,6 +150,10 @@ async function renderSettings(
   }
 }
 
+async function flushEffects() {
+  await new Promise((resolve) => setTimeout(resolve, 20))
+}
+
 after(() => domWindow.close())
 
 describe('assistant search provider settings', () => {
@@ -231,5 +236,59 @@ describe('assistant search provider settings', () => {
     )
     assert.match(container.textContent ?? '', /official Exa Search API/)
     await cleanup()
+  })
+
+  test('loads model IDs only after the administrator requests the list', async () => {
+    const originalGet = api.get
+    const modelRequests: string[] = []
+    api.get = (async (url: string) => {
+      if (url === '/api/group/') {
+        return { data: { data: ['default', 'premium'] } }
+      }
+      if (url === '/api/assistant/models') {
+        modelRequests.push(url)
+        return { data: { data: ['model-a', 'model-b'] } }
+      }
+      throw new Error(`unexpected GET ${url}`)
+    }) as typeof api.get
+
+    const rendered = await renderSettings('none')
+    try {
+      await act(flushEffects)
+      assert.equal(modelRequests.length, 0)
+
+      const getModelListButton =
+        rendered.container.querySelector<HTMLButtonElement>(
+          '[data-testid="assistant-get-model-list"]'
+        )
+      assert.ok(getModelListButton)
+      assert.equal(getModelListButton.disabled, false)
+
+      await act(async () => {
+        getModelListButton.click()
+        await flushEffects()
+      })
+
+      assert.deepEqual(modelRequests, ['/api/assistant/models'])
+      const modelTrigger =
+        rendered.container.querySelectorAll<HTMLButtonElement>(
+          'button[role="combobox"]'
+        )[1]
+      assert.ok(modelTrigger)
+      assert.equal(modelTrigger.disabled, false)
+      assert.match(modelTrigger.textContent ?? '', /deepseek-v4-flash/)
+
+      await act(async () => {
+        modelTrigger.click()
+        await flushEffects()
+      })
+      const modelOption = [
+        ...document.querySelectorAll('[role="option"]'),
+      ].find((option) => option.textContent?.includes('model-b'))
+      assert.ok(modelOption)
+    } finally {
+      api.get = originalGet
+      await rendered.cleanup()
+    }
   })
 })

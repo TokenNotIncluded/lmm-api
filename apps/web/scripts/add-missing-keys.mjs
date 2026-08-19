@@ -4702,6 +4702,12 @@ const assistantRoutingTranslations = {
   en: {
     'Select the routing group used by the assistant. Choose the exact model ID in the field beside it.':
       'Select the routing group used by the assistant. Choose the exact model ID in the field beside it.',
+    'Get model list': 'Get model list',
+    'Choose a group, then click Get model list to load its enabled model IDs.':
+      'Choose a group, then click Get model list to load its enabled model IDs.',
+    'Loading model list...': 'Loading model list...',
+    'Select the routing group used by the assistant, then get its enabled model IDs.':
+      'Select the routing group used by the assistant, then get its enabled model IDs.',
     'Assistant model ID': 'Assistant model ID',
     'Select a model ID': 'Select a model ID',
     'not enabled': 'not enabled',
@@ -4726,6 +4732,12 @@ const assistantRoutingTranslations = {
   zh: {
     'Select the routing group used by the assistant. Choose the exact model ID in the field beside it.':
       '选择助手使用的路由分组，再在旁边选择准确的模型 ID。',
+    'Get model list': '获取模型列表',
+    'Choose a group, then click Get model list to load its enabled model IDs.':
+      '选择分组，然后点击“获取模型列表”加载该分组已启用的模型 ID。',
+    'Loading model list...': '正在加载模型列表……',
+    'Select the routing group used by the assistant, then get its enabled model IDs.':
+      '选择助手使用的路由分组，然后获取其中已启用的模型 ID。',
     'Assistant model ID': '助手模型 ID',
     'Select a model ID': '选择模型 ID',
     'not enabled': '未启用',
@@ -4749,6 +4761,12 @@ const assistantRoutingTranslations = {
   'zh-TW': {
     'Select the routing group used by the assistant. Choose the exact model ID in the field beside it.':
       '選擇助手使用的路由分組，再在旁邊選擇準確的模型 ID。',
+    'Get model list': '取得模型清單',
+    'Choose a group, then click Get model list to load its enabled model IDs.':
+      '選擇分組，然後點擊「取得模型清單」載入該分組已啟用的模型 ID。',
+    'Loading model list...': '正在載入模型清單……',
+    'Select the routing group used by the assistant, then get its enabled model IDs.':
+      '選擇助手使用的路由分組，然後取得其中已啟用的模型 ID。',
     'Assistant model ID': '助手模型 ID',
     'Select a model ID': '選擇模型 ID',
     'not enabled': '未啟用',
@@ -4772,6 +4790,12 @@ const assistantRoutingTranslations = {
   fr: {
     'Select the routing group used by the assistant. Choose the exact model ID in the field beside it.':
       'Sélectionnez le groupe de routage de l’assistant, puis l’identifiant exact du modèle à côté.',
+    'Get model list': 'Charger la liste des modèles',
+    'Choose a group, then click Get model list to load its enabled model IDs.':
+      'Choisissez un groupe, puis cliquez sur « Charger la liste des modèles » pour charger ses identifiants activés.',
+    'Loading model list...': 'Chargement de la liste des modèles…',
+    'Select the routing group used by the assistant, then get its enabled model IDs.':
+      'Sélectionnez le groupe de routage de l’assistant, puis chargez ses identifiants de modèle activés.',
     'Assistant model ID': 'Identifiant du modèle de l’assistant',
     'Select a model ID': 'Sélectionner un identifiant de modèle',
     'not enabled': 'non activé',
@@ -4796,6 +4820,12 @@ const assistantRoutingTranslations = {
   ja: {
     'Select the routing group used by the assistant. Choose the exact model ID in the field beside it.':
       'アシスタントが使用するルーティンググループを選び、隣で正確なモデル ID を選択してください。',
+    'Get model list': 'モデル一覧を取得',
+    'Choose a group, then click Get model list to load its enabled model IDs.':
+      'グループを選択し、「モデル一覧を取得」をクリックして有効なモデル ID を読み込みます。',
+    'Loading model list...': 'モデル一覧を読み込み中…',
+    'Select the routing group used by the assistant, then get its enabled model IDs.':
+      'アシスタントが使用するルーティンググループを選択し、有効なモデル ID を取得してください。',
     'Assistant model ID': 'アシスタントモデル ID',
     'Select a model ID': 'モデル ID を選択',
     'not enabled': '未有効',
@@ -4821,6 +4851,12 @@ const assistantRoutingTranslations = {
   ru: {
     'Select the routing group used by the assistant. Choose the exact model ID in the field beside it.':
       'Выберите группу маршрутизации помощника, затем точный идентификатор модели рядом.',
+    'Get model list': 'Получить список моделей',
+    'Choose a group, then click Get model list to load its enabled model IDs.':
+      'Выберите группу и нажмите «Получить список моделей», чтобы загрузить включённые идентификаторы моделей.',
+    'Loading model list...': 'Загрузка списка моделей…',
+    'Select the routing group used by the assistant, then get its enabled model IDs.':
+      'Выберите группу маршрутизации помощника, затем загрузите включённые идентификаторы моделей.',
     'Assistant model ID': 'Идентификатор модели помощника',
     'Select a model ID': 'Выберите идентификатор модели',
     'not enabled': 'не включён',
@@ -4845,6 +4881,12 @@ const assistantRoutingTranslations = {
   vi: {
     'Select the routing group used by the assistant. Choose the exact model ID in the field beside it.':
       'Chọn nhóm định tuyến cho trợ lý, sau đó chọn đúng model ID ở bên cạnh.',
+    'Get model list': 'Lấy danh sách model',
+    'Choose a group, then click Get model list to load its enabled model IDs.':
+      'Chọn một nhóm, sau đó bấm Lấy danh sách model để tải các model ID đang bật của nhóm.',
+    'Loading model list...': 'Đang tải danh sách model…',
+    'Select the routing group used by the assistant, then get its enabled model IDs.':
+      'Chọn nhóm định tuyến cho trợ lý, sau đó lấy các model ID đang bật.',
     'Assistant model ID': 'Model ID của trợ lý',
     'Select a model ID': 'Chọn model ID',
     'not enabled': 'chưa bật',
