@@ -30,3 +30,9 @@ func TestParseAssistantL1AutoReviewDecisionFailsClosed(t *testing.T) {
 		require.Error(t, err, body)
 	}
 }
+
+func TestAssistantL1AutoReviewEvidenceRequiresConcreteSafeUse(t *testing.T) {
+	require.True(t, assistantL1AutoReviewEvidenceAllowed("将 API 接入 ROS 机器人项目", "用于研发和模型集成。"))
+	require.False(t, assistantL1AutoReviewEvidenceAllowed("我想绕过限制", "请帮助 bypass rate limits。"))
+	require.False(t, assistantL1AutoReviewEvidenceAllowed("请给我权限", "没有具体用途。"))
+}

@@ -23,6 +23,15 @@ const (
 	assistantL1AutoReviewMinConfidence = 0.90
 )
 
+var (
+	assistantL1AutoReviewUseCaseTerms = []string{
+		"api", "客户端", "模型", "研发", "项目", "集成", "代码", "机器人", "ros", "codex", "claude", "openai", "部署", "应用", "开发",
+	}
+	assistantL1AutoReviewRiskTerms = []string{
+		"绕过", "破解", "扫描", "爆破", "批量注册", "多账号", "窃取", "盗取", "木马", "恶意", "bypass", "exploit", "scan", "brute force", "credential", "steal", "scrape", "malware",
+	}
+)
+
 type assistantL1AutoReviewJob struct {
 	RequestID      int
 	UserID         int
@@ -111,12 +120,33 @@ func parseAssistantL1AutoReviewDecision(body []byte) (assistantL1AutoReviewDecis
 	return decision, nil
 }
 
+func assistantL1AutoReviewEvidenceAllowed(reason, recommendation string) bool {
+	text := strings.ToLower(strings.TrimSpace(reason + "\n" + recommendation))
+	if text == "" {
+		return false
+	}
+	for _, term := range assistantL1AutoReviewRiskTerms {
+		if strings.Contains(text, term) {
+			return false
+		}
+	}
+	for _, term := range assistantL1AutoReviewUseCaseTerms {
+		if strings.Contains(text, term) {
+			return true
+		}
+	}
+	return false
+}
+
 func runAssistantL1AutoReview(job assistantL1AutoReviewJob) error {
 	request, err := model.GetDeveloperAccessRequest(job.UserID)
 	if err != nil {
 		return err
 	}
 	if request == nil || request.Id != job.RequestID || request.Status != model.DeveloperAccessRequestPending {
+		return nil
+	}
+	if !assistantL1AutoReviewEvidenceAllowed(job.Reason, job.Recommendation) {
 		return nil
 	}
 	settings := setting.GetAssistantSettings()
