@@ -221,6 +221,7 @@ export interface LogOtherData {
   is_system_prompt_overwritten?: boolean
   po?: string[]
   billing_source?: string
+  upstream_empty_usage?: boolean
   group?: string
   stream_status?: {
     status?: string

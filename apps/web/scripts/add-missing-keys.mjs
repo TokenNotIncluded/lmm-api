@@ -28,6 +28,9 @@ function stableStringify(obj) {
 const newKeys = {
   en: {
     Guide: 'Guide',
+    Web: 'Web',
+    'Upstream returned no usage; no quota charged':
+      'Upstream returned no usage; no quota charged',
     'View model pricing': 'View model pricing',
     'Browse open-source work': 'Browse open-source work',
     'Read the guide': 'Read the guide',
@@ -138,6 +141,8 @@ const newKeys = {
   },
   zh: {
     Guide: '接入指南',
+    Web: '前端',
+    'Upstream returned no usage; no quota charged': '上游没有返回用量，未扣费',
     'View model pricing': '查看模型价格',
     'Browse open-source work': '浏览开源任务',
     'Read the guide': '阅读接入指南',
@@ -242,6 +247,8 @@ const newKeys = {
   },
   'zh-TW': {
     Guide: '接入指南',
+    Web: '前端',
+    'Upstream returned no usage; no quota charged': '上游沒有返回用量，未扣費',
     'View model pricing': '查看模型價格',
     'Browse open-source work': '瀏覽開源任務',
     'Read the guide': '閱讀接入指南',
@@ -343,6 +350,9 @@ const newKeys = {
   },
   fr: {
     Guide: 'Guide',
+    Web: 'Web',
+    'Upstream returned no usage; no quota charged':
+      'L’amont n’a renvoyé aucun usage ; aucun quota n’a été débité',
     'View model pricing': 'Voir les tarifs des modèles',
     'Browse open-source work': 'Parcourir les projets open source',
     'Read the guide': 'Lire le guide',
@@ -451,6 +461,9 @@ const newKeys = {
   },
   ja: {
     Guide: 'ガイド',
+    Web: 'Web',
+    'Upstream returned no usage; no quota charged':
+      '上流が使用量を返さなかったため、クォータは引かれていません',
     'View model pricing': 'モデル料金を見る',
     'Browse open-source work': 'オープンソースの仕事を見る',
     'Read the guide': 'ガイドを読む',
@@ -556,6 +569,9 @@ const newKeys = {
   },
   ru: {
     Guide: 'Руководство',
+    Web: 'Веб',
+    'Upstream returned no usage; no quota charged':
+      'Провайдер не вернул данные об использовании; квота не списана',
     'View model pricing': 'Посмотреть цены моделей',
     'Browse open-source work': 'Открытые проекты',
     'Read the guide': 'Открыть руководство',
@@ -663,6 +679,9 @@ const newKeys = {
   },
   vi: {
     Guide: 'Hướng dẫn',
+    Web: 'Web',
+    'Upstream returned no usage; no quota charged':
+      'Upstream không trả về mức sử dụng; không trừ quota',
     'View model pricing': 'Xem giá mô hình',
     'Browse open-source work': 'Xem dự án mã nguồn mở',
     'Read the guide': 'Đọc hướng dẫn',

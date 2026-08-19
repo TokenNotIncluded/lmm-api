@@ -158,6 +158,13 @@ function buildTypeDetailSegments(
 
   const segments: DetailSegment[] = []
 
+  if (other.upstream_empty_usage) {
+    segments.push({
+      text: t('Upstream returned no usage; no quota charged'),
+      danger: true,
+    })
+  }
+
   const priceOpts = { digitsLarge: 4, digitsSmall: 6, abbreviate: false }
   const formatPrice = (price: number) =>
     `${formatBillingCurrencyFromUSD(price, priceOpts)}/M`

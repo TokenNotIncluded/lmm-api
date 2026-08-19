@@ -19,6 +19,9 @@ func ShouldRetryRelayError(c *gin.Context, apiErr *types.NewAPIError, retryTimes
 	if apiErr == nil || ShouldSkipRetryAfterChannelAffinityFailure(c) {
 		return false
 	}
+	if c != nil && c.Request != nil && c.Request.Context().Err() != nil {
+		return false
+	}
 	if c != nil {
 		if common.GetContextKeyString(c, constant.ContextKeyTokenSpecificChannelId) != "" {
 			return false
@@ -37,6 +40,9 @@ func ShouldRetryRelayError(c *gin.Context, apiErr *types.NewAPIError, retryTimes
 	}
 	if types.IsSkipRetryError(apiErr) {
 		return false
+	}
+	if apiErr.GetErrorCode() == types.ErrorCodeUpstreamTimeout {
+		return retryTimes > 0
 	}
 	code := apiErr.StatusCode
 	if code >= 200 && code < 300 {
