@@ -2,9 +2,18 @@
 Copyright (C) 2026 LIghtJUNction
 */
 import { useQuery } from '@tanstack/react-query'
-import { ImageIcon, ImagePlus, RefreshCw, Sparkles, X } from 'lucide-react'
+import {
+  Copy,
+  ImageIcon,
+  ImagePlus,
+  RefreshCw,
+  ServerCog,
+  Sparkles,
+  X,
+} from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 
 import { SectionPageLayout } from '@/components/layout'
 import {
@@ -14,19 +23,23 @@ import {
   AlertTitle,
 } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
+import { copyToClipboard } from '@/lib/copy-to-clipboard'
 
 import { getAssistantStatus } from '../assistant/api'
+import { rotateMcpToken } from '../open-source-bounties/api'
 import { getPricing } from '../pricing/api'
 import type { PricingModel } from '../pricing/types'
 import {
   getDrawingRequestErrorKind,
   getDrawingRequestStatus,
 } from './error-state'
+import { buildDrawingMcpConfig } from './mcp-config'
 
 type ImageResult = {
   url?: string
@@ -126,6 +139,8 @@ export function Drawing() {
   const [referenceImages, setReferenceImages] = useState<ReferenceImage[]>([])
   const [error, setError] = useState<string | null>(null)
   const [generating, setGenerating] = useState(false)
+  const [drawingMcpToken, setDrawingMcpToken] = useState('')
+  const [drawingMcpPending, setDrawingMcpPending] = useState(false)
   const referenceInputRef = useRef<HTMLInputElement>(null)
   const previewUrlsRef = useRef(new Set<string>())
 
@@ -190,6 +205,13 @@ export function Drawing() {
   const accessGranted = accessQuery.data?.developer_access_granted === true
   const hasPrompt = prompt.trim().length > 0
   const configurationReady = Boolean(selectedGroup && selectedModel)
+  const drawingMcpEndpoint =
+    typeof window === 'undefined'
+      ? '/mcp/drawing'
+      : `${window.location.origin}/mcp/drawing`
+  const drawingMcpConfig = drawingMcpToken
+    ? buildDrawingMcpConfig(drawingMcpEndpoint, drawingMcpToken)
+    : ''
 
   const sizePresets = useMemo(() => {
     const defaults = [{ value: '', label: t('Default') }]
@@ -380,6 +402,37 @@ export function Drawing() {
       )
     } finally {
       setGenerating(false)
+    }
+  }
+
+  const copyDrawingMcpConfig = async () => {
+    if (drawingMcpPending) return
+    setDrawingMcpPending(true)
+    try {
+      let token = drawingMcpToken
+      if (!token) {
+        const confirmed = window.confirm(
+          t(
+            'Generate or rotate the personal MCP token? Existing MCP agents using the old token will stop working immediately.'
+          )
+        )
+        if (!confirmed) return
+        const connection = await rotateMcpToken()
+        token = connection.token
+        setDrawingMcpToken(token)
+      }
+      const copied = await copyToClipboard(
+        buildDrawingMcpConfig(drawingMcpEndpoint, token)
+      )
+      if (copied) {
+        toast.success(t('Drawing MCP configuration copied.'))
+      } else {
+        toast.error(t('Unable to copy the drawing MCP configuration.'))
+      }
+    } catch {
+      toast.error(t('Unable to create the drawing MCP configuration.'))
+    } finally {
+      setDrawingMcpPending(false)
     }
   }
 
@@ -881,6 +934,71 @@ export function Drawing() {
               )}
             </p>
           </header>
+          {accessGranted ? (
+            <section className='bg-card mb-5 grid gap-4 border p-4 sm:p-5'>
+              <div className='flex flex-wrap items-start justify-between gap-3'>
+                <div className='flex min-w-0 items-start gap-3'>
+                  <span className='bg-primary/10 text-primary flex size-9 shrink-0 items-center justify-center rounded-lg'>
+                    <ServerCog className='size-4' aria-hidden='true' />
+                  </span>
+                  <div className='min-w-0'>
+                    <h2 className='text-sm font-semibold'>
+                      {t('Drawing MCP')}
+                    </h2>
+                    <p className='text-muted-foreground mt-1 max-w-2xl text-xs leading-5'>
+                      {t(
+                        'Connect an Agent to this drawing workbench with the dedicated MCP endpoint. Generation keeps the same group permissions and billing as this page.'
+                      )}
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  type='button'
+                  size='sm'
+                  variant='outline'
+                  onClick={() => void copyDrawingMcpConfig()}
+                  disabled={drawingMcpPending}
+                >
+                  <Copy data-icon='inline-start' />
+                  {drawingMcpPending
+                    ? t('Loading')
+                    : drawingMcpToken
+                      ? t('Copy drawing MCP config')
+                      : t('Generate token and copy config')}
+                </Button>
+              </div>
+              <div className='grid gap-2'>
+                <Label htmlFor='drawing-mcp-endpoint'>
+                  {t('MCP endpoint')}
+                </Label>
+                <Input
+                  id='drawing-mcp-endpoint'
+                  value={drawingMcpEndpoint}
+                  readOnly
+                  className='font-mono text-xs'
+                />
+              </div>
+              {drawingMcpConfig ? (
+                <div className='grid gap-2'>
+                  <Label htmlFor='drawing-mcp-config'>
+                    {t('Agent configuration')}
+                  </Label>
+                  <Textarea
+                    id='drawing-mcp-config'
+                    value={drawingMcpConfig}
+                    readOnly
+                    rows={9}
+                    className='font-mono text-xs'
+                  />
+                  <p className='text-muted-foreground text-xs leading-5'>
+                    {t(
+                      'The personal token is shown only in this session. Store the copied configuration in your Agent securely.'
+                    )}
+                  </p>
+                </div>
+              ) : null}
+            </section>
+          ) : null}
           {content}
         </div>
       </SectionPageLayout.Content>
