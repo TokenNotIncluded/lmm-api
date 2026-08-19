@@ -233,7 +233,7 @@ function BillingBreakdown(props: {
   if (isTieredExpr) {
     rows.push({
       label: t('Billing Mode'),
-      value: t('Dynamic Pricing'),
+      value: t('Tiered pricing'),
     })
     if (tieredSummary) {
       if (tieredSummary.tier.label) {
@@ -1079,7 +1079,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
 
         {/* Tiered pricing breakdown (when billing_mode is tiered_expr) */}
         {isTieredBilling && other?.expr_b64 && (
-          <DetailSection label={t('Dynamic Pricing')}>
+          <DetailSection label={t('Tiered pricing')}>
             <DynamicPricingBreakdown
               compact
               billingExpr={decodeBillingExprB64(other.expr_b64)}

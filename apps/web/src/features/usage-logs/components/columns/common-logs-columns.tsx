@@ -94,6 +94,14 @@ function getGroupRatio(other: LogOtherData | null): number | null {
   return null
 }
 
+function getDynamicProfitMultiplier(other: LogOtherData | null): number | null {
+  const multiplier = other?.dynamic_pricing
+  if (multiplier == null || !Number.isFinite(multiplier) || multiplier <= 0) {
+    return null
+  }
+  return multiplier
+}
+
 function buildDetailSegments(
   log: UsageLog,
   other: LogOtherData | null,
@@ -209,7 +217,7 @@ function buildTypeDetailSegments(
       }
     } else {
       segments.push({
-        text: `${t('Dynamic Pricing')} · ${t('No matching results')}`,
+        text: `${t('Tiered pricing')} · ${t('No matching results')}`,
         muted: true,
       })
     }
@@ -551,6 +559,7 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
       let group = log.group
       if (!group) group = other?.group || ''
       const groupRatio = getGroupRatio(other)
+      const dynamicProfitMultiplier = getDynamicProfitMultiplier(other)
 
       return (
         <div className='flex max-w-[200px] flex-col gap-0.5'>
@@ -573,8 +582,8 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
               )}
             </Tooltip>
           </TooltipProvider>
-          {(group || groupRatio != null) && (
-            <span className='block max-w-full truncate text-xs leading-none'>
+          {(group || groupRatio != null || dynamicProfitMultiplier != null) && (
+            <span className='flex max-w-full flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs leading-none'>
               {group ? (
                 <GroupBadge
                   group={group}
@@ -586,8 +595,22 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
               ) : null}
               {group && groupRatio != null ? ' ' : null}
               {groupRatio != null ? (
-                <span className='text-muted-foreground/60 relative top-px align-baseline tabular-nums'>
-                  {formatRatioCompact(groupRatio)}x
+                <span
+                  className='text-muted-foreground/60 relative top-px align-baseline tabular-nums'
+                  title={t('Cost multiplier')}
+                  aria-label={`${t('Cost multiplier')}: ${formatRatioCompact(groupRatio)}x`}
+                >
+                  {t('Cost multiplier')} {formatRatioCompact(groupRatio)}x
+                </span>
+              ) : null}
+              {dynamicProfitMultiplier != null ? (
+                <span
+                  className='text-primary/80 relative top-px align-baseline tabular-nums'
+                  title={t('Profit multiplier')}
+                  aria-label={`${t('Profit multiplier')}: ${formatRatioCompact(dynamicProfitMultiplier)}x`}
+                >
+                  {t('Profit multiplier')}{' '}
+                  {formatRatioCompact(dynamicProfitMultiplier)}x
                 </span>
               ) : null}
             </span>

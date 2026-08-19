@@ -294,6 +294,7 @@ export function DynamicPricingSection({
     }
   }
   const safetyReady = status?.safety.ready ?? false
+  const livePricingEnabled = status?.enabled === true
 
   return (
     <SettingsSection title={t('Dynamic Profit Pricing')}>
@@ -678,16 +679,28 @@ export function DynamicPricingSection({
                       ) : null}
                     </TableCell>
                     <TableCell className='font-medium'>
-                      {factorText([
-                        model.request_factor_min,
-                        model.request_factor_max,
-                      ])}
+                      {livePricingEnabled
+                        ? factorText([
+                            model.request_factor_min,
+                            model.request_factor_max,
+                          ])
+                        : '—'}
                     </TableCell>
-                    <TableCell>{model.hard_cost_floor.toFixed(3)}×</TableCell>
-                    <TableCell>{model.load_ema.toFixed(3)}</TableCell>
-                    <TableCell>${model.cost_ema.toFixed(4)}</TableCell>
+                    <TableCell>
+                      {livePricingEnabled
+                        ? `${model.hard_cost_floor.toFixed(3)}×`
+                        : '—'}
+                    </TableCell>
+                    <TableCell>
+                      {livePricingEnabled ? model.load_ema.toFixed(3) : '—'}
+                    </TableCell>
+                    <TableCell>
+                      {livePricingEnabled
+                        ? `$${model.cost_ema.toFixed(4)}`
+                        : '—'}
+                    </TableCell>
                     <TableCell className='text-muted-foreground'>
-                      {model.updated_at > 0
+                      {livePricingEnabled && model.updated_at > 0
                         ? dayjs(model.updated_at * 1000).format('HH:mm:ss')
                         : '—'}
                     </TableCell>
