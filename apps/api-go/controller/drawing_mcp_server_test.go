@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/LIghtJUNction/api.lmm.best/common"
@@ -84,4 +85,52 @@ func TestDrawingMCPAuthenticationDiscoveryAndConfirmation(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.True(t, invalid.IsError)
+}
+
+func TestDrawingMCPConfirmationRejectsForgeryWrongPayloadReplayAndDoubleSubmit(t *testing.T) {
+	_, user, _ := setupOpenSourceBountyMCPControllerTest(t)
+	payload := map[string]any{"prompt": "a real prompt", "group": "image-2", "model": "image-2", "n": 1}
+	payloadHash, err := model.OpenSourceBountyMCPPayloadHash(payload)
+	require.NoError(t, err)
+
+	newOperation := func(t *testing.T) *model.OpenSourceBountyMCPConfirmedOperation {
+		t.Helper()
+		state, createErr := model.CreateOpenSourceBountyMCPConfirmation(user.Id, "drawing.generate", payloadHash)
+		require.NoError(t, createErr)
+		return &model.OpenSourceBountyMCPConfirmedOperation{
+			State: state, ToolName: "drawing.generate", PayloadHash: payloadHash,
+		}
+	}
+
+	forged := newOperation(t)
+	forged.State = "mcp_confirm_forged"
+	assert.Error(t, drawingMCPConsumeConfirmation(user.Id, forged))
+
+	wrongPayload := newOperation(t)
+	wrongPayload.PayloadHash = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+	assert.Error(t, drawingMCPConsumeConfirmation(user.Id, wrongPayload))
+
+	replayed := newOperation(t)
+	require.NoError(t, drawingMCPConsumeConfirmation(user.Id, replayed))
+	assert.Error(t, drawingMCPConsumeConfirmation(user.Id, replayed))
+
+	concurrent := newOperation(t)
+	results := make(chan error, 2)
+	var wait sync.WaitGroup
+	wait.Add(2)
+	for range 2 {
+		go func() {
+			defer wait.Done()
+			results <- drawingMCPConsumeConfirmation(user.Id, concurrent)
+		}()
+	}
+	wait.Wait()
+	close(results)
+	successes := 0
+	for consumeErr := range results {
+		if consumeErr == nil {
+			successes++
+		}
+	}
+	assert.Equal(t, 1, successes)
 }
