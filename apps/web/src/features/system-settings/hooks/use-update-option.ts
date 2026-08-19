@@ -39,6 +39,7 @@ const STATUS_RELATED_KEYS = new Set([
   'oidc.display_name',
   'OAuthRegisterEnabled',
   'AssistantEnabled',
+  'AssistantGroup',
   'AssistantModel',
   'AssistantReasoningEffort',
   'AssistantAgentLoopEnabled',

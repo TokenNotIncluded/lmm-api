@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useQuery } from '@tanstack/react-query'
 import { FileText, Plus, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
@@ -43,6 +44,7 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { api } from '@/lib/api'
 
 import {
   SettingsForm,
@@ -302,6 +304,28 @@ export function AssistantSettingsSection(props: {
   const reviewEnabled = form.watch('AssistantReviewEnabled')
   const retentionEnabled = form.watch('AssistantRetentionEnabled')
   const searchProvider = form.watch('AssistantSearchProvider')
+  const groupsQuery = useQuery({
+    queryKey: ['assistant-routing-groups'],
+    queryFn: async () => {
+      const response = await api.get<{ data?: unknown }>('/api/user/groups')
+      const groups = Array.isArray(response.data.data)
+        ? response.data.data.filter(
+            (group): group is string =>
+              typeof group === 'string' && group.trim().length > 0
+          )
+        : []
+      return Array.from(new Set(groups)).sort((left, right) =>
+        left.localeCompare(right)
+      )
+    },
+    staleTime: 60_000,
+  })
+  const assistantGroups = Array.from(
+    new Set([
+      props.defaultValues.AssistantGroup || 'default',
+      ...(groupsQuery.data ?? []),
+    ])
+  ).sort((left, right) => left.localeCompare(right))
   const searchProviderDescription: Record<AssistantSearchProvider, string> = {
     none: t('Disable assistant web search.'),
     exa: t('Uses the official Exa Search API from the server.'),
@@ -359,21 +383,30 @@ export function AssistantSettingsSection(props: {
           <div className='grid gap-6 md:grid-cols-2'>
             <FormField
               control={form.control}
-              name='AssistantModel'
+              name='AssistantGroup'
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>{t('Default assistant model')}</FormLabel>
-                  <FormControl>
-                    <Input
-                      {...field}
-                      disabled={!enabled}
-                      placeholder='deepseek-v4-flash'
-                      autoComplete='off'
-                    />
-                  </FormControl>
+                  <FormLabel>{t('Routing group')}</FormLabel>
+                  <Select value={field.value} onValueChange={field.onChange}>
+                    <FormControl>
+                      <SelectTrigger
+                        className='w-full'
+                        disabled={!enabled || groupsQuery.isLoading}
+                      >
+                        <SelectValue placeholder={t('Select a group')} />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent alignItemWithTrigger={false}>
+                      {assistantGroups.map((group) => (
+                        <SelectItem key={group} value={group}>
+                          {group}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                   <FormDescription>
                     {t(
-                      'Model ID used for assistant conversations. Token usage is charged to the enabled super administrator account.'
+                      'The assistant uses this group and automatically chooses an enabled model from its live catalog.'
                     )}
                   </FormDescription>
                   <FormMessage />

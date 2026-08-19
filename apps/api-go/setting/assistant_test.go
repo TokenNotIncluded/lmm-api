@@ -16,6 +16,9 @@ func TestAssistantDefaultsAndValidation(t *testing.T) {
 	if settings.Model != DefaultAssistantModel {
 		t.Fatalf("unexpected default model: %q", settings.Model)
 	}
+	if settings.Group != DefaultAssistantGroup {
+		t.Fatalf("unexpected default group: %q", settings.Group)
+	}
 	if settings.ReasoningEffort != DefaultAssistantReasoningEffort {
 		t.Fatalf("unexpected default reasoning effort: %q", settings.ReasoningEffort)
 	}
@@ -31,6 +34,7 @@ func TestAssistantDefaultsAndValidation(t *testing.T) {
 
 	invalid := map[string]string{
 		AssistantModelOptionKey:                  " ",
+		AssistantGroupOptionKey:                  " ",
 		AssistantReasoningEffortOptionKey:        "extreme",
 		AssistantMaxStepsOptionKey:               "13",
 		AssistantTimeoutSecondsOptionKey:         "4",
@@ -60,6 +64,7 @@ func TestAssistantSettingsUpdates(t *testing.T) {
 	t.Cleanup(func() {
 		SetAssistantEnabled(original.Enabled)
 		_ = UpdateAssistantModel(original.Model)
+		_ = UpdateAssistantGroup(original.Group)
 		_ = UpdateAssistantReasoningEffort(original.ReasoningEffort)
 		SetAssistantAgentLoopEnabled(original.AgentLoopEnabled)
 		_ = UpdateAssistantMaxSteps(strconv.Itoa(original.MaxSteps))
@@ -81,6 +86,9 @@ func TestAssistantSettingsUpdates(t *testing.T) {
 
 	SetAssistantEnabled(false)
 	if err := UpdateAssistantModel(" custom-model "); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateAssistantGroup(" premium "); err != nil {
 		t.Fatal(err)
 	}
 	if err := UpdateAssistantReasoningEffort("HIGH"); err != nil {
@@ -128,7 +136,7 @@ func TestAssistantSettingsUpdates(t *testing.T) {
 	}
 
 	settings := GetAssistantSettings()
-	if settings.Enabled || settings.Model != "custom-model" || settings.ReasoningEffort != "high" || settings.AgentLoopEnabled || settings.MaxSteps != 9 || settings.TimeoutSeconds != 60 || settings.CacheEnabled || settings.CacheTTLMinutes != 30 || settings.ReviewEnabled || settings.ReviewWindowDays != 14 || settings.ReviewIntervalHours != 6 || settings.ReviewProbability != 1 || settings.ReviewModel != "review-model" || settings.ReviewGroupPolicies["premium"].Intensity != "high" || settings.RetentionEnabled || settings.ActiveRetentionDays != 120 || settings.ArchivedRetentionDays != 45 || settings.SecurityRetentionDays != 365 || settings.RetentionIntervalHours != 12 {
+	if settings.Enabled || settings.Model != "custom-model" || settings.Group != "premium" || settings.ReasoningEffort != "high" || settings.AgentLoopEnabled || settings.MaxSteps != 9 || settings.TimeoutSeconds != 60 || settings.CacheEnabled || settings.CacheTTLMinutes != 30 || settings.ReviewEnabled || settings.ReviewWindowDays != 14 || settings.ReviewIntervalHours != 6 || settings.ReviewProbability != 1 || settings.ReviewModel != "review-model" || settings.ReviewGroupPolicies["premium"].Intensity != "high" || settings.RetentionEnabled || settings.ActiveRetentionDays != 120 || settings.ArchivedRetentionDays != 45 || settings.SecurityRetentionDays != 365 || settings.RetentionIntervalHours != 12 {
 		t.Fatalf("unexpected updated settings: %+v", settings)
 	}
 }

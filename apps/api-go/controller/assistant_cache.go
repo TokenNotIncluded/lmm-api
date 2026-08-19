@@ -144,6 +144,7 @@ func assistantCacheKey(settings setting.AssistantSettings, conversation []assist
 
 	fingerprint := struct {
 		Version          string                   `json:"version"`
+		Group            string                   `json:"group"`
 		Model            string                   `json:"model"`
 		SystemPrompt     string                   `json:"system_prompt"`
 		AgentLoopEnabled bool                     `json:"agent_loop_enabled"`
@@ -154,6 +155,7 @@ func assistantCacheKey(settings setting.AssistantSettings, conversation []assist
 		Conversation     []assistantOpenAIMessage `json:"conversation"`
 	}{
 		Version:          "assistant-cache-v2",
+		Group:            settings.Group,
 		Model:            settings.Model,
 		SystemPrompt:     buildAssistantSystemPrompt(settings, cachePromptContext),
 		AgentLoopEnabled: settings.AgentLoopEnabled,

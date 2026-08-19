@@ -302,6 +302,7 @@ export type ContentSettings = {
   DataExportInterval: number
   Chats: string
   AssistantEnabled: boolean
+  AssistantGroup: string
   AssistantModel: string
   AssistantReasoningEffort: AssistantReasoningEffort
   AssistantAgentLoopEnabled: boolean
