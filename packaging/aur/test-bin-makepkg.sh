@@ -64,12 +64,18 @@ go_pkgver=$(awk -F= '$1 == "pkgver" { print $2; exit }' "$HERE/lmm-api-go-bin/PK
 [[ $go_pkgver =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "invalid Go binary pkgver: $go_pkgver"
 go_artifact="lmm-api-go-${go_pkgver}-linux-amd64"
 go_bundle="$go_work/stage/$go_artifact"
-mkdir -p "$go_bundle/frontend-dist"
+mkdir -p "$go_bundle/frontend-dist" "$go_bundle/edge-policy/nginx"
 cp "$HERE/lmm-api-go-bin/PKGBUILD" "$go_work/"
 printf '#!/bin/sh\nexit 0\n' > "$go_bundle/lmm-api-go"
 chmod 0755 "$go_bundle/lmm-api-go"
 printf '<!doctype html>\n' > "$go_bundle/frontend-dist/index.html"
 cp "$SHARED/lmm-api.service" "$SHARED/lmm-api-go.env" "$go_bundle/"
+for file in http-map.conf lmm-api-locations.conf mime.types new-api.conf lmm-api-region-policy.conf; do
+  printf 'fixture\n' > "$go_bundle/edge-policy/nginx/$file"
+done
+for file in geoip2-country-update.service geoip2-country-update.timer; do
+  printf 'fixture\n' > "$go_bundle/edge-policy/$file"
+done
 add_metadata "$go_bundle"
 create_archive "$go_work" "$go_artifact"
 pin_fixture_hashes "$go_work/PKGBUILD" sha256sums_x86_64 \
@@ -81,7 +87,9 @@ build_package lmm-api-go-bin \
   usr/bin/lmm-api \
   usr/lib/systemd/system/lmm-api.service \
   etc/lmm-api-go/lmm-api-go.env \
-  usr/share/lmm-api-go/frontend-dist/index.html
+  usr/share/lmm-api-go/frontend-dist/index.html \
+  usr/share/lmm-api-go/edge-policy/nginx/http-map.conf \
+  usr/share/lmm-api-go/edge-policy/geoip2-country-update.timer
 
 web_work="$tmp/lmm-api-web-bin"
 web_pkgver=$(awk -F= '$1 == "pkgver" { print $2; exit }' "$HERE/lmm-api-web-bin/PKGBUILD")
