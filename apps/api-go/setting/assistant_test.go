@@ -25,7 +25,7 @@ func TestAssistantDefaultsAndValidation(t *testing.T) {
 	if settings.ReasoningEffort != DefaultAssistantReasoningEffort {
 		t.Fatalf("unexpected default reasoning effort: %q", settings.ReasoningEffort)
 	}
-	if !settings.AgentLoopEnabled || settings.MaxSteps != 6 || settings.TimeoutSeconds != 45 || !settings.CacheEnabled || settings.CacheTTLMinutes != 1440 {
+	if !settings.StreamEnabled || settings.Temperature != DefaultAssistantTemperature || settings.MaxTokens != DefaultAssistantMaxTokens || !settings.AgentLoopEnabled || settings.MaxSteps != 6 || settings.TimeoutSeconds != 45 || !settings.CacheEnabled || settings.CacheTTLMinutes != 1440 {
 		t.Fatalf("unexpected assistant runtime defaults: %+v", settings)
 	}
 	if !settings.RetentionEnabled || settings.ActiveRetentionDays != 90 || settings.ArchivedRetentionDays != 30 || settings.SecurityRetentionDays != 180 || settings.RetentionIntervalHours != 24 {
@@ -40,6 +40,9 @@ func TestAssistantDefaultsAndValidation(t *testing.T) {
 		AssistantGroupOptionKey:                  " ",
 		AssistantL1AutoApprovalUserIDsOptionKey:  "1,not-an-id",
 		AssistantReasoningEffortOptionKey:        "extreme",
+		AssistantStreamEnabledOptionKey:          "not-a-bool",
+		AssistantTemperatureOptionKey:            "2.1",
+		AssistantMaxTokensOptionKey:              "63",
 		AssistantMaxStepsOptionKey:               "13",
 		AssistantTimeoutSecondsOptionKey:         "4",
 		AssistantCacheTTLMinutesOptionKey:        "10081",
@@ -71,6 +74,9 @@ func TestAssistantSettingsUpdates(t *testing.T) {
 		_ = UpdateAssistantGroup(original.Group)
 		_ = UpdateAssistantL1AutoApprovalUserIDs(original.L1AutoApprovalUserIDs)
 		_ = UpdateAssistantReasoningEffort(original.ReasoningEffort)
+		SetAssistantStreamEnabled(original.StreamEnabled)
+		_ = UpdateAssistantTemperature(strconv.FormatFloat(original.Temperature, 'f', -1, 64))
+		_ = UpdateAssistantMaxTokens(strconv.Itoa(original.MaxTokens))
 		SetAssistantAgentLoopEnabled(original.AgentLoopEnabled)
 		_ = UpdateAssistantMaxSteps(strconv.Itoa(original.MaxSteps))
 		_ = UpdateAssistantTimeoutSeconds(strconv.Itoa(original.TimeoutSeconds))
@@ -100,6 +106,13 @@ func TestAssistantSettingsUpdates(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := UpdateAssistantReasoningEffort("HIGH"); err != nil {
+		t.Fatal(err)
+	}
+	SetAssistantStreamEnabled(false)
+	if err := UpdateAssistantTemperature("1.1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateAssistantMaxTokens("2048"); err != nil {
 		t.Fatal(err)
 	}
 	SetAssistantAgentLoopEnabled(false)
@@ -144,7 +157,7 @@ func TestAssistantSettingsUpdates(t *testing.T) {
 	}
 
 	settings := GetAssistantSettings()
-	if settings.Enabled || settings.Model != "custom-model" || settings.Group != "premium" || settings.L1AutoApprovalUserIDs != "7,42" || settings.ReasoningEffort != "high" || settings.AgentLoopEnabled || settings.MaxSteps != 9 || settings.TimeoutSeconds != 60 || settings.CacheEnabled || settings.CacheTTLMinutes != 30 || settings.ReviewEnabled || settings.ReviewWindowDays != 14 || settings.ReviewIntervalHours != 6 || settings.ReviewProbability != 1 || settings.ReviewModel != "review-model" || settings.ReviewGroupPolicies["premium"].Intensity != "high" || settings.RetentionEnabled || settings.ActiveRetentionDays != 120 || settings.ArchivedRetentionDays != 45 || settings.SecurityRetentionDays != 365 || settings.RetentionIntervalHours != 12 {
+	if settings.Enabled || settings.Model != "custom-model" || settings.Group != "premium" || settings.L1AutoApprovalUserIDs != "7,42" || settings.ReasoningEffort != "high" || settings.StreamEnabled || settings.Temperature != 1.1 || settings.MaxTokens != 2048 || settings.AgentLoopEnabled || settings.MaxSteps != 9 || settings.TimeoutSeconds != 60 || settings.CacheEnabled || settings.CacheTTLMinutes != 30 || settings.ReviewEnabled || settings.ReviewWindowDays != 14 || settings.ReviewIntervalHours != 6 || settings.ReviewProbability != 1 || settings.ReviewModel != "review-model" || settings.ReviewGroupPolicies["premium"].Intensity != "high" || settings.RetentionEnabled || settings.ActiveRetentionDays != 120 || settings.ArchivedRetentionDays != 45 || settings.SecurityRetentionDays != 365 || settings.RetentionIntervalHours != 12 {
 		t.Fatalf("unexpected updated settings: %+v", settings)
 	}
 	if !AssistantL1AutoApprovalUserAllowed(7) || AssistantL1AutoApprovalUserAllowed(8) {

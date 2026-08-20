@@ -599,6 +599,82 @@ export function AssistantSettingsSection(props: {
             />
           </div>
 
+          <div className='border-border/60 bg-muted/20 grid gap-5 rounded-lg border p-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]'>
+            <SettingsSwitchItem className='border-0 p-0'>
+              <SettingsSwitchContent>
+                <FormLabel>{t('Stream responses')}</FormLabel>
+                <FormDescription>
+                  {t('Stream tokens incrementally as they are generated')}
+                </FormDescription>
+              </SettingsSwitchContent>
+              <FormField
+                control={form.control}
+                name='AssistantStreamEnabled'
+                render={({ field }) => (
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                      disabled={!enabled}
+                    />
+                  </FormControl>
+                )}
+              />
+            </SettingsSwitchItem>
+
+            <div className='grid gap-5 sm:grid-cols-2'>
+              <FormField
+                control={form.control}
+                name='AssistantTemperature'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Response temperature')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        min={0}
+                        max={2}
+                        step={0.1}
+                        {...safeNumberFieldProps(field)}
+                        disabled={!enabled}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'Controls how varied the assistant response can be (0–2).'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='AssistantMaxTokens'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Maximum output tokens')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        min={64}
+                        max={8192}
+                        step={1}
+                        {...safeNumberFieldProps(field)}
+                        disabled={!enabled}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t('Limits each final response to 64–8192 tokens.')}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
+          </div>
+
           <div className='border-border/60 bg-muted/20 space-y-4 rounded-lg border p-4'>
             <div>
               <h3 className='text-sm font-medium'>{t('Assistant behavior')}</h3>

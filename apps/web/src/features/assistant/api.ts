@@ -24,6 +24,10 @@ import type { PlanRecord } from '@/features/subscriptions/types'
 import { api, getCommonHeaders, getFreshAuthHeaders } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth-store'
 
+import {
+  AssistantStreamError,
+  consumeAssistantAISDKStream,
+} from './assistant-ai-stream'
 import { redactAssistantMessageForRequest } from './assistant-message-safety'
 
 type AssistantChatPayload = {
@@ -65,26 +69,8 @@ type AssistantStreamHandlers = {
   onReset?: () => void
 }
 
-class AssistantStreamError extends Error {
-  readonly response: { status: number; data: unknown }
-  readonly status: number
-  readonly retryable: boolean
-
-  constructor(
-    status: number,
-    data: unknown,
-    message: string,
-    retryable = status >= 500
-  ) {
-    super(message)
-    this.name = 'AssistantStreamError'
-    this.status = status
-    this.response = { status, data }
-    this.retryable = retryable
-  }
-}
-
 function isRetryableAssistantError(error: unknown): boolean {
+  if (isAssistantRequestAborted(error)) return false
   if (axios.isAxiosError(error)) {
     const status = error.response?.status
     return (
@@ -101,6 +87,10 @@ function isRetryableAssistantError(error: unknown): boolean {
   // A failed fetch has no HTTP status. It is safe to retry because the
   // browser has not received a completed assistant response.
   return error instanceof TypeError
+}
+
+export function isAssistantRequestAborted(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError'
 }
 
 function waitForAssistantRetry(delayMs: number): Promise<void> {
@@ -1310,103 +1300,17 @@ async function consumeAssistantStream(
   body: ReadableStream<Uint8Array>,
   handlers: AssistantStreamHandlers
 ): Promise<AssistantChatPayload> {
-  const reader = body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  let eventName = ''
-  let eventData: string[] = []
-  let finalPayload: AssistantChatPayload | undefined
-
-  const dispatch = () => {
-    const data = eventData.join('\n').trim()
-    eventData = []
-    const currentEvent = eventName || 'message'
-    eventName = ''
-    if (!data || data === '[DONE]') return
-
-    let payload: Record<string, unknown>
-    try {
-      payload = JSON.parse(data) as Record<string, unknown>
-    } catch {
-      throw new AssistantStreamError(
-        502,
-        { message: 'Assistant stream returned invalid event data' },
-        'Assistant stream returned invalid event data'
-      )
-    }
-
-    if (currentEvent === 'delta') {
-      if (typeof payload.content === 'string') {
-        handlers.onDelta?.(payload.content)
-      }
-      return
-    }
-    if (currentEvent === 'replace') {
-      handlers.onReset?.()
-      if (typeof payload.content === 'string') {
-        handlers.onDelta?.(payload.content)
-      }
-      return
-    }
-    if (currentEvent === 'error') {
-      const status = typeof payload.status === 'number' ? payload.status : 502
-      const message =
-        typeof payload.message === 'string'
-          ? payload.message
-          : 'AI assistant stream failed'
-      throw new AssistantStreamError(
-        status,
-        payload,
-        message,
-        payload.retryable === true || status >= 500
-      )
-    }
-    if (currentEvent === 'done') {
-      finalPayload = payload as AssistantChatPayload
-    }
-  }
-
-  const processLine = (rawLine: string) => {
-    const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine
-    if (line === '') {
-      dispatch()
-    } else if (line.startsWith('event:')) {
-      eventName = line.slice(6).trim()
-    } else if (line.startsWith('data:')) {
-      let data = line.slice(5)
-      if (data.startsWith(' ')) data = data.slice(1)
-      eventData.push(data)
-    }
-  }
-
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
-    const lines = buffer.split('\n')
-    buffer = lines.pop() || ''
-    lines.forEach(processLine)
-  }
-  buffer += decoder.decode()
-  if (buffer) {
-    buffer.split('\n').forEach(processLine)
-  }
-  dispatch()
-
-  if (!finalPayload) {
-    throw new AssistantStreamError(
-      502,
-      { message: 'Assistant stream ended before completion' },
-      'Assistant stream ended before completion'
-    )
-  }
-  return finalPayload
+  return (await consumeAssistantAISDKStream(
+    body,
+    handlers
+  )) as AssistantChatPayload
 }
 
 async function sendAssistantMessageStream(
   body: Record<string, unknown>,
   attempt: number,
-  handlers: AssistantStreamHandlers
+  handlers: AssistantStreamHandlers,
+  signal?: AbortSignal
 ): Promise<AssistantReply> {
   const auth = useAuthStore.getState().auth
   const authHeaders =
@@ -1419,6 +1323,7 @@ async function sendAssistantMessageStream(
       Accept: 'text/event-stream',
       'X-LMM-Assistant-Attempt': String(attempt),
     },
+    signal,
     body: JSON.stringify(body),
   })
 
@@ -1465,7 +1370,8 @@ export async function sendAssistantMessage(
   history: AssistantChatMessage[] = [],
   conversationId?: number,
   presetId?: string,
-  handlers?: AssistantStreamHandlers
+  handlers?: AssistantStreamHandlers,
+  signal?: AbortSignal
 ): Promise<AssistantReply> {
   const normalizedMessage =
     redactAssistantMessageForRequest(message).content.trim()
@@ -1485,7 +1391,12 @@ export async function sendAssistantMessage(
     if (attempt > 1) handlers?.onReset?.()
     try {
       if (handlers?.onDelta) {
-        return await sendAssistantMessageStream(requestBody, attempt, handlers)
+        return await sendAssistantMessageStream(
+          requestBody,
+          attempt,
+          handlers,
+          signal
+        )
       }
       response = await api.post<AssistantChatPayload>(
         '/api/assistant/chat',

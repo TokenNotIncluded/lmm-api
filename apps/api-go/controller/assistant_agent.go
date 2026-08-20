@@ -1404,7 +1404,9 @@ func relayAssistantTurn(c *gin.Context, request assistantOpenAIRequest, rootRequ
 	return recorder.Status(), recorder.body.Bytes(), nil
 }
 
-func relayAssistantStreamTurn(c *gin.Context, request assistantOpenAIRequest, rootRequestID string, step int, session *assistantStreamSession) (int, []byte, error) {
+var relayAssistantStreamTurn = relayAssistantStreamTurnWithSession
+
+func relayAssistantStreamTurnWithSession(c *gin.Context, request assistantOpenAIRequest, rootRequestID string, step int, session *assistantStreamSession) (int, []byte, error) {
 	if session == nil {
 		return http.StatusInternalServerError, nil, errors.New("assistant stream session is unavailable")
 	}
@@ -1623,13 +1625,13 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 	}
 
 	for step := 0; step < maxSteps; step++ {
-		streamFinal := streamSession != nil && step == maxSteps-1
+		streamTurn := streamSession != nil && settings.StreamEnabled
 		request := assistantOpenAIRequest{
 			Model:           settings.Model,
 			Messages:        messages,
-			Stream:          streamFinal,
-			Temperature:     0.2,
-			MaxTokens:       900,
+			Stream:          streamTurn,
+			Temperature:     settings.Temperature,
+			MaxTokens:       settings.MaxTokens,
 			ReasoningEffort: assistantReasoningEffort(settings),
 		}
 		// Reserve the last turn for a final natural-language answer. This
@@ -1642,7 +1644,7 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 		var status int
 		var body []byte
 		var err error
-		if streamFinal {
+		if streamTurn {
 			status, body, err = relayAssistantStreamTurn(c, request, rootRequestID, step, streamSession)
 		} else {
 			status, body, err = relayAssistantAgentTurn(c, request, rootRequestID, step)
@@ -1679,8 +1681,14 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 				storeAssistantCachedResponse(settings, cacheKey, status, normalizedBody, c.GetString(assistantConversationTitleDraftKey))
 				c.Header("X-LMM-Assistant-Cache", "STORE")
 			}
-			if streamFinal {
+			if streamSession != nil {
 				enrichedBody := assistantHistoryResponseBody(c, status, normalizedBody)
+				if !streamTurn {
+					finalResponse, parseErr := parseAssistantResponse(normalizedBody)
+					if parseErr == nil && len(finalResponse.Choices) > 0 {
+						_ = streamSession.appendContent(assistantResponseContent(finalResponse.Choices[0].Message.Content))
+					}
+				}
 				streamBody := sanitizeAssistantStreamResponseBody(enrichedBody, streamSession.safeContent())
 				c.Set(assistantFinalResponseBodyKey, streamBody)
 				if err := streamSession.finish(enrichedBody); err != nil {

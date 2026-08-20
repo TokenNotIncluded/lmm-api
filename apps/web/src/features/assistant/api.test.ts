@@ -26,6 +26,7 @@ import {
   archiveAssistantConversation,
   buildAssistantConversation,
   getAssistantConversationHistory,
+  isAssistantRequestAborted,
   parseAssistantAction,
   parseAssistantIntent,
   parseAssistantReply,
@@ -614,6 +615,161 @@ describe('assistant chat retry policy', () => {
         action: undefined,
         conversationId: 9,
       })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('resets the visible message when the redaction boundary replaces content', async () => {
+    const originalFetch = globalThis.fetch
+    const chunks = [
+      'event: delta\ndata: {"content":"safe"}\n\n',
+      'event: replace\ndata: {"content":"[REDACTED]"}\n\n',
+      'event: done\ndata: {"choices":[{"message":{"content":"[REDACTED]"}}]}\n\n',
+    ]
+    const deltas: string[] = []
+    let resets = 0
+    globalThis.fetch = (async () => {
+      const encoder = new TextEncoder()
+      let index = 0
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (index >= chunks.length) {
+              controller.close()
+              return
+            }
+            controller.enqueue(encoder.encode(chunks[index]))
+            index += 1
+          },
+        }),
+        { headers: { 'content-type': 'text/event-stream' } }
+      )
+    }) as typeof globalThis.fetch
+
+    try {
+      const reply = await sendAssistantMessage(
+        'hello',
+        [],
+        undefined,
+        undefined,
+        {
+          onDelta: (content) => deltas.push(content),
+          onReset: () => {
+            resets += 1
+          },
+        }
+      )
+      assert.equal(resets, 1)
+      assert.deepEqual(deltas, ['safe', '[REDACTED]'])
+      assert.equal(reply.content, '[REDACTED]')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('immediately clears streamed planning before an agent tool call', async () => {
+    const originalFetch = globalThis.fetch
+    const chunks = [
+      'event: delta\ndata: {"content":"I will check that."}\n\n',
+      'event: replace\ndata: {"content":""}\n\n',
+      'event: delta\ndata: {"content":"Here are the live models."}\n\n',
+      'event: done\ndata: {"choices":[{"message":{"content":"Here are the live models."}}]}\n\n',
+    ]
+    const deltas: string[] = []
+    let resets = 0
+    globalThis.fetch = (async () => {
+      const encoder = new TextEncoder()
+      let index = 0
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (index >= chunks.length) {
+              controller.close()
+              return
+            }
+            controller.enqueue(encoder.encode(chunks[index]))
+            index += 1
+          },
+        }),
+        { headers: { 'content-type': 'text/event-stream' } }
+      )
+    }) as typeof globalThis.fetch
+
+    try {
+      await sendAssistantMessage('hello', [], undefined, undefined, {
+        onDelta: (content) => deltas.push(content),
+        onReset: () => {
+          resets += 1
+        },
+      })
+      assert.equal(resets, 1)
+      assert.deepEqual(deltas, [
+        'I will check that.',
+        'Here are the live models.',
+      ])
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('does not retry a user-cancelled stream request', async () => {
+    const originalFetch = globalThis.fetch
+    const controller = new AbortController()
+    controller.abort()
+    globalThis.fetch = (async () => {
+      throw new DOMException('The user cancelled the request.', 'AbortError')
+    }) as typeof globalThis.fetch
+
+    try {
+      await assert.rejects(
+        sendAssistantMessage(
+          'hello',
+          [],
+          undefined,
+          undefined,
+          { onDelta: () => undefined },
+          controller.signal
+        ),
+        (error: unknown) => isAssistantRequestAborted(error)
+      )
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('keeps an in-flight stream cancellation out of retry handling', async () => {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () => {
+      let deliveredDelta = false
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (!deliveredDelta) {
+              deliveredDelta = true
+              controller.enqueue(
+                new TextEncoder().encode(
+                  'event: delta\ndata: {"content":"partial"}\n\n'
+                )
+              )
+              return
+            }
+            controller.error(
+              new DOMException('The user cancelled the request.', 'AbortError')
+            )
+          },
+        }),
+        { headers: { 'content-type': 'text/event-stream' } }
+      )
+    }) as typeof globalThis.fetch
+
+    try {
+      await assert.rejects(
+        sendAssistantMessage('hello', [], undefined, undefined, {
+          onDelta: () => undefined,
+        }),
+        (error: unknown) => isAssistantRequestAborted(error)
+      )
     } finally {
       globalThis.fetch = originalFetch
     }

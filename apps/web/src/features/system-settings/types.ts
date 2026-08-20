@@ -305,6 +305,9 @@ export type ContentSettings = {
   AssistantGroup: string
   AssistantModel: string
   AssistantReasoningEffort: AssistantReasoningEffort
+  AssistantStreamEnabled: boolean
+  AssistantTemperature: number
+  AssistantMaxTokens: number
   AssistantAgentLoopEnabled: boolean
   AssistantMaxSteps: number
   AssistantTimeoutSeconds: number

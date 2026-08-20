@@ -25,6 +25,9 @@ const (
 	AssistantGroupOptionKey                 = "AssistantGroup"
 	AssistantL1AutoApprovalUserIDsOptionKey = "AssistantL1AutoApprovalUserIDs"
 	AssistantReasoningEffortOptionKey       = "AssistantReasoningEffort"
+	AssistantStreamEnabledOptionKey         = "AssistantStreamEnabled"
+	AssistantTemperatureOptionKey           = "AssistantTemperature"
+	AssistantMaxTokensOptionKey             = "AssistantMaxTokens"
 	// AssistantWeeklyCreditUSDOptionKey is retained only so older consoles can
 	// read and submit their retired field without affecting runtime funding.
 	AssistantWeeklyCreditUSDOptionKey        = "AssistantWeeklyCreditUSD"
@@ -56,6 +59,8 @@ const (
 	DefaultAssistantGroup                    = "default"
 	DefaultAssistantL1AutoApprovalUserIDs    = ""
 	DefaultAssistantReasoningEffort          = "auto"
+	DefaultAssistantTemperature              = 0.2
+	DefaultAssistantMaxTokens                = 900
 	DefaultAssistantReviewModel              = "deepseek-v4-flash"
 	AssistantReviewDefaultIntensity          = "standard"
 	AssistantReviewMaxGroupPolicies          = 64
@@ -101,6 +106,9 @@ type AssistantSettings struct {
 	Group                  string
 	L1AutoApprovalUserIDs  string
 	ReasoningEffort        string
+	StreamEnabled          bool
+	Temperature            float64
+	MaxTokens              int
 	AgentLoopEnabled       bool
 	MaxSteps               int
 	TimeoutSeconds         int
@@ -144,6 +152,9 @@ var (
 		Group:                  DefaultAssistantGroup,
 		L1AutoApprovalUserIDs:  DefaultAssistantL1AutoApprovalUserIDs,
 		ReasoningEffort:        DefaultAssistantReasoningEffort,
+		StreamEnabled:          true,
+		Temperature:            DefaultAssistantTemperature,
+		MaxTokens:              DefaultAssistantMaxTokens,
 		AgentLoopEnabled:       true,
 		MaxSteps:               6,
 		TimeoutSeconds:         45,
@@ -276,6 +287,36 @@ func UpdateAssistantReasoningEffort(value string) error {
 	assistantSettingsMutex.Lock()
 	defer assistantSettingsMutex.Unlock()
 	assistantSettings.ReasoningEffort = effort
+	return nil
+}
+
+func SetAssistantStreamEnabled(enabled bool) {
+	assistantSettingsMutex.Lock()
+	defer assistantSettingsMutex.Unlock()
+	assistantSettings.StreamEnabled = enabled
+}
+
+func UpdateAssistantTemperature(value string) error {
+	temperature, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	if err != nil || math.IsNaN(temperature) || math.IsInf(temperature, 0) || temperature < 0 || temperature > 2 {
+		return errors.New("assistant temperature must be between 0 and 2")
+	}
+
+	assistantSettingsMutex.Lock()
+	defer assistantSettingsMutex.Unlock()
+	assistantSettings.Temperature = temperature
+	return nil
+}
+
+func UpdateAssistantMaxTokens(value string) error {
+	tokens, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || tokens < 64 || tokens > 8192 {
+		return errors.New("assistant max tokens must be between 64 and 8192")
+	}
+
+	assistantSettingsMutex.Lock()
+	defer assistantSettingsMutex.Unlock()
+	assistantSettings.MaxTokens = tokens
 	return nil
 }
 
@@ -736,6 +777,17 @@ func ValidateAssistantOption(key string, value string) error {
 		if !IsAssistantReasoningEffort(strings.TrimSpace(value)) {
 			return errors.New("assistant reasoning effort must be auto, none, low, medium, or high")
 		}
+	case AssistantStreamEnabledOptionKey:
+		if _, err := strconv.ParseBool(strings.TrimSpace(value)); err != nil {
+			return errors.New("assistant stream enabled must be a boolean")
+		}
+	case AssistantTemperatureOptionKey:
+		temperature, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		if err != nil || math.IsNaN(temperature) || math.IsInf(temperature, 0) || temperature < 0 || temperature > 2 {
+			return errors.New("assistant temperature must be between 0 and 2")
+		}
+	case AssistantMaxTokensOptionKey:
+		return validateAssistantNumber(value, 64, 8192, "assistant max tokens must be between 64 and 8192")
 	case AssistantMaxStepsOptionKey:
 		steps, err := strconv.Atoi(strings.TrimSpace(value))
 		if err != nil || steps < 1 || steps > 12 {

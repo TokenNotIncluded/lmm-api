@@ -142,6 +142,9 @@ func InitOptionMap() {
 	common.OptionMap[setting.AssistantGroupOptionKey] = assistantSettings.Group
 	common.OptionMap[setting.AssistantL1AutoApprovalUserIDsOptionKey] = assistantSettings.L1AutoApprovalUserIDs
 	common.OptionMap[setting.AssistantReasoningEffortOptionKey] = assistantSettings.ReasoningEffort
+	common.OptionMap[setting.AssistantStreamEnabledOptionKey] = strconv.FormatBool(assistantSettings.StreamEnabled)
+	common.OptionMap[setting.AssistantTemperatureOptionKey] = strconv.FormatFloat(assistantSettings.Temperature, 'f', -1, 64)
+	common.OptionMap[setting.AssistantMaxTokensOptionKey] = strconv.Itoa(assistantSettings.MaxTokens)
 	common.OptionMap[setting.AssistantWeeklyCreditUSDOptionKey] = "0"
 	common.OptionMap[setting.AssistantAgentLoopEnabledOptionKey] = strconv.FormatBool(assistantSettings.AgentLoopEnabled)
 	common.OptionMap[setting.AssistantMaxStepsOptionKey] = strconv.Itoa(assistantSettings.MaxSteps)
@@ -718,6 +721,8 @@ func updateOptionMap(key string, value string) (err error) {
 			setting.SetAssistantEnabled(boolValue)
 		case setting.AssistantAgentLoopEnabledOptionKey:
 			setting.SetAssistantAgentLoopEnabled(boolValue)
+		case setting.AssistantStreamEnabledOptionKey:
+			setting.SetAssistantStreamEnabled(boolValue)
 		case setting.AssistantCacheEnabledOptionKey:
 			setting.SetAssistantCacheEnabled(boolValue)
 		case setting.AssistantReviewEnabledOptionKey:
@@ -758,6 +763,10 @@ func updateOptionMap(key string, value string) (err error) {
 		err = setting.UpdateAssistantL1AutoApprovalUserIDs(value)
 	case setting.AssistantReasoningEffortOptionKey:
 		err = setting.UpdateAssistantReasoningEffort(value)
+	case setting.AssistantTemperatureOptionKey:
+		err = setting.UpdateAssistantTemperature(value)
+	case setting.AssistantMaxTokensOptionKey:
+		err = setting.UpdateAssistantMaxTokens(value)
 	case setting.AssistantMaxStepsOptionKey:
 		err = setting.UpdateAssistantMaxSteps(value)
 	case setting.AssistantTimeoutSecondsOptionKey:

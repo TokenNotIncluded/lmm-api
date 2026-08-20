@@ -829,8 +829,8 @@ func PrepareAssistantRequest(c *gin.Context) {
 		Model:           settings.Model,
 		Messages:        requestMessages,
 		Stream:          false,
-		Temperature:     0.2,
-		MaxTokens:       900,
+		Temperature:     settings.Temperature,
+		MaxTokens:       settings.MaxTokens,
 		ReasoningEffort: assistantReasoningEffort(settings),
 	}
 	if (settings.AgentLoopEnabled && settings.MaxSteps > 1) ||
@@ -1026,6 +1026,9 @@ func GetAssistantStatus(c *gin.Context) {
 			"enabled":           settings.AgentLoopEnabled,
 			"max_steps":         settings.MaxSteps,
 			"timeout_seconds":   settings.TimeoutSeconds,
+			"stream_enabled":    settings.StreamEnabled,
+			"temperature":       settings.Temperature,
+			"max_tokens":        settings.MaxTokens,
 			"cache_enabled":     settings.CacheEnabled,
 			"cache_ttl_minutes": settings.CacheTTLMinutes,
 		},

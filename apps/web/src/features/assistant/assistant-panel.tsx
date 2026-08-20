@@ -27,7 +27,7 @@ import {
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { PanelLeft, Plus } from 'lucide-react'
+import { PanelLeft, Plus, Square } from 'lucide-react'
 import { nanoid } from 'nanoid'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
@@ -80,6 +80,7 @@ import {
   getAssistantErrorInfo,
   getAssistantPreConversationPresets,
   getAssistantStatus,
+  isAssistantRequestAborted,
   recordAssistantPreConversationPresetClick,
   sendAssistantMessage,
   type AssistantPreConversationPreset,
@@ -733,6 +734,7 @@ function AssistantPromptComposer(props: {
   terminated: boolean
   routeUnavailable: boolean
   sending: boolean
+  onStop: () => void
   onSubmit: (message: { text?: string }) => void | Promise<void>
 }) {
   const { t } = useTranslation()
@@ -803,23 +805,33 @@ function AssistantPromptComposer(props: {
           <span className='min-w-0 flex-1 truncate text-xs'>
             {props.footerStatus}
           </span>
-          <PromptInputSubmit
-            status={props.sending ? 'submitted' : 'ready'}
-            disabled={
-              props.sending ||
-              props.terminated ||
-              props.routeUnavailable ||
-              validation.invalid
-            }
-            size='sm'
-            className={
-              props.classicLayout
-                ? 'bg-[#19c37d] text-[#202123] hover:bg-[#1aaf73]'
-                : undefined
-            }
-          >
-            {t('Send')}
-          </PromptInputSubmit>
+          {props.sending ? (
+            <Button
+              type='button'
+              variant='outline'
+              size='sm'
+              onClick={props.onStop}
+              aria-label={t('Stop')}
+            >
+              <Square data-icon='inline-start' aria-hidden='true' />
+              {t('Stop')}
+            </Button>
+          ) : (
+            <PromptInputSubmit
+              status='ready'
+              disabled={
+                props.terminated || props.routeUnavailable || validation.invalid
+              }
+              size='sm'
+              className={
+                props.classicLayout
+                  ? 'bg-[#19c37d] text-[#202123] hover:bg-[#1aaf73]'
+                  : undefined
+              }
+            >
+              {t('Send')}
+            </PromptInputSubmit>
+          )}
         </PromptInputFooter>
       </PromptInput>
       {showValidationError ? (
@@ -1214,6 +1226,7 @@ export function AssistantPanel(props: {
     useState<string | null>(null)
   const [conversationRestricted, setConversationRestricted] = useState(false)
   const [sending, setSending] = useState(false)
+  const assistantAbortControllerRef = useRef<AbortController | null>(null)
   const [classicLayout, setClassicLayout] = useState(readAssistantClassicLayout)
   const submittedAutoSendIdRef = useRef<string | undefined>(undefined)
   const [recommendationDraft, setRecommendationDraft] =
@@ -1251,6 +1264,12 @@ export function AssistantPanel(props: {
   )
   const privacyNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null
+  )
+  useEffect(
+    () => () => {
+      assistantAbortControllerRef.current?.abort()
+    },
+    []
   )
   useEffect(() => {
     try {
@@ -1422,6 +1441,7 @@ export function AssistantPanel(props: {
   }, [clearToolState])
 
   const resetConversation = useCallback(() => {
+    assistantAbortControllerRef.current?.abort()
     setEntries([])
     setConversationId(null)
     setSelectedPreConversationPresetId(null)
@@ -1526,8 +1546,11 @@ export function AssistantPanel(props: {
     presetId?: string
   ) => {
     setSending(true)
+    const abortController = new AbortController()
+    assistantAbortControllerRef.current = abortController
     const streamingEntryId = nanoid()
     let streamedContent = ''
+    let streamFrame: number | null = null
     const displayRedactionNotice = t(
       'Sensitive details are hidden until confirmation and remain visible only to you.'
     )
@@ -1535,6 +1558,26 @@ export function AssistantPanel(props: {
       ...current,
       { id: streamingEntryId, role: 'assistant', content: '' },
     ])
+    const renderStreamedContent = () => {
+      const safeContent = redactAssistantMessageForDisplay(
+        streamedContent,
+        displayRedactionNotice
+      ).content
+      setEntries((current) =>
+        current.map((entry) =>
+          entry.id === streamingEntryId
+            ? { ...entry, content: safeContent }
+            : entry
+        )
+      )
+    }
+    const scheduleStreamRender = () => {
+      if (streamFrame !== null) return
+      streamFrame = window.requestAnimationFrame(() => {
+        streamFrame = null
+        renderStreamedContent()
+      })
+    }
     try {
       const reply = await sendAssistantMessage(
         message,
@@ -1544,29 +1587,18 @@ export function AssistantPanel(props: {
         {
           onDelta: (delta) => {
             streamedContent += delta
-            const safeContent = redactAssistantMessageForDisplay(
-              streamedContent,
-              displayRedactionNotice
-            ).content
-            setEntries((current) =>
-              current.map((entry) =>
-                entry.id === streamingEntryId
-                  ? { ...entry, content: safeContent }
-                  : entry
-              )
-            )
+            scheduleStreamRender()
           },
           onReset: () => {
+            if (streamFrame !== null) {
+              window.cancelAnimationFrame(streamFrame)
+              streamFrame = null
+            }
             streamedContent = ''
-            setEntries((current) =>
-              current.map((entry) =>
-                entry.id === streamingEntryId
-                  ? { ...entry, content: '' }
-                  : entry
-              )
-            )
+            renderStreamedContent()
           },
-        }
+        },
+        abortController.signal
       )
       if (reply.conversationId) setConversationId(reply.conversationId)
       if (reply.restricted) setConversationRestricted(true)
@@ -1733,6 +1765,24 @@ export function AssistantPanel(props: {
         queryKey: ['assistant-conversations'],
       })
     } catch (error) {
+      if (isAssistantRequestAborted(error)) {
+        if (streamFrame !== null) {
+          window.cancelAnimationFrame(streamFrame)
+          streamFrame = null
+        }
+        if (streamedContent) {
+          renderStreamedContent()
+        } else {
+          setEntries((current) =>
+            current.map((entry) =>
+              entry.id === streamingEntryId
+                ? { ...entry, content: t('Response stopped.'), notice: true }
+                : entry
+            )
+          )
+        }
+        return
+      }
       const canSubmitWithoutAssistant =
         accountAccessState === 'restricted' &&
         isExplicitAssistantL1Request(message)
@@ -1767,6 +1817,10 @@ export function AssistantPanel(props: {
         errorEntry,
       ])
     } finally {
+      if (streamFrame !== null) window.cancelAnimationFrame(streamFrame)
+      if (assistantAbortControllerRef.current === abortController) {
+        assistantAbortControllerRef.current = null
+      }
       setSending(false)
     }
   }
@@ -2336,6 +2390,7 @@ export function AssistantPanel(props: {
                   terminated={conversationRestricted}
                   routeUnavailable={assistantRouteUnavailable}
                   sending={sending}
+                  onStop={() => assistantAbortControllerRef.current?.abort()}
                   onSubmit={submitMessage}
                 />
               </PromptInputProvider>

@@ -81,6 +81,9 @@ const baseValues = {
   AssistantGroup: 'default',
   AssistantModel: 'deepseek-v4-flash',
   AssistantReasoningEffort: 'auto',
+  AssistantStreamEnabled: true,
+  AssistantTemperature: 0.2,
+  AssistantMaxTokens: 900,
   AssistantAgentLoopEnabled: true,
   AssistantMaxSteps: 6,
   AssistantTimeoutSeconds: 45,
@@ -162,6 +165,10 @@ describe('assistant search provider settings', () => {
     for (const invalid of [
       { AssistantReviewWindowDays: 0 },
       { AssistantReviewIntervalHours: 169 },
+      { AssistantTemperature: -0.1 },
+      { AssistantTemperature: 2.1 },
+      { AssistantMaxTokens: 63 },
+      { AssistantMaxTokens: 8193 },
       { AssistantActiveRetentionDays: 6 },
       { AssistantArchivedRetentionDays: 0 },
       { AssistantSecurityRetentionDays: 29 },
@@ -172,6 +179,18 @@ describe('assistant search provider settings', () => {
           .success,
         false
       )
+    }
+  })
+
+  test('renders response delivery controls with bounded AI settings', async () => {
+    const { container, cleanup } = await renderSettings('none')
+    try {
+      assert.ok(container.querySelector('input[name="AssistantTemperature"]'))
+      assert.ok(container.querySelector('input[name="AssistantMaxTokens"]'))
+      assert.match(container.textContent ?? '', /Stream responses/)
+      assert.match(container.textContent ?? '', /Stream tokens incrementally/)
+    } finally {
+      await cleanup()
     }
   })
 
