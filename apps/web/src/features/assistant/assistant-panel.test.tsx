@@ -82,12 +82,35 @@ const ASSISTANT_PRIVACY_NOTICE_COLLAPSE_DELAY_MS = 5_000
 
 const originalGet = api.get
 const originalPost = api.post
+const originalFetch = globalThis.fetch
 const originalMatchMedia = window.matchMedia
 const originalInnerWidth = window.innerWidth
 const reactTestGlobals = globalThis as typeof globalThis & {
   IS_REACT_ACT_ENVIRONMENT?: boolean
 }
 reactTestGlobals.IS_REACT_ACT_ENVIRONMENT = true
+
+// The production panel uses fetch so it can consume SSE incrementally. Keep
+// the existing per-test api.post stubs as the transport seam for these UI
+// tests, while returning the JSON fallback used by cached and deterministic
+// assistant responses.
+globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  const url = typeof input === 'string' ? input : input.toString()
+  if (url === '/api/assistant/chat') {
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined
+    const response = await api.post('/api/assistant/chat', body)
+    const headers = new Headers({ 'content-type': 'application/json' })
+    const intent = response.headers?.['x-lmm-assistant-intent']
+    if (typeof intent === 'string') {
+      headers.set('x-lmm-assistant-intent', intent)
+    }
+    return new Response(JSON.stringify(response.data), {
+      status: response.status ?? 200,
+      headers,
+    })
+  }
+  return originalFetch(input, init)
+}) as typeof globalThis.fetch
 
 const i18n = createInstance()
 await i18n.use(initReactI18next).init({
@@ -323,7 +346,10 @@ afterEach(() => {
   document.body.replaceChildren()
 })
 
-after(() => domWindow.close())
+after(() => {
+  globalThis.fetch = originalFetch
+  domWindow.close()
+})
 
 describe('AssistantPanel', () => {
   test('auto-collapses the privacy notice without moving focus and can reopen it', async () => {

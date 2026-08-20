@@ -1526,20 +1526,53 @@ export function AssistantPanel(props: {
     presetId?: string
   ) => {
     setSending(true)
+    const streamingEntryId = nanoid()
+    let streamedContent = ''
+    const displayRedactionNotice = t(
+      'Sensitive details are hidden until confirmation and remain visible only to you.'
+    )
+    setEntries((current) => [
+      ...current,
+      { id: streamingEntryId, role: 'assistant', content: '' },
+    ])
     try {
       const reply = await sendAssistantMessage(
         message,
         history,
         conversationId ?? undefined,
-        presetId
+        presetId,
+        {
+          onDelta: (delta) => {
+            streamedContent += delta
+            const safeContent = redactAssistantMessageForDisplay(
+              streamedContent,
+              displayRedactionNotice
+            ).content
+            setEntries((current) =>
+              current.map((entry) =>
+                entry.id === streamingEntryId
+                  ? { ...entry, content: safeContent }
+                  : entry
+              )
+            )
+          },
+          onReset: () => {
+            streamedContent = ''
+            setEntries((current) =>
+              current.map((entry) =>
+                entry.id === streamingEntryId
+                  ? { ...entry, content: '' }
+                  : entry
+              )
+            )
+          },
+        }
       )
       if (reply.conversationId) setConversationId(reply.conversationId)
       if (reply.restricted) setConversationRestricted(true)
       const safeReply = redactAssistantMessageForDisplay(
         reply.content,
-        t(
-          'Sensitive details are hidden until confirmation and remain visible only to you.'
-        )
+        displayRedactionNotice
       )
       const suggestedTarget = getAssistantPresetForIntent(reply.intent)
       const explicitNavigation = getExplicitAssistantNavigation(
@@ -1669,18 +1702,22 @@ export function AssistantPanel(props: {
           tool: 'activation',
         }
       }
-      setEntries((current) => [
-        ...current,
-        {
-          id: nanoid(),
-          role: 'assistant',
-          content: safeReply.content,
-          tools: reply.tools,
-          action: suggestedAction,
-          adminChange,
-          imageAction,
-        },
-      ])
+      const completedEntry: ConversationEntry = {
+        id: streamingEntryId,
+        role: 'assistant',
+        content: safeReply.content,
+        tools: reply.tools,
+        action: suggestedAction,
+        adminChange,
+        imageAction,
+      }
+      setEntries((current) => {
+        const found = current.some((entry) => entry.id === streamingEntryId)
+        if (!found) return [...current, completedEntry]
+        return current.map((entry) =>
+          entry.id === streamingEntryId ? completedEntry : entry
+        )
+      })
       if (explicitNavigation && developerAccessGranted) {
         void navigate({ to: explicitNavigation })
       }
@@ -1717,16 +1754,17 @@ export function AssistantPanel(props: {
           to: '/support',
         }
       }
+      const errorEntry: ConversationEntry = {
+        id: nanoid(),
+        role: 'assistant',
+        content: assistantFailureMessage(error, t),
+        error: true,
+        retry: { message, history, presetId },
+        action: errorAction,
+      }
       setEntries((current) => [
-        ...current,
-        {
-          id: nanoid(),
-          role: 'assistant',
-          content: assistantFailureMessage(error, t),
-          error: true,
-          retry: { message, history, presetId },
-          action: errorAction,
-        },
+        ...current.filter((entry) => entry.id !== streamingEntryId),
+        errorEntry,
       ])
     } finally {
       setSending(false)

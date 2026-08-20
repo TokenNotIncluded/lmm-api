@@ -398,6 +398,16 @@ func writeAssistantConversationRestricted(c *gin.Context, conversationID int64) 
 }
 
 func writeAssistantError(c *gin.Context, status int, code string, err error) {
+	if session := assistantStreamSessionFrom(c); session != nil {
+		started, finished := session.startedAndFinished()
+		if started {
+			if !finished {
+				_ = session.fail(status, code, err.Error())
+			}
+			c.Abort()
+			return
+		}
+	}
 	c.AbortWithStatusJSON(status, gin.H{
 		"success": false,
 		"code":    code,
@@ -531,6 +541,11 @@ func trimAssistantHistoryToRuneBudget(messages []model.AssistantHistoryMessage, 
 }
 
 func writeAssistantHistoryResponse(c *gin.Context, status int, body []byte) {
+	body = assistantHistoryResponseBody(c, status, body)
+	c.Data(status, "application/json; charset=utf-8", body)
+}
+
+func assistantHistoryResponseBody(c *gin.Context, status int, body []byte) []byte {
 	recordAssistantHistoryResponse(c, status, body)
 	conversationID := assistantHistoryConversationID(c)
 	if conversationID > 0 {
@@ -546,7 +561,7 @@ func writeAssistantHistoryResponse(c *gin.Context, status int, body []byte) {
 			}
 		}
 	}
-	c.Data(status, "application/json; charset=utf-8", body)
+	return body
 }
 
 // PrepareAssistantRequest validates the narrow browser contract, then replaces
@@ -894,6 +909,28 @@ func AssistantChat(c *gin.Context) {
 	conversationMessages, ok := conversation.([]assistantOpenAIMessage)
 	if !ok || len(conversationMessages) == 0 {
 		writeAssistantError(c, http.StatusInternalServerError, "ASSISTANT_CONTEXT_FAILED", errors.New("assistant conversation is unavailable"))
+		return
+	}
+	if assistantWantsStream(c) {
+		session := newAssistantStreamSession(c.Writer)
+		if err := session.start(); err != nil {
+			c.Set(assistantStreamSessionKey, (*assistantStreamSession)(nil))
+			writeAssistantError(c, http.StatusInternalServerError, "ASSISTANT_STREAM_START_FAILED", errors.New("assistant stream could not be started"))
+			return
+		}
+		c.Set(assistantStreamSessionKey, session)
+		runAssistantAgent(c, settings, conversationMessages)
+		started, finished := session.startedAndFinished()
+		if finished {
+			if body, exists := c.Get(assistantFinalResponseBodyKey); exists {
+				if finalBody, ok := body.([]byte); ok && len(finalBody) > 0 {
+					enqueueAssistantRequestReview(c, settings, conversationMessages, finalBody)
+				}
+			}
+		}
+		if started && !finished {
+			_ = session.fail(http.StatusBadGateway, "ASSISTANT_STREAM_INCOMPLETE", "AI assistant stream ended before completion")
+		}
 		return
 	}
 	// The relay normally writes directly to Gin's response writer.  Capture the

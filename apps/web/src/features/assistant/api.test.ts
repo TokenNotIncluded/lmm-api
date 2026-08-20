@@ -566,6 +566,59 @@ describe('assistant conversation context', () => {
 })
 
 describe('assistant chat retry policy', () => {
+  test('consumes assistant SSE deltas before the final response', async () => {
+    const originalFetch = globalThis.fetch
+    const chunks = [
+      'event: ready\ndata: {"type":"ready"}\n\n',
+      'event: delta\ndata: {"content":"实时"}\n\n',
+      'event: delta\ndata: {"content":"输出"}\n\n',
+      'event: done\ndata: {"choices":[{"message":{"content":"实时输出"}}],"lmm_assistant_history":{"conversation_id":9}}\n\n',
+    ]
+    const deltas: string[] = []
+    let requestedAccept = ''
+    globalThis.fetch = (async (_input, init) => {
+      requestedAccept = new Headers(init?.headers).get('Accept') || ''
+      const encoder = new TextEncoder()
+      let index = 0
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (index >= chunks.length) {
+            controller.close()
+            return
+          }
+          controller.enqueue(encoder.encode(chunks[index]))
+          index += 1
+        },
+      })
+      return new Response(body, {
+        headers: {
+          'content-type': 'text/event-stream',
+          'x-lmm-assistant-intent': 'models',
+        },
+      })
+    }) as typeof globalThis.fetch
+
+    try {
+      const reply = await sendAssistantMessage(
+        'hello',
+        [],
+        undefined,
+        undefined,
+        { onDelta: (content) => deltas.push(content) }
+      )
+      assert.equal(requestedAccept, 'text/event-stream')
+      assert.deepEqual(deltas, ['实时', '输出'])
+      assert.deepEqual(reply, {
+        content: '实时输出',
+        intent: 'models',
+        action: undefined,
+        conversationId: 9,
+      })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   test('marks a safety-terminated conversation from server-owned metadata', async () => {
     const originalPost = api.post
     api.post = (async () => ({

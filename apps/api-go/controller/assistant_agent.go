@@ -1404,6 +1404,34 @@ func relayAssistantTurn(c *gin.Context, request assistantOpenAIRequest, rootRequ
 	return recorder.Status(), recorder.body.Bytes(), nil
 }
 
+func relayAssistantStreamTurn(c *gin.Context, request assistantOpenAIRequest, rootRequestID string, step int, session *assistantStreamSession) (int, []byte, error) {
+	if session == nil {
+		return http.StatusInternalServerError, nil, errors.New("assistant stream session is unavailable")
+	}
+	if err := setAssistantRelayRequest(c, request); err != nil {
+		return http.StatusInternalServerError, nil, err
+	}
+
+	originalWriter := c.Writer
+	relayWriter := newAssistantStreamingRelayWriter(originalWriter, session)
+	c.Writer = relayWriter
+	c.Set(common.RequestIdKey, fmt.Sprintf("%s-assistant-%d", rootRequestID, step+1))
+	defer func() {
+		c.Writer = originalWriter
+		c.Set(common.RequestIdKey, rootRequestID)
+	}()
+
+	Relay(c, types.RelayFormatOpenAI)
+	if relayWriter.writeErr != nil {
+		return relayWriter.Status(), nil, relayWriter.writeErr
+	}
+	body, err := relayWriter.responseBody()
+	if err != nil {
+		return relayWriter.Status(), nil, err
+	}
+	return relayWriter.Status(), body, nil
+}
+
 func assistantRetryableUpstreamStatus(status int) bool {
 	switch status {
 	case http.StatusRequestTimeout, http.StatusTooEarly, http.StatusTooManyRequests:
@@ -1520,6 +1548,7 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 		c.Request = originalRequest
 		common.CleanupBodyStorage(c)
 	}()
+	streamSession := assistantStreamSessionFrom(c)
 
 	rootRequestID := c.GetString(common.RequestIdKey)
 	if rootRequestID == "" {
@@ -1594,10 +1623,11 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 	}
 
 	for step := 0; step < maxSteps; step++ {
+		streamFinal := streamSession != nil && step == maxSteps-1
 		request := assistantOpenAIRequest{
 			Model:           settings.Model,
 			Messages:        messages,
-			Stream:          false,
+			Stream:          streamFinal,
 			Temperature:     0.2,
 			MaxTokens:       900,
 			ReasoningEffort: assistantReasoningEffort(settings),
@@ -1609,7 +1639,14 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 			request.ToolChoice = assistantToolChoiceForAgentStep(userContext, calledTools, successfulTools)
 		}
 
-		status, body, err := relayAssistantAgentTurn(c, request, rootRequestID, step)
+		var status int
+		var body []byte
+		var err error
+		if streamFinal {
+			status, body, err = relayAssistantStreamTurn(c, request, rootRequestID, step, streamSession)
+		} else {
+			status, body, err = relayAssistantAgentTurn(c, request, rootRequestID, step)
+		}
 		if err != nil {
 			writeAssistantError(c, http.StatusInternalServerError, "ASSISTANT_REQUEST_BUILD_FAILED", errors.New("failed to build assistant request"))
 			return
@@ -1641,6 +1678,15 @@ func runAssistantAgent(c *gin.Context, settings setting.AssistantSettings, conve
 			if !usedCacheSensitiveTool && cacheKey != "" {
 				storeAssistantCachedResponse(settings, cacheKey, status, normalizedBody, c.GetString(assistantConversationTitleDraftKey))
 				c.Header("X-LMM-Assistant-Cache", "STORE")
+			}
+			if streamFinal {
+				enrichedBody := assistantHistoryResponseBody(c, status, normalizedBody)
+				streamBody := sanitizeAssistantStreamResponseBody(enrichedBody, streamSession.safeContent())
+				c.Set(assistantFinalResponseBodyKey, streamBody)
+				if err := streamSession.finish(enrichedBody); err != nil {
+					writeAssistantError(c, http.StatusBadGateway, "ASSISTANT_STREAM_WRITE_FAILED", errors.New("assistant stream output failed"))
+				}
+				return
 			}
 			c.Data(status, "application/json; charset=utf-8", normalizedBody)
 			return
@@ -1754,6 +1800,11 @@ func writeAssistantUpstreamError(c *gin.Context, code, message string) {
 	payload := gin.H{"success": false, "code": code, "message": message, "retryable": true}
 	if requestID := strings.TrimSpace(c.GetString(common.RequestIdKey)); requestID != "" {
 		payload["request_id"] = requestID
+	}
+	if session := assistantStreamSessionFrom(c); session != nil {
+		_ = session.fail(http.StatusBadGateway, code, message)
+		c.Abort()
+		return
 	}
 	c.AbortWithStatusJSON(http.StatusBadGateway, payload)
 }

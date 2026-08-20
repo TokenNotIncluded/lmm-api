@@ -21,7 +21,8 @@ import axios, { type AxiosResponse } from 'axios'
 import type { QuotaDataItem } from '@/features/dashboard/types'
 import type { PricingData } from '@/features/pricing/types'
 import type { PlanRecord } from '@/features/subscriptions/types'
-import { api } from '@/lib/api'
+import { api, getCommonHeaders, getFreshAuthHeaders } from '@/lib/api'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { redactAssistantMessageForRequest } from './assistant-message-safety'
 
@@ -45,6 +46,7 @@ type AssistantChatPayload = {
     restricted?: unknown
   }
   lmm_assistant_tools?: unknown
+  retryable?: boolean
 }
 
 export type AssistantChatMessage = {
@@ -58,16 +60,47 @@ const ASSISTANT_MESSAGE_MAX_RUNES = 4_000
 export const ASSISTANT_MAX_REQUEST_ATTEMPTS = 5
 const ASSISTANT_RETRY_DELAYS_MS = [200, 500, 1_000, 1_500] as const
 
+type AssistantStreamHandlers = {
+  onDelta?: (content: string) => void
+  onReset?: () => void
+}
+
+class AssistantStreamError extends Error {
+  readonly response: { status: number; data: unknown }
+  readonly status: number
+  readonly retryable: boolean
+
+  constructor(
+    status: number,
+    data: unknown,
+    message: string,
+    retryable = status >= 500
+  ) {
+    super(message)
+    this.name = 'AssistantStreamError'
+    this.status = status
+    this.response = { status, data }
+    this.retryable = retryable
+  }
+}
+
 function isRetryableAssistantError(error: unknown): boolean {
-  if (!axios.isAxiosError(error)) return false
-  const status = error.response?.status
-  return (
-    status === undefined ||
-    status === 408 ||
-    status === 425 ||
-    status === 429 ||
-    status >= 500
-  )
+  if (axios.isAxiosError(error)) {
+    const status = error.response?.status
+    return (
+      status === undefined ||
+      status === 408 ||
+      status === 425 ||
+      status === 429 ||
+      status >= 500
+    )
+  }
+  if (error instanceof AssistantStreamError) {
+    return error.retryable
+  }
+  // A failed fetch has no HTTP status. It is safe to retry because the
+  // browser has not received a completed assistant response.
+  return error instanceof TypeError
 }
 
 function waitForAssistantRetry(delayMs: number): Promise<void> {
@@ -587,6 +620,33 @@ export function parseAssistantReply(payload: AssistantChatPayload): string {
   throw new Error(
     payload.error?.message || payload.message || 'Assistant returned no answer'
   )
+}
+
+function buildAssistantReply(
+  payload: AssistantChatPayload,
+  intentHeader?: unknown
+): AssistantReply {
+  const tools = parseAssistantToolTraces(payload.lmm_assistant_tools)
+  const responseConversationId = payload.lmm_assistant_history?.conversation_id
+  const conversationRestricted =
+    payload.lmm_assistant_history?.restricted === true ||
+    payload.lmm_assistant_policy === 'security_refusal' ||
+    payload.lmm_assistant_policy === 'conversation_restricted'
+  const reply: AssistantReply = {
+    content: parseAssistantReply(payload),
+    intent: parseAssistantIntent(intentHeader),
+    action: parseAssistantAction(payload.lmm_assistant_action),
+    ...(tools.length > 0 ? { tools } : {}),
+  }
+  if (
+    typeof responseConversationId === 'number' &&
+    Number.isSafeInteger(responseConversationId) &&
+    responseConversationId > 0
+  ) {
+    reply.conversationId = responseConversationId
+  }
+  if (conversationRestricted) reply.restricted = true
+  return reply
 }
 
 export function parseAssistantIntent(
@@ -1218,32 +1278,218 @@ export function buildAssistantConversation(
   return conversation
 }
 
+function buildAssistantRequestBody(
+  normalizedMessage: string,
+  messages: AssistantChatMessage[],
+  conversationId?: number,
+  presetId?: string
+): Record<string, unknown> {
+  return {
+    message: normalizedMessage,
+    messages,
+    ...(conversationId && conversationId > 0
+      ? { conversation_id: conversationId }
+      : {}),
+    ...(presetId ? { preset_id: presetId } : {}),
+  }
+}
+
+async function readAssistantFetchPayload(
+  response: Response
+): Promise<AssistantChatPayload> {
+  const text = await response.text()
+  if (!text.trim()) return {}
+  try {
+    return JSON.parse(text) as AssistantChatPayload
+  } catch {
+    return { message: text.trim() }
+  }
+}
+
+async function consumeAssistantStream(
+  body: ReadableStream<Uint8Array>,
+  handlers: AssistantStreamHandlers
+): Promise<AssistantChatPayload> {
+  const reader = body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let eventName = ''
+  let eventData: string[] = []
+  let finalPayload: AssistantChatPayload | undefined
+
+  const dispatch = () => {
+    const data = eventData.join('\n').trim()
+    eventData = []
+    const currentEvent = eventName || 'message'
+    eventName = ''
+    if (!data || data === '[DONE]') return
+
+    let payload: Record<string, unknown>
+    try {
+      payload = JSON.parse(data) as Record<string, unknown>
+    } catch {
+      throw new AssistantStreamError(
+        502,
+        { message: 'Assistant stream returned invalid event data' },
+        'Assistant stream returned invalid event data'
+      )
+    }
+
+    if (currentEvent === 'delta') {
+      if (typeof payload.content === 'string') {
+        handlers.onDelta?.(payload.content)
+      }
+      return
+    }
+    if (currentEvent === 'replace') {
+      handlers.onReset?.()
+      if (typeof payload.content === 'string') {
+        handlers.onDelta?.(payload.content)
+      }
+      return
+    }
+    if (currentEvent === 'error') {
+      const status = typeof payload.status === 'number' ? payload.status : 502
+      const message =
+        typeof payload.message === 'string'
+          ? payload.message
+          : 'AI assistant stream failed'
+      throw new AssistantStreamError(
+        status,
+        payload,
+        message,
+        payload.retryable === true || status >= 500
+      )
+    }
+    if (currentEvent === 'done') {
+      finalPayload = payload as AssistantChatPayload
+    }
+  }
+
+  const processLine = (rawLine: string) => {
+    const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine
+    if (line === '') {
+      dispatch()
+    } else if (line.startsWith('event:')) {
+      eventName = line.slice(6).trim()
+    } else if (line.startsWith('data:')) {
+      let data = line.slice(5)
+      if (data.startsWith(' ')) data = data.slice(1)
+      eventData.push(data)
+    }
+  }
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+    lines.forEach(processLine)
+  }
+  buffer += decoder.decode()
+  if (buffer) {
+    buffer.split('\n').forEach(processLine)
+  }
+  dispatch()
+
+  if (!finalPayload) {
+    throw new AssistantStreamError(
+      502,
+      { message: 'Assistant stream ended before completion' },
+      'Assistant stream ended before completion'
+    )
+  }
+  return finalPayload
+}
+
+async function sendAssistantMessageStream(
+  body: Record<string, unknown>,
+  attempt: number,
+  handlers: AssistantStreamHandlers
+): Promise<AssistantReply> {
+  const auth = useAuthStore.getState().auth
+  const authHeaders =
+    auth.user && auth.session ? await getFreshAuthHeaders() : getCommonHeaders()
+  const response = await fetch('/api/assistant/chat', {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      ...authHeaders,
+      Accept: 'text/event-stream',
+      'X-LMM-Assistant-Attempt': String(attempt),
+    },
+    body: JSON.stringify(body),
+  })
+
+  const payload = response.ok
+    ? undefined
+    : await readAssistantFetchPayload(response)
+  if (!response.ok) {
+    const message =
+      payload?.error?.message ||
+      payload?.message ||
+      `Assistant request failed with HTTP ${response.status}`
+    throw new AssistantStreamError(
+      response.status,
+      payload,
+      message,
+      payload?.retryable === true || response.status >= 500
+    )
+  }
+
+  const contentType = response.headers.get('content-type')?.toLowerCase() || ''
+  if (!contentType.includes('text/event-stream')) {
+    const jsonPayload = payload ?? (await readAssistantFetchPayload(response))
+    return buildAssistantReply(
+      jsonPayload,
+      response.headers.get('x-lmm-assistant-intent')
+    )
+  }
+  if (!response.body) {
+    throw new AssistantStreamError(
+      502,
+      { message: 'Assistant stream body is unavailable' },
+      'Assistant stream body is unavailable'
+    )
+  }
+  const streamedPayload = await consumeAssistantStream(response.body, handlers)
+  return buildAssistantReply(
+    streamedPayload,
+    response.headers.get('x-lmm-assistant-intent')
+  )
+}
+
 export async function sendAssistantMessage(
   message: string,
   history: AssistantChatMessage[] = [],
   conversationId?: number,
-  presetId?: string
+  presetId?: string,
+  handlers?: AssistantStreamHandlers
 ): Promise<AssistantReply> {
   const normalizedMessage =
     redactAssistantMessageForRequest(message).content.trim()
   const messages = buildAssistantConversation(history, normalizedMessage)
+  const requestBody = buildAssistantRequestBody(
+    normalizedMessage,
+    messages,
+    conversationId,
+    presetId
+  )
   let response: AxiosResponse<AssistantChatPayload> | undefined
   for (
     let attempt = 1;
     attempt <= ASSISTANT_MAX_REQUEST_ATTEMPTS;
     attempt += 1
   ) {
+    if (attempt > 1) handlers?.onReset?.()
     try {
+      if (handlers?.onDelta) {
+        return await sendAssistantMessageStream(requestBody, attempt, handlers)
+      }
       response = await api.post<AssistantChatPayload>(
         '/api/assistant/chat',
-        {
-          message: normalizedMessage,
-          messages,
-          ...(conversationId && conversationId > 0
-            ? { conversation_id: conversationId }
-            : {}),
-          ...(presetId ? { preset_id: presetId } : {}),
-        },
+        requestBody,
         {
           skipBusinessError: true,
           skipErrorHandler: true,
@@ -1264,28 +1510,10 @@ export async function sendAssistantMessage(
     }
   }
   if (!response) throw new Error('Assistant request did not complete')
-  const tools = parseAssistantToolTraces(response.data.lmm_assistant_tools)
-  const responseConversationId =
-    response.data.lmm_assistant_history?.conversation_id
-  const conversationRestricted =
-    response.data.lmm_assistant_history?.restricted === true ||
-    response.data.lmm_assistant_policy === 'security_refusal' ||
-    response.data.lmm_assistant_policy === 'conversation_restricted'
-  const reply: AssistantReply = {
-    content: parseAssistantReply(response.data),
-    intent: parseAssistantIntent(response.headers['x-lmm-assistant-intent']),
-    action: parseAssistantAction(response.data.lmm_assistant_action),
-    ...(tools.length > 0 ? { tools } : {}),
-  }
-  if (conversationRestricted) reply.restricted = true
-  if (
-    typeof responseConversationId === 'number' &&
-    Number.isSafeInteger(responseConversationId) &&
-    responseConversationId > 0
-  ) {
-    reply.conversationId = responseConversationId
-  }
-  return reply
+  return buildAssistantReply(
+    response.data,
+    response.headers['x-lmm-assistant-intent']
+  )
 }
 
 export async function getAssistantPreConversationPresets(): Promise<AssistantPreConversationPresets> {
