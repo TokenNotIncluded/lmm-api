@@ -4702,6 +4702,8 @@ const assistantRoutingTranslations = {
   en: {
     'Select the routing group used by the assistant. Choose the exact model ID in the field beside it.':
       'Select the routing group used by the assistant. Choose the exact model ID in the field beside it.',
+    'The built-in AI assistant is under maintenance. Please try again later.':
+      'The built-in AI assistant is under maintenance. Please try again later.',
     'Get model list': 'Get model list',
     'Choose a group, then click Get model list to load its enabled model IDs.':
       'Choose a group, then click Get model list to load its enabled model IDs.',
@@ -4732,6 +4734,8 @@ const assistantRoutingTranslations = {
   zh: {
     'Select the routing group used by the assistant. Choose the exact model ID in the field beside it.':
       '选择助手使用的路由分组，再在旁边选择准确的模型 ID。',
+    'The built-in AI assistant is under maintenance. Please try again later.':
+      '内置AI助手正在维护中，请稍后再试。',
     'Get model list': '获取模型列表',
     'Choose a group, then click Get model list to load its enabled model IDs.':
       '选择分组，然后点击“获取模型列表”加载该分组已启用的模型 ID。',
@@ -4761,6 +4765,8 @@ const assistantRoutingTranslations = {
   'zh-TW': {
     'Select the routing group used by the assistant. Choose the exact model ID in the field beside it.':
       '選擇助手使用的路由分組，再在旁邊選擇準確的模型 ID。',
+    'The built-in AI assistant is under maintenance. Please try again later.':
+      '內建 AI 助手正在維護中，請稍後再試。',
     'Get model list': '取得模型清單',
     'Choose a group, then click Get model list to load its enabled model IDs.':
       '選擇分組，然後點擊「取得模型清單」載入該分組已啟用的模型 ID。',
@@ -4790,6 +4796,8 @@ const assistantRoutingTranslations = {
   fr: {
     'Select the routing group used by the assistant. Choose the exact model ID in the field beside it.':
       'Sélectionnez le groupe de routage de l’assistant, puis l’identifiant exact du modèle à côté.',
+    'The built-in AI assistant is under maintenance. Please try again later.':
+      'L’assistant IA intégré est en maintenance. Veuillez réessayer plus tard.',
     'Get model list': 'Charger la liste des modèles',
     'Choose a group, then click Get model list to load its enabled model IDs.':
       'Choisissez un groupe, puis cliquez sur « Charger la liste des modèles » pour charger ses identifiants activés.',
@@ -4820,6 +4828,8 @@ const assistantRoutingTranslations = {
   ja: {
     'Select the routing group used by the assistant. Choose the exact model ID in the field beside it.':
       'アシスタントが使用するルーティンググループを選び、隣で正確なモデル ID を選択してください。',
+    'The built-in AI assistant is under maintenance. Please try again later.':
+      '内蔵 AI アシスタントはメンテナンス中です。後でもう一度お試しください。',
     'Get model list': 'モデル一覧を取得',
     'Choose a group, then click Get model list to load its enabled model IDs.':
       'グループを選択し、「モデル一覧を取得」をクリックして有効なモデル ID を読み込みます。',
@@ -4851,6 +4861,8 @@ const assistantRoutingTranslations = {
   ru: {
     'Select the routing group used by the assistant. Choose the exact model ID in the field beside it.':
       'Выберите группу маршрутизации помощника, затем точный идентификатор модели рядом.',
+    'The built-in AI assistant is under maintenance. Please try again later.':
+      'Встроенный ИИ-помощник находится на обслуживании. Повторите попытку позже.',
     'Get model list': 'Получить список моделей',
     'Choose a group, then click Get model list to load its enabled model IDs.':
       'Выберите группу и нажмите «Получить список моделей», чтобы загрузить включённые идентификаторы моделей.',
@@ -4881,6 +4893,8 @@ const assistantRoutingTranslations = {
   vi: {
     'Select the routing group used by the assistant. Choose the exact model ID in the field beside it.':
       'Chọn nhóm định tuyến cho trợ lý, sau đó chọn đúng model ID ở bên cạnh.',
+    'The built-in AI assistant is under maintenance. Please try again later.':
+      'Trợ lý AI tích hợp đang được bảo trì. Vui lòng thử lại sau.',
     'Get model list': 'Lấy danh sách model',
     'Choose a group, then click Get model list to load its enabled model IDs.':
       'Chọn một nhóm, sau đó bấm Lấy danh sách model để tải các model ID đang bật của nhóm.',

@@ -6402,6 +6402,7 @@
     "The board starts empty. Publish the first project by spending your own balance and funding its reward pool.": "董事會開始是空的。透過花費您自己的餘額並為其獎勵池提供資金來發布第一個項目。",
     "The bound Product powers wallet top-ups: when a user enters any amount, this platform runs the checkout against this single Pancake product and overrides the price per session — no need to pre-create $1 / $5 / $10 SKUs.": "已連結產品用於錢包儲值：當使用者輸入任意金額時，本平台會基於這個單一 Pancake 產品發起結帳，並按工作階段覆蓋價格，無需預先建立 $1 / $5 / $10 的 SKU。",
     "The bound Store is the parent container for every Pancake product this platform creates from this admin — both the wallet top-up product and any subscription-plan products. One store is enough; pin a different one only if you genuinely run separate Pancake catalogs.": "已連結店鋪是本平台從此管理端建立的所有 Pancake 產品的父容器，包括錢包儲值產品和訂閱方案產品。一個店鋪通常足夠；只有在確實運營多個 Pancake 目錄時才需要連結不同店鋪。",
+    "The built-in AI assistant is under maintenance. Please try again later.": "內建 AI 助手正在維護中，請稍後再試。",
     "The channel is assigned to the administrator-configured public group and is reviewed before publication. Do not submit credentials.": "渠道會被分配至管理員設定的公開分組，審核通過後才會發布。請勿提交憑證。",
     "The clipboard action returns a plain-text bundle; the ZIP action contains separate JSON files for AI analysis.": "複製操作會返回純文字資料包；ZIP 操作會產生多個獨立 JSON 檔案，方便 AI 分析。",
     "The confirmation was consumed or the image request failed. Ask the assistant to prepare it again.": "確認已使用或圖片請求失敗，請讓助手重新準備。",

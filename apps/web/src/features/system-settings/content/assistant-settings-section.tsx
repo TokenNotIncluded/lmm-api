@@ -379,7 +379,7 @@ export function AssistantSettingsSection(props: {
   )
   if (assistantModelsQuery.isError) {
     modelDescription = t(
-      'Unable to enumerate model IDs for this group. Check the live model catalog and try again.'
+      'The built-in AI assistant is under maintenance. Please try again later.'
     )
   } else if (assistantModelsQuery.isFetching) {
     modelDescription = t('Loading model list...')

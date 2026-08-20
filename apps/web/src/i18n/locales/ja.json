@@ -6402,6 +6402,7 @@
     "The board starts empty. Publish the first project by spending your own balance and funding its reward pool.": "ボードは空から始まります。自分の残高を費やし、その報酬プールに資金を提供して、最初のプロジェクトを公開します。",
     "The bound Product powers wallet top-ups: when a user enters any amount, this platform runs the checkout against this single Pancake product and overrides the price per session — no need to pre-create $1 / $5 / $10 SKUs.": "紐付け済み商品はウォレットチャージに使用されます。ユーザーが金額を入力すると、このプラットフォームが単一の Pancake 商品で決済を実行し、セッションごとに価格を上書きします。SKU の事前作成は不要です。",
     "The bound Store is the parent container for every Pancake product this platform creates from this admin — both the wallet top-up product and any subscription-plan products. One store is enough; pin a different one only if you genuinely run separate Pancake catalogs.": "紐付け済みストアは、このプラットフォームが管理画面から作成するすべての Pancake 商品の親コンテナです。ウォレットチャージ商品とサブスクリプション商品が含まれます。通常は 1 つのストアで十分です。",
+    "The built-in AI assistant is under maintenance. Please try again later.": "内蔵 AI アシスタントはメンテナンス中です。後でもう一度お試しください。",
     "The channel is assigned to the administrator-configured public group and is reviewed before publication. Do not submit credentials.": "チャンネルは管理者設定の公開グループに割り当てられ、掲載前に審査されます。認証情報は送信しないでください。",
     "The clipboard action returns a plain-text bundle; the ZIP action contains separate JSON files for AI analysis.": "コピー操作はプレーンテキストのデータを返し、ZIP 操作は AI 分析用の個別 JSON ファイルを含みます。",
     "The confirmation was consumed or the image request failed. Ask the assistant to prepare it again.": "確認が使用済みか画像リクエストに失敗しました。アシスタントに再準備を依頼してください。",
