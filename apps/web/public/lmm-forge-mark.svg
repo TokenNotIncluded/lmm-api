@@ -1,4 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 56 56" role="img" aria-label="LMM Forge">
-  <path d="M10 39V16l18 18 18-18v23" fill="none" stroke="#141413" stroke-width="3.5" stroke-linecap="square" stroke-linejoin="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 56 56" role="img" aria-label="LMM Best">
+  <style>:root{color:#141413}@media(prefers-color-scheme:dark){:root{color:#faf9f5}}</style>
+  <path d="M10 39V16l18 18 18-18v23" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="square" stroke-linejoin="round"/>
   <path d="M12 45h32" fill="none" stroke="#b8634c" stroke-width="2.5" stroke-linecap="square"/>
 </svg>
