@@ -1,15 +1,16 @@
-# 文档目录
+# 📖 文档导航
 
 [项目首页](../README.md) · [贡献指南](contributing.md)
 
-本目录以微服务分支为准：可执行程序只有 `lmm` 客户端、`lmm-core` 核心和 `lmm-extensions` 扩展；Web 是单独构建的静态文件。线上 Go 单体的历史说明不是新架构安装步骤。
+欢迎来到 LMM Forge 文档中心！这里汇集了项目的架构设计、开发指南和运维参考，帮助你快速找到所需内容。
 
-默认开发主线为 `wip/rust-core-go-extensions`；`main` 与 `traditional` 已冻结，
-见[分支交接规则](development-branches.md)。
-传统 main 的增量是否已移植，见[固定源码对齐核查](main-wip-parity-audit.md)。
-[Extore 商品同步](extore-shop-binding-followup.md)尚未验收，禁止部署。
+我们当前的架构以微服务分支为基础：可执行程序包括 `lmm` 客户端、`lmm-core` 核心和 `lmm-extensions` 扩展；Web 前端作为独立构建的静态文件单独产出。如果你在其他地方看到线上 Go 单体的历史说明，那是旧架构的参考资料，并非新架构的安装步骤。
+
+日常开发请基于 `wip/rust-core-go-extensions` 分支；`main` 与 `traditional` 已冻结，不再接受新提交——详情请参阅[分支交接规则](development-branches.md)。如果你想了解传统 main 的增量是否已迁移到新分支，可以查看[固定源码对齐核查](main-wip-parity-audit.md)。另外，[Extore 商品同步](extore-shop-binding-followup.md)目前尚未完成验收，暂时请不要将其部署到生产环境。
 
 ## 主要入口
+
+从这里找到你需要的内容：
 
 | 主题 | 文档 |
 | --- | --- |
@@ -26,16 +27,25 @@
 
 ## 详细设计
 
+如果你想深入了解各模块的设计细节，以下文档会是很好的起点：
+
 [核心身份](core-identity.md) · [跨进程接口](core-protocol.md) · [业务验收范围](microkernel-business-acceptance.md)
 
-[RT16 Markdown 隔离安全复现](../scripts/security/rt16/README.md)只验证组件，不能替代商品、客服、个人资料和助手的存储读写验收。
+[RT16 Markdown 隔离安全复现](../scripts/security/rt16/README.md)用于验证组件层面的安全性。不过请注意，它不能替代商品、客服、个人资料和助手的存储读写验收——那些需要单独确认。
 
-[部署研究结论与待接入项](deployment-research.md)保留已移除实验目录的有效结论与历史来源，不作为正式部署步骤。
+[部署研究结论与待接入项](deployment-research.md)保留了已移除实验目录中的有效结论与历史来源，供参考学习使用，但请不要将其作为正式部署步骤。
 
 Go 模块的接口与存储规则以各自源码目录为准：[扩展宿主](../services/extensions/README.md)、[助手](../services/extensions/internal/modules/assistant/README.md)。[CLI 子项目文档](https://github.com/TokenNotIncluded/lmm#readme)与服务端部署分开。
 
 品牌与产品：[品牌设计](brand-design.md)、[产品记录](product.md)、[分支来源与归属](fork.md)。前端资料：[设计](../apps/web/DESIGN.md)、[Logo](../.github/assets/README.md)、[翻译术语](translation-glossary.md)。[安全报告](../.github/SECURITY.md)与[支持渠道](SUPPORT.md)不属于运行时用户协议。
 
-旧部署、OpenAPI、审计和已合并专题统一从[历史索引](archive.md)查找原文。它们不作为当前服务能力或测试通过的依据。
+旧部署、OpenAPI、审计和已合并专题可以从[历史索引](archive.md)查找原文。它们作为历史参考保留，但不代表当前服务能力或测试通过状态。
 
-维护规则：入口只描述当前可执行步骤；细节留在拥有该接口的模块中。删除实现后，删除生成依赖并将历史来源集中到 archive.md；不新增逐文件占位页。保留许可证、安全记录和仍有使用方的接口约定。
+## 文档维护指南
+
+为了让文档保持清晰和实用，我们遵循以下几条简单的原则：
+
+- **聚焦当前**：入口文档只描述当前可执行的步骤，避免过时信息造成困惑。
+- **就近原则**：实现细节留在拥有该接口的模块中，让信息和代码住在一起。
+- **整洁归档**：删除实现后，同步删除相关的生成依赖，并将历史来源集中到 [archive.md](archive.md)，而不是新增逐文件的占位页。
+- **始终保留**：许可证、安全记录和仍有使用方的接口约定不应删除。
