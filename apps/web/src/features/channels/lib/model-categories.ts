@@ -25,8 +25,21 @@ type ModelCategoryRule = {
 // Rules are ordered so platform-specific IDs such as Perplexity's Sonar and
 // NVIDIA's Nemotron take precedence over the base Llama/Mixtral family name.
 const MODEL_CATEGORY_RULES: readonly ModelCategoryRule[] = [
+  {
+    name: 'Thinking Machines',
+    pattern: /(?:^|[/.:])(?:thinkingmachines[/.:]|inkling(?=$|[-_.:]))/,
+  },
   { name: 'Perplexity', keywords: ['perplexity', 'sonar-'] },
-  { name: 'NVIDIA', keywords: ['nvidia/', 'nvidia.', 'nemotron'] },
+  {
+    name: 'NVIDIA',
+    keywords: ['nvidia/', 'nvidia.', 'nemotron'],
+    pattern:
+      /(?:^|[/.:])(?:nv-embed|nv-rerank|riva|parakeet|canary|nemoretriever)(?=$|[-_.:])/,
+  },
+  {
+    name: 'Cloudflare',
+    pattern: /(?:^|[/.:])(?:cloudflare[/.:]|clef(?=$|[-_.:]))/,
+  },
   {
     name: 'OpenAI',
     keywords: [
@@ -137,7 +150,7 @@ const MODEL_CATEGORY_RULES: readonly ModelCategoryRule[] = [
   { name: 'Nous Research', keywords: ['nousresearch', 'hermes-'] },
   { name: '360 AI', keywords: ['360gpt', '360zhinao'] },
   { name: 'Midjourney', keywords: ['midjourney', 'mj_', 'mj-', 'swap_face'] },
-  { name: 'Kling', keywords: ['kling'] },
+  { name: 'Kling', pattern: /(?:^|[/.:])kling(?=$|[-_./:])/ },
   { name: 'Vidu', keywords: ['vidu'] },
   { name: 'Suno', keywords: ['suno'] },
   { name: 'Jimeng', keywords: ['jimeng'] },
