@@ -33,7 +33,7 @@ describe('UsersMutateDrawer query loading', () => {
     )
     assert.match(
       source,
-      /queryKey:\s*\['admin-permission-catalog'\][\s\S]*?queryFn:\s*getPermissionCatalog,\s*enabled:\s*open/
+      /queryKey:\s*\[\s*'admin-permission-catalog',\s*currentUser\?\.id,\s*currentUser\?\.role,\s*sessionId,?\s*\][\s\S]*?enabled:\s*open && currentUser\?\.role === ROLE\.SUPER_ADMIN/
     )
   })
 })

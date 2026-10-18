@@ -23,11 +23,51 @@ import { api } from '@/lib/api'
 
 import {
   getAssistantUserProfile,
+  getPermissionCatalog,
   getUsers,
   listAssistantRequestReviews,
   searchUsers,
   updateAssistantUserProfile,
 } from './api'
+
+describe('administrator permission catalog API', () => {
+  test('failed or malformed responses reject instead of returning an empty catalog', async () => {
+    const originalGet = api.get
+    try {
+      for (const data of [
+        { success: false, message: 'Permission denied' },
+        { success: true },
+        { success: true, data: { resources: [], roles: [] } },
+        { success: true, data: { resources: 'invalid', roles: [] } },
+      ]) {
+        api.get = (async (url: string, config: unknown) => {
+          assert.equal(url, '/api/authz/catalog')
+          assert.deepEqual(config, { timeout: 10_000 })
+          return { data }
+        }) as typeof api.get
+        await assert.rejects(
+          getPermissionCatalog,
+          /permission catalog is unavailable/
+        )
+      }
+    } finally {
+      api.get = originalGet
+    }
+  })
+
+  test('keeps transport and authorization failures as rejected reads', async () => {
+    const originalGet = api.get
+    const failure = new Error('HTTP 403')
+    api.get = (async () => {
+      throw failure
+    }) as typeof api.get
+    try {
+      await assert.rejects(getPermissionCatalog, (error) => error === failure)
+    } finally {
+      api.get = originalGet
+    }
+  })
+})
 
 describe('user management API filters', () => {
   test('sends activity filters and risk sorting to both list endpoints including a zero lower bound', async () => {

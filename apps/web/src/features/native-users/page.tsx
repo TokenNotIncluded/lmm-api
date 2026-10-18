@@ -23,6 +23,7 @@ import {
   type NativeUsersResponse,
 } from './contract'
 import { nativeQueryFromLegacySearch } from './legacy-search'
+import { NativeDisplayNameEditor } from './profile-editor'
 
 type Props = { scope: NativeUsersScope; recheck: () => void; search: string }
 type Load<T> =
@@ -57,7 +58,17 @@ function FieldSelect({ id, label, value, options, onChange }: SelectProps) {
   )
 }
 
-function UserRecord({ user }: { user: NativeUser }) {
+function UserRecord({
+  user,
+  scope,
+  onUpdated,
+  onAccessDenied,
+}: {
+  user: NativeUser
+  scope: NativeUsersScope
+  onUpdated: () => void
+  onAccessDenied: () => void
+}) {
   const { t } = useTranslation()
   const profile = (value: string | null) =>
     value === null ? t('Unavailable') : value === '' ? t('Empty value') : value
@@ -78,6 +89,14 @@ function UserRecord({ user }: { user: NativeUser }) {
     >
       <div className='min-w-0 space-y-2'>
         <h3 className='font-semibold break-all'>{profile(user.username)}</h3>
+        {user.platform_role === 'user' && (
+          <NativeDisplayNameEditor
+            scope={scope}
+            userId={user.id}
+            onUpdated={onUpdated}
+            onAccessDenied={onAccessDenied}
+          />
+        )}
         <dl className='space-y-1 text-sm break-all'>
           <div>
             <dt className='text-muted-foreground inline'>{t('User ID')}: </dt>
@@ -522,7 +541,7 @@ function UsersWorkspace({
       <Alert>
         <AlertDescription>
           {t(
-            'Read-only user management. Risk, usage, top-up, referral history and legacy trust information are unavailable in this view.'
+            'User management. Available actions are shown beside each user. Risk, usage, top-up, referral history and legacy trust information are unavailable in this view.'
           )}
         </AlertDescription>
       </Alert>
@@ -721,7 +740,13 @@ function UsersWorkspace({
               <p>{t('No users on this page.')}</p>
             ) : (
               state.data.items.map((user) => (
-                <UserRecord key={user.id} user={user} />
+                <UserRecord
+                  key={user.id}
+                  user={user}
+                  scope={scope}
+                  onUpdated={() => setReload((value) => value + 1)}
+                  onAccessDenied={onAccessDenied}
+                />
               ))
             )}
           </>

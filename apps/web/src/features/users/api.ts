@@ -16,8 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import type { PermissionCatalog } from '@/lib/admin-permissions'
-import { api } from '@/lib/api'
+import {
+  type PermissionCatalog,
+  parsePermissionCatalogResponse,
+} from '@/lib/admin-permissions'
+import { api, type ApiRequestConfig } from '@/lib/api'
 import type { CustomOAuthBinding } from '@/lib/oauth'
 
 import type {
@@ -150,8 +153,11 @@ export async function resetAssistantRequestReviewViolations(
 /**
  * Get single user by ID
  */
-export async function getUser(id: number): Promise<ApiResponse<User>> {
-  const res = await api.get(`/api/user/${id}`)
+export async function getUser(
+  id: number,
+  config?: ApiRequestConfig
+): Promise<ApiResponse<User>> {
+  const res = await api.get(`/api/user/${id}`, config)
   return res.data
 }
 
@@ -185,9 +191,10 @@ export async function updateAssistantUserProfile(
  * Create a new user
  */
 export async function createUser(
-  data: UserFormData
+  data: UserFormData,
+  config?: ApiRequestConfig
 ): Promise<ApiResponse<User>> {
-  const res = await api.post('/api/user/', data)
+  const res = await api.post('/api/user/', data, config)
   return res.data
 }
 
@@ -195,9 +202,10 @@ export async function createUser(
  * Update an existing user
  */
 export async function updateUser(
-  data: UserFormData & { id: number }
+  data: UserFormData & { id: number },
+  config?: ApiRequestConfig
 ): Promise<ApiResponse<Partial<User>>> {
-  const res = await api.put('/api/user/', data)
+  const res = await api.put('/api/user/', data, config)
   return res.data
 }
 
@@ -265,12 +273,14 @@ export async function getGroups(): Promise<ApiResponse<string[]>> {
  * Get the permission catalog (resources, actions, and role baselines).
  * Source of truth lives in the backend authz package.
  */
-export async function getPermissionCatalog(): Promise<PermissionCatalog> {
-  const res = await api.get('/api/authz/catalog')
-  return {
-    resources: res.data?.data?.resources ?? [],
-    roles: res.data?.data?.roles ?? [],
-  }
+export async function getPermissionCatalog(
+  config?: ApiRequestConfig
+): Promise<PermissionCatalog> {
+  const res = await api.get<unknown>('/api/authz/catalog', {
+    timeout: 10_000,
+    ...config,
+  })
+  return parsePermissionCatalogResponse(res.data)
 }
 
 // ============================================================================
