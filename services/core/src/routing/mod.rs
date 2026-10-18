@@ -17,8 +17,8 @@ pub use engine::{
     ReplayPermission, RoutePlan, RouteRequest, Router,
 };
 pub use pricing::{
-    BillingMode, MAX_MULTIPLIER, MULTIPLIER_ONE, MicroUsd, PriceConfig, PriceQuote, PriceRule,
-    PriceSnapshot, TokenRates, Usage,
+    BillingMode, CreditQuote, CreditRate, Credits, MAX_MULTIPLIER, MULTIPLIER_ONE, MicroUsd,
+    PriceConfig, PriceQuote, PriceRule, PriceSnapshot, TokenRates, Usage,
 };
 
 pub const CONTRACT_VERSION: u32 = 1;
