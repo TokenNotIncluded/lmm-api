@@ -11,9 +11,26 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 COMPOSITION_STORAGE = "services/extensions/internal/composition/storage.go"
 COMPOSITION_PAYMENTS = "services/extensions/internal/composition/payments.go"
+COMPOSITION_ASSISTANT = "services/extensions/internal/composition/assistant.go"
 OPERATIONS_POSTGRES = "services/extensions/internal/modules/operations/postgres.go"
 OPERATIONS_RELEASES = "services/extensions/internal/modules/operations/releases.go"
 OPERATIONS_INJECTION = "services/extensions/internal/modules/operations/scripts.go"
+CORE_SCHEMAS = (
+    "core_abuse.",
+    "core_billing.",
+    "core_charging.",
+    "core_commerce.",
+    "core_console.",
+    "core_events.",
+    "core_identity.",
+    "core_meta.",
+    "core_migration.",
+    "core_model.",
+    "core_oauth.",
+    "core_payments.",
+    "core_runtime.",
+    "core_schema.",
+)
 # Source guards are an offline contract only. The PostgreSQL role/schema/grant
 # mutations in composition/guards_integration_test.go require a real test DB.
 COMPOSITION_STORAGE_GUARDS = (
@@ -101,6 +118,22 @@ if err := independentRuntimeCredentials(cfg.HostCredential, identityToken, comme
     return nil, err
 }
 return paymentToken, nil
+"""
+ASSISTANT_CREDENTIAL_BODY = """
+if cfg.AssistantTokenFile == "" {
+    return nil, nil
+}
+if len(cfg.HostCredential) < 32 {
+    return nil, errors.New("assistant RPC requires an independent loaded host credential")
+}
+token, err := coreclient.ReadTokenFile(cfg.AssistantTokenFile)
+if err != nil {
+    return nil, errors.New("private assistant RPC credential unavailable")
+}
+if err = independentRuntimeCredentials(cfg.HostCredential, identity, commerce, payment, token); err != nil {
+    return nil, err
+}
+return token, nil
 """
 OPERATIONS_RUNTIME_BLOCK = """
 if selected["operations"] {
@@ -244,6 +277,8 @@ class CoreBoundaryTests(unittest.TestCase):
             "services/extensions/internal/modules/support/postgres_web.go": "lmm_support.",
             "services/extensions/internal/modules/assistant/postgres.go": "lmm_assistant.",
             "services/extensions/internal/modules/assistant/history_postgres.go": "lmm_assistant.",
+            "services/extensions/internal/modules/assistant/delegation_pending_postgres.go": "lmm_assistant.",
+            "services/extensions/internal/modules/assistant/delegation_postgres.go": "lmm_assistant.",
             "services/extensions/internal/modules/promotions/postgres.go": "lmm_promotions.",
             "services/extensions/internal/modules/payments/postgres.go": "payment_",
             OPERATIONS_POSTGRES: "lmm_operations.",
@@ -264,8 +299,12 @@ class CoreBoundaryTests(unittest.TestCase):
             self.assertNotRegex(text, r"\bsql\s*\.\s*(?:Open|OpenDB)\s*\(", path)
         if path == OPERATIONS_INJECTION:
             self.assert_operations_injection(text)
-            for schema in ("core_meta.", "core_identity.", "core_billing.",
-                           "core_events.", "core_runtime.") + tuple(stores.values()):
+            for schema in CORE_SCHEMAS + tuple(stores.values()):
+                self.assertNotIn(schema, text, path)
+            return
+        if path == COMPOSITION_ASSISTANT:
+            self.assert_assistant_composition(text)
+            for schema in CORE_SCHEMAS + tuple(stores.values()):
                 self.assertNotIn(schema, text, path)
             return
         if path not in stores and path != COMPOSITION_STORAGE:
@@ -279,8 +318,7 @@ class CoreBoundaryTests(unittest.TestCase):
             self.assert_operations_storage(text)
         else:
             self.assertIn(stores[path], text, path)
-        schemas = ("core_meta.", "core_identity.", "core_billing.",
-                   "core_events.", "core_runtime.") + tuple(stores.values())
+        schemas = CORE_SCHEMAS + tuple(stores.values())
         for schema in schemas:
             if schema != stores.get(path):
                 if path == COMPOSITION_STORAGE or schema == "payment_":
@@ -290,6 +328,19 @@ class CoreBoundaryTests(unittest.TestCase):
                     self.assertNotRegex(text, r"(?i)\b(?:FROM|JOIN|UPDATE|INTO|TRUNCATE)\s+" + qualifier + re.escape(schema), path)
                 else:
                     self.assertNotIn(schema, text, path)
+
+    def assert_assistant_composition(self, text):
+        for forbidden in ("github.com/lib/pq", "gorm.io", "go-sql-driver", "jackc/pgx", "sqlite"):
+            self.assertNotIn(forbidden, text, COMPOSITION_ASSISTANT)
+        self.assertNotRegex(text, r"\bsql\s*\.\s*(?:Open|OpenDB)\s*\(", COMPOSITION_ASSISTANT)
+        self.assertNotRegex(text, r"\bdb\s*\.", COMPOSITION_ASSISTANT)
+        self.assert_no_close_declaration(go_tokens(text))
+        self.assertIn("func (r *Runtime) composeAssistantDelegation(", text, COMPOSITION_ASSISTANT)
+        for schema in CORE_SCHEMAS:
+            self.assertNotIn(schema, text, COMPOSITION_ASSISTANT)
+        self.assertNotRegex(text, r"\bcore_[a-z0-9_]+\.", COMPOSITION_ASSISTANT)
+        self.assertNotRegex(text, r"\blmm_[a-z0-9_]+\.", COMPOSITION_ASSISTANT)
+        self.assertNotRegex(text, r"(?i)\b(?:FROM|JOIN|UPDATE|INTO|TRUNCATE)\s+(?:public\.)?(?:core_|lmm_|payment_|extension_)", COMPOSITION_ASSISTANT)
 
     def test_only_exact_composition_storage_file_may_import_driver_or_open_pools(self):
         for path in ("services/extensions/internal/app/unapproved.go",
@@ -304,6 +355,19 @@ class CoreBoundaryTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             self.assert_extension_storage("services/extensions/internal/composition/unapproved.go",
                                           'package composition\nimport "database/sql"')
+        assistant_source = (ROOT / COMPOSITION_ASSISTANT).read_text()
+        for forbidden in ('import _ "github.com/lib/pq"', 'sql.Open("postgres", dsn)',
+                          'sql.OpenDB(connector)', 'sql . Open ("postgres", dsn)',
+                          'SELECT * FROM core_billing.balance_state',
+                          'SELECT * FROM core_identity.users',
+                          'SELECT * FROM core_payments.intents',
+                          'SELECT * FROM core_oauth.families',
+                          'SELECT * FROM lmm_operations.publications',
+                          'func (r *Runtime) Close() error { return nil }',
+                          'func bad() { db.Query("SELECT 1") }'):
+            with self.subTest(path=COMPOSITION_ASSISTANT, forbidden=forbidden):
+                with self.assertRaises(AssertionError):
+                    self.assert_extension_storage(COMPOSITION_ASSISTANT, assistant_source + "\n" + forbidden)
 
     def test_composition_storage_guards_cannot_be_removed_or_gain_table_access(self):
         source = (ROOT / COMPOSITION_STORAGE).read_text()
@@ -454,13 +518,17 @@ class CoreBoundaryTests(unittest.TestCase):
             case "payments":
         """)
 
-    def assert_runtime_credentials(self, runtime, payments, startup):
+    def assert_runtime_credentials(self, runtime, payments, startup, assistant=None):
         pairwise = self.go_function_body(
             payments, "func independentRuntimeCredentials(credentials ...[]byte) error")
         self.assertEqual(pairwise, go_tokens(RUNTIME_CREDENTIAL_BODY))
         loader = self.go_function_body(
             payments, "func loadPaymentCredential(cfg Config, identityToken, commerceToken []byte) ([]byte, error)")
         self.assertEqual(loader, go_tokens(PAYMENT_CREDENTIAL_BODY))
+        assistant_file = assistant if assistant is not None else (ROOT / COMPOSITION_ASSISTANT).read_text()
+        assistant_loader = self.go_function_body(
+            assistant_file, "func loadAssistantCredential(cfg Config, identity, commerce, payment []byte) ([]byte, error)")
+        self.assertEqual(assistant_loader, go_tokens(ASSISTANT_CREDENTIAL_BODY))
         body = self.go_function_body(
             runtime, "func New(ctx context.Context, cfg Config) (_ *Runtime, resultErr error)")
         guard = self.token_index(body, """
@@ -468,19 +536,45 @@ class CoreBoundaryTests(unittest.TestCase):
                 return nil, err
             }
         """)
-        payment = self.token_index(body, """
+        payment_load = self.token_index(body, """
             if selected["payments"] {
-                paymentToken, err := loadPaymentCredential(cfg, token, commerceToken)
-                if err != nil { return nil, err }
+                paymentToken, err = loadPaymentCredential(cfg, token, commerceToken)
+                if err != nil {
+                    return nil, err
+                }
+            }
+        """)
+        assistant_load = self.token_index(body, """
+            assistantToken, err := loadAssistantCredential(cfg, token, commerceToken, paymentToken)
+            if err != nil {
+                return nil, err
+            }
+        """)
+        payment_compose = self.token_index(body, """
+            if selected["payments"] {
                 if err := r.composePayments(ctx, cfg, paymentToken); err != nil {
                     return nil, err
                 }
             }
         """)
-        self.assertLess(guard, payment)
-        self.assertLess(guard, self.token_index(body, "openStorage(ctx, cfg.Store)"))
-        self.assertLess(guard, self.token_index(
-            body, "r.CommerceClient, err = coreclient.New(cfg.Socket, commerceToken)"))
+        self.assertLess(guard, payment_load)
+        self.assertLess(payment_load, assistant_load)
+        self.assertLess(assistant_load, payment_compose)
+        store_block = self.token_index(body, 'if selected["store"] {')
+        store_open = self.token_index(body, "openStorage(ctx, cfg.Store)")
+        commerce_client = self.token_index(body, "r.CommerceClient, err = coreclient.New(cfg.Socket, commerceToken)")
+        assistant_block = self.token_index(body, 'if selected["assistant"] {')
+        assistant_open = self.token_index(body, "openStorage(ctx, cfg.Assistant)")
+        assistant_delegation = self.token_index(body, "r.composeAssistantDelegation(ctx, cfg, db, auth, assistantToken)")
+        operations_block = self.token_index(body, 'if selected["operations"] {')
+
+        self.assertLess(assistant_load, store_block)
+        self.assertLess(assistant_load, store_open)
+        self.assertLess(assistant_load, commerce_client)
+        self.assertLess(assistant_load, assistant_block)
+        self.assertLess(assistant_load, assistant_open)
+        self.assertLess(assistant_load, assistant_delegation)
+        self.assertLess(assistant_load, operations_block)
         compose = self.go_function_body(
             payments, "func (r *Runtime) composePayments(ctx context.Context, cfg Config, paymentToken []byte) error")
         self.token_index(compose, """
@@ -512,13 +606,14 @@ class CoreBoundaryTests(unittest.TestCase):
         runtime = (ROOT / "services/extensions/internal/composition/runtime.go").read_text()
         payments = (ROOT / COMPOSITION_PAYMENTS).read_text()
         startup = (ROOT / "services/extensions/internal/app/run.go").read_text()
-        self.assert_runtime_credentials(runtime, payments, startup)
+        assistant = (ROOT / COMPOSITION_ASSISTANT).read_text()
+        self.assert_runtime_credentials(runtime, payments, startup, assistant)
         for required in ("credentials ...[]byte", "for i, token := range credentials",
                          "len(token) == 0", "credentials[i+1:]", "len(other) != 0",
                          "bytes.Equal(token, other)",
                          'errors.New("host and core RPC credentials must be independent")'):
             with self.subTest(removed=required), self.assertRaises(AssertionError):
-                self.assert_runtime_credentials(runtime, payments.replace(required, ""), startup)
+                self.assert_runtime_credentials(runtime, payments.replace(required, ""), startup, assistant)
         # Each of the six possible role aliases must invalidate the exact
         # loaded-byte call. Empty optional roles are handled by the real helper.
         roles = ["cfg.HostCredential", "identityToken", "commerceToken", "paymentToken"]
@@ -529,7 +624,16 @@ class CoreBoundaryTests(unittest.TestCase):
                 aliased[j] = aliased[i]
                 changed = "independentRuntimeCredentials(" + ", ".join(aliased) + ")"
                 with self.subTest(pair=(roles[i], roles[j])), self.assertRaises(AssertionError):
-                    self.assert_runtime_credentials(runtime, payments.replace(original, changed), startup)
+                    self.assert_runtime_credentials(runtime, payments.replace(original, changed), startup, assistant)
+        as_roles = ["cfg.HostCredential", "identity", "commerce", "payment", "token"]
+        as_original = "independentRuntimeCredentials(" + ", ".join(as_roles) + ")"
+        for i in range(len(as_roles)):
+            for j in range(i + 1, len(as_roles)):
+                aliased = list(as_roles)
+                aliased[j] = aliased[i]
+                changed = "independentRuntimeCredentials(" + ", ".join(aliased) + ")"
+                with self.subTest(as_pair=(as_roles[i], as_roles[j])), self.assertRaises(AssertionError):
+                    self.assert_runtime_credentials(runtime, payments, startup, assistant.replace(as_original, changed))
 
     def test_actual_startup_uses_checked_credentials_before_financial_dependencies(self):
         runtime = (ROOT / "services/extensions/internal/composition/runtime.go").read_text()
@@ -543,9 +647,32 @@ class CoreBoundaryTests(unittest.TestCase):
                         runtime.replace("loadPaymentCredential(cfg, token, commerceToken)",
                                         "loadPaymentCredential(cfg, token, token)"),
                         runtime.replace("r.composePayments(ctx, cfg, paymentToken)",
-                                        "r.composePayments(ctx, cfg, token)")):
+                                        "r.composePayments(ctx, cfg, token)"),
+                        runtime.replace("loadAssistantCredential(cfg, token, commerceToken, paymentToken)",
+                                        "loadAssistantCredential(cfg, token, token, paymentToken)"),
+                        runtime.replace("loadAssistantCredential(cfg, token, commerceToken, paymentToken)",
+                                        "loadAssistantCredential(cfg, token, commerceToken, token)")):
             with self.subTest(runtime=changed), self.assertRaises(AssertionError):
                 self.assert_runtime_credentials(changed, payments, startup)
+        # Store assembly moved before assistant credential validation (counterexample from verify.py)
+        marker = '\tif selected["store"] {'
+        start = runtime.index(marker)
+        brace = runtime.index('{', start)
+        depth = 0
+        end = None
+        for match in GO_TOKEN.finditer(runtime, brace):
+            token = match.group(0)
+            if token == '{': depth += 1
+            elif token == '}':
+                depth -= 1
+                if depth == 0: end = match.end(); break
+        self.assertIsNotNone(end)
+        block = runtime[start:end]
+        shortened = runtime[:start] + runtime[end:]
+        pos = shortened.index('\tassistantToken, err := loadAssistantCredential(')
+        store_before_assistant = shortened[:pos] + block + '\n' + shortened[pos:]
+        with self.subTest(case="store_before_assistant"), self.assertRaises(AssertionError):
+            self.assert_runtime_credentials(store_before_assistant, payments, startup)
         for required in ("coreclient.ReadTokenFile(cfg.PaymentTokenFile)",
                          "len(cfg.HostCredential) < 32", "return paymentToken, nil"):
             with self.subTest(removed=required), self.assertRaises(AssertionError):
@@ -809,19 +936,80 @@ class CoreBoundaryTests(unittest.TestCase):
         self.assertIn("with_password_slots", core)
         self.assertNotIn("lmm_extensions", core)
 
-    def test_core_runtime_privileges_are_checked_without_writes(self):
-        main = (ROOT / "services/core/src/main.rs").read_text()
-        guard = (ROOT / "services/core/src/runtime_database.rs").read_text()
-        self.assertIn("runtime_database::check", main)
+    def assert_runtime_database_guards(self, guard):
+        uncommented = re.sub(r'//[^\n]*', '', guard)
+        uncommented = re.sub(r'/\*.*?\*/', '', uncommented, flags=re.DOTALL)
         for required in ("REPEATABLE READ READ ONLY", "rolsuper", "rolbypassrls",
                          "rolcreaterole", "rolcreatedb", "rolreplication",
                          "has_any_column_privilege", "MEMBER WITH ADMIN OPTION",
                          "pg_has_role(current_user,r.oid,'SET')",
-                         "core_migration", "balance_state", "open_ledger_wallet"):
-            self.assertIn(required, guard)
+                         "core_migration", "core_billing", "c.relname<>'account_policies'",
+                         "open_ledger_wallet"):
+            self.assertIn(required, uncommented)
         for mutation in ("GRANT ", "ALTER ROLE ", "CREATE TABLE ", "INSERT INTO ",
                          "UPDATE core_", "DELETE FROM "):
-            self.assertNotIn(mutation, guard)
+            self.assertNotIn(mutation, uncommented)
+
+        m = re.search(r'let\s+forbidden_write\s*:\s*bool\s*=\s*sqlx::query_scalar\(\s*r#"(.*?)"#\)', uncommented, re.DOTALL)
+        self.assertIsNotNone(m, "forbidden_write query must be present in runtime_database.rs")
+        sql = m.group(1)
+        sql = re.sub(r'--[^\n]*', '', sql)
+        sql = re.sub(r'/\*.*?\*/', '', sql, flags=re.DOTALL)
+        norm_sql = " ".join(sql.split())
+
+        billing_rule = re.search(
+            r"\(\s*n\.nspname\s*=\s*'core_billing'\s+AND\s+c\.relname\s*<>\s*'account_policies'\s*\)",
+            norm_sql
+        )
+        self.assertIsNotNone(billing_rule, "core_billing write protection rule must be active")
+        start_pos = billing_rule.start()
+        prefix = norm_sql[max(0, start_pos - 30):start_pos]
+        self.assertFalse(re.search(r"\bFALSE\s+AND\b|\b0\s*=\s*1\s+AND\b", prefix, re.IGNORECASE), "billing rule must not be disabled with FALSE")
+        suffix = norm_sql[billing_rule.end():min(len(norm_sql), billing_rule.end() + 30)]
+        self.assertFalse(re.search(r"\bAND\s+FALSE\b|\bAND\s+0\s*=\s*1\b", suffix, re.IGNORECASE), "billing rule must not be disabled with FALSE")
+
+        self.assertIn("has_table_privilege(c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,TRIGGER,REFERENCES,MAINTAIN')", norm_sql)
+        self.assertIn("has_any_column_privilege(c.oid,'INSERT,UPDATE,REFERENCES')", norm_sql)
+        self.assertTrue(re.search(
+            r"n\.nspname\s*=\s*'core_billing'\s+AND\s+c\.relname\s*=\s*'account_policies'\s+AND\s+has_table_privilege\(c\.oid,'DELETE,TRUNCATE,TRIGGER,REFERENCES,MAINTAIN'\)",
+            norm_sql
+        ), "account_policies DELETE/TRUNCATE protection must be present")
+        self.assertTrue(re.search(
+            r"n\.nspname\s*=\s*'core_billing'\s+AND\s+CASE\s+WHEN\s+c\.relkind\s*=\s*'S'\s+THEN\s+has_sequence_privilege\(c\.oid,'USAGE,SELECT,UPDATE'\)",
+            norm_sql
+        ), "core_billing sequence privileges must be checked")
+        for fn in ('core_billing.import_opening_balance(jsonb)',
+                   'core_billing.import_account_opening_counters(jsonb)',
+                   'core_billing.import_legacy_escrow_batch(jsonb)'):
+            self.assertIn(f"has_function_privilege('{fn}','EXECUTE')", norm_sql)
+
+    def test_core_runtime_privileges_are_checked_without_writes(self):
+        main = (ROOT / "services/core/src/main.rs").read_text()
+        guard = (ROOT / "services/core/src/runtime_database.rs").read_text()
+        self.assertIn("runtime_database::check", main)
+        self.assert_runtime_database_guards(guard)
+        # Counterexample 1: replacing billing write rule with FALSE (the exact verify.py mutant)
+        mutated_false = guard.replace("(n.nspname='core_billing' AND c.relname<>'account_policies')",
+                                      "(FALSE AND c.relname<>'account_policies')")
+        with self.assertRaises(AssertionError):
+            self.assert_runtime_database_guards(mutated_false)
+        # Counterexample 2: commenting out billing write rule
+        mutated_comment = guard.replace("(n.nspname='core_billing' AND c.relname<>'account_policies')",
+                                        "/* (n.nspname='core_billing' AND c.relname<>'account_policies') */ true")
+        with self.assertRaises(AssertionError):
+            self.assert_runtime_database_guards(mutated_comment)
+        # Counterexample 3: tampering billing schema name
+        mutated_name = guard.replace("n.nspname='core_billing'", "n.nspname='tampered_billing'")
+        with self.assertRaises(AssertionError):
+            self.assert_runtime_database_guards(mutated_name)
+        # Counterexample 4: allowing write to account_policies
+        mutated_policy = guard.replace("c.relname<>'account_policies'", "true")
+        with self.assertRaises(AssertionError):
+            self.assert_runtime_database_guards(mutated_policy)
+        # Counterexample 5: injecting an unsafe mutation command into guard
+        mutated_insert = guard + "\nINSERT INTO core_billing.ledger_entries VALUES (1);"
+        with self.assertRaises(AssertionError):
+            self.assert_runtime_database_guards(mutated_insert)
 
     def test_core_owns_the_funding_contract(self):
         cases = json.loads((ROOT / "contracts/core/v1/funding-cases.json").read_text())
