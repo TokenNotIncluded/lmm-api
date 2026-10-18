@@ -147,16 +147,26 @@ after(() => {
 test('the selected top-up and actual payment remain distinct after an amount change', async () => {
   let summary = await render()
   assert.match(
-    summary.querySelector('[data-slot="wallet-selected-topup"]')?.textContent ?? '',
+    summary.querySelector('[data-slot="wallet-selected-topup"]')?.textContent ??
+      '',
     /10/
   )
-  assert.match(summary.textContent ?? '', /9\.6(?:0)?/)
+  assert.match(
+    summary.querySelector('[data-slot="wallet-payment-total"]')?.textContent ??
+      '',
+    /^9\.6(?:0)? USD$/
+  )
   summary = await render({ topupAmount: 10000000, paymentAmount: 19.2 })
   assert.match(
-    summary.querySelector('[data-slot="wallet-selected-topup"]')?.textContent ?? '',
+    summary.querySelector('[data-slot="wallet-selected-topup"]')?.textContent ??
+      '',
     /20/
   )
-  assert.match(summary.textContent ?? '', /19\.2(?:0)?/)
+  assert.match(
+    summary.querySelector('[data-slot="wallet-payment-total"]')?.textContent ??
+      '',
+    /^19\.2(?:0)? USD$/
+  )
 })
 
 test('Edit returns focus to the amount input without starting a payment', async () => {
