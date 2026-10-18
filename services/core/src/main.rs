@@ -18,7 +18,7 @@ use std::{
 
 mod admin;
 
-const USAGE: &str = "Usage: lmm-core [--config /absolute/core.toml | --legacy-env] [serve | init-db | bootstrap-user | complete-setup | install-usage-receipt-index | schema-manifest | check-db]\n\n\
+const USAGE: &str = "Usage: lmm-core [--config /absolute/core.toml | --legacy-env] [serve | init-db | bootstrap-user | complete-setup | install-usage-receipt-index | plan-admin-activation | apply-admin-activation | schema-manifest | check-db]\n\n\
 Commands:\n\
   serve           Start the core service (the default without arguments).\n\
   schema-manifest Print the compiled schema contract as JSON; accepts no config options and performs no I/O except stdout.\n\
@@ -26,7 +26,9 @@ Commands:\n\
   init-db         Initialize a new, empty core database.\n\
   bootstrap-user  Read a user_id and platform_level JSON object from stdin.\n\n\
   complete-setup  Record setup completion offline after creating or importing root.\n\
-  install-usage-receipt-index  Offline owner-only index installation; requires explicit --config.\n\n\
+  install-usage-receipt-index  Offline owner-only index installation; requires explicit --config.\n\
+  plan-admin-activation  Read-only candidate binding for one imported admin; requires explicit --config (not --legacy-env).\n\
+  apply-admin-activation Owner-only apply of one human-confirmed activation; requires explicit --config (not --legacy-env).\n\n\
 Options:\n\
   --config PATH  Read one absolute TOML file (default /etc/lmm.conf.d/core.toml).\n\
   --legacy-env   Explicit temporary environment compatibility; conflicts with --config.\n\
@@ -36,7 +38,9 @@ bootstrap-user accepts at most 4096 bytes and writes a one-time credential to\n\
 stdout. Redirect that output to a private file; do not put secrets in arguments.\n\
 install-usage-receipt-index reads exactly one approved prior catalog SHA256 from\n\
 stdin (64 hex digits, optional LF/CRLF). Use separate installer-owner configuration\n\
-after independent frozen-source review; never runtime credentials or automatic detection.";
+after independent frozen-source review; never runtime credentials or automatic detection.\n\
+plan-admin-activation and apply-admin-activation read at most 64 KiB of deny_unknown_fields\n\
+JSON from stdin and print secret-free diagnostics. They never invent a human approval.";
 
 enum Command {
     Serve,
@@ -44,6 +48,8 @@ enum Command {
     BootstrapUser,
     CompleteSetup,
     InstallUsageReceiptIndex,
+    PlanAdminActivation,
+    ApplyAdminActivation,
     SchemaManifest,
     CheckDb,
     Help,
@@ -82,6 +88,8 @@ fn command(args: impl IntoIterator<Item = OsString>) -> io::Result<Arguments> {
                 | "bootstrap-user"
                 | "complete-setup"
                 | "install-usage-receipt-index"
+                | "plan-admin-activation"
+                | "apply-admin-activation"
                 | "schema-manifest"
                 | "check-db",
             ) if operation.is_none() && !version => {
@@ -90,6 +98,8 @@ fn command(args: impl IntoIterator<Item = OsString>) -> io::Result<Arguments> {
                     Some("bootstrap-user") => Command::BootstrapUser,
                     Some("complete-setup") => Command::CompleteSetup,
                     Some("install-usage-receipt-index") => Command::InstallUsageReceiptIndex,
+                    Some("plan-admin-activation") => Command::PlanAdminActivation,
+                    Some("apply-admin-activation") => Command::ApplyAdminActivation,
                     Some("schema-manifest") => Command::SchemaManifest,
                     Some("check-db") => Command::CheckDb,
                     _ => Command::Serve,
@@ -174,6 +184,28 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .into());
             }
             Some(operation)
+        }
+        Command::PlanAdminActivation => {
+            if arguments.config.is_none() || arguments.legacy_env {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "plan-admin-activation requires explicit --config and cannot use --legacy-env",
+                )
+                .into());
+            }
+            Some(admin::Operation::plan_admin_activation(io::stdin().lock())?)
+        }
+        Command::ApplyAdminActivation => {
+            if arguments.config.is_none() || arguments.legacy_env {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "apply-admin-activation requires explicit --config and cannot use --legacy-env",
+                )
+                .into());
+            }
+            Some(admin::Operation::apply_admin_activation(
+                io::stdin().lock(),
+            )?)
         }
     };
     config::initialize(arguments.config.as_deref(), arguments.legacy_env)?;

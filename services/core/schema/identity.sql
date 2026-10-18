@@ -406,11 +406,24 @@ CREATE INDEX web_sessions_user ON core_identity.web_sessions(user_id);
 
 -- Account security-policy changes invalidate every previously issued bearer
 -- and browser family, including native endpoints, in the same transaction.
+-- Opening the password gate for a still-dormant imported privileged account is
+-- owned by the offline activation UPDATE on users.auth_version; do not +1 here
+-- or activation would become +2.
 CREATE FUNCTION core_identity.profile_policy_changed() RETURNS TRIGGER
 LANGUAGE plpgsql SET search_path = pg_catalog AS $$
 BEGIN
     IF (NEW.password_login_allowed,NEW.second_factor_required) IS DISTINCT FROM
        (OLD.password_login_allowed,OLD.second_factor_required) THEN
+        IF NEW.password_login_allowed AND NOT OLD.password_login_allowed
+           AND NEW.second_factor_required IS NOT DISTINCT FROM OLD.second_factor_required
+           AND core_identity.is_identity_relation_owner()
+           AND EXISTS (
+                SELECT 1 FROM core_identity.privileged_import_facts f
+                JOIN core_identity.users u ON u.id = NEW.user_id
+                WHERE f.user_id = NEW.user_id AND NOT u.active
+           ) THEN
+            RETURN NEW;
+        END IF;
         UPDATE core_identity.users SET auth_version=auth_version+1 WHERE id=NEW.user_id;
     END IF;
     RETURN NEW;
@@ -540,3 +553,181 @@ CREATE TRIGGER session_authentication_truncate BEFORE TRUNCATE
  ON core_identity.session_authentication FOR EACH STATEMENT EXECUTE FUNCTION core_identity.check_session_authentication();
 REVOKE ALL ON core_identity.mfa_factors,core_identity.mfa_enrollments,
  core_identity.mfa_backup_codes,core_identity.mfa_challenges,core_identity.session_authentication FROM PUBLIC;
+
+-- Persisted import facts for one privileged account. Written only by the A2
+-- importer in the same transaction as users/profiles; activation reads them and
+-- never accepts caller-declared substitutes. Source enabled / global password
+-- flags are archive facts; live users stay dormant until owner apply.
+-- a2_sql_sha256 is the SHA-256 of the pre-seal base import SQL body (with the
+-- SQL-body digest field held as 64 zero hex digits during hashing), not the
+-- SHA-256 of the sealed complete SQL file.
+CREATE TABLE core_identity.privileged_import_facts (
+    user_id BIGINT PRIMARY KEY REFERENCES core_identity.users(id),
+    archive_sha256 BYTEA NOT NULL CHECK (octet_length(archive_sha256) = 32),
+    a2_semantic_sha256 BYTEA NOT NULL CHECK (octet_length(a2_semantic_sha256) = 32),
+    a2_file_sha256 BYTEA NOT NULL CHECK (octet_length(a2_file_sha256) = 32),
+    a2_sql_sha256 BYTEA NOT NULL CHECK (octet_length(a2_sql_sha256) = 32),
+    migration_id TEXT NOT NULL CHECK (length(migration_id) BETWEEN 1 AND 128),
+    system_id BYTEA NOT NULL CHECK (octet_length(system_id) = 32),
+    database_oid BIGINT NOT NULL CHECK (database_oid > 0),
+    instance_nonce BYTEA NOT NULL CHECK (octet_length(instance_nonce) = 32),
+    import_run BYTEA NOT NULL CHECK (octet_length(import_run) = 32),
+    source_enabled BOOLEAN NOT NULL,
+    source_deleted BOOLEAN NOT NULL,
+    password_verifier_recognized BOOLEAN NOT NULL,
+    password_login_enabled BOOLEAN NOT NULL,
+    password_hash_sha256 BYTEA NOT NULL CHECK (octet_length(password_hash_sha256) = 32),
+    login_name_sha256 BYTEA NOT NULL CHECK (octet_length(login_name_sha256) = 32),
+    source_role TEXT NOT NULL CHECK (source_role IN ('admin', 'superadmin')),
+    source_second_factor_required BOOLEAN NOT NULL,
+    source_auth_version BIGINT NOT NULL CHECK (source_auth_version > 0),
+    UNIQUE (migration_id, user_id)
+);
+CREATE TABLE core_identity.permission_policies (
+    user_id BIGINT PRIMARY KEY REFERENCES core_identity.users(id),
+    revision BIGINT NOT NULL CHECK (revision > 0),
+    contract TEXT NOT NULL CHECK (contract = 'core.permissions.v1'),
+    sha256 BYTEA NOT NULL CHECK (octet_length(sha256) = 32),
+    canonical_payload BYTEA NOT NULL CHECK (octet_length(canonical_payload) BETWEEN 1 AND 65536),
+    verified_complete BOOLEAN NOT NULL CHECK (verified_complete)
+);
+CREATE TABLE core_identity.permission_policy_rows (
+    user_id BIGINT NOT NULL REFERENCES core_identity.permission_policies(user_id),
+    action TEXT NOT NULL,
+    effect TEXT NOT NULL CHECK (effect IN ('allow', 'deny')),
+    PRIMARY KEY (user_id, action)
+);
+CREATE TABLE core_identity.admin_activation_receipts (
+    approval_id BYTEA PRIMARY KEY CHECK (octet_length(approval_id) = 32),
+    payload_sha256 BYTEA NOT NULL CHECK (octet_length(payload_sha256) = 32),
+    user_id BIGINT NOT NULL REFERENCES core_identity.users(id),
+    expected_auth_version BIGINT NOT NULL CHECK (expected_auth_version > 0),
+    UNIQUE (user_id, expected_auth_version)
+);
+CREATE FUNCTION core_identity.offline_authority_immutable() RETURNS TRIGGER
+LANGUAGE plpgsql SET search_path = pg_catalog AS $$
+BEGIN
+    RAISE EXCEPTION 'offline imported-admin authority is immutable' USING ERRCODE = '55000';
+END $$;
+CREATE TRIGGER privileged_import_facts_immutable
+    BEFORE UPDATE OR DELETE ON core_identity.privileged_import_facts
+    FOR EACH ROW EXECUTE FUNCTION core_identity.offline_authority_immutable();
+CREATE TRIGGER privileged_import_facts_no_truncate
+    BEFORE TRUNCATE ON core_identity.privileged_import_facts
+    FOR EACH STATEMENT EXECUTE FUNCTION core_identity.offline_authority_immutable();
+CREATE TRIGGER permission_policies_immutable
+    BEFORE UPDATE OR DELETE ON core_identity.permission_policies
+    FOR EACH ROW EXECUTE FUNCTION core_identity.offline_authority_immutable();
+CREATE TRIGGER permission_policies_no_truncate
+    BEFORE TRUNCATE ON core_identity.permission_policies
+    FOR EACH STATEMENT EXECUTE FUNCTION core_identity.offline_authority_immutable();
+CREATE TRIGGER permission_policy_rows_immutable
+    BEFORE UPDATE OR DELETE ON core_identity.permission_policy_rows
+    FOR EACH ROW EXECUTE FUNCTION core_identity.offline_authority_immutable();
+CREATE TRIGGER permission_policy_rows_no_truncate
+    BEFORE TRUNCATE ON core_identity.permission_policy_rows
+    FOR EACH STATEMENT EXECUTE FUNCTION core_identity.offline_authority_immutable();
+CREATE TRIGGER admin_activation_receipts_immutable
+    BEFORE UPDATE OR DELETE ON core_identity.admin_activation_receipts
+    FOR EACH ROW EXECUTE FUNCTION core_identity.offline_authority_immutable();
+CREATE TRIGGER admin_activation_receipts_no_truncate
+    BEFORE TRUNCATE ON core_identity.admin_activation_receipts
+    FOR EACH STATEMENT EXECUTE FUNCTION core_identity.offline_authority_immutable();
+
+-- Runtime roles hold broad UPDATE on users/profiles/password_logins; block
+-- bypass of offline approval for imported privileged accounts unless the
+-- session is the relation owner (installer/migration owner).
+CREATE FUNCTION core_identity.is_identity_relation_owner() RETURNS BOOLEAN
+LANGUAGE sql STABLE SET search_path = pg_catalog AS $$
+    SELECT current_user = pg_get_userbyid(
+        (SELECT relowner FROM pg_class
+         WHERE oid = 'core_identity.privileged_import_facts'::regclass))
+       AND current_user = (SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname=current_database())
+$$;
+CREATE FUNCTION core_identity.protect_imported_admin_user() RETURNS TRIGGER
+LANGUAGE plpgsql SET search_path = pg_catalog AS $$
+BEGIN
+    IF NOT core_identity.is_identity_relation_owner() THEN
+        IF TG_OP = 'INSERT' THEN
+            IF NEW.platform_role <> 'user' THEN
+                RAISE EXCEPTION 'privileged user creation is owner-only' USING ERRCODE = '42501';
+            END IF;
+        ELSE
+            IF NEW.platform_role IS DISTINCT FROM OLD.platform_role THEN
+                RAISE EXCEPTION 'platform role changes are owner-only' USING ERRCODE = '42501';
+            END IF;
+            IF EXISTS (SELECT 1 FROM core_identity.privileged_import_facts WHERE user_id = OLD.id)
+               AND ((NEW.active, NEW.personal_account_id) IS DISTINCT FROM (OLD.active, OLD.personal_account_id)
+                    OR (NOT OLD.active AND NEW.auth_version IS DISTINCT FROM OLD.auth_version)) THEN
+                RAISE EXCEPTION 'imported privileged user activation is owner-only' USING ERRCODE = '42501';
+            END IF;
+        END IF;
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE TRIGGER imported_admin_user_guard BEFORE INSERT OR UPDATE ON core_identity.users
+    FOR EACH ROW EXECUTE FUNCTION core_identity.protect_imported_admin_user();
+CREATE FUNCTION core_identity.protect_imported_admin_profile() RETURNS TRIGGER
+LANGUAGE plpgsql SET search_path = pg_catalog AS $$
+BEGIN
+    IF NOT core_identity.is_identity_relation_owner() AND (
+        (NEW.user_id IS DISTINCT FROM OLD.user_id AND EXISTS (
+            SELECT 1 FROM core_identity.privileged_import_facts WHERE user_id IN (OLD.user_id,NEW.user_id)))
+        OR (EXISTS (SELECT 1 FROM core_identity.privileged_import_facts f
+                    JOIN core_identity.users u ON u.id=f.user_id
+                    WHERE f.user_id=OLD.user_id AND NOT u.active)
+            AND (NEW.password_login_allowed, NEW.second_factor_required, NEW.legacy_bcrypt_allowed, NEW.email_login_allowed)
+                IS DISTINCT FROM (OLD.password_login_allowed, OLD.second_factor_required, OLD.legacy_bcrypt_allowed, OLD.email_login_allowed))
+    ) THEN
+        RAISE EXCEPTION 'dormant imported privileged profile gate is owner-only' USING ERRCODE = '42501';
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE TRIGGER imported_admin_profile_guard BEFORE UPDATE ON core_identity.user_profiles
+    FOR EACH ROW EXECUTE FUNCTION core_identity.protect_imported_admin_profile();
+CREATE FUNCTION core_identity.protect_imported_admin_password() RETURNS TRIGGER
+LANGUAGE plpgsql SET search_path = pg_catalog AS $$
+DECLARE target BIGINT; imported BOOLEAN; dormant BOOLEAN;
+BEGIN
+    IF core_identity.is_identity_relation_owner() THEN
+        IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+        RETURN NEW;
+    END IF;
+    target := CASE WHEN TG_OP = 'DELETE' THEN OLD.user_id ELSE NEW.user_id END;
+    SELECT EXISTS(SELECT 1 FROM core_identity.privileged_import_facts WHERE user_id=target),
+           EXISTS(SELECT 1 FROM core_identity.privileged_import_facts f
+                  JOIN core_identity.users u ON u.id=f.user_id WHERE f.user_id=target AND NOT u.active)
+       INTO imported,dormant;
+    IF dormant OR (imported AND TG_OP='DELETE') THEN
+        RAISE EXCEPTION 'dormant imported privileged password verifier is owner-only' USING ERRCODE = '42501';
+    END IF;
+    IF TG_OP='UPDATE' AND (NEW.user_id,NEW.login_name) IS DISTINCT FROM (OLD.user_id,OLD.login_name)
+       AND (imported OR EXISTS(SELECT 1 FROM core_identity.privileged_import_facts WHERE user_id=OLD.user_id)) THEN
+        RAISE EXCEPTION 'imported privileged login identity is owner-only' USING ERRCODE = '42501';
+    END IF;
+    -- After approval, normal password changes and bcrypt upgrades remain Core
+    -- operations. Their business transaction controls credential invalidation.
+    IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+    RETURN NEW;
+END $$;
+CREATE TRIGGER imported_admin_password_guard BEFORE INSERT OR UPDATE OR DELETE
+    ON core_identity.password_logins
+    FOR EACH ROW EXECUTE FUNCTION core_identity.protect_imported_admin_password();
+CREATE FUNCTION core_identity.protect_imported_admin_account() RETURNS TRIGGER
+LANGUAGE plpgsql SET search_path = pg_catalog AS $$
+BEGIN
+    IF EXISTS (
+            SELECT 1 FROM core_identity.privileged_import_facts f
+            JOIN core_identity.users u ON u.id = f.user_id
+            WHERE u.personal_account_id = OLD.id)
+       AND NEW.active IS DISTINCT FROM OLD.active
+       AND NOT core_identity.is_identity_relation_owner() THEN
+        RAISE EXCEPTION 'imported privileged account gate is owner-only' USING ERRCODE = '42501';
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE TRIGGER imported_admin_account_guard BEFORE UPDATE ON core_identity.accounts
+    FOR EACH ROW EXECUTE FUNCTION core_identity.protect_imported_admin_account();
+
+REVOKE ALL ON core_identity.privileged_import_facts, core_identity.permission_policies,
+    core_identity.permission_policy_rows, core_identity.admin_activation_receipts FROM PUBLIC;

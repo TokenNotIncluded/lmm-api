@@ -74,6 +74,11 @@ GRANT SELECT ON core_billing.ledger_accounts, core_billing.balance_state,
     core_billing.legacy_escrow_batch_runs, core_billing.legacy_escrow_projects,
     core_billing.legacy_escrow_claims, core_billing.legacy_escrow_disputes,
     core_billing.legacy_escrow_state, core_billing.legacy_escrow_operations TO :"runtime_role";
+-- Imported administrator approval remains owner-only. Runtime reads frozen
+-- facts for guarded identity changes and the complete permission snapshot.
+-- Approval receipts and the migration registry are not runtime inputs.
+GRANT SELECT ON core_identity.privileged_import_facts,
+    core_identity.permission_policies, core_identity.permission_policy_rows TO :"runtime_role";
 GRANT SELECT, INSERT, UPDATE ON core_billing.account_policies TO :"runtime_role";
 GRANT EXECUTE ON FUNCTION core_billing.open_ledger_wallet(bigint),
     core_billing.post_ledger(jsonb),
