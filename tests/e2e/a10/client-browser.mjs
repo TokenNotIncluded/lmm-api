@@ -16,7 +16,8 @@ const clientSource = await readFile(modulePath)
 const require = createRequire(import.meta.url)
 const entry = process.env.PLAYWRIGHT_MODULE ?? require.resolve('playwright')
 assert.ok(path.isAbsolute(entry), 'Use an absolute installed Playwright entry')
-const { chromium } = await import(pathToFileURL(entry).href)
+const playwrightImport = await import(pathToFileURL(entry).href)
+const chromium = playwrightImport.chromium ?? playwrightImport.default?.chromium
 const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE
 if (executablePath) assert.ok(path.isAbsolute(executablePath))
 
