@@ -26,6 +26,131 @@ fn frame(decoder: &mut Decoder, v: Value) -> Result<Vec<Event>, RelayError> {
 }
 
 #[test]
+fn chat_reasoning_summary_survives_responses_json_and_stream_lifecycle() {
+    let summary = json!([{"type":"summary_text","text":"think carefully"}]);
+    for finish in ["stop", "length"] {
+        for stream in [false, true] {
+            let limits = Limits::default();
+            let mut decoder = Decoder::new(UpstreamProtocol::Chat, &limits);
+            let events = if stream {
+                let mut events = Vec::new();
+                for delta in [
+                    json!({"reasoning_content":"think "}),
+                    json!({"reasoning_content":"carefully"}),
+                    json!({"content":"answer"}),
+                ] {
+                    events.extend(
+                        frame(
+                            &mut decoder,
+                            json!({"id":"chat_1","choices":[{"index":0,"delta":delta}]}),
+                        )
+                        .unwrap(),
+                    );
+                }
+                events.extend(frame(&mut decoder, json!({"id":"chat_1","choices":[{"index":0,"delta":{},"finish_reason":finish}]})).unwrap());
+                events.extend(
+                    decoder
+                        .frame(Frame {
+                            event: None,
+                            data: "[DONE]".into(),
+                        })
+                        .unwrap(),
+                );
+                events
+            } else {
+                decoder.json(&json!({"id":"chat_1","choices":[{"index":0,"message":{"role":"assistant","reasoning_content":"think carefully","content":"answer"},"finish_reason":finish}]})).unwrap()
+            };
+            let mut encoder = Encoder::new(
+                &input(ClientProtocol::Responses, stream),
+                "reasoning_summary",
+                &limits,
+            );
+            let mut bytes = Vec::new();
+            for event in events {
+                for packet in encoder.consume(event).unwrap() {
+                    bytes.extend(packet);
+                }
+            }
+            for packet in encoder.terminal().unwrap() {
+                bytes.extend(packet);
+            }
+            let body = String::from_utf8(bytes).unwrap();
+            let packets: Vec<Value> = if stream {
+                body.lines()
+                    .filter_map(|line| line.strip_prefix("data: "))
+                    .map(|line| serde_json::from_str(line).unwrap())
+                    .collect()
+            } else {
+                vec![serde_json::from_str(&body).unwrap()]
+            };
+            let response = if stream {
+                &packets.last().unwrap()["response"]
+            } else {
+                &packets[0]
+            };
+            let item = &response["output"][0];
+            assert_eq!(item["type"], "reasoning");
+            assert_eq!(item["summary"], summary);
+            assert!(item.get("content").is_none());
+            assert_eq!(response["output"][1]["content"][0]["text"], "answer");
+            assert_eq!(
+                response["status"],
+                if finish == "length" {
+                    "incomplete"
+                } else {
+                    "completed"
+                }
+            );
+            if stream {
+                let lifecycle: Vec<_> = packets
+                    .iter()
+                    .filter(|p| {
+                        p["item"]["type"] == "reasoning"
+                            || p["type"]
+                                .as_str()
+                                .is_some_and(|kind| kind.starts_with("response.reasoning_summary_"))
+                    })
+                    .collect();
+                assert_eq!(
+                    lifecycle
+                        .iter()
+                        .map(|p| p["type"].as_str().unwrap())
+                        .collect::<Vec<_>>(),
+                    [
+                        "response.output_item.added",
+                        "response.reasoning_summary_part.added",
+                        "response.reasoning_summary_text.delta",
+                        "response.reasoning_summary_text.delta",
+                        "response.reasoning_summary_text.done",
+                        "response.reasoning_summary_part.done",
+                        "response.output_item.done",
+                    ]
+                );
+                assert_eq!(lifecycle[0]["item"]["summary"], json!([]));
+                assert_eq!(lifecycle[0]["item"]["id"], item["id"]);
+                assert!(lifecycle[0]["item"].get("content").is_none());
+                for event in &lifecycle {
+                    assert_eq!(event["output_index"], 0);
+                    if event.get("item_id").is_some() {
+                        assert_eq!(event["item_id"], item["id"]);
+                        assert_eq!(event["summary_index"], 0);
+                    }
+                }
+                assert_eq!(
+                    lifecycle[1]["part"],
+                    json!({"type":"summary_text","text":""})
+                );
+                assert_eq!(lifecycle[2]["delta"], "think ");
+                assert_eq!(lifecycle[3]["delta"], "carefully");
+                assert_eq!(lifecycle[4]["text"], "think carefully");
+                assert_eq!(lifecycle[5]["part"], summary[0]);
+                assert_eq!(&lifecycle[6]["item"], item);
+            }
+        }
+    }
+}
+
+#[test]
 fn extra_tool_result_fields_are_not_silently_discarded() {
     for field in ["reasoning_content", "refusal", "provider_metadata"] {
         let mut body = json!({"model":"alias","messages":[

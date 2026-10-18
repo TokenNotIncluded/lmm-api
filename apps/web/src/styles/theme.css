@@ -100,12 +100,14 @@ For commercial licensing, please contact support@quantumnous.com
 }
 
 :root {
+  color-scheme: light;
   /* Cut system: tighter corners echo the logo's squared bowls and 45° base
    * cut. Presets and the user's radius axis still override this value. */
   --radius: 0.5rem;
   /* Signature 45° corner cut used by brand marks and key surfaces. */
   --cut-size: 0.625rem;
   --app-header-height: 3rem;
+  --public-header-height: 4rem;
   /* Static build-channel fallback consumed when JS hasn't booted yet. */
   --app-rev: '2k6e8r7p';
   /* Currently active body font. The font axis swaps this between
@@ -189,6 +191,7 @@ For commercial licensing, please contact support@quantumnous.com
 }
 
 .dark {
+  color-scheme: dark;
   /* OpenAI-like dark mode with a crisp charcoal canvas. */
   --background: oklch(0.235 0 0);
   --foreground: oklch(0.965 0 0);
