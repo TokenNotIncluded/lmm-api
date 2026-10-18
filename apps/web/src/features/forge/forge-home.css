@@ -366,6 +366,11 @@
   letter-spacing: -0.035em;
   text-wrap: balance;
 }
+.lmm-section h2[id] {
+  scroll-margin-top: calc(
+    var(--public-header-height) + env(safe-area-inset-top) + 1rem
+  );
+}
 /* Cut mark: the logo's 45° base cut, set as a solid block above each
  * section heading. Monochrome so it reads as identity, not decoration. */
 .lmm-section h2::before {

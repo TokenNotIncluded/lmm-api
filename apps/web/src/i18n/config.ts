@@ -24,6 +24,7 @@ import {
   convertDetectedLanguage,
   type InterfaceLanguageCode,
   normalizeInterfaceLanguage,
+  toIntlLocale,
 } from './languages'
 
 type LocaleModule = {
@@ -71,6 +72,15 @@ const localeBackend: BackendModule = {
     void readLocale(language, callback)
   },
 }
+
+function syncDocumentLanguage() {
+  if (typeof document === 'undefined') return
+  document.documentElement.lang = toIntlLocale(i18n.resolvedLanguage) ?? 'en'
+}
+
+i18n.on('initialized', syncDocumentLanguage)
+i18n.on('languageChanged', syncDocumentLanguage)
+i18n.on('loaded', syncDocumentLanguage)
 
 i18n
   .use(localeBackend)
