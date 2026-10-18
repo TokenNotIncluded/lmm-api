@@ -80,3 +80,7 @@ __pycache__/
 
 # Operator-reviewed legal configuration belongs outside the source tree.
 /config/legal/site.json
+
+# Scratch test outputs and untracked indices
+/scripts/.key-rights-test-output/
+/undefined/

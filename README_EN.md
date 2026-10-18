@@ -9,20 +9,66 @@
   <p><a href="README.md">简体中文</a> · <a href="README_EN.md">English</a></p>
 </div>
 
-**LMM stands for Language Model Mesh (语言模型网络).** “Mesh” conveys connection and collaboration, reflecting the project's direction in multi-model routing, channel sharing and microservice collaboration.
+**LMM stands for Language Model Mesh (语言模型网络).** It is a model gateway: one core owns identity, permissions, billing and model routing, and extensions carry the store, tool market, assistant, operations and payment adapters. “Mesh” refers to multi-model routing, channel sharing and component collaboration.
 
-This branch has exactly three executable programs: the `lmm` client, the `lmm-core` Rust core and the `lmm-extensions` Go host. The React console has a separate static Web build.
+> [!WARNING]
+> **This branch is a fresh-install microservice rewrite. It is WIP and not a replacement for the existing site.**
+> Passing module tests does not prove complete model, payment or funds flows. Historical funds, subscriptions and API keys are still being reconciled on isolated copies and are not accepted.
+> The runtime does not connect to the old application database, automatically upgrade schemas or fall back to the legacy server. See [architecture and status](docs/core-migration.md) for remaining work.
 
-**This fresh-install microservice branch is WIP, not a deployable replacement for the existing site.** Passing module tests does not prove a complete model, payment or funds flow. The runtime does not connect to the old application database, automatically upgrade schemas or fall back to the legacy server. Controlled migration experiments use isolated copies; see [architecture and status](docs/core-migration.md).
+## Three programs
 
-The default development branch is `wip/rust-core-go-extensions`; legacy `main`
-and `traditional` are frozen. [Branch promotion](docs/development-branches.md)
-is not deployment or acceptance. [Extore product sync](docs/extore-shop-binding-followup.md)
-remains incomplete and must not be deployed.
+```text
+lmm client / Web console
+        │
+        ├──► lmm-core (Rust) ────────► core PostgreSQL, model providers
+        │        ▲
+        │        │ authorized internal calls
+        └──► lmm-extensions (Go) ────► its own PostgreSQL
+```
 
-Initialize a new core database explicitly with `lmm-core init-db`; normal startup does not create or alter tables.
+| Program | Source | Responsibility |
+| --- | --- | --- |
+| `lmm` | `apps/cli` | User client that connects to services and calls their available features |
+| `lmm-core` | `services/core` | Identity, permissions, billing, ledger and model routing; `init-db`, `bootstrap-user` and others are subcommands of this program |
+| `lmm-extensions` | `services/extensions` | Business extensions for the store, tools, assistant, operations and payment adapters |
 
-## Start here
+- The core runs without Go. Extensions own their records only and cannot edit core balances or the core database.
+- `apps/web` produces a static Web archive served by a Web server; it is not an extra executable.
+- The Rust `lmm` client is maintained in [TokenNotIncluded/lmm](https://github.com/TokenNotIncluded/lmm) and pinned here as the `apps/cli` submodule. See the [client README](https://github.com/TokenNotIncluded/lmm#readme) for features and Magpie parity progress.
+- `contracts` holds cross-process contracts, `config/legal` holds editable policy drafts, and `packaging/distribution.json` defines archive contents.
+
+## Quick start
+
+Tool versions come from [mise.toml](mise.toml); run tools through `mise exec --`. Prepare only what your task needs; see [Development](docs/development.md).
+
+```sh
+# Initialize the client submodule only when you need the CLI
+git submodule update --init --depth 1 -- apps/cli
+
+# Initialize a new core database once with the installation-owner config; normal startup never creates or alters tables
+# Prepare owner and runtime credentials separately; see deployment/postgres/README.md
+lmm-core --config /absolute/private/core-owner.toml init-db
+
+# Read-only check of the installed database and runtime configuration
+lmm-core --config /absolute/private/core.toml check-db
+```
+
+Start a full isolated environment with the [Docker development stack](deployment/docker/README.md). Core and extensions are separate Compose projects: updating extensions must not restart the core or its database, and a responding core health route does not mean model routes are ready.
+
+## Configuration and directories
+
+New installations use TOML: `/etc/lmm.conf.d/core.toml` and `/etc/lmm.conf.d/extensions.toml`, or an explicit `--config` path.
+
+| Content | Path |
+| --- | --- |
+| Secrets | `/etc/lmm.conf.d/secrets/<service>/` |
+| Persistent state | `/var/lib/lmm/<service>/` |
+| Runtime files | `/run/lmm/<service>/` |
+
+See [configuration and filesystem layout](docs/filesystem-layout.md) for ownership, upgrades and legacy package boundaries. This convention does not automatically migrate an existing installation.
+
+## Documentation
 
 | Task | Entry point |
 | --- | --- |
@@ -34,24 +80,12 @@ Initialize a new core database explicitly with `lmm-core init-db`; normal startu
 | Build and inspect separate archives | [Packaging and distribution](docs/release-architecture.md) |
 | Find detailed contracts and historical material | [Documentation](docs/README.md) |
 
-## Layout and runtime boundaries
+## Branches
 
-| Program | Source | Responsibility |
-| --- | --- | --- |
-| `lmm` | `apps/cli` | User client that connects to services and calls their available features |
-| `lmm-core` | `services/core` | Identity, permissions, billing, ledger and model routing; `init-db` and `bootstrap-user` are subcommands of this same program |
-| `lmm-extensions` | `services/extensions` | Business extensions for the store, tools, assistant, operations and payment adapters |
-
-The Rust `lmm` client is maintained in [TokenNotIncluded/lmm](https://github.com/TokenNotIncluded/lmm) and pinned here as the `apps/cli` Git submodule. Initialize it with `git submodule update --init --depth 1 -- apps/cli`; see the [client README](https://github.com/TokenNotIncluded/lmm#readme) for implemented features and Magpie parity progress.
-
-`apps/web` produces a separate static Web archive served by a Web server. It does not add an executable program. `contracts` holds cross-process contracts, `config/legal` holds editable policy drafts, and `packaging/distribution.json` defines archive contents.
-
-New installations use `/etc/lmm.conf.d/core.toml` and `/etc/lmm.conf.d/extensions.toml`, selected by their fixed defaults or an explicit `--config` path. Secrets, persistent state and runtime files use `/etc/lmm.conf.d/secrets/<service>/`, `/var/lib/lmm/<service>/` and `/run/lmm/<service>/`. See [configuration and filesystem layout](docs/filesystem-layout.md) for ownership, upgrades and legacy package boundaries. This convention does not automatically migrate an existing installation or prove business acceptance.
-
-Core and extensions use separate Compose projects. Updating extensions must not restart the core or its database. A responding health route does not make model routes ready. Public policy reads do not need the core. Other business flows still require explicit integration and acceptance tests.
+The default development branch is `wip/rust-core-go-extensions`; legacy `main` and `traditional` are frozen. [Branch promotion](docs/development-branches.md) is not deployment or acceptance. [Extore product sync](docs/extore-shop-binding-followup.md) remains incomplete and must not be deployed.
 
 ## Contribution and license
 
-Read the [contribution guide](docs/contributing.md). Follow the [security policy](.github/SECURITY.md) for vulnerabilities; do not disclose keys or user data. Merging, packaging, publishing and deploying are separate decisions. Checks produce test evidence or preview archives only.
+Read the [contribution guide](docs/contributing.md). Follow the [security policy](.github/SECURITY.md) for vulnerabilities; do not disclose keys or user data. Merging, packaging, publishing and deploying are separate decisions.
 
-The project builds on [QuantumNous/new-api](https://github.com/QuantumNous/new-api) under [AGPL-3.0](LICENSE). Preserve [NOTICE](NOTICE), [fork provenance](docs/fork.md) and [third-party notices](THIRD-PARTY-LICENSES.md). The [hosted service](https://api.lmm.best) and this branch have different implementation states.
+The project builds on [QuantumNous/new-api](https://github.com/QuantumNous/new-api) under [[PERSON_NAME]). Preserve [NOTICE](NOTICE), [fork provenance](docs/fork.md) and [third-party notices](THIRD-PARTY-LICENSES.md). The [hosted service](https://api.lmm.best) and this branch have different implementation states.
