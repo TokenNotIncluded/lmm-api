@@ -4,6 +4,7 @@
 pub mod admin_approval;
 pub mod admin_users;
 mod permissions;
+pub(crate) use permissions::authorize_admin_read_snapshot;
 pub use permissions::{
     Action, CONTRACT_VERSION as PERMISSIONS_CONTRACT, CatalogDecision, Effect, PermissionReadStore,
     PlatformRole, PolicyLoadError, PolicySnapshot, PolicySnapshotError, canonical_policy_payload,
@@ -314,6 +315,14 @@ async fn authenticate(c: &mut PgConnection, secret: &str, write: bool) -> Result
         },
     )
     .await
+}
+/// Authenticate a caller against this transaction's read snapshot without
+/// taking authority locks. This is for read-only views, never spending writes.
+pub(crate) async fn authenticate_readonly_in_transaction(
+    c: &mut PgConnection,
+    secret: &str,
+) -> Result<Principal> {
+    authenticate(c, secret, false).await
 }
 /// Authenticate and hold current credential, user and account authority locks
 /// in the caller's transaction. Financial writes must use this same transaction.

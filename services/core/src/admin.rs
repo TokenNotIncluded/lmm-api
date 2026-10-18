@@ -31,7 +31,7 @@ pub enum Operation {
     BootstrapUser(Bootstrap),
     InstallUsageReceiptIndex([u8; 32]),
     PlanAdminActivation(PlanAdminActivationRequest),
-    ApplyAdminActivation(ApplyAdminActivationRequest),
+    ApplyAdminActivation(Box<ApplyAdminActivationRequest>),
 }
 
 impl Operation {
@@ -81,7 +81,7 @@ impl Operation {
 
     pub fn apply_admin_activation(input: impl Read) -> io::Result<Self> {
         let request = admin_approval::read_bounded_json(input).map_err(approval_io)?;
-        Ok(Self::ApplyAdminActivation(request))
+        Ok(Self::ApplyAdminActivation(Box::new(request)))
     }
 }
 

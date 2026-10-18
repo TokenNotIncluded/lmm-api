@@ -286,8 +286,13 @@ async fn wait_for_writer_lock(pool: &PgPool, fragment: &str) {
 #[sqlx::test(migrations = false)]
 async fn revocation_committed_while_patch_waits_on_actor_lock_prevents_mutation(pool: PgPool) {
     let f = fixture(&pool).await;
-    let activity_limit: String = sqlx::query_scalar("SHOW track_activity_query_size").fetch_one(&pool).await.unwrap();
-    println!("independent actor-revoke lock observer: track_activity_query_size={activity_limit}; pinned AUTH=1055 bytes; matching unique prefix plus real Lock wait");
+    let activity_limit: String = sqlx::query_scalar("SHOW track_activity_query_size")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    println!(
+        "independent actor-revoke lock observer: track_activity_query_size={activity_limit}; pinned AUTH=1055 bytes; matching unique prefix plus real Lock wait"
+    );
     let version = f
         .store
         .user_profile(&f.admin, f.target_id)
@@ -306,7 +311,11 @@ async fn revocation_committed_while_patch_waits_on_actor_lock_prevents_mutation(
     });
     // AUTH is 1055 bytes before the suffix; pg_stat_activity commonly
     // truncates at 1KiB, so require the unique AUTH prefix plus a real Lock wait.
-    wait_for_writer_lock(&pool, "SELECT c.id,c.kind,c.user_id,c.user_version,c.owner_account_id").await;
+    wait_for_writer_lock(
+        &pool,
+        "SELECT c.id,c.kind,c.user_id,c.user_version,c.owner_account_id",
+    )
+    .await;
     tx.commit().await.unwrap();
     let before = data_fingerprint(&pool).await;
     let seq = sequences(&pool).await;

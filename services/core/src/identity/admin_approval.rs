@@ -307,14 +307,13 @@ pub fn plan_one(
     if observed.policy != approval.policy {
         return Err(ApprovalError::PolicyMismatch);
     }
-    if let Some(other) = occupied {
-        if other.applied
-            && other.user_id == approval.source.user_id
-            && other.expected_auth_version == approval.source.auth_version
-            && other.approval_id != approval.id
-        {
-            return Err(ApprovalError::CasConflict);
-        }
+    if let Some(other) = occupied
+        && other.applied
+        && other.user_id == approval.source.user_id
+        && other.expected_auth_version == approval.source.auth_version
+        && other.approval_id != approval.id
+    {
+        return Err(ApprovalError::CasConflict);
     }
     if observed.current_auth_version != approval.source.auth_version {
         return Err(ApprovalError::VersionConflict);
