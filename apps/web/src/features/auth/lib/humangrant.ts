@@ -55,9 +55,12 @@ export function parseHumanGrantSettings(value: unknown): HumanGrantSettings {
 }
 
 export class HumanGrantHttpError extends Error {
-  constructor(readonly status: number) {
+  readonly status: number
+
+  constructor(status: number) {
     super(`HumanGrant request failed (HTTP ${status})`)
     this.name = 'HumanGrantHttpError'
+    this.status = status
   }
 }
 
