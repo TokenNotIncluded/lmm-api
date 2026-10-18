@@ -77,6 +77,8 @@ except OSError:
 # @mark testing.resource-lease role=test
 class TestResourceLease(unittest.TestCase):
     def setUp(self):
+        if 'LMM_A09_TEST_ROOT' not in os.environ:
+            self.skipTest('LMM_A09_TEST_ROOT must be an existing private directory')
         parent = Path(os.environ['LMM_A09_TEST_ROOT'])
         LEASE.private_root(parent)
         self.root = Path(tempfile.mkdtemp(prefix='case-', dir=parent))
