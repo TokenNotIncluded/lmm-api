@@ -12,6 +12,35 @@
 覆盖预览、审核材料、整批写入、严格重放，以及真实 COMMIT 成功后丢弃 psql 确认的原 attempt 对账。
 验收只适用于记录中的源码、schema 和二进制；后续 Pi schema 的签字不能复用旧目标或旧 approval。
 
+## 可选：同事务保留原始历史计数
+
+三个 opening 模式可显式增加 `--include-opening-counters`，选择独立的
+`financial-opening-with-historical-counters` profile。默认 opening 仍只写余额；
+普通 `--apply` 仍拒绝。新 profile 不能用于 source-rights preview，也不能为已使用的旧目标补写计数。
+
+该 profile 要求新的 reservation review：`format_version=2`、
+`scope=opening-with-historical-counters-economic-policy-review`，
+`included_families=["wallet-opening","historical-counters"]`，
+`excluded_families` 为原排除集合去掉 `historical-counters`。
+`historical_counter_policy=preserve-source-integers-no-pricing-or-usage-normalization`，
+`counter_source_facts_sha256` 绑定完整逐账户来源用户、个人账户、原行 hash 与
+`used_quota/request_count/aff_history` 的带类型向量。其余全表、全用户零预留审核保持不变；
+仅填写 hash 或状态不能证明经济事实。
+
+新 approval 使用版本 `3` 和上述独立 scope，另绑定完整 counter payload、来源事实向量和
+包含实际 counter 原行的完整读回；旧版本 `2` 的批准不能授权这个 profile，反向混用也拒绝。
+预览额外输出 `opening-counter-payloads.private.json`。apply 在同一 SERIALIZABLE 事务中
+先完成全部钱包 opening，再调用 owner-only `import_account_opening_counters`，计数不额外取号或造账。
+严格 replay、CAS、所有无关表/序列守恒与原 attempt 的 UNKNOWN 对账也同时包含这些计数。
+执行和对账必须保留相同显式 profile，不可用更换模式或 migration ID 处理不确定结果。
+
+计数始终保留来源有符号整数，不归零、不按当前价格换算、不伪造模型请求或历史充值。
+非零历史 used 的归一化金额仍为 unknown；Key、订阅、历史支付退款、托管和其他权利仍在排除范围。
+该路径已在独立的新 PostgreSQL 合成目标验证正常 apply、严格 replay、丢弃真实 COMMIT 回包后的原 attempt 对账、拒绝与 CAS，以及后段故障的业务整笔回滚。
+故障实验仅在实际发送的 SQL 中显式加入一条 RAISE；原 SQL、差异和序列前进记录分别保留。
+这些结果绑定当次 13 组件 schema、冻结工具和 Core 二进制，不是后续 schema 组合或所有资金流程的签字。
+真实 06 批次的完整经济审核、source 单位证明和全新离线目标要求没有因此完成。
+
 ## 先定位待处理的经济权利
 
 `--source-rights-preview` 只读取已经核验的冻结导出和身份映射，列出钱包、债务、affiliate、订阅、Key 额度、悬赏托管等来源事实，帮助逐项审核。它不查询来源或目标数据库，不生成 opening payload、approval 或零预留证明。

@@ -3,6 +3,8 @@
 This module has no HTTP interface and never posts generic credits. Review files
 are governance evidence, not signatures: only a separately provisioned offline
 owner can execute the generated, whole-batch Core opening transaction.
+The explicit historical-counter profile has a separate review and approval;
+it preserves raw reporting integers without creating money or normalizing usage.
 """
 from __future__ import annotations
 
@@ -18,6 +20,13 @@ import stat
 SCOPE = "financial-opening-only"
 DOMAIN = "lmm.offline-opening.readback.v1"
 EXCLUDED = ["historical-counters", "key-quota", "subscriptions", "payment-refund-basis", "escrow", "in-flight-claims"]
+COUNTER_SCOPE = "financial-opening-with-historical-counters"
+COUNTER_DOMAIN = "lmm.offline-opening-with-counters.readback.v1"
+COUNTER_REVIEW_SCOPE = "opening-with-historical-counters-economic-policy-review"
+COUNTER_POLICY = "preserve-source-integers-no-pricing-or-usage-normalization"
+COUNTER_INCLUDED = ["wallet-opening", "historical-counters"]
+COUNTER_EXCLUDED = [family for family in EXCLUDED if family != "historical-counters"]
+COUNTER_TABLE = "core_billing.account_opening_counters"
 TOUCHED = {"core_billing.ledger_accounts_id_seq", "core_billing.ledger_journals_id_seq"}
 CHANGED = {"core_billing.ledger_accounts", "core_billing.balance_state", "core_billing.ledger_operations",
            "core_billing.ledger_journals", "core_billing.ledger_entries", "core_billing.opening_import_runs",
@@ -45,7 +54,61 @@ def key_for(payload):
                                     ensure_ascii=False, separators=(", ", ": ")).encode()).hexdigest()
 
 
-def expected_readback(F, payloads):
+def counter_source_facts(F, plan):
+    """Bind the reviewed raw counters, without assigning a price or a new charge."""
+    F.verify_plan_mapping(plan)
+    rows, users, accounts = [], set(), set()
+    for position in plan["wallet_positions"]:
+        uid = F.integer(position.get("source_user_id"), "opening_counter_user_invalid", minimum=1)
+        aid = F.integer(position.get("account_id"), "opening_counter_account_invalid", minimum=1)
+        F.require(uid not in users and aid not in accounts, "opening_counter_owner_duplicate")
+        users.add(uid); accounts.add(aid)
+        source_hash = position.get("source_row_sha256")
+        F.require(type(source_hash) is str and F.IDENTITY.HEX.fullmatch(source_hash) is not None,
+                  "opening_counter_source_hash_invalid")
+        row = {"source_user_id": uid, "account_id": aid, "source_row_sha256": source_hash}
+        for destination, source in (("used_quota", "historical_used_units"),
+                                    ("request_count", "historical_request_count"),
+                                    ("aff_history", "historical_affiliate_units")):
+            row[destination] = F.integer(position.get(source), "opening_counter_out_of_range",
+                                         minimum=-F.JS_SAFE_MAX, maximum=F.JS_SAFE_MAX)
+        rows.append(row)
+    return sorted(rows, key=lambda row: row["account_id"])
+
+
+def counter_payloads_for(F, plan, payloads):
+    opening = {"source_archive_sha256": plan["source_archive_sha256"],
+               "mapping_sha256": plan["mapping_sha256"], "payloads": payloads}
+    opening["opening_payloads_sha256"] = F.digest(opening)
+    return F.build_opening_counter_payloads(plan, opening)["payloads"]
+
+
+def counter_projection(F, payloads, counters):
+    F.require(type(counters) is list, "opening_counter_payloads_invalid")
+    bases = {p["account_id"]: p for p in payloads}
+    F.require(len(bases) == len(payloads) == len(counters), "opening_counter_coverage_mismatch")
+    shared = {"account_id", "migration_id", "source_entity_key", "source_archive_sha256",
+              "mapping_sha256", "source_row_sha256", "observed_at"}
+    keys = shared | {"user_id", "used_quota", "request_count", "aff_history"}
+    seen_accounts, seen_users, result = set(), set(), []
+    for row in counters:
+        F.require(type(row) is dict and set(row) == keys, "opening_counter_payload_shape_invalid")
+        aid = F.integer(row["account_id"], "opening_counter_account_invalid", minimum=1)
+        uid = F.integer(row["user_id"], "opening_counter_user_invalid", minimum=1)
+        F.require(aid in bases and aid not in seen_accounts and uid not in seen_users,
+                  "opening_counter_owner_mismatch")
+        seen_accounts.add(aid); seen_users.add(uid)
+        F.require(row["source_entity_key"] == f"legacy.users/{uid}"
+                  and typed_equal(F, {k: row[k] for k in shared}, {k: bases[aid][k] for k in shared}),
+                  "opening_counter_original_row_mismatch")
+        for field in ("used_quota", "request_count", "aff_history"):
+            F.integer(row[field], "opening_counter_out_of_range", minimum=-F.JS_SAFE_MAX, maximum=F.JS_SAFE_MAX)
+        result.append({**row, "request": row})
+    F.require(seen_accounts == set(bases), "opening_counter_coverage_mismatch")
+    return sorted(result, key=lambda row: row["account_id"])
+
+
+def expected_readback(F, payloads, *, counter_payloads=None):
     positions, clearing, revision = [], 0, 0
     for p in payloads:
         a, f = p["available_units"], p["affiliate_units"]
@@ -71,12 +134,25 @@ def expected_readback(F, payloads):
                        "entries": sorted(legs, key=lambda row: row["bucket"])}
         positions.append({"request": p, "balances": [{"bucket": b, "balance_units": amounts[b],
                            "revision": int(amounts[b] != 0)} for b in sorted(amounts)], "journal": journal})
-    return {"domain": DOMAIN, "positions": positions,
-            "clearing": {"balance_units": clearing, "revision": revision},
-            "revenue": {"balance_units": 0, "revision": 0}}
+    result = {"domain": DOMAIN, "positions": positions,
+              "clearing": {"balance_units": clearing, "revision": revision},
+              "revenue": {"balance_units": 0, "revision": 0}}
+    if counter_payloads is not None:
+        result.update(domain=COUNTER_DOMAIN, historical_counters=counter_projection(F, payloads, counter_payloads))
+    return result
 
 
-def validate_review(F, plan, proof, evidence, review, *, evidence_sha256):
+def validate_counter_review(F, plan, review):
+    F.require(type(review) is dict and type(review.get("format_version")) is int
+              and review["format_version"] == 2 and review.get("scope") == COUNTER_REVIEW_SCOPE
+              and review.get("included_families") == COUNTER_INCLUDED
+              and review.get("excluded_families") == COUNTER_EXCLUDED
+              and review.get("historical_counter_policy") == COUNTER_POLICY
+              and review.get("counter_source_facts_sha256") == F.digest(counter_source_facts(F, plan)),
+              "opening_counter_independent_review_missing_or_mismatched")
+
+
+def validate_review(F, plan, proof, evidence, review, *, evidence_sha256, include_counters=False):
     """Bind actual independently reviewed bytes and all exported tables/users.
 
     This validates review coverage, not the truth of a reviewer's historical
@@ -106,13 +182,17 @@ def validate_review(F, plan, proof, evidence, review, *, evidence_sha256):
         F.require(row["opening_holds"] == "proven-none" and isinstance(row["review_basis"], str)
                   and 16 <= len(row["review_basis"]) <= 4096, "unknown_opening_rights_rejected")
     F.require(seen == set(proof["selected_table_counts"]), "reservation_table_review_incomplete")
-    F.require(isinstance(review, dict) and type(review.get("format_version")) is int and review.get("format_version") == 1
-              and review.get("scope") == "opening-economic-policy-review"
+    F.require(type(include_counters) is bool, "opening_counter_profile_invalid")
+    if include_counters:
+        validate_counter_review(F, plan, review)
+    F.require(isinstance(review, dict) and type(review.get("format_version")) is int
+              and review.get("format_version") == (2 if include_counters else 1)
+              and review.get("scope") == (COUNTER_REVIEW_SCOPE if include_counters else "opening-economic-policy-review")
               and review.get("status") == "independently-reviewed-zero-reserved"
               and review.get("source_archive_sha256") == plan["source_archive_sha256"]
               and review.get("mapping_sha256") == plan["mapping_sha256"]
               and review.get("reservation_evidence_file_sha256") == evidence_sha256
-              and review.get("excluded_families") == EXCLUDED
+              and review.get("excluded_families") == (COUNTER_EXCLUDED if include_counters else EXCLUDED)
               and isinstance(review.get("reviewer"), str) and 1 <= len(review["reviewer"]) <= 128
               and isinstance(review.get("review_basis"), str) and 16 <= len(review["review_basis"]) <= 4096,
               "opening_independent_review_missing_or_mismatched")
@@ -259,13 +339,13 @@ COMMIT;
 """
 
 
-def raw_readback_sql():
-    names = sorted(CHANGED - {"core_migration.import_runs"})
+def raw_readback_sql(*, include_counters=False):
+    names = sorted((CHANGED | ({COUNTER_TABLE} if include_counters else set())) - {"core_migration.import_runs"})
     return "SELECT jsonb_build_object(" + ",".join("'"+n+"',(SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY to_jsonb(r)::text COLLATE \"C\"),'[]'::jsonb) FROM "+n+" r)" for n in names) + ")"
 
 
-def projection_sql():
-    return """SELECT jsonb_build_object('domain','lmm.offline-opening.readback.v1',
+def projection_sql(*, include_counters=False):
+    sql = """SELECT jsonb_build_object('domain','lmm.offline-opening.readback.v1',
  'positions',coalesce((SELECT jsonb_agg(jsonb_build_object('request',o.request,
  'balances',(SELECT jsonb_agg(jsonb_build_object('bucket',a.bucket,'balance_units',b.balance_units,'revision',b.revision) ORDER BY a.bucket)
   FROM core_billing.ledger_accounts a JOIN core_billing.balance_state b ON b.ledger_account_id=a.id WHERE a.owner_account_id=o.account_id),
@@ -279,13 +359,24 @@ def projection_sql():
  WHERE j.id=(o.result->>'journal_id')::bigint)) ORDER BY o.account_id) FROM core_billing.opening_imports o),'[]'::jsonb),
  'clearing',(SELECT jsonb_build_object('balance_units',b.balance_units,'revision',b.revision) FROM core_billing.ledger_accounts a JOIN core_billing.balance_state b ON b.ledger_account_id=a.id WHERE a.bucket='clearing'),
  'revenue',(SELECT jsonb_build_object('balance_units',b.balance_units,'revision',b.revision) FROM core_billing.ledger_accounts a JOIN core_billing.balance_state b ON b.ledger_account_id=a.id WHERE a.bucket='revenue'))"""
+    if include_counters:
+        return "SELECT (" + sql + ")-'domain'||jsonb_build_object('domain','" + COUNTER_DOMAIN + "','historical_counters'," \
+            "coalesce((SELECT jsonb_agg(to_jsonb(c) ORDER BY c.account_id) FROM " + COUNTER_TABLE + " c),'[]'::jsonb))"
+    return sql
 
 
-def make_approval(F, *, plan, opening, target, contract, file_hashes, review, snapshot):
+def make_approval(F, *, plan, opening, target, contract, file_hashes, review, snapshot, include_counters=False):
     ident = target_contract(F, target, contract)
     F.require(target["identity_import"]["migration_id"] != opening["migration_id"], "opening_identity_run_collision")
-    projected = expected_readback(F, opening["payloads"])
-    return {"format_version": 2, "scope": SCOPE, "migration_id": opening["migration_id"], "unit": F.UNIT,
+    F.require(type(include_counters) is bool, "opening_counter_profile_invalid")
+    counters = None
+    if include_counters:
+        validate_counter_review(F, plan, review)
+        counters = counter_payloads_for(F, plan, opening["payloads"])
+    projected = expected_readback(F, opening["payloads"], counter_payloads=counters)
+    approval = {"format_version": 3 if include_counters else 2,
+            "scope": COUNTER_SCOPE if include_counters else SCOPE,
+            "migration_id": opening["migration_id"], "unit": F.UNIT,
             "credits_per_usd": 500000, "reserved_policy": "reviewed-zero-only", "sequence_policy": "record-touched-advances",
             "source": {**file_hashes["source"], "source_archive_sha256": plan["source_archive_sha256"],
                        "financial_mapping_sha256": plan["mapping_sha256"],
@@ -299,20 +390,30 @@ def make_approval(F, *, plan, opening, target, contract, file_hashes, review, sn
                        "identity_receipt_and_native_mapping_sha256": target["identity_binding_sha256"]},
             "review": {**file_hashes["review"], "full_payload_set_sha256": F.digest(opening["payloads"]),
                        "expected_complete_readback_sha256": F.digest(projected)},
-            "tool_sources_sha256": source_hashes(F), "payloads": opening["payloads"], "excluded_families": EXCLUDED}
+            "tool_sources_sha256": source_hashes(F), "payloads": opening["payloads"],
+            "excluded_families": list(COUNTER_EXCLUDED if include_counters else EXCLUDED)}
+    if include_counters:
+        approval.update(counter_payloads=counters, historical_counter_policy=COUNTER_POLICY,
+                        included_families=list(COUNTER_INCLUDED))
+        approval["review"].update(full_counter_payload_set_sha256=F.digest(counters),
+                                 counter_source_facts_sha256=F.digest(counter_source_facts(F, plan)))
+    return approval
 
 
 def build_import_sql(F, *, approval, target, contract, plan, identities, identity_manifest, snapshot,
-                     reconcile_attempt=None, original_backend=None):
+                     reconcile_attempt=None, original_backend=None, include_counters=False):
     """No connection. All dynamic inputs are JSON/text literals, never SQL names."""
     I, R = F.IDENTITY, F.require
     ident = target_contract(F, target, contract)
     F.integer(approval.get('credits_per_usd'), 'opening_approval_contract_mismatch', minimum=500000, maximum=500000)
-    R(type(approval.get("format_version")) is int and approval.get("format_version") == 2 and approval.get("scope") == SCOPE
+    R(type(include_counters) is bool, "opening_counter_profile_invalid")
+    R(type(approval.get("format_version")) is int
+      and approval.get("format_version") == (3 if include_counters else 2)
+      and approval.get("scope") == (COUNTER_SCOPE if include_counters else SCOPE)
       and approval.get("unit") == F.UNIT and approval.get("credits_per_usd") == 500000
       and approval.get("reserved_policy") == "reviewed-zero-only"
       and approval.get("sequence_policy") == "record-touched-advances"
-      and approval.get("excluded_families") == EXCLUDED
+      and approval.get("excluded_families") == (COUNTER_EXCLUDED if include_counters else EXCLUDED)
       and approval.get("tool_sources_sha256") == source_hashes(F), "opening_approval_contract_mismatch")
     payloads = approval["payloads"]
     R(isinstance(payloads, list) and payloads and payloads == sorted(payloads, key=lambda p:p["account_id"]), "opening_payload_order_invalid")
@@ -322,7 +423,19 @@ def build_import_sql(F, *, approval, target, contract, plan, identities, identit
     R(approval["source"]["financial_mapping_sha256"] == plan["mapping_sha256"]
       and approval["source"]["source_archive_sha256"] == plan["source_archive_sha256"], "opening_plan_source_mismatch")
     R(F.digest(payloads) == approval["review"]["full_payload_set_sha256"], "opening_payload_hash_mismatch")
-    expected = expected_readback(F, payloads)
+    counters = None
+    if include_counters:
+        counters = approval.get("counter_payloads")
+        R(approval.get("historical_counter_policy") == COUNTER_POLICY
+          and approval.get("included_families") == COUNTER_INCLUDED
+          and typed_equal(F, counters, counter_payloads_for(F, plan, payloads))
+          and F.digest(counters) == approval["review"].get("full_counter_payload_set_sha256")
+          and F.digest(counter_source_facts(F, plan)) == approval["review"].get("counter_source_facts_sha256"),
+          "opening_counter_payload_source_mismatch")
+    else:
+        R(not any(key in approval for key in ("counter_payloads", "historical_counter_policy", "included_families")),
+          "opening_counter_profile_requires_explicit_opt_in")
+    expected = expected_readback(F, payloads, counter_payloads=counters)
     R(F.digest(expected) == approval["review"]["expected_complete_readback_sha256"], "opening_expected_readback_hash_mismatch")
     R(F.digest(snapshot["sequence-state"]) == approval["target"]["pre_import_sequences_sha256"]
       and F.digest({k:v for k,v in snapshot.items() if k != "sequence-state"}) == approval["target"]["pre_import_facts_sha256"], "opening_prestate_hash_mismatch")
@@ -354,10 +467,19 @@ def build_import_sql(F, *, approval, target, contract, plan, identities, identit
     L = I.sql_literal
     J = lambda value: L(F.canonical(value))+"::jsonb"
     expected_native = [{"id":u,"personal_account_id":a} for u,a in sorted(identities.items())]
-    other_keys = ",".join(L(k) for k in sorted(CHANGED))
+    changed_tables = CHANGED | ({COUNTER_TABLE} if include_counters else set())
+    other_keys = ",".join(L(k) for k in sorted(changed_tables))
     touched_keys = ",".join(L(k) for k in sorted(TOUCHED))
     runtime, login, owner = target["runtime_role"], target["connection"]["login_role"], target["connection"]["role"]
     scope = L(run)
+    counter_insert = ""
+    if include_counters:
+        counter_insert = f"""
+  FOR item IN SELECT value FROM jsonb_array_elements({J(counters)}) ORDER BY (value->>'account_id')::bigint LOOP
+   result := core_billing.import_account_opening_counters(item);
+   IF result->>'status'<>'imported' THEN RAISE EXCEPTION 'opening counter row was not imported'; END IF;
+  END LOOP;
+"""
     backend_guard = ""
     rollback_branch = ""
     if reconcile_attempt is not None:
@@ -461,6 +583,7 @@ BEGIN
  {rollback_branch}
  IF replay THEN
   IF previous.source_archive_sha256<>{L(plan['source_archive_sha256'])} OR previous.mapping_sha256<>{L(plan['mapping_sha256'])}
+  OR previous.manifest->>'scope' IS DISTINCT FROM {L(approval['scope'])}
   OR previous.manifest->'approval' IS DISTINCT FROM approved THEN RAISE EXCEPTION 'opening whole batch conflict'; END IF;
   IF previous.manifest->'sequence_state' IS DISTINCT FROM before_state->'sequence-state'
   THEN RAISE EXCEPTION 'opening sealed sequence state changed'; END IF;
@@ -493,9 +616,10 @@ BEGIN
    result := core_billing.import_opening_balance(item);
    IF result->>'status'<>'posted' THEN RAISE EXCEPTION 'opening row was not posted'; END IF;
   END LOOP;
+{counter_insert}
  END IF;
  SET CONSTRAINTS ALL IMMEDIATE;
- SELECT ({projection_sql()}) INTO actual_projection;
+ SELECT ({projection_sql(include_counters=include_counters)}) INTO actual_projection;
  IF actual_projection IS DISTINCT FROM expected THEN RAISE EXCEPTION 'opening complete projection mismatch'; END IF;
  IF (SELECT count(*) FROM core_billing.ledger_accounts)<>2+4*jsonb_array_length(payload)
  OR (SELECT count(*) FROM core_billing.balance_state)<>2+4*jsonb_array_length(payload)
@@ -525,7 +649,7 @@ BEGIN
  OR NOT EXISTS(SELECT 1 FROM core_billing.opening_import_runs WHERE migration_id={scope}
   AND source_archive_sha256={L(plan['source_archive_sha256'])} AND mapping_sha256={L(plan['mapping_sha256'])} AND observed_at={payloads[0]['observed_at']})
  THEN RAISE EXCEPTION 'opening full receipts or conservation mismatch'; END IF;
- SELECT ({raw_readback_sql()}) INTO raw_readback;
+ SELECT ({raw_readback_sql(include_counters=include_counters)}) INTO raw_readback;
  IF replay THEN
   IF previous.manifest->'raw_readback' IS DISTINCT FROM raw_readback OR previous.manifest->'projection' IS DISTINCT FROM actual_projection
   OR previous.manifest->>'raw_readback_pg_jsonb_sha256' IS DISTINCT FROM encode(sha256(convert_to(raw_readback::text,'UTF8')),'hex')
@@ -533,7 +657,7 @@ BEGIN
  ELSE
   {snapshot_sql('posted_state')}
   INSERT INTO core_migration.import_runs(migration_id,source_archive_sha256,mapping_sha256,manifest)
-  VALUES({scope},{L(plan['source_archive_sha256'])},{L(plan['mapping_sha256'])},jsonb_build_object('scope','financial-opening-only','approval',approved,
+  VALUES({scope},{L(plan['source_archive_sha256'])},{L(plan['mapping_sha256'])},jsonb_build_object('scope',{L(approval['scope'])},'approval',approved,
    'projection',actual_projection,'raw_readback',raw_readback,'sequence_state',posted_state->'sequence-state','raw_readback_pg_jsonb_sha256',encode(sha256(convert_to(raw_readback::text,'UTF8')),'hex')));
  END IF;
  {snapshot_sql('after_state')}
@@ -679,6 +803,7 @@ def run(F, args, *, output, source, tables, proof, plan, planner_manifest, ident
         identity_manifest, source_path, map_path, identity_manifest_path):
     """Concrete preview/apply/reconcile entry, with a stable external target lease."""
     I, R = F.IDENTITY, F.require
+    include_counters = getattr(args, "include_opening_counters", False)
     R(args.reuse_export_proof is not None, "opening_requires_frozen_export_no_source_queries")
     target_path, target = read_json(F, args.target_receipt)
     evidence_path, evidence = read_json(F, args.reservation_evidence)
@@ -686,7 +811,8 @@ def run(F, args, *, output, source, tables, proof, plan, planner_manifest, ident
     contract = I.current_contract()
     target_contract(F, target, contract)
     proof = {**proof, "opening_table_rows_sha256": {name:F.digest(sorted(rows, key=F.canonical)) for name,rows in tables.items()}}
-    reconciliation = validate_review(F, plan, proof, evidence, review, evidence_sha256=I.sha256_file(evidence_path))
+    reconciliation = validate_review(F, plan, proof, evidence, review, evidence_sha256=I.sha256_file(evidence_path),
+                                     include_counters=include_counters)
     opening = F.build_opening_payloads(plan, migration_id=args.migration_id, observation=F.source_observation(source), reservation_reconciliation=reconciliation)
     R(target.get("identity_import", {}).get("source_archive_sha256") == plan["source_archive_sha256"]
       and target["identity_import"].get("mapping_sha256") == plan["identity_provenance"]["identity_mapping_sha256"], "opening_target_identity_reference_mismatch")
@@ -703,7 +829,8 @@ def run(F, args, *, output, source, tables, proof, plan, planner_manifest, ident
                     "reservation_review_manifest_file_sha256": I.sha256_file(review_path),
                     "opening_economic_policy_review_file_sha256": I.sha256_file(review_path)}}
     candidate = make_approval(F, plan=plan, opening=opening, target=target, contract=contract,
-                              file_hashes=file_hashes, review=review, snapshot=snapshot)
+                              file_hashes=file_hashes, review=review, snapshot=snapshot,
+                              include_counters=include_counters)
     paths = [source_path,map_path,identity_manifest_path,target_path,evidence_path,review_path,I.private_backup_path(args.reuse_export_proof),output/"financial-plan.private.json",output/"manifest.private.json",
              I.private_backup_path(Path(source["archive"]["path"])),
              I.private_backup_path(args.reuse_export_proof.with_name("source-financial-export.private.jsonl")),
@@ -716,6 +843,9 @@ def run(F, args, *, output, source, tables, proof, plan, planner_manifest, ident
         frozen_files[str(approval_path)] = I.sha256_file(approval_path)
     I.write_private(output, "opening-approval-candidate.private.json", F.canonical(candidate)+"\n")
     I.write_private(output, "opening-payloads.private.json", F.canonical(opening)+"\n")
+    if include_counters:
+        I.write_private(output, "opening-counter-payloads.private.json",
+                        F.canonical(F.build_opening_counter_payloads(plan, opening))+"\n")
     with TargetLease(F, target):
         binding = inspect_target(F, target, output, "opening-target")
         F.verify_target_identity_binding(plan, identities, import_run=binding["identity_run"], native_users=binding["native_users"])
@@ -723,7 +853,8 @@ def run(F, args, *, output, source, tables, proof, plan, planner_manifest, ident
         R((str(source_instance.get("database_oid")),source_instance.get("postmaster_started_at")) !=
           (str(target["instance_identity"]["database_oid"]),target["instance_identity"]["postmaster_started_at"]), "opening_source_target_same_database")
         sql = build_import_sql(F, approval=approval, target=target, contract=contract, plan=plan,
-                               identities=identities, identity_manifest=identity_manifest, snapshot=snapshot)
+                               identities=identities, identity_manifest=identity_manifest, snapshot=snapshot,
+                               include_counters=include_counters)
         I.write_private(output, "opening-import.private.sql", sql)
         I.write_private(output, "opening-input-files.private.json", F.canonical(frozen_files)+"\n")
         if args.reconcile_opening:
@@ -734,14 +865,19 @@ def run(F, args, *, output, source, tables, proof, plan, planner_manifest, ident
         I.write_private(output, "opening-actual-prestate.private.json", F.canonical(actual)+"\n")
         if not args.apply_opening:
             R(typed_equal(F, actual, snapshot), "opening_preview_fresh_prestate_mismatch")
-            return {"status":"opening-preview-review-required", "target_writes":0, "real_financial_import_complete":False}
+            result = {"status":"opening-preview-review-required", "target_writes":0, "real_financial_import_complete":False}
+            if include_counters:
+                result.update(scope=COUNTER_SCOPE, historical_counter_policy=COUNTER_POLICY,
+                              historical_counter_payload_count=len(candidate["counter_payloads"]),
+                              historical_counters_written=False)
+            return result
         # Freeze bytes and session identity BEFORE the write SQL can begin.
         R(I.current_contract() == contract and source_hashes(F) == approval["tool_sources_sha256"], "opening_sources_changed_before_attempt")
         R(all(I.sha256_file(I.private_backup_path(Path(p))) == h for p,h in frozen_files.items()), "opening_input_changed_before_attempt")
         backend_path = I.write_private(output, "opening-backend.private.json", "")
         session_sql = attempt_session_sql(F,target,backend_path)
         I.write_private(output,'opening-session-prefix.private.sql',session_sql)
-        attempted = {"format_version":1,"scope":SCOPE,"status":"attempted-outcome-unknown","migration_id":approval["migration_id"],
+        attempted = {"format_version":1,"scope":approval["scope"],"status":"attempted-outcome-unknown","migration_id":approval["migration_id"],
                      "approval_sha256":F.digest(approval),"sql_sha256":hashlib.sha256(sql.encode()).hexdigest(),
                      "session_sql_sha256":hashlib.sha256(session_sql.encode()).hexdigest(),
                      "backend_file":str(backend_path),"target_receipt_file_sha256":file_hashes["target_receipt"],
@@ -758,12 +894,22 @@ def run(F, args, *, output, source, tables, proof, plan, planner_manifest, ident
             I.write_private(output, "opening-apply.stdout.private.txt", raw)
             rows = [F.parse_json(line) for line in raw.splitlines() if line.strip().startswith("{")]
             R(len(rows) == 1 and rows[0].get("status") in ("applied","replay-noop"), "opening_apply_ack_invalid")
-            R(typed_equal(F, rows[0].get("projection"), expected_readback(F, approval["payloads"])), "opening_apply_projection_invalid")
+            R(typed_equal(F, rows[0].get("projection"), expected_readback(
+                F, approval["payloads"],
+                counter_payloads=approval["counter_payloads"] if include_counters else None)),
+              "opening_apply_projection_invalid")
             after = F.parse_json(I.psql(target["connection"], snapshot_query(), readonly=True, private_dir=output, label="opening-poststate"))
             R(typed_equal(F, after, rows[0].get('poststate')), 'opening_postcommit_state_changed_or_unconfirmed')
             I.write_private(output, "opening-actual-poststate.private.json", F.canonical(after)+"\n")
             I.write_private(output, "opening-success.private.json", F.canonical({"status":rows[0]["status"],"approval_sha256":F.digest(approval),"prestate":actual,"poststate":after,"raw_ack_sha256":hashlib.sha256(raw.encode()).hexdigest()})+"\n")
-            return {"status":"opening-"+rows[0]["status"],"real_financial_import_complete":False}
+            result = {"status":"opening-"+rows[0]["status"],"real_financial_import_complete":False}
+            if include_counters:
+                result.update(scope=COUNTER_SCOPE, historical_counter_policy=COUNTER_POLICY,
+                              historical_counter_rows_verified=len(candidate["counter_payloads"]),
+                              historical_counter_rows_newly_imported=(len(candidate["counter_payloads"])
+                                  if rows[0]["status"] == "applied" else 0),
+                              historical_usage_normalized=False)
+            return result
         except (F.MappingError,OSError,ValueError,KeyError,TypeError) as error:
             I.write_private(output, "opening-outcome-unknown.private.json", F.canonical({"status":"opening-outcome-unknown","automatic_retry":False,"error_code":str(error) if isinstance(error,F.MappingError) else type(error).__name__})+"\n")
             raise F.MappingError("opening_outcome_unknown_reconcile_original_attempt") from None
@@ -778,7 +924,7 @@ def reconcile(F, args, *, target, approval, snapshot, output):
     I, R = F.IDENTITY, F.require
     attempt_path, attempt = read_json(F, args.opening_attempt)
     R(type(attempt.get("format_version")) is int and attempt.get("format_version") == 1
-      and attempt.get("scope") == SCOPE and attempt.get("migration_id") == approval["migration_id"]
+      and attempt.get("scope") == approval["scope"] and attempt.get("migration_id") == approval["migration_id"]
       and attempt.get("approval_sha256") == F.digest(approval), "opening_attempt_material_mismatch")
     original_sql=I.private_backup_path(attempt_path.with_name('opening-import.private.sql'))
     original_session=I.private_backup_path(attempt_path.with_name('opening-session-prefix.private.sql'))
@@ -790,12 +936,14 @@ def reconcile(F, args, *, target, approval, snapshot, output):
     R(backend.get("system_id") == target["instance_identity"]["cluster_system_identifier"]
       and backend.get("database_oid") == target["instance_identity"]["database_oid"]
       and isinstance(backend.get("backend_start"),str), "opening_original_backend_identity_incomplete")
+    include_counters = getattr(args, "include_opening_counters", False)
     normal = build_import_sql(F, approval=approval,target=target,contract=I.current_contract(),plan=args._opening_plan,
-                              identities=args._opening_identities,identity_manifest=args._opening_identity_manifest,snapshot=snapshot)
+                              identities=args._opening_identities,identity_manifest=args._opening_identity_manifest,snapshot=snapshot,
+                              include_counters=include_counters)
     R(hashlib.sha256(normal.encode()).hexdigest()==attempt['sql_sha256'], 'opening_original_sql_contract_changed')
     sql = build_import_sql(F, approval=approval,target=target,contract=I.current_contract(),plan=args._opening_plan,
                            identities=args._opening_identities,identity_manifest=args._opening_identity_manifest,snapshot=snapshot,
-                           reconcile_attempt=attempt,original_backend=backend)
+                           reconcile_attempt=attempt,original_backend=backend,include_counters=include_counters)
     I.write_private(output,'opening-reconcile.private.sql',sql)
     raw=I.psql(target['connection'],sql,readonly=True,private_dir=output,label='opening-reconcile-fenced-readback')
     I.write_private(output,'opening-reconcile.stdout.private.txt',raw)
@@ -805,6 +953,10 @@ def reconcile(F, args, *, target, approval, snapshot, output):
     I.write_private(output,'opening-reconcile-state.private.json',F.canonical(current)+'\n')
     result={'status':'opening-confirmed-committed' if rows[0]['status']=='replay-noop' else 'opening-confirmed-business-rollback',
             'automatic_retry':False,'real_financial_import_complete':False}
+    if include_counters:
+        result.update(scope=COUNTER_SCOPE, historical_counter_policy=COUNTER_POLICY,
+                      historical_counter_rows_verified=(len(approval["counter_payloads"])
+                          if rows[0]['status']=='replay-noop' else 0), historical_usage_normalized=False)
     if rows[0]['status']=='confirmed-business-rollback':
         result['new_reviewed_sequence_envelope_required']=True
     I.write_private(output,'opening-reconciliation.private.json',F.canonical({**result,
