@@ -1020,6 +1020,8 @@ def main() -> int:
     opening_modes.add_argument("--opening-preview", action="store_true", help="Prepare only the reviewed-zero opening candidate; never apply other financial families")
     opening_modes.add_argument("--apply-opening", action="store_true", help="Apply one separately approved opening-only batch to a new owned offline target")
     opening_modes.add_argument("--reconcile-opening", action="store_true", help="Read back an original uncertain opening attempt; never retry it")
+    parser.add_argument("--include-opening-counters", action="store_true",
+                        help="Explicit separate approval profile: import raw historical counters atomically with a reviewed opening; no pricing or usage normalization")
     parser.add_argument("--target-receipt", type=Path)
     parser.add_argument("--reservation-evidence", type=Path)
     parser.add_argument("--reservation-review", type=Path)
@@ -1030,6 +1032,8 @@ def main() -> int:
     try:
         require(not args.apply, "financial_apply_contract_not_frozen")
         opening_mode = args.opening_preview or args.apply_opening or args.reconcile_opening
+        require(not args.include_opening_counters or opening_mode,
+                "opening_counters_require_opening_mode")
         require(args.target_key_inventory is None or args.source_rights_preview,
                 "target_key_inventory_requires_source_rights_preview")
         if args.source_rights_preview:

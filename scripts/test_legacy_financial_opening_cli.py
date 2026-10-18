@@ -39,7 +39,10 @@ def main():
         required=True,
         help="New private directory under ~/Backups; all parent directories must be mode 0700",
     )
+    parser.add_argument("--include-opening-counters", action="store_true",
+                        help="Select the separately reviewed wallet-plus-raw-counters profile; default stays opening-only")
     args = parser.parse_args()
+    INCLUDE_COUNTERS = args.include_opening_counters
     ROOT = args.source_root.resolve(strict=True)
     CORE = args.core.resolve(strict=True)
     assert hashlib.sha256(CORE.read_bytes()).hexdigest() == args.expected_core_sha256, (
@@ -365,6 +368,11 @@ def main():
             "reviewer": "independent-opening-acceptance",
             "review_basis": "All four newly generated synthetic user rows and complete six-table restored source reviewed; no real users or historical rights. Nonzero reservations explicitly unsupported.",
         }
+        if INCLUDE_COUNTERS:
+            review.update(format_version=2, scope=O.COUNTER_REVIEW_SCOPE,
+                included_families=O.COUNTER_INCLUDED, excluded_families=O.COUNTER_EXCLUDED,
+                historical_counter_policy=O.COUNTER_POLICY,
+                counter_source_facts_sha256=F.digest(O.counter_source_facts(F, plan)))
         write("reservation-review.json", review)
         return receipt, tables, proof, identity_manifest, plan
 
@@ -488,6 +496,8 @@ def main():
         ]
         if approval:
             args += ["--opening-approval", str(approval)]
+        if INCLUDE_COUNTERS:
+            args += ["--include-opening-counters"]
         if attempt:
             args += ["--opening-attempt", str(attempt)]
         e = ENV.copy()
@@ -525,8 +535,24 @@ def main():
             )
             assert p["mapping_sha256"] == plan["mapping_sha256"]
         assert candidate["review"]["full_payload_set_sha256"] == F.digest(payloads)
+        counters = None
+        if INCLUDE_COUNTERS:
+            assert candidate["format_version"] == 3 and candidate["scope"] == O.COUNTER_SCOPE
+            # Compare raw restored source facts independently of the mapper.
+            source_users = {row["id"]: row for row in tables["users"]}
+            expected_counters = []
+            for p in payloads:
+                uid = int(p["source_entity_key"].removeprefix("legacy.users/"))
+                source = source_users[uid]
+                expected_counters.append({**{k: p[k] for k in (
+                    "account_id", "migration_id", "source_entity_key", "source_archive_sha256",
+                    "mapping_sha256", "source_row_sha256", "observed_at")}, "user_id": uid,
+                    **{k: source[k] for k in ("used_quota", "request_count", "aff_history")}})
+            counters = candidate["counter_payloads"]
+            assert F.digest(counters) == F.digest(expected_counters)
+            assert candidate["review"]["full_counter_payload_set_sha256"] == F.digest(counters)
         assert candidate["review"]["expected_complete_readback_sha256"] == F.digest(
-            O.expected_readback(F, payloads)
+            O.expected_readback(F, payloads, counter_payloads=counters)
         )
         write(
             label + "-independent-review.json",
@@ -618,9 +644,12 @@ def main():
             )
             after = snap(db)
             assert after != before
-            projection = jsql(O.projection_sql(), db)
-            payloads = F.parse_json(approval.read_text())["payloads"]
-            assert projection == O.expected_readback(F, payloads)
+            projection = jsql(O.projection_sql(include_counters=INCLUDE_COUNTERS), db)
+            approved = F.parse_json(approval.read_text())
+            payloads = approved["payloads"]
+            assert F.digest(projection) == F.digest(O.expected_readback(F, payloads,
+                counter_payloads=approved.get("counter_payloads") if INCLUDE_COUNTERS else None))
+            assert int(sql("SELECT count(*) FROM core_billing.account_opening_counters;", db)) == (4 if INCLUDE_COUNTERS else 0)
             assert jsql(
                 "SELECT jsonb_build_object('sum',sum(delta_units),'journals',count(DISTINCT journal_id)) FROM core_billing.ledger_entries;",
                 db,
@@ -672,6 +701,10 @@ def main():
             "independent-cli-signoff.json",
             {
                 "status": "passed",
+                "scope": O.COUNTER_SCOPE if INCLUDE_COUNTERS else O.SCOPE,
+                "historical_counter_policy": O.COUNTER_POLICY if INCLUDE_COUNTERS else "excluded",
+                "historical_usage_normalized": False,
+                "real_financial_import_complete": False,
                 "cases": RESULTS,
                 "tools": O.source_hashes(F),
                 "core_sha256": I.sha256_file(CORE),
