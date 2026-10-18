@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { z } from 'zod'
+
 import type { AuthUser } from '@/stores/auth-store'
 
 import { ROLE } from './roles'
@@ -65,6 +67,78 @@ export interface PermissionRoleDef {
 export interface PermissionCatalog {
   resources: PermissionResourceDef[]
   roles: PermissionRoleDef[]
+}
+
+const permissionCatalogSchema = z
+  .object({
+    resources: z
+      .array(
+        z.object({
+          resource: z.string().min(1),
+          label_key: z.string().min(1),
+          actions: z
+            .array(
+              z.object({
+                action: z.string().min(1),
+                label_key: z.string().min(1),
+                description_key: z.string(),
+              })
+            )
+            .min(1),
+        })
+      )
+      .min(1),
+    roles: z
+      .array(
+        z.object({
+          key: z.string().min(1),
+          name: z.string().min(1),
+          built_in: z.boolean(),
+          superuser: z.boolean(),
+          grants: z.record(z.string(), z.record(z.string(), z.boolean())),
+        })
+      )
+      .min(1),
+  })
+  .superRefine((catalog, context) => {
+    const resources = catalog.resources.map((item) => item.resource)
+    const roles = catalog.roles.map((item) => item.key)
+    const baseline = catalog.roles.find((role) => role.key === ADMIN_ROLE_KEY)
+    if (
+      new Set(resources).size !== resources.length ||
+      new Set(roles).size !== roles.length ||
+      !baseline ||
+      catalog.resources.some((resource) => {
+        const actions = resource.actions.map((item) => item.action)
+        return (
+          new Set(actions).size !== actions.length ||
+          actions.some(
+            (action) =>
+              typeof baseline.grants[resource.resource]?.[action] !== 'boolean'
+          )
+        )
+      })
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Incomplete permission catalog',
+      })
+    }
+  })
+
+const permissionCatalogResponseSchema = z.object({
+  success: z.literal(true),
+  data: permissionCatalogSchema,
+})
+
+export function parsePermissionCatalogResponse(
+  value: unknown
+): PermissionCatalog {
+  const result = permissionCatalogResponseSchema.safeParse(value)
+  if (!result.success) {
+    throw new Error('Administrator permission catalog is unavailable')
+  }
+  return result.data.data
 }
 
 export const EMPTY_PERMISSION_CATALOG: PermissionCatalog = {
