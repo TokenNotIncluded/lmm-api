@@ -10,6 +10,7 @@ mod catalog;
 mod checkpoints;
 mod honeypot;
 mod routing;
+pub mod trusted_delegation;
 
 use crate::{
     billing::{charging::Charging, transactional_ledger::TransactionalLedger},
