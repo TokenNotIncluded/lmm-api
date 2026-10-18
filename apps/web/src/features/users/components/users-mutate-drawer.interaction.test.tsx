@@ -398,15 +398,16 @@ for (const failure of [
 }
 
 test('a late previous-target read cannot overwrite the current target or authorize its write', async () => {
+  type DeferredUserResponse = { data: { success: boolean; data: User } }
   const other: User = { ...user, id: 42, username: 'synthetic-admin-b' }
-  let resolvePrevious: ((value: unknown) => void) | undefined
+  let resolvePrevious: ((value: DeferredUserResponse) => void) | undefined
   const writes: Array<Record<string, unknown>> = []
   api.get = (async (url: string) => {
     if (url === '/api/authz/catalog') {
       return { data: { success: true, data: catalog } }
     }
     if (url === '/api/user/41') {
-      return new Promise((resolve) => {
+      return new Promise<DeferredUserResponse>((resolve) => {
         resolvePrevious = resolve
       })
     }
