@@ -12,9 +12,14 @@ from pathlib import Path
 import re
 import selectors
 import subprocess
+import sys
 import time
 import unittest
 import uuid
+
+_SCRIPTS_DIR = str(Path(__file__).parent)
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
 
 import financial_import as F
 from test_financial_import import source_fixture, material_fixture
@@ -36,21 +41,27 @@ class PostgreSQLTests(unittest.TestCase):
     def setUpClass(cls):
         cls.name = "lmm-a03-" + uuid.uuid4().hex
         cls.label = "lmm.test.a03=" + cls.name
-        image = cls.docker("image", "inspect", "postgres:17-alpine", "--format", "{{.Id}}")
-        cls.image = image.stdout.strip()
+        for candidate in ("postgres:18-alpine", "postgres:17-alpine"):
+            image = cls.docker("image", "inspect", candidate, "--format", "{{.Id}}", check=False)
+            if image.returncode == 0:
+                cls.image = image.stdout.strip()
+                break
+        else:
+            raise AssertionError("preinstalled PostgreSQL image identity missing")
         if not re.fullmatch(r"sha256:[0-9a-f]{64}", cls.image):
             raise AssertionError("preinstalled PostgreSQL image identity missing")
         print("A03_POSTGRES_IMAGE=" + cls.image, flush=True)
+        data_mount = "/var/lib/postgresql:rw,size=512m" if "18" in candidate else "/var/lib/postgresql/data:rw,size=512m"
         cls.docker("run", "--detach", "--pull=never", "--network=none", "--name", cls.name,
             "--label", cls.label, "--memory=384m", "--cpus=1", "--pids-limit=128",
-            "--tmpfs", "/var/lib/postgresql/data:rw,size=512m", "--tmpfs", "/var/run/postgresql:rw,size=16m",
+            "--tmpfs", data_mount, "--tmpfs", "/var/run/postgresql:rw,size=16m",
             "--env", "POSTGRES_HOST_AUTH_METHOD=trust", cls.image, "postgres",
             "-c", "listen_addresses=", "-c", "autovacuum=off", "-c", "max_connections=20",
             "-c", "shared_buffers=32MB", "-c", "lmm.migration_instance_nonce=" + cls.name)
         cls.addClassCleanup(cls.cleanup)
         # The image starts a temporary bootstrap server first. Wait until PID 1
         # has execed the final server, not merely for that temporary socket.
-        for _ in range(100):
+        for _ in range(300):
             if cls.docker("exec", cls.name, "sh", "-c",
                 'test "$(cat /proc/1/comm)" = postgres && pg_isready -q -U postgres',
                 check=False).returncode == 0:

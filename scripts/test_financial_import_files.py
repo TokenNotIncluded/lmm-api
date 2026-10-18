@@ -1,9 +1,14 @@
 """Private files and complete prepare flow; only target query transport is a fake."""
 from pathlib import Path
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+
+_SCRIPTS_DIR = str(Path(__file__).parent)
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
 
 import financial_import as F
 from test_financial_import import approval_fixture, material_fixture, snapshot_fixture, source_fixture
