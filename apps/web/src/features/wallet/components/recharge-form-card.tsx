@@ -1377,7 +1377,10 @@ export function RechargeFormCard({
                             {t('Total')}
                           </span>
                           <div className='flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1'>
-                            <span className='text-primary min-w-0 max-w-full text-2xl font-semibold tracking-tight wrap-anywhere tabular-nums'>
+                            <span
+                              data-slot='wallet-payment-total'
+                              className='text-primary max-w-full min-w-0 text-2xl font-semibold tracking-tight wrap-anywhere tabular-nums'
+                            >
                               {paymentAmountLabel}
                             </span>
                             {discount &&
@@ -1412,7 +1415,7 @@ export function RechargeFormCard({
                         <Button
                           type='button'
                           size='default'
-                          className='h-auto min-h-11 w-full min-w-0 py-2 font-semibold whitespace-normal wrap-anywhere'
+                          className='h-auto min-h-11 w-full min-w-0 py-2 font-semibold wrap-anywhere whitespace-normal'
                           disabled={
                             isUpdatingQuote ||
                             !hasCurrentPaymentAmount ||

@@ -799,6 +799,16 @@ describe('wallet payment clarity', () => {
       const rechargeText = recharge.container.textContent ?? ''
       assert.equal(rechargeText.includes('Payment unavailable'), true)
       assert.equal(/\b0 USD\b/.test(rechargeText), false)
+      const total = recharge.container.querySelector(
+        '[data-slot="wallet-payment-total"]'
+      )
+      assert.ok(total)
+      assert.equal(total.textContent, 'Payment unavailable')
+      const paymentButton = recharge.container.querySelector<HTMLButtonElement>(
+        '[data-slot="wallet-payment-summary"] button:not([aria-controls])'
+      )
+      assert.ok(paymentButton)
+      assert.equal(paymentButton.disabled, true)
       assert.equal(rechargeText.includes('NaN'), false)
       assert.equal(rechargeText.includes('Infinity'), false)
       await unmount(recharge)

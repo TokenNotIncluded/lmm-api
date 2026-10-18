@@ -420,6 +420,74 @@ async fn platform_roles_follow_native_authority_and_admin_target_boundary(pool: 
 }
 
 #[sqlx::test(migrations = false)]
+async fn acknowledgement_body_read_failures_do_not_create_receipts(pool: PgPool) {
+    let (identity, state, app) = setup(&pool).await;
+    let user = identity.bootstrap_user(1, 0).await.unwrap();
+    publish(&pool, &[announcement(1, "g1")]).await;
+    let item = state
+        .announcements(&user.secret, None)
+        .await
+        .unwrap()
+        .remove(0);
+    let body = json!({"id":item.id,"revision":item.revision}).to_string();
+    for kind in [
+        std::io::ErrorKind::ConnectionReset,
+        std::io::ErrorKind::TimedOut,
+    ] {
+        for before_error in [Vec::new(), body.as_bytes().to_vec()] {
+            for declared in [None, Some(body.len())] {
+                let chunks = tokio_stream::iter(vec![
+                    Ok(before_error.clone()),
+                    Err(std::io::Error::new(
+                        kind,
+                        "synthetic-private-transport-detail",
+                    )),
+                ]);
+                let (status, _, response) = call(
+                    &app,
+                    "POST",
+                    "/api/user/self/announcements/read",
+                    Some(&user.secret),
+                    Body::from_stream(chunks),
+                    declared,
+                )
+                .await;
+                assert_eq!(status, StatusCode::BAD_REQUEST);
+                assert_eq!(
+                    response,
+                    json!({
+                        "success":false,
+                        "code":"CONSOLE_BODY_READ_FAILED",
+                        "message":"Could not read acknowledgement body",
+                    })
+                );
+                let count: i64 = sqlx::query_scalar(
+                    "SELECT count(*) FROM core_console.announcement_reads WHERE user_id=1",
+                )
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+                assert_eq!(count, 0);
+            }
+        }
+    }
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/api/user/self/announcements/read",
+            Some(&user.secret),
+            Body::from(body),
+            None,
+        )
+        .await
+        .0,
+        StatusCode::OK,
+    );
+    assert!(state.announcements(&user.secret, None).await.unwrap()[0].read_at > 0);
+}
+
+#[sqlx::test(migrations = false)]
 async fn authentication_precedes_body_and_storage_access_and_rejects_api_keys(pool: PgPool) {
     let (identity, _, app) = setup(&pool).await;
     let user = identity.bootstrap_user(1, 0).await.unwrap();

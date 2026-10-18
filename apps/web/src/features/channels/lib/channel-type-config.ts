@@ -126,7 +126,7 @@ export const CHANNEL_TYPE_CONFIGS: Record<number, ChannelTypeConfig> = {
     defaultBaseUrl: 'https://api.deepseek.com',
     hints: {
       key: 'DeepSeek API Key',
-      models: 'deepseek-chat,deepseek-coder',
+      models: 'deepseek-flash,deepseek-v4-pro',
     },
   },
   20: {

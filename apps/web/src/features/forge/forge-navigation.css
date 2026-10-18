@@ -7,7 +7,7 @@
 
 .forge-public-header .forge-public-nav {
   min-width: 0;
-  min-height: 4rem;
+  min-height: var(--public-header-height);
   padding-inline: 0;
   border-color: color-mix(in oklch, var(--forge-header-ink) 10%, transparent);
 }
