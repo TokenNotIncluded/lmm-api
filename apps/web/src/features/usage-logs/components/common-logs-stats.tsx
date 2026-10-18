@@ -25,9 +25,12 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useHistoricalQuotaMoney } from '@/hooks/use-historical-quota-money'
 import { historicalQuotaUSD } from '@/lib/historical-quota-money'
 import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/stores/auth-store'
 
-import { getLogStats, getUserLogStats } from '../api'
-import { DEFAULT_LOG_STATS } from '../constants'
+import {
+  readUsageStatistics,
+  readUsageStatisticsScope,
+} from '../lib/statistics'
 import { buildApiParams, getDefaultTimeRange } from '../lib/utils'
 import type { LogStatistics } from '../types'
 import { useLogsViewScope, useUsageLogsContext } from './usage-logs-provider'
@@ -152,10 +155,16 @@ export function CommonLogsStats() {
   const searchParams = route.useSearch()
   const { sensitiveVisible } = useUsageLogsContext()
   const navigate = route.useNavigate()
+  const auth = useAuthStore((state) => state.auth)
+  const scope = readUsageStatisticsScope(auth)
+  const scopeKey = [scope?.userId, scope?.sessionId, scope?.role]
 
-  const { data: stats, isLoading } = useQuery({
-    queryKey: ['usage-logs-stats', isAdmin, searchParams],
-    queryFn: async () => {
+  const statsQuery = useQuery({
+    queryKey: ['usage-logs-stats', ...scopeKey, isAdmin, searchParams],
+    queryFn: async ({ signal }) => {
+      if (!scope) {
+        throw new Error('Usage statistics session unavailable')
+      }
       const params = buildApiParams({
         page: 1,
         pageSize: 1,
@@ -164,15 +173,10 @@ export function CommonLogsStats() {
         isAdmin,
       })
 
-      const result = isAdmin
-        ? await getLogStats(params)
-        : await getUserLogStats(params)
-
-      return result.success
-        ? result.data || DEFAULT_LOG_STATS
-        : DEFAULT_LOG_STATS
+      return readUsageStatistics(scope, params, isAdmin, signal)
     },
-    placeholderData: (previousData) => previousData,
+    enabled: !!scope,
+    retry: false,
   })
 
   const trendBuckets = useMemo(() => {
@@ -191,9 +195,12 @@ export function CommonLogsStats() {
   }, [searchParams.endTime, searchParams.startTime])
 
   const trendQuery = useQuery({
-    queryKey: ['usage-logs-trend', isAdmin, searchParams],
-    queryFn: async () => {
-      const results = await Promise.all(
+    queryKey: ['usage-logs-trend', ...scopeKey, isAdmin, searchParams],
+    queryFn: async ({ signal }) => {
+      if (!scope) {
+        throw new Error('Usage statistics session unavailable')
+      }
+      return Promise.all(
         trendBuckets.map(async (bucket) => {
           const params = buildApiParams({
             page: 1,
@@ -206,24 +213,21 @@ export function CommonLogsStats() {
             columnFilters: [],
             isAdmin,
           })
-          const result = isAdmin
-            ? await getLogStats(params)
-            : await getUserLogStats(params)
-          return result.success
-            ? { ...bucket, ...(result.data || DEFAULT_LOG_STATS) }
-            : null
+          const result = await readUsageStatistics(
+            scope,
+            params,
+            isAdmin,
+            signal
+          )
+          return { ...bucket, ...result }
         })
       )
-      if (results.every((result) => result === null)) {
-        throw new Error('Unable to load usage trend')
-      }
-      return results.filter((result): result is TrendBucket => result !== null)
     },
-    placeholderData: (previousData) => previousData,
-    enabled: sensitiveVisible,
+    enabled: sensitiveVisible && !!scope,
+    retry: false,
   })
 
-  if (isLoading) {
+  if (statsQuery.isLoading || statsQuery.isFetching) {
     return (
       <div className='flex items-center gap-2'>
         <Skeleton className='h-7 w-[150px] rounded-md' />
@@ -233,6 +237,9 @@ export function CommonLogsStats() {
     )
   }
 
+  const stats = statsQuery.isError ? undefined : statsQuery.data
+  const statisticsUnavailable = !scope || !stats
+
   return (
     <div className='flex w-full flex-wrap items-center gap-2'>
       <div className='flex flex-wrap items-center gap-2'>
@@ -240,7 +247,9 @@ export function CommonLogsStats() {
           label={t('Usage')}
           value={
             sensitiveVisible
-              ? formatHistoricalQuota(stats?.quota ?? 0, stats)
+              ? stats
+                ? formatHistoricalQuota(stats.quota, stats)
+                : '—'
               : '••••'
           }
           title={
@@ -252,34 +261,56 @@ export function CommonLogsStats() {
         />
         <StatBadge
           label={t('RPM')}
-          value={stats?.rpm || 0}
+          value={stats?.rpm ?? '—'}
           accent='console-stat-accent-danger'
         />
         <StatBadge
           label={t('TPM')}
-          value={stats?.tpm || 0}
+          value={stats?.tpm ?? '—'}
           accent='console-stat-accent-neutral'
         />
       </div>
-      {sensitiveVisible && (
-        <UsageTrend
-          buckets={trendQuery.data ?? []}
-          loading={trendQuery.isLoading}
-          error={trendQuery.isError}
-          onRetry={() => void trendQuery.refetch()}
-          onSelect={(bucket) => {
-            void navigate({
-              to: '/usage-logs/$section',
-              params: { section: 'common' },
-              search: (previous) => ({
-                ...previous,
-                startTime: bucket.start,
-                endTime: bucket.end,
-                page: 1,
-              }),
-            })
-          }}
-        />
+      {statisticsUnavailable ? (
+        <div
+          role='alert'
+          className='text-muted-foreground flex items-center gap-2 text-xs'
+        >
+          <span>{t('Failed to load')}</span>
+          <button
+            type='button'
+            className='text-foreground underline underline-offset-2'
+            disabled={!scope}
+            onClick={() => {
+              void statsQuery.refetch()
+              if (sensitiveVisible) {
+                void trendQuery.refetch()
+              }
+            }}
+          >
+            {t('Retry')}
+          </button>
+        </div>
+      ) : (
+        sensitiveVisible && (
+          <UsageTrend
+            buckets={trendQuery.data ?? []}
+            loading={trendQuery.isLoading || trendQuery.isFetching}
+            error={trendQuery.isError}
+            onRetry={() => void trendQuery.refetch()}
+            onSelect={(bucket) => {
+              void navigate({
+                to: '/usage-logs/$section',
+                params: { section: 'common' },
+                search: (previous) => ({
+                  ...previous,
+                  startTime: bucket.start,
+                  endTime: bucket.end,
+                  page: 1,
+                }),
+              })
+            }}
+          />
+        )
       )}
     </div>
   )
