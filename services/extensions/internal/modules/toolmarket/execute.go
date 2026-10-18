@@ -2,7 +2,6 @@ package toolmarket
 
 import (
 	"context"
-	"encoding/json"
 )
 
 func (m *Module) execute(ctx context.Context, p Principal, credential string, in ExecuteInput) (any, error) {
@@ -105,11 +104,8 @@ func (m *Module) execute(ctx context.Context, p Principal, credential string, in
 	if e != nil {
 		return nil, ErrPending
 	}
-	var check struct {
-		Content []json.RawMessage `json:"content"`
-		IsError bool              `json:"isError"`
-	}
-	if json.Unmarshal(result, &check) != nil || check.Content == nil {
+	result, e = safeToolResult(result, credential, s.Access, s.Refresh)
+	if e != nil {
 		return nil, ErrPending
 	}
 	// Commit charges for an accepted fixed-price invocation, including a tool's
