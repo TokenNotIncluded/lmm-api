@@ -22,6 +22,8 @@ import subprocess
 import sys
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import legacy_financial_preflight as FINANCIAL_PREFLIGHT
+
 
 _SPEC = importlib.util.spec_from_file_location("legacy_identity_import", Path(__file__).with_name("migrate-legacy-snapshot.py"))
 IDENTITY = importlib.util.module_from_spec(_SPEC)
@@ -302,10 +304,15 @@ def build_opening_payloads(plan: dict, *, migration_id: str, observation: dict,
                          "source_archive_sha256": source_hash, "source_entity_key": f"legacy.users/{uid}",
                          "source_row_sha256": row_hash})
     payloads.sort(key=lambda row: row["account_id"])
+    try:
+        opening_preflight = FINANCIAL_PREFLIGHT.preflight_opening_batch(payloads).summary()
+    except FINANCIAL_PREFLIGHT.FinancialPreflightError as error:
+        raise MappingError(str(error)) from None
     result = {"contract": "core_billing.import_opening_balance(jsonb)", "contract_review_status": "requires-final-core-schema-and-target-review",
               "migration_id": migration_id, "source_archive_sha256": source_hash, "mapping_sha256": mapping_hash,
               "observation": observation, "reservation_review_evidence_sha256": review_hash,
               "payloads": payloads, "target_writes": 0,
+              "opening_preflight": opening_preflight,
               "historical_user_counters_imported_by_this_contract": False,
               "terminal_transfer_and_payment_basis_imported_by_this_contract": False}
     result["opening_payloads_sha256"] = digest(result)
@@ -340,6 +347,10 @@ def build_opening_counter_payloads(plan: dict, opening: dict) -> dict:
             request_count=integer(row.get("historical_request_count"), "opening_counter_out_of_range", minimum=-JS_SAFE_MAX, maximum=JS_SAFE_MAX),
             aff_history=integer(row.get("historical_affiliate_units"), "opening_counter_out_of_range", minimum=-JS_SAFE_MAX, maximum=JS_SAFE_MAX))
     payloads.sort(key=lambda row: row["account_id"])
+    try:
+        FINANCIAL_PREFLIGHT.validate_opening_counters(opening["payloads"], payloads)
+    except FINANCIAL_PREFLIGHT.FinancialPreflightError as error:
+        raise MappingError(str(error)) from None
     result = {"contract": "core_billing.import_account_opening_counters(jsonb)",
               "contract_review_status": "requires-final-core-schema-and-target-review", "payloads": payloads,
               "target_writes": 0, "wallet_or_affiliate_units_created_by_counters": 0,
@@ -870,7 +881,8 @@ def build_full_financial_manifest(plan: dict, tables: dict[str, list[dict]], ide
 
 def tool_source_hashes(*, source_rights=False) -> dict:
     result = {"importer_sha256": IDENTITY.sha256_file(Path(__file__)),
-              "identity_helper_sha256": IDENTITY.sha256_file(Path(IDENTITY.__file__))}
+              "identity_helper_sha256": IDENTITY.sha256_file(Path(IDENTITY.__file__)),
+              "financial_preflight_helper_sha256": IDENTITY.sha256_file(Path(FINANCIAL_PREFLIGHT.__file__))}
     if source_rights:
         result["reconciliation_helper_sha256"] = IDENTITY.sha256_file(Path(__file__).with_name("legacy_financial_reconciliation.py"))
         result["bounty_basis_helper_sha256"] = IDENTITY.sha256_file(Path(__file__).with_name("legacy_bounty_basis.py"))
