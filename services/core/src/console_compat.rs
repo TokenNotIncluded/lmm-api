@@ -658,11 +658,21 @@ async fn acknowledge(State(state): State<ConsoleCompat>, request: Request) -> Re
     }
     let bytes = match to_bytes(request.into_body(), BODY_LIMIT).await {
         Ok(bytes) => bytes,
-        Err(_) => {
+        Err(err)
+            if std::error::Error::source(&err)
+                .is_some_and(|cause| cause.is::<http_body_util::LengthLimitError>()) =>
+        {
             return failure(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "CONSOLE_BODY_TOO_LARGE",
                 "Acknowledgement exceeds 1024 bytes",
+            );
+        }
+        Err(_) => {
+            return failure(
+                StatusCode::BAD_REQUEST,
+                "CONSOLE_BODY_READ_FAILED",
+                "Could not read acknowledgement body",
             );
         }
     };
