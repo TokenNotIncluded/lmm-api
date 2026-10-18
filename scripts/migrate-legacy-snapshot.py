@@ -53,7 +53,7 @@ ARGON2 = re.compile(r"\$argon2id\$v=19\$m=19456,t=2,p=1\$([A-Za-z0-9+/]+)\$([A-Z
 TABLES = ("accounts", "users", "user_profiles", "password_logins", "developer_access")
 IDENTITY_VERSION = 4
 # Bind this importer to the reviewed DDL, rather than trusting a caller's hash.
-IDENTITY_FINGERPRINT = "1fe8c54a0afce5d50e322d41dad405b7676f81983e720d5412bf893e40636ac8"
+IDENTITY_FINGERPRINT = "38e020822b4e986fd7b77ddb7a79925b4f05e2abdc0a0ce99222bb1c6df75e82"
 IDENTITY_SCHEMA = Path(__file__).resolve().parents[1] / "services/core/schema/identity.sql"
 IDENTITY_SCHEMA_RUST = Path(__file__).resolve().parents[1] / "services/core/src/identity/schema.rs"
 ROOT = Path(__file__).resolve().parents[1]
@@ -168,6 +168,9 @@ def validate_import_material(plan: dict, source_sha256: str, manifest: dict) -> 
             and manifest.get("source_target_id_map_sha256") == hashlib.sha256(id_map_bytes(records).encode()).hexdigest(), "identity_manifest_mismatch")
     require(all(isinstance(manifest.get(field), str) and HEX.fullmatch(manifest[field]) for field in
                 ("source_export_sha256", "source_baseline_proof_sha256")), "identity_manifest_proof_invalid")
+    mapping_file_sha256 = hashlib.sha256((canonical(plan) + "\n").encode()).hexdigest()
+    require(manifest.get("mapping_file_sha256", mapping_file_sha256) == mapping_file_sha256,
+            "identity_manifest_mapping_file_mismatch")
 
 
 def developer_decision(source: dict) -> tuple[bool, str]:
@@ -284,8 +287,12 @@ def map_identity(users: list[dict], second_factors: list[dict], *, source_sha256
             blocked.append("unknown_status")
         elif status == 2:
             blocked.append("source_disabled")
-        if source.get("deleted_at") not in (None, ""):
+        source_deleted = source.get("deleted_at") not in (None, "")
+        if source_deleted:
             blocked.append("source_deleted")
+        # Archive source flags stay independent of the dormant live gate used for
+        # privileged accounts pending offline owner activation.
+        source_enabled = type(status) is int and status == 1 and not source_deleted
         active = not blocked
         second_factor = factors.get(user_id, False) or user_id in unknown_factors
         if second_factor:
@@ -301,6 +308,9 @@ def map_identity(users: list[dict], second_factors: list[dict], *, source_sha256
             blocked.append("password_absent" if password in (None, "") else "password_format_unsupported")
         if not password_login_enabled:
             blocked.append("source_password_login_disabled")
+        source_password_login_enabled = password_login_enabled
+        # Source global policy, verifier availability and MFA are distinct facts.
+        # Imported privileged accounts stay dormant even when source permits login.
         password_allowed = active and not second_factor and verifier is not None and password_login_enabled
         developer_granted, developer_reason = developer_decision(source)
         record = {
@@ -309,6 +319,8 @@ def map_identity(users: list[dict], second_factors: list[dict], *, source_sha256
             **profile, "email_login_allowed": False, "password_login_allowed": password_allowed,
             "second_factor_required": second_factor, "legacy_bcrypt_allowed": legacy_bcrypt,
             "password_hash": verifier, "blocked_reasons": sorted(blocked), "normalizations": normalized,
+            "source_enabled": source_enabled, "source_deleted": source_deleted,
+            "source_password_login_enabled": source_password_login_enabled,
             "developer_access_granted": developer_granted,
             "developer_access_source_reference": f"legacy:{source_sha256}:{developer_reason}",
             "developer_access_revision": 1, "developer_access_reason": developer_reason,
@@ -567,9 +579,16 @@ def sql_literal(value: str) -> str:
 
 
 def build_import_sql(plan: dict, *, migration_id: str, source_sha256: str,
-                     target_contract: dict, manifest: dict, target_identity: dict) -> str:
+                     target_contract: dict, manifest: dict, target_identity: dict,
+                     mapping_file_sha256: str | None = None) -> str:
     require(MIGRATION_ID.fullmatch(migration_id) is not None, "migration_id_invalid")
     require(HEX.fullmatch(source_sha256) is not None, "source_hash_invalid")
+    if mapping_file_sha256 is None:
+        # Exact bytes of identity-mapping.private.json (canonical plan + newline).
+        mapping_file_sha256 = hashlib.sha256((canonical(plan) + "\n").encode()).hexdigest()
+    require(isinstance(mapping_file_sha256, str) and HEX.fullmatch(mapping_file_sha256) is not None
+            and mapping_file_sha256 == hashlib.sha256((canonical(plan) + "\n").encode()).hexdigest(),
+            "mapping_file_hash_invalid")
     expected_contract = identity_contract()
     require(isinstance(target_contract, dict) and all(target_contract.get(key) == value for key, value in expected_contract.items()), "target_contract_invalid")
     require(type(target_contract.get("identity_version")) is int, "target_contract_invalid")
@@ -603,8 +622,17 @@ def build_import_sql(plan: dict, *, migration_id: str, source_sha256: str,
     datetime.fromisoformat(target_identity["postmaster_started_at"])
     fingerprint = expected_contract["identity_fingerprint_sha256"]
     payload = sql_literal(canonical(plan["records"]))
-    run_id, source_hash, mapping_hash = map(sql_literal, (migration_id, source_sha256, plan["mapping_sha256"]))
+    run_id, source_hash, mapping_hash, mapping_file_hash = map(
+        sql_literal, (migration_id, source_sha256, plan["mapping_sha256"], mapping_file_sha256))
+    # Placeholder digested with the pre-seal SQL body, then replaced. This is the
+    # SQL-body digest contract: never claim it is the sealed complete-file SHA256.
+    sql_body_digest_placeholder = "__LMM_A2_SQL_BODY_SHA256__"
     run_manifest = sql_literal(canonical(manifest))
+    # A marker absent from all user material prevents replacing source strings
+    # that happen to contain 64 zeroes while sealing the two digest positions.
+    while sql_body_digest_placeholder in payload + run_manifest + str(target_identity) + migration_id:
+        sql_body_digest_placeholder += "X"
+    privileged_count = sum(1 for row in plan["records"] if row["platform_role"] in ("admin", "superadmin"))
     allow_core_seed = target_contract.get("allow_initialized_core_seed") is True
     if allow_core_seed:
         require(target_contract.get("initialized_core_seed_contract") == CORE_SEED_CONTRACT, "target_seed_contract_invalid")
@@ -731,6 +759,28 @@ BEGIN
    SELECT (r->>'user_id')::bigint,(r->>'developer_access_granted')::boolean,r->>'developer_access_source_reference',(r->>'developer_access_revision')::bigint FROM jsonb_array_elements(payload) r;
   INSERT INTO core_billing.account_policies(account_id,preference,revision)
    SELECT (r->>'account_id')::bigint,'wallet_only',1 FROM jsonb_array_elements(payload) r;
+  -- Privileged facts bind live cluster identity and A2 inputs in this same
+  -- transaction. a2_sql_sha256 starts as a zero placeholder in the pre-seal
+  -- base SQL body; Python replaces it with SHA-256(pre-seal bytes) before seal.
+  INSERT INTO core_identity.privileged_import_facts(
+   user_id,archive_sha256,a2_semantic_sha256,a2_file_sha256,a2_sql_sha256,migration_id,
+   system_id,database_oid,instance_nonce,import_run,source_enabled,source_deleted,
+   password_verifier_recognized,password_login_enabled,password_hash_sha256,login_name_sha256,
+   source_role,source_second_factor_required,source_auth_version)
+  SELECT (r->>'user_id')::bigint,
+   decode({source_hash},'hex'),decode({mapping_hash},'hex'),decode({mapping_file_hash},'hex'),
+   decode('{sql_body_digest_placeholder}','hex'),{run_id},
+   (SELECT substring(int8send(system_identifier) FROM 1 FOR 8)||decode(repeat('00',24),'hex') FROM pg_control_system()),
+   (SELECT oid::bigint FROM pg_database WHERE datname=current_database()),
+   decode(current_setting('lmm.migration_instance_nonce',true),'hex'),
+   sha256(convert_to({run_id},'UTF8')),
+   (r->>'source_enabled')::boolean,(r->>'source_deleted')::boolean,
+   (r->>'password_hash') IS NOT NULL,(r->>'source_password_login_enabled')::boolean,
+   CASE WHEN r->>'password_hash' IS NULL THEN decode(repeat('00',32),'hex') ELSE sha256(convert_to(r->>'password_hash','UTF8')) END,
+   sha256(convert_to('legacy-'||(r->>'user_id'),'UTF8')),
+   r->>'platform_role',(r->>'second_factor_required')::boolean,(r->>'auth_version')::bigint
+  FROM jsonb_array_elements(payload) r
+  WHERE r->>'platform_role' IN ('admin','superadmin');
   -- ALTER SEQUENCE RESTART is transactional; setval would survive a rollback.
   EXECUTE format('ALTER SEQUENCE %s RESTART WITH %s',pg_get_serial_sequence('core_identity.accounts','id'),COALESCE((SELECT max((r->>'account_id')::bigint)+1 FROM jsonb_array_elements(payload) r),1));
   EXECUTE format('ALTER SEQUENCE %s RESTART WITH %s',pg_get_serial_sequence('core_identity.users','id'),COALESCE((SELECT max((r->>'user_id')::bigint)+1 FROM jsonb_array_elements(payload) r),1));
@@ -740,7 +790,8 @@ BEGIN
  IF (SELECT count(*) FROM core_identity.users)<>expected_count OR (SELECT count(*) FROM core_identity.accounts)<>expected_count
  OR (SELECT count(*) FROM core_identity.user_profiles)<>expected_count OR (SELECT count(*) FROM core_billing.account_policies)<>expected_count
  OR (SELECT count(*) FROM core_identity.developer_access)<>expected_count
- OR (SELECT count(*) FROM core_identity.password_logins)<>(SELECT count(*) FROM jsonb_array_elements(payload) r WHERE r->>'password_hash' IS NOT NULL) THEN
+ OR (SELECT count(*) FROM core_identity.password_logins)<>(SELECT count(*) FROM jsonb_array_elements(payload) r WHERE r->>'password_hash' IS NOT NULL)
+ OR (SELECT count(*) FROM core_identity.privileged_import_facts)<>{privileged_count} THEN
   RAISE EXCEPTION 'identity row count mismatch';
  END IF;
  IF EXISTS(SELECT 1 FROM jsonb_array_elements(payload) r
@@ -761,19 +812,51 @@ BEGIN
  END IF;
  FOR table_row IN SELECT n.nspname,c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
   WHERE {application_tables}
-  AND NOT (n.nspname='core_identity' AND c.relname IN ('accounts','users','user_profiles','password_logins','developer_access'))
+  AND NOT (n.nspname='core_identity' AND c.relname IN ('accounts','users','user_profiles','password_logins','developer_access','privileged_import_facts'))
   AND NOT (n.nspname='core_billing' AND c.relname='account_policies')
   {seed_exclusion}
  LOOP
   EXECUTE format('SELECT EXISTS(SELECT 1 FROM %I.%I)',table_row.nspname,table_row.relname) INTO occupied;
   IF occupied THEN RAISE EXCEPTION 'non-import target table is not empty'; END IF;
  END LOOP;
+ IF EXISTS(SELECT 1 FROM jsonb_array_elements(payload) r
+  WHERE r->>'platform_role' IN ('admin','superadmin')
+  AND NOT EXISTS(
+   SELECT 1 FROM core_identity.privileged_import_facts f
+   WHERE f.user_id=(r->>'user_id')::bigint
+    AND encode(f.archive_sha256,'hex')={source_hash}
+    AND encode(f.a2_semantic_sha256,'hex')={mapping_hash}
+    AND encode(f.a2_file_sha256,'hex')={mapping_file_hash}
+    AND f.migration_id={run_id}
+    AND f.source_enabled=(r->>'source_enabled')::boolean
+    AND f.source_deleted=(r->>'source_deleted')::boolean
+    AND f.password_login_enabled=(r->>'source_password_login_enabled')::boolean
+    AND f.password_verifier_recognized=((r->>'password_hash') IS NOT NULL)
+    AND f.password_hash_sha256=CASE WHEN r->>'password_hash' IS NULL THEN decode(repeat('00',32),'hex') ELSE sha256(convert_to(r->>'password_hash','UTF8')) END
+    AND f.login_name_sha256=sha256(convert_to('legacy-'||(r->>'user_id'),'UTF8'))
+    AND f.source_role=r->>'platform_role'
+    AND f.source_second_factor_required=(r->>'second_factor_required')::boolean
+    AND f.source_auth_version=(r->>'auth_version')::bigint
+    AND encode(f.import_run,'hex')=encode(sha256(convert_to({run_id},'UTF8')),'hex')
+    AND encode(f.a2_sql_sha256,'hex')='{sql_body_digest_placeholder}'
+    AND f.database_oid=(SELECT oid::bigint FROM pg_database WHERE datname=current_database())
+    AND f.instance_nonce=decode(current_setting('lmm.migration_instance_nonce',true),'hex')
+    AND f.system_id=(SELECT substring(int8send(system_identifier) FROM 1 FOR 8)||decode(repeat('00',24),'hex') FROM pg_control_system())
+  )) THEN
+  RAISE EXCEPTION 'privileged import facts mismatch';
+ END IF;
  {seed_readback}
  {role_guard}
 END $lmm_identity_import$;
 SELECT json_build_object('status','identity-import-verified','migration_id',{run_id},'mapped_user_count',{len(plan['records'])});
 COMMIT;
 """
+    # SQL-body digest covers the pre-seal base import SQL with the zero digest
+    # placeholder still present. After hashing, replace the placeholder; then
+    # seal dollar-quote delimiters. Do not label this digest as complete-file SHA.
+    require(sql.count(sql_body_digest_placeholder) == 2, "sql_body_digest_placeholder_invalid")
+    sql_body_digest = hashlib.sha256(sql.replace(sql_body_digest_placeholder, "0" * 64).encode()).hexdigest()
+    sql = sql.replace(sql_body_digest_placeholder, sql_body_digest)
     # Dollar quoting is lexical: a source string can close a fixed DO delimiter
     # even inside an inner SQL string. Choose a delimiter absent from all input.
     suffix = hashlib.sha256(sql.encode()).hexdigest()[:24]
@@ -809,7 +892,9 @@ def main() -> int:
         source_identity, users, factors, password_enabled = export_source(source, output)
         source_hash = source["archive"]["sha256"]
         plan = map_identity(users, factors, source_sha256=source_hash, password_login_enabled=password_enabled)
-        write_private(output, "identity-mapping.private.json", canonical(plan) + "\n")
+        mapping_document = canonical(plan) + "\n"
+        write_private(output, "identity-mapping.private.json", mapping_document)
+        mapping_file_sha256 = hashlib.sha256(mapping_document.encode()).hexdigest()
         id_map_path = write_private(output, "source-target-id-map.private.jsonl", id_map_bytes(plan["records"]))
         manifest = {"format_version": 2, "scope": "identity-only", "source_archive_sha256": source_hash,
                     "identity_contract": expected_contract, "developer_access_policy": DEVELOPER_POLICY,
@@ -817,12 +902,14 @@ def main() -> int:
                     "source_export_sha256": sha256_file(output / "source-identity-export.private.jsonl"),
                     "source_baseline_proof_sha256": sha256_file(output / "source-baseline-proof.private.json"),
                     "source_target_id_map_sha256": sha256_file(id_map_path),
-                    "mapping_sha256": plan["mapping_sha256"], "summary": plan["summary"]}
+                    "mapping_sha256": plan["mapping_sha256"],
+                    "mapping_file_sha256": mapping_file_sha256, "summary": plan["summary"]}
         validate_import_material(plan, source_hash, manifest)
         # Persist the exact replay materials before any possible target commit.
         write_private(output, "manifest.private.json", canonical(manifest) + "\n")
         public = {"status": "dry-run-mapped", "migration_id": args.migration_id, "apply": False,
                   "source_archive_sha256": source_hash, "mapping_sha256": plan["mapping_sha256"],
+                  "mapping_file_sha256": mapping_file_sha256,
                   "identity_contract": expected_contract, **plan["summary"]}
         if args.target_receipt:
             target = load_receipt(args.target_receipt, private=True)
@@ -837,7 +924,10 @@ def main() -> int:
             _, login_role = connection_roles(connection)
             sql_identity = {**instance, "database": connection.get("database"), "role": connection.get("role"),
                             "session_user": login_role, "port": connection.get("port")}
-            sql = build_import_sql(plan, migration_id=args.migration_id, source_sha256=source_hash, target_contract=target.get("contract", {}), manifest=manifest, target_identity=sql_identity)
+            sql = build_import_sql(plan, migration_id=args.migration_id, source_sha256=source_hash,
+                                  mapping_file_sha256=mapping_file_sha256,
+                                  target_contract=target.get("contract", {}), manifest=manifest,
+                                  target_identity=sql_identity)
             target_identity = json.loads(psql(connection, "BEGIN READ ONLY;\n" + IDENTITY_SQL + "\nCOMMIT;", readonly=True, private_dir=output, label="target-identity"))
             verify_instance(target_identity, connection, target.get("instance_identity", {}), source=False)
             require((target_identity["database_oid"], target_identity["postmaster_started_at"]) != (source_identity["database_oid"], source_identity["postmaster_started_at"]), "source_target_same_database")

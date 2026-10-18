@@ -611,6 +611,7 @@ class ImportSqlTests(unittest.TestCase):
         self.assertEqual(tables, {
             "core_identity.accounts", "core_identity.users", "core_identity.user_profiles",
             "core_identity.password_logins", "core_identity.developer_access",
+            "core_identity.privileged_import_facts",
             "core_billing.account_policies", "core_migration.import_runs",
         })
         self.assertNotRegex(code, r"(?i)\b(?:TRUNCATE|DELETE\s+FROM|UPDATE\s+[a-z_]+\.|DROP|CREATE)\b")

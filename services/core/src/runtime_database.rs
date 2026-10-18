@@ -64,6 +64,8 @@ pub(crate) async fn check_connection(
 ) -> Result<(), RuntimeDatabaseError> {
     let unsafe_role: bool = sqlx::query_scalar(r#"
         SELECT current_user<>session_user
+        OR has_parameter_privilege(current_user,'session_replication_role','SET')
+        OR has_parameter_privilege(session_user,'session_replication_role','SET')
         OR EXISTS(SELECT FROM pg_roles r WHERE r.rolname<>current_user AND (
           pg_has_role(current_user,r.oid,'SET') OR pg_has_role(session_user,r.oid,'SET')
           OR pg_has_role(current_user,r.oid,'MEMBER WITH ADMIN OPTION') OR pg_has_role(session_user,r.oid,'MEMBER WITH ADMIN OPTION')))
@@ -105,7 +107,7 @@ pub(crate) async fn check_connection(
           WHERE c.relkind IN ('r','p','v','m','f') AND (
             ((n.nspname IN ('core_meta','core_migration','core_model')
               OR (n.nspname='core_console' AND c.relname IN ('options','initialization'))
-              OR (n.nspname='core_identity' AND c.relname IN ('developer_access','user_routing_groups'))
+              OR (n.nspname='core_identity' AND c.relname IN ('developer_access','user_routing_groups','privileged_import_facts','permission_policies','permission_policy_rows','admin_activation_receipts'))
               OR (n.nspname='public' AND c.relname IN ('routing_active_release','routing_groups','routing_routes'))
               OR (n.nspname='core_charging' AND c.relname IN ('budget_opening_consumption','subscription_opening_consumption'))
               OR (n.nspname='core_billing' AND c.relname<>'account_policies'))
@@ -194,6 +196,9 @@ pub(crate) async fn check_connection(
           AND has_table_privilege('core_identity.auth_attempts','UPDATE')
           AND has_table_privilege('core_identity.developer_access','SELECT')
           AND has_table_privilege('core_identity.user_routing_groups','SELECT')
+          AND has_table_privilege('core_identity.privileged_import_facts','SELECT')
+          AND has_table_privilege('core_identity.permission_policies','SELECT')
+          AND has_table_privilege('core_identity.permission_policy_rows','SELECT')
           AND NOT EXISTS(SELECT FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
             WHERE n.nspname='core_identity' AND CASE WHEN c.relkind='S' THEN NOT has_sequence_privilege(c.oid,'USAGE') ELSE FALSE END)
           AND NOT EXISTS(SELECT FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace

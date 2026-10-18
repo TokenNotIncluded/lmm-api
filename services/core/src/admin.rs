@@ -1,6 +1,14 @@
 //! Explicit administrative operations in the core executable. Service startup
 //! never invokes these operations or creates database objects.
-use lmm_core::{config, identity::IdentityStore};
+use lmm_core::{
+    config,
+    identity::{
+        IdentityStore,
+        admin_approval::{
+            self, ApplyAdminActivationRequest, ApprovalError, PlanAdminActivationRequest,
+        },
+    },
+};
 use serde::Deserialize;
 
 mod check_db;
@@ -22,6 +30,8 @@ pub enum Operation {
     CompleteSetup,
     BootstrapUser(Bootstrap),
     InstallUsageReceiptIndex([u8; 32]),
+    PlanAdminActivation(PlanAdminActivationRequest),
+    ApplyAdminActivation(ApplyAdminActivationRequest),
 }
 
 impl Operation {
@@ -63,6 +73,27 @@ impl Operation {
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid bootstrap JSON"))?;
         Ok(Self::BootstrapUser(request))
     }
+
+    pub fn plan_admin_activation(input: impl Read) -> io::Result<Self> {
+        let request = admin_approval::read_bounded_json(input).map_err(approval_io)?;
+        Ok(Self::PlanAdminActivation(request))
+    }
+
+    pub fn apply_admin_activation(input: impl Read) -> io::Result<Self> {
+        let request = admin_approval::read_bounded_json(input).map_err(approval_io)?;
+        Ok(Self::ApplyAdminActivation(request))
+    }
+}
+
+fn approval_io(error: ApprovalError) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        match error {
+            ApprovalError::InputTooLarge => "activation input exceeds 64 KiB",
+            ApprovalError::InvalidJson => "invalid activation JSON",
+            other => return io::Error::other(other.to_string()),
+        },
+    )
 }
 
 pub async fn run(operation: Operation) -> Result<(), Box<dyn Error>> {
@@ -102,6 +133,21 @@ pub async fn run(operation: Operation) -> Result<(), Box<dyn Error>> {
             println!(
                 "Core setup completion recorded. Existing initialization facts were preserved."
             );
+        }
+        Operation::PlanAdminActivation(request) => {
+            lmm_core::core_schema::check(&pool).await?;
+            let mut connection = pool.acquire().await?;
+            let response = admin_approval::plan_admin_activation(&mut connection, &request).await?;
+            serde_json::to_writer(io::stdout().lock(), &response)?;
+            println!();
+        }
+        Operation::ApplyAdminActivation(request) => {
+            lmm_core::core_schema::check(&pool).await?;
+            let mut connection = pool.acquire().await?;
+            let response =
+                admin_approval::apply_admin_activation(&mut connection, &request).await?;
+            serde_json::to_writer(io::stdout().lock(), &response)?;
+            println!();
         }
     }
     Ok(())

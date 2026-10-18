@@ -4,7 +4,7 @@ mod wallet;
 use super::*;
 pub use http::router;
 use serde::{Deserialize, Serialize};
-use sqlx::{Postgres, Transaction};
+use sqlx::{Postgres, Row, Transaction};
 pub use wallet::WalletProjection;
 
 pub const PROTOCOL: &str = "core.admin-users.v1";
@@ -327,13 +327,67 @@ impl AdminUsersStore {
         {
             return Err(AdminUsersError::Forbidden);
         }
-        let role: String =
-            sqlx::query_scalar("SELECT platform_role FROM core_identity.users WHERE id=$1")
-                .bind(actor.user_id)
-                .fetch_one(c)
-                .await?;
+        let row = sqlx::query(
+            "SELECT u.platform_role,u.personal_account_id,u.auth_version,u.active,a.active AS account_active
+             FROM core_identity.users u
+             JOIN core_identity.accounts a ON a.id=u.personal_account_id
+             WHERE u.id=$1",
+        )
+        .bind(actor.user_id)
+        .fetch_one(&mut *c)
+        .await?;
+        let role: String = row.try_get("platform_role")?;
         if !matches!(role.as_str(), "admin" | "superadmin") {
             return Err(AdminUsersError::Forbidden);
+        }
+        // Synthetic development bootstrap admins have no privileged_import_facts
+        // and keep the role-only gate. Imported admins must load a complete
+        // persisted policy; hash-only claims fail closed.
+        let imported = super::permissions::has_privileged_import_facts(c, actor.user_id)
+            .await
+            .map_err(|_| AdminUsersError::Unavailable)?;
+        if imported {
+            let loaded = super::permissions::load_complete_policy(c, actor.user_id)
+                .await
+                .map_err(|error| match error {
+                    super::permissions::PolicyLoadError::Storage => AdminUsersError::Unavailable,
+                    super::permissions::PolicyLoadError::Missing
+                    | super::permissions::PolicyLoadError::Incomplete
+                    | super::permissions::PolicyLoadError::HashMismatch => {
+                        AdminUsersError::Forbidden
+                    }
+                })?;
+            let platform_role = match role.as_str() {
+                "admin" => super::permissions::PlatformRole::Admin,
+                "superadmin" => super::permissions::PlatformRole::Root,
+                _ => return Err(AdminUsersError::Forbidden),
+            };
+            let personal_account_id: i64 = row.try_get("personal_account_id")?;
+            let auth_version: i64 = row.try_get("auth_version")?;
+            let active: bool = row.try_get("active")?;
+            let account_active: bool = row.try_get("account_active")?;
+            let decision = super::permissions::decide(
+                &super::permissions::Actor {
+                    user_id: actor.user_id,
+                    personal_account_id,
+                    role: platform_role,
+                    credential: super::permissions::Credential::Session,
+                    active,
+                    account_active,
+                    auth_version,
+                    credential_auth_version: actor.user_version,
+                    developer: super::permissions::DeveloperState::Granted,
+                },
+                &loaded.as_policy(),
+                super::permissions::Action::AdminUsersRead,
+                super::permissions::Scope::Platform(
+                    super::permissions::PlatformResource::Directory,
+                ),
+                None,
+            );
+            if !decision.allowed() {
+                return Err(AdminUsersError::Forbidden);
+            }
         }
         Ok(actor)
     }
