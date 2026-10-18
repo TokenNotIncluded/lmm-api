@@ -43,6 +43,7 @@ impl IntoResponse for AdminUsersError {
 }
 pub fn router(store: AdminUsersStore) -> Router {
     Router::new()
+        .merge(super::profile_mutation::routes())
         .route("/core/v1/admin/users", get(users))
         .route("/core/v1/admin/users/groups", get(groups))
         .layer(axum::middleware::from_fn(

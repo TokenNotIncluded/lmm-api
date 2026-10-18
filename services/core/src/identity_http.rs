@@ -41,7 +41,10 @@ pub fn router(store: IdentityStore) -> Router {
         )
         .layer(DefaultBodyLimit::max(16 * 1024))
         .layer(middleware::from_fn(no_store))
-        .with_state(store)
+        .with_state(store.clone())
+        .merge(crate::identity::permission_read_router(
+            crate::identity::PermissionReadStore::new(store),
+        ))
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

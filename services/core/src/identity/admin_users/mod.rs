@@ -1,5 +1,10 @@
-//! Core-owned administrator user read model. No writes or delegated grants.
+//! Core-owned administrator user reads and a separate conditional display-name update.
 mod http;
+mod profile_mutation;
+pub use profile_mutation::{
+    AdminProfile, PROFILE_CONTRACT, ProfileCapabilities, ProfileError, ProfileUpdate,
+    ProfileUpdateRequest,
+};
 mod wallet;
 use super::*;
 pub use http::router;
@@ -306,7 +311,7 @@ impl AdminUsersStore {
     pub fn new(identity: IdentityStore) -> Self {
         Self { identity }
     }
-    async fn begin(&self) -> ReadResult<Transaction<'_, Postgres>> {
+    pub(super) async fn begin(&self) -> ReadResult<Transaction<'_, Postgres>> {
         let mut tx = self.identity.pool.begin().await?;
         sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
             .execute(&mut *tx)
@@ -319,7 +324,7 @@ impl AdminUsersStore {
             .await?;
         Ok(tx)
     }
-    async fn authorize(c: &mut PgConnection, secret: &str) -> ReadResult<Principal> {
+    pub(super) async fn authorize(c: &mut PgConnection, secret: &str) -> ReadResult<Principal> {
         let actor = super::authenticate(c, secret, false).await?;
         if actor.credential_kind != CredentialKind::Session
             || actor.owner.kind != AccountKind::Personal
