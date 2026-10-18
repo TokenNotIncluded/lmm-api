@@ -4,8 +4,13 @@ from decimal import Decimal
 import importlib.util
 import io
 from pathlib import Path
+import sys
 import unittest
 from unittest.mock import patch
+
+_SCRIPTS_DIR = str(Path(__file__).parent)
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
 
 import test_migrate_legacy_financial as facts
 

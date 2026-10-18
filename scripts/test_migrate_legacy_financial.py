@@ -7,10 +7,15 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
+
+_SCRIPTS_DIR = str(Path(__file__).parent)
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
 
 SPEC = importlib.util.spec_from_file_location("financial_import", Path(__file__).with_name("migrate-legacy-financial.py"))
 MODULE = importlib.util.module_from_spec(SPEC)

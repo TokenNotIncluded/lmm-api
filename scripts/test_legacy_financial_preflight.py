@@ -2,8 +2,14 @@
 
 import copy
 from decimal import Decimal
+from pathlib import Path
 import random
+import sys
 import unittest
+
+_SCRIPTS_DIR = str(Path(__file__).parent)
+if _SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPTS_DIR)
 
 from legacy_financial_preflight import (
     BIGINT_MAX, BIGINT_MIN, EPOCH_MAX, EPOCH_MIN, JS_SAFE_MAX,
