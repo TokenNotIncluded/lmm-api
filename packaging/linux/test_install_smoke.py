@@ -226,12 +226,98 @@ class InstallSmokeTests(unittest.TestCase):
         self.assertIn("install_packages 2\nassert_not_activated", SCRIPT)
         self.assertIn("remove_packages\nassert_not_activated", SCRIPT)
         self.assertIn("for port in 8080 8081", function("assert_not_activated"))
-        self.assertEqual(SCRIPT.count('[ "$(cat /var/lib/lmm/core/keep)" = operator-data ]'), 2)
-        self.assertEqual(SCRIPT.count('[ "$(cat /etc/lmm.conf.d/secrets/core/keep)" = synthetic-preservation-fixture ]'), 2)
+        self.assertIn("record_operator_files\ninstall_packages 2", SCRIPT)
+        self.assertIn("install_packages 2\nassert_not_activated\nassert_operator_files upgrade", SCRIPT)
+        self.assertIn("remove_packages\nassert_not_activated\nassert_operator_files removal", SCRIPT)
         self.assertIn("not service-manager acceptance", SCRIPT)
         self.assertNotRegex(SCRIPT, r"\b(?:systemctl|rc-service|init-db|bootstrap-user)\b")
         self.assertIn("trap 'stop_service' EXIT", SCRIPT)
         self.assertIn("trap 'exit 1' HUP INT TERM", SCRIPT)
+
+
+class OperatorFilePreservationTests(unittest.TestCase):
+    """Run the actual preservation functions only in a private synthetic root.
+
+    No package manager, real /etc, service account or database is used here.
+    Actual install/upgrade/remove still requires the separate container runner.
+    """
+
+    def probe(self, *, fmt="deb", mutation="", phase="upgrade"):
+        with tempfile.TemporaryDirectory(prefix="operator-files-") as directory:
+            work = Path(directory)
+            (work / "etc/lmm.conf.d").mkdir(parents=True)
+            for component in ("core", "extensions"):
+                (work / f"etc/lmm.conf.d/{component}.toml").write_text(
+                    "version = 1\n# synthetic original configuration\n")
+            (work / "saved").mkdir(mode=0o700)
+            functions = "\n".join(function(name) for name in
+                                   ("record_operator_files", "assert_operator_files"))
+            # Rebase only these shell function literals, never run the installer.
+            functions = functions.replace("/etc/lmm.conf.d", "${WORK}/etc/lmm.conf.d")
+            functions = functions.replace("/var/lib/lmm", "${WORK}/var/lib/lmm")
+            script = functions + r'''
+                preservation_dir="$WORK/saved"
+                format=$FORMAT
+                record_operator_files
+            ''' + mutation + "\nassert_operator_files \"$PHASE\"\n"
+            return subprocess.run(["sh", "-eu", "-c", script], text=True,
+                                  capture_output=True, timeout=10,
+                                  env={**os.environ, "WORK": directory,
+                                       "FORMAT": fmt, "PHASE": phase})
+
+    def test_both_components_survive_upgrade_and_removal_in_each_format(self):
+        for fmt in ("deb", "rpm", "apk", "archlinux"):
+            for phase in ("upgrade", "removal"):
+                with self.subTest(fmt=fmt, phase=phase):
+                    result = self.probe(fmt=fmt, phase=phase)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_removal_accepts_only_the_expected_package_manager_saved_config(self):
+        for fmt, suffix in (("rpm", ".rpmsave"), ("archlinux", ".pacsave")):
+            mutation = "\n".join(
+                f'mv "$WORK/etc/lmm.conf.d/{component}.toml" '
+                f'"$WORK/etc/lmm.conf.d/{component}.toml{suffix}"'
+                for component in ("core", "extensions"))
+            with self.subTest(fmt=fmt):
+                result = self.probe(fmt=fmt, phase="removal", mutation=mutation)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                result = self.probe(fmt=fmt, phase="upgrade", mutation=mutation)
+                self.assertNotEqual(result.returncode, 0, "upgrade lost its active TOML")
+        mutation = 'mv "$WORK/etc/lmm.conf.d/extensions.toml" "$WORK/etc/lmm.conf.d/extensions.toml.pacsave"'
+        self.assertNotEqual(self.probe(fmt="rpm", phase="removal", mutation=mutation).returncode, 0)
+        self.assertNotEqual(self.probe(fmt="deb", phase="removal", mutation=mutation).returncode, 0)
+        mutation = 'mv "$WORK/etc/lmm.conf.d/extensions.toml" "$WORK/etc/lmm.conf.d/extensions.toml.apk-save"'
+        self.assertNotEqual(self.probe(fmt="apk", phase="removal", mutation=mutation).returncode, 0)
+
+    def test_each_component_rejects_lost_or_changed_config_data_and_secret(self):
+        for component in ("core", "extensions"):
+            for relative in (f"etc/lmm.conf.d/{component}.toml",
+                             f"var/lib/lmm/{component}/keep",
+                             f"etc/lmm.conf.d/secrets/{component}/keep"):
+                for mutation in (f'rm "$WORK/{relative}"',
+                                 f'printf corrupted > "$WORK/{relative}"'):
+                    for phase in ("upgrade", "removal"):
+                        with self.subTest(component=component, path=relative,
+                                          mutation=mutation, phase=phase):
+                            self.assertNotEqual(self.probe(mutation=mutation, phase=phase).returncode, 0)
+
+    def test_saved_toml_must_equal_the_whole_original_not_only_its_marker(self):
+        mutation = r'''
+            mv "$WORK/etc/lmm.conf.d/extensions.toml" "$WORK/etc/lmm.conf.d/extensions.toml.rpmsave"
+            printf '\n# changed after uninstall\n' >> "$WORK/etc/lmm.conf.d/extensions.toml.rpmsave"
+        '''
+        self.assertNotEqual(self.probe(fmt="rpm", phase="removal", mutation=mutation).returncode, 0)
+
+    def test_preservation_rejects_changed_private_modes(self):
+        for component in ("core", "extensions"):
+            for relative, mode in ((f"etc/lmm.conf.d/{component}.toml", "640"),
+                                   (f"var/lib/lmm/{component}", "755"),
+                                   (f"var/lib/lmm/{component}/keep", "644"),
+                                   (f"etc/lmm.conf.d/secrets/{component}", "755"),
+                                   (f"etc/lmm.conf.d/secrets/{component}/keep", "640")):
+                with self.subTest(component=component, path=relative):
+                    result = self.probe(mutation=f'chmod {mode} "$WORK/{relative}"')
+                    self.assertNotEqual(result.returncode, 0)
 
 
 @unittest.skipUnless(os.environ.get("LMM_INSTALL_SMOKE_TEST_IMAGE"),
