@@ -90,7 +90,7 @@ async fn current_schema_index_predecessor_upgrade_changes_only_verified_index_an
         .map(|b| format!("{b:02x}"))
         .collect::<String>();
     assert_eq!(
-        prior_hex, "660ddf6f75c0350c93ae2886951312997c82c4bc6ebcf5d79a561de629781bad",
+        prior_hex, "b338104a3394e575c11434d9434c077793a4090cb31c830d0b490e2ea7ec40db",
         "current-schema index-predecessor fixture must match its reviewed canonical catalog"
     );
     println!("prior catalog SHA256={prior_hex}");
@@ -129,6 +129,7 @@ async fn current_schema_index_predecessor_upgrade_changes_only_verified_index_an
     // The retired pre-Pi thirteen-component, twelve-component and earlier catalogs
     // are not the current catalog, even when approval matches the saved receipt.
     for retired_hex in [
+        "660ddf6f75c0350c93ae2886951312997c82c4bc6ebcf5d79a561de629781bad",
         "431a4af6b4790abdb32a3583cb097b733c41b6b2cdc04537e15808260de44d57",
         "9ce6c5120645792608d4466ef9fe4b6f91add7ec082670d276bffbd94f48c14a",
         "e8fa053daca7741952caa4c60e27071652f600b4fa48f4b7631ea54ee801df7b",
