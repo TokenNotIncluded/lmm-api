@@ -9,14 +9,16 @@
   <p><a href="README.md">简体中文</a> · <a href="README_EN.md">English</a></p>
 </div>
 
-**LMM stands for Language Model Mesh (语言模型网络).** It is a model gateway: one core owns identity, permissions, billing and model routing, and extensions carry the store, tool market, assistant, operations and payment adapters. “Mesh” refers to multi-model routing, channel sharing and component collaboration.
+**LMM — Language Model Mesh (语言模型网络)** — helps you connect language models, tools, and services through a single, intelligently-routed gateway. A lean Rust core handles identity, permissions, billing, and model routing, while Go-based extensions carry the store, tool market, assistant, operations, and payment adapters. The "Mesh" in our name reflects what we care about most: multi-model routing, channel sharing, and seamless component collaboration.
 
 > [!WARNING]
-> **This branch is a fresh-install microservice rewrite. It is WIP and not a replacement for the existing site.**
-> Passing module tests does not prove complete model, payment or funds flows. Historical funds, subscriptions and API keys are still being reconciled on isolated copies and are not accepted.
-> The runtime does not connect to the old application database, automatically upgrade schemas or fall back to the legacy server. See [architecture and status](docs/core-migration.md) for remaining work.
+> **You're looking at our next-generation microservice rewrite — exciting work that's still in progress.**
+> This branch is a fresh-install architecture and is not yet a drop-in replacement for the existing site. Passing module tests does not prove complete model, payment, or funds flows. Historical funds, subscriptions, and API keys are still being reconciled on isolated copies and are not accepted here.
+> The runtime does not connect to the old application database, automatically upgrade schemas, or fall back to the legacy server. Check our [architecture and status](docs/core-migration.md) document for a full picture of the remaining work.
 
 ## Three programs
+
+LMM is organized as three focused programs that work together. Here's how they relate to each other:
 
 ```text
 lmm client / Web console
@@ -40,7 +42,7 @@ lmm client / Web console
 
 ## Quick start
 
-Tool versions come from [mise.toml](mise.toml); run tools through `mise exec --`. Prepare only what your task needs; see [Development](docs/development.md).
+Ready to dive in? Tool versions come from [mise.toml](mise.toml); run tools through `mise exec --`. You only need to prepare what your task requires — see [Development](docs/development.md) for the full walkthrough.
 
 ```sh
 # Initialize the client submodule only when you need the CLI
@@ -58,7 +60,7 @@ Start a full isolated environment with the [Docker development stack](deployment
 
 ## Configuration and directories
 
-New installations use TOML: `/etc/lmm.conf.d/core.toml` and `/etc/lmm.conf.d/extensions.toml`, or an explicit `--config` path.
+We use a clean, predictable layout so you always know where things live. New installations use TOML: `/etc/lmm.conf.d/core.toml` and `/etc/lmm.conf.d/extensions.toml`, or an explicit `--config` path.
 
 | Content | Path |
 | --- | --- |
@@ -69,6 +71,8 @@ New installations use TOML: `/etc/lmm.conf.d/core.toml` and `/etc/lmm.conf.d/ext
 See [configuration and filesystem layout](docs/filesystem-layout.md) for ownership, upgrades and legacy package boundaries. This convention does not automatically migrate an existing installation.
 
 ## Documentation
+
+Not sure where to start? Here's a quick map to help you find what you need:
 
 | Task | Entry point |
 | --- | --- |
@@ -82,10 +86,10 @@ See [configuration and filesystem layout](docs/filesystem-layout.md) for ownersh
 
 ## Branches
 
-The default development branch is `wip/rust-core-go-extensions`; legacy `main` and `traditional` are frozen. [Branch promotion](docs/development-branches.md) is not deployment or acceptance. [Extore product sync](docs/extore-shop-binding-followup.md) remains incomplete and must not be deployed.
+All active development happens on the `wip/rust-core-go-extensions` branch — that's the one you're reading now. The legacy `main` and `traditional` branches are preserved as historical snapshots and are no longer updated. Please note that [branch promotion](docs/development-branches.md) is a development milestone, not a deployment or acceptance decision. The [Extore product sync](docs/extore-shop-binding-followup.md) remains incomplete and is not ready for deployment.
 
 ## Contribution and license
 
-Read the [contribution guide](docs/contributing.md). Follow the [security policy](.github/SECURITY.md) for vulnerabilities; do not disclose keys or user data. Merging, packaging, publishing and deploying are separate decisions.
+We'd love to have you contribute! Start by reading the [contribution guide](docs/contributing.md). If you discover a security vulnerability, please follow the [security policy](.github/SECURITY.md) — never disclose keys or user data publicly. Keep in mind that merging, packaging, publishing, and deploying are separate decisions in our workflow.
 
-The project builds on [QuantumNous/new-api](https://github.com/QuantumNous/new-api) under [[PERSON_NAME]). Preserve [NOTICE](NOTICE), [fork provenance](docs/fork.md) and [third-party notices](THIRD-PARTY-LICENSES.md). The [hosted service](https://api.lmm.best) and this branch have different implementation states.
+The project builds on [QuantumNous/new-api](https://github.com/QuantumNous/new-api) under [PERSON_NAME]. Please preserve [NOTICE](NOTICE), [fork provenance](docs/fork.md) and [third-party notices](THIRD-PARTY-LICENSES.md). The [hosted service](https://api.lmm.best) and this branch have different implementation states.

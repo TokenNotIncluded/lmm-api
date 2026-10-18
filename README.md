@@ -9,14 +9,16 @@
   <p><a href="README.md">简体中文</a> · <a href="README_EN.md">English</a></p>
 </div>
 
-**LMM = Language Model Mesh，中文「语言模型网络」。** 一个模型网关：统一身份、权限、计费和模型路由，再用扩展承载商店、工具市场、助手、运营和支付适配。Mesh 指多模型路由、渠道共享和组件协作。
+**LMM 帮你把各种大语言模型统一管理起来** —— 身份认证、权限控制、计费账本、模型路由，一个网关全部搞定；商店、工具市场、助手、运营和支付适配则交给可插拔的扩展模块。**LMM 全称 Language Model Mesh（语言模型网络）**，Mesh 的含义正是多模型路由、渠道共享和组件之间的协作。
 
 > [!WARNING]
-> **本分支是全新安装的微服务重构，仍为 WIP，不能替代现有网站。**
-> 模块测试通过不代表整站调用、支付和资金链路已接通。历史资金、订阅和 API Key 迁移仍在隔离副本中对账，尚未验收。
-> 程序不连接旧业务库、不自动升级表结构，也不回退到旧单体。剩余工作见[架构与状态](docs/core-migration.md)。
+> **这是我们正在精心打造的下一代微服务架构（WIP），目前还不能替代现有网站。**
+> 各模块的单元测试已经通过，但整站调用、支付和资金链路的端到端联通仍在推进中。历史资金、订阅和 API Key 的迁移正在隔离副本中逐步对账，尚未最终验收。
+> 程序设计上不会连接旧业务库、不会自动升级表结构，也不会回退到旧单体，请放心。剩余工作和详细状态请参阅[架构与状态](docs/core-migration.md)。
 
 ## 三个程序
+
+LMM 由三个独立的程序协作完成工作：
 
 ```text
 lmm 客户端 / Web 控制台
@@ -40,7 +42,7 @@ lmm 客户端 / Web 控制台
 
 ## 快速开始
 
-工具版本以 [mise.toml](mise.toml) 为准，命令通过 `mise exec --` 执行。按任务只准备需要的工具，详见[开发指南](docs/development.md)。
+准备好了？按照下面的步骤开始吧！工具版本以 [mise.toml](mise.toml) 为准，命令通过 `mise exec --` 执行。按任务只准备需要的工具，详见[开发指南](docs/development.md)。
 
 ```sh
 # 需要 CLI 时才初始化客户端子模块
@@ -58,7 +60,7 @@ lmm-core --config /absolute/private/core.toml check-db
 
 ## 配置与目录
 
-新安装统一使用 TOML：`/etc/lmm.conf.d/core.toml` 与 `/etc/lmm.conf.d/extensions.toml`，也可显式 `--config` 指定。
+新安装统一使用 TOML 格式的配置文件，以下是默认路径一览：`/etc/lmm.conf.d/core.toml` 与 `/etc/lmm.conf.d/extensions.toml`，也可通过 `--config` 显式指定。
 
 | 内容 | 路径 |
 | --- | --- |
@@ -69,6 +71,8 @@ lmm-core --config /absolute/private/core.toml check-db
 完整规则和旧包迁移边界见[配置与文件路径](docs/filesystem-layout.md)。统一路径不代表旧安装已自动转换。
 
 ## 文档入口
+
+不确定从哪里开始？根据你想做的事情选择入口：
 
 | 想做什么 | 入口 |
 | --- | --- |
@@ -82,10 +86,10 @@ lmm-core --config /absolute/private/core.toml check-db
 
 ## 分支说明
 
-默认开发主线为 `wip/rust-core-go-extensions`；旧单体 `main` 与 `traditional` 已冻结。[主线交接](docs/development-branches.md)不表示上线或验收通过。[Extore 商品同步](docs/extore-shop-binding-followup.md)仍未完成，禁止部署。
+我们的开发主线是 `wip/rust-core-go-extensions`；旧单体分支 `main` 与 `traditional` 已冻结，不再接受变更。需要注意的是，[主线交接](docs/development-branches.md)并不代表已上线或通过验收。此外，[Extore 商品同步](docs/extore-shop-binding-followup.md)功能尚未完成，目前还不具备部署条件。
 
 ## 贡献与许可证
 
-先阅读[贡献指南](docs/contributing.md)。漏洞按[安全指南](.github/SECURITY.md)私下报告，不要公开密钥或用户数据。合并、打包、发布和部署是分开的决定。
+欢迎参与贡献！在开始之前，请先阅读[贡献指南](docs/contributing.md)。如果发现安全漏洞，请按[安全指南](.github/SECURITY.md)私下报告，不要公开密钥或用户数据。合并、打包、发布和部署是分开的决定。
 
 项目基于 [QuantumNous/new-api](https://github.com/QuantumNous/new-api) 发展，按 [AGPL-3.0](LICENSE) 发布。保留 [NOTICE](NOTICE)、[分支来源与归属](docs/fork.md) 和[第三方许可证](THIRD-PARTY-LICENSES.md)。[线上服务](https://api.lmm.best)与本分支的实现状态不同。

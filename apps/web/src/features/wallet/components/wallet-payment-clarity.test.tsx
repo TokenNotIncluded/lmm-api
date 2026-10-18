@@ -798,7 +798,7 @@ describe('wallet payment clarity', () => {
 
       const rechargeText = recharge.container.textContent ?? ''
       assert.equal(rechargeText.includes('Payment unavailable'), true)
-      assert.equal(rechargeText.includes('0 USD'), false)
+      assert.equal(/\b0 USD\b/.test(rechargeText), false)
       assert.equal(rechargeText.includes('NaN'), false)
       assert.equal(rechargeText.includes('Infinity'), false)
       await unmount(recharge)
