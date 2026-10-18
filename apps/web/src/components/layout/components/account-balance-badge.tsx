@@ -52,7 +52,7 @@ export function AccountBalanceBadge({
           title={`${t('Balance')}: ${balance} · ${walletAction}`}
           data-testid='mobile-account-balance'
         >
-          <span className='min-w-0 text-center leading-4 whitespace-normal wrap-anywhere'>
+          <span className='min-w-0 text-center leading-4 wrap-anywhere whitespace-normal'>
             {balance}
           </span>
           {!projection.native && (
