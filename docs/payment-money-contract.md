@@ -83,9 +83,26 @@ result is a recovery handle, not usable value.
 Refunds use the captured charge, fiat conversion and entitlement snapshot, and
 return value only to the original economic payer. Enforce the cumulative original
 amount cap. Hold funds before a provider refund; independently verified terminal
-success commits it, verified terminal failure releases the hold. Timeout, missing
-callback or unsigned success proves neither. A pre-credit refund must fence later
+success commits the bound refund. A terminal failure can release a hold only when
+Core can bind it to the original dispatch and rule out another successful send.
+The current refund-release path remains unavailable and retains the hold. Timeout,
+missing callback or unsigned success proves neither. A pre-credit refund must fence later
 stale credit replay. Ledger refund and external provider payout are separate steps.
+
+Native top-up refunds use `refund_topup` against the original credit journal.
+The ledger takes available wallet units first, then restores debt for any
+remaining refunded credit, including credit that previously repaid debt. The
+refund reference is `provider:channel_id:refund_id`; changing an event or request
+key cannot post that reference twice. An exact key and payload replay returns
+the original receipt. A duplicate reference is a conflict, not a new unresolved
+refund fact. Refund counters, ledger changes, hold release and receipts commit
+together. After a failed response, query/reconcile the original operation; do not
+assume rollback or create a replacement request key.
+
+This bridge requires the original native credit. It does not enable historical
+refund dispatch or turn an opening balance into a replayed top-up. The legacy
+rounding helper only computes an integer delta; historical basis import and its
+reviewed ledger binding remain separate work.
 
 ## Account-authorized payment status reads
 

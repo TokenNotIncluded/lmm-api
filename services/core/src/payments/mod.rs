@@ -1,13 +1,15 @@
 //! Core-owned payment intents and independently verified provider transitions.
 //! All money uses the existing controlled ledger, inside the metadata transaction.
 //! Provider requests never run while this transaction is open.
+mod legacy;
 pub mod rpc;
 mod stripe;
+pub use legacy::{LegacyRefundError, cumulative_half_up_credit_delta};
 
 use crate::{
     billing::{
         Credits,
-        ledger::{Action, Outcome, Request as LedgerRequest},
+        ledger::{Action, Outcome, Rejection, Request as LedgerRequest},
     },
     identity::{self, CredentialKind, IdentityError},
     internal_rpc::pb,
@@ -202,6 +204,20 @@ fn now() -> Result<i64> {
 }
 fn units(amount: i64) -> Result<Credits> {
     Credits::try_from(amount).map_err(|_| Error::Invalid)
+}
+
+/// One provider refund id maps to one ledger reference. A second event for the
+/// same namespace and refund id is a duplicate, not another posting.
+/// @mark payments.refund-topup role=authority
+fn topup_refund_reference(intent: &IntentRow, refund_id: &str) -> Result<String> {
+    if !valid_id(refund_id) || intent.channel_id <= 0 || !valid_id(&intent.provider) {
+        return Err(Error::Invalid);
+    }
+    let reference = format!("{}:{}:{}", intent.provider, intent.channel_id, refund_id);
+    if reference.len() > 256 {
+        return Err(Error::Invalid);
+    }
+    Ok(reference)
 }
 
 impl PaymentsStore {
@@ -881,9 +897,10 @@ impl PaymentsStore {
                 key,
                 "refund",
                 None,
-                Action::Refund {
+                Action::RefundTopup {
                     journal_id: intent.credit_journal_id.ok_or(Error::Conflict)?,
                     amount_units: units(hold.credit_units)?,
+                    refund_reference: topup_refund_reference(&intent, &refund_id)?,
                 },
             )
             .await?;
@@ -1069,9 +1086,10 @@ impl PaymentsStore {
                 key,
                 "refund",
                 None,
-                Action::Refund {
+                Action::RefundTopup {
                     journal_id: credit,
                     amount_units: units(amount)?,
+                    refund_reference: topup_refund_reference(&intent, refund_id)?,
                 },
             )
             .await?;
@@ -1081,7 +1099,16 @@ impl PaymentsStore {
             else {
                 // No own hold was released on this path. Held refunds resolve
                 // through resolve() so a failed post always rolls back release.
-                if verified.hold_receipt_id.is_some() {
+                // A duplicate provider refund id already posted; do not fence it
+                // as an unresolved debt fact.
+                if verified.hold_receipt_id.is_some()
+                    || matches!(
+                        outcome,
+                        Outcome::Rejected {
+                            code: Rejection::DuplicateRefund
+                        }
+                    )
+                {
                     return Err(Error::Conflict);
                 }
                 Self::block_external(
