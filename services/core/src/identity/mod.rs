@@ -5,9 +5,10 @@ pub mod admin_approval;
 pub mod admin_users;
 mod permissions;
 pub use permissions::{
-    Action, CONTRACT_VERSION as PERMISSIONS_CONTRACT, CatalogDecision, Effect, PlatformRole,
-    PolicyLoadError, PolicySnapshot, PolicySnapshotError, canonical_policy_payload,
-    complete_policy_snapshot, has_privileged_import_facts, load_complete_policy, policy_sha256,
+    Action, CONTRACT_VERSION as PERMISSIONS_CONTRACT, CatalogDecision, Effect, PermissionReadStore,
+    PlatformRole, PolicyLoadError, PolicySnapshot, PolicySnapshotError, canonical_policy_payload,
+    complete_policy_snapshot, has_privileged_import_facts, load_complete_policy,
+    permission_read_router, policy_sha256,
 };
 mod auth;
 mod browser;

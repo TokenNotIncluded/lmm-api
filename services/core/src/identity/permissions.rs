@@ -15,6 +15,24 @@
 use sha2::{Digest, Sha256};
 use sqlx::{PgConnection, Row};
 
+mod http;
+pub use http::{PermissionReadStore, router as permission_read_router};
+
+/// Shared static administrator read admission for the user directory,
+/// permission discovery and financial audit reads. Fixed main's finance group
+/// uses AdminAuth (api-router.go:698-710), outside the nine dynamic permissions.
+///
+/// The caller must own a REPEATABLE READ READ ONLY transaction. This reuses the
+/// verified native Session/personal account/current role/MFA/generation gate and
+/// complete persisted imported-admin policy check without constructing authority
+/// from a caller boolean. It grants no financial mutation or spending authority.
+pub(crate) async fn authorize_admin_read_snapshot(
+    connection: &mut PgConnection,
+    secret: &str,
+) -> Result<crate::identity::Principal, crate::identity::admin_users::AdminUsersError> {
+    crate::identity::admin_users::AdminUsersStore::authorize(connection, secret).await
+}
+
 pub const CONTRACT_VERSION: &str = "core.permissions.v1";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -529,6 +547,37 @@ impl PermissionDecision {
 fn deny(reason: Denial) -> PermissionDecision {
     PermissionDecision::Deny(reason)
 }
+
+/// Shared catalog evaluation after the caller has validated current identity,
+/// credential and policy. This never authorizes a transaction by itself.
+fn catalog_decision(
+    role: PlatformRole,
+    overrides: &[Override],
+    action: Action,
+) -> PermissionDecision {
+    if !action.is_catalog() {
+        return deny(Denial::UnknownAction);
+    }
+    // Main root precedes overrides; deny wins among conflicting user rows.
+    if role == PlatformRole::Root {
+        return PermissionDecision::Allow;
+    }
+    if role != PlatformRole::Admin {
+        return deny(Denial::RoleDenied);
+    }
+    let mut allow = false;
+    for row in overrides.iter().filter(|r| r.action == action) {
+        if row.effect == Effect::Deny {
+            return deny(Denial::ExplicitDeny);
+        }
+        allow = true;
+    }
+    if allow || action.admin_default() {
+        PermissionDecision::Allow
+    } else {
+        deny(Denial::RoleDenied)
+    }
+}
 fn platform_kind(action: Action) -> Option<PlatformResource> {
     use Action::*;
     Some(match action {
@@ -605,25 +654,7 @@ pub(crate) fn decide(
         }
     }
     if action.is_catalog() {
-        // Main root precedes overrides; deny wins among conflicting user rows.
-        if actor.role == PlatformRole::Root {
-            return PermissionDecision::Allow;
-        }
-        if actor.role != PlatformRole::Admin {
-            return deny(Denial::RoleDenied);
-        }
-        let mut allow = false;
-        for row in policy.overrides.iter().filter(|r| r.action == action) {
-            if row.effect == Effect::Deny {
-                return deny(Denial::ExplicitDeny);
-            }
-            allow = true;
-        }
-        return if allow || action.admin_default() {
-            PermissionDecision::Allow
-        } else {
-            deny(Denial::RoleDenied)
-        };
+        return catalog_decision(actor.role, policy.overrides, action);
     }
     let allowed = match action {
         PermissionCatalogRead | FinanceAuditRead | AdminUsersRead => {
@@ -708,156 +739,4 @@ pub fn can_manage_role(actor: PlatformRole, target: PlatformRole) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn actor(role: PlatformRole) -> Actor {
-        Actor {
-            user_id: 7,
-            personal_account_id: 8,
-            role,
-            credential: Credential::Session,
-            active: true,
-            account_active: true,
-            auth_version: 3,
-            credential_auth_version: 3,
-            developer: DeveloperState::Granted,
-        }
-    }
-    fn policy(overrides: &[Override]) -> Policy<'_> {
-        Policy {
-            subject_user_id: 7,
-            contract: CONTRACT_VERSION,
-            revision: 1,
-            sha256: [9; 32],
-            verified_complete: true,
-            overrides,
-        }
-    }
-    fn member(role: MemberRole, can_spend: bool) -> Membership {
-        Membership {
-            user_id: 7,
-            team_id: 4,
-            account_id: 5,
-            role,
-            can_spend,
-            active: true,
-            revision: 1,
-        }
-    }
-
-    #[test]
-    fn root_catalog_allows_known_actions_and_unknown_stays_closed() {
-        let decision = decide(
-            &actor(PlatformRole::Root),
-            &policy(&[]),
-            Action::ChannelSecretView,
-            Scope::Platform(PlatformResource::Channel),
-            None,
-        );
-        assert_eq!(decision, PermissionDecision::Allow);
-        let unknown = decide(
-            &actor(PlatformRole::Root),
-            &policy(&[]),
-            Action::Unknown,
-            Scope::Platform(PlatformResource::Channel),
-            None,
-        );
-        assert_eq!(unknown, PermissionDecision::Deny(Denial::UnknownAction));
-    }
-
-    #[test]
-    fn explicit_deny_beats_admin_default_and_api_key_cannot_administer() {
-        let deny_row = [Override {
-            subject_user_id: 7,
-            action: Action::ChannelRead,
-            effect: Effect::Deny,
-        }];
-        let denied = decide(
-            &actor(PlatformRole::Admin),
-            &policy(&deny_row),
-            Action::ChannelRead,
-            Scope::Platform(PlatformResource::Channel),
-            None,
-        );
-        assert_eq!(denied, PermissionDecision::Deny(Denial::ExplicitDeny));
-        let mut key = actor(PlatformRole::Root);
-        key.credential = Credential::ApiKey;
-        let keyed = decide(
-            &key,
-            &policy(&[]),
-            Action::ChannelRead,
-            Scope::Platform(PlatformResource::Channel),
-            None,
-        );
-        assert_eq!(keyed, PermissionDecision::Deny(Denial::CredentialKind));
-    }
-
-    #[test]
-    fn complete_catalog_snapshot_hashes_in_fixed_order() {
-        let entries: Vec<(String, String)> = Action::CATALOG
-            .iter()
-            .enumerate()
-            .map(|(index, action)| {
-                (
-                    action.catalog_name().unwrap().to_owned(),
-                    if index < 5 { "allow" } else { "deny" }.to_owned(),
-                )
-            })
-            .collect();
-        let snapshot = complete_policy_snapshot(7, 1, &entries).unwrap();
-        assert_eq!(
-            policy_sha256(&snapshot).unwrap(),
-            policy_sha256(&complete_policy_snapshot(7, 1, &entries).unwrap()).unwrap()
-        );
-        assert!(matches!(
-            complete_policy_snapshot(7, 1, &entries[..8]),
-            Err(PolicySnapshotError::Incomplete)
-        ));
-        let mut unknown = entries.clone();
-        unknown[0].0 = "NotAnAction".into();
-        assert_eq!(
-            complete_policy_snapshot(7, 1, &unknown),
-            Err(PolicySnapshotError::UnknownAction)
-        );
-    }
-
-    #[test]
-    fn team_spend_and_cross_account_profile_are_scoped() {
-        let scope = Scope::Team {
-            team_id: 4,
-            account_id: 5,
-        };
-        let plain = member(MemberRole::Member, false);
-        let spend = decide(
-            &actor(PlatformRole::User),
-            &policy(&[]),
-            Action::TeamSpend,
-            scope,
-            Some(&plain),
-        );
-        assert_eq!(spend, PermissionDecision::Deny(Denial::RoleDenied));
-        let owner = member(MemberRole::Owner, false);
-        let allowed = decide(
-            &actor(PlatformRole::User),
-            &policy(&[]),
-            Action::TeamSpend,
-            scope,
-            Some(&owner),
-        );
-        assert_eq!(allowed, PermissionDecision::Allow);
-        let other = Scope::User {
-            user_id: 99,
-            account_id: 100,
-            role: PlatformRole::User,
-        };
-        let crossed = decide(
-            &actor(PlatformRole::User),
-            &policy(&[]),
-            Action::OwnProfileRead,
-            other,
-            None,
-        );
-        assert_eq!(crossed, PermissionDecision::Deny(Denial::TenantDenied));
-    }
-}
+mod tests;
