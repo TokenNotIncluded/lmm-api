@@ -17,6 +17,126 @@ use tower::ServiceExt;
 mod runtime;
 
 #[sqlx::test(migrations = false)]
+async fn imported_admin_authority_reads_are_required_and_writes_are_forbidden(pool: PgPool) {
+    core_schema::init(&pool).await.unwrap();
+    let role = runtime::RuntimeRole::create(&pool).await;
+    runtime_database::check(&role.pool, RequiredCapabilities::default())
+        .await
+        .unwrap();
+    for table in [
+        "privileged_import_facts",
+        "permission_policies",
+        "permission_policy_rows",
+    ] {
+        // Exercise actual SQL authority as well as the startup check. The role
+        // needs these reads even when this fixture has no imported admins.
+        let read = format!("SELECT count(*) FROM core_identity.{table}");
+        let count: i64 = sqlx::query_scalar(&read)
+            .fetch_one(&role.pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+        sqlx::raw_sql(&format!(
+            "REVOKE SELECT ON core_identity.{table} FROM {}",
+            role.name
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            runtime_database::check(&role.pool, RequiredCapabilities::default()).await,
+            Err(Error::MissingPrivileges),
+            "missing imported-admin read accepted: {table}"
+        );
+        let denied = sqlx::query_scalar::<_, i64>(&read)
+            .fetch_one(&role.pool)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            denied
+                .as_database_error()
+                .and_then(|error| error.code())
+                .as_deref(),
+            Some("42501")
+        );
+        sqlx::raw_sql(&format!(
+            "GRANT SELECT ON core_identity.{table} TO {}",
+            role.name
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        runtime_database::check(&role.pool, RequiredCapabilities::default())
+            .await
+            .unwrap();
+    }
+    let receipt_read = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM core_identity.admin_activation_receipts",
+    )
+    .fetch_one(&role.pool)
+    .await
+    .unwrap_err();
+    assert_eq!(
+        receipt_read
+            .as_database_error()
+            .and_then(|error| error.code())
+            .as_deref(),
+        Some("42501"),
+        "runtime must not read offline activation receipts"
+    );
+    for table in [
+        "privileged_import_facts",
+        "permission_policies",
+        "permission_policy_rows",
+        "admin_activation_receipts",
+    ] {
+        for statement in [
+            format!("INSERT INTO core_identity.{table} DEFAULT VALUES"),
+            format!("UPDATE core_identity.{table} SET user_id=DEFAULT WHERE FALSE"),
+            format!("DELETE FROM core_identity.{table} WHERE FALSE"),
+        ] {
+            let denied = sqlx::query(&statement)
+                .execute(&role.pool)
+                .await
+                .unwrap_err();
+            assert_eq!(
+                denied
+                    .as_database_error()
+                    .and_then(|error| error.code())
+                    .as_deref(),
+                Some("42501"),
+                "offline authority write was not refused: {statement}"
+            );
+        }
+        // A column grant can bypass a table-grant-only audit, so verify the
+        // real checker rejects this extra authority even with empty tables.
+        sqlx::raw_sql(&format!(
+            "GRANT UPDATE(user_id) ON core_identity.{table} TO {}",
+            role.name
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            runtime_database::check(&role.pool, RequiredCapabilities::default()).await,
+            Err(Error::UnsafePrivileges),
+            "offline authority column write accepted: {table}"
+        );
+        sqlx::raw_sql(&format!(
+            "REVOKE UPDATE(user_id) ON core_identity.{table} FROM {}",
+            role.name
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        runtime_database::check(&role.pool, RequiredCapabilities::default())
+            .await
+            .unwrap();
+    }
+    role.cleanup().await;
+}
+
+#[sqlx::test(migrations = false)]
 async fn restricted_role_checks_without_disabled_module_grants(pool: PgPool) {
     core_schema::init(&pool).await.unwrap();
     // Match the official isolated installer: identity-only runtime has no
