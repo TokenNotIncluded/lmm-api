@@ -33,25 +33,29 @@ type Config struct {
 	Support                StorageConfig
 	Assistant              StorageConfig
 	AssistantCursorKeyFile string
+	AssistantTokenFile     string
 	Operations             StorageConfig
 	Scripts                *operations.ScriptConfig
 }
 
 type Runtime struct {
-	Modules          []modules.Module
-	Client           *coreclient.Client
-	PaymentClient    *coreclient.Client
-	Payments         *payments.Service
-	CommerceClient   *coreclient.Client
-	Store            *store.Service
-	Support          *support.Service
-	Assistant        *assistant.Service
-	AssistantHistory *assistant.HistoryService
-	Operations       *operations.Service
-	close            []func() error
-	workerCancel     context.CancelFunc
-	workerDone       chan struct{}
-	workerOnce       sync.Once
+	Modules              []modules.Module
+	Client               *coreclient.Client
+	PaymentClient        *coreclient.Client
+	Payments             *payments.Service
+	CommerceClient       *coreclient.Client
+	Store                *store.Service
+	Support              *support.Service
+	Assistant            *assistant.Service
+	AssistantHistory     *assistant.HistoryService
+	AssistantModelClient *coreclient.AssistantClient
+	AssistantPending     *assistant.PendingConversations
+	AssistantTurns       *assistant.DelegatedTurns
+	Operations           *operations.Service
+	close                []func() error
+	workerCancel         context.CancelFunc
+	workerDone           chan struct{}
+	workerOnce           sync.Once
 }
 
 func (r *Runtime) Close() error {
@@ -117,6 +121,9 @@ func (r *Runtime) StartWorkers(parent context.Context, host *modules.Host) {
 }
 
 func New(ctx context.Context, cfg Config) (_ *Runtime, resultErr error) {
+	if err := validateAssistantSelection(cfg); err != nil {
+		return nil, err
+	}
 	if err := validatePaymentSelection(cfg); err != nil {
 		return nil, err
 	}
@@ -164,11 +171,18 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, resultErr error) {
 	if err := independentRuntimeCredentials(cfg.HostCredential, token, commerceToken); err != nil {
 		return nil, err
 	}
+	var paymentToken []byte
 	if selected["payments"] {
-		paymentToken, err := loadPaymentCredential(cfg, token, commerceToken)
+		paymentToken, err = loadPaymentCredential(cfg, token, commerceToken)
 		if err != nil {
 			return nil, err
 		}
+	}
+	assistantToken, err := loadAssistantCredential(cfg, token, commerceToken, paymentToken)
+	if err != nil {
+		return nil, err
+	}
+	if selected["payments"] {
 		if err := r.composePayments(ctx, cfg, paymentToken); err != nil {
 			return nil, err
 		}
@@ -249,6 +263,9 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, resultErr error) {
 		}
 		r.Assistant, err = assistant.New(repo, auth, nil, assistant.Options{})
 		if err != nil {
+			return nil, err
+		}
+		if err := r.composeAssistantDelegation(ctx, cfg, db, auth, assistantToken); err != nil {
 			return nil, err
 		}
 	}

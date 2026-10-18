@@ -1,0 +1,60 @@
+syntax = "proto3";
+package lmm.core.v1;
+option go_package = "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/corepb;corepb";
+
+// PRIVATE DRAFT. NOT generated, registered or advertised. Root owns canonical
+// proto/mandatory capability negotiation and transport registration. This is
+// personal_assistant_text admission, NOT the previous JSON Model.Next bridge.
+// Every method reuses existing UDS host + original user metadata verification;
+// there are no credentials, actor, payer, role, price or authority flags here.
+service CoreAssistantModel {
+  rpc BeginConversation(AssistantConversationKey) returns (AssistantConversationReceipt);
+  rpc LookupConversation(AssistantConversationKey) returns (AssistantConversationReceipt);
+  rpc IssueGrant(AssistantTurnKey) returns (AssistantGrantReceipt);
+  rpc LookupGrant(AssistantTurnKey) returns (AssistantGrantReceipt);
+  rpc ReserveText(AssistantTextReservation) returns (AssistantOperationReceipt);
+  rpc GetOperation(AssistantOperationBinding) returns (AssistantOperationReceipt);
+  rpc RevokeGrant(AssistantRevokeGrant) returns (AssistantRevokeReceipt);
+}
+message AssistantConversationKey { string creation_key = 1; }
+message AssistantConversationReceipt { string creation_key = 1; string core_conversation_id = 2; }
+message AssistantTurnKey { string core_conversation_id = 1; string turn_id = 2; }
+message AssistantGrantReceipt {
+  string delegation_id = 1;
+  string core_conversation_id = 2;
+  string turn_id = 3;
+  int64 expires_at_unix = 4;
+  uint32 max_model_calls = 5;
+  bool revoked = 6;
+}
+message AssistantOperationBinding {
+  string delegation_id = 1;
+  string core_conversation_id = 2;
+  string turn_id = 3;
+  uint32 round = 4;
+  string operation_key = 5; // exact turn_id + ':' + round; 0 <= round < 4
+  bytes text_sha256 = 6; // SHA256 of exact UTF8 text bytes, NOT legacy request_json.
+}
+message AssistantTextReservation {
+  AssistantOperationBinding binding = 1;
+  string text = 2; // bounded <=8192 UTF8 bytes; no tools/results supported yet.
+}
+enum AssistantOperationState {
+  ASSISTANT_OPERATION_STATE_UNSPECIFIED = 0;
+  ASSISTANT_OPERATION_STATE_RESERVED = 1;
+  ASSISTANT_OPERATION_STATE_STREAMING = 2;
+  ASSISTANT_OPERATION_STATE_SETTLED = 3;
+  ASSISTANT_OPERATION_STATE_RELEASED = 4;
+  ASSISTANT_OPERATION_STATE_UNKNOWN = 5;
+}
+message AssistantOperationReceipt {
+  AssistantOperationBinding binding = 1;
+  string request_id = 2;
+  AssistantOperationState state = 3;
+  int64 reserved_credits = 4;
+  optional int64 settled_credits = 5; // present only for authoritative settled.
+  // Deliberately no provider output or worker capability. A reservation is not
+  // completed model work. Unknown can only inspect this same immutable binding.
+}
+message AssistantRevokeGrant { string delegation_id = 1; }
+message AssistantRevokeReceipt { string delegation_id = 1; bool revoked = 2; }

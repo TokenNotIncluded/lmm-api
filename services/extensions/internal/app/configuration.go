@@ -36,10 +36,11 @@ type HostConfig struct {
 	WebCompat   bool     `toml:"web_compat"`
 }
 type CoreConfig struct {
-	Socket            string `toml:"socket"`
-	IdentityTokenFile string `toml:"identity_token_file"`
-	CommerceTokenFile string `toml:"commerce_token_file"`
-	PaymentTokenFile  string `toml:"payment_token_file"`
+	Socket             string `toml:"socket"`
+	IdentityTokenFile  string `toml:"identity_token_file"`
+	CommerceTokenFile  string `toml:"commerce_token_file"`
+	PaymentTokenFile   string `toml:"payment_token_file"`
+	AssistantTokenFile string `toml:"assistant_token_file"`
 }
 type DatabaseConfig struct {
 	DatabaseName    string `toml:"database_name"`
@@ -124,7 +125,7 @@ func LoadConfig(path string) (GoConfig, error) {
 			continue
 		}
 		switch key.String() {
-		case "assistant", "assistant.database_name", "assistant.database_url_file", "assistant.cursor_key_file",
+		case "core.assistant_token_file", "assistant", "assistant.database_name", "assistant.database_url_file", "assistant.cursor_key_file",
 			"operations", "operations.database_name", "operations.database_url_file",
 			"scripts", "scripts.root", "scripts.manifest", "scripts.manifest.name", "scripts.manifest.sha256":
 			continue
@@ -148,7 +149,7 @@ func LoadConfig(path string) (GoConfig, error) {
 	if _, _, err = net.SplitHostPort(cfg.Host.Listen); err != nil {
 		return cfg, errors.New("invalid extension host listen address")
 	}
-	for _, p := range []string{cfg.Core.Socket, cfg.Core.IdentityTokenFile, cfg.Core.CommerceTokenFile, cfg.Store.DatabaseURLFile, cfg.Support.DatabaseURLFile, cfg.Legal.ConfigFile, cfg.Assistant.DatabaseURLFile, cfg.Assistant.CursorKeyFile, cfg.Operations.DatabaseURLFile, cfg.Scripts.Root} {
+	for _, p := range []string{cfg.Core.Socket, cfg.Core.IdentityTokenFile, cfg.Core.CommerceTokenFile, cfg.Core.AssistantTokenFile, cfg.Store.DatabaseURLFile, cfg.Support.DatabaseURLFile, cfg.Legal.ConfigFile, cfg.Assistant.DatabaseURLFile, cfg.Assistant.CursorKeyFile, cfg.Operations.DatabaseURLFile, cfg.Scripts.Root} {
 		if p != "" && !absolutePath(p) {
 			return cfg, errors.New("extension TOML file and socket paths must be absolute")
 		}
@@ -165,6 +166,9 @@ func LoadConfig(path string) (GoConfig, error) {
 		if cfg.Scripts.Root == "" || cfg.Scripts.Manifest == nil {
 			return cfg, errors.New("configure both scripts root and an explicit reviewed manifest")
 		}
+	}
+	if err := validateAssistantConfiguration(cfg); err != nil {
+		return cfg, err
 	}
 	if err := validatePaymentsConfiguration(cfg); err != nil {
 		return cfg, err

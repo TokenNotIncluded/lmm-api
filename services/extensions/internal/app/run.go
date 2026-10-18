@@ -65,13 +65,14 @@ func Run() error {
 	}
 	runtime, err := composition.New(context.Background(), composition.Config{
 		Selected: selected, Socket: socket, TokenFile: tokenFile, HostCredential: credential,
-		CommerceTokenFile: cfg.Core.CommerceTokenFile,
-		PaymentTokenFile:  cfg.Core.PaymentTokenFile,
-		PaymentConfigFile: cfg.Payments.ConfigFile,
-		Payments:          composition.StorageConfig{Component: "payments", URLFile: cfg.Payments.DatabaseURLFile, Database: cfg.Payments.DatabaseName},
-		Store:             composition.StorageConfig{Component: "store", URLFile: cfg.Store.DatabaseURLFile, Database: cfg.Store.DatabaseName},
-		Support:           composition.StorageConfig{Component: "support", URLFile: cfg.Support.DatabaseURLFile, Database: cfg.Support.DatabaseName},
-		Assistant:         composition.StorageConfig{Component: "assistant", URLFile: cfg.Assistant.DatabaseURLFile, Database: cfg.Assistant.DatabaseName}, AssistantCursorKeyFile: cfg.Assistant.CursorKeyFile,
+		CommerceTokenFile:  cfg.Core.CommerceTokenFile,
+		AssistantTokenFile: cfg.Core.AssistantTokenFile,
+		PaymentTokenFile:   cfg.Core.PaymentTokenFile,
+		PaymentConfigFile:  cfg.Payments.ConfigFile,
+		Payments:           composition.StorageConfig{Component: "payments", URLFile: cfg.Payments.DatabaseURLFile, Database: cfg.Payments.DatabaseName},
+		Store:              composition.StorageConfig{Component: "store", URLFile: cfg.Store.DatabaseURLFile, Database: cfg.Store.DatabaseName},
+		Support:            composition.StorageConfig{Component: "support", URLFile: cfg.Support.DatabaseURLFile, Database: cfg.Support.DatabaseName},
+		Assistant:          composition.StorageConfig{Component: "assistant", URLFile: cfg.Assistant.DatabaseURLFile, Database: cfg.Assistant.DatabaseName}, AssistantCursorKeyFile: cfg.Assistant.CursorKeyFile,
 		Operations: composition.StorageConfig{Component: "operations", URLFile: cfg.Operations.DatabaseURLFile, Database: cfg.Operations.DatabaseName}, Scripts: scripts,
 	})
 	if err != nil {
