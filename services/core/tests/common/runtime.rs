@@ -37,7 +37,7 @@ impl RuntimeRole {
             GRANT SELECT,INSERT ON core_identity.key_funding_rules,core_identity.credential_grants,core_identity.oauth_identities,core_identity.audit,core_identity.web_session_credentials,core_identity.session_authentication TO {name};
             GRANT SELECT,INSERT,DELETE ON core_identity.oauth_flows TO {name};
             GRANT SELECT,INSERT,UPDATE,DELETE ON core_identity.auth_attempts TO {name};
-            GRANT SELECT ON core_identity.developer_access,core_identity.user_routing_groups TO {name};
+            GRANT SELECT ON core_identity.developer_access,core_identity.user_routing_groups,core_identity.privileged_import_facts,core_identity.permission_policies,core_identity.permission_policy_rows TO {name};
             GRANT USAGE ON ALL SEQUENCES IN SCHEMA core_identity TO {name};
             GRANT SELECT,INSERT,UPDATE ON core_billing.account_policies TO {name};
             GRANT EXECUTE ON FUNCTION core_billing.open_ledger_wallet(bigint),core_billing.post_ledger(jsonb),core_billing.legacy_escrow_finalize(jsonb,bigint,bigint) TO {name};
