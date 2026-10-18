@@ -154,6 +154,7 @@ type Order struct {
 	SettlementRef string               `json:"settlement_ref,omitempty"`
 	RefundRef     string               `json:"refund_ref,omitempty"`
 	Legacy        *LegacyOrderMetadata `json:"legacy,omitempty"`
+	LegacyRefund  *legacyRefundRecord  `json:"legacy_refund,omitempty"`
 }
 
 const (

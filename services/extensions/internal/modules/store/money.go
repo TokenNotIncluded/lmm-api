@@ -177,6 +177,9 @@ func (s *Service) finishMoney(ctx context.Context, shopID, orderID string, op op
 		}
 		if receipt.Outcome == "rejected" {
 			out.State = current.Before
+			if current.Command.Kind == "refund" && out.LegacyRefund != nil {
+				out.RefundState = "rejected"
+			}
 			if current.Command.Kind == "pay" {
 				if err := release(tx, &out); err != nil {
 					return err
@@ -205,6 +208,9 @@ func (s *Service) finishMoney(ctx context.Context, shopID, orderID string, op op
 				out.State = Refunded
 				out.RefundState = "completed"
 				out.RefundRef = receipt.Reference
+				if out.LegacyRefund != nil {
+					out.LegacyRefund.CompletedAt = time.Now().Unix()
+				}
 			}
 		}
 		current.Done = true
