@@ -602,8 +602,73 @@ async fn partial_precredit_refund_is_explicitly_blocked_for_net_reconciliation(p
     assert_eq!(journals(&pool).await, 0);
 }
 
+// @mark payments.refund-topup role=test
 #[sqlx::test]
-async fn external_refund_debt_is_preserved_but_not_reported_as_success(pool: PgPool) {
+async fn partial_external_refund_id_reuse_preserves_financial_state(pool: PgPool) {
+    let f = fresh(&pool).await;
+    let intent = prepare(&f, "prepare_duplicate_0001", 100).await;
+    credit(&f, &intent, "credit_duplicate_0001").await;
+    let request = pb::ExternalRefundRequest {
+        mutation: mutation("external_duplicate_first"),
+        intent_id: intent.intent_id,
+        evidence: Some(proof(event(
+            &intent,
+            "evt_partial_duplicate_first",
+            Some(("re_partial_duplicate", 20, "succeeded", None)),
+        ))),
+    };
+    let receipt = f.store.external_refund(request.clone()).await.unwrap();
+    assert_eq!(receipt.state, 5);
+    assert!(receipt.journal_id > 0);
+    assert_eq!(f.store.external_refund(request).await.unwrap(), receipt);
+
+    // Both amounts fit the remaining 80 cents: the original amount cap cannot
+    // hide a duplicate refund being persisted as an unresolved debt fact.
+    for (index, amount) in [20, 21].into_iter().enumerate() {
+        let duplicate = pb::ExternalRefundRequest {
+            mutation: mutation(&format!("external_duplicate_repeat_{index}")),
+            intent_id: intent.intent_id,
+            evidence: Some(proof(event(
+                &intent,
+                &format!("evt_partial_duplicate_repeat_{index}"),
+                Some(("re_partial_duplicate", amount, "succeeded", None)),
+            ))),
+        };
+        assert_eq!(
+            f.store.external_refund(duplicate).await.unwrap_err(),
+            Error::Conflict
+        );
+        let actual = f.ledger.balance(f.account).await.unwrap();
+        assert_eq!(
+            (
+                actual.available_units,
+                actual.spendable_units,
+                actual.debt_units,
+                actual.reserved_units
+            ),
+            (400_000, 400_000, 0, 0)
+        );
+        // A new event may have its own accepted proof. It must not add an
+        // applied payment receipt, provider refund or blocked financial fact.
+        let state: (i64, i64, i64, i64) = sqlx::query_as(concat!(
+            "SELECT i.refunded_minor,",
+            "(SELECT count(*) FROM core_payments.receipts),",
+            "(SELECT count(*) FROM core_payments.provider_refunds),",
+            "(SELECT count(*) FROM core_payments.blocked_refunds) ",
+            "FROM core_payments.intents i WHERE i.id=$1"
+        ))
+        .bind(intent.intent_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(state, (20, 3, 1, 0));
+        assert_eq!(journals(&pool).await, 2);
+    }
+}
+
+// @mark payments.refund-topup role=test
+#[sqlx::test]
+async fn external_refund_of_spent_credits_restores_debt(pool: PgPool) {
     let f = fresh(&pool).await;
     let intent = prepare(&f, "prepare_debt_000001", 100).await;
     credit(&f, &intent, "credit_debt_000001").await;
@@ -631,25 +696,105 @@ async fn external_refund_debt_is_preserved_but_not_reported_as_success(pool: PgP
             Some(("re_debt", 100, "succeeded", None)),
         ))),
     };
+    let receipt = f.store.external_refund(request.clone()).await.unwrap();
+    assert_eq!(receipt.state, 5);
+    assert!(receipt.journal_id > 0);
+    assert_eq!(f.store.external_refund(request).await.unwrap(), receipt);
+    let actual = f.ledger.balance(f.account).await.unwrap();
     assert_eq!(
-        f.store.external_refund(request.clone()).await.unwrap_err(),
+        (
+            actual.available_units,
+            actual.spendable_units,
+            actual.debt_units,
+            actual.reserved_units
+        ),
+        (-500_000, 0, -500_000, 0)
+    );
+    let blocked: i64 = sqlx::query_scalar("SELECT count(*) FROM core_payments.blocked_refunds")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(blocked, 0);
+    let net: i64 =
+        sqlx::query_scalar("SELECT sum(delta_units)::bigint FROM core_billing.ledger_entries")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(net, 0);
+    let again = pb::ExternalRefundRequest {
+        mutation: mutation("external_debt_00002"),
+        intent_id: intent.intent_id,
+        evidence: Some(proof(event(
+            &intent,
+            "evt_debt_refund_again",
+            Some(("re_debt", 100, "succeeded", None)),
+        ))),
+    };
+    assert_eq!(
+        f.store.external_refund(again).await.unwrap_err(),
         Error::Conflict
     );
-    let fact:(String,i64,bool)=sqlx::query_as("SELECT b.reason,b.amount_minor,i.refund_fenced FROM core_payments.blocked_refunds b JOIN core_payments.intents i ON i.id=b.intent_id").fetch_one(&pool).await.unwrap();
-    assert_eq!(fact, ("refund_debt_recovery_required".into(), 100, true));
+    assert_eq!(journals(&pool).await, 3);
+}
+
+#[sqlx::test]
+async fn refund_of_debt_repayment_credit_restores_original_debt(pool: PgPool) {
+    let f = fresh(&pool).await;
+    let intent = prepare(&f, "prepare_repay_000001", 100).await;
+    let value = json!({
+        "migration_id": "synthetic-payment-opening-v1",
+        "source_archive_sha256": "11".repeat(32),
+        "mapping_sha256": "22".repeat(32),
+        "source_entity_key": format!("users:{}", f.account),
+        "source_row_sha256": "33".repeat(32),
+        "account_id": f.account,
+        "available_units": -100,
+        "reserved_units": 0,
+        "affiliate_units": 0,
+        "observed_at": 1_700_000_000_i64,
+    });
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::raw_sql("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE; SET LOCAL synchronous_commit=on")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let inserted: sqlx::types::Json<Value> =
+        sqlx::query_scalar("SELECT core_billing.import_opening_balance($1)")
+            .bind(sqlx::types::Json(value))
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(inserted.0["status"], "posted");
+    credit(&f, &intent, "credit_repay_000001").await;
+    let before = f.ledger.balance(f.account).await.unwrap();
+    assert_eq!((before.available_units, before.debt_units), (499_900, 0));
+    let request = pb::ExternalRefundRequest {
+        mutation: mutation("external_repay_00001"),
+        intent_id: intent.intent_id,
+        evidence: Some(proof(event(
+            &intent,
+            "evt_repay_refund",
+            Some(("re_repay", 100, "succeeded", None)),
+        ))),
+    };
+    let receipt = f.store.external_refund(request).await.unwrap();
+    assert_eq!(receipt.state, 5);
+    let after = f.ledger.balance(f.account).await.unwrap();
     assert_eq!(
-        f.store.external_refund(request).await.unwrap_err(),
-        Error::Conflict
+        (
+            after.available_units,
+            after.spendable_units,
+            after.debt_units
+        ),
+        (-100, 0, -100)
     );
-    let receipts: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM core_payments.receipts WHERE method='external_refund'",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(receipts, 0);
-    balance(&f, 0, 0).await;
-    assert_eq!(journals(&pool).await, 2);
+    let net: i64 =
+        sqlx::query_scalar("SELECT sum(delta_units)::bigint FROM core_billing.ledger_entries")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(net, 0);
 }
 
 #[sqlx::test]
