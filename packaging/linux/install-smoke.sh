@@ -75,17 +75,63 @@ done
 /usr/bin/lmm --version
 (run_service lmm-core /usr/bin/lmm-core --version)
 # Installation must not start the daemons, modify a database or need Go/Docker.
-printf '\n# operator-setting-survives\n' >> /etc/lmm.conf.d/core.toml
-mkdir -p /var/lib/lmm/core /etc/lmm.conf.d/secrets/core
-chmod 0700 /etc/lmm.conf.d/secrets/core
-printf 'operator-data\n' > /var/lib/lmm/core/keep
-printf 'synthetic-preservation-fixture\n' > /etc/lmm.conf.d/secrets/core/keep
-chmod 0600 /etc/lmm.conf.d/secrets/core/keep
+preservation_dir=$(mktemp -d /tmp/lmm-package-preservation.XXXXXX)
+chmod 0700 "$preservation_dir"
+record_operator_files() {
+    for component in core extensions; do
+        config="/etc/lmm.conf.d/$component.toml"
+        state="/var/lib/lmm/$component"
+        secrets="/etc/lmm.conf.d/secrets/$component"
+        printf '\n# operator-setting-%s-survives\n' "$component" >> "$config"
+        cp "$config" "$preservation_dir/$component.toml"
+        stat -c '%u:%g:%a' "$config" > "$preservation_dir/$component.config-metadata"
+        mkdir -p "$state" "$secrets"
+        chmod 0700 "$state" "$secrets"
+        printf 'operator-data-%s\n' "$component" > "$state/keep"
+        printf 'synthetic-preservation-fixture-%s\n' "$component" > "$secrets/keep"
+        chmod 0600 "$state/keep" "$secrets/keep"
+        cp "$state/keep" "$preservation_dir/$component.state"
+        cp "$secrets/keep" "$preservation_dir/$component.secret"
+        for path in "$state" "$state/keep" "$secrets" "$secrets/keep"; do
+            stat -c '%u:%g:%a' "$path"
+        done > "$preservation_dir/$component.metadata"
+    done
+}
+assert_operator_files() {
+    case "$1" in upgrade|removal) phase=$1 ;; *) return 2 ;; esac
+    case "$format" in
+        deb|apk) suffix= ;;
+        rpm) suffix=.rpmsave ;;
+        archlinux) suffix=.pacsave ;;
+        *) return 2 ;;
+    esac
+    for component in core extensions; do
+        config="/etc/lmm.conf.d/$component.toml"
+        selected_config=$config
+        state="/var/lib/lmm/$component"
+        secrets="/etc/lmm.conf.d/secrets/$component"
+        # Removal may save the modified TOML under the manager's own suffix.
+        # The whole file must match; a surviving marker alone is insufficient.
+        if ! cmp -s "$preservation_dir/$component.toml" "$config"; then
+            [ "$phase" = removal ] && [ -n "$suffix" ] &&
+                cmp -s "$preservation_dir/$component.toml" "$config$suffix" || return 1
+            selected_config=$config$suffix
+        fi
+        [ "$(stat -c '%u:%g:%a' "$selected_config")" = "$(cat "$preservation_dir/$component.config-metadata")" ] || return 1
+        cmp -s "$preservation_dir/$component.state" "$state/keep" || return 1
+        cmp -s "$preservation_dir/$component.secret" "$secrets/keep" || return 1
+        metadata=$(
+            for path in "$state" "$state/keep" "$secrets" "$secrets/keep"; do
+                stat -c '%u:%g:%a' "$path" || exit 1
+            done
+        ) || return 1
+        [ "$metadata" = "$(cat "$preservation_dir/$component.metadata")" ] || return 1
+    done
+}
+record_operator_files
 install_packages 2
 assert_not_activated
-grep -q operator-setting-survives /etc/lmm.conf.d/core.toml
-[ "$(cat /var/lib/lmm/core/keep)" = operator-data ]
-[ "$(cat /etc/lmm.conf.d/secrets/core/keep)" = synthetic-preservation-fixture ]
+assert_operator_files upgrade
 if [ "$format" != apk ]; then
     systemd-analyze verify /usr/lib/systemd/system/lmm-core.service /usr/lib/systemd/system/lmm-extensions.service
 fi
@@ -222,6 +268,5 @@ for component in core extensions; do
 done
 remove_packages
 assert_not_activated
-[ "$(cat /var/lib/lmm/core/keep)" = operator-data ]
-[ "$(cat /etc/lmm.conf.d/secrets/core/keep)" = synthetic-preservation-fixture ]
+assert_operator_files removal
 printf 'PASS: %s/%s install, upgrade, preservation, service-UID processes, private credentials, removal (not service-manager acceptance)\n' "$format" "$arch"
