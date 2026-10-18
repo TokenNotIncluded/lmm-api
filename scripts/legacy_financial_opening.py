@@ -243,6 +243,52 @@ def target_contract(F, target, contract):
     return ident
 
 
+def build_target_guard_sql(F, *, connection, instance_identity, contract,
+                           catalog_fingerprint_sha256):
+    """Return the inherited offline target guard as a PL/pgSQL statement fragment.
+
+    Pure construction only: no file reads, connection, transaction or DB writes.
+    The caller must first validate its domain target and bind the trusted compiled
+    contract (including catalog_query); receipt JSON is never SQL authority.
+    Required enclosing DO variables: table_row RECORD and actual_catalog TEXT.
+    Run after transaction settings/shared+domain locks and before domain runtime
+    checks, prestate CAS or any nextval/write. Domain ACLs and all postconditions
+    remain the caller's job. Opening error text is retained for byte equivalence.
+    """
+    I = F.IDENTITY
+    L = I.sql_literal
+    J = lambda value: L(F.canonical(value))+"::jsonb"
+    ident = instance_identity
+    owner, login = connection["role"], connection["login_role"]
+    return f""" IF current_database()<>{L(ident['database'])} OR current_user<>{L(owner)} OR session_user<>{L(login)}
+ OR (SELECT rolcanlogin FROM pg_roles WHERE rolname=current_user) IS DISTINCT FROM false
+ OR (SELECT rolcanlogin FROM pg_roles WHERE rolname=session_user) IS DISTINCT FROM true
+ OR (SELECT rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls FROM pg_roles WHERE rolname=current_user)
+ OR (SELECT rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls FROM pg_roles WHERE rolname=session_user)
+ OR NOT pg_has_role(session_user,current_user,'SET')
+ OR (SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname=current_database())<>current_user
+ OR (SELECT oid::bigint FROM pg_database WHERE datname=current_database())<>{ident['database_oid']}
+ OR (SELECT system_identifier::text FROM pg_control_system())<>{L(ident['cluster_system_identifier'])}
+ OR pg_postmaster_start_time()<>{L(ident['postmaster_started_at'])}::timestamptz
+ OR current_setting('server_version_num')<>{L(str(ident['server_version_num']))}
+ OR current_setting('port')::int<>{ident['port']}
+ OR current_setting('lmm.migration_instance_nonce',true) IS DISTINCT FROM {L(ident['server_instance_nonce'])}
+ OR inet_server_addr() IS NOT NULL THEN RAISE EXCEPTION 'opening target identity mismatch'; END IF;
+ IF EXISTS(SELECT 1 FROM pg_stat_activity WHERE datid=(SELECT oid FROM pg_database WHERE datname=current_database()) AND pid<>pg_backend_pid())
+ THEN RAISE EXCEPTION 'opening target has another client'; END IF;
+ FOR table_row IN SELECT n.nspname,c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+  WHERE {TABLE_PREDICATE} ORDER BY n.nspname,c.relname LOOP
+  EXECUTE format('LOCK TABLE %I.%I IN ACCESS EXCLUSIVE MODE',table_row.nspname,table_row.relname);
+ END LOOP;
+ SELECT ({I.catalog_hash_sql(contract)}) INTO actual_catalog;
+ IF actual_catalog<>{L(catalog_fingerprint_sha256)}
+ OR NOT EXISTS(SELECT 1 FROM core_meta.runtime_contract WHERE singleton AND encode(catalog_fingerprint,'hex')=actual_catalog)
+ OR NOT EXISTS(SELECT 1 FROM core_meta.schema_contract WHERE singleton AND version={contract['identity_version']} AND encode(fingerprint,'hex')={L(contract['identity_fingerprint_sha256'])})
+ OR (SELECT jsonb_object_agg(name,encode(fingerprint,'hex')) FROM core_meta.component_contract) IS DISTINCT FROM {J(contract['component_fingerprints'])}
+ THEN RAISE EXCEPTION 'opening installed contract mismatch'; END IF;
+"""
+
+
 def unsafe_runtime_sql(F, runtime):
     """Core runtime_database unsafe_role contract, with an explicit subject.
 
@@ -251,7 +297,8 @@ def unsafe_runtime_sql(F, runtime):
     """
     role=F.IDENTITY.sql_literal(runtime)
     return f"""SELECT
- EXISTS(SELECT FROM pg_roles r WHERE r.rolname<>{role} AND (
+ has_parameter_privilege({role},'session_replication_role','SET')
+ OR EXISTS(SELECT FROM pg_roles r WHERE r.rolname<>{role} AND (
   pg_has_role({role},r.oid,'SET') OR pg_has_role({role},r.oid,'MEMBER WITH ADMIN OPTION')))
  OR EXISTS(SELECT FROM pg_roles r
   WHERE (r.rolsuper OR r.rolbypassrls OR r.rolcreaterole OR r.rolcreatedb OR r.rolreplication
@@ -522,33 +569,8 @@ DECLARE payload JSONB := {J(payloads)}; approved JSONB := {J(approval)};
  replay BOOLEAN; occupied BOOLEAN; actual_catalog TEXT; result JSONB;
 BEGIN
  {backend_guard}
- IF current_database()<>{L(ident['database'])} OR current_user<>{L(owner)} OR session_user<>{L(login)}
- OR (SELECT rolcanlogin FROM pg_roles WHERE rolname=current_user) IS DISTINCT FROM false
- OR (SELECT rolcanlogin FROM pg_roles WHERE rolname=session_user) IS DISTINCT FROM true
- OR (SELECT rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls FROM pg_roles WHERE rolname=current_user)
- OR (SELECT rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls FROM pg_roles WHERE rolname=session_user)
- OR NOT pg_has_role(session_user,current_user,'SET')
- OR (SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname=current_database())<>current_user
- OR (SELECT oid::bigint FROM pg_database WHERE datname=current_database())<>{ident['database_oid']}
- OR (SELECT system_identifier::text FROM pg_control_system())<>{L(ident['cluster_system_identifier'])}
- OR pg_postmaster_start_time()<>{L(ident['postmaster_started_at'])}::timestamptz
- OR current_setting('server_version_num')<>{L(str(ident['server_version_num']))}
- OR current_setting('port')::int<>{ident['port']}
- OR current_setting('lmm.migration_instance_nonce',true) IS DISTINCT FROM {L(ident['server_instance_nonce'])}
- OR inet_server_addr() IS NOT NULL THEN RAISE EXCEPTION 'opening target identity mismatch'; END IF;
- IF EXISTS(SELECT 1 FROM pg_stat_activity WHERE datid=(SELECT oid FROM pg_database WHERE datname=current_database()) AND pid<>pg_backend_pid())
- THEN RAISE EXCEPTION 'opening target has another client'; END IF;
- FOR table_row IN SELECT n.nspname,c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-  WHERE {TABLE_PREDICATE} ORDER BY n.nspname,c.relname LOOP
-  EXECUTE format('LOCK TABLE %I.%I IN ACCESS EXCLUSIVE MODE',table_row.nspname,table_row.relname);
- END LOOP;
- SELECT ({I.catalog_hash_sql(contract)}) INTO actual_catalog;
- IF actual_catalog<>{L(target['contract']['catalog_fingerprint_sha256'])}
- OR NOT EXISTS(SELECT 1 FROM core_meta.runtime_contract WHERE singleton AND encode(catalog_fingerprint,'hex')=actual_catalog)
- OR NOT EXISTS(SELECT 1 FROM core_meta.schema_contract WHERE singleton AND version={contract['identity_version']} AND encode(fingerprint,'hex')={L(contract['identity_fingerprint_sha256'])})
- OR (SELECT jsonb_object_agg(name,encode(fingerprint,'hex')) FROM core_meta.component_contract) IS DISTINCT FROM {J(contract['component_fingerprints'])}
- THEN RAISE EXCEPTION 'opening installed contract mismatch'; END IF;
- IF ({unsafe_runtime_sql(F, runtime)})
+{build_target_guard_sql(F, connection=target["connection"], instance_identity=ident,
+                         contract=contract, catalog_fingerprint_sha256=target["contract"]["catalog_fingerprint_sha256"])} IF ({unsafe_runtime_sql(F, runtime)})
  OR has_function_privilege({L(runtime)},'core_billing.import_opening_balance(jsonb)','EXECUTE')
  OR has_function_privilege({L(runtime)},'core_billing.import_account_opening_counters(jsonb)','EXECUTE')
  OR EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
