@@ -68,6 +68,20 @@ GRANT USAGE ON SEQUENCE core_abuse.audit_id_seq TO {name};
             .await
             .unwrap();
         }
+        let history_installed: bool =
+            sqlx::query_scalar("SELECT to_regnamespace('core_history') IS NOT NULL")
+                .fetch_one(owner)
+                .await
+                .unwrap();
+        if history_installed {
+            sqlx::raw_sql(&format!(
+                "GRANT USAGE ON SCHEMA core_history TO {0}; GRANT SELECT ON core_history.sources,core_history.log_records TO {0}",
+                name
+            ))
+            .execute(owner)
+            .await
+            .unwrap();
+        }
         let mut url = reqwest::Url::parse(&std::env::var("DATABASE_URL").unwrap()).unwrap();
         assert!(matches!(url.host_str(), Some("localhost" | "127.0.0.1")));
         url.set_path(&database);

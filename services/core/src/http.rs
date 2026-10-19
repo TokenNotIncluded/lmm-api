@@ -149,6 +149,11 @@ pub fn configured_router_with_runtime_status(
     } else {
         Router::new()
     };
+    let history = if capabilities.identity {
+        crate::history_http::router(crate::history_read::HistoryStore::new(pool.clone()))
+    } else {
+        Router::new()
+    };
     Router::new()
         .route("/health/live", get(live))
         .route("/health/ready", get(ready))
@@ -163,6 +168,7 @@ pub fn configured_router_with_runtime_status(
             public_status,
         })
         .merge(usage)
+        .merge(history)
 }
 
 async fn public_status_response(

@@ -14,6 +14,7 @@ pub mod events;
 pub mod finance_export;
 pub mod financial_profile;
 pub mod funding;
+pub mod history_http;
 pub mod history_read;
 pub mod http;
 pub mod identity;

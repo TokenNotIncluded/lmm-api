@@ -28,6 +28,7 @@ const COMPONENTS: &[(&str, &str)] = &[
     ("commerce", include_str!("../schema/commerce.sql")),
     ("abuse", include_str!("../schema/abuse.sql")),
     ("oauth-grants", include_str!("../schema/oauth_grants.sql")),
+    ("history", include_str!("../schema/history.sql")),
 ];
 
 /// The compiled fresh-install contract, including explicitly disabled modules.

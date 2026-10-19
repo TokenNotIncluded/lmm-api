@@ -1,5 +1,5 @@
--- Synthetic installation fixture matching A04's S11 schema proposal. It does
--- not install at startup or grant runtime import/write authority.
+-- Immutable historical source receipts and logs, installed by fresh init-db.
+-- Import is offline owner work; ordinary startup and runtime never write here.
 CREATE SCHEMA core_history;
 CREATE TABLE core_history.sources (
   source_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

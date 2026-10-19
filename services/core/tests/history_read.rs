@@ -9,10 +9,6 @@ use sqlx::PgPool;
 
 async fn fixture(pool: &PgPool) -> (String, String, i64, i64) {
     core_schema::init(pool).await.unwrap();
-    sqlx::raw_sql(include_str!("history_read/source.sql"))
-        .execute(pool)
-        .await
-        .unwrap();
     let identity = IdentityStore::from_pool(pool.clone());
     let user = identity.bootstrap_user(7, 1).await.unwrap();
     let admin = identity.bootstrap_user(8, 5).await.unwrap();

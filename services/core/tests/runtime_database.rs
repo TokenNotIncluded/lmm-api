@@ -17,6 +17,89 @@ use tower::ServiceExt;
 mod runtime;
 
 #[sqlx::test(migrations = false)]
+async fn historical_reads_need_exact_readonly_runtime_authority(pool: PgPool) {
+    core_schema::init(&pool).await.unwrap();
+    let role = runtime::RuntimeRole::create(&pool).await;
+    runtime_database::check(&role.pool, RequiredCapabilities::default())
+        .await
+        .unwrap();
+    for table in ["sources", "log_records"] {
+        let count: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM core_history.{table}"))
+            .fetch_one(&role.pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+        sqlx::query(&format!(
+            "REVOKE SELECT ON core_history.{table} FROM {}",
+            role.name
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            runtime_database::check(&role.pool, RequiredCapabilities::default()).await,
+            Err(Error::MissingPrivileges)
+        );
+        sqlx::query(&format!(
+            "GRANT SELECT ON core_history.{table} TO {}",
+            role.name
+        ))
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    for (grant, revoke) in [
+        (
+            "GRANT UPDATE(source_namespace) ON core_history.sources",
+            "REVOKE UPDATE(source_namespace) ON core_history.sources",
+        ),
+        (
+            "GRANT INSERT(request_id) ON core_history.log_records",
+            "REVOKE INSERT(request_id) ON core_history.log_records",
+        ),
+        (
+            "GRANT DELETE ON core_history.log_records",
+            "REVOKE DELETE ON core_history.log_records",
+        ),
+        (
+            "GRANT USAGE ON SEQUENCE core_history.sources_source_id_seq",
+            "REVOKE USAGE ON SEQUENCE core_history.sources_source_id_seq",
+        ),
+    ] {
+        sqlx::query(&format!("{grant} TO {}", role.name))
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime_database::check(&role.pool, RequiredCapabilities::default()).await,
+            Err(Error::UnsafePrivileges),
+            "{grant}"
+        );
+        sqlx::query(&format!("{revoke} FROM {}", role.name))
+            .execute(&pool)
+            .await
+            .unwrap();
+        runtime_database::check(&role.pool, RequiredCapabilities::default())
+            .await
+            .unwrap();
+    }
+    for sql in [
+        "INSERT INTO core_history.sources DEFAULT VALUES",
+        "UPDATE core_history.log_records SET request_id='changed' WHERE FALSE",
+        "DELETE FROM core_history.log_records WHERE FALSE",
+        "SELECT nextval('core_history.sources_source_id_seq')",
+    ] {
+        let error = sqlx::query(sql).execute(&role.pool).await.unwrap_err();
+        assert_eq!(
+            error.as_database_error().and_then(|e| e.code()).as_deref(),
+            Some("42501"),
+            "{sql}"
+        );
+    }
+    role.cleanup().await;
+}
+
+#[sqlx::test(migrations = false)]
 async fn imported_admin_authority_reads_are_required_and_writes_are_forbidden(pool: PgPool) {
     core_schema::init(&pool).await.unwrap();
     let role = runtime::RuntimeRole::create(&pool).await;

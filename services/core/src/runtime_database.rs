@@ -105,7 +105,7 @@ pub(crate) async fn check_connection(
     let forbidden_write: bool = sqlx::query_scalar(r#"
         SELECT EXISTS(SELECT FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
           WHERE c.relkind IN ('r','p','v','m','f') AND (
-            ((n.nspname IN ('core_meta','core_migration','core_model')
+            ((n.nspname IN ('core_meta','core_migration','core_model','core_history')
               OR (n.nspname='core_console' AND c.relname IN ('options','initialization'))
               OR (n.nspname='core_identity' AND c.relname IN ('developer_access','user_routing_groups','privileged_import_facts','permission_policies','permission_policy_rows','admin_activation_receipts'))
               OR (n.nspname='public' AND c.relname IN ('routing_active_release','routing_groups','routing_routes'))
@@ -156,7 +156,7 @@ pub(crate) async fn check_connection(
         OR has_function_privilege('core_billing.import_account_opening_counters(jsonb)','EXECUTE')
         OR has_function_privilege('core_billing.import_legacy_escrow_batch(jsonb)','EXECUTE')
         OR EXISTS(SELECT FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-          WHERE n.nspname='core_billing' AND CASE WHEN c.relkind='S'
+          WHERE n.nspname IN ('core_billing','core_history') AND CASE WHEN c.relkind='S'
             THEN has_sequence_privilege(c.oid,'USAGE,SELECT,UPDATE') ELSE FALSE END)
     "#).fetch_one(&mut *connection).await?;
     if forbidden_write {
@@ -184,6 +184,9 @@ pub(crate) async fn check_connection(
           AND has_sequence_privilege('core_abuse.audit_id_seq','USAGE')
           AND has_schema_privilege('core_meta','USAGE')
           AND has_schema_privilege('core_billing','USAGE')
+          AND has_schema_privilege('core_history','USAGE')
+          AND has_table_privilege('core_history.sources','SELECT')
+          AND has_table_privilege('core_history.log_records','SELECT')
           AND NOT EXISTS(SELECT FROM (VALUES ('accounts'),('users'),('teams'),('memberships'),('credentials'),('invites'),('password_logins'),('user_profiles'),('company_billing_profiles'),('web_sessions'),('api_key_settings'),('mfa_factors'),('mfa_enrollments'),('mfa_backup_codes'),('mfa_challenges')) t(name)
             CROSS JOIN (VALUES ('SELECT'),('INSERT'),('UPDATE')) p(privilege)
             WHERE NOT has_table_privilege('core_identity.'||t.name,p.privilege))
