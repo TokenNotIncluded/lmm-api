@@ -22,6 +22,7 @@ CORE_SCHEMAS = (
     "core_commerce.",
     "core_console.",
     "core_events.",
+    "core_history.",
     "core_identity.",
     "core_meta.",
     "core_migration.",
@@ -269,10 +270,15 @@ class CoreBoundaryTests(unittest.TestCase):
         self.assertIn("corepb", identity)
 
     def assert_extension_storage(self, path, text):
+        # Borrowed pools can execute SQL from files without a database/sql import.
+        # Check Core table access before any unregistered-file early return.
+        for schema in CORE_SCHEMAS:
+            self.assertNotRegex(text, r"(?i)\b(?:FROM|JOIN|UPDATE|INTO|TRUNCATE)\s+" + re.escape(schema), path)
         stores = {
             "services/extensions/internal/coreclient/sqlinbox.go": "extension_events.",
             "services/extensions/internal/modules/store/postgres.go": "lmm_store.",
             "services/extensions/internal/modules/store/postgres_web.go": "lmm_store.",
+            "services/extensions/internal/modules/store/money_recovery_postgres.go": "lmm_store.",
             "services/extensions/internal/modules/support/postgres.go": "lmm_support.",
             "services/extensions/internal/modules/support/postgres_web.go": "lmm_support.",
             "services/extensions/internal/modules/assistant/postgres.go": "lmm_assistant.",
@@ -375,7 +381,8 @@ class CoreBoundaryTests(unittest.TestCase):
         for required in COMPOSITION_STORAGE_GUARDS:
             with self.subTest(required=required), self.assertRaises(AssertionError):
                 self.assert_extension_storage(COMPOSITION_STORAGE, source.replace(required, ""))
-        for forbidden in ("core_identity.users", "core_billing.balance_state", "core_events.outbox",
+        for forbidden in ("core_history.sources", "core_history.log_records",
+                          "core_identity.users", "core_billing.balance_state", "core_events.outbox",
                           "lmm_store.orders", "lmm_support.messages", "lmm_assistant.records",
                           "lmm_promotions.records", "payment_orders", 'sql.OpenDB(connector)'):
             with self.subTest(forbidden=forbidden), self.assertRaises(AssertionError):
@@ -692,7 +699,8 @@ class CoreBoundaryTests(unittest.TestCase):
         for path in paths:
             source = (ROOT / path).read_text()
             self.assert_extension_storage(path, source)
-            for forbidden in ("core_identity.users", "core_billing.balance_state", "core_events.outbox",
+            for forbidden in ("core_history.sources", "core_history.log_records",
+                              "core_identity.users", "core_billing.balance_state", "core_events.outbox",
                               "lmm_store.orders", "lmm_support.messages", "lmm_assistant.records",
                               "lmm_promotions.records", "payment_orders"):
                 with self.subTest(path=path, table=forbidden), self.assertRaises(AssertionError):
@@ -809,7 +817,8 @@ class CoreBoundaryTests(unittest.TestCase):
         path = "services/extensions/internal/modules/store/postgres.go"
         source = (ROOT / path).read_text()
         self.assert_extension_storage(path, source)
-        for forbidden in ("core_identity.users", "core_billing.balance_state",
+        for forbidden in ("core_history.sources", "core_history.log_records",
+                          "core_identity.users", "core_billing.balance_state",
                           "core_events.outbox", "lmm_support.messages", "lmm_assistant.records",
                           "lmm_promotions.records", "payment_orders",
                           "sql.Open(", "sql.OpenDB("):
@@ -825,7 +834,8 @@ class CoreBoundaryTests(unittest.TestCase):
             path = f"services/extensions/internal/modules/{module}/postgres.go"
             source = (ROOT / path).read_text()
             self.assert_extension_storage(path, source)
-            for forbidden in ("core_identity.users", "core_billing.balance_state", "core_events.outbox",
+            for forbidden in ("core_history.sources", "core_history.log_records",
+                              "core_identity.users", "core_billing.balance_state", "core_events.outbox",
                               "lmm_store.records", "lmm_support.records", "sql.Open(", "sql.OpenDB("):
                 with self.subTest(module=module, forbidden=forbidden):
                     with self.assertRaises(AssertionError):
@@ -834,6 +844,19 @@ class CoreBoundaryTests(unittest.TestCase):
                 if other != own:
                     with self.assertRaises(AssertionError):
                         self.assert_extension_storage(path, source + "\nSELECT * FROM " + other + "records")
+
+    def test_borrowed_pool_adapters_cannot_access_core_without_sql_import(self):
+        path = "services/extensions/internal/modules/store/money_recovery_postgres.go"
+        source = (ROOT / path).read_text()
+        self.assertNotIn('"database/sql"', source)
+        # The unregistered path exercises the same early-return boundary for new files.
+        for adapter in (path, "services/extensions/internal/modules/store/future_recovery.go"):
+            self.assert_extension_storage(adapter, source)
+            for table in ("core_history.sources", "core_history.log_records", "core_billing.ledger_entries"):
+                method = "\nfunc (p *Postgres) boundaryProbe(ctx context.Context) error {\n" + \
+                    "_, err := p.db.ExecContext(ctx, `SELECT * FROM " + table + "`); return err\n}\n"
+                with self.subTest(adapter=adapter, table=table), self.assertRaises(AssertionError):
+                    self.assert_extension_storage(adapter, source + method)
 
     def test_fresh_schema_is_explicit_and_relational(self):
         schema = (ROOT / "services/core/schema/identity.sql").read_text()
@@ -975,9 +998,9 @@ class CoreBoundaryTests(unittest.TestCase):
             norm_sql
         ), "account_policies DELETE/TRUNCATE protection must be present")
         self.assertTrue(re.search(
-            r"n\.nspname\s*=\s*'core_billing'\s+AND\s+CASE\s+WHEN\s+c\.relkind\s*=\s*'S'\s+THEN\s+has_sequence_privilege\(c\.oid,'USAGE,SELECT,UPDATE'\)",
+            r"n\.nspname\s+IN\s*\(\s*'core_billing'\s*,\s*'core_history'\s*\)\s+AND\s+CASE\s+WHEN\s+c\.relkind\s*=\s*'S'\s+THEN\s+has_sequence_privilege\(c\.oid,'USAGE,SELECT,UPDATE'\)",
             norm_sql
-        ), "core_billing sequence privileges must be checked")
+        ), "core_billing and core_history sequence privileges must both be checked")
         for fn in ('core_billing.import_opening_balance(jsonb)',
                    'core_billing.import_account_opening_counters(jsonb)',
                    'core_billing.import_legacy_escrow_batch(jsonb)'):
@@ -1010,6 +1033,13 @@ class CoreBoundaryTests(unittest.TestCase):
         mutated_insert = guard + "\nINSERT INTO core_billing.ledger_entries VALUES (1);"
         with self.assertRaises(AssertionError):
             self.assert_runtime_database_guards(mutated_insert)
+
+        sequence_scope = "n.nspname IN ('core_billing','core_history')"
+        self.assertEqual(guard.count(sequence_scope), 1)
+        for retained in ("core_billing", "core_history"):
+            changed = guard.replace(sequence_scope, "n.nspname='" + retained + "'")
+            with self.subTest(retained_sequence_schema=retained), self.assertRaises(AssertionError):
+                self.assert_runtime_database_guards(changed)
 
     def test_core_owns_the_funding_contract(self):
         cases = json.loads((ROOT / "contracts/core/v1/funding-cases.json").read_text())
