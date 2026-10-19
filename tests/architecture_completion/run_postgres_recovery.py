@@ -57,10 +57,49 @@ RESET ROLE;
 SNAPSHOT = '''
 BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
 SET LOCAL search_path=pg_catalog;
+WITH acl_objects(kind,name,owner,acl) AS (
+ SELECT 'relation',c.relname::text,c.relowner,
+   coalesce(c.relacl,CASE
+     WHEN c.relkind='S' THEN acldefault('s',c.relowner)
+     WHEN c.relkind IN ('r','p','v','m','f') THEN acldefault('r',c.relowner)
+     ELSE NULL::aclitem[] END)
+ FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+ WHERE n.nspname='a09_probe'
+ UNION ALL
+ SELECT 'column',c.relname||'.'||a.attnum||':'||a.attname,c.relowner,
+   coalesce(a.attacl,acldefault('c',c.relowner))
+ FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid
+ JOIN pg_namespace n ON n.oid=c.relnamespace
+ WHERE n.nspname='a09_probe' AND a.attnum>0 AND NOT a.attisdropped
+ UNION ALL
+ SELECT 'function',p.proname||'('||pg_get_function_identity_arguments(p.oid)||')',
+   p.proowner,coalesce(p.proacl,acldefault('f',p.proowner))
+ FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+ WHERE n.nspname='a09_probe' AND p.prokind='f'
+ UNION ALL
+ SELECT 'schema',nspname,nspowner,coalesce(nspacl,acldefault('n',nspowner))
+ FROM pg_namespace WHERE nspname='a09_probe'
+), permissions AS (
+ SELECT o.kind,o.name,pg_get_userbyid(o.owner) AS owner,
+   coalesce(json_agg(json_build_array(
+     pg_get_userbyid(a.grantor),a.grantee=0,
+     CASE WHEN a.grantee=0 THEN NULL ELSE pg_get_userbyid(a.grantee) END,
+     a.privilege_type,a.is_grantable)
+     ORDER BY pg_get_userbyid(a.grantor) COLLATE "C",a.grantee=0,
+       pg_get_userbyid(a.grantee) COLLATE "C",a.privilege_type COLLATE "C",a.is_grantable)
+     FILTER (WHERE a.privilege_type IS NOT NULL),'[]'::json) AS privileges
+ FROM acl_objects o LEFT JOIN LATERAL aclexplode(o.acl) a ON true
+ GROUP BY o.kind,o.name,o.owner
+)
 SELECT json_build_object(
  'rows',(SELECT json_agg(t ORDER BY id) FROM a09_probe.entries t),
  'contract',(SELECT json_agg(t ORDER BY name) FROM a09_probe.contract t),
  'sequence',(SELECT json_build_array(last_value,is_called) FROM a09_probe.entries_id_seq),
+ 'sequence_definitions',(SELECT json_agg(json_build_array(c.relname,
+   format_type(s.seqtypid,NULL),s.seqstart,s.seqincrement,s.seqmin,s.seqmax,
+   s.seqcache,s.seqcycle) ORDER BY c.relname COLLATE "C")
+   FROM pg_sequence s JOIN pg_class c ON c.oid=s.seqrelid
+   JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='a09_probe'),
  'columns',(SELECT json_agg(json_build_array(c.relname,a.attnum,a.attname,
    format_type(a.atttypid,a.atttypmod),a.attnotnull,pg_get_expr(d.adbin,d.adrelid)) ORDER BY c.relname,a.attnum)
    FROM pg_attribute a JOIN pg_class c ON c.oid=a.attrelid
@@ -68,10 +107,10 @@ SELECT json_build_object(
    LEFT JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
    WHERE n.nspname='a09_probe' AND a.attnum>0 AND NOT a.attisdropped),
  'relations',(SELECT json_agg(json_build_array(c.relname,c.relkind,
-   pg_get_userbyid(c.relowner),c.relacl::text) ORDER BY c.relname)
+   pg_get_userbyid(c.relowner)) ORDER BY c.relname)
    FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='a09_probe'),
  'functions',(SELECT json_agg(json_build_array(pg_get_functiondef(p.oid),
-   pg_get_userbyid(p.proowner),p.proacl::text) ORDER BY p.proname)
+   pg_get_userbyid(p.proowner)) ORDER BY p.proname,pg_get_function_identity_arguments(p.oid))
    FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
    WHERE n.nspname='a09_probe' AND p.prokind='f'),
  'indexes',(SELECT json_agg(pg_get_indexdef(i.indexrelid) ORDER BY c.relname)
@@ -80,8 +119,9 @@ SELECT json_build_object(
  'triggers',(SELECT json_agg(json_build_array(pg_get_triggerdef(t.oid,true),t.tgenabled) ORDER BY t.tgname)
    FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid
    JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='a09_probe' AND NOT t.tgisinternal),
- 'schema_acl',(SELECT json_build_array(pg_get_userbyid(nspowner),nspacl::text)
-   FROM pg_namespace WHERE nspname='a09_probe')
+ 'schema_owner',(SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname='a09_probe'),
+ 'permissions',(SELECT json_agg(json_build_array(kind,name,owner,privileges)
+   ORDER BY kind COLLATE "C",name COLLATE "C",owner COLLATE "C") FROM permissions)
 );
 COMMIT;
 '''
@@ -105,6 +145,7 @@ def run(parent: Path) -> dict:
     fixture = Fixture(parent)
     fixture.start()
     completed = False
+    directory = None
     try:
         resources = {f'A{i:02d}': fixture.allocate(f'A{i:02d}') for i in range(1, 11)}
         selected = resources['A09']
@@ -114,7 +155,7 @@ def run(parent: Path) -> dict:
             password = stream.read(4096).decode().strip().split(':')[-1]
         fixture.sql(seed(owner, role), source)
         expect_denied(fixture, f'SET ROLE {owner};', source, role, password)
-        expect_denied(fixture, 'SELECT 1;', resources['A01']['database'], role, password)
+        fixture.expect_connect_denied(resources['A01']['database'], role, password)
         expect_denied(fixture, "INSERT INTO a09_probe.entries(request_key,credits) VALUES ('unapproved',1);", source, role, password)
         before = snapshot(fixture, source)
         target = fixture.restore_database('A09')
@@ -126,7 +167,8 @@ def run(parent: Path) -> dict:
         backup.private_dir(backup.BACKUPS)
         host = ''.join(c if c.isalnum() or c in '-.' else '_' for c in socket.gethostname())
         prefix = f'api-lmm-a09-{host}-{datetime.now(timezone.utc):%Y%m%d}-'
-        directory = Path(tempfile.mkdtemp(prefix=prefix, dir=backup.BACKUPS))
+        # The already-validated task root keeps all recovery material bounded.
+        directory = Path(tempfile.mkdtemp(prefix=prefix, dir=parent))
         keys = directory/'keys'
         keys.mkdir(mode=0o700)
         key = keys/'recovery.key'
@@ -168,11 +210,16 @@ def run(parent: Path) -> dict:
         completed = True
         return report
     finally:
-        # Cleanup itself checks the exact identity and zero clients. It never
-        # sweeps old fixtures. Backup and key files are retained for inspection.
-        fixture.cleanup()
-        if not completed:
-            fixture.record('test-failed',{'status':'FAIL','backup_retained':True})
+        if completed:
+            # Successful probes remove only their verified, idle owned cluster.
+            # Backup and key files remain available for inspection.
+            fixture.cleanup()
+        else:
+            fixture.record('test-failed', {
+                'status': 'FAIL', 'fixture_retained': True,
+                'backup_retained': directory is not None,
+                'backup_status': 'partial_or_complete_requires_inspection',
+            })
 
 
 def main():

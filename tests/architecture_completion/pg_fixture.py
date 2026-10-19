@@ -15,6 +15,7 @@ import re
 import secrets
 import shutil
 import subprocess
+import sys
 import time
 
 from build_lease import private_directory
@@ -24,6 +25,7 @@ DOCKER = ['docker', '--host', 'unix:///var/run/docker.sock']
 LABEL = 'best.lmm.a09-fixture'
 TASKS = {f'A{i:02d}' for i in range(1, 11)} | {'S11'}
 NAME = re.compile(r'[a-z][a-z0-9_]{0,62}')
+PROTECTED_PORTS = {5432, 18080, 18081, 50837, 47399}
 
 
 class FixtureError(RuntimeError):
@@ -64,6 +66,88 @@ def identifier(value: str) -> str:
     return '"' + value + '"'
 
 
+def _connect_probe(parameters: dict) -> dict:
+    """One local connection using installed libpq; no SQL or wire implementation.
+
+    The child runs with the fixture's PG-free environment. Unlike psql's initial
+    synchronous connect, async libpq lets us set verbose errors before handshake.
+    See https://www.postgresql.org/docs/18/libpq-connect.html#LIBPQ-PQCONNECTSTARTPARAMS
+    """
+    import ctypes
+    import select
+
+    if set(parameters) != {'port', 'database', 'role', 'password'}:
+        raise FixtureError('invalid connection probe fields')
+    port, password = parameters['port'], parameters['password']
+    if (type(port) is not int or not 1024 <= port <= 65535 or port in PROTECTED_PORTS
+            or not isinstance(password, str) or not password or '\0' in password
+            or len(password.encode()) > 1024):
+        raise FixtureError('invalid private connection probe input')
+    identifier(parameters['database'])
+    identifier(parameters['role'])
+    try:
+        lib = ctypes.CDLL('/usr/lib/libpq.so.5')
+    except OSError:
+        return {'status': 'blocked', 'reason': 'installed libpq is required'}
+    signatures = {
+        'PQlibVersion': ([], ctypes.c_int),
+        'PQconnectStartParams': ([ctypes.POINTER(ctypes.c_char_p),
+                                  ctypes.POINTER(ctypes.c_char_p), ctypes.c_int], ctypes.c_void_p),
+        'PQsetErrorVerbosity': ([ctypes.c_void_p, ctypes.c_int], ctypes.c_int),
+        'PQconnectPoll': ([ctypes.c_void_p], ctypes.c_int),
+        'PQsocket': ([ctypes.c_void_p], ctypes.c_int),
+        'PQerrorMessage': ([ctypes.c_void_p], ctypes.c_char_p),
+        'PQfinish': ([ctypes.c_void_p], None),
+    }
+    for name, (arguments, result) in signatures.items():
+        function = getattr(lib, name)
+        function.argtypes, function.restype = arguments, result
+    version = lib.PQlibVersion()
+    if not 180000 <= version < 190000:
+        return {'status': 'blocked', 'reason': 'installed libpq 18 is required',
+                'client_version': version}
+    values = {'host': '127.0.0.1', 'hostaddr': '127.0.0.1', 'port': str(port),
+              'dbname': parameters['database'], 'user': parameters['role'],
+              'password': password, 'sslmode': 'disable', 'gssencmode': 'disable',
+              'connect_timeout': '3', 'application_name': 'a09-connect-refusal'}
+    array = ctypes.c_char_p * (len(values) + 1)
+    keys = array(*(key.encode() for key in values), None)
+    settings = array(*(value.encode() for value in values.values()), None)
+    connection = lib.PQconnectStartParams(keys, settings, 0)
+    if not connection:
+        return {'status': 'unknown', 'reason': 'libpq did not create a connection',
+                'client_version': version}
+    try:
+        lib.PQsetErrorVerbosity(connection, 2)  # PQERRORS_VERBOSE
+        deadline = time.monotonic() + 3
+        while True:
+            if time.monotonic() >= deadline:
+                return {'status': 'unknown', 'reason': 'connection poll timed out',
+                        'client_version': version}
+            status = lib.PQconnectPoll(connection)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return {'status': 'unknown', 'reason': 'connection poll timed out',
+                        'client_version': version}
+            if status in {0, 3}:  # PGRES_POLLING_FAILED / PGRES_POLLING_OK
+                error = bytes(lib.PQerrorMessage(connection) or b'')
+                return {'status': 'refused' if status == 0 else 'connected',
+                        'client_version': version,
+                        'error_base64': base64.b64encode(error).decode('ascii')}
+            descriptor = lib.PQsocket(connection)  # libpq can replace its socket.
+            if status not in {1, 2} or descriptor < 0:
+                return {'status': 'unknown', 'reason': 'connection poll did not complete',
+                        'client_version': version}
+            readable, writable, _ = select.select(
+                [descriptor] if status == 1 else [],
+                [descriptor] if status == 2 else [], [], remaining)
+            if not readable and not writable:
+                return {'status': 'unknown', 'reason': 'connection poll timed out',
+                        'client_version': version}
+    finally:
+        lib.PQfinish(connection)
+
+
 def container_binding(info: dict, nonce: str, container: str) -> dict:
     """Inspect immutable ownership and required sandbox settings before use."""
     try:
@@ -80,7 +164,7 @@ def container_binding(info: dict, nonce: str, container: str) -> dict:
                 or any(mount['Type'] in {'bind', 'volume'} for mount in info['Mounts'])):
             raise FixtureError('owned fixture boundaries changed')
         port = int(ports[0]['HostPort'])
-        if not 1024 <= port <= 65535 or port in {18080, 18081, 50837, 47399}:
+        if not 1024 <= port <= 65535 or port in PROTECTED_PORTS:
             raise FixtureError('fixture must use a new unprotected loopback port')
         return {'container': container, 'image_id': info['Image'],
                 'started_at': state['StartedAt'], 'pid': state['Pid'], 'port': port}
@@ -155,6 +239,45 @@ class Fixture:
             raise FixtureError('isolated SQL failed; not proof of a permission denial; '
                                f'private diagnostic {diagnostic}.json')
         return result.stdout.decode().strip()
+
+    def expect_connect_denied(self, database: str, role: str, password: str) -> None:
+        if database not in self.databases:
+            raise FixtureError('connection target was not allocated by this fixture')
+        if role not in {item[key] for item in self.allocations.values()
+                        for key in ('runtime', 'installer')}:
+            raise FixtureError('connection role was not allocated by this fixture')
+        identifier(database)
+        identifier(role)
+        if not isinstance(password, str) or not password:
+            raise FixtureError('connection probe requires a private fixture credential')
+        self.verify()
+        request = {'port': self.binding['port'], 'database': database,
+                   'role': role, 'password': password}
+        diagnostic = 'connect-probe-' + secrets.token_hex(8)
+        try:
+            result = subprocess.run(
+                [sys.executable, '-B', str(Path(__file__).resolve()), '--connect-probe'],
+                input=json.dumps(request).encode(), capture_output=True, env=self.env, timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            self.record(diagnostic, {'status': 'UNKNOWN', 'database': database, 'role': role})
+            raise FixtureError('connection probe outcome is UNKNOWN; resource retained') from None
+        self.record(diagnostic, {'database': database, 'role': role,
+            'exit_code': result.returncode, 'stdout_base64': base64.b64encode(result.stdout).decode(),
+            'stderr_base64': base64.b64encode(result.stderr).decode()})
+        self.verify()
+        try:
+            response = json.loads(result.stdout)
+            error = base64.b64decode(response.get('error_base64', ''), validate=True)
+        except (ValueError, TypeError, AttributeError):
+            raise FixtureError('connection diagnostic is UNKNOWN; private result retained') from None
+        if result.returncode == 0 and response.get('status') == 'blocked':
+            raise FixtureError('BLOCKED: the installed libpq 18 client is required')
+        state = re.search(rb'FATAL:\s+([0-9A-Z]{5}):', error)
+        if (result.returncode == 0 and response.get('status') == 'refused'
+                and state and state[1] == b'42501'):
+            return
+        raise FixtureError('connection was not proven denied with SQLSTATE 42501; '
+                           f'private diagnostic {diagnostic}.json')
 
     def inspect(self):
         if not self.container:
@@ -329,3 +452,17 @@ class Fixture:
         if remaining:
             raise FixtureError('owned fixture removal is unconfirmed')
         self.record('removed', {'container': self.container, 'no_client_backends': True})
+
+
+if __name__ == '__main__':
+    if sys.argv[1:] != ['--connect-probe']:
+        raise SystemExit('This module only exposes its private fixture connection worker.')
+    try:
+        data = sys.stdin.buffer.read(8193)
+        if len(data) > 8192:
+            raise FixtureError('connection input exceeds the private probe bound')
+        response = _connect_probe(json.loads(data))
+    except Exception as error:
+        # The parent retains the result privately. Never echo credentials/input.
+        response = {'status': 'unknown', 'error_type': type(error).__name__}
+    print(json.dumps(response, sort_keys=True))
