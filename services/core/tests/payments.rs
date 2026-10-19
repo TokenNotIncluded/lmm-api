@@ -1412,3 +1412,111 @@ async fn marked_payment_intent_admission_denied_but_original_credit_and_refund_a
         credited
     );
 }
+
+#[sqlx::test]
+async fn a05_external_refund_without_metadata_must_reach_durable_core_proof(pool: PgPool) {
+    use sha2::Digest;
+    let f = fresh(&pool).await;
+    let intent = prepare(&f, "a05_probe_prepare_0001", 100).await;
+    let credit = credit(&f, &intent, "a05_probe_credit_00001").await;
+    assert_eq!(credit.state, 1, "fixture must really credit the original payer");
+    let payment_id = format!("pi_{}", intent.intent_id);
+    let binding: (i64, String, i64) = sqlx::query_as(
+        "SELECT account_id,provider_transaction,credit_journal_id FROM core_payments.intents WHERE id=$1"
+    ).bind(intent.intent_id).fetch_one(&pool).await.unwrap();
+    assert_eq!(binding.0, f.account);
+    assert_eq!(binding.1, payment_id);
+    assert_eq!(binding.2, credit.journal_id);
+    assert!(credit.journal_id > 0);
+    balance(&f, 500_000, 0).await;
+    let before_journals = journals(&pool).await;
+    let baseline_value = event(&intent, "evt_a05_refund_metadata_positive",
+        Some(("re_a05_external_refund", 30, "succeeded", None)));
+    let baseline = proof(baseline_value.clone());
+    let accepted = f.store.0.accept_proof(pb::AcceptProviderProofRequest {
+        intent_id: intent.intent_id, evidence: Some(baseline.clone()),
+    }).await.expect("positive control with local metadata must pass actual Rust verifier and commit");
+    let baseline_sha = Sha256::digest(&baseline.signed_payload).to_vec();
+    let reread = f.store.0.get_proof(pb::GetProviderProofRequest {
+        intent_id: intent.intent_id,
+        provider_event_id: baseline.provider_event_id.clone(),
+        payload_sha256: baseline_sha.clone(),
+    }).await.expect("positive control proof must be durable and independently readable");
+    assert_eq!(accepted, reread);
+    let original_bytes: Vec<u8> = sqlx::query_scalar(
+        "SELECT signed_payload FROM core_payments.accepted_proofs WHERE id=$1"
+    ).bind(&accepted.proof_id).fetch_one(&pool).await.unwrap();
+    assert_eq!(original_bytes, baseline.signed_payload);
+    let mut empty_value = baseline_value;
+    empty_value["id"] = json!("evt_a05_refund_metadata_empty");
+    empty_value["data"]["object"]["metadata"] = json!({});
+    let empty = proof(empty_value);
+    let rejected = f.store.0.accept_proof(pb::AcceptProviderProofRequest {
+        intent_id: intent.intent_id, evidence: Some(empty.clone()),
+    }).await;
+    let denial = rejected.as_ref().err().map(|error| format!("{error:?}"));
+    let empty_rows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM core_payments.accepted_proofs WHERE event_id=$1"
+    ).bind(&empty.provider_event_id).fetch_one(&pool).await.unwrap();
+    let proof_rows: i64 = sqlx::query_scalar("SELECT count(*) FROM core_payments.accepted_proofs")
+        .fetch_one(&pool).await.unwrap();
+    let after_journals = journals(&pool).await;
+    let refund_rows: i64 = sqlx::query_scalar("SELECT count(*) FROM core_payments.provider_refunds")
+        .fetch_one(&pool).await.unwrap();
+    balance(&f, 500_000, 0).await;
+    assert_eq!(after_journals, before_journals, "proof-only calls must not move funds");
+    assert_eq!(refund_rows, 0);
+    if let Some(output) = std::env::var_os("A05_PROBE_OUTPUT").map(std::path::PathBuf::from) {
+        fn save(path: &std::path::Path, bytes: &[u8]) {
+            use std::io::Write;
+            let mut file = std::fs::OpenOptions::new().write(true).create(true).truncate(true).open(path).unwrap();
+            file.write_all(bytes).unwrap();
+            file.sync_all().unwrap();
+        }
+        save(&output.join("positive.payload.json"), &baseline.signed_payload);
+        save(&output.join("positive.signature.txt"), &baseline.signature);
+        save(&output.join("empty.payload.json"), &empty.signed_payload);
+        save(&output.join("empty.signature.txt"), &empty.signature);
+        let report = json!({
+            "format":"a05-core-pg-refund-metadata-probe-v1",
+            "scope":"actual Core PostgreSQL accepted-proof gate only; no Go, HTTP ingress, OS restart, live provider or refund posting claim",
+            "business_expected":"valid signed refund for durably bound original payment can reach accepted proof without caller-specific local metadata",
+            "business_verdict":if rejected.is_ok(){"PASS"}else{"FAIL"},
+            "original_payment":{"intent_id":intent.intent_id,"account_id":binding.0,"provider_transaction":binding.1,"credit_journal_id":binding.2,"amount_minor":100,"wallet_available_units":500000},
+            "positive_control":{"accepted":true,"durable_get_exact":true,"original_signed_bytes_persisted":true,"proof_id":accepted.proof_id,"payload_sha256":format!("{:x}",Sha256::digest(&baseline.signed_payload))},
+            "empty_metadata":{"accepted":rejected.is_ok(),"error":denial,"accepted_proof_rows":empty_rows,"payload_sha256":format!("{:x}",Sha256::digest(&empty.signed_payload))},
+            "isolation":{"separate_event_ids":true,"same_provider_refund_id":true,"same_original_payment":true,"same_amount_and_currency":true,"both_original_payloads_freshly_signed":true},
+            "totals":{"proof_rows":proof_rows,"journals_before":before_journals,"journals_after":after_journals,"applied_refund_rows":refund_rows}
+        });
+        save(&output.join("probe-result.json"), &serde_json::to_vec_pretty(&report).unwrap());
+    }
+    assert!(rejected.is_ok(), "A05 business acceptance failed after durable positive control: valid signed metadata-free refund for original bound PaymentIntent was {denial:?}; private probe-result.json records exact gate outcome");
+}
+
+#[sqlx::test]
+async fn external_refund_requires_durable_original_payment_binding(pool: PgPool) {
+    let f = fresh(&pool).await;
+    let uncredited = prepare(&f, "a05_uncredited_prepare", 100).await;
+    let uncredited_value = event(&uncredited, "evt_a05_uncredited",
+        Some(("re_a05_uncredited", 30, "succeeded", None)));
+    let uncredited_proof = proof(uncredited_value);
+    let err = f.store.0.accept_proof(pb::AcceptProviderProofRequest {
+        intent_id: uncredited.intent_id,
+        evidence: Some(uncredited_proof),
+    }).await.unwrap_err();
+    assert_eq!(err, Error::Conflict, "refund against uncredited intent must be rejected");
+
+    let credited = prepare(&f, "a05_credited_prepare", 100).await;
+    credit(&f, &credited, "a05_credited_credit").await;
+
+    let mut mismatched_value = event(&credited, "evt_a05_mismatched",
+        Some(("re_a05_mismatched", 30, "succeeded", None)));
+    mismatched_value["data"]["object"]["payment_intent"] = json!("pi_different_transaction");
+    let mismatched_proof = proof(mismatched_value);
+    let err = f.store.0.accept_proof(pb::AcceptProviderProofRequest {
+        intent_id: credited.intent_id,
+        evidence: Some(mismatched_proof),
+    }).await.unwrap_err();
+    assert_eq!(err, Error::Conflict, "refund with mismatched transaction must be rejected");
+}
+
