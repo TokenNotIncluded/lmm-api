@@ -5,7 +5,7 @@
 use std::{collections::BTreeMap, fmt};
 
 use hmac::{Hmac, Mac};
-use serde::{Deserialize, Deserializer, Serialize, de};
+use serde::{de, Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use sha2::Sha256;
 
@@ -65,7 +65,15 @@ struct Object {
     livemode: Option<bool>,
     #[serde(default)]
     payment_intent: Option<Value>,
+    #[serde(default, deserialize_with = "deserialize_metadata")]
     metadata: BTreeMap<String, String>,
+}
+
+fn deserialize_metadata<'de, D>(deserializer: D) -> Result<BTreeMap<String, String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<BTreeMap<String, String>>::deserialize(deserializer).map(|opt| opt.unwrap_or_default())
 }
 
 /// Secrets come from trusted core configuration for this merchant and mode.
@@ -130,11 +138,7 @@ pub(super) fn verify(
     {
         return Err(Error::Denied);
     }
-    if object.metadata.get("lmm_merchant") != Some(&channel.merchant) {
-        return Err(Error::Denied);
-    }
-    if object.metadata.get("lmm_core_intent_id") != Some(&intent_id.to_string())
-        || !currency(&object.currency)
+    if !currency(&object.currency)
         || !object.currency.eq_ignore_ascii_case(expected_currency)
         || object.amount <= 0
         || object.amount > expected_amount_minor
@@ -146,6 +150,12 @@ pub(super) fn verify(
         "payment_intent.payment_failed" => {
             if object.object != "payment_intent" || !identifier(&object.id, "pi_") {
                 return Err(Error::Invalid);
+            }
+            if object.metadata.get("lmm_merchant") != Some(&channel.merchant) {
+                return Err(Error::Denied);
+            }
+            if object.metadata.get("lmm_core_intent_id") != Some(&intent_id.to_string()) {
+                return Err(Error::Conflict);
             }
             if !matches!(
                 object.status.as_str(),
@@ -168,6 +178,12 @@ pub(super) fn verify(
             if object.object != "payment_intent" || !identifier(&object.id, "pi_") {
                 return Err(Error::Invalid);
             }
+            if object.metadata.get("lmm_merchant") != Some(&channel.merchant) {
+                return Err(Error::Denied);
+            }
+            if object.metadata.get("lmm_core_intent_id") != Some(&intent_id.to_string()) {
+                return Err(Error::Conflict);
+            }
             if object.status != "succeeded"
                 || object.amount != expected_amount_minor
                 || object.amount_received != Some(expected_amount_minor)
@@ -186,6 +202,16 @@ pub(super) fn verify(
         "refund.created" | "refund.updated" | "refund.failed" => {
             if object.object != "refund" || !identifier(&object.id, "re_") {
                 return Err(Error::Invalid);
+            }
+            if let Some(merchant) = object.metadata.get("lmm_merchant") {
+                if merchant != &channel.merchant {
+                    return Err(Error::Denied);
+                }
+            }
+            if let Some(core_id) = object.metadata.get("lmm_core_intent_id") {
+                if core_id != &intent_id.to_string() {
+                    return Err(Error::Conflict);
+                }
             }
             let transaction = payment_intent(object.payment_intent.as_ref())?;
             let kind = match object.status.as_str() {
@@ -495,18 +521,16 @@ mod tests {
         config
             .webhook_secrets
             .insert(0, "whsec_replacement_core_test".into());
-        assert!(
-            verify(
-                &raw,
-                &signed(&raw, SECRET, NOW),
-                &config,
-                42,
-                "USD",
-                100,
-                NOW
-            )
-            .is_ok()
-        );
+        assert!(verify(
+            &raw,
+            &signed(&raw, SECRET, NOW),
+            &config,
+            42,
+            "USD",
+            100,
+            NOW
+        )
+        .is_ok());
     }
 
     #[test]
@@ -527,18 +551,16 @@ mod tests {
             ));
         }
         for time in [NOW - 300, NOW + 300] {
-            assert!(
-                verify(
-                    &raw,
-                    &signed(&raw, SECRET, time),
-                    &channel(),
-                    42,
-                    "USD",
-                    100,
-                    NOW
-                )
-                .is_ok()
-            );
+            assert!(verify(
+                &raw,
+                &signed(&raw, SECRET, time),
+                &channel(),
+                42,
+                "USD",
+                100,
+                NOW
+            )
+            .is_ok());
         }
     }
 
@@ -726,5 +748,107 @@ mod tests {
         let mut value = event();
         value["data"]["object"]["amount"] = json!(100.0);
         assert!(matches!(check(value), Err(Error::Invalid)));
+    }
+
+    #[test]
+    fn refund_without_metadata_succeeds_with_valid_signature_and_amount() {
+        let mut value = refund("succeeded");
+        value["data"]["object"]["metadata"] = json!({});
+        let verified = check(value).unwrap();
+        assert_eq!(verified.kind, EventKind::RefundSucceeded);
+        assert_eq!(verified.transaction, "pi_core_test");
+        assert_eq!(verified.refund_id.as_deref(), Some("re_core_test"));
+        assert!(verified.hold_receipt_id.is_none());
+        assert_eq!(verified.amount_minor, 40);
+    }
+
+    #[test]
+    fn refund_with_mismatched_metadata_merchant_or_intent_is_rejected() {
+        let mut wrong_merchant = refund("succeeded");
+        wrong_merchant["data"]["object"]["metadata"] = json!({"lmm_merchant": "acct_other"});
+        assert!(matches!(check(wrong_merchant), Err(Error::Denied)));
+
+        let mut wrong_intent = refund("succeeded");
+        wrong_intent["data"]["object"]["metadata"] = json!({"lmm_core_intent_id": "999"});
+        assert!(matches!(check(wrong_intent), Err(Error::Conflict)));
+
+        let mut matching = refund("succeeded");
+        matching["data"]["object"]["metadata"] = json!({
+            "lmm_merchant": "acct_local_test",
+            "lmm_core_intent_id": "42"
+        });
+        assert!(check(matching).is_ok());
+    }
+
+    #[test]
+    fn refund_with_null_or_absent_metadata_succeeds_with_valid_signature_and_amount() {
+        let mut null_meta = refund("succeeded");
+        null_meta["data"]["object"]["metadata"] = Value::Null;
+        let verified = check(null_meta).unwrap();
+        assert_eq!(verified.kind, EventKind::RefundSucceeded);
+        assert_eq!(verified.transaction, "pi_core_test");
+        assert_eq!(verified.refund_id.as_deref(), Some("re_core_test"));
+        assert!(verified.hold_receipt_id.is_none());
+        assert_eq!(verified.amount_minor, 40);
+
+        let mut absent_meta = refund("succeeded");
+        absent_meta["data"]["object"]
+            .as_object_mut()
+            .unwrap()
+            .remove("metadata");
+        let verified = check(absent_meta).unwrap();
+        assert_eq!(verified.kind, EventKind::RefundSucceeded);
+        assert_eq!(verified.transaction, "pi_core_test");
+        assert_eq!(verified.refund_id.as_deref(), Some("re_core_test"));
+        assert!(verified.hold_receipt_id.is_none());
+        assert_eq!(verified.amount_minor, 40);
+
+        let mut custom_meta = refund("succeeded");
+        custom_meta["data"]["object"]["metadata"] = json!({
+            "custom_reason": "test",
+            "ticket_id": "tk_123"
+        });
+        let verified = check(custom_meta).unwrap();
+        assert_eq!(verified.kind, EventKind::RefundSucceeded);
+        assert_eq!(verified.transaction, "pi_core_test");
+        assert_eq!(verified.refund_id.as_deref(), Some("re_core_test"));
+        assert!(verified.hold_receipt_id.is_none());
+        assert_eq!(verified.amount_minor, 40);
+    }
+
+    #[test]
+    fn payment_intent_rejects_null_absent_or_empty_metadata() {
+        let mut null_meta = event();
+        null_meta["data"]["object"]["metadata"] = Value::Null;
+        assert!(matches!(check(null_meta), Err(Error::Denied)));
+
+        let mut absent_meta = event();
+        absent_meta["data"]["object"]
+            .as_object_mut()
+            .unwrap()
+            .remove("metadata");
+        assert!(matches!(check(absent_meta), Err(Error::Denied)));
+
+        let mut empty_meta = event();
+        empty_meta["data"]["object"]["metadata"] = json!({});
+        assert!(matches!(check(empty_meta), Err(Error::Denied)));
+    }
+
+    #[test]
+    fn non_map_metadata_fails_closed_as_invalid() {
+        for bad_val in [
+            json!("string_metadata"),
+            json!(12345),
+            json!(["array"]),
+            json!({"key": 123}),
+        ] {
+            let mut bad_refund = refund("succeeded");
+            bad_refund["data"]["object"]["metadata"] = bad_val.clone();
+            assert!(matches!(check(bad_refund), Err(Error::Invalid)));
+
+            let mut bad_pi = event();
+            bad_pi["data"]["object"]["metadata"] = bad_val;
+            assert!(matches!(check(bad_pi), Err(Error::Invalid)));
+        }
     }
 }

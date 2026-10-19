@@ -281,6 +281,21 @@ impl PaymentsStore {
         }
         Ok(channel)
     }
+    fn channel_by_namespace(
+        &self,
+        provider: &str,
+        merchant: &str,
+        environment: &str,
+    ) -> Result<&Channel> {
+        self.channels
+            .values()
+            .find(|c| {
+                c.provider == provider
+                    && c.merchant == merchant
+                    && c.environment == environment
+            })
+            .ok_or(Error::Unavailable)
+    }
     async fn intent(connection: &mut PgConnection, id: i64) -> Result<IntentRow> {
         if id <= 0 {
             return Err(Error::Invalid);
@@ -452,12 +467,23 @@ impl PaymentsStore {
         {
             return Err(Error::Conflict);
         }
-        if intent
-            .provider_transaction
-            .as_ref()
-            .is_some_and(|id| id != &verified.transaction)
-        {
-            return Err(Error::Conflict);
+        match verified.kind {
+            stripe::EventKind::RefundSucceeded
+            | stripe::EventKind::RefundFailed
+            | stripe::EventKind::RefundPending => {
+                if intent.provider_transaction.as_deref() != Some(&verified.transaction) {
+                    return Err(Error::Conflict);
+                }
+            }
+            stripe::EventKind::Credit | stripe::EventKind::PaymentFailed => {
+                if intent
+                    .provider_transaction
+                    .as_ref()
+                    .is_some_and(|id| id != &verified.transaction)
+                {
+                    return Err(Error::Conflict);
+                }
+            }
         }
         Ok(verified)
     }
@@ -473,7 +499,24 @@ impl PaymentsStore {
             return Err(Error::Invalid);
         }
         let mut tx = self.begin().await?;
-        let intent = Self::intent(&mut tx, request.intent_id).await?;
+        let intent = if request.intent_id > 0 {
+            Self::intent(&mut tx, request.intent_id).await?
+        } else {
+            let payment = evidence.payment.as_ref().ok_or(Error::Invalid)?;
+            let channel = self.channel_by_namespace(
+                &payment.provider,
+                &payment.merchant,
+                &payment.environment,
+            )?;
+            sqlx::query_as(
+                "SELECT * FROM core_payments.intents WHERE channel_id=$1 AND provider_transaction=$2 FOR UPDATE",
+            )
+            .bind(channel.id)
+            .bind(&payment.transaction)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(Error::NotFound)?
+        };
         // Freshness is checked exclusively against Rust's own wall clock here.
         // Unknown commit results are recovered by get_proof, not stale re-signing.
         let verified = self.verify(&intent, evidence)?;
@@ -582,12 +625,22 @@ impl PaymentsStore {
         let (digest, wire, Json(verified)) = row.ok_or(Error::Denied)?;
         let receipt =
             pb::ProviderProofReceipt::decode(wire.as_slice()).map_err(|_| Error::Storage)?;
+        let mismatch = match verified.kind {
+            stripe::EventKind::RefundSucceeded
+            | stripe::EventKind::RefundFailed
+            | stripe::EventKind::RefundPending => {
+                intent.provider_transaction.as_deref() != Some(&verified.transaction)
+            }
+            stripe::EventKind::Credit | stripe::EventKind::PaymentFailed => {
+                intent
+                    .provider_transaction
+                    .as_ref()
+                    .is_some_and(|id| id != &verified.transaction)
+            }
+        };
         if digest != Sha256::digest(&evidence.signed_payload).to_vec()
             || receipt.payment != evidence.payment
-            || intent
-                .provider_transaction
-                .as_ref()
-                .is_some_and(|id| id != &verified.transaction)
+            || mismatch
         {
             return Err(Error::Conflict);
         }
