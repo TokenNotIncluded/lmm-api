@@ -321,7 +321,7 @@ pub(crate) async fn check_connection(
         let complete: bool = sqlx::query_scalar(r#"
           SELECT has_schema_privilege('core_model','USAGE')
             AND has_function_privilege('core_model.checkpoint_output(text,bytea,bigint,bytea,bigint,jsonb,boolean)','EXECUTE')
-            AND has_function_privilege('core_model.completed_streams(integer)','EXECUTE')
+            AND has_function_privilege('core_model.completed_streams_after(integer,text)','EXECUTE')
         "#).fetch_one(&mut *connection).await?;
         if !complete {
             return Err(RuntimeDatabaseError::MissingPrivileges);

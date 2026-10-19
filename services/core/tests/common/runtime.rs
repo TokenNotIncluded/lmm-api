@@ -107,7 +107,7 @@ GRANT USAGE ON SEQUENCE core_abuse.audit_id_seq TO {name};
             return;
         }
         if schema == "core_model" {
-            sqlx::raw_sql(&format!("GRANT USAGE ON SCHEMA core_model TO {0}; GRANT EXECUTE ON FUNCTION core_model.checkpoint_output(text,bytea,bigint,bytea,bigint,jsonb,boolean),core_model.completed_streams(integer) TO {0}",self.name))
+            sqlx::raw_sql(&format!("GRANT USAGE ON SCHEMA core_model TO {0}; GRANT EXECUTE ON FUNCTION core_model.checkpoint_output(text,bytea,bigint,bytea,bigint,jsonb,boolean),core_model.completed_streams_after(integer,text) TO {0}",self.name))
                 .execute(&self.owner).await.unwrap();
             return;
         }

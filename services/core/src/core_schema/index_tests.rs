@@ -5,6 +5,9 @@ use super::*;
 #[path = "../../tests/common/database_snapshot.rs"]
 mod database_snapshot;
 
+const PRE_MODEL_PAGING_MODEL: &str =
+    include_str!("../../tests/core_schema/model_gateway_before_paging.sql");
+
 fn legacy_components() -> Vec<(&'static str, &'static str)> {
     let frozen: serde_json::Value = serde_json::from_str(include_str!(
         "../../tests/core_schema/pre_history_contract.json"
@@ -62,7 +65,12 @@ fn legacy_components() -> Vec<(&'static str, &'static str)> {
         .map(|expected| {
             let name = expected["name"].as_str().unwrap();
             assert!(names.insert(name));
-            let &(name, source) = COMPONENTS.iter().find(|(n, _)| *n == name).unwrap();
+            let &(name, current_source) = COMPONENTS.iter().find(|(n, _)| *n == name).unwrap();
+            let source = if name == "model-gateway" {
+                PRE_MODEL_PAGING_MODEL
+            } else {
+                current_source
+            };
             assert_eq!(
                 expected["sha256"],
                 format!("{:x}", Sha256::digest(source.as_bytes())),
@@ -71,6 +79,39 @@ fn legacy_components() -> Vec<(&'static str, &'static str)> {
             (name, source)
         })
         .collect()
+}
+
+fn pre_model_paging_components() -> Vec<(&'static str, &'static str)> {
+    let frozen: serde_json::Value = serde_json::from_str(include_str!(
+        "../../tests/core_schema/pre_model_paging_contract.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        frozen["source_commit"],
+        "7cc3be8b5c65be911b22494d7a6c724d4cbf3938"
+    );
+    assert_eq!(
+        frozen["fixture_kind"],
+        "pre-model-paging-14-index-predecessor"
+    );
+    let mut components = legacy_components();
+    components.push(
+        *COMPONENTS
+            .iter()
+            .find(|(name, _)| *name == "history")
+            .unwrap(),
+    );
+    let expected = frozen["components"].as_array().unwrap();
+    assert_eq!(components.len(), 14);
+    assert_eq!(expected.len(), components.len());
+    for ((name, source), expected) in components.iter().zip(expected) {
+        assert_eq!(expected["name"], *name);
+        assert_eq!(
+            expected["sha256"],
+            format!("{:x}", Sha256::digest(source.as_bytes()))
+        );
+    }
+    components
 }
 
 async fn prior(pool: &PgPool) -> [u8; 32] {
@@ -198,6 +239,36 @@ async fn pre_history_thirteen_component_contract_is_refused_without_changes(pool
     }
 }
 
+#[sqlx::test(migrations = false)]
+async fn pre_model_paging_fourteen_component_contract_is_refused_without_changes(pool: PgPool) {
+    let approved = prior_components(&pool, &pre_model_paging_components()).await;
+    assert_eq!(
+        approved
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>(),
+        "fac62641832a7dea66dd565031c31087ae067659fe2bfff2a42fa0b76c32c5bd"
+    );
+    let before = snapshot(&pool).await;
+    let before_catalog = catalog(&mut pool.acquire().await.unwrap()).await.unwrap();
+    let before_permissions = permissions(&mut pool.acquire().await.unwrap())
+        .await
+        .unwrap();
+    assert!(check(&pool).await.is_err());
+    assert!(install_usage_receipt_index(&pool, approved).await.is_err());
+    assert_eq!(snapshot(&pool).await, before);
+    assert_eq!(
+        catalog(&mut pool.acquire().await.unwrap()).await.unwrap(),
+        before_catalog
+    );
+    assert_eq!(
+        permissions(&mut pool.acquire().await.unwrap())
+            .await
+            .unwrap(),
+        before_permissions
+    );
+}
+
 async fn unchanged(pool: &PgPool, before: &[String]) {
     assert_eq!(snapshot(pool).await, before);
     let index: bool = sqlx::query_scalar(
@@ -219,7 +290,7 @@ async fn current_schema_index_predecessor_upgrade_changes_only_verified_index_an
         .map(|b| format!("{b:02x}"))
         .collect::<String>();
     assert_eq!(
-        prior_hex, "fac62641832a7dea66dd565031c31087ae067659fe2bfff2a42fa0b76c32c5bd",
+        prior_hex, "dbc8ad04bf41b2ea13282db9b82947b29e33b8c4329a14d9d53497c44c360b54",
         "current-schema index-predecessor fixture must match its reviewed canonical catalog"
     );
     println!("prior catalog SHA256={prior_hex}");
