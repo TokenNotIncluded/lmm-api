@@ -8,7 +8,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pg_fixture as pg
 
@@ -59,6 +59,7 @@ class FixtureContractTests(unittest.TestCase):
 
     def test_public_or_protected_port_refused(self):
         for address, port in [('0.0.0.0', '32001'), ('127.0.0.1','18080'),
+                              ('127.0.0.1','5432'), ('127.0.0.1','50837'),
                               ('127.0.0.1','47399'), ('127.0.0.1','unknown')]:
             info = copy.deepcopy(self.info)
             info['NetworkSettings']['Ports']['5432/tcp'] = [{'HostIp':address,'HostPort':port}]
@@ -93,6 +94,83 @@ class FixtureContractTests(unittest.TestCase):
         self.assertEqual(kwargs['env']['PGPASSWORD'],'synthetic-secret')
         self.assertEqual(args[0][:3],pg.DOCKER)
         self.assertNotIn('shell',kwargs)
+
+    def prepare_connect_probe(self):
+        self.fixture.binding = self.binding()
+        self.fixture.databases.update({'source', 'other'})
+        self.fixture.allocations['A09'] = {'runtime': 'runtime', 'installer': 'installer'}
+
+    def test_connect_probe_uses_private_stdin_and_clean_environment(self):
+        self.prepare_connect_probe()
+        response = {'status': 'refused', 'client_version': 180006,
+                    'error_base64': base64.b64encode(b'FATAL: 42501: denied').decode()}
+        result = subprocess.CompletedProcess([], 0, json.dumps(response).encode(), b'')
+        with patch.object(self.fixture, 'verify') as verify:
+            with patch.object(subprocess, 'run', return_value=result) as run:
+                self.fixture.expect_connect_denied('other', 'runtime', 'synthetic-secret')
+        self.assertEqual(verify.call_count, 2)
+        args, kwargs = run.call_args
+        self.assertNotIn('synthetic-secret', ' '.join(args[0]))
+        self.assertEqual(json.loads(kwargs['input'])['password'], 'synthetic-secret')
+        self.assertFalse(any(key.startswith('PG') for key in kwargs['env']))
+        self.assertEqual(kwargs['timeout'], 5)
+
+    def test_connect_probe_requires_exact_refusal_not_any_failure(self):
+        self.prepare_connect_probe()
+        for status, code, error in [
+            ('refused', 0, b'FATAL: 28P01: password failed; FATAL: 42501: nested'),
+            ('refused', 0, b'FATAL: 3D000: database missing'),
+            ('connected', 0, b'FATAL: 42501: ignored stale error'),
+            ('unknown', 0, b'FATAL: 42501: not proven'),
+            ('refused', 125, b'FATAL: 42501: worker failed'),
+        ]:
+            response = {'status': status, 'client_version': 180006,
+                        'error_base64': base64.b64encode(error).decode()}
+            result = subprocess.CompletedProcess([], code, json.dumps(response).encode(), b'')
+            with self.subTest(status=status, code=code, error=error):
+                with patch.object(self.fixture, 'verify'), patch.object(subprocess, 'run', return_value=result):
+                    with self.assertRaises(pg.FixtureError) as failure:
+                        self.fixture.expect_connect_denied('other', 'runtime', 'synthetic-secret')
+                self.assertNotIn('synthetic-secret', str(failure.exception))
+
+    def test_connect_probe_refuses_unowned_resources_before_io(self):
+        self.prepare_connect_probe()
+        with patch.object(self.fixture, 'verify') as verify, patch.object(subprocess, 'run') as run:
+            for database, role in [('unowned', 'runtime'), ('other', 'unowned')]:
+                with self.subTest(database=database, role=role), self.assertRaises(pg.FixtureError):
+                    self.fixture.expect_connect_denied(database, role, 'synthetic-secret')
+        verify.assert_not_called()
+        run.assert_not_called()
+
+    def test_connect_probe_timeout_retains_unknown_without_retry(self):
+        self.prepare_connect_probe()
+        with patch.object(self.fixture, 'verify'), patch.object(subprocess, 'run',
+                side_effect=subprocess.TimeoutExpired('private probe', 5)) as run:
+            with self.assertRaisesRegex(pg.FixtureError, 'UNKNOWN'):
+                self.fixture.expect_connect_denied('other', 'runtime', 'synthetic-secret')
+        self.assertEqual(run.call_count, 1)
+        result = json.loads(next(self.fixture.root.glob('connect-probe-*.json')).read_text())
+        self.assertEqual(result['status'], 'UNKNOWN')
+
+    def test_connect_probe_refuses_protected_ports_before_loading_client(self):
+        for port in pg.PROTECTED_PORTS:
+            with self.subTest(port=port), self.assertRaises(pg.FixtureError):
+                pg._connect_probe({'port': port, 'database': 'other',
+                                   'role': 'runtime', 'password': 'synthetic-secret'})
+
+    def test_connect_probe_rejects_terminal_results_after_deadline(self):
+        for terminal in (0, 3):
+            lib = Mock()
+            lib.PQlibVersion.return_value = 180006
+            lib.PQconnectStartParams.return_value = 1
+            lib.PQconnectPoll.return_value = terminal
+            lib.PQerrorMessage.return_value = b'FATAL: 42501: denied'
+            with self.subTest(terminal=terminal), patch('ctypes.CDLL', return_value=lib):
+                with patch.object(pg.time, 'monotonic', side_effect=[0.0, 0.5, 3.01]):
+                    result = pg._connect_probe({'port': 32001, 'database': 'other',
+                                               'role': 'runtime', 'password': 'synthetic-secret'})
+            self.assertEqual(result['status'], 'unknown')
+            lib.PQfinish.assert_called_once_with(1)
 
     def test_external_database_or_injected_identifier_refused(self):
         with self.assertRaises(pg.FixtureError):

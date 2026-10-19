@@ -32,7 +32,9 @@ not qualify a PostgreSQL maintenance fence or database takeover.
 ## Explicit PostgreSQL restore probe
 
 The [runner](run_postgres_recovery.py) needs the local Docker socket and the
-already-cached, pinned image in [pg_fixture.py](pg_fixture.py). Supply a new,
+already-cached, pinned image in [pg_fixture.py](pg_fixture.py). Its connection
+denial check also requires an installed host libpq 18 at `/usr/lib/libpq.so.5`;
+the helper does not install it. Supply a new,
 absolute, private parent directory under `/home/lightjunction/Backups` for
 fixture recovery credentials and receipts. No external DSN or existing container is
 accepted. The runner never pulls an image or changes global shell settings.
@@ -51,22 +53,29 @@ loopback port, never the protected original service or migration ports.
 The probe installs a small synthetic schema, fences its test login writers,
 captures a custom-format dump, encrypts it, reloads the separate key and authenticates
 the whole dump. It restores into a different empty database, then compares rows,
-sequence state, contract values, columns, owners, ACLs, functions, indexes and
-triggers. Runtime denials must specifically return PostgreSQL SQLSTATE 42501;
+sequence state and logical parameters, contract values, columns, owners, ACLs,
+functions, indexes and triggers. Runtime denials must specifically return
+PostgreSQL SQLSTATE 42501;
 a failed connection or a syntax error is not accepted as a security test pass.
+ACL comparisons normalize default privileges and ordering while retaining
+grantors, grantees, PUBLIC, individual privileges and grant options. The isolated
+connection probe uses libpq's verbose startup error, a private stdin credential
+and a bounded handshake; authentication errors are not permission-denial proof.
 
 Restore input is checked again against the authenticated digest. A persisted,
 exclusive restore intent prevents automatic replay after a lost response. A
 successful `pg_restore` result is not enough: the snapshot and runtime checks
-must also pass. Missing Docker is reported as `BLOCKED` with exit code 2.
+must also pass. Missing Docker or the required host libpq is reported as
+`BLOCKED` with exit code 2.
 
 Only an exact owned container generation can be removed. Cleanup checks the
 cluster system ID, boot, data directory and port; it closes new database
 connections and rechecks for existing clients before removal. Unknown identity,
 a changed container, a live client or a driver error retains the resource.
-Backups, keys and private receipts are retained after the real probe. Failed
-initial provisioning is retained for explicit inspection; there is no prefix
-cleanup, TTL takeover or adoption of a previous run.
+Backups, keys and private receipts stay in the supplied task directory. Only a
+fully successful probe attempts cleanup. Failed provisioning or later checks
+retain the container and partial recovery material for explicit inspection;
+there is no prefix cleanup, TTL takeover or adoption of a previous run.
 
 ## Integration still required
 
