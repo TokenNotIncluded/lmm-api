@@ -31,6 +31,8 @@ def main():
     name = "lmm-pgroll-test-" + owner
     container = None
     url = ""
+    completed = False
+    removed = False
 
     def run(args, *, data=None, command_env=None, timeout=60, allow_failure=False):
         try:
@@ -67,7 +69,8 @@ def main():
         raise SystemExit(f"Expected pgroll {VERSION}; run mise install aqua:xataio/pgroll@{VERSION}.")
     docker("image", "inspect", IMAGE)
     # A private env file avoids putting the password in Docker command arguments.
-    with tempfile.TemporaryDirectory(prefix="lmm-pgroll-test-") as directory:
+    directory = tempfile.mkdtemp(prefix="lmm-pgroll-test-")
+    try:
         config = Path(directory) / "postgres.env"
         with open(config, "x", opener=lambda path, flags: os.open(path, flags, 0o600)) as file:
             file.write(f"POSTGRES_USER=pgroll_demo\nPOSTGRES_DB=pgroll_demo\nPOSTGRES_PASSWORD={password}\n")
@@ -102,14 +105,14 @@ def main():
             pgroll("start", create)
             expect(f"SELECT relkind FROM pg_class WHERE oid='{V1}.items'::regclass;", "v")
             pgroll("complete")
-            sql(f"SET search_path TO {V1}; INSERT INTO items VALUES (1, 'original');")
+            sql(f"SET search_path TO {V1}; INSERT INTO items(id,label) VALUES (1, 'original');")
             pgroll("validate", rename)
             pgroll("start", rename)
             expect(f"SET search_path TO {V1}; SELECT label FROM items WHERE id=1;", "SET\noriginal")
             expect(f"SET search_path TO {V2}; SELECT display_name FROM items WHERE id=1;", "SET\noriginal")
             sql(f"SET search_path TO {V1}; UPDATE items SET label='old_client' WHERE id=1;")
             expect(f"SELECT display_name FROM {V2}.items WHERE id=1;", "old_client")
-            sql(f"SET search_path TO {V2}; INSERT INTO items VALUES (2, 'new_client');")
+            sql(f"SET search_path TO {V2}; INSERT INTO items(id,display_name) VALUES (2, 'new_client');")
             expect(f"SELECT label FROM {V1}.items WHERE id=2;", "new_client")
             print("PASS: init, validation, start, coexisting views and sequential client writes", flush=True)
             pgroll("rollback")
@@ -124,25 +127,35 @@ def main():
             expect("SELECT column_name FROM information_schema.columns "
                    "WHERE table_schema='public' AND table_name='items' ORDER BY ordinal_position;", "id\ndisplay_name")
             print("PASS: complete retires the old view, renames the physical column and preserves data", flush=True)
+            completed = True
         finally:
-            # Recover by the preselected name if create succeeded but its response
-            # was lost. A daemon error is never treated as proof of absence.
-            found = docker("container", "ls", "--all", "--quiet", "--no-trunc",
-                           "--filter", "name=^/" + name + "$")[0].splitlines()
-            if len(found) > 1 or (container and found and found != [container]):
-                raise RuntimeError("Unexpected test container identity; refusing cleanup")
-            if found:
-                target = found[0]
-                info = json.loads(docker("inspect", target)[0])[0]
-                labels = info["Config"].get("Labels") or {}
-                if labels.get(OWNER_LABEL) != owner:
-                    raise RuntimeError("Refusing to remove a container without this test's ownership label")
-                docker("rm", "--force", target)
-                remaining = docker("container", "ls", "--all", "--quiet", "--no-trunc",
-                                   "--filter", "id=" + target)[0]
-                if remaining:
-                    raise RuntimeError("Disposable test container was not removed")
-            print("PASS: owned container absent; no persistent database volume", flush=True)
+            if completed:
+                found = docker("container", "ls", "--all", "--quiet", "--no-trunc",
+                               "--filter", "name=^/" + name + "$")[0].splitlines()
+                if len(found) > 1 or (container and found and found != [container]):
+                    raise RuntimeError("Unexpected test container identity; refusing cleanup")
+                if found:
+                    target = found[0]
+                    info = json.loads(docker("inspect", target)[0])[0]
+                    labels = info["Config"].get("Labels") or {}
+                    if labels.get(OWNER_LABEL) != owner:
+                        raise RuntimeError("Refusing to remove a container without this test's ownership label")
+                    docker("rm", "--force", target)
+                    remaining = docker("container", "ls", "--all", "--quiet", "--no-trunc",
+                                       "--filter", "id=" + target)[0]
+                    if remaining:
+                        raise RuntimeError("Disposable test container was not removed")
+                removed = True
+                print("PASS: owned container absent; no persistent database volume", flush=True)
+            else:
+                # Keep both the database and its private connection material.
+                # Do not let a failed assertion trigger another destructive IO.
+                print(json.dumps({"status": "FAIL", "fixture_retained": True,
+                                  "container": container, "name": name,
+                                  "private_root": directory}), flush=True)
+    finally:
+        if removed:
+            shutil.rmtree(directory)
 
 
 if __name__ == "__main__":
