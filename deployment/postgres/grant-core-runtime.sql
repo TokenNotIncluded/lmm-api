@@ -67,6 +67,9 @@ GRANT CONNECT ON DATABASE :"core_database" TO :"runtime_role";
 GRANT USAGE ON SCHEMA core_meta, core_identity, core_billing TO :"runtime_role";
 GRANT SELECT ON core_meta.schema_contract, core_meta.component_contract,
     core_meta.runtime_contract TO :"runtime_role";
+-- Historical source receipts and logs are imported offline. Runtime only reads.
+GRANT USAGE ON SCHEMA core_history TO :"runtime_role";
+GRANT SELECT ON core_history.sources, core_history.log_records TO :"runtime_role";
 GRANT SELECT ON core_billing.ledger_accounts, core_billing.balance_state,
     core_billing.ledger_operations, core_billing.ledger_journals,
     core_billing.ledger_entries, core_billing.opening_import_runs,

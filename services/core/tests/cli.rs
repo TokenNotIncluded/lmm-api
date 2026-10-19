@@ -955,9 +955,11 @@ WITH catalog_path AS MATERIALIZED (
             .collect()
     }
     lmm_core::core_schema::init(&pool).await.unwrap();
-    // Fresh current Pi/session thirteen-component schema with only this index removed.
+    // Fresh fourteen-component history schema with only this index removed.
     // core_schema::index_tests independently constructs and pins this exact catalog.
-    const PRIOR: &str = "b338104a3394e575c11434d9434c077793a4090cb31c830d0b490e2ea7ec40db";
+    const PRIOR: &str = "fac62641832a7dea66dd565031c31087ae067659fe2bfff2a42fa0b76c32c5bd";
+    const RETIRED_PRE_HISTORY_THIRTEEN_COMPONENT_PRIOR: &str =
+        "b338104a3394e575c11434d9434c077793a4090cb31c830d0b490e2ea7ec40db";
     const RETIRED_PRIOR_660: &str =
         "660ddf6f75c0350c93ae2886951312997c82c4bc6ebcf5d79a561de629781bad";
     const RETIRED_PRE_PI_THIRTEEN_COMPONENT_PRIOR: &str =
@@ -967,8 +969,13 @@ WITH catalog_path AS MATERIALIZED (
     const RETIRED_PRIOR: &str = "e8fa053daca7741952caa4c60e27071652f600b4fa48f4b7631ea54ee801df7b";
     const RETIRED_ELEVEN_COMPONENT_PRIOR: &str =
         "5510e0bee0e5659ff940b798c9d6d3c69aea220734d9f73577c847b6841254b7";
-    sqlx::raw_sql("DROP INDEX core_charging.ledger_commands_request_operation; UPDATE core_meta.component_contract SET fingerprint=decode('7f84659ad2bd60268256a9f76959299a33911aaaeaf7194156a6f195ab54a734','hex') WHERE name='charging-ledger'; UPDATE core_meta.runtime_contract SET catalog_fingerprint=decode('b338104a3394e575c11434d9434c077793a4090cb31c830d0b490e2ea7ec40db','hex')")
+    sqlx::raw_sql("DROP INDEX core_charging.ledger_commands_request_operation; UPDATE core_meta.component_contract SET fingerprint=decode('7f84659ad2bd60268256a9f76959299a33911aaaeaf7194156a6f195ab54a734','hex') WHERE name='charging-ledger'")
         .execute(&pool).await.unwrap();
+    sqlx::query("UPDATE core_meta.runtime_contract SET catalog_fingerprint=decode($1,'hex')")
+        .bind(PRIOR)
+        .execute(&pool)
+        .await
+        .unwrap();
     // Nonempty synthetic ledger data makes refusal and upgrade conservation real.
     let store = IdentityStore::from_pool(pool.clone());
     let issued = store.bootstrap_user(97, 0).await.unwrap();
@@ -1042,10 +1049,16 @@ WITH catalog_path AS MATERIALIZED (
     );
     let owner_url = database_url(&pool);
     std::fs::write(&database, &owner_url).unwrap();
-    // All four retired catalogs must fail for saved=current/approval=retired,
+    // Retired catalogs must fail for saved=current/approval=retired,
     // saved=retired/approval=retired, and saved=retired/approval=current.
     // No mismatch may change financial rows, receipts, ACLs or definitions.
     for (saved, approval) in [
+        (PRIOR, RETIRED_PRE_HISTORY_THIRTEEN_COMPONENT_PRIOR),
+        (
+            RETIRED_PRE_HISTORY_THIRTEEN_COMPONENT_PRIOR,
+            RETIRED_PRE_HISTORY_THIRTEEN_COMPONENT_PRIOR,
+        ),
+        (RETIRED_PRE_HISTORY_THIRTEEN_COMPONENT_PRIOR, PRIOR),
         (PRIOR, RETIRED_PRIOR_660),
         (RETIRED_PRIOR_660, RETIRED_PRIOR_660),
         (RETIRED_PRIOR_660, PRIOR),

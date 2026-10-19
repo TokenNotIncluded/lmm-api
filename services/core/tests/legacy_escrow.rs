@@ -186,7 +186,7 @@ async fn initialize_owned_schema() {
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(count, 13);
+    assert_eq!(count, lmm_core::core_schema::component_count() as i64);
     receipt(
         "schema-ready.json",
         &serde_json::json!({"status":"PASS", "components":count,

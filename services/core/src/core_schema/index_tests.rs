@@ -2,10 +2,85 @@
 //! index removed. These do not establish historical identity-schema upgrades.
 use super::*;
 
+#[path = "../../tests/common/database_snapshot.rs"]
+mod database_snapshot;
+
+fn legacy_components() -> Vec<(&'static str, &'static str)> {
+    let frozen: serde_json::Value = serde_json::from_str(include_str!(
+        "../../tests/core_schema/pre_history_contract.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        frozen["source_commit"],
+        "a436ad4a73cb640babce61fe5e9fc85aead610c1"
+    );
+    assert_eq!(frozen["fixture_kind"], "pre-history-13-index-predecessor");
+    assert_eq!(frozen["oauth_receipt_version"], 1);
+    assert_eq!(
+        frozen["catalog_fingerprint_encoding"],
+        "sha256-u64be-byte-length-prefixed-utf8-v1"
+    );
+    let oauth_query = include_str!("../identity/grants.rs")
+        .split_once("const CATALOG: &str = r#\"")
+        .unwrap()
+        .1
+        .split_once("\"#;")
+        .unwrap()
+        .0;
+    assert_eq!(
+        frozen["oauth_catalog_query_sha256"],
+        format!("{:x}", Sha256::digest(oauth_query.as_bytes()))
+    );
+    for (field, bytes) in [
+        ("installer_contract_sql_sha256", CONTRACT.as_bytes()),
+        ("catalog_query_sha256", CATALOG.as_bytes()),
+        (
+            "identity_receipt_source_sha256",
+            include_bytes!("../identity/schema.rs").as_slice(),
+        ),
+        (
+            "oauth_receipt_source_sha256",
+            include_bytes!("../identity/grants.rs").as_slice(),
+        ),
+    ] {
+        assert_eq!(
+            frozen[field],
+            format!("{:x}", Sha256::digest(bytes)),
+            "{field}"
+        );
+    }
+    assert_eq!(
+        IdentityStore::compiled_schema_contract().0,
+        frozen["identity_version"].as_i64().unwrap() as i32
+    );
+    let components = frozen["components"].as_array().unwrap();
+    assert_eq!(components.len(), 13);
+    let mut names = std::collections::BTreeSet::new();
+    // Validate every original compiled byte before executing any of them.
+    components
+        .iter()
+        .map(|expected| {
+            let name = expected["name"].as_str().unwrap();
+            assert!(names.insert(name));
+            let &(name, source) = COMPONENTS.iter().find(|(n, _)| *n == name).unwrap();
+            assert_eq!(
+                expected["sha256"],
+                format!("{:x}", Sha256::digest(source.as_bytes())),
+                "{name}"
+            );
+            (name, source)
+        })
+        .collect()
+}
+
 async fn prior(pool: &PgPool) -> [u8; 32] {
-    assert_eq!(COMPONENTS.len(), 13);
+    assert_eq!(COMPONENTS.len(), 14);
+    prior_components(pool, COMPONENTS).await
+}
+
+async fn prior_components(pool: &PgPool, components: &[(&str, &str)]) -> [u8; 32] {
     let mut tx = pool.begin().await.unwrap();
-    for (name, source) in COMPONENTS {
+    for (name, source) in components {
         let source = if *name == "charging-ledger" {
             let index = "CREATE INDEX ledger_commands_request_operation\n    ON core_charging.ledger_commands USING btree (request_id, operation_id);\n";
             assert_eq!(source.matches(index).count(), 1);
@@ -28,7 +103,7 @@ async fn prior(pool: &PgPool) -> [u8; 32] {
     crate::identity::grants::record_schema_contract(&mut tx)
         .await
         .unwrap();
-    for (name, source) in COMPONENTS {
+    for (name, source) in components {
         let hash = if *name == "charging-ledger" {
             PRIOR_CHARGING_LEDGER.to_vec()
         } else {
@@ -52,21 +127,75 @@ async fn prior(pool: &PgPool) -> [u8; 32] {
 }
 
 async fn snapshot(pool: &PgPool) -> Vec<String> {
-    sqlx::query_scalar(r#"
-      SELECT value FROM (
-        SELECT json_build_array('component',name,encode(fingerprint,'hex'))::text AS value FROM core_meta.component_contract
-        UNION ALL SELECT json_build_array('runtime',singleton,encode(catalog_fingerprint,'hex'))::text FROM core_meta.runtime_contract
-        UNION ALL SELECT json_build_array('identity',singleton,version,encode(fingerprint,'hex'))::text FROM core_meta.schema_contract
-        UNION ALL SELECT json_build_array('oauth',singleton,version,encode(ddl_fingerprint,'hex'),encode(catalog_fingerprint,'hex'))::text FROM core_oauth.contract
-        UNION ALL SELECT json_build_array('journal',to_jsonb(j))::text FROM core_billing.ledger_journals j
-        UNION ALL SELECT json_build_array('entry',to_jsonb(e))::text FROM core_billing.ledger_entries e
-        UNION ALL SELECT json_build_array('wallet',to_jsonb(w))::text FROM core_billing.ledger_accounts w
-        UNION ALL SELECT json_build_array('balance',to_jsonb(b))::text FROM core_billing.balance_state b
-        UNION ALL SELECT json_build_array('operation',to_jsonb(o))::text FROM core_billing.ledger_operations o
-        UNION ALL SELECT json_build_array('request',to_jsonb(r))::text FROM core_charging.requests r
-        UNION ALL SELECT json_build_array('command',to_jsonb(c))::text FROM core_charging.ledger_commands c
-      ) rows ORDER BY value COLLATE "C"
-    "#).fetch_all(pool).await.unwrap()
+    database_snapshot::snapshot(pool)
+        .await
+        .into_iter()
+        .map(|(table, rows)| {
+            let kind = match table.as_str() {
+                "r:core_meta.component_contract" => "component",
+                "r:core_meta.runtime_contract" => "runtime",
+                _ => "data",
+            };
+            serde_json::to_string(&(kind, table, rows)).unwrap()
+        })
+        .collect()
+}
+
+#[sqlx::test(migrations = false)]
+async fn pre_history_thirteen_component_contract_is_refused_without_changes(pool: PgPool) {
+    let approved = prior_components(&pool, &legacy_components()).await;
+    assert_eq!(
+        approved
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>(),
+        "b338104a3394e575c11434d9434c077793a4090cb31c830d0b490e2ea7ec40db"
+    );
+    for installed_index in [false, true] {
+        if installed_index {
+            sqlx::query(USAGE_INDEX_DDL).execute(&pool).await.unwrap();
+            let source = COMPONENTS
+                .iter()
+                .find(|(n, _)| *n == "charging-ledger")
+                .unwrap()
+                .1;
+            sqlx::query("UPDATE core_meta.component_contract SET fingerprint=$1 WHERE name='charging-ledger'")
+                .bind(Sha256::digest(source.as_bytes()).to_vec()).execute(&pool).await.unwrap();
+            let actual = catalog(&mut pool.acquire().await.unwrap()).await.unwrap();
+            sqlx::query("UPDATE core_meta.runtime_contract SET catalog_fingerprint=$1")
+                .bind(actual)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let before = snapshot(&pool).await;
+        let before_catalog = catalog(&mut pool.acquire().await.unwrap()).await.unwrap();
+        let before_permissions = permissions(&mut pool.acquire().await.unwrap())
+            .await
+            .unwrap();
+        let saved: Vec<u8> =
+            sqlx::query_scalar("SELECT catalog_fingerprint FROM core_meta.runtime_contract")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(check(&pool).await.is_err());
+        assert!(
+            install_usage_receipt_index(&pool, saved.try_into().unwrap())
+                .await
+                .is_err()
+        );
+        assert_eq!(snapshot(&pool).await, before);
+        assert_eq!(
+            catalog(&mut pool.acquire().await.unwrap()).await.unwrap(),
+            before_catalog
+        );
+        assert_eq!(
+            permissions(&mut pool.acquire().await.unwrap())
+                .await
+                .unwrap(),
+            before_permissions
+        );
+    }
 }
 
 async fn unchanged(pool: &PgPool, before: &[String]) {
@@ -90,7 +219,7 @@ async fn current_schema_index_predecessor_upgrade_changes_only_verified_index_an
         .map(|b| format!("{b:02x}"))
         .collect::<String>();
     assert_eq!(
-        prior_hex, "b338104a3394e575c11434d9434c077793a4090cb31c830d0b490e2ea7ec40db",
+        prior_hex, "fac62641832a7dea66dd565031c31087ae067659fe2bfff2a42fa0b76c32c5bd",
         "current-schema index-predecessor fixture must match its reviewed canonical catalog"
     );
     println!("prior catalog SHA256={prior_hex}");
@@ -117,6 +246,10 @@ async fn current_schema_index_predecessor_upgrade_changes_only_verified_index_an
         },
     };
     ledger.execute(&request).await.unwrap();
+    sqlx::query("INSERT INTO core_history.sources(contract_version,source_archive_sha256,mapping_sha256,source_namespace,observed_at,complete) VALUES ('core.history-source.v1',repeat('a',64),repeat('b',64),'index-maintenance-synthetic',1700000000,true)")
+        .execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO core_history.log_records(source_id,source_log_id,canonical_event_key,source_row_sha256,user_id,owner_account_id,created_at,log_type,quota) VALUES (1,1,'index-maintenance-history',repeat('c',64),7,$1,1700000000,2,1)")
+        .bind(owner).execute(&pool).await.unwrap();
     let before = snapshot(&pool).await;
     let grants = permissions(&mut pool.acquire().await.unwrap())
         .await
@@ -129,6 +262,7 @@ async fn current_schema_index_predecessor_upgrade_changes_only_verified_index_an
     // The retired pre-Pi thirteen-component, twelve-component and earlier catalogs
     // are not the current catalog, even when approval matches the saved receipt.
     for retired_hex in [
+        "b338104a3394e575c11434d9434c077793a4090cb31c830d0b490e2ea7ec40db",
         "660ddf6f75c0350c93ae2886951312997c82c4bc6ebcf5d79a561de629781bad",
         "431a4af6b4790abdb32a3583cb097b733c41b6b2cdc04537e15808260de44d57",
         "9ce6c5120645792608d4466ef9fe4b6f91add7ec082670d276bffbd94f48c14a",

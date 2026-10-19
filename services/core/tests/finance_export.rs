@@ -8,10 +8,6 @@ use sqlx::PgPool;
 #[sqlx::test(migrations = false)]
 async fn export_uses_admin_gate_allowlisted_fields_and_unknown_instead_of_zero(pool: PgPool) {
     core_schema::init(&pool).await.unwrap();
-    sqlx::raw_sql(include_str!("history_read/source.sql"))
-        .execute(&pool)
-        .await
-        .unwrap();
     let identity = IdentityStore::from_pool(pool.clone());
     let user = identity.bootstrap_user(7, 1).await.unwrap();
     let admin = identity.bootstrap_user(8, 5).await.unwrap();
