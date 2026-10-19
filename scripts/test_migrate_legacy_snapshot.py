@@ -508,10 +508,10 @@ class IdentityContractTests(unittest.TestCase):
             with self.assertRaisesRegex(MODULE.MappingError, "^oauth_catalog_contract_changed$"):
                 MODULE.oauth_seed_guard_sql(contract)
 
-    def test_assembled_contract_includes_commerce_and_abuse(self):
+    def test_assembled_contract_includes_commerce_abuse_and_history(self):
         contract = MODULE.current_contract()
         self.assertEqual(set(contract["component_fingerprints"]), MODULE.CORE_COMPONENTS)
-        for name in ("commerce", "abuse"):
+        for name in ("commerce", "abuse", "history"):
             self.assertEqual(contract["component_fingerprints"][name],
                 hashlib.sha256((MODULE.ROOT / "services/core/schema" / (name + ".sql")).read_bytes()).hexdigest())
 
@@ -522,14 +522,17 @@ class IdentityContractTests(unittest.TestCase):
             (root / "services/core/src").mkdir(parents=True)
             (root / "services/core/schema").symlink_to(MODULE.ROOT / "services/core/schema", target_is_directory=True)
             # Use real schema bytes, but preserve the helper's resolved-path guard.
-            for name in ("identity", "commerce", "abuse"):
+            for name in ("identity", "commerce", "abuse", "history"):
                 self.assertIn('(\"' + name + '\", include_str!', source)
-            for replacement in ("", '("unknown", include_str!("../schema/abuse.sql")),'):
-                changed = source.replace('(\"abuse\", include_str!(\"../schema/abuse.sql\")),', replacement)
-                (root / "services/core/src/core_schema.rs").write_text(changed)
-                with patch.object(MODULE, "ROOT", root):
-                    with self.assertRaisesRegex(MODULE.MappingError, "^component_contract_incomplete$"):
-                        MODULE.current_contract()
+            for component in ("abuse", "history"):
+                original = f'("{component}", include_str!("../schema/{component}.sql")),'
+                self.assertEqual(source.count(original), 1)
+                for replacement in ("", f'("unknown", include_str!("../schema/{component}.sql")),'):
+                    changed = source.replace(original, replacement)
+                    (root / "services/core/src/core_schema.rs").write_text(changed)
+                    with patch.object(MODULE, "ROOT", root):
+                        with self.assertRaisesRegex(MODULE.MappingError, "^component_contract_incomplete$"):
+                            MODULE.current_contract()
 
     def test_current_source_raw_bytes_and_rust_version_match_pinned_review(self):
         contract = MODULE.identity_contract()

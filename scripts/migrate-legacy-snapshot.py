@@ -61,7 +61,7 @@ CORE_SEED_CONTRACT = "ledger-zero-events-empty-routing-unset-abuse-default-oauth
 CORE_COMPONENTS = frozenset({
     "identity", "oauth-grants", "ledger", "payments", "charging", "routing",
     "events", "charging-ledger", "migration", "console", "model-gateway",
-    "commerce", "abuse",
+    "commerce", "abuse", "history",
 })
 DEVELOPER_POLICY = "legacy-explicit-override-before-manual-v1-paid-unproven"
 
@@ -873,7 +873,7 @@ COMMIT;
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--source-receipt", type=Path, required=True)
-    parser.add_argument("--target-receipt", type=Path, help="Owner-provisioned private receipt: status=initialized-empty-identity-target; migration_id; source_archive_sha256; connection={socket_directory,port,database,role,pgpass_file}; instance_identity={database_oid,database_owner,postmaster_started_at,server_version_num,server_instance_nonce,listen_addresses}; contract={identity_version:4,identity_fingerprint_sha256:reviewed-exact-raw-SQL-SHA256,component_fingerprints:exact-13-components,catalog_query_sha256:current-Rust-query-SHA,catalog_fingerprint_sha256:owner-verified-actual-catalog,allow_initialized_core_seed:true,initialized_core_seed_contract:ledger-zero-events-empty-routing-unset-abuse-default-oauth-contract-v3}; application_or_worker_started:false; registry_provisioned:true")
+    parser.add_argument("--target-receipt", type=Path, help="Owner-provisioned private receipt: status=initialized-empty-identity-target; migration_id; source_archive_sha256; connection={socket_directory,port,database,role,pgpass_file}; instance_identity={database_oid,database_owner,postmaster_started_at,server_version_num,server_instance_nonce,listen_addresses}; contract={identity_version:4,identity_fingerprint_sha256:reviewed-exact-raw-SQL-SHA256,component_fingerprints:exact-14-components,catalog_query_sha256:current-Rust-query-SHA,catalog_fingerprint_sha256:owner-verified-actual-catalog,allow_initialized_core_seed:true,initialized_core_seed_contract:ledger-zero-events-empty-routing-unset-abuse-default-oauth-contract-v3}; application_or_worker_started:false; registry_provisioned:true")
     parser.add_argument("--output", type=Path, required=True, help="New private directory under ~/Backups; must not already exist")
     parser.add_argument("--migration-id", required=True)
     parser.add_argument("--apply", action="store_true", help="Explicitly execute the private SQL plan against the matching empty initialized target")

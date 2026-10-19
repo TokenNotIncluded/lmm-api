@@ -23,27 +23,9 @@ impl super::ModelGateway {
         limit: i32,
         after_request_id: Option<&str>,
     ) -> Result<(usize, Option<String>), RelayError> {
-        validate_recovery_page(limit, after_request_id)?;
-        let rows: Vec<CompletedStream> = sqlx::query_as(
-            "SELECT request_id,revision,provider_usage,sequence \
-             FROM core_model.completed_streams_after($1,$2)",
-        )
-        .bind(limit)
-        .bind(after_request_id)
-        .fetch_all(&self.bridge.pool)
-        .await
-        .map_err(|error| {
-            if error.as_database_error().and_then(|e| e.code()).as_deref() == Some("42883") {
-                RelayError::Unsupported("paged model recovery requires the database contract")
-            } else {
-                RelayError::BillingUnavailable
-            }
-        })?;
-        // Advance by scanned rows, not successful settlements. A full page of
-        // malformed or concurrently resolved receipts must still yield a cursor.
-        let next = next_recovery_page(&rows, limit as usize);
-        let recovered = self.bridge.reconcile_stream_rows(rows).await?;
-        Ok((recovered, next))
+        self.bridge
+            .reconcile_completed_streams_page_internal(limit, after_request_id)
+            .await
     }
 }
 
@@ -74,20 +56,46 @@ impl Bridge {
         limit: i32,
     ) -> Result<usize, RelayError> {
         validate_recovery_page(limit, None)?;
+        let mut cursor_guard = self.recovery_cursor.lock().await;
+        let after = cursor_guard.as_deref();
+        let (recovered, next) = self
+            .reconcile_completed_streams_page_internal(limit, after)
+            .await?;
+        *cursor_guard = next;
+        Ok(recovered)
+    }
+
+    pub(super) async fn reconcile_completed_streams_page_internal(
+        &self,
+        limit: i32,
+        after_request_id: Option<&str>,
+    ) -> Result<(usize, Option<String>), RelayError> {
+        validate_recovery_page(limit, after_request_id)?;
         let rows: Vec<CompletedStream> = sqlx::query_as(
-            "SELECT request_id,revision,provider_usage,sequence FROM core_model.completed_streams($1)"
-        ).bind(limit).fetch_all(&self.pool).await.map_err(|_| RelayError::BillingUnavailable)?;
-        self.reconcile_stream_rows(rows).await
+            "SELECT request_id,revision,provider_usage,sequence \
+             FROM core_model.completed_streams_after($1,$2)",
+        )
+        .bind(limit)
+        .bind(after_request_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|error| {
+            if error.as_database_error().and_then(|e| e.code()).as_deref() == Some("42883") {
+                RelayError::Unsupported("paged model recovery requires the database contract")
+            } else {
+                RelayError::BillingUnavailable
+            }
+        })?;
+        // Advance by scanned rows, not successful settlements. A full page of
+        // malformed or concurrently resolved receipts must still yield a cursor.
+        let next = next_recovery_page(&rows, limit as usize);
+        let recovered = self.reconcile_stream_rows(rows).await?;
+        Ok((recovered, next))
     }
 
     async fn reconcile_stream_rows(&self, rows: Vec<CompletedStream>) -> Result<usize, RelayError> {
         let mut recovered = 0;
         for (id, revision, value, sequence) in rows {
-            // A malformed historical receipt must not block the other rows in
-            // this bounded batch. Never turn failed decoding into zero usage.
-            let Some(usage) = recovery_usage(value, sequence) else {
-                continue;
-            };
             let Some(original) = self
                 .charging
                 .resolve(&id)
@@ -100,6 +108,11 @@ impl Bridge {
                 continue;
             }
             let upstream_cost = original.price.upstream_cost_group_ppm.is_some();
+            // A malformed historical receipt must not block the other rows in
+            // this bounded batch. Never turn failed decoding into zero usage.
+            let Some(usage) = recovery_usage(value, sequence, upstream_cost) else {
+                continue;
+            };
             if upstream_cost && usage.upstream_cost_atto_usd.is_none() {
                 continue;
             }
@@ -248,12 +261,16 @@ impl Bridge {
     }
 }
 
-fn recovery_usage(value: serde_json::Value, sequence: i64) -> Option<charging::Usage> {
+fn recovery_usage(
+    value: serde_json::Value,
+    sequence: i64,
+    upstream_cost: bool,
+) -> Option<charging::Usage> {
     if !(1..=65_536).contains(&sequence) {
         return None;
     }
     let observed = serde_json::from_value(value).ok()?;
-    super::billing::complete_usage(observed).ok()
+    super::billing::complete_usage(observed, upstream_cost).ok()
 }
 
 #[cfg(test)]
@@ -296,7 +313,7 @@ mod a07_recovery_tests {
         ];
         assert!(
             rows.iter()
-                .all(|row| recovery_usage(row.2.clone(), row.3).is_none())
+                .all(|row| recovery_usage(row.2.clone(), row.3, false).is_none())
         );
         assert_eq!(next_recovery_page(&rows, 2), Some("b".into()));
         assert_eq!(next_recovery_page(&rows[..1], 1), Some("a".into()));
@@ -325,7 +342,7 @@ mod a07_recovery_tests {
         ];
         let valid: Vec<_> = receipts
             .into_iter()
-            .filter_map(|value| recovery_usage(value, 1))
+            .filter_map(|value| recovery_usage(value, 1, false))
             .collect();
         assert_eq!(
             valid,
@@ -347,7 +364,7 @@ mod a07_recovery_tests {
             json!({"input_tokens":4,"output_tokens":2,"future_counter":1}),
             json!({"input_tokens":u64::MAX,"output_tokens":2}),
         ] {
-            assert!(recovery_usage(value, 1).is_none());
+            assert!(recovery_usage(value, 1, false).is_none());
         }
     }
 
@@ -358,10 +375,10 @@ mod a07_recovery_tests {
             json!({"input_tokens":0}),
             json!({"output_tokens":0}),
         ] {
-            assert!(recovery_usage(value, 1).is_none());
+            assert!(recovery_usage(value, 1, false).is_none());
         }
         assert_eq!(
-            recovery_usage(json!({"input_tokens":0,"output_tokens":0}), 1),
+            recovery_usage(json!({"input_tokens":0,"output_tokens":0}), 1, false),
             Some(charging::Usage::default())
         );
     }
@@ -370,10 +387,40 @@ mod a07_recovery_tests {
     fn checkpoint_sequence_must_fit_the_persistent_contract() {
         let value = json!({"input_tokens":4,"output_tokens":2});
         for sequence in [-1, 0, 65_537, i64::MAX] {
-            assert!(recovery_usage(value.clone(), sequence).is_none());
+            assert!(recovery_usage(value.clone(), sequence, false).is_none());
         }
         for sequence in [1, 65_536] {
-            assert!(recovery_usage(value.clone(), sequence).is_some());
+            assert!(recovery_usage(value.clone(), sequence, false).is_some());
         }
+    }
+
+    #[test]
+    fn upstream_cost_with_cache_creation_is_recovered_successfully() {
+        let value = json!({
+            "input_tokens": 4,
+            "output_tokens": 2,
+            "cache_creation_input_tokens": 1,
+            "upstream_cost_atto_usd": 123_456_789_000_000_000_u128
+        });
+        assert_eq!(
+            recovery_usage(value, 1, true),
+            Some(charging::Usage {
+                upstream_cost_atto_usd: Some(123_456_789_000_000_000),
+                input: 4,
+                cached: 0,
+                output: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn token_pricing_rejects_cache_creation_in_recovery_even_with_reported_cost() {
+        let value = json!({
+            "input_tokens": 4,
+            "output_tokens": 2,
+            "cache_creation_input_tokens": 1,
+            "upstream_cost_atto_usd": 123_456_789_000_000_000_u128
+        });
+        assert_eq!(recovery_usage(value, 1, false), None);
     }
 }

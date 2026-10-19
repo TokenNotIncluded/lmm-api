@@ -339,34 +339,18 @@ impl Billing for Bridge {
                     return Err(RelayError::SettlementPending);
                 }
                 if upstream_cost {
-                    let observed = report.usage;
-                    if observed.upstream_cost_atto_usd.is_none() {
+                    let usage = complete_usage(report.usage, true)?;
+                    if usage.upstream_cost_atto_usd.is_none() {
                         return Err(RelayError::SettlementPending);
                     }
-                    let input = observed
-                        .input_tokens
-                        .and_then(|v| i64::try_from(v).ok())
-                        .ok_or(RelayError::SettlementPending)?;
-                    let output = observed
-                        .output_tokens
-                        .and_then(|v| i64::try_from(v).ok())
-                        .ok_or(RelayError::SettlementPending)?;
-                    let cached = i64::try_from(observed.cached_input_tokens.unwrap_or(0))
-                        .map_err(|_| RelayError::SettlementPending)?;
-                    if input > self.policy.input_token_ceiling || output > i64::from(output_ceiling) {
+                    if usage.input > self.policy.input_token_ceiling
+                        || usage.output > i64::from(output_ceiling)
+                    {
                         return Err(RelayError::SettlementPending);
                     }
-                    (
-                        Usage {
-                            upstream_cost_atto_usd: observed.upstream_cost_atto_usd,
-                            input,
-                            cached,
-                            output,
-                        },
-                        Outcome::Completed,
-                    )
+                    (usage, Outcome::Completed)
                 } else {
-                    let usage = complete_usage(report.usage)?;
+                    let usage = complete_usage(report.usage, false)?;
                     if usage.input > self.policy.input_token_ceiling
                         || usage.output > i64::from(output_ceiling)
                     {
@@ -545,13 +529,17 @@ fn local_input_bound(request: &Request) -> Result<u64, RelayError> {
 /// cache reads retain its existing zero-default semantics; this is not a
 /// normalization policy for external providers. Missing input/output totals
 /// and cache creation unsupported by the ledger must retain the original hold.
-pub(super) fn complete_usage(observed: crate::relay::Usage) -> Result<Usage, RelayError> {
+pub(super) fn complete_usage(
+    observed: crate::relay::Usage,
+    upstream_cost: bool,
+) -> Result<Usage, RelayError> {
     observed
         .validate()
         .map_err(|_| RelayError::SettlementPending)?;
-    if observed
-        .cache_creation_input_tokens
-        .is_some_and(|value| value != 0)
+    if !upstream_cost
+        && observed
+            .cache_creation_input_tokens
+            .is_some_and(|value| value != 0)
     {
         return Err(RelayError::SettlementPending);
     }
@@ -565,8 +553,13 @@ pub(super) fn complete_usage(observed: crate::relay::Usage) -> Result<Usage, Rel
         .ok_or(RelayError::SettlementPending)?;
     let cached = i64::try_from(observed.cached_input_tokens.unwrap_or(0))
         .map_err(|_| RelayError::SettlementPending)?;
+    let upstream_cost_atto_usd = if upstream_cost {
+        observed.upstream_cost_atto_usd
+    } else {
+        None
+    };
     Ok(Usage {
-        upstream_cost_atto_usd: observed.upstream_cost_atto_usd,
+        upstream_cost_atto_usd,
         input,
         cached,
         output,
@@ -1017,23 +1010,89 @@ mod a07_billing_tests {
                 ..Observed::default()
             },
         ] {
-            assert_eq!(complete_usage(observed), Err(RelayError::SettlementPending));
+            assert_eq!(
+                complete_usage(observed, false),
+                Err(RelayError::SettlementPending)
+            );
         }
     }
 
     #[test]
     fn final_receipt_keeps_cache_as_a_subset_not_an_extra_charge() {
         assert_eq!(
-            complete_usage(Observed {
-                upstream_cost_atto_usd: None,
-                input_tokens: Some(10),
-                output_tokens: Some(20),
-                cached_input_tokens: Some(2),
-                cache_creation_input_tokens: Some(0),
-                reasoning_output_tokens: Some(5),
-            }),
+            complete_usage(
+                Observed {
+                    upstream_cost_atto_usd: None,
+                    input_tokens: Some(10),
+                    output_tokens: Some(20),
+                    cached_input_tokens: Some(2),
+                    cache_creation_input_tokens: Some(0),
+                    reasoning_output_tokens: Some(5),
+                },
+                false,
+            ),
             Ok(Usage {
                 upstream_cost_atto_usd: None,
+                input: 10,
+                cached: 2,
+                output: 20
+            })
+        );
+    }
+
+    #[test]
+    fn complete_usage_rejects_cache_creation_for_token_pricing_even_with_reported_cost() {
+        let observed = Observed {
+            upstream_cost_atto_usd: Some(123_456_789_000_000_000),
+            input_tokens: Some(10),
+            output_tokens: Some(20),
+            cached_input_tokens: Some(2),
+            cache_creation_input_tokens: Some(1),
+            reasoning_output_tokens: Some(5),
+        };
+        assert_eq!(
+            complete_usage(observed, false),
+            Err(RelayError::SettlementPending)
+        );
+    }
+
+    #[test]
+    fn complete_usage_strips_reported_cost_for_token_pricing() {
+        let observed = Observed {
+            upstream_cost_atto_usd: Some(123_456_789_000_000_000),
+            input_tokens: Some(10),
+            output_tokens: Some(20),
+            cached_input_tokens: Some(2),
+            cache_creation_input_tokens: Some(0),
+            reasoning_output_tokens: Some(5),
+        };
+        assert_eq!(
+            complete_usage(observed, false),
+            Ok(Usage {
+                upstream_cost_atto_usd: None,
+                input: 10,
+                cached: 2,
+                output: 20,
+            })
+        );
+    }
+
+    #[test]
+    fn complete_usage_accepts_cache_creation_when_upstream_cost_is_present() {
+        assert_eq!(
+            complete_usage(
+                Observed {
+                    upstream_cost_atto_usd: Some(123_456_789_000_000_000),
+                    input_tokens: Some(10),
+                    output_tokens: Some(20),
+                    cached_input_tokens: Some(2),
+                    cache_creation_input_tokens: Some(1),
+                    reasoning_output_tokens: Some(5),
+                },
+                true,
+            ),
+            Ok(Usage {
+                upstream_cost_atto_usd: Some(123_456_789_000_000_000),
                 input: 10,
                 cached: 2,
                 output: 20

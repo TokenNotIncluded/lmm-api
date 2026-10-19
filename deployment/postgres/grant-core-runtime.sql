@@ -202,7 +202,7 @@ GRANT EXECUTE ON FUNCTION core_charging.committed_credits(text,bigint,bigint,big
 GRANT USAGE ON SCHEMA core_model TO :"runtime_role";
 GRANT EXECUTE ON FUNCTION
     core_model.checkpoint_output(text,bytea,bigint,bytea,bigint,jsonb,boolean),
-    core_model.completed_streams(integer) TO :"runtime_role";
+    core_model.completed_streams_after(integer,text) TO :"runtime_role";
 \endif
 
 \if :enable_commerce

@@ -955,9 +955,11 @@ WITH catalog_path AS MATERIALIZED (
             .collect()
     }
     lmm_core::core_schema::init(&pool).await.unwrap();
-    // Fresh fourteen-component history schema with only this index removed.
+    // Fresh fourteen-component schema with canonical model paging and only this index removed.
     // core_schema::index_tests independently constructs and pins this exact catalog.
-    const PRIOR: &str = "fac62641832a7dea66dd565031c31087ae067659fe2bfff2a42fa0b76c32c5bd";
+    const PRIOR: &str = "dbc8ad04bf41b2ea13282db9b82947b29e33b8c4329a14d9d53497c44c360b54";
+    const RETIRED_PRE_MODEL_PAGING_FOURTEEN_COMPONENT_PRIOR: &str =
+        "fac62641832a7dea66dd565031c31087ae067659fe2bfff2a42fa0b76c32c5bd";
     const RETIRED_PRE_HISTORY_THIRTEEN_COMPONENT_PRIOR: &str =
         "b338104a3394e575c11434d9434c077793a4090cb31c830d0b490e2ea7ec40db";
     const RETIRED_PRIOR_660: &str =
@@ -1053,6 +1055,12 @@ WITH catalog_path AS MATERIALIZED (
     // saved=retired/approval=retired, and saved=retired/approval=current.
     // No mismatch may change financial rows, receipts, ACLs or definitions.
     for (saved, approval) in [
+        (PRIOR, RETIRED_PRE_MODEL_PAGING_FOURTEEN_COMPONENT_PRIOR),
+        (
+            RETIRED_PRE_MODEL_PAGING_FOURTEEN_COMPONENT_PRIOR,
+            RETIRED_PRE_MODEL_PAGING_FOURTEEN_COMPONENT_PRIOR,
+        ),
+        (RETIRED_PRE_MODEL_PAGING_FOURTEEN_COMPONENT_PRIOR, PRIOR),
         (PRIOR, RETIRED_PRE_HISTORY_THIRTEEN_COMPONENT_PRIOR),
         (
             RETIRED_PRE_HISTORY_THIRTEEN_COMPONENT_PRIOR,

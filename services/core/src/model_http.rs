@@ -67,6 +67,7 @@ struct Bridge {
     routing: Arc<crate::routing::Router>,
     credentials: BTreeMap<(u64, u64), String>,
     active: Mutex<BTreeMap<String, Operation>>,
+    recovery_cursor: tokio::sync::Mutex<Option<String>>,
     policy: ChargePolicy,
     total_timeout: Duration,
 }
@@ -136,6 +137,7 @@ impl ModelGateway {
             routing,
             credentials,
             active: Mutex::new(BTreeMap::new()),
+            recovery_cursor: tokio::sync::Mutex::new(None),
             policy,
             total_timeout: limits.total_timeout,
         });

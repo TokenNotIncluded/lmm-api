@@ -19,8 +19,6 @@ use serde_json::{Value, json};
 use sqlx::PgPool;
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
-const PAGE_CONTRACT: &str = include_str!("fixtures/model_recovery_page.sql");
-
 struct Fixture {
     gateway: ModelGateway,
     charging: Charging,
@@ -29,12 +27,9 @@ struct Fixture {
     account: i64,
 }
 
-async fn fixture(pool: &PgPool, install_page: bool) -> Fixture {
+async fn fixture(pool: &PgPool) -> Fixture {
     core_schema::init(pool).await.unwrap();
     core_schema::check(pool).await.unwrap();
-    if install_page {
-        sqlx::raw_sql(PAGE_CONTRACT).execute(pool).await.unwrap();
-    }
     let identity = IdentityStore::from_pool(pool.clone());
     let session = identity.bootstrap_user(7, 1).await.unwrap();
     let principal = identity.authorize(&session.secret).await.unwrap();
@@ -184,7 +179,7 @@ fn valid_usage() -> Value {
 
 #[sqlx::test(migrations = false)]
 async fn invalid_first_pages_do_not_starve_later_settlement(pool: PgPool) {
-    let f = fixture(&pool, true).await;
+    let f = fixture(&pool).await;
     seed(
         &pool,
         &f,
@@ -266,7 +261,7 @@ async fn invalid_first_pages_do_not_starve_later_settlement(pool: PgPool) {
 
 #[sqlx::test(migrations = false)]
 async fn concurrent_pages_confirm_the_same_charge_without_double_debit(pool: PgPool) {
-    let f = fixture(&pool, true).await;
+    let f = fixture(&pool).await;
     seed(&pool, &f, "single-valid", valid_usage(), true).await;
     expire(&pool, &f).await;
     let (one, two) = tokio::join!(
@@ -293,9 +288,24 @@ async fn concurrent_pages_confirm_the_same_charge_without_double_debit(pool: PgP
 
 #[sqlx::test(migrations = false)]
 async fn missing_contract_and_invalid_pages_never_fall_back_or_expand_access(pool: PgPool) {
-    let f = fixture(&pool, false).await;
+    let f = fixture(&pool).await;
+    let func_def: String = sqlx::query_scalar(
+        "SELECT pg_get_functiondef('core_model.completed_streams_after(integer,text)'::regprocedure)",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query("DROP FUNCTION core_model.completed_streams_after(integer,text)")
+        .execute(&pool)
+        .await
+        .unwrap();
+
     assert!(matches!(
         f.gateway.reconcile_completed_streams_page(1, None).await,
+        Err(RelayError::Unsupported(_))
+    ));
+    assert!(matches!(
+        f.gateway.reconcile_completed_streams(1).await,
         Err(RelayError::Unsupported(_))
     ));
     for (limit, cursor) in [
@@ -311,7 +321,11 @@ async fn missing_contract_and_invalid_pages_never_fall_back_or_expand_access(poo
             Err(RelayError::Invalid(_))
         ));
     }
-    sqlx::raw_sql(PAGE_CONTRACT).execute(&pool).await.unwrap();
+    sqlx::raw_sql(&func_def).execute(&pool).await.unwrap();
+    sqlx::query("REVOKE ALL ON FUNCTION core_model.completed_streams_after(integer,text) FROM PUBLIC")
+        .execute(&pool)
+        .await
+        .unwrap();
     assert_eq!(
         f.gateway
             .reconcile_completed_streams_page(1, None)
