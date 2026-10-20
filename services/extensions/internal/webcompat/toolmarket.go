@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -24,6 +25,13 @@ type ToolMarketService interface {
 	WebAuthorize(context.Context, string, string, string) (int64, error)
 	LegacyWeb(context.Context, string, string, toolmarket.WebRequest) (any, error)
 }
+
+// ToolMarketRuntime is optional: the native module owns its own closed DTOs,
+// USD quote units, OAuth cookie binding and MCP authorization.
+type ToolMarketRuntime interface {
+	ToolMarketRuntimeHandler() http.Handler
+}
+
 type toolMarketRoute struct {
 	pattern, action string
 	body            bool
@@ -117,6 +125,8 @@ func RegisterToolMarket(mux *http.ServeMux, auth *Authenticator, service ToolMar
 		toolMarketRespond(w, value, err)
 	}))
 	routes := []toolMarketRoute{
+		{"GET /api/tool-market/services/{id}/credentials", "credentials", false, false},
+		{"PUT /api/tool-market/services/{id}/credentials", "credential.configure", true, false},
 		{"POST /api/tool-market/services", "save", true, false},
 		{"PUT /api/tool-market/services/{id}/draft", "save", true, false},
 		{"GET /api/tool-market/services/{id}/draft", "draft", false, false},
@@ -132,7 +142,23 @@ func RegisterToolMarket(mux *http.ServeMux, auth *Authenticator, service ToolMar
 		{"GET /api/tool-market/services/{id}/review", "review_detail", false, false},
 		{"POST /api/tool-market/services/{id}/review", "review", true, false},
 		{"POST /api/tool-market/inspect", "inspect", true, false},
+		{"GET /api/tool-market/calls", "calls", false, true},
+		{"GET /api/tool-market/calls/{id}/result", "call.result", false, false},
+		{"POST /api/tool-market/calls/{id}/report", "report", true, false},
+		{"GET /api/tool-market/reports", "reports", false, true},
+		{"POST /api/tool-market/reports/{id}/review", "report.review", true, false},
+		{"GET /api/tool-market/income", "income", false, true},
+		{"GET /api/tool-market/meta-delegations/{kind}/{id}", "delegation.get", false, false},
+		{"GET /api/tool-market/meta-delegations/oauth-clients", "delegation.clients", false, true},
+		{"PUT /api/tool-market/meta-delegations/{kind}/{id}", "delegation.set", true, false},
 		{"POST /api/tool-market/invoke", "invoke", true, false},
+		{"DELETE /api/tool-market/grants/{id}", "grant.revoke", false, false},
+		{"DELETE /api/tool-market/grants/{id}/record", "grant.hide", false, false},
+		{"POST /api/tool-market/tokens", "token", true, false},
+		{"DELETE /api/tool-market/tokens/{id}", "token.revoke", false, false},
+		{"DELETE /api/tool-market/tokens/{id}/record", "token.hide", false, false},
+		{"POST /api/tool-market/clients/disconnect", "client.disconnect", true, false},
+		{"POST /api/tool-market/clients/remove", "client.remove", true, false},
 		{"POST /api/tool-market/grants", "grant", true, false},
 		{"PUT /api/tool-market/budgets", "budget", true, false},
 		{"PUT /api/tool-market/config", "configure", true, false},
@@ -157,6 +183,9 @@ func RegisterToolMarket(mux *http.ServeMux, auth *Authenticator, service ToolMar
 				return
 			}
 			request := toolmarket.WebRequest{Action: route.action, ID: r.PathValue("id"), Kind: r.PathValue("kind"), Offset: 0, Limit: 20}
+			if peer, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+				request.ActualPeerIP = peer
+			}
 			if route.page {
 				for key := range query {
 					if key != "offset" && key != "limit" {
@@ -165,6 +194,12 @@ func RegisterToolMarket(mux *http.ServeMux, auth *Authenticator, service ToolMar
 					}
 				}
 				request.Offset, request.Limit, err = toolMarketPage(query)
+			} else if route.action == "credentials" {
+				if len(query) != 1 || query.Get("version_id") == "" {
+					err = toolmarket.ErrInvalid
+				} else {
+					request.VersionID = query.Get("version_id")
+				}
 			} else if len(query) != 0 {
 				err = toolmarket.ErrInvalid
 			}
@@ -172,7 +207,23 @@ func RegisterToolMarket(mux *http.ServeMux, auth *Authenticator, service ToolMar
 				toolMarketRespond(w, nil, err)
 				return
 			}
+			var operations []string
+			for key, values := range r.Header {
+				if strings.EqualFold(key, "Idempotency-Key") {
+					operations = append(operations, values...)
+				}
+			}
+			if len(operations) > 1 || len(operations) == 1 && (len(operations[0]) == 0 || len(operations[0]) > 80) {
+				toolMarketRespond(w, nil, toolmarket.ErrInvalid)
+				return
+			}
+			if len(operations) == 1 {
+				request.OperationID = operations[0]
+			}
 			if route.body {
+				if route.action == "delegation.set" {
+					r.Body = http.MaxBytesReader(w, r.Body, 1024)
+				}
 				request.Body, err = toolMarketBody(w, r)
 				if err != nil {
 					toolMarketRespond(w, nil, err)
@@ -181,6 +232,38 @@ func RegisterToolMarket(mux *http.ServeMux, auth *Authenticator, service ToolMar
 			}
 			value, err := service.LegacyWeb(r.Context(), credential, account, request)
 			toolMarketRespond(w, value, err)
+		})
+	}
+	// Runtime APIs retain the native module's typed contract. They do not reinterpret
+	// legacy price_quota as USD millionths. Replace all internal identity headers
+	// with the freshly verified Web actor before invoking the native handler.
+	if runtime, ok := service.(ToolMarketRuntime); ok && !store.Missing(runtime) {
+		mux.HandleFunc("/api/tool-market/runtime/", func(w http.ResponseWriter, r *http.Request) {
+			credential, account, ok := actor(w, r, true)
+			if !ok {
+				return
+			}
+			if _, err := service.WebAuthorize(r.Context(), credential, account, "toolmarket.read"); err != nil {
+				toolMarketRespond(w, nil, err)
+				return
+			}
+			handler := runtime.ToolMarketRuntimeHandler()
+			if store.Missing(handler) {
+				toolMarketRespond(w, nil, toolmarket.ErrUnavailable)
+				return
+			}
+			request := r.Clone(r.Context())
+			request.Header = r.Header.Clone()
+			for key := range request.Header {
+				if strings.HasPrefix(strings.ToLower(key), "x-lmm-") {
+					delete(request.Header, key)
+				}
+			}
+			request.Header.Set("X-LMM-User-Credential", credential)
+			request.Header.Set("X-LMM-Account-ID", account)
+			request.URL.Path = strings.TrimPrefix(r.URL.Path, "/api/tool-market/runtime")
+			request.URL.RawPath = ""
+			handler.ServeHTTP(w, request)
 		})
 	}
 	// Explicitly reject unimplemented OAuth, metatool, credentials, paid call
@@ -271,6 +354,10 @@ func toolMarketRespond(w http.ResponseWriter, value any, err error) {
 			code, label = http.StatusNotFound, "TOOL_MARKET_NOT_FOUND"
 		case errors.Is(err, toolmarket.ErrConflict):
 			code, label = http.StatusConflict, "TOOL_MARKET_CONFLICT"
+		case errors.Is(err, toolmarket.ErrPending):
+			code, label = http.StatusConflict, "TOOL_MARKET_EXECUTION_PENDING"
+		case errors.Is(err, toolmarket.ErrConsent):
+			code, label = http.StatusConflict, "TOOL_MARKET_CONSENT_REQUIRED"
 		case errors.Is(err, toolmarket.ErrPrice):
 			code, label = http.StatusUnprocessableEntity, "TOOL_MARKET_PROVIDER_PRICE"
 		case errors.Is(err, toolmarket.ErrFunds):
@@ -282,6 +369,9 @@ func toolMarketRespond(w http.ResponseWriter, value any, err error) {
 			code, label = http.StatusBadGateway, "TOOL_MARKET_REMOTE_CONNECTION"
 		}
 		body = map[string]any{"success": false, "code": label, "message": message}
+		if errors.Is(err, toolmarket.ErrPending) && value != nil {
+			body["data"] = value
+		}
 	}
 	encoded, marshalErr := json.Marshal(body)
 	if marshalErr != nil {

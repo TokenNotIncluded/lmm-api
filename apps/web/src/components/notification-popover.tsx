@@ -46,7 +46,10 @@ import {
   bountyNotificationPresentation,
   bountyNotificationSearch,
 } from '@/features/open-source-bounties/notification-target'
-import type { BountyNotification } from '@/features/open-source-bounties/types'
+import type {
+  BountyId,
+  BountyNotification,
+} from '@/features/open-source-bounties/types'
 import { getAnnouncementColorClass } from '@/lib/colors'
 import { formatQuota } from '@/lib/format'
 import { formatDateTimeObject } from '@/lib/time'
@@ -79,8 +82,8 @@ interface NotificationPopoverProps {
   notice: string
   announcements: AnnouncementItem[]
   bountyTips: BountyNotification[]
-  thankingTipId: number
-  onThankTip: (tipId: number) => void
+  thankingTipId: BountyId
+  onThankTip: (tipId: BountyId) => void
   loading: boolean
   className?: string
 }
@@ -327,8 +330,8 @@ function BountyNotificationsContent({
 }: {
   items: BountyNotification[]
   loading: boolean
-  thankingTipId: number
-  onThankTip: (tipId: number) => void
+  thankingTipId: BountyId
+  onThankTip: (tipId: BountyId) => void
   t: TFunction
 }) {
   if (loading) {

@@ -5,8 +5,65 @@ use super::*;
 #[path = "../../tests/common/database_snapshot.rs"]
 mod database_snapshot;
 
-const PRE_MODEL_PAGING_MODEL: &str =
-    include_str!("../../tests/core_schema/model_gateway_before_paging.sql");
+// Exact historical SQL bytes, authenticated by the unchanged frozen contracts.
+// Keeping all predecessor components independent of current sources prevents a
+// future fresh-install change from rewriting historical fixture inputs.
+const PRE_HISTORY_COMPONENTS: &[(&str, &str)] = &[
+    (
+        "identity",
+        include_str!("../../tests/core_schema/identity_pre_history.sql"),
+    ),
+    (
+        "ledger",
+        include_str!("../../tests/core_schema/ledger_pre_history.sql"),
+    ),
+    (
+        "payments",
+        include_str!("../../tests/core_schema/payments_before_seventeen.sql"),
+    ),
+    (
+        "charging",
+        include_str!("../../tests/core_schema/charging_before_seventeen.sql"),
+    ),
+    (
+        "routing",
+        include_str!("../../tests/core_schema/routing_pre_history.sql"),
+    ),
+    (
+        "events",
+        include_str!("../../tests/core_schema/events_pre_history.sql"),
+    ),
+    (
+        "charging-ledger",
+        include_str!("../../tests/core_schema/charging_ledger_pre_history.sql"),
+    ),
+    (
+        "migration",
+        include_str!("../../tests/core_schema/migration_pre_history.sql"),
+    ),
+    (
+        "console",
+        include_str!("../../tests/core_schema/console_pre_history.sql"),
+    ),
+    (
+        "model-gateway",
+        include_str!("../../tests/core_schema/model_gateway_before_paging.sql"),
+    ),
+    (
+        "commerce",
+        include_str!("../../tests/core_schema/commerce_pre_history.sql"),
+    ),
+    (
+        "abuse",
+        include_str!("../../tests/core_schema/abuse_pre_history.sql"),
+    ),
+    (
+        "oauth-grants",
+        include_str!("../../tests/core_schema/oauth_grants_pre_history.sql"),
+    ),
+];
+const PRE_MODEL_PAGING_HISTORY: &str =
+    include_str!("../../tests/core_schema/history_pre_model_paging.sql");
 
 fn legacy_components() -> Vec<(&'static str, &'static str)> {
     let frozen: serde_json::Value = serde_json::from_str(include_str!(
@@ -65,12 +122,10 @@ fn legacy_components() -> Vec<(&'static str, &'static str)> {
         .map(|expected| {
             let name = expected["name"].as_str().unwrap();
             assert!(names.insert(name));
-            let &(name, current_source) = COMPONENTS.iter().find(|(n, _)| *n == name).unwrap();
-            let source = if name == "model-gateway" {
-                PRE_MODEL_PAGING_MODEL
-            } else {
-                current_source
-            };
+            let &(name, source) = PRE_HISTORY_COMPONENTS
+                .iter()
+                .find(|(n, _)| *n == name)
+                .unwrap();
             assert_eq!(
                 expected["sha256"],
                 format!("{:x}", Sha256::digest(source.as_bytes())),
@@ -95,12 +150,7 @@ fn pre_model_paging_components() -> Vec<(&'static str, &'static str)> {
         "pre-model-paging-14-index-predecessor"
     );
     let mut components = legacy_components();
-    components.push(
-        *COMPONENTS
-            .iter()
-            .find(|(name, _)| *name == "history")
-            .unwrap(),
-    );
+    components.push(("history", PRE_MODEL_PAGING_HISTORY));
     let expected = frozen["components"].as_array().unwrap();
     assert_eq!(components.len(), 14);
     assert_eq!(expected.len(), components.len());
@@ -115,7 +165,6 @@ fn pre_model_paging_components() -> Vec<(&'static str, &'static str)> {
 }
 
 async fn prior(pool: &PgPool) -> [u8; 32] {
-    assert_eq!(COMPONENTS.len(), 14);
     prior_components(pool, COMPONENTS).await
 }
 
@@ -333,6 +382,7 @@ async fn current_schema_index_predecessor_upgrade_changes_only_verified_index_an
     // The retired pre-Pi thirteen-component, twelve-component and earlier catalogs
     // are not the current catalog, even when approval matches the saved receipt.
     for retired_hex in [
+        "dbc8ad04bf41b2ea13282db9b82947b29e33b8c4329a14d9d53497c44c360b54",
         "b338104a3394e575c11434d9434c077793a4090cb31c830d0b490e2ea7ec40db",
         "660ddf6f75c0350c93ae2886951312997c82c4bc6ebcf5d79a561de629781bad",
         "431a4af6b4790abdb32a3583cb097b733c41b6b2cdc04537e15808260de44d57",

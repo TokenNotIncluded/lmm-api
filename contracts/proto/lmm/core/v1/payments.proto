@@ -13,6 +13,7 @@ service CorePayments {
   rpc PrepareTopup(PrepareTopupRequest) returns (PaymentIntent);
   rpc CreditTopup(CreditTopupRequest) returns (PaymentReceipt);
   rpc HoldRefund(HoldRefundRequest) returns (PaymentReceipt);
+  rpc BeginRefundDispatch(ResolveRefundRequest) returns (PaymentReceipt);
   rpc CommitRefund(ResolveRefundRequest) returns (PaymentReceipt);
   rpc ReleaseRefund(ResolveRefundRequest) returns (PaymentReceipt);
   rpc ApplyExternalRefund(ExternalRefundRequest) returns (PaymentReceipt);

@@ -239,6 +239,24 @@ func (m *Module) revokeGrant(ctx context.Context, p Principal, credential, id st
 	if !validID.MatchString(id) {
 		return ErrInvalid
 	}
+	if revoker, ok := m.authority.(GrantRevoker); ok {
+		var grant ExecutionGrant
+		if err := m.store.view(func(d database) error {
+			g, exists := d.Grants[id]
+			if !exists || g.Owner != p {
+				return ErrMissing
+			}
+			grant = g
+			return nil
+		}); err != nil {
+			return err
+		}
+		if grant.ApprovalID != "" {
+			if err := revoker.RevokeToolApproval(ctx, credential, p, grant.ApprovalID); err != nil {
+				return err
+			}
+		}
+	}
 	return m.store.update(func(d *database) error {
 		g, ok := d.Grants[id]
 		if !ok || g.Owner != p {

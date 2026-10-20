@@ -265,7 +265,7 @@ func (f *fakeCore) post(kind string, id int64, key, state string, e Evidence) (R
 	if f.offline {
 		return Receipt{}, ErrUnavailable
 	}
-	if kind != "hold" && (e.Source != "webhook" || len(e.Signature) == 0 || e.AcceptedProofID == "") {
+	if kind != "hold" && kind != "dispatch" && (e.Source != "webhook" || len(e.Signature) == 0 || e.AcceptedProofID == "") {
 		return Receipt{}, ErrEvidence
 	}
 	if old, ok := f.receipts[key]; ok {
@@ -310,6 +310,12 @@ func (f *fakeCore) Release(ctx context.Context, id int64, key, hold string, e Ev
 		return Receipt{}, ErrInvalid
 	}
 	return f.post("release", id, key, RefundReleased, e)
+}
+func (f *fakeCore) BeginRefundDispatch(ctx context.Context, id int64, key, hold string) (Receipt, error) {
+	if hold == "" {
+		return Receipt{}, ErrInvalid
+	}
+	return f.post("dispatch", id, key, RefundHeld, Evidence{})
 }
 func (f *fakeCore) ExternalRefund(ctx context.Context, id int64, key string, e Evidence) (Receipt, error) {
 	return f.post("external", id, key, ExternalRefundApplied, e)

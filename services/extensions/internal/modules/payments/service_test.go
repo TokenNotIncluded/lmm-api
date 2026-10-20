@@ -300,7 +300,7 @@ func TestRefundTimeoutNeverReleasesHold(t *testing.T) {
 	h.advance()
 	h.work()
 	o = h.get(o.ID)
-	if o.Refunds[r.ID].HoldReceipt == "" || o.Refunds[r.ID].State == "released" || h.c.count("release") != 0 || h.a.refundCalls.Load() != 2 {
+	if o.Refunds[r.ID].HoldReceipt == "" || o.Refunds[r.ID].State == "released" || h.c.count("release") != 0 || h.a.refundCalls.Load() != 1 {
 		t.Fatal("unknown refund released hold")
 	}
 }
@@ -515,5 +515,33 @@ func TestCanceledWorkerDoesNotSendMoney(t *testing.T) {
 	}
 	if h.a.checkoutCalls.Load() != 0 {
 		t.Fatal("canceled request called provider")
+	}
+}
+
+func TestRefundDispatchACKLossReconcilesSameKeyBeforeProviderIO(t *testing.T) {
+	h := setup(t)
+	o := h.paid()
+	r, err := h.s.RequestRefund(context.Background(), "user", o.ID, "refund_dispatch_ack01", 300)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.c.lose["dispatch"] = true
+	h.work()
+	if h.a.refundCalls.Load() != 0 {
+		t.Fatal("provider called before Core dispatch ACK")
+	}
+	first := h.get(o.ID)
+	key := stableKey("submit", r.ID)
+	if first.Jobs[key].Kind != "refund_dispatch" || first.Jobs[key].State != "pending" {
+		t.Fatal("registration ACK loss was not preserved")
+	}
+	h.advance()
+	h.work()
+	last := h.get(o.ID)
+	if h.a.refundCalls.Load() != 1 || last.Jobs[key].Kind != "refund_submit" || last.Jobs[key].State != "done" {
+		t.Fatal("same-key registration recovery did not dispatch exactly once")
+	}
+	if last.Refunds[r.ID].HoldReceipt != r.HoldReceipt || h.c.count("hold") != 1 || h.c.count("release") != 0 {
+		t.Fatal("registration recovery changed reservation")
 	}
 }

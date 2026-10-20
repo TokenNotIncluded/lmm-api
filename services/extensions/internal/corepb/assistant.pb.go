@@ -21,6 +21,55 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type AssistantBusinessFactKind int32
+
+const (
+	AssistantBusinessFactKind_ASSISTANT_BUSINESS_FACT_KIND_UNSPECIFIED         AssistantBusinessFactKind = 0
+	AssistantBusinessFactKind_ASSISTANT_BUSINESS_FACT_KIND_AVAILABLE_MODELS    AssistantBusinessFactKind = 1
+	AssistantBusinessFactKind_ASSISTANT_BUSINESS_FACT_KIND_SUPPORT_ELIGIBILITY AssistantBusinessFactKind = 2
+)
+
+// Enum value maps for AssistantBusinessFactKind.
+var (
+	AssistantBusinessFactKind_name = map[int32]string{
+		0: "ASSISTANT_BUSINESS_FACT_KIND_UNSPECIFIED",
+		1: "ASSISTANT_BUSINESS_FACT_KIND_AVAILABLE_MODELS",
+		2: "ASSISTANT_BUSINESS_FACT_KIND_SUPPORT_ELIGIBILITY",
+	}
+	AssistantBusinessFactKind_value = map[string]int32{
+		"ASSISTANT_BUSINESS_FACT_KIND_UNSPECIFIED":         0,
+		"ASSISTANT_BUSINESS_FACT_KIND_AVAILABLE_MODELS":    1,
+		"ASSISTANT_BUSINESS_FACT_KIND_SUPPORT_ELIGIBILITY": 2,
+	}
+)
+
+func (x AssistantBusinessFactKind) Enum() *AssistantBusinessFactKind {
+	p := new(AssistantBusinessFactKind)
+	*p = x
+	return p
+}
+
+func (x AssistantBusinessFactKind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (AssistantBusinessFactKind) Descriptor() protoreflect.EnumDescriptor {
+	return file_lmm_core_v1_assistant_proto_enumTypes[0].Descriptor()
+}
+
+func (AssistantBusinessFactKind) Type() protoreflect.EnumType {
+	return &file_lmm_core_v1_assistant_proto_enumTypes[0]
+}
+
+func (x AssistantBusinessFactKind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use AssistantBusinessFactKind.Descriptor instead.
+func (AssistantBusinessFactKind) EnumDescriptor() ([]byte, []int) {
+	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{0}
+}
+
 type AssistantOperationState int32
 
 const (
@@ -63,11 +112,11 @@ func (x AssistantOperationState) String() string {
 }
 
 func (AssistantOperationState) Descriptor() protoreflect.EnumDescriptor {
-	return file_lmm_core_v1_assistant_proto_enumTypes[0].Descriptor()
+	return file_lmm_core_v1_assistant_proto_enumTypes[1].Descriptor()
 }
 
 func (AssistantOperationState) Type() protoreflect.EnumType {
-	return &file_lmm_core_v1_assistant_proto_enumTypes[0]
+	return &file_lmm_core_v1_assistant_proto_enumTypes[1]
 }
 
 func (x AssistantOperationState) Number() protoreflect.EnumNumber {
@@ -76,7 +125,355 @@ func (x AssistantOperationState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use AssistantOperationState.Descriptor instead.
 func (AssistantOperationState) EnumDescriptor() ([]byte, []int) {
+	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{1}
+}
+
+type AssistantGiftState int32
+
+const (
+	AssistantGiftState_ASSISTANT_GIFT_STATE_UNSPECIFIED AssistantGiftState = 0
+	AssistantGiftState_ASSISTANT_GIFT_STATE_OFFERED     AssistantGiftState = 1
+	AssistantGiftState_ASSISTANT_GIFT_STATE_CLAIMED     AssistantGiftState = 2
+)
+
+// Enum value maps for AssistantGiftState.
+var (
+	AssistantGiftState_name = map[int32]string{
+		0: "ASSISTANT_GIFT_STATE_UNSPECIFIED",
+		1: "ASSISTANT_GIFT_STATE_OFFERED",
+		2: "ASSISTANT_GIFT_STATE_CLAIMED",
+	}
+	AssistantGiftState_value = map[string]int32{
+		"ASSISTANT_GIFT_STATE_UNSPECIFIED": 0,
+		"ASSISTANT_GIFT_STATE_OFFERED":     1,
+		"ASSISTANT_GIFT_STATE_CLAIMED":     2,
+	}
+)
+
+func (x AssistantGiftState) Enum() *AssistantGiftState {
+	p := new(AssistantGiftState)
+	*p = x
+	return p
+}
+
+func (x AssistantGiftState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (AssistantGiftState) Descriptor() protoreflect.EnumDescriptor {
+	return file_lmm_core_v1_assistant_proto_enumTypes[2].Descriptor()
+}
+
+func (AssistantGiftState) Type() protoreflect.EnumType {
+	return &file_lmm_core_v1_assistant_proto_enumTypes[2]
+}
+
+func (x AssistantGiftState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use AssistantGiftState.Descriptor instead.
+func (AssistantGiftState) EnumDescriptor() ([]byte, []int) {
+	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{2}
+}
+
+type AssistantAgentPhase int32
+
+const (
+	AssistantAgentPhase_ASSISTANT_AGENT_PHASE_UNSPECIFIED   AssistantAgentPhase = 0
+	AssistantAgentPhase_ASSISTANT_AGENT_PHASE_NEW           AssistantAgentPhase = 1
+	AssistantAgentPhase_ASSISTANT_AGENT_PHASE_MODEL_RUNNING AssistantAgentPhase = 2
+	AssistantAgentPhase_ASSISTANT_AGENT_PHASE_TOOLS_PENDING AssistantAgentPhase = 3
+	AssistantAgentPhase_ASSISTANT_AGENT_PHASE_COMPLETED     AssistantAgentPhase = 4
+	AssistantAgentPhase_ASSISTANT_AGENT_PHASE_UNKNOWN       AssistantAgentPhase = 5
+	AssistantAgentPhase_ASSISTANT_AGENT_PHASE_REJECTED      AssistantAgentPhase = 6
+	AssistantAgentPhase_ASSISTANT_AGENT_PHASE_EXPIRED       AssistantAgentPhase = 7
+)
+
+// Enum value maps for AssistantAgentPhase.
+var (
+	AssistantAgentPhase_name = map[int32]string{
+		0: "ASSISTANT_AGENT_PHASE_UNSPECIFIED",
+		1: "ASSISTANT_AGENT_PHASE_NEW",
+		2: "ASSISTANT_AGENT_PHASE_MODEL_RUNNING",
+		3: "ASSISTANT_AGENT_PHASE_TOOLS_PENDING",
+		4: "ASSISTANT_AGENT_PHASE_COMPLETED",
+		5: "ASSISTANT_AGENT_PHASE_UNKNOWN",
+		6: "ASSISTANT_AGENT_PHASE_REJECTED",
+		7: "ASSISTANT_AGENT_PHASE_EXPIRED",
+	}
+	AssistantAgentPhase_value = map[string]int32{
+		"ASSISTANT_AGENT_PHASE_UNSPECIFIED":   0,
+		"ASSISTANT_AGENT_PHASE_NEW":           1,
+		"ASSISTANT_AGENT_PHASE_MODEL_RUNNING": 2,
+		"ASSISTANT_AGENT_PHASE_TOOLS_PENDING": 3,
+		"ASSISTANT_AGENT_PHASE_COMPLETED":     4,
+		"ASSISTANT_AGENT_PHASE_UNKNOWN":       5,
+		"ASSISTANT_AGENT_PHASE_REJECTED":      6,
+		"ASSISTANT_AGENT_PHASE_EXPIRED":       7,
+	}
+)
+
+func (x AssistantAgentPhase) Enum() *AssistantAgentPhase {
+	p := new(AssistantAgentPhase)
+	*p = x
+	return p
+}
+
+func (x AssistantAgentPhase) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (AssistantAgentPhase) Descriptor() protoreflect.EnumDescriptor {
+	return file_lmm_core_v1_assistant_proto_enumTypes[3].Descriptor()
+}
+
+func (AssistantAgentPhase) Type() protoreflect.EnumType {
+	return &file_lmm_core_v1_assistant_proto_enumTypes[3]
+}
+
+func (x AssistantAgentPhase) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use AssistantAgentPhase.Descriptor instead.
+func (AssistantAgentPhase) EnumDescriptor() ([]byte, []int) {
+	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{3}
+}
+
+type AssistantAgentDomain int32
+
+const (
+	AssistantAgentDomain_ASSISTANT_AGENT_DOMAIN_UNSPECIFIED     AssistantAgentDomain = 0
+	AssistantAgentDomain_ASSISTANT_AGENT_DOMAIN_REGISTERED_CORE AssistantAgentDomain = 1
+	AssistantAgentDomain_ASSISTANT_AGENT_DOMAIN_EXTENSION       AssistantAgentDomain = 2
+)
+
+// Enum value maps for AssistantAgentDomain.
+var (
+	AssistantAgentDomain_name = map[int32]string{
+		0: "ASSISTANT_AGENT_DOMAIN_UNSPECIFIED",
+		1: "ASSISTANT_AGENT_DOMAIN_REGISTERED_CORE",
+		2: "ASSISTANT_AGENT_DOMAIN_EXTENSION",
+	}
+	AssistantAgentDomain_value = map[string]int32{
+		"ASSISTANT_AGENT_DOMAIN_UNSPECIFIED":     0,
+		"ASSISTANT_AGENT_DOMAIN_REGISTERED_CORE": 1,
+		"ASSISTANT_AGENT_DOMAIN_EXTENSION":       2,
+	}
+)
+
+func (x AssistantAgentDomain) Enum() *AssistantAgentDomain {
+	p := new(AssistantAgentDomain)
+	*p = x
+	return p
+}
+
+func (x AssistantAgentDomain) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (AssistantAgentDomain) Descriptor() protoreflect.EnumDescriptor {
+	return file_lmm_core_v1_assistant_proto_enumTypes[4].Descriptor()
+}
+
+func (AssistantAgentDomain) Type() protoreflect.EnumType {
+	return &file_lmm_core_v1_assistant_proto_enumTypes[4]
+}
+
+func (x AssistantAgentDomain) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use AssistantAgentDomain.Descriptor instead.
+func (AssistantAgentDomain) EnumDescriptor() ([]byte, []int) {
+	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{4}
+}
+
+type AssistantAgentClaimDisposition int32
+
+const (
+	AssistantAgentClaimDisposition_ASSISTANT_AGENT_CLAIM_UNSPECIFIED  AssistantAgentClaimDisposition = 0
+	AssistantAgentClaimDisposition_ASSISTANT_AGENT_CLAIM_EXECUTE_ONCE AssistantAgentClaimDisposition = 1
+	AssistantAgentClaimDisposition_ASSISTANT_AGENT_CLAIM_INSPECT_ONLY AssistantAgentClaimDisposition = 2
+)
+
+// Enum value maps for AssistantAgentClaimDisposition.
+var (
+	AssistantAgentClaimDisposition_name = map[int32]string{
+		0: "ASSISTANT_AGENT_CLAIM_UNSPECIFIED",
+		1: "ASSISTANT_AGENT_CLAIM_EXECUTE_ONCE",
+		2: "ASSISTANT_AGENT_CLAIM_INSPECT_ONLY",
+	}
+	AssistantAgentClaimDisposition_value = map[string]int32{
+		"ASSISTANT_AGENT_CLAIM_UNSPECIFIED":  0,
+		"ASSISTANT_AGENT_CLAIM_EXECUTE_ONCE": 1,
+		"ASSISTANT_AGENT_CLAIM_INSPECT_ONLY": 2,
+	}
+)
+
+func (x AssistantAgentClaimDisposition) Enum() *AssistantAgentClaimDisposition {
+	p := new(AssistantAgentClaimDisposition)
+	*p = x
+	return p
+}
+
+func (x AssistantAgentClaimDisposition) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (AssistantAgentClaimDisposition) Descriptor() protoreflect.EnumDescriptor {
+	return file_lmm_core_v1_assistant_proto_enumTypes[5].Descriptor()
+}
+
+func (AssistantAgentClaimDisposition) Type() protoreflect.EnumType {
+	return &file_lmm_core_v1_assistant_proto_enumTypes[5]
+}
+
+func (x AssistantAgentClaimDisposition) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use AssistantAgentClaimDisposition.Descriptor instead.
+func (AssistantAgentClaimDisposition) EnumDescriptor() ([]byte, []int) {
+	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{5}
+}
+
+type AssistantAgentResultState int32
+
+const (
+	AssistantAgentResultState_ASSISTANT_AGENT_RESULT_UNSPECIFIED AssistantAgentResultState = 0
+	AssistantAgentResultState_ASSISTANT_AGENT_RESULT_COMPLETED   AssistantAgentResultState = 1
+	AssistantAgentResultState_ASSISTANT_AGENT_RESULT_UNKNOWN     AssistantAgentResultState = 2
+)
+
+// Enum value maps for AssistantAgentResultState.
+var (
+	AssistantAgentResultState_name = map[int32]string{
+		0: "ASSISTANT_AGENT_RESULT_UNSPECIFIED",
+		1: "ASSISTANT_AGENT_RESULT_COMPLETED",
+		2: "ASSISTANT_AGENT_RESULT_UNKNOWN",
+	}
+	AssistantAgentResultState_value = map[string]int32{
+		"ASSISTANT_AGENT_RESULT_UNSPECIFIED": 0,
+		"ASSISTANT_AGENT_RESULT_COMPLETED":   1,
+		"ASSISTANT_AGENT_RESULT_UNKNOWN":     2,
+	}
+)
+
+func (x AssistantAgentResultState) Enum() *AssistantAgentResultState {
+	p := new(AssistantAgentResultState)
+	*p = x
+	return p
+}
+
+func (x AssistantAgentResultState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (AssistantAgentResultState) Descriptor() protoreflect.EnumDescriptor {
+	return file_lmm_core_v1_assistant_proto_enumTypes[6].Descriptor()
+}
+
+func (AssistantAgentResultState) Type() protoreflect.EnumType {
+	return &file_lmm_core_v1_assistant_proto_enumTypes[6]
+}
+
+func (x AssistantAgentResultState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use AssistantAgentResultState.Descriptor instead.
+func (AssistantAgentResultState) EnumDescriptor() ([]byte, []int) {
+	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{6}
+}
+
+type GetAssistantBusinessFactsRequest struct {
+	state         protoimpl.MessageState    `protogen:"open.v1"`
+	Kind          AssistantBusinessFactKind `protobuf:"varint,1,opt,name=kind,proto3,enum=lmm.core.v1.AssistantBusinessFactKind" json:"kind,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetAssistantBusinessFactsRequest) Reset() {
+	*x = GetAssistantBusinessFactsRequest{}
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetAssistantBusinessFactsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetAssistantBusinessFactsRequest) ProtoMessage() {}
+
+func (x *GetAssistantBusinessFactsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetAssistantBusinessFactsRequest.ProtoReflect.Descriptor instead.
+func (*GetAssistantBusinessFactsRequest) Descriptor() ([]byte, []int) {
 	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *GetAssistantBusinessFactsRequest) GetKind() AssistantBusinessFactKind {
+	if x != nil {
+		return x.Kind
+	}
+	return AssistantBusinessFactKind_ASSISTANT_BUSINESS_FACT_KIND_UNSPECIFIED
+}
+
+type GetAssistantBusinessFactsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	FactsJson     []byte                 `protobuf:"bytes,1,opt,name=facts_json,json=factsJson,proto3" json:"facts_json,omitempty"` // Closed Core-owned projection, never financial authority.
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetAssistantBusinessFactsResponse) Reset() {
+	*x = GetAssistantBusinessFactsResponse{}
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetAssistantBusinessFactsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetAssistantBusinessFactsResponse) ProtoMessage() {}
+
+func (x *GetAssistantBusinessFactsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetAssistantBusinessFactsResponse.ProtoReflect.Descriptor instead.
+func (*GetAssistantBusinessFactsResponse) Descriptor() ([]byte, []int) {
+	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *GetAssistantBusinessFactsResponse) GetFactsJson() []byte {
+	if x != nil {
+		return x.FactsJson
+	}
+	return nil
 }
 
 type AssistantConversationKey struct {
@@ -88,7 +485,7 @@ type AssistantConversationKey struct {
 
 func (x *AssistantConversationKey) Reset() {
 	*x = AssistantConversationKey{}
-	mi := &file_lmm_core_v1_assistant_proto_msgTypes[0]
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -100,7 +497,7 @@ func (x *AssistantConversationKey) String() string {
 func (*AssistantConversationKey) ProtoMessage() {}
 
 func (x *AssistantConversationKey) ProtoReflect() protoreflect.Message {
-	mi := &file_lmm_core_v1_assistant_proto_msgTypes[0]
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -113,7 +510,7 @@ func (x *AssistantConversationKey) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssistantConversationKey.ProtoReflect.Descriptor instead.
 func (*AssistantConversationKey) Descriptor() ([]byte, []int) {
-	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{0}
+	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *AssistantConversationKey) GetCreationKey() string {
@@ -133,7 +530,7 @@ type AssistantConversationReceipt struct {
 
 func (x *AssistantConversationReceipt) Reset() {
 	*x = AssistantConversationReceipt{}
-	mi := &file_lmm_core_v1_assistant_proto_msgTypes[1]
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -145,7 +542,7 @@ func (x *AssistantConversationReceipt) String() string {
 func (*AssistantConversationReceipt) ProtoMessage() {}
 
 func (x *AssistantConversationReceipt) ProtoReflect() protoreflect.Message {
-	mi := &file_lmm_core_v1_assistant_proto_msgTypes[1]
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -158,7 +555,7 @@ func (x *AssistantConversationReceipt) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssistantConversationReceipt.ProtoReflect.Descriptor instead.
 func (*AssistantConversationReceipt) Descriptor() ([]byte, []int) {
-	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{1}
+	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *AssistantConversationReceipt) GetCreationKey() string {
@@ -185,7 +582,7 @@ type AssistantTurnKey struct {
 
 func (x *AssistantTurnKey) Reset() {
 	*x = AssistantTurnKey{}
-	mi := &file_lmm_core_v1_assistant_proto_msgTypes[2]
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -197,7 +594,7 @@ func (x *AssistantTurnKey) String() string {
 func (*AssistantTurnKey) ProtoMessage() {}
 
 func (x *AssistantTurnKey) ProtoReflect() protoreflect.Message {
-	mi := &file_lmm_core_v1_assistant_proto_msgTypes[2]
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -210,7 +607,7 @@ func (x *AssistantTurnKey) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssistantTurnKey.ProtoReflect.Descriptor instead.
 func (*AssistantTurnKey) Descriptor() ([]byte, []int) {
-	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{2}
+	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *AssistantTurnKey) GetCoreConversationId() string {
@@ -241,7 +638,7 @@ type AssistantGrantReceipt struct {
 
 func (x *AssistantGrantReceipt) Reset() {
 	*x = AssistantGrantReceipt{}
-	mi := &file_lmm_core_v1_assistant_proto_msgTypes[3]
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -253,7 +650,7 @@ func (x *AssistantGrantReceipt) String() string {
 func (*AssistantGrantReceipt) ProtoMessage() {}
 
 func (x *AssistantGrantReceipt) ProtoReflect() protoreflect.Message {
-	mi := &file_lmm_core_v1_assistant_proto_msgTypes[3]
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -266,7 +663,7 @@ func (x *AssistantGrantReceipt) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssistantGrantReceipt.ProtoReflect.Descriptor instead.
 func (*AssistantGrantReceipt) Descriptor() ([]byte, []int) {
-	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{3}
+	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *AssistantGrantReceipt) GetDelegationId() string {
@@ -325,7 +722,7 @@ type AssistantOperationBinding struct {
 
 func (x *AssistantOperationBinding) Reset() {
 	*x = AssistantOperationBinding{}
-	mi := &file_lmm_core_v1_assistant_proto_msgTypes[4]
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -337,7 +734,7 @@ func (x *AssistantOperationBinding) String() string {
 func (*AssistantOperationBinding) ProtoMessage() {}
 
 func (x *AssistantOperationBinding) ProtoReflect() protoreflect.Message {
-	mi := &file_lmm_core_v1_assistant_proto_msgTypes[4]
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -350,7 +747,7 @@ func (x *AssistantOperationBinding) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssistantOperationBinding.ProtoReflect.Descriptor instead.
 func (*AssistantOperationBinding) Descriptor() ([]byte, []int) {
-	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{4}
+	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *AssistantOperationBinding) GetDelegationId() string {
@@ -405,7 +802,7 @@ type AssistantTextReservation struct {
 
 func (x *AssistantTextReservation) Reset() {
 	*x = AssistantTextReservation{}
-	mi := &file_lmm_core_v1_assistant_proto_msgTypes[5]
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -417,7 +814,7 @@ func (x *AssistantTextReservation) String() string {
 func (*AssistantTextReservation) ProtoMessage() {}
 
 func (x *AssistantTextReservation) ProtoReflect() protoreflect.Message {
-	mi := &file_lmm_core_v1_assistant_proto_msgTypes[5]
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -430,7 +827,7 @@ func (x *AssistantTextReservation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssistantTextReservation.ProtoReflect.Descriptor instead.
 func (*AssistantTextReservation) Descriptor() ([]byte, []int) {
-	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{5}
+	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *AssistantTextReservation) GetBinding() *AssistantOperationBinding {
@@ -454,13 +851,17 @@ type AssistantOperationReceipt struct {
 	State           AssistantOperationState    `protobuf:"varint,3,opt,name=state,proto3,enum=lmm.core.v1.AssistantOperationState" json:"state,omitempty"`
 	ReservedCredits int64                      `protobuf:"varint,4,opt,name=reserved_credits,json=reservedCredits,proto3" json:"reserved_credits,omitempty"`
 	SettledCredits  *int64                     `protobuf:"varint,5,opt,name=settled_credits,json=settledCredits,proto3,oneof" json:"settled_credits,omitempty"` // present only for authoritative settled.
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Present only for SETTLED, persisted in the same transaction as settlement.
+	// Replays and UNKNOWN inspect the original operation; they never dispatch again.
+	AnswerText    *string               `protobuf:"bytes,6,opt,name=answer_text,json=answerText,proto3,oneof" json:"answer_text,omitempty"`
+	GiftReceipt   *AssistantGiftReceipt `protobuf:"bytes,7,opt,name=gift_receipt,json=giftReceipt,proto3" json:"gift_receipt,omitempty"` // only SETTLED, durable authoritative Core gift outcome.
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AssistantOperationReceipt) Reset() {
 	*x = AssistantOperationReceipt{}
-	mi := &file_lmm_core_v1_assistant_proto_msgTypes[6]
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -472,7 +873,7 @@ func (x *AssistantOperationReceipt) String() string {
 func (*AssistantOperationReceipt) ProtoMessage() {}
 
 func (x *AssistantOperationReceipt) ProtoReflect() protoreflect.Message {
-	mi := &file_lmm_core_v1_assistant_proto_msgTypes[6]
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -485,7 +886,7 @@ func (x *AssistantOperationReceipt) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssistantOperationReceipt.ProtoReflect.Descriptor instead.
 func (*AssistantOperationReceipt) Descriptor() ([]byte, []int) {
-	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{6}
+	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *AssistantOperationReceipt) GetBinding() *AssistantOperationBinding {
@@ -523,6 +924,20 @@ func (x *AssistantOperationReceipt) GetSettledCredits() int64 {
 	return 0
 }
 
+func (x *AssistantOperationReceipt) GetAnswerText() string {
+	if x != nil && x.AnswerText != nil {
+		return *x.AnswerText
+	}
+	return ""
+}
+
+func (x *AssistantOperationReceipt) GetGiftReceipt() *AssistantGiftReceipt {
+	if x != nil {
+		return x.GiftReceipt
+	}
+	return nil
+}
+
 type AssistantRevokeGrant struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	DelegationId  string                 `protobuf:"bytes,1,opt,name=delegation_id,json=delegationId,proto3" json:"delegation_id,omitempty"`
@@ -532,7 +947,7 @@ type AssistantRevokeGrant struct {
 
 func (x *AssistantRevokeGrant) Reset() {
 	*x = AssistantRevokeGrant{}
-	mi := &file_lmm_core_v1_assistant_proto_msgTypes[7]
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -544,7 +959,7 @@ func (x *AssistantRevokeGrant) String() string {
 func (*AssistantRevokeGrant) ProtoMessage() {}
 
 func (x *AssistantRevokeGrant) ProtoReflect() protoreflect.Message {
-	mi := &file_lmm_core_v1_assistant_proto_msgTypes[7]
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -557,7 +972,7 @@ func (x *AssistantRevokeGrant) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssistantRevokeGrant.ProtoReflect.Descriptor instead.
 func (*AssistantRevokeGrant) Descriptor() ([]byte, []int) {
-	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{7}
+	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *AssistantRevokeGrant) GetDelegationId() string {
@@ -577,7 +992,7 @@ type AssistantRevokeReceipt struct {
 
 func (x *AssistantRevokeReceipt) Reset() {
 	*x = AssistantRevokeReceipt{}
-	mi := &file_lmm_core_v1_assistant_proto_msgTypes[8]
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -589,7 +1004,7 @@ func (x *AssistantRevokeReceipt) String() string {
 func (*AssistantRevokeReceipt) ProtoMessage() {}
 
 func (x *AssistantRevokeReceipt) ProtoReflect() protoreflect.Message {
-	mi := &file_lmm_core_v1_assistant_proto_msgTypes[8]
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -602,7 +1017,7 @@ func (x *AssistantRevokeReceipt) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssistantRevokeReceipt.ProtoReflect.Descriptor instead.
 func (*AssistantRevokeReceipt) Descriptor() ([]byte, []int) {
-	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{8}
+	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *AssistantRevokeReceipt) GetDelegationId() string {
@@ -619,11 +1034,1288 @@ func (x *AssistantRevokeReceipt) GetRevoked() bool {
 	return false
 }
 
+type AssistantGiftRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AssistantGiftRequest) Reset() {
+	*x = AssistantGiftRequest{}
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AssistantGiftRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AssistantGiftRequest) ProtoMessage() {}
+
+func (x *AssistantGiftRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AssistantGiftRequest.ProtoReflect.Descriptor instead.
+func (*AssistantGiftRequest) Descriptor() ([]byte, []int) {
+	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{11}
+}
+
+type AssistantGiftReceipt struct {
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	GiftId              string                 `protobuf:"bytes,1,opt,name=gift_id,json=giftId,proto3" json:"gift_id,omitempty"`                   // 64 lowercase hexadecimal decision id, not a bearer token.
+	OwnerUserId         int64                  `protobuf:"varint,2,opt,name=owner_user_id,json=ownerUserId,proto3" json:"owner_user_id,omitempty"` // Core authenticated original Session user.
+	State               AssistantGiftState     `protobuf:"varint,3,opt,name=state,proto3,enum=lmm.core.v1.AssistantGiftState" json:"state,omitempty"`
+	CreditAmount        int64                  `protobuf:"varint,4,opt,name=credit_amount,json=creditAmount,proto3" json:"credit_amount,omitempty"` // integer ledger credits, 500000 per USD anchor.
+	CreatedAtUnix       int64                  `protobuf:"varint,5,opt,name=created_at_unix,json=createdAtUnix,proto3" json:"created_at_unix,omitempty"`
+	ClaimedAtUnix       int64                  `protobuf:"varint,6,opt,name=claimed_at_unix,json=claimedAtUnix,proto3" json:"claimed_at_unix,omitempty"`
+	LedgerTransactionId string                 `protobuf:"bytes,7,opt,name=ledger_transaction_id,json=ledgerTransactionId,proto3" json:"ledger_transaction_id,omitempty"` // positive decimal journal id only for CLAIMED.
+	MaxCreditAmount     int64                  `protobuf:"varint,8,opt,name=max_credit_amount,json=maxCreditAmount,proto3" json:"max_credit_amount,omitempty"`            // current exclusive policy cap; may differ from old grant.
+	ClaimAvailable      bool                   `protobuf:"varint,9,opt,name=claim_available,json=claimAvailable,proto3" json:"claim_available,omitempty"`                 // current Core eligibility; never browser authority.
+	ClaimBlockedCode    string                 `protobuf:"bytes,10,opt,name=claim_blocked_code,json=claimBlockedCode,proto3" json:"claim_blocked_code,omitempty"`         // safe closed policy reason, no identity/network data.
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *AssistantGiftReceipt) Reset() {
+	*x = AssistantGiftReceipt{}
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AssistantGiftReceipt) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AssistantGiftReceipt) ProtoMessage() {}
+
+func (x *AssistantGiftReceipt) ProtoReflect() protoreflect.Message {
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AssistantGiftReceipt.ProtoReflect.Descriptor instead.
+func (*AssistantGiftReceipt) Descriptor() ([]byte, []int) {
+	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *AssistantGiftReceipt) GetGiftId() string {
+	if x != nil {
+		return x.GiftId
+	}
+	return ""
+}
+
+func (x *AssistantGiftReceipt) GetOwnerUserId() int64 {
+	if x != nil {
+		return x.OwnerUserId
+	}
+	return 0
+}
+
+func (x *AssistantGiftReceipt) GetState() AssistantGiftState {
+	if x != nil {
+		return x.State
+	}
+	return AssistantGiftState_ASSISTANT_GIFT_STATE_UNSPECIFIED
+}
+
+func (x *AssistantGiftReceipt) GetCreditAmount() int64 {
+	if x != nil {
+		return x.CreditAmount
+	}
+	return 0
+}
+
+func (x *AssistantGiftReceipt) GetCreatedAtUnix() int64 {
+	if x != nil {
+		return x.CreatedAtUnix
+	}
+	return 0
+}
+
+func (x *AssistantGiftReceipt) GetClaimedAtUnix() int64 {
+	if x != nil {
+		return x.ClaimedAtUnix
+	}
+	return 0
+}
+
+func (x *AssistantGiftReceipt) GetLedgerTransactionId() string {
+	if x != nil {
+		return x.LedgerTransactionId
+	}
+	return ""
+}
+
+func (x *AssistantGiftReceipt) GetMaxCreditAmount() int64 {
+	if x != nil {
+		return x.MaxCreditAmount
+	}
+	return 0
+}
+
+func (x *AssistantGiftReceipt) GetClaimAvailable() bool {
+	if x != nil {
+		return x.ClaimAvailable
+	}
+	return false
+}
+
+func (x *AssistantGiftReceipt) GetClaimBlockedCode() string {
+	if x != nil {
+		return x.ClaimBlockedCode
+	}
+	return ""
+}
+
+type AssistantGiftStatus struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Gift          *AssistantGiftReceipt  `protobuf:"bytes,1,opt,name=gift,proto3" json:"gift,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AssistantGiftStatus) Reset() {
+	*x = AssistantGiftStatus{}
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AssistantGiftStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AssistantGiftStatus) ProtoMessage() {}
+
+func (x *AssistantGiftStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AssistantGiftStatus.ProtoReflect.Descriptor instead.
+func (*AssistantGiftStatus) Descriptor() ([]byte, []int) {
+	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *AssistantGiftStatus) GetGift() *AssistantGiftReceipt {
+	if x != nil {
+		return x.Gift
+	}
+	return nil
+}
+
+type AssistantGiftClaim struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Gift           *AssistantGiftReceipt  `protobuf:"bytes,1,opt,name=gift,proto3" json:"gift,omitempty"`
+	AlreadyClaimed bool                   `protobuf:"varint,2,opt,name=already_claimed,json=alreadyClaimed,proto3" json:"already_claimed,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *AssistantGiftClaim) Reset() {
+	*x = AssistantGiftClaim{}
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AssistantGiftClaim) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AssistantGiftClaim) ProtoMessage() {}
+
+func (x *AssistantGiftClaim) ProtoReflect() protoreflect.Message {
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AssistantGiftClaim.ProtoReflect.Descriptor instead.
+func (*AssistantGiftClaim) Descriptor() ([]byte, []int) {
+	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *AssistantGiftClaim) GetGift() *AssistantGiftReceipt {
+	if x != nil {
+		return x.Gift
+	}
+	return nil
+}
+
+func (x *AssistantGiftClaim) GetAlreadyClaimed() bool {
+	if x != nil {
+		return x.AlreadyClaimed
+	}
+	return false
+}
+
+type AssistantAgentLookup struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	CoreConversationId string                 `protobuf:"bytes,1,opt,name=core_conversation_id,json=coreConversationId,proto3" json:"core_conversation_id,omitempty"`
+	ClientTurnId       string                 `protobuf:"bytes,2,opt,name=client_turn_id,json=clientTurnId,proto3" json:"client_turn_id,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *AssistantAgentLookup) Reset() {
+	*x = AssistantAgentLookup{}
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AssistantAgentLookup) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AssistantAgentLookup) ProtoMessage() {}
+
+func (x *AssistantAgentLookup) ProtoReflect() protoreflect.Message {
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AssistantAgentLookup.ProtoReflect.Descriptor instead.
+func (*AssistantAgentLookup) Descriptor() ([]byte, []int) {
+	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *AssistantAgentLookup) GetCoreConversationId() string {
+	if x != nil {
+		return x.CoreConversationId
+	}
+	return ""
+}
+
+func (x *AssistantAgentLookup) GetClientTurnId() string {
+	if x != nil {
+		return x.ClientTurnId
+	}
+	return ""
+}
+
+type AssistantAgentStart struct {
+	state              protoimpl.MessageState `protogen:"open.v1"`
+	CoreConversationId string                 `protobuf:"bytes,1,opt,name=core_conversation_id,json=coreConversationId,proto3" json:"core_conversation_id,omitempty"`
+	ClientTurnId       string                 `protobuf:"bytes,2,opt,name=client_turn_id,json=clientTurnId,proto3" json:"client_turn_id,omitempty"`
+	Text               string                 `protobuf:"bytes,3,opt,name=text,proto3" json:"text,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *AssistantAgentStart) Reset() {
+	*x = AssistantAgentStart{}
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AssistantAgentStart) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AssistantAgentStart) ProtoMessage() {}
+
+func (x *AssistantAgentStart) ProtoReflect() protoreflect.Message {
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AssistantAgentStart.ProtoReflect.Descriptor instead.
+func (*AssistantAgentStart) Descriptor() ([]byte, []int) {
+	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *AssistantAgentStart) GetCoreConversationId() string {
+	if x != nil {
+		return x.CoreConversationId
+	}
+	return ""
+}
+
+func (x *AssistantAgentStart) GetClientTurnId() string {
+	if x != nil {
+		return x.ClientTurnId
+	}
+	return ""
+}
+
+func (x *AssistantAgentStart) GetText() string {
+	if x != nil {
+		return x.Text
+	}
+	return ""
+}
+
+type AssistantAgentScope struct {
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	ToolName             string                 `protobuf:"bytes,1,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
+	ToolVersion          string                 `protobuf:"bytes,2,opt,name=tool_version,json=toolVersion,proto3" json:"tool_version,omitempty"`
+	SchemaSha256         []byte                 `protobuf:"bytes,3,opt,name=schema_sha256,json=schemaSha256,proto3" json:"schema_sha256,omitempty"`
+	PriceVersion         string                 `protobuf:"bytes,4,opt,name=price_version,json=priceVersion,proto3" json:"price_version,omitempty"`
+	PriceSha256          []byte                 `protobuf:"bytes,5,opt,name=price_sha256,json=priceSha256,proto3" json:"price_sha256,omitempty"`
+	ResourceKind         string                 `protobuf:"bytes,6,opt,name=resource_kind,json=resourceKind,proto3" json:"resource_kind,omitempty"`
+	ResourceId           string                 `protobuf:"bytes,7,opt,name=resource_id,json=resourceId,proto3" json:"resource_id,omitempty"`
+	ResourceVersion      string                 `protobuf:"bytes,8,opt,name=resource_version,json=resourceVersion,proto3" json:"resource_version,omitempty"`
+	GrantId              string                 `protobuf:"bytes,9,opt,name=grant_id,json=grantId,proto3" json:"grant_id,omitempty"`
+	Domain               AssistantAgentDomain   `protobuf:"varint,10,opt,name=domain,proto3,enum=lmm.core.v1.AssistantAgentDomain" json:"domain,omitempty"`
+	ResourceSchemaSha256 []byte                 `protobuf:"bytes,11,opt,name=resource_schema_sha256,json=resourceSchemaSha256,proto3" json:"resource_schema_sha256,omitempty"`
+	ResourcePriceSha256  []byte                 `protobuf:"bytes,12,opt,name=resource_price_sha256,json=resourcePriceSha256,proto3" json:"resource_price_sha256,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *AssistantAgentScope) Reset() {
+	*x = AssistantAgentScope{}
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AssistantAgentScope) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AssistantAgentScope) ProtoMessage() {}
+
+func (x *AssistantAgentScope) ProtoReflect() protoreflect.Message {
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AssistantAgentScope.ProtoReflect.Descriptor instead.
+func (*AssistantAgentScope) Descriptor() ([]byte, []int) {
+	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *AssistantAgentScope) GetToolName() string {
+	if x != nil {
+		return x.ToolName
+	}
+	return ""
+}
+
+func (x *AssistantAgentScope) GetToolVersion() string {
+	if x != nil {
+		return x.ToolVersion
+	}
+	return ""
+}
+
+func (x *AssistantAgentScope) GetSchemaSha256() []byte {
+	if x != nil {
+		return x.SchemaSha256
+	}
+	return nil
+}
+
+func (x *AssistantAgentScope) GetPriceVersion() string {
+	if x != nil {
+		return x.PriceVersion
+	}
+	return ""
+}
+
+func (x *AssistantAgentScope) GetPriceSha256() []byte {
+	if x != nil {
+		return x.PriceSha256
+	}
+	return nil
+}
+
+func (x *AssistantAgentScope) GetResourceKind() string {
+	if x != nil {
+		return x.ResourceKind
+	}
+	return ""
+}
+
+func (x *AssistantAgentScope) GetResourceId() string {
+	if x != nil {
+		return x.ResourceId
+	}
+	return ""
+}
+
+func (x *AssistantAgentScope) GetResourceVersion() string {
+	if x != nil {
+		return x.ResourceVersion
+	}
+	return ""
+}
+
+func (x *AssistantAgentScope) GetGrantId() string {
+	if x != nil {
+		return x.GrantId
+	}
+	return ""
+}
+
+func (x *AssistantAgentScope) GetDomain() AssistantAgentDomain {
+	if x != nil {
+		return x.Domain
+	}
+	return AssistantAgentDomain_ASSISTANT_AGENT_DOMAIN_UNSPECIFIED
+}
+
+func (x *AssistantAgentScope) GetResourceSchemaSha256() []byte {
+	if x != nil {
+		return x.ResourceSchemaSha256
+	}
+	return nil
+}
+
+func (x *AssistantAgentScope) GetResourcePriceSha256() []byte {
+	if x != nil {
+		return x.ResourcePriceSha256
+	}
+	return nil
+}
+
+type AssistantAgentToolCall struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	ToolOperationId  string                 `protobuf:"bytes,1,opt,name=tool_operation_id,json=toolOperationId,proto3" json:"tool_operation_id,omitempty"`
+	ProviderCallId   string                 `protobuf:"bytes,2,opt,name=provider_call_id,json=providerCallId,proto3" json:"provider_call_id,omitempty"`
+	ModelOperationId string                 `protobuf:"bytes,3,opt,name=model_operation_id,json=modelOperationId,proto3" json:"model_operation_id,omitempty"`
+	Round            uint32                 `protobuf:"varint,4,opt,name=round,proto3" json:"round,omitempty"`
+	Ordinal          uint32                 `protobuf:"varint,5,opt,name=ordinal,proto3" json:"ordinal,omitempty"`
+	Scope            *AssistantAgentScope   `protobuf:"bytes,6,opt,name=scope,proto3" json:"scope,omitempty"`
+	ArgumentsJson    []byte                 `protobuf:"bytes,7,opt,name=arguments_json,json=argumentsJson,proto3" json:"arguments_json,omitempty"`
+	ArgumentsSha256  []byte                 `protobuf:"bytes,8,opt,name=arguments_sha256,json=argumentsSha256,proto3" json:"arguments_sha256,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *AssistantAgentToolCall) Reset() {
+	*x = AssistantAgentToolCall{}
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AssistantAgentToolCall) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AssistantAgentToolCall) ProtoMessage() {}
+
+func (x *AssistantAgentToolCall) ProtoReflect() protoreflect.Message {
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AssistantAgentToolCall.ProtoReflect.Descriptor instead.
+func (*AssistantAgentToolCall) Descriptor() ([]byte, []int) {
+	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *AssistantAgentToolCall) GetToolOperationId() string {
+	if x != nil {
+		return x.ToolOperationId
+	}
+	return ""
+}
+
+func (x *AssistantAgentToolCall) GetProviderCallId() string {
+	if x != nil {
+		return x.ProviderCallId
+	}
+	return ""
+}
+
+func (x *AssistantAgentToolCall) GetModelOperationId() string {
+	if x != nil {
+		return x.ModelOperationId
+	}
+	return ""
+}
+
+func (x *AssistantAgentToolCall) GetRound() uint32 {
+	if x != nil {
+		return x.Round
+	}
+	return 0
+}
+
+func (x *AssistantAgentToolCall) GetOrdinal() uint32 {
+	if x != nil {
+		return x.Ordinal
+	}
+	return 0
+}
+
+func (x *AssistantAgentToolCall) GetScope() *AssistantAgentScope {
+	if x != nil {
+		return x.Scope
+	}
+	return nil
+}
+
+func (x *AssistantAgentToolCall) GetArgumentsJson() []byte {
+	if x != nil {
+		return x.ArgumentsJson
+	}
+	return nil
+}
+
+func (x *AssistantAgentToolCall) GetArgumentsSha256() []byte {
+	if x != nil {
+		return x.ArgumentsSha256
+	}
+	return nil
+}
+
+type AssistantAgentTurn struct {
+	state               protoimpl.MessageState    `protogen:"open.v1"`
+	CoreConversationId  string                    `protobuf:"bytes,1,opt,name=core_conversation_id,json=coreConversationId,proto3" json:"core_conversation_id,omitempty"`
+	ClientTurnId        string                    `protobuf:"bytes,2,opt,name=client_turn_id,json=clientTurnId,proto3" json:"client_turn_id,omitempty"`
+	OwnerUserId         int64                     `protobuf:"varint,3,opt,name=owner_user_id,json=ownerUserId,proto3" json:"owner_user_id,omitempty"`
+	OwnerAccountId      int64                     `protobuf:"varint,4,opt,name=owner_account_id,json=ownerAccountId,proto3" json:"owner_account_id,omitempty"`
+	OriginalTextSha256  []byte                    `protobuf:"bytes,5,opt,name=original_text_sha256,json=originalTextSha256,proto3" json:"original_text_sha256,omitempty"`
+	Phase               AssistantAgentPhase       `protobuf:"varint,6,opt,name=phase,proto3,enum=lmm.core.v1.AssistantAgentPhase" json:"phase,omitempty"`
+	Revision            uint64                    `protobuf:"varint,7,opt,name=revision,proto3" json:"revision,omitempty"`
+	Round               uint32                    `protobuf:"varint,8,opt,name=round,proto3" json:"round,omitempty"`
+	MaxRounds           uint32                    `protobuf:"varint,9,opt,name=max_rounds,json=maxRounds,proto3" json:"max_rounds,omitempty"`
+	ModelBudgetCredits  int64                     `protobuf:"varint,10,opt,name=model_budget_credits,json=modelBudgetCredits,proto3" json:"model_budget_credits,omitempty"`
+	ModelHeldCredits    int64                     `protobuf:"varint,11,opt,name=model_held_credits,json=modelHeldCredits,proto3" json:"model_held_credits,omitempty"`
+	ModelSettledCredits int64                     `protobuf:"varint,12,opt,name=model_settled_credits,json=modelSettledCredits,proto3" json:"model_settled_credits,omitempty"`
+	PendingCalls        []*AssistantAgentToolCall `protobuf:"bytes,13,rep,name=pending_calls,json=pendingCalls,proto3" json:"pending_calls,omitempty"`
+	FinalText           *string                   `protobuf:"bytes,14,opt,name=final_text,json=finalText,proto3,oneof" json:"final_text,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *AssistantAgentTurn) Reset() {
+	*x = AssistantAgentTurn{}
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AssistantAgentTurn) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AssistantAgentTurn) ProtoMessage() {}
+
+func (x *AssistantAgentTurn) ProtoReflect() protoreflect.Message {
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AssistantAgentTurn.ProtoReflect.Descriptor instead.
+func (*AssistantAgentTurn) Descriptor() ([]byte, []int) {
+	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *AssistantAgentTurn) GetCoreConversationId() string {
+	if x != nil {
+		return x.CoreConversationId
+	}
+	return ""
+}
+
+func (x *AssistantAgentTurn) GetClientTurnId() string {
+	if x != nil {
+		return x.ClientTurnId
+	}
+	return ""
+}
+
+func (x *AssistantAgentTurn) GetOwnerUserId() int64 {
+	if x != nil {
+		return x.OwnerUserId
+	}
+	return 0
+}
+
+func (x *AssistantAgentTurn) GetOwnerAccountId() int64 {
+	if x != nil {
+		return x.OwnerAccountId
+	}
+	return 0
+}
+
+func (x *AssistantAgentTurn) GetOriginalTextSha256() []byte {
+	if x != nil {
+		return x.OriginalTextSha256
+	}
+	return nil
+}
+
+func (x *AssistantAgentTurn) GetPhase() AssistantAgentPhase {
+	if x != nil {
+		return x.Phase
+	}
+	return AssistantAgentPhase_ASSISTANT_AGENT_PHASE_UNSPECIFIED
+}
+
+func (x *AssistantAgentTurn) GetRevision() uint64 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
+func (x *AssistantAgentTurn) GetRound() uint32 {
+	if x != nil {
+		return x.Round
+	}
+	return 0
+}
+
+func (x *AssistantAgentTurn) GetMaxRounds() uint32 {
+	if x != nil {
+		return x.MaxRounds
+	}
+	return 0
+}
+
+func (x *AssistantAgentTurn) GetModelBudgetCredits() int64 {
+	if x != nil {
+		return x.ModelBudgetCredits
+	}
+	return 0
+}
+
+func (x *AssistantAgentTurn) GetModelHeldCredits() int64 {
+	if x != nil {
+		return x.ModelHeldCredits
+	}
+	return 0
+}
+
+func (x *AssistantAgentTurn) GetModelSettledCredits() int64 {
+	if x != nil {
+		return x.ModelSettledCredits
+	}
+	return 0
+}
+
+func (x *AssistantAgentTurn) GetPendingCalls() []*AssistantAgentToolCall {
+	if x != nil {
+		return x.PendingCalls
+	}
+	return nil
+}
+
+func (x *AssistantAgentTurn) GetFinalText() string {
+	if x != nil && x.FinalText != nil {
+		return *x.FinalText
+	}
+	return ""
+}
+
+type AssistantAgentClaim struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	ToolOperationId string                 `protobuf:"bytes,1,opt,name=tool_operation_id,json=toolOperationId,proto3" json:"tool_operation_id,omitempty"`
+	ClaimKey        string                 `protobuf:"bytes,2,opt,name=claim_key,json=claimKey,proto3" json:"claim_key,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *AssistantAgentClaim) Reset() {
+	*x = AssistantAgentClaim{}
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AssistantAgentClaim) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AssistantAgentClaim) ProtoMessage() {}
+
+func (x *AssistantAgentClaim) ProtoReflect() protoreflect.Message {
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AssistantAgentClaim.ProtoReflect.Descriptor instead.
+func (*AssistantAgentClaim) Descriptor() ([]byte, []int) {
+	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *AssistantAgentClaim) GetToolOperationId() string {
+	if x != nil {
+		return x.ToolOperationId
+	}
+	return ""
+}
+
+func (x *AssistantAgentClaim) GetClaimKey() string {
+	if x != nil {
+		return x.ClaimKey
+	}
+	return ""
+}
+
+type AssistantAgentClaimReceipt struct {
+	state          protoimpl.MessageState         `protogen:"open.v1"`
+	Call           *AssistantAgentToolCall        `protobuf:"bytes,1,opt,name=call,proto3" json:"call,omitempty"`
+	ClaimKey       string                         `protobuf:"bytes,2,opt,name=claim_key,json=claimKey,proto3" json:"claim_key,omitempty"`
+	Disposition    AssistantAgentClaimDisposition `protobuf:"varint,3,opt,name=disposition,proto3,enum=lmm.core.v1.AssistantAgentClaimDisposition" json:"disposition,omitempty"`
+	AcceptedResult *AssistantAgentResult          `protobuf:"bytes,4,opt,name=accepted_result,json=acceptedResult,proto3,oneof" json:"accepted_result,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *AssistantAgentClaimReceipt) Reset() {
+	*x = AssistantAgentClaimReceipt{}
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AssistantAgentClaimReceipt) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AssistantAgentClaimReceipt) ProtoMessage() {}
+
+func (x *AssistantAgentClaimReceipt) ProtoReflect() protoreflect.Message {
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AssistantAgentClaimReceipt.ProtoReflect.Descriptor instead.
+func (*AssistantAgentClaimReceipt) Descriptor() ([]byte, []int) {
+	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *AssistantAgentClaimReceipt) GetCall() *AssistantAgentToolCall {
+	if x != nil {
+		return x.Call
+	}
+	return nil
+}
+
+func (x *AssistantAgentClaimReceipt) GetClaimKey() string {
+	if x != nil {
+		return x.ClaimKey
+	}
+	return ""
+}
+
+func (x *AssistantAgentClaimReceipt) GetDisposition() AssistantAgentClaimDisposition {
+	if x != nil {
+		return x.Disposition
+	}
+	return AssistantAgentClaimDisposition_ASSISTANT_AGENT_CLAIM_UNSPECIFIED
+}
+
+func (x *AssistantAgentClaimReceipt) GetAcceptedResult() *AssistantAgentResult {
+	if x != nil {
+		return x.AcceptedResult
+	}
+	return nil
+}
+
+type AssistantAgentComplete struct {
+	state           protoimpl.MessageState    `protogen:"open.v1"`
+	ToolOperationId string                    `protobuf:"bytes,1,opt,name=tool_operation_id,json=toolOperationId,proto3" json:"tool_operation_id,omitempty"`
+	ClaimKey        string                    `protobuf:"bytes,2,opt,name=claim_key,json=claimKey,proto3" json:"claim_key,omitempty"`
+	State           AssistantAgentResultState `protobuf:"varint,3,opt,name=state,proto3,enum=lmm.core.v1.AssistantAgentResultState" json:"state,omitempty"`
+	ResultJson      []byte                    `protobuf:"bytes,4,opt,name=result_json,json=resultJson,proto3" json:"result_json,omitempty"`
+	ResultSha256    []byte                    `protobuf:"bytes,5,opt,name=result_sha256,json=resultSha256,proto3" json:"result_sha256,omitempty"`
+	DomainReceiptId string                    `protobuf:"bytes,6,opt,name=domain_receipt_id,json=domainReceiptId,proto3" json:"domain_receipt_id,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *AssistantAgentComplete) Reset() {
+	*x = AssistantAgentComplete{}
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AssistantAgentComplete) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AssistantAgentComplete) ProtoMessage() {}
+
+func (x *AssistantAgentComplete) ProtoReflect() protoreflect.Message {
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AssistantAgentComplete.ProtoReflect.Descriptor instead.
+func (*AssistantAgentComplete) Descriptor() ([]byte, []int) {
+	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *AssistantAgentComplete) GetToolOperationId() string {
+	if x != nil {
+		return x.ToolOperationId
+	}
+	return ""
+}
+
+func (x *AssistantAgentComplete) GetClaimKey() string {
+	if x != nil {
+		return x.ClaimKey
+	}
+	return ""
+}
+
+func (x *AssistantAgentComplete) GetState() AssistantAgentResultState {
+	if x != nil {
+		return x.State
+	}
+	return AssistantAgentResultState_ASSISTANT_AGENT_RESULT_UNSPECIFIED
+}
+
+func (x *AssistantAgentComplete) GetResultJson() []byte {
+	if x != nil {
+		return x.ResultJson
+	}
+	return nil
+}
+
+func (x *AssistantAgentComplete) GetResultSha256() []byte {
+	if x != nil {
+		return x.ResultSha256
+	}
+	return nil
+}
+
+func (x *AssistantAgentComplete) GetDomainReceiptId() string {
+	if x != nil {
+		return x.DomainReceiptId
+	}
+	return ""
+}
+
+type AssistantAgentResult struct {
+	state           protoimpl.MessageState    `protogen:"open.v1"`
+	ToolOperationId string                    `protobuf:"bytes,1,opt,name=tool_operation_id,json=toolOperationId,proto3" json:"tool_operation_id,omitempty"`
+	ClaimKey        string                    `protobuf:"bytes,2,opt,name=claim_key,json=claimKey,proto3" json:"claim_key,omitempty"`
+	State           AssistantAgentResultState `protobuf:"varint,3,opt,name=state,proto3,enum=lmm.core.v1.AssistantAgentResultState" json:"state,omitempty"`
+	ResultSha256    []byte                    `protobuf:"bytes,4,opt,name=result_sha256,json=resultSha256,proto3" json:"result_sha256,omitempty"`
+	DomainReceiptId string                    `protobuf:"bytes,5,opt,name=domain_receipt_id,json=domainReceiptId,proto3" json:"domain_receipt_id,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *AssistantAgentResult) Reset() {
+	*x = AssistantAgentResult{}
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AssistantAgentResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AssistantAgentResult) ProtoMessage() {}
+
+func (x *AssistantAgentResult) ProtoReflect() protoreflect.Message {
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AssistantAgentResult.ProtoReflect.Descriptor instead.
+func (*AssistantAgentResult) Descriptor() ([]byte, []int) {
+	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *AssistantAgentResult) GetToolOperationId() string {
+	if x != nil {
+		return x.ToolOperationId
+	}
+	return ""
+}
+
+func (x *AssistantAgentResult) GetClaimKey() string {
+	if x != nil {
+		return x.ClaimKey
+	}
+	return ""
+}
+
+func (x *AssistantAgentResult) GetState() AssistantAgentResultState {
+	if x != nil {
+		return x.State
+	}
+	return AssistantAgentResultState_ASSISTANT_AGENT_RESULT_UNSPECIFIED
+}
+
+func (x *AssistantAgentResult) GetResultSha256() []byte {
+	if x != nil {
+		return x.ResultSha256
+	}
+	return nil
+}
+
+func (x *AssistantAgentResult) GetDomainReceiptId() string {
+	if x != nil {
+		return x.DomainReceiptId
+	}
+	return ""
+}
+
+type PrepareAssistantToolConfirmationRequest struct {
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	ToolOperationId     string                 `protobuf:"bytes,1,opt,name=tool_operation_id,json=toolOperationId,proto3" json:"tool_operation_id,omitempty"`
+	NormalizedDraftJson []byte                 `protobuf:"bytes,2,opt,name=normalized_draft_json,json=normalizedDraftJson,proto3" json:"normalized_draft_json,omitempty"` // bounded 16 KiB object; per-tool Core validator
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *PrepareAssistantToolConfirmationRequest) Reset() {
+	*x = PrepareAssistantToolConfirmationRequest{}
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PrepareAssistantToolConfirmationRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PrepareAssistantToolConfirmationRequest) ProtoMessage() {}
+
+func (x *PrepareAssistantToolConfirmationRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PrepareAssistantToolConfirmationRequest.ProtoReflect.Descriptor instead.
+func (*PrepareAssistantToolConfirmationRequest) Descriptor() ([]byte, []int) {
+	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *PrepareAssistantToolConfirmationRequest) GetToolOperationId() string {
+	if x != nil {
+		return x.ToolOperationId
+	}
+	return ""
+}
+
+func (x *PrepareAssistantToolConfirmationRequest) GetNormalizedDraftJson() []byte {
+	if x != nil {
+		return x.NormalizedDraftJson
+	}
+	return nil
+}
+
+type GetAssistantToolConfirmationReceiptRequest struct {
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	ToolOperationId       string                 `protobuf:"bytes,1,opt,name=tool_operation_id,json=toolOperationId,proto3" json:"tool_operation_id,omitempty"`
+	NormalizedDraftSha256 []byte                 `protobuf:"bytes,2,opt,name=normalized_draft_sha256,json=normalizedDraftSha256,proto3" json:"normalized_draft_sha256,omitempty"` // exactly 32 bytes, returned by Core Prepare
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
+}
+
+func (x *GetAssistantToolConfirmationReceiptRequest) Reset() {
+	*x = GetAssistantToolConfirmationReceiptRequest{}
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetAssistantToolConfirmationReceiptRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetAssistantToolConfirmationReceiptRequest) ProtoMessage() {}
+
+func (x *GetAssistantToolConfirmationReceiptRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetAssistantToolConfirmationReceiptRequest.ProtoReflect.Descriptor instead.
+func (*GetAssistantToolConfirmationReceiptRequest) Descriptor() ([]byte, []int) {
+	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *GetAssistantToolConfirmationReceiptRequest) GetToolOperationId() string {
+	if x != nil {
+		return x.ToolOperationId
+	}
+	return ""
+}
+
+func (x *GetAssistantToolConfirmationReceiptRequest) GetNormalizedDraftSha256() []byte {
+	if x != nil {
+		return x.NormalizedDraftSha256
+	}
+	return nil
+}
+
+type AssistantToolConfirmation struct {
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	ChallengeId           string                 `protobuf:"bytes,1,opt,name=challenge_id,json=challengeId,proto3" json:"challenge_id,omitempty"`
+	ToolOperationId       string                 `protobuf:"bytes,2,opt,name=tool_operation_id,json=toolOperationId,proto3" json:"tool_operation_id,omitempty"`
+	ToolName              string                 `protobuf:"bytes,3,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
+	ToolVersion           string                 `protobuf:"bytes,4,opt,name=tool_version,json=toolVersion,proto3" json:"tool_version,omitempty"`
+	SourceArgumentsSha256 []byte                 `protobuf:"bytes,5,opt,name=source_arguments_sha256,json=sourceArgumentsSha256,proto3" json:"source_arguments_sha256,omitempty"`
+	NormalizedDraftSha256 []byte                 `protobuf:"bytes,6,opt,name=normalized_draft_sha256,json=normalizedDraftSha256,proto3" json:"normalized_draft_sha256,omitempty"`
+	PreviewJson           []byte                 `protobuf:"bytes,7,opt,name=preview_json,json=previewJson,proto3" json:"preview_json,omitempty"`
+	ResourceKind          string                 `protobuf:"bytes,8,opt,name=resource_kind,json=resourceKind,proto3" json:"resource_kind,omitempty"`
+	ResourceId            string                 `protobuf:"bytes,9,opt,name=resource_id,json=resourceId,proto3" json:"resource_id,omitempty"`
+	ResourceVersion       string                 `protobuf:"bytes,10,opt,name=resource_version,json=resourceVersion,proto3" json:"resource_version,omitempty"`
+	ExpiresAtUnix         int64                  `protobuf:"varint,11,opt,name=expires_at_unix,json=expiresAtUnix,proto3" json:"expires_at_unix,omitempty"`
+	State                 string                 `protobuf:"bytes,12,opt,name=state,proto3" json:"state,omitempty"` // pending/approved/rejected; GetReceipt returns approved only
+	BrowserPath           string                 `protobuf:"bytes,13,opt,name=browser_path,json=browserPath,proto3" json:"browser_path,omitempty"`
+	Executed              bool                   `protobuf:"varint,14,opt,name=executed,proto3" json:"executed,omitempty"` // always false; domain receipt proves actual execution
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
+}
+
+func (x *AssistantToolConfirmation) Reset() {
+	*x = AssistantToolConfirmation{}
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AssistantToolConfirmation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AssistantToolConfirmation) ProtoMessage() {}
+
+func (x *AssistantToolConfirmation) ProtoReflect() protoreflect.Message {
+	mi := &file_lmm_core_v1_assistant_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AssistantToolConfirmation.ProtoReflect.Descriptor instead.
+func (*AssistantToolConfirmation) Descriptor() ([]byte, []int) {
+	return file_lmm_core_v1_assistant_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *AssistantToolConfirmation) GetChallengeId() string {
+	if x != nil {
+		return x.ChallengeId
+	}
+	return ""
+}
+
+func (x *AssistantToolConfirmation) GetToolOperationId() string {
+	if x != nil {
+		return x.ToolOperationId
+	}
+	return ""
+}
+
+func (x *AssistantToolConfirmation) GetToolName() string {
+	if x != nil {
+		return x.ToolName
+	}
+	return ""
+}
+
+func (x *AssistantToolConfirmation) GetToolVersion() string {
+	if x != nil {
+		return x.ToolVersion
+	}
+	return ""
+}
+
+func (x *AssistantToolConfirmation) GetSourceArgumentsSha256() []byte {
+	if x != nil {
+		return x.SourceArgumentsSha256
+	}
+	return nil
+}
+
+func (x *AssistantToolConfirmation) GetNormalizedDraftSha256() []byte {
+	if x != nil {
+		return x.NormalizedDraftSha256
+	}
+	return nil
+}
+
+func (x *AssistantToolConfirmation) GetPreviewJson() []byte {
+	if x != nil {
+		return x.PreviewJson
+	}
+	return nil
+}
+
+func (x *AssistantToolConfirmation) GetResourceKind() string {
+	if x != nil {
+		return x.ResourceKind
+	}
+	return ""
+}
+
+func (x *AssistantToolConfirmation) GetResourceId() string {
+	if x != nil {
+		return x.ResourceId
+	}
+	return ""
+}
+
+func (x *AssistantToolConfirmation) GetResourceVersion() string {
+	if x != nil {
+		return x.ResourceVersion
+	}
+	return ""
+}
+
+func (x *AssistantToolConfirmation) GetExpiresAtUnix() int64 {
+	if x != nil {
+		return x.ExpiresAtUnix
+	}
+	return 0
+}
+
+func (x *AssistantToolConfirmation) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
+func (x *AssistantToolConfirmation) GetBrowserPath() string {
+	if x != nil {
+		return x.BrowserPath
+	}
+	return ""
+}
+
+func (x *AssistantToolConfirmation) GetExecuted() bool {
+	if x != nil {
+		return x.Executed
+	}
+	return false
+}
+
 var File_lmm_core_v1_assistant_proto protoreflect.FileDescriptor
 
 const file_lmm_core_v1_assistant_proto_rawDesc = "" +
 	"\n" +
-	"\x1blmm/core/v1/assistant.proto\x12\vlmm.core.v1\"=\n" +
+	"\x1blmm/core/v1/assistant.proto\x12\vlmm.core.v1\"^\n" +
+	" GetAssistantBusinessFactsRequest\x12:\n" +
+	"\x04kind\x18\x01 \x01(\x0e2&.lmm.core.v1.AssistantBusinessFactKindR\x04kind\"B\n" +
+	"!GetAssistantBusinessFactsResponse\x12\x1d\n" +
+	"\n" +
+	"facts_json\x18\x01 \x01(\fR\tfactsJson\"=\n" +
 	"\x18AssistantConversationKey\x12!\n" +
 	"\fcreation_key\x18\x01 \x01(\tR\vcreationKey\"s\n" +
 	"\x1cAssistantConversationReceipt\x12!\n" +
@@ -649,27 +2341,174 @@ const file_lmm_core_v1_assistant_proto_rawDesc = "" +
 	"textSha256\"p\n" +
 	"\x18AssistantTextReservation\x12@\n" +
 	"\abinding\x18\x01 \x01(\v2&.lmm.core.v1.AssistantOperationBindingR\abinding\x12\x12\n" +
-	"\x04text\x18\x02 \x01(\tR\x04text\"\xa5\x02\n" +
+	"\x04text\x18\x02 \x01(\tR\x04text\"\xa1\x03\n" +
 	"\x19AssistantOperationReceipt\x12@\n" +
 	"\abinding\x18\x01 \x01(\v2&.lmm.core.v1.AssistantOperationBindingR\abinding\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x02 \x01(\tR\trequestId\x12:\n" +
 	"\x05state\x18\x03 \x01(\x0e2$.lmm.core.v1.AssistantOperationStateR\x05state\x12)\n" +
 	"\x10reserved_credits\x18\x04 \x01(\x03R\x0freservedCredits\x12,\n" +
-	"\x0fsettled_credits\x18\x05 \x01(\x03H\x00R\x0esettledCredits\x88\x01\x01B\x12\n" +
-	"\x10_settled_credits\";\n" +
+	"\x0fsettled_credits\x18\x05 \x01(\x03H\x00R\x0esettledCredits\x88\x01\x01\x12$\n" +
+	"\vanswer_text\x18\x06 \x01(\tH\x01R\n" +
+	"answerText\x88\x01\x01\x12D\n" +
+	"\fgift_receipt\x18\a \x01(\v2!.lmm.core.v1.AssistantGiftReceiptR\vgiftReceiptB\x12\n" +
+	"\x10_settled_creditsB\x0e\n" +
+	"\f_answer_text\";\n" +
 	"\x14AssistantRevokeGrant\x12#\n" +
 	"\rdelegation_id\x18\x01 \x01(\tR\fdelegationId\"W\n" +
 	"\x16AssistantRevokeReceipt\x12#\n" +
 	"\rdelegation_id\x18\x01 \x01(\tR\fdelegationId\x12\x18\n" +
-	"\arevoked\x18\x02 \x01(\bR\arevoked*\x8b\x02\n" +
+	"\arevoked\x18\x02 \x01(\bR\arevoked\"\x16\n" +
+	"\x14AssistantGiftRequest\"\xb6\x03\n" +
+	"\x14AssistantGiftReceipt\x12\x17\n" +
+	"\agift_id\x18\x01 \x01(\tR\x06giftId\x12\"\n" +
+	"\rowner_user_id\x18\x02 \x01(\x03R\vownerUserId\x125\n" +
+	"\x05state\x18\x03 \x01(\x0e2\x1f.lmm.core.v1.AssistantGiftStateR\x05state\x12#\n" +
+	"\rcredit_amount\x18\x04 \x01(\x03R\fcreditAmount\x12&\n" +
+	"\x0fcreated_at_unix\x18\x05 \x01(\x03R\rcreatedAtUnix\x12&\n" +
+	"\x0fclaimed_at_unix\x18\x06 \x01(\x03R\rclaimedAtUnix\x122\n" +
+	"\x15ledger_transaction_id\x18\a \x01(\tR\x13ledgerTransactionId\x12*\n" +
+	"\x11max_credit_amount\x18\b \x01(\x03R\x0fmaxCreditAmount\x12'\n" +
+	"\x0fclaim_available\x18\t \x01(\bR\x0eclaimAvailable\x12,\n" +
+	"\x12claim_blocked_code\x18\n" +
+	" \x01(\tR\x10claimBlockedCode\"L\n" +
+	"\x13AssistantGiftStatus\x125\n" +
+	"\x04gift\x18\x01 \x01(\v2!.lmm.core.v1.AssistantGiftReceiptR\x04gift\"t\n" +
+	"\x12AssistantGiftClaim\x125\n" +
+	"\x04gift\x18\x01 \x01(\v2!.lmm.core.v1.AssistantGiftReceiptR\x04gift\x12'\n" +
+	"\x0falready_claimed\x18\x02 \x01(\bR\x0ealreadyClaimed\"n\n" +
+	"\x14AssistantAgentLookup\x120\n" +
+	"\x14core_conversation_id\x18\x01 \x01(\tR\x12coreConversationId\x12$\n" +
+	"\x0eclient_turn_id\x18\x02 \x01(\tR\fclientTurnId\"\x81\x01\n" +
+	"\x13AssistantAgentStart\x120\n" +
+	"\x14core_conversation_id\x18\x01 \x01(\tR\x12coreConversationId\x12$\n" +
+	"\x0eclient_turn_id\x18\x02 \x01(\tR\fclientTurnId\x12\x12\n" +
+	"\x04text\x18\x03 \x01(\tR\x04text\"\xf3\x03\n" +
+	"\x13AssistantAgentScope\x12\x1b\n" +
+	"\ttool_name\x18\x01 \x01(\tR\btoolName\x12!\n" +
+	"\ftool_version\x18\x02 \x01(\tR\vtoolVersion\x12#\n" +
+	"\rschema_sha256\x18\x03 \x01(\fR\fschemaSha256\x12#\n" +
+	"\rprice_version\x18\x04 \x01(\tR\fpriceVersion\x12!\n" +
+	"\fprice_sha256\x18\x05 \x01(\fR\vpriceSha256\x12#\n" +
+	"\rresource_kind\x18\x06 \x01(\tR\fresourceKind\x12\x1f\n" +
+	"\vresource_id\x18\a \x01(\tR\n" +
+	"resourceId\x12)\n" +
+	"\x10resource_version\x18\b \x01(\tR\x0fresourceVersion\x12\x19\n" +
+	"\bgrant_id\x18\t \x01(\tR\agrantId\x129\n" +
+	"\x06domain\x18\n" +
+	" \x01(\x0e2!.lmm.core.v1.AssistantAgentDomainR\x06domain\x124\n" +
+	"\x16resource_schema_sha256\x18\v \x01(\fR\x14resourceSchemaSha256\x122\n" +
+	"\x15resource_price_sha256\x18\f \x01(\fR\x13resourcePriceSha256\"\xd6\x02\n" +
+	"\x16AssistantAgentToolCall\x12*\n" +
+	"\x11tool_operation_id\x18\x01 \x01(\tR\x0ftoolOperationId\x12(\n" +
+	"\x10provider_call_id\x18\x02 \x01(\tR\x0eproviderCallId\x12,\n" +
+	"\x12model_operation_id\x18\x03 \x01(\tR\x10modelOperationId\x12\x14\n" +
+	"\x05round\x18\x04 \x01(\rR\x05round\x12\x18\n" +
+	"\aordinal\x18\x05 \x01(\rR\aordinal\x126\n" +
+	"\x05scope\x18\x06 \x01(\v2 .lmm.core.v1.AssistantAgentScopeR\x05scope\x12%\n" +
+	"\x0earguments_json\x18\a \x01(\fR\rargumentsJson\x12)\n" +
+	"\x10arguments_sha256\x18\b \x01(\fR\x0fargumentsSha256\"\x86\x05\n" +
+	"\x12AssistantAgentTurn\x120\n" +
+	"\x14core_conversation_id\x18\x01 \x01(\tR\x12coreConversationId\x12$\n" +
+	"\x0eclient_turn_id\x18\x02 \x01(\tR\fclientTurnId\x12\"\n" +
+	"\rowner_user_id\x18\x03 \x01(\x03R\vownerUserId\x12(\n" +
+	"\x10owner_account_id\x18\x04 \x01(\x03R\x0eownerAccountId\x120\n" +
+	"\x14original_text_sha256\x18\x05 \x01(\fR\x12originalTextSha256\x126\n" +
+	"\x05phase\x18\x06 \x01(\x0e2 .lmm.core.v1.AssistantAgentPhaseR\x05phase\x12\x1a\n" +
+	"\brevision\x18\a \x01(\x04R\brevision\x12\x14\n" +
+	"\x05round\x18\b \x01(\rR\x05round\x12\x1d\n" +
+	"\n" +
+	"max_rounds\x18\t \x01(\rR\tmaxRounds\x120\n" +
+	"\x14model_budget_credits\x18\n" +
+	" \x01(\x03R\x12modelBudgetCredits\x12,\n" +
+	"\x12model_held_credits\x18\v \x01(\x03R\x10modelHeldCredits\x122\n" +
+	"\x15model_settled_credits\x18\f \x01(\x03R\x13modelSettledCredits\x12H\n" +
+	"\rpending_calls\x18\r \x03(\v2#.lmm.core.v1.AssistantAgentToolCallR\fpendingCalls\x12\"\n" +
+	"\n" +
+	"final_text\x18\x0e \x01(\tH\x00R\tfinalText\x88\x01\x01B\r\n" +
+	"\v_final_text\"^\n" +
+	"\x13AssistantAgentClaim\x12*\n" +
+	"\x11tool_operation_id\x18\x01 \x01(\tR\x0ftoolOperationId\x12\x1b\n" +
+	"\tclaim_key\x18\x02 \x01(\tR\bclaimKey\"\xa6\x02\n" +
+	"\x1aAssistantAgentClaimReceipt\x127\n" +
+	"\x04call\x18\x01 \x01(\v2#.lmm.core.v1.AssistantAgentToolCallR\x04call\x12\x1b\n" +
+	"\tclaim_key\x18\x02 \x01(\tR\bclaimKey\x12M\n" +
+	"\vdisposition\x18\x03 \x01(\x0e2+.lmm.core.v1.AssistantAgentClaimDispositionR\vdisposition\x12O\n" +
+	"\x0faccepted_result\x18\x04 \x01(\v2!.lmm.core.v1.AssistantAgentResultH\x00R\x0eacceptedResult\x88\x01\x01B\x12\n" +
+	"\x10_accepted_result\"\x91\x02\n" +
+	"\x16AssistantAgentComplete\x12*\n" +
+	"\x11tool_operation_id\x18\x01 \x01(\tR\x0ftoolOperationId\x12\x1b\n" +
+	"\tclaim_key\x18\x02 \x01(\tR\bclaimKey\x12<\n" +
+	"\x05state\x18\x03 \x01(\x0e2&.lmm.core.v1.AssistantAgentResultStateR\x05state\x12\x1f\n" +
+	"\vresult_json\x18\x04 \x01(\fR\n" +
+	"resultJson\x12#\n" +
+	"\rresult_sha256\x18\x05 \x01(\fR\fresultSha256\x12*\n" +
+	"\x11domain_receipt_id\x18\x06 \x01(\tR\x0fdomainReceiptId\"\xee\x01\n" +
+	"\x14AssistantAgentResult\x12*\n" +
+	"\x11tool_operation_id\x18\x01 \x01(\tR\x0ftoolOperationId\x12\x1b\n" +
+	"\tclaim_key\x18\x02 \x01(\tR\bclaimKey\x12<\n" +
+	"\x05state\x18\x03 \x01(\x0e2&.lmm.core.v1.AssistantAgentResultStateR\x05state\x12#\n" +
+	"\rresult_sha256\x18\x04 \x01(\fR\fresultSha256\x12*\n" +
+	"\x11domain_receipt_id\x18\x05 \x01(\tR\x0fdomainReceiptId\"\x89\x01\n" +
+	"'PrepareAssistantToolConfirmationRequest\x12*\n" +
+	"\x11tool_operation_id\x18\x01 \x01(\tR\x0ftoolOperationId\x122\n" +
+	"\x15normalized_draft_json\x18\x02 \x01(\fR\x13normalizedDraftJson\"\x90\x01\n" +
+	"*GetAssistantToolConfirmationReceiptRequest\x12*\n" +
+	"\x11tool_operation_id\x18\x01 \x01(\tR\x0ftoolOperationId\x126\n" +
+	"\x17normalized_draft_sha256\x18\x02 \x01(\fR\x15normalizedDraftSha256\"\xab\x04\n" +
+	"\x19AssistantToolConfirmation\x12!\n" +
+	"\fchallenge_id\x18\x01 \x01(\tR\vchallengeId\x12*\n" +
+	"\x11tool_operation_id\x18\x02 \x01(\tR\x0ftoolOperationId\x12\x1b\n" +
+	"\ttool_name\x18\x03 \x01(\tR\btoolName\x12!\n" +
+	"\ftool_version\x18\x04 \x01(\tR\vtoolVersion\x126\n" +
+	"\x17source_arguments_sha256\x18\x05 \x01(\fR\x15sourceArgumentsSha256\x126\n" +
+	"\x17normalized_draft_sha256\x18\x06 \x01(\fR\x15normalizedDraftSha256\x12!\n" +
+	"\fpreview_json\x18\a \x01(\fR\vpreviewJson\x12#\n" +
+	"\rresource_kind\x18\b \x01(\tR\fresourceKind\x12\x1f\n" +
+	"\vresource_id\x18\t \x01(\tR\n" +
+	"resourceId\x12)\n" +
+	"\x10resource_version\x18\n" +
+	" \x01(\tR\x0fresourceVersion\x12&\n" +
+	"\x0fexpires_at_unix\x18\v \x01(\x03R\rexpiresAtUnix\x12\x14\n" +
+	"\x05state\x18\f \x01(\tR\x05state\x12!\n" +
+	"\fbrowser_path\x18\r \x01(\tR\vbrowserPath\x12\x1a\n" +
+	"\bexecuted\x18\x0e \x01(\bR\bexecuted*\xb2\x01\n" +
+	"\x19AssistantBusinessFactKind\x12,\n" +
+	"(ASSISTANT_BUSINESS_FACT_KIND_UNSPECIFIED\x10\x00\x121\n" +
+	"-ASSISTANT_BUSINESS_FACT_KIND_AVAILABLE_MODELS\x10\x01\x124\n" +
+	"0ASSISTANT_BUSINESS_FACT_KIND_SUPPORT_ELIGIBILITY\x10\x02*\x8b\x02\n" +
 	"\x17AssistantOperationState\x12)\n" +
 	"%ASSISTANT_OPERATION_STATE_UNSPECIFIED\x10\x00\x12&\n" +
 	"\"ASSISTANT_OPERATION_STATE_RESERVED\x10\x01\x12'\n" +
 	"#ASSISTANT_OPERATION_STATE_STREAMING\x10\x02\x12%\n" +
 	"!ASSISTANT_OPERATION_STATE_SETTLED\x10\x03\x12&\n" +
 	"\"ASSISTANT_OPERATION_STATE_RELEASED\x10\x04\x12%\n" +
-	"!ASSISTANT_OPERATION_STATE_UNKNOWN\x10\x052\x9b\x05\n" +
+	"!ASSISTANT_OPERATION_STATE_UNKNOWN\x10\x05*~\n" +
+	"\x12AssistantGiftState\x12$\n" +
+	" ASSISTANT_GIFT_STATE_UNSPECIFIED\x10\x00\x12 \n" +
+	"\x1cASSISTANT_GIFT_STATE_OFFERED\x10\x01\x12 \n" +
+	"\x1cASSISTANT_GIFT_STATE_CLAIMED\x10\x02*\xbc\x02\n" +
+	"\x13AssistantAgentPhase\x12%\n" +
+	"!ASSISTANT_AGENT_PHASE_UNSPECIFIED\x10\x00\x12\x1d\n" +
+	"\x19ASSISTANT_AGENT_PHASE_NEW\x10\x01\x12'\n" +
+	"#ASSISTANT_AGENT_PHASE_MODEL_RUNNING\x10\x02\x12'\n" +
+	"#ASSISTANT_AGENT_PHASE_TOOLS_PENDING\x10\x03\x12#\n" +
+	"\x1fASSISTANT_AGENT_PHASE_COMPLETED\x10\x04\x12!\n" +
+	"\x1dASSISTANT_AGENT_PHASE_UNKNOWN\x10\x05\x12\"\n" +
+	"\x1eASSISTANT_AGENT_PHASE_REJECTED\x10\x06\x12!\n" +
+	"\x1dASSISTANT_AGENT_PHASE_EXPIRED\x10\a*\x90\x01\n" +
+	"\x14AssistantAgentDomain\x12&\n" +
+	"\"ASSISTANT_AGENT_DOMAIN_UNSPECIFIED\x10\x00\x12*\n" +
+	"&ASSISTANT_AGENT_DOMAIN_REGISTERED_CORE\x10\x01\x12$\n" +
+	" ASSISTANT_AGENT_DOMAIN_EXTENSION\x10\x02*\x97\x01\n" +
+	"\x1eAssistantAgentClaimDisposition\x12%\n" +
+	"!ASSISTANT_AGENT_CLAIM_UNSPECIFIED\x10\x00\x12&\n" +
+	"\"ASSISTANT_AGENT_CLAIM_EXECUTE_ONCE\x10\x01\x12&\n" +
+	"\"ASSISTANT_AGENT_CLAIM_INSPECT_ONLY\x10\x02*\x8d\x01\n" +
+	"\x19AssistantAgentResultState\x12&\n" +
+	"\"ASSISTANT_AGENT_RESULT_UNSPECIFIED\x10\x00\x12$\n" +
+	" ASSISTANT_AGENT_RESULT_COMPLETED\x10\x01\x12\"\n" +
+	"\x1eASSISTANT_AGENT_RESULT_UNKNOWN\x10\x022\xbb\f\n" +
 	"\x12CoreAssistantModel\x12e\n" +
 	"\x11BeginConversation\x12%.lmm.core.v1.AssistantConversationKey\x1a).lmm.core.v1.AssistantConversationReceipt\x12f\n" +
 	"\x12LookupConversation\x12%.lmm.core.v1.AssistantConversationKey\x1a).lmm.core.v1.AssistantConversationReceipt\x12O\n" +
@@ -678,7 +2517,16 @@ const file_lmm_core_v1_assistant_proto_rawDesc = "" +
 	"\vLookupGrant\x12\x1d.lmm.core.v1.AssistantTurnKey\x1a\".lmm.core.v1.AssistantGrantReceipt\x12\\\n" +
 	"\vReserveText\x12%.lmm.core.v1.AssistantTextReservation\x1a&.lmm.core.v1.AssistantOperationReceipt\x12^\n" +
 	"\fGetOperation\x12&.lmm.core.v1.AssistantOperationBinding\x1a&.lmm.core.v1.AssistantOperationReceipt\x12U\n" +
-	"\vRevokeGrant\x12!.lmm.core.v1.AssistantRevokeGrant\x1a#.lmm.core.v1.AssistantRevokeReceiptBLZJgithub.com/TokenNotIncluded/api.lmm.best/extensions/internal/corepb;corepbb\x06proto3"
+	"\vRevokeGrant\x12!.lmm.core.v1.AssistantRevokeGrant\x1a#.lmm.core.v1.AssistantRevokeReceipt\x12U\n" +
+	"\x0eGetNewUserGift\x12!.lmm.core.v1.AssistantGiftRequest\x1a .lmm.core.v1.AssistantGiftStatus\x12\\\n" +
+	"\x16ClaimStoredNewUserGift\x12!.lmm.core.v1.AssistantGiftRequest\x1a\x1f.lmm.core.v1.AssistantGiftClaim\x12S\n" +
+	"\x0eStartAgentTurn\x12 .lmm.core.v1.AssistantAgentStart\x1a\x1f.lmm.core.v1.AssistantAgentTurn\x12R\n" +
+	"\fGetAgentTurn\x12!.lmm.core.v1.AssistantAgentLookup\x1a\x1f.lmm.core.v1.AssistantAgentTurn\x12[\n" +
+	"\x0eClaimAgentTool\x12 .lmm.core.v1.AssistantAgentClaim\x1a'.lmm.core.v1.AssistantAgentClaimReceipt\x12[\n" +
+	"\x11CompleteAgentTool\x12#.lmm.core.v1.AssistantAgentComplete\x1a!.lmm.core.v1.AssistantAgentResult\x12\x80\x01\n" +
+	" PrepareAssistantToolConfirmation\x124.lmm.core.v1.PrepareAssistantToolConfirmationRequest\x1a&.lmm.core.v1.AssistantToolConfirmation\x12\x86\x01\n" +
+	"#GetAssistantToolConfirmationReceipt\x127.lmm.core.v1.GetAssistantToolConfirmationReceiptRequest\x1a&.lmm.core.v1.AssistantToolConfirmation\x12z\n" +
+	"\x19GetAssistantBusinessFacts\x12-.lmm.core.v1.GetAssistantBusinessFactsRequest\x1a..lmm.core.v1.GetAssistantBusinessFactsResponseBLZJgithub.com/TokenNotIncluded/api.lmm.best/extensions/internal/corepb;corepbb\x06proto3"
 
 var (
 	file_lmm_core_v1_assistant_proto_rawDescOnce sync.Once
@@ -692,43 +2540,99 @@ func file_lmm_core_v1_assistant_proto_rawDescGZIP() []byte {
 	return file_lmm_core_v1_assistant_proto_rawDescData
 }
 
-var file_lmm_core_v1_assistant_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_lmm_core_v1_assistant_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_lmm_core_v1_assistant_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
+var file_lmm_core_v1_assistant_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
 var file_lmm_core_v1_assistant_proto_goTypes = []any{
-	(AssistantOperationState)(0),         // 0: lmm.core.v1.AssistantOperationState
-	(*AssistantConversationKey)(nil),     // 1: lmm.core.v1.AssistantConversationKey
-	(*AssistantConversationReceipt)(nil), // 2: lmm.core.v1.AssistantConversationReceipt
-	(*AssistantTurnKey)(nil),             // 3: lmm.core.v1.AssistantTurnKey
-	(*AssistantGrantReceipt)(nil),        // 4: lmm.core.v1.AssistantGrantReceipt
-	(*AssistantOperationBinding)(nil),    // 5: lmm.core.v1.AssistantOperationBinding
-	(*AssistantTextReservation)(nil),     // 6: lmm.core.v1.AssistantTextReservation
-	(*AssistantOperationReceipt)(nil),    // 7: lmm.core.v1.AssistantOperationReceipt
-	(*AssistantRevokeGrant)(nil),         // 8: lmm.core.v1.AssistantRevokeGrant
-	(*AssistantRevokeReceipt)(nil),       // 9: lmm.core.v1.AssistantRevokeReceipt
+	(AssistantBusinessFactKind)(0),                     // 0: lmm.core.v1.AssistantBusinessFactKind
+	(AssistantOperationState)(0),                       // 1: lmm.core.v1.AssistantOperationState
+	(AssistantGiftState)(0),                            // 2: lmm.core.v1.AssistantGiftState
+	(AssistantAgentPhase)(0),                           // 3: lmm.core.v1.AssistantAgentPhase
+	(AssistantAgentDomain)(0),                          // 4: lmm.core.v1.AssistantAgentDomain
+	(AssistantAgentClaimDisposition)(0),                // 5: lmm.core.v1.AssistantAgentClaimDisposition
+	(AssistantAgentResultState)(0),                     // 6: lmm.core.v1.AssistantAgentResultState
+	(*GetAssistantBusinessFactsRequest)(nil),           // 7: lmm.core.v1.GetAssistantBusinessFactsRequest
+	(*GetAssistantBusinessFactsResponse)(nil),          // 8: lmm.core.v1.GetAssistantBusinessFactsResponse
+	(*AssistantConversationKey)(nil),                   // 9: lmm.core.v1.AssistantConversationKey
+	(*AssistantConversationReceipt)(nil),               // 10: lmm.core.v1.AssistantConversationReceipt
+	(*AssistantTurnKey)(nil),                           // 11: lmm.core.v1.AssistantTurnKey
+	(*AssistantGrantReceipt)(nil),                      // 12: lmm.core.v1.AssistantGrantReceipt
+	(*AssistantOperationBinding)(nil),                  // 13: lmm.core.v1.AssistantOperationBinding
+	(*AssistantTextReservation)(nil),                   // 14: lmm.core.v1.AssistantTextReservation
+	(*AssistantOperationReceipt)(nil),                  // 15: lmm.core.v1.AssistantOperationReceipt
+	(*AssistantRevokeGrant)(nil),                       // 16: lmm.core.v1.AssistantRevokeGrant
+	(*AssistantRevokeReceipt)(nil),                     // 17: lmm.core.v1.AssistantRevokeReceipt
+	(*AssistantGiftRequest)(nil),                       // 18: lmm.core.v1.AssistantGiftRequest
+	(*AssistantGiftReceipt)(nil),                       // 19: lmm.core.v1.AssistantGiftReceipt
+	(*AssistantGiftStatus)(nil),                        // 20: lmm.core.v1.AssistantGiftStatus
+	(*AssistantGiftClaim)(nil),                         // 21: lmm.core.v1.AssistantGiftClaim
+	(*AssistantAgentLookup)(nil),                       // 22: lmm.core.v1.AssistantAgentLookup
+	(*AssistantAgentStart)(nil),                        // 23: lmm.core.v1.AssistantAgentStart
+	(*AssistantAgentScope)(nil),                        // 24: lmm.core.v1.AssistantAgentScope
+	(*AssistantAgentToolCall)(nil),                     // 25: lmm.core.v1.AssistantAgentToolCall
+	(*AssistantAgentTurn)(nil),                         // 26: lmm.core.v1.AssistantAgentTurn
+	(*AssistantAgentClaim)(nil),                        // 27: lmm.core.v1.AssistantAgentClaim
+	(*AssistantAgentClaimReceipt)(nil),                 // 28: lmm.core.v1.AssistantAgentClaimReceipt
+	(*AssistantAgentComplete)(nil),                     // 29: lmm.core.v1.AssistantAgentComplete
+	(*AssistantAgentResult)(nil),                       // 30: lmm.core.v1.AssistantAgentResult
+	(*PrepareAssistantToolConfirmationRequest)(nil),    // 31: lmm.core.v1.PrepareAssistantToolConfirmationRequest
+	(*GetAssistantToolConfirmationReceiptRequest)(nil), // 32: lmm.core.v1.GetAssistantToolConfirmationReceiptRequest
+	(*AssistantToolConfirmation)(nil),                  // 33: lmm.core.v1.AssistantToolConfirmation
 }
 var file_lmm_core_v1_assistant_proto_depIdxs = []int32{
-	5,  // 0: lmm.core.v1.AssistantTextReservation.binding:type_name -> lmm.core.v1.AssistantOperationBinding
-	5,  // 1: lmm.core.v1.AssistantOperationReceipt.binding:type_name -> lmm.core.v1.AssistantOperationBinding
-	0,  // 2: lmm.core.v1.AssistantOperationReceipt.state:type_name -> lmm.core.v1.AssistantOperationState
-	1,  // 3: lmm.core.v1.CoreAssistantModel.BeginConversation:input_type -> lmm.core.v1.AssistantConversationKey
-	1,  // 4: lmm.core.v1.CoreAssistantModel.LookupConversation:input_type -> lmm.core.v1.AssistantConversationKey
-	3,  // 5: lmm.core.v1.CoreAssistantModel.IssueGrant:input_type -> lmm.core.v1.AssistantTurnKey
-	3,  // 6: lmm.core.v1.CoreAssistantModel.LookupGrant:input_type -> lmm.core.v1.AssistantTurnKey
-	6,  // 7: lmm.core.v1.CoreAssistantModel.ReserveText:input_type -> lmm.core.v1.AssistantTextReservation
-	5,  // 8: lmm.core.v1.CoreAssistantModel.GetOperation:input_type -> lmm.core.v1.AssistantOperationBinding
-	8,  // 9: lmm.core.v1.CoreAssistantModel.RevokeGrant:input_type -> lmm.core.v1.AssistantRevokeGrant
-	2,  // 10: lmm.core.v1.CoreAssistantModel.BeginConversation:output_type -> lmm.core.v1.AssistantConversationReceipt
-	2,  // 11: lmm.core.v1.CoreAssistantModel.LookupConversation:output_type -> lmm.core.v1.AssistantConversationReceipt
-	4,  // 12: lmm.core.v1.CoreAssistantModel.IssueGrant:output_type -> lmm.core.v1.AssistantGrantReceipt
-	4,  // 13: lmm.core.v1.CoreAssistantModel.LookupGrant:output_type -> lmm.core.v1.AssistantGrantReceipt
-	7,  // 14: lmm.core.v1.CoreAssistantModel.ReserveText:output_type -> lmm.core.v1.AssistantOperationReceipt
-	7,  // 15: lmm.core.v1.CoreAssistantModel.GetOperation:output_type -> lmm.core.v1.AssistantOperationReceipt
-	9,  // 16: lmm.core.v1.CoreAssistantModel.RevokeGrant:output_type -> lmm.core.v1.AssistantRevokeReceipt
-	10, // [10:17] is the sub-list for method output_type
-	3,  // [3:10] is the sub-list for method input_type
-	3,  // [3:3] is the sub-list for extension type_name
-	3,  // [3:3] is the sub-list for extension extendee
-	0,  // [0:3] is the sub-list for field type_name
+	0,  // 0: lmm.core.v1.GetAssistantBusinessFactsRequest.kind:type_name -> lmm.core.v1.AssistantBusinessFactKind
+	13, // 1: lmm.core.v1.AssistantTextReservation.binding:type_name -> lmm.core.v1.AssistantOperationBinding
+	13, // 2: lmm.core.v1.AssistantOperationReceipt.binding:type_name -> lmm.core.v1.AssistantOperationBinding
+	1,  // 3: lmm.core.v1.AssistantOperationReceipt.state:type_name -> lmm.core.v1.AssistantOperationState
+	19, // 4: lmm.core.v1.AssistantOperationReceipt.gift_receipt:type_name -> lmm.core.v1.AssistantGiftReceipt
+	2,  // 5: lmm.core.v1.AssistantGiftReceipt.state:type_name -> lmm.core.v1.AssistantGiftState
+	19, // 6: lmm.core.v1.AssistantGiftStatus.gift:type_name -> lmm.core.v1.AssistantGiftReceipt
+	19, // 7: lmm.core.v1.AssistantGiftClaim.gift:type_name -> lmm.core.v1.AssistantGiftReceipt
+	4,  // 8: lmm.core.v1.AssistantAgentScope.domain:type_name -> lmm.core.v1.AssistantAgentDomain
+	24, // 9: lmm.core.v1.AssistantAgentToolCall.scope:type_name -> lmm.core.v1.AssistantAgentScope
+	3,  // 10: lmm.core.v1.AssistantAgentTurn.phase:type_name -> lmm.core.v1.AssistantAgentPhase
+	25, // 11: lmm.core.v1.AssistantAgentTurn.pending_calls:type_name -> lmm.core.v1.AssistantAgentToolCall
+	25, // 12: lmm.core.v1.AssistantAgentClaimReceipt.call:type_name -> lmm.core.v1.AssistantAgentToolCall
+	5,  // 13: lmm.core.v1.AssistantAgentClaimReceipt.disposition:type_name -> lmm.core.v1.AssistantAgentClaimDisposition
+	30, // 14: lmm.core.v1.AssistantAgentClaimReceipt.accepted_result:type_name -> lmm.core.v1.AssistantAgentResult
+	6,  // 15: lmm.core.v1.AssistantAgentComplete.state:type_name -> lmm.core.v1.AssistantAgentResultState
+	6,  // 16: lmm.core.v1.AssistantAgentResult.state:type_name -> lmm.core.v1.AssistantAgentResultState
+	9,  // 17: lmm.core.v1.CoreAssistantModel.BeginConversation:input_type -> lmm.core.v1.AssistantConversationKey
+	9,  // 18: lmm.core.v1.CoreAssistantModel.LookupConversation:input_type -> lmm.core.v1.AssistantConversationKey
+	11, // 19: lmm.core.v1.CoreAssistantModel.IssueGrant:input_type -> lmm.core.v1.AssistantTurnKey
+	11, // 20: lmm.core.v1.CoreAssistantModel.LookupGrant:input_type -> lmm.core.v1.AssistantTurnKey
+	14, // 21: lmm.core.v1.CoreAssistantModel.ReserveText:input_type -> lmm.core.v1.AssistantTextReservation
+	13, // 22: lmm.core.v1.CoreAssistantModel.GetOperation:input_type -> lmm.core.v1.AssistantOperationBinding
+	16, // 23: lmm.core.v1.CoreAssistantModel.RevokeGrant:input_type -> lmm.core.v1.AssistantRevokeGrant
+	18, // 24: lmm.core.v1.CoreAssistantModel.GetNewUserGift:input_type -> lmm.core.v1.AssistantGiftRequest
+	18, // 25: lmm.core.v1.CoreAssistantModel.ClaimStoredNewUserGift:input_type -> lmm.core.v1.AssistantGiftRequest
+	23, // 26: lmm.core.v1.CoreAssistantModel.StartAgentTurn:input_type -> lmm.core.v1.AssistantAgentStart
+	22, // 27: lmm.core.v1.CoreAssistantModel.GetAgentTurn:input_type -> lmm.core.v1.AssistantAgentLookup
+	27, // 28: lmm.core.v1.CoreAssistantModel.ClaimAgentTool:input_type -> lmm.core.v1.AssistantAgentClaim
+	29, // 29: lmm.core.v1.CoreAssistantModel.CompleteAgentTool:input_type -> lmm.core.v1.AssistantAgentComplete
+	31, // 30: lmm.core.v1.CoreAssistantModel.PrepareAssistantToolConfirmation:input_type -> lmm.core.v1.PrepareAssistantToolConfirmationRequest
+	32, // 31: lmm.core.v1.CoreAssistantModel.GetAssistantToolConfirmationReceipt:input_type -> lmm.core.v1.GetAssistantToolConfirmationReceiptRequest
+	7,  // 32: lmm.core.v1.CoreAssistantModel.GetAssistantBusinessFacts:input_type -> lmm.core.v1.GetAssistantBusinessFactsRequest
+	10, // 33: lmm.core.v1.CoreAssistantModel.BeginConversation:output_type -> lmm.core.v1.AssistantConversationReceipt
+	10, // 34: lmm.core.v1.CoreAssistantModel.LookupConversation:output_type -> lmm.core.v1.AssistantConversationReceipt
+	12, // 35: lmm.core.v1.CoreAssistantModel.IssueGrant:output_type -> lmm.core.v1.AssistantGrantReceipt
+	12, // 36: lmm.core.v1.CoreAssistantModel.LookupGrant:output_type -> lmm.core.v1.AssistantGrantReceipt
+	15, // 37: lmm.core.v1.CoreAssistantModel.ReserveText:output_type -> lmm.core.v1.AssistantOperationReceipt
+	15, // 38: lmm.core.v1.CoreAssistantModel.GetOperation:output_type -> lmm.core.v1.AssistantOperationReceipt
+	17, // 39: lmm.core.v1.CoreAssistantModel.RevokeGrant:output_type -> lmm.core.v1.AssistantRevokeReceipt
+	20, // 40: lmm.core.v1.CoreAssistantModel.GetNewUserGift:output_type -> lmm.core.v1.AssistantGiftStatus
+	21, // 41: lmm.core.v1.CoreAssistantModel.ClaimStoredNewUserGift:output_type -> lmm.core.v1.AssistantGiftClaim
+	26, // 42: lmm.core.v1.CoreAssistantModel.StartAgentTurn:output_type -> lmm.core.v1.AssistantAgentTurn
+	26, // 43: lmm.core.v1.CoreAssistantModel.GetAgentTurn:output_type -> lmm.core.v1.AssistantAgentTurn
+	28, // 44: lmm.core.v1.CoreAssistantModel.ClaimAgentTool:output_type -> lmm.core.v1.AssistantAgentClaimReceipt
+	30, // 45: lmm.core.v1.CoreAssistantModel.CompleteAgentTool:output_type -> lmm.core.v1.AssistantAgentResult
+	33, // 46: lmm.core.v1.CoreAssistantModel.PrepareAssistantToolConfirmation:output_type -> lmm.core.v1.AssistantToolConfirmation
+	33, // 47: lmm.core.v1.CoreAssistantModel.GetAssistantToolConfirmationReceipt:output_type -> lmm.core.v1.AssistantToolConfirmation
+	8,  // 48: lmm.core.v1.CoreAssistantModel.GetAssistantBusinessFacts:output_type -> lmm.core.v1.GetAssistantBusinessFactsResponse
+	33, // [33:49] is the sub-list for method output_type
+	17, // [17:33] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_lmm_core_v1_assistant_proto_init() }
@@ -736,14 +2640,16 @@ func file_lmm_core_v1_assistant_proto_init() {
 	if File_lmm_core_v1_assistant_proto != nil {
 		return
 	}
-	file_lmm_core_v1_assistant_proto_msgTypes[6].OneofWrappers = []any{}
+	file_lmm_core_v1_assistant_proto_msgTypes[8].OneofWrappers = []any{}
+	file_lmm_core_v1_assistant_proto_msgTypes[19].OneofWrappers = []any{}
+	file_lmm_core_v1_assistant_proto_msgTypes[21].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_lmm_core_v1_assistant_proto_rawDesc), len(file_lmm_core_v1_assistant_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   9,
+			NumEnums:      7,
+			NumMessages:   27,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

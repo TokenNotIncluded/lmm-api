@@ -1168,6 +1168,16 @@ def execute(temp, projects, context):
     )
     assert len(components) == len(set(components))
     assert set(components) == {
+        "humangrant",
+        "assistant-model",
+        "tool-market",
+        "gift",
+        "image",
+        "market-oauth",
+        "tool-market-credit",
+        "assistant-tools",
+        "wallet",
+        "bounties",
         "identity",
         "oauth-grants",
         "ledger",

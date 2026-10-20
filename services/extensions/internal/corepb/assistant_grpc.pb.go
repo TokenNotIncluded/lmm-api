@@ -19,22 +19,30 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	CoreAssistantModel_BeginConversation_FullMethodName  = "/lmm.core.v1.CoreAssistantModel/BeginConversation"
-	CoreAssistantModel_LookupConversation_FullMethodName = "/lmm.core.v1.CoreAssistantModel/LookupConversation"
-	CoreAssistantModel_IssueGrant_FullMethodName         = "/lmm.core.v1.CoreAssistantModel/IssueGrant"
-	CoreAssistantModel_LookupGrant_FullMethodName        = "/lmm.core.v1.CoreAssistantModel/LookupGrant"
-	CoreAssistantModel_ReserveText_FullMethodName        = "/lmm.core.v1.CoreAssistantModel/ReserveText"
-	CoreAssistantModel_GetOperation_FullMethodName       = "/lmm.core.v1.CoreAssistantModel/GetOperation"
-	CoreAssistantModel_RevokeGrant_FullMethodName        = "/lmm.core.v1.CoreAssistantModel/RevokeGrant"
+	CoreAssistantModel_BeginConversation_FullMethodName                   = "/lmm.core.v1.CoreAssistantModel/BeginConversation"
+	CoreAssistantModel_LookupConversation_FullMethodName                  = "/lmm.core.v1.CoreAssistantModel/LookupConversation"
+	CoreAssistantModel_IssueGrant_FullMethodName                          = "/lmm.core.v1.CoreAssistantModel/IssueGrant"
+	CoreAssistantModel_LookupGrant_FullMethodName                         = "/lmm.core.v1.CoreAssistantModel/LookupGrant"
+	CoreAssistantModel_ReserveText_FullMethodName                         = "/lmm.core.v1.CoreAssistantModel/ReserveText"
+	CoreAssistantModel_GetOperation_FullMethodName                        = "/lmm.core.v1.CoreAssistantModel/GetOperation"
+	CoreAssistantModel_RevokeGrant_FullMethodName                         = "/lmm.core.v1.CoreAssistantModel/RevokeGrant"
+	CoreAssistantModel_GetNewUserGift_FullMethodName                      = "/lmm.core.v1.CoreAssistantModel/GetNewUserGift"
+	CoreAssistantModel_ClaimStoredNewUserGift_FullMethodName              = "/lmm.core.v1.CoreAssistantModel/ClaimStoredNewUserGift"
+	CoreAssistantModel_StartAgentTurn_FullMethodName                      = "/lmm.core.v1.CoreAssistantModel/StartAgentTurn"
+	CoreAssistantModel_GetAgentTurn_FullMethodName                        = "/lmm.core.v1.CoreAssistantModel/GetAgentTurn"
+	CoreAssistantModel_ClaimAgentTool_FullMethodName                      = "/lmm.core.v1.CoreAssistantModel/ClaimAgentTool"
+	CoreAssistantModel_CompleteAgentTool_FullMethodName                   = "/lmm.core.v1.CoreAssistantModel/CompleteAgentTool"
+	CoreAssistantModel_PrepareAssistantToolConfirmation_FullMethodName    = "/lmm.core.v1.CoreAssistantModel/PrepareAssistantToolConfirmation"
+	CoreAssistantModel_GetAssistantToolConfirmationReceipt_FullMethodName = "/lmm.core.v1.CoreAssistantModel/GetAssistantToolConfirmationReceipt"
+	CoreAssistantModel_GetAssistantBusinessFacts_FullMethodName           = "/lmm.core.v1.CoreAssistantModel/GetAssistantBusinessFacts"
 )
 
 // CoreAssistantModelClient is the client API for CoreAssistantModel service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// PRIVATE DRAFT. NOT generated, registered or advertised. Root owns canonical
-// proto/mandatory capability negotiation and transport registration. This is
-// personal_assistant_text admission, NOT the previous JSON Model.Next bridge.
+// Core-owned assistant delegation. Each workflow requires its independently
+// negotiated capability and a fully installed durable execution path.
 // Every method reuses existing UDS host + original user metadata verification;
 // there are no credentials, actor, payer, role, price or authority flags here.
 type CoreAssistantModelClient interface {
@@ -45,6 +53,15 @@ type CoreAssistantModelClient interface {
 	ReserveText(ctx context.Context, in *AssistantTextReservation, opts ...grpc.CallOption) (*AssistantOperationReceipt, error)
 	GetOperation(ctx context.Context, in *AssistantOperationBinding, opts ...grpc.CallOption) (*AssistantOperationReceipt, error)
 	RevokeGrant(ctx context.Context, in *AssistantRevokeGrant, opts ...grpc.CallOption) (*AssistantRevokeReceipt, error)
+	GetNewUserGift(ctx context.Context, in *AssistantGiftRequest, opts ...grpc.CallOption) (*AssistantGiftStatus, error)
+	ClaimStoredNewUserGift(ctx context.Context, in *AssistantGiftRequest, opts ...grpc.CallOption) (*AssistantGiftClaim, error)
+	StartAgentTurn(ctx context.Context, in *AssistantAgentStart, opts ...grpc.CallOption) (*AssistantAgentTurn, error)
+	GetAgentTurn(ctx context.Context, in *AssistantAgentLookup, opts ...grpc.CallOption) (*AssistantAgentTurn, error)
+	ClaimAgentTool(ctx context.Context, in *AssistantAgentClaim, opts ...grpc.CallOption) (*AssistantAgentClaimReceipt, error)
+	CompleteAgentTool(ctx context.Context, in *AssistantAgentComplete, opts ...grpc.CallOption) (*AssistantAgentResult, error)
+	PrepareAssistantToolConfirmation(ctx context.Context, in *PrepareAssistantToolConfirmationRequest, opts ...grpc.CallOption) (*AssistantToolConfirmation, error)
+	GetAssistantToolConfirmationReceipt(ctx context.Context, in *GetAssistantToolConfirmationReceiptRequest, opts ...grpc.CallOption) (*AssistantToolConfirmation, error)
+	GetAssistantBusinessFacts(ctx context.Context, in *GetAssistantBusinessFactsRequest, opts ...grpc.CallOption) (*GetAssistantBusinessFactsResponse, error)
 }
 
 type coreAssistantModelClient struct {
@@ -125,13 +142,102 @@ func (c *coreAssistantModelClient) RevokeGrant(ctx context.Context, in *Assistan
 	return out, nil
 }
 
+func (c *coreAssistantModelClient) GetNewUserGift(ctx context.Context, in *AssistantGiftRequest, opts ...grpc.CallOption) (*AssistantGiftStatus, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AssistantGiftStatus)
+	err := c.cc.Invoke(ctx, CoreAssistantModel_GetNewUserGift_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *coreAssistantModelClient) ClaimStoredNewUserGift(ctx context.Context, in *AssistantGiftRequest, opts ...grpc.CallOption) (*AssistantGiftClaim, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AssistantGiftClaim)
+	err := c.cc.Invoke(ctx, CoreAssistantModel_ClaimStoredNewUserGift_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *coreAssistantModelClient) StartAgentTurn(ctx context.Context, in *AssistantAgentStart, opts ...grpc.CallOption) (*AssistantAgentTurn, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AssistantAgentTurn)
+	err := c.cc.Invoke(ctx, CoreAssistantModel_StartAgentTurn_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *coreAssistantModelClient) GetAgentTurn(ctx context.Context, in *AssistantAgentLookup, opts ...grpc.CallOption) (*AssistantAgentTurn, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AssistantAgentTurn)
+	err := c.cc.Invoke(ctx, CoreAssistantModel_GetAgentTurn_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *coreAssistantModelClient) ClaimAgentTool(ctx context.Context, in *AssistantAgentClaim, opts ...grpc.CallOption) (*AssistantAgentClaimReceipt, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AssistantAgentClaimReceipt)
+	err := c.cc.Invoke(ctx, CoreAssistantModel_ClaimAgentTool_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *coreAssistantModelClient) CompleteAgentTool(ctx context.Context, in *AssistantAgentComplete, opts ...grpc.CallOption) (*AssistantAgentResult, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AssistantAgentResult)
+	err := c.cc.Invoke(ctx, CoreAssistantModel_CompleteAgentTool_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *coreAssistantModelClient) PrepareAssistantToolConfirmation(ctx context.Context, in *PrepareAssistantToolConfirmationRequest, opts ...grpc.CallOption) (*AssistantToolConfirmation, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AssistantToolConfirmation)
+	err := c.cc.Invoke(ctx, CoreAssistantModel_PrepareAssistantToolConfirmation_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *coreAssistantModelClient) GetAssistantToolConfirmationReceipt(ctx context.Context, in *GetAssistantToolConfirmationReceiptRequest, opts ...grpc.CallOption) (*AssistantToolConfirmation, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AssistantToolConfirmation)
+	err := c.cc.Invoke(ctx, CoreAssistantModel_GetAssistantToolConfirmationReceipt_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *coreAssistantModelClient) GetAssistantBusinessFacts(ctx context.Context, in *GetAssistantBusinessFactsRequest, opts ...grpc.CallOption) (*GetAssistantBusinessFactsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetAssistantBusinessFactsResponse)
+	err := c.cc.Invoke(ctx, CoreAssistantModel_GetAssistantBusinessFacts_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // CoreAssistantModelServer is the server API for CoreAssistantModel service.
 // All implementations must embed UnimplementedCoreAssistantModelServer
 // for forward compatibility.
 //
-// PRIVATE DRAFT. NOT generated, registered or advertised. Root owns canonical
-// proto/mandatory capability negotiation and transport registration. This is
-// personal_assistant_text admission, NOT the previous JSON Model.Next bridge.
+// Core-owned assistant delegation. Each workflow requires its independently
+// negotiated capability and a fully installed durable execution path.
 // Every method reuses existing UDS host + original user metadata verification;
 // there are no credentials, actor, payer, role, price or authority flags here.
 type CoreAssistantModelServer interface {
@@ -142,6 +248,15 @@ type CoreAssistantModelServer interface {
 	ReserveText(context.Context, *AssistantTextReservation) (*AssistantOperationReceipt, error)
 	GetOperation(context.Context, *AssistantOperationBinding) (*AssistantOperationReceipt, error)
 	RevokeGrant(context.Context, *AssistantRevokeGrant) (*AssistantRevokeReceipt, error)
+	GetNewUserGift(context.Context, *AssistantGiftRequest) (*AssistantGiftStatus, error)
+	ClaimStoredNewUserGift(context.Context, *AssistantGiftRequest) (*AssistantGiftClaim, error)
+	StartAgentTurn(context.Context, *AssistantAgentStart) (*AssistantAgentTurn, error)
+	GetAgentTurn(context.Context, *AssistantAgentLookup) (*AssistantAgentTurn, error)
+	ClaimAgentTool(context.Context, *AssistantAgentClaim) (*AssistantAgentClaimReceipt, error)
+	CompleteAgentTool(context.Context, *AssistantAgentComplete) (*AssistantAgentResult, error)
+	PrepareAssistantToolConfirmation(context.Context, *PrepareAssistantToolConfirmationRequest) (*AssistantToolConfirmation, error)
+	GetAssistantToolConfirmationReceipt(context.Context, *GetAssistantToolConfirmationReceiptRequest) (*AssistantToolConfirmation, error)
+	GetAssistantBusinessFacts(context.Context, *GetAssistantBusinessFactsRequest) (*GetAssistantBusinessFactsResponse, error)
 	mustEmbedUnimplementedCoreAssistantModelServer()
 }
 
@@ -172,6 +287,33 @@ func (UnimplementedCoreAssistantModelServer) GetOperation(context.Context, *Assi
 }
 func (UnimplementedCoreAssistantModelServer) RevokeGrant(context.Context, *AssistantRevokeGrant) (*AssistantRevokeReceipt, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RevokeGrant not implemented")
+}
+func (UnimplementedCoreAssistantModelServer) GetNewUserGift(context.Context, *AssistantGiftRequest) (*AssistantGiftStatus, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetNewUserGift not implemented")
+}
+func (UnimplementedCoreAssistantModelServer) ClaimStoredNewUserGift(context.Context, *AssistantGiftRequest) (*AssistantGiftClaim, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ClaimStoredNewUserGift not implemented")
+}
+func (UnimplementedCoreAssistantModelServer) StartAgentTurn(context.Context, *AssistantAgentStart) (*AssistantAgentTurn, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method StartAgentTurn not implemented")
+}
+func (UnimplementedCoreAssistantModelServer) GetAgentTurn(context.Context, *AssistantAgentLookup) (*AssistantAgentTurn, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetAgentTurn not implemented")
+}
+func (UnimplementedCoreAssistantModelServer) ClaimAgentTool(context.Context, *AssistantAgentClaim) (*AssistantAgentClaimReceipt, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ClaimAgentTool not implemented")
+}
+func (UnimplementedCoreAssistantModelServer) CompleteAgentTool(context.Context, *AssistantAgentComplete) (*AssistantAgentResult, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CompleteAgentTool not implemented")
+}
+func (UnimplementedCoreAssistantModelServer) PrepareAssistantToolConfirmation(context.Context, *PrepareAssistantToolConfirmationRequest) (*AssistantToolConfirmation, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PrepareAssistantToolConfirmation not implemented")
+}
+func (UnimplementedCoreAssistantModelServer) GetAssistantToolConfirmationReceipt(context.Context, *GetAssistantToolConfirmationReceiptRequest) (*AssistantToolConfirmation, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetAssistantToolConfirmationReceipt not implemented")
+}
+func (UnimplementedCoreAssistantModelServer) GetAssistantBusinessFacts(context.Context, *GetAssistantBusinessFactsRequest) (*GetAssistantBusinessFactsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetAssistantBusinessFacts not implemented")
 }
 func (UnimplementedCoreAssistantModelServer) mustEmbedUnimplementedCoreAssistantModelServer() {}
 func (UnimplementedCoreAssistantModelServer) testEmbeddedByValue()                            {}
@@ -320,6 +462,168 @@ func _CoreAssistantModel_RevokeGrant_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CoreAssistantModel_GetNewUserGift_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AssistantGiftRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoreAssistantModelServer).GetNewUserGift(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CoreAssistantModel_GetNewUserGift_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CoreAssistantModelServer).GetNewUserGift(ctx, req.(*AssistantGiftRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CoreAssistantModel_ClaimStoredNewUserGift_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AssistantGiftRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoreAssistantModelServer).ClaimStoredNewUserGift(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CoreAssistantModel_ClaimStoredNewUserGift_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CoreAssistantModelServer).ClaimStoredNewUserGift(ctx, req.(*AssistantGiftRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CoreAssistantModel_StartAgentTurn_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AssistantAgentStart)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoreAssistantModelServer).StartAgentTurn(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CoreAssistantModel_StartAgentTurn_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CoreAssistantModelServer).StartAgentTurn(ctx, req.(*AssistantAgentStart))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CoreAssistantModel_GetAgentTurn_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AssistantAgentLookup)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoreAssistantModelServer).GetAgentTurn(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CoreAssistantModel_GetAgentTurn_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CoreAssistantModelServer).GetAgentTurn(ctx, req.(*AssistantAgentLookup))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CoreAssistantModel_ClaimAgentTool_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AssistantAgentClaim)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoreAssistantModelServer).ClaimAgentTool(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CoreAssistantModel_ClaimAgentTool_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CoreAssistantModelServer).ClaimAgentTool(ctx, req.(*AssistantAgentClaim))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CoreAssistantModel_CompleteAgentTool_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AssistantAgentComplete)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoreAssistantModelServer).CompleteAgentTool(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CoreAssistantModel_CompleteAgentTool_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CoreAssistantModelServer).CompleteAgentTool(ctx, req.(*AssistantAgentComplete))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CoreAssistantModel_PrepareAssistantToolConfirmation_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PrepareAssistantToolConfirmationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoreAssistantModelServer).PrepareAssistantToolConfirmation(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CoreAssistantModel_PrepareAssistantToolConfirmation_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CoreAssistantModelServer).PrepareAssistantToolConfirmation(ctx, req.(*PrepareAssistantToolConfirmationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CoreAssistantModel_GetAssistantToolConfirmationReceipt_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetAssistantToolConfirmationReceiptRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoreAssistantModelServer).GetAssistantToolConfirmationReceipt(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CoreAssistantModel_GetAssistantToolConfirmationReceipt_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CoreAssistantModelServer).GetAssistantToolConfirmationReceipt(ctx, req.(*GetAssistantToolConfirmationReceiptRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CoreAssistantModel_GetAssistantBusinessFacts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetAssistantBusinessFactsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CoreAssistantModelServer).GetAssistantBusinessFacts(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CoreAssistantModel_GetAssistantBusinessFacts_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CoreAssistantModelServer).GetAssistantBusinessFacts(ctx, req.(*GetAssistantBusinessFactsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // CoreAssistantModel_ServiceDesc is the grpc.ServiceDesc for CoreAssistantModel service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -354,6 +658,42 @@ var CoreAssistantModel_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RevokeGrant",
 			Handler:    _CoreAssistantModel_RevokeGrant_Handler,
+		},
+		{
+			MethodName: "GetNewUserGift",
+			Handler:    _CoreAssistantModel_GetNewUserGift_Handler,
+		},
+		{
+			MethodName: "ClaimStoredNewUserGift",
+			Handler:    _CoreAssistantModel_ClaimStoredNewUserGift_Handler,
+		},
+		{
+			MethodName: "StartAgentTurn",
+			Handler:    _CoreAssistantModel_StartAgentTurn_Handler,
+		},
+		{
+			MethodName: "GetAgentTurn",
+			Handler:    _CoreAssistantModel_GetAgentTurn_Handler,
+		},
+		{
+			MethodName: "ClaimAgentTool",
+			Handler:    _CoreAssistantModel_ClaimAgentTool_Handler,
+		},
+		{
+			MethodName: "CompleteAgentTool",
+			Handler:    _CoreAssistantModel_CompleteAgentTool_Handler,
+		},
+		{
+			MethodName: "PrepareAssistantToolConfirmation",
+			Handler:    _CoreAssistantModel_PrepareAssistantToolConfirmation_Handler,
+		},
+		{
+			MethodName: "GetAssistantToolConfirmationReceipt",
+			Handler:    _CoreAssistantModel_GetAssistantToolConfirmationReceipt_Handler,
+		},
+		{
+			MethodName: "GetAssistantBusinessFacts",
+			Handler:    _CoreAssistantModel_GetAssistantBusinessFacts_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

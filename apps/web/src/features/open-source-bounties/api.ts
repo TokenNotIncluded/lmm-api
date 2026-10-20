@@ -16,9 +16,23 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { api } from '@/lib/api'
+import axios from 'axios'
 
+import { api } from '@/lib/api'
+import { useAuthStore } from '@/stores/auth-store'
+
+import {
+  activateBountyAccount,
+  beginBountyOperation,
+  bountyOperationsSnapshot,
+  completeBountyOperation,
+  hasBountyOperation,
+  pendingBountyOperation,
+  updateBountyOperation,
+  waitForBountyOperation,
+} from './native-operation'
 import type {
+  BountyId,
   BountyNotification,
   BountyChallenge,
   BountyDraftInput,
@@ -30,6 +44,15 @@ import type {
   BountyTipNotification,
 } from './types'
 
+class BountyActionRejected extends Error {
+  constructor(
+    message: string,
+    readonly code?: string
+  ) {
+    super(message)
+  }
+}
+
 interface ApiEnvelope<T> {
   success: boolean
   code?: string
@@ -37,16 +60,89 @@ interface ApiEnvelope<T> {
   data: T
 }
 
-async function unwrap<T>(request: Promise<{ data: ApiEnvelope<T> }>) {
+async function unwrap<T>(
+  request: Promise<{ data: ApiEnvelope<T>; status?: number }>,
+  expectedOperationID?: string
+) {
   const response = await request
   if (!response.data.success) {
-    const error = new Error(
-      response.data.message || 'Open-source bounty request failed'
+    throw new BountyActionRejected(
+      response.data.message || 'Open-source bounty request failed',
+      response.data.code
     )
-    Object.assign(error, { code: response.data.code })
-    throw error
+  }
+  if (response.status === 202) {
+    const id = pendingBountyOperation(response.data.data, expectedOperationID)
+    await waitForBountyOperation(id)
+    return unwrap<T>(
+      api.get(
+        `/api/open-source-bounties/operations/${encodeURIComponent(id)}/result`
+      )
+    )
   }
   return response.data.data
+}
+async function nativeMutation<T>(
+  method: 'post' | 'delete',
+  url: string,
+  data?: unknown,
+  idempotencyKey?: string
+): Promise<T> {
+  const user = useAuthStore.getState().auth.user
+  activateBountyAccount(user ? String(user.id) : 'session')
+  const id = idempotencyKey ?? crypto.randomUUID()
+  if (!beginBountyOperation(id)) {
+    await waitForBountyOperation(id)
+    return unwrap<T>(
+      api.get(
+        `/api/open-source-bounties/operations/${encodeURIComponent(id)}/result`
+      )
+    )
+  }
+  try {
+    const config = {
+      headers: {
+        'X-Lmm-Operation-ID': id,
+        'Idempotency-Key': idempotencyKey ?? id,
+      },
+      skipErrorHandler: true,
+      skipBusinessError: true,
+    }
+    const result = await unwrap<T>(
+      method === 'post'
+        ? api.post<ApiEnvelope<T>>(url, data, config)
+        : api.delete<ApiEnvelope<T>>(url, config),
+      id
+    )
+    completeBountyOperation(id)
+    return result
+  } catch (error) {
+    if (
+      bountyOperationsSnapshot().find((operation) => operation.id === id)
+        ?.phase === 'preparing' &&
+      (error instanceof BountyActionRejected ||
+        (axios.isAxiosError(error) &&
+          [400, 401, 403, 404, 409].includes(error.response?.status ?? 0)))
+    ) {
+      completeBountyOperation(id)
+      throw error
+    }
+    if (
+      !hasBountyOperation(id) ||
+      (error instanceof Error && error.message === 'Session changed')
+    ) {
+      throw error
+    }
+    updateBountyOperation(id, { phase: 'unknown' })
+    await waitForBountyOperation(id)
+    const result = await unwrap<T>(
+      api.get(
+        `/api/open-source-bounties/operations/${encodeURIComponent(id)}/result`
+      )
+    )
+    completeBountyOperation(id)
+    return result
+  }
 }
 
 export async function listBounties() {
@@ -97,9 +193,11 @@ export function listAcceptedBounties() {
   )
 }
 
-export function getBountyDetail(projectId: number) {
+export function getBountyDetail(projectId: BountyId) {
   return unwrap<BountyProjectDetail>(
-    api.get(`/api/open-source-bounties/projects/${projectId}`)
+    api.get(
+      `/api/open-source-bounties/projects/${encodeURIComponent(projectId)}`
+    )
   )
 }
 
@@ -107,89 +205,99 @@ export function createBounty(input: BountyDraftInput) {
   return unwrap<BountyProject>(api.post('/api/open-source-bounties', input))
 }
 
-export function updateBounty(projectId: number, input: BountyDraftInput) {
+export function updateBounty(projectId: BountyId, input: BountyDraftInput) {
   return unwrap<BountyProject>(
-    api.put(`/api/open-source-bounties/projects/${projectId}`, input)
+    api.put(
+      `/api/open-source-bounties/projects/${encodeURIComponent(projectId)}`,
+      input
+    )
   )
 }
 
-export function deleteBounty(projectId: number) {
-  return unwrap<null>(
-    api.delete(`/api/open-source-bounties/projects/${projectId}`)
+export function deleteBounty(projectId: BountyId) {
+  return nativeMutation<null>(
+    'delete',
+    `/api/open-source-bounties/projects/${encodeURIComponent(projectId)}`
   )
 }
 
-export function publishBounty(projectId: number) {
-  return unwrap<{ project: BountyProject; charged_quota: number }>(
-    api.post(`/api/open-source-bounties/projects/${projectId}/publish`)
+export function publishBounty(projectId: BountyId) {
+  return nativeMutation<{ project: BountyProject; charged_quota: number }>(
+    'post',
+    `/api/open-source-bounties/projects/${encodeURIComponent(projectId)}/publish`
   )
 }
-
-export function pauseBounty(projectId: number) {
+export function pauseBounty(projectId: BountyId) {
+  return nativeMutation<BountyProject>(
+    'post',
+    `/api/open-source-bounties/projects/${encodeURIComponent(projectId)}/pause`
+  )
+}
+export function resumeBounty(projectId: BountyId) {
+  return nativeMutation<BountyProject>(
+    'post',
+    `/api/open-source-bounties/projects/${encodeURIComponent(projectId)}/resume`
+  )
+}
+export function closeBounty(projectId: BountyId) {
+  return nativeMutation<{ project: BountyProject; refunded_quota: number }>(
+    'post',
+    `/api/open-source-bounties/projects/${encodeURIComponent(projectId)}/close`
+  )
+}
+export function archiveBounty(projectId: BountyId) {
   return unwrap<BountyProject>(
-    api.post(`/api/open-source-bounties/projects/${projectId}/pause`)
+    api.post(
+      `/api/open-source-bounties/projects/${encodeURIComponent(projectId)}/archive`
+    )
   )
 }
 
-export function resumeBounty(projectId: number) {
+export function unarchiveBounty(projectId: BountyId) {
   return unwrap<BountyProject>(
-    api.post(`/api/open-source-bounties/projects/${projectId}/resume`)
+    api.post(
+      `/api/open-source-bounties/projects/${encodeURIComponent(projectId)}/unarchive`
+    )
   )
 }
 
-export function closeBounty(projectId: number) {
-  return unwrap<{ project: BountyProject; refunded_quota: number }>(
-    api.post(`/api/open-source-bounties/projects/${projectId}/close`)
-  )
-}
-
-export function archiveBounty(projectId: number) {
-  return unwrap<BountyProject>(
-    api.post(`/api/open-source-bounties/projects/${projectId}/archive`)
-  )
-}
-
-export function unarchiveBounty(projectId: number) {
-  return unwrap<BountyProject>(
-    api.post(`/api/open-source-bounties/projects/${projectId}/unarchive`)
-  )
-}
-
-export function acceptBounty(projectId: number, githubHandle: string) {
-  return unwrap<BountyChallenge>(
-    api.post(`/api/open-source-bounties/projects/${projectId}/accept`, {
+export function acceptBounty(projectId: BountyId, githubHandle: string) {
+  return nativeMutation<BountyChallenge>(
+    'post',
+    `/api/open-source-bounties/projects/${encodeURIComponent(projectId)}/accept`,
+    {
       github_handle: githubHandle,
-    })
+    }
   )
 }
-
 export function submitChallenge(
-  projectId: number,
+  projectId: BountyId,
   input: {
     issue_url: string
     pull_request_url: string
     submission_note: string
   }
 ) {
-  return unwrap<BountyChallenge>(
-    api.post(`/api/open-source-bounties/projects/${projectId}/submit`, input)
+  return nativeMutation<BountyChallenge>(
+    'post',
+    `/api/open-source-bounties/projects/${encodeURIComponent(projectId)}/submit`,
+    input
   )
 }
-
-export function withdrawChallenge(challengeId: number) {
-  return unwrap<BountyChallenge>(
-    api.post(`/api/open-source-bounties/challenges/${challengeId}/withdraw`)
+export function withdrawChallenge(challengeId: BountyId) {
+  return nativeMutation<BountyChallenge>(
+    'post',
+    `/api/open-source-bounties/challenges/${encodeURIComponent(challengeId)}/withdraw`
   )
 }
-
-export function cancelChallenge(challengeId: number) {
-  return unwrap<BountyChallenge>(
-    api.post(`/api/open-source-bounties/challenges/${challengeId}/cancel`)
+export function cancelChallenge(challengeId: BountyId) {
+  return nativeMutation<BountyChallenge>(
+    'post',
+    `/api/open-source-bounties/challenges/${encodeURIComponent(challengeId)}/cancel`
   )
 }
-
 export function reviewChallenge(
-  challengeId: number,
+  challengeId: BountyId,
   action: 'approve' | 'reject',
   input: {
     review_note: string
@@ -197,30 +305,31 @@ export function reviewChallenge(
     rating_comment: string
   }
 ) {
-  return unwrap<{ challenge: BountyChallenge; transferred_quota: number }>(
-    api.post(
-      `/api/open-source-bounties/challenges/${challengeId}/${action}`,
-      input
-    )
+  return nativeMutation<{
+    challenge: BountyChallenge
+    transferred_quota: number
+  }>(
+    'post',
+    `/api/open-source-bounties/challenges/${encodeURIComponent(challengeId)}/${action}`,
+    input
   )
 }
-
 export function tipChallenge(
-  challengeId: number,
+  challengeId: BountyId,
   input: { quota: number; note: string },
   idempotencyKey: string
 ) {
-  return unwrap<{
+  return nativeMutation<{
     challenge: BountyChallenge
     transferred_quota: number
     remaining_quota: number
   }>(
-    api.post(`/api/open-source-bounties/challenges/${challengeId}/tip`, input, {
-      headers: { 'Idempotency-Key': idempotencyKey },
-    })
+    'post',
+    `/api/open-source-bounties/challenges/${encodeURIComponent(challengeId)}/tip`,
+    input,
+    idempotencyKey
   )
 }
-
 export function listBountyNotifications() {
   return unwrap<BountyNotification[]>(
     api.get('/api/open-source-bounties/notifications', {
@@ -269,36 +378,34 @@ export function markCompatibleBountyNotificationsRead(
     : markReceivedBountyTipsRead()
 }
 
-export function thankBountyTip(tipId: number) {
+export function thankBountyTip(tipId: BountyId) {
   return unwrap<BountyTipNotification>(
-    api.post(`/api/open-source-bounties/tips/${tipId}/thank`)
+    api.post(
+      `/api/open-source-bounties/tips/${encodeURIComponent(tipId)}/thank`
+    )
   )
 }
 
 export function rateBountyOwner(
-  challengeId: number,
+  challengeId: BountyId,
   input: { score: number; comment: string }
 ) {
-  return unwrap<BountyChallenge>(
-    api.post(
-      `/api/open-source-bounties/challenges/${challengeId}/rate-owner`,
-      input
-    )
+  return nativeMutation<BountyChallenge>(
+    'post',
+    `/api/open-source-bounties/challenges/${encodeURIComponent(challengeId)}/rate-owner`,
+    input
   )
 }
-
 export function openBountyDispute(
-  challengeId: number,
+  challengeId: BountyId,
   input: { reason: BountyDisputeReason; statement: string }
 ) {
-  return unwrap<BountyDispute>(
-    api.post(
-      `/api/open-source-bounties/challenges/${challengeId}/disputes`,
-      input
-    )
+  return nativeMutation<BountyDispute>(
+    'post',
+    `/api/open-source-bounties/challenges/${encodeURIComponent(challengeId)}/disputes`,
+    input
   )
 }
-
 export function listMyBountyDisputes() {
   return unwrap<BountyDispute[]>(
     api.get('/api/open-source-bounties/disputes/mine')
@@ -312,10 +419,12 @@ export function listAdminBountyDisputes() {
 }
 
 export function resolveBountyDispute(
-  disputeId: number,
+  disputeId: BountyId,
   input: { action: 'pay' | 'deny'; resolution: string }
 ) {
-  return unwrap<{ dispute: BountyDispute; transferred_quota: number }>(
-    api.post(`/api/open-source-bounties/disputes/${disputeId}/resolve`, input)
+  return nativeMutation<{ dispute: BountyDispute; transferred_quota: number }>(
+    'post',
+    `/api/open-source-bounties/disputes/${encodeURIComponent(disputeId)}/resolve`,
+    input
   )
 }

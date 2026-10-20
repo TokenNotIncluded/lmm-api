@@ -1193,14 +1193,15 @@ const file_lmm_core_v1_payments_proto_rawDesc = "" +
 	"%PAYMENT_RECEIPT_STATE_REFUND_RELEASED\x10\x04\x121\n" +
 	"-PAYMENT_RECEIPT_STATE_EXTERNAL_REFUND_APPLIED\x10\x05\x12\"\n" +
 	"\x1ePAYMENT_RECEIPT_STATE_REJECTED\x10\x06\x12\"\n" +
-	"\x1ePAYMENT_RECEIPT_STATE_PREPARED\x10\a2\x86\x06\n" +
+	"\x1ePAYMENT_RECEIPT_STATE_PREPARED\x10\a2\xdd\x06\n" +
 	"\fCorePayments\x12a\n" +
 	"\x13AcceptProviderProof\x12'.lmm.core.v1.AcceptProviderProofRequest\x1a!.lmm.core.v1.ProviderProofReceipt\x12[\n" +
 	"\x10GetProviderProof\x12$.lmm.core.v1.GetProviderProofRequest\x1a!.lmm.core.v1.ProviderProofReceipt\x12L\n" +
 	"\fPrepareTopup\x12 .lmm.core.v1.PrepareTopupRequest\x1a\x1a.lmm.core.v1.PaymentIntent\x12K\n" +
 	"\vCreditTopup\x12\x1f.lmm.core.v1.CreditTopupRequest\x1a\x1b.lmm.core.v1.PaymentReceipt\x12I\n" +
 	"\n" +
-	"HoldRefund\x12\x1e.lmm.core.v1.HoldRefundRequest\x1a\x1b.lmm.core.v1.PaymentReceipt\x12N\n" +
+	"HoldRefund\x12\x1e.lmm.core.v1.HoldRefundRequest\x1a\x1b.lmm.core.v1.PaymentReceipt\x12U\n" +
+	"\x13BeginRefundDispatch\x12!.lmm.core.v1.ResolveRefundRequest\x1a\x1b.lmm.core.v1.PaymentReceipt\x12N\n" +
 	"\fCommitRefund\x12!.lmm.core.v1.ResolveRefundRequest\x1a\x1b.lmm.core.v1.PaymentReceipt\x12O\n" +
 	"\rReleaseRefund\x12!.lmm.core.v1.ResolveRefundRequest\x1a\x1b.lmm.core.v1.PaymentReceipt\x12V\n" +
 	"\x13ApplyExternalRefund\x12\".lmm.core.v1.ExternalRefundRequest\x1a\x1b.lmm.core.v1.PaymentReceipt\x12W\n" +
@@ -1257,21 +1258,23 @@ var file_lmm_core_v1_payments_proto_depIdxs = []int32{
 	6,  // 15: lmm.core.v1.CorePayments.PrepareTopup:input_type -> lmm.core.v1.PrepareTopupRequest
 	8,  // 16: lmm.core.v1.CorePayments.CreditTopup:input_type -> lmm.core.v1.CreditTopupRequest
 	9,  // 17: lmm.core.v1.CorePayments.HoldRefund:input_type -> lmm.core.v1.HoldRefundRequest
-	10, // 18: lmm.core.v1.CorePayments.CommitRefund:input_type -> lmm.core.v1.ResolveRefundRequest
-	10, // 19: lmm.core.v1.CorePayments.ReleaseRefund:input_type -> lmm.core.v1.ResolveRefundRequest
-	11, // 20: lmm.core.v1.CorePayments.ApplyExternalRefund:input_type -> lmm.core.v1.ExternalRefundRequest
-	12, // 21: lmm.core.v1.CorePayments.GetPaymentReceipt:input_type -> lmm.core.v1.GetPaymentReceiptRequest
-	5,  // 22: lmm.core.v1.CorePayments.AcceptProviderProof:output_type -> lmm.core.v1.ProviderProofReceipt
-	5,  // 23: lmm.core.v1.CorePayments.GetProviderProof:output_type -> lmm.core.v1.ProviderProofReceipt
-	7,  // 24: lmm.core.v1.CorePayments.PrepareTopup:output_type -> lmm.core.v1.PaymentIntent
-	13, // 25: lmm.core.v1.CorePayments.CreditTopup:output_type -> lmm.core.v1.PaymentReceipt
-	13, // 26: lmm.core.v1.CorePayments.HoldRefund:output_type -> lmm.core.v1.PaymentReceipt
-	13, // 27: lmm.core.v1.CorePayments.CommitRefund:output_type -> lmm.core.v1.PaymentReceipt
-	13, // 28: lmm.core.v1.CorePayments.ReleaseRefund:output_type -> lmm.core.v1.PaymentReceipt
-	13, // 29: lmm.core.v1.CorePayments.ApplyExternalRefund:output_type -> lmm.core.v1.PaymentReceipt
-	13, // 30: lmm.core.v1.CorePayments.GetPaymentReceipt:output_type -> lmm.core.v1.PaymentReceipt
-	22, // [22:31] is the sub-list for method output_type
-	13, // [13:22] is the sub-list for method input_type
+	10, // 18: lmm.core.v1.CorePayments.BeginRefundDispatch:input_type -> lmm.core.v1.ResolveRefundRequest
+	10, // 19: lmm.core.v1.CorePayments.CommitRefund:input_type -> lmm.core.v1.ResolveRefundRequest
+	10, // 20: lmm.core.v1.CorePayments.ReleaseRefund:input_type -> lmm.core.v1.ResolveRefundRequest
+	11, // 21: lmm.core.v1.CorePayments.ApplyExternalRefund:input_type -> lmm.core.v1.ExternalRefundRequest
+	12, // 22: lmm.core.v1.CorePayments.GetPaymentReceipt:input_type -> lmm.core.v1.GetPaymentReceiptRequest
+	5,  // 23: lmm.core.v1.CorePayments.AcceptProviderProof:output_type -> lmm.core.v1.ProviderProofReceipt
+	5,  // 24: lmm.core.v1.CorePayments.GetProviderProof:output_type -> lmm.core.v1.ProviderProofReceipt
+	7,  // 25: lmm.core.v1.CorePayments.PrepareTopup:output_type -> lmm.core.v1.PaymentIntent
+	13, // 26: lmm.core.v1.CorePayments.CreditTopup:output_type -> lmm.core.v1.PaymentReceipt
+	13, // 27: lmm.core.v1.CorePayments.HoldRefund:output_type -> lmm.core.v1.PaymentReceipt
+	13, // 28: lmm.core.v1.CorePayments.BeginRefundDispatch:output_type -> lmm.core.v1.PaymentReceipt
+	13, // 29: lmm.core.v1.CorePayments.CommitRefund:output_type -> lmm.core.v1.PaymentReceipt
+	13, // 30: lmm.core.v1.CorePayments.ReleaseRefund:output_type -> lmm.core.v1.PaymentReceipt
+	13, // 31: lmm.core.v1.CorePayments.ApplyExternalRefund:output_type -> lmm.core.v1.PaymentReceipt
+	13, // 32: lmm.core.v1.CorePayments.GetPaymentReceipt:output_type -> lmm.core.v1.PaymentReceipt
+	23, // [23:33] is the sub-list for method output_type
+	13, // [13:23] is the sub-list for method input_type
 	13, // [13:13] is the sub-list for extension type_name
 	13, // [13:13] is the sub-list for extension extendee
 	0,  // [0:13] is the sub-list for field type_name

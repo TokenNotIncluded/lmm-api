@@ -278,7 +278,7 @@ func TestStripeWorkerKeepsHoldUntilVerifiedRefundAfterRetry(t *testing.T) {
 	}
 	jobKey := ""
 	for key, job := range h.get(o.ID).Jobs {
-		if job.Kind == "refund_submit" && job.RefundID == r.ID {
+		if (job.Kind == "refund_dispatch" || job.Kind == "refund_submit") && job.RefundID == r.ID {
 			jobKey = key
 		}
 	}

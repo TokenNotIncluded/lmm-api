@@ -2,6 +2,8 @@ package toolmarket
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 )
 
 func (m *Module) execute(ctx context.Context, p Principal, credential string, in ExecuteInput) (any, error) {
@@ -69,7 +71,7 @@ func (m *Module) execute(ctx context.Context, p Principal, credential string, in
 		return nil, ErrAuth
 	}
 	fingerprint := digest([]any{i.ID, r.ID, t.Name, canonical, q.ID})
-	charge := Charge{ID: id, Installation: i.ID, Tool: t.Name, Quote: q.ID, Currency: q.Currency, Amount: q.Amount}
+	charge := Charge{ID: id, IdempotencyKey: in.IdempotencyKey, Installation: i.ID, Release: r.ID, Grant: in.Grant, Handle: in.Handle, ArgumentsHash: digest(canonical), Generation: i.Generation, Tool: t.Name, Quote: q.ID, Currency: q.Currency, Amount: q.Amount}
 	created := false
 	e = m.store.update(func(d *database) error {
 		current, _, _, e := selected(*d, p, i.ID)
@@ -92,6 +94,7 @@ func (m *Module) execute(ctx context.Context, p Principal, credential string, in
 		if e := m.consumeGrant(d, p, in, charge, digest(canonical)); e != nil {
 			return e
 		}
+		charge.Approval = d.Grants[in.Grant].ApprovalID
 		d.Executions[id] = Execution{Owner: p, Fingerprint: fingerprint, RequestHash: requestHash, Grant: in.Grant, State: "started", Charge: charge}
 		d.audit(p, "execute", id, "started")
 		created = true
@@ -105,7 +108,7 @@ func (m *Module) execute(ctx context.Context, p Principal, credential string, in
 	}
 	// The same durable operation consumes consent and reserves Core funds.
 	// Uncertainty retains both; no retry gets a fresh budget or idempotency key.
-	if q.Amount > 0 {
+	if m.funds != nil {
 		if e = m.funds.Reserve(ctx, credential, p, charge); e != nil {
 			return nil, ErrPending
 		}
@@ -152,6 +155,11 @@ func (m *Module) execute(ctx context.Context, p Principal, credential string, in
 	if e != nil {
 		return nil, ErrPending
 	}
+	if funds, ok := m.funds.(DispatchFunds); ok {
+		if err := funds.MarkDispatched(ctx, credential, p, charge); err != nil {
+			return nil, ErrPending
+		}
+	}
 	expected := Execution{Owner: p, Fingerprint: fingerprint, RequestHash: requestHash, Grant: in.Grant, State: "dispatched", Charge: charge}
 	m.bindExecutionStream(ctx, p, credential, id, expected, i, r, c)
 	result, e := c.rpc(ctx, "tools/call", map[string]any{"name": t.Name, "arguments": canonical})
@@ -191,7 +199,14 @@ func (m *Module) settle(ctx context.Context, p Principal, credential, id string,
 	if err != nil {
 		return nil, err
 	}
-	if e := m.funds.Commit(ctx, credential, p, record.Charge); e != nil {
+	var settlementErr error
+	if funds, ok := m.funds.(ResultFunds); ok {
+		hash := sha256.Sum256(record.Result)
+		settlementErr = funds.CommitResult(ctx, credential, p, record.Charge, hex.EncodeToString(hash[:]))
+	} else {
+		settlementErr = m.funds.Commit(ctx, credential, p, record.Charge)
+	}
+	if settlementErr != nil {
 		return nil, ErrPending
 	}
 	e := m.store.update(func(d *database) error {

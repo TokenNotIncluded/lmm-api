@@ -14,6 +14,7 @@ struct Block {
 }
 pub(crate) struct Encoder {
     client: ClientProtocol,
+    native: Option<super::native::NativeEncoder>,
     stream: bool,
     include_usage: bool,
     id: String,
@@ -33,9 +34,12 @@ impl Encoder {
         let prefix = match request.client {
             ClientProtocol::Chat => "chatcmpl",
             ClientProtocol::Responses => "resp",
+            ClientProtocol::Anthropic => "msg",
+            ClientProtocol::Gemini => "gemini",
         };
         Self {
             client: request.client,
+            native: super::native::NativeEncoder::new(request, request_id, limits),
             stream: request.stream,
             include_usage: request.include_usage,
             id: format!("{prefix}_{request_id}"),
@@ -55,9 +59,15 @@ impl Encoder {
         }
     }
     pub fn usage(&self) -> Usage {
+        if let Some(native) = &self.native {
+            return native.usage();
+        }
         self.usage
     }
     pub fn finish_reason(&self) -> Option<FinishReason> {
+        if let Some(native) = &self.native {
+            return native.finish_reason();
+        }
         self.finish
     }
     fn account(&mut self, bytes: usize) -> Result<(), RelayError> {
@@ -181,6 +191,9 @@ impl Encoder {
             "usage":if initial {Value::Null} else {self.usage.wire(ClientProtocol::Responses)},"store":false})
     }
     pub fn consume(&mut self, event: Event) -> Result<Vec<Vec<u8>>, RelayError> {
+        if let Some(native) = &mut self.native {
+            return native.consume(&event);
+        }
         let mut out = Vec::new();
         match event {
             Event::Start(source_id) => {
@@ -191,7 +204,9 @@ impl Encoder {
                 self.started = true;
                 if self.stream {
                     match self.client {
-                        ClientProtocol::Chat => out
+                        ClientProtocol::Chat
+                        | ClientProtocol::Anthropic
+                        | ClientProtocol::Gemini => out
                             .push(self.chat_chunk(json!({"role":"assistant","content":""}), None)?),
                         ClientProtocol::Responses => {
                             out.push(self.response_event(
@@ -227,7 +242,9 @@ impl Encoder {
                 });
                 if self.stream {
                     match self.client {
-                        ClientProtocol::Chat => {
+                        ClientProtocol::Chat
+                        | ClientProtocol::Anthropic
+                        | ClientProtocol::Gemini => {
                             if let BlockKind::Tool { id, name } = &self.blocks[index].kind {
                                 out.push(self.chat_chunk(json!({"tool_calls":[{"index":tool_index,"id":id,"type":"function","function":{"name":name,"arguments":""}}]}),None)?);
                             }
@@ -265,7 +282,9 @@ impl Encoder {
                 b.text.push_str(&text);
                 if self.stream {
                     match self.client {
-                        ClientProtocol::Chat => {
+                        ClientProtocol::Chat
+                        | ClientProtocol::Anthropic
+                        | ClientProtocol::Gemini => {
                             let delta = match b.kind {
                                 BlockKind::Text => json!({"content":text}),
                                 BlockKind::Refusal => json!({"refusal":text}),
@@ -329,6 +348,18 @@ impl Encoder {
                     };
                     out.push(self.chat_chunk(delta, None)?);
                 }
+            }
+            Event::StopSequence(sequence) => {
+                if !self.started
+                    || self.finish.is_some()
+                    || sequence.is_empty()
+                    || sequence.len() > 1024
+                {
+                    return Err(RelayError::Protocol("invalid stop sequence receipt"));
+                }
+                // OpenAI exposes the normalized stop finish, not the matched
+                // sequence; native Anthropic retains it in its leaf renderer.
+                self.account(sequence.len())?;
             }
             Event::EndBlock(i) => {
                 let b = self
@@ -440,16 +471,21 @@ impl Encoder {
     /// Build (but do not send) a terminal response. Validation must happen before
     /// the billing hook. A length-limited tool may contain partial JSON.
     pub fn terminal(&mut self) -> Result<Vec<Vec<u8>>, RelayError> {
+        if let Some(native) = &mut self.native {
+            return native.terminal();
+        }
         self.validate_complete()?;
         if !self.stream {
             return Ok(vec![self.serialize(&match self.client {
-                ClientProtocol::Chat => self.chat_response(),
+                ClientProtocol::Chat | ClientProtocol::Anthropic | ClientProtocol::Gemini => {
+                    self.chat_response()
+                }
                 ClientProtocol::Responses => self.response(false),
             })?]);
         }
         let mut out = Vec::new();
         match self.client {
-            ClientProtocol::Chat => {
+            ClientProtocol::Chat | ClientProtocol::Anthropic | ClientProtocol::Gemini => {
                 out.push(self.chat_chunk(json!({}), self.finish)?);
                 if self.include_usage {
                     out.push(self.packet(None,&json!({"id":self.id,"object":"chat.completion.chunk","created":self.created,
@@ -521,8 +557,13 @@ impl Encoder {
         Ok(out)
     }
     pub fn error_packet(&mut self, error: &RelayError) -> Result<Vec<u8>, RelayError> {
+        if let Some(native) = &mut self.native {
+            return native.error_packet(error);
+        }
         match self.client {
-            ClientProtocol::Chat => self.packet(None, &error.json()),
+            ClientProtocol::Chat | ClientProtocol::Anthropic | ClientProtocol::Gemini => {
+                self.packet(None, &error.json())
+            }
             ClientProtocol::Responses => self.response_event(
                 "error",
                 json!({"code":error.code(),"message":error.to_string(),"param":Value::Null}),

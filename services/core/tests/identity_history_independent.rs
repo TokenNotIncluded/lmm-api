@@ -1,6 +1,8 @@
 //! Independent synthetic acceptance. Copy only this test and the separately
 //! pinned schema fixture into a frozen candidate; never edit business source.
 //! Source presence is not a test result. Requires a fresh SQLx test database.
+#[path = "common/history_scope.rs"]
+mod history_scope;
 use lmm_core::{
     core_schema,
     finance_export::{self, ExportFormat},
@@ -99,10 +101,6 @@ struct Fixture {
 }
 async fn fixture(pool: &PgPool) -> Fixture {
     core_schema::init(pool).await.unwrap();
-    sqlx::raw_sql(include_str!("identity_history_source.sql"))
-        .execute(pool)
-        .await
-        .unwrap();
     let identity = IdentityStore::from_pool(pool.clone());
     let user = identity.bootstrap_user(9101, 1).await.unwrap().secret;
     let admin = identity.bootstrap_user(9102, 5).await.unwrap().secret;
@@ -117,6 +115,7 @@ async fn fixture(pool: &PgPool) -> Fixture {
             .await
             .unwrap();
     sqlx::query("INSERT INTO core_history.sources(contract_version,source_archive_sha256,mapping_sha256,source_namespace,observed_at,complete) VALUES ('core.history-source.v1',repeat('a',64),repeat('b',64),'independent-synthetic',1700000000,true)").execute(pool).await.unwrap();
+    history_scope::install(pool).await;
     Fixture {
         identity,
         store: HistoryStore::new(pool.clone()),
@@ -440,6 +439,7 @@ async fn independent_real_keys_cannot_cross_credential_scope_or_enter_session_ad
     row(&pool, 1, 9101, f.owner, Some(1), Some(3), "selected").await;
     row(&pool, 2, 9101, f.owner, Some(100), Some(1), "selected").await;
     sqlx::query("UPDATE core_history.log_records SET token_id=CASE source_log_id WHEN 1 THEN $1 ELSE $2 END").bind(key.id).bind(second.id).execute(&pool).await.unwrap();
+    history_scope::install(&pool).await;
     let before = fingerprint(&pool).await;
     let selected = f
         .store

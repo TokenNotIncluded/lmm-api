@@ -24,6 +24,7 @@ describe('upstream model listing differences', () => {
   test('keeps documented TypeSafe versions when the real listing contains only aliases', () => {
     const fetchedModels = ['jev-latest', 'jev-preview']
     const selectedModels = [
+      'jev-1.14.0',
       'jev-1.13.0',
       'jev-latest',
       'jev-preview',
@@ -39,6 +40,7 @@ describe('upstream model listing differences', () => {
     )
     assert.deepEqual(fetchedModels, ['jev-latest', 'jev-preview'])
     assert.deepEqual(selectedModels, [
+      'jev-1.14.0',
       'jev-1.13.0',
       'jev-latest',
       'jev-preview',

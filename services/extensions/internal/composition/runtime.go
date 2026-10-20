@@ -3,6 +3,7 @@ package composition
 import (
 	"context"
 	"errors"
+	"net/http"
 	"sync"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules"
 	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant"
 	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant/access"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant_services"
 	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/identity"
 	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/operations"
 	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/payments"
@@ -18,44 +20,70 @@ import (
 	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/store/rustauth"
 	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/store/rustfunds"
 	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/support"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/toolmarket"
 )
 
 type Config struct {
-	HostCredential         []byte
-	Selected               []string
-	Socket                 string
-	TokenFile              string
-	PaymentTokenFile       string
-	PaymentConfigFile      string
-	Payments               StorageConfig
-	CommerceTokenFile      string
-	Store                  StorageConfig
-	Support                StorageConfig
-	Assistant              StorageConfig
-	AssistantCursorKeyFile string
-	AssistantTokenFile     string
-	Operations             StorageConfig
-	Scripts                *operations.ScriptConfig
+	ToolMarketCorePublicOrigin    string
+	LocalHTTP                     bool
+	HostListen                    string
+	HostPublicOrigin              string
+	ToolMarketWitnessSocket       string
+	ToolMarketWitnessTokenFile    string
+	ToolMarketBuiltins            ToolMarketBuiltinConfig
+	ToolMarketMeteringFile        string
+	SupportCustomerSocket         string
+	SupportCustomerTokenFile      string
+	SupportNoteKeyFile            string
+	ToolMarket                    StorageConfig
+	ToolMarketKeyFile             string
+	ToolMarketCallbackURL         string
+	ToolMarketSocket              string
+	ToolMarketTokenFile           string
+	HostCredential                []byte
+	Selected                      []string
+	Socket                        string
+	TokenFile                     string
+	PaymentTokenFile              string
+	PaymentConfigFile             string
+	Payments                      StorageConfig
+	CommerceTokenFile             string
+	Store                         StorageConfig
+	Support                       StorageConfig
+	Assistant                     StorageConfig
+	AssistantCursorKeyFile        string
+	AssistantTokenFile            string
+	AssistantServicesDependencies func(context.Context, *coreclient.AssistantClient) (assistant_services.Dependencies, error)
+	AssistantServicesPolicies     assistant_services.PolicyReader
+	AssistantPublicSnapshot       assistant_services.PublicSnapshotReader
+	Operations                    StorageConfig
+	Scripts                       *operations.ScriptConfig
 }
 
 type Runtime struct {
-	Modules              []modules.Module
-	Client               *coreclient.Client
-	PaymentClient        *coreclient.Client
-	Payments             *payments.Service
-	CommerceClient       *coreclient.Client
-	Store                *store.Service
-	Support              *support.Service
-	Assistant            *assistant.Service
-	AssistantHistory     *assistant.HistoryService
-	AssistantModelClient *coreclient.AssistantClient
-	AssistantPending     *assistant.PendingConversations
-	AssistantTurns       *assistant.DelegatedTurns
-	Operations           *operations.Service
-	close                []func() error
-	workerCancel         context.CancelFunc
-	workerDone           chan struct{}
-	workerOnce           sync.Once
+	paymentIsolationCredentials [][]byte
+	Builtins                    *toolmarket.BuiltinDispatcher
+	ToolMarketMCP               http.Handler
+	ToolMarket                  *toolmarket.Module
+	Modules                     []modules.Module
+	Client                      *coreclient.Client
+	PaymentClient               *coreclient.Client
+	Payments                    *payments.Service
+	CommerceClient              *coreclient.Client
+	Store                       *store.Service
+	Support                     *support.Service
+	Assistant                   *assistant.Service
+	AssistantHistory            *assistant.HistoryService
+	AssistantModelClient        *coreclient.AssistantClient
+	AssistantPending            *assistant.PendingConversations
+	AssistantTurns              *assistant.DelegatedTurns
+	AssistantChat               assistant.ChatPort
+	AssistantServices           *assistant_services.Service
+	Operations                  *operations.Service
+	close                       []func() error
+	workerCancel                context.CancelFunc
+	workerDone                  chan struct{}
+	workerOnce                  sync.Once
 }
 
 func (r *Runtime) Close() error {
@@ -98,6 +126,9 @@ func (r *Runtime) StartWorkers(parent context.Context, host *modules.Host) {
 				if r.Store != nil {
 					recovery = append(recovery, r.Store.RecoverDeliveries)
 				}
+				if r.ToolMarket != nil {
+					recovery = append(recovery, func(work context.Context) error { _, err := r.ToolMarket.RecoverSettlements(work, 1); return err }, func(work context.Context) error { _, err := r.ToolMarket.LegacyRecoverPending(work, 1); return err })
+				}
 				for _, recover := range recovery {
 					if ctx.Err() != nil {
 						return
@@ -121,6 +152,15 @@ func (r *Runtime) StartWorkers(parent context.Context, host *modules.Host) {
 }
 
 func New(ctx context.Context, cfg Config) (_ *Runtime, resultErr error) {
+	if err := ValidateHostProfile(cfg.LocalHTTP, cfg.HostListen, cfg.HostPublicOrigin); err != nil {
+		return nil, err
+	}
+	if err := validateSupportCustomersSelection(cfg); err != nil {
+		return nil, err
+	}
+	if err := validateToolMarketSelection(cfg); err != nil {
+		return nil, err
+	}
 	if err := validateAssistantSelection(cfg); err != nil {
 		return nil, err
 	}
@@ -182,8 +222,17 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, resultErr error) {
 	if err != nil {
 		return nil, err
 	}
+	supportCustomerToken, supportNoteKey, err := loadSupportCustomerCredentials(cfg, token, commerceToken, paymentToken, assistantToken)
+	if err != nil {
+		return nil, err
+	}
+	if selected["toolmarket"] {
+		if err := r.composeToolMarket(ctx, cfg, token, commerceToken, paymentToken, assistantToken, supportCustomerToken, supportNoteKey); err != nil {
+			return nil, err
+		}
+	}
 	if selected["payments"] {
-		if err := r.composePayments(ctx, cfg, paymentToken); err != nil {
+		if err := r.composePayments(ctx, cfg, paymentToken, token, commerceToken, assistantToken, supportCustomerToken, supportNoteKey); err != nil {
 			return nil, err
 		}
 	}
@@ -237,6 +286,9 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, resultErr error) {
 			if err != nil {
 				return nil, err
 			}
+			if err := r.composeSupportCustomers(ctx, cfg, supportCustomerToken, supportNoteKey); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if selected["assistant"] {
@@ -256,6 +308,9 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, resultErr error) {
 		key, err := coreclient.ReadTokenFile(cfg.AssistantCursorKeyFile)
 		if err != nil {
 			return nil, errors.New("assistant private cursor key unavailable")
+		}
+		if err := independentRuntimeCredentials(key, supportCustomerToken, supportNoteKey); err != nil {
+			return nil, err
 		}
 		r.AssistantHistory, err = assistant.NewHistory(repo, auth, key)
 		if err != nil {
@@ -305,6 +360,8 @@ func New(ctx context.Context, cfg Config) (_ *Runtime, resultErr error) {
 			r.Modules = append(r.Modules, r.Store)
 		case "support":
 			r.Modules = append(r.Modules, r.Support)
+		case "toolmarket":
+			r.Modules = append(r.Modules, r.ToolMarket)
 		case "assistant":
 			r.Modules = append(r.Modules, r.Assistant)
 		case "operations":

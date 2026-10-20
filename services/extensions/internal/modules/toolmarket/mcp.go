@@ -20,6 +20,7 @@ type rpcEnvelope struct {
 	Error   json.RawMessage `json:"error,omitempty"`
 }
 type mcpSession struct {
+	maxResponse  int64
 	net          *network
 	endpoint     string
 	headers      http.Header
@@ -27,6 +28,21 @@ type mcpSession struct {
 	checkpoint   func(json.RawMessage, string, time.Duration) error
 	beforeResume func() error
 	preserve     bool
+}
+
+func (c *mcpSession) responseLimit() int64 {
+	if c.maxResponse == 2<<20 {
+		return 2 << 20
+	}
+	return maxBody
+}
+func (m *Module) connectLegacy(ctx context.Context, server Server, secret Secret) (*mcpSession, error) {
+	connection, err := m.connect(ctx, server, secret)
+	if err != nil {
+		return nil, err
+	}
+	connection.maxResponse = 2 << 20
+	return connection, nil
 }
 
 func (m *Module) connectionHeaders(s Server, secret Secret) (http.Header, error) {
@@ -144,7 +160,7 @@ func (c *mcpSession) rpc(ctx context.Context, method string, params any) (json.R
 		return nil, ErrUpstream
 	}
 	if kind == "application/json" {
-		b, e := readBody(r)
+		b, e := readBodyLimit(r, c.responseLimit())
 		if e != nil {
 			return nil, e
 		}
@@ -154,6 +170,8 @@ func (c *mcpSession) rpc(ctx context.Context, method string, params any) (json.R
 		return nil, ErrUpstream
 	}
 	stream := newMCPStream(id, nil)
+	stream.remaining = c.responseLimit()
+	stream.maxLine = int(c.responseLimit())
 	if c.checkpoint != nil {
 		stream.checkpoint = func(cursor string, retry time.Duration) error {
 			// A failed store acknowledgement may already have committed a cursor.
@@ -189,7 +207,11 @@ func checkedRPCResult(r rpcEnvelope, id json.RawMessage) (json.RawMessage, error
 	}
 	return r.Result, nil
 }
-func (c *mcpSession) tools(ctx context.Context) ([]Tool, error) {
+func (c *mcpSession) tools(ctx context.Context) ([]Tool, error) { return c.toolsValidated(ctx, false) }
+func (c *mcpSession) legacyTools(ctx context.Context) ([]Tool, error) {
+	return c.toolsValidated(ctx, true)
+}
+func (c *mcpSession) toolsValidated(ctx context.Context, legacy bool) ([]Tool, error) {
 	result := []Tool{}
 	cursor := ""
 	seen := map[string]bool{}
@@ -211,17 +233,49 @@ func (c *mcpSession) tools(ctx context.Context) ([]Tool, error) {
 			return nil, ErrUpstream
 		}
 		for _, t := range list.Tools {
-			if !validTool.MatchString(t.Name) || names[t.Name] || len(t.Description) > 2000 {
+			if len(t.Annotations) > 4096 {
 				return nil, ErrUpstream
 			}
-			s, e := readSchema(t.InputSchema, 0)
-			if e != nil || s.Type != "object" {
-				return nil, invalid("unsupported tool schema")
+			if len(t.Annotations) > 0 && string(t.Annotations) != "null" {
+				var annotations map[string]any
+				if decodeStrict(t.Annotations, &annotations) != nil || annotations == nil {
+					return nil, ErrUpstream
+				}
+				for key, value := range annotations {
+					if key == "title" {
+						if _, ok := value.(string); !ok {
+							return nil, ErrUpstream
+						}
+						continue
+					}
+					if key != "readOnlyHint" && key != "destructiveHint" && key != "idempotentHint" && key != "openWorldHint" {
+						return nil, ErrUpstream
+					}
+					if _, ok := value.(bool); !ok {
+						return nil, ErrUpstream
+					}
+				}
 			}
-			if len(t.OutputSchema) > 0 && string(t.OutputSchema) != "null" {
-				s, e := readSchema(t.OutputSchema, 0)
-				if e != nil || s.Type != "object" {
+			if (!legacy && !validTool.MatchString(t.Name) || legacy && !validWebTool.MatchString(t.Name)) || names[t.Name] || len(t.Description) > 4000 || !legacy && len(t.Description) > 2000 {
+				return nil, ErrUpstream
+			}
+			if legacy {
+				if ValidateLegacySchema(t.InputSchema) != nil {
+					return nil, invalid("unsupported tool schema")
+				}
+				if len(t.OutputSchema) > 0 && string(t.OutputSchema) != "null" && ValidateLegacySchema(t.OutputSchema) != nil {
 					return nil, invalid("unsupported output schema")
+				}
+			} else {
+				s, e := readSchema(t.InputSchema, 0)
+				if e != nil || s.Type != "object" {
+					return nil, invalid("unsupported tool schema")
+				}
+				if len(t.OutputSchema) > 0 && string(t.OutputSchema) != "null" {
+					s, e := readSchema(t.OutputSchema, 0)
+					if e != nil || s.Type != "object" {
+						return nil, invalid("unsupported output schema")
+					}
 				}
 			}
 			names[t.Name] = true

@@ -87,7 +87,7 @@ curl --fail http://127.0.0.1:${LMM_DOCKER_CORE_PORT:-18080}/health/ready
 curl -i http://127.0.0.1:${LMM_DOCKER_CORE_PORT:-18080}/health/model-ready
 ```
 
-`init-db` 一次事务安装当前完整契约的 13 个组件：identity、oauth-grants、ledger、payments、charging、routing、events、charging-ledger、migration、console、model-gateway、commerce、abuse。已有应用对象或重复安装拒绝，不删表、不清库。普通启动校验运行账户权限、完整组件契约及实时 catalog 指纹，不创建角色、不 GRANT、不安装或升级 schema。安装组件不等于其 HTTP 业务已启用。
+`init-db` 一次事务安装当前完整契约的 24 个组件：humangrant、identity、ledger、payments、charging、routing、events、charging-ledger、migration、console、model-gateway、commerce、tool-market、abuse、oauth-grants、history、assistant-model、gift、image、market-oauth、tool-market-credit、wallet、bounties、assistant-tools。可用同一二进制的 `schema-manifest` 离线查看精确契约。已有应用对象或重复安装拒绝，不删表、不清库。普通启动校验运行账户权限、完整组件契约及实时 catalog 指纹，不创建角色、不 GRANT、不安装或升级 schema。安装组件不等于其 HTTP 业务已启用。
 
 配置完整身份和数据库后，`/health/ready` 可以返回 200，即使 `models` 为 `false`；模型默认关闭时 `/health/model-ready` 返回 503。这不证明供应商健康、支付已启用或功能对齐 main。
 
@@ -110,7 +110,7 @@ mise exec -- python3 -B scripts/test-core-rpc-docker.py \
 ```
 
 测试输出目录须为绝对路径、无符号链接、属于当前用户且为空的 `0700` 目录；
-创建目录、构建与测试前按 [工作指南](../../docs/agent-workflows.md) 用 agcc 覆盖源码和输出目录。
+创建目录、构建与测试前按 [工作指南](../../docs/agent-workflows.md) 确认输入与输出范围。
 两程序的正式 Dockerfile 构建共用同一个重构建租约，串行完成；Docker daemon 的层、卷与
 CPU/内存不属于本机文件 watcher 或客户端租约的覆盖范围。基础镜像已固定到摘要，
 实际生成镜像仍需按回执中的 image ID 核对，不能把版本标签当成已测试字节。

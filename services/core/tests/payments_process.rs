@@ -26,7 +26,12 @@ use std::{
 mod runtime;
 const SECRET: &str = "whsec_local_synthetic_endpoint_only";
 const MERCHANT: &str = "acct_local_synthetic";
-struct Process(Child, Value, PathBuf, String);
+pub(crate) struct Process(
+    pub(crate) Child,
+    pub(crate) Value,
+    pub(crate) PathBuf,
+    pub(crate) String,
+);
 
 fn binary_sha(binary: &Path, variable: &str, required: bool) -> String {
     assert!(binary.is_absolute() && binary.is_file());
@@ -48,7 +53,7 @@ fn binary_sha(binary: &Path, variable: &str, required: bool) -> String {
     actual
 }
 
-fn observation(pid: u32, expected: &str) -> Value {
+pub(crate) fn observation(pid: u32, expected: &str) -> Value {
     use std::io::Read;
     let stat = || {
         let text = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
@@ -85,7 +90,7 @@ fn observation(pid: u32, expected: &str) -> Value {
         "boot_id":fs::read_to_string("/proc/sys/kernel/random/boot_id").unwrap().trim()})
 }
 
-fn record_identity(process: &Process, stage: &str) {
+pub(crate) fn record_identity(process: &Process, stage: &str) {
     let actual = observation(
         process.0.id(),
         process.1["executed_sha256"].as_str().unwrap(),
@@ -109,7 +114,7 @@ impl Drop for Process {
     }
 }
 
-fn private(root: &Path, name: &str, bytes: &[u8]) -> PathBuf {
+pub(crate) fn private(root: &Path, name: &str, bytes: &[u8]) -> PathBuf {
     use std::io::Write;
     let path = root.join(name);
     fs::OpenOptions::new()
@@ -123,7 +128,13 @@ fn private(root: &Path, name: &str, bytes: &[u8]) -> PathBuf {
     path
 }
 
-fn spawn(binary: &Path, expected: &str, config: &Path, root: &Path, log: &str) -> Process {
+pub(crate) fn spawn(
+    binary: &Path,
+    expected: &str,
+    config: &Path,
+    root: &Path,
+    log: &str,
+) -> Process {
     assert_eq!(
         format!("{:x}", Sha256::digest(fs::read(binary).unwrap())),
         expected,
@@ -166,7 +177,7 @@ fn address() -> std::net::SocketAddr {
         .unwrap()
 }
 
-async fn ready(client: &Client, endpoint: &str, process: &mut Process) -> Value {
+pub(crate) async fn ready(client: &Client, endpoint: &str, process: &mut Process) -> Value {
     record_identity(process, "before-ready");
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
@@ -301,7 +312,7 @@ async fn bootstrap(binary: &Path, sha: &str, fixture: &Path, root: &Path, phase:
     private(root,&format!("bootstrap-{phase}-exit.json"),&serde_json::to_vec(&json!({"exit_code":status.code(),"exit_signal":exit_signal,"fd_based_attestation":guard.1,"sha256":sha,"provider_transport":"synthetic in-process only","core_rpc":"real product OS process"})).unwrap());
     assert!(status.success(), "bootstrap failed; inspect private log");
 }
-fn crash(mut process: Process) {
+pub(crate) fn crash(mut process: Process) {
     use std::os::unix::process::ExitStatusExt;
     let pid = process.0.id();
     assert_eq!(
@@ -420,28 +431,28 @@ async fn snapshot(go: &PgPool, id: &str) -> Value {
         .await
         .unwrap()
 }
-struct PaymentFixture {
-    root: PathBuf,
-    account: i64,
-    intent: pb::PaymentIntent,
-    role: runtime::RuntimeRole,
-    go_owner: PgPool,
-    core_bin: PathBuf,
-    core_sha: String,
-    go_bin: PathBuf,
-    go_sha: String,
-    boot_bin: PathBuf,
-    boot_sha: String,
-    fixture: PathBuf,
-    core_config: PathBuf,
-    go_config: PathBuf,
-    client: Client,
-    core_endpoint: String,
-    go_endpoint: String,
-    core: Process,
-    login: String,
+pub(crate) struct PaymentFixture {
+    pub(crate) root: PathBuf,
+    pub(crate) account: i64,
+    pub(crate) intent: pb::PaymentIntent,
+    pub(crate) role: runtime::RuntimeRole,
+    pub(crate) go_owner: PgPool,
+    pub(crate) core_bin: PathBuf,
+    pub(crate) core_sha: String,
+    pub(crate) go_bin: PathBuf,
+    pub(crate) go_sha: String,
+    pub(crate) boot_bin: PathBuf,
+    pub(crate) boot_sha: String,
+    pub(crate) fixture: PathBuf,
+    pub(crate) core_config: PathBuf,
+    pub(crate) go_config: PathBuf,
+    pub(crate) client: Client,
+    pub(crate) core_endpoint: String,
+    pub(crate) go_endpoint: String,
+    pub(crate) core: Process,
+    pub(crate) login: String,
 }
-async fn prepare_payment_fixture(pool: &PgPool) -> PaymentFixture {
+pub(crate) async fn prepare_payment_fixture(pool: &PgPool) -> PaymentFixture {
     let required = |name: &str| {
         PathBuf::from(
             std::env::var_os(name).unwrap_or_else(|| panic!("required sealed input {name}")),

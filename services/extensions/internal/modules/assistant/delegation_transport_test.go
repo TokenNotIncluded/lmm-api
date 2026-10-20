@@ -22,6 +22,24 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+func TestPersonalTextReceiptPreservesAuthoritativeOptionalAnswer(t *testing.T) {
+	reservation := personalReservationFixture()
+	binding, err := personalOperationBinding(reservation.Binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	answer, charged := "authoritative answer", int64(3)
+	response := &pb.AssistantOperationReceipt{Binding: binding, RequestId: strings.Repeat("b", 64), State: pb.AssistantOperationState_ASSISTANT_OPERATION_STATE_SETTLED, ReservedCredits: 10, SettledCredits: &charged, AnswerText: &answer}
+	out, err := personalOperationReceipt(reservation.Binding, response)
+	if err != nil || out.AnswerText == nil || *out.AnswerText != answer {
+		t.Fatal(out, err)
+	}
+	response.State, response.SettledCredits = pb.AssistantOperationState_ASSISTANT_OPERATION_STATE_RESERVED, nil
+	if _, err := personalOperationReceipt(reservation.Binding, response); err != ErrDelegationUnknown {
+		t.Fatal("nonterminal response supplied an authoritative answer", err)
+	}
+}
+
 // This runs the actual protobuf codec, UDS client and metadata path against a
 // controlled Go gRPC peer. It is not the Rust issuer, Session or ledger proof.
 type assistantRPCFixture struct {
@@ -29,6 +47,10 @@ type assistantRPCFixture struct {
 	pb.UnimplementedCoreAssistantModelServer
 	mu           sync.Mutex
 	feature      bool
+	giftFeature  bool
+	giftReads    int
+	giftClaims   int
+	giftMode     string
 	major        uint32
 	mode         string
 	beginCalls   int
@@ -72,8 +94,16 @@ func (s *assistantRPCFixture) Capabilities(ctx context.Context, _ *pb.Capabiliti
 		return nil, err
 	}
 	features := []string{}
+	if s.giftFeature {
+		features = append(features, coreclient.AssistantNewUserGiftFeature)
+	}
 	if s.feature {
-		features = append(features, coreclient.AssistantPersonalTextReserveFeature)
+		if s.mode != "execute-only" {
+			features = append(features, coreclient.AssistantPersonalTextReserveFeature)
+		}
+		if s.mode != "admission-only" {
+			features = append(features, coreclient.AssistantPersonalTextExecuteFeature)
+		}
 	}
 	r := &pb.CapabilitiesResponse{ProtocolMajor: s.major, Features: features}
 	if s.mode == "unknown-caps" {
@@ -195,7 +225,7 @@ func TestPersonalTextUDSReplacesHostSessionAndProtocolMetadata(t *testing.T) {
 	}
 }
 func TestPersonalTextUDSRequiresMandatoryCapability(t *testing.T) {
-	for _, name := range []string{"missing", "major", "unknown-caps"} {
+	for _, name := range []string{"missing", "major", "unknown-caps", "admission-only", "execute-only"} {
 		t.Run(name, func(t *testing.T) {
 			s := &assistantRPCFixture{feature: true, major: 1}
 			switch name {
@@ -205,6 +235,8 @@ func TestPersonalTextUDSRequiresMandatoryCapability(t *testing.T) {
 				s.major = 2
 			case "unknown-caps":
 				s.mode = name
+			case "admission-only", "execute-only":
+				s.mode = name
 			}
 			p, _ := newAssistantRPCFixture(t, s)
 			if _, err := p.Reserve(context.Background(), assistantSessionFixture, personalReservationFixture()); !errors.Is(err, ErrDelegationUnavailable) {
@@ -213,7 +245,29 @@ func TestPersonalTextUDSRequiresMandatoryCapability(t *testing.T) {
 			if s.calls().reserve != 0 {
 				t.Fatal("unsupported Core received a reservation")
 			}
+			if _, err := p.BeginConversation(context.Background(), assistantSessionFixture, strings.Repeat("a", 32)); !errors.Is(err, ErrDelegationUnavailable) || s.calls().begin != 0 {
+				t.Fatal("unsupported Core received a conversation mutation", err)
+			}
 		})
+	}
+}
+
+func TestGiftCapabilityCannotBeInferredFromPaidTextOrEnableTextByItself(t *testing.T) {
+	peer := &assistantRPCFixture{feature: true, major: 1}
+	_, client := newAssistantRPCFixture(t, peer)
+	if status.Code(client.GiftReady(context.Background())) != codes.FailedPrecondition {
+		t.Fatal("paid text implied gift capability")
+	}
+	peer = &assistantRPCFixture{giftFeature: true, major: 1}
+	_, client = newAssistantRPCFixture(t, peer)
+	if err := client.GiftReady(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if status.Code(client.Ready(context.Background())) != codes.FailedPrecondition {
+		t.Fatal("gift capability enabled text execution")
+	}
+	if peer.calls() != (assistantRPCCounts{}) {
+		t.Fatal("capability discovery mutated an operation")
 	}
 }
 func TestPersonalTextUDSMalformedOrBoundedACKIsUnknownWithoutRetry(t *testing.T) {

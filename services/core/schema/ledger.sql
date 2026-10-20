@@ -36,10 +36,10 @@ CREATE TABLE core_billing.ledger_journals (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     scope TEXT NOT NULL,
     operation_key TEXT NOT NULL,
-    kind TEXT NOT NULL CHECK (kind IN ('credit', 'transfer', 'charge', 'reserve', 'capture', 'commerce_capture', 'claim_affiliate', 'opening', 'release', 'refund', 'refund_topup', 'refund_commerce', 'reverse', 'legacy_escrow_opening', 'legacy_escrow_payout', 'legacy_escrow_release')),
+    kind TEXT NOT NULL CHECK (kind IN ('gift', 'credit', 'transfer', 'charge', 'reserve', 'capture', 'commerce_capture', 'split_commerce_capture', 'claim_affiliate', 'opening', 'release', 'refund', 'refund_topup', 'refund_commerce', 'reverse', 'legacy_escrow_opening', 'legacy_escrow_payout', 'legacy_escrow_release')),
     payer_id BIGINT NOT NULL REFERENCES core_billing.ledger_accounts(id),
     payee_id BIGINT NOT NULL REFERENCES core_billing.ledger_accounts(id),
-    amount_units BIGINT NOT NULL CHECK (amount_units >= 0 AND (amount_units > 0 OR kind = 'capture')),
+    amount_units BIGINT NOT NULL CHECK (amount_units >= 0 AND (amount_units > 0 OR kind IN ('capture','split_commerce_capture'))),
     parent_journal_id BIGINT REFERENCES core_billing.ledger_journals(id),
     payment_reference TEXT,
     refund_reference TEXT,
@@ -47,10 +47,10 @@ CREATE TABLE core_billing.ledger_journals (
     reason TEXT NOT NULL CHECK (length(reason) BETWEEN 1 AND 512),
     created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
     created_xid XID8 NOT NULL DEFAULT pg_current_xact_id(),
-    CHECK (payer_id <> payee_id),
+    CHECK (payer_id <> payee_id OR kind='split_commerce_capture'),
     CHECK ((kind = 'credit') = (payment_reference IS NOT NULL)),
     CHECK ((kind = 'refund_topup') = (refund_reference IS NOT NULL)),
-    CHECK ((kind IN ('capture', 'commerce_capture', 'release', 'refund', 'refund_topup', 'refund_commerce', 'reverse', 'legacy_escrow_payout', 'legacy_escrow_release')) = (parent_journal_id IS NOT NULL)),
+    CHECK ((kind IN ('capture', 'commerce_capture', 'split_commerce_capture', 'release', 'refund', 'refund_topup', 'refund_commerce', 'reverse', 'legacy_escrow_payout', 'legacy_escrow_release')) = (parent_journal_id IS NOT NULL)),
     UNIQUE (scope, operation_key),
     FOREIGN KEY (scope, operation_key) REFERENCES core_billing.ledger_operations(scope, operation_key)
         DEFERRABLE INITIALLY DEFERRED
@@ -60,7 +60,7 @@ CREATE UNIQUE INDEX ledger_payment_once ON core_billing.ledger_journals(payment_
 CREATE UNIQUE INDEX ledger_refund_once ON core_billing.ledger_journals(refund_reference)
     WHERE kind = 'refund_topup';
 CREATE UNIQUE INDEX ledger_reservation_terminal ON core_billing.ledger_journals(parent_journal_id)
-    WHERE kind IN ('capture', 'commerce_capture', 'release');
+    WHERE kind IN ('capture', 'commerce_capture', 'split_commerce_capture', 'release');
 CREATE INDEX ledger_journal_parent ON core_billing.ledger_journals(parent_journal_id);
 
 CREATE TABLE core_billing.ledger_entries (
@@ -199,6 +199,7 @@ DECLARE
     action_kind TEXT := p_request->'action'->>'kind';
     prior core_billing.ledger_operations%ROWTYPE;
     original core_billing.ledger_journals%ROWTYPE;
+    split_platform BIGINT; split_fee BIGINT; split_bps BIGINT;
     payer BIGINT; payee BIGINT; held BIGINT; revenue BIGINT; clearing BIGINT; debt_id BIGINT;
     repayment BIGINT; debt_balance BIGINT; adjusted_legs JSONB;
     refund_ref TEXT; refund_wallet BIGINT; refund_debt BIGINT; refund_wallet_units BIGINT;
@@ -217,7 +218,7 @@ BEGIN
         AND op_key ~ '^[A-Za-z0-9._:/-]{1,128}$'
         AND jsonb_typeof(p_request->'reason') = 'string'
         AND length(p_request->>'reason') BETWEEN 1 AND 512
-        AND action_kind IN ('credit', 'transfer', 'charge', 'reserve', 'capture', 'commerce_capture', 'claim_affiliate', 'release', 'refund', 'refund_topup', 'refund_commerce', 'reverse'), FALSE)
+        AND action_kind IN ('gift', 'credit', 'transfer', 'charge', 'reserve', 'capture', 'commerce_capture', 'split_commerce_capture', 'claim_affiliate', 'release', 'refund', 'refund_topup', 'refund_commerce', 'reverse'), FALSE)
     THEN
         RAISE EXCEPTION 'invalid ledger request' USING ERRCODE = 'P1000';
     END IF;
@@ -234,23 +235,27 @@ BEGIN
     -- Expected business failures roll back every posting in this subtransaction,
     -- then store a rejected result outside it. Unexpected failures abort everything.
     BEGIN
-        IF action_kind IN ('credit', 'transfer', 'charge', 'reserve', 'capture', 'commerce_capture', 'claim_affiliate', 'refund', 'refund_topup') THEN
+        IF action_kind IN ('gift', 'credit', 'transfer', 'charge', 'reserve', 'capture', 'commerce_capture', 'split_commerce_capture', 'claim_affiliate', 'refund', 'refund_topup') THEN
             amount := (action->>'amount_units')::BIGINT;
-            IF amount IS NULL OR amount < 0 OR (amount = 0 AND action_kind <> 'capture') THEN
+            IF amount IS NULL OR amount < 0 OR (amount = 0 AND action_kind NOT IN ('capture','split_commerce_capture')) THEN
                 RAISE EXCEPTION 'invalid amount' USING ERRCODE = 'P1000';
             END IF;
         END IF;
         SELECT id INTO STRICT revenue FROM core_billing.ledger_accounts WHERE bucket = 'revenue';
         SELECT id INTO STRICT clearing FROM core_billing.ledger_accounts WHERE bucket = 'clearing';
 
-        IF action_kind IN ('capture', 'commerce_capture', 'release', 'refund', 'refund_topup', 'refund_commerce', 'reverse') THEN
-            parent_id := CASE WHEN action_kind IN ('capture', 'commerce_capture', 'release')
+        IF action_kind IN ('capture', 'commerce_capture', 'split_commerce_capture', 'release', 'refund', 'refund_topup', 'refund_commerce', 'reverse') THEN
+            parent_id := CASE WHEN action_kind IN ('capture', 'commerce_capture', 'split_commerce_capture', 'release')
                 THEN (action->>'reservation_journal_id')::BIGINT ELSE (action->>'journal_id')::BIGINT END;
             SELECT * INTO original FROM core_billing.ledger_journals WHERE id = parent_id FOR NO KEY UPDATE;
             IF NOT FOUND THEN RAISE EXCEPTION 'original not found' USING ERRCODE = 'P1002'; END IF;
         END IF;
 
-        IF action_kind = 'credit' THEN
+        IF action_kind = 'gift' THEN
+            payer := clearing;
+            SELECT id INTO payee FROM core_billing.ledger_accounts
+                WHERE owner_account_id = (action->>'account_id')::BIGINT AND bucket = 'wallet';
+        ELSIF action_kind = 'credit' THEN
             payer := clearing;
             SELECT id INTO payee FROM core_billing.ledger_accounts
                 WHERE owner_account_id = (action->>'account_id')::BIGINT AND bucket = 'wallet';
@@ -276,12 +281,12 @@ BEGIN
                 SELECT id INTO payee FROM core_billing.ledger_accounts
                     WHERE owner_account_id = (action->>'account_id')::BIGINT AND bucket = 'reserved';
             END IF;
-        ELSIF action_kind IN ('capture', 'commerce_capture', 'release') THEN
+        ELSIF action_kind IN ('capture', 'commerce_capture', 'split_commerce_capture', 'release') THEN
             IF original.kind <> 'reserve' THEN
                 RAISE EXCEPTION 'not a reservation' USING ERRCODE = 'P1004';
             END IF;
             IF EXISTS (SELECT 1 FROM core_billing.ledger_journals
-                WHERE parent_journal_id = parent_id AND kind IN ('capture', 'commerce_capture', 'release')) THEN
+                WHERE parent_journal_id = parent_id AND kind IN ('capture', 'commerce_capture', 'split_commerce_capture', 'release')) THEN
                 RAISE EXCEPTION 'reservation finalized' USING ERRCODE = 'P1006';
             END IF;
             IF action_kind = 'release' THEN
@@ -292,17 +297,47 @@ BEGIN
                 END IF;
                 -- Economic payer stays the ORIGINAL wallet, so refunds never go to a held bucket.
                 payer := original.payer_id; payee := revenue; held := original.payee_id;
-                IF action_kind = 'commerce_capture' THEN
+                IF action_kind = 'split_commerce_capture' THEN
+                    -- Only the reviewed tool-market business leaf can construct
+                    -- this closed action. No generic caller-selected entry list.
+                    IF op_scope <> 'core-tool-market-credit' THEN
+                        RAISE EXCEPTION 'invalid split capture scope' USING ERRCODE='P1000';
+                    END IF;
+                    split_bps := (action->>'fee_basis_points')::BIGINT;
+                    IF split_bps IS NULL OR split_bps NOT BETWEEN 0 AND 10000 THEN
+                        RAISE EXCEPTION 'invalid split capture fee' USING ERRCODE='P1000';
+                    END IF;
+                    SELECT id INTO payee FROM core_billing.ledger_accounts
+                        WHERE owner_account_id=(action->>'seller_account_id')::BIGINT AND bucket='wallet';
+                    SELECT id INTO split_platform FROM core_billing.ledger_accounts
+                        WHERE owner_account_id=(action->>'platform_account_id')::BIGINT AND bucket='wallet';
+                    IF payee IS NULL OR split_platform IS NULL THEN
+                        RAISE EXCEPTION 'split capture wallet not found' USING ERRCODE='P1002';
+                    END IF;
+                    split_fee := floor(amount::NUMERIC*split_bps/10000)::BIGINT;
+                    -- Merge shared parties before debt allocation. A seller may
+                    -- be the payer or platform; no duplicate entry or debt repay.
+                    SELECT jsonb_agg(jsonb_build_object('id',id,'units',units) ORDER BY id) INTO legs
+                    FROM (SELECT (v->>'id')::BIGINT AS id,sum((v->>'units')::BIGINT)::BIGINT AS units
+                        FROM jsonb_array_elements(jsonb_build_array(
+                            jsonb_build_object('id',held,'units',-original.amount_units),
+                            jsonb_build_object('id',payee,'units',amount-split_fee),
+                            jsonb_build_object('id',split_platform,'units',split_fee),
+                            jsonb_build_object('id',payer,'units',original.amount_units-amount))) v
+                        GROUP BY (v->>'id')::BIGINT) grouped;
+                ELSIF action_kind = 'commerce_capture' THEN
                     SELECT id INTO payee FROM core_billing.ledger_accounts
                         WHERE owner_account_id = (action->>'destination_account_id')::BIGINT AND bucket = 'wallet';
                     IF payee IS NULL OR payee = payer THEN
                         RAISE EXCEPTION 'invalid commerce destination' USING ERRCODE = 'P1000';
                     END IF;
                 END IF;
-                legs := jsonb_build_array(
-                    jsonb_build_object('id', held, 'units', -original.amount_units),
-                    jsonb_build_object('id', payee, 'units', amount),
-                    jsonb_build_object('id', payer, 'units', original.amount_units - amount));
+                IF action_kind <> 'split_commerce_capture' THEN
+                    legs := jsonb_build_array(
+                        jsonb_build_object('id', held, 'units', -original.amount_units),
+                        jsonb_build_object('id', payee, 'units', amount),
+                        jsonb_build_object('id', payer, 'units', original.amount_units - amount));
+                END IF;
             END IF;
         ELSE
             IF original.kind NOT IN ('credit', 'transfer', 'charge', 'capture', 'commerce_capture')
@@ -366,7 +401,7 @@ BEGIN
         IF payer IS NULL OR payee IS NULL THEN
             RAISE EXCEPTION 'wallet not found' USING ERRCODE = 'P1002';
         END IF;
-        IF payer = payee THEN RAISE EXCEPTION 'self transfer' USING ERRCODE = 'P1000'; END IF;
+        IF payer = payee AND action_kind <> 'split_commerce_capture' THEN RAISE EXCEPTION 'self transfer' USING ERRCODE = 'P1000'; END IF;
         IF legs IS NULL THEN
             legs := jsonb_build_array(jsonb_build_object('id', payer, 'units', -amount),
                 jsonb_build_object('id', payee, 'units', amount));

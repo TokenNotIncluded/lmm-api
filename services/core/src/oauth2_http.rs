@@ -72,6 +72,8 @@ async fn metadata(State(issuer): State<LmmIssuer>) -> Json<Value> {
     let p = issuer.profile();
     let resource = p.resource();
     let mut document = json!({"issuer":p.issuer(),"authorization_endpoint":format!("{resource}/authorize"),"token_endpoint":format!("{resource}/token"),"revocation_endpoint":format!("{resource}/revoke"),"response_types_supported":["code"],"grant_types_supported":["authorization_code","refresh_token"],"code_challenge_methods_supported":["S256"],"token_endpoint_auth_methods_supported":["none"],"authorization_response_iss_parameter_supported":true,"scopes_supported":["catalog:read","balance:read"],"lmm_client_ids_supported":["lmm"]});
+    document["lmm_deployment_contract"] = json!(p.deployment_contract());
+    document["lmm_isolated_loopback_test"] = json!(p.is_isolated_loopback_test());
     if p.pi_budget_limit().is_some() {
         document["lmm_client_ids_supported"] = json!(["lmm", "lmm-pi"]);
         document["scopes_supported"] = json!([

@@ -34,6 +34,10 @@ pub(super) struct Verified {
     pub(super) amount_minor: i64,
     pub(super) refund_id: Option<String>,
     pub(super) hold_receipt_id: Option<String>,
+    // Only refund.created carries the signed original creation request. Later
+    // asynchronous status changes may have request=null.
+    #[serde(default)]
+    pub(super) dispatch_key: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -45,6 +49,14 @@ struct Envelope {
     account: String,
     livemode: bool,
     data: EventData,
+    #[serde(default)]
+    request: Option<EventRequest>,
+}
+
+#[derive(Deserialize)]
+struct EventRequest {
+    #[serde(default)]
+    idempotency_key: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -172,6 +184,7 @@ pub(super) fn verify(
                 amount_minor: object.amount,
                 refund_id: None,
                 hold_receipt_id: None,
+                dispatch_key: None,
             })
         }
         "payment_intent.succeeded" => {
@@ -197,6 +210,7 @@ pub(super) fn verify(
                 amount_minor: object.amount,
                 refund_id: None,
                 hold_receipt_id: None,
+                dispatch_key: None,
             })
         }
         "refund.created" | "refund.updated" | "refund.failed" => {
@@ -234,6 +248,11 @@ pub(super) fn verify(
                 amount_minor: object.amount,
                 refund_id: Some(object.id),
                 hold_receipt_id,
+                dispatch_key: if envelope.kind == "refund.created" {
+                    envelope.request.and_then(|request| request.idempotency_key)
+                } else {
+                    None
+                },
             })
         }
         _ => Err(Error::Invalid),
@@ -689,6 +708,21 @@ mod tests {
         value["data"]["object"]["payment_intent"] =
             json!({"id":"pi_core_test","object":"payment_intent"});
         assert!(check(value).is_ok());
+    }
+
+    #[test]
+    fn dispatch_identity_requires_signed_creation_request_not_metadata() {
+        let mut value = refund("pending");
+        value["type"] = json!("refund.created");
+        value["request"] = json!({"id": "req_creation", "idempotency_key": "dispatch_test_0001"});
+        assert_eq!(
+            check(value.clone()).unwrap().dispatch_key.as_deref(),
+            Some("dispatch_test_0001")
+        );
+        value["type"] = json!("refund.updated");
+        assert!(check(value.clone()).unwrap().dispatch_key.is_none());
+        value["request"] = Value::Null;
+        assert!(check(value).unwrap().dispatch_key.is_none());
     }
 
     #[test]

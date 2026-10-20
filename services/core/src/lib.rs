@@ -4,7 +4,11 @@
 //! disabled until durable billing and routing adapters are integrated.
 pub mod abuse;
 pub mod accounts;
+pub mod assistant_model;
+pub mod assistant_tools_core;
 pub mod billing;
+pub mod bounties;
+pub mod builtins;
 #[cfg(unix)]
 pub mod commerce;
 pub mod config;
@@ -14,6 +18,7 @@ pub mod events;
 pub mod finance_export;
 pub mod financial_profile;
 pub mod funding;
+pub mod gift;
 pub mod history_http;
 pub mod history_read;
 pub mod http;
@@ -23,6 +28,7 @@ pub mod identity_http;
 pub mod internal_rpc;
 pub mod legacy_auth;
 pub mod lifecycle;
+pub mod market_oauth;
 pub mod model_http;
 pub mod oauth2_balance;
 pub mod oauth2_http;
@@ -33,8 +39,13 @@ pub mod relay;
 pub mod remote_control;
 pub mod routing;
 pub mod runtime_database;
+pub mod support_projection;
 #[cfg(test)]
 #[path = "../tests/common/runtime.rs"]
 pub(crate) mod test_runtime;
+pub mod tool_market;
 pub mod upstream_cost;
 pub mod usage;
+pub mod wallet;
+
+pub mod humangrant;

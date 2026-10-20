@@ -12,6 +12,8 @@ pub type RelayFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, RelayError>>
 pub enum ClientProtocol {
     Chat,
     Responses,
+    Anthropic,
+    Gemini,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -469,6 +471,9 @@ impl Usage {
         let (input, output) = match client {
             ClientProtocol::Chat => ("prompt_tokens", "completion_tokens"),
             ClientProtocol::Responses => ("input_tokens", "output_tokens"),
+            // Native usage has different disjoint counters and is rendered by
+            // the native leaf encoders; it never uses the OpenAI wire shape.
+            ClientProtocol::Anthropic | ClientProtocol::Gemini => return Value::Null,
         };
         if let Some(v) = self.input_tokens {
             out.insert(input.into(), json!(v));
@@ -538,6 +543,7 @@ pub(crate) enum Event {
     },
     EndBlock(usize),
     Usage(Usage),
+    StopSequence(String),
     Finish(FinishReason),
     Done,
 }

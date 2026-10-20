@@ -28,11 +28,24 @@ type AssistantGreeting interface {
 	UpdateGreeting(context.Context, string, string, string, int64) (assistant.GreetingPreference, error)
 }
 
+type AssistantChat interface {
+	Chat(context.Context, string, assistant.PersonalChatRequest) (assistant.PersonalChatReply, error)
+	Recover(context.Context, string, int64, string) (assistant.PersonalChatReply, error)
+}
+type AssistantResume interface {
+	Resume(context.Context, string, int64, string) (assistant.PersonalChatReply, error)
+}
+
 // RegisterAssistant preserves the old public presets, personal greeting and
 // interactive history routes. A shared host must wrap these routes in its own
 // admission/drain gate.
 // No browser may inject assistant messages or select a payer/model/owner.
-func RegisterAssistant(mux *http.ServeMux, auth *Authenticator, history AssistantHistory) {
+func RegisterAssistant(mux *http.ServeMux, auth *Authenticator, history AssistantHistory, chatPorts ...AssistantChat) {
+	var chat AssistantChat
+	if len(chatPorts) == 1 && !access.Missing(chatPorts[0]) {
+		chat = chatPorts[0]
+	}
+	gifts, _ := chat.(AssistantGifts)
 	protected := func(fn func(http.ResponseWriter, *http.Request, string)) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			if _, err := auth.Verify(r.Context(), r); err != nil {
@@ -114,6 +127,21 @@ func RegisterAssistant(mux *http.ServeMux, auth *Authenticator, history Assistan
 	}))
 	mux.HandleFunc("GET /api/assistant/status", protected(func(w http.ResponseWriter, r *http.Request, token string) {
 		value, err := history.Status(r.Context(), token)
+		if err == nil && !access.Missing(chat) {
+			value["enabled"], value["route_available"] = true, true
+			value["funding"] = map[string]any{"mode": "personal", "configured": true}
+			value["agent"] = map[string]any{"enabled": true, "stream_enabled": false}
+			value["unavailable_reason"] = ""
+		}
+		if err == nil && !access.Missing(gifts) && gifts.GiftsAvailable() {
+			if capabilities, ok := value["capabilities"].(map[string]bool); ok {
+				capabilities["new_user_gift"] = true
+			}
+		}
+		if agent, ok := chat.(interface{ MultiRoundAvailable() bool }); err == nil && ok && agent.MultiRoundAvailable() {
+			value["agent"] = map[string]any{"enabled": true, "stream_enabled": false, "multi_round": true, "explicit_resume": true}
+			value["funding"] = map[string]any{"mode": "core_policy", "configured": true}
+		}
 		assistantRespond(w, value, err)
 	}))
 	mux.HandleFunc("GET /api/assistant/conversations", protected(func(w http.ResponseWriter, r *http.Request, token string) {
@@ -177,29 +205,112 @@ func RegisterAssistant(mux *http.ServeMux, auth *Authenticator, history Assistan
 			assistantRespond(w, value, err)
 		}))
 	}
-	// No Rust gift grant/receipt contract is installed. An authenticated user
-	// gets an explicit unavailable outcome, never an invented offer or credit.
-	giftUnavailable := func(w http.ResponseWriter, r *http.Request) {
-		if _, err := auth.Verify(r.Context(), r); err != nil {
-			assistantRespond(w, nil, assistantAuthError(err))
+	RegisterAssistantGifts(mux, auth, gifts)
+	mux.HandleFunc("POST /api/assistant/chat", protected(func(w http.ResponseWriter, r *http.Request, token string) {
+		if access.Missing(chat) {
+			assistantRespond(w, nil, access.ErrUnavailable)
 			return
 		}
+		var body struct {
+			ConversationID int64  `json:"conversation_id"`
+			ClientTurnID   string `json:"client_turn_id"`
+			Message        string `json:"message"`
+			Messages       []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+			PresetID string `json:"preset_id"`
+		}
+		query, err := assistantQuery(r)
+		if err != nil || len(query) != 0 || access.Body(w, r, &body) != nil {
+			assistantRespond(w, nil, access.ErrInvalid)
+			return
+		}
+		// Browser history is display context, never Core authority or a system
+		// prompt. Core reconstructs its own conversation. Custom presets need a
+		// server-owned policy contract before they can change model behavior.
+		if body.PresetID != "" || len(body.Messages) > 64 {
+			assistantRespond(w, nil, access.ErrInvalid)
+			return
+		}
+		for _, message := range body.Messages {
+			if (message.Role != "user" && message.Role != "assistant") || len(message.Content) > 32768 {
+				assistantRespond(w, nil, access.ErrInvalid)
+				return
+			}
+		}
+		reply, err := chat.Chat(r.Context(), token, assistant.PersonalChatRequest{ConversationID: body.ConversationID, ClientTurnID: body.ClientTurnID, Message: body.Message})
+		assistantChatRespond(w, reply, err)
+	}))
+	mux.HandleFunc("GET /api/assistant/conversations/{id}/turns/{turn}", protected(func(w http.ResponseWriter, r *http.Request, token string) {
+		if access.Missing(chat) {
+			assistantRespond(w, nil, access.ErrUnavailable)
+			return
+		}
+		id, err := assistantConversationID(r)
+		query, queryErr := assistantQuery(r)
+		if err != nil || queryErr != nil || len(query) != 0 {
+			assistantRespond(w, nil, access.ErrInvalid)
+			return
+		}
+		reply, err := chat.Recover(r.Context(), token, id, r.PathValue("turn"))
+		assistantChatRespond(w, reply, err)
+	}))
+	mux.HandleFunc("POST /api/assistant/conversations/{id}/turns/{turn}/resume", protected(func(w http.ResponseWriter, r *http.Request, token string) {
+		resume, ok := chat.(AssistantResume)
+		if !ok || access.Missing(resume) {
+			assistantRespond(w, nil, access.ErrUnavailable)
+			return
+		}
+		id, err := assistantConversationID(r)
+		query, queryErr := assistantQuery(r)
+		var body struct{}
+		if err != nil || queryErr != nil || len(query) != 0 || access.Body(w, r, &body) != nil {
+			assistantRespond(w, nil, access.ErrInvalid)
+			return
+		}
+		reply, err := resume.Resume(r.Context(), token, id, r.PathValue("turn"))
+		assistantChatRespond(w, reply, err)
+	}))
+}
+
+func assistantChatRespond(w http.ResponseWriter, reply assistant.PersonalChatReply, err error) {
+	if err != nil {
+		assistantRespond(w, nil, err)
+		return
+	}
+	if reply.State != "settled" || reply.Text == "" {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"success": false, "code": "ASSISTANT_GIFT_UNAVAILABLE", "retryable": false,
-			"message": "New-user gifts are not available on this installation.",
-		})
+		status, code := http.StatusAccepted, "ASSISTANT_OPERATION_PENDING"
+		if reply.State == "released" {
+			status, code = http.StatusConflict, "ASSISTANT_OPERATION_RELEASED"
+		}
+		switch reply.State {
+		case "rejected":
+			status, code = http.StatusConflict, "ASSISTANT_OPERATION_REJECTED"
+		case "expired":
+			status, code = http.StatusConflict, "ASSISTANT_OPERATION_EXPIRED"
+		case "human_support_pending":
+			code = "ASSISTANT_HUMAN_SUPPORT_PENDING"
+		}
+		w.WriteHeader(status)
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": false, "code": code, "data": reply})
+		return
 	}
-	mux.HandleFunc("GET /api/assistant/new-user-gift", giftUnavailable)
-	mux.HandleFunc("POST /api/assistant/new-user-gift/claim", giftUnavailable)
-	mux.HandleFunc("POST /api/assistant/chat", protected(func(w http.ResponseWriter, r *http.Request, _ string) {
-		// No Model.Next adapter is installed: SESSION -> ApiKey substitution
-		// would change the payer and bypass the missing sponsorship policy.
-		assistantRespond(w, nil, access.ErrUnavailable)
-	}))
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	body := map[string]any{
+		"success":               true,
+		"choices":               []any{map[string]any{"message": map[string]string{"role": "assistant", "content": reply.Text}}},
+		"lmm_assistant_history": map[string]any{"conversation_id": reply.ConversationID, "client_turn_id": reply.ClientTurnID},
+	}
+	if reply.Gift != nil {
+		body["lmm_assistant_gift"] = reply.Gift
+	}
+	_ = json.NewEncoder(w).Encode(body)
 }
 
 func assistantConversationID(r *http.Request) (int64, error) {

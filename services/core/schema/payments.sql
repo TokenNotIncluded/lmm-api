@@ -31,7 +31,7 @@ CREATE TABLE core_payments.receipts (
     id TEXT PRIMARY KEY CHECK (id ~ '^pay_[a-f0-9]{64}$'),
     intent_id BIGINT NOT NULL REFERENCES core_payments.intents(id),
     operation_key TEXT NOT NULL CHECK (length(operation_key) BETWEEN 16 AND 128),
-    method TEXT NOT NULL CHECK (method IN ('prepare','credit','hold','commit','release','external_refund')),
+    method TEXT NOT NULL CHECK (method IN ('prepare','credit','hold','dispatch','commit','release','external_refund')),
     request_hash BYTEA NOT NULL CHECK (octet_length(request_hash)=32),
     receipt_wire BYTEA NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
@@ -133,6 +133,26 @@ CREATE TRIGGER refunds_immutable BEFORE UPDATE OR DELETE ON core_payments.provid
     FOR EACH ROW EXECUTE FUNCTION core_billing.ledger_immutable();
 CREATE TRIGGER blocked_refunds_immutable BEFORE UPDATE OR DELETE ON core_payments.blocked_refunds
     FOR EACH ROW EXECUTE FUNCTION core_billing.ledger_immutable();
+-- Append to payments.sql after accepted_proofs, before revokes.
+CREATE TABLE core_payments.refund_dispatches (
+    hold_receipt_id TEXT PRIMARY KEY REFERENCES core_payments.refund_holds(receipt_id),
+    intent_id BIGINT NOT NULL REFERENCES core_payments.intents(id),
+    operation_key TEXT NOT NULL UNIQUE CHECK (length(operation_key) BETWEEN 16 AND 128),
+    receipt_id TEXT NOT NULL UNIQUE REFERENCES core_payments.receipts(id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+CREATE TABLE core_payments.refund_dispatch_bindings (
+    hold_receipt_id TEXT PRIMARY KEY REFERENCES core_payments.refund_dispatches(hold_receipt_id),
+    channel_id BIGINT NOT NULL,
+    refund_id TEXT NOT NULL CHECK (length(refund_id) BETWEEN 1 AND 128),
+    proof_id TEXT NOT NULL REFERENCES core_payments.accepted_proofs(id),
+    UNIQUE (channel_id,refund_id)
+);
+CREATE TRIGGER dispatches_immutable BEFORE UPDATE OR DELETE ON core_payments.refund_dispatches
+    FOR EACH ROW EXECUTE FUNCTION core_billing.ledger_immutable();
+CREATE TRIGGER dispatch_bindings_immutable BEFORE UPDATE OR DELETE ON core_payments.refund_dispatch_bindings
+    FOR EACH ROW EXECUTE FUNCTION core_billing.ledger_immutable();
+
 REVOKE ALL ON SCHEMA core_payments FROM PUBLIC;
 REVOKE ALL ON ALL TABLES IN SCHEMA core_payments FROM PUBLIC;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA core_payments FROM PUBLIC;

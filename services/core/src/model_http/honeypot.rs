@@ -198,6 +198,11 @@ impl HoneypotGateway {
         {
             return Ok(None);
         }
+        if matches!(client, ClientProtocol::Anthropic | ClientProtocol::Gemini) {
+            return Err(RelayError::Unsupported(
+                "native honeypot policies are not configured",
+            ));
+        }
         let request = relay::Request::parse(client, body, &self.ceiling)?;
         // Admission authenticates current API-key policy itself. It cannot
         // manufacture ordinary developer grants, model routes or spending.
@@ -218,6 +223,11 @@ impl HoneypotGateway {
                 match client {
                     ClientProtocol::Chat => abuse::ClientProtocol::OpenaiChat,
                     ClientProtocol::Responses => abuse::ClientProtocol::OpenaiResponses,
+                    ClientProtocol::Anthropic | ClientProtocol::Gemini => {
+                        return Err(RelayError::Unsupported(
+                            "native honeypot policies are not configured",
+                        ));
+                    }
                 },
                 &request.model,
                 peer,

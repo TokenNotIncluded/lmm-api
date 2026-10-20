@@ -58,6 +58,7 @@ pub(super) fn credit_price(
     if quote.billing_mode() == crate::routing::BillingMode::UpstreamCost {
         let (group_ppm, _) = quote.multipliers_ppm();
         let price = Price {
+            image: None,
             upstream_cost_group_ppm: Some(group_ppm),
             version: format!("routing-{}-rule-{}", quote.version(), quote.rule_id()),
             model: model.to_owned(),
@@ -89,6 +90,7 @@ pub(super) fn credit_price(
         i64::try_from(numerator / DENOMINATOR).map_err(|_| RelayError::BillingUnavailable)
     };
     let price = Price {
+        image: None,
         upstream_cost_group_ppm: None,
         version: format!("routing-{}-rule-{}", quote.version(), quote.rule_id()),
         model: model.to_owned(),
@@ -99,6 +101,48 @@ pub(super) fn credit_price(
     };
     price.validate().map_err(super::billing::error)?;
     Ok(price)
+}
+
+/// Keep provider base prefixes and encode model identifiers as one segment.
+/// Only Gemini's streaming switch can add a query, always server-derived.
+fn operation_endpoint(
+    base: &str,
+    protocol: UpstreamProtocol,
+    model: &str,
+    stream: bool,
+) -> Result<reqwest::Url, RelayError> {
+    let mut endpoint = crate::relay::honeypot_network::validate_base_url(base, true)?;
+    {
+        let mut segments = endpoint
+            .path_segments_mut()
+            .map_err(|_| RelayError::RouteUnavailable)?;
+        segments.pop_if_empty();
+        match protocol {
+            UpstreamProtocol::Chat => {
+                segments.push("chat").push("completions");
+            }
+            UpstreamProtocol::Responses => {
+                segments.push("responses");
+            }
+            UpstreamProtocol::Anthropic => {
+                segments.push("messages");
+            }
+            UpstreamProtocol::Gemini => {
+                segments.push("models").push(&format!(
+                    "{model}:{}",
+                    if stream {
+                        "streamGenerateContent"
+                    } else {
+                        "generateContent"
+                    }
+                ));
+            }
+        }
+    }
+    if protocol == UpstreamProtocol::Gemini && stream {
+        endpoint.set_query(Some("alt=sse"));
+    }
+    Ok(endpoint)
 }
 
 impl RouteProvider for Bridge {
@@ -119,6 +163,8 @@ impl RouteProvider for Bridge {
             let protocol = match request.client {
                 ClientProtocol::Chat => Protocol::OpenAiChat,
                 ClientProtocol::Responses => Protocol::OpenAiResponses,
+                ClientProtocol::Anthropic => Protocol::AnthropicMessages,
+                ClientProtocol::Gemini => Protocol::Gemini,
             };
             let mut plan = self
                 .routing
@@ -147,54 +193,44 @@ impl RouteProvider for Bridge {
             let upstream = match attempt.protocol() {
                 Protocol::OpenAiChat => UpstreamProtocol::Chat,
                 Protocol::OpenAiResponses => UpstreamProtocol::Responses,
-                _ => {
+                Protocol::AnthropicMessages => UpstreamProtocol::Anthropic,
+                Protocol::Gemini => UpstreamProtocol::Gemini,
+                Protocol::SystemOne => {
                     return Err(RelayError::Unsupported(
-                        "upstream protocol is not integrated with charging",
+                        "System One requires its native endpoint",
                     ));
                 }
             };
+            if request.client == ClientProtocol::Anthropic
+                && upstream != UpstreamProtocol::Anthropic
+            {
+                return Err(RelayError::Unsupported(
+                    "native Anthropic requires an upstream with disjoint cache usage receipts",
+                ));
+            }
             let reference = attempt.credential_ref();
             let secret = self
                 .credentials
                 .get(&(reference.id, reference.revision))
                 .ok_or(RelayError::RouteUnavailable)?;
-            let mut endpoint = reqwest::Url::parse(attempt.endpoint())
-                .map_err(|_| RelayError::RouteUnavailable)?;
-            let local = endpoint
-                .host_str()
-                .and_then(|host| {
-                    host.trim_matches(['[', ']'])
-                        .parse::<std::net::IpAddr>()
-                        .ok()
-                })
-                .is_some_and(|ip| ip.is_loopback());
+            self.provider_policy.validate_attempt(
+                &attempt,
+                self.policy.input_token_ceiling,
+                request.max_output_tokens,
+            )?;
+            self.provider_policy
+                .validate_billing_mode(&attempt, price.upstream_cost_group_ppm.is_some())?;
             if price.upstream_cost_group_ppm.is_some() && attempt.upstream_model() != price.model {
                 return Err(RelayError::Unsupported(
                     "upstream-cost router cannot be mapped to another model",
                 ));
             }
-            if !local {
-                return Err(RelayError::Unsupported(
-                    "external providers require validated model context bounds",
-                ));
-            }
-            // Configured base already carries the provider's /v1 prefix, if any.
-            // Append path segments rather than dropping that prefix with join().
-            {
-                let mut segments = endpoint
-                    .path_segments_mut()
-                    .map_err(|_| RelayError::RouteUnavailable)?;
-                segments.pop_if_empty();
-                match upstream {
-                    UpstreamProtocol::Chat => {
-                        segments.push("chat").push("completions");
-                    }
-                    UpstreamProtocol::Responses => {
-                        segments.push("responses");
-                    }
-                    _ => unreachable!(),
-                }
-            }
+            let endpoint = operation_endpoint(
+                attempt.endpoint(),
+                upstream,
+                attempt.upstream_model(),
+                request.stream,
+            )?;
             let route_id = format!(
                 "r{}-t{}-u{}",
                 attempt.route_id(),
@@ -239,6 +275,58 @@ mod tests {
     use crate::routing::{
         MULTIPLIER_ONE, PriceConfig, PriceRule, PriceSnapshot, Speed, TokenRates,
     };
+
+    #[test]
+    fn provider_paths_preserve_prefix_and_never_take_client_queries() {
+        for (protocol, tail) in [
+            (UpstreamProtocol::Chat, "chat/completions"),
+            (UpstreamProtocol::Responses, "responses"),
+            (UpstreamProtocol::Anthropic, "messages"),
+            (UpstreamProtocol::Gemini, "models/synthetic:generateContent"),
+        ] {
+            let endpoint = operation_endpoint(
+                "https://api.example/prefix/v1/",
+                protocol,
+                "synthetic",
+                false,
+            )
+            .unwrap();
+            assert_eq!(
+                endpoint.as_str(),
+                format!("https://api.example/prefix/v1/{tail}")
+            );
+        }
+        let stream = operation_endpoint(
+            "https://api.example/v1beta",
+            UpstreamProtocol::Gemini,
+            "a/b?key=x",
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            stream.path(),
+            "/v1beta/models/a%2Fb%3Fkey=x:streamGenerateContent"
+        );
+        assert_eq!(stream.query(), Some("alt=sse"));
+        assert!(
+            operation_endpoint(
+                "https://api.example/v1?key=x",
+                UpstreamProtocol::Chat,
+                "model",
+                false
+            )
+            .is_err()
+        );
+        assert!(
+            operation_endpoint(
+                "https://10.0.0.1/v1",
+                UpstreamProtocol::Chat,
+                "model",
+                false
+            )
+            .is_err()
+        );
+    }
 
     fn quote(input: u64, cache_write: u64, request: u64, multiplier: u32) -> PriceQuote {
         PriceSnapshot::compile(PriceConfig {
@@ -310,6 +398,7 @@ mod tests {
                             .unwrap();
                         let amount = legacy
                             .cost(crate::billing::charging::Usage {
+                                image: None,
                                 upstream_cost_atto_usd: None,
                                 input: input as i64,
                                 cached: cached as i64,

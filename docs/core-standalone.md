@@ -12,6 +12,7 @@
 | --- | --- | --- |
 | Tokio I/O 工作者线程 | 1 | `server.worker_threads=1..4` |
 | 身份 PostgreSQL 连接池上限 | 2 | `database.max_connections=1..8` |
+| PostgreSQL 连接及连接池获取等待 | 3 秒 | `database.acquire_timeout_seconds=1..30` |
 | 同时运行的密码哈希任务 | 1 | `identity.password_slots=1..2` |
 | 已接纳的 HTTP 请求及后台完成任务 | 16 | `server.max_inflight=1..64` |
 | Tokio 阻塞线程上限 | 4 | 固定 |
@@ -19,6 +20,8 @@
 | 独立核心容器内存硬限制 | 256 MiB | Compose 覆盖参数 |
 
 Argon2id 继续使用 19,456 KiB、两次迭代和原有校验规则。减少并发不等于降低密码安全。内存硬上限是安全预算，不是实际消耗；低于上限并不能证明无 OOM。
+
+`database.acquire_timeout_seconds` 适用于核心及可选业务的数据库连接池；远端数据库连接较慢时可在主机 TOML 中显式提高。它不改变 SQL 的 5 秒超时、事务空闲的 10 秒超时或计费期限。仅显式使用 `--legacy-env` 时，对应设置为 `LMM_CORE_DB_ACQUIRE_TIMEOUT_SECONDS`；TOML 模式不读取环境变量覆盖。
 
 RPC 未配置时，不创建额外 RPC 监听器及其数据库池。只有需要扩展的机器才配置 `compose.rpc-core.yml`。不要把所有模块和 PostgreSQL 都塞入同一台 1 核 / 1 GiB 主机后直接套用这些限额。
 

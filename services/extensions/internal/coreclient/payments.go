@@ -57,3 +57,7 @@ func (c *Client) AcceptPaymentProviderProof(ctx context.Context, request *pb.Acc
 func (c *Client) ReconcilePaymentProviderProof(ctx context.Context, request *pb.GetProviderProofRequest) (*pb.ProviderProofReceipt, error) {
 	return pb.NewCorePaymentsClient(c.connection).GetProviderProof(c.context(ctx, ""), request)
 }
+
+func (c *Client) BeginPaymentRefundDispatch(ctx context.Context, request *pb.ResolveRefundRequest) (*pb.PaymentReceipt, error) {
+	return pb.NewCorePaymentsClient(c.connection).BeginRefundDispatch(c.context(ctx, ""), request)
+}

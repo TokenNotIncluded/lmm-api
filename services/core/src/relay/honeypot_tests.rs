@@ -22,6 +22,10 @@ fn request(client: super::super::ClientProtocol, stream: bool) -> Request {
         super::super::ClientProtocol::Responses => {
             json!({"model":"visible-alias","input":"input","stream":stream})
         }
+
+        super::super::ClientProtocol::Anthropic | super::super::ClientProtocol::Gemini => {
+            unreachable!("native clients require native fixtures")
+        }
     };
     Request::parse(
         client,
@@ -76,6 +80,10 @@ fn text(client: super::super::ClientProtocol, stream: bool, bytes: &[u8]) -> Str
                     .unwrap()
                     .to_owned()
             }
+
+            super::super::ClientProtocol::Anthropic | super::super::ClientProtocol::Gemini => {
+                unreachable!("native clients require native fixtures")
+            }
         };
     }
     let frames = frames(bytes);
@@ -128,6 +136,10 @@ fn text(client: super::super::ClientProtocol, stream: bool, bytes: &[u8]) -> Str
                 .filter(|v| v["type"] == "response.output_text.delta")
                 .map(|v| v["delta"].as_str().unwrap())
                 .collect()
+        }
+
+        super::super::ClientProtocol::Anthropic | super::super::ClientProtocol::Gemini => {
+            unreachable!("native clients require native fixtures")
         }
     }
 }
@@ -526,6 +538,10 @@ async fn fixed_text_encoded_byte_cap_and_utf8_output_budget_are_enforced() {
                         .iter()
                         .any(|v| v["status"] == "incomplete" || v["type"] == "response.incomplete")
                 ),
+
+                super::super::ClientProtocol::Anthropic | super::super::ClientProtocol::Gemini => {
+                    unreachable!("native clients require native fixtures")
+                }
             }
         }
     }

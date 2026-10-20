@@ -5,8 +5,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -22,13 +24,19 @@ type paymentDocument struct {
 	Channels []paymentChannel `toml:"channels"`
 }
 type paymentChannel struct {
-	ID         int64  `toml:"id"`
-	Merchant   string `toml:"merchant"`
-	Enabled    bool   `toml:"enabled"`
-	APIKeyFile string `toml:"api_key_file"`
-	APIVersion string `toml:"api_version"`
-	SuccessURL string `toml:"success_url"`
-	CancelURL  string `toml:"cancel_url"`
+	ID                       int64  `toml:"id"`
+	Merchant                 string `toml:"merchant"`
+	Enabled                  bool   `toml:"enabled"`
+	APIKeyFile               string `toml:"api_key_file"`
+	APIVersion               string `toml:"api_version"`
+	SuccessURL               string `toml:"success_url"`
+	CancelURL                string `toml:"cancel_url"`
+	IsolatedTestMode         bool   `toml:"isolated_test_mode"`
+	IsolatedProviderURL      string `toml:"isolated_provider_url"`
+	IsolatedCheckoutOrigin   string `toml:"isolated_checkout_origin"`
+	IsolatedReturnOrigin     string `toml:"isolated_return_origin"`
+	IsolatedSecretDirectory  string `toml:"isolated_secret_directory"`
+	IsolatedBindingTokenFile string `toml:"isolated_binding_token_file"`
 }
 
 func paymentConfigured(cfg Config) bool {
@@ -57,8 +65,12 @@ func validatePaymentSelection(cfg Config) error {
 }
 
 // Only the Core's existing Stripe test/USD policy is supported. This private
-// document has no webhook secret, arbitrary endpoint or exchange-rate field.
-func loadPaymentAdapters(path string) ([]payments.Adapter, error) {
+// document has no webhook secret or exchange-rate field. The isolated lab is
+// a separate provider selection with a bound numeric-loopback capability.
+func loadPaymentAdapters(path string, runtimeCredentials ...[]byte) ([]payments.Adapter, error) {
+	return loadPaymentAdaptersForHost(context.Background(), path, "", false, runtimeCredentials...)
+}
+func loadPaymentAdaptersForHost(ctx context.Context, path, hostOrigin string, localHTTP bool, runtimeCredentials ...[]byte) ([]payments.Adapter, error) {
 	if !cleanPaymentPath(path) {
 		return nil, errors.New("invalid private payment configuration path")
 	}
@@ -71,14 +83,21 @@ func loadPaymentAdapters(path string) ([]payments.Adapter, error) {
 	if err != nil || len(meta.Undecoded()) != 0 {
 		return nil, errors.New("invalid private payment configuration")
 	}
-	allowed := map[string]bool{"version": true, "provider": true, "channels": true, "channels.id": true, "channels.merchant": true, "channels.enabled": true, "channels.api_key_file": true, "channels.api_version": true, "channels.success_url": true, "channels.cancel_url": true}
+	allowed := map[string]bool{"version": true, "provider": true, "channels": true, "channels.id": true, "channels.merchant": true, "channels.enabled": true, "channels.api_key_file": true, "channels.api_version": true, "channels.success_url": true, "channels.cancel_url": true, "channels.isolated_test_mode": true, "channels.isolated_provider_url": true, "channels.isolated_checkout_origin": true, "channels.isolated_return_origin": true, "channels.isolated_secret_directory": true, "channels.isolated_binding_token_file": true}
 	for _, key := range meta.Keys() {
 		if !allowed[key.String()] {
 			return nil, errors.New("unknown private payment configuration field")
 		}
 	}
-	if cfg.Version != 1 || cfg.Provider != "stripe-test" || !meta.IsDefined("channels") || len(cfg.Channels) > 16 {
+	if cfg.Version != 1 || (cfg.Provider != "stripe-test" && cfg.Provider != "stripe-isolated-test") || !meta.IsDefined("channels") || len(cfg.Channels) > 16 {
 		return nil, errors.New("payments require explicit bounded Stripe test channels")
+	}
+	if cfg.Provider == "stripe-test" {
+		for _, key := range meta.Keys() {
+			if strings.HasPrefix(key.String(), "channels.isolated_") {
+				return nil, errors.New("isolated fields require explicit isolated payments provider")
+			}
+		}
 	}
 	adapters := make([]payments.Adapter, 0, len(cfg.Channels))
 	ids, merchants := map[int64]bool{}, map[string]bool{}
@@ -99,7 +118,19 @@ func loadPaymentAdapters(path string) ([]payments.Adapter, error) {
 				return nil, errors.New("invalid private payment API credential")
 			}
 		}
-		adapter, err := payments.NewStripe(payments.StripeConfig{Channel: payments.Channel{ID: c.ID, Provider: "stripe", Merchant: c.Merchant, Environment: "test", Currency: "USD", Enabled: c.Enabled}, APIKey: key, APIVersion: c.APIVersion, SuccessURL: c.SuccessURL, CancelURL: c.CancelURL})
+		stripeCfg := payments.StripeConfig{Channel: payments.Channel{ID: c.ID, Provider: "stripe", Merchant: c.Merchant, Environment: "test", Currency: "USD", Enabled: c.Enabled}, APIKey: key, APIVersion: c.APIVersion, SuccessURL: c.SuccessURL, CancelURL: c.CancelURL}
+		var adapter *payments.Stripe
+		if cfg.Provider == "stripe-isolated-test" {
+			if hostOrigin == "" || c.IsolatedReturnOrigin != hostOrigin || (!localHTTP && strings.HasPrefix(hostOrigin, "http:")) || !loadedPaymentHostCredential(runtimeCredentials) || !cleanPaymentPath(c.IsolatedSecretDirectory) || !isolatedPaymentAPIFile(c.APIKeyFile, c.IsolatedSecretDirectory) || c.APIKeyFile == c.IsolatedBindingTokenFile {
+				return nil, errors.New("isolated payments require independent private lab credentials")
+			}
+			adapter, err = payments.NewStripeIsolated(ctx, payments.StripeIsolatedConfig{Stripe: stripeCfg, TestMode: c.IsolatedTestMode, ProviderURL: c.IsolatedProviderURL, CheckoutOrigin: c.IsolatedCheckoutOrigin, ReturnOrigin: c.IsolatedReturnOrigin, SecretDirectory: c.IsolatedSecretDirectory, BindingTokenFile: c.IsolatedBindingTokenFile, ForbiddenCredentials: runtimeCredentials})
+		} else {
+			if c.IsolatedTestMode || c.IsolatedProviderURL != "" || c.IsolatedCheckoutOrigin != "" || c.IsolatedReturnOrigin != "" || c.IsolatedSecretDirectory != "" || c.IsolatedBindingTokenFile != "" {
+				return nil, errors.New("isolated fields require explicit isolated payments provider")
+			}
+			adapter, err = payments.NewStripe(stripeCfg)
+		}
 		if err != nil {
 			return nil, errors.New("invalid Stripe test channel configuration")
 		}
@@ -145,8 +176,11 @@ func independentRuntimeCredentials(credentials ...[]byte) error {
 	}
 	return nil
 }
-func (r *Runtime) composePayments(ctx context.Context, cfg Config, paymentToken []byte) error {
-	adapters, err := loadPaymentAdapters(cfg.PaymentConfigFile)
+func (r *Runtime) composePayments(ctx context.Context, cfg Config, paymentToken []byte, otherCredentials ...[]byte) error {
+	credentials := append([][]byte{cfg.HostCredential, paymentToken}, otherCredentials...)
+	credentials = append(credentials, r.paymentIsolationCredentials...)
+	defer func() { r.paymentIsolationCredentials = nil }()
+	adapters, err := loadPaymentAdaptersForHost(ctx, cfg.PaymentConfigFile, cfg.HostPublicOrigin, cfg.LocalHTTP, credentials...)
 	if err != nil {
 		return err
 	}
@@ -172,4 +206,20 @@ func (r *Runtime) composePayments(ctx context.Context, cfg Config, paymentToken 
 	}
 	r.Payments, err = payments.New(repo, bridge, adapters...)
 	return err
+}
+
+func loadedPaymentHostCredential(credentials [][]byte) bool {
+	return len(credentials) > 0 && len(credentials[0]) >= 32
+}
+
+func isolatedPaymentAPIFile(path, dir string) bool {
+	if filepath.Dir(path) != dir {
+		return false
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
+		return false
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	return ok && stat.Uid == uint32(os.Geteuid()) && stat.Nlink == 1
 }

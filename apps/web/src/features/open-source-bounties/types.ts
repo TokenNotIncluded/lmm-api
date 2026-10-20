@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+export type BountyId = string | number
+
 export type BountyProjectStatus =
   | 'draft'
   | 'published'
@@ -41,9 +43,9 @@ export type BountyDisputeReason =
 export type BountyDisputeStatus = 'open' | 'resolved_paid' | 'resolved_denied'
 
 export interface BountyDispute {
-  id: number
-  challenge_id: number
-  project_id: number
+  id: BountyId
+  challenge_id: BountyId
+  project_id: BountyId
   opened_by_user_id: number
   against_user_id: number
   reason: BountyDisputeReason
@@ -164,8 +166,8 @@ export function getBountyDisputeEvidenceComparison(dispute: BountyDispute): {
 }
 
 export interface BountyChallenge {
-  id: number
-  project_id: number
+  id: BountyId
+  project_id: BountyId
   participant_user_id: number
   participant_username?: string
   github_handle: string
@@ -198,7 +200,7 @@ export interface BountyChallenge {
 }
 
 export interface BountyProject {
-  id: number
+  id: BountyId
   owner_user_id: number
   owner_username: string
   repository_url: string
@@ -235,9 +237,9 @@ export interface BountyProject {
 }
 
 export interface BountyTipNotification {
-  id: number
-  project_id: number
-  challenge_id: number
+  id: BountyId
+  project_id: BountyId
+  challenge_id: BountyId
   sender_user_id: number
   sender_username: string
   project_title: string
@@ -270,9 +272,9 @@ export interface BountyProjectDetail {
   project: BountyProject
   challenges: BountyChallenge[]
   ledger: Array<{
-    id: number
-    project_id: number
-    challenge_id: number
+    id: BountyId
+    project_id: BountyId
+    challenge_id: BountyId
     user_id: number
     counterparty_user_id: number
     kind: string
@@ -283,6 +285,8 @@ export interface BountyProjectDetail {
 }
 
 export interface BountyFeeConfig {
+  enabled?: boolean
+  code?: string
   rate_percent: number
   rate_basis_points: number
 }

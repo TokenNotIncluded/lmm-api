@@ -3,7 +3,7 @@
 //! own transaction before taking funds. Model routes remain unavailable.
 pub mod admin_approval;
 pub mod admin_users;
-mod permissions;
+pub(crate) mod permissions;
 pub(crate) use permissions::authorize_admin_read_snapshot;
 pub use permissions::{
     Action, CONTRACT_VERSION as PERMISSIONS_CONTRACT, CatalogDecision, Effect, PermissionReadStore,
@@ -18,6 +18,7 @@ pub use browser::{
 };
 mod company;
 mod compat;
+pub(crate) use compat::quota as assistant_key_quota;
 mod credentials;
 pub use company::CompanyBillingProfileInput;
 pub use compat::authorize_model_request_in_transaction;
@@ -34,6 +35,7 @@ mod resource;
 pub use auth::{CredentialSummary, LoginRequest};
 pub use lifecycle::{InviteSummary, MemberSummary, MemberUpdate};
 pub use oauth::GoogleOAuth;
+pub(crate) use oauth::VerifiedGoogleIdentity;
 pub(crate) use resource::{NewResourceAction, reject_marked_new_action};
 mod schema;
 mod teams;
@@ -331,6 +333,42 @@ pub(crate) async fn authorize_in_transaction(
     secret: &str,
 ) -> Result<Principal> {
     authenticate(c, secret, true).await
+}
+/// A current personal Session may use only its persisted enabled routing group.
+/// This is a dedicated model authority, never an API-key compatibility adapter.
+pub(crate) async fn authorize_assistant_model_in_transaction(
+    c: &mut PgConnection,
+    secret: &str,
+    group: &str,
+) -> Result<Principal> {
+    let actor = session(c, secret).await?;
+    if actor.owner.kind != AccountKind::Personal || actor.owner.id != actor.user_id {
+        return Err(IdentityError::Forbidden);
+    }
+    compat::developer(c, &actor).await?;
+    let granted: Option<bool> = sqlx::query_scalar(
+        "SELECT enabled FROM core_identity.user_routing_groups WHERE user_id=$1 AND group_name=$2",
+    )
+    .bind(actor.user_id)
+    .bind(group)
+    .fetch_optional(c)
+    .await?;
+    if granted != Some(true) {
+        return Err(IdentityError::Forbidden);
+    }
+    Ok(actor)
+}
+pub(crate) async fn require_bounty_developer_in_transaction(
+    c: &mut PgConnection,
+    actor: &Principal,
+    secret: &str,
+) -> Result<()> {
+    if actor.platform_level >= 5 {
+        authorize_admin_read_snapshot(c, secret)
+            .await
+            .map_err(|_| IdentityError::Forbidden)?;
+    }
+    compat::developer(c, actor).await
 }
 async fn session(c: &mut PgConnection, secret: &str) -> Result<Principal> {
     let actor = authorize_in_transaction(c, secret).await?;

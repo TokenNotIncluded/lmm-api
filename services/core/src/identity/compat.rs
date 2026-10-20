@@ -292,7 +292,7 @@ async fn validate(
         unlimited: input.unlimited_quota.ok_or(IdentityError::Invalid)?,
     })
 }
-async fn quota(c: &mut PgConnection, id: i64, issuer: i64) -> Result<(i64, i64, bool)> {
+pub(crate) async fn quota(c: &mut PgConnection, id: i64, issuer: i64) -> Result<(i64, i64, bool)> {
     crate::billing::charging::key_quota_snapshot_for_issuer(c, id, issuer)
         .await
         .map_err(|_| IdentityError::Storage)

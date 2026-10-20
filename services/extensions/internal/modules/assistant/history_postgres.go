@@ -21,6 +21,9 @@ func historyError(err error) error {
 }
 
 func (p *Postgres) RecordTurn(ctx context.Context, userID int64, turn CompletedTurn) (int64, error) {
+	if turn.Title != RedactAssistantHistoryContent(turn.Title) || len([]rune(turn.Title)) > 60 || len([]rune(turn.Title)) == 1 {
+		return 0, access.ErrInvalid
+	}
 	if userID <= 0 || turn.Now <= 0 || !access.ID(turn.ClientTurnID) || len(turn.ClientTurnID) > 64 || turn.ConversationID < 0 || turn.ConversationID > maxSafeHistoryID ||
 		turn.UserContent == "" || turn.AnswerContent == "" || len([]rune(turn.UserContent)) > 4000 || len([]rune(turn.AnswerContent)) > 4000 {
 		return 0, access.ErrInvalid
@@ -68,6 +71,11 @@ func (p *Postgres) RecordTurn(ctx context.Context, userID int64, turn CompletedT
 	var sequence int64
 	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(max(sequence),0)+1 FROM lmm_assistant.history_messages WHERE conversation_id=$1`, id).Scan(&sequence); err != nil {
 		return 0, access.ErrUnavailable
+	}
+	if sequence == 1 && turn.Title != "" {
+		if _, err = tx.ExecContext(ctx, `UPDATE lmm_assistant.conversations SET title=$1 WHERE id=$2 AND user_id=$3`, turn.Title, id, userID); err != nil {
+			return 0, access.ErrUnavailable
+		}
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO lmm_assistant.history_messages(conversation_id,sequence,role,content,created_at) VALUES($1,$2,'user',$3,$5),($1,$2+1,'assistant',$4,$5)`,
 		id, sequence, turn.UserContent, turn.AnswerContent, turn.Now)

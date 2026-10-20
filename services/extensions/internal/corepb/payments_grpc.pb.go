@@ -24,6 +24,7 @@ const (
 	CorePayments_PrepareTopup_FullMethodName        = "/lmm.core.v1.CorePayments/PrepareTopup"
 	CorePayments_CreditTopup_FullMethodName         = "/lmm.core.v1.CorePayments/CreditTopup"
 	CorePayments_HoldRefund_FullMethodName          = "/lmm.core.v1.CorePayments/HoldRefund"
+	CorePayments_BeginRefundDispatch_FullMethodName = "/lmm.core.v1.CorePayments/BeginRefundDispatch"
 	CorePayments_CommitRefund_FullMethodName        = "/lmm.core.v1.CorePayments/CommitRefund"
 	CorePayments_ReleaseRefund_FullMethodName       = "/lmm.core.v1.CorePayments/ReleaseRefund"
 	CorePayments_ApplyExternalRefund_FullMethodName = "/lmm.core.v1.CorePayments/ApplyExternalRefund"
@@ -44,6 +45,7 @@ type CorePaymentsClient interface {
 	PrepareTopup(ctx context.Context, in *PrepareTopupRequest, opts ...grpc.CallOption) (*PaymentIntent, error)
 	CreditTopup(ctx context.Context, in *CreditTopupRequest, opts ...grpc.CallOption) (*PaymentReceipt, error)
 	HoldRefund(ctx context.Context, in *HoldRefundRequest, opts ...grpc.CallOption) (*PaymentReceipt, error)
+	BeginRefundDispatch(ctx context.Context, in *ResolveRefundRequest, opts ...grpc.CallOption) (*PaymentReceipt, error)
 	CommitRefund(ctx context.Context, in *ResolveRefundRequest, opts ...grpc.CallOption) (*PaymentReceipt, error)
 	ReleaseRefund(ctx context.Context, in *ResolveRefundRequest, opts ...grpc.CallOption) (*PaymentReceipt, error)
 	ApplyExternalRefund(ctx context.Context, in *ExternalRefundRequest, opts ...grpc.CallOption) (*PaymentReceipt, error)
@@ -108,6 +110,16 @@ func (c *corePaymentsClient) HoldRefund(ctx context.Context, in *HoldRefundReque
 	return out, nil
 }
 
+func (c *corePaymentsClient) BeginRefundDispatch(ctx context.Context, in *ResolveRefundRequest, opts ...grpc.CallOption) (*PaymentReceipt, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PaymentReceipt)
+	err := c.cc.Invoke(ctx, CorePayments_BeginRefundDispatch_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *corePaymentsClient) CommitRefund(ctx context.Context, in *ResolveRefundRequest, opts ...grpc.CallOption) (*PaymentReceipt, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(PaymentReceipt)
@@ -162,6 +174,7 @@ type CorePaymentsServer interface {
 	PrepareTopup(context.Context, *PrepareTopupRequest) (*PaymentIntent, error)
 	CreditTopup(context.Context, *CreditTopupRequest) (*PaymentReceipt, error)
 	HoldRefund(context.Context, *HoldRefundRequest) (*PaymentReceipt, error)
+	BeginRefundDispatch(context.Context, *ResolveRefundRequest) (*PaymentReceipt, error)
 	CommitRefund(context.Context, *ResolveRefundRequest) (*PaymentReceipt, error)
 	ReleaseRefund(context.Context, *ResolveRefundRequest) (*PaymentReceipt, error)
 	ApplyExternalRefund(context.Context, *ExternalRefundRequest) (*PaymentReceipt, error)
@@ -190,6 +203,9 @@ func (UnimplementedCorePaymentsServer) CreditTopup(context.Context, *CreditTopup
 }
 func (UnimplementedCorePaymentsServer) HoldRefund(context.Context, *HoldRefundRequest) (*PaymentReceipt, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method HoldRefund not implemented")
+}
+func (UnimplementedCorePaymentsServer) BeginRefundDispatch(context.Context, *ResolveRefundRequest) (*PaymentReceipt, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method BeginRefundDispatch not implemented")
 }
 func (UnimplementedCorePaymentsServer) CommitRefund(context.Context, *ResolveRefundRequest) (*PaymentReceipt, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CommitRefund not implemented")
@@ -314,6 +330,24 @@ func _CorePayments_HoldRefund_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _CorePayments_BeginRefundDispatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResolveRefundRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CorePaymentsServer).BeginRefundDispatch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CorePayments_BeginRefundDispatch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CorePaymentsServer).BeginRefundDispatch(ctx, req.(*ResolveRefundRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _CorePayments_CommitRefund_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ResolveRefundRequest)
 	if err := dec(in); err != nil {
@@ -412,6 +446,10 @@ var CorePayments_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "HoldRefund",
 			Handler:    _CorePayments_HoldRefund_Handler,
+		},
+		{
+			MethodName: "BeginRefundDispatch",
+			Handler:    _CorePayments_BeginRefundDispatch_Handler,
 		},
 		{
 			MethodName: "CommitRefund",

@@ -24,12 +24,23 @@ async fn check_budgets(
     c: &mut PgConnection,
     subject: &BudgetSubject<'_>,
 ) -> Result<Vec<BudgetSnapshot>> {
+    // Shared market/commerce consumers may read policy but cannot update it.
+    // SERIALIZABLE predicate reads include both the policy and aggregate spend;
+    // a concurrent policy/spend write must serialize or retry, not require an
+    // otherwise forbidden UPDATE privilege merely to take a SELECT row lock.
+    let serializable: bool =
+        sqlx::query_scalar("SELECT current_setting('transaction_isolation')='serializable'")
+            .fetch_one(&mut *c)
+            .await?;
+    if !serializable {
+        return Err(Error::Invalid);
+    }
     let rules = sqlx::query(
         "SELECT * FROM core_charging.budgets WHERE \
          (scope='account' AND account_id=$1) OR \
          (scope='member' AND account_id=$1 AND user_id=$2) OR \
          (scope='self' AND user_id=$2) OR (scope='key' AND key_id=$3) \
-         ORDER BY id FOR SHARE",
+         ORDER BY id",
     )
     .bind(subject.payer)
     .bind(subject.actor)
@@ -134,8 +145,18 @@ pub(super) async fn budgets(c: &mut PgConnection, charge: &Charge, total: i64) -
         if !fits {
             return Err(Error::BudgetExceeded);
         }
+    } else if charge.key_id.is_none() && charge.price.image.is_some() {
+        let allowed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM core_charging.requests r JOIN core_image.operations o ON o.id=r.image_operation_id WHERE r.id=$1 AND o.id=r.id AND r.actor_user_id=$2 AND o.actor_user_id=$2 AND r.owner_account_id=$3 AND o.owner_account_id=$3 AND r.payer_account_id=$3 AND r.key_id IS NULL AND r.oauth_source IS NULL AND r.assistant_grant_id IS NULL AND r.assistant_sponsor_account_id IS NULL AND r.price=o.price AND r.fingerprint=o.fingerprint AND r.reserved=(o.price#>>'{image,reservation_credits}')::bigint AND $4::bigint <= r.reserved AND o.state IN ('confirmed','dispatching','billing_pending','completed'))")
+            .bind(&charge.id).bind(charge.actor_user_id).bind(charge.owner_account_id).bind(total).fetch_one(&mut *c).await?;
+        if !allowed {
+            return Err(Error::Storage);
+        }
     } else if charge.key_id.is_none() {
-        return Err(Error::Storage);
+        let allowed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM core_charging.requests r JOIN core_assistant.grants g ON g.id=r.assistant_grant_id JOIN core_assistant.conversations v ON v.id=g.conversation_id WHERE r.id=$1 AND r.actor_user_id=$2 AND r.owner_account_id=$3 AND ((r.payer_account_id=$3 AND r.assistant_sponsor_account_id IS NULL AND (g.policy->'sponsor') IS NOT DISTINCT FROM 'null'::jsonb) OR (r.payer_account_id=r.assistant_sponsor_account_id AND r.payer_account_id=(g.policy#>>'{sponsor,treasury_account_id}')::bigint)) AND v.owner_user_id=$2 AND v.owner_account_id=$3 AND r.price=g.price AND $4::bigint <= (g.policy->>'budget_credits')::bigint)")
+            .bind(&charge.id).bind(charge.actor_user_id).bind(charge.owner_account_id).bind(total).fetch_one(&mut *c).await?;
+        if !allowed {
+            return Err(Error::Storage);
+        }
     }
     let snapshots = check_budgets(
         c,

@@ -1,15 +1,24 @@
 //! Rust-owned model HTTP entry. No Go proxy and no simulated money adapter.
 //!
-//! The first integration supports isolated numeric-loopback synthetic providers
-//! only, with bounded OpenAI text/tool requests. External providers remain
-//! disabled until versioned model context/input bounds are integrated and tested.
-//! Streaming requires explicit host opt-in and durable pre-output checkpoints.
-//! Unknown provider usage retains its durable hold.
+//! Numeric-loopback test suppliers and explicitly configured HTTPS providers
+//! share bounded transports and the real Core ledger. Text stream checkpoints
+//! and image receipts are durable; unknown supplier usage retains its hold.
+pub(crate) mod assistant_execution;
+pub(crate) mod assistant_gift;
 mod billing;
 mod catalog;
 mod checkpoints;
 mod honeypot;
+mod image_api;
+pub mod image_execution;
+pub mod image_http;
+pub mod image_internal;
+pub mod image_price;
+mod image_provider;
+mod native;
+mod provider_policy;
 mod routing;
+mod systemone;
 pub mod trusted_delegation;
 
 use crate::{
@@ -39,6 +48,7 @@ use subtle::ConstantTimeEq;
 
 pub use catalog::{CatalogError, CatalogSurface, CatalogV1};
 pub use honeypot::{HoneypotCredential, HoneypotGateway};
+pub use provider_policy::{ExternalModelContext, ProviderPolicy};
 pub use routing::UpstreamCredential;
 pub const SCHEMA: &str = include_str!("../schema/model_gateway.sql");
 
@@ -69,6 +79,7 @@ struct Bridge {
     active: Mutex<BTreeMap<String, Operation>>,
     recovery_cursor: tokio::sync::Mutex<Option<String>>,
     policy: ChargePolicy,
+    provider_policy: ProviderPolicy,
     total_timeout: Duration,
 }
 
@@ -83,6 +94,8 @@ pub struct ModelGateway {
     honeypot: Option<HoneypotGateway>,
     catalog_surface: Arc<CatalogSurface>,
     oauth2: Option<crate::identity::grants::LmmIssuer>,
+    images: Option<image_execution::ImageService>,
+    systemone: systemone::Host,
 }
 
 impl ModelGateway {
@@ -94,6 +107,10 @@ impl ModelGateway {
             matched |= credential.as_bytes().ct_eq(secret.as_bytes());
         }
         bool::from(matched)
+            | self
+                .images
+                .as_ref()
+                .is_some_and(|images| images.contains_credential(secret))
     }
 
     /// All credentials, group grants and routing snapshots are supplied by the
@@ -106,6 +123,27 @@ impl ModelGateway {
         key_groups: BTreeMap<i64, String>,
         limits: Limits,
         policy: ChargePolicy,
+    ) -> Result<Self, RelayError> {
+        Self::new_with_provider_policy(
+            pool,
+            routing,
+            credentials,
+            key_groups,
+            limits,
+            policy,
+            ProviderPolicy::default(),
+        )
+    }
+
+    /// The host freezes reviewed context bounds before sharing the gateway.
+    pub fn new_with_provider_policy(
+        pool: PgPool,
+        routing: Arc<crate::routing::Router>,
+        credentials: Vec<UpstreamCredential>,
+        key_groups: BTreeMap<i64, String>,
+        limits: Limits,
+        policy: ChargePolicy,
+        provider_policy: ProviderPolicy,
     ) -> Result<Self, RelayError> {
         limits.validate()?;
         if policy.input_token_ceiling <= 0
@@ -126,10 +164,12 @@ impl ModelGateway {
                 .catalog(group)
                 .map_err(|_| RelayError::RouteUnavailable)?;
         }
-        let catalog_surface = Arc::new(CatalogSurface::from_gateway(
+        let catalog_surface = Arc::new(CatalogSurface::from_gateway_with_provider_policy(
             routing.clone(),
             &credentials,
             limits.total_timeout,
+            &provider_policy,
+            policy.input_token_ceiling,
         ));
         let bridge = Arc::new(Bridge {
             pool: pool.clone(),
@@ -139,6 +179,7 @@ impl ModelGateway {
             active: Mutex::new(BTreeMap::new()),
             recovery_cursor: tokio::sync::Mutex::new(None),
             policy,
+            provider_policy,
             total_timeout: limits.total_timeout,
         });
         let relay = Relay::new(bridge.clone(), bridge.clone(), limits.clone())?;
@@ -147,12 +188,22 @@ impl ModelGateway {
             access: Arc::new(key_groups),
             bridge,
             relay,
+            systemone: systemone::Host::new(&limits),
             limits,
             local_streaming: false,
             honeypot: None,
             catalog_surface,
             oauth2: None,
+            images: None,
         })
+    }
+
+    pub(crate) fn with_image_service(mut self, images: image_execution::ImageService) -> Self {
+        self.images = Some(images);
+        self
+    }
+    pub fn image_service(&self) -> Option<&image_execution::ImageService> {
+        self.images.as_ref()
     }
 
     /// Explicit host opt-in for the numeric-loopback synthetic provider mode.
@@ -221,23 +272,51 @@ impl ModelGateway {
         }
     }
     pub fn router(&self) -> Router {
-        Router::new()
+        let router = Router::new()
             .route("/v1/models", get(models))
             .route("/v1/chat/completions", post(chat))
             .route("/v1/responses", post(responses))
+            .route("/v1/messages", post(native::messages))
+            .route("/v1beta/models/{*action}", post(native::gemini))
             .layer(DefaultBodyLimit::max(self.limits.request_bytes))
-            .with_state(self.clone())
+            .with_state(self.clone());
+        let router = router.merge(systemone::router(self.clone()));
+        if self.images.is_some() {
+            router.merge(image_api::router(self.clone()))
+        } else {
+            router
+        }
     }
 
     pub async fn drain(&self, grace: Duration) -> relay::DrainReport {
-        if let Some(honeypot) = &self.honeypot {
-            let (normal, marked) = tokio::join!(self.relay.drain(grace), honeypot.drain(grace));
-            relay::DrainReport {
-                cancelled: normal.cancelled.saturating_add(marked.cancelled),
-                remaining: normal.remaining.saturating_add(marked.remaining),
-            }
-        } else {
-            self.relay.drain(grace).await
+        let (normal, marked, images, systemone) = tokio::join!(
+            self.relay.drain(grace),
+            async {
+                if let Some(honeypot) = &self.honeypot {
+                    honeypot.drain(grace).await
+                } else {
+                    relay::DrainReport {
+                        cancelled: 0,
+                        remaining: 0,
+                    }
+                }
+            },
+            async {
+                if let Some(images) = &self.images {
+                    images.drain(grace).await
+                } else {
+                    0
+                }
+            },
+            self.systemone.drain(grace),
+        );
+        relay::DrainReport {
+            cancelled: normal.cancelled.saturating_add(marked.cancelled),
+            remaining: normal
+                .remaining
+                .saturating_add(marked.remaining)
+                .saturating_add(images)
+                .saturating_add(systemone),
         }
     }
 
@@ -245,12 +324,19 @@ impl ModelGateway {
     /// dispatches keep their holds pending authoritative provider evidence.
     // @mark model.recovery role=host
     pub async fn recover_expired(&self, limit: i64) -> Result<usize, RelayError> {
-        self.bridge
+        let recovered = self
+            .bridge
             .charging
             .recover_expired(limit)
             .await
-            .map(|charges| charges.len())
-            .map_err(billing::error)
+            .map_err(billing::error)?;
+        if let Some(images) = &self.images {
+            images
+                .recover_receipts(limit)
+                .await
+                .map_err(|_| RelayError::BillingUnavailable)?;
+        }
+        Ok(recovered.len())
     }
 
     /// Trusted host-only recovery. A process restart can settle a previously
@@ -430,7 +516,7 @@ async fn models(
     };
     let peer = peer.ok().map(|peer| peer.0.ip());
     let mut available = BTreeMap::new();
-    for group in groups {
+    for group in &groups {
         let models = match gateway.bridge.routing.catalog(&group) {
             Ok(models) => models,
             Err(_) => return public_error(RelayError::RouteUnavailable),
@@ -448,6 +534,28 @@ async fn models(
                     return public_error(RelayError::Unauthorized);
                 }
                 Err(_) => return public_error(RelayError::BillingUnavailable),
+            }
+        }
+    }
+    if principal.key_id().is_some() {
+        if let Some(images) = &gateway.images {
+            // Catalog grants are the same current model/group/IP checks as a send.
+            for group in groups {
+                for model in images.catalog(&group) {
+                    match gateway
+                        .authorize_request(&principal, &secret, &model, &group, peer)
+                        .await
+                    {
+                        Ok(()) => {
+                            available.insert(model, ());
+                        }
+                        Err(IdentityError::Forbidden) => (),
+                        Err(IdentityError::Unauthorized | IdentityError::Invalid) => {
+                            return public_error(RelayError::Unauthorized);
+                        }
+                        Err(_) => return public_error(RelayError::BillingUnavailable),
+                    }
+                }
             }
         }
     }
@@ -477,6 +585,7 @@ async fn chat(
         body,
         ClientProtocol::Chat,
         peer.ok().map(|p| p.0.ip()),
+        None,
     )
     .await
 }
@@ -492,6 +601,7 @@ async fn responses(
         body,
         ClientProtocol::Responses,
         peer.ok().map(|p| p.0.ip()),
+        None,
     )
     .await
 }
@@ -541,6 +651,7 @@ async fn dispatch(
     body: Bytes,
     client: ClientProtocol,
     peer: Option<IpAddr>,
+    native_operation: Option<native::GeminiOperation>,
 ) -> Response {
     if let Some(honeypot) = &gateway.honeypot
         && !oauth_header(&headers)
@@ -548,16 +659,26 @@ async fn dispatch(
         match honeypot.dispatch(&headers, &body, client, peer).await {
             Ok(Some(response)) => return response,
             Ok(None) => (),
-            Err(error) => return public_error(error),
+            Err(error) => return native::error_response(client, error),
         }
     }
     let (principal, secret, groups) = match gateway.authenticate(&headers).await {
         Ok(v) => v,
-        Err(e) => return public_error(e),
+        Err(e) => return native::error_response(client, e),
     };
-    let request = match relay::Request::parse(client, &body, &gateway.limits) {
+    let parsed = if let Some(operation) = &native_operation {
+        relay::native_gemini::parse(&operation.model, operation.stream, &body, &gateway.limits).map(
+            |mut request| {
+                request.client = ClientProtocol::Gemini;
+                request
+            },
+        )
+    } else {
+        relay::Request::parse(client, &body, &gateway.limits)
+    };
+    let request = match parsed {
         Ok(v) => v,
-        Err(e) => return public_error(e),
+        Err(e) => return native::error_response(client, e),
     };
     let selected = groups.into_iter().find_map(|group| {
         let plan = gateway
@@ -570,6 +691,8 @@ async fn dispatch(
                 protocol: match client {
                     ClientProtocol::Chat => crate::routing::Protocol::OpenAiChat,
                     ClientProtocol::Responses => crate::routing::Protocol::OpenAiResponses,
+                    ClientProtocol::Anthropic => crate::routing::Protocol::AnthropicMessages,
+                    ClientProtocol::Gemini => crate::routing::Protocol::Gemini,
                 },
                 replay: crate::routing::ReplayPermission::Denied,
             })
@@ -577,22 +700,26 @@ async fn dispatch(
         Some((group, plan.canonical_model().to_owned()))
     });
     let Some((group, canonical)) = selected else {
-        return public_error(RelayError::RouteUnavailable);
+        return native::error_response(client, RelayError::RouteUnavailable);
     };
     if let Err(error) = gateway
         .authorize_request(&principal, &secret, &canonical, &group, peer)
         .await
     {
-        return public_error(match error {
-            IdentityError::Unauthorized | IdentityError::Invalid => RelayError::Unauthorized,
-            IdentityError::Forbidden => RelayError::Forbidden,
-            _ => RelayError::BillingUnavailable,
-        });
+        return native::error_response(
+            client,
+            match error {
+                IdentityError::Unauthorized | IdentityError::Invalid => RelayError::Unauthorized,
+                IdentityError::Forbidden => RelayError::Forbidden,
+                _ => RelayError::BillingUnavailable,
+            },
+        );
     }
     if request.stream && !gateway.local_streaming {
-        return public_error(RelayError::Unsupported(
-            "streaming requires durable output checkpoints",
-        ));
+        return native::error_response(
+            client,
+            RelayError::Unsupported("streaming requires durable output checkpoints"),
+        );
     }
     let id = match if let Some(key) = principal.key_id() {
         request_id(key, &headers)
@@ -601,9 +728,9 @@ async fn dispatch(
         oauth_request_id(source, &headers)
     } {
         Ok(v) => v,
-        Err(e) => return public_error(e),
+        Err(e) => return native::error_response(client, e),
     };
-    let fail = |error| with_request_id(public_error(error), &id);
+    let fail = |error| with_request_id(native::error_response(client, error), &id);
     match gateway.bridge.charging.resolve(&id).await {
         Ok(Some(_)) => return fail(RelayError::Conflict),
         Ok(None) => (),
@@ -632,6 +759,11 @@ async fn dispatch(
     }
     hash.update(group.as_bytes());
     hash.update([client as u8]);
+    if let Some(operation) = &native_operation {
+        hash.update(b"native-gemini-operation\0");
+        hash.update(operation.model.as_bytes());
+        hash.update([0, u8::from(operation.stream)]);
+    }
     hash.update(&body);
     let mut worker = [0; 32];
     OsRng.fill_bytes(&mut worker);
@@ -710,8 +842,8 @@ async fn dispatch(
                 );
                 response
             }
-            Ok(Err(e)) => public_error(e),
-            Err(_) => public_error(RelayError::BillingUnavailable),
+            Ok(Err(e)) => native::error_response(client, e),
+            Err(_) => native::error_response(client, RelayError::BillingUnavailable),
         },
         &id,
     )

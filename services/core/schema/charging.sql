@@ -187,6 +187,9 @@ CREATE TABLE core_charging.requests (
     id TEXT PRIMARY KEY CHECK (length(id) BETWEEN 1 AND 128),
     actor_user_id BIGINT NOT NULL REFERENCES core_identity.users(id),
     key_id BIGINT REFERENCES core_identity.credentials(id),
+    assistant_grant_id TEXT,
+    image_operation_id TEXT UNIQUE CHECK (image_operation_id IS NULL OR image_operation_id ~ '^image:[0-9a-f]{64}$'),
+    assistant_sponsor_account_id BIGINT REFERENCES core_identity.accounts(id),
     oauth_source JSONB CHECK (oauth_source IS NULL OR ((jsonb_typeof(oauth_source)='object'
         AND oauth_source ?& ARRAY['grant_id','access_id','client_id','issuer','resource','user_id','personal_account_id','user_version','consent_version','scopes','expires_at','budget_credits']
         AND oauth_source - ARRAY['grant_id','access_id','client_id','issuer','resource','user_id','personal_account_id','user_version','consent_version','scopes','expires_at','budget_credits']='{}'::jsonb
@@ -236,15 +239,38 @@ CREATE TABLE core_charging.requests (
     input_tokens BIGINT NOT NULL DEFAULT 0 CHECK (input_tokens >= 0),
     cached_tokens BIGINT NOT NULL DEFAULT 0 CHECK (cached_tokens BETWEEN 0 AND input_tokens),
     output_tokens BIGINT NOT NULL DEFAULT 0 CHECK (output_tokens >= 0),
+    image_usage JSONB CHECK (image_usage IS NULL OR ((
+        jsonb_typeof(image_usage)='object'
+        AND image_usage ?& ARRAY['output_images','provider_receipt_sha256']
+        AND image_usage - ARRAY['output_images','provider_receipt_sha256']='{}'::jsonb
+        AND jsonb_typeof(image_usage->'output_images')='number'
+        AND (image_usage->>'output_images') ~ '^[1-9][0-9]{0,2}$'
+        AND (image_usage->>'output_images')::integer BETWEEN 1 AND 128
+        AND jsonb_typeof(image_usage->'provider_receipt_sha256')='array'
+        AND jsonb_array_length(image_usage->'provider_receipt_sha256')=32
+        AND NOT jsonb_path_exists(image_usage->'provider_receipt_sha256', '$[*] ? (@.type() != "number" || @ < 0 || @ > 255 || @ % 1 != 0)')
+        AND jsonb_path_exists(image_usage->'provider_receipt_sha256', '$[*] ? (@ > 0)')
+        AND jsonb_typeof(price->'image')='object'
+        AND input_tokens=0 AND cached_tokens=0 AND output_tokens=0) IS TRUE)),
+    CHECK (NOT (price ? 'image') OR (state <> 'settled' OR image_usage IS NOT NULL)),
+    -- Every image quote has one durable operation source, including native keys.
+    CHECK ((image_operation_id IS NOT NULL) = ((jsonb_typeof(price->'image')='object') IS TRUE)),
+    CHECK (image_usage IS NULL OR image_operation_id IS NOT NULL),
     settled BIGINT NOT NULL DEFAULT 0 CHECK (settled BETWEEN 0 AND reserved),
     refunded BIGINT NOT NULL DEFAULT 0 CHECK (refunded BETWEEN 0 AND settled),
     revision BIGINT NOT NULL DEFAULT 1 CHECK (revision > 0),
     outcome TEXT,
-    CHECK ((key_id IS NOT NULL AND oauth_source IS NULL)
-        OR (key_id IS NULL AND oauth_source IS NOT NULL
+    CHECK ((key_id IS NOT NULL AND oauth_source IS NULL AND assistant_grant_id IS NULL AND assistant_sponsor_account_id IS NULL
+            AND (image_operation_id IS NULL OR (image_operation_id=id AND jsonb_typeof(price->'image')='object')))
+        OR (key_id IS NULL AND oauth_source IS NOT NULL AND assistant_grant_id IS NULL AND assistant_sponsor_account_id IS NULL AND image_operation_id IS NULL
             AND (oauth_source->>'user_id')::bigint=actor_user_id
             AND (oauth_source->>'personal_account_id')::bigint=owner_account_id
-            AND payer_account_id=owner_account_id)),
+            AND payer_account_id=owner_account_id)
+        OR (key_id IS NULL AND oauth_source IS NULL AND assistant_grant_id IS NOT NULL AND image_operation_id IS NULL
+            AND ((assistant_sponsor_account_id IS NULL AND payer_account_id=owner_account_id)
+              OR (assistant_sponsor_account_id IS NOT NULL AND payer_account_id=assistant_sponsor_account_id)))
+        OR (key_id IS NULL AND oauth_source IS NULL AND assistant_grant_id IS NULL AND assistant_sponsor_account_id IS NULL
+            AND image_operation_id IS NOT NULL AND payer_account_id=owner_account_id AND jsonb_typeof(price->'image')='object')),
     CHECK (lease_until <= hard_deadline),
     CHECK ((source_subscription_id IS NULL AND source_start IS NULL AND source_end IS NULL)
         OR (source_subscription_id IS NOT NULL AND source_start IS NOT NULL
@@ -264,7 +290,7 @@ CREATE INDEX requests_expired ON core_charging.requests(lease_until, id)
 -- model request. Only Rust's same-transaction commerce writer may add a row.
 CREATE TABLE core_charging.external_consumption (
     id TEXT PRIMARY KEY CHECK (length(id) BETWEEN 1 AND 128),
-    domain TEXT NOT NULL CHECK (domain = 'commerce'),
+    domain TEXT NOT NULL CHECK (domain IN ('commerce','toolmarket','bounty')),
     actor_user_id BIGINT NOT NULL REFERENCES core_identity.users(id),
     key_id BIGINT NOT NULL REFERENCES core_identity.credentials(id),
     payer_account_id BIGINT NOT NULL REFERENCES core_identity.accounts(id),
@@ -380,16 +406,17 @@ CREATE TRIGGER subscription_identity BEFORE UPDATE ON core_charging.subscription
     FOR EACH ROW EXECUTE FUNCTION core_charging.guard_subscription();
 CREATE FUNCTION core_charging.guard_request() RETURNS TRIGGER LANGUAGE plpgsql AS $$
 BEGIN
-    IF (NEW.id, NEW.actor_user_id, NEW.key_id, NEW.oauth_source, NEW.owner_account_id, NEW.payer_account_id,
+    IF (NEW.id, NEW.actor_user_id, NEW.key_id, NEW.oauth_source, NEW.assistant_grant_id, NEW.assistant_sponsor_account_id, NEW.image_operation_id, NEW.owner_account_id, NEW.payer_account_id,
         NEW.fingerprint, NEW.worker_digest, NEW.spec_digest, NEW.price, NEW.source_subscription_id,
         NEW.source_start, NEW.source_end, NEW.authorized_at, NEW.hard_deadline)
         IS DISTINCT FROM
-       (OLD.id, OLD.actor_user_id, OLD.key_id, OLD.oauth_source, OLD.owner_account_id, OLD.payer_account_id,
+       (OLD.id, OLD.actor_user_id, OLD.key_id, OLD.oauth_source, OLD.assistant_grant_id, OLD.assistant_sponsor_account_id, OLD.image_operation_id, OLD.owner_account_id, OLD.payer_account_id,
         OLD.fingerprint, OLD.worker_digest, OLD.spec_digest, OLD.price, OLD.source_subscription_id,
         OLD.source_start, OLD.source_end, OLD.authorized_at, OLD.hard_deadline)
        OR NEW.reserved < OLD.reserved OR NEW.refunded < OLD.refunded
        OR NEW.input_tokens < OLD.input_tokens OR NEW.cached_tokens < OLD.cached_tokens
-       OR NEW.output_tokens < OLD.output_tokens OR NEW.revision <> OLD.revision + 1 THEN
+       OR NEW.output_tokens < OLD.output_tokens OR NEW.revision <> OLD.revision + 1
+       OR (OLD.image_usage IS NOT NULL AND NEW.image_usage IS DISTINCT FROM OLD.image_usage) THEN
         RAISE EXCEPTION 'invalid charging mutation' USING ERRCODE = '23514';
     END IF;
     -- Stored generated OAuth projections are NULL in NEW during BEFORE UPDATE.
@@ -397,9 +424,9 @@ BEGIN
     -- business column explicitly so a legitimate terminal refund stays possible.
     IF OLD.state IN ('settled', 'released') AND
         (NEW.state, NEW.reserved, NEW.lease_until, NEW.input_tokens, NEW.cached_tokens,
-         NEW.output_tokens, NEW.settled, NEW.outcome) IS DISTINCT FROM
+         NEW.output_tokens, NEW.image_usage, NEW.settled, NEW.outcome) IS DISTINCT FROM
         (OLD.state, OLD.reserved, OLD.lease_until, OLD.input_tokens, OLD.cached_tokens,
-         OLD.output_tokens, OLD.settled, OLD.outcome) THEN
+         OLD.output_tokens, OLD.image_usage, OLD.settled, OLD.outcome) THEN
         RAISE EXCEPTION 'request is terminal' USING ERRCODE = '23514';
     END IF;
     IF NEW.state <> OLD.state AND NOT

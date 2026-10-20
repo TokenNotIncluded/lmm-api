@@ -147,7 +147,7 @@ export const STATIC_I18N_KEYS = [
   'TypeSafe (Jev)',
   'Judgment',
   'TypeSafe Judgment (/typesafe/v1/systemone)',
-  'Jev uses state and questions for synchronous judgment requests.',
+  'Jev evaluates state and typed questions synchronously. Images and Box require explicit opt-in.',
   'One request, input tokens and selected group multiplier included. Actual charges may differ.',
   'Moderation',
   'Moderation (/v1/moderations)',

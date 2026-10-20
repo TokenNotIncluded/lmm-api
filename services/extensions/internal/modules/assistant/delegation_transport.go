@@ -154,7 +154,14 @@ func personalOperationReceipt(expected PersonalTextBinding, r *pb.AssistantOpera
 		return PersonalTextOperation{}, ErrDelegationUnknown
 	}
 	b := r.GetBinding()
-	value := PersonalTextOperation{Binding: PersonalTextBinding{ID: b.GetDelegationId(), CoreConversationID: b.GetCoreConversationId(), TurnID: b.GetTurnId(), Round: int(b.GetRound()), OperationKey: b.GetOperationKey(), TextSHA256: hex.EncodeToString(b.GetTextSha256())}, RequestID: r.GetRequestId(), ReservedCredits: r.GetReservedCredits(), SettledCredits: r.SettledCredits}
+	value := PersonalTextOperation{Binding: PersonalTextBinding{ID: b.GetDelegationId(), CoreConversationID: b.GetCoreConversationId(), TurnID: b.GetTurnId(), Round: int(b.GetRound()), OperationKey: b.GetOperationKey(), TextSHA256: hex.EncodeToString(b.GetTextSha256())}, RequestID: r.GetRequestId(), ReservedCredits: r.GetReservedCredits(), SettledCredits: r.SettledCredits, AnswerText: r.AnswerText}
+	if r.GetGiftReceipt() != nil {
+		gift, err := decodeGiftReceipt(r.GetGiftReceipt())
+		if err != nil {
+			return PersonalTextOperation{}, ErrDelegationUnknown
+		}
+		value.GiftReceipt = &gift
+	}
 	switch r.GetState() {
 	case pb.AssistantOperationState_ASSISTANT_OPERATION_STATE_RESERVED:
 		value.Status = "reserved"

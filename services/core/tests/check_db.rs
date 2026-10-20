@@ -219,6 +219,7 @@ async fn funded_fixture(pool: &PgPool, role: &runtime::RuntimeRole) {
         lease_seconds: 60,
         maximum_seconds: 120,
         price: Price {
+            image: None,
             upstream_cost_group_ppm: None,
             version: "synthetic-v1".into(),
             model: "public-model".into(),
@@ -385,7 +386,7 @@ async fn full_fresh_runtime_check_is_readonly_and_never_serves_or_loads_models(p
     assert_eq!(v["runtime_authority"]["status"], "validated");
     assert_eq!(
         v["runtime_authority"]["required_capabilities"],
-        json!({"models":true,"events":false,"payments":false,"console":false,"commerce":false,"web_identity":false,"oauth2":false})
+        json!({"models":true,"images":false,"events":false,"payments":false,"console":false,"commerce":false,"web_identity":false,"oauth2":false,"market_oauth":false,"assistant_tools":false,"assistant":false,"tool_market":false,"wallet":false,"bounties":false})
     );
     assert_eq!(
         v["not_checked"],

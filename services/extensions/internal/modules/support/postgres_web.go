@@ -19,6 +19,33 @@ type LegacyIndex interface {
 	MessagesBefore(context.Context, string, string, int64, int) ([]Message, error)
 }
 
+// CustomerRelationships reads only this extension's seller-bound conversations.
+// A hard bound fails explicitly rather than returning a truncated customer list.
+func (p *Postgres) CustomerRelationships(ctx context.Context, seller int64) ([]CustomerRelationship, error) {
+	if seller <= 0 {
+		return nil, store.ErrInvalid
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	rows, err := p.db.QueryContext(ctx, `SELECT DISTINCT ON ((body->'buyer'->>'id')::bigint) (body->'buyer'->>'id')::bigint,id FROM lmm_support.conversations WHERE body->'seller'->>'kind'='personal' AND (body->'seller'->>'id')::bigint=$1 AND body->'buyer'->>'kind'='personal' AND (body->'buyer'->>'id')::bigint<>$1 ORDER BY (body->'buyer'->>'id')::bigint,COALESCE(body->>'updated_at',body->>'created_at') DESC,id DESC LIMIT 5001`, seller)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []CustomerRelationship{}
+	for rows.Next() {
+		var row CustomerRelationship
+		if err = rows.Scan(&row.BuyerID, &row.ConversationID); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	if len(out) > 5000 {
+		return nil, store.ErrUnavailable
+	}
+	return out, rows.Err()
+}
+
 func (t *postgresTx) RateLimitTime() (int64, error) {
 	var now int64
 	err := t.tx.QueryRowContext(t.ctx, `SELECT floor(extract(epoch from clock_timestamp())*1000)::bigint`).Scan(&now)

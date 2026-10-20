@@ -29,13 +29,14 @@ type Service struct {
 	repo      Repository
 	auth      store.Authority
 	directory Directory
+	customers *customerPorts
 }
 
 func New(repo Repository, auth store.Authority, directory Directory) (*Service, error) {
 	if store.Missing(repo) || store.Missing(auth) || store.Missing(directory) {
 		return nil, store.ErrInvalid
 	}
-	return &Service{repo, auth, directory}, nil
+	return &Service{repo: repo, auth: auth, directory: directory}, nil
 }
 
 type Customer struct {

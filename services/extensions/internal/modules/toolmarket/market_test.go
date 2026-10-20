@@ -537,23 +537,45 @@ func TestProtocolErrorIsNotRetried(t *testing.T) {
 		t.Fatal("uncertain request retried")
 	}
 }
-func TestTimeoutDoesNotRetryTool(t *testing.T) {
-	mock := newMock(t)
-	mock.blockCall = make(chan struct{})
+func TestDispatchedCancellationDoesNotRetryTool(t *testing.T) {
+	mock := newMockConfigured(t, func(mock *mockMCP) {
+		mock.blockCall = make(chan struct{})
+		mock.enteredCall = make(chan struct{}, 1)
+	})
 	m := testModule(t, mock)
 	_, i, _ := prepared(t, m, mock, "none", "free")
 	in := invocation(t, m, alice, i.ID, "timeout")
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if _, e := m.execute(ctx, alice, "alice", in); !errors.Is(e, ErrPending) {
-		t.Fatal(e)
+	done := make(chan error, 1)
+	go func() {
+		_, err := m.execute(ctx, alice, "alice", in)
+		done <- err
+	}()
+	select {
+	case <-mock.enteredCall:
+		// Cancel only after the supplier accepted tools/call. A preparation
+		// timeout can legitimately send zero calls and does not test replay.
+	case err := <-done:
+		t.Fatal("execution ended before dispatch", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("supplier did not receive the original call")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrPending) {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("canceled call did not return")
 	}
 	close(mock.blockCall)
 	if _, e := m.execute(context.Background(), alice, "alice", in); !errors.Is(e, ErrPending) {
 		t.Fatal(e)
 	}
 	if mock.calls.Load() != 1 {
-		t.Fatal("timeout retried")
+		t.Fatal("canceled dispatch retried", mock.calls.Load())
 	}
 }
 

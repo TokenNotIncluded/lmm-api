@@ -1,14 +1,14 @@
 //! Cookie identity for explicit native-client consent; never rotates a session.
 use super::*;
 
-pub(in crate::identity) struct OAuthBrowserIdentity {
-    pub(in crate::identity) user: i64,
-    pub(in crate::identity) account: i64,
-    pub(in crate::identity) version: i64,
-    pub(in crate::identity) sid: String,
+pub(crate) struct OAuthBrowserIdentity {
+    pub(crate) user: i64,
+    pub(crate) account: i64,
+    pub(crate) version: i64,
+    pub(crate) sid: String,
 }
 impl BrowserAuth {
-    pub(in crate::identity) async fn oauth_identity_in_transaction(
+    pub(crate) async fn oauth_identity_in_transaction(
         c: &mut PgConnection,
         cookie: &str,
     ) -> Result<OAuthBrowserIdentity> {

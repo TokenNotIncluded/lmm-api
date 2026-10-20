@@ -111,6 +111,7 @@ fn spec(id: &str) -> ChargeRequest {
         lease_seconds: 300,
         maximum_seconds: 600,
         price: Price {
+            image: None,
             upstream_cost_group_ppm: None,
             version: "v1".into(),
             model: "test-model".into(),

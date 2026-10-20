@@ -31,6 +31,7 @@ type StreamResume struct {
 }
 
 type mcpStream struct {
+	maxLine    int
 	id         json.RawMessage
 	cursor     string
 	retry      time.Duration
@@ -51,7 +52,7 @@ func visibleStreamID(s string) bool {
 }
 
 func newMCPStream(id json.RawMessage, checkpoint func(string, time.Duration) error) *mcpStream {
-	return &mcpStream{id: id, retry: time.Second, remaining: maxBody, checkpoint: checkpoint}
+	return &mcpStream{id: id, retry: time.Second, remaining: maxBody, maxLine: maxBody, checkpoint: checkpoint}
 }
 
 func (s *mcpStream) saveCursor(cursor string) error {
@@ -72,7 +73,11 @@ func (s *mcpStream) read(r *http.Response) (json.RawMessage, error) {
 	start := reader.N
 	defer func() { s.remaining -= start - reader.N }()
 	scan := bufio.NewScanner(reader)
-	scan.Buffer(make([]byte, 4096), maxBody)
+	maxLine := s.maxLine
+	if maxLine == 0 {
+		maxLine = maxBody
+	}
+	scan.Buffer(make([]byte, 4096), maxLine)
 	var data []string
 	cursor := s.cursor
 	for scan.Scan() {

@@ -154,6 +154,7 @@ import {
   getBountyLifecycleSummary,
   type BountyLifecycleSummary,
 } from './lifecycle'
+import { BountyOperationDialog } from './native-operation-dialog'
 import {
   selectBountyNotificationChallenge,
   type BountyNotificationDetailTarget,
@@ -161,6 +162,7 @@ import {
 import { PendingReviewSuperscript } from './pending-review-superscript'
 import {
   getBountyDisputeEvidenceComparison,
+  type BountyId,
   type BountyChallenge,
   type BountyDispute,
   type BountyDisputeEvidenceField,
@@ -360,7 +362,7 @@ export function OpenSourceBounties({
   const [acceptProject, setAcceptProject] = useState<BountyProject | null>(null)
   const [githubHandle, setGithubHandle] = useState('')
   const [submitTarget, setSubmitTarget] = useState<{
-    projectId: number
+    projectId: BountyId
     challenge: BountyChallenge
   } | null>(null)
   const [submission, setSubmission] = useState({
@@ -370,7 +372,7 @@ export function OpenSourceBounties({
   })
   const [detail, setDetail] = useState<BountyProjectDetail | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
-  const [focusedChallengeId, setFocusedChallengeId] = useState<number>()
+  const [focusedChallengeId, setFocusedChallengeId] = useState<BountyId>()
   const [reviewTarget, setReviewTarget] = useState<{
     challenge: BountyChallenge
     action: 'approve' | 'reject'
@@ -555,7 +557,7 @@ export function OpenSourceBounties({
     if (success) setDraftOpen(false)
   }
 
-  const openProjectDetail = async (projectId: number) => {
+  const openProjectDetail = async (projectId: BountyId) => {
     setPending(`detail-${projectId}`)
     try {
       setDetail(await getBountyDetail(projectId))
@@ -624,6 +626,14 @@ export function OpenSourceBounties({
   }
 
   const confirmPublication = (project: BountyProject) => {
+    if (
+      !configQuery.data ||
+      configQuery.data.enabled === false ||
+      configQuery.isError
+    ) {
+      toast.error(t('Unavailable'))
+      return
+    }
     const charge = calculateBountyCharge(
       project.reward_quota,
       project.reward_slots,
@@ -779,7 +789,10 @@ export function OpenSourceBounties({
     }
   }
 
-  const openSubmitDialog = (projectId: number, challenge: BountyChallenge) => {
+  const openSubmitDialog = (
+    projectId: BountyId,
+    challenge: BountyChallenge
+  ) => {
     setSubmitTarget({ projectId, challenge })
     setSubmission({
       issueUrl: challenge.issue_url || '',
@@ -837,6 +850,7 @@ export function OpenSourceBounties({
 
   return (
     <Main>
+      <BountyOperationDialog />
       <div
         data-mobile-scroll-root=''
         className='console-bounties min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-5 sm:px-6 sm:py-7'
@@ -845,8 +859,14 @@ export function OpenSourceBounties({
           <CardStaggerItem>
             <BountyPageHeader
               onCreate={openCreateDialog}
-              feeRate={configQuery.data?.rate_basis_points}
-              feeError={configQuery.isError}
+              feeRate={
+                configQuery.data?.enabled === false
+                  ? undefined
+                  : configQuery.data?.rate_basis_points
+              }
+              feeError={
+                configQuery.isError || configQuery.data?.enabled === false
+              }
               isSuperAdmin={isSuperAdmin}
             />
           </CardStaggerItem>
@@ -2337,7 +2357,7 @@ function Field({
 }
 
 function SubmissionDialog(props: {
-  target: { projectId: number; challenge: BountyChallenge } | null
+  target: { projectId: BountyId; challenge: BountyChallenge } | null
   onOpenChange: (open: boolean) => void
   submission: {
     issueUrl: string
@@ -2426,7 +2446,7 @@ export function ProjectReviewDialog(props: {
   open: boolean
   onOpenChange: (open: boolean) => void
   detail: BountyProjectDetail | null
-  focusedChallengeId?: number
+  focusedChallengeId?: BountyId
   pending: string
   onReview: (challenge: BountyChallenge, action: 'approve' | 'reject') => void
   onTip: (challenge: BountyChallenge) => void

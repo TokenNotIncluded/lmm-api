@@ -18,6 +18,7 @@ import (
 	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/coreclient"
 	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/legal"
 	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/assistant_services"
 	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/operations"
 	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/webcompat"
 )
@@ -51,7 +52,7 @@ func Run() error {
 	if socket != "" {
 		defaults = []string{"identity"}
 	}
-	selected, err := modules.Select(strings.Join(cfg.Host.Modules, ","), defaults, []string{"identity", "store", "support", "assistant", "operations", "remote-control", "payments"})
+	selected, err := modules.Select(strings.Join(cfg.Host.Modules, ","), defaults, []string{"identity", "store", "support", "assistant", "operations", "remote-control", "payments", "toolmarket"})
 	if err != nil {
 		return err
 	}
@@ -63,16 +64,27 @@ func Run() error {
 		}
 		scripts = &operations.ScriptConfig{Root: cfg.Scripts.Root, Manifest: manifest}
 	}
+	policies, err := legal.Load(cfg.Legal.ConfigFile)
+	if err != nil {
+		return err
+	}
 	runtime, err := composition.New(context.Background(), composition.Config{
 		Selected: selected, Socket: socket, TokenFile: tokenFile, HostCredential: credential,
-		CommerceTokenFile:  cfg.Core.CommerceTokenFile,
-		AssistantTokenFile: cfg.Core.AssistantTokenFile,
-		PaymentTokenFile:   cfg.Core.PaymentTokenFile,
-		PaymentConfigFile:  cfg.Payments.ConfigFile,
-		Payments:           composition.StorageConfig{Component: "payments", URLFile: cfg.Payments.DatabaseURLFile, Database: cfg.Payments.DatabaseName},
-		Store:              composition.StorageConfig{Component: "store", URLFile: cfg.Store.DatabaseURLFile, Database: cfg.Store.DatabaseName},
-		Support:            composition.StorageConfig{Component: "support", URLFile: cfg.Support.DatabaseURLFile, Database: cfg.Support.DatabaseName},
-		Assistant:          composition.StorageConfig{Component: "assistant", URLFile: cfg.Assistant.DatabaseURLFile, Database: cfg.Assistant.DatabaseName}, AssistantCursorKeyFile: cfg.Assistant.CursorKeyFile,
+		SupportCustomerSocket: cfg.SupportCustomers.CoreSocket, SupportCustomerTokenFile: cfg.SupportCustomers.CoreTokenFile, SupportNoteKeyFile: cfg.SupportCustomers.NoteKeyFile,
+		LocalHTTP: cfg.Host.LocalHTTP, HostListen: cfg.Host.Listen, HostPublicOrigin: cfg.Host.PublicOrigin,
+		ToolMarketCorePublicOrigin: cfg.ToolMarket.CorePublicOrigin,
+		ToolMarketBuiltins:         cfg.ToolMarket.Builtins.composition(),
+		ToolMarketWitnessSocket:    cfg.ToolMarket.FixedWitnessSocket, ToolMarketWitnessTokenFile: cfg.ToolMarket.FixedWitnessTokenFile,
+		ToolMarket: composition.StorageConfig{Component: "toolmarket", URLFile: cfg.ToolMarket.DatabaseURLFile, Database: cfg.ToolMarket.DatabaseName}, ToolMarketKeyFile: cfg.ToolMarket.EncryptionKeyFile, ToolMarketMeteringFile: cfg.ToolMarket.MeteringConfigFile, ToolMarketCallbackURL: cfg.ToolMarket.CallbackURL, ToolMarketSocket: cfg.ToolMarket.CoreSocket, ToolMarketTokenFile: cfg.ToolMarket.CoreTokenFile,
+		CommerceTokenFile:         cfg.Core.CommerceTokenFile,
+		AssistantTokenFile:        cfg.Core.AssistantTokenFile,
+		AssistantServicesPolicies: assistant_services.PublishedLegalReader{Handler: policies},
+		PaymentTokenFile:          cfg.Core.PaymentTokenFile,
+		PaymentConfigFile:         cfg.Payments.ConfigFile,
+		Payments:                  composition.StorageConfig{Component: "payments", URLFile: cfg.Payments.DatabaseURLFile, Database: cfg.Payments.DatabaseName},
+		Store:                     composition.StorageConfig{Component: "store", URLFile: cfg.Store.DatabaseURLFile, Database: cfg.Store.DatabaseName},
+		Support:                   composition.StorageConfig{Component: "support", URLFile: cfg.Support.DatabaseURLFile, Database: cfg.Support.DatabaseName},
+		Assistant:                 composition.StorageConfig{Component: "assistant", URLFile: cfg.Assistant.DatabaseURLFile, Database: cfg.Assistant.DatabaseName}, AssistantCursorKeyFile: cfg.Assistant.CursorKeyFile,
 		Operations: composition.StorageConfig{Component: "operations", URLFile: cfg.Operations.DatabaseURLFile, Database: cfg.Operations.DatabaseName}, Scripts: scripts,
 	})
 	if err != nil {
@@ -93,16 +105,19 @@ func Run() error {
 	if err != nil {
 		return err
 	}
-	policies, err := legal.Load(cfg.Legal.ConfigFile)
-	if err != nil {
-		return err
-	}
 	var api http.Handler = host
+	var builtinHTTP webcompat.BuiltinHTTP
+	if cfg.Host.WebCompat && runtime.Builtins != nil {
+		builtinHTTP, err = webcompat.NewBuiltinHTTP(auth, runtime.Builtins.Wallet, runtime.Builtins.Bounties, cfg.Host.PublicOrigin, cfg.Host.LocalHTTP)
+		if err != nil {
+			return err
+		}
+	}
 	if cfg.Host.WebCompat {
-		if runtime.Store == nil && runtime.AssistantHistory == nil && runtime.Operations == nil && runtime.Payments == nil {
+		if runtime.Store == nil && runtime.AssistantHistory == nil && runtime.Operations == nil && runtime.Payments == nil && runtime.ToolMarket == nil {
 			return errors.New("Web compatibility requires an assembled Web module")
 		}
-		api = webcompat.Mount(host, auth, runtime.Store, runtime.Support, webcompat.AdditionalServices{Assistant: runtime.AssistantHistory, Operations: runtime.Operations, Payments: webcompat.NewPaymentStatusReader(runtime.Payments)})
+		api = webcompat.Mount(host, auth, runtime.Store, runtime.Support, webcompat.AdditionalServices{Builtins: builtinHTTP, ToolMarket: runtime.ToolMarket, ToolMarketMCP: runtime.ToolMarketMCP, Assistant: runtime.AssistantHistory, AssistantChat: runtime.AssistantChat, AssistantServices: runtime.AssistantServices, Operations: runtime.Operations, Payments: webcompat.NewPaymentStatusReader(runtime.Payments)})
 	}
 	handler := listenerHandler(policies, api)
 	if cfg.Payments.CallbacksEnabled {

@@ -182,6 +182,7 @@ async fn seed_terminal(
 ) {
     let price = if cost.is_some() {
         Price {
+            image: None,
             upstream_cost_group_ppm: Some(1_250_000),
             version: "synthetic-v1".into(),
             model: "openrouter/fusion".into(),
@@ -192,6 +193,7 @@ async fn seed_terminal(
         }
     } else {
         Price {
+            image: None,
             upstream_cost_group_ppm: None,
             version: "synthetic-v1".into(),
             model: "token/model".into(),
@@ -273,6 +275,7 @@ async fn test_a07_token_based_with_cache_creation_refuses_recovery(pool: PgPool)
 async fn test_a07_token_based_with_cache_creation_and_reported_cost_refuses_recovery(pool: PgPool) {
     let f = fixture(&pool).await;
     let token_price = Price {
+        image: None,
         upstream_cost_group_ppm: None,
         version: "synthetic-v1".into(),
         model: "token/model".into(),
@@ -322,6 +325,7 @@ async fn test_a07_paged_recovery_advances_past_holds_without_starvation(pool: Pg
             id: format!("need-res-{n:03}"),
             fingerprint: [17; 32],
             price: Price {
+                image: None,
                 upstream_cost_group_ppm: Some(1_250_000),
                 version: "synthetic-v1".into(),
                 model: "openrouter/fusion".into(),

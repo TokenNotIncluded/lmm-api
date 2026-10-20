@@ -26,7 +26,12 @@ export const CHANNEL_TYPE_NEW_API = 60
 // Retired ID kept only to identify historical records; never reuse it.
 export const CHANNEL_TYPE_OPENHUMAN = 61
 export const CHANNEL_TYPE_TYPESAFE = 62
-export const TYPESAFE_MODELS = ['jev-1.13.0', 'jev-latest', 'jev-preview']
+export const TYPESAFE_MODELS = [
+  'jev-1.14.0',
+  'jev-1.13.0',
+  'jev-latest',
+  'jev-preview',
+]
 
 export function isOpenAIChannelType(type: number): boolean {
   return type === CHANNEL_TYPE_OPENAI
@@ -429,5 +434,5 @@ export const CHANNEL_TYPE_WARNINGS: Record<number, string> = {
   3: 'For channels added after May 10, 2025, no need to remove "." from model names during deployment',
   8: 'If connecting to a relay project, use OpenAI type unless you know what you are doing',
   37: 'Dify channels only support chatflow and agent, and agent does not support images',
-  62: 'Jev uses state and questions for synchronous judgment requests.',
+  62: 'Jev evaluates state and typed questions synchronously. Images and Box require explicit opt-in.',
 }

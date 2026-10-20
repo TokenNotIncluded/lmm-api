@@ -16,79 +16,152 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { z } from 'zod'
+
 /*
 Copyright (C) 2026 LIghtJUNction
 */
 import { api } from '@/lib/api'
 import { formatQuotaWithCurrency } from '@/lib/currency'
 
-export interface WalletTransfer {
-  id: number
-  token: string
-  quota: number
-  status: 'pending' | 'claimed' | 'cancelled'
-  created_at: number
-  claimed_at: number
-  cancelled_at: number
-  recipient_id: number
-  recipient_username: string
-  recipient_name: string
-  recipient_email: string
-}
-export interface TransferReceipt {
-  quota: number
-  status: WalletTransfer['status']
-  created_at: number
-  claimed_at: number
-  is_sender: boolean
-  claimed_by_me: boolean
-}
+import {
+  confirmationSchema,
+  envelopeSchema,
+  receiptSchema,
+  transferSchema,
+  WalletOutcomeUnknown,
+  type CancelActionResult,
+  type TransferActionResult,
+} from './flow'
 
-async function result<T>(
-  request: Promise<{ data: { success: boolean; message: string; data: T } }>
+export type { WalletTransfer, TransferReceipt } from './flow'
+
+const readConfig = { skipBusinessError: true, skipErrorHandler: true }
+// An authentication retry must not dispatch a second financial POST. Recovery
+// uses the immutable original key/id with GET, including after a missing ACK.
+const writeConfig = { ...readConfig, skipAuthRefresh: true }
+async function readResult<T>(
+  request: Promise<{ data: unknown }>,
+  schema: z.ZodType<T>
 ): Promise<T> {
   const { data } = await request
-  if (!data.success) throw new Error(data.message)
-  return data.data
+  const envelope = envelopeSchema.parse(data)
+  if (!envelope.success) throw new WalletOutcomeUnknown()
+  return schema.parse(envelope.data)
+}
+function actionResult(
+  raw: unknown,
+  requestKey: string | undefined,
+  id: number | undefined,
+  quota: number | undefined
+): TransferActionResult {
+  const envelope = envelopeSchema.parse(raw)
+  if (!envelope.success) {
+    if (envelope.code !== 'WALLET_CONFIRMATION_REQUIRED') {
+      throw new WalletOutcomeUnknown()
+    }
+    const confirmation = confirmationSchema.parse(envelope.data)
+    if (
+      (requestKey && confirmation.request_key !== requestKey) ||
+      (id && confirmation.transfer.id !== id) ||
+      (quota && confirmation.transfer.quota !== quota)
+    ) {
+      throw new WalletOutcomeUnknown()
+    }
+    return {
+      kind: 'confirmation',
+      confirmationURL: confirmation.confirmation_url,
+      transfer: confirmation.transfer,
+    }
+  }
+  const transfer = transferSchema.parse(envelope.data)
+  if (
+    (requestKey &&
+      transfer.request_key &&
+      transfer.request_key !== requestKey) ||
+    (id && transfer.id !== id) ||
+    (quota && transfer.quota !== quota)
+  ) {
+    throw new WalletOutcomeUnknown()
+  }
+  return { kind: 'transfer', transfer }
 }
 export const listTransfers = (before = 0) =>
-  result<WalletTransfer[]>(
-    api.get('/api/wallet-transfer', {
+  readResult(
+    api.get<unknown>('/api/wallet-transfer', {
+      ...readConfig,
       params: { before },
-      skipBusinessError: true,
-    })
+    }),
+    z.array(transferSchema)
   )
-export const createTransfer = (quota: number, requestKey: string) =>
-  result<WalletTransfer>(
-    api.post(
+export async function createTransfer(
+  quota: number,
+  requestKey: string
+): Promise<TransferActionResult> {
+  try {
+    const response = await api.post<unknown>(
       '/api/wallet-transfer',
       { quota, request_key: requestKey },
-      { skipBusinessError: true }
+      writeConfig
     )
-  )
-export const cancelTransfer = (id: number) =>
-  result<null>(
-    api.post(
+    return actionResult(response.data, requestKey, undefined, quota)
+  } catch {
+    throw new WalletOutcomeUnknown()
+  }
+}
+export async function cancelTransfer(
+  id: number,
+  quota?: number
+): Promise<CancelActionResult> {
+  try {
+    const response = await api.post<unknown>(
       `/api/wallet-transfer/${id}/cancel`,
       {},
-      { skipBusinessError: true }
+      writeConfig
     )
-  )
+    const result = actionResult(response.data, undefined, id, quota)
+    if (result.kind === 'confirmation') return result
+    if (result.transfer.status === 'cancelled') return { kind: 'cancelled' }
+    throw new WalletOutcomeUnknown()
+  } catch {
+    throw new WalletOutcomeUnknown()
+  }
+}
+export async function queryTransfer(
+  requestKey: string
+): Promise<TransferActionResult> {
+  try {
+    const response = await api.get<unknown>('/api/wallet-transfer/query', {
+      ...readConfig,
+      params: { request_key: requestKey },
+    })
+    return actionResult(response.data, requestKey, undefined, undefined)
+  } catch {
+    throw new WalletOutcomeUnknown()
+  }
+}
+export async function queryTransferByID(
+  id: number
+): Promise<TransferActionResult> {
+  try {
+    const response = await api.get<unknown>('/api/wallet-transfer/query', {
+      ...readConfig,
+      params: { cancel_transfer_id: id },
+    })
+    return actionResult(response.data, undefined, id, undefined)
+  } catch {
+    throw new WalletOutcomeUnknown()
+  }
+}
 export const inspectTransfer = (token: string) =>
-  result<TransferReceipt>(
-    api.post(
-      '/api/wallet-transfer/inspect',
-      { token },
-      { skipBusinessError: true }
-    )
+  readResult(
+    api.post<unknown>('/api/wallet-transfer/inspect', { token }, readConfig),
+    receiptSchema
   )
 export const claimTransfer = (token: string) =>
-  result<TransferReceipt>(
-    api.post(
-      '/api/wallet-transfer/claim',
-      { token },
-      { skipBusinessError: true }
-    )
+  readResult(
+    api.post<unknown>('/api/wallet-transfer/claim', { token }, writeConfig),
+    receiptSchema
   )
 
 // A fragment is never sent in an HTTP request or Referer header. Send the

@@ -86,6 +86,9 @@ func (b *Bridge) Credit(ctx context.Context, id int64, key string, e p.Evidence)
 	}
 	return convert(b.client.CreditPaymentTopup(ctx, &pb.CreditTopupRequest{Mutation: mutation(key), IntentId: id, Evidence: proof}))
 }
+func (b *Bridge) BeginRefundDispatch(ctx context.Context, id int64, key, hold string) (p.Receipt, error) {
+	return convert(b.client.BeginPaymentRefundDispatch(ctx, &pb.ResolveRefundRequest{Mutation: mutation(key), IntentId: id, HoldReceiptId: hold}))
+}
 func (b *Bridge) Commit(ctx context.Context, id int64, key, hold string, e p.Evidence) (p.Receipt, error) {
 	proof, err := evidence(e)
 	if err != nil {

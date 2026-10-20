@@ -12,6 +12,7 @@ pub use manifest::{
 };
 
 const COMPONENTS: &[(&str, &str)] = &[
+    ("humangrant", include_str!("../schema/humangrant.sql")),
     ("identity", include_str!("../schema/identity.sql")),
     ("ledger", include_str!("../schema/ledger.sql")),
     ("payments", include_str!("../schema/payments.sql")),
@@ -26,9 +27,27 @@ const COMPONENTS: &[(&str, &str)] = &[
     ("console", include_str!("../schema/console.sql")),
     ("model-gateway", include_str!("../schema/model_gateway.sql")),
     ("commerce", include_str!("../schema/commerce.sql")),
+    ("tool-market", include_str!("../schema/tool_market.sql")),
     ("abuse", include_str!("../schema/abuse.sql")),
     ("oauth-grants", include_str!("../schema/oauth_grants.sql")),
     ("history", include_str!("../schema/history.sql")),
+    (
+        "assistant-model",
+        include_str!("../schema/assistant_model.sql"),
+    ),
+    ("gift", include_str!("../schema/gift.sql")),
+    ("image", include_str!("../schema/image.sql")),
+    ("market-oauth", include_str!("../schema/market_oauth.sql")),
+    (
+        "tool-market-credit",
+        include_str!("../schema/tool_market_credit.sql"),
+    ),
+    ("wallet", include_str!("../schema/wallet.sql")),
+    ("bounties", include_str!("../schema/bounties.sql")),
+    (
+        "assistant-tools",
+        include_str!("../schema/assistant_tools.sql"),
+    ),
 ];
 
 /// The compiled fresh-install contract, including explicitly disabled modules.

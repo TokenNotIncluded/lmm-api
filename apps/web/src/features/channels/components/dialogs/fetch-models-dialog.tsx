@@ -386,7 +386,7 @@ export function FetchModelsDialog({
           className='bg-muted/50 text-muted-foreground rounded-lg border p-3 text-sm'
         >
           {t(
-            'TypeSafe currently lists aliases only. Supported version IDs such as jev-1.13.0 can still be entered manually and kept selected.'
+            'TypeSafe currently lists aliases only. Supported version IDs such as jev-1.14.0 can still be entered manually and kept selected.'
           )}
         </p>
       )}

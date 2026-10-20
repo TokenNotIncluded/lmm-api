@@ -167,7 +167,7 @@ impl Bridge {
         reservation: &Reservation,
         checkpoint: &OutputCheckpoint,
     ) -> Result<(), RelayError> {
-        let (worker, output_ceiling, upstream_cost) = {
+        let (worker, output_ceiling, selected) = {
             let active = self
                 .active
                 .lock()
@@ -178,10 +178,21 @@ impl Bridge {
                 operation.output_token_ceiling,
                 operation
                     .selected
-                    .as_ref()
-                    .is_some_and(|s| s.price.upstream_cost_group_ppm.is_some()),
+                    .clone()
+                    .ok_or(RelayError::RouteUnavailable)?,
             )
         };
+        let upstream_cost = selected.price.upstream_cost_group_ppm.is_some();
+        // A persisted terminal is authority for automatic settlement after an
+        // OS restart. Validate the original provider contract BEFORE writing it,
+        // so recovery cannot turn a rejected receipt into a zero-cache charge.
+        if checkpoint.terminal_observed {
+            self.provider_policy.validate_usage(
+                &selected.attempt,
+                &checkpoint.usage,
+                upstream_cost,
+            )?;
+        }
         checkpoint
             .usage
             .validate()
@@ -278,6 +289,137 @@ mod a07_recovery_tests {
     use super::*;
     use serde_json::json;
 
+    #[tokio::test]
+    async fn provider_terminal_contract_rejection_precedes_any_persisted_recovery_authority() {
+        use crate::model_http::{
+            ChargePolicy, ExternalModelContext, ModelGateway, ProviderPolicy, UpstreamCredential,
+        };
+        use crate::routing::{
+            self, CredentialRef, CreditRate, PriceSnapshot, Protocol, ReplayPermission,
+            RouteRequest,
+        };
+        use std::{collections::BTreeMap, sync::Arc, time::Duration};
+        let config = serde_json::from_value(json!({
+            "version": 1, "groups": [{"name":"allowed","enabled":true}],
+            "upstreams": [{"id":1,"endpoint":"https://provider.example/v1","protocol":"openai_chat","credential":{"id":7,"revision":1},"enabled":true}],
+            "routes": [{"id":1,"model":"model","group":"allowed","enabled":true,"speeds":["standard"],"targets":[{"id":1,"upstream_id":1,"upstream_model":"bounded-model","enabled":true,"priority":0,"weight":1,"speeds":["standard"],"payload":"adapt","timeout_ms":5000}],"failover":{"max_attempts":1,"retry_on":[],"allow_replay_after_send":false}}], "aliases": []
+        })).unwrap();
+        let price_config = serde_json::from_value(json!({"version":1,"rules":[{"id":1,"model":"model","group":"allowed","speed":"standard","rates":{"input":2000000,"output":4000000,"cache_read":500000,"cache_write":0,"request":0},"group_multiplier_ppm":1000000,"speed_multiplier_ppm":1000000}]})).unwrap();
+        let router = Arc::new(
+            routing::Router::new(
+                config,
+                Arc::new(PriceSnapshot::compile(price_config).unwrap()),
+            )
+            .unwrap(),
+        );
+        let mut plan = router
+            .route(RouteRequest {
+                model: "model",
+                group: "allowed",
+                speed: None,
+                protocol: Protocol::OpenAiChat,
+                replay: ReplayPermission::Denied,
+            })
+            .unwrap();
+        let quote = plan
+            .quote()
+            .with_credit_rate(CreditRate::new(1, 500_000).unwrap());
+        let price = super::super::routing::credit_price(quote.price(), "model", "allowed").unwrap();
+        let selected = super::super::routing::Selected {
+            attempt: Arc::new(plan.start().unwrap()),
+            price,
+            quote,
+            route_id: "r1-t1-u1".into(),
+        };
+        let policy = ProviderPolicy::new(
+            vec![ExternalModelContext {
+                upstream_id: 1,
+                upstream_model: "bounded-model".into(),
+                protocol: Protocol::OpenAiChat,
+                endpoint: "https://provider.example/v1".into(),
+                max_input_tokens: 64,
+                max_output_tokens: 8,
+                contract_revision: "synthetic-v1".into(),
+                missing_cached_tokens_is_zero: false,
+            }],
+            128,
+        )
+        .unwrap();
+        // This pool is deliberately unconnected. Reaching SQL is a test failure:
+        // invalid terminals must never enter the recoverable evidence relation.
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .acquire_timeout(Duration::from_millis(20))
+            .connect_lazy("postgresql://synthetic:synthetic@127.0.0.1:1/synthetic")
+            .unwrap();
+        let gateway = ModelGateway::new_with_provider_policy(
+            pool,
+            router,
+            vec![UpstreamCredential {
+                reference: CredentialRef { id: 7, revision: 1 },
+                secret: "synthetic-only".into(),
+            }],
+            BTreeMap::from([(1, "allowed".into())]),
+            crate::relay::Limits {
+                total_timeout: Duration::from_secs(5),
+                connect_retries: 0,
+                ..Default::default()
+            },
+            ChargePolicy {
+                input_token_ceiling: 128,
+                lease_seconds: 90,
+            },
+            policy,
+        )
+        .unwrap();
+        gateway.bridge.active.lock().unwrap().insert(
+            "terminal-contract".into(),
+            super::super::Operation {
+                secret: "synthetic-only".into(),
+                group: "allowed".into(),
+                worker: [1; 32],
+                fingerprint: [2; 32],
+                selected: Some(selected),
+                output_token_ceiling: 8,
+                peer: None,
+                oauth_issuer: None,
+            },
+        );
+        for usage in [
+            crate::relay::Usage {
+                input_tokens: Some(12),
+                output_tokens: Some(3),
+                ..Default::default()
+            },
+            crate::relay::Usage {
+                input_tokens: Some(65),
+                cached_input_tokens: Some(0),
+                output_tokens: Some(3),
+                ..Default::default()
+            },
+        ] {
+            let checkpoint = OutputCheckpoint {
+                sequence: 1,
+                packet_sha256: [3; 32],
+                packet_bytes: 1,
+                usage,
+                terminal_observed: true,
+            };
+            let result = gateway
+                .bridge
+                .persist_output(
+                    &Reservation {
+                        id: "terminal-contract".into(),
+                    },
+                    &checkpoint,
+                )
+                .await;
+            assert!(
+                matches!(result, Err(RelayError::SettlementPending)),
+                "invalid terminal reached persistence: {result:?}"
+            );
+        }
+    }
+
     #[test]
     fn recovery_page_rejects_unbounded_or_invalid_cursors() {
         for limit in [i32::MIN, -1, 0, 1001, i32::MAX] {
@@ -347,6 +489,7 @@ mod a07_recovery_tests {
         assert_eq!(
             valid,
             vec![charging::Usage {
+                image: None,
                 upstream_cost_atto_usd: None,
                 input: 4,
                 cached: 1,
@@ -405,6 +548,7 @@ mod a07_recovery_tests {
         assert_eq!(
             recovery_usage(value, 1, true),
             Some(charging::Usage {
+                image: None,
                 upstream_cost_atto_usd: Some(123_456_789_000_000_000),
                 input: 4,
                 cached: 0,

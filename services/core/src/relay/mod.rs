@@ -6,6 +6,10 @@ mod decode;
 mod encode;
 pub(crate) mod honeypot;
 pub(crate) mod honeypot_network;
+mod native;
+pub(crate) mod native_anthropic;
+pub(crate) mod native_gemini;
+pub(crate) mod provider_network;
 mod request;
 mod sse;
 #[cfg(test)]
@@ -117,7 +121,7 @@ struct Registry {
     active: BTreeMap<u64, Cancellation>,
 }
 struct Inner {
-    client: reqwest::Client,
+    provider_transport: provider_network::ProviderTransport,
     router: Arc<dyn RouteProvider>,
     billing: Arc<dyn Billing>,
     limits: Limits,
@@ -152,30 +156,10 @@ impl Relay {
         limits: Limits,
     ) -> Result<Self, RelayError> {
         limits.validate()?;
-        let client = reqwest::Client::builder()
-            .connect_timeout(limits.connect_timeout)
-            .redirect(reqwest::redirect::Policy::none())
-            .retry(reqwest::retry::never())
-            .referer(false)
-            .no_proxy()
-            .no_gzip()
-            .no_brotli()
-            .no_deflate()
-            .no_zstd()
-            // No idle connections for an unbounded set of route origins. Active
-            // connections are bounded by the admission semaphore, including H2.
-            .pool_max_idle_per_host(0)
-            .http2_adaptive_window(false)
-            .http2_initial_stream_window_size(65_536)
-            .http2_initial_connection_window_size(262_144)
-            .http2_max_frame_size(16_384)
-            .http2_max_header_list_size(16_384)
-            .user_agent("lmm-core-relay/0.1")
-            .build()
-            .map_err(|_| RelayError::Invalid("HTTP client initialization failed"))?;
+        let provider_transport = provider_network::ProviderTransport::new(limits.max_in_flight);
         Ok(Self {
             inner: Arc::new(Inner {
-                client,
+                provider_transport,
                 router,
                 billing,
                 permits: Arc::new(Semaphore::new(limits.max_in_flight)),
@@ -526,11 +510,25 @@ impl Worker {
             if !route.is_available() {
                 return Err(RelayError::RouteUnavailable);
             }
+            let connection = self
+                .gate
+                .run(
+                    self.inner.limits.header_timeout,
+                    Phase::Connect,
+                    self.inner
+                        .provider_transport
+                        .prepare(&route.endpoint, &self.inner.limits),
+                )
+                .await?;
+            // DNS/policy failure cannot claim a dispatched request. Recheck the
+            // route after the await so revocation during resolution fails closed.
+            if !route.is_available() {
+                return Err(RelayError::RouteUnavailable);
+            }
             self.report.attempts += 1;
             self.report.upstream_attempted = true;
-            let request = self
-                .inner
-                .client
+            let request = connection
+                .client()
                 .post(route.endpoint.clone())
                 .header(header::CONTENT_TYPE, "application/json")
                 .header(header::ACCEPT_ENCODING, "identity")
@@ -561,7 +559,12 @@ impl Worker {
                 })
                 .await?;
             match result {
-                Ok(response) => return Ok(response),
+                Ok(response) => {
+                    if !connection.matches_peer(response.remote_addr()) {
+                        return Err(RelayError::UpstreamConnection);
+                    }
+                    return Ok(response);
+                }
                 Err(e)
                     if e.is_connect()
                         && self.report.attempts <= self.inner.limits.connect_retries =>

@@ -12,6 +12,7 @@ pub struct HumanGrantEngine {
     pub store: HumanGrantStore,
     pub origin: String,
     pub local: bool,
+    pub mail: Option<std::sync::Arc<super::mail::SmtpMailer>>,
 }
 
 impl HumanGrantEngine {
@@ -20,6 +21,7 @@ impl HumanGrantEngine {
             store,
             origin,
             local,
+            mail: None,
         }
     }
 
@@ -270,6 +272,29 @@ impl HumanGrantEngine {
             }
         }
         out
+    }
+
+    /// A retained request is not necessarily a live consent request.
+    pub async fn check_pending_request(
+        &self,
+        tx: &mut HumanGrantTx,
+        request: &Request,
+        now: i64,
+    ) -> Result<(), ProtocolError> {
+        let settings = self.get_settings(tx, now).await?;
+        if !settings.enabled || request.epoch != settings.epoch {
+            return Err(failure(403, "feature_disabled"));
+        }
+        if request.expires <= now {
+            return Err(failure(410, "expired"));
+        }
+        if !matches!(
+            request.phase.as_str(),
+            "waiting_human" | "authenticating_human" | "awaiting_consent"
+        ) {
+            return Err(failure(409, "invalid_state"));
+        }
+        Ok(())
     }
 
     pub async fn check_flow(

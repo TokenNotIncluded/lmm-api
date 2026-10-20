@@ -34,7 +34,7 @@ func priority(kind string) int {
 	switch kind {
 	case "external_refund":
 		return 0
-	case "commit", "release", "lookup_hold":
+	case "commit", "release", "lookup_hold", "refund_dispatch":
 		return 1
 	case "credit":
 		return 2
@@ -145,7 +145,17 @@ func (s *Service) Step(ctx context.Context, id string) error {
 	expected := ""
 	var callErr error
 	switch chosen.Kind {
+	case "refund_dispatch":
+		expected = RefundHeld
+		receipt, callErr = s.core.BeginRefundDispatch(bounded, snapshot.Intent.ID, chosen.Key, snapshot.Refunds[chosen.RefundID].HoldReceipt)
 	case "checkout", "refund_submit":
+		// An ambiguous refund is queried by its original provider identity.
+		// Even provider key retention cannot authorize a second POST after
+		// the host has durably recorded that the first call may have started.
+		if chosen.Kind == "refund_submit" && chosen.Attempts > 1 {
+			callErr = ErrUnsupported
+			break
+		}
 		// Provider idempotency retention is finite. Never repeat an ambiguous write
 		// after that window, and never automatically retry legacy ePay refunds.
 		if chosen.Attempts > 1 && (a.ReplayWindow(chosen.Kind) <= 0 || now.Sub(chosen.FirstAttempt) >= a.ReplayWindow(chosen.Kind)) {
@@ -153,7 +163,20 @@ func (s *Service) Step(ctx context.Context, id string) error {
 		} else if chosen.Kind == "checkout" {
 			checkout, callErr = a.Checkout(bounded, snapshot, chosen.Key)
 		} else {
-			refund, callErr = a.Refund(bounded, snapshot, snapshot.Refunds[chosen.RefundID], chosen.Key)
+			// Also fence legacy queues created before dispatch registration.
+			// New queues already persisted the Core registration receipt.
+			if snapshot.Refunds[chosen.RefundID].DispatchReceipt == "" {
+				receipt, callErr = s.core.BeginRefundDispatch(bounded, snapshot.Intent.ID, chosen.Key, snapshot.Refunds[chosen.RefundID].HoldReceipt)
+				if callErr == nil && !receiptMatches(receipt, snapshot.Intent.ID, chosen.Key, RefundHeld) {
+					callErr = ErrConflict
+				}
+				if callErr != nil {
+					callErr = refundBeforeDispatch{callErr}
+				}
+			}
+			if callErr == nil {
+				refund, callErr = a.Refund(bounded, snapshot, snapshot.Refunds[chosen.RefundID], chosen.Key)
+			}
 		}
 	case "lookup_hold":
 		expected = RefundHeld
@@ -220,7 +243,7 @@ func (s *Service) Step(ctx context.Context, id string) error {
 	if callErr == nil && chosen.Kind == "refund_submit" && refund.ID != "" && !validID(refund.ID) {
 		callErr = ErrConflict
 	}
-	return s.store.Mutate(ctx, id, func(o *Order) error {
+	err = s.store.Mutate(ctx, id, func(o *Order) error {
 		j := o.Jobs[chosen.Key]
 		if j.Lease != lease {
 			return nil
@@ -237,6 +260,16 @@ func (s *Service) Step(ctx context.Context, id string) error {
 				j.NextAttempt = s.now()
 				o.Jobs[j.Key] = j
 				return nil
+			}
+			var before refundBeforeDispatch
+			if chosen.Kind == "refund_submit" && chosen.Attempts == 1 && errors.As(callErr, &before) {
+				// Only a locally known pre-POST failure can reset this claim.
+				// A crashed worker or an error after POST never reaches here.
+				j.Attempts = 0
+				j.FirstAttempt = time.Time{}
+				r := o.Refunds[j.RefundID]
+				r.Dispatch = ""
+				o.Refunds[r.ID] = r
 			}
 			j.State = "pending"
 			j.ErrorCode = errorCode(callErr)
@@ -267,6 +300,18 @@ func (s *Service) Step(ctx context.Context, id string) error {
 			}
 		}
 		switch j.Kind {
+		case "refund_dispatch":
+			r := o.Refunds[j.RefundID]
+			r.DispatchReceipt = receipt.ID
+			o.Refunds[r.ID] = r
+			// Core ACK and queue transition commit before any provider call.
+			// Keep the same operation key when converting registration to IO.
+			j.Kind = "refund_submit"
+			j.State = "pending"
+			j.Attempts = 0
+			j.FirstAttempt = time.Time{}
+			j.NextAttempt = s.now()
+			j.Receipt = nil
 		case "checkout":
 			if o.PaymentID != "" && checkout.PaymentID != "" && o.PaymentID != checkout.PaymentID {
 				return ErrConflict
@@ -309,6 +354,10 @@ func (s *Service) Step(ctx context.Context, id string) error {
 		o.Jobs[j.Key] = j
 		return nil
 	})
+	if err == nil && callErr == nil && chosen.Kind == "refund_dispatch" && receipt.State == RefundHeld {
+		return s.Step(ctx, id)
+	}
+	return err
 }
 
 func (s *Service) acceptedEvidence(ctx context.Context, intent int64, e Evidence) (Evidence, error) {

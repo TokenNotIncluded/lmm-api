@@ -531,7 +531,7 @@ function CodeSamplesSection(props: {
           </code>{' '}
           {activeEndpoint.type === 'systemone'
             ? t(
-                'Jev uses state and questions for synchronous judgment requests.'
+                'Jev evaluates state and typed questions synchronously. Images and Box require explicit opt-in.'
               )
             : t('Moderation uses input for synchronous content safety checks.')}
         </p>

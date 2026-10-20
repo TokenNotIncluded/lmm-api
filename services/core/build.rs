@@ -7,6 +7,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "../../contracts/proto/lmm/core/v1/ledger.proto",
         "../../contracts/proto/lmm/core/v1/payments.proto",
         "../../contracts/proto/lmm/core/v1/commerce.proto",
+        "../../contracts/proto/lmm/core/v1/assistant.proto",
     ];
     for source in sources {
         println!("cargo:rerun-if-changed={source}");

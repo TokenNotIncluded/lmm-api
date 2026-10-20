@@ -580,6 +580,7 @@ impl PaymentsStore {
             .bind(&receipt.proof_id).bind(intent.channel_id).bind(verified.event_id.clone()).bind(intent.id)
             .bind(digest).bind(&evidence.signed_payload).bind(&evidence.signature).bind(Json(verified)).bind(receipt.encode_to_vec())
             .execute(&mut *tx).await?;
+        Self::bind_dispatch_proof(&mut tx, &intent, &receipt.proof_id).await?;
         tx.commit().await?;
         Ok(receipt)
     }
@@ -899,6 +900,97 @@ impl PaymentsStore {
         Ok(receipt)
     }
 
+    /// Register the single provider operation for an already authorized hold.
+    /// This commits before provider IO; a lost ACK is reconciled with this key.
+    pub async fn begin_refund_dispatch(
+        &self,
+        request: pb::ResolveRefundRequest,
+    ) -> Result<pb::PaymentReceipt> {
+        if request.evidence.is_some() {
+            return Err(Error::Invalid);
+        }
+        let key = mutation(&request.mutation)?;
+        let request_hash = hash(json!([
+            "dispatch",
+            request.intent_id,
+            request.hold_receipt_id
+        ]));
+        let mut tx = self.begin().await?;
+        let intent = Self::intent(&mut tx, request.intent_id).await?;
+        self.channel(&intent)?;
+        if let Some(prior) = Self::prior(&mut tx, intent.id, key, "dispatch", &request_hash).await?
+        {
+            tx.commit().await?;
+            return Ok(prior);
+        }
+        let hold: HoldRow = sqlx::query_as("SELECT receipt_id,amount_minor,credit_units,reservation_journal_id,state FROM core_payments.refund_holds WHERE receipt_id=$1 AND intent_id=$2 FOR UPDATE")
+            .bind(&request.hold_receipt_id).bind(intent.id).fetch_optional(&mut *tx).await?.ok_or(Error::NotFound)?;
+        if hold.state != "held" || intent.credit_journal_id.is_none() {
+            return Err(Error::Conflict);
+        }
+        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM core_payments.refund_dispatches WHERE hold_receipt_id=$1 OR operation_key=$2)")
+            .bind(&hold.receipt_id).bind(key).fetch_one(&mut *tx).await?;
+        if exists {
+            return Err(Error::Conflict);
+        }
+        let receipt = Self::save(
+            &mut tx,
+            intent.id,
+            key,
+            "dispatch",
+            request_hash,
+            2,
+            hold.reservation_journal_id,
+            "",
+        )
+        .await?;
+        sqlx::query("INSERT INTO core_payments.refund_dispatches(hold_receipt_id,intent_id,operation_key,receipt_id) VALUES($1,$2,$3,$4)")
+            .bind(&hold.receipt_id).bind(intent.id).bind(key).bind(&receipt.receipt_id).execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(receipt)
+    }
+
+    async fn bind_dispatch_proof(
+        tx: &mut Transaction<'_, Postgres>,
+        intent: &IntentRow,
+        proof_id: &str,
+    ) -> Result<()> {
+        let Json(verified): Json<stripe::Verified> = sqlx::query_scalar(
+            "SELECT verified_facts FROM core_payments.accepted_proofs WHERE id=$1",
+        )
+        .bind(proof_id)
+        .fetch_one(&mut **tx)
+        .await?;
+        let (Some(hold), Some(key), Some(refund)) = (
+            &verified.hold_receipt_id,
+            &verified.dispatch_key,
+            &verified.refund_id,
+        ) else {
+            return Ok(());
+        };
+        // Unrequested/external refunds remain authentic financial facts. They
+        // do not gain authority to release a reservation merely via metadata.
+        let dispatched: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM core_payments.refund_dispatches WHERE hold_receipt_id=$1 AND intent_id=$2 AND operation_key=$3)")
+            .bind(hold).bind(intent.id).bind(key).fetch_one(&mut **tx).await?;
+        if !dispatched {
+            return Ok(());
+        }
+        let prior: Option<String> = sqlx::query_scalar(
+            "SELECT refund_id FROM core_payments.refund_dispatch_bindings WHERE hold_receipt_id=$1",
+        )
+        .bind(hold)
+        .fetch_optional(&mut **tx)
+        .await?;
+        if prior.is_some() {
+            // Never replace the first binding. Retain a conflicting authentic
+            // event as durable evidence; release checks all accepted attempts.
+            return Ok(());
+        }
+        sqlx::query("INSERT INTO core_payments.refund_dispatch_bindings(hold_receipt_id,channel_id,refund_id,proof_id) VALUES($1,$2,$3,$4)")
+            .bind(hold).bind(intent.channel_id).bind(refund).bind(proof_id).execute(&mut **tx).await?;
+        Ok(())
+    }
+
     /// Unknown/timeouts never enter here as a failure proof. Missing evidence is
     /// rejected and the original reservation remains held indefinitely.
     pub async fn resolve(
@@ -906,12 +998,6 @@ impl PaymentsStore {
         request: pb::ResolveRefundRequest,
         commit: bool,
     ) -> Result<pb::PaymentReceipt> {
-        // A signed failed refund does not prove that another provider attempt
-        // for this hold was never submitted. Until core owns/binds dispatch,
-        // releasing on that evidence could free money already refunded by B.
-        if !commit {
-            return Err(Error::Unavailable);
-        }
         let key = mutation(&request.mutation)?;
         let method = if commit { "commit" } else { "release" };
         let evidence = request.evidence.as_ref().ok_or(Error::Invalid)?;
@@ -948,6 +1034,17 @@ impl PaymentsStore {
             return Err(Error::Conflict);
         }
         let refund_id = verified.refund_id.ok_or(Error::Invalid)?;
+        if !commit {
+            // A failed A cannot release a hold dispatched as B. Neither a Go
+            // response nor hold metadata establishes this binding: only the
+            // provider-signed creation request bound it at proof ingress.
+            let bound: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM core_payments.refund_dispatch_bindings WHERE hold_receipt_id=$1 AND channel_id=$2 AND refund_id=$3) AND NOT EXISTS(SELECT 1 FROM core_payments.accepted_proofs WHERE intent_id=$4 AND verified_facts->>'hold_receipt_id'=$1 AND verified_facts->>'refund_id' IS NOT NULL AND verified_facts->>'refund_id'<>$3 AND verified_facts->>'kind' IN ('RefundPending','RefundSucceeded'))")
+                .bind(&hold.receipt_id).bind(intent.channel_id).bind(&refund_id).bind(intent.id)
+                .fetch_one(&mut *tx).await?;
+            if !bound {
+                return Err(Error::Denied);
+            }
+        }
         Self::release_hold(&mut tx, &intent, key, &hold).await?;
         let receipt = if commit {
             let outcome = Self::post(

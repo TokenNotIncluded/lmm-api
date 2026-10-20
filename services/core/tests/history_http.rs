@@ -8,6 +8,8 @@ use axum::{
     body::{Body, to_bytes},
     http::{HeaderMap, Request, StatusCode},
 };
+#[path = "common/history_scope.rs"]
+mod history_scope;
 use lmm_core::{
     accounts::{Account, AccountKind},
     core_schema,
@@ -146,6 +148,7 @@ async fn fixture(pool: &PgPool) -> TestContext {
     .await
     .unwrap();
 
+    history_scope::install(pool).await;
     let app = app(pool);
 
     TestContext {

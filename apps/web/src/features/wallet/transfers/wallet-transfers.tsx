@@ -26,7 +26,13 @@ import {
 } from '@tanstack/react-query'
 import { ArrowUpRight, RefreshCw } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
-import { useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type SetStateAction,
+} from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -47,15 +53,31 @@ import {
   cancelTransfer,
   createTransfer,
   listTransfers,
+  queryTransfer,
+  queryTransferByID,
   transferLink,
   type WalletTransfer,
 } from './api'
+import {
+  canShareTransfer,
+  hasRecipientDetails,
+  readPendingTransfer,
+  savePendingTransfer,
+  reconcileTransfer,
+  trustedConfirmationURL,
+  unknownMessage,
+  type PendingTransfer,
+  type TransferActionResult,
+} from './flow'
 
 export function TransferShare({ transfer }: { transfer: WalletTransfer }) {
   const { t } = useTranslation()
   const currency = useWalletCurrency()
   const formatTransferQuota = currency.formatQuota
-  const link = transferLink(transfer.token)
+  const link =
+    canShareTransfer(transfer) && transfer.token
+      ? transferLink(transfer.token)
+      : null
   const qr = useRef<HTMLDivElement>(null)
   const [copying, setCopying] = useState(false)
   const image = async (copy: boolean) => {
@@ -111,6 +133,7 @@ export function TransferShare({ transfer }: { transfer: WalletTransfer }) {
       setCopying(false)
     }
   }
+  if (!link) return null
   return (
     <div className='grid justify-items-center gap-3 rounded-lg border p-4'>
       <p className='text-sm font-medium'>
@@ -178,7 +201,41 @@ export function WalletTransfers({
         ? ''
         : currency.quotaToInput(amountQuota)
   const [requestKey, setRequestKey] = useState(() => crypto.randomUUID())
-  const [share, setShare] = useState<WalletTransfer | null>(null)
+  const [shareState, setShareState] = useState<{
+    userID: number
+    transfer: WalletTransfer | null
+  }>({ userID, transfer: null })
+  const share = shareState.userID === userID ? shareState.transfer : null
+  const setShare = useCallback(
+    (value: SetStateAction<WalletTransfer | null>) => {
+      setShareState((previous) => ({
+        userID,
+        transfer:
+          typeof value === 'function'
+            ? value(previous.userID === userID ? previous.transfer : null)
+            : value,
+      }))
+    },
+    [userID]
+  )
+  const [pendingState, setPendingState] = useState(() => ({
+    userID,
+    operation: readPendingTransfer(userID),
+  }))
+  const pending = pendingState.userID === userID ? pendingState.operation : null
+  const [checking, setChecking] = useState(false)
+  const [recoveryError, setRecoveryError] = useState(false)
+  const [pollTick, setPollTick] = useState(0)
+  useEffect(() => {
+    setPendingState({ userID, operation: readPendingTransfer(userID) })
+  }, [userID])
+  const updatePending = useCallback(
+    (operation: PendingTransfer | null) => {
+      savePendingTransfer(userID, operation)
+      setPendingState({ userID, operation })
+    },
+    [userID]
+  )
   const quota = amountQuota
   const key = ['wallet-transfers', userID]
   const history = useInfiniteQuery({
@@ -190,35 +247,124 @@ export function WalletTransfers({
       last.length === 50 ? last.at(-1)?.id : undefined,
     refetchInterval: open ? 10000 : false,
   })
-  const refresh = async () => {
-    await queryClient.invalidateQueries({ queryKey: key })
+  const refresh = useCallback(async () => {
+    await queryClient.invalidateQueries({
+      queryKey: ['wallet-transfers', userID],
+    })
     await onBalanceChange()
-  }
+  }, [queryClient, userID, onBalanceChange])
   const error = (err: Error) => toast.error(t(err.message))
-  const create = useMutation({
-    mutationFn: () => {
-      if (!quota || quota > balance) {
-        throw new Error(t('Invalid transfer amount or request'))
+  const acceptResult = useCallback(
+    (operation: PendingTransfer, result: TransferActionResult) => {
+      const reconciled = reconcileTransfer(operation, result)
+      if (reconciled.kind === 'pending') {
+        if (JSON.stringify(reconciled.pending) !== JSON.stringify(operation)) {
+          updatePending(reconciled.pending)
+        }
+        return
       }
-      return createTransfer(quota, requestKey)
+      updatePending(null)
+      if (operation.action === 'create') {
+        setShare(
+          canShareTransfer(reconciled.transfer) ? reconciled.transfer : null
+        )
+        setAmountQuota(null)
+        setDraft({ currencyKey, value: '' })
+        setRequestKey(crypto.randomUUID())
+      } else {
+        setShare((previous) =>
+          previous?.id === operation.id ? null : previous
+        )
+      }
+      if (reconciled.kind === 'conflict') {
+        toast.error(t('Transfer is unavailable or already claimed'))
+      }
+      void refresh()
     },
-    onSuccess: async (transfer) => {
-      setShare(transfer)
-      setAmountQuota(null)
-      setDraft({ currencyKey, value: '' })
-      setRequestKey(crypto.randomUUID())
-      await refresh()
+    [currencyKey, refresh, setShare, t, updatePending]
+  )
+  const create = useMutation({
+    retry: false,
+    mutationFn: (variables: {
+      ownerUserID: number
+      operation: Extract<PendingTransfer, { action: 'create' }>
+    }) =>
+      createTransfer(variables.operation.quota, variables.operation.requestKey),
+    onSuccess: (result, variables) => {
+      if (variables.ownerUserID === userID) {
+        acceptResult(variables.operation, result)
+      }
     },
-    onError: error,
+    onError: (_err: Error, variables) => {
+      if (variables.ownerUserID !== userID) return
+      updatePending({ ...variables.operation, step: { kind: 'unknown' } })
+      error(new Error(unknownMessage))
+    },
   })
   const cancel = useMutation({
-    mutationFn: cancelTransfer,
-    onSuccess: async (_, id) => {
-      if (share?.id === id) setShare(null)
-      await refresh()
+    retry: false,
+    mutationFn: (variables: {
+      ownerUserID: number
+      operation: Extract<PendingTransfer, { action: 'cancel' }>
+    }) => cancelTransfer(variables.operation.id, variables.operation.quota),
+    onSuccess: (result, variables) => {
+      if (variables.ownerUserID !== userID) return
+      if (result.kind === 'cancelled') {
+        updatePending(null)
+        setShare((previous) =>
+          previous?.id === variables.operation.id ? null : previous
+        )
+        void refresh()
+      } else acceptResult(variables.operation, result)
     },
-    onError: error,
+    onError: (_err: Error, variables) => {
+      if (variables.ownerUserID !== userID) return
+      updatePending({ ...variables.operation, step: { kind: 'unknown' } })
+      error(new Error(unknownMessage))
+    },
   })
+  useEffect(() => {
+    if (!open || !pending) return
+    let active = true
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const poll = async () => {
+      setChecking(true)
+      try {
+        const result =
+          pending.action === 'create'
+            ? await queryTransfer(pending.requestKey)
+            : await queryTransferByID(pending.id)
+        if (!active) return
+        setRecoveryError(false)
+        acceptResult(pending, result)
+      } catch {
+        if (active) setRecoveryError(true)
+      } finally {
+        if (active) {
+          setChecking(false)
+          timer = setTimeout(() => void poll(), 4000)
+        }
+      }
+    }
+    void poll()
+    return () => {
+      active = false
+      if (timer) clearTimeout(timer)
+    }
+  }, [open, pending, pollTick, acceptResult])
+  const configuredCoreOrigin = import.meta.env?.VITE_CORE_PUBLIC_ORIGIN
+  const confirmationURL =
+    pending?.step.kind === 'confirmation'
+      ? trustedConfirmationURL(
+          pending.step.url,
+          pending.action,
+          pending.step.id,
+          window.location.origin,
+          typeof configuredCoreOrigin === 'string'
+            ? configuredCoreOrigin
+            : undefined
+        )
+      : null
   const date = (value: number) =>
     value ? new Date(value * 1000).toLocaleString() : '—'
   const status = (value: WalletTransfer['status']) =>
@@ -226,7 +372,9 @@ export function WalletTransfers({
       ? t('Claimed')
       : value === 'cancelled'
         ? t('Cancelled')
-        : t('Awaiting claim')
+        : value === 'awaiting_confirmation'
+          ? t('Awaiting confirmation')
+          : t('Awaiting claim')
   return (
     <>
       <div className='flex justify-end'>
@@ -251,8 +399,18 @@ export function WalletTransfers({
           <form
             onSubmit={(event) => {
               event.preventDefault()
-              if (quota && quota <= balance && !create.isPending) {
-                create.mutate()
+              if (quota && quota <= balance && !create.isPending && !pending) {
+                const operation: Extract<
+                  PendingTransfer,
+                  { action: 'create' }
+                > = {
+                  action: 'create',
+                  requestKey,
+                  quota,
+                  step: { kind: 'unknown' },
+                }
+                updatePending(operation)
+                create.mutate({ ownerUserID: userID, operation })
               }
             }}
           >
@@ -265,7 +423,11 @@ export function WalletTransfers({
                   id='transfer-amount'
                   inputMode='decimal'
                   value={amount}
-                  disabled={create.isPending || currency.quotaToInput(1) === ''}
+                  disabled={
+                    !!pending ||
+                    create.isPending ||
+                    currency.quotaToInput(1) === ''
+                  }
                   onChange={(event) => {
                     const value = event.target.value
                     const parsed = currency.amountToQuota(value)
@@ -279,13 +441,15 @@ export function WalletTransfers({
                 />
                 <p className='text-muted-foreground text-sm'>
                   {t(
-                    'The amount is deducted immediately. You can cancel before it is claimed.'
+                    'Funds are held only after you confirm the exact amount on the confirmation page.'
                   )}
                 </p>
               </Field>
               <Button
                 type='submit'
-                disabled={!quota || quota > balance || create.isPending}
+                disabled={
+                  !!pending || !quota || quota > balance || create.isPending
+                }
               >
                 {create.isPending
                   ? t('Creating...')
@@ -293,6 +457,63 @@ export function WalletTransfers({
               </Button>
             </FieldGroup>
           </form>
+          {pending && (
+            <section
+              aria-live='polite'
+              className='grid gap-3 rounded-lg border p-3 text-sm'
+            >
+              <p className='font-medium'>
+                {pending.step.kind === 'confirmation'
+                  ? t('Awaiting confirmation')
+                  : t(
+                      'The result is unknown. Check this call instead of starting it again.'
+                    )}
+              </p>
+              <p>{formatTransferQuota(pending.quota)}</p>
+              <p className='text-muted-foreground'>
+                {t(
+                  'Finish confirmation, then check this transfer. The original request is kept until its result is known.'
+                )}
+              </p>
+              <code className='break-all'>
+                {pending.requestKey ??
+                  (pending.action === 'cancel' ? pending.id : '')}
+              </code>
+              {(recoveryError ||
+                (pending.step.kind === 'confirmation' && !confirmationURL)) && (
+                <p role='status'>
+                  {t(
+                    'The result is unknown. Check this call instead of starting it again.'
+                  )}
+                </p>
+              )}
+              <div className='flex flex-wrap gap-2'>
+                {confirmationURL && (
+                  <Button
+                    type='button'
+                    onClick={() => {
+                      // Validated origin and exact action/id path; backend cannot open an arbitrary URL.
+                      window.open(
+                        confirmationURL,
+                        '_blank',
+                        'noopener,noreferrer'
+                      )
+                    }}
+                  >
+                    {t('Continue')}
+                  </Button>
+                )}
+                <Button
+                  type='button'
+                  variant='outline'
+                  onClick={() => setPollTick((value) => value + 1)}
+                  disabled={checking}
+                >
+                  {checking ? t('Loading...') : t('Refresh')}
+                </Button>
+              </div>
+            </section>
+          )}
           {share && (
             <TransferShare
               transfer={
@@ -343,12 +564,14 @@ export function WalletTransfers({
                     <p>
                       {t('Claimed at')}: {date(transfer.claimed_at)}
                     </p>
-                    <p className='break-all'>
-                      {t('Recipient')}: #{transfer.recipient_id} ·{' '}
-                      {transfer.recipient_name || transfer.recipient_username} ·{' '}
-                      {transfer.recipient_username} ·{' '}
-                      {transfer.recipient_email || '—'}
-                    </p>
+                    {hasRecipientDetails(transfer) && (
+                      <p className='break-all'>
+                        {t('Recipient')}: #{transfer.recipient_id} ·{' '}
+                        {transfer.recipient_name || transfer.recipient_username}{' '}
+                        · {transfer.recipient_username} ·{' '}
+                        {transfer.recipient_email || '—'}
+                      </p>
+                    )}
                   </>
                 )}
                 {transfer.status === 'cancelled' && (
@@ -358,28 +581,51 @@ export function WalletTransfers({
                 )}
 
                 <div className='flex flex-wrap gap-2'>
-                  <Button
-                    variant='outline'
-                    size='sm'
-                    onClick={() => setShare(transfer)}
-                  >
-                    {t('Link and QR code')}
-                  </Button>
+                  {canShareTransfer(transfer) && (
+                    <Button
+                      variant='outline'
+                      size='sm'
+                      onClick={() => setShare(transfer)}
+                    >
+                      {t('Link and QR code')}
+                    </Button>
+                  )}
+                  {transfer.status === 'awaiting_confirmation' &&
+                    transfer.request_key && (
+                      <Button
+                        variant='outline'
+                        size='sm'
+                        disabled={!!pending}
+                        onClick={() =>
+                          updatePending({
+                            action: 'create',
+                            requestKey: transfer.request_key ?? '',
+                            quota: transfer.quota,
+                            step: { kind: 'unknown' },
+                          })
+                        }
+                      >
+                        {t('Continue')}
+                      </Button>
+                    )}
                   {transfer.status === 'pending' && (
                     <Button
                       variant='ghost'
                       size='sm'
-                      disabled={cancel.isPending}
+                      disabled={!!pending || cancel.isPending}
                       onClick={() => {
-                        if (
-                          window.confirm(
-                            t(
-                              'Cancel this transfer and refund the amount to your wallet?'
-                            )
-                          )
-                        ) {
-                          cancel.mutate(transfer.id)
+                        const operation: Extract<
+                          PendingTransfer,
+                          { action: 'cancel' }
+                        > = {
+                          action: 'cancel',
+                          id: transfer.id,
+                          quota: transfer.quota,
+                          requestKey: transfer.request_key,
+                          step: { kind: 'unknown' },
                         }
+                        updatePending(operation)
+                        cancel.mutate({ ownerUserID: userID, operation })
                       }}
                     >
                       {t('Cancel transfer')}

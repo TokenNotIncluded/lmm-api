@@ -75,12 +75,21 @@ GRANT USAGE ON SEQUENCE core_abuse.audit_id_seq TO {name};
                 .unwrap();
         if history_installed {
             sqlx::raw_sql(&format!(
-                "GRANT USAGE ON SCHEMA core_history TO {0}; GRANT SELECT ON core_history.sources,core_history.log_records TO {0}",
+                "GRANT USAGE ON SCHEMA core_history TO {0}; GRANT SELECT ON core_history.sources,core_history.log_records,core_history.scope_receipts TO {0}",
                 name
             ))
             .execute(owner)
             .await
             .unwrap();
+        }
+        let gift_installed: bool =
+            sqlx::query_scalar("SELECT to_regnamespace('core_gift') IS NOT NULL")
+                .fetch_one(owner)
+                .await
+                .unwrap();
+        if gift_installed {
+            sqlx::raw_sql(&format!("GRANT USAGE ON SCHEMA core_gift TO {0}; GRANT SELECT ON core_gift.risk_key,core_gift.policy,core_gift.qualifications TO {0}; GRANT INSERT ON core_gift.qualifications TO {0}; GRANT EXECUTE ON FUNCTION core_gift.lock_eligibility(bigint) TO {0}",name))
+                .execute(owner).await.unwrap();
         }
         let mut url = reqwest::Url::parse(&std::env::var("DATABASE_URL").unwrap()).unwrap();
         assert!(matches!(url.host_str(), Some("localhost" | "127.0.0.1")));
@@ -101,6 +110,10 @@ GRANT USAGE ON SEQUENCE core_abuse.audit_id_seq TO {name};
         }
     }
     pub async fn optional(&self, schema: &str) {
+        if schema == "core_market_oauth" {
+            sqlx::raw_sql(&format!("GRANT USAGE ON SCHEMA core_market_oauth TO {0}; GRANT SELECT,INSERT ON core_market_oauth.clients,core_market_oauth.requests,core_market_oauth.families,core_market_oauth.codes,core_market_oauth.tokens TO {0}; GRANT UPDATE(revoked_at) ON core_market_oauth.clients,core_market_oauth.families TO {0}; GRANT UPDATE(consumed_at) ON core_market_oauth.requests,core_market_oauth.codes,core_market_oauth.tokens TO {0}; GRANT EXECUTE ON FUNCTION core_market_oauth.scope_set(text[]) TO {0}",self.name)).execute(&self.owner).await.unwrap();
+            return;
+        }
         if schema == "core_console" {
             sqlx::raw_sql(&format!("GRANT USAGE ON SCHEMA core_console TO {0}; GRANT SELECT ON core_console.options,core_console.initialization,core_console.announcement_reads TO {0}; GRANT INSERT ON core_console.announcement_reads TO {0}",self.name))
                 .execute(&self.owner).await.unwrap();
@@ -117,6 +130,39 @@ GRANT USAGE ON SEQUENCE core_abuse.audit_id_seq TO {name};
             return;
         }
         let sql = match schema {
+            "support_projection" => format!(
+                "GRANT USAGE ON SCHEMA core_commerce TO {0}; GRANT SELECT ON core_commerce.orders TO {0}",
+                self.name
+            ),
+            "core_assistant_tools" => format!(
+                "GRANT USAGE ON SCHEMA core_assistant_tools,core_payments,core_humangrant TO {0}; GRANT SELECT,UPDATE(revision) ON core_humangrant.human_grant_gate TO {0}; GRANT SELECT ON core_payments.intents,core_payments.accepted_proofs,core_payments.refund_holds,core_payments.blocked_refunds TO {0}; GRANT SELECT,INSERT ON core_assistant_tools.confirmations TO {0}; GRANT UPDATE(nonce_sha256,state,confirmed_at) ON core_assistant_tools.confirmations TO {0}",
+                self.name
+            ),
+            "core_assistant" => format!(
+                r#"
+              GRANT USAGE ON SCHEMA core_assistant TO {0};
+              GRANT SELECT,INSERT ON core_assistant.conversations,core_assistant.grants,core_assistant.operations TO {0};
+              GRANT UPDATE(revoked) ON core_assistant.grants TO {0};
+              GRANT UPDATE(answer_text,completed_at,gift_receipt,gift_tool_id,gift_response_sha256) ON core_assistant.operations TO {0};
+              GRANT USAGE,SELECT ON SEQUENCE core_assistant.operations_position_seq TO {0};
+              GRANT SELECT,INSERT ON core_gift.decisions,core_gift.registration_profiles,core_gift.fingerprints TO {0};
+              GRANT UPDATE(claimed_at,ledger_journal_id) ON core_gift.decisions TO {0};
+              GRANT UPDATE(observed_at) ON core_gift.registration_profiles TO {0};
+              GRANT DELETE ON core_gift.fingerprints TO {0};
+              GRANT USAGE,SELECT ON SEQUENCE core_gift.fingerprints_id_seq TO {0};
+            "#,
+                self.name
+            ),
+            "core_gift" => format!(
+                r#"
+              GRANT SELECT,INSERT ON core_gift.decisions,core_gift.registration_profiles,core_gift.fingerprints TO {0};
+              GRANT UPDATE(claimed_at,ledger_journal_id) ON core_gift.decisions TO {0};
+              GRANT UPDATE(observed_at) ON core_gift.registration_profiles TO {0};
+              GRANT DELETE ON core_gift.fingerprints TO {0};
+              GRANT USAGE,SELECT ON SEQUENCE core_gift.fingerprints_id_seq TO {0};
+            "#,
+                self.name
+            ),
             "web_identity" => format!(
                 r#"
               GRANT USAGE ON SCHEMA public TO {0};
@@ -134,11 +180,22 @@ GRANT USAGE ON SEQUENCE core_abuse.audit_id_seq TO {name};
                 r#"
               GRANT USAGE ON SCHEMA core_charging TO {0};
               GRANT SELECT ON ALL TABLES IN SCHEMA core_charging TO {0};
-              GRANT INSERT,UPDATE ON core_charging.budgets,core_charging.subscriptions,core_charging.requests,core_charging.ledger_holds TO {0};
+              GRANT INSERT,UPDATE ON core_charging.budgets,core_charging.subscriptions,core_charging.ledger_holds TO {0};
+              GRANT INSERT(id,actor_user_id,key_id,oauth_source,assistant_grant_id,assistant_sponsor_account_id,owner_account_id,payer_account_id,fingerprint,worker_digest,spec_digest,price,source_subscription_id,source_start,source_end,authorized_at,lease_until,hard_deadline,state,reserved), UPDATE(state,reserved,input_tokens,cached_tokens,output_tokens,settled,refunded,lease_until,revision,outcome) ON core_charging.requests TO {0};
               GRANT INSERT ON core_charging.budget_checks,core_charging.usage_events,core_charging.refunds,core_charging.policy_events,core_charging.ledger_commands,core_charging.external_consumption TO {0};
               GRANT UPDATE(refunded) ON core_charging.external_consumption TO {0};
               GRANT USAGE ON SEQUENCE core_charging.budgets_id_seq,core_charging.subscriptions_id_seq,core_charging.policy_events_id_seq TO {0};
               GRANT EXECUTE ON FUNCTION core_charging.period_window(text,bigint,bigint,bigint),core_charging.subscription_window(bigint,bigint),core_charging.committed_credits(text,bigint,bigint,bigint) TO {0};
+            "#,
+                self.name
+            ),
+            "core_image" => format!(
+                r#"
+              GRANT USAGE ON SCHEMA core_image,core_tool_market TO {0};
+              GRANT SELECT,INSERT,UPDATE(state,confirmed_at,confirmation_digest,confirmation_sid,charge_id,output,output_digest,image_usage,settled_credits) ON core_image.operations TO {0};
+              GRANT INSERT(image_operation_id),UPDATE(image_usage) ON core_charging.requests TO {0};
+              GRANT EXECUTE ON FUNCTION core_image.valid_output(jsonb),core_tool_market.lock_builtin_context(text) TO {0};
+              GRANT SELECT ON core_tool_market.credit_calls,core_tool_market.credit_consents,core_tool_market.credit_quotes,core_tool_market.credit_builtin_bindings TO {0};
             "#,
                 self.name
             ),
@@ -162,6 +219,25 @@ GRANT USAGE ON SEQUENCE core_abuse.audit_id_seq TO {name};
             "#,
                 self.name
             ),
+            "core_tool_market" => {
+                let credit =
+                    include_str!("../../../../deployment/postgres/grant-tool-market-credit.sql")
+                        .replace(":\"runtime_role\"", &self.name);
+                format!(
+                    r#"
+ GRANT USAGE ON SCHEMA core_tool_market,core_charging TO {0};
+ GRANT SELECT ON core_tool_market.publishers TO {0};
+ GRANT SELECT,INSERT ON core_tool_market.quotes TO {0};
+ GRANT SELECT,INSERT,UPDATE(revoked,used_calls,used_amount) ON core_tool_market.approvals TO {0};
+ GRANT SELECT,INSERT,UPDATE(receipt,result_hash) ON core_tool_market.calls TO {0};
+ GRANT SELECT ON core_charging.budgets,core_charging.subscriptions,core_charging.requests,core_charging.external_consumption,core_charging.budget_opening_consumption,core_charging.subscription_opening_consumption TO {0};
+ GRANT INSERT,UPDATE(refunded) ON core_charging.external_consumption TO {0};GRANT INSERT ON core_charging.budget_checks TO {0};
+ GRANT EXECUTE ON FUNCTION core_charging.period_window(text,bigint,bigint,bigint),core_charging.subscription_window(bigint,bigint),core_charging.committed_credits(text,bigint,bigint,bigint) TO {0};
+ {credit}
+ "#,
+                    self.name
+                )
+            }
             _ => panic!("unknown synthetic optional schema"),
         };
         sqlx::raw_sql(&sql).execute(&self.owner).await.unwrap();

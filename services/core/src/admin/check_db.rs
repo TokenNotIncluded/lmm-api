@@ -155,14 +155,23 @@ fn execution() -> Result<Execution, Rejection> {
 fn required() -> Result<RequiredCapabilities, Rejection> {
     Ok(RequiredCapabilities {
         models: config::setting_os("LMM_CORE_MODEL_CONFIG_FILE").is_some(),
+        images: config::images_configured()
+            .map_err(|_| Rejection::new("CHECK_DB_CONFIG_INVALID", 2))?,
         events: config::setting_os("LMM_CORE_RPC_SOCKET").is_some(),
         payments: config::payments_configured(),
         commerce: config::commerce_configured(),
+        assistant: config::assistant_configured(),
+        assistant_tools: config::assistant_tools_enabled()
+            .map_err(|_| Rejection::new("CHECK_DB_CONFIG_INVALID", 2))?,
+        tool_market: config::tool_market_configured(),
         console: config::console_enabled()
             .map_err(|_| Rejection::new("CHECK_DB_CONFIG_INVALID", 2))?,
         web_identity: config::setting_os("LMM_CORE_WEB_ORIGIN").is_some()
             || config::setting_os("LMM_CORE_WEB_REFRESH_KEY_FILE").is_some(),
         oauth2: config::oauth2_configured(),
+        market_oauth: config::market_oauth_configured(),
+        wallet: config::wallet_configured(),
+        bounties: config::bounties_configured(),
     })
 }
 fn checked(error: DatabaseCheckError) -> Rejection {
@@ -185,7 +194,10 @@ async fn observe(
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(1)
         .min_connections(0)
-        .acquire_timeout(Duration::from_secs(3))
+        .acquire_timeout(Duration::from_secs(u64::from(
+            config::database_acquire_timeout_seconds()
+                .map_err(|_| Rejection::new("CHECK_DB_CONFIG_INVALID", 2))?,
+        )))
         .after_connect(|connection, _| {
             Box::pin(async move {
                 sqlx::query("SET default_transaction_read_only=on")

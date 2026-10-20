@@ -28,6 +28,7 @@ pub struct Bootstrap {
 pub enum Operation {
     InitDb,
     CompleteSetup,
+    InstallToolMarketBuiltins,
     BootstrapUser(Bootstrap),
     InstallUsageReceiptIndex([u8; 32]),
     PlanAdminActivation(PlanAdminActivationRequest),
@@ -109,6 +110,13 @@ pub async fn run(operation: Operation) -> Result<(), Box<dyn Error>> {
         Operation::InstallUsageReceiptIndex(prior) => {
             lmm_core::core_schema::install_usage_receipt_index(&pool, prior).await?;
             println!("Usage receipt index installed; schema receipts verified atomically.");
+        }
+        Operation::InstallToolMarketBuiltins => {
+            lmm_core::core_schema::check(&pool).await?;
+            let receipt =
+                lmm_core::tool_market::builtin_install::install_compiled_builtins(&pool).await?;
+            serde_json::to_writer(io::stdout().lock(), &receipt)?;
+            println!();
         }
         Operation::InitDb => {
             lmm_core::core_schema::init(&pool).await?;

@@ -1,5 +1,19 @@
 # Business extension acceptance still required
 
+The 2026-10-21 deployment preparation adds independent, isolated Core and Go
+main-process payment recovery evidence: formal database installation, signed
+top-up callback, durable refund dispatch acknowledgement before provider work,
+actual termination and restart of both programs, no duplicate refund POST, and
+one release after the original signed failure callback. Duplicate and conflicting
+signed callbacks preserve the balanced ledger. The provider was a synthetic TCP
+service, not external Stripe. Separately, native System One acceptance covers
+39 distinct checks, including the official JavaScript and Python SDKs over real
+HTTP with raw JSON, zstd and multipart images, original API key authority,
+transactional charging, uncertain-response holds and caller disconnects; see
+[the independent tests](../services/core/tests/systemone_independent.rs) and
+[the protocol limits](jev-native-relay.md). These scoped results do not complete
+existing-site migration, the browser page matrix or production deployment.
+
 The old single-server qualification tests cannot execute after their database, router and models have been removed. Their removal does not demonstrate that replacement business modules work. The following behaviors must receive executable tests when the corresponding Rust commands and Go modules are implemented.
 
 - Paid tools: separate buyers, client identities and authorization scopes. Duplicate calls must not charge twice. Concurrent reservations must respect balances and all applicable budgets.

@@ -220,6 +220,7 @@ impl Billing for Bridge {
                     .max(conservative.cached_per_million);
                 conservative
                     .cost(Usage {
+                        image: None,
                         upstream_cost_atto_usd: Some(crate::upstream_cost::ATTO_USD),
                         input: self.policy.input_token_ceiling,
                         cached: 0,
@@ -316,158 +317,172 @@ impl Billing for Bridge {
                     op.oauth_issuer.clone(),
                 )
             };
-            let price = selected.price.clone();
-            let upstream_cost = price.upstream_cost_group_ppm.is_some();
-            if reservation.id != report.request_id
-                || report.route_id.as_deref() != Some(selected.route_id.as_str())
-                || report.price_version != Some(selected.quote.price().version())
-            {
-                return Err(RelayError::Conflict);
-            }
-            let (usage, outcome) = if !report.upstream_attempted {
-                (
-                    Usage {
-                        upstream_cost_atto_usd: upstream_cost.then_some(0),
-                        ..Usage::default()
-                    },
-                    Outcome::Cancelled,
-                )
-            } else {
-                // Partial/local output is not an authoritative final provider
-                // usage receipt. Never substitute missing usage with zero.
-                if !report.provider_complete {
-                    return Err(RelayError::SettlementPending);
+            let result = async {
+                let price = selected.price.clone();
+                let upstream_cost = price.upstream_cost_group_ppm.is_some();
+                if reservation.id != report.request_id
+                    || report.route_id.as_deref() != Some(selected.route_id.as_str())
+                    || report.price_version != Some(selected.quote.price().version())
+                {
+                    return Err(RelayError::Conflict);
                 }
-                if upstream_cost {
-                    let usage = complete_usage(report.usage, true)?;
-                    if usage.upstream_cost_atto_usd.is_none() {
-                        return Err(RelayError::SettlementPending);
-                    }
-                    if usage.input > self.policy.input_token_ceiling
-                        || usage.output > i64::from(output_ceiling)
-                    {
-                        return Err(RelayError::SettlementPending);
-                    }
-                    (usage, Outcome::Completed)
-                } else {
-                    let usage = complete_usage(report.usage, false)?;
-                    if usage.input > self.policy.input_token_ceiling
-                        || usage.output > i64::from(output_ceiling)
-                    {
-                        return Err(RelayError::SettlementPending);
-                    }
-                    // The legacy ledger must agree with the captured exact quote.
-                    // Never reinterpret a price or a missing receipt at settlement.
-                    let disjoint = crate::routing::Usage::from_totals(
-                        usage.input as u64,
-                        usage.output as u64,
-                        usage.cached as u64,
-                        0,
+                let (usage, outcome) = if !report.upstream_attempted {
+                    (
+                        Usage {
+                            upstream_cost_atto_usd: upstream_cost.then_some(0),
+                            ..Usage::default()
+                        },
+                        Outcome::Cancelled,
                     )
-                    .map_err(|_| RelayError::SettlementPending)?;
-                    let quoted = selected
-                        .quote
-                        .charge(disjoint)
-                        .map_err(|_| RelayError::SettlementPending)?;
-                    let ledger = selected.price.cost(usage).map_err(error)?;
-                    if i64::try_from(quoted.0).ok() != Some(ledger) {
+                } else {
+                    // Partial/local output is not an authoritative final provider
+                    // usage receipt. Never substitute missing usage with zero.
+                    if !report.provider_complete {
                         return Err(RelayError::SettlementPending);
                     }
-                    (usage, Outcome::Completed)
-                }
-            };
-            if upstream_cost {
-                let amount = price.cost(usage).map_err(error)?;
-                let charge = self
-                    .charging
-                    .resolve(&reservation.id)
-                    .await
-                    .map_err(error)?
-                    .ok_or(RelayError::SettlementPending)?;
-                if amount > charge.reserved {
-                    retry(|| async {
-                        if let Some(issuer) = &oauth_issuer {
-                            self.charging
-                                .increase_oauth_with_context(
-                                    issuer,
-                                    &secret,
-                                    &reservation.id,
-                                    &worker,
-                                    amount,
-                                    peer,
-                                )
-                                .await
-                        } else {
-                            self.charging
-                                .increase_with_context(
-                                    &secret,
-                                    &reservation.id,
-                                    &worker,
-                                    amount,
-                                    peer,
-                                )
-                                .await
+                    self.provider_policy.validate_usage(
+                        &selected.attempt,
+                        &report.usage,
+                        upstream_cost,
+                    )?;
+                    if upstream_cost {
+                        let usage = complete_usage(report.usage, true)?;
+                        if usage.upstream_cost_atto_usd.is_none() {
+                            return Err(RelayError::SettlementPending);
                         }
+                        if usage.input > self.policy.input_token_ceiling
+                            || usage.output > i64::from(output_ceiling)
+                        {
+                            return Err(RelayError::SettlementPending);
+                        }
+                        (usage, Outcome::Completed)
+                    } else {
+                        let usage = complete_usage(report.usage, false)?;
+                        if usage.input > self.policy.input_token_ceiling
+                            || usage.output > i64::from(output_ceiling)
+                        {
+                            return Err(RelayError::SettlementPending);
+                        }
+                        // The legacy ledger must agree with the captured exact quote.
+                        // Never reinterpret a price or a missing receipt at settlement.
+                        let disjoint = crate::routing::Usage::from_totals(
+                            usage.input as u64,
+                            usage.output as u64,
+                            usage.cached as u64,
+                            0,
+                        )
+                        .map_err(|_| RelayError::SettlementPending)?;
+                        let quoted = selected
+                            .quote
+                            .charge(disjoint)
+                            .map_err(|_| RelayError::SettlementPending)?;
+                        let ledger = selected.price.cost(usage).map_err(error)?;
+                        if i64::try_from(quoted.0).ok() != Some(ledger) {
+                            return Err(RelayError::SettlementPending);
+                        }
+                        (usage, Outcome::Completed)
+                    }
+                };
+                if upstream_cost {
+                    let amount = price.cost(usage).map_err(error)?;
+                    let charge = self
+                        .charging
+                        .resolve(&reservation.id)
+                        .await
+                        .map_err(error)?
+                        .ok_or(RelayError::SettlementPending)?;
+                    if amount > charge.reserved {
+                        retry(|| async {
+                            if let Some(issuer) = &oauth_issuer {
+                                self.charging
+                                    .increase_oauth_with_context(
+                                        issuer,
+                                        &secret,
+                                        &reservation.id,
+                                        &worker,
+                                        amount,
+                                        peer,
+                                    )
+                                    .await
+                            } else {
+                                self.charging
+                                    .increase_with_context(
+                                        &secret,
+                                        &reservation.id,
+                                        &worker,
+                                        amount,
+                                        peer,
+                                    )
+                                    .await
+                            }
+                        })
+                        .await
+                        .map_err(error)?;
+                    }
+                }
+                // Non-streaming relay exposes the body only after this durable final
+                // transaction. The checkpoint records the provider observation.
+                // Both finalization stages share one start window; neither stage
+                // cancels an in-flight transaction or replays an unknown commit.
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+                retry_finalize(
+                    deadline,
+                    &reservation.id,
+                    FinalizeStage::ProviderFinal,
+                    || {
+                        self.charging
+                            .checkpoint(&reservation.id, &worker, "provider-final", usage)
+                    },
+                )
+                .await
+                .map_err(error)?;
+                let settlement =
+                    retry_finalize(deadline, &reservation.id, FinalizeStage::Settle, || {
+                        self.charging
+                            .settle(&reservation.id, &worker, usage, outcome)
                     })
+                    .await;
+                match settlement {
+                    Ok(charge)
+                        if confirmed_settlement(
+                            &charge,
+                            &reservation.id,
+                            &selected.price,
+                            usage,
+                            outcome,
+                        ) =>
+                    {
+                        Ok(())
+                    }
+                    Ok(_) => Err(RelayError::SettlementPending),
+                    Err(charging::Error::CommitUnknown) => {
+                        // Resolve the same operation after a lost COMMIT reply.
+                        // Never create another request or dispatch another model call.
+                        match self.charging.resolve(&reservation.id).await {
+                            Ok(Some(charge))
+                                if confirmed_settlement(
+                                    &charge,
+                                    &reservation.id,
+                                    &selected.price,
+                                    usage,
+                                    outcome,
+                                ) =>
+                            {
+                                Ok(())
+                            }
+                            _ => Err(RelayError::SettlementPending),
+                        }
+                    }
+                    Err(e) => Err(error(e)),
+                }
+            }
+            .await;
+            if result.is_err() && report.upstream_attempted {
+                retry(|| self.charging.mark_unknown(&reservation.id, &worker))
                     .await
                     .map_err(error)?;
-                }
             }
-            // Non-streaming relay exposes the body only after this durable final
-            // transaction. The checkpoint records the provider observation.
-            // Both finalization stages share one start window; neither stage
-            // cancels an in-flight transaction or replays an unknown commit.
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
-            retry_finalize(
-                deadline,
-                &reservation.id,
-                FinalizeStage::ProviderFinal,
-                || {
-                    self.charging
-                        .checkpoint(&reservation.id, &worker, "provider-final", usage)
-                },
-            )
-            .await
-            .map_err(error)?;
-            let settlement =
-                retry_finalize(deadline, &reservation.id, FinalizeStage::Settle, || {
-                    self.charging
-                        .settle(&reservation.id, &worker, usage, outcome)
-                })
-                .await;
-            match settlement {
-                Ok(charge)
-                    if confirmed_settlement(
-                        &charge,
-                        &reservation.id,
-                        &selected.price,
-                        usage,
-                        outcome,
-                    ) =>
-                {
-                    Ok(())
-                }
-                Ok(_) => Err(RelayError::SettlementPending),
-                Err(charging::Error::CommitUnknown) => {
-                    // Resolve the same operation after a lost COMMIT reply.
-                    // Never create another request or dispatch another model call.
-                    match self.charging.resolve(&reservation.id).await {
-                        Ok(Some(charge))
-                            if confirmed_settlement(
-                                &charge,
-                                &reservation.id,
-                                &selected.price,
-                                usage,
-                                outcome,
-                            ) =>
-                        {
-                            Ok(())
-                        }
-                        _ => Err(RelayError::SettlementPending),
-                    }
-                }
-                Err(e) => Err(error(e)),
-            }
+            result
         })
     }
 }
@@ -559,6 +574,7 @@ pub(super) fn complete_usage(
         None
     };
     Ok(Usage {
+        image: None,
         upstream_cost_atto_usd,
         input,
         cached,
@@ -947,6 +963,7 @@ mod a07_billing_tests {
             owner_account_id: 3,
             payer_account_id: 3,
             price: charging::Price {
+                image: None,
                 upstream_cost_group_ppm: None,
                 version: "routing-1-rule-1".into(),
                 model: "synthetic-model".into(),
@@ -962,6 +979,7 @@ mod a07_billing_tests {
             state: "settled".into(),
             reserved: 100,
             usage: Usage {
+                image: None,
                 upstream_cost_atto_usd: None,
                 input: 10,
                 cached: 2,
@@ -1032,6 +1050,7 @@ mod a07_billing_tests {
                 false,
             ),
             Ok(Usage {
+                image: None,
                 upstream_cost_atto_usd: None,
                 input: 10,
                 cached: 2,
@@ -1069,6 +1088,7 @@ mod a07_billing_tests {
         assert_eq!(
             complete_usage(observed, false),
             Ok(Usage {
+                image: None,
                 upstream_cost_atto_usd: None,
                 input: 10,
                 cached: 2,
@@ -1092,6 +1112,7 @@ mod a07_billing_tests {
                 true,
             ),
             Ok(Usage {
+                image: None,
                 upstream_cost_atto_usd: Some(123_456_789_000_000_000),
                 input: 10,
                 cached: 2,

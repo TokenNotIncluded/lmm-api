@@ -1,5 +1,7 @@
 //! Development regressions. These require new isolated PostgreSQL databases;
 //! source presence or a skipped database run is not historical migration proof.
+#[path = "common/history_scope.rs"]
+mod history_scope;
 use lmm_core::{
     core_schema,
     history_read::{HistoryError, HistoryQuery, HistoryStore, ReadRoute},
@@ -23,6 +25,7 @@ async fn fixture(pool: &PgPool) -> (String, String, i64, i64) {
             .await
             .unwrap();
     sqlx::query("INSERT INTO core_history.sources(contract_version,source_archive_sha256,mapping_sha256,source_namespace,observed_at,complete) VALUES('core.history-source.v1',repeat('a',64),repeat('b',64),'synthetic-only',1700000000,true)").execute(pool).await.unwrap();
+    history_scope::install(pool).await;
     (user.secret, admin.secret, owner, other)
 }
 async fn row(
@@ -71,6 +74,7 @@ async fn readonly_key_cannot_use_session_or_other_key_scope(pool: PgPool) {
     row(&pool, 1, 7, owner, Some(1), Some(1)).await;
     row(&pool, 2, 7, owner, Some(9), Some(1)).await;
     sqlx::query("UPDATE core_history.log_records SET token_id=CASE WHEN source_log_id=1 THEN $1 ELSE $2 END").bind(key.id).bind(other.id).execute(&pool).await.unwrap();
+    history_scope::install(&pool).await;
     let store = HistoryStore::new(pool);
     let result = store
         .read(
@@ -230,6 +234,7 @@ async fn concurrent_owner_changes_cannot_split_count_page_and_money_snapshots(po
             tokio::task::yield_now().await;
         }
     });
+    history_scope::install(&pool).await;
     let store = HistoryStore::new(pool);
     for _ in 0..40 {
         let result = store

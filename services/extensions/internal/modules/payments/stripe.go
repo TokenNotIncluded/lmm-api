@@ -20,23 +20,14 @@ type StripeConfig struct {
 	CancelURL      string
 }
 type Stripe struct {
-	cfg    StripeConfig
-	client *http.Client
+	cfg      StripeConfig
+	client   *http.Client
+	isolated *stripeIsolation
 }
 
 func NewStripe(cfg StripeConfig) (*Stripe, error) {
-	if !cfg.Channel.valid() || cfg.Channel.Provider != "stripe" || !strings.HasPrefix(cfg.Channel.Merchant, "acct_") || len(cfg.WebhookSecrets) != 0 || len(cfg.APIVersion) < 10 || len(cfg.APIVersion) > 64 {
-		return nil, ErrInvalid
-	}
-	for _, r := range cfg.APIVersion {
-		if r < 33 || r > 126 {
-			return nil, ErrInvalid
-		}
-	}
-	prefix := "sk_" + cfg.Channel.Environment + "_"
-	restricted := "rk_" + cfg.Channel.Environment + "_"
-	if !strings.HasPrefix(cfg.APIKey, prefix) && !strings.HasPrefix(cfg.APIKey, restricted) {
-		return nil, ErrInvalid
+	if err := validateStripeConfig(cfg); err != nil {
+		return nil, err
 	}
 	if _, err := secureURL(cfg.SuccessURL); err != nil {
 		return nil, err
@@ -45,6 +36,22 @@ func NewStripe(cfg StripeConfig) (*Stripe, error) {
 		return nil, err
 	}
 	return &Stripe{cfg: cfg, client: outboundClient()}, nil
+}
+func validateStripeConfig(cfg StripeConfig) error {
+	if !cfg.Channel.valid() || cfg.Channel.Provider != "stripe" || !strings.HasPrefix(cfg.Channel.Merchant, "acct_") || len(cfg.WebhookSecrets) != 0 || len(cfg.APIVersion) < 10 || len(cfg.APIVersion) > 64 {
+		return ErrInvalid
+	}
+	for _, r := range cfg.APIVersion {
+		if r < 33 || r > 126 {
+			return ErrInvalid
+		}
+	}
+	prefix := "sk_" + cfg.Channel.Environment + "_"
+	restricted := "rk_" + cfg.Channel.Environment + "_"
+	if !strings.HasPrefix(cfg.APIKey, prefix) && !strings.HasPrefix(cfg.APIKey, restricted) {
+		return ErrInvalid
+	}
+	return nil
 }
 func (s *Stripe) Channel() Channel                { return s.cfg.Channel }
 func (*Stripe) RefundEnabled() bool               { return true }
@@ -55,7 +62,12 @@ func (s *Stripe) api(ctx context.Context, method, path, key string, form url.Val
 	if key != "" {
 		h.Set("Idempotency-Key", key)
 	}
-	return requestJSON(ctx, s.client, method, "https://api.stripe.com/v1/"+path, form, h)
+	origin := "https://api.stripe.com"
+	if s.isolated != nil {
+		origin = s.isolated.origin
+		h.Set("X-LMM-Isolated-Binding", s.isolated.token)
+	}
+	return requestJSON(ctx, s.client, method, origin+"/v1/"+path, form, h)
 }
 func (s *Stripe) merchant(ctx context.Context) error {
 	b, err := s.api(ctx, "GET", "account", "", nil)
@@ -152,8 +164,7 @@ func (s *Stripe) Checkout(ctx context.Context, o Order, key string) (Checkout, e
 	if jsonObject(b, &v) != nil || !s.checkoutMatches(v, o) {
 		return Checkout{}, ErrConflict
 	}
-	u, err := secureURL(v.URL)
-	if err != nil || u.Hostname() != "checkout.stripe.com" {
+	if !s.validCheckoutURL(v.URL) {
 		return Checkout{}, ErrConflict
 	}
 	return Checkout{ID: v.ID, URL: v.URL, PaymentID: refID(v.PaymentIntent)}, nil
@@ -407,21 +418,29 @@ func apiEvidence(e *Event, id, state string) {
 	e.Evidence.EventID = stableKey("api", id, state)
 	e.Evidence.Signature = nil
 }
+
+// refundBeforeDispatch certifies only the local adapter path: the refund POST
+// has not been reached. Network failures from the POST are always ambiguous.
+type refundBeforeDispatch struct{ cause error }
+
+func (e refundBeforeDispatch) Error() string { return e.cause.Error() }
+func (e refundBeforeDispatch) Unwrap() error { return e.cause }
+
 func (s *Stripe) Refund(ctx context.Context, o Order, r Refund, key string) (RefundResult, error) {
 	if o.Intent.ID <= 0 || o.Intent.Merchant != s.cfg.Channel.Merchant || r.HoldReceipt == "" || !validAmount(r.AmountMinor) || r.AmountMinor > o.Intent.AmountMinor || o.PaymentID == "" {
-		return RefundResult{}, ErrInvalid
+		return RefundResult{}, refundBeforeDispatch{ErrInvalid}
 	}
 	if err := s.merchant(ctx); err != nil {
-		return RefundResult{}, err
+		return RefundResult{}, refundBeforeDispatch{err}
 	}
 	// Verify the saved transaction before the provider mutation. A timeout or
 	// conflicting binding leaves the Rust hold intact for reconciliation.
 	payment, _, err := s.paymentForOrder(ctx, o.PaymentID, o)
 	if err != nil {
-		return RefundResult{}, err
+		return RefundResult{}, refundBeforeDispatch{err}
 	}
 	if payment.Status != "succeeded" || payment.Received != payment.Amount {
-		return RefundResult{}, ErrConflict
+		return RefundResult{}, refundBeforeDispatch{ErrConflict}
 	}
 	f := url.Values{"payment_intent": {o.PaymentID}, "amount": {strconv.FormatInt(r.AmountMinor, 10)},
 		"metadata[lmm_order_id]": {o.ID}, "metadata[lmm_refund_id]": {r.ID},

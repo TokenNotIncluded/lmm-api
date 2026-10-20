@@ -5,26 +5,7 @@ use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use subtle::ConstantTimeEq;
 
-pub const DDL: &str = r#"
-CREATE SCHEMA IF NOT EXISTS core_humangrant;
-
-CREATE TABLE IF NOT EXISTS core_humangrant.human_grant_records (
-    kind VARCHAR(32) NOT NULL,
-    id VARCHAR(128) NOT NULL,
-    owner VARCHAR(128),
-    expires_at BIGINT,
-    payload TEXT NOT NULL,
-    PRIMARY KEY (kind, id)
-);
-CREATE INDEX IF NOT EXISTS idx_core_hg_owner ON core_humangrant.human_grant_records(kind, owner);
-CREATE INDEX IF NOT EXISTS idx_core_hg_expiry ON core_humangrant.human_grant_records(expires_at);
-
-CREATE TABLE IF NOT EXISTS core_humangrant.human_grant_gate (
-    id INT PRIMARY KEY,
-    revision BIGINT NOT NULL DEFAULT 1
-);
-INSERT INTO core_humangrant.human_grant_gate (id, revision) VALUES (1, 1) ON CONFLICT (id) DO NOTHING;
-"#;
+pub const DDL: &str = include_str!("../../schema/humangrant.sql");
 
 #[derive(Clone)]
 pub struct HumanGrantStore {
@@ -46,10 +27,21 @@ impl HumanGrantStore {
     }
 
     pub async fn begin(&self) -> Result<HumanGrantTx, ProtocolError> {
-        let tx = self.pool.begin().await.map_err(|e| {
+        let mut tx = self.pool.begin().await.map_err(|e| {
             eprintln!("store begin transaction error: {:?}", e);
             failure(500, "internal_error")
         })?;
+        // The single gate makes settings changes, consent, revocation and rate
+        // counters linearizable across all Core processes sharing this store.
+        let gate: Option<i32> = sqlx::query_scalar(
+            "SELECT id FROM core_humangrant.human_grant_gate WHERE id = 1 FOR UPDATE",
+        )
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|_| failure(500, "internal_error"))?;
+        if gate != Some(1) {
+            return Err(failure(503, "not_ready"));
+        }
         Ok(HumanGrantTx { tx })
     }
 }
@@ -356,7 +348,7 @@ impl HumanGrantTx {
             JOIN core_identity.accounts a ON a.id = u.personal_account_id
             JOIN core_identity.credentials c ON c.id = s.current_credential_id
             WHERE s.sid = $1
-            FOR SHARE OF u, a
+            FOR SHARE OF s, u, a, c
             "#,
         )
         .bind(sid)
@@ -508,7 +500,7 @@ impl HumanGrantTx {
             JOIN core_identity.accounts a ON a.id = u.personal_account_id
             JOIN core_identity.credentials c ON c.id = s.current_credential_id
             WHERE s.sid = $1 AND u.id = $2
-            FOR SHARE OF u, a
+            FOR SHARE OF s, u, a, c
             "#,
         )
         .bind(&human.session_id)

@@ -3,6 +3,7 @@ package assistant
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"regexp"
 	"strings"
@@ -51,6 +52,12 @@ func validGreetingTemplate(language, template string) bool {
 		}
 	}
 	return true
+}
+
+// ValidGreetingTemplate shares the preference domain's exact validation with
+// trusted preview adapters; it grants no permission to apply a change.
+func ValidGreetingTemplate(language, template string) bool {
+	return validGreetingTemplate(language, template)
 }
 
 func readGreeting(tx storage.Tx) (GreetingPreference, error) {
@@ -121,32 +128,66 @@ func (s *HistoryService) UpdateGreeting(ctx context.Context, token, language, te
 	}
 	var value GreetingPreference
 	err = repo.Within(ctx, p.Account.Key(), func(tx storage.Tx) error {
-		var err error
-		value, err = readGreeting(tx)
-		if err != nil {
-			return err
-		}
-		if value.Revision != revision {
-			return access.ErrConflict
-		}
-		if value.Revision == maxSafeHistoryID {
-			return access.ErrLimit
-		}
-		if strings.TrimSpace(template) == "" {
-			template = ""
-			delete(value.Templates, language)
-		} else {
-			value.Templates[language] = template
-		}
-		value.Revision++
-		value.UpdatedAt = s.now().Unix()
-		if value.UpdatedAt <= 0 || value.UpdatedAt > maxSafeHistoryID {
-			return access.ErrUnavailable
-		}
-		if err = tx.Put("preferences", greetingRecordID+":"+language, greetingTemplate{&template}); err != nil {
-			return err
-		}
-		return tx.Put("preferences", greetingRecordID, greetingVersion{value.Revision, value.UpdatedAt})
+		var updateErr error
+		value, updateErr = writeGreeting(tx, language, template, revision, s.now().Unix())
+		return updateErr
 	})
 	return value, err
+}
+
+func writeGreeting(tx storage.Tx, language, template string, revision, now int64) (GreetingPreference, error) {
+	if revision < 0 || revision > maxSafeHistoryID || !validGreetingTemplate(language, template) {
+		return GreetingPreference{}, access.ErrInvalid
+	}
+	value, err := readGreeting(tx)
+	if err != nil {
+		return value, err
+	}
+	if value.Revision != revision {
+		return value, access.ErrConflict
+	}
+	if value.Revision == maxSafeHistoryID {
+		return value, access.ErrLimit
+	}
+	if now <= 0 || now > maxSafeHistoryID {
+		return value, access.ErrUnavailable
+	}
+	if strings.TrimSpace(template) == "" {
+		template = ""
+		delete(value.Templates, language)
+	} else {
+		value.Templates[language] = template
+	}
+	value.Revision++
+	value.UpdatedAt = now
+	if err = tx.Put("preferences", greetingRecordID+":"+language, greetingTemplate{&template}); err != nil {
+		return value, err
+	}
+	err = tx.Put("preferences", greetingRecordID, greetingVersion{value.Revision, value.UpdatedAt})
+	return value, err
+}
+
+// UpdateGreetingTx is a trusted confirmation-coordinator hook. The caller must
+// verify the fresh original Session and exact redeemed browser proof first,
+// then consume that proof and the effect receipt in this same Go transaction.
+// This function never commits and is not a model-call or browser-write API.
+func UpdateGreetingTx(ctx context.Context, tx *sql.Tx, p access.Principal, language, template string, revision, now int64) (GreetingPreference, error) {
+	if tx == nil || p.UserID <= 0 || p.Level < 0 || p.Level > 6 || p.Account != (access.Account{Kind: "personal", ID: p.UserID}) {
+		return GreetingPreference{}, access.ErrForbidden
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "lmm_assistant:"+p.Account.Key()); err != nil {
+		return GreetingPreference{}, access.ErrUnavailable
+	}
+	return writeGreeting(&postgresTx{ctx: ctx, tx: tx, scope: p.Account.Key()}, language, template, revision, now)
+}
+
+// ReadGreetingTx shares the caller's operation journal transaction and lock.
+func ReadGreetingTx(ctx context.Context, tx *sql.Tx, p access.Principal) (GreetingPreference, error) {
+	if tx == nil || p.UserID <= 0 || p.Level < 0 || p.Level > 6 || p.Account != (access.Account{Kind: "personal", ID: p.UserID}) {
+		return GreetingPreference{}, access.ErrForbidden
+	}
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "lmm_assistant:"+p.Account.Key()); err != nil {
+		return GreetingPreference{}, access.ErrUnavailable
+	}
+	return readGreeting(&postgresTx{ctx: ctx, tx: tx, scope: p.Account.Key()})
 }

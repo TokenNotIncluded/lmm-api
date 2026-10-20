@@ -307,12 +307,19 @@ async fn restricted_role_checks_without_disabled_module_grants(pool: PgPool) {
         &role.pool,
         RequiredCapabilities {
             models: true,
+            images: false,
             events: true,
             payments: true,
             console: true,
             commerce: true,
+            assistant: false,
+            assistant_tools: false,
+            tool_market: false,
             web_identity: true,
             oauth2: false,
+            market_oauth: false,
+            wallet: false,
+            bounties: false,
         },
     )
     .await
@@ -821,6 +828,97 @@ async fn security_definer_public_execute_and_search_path_are_rejected(pool: PgPo
     assert_eq!(
         runtime_database::check(&role.pool, RequiredCapabilities::default()).await,
         Err(Error::UnsafePrivileges)
+    );
+    role.cleanup().await;
+}
+
+#[sqlx::test(migrations = false)]
+async fn image_authority_requires_explicit_grants_and_preserves_immutable_facts(pool: PgPool) {
+    core_schema::init(&pool).await.unwrap();
+    // An admitted raw provider response may grow when JSONB prints separators.
+    // This exact raw envelope remains persistable without enlarging HTTP caps.
+    let (raw_bytes, normalized_bytes, valid): (i32, i32, bool) = sqlx::query_as(
+        "WITH envelope AS (SELECT format('{\"data\":[{\"b64_json\":\"%s\",\"revised_prompt\":\"%s\"}]}',repeat('A',33554432),repeat('p',65490)) AS raw) SELECT octet_length(raw),octet_length((raw::jsonb)::text),core_image.valid_output(raw::jsonb) FROM envelope",
+    ).fetch_one(&pool).await.unwrap();
+    assert_eq!(raw_bytes, 33619968);
+    assert!(normalized_bytes > raw_bytes);
+    assert!(normalized_bytes <= raw_bytes + 4096);
+    assert!(
+        valid,
+        "normalizing an admitted envelope must not lose its receipt"
+    );
+    let role = runtime::RuntimeRole::create(&pool).await;
+    role.optional("core_charging").await;
+    role.optional("core_model").await;
+    let models = RequiredCapabilities {
+        models: true,
+        ..RequiredCapabilities::default()
+    };
+    runtime_database::check(&role.pool, models).await.unwrap();
+    let image_writes:bool=sqlx::query_scalar("SELECT has_column_privilege('core_charging.requests','image_operation_id','INSERT') OR has_column_privilege('core_charging.requests','image_usage','UPDATE') OR has_table_privilege((SELECT c.oid FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='core_image' AND c.relname='operations'),'INSERT')")
+        .fetch_one(&role.pool).await.unwrap();
+    assert!(
+        !image_writes,
+        "ordinary model authority must not gain image spending writes"
+    );
+    let images = RequiredCapabilities {
+        images: true,
+        ..models
+    };
+    assert_eq!(
+        runtime_database::check(&role.pool, images).await,
+        Err(Error::MissingPrivileges)
+    );
+    role.optional("core_image").await;
+    runtime_database::check(&role.pool, images).await.unwrap();
+    let market_mutation:bool=sqlx::query_scalar("SELECT has_table_privilege('core_tool_market.credit_calls','INSERT,UPDATE,DELETE') OR has_any_column_privilege('core_tool_market.credit_calls','INSERT,UPDATE')")
+        .fetch_one(&role.pool).await.unwrap();
+    assert!(
+        !market_mutation,
+        "drawing admission may inspect, never fabricate, its Core market call"
+    );
+    for (grant, revoke) in [
+        (
+            "GRANT UPDATE(fingerprint) ON core_image.operations",
+            "REVOKE UPDATE(fingerprint) ON core_image.operations",
+        ),
+        (
+            "GRANT UPDATE ON core_image.operations",
+            "REVOKE UPDATE ON core_image.operations",
+        ),
+        (
+            "GRANT DELETE ON core_image.operations",
+            "REVOKE DELETE ON core_image.operations",
+        ),
+    ] {
+        sqlx::query(&format!("{grant} TO {}", role.name))
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            runtime_database::check(&role.pool, images).await,
+            Err(Error::UnsafePrivileges),
+            "{grant}"
+        );
+        sqlx::query(&format!("{revoke} FROM {}", role.name))
+            .execute(&pool)
+            .await
+            .unwrap();
+        // PostgreSQL's table-wide REVOKE also removes column UPDATE grants.
+        // Restore only the exact image capability before checking readiness.
+        role.optional("core_image").await;
+        runtime_database::check(&role.pool, images).await.unwrap();
+    }
+    sqlx::query(&format!(
+        "REVOKE EXECUTE ON FUNCTION core_image.valid_output(jsonb) FROM {}",
+        role.name
+    ))
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        runtime_database::check(&role.pool, images).await,
+        Err(Error::MissingPrivileges)
     );
     role.cleanup().await;
 }

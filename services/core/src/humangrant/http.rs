@@ -130,7 +130,9 @@ async fn get_config(State(engine): State<SharedEngine>) -> Response {
         Ok(s) => s,
         Err(e) => return error_response(e),
     };
-    let _ = tx.commit().await;
+    if let Err(e) = tx.commit().await {
+        return error_response(e);
+    }
 
     json_response(
         StatusCode::OK,
@@ -333,7 +335,7 @@ async fn put_settings(
         Err(e) => return error_response(e),
     };
 
-    if flow.human.id != human.id {
+    if flow.human != human {
         return error_response(failure(403, "csrf_failed"));
     }
 
@@ -469,7 +471,7 @@ async fn revoke_grant(
         Err(e) => return error_response(e),
     };
 
-    if flow.human.id != human.id {
+    if flow.human != human {
         return error_response(failure(403, "csrf_failed"));
     }
 
@@ -533,6 +535,10 @@ async fn human_begin(
         _ => return error_response(failure(404, "not_found")),
     };
 
+    if let Err(e) = engine.check_pending_request(&mut tx, &req, now).await {
+        return error_response(e);
+    }
+
     let _flow = match engine.check_flow(&mut tx, &headers, &req.id, now).await {
         Ok(f) => f,
         Err(e) => return error_response(e),
@@ -585,6 +591,10 @@ async fn human_verify(
         Ok(Some(r)) => r,
         _ => return error_response(failure(404, "not_found")),
     };
+
+    if let Err(e) = engine.check_pending_request(&mut tx, &req, now).await {
+        return error_response(e);
+    }
 
     let _flow = match engine.check_flow(&mut tx, &headers, &req.id, now).await {
         Ok(f) => f,
@@ -684,6 +694,10 @@ async fn human_approve(
         _ => return error_response(failure(404, "not_found")),
     };
 
+    if let Err(e) = engine.check_pending_request(&mut tx, &req, now).await {
+        return error_response(e);
+    }
+
     let flow = match engine.check_flow(&mut tx, &headers, &req.id, now).await {
         Ok(f) => f,
         Err(e) => return error_response(e),
@@ -713,8 +727,14 @@ async fn human_approve(
         return error_response(failure(400, "invalid_request"));
     }
 
+    if consent.permissions.is_empty() {
+        return error_response(failure(400, "invalid_request"));
+    }
     for p in &consent.permissions {
-        if p.resource != human.id || !req.input.requested_permissions.contains(p) {
+        if p.action != PROFILE_READ
+            || p.resource != human.id
+            || !req.input.requested_permissions.contains(p)
+        {
             return error_response(failure(403, "forbidden"));
         }
     }
@@ -815,6 +835,10 @@ async fn human_reject(
         _ => return error_response(failure(404, "not_found")),
     };
 
+    if let Err(e) = engine.check_pending_request(&mut tx, &req, now).await {
+        return error_response(e);
+    }
+
     let flow = match engine.check_flow(&mut tx, &headers, &req.id, now).await {
         Ok(f) => f,
         Err(e) => return error_response(e),
@@ -822,6 +846,12 @@ async fn human_reject(
 
     if !flow.verified || req.phase != "awaiting_consent" {
         return error_response(failure(403, "forbidden"));
+    }
+
+    let refresh_cookie = engine.parse_cookie_value(&headers, "new_api_refresh");
+    match tx.authenticate_human(refresh_cookie, now).await {
+        Ok(Some((human, _))) if human == flow.human => {}
+        _ => return error_response(failure(403, "forbidden")),
     }
 
     req.phase = "rejected".to_string();
@@ -1141,7 +1171,7 @@ async fn claim_request(
     if req.phase == "succeeded" {
         return error_response(failure(409, "credential_already_issued"));
     }
-    if req.phase == "expired" {
+    if req.phase == "expired" || req.expires <= now {
         return error_response(failure(410, "expired"));
     }
     if req.phase != "approved" {
@@ -1364,59 +1394,21 @@ async fn email_request(
         return error_response(failure(403, "forbidden"));
     }
 
+    if let Err(e) = engine.check_pending_request(&mut tx, &req, now).await {
+        return error_response(e);
+    }
     let input: EmailRequest = match serde_json::from_slice(&body) {
-        Ok(i) => i,
+        Ok(input) => input,
         Err(_) => return error_response(failure(400, "invalid_request")),
     };
-
-    req.email_status = "sent".to_string();
-    req.last_email = now;
-    if let Err(e) = tx
-        .put(
-            "request",
-            &req.id,
-            &req.actor,
-            req.created + RETENTION_SECONDS,
-            &req,
-        )
-        .await
-    {
-        return error_response(e);
+    let status = match super::mail::enqueue(&engine, &mut tx, &mut req, input, now).await {
+        Ok(status) => status,
+        Err(error) => return error_response(error),
+    };
+    if let Err(error) = tx.commit().await {
+        return error_response(error);
     }
-
-    // Local outbox record
-    let op_payload = serde_json::json!({
-        "id": HumanGrantEngine::random_id(),
-        "request_id": req.id,
-        "destination": input.email,
-        "state": "local_spooled",
-        "created": now,
-        "expires": req.expires,
-    });
-    if let Err(e) = tx
-        .put(
-            "local-mail",
-            &HumanGrantEngine::random_id(),
-            "",
-            req.expires,
-            &op_payload,
-        )
-        .await
-    {
-        return error_response(e);
-    }
-
-    if let Err(e) = tx.commit().await {
-        return error_response(e);
-    }
-
-    json_response(
-        StatusCode::ACCEPTED,
-        &serde_json::json!({
-            "status": "accepted",
-            "message": "Invitation spooled to local outbox.",
-        }),
-    )
+    json_response(StatusCode::ACCEPTED, &serde_json::json!({"status": status}))
 }
 
 async fn resolve_token(

@@ -28,7 +28,7 @@ async fn google_login_cannot_issue_sessions_while_local_second_factor_is_require
     let store = IdentityStore::from_pool(pool.clone())
         .with_google_oauth(config)
         .with_registration_enabled(true);
-    store.init_database().await.unwrap();
+    crate::core_schema::init(&pool).await.unwrap();
     let native = store
         .register(&LoginRequest {
             login_name: "mfa-account".into(),
@@ -257,7 +257,7 @@ async fn flow_binding_expiry_and_atomic_consumption(pool: PgPool) {
     )
     .unwrap();
     let store = IdentityStore::from_pool(pool.clone()).with_google_oauth(config);
-    store.init_database().await.unwrap();
+    crate::core_schema::init(&pool).await.unwrap();
     let binding = new_secret("").unwrap();
     let url = Url::parse(&store.begin_google_login(&binding).await.unwrap()).unwrap();
     let params: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
@@ -449,7 +449,7 @@ async fn signed_provider_round_trip_creates_native_sessions_without_go_or_email_
     let store = IdentityStore::from_pool(pool.clone())
         .with_google_oauth(config)
         .with_registration_enabled(true);
-    store.init_database().await.unwrap();
+    crate::core_schema::init(&pool).await.unwrap();
     let native = store
         .register(&LoginRequest {
             login_name: "alice".into(),
@@ -689,12 +689,7 @@ async fn google_browser_signed_routes_cookie_refresh_replay_policy_and_registrat
     let store = IdentityStore::from_pool(pool.clone())
         .with_google_oauth(config)
         .with_registration_enabled(true);
-    store.init_database().await.unwrap();
-    // Explicit installer-owned fixture for the key-management/user projection dependency.
-    sqlx::raw_sql(crate::abuse::SCHEMA)
-        .execute(&pool)
-        .await
-        .unwrap();
+    crate::core_schema::init(&pool).await.unwrap();
     let app = web_app(store.clone());
     let (cookie, state, code) = web_flow(&app, &store, &mock, "browser-subject").await;
     let path =
@@ -964,5 +959,165 @@ async fn google_browser_signed_routes_cookie_refresh_replay_policy_and_registrat
             .unwrap(),
         0
     );
+    server.abort();
+}
+
+#[test]
+fn verified_email_proof_requires_signed_boolean_true_and_valid_email() {
+    let expected = digest(&"n".repeat(64)).unwrap();
+    for verified in [None, Some(false), Some(true)] {
+        let mut c = claims();
+        c["email"] = json!("Alice+tag@Example.test");
+        if let Some(value) = verified {
+            c["email_verified"] = json!(value);
+        }
+        let proof =
+            verified_identity(verify_token(&token(c), &keys(), &expected, "client-1").unwrap());
+        assert_eq!(proof.issuer(), ISSUER);
+        assert_eq!(proof.subject(), "google-user-1");
+        assert_eq!(
+            proof.verified_email(),
+            if verified == Some(true) {
+                Some("Alice+tag@Example.test")
+            } else {
+                None
+            }
+        );
+    }
+    let mut c = claims();
+    c["email"] = json!("alice@example.test");
+    c["email_verified"] = json!("true");
+    assert!(verify_token(&token(c), &keys(), &expected, "client-1").is_err());
+    for email in [
+        "",
+        "alice",
+        "@example.test",
+        "alice@",
+        "alice@@example.test",
+        " alice@example.test",
+        "alice@example.test\n",
+    ] {
+        let mut c = claims();
+        c["email"] = json!(email);
+        c["email_verified"] = json!(true);
+        let proof =
+            verified_identity(verify_token(&token(c), &keys(), &expected, "client-1").unwrap());
+        assert!(proof.verified_email().is_none());
+    }
+}
+
+#[sqlx::test(migrations = false)]
+async fn signed_browser_verified_registration_is_the_only_gift_proof_source(pool: PgPool) {
+    let mock = MockProvider {
+        redirect_uri: Some(Arc::from("https://example.com/api/oauth/google/callback")),
+        ..Default::default()
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let provider = Router::new()
+        .route("/token", post(exchange))
+        .route("/keys", get(public_keys))
+        .with_state(mock.clone());
+    let server = tokio::spawn(async move { axum::serve(listener, provider).await.unwrap() });
+    let mut config = GoogleOAuth::new(
+        "client-1".into(),
+        "test-client-secret".into(),
+        mock.redirect_uri.as_deref().unwrap().into(),
+    )
+    .unwrap();
+    config.client = Client::builder()
+        .redirect(Policy::none())
+        .timeout(Duration::from_secs(3))
+        .build()
+        .unwrap();
+    config.token_endpoint = Url::parse(&format!("http://{address}/token")).unwrap();
+    config.keys_endpoint = Url::parse(&format!("http://{address}/keys")).unwrap();
+    let store = IdentityStore::from_pool(pool.clone())
+        .with_google_oauth(config)
+        .with_registration_enabled(true);
+    crate::core_schema::init(&pool).await.unwrap();
+    let app = web_app(store.clone()).layer(axum::Extension(axum::extract::ConnectInfo(
+        "203.0.113.42:32100"
+            .parse::<std::net::SocketAddr>()
+            .unwrap(),
+    )));
+    for (subject, verified, expected) in [
+        ("verified-subject", Some(true), 1_i64),
+        ("unverified-subject", Some(false), 0),
+        ("missing-subject", None, 0),
+    ] {
+        let (cookie, state, code) = web_flow(&app, &store, &mock, subject).await;
+        {
+            let mut codes = mock.codes.lock().await;
+            let (c, _) = codes.get_mut(&code).unwrap();
+            c["email"] = json!(format!("{subject}@example.test"));
+            if let Some(value) = verified {
+                c["email_verified"] = json!(value);
+            }
+        }
+        let path = format!("/api/oauth/google/callback?state={state}&code={code}");
+        assert_eq!(
+            web_call(&app, "GET", &path, Some(&cookie), None).await.0,
+            StatusCode::OK
+        );
+        let user: i64 = sqlx::query_scalar(
+            "SELECT user_id FROM core_identity.oauth_identities WHERE issuer=$1 AND subject=$2",
+        )
+        .bind(ISSUER)
+        .bind(subject)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let qualified: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM core_gift.qualifications WHERE user_id=$1")
+                .bind(user)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(qualified, expected);
+        let email: String = sqlx::query_scalar("SELECT email_at_registration FROM core_abuse.registration_observations WHERE user_id=$1").bind(user).fetch_one(&pool).await.unwrap();
+        assert_eq!(!email.is_empty(), verified == Some(true));
+    }
+    // A valid provider email without a trusted connection source never creates
+    // a network/risk qualification from missing evidence.
+    let unknown_source_app = web_app(store.clone());
+    let (cookie, state, code) =
+        web_flow(&unknown_source_app, &store, &mock, "unknown-source").await;
+    {
+        let mut codes = mock.codes.lock().await;
+        let (c, _) = codes.get_mut(&code).unwrap();
+        c["email"] = json!("unknown-source@example.test");
+        c["email_verified"] = json!(true);
+    }
+    let path = format!("/api/oauth/google/callback?state={state}&code={code}");
+    assert_eq!(
+        web_call(&unknown_source_app, "GET", &path, Some(&cookie), None)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let qualified: i64 = sqlx::query_scalar("SELECT count(*) FROM core_gift.qualifications q JOIN core_identity.oauth_identities i ON i.user_id=q.user_id WHERE i.issuer=$1 AND i.subject='unknown-source'")
+        .bind(ISSUER).fetch_one(&pool).await.unwrap();
+    assert_eq!(qualified, 0);
+
+    // A later signed email on an existing unverified registration cannot create
+    // a fresh registration observation or recover unknown historical risk.
+    let (cookie, state, code) = web_flow(&app, &store, &mock, "unverified-subject").await;
+    {
+        let mut codes = mock.codes.lock().await;
+        let (c, _) = codes.get_mut(&code).unwrap();
+        c["email"] = json!("new-verified@example.test");
+        c["email_verified"] = json!(true);
+    }
+    let path = format!("/api/oauth/google/callback?state={state}&code={code}");
+    assert_eq!(
+        web_call(&app, "GET", &path, Some(&cookie), None).await.0,
+        StatusCode::OK
+    );
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM core_gift.qualifications")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
     server.abort();
 }
