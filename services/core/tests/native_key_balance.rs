@@ -109,7 +109,13 @@ async fn native_balance_existing_personal_key_without_developer_grant_can_read(p
 async fn native_balance_zero_and_exhausted_quota_do_not_require_spending_authority(pool: PgPool) {
     let (_, _, _, key, id, _) = model_fixture::fixture(&pool, 0).await;
     settings(&pool, id, true).await;
-    sqlx::query("INSERT INTO core_charging.budgets(scope,key_id,issuer_user_id,period,limit_credits,unlimited) VALUES('key',$1,7,'lifetime',0,FALSE)").bind(id).execute(&pool).await.unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO core_charging.budgets(scope,key_id,issuer_user_id,period,limit_credits,unlimited) VALUES('key',$1,7,'lifetime',0,FALSE)").bind(id).execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
     let before = financial_snapshot(&pool).await;
     let (code, value) = query(
         &lmm_core::native_key_read::router(pool.clone()),
