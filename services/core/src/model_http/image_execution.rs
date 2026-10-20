@@ -40,6 +40,72 @@ pub enum Error {
     Storage,
 }
 type Result<T> = std::result::Result<T, Error>;
+
+/// A persisted drawing keeps its real original credential as an immutable
+/// anchor. Only a live current credential in that same browser family may
+/// replace it; native Sessions still require the exact original credential.
+/// The caller's original transaction and identity/financial locks are retained.
+pub(crate) async fn drawing_session_anchor_matches(
+    c: &mut PgConnection,
+    actor: &identity::Principal,
+    original: i64,
+    version: i64,
+) -> Result<bool> {
+    if actor.credential_kind != CredentialKind::Session {
+        return Ok(false);
+    }
+    let allowed: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM core_identity.credentials old JOIN core_identity.credentials live ON live.id=$2 JOIN core_identity.users u ON u.id=$3 JOIN core_identity.accounts a ON a.id=$4 WHERE old.id=$1 AND old.kind='session' AND old.user_id=u.id AND old.owner_account_id=a.id AND old.user_version=$5 AND live.kind='session' AND live.user_id=u.id AND live.owner_account_id=a.id AND live.user_version=$5 AND live.revoked_at IS NULL AND live.expires_at>clock_timestamp() AND u.active AND a.active AND u.auth_version=$5 AND ((old.id=live.id AND NOT EXISTS(SELECT 1 FROM core_identity.web_session_credentials WHERE credential_id=old.id) AND NOT EXISTS(SELECT 1 FROM core_identity.web_sessions WHERE current_credential_id=old.id)) OR EXISTS(SELECT 1 FROM core_identity.web_session_credentials original_map JOIN core_identity.web_session_credentials current_map ON current_map.sid=original_map.sid JOIN core_identity.web_sessions family ON family.sid=original_map.sid WHERE original_map.credential_id=old.id AND current_map.credential_id=live.id AND family.current_credential_id=live.id AND family.user_id=u.id AND family.user_version=$5 AND family.revoked_at IS NULL AND family.expires_at>clock_timestamp() AND (NOT family.weekly_logout OR family.created_at>clock_timestamp()-interval '7 days'))))",
+    )
+    .bind(original)
+    .bind(actor.credential_id)
+    .bind(actor.user_id)
+    .bind(actor.owner_account_id)
+    .bind(version)
+    .fetch_one(c)
+    .await?;
+    Ok(allowed)
+}
+
+async fn drawing_cookie_anchor_matches(
+    c: &mut PgConnection,
+    original: i64,
+    sid: &str,
+) -> Result<bool> {
+    Ok(sqlx::query_scalar("SELECT (NOT EXISTS(SELECT 1 FROM core_identity.web_session_credentials WHERE credential_id=$1) AND NOT EXISTS(SELECT 1 FROM core_identity.web_sessions WHERE current_credential_id=$1)) OR EXISTS(SELECT 1 FROM core_identity.web_session_credentials m JOIN core_identity.web_sessions s ON s.sid=m.sid WHERE m.credential_id=$1 AND s.sid=$2 AND s.revoked_at IS NULL AND s.expires_at>clock_timestamp())")
+        .bind(original).bind(sid).fetch_one(c).await?)
+}
+
+async fn drawing_context_operation(
+    c: &mut PgConnection,
+    actor: &identity::Principal,
+    context: &BuiltinContext,
+) -> Result<Option<sqlx::postgres::PgRow>> {
+    let mut rows = sqlx::query("SELECT id,session_id,auth_version,context FROM core_image.operations WHERE source_kind='drawing' AND actor_user_id=$1 AND owner_account_id=$2 AND context->>'call_id'=$3 AND context->>'dispatch_id'=$4 LIMIT 2")
+        .bind(actor.user_id).bind(actor.owner_account_id).bind(&context.call_id).bind(&context.dispatch_id).fetch_all(&mut *c).await?;
+    if rows.len() > 1 {
+        return Err(Error::Conflict);
+    }
+    let Some(row) = rows.pop() else {
+        return Ok(None);
+    };
+    let stored: BuiltinContext =
+        serde_json::from_value(row.try_get("context")?).map_err(|_| Error::Storage)?;
+    if stored != *context {
+        return Err(Error::Conflict);
+    }
+    if !drawing_session_anchor_matches(
+        c,
+        actor,
+        row.try_get("session_id")?,
+        row.try_get("auth_version")?,
+    )
+    .await?
+    {
+        return Err(Error::Missing);
+    }
+    Ok(Some(row))
+}
 impl From<sqlx::Error> for Error {
     fn from(e: sqlx::Error) -> Self {
         match e.as_database_error().and_then(|e| e.code()).as_deref() {
@@ -541,6 +607,16 @@ impl ImageService {
         let quote = self.drawing_quote(&parsed)?;
         let frozen = price(&quote);
         let mut tx = begin(&self.pool).await?;
+        // Call-local and nonblocking: a competing preview can query/retry in a
+        // fresh transaction. Never wait while holding identity/family locks.
+        let claim: bool =
+            sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(hashtextextended($1,0))")
+                .bind(format!("drawing-preview/v1:{}", context.call_id))
+                .fetch_one(&mut *tx)
+                .await?;
+        if !claim {
+            return Err(Error::Pending);
+        }
         let actor =
             identity::authorize_assistant_model_in_transaction(&mut tx, session, &parsed.group)
                 .await
@@ -569,16 +645,31 @@ impl ImageService {
                 .await
                 .map_err(|_| Error::Pending)??
         };
-        let id = format!(
-            "image:{}",
-            hex(&digest(&json!([
+        // The preview lock uses the stable call id across browser refreshes.
+        // The existing dispatch UNIQUE constraint remains the final arbiter.
+        // Never create a new operation
+        // for a refreshed credential when this original dispatch already exists.
+        let existing = drawing_context_operation(&mut tx, &actor, context).await?;
+        let (id, anchor) = if let Some(row) = existing {
+            (
+                row.try_get::<String, _>("id")?,
+                row.try_get::<i64, _>("session_id")?,
+            )
+        } else {
+            (
+                format!(
+                    "image:{}",
+                    hex(&digest(&json!([
+                        actor.credential_id,
+                        context.call_id,
+                        context.dispatch_id
+                    ]))?)
+                ),
                 actor.credential_id,
-                context.call_id,
-                context.dispatch_id
-            ]))?)
-        );
+            )
+        };
         let source = api_execution::SourceKey::Drawing {
-            credential_id: actor.credential_id,
+            credential_id: anchor,
         };
         // Metadata includes Core-verified content SHA/length/MIME. Hashing the
         // original small arguments binds the bytes without copying base64 into
@@ -597,7 +688,7 @@ impl ImageService {
         .fetch_one(&mut *tx)
         .await?;
         sqlx::query("INSERT INTO core_image.operations(id,session_id,actor_user_id,owner_account_id,auth_version,context,input,fingerprint,price,state,created_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'previewed',$10,$11) ON CONFLICT(id) DO NOTHING")
-            .bind(&id).bind(actor.credential_id).bind(actor.user_id).bind(actor.owner_account_id).bind(version).bind(json!(context)).bind(&stored_input).bind(fingerprint.as_slice()).bind(json!(frozen)).bind(at).bind(expires_at).execute(&mut *tx).await?;
+            .bind(&id).bind(anchor).bind(actor.user_id).bind(actor.owner_account_id).bind(version).bind(json!(context)).bind(&stored_input).bind(fingerprint.as_slice()).bind(json!(frozen)).bind(at).bind(expires_at).execute(&mut *tx).await?;
         let row = sqlx::query(
             "SELECT fingerprint,expires_at,state FROM core_image.operations WHERE id=$1 FOR SHARE",
         )
@@ -650,6 +741,9 @@ impl ImageService {
         .fetch_optional(&mut *tx)
         .await?
         .ok_or(Error::Missing)?;
+        if !drawing_cookie_anchor_matches(&mut tx, r.try_get("session_id")?, &a.sid).await? {
+            return Err(Error::Missing);
+        }
         let at = now(&mut tx).await?;
         if r.try_get::<i64, _>("auth_version")? != a.version
             || r.try_get::<i64, _>("owner_account_id")? != a.account
@@ -680,6 +774,9 @@ impl ImageService {
         .fetch_optional(&mut *tx)
         .await?
         .ok_or(Error::Missing)?;
+        if !drawing_cookie_anchor_matches(&mut tx, r.try_get("session_id")?, &a.sid).await? {
+            return Err(Error::Forbidden);
+        }
         let at = now(&mut tx).await?;
         let expected: Option<Vec<u8>> = r.try_get("confirmation_digest")?;
         if r.try_get::<i64, _>("auth_version")? != a.version
@@ -823,7 +920,13 @@ impl ImageService {
         .bind(a.user_id)
         .fetch_one(&mut *tx)
         .await?;
-        if r.try_get::<i64, _>("session_id")? != a.credential_id
+        if !drawing_session_anchor_matches(
+            &mut tx,
+            &a,
+            r.try_get("session_id")?,
+            r.try_get("auth_version")?,
+        )
+        .await?
             || r.try_get::<i64, _>("actor_user_id")? != a.user_id
             || r.try_get::<i64, _>("owner_account_id")? != a.owner_account_id
             || r.try_get::<i64, _>("auth_version")? != version
@@ -883,14 +986,10 @@ impl ImageService {
         if actor.credential_kind != CredentialKind::Session {
             return Err(Error::Forbidden);
         }
-        let id = format!(
-            "image:{}",
-            hex(&digest(&json!([
-                actor.credential_id,
-                context.call_id,
-                context.dispatch_id
-            ]))?)
-        );
+        let row = drawing_context_operation(&mut tx, &actor, context)
+            .await?
+            .ok_or(Error::Missing)?;
+        let id: String = row.try_get("id")?;
         tx.commit().await.map_err(|_| Error::Pending)?;
         self.query_for_context(session, &id, context).await
     }
@@ -900,18 +999,7 @@ impl ImageService {
         id: &str,
         context: &BuiltinContext,
     ) -> Result<Receipt> {
-        let receipt = self.query(session, id).await?;
-        let stored: Value = sqlx::query_scalar(
-            "SELECT context FROM core_image.operations WHERE id=$1 AND source_kind='drawing'",
-        )
-        .bind(id)
-        .fetch_one(&self.pool)
-        .await?;
-        let stored: BuiltinContext = serde_json::from_value(stored).map_err(|_| Error::Storage)?;
-        if stored != *context {
-            return Err(Error::Forbidden);
-        }
-        Ok(receipt)
+        self.query_drawing(session, id, Some(context)).await
     }
     pub async fn execute_for_context(
         &self,
@@ -926,6 +1014,14 @@ impl ImageService {
         self.execute(session, id).await
     }
     pub async fn query(&self, session: &str, id: &str) -> Result<Receipt> {
+        self.query_drawing(session, id, None).await
+    }
+    async fn query_drawing(
+        &self,
+        session: &str,
+        id: &str,
+        expected_context: Option<&BuiltinContext>,
+    ) -> Result<Receipt> {
         if !valid_id(id) {
             return Err(Error::Invalid);
         }
@@ -936,7 +1032,24 @@ impl ImageService {
         if a.credential_kind != CredentialKind::Session {
             return Err(Error::Forbidden);
         }
-        let r=sqlx::query("SELECT id,session_id,actor_user_id,owner_account_id,auth_version,price,fingerprint,state,created_at,expires_at,confirmation_digest,confirmation_sid,settled_credits,output,CASE WHEN input->>'kind'='drawing_reference_v1' THEN input->'arguments' ELSE input END AS input FROM core_image.operations WHERE id=$1 AND actor_user_id=$2 AND owner_account_id=$3 AND session_id=$4 AND source_kind='drawing' FOR SHARE").bind(id).bind(a.user_id).bind(a.owner_account_id).bind(a.credential_id).fetch_optional(&mut *tx).await?.ok_or(Error::Missing)?;
+        let r=sqlx::query("SELECT id,session_id,actor_user_id,owner_account_id,auth_version,context,price,fingerprint,state,created_at,expires_at,confirmation_digest,confirmation_sid,settled_credits,output,CASE WHEN input->>'kind'='drawing_reference_v1' THEN input->'arguments' ELSE input END AS input FROM core_image.operations WHERE id=$1 AND actor_user_id=$2 AND owner_account_id=$3 AND source_kind='drawing' FOR SHARE").bind(id).bind(a.user_id).bind(a.owner_account_id).fetch_optional(&mut *tx).await?.ok_or(Error::Missing)?;
+        if !drawing_session_anchor_matches(
+            &mut tx,
+            &a,
+            r.try_get("session_id")?,
+            r.try_get("auth_version")?,
+        )
+        .await?
+        {
+            return Err(Error::Missing);
+        }
+        if let Some(expected) = expected_context {
+            let stored: BuiltinContext =
+                serde_json::from_value(r.try_get("context")?).map_err(|_| Error::Storage)?;
+            if stored != *expected {
+                return Err(Error::Forbidden);
+            }
+        }
         let out = receipt_row(&r)?;
         tx.commit().await.map_err(|_| Error::Pending)?;
         Ok(out)
