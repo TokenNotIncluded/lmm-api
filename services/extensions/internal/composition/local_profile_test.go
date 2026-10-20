@@ -6,10 +6,36 @@ func TestLocalHTTPProfileKeepsGoOriginAndCorePortsIsolated(t *testing.T) {
 	if err := ValidateHostProfile(false, "0.0.0.0:8000", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := ValidateHostProfile(true, "127.0.0.1:39001", "http://127.0.0.1:39001"); err != nil {
+	if err := ValidateHostProfile(true, "127.0.0.1:39001", "http://127.0.0.1:39002"); err != nil {
 		t.Fatal(err)
 	}
-	for _, pair := range [][2]string{{"0.0.0.0:39001", "http://0.0.0.0:39001"}, {"localhost:39001", "http://localhost:39001"}, {"127.0.0.1:80", "http://127.0.0.1:80"}, {"127.0.0.1:39001", "http://127.0.0.1:39002"}, {"127.0.0.1:39001", "https://127.0.0.1:39001"}, {"127.0.0.1:39001", "http://127.0.0.1:39001/path"}} {
+	for _, pair := range [][2]string{
+		{"127.0.0.1:55554", "http://127.0.0.1:49416"},
+		{"[::1]:55554", "http://[::1]:49416"},
+		{"[::ffff:127.0.0.1]:55554", "http://127.0.0.1:49416"},
+	} {
+		if err := ValidateHostProfile(true, pair[0], pair[1]); err != nil {
+			t.Fatal("valid loopback proxy rejected", pair, err)
+		}
+	}
+	for _, pair := range [][2]string{
+		{"0.0.0.0:39001", "http://0.0.0.0:39001"},
+		{"localhost:39001", "http://localhost:39001"},
+		{"127.0.0.1:80", "http://127.0.0.1:80"},
+		{"127.0.0.1:39001", "http://127.0.0.2:39002"},
+		{"127.0.0.1:39001", "http://127.0.0.1:80"},
+		{"127.0.0.1:39001", "http://localhost:39002"},
+		{"[::1%lo]:39001", "http://[::1%25lo]:39002"},
+		{"127.0.0.1:39001", "http://user@127.0.0.1:39002"},
+		{"127.0.0.1:39001", "http://127.0.0.1:39002?"},
+		{"127.0.0.1:39001", "http://127.0.0.1:39002#"},
+		{"127.0.0.1:39001", "http://127.0.0.1"},
+		{"127.0.0.1:39001", "http://127.0.0.1:65536"},
+		{"127.0.0.1:39001", "http://127.0.0.1:039002"},
+		{"[::1]:39001", "http://[::1%25lo]:39002"},
+		{"127.0.0.1:39001", "https://127.0.0.1:39001"},
+		{"127.0.0.1:39001", "http://127.0.0.1:39001/path"},
+	} {
 		if ValidateHostProfile(true, pair[0], pair[1]) == nil {
 			t.Fatal("invalid fixture profile", pair)
 		}
