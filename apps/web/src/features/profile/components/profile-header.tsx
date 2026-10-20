@@ -144,12 +144,18 @@ export function ProfileHeader({ profile, loading }: ProfileHeaderProps) {
   const stats: ProfileStat[] = [
     {
       label: t('Tokens in the past year'),
-      value: formatCompactNumber(summary.totalTokens, locale),
+      value:
+        summary.totalTokens === null
+          ? t('Unavailable')
+          : formatCompactNumber(summary.totalTokens, locale),
       loading: activityLoading,
     },
     {
       label: t('Peak daily tokens'),
-      value: formatCompactNumber(summary.peakDailyTokens, locale),
+      value:
+        summary.peakDailyTokens === null
+          ? t('Unavailable')
+          : formatCompactNumber(summary.peakDailyTokens, locale),
       loading: activityLoading,
     },
     {
@@ -228,6 +234,19 @@ export function ProfileHeader({ profile, loading }: ProfileHeaderProps) {
 
       <div className='mt-10 sm:mt-12'>
         <ProfileStatRail stats={stats} />
+        {!activityLoading && !activityError ? (
+          <div className='text-muted-foreground mt-3 space-y-1 text-center text-xs'>
+            <p>
+              {t('Images')}: {formatNumber(summary.totalImages, locale)}
+              {' · '}
+              {t('Platform sponsored requests')}:{' '}
+              {formatNumber(summary.sponsoredRequests, locale)}
+            </p>
+            {summary.tokenCountScope === 'settled_text_requests' ? (
+              <p>{t('Tokens cover settled text requests only.')}</p>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       <div className='mt-12 sm:mt-16'>

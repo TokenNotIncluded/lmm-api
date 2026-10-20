@@ -187,7 +187,7 @@ function UsageTrend(props: {
 
 export function CommonLogsStats() {
   const { t, i18n } = useTranslation()
-  const { formatHistoricalQuota } = useHistoricalQuotaMoney()
+  const { formatHistoricalQuota, formatRawQuota } = useHistoricalQuotaMoney()
   const { isAdminView: isAdmin } = useLogsViewScope()
   const searchParams = route.useSearch()
   const { sensitiveVisible } = useUsageLogsContext()
@@ -308,8 +308,54 @@ export function CommonLogsStats() {
         <StatBadge
           label={t('TPM')}
           value={stats?.tpm ?? '—'}
+          title={
+            stats?.source !== 'legacy_log_only' &&
+            stats?.token_count_scope === 'settled_text_requests'
+              ? t('Tokens cover settled text requests only.')
+              : undefined
+          }
           accent='console-stat-accent-neutral'
         />
+        {stats?.source !== 'legacy_log_only' &&
+          stats?.output_image_count !== undefined && (
+            <StatBadge
+              label={t('Images (billing quantity)')}
+              value={stats.output_image_count}
+              accent='console-stat-accent-neutral'
+            />
+          )}
+        {stats?.source !== 'legacy_log_only' &&
+          stats?.reserved_credits !== undefined && (
+            <StatBadge
+              label={t('Reserved funds')}
+              value={
+                sensitiveVisible
+                  ? formatRawQuota(stats.reserved_credits)
+                  : '••••'
+              }
+              accent='console-stat-accent-neutral'
+            />
+          )}
+        {stats?.source !== 'legacy_log_only' &&
+          stats?.incomplete_count !== undefined && (
+            <StatBadge
+              label={t('Incomplete')}
+              value={stats.incomplete_count}
+              accent='console-stat-accent-neutral'
+            />
+          )}
+        {stats?.source !== 'legacy_log_only' &&
+          stats?.platform_sponsored_quota !== undefined && (
+            <StatBadge
+              label={t('Platform-sponsored usage')}
+              value={
+                sensitiveVisible
+                  ? formatRawQuota(stats.platform_sponsored_quota)
+                  : '••••'
+              }
+              accent='console-stat-accent-neutral'
+            />
+          )}
       </div>
       {statisticsUnavailable ? (
         <div

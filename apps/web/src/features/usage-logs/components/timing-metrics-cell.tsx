@@ -52,7 +52,7 @@ const barColorMap: Record<StatusVariant, string> = {
 
 interface TimingMetricsCellProps {
   useTimeSec: number
-  completionTokens: number
+  completionTokens: number | null
   frtMs?: number
   isStream: boolean
   className?: string

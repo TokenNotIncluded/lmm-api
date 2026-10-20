@@ -60,8 +60,14 @@ export function ModelUsageReport({
 }: ModelUsageReportProps) {
   const { t, i18n } = useTranslation()
   const { formatQuota } = useWalletCurrency()
-  const formatLogQuota = (value: number) =>
-    formatQuota(value, { digitsLarge: 4, digitsSmall: 8, abbreviate: false })
+  const formatLogQuota = (value: number | null) =>
+    value === null
+      ? t('Unknown')
+      : formatQuota(value, {
+          digitsLarge: 4,
+          digitsSmall: 8,
+          abbreviate: false,
+        })
   const { resolvedTheme } = useTheme()
   const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language) ?? 'en'
   const [localRange, setLocalRange] = useState<ModelUsageRangeKey>('30d')
@@ -98,8 +104,12 @@ export function ModelUsageReport({
     }
     return result
   }, [models, resolvedTheme, t])
-  const formatValue = (value: number) =>
-    hideNumbers ? '••••' : formatNumber(value, locale)
+  const formatValue = (value: number | null) =>
+    hideNumbers
+      ? '••••'
+      : value === null
+        ? t('Not recorded')
+        : formatNumber(value, locale)
   const shareFormatter = useMemo(
     () =>
       new Intl.NumberFormat(locale, {
@@ -114,31 +124,48 @@ export function ModelUsageReport({
   const rangeLabel = `${dateFormat.format(new Date(query.range.start_timestamp * 1000))} – ${dateFormat.format(new Date(query.range.end_timestamp * 1000))}`
   const copyMarkdown = useMemo(() => {
     if (loading || failed || models.length === 0) return ''
-    const displayNumber = (value: number) =>
-      hideNumbers ? '••••' : formatNumber(value, locale)
-    const displayQuota = (value: number) =>
+    const displayNumber = (value: number | null) =>
       hideNumbers
         ? '••••'
-        : formatQuota(value, {
-            digitsLarge: 4,
-            digitsSmall: 8,
-            abbreviate: false,
-          })
+        : value === null
+          ? t('Not recorded')
+          : formatNumber(value, locale)
+    const displayQuota = (value: number | null) =>
+      hideNumbers
+        ? '••••'
+        : value === null
+          ? t('Unknown')
+          : formatQuota(value, {
+              digitsLarge: 4,
+              digitsSmall: 8,
+              abbreviate: false,
+            })
     const rows = models.map(
       (model) =>
-        `| ${escapeMarkdownCell(model.modelName === 'unknown' ? t('Unknown model') : model.modelName)} | ${displayNumber(model.tokens)} | ${displayNumber(model.requests)} | ${displayQuota(model.quota)} | ${shareFormatter.format(model.share)} |`
+        `| ${escapeMarkdownCell(model.modelName === 'unknown' ? t('Unknown model') : model.modelName)} | ${displayNumber(model.tokens)} | ${displayNumber(model.outputImages)} | ${displayNumber(model.requests)} | ${displayQuota(model.quota)} | ${totals.sponsoredRequests > 0 ? `${displayQuota(model.sponsoredQuota)} | ` : ''}${shareFormatter.format(model.share)} |`
     )
     return [
       `### ${t('Model by model')}`,
       `_${rangeLabel}_`,
       '',
       `- **${t('Total tokens')}**: ${displayNumber(totals.tokens)}`,
+      ...(totals.tokenCountScope === 'settled_text_requests'
+        ? [t('Tokens cover settled text requests only.')]
+        : []),
+      `- **${t('Images (billing quantity)')}**: ${displayNumber(totals.outputImages)}`,
+      ...(totals.sponsoredRequests > 0
+        ? [
+            `- **${t('Platform-sponsored usage')}**: ${displayQuota(totals.sponsoredQuota)}`,
+          ]
+        : []),
       `- **${t('Total requests')}**: ${displayNumber(totals.requests)}`,
       `- **${t('Total Usage')}**: ${displayQuota(totals.quota)}`,
       `- **${t('Models used')}**: ${formatNumber(totals.modelCount, locale)}`,
       '',
-      `| ${t('Model')} | ${t('Tokens')} | ${t('Requests')} | ${t('Total Usage')} | ${t('Share')} |`,
-      '| --- | ---: | ---: | ---: | ---: |',
+      `| ${t('Model')} | ${t('Tokens')} | ${t('Images (billing quantity)')} | ${t('Requests')} | ${t('Total Usage')} | ${totals.sponsoredRequests > 0 ? `${t('Platform-sponsored usage')} | ` : ''}${t('Share')} |`,
+      totals.sponsoredRequests > 0
+        ? '| --- | ---: | ---: | ---: | ---: | ---: | ---: |'
+        : '| --- | ---: | ---: | ---: | ---: | ---: |',
       ...rows,
     ].join('\n')
   }, [
@@ -155,6 +182,10 @@ export function ModelUsageReport({
     totals.quota,
     totals.requests,
     totals.tokens,
+    totals.outputImages,
+    totals.sponsoredQuota,
+    totals.sponsoredRequests,
+    totals.tokenCountScope,
   ])
   useEffect(() => {
     onCopySnapshotChange?.(
@@ -265,6 +296,20 @@ export function ModelUsageReport({
                 [t('Total tokens'), formatValue(totals.tokens)],
                 [t('Total requests'), formatValue(totals.requests)],
                 [
+                  t('Images (billing quantity)'),
+                  formatValue(totals.outputImages),
+                ],
+                ...(totals.sponsoredRequests > 0
+                  ? [
+                      [
+                        t('Platform-sponsored usage'),
+                        hideNumbers
+                          ? '••••'
+                          : formatLogQuota(totals.sponsoredQuota),
+                      ],
+                    ]
+                  : []),
+                [
                   t('Total Usage'),
                   hideNumbers ? '••••' : formatLogQuota(totals.quota),
                 ],
@@ -281,6 +326,11 @@ export function ModelUsageReport({
           </div>
           <div className='space-y-2'>
             <p className='text-muted-foreground text-xs'>{shareLabel}</p>
+            {totals.tokenCountScope === 'settled_text_requests' && (
+              <p className='text-muted-foreground text-xs'>
+                {t('Tokens cover settled text requests only.')}
+              </p>
+            )}
             <ol className='divide-y border-y'>
               {models.map((model, index) => {
                 const segmentIndex =
@@ -314,12 +364,18 @@ export function ModelUsageReport({
                           {shareFormatter.format(model.share)}
                         </span>
                       </span>
-                      <span className='grid grid-cols-3 gap-2 text-xs tabular-nums'>
+                      <span className='grid grid-cols-2 gap-2 text-xs tabular-nums sm:grid-cols-3'>
                         <span className='min-w-0 break-words'>
                           <span className='text-muted-foreground block'>
                             {t('Tokens')}
                           </span>
                           {formatValue(model.tokens)}
+                        </span>
+                        <span className='min-w-0 break-words'>
+                          <span className='text-muted-foreground block'>
+                            {t('Images (billing quantity)')}
+                          </span>
+                          {formatValue(model.outputImages)}
                         </span>
                         <span className='min-w-0 break-words'>
                           <span className='text-muted-foreground block'>
@@ -333,6 +389,16 @@ export function ModelUsageReport({
                           </span>
                           {hideNumbers ? '••••' : formatLogQuota(model.quota)}
                         </span>
+                        {model.sponsoredRequests > 0 && (
+                          <span className='min-w-0 break-words'>
+                            <span className='text-muted-foreground block'>
+                              {t('Platform-sponsored usage')}
+                            </span>
+                            {hideNumbers
+                              ? '••••'
+                              : formatLogQuota(model.sponsoredQuota)}
+                          </span>
+                        )}
                       </span>
                     </button>
                   </li>

@@ -67,12 +67,15 @@ function formatStatNumber(value: number, locale: Intl.LocalesArgument) {
 export function LogStatCards({ filters, onDataUpdate }: LogStatCardsProps) {
   const { t, i18n } = useTranslation()
   registerDashboardUsageTranslations(i18n)
-  const statCardsConfig = useModelStatCardsConfig()
   const userRole = useAuthStore((state) => state.auth.user?.role)
   const isAdmin = Boolean(userRole && userRole >= ROLE.ADMIN)
   const [stats, setStats] = useState<ReturnType<
     typeof calculateDashboardStats
   > | null>(null)
+  const statCardsConfig = useModelStatCardsConfig({
+    tokenCountScope: stats?.tokenCountScope,
+    includeOutputImages: stats?.hasOutputImages,
+  })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
   const [refreshVersion, setRefreshVersion] = useState(0)
@@ -125,8 +128,9 @@ export function LogStatCards({ filters, onDataUpdate }: LogStatCardsProps) {
 
   const adaptedStats = {
     rpm: stats?.totalCount ?? 0,
-    quota: stats?.totalQuota ?? 0,
-    tpm: stats?.totalTokens ?? 0,
+    quota: stats?.totalQuota ?? null,
+    tpm: stats?.totalTokens ?? null,
+    outputImages: stats?.totalOutputImages ?? null,
   }
   const start = filters?.start_timestamp
   const end = filters?.end_timestamp
@@ -198,8 +202,10 @@ export function LogStatCards({ filters, onDataUpdate }: LogStatCardsProps) {
         {statCardsConfig.map((config) => {
           const Icon = config.icon
           const rawValue = config.getValue(adaptedStats, timeRangeMinutes)
-          const formatted =
-            config.key === 'quota'
+          const unavailable = rawValue === null
+          const formatted = unavailable
+            ? { displayValue: '—', fullValue: t('Unavailable') }
+            : config.key === 'quota'
               ? {
                   displayValue: formatHistoricalRawQuota(
                     rawValue,
@@ -237,7 +243,13 @@ export function LogStatCards({ filters, onDataUpdate }: LogStatCardsProps) {
                   formatted.displayValue
                 )}
               </dd>
-              <dd className='dashboard-stat__hint'>{config.description}</dd>
+              <dd className='dashboard-stat__hint'>
+                {unavailable && !loading && !error && `${t('Unavailable')} · `}
+                {config.description}
+                {config.key === 'quota' &&
+                  stats?.hasPlatformSponsoredUsage &&
+                  ` · ${t('Platform-sponsored usage')}`}
+              </dd>
             </div>
           )
         })}

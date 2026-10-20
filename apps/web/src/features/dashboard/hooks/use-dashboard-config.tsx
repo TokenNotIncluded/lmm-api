@@ -25,12 +25,21 @@ import {
   Flame,
   TrendingUp,
   Activity,
+  Image,
   type LucideIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import type { IconBadgeTone } from '@/components/ui/icon-badge'
-import { safeDivide } from '@/features/dashboard/lib'
+import { safeDivide } from '@/features/dashboard/lib/stats'
+import type { QuotaDataItem } from '@/features/dashboard/types'
+
+interface ModelStatValues {
+  rpm: number
+  quota: number | null
+  tpm: number | null
+  outputImages: number | null
+}
 
 interface StatCardConfig {
   key: string
@@ -38,13 +47,20 @@ interface StatCardConfig {
   description: string
   icon: LucideIcon
   iconTone: IconBadgeTone
-  getValue: (stat: Record<string, number>, days?: number) => number
+  getValue: (stat: ModelStatValues, minutes?: number) => number | null
 }
 
-export function useModelStatCardsConfig(): StatCardConfig[] {
+export function useModelStatCardsConfig({
+  tokenCountScope,
+  includeOutputImages = false,
+}: {
+  tokenCountScope?: QuotaDataItem['token_count_scope']
+  includeOutputImages?: boolean
+} = {}): StatCardConfig[] {
   const { t } = useTranslation()
+  const textOnlyTokens = tokenCountScope === 'settled_text_requests'
 
-  return [
+  const cards: StatCardConfig[] = [
     {
       key: 'count',
       title: t('Total Count'),
@@ -59,15 +75,17 @@ export function useModelStatCardsConfig(): StatCardConfig[] {
       description: t('Historical monetary value unavailable'),
       icon: Coins,
       iconTone: 'success',
-      getValue: (stat) => stat?.quota ?? 0,
+      getValue: (stat) => stat.quota,
     },
     {
       key: 'tokens',
       title: t('Total Tokens'),
-      description: t('Statistical tokens'),
+      description: textOnlyTokens
+        ? t('Tokens cover settled text requests only.')
+        : t('Statistical tokens'),
       icon: Layers,
       iconTone: 'chart-4',
-      getValue: (stat) => stat?.tpm ?? 0,
+      getValue: (stat) => stat.tpm,
     },
     {
       key: 'avgRpm',
@@ -81,13 +99,28 @@ export function useModelStatCardsConfig(): StatCardConfig[] {
     {
       key: 'avgTpm',
       title: t('Average TPM'),
-      description: t('Tokens per minute'),
+      description: textOnlyTokens
+        ? t('Tokens cover settled text requests only.')
+        : t('Tokens per minute'),
       icon: Zap,
       iconTone: 'warning',
       getValue: (stat, timeRangeMinutes = 1) =>
-        safeDivide(stat?.tpm ?? 0, timeRangeMinutes),
+        stat.tpm === null ? null : safeDivide(stat.tpm, timeRangeMinutes),
     },
   ]
+
+  if (includeOutputImages) {
+    cards.push({
+      key: 'images',
+      title: t('Images (billing quantity)'),
+      description: t('Images (billing quantity)'),
+      icon: Image,
+      iconTone: 'chart-4',
+      getValue: (stat) => stat.outputImages,
+    })
+  }
+
+  return cards
 }
 
 export function useSummaryCardsConfig(totals: {

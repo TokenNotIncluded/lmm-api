@@ -63,8 +63,9 @@ const {
 const { createInstance } = await import('i18next')
 const { I18nextProvider, initReactI18next } = await import('react-i18next')
 const { api } = await import('@/lib/api')
+const { useAuthStore } = await import('@/stores/auth-store')
 const { AssistantUsageTool } = await import('./assistant-usage-tool')
-const { resetAssistantCurrencyTest, useWalletCurrencyPreferenceStore } =
+const { resetAssistantCurrencyTest } =
   await import('./assistant-currency-test-support')
 
 const originalGet = api.get
@@ -123,7 +124,10 @@ async function unmount(rendered: Awaited<ReturnType<typeof renderTool>>) {
   rendered.container.remove()
 }
 
-beforeEach(resetAssistantCurrencyTest)
+beforeEach(() => {
+  resetAssistantCurrencyTest()
+  useAuthStore.getState().auth.setUser({ id: 7, username: 'alice', role: 1 })
+})
 afterEach(async () => {
   api.get = originalGet
   document.body.replaceChildren()
@@ -219,7 +223,12 @@ describe('AssistantUsageTool', () => {
       await act(async () => i18n.changeLanguage('en'))
       assert.match(rendered.container.textContent ?? '', /7 USD/)
       await act(async () => {
-        useWalletCurrencyPreferenceStore.getState().setPreference('CREDIT')
+        useAuthStore.getState().auth.setUser({
+          id: 7,
+          username: 'alice',
+          role: 1,
+          setting: { wallet_display_currency: 'CREDIT' },
+        })
       })
       assert.match(rendered.container.textContent ?? '', /3,500,000 Credits/)
       await act(async () => i18n.changeLanguage('zhCN'))
@@ -247,4 +256,133 @@ describe('AssistantUsageTool', () => {
       await unmount(rendered)
     }
   })
+})
+
+test('image usage shows its billing quantity and sponsor without inventing token zero', async () => {
+  api.get = (async () => ({
+    data: {
+      success: true,
+      data: [
+        {
+          user_id: 7,
+          model_name: 'image-native',
+          created_at: 1,
+          count: 1,
+          token_used: null,
+          output_image_count: 2,
+          quota: 2000,
+          quota_usd: '0.004000',
+          quota_money_available: true,
+          quota_money_basis: 'captured_credits_per_usd',
+          token_count_scope: 'settled_text_requests',
+          usage_scope: 'actor_personal_usage',
+          settlement_scope: 'settled_requests',
+          platform_sponsored: true,
+          payer_kind: 'personal',
+          subscription_funded: false,
+          gross_settled_credits: 2000,
+          refunded_credits: 0,
+          net_consumption_credits: 2000,
+          billing_basis: 'net_consumption',
+          billing_currency: 'USD',
+          wallet_debit_supported: false,
+        },
+      ],
+    },
+  })) as typeof api.get
+  const rendered = await renderTool(true)
+  try {
+    const text = rendered.container.textContent ?? ''
+    assert.match(text, /Total tokensNot recorded/)
+    assert.match(text, /Images \(billing quantity\): 2/)
+    assert.match(text, /Tokens cover settled text requests only\./)
+    assert.match(text, /Platform-sponsored usage/)
+    assert.doesNotMatch(text, /wallet|debit/i)
+  } finally {
+    await unmount(rendered)
+  }
+})
+
+test('unknown amount stays unknown while a measured zero text token count remains zero', async () => {
+  api.get = (async () => ({
+    data: {
+      success: true,
+      data: [
+        {
+          created_at: 1,
+          count: 1,
+          token_used: 0,
+          quota: null,
+          model_name: 'text-zero',
+        },
+      ],
+    },
+  })) as typeof api.get
+  const rendered = await renderTool(true)
+  try {
+    const text = rendered.container.textContent ?? ''
+    assert.match(text, /Total tokens0/)
+    assert.match(text, /Total consumedUnknown/)
+    assert.doesNotMatch(text, /No recent usage/)
+  } finally {
+    await unmount(rendered)
+  }
+})
+
+test('a missing success payload fails instead of pretending the account has no usage', async () => {
+  api.get = (async () => ({
+    data: { success: true, data: null },
+  })) as typeof api.get
+  const rendered = await renderTool(true)
+  try {
+    assert.match(rendered.container.textContent ?? '', /Failed to fetch usage/)
+    assert.doesNotMatch(rendered.container.textContent ?? '', /No recent usage/)
+  } finally {
+    await unmount(rendered)
+  }
+})
+
+test('switching accounts clears the previous assistant usage while the next response is pending', async () => {
+  let calls = 0
+  let releaseSecond: (() => void) | undefined
+  const response = (model: string) => ({
+    data: {
+      success: true,
+      data: [
+        {
+          created_at: 1,
+          count: 1,
+          token_used: 10,
+          quota: 5,
+          model_name: model,
+        },
+      ],
+    },
+  })
+  api.get = (async () => {
+    calls += 1
+    if (calls === 1) return response('account-a-model')
+    return new Promise<ReturnType<typeof response>>((resolve) => {
+      releaseSecond = () => resolve(response('account-b-model'))
+    })
+  }) as typeof api.get
+  const rendered = await renderTool(true)
+  try {
+    assert.match(rendered.container.textContent ?? '', /account-a-model/)
+    await act(async () => {
+      useAuthStore.getState().auth.setUser({ id: 8, username: 'bob', role: 1 })
+      await flushQueries()
+    })
+    assert.doesNotMatch(rendered.container.textContent ?? '', /account-a-model/)
+    assert.ok(releaseSecond)
+    await act(async () => {
+      releaseSecond?.()
+      await flushQueries()
+    })
+    await act(flushQueries)
+    assert.match(rendered.container.textContent ?? '', /account-b-model/)
+    assert.equal(calls, 2)
+  } finally {
+    await unmount(rendered)
+  }
 })

@@ -94,12 +94,14 @@ export function ProfileShareDialog({
       displayName: getDisplayName(profile),
       username: profile.username,
       roleLabel: getRoleLabel(profile.role),
-      totalTokens: activityAvailable
-        ? formatCompactNumber(summary.totalTokens, locale)
-        : '—',
-      peakDailyTokens: activityAvailable
-        ? formatCompactNumber(summary.peakDailyTokens, locale)
-        : '—',
+      totalTokens:
+        activityAvailable && summary.totalTokens !== null
+          ? formatCompactNumber(summary.totalTokens, locale)
+          : t('Unavailable'),
+      peakDailyTokens:
+        activityAvailable && summary.peakDailyTokens !== null
+          ? formatCompactNumber(summary.peakDailyTokens, locale)
+          : t('Unavailable'),
       requestCount: formatCompactNumber(profile.request_count, locale),
       currentStreak: activityAvailable
         ? `${formatNumber(summary.currentStreak, locale)}${summary.currentStreakCapped ? '+' : ''} ${t('days')}`
@@ -107,6 +109,16 @@ export function ProfileShareDialog({
       longestStreak: activityAvailable
         ? `${formatNumber(summary.longestStreak, locale)} ${t('days')}`
         : '—',
+      imageCount: activityAvailable
+        ? formatNumber(summary.totalImages, locale)
+        : t('Unavailable'),
+      sponsoredRequests: activityAvailable
+        ? formatNumber(summary.sponsoredRequests, locale)
+        : t('Unavailable'),
+      tokenScopeNote:
+        activityAvailable && summary.tokenCountScope === 'settled_text_requests'
+          ? t('Tokens cover settled text requests only.')
+          : null,
       days,
       activityAvailable,
       locale,
@@ -118,6 +130,8 @@ export function ProfileShareDialog({
         requestCount: t('API Requests'),
         currentStreak: t('Current streak'),
         longestStreak: t('Longest streak this year'),
+        imageCount: t('Images'),
+        sponsoredRequests: t('Platform sponsored requests'),
       },
     }
 

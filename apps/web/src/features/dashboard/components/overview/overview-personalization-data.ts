@@ -129,11 +129,55 @@ export function buildOverviewUsage(
     cursor.setDate(cursor.getDate() + 1)
   }
   const models = new Map<string, number>()
+  let tokenCountScope: QuotaDataItem['token_count_scope']
+  let allTokenCountsScoped = true
+  let hasTextTokenData = false
+  let outputImageCount: number | null = 0
+  let excludedImageCount = 0
   for (const row of rows) {
     if (!Number.isFinite(row.created_at)) {
       throw new Error('Usage timestamps unavailable')
     }
     if (row.created_at < start || row.created_at > end) continue
+    if (row.token_count_scope === 'settled_text_requests') {
+      tokenCountScope = row.token_count_scope
+    } else {
+      allTokenCountsScoped = false
+    }
+    if (
+      typeof row.token_used === 'number' &&
+      Number.isFinite(row.token_used) &&
+      row.token_used >= 0
+    ) {
+      hasTextTokenData = true
+    }
+    const imageCount = row.output_image_count
+    if (
+      typeof imageCount !== 'number' ||
+      !Number.isSafeInteger(imageCount) ||
+      imageCount < 0
+    ) {
+      outputImageCount = null
+    } else if (outputImageCount !== null) {
+      const imageTotal: number = outputImageCount + imageCount
+      outputImageCount = Number.isSafeInteger(imageTotal) ? imageTotal : null
+    }
+    // Image-only buckets have no token measurement. Exclude them from the
+    // explicitly text-only metric while retaining their known image counts.
+    if (
+      metric === 'tokens' &&
+      row.token_used === null &&
+      row.token_count_scope === 'settled_text_requests' &&
+      typeof imageCount === 'number' &&
+      Number.isSafeInteger(imageCount) &&
+      imageCount > 0
+    ) {
+      excludedImageCount += imageCount
+      if (!Number.isSafeInteger(excludedImageCount)) {
+        throw new Error('Usage metric unavailable')
+      }
+      continue
+    }
     const value = row[metricFields[metric]]
     if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
       throw new Error('Usage metric unavailable')
@@ -157,5 +201,9 @@ export function buildOverviewUsage(
     values: values.map((row) => row.value),
     models: top,
     total: values.reduce((sum, row) => sum + row.value, 0),
+    tokenCountScope: allTokenCountsScoped ? tokenCountScope : undefined,
+    hasTextTokenData,
+    outputImageCount,
+    excludedImageCount,
   }
 }

@@ -17,28 +17,100 @@ export type ModelUsageSort = {
 export interface ModelUsageRow {
   model: string
   count: number
-  tokens: number
+  tokens: number | null
   quota: number
   quota_raw: string | null
   share: number | null
+  output_image_count?: number | null
+  token_count_scope?: QuotaDataItem['token_count_scope']
+  usage_scope?: QuotaDataItem['usage_scope']
+  settlement_scope?: QuotaDataItem['settlement_scope']
+  platform_sponsored_quota?: number | null
+  wallet_debit_supported?: false
 }
 
-const finite = (value: number | undefined) =>
+const finite = (value: number | null | undefined) =>
   typeof value === 'number' && Number.isFinite(value) ? value : 0
+
+function knownTotal(
+  values: readonly (number | null | undefined)[]
+): number | null {
+  let total = 0
+  for (const value of values) {
+    if (
+      typeof value !== 'number' ||
+      !Number.isSafeInteger(value) ||
+      value < 0
+    ) {
+      return null
+    }
+    total += value
+    if (!Number.isSafeInteger(total)) return null
+  }
+  return total
+}
+
+function usageMetadata(inputs: readonly QuotaDataItem[]) {
+  return {
+    ...(inputs.some((item) => item.output_image_count !== undefined)
+      ? {
+          output_image_count: knownTotal(
+            inputs.map((item) => item.output_image_count)
+          ),
+        }
+      : {}),
+    ...(inputs.every(
+      (item) => item.token_count_scope === 'settled_text_requests'
+    )
+      ? { token_count_scope: 'settled_text_requests' as const }
+      : {}),
+    ...(inputs.every((item) => item.usage_scope !== undefined)
+      ? {
+          usage_scope: inputs.some(
+            (item) => item.usage_scope === 'actor_personal_usage'
+          )
+            ? ('actor_personal_usage' as const)
+            : ('actor_personal_key' as const),
+        }
+      : {}),
+    ...(inputs.every((item) => item.settlement_scope === 'settled_requests')
+      ? { settlement_scope: 'settled_requests' as const }
+      : {}),
+    ...(inputs.some((item) => item.platform_sponsored !== undefined)
+      ? {
+          platform_sponsored_quota: inputs.every(
+            (item) => item.platform_sponsored !== undefined
+          )
+            ? knownTotal(
+                inputs.map((item) => (item.platform_sponsored ? item.quota : 0))
+              )
+            : null,
+        }
+      : {}),
+    ...(inputs.every((item) => item.wallet_debit_supported === false)
+      ? { wallet_debit_supported: false as const }
+      : {}),
+  }
+}
 
 /** Keep model identity intact; translate an empty name only when displaying it. */
 export function summarizeModelUsage(data: readonly QuotaDataItem[]) {
   const models = new Map<string, ModelUsageRow>()
+  const modelInputs = new Map<string, QuotaDataItem[]>()
+  const unavailableTokens = new Set<string>()
   let totalQuota = 0n
   let completeRawQuota = true
   for (const item of data) {
     const model = item.model_name ?? ''
+    const inputs = modelInputs.get(model) ?? []
+    inputs.push(item)
+    modelInputs.set(model, inputs)
     let row = models.get(model)
     if (!row) {
       row = {
         model,
         count: 0,
-        tokens: 0,
+        tokens: null,
         quota: 0,
         quota_raw: '0',
         share: null,
@@ -46,7 +118,21 @@ export function summarizeModelUsage(data: readonly QuotaDataItem[]) {
       models.set(model, row)
     }
     row.count += finite(item.count)
-    row.tokens += finite(item.token_used)
+    // Native image-only buckets have no token receipt. A mixed model's known
+    // text sum remains valid and retains its settled-text-only scope below.
+    const imageOnly =
+      item.token_used === null &&
+      item.token_count_scope === 'settled_text_requests' &&
+      typeof item.output_image_count === 'number' &&
+      item.output_image_count > 0
+    if (
+      typeof item.token_used === 'number' &&
+      Number.isFinite(item.token_used)
+    ) {
+      row.tokens = (row.tokens ?? 0) + item.token_used
+    } else if (!imageOnly) {
+      unavailableTokens.add(model)
+    }
     row.quota += finite(item.quota)
     const raw =
       item.quota_money_basis !== 'invalid_stored_quota' &&
@@ -66,6 +152,8 @@ export function summarizeModelUsage(data: readonly QuotaDataItem[]) {
   }
   return Array.from(models.values(), (row) => ({
     ...row,
+    tokens: unavailableTokens.has(row.model) ? null : row.tokens,
+    ...usageMetadata(modelInputs.get(row.model) ?? []),
     // Unknown input makes the entire period's denominator unknown. A known
     // row must not acquire 100% by silently treating another row as zero.
     share:
@@ -88,7 +176,13 @@ export function selectModelUsage(
       (row.model || unknownLabel).toLocaleLowerCase().includes(needle)
     )
     .sort((a, b) => {
-      const difference = (a[sort.metric] - b[sort.metric]) * direction
+      const left = a[sort.metric]
+      const right = b[sort.metric]
+      // Unknown token counts sort after known values in either direction.
+      if (left === null && right !== null) return 1
+      if (right === null && left !== null) return -1
+      const difference =
+        left === null || right === null ? 0 : (left - right) * direction
       // Stable tie order regardless of API row order, without mutating input.
       return difference || (a.model < b.model ? -1 : a.model > b.model ? 1 : 0)
     })
@@ -108,12 +202,17 @@ export function modelUsageCsv(
   headers: readonly string[],
   unknownLabel: string
 ) {
+  const nativeDetails = rows.some(
+    (row) =>
+      row.output_image_count !== undefined ||
+      row.token_count_scope !== undefined
+  )
   const records: (string | number | bigint)[][] = [
     [...headers],
     ...rows.map((row) => [
       row.model || unknownLabel,
       row.count,
-      row.tokens,
+      row.tokens ?? '',
       row.quota_raw === null ? '' : BigInt(row.quota_raw),
       // Hour buckets do not capture a historical money basis. Aggregating raw
       // quota cannot establish one, even if today's wallet FX is available.
@@ -123,6 +222,9 @@ export function modelUsageCsv(
         ? 'raw_quota_not_exact'
         : 'bucket_without_credit_basis',
       row.share === null ? '' : row.share * 100,
+      ...(nativeDetails
+        ? [row.output_image_count ?? '', row.token_count_scope ?? '']
+        : []),
     ]),
   ]
   // BOM preserves non-ASCII model names in common spreadsheet applications.

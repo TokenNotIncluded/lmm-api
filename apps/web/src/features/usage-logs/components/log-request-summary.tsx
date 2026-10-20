@@ -28,8 +28,11 @@ import type { UsageLog } from '../data/schema'
 import {
   hasNetConsumptionMetadata,
   logNetConsumptionAmounts,
+  logFundingLabel,
 } from '../lib/money'
+import { usageReceiptState } from '../lib/receipt-state'
 import { logRecovery, safeLogDiagnostic } from '../lib/recovery'
+import { logUsageQuantity } from '../lib/usage-quantity'
 import type { LogOtherData } from '../types'
 
 export function LogRequestSummary({
@@ -46,6 +49,7 @@ export function LogRequestSummary({
   const { copyToClipboard } = useCopyToClipboard()
   const netBasis = hasNetConsumptionMetadata(other)
   const amounts = logNetConsumptionAmounts(log, other)
+  const usage = logUsageQuantity(log, other)
   if (![2, 5, 6].includes(log.type)) return null
   const cacheReadDetails = [
     { label: t('Text cache read tokens'), tokens: other?.cache_text_tokens },
@@ -74,9 +78,10 @@ export function LogRequestSummary({
     Number.isFinite(audioSeconds) &&
     audioSeconds >= 0
   const failed =
-    log.type === 5 ||
-    other?.stream_status?.status === 'error' ||
-    Boolean(other?.stream_status?.end_error)
+    !usageReceiptState(log, other) &&
+    (log.type === 5 ||
+      other?.stream_status?.status === 'error' ||
+      Boolean(other?.stream_status?.end_error))
   const recovery = logRecovery(other)
   const diagnostic = safeLogDiagnostic(
     JSON.stringify(
@@ -105,22 +110,49 @@ export function LogRequestSummary({
     <section className='border-border space-y-3 border-b pb-4'>
       <h3 className='font-semibold'>{t('Request and billing summary')}</h3>
       <dl className='grid grid-cols-2 gap-3 text-sm'>
+        {usage.kind === 'image' ? (
+          <div>
+            <dt className='text-muted-foreground'>
+              {t('Images (billing quantity)')}
+            </dt>
+            <dd>{usage.count?.toLocaleString() ?? t('Unknown')}</dd>
+          </div>
+        ) : (
+          <>
+            <div>
+              <dt className='text-muted-foreground'>{t('Input Tokens')}</dt>
+              <dd>
+                {usage.input === null
+                  ? t('Not recorded')
+                  : formatTokens(usage.input)}
+              </dd>
+            </div>
+            <div>
+              <dt className='text-muted-foreground'>{t('Output Tokens')}</dt>
+              <dd>
+                {usage.output === null
+                  ? t('Not recorded')
+                  : formatTokens(usage.output)}
+              </dd>
+            </div>
+          </>
+        )}
         <div>
-          <dt className='text-muted-foreground'>{t('Input Tokens')}</dt>
-          <dd>
-            {log.type === 5 && log.prompt_tokens === 0
-              ? t('Not recorded')
-              : formatTokens(log.prompt_tokens)}
-          </dd>
+          <dt className='text-muted-foreground'>{t('Billing Source')}</dt>
+          <dd>{t(logFundingLabel(log, other))}</dd>
         </div>
-        <div>
-          <dt className='text-muted-foreground'>{t('Output Tokens')}</dt>
-          <dd>
-            {log.type === 5 && log.completion_tokens === 0
-              ? t('Not recorded')
-              : formatTokens(log.completion_tokens)}
-          </dd>
-        </div>
+        {other?.reserved_credits !== undefined && (
+          <div>
+            <dt className='text-muted-foreground'>{t('Reserved funds')}</dt>
+            <dd>
+              {formatHistoricalLogQuota({
+                quota: other.reserved_credits,
+                other,
+                type: log.type,
+              })}
+            </dd>
+          </div>
+        )}
         <div>
           <dt className='text-muted-foreground'>{t('Cache read tokens')}</dt>
           <dd>

@@ -341,23 +341,25 @@ export function processChartData(
     }
   }
 
-  // Aggregate all metrics by time and model
+  const quotaAvailable = data.every(
+    (item) => typeof item.quota === 'number' && Number.isFinite(item.quota)
+  )
+  // Unknown quota invalidates only amount charts; request counts remain usable.
   const timeModelMap = new Map<
     string,
-    Map<string, { quota: number; count: number; tokens: number }>
+    Map<string, { quota: number; count: number }>
   >()
-  const modelTotalsMap = new Map<
-    string,
-    { quota: number; count: number; tokens: number }
-  >()
+  const modelTotalsMap = new Map<string, { quota: number; count: number }>()
 
   data.forEach((item) => {
     const timestamp = Number(item.created_at)
     const timeKey = formatChartTime(timestamp, timeGranularity)
     const model = item.model_name || 'Unknown'
-    const quota = Number(item.quota) || 0
+    const quota =
+      typeof item.quota === 'number' && Number.isFinite(item.quota)
+        ? item.quota
+        : Number.NaN
     const count = Number(item.count) || 0
-    const tokens = Number(item.token_used) || 0
 
     // Aggregate by time and model
     let modelMap = timeModelMap.get(timeKey)
@@ -365,23 +367,20 @@ export function processChartData(
       modelMap = new Map()
       timeModelMap.set(timeKey, modelMap)
     }
-    const existing = modelMap.get(model) || { quota: 0, count: 0, tokens: 0 }
+    const existing = modelMap.get(model) || { quota: 0, count: 0 }
     modelMap.set(model, {
       quota: existing.quota + quota,
       count: existing.count + count,
-      tokens: existing.tokens + tokens,
     })
 
     // Calculate totals
     const totalExisting = modelTotalsMap.get(model) || {
       quota: 0,
       count: 0,
-      tokens: 0,
     }
     modelTotalsMap.set(model, {
       quota: totalExisting.quota + quota,
       count: totalExisting.count + count,
-      tokens: totalExisting.tokens + tokens,
     })
   })
 
@@ -410,7 +409,7 @@ export function processChartData(
     0
   )
   const totalQuotaRaw = [...modelTotalsMap.values()].reduce(
-    (sum, x) => sum + (Number(x.quota) || 0),
+    (sum, x) => sum + x.quota,
     0
   )
 
@@ -434,7 +433,7 @@ export function processChartData(
   chartTimes.forEach((time) => {
     const timeData = sortedModels.map((model) => {
       const stats = timeModelMap.get(time)?.get(model)
-      const rawQuota = Number(stats?.quota) || 0
+      const rawQuota = stats?.quota ?? 0
       const usage = rawQuota
       return {
         Time: time,
@@ -460,7 +459,7 @@ export function processChartData(
   const rankedQuotaModels = [...modelTotalsMap.entries()]
     .map(([model, stats]) => ({
       Model: model,
-      Quota: Number(stats.quota) || 0,
+      Quota: stats.quota,
     }))
     .sort((a, b) => b.Quota - a.Quota)
   const topAreaModels = new Set(
@@ -474,7 +473,7 @@ export function processChartData(
     let timeSum = 0
     sortedModels.forEach((model) => {
       const stats = modelMap?.get(model)
-      const rawQuota = Number(stats?.quota) || 0
+      const rawQuota = stats?.quota ?? 0
       timeSum += rawQuota
       const key = topAreaModels.has(model) ? model : otherLabel
       const prev = buckets.get(key) || { rawQuota: 0, usage: 0 }
@@ -614,7 +613,9 @@ export function processChartData(
       data: [
         {
           id: 'barData',
-          values: sortedLineValues.filter((row) => Number.isFinite(row.Usage)),
+          values: quotaAvailable
+            ? sortedLineValues.filter((row) => Number.isFinite(row.Usage))
+            : [],
         },
       ],
       xField: 'Time',
@@ -630,6 +631,7 @@ export function processChartData(
       ],
       seriesField: 'Model',
       stack: true,
+      title: { visible: !quotaAvailable, text: tt('Unavailable') },
       legends: { visible: true, selectMode: 'single' },
       color: modelColor,
       bar: {
@@ -666,7 +668,9 @@ export function processChartData(
       data: [
         {
           id: 'areaData',
-          values: sortedAreaValues.filter((row) => Number.isFinite(row.Usage)),
+          values: quotaAvailable
+            ? sortedAreaValues.filter((row) => Number.isFinite(row.Usage))
+            : [],
         },
       ],
       xField: 'Time',
@@ -682,6 +686,7 @@ export function processChartData(
       ],
       seriesField: 'Model',
       stack: false,
+      title: { visible: !quotaAvailable, text: tt('Unavailable') },
       legends: { visible: true, selectMode: 'single' },
       color: modelColor,
       tooltip: {
@@ -832,7 +837,9 @@ export function processChartData(
       background: { fill: 'transparent' },
       animation: true,
     },
-    totalQuotaDisplay: formatQuotaTotal(totalQuotaRaw),
+    totalQuotaDisplay: quotaAvailable
+      ? formatQuotaTotal(totalQuotaRaw)
+      : tt('Unavailable'),
     totalCountDisplay: formatInt(totalTimes),
   }
 }
@@ -887,6 +894,30 @@ export function processUserChartData(
   }
 
   if (!data || data.length === 0) return emptyResult
+  if (
+    data.some(
+      (item) => typeof item.quota !== 'number' || !Number.isFinite(item.quota)
+    )
+  ) {
+    return {
+      spec_user_rank: {
+        ...emptyResult.spec_user_rank,
+        title: {
+          visible: true,
+          text: tt('User Consumption Ranking'),
+          subtext: tt('Unavailable'),
+        },
+      },
+      spec_user_trend: {
+        ...emptyResult.spec_user_trend,
+        title: {
+          visible: true,
+          text: tt('User Consumption Trend'),
+          subtext: tt('Unavailable'),
+        },
+      },
+    }
+  }
 
   const userQuotaTotal = new Map<string, number>()
   data.forEach((item) => {

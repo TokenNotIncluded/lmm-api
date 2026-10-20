@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import axios, { type AxiosError } from 'axios'
 
+import { parseUsageBuckets } from '@/features/dashboard/lib/usage-bucket'
 import type { QuotaDataItem } from '@/features/dashboard/types'
 import type { PricingData } from '@/features/pricing/types'
 import type { PlanRecord } from '@/features/subscriptions/types'
@@ -60,6 +61,7 @@ import {
   type AssistantWorkspaceAction,
 } from './assistant-workspace-contract'
 import { getGuideEligibleModels } from './setup-guide'
+
 export { AssistantTurnContinuationError } from './assistant-turn-recovery'
 
 export type {
@@ -2094,7 +2096,9 @@ export async function getAssistantUsageData(
       skipErrorHandler: true,
     }
   )
-  return requireAssistantData(response.data, 'Failed to fetch usage')
+  return parseUsageBuckets(
+    requireAssistantData(response.data, 'Failed to fetch usage')
+  )
 }
 
 export async function prepareAssistantDefaultKey(

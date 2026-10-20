@@ -261,3 +261,64 @@ describe('buildModelUsageQueryRanges', () => {
     assert.equal(ranges.length, 1)
   })
 })
+
+describe('native image and sponsored model report', () => {
+  test('keeps image counts and sponsored consumption independent from text tokens', () => {
+    const report = buildModelUsageReport([
+      row({
+        model_name: 'image',
+        count: 1,
+        token_used: null,
+        output_image_count: 2,
+        quota: 12,
+        platform_sponsored: true,
+        token_count_scope: 'settled_text_requests',
+      }),
+      row({
+        model_name: 'image',
+        count: 2,
+        token_used: null,
+        output_image_count: 3,
+        quota: 8,
+        platform_sponsored: false,
+        token_count_scope: 'settled_text_requests',
+      }),
+      row({
+        model_name: 'text',
+        token_used: 0,
+        quota: 0,
+        token_count_scope: 'settled_text_requests',
+      }),
+    ])
+    assert.equal(report.models[0]?.tokens, null)
+    assert.equal(report.models[0]?.outputImages, 5)
+    assert.equal(report.models[0]?.sponsoredRequests, 1)
+    assert.equal(report.models[0]?.sponsoredQuota, 12)
+    assert.equal(report.totals.tokens, 0)
+    assert.equal(report.totals.quota, 20)
+    assert.equal(report.totals.sponsoredQuota, 12)
+    assert.equal(report.totals.tokenCountScope, 'settled_text_requests')
+  })
+
+  test('never coerces an unknown settled amount or image-only token total to zero', () => {
+    const report = buildModelUsageReport([
+      row({
+        token_used: null,
+        output_image_count: 1,
+        quota: null,
+        platform_sponsored: true,
+      }),
+      row({
+        model_name: 'known-image',
+        token_used: null,
+        output_image_count: 2,
+        quota: 5,
+      }),
+    ])
+    assert.equal(report.totals.tokens, null)
+    assert.equal(report.totals.quota, null)
+    assert.equal(report.totals.sponsoredQuota, null)
+    assert.equal(report.shareMetric, 'requests')
+    assert.equal(report.totals.outputImages, 3)
+  })
+})

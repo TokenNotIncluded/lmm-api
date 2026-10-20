@@ -87,21 +87,32 @@ function getCellTitle(
   numberFormatter: Intl.NumberFormat,
   tokensLabel: string,
   requestsLabel: string,
-  cumulativeLabel: string
+  cumulativeLabel: string,
+  imagesLabel: string,
+  sponsoredRequestsLabel: string,
+  notRecordedLabel: string,
+  textOnlyNote: string
 ): string {
-  const tokens = `${numberFormatter.format(cell.displayTokens)} ${tokensLabel}`
+  const tokens = `${cell.displayTokens === null ? notRecordedLabel : numberFormatter.format(cell.displayTokens)} ${tokensLabel}`
   const requests = `${numberFormatter.format(cell.displayRequests)} ${requestsLabel}`
+  const images = `${numberFormatter.format(cell.displayImages)} ${imagesLabel}`
+  const sponsored = `${numberFormatter.format(cell.displaySponsoredRequests)} ${sponsoredRequestsLabel}`
+  const details = [tokens, requests, images, sponsored]
+  if (cell.tokenCountScope === 'settled_text_requests') {
+    details.push(textOnlyNote)
+  }
+  const usage = details.join(' · ')
 
   if (view === 'weekly') {
     const start = dateFormatter.format(cell.periodStart)
     const end = dateFormatter.format(cell.periodEnd)
-    return `${start} – ${end}: ${tokens} · ${requests}`
+    return `${start} – ${end}: ${usage}`
   }
 
   const date = dateFormatter.format(cell.date)
   return view === 'cumulative'
-    ? `${date} · ${cumulativeLabel}: ${tokens} · ${requests}`
-    : `${date}: ${tokens} · ${requests}`
+    ? `${date} · ${cumulativeLabel}: ${usage}`
+    : `${date}: ${usage}`
 }
 
 function ActivityGrid({
@@ -111,6 +122,10 @@ function ActivityGrid({
   tokensLabel,
   requestsLabel,
   cumulativeLabel,
+  imagesLabel,
+  sponsoredRequestsLabel,
+  notRecordedLabel,
+  textOnlyNote,
 }: {
   days: ProfileDailyUsage[]
   view: ProfileActivityView
@@ -118,6 +133,10 @@ function ActivityGrid({
   tokensLabel: string
   requestsLabel: string
   cumulativeLabel: string
+  imagesLabel: string
+  sponsoredRequestsLabel: string
+  notRecordedLabel: string
+  textOnlyNote: string
 }) {
   const cells = useMemo(
     () => buildProfileActivityCells(days, view),
@@ -163,7 +182,11 @@ function ActivityGrid({
               numberFormatter,
               tokensLabel,
               requestsLabel,
-              cumulativeLabel
+              cumulativeLabel,
+              imagesLabel,
+              sponsoredRequestsLabel,
+              notRecordedLabel,
+              textOnlyNote
             )}
             className={cn(
               'aspect-square min-h-2 rounded-[3px] transition-[background-color,box-shadow] duration-150 hover:ring-1 hover:ring-primary/70 motion-reduce:transition-none',
@@ -221,6 +244,15 @@ export function ProfileActivity({
           >
             {t('Token activity')}
           </h2>
+          {!loading &&
+          !error &&
+          days.some(
+            (day) => day.tokenCountScope === 'settled_text_requests'
+          ) ? (
+            <p className='text-muted-foreground mt-1 text-sm'>
+              {t('Tokens cover settled text requests only.')}
+            </p>
+          ) : null}
           {!loading && !error && !hasActivity ? (
             <p className='text-muted-foreground mt-1 text-sm'>
               {t('No token activity in the past year')}
@@ -275,6 +307,10 @@ export function ProfileActivity({
               tokensLabel={t('tokens')}
               requestsLabel={t('requests')}
               cumulativeLabel={t('Cumulative')}
+              imagesLabel={t('Images')}
+              sponsoredRequestsLabel={t('Platform sponsored requests')}
+              notRecordedLabel={t('Not recorded')}
+              textOnlyNote={t('Tokens cover settled text requests only.')}
             />
           )}
         </div>

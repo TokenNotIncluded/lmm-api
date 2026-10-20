@@ -89,6 +89,7 @@ import {
   logExpressionCurrency,
   logCostRows,
 } from '../../lib/money'
+import { usageReceiptState } from '../../lib/receipt-state'
 import { safeLogDiagnostic } from '../../lib/recovery'
 import {
   getLogTypeConfig,
@@ -256,7 +257,7 @@ function BillingBreakdown(props: {
   const { log, other, isAdmin } = props
   const currency = useBillingUSD()
   const { formatHistoricalLogQuota } = useHistoricalQuotaMoney()
-  const formatLogQuota = (raw: number) =>
+  const formatLogQuota = (raw: number | null) =>
     formatHistoricalLogQuota({
       quota: log.quota,
       other,
@@ -479,22 +480,25 @@ function TokenBreakdown(props: { log: UsageLog; other: LogOtherData }) {
   const { t } = useTranslation()
   const { log, other } = props
 
-  const promptTokens = log.prompt_tokens || 0
-  const completionTokens = log.completion_tokens || 0
+  const promptTokens = log.prompt_tokens
+  const completionTokens = log.completion_tokens
   const cacheRead = other.cache_tokens || 0
   const cacheWrite = other.cache_creation_tokens || 0
   const cacheWrite5m = other.cache_creation_tokens_5m || 0
   const cacheWrite1h = other.cache_creation_tokens_1h || 0
-  const hasTokens = promptTokens > 0 || completionTokens > 0
+  const hasTokens = promptTokens !== null || completionTokens !== null
 
   if (!hasTokens) return null
 
   const rows: Array<{ label: string; value: string }> = []
 
-  rows.push({ label: t('Input Tokens'), value: promptTokens.toLocaleString() })
+  rows.push({
+    label: t('Input Tokens'),
+    value: promptTokens?.toLocaleString() ?? t('Not recorded'),
+  })
   rows.push({
     label: t('Output Tokens'),
-    value: completionTokens.toLocaleString(),
+    value: completionTokens?.toLocaleString() ?? t('Not recorded'),
   })
 
   if (cacheRead > 0) {
@@ -552,7 +556,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const { t } = useTranslation()
   const currency = useBillingUSD()
   const { formatHistoricalLogQuota, formatRawQuota } = useHistoricalQuotaMoney()
-  const formatLogQuota = (raw: number) =>
+  const formatLogQuota = (raw: number | null) =>
     formatHistoricalLogQuota({
       quota: props.log.quota,
       other,
@@ -568,6 +572,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const other = parseLogOther(props.log.other)
   const modelInfo = formatModelName(props.log)
   const typeConfig = getLogTypeConfig(props.log.type)
+  const receipt = usageReceiptState(props.log, other)
 
   const isViolation = isViolationFeeLog(other)
   const isRefund = props.log.type === 6
@@ -705,8 +710,11 @@ export function DetailsDialog(props: DetailsDialogProps) {
         <>
           {t('Log Details')}
           <StatusBadge
-            label={t(typeConfig.label)}
-            variant={typeConfig.color as StatusBadgeProps['variant']}
+            label={t(receipt?.label ?? typeConfig.label)}
+            variant={
+              receipt?.variant ??
+              (typeConfig.color as StatusBadgeProps['variant'])
+            }
             size='sm'
             copyable={false}
           />

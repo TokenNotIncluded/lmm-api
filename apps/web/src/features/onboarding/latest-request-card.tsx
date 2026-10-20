@@ -10,6 +10,14 @@ import { useAuthStore } from '@/stores/auth-store'
 
 import { latestRequestStatus, loadLatestRequest } from './latest-request'
 
+const requestStatusLabels = {
+  failed: 'Failed',
+  successful: 'Successful API response observed',
+  recorded: 'Usage recorded; check details for the request outcome.',
+  incomplete: 'Incomplete',
+  unknown: 'Unknown',
+} satisfies Record<ReturnType<typeof latestRequestStatus>, string>
+
 export function LatestRequestCard() {
   const { t } = useTranslation()
   const user = useAuthStore((state) => state.auth.user)
@@ -55,15 +63,7 @@ export function LatestRequestCard() {
             </div>
             <div>
               <dt className='text-muted-foreground'>{t('Status')}</dt>
-              <dd>
-                {status === 'failed'
-                  ? t('Failed')
-                  : status === 'successful'
-                    ? t('Successful API response observed')
-                    : t(
-                        'Usage recorded; check details for the request outcome.'
-                      )}
-              </dd>
+              <dd>{status && t(requestStatusLabels[status])}</dd>
             </div>
             <div>
               <dt className='text-muted-foreground'>{t('API Key')}</dt>

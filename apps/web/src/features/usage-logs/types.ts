@@ -194,7 +194,7 @@ export interface LogOtherData {
   audio_usage_status?: 'reported' | 'estimated'
   text_input?: number
   text_output?: number
-  cache_tokens?: number
+  cache_tokens?: number | null
   cache_read_details_status?: 'unknown' | 'reported' | 'invalid'
   cache_text_tokens?: number | null
   cache_image_tokens?: number | null
@@ -256,9 +256,21 @@ export interface LogOtherData {
   billing_source?: string
   // Native Core receipts distinguish gross settlement from refunded net usage.
   billing_basis?: string
-  gross_settled_credits?: number
-  refunded_credits?: number
-  net_consumption_credits?: number
+  gross_settled_credits?: number | null
+  refunded_credits?: number | null
+  net_consumption_credits?: number | null
+  reserved_credits?: number
+  pricing_dimension?: 'image' | 'text'
+  token_usage_available?: boolean
+  output_image_count?: number | null
+  platform_sponsored?: boolean
+  payer_kind?: 'personal' | 'team'
+  credential_source?:
+    | 'api_key'
+    | 'oauth_grant'
+    | 'drawing_session'
+    | 'assistant_session'
+  wallet_debit_supported?: boolean
   request_state?: string
   usage_status?: string
   upstream_empty_usage?: boolean

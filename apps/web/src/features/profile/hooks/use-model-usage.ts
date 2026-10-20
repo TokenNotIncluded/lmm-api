@@ -36,6 +36,7 @@ export function useModelUsage(
   enabled = true
 ) {
   const userId = useAuthStore((state) => state.auth.user?.id)
+  const sessionId = useAuthStore((state) => state.auth.session?.sid)
   const range = useMemo(
     () => getModelUsageRange(rangeKey, new Date(), accountCreatedTime),
     [rangeKey, accountCreatedTime]
@@ -47,6 +48,7 @@ export function useModelUsage(
       'profile',
       'model-usage',
       userId,
+      sessionId,
       rangeKey,
       range.start_timestamp,
       range.end_timestamp,

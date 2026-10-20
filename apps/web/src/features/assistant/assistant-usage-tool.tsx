@@ -58,6 +58,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { useWalletCurrency } from '@/hooks/use-wallet-currency'
 import { toIntlLocale } from '@/i18n/languages'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { getAssistantUsageData } from './api'
 import { summarizeAssistantUsage } from './usage-summary'
@@ -70,10 +71,12 @@ export function AssistantUsageTool(props: { developerAccessGranted: boolean }) {
   const { t, i18n } = useTranslation()
   const { formatQuota } = useWalletCurrency()
   const [days, setDays] = useState<UsageDays>(30)
+  const userId = useAuthStore((state) => state.auth.user?.id)
+  const sessionId = useAuthStore((state) => state.auth.session?.sid)
   const usageQuery = useQuery({
-    queryKey: ['assistant-usage', days],
+    queryKey: ['assistant-usage', userId, sessionId, days],
     queryFn: () => getAssistantUsageData(days),
-    enabled: props.developerAccessGranted,
+    enabled: props.developerAccessGranted && userId !== undefined,
     staleTime: 60_000,
     retry: false,
   })
@@ -135,7 +138,9 @@ export function AssistantUsageTool(props: { developerAccessGranted: boolean }) {
             {t('Total tokens')}
           </p>
           <p className='mt-1 font-mono text-lg font-semibold tabular-nums'>
-            {compactNumber.format(summary.tokens)}
+            {summary.tokens === null
+              ? t('Not recorded')
+              : compactNumber.format(summary.tokens)}
           </p>
         </div>
         <div className='bg-muted/40 min-w-0 rounded-lg p-3'>
@@ -143,9 +148,32 @@ export function AssistantUsageTool(props: { developerAccessGranted: boolean }) {
             {t('Total consumed')}
           </p>
           <p className='mt-1 truncate font-mono text-sm font-semibold tabular-nums'>
-            {formatQuota(summary.credits)}
+            {summary.credits === null
+              ? t('Unknown')
+              : formatQuota(summary.credits)}
           </p>
         </div>
+      </div>
+
+      <div className='text-muted-foreground grid gap-1 text-xs'>
+        {summary.tokenCountScope === 'settled_text_requests' && (
+          <p>{t('Tokens cover settled text requests only.')}</p>
+        )}
+        {summary.outputImages > 0 && (
+          <p>
+            {t('Images (billing quantity)')}:{' '}
+            {compactNumber.format(summary.outputImages)}
+          </p>
+        )}
+        {summary.sponsoredRequests > 0 && (
+          <p>
+            {t('Platform-sponsored usage')}:{' '}
+            {summary.sponsoredCredits === null
+              ? t('Unknown')
+              : formatQuota(summary.sponsoredCredits)}{' '}
+            · {compactNumber.format(summary.sponsoredRequests)} {t('Requests')}
+          </p>
+        )}
       </div>
 
       <section className='grid gap-3' aria-labelledby='assistant-top-models'>
@@ -168,8 +196,26 @@ export function AssistantUsageTool(props: { developerAccessGranted: boolean }) {
                 </ProgressValue>
               </Progress>
               <p className='text-muted-foreground text-xs'>
-                {formatQuota(model.credits)} ·{' '}
-                {compactNumber.format(model.requests)} {t('Requests')}
+                {model.credits === null
+                  ? t('Unknown')
+                  : formatQuota(model.credits)}{' '}
+                · {compactNumber.format(model.requests)} {t('Requests')}
+                {model.outputImages > 0 && (
+                  <>
+                    {' '}
+                    · {compactNumber.format(model.outputImages)}{' '}
+                    {t('Images (billing quantity)')}
+                  </>
+                )}
+                {model.sponsoredRequests > 0 && (
+                  <>
+                    {' '}
+                    · {t('Platform-sponsored usage')}:{' '}
+                    {model.sponsoredCredits === null
+                      ? t('Unknown')
+                      : formatQuota(model.sponsoredCredits)}
+                  </>
+                )}
               </p>
             </div>
           ))}
@@ -215,7 +261,11 @@ export function AssistantUsageTool(props: { developerAccessGranted: boolean }) {
         </AlertAction>
       </Alert>
     )
-  } else if (summary.requests === 0 && summary.tokens === 0) {
+  } else if (
+    summary.models.length === 0 &&
+    summary.requests === 0 &&
+    summary.outputImages === 0
+  ) {
     content = (
       <Empty className='min-h-36 border'>
         <EmptyHeader>
@@ -259,9 +309,12 @@ export function AssistantUsageTool(props: { developerAccessGranted: boolean }) {
             size='sm'
             value={String(days)}
             aria-label={t('Historical Usage')}
-            onChange={(event) =>
-              setDays(Number(event.target.value) as UsageDays)
-            }
+            onChange={(event) => {
+              const selected = USAGE_DAY_OPTIONS.find(
+                (option) => String(option) === event.target.value
+              )
+              if (selected !== undefined) setDays(selected)
+            }}
           >
             {USAGE_DAY_OPTIONS.map((option) => (
               <NativeSelectOption key={option} value={option}>

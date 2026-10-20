@@ -40,7 +40,7 @@ import { isUsageCostIncomplete } from '../lib/money'
 import type { LogOtherData } from '../types'
 
 interface LogCostDisplayProps {
-  quota: number
+  quota: number | null
   other: LogOtherData | null
   type?: number
   projection?: HistoricalQuotaProjection &
@@ -149,7 +149,10 @@ function SubscriptionBadge(props: { display: string; unavailable: boolean }) {
 export function LogCostDisplay(props: LogCostDisplayProps) {
   const { t } = useTranslation()
   const { formatHistoricalLogQuota } = useHistoricalQuotaMoney()
-  if (isUsageCostIncomplete(props.other, props.projection)) {
+  if (
+    props.quota === null ||
+    isUsageCostIncomplete(props.other, props.projection)
+  ) {
     return (
       <QuotaBadge
         display={t('Unknown')}

@@ -18,6 +18,9 @@ export interface ProfileShareCardContent {
   requestCount: string
   currentStreak: string
   longestStreak: string
+  imageCount: string
+  sponsoredRequests: string
+  tokenScopeNote: string | null
   days: ProfileDailyUsage[]
   activityAvailable: boolean
   locale: string
@@ -29,6 +32,8 @@ export interface ProfileShareCardContent {
     requestCount: string
     currentStreak: string
     longestStreak: string
+    imageCount: string
+    sponsoredRequests: string
   }
 }
 
@@ -180,6 +185,18 @@ function drawStats(
     context.fillStyle = COLOR.muted
     context.font = '400 17px "Public Sans Variable", "Public Sans", sans-serif'
     fillCenteredText(context, stats[index][1], x, 463, width - 20)
+  }
+  context.fillStyle = COLOR.muted
+  context.font = '400 17px "Public Sans Variable", "Public Sans", sans-serif'
+  fillCenteredText(
+    context,
+    `${content.labels.imageCount}: ${content.imageCount} · ${content.labels.sponsoredRequests}: ${content.sponsoredRequests}`,
+    600,
+    517,
+    1120
+  )
+  if (content.tokenScopeNote) {
+    fillCenteredText(context, content.tokenScopeNote, 600, 542, 1120)
   }
 }
 
