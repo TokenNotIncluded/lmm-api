@@ -335,6 +335,7 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
             capabilities.console = true;
         }
         remote_store = Some(store.clone());
+        routes = routes.merge(lmm_core::native_key_read::router(pool.clone()));
         if let Some(issuer) = config::market_oauth_issuer(pool.clone()).await? {
             routes = routes.merge(lmm_core::market_oauth::http::router(issuer));
         }
