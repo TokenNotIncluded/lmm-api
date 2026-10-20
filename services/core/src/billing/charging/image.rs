@@ -83,8 +83,18 @@ async fn image_source(c: &mut PgConnection, session: &str, id: &str) -> Result<I
     let at = now(c).await?;
     let confirmed: Option<i64> = row.try_get("confirmed_at")?;
     let expires: i64 = row.try_get("expires_at")?;
-    if row.try_get::<i64, _>("session_id")? != actor.credential_id
-        || row.try_get::<i64, _>("actor_user_id")? != actor.user_id
+    if !crate::model_http::image_execution::drawing_session_anchor_matches(
+        c,
+        &actor,
+        row.try_get("session_id")?,
+        row.try_get("auth_version")?,
+    )
+    .await
+    .map_err(|error| match error {
+        crate::model_http::image_execution::Error::Retry => Error::Retry,
+        crate::model_http::image_execution::Error::Storage => Error::Storage,
+        _ => Error::Forbidden,
+    })? || row.try_get::<i64, _>("actor_user_id")? != actor.user_id
         || row.try_get::<i64, _>("owner_account_id")? != actor.owner_account_id
         || row.try_get::<i64, _>("auth_version")? != version
     {

@@ -423,3 +423,6 @@ async fn image_drawing_http_cookie_jar_scopes_confirmation_without_bearer_or_mon
     drop(jar);
     assert!(!private_root.exists());
 }
+
+#[path = "image_browser_refresh_family_tests.rs"]
+mod refresh_family_tests;
