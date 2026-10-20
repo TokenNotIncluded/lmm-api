@@ -9,7 +9,7 @@ import (
 )
 
 func builtinHostConfig() ToolMarketBuiltinConfig {
-	return ToolMarketBuiltinConfig{CorePublicOrigin: "https://api.example.test", WalletSocket: "/run/wallet.sock", WalletTokenFile: "/private/wallet", BountySocket: "/run/bounty.sock", BountyTokenFile: "/private/bounty", ImageSocket: "/run/image.sock", ImageTokenFile: "/private/image"}
+	return ToolMarketBuiltinConfig{CorePublicOrigin: "https://api.example.test", WalletSocket: "/run/toolmarket.sock", WalletTokenFile: "/private/wallet", BountySocket: "/run/toolmarket.sock", BountyTokenFile: "/private/bounty", ImageSocket: "/run/toolmarket.sock", ImageTokenFile: "/private/image"}
 }
 func TestToolMarketBuiltinConfigurationIsCompleteAndIndependent(t *testing.T) {
 	valid := builtinHostConfig()
@@ -36,12 +36,20 @@ func TestToolMarketBuiltinConfigurationIsCompleteAndIndependent(t *testing.T) {
 			t.Fatal("aliased private credential", path)
 		}
 	}
-	for _, socket := range []string{valid.BountySocket, base.Socket, base.ToolMarketSocket, "relative"} {
+	for _, socket := range []string{"/run/another.sock", base.Socket, "relative", "/run/../bad.sock", "/bad\npath"} {
 		c := valid
 		c.WalletSocket = socket
 		if c.validate(base) == nil {
-			t.Fatal("aliased authority socket", socket)
+			t.Fatal("different or malformed authority socket", socket)
 		}
+	}
+	base.SupportCustomerSocket = base.ToolMarketSocket
+	if err := valid.validate(base); err != nil {
+		t.Fatal("shared support/market/builtin socket rejected", err)
+	}
+	base.SupportCustomerSocket = "/run/different-support.sock"
+	if valid.validate(base) == nil {
+		t.Fatal("support configured on a different private socket")
 	}
 }
 func TestBuiltinTokenContentAliasingIsRejectedBeforeDatabaseOpen(t *testing.T) {

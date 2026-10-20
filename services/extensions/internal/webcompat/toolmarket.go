@@ -144,6 +144,8 @@ func RegisterToolMarket(mux *http.ServeMux, auth *Authenticator, service ToolMar
 		{"POST /api/tool-market/inspect", "inspect", true, false},
 		{"GET /api/tool-market/calls", "calls", false, true},
 		{"GET /api/tool-market/calls/{id}/result", "call.result", false, false},
+		{"GET /api/tool-market/executions/by-request/{id}", "call.lookup", false, false},
+		{"POST /api/tool-market/calls/{id}/resume", "call.resume", true, false},
 		{"POST /api/tool-market/calls/{id}/report", "report", true, false},
 		{"GET /api/tool-market/reports", "reports", false, true},
 		{"POST /api/tool-market/reports/{id}/review", "report.review", true, false},
@@ -152,6 +154,7 @@ func RegisterToolMarket(mux *http.ServeMux, auth *Authenticator, service ToolMar
 		{"GET /api/tool-market/meta-delegations/oauth-clients", "delegation.clients", false, true},
 		{"PUT /api/tool-market/meta-delegations/{kind}/{id}", "delegation.set", true, false},
 		{"POST /api/tool-market/invoke", "invoke", true, false},
+		{"POST /api/tool-market/drawing/invoke", "invoke", true, false},
 		{"DELETE /api/tool-market/grants/{id}", "grant.revoke", false, false},
 		{"DELETE /api/tool-market/grants/{id}/record", "grant.hide", false, false},
 		{"POST /api/tool-market/tokens", "token", true, false},
@@ -221,10 +224,25 @@ func RegisterToolMarket(mux *http.ServeMux, auth *Authenticator, service ToolMar
 				request.OperationID = operations[0]
 			}
 			if route.body {
-				if route.action == "delegation.set" {
-					r.Body = http.MaxBytesReader(w, r.Body, 1024)
+				if route.pattern == "POST /api/tool-market/drawing/invoke" {
+					select {
+					case toolMarketDrawingUploadSlots <- struct{}{}:
+						defer func() { <-toolMarketDrawingUploadSlots }()
+					default:
+						toolMarketRespond(w, nil, toolmarket.ErrLimit)
+						return
+					}
+					var uploads []toolmarket.DrawingUpload
+					request.Body, uploads, err = toolMarketDrawingBody(w, r)
+					if err == nil {
+						r = r.WithContext(toolmarket.WithDrawingUploads(r.Context(), uploads))
+					}
+				} else {
+					if route.action == "delegation.set" {
+						r.Body = http.MaxBytesReader(w, r.Body, 1024)
+					}
+					request.Body, err = toolMarketBody(w, r)
 				}
-				request.Body, err = toolMarketBody(w, r)
 				if err != nil {
 					toolMarketRespond(w, nil, err)
 					return

@@ -6,6 +6,7 @@ import (
 	"io"
 	"math/big"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -28,7 +29,12 @@ type schema struct {
 	MaxLength   *int                       `json:"maxLength,omitempty"`
 	MinItems    *int                       `json:"minItems,omitempty"`
 	MaxItems    *int                       `json:"maxItems,omitempty"`
+	Pattern     string                     `json:"pattern,omitempty"`
 }
+
+// The native closed subset admits only the fixed digest constraint needed by
+// compiled drawing uploads. It never compiles a supplier-provided expression.
+var schemaDigestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 func decodeStrict(b []byte, v any) error {
 	if len(b) == 0 || len(b) > maxBody || !utf8.Valid(b) {
@@ -120,6 +126,9 @@ func readSchema(raw json.RawMessage, depth int) (schema, error) {
 		}
 	}
 	if s.Enum != nil && len(s.Enum) == 0 {
+		return s, ErrInvalid
+	}
+	if _, present := fields["pattern"]; present && (s.Type != "string" || s.Pattern != `^[0-9a-f]{64}$`) {
 		return s, ErrInvalid
 	}
 	if len(s.Description) > 2000 || len(s.Title) > 200 || len(s.Properties) > 128 || len(s.Enum) > 128 {
@@ -335,6 +344,9 @@ func validateValue(s schema, v any, depth int) error {
 		}
 		n := utf8.RuneCountInString(x)
 		if s.MinLength != nil && n < *s.MinLength || s.MaxLength != nil && n > *s.MaxLength {
+			return ErrInvalid
+		}
+		if s.Pattern != "" && !schemaDigestPattern.MatchString(x) {
 			return ErrInvalid
 		}
 	case "integer", "number":

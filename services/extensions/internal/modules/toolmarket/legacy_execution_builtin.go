@@ -97,17 +97,19 @@ func (m *Module) legacyQueryBuiltin(ctx context.Context, port CoreLegacyCredits,
 	if r.Builtin == nil || missingInterface(m.builtinRuntime) || credential == "" || r.Core.DispatchID == "" {
 		return r, ErrPending
 	}
-	definition, entry, e := compiledBuiltin(r.Builtin.ServiceKey, r.Builtin.ToolName)
-	if e != nil || definition.VersionID != r.Input.VersionID || entry.ToolID != r.Input.ToolID || entry.InputSchemaDigest != r.Builtin.InputSchemaDigest {
+	ctx, _, entry, e := m.builtinRecoveryContext(ctx, r)
+	if e != nil {
 		return r, ErrDenied
 	}
 	priorState := r.State
 	out, e := m.builtinRuntime.QueryBuiltin(ctx, credential, legacyBuiltinInvocation(r, builtinPeerIP(ctx)))
 	if e != nil {
+		r.State = "unknown"
 		return r, ErrPending
 	}
 	observed, resultErr := m.legacySaveBuiltinOutcome(ctx, port, credential, r, entry.WebTool, out)
-	if resultErr != ErrPending || !out.ResumeReady || priorState != "awaiting_confirmation" || observed.Builtin.ResumeClaimed || observed.Builtin.Indeterminate {
+	explicit, _ := ctx.Value(legacyExplicitWebResumeKey{}).(bool)
+	if resultErr != ErrPending || !out.ResumeReady || priorState != "awaiting_confirmation" && !explicit || observed.Builtin.ResumeClaimed || observed.Builtin.Indeterminate && !explicit {
 		return observed, resultErr
 	}
 	resumer, ok := m.builtinRuntime.(LegacyBuiltinResumer)
@@ -120,7 +122,7 @@ func (m *Module) legacyQueryBuiltin(ctx context.Context, port CoreLegacyCredits,
 		if !ok || current.Owner != r.Owner || current.RequestHash != r.RequestHash || current.Builtin == nil {
 			return ErrConflict
 		}
-		if current.State != "awaiting_confirmation" || !current.Builtin.ResumeReady || current.Builtin.ResumeClaimed || current.Builtin.Indeterminate {
+		if current.State != "awaiting_confirmation" && !(explicit && current.State == "unknown") || !current.Builtin.ResumeReady || current.Builtin.ResumeClaimed || current.Builtin.Indeterminate && !explicit {
 			return nil
 		}
 		if current.Builtin.DownstreamOperationID != observed.Builtin.DownstreamOperationID || digest(current.Builtin.Continuation) != digest(observed.Builtin.Continuation) {

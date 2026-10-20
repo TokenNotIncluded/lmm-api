@@ -5,6 +5,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"path/filepath"
+	"strings"
 
 	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/bounties"
 	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/toolmarket"
@@ -40,11 +42,11 @@ func composeBuiltinDispatcher(ctx context.Context, in BuiltinDependencies) (*too
 		for _, b := range tokens[i] {
 			validToken = validToken && b >= 33 && b <= 126
 		}
-		if !validToken || sockets[i] == "" {
+		if !validToken || !filepath.IsAbs(sockets[i]) || filepath.Clean(sockets[i]) != sockets[i] || strings.ContainsAny(sockets[i], "\x00\r\n") || sockets[i] != sockets[0] {
 			return nil, nil, errors.New("builtin purpose configuration unavailable")
 		}
 		for j := 0; j < i; j++ {
-			if bytes.Equal(tokens[i], tokens[j]) || sockets[i] == sockets[j] {
+			if bytes.Equal(tokens[i], tokens[j]) {
 				return nil, nil, errors.New("builtin authority credentials must be independent")
 			}
 		}

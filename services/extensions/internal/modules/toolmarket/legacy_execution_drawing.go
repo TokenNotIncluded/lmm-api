@@ -15,6 +15,12 @@ func legacyDrawingExecution(r LegacyExecution) bool {
 		return false
 	}
 	definition, entry, err := compiledBuiltin(r.Builtin.ServiceKey, r.Builtin.ToolName)
+	if err != nil || definition.VersionID != r.Input.VersionID {
+		definition, entry, err = drawingV1RecoveryDefinition(r.Input.VersionID, r.Input.ToolID)
+		if r.ID == "" || r.Core.ID == "" || r.Core.DispatchID == "" || r.RequestHash != digest(r.Input) {
+			return false
+		}
+	}
 	return err == nil && definition.VersionID == r.Input.VersionID && entry.ToolID == r.Input.ToolID && entry.InputSchemaDigest == r.Builtin.InputSchemaDigest && r.Pricing.BillingMode == "" && r.Pricing.PriceQuota == 0 && r.Core.Held == 0
 }
 func legacyBuiltinResultLimit(r LegacyExecution) int {
@@ -82,7 +88,7 @@ func (m *Module) legacyDeliverDrawing(ctx context.Context, credential string, r 
 	if !legacyDrawingExecution(r) || r.State != "done" || r.Core.State != "settled" || credential == "" || missingInterface(m.builtinRuntime) {
 		return r, ErrPending
 	}
-	_, entry, err := compiledBuiltin(r.Builtin.ServiceKey, r.Builtin.ToolName)
+	ctx, _, entry, err := m.builtinRecoveryContext(ctx, r)
 	if err != nil {
 		return r, ErrDenied
 	}
