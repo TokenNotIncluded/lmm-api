@@ -3634,25 +3634,30 @@ rules=[{{id=1,model='model',group='allowed',speed='standard',rates={{input=20000
             "max_output_tokens=20,contract_revision",
             "max_output_tokens=19,contract_revision",
         );
-        let mut mixed: toml::Value = toml::from_str(&low_output).unwrap();
-        let contexts = mixed["external_models"].as_array_mut().unwrap();
-        let mut second_context = contexts[0].clone();
-        second_context["upstream_model"] = "second-provider-model".into();
-        second_context["max_output_tokens"] = 20.into();
-        contexts.push(second_context);
-        let routes = mixed["routing"]["routes"].as_array_mut().unwrap();
-        let mut second_route = routes[0].clone();
-        second_route["id"] = 2.into();
-        second_route["model"] = "second-model".into();
-        second_route["targets"][0]["id"] = 2.into();
-        second_route["targets"][0]["upstream_model"] = "second-provider-model".into();
-        routes.push(second_route);
-        let rules = mixed["prices"]["rules"].as_array_mut().unwrap();
-        let mut second_rule = rules[0].clone();
-        second_rule["id"] = 2.into();
-        second_rule["model"] = "second-model".into();
-        rules.push(second_rule);
-        let mixed = toml::to_string(&mixed).unwrap();
+        let mixed = low_output
+            .replacen(
+                "external_models=[",
+                "external_models=[{upstream_id=1,upstream_model='second-provider-model',protocol='openai_chat',endpoint='https://provider.example/v1',max_input_tokens=64,max_output_tokens=20,contract_revision='synthetic-contract-v1'},",
+                1,
+            )
+            .replacen(
+                "routes=[",
+                concat!(
+                    "routes=[{id=2,model='second-model',group='allowed',enabled=true,speeds=['standard'],",
+                    "targets=[{id=2,upstream_id=1,upstream_model='second-provider-model',enabled=true,priority=0,weight=1,speeds=['standard'],payload='adapt',timeout_ms=5000}],",
+                    "failover={max_attempts=1,retry_on=[],allow_replay_after_send=false}},",
+                ),
+                1,
+            )
+            .replacen(
+                "rules=[",
+                concat!(
+                    "rules=[{id=2,model='second-model',group='allowed',speed='standard',",
+                    "rates={input=2000000,output=4000000,cache_read=500000,cache_write=0,request=0},",
+                    "group_multiplier_ppm=1000000,speed_multiplier_ppm=1000000},",
+                ),
+                1,
+            );
         let mixed_gateway = model_gateway(pool.clone(), mixed.as_bytes(), false).unwrap();
         assert!(
             mixed_gateway
