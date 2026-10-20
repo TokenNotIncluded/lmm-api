@@ -100,7 +100,7 @@ pub struct Price {
 impl Price {
     pub fn validate(&self) -> Result<()> {
         if !valid_id(&self.version)
-            || !valid_id(&self.model)
+            || !valid_price_model(&self.model)
             || !crate::routing::valid_group_name(&self.group)
             || self.input_per_million < 0
             || self.cached_per_million < 0
@@ -372,6 +372,14 @@ impl Budget {
     }
 }
 
+fn valid_price_model(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_.:/~".contains(&b))
+}
+
 pub(super) fn valid_id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
@@ -383,6 +391,40 @@ pub(super) fn valid_id(value: &str) -> bool {
 #[cfg(test)]
 mod delegated_source_tests {
     use super::*;
+    #[test]
+    fn tilde_model_price_does_not_relax_other_identifiers_or_lengths() {
+        let mut price = Price {
+            image: None,
+            upstream_cost_group_ppm: None,
+            tiered: None,
+            version: "routing-1-rule-1".into(),
+            model: "~anthropic/claude-fable-latest".into(),
+            group: "allowed".into(),
+            input_per_million: 2_000_000,
+            cached_per_million: 0,
+            output_per_million: 0,
+        };
+        assert!(price.validate().is_ok());
+        assert_eq!(
+            serde_json::to_value(&price).unwrap()["model"],
+            "~anthropic/claude-fable-latest"
+        );
+        price.model = format!("~{}", "a".repeat(127));
+        assert!(price.validate().is_ok());
+        for bad in [
+            format!("~{}", "a".repeat(128)),
+            "~模型".into(),
+            "~ model".into(),
+            "~model\n".into(),
+        ] {
+            price.model = bad;
+            assert!(price.validate().is_err());
+        }
+        price.model = "~model".into();
+        price.version = "~version".into();
+        assert!(price.validate().is_err());
+        assert!(!valid_id("~operation"));
+    }
     #[test]
     fn unicode_group_price_keeps_model_and_version_identifier_rules_strict() {
         let mut price = Price {

@@ -241,7 +241,7 @@ pub(super) fn valid_model(value: &str) -> bool {
         && value.len() <= 200
         && value
             .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"._-/:@".contains(&b))
+            .all(|b| b.is_ascii_alphanumeric() || b"._-/:@~".contains(&b))
         && !value.ends_with("/fast")
         && !value.ends_with("/ultrafast")
 }
@@ -264,4 +264,31 @@ pub(super) fn requested_model(
         return Err(RoutingError::ConflictingSpeed);
     }
     Ok((base, explicit.or(suffix).unwrap_or_default()))
+}
+
+#[cfg(test)]
+mod tilde_model_tests {
+    use super::*;
+    #[test]
+    fn tilde_model_name_preserves_exact_ascii_and_reserved_speed_boundaries() {
+        assert!(valid_model("~anthropic/claude-fable-latest"));
+        assert!(valid_model(&format!("~{}", "a".repeat(199))));
+        assert!(!valid_model(&format!("~{}", "a".repeat(200))));
+        for invalid in [
+            "",
+            "~model/fast",
+            "~model/ultrafast",
+            "~ model",
+            "~model\n",
+            "~模型",
+            "~model?x",
+            "~model#x",
+            "~model%2fother",
+        ] {
+            assert!(!valid_model(invalid), "{invalid:?}");
+        }
+        let (base, speed) = requested_model("~anthropic/model/fast", None).unwrap();
+        assert_eq!(base, "~anthropic/model");
+        assert_eq!(speed, Speed::Fast);
+    }
 }

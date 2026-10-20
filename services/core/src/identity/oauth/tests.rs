@@ -1023,7 +1023,7 @@ async fn signed_browser_verified_registration_is_the_only_gift_proof_source(pool
     let server = tokio::spawn(async move { axum::serve(listener, provider).await.unwrap() });
     let mut config = GoogleOAuth::new(
         "client-1".into(),
-        "test-client-secret".into(),
+        "test-only-client-secret".into(),
         mock.redirect_uri.as_deref().unwrap().into(),
     )
     .unwrap();
@@ -1043,6 +1043,18 @@ async fn signed_browser_verified_registration_is_the_only_gift_proof_source(pool
             .parse::<std::net::SocketAddr>()
             .unwrap(),
     )));
+    let assert_browser_login = |response: (StatusCode, axum::http::HeaderMap, Value)| {
+        assert_eq!(response.0, StatusCode::SEE_OTHER);
+        assert_eq!(response.1["location"], "/console");
+        assert!(response.2.is_null());
+        assert!(response.1.get_all("set-cookie").iter().any(|value| {
+            value.to_str().is_ok_and(|cookie| {
+                cookie.starts_with("new_api_refresh=")
+                    && cookie.contains("HttpOnly; Secure; SameSite=Strict")
+                    && cookie.contains("Path=/api/user/auth")
+            })
+        }));
+    };
     for (subject, verified, expected) in [
         ("verified-subject", Some(true), 1_i64),
         ("unverified-subject", Some(false), 0),
@@ -1058,10 +1070,7 @@ async fn signed_browser_verified_registration_is_the_only_gift_proof_source(pool
             }
         }
         let path = format!("/api/oauth/google/callback?state={state}&code={code}");
-        assert_eq!(
-            web_call(&app, "GET", &path, Some(&cookie), None).await.0,
-            StatusCode::OK
-        );
+        assert_browser_login(web_call(&app, "GET", &path, Some(&cookie), None).await);
         let user: i64 = sqlx::query_scalar(
             "SELECT user_id FROM core_identity.oauth_identities WHERE issuer=$1 AND subject=$2",
         )
@@ -1092,12 +1101,7 @@ async fn signed_browser_verified_registration_is_the_only_gift_proof_source(pool
         c["email_verified"] = json!(true);
     }
     let path = format!("/api/oauth/google/callback?state={state}&code={code}");
-    assert_eq!(
-        web_call(&unknown_source_app, "GET", &path, Some(&cookie), None)
-            .await
-            .0,
-        StatusCode::OK
-    );
+    assert_browser_login(web_call(&unknown_source_app, "GET", &path, Some(&cookie), None).await);
     let qualified: i64 = sqlx::query_scalar("SELECT count(*) FROM core_gift.qualifications q JOIN core_identity.oauth_identities i ON i.user_id=q.user_id WHERE i.issuer=$1 AND i.subject='unknown-source'")
         .bind(ISSUER).fetch_one(&pool).await.unwrap();
     assert_eq!(qualified, 0);
@@ -1112,10 +1116,7 @@ async fn signed_browser_verified_registration_is_the_only_gift_proof_source(pool
         c["email_verified"] = json!(true);
     }
     let path = format!("/api/oauth/google/callback?state={state}&code={code}");
-    assert_eq!(
-        web_call(&app, "GET", &path, Some(&cookie), None).await.0,
-        StatusCode::OK
-    );
+    assert_browser_login(web_call(&app, "GET", &path, Some(&cookie), None).await);
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM core_gift.qualifications")
         .fetch_one(&pool)
         .await

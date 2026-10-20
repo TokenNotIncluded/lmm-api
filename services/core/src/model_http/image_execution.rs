@@ -612,7 +612,7 @@ impl ImageService {
         tx.commit().await.map_err(|_| Error::Pending)?;
         let binding = quote.binding();
         Ok(Preview {
-            confirmation_path: format!("/core/v1/images/confirm/{id}"),
+            confirmation_path: super::image_http::confirmation_path(&id),
             operation_id: id,
             preview_digest: hex(&fingerprint),
             input: DrawingPreviewInput {
@@ -1037,7 +1037,7 @@ fn preview_row(r: &sqlx::postgres::PgRow) -> Result<Preview> {
     input.settings.quality = quote.binding().quality.clone();
     input.settings.n = quote.binding().n;
     Ok(Preview {
-        confirmation_path: format!("/core/v1/images/confirm/{}", r.try_get::<String, _>("id")?),
+        confirmation_path: super::image_http::confirmation_path(&r.try_get::<String, _>("id")?),
         operation_id: r.try_get("id")?,
         preview_digest: hex(&r.try_get::<Vec<u8>, _>("fingerprint")?),
         input,

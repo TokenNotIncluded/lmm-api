@@ -183,13 +183,6 @@ impl Billing for Bridge {
         request: &'a Request,
     ) -> RelayFuture<'a, Reservation> {
         Box::pin(async move {
-            // The local synthetic provider contract budgets one token per UTF-8
-            // byte plus bounded framing. This is deliberately not advertised as
-            // an external provider tokenizer. Oversize prompts never reserve or
-            // dispatch; supplier-specific versioned bounds remain required.
-            if local_input_bound(request)? > self.policy.input_token_ceiling as u64 {
-                return Err(RelayError::Limit("local model input budget"));
-            }
             let (secret, worker, fingerprint, selected, peer, oauth_issuer) = {
                 let active = self
                     .active
@@ -213,6 +206,19 @@ impl Billing for Bridge {
             {
                 return Err(RelayError::RouteUnavailable);
             }
+            // Only the numeric-loopback synthetic contract budgets UTF-8 bytes
+            // plus framing as tokens. External models use the frozen supplier
+            // bound; byte length is not their tokenizer.
+            let endpoint = crate::relay::honeypot_network::validate_base_url(
+                selected.attempt.endpoint(),
+                true,
+            )?;
+            if crate::relay::honeypot_network::literal_ip(&endpoint)
+                .is_some_and(|ip| ip.is_loopback())
+                && local_input_bound(request)? > selected.input_token_ceiling as u64
+            {
+                return Err(RelayError::Limit("local model input budget"));
+            }
             let reserve = if selected.price.upstream_cost_group_ppm.is_some() {
                 let mut conservative = selected.price.clone();
                 conservative.input_per_million = conservative
@@ -222,7 +228,7 @@ impl Billing for Bridge {
                     .cost(Usage {
                         image: None,
                         upstream_cost_atto_usd: Some(crate::upstream_cost::ATTO_USD),
-                        input: self.policy.input_token_ceiling,
+                        input: selected.input_token_ceiling,
                         cached: 0,
                         output: i64::from(request.max_output_tokens),
                     })
@@ -231,7 +237,7 @@ impl Billing for Bridge {
                 let reserve = selected
                     .quote
                     .reservation_ceiling(
-                        self.policy.input_token_ceiling as u64,
+                        selected.input_token_ceiling as u64,
                         u64::from(request.max_output_tokens),
                     )
                     .map_err(|_| RelayError::BillingUnavailable)?;
@@ -350,7 +356,7 @@ impl Billing for Bridge {
                         if usage.upstream_cost_atto_usd.is_none() {
                             return Err(RelayError::SettlementPending);
                         }
-                        if usage.input > self.policy.input_token_ceiling
+                        if usage.input > selected.input_token_ceiling
                             || usage.output > i64::from(output_ceiling)
                         {
                             return Err(RelayError::SettlementPending);
@@ -358,7 +364,7 @@ impl Billing for Bridge {
                         (usage, Outcome::Completed)
                     } else {
                         let usage = complete_usage(report.usage, false)?;
-                        if usage.input > self.policy.input_token_ceiling
+                        if usage.input > selected.input_token_ceiling
                             || usage.output > i64::from(output_ceiling)
                         {
                             return Err(RelayError::SettlementPending);

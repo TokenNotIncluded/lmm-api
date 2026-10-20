@@ -24,6 +24,7 @@ pub(super) struct Selected {
     pub price: Price,
     pub quote: CreditQuote,
     pub route_id: String,
+    pub input_token_ceiling: i64,
 }
 
 pub(super) fn credential_map(
@@ -244,7 +245,7 @@ impl RouteProvider for Bridge {
                 .credentials
                 .get(&(reference.id, reference.revision))
                 .ok_or(RelayError::RouteUnavailable)?;
-            self.provider_policy.validate_attempt(
+            let input_token_ceiling = self.provider_policy.reservation_input_bound(
                 &attempt,
                 self.policy.input_token_ceiling,
                 request.max_output_tokens,
@@ -294,6 +295,7 @@ impl RouteProvider for Bridge {
                 price,
                 quote,
                 route_id,
+                input_token_ceiling,
             });
             Ok(route)
         })

@@ -72,12 +72,14 @@ impl ProviderPolicy {
         Ok(result)
     }
 
-    pub(crate) fn validate_attempt(
+    /// Freeze the reviewed input bound for this exact selected attempt. The
+    /// installation ceiling is only a maximum across models, not their price.
+    pub(crate) fn reservation_input_bound(
         &self,
         attempt: &Attempt,
         reserved_input_tokens: i64,
         output_tokens: u32,
-    ) -> Result<(), RelayError> {
+    ) -> Result<i64, RelayError> {
         self.validate_binding(
             attempt.upstream_id(),
             attempt.upstream_model(),
@@ -85,7 +87,15 @@ impl ProviderPolicy {
             attempt.endpoint(),
             reserved_input_tokens,
             output_tokens,
-        )
+        )?;
+        let endpoint = validate_base_url(attempt.endpoint(), true)?;
+        if literal_ip(&endpoint).is_some_and(|ip| ip.is_loopback()) {
+            return Ok(reserved_input_tokens);
+        }
+        self.contexts
+            .get(&(attempt.upstream_id(), attempt.upstream_model().to_owned()))
+            .map(|context| i64::from(context.max_input_tokens))
+            .ok_or(RelayError::RouteUnavailable)
     }
 
     /// Local synthetic cost contracts retain their bounded test behavior.
@@ -130,6 +140,11 @@ impl ProviderPolicy {
         reserved_input_tokens: i64,
         output_tokens: u32,
     ) -> Result<(), RelayError> {
+        if !(1..=16_000_000).contains(&reserved_input_tokens) {
+            return Err(RelayError::Invalid(
+                "invalid provider input reservation bound",
+            ));
+        }
         if protocol == Protocol::SystemOne && reserved_input_tokens < 65_536 {
             return Err(RelayError::Unsupported(
                 "System One requires the complete native input reservation bound",
@@ -152,6 +167,11 @@ impl ProviderPolicy {
         {
             return Err(RelayError::RouteUnavailable);
         }
+        if protocol == Protocol::SystemOne && context.max_input_tokens < 65_536 {
+            return Err(RelayError::Unsupported(
+                "System One requires the complete native input reservation bound",
+            ));
+        }
         if protocol == Protocol::SystemOne && !context.missing_cached_tokens_is_zero {
             return Err(RelayError::Unsupported(
                 "System One requires a reviewed no-discounted-cache usage contract",
@@ -165,22 +185,14 @@ impl ProviderPolicy {
         attempt: &Attempt,
         reserved_input_tokens: i64,
         long_context: bool,
-    ) -> Result<(), RelayError> {
-        self.validate_attempt(attempt, reserved_input_tokens, 0)?;
-        if long_context {
-            let bound = self
-                .contexts
-                .get(&(attempt.upstream_id(), attempt.upstream_model().to_owned()))
-                .map_or(reserved_input_tokens, |context| {
-                    i64::from(context.max_input_tokens)
-                });
-            if bound <= 65_536 {
-                return Err(RelayError::Unsupported(
-                    "System One long context requires an explicit larger provider reservation contract",
-                ));
-            }
+    ) -> Result<i64, RelayError> {
+        let bound = self.reservation_input_bound(attempt, reserved_input_tokens, 0)?;
+        if long_context && bound <= 65_536 {
+            return Err(RelayError::Unsupported(
+                "System One long context requires an explicit larger provider reservation contract",
+            ));
         }
-        Ok(())
+        Ok(bound)
     }
 }
 
@@ -214,6 +226,153 @@ impl ExternalModelContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::routing::{
+        Endpoint, PriceConfig, PriceSnapshot, ReplayPermission, RouteRequest, Router, RoutingConfig,
+    };
+    use serde_json::json;
+    use std::sync::Arc;
+
+    fn attempt(protocol: Protocol, model: &str, endpoint: &str) -> Attempt {
+        let mut config: RoutingConfig = serde_json::from_value(json!({
+            "version":1,"groups":[{"name":"allowed","enabled":true}],
+            "upstreams":[{"id":1,"endpoint":"https://api.example/v1","protocol":protocol,"credential":{"id":7,"revision":1},"enabled":true}],
+            "routes":[{"id":1,"model":"model","group":"allowed","enabled":true,"speeds":["standard"],
+                "targets":[{"id":1,"upstream_id":1,"upstream_model":model,"enabled":true,"priority":0,"weight":1,"speeds":["standard"],"payload":"adapt","timeout_ms":5000}],
+                "failover":{"max_attempts":1,"retry_on":[],"allow_replay_after_send":false}}],"aliases":[]
+        })).unwrap();
+        config.upstreams[0].endpoint = if endpoint.starts_with("http://127.0.0.1") {
+            Endpoint::local_loopback(endpoint.into()).unwrap()
+        } else {
+            Endpoint::try_from(endpoint.to_owned()).unwrap()
+        };
+        let prices: PriceConfig = serde_json::from_value(json!({"version":1,"rules":[{
+            "id":1,"model":"model","group":"allowed","speed":"standard",
+            "rates":{"input":2000000,"output":0,"cache_read":0,"cache_write":0,"request":0},
+            "group_multiplier_ppm":1000000,"speed_multiplier_ppm":1000000
+        }]}))
+        .unwrap();
+        let router =
+            Router::new(config, Arc::new(PriceSnapshot::compile(prices).unwrap())).unwrap();
+        router
+            .route(RouteRequest {
+                model: "model",
+                group: "allowed",
+                speed: None,
+                protocol,
+                replay: ReplayPermission::Denied,
+            })
+            .unwrap()
+            .start()
+            .unwrap()
+    }
+
+    #[test]
+    fn selected_input_bound_uses_exact_model_contract_and_loopback_keeps_global() {
+        let mut small = context();
+        small.max_input_tokens = 65_536;
+        small.max_output_tokens = 16;
+        let mut large = small.clone();
+        large.upstream_model = "large-model".into();
+        large.max_input_tokens = 1_048_576;
+        large.max_output_tokens = 65_536;
+        let policy = ProviderPolicy::new(vec![small, large], 1_048_576).unwrap();
+        let selected = attempt(
+            Protocol::OpenAiChat,
+            "bounded-model",
+            "https://api.example/v1",
+        );
+        assert_eq!(
+            policy
+                .reservation_input_bound(&selected, 1_048_576, 16)
+                .unwrap(),
+            65_536
+        );
+        assert!(
+            policy
+                .reservation_input_bound(&selected, 1_048_576, 17)
+                .is_err()
+        );
+        assert!(
+            policy
+                .reservation_input_bound(&selected, 65_535, 16)
+                .is_err()
+        );
+        let large = attempt(
+            Protocol::OpenAiChat,
+            "large-model",
+            "https://api.example/v1",
+        );
+        assert_eq!(
+            policy
+                .reservation_input_bound(&large, 1_048_576, 65_536)
+                .unwrap(),
+            1_048_576
+        );
+        for selected in [
+            attempt(
+                Protocol::OpenAiChat,
+                "missing-model",
+                "https://api.example/v1",
+            ),
+            attempt(
+                Protocol::OpenAiResponses,
+                "bounded-model",
+                "https://api.example/v1",
+            ),
+            attempt(
+                Protocol::OpenAiChat,
+                "bounded-model",
+                "https://other.example/v1",
+            ),
+        ] {
+            assert!(
+                policy
+                    .reservation_input_bound(&selected, 1_048_576, 16)
+                    .is_err()
+            );
+        }
+        let local = attempt(
+            Protocol::OpenAiChat,
+            "bounded-model",
+            "http://127.0.0.1:1234/v1",
+        );
+        assert_eq!(
+            policy
+                .reservation_input_bound(&local, 1_048_576, 16)
+                .unwrap(),
+            1_048_576
+        );
+        assert!(policy.reservation_input_bound(&local, 0, 16).is_err());
+    }
+
+    #[test]
+    fn selected_systemone_bound_enforces_native_minimum_and_long_context_contract() {
+        let selected = attempt(
+            Protocol::SystemOne,
+            "bounded-model",
+            "https://api.example/v1",
+        );
+        for cap in [65_535, 65_536, 1_048_576] {
+            let mut native = context();
+            native.protocol = Protocol::SystemOne;
+            native.max_input_tokens = cap;
+            native.missing_cached_tokens_is_zero = true;
+            let policy = ProviderPolicy::new(vec![native], 1_048_576).unwrap();
+            let result = policy.validate_systemone_mode(&selected, 1_048_576, false);
+            if cap < 65_536 {
+                assert!(result.is_err());
+            } else {
+                assert_eq!(result.unwrap(), i64::from(cap));
+            }
+            assert_eq!(
+                policy
+                    .validate_systemone_mode(&selected, 1_048_576, true)
+                    .is_ok(),
+                cap > 65_536,
+            );
+        }
+    }
+
     fn context() -> ExternalModelContext {
         ExternalModelContext {
             upstream_id: 1,

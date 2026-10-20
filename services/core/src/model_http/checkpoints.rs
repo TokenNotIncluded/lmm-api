@@ -200,7 +200,7 @@ impl Bridge {
         if checkpoint
             .usage
             .input_tokens
-            .is_some_and(|v| v > self.policy.input_token_ceiling as u64)
+            .is_some_and(|v| v > selected.input_token_ceiling as u64)
             || checkpoint
                 .usage
                 .output_tokens
@@ -330,6 +330,7 @@ mod a07_recovery_tests {
             price,
             quote,
             route_id: "r1-t1-u1".into(),
+            input_token_ceiling: 64,
         };
         let policy = ProviderPolicy::new(
             vec![ExternalModelContext {
