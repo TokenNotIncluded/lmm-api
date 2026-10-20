@@ -530,6 +530,16 @@ impl PaymentsStore {
                 return Err(Error::Denied);
             }
         }
+        // Persist the verified original PaymentIntent before any ledger credit.
+        // A refund may arrive while that credit is still pending; it must use
+        // this durable binding without minting money or trusting refund metadata.
+        if verified.kind == stripe::EventKind::Credit && intent.provider_transaction.is_none() {
+            sqlx::query("UPDATE core_payments.intents SET provider_transaction=$2 WHERE id=$1")
+                .bind(intent.id)
+                .bind(&verified.transaction)
+                .execute(&mut *tx)
+                .await?;
+        }
         let digest = Sha256::digest(&evidence.signed_payload).to_vec();
         let prior: Option<(i64, Vec<u8>, Vec<u8>)> = sqlx::query_as(
             "SELECT intent_id,payload_hash,receipt_wire FROM core_payments.accepted_proofs WHERE channel_id=$1 AND event_id=$2",

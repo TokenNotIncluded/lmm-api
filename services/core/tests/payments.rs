@@ -544,18 +544,75 @@ async fn unknown_or_other_failed_attempt_never_releases_hold(pool: PgPool) {
     balance(&f, 300_000, 0).await;
 }
 
+async fn assert_no_payment_funds(f: &Fixture, pool: &PgPool) {
+    // A prepared intent has no ledger wallet yet; proof ingress must not create one.
+    assert!(matches!(
+        f.ledger.balance(f.account).await,
+        Err(ledger::Error::NotFound)
+    ));
+    let nonzero: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM core_billing.balance_state b JOIN core_billing.ledger_accounts a ON a.id=b.ledger_account_id WHERE a.owner_account_id=$1 AND b.balance_units<>0",
+    ).bind(f.account).fetch_one(pool).await.unwrap();
+    assert_eq!(nonzero, 0);
+    assert_eq!(journals(pool).await, 0);
+}
+
+async fn accept_original_without_credit(f: &Fixture, pool: &PgPool, intent: &pb::PaymentIntent) {
+    let value = event(intent, &format!("evt_original_{}", intent.intent_id), None);
+    let request = pb::AcceptProviderProofRequest {
+        intent_id: intent.intent_id,
+        evidence: Some(proof(value.clone())),
+    };
+    let accepted = f.store.accept_proof(request.clone()).await.unwrap();
+    assert_eq!(f.store.accept_proof(request).await.unwrap(), accepted);
+    let binding: (Option<String>, Option<i64>) = sqlx::query_as(
+        "SELECT provider_transaction,credit_journal_id FROM core_payments.intents WHERE id=$1",
+    )
+    .bind(intent.intent_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(binding, (Some(format!("pi_{}", intent.intent_id)), None));
+
+    // A separately signed event cannot rebind the accepted original transaction.
+    let mut conflicting = value;
+    conflicting["id"] = json!(format!("evt_conflicting_original_{}", intent.intent_id));
+    conflicting["data"]["object"]["id"] = json!("pi_different_original");
+    assert_eq!(
+        f.store
+            .accept_proof(pb::AcceptProviderProofRequest {
+                intent_id: intent.intent_id,
+                evidence: Some(proof(conflicting)),
+            })
+            .await
+            .unwrap_err(),
+        Error::Conflict
+    );
+    let counts: (i64, i64) = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM core_payments.accepted_proofs),(SELECT count(*) FROM core_payments.receipts WHERE method='credit')",
+    ).fetch_one(pool).await.unwrap();
+    assert_eq!(counts, (1, 0));
+    assert_no_payment_funds(f, pool).await;
+}
+
 #[sqlx::test]
 async fn precredit_refund_is_fenced_without_fake_journal(pool: PgPool) {
     let f = fresh(&pool).await;
     let intent = prepare(&f, "prepare_precredit01", 100).await;
+    accept_original_without_credit(&f, &pool, &intent).await;
+    let mut refund = event(
+        &intent,
+        "evt_precredit_refund",
+        Some(("re_precredit", 100, "succeeded", None)),
+    );
+    refund["data"]["object"]
+        .as_object_mut()
+        .unwrap()
+        .remove("metadata");
     let request = pb::ExternalRefundRequest {
         mutation: mutation("external_precredit01"),
         intent_id: intent.intent_id,
-        evidence: Some(proof(event(
-            &intent,
-            "evt_precredit_refund",
-            Some(("re_precredit", 100, "succeeded", None)),
-        ))),
+        evidence: Some(proof(refund)),
     };
     let receipt = f.store.external_refund(request.clone()).await.unwrap();
     assert_eq!((receipt.state, receipt.journal_id), (5, 0));
@@ -572,6 +629,7 @@ async fn precredit_refund_is_fenced_without_fake_journal(pool: PgPool) {
 async fn partial_precredit_refund_is_explicitly_blocked_for_net_reconciliation(pool: PgPool) {
     let f = fresh(&pool).await;
     let intent = prepare(&f, "prepare_partial_fence", 100).await;
+    accept_original_without_credit(&f, &pool, &intent).await;
     let request = pb::ExternalRefundRequest {
         mutation: mutation("external_partial_fence"),
         intent_id: intent.intent_id,
@@ -1568,6 +1626,27 @@ async fn external_refund_requires_durable_original_payment_binding(pool: PgPool)
         "refund against uncredited intent must be rejected"
     );
 
+    let mut unbound_without_metadata = event(
+        &uncredited,
+        "evt_a05_unbound_no_metadata",
+        Some(("re_a05_unbound_no_metadata", 30, "succeeded", None)),
+    );
+    unbound_without_metadata["data"]["object"]
+        .as_object_mut()
+        .unwrap()
+        .remove("metadata");
+    assert_eq!(
+        f.store
+            .accept_proof(pb::AcceptProviderProofRequest {
+                intent_id: uncredited.intent_id,
+                evidence: Some(proof(unbound_without_metadata)),
+            })
+            .await
+            .unwrap_err(),
+        Error::Conflict
+    );
+    assert_no_payment_funds(&f, &pool).await;
+
     let credited = prepare(&f, "a05_credited_prepare", 100).await;
     credit(&f, &credited, "a05_credited_credit").await;
 
@@ -1577,6 +1656,22 @@ async fn external_refund_requires_durable_original_payment_binding(pool: PgPool)
         Some(("re_a05_mismatched", 30, "succeeded", None)),
     );
     mismatched_value["data"]["object"]["payment_intent"] = json!("pi_different_transaction");
+    let mut mismatched_without_metadata = mismatched_value.clone();
+    mismatched_without_metadata["id"] = json!("evt_a05_mismatched_no_metadata");
+    mismatched_without_metadata["data"]["object"]
+        .as_object_mut()
+        .unwrap()
+        .remove("metadata");
+    assert_eq!(
+        f.store
+            .accept_proof(pb::AcceptProviderProofRequest {
+                intent_id: credited.intent_id,
+                evidence: Some(proof(mismatched_without_metadata)),
+            })
+            .await
+            .unwrap_err(),
+        Error::Conflict
+    );
     let mismatched_proof = proof(mismatched_value);
     let err = f
         .store
