@@ -1,4 +1,4 @@
-//! Read-only Web projections of immutable personal-key model requests.
+//! Read-only Web projections of immutable personal model requests.
 //! Self means actor + personal key owner, NOT wallet payer: team-funded personal
 //! keys are included, team-owned keys are not. No provider/channel evidence is
 //! exposed. Core credits are exact (500,000/USD); holds are never consumption.
@@ -238,6 +238,9 @@ struct ValidatedRequest {
     user: i64,
     key: Option<i64>,
     oauth_source: Option<crate::identity::grants::OAuthSource>,
+    credential_source: &'static str,
+    payer_is_owner: bool,
+    sponsored: bool,
     at: i64,
     price: Price,
     token_name: String,
@@ -263,13 +266,48 @@ impl ValidatedRequest {
             .try_get::<Option<Value>, _>("oauth_source")?
             .map(decode)
             .transpose()?;
-        match (&key, &oauth_source) {
-            (Some(key), None) if *key > 0 => (),
-            (None, Some(source)) => source.validate_stored().map_err(|_| Error::Storage)?,
-            _ => return Err(Error::Storage),
-        }
         let owner: i64 = row.try_get("owner_account_id")?;
         let payer: i64 = row.try_get("payer_account_id")?;
+        let image_operation: Option<String> = row.try_get("image_operation_id")?;
+        let assistant_grant: Option<String> = row.try_get("assistant_grant_id")?;
+        let assistant_sponsor: Option<i64> = row.try_get("assistant_sponsor_account_id")?;
+        if price.image.is_some() != image_operation.is_some()
+            || image_operation.as_deref().is_some_and(|op| op != id)
+        {
+            return Err(Error::Storage);
+        }
+        let credential_source = match (&key, &oauth_source) {
+            (Some(key), None)
+                if *key > 0 && assistant_grant.is_none() && assistant_sponsor.is_none() =>
+            {
+                "api_key"
+            }
+            (None, Some(source))
+                if image_operation.is_none()
+                    && assistant_grant.is_none()
+                    && assistant_sponsor.is_none() =>
+            {
+                source.validate_stored().map_err(|_| Error::Storage)?;
+                "oauth_grant"
+            }
+            (None, None)
+                if image_operation.is_some()
+                    && assistant_grant.is_none()
+                    && assistant_sponsor.is_none()
+                    && owner == payer =>
+            {
+                "drawing_session"
+            }
+            (None, None)
+                if image_operation.is_none()
+                    && assistant_grant.as_ref().is_some_and(|g| !g.is_empty())
+                    && (assistant_sponsor == Some(payer)
+                        || (assistant_sponsor.is_none() && owner == payer)) =>
+            {
+                "assistant_session"
+            }
+            _ => return Err(Error::Storage),
+        };
         if let Some(source) = &oauth_source
             && (source.user_id != user
                 || source.personal_account_id != owner
@@ -293,6 +331,10 @@ impl ValidatedRequest {
             refunded: safe(row.try_get("refunded")?)?,
         };
         let mut usage = Usage {
+            image: row
+                .try_get::<Option<Value>, _>("image_usage")?
+                .map(decode)
+                .transpose()?,
             input: safe(row.try_get("input_tokens")?)?,
             cached: safe(row.try_get("cached_tokens")?)?,
             output: safe(row.try_get("output_tokens")?)?,
@@ -304,7 +346,12 @@ impl ValidatedRequest {
                 .checked_add(usage.output)
                 .ok_or(Error::Storage)?,
         )?;
-        if !usage.valid() || amounts.refunded > amounts.gross || amounts.gross > reserved {
+        if !usage.valid()
+            || (usage.image.is_some() && price.image.is_none())
+            || (state == "settled" && price.image.is_some() && usage.image.is_none())
+            || amounts.refunded > amounts.gross
+            || amounts.gross > reserved
+        {
             return Err(Error::Storage);
         }
         let commands: Vec<StoredCommand> = decode(row.try_get("commands")?)?;
@@ -349,6 +396,7 @@ impl ValidatedRequest {
                 || event.usage.input != usage.input
                 || event.usage.cached != usage.cached
                 || event.usage.output != usage.output
+                || event.usage.image != usage.image
                 || price.cost(event.usage).map_err(|_| Error::Storage)? != amounts.gross
             {
                 return Err(Error::Storage);
@@ -400,6 +448,9 @@ impl ValidatedRequest {
             user,
             key,
             oauth_source,
+            credential_source,
+            payer_is_owner: payer == owner,
+            sponsored: assistant_sponsor.is_some(),
             at: safe(row.try_get("authorized_at")?)?,
             price,
             token_name: row.try_get("token_name")?,
@@ -422,23 +473,34 @@ impl ValidatedRequest {
         matches!(self.source, Source::Subscription { .. })
     }
     fn log(&self) -> Value {
-        let mut other = json!({"credential_source":if self.oauth_source.is_some(){"oauth_grant"}else{"api_key"},"request_state":self.state,"usage_status":if self.settled() {"settled"}else{"incomplete"},
+        let image = self.price.image.is_some();
+        let mut other = json!({"credential_source":self.credential_source,"request_state":self.state,"usage_status":if self.settled() {"settled"}else{"incomplete"},
             "reserved_credits":if self.held() {self.reserved}else{0},
-            "cache_tokens":if self.settled() {Some(self.usage.cached)}else{None},
+            "pricing_dimension":if image {"image"}else{"text"},
+            "token_usage_available":self.settled() && !image,
+            "output_image_count":self.usage.image.filter(|_|self.settled()).map(|u|u.output_images),
+            "cache_tokens":if self.settled() && !image {Some(self.usage.cached)}else{None},
             "billing_source":if self.subscription() {"subscription"}else{"wallet"},
             "payer_kind":self.payer_kind,"pricing_credits_per_usd":CREDITS_PER_USD,
+            "platform_sponsored":self.sponsored,
             "billing_basis":"incomplete","wallet_debit_supported":false});
         let mut item = json!({"id":presentation_id(&self.id),"request_id":self.id,"user_id":self.user,"token_id":self.key,
             "created_at":self.at,"type":if self.settled() && self.outcome.as_deref()==Some("completed") {2}else{5},
             "content":self.outcome.clone().unwrap_or_else(||format!("Model request {}; no final usage receipt",self.state)),
             "model_name":self.price.model,"group":self.price.group,"token_name":self.token_name,"state":self.state,
             "payer_kind":self.payer_kind,"team_funded":self.payer_kind=="team","subscription_funded":self.subscription(),
-            "quota":0,"quota_money_available":false,"billing_basis":"incomplete","wallet_debit_supported":false});
+            "platform_sponsored":self.sponsored,
+            "quota":null,"gross_settled_credits":null,"refunded_credits":null,"net_consumption_credits":null,
+            "quota_money_available":false,"billing_basis":"incomplete","wallet_debit_supported":false,
+            "pricing_dimension":if image {"image"}else{"text"},"token_usage_available":self.settled() && !image,
+            "output_image_count":self.usage.image.filter(|_|self.settled()).map(|u|u.output_images)});
         if self.settled() {
             self.amounts.project(&mut item);
             self.amounts.project(&mut other);
-            item["prompt_tokens"] = json!(self.usage.input);
-            item["completion_tokens"] = json!(self.usage.output);
+            if !image {
+                item["prompt_tokens"] = json!(self.usage.input);
+                item["completion_tokens"] = json!(self.usage.output);
+            }
         }
         item["other"] = json!(other.to_string());
         item
@@ -454,24 +516,35 @@ struct Summary {
     tokens: i64,
     team_net: i64,
     personal_wallet_source_net: i64,
+    sponsored_net: i64,
+    session_sources: bool,
+    images: i64,
 }
 fn recent(at: i64, now: i64) -> bool {
     at > now - 60 && at <= now
 }
 impl Summary {
     fn include(&mut self, r: &ValidatedRequest, now: i64) -> Result<(), Error> {
+        self.session_sources |=
+            matches!(r.credential_source, "drawing_session" | "assistant_session");
         if r.held() {
             add(&mut self.reserved, r.reserved)?;
             add(&mut self.incomplete, 1)?;
         }
         if r.settled() {
+            if let Some(image) = r.usage.image {
+                add(&mut self.images, i64::from(image.output_images))?;
+            }
             self.amounts.accumulate(r.amounts)?;
             add(&mut self.tokens, r.usage.input + r.usage.output)?;
             if r.payer_kind == "team" {
                 add(&mut self.team_net, r.amounts.net())?;
             }
-            if r.payer_kind == "personal" && !r.subscription() {
+            if r.payer_kind == "personal" && r.payer_is_owner && !r.subscription() {
                 add(&mut self.personal_wallet_source_net, r.amounts.net())?;
+            }
+            if r.sponsored {
+                add(&mut self.sponsored_net, r.amounts.net())?;
             }
             if recent(r.at, now) {
                 add(&mut self.rpm, 1)?;
@@ -482,7 +555,9 @@ impl Summary {
     }
     fn project(&self) -> Value {
         let mut data = json!({"rpm":self.rpm,"tpm":self.tpm,"reserved_credits":self.reserved,"incomplete_count":self.incomplete,
-            "usage_scope":"actor_personal_key","settlement_scope":"settled_requests","spending_scope":"all_payers","team_funded_quota":self.team_net,
+            "usage_scope":if self.session_sources {"actor_personal_usage"}else{"actor_personal_key"},"settlement_scope":"settled_requests","spending_scope":"all_payers","team_funded_quota":self.team_net,
+            "output_image_count":self.images,"token_count_scope":"settled_text_requests",
+            "platform_sponsored_quota":self.sponsored_net,
             "personal_wallet_quota":self.personal_wallet_source_net,"personal_wallet_quota_basis":"wallet_source_net_consumption_not_debit"});
         self.amounts.project(&mut data);
         data
@@ -493,6 +568,10 @@ struct Bucket {
     amounts: Amounts,
     tokens: i64,
     count: i64,
+    image_count: i64,
+    has_images: bool,
+    has_text: bool,
+    has_session_sources: bool,
 }
 #[derive(Clone, Copy)]
 enum Projection {
@@ -530,7 +609,7 @@ impl UsageStore {
         let mut total = 0;
         let mut items = Vec::new();
         let mut ids = HashSet::new();
-        let mut buckets: BTreeMap<(i64, String, String, bool), Bucket> = BTreeMap::new();
+        let mut buckets: BTreeMap<(i64, String, String, bool, bool), Bucket> = BTreeMap::new();
         {
             let mut rows = sqlx::query(SELECT_REQUESTS)
                 .bind(actor.user_id)
@@ -566,9 +645,17 @@ impl UsageStore {
                             r.price.model.clone(),
                             r.payer_kind.clone(),
                             r.subscription(),
+                            r.sponsored,
                         );
                         let bucket = buckets.entry(key).or_default();
                         bucket.amounts.accumulate(r.amounts)?;
+                        bucket.has_images |= r.price.image.is_some();
+                        bucket.has_text |= r.price.image.is_none();
+                        bucket.has_session_sources |=
+                            matches!(r.credential_source, "drawing_session" | "assistant_session");
+                        if let Some(image) = r.usage.image {
+                            add(&mut bucket.image_count, i64::from(image.output_images))?;
+                        }
                         add(&mut bucket.tokens, r.usage.input + r.usage.output)?;
                         add(&mut bucket.count, 1)?;
                         if buckets.len() > MAX_BUCKETS {
@@ -586,9 +673,11 @@ impl UsageStore {
             Projection::Stats => summary.project(),
             Projection::Data => {
                 let mut data = Vec::new();
-                for ((at, model, payer_kind, subscription), bucket) in buckets {
-                    let mut item = json!({"user_id":actor.user_id,"model_name":model,"created_at":at,"token_used":bucket.tokens,
-                        "count":bucket.count,"payer_kind":payer_kind,"subscription_funded":subscription,"usage_scope":"actor_personal_key","settlement_scope":"settled_requests"});
+                for ((at, model, payer_kind, subscription, sponsored), bucket) in buckets {
+                    let mut item = json!({"user_id":actor.user_id,"model_name":model,"created_at":at,"token_used":if bucket.has_images && !bucket.has_text {None}else{Some(bucket.tokens)},
+                        "output_image_count":bucket.image_count,"token_count_scope":"settled_text_requests",
+                        "platform_sponsored":sponsored,
+                        "count":bucket.count,"payer_kind":payer_kind,"subscription_funded":subscription,"usage_scope":if bucket.has_session_sources {"actor_personal_usage"}else{"actor_personal_key"},"settlement_scope":"settled_requests"});
                     bucket.amounts.project(&mut item);
                     data.push(item);
                 }
