@@ -2995,9 +2995,15 @@ mod tests {
             "/missing-google"
         );
         let google = crate::identity::GoogleOAuth::new(
-            parsed["LMM_CORE_GOOGLE_CLIENT_ID"].clone(),
+            parsed["LMM_CORE_GOOGLE_CLIENT_ID"]
+                .to_str()
+                .unwrap()
+                .to_owned(),
             "test-only-client-secret".into(),
-            parsed["LMM_CORE_GOOGLE_REDIRECT_URI"].clone(),
+            parsed["LMM_CORE_GOOGLE_REDIRECT_URI"]
+                .to_str()
+                .unwrap()
+                .to_owned(),
         )
         .unwrap();
         let pool = sqlx::postgres::PgPoolOptions::new()
@@ -3005,9 +3011,11 @@ mod tests {
             .connect_lazy("postgresql://unused:unused@127.0.0.1:1/unused")
             .unwrap();
         let store = crate::identity::IdentityStore::from_pool(pool).with_google_oauth(google);
-        let web =
-            crate::legacy_auth::LegacyAuthConfig::new(&parsed["LMM_CORE_WEB_ORIGIN"], &[43; 32])
-                .unwrap();
+        let web = crate::legacy_auth::LegacyAuthConfig::new(
+            parsed["LMM_CORE_WEB_ORIGIN"].to_str().unwrap(),
+            &[43; 32],
+        )
+        .unwrap();
         assert_eq!(web.google_browser_callback(&store), Some("/oauth/google"));
         assert_eq!(web.google_client_id(&store), Some("public-test-client"));
         assert!(!store.google_native_enabled());
