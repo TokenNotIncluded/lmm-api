@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/coreclient"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/postgresurl"
 	"net/url"
 	"regexp"
 	"strings"
@@ -42,13 +43,20 @@ func storageURL(c StorageConfig) (string, error) {
 	}
 	dsn := strings.TrimSpace(string(b))
 	u, err := url.Parse(dsn)
-	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") || u.User == nil || u.User.Username() == "" || u.Hostname() == "" ||
+	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") || u.User == nil || u.User.Username() == "" ||
 		u.Fragment != "" || strings.ContainsAny(dsn, "\r\n\x00") {
 		return "", errors.New("invalid extension PostgreSQL URL")
+	}
+	unix, err := postgresurl.Unix(u)
+	if err != nil {
+		return "", errors.New("invalid extension Unix PostgreSQL URL or connection environment")
 	}
 	name, err := url.PathUnescape(strings.TrimPrefix(u.EscapedPath(), "/"))
 	if err != nil || name != c.Database {
 		return "", errors.New("extension PostgreSQL database does not match its component")
+	}
+	if unix {
+		return dsn, nil
 	}
 	// URL query parameters cannot replace the checked database, role or host, or
 	// install a caller-controlled search_path/statement configuration.

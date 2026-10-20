@@ -30,7 +30,7 @@ func TestDrawingUploadsOnlyExpandInitialPreviewWire(t *testing.T) {
 			if json.Unmarshal(body["uploads"], &uploads) != nil || len(uploads) != 1 || uploads[0] != upload {
 				t.Error("transient sidecar changed")
 			}
-			w.Write([]byte(`{"operation_id":"image:original","preview_digest":"digest","input":{},"reservation_credits":12,"expires_at":999,"state":"previewed","confirmation_path":"/core/v1/images/confirm/image:original"}`))
+			w.Write([]byte(`{"operation_id":"image:original","preview_digest":"digest","input":{},"reservation_credits":12,"expires_at":999,"state":"previewed","confirmation_path":"/api/user/auth/images/confirm/image:original"}`))
 		case "/internal/models/images/v1/query":
 			query++
 			if body["uploads"] != nil {
@@ -56,7 +56,7 @@ func TestDrawingUploadsOnlyExpandInitialPreviewWire(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(observed.Result), `"expires_at":999`) || !strings.Contains(string(observed.Result), `https://core.example.test/core/v1/images/confirm/image:original`) {
+	if !strings.Contains(string(observed.Result), `"expires_at":999`) || !strings.Contains(string(observed.Result), `https://core.example.test/api/user/auth/images/confirm/image:original`) {
 		t.Fatal("query lost original confirmation expiry/URL")
 	}
 	if _, err = adapter.ResumeDrawing(ctx, "original-session", in, "image:original"); err != nil {

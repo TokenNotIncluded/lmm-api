@@ -15,6 +15,10 @@ func TestStorageURLRejectsUnisolatedConfiguration(t *testing.T) {
 		ok                             bool
 	}{
 		{"valid", "postgres://role:synthetic@127.0.0.1:5432/lmm_store_test?sslmode=disable", "lmm_store_test", "store", 0600, true},
+		{"Unix socket", "postgresql://role:synthetic@/lmm_store_test?host=%2Frun%2Flmm-postgresql&port=5433&sslmode=disable", "lmm_store_test", "store", 0600, true},
+		{"mixed endpoint", "postgresql://role:synthetic@127.0.0.1/lmm_store_test?host=%2Frun%2Flmm-postgresql&sslmode=disable", "lmm_store_test", "store", 0600, false},
+		{"Unix database override", "postgresql://role:synthetic@/core_test?host=%2Frun%2Flmm-postgresql&sslmode=disable", "lmm_store_test", "store", 0600, false},
+		{"Unix password required", "postgresql://role@/lmm_store_test?host=%2Frun%2Flmm-postgresql&sslmode=disable", "lmm_store_test", "store", 0600, false},
 		{"operations", "postgres://role:synthetic@127.0.0.1:5432/lmm_operations_test?sslmode=disable", "lmm_operations_test", "operations", 0600, true},
 		{"operations core database", "postgres://role@127.0.0.1/core_test", "core_test", "operations", 0600, false},
 		{"operations wrong component", "postgres://role@127.0.0.1/lmm_store_test", "lmm_store_test", "operations", 0600, false},

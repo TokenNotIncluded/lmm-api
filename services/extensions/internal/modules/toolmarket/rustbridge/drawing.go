@@ -14,6 +14,8 @@ import (
 	market "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/toolmarket"
 )
 
+const imageConfirmationPathPrefix = "/api/user/auth/images/confirm/"
+
 // DrawingAdapter has its own model socket and host token; it holds no supplier
 // credential or price and cannot confirm an image operation for the user.
 type DrawingAdapter struct {
@@ -153,7 +155,7 @@ func imageResult(call string, r imageReceipt, origin ...string) (market.BuiltinR
 	out.AwaitingConfirmation = r.State == "previewed"
 	document := map[string]any{"operation_id": r.OperationID, "state": r.State, "preview_digest": r.PreviewDigest, "reservation_credits": r.ReservationCredits, "charged_credits": r.ChargedCredits, "output": r.Output, "billing_pending": out.SettlementStatus != "settled"}
 	if (out.AwaitingConfirmation || out.ResumeReady) && len(origin) == 1 {
-		document["confirmation_url"] = origin[0] + "/core/v1/images/confirm/" + r.OperationID
+		document["confirmation_url"] = origin[0] + imageConfirmationPathPrefix + r.OperationID
 		if r.ExpiresAt > 0 {
 			document["preview"] = map[string]any{"operation_id": r.OperationID, "state": r.State, "expires_at": r.ExpiresAt, "reservation_credits": r.ReservationCredits, "preview_digest": r.PreviewDigest}
 		}
@@ -192,7 +194,7 @@ func (d *DrawingAdapter) InvokeDrawing(ctx context.Context, session string, in m
 	if e != nil {
 		return out, e
 	}
-	if p.OperationID == "" || len(p.OperationID) > 200 || p.PreviewDigest == "" || p.ReservationCredits < 0 || p.ConfirmationPath != "/core/v1/images/confirm/"+p.OperationID || strings.ContainsAny(p.OperationID, "/?#%\\\r\n") {
+	if p.OperationID == "" || len(p.OperationID) > 200 || p.PreviewDigest == "" || p.ReservationCredits < 0 || p.ConfirmationPath != imageConfirmationPathPrefix+p.OperationID || strings.ContainsAny(p.OperationID, "/?#%\\\r\n") {
 		return out, market.ErrPending
 	}
 	out.DownstreamOperationID = p.OperationID

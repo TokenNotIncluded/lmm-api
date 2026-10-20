@@ -36,24 +36,31 @@ func TestOwnerURLCannotOverrideCheckedDatabaseOrRole(t *testing.T) {
 	file := filepath.Join(dir, "owner-url")
 	p, _ := compiled("toolmarket")
 	c := Config{Component: "toolmarket", OwnerURLFile: file, ExpectedDatabase: "lmm_toolmarket_new", OwnerRole: "module_owner", RuntimeRole: "module_runtime"}
-	for _, raw := range []string{
-		"postgres://installer:private@127.0.0.1:55555/lmm_toolmarket_new?sslmode=disable",
-		"postgres://installer:private@127.0.0.1:55555/lmm_toolmarket_new?options=-crole%3Dsuperuser",
-		"postgres://installer:private@127.0.0.1:55555/lmm_core_new",
-		"postgres://installer:private@127.0.0.1:55555/lmm_toolmarket_new?sslmode=disable&sslmode=require",
+	for _, test := range []struct {
+		raw string
+		ok  bool
+	}{
+		{"postgres://installer:private@127.0.0.1:55555/lmm_toolmarket_new?sslmode=disable", true},
+		{"postgresql://installer:private@/lmm_toolmarket_new?host=%2Frun%2Flmm-postgresql&port=5433&sslmode=disable", true},
+		{"postgresql://installer:private@127.0.0.1/lmm_toolmarket_new?host=%2Frun%2Flmm-postgresql&sslmode=require", false},
+		{"postgresql://installer:private@/lmm_core_new?host=%2Frun%2Flmm-postgresql&sslmode=disable", false},
+		{"postgresql://installer@/lmm_toolmarket_new?host=%2Frun%2Flmm-postgresql&sslmode=disable", false},
+		{"postgres://installer:private@127.0.0.1:55555/lmm_toolmarket_new?options=-crole%3Dsuperuser", false},
+		{"postgres://installer:private@127.0.0.1:55555/lmm_core_new", false},
+		{"postgres://installer:private@127.0.0.1:55555/lmm_toolmarket_new?sslmode=disable&sslmode=require", false},
 	} {
-		if os.WriteFile(file, []byte(raw), 0600) != nil {
+		if os.WriteFile(file, []byte(test.raw), 0600) != nil {
 			t.Fatal("file")
 		}
-		_, e := ownerURL(c, p)
-		if strings.HasSuffix(raw, "?sslmode=disable") {
-			if e != nil {
-				t.Fatal(e)
-			}
-		} else if e == nil {
-			t.Fatal("accepted override")
+		got, err := ownerURL(c, p)
+		if (err == nil) != test.ok {
+			t.Fatal("unexpected owner URL acceptance")
+		}
+		if test.ok && got != test.raw {
+			t.Fatal("owner URL changed")
 		}
 	}
+
 	c.OwnerRole = c.RuntimeRole
 	if _, e := ownerURL(c, p); e == nil {
 		t.Fatal("runtime as owner")

@@ -55,7 +55,7 @@ func TestDrawingPrivateWirePreviewQueryAndSettledReceipt(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/internal/models/images/v1/preview":
-			w.Write([]byte(`{"operation_id":"image:original","preview_digest":"digest","input":{"prompt":"synthetic image"},"reservation_credits":21,"expires_at":999,"state":"previewed","confirmation_path":"/core/v1/images/confirm/image:original"}`))
+			w.Write([]byte(`{"operation_id":"image:original","preview_digest":"digest","input":{"prompt":"synthetic image"},"reservation_credits":21,"expires_at":999,"state":"previewed","confirmation_path":"/api/user/auth/images/confirm/image:original"}`))
 		case "/internal/models/images/v1/query":
 			if _, present := body["operation_id"]; present {
 				t.Error("ACK-loss query must locate by context without fabricated id")
@@ -98,5 +98,104 @@ func TestDrawingDoesNotClearBillingWithoutCoreSettledCharge(t *testing.T) {
 		if e == nil && result.SettlementStatus == "settled" {
 			t.Fatal("unsettled image accepted")
 		}
+	}
+}
+
+func TestDrawingPreviewConfirmationPathRequiresCookieScopedOriginalOperation(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		path  string
+		valid bool
+	}{
+		{"cookie-scoped-original", "/api/user/auth/images/confirm/image:original", true},
+		{"retired-core-path", "/core/v1/images/confirm/image:original", false},
+		{"other-operation", "/api/user/auth/images/confirm/image:other", false},
+		{"missing-operation", "/api/user/auth/images/confirm/", false},
+		{"other-auth-action", "/api/user/auth/logout", false},
+		{"other-image-action", "/api/user/auth/images/preview/image:original", false},
+		{"other-cookie-path", "/api/user/images/confirm/image:original", false},
+		{"query", "/api/user/auth/images/confirm/image:original?confirm=true", false},
+		{"fragment", "/api/user/auth/images/confirm/image:original#confirm", false},
+		{"trailing-slash", "/api/user/auth/images/confirm/image:original/", false},
+		{"absolute-same-origin", "https://core.example.test/api/user/auth/images/confirm/image:original", false},
+		{"absolute-other-origin", "https://other.example.test/api/user/auth/images/confirm/image:original", false},
+		{"network-path", "//other.example.test/api/user/auth/images/confirm/image:original", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var requests atomic.Int64
+			adapter := drawingTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				if r.Method != http.MethodPost || r.URL.Path != "/internal/models/images/v1/preview" {
+					t.Error("preview performed another action")
+				}
+				json.NewEncoder(w).Encode(imagePreview{OperationID: "image:original", PreviewDigest: "digest", Input: json.RawMessage(`{}`), ReservationCredits: 21, ExpiresAt: 999, State: "previewed", ConfirmationPath: tt.path})
+			})
+			in := market.BuiltinInvocation{Context: market.BuiltinContext{CallID: "original-call", DispatchID: "original-dispatch"}, ToolName: "drawing.generate", Arguments: json.RawMessage(`{"prompt":"synthetic image"}`)}
+			out, err := adapter.InvokeDrawing(context.Background(), "synthetic-personal-session", in, "original-key")
+			if requests.Load() != 1 {
+				t.Fatal("preview was retried")
+			}
+			if !tt.valid {
+				if err != market.ErrPending || len(out.Result) != 0 || out.DownstreamOperationID != "" {
+					t.Fatalf("unbound confirmation path accepted: %v", err)
+				}
+				return
+			}
+			if err != nil || out.DownstreamOperationID != "image:original" || !out.AwaitingConfirmation || out.SettlementStatus != "pending" {
+				t.Fatalf("cookie-scoped original preview rejected: %v", err)
+			}
+			var result struct {
+				StructuredContent struct {
+					ConfirmationURL string `json:"confirmation_url"`
+				} `json:"structuredContent"`
+			}
+			if json.Unmarshal(out.Result, &result) != nil || result.StructuredContent.ConfirmationURL != "https://core.example.test/api/user/auth/images/confirm/image:original" {
+				t.Fatal("preview changed the cookie-scoped original confirmation URL")
+			}
+		})
+	}
+}
+
+func TestDrawingReceiptConfirmationURLUsesCookieScopedOriginalOperation(t *testing.T) {
+	for _, state := range []string{"previewed", "confirmed"} {
+		out, err := imageResult("original-call", imageReceipt{OperationID: "image:original", PreviewDigest: "digest", ReservationCredits: 21, State: state, ExpiresAt: 999}, "https://core.example.test")
+		if err != nil || out.DownstreamOperationID != "image:original" || out.SettlementStatus != "pending" {
+			t.Fatalf("original receipt rejected: %v", err)
+		}
+		var result struct {
+			StructuredContent struct {
+				ConfirmationURL string `json:"confirmation_url"`
+			} `json:"structuredContent"`
+		}
+		if json.Unmarshal(out.Result, &result) != nil || result.StructuredContent.ConfirmationURL != "https://core.example.test/api/user/auth/images/confirm/image:original" {
+			t.Fatal("query receipt changed the cookie-scoped original confirmation URL")
+		}
+	}
+}
+
+func TestDrawingQueryAndResumeRejectDifferentOperationID(t *testing.T) {
+	var requests atomic.Int64
+	adapter := drawingTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if r.URL.Path != "/internal/models/images/v1/query" && r.URL.Path != "/internal/models/images/v1/execute" {
+			t.Error("unexpected private action")
+		}
+		var body struct {
+			OperationID string `json:"operation_id"`
+		}
+		if json.NewDecoder(r.Body).Decode(&body) != nil || body.OperationID != "image:original" {
+			t.Error("original operation binding changed")
+		}
+		json.NewEncoder(w).Encode(imageReceipt{OperationID: "image:other", PreviewDigest: "digest", ReservationCredits: 21, State: "confirmed"})
+	})
+	in := market.BuiltinInvocation{Context: market.BuiltinContext{CallID: "original-call", DispatchID: "original-dispatch"}, ToolName: "drawing.generate", Arguments: json.RawMessage(`{"prompt":"synthetic image"}`)}
+	if _, err := adapter.QueryDrawing(context.Background(), "synthetic-personal-session", in, "image:original"); err != market.ErrConflict {
+		t.Fatal("query accepted another operation")
+	}
+	if _, err := adapter.ResumeDrawing(context.Background(), "synthetic-personal-session", in, "image:original"); err != market.ErrConflict {
+		t.Fatal("resume accepted another operation")
+	}
+	if requests.Load() != 2 {
+		t.Fatal("query or resume was retried")
 	}
 }
