@@ -272,6 +272,55 @@ async fn prepare_freezes_policy_credit_receipt_and_replay_are_atomic(pool: PgPoo
 }
 
 #[sqlx::test]
+async fn receipt_does_not_wait_for_concurrent_intent_writer_and_keeps_authorization(pool: PgPool) {
+    let f = fresh(&pool).await;
+    let intent = prepare(&f, "prepare_receipt_read_01", 100).await;
+    let request = pb::GetPaymentReceiptRequest {
+        intent_id: intent.intent_id,
+        idempotency_key: intent.idempotency_key.clone(),
+    };
+    let expected = f
+        .store
+        .receipt(Some(&f.secret), request.clone())
+        .await
+        .unwrap();
+    let stranger = f.identity.bootstrap_user(902, 0).await.unwrap();
+    let mut writer = pool.begin().await.unwrap();
+    // Create a new, uncommitted tuple version and retain its actual row lock.
+    // The payer and receipt remain unchanged, as during a concurrent credit.
+    sqlx::query("UPDATE core_payments.intents SET refund_fenced=refund_fenced WHERE id=$1")
+        .bind(intent.intent_id)
+        .execute(&mut *writer)
+        .await
+        .unwrap();
+    let read = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        f.store.receipt(Some(&f.secret), request.clone()),
+    )
+    .await
+    .expect("receipt waited for the mutable intent writer")
+    .unwrap();
+    assert_eq!(read, expected);
+    assert_eq!(
+        f.store
+            .receipt(Some(&stranger.secret), request.clone())
+            .await,
+        Err(Error::Denied)
+    );
+    writer.commit().await.unwrap();
+    assert_eq!(
+        f.store.receipt(Some(&f.secret), request).await.unwrap(),
+        expected
+    );
+    assert_eq!(journals(&pool).await, 0);
+    let entries: i64 = sqlx::query_scalar("SELECT count(*) FROM core_billing.ledger_entries")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(entries, 0);
+}
+
+#[sqlx::test]
 async fn current_authority_is_checked_even_on_prepare_and_hold_replay(pool: PgPool) {
     let f = fresh(&pool).await;
     let intent = prepare(&f, "prepare_authority_01", 100).await;
