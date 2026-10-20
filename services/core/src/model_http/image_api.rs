@@ -748,6 +748,7 @@ mod tests {
     async fn image_api_output_is_not_published_from_nonterminal_receipt() {
         let id = operation_id(&"a".repeat(64));
         let receipt = Receipt {
+            expires_at: None,
             operation_id: id.clone(),
             state: "billing_pending".into(),
             preview_digest: "digest".into(),

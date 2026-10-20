@@ -1,6 +1,6 @@
 //! Mount ONLY on the existing protected model UDS listener. This host credential
 //! grants transport access, never user identity, quote or spending authority.
-use super::image_execution::{Error, ImageService, Receipt};
+use super::image_execution::{DrawingUpload, Error, ImageService, MAX_PREVIEW_BODY, Receipt};
 use crate::tool_market::credit_execution::BuiltinContext;
 use axum::{
     Json, Router,
@@ -30,6 +30,7 @@ struct Internal {
 struct Authority {
     digest: [u8; 32],
     slots: Arc<Semaphore>,
+    preview_slots: Arc<Semaphore>,
 }
 fn valid_host_token(token: &[u8]) -> bool {
     (32..=256).contains(&token.len()) && token.iter().all(u8::is_ascii_graphic)
@@ -50,6 +51,7 @@ impl Authority {
         Ok(Self {
             digest: Sha256::digest(token).into(),
             slots: Arc::new(Semaphore::new(MAX_CALLS)),
+            preview_slots: Arc::new(Semaphore::new(1)),
         })
     }
     fn host(&self, headers: &HeaderMap) -> Result<(), Error> {
@@ -95,6 +97,8 @@ impl Authority {
 struct PreviewRequest {
     context: BuiltinContext,
     input: Value,
+    #[serde(default)]
+    uploads: Vec<DrawingUpload>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -160,7 +164,16 @@ async fn secure_response(response: Response) -> Response {
     secure(response)
 }
 async fn bounded_body(request: Request) -> Result<Bytes, Response> {
-    to_bytes(request.into_body(), MAX_BODY).await.map_err(|_| {
+    bounded_body_limit(request, MAX_BODY).await
+}
+async fn bounded_body_limit(request: Request, maximum: usize) -> Result<Bytes, Response> {
+    tokio::time::timeout(
+        std::time::Duration::from_secs(if maximum > MAX_BODY { 30 } else { 2 }),
+        to_bytes(request.into_body(), maximum),
+    )
+    .await
+    .map_err(|_| failure(Error::Pending))?
+    .map_err(|_| {
         secure(
             (
                 StatusCode::PAYLOAD_TOO_LARGE,
@@ -194,7 +207,19 @@ async fn action(
     ) {
         return failure(Error::Missing);
     }
-    let body = match bounded_body(request).await {
+    let _preview_permit = if action == "preview" {
+        match state.authority.preview_slots.clone().try_acquire_owned() {
+            Ok(permit) => Some(permit),
+            Err(_) => return failure(Error::Pending),
+        }
+    } else {
+        None
+    };
+    let body = match if action == "preview" {
+        bounded_body_limit(request, MAX_PREVIEW_BODY).await
+    } else {
+        bounded_body(request).await
+    } {
         Ok(body) => body,
         Err(response) => return response,
     };
@@ -209,7 +234,7 @@ async fn action(
                 let input: PreviewRequest = decode(&body)?;
                 state
                     .service
-                    .preview(&session, &input.context, input.input)
+                    .preview_with_uploads(&session, &input.context, input.input, input.uploads)
                     .await
                     .map(|preview| Json(preview).into_response())
             }
@@ -258,7 +283,8 @@ async fn action(
 }
 
 /// This returned router must be merged into the private UDS router only.
-/// The 64 KiB request limit does not cap image output responses.
+/// Only the typed preview accepts the bounded image sidecar. All other actions
+/// retain 64 KiB bodies; neither limit caps image output responses.
 pub fn internal_router(service: ImageService, token: Vec<u8>) -> Result<Router, Error> {
     let authority = Authority::new(&token)?;
     Ok(Router::new()
@@ -397,6 +423,7 @@ mod tests {
     #[test]
     fn image_internal_pending_output_is_never_exposed() {
         let mut receipt = Receipt {
+            expires_at: None,
             operation_id: "id".into(),
             state: "billing_pending".into(),
             preview_digest: "d".into(),
@@ -427,5 +454,24 @@ mod tests {
             assert_eq!(response.status().as_u16(), status);
             assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
         }
+    }
+    #[tokio::test]
+    async fn image_internal_preview_sidecar_limit_does_not_expand_other_actions() {
+        let bytes = vec![b' '; MAX_BODY + 1];
+        assert!(
+            bounded_body(Request::new(Body::from(bytes.clone())))
+                .await
+                .is_err()
+        );
+        assert!(
+            bounded_body_limit(Request::new(Body::from(bytes)), MAX_PREVIEW_BODY)
+                .await
+                .is_ok()
+        );
+        let auth = authority();
+        let permit = auth.preview_slots.clone().try_acquire_owned().unwrap();
+        assert!(auth.preview_slots.clone().try_acquire_owned().is_err());
+        drop(permit);
+        assert!(auth.preview_slots.clone().try_acquire_owned().is_ok());
     }
 }

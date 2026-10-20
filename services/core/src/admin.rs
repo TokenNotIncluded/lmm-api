@@ -12,6 +12,7 @@ use lmm_core::{
 use serde::Deserialize;
 
 mod check_db;
+mod first_owner;
 pub use check_db::{invalid_arguments as invalid_check_db_arguments, run as check_database};
 use std::{
     error::Error,
@@ -30,12 +31,16 @@ pub enum Operation {
     CompleteSetup,
     InstallToolMarketBuiltins,
     BootstrapUser(Bootstrap),
+    CreateFirstOwner(first_owner::Request),
     InstallUsageReceiptIndex([u8; 32]),
     PlanAdminActivation(PlanAdminActivationRequest),
     ApplyAdminActivation(Box<ApplyAdminActivationRequest>),
 }
 
 impl Operation {
+    pub fn create_first_owner(input: impl Read) -> io::Result<Self> {
+        first_owner::read(input).map(Self::CreateFirstOwner)
+    }
     pub fn usage_receipt_index(input: impl Read) -> io::Result<Self> {
         let bad = || io::Error::new(io::ErrorKind::InvalidInput, "invalid prior catalog SHA256");
         let mut bytes = Vec::new();
@@ -130,6 +135,11 @@ pub async fn run(operation: Operation) -> Result<(), Box<dyn Error>> {
                 .await?;
             // One-time secret output. Operators must redirect to a private file.
             serde_json::to_writer(io::stdout().lock(), &issued)?;
+            println!();
+        }
+        Operation::CreateFirstOwner(request) => {
+            let receipt = first_owner::run(&pool, request).await?;
+            serde_json::to_writer(io::stdout().lock(), &receipt)?;
             println!();
         }
         Operation::CompleteSetup => {

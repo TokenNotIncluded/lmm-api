@@ -241,12 +241,11 @@ async fn validate(
         return Err(IdentityError::Invalid);
     }
     let ips = networks(input.allow_ips.as_deref().unwrap_or(""))?;
-    let group = input
-        .group
-        .as_deref()
-        .ok_or(IdentityError::Invalid)?
-        .trim()
-        .to_owned();
+    let group = input.group.as_deref().ok_or(IdentityError::Invalid)?;
+    if !crate::routing::valid_group_name(group) {
+        return Err(IdentityError::Invalid);
+    }
+    let group = group.to_owned();
     let allowed = if marked {
         let public = crate::abuse::public_models_in_transaction(c, user)
             .await
@@ -271,7 +270,9 @@ async fn validate(
         if auto.is_empty()
             || auto.len() > 16
             || auto.iter().collect::<HashSet<_>>().len() != auto.len()
-            || auto.iter().any(|g| !allowed.contains(g))
+            || auto
+                .iter()
+                .any(|g| !crate::routing::valid_group_name(g) || !allowed.contains(g))
         {
             return Err(IdentityError::Forbidden);
         }
@@ -404,7 +405,7 @@ impl IdentityStore {
             let allowed = groups(&mut tx, actor.user_id, self.dashboard_routing.as_deref()).await?;
             candidates
                 .into_iter()
-                .filter(|g| allowed.contains(g))
+                .filter(|g| crate::routing::valid_group_name(g) && allowed.contains(g))
                 .collect()
         } else {
             Vec::new()

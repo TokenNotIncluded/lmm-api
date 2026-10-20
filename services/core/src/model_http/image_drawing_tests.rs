@@ -416,3 +416,6 @@ async fn image_drawing_restricted_runtime_role_confirms_and_settles_original_gra
     drop(service);
     role.cleanup().await;
 }
+
+#[path = "image_drawing_reference_tests.rs"]
+mod references;

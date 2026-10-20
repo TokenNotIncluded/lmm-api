@@ -38,6 +38,7 @@ fn request(id: &str, reserve: i64) -> ChargeRequest {
         price: Price {
             image: None,
             upstream_cost_group_ppm: None,
+            tiered: None,
             version: "price-1".into(),
             model: "local-model".into(),
             group: "default".into(),

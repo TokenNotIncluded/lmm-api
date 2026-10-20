@@ -34,8 +34,55 @@ pub fn router(store: HistoryStore) -> Router {
         .route("/api/log/stat", get(stats))
         .route("/api/log/token", get(token_logs))
         .route("/api/finance/export", get(export_usage))
+        .route("/api/mj", get(drawing_admin))
+        .route("/api/mj/", get(drawing_admin))
+        .route("/api/mj/self", get(drawing_self))
+        .route("/api/mj/self/", get(drawing_self))
+        .route("/api/task", get(task_admin))
+        .route("/api/task/", get(task_admin))
+        .route("/api/task/self", get(task_self))
+        .route("/api/task/self/", get(task_self))
         .with_state(store)
         .layer(middleware::from_fn(no_store))
+}
+
+async fn unavailable_category(
+    store: HistoryStore,
+    headers: HeaderMap,
+    route: ReadRoute,
+    category: &'static str,
+) -> Response {
+    let secret = match extract_bearer(&headers) {
+        Ok(secret) => secret,
+        Err(error) => return error_response(error),
+    };
+    if let Err(error) = store.authenticate_category(secret, route).await {
+        return error_response(error);
+    }
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({
+            "success": false,
+            "code": "USAGE_HISTORY_UNAVAILABLE",
+            "availability": "unavailable",
+            "category": category,
+            "message": "This usage history category is unavailable"
+        })),
+    )
+        .into_response()
+}
+
+async fn drawing_admin(State(store): State<HistoryStore>, headers: HeaderMap) -> Response {
+    unavailable_category(store, headers, ReadRoute::Administrator, "drawing").await
+}
+async fn drawing_self(State(store): State<HistoryStore>, headers: HeaderMap) -> Response {
+    unavailable_category(store, headers, ReadRoute::SelfSession, "drawing").await
+}
+async fn task_admin(State(store): State<HistoryStore>, headers: HeaderMap) -> Response {
+    unavailable_category(store, headers, ReadRoute::Administrator, "task").await
+}
+async fn task_self(State(store): State<HistoryStore>, headers: HeaderMap) -> Response {
+    unavailable_category(store, headers, ReadRoute::SelfSession, "task").await
 }
 
 async fn no_store(request: axum::extract::Request, next: Next) -> Response {

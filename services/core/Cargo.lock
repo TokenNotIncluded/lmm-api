@@ -1573,6 +1573,8 @@ dependencies = [
  "jsonschema",
  "jsonwebtoken",
  "lettre",
+ "num-bigint",
+ "num-rational",
  "oxide-auth",
  "prost",
  "protoc-bin-vendored",

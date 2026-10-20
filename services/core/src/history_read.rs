@@ -224,6 +224,43 @@ impl HistoryStore {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
+    /// Admit an unavailable category without reading unrelated historical logs.
+    /// This establishes read identity only; it grants no data or write authority.
+    pub(crate) async fn authenticate_category(&self, secret: &str, route: ReadRoute) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("SET LOCAL statement_timeout='5s'")
+            .execute(&mut *tx)
+            .await?;
+        match route {
+            ReadRoute::Administrator => {
+                authorize(&mut tx, secret, route).await?;
+            }
+            ReadRoute::SelfSession => {
+                let actor = identity::authenticate_readonly_in_transaction(&mut tx, secret).await?;
+                if actor.credential_kind != CredentialKind::Session
+                    || actor.owner.kind != crate::accounts::AccountKind::Personal
+                    || actor.owner.id != actor.user_id
+                {
+                    return Err(HistoryError::Forbidden);
+                }
+                let current_owner: i64 = sqlx::query_scalar(
+                    "SELECT personal_account_id FROM core_identity.users WHERE id=$1",
+                )
+                .bind(actor.user_id)
+                .fetch_one(&mut *tx)
+                .await?;
+                if actor.owner_account_id != current_owner {
+                    return Err(HistoryError::Forbidden);
+                }
+            }
+            ReadRoute::ReadOnlyKey => return Err(HistoryError::Forbidden),
+        }
+        tx.commit().await?;
+        Ok(())
+    }
     pub async fn read(
         &self,
         secret: &str,

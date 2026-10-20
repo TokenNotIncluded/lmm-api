@@ -53,6 +53,7 @@ fn routes(
         version: 1,
         rules: vec![PriceRule {
             billing_mode: lmm_core::routing::BillingMode::Tokens,
+            tiered: None,
             id: 1,
             model: "local-model".into(),
             group: "allowed".into(),
@@ -616,6 +617,7 @@ async fn output_checkpoint_exact_replay_conflict_worker_binding_and_immutability
         price: ChargingPrice {
             image: None,
             upstream_cost_group_ppm: None,
+            tiered: None,
             version: "synthetic-checkpoint-v1".into(),
             model: "local-model".into(),
             group: "allowed".into(),

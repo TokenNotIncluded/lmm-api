@@ -33,6 +33,7 @@ fn test_price() -> Price {
     Price {
         image: None,
         upstream_cost_group_ppm: None,
+        tiered: None,
         version: "v1".into(),
         model: "test-model".into(),
         group: "default".into(),

@@ -261,6 +261,7 @@ async fn actual_team_settlement_and_refund_count_the_actor_without_spending_pers
         price: Price {
             image: None,
             upstream_cost_group_ppm: None,
+            tiered: None,
             version: "synthetic-v1".into(),
             model: "local-model".into(),
             group: "default".into(),

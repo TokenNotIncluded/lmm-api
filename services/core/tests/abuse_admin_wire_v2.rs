@@ -210,6 +210,7 @@ async fn seed_nonempty_hold(f: &Fixture, pool: &PgPool) {
         price: Price {
             image: None,
             upstream_cost_group_ppm: None,
+            tiered: None,
             version: "synthetic-v1".into(),
             model: "public-model".into(),
             group: "synthetic-group".into(),

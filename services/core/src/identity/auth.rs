@@ -204,6 +204,12 @@ impl IdentityStore {
         .await
         .map_err(|_| IdentityError::Storage)?
     }
+    /// Password preparation for the explicit offline installer. This does not
+    /// create identity, grant permissions, or bypass a database owner check.
+    pub async fn hash_installer_password(&self, password: String) -> Result<String> {
+        password_policy(&password)?;
+        self.hash_password(password).await
+    }
     pub(super) async fn verify_password(&self, password: String, hash: String) -> Result<bool> {
         let permit = self
             .password_slots

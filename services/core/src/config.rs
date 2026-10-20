@@ -133,6 +133,9 @@ struct IdentityFile {
     oauth2: Option<OAuth2File>,
     web: Option<WebFile>,
     google: Option<GoogleFile>,
+    github: Option<GoogleFile>,
+    linuxdo: Option<GoogleFile>,
+    discord: Option<GoogleFile>,
 }
 impl Default for IdentityFile {
     fn default() -> Self {
@@ -146,6 +149,9 @@ impl Default for IdentityFile {
             oauth2: None,
             web: None,
             google: None,
+            github: None,
+            linuxdo: None,
+            discord: None,
         }
     }
 }
@@ -294,6 +300,7 @@ struct CoreFile {
     images: Option<SupportProjectionFile>,
     ingress: Option<IngressFile>,
     remote_control: Option<RemoteControlFile>,
+    edge_access: Option<crate::edge_access::TypedConfig>,
 }
 
 fn parse_document<T: serde::de::DeserializeOwned>(document: &[u8]) -> io::Result<T> {
@@ -343,6 +350,9 @@ fn parse_core_file(document: &[u8]) -> io::Result<BTreeMap<&'static str, OsStrin
         && (file.identity.registration_enabled
             || file.identity.web.is_some()
             || file.identity.google.is_some()
+            || file.identity.github.is_some()
+            || file.identity.linuxdo.is_some()
+            || file.identity.discord.is_some()
             || file.identity.api_key_encryption_key_file.is_some()
             || file.identity.mfa.is_some()
             || file.identity.oauth2.is_some()
@@ -358,7 +368,8 @@ fn parse_core_file(document: &[u8]) -> io::Result<BTreeMap<&'static str, OsStrin
             || file.wallet.is_some()
             || file.bounties.is_some()
             || file.images.is_some()
-            || file.remote_control.is_some())
+            || file.remote_control.is_some()
+            || file.edge_access.is_some())
     {
         return Err(invalid_config(
             "configured identity and business capabilities require a core database",
@@ -373,6 +384,20 @@ fn parse_core_file(document: &[u8]) -> io::Result<BTreeMap<&'static str, OsStrin
         values.insert(name, value.into());
     };
     let configured_listen = file.server.listen.clone();
+    if file.edge_access.is_some() && !file.console.enabled {
+        return Err(invalid_config(
+            "edge access requires the console policy store",
+        ));
+    }
+    if (file.identity.github.is_some()
+        || file.identity.linuxdo.is_some()
+        || file.identity.discord.is_some())
+        && file.identity.web.is_none()
+    {
+        return Err(invalid_config(
+            "external browser login requires Web authentication",
+        ));
+    }
     put("LMM_CORE_LISTEN", file.server.listen);
     for (name, number, maximum) in [
         ("LMM_CORE_WORKER_THREADS", file.server.worker_threads, 4),
@@ -555,6 +580,35 @@ fn parse_core_file(document: &[u8]) -> io::Result<BTreeMap<&'static str, OsStrin
             "LMM_CORE_GOOGLE_CLIENT_SECRET_FILE",
             google.client_secret_file,
         ));
+    }
+    for (provider, id_key, uri_key, secret_key) in [
+        (
+            file.identity.github,
+            "LMM_CORE_GITHUB_CLIENT_ID",
+            "LMM_CORE_GITHUB_REDIRECT_URI",
+            "LMM_CORE_GITHUB_CLIENT_SECRET_FILE",
+        ),
+        (
+            file.identity.linuxdo,
+            "LMM_CORE_LINUXDO_CLIENT_ID",
+            "LMM_CORE_LINUXDO_REDIRECT_URI",
+            "LMM_CORE_LINUXDO_CLIENT_SECRET_FILE",
+        ),
+        (
+            file.identity.discord,
+            "LMM_CORE_DISCORD_CLIENT_ID",
+            "LMM_CORE_DISCORD_REDIRECT_URI",
+            "LMM_CORE_DISCORD_CLIENT_SECRET_FILE",
+        ),
+    ] {
+        if let Some(provider) = provider {
+            put(id_key, provider.client_id);
+            put(uri_key, provider.redirect_uri);
+            paths.push((secret_key, provider.client_secret_file));
+        }
+    }
+    if let Some(edge) = file.edge_access {
+        paths.push(("LMM_CORE_EDGE_PROOF_FILE", edge.proof_file));
     }
     if let Some(rpc) = file.rpc {
         if let Some(gid) = rpc.shared_group_id {
@@ -791,6 +845,48 @@ pub fn identity_auth(
         }
         store
     };
+    for (provider, id_key, uri_key, secret_key) in [
+        (
+            crate::identity::ExternalProvider::Github,
+            "LMM_CORE_GITHUB_CLIENT_ID",
+            "LMM_CORE_GITHUB_REDIRECT_URI",
+            "LMM_CORE_GITHUB_CLIENT_SECRET_FILE",
+        ),
+        (
+            crate::identity::ExternalProvider::LinuxDo,
+            "LMM_CORE_LINUXDO_CLIENT_ID",
+            "LMM_CORE_LINUXDO_REDIRECT_URI",
+            "LMM_CORE_LINUXDO_CLIENT_SECRET_FILE",
+        ),
+        (
+            crate::identity::ExternalProvider::Discord,
+            "LMM_CORE_DISCORD_CLIENT_ID",
+            "LMM_CORE_DISCORD_REDIRECT_URI",
+            "LMM_CORE_DISCORD_CLIENT_SECRET_FILE",
+        ),
+    ] {
+        let configured = [
+            setting_os(id_key),
+            setting_os(uri_key),
+            setting_os(secret_key),
+        ];
+        if configured.iter().all(Option::is_none) {
+            continue;
+        }
+        let id = setting(id_key)
+            .map_err(|_| invalid_config("incomplete external OAuth configuration"))?;
+        let uri = setting(uri_key)
+            .map_err(|_| invalid_config("incomplete external OAuth configuration"))?;
+        let path = setting_os(secret_key)
+            .ok_or_else(|| invalid_config("incomplete external OAuth configuration"))?;
+        let secret = String::from_utf8(private_file(Path::new(&path), 4096)?)
+            .map_err(|_| invalid_config("invalid OAuth credential"))?;
+        let provider = crate::identity::ExternalOAuth::new(provider, &id, secret.trim(), &uri)
+            .map_err(|_| invalid_config("invalid external OAuth configuration"))?;
+        store = store
+            .with_external_oauth(provider)
+            .map_err(|_| invalid_config("duplicate external OAuth configuration"))?;
+    }
     if let Some(path) = setting_os("LMM_CORE_API_KEY_ENCRYPTION_KEY_FILE") {
         store = store
             .with_api_key_encryption_key(&private_file(Path::new(&path), 32)?)
@@ -853,8 +949,70 @@ pub fn identity_database_required() -> io::Result<bool> {
         || setting_os("LMM_CORE_GOOGLE_CLIENT_SECRET").is_some()
         || setting_os("LMM_CORE_GOOGLE_CLIENT_SECRET_FILE").is_some()
         || setting_os("LMM_CORE_GOOGLE_REDIRECT_URI").is_some()
+        || setting_os("LMM_CORE_GITHUB_CLIENT_ID").is_some()
+        || setting_os("LMM_CORE_LINUXDO_CLIENT_ID").is_some()
+        || setting_os("LMM_CORE_DISCORD_CLIENT_ID").is_some()
         || oauth2_configured()
         || market_oauth_configured())
+}
+
+pub fn edge_access_config() -> io::Result<Option<crate::edge_access::TypedConfig>> {
+    let proof = setting_os("LMM_CORE_EDGE_PROOF_FILE").map(PathBuf::from);
+    if proof.is_none() {
+        return Ok(None);
+    }
+    let tokens: Vec<PathBuf> = match SOURCE.get() {
+        Some(Source::File(values)) => values
+            .iter()
+            .filter(|(name, _)| edge_service_token_setting(name))
+            .map(|(_, path)| PathBuf::from(path))
+            .collect(),
+        Some(Source::LegacyEnv) => env::vars_os()
+            .filter(|(name, _)| name.to_str().is_some_and(edge_service_token_setting))
+            .map(|(_, path)| PathBuf::from(path))
+            .collect(),
+        None => vec![],
+    };
+    checked_edge_access_config(proof, &tokens)
+}
+
+fn edge_service_token_setting(name: &str) -> bool {
+    name.starts_with("LMM_CORE_") && name.ends_with("_TOKEN_FILE")
+}
+
+fn checked_edge_access_config(
+    proof: Option<PathBuf>,
+    tokens: &[PathBuf],
+) -> io::Result<Option<crate::edge_access::TypedConfig>> {
+    let Some(proof_file) = proof else {
+        return Ok(None);
+    };
+    #[cfg(not(unix))]
+    {
+        let _ = (proof_file, tokens);
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "edge access credentials require Unix private files",
+        ))
+    }
+    #[cfg(unix)]
+    {
+        let proof = zeroize::Zeroizing::new(service_token(&proof_file)?);
+        for path in tokens {
+            if path == &proof_file {
+                return Err(invalid_config(
+                    "edge proof must be independent from service credentials",
+                ));
+            }
+            let token = zeroize::Zeroizing::new(service_token(path)?);
+            if proof.as_slice() == token.as_slice() {
+                return Err(invalid_config(
+                    "edge proof must be independent from service credentials",
+                ));
+            }
+        }
+        Ok(Some(crate::edge_access::TypedConfig { proof_file }))
+    }
 }
 
 /// A bounded core pool. RPC identity and event delivery use separate pools.
@@ -1139,6 +1297,10 @@ pub async fn tool_market_server(
     let pool = bounded_database_pool(url, 4).await?;
     let mut app = axum::Router::new();
     if let Some((_, token)) = &tool {
+        app = app.merge(
+            crate::builtins::http::router(crate::builtins::Store::from_pool(pool.clone()), token)
+                .map_err(|_| invalid_config("invalid private builtin registry service"))?,
+        );
         app = app.merge(
             crate::tool_market::http::router(
                 crate::tool_market::ToolMarketStore::from_pool(pool.clone()),
@@ -2039,7 +2201,6 @@ fn model_gateway_with_origins(
     .map_err(|_| invalid_config("invalid external model context contracts"))?;
     if config.version != 1
         || config.routing.routes.is_empty()
-        || config.key_groups.is_empty()
         || config.credentials.is_empty()
         || !(1..=240).contains(&config.timeout_seconds)
         || !(1..=65_536).contains(&config.max_output_tokens)
@@ -2582,6 +2743,136 @@ fn read_database_url(inline: Option<String>, file: Option<PathBuf>) -> io::Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn edge_proof_disabled_does_not_read_service_files() {
+        assert!(
+            checked_edge_access_config(None, &[PathBuf::from("/missing-service-token")])
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn edge_proof_service_settings_include_every_core_token_purpose() {
+        for name in [
+            "RPC",
+            "TOOL_MARKET",
+            "WALLET",
+            "BOUNTIES",
+            "IMAGES",
+            "SUPPORT_PROJECTION",
+            "TOOL_MARKET_FIXED_WITNESS",
+            "INGRESS",
+            "REMOTE_CONTROL",
+            "PAYMENTS",
+            "COMMERCE",
+            "ASSISTANT",
+            "FUTURE_PURPOSE",
+        ] {
+            assert!(edge_service_token_setting(&format!(
+                "LMM_CORE_{name}_TOKEN_FILE"
+            )));
+        }
+        for name in [
+            "OTHER_RPC_TOKEN_FILE",
+            "LMM_CORE_EDGE_PROOF_FILE",
+            "LMM_CORE_RPC_TOKEN_FILE_EXTRA",
+        ] {
+            assert!(!edge_service_token_setting(name));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn edge_proof_rejects_same_path_and_trimmed_bytes_in_distinct_private_files() {
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let directory = std::env::temp_dir().join(format!(
+            "lmm-edge-proof-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&directory).unwrap();
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+        let proof = directory.join("edge");
+        let reused = directory.join("service-reused");
+        let independent = directory.join("service-independent");
+        for (path, contents) in [
+            (&proof, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"),
+            (&reused, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            (&independent, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"),
+        ] {
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(path)
+                .unwrap();
+            file.write_all(contents.as_bytes()).unwrap();
+        }
+        for path in [&proof, &reused] {
+            let error = checked_edge_access_config(Some(proof.clone()), &[path.clone()])
+                .err()
+                .unwrap();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+            assert_eq!(
+                error.to_string(),
+                "edge proof must be independent from service credentials"
+            );
+        }
+        let config = checked_edge_access_config(Some(proof.clone()), &[independent])
+            .unwrap()
+            .unwrap();
+        assert_eq!(config.proof_file, proof);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn deployment_edge_requires_database_console_and_private_absolute_path() {
+        let edge = "\n[edge_access]\nproof_file='/nonexistent-lmm-test/edge-proof'\n";
+        assert!(parse_core_file(format!("version=1{edge}").as_bytes()).is_err());
+        let base = "version=1\n[database]\nurl_file='/nonexistent-lmm-test/db'\n";
+        assert!(parse_core_file(format!("{base}{edge}").as_bytes()).is_err());
+        let document = format!("{base}[console]\nenabled=true\n{edge}");
+        let values = parse_core_file(document.as_bytes()).unwrap();
+        assert_eq!(
+            values.get("LMM_CORE_EDGE_PROOF_FILE"),
+            Some(&OsString::from("/nonexistent-lmm-test/edge-proof"))
+        );
+        assert!(
+            parse_core_file(
+                document
+                    .replace("'/nonexistent-lmm-test/edge-proof'", "'relative-proof'")
+                    .as_bytes()
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn deployment_external_oauth_requires_web_and_separate_provider_settings() {
+        let base = "version=1\n[database]\nurl_file='/nonexistent-lmm-test/db'\n";
+        for (provider, key) in [
+            ("github", "LMM_CORE_GITHUB_CLIENT_SECRET_FILE"),
+            ("linuxdo", "LMM_CORE_LINUXDO_CLIENT_SECRET_FILE"),
+            ("discord", "LMM_CORE_DISCORD_CLIENT_SECRET_FILE"),
+        ] {
+            let oauth = format!(
+                "[identity.{provider}]\nclient_id='public-client'\nclient_secret_file='/nonexistent-lmm-test/{provider}'\nredirect_uri='https://api.example.test/oauth/{provider}'\n"
+            );
+            assert!(parse_core_file(format!("{base}{oauth}").as_bytes()).is_err());
+            let web = "[identity.web]\norigin='https://api.example.test'\nrefresh_key_file='/nonexistent-lmm-test/refresh'\nuser_agreement_enabled=true\nprivacy_policy_enabled=true\n";
+            let values = parse_core_file(format!("{base}{web}{oauth}").as_bytes()).unwrap();
+            assert_eq!(
+                values.get(key),
+                Some(&OsString::from(format!("/nonexistent-lmm-test/{provider}")))
+            );
+            assert!(!values.contains_key("LMM_CORE_GOOGLE_CLIENT_SECRET_FILE"));
+        }
+    }
     #[test]
     fn builtin_private_hosts_require_database_and_separate_witness_configuration() {
         for (section, token) in [
@@ -3335,6 +3626,23 @@ rules=[{{id=1,model='model',group='allowed',speed='standard',rates={{input=20000
             .connect_lazy("postgresql://synthetic:synthetic@127.0.0.1:1/synthetic")
             .unwrap();
         assert!(model_gateway(pool.clone(), document.as_bytes(), false).is_ok());
+        // Native API keys are created and revoked in the identity database.
+        // A host need not predeclare their IDs in the synthetic access map.
+        let dynamic_keys =
+            document.replace("key_groups=[{key_id=1,group='allowed'}]", "key_groups=[]");
+        let dynamic_gateway = model_gateway(pool.clone(), dynamic_keys.as_bytes(), false).unwrap();
+        let _router = dynamic_gateway.router();
+        // Empty static access never bypasses provider binding validation.
+        assert!(
+            model_gateway(
+                pool.clone(),
+                dynamic_keys
+                    .replace("max_input_tokens=64", "max_input_tokens=101")
+                    .as_bytes(),
+                false,
+            )
+            .is_err()
+        );
         // Explicit local mode can never consume an external provider contract.
         assert!(model_gateway(pool.clone(), document.as_bytes(), true).is_err());
         for invalid in [

@@ -11,6 +11,7 @@ use subtle::ConstantTimeEq;
 const ISSUER: &str = "https://accounts.google.com";
 const CALLBACK_PATH: &str = "/core/v1/auth/oauth/google/callback";
 const BROWSER_CALLBACK_PATH: &str = "/api/oauth/google/callback";
+const LEGACY_BROWSER_CALLBACK_PATH: &str = "/api/oauth/google";
 const MAX_PROVIDER_BODY: usize = 65_536;
 
 /// No Debug implementation: this contains a client secret.
@@ -39,7 +40,10 @@ impl GoogleOAuth {
             || redirect.password().is_some()
             || redirect.query().is_some()
             || redirect.fragment().is_some()
-            || !matches!(redirect.path(), CALLBACK_PATH | BROWSER_CALLBACK_PATH)
+            || !matches!(
+                redirect.path(),
+                CALLBACK_PATH | BROWSER_CALLBACK_PATH | LEGACY_BROWSER_CALLBACK_PATH
+            )
         {
             return Err(IdentityError::Invalid);
         }
@@ -228,7 +232,7 @@ impl IdentityStore {
             ("client_id", config.client_id.as_str()),
             ("redirect_uri", config.redirect_uri.as_str()),
             ("response_type", "code"),
-            ("scope", "openid email"),
+            ("scope", "openid profile email"),
             ("state", &state),
             ("nonce", &nonce),
             ("code_challenge", &challenge),
@@ -258,8 +262,14 @@ impl IdentityStore {
     /// native callback or a different origin cannot enable browser login.
     pub fn google_browser_client_id(&self, origin: &str) -> Option<&str> {
         let config = self.google.as_ref()?;
-        (config.redirect_uri == format!("{origin}{BROWSER_CALLBACK_PATH}"))
-            .then_some(config.client_id.as_str())
+        self.google_browser_callback(origin)
+            .map(|_| config.client_id.as_str())
+    }
+    pub fn google_browser_callback(&self, origin: &str) -> Option<&str> {
+        let config = self.google.as_ref()?;
+        [BROWSER_CALLBACK_PATH, LEGACY_BROWSER_CALLBACK_PATH]
+            .into_iter()
+            .find(|path| config.redirect_uri == format!("{origin}{path}"))
     }
     pub(crate) fn google_native_enabled(&self) -> bool {
         self.google.as_ref().is_some_and(|config| {
@@ -344,7 +354,7 @@ impl IdentityStore {
         Ok(user_id)
     }
     async fn take_google_flow(&self, state: &str, binding: &str) -> Result<PgRow> {
-        sqlx::query("DELETE FROM core_identity.oauth_flows WHERE state_digest=$1 AND binding_digest=$2 AND expires_at>clock_timestamp() RETURNING nonce_digest,pkce_verifier")
+        sqlx::query("DELETE FROM core_identity.oauth_flows WHERE state_digest=$1 AND binding_digest=$2 AND issuer='https://accounts.google.com' AND expires_at>clock_timestamp() RETURNING nonce_digest,pkce_verifier")
             .bind(digest(state)?).bind(digest(binding)?).fetch_optional(&self.pool).await?
             .ok_or(IdentityError::Unauthorized)
     }

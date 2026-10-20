@@ -30,7 +30,9 @@ pub use mfa::{
     BrowserLoginOutcome, LoginOutcome, MfaChallenge, MfaCompletion, MfaError, MfaResult, MfaSetup,
     MfaStatus,
 };
+mod external_login;
 mod oauth;
+pub use external_login::{ExternalOAuth, ExternalProvider};
 mod resource;
 pub use auth::{CredentialSummary, LoginRequest};
 pub use lifecycle::{InviteSummary, MemberSummary, MemberUpdate};
@@ -92,6 +94,7 @@ pub struct IdentityStore {
     registration_enabled: bool,
     password_slots: std::sync::Arc<tokio::sync::Semaphore>,
     google: Option<std::sync::Arc<GoogleOAuth>>,
+    external: std::collections::BTreeMap<ExternalProvider, std::sync::Arc<ExternalOAuth>>,
     dashboard_routing: Option<std::sync::Arc<crate::routing::Router>>,
     commerce_scope_enabled: bool,
     financial_profile_enabled: bool,
@@ -405,6 +408,7 @@ impl IdentityStore {
             registration_enabled: false,
             password_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(2)),
             google: None,
+            external: std::collections::BTreeMap::new(),
             dashboard_routing: None,
             commerce_scope_enabled: false,
             financial_profile_enabled: false,

@@ -115,6 +115,7 @@ async fn seed(pool: &PgPool, fixture: &Fixture, id: &str, usage: Value, terminal
         price: Price {
             image: None,
             upstream_cost_group_ppm: None,
+            tiered: None,
             version: "synthetic-recovery-v1".into(),
             model: "local-model".into(),
             group: "allowed".into(),

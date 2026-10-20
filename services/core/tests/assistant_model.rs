@@ -40,6 +40,7 @@ fn gateway_endpoint(pool: &PgPool, endpoint: &str) -> ModelGateway {
         version: 1,
         rules: vec![PriceRule {
             billing_mode: BillingMode::Tokens,
+            tiered: None,
             id: 1,
             model: "local-model".into(),
             group: "allowed".into(),

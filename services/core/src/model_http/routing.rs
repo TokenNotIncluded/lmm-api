@@ -55,11 +55,34 @@ pub(super) fn credit_price(
     group: &str,
 ) -> Result<Price, RelayError> {
     let rates = quote.rates();
+    if let Some(tariff) = quote.tiered() {
+        let (group_multiplier_ppm, speed_multiplier_ppm) = quote.multipliers_ppm();
+        let price = Price {
+            image: None,
+            upstream_cost_group_ppm: None,
+            tiered: Some(crate::routing::PersistedTieredTariff {
+                tariff: tariff.tariff(),
+                input_semantics: crate::routing::InputSemantics::Inclusive,
+                group_multiplier_ppm,
+                speed_multiplier_ppm,
+                credits_per_usd: 500_000,
+            }),
+            version: format!("routing-{}-rule-{}", quote.version(), quote.rule_id()),
+            model: model.to_owned(),
+            group: group.to_owned(),
+            input_per_million: 0,
+            cached_per_million: 0,
+            output_per_million: 0,
+        };
+        price.validate().map_err(super::billing::error)?;
+        return Ok(price);
+    }
     if quote.billing_mode() == crate::routing::BillingMode::UpstreamCost {
         let (group_ppm, _) = quote.multipliers_ppm();
         let price = Price {
             image: None,
             upstream_cost_group_ppm: Some(group_ppm),
+            tiered: None,
             version: format!("routing-{}-rule-{}", quote.version(), quote.rule_id()),
             model: model.to_owned(),
             group: group.to_owned(),
@@ -92,6 +115,7 @@ pub(super) fn credit_price(
     let price = Price {
         image: None,
         upstream_cost_group_ppm: None,
+        tiered: None,
         version: format!("routing-{}-rule-{}", quote.version(), quote.rule_id()),
         model: model.to_owned(),
         group: group.to_owned(),
@@ -182,8 +206,15 @@ impl RouteProvider for Bridge {
             let quote = plan.quote().with_credit_rate(
                 CreditRate::new(1, 500_000).map_err(|_| RelayError::BillingUnavailable)?,
             );
-            let price = credit_price(quote.price(), plan.canonical_model(), &group)?;
+            let mut price = credit_price(quote.price(), plan.canonical_model(), &group)?;
             let attempt = plan.start().map_err(|_| RelayError::RouteUnavailable)?;
+            if let Some(tariff) = &mut price.tiered {
+                tariff.input_semantics = if attempt.protocol() == Protocol::AnthropicMessages {
+                    crate::routing::InputSemantics::AnthropicText
+                } else {
+                    crate::routing::InputSemantics::Inclusive
+                };
+            }
             if !attempt.is_available()
                 || attempt.payload_policy() != PayloadPolicy::Adapt
                 || u128::from(attempt.timeout_ms()) < self.total_timeout.as_millis()
@@ -333,6 +364,7 @@ mod tests {
             version: 3,
             rules: vec![PriceRule {
                 billing_mode: crate::routing::BillingMode::Tokens,
+                tiered: None,
                 id: 1,
                 model: "test".into(),
                 group: "default".into(),

@@ -2,6 +2,8 @@
 //! supplies a payer, tariff, provider URL, usage or a successful-payment flag.
 #[path = "image_api_execution.rs"]
 mod api_execution;
+#[path = "image_drawing_input.rs"]
+mod drawing_input;
 use super::{
     image_price::{ImageEndpoint, ImagePriceConfig, ImageQuote, ImageQuoteRequest, ImageUsage},
     image_provider::ImageProvider,
@@ -15,6 +17,8 @@ use crate::{
         credit_execution::{BuiltinContext, BuiltinKind},
     },
 };
+pub(crate) use drawing_input::MAX_PREVIEW_BODY;
+pub use drawing_input::{DrawingPreviewInput, DrawingUpload, ReferenceImage};
 use rand::{RngCore, rngs::OsRng};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -146,13 +150,17 @@ pub struct Preview {
     pub operation_id: String,
     pub confirmation_path: String,
     pub preview_digest: String,
-    pub input: DrawingInput,
+    pub input: DrawingPreviewInput,
     pub reservation_credits: i64,
     pub expires_at: i64,
     pub state: String,
 }
 #[derive(Clone, Debug, Serialize, Eq, PartialEq)]
 pub struct Capability {
+    pub endpoint: ImageEndpoint,
+    pub max_reference_images: u32,
+    pub max_reference_bytes: u64,
+    pub max_total_reference_bytes: u64,
     pub model: String,
     pub group: String,
     pub size: String,
@@ -163,6 +171,8 @@ pub struct Capability {
 #[derive(Clone, Debug, Serialize)]
 pub struct Receipt {
     pub operation_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<i64>,
     pub state: String,
     pub preview_digest: String,
     pub reservation_credits: i64,
@@ -226,6 +236,7 @@ fn price(quote: &ImageQuote) -> Price {
     Price {
         image: Some(quote.persisted()),
         upstream_cost_group_ppm: None,
+        tiered: None,
         version: format!("image-{}", quote.revision()),
         model: quote.binding().semantic_model.clone(),
         group: quote.binding().billing_group.clone(),
@@ -311,6 +322,64 @@ impl ImageService {
             .into_iter()
             .collect()
     }
+    /// Safe immutable tariff metadata only; never provider identity or credentials.
+    pub(crate) fn pricing_projection(
+        &self,
+    ) -> std::result::Result<
+        (u64, Vec<(String, String, super::pricing::ImageVariant)>),
+        super::pricing::PricingError,
+    > {
+        let mut counts = BTreeMap::new();
+        for rule in &self.prices.rules {
+            *counts
+                .entry((
+                    &rule.billing_group,
+                    &rule.semantic_model,
+                    rule.endpoint,
+                    &rule.size,
+                    &rule.quality,
+                ))
+                .or_insert(0_usize) += 1;
+        }
+        let mut result = Vec::new();
+        for rule in &self.prices.rules {
+            // Configured dimensions are normalized by ImageService::new. More
+            // than one supplier binding is the same ambiguity quote_for rejects.
+            if counts[&(
+                &rule.billing_group,
+                &rule.semantic_model,
+                rule.endpoint,
+                &rule.size,
+                &rule.quality,
+            )] != 1
+            {
+                continue;
+            }
+            let config = ImagePriceConfig {
+                revision: self.prices.revision,
+                rules: vec![rule.clone()],
+            };
+            let quote = config
+                .quote(&ImageQuoteRequest {
+                    upstream_id: rule.upstream_id,
+                    vendor: rule.vendor.clone(),
+                    billing_group: rule.billing_group.clone(),
+                    upstream_model: rule.upstream_model.clone(),
+                    semantic_model: rule.semantic_model.clone(),
+                    endpoint: rule.endpoint,
+                    size: rule.size.clone(),
+                    quality: rule.quality.clone(),
+                    n: 1,
+                })
+                .map_err(|_| super::pricing::PricingError::Unavailable)?;
+            result.push((
+                rule.billing_group.clone(),
+                rule.semantic_model.clone(),
+                super::pricing::image_variant(rule, &quote)?,
+            ));
+        }
+        Ok((self.prices.revision, result))
+    }
     pub(crate) fn contains_credential(&self, secret: &str) -> bool {
         let digest: [u8; 32] = Sha256::digest(secret.as_bytes()).into();
         let mut matched = subtle::Choice::from(0);
@@ -319,11 +388,18 @@ impl ImageService {
         }
         bool::from(matched)
     }
-    fn quote(&self, input: &DrawingInput) -> Result<ImageQuote> {
+    fn drawing_quote(&self, input: &DrawingPreviewInput) -> Result<ImageQuote> {
         if input.prompt.chars().count() > 2000 || !(1..=4).contains(&input.n) {
             return Err(Error::Invalid);
         }
-        self.quote_for(input, ImageEndpoint::Generations)
+        self.quote_for(
+            &input.settings,
+            if input.reference_images.is_empty() {
+                ImageEndpoint::Generations
+            } else {
+                ImageEndpoint::Edits
+            },
+        )
     }
     fn quote_for(&self, input: &DrawingInput, endpoint: ImageEndpoint) -> Result<ImageQuote> {
         if input.prompt.is_empty()
@@ -386,8 +462,7 @@ impl ImageService {
         let groups:Vec<String>=sqlx::query_scalar("SELECT group_name FROM core_identity.user_routing_groups WHERE user_id=$1 AND enabled ORDER BY group_name").bind(a.user_id).fetch_all(&mut *tx).await?;
         let mut out = Vec::new();
         for rule in &self.prices.rules {
-            if rule.endpoint != ImageEndpoint::Generations || !groups.contains(&rule.billing_group)
-            {
+            if !groups.contains(&rule.billing_group) {
                 continue;
             }
             let input = DrawingInput {
@@ -398,8 +473,25 @@ impl ImageService {
                 quality: rule.quality.clone(),
                 n: 1,
             };
-            if let Ok(quote) = self.quote(&input) {
+            if let Ok(quote) = self.quote_for(&input, rule.endpoint) {
+                let edits = rule.endpoint == ImageEndpoint::Edits;
                 let item = Capability {
+                    endpoint: rule.endpoint,
+                    max_reference_images: if edits {
+                        drawing_input::MAX_REFERENCES as u32
+                    } else {
+                        0
+                    },
+                    max_reference_bytes: if edits {
+                        drawing_input::MAX_REFERENCE_BYTES as u64
+                    } else {
+                        0
+                    },
+                    max_total_reference_bytes: if edits {
+                        drawing_input::MAX_TOTAL_REFERENCE_BYTES as u64
+                    } else {
+                        0
+                    },
                     model: input.model,
                     group: input.group,
                     size: input.size,
@@ -423,14 +515,30 @@ impl ImageService {
         context: &BuiltinContext,
         input: Value,
     ) -> Result<Preview> {
-        let parsed: DrawingInput =
-            serde_json::from_value(input.clone()).map_err(|_| Error::Invalid)?;
+        self.preview_with_uploads(session, context, input, vec![])
+            .await
+    }
+    pub async fn preview_with_uploads(
+        &self,
+        session: &str,
+        context: &BuiltinContext,
+        input: Value,
+        uploads: Vec<DrawingUpload>,
+    ) -> Result<Preview> {
+        let _permit = self
+            .gate
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Error::Pending)?;
+        let parsed = drawing_input::parse_arguments(&input)?;
+        // Bytes are checked before a quote can be confirmed. The immutable input
+        // digest remains the exact original market arguments, not this sidecar.
         if crate::builtins::input_digest(&input).map_err(|_| Error::Invalid)?
             != context.input_digest
         {
             return Err(Error::Forbidden);
         }
-        let quote = self.quote(&parsed)?;
+        let quote = self.drawing_quote(&parsed)?;
         let frozen = price(&quote);
         let mut tx = begin(&self.pool).await?;
         let actor =
@@ -448,6 +556,19 @@ impl ImageService {
         if builtin.user_id != actor.user_id || builtin.owner_account_id != actor.owner_account_id {
             return Err(Error::Forbidden);
         }
+        drawing_input::authorize_references(
+            &input,
+            &builtin.version_id,
+            &builtin.input_schema_digest,
+        )?;
+        let stored_input = if uploads.is_empty() {
+            drawing_input::freeze(input.clone(), uploads)?
+        } else {
+            let original = input.clone();
+            tokio::task::spawn_blocking(move || drawing_input::freeze(original, uploads))
+                .await
+                .map_err(|_| Error::Pending)??
+        };
         let id = format!(
             "image:{}",
             hex(&digest(&json!([
@@ -459,16 +580,24 @@ impl ImageService {
         let source = api_execution::SourceKey::Drawing {
             credential_id: actor.credential_id,
         };
+        // Metadata includes Core-verified content SHA/length/MIME. Hashing the
+        // original small arguments binds the bytes without copying base64 into
+        // several canonicalization buffers under the process memory limit.
         let fingerprint = digest(&json!([source, context, input, frozen]))?;
         let at = now(&mut tx).await?;
+        let expires_at:i64=sqlx::query_scalar("SELECT LEAST(c.resolve_by,(g.request->>'expires_at')::bigint,$2) FROM core_tool_market.credit_calls c JOIN core_tool_market.credit_consents g ON g.id=c.consent_id WHERE c.id=$1")
+            .bind(&builtin.call_id).bind(at+600).fetch_one(&mut *tx).await?;
+        if expires_at <= at {
+            return Err(Error::Forbidden);
+        }
         let version: i64 = sqlx::query_scalar(
             "SELECT auth_version FROM core_identity.users WHERE id=$1 FOR SHARE",
         )
         .bind(actor.user_id)
         .fetch_one(&mut *tx)
         .await?;
-        sqlx::query("INSERT INTO core_image.operations(id,session_id,actor_user_id,owner_account_id,auth_version,context,input,fingerprint,price,state,created_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'previewed',$10,$10+600) ON CONFLICT(id) DO NOTHING")
-            .bind(&id).bind(actor.credential_id).bind(actor.user_id).bind(actor.owner_account_id).bind(version).bind(json!(context)).bind(&input).bind(fingerprint.as_slice()).bind(json!(frozen)).bind(at).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO core_image.operations(id,session_id,actor_user_id,owner_account_id,auth_version,context,input,fingerprint,price,state,created_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'previewed',$10,$11) ON CONFLICT(id) DO NOTHING")
+            .bind(&id).bind(actor.credential_id).bind(actor.user_id).bind(actor.owner_account_id).bind(version).bind(json!(context)).bind(&stored_input).bind(fingerprint.as_slice()).bind(json!(frozen)).bind(at).bind(expires_at).execute(&mut *tx).await?;
         let row = sqlx::query(
             "SELECT fingerprint,expires_at,state FROM core_image.operations WHERE id=$1 FOR SHARE",
         )
@@ -486,11 +615,14 @@ impl ImageService {
             confirmation_path: format!("/core/v1/images/confirm/{id}"),
             operation_id: id,
             preview_digest: hex(&fingerprint),
-            input: DrawingInput {
-                size: binding.size.clone(),
-                quality: binding.quality.clone(),
-                n: binding.n,
-                ..parsed
+            input: DrawingPreviewInput {
+                settings: DrawingInput {
+                    size: binding.size.clone(),
+                    quality: binding.quality.clone(),
+                    n: binding.n,
+                    ..parsed.settings
+                },
+                reference_images: parsed.reference_images,
             },
             reservation_credits: quote.reservation_credits().into(),
             expires_at,
@@ -511,7 +643,7 @@ impl ImageService {
             .await
             .map_err(identity_error)?;
         let r = sqlx::query(
-            "SELECT * FROM core_image.operations WHERE id=$1 AND actor_user_id=$2 AND source_kind='drawing' FOR UPDATE",
+            "SELECT id,session_id,actor_user_id,owner_account_id,auth_version,price,fingerprint,state,created_at,expires_at,confirmation_digest,confirmation_sid,settled_credits,output,CASE WHEN input->>'kind'='drawing_reference_v1' THEN input->'arguments' ELSE input END AS input FROM core_image.operations WHERE id=$1 AND actor_user_id=$2 AND source_kind='drawing' FOR UPDATE",
         )
         .bind(id)
         .bind(a.user)
@@ -541,7 +673,7 @@ impl ImageService {
             .await
             .map_err(identity_error)?;
         let r = sqlx::query(
-            "SELECT * FROM core_image.operations WHERE id=$1 AND actor_user_id=$2 AND source_kind='drawing' FOR UPDATE",
+            "SELECT id,session_id,actor_user_id,owner_account_id,auth_version,price,fingerprint,state,created_at,expires_at,confirmation_digest,confirmation_sid,settled_credits,output,CASE WHEN input->>'kind'='drawing_reference_v1' THEN input->'arguments' ELSE input END AS input FROM core_image.operations WHERE id=$1 AND actor_user_id=$2 AND source_kind='drawing' FOR UPDATE",
         )
         .bind(id)
         .bind(a.user)
@@ -596,15 +728,17 @@ impl ImageService {
         if !valid_id(id) {
             return Err(Error::Invalid);
         }
-        let (quote, prompt, fingerprint) = self.prepare_execution(session, id).await?;
+        let (quote, prompt, fingerprint, edits) = self.prepare_execution(session, id).await?;
         let provider = self
             .providers
             .get(&quote.binding().upstream_id)
             .ok_or(Error::Invalid)?;
-        let prepared = provider
-            .prepare(&quote, &prompt)
-            .await
-            .map_err(|_| Error::Pending)?;
+        let prepared = if let Some(edits) = edits {
+            provider.prepare_edits(&quote, &prompt, edits).await
+        } else {
+            provider.prepare(&quote, &prompt).await
+        }
+        .map_err(|_| Error::Pending)?;
         let worker = random()?;
         let spec = Request {
             id: id.into(),
@@ -664,7 +798,12 @@ impl ImageService {
         &self,
         session: &str,
         id: &str,
-    ) -> Result<(ImageQuote, String, [u8; 32])> {
+    ) -> Result<(
+        ImageQuote,
+        String,
+        [u8; 32],
+        Option<super::image_provider::ImageMultipartInput>,
+    )> {
         let mut tx = begin(&self.pool).await?;
         let r = sqlx::query(
             "SELECT * FROM core_image.operations WHERE id=$1 AND source_kind='drawing' FOR UPDATE",
@@ -706,25 +845,29 @@ impl ImageService {
         )
         .await
         .map_err(market_error)?;
-        let raw: Value = r.try_get("input")?;
+        let stored: Value = r.try_get("input")?;
+        let raw = drawing_input::arguments(&stored)?;
         if crate::builtins::input_digest(&raw).map_err(|_| Error::Storage)? != context.input_digest
         {
             return Err(Error::Storage);
         }
-        let input: DrawingInput = serde_json::from_value(raw).map_err(|_| Error::Storage)?;
+        let input = drawing_input::parse_arguments(&raw).map_err(|_| Error::Storage)?;
         let quote = frozen
             .image
             .ok_or(Error::Storage)?
             .restore()
             .map_err(|_| Error::Storage)?;
         // Current server pricing must still be the exact confirmed revision.
-        if self.quote(&input)? != quote {
+        if self.drawing_quote(&input)? != quote {
             return Err(Error::Conflict);
         }
         let fp: Vec<u8> = r.try_get("fingerprint")?;
         let fp = fp.try_into().map_err(|_| Error::Storage)?;
+        let edits = tokio::task::spawn_blocking(move || drawing_input::restore(&stored))
+            .await
+            .map_err(|_| Error::Pending)??;
         tx.commit().await.map_err(|_| Error::Pending)?;
-        Ok((quote, input.prompt, fp))
+        Ok((quote, input.settings.prompt, fp, edits))
     }
     /// ACK-loss recovery is read only: derive the original id from the current
     /// real Session and Core call, without creating a preview or another send.
@@ -793,7 +936,7 @@ impl ImageService {
         if a.credential_kind != CredentialKind::Session {
             return Err(Error::Forbidden);
         }
-        let r=sqlx::query("SELECT * FROM core_image.operations WHERE id=$1 AND actor_user_id=$2 AND owner_account_id=$3 AND session_id=$4 AND source_kind='drawing' FOR SHARE").bind(id).bind(a.user_id).bind(a.owner_account_id).bind(a.credential_id).fetch_optional(&mut *tx).await?.ok_or(Error::Missing)?;
+        let r=sqlx::query("SELECT id,session_id,actor_user_id,owner_account_id,auth_version,price,fingerprint,state,created_at,expires_at,confirmation_digest,confirmation_sid,settled_credits,output,CASE WHEN input->>'kind'='drawing_reference_v1' THEN input->'arguments' ELSE input END AS input FROM core_image.operations WHERE id=$1 AND actor_user_id=$2 AND owner_account_id=$3 AND session_id=$4 AND source_kind='drawing' FOR SHARE").bind(id).bind(a.user_id).bind(a.owner_account_id).bind(a.credential_id).fetch_optional(&mut *tx).await?.ok_or(Error::Missing)?;
         let out = receipt_row(&r)?;
         tx.commit().await.map_err(|_| Error::Pending)?;
         Ok(out)
@@ -866,6 +1009,20 @@ impl ImageService {
         Ok(finished)
     }
 }
+/// Private storage projection used by the same-transaction image charge guard.
+/// It never accepts a caller envelope: the argument is the immutable Core row.
+pub(crate) fn authorize_drawing_reference_contract(
+    input: &Value,
+    version: &str,
+    schema: &str,
+) -> Result<()> {
+    drawing_input::authorize_references(input, version, schema)
+}
+pub(crate) fn confirmed_drawing_arguments(stored: &Value) -> Result<Value> {
+    let arguments = drawing_input::arguments(stored)?;
+    drawing_input::parse_arguments(&arguments).map_err(|_| Error::Storage)?;
+    Ok(arguments)
+}
 fn preview_row(r: &sqlx::postgres::PgRow) -> Result<Preview> {
     let frozen: Price = serde_json::from_value(r.try_get("price")?).map_err(|_| Error::Storage)?;
     let quote = frozen
@@ -873,11 +1030,12 @@ fn preview_row(r: &sqlx::postgres::PgRow) -> Result<Preview> {
         .ok_or(Error::Storage)?
         .restore()
         .map_err(|_| Error::Storage)?;
-    let mut input: DrawingInput =
-        serde_json::from_value(r.try_get("input")?).map_err(|_| Error::Storage)?;
-    input.size = quote.binding().size.clone();
-    input.quality = quote.binding().quality.clone();
-    input.n = quote.binding().n;
+    let stored: Value = r.try_get("input")?;
+    let mut input = drawing_input::parse_arguments(&drawing_input::arguments(&stored)?)
+        .map_err(|_| Error::Storage)?;
+    input.settings.size = quote.binding().size.clone();
+    input.settings.quality = quote.binding().quality.clone();
+    input.settings.n = quote.binding().n;
     Ok(Preview {
         confirmation_path: format!("/core/v1/images/confirm/{}", r.try_get::<String, _>("id")?),
         operation_id: r.try_get("id")?,
@@ -893,6 +1051,7 @@ fn receipt_row(r: &sqlx::postgres::PgRow) -> Result<Receipt> {
     let completed = p.state == "completed";
     Ok(Receipt {
         operation_id: p.operation_id,
+        expires_at: Some(p.expires_at),
         state: p.state,
         preview_digest: p.preview_digest,
         reservation_credits: p.reservation_credits,

@@ -252,7 +252,7 @@ CREATE TABLE core_identity.password_logins (
     created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
 CREATE TABLE core_identity.oauth_identities (
-    issuer TEXT NOT NULL CHECK (issuer = 'https://accounts.google.com'),
+    issuer TEXT NOT NULL CHECK (issuer IN ('https://accounts.google.com','https://github.com','https://connect.linux.do','https://discord.com')),
     subject TEXT NOT NULL CHECK (length(subject) BETWEEN 1 AND 255),
     user_id BIGINT NOT NULL REFERENCES core_identity.users(id),
     PRIMARY KEY (issuer, subject),
@@ -264,7 +264,9 @@ CREATE TABLE core_identity.oauth_flows (
     nonce_digest BYTEA NOT NULL CHECK (octet_length(nonce_digest) = 32),
     -- The verifier is required for the one-time code exchange, then deleted.
     pkce_verifier TEXT NOT NULL CHECK (length(pkce_verifier) BETWEEN 43 AND 128),
-    expires_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp() + interval '10 minutes'
+    expires_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp() + interval '10 minutes',
+    issuer TEXT NOT NULL DEFAULT 'https://accounts.google.com'
+        CHECK (issuer IN ('https://accounts.google.com','https://github.com','https://connect.linux.do','https://discord.com'))
 );
 CREATE INDEX oauth_flows_expiry ON core_identity.oauth_flows(expires_at);
 CREATE TABLE core_identity.auth_attempts (

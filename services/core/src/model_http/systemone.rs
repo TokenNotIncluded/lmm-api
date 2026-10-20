@@ -298,6 +298,11 @@ async fn execute(
     let quote = plan
         .quote()
         .with_credit_rate(CreditRate::new(1, 500_000).map_err(|_| RelayError::BillingUnavailable)?);
+    if !quote.price().is_input_only_scalar() {
+        return Err(RelayError::Unsupported(
+            "System One requires a frozen scalar input-only token tariff",
+        ));
+    }
     let price = routing::credit_price(quote.price(), plan.canonical_model(), &group)?;
     if price.upstream_cost_group_ppm.is_some()
         || price.image.is_some()

@@ -233,11 +233,7 @@ pub(super) fn valid_id(value: u64) -> bool {
 }
 
 pub(super) fn valid_group(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 64
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+    super::valid_group_name(value)
 }
 
 pub(super) fn valid_model(value: &str) -> bool {

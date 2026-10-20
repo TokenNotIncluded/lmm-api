@@ -67,6 +67,7 @@ async fn requests(f: &Fixture, prefix: &str, count: i64, at: i64) {
         cached_per_million: 0,
         output_per_million: 0,
         upstream_cost_group_ppm: None,
+        tiered: None,
     })
     .unwrap();
     sqlx::query(r#"INSERT INTO core_charging.requests(id,actor_user_id,key_id,owner_account_id,payer_account_id,fingerprint,worker_digest,spec_digest,price,authorized_at,lease_until,hard_deadline,state,reserved)
