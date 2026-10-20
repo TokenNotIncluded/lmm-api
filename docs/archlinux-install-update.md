@@ -348,6 +348,13 @@ curl --fail --silent --show-error http://127.0.0.1:8080/health/ready
 curl --fail --silent --show-error http://127.0.0.1:8081/health/ready
 ```
 
+启用 `[edge_access]` 后，Core 的健康接口也要求受信反代凭据。
+此时普通直连会返回 `403 INTERNAL_ONLY`，不能据此判断进程不健康。
+运维检查应通过已配置的 Nginx，或在仅运维可读的 `0600` curl 配置文件中提供
+`X-LMM-Edge-Proof` 和 `X-LMM-Edge-Client-IP` 后访问回环监听。
+前者读取本站独立 proof 文件，后者填写实际检查来源 IP；不要把 proof 放进命令参数、
+浏览器或 Go 配置。用后文的 `curl --config` 方式读取该私密文件。
+
 Go 的健康响应只表示宿主存活/接收请求，不能代替所选模块的数据库和 RPC 业务检查。
 Core 模型未启用时 `/health/model-ready` 为 503；不要为改成 200 而虚开模型或花钱探测。
 
