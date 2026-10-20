@@ -13,5 +13,5 @@ func (m *Module) LegacyGetExecutionByRequestKey(ctx context.Context, credential,
 	if !legacyClientValid(clientID) || len(requestKey) == 0 || len(requestKey) > 128 {
 		return LegacyExecution{}, ErrInvalid
 	}
-	return m.LegacyGetExecution(ctx, credential, account, digest([]any{user, clientID, requestKey}))
+	return m.LegacyInspectExecution(ctx, credential, account, digest([]any{user, clientID, requestKey}))
 }

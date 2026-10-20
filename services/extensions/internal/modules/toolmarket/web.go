@@ -18,7 +18,7 @@ var validWebTool = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
 // The production Authority must ask Rust to authorize this exact action.
 func WebPermission(action string) string {
 	switch action {
-	case "draft", "mine", "credentials", "calls", "call.result", "report", "income", "delegation.get", "delegation.clients":
+	case "draft", "mine", "credentials", "calls", "call.result", "call.lookup", "report", "income", "delegation.get", "delegation.clients":
 		return "toolmarket.read"
 	case "install", "favorite", "grant", "budget", "grant.revoke", "grant.hide", "token", "token.revoke", "token.hide", "client.disconnect", "client.remove", "delegation.set":
 		return "toolmarket.authorize"
@@ -28,7 +28,7 @@ func WebPermission(action string) string {
 		return "toolmarket.config"
 	case "credential.configure", "save", "validate", "submit", "activate", "pause", "delete", "inspect":
 		return "toolmarket.manage"
-	case "invoke":
+	case "invoke", "call.resume":
 		return "toolmarket.execute"
 	default:
 		return ""
@@ -303,7 +303,7 @@ func (m *Module) LegacyWeb(ctx context.Context, credential, account string, in W
 	if err = m.admit(p); err != nil {
 		return nil, err
 	}
-	if in.ID != "" && !validID.MatchString(in.ID) && in.Action != "delegation.get" && in.Action != "delegation.set" {
+	if in.ID != "" && !validID.MatchString(in.ID) && in.Action != "delegation.get" && in.Action != "delegation.set" && in.Action != "call.lookup" {
 		return nil, ErrInvalid
 	}
 	switch in.Action {
@@ -522,6 +522,10 @@ func (m *Module) LegacyWeb(ctx context.Context, credential, account string, in W
 		return m.legacyWebInvoke(ctx, credential, account, in)
 	case "call.result":
 		return m.legacyWebCallResult(ctx, credential, account, in.ID)
+	case "call.lookup":
+		return m.legacyWebExecutionLookup(ctx, credential, account, in.ID)
+	case "call.resume":
+		return m.legacyWebResume(ctx, credential, account, in)
 	case "calls":
 		return m.legacyWebCalls(ctx, credential, account, user, in.Offset, in.Limit)
 	case "report", "reports", "report.review", "income":

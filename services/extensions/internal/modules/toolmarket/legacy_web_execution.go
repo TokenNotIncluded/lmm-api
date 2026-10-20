@@ -10,11 +10,13 @@ import (
 )
 
 type LegacyWebExecutionResponse struct {
-	Call            map[string]any  `json:"call"`
-	Result          json.RawMessage `json:"result,omitempty"`
-	ResultExpiresAt int64           `json:"result_expires_at,omitempty"`
-	ResultExpired   bool            `json:"result_expired"`
-	ErrorCode       string          `json:"error_code,omitempty"`
+	Call                 map[string]any  `json:"call"`
+	Result               json.RawMessage `json:"result,omitempty"`
+	ResultExpiresAt      int64           `json:"result_expires_at,omitempty"`
+	ResultExpired        bool            `json:"result_expired"`
+	ErrorCode            string          `json:"error_code,omitempty"`
+	RequestState         string          `json:"request_state,omitempty"`
+	AwaitingConfirmation bool            `json:"awaiting_confirmation"`
 }
 
 func (m *Module) legacyWebExecution(r LegacyExecution, pending bool) (LegacyWebExecutionResponse, error) {
@@ -32,6 +34,8 @@ func (m *Module) legacyWebExecution(r LegacyExecution, pending bool) (LegacyWebE
 		execution = "running"
 	case "unknown":
 		execution = "unknown"
+	case "awaiting_confirmation":
+		execution = "awaiting_confirmation"
 	case "done":
 		execution = "failed"
 		if r.Success {
@@ -53,7 +57,10 @@ func (m *Module) legacyWebExecution(r LegacyExecution, pending bool) (LegacyWebE
 	if r.Core.State == "running" && execution == "reserved" {
 		execution = "running"
 	}
-	if r.Core.State == "unknown" && r.ResultDigest == "" {
+	if r.Core.State == "unknown" && r.ResultDigest == "" && r.State != "awaiting_confirmation" {
+		execution = "unknown"
+	}
+	if r.Builtin != nil && r.Builtin.ResumeClaimed && r.ResultDigest == "" {
 		execution = "unknown"
 	}
 	call["execution_status"], call["settlement_status"] = execution, settlement
@@ -86,11 +93,18 @@ func (m *Module) legacyWebExecution(r LegacyExecution, pending bool) (LegacyWebE
 		return LegacyWebExecutionResponse{}, err
 	}
 	result := append(json.RawMessage(nil), r.Result...)
+	if len(result) == 0 && r.Builtin != nil {
+		result = LegacyBuiltinPublicPreview(r)
+	}
 	expired := r.ResultExpires > 0 && m.now().Unix() >= r.ResultExpires
 	if expired {
 		result = nil
 	}
 	out := LegacyWebExecutionResponse{Call: call, Result: result, ResultExpiresAt: r.ResultExpires, ResultExpired: expired && r.Success}
+	if r.Builtin != nil {
+		out.RequestState = LegacyMCPRequestState(r)
+		out.AwaitingConfirmation = execution == "awaiting_confirmation"
+	}
 	if pending {
 		out.ErrorCode = "TOOL_MARKET_EXECUTION_PENDING"
 	}
@@ -101,16 +115,18 @@ func (m *Module) legacyWebInvoke(ctx context.Context, credential, account string
 		return nil, ErrFunds
 	}
 	value, err := payload[struct {
-		ToolID    string          `json:"tool_id"`
-		VersionID string          `json:"version_id"`
-		GrantID   string          `json:"grant_id"`
-		RequestID string          `json:"request_id"`
-		Arguments json.RawMessage `json:"arguments"`
+		ToolID         string          `json:"tool_id"`
+		VersionID      string          `json:"version_id"`
+		GrantID        string          `json:"grant_id"`
+		RequestID      string          `json:"request_id"`
+		Arguments      json.RawMessage `json:"arguments"`
+		RequestState   string          `json:"request_state"`
+		InputResponses json.RawMessage `json:"input_responses"`
 	}](in.Body, "tool_id", "version_id", "grant_id", "request_id", "arguments")
 	if err != nil {
 		return nil, err
 	}
-	record, err := m.LegacyExecute(WithBuiltinPeerIP(ctx, in.ActualPeerIP), credential, account, LegacyExecuteInput{ClientID: "web-market", RequestKey: value.RequestID, ToolID: value.ToolID, VersionID: value.VersionID, GrantID: value.GrantID, Arguments: value.Arguments})
+	record, err := m.LegacyExecuteMCP(WithBuiltinPeerIP(ctx, in.ActualPeerIP), credential, account, LegacyExecuteInput{ClientID: "web-market", RequestKey: value.RequestID, ToolID: value.ToolID, VersionID: value.VersionID, GrantID: value.GrantID, Arguments: value.Arguments}, value.RequestState, value.InputResponses)
 	if err != nil && !errors.Is(err, ErrPending) {
 		return nil, err
 	}
@@ -121,7 +137,38 @@ func (m *Module) legacyWebInvoke(ctx context.Context, credential, account string
 	return response, err
 }
 func (m *Module) legacyWebCallResult(ctx context.Context, credential, account, id string) (any, error) {
-	record, err := m.LegacyGetExecution(ctx, credential, account, id)
+	record, err := m.LegacyInspectExecution(ctx, credential, account, id)
+	if err != nil && !errors.Is(err, ErrPending) {
+		return nil, err
+	}
+	response, projectionErr := m.legacyWebExecution(record, errors.Is(err, ErrPending))
+	if projectionErr != nil {
+		return nil, projectionErr
+	}
+	return response, err
+}
+
+func (m *Module) legacyWebExecutionLookup(ctx context.Context, credential, account, requestID string) (any, error) {
+	record, err := m.LegacyGetExecutionByRequestKey(ctx, credential, account, "web-market", requestID)
+	if err != nil && !errors.Is(err, ErrPending) {
+		return nil, err
+	}
+	response, projectionErr := m.legacyWebExecution(record, errors.Is(err, ErrPending))
+	if projectionErr != nil {
+		return nil, projectionErr
+	}
+	return response, err
+}
+
+func (m *Module) legacyWebResume(ctx context.Context, credential, account string, in WebRequest) (any, error) {
+	value, err := payload[struct {
+		RequestState   string          `json:"request_state"`
+		InputResponses json.RawMessage `json:"input_responses"`
+	}](in.Body, "request_state")
+	if err != nil {
+		return nil, err
+	}
+	record, err := m.LegacyResumeWebExecution(WithBuiltinPeerIP(ctx, in.ActualPeerIP), credential, account, in.ID, value.RequestState, value.InputResponses)
 	if err != nil && !errors.Is(err, ErrPending) {
 		return nil, err
 	}
@@ -158,7 +205,7 @@ func (m *Module) legacyWebCalls(ctx context.Context, credential, account string,
 	records = webSlice(records, offset, limit)
 	rows := make([]map[string]any, 0, len(records))
 	for _, r := range records {
-		latest, err := m.LegacyGetExecution(ctx, credential, account, r.ID)
+		latest, err := m.LegacyInspectExecution(ctx, credential, account, r.ID)
 		if err != nil && !errors.Is(err, ErrPending) {
 			return nil, err
 		}

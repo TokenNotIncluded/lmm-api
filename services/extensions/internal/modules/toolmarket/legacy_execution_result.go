@@ -228,6 +228,9 @@ func (m *Module) legacyRecoverExecution(ctx context.Context, port CoreLegacyCred
 		receipt, e = port.QueryLegacyCredits(ctx, credential, LegacyCreditID{Owner: r.Owner, CallID: r.Core.ID})
 	}
 	if e != nil {
+		if r.Builtin != nil && r.ResultDigest == "" {
+			r.State = "unknown"
+		}
 		return r, ErrPending
 	}
 	if !legacyCallMatches(receipt, r) {

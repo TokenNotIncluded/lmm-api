@@ -61,14 +61,19 @@ type imageReceipt struct {
 	ReservationCredits int64           `json:"reservation_credits"`
 	ChargedCredits     *int64          `json:"charged_credits"`
 	Output             json.RawMessage `json:"output"`
+	ExpiresAt          int64           `json:"expires_at,omitempty"`
 }
 
 func (d *DrawingAdapter) requestImage(ctx context.Context, session, action string, in, out any) error {
+	return d.requestImageBound(ctx, session, action, in, out, 80<<10)
+}
+
+func (d *DrawingAdapter) requestImageBound(ctx context.Context, session, action string, in, out any, requestLimit int) error {
 	if d == nil || d.bridge == nil {
 		return market.ErrUnavailable
 	}
 	raw, e := json.Marshal(in)
-	if e != nil || len(raw) > 80<<10 {
+	if e != nil || len(raw) > requestLimit {
 		return market.ErrInvalid
 	}
 	req, e := http.NewRequestWithContext(ctx, http.MethodPost, "http://core-images/internal/models/images/v1/"+action, bytes.NewReader(raw))
@@ -131,9 +136,9 @@ func imageEnvelope(value any) json.RawMessage {
 	result, _ := json.Marshal(map[string]any{"content": []any{map[string]any{"type": "text", "text": string(text)}}, "structuredContent": value, "isError": false})
 	return result
 }
-func imageResult(call string, r imageReceipt) (market.BuiltinResult, error) {
+func imageResult(call string, r imageReceipt, origin ...string) (market.BuiltinResult, error) {
 	out := market.BuiltinResult{CallID: call, DownstreamOperationID: r.OperationID, ExecutionStatus: r.State, SettlementStatus: "pending"}
-	if r.OperationID == "" || r.PreviewDigest == "" || r.ReservationCredits < 0 {
+	if r.OperationID == "" || len(r.OperationID) > 200 || strings.ContainsAny(r.OperationID, "/?#%\\\r\n") || r.PreviewDigest == "" || r.ReservationCredits < 0 {
 		return out, market.ErrPending
 	}
 	if r.State == "completed" {
@@ -146,7 +151,14 @@ func imageResult(call string, r imageReceipt) (market.BuiltinResult, error) {
 	out.Continuation, _ = json.Marshal(map[string]string{"operation_id": r.OperationID})
 	out.ResumeReady = r.State == "confirmed"
 	out.AwaitingConfirmation = r.State == "previewed"
-	out.Result = imageEnvelope(map[string]any{"operation_id": r.OperationID, "state": r.State, "preview_digest": r.PreviewDigest, "reservation_credits": r.ReservationCredits, "charged_credits": r.ChargedCredits, "output": r.Output, "billing_pending": out.SettlementStatus != "settled"})
+	document := map[string]any{"operation_id": r.OperationID, "state": r.State, "preview_digest": r.PreviewDigest, "reservation_credits": r.ReservationCredits, "charged_credits": r.ChargedCredits, "output": r.Output, "billing_pending": out.SettlementStatus != "settled"}
+	if (out.AwaitingConfirmation || out.ResumeReady) && len(origin) == 1 {
+		document["confirmation_url"] = origin[0] + "/core/v1/images/confirm/" + r.OperationID
+		if r.ExpiresAt > 0 {
+			document["preview"] = map[string]any{"operation_id": r.OperationID, "state": r.State, "expires_at": r.ExpiresAt, "reservation_credits": r.ReservationCredits, "preview_digest": r.PreviewDigest}
+		}
+	}
+	out.Result = imageEnvelope(document)
 	return out, nil
 }
 func (d *DrawingAdapter) InvokeDrawing(ctx context.Context, session string, in market.BuiltinInvocation, _ string) (market.BuiltinResult, error) {
@@ -163,11 +175,24 @@ func (d *DrawingAdapter) InvokeDrawing(ctx context.Context, session string, in m
 		return out, nil
 	}
 	var p imagePreview
-	e := d.requestImage(ctx, session, "preview", map[string]any{"context": in.Context, "input": in.Arguments}, &p)
+	input := map[string]any{"context": in.Context, "input": in.Arguments}
+	var e error
+	if uploads := market.DrawingUploads(ctx); len(uploads) > 0 {
+		if in.ToolName != "drawing.generate" || len(uploads) > market.DrawingUploadCountLimit {
+			return out, market.ErrInvalid
+		}
+		input["uploads"] = uploads
+		// Only this initial preview accepts the bounded transient sidecar.
+		// Execute/query keep the original small command bound and use Core's
+		// frozen image bytes, never a browser replacement upload.
+		e = d.requestImageBound(ctx, session, "preview", input, &p, (24<<20)+(64<<10))
+	} else {
+		e = d.requestImage(ctx, session, "preview", input, &p)
+	}
 	if e != nil {
 		return out, e
 	}
-	if p.OperationID == "" || p.PreviewDigest == "" || p.ReservationCredits < 0 || p.ConfirmationPath != "/core/v1/images/confirm/"+p.OperationID || strings.ContainsAny(p.OperationID, "/?#\r\n") {
+	if p.OperationID == "" || len(p.OperationID) > 200 || p.PreviewDigest == "" || p.ReservationCredits < 0 || p.ConfirmationPath != "/core/v1/images/confirm/"+p.OperationID || strings.ContainsAny(p.OperationID, "/?#%\\\r\n") {
 		return out, market.ErrPending
 	}
 	out.DownstreamOperationID = p.OperationID
@@ -191,7 +216,7 @@ func (d *DrawingAdapter) QueryDrawing(ctx context.Context, session string, in ma
 	if id != "" && r.OperationID != id {
 		return market.BuiltinResult{}, market.ErrConflict
 	}
-	return imageResult(in.Context.CallID, r)
+	return imageResult(in.Context.CallID, r, d.origin)
 }
 func (d *DrawingAdapter) ResumeDrawing(ctx context.Context, session string, in market.BuiltinInvocation, id string) (market.BuiltinResult, error) {
 	var r imageReceipt
@@ -202,5 +227,5 @@ func (d *DrawingAdapter) ResumeDrawing(ctx context.Context, session string, in m
 	if id != "" && r.OperationID != id {
 		return market.BuiltinResult{}, market.ErrConflict
 	}
-	return imageResult(in.Context.CallID, r)
+	return imageResult(in.Context.CallID, r, d.origin)
 }

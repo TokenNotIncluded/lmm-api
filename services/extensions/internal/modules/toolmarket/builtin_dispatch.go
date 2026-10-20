@@ -213,7 +213,10 @@ func (d *BuiltinDispatcher) QueryBuiltin(ctx context.Context, session string, in
 	}
 	definition, tool, e := compiledBuiltin(in.ServiceKey, in.ToolName)
 	if e != nil || definition.VersionID != in.Context.VersionID || tool.ToolID != in.Context.ToolID {
-		return out, ErrDenied
+		definition, tool, e = drawingRecoveryInvocation(ctx, in)
+		if e != nil {
+			return out, ErrDenied
+		}
 	}
 	var arguments map[string]any
 	if decodeStrict(in.Arguments, &arguments) != nil || digest(arguments) != in.Context.InputDigest {

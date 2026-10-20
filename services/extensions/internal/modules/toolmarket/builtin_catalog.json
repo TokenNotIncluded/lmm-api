@@ -4,20 +4,20 @@
     "name": "Drawing",
     "description": "Drawing tools with current account authority and separate underlying financial confirmation.",
     "service_id": "840e4dc5-e1a5-5b71-bdbc-3aabdb419a6f",
-    "version_id": "37ff72e9-6f8e-5e34-a8e1-988253f20d27",
+    "version_id": "ca3a1996-723d-5695-b29e-40e3bef58644",
     "schema_version": "core-authority-v1",
-    "digest": "62c1757061b0aa45e71d509e61bacd4aa8dfec69492553ce3718c2369f8ecd32",
+    "digest": "6644ab27dde42d414abb42e61137b7b398adc45a6033c1c0833f7045b18586f4",
     "tools": [
       {
         "tool_id": "23ff32df-37fb-5105-9063-db1228dd3d3b",
         "name": "drawing.generate",
         "description": "drawing.generate. Requires current authorization; money and generation require explicit Core confirmation.",
-        "input_schema": "{\"additionalProperties\":false,\"properties\":{\"group\":{\"maxLength\":128,\"minLength\":0,\"type\":\"string\"},\"model\":{\"maxLength\":256,\"minLength\":0,\"type\":\"string\"},\"n\":{\"maximum\":4,\"minimum\":1,\"type\":\"integer\"},\"prompt\":{\"maxLength\":2000,\"minLength\":1,\"type\":\"string\"},\"quality\":{\"maxLength\":64,\"minLength\":0,\"type\":\"string\"},\"size\":{\"maxLength\":64,\"minLength\":0,\"type\":\"string\"}},\"required\":[\"prompt\"],\"type\":\"object\"}",
+        "input_schema": "{\"additionalProperties\":false,\"properties\":{\"group\":{\"maxLength\":128,\"minLength\":0,\"type\":\"string\"},\"model\":{\"maxLength\":256,\"minLength\":0,\"type\":\"string\"},\"n\":{\"maximum\":4,\"minimum\":1,\"type\":\"integer\"},\"prompt\":{\"maxLength\":2000,\"minLength\":1,\"type\":\"string\"},\"quality\":{\"maxLength\":64,\"minLength\":0,\"type\":\"string\"},\"reference_images\":{\"items\":{\"additionalProperties\":false,\"properties\":{\"byte_length\":{\"maximum\":10485760,\"minimum\":1,\"type\":\"integer\"},\"media_type\":{\"enum\":[\"image/png\",\"image/jpeg\",\"image/webp\"],\"type\":\"string\"},\"sha256\":{\"pattern\":\"^[0-9a-f]{64}$\",\"type\":\"string\"}},\"required\":[\"media_type\",\"sha256\",\"byte_length\"],\"type\":\"object\"},\"maxItems\":8,\"minItems\":1,\"type\":\"array\"},\"size\":{\"maxLength\":64,\"minLength\":0,\"type\":\"string\"}},\"required\":[\"prompt\"],\"type\":\"object\"}",
         "output_schema": "{\"type\":\"object\"}",
         "permissions": "[\"write\"]",
         "price_quota": 0,
-        "input_schema_digest": "9fcd21d3b6c1684215bebfb55edb64ac1448d7b601a2130a434af1bdc565e094",
-        "version_id": "37ff72e9-6f8e-5e34-a8e1-988253f20d27"
+        "input_schema_digest": "abd718715e097d729e362afd0f5cdf19ae664886a878902e1c38ac31a2c2964e",
+        "version_id": "ca3a1996-723d-5695-b29e-40e3bef58644"
       },
       {
         "tool_id": "b04851b4-ba39-5e5b-9a10-160dbd909585",
@@ -28,7 +28,7 @@
         "permissions": "[\"read\"]",
         "price_quota": 0,
         "input_schema_digest": "99334726611ccf58a148b0814696bfa6fe08c1b2d027e946beccf5a74331c9aa",
-        "version_id": "37ff72e9-6f8e-5e34-a8e1-988253f20d27"
+        "version_id": "ca3a1996-723d-5695-b29e-40e3bef58644"
       }
     ]
   },
