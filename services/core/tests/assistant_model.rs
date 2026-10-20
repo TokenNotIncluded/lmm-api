@@ -16,6 +16,8 @@ use std::{
 mod model_fixture;
 #[path = "common/runtime.rs"]
 mod runtime_authority;
+#[path = "usage/assistant_sources.rs"]
+mod usage_sources;
 use model_fixture::Provider;
 async fn fixture(
     pool: &PgPool,
@@ -704,6 +706,7 @@ async fn zero_balance_user_uses_bounded_treasury_and_real_gift_ledger(pool: PgPo
         Err(Error::Forbidden | Error::NoFunds)
     ));
     assert_eq!(hits.load(Ordering::SeqCst), 2);
+    usage_sources::assert_sponsored_usage(&pool, &session).await;
     server.abort();
     let _ = server.await;
 }
