@@ -94,8 +94,28 @@ fn render(p: &Preview, csrf: &str) -> String {
     let reserve = escape(&p.reservation_credits.to_string());
     let expiry = escape(&p.expires_at.to_string());
     let csrf = escape(csrf);
+    let request_kind = if p.input.reference_images.is_empty() {
+        "生成图片"
+    } else {
+        "参考图编辑"
+    };
+    let references = p
+        .input
+        .reference_images
+        .iter()
+        .enumerate()
+        .map(|(index, image)| {
+            format!(
+                "<li>参考图 {}：{}，{} 字节，SHA-256 <code>{}</code></li>",
+                index + 1,
+                escape(&image.media_type),
+                image.byte_length,
+                escape(&image.sha256)
+            )
+        })
+        .collect::<String>();
     format!(
-        r#"<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>确认付费图片请求</title></head><body><main><h1>确认付费图片请求</h1><p>请核对下面的报价。返回原工具执行后，会从你的钱包预留全额，并按这份报价扣费。</p><dl><dt>模型</dt><dd>{model}</dd><dt>计费组</dt><dd>{group}</dd><dt>尺寸</dt><dd>{size}</dd><dt>质量</dt><dd>{quality}</dd><dt>数量</dt><dd>{n}</dd><dt>完整预留金额</dt><dd><strong>{reserve} CREDIT</strong>（500000 CREDIT = 1 USD）</dd><dt>确认有效期截止</dt><dd><time id="expiry" data-unix="{expiry}">{expiry}（Unix 秒）</time></dd></dl><h2>图片描述</h2><pre>{prompt}</pre><input type="hidden" id="csrf" value="{csrf}"><button type="button" id="confirm">确认此报价并授权钱包扣费</button><p id="status" role="status" aria-live="polite"></p></main><script>const expiry=document.getElementById('expiry');const stamp=new Date(Number(expiry.dataset.unix)*1000);if(!Number.isNaN(stamp.getTime()))expiry.textContent=stamp.toLocaleString();document.getElementById('confirm').onclick=async()=>{{const button=document.getElementById('confirm');const status=document.getElementById('status');button.disabled=true;status.textContent='正在保存确认…';try{{const response=await fetch(location.pathname,{{method:'POST',credentials:'same-origin',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{csrf:document.getElementById('csrf').value}})}});status.textContent=response.ok?'确认已保存。请返回原工具查询状态并继续执行。':'确认未完成，请重新打开此页面检查当前状态。';}}catch(error){{status.textContent='确认结果暂时未知，请返回原工具查询状态。';}}}};</script></body></html>"#
+        r#"<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>确认付费图片请求</title></head><body><main><h1>确认付费图片请求</h1><p>请核对下面的报价。返回原工具执行后，会从你的钱包预留全额，并按这份报价扣费。</p><dl><dt>请求类型</dt><dd>{request_kind}</dd><dt>模型</dt><dd>{model}</dd><dt>计费组</dt><dd>{group}</dd><dt>尺寸</dt><dd>{size}</dd><dt>质量</dt><dd>{quality}</dd><dt>数量</dt><dd>{n}</dd><dt>完整预留金额</dt><dd><strong>{reserve} CREDIT</strong>（500000 CREDIT = 1 USD）</dd><dt>确认有效期截止</dt><dd><time id="expiry" data-unix="{expiry}">{expiry}（Unix 秒）</time></dd></dl><h2>参考图片</h2><ol>{references}</ol><h2>图片描述</h2><pre>{prompt}</pre><input type="hidden" id="csrf" value="{csrf}"><button type="button" id="confirm">确认此报价并授权钱包扣费</button><p id="status" role="status" aria-live="polite"></p></main><script>const expiry=document.getElementById('expiry');const stamp=new Date(Number(expiry.dataset.unix)*1000);if(!Number.isNaN(stamp.getTime()))expiry.textContent=stamp.toLocaleString();document.getElementById('confirm').onclick=async()=>{{const button=document.getElementById('confirm');const status=document.getElementById('status');button.disabled=true;status.textContent='正在保存确认…';try{{const response=await fetch(location.pathname,{{method:'POST',credentials:'same-origin',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{csrf:document.getElementById('csrf').value}})}});status.textContent=response.ok?'确认已保存。请返回原工具查询状态并继续执行。':'确认未完成，请重新打开此页面检查当前状态。';}}catch(error){{status.textContent='确认结果暂时未知，请返回原工具查询状态。';}}}};</script></body></html>"#
     )
 }
 struct HttpError(Error);
@@ -239,7 +259,8 @@ mod tests {
                 size: attack.into(),
                 quality: attack.into(),
                 n: 2,
-            },
+            }
+            .into(),
             reservation_credits: 1234,
             expires_at: 1792499999,
             state: "previewed".into(),

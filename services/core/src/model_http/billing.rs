@@ -372,10 +372,17 @@ impl Billing for Bridge {
                             0,
                         )
                         .map_err(|_| RelayError::SettlementPending)?;
-                        let quoted = selected
-                            .quote
-                            .charge(disjoint)
-                            .map_err(|_| RelayError::SettlementPending)?;
+                        let quoted =
+                            selected
+                                .quote
+                                .charge_with_semantics(
+                                    disjoint,
+                                    selected.price.tiered.as_ref().map_or(
+                                        crate::routing::InputSemantics::Inclusive,
+                                        |tariff| tariff.input_semantics,
+                                    ),
+                                )
+                                .map_err(|_| RelayError::SettlementPending)?;
                         let ledger = selected.price.cost(usage).map_err(error)?;
                         if i64::try_from(quoted.0).ok() != Some(ledger) {
                             return Err(RelayError::SettlementPending);
@@ -965,6 +972,7 @@ mod a07_billing_tests {
             price: charging::Price {
                 image: None,
                 upstream_cost_group_ppm: None,
+                tiered: None,
                 version: "routing-1-rule-1".into(),
                 model: "synthetic-model".into(),
                 group: "default".into(),

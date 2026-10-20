@@ -112,6 +112,10 @@ pub struct PublicStatus {
     /// Only set after the browser callback, origin and cookie bridge match.
     /// A client ID is public; provider secrets never enter this projection.
     pub google_client_id: Option<String>,
+    pub google_browser_callback: Option<String>,
+    pub github_client_id: Option<String>,
+    pub linuxdo_client_id: Option<String>,
+    pub discord_client_id: Option<String>,
 }
 
 #[derive(Clone)]
@@ -192,9 +196,12 @@ async fn public_status_response(
             "user_agreement_enabled":status.user_agreement_enabled,
             "privacy_policy_enabled":status.privacy_policy_enabled,
             "google_oauth":google_enabled,"google_client_id":google_client_id,
-            "oauth_register_enabled":google_enabled && status.password_register_enabled,
-            "github_oauth":false,"discord_oauth":false,
-            "oidc_enabled":false,"linuxdo_oauth":false,"telegram_oauth":false,
+            "google_browser_callback":status.google_browser_callback,
+            "external_oauth_browser":true,
+            "oauth_register_enabled":(google_enabled || status.github_client_id.is_some() || status.linuxdo_client_id.is_some() || status.discord_client_id.is_some()) && status.password_register_enabled,
+            "github_oauth":status.github_client_id.is_some(),"github_client_id":status.github_client_id,
+            "discord_oauth":status.discord_client_id.is_some(),"discord_client_id":status.discord_client_id,
+            "oidc_enabled":false,"linuxdo_oauth":status.linuxdo_client_id.is_some(),"linuxdo_client_id":status.linuxdo_client_id,"telegram_oauth":false,
             "wechat_login":false,"passkey_login":false,"email_verification":false,
             "turnstile_check":false,"two_factor_enabled":status.two_factor_enabled,"payments_enabled":false,
             "payments_test_rpc_enabled":state.capabilities.payments,

@@ -322,7 +322,7 @@ pub(super) fn secret(prefix: &str) -> Result<String> {
     Ok(format!("{prefix}{}", URL_SAFE_NO_PAD.encode(*bytes)))
 }
 pub(super) fn group_scope(group: &str) -> Result<String> {
-    if group.is_empty() || group.len() > 64 || group.chars().any(char::is_control) {
+    if !crate::routing::valid_group_name(group) {
         return Err(IdentityError::Invalid);
     }
     Ok(format!(
@@ -373,6 +373,24 @@ mod tests {
             decode_group(&group_scope("default").unwrap()).unwrap(),
             "default"
         );
+    }
+    #[test]
+    fn unicode_group_scope_round_trips_exact_bytes_without_normalization() {
+        for group in [
+            "国产[Kimi/Deepseek/GLM]",
+            "官key",
+            &"🦀".repeat(64),
+            "é",
+            "e\u{301}",
+        ] {
+            let encoded = group_scope(group).unwrap();
+            assert!(encoded.is_ascii());
+            assert_eq!(decode_group(&encoded).unwrap().as_bytes(), group.as_bytes());
+        }
+        assert_ne!(group_scope("é").unwrap(), group_scope("e\u{301}").unwrap());
+        for bad in ["group:admin", "bad,name", " whitespace", "a\u{202e}b"] {
+            assert!(group_scope(bad).is_err());
+        }
     }
     #[test]
     fn production_profile_rejects_issuer_downgrade_and_implicit_groups() {

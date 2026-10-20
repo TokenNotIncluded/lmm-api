@@ -73,6 +73,7 @@ fn fixture(version: u64) -> (RoutingConfig, PriceConfig) {
             .enumerate()
             .map(|(index, speed)| PriceRule {
                 billing_mode: crate::routing::BillingMode::Tokens,
+                tiered: None,
                 id: index as u64 + 1,
                 model: "model-a".into(),
                 group: "default".into(),
@@ -94,6 +95,43 @@ fn fixture(version: u64) -> (RoutingConfig, PriceConfig) {
 
 fn build(config: RoutingConfig, prices: PriceConfig) -> Router {
     Router::new(config, Arc::new(PriceSnapshot::compile(prices).unwrap())).unwrap()
+}
+
+#[test]
+fn unicode_group_routes_price_aliases_and_request_keys_are_byte_exact() {
+    for group in ["国产", "官key", "国产[Kimi/Deepseek/GLM]", "é", "e\u{301}"] {
+        let (mut config, mut prices) = fixture(1);
+        config.groups[0].name = group.into();
+        for route in &mut config.routes {
+            route.group = group.into();
+        }
+        for alias in &mut config.aliases {
+            alias.group = group.into();
+        }
+        for price in &mut prices.rules {
+            price.group = group.into();
+        }
+        let router = build(config, prices);
+        let catalog = router.catalog(group).unwrap();
+        assert!(catalog.iter().any(|m| m.name == "preferred"));
+        let plan = router
+            .route(RouteRequest {
+                group,
+                model: "preferred",
+                ..request()
+            })
+            .unwrap();
+        assert_eq!(plan.canonical_model(), "model-a");
+        let wrong = format!("{group} ");
+        assert!(router.catalog(&wrong).is_err());
+        if group == "é" {
+            assert!(router.catalog("e\u{301}").is_err());
+        }
+        if group == "e\u{301}" {
+            assert!(router.catalog("é").is_err());
+        }
+    }
+    assert!(!super::config::valid_model("中文-model"));
 }
 
 fn request() -> RouteRequest<'static> {

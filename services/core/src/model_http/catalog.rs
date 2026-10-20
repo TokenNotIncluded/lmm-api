@@ -360,9 +360,7 @@ fn api_supported(
                                             )
                                             .is_ok()
                                 })
-                                && quote.billing_mode() == BillingMode::Tokens
-                                && quote.rates().output == 0
-                                && quote.rates().cache_read == 0
+                                && quote.is_input_only_scalar()
                                 && reqwest::header::HeaderValue::from_str(&format!(
                                     "Bearer {secret}"
                                 ))
@@ -526,6 +524,7 @@ mod tests {
                 version: 1,
                 rules: vec![PriceRule {
                     billing_mode: BillingMode::Tokens,
+                    tiered: None,
                     id: 1,
                     model: model.into(),
                     group: "synthetic".into(),
@@ -629,6 +628,57 @@ mod tests {
         assert!(v.models[0].id.ends_with("YWN0dWFsLWFsaWFz"));
     }
 
+    #[test]
+    fn systemone_catalog_admits_only_safe_scalar_decimal_tariff() {
+        let (mut config, mut prices) = fixture("jev-native");
+        config.upstreams[0].protocol = Protocol::SystemOne;
+        prices.rules[0].billing_mode = BillingMode::TieredDecimal;
+        prices.rules[0].rates = TokenRates {
+            input: 0,
+            output: 0,
+            cache_read: 0,
+            cache_write: 0,
+            request: 0,
+        };
+        let scalar: crate::routing::TieredTariff = serde_json::from_value(serde_json::json!({
+            "revision":1,"source_digest":"af0d4b7d188d58f20f9eb13cef18353659ca208151824014795189b70dc0afd7",
+            "uses_cache_read":false,"uses_cache_write":false,
+            "tiers":[{"rates":{"input":{"numerator":21,"denominator":500},"output":{"numerator":0,"denominator":1},"cache_read":{"numerator":0,"denominator":1},"cache_write":{"numerator":0,"denominator":1}}}]
+        })).unwrap();
+        for accepted in [true, false] {
+            let mut tariff = scalar.clone();
+            if !accepted {
+                tariff.tiers[0].rates.output.numerator = 1;
+            }
+            prices.rules[0].tiered = Some(tariff);
+            let router = Arc::new(
+                Router::new(
+                    config.clone(),
+                    Arc::new(PriceSnapshot::compile(prices.clone()).unwrap()),
+                )
+                .unwrap(),
+            );
+            let credentials = BTreeMap::from([((1, 1), "synthetic-systemone-only".into())]);
+            let surface = CatalogSurface::from_gateway_with_provider_policy(
+                router,
+                &credentials,
+                Duration::from_secs(1),
+                &super::super::ProviderPolicy::default(),
+                65536,
+            );
+            let result = view(&surface);
+            if accepted {
+                assert_eq!(result.models.len(), 1);
+                assert_eq!(result.models[0].apis, ["system-one"]);
+                let price = serde_json::to_value(&result.models[0].pricing).unwrap();
+                for field in ["input", "output", "cache_read", "cache_write", "request"] {
+                    assert!(price[field].is_null(), "{field}");
+                }
+            } else {
+                assert!(result.models.is_empty());
+            }
+        }
+    }
     #[test]
     fn upstream_cost_sentinel_is_unknown_and_never_a_free_price() {
         let (r, mut p) = fixture("openrouter/fusion");

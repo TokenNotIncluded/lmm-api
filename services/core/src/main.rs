@@ -18,12 +18,13 @@ use std::{
 
 mod admin;
 
-const USAGE: &str = "Usage: lmm-core [--config /absolute/core.toml | --legacy-env] [serve | init-db | bootstrap-user | complete-setup | install-tool-market-builtins | install-usage-receipt-index | plan-admin-activation | apply-admin-activation | schema-manifest | check-db]\n\n\
+const USAGE: &str = "Usage: lmm-core [--config /absolute/core.toml | --legacy-env] [serve | init-db | create-first-owner | bootstrap-user | complete-setup | install-tool-market-builtins | install-usage-receipt-index | plan-admin-activation | apply-admin-activation | schema-manifest | check-db]\n\n\
 Commands:\n\
   serve           Start the core service (the default without arguments).\n\
   schema-manifest Print the compiled schema contract as JSON; accepts no config options and performs no I/O except stdout.\n\
   check-db        Read-only schema/runtime authority JSON; requires explicit --config.\n\
   init-db         Initialize a new, empty core database.\n\
+  create-first-owner  Create the first production owner offline from private stdin JSON; requires explicit --config and a fresh store.\n\
   bootstrap-user  Read a user_id and platform_level JSON object from stdin.\n\n\
   install-tool-market-builtins  Install the compiled tool catalog offline as installation owner.\n\n\
   complete-setup  Record setup completion offline after creating or importing root.\n\
@@ -46,6 +47,7 @@ JSON from stdin and print secret-free diagnostics. They never invent a human app
 enum Command {
     Serve,
     InitDb,
+    CreateFirstOwner,
     BootstrapUser,
     CompleteSetup,
     InstallToolMarketBuiltins,
@@ -87,6 +89,7 @@ fn command(args: impl IntoIterator<Item = OsString>) -> io::Result<Arguments> {
             Some(
                 "serve"
                 | "init-db"
+                | "create-first-owner"
                 | "bootstrap-user"
                 | "complete-setup"
                 | "install-tool-market-builtins"
@@ -98,6 +101,7 @@ fn command(args: impl IntoIterator<Item = OsString>) -> io::Result<Arguments> {
             ) if operation.is_none() && !version => {
                 operation = Some(match arg.to_str() {
                     Some("init-db") => Command::InitDb,
+                    Some("create-first-owner") => Command::CreateFirstOwner,
                     Some("bootstrap-user") => Command::BootstrapUser,
                     Some("complete-setup") => Command::CompleteSetup,
                     Some("install-tool-market-builtins") => Command::InstallToolMarketBuiltins,
@@ -176,6 +180,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         )),
         Command::Serve => None,
         Command::InitDb => Some(admin::Operation::InitDb),
+        Command::CreateFirstOwner => {
+            if arguments.config.is_none() || arguments.legacy_env {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "create-first-owner requires explicit installer-owner --config",
+                )
+                .into());
+            }
+            Some(admin::Operation::create_first_owner(io::stdin().lock())?)
+        }
         Command::BootstrapUser => Some(admin::Operation::bootstrap(io::stdin().lock())?),
         Command::CompleteSetup => Some(admin::Operation::CompleteSetup),
         Command::InstallToolMarketBuiltins => {
@@ -352,15 +366,37 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
                 user_agreement_enabled: config.user_agreement_enabled,
                 privacy_policy_enabled: config.privacy_policy_enabled,
                 google_client_id: config.auth.google_client_id(&store).map(str::to_owned),
+                google_browser_callback: config
+                    .auth
+                    .google_browser_callback(&store)
+                    .map(str::to_owned),
+                github_client_id: config
+                    .auth
+                    .external_client_id(&store, lmm_core::identity::ExternalProvider::Github)
+                    .map(str::to_owned),
+                linuxdo_client_id: config
+                    .auth
+                    .external_client_id(&store, lmm_core::identity::ExternalProvider::LinuxDo)
+                    .map(str::to_owned),
+                discord_client_id: config
+                    .auth
+                    .external_client_id(&store, lmm_core::identity::ExternalProvider::Discord)
+                    .map(str::to_owned),
             };
             routes = routes.merge(lmm_core::legacy_auth::router(store, config.auth));
             capabilities.legacy_web_auth = true;
         }
         if let Some(gateway) = &model_gateway {
             routes = routes.merge(gateway.router());
+            routes = routes.merge(
+                lmm_core::pricing_http::PricingHttp::from_gateway(pool.clone(), gateway).router(),
+            );
             if config::image_host_configured() {
                 routes = routes.merge(config::image_browser_router(gateway)?);
             }
+        } else {
+            routes = routes
+                .merge(lmm_core::pricing_http::PricingHttp::unavailable(pool.clone()).router());
         }
         if config::wallet_configured() {
             let wallet = lmm_core::wallet::Store::new(pool.clone());
@@ -552,6 +588,14 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
     });
     #[cfg(unix)]
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    if let Some(edge) = config::edge_access_config()? {
+        let pool = database_pool
+            .clone()
+            .ok_or("edge access requires a database")?;
+        app = lmm_core::edge_access::EdgeAccess::new(pool, edge)
+            .await?
+            .protect(app);
+    }
     app = app.layer(axum::middleware::from_fn(
         lmm_core::http::request_body_deadline,
     ));

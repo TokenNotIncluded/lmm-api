@@ -542,6 +542,7 @@ async fn model_and_commerce_on_distinct_wallets_cannot_exceed_shared_user_cap(po
         price: ModelPrice {
             image: None,
             upstream_cost_group_ppm: None,
+            tiered: None,
             version: "price-1".into(),
             model: "local-model".into(),
             group: "default".into(),

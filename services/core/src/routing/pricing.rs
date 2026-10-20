@@ -16,6 +16,7 @@ pub enum BillingMode {
     #[default]
     Tokens,
     UpstreamCost,
+    TieredDecimal,
 }
 impl BillingMode {
     fn is_tokens(&self) -> bool {
@@ -40,6 +41,8 @@ pub struct TokenRates {
 pub struct PriceRule {
     #[serde(default, skip_serializing_if = "BillingMode::is_tokens")]
     pub billing_mode: BillingMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tiered: Option<super::TieredTariff>,
     pub id: u64,
     pub model: String,
     pub group: String,
@@ -149,6 +152,17 @@ impl CreditQuote {
         input_tokens: u64,
         output_tokens: u64,
     ) -> Result<Credits, RoutingError> {
+        if let Some(tariff) = self.price.tiered {
+            return tariff
+                .reservation_ceiling(
+                    input_tokens,
+                    output_tokens,
+                    self.price.group_multiplier_ppm,
+                    self.price.speed_multiplier_ppm,
+                    self.conversion.credits_per_usd,
+                )
+                .map(Credits);
+        }
         let mut ceiling = *self;
         ceiling.price.rates.input = self
             .price
@@ -166,6 +180,34 @@ impl CreditQuote {
     /// Sum all dimensions and multipliers, then round up once in ledger units.
     /// Do not round the token rates or the intermediate micro-USD amount.
     pub fn charge(&self, usage: Usage) -> Result<Credits, RoutingError> {
+        self.charge_with_semantics(usage, super::InputSemantics::Inclusive)
+    }
+
+    pub fn charge_with_semantics(
+        &self,
+        usage: Usage,
+        semantics: super::InputSemantics,
+    ) -> Result<Credits, RoutingError> {
+        if let Some(tariff) = self.price.tiered {
+            return tariff
+                .charge(
+                    super::TieredUsage {
+                        input: usage
+                            .input
+                            .checked_add(usage.cache_read)
+                            .and_then(|v| v.checked_add(usage.cache_write))
+                            .ok_or(RoutingError::PriceOverflow)?,
+                        cached: usage.cache_read,
+                        created: usage.cache_write,
+                        output: usage.output,
+                    },
+                    semantics,
+                    self.price.group_multiplier_ppm,
+                    self.price.speed_multiplier_ppm,
+                    self.conversion.credits_per_usd,
+                )
+                .map(Credits);
+        }
         let mut factor = u128::from(self.conversion.credits_per_usd);
         let mut divisor = PER_MILLION;
         // Reduce the conversion before multiplying. For 500000 credits/USD this
@@ -200,6 +242,7 @@ fn rounded_amount(numerator: u128, denominator: u128) -> Result<u64, RoutingErro
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PriceQuote {
     billing_mode: BillingMode,
+    tiered: Option<super::CompiledTariff>,
     version: u64,
     rule_id: u64,
     rates: TokenRates,
@@ -208,6 +251,32 @@ pub struct PriceQuote {
 }
 
 impl PriceQuote {
+    /// Native input-only protocols cannot infer zero rates from the integer
+    /// placeholders carried beside a decimal tariff.
+    pub fn is_input_only_scalar(&self) -> bool {
+        match (self.billing_mode, self.tiered) {
+            (BillingMode::Tokens, None) => {
+                self.rates.output == 0
+                    && self.rates.cache_read == 0
+                    && self.rates.cache_write == 0
+                    && self.rates.request == 0
+            }
+            (BillingMode::TieredDecimal, Some(compiled)) => {
+                let tariff = compiled.tariff();
+                !tariff.uses_cache_read
+                    && !tariff.uses_cache_write
+                    && tariff.tiers.len() == 1
+                    && tariff.tiers[0].up_to_input_tokens.is_none()
+                    && tariff.tiers[0].rates.output.numerator == 0
+                    && tariff.tiers[0].rates.cache_read.numerator == 0
+                    && tariff.tiers[0].rates.cache_write.numerator == 0
+            }
+            _ => false,
+        }
+    }
+    pub fn tiered(&self) -> Option<super::CompiledTariff> {
+        self.tiered
+    }
     pub fn billing_mode(&self) -> BillingMode {
         self.billing_mode
     }
@@ -230,6 +299,26 @@ impl PriceQuote {
     /// Round UP once, after summing all dimensions and both multipliers.
     /// Task 03 must apply this once to a logical request; retries are not new fees.
     pub fn charge(&self, usage: Usage) -> Result<MicroUsd, RoutingError> {
+        if let Some(tariff) = self.tiered {
+            return tariff
+                .charge(
+                    super::TieredUsage {
+                        input: usage
+                            .input
+                            .checked_add(usage.cache_read)
+                            .and_then(|v| v.checked_add(usage.cache_write))
+                            .ok_or(RoutingError::PriceOverflow)?,
+                        cached: usage.cache_read,
+                        created: usage.cache_write,
+                        output: usage.output,
+                    },
+                    super::InputSemantics::Inclusive,
+                    self.group_multiplier_ppm,
+                    self.speed_multiplier_ppm,
+                    1_000_000,
+                )
+                .map(MicroUsd);
+        }
         Ok(MicroUsd(rounded_amount(
             self.numerator(usage)?,
             DENOMINATOR,
@@ -289,7 +378,7 @@ impl PriceSnapshot {
                 || !ids.insert(rule.id)
                 || !valid_group(&rule.group)
                 || !valid_model(&rule.model)
-                || !(1..=MAX_MULTIPLIER).contains(&rule.group_multiplier_ppm)
+                || rule.group_multiplier_ppm > MAX_MULTIPLIER
                 || !(1..=MAX_MULTIPLIER).contains(&rule.speed_multiplier_ppm)
                 || [
                     rule.rates.input,
@@ -303,8 +392,26 @@ impl PriceSnapshot {
             {
                 return Err(RoutingError::InvalidConfig("price rule"));
             }
+            let tiered = match (&rule.tiered, rule.billing_mode) {
+                (Some(tariff), BillingMode::TieredDecimal)
+                    if [
+                        rule.rates.input,
+                        rule.rates.output,
+                        rule.rates.cache_read,
+                        rule.rates.cache_write,
+                        rule.rates.request,
+                    ]
+                    .iter()
+                    .all(|v| *v == 0) =>
+                {
+                    Some(tariff.compile()?)
+                }
+                (None, BillingMode::Tokens | BillingMode::UpstreamCost) => None,
+                _ => return Err(RoutingError::InvalidConfig("tiered token price")),
+            };
             if rule.billing_mode == BillingMode::UpstreamCost
                 && (!crate::upstream_cost::supported_router(&rule.model)
+                    || rule.group_multiplier_ppm == 0
                     || rule.speed != Speed::Standard
                     || rule.speed_multiplier_ppm != MULTIPLIER_ONE
                     || [
@@ -321,6 +428,7 @@ impl PriceSnapshot {
             }
             let quote = PriceQuote {
                 billing_mode: rule.billing_mode,
+                tiered,
                 version: config.version,
                 rule_id: rule.id,
                 rates: rule.rates,
@@ -365,6 +473,7 @@ mod upstream_cost_tests {
     fn upstream_cost_rules_reject_fixed_rates_unknown_models_and_speed_fees() {
         let mut rule = PriceRule {
             billing_mode: BillingMode::UpstreamCost,
+            tiered: None,
             id: 1,
             model: "openrouter/fusion".into(),
             group: "default".into(),
@@ -389,6 +498,9 @@ mod upstream_cost_tests {
         let quote = prices.quote(&rule.model, &rule.group, rule.speed).unwrap();
         assert_eq!(quote.billing_mode(), BillingMode::UpstreamCost);
         assert!(quote.charge(Usage::default()).is_err());
+        rule.group_multiplier_ppm = 0;
+        assert!(compile(&rule).is_err());
+        rule.group_multiplier_ppm = 1_250_000;
         rule.rates.request = 1;
         assert!(compile(&rule).is_err());
         rule.rates.request = 0;
@@ -400,12 +512,69 @@ mod upstream_cost_tests {
 }
 
 #[cfg(test)]
+mod explicit_free_group_tests {
+    use super::*;
+
+    #[test]
+    fn explicitly_free_tokens_keep_zero_quote_but_missing_prices_stay_missing() {
+        let prices = PriceSnapshot::compile(PriceConfig {
+            version: 1,
+            rules: vec![PriceRule {
+                billing_mode: BillingMode::Tokens,
+                tiered: None,
+                id: 1,
+                model: "configured-model".into(),
+                group: "FREE".into(),
+                speed: Speed::Standard,
+                rates: TokenRates {
+                    input: 2_000_000,
+                    output: 4_000_000,
+                    cache_read: 500_000,
+                    cache_write: 0,
+                    request: 0,
+                },
+                group_multiplier_ppm: 0,
+                speed_multiplier_ppm: MULTIPLIER_ONE,
+            }],
+        })
+        .unwrap();
+        let quote = prices
+            .quote("configured-model", "FREE", Speed::Standard)
+            .unwrap()
+            .with_credit_rate(CreditRate::new(1, 500_000).unwrap());
+        assert_eq!(quote.reservation_ceiling(100, 20).unwrap(), Credits(0));
+        assert_eq!(
+            quote
+                .charge(Usage {
+                    input: 8,
+                    cache_read: 2,
+                    output: 20,
+                    cache_write: 0
+                })
+                .unwrap(),
+            Credits(0)
+        );
+        assert!(
+            prices
+                .quote("unconfigured-model", "FREE", Speed::Standard)
+                .is_none()
+        );
+        assert!(
+            prices
+                .quote("configured-model", "unconfigured-group", Speed::Standard)
+                .is_none()
+        );
+    }
+}
+
+#[cfg(test)]
 mod a07_tests {
     use super::*;
 
     fn quote(rates: TokenRates) -> PriceQuote {
         PriceQuote {
             billing_mode: BillingMode::Tokens,
+            tiered: None,
             version: 3,
             rule_id: 7,
             rates,

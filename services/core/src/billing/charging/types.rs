@@ -88,6 +88,8 @@ pub struct Price {
     /// Set only by the trusted Rust router; no client or Go price authority.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream_cost_group_ppm: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tiered: Option<crate::routing::PersistedTieredTariff>,
     pub version: String,
     pub model: String,
     pub group: String,
@@ -99,7 +101,7 @@ impl Price {
     pub fn validate(&self) -> Result<()> {
         if !valid_id(&self.version)
             || !valid_id(&self.model)
-            || !valid_id(&self.group)
+            || !crate::routing::valid_group_name(&self.group)
             || self.input_per_million < 0
             || self.cached_per_million < 0
             || self.output_per_million < 0
@@ -109,6 +111,7 @@ impl Price {
         if let Some(image) = &self.image {
             image.validate().map_err(|_| Error::Invalid)?;
             if self.upstream_cost_group_ppm.is_some()
+                || self.tiered.is_some()
                 || self.input_per_million != 0
                 || self.cached_per_million != 0
                 || self.output_per_million != 0
@@ -121,12 +124,22 @@ impl Price {
         }
         if let Some(ppm) = self.upstream_cost_group_ppm
             && (!crate::upstream_cost::supported_router(&self.model)
+                || self.tiered.is_some()
                 || !(1..=1_000_000_000).contains(&ppm)
                 || self.input_per_million != 0
                 || self.cached_per_million != 0
                 || self.output_per_million != 0)
         {
             return Err(Error::Invalid);
+        }
+        if let Some(tariff) = &self.tiered {
+            tariff.validate().map_err(|_| Error::Invalid)?;
+            if self.input_per_million != 0
+                || self.cached_per_million != 0
+                || self.output_per_million != 0
+            {
+                return Err(Error::Invalid);
+            }
         }
         Ok(())
     }
@@ -142,6 +155,19 @@ impl Price {
         }
         if usage.image.is_some() {
             return Err(Error::Invalid);
+        }
+        if let Some(tariff) = &self.tiered {
+            return tariff
+                .cost(crate::routing::TieredUsage {
+                    input: usage.input as u64,
+                    cached: usage.cached as u64,
+                    created: 0,
+                    output: usage.output as u64,
+                })
+                .and_then(|amount| {
+                    i64::try_from(amount).map_err(|_| crate::routing::RoutingError::PriceOverflow)
+                })
+                .map_err(|_| Error::Invalid);
         }
         if let Some(ppm) = self.upstream_cost_group_ppm {
             return crate::upstream_cost::credits(
@@ -357,6 +383,42 @@ pub(super) fn valid_id(value: &str) -> bool {
 #[cfg(test)]
 mod delegated_source_tests {
     use super::*;
+    #[test]
+    fn unicode_group_price_keeps_model_and_version_identifier_rules_strict() {
+        let mut price = Price {
+            image: None,
+            upstream_cost_group_ppm: None,
+            tiered: None,
+            version: "routing-1-rule-1".into(),
+            model: "model".into(),
+            group: "国产[Kimi/Deepseek/GLM]".into(),
+            input_per_million: 2_000_000,
+            cached_per_million: 0,
+            output_per_million: 0,
+        };
+        assert!(price.validate().is_ok());
+        let encoded = serde_json::to_value(&price).unwrap();
+        assert_eq!(encoded["group"], "国产[Kimi/Deepseek/GLM]");
+        price.group = "官key".into();
+        assert!(price.validate().is_ok());
+        price.model = "中文-model".into();
+        assert!(price.validate().is_err());
+        price.model = "model".into();
+        price.version = "中文-version".into();
+        assert!(price.validate().is_err());
+        price.version = "v1".into();
+        for bad in [
+            "",
+            " group",
+            "group ",
+            "group,other",
+            "group:other",
+            "a\u{202e}b",
+        ] {
+            price.group = bad.into();
+            assert!(price.validate().is_err());
+        }
+    }
     #[test]
     fn native_ledger_command_preserves_original_exact_json_bytes() {
         let command = LedgerCommand {

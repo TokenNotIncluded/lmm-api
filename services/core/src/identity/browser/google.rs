@@ -16,6 +16,41 @@ impl BrowserAuth {
             .begin_google_login(&self.google_binding(binding)?)
             .await?)
     }
+    pub async fn finish_google_login_with_mfa(
+        &self,
+        state: &str,
+        binding: &str,
+        code: &str,
+        metadata: &BrowserSessionMetadata,
+        mfa_binding: &str,
+    ) -> super::super::mfa::MfaResult<super::super::mfa::BrowserLoginOutcome> {
+        let identity = self
+            .store
+            .exchange_google_code(state, &self.google_binding(binding)?, code)
+            .await?;
+        let mut tx = self.store.pool.begin().await?;
+        let source = metadata.ip.parse().ok().map(|address| {
+            crate::abuse::registration::RegistrationSource {
+                address,
+                kind: crate::abuse::registration::RegistrationSourceKind::Socket,
+            }
+        });
+        let user = self.store.google_user(&mut tx, &identity, source).await?;
+        let username = format!("g_{}", &new_secret("")?[..18]);
+        sqlx::query("INSERT INTO core_identity.user_profiles(user_id,username,display_name,password_login_allowed) VALUES ($1,$2,$2,FALSE) ON CONFLICT (user_id) DO NOTHING")
+            .bind(user).bind(username).execute(&mut *tx).await?;
+        let outcome = self
+            .provider_login_outcome(
+                &mut tx,
+                user,
+                metadata,
+                mfa_binding,
+                "session.google_browser_login",
+            )
+            .await?;
+        tx.commit().await?;
+        Ok(outcome)
+    }
     pub async fn finish_google_login(
         &self,
         state: &str,

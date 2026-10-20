@@ -2,7 +2,7 @@
 use super::*;
 
 const SCHEMA: &str = include_str!("../../schema/identity.sql");
-const VERSION: i32 = 4;
+const VERSION: i32 = 5;
 // Serialize concurrent installers. Ordinary requests do not take this lock.
 const INSTALL_LOCK: i64 = 741_803_120;
 const HAS_APPLICATION_OBJECTS: &str = r#"

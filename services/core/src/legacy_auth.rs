@@ -1,6 +1,7 @@
 //! Existing Web authentication contract backed exclusively by Rust identity.
 #[path = "identity_compat.rs"]
 mod compatibility;
+mod external_login;
 mod oauth2;
 mod sessions;
 use crate::identity::{
@@ -78,6 +79,16 @@ impl LegacyAuthConfig {
     pub fn google_client_id<'a>(&self, store: &'a IdentityStore) -> Option<&'a str> {
         store.google_browser_client_id(&self.origin)
     }
+    pub fn google_browser_callback<'a>(&self, store: &'a IdentityStore) -> Option<&'a str> {
+        store.google_browser_callback(&self.origin)
+    }
+    pub fn external_client_id<'a>(
+        &self,
+        store: &'a IdentityStore,
+        provider: crate::identity::ExternalProvider,
+    ) -> Option<&'a str> {
+        store.external_browser_client_id(provider, &self.origin)
+    }
     /// Explicitly match the operator's published registration policy.
     pub fn with_legal_acceptance_required(mut self, required: bool) -> Self {
         self.require_legal_acceptance = required;
@@ -117,6 +128,7 @@ pub fn router(store: IdentityStore, config: LegacyAuthConfig) -> Router {
         .merge(compatibility::routes())
         .merge(sessions::routes())
         .merge(oauth2::routes())
+        .merge(external_login::routes())
         .route("/api/user/register", post(register))
         .route("/api/user/login", post(login))
         .route("/api/user/login/2fa", post(complete_mfa_login))
@@ -127,7 +139,7 @@ pub fn router(store: IdentityStore, config: LegacyAuthConfig) -> Router {
         .route("/api/user/2fa/backup_codes", post(mfa_regenerate))
         .route("/api/user/auth/refresh", post(refresh))
         .route("/api/user/auth/logout", post(logout))
-        .route("/api/oauth/google", post(google_start))
+        .route("/api/oauth/google", post(google_start).get(google_callback))
         .route("/api/oauth/google/callback", get(google_callback))
         .route(
             "/api/user/self",
@@ -142,7 +154,8 @@ async fn security(State(state): State<AuthState>, request: Request, next: Next) 
         *request.method(),
         axum::http::Method::GET | axum::http::Method::HEAD | axum::http::Method::OPTIONS
     );
-    let mut response = if request.uri().path() == "/api/oauth2/authorize"
+    let mut response = if (request.uri().path() == "/api/oauth2/authorize"
+        || request.uri().path().starts_with("/api/oauth/"))
         && request
             .uri()
             .query()
@@ -162,7 +175,12 @@ async fn security(State(state): State<AuthState>, request: Request, next: Next) 
     } else if unsafe_method
         || matches!(
             request.uri().path(),
-            "/api/oauth/google/callback" | "/api/oauth2/authorize"
+            "/api/oauth/google"
+                | "/api/oauth/google/callback"
+                | "/api/oauth/github"
+                | "/api/oauth/linuxdo"
+                | "/api/oauth/discord"
+                | "/api/oauth2/authorize"
         )
     {
         let peer = request
@@ -711,6 +729,7 @@ struct GoogleCallback {
     state: Option<String>,
     code: Option<String>,
     error: Option<String>,
+    external_mfa: Option<String>,
 }
 async fn google_callback(
     State(state): State<AuthState>,
@@ -718,6 +737,18 @@ async fn google_callback(
     peer: Result<ConnectInfo<SocketAddr>, axum::extract::rejection::ExtensionRejection>,
     query: Result<Query<GoogleCallback>, QueryRejection>,
 ) -> Response {
+    if let Ok(Query(query)) = &query {
+        if query.external_mfa.as_deref() == Some("1") {
+            if query.code.is_some() || query.state.is_some() || query.error.is_some() {
+                return auth_failure(IdentityError::Invalid.into());
+            }
+            return external_login::pending_mfa(&state, &headers).await;
+        }
+    }
+    let mfa_binding = match external_login::random_binding() {
+        Ok(binding) => binding,
+        Err(error) => return auth_failure(error.into()),
+    };
     let result = async {
         if state.config.google_client_id(&state.store).is_none() {
             return Err(IdentityError::Forbidden.into());
@@ -739,22 +770,26 @@ async fn google_callback(
         };
         state
             .browser
-            .finish_google_login(
+            .finish_google_login_with_mfa(
                 query.state.as_deref().ok_or(IdentityError::Unauthorized)?,
                 binding,
                 query.code.as_deref().ok_or(IdentityError::Unauthorized)?,
                 &metadata,
+                &mfa_binding,
             )
             .await
     }
     .await;
     let response = match result {
-        Ok(bundle) => set_cookie(
+        Ok(BrowserLoginOutcome::Session(bundle)) => set_cookie(
             Redirect::to("/console").into_response(),
             Some((&bundle.refresh_token, bundle.expires_at)),
             &state.config,
         ),
-        Err(error) => auth_failure(error),
+        Ok(BrowserLoginOutcome::Challenge(challenge)) => {
+            external_login::direct_mfa_redirect(&challenge, &mfa_binding, &state.config)
+        }
+        Err(error) => mfa_failure(error),
     };
     google_flow_cookie(response, None, &state.config)
 }

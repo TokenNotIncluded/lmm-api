@@ -5,8 +5,10 @@
 
 mod config;
 mod engine;
+mod group_name;
 mod pricing;
 pub mod store;
+mod tiered;
 
 pub use config::{
     CredentialRef, Endpoint, FailoverPolicy, ModelAlias, ModelGroup, ModelRoute, PayloadPolicy,
@@ -16,9 +18,14 @@ pub use engine::{
     Attempt, DeliveryState, Failure, FailureKind, HealthStatus, PublicModel, ReleaseVersion,
     ReplayPermission, RoutePlan, RouteRequest, Router,
 };
+pub use group_name::valid_group_name;
 pub use pricing::{
     BillingMode, CreditQuote, CreditRate, Credits, MAX_MULTIPLIER, MULTIPLIER_ONE, MicroUsd,
     PriceConfig, PriceQuote, PriceRule, PriceSnapshot, TokenRates, Usage,
+};
+pub use tiered::{
+    CompiledTariff, DecimalRate, InputSemantics, PersistedTieredTariff, TieredRates, TieredTariff,
+    TieredUsage, TokenTier,
 };
 
 pub const CONTRACT_VERSION: u32 = 1;

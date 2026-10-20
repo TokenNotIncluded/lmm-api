@@ -38,6 +38,7 @@ fn routes(
         version: 1,
         rules: vec![PriceRule {
             billing_mode: lmm_core::routing::BillingMode::Tokens,
+            tiered: None,
             id: 1,
             model: "provider-model".into(),
             group: "allowed".into(),
@@ -396,6 +397,7 @@ impl Fixture {
             price: Price {
                 image: None,
                 upstream_cost_group_ppm: None,
+                tiered: None,
                 version: "1:1:1".into(),
                 model: "provider-model".into(),
                 group: "allowed".into(),

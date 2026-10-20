@@ -16,6 +16,7 @@ pub mod image_internal;
 pub mod image_price;
 mod image_provider;
 mod native;
+pub mod pricing;
 mod provider_policy;
 mod routing;
 mod systemone;

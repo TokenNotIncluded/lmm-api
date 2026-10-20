@@ -14,6 +14,7 @@ pub mod commerce;
 pub mod config;
 pub mod console_compat;
 pub mod core_schema;
+pub mod edge_access;
 pub mod events;
 pub mod finance_export;
 pub mod financial_profile;
@@ -34,6 +35,7 @@ pub mod oauth2_balance;
 pub mod oauth2_http;
 #[cfg(unix)]
 pub mod payments;
+pub mod pricing_http;
 pub mod public_server;
 pub mod relay;
 pub mod remote_control;

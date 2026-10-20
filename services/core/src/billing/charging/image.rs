@@ -100,7 +100,9 @@ async fn image_source(c: &mut PgConnection, session: &str, id: &str) -> Result<I
     }
     let context: BuiltinContext =
         serde_json::from_value(row.try_get("context")?).map_err(|_| Error::Storage)?;
-    let input: Value = row.try_get("input")?;
+    let stored_input: Value = row.try_get("input")?;
+    let input = crate::model_http::image_execution::confirmed_drawing_arguments(&stored_input)
+        .map_err(|_| Error::Forbidden)?;
     if !input.is_object() || input_digest(&input)? != context.input_digest {
         return Err(Error::Forbidden);
     }
@@ -115,6 +117,12 @@ async fn image_source(c: &mut PgConnection, session: &str, id: &str) -> Result<I
     if builtin.user_id != actor.user_id || builtin.owner_account_id != actor.owner_account_id {
         return Err(Error::Forbidden);
     }
+    crate::model_http::image_execution::authorize_drawing_reference_contract(
+        &input,
+        &builtin.version_id,
+        &builtin.input_schema_digest,
+    )
+    .map_err(|_| Error::Forbidden)?;
     let fingerprint: Vec<u8> = row.try_get("fingerprint")?;
     if fingerprint.len() != 32 || fingerprint.iter().all(|byte| *byte == 0) {
         return Err(Error::Storage);

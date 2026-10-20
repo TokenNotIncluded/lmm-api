@@ -95,6 +95,36 @@ async fn supplier_reply(
         }
     }
 }
+async fn supplier_edit_reply(
+    State(state): State<SupplierState>,
+    headers: HeaderMap,
+    mut multipart: axum::extract::Multipart,
+) -> Response {
+    state.hits.fetch_add(1, Ordering::SeqCst);
+    assert_eq!(
+        headers["authorization"],
+        "Bearer synthetic-image-provider-key"
+    );
+    let mut images = 0usize;
+    let mut model = None;
+    while let Some(field) = multipart.next_field().await.unwrap() {
+        let name = field.name().unwrap().to_owned();
+        if matches!(name.as_str(), "image" | "image[]") {
+            assert_eq!(field.content_type(), Some("image/png"));
+            let bytes = field.bytes().await.unwrap();
+            assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+            images += 1;
+        } else if name == "model" {
+            model = Some(field.text().await.unwrap());
+        }
+    }
+    assert!(images > 0);
+    assert_eq!(model.as_deref(), Some("supplier-image"));
+    if matches!(state.reply, Reply::Truncated) {
+        return (axum::http::StatusCode::OK, "{\"data\":[").into_response();
+    }
+    Json(json!({"created":1,"data":[{"b64_json":"AQID"}]})).into_response()
+}
 impl Supplier {
     pub(super) async fn start(reply: Reply) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -103,6 +133,7 @@ impl Supplier {
         let release = Arc::new(tokio::sync::Semaphore::new(0));
         let app = Router::new()
             .route("/v1/images/generations", post(supplier_reply))
+            .route("/v1/images/edits", post(supplier_edit_reply))
             .with_state(SupplierState {
                 hits: hits.clone(),
                 release: release.clone(),

@@ -1,4 +1,5 @@
 //! Browser-session compatibility without importing legacy sessions or funds.
+mod external_login;
 mod google;
 pub(super) mod grants;
 mod mfa;
@@ -7,6 +8,11 @@ mod sessions;
 use super::*;
 use hmac::{Hmac, Mac};
 use subtle::ConstantTimeEq;
+
+// Refresh rotates credentials, not the family's original provider evidence.
+// Local second-factor assurance is presented truthfully as 2FA regardless of
+// the primary provider; provider-supplied role/profile fields are never used.
+const LOGIN_METHOD_SQL: &str = "CASE WHEN EXISTS(SELECT 1 FROM core_identity.session_authentication sa WHERE sa.credential_id=s.current_credential_id AND sa.factor_level=2) THEN '2fa' ELSE COALESCE((SELECT CASE a.action WHEN 'session.google_browser_login' THEN 'google' WHEN 'session.github_browser_login' THEN 'oauth:github' WHEN 'session.linuxdo_browser_login' THEN 'oauth:linuxdo' WHEN 'session.discord_browser_login' THEN 'oauth:discord' END FROM core_identity.web_session_credentials m JOIN core_identity.audit a ON a.target->>'session_id'=m.credential_id::text WHERE m.sid=s.sid AND a.action IN ('session.google_browser_login','session.github_browser_login','session.linuxdo_browser_login','session.discord_browser_login') ORDER BY a.id LIMIT 1),'password') END AS login_method";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BrowserAuthError {
@@ -560,11 +566,11 @@ async fn make_bundle(
     refresh: String,
     financial: bool,
 ) -> BrowserResult<BrowserBundle> {
-    let r=sqlx::query("SELECT s.*,EXISTS(SELECT 1 FROM core_identity.web_session_credentials m JOIN core_identity.audit a ON a.target->>'session_id'=m.credential_id::text WHERE m.sid=s.sid AND a.action='session.google_browser_login') AS google_login,extract(epoch FROM s.created_at)::bigint AS created,extract(epoch FROM s.last_active_at)::bigint AS active,extract(epoch FROM s.expires_at)::bigint AS expires,extract(epoch FROM c.expires_at)::bigint AS access_expires FROM core_identity.web_sessions s JOIN core_identity.credentials c ON c.id=s.current_credential_id WHERE s.sid=$1").bind(sid).fetch_one(&mut *c).await?;
+    let r=sqlx::query(&format!("SELECT s.*,{LOGIN_METHOD_SQL},extract(epoch FROM s.created_at)::bigint AS created,extract(epoch FROM s.last_active_at)::bigint AS active,extract(epoch FROM s.expires_at)::bigint AS expires,extract(epoch FROM c.expires_at)::bigint AS access_expires FROM core_identity.web_sessions s JOIN core_identity.credentials c ON c.id=s.current_credential_id WHERE s.sid=$1")).bind(sid).fetch_one(&mut *c).await?;
     let expires: i64 = r.try_get("expires")?;
     let user = user_projection(c, r.try_get("user_id")?, financial).await?;
     Ok(BrowserBundle {
-        data: json!({"access_token":access,"token_type":"Bearer","access_expires_at":r.try_get::<i64,_>("access_expires")?,"user":user,"session":{"sid":sid,"current":true,"login_method":if r.try_get::<bool,_>("google_login")? {"google"} else {"password"},"ip":r.try_get::<String,_>("ip")?,"user_agent":r.try_get::<String,_>("user_agent")?,"created_at":r.try_get::<i64,_>("created")?,"last_active_at":r.try_get::<i64,_>("active")?,"expires_at":expires}}),
+        data: json!({"access_token":access,"token_type":"Bearer","access_expires_at":r.try_get::<i64,_>("access_expires")?,"user":user,"session":{"sid":sid,"current":true,"login_method":r.try_get::<String,_>("login_method")?,"ip":r.try_get::<String,_>("ip")?,"user_agent":r.try_get::<String,_>("user_agent")?,"created_at":r.try_get::<i64,_>("created")?,"last_active_at":r.try_get::<i64,_>("active")?,"expires_at":expires}}),
         refresh_token: refresh,
         expires_at: expires,
     })

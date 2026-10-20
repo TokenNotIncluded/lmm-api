@@ -221,6 +221,7 @@ async fn funded_fixture(pool: &PgPool, role: &runtime::RuntimeRole) {
         price: Price {
             image: None,
             upstream_cost_group_ppm: None,
+            tiered: None,
             version: "synthetic-v1".into(),
             model: "public-model".into(),
             group: "synthetic-group".into(),

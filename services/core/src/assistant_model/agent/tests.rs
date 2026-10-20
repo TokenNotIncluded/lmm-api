@@ -28,6 +28,7 @@ fn gateway_endpoint_group(pool: &PgPool, endpoint: &str, group: &str) -> ModelGa
         version: 1,
         rules: vec![PriceRule {
             billing_mode: BillingMode::Tokens,
+            tiered: None,
             id: 1,
             model: "local-model".into(),
             group: group.into(),

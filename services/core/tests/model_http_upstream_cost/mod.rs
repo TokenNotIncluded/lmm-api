@@ -56,6 +56,7 @@ fn cost_routes(endpoint: &str, model: &str) -> Arc<lmm_core::routing::Router> {
         version: 1,
         rules: vec![PriceRule {
             billing_mode: BillingMode::UpstreamCost,
+            tiered: None,
             id: 1,
             model: model.into(),
             group: "allowed".into(),

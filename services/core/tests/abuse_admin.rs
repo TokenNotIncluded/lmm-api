@@ -797,6 +797,7 @@ async fn marking_blocks_new_real_reservations_but_preserves_existing_real_settle
         price: Price {
             image: None,
             upstream_cost_group_ppm: None,
+            tiered: None,
             version: "synthetic-v1".into(),
             model: "public-model".into(),
             group: "synthetic-group".into(),

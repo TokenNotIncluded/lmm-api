@@ -206,6 +206,15 @@ async fn fixture(pool: PgPool) -> Fixture {
 }
 fn gateway(pool: &PgPool, supplier: &Supplier, key_id: i64, input_ceiling: i64) -> ModelGateway {
     let prices=PriceSnapshot::compile(serde_json::from_value(json!({"version":1,"rules":[{"id":1,"model":"jev-native","group":"allowed","speed":"standard","rates":{"input":42000,"output":0,"cache_read":0,"cache_write":0,"request":0},"group_multiplier_ppm":1000000,"speed_multiplier_ppm":1000000}]})).unwrap()).unwrap();
+    gateway_with_prices(pool, supplier, Some(key_id), input_ceiling, prices)
+}
+fn gateway_with_prices(
+    pool: &PgPool,
+    supplier: &Supplier,
+    static_key_id: Option<i64>,
+    input_ceiling: i64,
+    prices: PriceSnapshot,
+) -> ModelGateway {
     let routes = RoutingConfig {
         version: 1,
         groups: vec![ModelGroup {
@@ -251,7 +260,10 @@ fn gateway(pool: &PgPool, supplier: &Supplier, key_id: i64, input_ceiling: i64) 
             reference: CredentialRef { id: 7, revision: 1 },
             secret: "synthetic-systemone-provider-key".into(),
         }],
-        BTreeMap::from([(key_id, "allowed".into())]),
+        static_key_id
+            .into_iter()
+            .map(|id| (id, "allowed".into()))
+            .collect(),
         Limits {
             total_timeout: Duration::from_secs(2),
             hook_timeout: Duration::from_secs(2),
@@ -263,6 +275,214 @@ fn gateway(pool: &PgPool, supplier: &Supplier, key_id: i64, input_ceiling: i64) 
         },
     )
     .unwrap()
+}
+fn scalar_tariff() -> TieredTariff {
+    TieredTariff {
+        revision: 1,
+        source_digest: "af0d4b7d188d58f20f9eb13cef18353659ca208151824014795189b70dc0afd7".into(),
+        uses_cache_read: false,
+        uses_cache_write: false,
+        tiers: vec![TokenTier {
+            up_to_input_tokens: None,
+            rates: TieredRates {
+                input: DecimalRate {
+                    numerator: 21,
+                    denominator: 500,
+                },
+                output: DecimalRate {
+                    numerator: 0,
+                    denominator: 1,
+                },
+                cache_read: DecimalRate {
+                    numerator: 0,
+                    denominator: 1,
+                },
+                cache_write: DecimalRate {
+                    numerator: 0,
+                    denominator: 1,
+                },
+            },
+        }],
+    }
+}
+fn scalar_prices(tariff: TieredTariff) -> PriceSnapshot {
+    PriceSnapshot::compile(PriceConfig {
+        version: 19,
+        rules: vec![PriceRule {
+            id: 1,
+            billing_mode: BillingMode::TieredDecimal,
+            tiered: Some(tariff),
+            model: "jev-native".into(),
+            group: "allowed".into(),
+            speed: Speed::Standard,
+            rates: TokenRates {
+                input: 0,
+                output: 0,
+                cache_read: 0,
+                cache_write: 0,
+                request: 0,
+            },
+            group_multiplier_ppm: 1_200_000,
+            speed_multiplier_ppm: 1_000_000,
+        }],
+    })
+    .unwrap()
+}
+#[test]
+fn systemone_scalar_tariff_helper_checks_real_decimal_dimensions() {
+    let accepted = scalar_prices(scalar_tariff());
+    assert!(
+        accepted
+            .quote("jev-native", "allowed", Speed::Standard)
+            .unwrap()
+            .is_input_only_scalar()
+    );
+    let mut output = scalar_tariff();
+    output.tiers[0].rates.output.numerator = 1;
+    let mut cached = scalar_tariff();
+    cached.uses_cache_read = true;
+    cached.tiers[0].rates.cache_read.numerator = 1;
+    let mut zero_cached = scalar_tariff();
+    zero_cached.uses_cache_read = true;
+    let mut multiple = scalar_tariff();
+    let mut lower = multiple.tiers[0];
+    lower.up_to_input_tokens = Some(9);
+    multiple.tiers.insert(0, lower);
+    for tariff in [output, cached, zero_cached, multiple] {
+        let prices = scalar_prices(tariff);
+        assert!(
+            !prices
+                .quote("jev-native", "allowed", Speed::Standard)
+                .unwrap()
+                .is_input_only_scalar()
+        );
+    }
+}
+#[sqlx::test(migrations = false)]
+async fn systemone_native_pg_decimal_scalar_dynamic_key_real_charge_and_no_replay(pool: PgPool) {
+    let f = fixture(pool).await;
+    sqlx::query("INSERT INTO core_identity.api_key_settings(credential_id,name,group_name,model_limits_enabled,model_limits) VALUES($1,'native-decimal-key','allowed',TRUE,ARRAY['jev-native'])")
+        .bind(f.key_id).execute(&f.pool).await.unwrap();
+    let supplier = Supplier::start(Reply::Valid).await;
+    // No static Key map: this is the current native database identity path.
+    let gateway = gateway_with_prices(
+        &f.pool,
+        &supplier,
+        None,
+        65536,
+        scalar_prices(scalar_tariff()),
+    );
+    let (status, headers, body) = call(
+        &gateway,
+        http_request(
+            &f.key,
+            "decimal-scalar",
+            "/typesafe/v1/systemone",
+            text_request(),
+            false,
+            false,
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let id = headers["x-request-id"].to_str().unwrap();
+    let charge = gateway.bridge.charging.resolve(id).await.unwrap().unwrap();
+    assert_eq!(charge.state, "settled");
+    assert_eq!(charge.key_id, Some(f.key_id));
+    assert_eq!(charge.reserved, 1652);
+    assert_eq!(charge.settled, 3);
+    let frozen = charge.price.tiered.as_ref().unwrap();
+    assert_eq!(frozen.tariff, scalar_tariff());
+    assert_eq!(frozen.group_multiplier_ppm, 1_200_000);
+    let balance = f.ledger.balance(f.account).await.unwrap();
+    assert_eq!((balance.available_units, balance.reserved_units), (9997, 0));
+    let (status, _, _) = call(
+        &gateway,
+        http_request(
+            &f.key,
+            "decimal-scalar",
+            "/v1/systemone",
+            text_request(),
+            false,
+            false,
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(supplier.hits.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        supplier.seen.lock().unwrap()[0].wire["model"],
+        "jev-provider"
+    );
+    sqlx::query("UPDATE core_identity.api_key_settings SET enabled=FALSE WHERE credential_id=$1")
+        .bind(f.key_id)
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let (status, _, _) = call(
+        &gateway,
+        http_request(
+            &f.key,
+            "decimal-revoked",
+            "/v1/systemone",
+            text_request(),
+            false,
+            false,
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(supplier.hits.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM core_charging.requests")
+            .fetch_one(&f.pool)
+            .await
+            .unwrap(),
+        1
+    );
+}
+#[sqlx::test(migrations = false)]
+async fn systemone_native_pg_complex_decimal_rejected_before_hold_and_supplier(pool: PgPool) {
+    let f = fixture(pool).await;
+    let supplier = Supplier::start(Reply::Valid).await;
+    let mut output = scalar_tariff();
+    output.tiers[0].rates.output.numerator = 1;
+    let mut cached = scalar_tariff();
+    cached.uses_cache_read = true;
+    cached.tiers[0].rates.cache_read.numerator = 1;
+    let mut multiple = scalar_tariff();
+    let mut lower = multiple.tiers[0];
+    lower.up_to_input_tokens = Some(9);
+    multiple.tiers.insert(0, lower);
+    for (index, tariff) in [output, cached, multiple].into_iter().enumerate() {
+        let gateway = gateway_with_prices(
+            &f.pool,
+            &supplier,
+            Some(f.key_id),
+            65536,
+            scalar_prices(tariff),
+        );
+        let (status, _, body) = call(
+            &gateway,
+            http_request(
+                &f.key,
+                &format!("decimal-denied-{index}"),
+                "/v1/systemone",
+                text_request(),
+                false,
+                false,
+                None,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"]["code"], "unsupported_feature");
+        untouched(&f).await;
+        assert_eq!(supplier.hits.load(Ordering::SeqCst), 0);
+    }
 }
 fn text_request() -> serde_json::Value {
     json!({"model":"jev-native","state":{"message":"hello"},"questions":{"n":{"type":"noul","instructions":"Is this hello?"},"c":{"type":"choice","criteria":{"x":"no","y":"yes"}},"s":{"type":"score","criteria":["low","high"]}}})
