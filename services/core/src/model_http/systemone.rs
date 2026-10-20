@@ -323,12 +323,7 @@ async fn execute(
     }
     // Never reduce the established 65,536-token native context reservation.
     // Long-context requires a host-reviewed larger bound, not a client price.
-    if gateway.bridge.policy.input_token_ceiling < 65_536 {
-        return Err(RelayError::Unsupported(
-            "System One context exceeds the installed reservation contract",
-        ));
-    }
-    gateway.bridge.provider_policy.validate_systemone_mode(
+    let input_token_ceiling = gateway.bridge.provider_policy.validate_systemone_mode(
         &attempt,
         gateway.bridge.policy.input_token_ceiling,
         request.flags().long_context,
@@ -395,7 +390,7 @@ async fn execute(
     }
     let reserve = i64::try_from(
         quote
-            .reservation_ceiling(gateway.bridge.policy.input_token_ceiling as u64, 0)
+            .reservation_ceiling(input_token_ceiling as u64, 0)
             .map_err(|_| RelayError::BillingUnavailable)?
             .0,
     )
@@ -430,6 +425,7 @@ async fn execute(
         price: price.clone(),
         quote,
         route_id,
+        input_token_ceiling,
     };
     {
         let mut active = gateway
@@ -548,7 +544,7 @@ async fn execute(
         if observed
             .usage
             .input_tokens
-            .is_none_or(|n| n > gateway.bridge.policy.input_token_ceiling as u64)
+            .is_none_or(|n| n > input_token_ceiling as u64)
         {
             return Err(RelayError::SettlementPending);
         }

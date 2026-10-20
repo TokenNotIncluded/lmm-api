@@ -79,7 +79,7 @@ impl ModelGateway {
         {
             return Err(RelayError::RouteUnavailable);
         }
-        self.bridge.provider_policy.validate_attempt(
+        self.bridge.provider_policy.reservation_input_bound(
             &attempt,
             self.bridge.policy.input_token_ceiling,
             max_output,
@@ -138,7 +138,7 @@ impl ModelGateway {
             .host_str()
             .and_then(|h| h.trim_matches(['[', ']']).parse::<IpAddr>().ok())
             .is_some_and(|ip| ip.is_loopback());
-        self.bridge.provider_policy.validate_attempt(
+        let input_ceiling = self.bridge.provider_policy.reservation_input_bound(
             &attempt,
             self.bridge.policy.input_token_ceiling,
             max_output,
@@ -183,16 +183,13 @@ impl ModelGateway {
         // Synthetic local contract: all serialized UTF8 bytes plus framing are
         // bounded before reserving; never apply this to an external tokenizer.
         if bytes.len() > self.limits.request_bytes
-            || (local && bytes.len() as i64 + 1024 > self.bridge.policy.input_token_ceiling)
+            || (local && bytes.len() as i64 + 1024 > input_ceiling)
         {
             return Err(RelayError::Limit("assistant context budget"));
         }
         let reserve = i64::try_from(
             quote
-                .reservation_ceiling(
-                    self.bridge.policy.input_token_ceiling as u64,
-                    u64::from(max_output),
-                )
+                .reservation_ceiling(input_ceiling as u64, u64::from(max_output))
                 .map_err(|_| RelayError::BillingUnavailable)?
                 .0,
         )
@@ -209,7 +206,7 @@ impl ModelGateway {
             fingerprint: Sha256::digest(bytes).into(),
             route,
             payload,
-            input_ceiling: self.bridge.policy.input_token_ceiling,
+            input_ceiling,
             output_ceiling: max_output,
             connection,
             attempt,

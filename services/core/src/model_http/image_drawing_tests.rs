@@ -15,6 +15,8 @@ use crate::{
     },
 };
 use std::sync::atomic::Ordering;
+#[path = "image_browser_cookie_path_tests.rs"]
+mod browser_cookie_path_tests;
 
 const PASSWORD: &str = "drawing-password";
 struct BrowserFixture {

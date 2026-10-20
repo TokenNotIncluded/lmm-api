@@ -13,6 +13,13 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 
+// Browser refresh credentials are scoped to /api/user/auth. Human confirmation
+// must stay below that path; Go receives only the public URL, never the cookie.
+const CONFIRMATION_PATH_PREFIX: &str = "/api/user/auth/images/confirm";
+pub(super) fn confirmation_path(id: &str) -> String {
+    format!("{CONFIRMATION_PATH_PREFIX}/{id}")
+}
+
 #[derive(Clone)]
 struct Browser {
     service: ImageService,
@@ -26,10 +33,25 @@ pub(crate) fn browser_router_with_local_http(
 ) -> Result<Router, Error> {
     validate_origin(&origin, local_http)?;
     Ok(Router::new()
-        .route("/core/v1/images/confirm/{id}", get(page).post(confirm))
+        .route(&confirmation_path("{id}"), get(page).post(confirm))
+        // Retired links must not fall through the whole-Core 503 fallback or
+        // accidentally become confirmation endpoints again.
+        .route(
+            "/core/v1/images/confirm/{id}",
+            get(retired_confirmation).post(retired_confirmation),
+        )
         .layer(DefaultBodyLimit::max(2048))
         .layer(middleware::map_response(secure_response))
         .with_state(Browser { service, origin }))
+}
+async fn retired_confirmation() -> Response {
+    secure(
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error":"confirmation_path_retired"})),
+        )
+            .into_response(),
+    )
 }
 fn validate_origin(origin: &str, local_http: bool) -> Result<(), Error> {
     let u = reqwest::Url::parse(origin).map_err(|_| Error::Invalid)?;
@@ -250,7 +272,7 @@ mod tests {
         let attack = "</pre><script>alert('x')</script> & \" '";
         let preview = Preview {
             operation_id: "image:id".into(),
-            confirmation_path: "/core/v1/images/confirm/image:id".into(),
+            confirmation_path: confirmation_path("image:id"),
             preview_digest: "digest".into(),
             input: DrawingInput {
                 prompt: attack.into(),

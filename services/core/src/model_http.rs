@@ -19,6 +19,8 @@ mod native;
 pub mod pricing;
 mod provider_policy;
 mod routing;
+#[cfg(test)]
+mod selected_bound_tests;
 mod systemone;
 pub mod trusted_delegation;
 

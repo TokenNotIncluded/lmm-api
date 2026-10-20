@@ -2250,7 +2250,9 @@ fn model_gateway_with_origins(
                     upstream.protocol,
                     upstream.endpoint.as_str(),
                     config.input_token_ceiling,
-                    config.max_output_tokens,
+                    // Binding needs a usable positive output capacity. Each
+                    // selected request checks its actual output ceiling.
+                    1,
                 )
                 .map_err(|_| invalid_config("invalid model provider context binding"))?;
         }
@@ -3626,6 +3628,47 @@ rules=[{{id=1,model='model',group='allowed',speed='standard',rates={{input=20000
             .connect_lazy("postgresql://synthetic:synthetic@127.0.0.1:1/synthetic")
             .unwrap();
         assert!(model_gateway(pool.clone(), document.as_bytes(), false).is_ok());
+        // The installation's output maximum need not fit every model. Startup
+        // binds both contracts; runtime checks the output actually requested.
+        let low_output = document.replace(
+            "max_output_tokens=20,contract_revision",
+            "max_output_tokens=19,contract_revision",
+        );
+        let mut mixed: toml::Value = toml::from_str(&low_output).unwrap();
+        let contexts = mixed["external_models"].as_array_mut().unwrap();
+        let mut second_context = contexts[0].clone();
+        second_context["upstream_model"] = "second-provider-model".into();
+        second_context["max_output_tokens"] = 20.into();
+        contexts.push(second_context);
+        let routes = mixed["routing"]["routes"].as_array_mut().unwrap();
+        let mut second_route = routes[0].clone();
+        second_route["id"] = 2.into();
+        second_route["model"] = "second-model".into();
+        second_route["targets"][0]["id"] = 2.into();
+        second_route["targets"][0]["upstream_model"] = "second-provider-model".into();
+        routes.push(second_route);
+        let rules = mixed["prices"]["rules"].as_array_mut().unwrap();
+        let mut second_rule = rules[0].clone();
+        second_rule["id"] = 2.into();
+        second_rule["model"] = "second-model".into();
+        rules.push(second_rule);
+        let mixed = toml::to_string(&mixed).unwrap();
+        let mixed_gateway = model_gateway(pool.clone(), mixed.as_bytes(), false).unwrap();
+        assert!(
+            mixed_gateway
+                .validate_assistant_policy("model", "allowed", 19)
+                .is_ok()
+        );
+        assert!(
+            mixed_gateway
+                .validate_assistant_policy("model", "allowed", 20)
+                .is_err()
+        );
+        assert!(
+            mixed_gateway
+                .validate_assistant_policy("second-model", "allowed", 20)
+                .is_ok()
+        );
         // Native API keys are created and revoked in the identity database.
         // A host need not predeclare their IDs in the synthetic access map.
         let dynamic_keys =
@@ -3661,7 +3704,7 @@ rules=[{{id=1,model='model',group='allowed',speed='standard',rates={{input=20000
             document.replace("max_input_tokens=64", "max_input_tokens=101"),
             document.replace(
                 "max_output_tokens=20,contract_revision",
-                "max_output_tokens=19,contract_revision",
+                "max_output_tokens=0,contract_revision",
             ),
         ] {
             assert!(model_gateway(pool.clone(), invalid.as_bytes(), false).is_err());
