@@ -540,7 +540,7 @@ test('a transport error only looks up the original request, including after a mi
 test('native confirmation opens only the Core page and requires a separate explicit resume', async () => {
   let invoked = 0
   const state = 'b'.repeat(64)
-  const imagePath = `/core/v1/images/confirm/image:${'d'.repeat(64)}`
+  const imagePath = `/api/user/auth/images/confirm/image:${'d'.repeat(64)}`
   const pending = {
     ...response('awaiting_confirmation', 'reserved', {
       content: [],

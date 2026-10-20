@@ -169,7 +169,13 @@ export function marketConfirmationURL(
       !url.password &&
       !url.search &&
       !url.hash &&
-      (/^\/core\/v1\/images\/confirm\/image:[a-f0-9]{64}$/.test(url.pathname) ||
+      ((/^\/api\/user\/auth\/images\/confirm\/image:[a-f0-9]{64}$/.test(
+        url.pathname
+      ) &&
+        // URL parsing normalizes dot segments; the supplied path must be exact.
+        /^(?:https?:\/\/[^/?#\\\s@]+)?\/api\/user\/auth\/images\/confirm\/image:[a-f0-9]{64}$/.test(
+          value
+        )) ||
         /^\/core\/v1\/bounties\/confirm\/[a-f0-9]{64}$/.test(url.pathname) ||
         /^\/core\/v1\/wallet\/confirm\/(create|claim|cancel)\/[1-9][0-9]*$/.test(
           url.pathname
