@@ -14,6 +14,9 @@ url_file = "/etc/lmm.conf.d/secrets/core/database-url"
 max_connections = 2
 # Optional pool connection/acquisition wait, in seconds (1..30; default 3).
 # acquire_timeout_seconds = 3
+# Optional check-db read-only observation deadline (1..120; default 15).
+# Does not change normal runtime SQL, transaction, or billing timeouts.
+# check_timeout_seconds = 15
 
 [identity]
 registration_enabled = false

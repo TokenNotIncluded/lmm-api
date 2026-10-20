@@ -118,6 +118,8 @@ struct DatabaseFile {
     max_connections: u32,
     #[serde(default)]
     acquire_timeout_seconds: Option<u32>,
+    #[serde(default)]
+    check_timeout_seconds: Option<u32>,
 }
 #[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -401,10 +403,18 @@ fn parse_core_file(document: &[u8]) -> io::Result<BTreeMap<&'static str, OsStrin
         if !(1..=30).contains(&acquire_timeout_seconds) {
             return Err(invalid_config("invalid core database acquire timeout"));
         }
+        let check_timeout_seconds = db.check_timeout_seconds.unwrap_or(15);
+        if !(1..=120).contains(&check_timeout_seconds) {
+            return Err(invalid_config("invalid core database check timeout"));
+        }
         put("LMM_CORE_DB_CONNECTIONS", db.max_connections.to_string());
         put(
             "LMM_CORE_DB_ACQUIRE_TIMEOUT_SECONDS",
             acquire_timeout_seconds.to_string(),
+        );
+        put(
+            "LMM_CORE_DB_CHECK_TIMEOUT_SECONDS",
+            check_timeout_seconds.to_string(),
         );
         paths.push(("LMM_CORE_DATABASE_URL_FILE", db.url_file));
     }
@@ -2533,6 +2543,11 @@ pub fn database_acquire_timeout_seconds() -> io::Result<u32> {
     configured_limit("LMM_CORE_DB_ACQUIRE_TIMEOUT_SECONDS", 3, 30)
 }
 
+/// Deadline for the one-shot read-only check-db observation only.
+pub fn database_check_timeout_seconds() -> io::Result<u32> {
+    configured_limit("LMM_CORE_DB_CHECK_TIMEOUT_SECONDS", 15, 120)
+}
+
 pub fn password_slots() -> io::Result<usize> {
     Ok(configured_limit("LMM_CORE_PASSWORD_SLOTS", 1, 2)? as usize)
 }
@@ -2645,15 +2660,16 @@ mod tests {
 
     #[test]
     fn typed_toml_maps_all_supported_capabilities_without_environment_mutation() {
-        let document = b"version=1\n[server]\nlisten='127.0.0.1:8000'\nworker_threads=2\nmax_inflight=8\ndrain_timeout_seconds=15\n[database]\nurl_file='/nonexistent-lmm-test/database'\nmax_connections=3\nacquire_timeout_seconds=7\n[identity]\nregistration_enabled=true\npassword_slots=2\napi_key_encryption_key_file='/nonexistent-lmm-test/api-key'\n[identity.web]\norigin='https://api.example.test'\nrefresh_key_file='/nonexistent-lmm-test/refresh'\nuser_agreement_enabled=false\nprivacy_policy_enabled=true\n[identity.google]\nclient_id='public-client-id'\nclient_secret_file='/nonexistent-lmm-test/google'\nredirect_uri='https://api.example.test/core/v1/auth/oauth/google/callback'\n[rpc]\nsocket='/nonexistent-lmm-test/core.sock'\ntoken_file='/nonexistent-lmm-test/rpc'\nshared_group_id=65534\n[console]\nenabled=true\n[model]\nconfig_file='/nonexistent-lmm-test/model.toml'\nlocal_http=true\n[payments]\nconfig_file='/nonexistent-lmm-test/payments.toml'\ntoken_file='/nonexistent-lmm-test/payments-token'\n[commerce]\nconfig_file='/nonexistent-lmm-test/commerce.toml'\ntoken_file='/nonexistent-lmm-test/commerce-token'\n[ingress]\nack_url='http://127.0.0.1:3000/__ack'\ntoken_file='/nonexistent-lmm-test/ingress'\ninstance='core-test'\n";
+        let document = b"version=1\n[server]\nlisten='127.0.0.1:8000'\nworker_threads=2\nmax_inflight=8\ndrain_timeout_seconds=15\n[database]\nurl_file='/nonexistent-lmm-test/database'\nmax_connections=3\nacquire_timeout_seconds=7\ncheck_timeout_seconds=60\n[identity]\nregistration_enabled=true\npassword_slots=2\napi_key_encryption_key_file='/nonexistent-lmm-test/api-key'\n[identity.web]\norigin='https://api.example.test'\nrefresh_key_file='/nonexistent-lmm-test/refresh'\nuser_agreement_enabled=false\nprivacy_policy_enabled=true\n[identity.google]\nclient_id='public-client-id'\nclient_secret_file='/nonexistent-lmm-test/google'\nredirect_uri='https://api.example.test/core/v1/auth/oauth/google/callback'\n[rpc]\nsocket='/nonexistent-lmm-test/core.sock'\ntoken_file='/nonexistent-lmm-test/rpc'\nshared_group_id=65534\n[console]\nenabled=true\n[model]\nconfig_file='/nonexistent-lmm-test/model.toml'\nlocal_http=true\n[payments]\nconfig_file='/nonexistent-lmm-test/payments.toml'\ntoken_file='/nonexistent-lmm-test/payments-token'\n[commerce]\nconfig_file='/nonexistent-lmm-test/commerce.toml'\ntoken_file='/nonexistent-lmm-test/commerce-token'\n[ingress]\nack_url='http://127.0.0.1:3000/__ack'\ntoken_file='/nonexistent-lmm-test/ingress'\ninstance='core-test'\n";
         let parsed = parse_core_file(document).unwrap();
-        assert_eq!(parsed.len(), 32);
+        assert_eq!(parsed.len(), 33);
         assert_eq!(parsed["LMM_CORE_HUMANGRANT_ENABLED"], "false");
         for (key, expected) in [
             ("LMM_CORE_WORKER_THREADS", "2"),
             ("LMM_CORE_DRAIN_TIMEOUT_SECONDS", "15"),
             ("LMM_CORE_DB_CONNECTIONS", "3"),
             ("LMM_CORE_DB_ACQUIRE_TIMEOUT_SECONDS", "7"),
+            ("LMM_CORE_DB_CHECK_TIMEOUT_SECONDS", "60"),
             ("LMM_CORE_PASSWORD_SLOTS", "2"),
             (
                 "LMM_CORE_GOOGLE_CLIENT_SECRET_FILE",
@@ -2836,6 +2852,38 @@ mod tests {
             assert!(
                 parse_limit(NAME, Some(value), 3, 30).is_err(),
                 "accepted legacy {value}"
+            );
+        }
+        assert!(!parse_core_file(b"version=1\n").unwrap().contains_key(NAME));
+    }
+
+    #[test]
+    fn database_check_timeout_defaults_and_bounds_are_explicit() {
+        const NAME: &str = "LMM_CORE_DB_CHECK_TIMEOUT_SECONDS";
+        let base = "version=1\n[database]\nurl_file='/nonexistent-lmm-test/database'\n";
+        let default = parse_core_file(base.as_bytes()).unwrap();
+        assert_eq!(default[NAME], "15");
+        assert_eq!(parse_limit(NAME, None, 15, 120).unwrap(), 15);
+        for seconds in [1, 15, 120] {
+            let document = format!("{base}check_timeout_seconds={seconds}\n");
+            assert_eq!(
+                parse_core_file(document.as_bytes()).unwrap()[NAME],
+                OsString::from(seconds.to_string())
+            );
+            assert_eq!(
+                parse_limit(NAME, Some(&seconds.to_string()), 15, 120).unwrap(),
+                seconds
+            );
+        }
+        for value in ["0", "121", "-1", "1.5", "'15'", "4294967296"] {
+            let document = format!("{base}check_timeout_seconds={value}\n");
+            assert!(
+                parse_core_file(document.as_bytes()).is_err(),
+                "accepted {value}"
+            );
+            assert!(
+                parse_limit(NAME, Some(value), 15, 120).is_err(),
+                "accepted {value}"
             );
         }
         assert!(!parse_core_file(b"version=1\n").unwrap().contains_key(NAME));
