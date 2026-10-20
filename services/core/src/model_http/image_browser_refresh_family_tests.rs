@@ -237,7 +237,10 @@ async fn image_drawing_refresh_family_unknown_keeps_original_hold_and_never_redi
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(charge.state, "unknown");
+    // The authoritative charging state for unknown supplier usage is
+    // reconcile; its audit event is named unknown. Neither is a release.
+    assert_eq!(charge.state, "reconcile");
+    assert_eq!(charge.settled, 0);
     assert_eq!(charge.reserved, 6000);
     let balance = h.f.ledger.balance(h.f.account).await.unwrap();
     assert_eq!(balance.reserved_units, 6000);
@@ -469,10 +472,19 @@ async fn image_drawing_refresh_family_parallel_previews_keep_one_original_dispat
 #[sqlx::test(migrations = false)]
 async fn image_drawing_refresh_family_preserves_exact_native_session_execution(pool: PgPool) {
     let h = RefreshFixture::new(pool, Reply::OneImage).await;
+    // Browser registration deliberately keeps its public username separate
+    // from the canonical native password-login name. Read only this fixture's
+    // real login record, then exercise the actual native issuer (no web map).
+    let canonical: String =
+        sqlx::query_scalar("SELECT login_name FROM core_identity.password_logins WHERE user_id=$1")
+            .bind(h.f.user)
+            .fetch_one(&h.f.pool)
+            .await
+            .unwrap();
     let native =
         h.f.identity
             .login(&crate::identity::LoginRequest {
-                login_name: "drawingowner".into(),
+                login_name: canonical.clone(),
                 password: PASSWORD.into(),
             })
             .await
@@ -480,11 +492,20 @@ async fn image_drawing_refresh_family_preserves_exact_native_session_execution(p
     let other =
         h.f.identity
             .login(&crate::identity::LoginRequest {
-                login_name: "drawingowner".into(),
+                login_name: canonical,
                 password: PASSWORD.into(),
             })
             .await
             .unwrap();
+    let mapped: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM core_identity.web_session_credentials WHERE credential_id IN ($1,$2)",
+    )
+    .bind(native.id)
+    .bind(other.id)
+    .fetch_one(&h.f.pool)
+    .await
+    .unwrap();
+    assert_eq!(mapped, 0);
     let raw = drawing_input();
     let b = builtin_with_session(
         &h.f.pool,
