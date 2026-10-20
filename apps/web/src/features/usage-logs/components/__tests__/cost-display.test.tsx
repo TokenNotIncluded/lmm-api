@@ -334,7 +334,10 @@ describe('log cost display', () => {
       })
       try {
         assert.equal(rendered.container.textContent, 'Unknown')
-        assert.ok(rendered.container.querySelector('[title="Incomplete"]'))
+        const badge = rendered.container.querySelector('[title="Incomplete"]')
+        assert.ok(badge)
+        assert.equal(badge.children.length, 1)
+        assert.equal(badge.firstElementChild?.textContent, 'Unknown')
         assert.doesNotMatch(
           rendered.container.textContent ?? '',
           /0|Raw credits|USD/
