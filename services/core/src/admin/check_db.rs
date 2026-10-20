@@ -191,6 +191,8 @@ async fn observe(
     url: &str,
     required: RequiredCapabilities,
 ) -> Result<DatabaseCheckReport, Rejection> {
+    let check_timeout_seconds = config::database_check_timeout_seconds()
+        .map_err(|_| Rejection::new("CHECK_DB_CONFIG_INVALID", 2))?;
     let pool = sqlx::postgres::PgPoolOptions::new()
         .max_connections(1)
         .min_connections(0)
@@ -216,7 +218,7 @@ async fn observe(
         .await
         .map_err(|_| Rejection::new("CHECK_DB_DATABASE_UNAVAILABLE", 3))?;
     let result = match tokio::time::timeout(
-        Duration::from_secs(15),
+        Duration::from_secs(u64::from(check_timeout_seconds)),
         lmm_core::core_schema::check_database(&pool, required),
     )
     .await
