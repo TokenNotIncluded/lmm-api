@@ -52,6 +52,28 @@ fn add(a: Option<u64>, b: Option<u64>, c: Option<u64>) -> Result<Option<u64>, Re
     })
     .transpose()
 }
+fn anthropic_stop_sequence(
+    value: &Value,
+    reason: &str,
+    out: &mut Vec<Event>,
+) -> Result<(), RelayError> {
+    if reason == "stop_sequence" {
+        let sequence = text(&value["stop_sequence"])?;
+        if sequence.is_empty() || sequence.len() > 1024 {
+            return Err(RelayError::Protocol("invalid stop sequence receipt"));
+        }
+        out.push(Event::StopSequence(sequence.to_owned()));
+    } else if value
+        .get("stop_sequence")
+        .is_some_and(|value| !value.is_null())
+    {
+        return Err(RelayError::Protocol(
+            "stop sequence without matching finish reason",
+        ));
+    }
+    Ok(())
+}
+
 fn usage(protocol: UpstreamProtocol, v: &Value) -> Result<Usage, RelayError> {
     if v.is_null() {
         return Ok(Usage::default());
@@ -506,6 +528,7 @@ impl Decoder {
                     self.anthropic_block((0, i as u64), b, false, &mut out)?;
                 }
                 out.push(Event::Usage(usage(self.protocol, &v["usage"])?));
+                anthropic_stop_sequence(v, text(&v["stop_reason"])?, &mut out)?;
                 self.finish(
                     finish_reason(self.protocol, text(&v["stop_reason"])?, self.tools())?,
                     &mut out,
@@ -693,6 +716,7 @@ impl Decoder {
                     out.push(Event::Usage(usage(self.protocol, u)?));
                 }
                 if let Some(r) = v["delta"].get("stop_reason").filter(|r| !r.is_null()) {
+                    anthropic_stop_sequence(&v["delta"], text(r)?, out)?;
                     self.finish(finish_reason(self.protocol, text(r)?, self.tools())?, out)?;
                 }
             }

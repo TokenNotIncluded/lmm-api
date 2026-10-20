@@ -83,11 +83,54 @@ struct PublicKey {
 #[derive(Deserialize)]
 struct Claims {
     sub: String,
+    email: Option<String>,
+    email_verified: Option<bool>,
     aud: String,
     nonce: String,
     exp: u64,
     iat: u64,
     azp: Option<String>,
+}
+/// Constructed only after provider signature, issuer, audience and nonce checks.
+/// Profile edits and browser input cannot construct this proof.
+pub(crate) struct VerifiedGoogleIdentity {
+    subject: String,
+    verified_email: Option<String>,
+}
+impl VerifiedGoogleIdentity {
+    pub(crate) fn issuer(&self) -> &'static str {
+        ISSUER
+    }
+    pub(crate) fn subject(&self) -> &str {
+        &self.subject
+    }
+    pub(crate) fn verified_email(&self) -> Option<&str> {
+        self.verified_email.as_deref()
+    }
+}
+fn verified_identity(claims: Claims) -> VerifiedGoogleIdentity {
+    // Never infer verification from a present email, string "true", or profile.
+    let verified_email = if claims.email_verified == Some(true) {
+        claims.email.filter(|email| {
+            let mut parts = email.split('@');
+            let local = parts.next().unwrap_or("");
+            let domain = parts.next().unwrap_or("");
+            !local.is_empty()
+                && !domain.is_empty()
+                && parts.next().is_none()
+                && email.len() <= 320
+                && email.is_ascii()
+                && !email
+                    .bytes()
+                    .any(|b| b.is_ascii_whitespace() || b.is_ascii_control())
+        })
+    } else {
+        None
+    };
+    VerifiedGoogleIdentity {
+        subject: claims.sub,
+        verified_email,
+    }
 }
 fn now() -> Result<u64> {
     SystemTime::now()
@@ -185,7 +228,7 @@ impl IdentityStore {
             ("client_id", config.client_id.as_str()),
             ("redirect_uri", config.redirect_uri.as_str()),
             ("response_type", "code"),
-            ("scope", "openid"),
+            ("scope", "openid email"),
             ("state", &state),
             ("nonce", &nonce),
             ("code_challenge", &challenge),
@@ -202,11 +245,11 @@ impl IdentityStore {
         browser_binding: &str,
         code: &str,
     ) -> Result<IssuedCredential> {
-        let subject = self
+        let identity = self
             .exchange_google_code(state, browser_binding, code)
             .await?;
         let mut tx = self.pool.begin().await?;
-        let user_id = self.google_user(&mut tx, &subject).await?;
+        let user_id = self.google_user(&mut tx, &identity, None).await?;
         let issued = auth::issue_session(&mut tx, user_id, "session.google_login").await?;
         tx.commit().await?;
         Ok(issued)
@@ -228,7 +271,7 @@ impl IdentityStore {
         state: &str,
         browser_binding: &str,
         code: &str,
-    ) -> Result<String> {
+    ) -> Result<VerifiedGoogleIdentity> {
         let config = self.google.as_ref().ok_or(IdentityError::Forbidden)?;
         if code.is_empty() || code.len() > 4096 || code.chars().any(char::is_control) {
             return Err(IdentityError::Unauthorized);
@@ -259,11 +302,17 @@ impl IdentityStore {
             .map_err(|_| IdentityError::Storage)?;
         let keys: KeySet = bounded_json(response).await?;
         let claims = verify_token(&tokens.id_token, &keys, &nonce, &config.client_id)?;
-        Ok(claims.sub)
+        Ok(verified_identity(claims))
     }
     /// Resolve only a cryptographically verified provider subject. Never link
     /// by email or trust provider-supplied privileges. Caller owns the commit.
-    pub(super) async fn google_user(&self, tx: &mut PgConnection, subject: &str) -> Result<i64> {
+    pub(super) async fn google_user(
+        &self,
+        tx: &mut PgConnection,
+        identity: &VerifiedGoogleIdentity,
+        source: Option<crate::abuse::registration::RegistrationSource>,
+    ) -> Result<i64> {
+        let subject = identity.subject();
         auth::lock_registration(tx).await?;
         let existing: Option<i64> = sqlx::query_scalar(
             "SELECT user_id FROM core_identity.oauth_identities WHERE issuer=$1 AND subject=$2",
@@ -279,10 +328,16 @@ impl IdentityStore {
                     return Err(IdentityError::Forbidden);
                 }
                 let id = auth::create_user(tx).await?;
-                sqlx::query("INSERT INTO core_identity.user_profiles(user_id,username,display_name,password_login_allowed) VALUES ($1,$2,$2,FALSE)")
-                    .bind(id).bind(format!("g_{}",&new_secret("")?[..18])).execute(&mut *tx).await?;
+                sqlx::query("INSERT INTO core_identity.user_profiles(user_id,username,display_name,password_login_allowed,email) VALUES ($1,$2,$2,FALSE,$3)")
+                    .bind(id).bind(format!("g_{}",&new_secret("")?[..18])).bind(identity.verified_email().unwrap_or("")).execute(&mut *tx).await?;
                 sqlx::query("INSERT INTO core_identity.oauth_identities(issuer,subject,user_id) VALUES ($1,$2,$3)")
                     .bind(ISSUER).bind(subject).bind(id).execute(&mut *tx).await?;
+                crate::abuse::registration::record(tx, id, source)
+                    .await
+                    .map_err(|_| IdentityError::Storage)?;
+                crate::gift::observe_google_identity(tx, id, identity)
+                    .await
+                    .map_err(|_| IdentityError::Storage)?;
                 id
             }
         };

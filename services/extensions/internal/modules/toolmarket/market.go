@@ -11,8 +11,11 @@ import (
 )
 
 type Config struct {
+	LocalHTTP      bool
+	BuiltinRuntime LegacyBuiltinRuntime
+	LegacyMetering LegacyMeteringResolver
 	// WebOnly disables the native MCP/OAuth API and needs no callback URL.
-	// It is the bounded legacy Web package, with no executable/funds adapter.
+	// Legacy execution still requires its independent Core authority ports.
 	WebOnly        bool
 	CallbackURL    string
 	Timeout        time.Duration
@@ -20,18 +23,21 @@ type Config struct {
 	Funds          Funds
 }
 type Module struct {
-	store     *Store
-	authority Authority
-	funds     Funds
-	net       *network
-	callback  string
-	timeout   time.Duration
-	perMinute int
-	now       func() time.Time
-	mu        sync.Mutex
-	buckets   map[string]bucket
-	active    chan struct{}
-	webOnly   bool
+	legacyMount    legacyMountState
+	builtinRuntime LegacyBuiltinRuntime
+	legacyMetering LegacyMeteringResolver
+	store          *Store
+	authority      Authority
+	funds          Funds
+	net            *network
+	callback       string
+	timeout        time.Duration
+	perMinute      int
+	now            func() time.Time
+	mu             sync.Mutex
+	buckets        map[string]bucket
+	active         chan struct{}
+	webOnly        bool
 }
 type bucket struct {
 	Start time.Time
@@ -39,10 +45,31 @@ type bucket struct {
 }
 
 func New(store *Store, authority Authority, cfg Config) (*Module, error) {
-	if store == nil || missingInterface(authority) || cfg.Funds != nil && missingInterface(cfg.Funds) {
+	if store == nil || missingInterface(authority) || cfg.Funds != nil && missingInterface(cfg.Funds) || cfg.BuiltinRuntime != nil && missingInterface(cfg.BuiltinRuntime) {
 		return nil, ErrInvalid
 	}
+	if cfg.Funds != nil {
+		_, confirmation := authority.(ConfirmationAuthority)
+		_, quotes := authority.(QuoteRegistrar)
+		_, revocation := authority.(GrantRevoker)
+		_, dispatch := cfg.Funds.(DispatchFunds)
+		_, results := cfg.Funds.(ResultFunds)
+		_, release := cfg.Funds.(ReleaseFunds)
+		if !confirmation || !quotes || !revocation || !dispatch || !results || !release {
+			return nil, ErrInvalid
+		}
+	}
 	n := newNetwork()
+	if cfg.LocalHTTP {
+		client, err := NewExternalHTTPClient(true)
+		if err != nil {
+			return nil, err
+		}
+		n = &network{client: client, test: true}
+		if !cfg.WebOnly && ValidateExternalHTTPURL(cfg.CallbackURL, true) != nil {
+			return nil, ErrInvalid
+		}
+	}
 	if cfg.WebOnly {
 		if cfg.CallbackURL != "" || cfg.Funds != nil {
 			return nil, ErrInvalid
@@ -62,7 +89,10 @@ func New(store *Store, authority Authority, cfg Config) (*Module, error) {
 	if cfg.CallsPerMinute < 1 || cfg.CallsPerMinute > 600 {
 		return nil, ErrInvalid
 	}
-	return &Module{store: store, authority: authority, funds: cfg.Funds, net: n, callback: cfg.CallbackURL, timeout: cfg.Timeout, perMinute: cfg.CallsPerMinute, now: time.Now, buckets: map[string]bucket{}, active: make(chan struct{}, 8), webOnly: cfg.WebOnly}, nil
+	store.mu.Lock()
+	store.virtualBuiltins = !cfg.WebOnly
+	store.mu.Unlock()
+	return &Module{builtinRuntime: cfg.BuiltinRuntime, legacyMetering: cfg.LegacyMetering, store: store, authority: authority, funds: cfg.Funds, net: n, callback: cfg.CallbackURL, timeout: cfg.Timeout, perMinute: cfg.CallsPerMinute, now: time.Now, buckets: map[string]bucket{}, active: make(chan struct{}, 8), webOnly: cfg.WebOnly}, nil
 }
 
 // Interfaces containing a nil pointer must not pass construction checks.

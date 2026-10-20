@@ -128,6 +128,7 @@ struct Control {
     events: Option<crate::events::EventStore>,
     service_id: String,
     commerce_features: Vec<String>,
+    assistant_features: Vec<String>,
     slots: Arc<Semaphore>,
 }
 impl Control {
@@ -142,6 +143,7 @@ impl Control {
             events: None,
             service_id: "extensions".into(),
             commerce_features: Vec::new(),
+            assistant_features: Vec::new(),
             slots: Arc::new(Semaphore::new(MAX_CALLS)),
         })
     }
@@ -214,6 +216,7 @@ impl CoreControl for Control {
                     // Discovery reports mounted commerce methods. Their
                     // independent credential still gates every money RPC.
                     features.extend(self.commerce_features.iter().cloned());
+                    features.extend(self.assistant_features.iter().cloned());
                     features
                 },
             })
@@ -340,7 +343,7 @@ impl CoreControl for Control {
     }
 }
 
-struct SocketGuard {
+pub(crate) struct SocketGuard {
     path: PathBuf,
     inode: u64,
     _lock: File,
@@ -360,8 +363,17 @@ pub struct RpcServer {
     control: Control,
     payments: Option<crate::payments::rpc::PaymentsRpc>,
     commerce: Option<crate::commerce::rpc::CommerceRpc>,
+    assistant: Option<crate::assistant_model::rpc::AssistantRpc>,
 }
 impl RpcServer {
+    /// Reuse the exact private socket owner/lock/inode policy for another
+    /// same-process Core protocol. No network listener is added by this method.
+    pub(crate) fn into_private_listener(self) -> (UnixListener, SocketGuard) {
+        let Self {
+            listener, guard, ..
+        } = self;
+        (listener, guard)
+    }
     pub fn bind(path: &Path, token: &[u8], store: Option<IdentityStore>) -> io::Result<Self> {
         Self::bind_with_group(path, token, store, None)
     }
@@ -437,6 +449,7 @@ impl RpcServer {
             control,
             payments: None,
             commerce: None,
+            assistant: None,
         })
     }
     /// Explicit integration hook. Provisioned subscriptions bind to this
@@ -465,6 +478,11 @@ impl RpcServer {
         self.commerce = Some(commerce);
         self
     }
+    pub fn with_assistant(mut self, assistant: crate::assistant_model::rpc::AssistantRpc) -> Self {
+        self.control.assistant_features = assistant.features();
+        self.assistant = Some(assistant);
+        self
+    }
     pub async fn serve(
         self,
         mut shutdown: watch::Receiver<bool>,
@@ -475,6 +493,7 @@ impl RpcServer {
             control,
             payments,
             commerce,
+            assistant,
         } = self;
         let connections = Arc::new(Semaphore::new(MAX_CONNECTIONS));
         let incoming = UnixListenerStream::new(listener).filter_map(move |item| match item {
@@ -511,6 +530,11 @@ impl RpcServer {
             }))
             .add_optional_service(commerce.map(|commerce| {
                 pb::core_commerce_server::CoreCommerceServer::new(commerce)
+                    .max_decoding_message_size(MAX_MESSAGE)
+                    .max_encoding_message_size(MAX_MESSAGE)
+            }))
+            .add_optional_service(assistant.map(|assistant| {
+                pb::core_assistant_model_server::CoreAssistantModelServer::new(assistant)
                     .max_decoding_message_size(MAX_MESSAGE)
                     .max_encoding_message_size(MAX_MESSAGE)
             }))

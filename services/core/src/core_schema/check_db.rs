@@ -49,23 +49,37 @@ struct Authority {
 #[derive(Serialize)]
 struct Capabilities {
     models: bool,
+    images: bool,
     events: bool,
     payments: bool,
     console: bool,
     commerce: bool,
     web_identity: bool,
     oauth2: bool,
+    market_oauth: bool,
+    wallet: bool,
+    bounties: bool,
+    assistant: bool,
+    assistant_tools: bool,
+    tool_market: bool,
 }
 impl From<RequiredCapabilities> for Capabilities {
     fn from(v: RequiredCapabilities) -> Self {
         Self {
             models: v.models,
+            images: v.images,
             events: v.events,
             payments: v.payments,
             console: v.console,
             commerce: v.commerce,
             web_identity: v.web_identity,
             oauth2: v.oauth2,
+            market_oauth: v.market_oauth,
+            wallet: v.wallet,
+            bounties: v.bounties,
+            assistant: v.assistant,
+            assistant_tools: v.assistant_tools,
+            tool_market: v.tool_market,
         }
     }
 }

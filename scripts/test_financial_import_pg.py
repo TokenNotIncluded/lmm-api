@@ -25,6 +25,23 @@ import financial_import as F
 from test_financial_import import source_fixture, material_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
+# CI service images are pulled by digest and need not have a floating tag.
+POSTGRES_IMAGES = (
+    ("postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873", 18),
+    ("postgres:18-alpine", 18),
+    ("postgres:17-alpine", 17),
+)
+
+
+def installed_postgres_image(docker):
+    for reference, major in POSTGRES_IMAGES:
+        image = docker("image", "inspect", reference, "--format", "{{.Id}}", check=False)
+        if image.returncode == 0:
+            identity = image.stdout.strip()
+            if not re.fullmatch(r"sha256:[0-9a-f]{64}", identity):
+                raise AssertionError("preinstalled PostgreSQL image identity invalid")
+            return reference, identity, major
+    raise AssertionError("preinstalled PostgreSQL image identity missing")
 
 
 @unittest.skipUnless(os.environ.get("LMM_FINANCIAL_PG_TEST") == "1", "isolated PostgreSQL test not enabled")
@@ -41,17 +58,10 @@ class PostgreSQLTests(unittest.TestCase):
     def setUpClass(cls):
         cls.name = "lmm-a03-" + uuid.uuid4().hex
         cls.label = "lmm.test.a03=" + cls.name
-        for candidate in ("postgres:18-alpine", "postgres:17-alpine"):
-            image = cls.docker("image", "inspect", candidate, "--format", "{{.Id}}", check=False)
-            if image.returncode == 0:
-                cls.image = image.stdout.strip()
-                break
-        else:
-            raise AssertionError("preinstalled PostgreSQL image identity missing")
-        if not re.fullmatch(r"sha256:[0-9a-f]{64}", cls.image):
-            raise AssertionError("preinstalled PostgreSQL image identity missing")
+        reference, cls.image, major = installed_postgres_image(cls.docker)
+        print("A03_POSTGRES_REFERENCE=" + reference, flush=True)
         print("A03_POSTGRES_IMAGE=" + cls.image, flush=True)
-        data_mount = "/var/lib/postgresql:rw,size=512m" if "18" in candidate else "/var/lib/postgresql/data:rw,size=512m"
+        data_mount = "/var/lib/postgresql:rw,size=512m" if major >= 18 else "/var/lib/postgresql/data:rw,size=512m"
         cls.docker("run", "--detach", "--pull=never", "--network=none", "--name", cls.name,
             "--label", cls.label, "--memory=384m", "--cpus=1", "--pids-limit=128",
             "--tmpfs", data_mount, "--tmpfs", "/var/run/postgresql:rw,size=16m",

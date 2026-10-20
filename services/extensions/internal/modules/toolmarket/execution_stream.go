@@ -126,7 +126,7 @@ func (m *Module) saveExecutionResult(p Principal, id string, expected Execution,
 	}
 	record := expected
 	record.State, record.Result, record.Resume = "done", result, nil
-	if record.Charge.Amount > 0 {
+	if record.Charge.Amount > 0 || m.funds != nil {
 		record.State = "settlement_pending"
 	}
 	err = m.store.update(func(d *database) error {

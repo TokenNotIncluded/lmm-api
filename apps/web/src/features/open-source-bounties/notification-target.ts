@@ -23,11 +23,11 @@ import {
 } from '@hugeicons/core-free-icons'
 import type { TFunction } from 'i18next'
 
-import type { BountyNotification, BountyProjectDetail } from './types'
+import type { BountyId, BountyNotification, BountyProjectDetail } from './types'
 
 export interface BountyNotificationDetailTarget {
-  projectId: number
-  challengeId: number
+  projectId: BountyId
+  challengeId: BountyId
 }
 
 export function selectBountyNotificationChallenge(

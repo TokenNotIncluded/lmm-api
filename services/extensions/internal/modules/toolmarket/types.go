@@ -51,13 +51,33 @@ type Funds interface {
 	Reserve(context.Context, string, Principal, Charge) error
 	Commit(context.Context, string, Principal, Charge) error
 }
+
+// DispatchFunds freezes the Core external-effect boundary. A real adapter
+// implements this port; failed or lost ACKs never permit a tools/call retry.
+type DispatchFunds interface {
+	MarkDispatched(context.Context, string, Principal, Charge) error
+}
+
+// ResultFunds attests the hash of persisted result bytes without changing the
+// original immutable reservation charge. Legacy controlled funds are test-only.
+type ResultFunds interface {
+	CommitResult(context.Context, string, Principal, Charge, string) error
+}
+
 type Charge struct {
-	ID           string `json:"id"`
-	Installation string `json:"installation"`
-	Tool         string `json:"tool"`
-	Quote        string `json:"quote"`
-	Currency     string `json:"currency"`
-	Amount       int64  `json:"amount"`
+	IdempotencyKey string `json:"idempotency_key"`
+	Release        string `json:"release"`
+	Grant          string `json:"grant"`
+	Handle         string `json:"handle"`
+	ArgumentsHash  string `json:"arguments_hash"`
+	Approval       string `json:"approval"`
+	Generation     int64  `json:"generation"`
+	ID             string `json:"id"`
+	Installation   string `json:"installation"`
+	Tool           string `json:"tool"`
+	Quote          string `json:"quote"`
+	Currency       string `json:"currency"`
+	Amount         int64  `json:"amount"`
 }
 
 var validID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,80}$`)
@@ -100,6 +120,7 @@ func (p Price) total(now time.Time) (int64, error) {
 }
 
 type Tool struct {
+	Annotations  json.RawMessage `json:"annotations,omitempty"`
 	Name         string          `json:"name"`
 	Description  string          `json:"description"`
 	InputSchema  json.RawMessage `json:"inputSchema"`
@@ -167,16 +188,18 @@ type Audit struct {
 	Outcome string    `json:"outcome"`
 }
 type database struct {
-	Version    int                       `json:"version"`
-	Servers    map[string]Server         `json:"servers"`
-	Releases   map[string]Release        `json:"releases"`
-	Installs   map[string]Installation   `json:"installs"`
-	Secrets    map[string]Secret         `json:"secrets"`
-	States     map[string]OAuthState     `json:"states"`
-	Executions map[string]Execution      `json:"executions"`
-	Grants     map[string]ExecutionGrant `json:"execution_grants,omitempty"`
-	Audit      []Audit                   `json:"audit"`
-	Web        *webDatabase              `json:"web_compat,omitempty"`
+	LegacyExecutions map[string]LegacyExecution `json:"legacy_executions,omitempty"`
+	LegacyAccess     *LegacyAccessRecords       `json:"legacy_access,omitempty"`
+	Version          int                        `json:"version"`
+	Servers          map[string]Server          `json:"servers"`
+	Releases         map[string]Release         `json:"releases"`
+	Installs         map[string]Installation    `json:"installs"`
+	Secrets          map[string]Secret          `json:"secrets"`
+	States           map[string]OAuthState      `json:"states"`
+	Executions       map[string]Execution       `json:"executions"`
+	Grants           map[string]ExecutionGrant  `json:"execution_grants,omitempty"`
+	Audit            []Audit                    `json:"audit"`
+	Web              *webDatabase               `json:"web_compat,omitempty"`
 }
 
 func emptyDB() database {

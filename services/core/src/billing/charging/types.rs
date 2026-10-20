@@ -41,6 +41,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[serde(deny_unknown_fields)]
 pub struct Usage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<crate::model_http::image_price::ImageUsage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream_cost_atto_usd: Option<u128>,
     /// Includes cached input. Cached input is priced separately, not twice.
     pub input: i64,
@@ -49,10 +51,22 @@ pub struct Usage {
 }
 impl Usage {
     pub fn valid(self) -> bool {
+        if let Some(image) = self.image {
+            return image.validate().is_ok()
+                && self.input == 0
+                && self.cached == 0
+                && self.output == 0
+                && self.upstream_cost_atto_usd.is_none();
+        }
         self.input >= 0 && self.cached >= 0 && self.cached <= self.input && self.output >= 0
     }
     pub fn follows(self, previous: Self) -> bool {
         self.valid()
+            && match (self.image, previous.image) {
+                (Some(now), Some(old)) => now.follows(&old),
+                (None, Some(_)) => false,
+                _ => true,
+            }
             && self.input >= previous.input
             && self.cached >= previous.cached
             && self.output >= previous.output
@@ -69,6 +83,8 @@ impl Usage {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Price {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<crate::model_http::image_price::PersistedImagePrice>,
     /// Set only by the trusted Rust router; no client or Go price authority.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream_cost_group_ppm: Option<u32>,
@@ -90,6 +106,19 @@ impl Price {
         {
             return Err(Error::Invalid);
         }
+        if let Some(image) = &self.image {
+            image.validate().map_err(|_| Error::Invalid)?;
+            if self.upstream_cost_group_ppm.is_some()
+                || self.input_per_million != 0
+                || self.cached_per_million != 0
+                || self.output_per_million != 0
+                || image.model() != self.model
+                || image.group() != self.group
+                || self.version != format!("image-{}", image.version())
+            {
+                return Err(Error::Invalid);
+            }
+        }
         if let Some(ppm) = self.upstream_cost_group_ppm
             && (!crate::upstream_cost::supported_router(&self.model)
                 || !(1..=1_000_000_000).contains(&ppm)
@@ -104,6 +133,14 @@ impl Price {
     pub fn cost(&self, usage: Usage) -> Result<i64> {
         self.validate()?;
         if !usage.valid() {
+            return Err(Error::Invalid);
+        }
+        if let Some(price) = &self.image {
+            return price
+                .cost(&usage.image.ok_or(Error::Invalid)?)
+                .map_err(|_| Error::Invalid);
+        }
+        if usage.image.is_some() {
             return Err(Error::Invalid);
         }
         if let Some(ppm) = self.upstream_cost_group_ppm {

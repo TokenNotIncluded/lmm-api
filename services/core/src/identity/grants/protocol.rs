@@ -17,14 +17,31 @@ pub struct LmmProfile {
     resource: String,
     groups: BTreeSet<String>,
     pi_max_credits: Option<i64>,
+    isolated_loopback_test: bool,
 }
 impl LmmProfile {
     pub fn new(issuer: &str, groups: Vec<String>) -> Result<Self> {
+        Self::build(issuer, groups, false)
+    }
+    /// Explicit test-only profile. The host must also enforce loopback binding,
+    /// synthetic upstreams, isolated credentials and a fresh isolated database.
+    /// This constructor does not relax the production `new` profile.
+    pub fn isolated_loopback_test(issuer: &str, groups: Vec<String>) -> Result<Self> {
+        Self::build(issuer, groups, true)
+    }
+    fn build(issuer: &str, groups: Vec<String>, isolated_loopback_test: bool) -> Result<Self> {
         let url = reqwest::Url::parse(issuer).map_err(|_| IdentityError::Invalid)?;
+        let valid_transport = if isolated_loopback_test {
+            url.scheme() == "http"
+                && matches!(url.host_str(), Some("127.0.0.1" | "[::1]"))
+                && url
+                    .port()
+                    .is_some_and(|port| (49152..=65535).contains(&port) && port != 50837)
+        } else {
+            url.scheme() == "https" && url.domain().is_some() && url.port().is_none()
+        };
         if issuer.len() > 256
-            || url.scheme() != "https"
-            || url.domain().is_none()
-            || url.port().is_some()
+            || !valid_transport
             || !url.username().is_empty()
             || url.password().is_some()
             || url.path() != "/"
@@ -48,7 +65,19 @@ impl LmmProfile {
             resource: format!("{issuer}/api/oauth2"),
             groups: allowed,
             pi_max_credits: None,
+            isolated_loopback_test,
         })
+    }
+    pub fn is_isolated_loopback_test(&self) -> bool {
+        self.isolated_loopback_test
+    }
+    /// Public metadata marker. A local HTTP issuer must never resemble production.
+    pub fn deployment_contract(&self) -> &'static str {
+        if self.isolated_loopback_test {
+            "isolated-loopback-test-v1"
+        } else {
+            "production-https-v1"
+        }
     }
     /// Explicit server ceiling, never a user privilege or default enabled client.
     pub fn with_pi_budget_limit(mut self, maximum: i64) -> Result<Self> {
@@ -368,5 +397,41 @@ mod tests {
             .is_err()
         );
         assert!(LmmProfile::new("https://api.lmm.best", vec!["default".into()]).is_ok());
+    }
+    #[test]
+    fn isolated_loopback_profile_is_explicit_numeric_dynamic_and_separate() {
+        for origin in ["http://127.0.0.1:54321", "http://[::1]:54321"] {
+            assert!(LmmProfile::new(origin, vec!["default".into()]).is_err());
+            let p = LmmProfile::isolated_loopback_test(origin, vec!["default".into()]).unwrap();
+            assert!(p.is_isolated_loopback_test());
+            assert_eq!(p.deployment_contract(), "isolated-loopback-test-v1");
+            assert_eq!(p.resource(), format!("{origin}/api/oauth2"));
+        }
+        for origin in [
+            "http://localhost:54321",
+            "http://127.0.0.2:54321",
+            "http://0.0.0.0:54321",
+            "http://192.0.2.1:54321",
+            "https://example.test",
+            "http://127.0.0.1",
+            "http://127.0.0.1:443",
+            "http://127.0.0.1:18080",
+            "http://127.0.0.1:18081",
+            "http://127.0.0.1:47399",
+            "http://127.0.0.1:50837",
+            "http://127.0.0.1:54321/",
+            "http://user@127.0.0.1:54321",
+            "http://127.0.0.1:54321?x=1",
+            "http://127.0.0.1:54321#x",
+        ] {
+            assert!(
+                LmmProfile::isolated_loopback_test(origin, vec!["default".into()]).is_err(),
+                "accepted {origin}"
+            );
+        }
+        let production =
+            LmmProfile::new("https://api.example.test", vec!["default".into()]).unwrap();
+        assert!(!production.is_isolated_loopback_test());
+        assert_eq!(production.deployment_contract(), "production-https-v1");
     }
 }

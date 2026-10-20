@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 )
 
-var databaseName = regexp.MustCompile(`^lmm_(store|support|assistant|payments|operations)(_[a-z0-9]+)*$`)
+var databaseName = regexp.MustCompile(`^lmm_(store|support|assistant|payments|operations|toolmarket)(_[a-z0-9]+)*$`)
 
 // StorageConfig names an independently provisioned extension database. Schema
 // installation is explicit; startup never creates or migrates tables.
@@ -25,7 +25,7 @@ type StorageConfig struct {
 }
 
 func (c StorageConfig) validate() error {
-	if (c.Component != "store" && c.Component != "support" && c.Component != "assistant" && c.Component != "payments" && c.Component != "operations") || c.URLFile == "" ||
+	if (c.Component != "store" && c.Component != "support" && c.Component != "assistant" && c.Component != "payments" && c.Component != "operations" && c.Component != "toolmarket") || c.URLFile == "" ||
 		!databaseName.MatchString(c.Database) || !strings.HasPrefix(c.Database, "lmm_"+c.Component) {
 		return errors.New("invalid dedicated extension storage configuration")
 	}
@@ -64,6 +64,14 @@ func storageURL(c StorageConfig) (string, error) {
 // only their own pool. A runtime role must not administer PostgreSQL or connect
 // to a core database; a dedicated database must not contain another module.
 func openStorage(ctx context.Context, c StorageConfig) (*sql.DB, error) {
+	return openStorageBundle(ctx, c, defaultStorageBundle)
+}
+
+func openStorageBundle(ctx context.Context, c StorageConfig, bundle storageBundle) (*sql.DB, error) {
+	policy, err := storagePolicyFor(c.Component, bundle)
+	if err != nil {
+		return nil, err
+	}
 	dsn, err := storageURL(c)
 	if err != nil {
 		return nil, err
@@ -87,21 +95,44 @@ func openStorage(ctx context.Context, c StorageConfig) (*sql.DB, error) {
 	var privileged, foreignSchema, coreConnect, rolePaths bool
 	err = db.QueryRowContext(bounded, `SELECT current_database(),
 	 EXISTS(SELECT 1 FROM pg_roles WHERE rolname=current_user AND (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls)) OR has_database_privilege(current_user,current_database(),'CREATE') OR has_database_privilege(current_user,current_database(),'TEMP') OR EXISTS(SELECT 1 FROM pg_namespace WHERE nspname NOT LIKE 'pg\_%' ESCAPE '\' AND nspname<>'information_schema' AND has_schema_privilege(current_user,oid,'CREATE')),
-	 EXISTS(SELECT 1 FROM pg_namespace WHERE nspname LIKE 'core\_%' ESCAPE '\' OR (nspname LIKE 'lmm\_%' ESCAPE '\' AND nspname <> $1)),
+	 EXISTS(SELECT 1 FROM pg_namespace WHERE nspname LIKE 'core\_%' ESCAPE '\' OR ((nspname LIKE 'lmm\_%' ESCAPE '\' OR nspname='extension_wallet' OR ($3 AND nspname NOT LIKE 'pg\_%' ESCAPE '\' AND nspname NOT IN ('public','information_schema'))) AND NOT(nspname=ANY($1::text[])))),
 	 EXISTS(SELECT 1 FROM pg_database WHERE (datname LIKE '%core%' OR (datname LIKE 'lmm\_%' ESCAPE '\' AND datname <> $2)) AND has_database_privilege(current_user,oid,'CONNECT')),
-	 EXISTS(SELECT 1 FROM pg_roles WHERE rolname<>current_user AND (pg_has_role(current_user,oid,'SET') OR pg_has_role(current_user,oid,'USAGE') OR pg_has_role(current_user,oid,'MEMBER')))`, "lmm_"+c.Component, c.Database).Scan(&name, &privileged, &foreignSchema, &coreConnect, &rolePaths)
+	 EXISTS(SELECT 1 FROM pg_roles WHERE rolname<>current_user AND (pg_has_role(current_user,oid,'SET') OR pg_has_role(current_user,oid,'USAGE') OR pg_has_role(current_user,oid,'MEMBER')))`, pq.Array(policy.namespaces), c.Database, c.Component == "toolmarket").Scan(&name, &privileged, &foreignSchema, &coreConnect, &rolePaths)
 	if err != nil {
 		return nil, errors.New("extension storage guard unavailable")
 	}
 	if name != c.Database || privileged || foreignSchema || coreConnect || rolePaths {
 		return nil, errors.New("extension storage isolation rejected")
 	}
-	tables := storageTables(c.Component)
-	for _, table := range tables {
+	for _, table := range policy.tables {
 		var allowed bool
 		for _, privilege := range table.privileges {
 			if err := db.QueryRowContext(bounded, `SELECT COALESCE(has_table_privilege(current_user,to_regclass($1),$2),false)`, table.name, privilege).Scan(&allowed); err != nil || !allowed {
 				return nil, errors.New("extension storage schema or runtime grants unavailable")
+			}
+		}
+	}
+	for _, table := range policy.forbidden {
+		for _, privilege := range table.privileges {
+			var allowed bool
+			if err := db.QueryRowContext(bounded, `SELECT COALESCE(has_table_privilege(current_user,to_regclass($1),$2),false)`, table.name, privilege).Scan(&allowed); err != nil || allowed {
+				return nil, errors.New("extension bundled storage grants exceed runtime authority")
+			}
+		}
+	}
+	for _, table := range policy.forbiddenColumns {
+		for _, privilege := range table.privileges {
+			var allowed bool
+			if err := db.QueryRowContext(bounded, `SELECT COALESCE(has_any_column_privilege(current_user,to_regclass($1),$2),false)`, table.name, privilege).Scan(&allowed); err != nil || allowed {
+				return nil, errors.New("extension bundled column grants exceed runtime authority")
+			}
+		}
+	}
+	if bundle == toolMarketBuiltinsBundle {
+		for _, namespace := range policy.namespaces {
+			var allowed bool
+			if err := db.QueryRowContext(bounded, `SELECT COALESCE(has_schema_privilege(current_user,$1,'USAGE'),false)`, namespace).Scan(&allowed); err != nil || !allowed {
+				return nil, errors.New("extension bundled storage schema grants unavailable")
 			}
 		}
 	}
@@ -138,6 +169,8 @@ func storageTables(component string) []storageTable {
 	var tables []storageTable
 	add := func(name string, privs ...string) { tables = append(tables, storageTable{name, privs}) }
 	switch component {
+	case "toolmarket":
+		add("lmm_toolmarket.snapshot", "SELECT", "UPDATE")
 	case "store":
 		for _, name := range []string{"shops", "products", "variants", "orders", "commands", "stock_movements", "money_operations"} {
 			add("lmm_store."+name, "SELECT", "INSERT", "UPDATE")

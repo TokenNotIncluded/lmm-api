@@ -803,3 +803,128 @@ mod tests {
         assert_eq!(presentation_id("one"), presentation_id("one"));
     }
 }
+
+/// Assistant projection over the same fully validated native-key/OAuth receipts
+/// as the Web usage views. It exposes aggregates only and fails on malformed,
+/// duplicate or over-dense evidence. Imported history is explicitly separate.
+pub(crate) async fn assistant_summary_in_transaction(
+    c: &mut sqlx::PgConnection,
+    context: &crate::assistant_tools_core::context::VerifiedToolContext,
+    input: &crate::assistant_tools_core::account::UsageSummaryArgs,
+    require_developer: bool,
+) -> Result<Value, crate::assistant_tools_core::Error> {
+    use crate::assistant_tools_core::{
+        Error as E,
+        account::{self, UserTarget},
+    };
+    let actor = context.revalidate(c).await?;
+    if require_developer && !actor.developer {
+        return Err(E::Forbidden);
+    }
+    let target = account::target(
+        c,
+        &actor,
+        &UserTarget {
+            user_id: input.user_id,
+            identifier: input.identifier.clone(),
+        },
+    )
+    .await?;
+    let owner: i64 =
+        sqlx::query_scalar("SELECT personal_account_id FROM core_identity.users WHERE id=$1")
+            .bind(target)
+            .fetch_one(&mut *c)
+            .await?;
+    let days = input.days.unwrap_or(30);
+    if !(1..=90).contains(&days) {
+        return Err(E::Invalid);
+    }
+    let now: i64 =
+        sqlx::query_scalar("SELECT floor(extract(epoch FROM transaction_timestamp()))::bigint")
+            .fetch_one(&mut *c)
+            .await?;
+    let start = now - days * 86400;
+    #[derive(Default)]
+    struct Aggregate {
+        requests: i64,
+        input: i64,
+        output: i64,
+        amounts: Amounts,
+    }
+    fn include(a: &mut Aggregate, r: &ValidatedRequest) -> Result<(), E> {
+        add(&mut a.requests, 1).map_err(|_| E::Unavailable)?;
+        add(&mut a.input, r.usage.input).map_err(|_| E::Unavailable)?;
+        add(&mut a.output, r.usage.output).map_err(|_| E::Unavailable)?;
+        let mut tokens = a.input;
+        add(&mut tokens, a.output).map_err(|_| E::Unavailable)?;
+        a.amounts.accumulate(r.amounts).map_err(|_| E::Unavailable)
+    }
+    fn project(name: Option<&str>, a: &Aggregate) -> Value {
+        let mut v = json!({"requests":a.requests,"prompt_tokens":a.input,"completion_tokens":a.output,"total_tokens":a.input+a.output,"quota":a.amounts.net(),"cost_usd":usd(a.amounts.net()),"gross_settled_credits":a.amounts.gross,"refunded_credits":a.amounts.refunded});
+        if let Some(name) = name {
+            v["name"] = json!(name)
+        }
+        v
+    }
+    let mut total = Aggregate::default();
+    let mut models: BTreeMap<String, Aggregate> = BTreeMap::new();
+    let mut groups: BTreeMap<String, Aggregate> = BTreeMap::new();
+    let mut seen = HashSet::new();
+    let mut count = 0usize;
+    let mut pending = 0_i64;
+    let sql = SELECT_REQUESTS.replace(
+        "WHERE r.actor_user_id=$1",
+        "WHERE r.assistant_grant_id IS NULL AND r.actor_user_id=$1",
+    );
+    {
+        let mut rows = sqlx::query(&sql)
+            .bind(target)
+            .bind(owner)
+            .bind(start)
+            .bind(now)
+            .bind(0_i16)
+            .bind("")
+            .bind("")
+            .bind("")
+            .bind("")
+            .fetch(&mut *c);
+        while let Some(row) = rows.next().await {
+            count += 1;
+            if count > MAX_REQUESTS {
+                return Err(E::Unavailable);
+            }
+            let r = ValidatedRequest::from_row(row?).map_err(|_| E::Unavailable)?;
+            if !seen.insert(r.id.clone()) {
+                return Err(E::Unavailable);
+            }
+            if r.held() {
+                add(&mut pending, 1).map_err(|_| E::Unavailable)?;
+            }
+            if !r.settled() || r.outcome.as_deref() != Some("completed") {
+                continue;
+            }
+            include(&mut total, &r)?;
+            include(models.entry(r.price.model.clone()).or_default(), &r)?;
+            include(groups.entry(r.price.group.clone()).or_default(), &r)?;
+            if models.len() > MAX_BUCKETS || groups.len() > MAX_BUCKETS {
+                return Err(E::Unavailable);
+            }
+        }
+    }
+    fn breakdown(map: &BTreeMap<String, Aggregate>) -> Vec<Value> {
+        let mut rows: Vec<_> = map.iter().collect();
+        rows.sort_by(|(an, a), (bn, b)| b.amounts.net().cmp(&a.amounts.net()).then(an.cmp(bn)));
+        rows.into_iter()
+            .take(20)
+            .map(|(name, a)| project(Some(name), a))
+            .collect()
+    }
+    let mut summary = project(None, &total);
+    summary["start_timestamp"] = json!(start);
+    summary["end_timestamp"] = json!(now);
+    summary["models"] = json!(breakdown(&models));
+    summary["groups"] = json!(breakdown(&groups));
+    Ok(
+        json!({"ok":true,"scope":if target==actor.user{"self"}else{"administrator_target"},"target_user_id":target,"days":days,"source":"consume logs","summary":summary,"raw_logs":false,"incomplete_native_requests":pending,"cost_usd_encoding":"decimal_string","coverage":{"native_personal_key_and_oauth":true,"historical_imports":false,"assistant_model_calls":false,"native_requests_validated":count,"breakdown_limit":20}}),
+    )
+}

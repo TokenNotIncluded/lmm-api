@@ -172,7 +172,7 @@ func acceptHold(o *Order, r *Refund, receipt Receipt, now time.Time) {
 	}
 	r.HoldReceipt = receipt.ID
 	r.State = "held"
-	enqueue(o, Job{Key: stableKey("submit", r.ID), Kind: "refund_submit", RefundID: r.ID}, now)
+	enqueue(o, Job{Key: stableKey("submit", r.ID), Kind: "refund_dispatch", RefundID: r.ID}, now)
 }
 func enqueue(o *Order, j Job, now time.Time) {
 	if old, ok := o.Jobs[j.Key]; ok {

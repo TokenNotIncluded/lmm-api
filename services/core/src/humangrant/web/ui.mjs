@@ -110,11 +110,11 @@ async function agent() {
     if (new URL(result.human_authorization_url).origin !== data.origin) throw new Error('Untrusted authorization URL')
     link('Open human review in a separate page', result.human_authorization_url, controls)
     display(result.forwarding_prompt, controls)
-    const email = field('Optional invitation email (local outbox only)', 'email', '', controls)
+    const email = field('Optional invitation email', 'email', '', controls)
     button('Request one invitation', async () => {
       const id = crypto.randomUUID()
       const result = await signedFetch(actor, data.origin, 'POST', '/v1/requests/' + request.request_id + '/email', { email: email.value, idempotency_key: id })
-      say(result.message)
+      say('Invitation status: ' + result.status)
     }, controls)
     button('Cancel this request', async () => { await signedFetch(actor, data.origin, 'POST', '/v1/requests/' + request.request_id + '/cancel', {}); stopped = true; say('Cancelled.') }, controls)
     setTimeout(poll, interval * 1000)

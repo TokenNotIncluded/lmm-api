@@ -259,6 +259,7 @@ async fn actual_team_settlement_and_refund_count_the_actor_without_spending_pers
         lease_seconds: 300,
         maximum_seconds: 600,
         price: Price {
+            image: None,
             upstream_cost_group_ppm: None,
             version: "synthetic-v1".into(),
             model: "local-model".into(),
@@ -278,6 +279,7 @@ async fn actual_team_settlement_and_refund_count_the_actor_without_spending_pers
             &request.id,
             &[5; 32],
             Usage {
+                image: None,
                 upstream_cost_atto_usd: None,
                 input: 10,
                 cached: 2,

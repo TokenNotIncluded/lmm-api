@@ -2,8 +2,10 @@
 """AGPL-3.0-or-later. Bounded Core operator inspection, never maintenance authority.
 
 Python stdlib only. JSON/private-file patterns follow scripts/lmm-admin.py.
-Only plan writes a new file. status/reconcile never create journals, locks or logs.
-There are deliberately no maintenance, backup, restore, takeover or retry commands.
+Inspection plan writes a new file; status/reconcile never write. The explicitly
+isolated qualification creates only its own synthetic fixture and backups.
+The isolated-recovery command qualifies only new synthetic resources, never a
+caller-supplied database. There are no live maintenance or takeover commands.
 """
 from __future__ import annotations
 from dataclasses import asdict, dataclass
@@ -19,7 +21,7 @@ MAX_STDOUT = 128 << 10
 MAX_STDERR = 16 << 10
 PROTOCOL = 'core.check-db.v1'
 SCOPE = 'core-inspection-v1'
-CAPABILITIES = {'models','events','payments','console','commerce','web_identity','oauth2'}
+CAPABILITIES = {'wallet','bounties','assistant_tools','market_oauth','images','models','events','payments','console','commerce','web_identity','oauth2','assistant','tool_market'}
 NOT_CHECKED = ['maintenance_fence','restore_readiness','backup_integrity',
                'physical_system_identifier','external_services','historical_migration']
 IDENTITY_FIELDS = {'name','oid','server_address','server_port','postmaster_started_at_unix_micros',
@@ -476,14 +478,27 @@ class Parser(argparse.ArgumentParser):
     def error(self,_):raise Refused('ARGUMENTS_INVALID')
 
 def main(argv=None):
-    parser=Parser(description='Read-only Core operator inspection. No maintenance/backup/restore commands.')
+    parser=Parser(description='Core readonly inspection and explicitly isolated synthetic restore qualification. No live maintenance.')
     subs=parser.add_subparsers(dest='command',required=True)
+    p=subs.add_parser('isolated-recovery',help='qualify a new synthetic full Core restore; no existing DB accepted')
+    for name in ['binary','source-manifest','private-root']:
+        p.add_argument('--'+name,required=True)
+    for name in ['binary','source-manifest']:
+        p.add_argument('--expect-'+name+'-sha256',required=True)
     p=subs.add_parser('plan');p.add_argument('--input',required=True);p.add_argument('--out',required=True)
     for name in ['status','reconcile']:
         p=subs.add_parser(name);p.add_argument('--plan',required=True);p.add_argument('--expect-plan-sha256',required=True)
         if name=='reconcile':p.add_argument('--expect-journal-sha256',required=True)
     try:
         args=parser.parse_args(argv)
+        if args.command=='isolated-recovery':
+            runner=Path(__file__).resolve().parents[1]/'tests/architecture_completion/run_core_recovery.py'
+            # Fixed repository runner; no shell, DSN, SQL or target selectors.
+            command=[sys.executable,str(runner)]
+            for name in ['binary','source-manifest','private-root','expect-binary-sha256','expect-source-manifest-sha256']:
+                command.extend(['--'+name,getattr(args,name.replace('-','_'))])
+            return subprocess.run(command,env={k:v for k,v in os.environ.items()
+                if not k.startswith(('PG','DOCKER_')) and k not in {'DATABASE_URL','SQL_DSN'}}).returncode
         if args.command=='plan':response=write_plan(args.input,args.out);code=0
         else:
             response,code=inspect_plan(args.plan,sha_value(args.expect_plan_sha256),journal_sha=sha_value(args.expect_journal_sha256) if args.command=='reconcile' else None,reconcile=args.command=='reconcile')

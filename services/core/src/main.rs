@@ -18,13 +18,14 @@ use std::{
 
 mod admin;
 
-const USAGE: &str = "Usage: lmm-core [--config /absolute/core.toml | --legacy-env] [serve | init-db | bootstrap-user | complete-setup | install-usage-receipt-index | plan-admin-activation | apply-admin-activation | schema-manifest | check-db]\n\n\
+const USAGE: &str = "Usage: lmm-core [--config /absolute/core.toml | --legacy-env] [serve | init-db | bootstrap-user | complete-setup | install-tool-market-builtins | install-usage-receipt-index | plan-admin-activation | apply-admin-activation | schema-manifest | check-db]\n\n\
 Commands:\n\
   serve           Start the core service (the default without arguments).\n\
   schema-manifest Print the compiled schema contract as JSON; accepts no config options and performs no I/O except stdout.\n\
   check-db        Read-only schema/runtime authority JSON; requires explicit --config.\n\
   init-db         Initialize a new, empty core database.\n\
   bootstrap-user  Read a user_id and platform_level JSON object from stdin.\n\n\
+  install-tool-market-builtins  Install the compiled tool catalog offline as installation owner.\n\n\
   complete-setup  Record setup completion offline after creating or importing root.\n\
   install-usage-receipt-index  Offline owner-only index installation; requires explicit --config.\n\
   plan-admin-activation  Read-only candidate binding for one imported admin; requires explicit --config (not --legacy-env).\n\
@@ -47,6 +48,7 @@ enum Command {
     InitDb,
     BootstrapUser,
     CompleteSetup,
+    InstallToolMarketBuiltins,
     InstallUsageReceiptIndex,
     PlanAdminActivation,
     ApplyAdminActivation,
@@ -87,6 +89,7 @@ fn command(args: impl IntoIterator<Item = OsString>) -> io::Result<Arguments> {
                 | "init-db"
                 | "bootstrap-user"
                 | "complete-setup"
+                | "install-tool-market-builtins"
                 | "install-usage-receipt-index"
                 | "plan-admin-activation"
                 | "apply-admin-activation"
@@ -97,6 +100,7 @@ fn command(args: impl IntoIterator<Item = OsString>) -> io::Result<Arguments> {
                     Some("init-db") => Command::InitDb,
                     Some("bootstrap-user") => Command::BootstrapUser,
                     Some("complete-setup") => Command::CompleteSetup,
+                    Some("install-tool-market-builtins") => Command::InstallToolMarketBuiltins,
                     Some("install-usage-receipt-index") => Command::InstallUsageReceiptIndex,
                     Some("plan-admin-activation") => Command::PlanAdminActivation,
                     Some("apply-admin-activation") => Command::ApplyAdminActivation,
@@ -174,6 +178,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         Command::InitDb => Some(admin::Operation::InitDb),
         Command::BootstrapUser => Some(admin::Operation::bootstrap(io::stdin().lock())?),
         Command::CompleteSetup => Some(admin::Operation::CompleteSetup),
+        Command::InstallToolMarketBuiltins => {
+            if arguments.config.is_none() || arguments.legacy_env {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "builtin catalog installation requires explicit installer-owner --config",
+                )
+                .into());
+            }
+            Some(admin::Operation::InstallToolMarketBuiltins)
+        }
         Command::InstallUsageReceiptIndex => {
             let operation = admin::Operation::usage_receipt_index(io::stdin().lock())?;
             if arguments.config.is_none() || arguments.legacy_env {
@@ -235,6 +249,7 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
     let mut database_pool = None;
     let mut remote_store = None;
     let mut model_gateway = None;
+    let mut humangrant_engine = None;
     let mut app = lmm_core::http::router();
     if let Some(url) = database_url.as_deref() {
         let pool = config::database_pool(url).await?;
@@ -242,12 +257,19 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
             &pool,
             lmm_core::runtime_database::RequiredCapabilities {
                 models: config::setting_os("LMM_CORE_MODEL_CONFIG_FILE").is_some(),
+                images: config::images_configured()?,
                 events: config::setting_os("LMM_CORE_RPC_SOCKET").is_some(),
                 payments: config::payments_configured(),
                 commerce: config::commerce_configured(),
+                assistant: config::assistant_configured(),
+                assistant_tools: config::assistant_tools_enabled()?,
+                tool_market: config::tool_market_configured(),
                 console: console_enabled,
                 web_identity: legacy_config.is_some(),
                 oauth2: config::oauth2_configured(),
+                market_oauth: config::market_oauth_configured(),
+                wallet: config::wallet_configured(),
+                bounties: config::bounties_configured(),
             },
         )
         .await?;
@@ -283,6 +305,14 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
                 lmm_core::identity::admin_users::AdminUsersStore::new(store.clone()),
             ));
         capabilities.admin_users_read = true;
+        if let Some((humangrant, engine)) = config::humangrant(pool.clone()).await? {
+            if legacy_config.is_none() {
+                return Err("HumanGrant requires native Web authentication".into());
+            }
+            routes = routes.merge(humangrant);
+            humangrant_engine = Some(engine);
+            capabilities.humangrant = true;
+        }
         capabilities.abuse_admin = true;
         if console_enabled {
             routes = routes.merge(lmm_core::console_compat::router(
@@ -291,6 +321,9 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
             capabilities.console = true;
         }
         remote_store = Some(store.clone());
+        if let Some(issuer) = config::market_oauth_issuer(pool.clone()).await? {
+            routes = routes.merge(lmm_core::market_oauth::http::router(issuer));
+        }
         let oauth2 = config::oauth2_issuer(store.clone()).await?;
         let oauth2 = oauth2.map(|issuer| {
             if let Some(gateway) = &model_gateway {
@@ -325,11 +358,39 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
         }
         if let Some(gateway) = &model_gateway {
             routes = routes.merge(gateway.router());
+            if config::image_host_configured() {
+                routes = routes.merge(config::image_browser_router(gateway)?);
+            }
+        }
+        if config::wallet_configured() {
+            let wallet = lmm_core::wallet::Store::new(pool.clone());
+            wallet
+                .check_ready()
+                .await
+                .map_err(|_| "wallet schema or runtime authority unavailable")?;
+            routes = routes.merge(config::wallet_browser_router(wallet)?);
+        }
+        if config::bounties_configured() {
+            let store = lmm_core::bounties::BountyStore::from_pool(pool.clone());
+            store
+                .check_ready()
+                .await
+                .map_err(|_| "bounty schema or runtime authority unavailable")?;
+            routes = routes.merge(config::bounties_browser_router(store)?);
+        }
+        if let Some(confirmations) = config::assistant_tools_browser_router(pool.clone())? {
+            routes = routes.merge(confirmations);
         }
         // The final readiness router is assembled after the optional RPC checks.
         app = routes;
         database_pool = Some(pool);
-    } else if config::remote_control_configured()
+    } else if config::assistant_configured()
+        || config::tool_market_configured()
+        || config::support_projection_configured()
+        || config::wallet_configured()
+        || config::bounties_configured()
+        || config::image_host_configured()
+        || config::remote_control_configured()
         || legacy_config.is_some()
         || config::identity_database_required()?
         || console_enabled
@@ -359,6 +420,8 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
     #[cfg(unix)]
     let (rpc_stop, rpc_stopped) = tokio::sync::watch::channel(false);
     #[cfg(unix)]
+    let mut assistant_drain = None;
+    #[cfg(unix)]
     let rpc = match (
         config::setting_os("LMM_CORE_RPC_SOCKET"),
         config::setting_os("LMM_CORE_RPC_TOKEN_FILE"),
@@ -380,6 +443,12 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
                 let events = lmm_core::events::EventStore::connect(url).await?;
                 server = server.with_events(events, "extensions")?;
                 capabilities.events = true;
+                if let Some(assistant) =
+                    config::assistant_rpc(url, model_gateway.as_ref(), &token).await?
+                {
+                    assistant_drain = Some(assistant.clone());
+                    server = server.with_assistant(assistant);
+                }
                 let financial = config::financial_rpcs(url, &token).await?;
                 if let Some(payments) = financial.payments {
                     server = server.with_payments(payments);
@@ -395,7 +464,11 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
         _ => return Err("configure both RPC socket and service credential file".into()),
     };
     #[cfg(unix)]
-    if rpc.is_none() && (config::payments_configured() || config::commerce_configured()) {
+    if rpc.is_none()
+        && (config::payments_configured()
+            || config::commerce_configured()
+            || config::assistant_configured())
+    {
         return Err("financial RPC configuration requires the private RPC listener".into());
     }
     #[cfg(not(unix))]
@@ -403,9 +476,28 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
         || config::setting_os("LMM_CORE_RPC_TOKEN_FILE").is_some()
         || config::payments_configured()
         || config::commerce_configured()
+        || config::assistant_configured()
+        || config::tool_market_configured()
+        || config::support_projection_configured()
+        || config::wallet_configured()
+        || config::bounties_configured()
+        || config::image_host_configured()
     {
         return Err("internal RPC requires a Unix socket on this release".into());
     }
+    #[cfg(unix)]
+    let tool_market_server = match database_url.as_deref() {
+        Some(url) => config::tool_market_server(url, model_gateway.as_ref()).await?,
+        None if config::tool_market_configured()
+            || config::support_projection_configured()
+            || config::wallet_configured()
+            || config::bounties_configured()
+            || config::image_host_configured() =>
+        {
+            return Err("tool market requires the Core database".into());
+        }
+        None => None,
+    };
     let rpc_running = Arc::new(AtomicBool::new(false));
     let models_healthy = Arc::new(AtomicBool::new(true));
     if let Some(pool) = &database_pool {
@@ -477,9 +569,20 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
     // All enabled components and listener binds have succeeded. The health body
     // lists capabilities; model readiness has its own explicit endpoint.
     assert!(lifecycle.mark_ready());
+    let humangrant_mail_task = humangrant_engine
+        .filter(|engine| engine.mail.is_some())
+        .map(|engine| lmm_core::humangrant::mail::spawn_worker(engine, stopped.clone()));
+    #[cfg(unix)]
+    let tool_market_task = tool_market_server.map(|server| {
+        let stopped = stopped.clone();
+        tokio::spawn(async move { server.serve(stopped).await })
+    });
+
     let signal_lifecycle = lifecycle.clone();
     let signal_stop = stop.clone();
     let signal_gateway = model_gateway.clone();
+    #[cfg(unix)]
+    let signal_assistant = assistant_drain.clone();
     let signal = tokio::spawn(async move {
         #[cfg(unix)]
         tokio::select! {
@@ -489,6 +592,10 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
         #[cfg(not(unix))]
         let _ = tokio::signal::ctrl_c().await;
         signal_lifecycle.begin_drain();
+        #[cfg(unix)]
+        if let Some(assistant) = signal_assistant {
+            assistant.close_admission();
+        }
         let _ = signal_stop.send(true);
         if let Some(gateway) = signal_gateway {
             // Stop admission and cancel an overlong upstream after the grace
@@ -524,11 +631,20 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
             eprintln!("waiting for durable model finalizers");
         }
     }
+    #[cfg(unix)]
+    if let Some(assistant) = assistant_drain {
+        while !assistant.drain(Duration::from_secs(5)).await {
+            eprintln!("waiting for durable assistant finalizers");
+        }
+    }
     // HTTP EOF/cancellation is not proof that asynchronous completion is done.
     // Completion tasks must own a WorkLease and write their durable outcome.
     lifecycle.wait_idle().await;
     if let Some(task) = recovery_task {
         let _ = task.await;
+    }
+    if let Some(task) = humangrant_mail_task {
+        task.await?;
     }
     #[cfg(unix)]
     {
@@ -536,6 +652,10 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
         if let Some(task) = rpc_task {
             task.await?;
         }
+    }
+    #[cfg(unix)]
+    if let Some(task) = tool_market_task {
+        task.await??;
     }
     if let Some(pool) = database_pool {
         pool.close().await;

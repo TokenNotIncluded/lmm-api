@@ -12,6 +12,8 @@ drain_timeout_seconds = 30
 [database]
 url_file = "/etc/lmm.conf.d/secrets/core/database-url"
 max_connections = 2
+# Optional pool connection/acquisition wait, in seconds (1..30; default 3).
+# acquire_timeout_seconds = 3
 
 [identity]
 registration_enabled = false

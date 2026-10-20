@@ -27,11 +27,18 @@ type PendingConversationRepository interface {
 type PendingConversations struct {
 	authority access.Authority
 	repo      PendingConversationRepository
-	port      DurableDelegationPort
+	port      ConversationRegistrationPort
 	now       func() time.Time
 }
 
-func NewPendingConversations(authority access.Authority, repo PendingConversationRepository, port DurableDelegationPort) (*PendingConversations, error) {
+// Registration is shared by the separately negotiated text and agent ports.
+// Possession of this interface does not authorize either execution capability.
+type ConversationRegistrationPort interface {
+	BeginConversation(context.Context, string, string) (CoreConversationRegistration, error)
+	LookupConversation(context.Context, string, string) (CoreConversationRegistration, error)
+}
+
+func NewPendingConversations(authority access.Authority, repo PendingConversationRepository, port ConversationRegistrationPort) (*PendingConversations, error) {
 	if access.Missing(authority) || access.Missing(repo) || access.Missing(port) {
 		return nil, ErrDelegationUnavailable
 	}

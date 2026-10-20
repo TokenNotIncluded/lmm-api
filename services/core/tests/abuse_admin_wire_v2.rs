@@ -208,6 +208,7 @@ async fn seed_nonempty_hold(f: &Fixture, pool: &PgPool) {
         lease_seconds: 60,
         maximum_seconds: 120,
         price: Price {
+            image: None,
             upstream_cost_group_ppm: None,
             version: "synthetic-v1".into(),
             model: "public-model".into(),

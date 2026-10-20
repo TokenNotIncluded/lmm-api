@@ -5,30 +5,31 @@ package toolmarket
 import (
 	"context"
 	"encoding/json"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 )
 
+var validWebTool = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
+
 // WebPermission is an action, not a grant inferred from read-only identity RPCs.
 // The production Authority must ask Rust to authorize this exact action.
 func WebPermission(action string) string {
 	switch action {
-	case "draft", "mine":
+	case "draft", "mine", "credentials", "calls", "call.result", "report", "income", "delegation.get", "delegation.clients":
 		return "toolmarket.read"
-	case "install", "favorite":
+	case "install", "favorite", "grant", "budget", "grant.revoke", "grant.hide", "token", "token.revoke", "token.hide", "client.disconnect", "client.remove", "delegation.set":
 		return "toolmarket.authorize"
-	case "reviews", "review", "review_detail":
+	case "reviews", "review", "review_detail", "reports", "report.review":
 		return "toolmarket.review"
 	case "configure":
 		return "toolmarket.config"
-	case "save", "validate", "submit", "activate", "pause", "delete", "inspect":
+	case "credential.configure", "save", "validate", "submit", "activate", "pause", "delete", "inspect":
 		return "toolmarket.manage"
-	case "invoke", "grant", "budget":
-		// Disabled operations only authenticate their caller and entitlement.
-		// They never request, infer or return an execution/funding grant.
-		return "toolmarket.read"
+	case "invoke":
+		return "toolmarket.execute"
 	default:
 		return ""
 	}
@@ -42,6 +43,9 @@ func (m *Module) WebAuthorize(ctx context.Context, credential, account, action s
 	}
 	if action != "toolmarket.read" && action != "toolmarket.manage" && action != "toolmarket.authorize" && action != "toolmarket.review" && action != "toolmarket.config" && action != "toolmarket.execute" {
 		return 0, ErrDenied
+	}
+	if strings.HasPrefix(credential, "lmm_market_") || strings.HasPrefix(credential, "lmm_at_") {
+		return m.LegacyAuthorizeMarketAction(ctx, credential, account, action)
 	}
 	p, err := m.authority.Authorize(ctx, credential, account, action)
 	if err != nil {
@@ -66,12 +70,29 @@ func (m *Module) PublicWebConfig(ctx context.Context) (map[string]any, error) {
 	if err := m.store.view(func(database) error { return nil }); err != nil {
 		return nil, err
 	}
-	return map[string]any{
+	out := map[string]any{
 		"enabled": false, "builtin_enabled": false, "fee_bps": 0, "recipient_id": 0,
 		"quota_per_unit": 500000, "credits_per_usd": "500000", "web_client_id": "web-market", "mcp_path": "/mcp/market",
 		"provider_presets": []any{}, "execution_ready": false,
-		"capabilities": map[string]bool{"service_deletion": true, "client_record_cleanup": false, "meta_delegation": false, "mcp_oauth": false, "metamcp": false},
-	}, nil
+		"capabilities": map[string]bool{"service_deletion": true, "client_record_cleanup": false, "meta_delegation": false, "mcp_oauth": false, "metamcp": false, "native_runtime": !m.webOnly},
+	}
+	if _, ok := m.authority.(CoreLegacyConfig); ok {
+		policy, err := m.LegacyReadConfig(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out["enabled"], out["fee_bps"], out["recipient_id"] = policy.Enabled, policy.FeeBPS, policy.RecipientID
+		out["updated_by"], out["updated_at"], out["version"] = policy.UpdatedBy, policy.UpdatedAt, policy.Version
+		out["provider_presets"] = LegacyProviderPresets()
+	}
+	ready := m.LegacyCapabilities()
+	out["execution_ready"], out["builtin_enabled"] = ready.ExecutionReady, ready.BuiltinEnabled
+	capabilities := out["capabilities"].(map[string]bool)
+	capabilities["meta_delegation"], capabilities["metamcp"], capabilities["mcp_oauth"] = ready.MetaDelegation, ready.MetaMCP, ready.MCPOAuth
+	if ready.MetaMCP {
+		out["meta_tool"] = LegacyMetaToolDescription()
+	}
+	return out, nil
 }
 func (m *Module) webEnter(ctx context.Context) (func(), error) {
 	if m == nil || m.store == nil || m.active == nil || ctx == nil || ctx.Err() != nil {
@@ -112,6 +133,12 @@ func webVisible(s WebServiceRecord, v webSnapshot, user int64) bool {
 func webSummary(s WebServiceRecord, v webSnapshot) WebSummary {
 	out := WebSummary{ID: s.ID, OwnerID: s.OwnerID, VersionID: v.Version.ID, Name: v.Version.Name, Description: v.Version.Description, ExecutionType: v.Version.ExecutionType, PublishedAt: v.Version.PublishedAt, ToolCount: len(v.Tools)}
 	for i, tool := range v.Tools {
+		if tool.BillingMode == "input_tokens" || tool.BillingMode == "metered" {
+			out.MeteredTools++
+		}
+		if tool.ProviderPricing != nil {
+			out.ProviderTools++
+		}
 		if i == 0 || tool.PriceQuota < out.MinPriceQuota {
 			out.MinPriceQuota = tool.PriceQuota
 		}
@@ -257,7 +284,7 @@ func webDraft(w *webDatabase, s WebServiceRecord) (webSnapshot, error) {
 }
 
 // LegacyWeb reauthorizes every operation independently of the HTTP adapter.
-// No operation here dispatches an execution or grants permission to spend.
+// Core revalidates every consent, policy change and execution independently.
 func (m *Module) LegacyWeb(ctx context.Context, credential, account string, in WebRequest) (any, error) {
 	permission := WebPermission(in.Action)
 	if permission == "" {
@@ -276,10 +303,40 @@ func (m *Module) LegacyWeb(ctx context.Context, credential, account string, in W
 	if err = m.admit(p); err != nil {
 		return nil, err
 	}
-	if in.ID != "" && !validID.MatchString(in.ID) {
+	if in.ID != "" && !validID.MatchString(in.ID) && in.Action != "delegation.get" && in.Action != "delegation.set" {
 		return nil, ErrInvalid
 	}
 	switch in.Action {
+	case "delegation.get", "delegation.set":
+		return m.legacyWebMetaDelegation(ctx, credential, account, in)
+	case "delegation.clients":
+		return m.LegacyListMarketOAuthClients(ctx, credential, account, true, in.Offset, in.Limit)
+	case "configure":
+		value, err := payload[struct {
+			Enabled     bool  `json:"enabled"`
+			FeeBPS      int64 `json:"fee_bps"`
+			RecipientID int64 `json:"recipient_id"`
+		}](in.Body, "enabled", "fee_bps", "recipient_id")
+		if err != nil {
+			return nil, err
+		}
+		operation := in.OperationID
+		if operation == "" {
+			current, err := m.LegacyReadConfig(ctx)
+			if err != nil {
+				return nil, err
+			}
+			operation = digest([]any{"legacy-toolmarket-config-v2", p, current.Version, string(in.Body)})
+		}
+		return m.LegacySetConfig(ctx, credential, account, operation, LegacyMarketConfigUpdate{Enabled: value.Enabled, FeeBPS: value.FeeBPS, RecipientID: value.RecipientID})
+	case "credentials":
+		return m.webCredentialMetadata(user, in.ID, in.VersionID)
+	case "credential.configure":
+		value, err := payload[WebCredentialInput](in.Body, "version_id", "mode")
+		if err != nil {
+			return nil, err
+		}
+		return m.webConfigureCredential(p, user, in.ID, value)
 	case "save":
 		v, err := payload[WebDraftInput](in.Body, "name", "execution_type", "visibility", "endpoint", "tools")
 		if err != nil {
@@ -306,11 +363,29 @@ func (m *Module) LegacyWeb(ctx context.Context, credential, account string, in W
 		})
 		return out, err
 	case "mine":
+		if in.Kind == "oauth-clients" {
+			return m.LegacyListMarketOAuthClients(ctx, credential, account, false, in.Offset, in.Limit)
+		}
+		if in.Kind == "income" {
+			income := in
+			income.Action = "income"
+			return m.legacyWebReports(ctx, credential, account, income)
+		}
+		if in.Kind == "grants" || in.Kind == "tokens" || in.Kind == "budgets" {
+			return m.legacyWebMine(ctx, credential, account, user, in.Kind, in.Offset, in.Limit)
+		}
 		return m.webMine(user, in.Kind, in.Offset, in.Limit)
 	case "reviews":
 		return m.webReviews(in.Offset, in.Limit)
 	case "inspect":
-		return m.webInspect(ctx, in.Body)
+		value, err := m.webInspect(ctx, user, in.Body)
+		if err != nil {
+			return nil, err
+		}
+		if _, err = m.WebAuthorize(ctx, credential, account, permission); err != nil {
+			return nil, err
+		}
+		return value, nil
 	case "validate":
 		return nil, m.webValidate(ctx, p, user, in.ID, "", false, credential, account, permission)
 	case "submit", "activate":
@@ -320,12 +395,23 @@ func (m *Module) LegacyWeb(ctx context.Context, credential, account string, in W
 		if e != nil || !validID.MatchString(v.VersionID) {
 			return nil, ErrInvalid
 		}
-		if in.Action == "activate" {
+		_, creditQuotes := m.authority.(CoreLegacyQuotes)
+		if in.Action == "activate" || creditQuotes {
 			if e = m.webValidate(ctx, p, user, in.ID, v.VersionID, false, credential, account, permission); e != nil {
 				return nil, e
 			}
 			if _, e = m.WebAuthorize(ctx, credential, account, permission); e != nil {
 				return nil, e
+			}
+		}
+		if creditQuotes {
+			if e = m.legacyRegisterVersionQuotes(ctx, credential, account, in.ID, v.VersionID); e != nil {
+				return nil, e
+			}
+			if in.Action == "activate" {
+				if e = m.legacyApproveVersionQuotes(ctx, credential, account, in.ID, v.VersionID, "private", true); e != nil {
+					return nil, e
+				}
 			}
 		}
 		return nil, m.webTransition(p, user, in.ID, v.VersionID, in.Action)
@@ -344,6 +430,19 @@ func (m *Module) LegacyWeb(ctx context.Context, credential, account string, in W
 			}
 			if _, e = m.WebAuthorize(ctx, credential, account, permission); e != nil {
 				return nil, e
+			}
+		}
+		if _, creditQuotes := m.authority.(CoreLegacyQuotes); creditQuotes {
+			_, snapshot, err := m.legacyQuoteSnapshot(in.ID, v.VersionID)
+			if err != nil {
+				return nil, err
+			}
+			visibility := "public"
+			if snapshot.Version.Visibility == "private" {
+				visibility = "private"
+			}
+			if err = m.legacyApproveVersionQuotes(ctx, credential, account, in.ID, v.VersionID, visibility, v.Approve); err != nil {
+				return nil, err
 			}
 		}
 		return nil, m.webReview(p, user, in.ID, v.VersionID, v.Approve, v.Note)
@@ -382,6 +481,10 @@ func (m *Module) LegacyWeb(ctx context.Context, credential, account string, in W
 		if e != nil {
 			return nil, e
 		}
+		ack, e := m.legacyWebLifecycle(ctx, credential, account, p, user, in, v.Paused, false)
+		if e != nil {
+			return nil, e
+		}
 		return nil, m.store.update(func(d *database) error {
 			w := webState(d)
 			s, e := webOwned(w, user, in.ID)
@@ -390,6 +493,12 @@ func (m *Module) LegacyWeb(ctx context.Context, credential, account string, in W
 			}
 			if s.Status != "published" && s.Status != "paused" {
 				return ErrConflict
+			}
+			if ack != nil {
+				if err := legacyValidateLifecycleAck(s.CoreLifecycleRevision, s.Status, *ack); err != nil {
+					return err
+				}
+				s.CoreLifecycleRevision = ack.Revision
 			}
 			if v.Paused {
 				s.Status = "paused"
@@ -402,15 +511,32 @@ func (m *Module) LegacyWeb(ctx context.Context, credential, account string, in W
 			return nil
 		})
 	case "delete":
-		return nil, m.webDelete(p, user, in.ID)
-	case "invoke", "grant", "budget":
-		return nil, ErrFunds
+		ack, err := m.legacyWebLifecycle(ctx, credential, account, p, user, in, false, true)
+		if err != nil {
+			return nil, err
+		}
+		return nil, m.webDelete(p, user, in.ID, ack)
+	case "grant", "budget", "grant.revoke", "grant.hide", "token", "token.revoke", "token.hide", "client.disconnect", "client.remove":
+		return m.legacyWebAccess(ctx, credential, account, p, user, in)
+	case "invoke":
+		return m.legacyWebInvoke(ctx, credential, account, in)
+	case "call.result":
+		return m.legacyWebCallResult(ctx, credential, account, in.ID)
+	case "calls":
+		return m.legacyWebCalls(ctx, credential, account, user, in.Offset, in.Limit)
+	case "report", "reports", "report.review", "income":
+		return m.legacyWebReports(ctx, credential, account, in)
 	default:
 		return nil, ErrUnavailable
 	}
 }
 
 func (m *Module) webSave(p Principal, user int64, id string, in WebDraftInput) (WebServiceRecord, error) {
+	var pricingErr error
+	in, pricingErr = normalizeWebDraftPricing(in)
+	if pricingErr != nil {
+		return WebServiceRecord{}, pricingErr
+	}
 	if err := m.validateWebDraft(in); err != nil {
 		return WebServiceRecord{}, err
 	}
@@ -473,7 +599,8 @@ func (m *Module) webSave(p Principal, user int64, id string, in WebDraftInput) (
 			if output == "null" {
 				output = ""
 			}
-			v.Tools = append(v.Tools, WebTool{ToolID: toolID, VersionID: versionID, Name: t.Name, Description: t.Description, InputSchema: string(t.InputSchema), OutputSchema: output, Permissions: string(permissions), PriceQuota: t.PriceQuota})
+			provider, rules := webToolPricingFields(t)
+			v.Tools = append(v.Tools, WebTool{ProviderPricing: provider, BillingMode: t.BillingMode, InputTokenPriceQuota: t.InputTokenPriceQuota, MaxInputTokens: t.MaxInputTokens, BillingRules: rules, ToolID: toolID, VersionID: versionID, Name: t.Name, Description: t.Description, InputSchema: string(t.InputSchema), OutputSchema: output, Permissions: string(permissions), PriceQuota: t.PriceQuota})
 		}
 		s.DraftVersionID = versionID
 		s.UpdatedAt = m.now().Unix()
@@ -502,12 +629,12 @@ func (m *Module) validateWebDraft(in WebDraftInput) error {
 	}
 	seen := map[string]bool{}
 	for _, t := range in.Tools {
-		if !validTool.MatchString(t.Name) || seen[t.Name] || len(t.Description) > 4000 || t.PriceQuota < 0 || t.PriceQuota > 9007199254740991 || len(t.Permissions) > 16 {
+		if !validWebTool.MatchString(t.Name) || seen[t.Name] || len(t.Description) > 4000 || t.PriceQuota < 0 || t.PriceQuota > 9007199254740991 || len(t.Permissions) > 16 {
 			return ErrInvalid
 		}
 		seen[t.Name] = true
-		if len(t.ProviderPricing) > 0 && string(t.ProviderPricing) != "null" || t.BillingMode != "" || t.InputTokenPriceQuota != 0 || t.MaxInputTokens != 0 || len(t.BillingRules) > 0 && string(t.BillingRules) != "null" && string(t.BillingRules) != "[]" {
-			return ErrPrice
+		if _, _, err := normalizeWebToolPricing(in.Endpoint, t); err != nil {
+			return err
 		}
 		for i, raw := range []json.RawMessage{t.InputSchema, t.OutputSchema} {
 			if i == 1 && (len(raw) == 0 || string(raw) == "null") {
@@ -516,8 +643,7 @@ func (m *Module) validateWebDraft(in WebDraftInput) error {
 			if len(raw) > 16384 {
 				return ErrInvalid
 			}
-			s, err := readSchema(raw, 0)
-			if err != nil || s.Type != "object" {
+			if err := ValidateLegacySchema(raw); err != nil {
 				return ErrInvalid
 			}
 		}
@@ -532,18 +658,7 @@ func (m *Module) validateWebDraft(in WebDraftInput) error {
 	return nil
 }
 
-func (m *Module) webRemote(ctx context.Context, endpoint string) ([]Tool, error) {
-	// LegacyWeb already owns one of the module's bounded request slots.
-	ctx, cancel := context.WithTimeout(ctx, m.timeout)
-	defer cancel()
-	c, err := m.connect(ctx, Server{Endpoint: endpoint, Auth: "none"}, Secret{})
-	if err != nil {
-		return nil, err
-	}
-	defer c.close(ctx)
-	return c.tools(ctx)
-}
-func (m *Module) webInspect(ctx context.Context, raw json.RawMessage) (any, error) {
+func (m *Module) webInspect(ctx context.Context, user int64, raw json.RawMessage) (any, error) {
 	v, err := payload[struct {
 		Endpoint       string `json:"endpoint"`
 		Authentication *struct {
@@ -557,10 +672,28 @@ func (m *Module) webInspect(ctx context.Context, raw json.RawMessage) (any, erro
 	if err != nil {
 		return nil, err
 	}
-	if v.Authentication != nil && (v.Authentication.Mode != "none" || v.Authentication.Secret != "") || v.ServiceID != "" || v.VersionID != "" || v.Preset != "" {
+	if (v.ServiceID == "") != (v.VersionID == "") || v.Authentication != nil && v.ServiceID != "" {
+		return nil, ErrInvalid
+	}
+	if v.Preset != "" {
 		return nil, ErrUnavailable
 	}
-	tools, err := m.webRemote(ctx, v.Endpoint)
+	remoteCredential := webCredential{Mode: "none"}
+	if v.Authentication != nil {
+		if !validWebCredential(v.Authentication.Mode, v.Authentication.Secret) {
+			return nil, ErrInvalid
+		}
+		remoteCredential.Mode, remoteCredential.Secret = v.Authentication.Mode, v.Authentication.Secret
+	} else if v.ServiceID != "" {
+		if err := m.store.view(func(d database) error {
+			var err error
+			remoteCredential, err = webResolveCredential(d, user, v.ServiceID, v.VersionID, v.Endpoint)
+			return err
+		}); err != nil {
+			return nil, err
+		}
+	}
+	tools, err := m.webRemoteCredential(ctx, v.Endpoint, remoteCredential)
 	if err != nil {
 		return nil, err
 	}
@@ -585,6 +718,8 @@ func sameWebSchema(a, b string) bool {
 }
 func (m *Module) webValidate(ctx context.Context, p Principal, user int64, id, versionID string, review bool, credential, account, permission string) error {
 	var captured webSnapshot
+	var capturedCredential webCredential
+	var publisher int64
 	err := m.store.view(func(d database) error {
 		w := webState(&d)
 		s, ok := w.Services[id]
@@ -602,12 +737,14 @@ func (m *Module) webValidate(ctx context.Context, p Principal, user int64, id, v
 			return ErrConflict
 		}
 		captured = v
-		return nil
+		publisher = s.OwnerID
+		capturedCredential, e = webResolveCredential(d, publisher, id, v.Version.ID, v.Version.Endpoint)
+		return e
 	})
 	if err != nil {
 		return err
 	}
-	remote, err := m.webRemote(ctx, captured.Version.Endpoint)
+	remote, err := m.webRemoteCredential(ctx, captured.Version.Endpoint, capturedCredential)
 	if err != nil {
 		return err
 	}
@@ -616,12 +753,14 @@ func (m *Module) webValidate(ctx context.Context, p Principal, user int64, id, v
 		byName[t.Name] = t
 	}
 	digests := map[string]string{}
+	annotations := map[string]json.RawMessage{}
 	for _, local := range captured.Tools {
 		t, ok := byName[local.Name]
 		if !ok || !sameWebSchema(local.InputSchema, string(t.InputSchema)) || !sameWebSchema(local.OutputSchema, string(t.OutputSchema)) {
 			return ErrConflict
 		}
 		digests[local.ToolID] = digest(t)
+		annotations[local.ToolID] = append(json.RawMessage(nil), t.Annotations...)
 	}
 	if actor, e := m.WebAuthorize(ctx, credential, account, permission); e != nil {
 		return e
@@ -641,11 +780,18 @@ func (m *Module) webValidate(ctx context.Context, p Principal, user int64, id, v
 		if e != nil {
 			return e
 		}
-		if current.Version.ID != captured.Version.ID || current.Digest != captured.Digest {
+		currentCredential, credentialErr := webResolveCredential(*d, publisher, id, current.Version.ID, current.Version.Endpoint)
+		if credentialErr != nil {
+			return credentialErr
+		}
+		if current.Version.ID != captured.Version.ID || current.Digest != captured.Digest || currentCredential != capturedCredential {
 			return ErrConflict
 		}
 		current.ValidationDigest = current.Digest
 		current.RemoteDigests = digests
+		for i := range current.Tools {
+			current.Tools[i].Annotations = annotations[current.Tools[i].ToolID]
+		}
 		w.Versions[current.Version.ID] = current
 		d.audit(p, "web.validate", id, "ok")
 		return nil
@@ -875,12 +1021,18 @@ func (m *Module) webReviews(offset, limit int) (any, error) {
 	})
 	return webSlice(rows, offset, limit), nil
 }
-func (m *Module) webDelete(p Principal, user int64, id string) error {
+func (m *Module) webDelete(p Principal, user int64, id string, ack ...*LegacyServiceLifecycleReceipt) error {
 	return m.store.update(func(d *database) error {
 		w := webState(d)
 		s, e := webOwned(w, user, id)
 		if e != nil {
 			return e
+		}
+		if len(ack) > 0 && ack[0] != nil {
+			if err := legacyValidateLifecycleAck(s.CoreLifecycleRevision, s.Status, *ack[0]); err != nil {
+				return err
+			}
+			s.CoreLifecycleRevision = ack[0].Revision
 		}
 		s.Status = "deleted"
 		s.LiveVersionID = ""

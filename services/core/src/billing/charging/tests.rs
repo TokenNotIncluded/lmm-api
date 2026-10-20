@@ -121,6 +121,7 @@ fn request(id: &str, reserve: i64) -> Request {
         lease_seconds: 300,
         maximum_seconds: 3600,
         price: Price {
+            image: None,
             upstream_cost_group_ppm: None,
             version: "v1".into(),
             model: "test-model".into(),
@@ -214,6 +215,7 @@ fn exact_cumulative_prices_cache_and_overflow() {
     let mut price = request("math", 0).price;
     assert_eq!(
         price.cost(Usage {
+            image: None,
             upstream_cost_atto_usd: None,
             input: 10,
             cached: 4,
@@ -223,6 +225,7 @@ fn exact_cumulative_prices_cache_and_overflow() {
     );
     assert_eq!(
         price.cost(Usage {
+            image: None,
             upstream_cost_atto_usd: None,
             input: 1,
             cached: 2,

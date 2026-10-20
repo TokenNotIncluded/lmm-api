@@ -10,6 +10,10 @@ fn input(client: ClientProtocol, stream: bool) -> Request {
             json!({"model":"alias","messages":[{"role":"user","content":"hello"}],"stream":stream})
         }
         ClientProtocol::Responses => json!({"model":"alias","input":"hello","stream":stream}),
+
+        ClientProtocol::Anthropic | ClientProtocol::Gemini => {
+            unreachable!("native clients require native fixtures")
+        }
     };
     Request::parse(
         client,
@@ -278,6 +282,10 @@ fn gemini_plain_text_signatures_survive_both_client_formats_and_output_modes() {
                         response["output"][0]["provider_metadata"]["protocol"],
                         "gemini"
                     );
+                }
+
+                ClientProtocol::Anthropic | ClientProtocol::Gemini => {
+                    unreachable!("native clients require native fixtures")
                 }
             }
         }

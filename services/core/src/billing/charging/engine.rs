@@ -1,3 +1,9 @@
+#[path = "assistant.rs"]
+mod assistant;
+#[path = "image.rs"]
+mod image;
+#[path = "model_unknown.rs"]
+mod model_unknown;
 use super::{authority, limits, types::*};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -53,6 +59,11 @@ fn decode(row: PgRow) -> Result<Stored> {
             state: row.try_get("state")?,
             reserved: row.try_get("reserved")?,
             usage: Usage {
+                image: row
+                    .try_get::<Option<Value>, _>("image_usage")?
+                    .map(serde_json::from_value)
+                    .transpose()
+                    .map_err(|_| Error::Storage)?,
                 upstream_cost_atto_usd: row
                     .try_get::<Option<String>, _>("upstream_cost_atto_usd")?
                     .map(|v| v.parse::<u128>().map_err(|_| Error::Storage))
@@ -75,6 +86,25 @@ fn decode(row: PgRow) -> Result<Stored> {
                 && source.personal_account_id == stored.charge.payer_account_id =>
         {
             source.validate_stored().map_err(|_| Error::Storage)?
+        }
+        (None, None)
+            if row
+                .try_get::<Option<String>, _>("assistant_grant_id")?
+                .is_some()
+                && (stored.charge.owner_account_id == stored.charge.payer_account_id
+                    || row.try_get::<Option<i64>, _>("assistant_sponsor_account_id")?
+                        == Some(stored.charge.payer_account_id)) =>
+        {
+            ()
+        }
+        (None, None)
+            if row
+                .try_get::<Option<String>, _>("image_operation_id")?
+                .is_some()
+                && stored.charge.price.image.is_some()
+                && stored.charge.owner_account_id == stored.charge.payer_account_id =>
+        {
+            ()
         }
         _ => return Err(Error::Storage),
     }
@@ -582,8 +612,13 @@ impl Charging {
             return Err(Error::WrongState);
         }
         Self::check_usage(&stored.charge, usage)?;
-        sqlx::query("UPDATE core_charging.requests SET input_tokens=$2,cached_tokens=$3,output_tokens=$4,revision=revision+1 WHERE id=$1")
-            .bind(id).bind(usage.input).bind(usage.cached).bind(usage.output).execute(&mut *tx).await?;
+        if let Some(image) = usage.image {
+            sqlx::query("UPDATE core_charging.requests SET input_tokens=$2,cached_tokens=$3,output_tokens=$4,image_usage=$5,revision=revision+1 WHERE id=$1")
+                .bind(id).bind(usage.input).bind(usage.cached).bind(usage.output).bind(json(&image)?).execute(&mut *tx).await?;
+        } else {
+            sqlx::query("UPDATE core_charging.requests SET input_tokens=$2,cached_tokens=$3,output_tokens=$4,revision=revision+1 WHERE id=$1")
+                .bind(id).bind(usage.input).bind(usage.cached).bind(usage.output).execute(&mut *tx).await?;
+        }
         event(&mut tx, id, &event_id, detail).await?;
         let charge = load(&mut tx, id).await?.charge;
         commit(tx).await?;
@@ -672,9 +707,15 @@ impl Charging {
         self.ledger
             .apply(c, command(&charge, "settle", Change::Settle { amount })?)
             .await?;
-        sqlx::query("UPDATE core_charging.requests SET state='settled',input_tokens=$2,cached_tokens=$3,output_tokens=$4,settled=$5,outcome=$6,revision=revision+1 WHERE id=$1")
-            .bind(&charge.id).bind(usage.input).bind(usage.cached).bind(usage.output).bind(amount)
-            .bind(outcome.text()).execute(&mut *c).await?;
+        if let Some(image) = usage.image {
+            sqlx::query("UPDATE core_charging.requests SET state='settled',input_tokens=$2,cached_tokens=$3,output_tokens=$4,settled=$5,outcome=$6,image_usage=$7,revision=revision+1 WHERE id=$1")
+                .bind(&charge.id).bind(usage.input).bind(usage.cached).bind(usage.output).bind(amount)
+                .bind(outcome.text()).bind(json(&image)?).execute(&mut *c).await?;
+        } else {
+            sqlx::query("UPDATE core_charging.requests SET state='settled',input_tokens=$2,cached_tokens=$3,output_tokens=$4,settled=$5,outcome=$6,revision=revision+1 WHERE id=$1")
+                .bind(&charge.id).bind(usage.input).bind(usage.cached).bind(usage.output).bind(amount)
+                .bind(outcome.text()).execute(&mut *c).await?;
+        }
         event(
             c,
             &charge.id,

@@ -1,7 +1,7 @@
 //! Native A03 Key Quota Acceptance Tests.
 //!
 //! Verifies:
-//! 1. Fresh14 Rust Core installer & independent installer LOGIN SET ROLE NOLOGIN owner.
+//! 1. Complete Rust Core installer & independent installer LOGIN SET ROLE NOLOGIN owner.
 //! 2. IdentityStore real key issuance & secret digest binding (no forged secret/status).
 //! 3. Real offline SQL writer consumption & restricted runtime ChargingEngine: historical used + new reserve merged admission.
 //! 4. Refuse cross-key and cross-account quota borrowing.
@@ -31,6 +31,7 @@ const WORKER: [u8; 32] = [7; 32];
 
 fn test_price() -> Price {
     Price {
+        image: None,
         upstream_cost_group_ppm: None,
         version: "v1".into(),
         model: "test-model".into(),
@@ -586,7 +587,7 @@ async fn apply_writer_sql(pool: PgPool, sql: &str) -> (Result<String, String>, P
 }
 
 #[tokio::test]
-async fn fresh14_installer_and_independent_owner_contract() {
+async fn fresh_installer_and_independent_owner_contract() {
     let pool = setup_a03_roles().await;
     let components: Vec<String> =
         sqlx::query_scalar("SELECT name FROM core_meta.component_contract ORDER BY name")
@@ -601,7 +602,34 @@ async fn fresh14_installer_and_independent_owner_contract() {
         .collect();
     expected.sort();
     assert_eq!(components, expected);
-    assert_eq!(components.len(), 14);
+    assert_eq!(components.len(), core_schema::component_count());
+    // Required assembled features remain explicit while the installer manifest
+    // supplies the complete count as independently owned modules are added.
+    for added in [
+        "identity",
+        "ledger",
+        "payments",
+        "charging",
+        "routing",
+        "events",
+        "charging-ledger",
+        "migration",
+        "console",
+        "model-gateway",
+        "commerce",
+        "abuse",
+        "oauth-grants",
+        "history",
+        "humangrant",
+        "tool-market",
+        "assistant-model",
+        "gift",
+    ] {
+        assert!(
+            components.iter().any(|name| name == added),
+            "missing required fresh-install component: {added}"
+        );
+    }
     let version: i32 =
         sqlx::query_scalar("SELECT version FROM core_meta.schema_contract WHERE singleton")
             .fetch_one(&pool)
@@ -781,6 +809,7 @@ async fn offline_writer_plan_and_charging_engine_admission() {
             &req1.id,
             &WORKER,
             Usage {
+                image: None,
                 upstream_cost_atto_usd: None,
                 input: 50,
                 cached: 0,

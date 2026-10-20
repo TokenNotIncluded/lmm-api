@@ -59,6 +59,9 @@ type CompletedTurn struct {
 	InputHash      [32]byte
 	AnswerHash     [32]byte
 	Now            int64
+	// A trusted agent title is applied only with this conversation's first
+	// completed pair. It never renames an existing conversation.
+	Title string
 }
 
 // HistoryRepository owns only the separate assistant DB. RecordTurn is atomic:
@@ -101,6 +104,10 @@ func (s *HistoryService) actor(ctx context.Context, token string) (access.Princi
 // Call only after the billed Core model result is authoritative. Passing these
 // persistence tests does not prove that such a model adapter is installed.
 func (s *HistoryService) RecordCompletedTurn(ctx context.Context, token string, conversationID int64, turnID, input, answer string) (int64, error) {
+	return s.RecordCompletedAgentTurn(ctx, token, conversationID, turnID, input, answer, "")
+}
+
+func (s *HistoryService) RecordCompletedAgentTurn(ctx context.Context, token string, conversationID int64, turnID, input, answer, title string) (int64, error) {
 	p, err := s.actor(ctx, token)
 	if err != nil {
 		return 0, err
@@ -113,9 +120,13 @@ func (s *HistoryService) RecordCompletedTurn(ctx context.Context, token string, 
 	if strings.TrimSpace(input) == "" || strings.TrimSpace(answer) == "" {
 		return 0, access.ErrInvalid
 	}
+	title = RedactAssistantHistoryContent(strings.TrimSpace(title))
+	if !utf8.ValidString(title) || len([]rune(title)) > 60 || len([]rune(title)) == 1 {
+		title = ""
+	}
 	return s.repo.RecordTurn(ctx, p.UserID, CompletedTurn{ConversationID: conversationID, ClientTurnID: turnID,
 		UserContent: input, AnswerContent: answer, InputHash: sha256.Sum256([]byte(input)),
-		AnswerHash: sha256.Sum256([]byte(answer)), Now: s.now().Unix()})
+		AnswerHash: sha256.Sum256([]byte(answer)), Now: s.now().Unix(), Title: title})
 }
 
 type historyCursor struct {

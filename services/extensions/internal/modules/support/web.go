@@ -352,18 +352,11 @@ func (s *Service) AssistantContextWeb(ctx context.Context, token string, actor i
 	return out, nil
 }
 
-// Customer summaries need core-owned public profile names and credit-denominated
-// order aggregates. Do not substitute external minor amounts or fabricated
-// balances/names merely to make the old route return a successful empty list.
+// Customers require both the Core projection and the encrypted extension notes
+// port. The base service remains unavailable until composition provides them.
 func (s *Service) ListCustomersWeb(ctx context.Context, token string, actor int64, q string, offset, limit int) ([]WebCustomer, error) {
-	if err := s.webActor(ctx, token, actor); err != nil {
-		return nil, err
-	}
-	return nil, store.ErrUnavailable
+	return s.listCustomersWeb(ctx, token, actor, q, offset, limit)
 }
 func (s *Service) SaveCustomerWeb(ctx context.Context, token string, actor, buyer int64, note string, tags []string, revision int64) error {
-	if err := s.webActor(ctx, token, actor); err != nil {
-		return err
-	}
-	return store.ErrUnavailable
+	return s.saveCustomerWeb(ctx, token, actor, buyer, note, tags, revision)
 }

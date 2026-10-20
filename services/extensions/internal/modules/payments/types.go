@@ -140,6 +140,7 @@ type Core interface {
 	LookupProof(context.Context, int64, Evidence) (ProofReceipt, error)
 	Credit(context.Context, int64, string, Evidence) (Receipt, error)
 	Hold(context.Context, string, int64, string, int64) (Receipt, error)
+	BeginRefundDispatch(context.Context, int64, string, string) (Receipt, error)
 	Commit(context.Context, int64, string, string, Evidence) (Receipt, error)
 	Release(context.Context, int64, string, string, Evidence) (Receipt, error)
 	ExternalRefund(context.Context, int64, string, Evidence) (Receipt, error)
@@ -236,13 +237,14 @@ const (
 )
 
 type Refund struct {
-	ID            string `json:"id"`
-	AmountMinor   int64  `json:"amount_minor"`
-	ProviderID    string `json:"provider_id,omitempty"`
-	HoldKey       string `json:"hold_key"`
-	HoldReceipt   string `json:"hold_receipt,omitempty"`
-	State         string `json:"state"`
-	ProviderState string `json:"provider_state,omitempty"`
+	ID              string `json:"id"`
+	AmountMinor     int64  `json:"amount_minor"`
+	ProviderID      string `json:"provider_id,omitempty"`
+	HoldKey         string `json:"hold_key"`
+	HoldReceipt     string `json:"hold_receipt,omitempty"`
+	DispatchReceipt string `json:"dispatch_receipt,omitempty"`
+	State           string `json:"state"`
+	ProviderState   string `json:"provider_state,omitempty"`
 	// Dispatch is unknown from the moment a refund write is claimed until the
 	// provider response is stored. A timeout keeps this value.
 	Dispatch string `json:"dispatch,omitempty"`
@@ -315,7 +317,7 @@ func (o Order) State() string {
 			if o.Credited() {
 				continue
 			}
-		case "lookup_hold", "refund_submit", "commit", "release", "external_refund":
+		case "lookup_hold", "refund_dispatch", "refund_submit", "commit", "release", "external_refund":
 			refund, exists := o.Refunds[job.RefundID]
 			// Signed provider status alone cannot free a hold. Only the
 			// completed Core result makes an older stopped job irrelevant.

@@ -152,6 +152,18 @@ func TestToolMarketDraftBodyKeepsExactSchemaNumbersAndCredits(t *testing.T) {
 		t.Fatal(rec.Code, f)
 	}
 }
+func TestToolMarketBuiltinPeerComesFromAcceptedConnection(t *testing.T) {
+	core, f := &authCore{}, &marketTransportFake{}
+	r := marketHTTP("POST", "/api/tool-market/invoke", `{}`, true)
+	r.RemoteAddr = "192.0.2.4:2345"
+	r.Header.Set("X-Forwarded-For", "203.0.113.9")
+	r.Header.Set("X-Real-IP", "203.0.113.10")
+	rec := httptest.NewRecorder()
+	marketMux(t, core, f).ServeHTTP(rec, r)
+	if rec.Code != 200 || f.request.ActualPeerIP != "192.0.2.4" {
+		t.Fatal("untrusted forwarding header supplied builtin peer", rec.Code, f.request.ActualPeerIP)
+	}
+}
 func TestToolMarketPaginationAndQueryAmbiguityRejectBeforeBusiness(t *testing.T) {
 	for _, path := range []string{"/api/tool-market?offset=-1", "/api/tool-market?limit=101", "/api/tool-market?offset=10001", "/api/tool-market?q=a&q=b", "/api/tool-market?limit=1&limit=2", "/api/tool-market?limit=wat", "/api/tool-market?unknown=x", "/api/tool-market/mine/services?offset=0&offset=1"} {
 		core, f := &authCore{}, &marketTransportFake{}
@@ -196,7 +208,7 @@ func TestToolMarketUnsupportedAndMissingModuleNeverReturnSuccessfulEmptyData(t *
 	}
 	core, f := &authCore{}, &marketTransportFake{}
 	rec := httptest.NewRecorder()
-	marketMux(t, core, f).ServeHTTP(rec, marketHTTP("GET", "/api/tool-market/calls", "", true))
+	marketMux(t, core, f).ServeHTTP(rec, marketHTTP("GET", "/api/tool-market/unsupported-path", "", true))
 	if rec.Code != 503 || f.businessCalls != 0 || f.authCalls != 1 {
 		t.Fatal(rec.Code, f)
 	}

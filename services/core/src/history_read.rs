@@ -272,6 +272,37 @@ impl HistoryStore {
         if !complete {
             return Err(HistoryError::Unavailable);
         }
+        if route != ReadRoute::Administrator {
+            // An archive-wide receipt proves neither this identity mapping nor
+            // that an unmapped credential has an empty history. Bind coverage
+            // to every source in this same read-only repeatable-read snapshot.
+            let covered: bool = sqlx::query_scalar(
+                r#"SELECT NOT EXISTS (
+                    SELECT 1 FROM core_history.sources s
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM core_history.scope_receipts p
+                        WHERE p.source_id=s.source_id AND p.user_id=$1
+                          AND p.owner_account_id=$2 AND p.token_id IS NULL
+                          AND p.complete AND p.source_archive_sha256=s.source_archive_sha256
+                          AND p.mapping_sha256=s.mapping_sha256
+                    ) OR ($3::bigint<>0 AND NOT EXISTS (
+                        SELECT 1 FROM core_history.scope_receipts p
+                        WHERE p.source_id=s.source_id AND p.user_id=$1
+                          AND p.owner_account_id=$2 AND p.token_id=$3
+                          AND p.complete AND p.source_archive_sha256=s.source_archive_sha256
+                          AND p.mapping_sha256=s.mapping_sha256
+                    ))
+                )"#,
+            )
+            .bind(user)
+            .bind(owner)
+            .bind(key)
+            .fetch_one(&mut *tx)
+            .await?;
+            if !covered {
+                return Err(HistoryError::Unavailable);
+            }
+        }
         let selection = Selection {
             user,
             owner,

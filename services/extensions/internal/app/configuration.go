@@ -17,23 +17,27 @@ import (
 const defaultConfigPath = "/etc/lmm.conf.d/extensions.toml"
 
 type GoConfig struct {
-	Version    int             `toml:"version"`
-	Host       HostConfig      `toml:"host"`
-	Core       CoreConfig      `toml:"core"`
-	Store      DatabaseConfig  `toml:"store"`
-	Support    DatabaseConfig  `toml:"support"`
-	Legal      LegalConfig     `toml:"legal"`
-	Assistant  AssistantConfig `toml:"assistant"`
-	Operations DatabaseConfig  `toml:"operations"`
-	Payments   PaymentsConfig  `toml:"payments"`
-	Scripts    ScriptConfig    `toml:"scripts"`
+	SupportCustomers SupportCustomersConfig `toml:"support_customers"`
+	ToolMarket       ToolMarketConfig       `toml:"toolmarket"`
+	Version          int                    `toml:"version"`
+	Host             HostConfig             `toml:"host"`
+	Core             CoreConfig             `toml:"core"`
+	Store            DatabaseConfig         `toml:"store"`
+	Support          DatabaseConfig         `toml:"support"`
+	Legal            LegalConfig            `toml:"legal"`
+	Assistant        AssistantConfig        `toml:"assistant"`
+	Operations       DatabaseConfig         `toml:"operations"`
+	Payments         PaymentsConfig         `toml:"payments"`
+	Scripts          ScriptConfig           `toml:"scripts"`
 }
 type HostConfig struct {
-	MaxInFlight int      `toml:"max_in_flight"`
-	Listen      string   `toml:"listen"`
-	TokenFile   string   `toml:"token_file"`
-	Modules     []string `toml:"modules"`
-	WebCompat   bool     `toml:"web_compat"`
+	LocalHTTP    bool     `toml:"local_http"`
+	PublicOrigin string   `toml:"public_origin"`
+	MaxInFlight  int      `toml:"max_in_flight"`
+	Listen       string   `toml:"listen"`
+	TokenFile    string   `toml:"token_file"`
+	Modules      []string `toml:"modules"`
+	WebCompat    bool     `toml:"web_compat"`
 }
 type CoreConfig struct {
 	Socket             string `toml:"socket"`
@@ -119,9 +123,9 @@ func LoadConfig(path string) (GoConfig, error) {
 	}
 	// The decoder's struct matching also accepts case variants. Only canonical
 	// names belong to this versioned operator contract.
-	allowed := map[string]bool{"version": true, "host": true, "host.listen": true, "host.token_file": true, "host.modules": true, "host.web_compat": true, "host.max_in_flight": true, "core": true, "core.socket": true, "core.identity_token_file": true, "core.commerce_token_file": true, "store": true, "store.database_name": true, "store.database_url_file": true, "support": true, "support.database_name": true, "support.database_url_file": true, "legal": true, "legal.config_file": true}
+	allowed := map[string]bool{"version": true, "host": true, "host.listen": true, "host.local_http": true, "host.public_origin": true, "host.token_file": true, "host.modules": true, "host.web_compat": true, "host.max_in_flight": true, "core": true, "core.socket": true, "core.identity_token_file": true, "core.commerce_token_file": true, "store": true, "store.database_name": true, "store.database_url_file": true, "support": true, "support.database_name": true, "support.database_url_file": true, "legal": true, "legal.config_file": true}
 	for _, key := range meta.Keys() {
-		if paymentConfigurationKey(key.String()) {
+		if paymentConfigurationKey(key.String()) || toolMarketConfigurationKey(key.String()) || supportCustomersConfigurationKey(key.String()) {
 			continue
 		}
 		switch key.String() {
@@ -166,6 +170,15 @@ func LoadConfig(path string) (GoConfig, error) {
 		if cfg.Scripts.Root == "" || cfg.Scripts.Manifest == nil {
 			return cfg, errors.New("configure both scripts root and an explicit reviewed manifest")
 		}
+	}
+	if err := validateSupportCustomersConfiguration(cfg); err != nil {
+		return cfg, err
+	}
+	if err := validateHostProfile(cfg); err != nil {
+		return cfg, err
+	}
+	if err := validateToolMarketConfiguration(cfg); err != nil {
+		return cfg, err
 	}
 	if err := validateAssistantConfiguration(cfg); err != nil {
 		return cfg, err

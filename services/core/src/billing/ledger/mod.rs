@@ -17,6 +17,11 @@ pub const SCHEMA: &str = include_str!("../../../schema/ledger.sql");
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
+    /// Core promotional grant only. Never represents an external payment.
+    Gift {
+        account_id: i64,
+        amount_units: Credits,
+    },
     Credit {
         account_id: i64,
         amount_units: Credits,
@@ -45,6 +50,16 @@ pub enum Action {
         reservation_journal_id: i64,
         destination_account_id: i64,
         amount_units: Credits,
+    },
+    /// Finalize one tool-market hold to its frozen seller and platform fee.
+    /// The ledger floors amount*bps/10000 and returns all unused hold to its
+    /// original payer; no transfer from the seller's newly received wallet.
+    SplitCommerceCapture {
+        reservation_journal_id: i64,
+        seller_account_id: i64,
+        platform_account_id: i64,
+        amount_units: Credits,
+        fee_basis_points: i64,
     },
     /// Claim only positive affiliate entitlement; receiving wallet debt is paid first.
     ClaimAffiliate {
@@ -120,7 +135,11 @@ impl Request {
                     && from_account_id != to_account_id
                     && positive(*amount_units)
             }
-            Action::Charge {
+            Action::Gift {
+                account_id,
+                amount_units,
+            }
+            | Action::Charge {
                 account_id,
                 amount_units,
             }
@@ -132,6 +151,19 @@ impl Request {
                 account_id,
                 amount_units,
             } => *account_id > 0 && positive(*amount_units),
+            Action::SplitCommerceCapture {
+                reservation_journal_id,
+                seller_account_id,
+                platform_account_id,
+                amount_units: _,
+                fee_basis_points,
+            } => {
+                self.scope == "core-tool-market-credit"
+                    && *reservation_journal_id > 0
+                    && *seller_account_id > 0
+                    && *platform_account_id > 0
+                    && (0..=10_000).contains(fee_basis_points)
+            }
             Action::CommerceCapture {
                 reservation_journal_id,
                 destination_account_id,

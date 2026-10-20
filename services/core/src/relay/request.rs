@@ -226,16 +226,31 @@ fn text_blocks(v: &Value, assistant: bool) -> Result<Vec<InputBlock>, RelayError
 impl Request {
     pub fn parse(client: ClientProtocol, body: &[u8], limits: &Limits) -> Result<Self, RelayError> {
         limits.validate()?;
+        if client == ClientProtocol::Anthropic {
+            let mut request = super::native_anthropic::parse(body, limits)?;
+            request.client = client;
+            return Ok(request);
+        }
+        if client == ClientProtocol::Gemini {
+            return Err(RelayError::Invalid(
+                "native Gemini requires its path model and operation",
+            ));
+        }
         if body.len() > limits.request_bytes {
             return Err(RelayError::Limit("request body"));
         }
+        let client = match client {
+            ClientProtocol::Chat => ClientProtocol::Chat,
+            ClientProtocol::Responses => ClientProtocol::Responses,
+            _ => unreachable!("native request dispatched above"),
+        };
         let v = Value::Object(
             serde_json::from_slice::<RequestObject>(body)
                 .map_err(|_| RelayError::Invalid("invalid or ambiguous JSON body"))?
                 .0,
         );
         match client {
-            ClientProtocol::Chat => keys(
+            ClientProtocol::Chat | ClientProtocol::Anthropic | ClientProtocol::Gemini => keys(
                 &v,
                 &[
                     "model",
@@ -333,7 +348,7 @@ impl Request {
                     return Err(RelayError::Unsupported("only function tools are supported"));
                 }
                 let f = match client {
-                    ClientProtocol::Chat => {
+                    ClientProtocol::Chat | ClientProtocol::Anthropic | ClientProtocol::Gemini => {
                         keys(t, &["type", "function"])?;
                         &t["function"]
                     }
@@ -375,7 +390,7 @@ impl Request {
                     return Err(RelayError::Unsupported("unsupported tool choice"));
                 }
                 let n = match client {
-                    ClientProtocol::Chat => {
+                    ClientProtocol::Chat | ClientProtocol::Anthropic | ClientProtocol::Gemini => {
                         keys(t, &["type", "function"])?;
                         keys(&t["function"], &["name"])?;
                         &t["function"]["name"]
@@ -396,7 +411,7 @@ impl Request {
             return Err(RelayError::Invalid("tool choice requires tools"));
         }
         let reasoning_effort = match client {
-            ClientProtocol::Chat => v
+            ClientProtocol::Chat | ClientProtocol::Anthropic | ClientProtocol::Gemini => v
                 .get("reasoning_effort")
                 .filter(|v| !v.is_null())
                 .map(string)
@@ -424,7 +439,7 @@ impl Request {
             });
         }
         match client {
-            ClientProtocol::Chat => {
+            ClientProtocol::Chat | ClientProtocol::Anthropic | ClientProtocol::Gemini => {
                 for m in v["messages"]
                     .as_array()
                     .ok_or(RelayError::Invalid("messages must be an array"))?

@@ -37,6 +37,21 @@ CREATE TABLE core_history.log_records (
 CREATE INDEX history_user_time ON core_history.log_records(user_id,owner_account_id,created_at DESC,source_id DESC,source_log_id DESC);
 CREATE INDEX history_token_time ON core_history.log_records(token_id,created_at DESC,source_id DESC,source_log_id DESC);
 CREATE INDEX history_time ON core_history.log_records(created_at DESC,source_id DESC,source_log_id DESC);
+-- Offline reviewed coverage includes mapped entities with no historical rows.
+-- NULL token_id is user/account coverage; key reads additionally require their
+-- exact credential mapping. Runtime receives SELECT only, never INSERT rights.
+CREATE TABLE core_history.scope_receipts (
+  source_id bigint NOT NULL REFERENCES core_history.sources(source_id),
+  user_id bigint NOT NULL REFERENCES core_identity.users(id),
+  owner_account_id bigint NOT NULL REFERENCES core_identity.accounts(id),
+  token_id bigint REFERENCES core_identity.credentials(id),
+  source_archive_sha256 text NOT NULL CHECK(source_archive_sha256 ~ '^[0-9a-f]{64}$'),
+  mapping_sha256 text NOT NULL CHECK(mapping_sha256 ~ '^[0-9a-f]{64}$'),
+  source_scope_sha256 text NOT NULL CHECK(source_scope_sha256 ~ '^[0-9a-f]{64}$'),
+  complete boolean NOT NULL,
+  UNIQUE NULLS NOT DISTINCT(source_id,user_id,owner_account_id,token_id)
+);
+CREATE INDEX history_scope_lookup ON core_history.scope_receipts(user_id,owner_account_id,token_id,source_id);
 REVOKE ALL ON SCHEMA core_history FROM PUBLIC;
 REVOKE ALL ON ALL TABLES IN SCHEMA core_history FROM PUBLIC;
 REVOKE ALL ON ALL SEQUENCES IN SCHEMA core_history FROM PUBLIC;

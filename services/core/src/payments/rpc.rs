@@ -51,7 +51,7 @@ fn status(error: Error) -> Status {
 }
 impl PaymentsRpc {
     /// Advertise only explicitly granted and implemented operations. A mounted
-    /// service is not authority, and failed-refund release remains unavailable.
+    /// service is not authority; dispatch and release still require a bound hold.
     pub fn features(&self) -> Vec<String> {
         let p = self.permissions;
         [
@@ -60,6 +60,8 @@ impl PaymentsRpc {
             (p.prepare, "payments.topup.prepare"),
             (p.credit_evidence, "payments.topup.credit"),
             (p.refund_user, "payments.refund.hold"),
+            (p.refund_evidence, "payments.refund.dispatch"),
+            (p.refund_evidence, "payments.refund.release"),
             (p.refund_evidence, "payments.refund.commit"),
             (p.refund_evidence, "payments.refund.external"),
             (p.read_user, "payments.receipt.read"),
@@ -165,6 +167,14 @@ impl pb::core_payments_server::CorePayments for PaymentsRpc {
         self.check(request.metadata(), self.permissions.refund_user)?;
         let user = single(request.metadata(), "x-lmm-user-credential")?.to_owned();
         self.bounded(self.store.hold(&user, request.into_inner()))
+            .await
+    }
+    async fn begin_refund_dispatch(
+        &self,
+        request: Request<pb::ResolveRefundRequest>,
+    ) -> Result<Response<pb::PaymentReceipt>, Status> {
+        self.check(request.metadata(), self.permissions.refund_evidence)?;
+        self.bounded(self.store.begin_refund_dispatch(request.into_inner()))
             .await
     }
     async fn commit_refund(

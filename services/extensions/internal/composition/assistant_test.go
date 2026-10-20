@@ -13,7 +13,7 @@ func TestAssistantMissingCredentialLeavesReservationAndModelUnavailable(t *testi
 	if err := r.composeAssistantDelegation(context.Background(), Config{}, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if r.AssistantPending != nil || r.AssistantTurns != nil || r.AssistantModelClient != nil {
+	if r.AssistantPending != nil || r.AssistantTurns != nil || r.AssistantModelClient != nil || r.AssistantChat != nil {
 		t.Fatal("missing credential enabled an assistant port")
 	}
 	if token, err := loadAssistantCredential(Config{}, nil, nil, nil); err != nil || len(token) != 0 {

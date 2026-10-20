@@ -48,7 +48,7 @@ func (m *Module) dispatch(ctx context.Context, p Principal, credential, action s
 	case "releases/create":
 		return apply(raw, func(v ReleaseInput) (any, error) { return m.release(p, v) }, "server", "version", "prices")
 	case "releases/publish":
-		return apply(raw, func(v PublishInput) (any, error) { return ok(m.publish(p, v)) }, "release", "published")
+		return apply(raw, func(v PublishInput) (any, error) { return ok(m.publishAuthorized(ctx, p, credential, v)) }, "release", "published")
 	case "installations/create":
 		return apply(raw, func(v InstallInput) (any, error) { return m.install(p, v) }, "release")
 	case "installations/enable":
@@ -81,6 +81,12 @@ func (m *Module) dispatch(ctx context.Context, p Principal, credential, action s
 		return apply(raw, func(v GrantInput) (any, error) { return m.grantStatus(p, v.Grant) }, "grant")
 	case "meta/execute":
 		return apply(raw, func(v ExecuteInput) (any, error) { return m.execute(ctx, p, credential, v) }, "installation", "name", "handle", "quote", "grant", "idempotency_key", "arguments")
+	case "executions/cancel":
+		return apply(raw, func(v struct {
+			Key string `json:"idempotency_key"`
+		}) (any, error) {
+			return m.cancelExecution(ctx, p, credential, v.Key)
+		}, "idempotency_key")
 	case "executions/status":
 		return apply(raw, func(v struct {
 			Key string `json:"idempotency_key"`
@@ -115,7 +121,7 @@ func permission(action string) string {
 	switch action {
 	case "meta/search", "meta/details", "meta/load", "catalog", "installations/list", "executions/status", "grants/status", "mcp":
 		return "toolmarket.read"
-	case "meta/execute":
+	case "meta/execute", "executions/cancel":
 		return "toolmarket.execute"
 	case "oauth/start", "oauth/callback", "oauth/refresh", "credentials/key", "credentials/revoke", "grants/preview", "grants/confirm", "grants/revoke":
 		return "toolmarket.authorize"
@@ -186,6 +192,11 @@ func respond(w http.ResponseWriter, v any, e error) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 func cookieName(state string) string { return "__Host-lmm-mcp-" + digest(state)[:24] }
+
+// ToolMarketRuntimeHandler exposes the native contract through a verified Web
+// adapter. WebOnly modules still refuse every operation inside Handler.
+func (m *Module) ToolMarketRuntimeHandler() http.Handler { return m.Handler() }
+
 func (m *Module) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if m.webOnly {

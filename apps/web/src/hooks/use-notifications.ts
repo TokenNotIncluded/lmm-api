@@ -31,7 +31,10 @@ import {
   markBountyNotificationsRead,
   thankBountyTip,
 } from '@/features/open-source-bounties/api'
-import type { BountyNotification } from '@/features/open-source-bounties/types'
+import type {
+  BountyId,
+  BountyNotification,
+} from '@/features/open-source-bounties/types'
 import {
   listRatioNotifications,
   ratioAnnouncement,
@@ -89,7 +92,7 @@ export function useNotifications() {
   const userId = authUser?.id ?? 0
   const [popoverOpen, setPopoverOpen] = useState(false)
   const [activeTab, setActiveTab] = useState<NotificationTab>('notice')
-  const [thankingTipId, setThankingTipId] = useState(0)
+  const [thankingTipId, setThankingTipId] = useState<BountyId>(0)
 
   // Fetch Notice from API
   const {
@@ -273,7 +276,7 @@ export function useNotifications() {
     }
   }
 
-  const handleThankTip = async (tipId: number) => {
+  const handleThankTip = async (tipId: BountyId) => {
     if (!bountyNotificationsEnabled) return
 
     setThankingTipId(tipId)

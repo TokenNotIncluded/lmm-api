@@ -614,6 +614,7 @@ async fn output_checkpoint_exact_replay_conflict_worker_binding_and_immutability
         id: request_id.into(),
         fingerprint: [17; 32],
         price: ChargingPrice {
+            image: None,
             upstream_cost_group_ppm: None,
             version: "synthetic-checkpoint-v1".into(),
             model: "local-model".into(),
@@ -649,6 +650,7 @@ async fn output_checkpoint_exact_replay_conflict_worker_binding_and_immutability
             request_id,
             &worker,
             ChargingUsage {
+                image: None,
                 upstream_cost_atto_usd: None,
                 input: 10,
                 cached: 2,

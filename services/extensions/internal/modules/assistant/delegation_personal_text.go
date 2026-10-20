@@ -46,6 +46,8 @@ type PersonalTextOperation struct {
 	Status          string              `json:"status"`
 	ReservedCredits int64               `json:"reserved_credits"`
 	SettledCredits  *int64              `json:"settled_credits"`
+	AnswerText      *string             `json:"answer_text,omitempty"`
+	GiftReceipt     *GiftReceipt        `json:"gift_receipt,omitempty"`
 }
 
 func validPersonalTextGrant(g PersonalTextGrant) bool {
@@ -73,12 +75,20 @@ func checkedPersonalTextOperation(expected PersonalTextBinding, receipt Personal
 	}
 	switch receipt.Status {
 	case "reserved", "streaming", "released", "unknown":
-		if receipt.SettledCredits != nil {
+		if receipt.SettledCredits != nil || receipt.AnswerText != nil || receipt.GiftReceipt != nil {
 			return PersonalTextOperation{}, access.ErrUnavailable
 		}
 	case "settled":
 		if receipt.SettledCredits == nil || *receipt.SettledCredits < 0 || *receipt.SettledCredits > receipt.ReservedCredits {
 			return PersonalTextOperation{}, access.ErrUnavailable
+		}
+		if receipt.AnswerText != nil && (!utf8.ValidString(*receipt.AnswerText) || len(*receipt.AnswerText) == 0 || len(*receipt.AnswerText) > 32768) {
+			return PersonalTextOperation{}, access.ErrUnavailable
+		}
+		if receipt.GiftReceipt != nil {
+			if _, err := checkedGift(receipt.GiftReceipt.OwnerUserID, *receipt.GiftReceipt); err != nil {
+				return PersonalTextOperation{}, access.ErrUnavailable
+			}
 		}
 	default:
 		return PersonalTextOperation{}, access.ErrUnavailable

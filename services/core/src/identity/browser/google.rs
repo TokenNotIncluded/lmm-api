@@ -23,12 +23,18 @@ impl BrowserAuth {
         code: &str,
         metadata: &BrowserSessionMetadata,
     ) -> BrowserResult<BrowserBundle> {
-        let subject = self
+        let identity = self
             .store
             .exchange_google_code(state, &self.google_binding(binding)?, code)
             .await?;
         let mut tx = self.store.pool.begin().await?;
-        let user = self.store.google_user(&mut tx, &subject).await?;
+        let source = metadata.ip.parse().ok().map(|address| {
+            crate::abuse::registration::RegistrationSource {
+                address,
+                kind: crate::abuse::registration::RegistrationSourceKind::Socket,
+            }
+        });
+        let user = self.store.google_user(&mut tx, &identity, source).await?;
         // Native provider-only identities may not yet have a Web profile. Do
         // not overwrite existing imported profiles or link by provider email.
         let username = format!("g_{}", &new_secret("")?[..18]);

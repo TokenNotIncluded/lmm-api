@@ -22,9 +22,14 @@ import { z } from 'zod'
 
 import { OpenSourceBounties } from '@/features/open-source-bounties'
 
+const bountyId = z.union([
+  z.number().int().positive(),
+  z.string().regex(/^[A-Za-z0-9_.:-]{1,128}$/),
+])
+
 const bountySearchSchema = z.object({
-  projectId: z.number().int().positive().optional(),
-  challengeId: z.number().int().positive().optional(),
+  projectId: bountyId.optional(),
+  challengeId: bountyId.optional(),
 })
 
 export const Route = createFileRoute('/_authenticated/open-source-bounties/')({

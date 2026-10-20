@@ -90,6 +90,7 @@ pub struct Capabilities {
     pub identity: bool,
     pub legacy_web_auth: bool,
     pub console: bool,
+    pub humangrant: bool,
     pub models: bool,
     pub models_streaming: bool,
     pub events: bool,

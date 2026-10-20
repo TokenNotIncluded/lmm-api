@@ -47,6 +47,7 @@ import {
   parseAssistantToolErrorCode,
   type AssistantToolErrorCode,
 } from './assistant-tool-errors'
+import { continueAssistantResponse } from './assistant-turn-recovery'
 import {
   parseAssistantVisualization,
   type AssistantVisualization,
@@ -59,6 +60,7 @@ import {
   type AssistantWorkspaceAction,
 } from './assistant-workspace-contract'
 import { getGuideEligibleModels } from './setup-guide'
+export { AssistantTurnContinuationError } from './assistant-turn-recovery'
 
 export type {
   AssistantKeyManagementAction,
@@ -1611,7 +1613,7 @@ async function sendAssistantMessageStream(
   const authHeaders =
     auth.user && auth.session ? await getFreshAuthHeaders() : getCommonHeaders()
   throwIfAssistantAborted(signal)
-  const response = await fetch('/api/assistant/chat', {
+  let response = await fetch('/api/assistant/chat', {
     method: 'POST',
     credentials: 'include',
     headers: {
@@ -1623,6 +1625,14 @@ async function sendAssistantMessageStream(
     signal,
     body: JSON.stringify(body),
   })
+
+  if (response.status === 202) {
+    response = await continueAssistantJSONResponse(
+      response,
+      typeof body.client_turn_id === 'string' ? body.client_turn_id : undefined,
+      signal
+    )
+  }
 
   const payload = response.ok
     ? undefined
@@ -1666,6 +1676,51 @@ async function sendAssistantMessageStream(
     streamedPayload,
     response.headers.get('x-lmm-assistant-intent')
   )
+}
+
+async function continueAssistantJSONResponse(
+  response: Response,
+  turnId: string | undefined,
+  signal?: AbortSignal
+): Promise<Response> {
+  const result = await continueAssistantResponse(
+    response,
+    turnId,
+    async (method, path) => {
+      const auth = useAuthStore.getState().auth
+      const headers =
+        auth.user && auth.session
+          ? await getFreshAuthHeaders()
+          : getCommonHeaders()
+      throwIfAssistantAborted(signal)
+      return fetch(path, {
+        method,
+        credentials: 'include',
+        headers: {
+          ...headers,
+          'Content-Type': 'application/json',
+          'X-LMM-Credit-Unit': '500000',
+        },
+        signal,
+        ...(method === 'POST' ? { body: '{}' } : {}),
+      })
+    },
+    signal
+  )
+  if (!result.ok) {
+    const payload = await readAssistantFetchPayload(result)
+    // Once the server issued an identity, an error cannot authorize a new chat
+    // attempt. A user retry retains this original client turn identifier.
+    throw new AssistantStreamError(
+      result.status,
+      payload,
+      payload.error?.message ||
+        payload.message ||
+        'Assistant request did not complete',
+      false
+    )
+  }
+  return result
 }
 
 export async function sendAssistantMessage(
@@ -1718,6 +1773,17 @@ export async function sendAssistantMessage(
           }
         )
         throwIfAssistantAborted(signal)
+        if (response.status === 202) {
+          const continued = await continueAssistantJSONResponse(
+            new Response(JSON.stringify(response.data), { status: 202 }),
+            clientTurnId,
+            signal
+          )
+          return buildAssistantReply(
+            await readAssistantFetchPayload(continued),
+            continued.headers.get('x-lmm-assistant-intent')
+          )
+        }
         return buildAssistantReply(
           response.data,
           response.headers['x-lmm-assistant-intent']

@@ -52,6 +52,12 @@ type ConfirmationAuthority interface {
 	VerifyToolConfirmation(context.Context, string, ConfirmationIntent) (ConfirmationEvidence, error)
 }
 
+// GrantRevoker revokes the original Core consent before recording local revoke.
+// A lost acknowledgement leaves the caller able to retry the same approval.
+type GrantRevoker interface {
+	RevokeToolApproval(context.Context, string, Principal, string) error
+}
+
 func confirmationIntent(g ExecutionGrant) ConfirmationIntent {
 	return ConfirmationIntent{
 		Audience: ConfirmationAudience, Grant: g.ID, Owner: g.Owner,

@@ -313,6 +313,10 @@ fn input(client: ClientProtocol, stream: bool) -> Value {
             tool["type"] = json!("function");
             json!({"model":"public-model","input":"hello","stream":stream,"tools":[tool]})
         }
+
+        ClientProtocol::Anthropic | ClientProtocol::Gemini => {
+            unreachable!("native clients require native fixtures")
+        }
     }
 }
 fn request(client: ClientProtocol, stream: bool, l: &Limits) -> Request {
@@ -570,6 +574,10 @@ fn assert_output(client: ClientProtocol, stream: bool, body: &str) {
                 assert_eq!(last["response"]["output"][2]["call_id"], "call_1");
                 assert_ne!(last["response"]["output"][2]["id"], "call_1");
             }
+
+            ClientProtocol::Anthropic | ClientProtocol::Gemini => {
+                unreachable!("native clients require native fixtures")
+            }
         }
         assert_eq!(text, "鲸鱼");
         assert_eq!(thinking, "think");
@@ -600,6 +608,10 @@ fn assert_output(client: ClientProtocol, stream: bool, body: &str) {
                 assert_eq!(v["usage"]["input_tokens"], 10);
                 assert_eq!(v["usage"]["output_tokens"], 5);
                 v["output"][2]["arguments"].as_str().unwrap()
+            }
+
+            ClientProtocol::Anthropic | ClientProtocol::Gemini => {
+                unreachable!("native clients require native fixtures")
             }
         };
         assert_eq!(

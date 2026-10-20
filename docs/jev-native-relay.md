@@ -1,49 +1,41 @@
 # Native TypeSafe Jev relay
 
-The Go backend exposes Jev's synchronous decision API directly. It follows the
-[official TypeSafe plugin 1.0.0](https://github.com/QuantumNous/new-api-plugins/blob/97a16e9a8d98b73ffb76e1c5a00b4d0f855f4d0a/plugins/tasks/typesafe/1.0.0/plugin.js)
-contract without installing a JavaScript plugin host. Rust remains a preview
-backend and does not implement this provider.
+Rust Core owns the synchronous System One relay, authentication, routing and
+charging. Structured decisions do not enter a Chat Completions adapter or a
+JavaScript plugin host. The historical Go relay is not the WIP implementation.
 
-## Configure a channel
+## Models and configuration
 
-Create a **TypeSafe (Jev)** channel, enter the provider API key, select the
-appropriate group, and enable any of these models:
+The Web TypeSafe choices are `jev-1.14.0`, `jev-1.13.0`, `jev-latest` and
+`jev-preview`. The [official model page](https://docs.typesafe.ai/models), checked
+2026-10-21, still maps `jev-latest` to 1.13.0 and `jev-preview` to 1.14.0.
+Versioned IDs remain valid even when the provider list returns only aliases.
 
-- `jev-1.13.0`
-- `jev-latest`
-- `jev-preview`
+Core uses explicit model configuration: upstream `protocol = "system_one"`, a
+private credential file, enabled group/route/target, mapped upstream model and
+reviewed frozen prices. The provider base is `https://api.typesafe.ai`; a base
+ending in `/v1` is also accepted. Path prefixes are preserved when appending
+`systemone`. Customers cannot supply an upstream URL, provider key, payer or price.
 
-The default upstream is `https://api.typesafe.ai`. A trailing `/v1` in the
-configured address is accepted. Local channel type 62 identifies TypeSafe;
-type 61 is reserved for historical OpenHuman records. OpenHuman creation and relay support have been removed; existing records are never renumbered or converted automatically.
-
-For a second New API or LMM gateway, use **Compatible Relay** (type 60) and
-that gateway's base URL and API token. Jev requests on this channel use the
-upstream `/typesafe/v1/systemone` path. Native TypeSafe channels instead use
-the provider's `/v1/systemone` path. Model mappings can expose a local alias
-that resolves to one of the three supported Jev model IDs.
-
-Use the channel test's **Judgment** endpoint. This sends a small structured
-decision request; Jev does not support streaming or Chat Completions.
+The Web compatibility identifier remains channel type 62; historical OpenHuman
+61 is never renumbered. These UI identifiers do not replace Core configuration.
+Native catalog API name `system-one`, legacy Web endpoint name `systemone` and
+routing value `system_one` are separate contracts requiring explicit mapping.
 
 ## Call the API
 
-Both routes accept the same JSON body and normal LMM API token:
-
-- `POST /v1/systemone`
-- `POST /typesafe/v1/systemone`
-
-For a TypeSafe SDK that appends `/v1/systemone`, set its base URL to either
-`https://YOUR_GATEWAY` or `https://YOUR_GATEWAY/typesafe`.
+Both `POST /v1/systemone` and `POST /typesafe/v1/systemone` accept a Core API key
+in `Authorization: Bearer`. Current model, group and peer restrictions apply.
+Session credentials and existing Pi/model OAuth grants are rejected before a
+hold or provider call. The endpoint is synchronous and does not support streaming.
 
 ```sh
 curl https://YOUR_GATEWAY/v1/systemone \
-  -H 'Authorization: Bearer YOUR_LMM_TOKEN' \
+  -H 'Authorization: Bearer YOUR_LMM_API_KEY' \
   -H 'Content-Type: application/json' \
   -d '{
-    "model": "jev-1.13.0",
-    "state": "The customer asks to reset a forgotten password.",
+    "model": "jev-1.14.0",
+    "state": {"message": "The customer asks to reset a forgotten password."},
     "questions": {
       "account_support": {
         "type": "noul",
@@ -53,61 +45,83 @@ curl https://YOUR_GATEWAY/v1/systemone \
   }'
 ```
 
-`state` is required and accepts text, a JSON object or array, or `null`.
-`questions` is a nonempty object of
-named `noul`, `choice`, or `score` questions. Choice questions need 1–255
-named criteria in an object; score questions need an array of 2–10 ordered
-criteria. Instructions can be
-text or structured JSON. Only `model`, `state`, and `questions` are forwarded.
-`stream` may be omitted or `false`; `true` is rejected before provider work.
-The response preserves the provider's `model`, `answers`, `usage`, and other
-response fields. Each requested question must have an answer of the matching
-type. See the [provider API reference](https://docs.typesafe.ai/api) for the
-question and answer formats.
+The native body preserves structured `state`, named questions and optional
+`assets`. Types are `noul`, `choice`, `score` and `box`. Choice uses an object of
+criteria; score uses an ordered criteria array. Box has no criteria and needs
+image input. Answer checks include matching types, probabilities, score legend
+and nonzero Box geometry. JSON numbers retain precision and ordinary user keys;
+duplicate keys and nonfinite values are rejected.
 
-Both paths use the normal token authentication, model restrictions, request
-admission, model rate limits, group/channel routing, model mappings, prompt
-security checks, and billing owners. Existing OAuth grants remain limited to
-their supported APIs; this change does not extend OAuth scopes to Jev.
+For SDK decision methods, set the base URL to `https://YOUR_GATEWAY` or
+`https://YOUR_GATEWAY/typesafe` and supply the model explicitly. **The gateway's
+`/v1/models` keeps its OpenAI-shaped response. The TypeSafe SDK `models.list()`
+contract is not implemented.** Successful decisions do not prove list compatibility.
 
-## Billing and existing installations
+## Images and long context
 
-The checked provider price on 2026-10-04 is **$0.042 per million input tokens**,
-with no output-token charge. The model ratio defaults are `0.021` for each Jev
-model (`1` means $2 per million tokens), and the default completion ratio is
-`0`. These are configurable gateway defaults, not a production pricing update.
-See [TypeSafe's current prices](https://docs.typesafe.ai/models).
+Images require `TypeSafe-Danger-Zone-Images: true` on each request. Box requires
+Jev 1.14 (the explicit version or corresponding preview) and actual image input.
+Assets accept inline `data_base64` with PNG/JPEG format or a multipart part
+reference. Multipart begins with the JSON `request` part, `application/json`;
+unique image parts must match asset references one to one. References occur in
+string values, including nested state/instructions, never object keys.
 
-Existing installations with saved ratio maps must add these entries through
-their normal model-pricing settings. Loading this implementation does not
-rewrite stored prices or remove model price locks. Local aliases also require
-their own gateway pricing. Deliberately configured per-request prices and
-tiered expressions retain their usual meaning.
+Wire and decompressed bodies are each capped at 32 MiB. Each base64-decoded or
+uploaded image file is capped at 16 MiB. Local checks inspect PNG/JPEG headers
+and dimensions 280..1568 and reject animated PNG. Full image decoding and the
+provider's re-encoded image and expanded-reference limits remain provider
+checks. Raw bytes multiplied by reference count do not prove processed size.
+See the [official image contract](https://docs.typesafe.ai/images).
 
-Before upstream work, billing reserves the configured price for 65,536 input
-tokens and zero output tokens. A successful response with an integer
-`usage.input_tokens` in `0..65536` settles against that quantity. Explicit zero
-is accepted and settles to zero under ordinary input-token pricing. Missing,
-fractional, negative, or out-of-range input usage keeps the conservative
-reservation and marks the usage as estimated in the consume log; it is not
-treated as a free request. Upstream rejection or transport failure follows the
-normal relay error/refund lifecycle.
+Single-layer `gzip`, `x-gzip` and `zstd` are decoded before JSON/multipart parsing;
+zstd windows are capped at 8 MiB. Invalid, stacked and oversized encodings are
+rejected. This includes SDK compression of the entire multipart body. Parsing
+and decompression share a gate allowing at most two System One requests.
 
-Wallets, subscriptions, group ratios, price locks, token quotas, and usage logs
-continue to use the existing billing system. Failed response delivery does not
-replay completed upstream work. Test actual answers, usage, and account charges
-with an authorized provider account before treating mock validation as live
-provider acceptance.
+Long context also requires `TypeSafe-Danger-Zone-Long-Context: true` and a reviewed
+larger host reservation bound. A request header cannot raise the installed bound.
+The official `262k` abbreviation is not used to guess an exact reservation.
+External model contexts must match protocol, endpoint, model and contract revision,
+with `missing_cached_tokens_is_zero = true` for the System One usage contract.
 
-## Upstream provenance
+## Charging and failures
 
-This is a native implementation of the TypeSafe task plugin's behavior,
-reviewed at `QuantumNous/new-api-plugins` commit
-`97a16e9a8d98b73ffb76e1c5a00b4d0f855f4d0a` (plugin version `1.0.0`). The upstream
-plugin repository is Apache-2.0 licensed. No plugin engine, executable plugin
-source, registry, or plugin-channel numeric configuration is imported.
+The official price checked on 2026-10-21 is $0.042 per million input tokens;
+output is free. Images contribute input tokens, not an image-generation charge.
+These provider facts do not rewrite saved customer prices or price locks.
 
-Provider access and resale permissions are separate from software support.
-The [TypeSafe standard MCA](https://typesafe.ai/legal/mca) distinguishes
-customer applications from standalone resale; separate agreements can change
-the applicable terms.
+Core uses the installed frozen input-token tariff. Output, discounted-cache and
+per-request rates must be zero; unsupported dimensions are rejected. The WIP
+implementation does not restore historical expression pricing.
+
+The input reservation ceiling must be at least 65,536 tokens. Core reserves
+against the configured ceiling, validates the complete response and integer input
+usage within its reviewed bound, persists the terminal observation, then settles
+before returning answers. Nonzero output usage adds no output charge. Explicit
+zero input usage is distinct from missing or malformed usage.
+
+Invalid usage, incomplete responses and uncertain provider work keep the original
+hold for reconciliation. They are not treated as free requests or guessed success.
+Send a stable `Idempotency-Key` for an operation. Reusing it returns a conflict
+instead of resending upstream; omitting it creates a new operation per request.
+A disconnected caller does not stop the Core worker from recording the outcome.
+Draining tracks these workers. Responses use `Cache-Control: no-store`.
+
+## Evidence and provenance
+
+References are the [System One API](https://docs.typesafe.ai/api/system-one),
+OpenAPI and official SDKs. The 2026-10-20 OpenAPI snapshot SHA-256 is
+`ee599512cbea3a198b34af3f60addcd72b381d3521196f93c70ae83185c057c3`.
+Reviewed MIT SDKs: JavaScript 0.7.0 revision
+`b844cd1aca12855a5d24a2df52a1401c86e7d37a`; Python 0.7.5 revision
+`f36e68549ceca3191e5791e5f99ea1baa1a258b5`.
+
+Historical Go behavior came from Apache-2.0 TypeSafe 1.0.0 at
+`QuantumNous/new-api-plugins` revision
+`97a16e9a8d98b73ffb76e1c5a00b4d0f855f4d0a`; attribution is retained.
+No executable plugin source or task host is imported.
+
+Local synthetic-provider/PG tests prove only their tested routing and charging.
+Independent SDK acceptance, live provider acceptance and deployment acceptance
+are separate outcomes. Provider access/resale permissions are separate from
+software support; see the [TypeSafe MCA](https://typesafe.ai/legal/mca).

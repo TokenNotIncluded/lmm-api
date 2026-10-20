@@ -67,6 +67,12 @@ describe('native TypeSafe judgment channels', () => {
     const config = getChannelTypeConfig(CHANNEL_TYPE_TYPESAFE)
     assert.equal(config.defaultBaseUrl, 'https://api.typesafe.ai')
     assert.deepEqual(config.supportedModels, TYPESAFE_MODELS)
+    assert.deepEqual(TYPESAFE_MODELS, [
+      'jev-1.14.0',
+      'jev-1.13.0',
+      'jev-latest',
+      'jev-preview',
+    ])
   })
 
   test('saves a native channel while discarding stale OpenAI settings', () => {

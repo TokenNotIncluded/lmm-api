@@ -13,10 +13,6 @@ use sqlx::PgPool;
 
 async fn fixture(pool: &PgPool) -> IdentityStore {
     core_schema::init(pool).await.unwrap();
-    sqlx::raw_sql(include_str!("identity_history_source.sql"))
-        .execute(pool)
-        .await
-        .unwrap();
     sqlx::query("INSERT INTO core_history.sources(contract_version,source_archive_sha256,mapping_sha256,source_namespace,observed_at,complete) VALUES('core.history-source.v1',repeat('a',64),repeat('b',64),'independent-missing-lineage',1700000000,true)").execute(pool).await.unwrap();
     let has_global_source: bool =
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM core_history.sources WHERE complete)")

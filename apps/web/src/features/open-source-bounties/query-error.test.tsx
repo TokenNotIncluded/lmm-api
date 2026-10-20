@@ -257,6 +257,23 @@ test('bounty board distinguishes failed requests, retry, cached data and success
     })
     await flush()
     assert.ok(retryButton(), 'failed retry remains recoverable')
+    await act(async () => {
+      client.setQueryData(['open-source-bounties', 'config'], {
+        enabled: false,
+        code: 'policy_not_configured',
+        rate_basis_points: 0,
+        rate_percent: 0,
+      })
+    })
+    await flush()
+    const feeSummary =
+      container.querySelector('.bounty-funding-details summary')?.textContent ??
+      ''
+    assert.ok(
+      feeSummary.includes('Unavailable'),
+      'missing Core policy is unavailable, not a free fee'
+    )
+    assert.ok(!feeSummary.includes('0.00%'))
   } finally {
     await act(async () => root.unmount())
     client.clear()

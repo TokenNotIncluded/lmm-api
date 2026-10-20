@@ -88,7 +88,24 @@ impl CatalogSurface {
         credentials: &BTreeMap<(u64, u64), String>,
         total_timeout: Duration,
     ) -> Self {
-        Self::load(router, credentials, total_timeout).unwrap_or(Self {
+        Self::load(router, credentials, total_timeout, None).unwrap_or(Self {
+            state: SurfaceState::Disabled,
+        })
+    }
+    pub(super) fn from_gateway_with_provider_policy(
+        router: Arc<Router>,
+        credentials: &BTreeMap<(u64, u64), String>,
+        total_timeout: Duration,
+        policy: &super::ProviderPolicy,
+        reserved_input_tokens: i64,
+    ) -> Self {
+        Self::load(
+            router,
+            credentials,
+            total_timeout,
+            Some((policy, reserved_input_tokens)),
+        )
+        .unwrap_or(Self {
             state: SurfaceState::Disabled,
         })
     }
@@ -97,6 +114,7 @@ impl CatalogSurface {
         router: Arc<Router>,
         credentials: &BTreeMap<(u64, u64), String>,
         total_timeout: Duration,
+        provider_policy: Option<(&super::ProviderPolicy, i64)>,
     ) -> Result<Self, CatalogError> {
         // catalog_document takes one Arc snapshot, so config and prices cannot
         // come from different releases. It never consults the database pointer.
@@ -158,6 +176,7 @@ impl CatalogSurface {
                     let apis: Vec<_> = [
                         (Protocol::OpenAiChat, "openai-completions"),
                         (Protocol::OpenAiResponses, "openai-responses"),
+                        (Protocol::SystemOne, "system-one"),
                     ]
                     .into_iter()
                     .filter_map(|(client, label)| {
@@ -169,6 +188,7 @@ impl CatalogSurface {
                             credentials,
                             total_timeout,
                             quote,
+                            provider_policy,
                         )
                         .then_some(label)
                     })
@@ -297,6 +317,7 @@ fn api_supported(
     credentials: &BTreeMap<(u64, u64), String>,
     total_timeout: Duration,
     quote: PriceQuote,
+    provider_policy: Option<(&super::ProviderPolicy, i64)>,
 ) -> bool {
     // Health/operational stops can recover without publishing new config. Check
     // every potentially selectable target, including lower priority targets.
@@ -322,7 +343,35 @@ fn api_supported(
                     || t.upstream_model == route.model)
                 && credentials
                     .get(&(u.credential.id, u.credential.revision))
-                    .is_some_and(|secret| route_is_constructible(route, t, u, secret, quote))
+                    .is_some_and(|secret| {
+                        if client == Protocol::SystemOne {
+                            u.protocol == Protocol::SystemOne
+                                && t.payload == PayloadPolicy::Adapt
+                                && provider_policy.is_some_and(|(policy, bound)| {
+                                    bound >= 65_536
+                                        && policy
+                                            .validate_binding(
+                                                u.id,
+                                                &t.upstream_model,
+                                                u.protocol,
+                                                u.endpoint.as_str(),
+                                                bound,
+                                                0,
+                                            )
+                                            .is_ok()
+                                })
+                                && quote.billing_mode() == BillingMode::Tokens
+                                && quote.rates().output == 0
+                                && quote.rates().cache_read == 0
+                                && reqwest::header::HeaderValue::from_str(&format!(
+                                    "Bearer {secret}"
+                                ))
+                                .is_ok()
+                                && super::systemone::endpoint(u.endpoint.as_str()).is_ok()
+                        } else {
+                            route_is_constructible(route, t, u, secret, quote)
+                        }
+                    })
         })
 }
 

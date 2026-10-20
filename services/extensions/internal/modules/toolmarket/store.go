@@ -4,6 +4,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -17,13 +18,15 @@ import (
 // One writer process owns the file lock. There is no database DSN or core SQL.
 // The directory and 32-byte encryption key must be owned by this module only.
 type Store struct {
-	mu     sync.Mutex
-	data   database
-	path   string
-	aead   cipher.AEAD
-	lock   *os.File
-	closed bool
-	broken bool
+	virtualBuiltins bool
+	pg              *sql.DB
+	mu              sync.Mutex
+	data            database
+	path            string
+	aead            cipher.AEAD
+	lock            *os.File
+	closed          bool
+	broken          bool
 }
 
 // InitStore is an explicit fresh-install operation. It refuses an existing file.
@@ -158,6 +161,9 @@ func (s *Store) view(fn func(database) error) error {
 	if s.closed || s.broken {
 		return ErrUnavailable
 	}
+	if s.pg != nil {
+		return s.postgresTransaction(false, fn, nil)
+	}
 	// A deep copy prevents accidental mutation and races through returned maps.
 	b, e := json.Marshal(s.data)
 	if e != nil {
@@ -167,6 +173,9 @@ func (s *Store) view(fn func(database) error) error {
 	if e = json.Unmarshal(b, &d); e != nil {
 		return e
 	}
+	if s.virtualBuiltins {
+		overlayBuiltinCatalog(&d)
+	}
 	return fn(d)
 }
 func (s *Store) update(fn func(*database) error) error {
@@ -175,6 +184,9 @@ func (s *Store) update(fn func(*database) error) error {
 	if s.closed || s.broken {
 		return ErrUnavailable
 	}
+	if s.pg != nil {
+		return s.postgresTransaction(true, nil, fn)
+	}
 	b, e := json.Marshal(s.data)
 	if e != nil {
 		return e
@@ -182,6 +194,9 @@ func (s *Store) update(fn func(*database) error) error {
 	var next database
 	if e = json.Unmarshal(b, &next); e != nil {
 		return e
+	}
+	if s.virtualBuiltins {
+		overlayBuiltinCatalog(&next)
 	}
 	if e = fn(&next); e != nil {
 		return e

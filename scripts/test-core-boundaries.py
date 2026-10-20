@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline source boundaries. Runtime, database and Docker tests are separate."""
 import configparser
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -9,6 +10,21 @@ import tomllib
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+# Reviewed offline installer bodies are frozen independently of runtime pool
+# ownership. A change requires re-review of the complete owner operation, not
+# extending a runtime SQL allowlist. Comments/formatting do not change tokens.
+OFFLINE_INSTALLER = "services/extensions/internal/freshinstall/install.go"
+OFFLINE_CLI = "services/extensions/internal/freshinstall/cli.go"
+OFFLINE_MAIN = "services/extensions/cmd/extensions/main.go"
+OFFLINE_SNAPSHOT = "services/extensions/internal/modules/toolmarket/install_snapshot.go"
+OFFLINE_TOKEN_SHA256 = {
+    'services/extensions/internal/freshinstall/install.go': '3cc4e225cd6ee203cfc71f15c04bdc612d9bbec338d88180a55662cca5356b5b',
+    'services/extensions/internal/freshinstall/cli.go': 'c397c48d8511a735924a7c8ceaadbd02a7c0335c5d0eca635c59b0a3b3ce137e',
+    'services/extensions/cmd/extensions/main.go': 'b3f4d41bad0abb5c3b22211e5d968f99c6717ac773a93aba3404d028716345bd',
+    'services/extensions/internal/modules/toolmarket/install_snapshot.go': '8f6f852068a5891a490876eb8918a58008d3f80844144f84307ba78c36b56013',
+}
+COMPOSITION_BUNDLE = "services/extensions/internal/composition/storage_bundle.go"
+BUNDLE_POLICY_TOKEN_SHA256 = "0972b67a2190087fda3ebf1ecd3c47e50327089490348cbc0b6249f502f8d48b"
 COMPOSITION_STORAGE = "services/extensions/internal/composition/storage.go"
 COMPOSITION_PAYMENTS = "services/extensions/internal/composition/payments.go"
 COMPOSITION_ASSISTANT = "services/extensions/internal/composition/assistant.go"
@@ -17,6 +33,15 @@ OPERATIONS_RELEASES = "services/extensions/internal/modules/operations/releases.
 OPERATIONS_INJECTION = "services/extensions/internal/modules/operations/scripts.go"
 CORE_SCHEMAS = (
     "core_abuse.",
+    "core_assistant.",
+    "core_assistant_tools.",
+    "core_bounties.",
+    "core_gift.",
+    "core_humangrant.",
+    "core_image.",
+    "core_market_oauth.",
+    "core_tool_market.",
+    "core_wallet.",
     "core_billing.",
     "core_charging.",
     "core_commerce.",
@@ -35,8 +60,8 @@ CORE_SCHEMAS = (
 # Source guards are an offline contract only. The PostgreSQL role/schema/grant
 # mutations in composition/guards_integration_test.go require a real test DB.
 COMPOSITION_STORAGE_GUARDS = (
-    'regexp.MustCompile(`^lmm_(store|support|assistant|payments|operations)(_[a-z0-9]+)*$`)',
-    '(c.Component != "store" && c.Component != "support" && c.Component != "assistant" && c.Component != "payments" && c.Component != "operations")',
+    'regexp.MustCompile(`^lmm_(store|support|assistant|payments|operations|toolmarket)(_[a-z0-9]+)*$`)',
+    '(c.Component != "store" && c.Component != "support" && c.Component != "assistant" && c.Component != "payments" && c.Component != "operations" && c.Component != "toolmarket")',
     '!databaseName.MatchString(c.Database)',
     'strings.HasPrefix(c.Database, "lmm_"+c.Component)',
     'if err := c.validate(); err != nil',
@@ -50,7 +75,17 @@ COMPOSITION_STORAGE_GUARDS = (
     'context.WithTimeout(ctx, 3*time.Second)',
     'rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication',
     r"nspname LIKE 'core\_%' ESCAPE '\'",
-    r"nspname LIKE 'lmm\_%' ESCAPE '\' AND nspname <> $1",
+    r"nspname LIKE 'lmm\_%' ESCAPE '\' OR nspname='extension_wallet'",
+    r"($3 AND nspname NOT LIKE 'pg\_%' ESCAPE '\' AND nspname NOT IN ('public','information_schema'))",
+    'NOT(nspname=ANY($1::text[]))',
+    'pq.Array(policy.namespaces), c.Database, c.Component == "toolmarket"',
+    'for _, table := range policy.tables',
+    'for _, table := range policy.forbidden',
+    'for _, table := range policy.forbiddenColumns',
+    "has_any_column_privilege(current_user,to_regclass($1),$2)",
+    'err != nil || allowed',
+    'return nil, errors.New("extension bundled storage grants exceed runtime authority")',
+    'return nil, errors.New("extension bundled column grants exceed runtime authority")',
     "datname LIKE '%core%'",
     r"datname LIKE 'lmm\_%' ESCAPE '\' AND datname <> $2",
     "has_database_privilege(current_user,oid,'CONNECT')",
@@ -269,11 +304,89 @@ class CoreBoundaryTests(unittest.TestCase):
             self.assertIn(operation, identity)
         self.assertIn("corepb", identity)
 
+    def assert_borrowed_pool_not_closed(self, path, text):
+        if path == COMPOSITION_STORAGE:
+            return  # The sole pool owner closes it on startup failure/shutdown.
+        tokens = go_tokens(text)
+        if path in {
+            "services/extensions/internal/composition/runtime.go",
+            "services/extensions/internal/composition/payments.go",
+            "services/extensions/internal/composition/toolmarket.go",
+        }:
+            owned_close = go_tokens("r.close = append(r.close, db.Close)")
+            opens = sum(tokens[i:i+2] == ["openStorage", "("] or tokens[i:i+2] == ["openStorageBundle", "("] for i in range(len(tokens)-1))
+            self.assertGreater(opens, 0, path)
+            self.assertEqual(sum(tokens[i:i+len(owned_close)] == owned_close for i in range(len(tokens))), opens, path)
+            stripped = []
+            i = 0
+            while i < len(tokens):
+                if tokens[i:i+len(owned_close)] == owned_close:
+                    i += len(owned_close)
+                else:
+                    stripped.append(tokens[i]); i += 1
+            tokens = stripped
+        code = " ".join(t if not t.startswith(('"', "`", "'")) else "LITERAL" for t in tokens)
+        # Track common injected DB fields and any explicitly typed DB parameter,
+        # including aliases/method values. Rows returned by Query remain closable.
+        borrowed = {"db", "pg", "Database", "Releases"}
+        borrowed.update(re.findall(r"\b(\w+) \* sql \. DB\b", code))
+        for _ in range(len(tokens)):
+            aliases = set()
+            for name, rhs in re.findall(r"\b(\w+) (?:=|:=) (\w+(?: \. \w+)*)", code):
+                parts = rhs.strip().split(" . ")
+                if parts[-1] in borrowed:
+                    aliases.add(name)
+            if aliases <= borrowed:
+                break
+            borrowed.update(aliases)
+        for name in borrowed:
+            self.assertNotRegex(code, r"\b" + re.escape(name) + r" \. Close\b", path)
+
+    def assert_offline_installation_boundary(self, path, text):
+        imported = "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/freshinstall"
+        if path not in (OFFLINE_MAIN, OFFLINE_INSTALLER, OFFLINE_CLI):
+            self.assertNotIn(imported, text, path)
+            self.assertNotRegex(" ".join(go_tokens(text)), r"\bfreshinstall \.", path)
+            for owner_entry in ('"install-db"', '"owner-url-file"', 'OwnerURLFile'):
+                self.assertNotIn(owner_entry, go_tokens(text), path)
+        if path not in (OFFLINE_SNAPSHOT, OFFLINE_INSTALLER):
+            self.assertNotIn("InitPostgresSnapshot", text, path)
+        if path in OFFLINE_TOKEN_SHA256:
+            actual = hashlib.sha256(json.dumps(go_tokens(text), separators=(",", ":")).encode()).hexdigest()
+            self.assertEqual(actual, OFFLINE_TOKEN_SHA256[path], path + ": offline owner body needs independent review")
+            if path in (OFFLINE_MAIN, OFFLINE_INSTALLER, OFFLINE_CLI):
+                return True
+        return False
+
     def assert_extension_storage(self, path, text):
+        offline = self.assert_offline_installation_boundary(path, text)
+        tokens = go_tokens(text)
+        if path not in (COMPOSITION_STORAGE, "services/extensions/internal/composition/toolmarket.go"):
+            self.assertNotIn("openStorageBundle", tokens, path)
+        if path not in (COMPOSITION_STORAGE, COMPOSITION_BUNDLE, "services/extensions/internal/composition/toolmarket.go"):
+            self.assertNotIn("toolMarketBuiltinsBundle", tokens, path)
+        if path == COMPOSITION_BUNDLE:
+            actual = hashlib.sha256(json.dumps(tokens, separators=(",", ":")).encode()).hexdigest()
+            self.assertEqual(actual, BUNDLE_POLICY_TOKEN_SHA256, "complete storage bundle policy requires review")
+        if path == "services/extensions/internal/composition/toolmarket.go":
+            body = self.go_function_body(text, "func (r *Runtime) composeToolMarket(ctx context.Context, cfg Config, otherCredentials ...[]byte) error")
+            self.token_index(body, """
+                bundle := defaultStorageBundle
+                if cfg.ToolMarketBuiltins.configured() {
+                    bundle = toolMarketBuiltinsBundle
+                }
+                db, err := openStorageBundle(ctx, cfg.ToolMarket, bundle)
+            """)
+            self.assertEqual(tokens.count("openStorageBundle"), 1, path)
+            self.assertEqual(tokens.count("toolMarketBuiltinsBundle"), 1, path)
         # Borrowed pools can execute SQL from files without a database/sql import.
         # Check Core table access before any unregistered-file early return.
-        for schema in CORE_SCHEMAS:
-            self.assertNotRegex(text, r"(?i)\b(?:FROM|JOIN|UPDATE|INTO|TRUNCATE)\s+" + re.escape(schema), path)
+        # Include quoted/future Core schemas: a new registry entry cannot open
+        # a hole before this explicit catalogue is maintained.
+        self.assertNotRegex(text, r'(?i)\b(?:FROM|JOIN|UPDATE|INTO|TRUNCATE(?:\s+TABLE)?|REFERENCES|(?:ALTER|CREATE|DROP)\s+TABLE)\s+"?core_[a-z0-9_]+"?\s*\.', path)
+        if offline:
+            return  # Exact reviewed owner/CLI bodies; never a runtime exception.
+        self.assert_borrowed_pool_not_closed(path, text)
         stores = {
             "services/extensions/internal/coreclient/sqlinbox.go": "extension_events.",
             "services/extensions/internal/modules/store/postgres.go": "lmm_store.",
@@ -286,6 +399,19 @@ class CoreBoundaryTests(unittest.TestCase):
             "services/extensions/internal/modules/assistant/delegation_pending_postgres.go": "lmm_assistant.",
             "services/extensions/internal/modules/assistant/delegation_postgres.go": "lmm_assistant.",
             "services/extensions/internal/modules/promotions/postgres.go": "lmm_promotions.",
+            "services/extensions/internal/modules/toolmarket/postgres.go": "lmm_toolmarket.",
+            OFFLINE_SNAPSHOT: "lmm_toolmarket.",
+            "services/extensions/internal/modules/wallet/postgres.go": "extension_wallet.",
+            "services/extensions/internal/modules/bounties/postgres.go": "lmm_bounties.",
+            "services/extensions/internal/modules/assistant/agent_postgres.go": "lmm_assistant.",
+            "services/extensions/internal/modules/assistant/personalization/service.go": "lmm_assistant.",
+            "services/extensions/internal/modules/assistant_services/service.go": "lmm_assistant.",
+            "services/extensions/internal/modules/assistant_services/memory.go": "lmm_assistant.",
+            "services/extensions/internal/modules/assistant_services/confirmation.go": "lmm_assistant.",
+            "services/extensions/internal/modules/assistant_services/issues.go": "lmm_assistant.",
+            "services/extensions/internal/modules/assistant_services/platform_support.go": "lmm_assistant.",
+            "services/extensions/internal/modules/assistant_services/search.go": "lmm_assistant.",
+            "services/extensions/internal/modules/assistant_services/support_messages.go": "lmm_assistant.",
             "services/extensions/internal/modules/payments/postgres.go": "payment_",
             OPERATIONS_POSTGRES: "lmm_operations.",
             OPERATIONS_RELEASES: "lmm_operations.",
@@ -302,7 +428,7 @@ class CoreBoundaryTests(unittest.TestCase):
                 self.assertNotIn("github.com/lib/pq", text, path)
                 if path == OPERATIONS_RELEASES:
                     self.assert_operations_releases(text)
-            self.assertNotRegex(text, r"\bsql\s*\.\s*(?:Open|OpenDB)\s*\(", path)
+            self.assertNotRegex(text, r"\bsql\s*\.\s*(?:Open|OpenDB)\b", path)
         if path == OPERATIONS_INJECTION:
             self.assert_operations_injection(text)
             for schema in CORE_SCHEMAS + tuple(stores.values()):
@@ -313,17 +439,58 @@ class CoreBoundaryTests(unittest.TestCase):
             for schema in CORE_SCHEMAS + tuple(stores.values()):
                 self.assertNotIn(schema, text, path)
             return
+        type_only = {
+            "services/extensions/internal/modules/toolmarket/store.go",
+            "services/extensions/internal/modules/assistant_services/actions.go",
+            "services/extensions/internal/modules/assistant_services/dispatch.go",
+        }
+        if '"database/sql"' in text:
+            tokens = self.assert_named_go_import(text, "database/sql")
+            for i in range(len(tokens)-2):
+                if tokens[i:i+2] == ["sql", "."] and path != COMPOSITION_STORAGE:
+                    self.assertIn(tokens[i+2], {"DB", "Tx", "TxOptions", "ErrNoRows", "NullString", "NullInt64", "LevelReadCommitted", "LevelRepeatableRead"}, path)
+        if path == "services/extensions/internal/modules/assistant/greeting.go":
+            advisory = "tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, \"lmm_assistant:\"+p.Account.Key())"
+            self.assertEqual(text.count(advisory), 2, path)
+            self.assertEqual(len(re.findall(r"\.\s*(?:Query|QueryRow|Exec|QueryContext|QueryRowContext|ExecContext|Begin|BeginTx)\s*\(", text)), 2, path)
+            for schema in CORE_SCHEMAS + tuple(stores.values()):
+                self.assertNotIn(schema, text, path)
+            return
+        if path in type_only:
+            self.assertNotRegex(text, r"\.\s*(?:Query|QueryRow|Exec|QueryContext|QueryRowContext|ExecContext|Begin|BeginTx)\s*\(", path)
+            for schema in CORE_SCHEMAS + tuple(stores.values()):
+                self.assertNotIn(schema, text, path)
+            return
+        if path == "services/extensions/internal/composition/builtins.go":
+            expected = "SELECT has_schema_privilege(current_user,'extension_wallet','USAGE') AND has_table_privilege(current_user,'extension_wallet.transfer_links','SELECT') AND has_table_privilege(current_user,'extension_wallet.transfer_links','INSERT')"
+            self.assertIn("`" + expected + "`", text, path)
+            self.assertEqual(len(re.findall(r"\.\s*(?:Query|QueryRow|Exec|QueryContext|QueryRowContext|ExecContext|Begin|BeginTx)\s*\(", text)), 1, path)
+            for schema in CORE_SCHEMAS + tuple(stores.values()):
+                self.assertNotRegex(text, r"(?i)\b(?:FROM|JOIN|UPDATE|INTO|TRUNCATE)\s+" + re.escape(schema), path)
+            return
         if path not in stores and path != COMPOSITION_STORAGE:
             self.assertNotIn('"database/sql"', text, path)
+            # Borrowing a pool via another struct cannot bypass registration.
+            self.assertNotRegex(text, r'(?i)\b(?:FROM|JOIN|UPDATE|INTO|TRUNCATE)\s+(?:"?(?:lmm_|extension_)[a-z0-9_]+"?\s*\.|(?:public\.)?payment_)', path)
             return
         if path == COMPOSITION_STORAGE:
             self.assertIn('"github.com/lib/pq"', text, path)
             self.assertEqual(len(re.findall(r"\bsql\s*\.\s*(?:Open|OpenDB)\s*\(", text)), 1)
+            selectors = [tokens[i+2] for i in range(len(tokens)-2) if tokens[i:i+2] == ["sql", "."]]
+            self.assertEqual(selectors.count("Open"), 1, path)
+            self.assertNotIn("OpenDB", selectors, path)
             for required in COMPOSITION_STORAGE_GUARDS:
                 self.assertIn(required, text, path)
             self.assert_operations_storage(text)
+            wrapper = self.go_function_body(text, "func openStorage(ctx context.Context, c StorageConfig) (*sql.DB, error)")
+            self.assertEqual(wrapper, go_tokens("return openStorageBundle(ctx, c, defaultStorageBundle)"))
+            pq_selectors = [tokens[i+2] for i in range(len(tokens)-2) if tokens[i:i+2] == ["pq", "."]]
+            self.assertEqual(pq_selectors, ["Array"], path)
         else:
             self.assertIn(stores[path], text, path)
+        for referenced in re.findall(r'(?i)\b((?:lmm_|extension_)[a-z0-9_]+)"?\s*\.', text):
+            if path != COMPOSITION_STORAGE:
+                self.assertEqual(referenced.lower() + ".", stores.get(path), path)
         schemas = CORE_SCHEMAS + tuple(stores.values())
         for schema in schemas:
             if schema != stores.get(path):
@@ -514,8 +681,39 @@ class CoreBoundaryTests(unittest.TestCase):
 
     def assert_operations_storage(self, text):
         body = self.go_function_body(
-            text, "func openStorage(ctx context.Context, c StorageConfig) (*sql.DB, error)")
+            text, "func openStorageBundle(ctx context.Context, c StorageConfig, bundle storageBundle) (*sql.DB, error)")
         self.token_index(body, OPERATIONS_SEQUENCE_BLOCK)
+        self.token_index(body, """
+            policy, err := storagePolicyFor(c.Component, bundle)
+            if err != nil { return nil, err }
+            dsn, err := storageURL(c)
+        """)
+        self.token_index(body, """
+            for _, table := range policy.forbidden {
+                for _, privilege := range table.privileges {
+                    var allowed bool
+                    if err := db.QueryRowContext(bounded, `SELECT COALESCE(has_table_privilege(current_user,to_regclass($1),$2),false)`, table.name, privilege).Scan(&allowed); err != nil || allowed {
+                        return nil, errors.New("extension bundled storage grants exceed runtime authority")
+                    }
+                }
+            }
+            for _, table := range policy.forbiddenColumns {
+                for _, privilege := range table.privileges {
+                    var allowed bool
+                    if err := db.QueryRowContext(bounded, `SELECT COALESCE(has_any_column_privilege(current_user,to_regclass($1),$2),false)`, table.name, privilege).Scan(&allowed); err != nil || allowed {
+                        return nil, errors.New("extension bundled column grants exceed runtime authority")
+                    }
+                }
+            }
+            if bundle == toolMarketBuiltinsBundle {
+                for _, namespace := range policy.namespaces {
+                    var allowed bool
+                    if err := db.QueryRowContext(bounded, `SELECT COALESCE(has_schema_privilege(current_user,$1,'USAGE'),false)`, namespace).Scan(&allowed); err != nil || !allowed {
+                        return nil, errors.New("extension bundled storage schema grants unavailable")
+                    }
+                }
+            }
+        """)
         tables = self.go_function_body(text, "func storageTables(component string) []storageTable")
         self.token_index(tables, """
             case "operations":
@@ -559,7 +757,7 @@ class CoreBoundaryTests(unittest.TestCase):
         """)
         payment_compose = self.token_index(body, """
             if selected["payments"] {
-                if err := r.composePayments(ctx, cfg, paymentToken); err != nil {
+                if err := r.composePayments(ctx, cfg, paymentToken, token, commerceToken, assistantToken, supportCustomerToken, supportNoteKey); err != nil {
                     return nil, err
                 }
             }
@@ -583,7 +781,7 @@ class CoreBoundaryTests(unittest.TestCase):
         self.assertLess(assistant_load, assistant_delegation)
         self.assertLess(assistant_load, operations_block)
         compose = self.go_function_body(
-            payments, "func (r *Runtime) composePayments(ctx context.Context, cfg Config, paymentToken []byte) error")
+            payments, "func (r *Runtime) composePayments(ctx context.Context, cfg Config, paymentToken []byte, otherCredentials ...[]byte) error")
         self.token_index(compose, """
             r.PaymentClient, err = coreclient.New(cfg.Socket, paymentToken)
             if err != nil { return err }
@@ -653,8 +851,8 @@ class CoreBoundaryTests(unittest.TestCase):
                         runtime.replace(guard, guard + "; false"),
                         runtime.replace("loadPaymentCredential(cfg, token, commerceToken)",
                                         "loadPaymentCredential(cfg, token, token)"),
-                        runtime.replace("r.composePayments(ctx, cfg, paymentToken)",
-                                        "r.composePayments(ctx, cfg, token)"),
+                        runtime.replace("r.composePayments(ctx, cfg, paymentToken, token, commerceToken, assistantToken, supportCustomerToken, supportNoteKey)",
+                                        "r.composePayments(ctx, cfg, token, token, commerceToken, assistantToken, supportCustomerToken, supportNoteKey)"),
                         runtime.replace("loadAssistantCredential(cfg, token, commerceToken, paymentToken)",
                                         "loadAssistantCredential(cfg, token, token, paymentToken)"),
                         runtime.replace("loadAssistantCredential(cfg, token, commerceToken, paymentToken)",
@@ -849,14 +1047,198 @@ class CoreBoundaryTests(unittest.TestCase):
         path = "services/extensions/internal/modules/store/money_recovery_postgres.go"
         source = (ROOT / path).read_text()
         self.assertNotIn('"database/sql"', source)
-        # The unregistered path exercises the same early-return boundary for new files.
+        # A future borrowed adapter must register before accessing even its own
+        # schema. Core access stays forbidden both before and after registration.
         for adapter in (path, "services/extensions/internal/modules/store/future_recovery.go"):
-            self.assert_extension_storage(adapter, source)
+            if adapter == path:
+                self.assert_extension_storage(adapter, source)
+            else:
+                with self.assertRaises(AssertionError):
+                    self.assert_extension_storage(adapter, source)
             for table in ("core_history.sources", "core_history.log_records", "core_billing.ledger_entries"):
                 method = "\nfunc (p *Postgres) boundaryProbe(ctx context.Context) error {\n" + \
                     "_, err := p.db.ExecContext(ctx, `SELECT * FROM " + table + "`); return err\n}\n"
                 with self.subTest(adapter=adapter, table=table), self.assertRaises(AssertionError):
                     self.assert_extension_storage(adapter, source + method)
+
+    def test_new_extension_sql_registrations_are_exact_and_borrowed(self):
+        direct = {
+            "toolmarket/postgres.go": "lmm_toolmarket.",
+            "wallet/postgres.go": "extension_wallet.",
+            "bounties/postgres.go": "lmm_bounties.",
+            "assistant/agent_postgres.go": "lmm_assistant.",
+            "assistant/personalization/service.go": "lmm_assistant.",
+            "assistant_services/service.go": "lmm_assistant.",
+            "assistant_services/memory.go": "lmm_assistant.",
+            "assistant_services/confirmation.go": "lmm_assistant.",
+            "assistant_services/issues.go": "lmm_assistant.",
+            "assistant_services/platform_support.go": "lmm_assistant.",
+            "assistant_services/search.go": "lmm_assistant.",
+            "assistant_services/support_messages.go": "lmm_assistant.",
+        }
+        for leaf, own in direct.items():
+            path = "services/extensions/internal/modules/" + leaf
+            source = (ROOT / path).read_text()
+            self.assert_extension_storage(path, source)
+            for other in ("lmm_toolmarket.", "extension_wallet.", "lmm_bounties.", "lmm_assistant.", "lmm_unregistered."):
+                if other != own:
+                    quoted = '"' + other[:-1] + '".'
+                    for target in (other, quoted):
+                        with self.subTest(path=path, target=target), self.assertRaises(AssertionError):
+                            self.assert_extension_storage(path, source + "\nSELECT * FROM " + target + "records")
+            for extra in ("db.Close()", "p.db.Close()", "borrowed := p.db; borrowed.Close()",
+                          "borrowed := p.db; alias := borrowed; closePool := alias.Close; closePool()",
+                          'var opener = sql.Open', 'sql.OpenDB(connector)'):
+                with self.subTest(path=path, mutation=extra), self.assertRaises(AssertionError):
+                    self.assert_extension_storage(path, source + "\nfunc unsafeBoundary() { " + extra + " }")
+            future = path.replace(".go", "_unregistered.go")
+            with self.subTest(future=future), self.assertRaises(AssertionError):
+                self.assert_extension_storage(future, source)
+        for leaf in ("toolmarket/store.go", "assistant/greeting.go", "assistant_services/actions.go", "assistant_services/dispatch.go"):
+            path = "services/extensions/internal/modules/" + leaf
+            source = (ROOT / path).read_text()
+            self.assert_extension_storage(path, source)
+            with self.subTest(type_only=path), self.assertRaises(AssertionError):
+                self.assert_extension_storage(path, source + '\nfunc extra() { tx.ExecContext(ctx, "SELECT 1") }')
+
+    def test_every_core_schema_and_future_core_schema_remains_forbidden(self):
+        declared = set()
+        for path in (ROOT / "services/core/schema").glob("*.sql"):
+            declared.update(name.lower() + "." for name in re.findall(r"(?i)CREATE\s+SCHEMA\s+(?:IF\s+NOT\s+EXISTS\s+)?(core_[a-z0-9_]+)", path.read_text()))
+        self.assertTrue(declared <= set(CORE_SCHEMAS), sorted(declared-set(CORE_SCHEMAS)))
+        for path in ("services/extensions/internal/modules/wallet/postgres.go",
+                     "services/extensions/internal/modules/unregistered.go"):
+            source = (ROOT / path).read_text() if (ROOT / path).exists() else "package unregistered\n"
+            for schema in (*CORE_SCHEMAS, "core_future_unregistered."):
+                for verb in ("FROM", "JOIN", "UPDATE", "INTO", "TRUNCATE TABLE", "REFERENCES", "ALTER TABLE", "CREATE TABLE", "DROP TABLE"):
+                    for target in (schema, '"' + schema[:-1] + '".'):
+                        with self.subTest(path=path, verb=verb, target=target), self.assertRaises(AssertionError):
+                            self.assert_extension_storage(path, source + "\n" + verb + " " + target + "records")
+
+    def test_resource_composition_cannot_gain_business_sql_or_extra_pool_close(self):
+        path = "services/extensions/internal/composition/builtins.go"
+        source = (ROOT / path).read_text()
+        self.assert_extension_storage(path, source)
+        for extra in ('db.QueryContext(ctx, "SELECT * FROM extension_wallet.transfer_links")',
+                      'in.Database.QueryContext(ctx, "SELECT 1")',
+                      "borrowed := in.Database; borrowed.Close()"):
+            with self.subTest(mutation=extra), self.assertRaises(AssertionError):
+                self.assert_extension_storage(path, source + "\nfunc extra() { " + extra + " }")
+        for path in (COMPOSITION_STORAGE, "services/extensions/internal/composition/runtime.go",
+                     COMPOSITION_PAYMENTS, "services/extensions/internal/composition/toolmarket.go"):
+            source = (ROOT / path).read_text()
+            for extra in ('var opener = sql.Open', 'func extra() { borrowed := db; borrowed.Close() }'):
+                # Pool opening is registered only in storage; composition owns
+                # pool shutdown solely through its existing resource stack.
+                if path == COMPOSITION_STORAGE and "borrowed" in extra:
+                    continue
+                with self.subTest(path=path, mutation=extra), self.assertRaises(AssertionError):
+                    self.assert_extension_storage(path, source + "\n" + extra)
+
+    def test_offline_installer_is_closed_and_cannot_be_called_by_runtime(self):
+        for path in (OFFLINE_MAIN, OFFLINE_INSTALLER, OFFLINE_CLI, OFFLINE_SNAPSHOT):
+            source = (ROOT / path).read_text()
+            self.assert_extension_storage(path, source)
+        installer = (ROOT / OFFLINE_INSTALLER).read_text()
+        changes = (
+            installer.replace('actual != c.ExpectedDatabase', 'false'),
+            installer.replace('owner != c.OwnerRole', 'false'),
+            installer.replace('session == c.RuntimeRole', 'false'),
+            installer.replace('name.MatchString(c.OwnerRole)', 'true'),
+            installer.replace('db != c.ExpectedDatabase', 'false'),
+            installer.replace('len(v) != 1', 'false'),
+            installer.replace('if e != nil || unsafe {', 'if false {'),
+            installer.replace('tx.ExecContext(ctx, p.schema)', 'tx.ExecContext(ctx, userSQL)'),
+            installer.replace('pq.QuoteIdentifier(c.OwnerRole)', 'c.OwnerRole'),
+            installer.replace('defer tx.Rollback()', ''),
+            installer.replace('nspowner=(SELECT oid FROM pg_roles WHERE rolname=$1)', 'false'),
+            installer.replace("r.rolname NOT IN($2,'pg_database_owner')", 'false'),
+            installer.replace('REVOKE ALL ON ALL TABLES IN SCHEMA "+q+" FROM "+role', 'SELECT 1'),
+            installer.replace('REVOKE ALL ON ALL SEQUENCES IN SCHEMA "+q+" FROM "+role', 'SELECT 1'),
+            installer.replace('REVOKE ALL ON ALL FUNCTIONS IN SCHEMA "+q+" FROM "+role', 'SELECT 1'),
+            installer.replace('if e = tx.Commit(); e != nil {', 'if e = tx.Commit(); false {'),
+            installer.replace('return Receipt{}, ErrCommitUnknown', 'return Receipt{}, nil'),
+            installer + '\nfunc extra() { _, _ = sql.Open("postgres", "unapproved") }',
+        )
+        for index, changed in enumerate(changes):
+            self.assertNotEqual(changed, installer, index)
+            with self.subTest(installer=index), self.assertRaises(AssertionError):
+                self.assert_extension_storage(OFFLINE_INSTALLER, changed)
+        cli = (ROOT / OFFLINE_CLI).read_text()
+        for changed in (cli.replace('f.NArg() != 0', 'false'),
+                        cli + '\nfunc extra() { Install(context.Background(), Config{}) }',
+                        cli.replace('"component"', '"sql-file"')):
+            with self.subTest(cli=changed), self.assertRaises(AssertionError):
+                self.assert_extension_storage(OFFLINE_CLI, changed)
+        main = (ROOT / OFFLINE_MAIN).read_text()
+        for changed in (main.replace('os.Args[1] == "install-db"', 'true'),
+                        main.replace('\t\treturn\n', ''),
+                        main.replace('os.Args[2:]', 'os.Args[1:]'),
+                        main + '\nfunc init() { freshinstall.RunCLI(context.Background(), nil, os.Stdout) }'):
+            with self.subTest(main=changed), self.assertRaises(AssertionError):
+                self.assert_extension_storage(OFFLINE_MAIN, changed)
+        for path in ("services/extensions/internal/app/run.go",
+                     "services/extensions/internal/composition/runtime.go",
+                     "services/extensions/internal/modules/unapproved.go",
+                     "services/extensions/internal/freshinstall/unapproved.go"):
+            source = (ROOT / path).read_text() if (ROOT / path).exists() else "package unapproved\n"
+            for extra in ('import installer "github.com/TokenNotIncluded/api.lmm.best/extensions/internal/freshinstall"',
+                          'func extra() { freshinstall.Install(ctx, cfg) }',
+                          'func extra() { exec.Command("extensions", "install-db").Run() }',
+                          'var ownerFlag = "owner-url-file"',
+                          'func extra() { toolmarket.InitPostgresSnapshot(ctx, db, tx, key) }',
+                          'func extra() { _, _ = sql.Open("postgres", "owner") }'):
+                with self.subTest(path=path, extra=extra), self.assertRaises(AssertionError):
+                    self.assert_extension_storage(path, source + "\n" + extra)
+        snapshot = (ROOT / OFFLINE_SNAPSHOT).read_text()
+        for changed in (snapshot.replace('tx.ExecContext(ctx,', 'db.ExecContext(ctx,'),
+                        snapshot.replace('INSERT INTO', 'DELETE FROM'),
+                        snapshot + '\nfunc extra() { db.Close() }'):
+            with self.subTest(snapshot=changed), self.assertRaises(AssertionError):
+                self.assert_extension_storage(OFFLINE_SNAPSHOT, changed)
+
+    def test_explicit_storage_bundle_cannot_expand_default_or_lose_acl_guards(self):
+        storage = (ROOT / COMPOSITION_STORAGE).read_text()
+        policy = (ROOT / COMPOSITION_BUNDLE).read_text()
+        market_path = "services/extensions/internal/composition/toolmarket.go"
+        market = (ROOT / market_path).read_text()
+        for changed in (
+            storage.replace('return openStorageBundle(ctx, c, defaultStorageBundle)', 'return openStorageBundle(ctx, c, toolMarketBuiltinsBundle)'),
+            storage.replace('policy, err := storagePolicyFor(c.Component, bundle)', 'policy, err := storagePolicyFor("toolmarket", toolMarketBuiltinsBundle)'),
+            storage.replace("nspname LIKE 'core\\_%' ESCAPE '\\' OR", 'false OR'),
+            storage.replace('NOT(nspname=ANY($1::text[]))', 'false'),
+            storage.replace('($3 AND nspname NOT LIKE', '(false AND nspname NOT LIKE'),
+            storage.replace('c.Component == "toolmarket"', 'false'),
+            storage.replace('err != nil || allowed {', 'err != nil {', 1),
+            storage.replace('has_any_column_privilege', 'has_table_privilege'),
+            storage.replace('for _, table := range policy.forbiddenColumns', 'for _, table := range policy.tables'),
+            storage + '\nfunc extra() { _ = pq.NewConnector("unapproved") }',
+        ):
+            self.assertNotEqual(changed, storage)
+            with self.subTest(storage=changed), self.assertRaises(AssertionError):
+                self.assert_extension_storage(COMPOSITION_STORAGE, changed)
+        for changed in (
+            policy.replace('component != "toolmarket"', 'false'),
+            policy.replace('bundle != toolMarketBuiltinsBundle', 'false'),
+            policy.replace('"lmm_bounties", "extension_wallet"', '"lmm_bounties", "extension_wallet", "core_wallet"'),
+            policy.replace('"MAINTAIN"', '"SELECT"'),
+            policy.replace('policy.forbiddenColumns =', 'policy.tables ='),
+        ):
+            self.assertNotEqual(changed, policy)
+            with self.subTest(policy=changed), self.assertRaises(AssertionError):
+                self.assert_extension_storage(COMPOSITION_BUNDLE, changed)
+        for changed in (
+            market.replace('if cfg.ToolMarketBuiltins.configured() {', 'if true {'),
+            market.replace('bundle := defaultStorageBundle', 'bundle := toolMarketBuiltinsBundle'),
+            market.replace('openStorageBundle(ctx, cfg.ToolMarket, bundle)', 'openStorageBundle(ctx, cfg.ToolMarket, toolMarketBuiltinsBundle)'),
+            market + '\nfunc extra() { openStorageBundle(ctx, cfg, toolMarketBuiltinsBundle) }',
+        ):
+            with self.subTest(market=changed), self.assertRaises(AssertionError):
+                self.assert_extension_storage(market_path, changed)
+        for path in ("services/extensions/internal/app/unapproved.go", "services/extensions/internal/composition/unapproved.go"):
+            for extra in ('openStorageBundle(ctx, cfg, storageBundle(1))', 'toolMarketBuiltinsBundle'):
+                with self.subTest(path=path, extra=extra), self.assertRaises(AssertionError):
+                    self.assert_extension_storage(path, "package unapproved\nfunc extra() { " + extra + " }")
 
     def test_fresh_schema_is_explicit_and_relational(self):
         schema = (ROOT / "services/core/schema/identity.sql").read_text()

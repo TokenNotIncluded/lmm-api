@@ -109,6 +109,7 @@ import { useAuthStore, type AuthUser } from '@/stores/auth-store'
 import './assistant-surface.css'
 
 import {
+  AssistantTurnContinuationError,
   assistantRunFailureDetails,
   getAssistantAvailableModels,
   getAssistantSetupModels,
@@ -785,6 +786,8 @@ function assistantFailureMessage(
   translate: ReturnType<typeof useTranslation>['t']
 ) {
   const { code } = getAssistantErrorInfo(error)
+  if (code === 'ASSISTANT_HUMAN_SUPPORT_PENDING')
+    return translate('Waiting for an administrator to join')
   if (code === 'ASSISTANT_REQUEST_TIMEOUT') {
     // A stopped run is not a generic failure: say whether a tool already ran
     // and whether the step budget or the wall clock ran out.
@@ -1958,6 +1961,13 @@ function AssistantPanelSession(props: AssistantPanelProps) {
       ).catch(() => undefined)
     } catch (error) {
       if (!isCurrentRequest()) return
+      const humanSupportPending =
+        error instanceof AssistantTurnContinuationError &&
+        error.code === 'ASSISTANT_HUMAN_SUPPORT_PENDING'
+      if (error instanceof AssistantTurnContinuationError)
+        setConversationId(error.conversationId)
+      if (humanSupportPending)
+        void queryClient.invalidateQueries({ queryKey: ['assistant-support'] })
       if (isAssistantRequestAborted(error) || abortController.signal.aborted) {
         if (streamFrame !== null) {
           window.cancelAnimationFrame(streamFrame)
@@ -2011,10 +2021,11 @@ function AssistantPanelSession(props: AssistantPanelProps) {
               'This saved reply is no longer available. Send a new message to continue.'
             )
           : assistantFailureMessage(error, t),
-        error: true,
-        retry: isAssistantTurnUnavailable(error)
-          ? undefined
-          : { message, history, presetId, clientTurnId },
+        error: !humanSupportPending,
+        retry:
+          isAssistantTurnUnavailable(error) || humanSupportPending
+            ? undefined
+            : { message, history, presetId, clientTurnId },
         action: errorAction,
       }
       setEntries((current) => [

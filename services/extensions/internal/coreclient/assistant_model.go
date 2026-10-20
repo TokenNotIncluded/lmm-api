@@ -18,6 +18,8 @@ import (
 )
 
 const AssistantPersonalTextReserveFeature = "assistant.personal_text.reserve.v1"
+const AssistantPersonalTextExecuteFeature = "assistant.personal_text.execute.v1"
+const AssistantNewUserGiftFeature = "assistant.new_user_gift.v1"
 
 // AssistantClient separates read-only capability discovery from the actual
 // assistant credential. Its only public calls are this narrow assistant port.
@@ -62,6 +64,17 @@ func (c *AssistantClient) assistantReady(ctx context.Context, user string) error
 // Ready discovers only the exact mandatory capability through the control
 // credential; it does not send a Session or authorize an assistant mutation.
 func (c *AssistantClient) Ready(ctx context.Context) error {
+	// Admission alone cannot provide a billed answer. Both are mandatory.
+	return c.assistantFeatures(ctx, AssistantPersonalTextReserveFeature, AssistantPersonalTextExecuteFeature)
+}
+
+// GiftReady is independent of text execution. It is advertised only when Core
+// has installed the gift policy, trusted decision hook and durable ledger path.
+func (c *AssistantClient) GiftReady(ctx context.Context) error {
+	return c.assistantFeatures(ctx, AssistantNewUserGiftFeature)
+}
+
+func (c *AssistantClient) assistantFeatures(ctx context.Context, required ...string) error {
 	if c == nil || c.rpc == nil || c.control == nil {
 		return status.Error(codes.FailedPrecondition, "assistant client unavailable")
 	}
@@ -74,17 +87,17 @@ func (c *AssistantClient) Ready(ctx context.Context) error {
 	if !assistantMessage(capabilities) || capabilities.GetProtocolMajor() != 1 || len(capabilities.GetFeatures()) > 128 {
 		return status.Error(codes.FailedPrecondition, "assistant capability unavailable")
 	}
-	found := false
 	seen := map[string]bool{}
 	for _, feature := range capabilities.GetFeatures() {
-		if !assistantLabel(feature, 128) || seen[feature] {
+		if !assistantLabel(feature, 256) || seen[feature] {
 			return status.Error(codes.FailedPrecondition, "assistant capability unavailable")
 		}
 		seen[feature] = true
-		found = found || feature == AssistantPersonalTextReserveFeature
 	}
-	if !found {
-		return status.Error(codes.FailedPrecondition, "assistant capability unavailable")
+	for _, feature := range required {
+		if !seen[feature] {
+			return status.Error(codes.FailedPrecondition, "assistant capability unavailable")
+		}
 	}
 	return nil
 }

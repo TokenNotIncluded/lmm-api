@@ -65,7 +65,7 @@ impl IngressStore {
         mut request: pb::ResolveRefundRequest,
         commit: bool,
     ) -> Result<pb::PaymentReceipt, Error> {
-        if commit {
+        if request.evidence.is_some() {
             self.receive(request.intent_id, &mut request.evidence)
                 .await?;
         }
@@ -513,7 +513,7 @@ async fn unknown_or_other_failed_attempt_never_releases_hold(pool: PgPool) {
     };
     assert_eq!(
         f.store.resolve(no_proof, false).await.unwrap_err(),
-        Error::Unavailable
+        Error::Invalid
     );
     let attempt_a = pb::ResolveRefundRequest {
         mutation: mutation("release_attempt_a01"),
@@ -527,7 +527,7 @@ async fn unknown_or_other_failed_attempt_never_releases_hold(pool: PgPool) {
     };
     assert_eq!(
         f.store.resolve(attempt_a, false).await.unwrap_err(),
-        Error::Unavailable
+        Error::Denied
     );
     balance(&f, 300_000, 200_000).await;
     let attempt_b = pb::ResolveRefundRequest {
@@ -1687,4 +1687,201 @@ async fn external_refund_requires_durable_original_payment_binding(pool: PgPool)
         Error::Conflict,
         "refund with mismatched transaction must be rejected"
     );
+}
+
+#[sqlx::test]
+async fn dispatch_requires_one_hold_and_signed_creation_request_before_failed_release(
+    pool: PgPool,
+) {
+    let f = fresh(&pool).await;
+    let intent = prepare(&f, "prepare_dispatch_001", 100).await;
+    credit(&f, &intent, "credit_dispatch_001").await;
+    let hold = f
+        .store
+        .hold(
+            &f.secret,
+            pb::HoldRefundRequest {
+                mutation: mutation("hold_dispatch_0001"),
+                intent_id: intent.intent_id,
+                refund_amount_minor: 40,
+            },
+        )
+        .await
+        .unwrap();
+    let dispatch = pb::ResolveRefundRequest {
+        mutation: mutation("dispatch_provider_0001"),
+        intent_id: intent.intent_id,
+        hold_receipt_id: hold.receipt_id.clone(),
+        evidence: None,
+    };
+    let registered = f
+        .store
+        .begin_refund_dispatch(dispatch.clone())
+        .await
+        .unwrap();
+    assert_eq!(registered.state, 2);
+    assert_eq!(registered.journal_id, hold.journal_id);
+    assert_eq!(
+        f.store
+            .begin_refund_dispatch(dispatch.clone())
+            .await
+            .unwrap(),
+        registered
+    );
+    let mut replaced = dispatch.clone();
+    replaced.mutation = mutation("dispatch_provider_0002");
+    assert_eq!(
+        f.store.begin_refund_dispatch(replaced).await.unwrap_err(),
+        Error::Conflict
+    );
+    // Same hold metadata in a signed failed A does not establish dispatch B.
+    let failed = |id: &str, refund: &str| pb::ResolveRefundRequest {
+        mutation: mutation(id),
+        intent_id: intent.intent_id,
+        hold_receipt_id: hold.receipt_id.clone(),
+        evidence: Some(proof(event(
+            &intent,
+            id,
+            Some((refund, 40, "failed", Some(&hold.receipt_id))),
+        ))),
+    };
+    assert_eq!(
+        f.store
+            .resolve(failed("evt_release_wrong_001", "re_other_attempt"), false)
+            .await
+            .unwrap_err(),
+        Error::Denied
+    );
+    let mut created = event(
+        &intent,
+        "evt_dispatch_created",
+        Some(("re_bound_attempt", 40, "pending", Some(&hold.receipt_id))),
+    );
+    created["type"] = json!("refund.created");
+    created["request"] = json!({"id":"req_creation", "idempotency_key":"dispatch_provider_0001"});
+    f.store
+        .accept_proof(pb::AcceptProviderProofRequest {
+            intent_id: intent.intent_id,
+            evidence: Some(proof(created)),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        f.store
+            .resolve(failed("evt_release_wrong_002", "re_other_attempt"), false)
+            .await
+            .unwrap_err(),
+        Error::Denied
+    );
+    balance(&f, 300_000, 200_000).await;
+    let release = failed("evt_release_bound_001", "re_bound_attempt");
+    let receipt = f.store.resolve(release.clone(), false).await.unwrap();
+    assert_eq!(receipt.state, 4);
+    assert_eq!(f.store.resolve(release, false).await.unwrap(), receipt);
+    balance(&f, 500_000, 0).await;
+    let success_after_release = pb::ResolveRefundRequest {
+        mutation: mutation("commit_after_release01"),
+        intent_id: intent.intent_id,
+        hold_receipt_id: hold.receipt_id.clone(),
+        evidence: Some(proof(event(
+            &intent,
+            "evt_success_after_release",
+            Some(("re_bound_attempt", 40, "succeeded", Some(&hold.receipt_id))),
+        ))),
+    };
+    assert_eq!(
+        f.store
+            .resolve(success_after_release, true)
+            .await
+            .unwrap_err(),
+        Error::Conflict
+    );
+    balance(&f, 500_000, 0).await;
+    let rows: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM core_payments.refund_dispatch_bindings")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(rows, 1);
+    assert_eq!(
+        f.store.begin_refund_dispatch(dispatch).await.unwrap(),
+        registered
+    );
+}
+
+#[sqlx::test]
+async fn conflicting_authentic_second_dispatch_is_retained_and_blocks_first_failed_release(
+    pool: PgPool,
+) {
+    let f = fresh(&pool).await;
+    let intent = prepare(&f, "prepare_conflict_001", 100).await;
+    credit(&f, &intent, "credit_conflict_001").await;
+    let hold = f
+        .store
+        .hold(
+            &f.secret,
+            pb::HoldRefundRequest {
+                mutation: mutation("hold_conflict_0001"),
+                intent_id: intent.intent_id,
+                refund_amount_minor: 40,
+            },
+        )
+        .await
+        .unwrap();
+    f.store
+        .begin_refund_dispatch(pb::ResolveRefundRequest {
+            mutation: mutation("dispatch_conflict_001"),
+            intent_id: intent.intent_id,
+            hold_receipt_id: hold.receipt_id.clone(),
+            evidence: None,
+        })
+        .await
+        .unwrap();
+    for (event_id, refund_id) in [
+        ("evt_conflict_a", "re_conflict_a"),
+        ("evt_conflict_b", "re_conflict_b"),
+    ] {
+        let mut created = event(
+            &intent,
+            event_id,
+            Some((refund_id, 40, "pending", Some(&hold.receipt_id))),
+        );
+        created["type"] = json!("refund.created");
+        created["request"] = json!({"idempotency_key":"dispatch_conflict_001"});
+        f.store
+            .accept_proof(pb::AcceptProviderProofRequest {
+                intent_id: intent.intent_id,
+                evidence: Some(proof(created)),
+            })
+            .await
+            .unwrap();
+    }
+    let failed = pb::ResolveRefundRequest {
+        mutation: mutation("release_conflict_001"),
+        intent_id: intent.intent_id,
+        hold_receipt_id: hold.receipt_id.clone(),
+        evidence: Some(proof(event(
+            &intent,
+            "evt_conflict_a_failed",
+            Some(("re_conflict_a", 40, "failed", Some(&hold.receipt_id))),
+        ))),
+    };
+    assert_eq!(
+        f.store.resolve(failed, false).await.unwrap_err(),
+        Error::Denied
+    );
+    balance(&f, 300_000, 200_000).await;
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM core_payments.accepted_proofs WHERE verified_facts->>'kind'='RefundPending'").fetch_one(&pool).await.unwrap();
+    assert_eq!(
+        count, 2,
+        "authentic conflicting financial evidence must survive"
+    );
+    let bound: String = sqlx::query_scalar(
+        "SELECT refund_id FROM core_payments.refund_dispatch_bindings WHERE hold_receipt_id=$1",
+    )
+    .bind(&hold.receipt_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(bound, "re_conflict_a");
 }

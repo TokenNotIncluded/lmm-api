@@ -1,7 +1,6 @@
 //! PostgreSQL integration and acceptance suite for native HumanGrant 0.1 slice.
 
-#[path = "../src/humangrant/mod.rs"]
-pub mod humangrant;
+use lmm_core::humangrant;
 
 use axum::{
     Router,
@@ -530,6 +529,18 @@ async fn test_humangrant_full_lifecycle_postgres(pool: PgPool) {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(approve_resp["status"], "approved");
     let grant_id = approve_resp["grant_id"].as_str().unwrap().to_string();
+
+    // A retained approved request cannot be verified again to mint another grant.
+    let (status, _, rejected_reverify) = call_http(
+        &app,
+        "POST",
+        &format!("/api/user/auth/humangrant/human/{link}/verify"),
+        HashMap::new(),
+        vec![],
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(rejected_reverify["error"], "invalid_state");
 
     // 9. AI polls request status
     let poll_nonce = BASE64_URL_SAFE_NO_PAD.encode([2u8; 24]);

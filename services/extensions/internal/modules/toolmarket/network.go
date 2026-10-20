@@ -50,6 +50,7 @@ func newNetwork() *network {
 }
 
 var blockedPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("168.63.129.16/32"), netip.MustParsePrefix("192.88.99.0/24"),
 	netip.MustParsePrefix("0.0.0.0/8"), netip.MustParsePrefix("100.64.0.0/10"), netip.MustParsePrefix("192.0.0.0/24"), netip.MustParsePrefix("192.0.2.0/24"), netip.MustParsePrefix("198.18.0.0/15"), netip.MustParsePrefix("198.51.100.0/24"), netip.MustParsePrefix("203.0.113.0/24"), netip.MustParsePrefix("240.0.0.0/4"), netip.MustParsePrefix("2001::/23"), netip.MustParsePrefix("2001:db8::/32"), netip.MustParsePrefix("2002::/16"),
 }
 
@@ -106,10 +107,11 @@ func (n *network) request(ctx context.Context, method, endpoint string, body []b
 	}
 	return resp, nil
 }
-func readBody(r *http.Response) ([]byte, error) {
+func readBody(r *http.Response) ([]byte, error) { return readBodyLimit(r, maxBody) }
+func readBodyLimit(r *http.Response, limit int64) ([]byte, error) {
 	defer r.Body.Close()
-	b, e := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
-	if e != nil || len(b) > maxBody {
+	b, e := io.ReadAll(io.LimitReader(r.Body, limit+1))
+	if e != nil || int64(len(b)) > limit {
 		return nil, ErrUpstream
 	}
 	return b, nil

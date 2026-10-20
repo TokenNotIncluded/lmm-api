@@ -31,6 +31,8 @@ pub enum Protocol {
     AnthropicMessages,
     #[serde(rename = "gemini")]
     Gemini,
+    #[serde(rename = "system_one")]
+    SystemOne,
 }
 
 /// A base URL, never a URL carrying credentials. This type is INTERNAL config.

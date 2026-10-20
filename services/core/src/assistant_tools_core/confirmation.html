@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>确认操作 · LMM</title>
+<style>
+body{font:16px/1.6 system-ui,sans-serif;max-width:780px;margin:3rem auto;padding:0 1.25rem;color:#17202a;background:#fafafa}main{background:white;border:1px solid #ddd;border-radius:12px;padding:1.5rem}h1{font-size:1.6rem}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f3f4f6;padding:1rem;border-radius:8px}button{font:inherit;padding:.65rem 1rem;border-radius:6px;border:1px solid #555;cursor:pointer;margin-right:.5rem}button:disabled{opacity:.5;cursor:default}#approve{background:#173f35;color:white}#status{font-weight:600}#details{overflow-wrap:anywhere}noscript{border:2px solid #8b2e20;padding:1rem}
+</style>
+<main>
+<h1>确认操作</h1>
+<p>请先核对下面的完整预览。批准只记录你的同意，业务处理结果会另外显示。</p>
+<p id="status" role="status" aria-live="polite">正在读取你的会话和操作预览…</p>
+<p id="details"></p>
+<pre id="preview" aria-label="操作预览"></pre>
+<button id="approve" type="button" disabled>批准这项操作</button>
+<button id="reject" type="button" disabled>拒绝</button>
+<noscript>此页需要 JavaScript 才能读取精确预览并安全提交。未启用时不会批准任何操作。请启用后重新打开此页。</noscript>
+</main>
+<script src="/api/user/assistant/confirmations/ui.js" defer></script>
+</html>

@@ -8,13 +8,14 @@ import "encoding/json"
 // WebServiceRecord and WebVersion keep author drafts separate from immutable
 // released snapshots. They are module business records, never Core identities.
 type WebServiceRecord struct {
-	ID             string `json:"id"`
-	OwnerID        int64  `json:"owner_id"`
-	LiveVersionID  string `json:"live_version_id"`
-	DraftVersionID string `json:"draft_version_id"`
-	Status         string `json:"status"`
-	CreatedAt      int64  `json:"created_at"`
-	UpdatedAt      int64  `json:"updated_at"`
+	CoreLifecycleRevision int64  `json:"core_lifecycle_revision,omitempty"`
+	ID                    string `json:"id"`
+	OwnerID               int64  `json:"owner_id"`
+	LiveVersionID         string `json:"live_version_id"`
+	DraftVersionID        string `json:"draft_version_id"`
+	Status                string `json:"status"`
+	CreatedAt             int64  `json:"created_at"`
+	UpdatedAt             int64  `json:"updated_at"`
 }
 type WebVersion struct {
 	ID            string `json:"id"`
@@ -32,6 +33,13 @@ type WebVersion struct {
 	PublishedAt   int64  `json:"published_at"`
 }
 type WebTool struct {
+	Annotations          json.RawMessage        `json:"annotations,omitempty"`
+	ProviderPricing      *LegacyProviderPricing `json:"provider_pricing,omitempty"`
+	BillingMode          string                 `json:"billing_mode,omitempty"`
+	InputTokenPriceQuota int64                  `json:"input_token_price_quota,omitempty"`
+	MaxInputTokens       int64                  `json:"max_input_tokens,omitempty"`
+	BillingRules         []LegacyBillingRule    `json:"billing_rules,omitempty"`
+
 	ToolID       string `json:"tool_id"`
 	VersionID    string `json:"version_id"`
 	Name         string `json:"name"`
@@ -98,7 +106,10 @@ type WebQuery struct {
 	Offset, Limit       int
 }
 type WebRequest struct {
+	ActualPeerIP     string `json:"-"`
+	OperationID      string
 	Action, ID, Kind string
+	VersionID        string
 	Offset, Limit    int
 	Body             json.RawMessage
 }
@@ -111,6 +122,7 @@ type webSnapshot struct {
 	RemoteDigests    map[string]string `json:"remote_digests,omitempty"`
 }
 type webDatabase struct {
+	Credentials   map[string]webCredential    `json:"credentials,omitempty"`
 	Services      map[string]WebServiceRecord `json:"services"`
 	Versions      map[string]webSnapshot      `json:"versions"`
 	Installations map[string]WebInstallation  `json:"installations"`

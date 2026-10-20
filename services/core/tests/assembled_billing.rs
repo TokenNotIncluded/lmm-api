@@ -36,6 +36,7 @@ fn request(id: &str, reserve: i64) -> ChargeRequest {
         lease_seconds: 300,
         maximum_seconds: 600,
         price: Price {
+            image: None,
             upstream_cost_group_ppm: None,
             version: "price-1".into(),
             model: "local-model".into(),
@@ -48,6 +49,7 @@ fn request(id: &str, reserve: i64) -> ChargeRequest {
 }
 fn usage() -> Usage {
     Usage {
+        image: None,
         upstream_cost_atto_usd: None,
         input: 10,
         cached: 2,
