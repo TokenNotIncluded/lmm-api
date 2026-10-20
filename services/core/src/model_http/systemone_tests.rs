@@ -434,7 +434,7 @@ async fn systemone_native_pg_decimal_scalar_dynamic_key_real_charge_and_no_repla
         ),
     )
     .await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(supplier.hits.load(Ordering::SeqCst), 1);
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM core_charging.requests")
