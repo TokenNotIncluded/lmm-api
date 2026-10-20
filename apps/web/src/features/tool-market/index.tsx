@@ -1566,15 +1566,19 @@ function ToolMarketWorkspace({
                             <MarketStatusIcon value={item.execution_status} />
                             {marketStatus(item.execution_status, t)} /{' '}
                             {marketStatus(item.settlement_status, t)} ·{' '}
-                            {item.settlement_status === 'held'
+                            {['held', 'reserved'].includes(
+                              item.settlement_status
+                            )
                               ? t('Reserved')
                               : t('Amount')}
                             :{' '}
-                            {formatQuota(
-                              item.settlement_status === 'released'
-                                ? 0
-                                : item.price_quota
-                            )}
+                            {item.price_quota === undefined
+                              ? t('Unknown')
+                              : formatQuota(
+                                  item.settlement_status === 'released'
+                                    ? 0
+                                    : item.price_quota
+                                )}
                           </p>
                           {item.usage_quantities && (
                             <p className='text-muted-foreground'>

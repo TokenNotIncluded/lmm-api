@@ -25,6 +25,7 @@ import type {
   TokenUnit,
   PriceType,
   PriceDisplayCurrency,
+  PricingGroupPrices,
 } from '../types'
 import { getConfiguredGroupRatio, getDisplayGroupRatio } from './model-helpers'
 /*
@@ -84,9 +85,13 @@ export function hasCanonicalPricing(model: PricingModel): boolean {
   return model.pricing_schema_version === 2 && model.pricing_currency === 'USD'
 }
 
-export function getTokenPriceUSD(model: PricingModel, type: PriceType): number {
+export function getTokenPriceUSD(
+  model: PricingModel,
+  type: PriceType,
+  group?: string
+): number {
   if (!hasCanonicalPricing(model)) return Number.NaN
-  const fields: Record<PriceType, keyof PricingModel> = {
+  const fields: Record<PriceType, keyof PricingGroupPrices> = {
     input: 'input_price',
     output: 'output_price',
     cache: 'cache_read_price',
@@ -95,7 +100,9 @@ export function getTokenPriceUSD(model: PricingModel, type: PriceType): number {
     audio_input: 'audio_input_price',
     audio_output: 'audio_output_price',
   }
-  const value = model[fields[type]]
+  const field = fields[type]
+  const groupPrice = group ? model.group_prices?.[group] : undefined
+  const value = groupPrice ? groupPrice[field] : model[field]
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
     ? value
     : Number.NaN
@@ -117,7 +124,8 @@ export function formatPrice(
 
   const displayGroupRatio = getDisplayGroupRatio(model, selectedGroup)
 
-  const amountUSD = getTokenPriceUSD(model, type) * displayGroupRatio
+  const amountUSD =
+    getTokenPriceUSD(model, type, selectedGroup) * displayGroupRatio
 
   const price = amountUSD / TOKEN_UNIT_DIVISORS[tokenUnit]
   return formatModelPrice(price, displayCurrency, {
@@ -142,8 +150,10 @@ export function formatGroupPrice(
     return '-'
   }
 
-  const ratio = getConfiguredGroupRatio(groupRatio, group)
-  const amountUSD = getTokenPriceUSD(model, type) * ratio
+  const ratio = model.group_prices
+    ? 1
+    : getConfiguredGroupRatio(groupRatio, group)
+  const amountUSD = getTokenPriceUSD(model, type, group) * ratio
 
   const price = amountUSD / TOKEN_UNIT_DIVISORS[tokenUnit]
   return formatModelPrice(price, displayCurrency, {
@@ -166,10 +176,14 @@ export function formatFixedPrice(
     return '-'
   }
 
-  const ratio = getConfiguredGroupRatio(groupRatio, group)
+  const ratio = model.group_prices
+    ? 1
+    : getConfiguredGroupRatio(groupRatio, group)
+  const grouped = model.group_prices?.[group]
+  const requestPrice = grouped ? grouped.model_price : model.model_price
   const amountUSD =
-    hasCanonicalPricing(model) && typeof model.model_price === 'number'
-      ? model.model_price * ratio
+    hasCanonicalPricing(model) && typeof requestPrice === 'number'
+      ? requestPrice * ratio
       : Number.NaN
 
   return formatModelPrice(amountUSD, displayCurrency, {
@@ -192,10 +206,14 @@ export function formatRequestPrice(
   }
 
   const displayGroupRatio = getDisplayGroupRatio(model, selectedGroup)
+  const grouped = selectedGroup
+    ? model.group_prices?.[selectedGroup]
+    : undefined
+  const requestPrice = grouped ? grouped.model_price : model.model_price
 
   const amountUSD =
-    hasCanonicalPricing(model) && typeof model.model_price === 'number'
-      ? model.model_price * displayGroupRatio
+    hasCanonicalPricing(model) && typeof requestPrice === 'number'
+      ? requestPrice * displayGroupRatio
       : Number.NaN
 
   return formatModelPrice(amountUSD, displayCurrency, {

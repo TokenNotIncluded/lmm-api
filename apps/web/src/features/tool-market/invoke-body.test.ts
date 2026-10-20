@@ -5,7 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { marketInvokeBody } from './invoke-body'
+import { marketInvokeBody, marketResumeBody } from './invoke-body'
 
 test('advanced arguments preserve integer and decimal representations in the HTTP body', () => {
   const raw =
@@ -66,4 +66,34 @@ test('callers without raw arguments retain the ordinary structured body', () => 
       arguments: { enabled: false },
     }
   )
+})
+
+test('explicit resume accepts only the original opaque binding and optional responses', () => {
+  const request_state = 'c'.repeat(64)
+  assert.deepEqual(marketResumeBody({ request_state }), { request_state })
+  assert.deepEqual(
+    marketResumeBody({
+      request_state,
+      input_responses: { confirmation: { action: 'cancel' } },
+    }),
+    {
+      request_state,
+      input_responses: { confirmation: { action: 'cancel' } },
+    }
+  )
+  for (const extra of [
+    'arguments',
+    'grant_id',
+    'tool_id',
+    'version_id',
+    'request_id',
+    'client_id',
+    'owner',
+    'price',
+  ]) {
+    assert.throws(() =>
+      marketResumeBody({ request_state, [extra]: 'replacement' })
+    )
+  }
+  assert.throws(() => marketResumeBody({ request_state: 'invented' }))
 })

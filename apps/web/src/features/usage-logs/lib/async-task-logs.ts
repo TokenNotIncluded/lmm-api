@@ -139,9 +139,16 @@ export function getAsyncLogRefreshInterval(
 export function canKeepPreviousLogData(
   previousKey: readonly unknown[] | undefined,
   category: string,
-  isAdmin: boolean
+  isAdmin: boolean,
+  account: { userId: number; sessionId: string | undefined; role: number }
 ): boolean {
-  return previousKey?.[1] === category && previousKey?.[2] === isAdmin
+  return (
+    previousKey?.[1] === category &&
+    previousKey?.[2] === isAdmin &&
+    previousKey?.[3] === account.userId &&
+    previousKey?.[4] === account.sessionId &&
+    previousKey?.[5] === account.role
+  )
 }
 
 /** Allow web media and same-origin paths, never executable or credential URLs. */

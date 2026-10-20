@@ -11,8 +11,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
-import { getPricing } from '@/features/pricing/api'
+import { getPricing, pricingQueryKey } from '@/features/pricing/api'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { LMM_ISSUER } from './integration-prompts'
 import { buildRequestBody, buildRequestSnippet } from './request-snippet'
@@ -59,43 +60,22 @@ const MODEL_OPTIONS: Readonly<
     Protocol,
     {
       endpoint: string
-      fallback: readonly string[]
-      preferred: readonly string[]
     }
   >
 > = {
   chat: {
     endpoint: 'openai',
-    fallback: ['gpt-5.6-sol', 'gpt-5.6-luna'],
-    preferred: ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-luna'],
   },
   messages: {
     endpoint: 'anthropic',
-    fallback: ['claude-opus-4-6', 'claude-sonnet-4-6'],
-    preferred: [
-      'claude-opus-5',
-      'claude-opus-4-8',
-      'claude-opus-4-6',
-      'claude-sonnet-4-6',
-    ],
   },
   gemini: {
     endpoint: 'gemini',
-    fallback: ['gemini-3.1-pro-preview', 'gemini-3-flash-preview'],
-    preferred: [
-      'gemini-3.1-pro-preview',
-      'gemini-3-flash-preview',
-      'gemini-3-pro-preview',
-    ],
   },
 }
 
-function sortModels(models: string[], preferred: readonly string[]): string[] {
-  const rank = new Map(preferred.map((name, index) => [name, index]))
+function sortModels(models: string[]): string[] {
   return models.sort((left, right) => {
-    const leftRank = rank.get(left) ?? Number.MAX_SAFE_INTEGER
-    const rightRank = rank.get(right) ?? Number.MAX_SAFE_INTEGER
-    if (leftRank !== rightRank) return leftRank - rightRank
     return left.localeCompare(right, undefined, {
       numeric: true,
       sensitivity: 'base',
@@ -110,44 +90,46 @@ function sortModels(models: string[], preferred: readonly string[]): string[] {
  */
 export function RequestBuilder() {
   const { t } = useTranslation()
+  const { user, session } = useAuthStore((state) => state.auth)
   const { copiedText, copyToClipboard } = useCopyToClipboard({ notify: false })
   const [protocol, setProtocol] = useState<Protocol>('chat')
   const [language, setLanguage] = useState<Language>('curl')
-  const [model, setModel] = useState(MODEL_OPTIONS.chat.fallback[0])
+  const [model, setModel] = useState('')
   const [prompt, setPrompt] = useState('Explain LMM in one sentence.')
 
   const pricingQuery = useQuery({
-    queryKey: ['pricing'],
+    queryKey: pricingQueryKey(user?.id, session?.sid),
     queryFn: ({ signal }) => getPricing(signal),
     staleTime: 5 * 60_000,
+    retry: false,
   })
 
   const modelOptions = useMemo(() => {
     const config = MODEL_OPTIONS[protocol]
     const liveModels =
       pricingQuery.data?.data
-        .filter((item) =>
-          item.supported_endpoint_types?.includes(config.endpoint)
+        .filter(
+          (item) =>
+            item.runtime_state?.status !== 'unavailable' &&
+            item.supported_endpoint_types?.includes(config.endpoint)
         )
         .map((item) => item.model_name.trim())
         .filter(Boolean) ?? []
 
     const uniqueModels = [...new Set(liveModels)]
-    return uniqueModels.length > 0
-      ? sortModels(uniqueModels, config.preferred)
-      : [...config.fallback]
+    return sortModels(uniqueModels)
   }, [pricingQuery.data?.data, protocol])
 
   useEffect(() => {
-    if (!modelOptions.includes(model)) {
-      setModel(modelOptions[0])
+    if (!model && modelOptions.length > 0) {
+      setModel(modelOptions[0] ?? '')
     }
   }, [model, modelOptions])
 
   const active = PROTOCOLS.find((item) => item.id === protocol) ?? PROTOCOLS[0]
   const url = `${LMM_ISSUER}${active.path.replace('{model}', encodeURIComponent(model || 'MODEL'))}`
   const body = useMemo(
-    () => buildRequestBody(active.shape, model, prompt || 'Hello'),
+    () => buildRequestBody(active.shape, model || 'MODEL', prompt || 'Hello'),
     [active.shape, model, prompt]
   )
   const snippet = useMemo(
@@ -170,7 +152,10 @@ export function RequestBuilder() {
               key={item.id}
               type='button'
               aria-pressed={protocol === item.id}
-              onClick={() => setProtocol(item.id)}
+              onClick={() => {
+                setProtocol(item.id)
+                setModel('')
+              }}
               className='dev-builder-tab'
             >
               {item.label}
@@ -183,18 +168,21 @@ export function RequestBuilder() {
           <label className='dev-builder-label' htmlFor='dev-builder-model'>
             {t('Model')}
           </label>
-          <select
+          <input
             id='dev-builder-model'
+            list='dev-builder-model-options'
             value={model}
+            placeholder='MODEL'
             onChange={(event) => setModel(event.target.value)}
             className='dev-builder-input'
-          >
+          />
+          <datalist id='dev-builder-model-options'>
             {modelOptions.map((item) => (
               <option key={item} value={item}>
                 {item}
               </option>
             ))}
-          </select>
+          </datalist>
         </div>
         <div className='dev-builder-field'>
           <label className='dev-builder-label' htmlFor='dev-builder-prompt'>

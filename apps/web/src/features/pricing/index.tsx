@@ -76,6 +76,7 @@ export function Pricing() {
     displayCurrency,
     setDisplayCurrency,
     displayCurrencyError,
+    performanceAvailable,
   } = usePricingData()
 
   const {
@@ -105,7 +106,7 @@ export function Pricing() {
     clearSearch,
   } = useFilters(models || [])
 
-  const { perfMap } = usePerfMap()
+  const { perfMap } = usePerfMap({ enabled: performanceAvailable })
 
   const handleModelClick = useCallback((modelName: string) => {
     setSelectedModelName(modelName)
@@ -334,7 +335,9 @@ export function Pricing() {
             </div>
             <p role='note' className='text-muted-foreground text-xs leading-5'>
               {t(
-                'Groups filter model availability only. Prices always use the base price (1×).'
+                models.some((model) => model.group_prices)
+                  ? 'Prices include the selected group factors. Select a group to compare its rates.'
+                  : 'Groups filter model availability only. Prices always use the base price (1×).'
               )}
             </p>
           </div>
@@ -361,12 +364,7 @@ export function Pricing() {
             model={selectedModel}
             groupRatio={groupRatio || {}}
             usableGroup={usableGroup || {}}
-            endpointMap={
-              (endpointMap as Record<
-                string,
-                { path?: string; method?: string }
-              >) || {}
-            }
+            endpointMap={endpointMap}
             autoGroups={autoGroups || []}
             tokenUnit={tokenUnit}
             displayCurrency={displayCurrency}

@@ -40,9 +40,11 @@ import {
 } from '@/components/ui/tooltip'
 import { getGroups } from '@/features/users/api'
 import { getUserGroups } from '@/lib/api'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { LOG_TYPE_ALL_VALUE, LOG_TYPE_FILTERS } from '../constants'
 import { buildSearchParams } from '../lib/filter'
+import { readUsageStatisticsScope } from '../lib/statistics'
 import { getDefaultTimeRange } from '../lib/utils'
 import type { CommonLogFilters } from '../types'
 import { CommonLogsStats } from './common-logs-stats'
@@ -122,16 +124,19 @@ export function CommonLogsFilterBar<TData>(
   const { isAdminView: isAdmin } = useLogsViewScope()
   const { sensitiveVisible, setSensitiveVisible } = useUsageLogsContext()
   const fetchingLogs = useIsFetching({ queryKey: ['logs'] })
+  const auth = useAuthStore((state) => state.auth)
+  const scope = readUsageStatisticsScope(auth)
+  const scopeKey = [scope?.userId, scope?.sessionId, scope?.role]
 
   const { data: adminGroups } = useQuery({
-    queryKey: ['groups'],
+    queryKey: ['groups', ...scopeKey],
     queryFn: getGroups,
-    enabled: isAdmin,
+    enabled: !!scope && isAdmin,
   })
   const { data: userGroups } = useQuery({
-    queryKey: ['user-groups'],
+    queryKey: ['user-groups', ...scopeKey],
     queryFn: getUserGroups,
-    enabled: !isAdmin,
+    enabled: !!scope && !isAdmin,
   })
   const groupOptions = useMemo(() => {
     const groups = isAdmin
@@ -271,7 +276,7 @@ export function CommonLogsFilterBar<TData>(
     isAdmin ? filters.username : undefined,
     isAdmin ? filters.channel : undefined,
     filters.requestId,
-    filters.upstreamRequestId,
+    isAdmin ? filters.upstreamRequestId : undefined,
   ].filter(Boolean).length
   const sensitiveType = sensitiveVisible ? 'text' : 'password'
   const logTypeItems = useMemo(
@@ -435,14 +440,16 @@ export function CommonLogsFilterBar<TData>(
           onKeyDown={handleKeyDown}
         />
       </LogsFilterField>
-      <LogsFilterField>
-        <LogsFilterInput
-          placeholder={t('Upstream Request ID')}
-          value={filters.upstreamRequestId || ''}
-          onChange={(e) => handleChange('upstreamRequestId', e.target.value)}
-          onKeyDown={handleKeyDown}
-        />
-      </LogsFilterField>
+      {isAdmin && (
+        <LogsFilterField>
+          <LogsFilterInput
+            placeholder={t('Upstream Request ID')}
+            value={filters.upstreamRequestId || ''}
+            onChange={(e) => handleChange('upstreamRequestId', e.target.value)}
+            onKeyDown={handleKeyDown}
+          />
+        </LogsFilterField>
+      )}
     </>
   )
 

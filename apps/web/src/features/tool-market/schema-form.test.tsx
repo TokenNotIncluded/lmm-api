@@ -401,6 +401,8 @@ test('an invalid optional numeric draft cannot execute a call with an old or sil
     return {
       call: {
         id: 'numeric-call',
+        user_id: 1,
+        grant_id: numericGrant.id,
         service_id: 'numeric-service',
         tool_id: numericTool.tool_id,
         version_id: numericTool.version_id,
@@ -480,6 +482,8 @@ async function mountExactCall() {
     return {
       call: {
         id: 'exact-call',
+        user_id: 1,
+        grant_id: exactGrant.id,
         service_id: 'exact-service',
         tool_id: exactTool.tool_id,
         version_id: exactTool.version_id,

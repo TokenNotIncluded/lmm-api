@@ -40,6 +40,9 @@ export function ModelBillingModeBadge(props: ModelBillingModeBadgeProps) {
   } else if (isTokenBasedModel(props.model)) {
     label = t('Token-based')
     variant = 'info'
+  } else if (props.model.quota_type === 2) {
+    label = t('Image prices')
+    variant = 'info'
   }
 
   return (

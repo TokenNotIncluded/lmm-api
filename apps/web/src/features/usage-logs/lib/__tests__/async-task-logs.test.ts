@@ -198,11 +198,30 @@ test('polling stops when disabled, empty, in error, or viewing common logs', () 
 })
 
 test('pagination placeholders cannot cross category or administrator scope', () => {
-  const previous = ['logs', 'task', true, 1]
-  assert.equal(canKeepPreviousLogData(previous, 'task', true), true)
-  assert.equal(canKeepPreviousLogData(previous, 'task', false), false)
-  assert.equal(canKeepPreviousLogData(previous, 'drawing', true), false)
-  assert.equal(canKeepPreviousLogData(undefined, 'task', false), false)
+  const account = { userId: 7, sessionId: 'session-a', role: 100 }
+  const previous = [
+    'logs',
+    'task',
+    true,
+    account.userId,
+    account.sessionId,
+    account.role,
+    1,
+  ]
+  assert.equal(canKeepPreviousLogData(previous, 'task', true, account), true)
+  assert.equal(canKeepPreviousLogData(previous, 'task', false, account), false)
+  assert.equal(
+    canKeepPreviousLogData(previous, 'drawing', true, account),
+    false
+  )
+  assert.equal(canKeepPreviousLogData(undefined, 'task', false, account), false)
+  for (const changed of [
+    { ...account, userId: 8 },
+    { ...account, sessionId: 'session-b' },
+    { ...account, role: 1 },
+  ]) {
+    assert.equal(canKeepPreviousLogData(previous, 'task', true, changed), false)
+  }
 })
 
 test('result_url is used first and legacy successful URLs remain usable', () => {

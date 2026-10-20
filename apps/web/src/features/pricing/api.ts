@@ -17,7 +17,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
+import { useAuthStore } from '@/stores/auth-store'
 
+import { adaptNativePricing } from './catalog-adapter'
+import { nativePricingSchema } from './catalog-contract'
 import type { PricingData } from './types'
 
 // ----------------------------------------------------------------------------
@@ -26,9 +29,24 @@ import type { PricingData } from './types'
 
 // Get model pricing data
 export async function getPricing(signal?: AbortSignal): Promise<PricingData> {
-  const res = await api.get('/api/pricing', { signal })
-  if (!res.data.success) {
-    throw new Error(res.data.message || 'Model catalog could not be loaded')
+  const { user, session } = useAuthStore.getState().auth
+  const visibility = user ? 'session' : 'public'
+  const res = await api.get<unknown>(`/core/v1/pricing/${visibility}`, {
+    signal,
+    timeout: 10_000,
+    authScope: { userId: user?.id, sessionId: session?.sid },
+    authMode: user ? 'session' : 'anonymous',
+    skipAuthRefresh: !user,
+    skipBusinessError: true,
+    skipErrorHandler: true,
+  })
+  const document = nativePricingSchema.parse(res.data)
+  if (document.visibility !== visibility) {
+    throw new Error('Model catalog visibility did not match the request')
   }
-  return res.data
+  return adaptNativePricing(document)
+}
+
+export function pricingQueryKey(userId?: number, sessionId?: string) {
+  return ['pricing', userId ?? null, sessionId ?? null]
 }

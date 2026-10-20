@@ -78,7 +78,10 @@ describe('Pricing perf columns', () => {
       /perfMap\?: ReadonlyMap<string, ModelPerfBadgeData>/
     )
     assert.match(tableSource, /perfMap,/)
-    assert.match(indexSource, /usePerfMap\(\)/)
+    assert.match(
+      indexSource,
+      /usePerfMap\(\{ enabled: performanceAvailable \}\)/
+    )
     assert.match(indexSource, /perfMap=\{perfMap\}/)
     assert.match(hookSource, /'perf-metrics-summary'/)
   })

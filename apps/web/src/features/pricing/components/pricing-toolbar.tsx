@@ -293,7 +293,9 @@ export function PricingToolbar(props: PricingToolbarProps) {
 
       <p role='note' className='text-muted-foreground text-xs leading-5'>
         {t(
-          'Groups filter model availability only. Prices always use the base price (1×).'
+          props.models.some((model) => model.group_prices)
+            ? 'Prices include the selected group factors. Select a group to compare its rates.'
+            : 'Groups filter model availability only. Prices always use the base price (1×).'
         )}
       </p>
 

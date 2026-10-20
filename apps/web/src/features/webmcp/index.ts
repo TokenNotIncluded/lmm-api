@@ -322,35 +322,42 @@ function coreTools(router: WebMcpRouter): ModelContextTool[] {
         const models = pricing.data
           .filter((item) => !model || item.model_name === model)
           .map((item) => {
-            const inputRatio = Number(item.model_ratio)
-            const outputRatio = inputRatio * Number(item.completion_ratio)
-            const tokenBased = item.quota_type === 0
+            const credits = (usd: number | null) => {
+              if (usd === null) return null
+              const value = usd * 500_000
+              return Number.isFinite(value) &&
+                value >= 0 &&
+                value <= Number.MAX_SAFE_INTEGER
+                ? value
+                : null
+            }
             return {
               model: item.model_name,
               vendor: item.vendor_name ?? null,
               quota_type: item.quota_type,
-              billing_unit: tokenBased
-                ? 'platform_credit_per_million_tokens'
-                : 'platform_credit_per_request',
-              input_platform_credit_per_million_tokens: tokenBased
-                ? inputRatio * 2
-                : null,
-              output_platform_credit_per_million_tokens: tokenBased
-                ? outputRatio * 2
-                : null,
-              cache_ratio_multiplier: tokenBased
-                ? (item.cache_ratio ?? null)
-                : null,
-              request_platform_credit: tokenBased
-                ? null
-                : (item.model_price ?? null),
-              group_multipliers: item.group_ratio ?? null,
-              billing_mode: item.billing_mode ?? null,
+              supported_endpoints: item.supported_endpoint_types ?? [],
+              token_prices_by_group: Object.entries(
+                item.group_prices ?? {}
+              ).map(([group, price]) => ({
+                group,
+                unit: 'million_tokens',
+                input_usd: price.input_price,
+                output_usd: price.output_price,
+                cache_read_usd: price.cache_read_price,
+                cache_write_usd: price.cache_write_price,
+                input_credits: credits(price.input_price),
+                output_credits: credits(price.output_price),
+                cache_read_credits: credits(price.cache_read_price),
+                cache_write_credits: credits(price.cache_write_price),
+              })),
+              image_variants: item.image_variants ?? [],
+              invocation_authorized: false,
             }
           })
         return {
           pricing_basis:
-            'Base platform credit before group multipliers; not a fiat checkout price.',
+            'Effective group rates already include group factors. Token amounts are USD and Credits per million tokens; image variants retain exact ratios per image. Unknown prices are null. This is not a locked quote or a fiat checkout price.',
+          credits_per_usd: 500_000,
           count: models.length,
           models,
         }

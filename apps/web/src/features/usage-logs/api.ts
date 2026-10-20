@@ -16,9 +16,20 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { isAxiosError } from 'axios'
+
 import { api } from '@/lib/api'
 
+import {
+  parseHistoryUnavailable,
+  parseLogsPage,
+  type LogsPage,
+} from './lib/history-response'
 import { buildQueryParams } from './lib/query-params'
+import {
+  readUsageStatisticsScope,
+  type UsageStatisticsScope,
+} from './lib/statistics'
 import type {
   GetLogsParams,
   GetLogsResponse,
@@ -27,6 +38,7 @@ import type {
   GetMidjourneyLogsParams,
   GetTaskLogsParams,
   UserInfo,
+  LogCategory,
 } from './types'
 
 // ============================================================================
@@ -37,20 +49,81 @@ function buildApiPath(endpoint: string, isAdmin: boolean): string {
   return isAdmin ? endpoint : `${endpoint}/self`
 }
 
-async function fetchLogs<T>(
-  endpoint: string,
+function assertLogScope(scope: UsageStatisticsScope, signal?: AbortSignal) {
+  const current = readUsageStatisticsScope()
+  if (
+    signal?.aborted ||
+    current?.userId !== scope.userId ||
+    current?.sessionId !== scope.sessionId ||
+    current?.role !== scope.role
+  ) {
+    throw new Error('Usage history session changed')
+  }
+}
+
+export async function readLogsPage({
+  category,
+  params,
+  isAdmin,
+  signal,
+  scope: expectedScope,
+}: {
+  category: LogCategory
+  params: GetLogsParams | GetMidjourneyLogsParams | GetTaskLogsParams
+  isAdmin: boolean
+  signal?: AbortSignal
+  scope?: UsageStatisticsScope
+}): Promise<LogsPage> {
+  const scope = expectedScope ?? readUsageStatisticsScope()
+  if (!scope) throw new Error('Usage history session unavailable')
+  assertLogScope(scope, signal)
+  const endpoint =
+    category === 'common'
+      ? '/api/log'
+      : category === 'drawing'
+        ? '/api/mj'
+        : '/api/task'
+  const query = buildQueryParams({ p: 1, page_size: 20, ...params })
+  let payload: unknown
+  try {
+    const response = await api.get<unknown>(
+      `${buildApiPath(endpoint, isAdmin)}?${query}`,
+      {
+        signal,
+        authScope: { userId: scope.userId, sessionId: scope.sessionId },
+        disableDuplicate: true,
+        skipBusinessError: true,
+        skipErrorHandler: true,
+        skipAuthRefresh: true,
+        timeout: 10_000,
+      }
+    )
+    payload = response.data
+  } catch (error) {
+    assertLogScope(scope, signal)
+    if (isAxiosError(error) && error.response?.status === 503) {
+      const unavailable = parseHistoryUnavailable(error.response.data, category)
+      if (unavailable) throw unavailable
+    }
+    throw error
+  }
+  assertLogScope(scope, signal)
+  const unavailable = parseHistoryUnavailable(payload, category)
+  if (unavailable) throw unavailable
+  return parseLogsPage(payload, category)
+}
+
+async function fetchLogs<
+  T extends GetLogsParams | GetMidjourneyLogsParams | GetTaskLogsParams,
+>(
+  category: LogCategory,
   params: T,
   isAdmin: boolean
 ): Promise<GetLogsResponse> {
-  const paramRecord = params as unknown as Record<string, unknown>
-  const queryParams = buildQueryParams({
-    p: paramRecord.p || 1,
-    page_size: paramRecord.page_size || 20,
-    ...params,
-  })
-  const path = buildApiPath(endpoint, isAdmin)
-  const res = await api.get(`${path}?${queryParams}`)
-  return res.data
+  return {
+    success: true,
+    data: await readLogsPage({ category, params, isAdmin }),
+  }
 }
 
 async function fetchLogStats<T>(
@@ -71,11 +144,11 @@ async function fetchLogStats<T>(
 // ============================================================================
 
 export const getAllLogs = (params: GetLogsParams = {}) =>
-  fetchLogs('/api/log', params, true)
+  fetchLogs('common', params, true)
 
 export const getUserLogs = (
   params: Omit<GetLogsParams, 'username' | 'channel'> = {}
-) => fetchLogs('/api/log', params, false)
+) => fetchLogs('common', params, false)
 
 export const getLogStats = (params: GetLogStatsParams = {}) =>
   fetchLogStats('/api/log', params, true)
@@ -96,17 +169,17 @@ export async function getUserInfo(
 // ============================================================================
 
 export const getAllMidjourneyLogs = (params: GetMidjourneyLogsParams) =>
-  fetchLogs('/api/mj', params, true)
+  fetchLogs('drawing', params, true)
 
 export const getUserMidjourneyLogs = (params: GetMidjourneyLogsParams) =>
-  fetchLogs('/api/mj', params, false)
+  fetchLogs('drawing', params, false)
 
 // ============================================================================
 // Task Logs API
 // ============================================================================
 
 export const getAllTaskLogs = (params: GetTaskLogsParams) =>
-  fetchLogs('/api/task', params, true)
+  fetchLogs('task', params, true)
 
 export const getUserTaskLogs = (params: GetTaskLogsParams) =>
-  fetchLogs('/api/task', params, false)
+  fetchLogs('task', params, false)

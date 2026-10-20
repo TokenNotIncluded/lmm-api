@@ -364,6 +364,34 @@ test('a malformed service deep link remains on the catalogue without a detail re
   assert.equal(findButton('Back to list', container), undefined)
 })
 
+test('an unresolved history price is shown as Unknown without inventing a zero bill', async () => {
+  stubNavigation([remote])
+  marketAPI.calls = async () => [
+    {
+      id: 'original-unknown-call',
+      service_id: remote.service.id,
+      tool_id: remote.tools[0].tool_id,
+      version_id: remote.version.id,
+      client_id: 'web-market',
+      execution_status: 'unknown',
+      settlement_status: 'reserved',
+      created_at: 1,
+      resolve_by: 100,
+    },
+  ]
+  const { container } = await mount()
+  await click(button('Call records', container))
+  await waitFor(
+    () => container.textContent?.includes('original-unknown-call') === true
+  )
+  const label = [...container.querySelectorAll('p')].find(
+    (item) => item.textContent === 'original-unknown-call'
+  )
+  assert.ok(label)
+  assert.match(label.parentElement?.textContent ?? '', /Reserved:\s*Unknown/)
+  assert.doesNotMatch(label.parentElement?.textContent ?? '', /NaN|undefined/)
+})
+
 test('a deep link rechecks visibility after an account switch and discards the previous private detail', async () => {
   const id = '768e7947-0652-4c6b-a998-712958765432'
   const item = detail(id, 'remote')
@@ -606,6 +634,8 @@ test('a paused remote market keeps builtin tools runnable and invokes only after
     calls.push(input)
     return {
       call: {
+        user_id: 1,
+        grant_id: input.grant_id,
         id: 'builtin-call',
         service_id: builtin.service.id,
         tool_id: input.tool_id,

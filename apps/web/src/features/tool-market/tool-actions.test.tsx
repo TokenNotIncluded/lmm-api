@@ -72,6 +72,8 @@ const original = {
   install: marketAPI.install,
   invoke: marketAPI.invoke,
   result: marketAPI.result,
+  lookupRequest: marketAPI.lookupRequest,
+  resume: marketAPI.resume,
   report: marketAPI.report,
 }
 const units = 500000
@@ -119,6 +121,8 @@ function response(
 ): CallResponse {
   return {
     call: {
+      user_id: 1,
+      grant_id: grant.id,
       id: 'call-original',
       service_id: 'service-search',
       tool_id: tool.tool_id,
@@ -481,16 +485,26 @@ test('cancelling a pending confirmation releases the same request without an acc
   assert.equal(findButton('Confirm and continue'), undefined)
 })
 
-test('a transport error freezes the original JSON and retry identity; an unknown held result cannot start another call', async () => {
+test('a transport error only looks up the original request, including after a missing lookup', async () => {
   const inputs: InvokeInput[] = []
   const refreshed: string[] = []
+  const lookups: string[] = []
   const unknown = {
     ...response('unknown', 'held'),
     error_code: 'TOOL_MARKET_RESULT_UNKNOWN',
   }
   marketAPI.invoke = async (input) => {
     inputs.push(structuredClone(input))
-    if (inputs.length === 1) throw new Error('connection lost after send')
+    assert.equal(
+      inputs.length,
+      1,
+      'an uncertain request is never invoked again'
+    )
+    throw new Error('connection lost after send')
+  }
+  marketAPI.lookupRequest = async (id) => {
+    lookups.push(id)
+    if (lookups.length === 1) throw new MarketAPIError('TOOL_MARKET_NOT_FOUND')
     return unknown
   }
   marketAPI.result = async (id) => {
@@ -500,20 +514,122 @@ test('a transport error freezes the original JSON and retry identity; an unknown
   await mount('call')
   const args = await advancedArguments('do not change this request')
   await click(button(runLabel))
-  await waitFor(() => findButton('Retry same request') !== undefined)
+  await waitFor(() => findButton('Check the original request') !== undefined)
   assert.equal(args.disabled, true)
   assert.equal(button('Advanced JSON').disabled, true)
   assert.equal(findButton('Start another call'), undefined)
-  await click(button('Retry same request'))
+  await click(button('Check the original request'))
+  await waitFor(
+    () =>
+      document.body.textContent?.includes('The request was not found.') === true
+  )
+  assert.equal(inputs.length, 1)
+  assert.equal(args.disabled, true)
+  await click(button('Check the original request'))
   await waitFor(() => findButton('Refresh result') !== undefined)
-  assert.equal(inputs[1].request_id, inputs[0].request_id)
-  assert.deepEqual(inputs[1].arguments, { q: 'do not change this request' })
-  assert.deepEqual(inputs[1].arguments, inputs[0].arguments)
+  assert.deepEqual(lookups, [inputs[0].request_id, inputs[0].request_id])
+  assert.deepEqual(inputs[0].arguments, { q: 'do not change this request' })
   assert.equal(findButton('Start another call'), undefined)
   assert.match(document.body.textContent ?? '', /The result is unknown/)
   await click(button('Refresh result'))
   assert.deepEqual(refreshed, ['call-original'])
-  assert.equal(inputs.length, 2)
+  assert.equal(inputs.length, 1)
+  assert.equal(findButton('Start another call'), undefined)
+})
+
+test('native confirmation opens only the Core page and requires a separate explicit resume', async () => {
+  let invoked = 0
+  const state = 'b'.repeat(64)
+  const imagePath = `/core/v1/images/confirm/image:${'d'.repeat(64)}`
+  const pending = {
+    ...response('awaiting_confirmation', 'reserved', {
+      content: [],
+      structuredContent: {
+        confirmation_url: imagePath,
+      },
+    }),
+    request_state: state,
+    awaiting_confirmation: true,
+    error_code: 'TOOL_MARKET_EXECUTION_PENDING',
+  }
+  const resumes: {
+    id: string
+    input: Parameters<typeof marketAPI.resume>[1]
+  }[] = []
+  marketAPI.invoke = async () => {
+    invoked++
+    return pending
+  }
+  marketAPI.result = async () => pending
+  marketAPI.resume = async (id, input) => {
+    resumes.push({ id, input })
+    return response('succeeded', 'settled', {
+      content: [{ type: 'text', text: 'Native operation completed' }],
+    })
+  }
+  await mount('call')
+  await advancedArguments()
+  await click(button(runLabel))
+  await waitFor(() => findButton('Continue after confirmation') !== undefined)
+  assert.equal(invoked, 1)
+  assert.equal(resumes.length, 0)
+  const link = element<HTMLAnchorElement>('a[target="_blank"]')
+  assert.equal(link.href, `https://console.example.test${imagePath}`)
+  assert.equal(link.rel, 'noopener noreferrer')
+  await click(button('Refresh result'))
+  assert.equal(resumes.length, 0, 'pure result GET never resumes')
+  await click(button('Continue after confirmation'))
+  await waitFor(
+    () =>
+      document.body.textContent?.includes('Native operation completed') === true
+  )
+  assert.deepEqual(resumes, [
+    { id: 'call-original', input: { request_state: state } },
+  ])
+  assert.equal(invoked, 1)
+})
+
+test('losing the resume ACK locks further POSTs until the original call is queried', async () => {
+  const state = 'b'.repeat(64)
+  const pending = {
+    ...response('awaiting_confirmation', 'reserved', {
+      content: [],
+      structuredContent: {},
+    }),
+    request_state: state,
+    awaiting_confirmation: true,
+    error_code: 'TOOL_MARKET_EXECUTION_PENDING',
+  }
+  let resumes = 0
+  let queries = 0
+  marketAPI.invoke = async () => pending
+  marketAPI.resume = async () => {
+    resumes++
+    throw new Error('ACK lost after resume')
+  }
+  marketAPI.result = async () => {
+    queries++
+    return {
+      ...response('unknown', 'reserved'),
+      error_code: 'TOOL_MARKET_EXECUTION_PENDING',
+      awaiting_confirmation: false,
+    }
+  }
+  await mount('call')
+  await advancedArguments()
+  await click(button(runLabel))
+  await waitFor(() => findButton('Continue after confirmation') !== undefined)
+  await click(button('Continue after confirmation'))
+  await waitFor(
+    () => document.body.textContent?.includes('The result is unknown.') === true
+  )
+  assert.equal(button('Continue after confirmation').disabled, true)
+  await click(button('Continue after confirmation'))
+  assert.equal(resumes, 1)
+  await click(button('Refresh result'))
+  await waitFor(() => findButton('Continue after confirmation') === undefined)
+  assert.equal(queries, 1)
+  assert.equal(resumes, 1)
   assert.equal(findButton('Start another call'), undefined)
 })
 

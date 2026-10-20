@@ -31,22 +31,22 @@ import { Button } from '@/components/ui/button'
 import { useMediaQuery } from '@/hooks'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
 import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/stores/auth-store'
 
-import {
-  DEFAULT_LOGS_DATA,
-  LOG_TYPE_ALL_VALUE,
-  LOG_TYPE_ENUM,
-} from '../constants'
+import { LOG_TYPE_ALL_VALUE, LOG_TYPE_ENUM } from '../constants'
 import {
   canKeepPreviousLogData,
   getAsyncLogRefreshInterval,
 } from '../lib/async-task-logs'
 import { useColumnsByCategory } from '../lib/columns'
 import { parseLogOther } from '../lib/format'
+import { UsageHistoryUnavailableError } from '../lib/history-response'
+import { readUsageStatisticsScope } from '../lib/statistics'
 import { fetchLogsByCategory } from '../lib/utils'
 import { useTaskLogsTranslation } from '../task-logs-i18n'
 import type { LogCategory } from '../types'
 import { CommonLogsFilterBar } from './common-logs-filter-bar'
+import { HistoricalLogsTable } from './historical-logs-table'
 import { TaskLogsFilterBar } from './task-logs-filter-bar'
 import { TaskLogsStatus } from './task-logs-status'
 import { UsageLogsMobileList } from './usage-logs-mobile-card'
@@ -82,6 +82,8 @@ interface UsageLogsTableProps {
 export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
   const { t } = useTaskLogsTranslation()
   const { isAdminView: isAdmin } = useLogsViewScope()
+  const auth = useAuthStore((state) => state.auth)
+  const scope = readUsageStatisticsScope(auth)
   const isMobile = useMediaQuery('(max-width: 640px)')
   const searchParams = route.useSearch()
   const [autoRefresh, setAutoRefresh] = useState(true)
@@ -124,53 +126,74 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
     ],
   })
 
-  const { data, dataUpdatedAt, isLoading, isFetching, isError, refetch } =
-    useQuery({
-      queryKey: [
-        'logs',
+  const {
+    data,
+    dataUpdatedAt,
+    isLoading,
+    isFetching,
+    isError,
+    error,
+    refetch,
+  } = useQuery({
+    queryKey: [
+      'logs',
+      logCategory,
+      isAdmin,
+      scope?.userId,
+      scope?.sessionId,
+      scope?.role,
+      pagination.pageIndex + 1,
+      pagination.pageSize,
+      columnFilters,
+      searchParams,
+      t,
+    ],
+    queryFn: async ({ signal }) => {
+      if (!scope) throw new Error('Usage history session unavailable')
+      const result = await fetchLogsByCategory({
         logCategory,
         isAdmin,
-        pagination.pageIndex + 1,
-        pagination.pageSize,
-        columnFilters,
+        page: pagination.pageIndex + 1,
+        pageSize: pagination.pageSize,
         searchParams,
-        t,
-      ],
-      queryFn: async () => {
-        const result = await fetchLogsByCategory({
+        columnFilters,
+        signal,
+        scope,
+      })
+
+      if (!result.success || !result.data) {
+        throw new Error(result?.message || t('Failed to load logs'))
+      }
+
+      return result.data
+    },
+    enabled: !!scope,
+    retry: false,
+    refetchInterval: (query) =>
+      getAsyncLogRefreshInterval(
+        logCategory,
+        query.state.data?.items || [],
+        autoRefresh,
+        query.state.status === 'error'
+      ),
+    refetchIntervalInBackground: false,
+    placeholderData: (previousData, previousQuery) => {
+      if (
+        scope &&
+        canKeepPreviousLogData(
+          previousQuery?.queryKey,
           logCategory,
           isAdmin,
-          page: pagination.pageIndex + 1,
-          pageSize: pagination.pageSize,
-          searchParams,
-          columnFilters,
-        })
+          scope
+        )
+      ) {
+        return previousData
+      }
+      return undefined
+    },
+  })
 
-        if (!result?.success) {
-          throw new Error(result?.message || t('Failed to load logs'))
-        }
-
-        return result.data || DEFAULT_LOGS_DATA
-      },
-      refetchInterval: (query) =>
-        getAsyncLogRefreshInterval(
-          logCategory,
-          query.state.data?.items || [],
-          autoRefresh,
-          query.state.status === 'error'
-        ),
-      refetchIntervalInBackground: false,
-      placeholderData: (previousData, previousQuery) => {
-        if (
-          canKeepPreviousLogData(previousQuery?.queryKey, logCategory, isAdmin)
-        ) {
-          return previousData
-        }
-        return undefined
-      },
-    })
-
-  const logs = data?.items || []
+  const logs = data?.kind === 'historical' ? [] : data?.items || []
   const columns = useColumnsByCategory(logCategory, isAdmin)
   const isLoadingData = isLoading || (isFetching && !data)
 
@@ -216,6 +239,20 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
   )
 
   if (isError) {
+    if (error instanceof UsageHistoryUnavailableError) {
+      return (
+        <ErrorState
+          title={t('History unavailable')}
+          description={t(
+            error.category === 'drawing'
+              ? 'Drawing history is not available on this server. Image API calls appear in Common Logs.'
+              : 'Task history is not available on this server. Other API calls appear in Common Logs.'
+          )}
+          onRetry={() => void refetch()}
+          action={emptyAction}
+        />
+      )
+    }
     return (
       <ErrorState
         title={t('Failed to load logs')}
@@ -223,6 +260,21 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
           'Check your connection and retry without losing filters.'
         )}
         onRetry={() => void refetch()}
+      />
+    )
+  }
+
+  if (data?.kind === 'historical') {
+    return (
+      <HistoricalLogsTable
+        items={data.items}
+        total={data.total}
+        pagination={pagination}
+        onPaginationChange={onPaginationChange}
+        columnFilters={columnFilters}
+        onColumnFiltersChange={onColumnFiltersChange}
+        ensurePageInRange={ensurePageInRange}
+        isFetching={isFetching}
       />
     )
   }

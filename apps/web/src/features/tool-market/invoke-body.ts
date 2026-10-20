@@ -2,6 +2,19 @@
 Copyright (C) 2026 LIghtJUNction
 SPDX-License-Identifier: AGPL-3.0-or-later
 */
+import { z } from 'zod'
+
+const resumeInput = z
+  .object({
+    request_state: z.string().regex(/^[a-f0-9]{64}$/),
+    input_responses: z.unknown().optional(),
+  })
+  .strict()
+
+export function marketResumeBody(input: unknown) {
+  return resumeInput.parse(input)
+}
+
 // Keep advanced JSON numbers in their original representation. Parsing an
 // integer above JavaScript's safe range and serializing it changes the payload.
 export function marketInvokeBody(input: {

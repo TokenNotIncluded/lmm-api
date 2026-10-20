@@ -169,7 +169,7 @@ export function ModelPlazaPanel() {
     isLoading: perfLoading,
     error: perfError,
     refetch: refetchPerf,
-  } = usePerfMap({ enabled: open })
+  } = usePerfMap({ enabled: open && pricing.performanceAvailable })
   const [query, setQuery] = useState('')
   const [vendor, setVendor] = useState('all')
   const [availability, setAvailability] = useState<AvailabilityFilter>('all')

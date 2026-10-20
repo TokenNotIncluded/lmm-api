@@ -38,7 +38,7 @@ export function getCompareTokenPrice(
 ): number | null {
   if (!isTokenBasedModel(model) || isDynamicPricingModel(model)) return null
   const price =
-    (getTokenPriceUSD(model, type) *
+    (getTokenPriceUSD(model, type, selectedGroup) *
       getDisplayGroupRatio(model, selectedGroup)) /
     TOKEN_UNIT_DIVISORS[tokenUnit]
   return Number.isFinite(price) && price >= 0 ? price : null
@@ -51,8 +51,20 @@ export function estimateWorkloadCost(
 ): { perRequest: number; perMonth: number } | null {
   const { input, output, requestsPerDay } = workload
   if (!Number.isFinite(requestsPerDay) || requestsPerDay < 0) return null
+  const groupPrices = selectedGroup
+    ? model.group_prices?.[selectedGroup]
+    : undefined
   const perRequest = estimateRequestCost(
-    model,
+    groupPrices
+      ? {
+          ...model,
+          ...groupPrices,
+          model_price: groupPrices.model_price ?? undefined,
+          quota_type: selectedGroup
+            ? (model.group_quota_types?.[selectedGroup] ?? model.quota_type)
+            : model.quota_type,
+        }
+      : model,
     getDisplayGroupRatio(model, selectedGroup),
     input,
     output,

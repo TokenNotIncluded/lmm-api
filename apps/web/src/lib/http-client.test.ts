@@ -88,6 +88,72 @@ afterEach(() => {
   clearAuthentication(false, 'idle')
 })
 
+describe('anonymous catalog requests', () => {
+  test('omits credentials and does not refresh an expired browser session', async () => {
+    const now = Math.floor(Date.now() / 1000)
+    useAuthStore
+      .getState()
+      .auth.setBundle(bundle('expired-private-token', now - 1))
+    let refreshes = 0
+    setDevelopmentAuthRefreshAdapter(async () => {
+      refreshes++
+      throw new Error('Anonymous requests must not refresh a session')
+    })
+    api.defaults.adapter = async (config) => {
+      assert.equal(config.headers.get('Authorization'), undefined)
+      assert.equal(config.auth, undefined)
+      assert.equal(config.withCredentials, false)
+      assert.equal(config.headers.get('X-LMM-Credit-Unit'), '500000')
+      return response(config, 200, { schema_version: 1 })
+    }
+
+    await api.get('/core/v1/pricing/public', {
+      authMode: 'anonymous',
+      headers: { Authorization: 'Bearer explicit-private-token' },
+      auth: { username: 'private-user', password: 'private-password' },
+    })
+    assert.equal(refreshes, 0)
+    assert.equal(
+      useAuthStore.getState().auth.accessToken,
+      'expired-private-token'
+    )
+  })
+
+  test('a public-policy 401 preserves the signed-in user without retrying', async () => {
+    const now = Math.floor(Date.now() / 1000)
+    useAuthStore.getState().auth.setBundle(bundle('private-token', now + 600))
+    let requests = 0
+    let refreshes = 0
+    setDevelopmentAuthRefreshAdapter(async () => {
+      refreshes++
+      throw new Error('Public-policy failures must not refresh a session')
+    })
+    api.defaults.adapter = async (config) => {
+      requests++
+      throw new AxiosError(
+        'Pricing requires authentication',
+        'ERR_BAD_REQUEST',
+        config,
+        undefined,
+        response(config, 401, { error: { code: 'pricing_unauthorized' } })
+      )
+    }
+
+    await assert.rejects(
+      api.get('/core/v1/pricing/public', {
+        authMode: 'anonymous',
+        skipErrorHandler: true,
+      }),
+      (error: unknown) =>
+        error instanceof AxiosError && error.response?.status === 401
+    )
+    assert.equal(requests, 1)
+    assert.equal(refreshes, 0)
+    assert.equal(useAuthStore.getState().auth.user?.id, 42)
+    assert.equal(useAuthStore.getState().auth.accessToken, 'private-token')
+  })
+})
+
 describe('canonical browser credit-unit acknowledgement', () => {
   test('declares the fixed unit on dispatched requests without changing raw payloads', async () => {
     const now = Math.floor(Date.now() / 1000)
