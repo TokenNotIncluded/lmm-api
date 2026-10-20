@@ -1306,17 +1306,33 @@ impl PaymentsStore {
         credential: Option<&str>,
         request: pb::GetPaymentReceiptRequest,
     ) -> Result<pb::PaymentReceipt> {
-        if !(16..=128).contains(&request.idempotency_key.len()) {
+        if request.intent_id <= 0 || !(16..=128).contains(&request.idempotency_key.len()) {
             return Err(Error::Invalid);
         }
-        let mut tx = self.begin().await?;
-        let intent = Self::intent(&mut tx, request.intent_id).await?;
+        // Receipts and the intent's payer basis are immutable. Reading them
+        // must not lock the mutable intent against a concurrent credit/refund.
+        // Keep the live Session/team authorization and its authority locks in
+        // this transaction; READ ONLY would reject those FOR SHARE checks.
+        let mut tx = self.pool.begin().await?;
+        for statement in [
+            "SET TRANSACTION ISOLATION LEVEL READ COMMITTED",
+            "SET LOCAL lock_timeout='1200ms'",
+            "SET LOCAL statement_timeout='1500ms'",
+        ] {
+            sqlx::query(statement).execute(&mut *tx).await?;
+        }
+        let account: i64 =
+            sqlx::query_scalar("SELECT account_id FROM core_payments.intents WHERE id=$1")
+                .bind(request.intent_id)
+                .fetch_optional(&mut *tx)
+                .await?
+                .ok_or(Error::NotFound)?;
         if let Some(credential) = credential {
-            Self::authorize(&mut tx, credential, intent.account_id).await?;
+            Self::authorize(&mut tx, credential, account).await?;
         }
         // None is allowed only by RPC's explicit reconcile service permission.
         let wire: Vec<u8> = sqlx::query_scalar("SELECT receipt_wire FROM core_payments.receipts WHERE intent_id=$1 AND operation_key=$2")
-            .bind(intent.id).bind(&request.idempotency_key).fetch_optional(&mut *tx).await?.ok_or(Error::NotFound)?;
+            .bind(request.intent_id).bind(&request.idempotency_key).fetch_optional(&mut *tx).await?.ok_or(Error::NotFound)?;
         let receipt = pb::PaymentReceipt::decode(wire.as_slice()).map_err(|_| Error::Storage)?;
         tx.commit().await?;
         Ok(receipt)
