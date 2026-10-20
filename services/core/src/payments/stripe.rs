@@ -5,7 +5,7 @@
 use std::{collections::BTreeMap, fmt};
 
 use hmac::{Hmac, Mac};
-use serde::{de, Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de};
 use serde_json::Value;
 use sha2::Sha256;
 
@@ -521,16 +521,18 @@ mod tests {
         config
             .webhook_secrets
             .insert(0, "whsec_replacement_core_test".into());
-        assert!(verify(
-            &raw,
-            &signed(&raw, SECRET, NOW),
-            &config,
-            42,
-            "USD",
-            100,
-            NOW
-        )
-        .is_ok());
+        assert!(
+            verify(
+                &raw,
+                &signed(&raw, SECRET, NOW),
+                &config,
+                42,
+                "USD",
+                100,
+                NOW
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -551,16 +553,18 @@ mod tests {
             ));
         }
         for time in [NOW - 300, NOW + 300] {
-            assert!(verify(
-                &raw,
-                &signed(&raw, SECRET, time),
-                &channel(),
-                42,
-                "USD",
-                100,
-                NOW
-            )
-            .is_ok());
+            assert!(
+                verify(
+                    &raw,
+                    &signed(&raw, SECRET, time),
+                    &channel(),
+                    42,
+                    "USD",
+                    100,
+                    NOW
+                )
+                .is_ok()
+            );
         }
     }
 

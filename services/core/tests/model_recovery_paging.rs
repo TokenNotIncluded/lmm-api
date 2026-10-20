@@ -322,10 +322,12 @@ async fn missing_contract_and_invalid_pages_never_fall_back_or_expand_access(poo
         ));
     }
     sqlx::raw_sql(&func_def).execute(&pool).await.unwrap();
-    sqlx::query("REVOKE ALL ON FUNCTION core_model.completed_streams_after(integer,text) FROM PUBLIC")
-        .execute(&pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "REVOKE ALL ON FUNCTION core_model.completed_streams_after(integer,text) FROM PUBLIC",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
     assert_eq!(
         f.gateway
             .reconcile_completed_streams_page(1, None)
