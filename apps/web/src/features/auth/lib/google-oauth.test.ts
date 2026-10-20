@@ -138,10 +138,37 @@ describe('Google authorization response restrictions', () => {
     )
   })
 
-  test('the advertised callback cannot expand the two browser API paths or change origin', () => {
+  test('accepts the registered legacy SPA callback only when it is explicitly configured', () => {
+    const url = authorizationUrl()
+    url.searchParams.set('redirect_uri', `${origin}/oauth/google`)
+    for (const configuredCallback of [
+      '/oauth/google',
+      `${origin}/oauth/google`,
+    ]) {
+      assert.equal(
+        validateGoogleBrowserAuthorizationUrl(
+          url.toString(),
+          'test-client',
+          origin,
+          false,
+          configuredCallback
+        ),
+        url.toString()
+      )
+    }
+    assert.throws(() =>
+      validateGoogleBrowserAuthorizationUrl(
+        url.toString(),
+        'test-client',
+        origin
+      )
+    )
+  })
+
+  test('the advertised callback cannot expand known browser paths or change origin', () => {
     for (const configuredCallback of [
       '/core/v1/auth/oauth/google/callback',
-      '/oauth/google',
+      '/oauth/google/other',
       'https://foreign.example.test/api/oauth/google',
       '/api/oauth/google?token=unsafe',
       '/api/oauth/google#token',
@@ -161,7 +188,7 @@ describe('Google authorization response restrictions', () => {
     }
   })
 
-  test('refuses native token callback, legacy SPA callback, foreign callback, fragment and credentials', () => {
+  test('refuses native token callback, unconfigured SPA callback, foreign callback, fragment and credentials', () => {
     for (const callback of [
       `${origin}/core/v1/auth/oauth/google/callback`,
       `${origin}/oauth/google`,
@@ -177,6 +204,55 @@ describe('Google authorization response restrictions', () => {
           url.toString(),
           'test-client',
           origin
+        )
+      )
+    }
+  })
+
+  test('the configured legacy SPA callback rejects foreign origins, userinfo and path normalization tricks', () => {
+    const path = '/oauth/google'
+    for (const callback of [
+      'https://foreign.example.test/oauth/google',
+      `${origin}/oauth/other/../google`,
+      `${origin}/oauth/%2e/google`,
+      `${origin}/api/oauth/../../oauth/google`,
+      String.raw`https://site.example.test\other\..${path}`,
+      `https://user:pass@site.example.test${path}`,
+      `https://@site.example.test${path}`,
+      `${origin}${path}?redirect=unsafe`,
+      `${origin}${path}#token`,
+      `${origin}${path}\n`,
+      `${origin}${path}\r`,
+    ]) {
+      const url = authorizationUrl()
+      url.searchParams.set('redirect_uri', callback)
+      assert.throws(() =>
+        validateGoogleBrowserAuthorizationUrl(
+          url.toString(),
+          'test-client',
+          origin,
+          false,
+          path
+        )
+      )
+    }
+    const url = authorizationUrl()
+    url.searchParams.set('redirect_uri', `${origin}${path}`)
+    for (const configuredCallback of [
+      '/oauth/other/../google',
+      '/oauth/%2e/google',
+      '/api/oauth/../../oauth/google',
+      'https://foreign.example.test/oauth/google',
+      '/oauth/google\n',
+      '/oauth/google\r',
+    ]) {
+      assert.throws(() =>
+        validateGoogleBrowserAuthorizationUrl(
+          url.toString(),
+          'test-client',
+          origin,
+          false,
+          configuredCallback
         )
       )
     }

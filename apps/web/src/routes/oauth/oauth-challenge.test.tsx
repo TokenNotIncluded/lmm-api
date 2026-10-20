@@ -73,6 +73,7 @@ await i18n.use(initReactI18next).init({
 })
 const originalGet = api.get
 const originalPost = api.post
+const originalAdapter = api.defaults.adapter
 const roots: ReturnType<typeof createRoot>[] = []
 
 function callbackTree() {
@@ -137,6 +138,7 @@ afterEach(async () => {
   for (const root of roots.splice(0)) await act(async () => root.unmount())
   api.get = originalGet
   api.post = originalPost
+  api.defaults.adapter = originalAdapter
   provider = 'github'
   useAuthStore.getState().auth.reset('complete')
   navigations.length = 0
@@ -179,6 +181,114 @@ test('StrictMode exchanges once and carries the product target with the 2FA chal
     },
   ])
   assert.equal(useAuthStore.getState().auth.accessToken, null)
+})
+
+test('the registered Google SPA callback exchanges JSON once and applies the returned session bundle', async () => {
+  provider = 'google'
+  search = {
+    code: 'legacy-google-code',
+    state: 'legacy-google-state',
+    redirect: '/wallet?from=google#activity',
+  }
+  const googleBundle: AuthBundle = {
+    ...bundle,
+    session: { ...bundle.session, login_method: 'google' },
+  }
+  let exchanges = 0
+  api.defaults.adapter = async (config) => {
+    exchanges++
+    assert.equal(config.url, '/api/oauth/google')
+    assert.deepEqual(config.params, {
+      code: search.code,
+      state: search.state,
+      error: undefined,
+      error_description: undefined,
+      iss: undefined,
+    })
+    assert.match(String(config.headers.get('Accept')), /application\/json/)
+    return {
+      config,
+      status: 200,
+      statusText: 'OK',
+      headers: { 'content-type': 'application/json' },
+      data: { success: true, data: googleBundle },
+    }
+  }
+  await mount()
+  assert.equal(exchanges, 1)
+  assert.equal(
+    useAuthStore.getState().auth.accessToken,
+    googleBundle.access_token
+  )
+  assert.equal(useAuthStore.getState().auth.session?.login_method, 'google')
+  assert.equal(useAuthStore.getState().auth.pending2FAFlowToken, null)
+  assert.deepEqual(navigations, [
+    {
+      href: '/wallet?from=google#activity',
+      replace: true,
+      flowTokenDuringNavigation: null,
+    },
+  ])
+})
+
+test('the registered Google SPA callback commits its JSON MFA challenge before considering a session bundle', async () => {
+  provider = 'google'
+  search = {
+    code: 'legacy-google-mfa-code',
+    state: 'legacy-google-mfa-state',
+    redirect: '/wallet',
+  }
+  let exchanges = 0
+  api.defaults.adapter = async (config) => {
+    exchanges++
+    assert.equal(config.url, '/api/oauth/google')
+    return {
+      config,
+      status: 200,
+      statusText: 'OK',
+      headers: { 'content-type': 'application/json' },
+      data: {
+        success: true,
+        data: {
+          ...bundle,
+          require_2fa: true,
+          flow_token: 'bound-legacy-google-mfa',
+          expires_at: 2_000_000_000,
+        },
+      },
+    }
+  }
+  await mount()
+  assert.equal(exchanges, 1)
+  assert.equal(useAuthStore.getState().auth.accessToken, null)
+  assert.equal(
+    useAuthStore.getState().auth.pending2FAFlowToken,
+    'bound-legacy-google-mfa'
+  )
+  assert.deepEqual(navigations, [
+    {
+      to: '/otp',
+      search: { redirect: '/wallet' },
+      replace: true,
+      flowTokenDuringNavigation: 'bound-legacy-google-mfa',
+    },
+  ])
+})
+
+test('an API-style Google redirect response is never treated as SPA JSON login acceptance', async () => {
+  provider = 'google'
+  search = { code: 'legacy-google-code', state: 'legacy-google-state' }
+  api.defaults.adapter = async (config) => ({
+    config,
+    status: 303,
+    statusText: 'See Other',
+    headers: { location: '/console', 'content-type': 'text/html' },
+    data: '<html>See Other</html>',
+  })
+  await mount()
+  assert.equal(useAuthStore.getState().auth.accessToken, null)
+  assert.equal(useAuthStore.getState().auth.pending2FAFlowToken, null)
+  assert.equal(navigations.at(-1)?.href, '/sign-in')
 })
 
 for (const builtInProvider of ['google', 'github', 'discord', 'linuxdo']) {

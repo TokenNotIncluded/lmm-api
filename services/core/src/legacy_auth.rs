@@ -749,6 +749,12 @@ async fn google_callback(
         Ok(binding) => binding,
         Err(error) => return auth_failure(error.into()),
     };
+    // Existing custom Google installations registered the SPA callback. That
+    // page exchanges code/state through this API and consumes the JSON result.
+    // API callbacks remain direct browser redirects. Only server configuration
+    // chooses the response contract; request headers or query cannot switch it.
+    let frontend_callback =
+        state.config.google_browser_callback(&state.store) == Some("/oauth/google");
     let result = async {
         if state.config.google_client_id(&state.store).is_none() {
             return Err(IdentityError::Forbidden.into());
@@ -781,9 +787,17 @@ async fn google_callback(
     }
     .await;
     let response = match result {
+        Ok(BrowserLoginOutcome::Session(bundle)) if frontend_callback => {
+            bundle_response(bundle, &state.config)
+        }
         Ok(BrowserLoginOutcome::Session(bundle)) => set_cookie(
             Redirect::to("/console").into_response(),
             Some((&bundle.refresh_token, bundle.expires_at)),
+            &state.config,
+        ),
+        Ok(BrowserLoginOutcome::Challenge(challenge)) if frontend_callback => mfa_flow_cookie(
+            success(Some(json!(challenge))),
+            Some(&mfa_binding),
             &state.config,
         ),
         Ok(BrowserLoginOutcome::Challenge(challenge)) => {

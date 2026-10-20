@@ -2980,6 +2980,43 @@ mod tests {
         assert!(!parsed.contains_key("LMM_CORE_GOOGLE_CLIENT_SECRET"));
     }
 
+    #[tokio::test]
+    async fn deployment_google_legacy_frontend_callback_preserves_exact_registered_uri() {
+        let parsed = parse_core_file(
+            b"version=1\n[database]\nurl_file='/missing-db'\n[identity.web]\norigin='https://example.test'\nrefresh_key_file='/missing-refresh'\n[identity.google]\nclient_id='public-test-client'\nclient_secret_file='/missing-google'\nredirect_uri='https://example.test/oauth/google'\n",
+        )
+        .unwrap();
+        assert_eq!(
+            parsed["LMM_CORE_GOOGLE_REDIRECT_URI"],
+            "https://example.test/oauth/google"
+        );
+        assert_eq!(
+            parsed["LMM_CORE_GOOGLE_CLIENT_SECRET_FILE"],
+            "/missing-google"
+        );
+        let google = crate::identity::GoogleOAuth::new(
+            parsed["LMM_CORE_GOOGLE_CLIENT_ID"].clone(),
+            "test-only-client-secret".into(),
+            parsed["LMM_CORE_GOOGLE_REDIRECT_URI"].clone(),
+        )
+        .unwrap();
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .min_connections(0)
+            .connect_lazy("postgresql://unused:unused@127.0.0.1:1/unused")
+            .unwrap();
+        let store = crate::identity::IdentityStore::from_pool(pool).with_google_oauth(google);
+        let web =
+            crate::legacy_auth::LegacyAuthConfig::new(&parsed["LMM_CORE_WEB_ORIGIN"], &[43; 32])
+                .unwrap();
+        assert_eq!(web.google_browser_callback(&store), Some("/oauth/google"));
+        assert_eq!(web.google_client_id(&store), Some("public-test-client"));
+        assert!(!store.google_native_enabled());
+        let foreign =
+            crate::legacy_auth::LegacyAuthConfig::new("https://foreign.test", &[43; 32]).unwrap();
+        assert!(foreign.google_browser_callback(&store).is_none());
+        assert!(foreign.google_client_id(&store).is_none());
+    }
+
     #[cfg(unix)]
     #[test]
     fn ordinary_toml_allows_readable_templates_but_rejects_writable_and_symlink_paths() {

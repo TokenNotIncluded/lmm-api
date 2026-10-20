@@ -1,6 +1,8 @@
 use super::*;
 #[path = "external_browser_tests.rs"]
 mod external_browser_tests;
+#[path = "google_legacy_browser_tests.rs"]
+mod google_legacy_browser_tests;
 use jsonwebtoken::{EncodingKey, Header, encode};
 
 #[sqlx::test(migrations = false)]
