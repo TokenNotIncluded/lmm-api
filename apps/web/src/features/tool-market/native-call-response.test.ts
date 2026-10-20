@@ -16,7 +16,7 @@ import {
 
 const callID = 'a'.repeat(64)
 const state = 'b'.repeat(64)
-const imagePath = `/core/v1/images/confirm/image:${'d'.repeat(64)}`
+const imagePath = `/api/user/auth/images/confirm/image:${'d'.repeat(64)}`
 const bountyPath = `/core/v1/bounties/confirm/${'e'.repeat(64)}`
 function receipt() {
   return {
@@ -172,6 +172,13 @@ test('confirmation links are same-origin exact Core confirmation paths', () => {
   )
   assert.equal(
     marketConfirmationURL(
+      { structuredContent: { confirmation_url: `${origin}${imagePath}` } },
+      origin
+    ),
+    `${origin}${imagePath}`
+  )
+  assert.equal(
+    marketConfirmationURL(
       {
         structuredContent: {
           receipt: { confirmation_url: bountyPath },
@@ -182,16 +189,30 @@ test('confirmation links are same-origin exact Core confirmation paths', () => {
     `${origin}${bountyPath}`
   )
   for (const url of [
-    '/core/v1/images/confirm/image_123',
-    '/core/v1/images/confirm/image:short',
+    `/core/v1/images/confirm/image:${'d'.repeat(64)}`,
+    `${origin}/core/v1/images/confirm/image:${'d'.repeat(64)}`,
+    '/api/user/auth/images/confirm/image_123',
+    '/api/user/auth/images/confirm/image:short',
+    `/api/user/auth/images/confirm/image:${'D'.repeat(64)}`,
     '/core/v1/bounties/confirm/not-a-confirmation-hash',
-    'https://attacker.test/core/v1/images/confirm/original',
+    `https://attacker.test${imagePath}`,
     'javascript:alert(1)',
     '/logout',
-    '/core/v1/images/confirm/id?approve=true',
-    '/core/v1/images/confirm/id#token',
-    '/core/v1/images/confirm/../logout',
-    'https://user@console.example.test/core/v1/images/confirm/id',
+    '/api/user/auth/refresh',
+    '/api/user/auth/logout',
+    `${imagePath}/`,
+    `${imagePath}?approve=true`,
+    `${imagePath}#token`,
+    `/api/user/auth/images/confirm/../confirm/image:${'d'.repeat(64)}`,
+    `${origin}/api/user/auth/images/confirm/%2e%2e/confirm/image:${'d'.repeat(64)}`,
+    `/api/user/auth/./images/confirm/image:${'d'.repeat(64)}`,
+    `/api/user/auth/images/confirm/other/../image:${'d'.repeat(64)}`,
+    `https://user@console.example.test${imagePath}`,
+    `https://user:password@console.example.test${imagePath}`,
+    `https://@console.example.test${imagePath}`,
+    `https://:@console.example.test${imagePath}`,
+    `https://console.example.test\t${imagePath}`,
+    String.raw`https://console.example.test\junk\..${imagePath}`,
   ]) {
     assert.equal(
       marketConfirmationURL(

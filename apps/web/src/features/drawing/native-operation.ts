@@ -106,7 +106,15 @@ export function imageConfirmationURL(
     // Only the Core browser page owns approval; never navigate to provider URLs.
     if (
       url.origin !== origin ||
-      !/^\/core\/v1\/images\/confirm\/image:[a-f0-9]{64}$/.test(url.pathname) ||
+      !/^\/api\/user\/auth\/images\/confirm\/image:[a-f0-9]{64}$/.test(
+        url.pathname
+      ) ||
+      // URL parsing normalizes dot segments, so also check the supplied path.
+      !/^(?:https?:\/\/[^/?#\\\s@]+)?\/api\/user\/auth\/images\/confirm\/image:[a-f0-9]{64}$/.test(
+        parsed.data.confirmation_url
+      ) ||
+      url.username ||
+      url.password ||
       url.search ||
       url.hash
     ) {

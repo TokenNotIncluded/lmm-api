@@ -276,7 +276,7 @@ const pendingReceipt = () => ({
   result: {
     isError: false,
     structuredContent: {
-      confirmation_url: `https://console.example.test/core/v1/images/confirm/${imageID}`,
+      confirmation_url: `https://console.example.test/api/user/auth/images/confirm/${imageID}`,
       billing_pending: true,
       preview: { expires_at: previewExpiresAt },
     },
@@ -441,7 +441,7 @@ test('preview does not execute: links Core confirmation and resumes the original
     assert.equal(button(rendered.container, 'Generate image').disabled, true)
     assert.equal(
       rendered.container
-        .querySelector('a[href*="/core/v1/images/confirm/"]')
+        .querySelector('a[href*="/api/user/auth/images/confirm/"]')
         ?.getAttribute('target'),
       '_blank'
     )

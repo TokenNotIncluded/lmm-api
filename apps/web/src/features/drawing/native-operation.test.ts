@@ -42,19 +42,35 @@ test('persists the original operation identity and only clears the same request'
 test('only links to the same Core image confirmation browser page', () => {
   const origin = 'https://local.example'
   const imageID = `image:${'a'.repeat(64)}`
-  assert.equal(
-    imageConfirmationURL(
-      { confirmation_url: `/core/v1/images/confirm/${imageID}` },
-      origin
-    ),
-    `${origin}/core/v1/images/confirm/${imageID}`
-  )
+  const imagePath = `/api/user/auth/images/confirm/${imageID}`
+  for (const confirmationURL of [imagePath, `${origin}${imagePath}`]) {
+    assert.equal(
+      imageConfirmationURL({ confirmation_url: confirmationURL }, origin),
+      `${origin}${imagePath}`
+    )
+  }
   for (const url of [
-    'https://provider.example/core/v1/images/confirm/x',
+    `https://provider.example${imagePath}`,
+    `/core/v1/images/confirm/${imageID}`,
+    `${origin}/core/v1/images/confirm/${imageID}`,
     '/logout',
-    '/core/v1/images/confirm/x?approve=true',
+    '/api/user/auth/refresh',
+    '/api/user/auth/logout',
+    `/api/user/auth/images/confirm/image:${'A'.repeat(64)}`,
+    `${imagePath}/`,
+    `${imagePath}?approve=true`,
+    `${imagePath}#approved`,
+    `https://user@local.example${imagePath}`,
+    `https://user:password@local.example${imagePath}`,
+    `https://@local.example${imagePath}`,
+    `https://:@local.example${imagePath}`,
+    `https://local.example\t${imagePath}`,
+    String.raw`https://local.example\junk\..${imagePath}`,
+    `/api/user/auth/images/confirm/../confirm/${imageID}`,
+    `${origin}/api/user/auth/images/confirm/%2e%2e/confirm/${imageID}`,
+    `/api/user/auth/./images/confirm/${imageID}`,
+    `/api/user/auth/images/confirm/other/../${imageID}`,
     'javascript:alert(1)',
-    '/core/v1/images/confirm/x#approved',
   ]) {
     assert.equal(imageConfirmationURL({ confirmation_url: url }, origin), null)
   }
