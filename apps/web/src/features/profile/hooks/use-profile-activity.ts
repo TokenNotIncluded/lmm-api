@@ -20,6 +20,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useMemo } from 'react'
 
 import { createQueryRetry } from '@/lib/query-retry'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { getProfileUsageWindow } from '../api'
 import {
@@ -31,6 +32,8 @@ export function useProfileActivity(
   accountCreatedTime?: number,
   enabled = true
 ) {
+  const userId = useAuthStore((state) => state.auth.user?.id)
+  const sessionId = useAuthStore((state) => state.auth.session?.sid)
   const range = useMemo(() => getProfileActivityRange(), [])
   const queryStart = Math.max(
     range.start_timestamp,
@@ -42,14 +45,21 @@ export function useProfileActivity(
   )
 
   const query = useQuery({
-    queryKey: ['profile', 'token-activity', queryStart, range.end_timestamp],
+    queryKey: [
+      'profile',
+      'token-activity',
+      userId,
+      sessionId,
+      queryStart,
+      range.end_timestamp,
+    ],
     queryFn: async () => {
       const windows = await Promise.all(
         queryRanges.map((window) => getProfileUsageWindow(window))
       )
       return windows.flat()
     },
-    enabled,
+    enabled: enabled && userId !== undefined,
     staleTime: 5 * 60 * 1000,
     retry: createQueryRetry(true, 1),
   })

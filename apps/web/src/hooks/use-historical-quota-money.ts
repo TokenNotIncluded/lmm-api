@@ -20,7 +20,7 @@ export function useHistoricalQuotaMoney() {
   const locale = getCurrencyFormattingLocale(
     i18n.resolvedLanguage || i18n.language
   )
-  const formatRawQuota = (quota: number) =>
+  const formatRawQuota = (quota: number | null) =>
     formatHistoricalRawQuota(quota, t('Raw credits'), locale)
   const formatUSDValue = (usd: number) =>
     formatUSD(usd, { digitsLarge: 4, digitsSmall: 8, abbreviate: false })

@@ -9,6 +9,7 @@ the Free Software Foundation, either version 3 of the License, or
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
+import type { QuotaDataItem } from '../types'
 import {
   modelUsageCsv,
   selectModelUsage,
@@ -21,6 +22,103 @@ const data = [
   { created_at: 2, model_name: 'alpha', count: 1, token_used: 10, quota: 1 },
   { created_at: 1, model_name: 'beta', count: 4, token_used: 80, quota: 6 },
 ]
+
+const nativeBucket = (
+  overrides: Partial<QuotaDataItem> = {}
+): QuotaDataItem => ({
+  created_at: 0,
+  model_name: 'image',
+  count: 1,
+  quota: 100,
+  token_used: null,
+  output_image_count: 2,
+  token_count_scope: 'settled_text_requests',
+  usage_scope: 'actor_personal_usage',
+  settlement_scope: 'settled_requests',
+  platform_sponsored: false,
+  wallet_debit_supported: false,
+  ...overrides,
+})
+
+test('native image-only models retain null tokens and exact image/consumption counts', () => {
+  const [row] = summarizeModelUsage([nativeBucket()])
+  assert.equal(row.tokens, null)
+  assert.equal(row.count, 1)
+  assert.equal(row.quota_raw, '100')
+  assert.equal(row.output_image_count, 2)
+  assert.equal(row.token_count_scope, 'settled_text_requests')
+  assert.equal(row.settlement_scope, 'settled_requests')
+  assert.equal(row.wallet_debit_supported, false)
+  const record = modelUsageCsv([row], [], '').split('\r\n')[1]
+  assert.match(record, /^"image","1","","100"/)
+  assert.ok(record.endsWith(',"2","settled_text_requests"'))
+})
+
+test('a model with text and images keeps known text tokens and separates sponsored consumption', () => {
+  const [row] = summarizeModelUsage([
+    nativeBucket(),
+    nativeBucket({
+      token_used: 19,
+      output_image_count: 0,
+      quota: 25,
+      platform_sponsored: true,
+    }),
+  ])
+  assert.equal(row.tokens, 19)
+  assert.equal(row.output_image_count, 2)
+  assert.equal(row.count, 2)
+  assert.equal(row.quota_raw, '125')
+  assert.equal(row.platform_sponsored_quota, 25)
+  assert.equal(row.token_count_scope, 'settled_text_requests')
+})
+
+test('unknown legacy tokens do not become zero or a known subtotal, while real zero remains known', () => {
+  const unknown = summarizeModelUsage([
+    {
+      created_at: 0,
+      model_name: 'unknown',
+      token_used: null,
+      count: 1,
+      quota: 3,
+    },
+    {
+      created_at: 0,
+      model_name: 'unknown',
+      token_used: 19,
+      count: 1,
+      quota: 2,
+    },
+  ])[0]
+  assert.equal(unknown.tokens, null)
+  assert.equal(unknown.count, 2)
+  assert.equal(unknown.quota_raw, '5')
+  const zero = summarizeModelUsage([
+    nativeBucket({ model_name: 'zero', token_used: 0, output_image_count: 0 }),
+  ])[0]
+  assert.equal(zero.tokens, 0)
+  for (const direction of ['ascending', 'descending'] as const) {
+    assert.equal(
+      selectModelUsage(
+        [unknown, zero],
+        '',
+        { metric: 'tokens', direction },
+        ''
+      )[0].model,
+      'zero'
+    )
+  }
+})
+
+test('mixing native and legacy buckets leaves incomplete image totals and scope unavailable', () => {
+  const [row] = summarizeModelUsage([
+    nativeBucket(),
+    { created_at: 1, model_name: 'image', token_used: 5, quota: 10 },
+  ])
+  assert.equal(row.tokens, 5)
+  assert.equal(row.output_image_count, null)
+  assert.equal(row.token_count_scope, undefined)
+  assert.equal(row.platform_sponsored_quota, null)
+})
 
 test('combines time buckets and users without changing the input', () => {
   const input = structuredClone(data)
@@ -90,7 +188,7 @@ test('empty data and zero cost do not invent a percentage', () => {
     {
       model: 'free',
       count: 3,
-      tokens: 0,
+      tokens: null,
       quota: 0,
       quota_raw: '0',
       share: null,
@@ -125,7 +223,7 @@ test('does not leak invalid numbers and preserves signed adjustments', () => {
     { created_at: 1, quota: 5 },
   ])
   assert.deepEqual(rows, [
-    { model: '', count: 0, tokens: 0, quota: 3, quota_raw: '3', share: 1 },
+    { model: '', count: 0, tokens: null, quota: 3, quota_raw: '3', share: 1 },
   ])
 })
 
@@ -167,7 +265,7 @@ test('unverified bucket metadata cannot turn raw quota into a historical amount'
   ])
   assert.equal(
     modelUsageCsv(rows, [], '').split('\r\n')[1],
-    '"legacy","0","0","3500000","raw_quota","false","bucket_without_credit_basis","100"'
+    '"legacy","0","","3500000","raw_quota","false","bucket_without_credit_basis","100"'
   )
 })
 
@@ -179,7 +277,7 @@ test('raw quota sums remain exact after crossing the safe-number boundary', () =
   assert.equal(rows[0].quota_raw, '9007199254740993')
   assert.equal(
     modelUsageCsv(rows, [], '').split('\r\n')[1],
-    '"large","0","0","9007199254740993","raw_quota","false","bucket_without_credit_basis","100"'
+    '"large","0","","9007199254740993","raw_quota","false","bucket_without_credit_basis","100"'
   )
 })
 
@@ -198,11 +296,11 @@ test('an inexact source leaves raw quota unknown without discarding usage counts
     ])
     assert.equal(rows[0].quota_raw, null)
     assert.equal(rows[0].count, 2)
-    assert.equal(rows[0].tokens, 20)
+    assert.equal(rows[0].tokens, null)
     assert.equal(rows[0].share, null)
     assert.match(
       modelUsageCsv(rows, [], '').split('\r\n')[1],
-      /^"invalid","2","20","","raw_quota","false","raw_quota_not_exact",/
+      /^"invalid","2","","","raw_quota","false","raw_quota_not_exact",/
     )
   }
   const signed = summarizeModelUsage([
@@ -211,7 +309,7 @@ test('an inexact source leaves raw quota unknown without discarding usage counts
   assert.equal(signed[0].quota_raw, '-2')
   assert.equal(
     modelUsageCsv(signed, [], '').split('\r\n')[1],
-    '"adjustment","0","0","-2","raw_quota","false","bucket_without_credit_basis",""'
+    '"adjustment","0","","-2","raw_quota","false","bucket_without_credit_basis",""'
   )
 })
 

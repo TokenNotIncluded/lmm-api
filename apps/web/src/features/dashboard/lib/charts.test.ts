@@ -172,6 +172,42 @@ describe('dashboard chart palette', () => {
 })
 
 describe('dashboard chart time buckets', () => {
+  test('image-only buckets retain request and quota series without requiring tokens', () => {
+    const rows: QuotaDataItem[] = [
+      {
+        created_at: 1_720_000_000,
+        model_name: 'image-model',
+        username: 'alice',
+        quota: 2000,
+        count: 1,
+        token_used: null,
+        token_count_scope: 'settled_text_requests',
+        output_image_count: 2,
+      },
+      {
+        created_at: 1_720_000_000,
+        model_name: 'text-model',
+        username: 'alice',
+        quota: 7,
+        count: 1,
+        token_used: 193,
+        token_count_scope: 'settled_text_requests',
+        output_image_count: 0,
+      },
+    ]
+    const result = processChartData(rows, 'day', undefined, undefined, 'en')
+    assert.equal(result.totalCountDisplay, '2')
+    assert.equal(result.totalQuotaDisplay, '2,007 Raw credits')
+    assert.deepEqual(result.spec_pie.data[0].values, [
+      { type: 'image-model', value: 1 },
+      { type: 'text-model', value: 1 },
+    ])
+    assert.equal(result.spec_line.data[0].values[0].Usage, 2000)
+    assert.equal(result.spec_model_line.data[0].values[0].Count, 1)
+    const user = processUserChartData(rows, 'day', undefined, 10, 'en')
+    assert.equal(user.spec_user_rank.data[0].values[0].Usage, 2007)
+  })
+
   test('preserves sparse real buckets without inventing replacement periods', () => {
     const rows: QuotaDataItem[] = [
       {
@@ -221,6 +257,51 @@ describe('dashboard chart time buckets', () => {
 })
 
 describe('dashboard historical raw quota units', () => {
+  test('unknown quota hides only amount charts while preserving image request counts', () => {
+    for (const quota of [
+      null,
+      undefined,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+    ]) {
+      const rows: QuotaDataItem[] = [
+        {
+          created_at: 1_720_000_000,
+          model_name: 'image-model',
+          username: 'alice',
+          quota,
+          count: 2,
+          token_used: null,
+          token_count_scope: 'settled_text_requests',
+          output_image_count: 3,
+        },
+        {
+          created_at: 1_720_000_000,
+          model_name: 'text-model',
+          username: 'alice',
+          quota: 7,
+          count: 1,
+          token_used: 193,
+        },
+      ]
+      const result = processChartData(rows, 'day')
+      assert.equal(result.totalQuotaDisplay, 'Unavailable')
+      assert.equal(result.totalCountDisplay, '3')
+      assert.deepEqual(result.spec_line.data[0].values, [])
+      assert.deepEqual(result.spec_area.data[0].values, [])
+      assert.equal(result.spec_line.title.text, 'Unavailable')
+      assert.equal(result.spec_area.title.text, 'Unavailable')
+      assert.equal(result.spec_pie.data[0].values[0].value, 2)
+      assert.equal(result.spec_model_line.data[0].values[0].Count, 2)
+      assert.equal(result.spec_rank_bar.data[0].values[0].Count, 2)
+      const user = processUserChartData(rows, 'day')
+      assert.deepEqual(user.spec_user_rank.data[0].values, [])
+      assert.deepEqual(user.spec_user_trend.data[0].values, [])
+      assert.equal(user.spec_user_rank.title.subtext, 'Unavailable')
+      assert.equal(user.spec_user_trend.title.subtext, 'Unavailable')
+    }
+  })
+
   const rows: QuotaDataItem[] = [
     {
       created_at: 1_720_000_000,

@@ -45,12 +45,14 @@ import { cn } from '@/lib/utils'
 import { LOG_TYPE_ENUM } from '../constants'
 import type { UsageLog } from '../data/schema'
 import { parseLogOther } from '../lib/format'
+import { usageReceiptState } from '../lib/receipt-state'
 import {
   getLogTypeConfig,
   isDisplayableLogType,
   isTimingLogType,
 } from '../lib/utils'
 import type { LogCategory } from '../types'
+import { LogUsageDisplay } from './log-usage-display'
 import { StreamTpsCell, TimingMetricsCell } from './timing-metrics-cell'
 import { useUsageLogsContext } from './usage-logs-provider'
 
@@ -159,15 +161,20 @@ function SummaryField<TData>({
 function MobileLogTimeStatus({
   createdAt,
   type,
+  log,
 }: {
   createdAt: unknown
   type: unknown
+  log?: UsageLog
 }) {
   const { t } = useTranslation()
   const timestamp = typeof createdAt === 'number' ? createdAt : undefined
   const logType = typeof type === 'number' ? type : undefined
   const config = getLogTypeConfig(logType ?? LOG_TYPE_ENUM.UNKNOWN)
-  const variant = config.color as StatusVariant
+  const receipt = log
+    ? usageReceiptState(log, parseLogOther(log.other))
+    : undefined
+  const variant = receipt?.variant ?? (config.color as StatusVariant)
 
   return (
     <div className='space-y-1'>
@@ -184,7 +191,7 @@ function MobileLogTimeStatus({
           className={cn('size-1.5 shrink-0 rounded-full', dotColorMap[variant])}
           aria-hidden='true'
         />
-        <span>{t(config.label)}</span>
+        <span>{t(receipt?.label ?? config.label)}</span>
       </div>
     </div>
   )
@@ -195,16 +202,6 @@ function MobileTokensField({ log }: { log: UsageLog }) {
   const { t } = useTranslation()
 
   if (!isDisplayableLogType(log.type)) return null
-
-  const promptTokens = log.prompt_tokens || 0
-  const completionTokens = log.completion_tokens || 0
-  if (promptTokens === 0 && completionTokens === 0) {
-    return (
-      <div className='bg-muted/20 min-w-0 rounded-md px-2 py-1.5'>
-        <span className='text-muted-foreground text-xs'>-</span>
-      </div>
-    )
-  }
 
   const other = parseLogOther(log.other)
   const cacheReadTokens = other?.cache_tokens || 0
@@ -220,7 +217,7 @@ function MobileTokensField({ log }: { log: UsageLog }) {
     <div className='bg-muted/20 min-w-0 rounded-md px-2 py-1.5'>
       <div className='flex flex-col gap-0.5'>
         <span className='font-mono text-xs font-medium tabular-nums'>
-          {promptTokens.toLocaleString()} / {completionTokens.toLocaleString()}
+          <LogUsageDisplay log={log} other={other} />
         </span>
         {showCache ? (
           <div className='text-muted-foreground flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] leading-none'>
@@ -287,7 +284,7 @@ function MobileStreamTimingField({ log }: { log: UsageLog }) {
   const other = parseLogOther(log.other)
   const useTime = log.use_time || 0
   const tokensPerSecond =
-    useTime > 0 && log.completion_tokens > 0
+    useTime > 0 && log.completion_tokens !== null && log.completion_tokens > 0
       ? log.completion_tokens / useTime
       : null
 
@@ -337,6 +334,7 @@ function CommonLogsCard<TData>({
           <MobileLogTimeStatus
             createdAt={rowData?.created_at}
             type={rowData?.type}
+            log={rowData}
           />
         </div>
         <SummaryField

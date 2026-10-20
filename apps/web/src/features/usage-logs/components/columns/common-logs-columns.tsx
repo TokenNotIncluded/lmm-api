@@ -56,6 +56,7 @@ import {
   formatLogTokenPrice,
   type LogCurrencyFormatter,
 } from '../../lib/money'
+import { usageReceiptState } from '../../lib/receipt-state'
 import {
   isDisplayableLogType,
   isTimingLogType,
@@ -65,6 +66,7 @@ import {
 import type { LogOtherData } from '../../types'
 import { DetailsDialog } from '../dialogs/details-dialog'
 import { LogCostDisplay } from '../log-cost-display'
+import { LogUsageDisplay } from '../log-usage-display'
 import { ModelBadge } from '../model-badge'
 import { TimingMetricsCell, StreamTpsCell } from '../timing-metrics-cell'
 import { useUsageLogsContext } from '../usage-logs-provider'
@@ -114,7 +116,7 @@ function buildDetailSegments(
   t: (key: string, opts?: Record<string, unknown>) => string,
   isAdmin: boolean,
   currency: LogCurrencyFormatter,
-  formatQuota: (quota: number) => string
+  formatQuota: (quota: number | null) => string
 ): DetailSegment[] {
   const segments = buildTypeDetailSegments(log, other, t, currency, formatQuota)
   // Quota saturation is a rare, admin-only anomaly marker; surface it first
@@ -132,7 +134,7 @@ function buildTypeDetailSegments(
   other: LogOtherData | null,
   t: (key: string, opts?: Record<string, unknown>) => string,
   currency: LogCurrencyFormatter,
-  formatQuota: (quota: number) => string
+  formatQuota: (quota: number | null) => string
 ): DetailSegment[] {
   // Audit (type=3) and login (type=7) logs: render localized content from the
   // structured op descriptor instead of the raw (English-fallback) content.
@@ -319,6 +321,7 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
         const log = row.original
         const timestamp = row.getValue('created_at') as number
         const config = getLogTypeConfig(log.type)
+        const receipt = usageReceiptState(log, parseLogOther(log.other))
 
         return (
           <div className='flex min-w-0 flex-col gap-0.5'>
@@ -326,8 +329,11 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
               {formatTimestampToDate(timestamp)}
             </span>
             <StatusBadge
-              label={t(config.label)}
-              variant={config.color as StatusBadgeProps['variant']}
+              label={t(receipt?.label ?? config.label)}
+              variant={
+                receipt?.variant ??
+                (config.color as StatusBadgeProps['variant'])
+              }
               size='sm'
               copyable={false}
               className='-ml-1.5 !text-xs [&_span]:!text-xs'
@@ -670,7 +676,9 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
         const useTime = row.getValue('use_time') as number
         const other = parseLogOther(log.other)
         const tokensPerSecond =
-          useTime > 0 && log.completion_tokens > 0
+          useTime > 0 &&
+          log.completion_tokens !== null &&
+          log.completion_tokens > 0
             ? log.completion_tokens / useTime
             : null
 
@@ -686,18 +694,12 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
     },
     {
       accessorKey: 'prompt_tokens',
-      header: 'Tokens',
+      header: t('Usage'),
       cell: ({ row }) => {
         const log = row.original
         if (!isDisplayableLogType(log.type)) return null
 
         const other = parseLogOther(log.other)
-
-        const promptTokens = log.prompt_tokens || 0
-        const completionTokens = log.completion_tokens || 0
-        if (promptTokens === 0 && completionTokens === 0) {
-          return <span className='text-muted-foreground text-xs'>-</span>
-        }
 
         const cacheReadTokens = other?.cache_tokens || 0
         const cacheWrite5m = other?.cache_creation_tokens_5m || 0
@@ -710,8 +712,7 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
         return (
           <div className='flex flex-col gap-0.5'>
             <span className='font-mono text-xs font-medium tabular-nums'>
-              {promptTokens.toLocaleString()} /{' '}
-              {completionTokens.toLocaleString()}
+              <LogUsageDisplay log={log} other={other} />
             </span>
             {(cacheReadTokens > 0 || cacheWriteTokens > 0) && (
               <div className='flex items-center gap-1 text-[11px]'>
@@ -738,7 +739,7 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
         const log = row.original
         if (!isDisplayableLogType(log.type)) return null
 
-        const quota = row.getValue('quota') as number
+        const quota = log.quota
         const other = parseLogOther(log.other)
         return (
           <LogCostDisplay

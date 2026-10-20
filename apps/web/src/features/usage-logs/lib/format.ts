@@ -209,9 +209,11 @@ export function getThroughputColor(
  */
 export function getResponseTimeColor(
   seconds: number,
-  completionTokens: number
+  completionTokens: number | null
 ): 'success' | 'warning' | 'danger' {
-  if (completionTokens < 100 || seconds <= 0) return getTimeColor(seconds)
+  if (completionTokens === null || completionTokens < 100 || seconds <= 0) {
+    return getTimeColor(seconds)
+  }
   return getThroughputColor(completionTokens / seconds)
 }
 

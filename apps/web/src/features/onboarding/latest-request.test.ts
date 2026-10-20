@@ -64,3 +64,43 @@ test('usage accounting alone is not evidence of a successful response', () => {
   )
   assert.equal(latestRequestStatus(fixture(5, 100)), 'failed')
 })
+
+test('native incomplete type-five receipts are not failed or successful responses', () => {
+  for (const state of ['reserved', 'streaming', 'reconcile', 'released']) {
+    const log = usageLogSchema.parse({
+      ...fixture(5, 100),
+      quota: null,
+      billing_basis: 'incomplete',
+      state,
+      other: JSON.stringify({
+        billing_basis: 'incomplete',
+        request_state: state,
+        usage_status: 'incomplete',
+        reserved_credits: state === 'released' ? 0 : 2000,
+        acquisition_success_v1: true,
+        stream_status: { status: 'error' },
+      }),
+    })
+    assert.equal(
+      latestRequestStatus(log),
+      state === 'reconcile' ? 'unknown' : 'incomplete'
+    )
+    assert.equal(log.type, 5)
+    assert.equal(log.quota, null)
+  }
+})
+
+test('settled type-five error outcome retains its failure display', () => {
+  const log = usageLogSchema.parse({
+    ...fixture(5, 100),
+    quota: 7,
+    billing_basis: 'net_consumption',
+    state: 'settled',
+    other: JSON.stringify({
+      billing_basis: 'net_consumption',
+      request_state: 'settled',
+      usage_status: 'settled',
+    }),
+  })
+  assert.equal(latestRequestStatus(log), 'failed')
+})

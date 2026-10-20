@@ -1,3 +1,5 @@
+import { z } from 'zod'
+
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -18,11 +20,22 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
 
-import type {
-  FlowQuotaDataItem,
-  QuotaDataItem,
-  UptimeGroupResult,
-} from './types'
+import { usageBucketsSchema, type UsageBucket } from './lib/usage-bucket'
+import type { FlowQuotaDataItem, UptimeGroupResult } from './types'
+
+const quotaDataResponseSchema = z.object({
+  success: z.literal(true),
+  data: usageBucketsSchema.nullable(),
+})
+
+function readQuotaResponse(input: unknown): {
+  success: boolean
+  data: UsageBucket[]
+} {
+  const response = quotaDataResponseSchema.parse(input)
+  // Older successful responses explicitly used null for an empty data set.
+  return { ...response, data: response.data ?? [] }
+}
 
 // ============================================================================
 // Dashboard APIs
@@ -45,11 +58,8 @@ export async function getUserQuotaDates(
   signal?: AbortSignal
 ) {
   const endpoint = isAdmin ? '/api/data' : '/api/data/self'
-  const res = await api.get<{ success: boolean; data: QuotaDataItem[] }>(
-    endpoint,
-    { params, signal }
-  )
-  return res.data
+  const res = await api.get<unknown>(endpoint, { params, signal })
+  return readQuotaResponse(res.data)
 }
 
 // ----------------------------------------------------------------------------
@@ -60,11 +70,8 @@ export async function getUserQuotaDataByUsers(params: {
   start_timestamp: number
   end_timestamp: number
 }) {
-  const res = await api.get<{ success: boolean; data: QuotaDataItem[] }>(
-    '/api/data/users',
-    { params }
-  )
-  return res.data
+  const res = await api.get<unknown>('/api/data/users', { params })
+  return readQuotaResponse(res.data)
 }
 
 export async function getFlowQuotaDates(

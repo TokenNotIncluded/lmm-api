@@ -38,6 +38,31 @@ test('preserves real zero and legacy raw counters without fabricating money meta
   )
 })
 
+test('native image summary preserves settled text scope, separate holds and sponsored usage', () => {
+  const data = {
+    quota: 2000,
+    rpm: 1,
+    tpm: 0,
+    reserved_credits: 4000,
+    incomplete_count: 1,
+    output_image_count: 2,
+    token_count_scope: 'settled_text_requests',
+    platform_sponsored_quota: 2000,
+    personal_wallet_quota: 0,
+    personal_wallet_quota_basis: 'wallet_source_net_consumption_not_debit',
+    settlement_scope: 'settled_requests',
+    spending_scope: 'all_payers',
+    usage_scope: 'actor_personal_usage',
+  }
+  assert.deepEqual(parseUsageStatistics({ success: true, data }), data)
+  assert.throws(() =>
+    parseUsageStatistics({
+      success: true,
+      data: { ...data, reserved_credits: null },
+    })
+  )
+})
+
 function legacyStatistics() {
   return {
     quota: 193,

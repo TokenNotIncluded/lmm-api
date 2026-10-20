@@ -46,6 +46,12 @@ const usageMetadata = z.object({
   billing_basis: z.string().max(64).optional(),
   request_state: z.string().max(64).optional(),
   usage_status: z.string().max(32).optional(),
+  pricing_dimension: z.enum(['image', 'text']).optional(),
+  token_usage_available: z.boolean().optional(),
+  output_image_count: z.number().int().safe().positive().nullable().optional(),
+  reserved_credits: z.number().int().safe().nonnegative().optional(),
+  platform_sponsored: z.boolean().optional(),
+  wallet_debit_supported: z.boolean().optional(),
 })
 
 function readUsageMetadata(value: string) {
@@ -312,6 +318,12 @@ export const accountTools: WebMcpToolFactory = ({ router }) => [
                   'billing_basis' in item
                     ? isUsageCostIncomplete(other, item)
                     : isUsageCostIncomplete(other)
+                const tokenUsageAvailable =
+                  'token_usage_available' in item
+                    ? (item.token_usage_available ??
+                      other?.token_usage_available ??
+                      null)
+                    : null
                 return {
                   id: 'id' in item ? item.id : item.source_log_id,
                   created_at: item.created_at,
@@ -334,8 +346,52 @@ export const accountTools: WebMcpToolFactory = ({ router }) => [
                     64
                   ),
                   usage_status: clip(other?.usage_status, 32),
-                  prompt_tokens: item.prompt_tokens,
-                  completion_tokens: item.completion_tokens,
+                  prompt_tokens:
+                    tokenUsageAvailable === false ? null : item.prompt_tokens,
+                  completion_tokens:
+                    tokenUsageAvailable === false
+                      ? null
+                      : item.completion_tokens,
+                  pricing_dimension:
+                    'pricing_dimension' in item
+                      ? (item.pricing_dimension ??
+                        other?.pricing_dimension ??
+                        null)
+                      : null,
+                  token_usage_available: tokenUsageAvailable,
+                  output_image_count:
+                    'output_image_count' in item
+                      ? item.output_image_count !== undefined
+                        ? item.output_image_count
+                        : (other?.output_image_count ?? null)
+                      : null,
+                  reserved_credits: other?.reserved_credits ?? null,
+                  platform_sponsored:
+                    'platform_sponsored' in item
+                      ? (item.platform_sponsored ??
+                        other?.platform_sponsored ??
+                        null)
+                      : null,
+                  wallet_debit_supported:
+                    'wallet_debit_supported' in item
+                      ? (item.wallet_debit_supported ??
+                        other?.wallet_debit_supported ??
+                        null)
+                      : null,
+                  gross_settled_credits:
+                    'gross_settled_credits' in item
+                      ? (item.gross_settled_credits ?? null)
+                      : null,
+                  refunded_credits:
+                    'refunded_credits' in item
+                      ? (item.refunded_credits ?? null)
+                      : null,
+                  net_consumption_credits:
+                    'net_consumption_credits' in item
+                      ? (item.net_consumption_credits ?? null)
+                      : null,
+                  payer_kind:
+                    'payer_kind' in item ? (item.payer_kind ?? null) : null,
                 }
               })
       return {

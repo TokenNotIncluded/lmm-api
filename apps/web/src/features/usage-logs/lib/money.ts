@@ -163,7 +163,10 @@ export function logNetConsumptionAmounts(
   const safeAmount = (value: unknown): value is number =>
     typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
   if (
-    log.type !== 2 ||
+    ![2, 5].includes(log.type) ||
+    (log.billing_basis !== undefined &&
+      log.billing_basis !== 'net_consumption') ||
+    (log.state !== undefined && log.state !== 'settled') ||
     other?.billing_basis !== 'net_consumption' ||
     other.request_state !== 'settled' ||
     other.usage_status !== 'settled' ||
@@ -189,7 +192,12 @@ export function logCostRows(
   t: (key: string) => string
 ): Array<{ label: string; value: string }> {
   if (!hasNetConsumptionMetadata(other)) {
-    return [{ label: t('Total Cost'), value: format(log.quota) }]
+    return [
+      {
+        label: t('Total Cost'),
+        value: log.quota === null ? '—' : format(log.quota),
+      },
+    ]
   }
   const amounts = logNetConsumptionAmounts(log, other)
   return [
@@ -218,7 +226,7 @@ export function buildLogCopyText(
 ): string {
   const formatRaw = (quota: number) =>
     formatHistoricalRawQuota(quota, t('Raw credits'))
-  const format = (quota: number) => {
+  const format = (quota: number | null) => {
     const usd = historicalLogQuotaUSD({
       quota: log.quota,
       other,
@@ -236,7 +244,9 @@ export function buildLogCopyText(
       ? `${audit}\n\n${t('Original log content')}:\n${original}`
       : original
   }
-  if (![1, 2, 6].includes(log.type)) return original
+  if (![1, 2, 6].includes(log.type) && !logNetConsumptionAmounts(log, other)) {
+    return original
+  }
   const moneyAvailable =
     historicalLogQuotaUSD({
       quota: log.quota,
@@ -249,7 +259,7 @@ export function buildLogCopyText(
     ...logCostRows(log, other, format, t).map(
       (row) => `${row.label}: ${row.value}`
     ),
-    `${t('Billing Source')}: ${t(other?.billing_source === 'subscription' ? 'Subscription' : 'Wallet')}`,
+    `${t('Billing Source')}: ${t(logFundingLabel(log, other))}`,
   ]
   if (other?.billing_mode === 'tiered_expr') {
     const tier = getTieredBillingSummary(other)
@@ -299,4 +309,13 @@ export function buildLogCopyText(
   }
   if (original) rows.push('', `${t('Original log content')}:`, original)
   return rows.join('\n')
+}
+
+export function logFundingLabel(log: UsageLog, other: LogOtherData | null) {
+  if (log.platform_sponsored === true || other?.platform_sponsored === true) {
+    return 'Sponsored'
+  }
+  if (other?.billing_source === 'subscription') return 'Subscription'
+  if (log.payer_kind === 'team' || other?.payer_kind === 'team') return 'Team'
+  return other?.billing_source === 'wallet' ? 'Wallet' : 'Not recorded'
 }

@@ -16,19 +16,17 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import type { QuotaDataItem } from '@/features/dashboard/types'
+
 export const PROFILE_ACTIVITY_WEEKS = 53
 export const PROFILE_ACTIVITY_DAYS = PROFILE_ACTIVITY_WEEKS * 7
 export const PROFILE_USAGE_WINDOW_SECONDS = 28 * 24 * 60 * 60
 
 export type ProfileActivityView = 'daily' | 'weekly' | 'cumulative'
 
-export interface ProfileUsageRow {
-  created_at: number
-  model_name?: string
-  count?: number
-  token_used?: number
-  quota?: number
-}
+export type ProfileUsageRow = QuotaDataItem
+
+export type UsageTokenCountScope = 'settled_text_requests' | null
 
 export interface ProfileUsageQueryRange {
   start_timestamp: number
@@ -43,13 +41,19 @@ export interface ProfileActivityRange extends ProfileUsageQueryRange {
 export interface ProfileDailyUsage {
   date: Date
   dateKey: string
-  tokens: number
+  tokens: number | null
   requests: number
+  outputImages: number
+  sponsoredRequests: number
+  tokenCountScope: UsageTokenCountScope
 }
 
 export interface ProfileUsageSummary {
-  totalTokens: number
-  peakDailyTokens: number
+  totalTokens: number | null
+  peakDailyTokens: number | null
+  totalImages: number
+  sponsoredRequests: number
+  tokenCountScope: UsageTokenCountScope
   activeDays: number
   currentStreak: number
   currentStreakCapped: boolean
@@ -57,8 +61,10 @@ export interface ProfileUsageSummary {
 }
 
 export interface ProfileActivityCell extends ProfileDailyUsage {
-  displayTokens: number
+  displayTokens: number | null
   displayRequests: number
+  displayImages: number
+  displaySponsoredRequests: number
   level: number
   periodStart: Date
   periodEnd: Date
@@ -74,9 +80,26 @@ function addLocalDays(date: Date, amount: number): Date {
   return next
 }
 
-function nonNegativeNumber(value: number | null | undefined): number {
-  const number = Number(value)
-  return Number.isFinite(number) ? Math.max(0, number) : 0
+export function nonNegativeUsageNumber(
+  value: number | null | undefined
+): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.max(0, value)
+    : 0
+}
+
+/** Null means the quantity was not recorded, while numeric zero is real usage. */
+export function sumKnownTextTokens(values: (number | null)[]): number | null {
+  const known = values.filter((value) => value !== null)
+  return values.length > 0 && known.length === 0
+    ? null
+    : known.reduce((sum, value) => sum + value, 0)
+}
+
+export function sumUsageCredits(values: (number | null)[]): number | null {
+  return values.includes(null)
+    ? null
+    : values.reduce<number>((sum, value) => sum + (value ?? 0), 0)
 }
 
 export function formatProfileDateKey(date: Date): string {
@@ -146,8 +169,13 @@ export function buildProfileDailyUsage(
       dateKey,
       tokens: 0,
       requests: 0,
+      outputImages: 0,
+      sponsoredRequests: 0,
+      tokenCountScope: null,
     })
   }
+
+  const daysWithTextTokens = new Set<string>()
 
   for (const row of rows) {
     const timestamp = Number(row.created_at)
@@ -157,8 +185,20 @@ export function buildProfileDailyUsage(
     const day = byDate.get(formatProfileDateKey(date))
     if (!day) continue
 
-    day.tokens += nonNegativeNumber(row.token_used)
-    day.requests += nonNegativeNumber(row.count)
+    if (row.token_used === null) {
+      if (!daysWithTextTokens.has(day.dateKey)) day.tokens = null
+    } else {
+      daysWithTextTokens.add(day.dateKey)
+      day.tokens = (day.tokens ?? 0) + nonNegativeUsageNumber(row.token_used)
+    }
+    day.requests += nonNegativeUsageNumber(row.count)
+    day.outputImages += nonNegativeUsageNumber(row.output_image_count)
+    if (row.platform_sponsored === true) {
+      day.sponsoredRequests += nonNegativeUsageNumber(row.count)
+    }
+    if (row.token_count_scope === 'settled_text_requests') {
+      day.tokenCountScope = row.token_count_scope
+    }
   }
 
   return [...byDate.values()]
@@ -167,17 +207,24 @@ export function buildProfileDailyUsage(
 export function buildProfileUsageSummary(
   days: ProfileDailyUsage[]
 ): ProfileUsageSummary {
-  let totalTokens = 0
-  let peakDailyTokens = 0
+  const usageDays = days.filter(
+    (day) =>
+      day.tokens === null ||
+      (day.tokens ?? 0) > 0 ||
+      day.requests > 0 ||
+      day.outputImages > 0
+  )
+  const totalTokens = sumKnownTextTokens(usageDays.map((day) => day.tokens))
+  const peakDailyTokens =
+    totalTokens === null
+      ? null
+      : Math.max(0, ...days.map((day) => day.tokens ?? 0))
   let activeDays = 0
   let longestStreak = 0
   let runningStreak = 0
 
   for (const day of days) {
-    totalTokens += day.tokens
-    peakDailyTokens = Math.max(peakDailyTokens, day.tokens)
-
-    if (day.tokens > 0) {
+    if ((day.tokens ?? 0) > 0) {
       activeDays += 1
       runningStreak += 1
       longestStreak = Math.max(longestStreak, runningStreak)
@@ -187,10 +234,10 @@ export function buildProfileUsageSummary(
   }
 
   let cursor = days.length - 1
-  if (cursor >= 0 && days[cursor].tokens <= 0) cursor -= 1
+  if (cursor >= 0 && (days[cursor].tokens ?? 0) <= 0) cursor -= 1
 
   let currentStreak = 0
-  while (cursor >= 0 && days[cursor].tokens > 0) {
+  while (cursor >= 0 && (days[cursor].tokens ?? 0) > 0) {
     currentStreak += 1
     cursor -= 1
   }
@@ -198,6 +245,16 @@ export function buildProfileUsageSummary(
   return {
     totalTokens,
     peakDailyTokens,
+    totalImages: days.reduce((sum, day) => sum + day.outputImages, 0),
+    sponsoredRequests: days.reduce(
+      (sum, day) => sum + day.sponsoredRequests,
+      0
+    ),
+    tokenCountScope: days.some(
+      (day) => day.tokenCountScope === 'settled_text_requests'
+    )
+      ? 'settled_text_requests'
+      : null,
     activeDays,
     currentStreak,
     currentStreakCapped: currentStreak > 0 && cursor < 0,
@@ -220,19 +277,44 @@ export function buildProfileActivityCells(
       (_, i) => {
         const week = days.slice(i * 7, i * 7 + 7)
         return {
-          tokens: week.reduce((sum, day) => sum + day.tokens, 0),
+          tokens: sumKnownTextTokens(
+            week
+              .filter(
+                (day) =>
+                  day.tokens === null ||
+                  day.requests > 0 ||
+                  (day.tokens ?? 0) > 0
+              )
+              .map((day) => day.tokens)
+          ),
+          images: week.reduce((sum, day) => sum + day.outputImages, 0),
+          sponsoredRequests: week.reduce(
+            (sum, day) => sum + day.sponsoredRequests,
+            0
+          ),
+          tokenCountScope: week.some(
+            (day) => day.tokenCountScope === 'settled_text_requests'
+          )
+            ? 'settled_text_requests'
+            : null,
           requests: week.reduce((sum, day) => sum + day.requests, 0),
         }
       }
     )
-    const maxWeek = Math.max(0, ...weekTotals.map((week) => week.tokens))
+    const maxWeek = Math.max(0, ...weekTotals.map((week) => week.tokens ?? 0))
 
     return days.map((day, index) => {
       const weekIndex = Math.floor(index / 7)
-      const week = weekTotals[weekIndex] ?? { tokens: 0, requests: 0 }
+      const week = weekTotals[weekIndex] ?? {
+        tokens: 0,
+        requests: 0,
+        images: 0,
+        sponsoredRequests: 0,
+        tokenCountScope: null,
+      }
       const filledRows =
-        week.tokens > 0 && maxWeek > 0
-          ? Math.max(1, Math.round((week.tokens / maxWeek) * 7))
+        (week.tokens ?? 0) > 0 && maxWeek > 0
+          ? Math.max(1, Math.round(((week.tokens ?? 0) / maxWeek) * 7))
           : 0
       const rowIndex = index % 7
       const periodStart = days[weekIndex * 7]?.date ?? day.date
@@ -242,6 +324,12 @@ export function buildProfileActivityCells(
         ...day,
         displayTokens: week.tokens,
         displayRequests: week.requests,
+        displayImages: week.images,
+        displaySponsoredRequests: week.sponsoredRequests,
+        tokenCountScope:
+          week.tokenCountScope === 'settled_text_requests'
+            ? week.tokenCountScope
+            : null,
         level: rowIndex >= 7 - filledRows ? 5 : 0,
         periodStart,
         periodEnd,
@@ -250,17 +338,32 @@ export function buildProfileActivityCells(
   }
 
   if (view === 'cumulative') {
-    const totalTokens = days.reduce((sum, day) => sum + day.tokens, 0)
+    const totalTokens = days.reduce((sum, day) => sum + (day.tokens ?? 0), 0)
     let runningTokens = 0
     let runningRequests = 0
+    let runningImages = 0
+    let runningSponsoredRequests = 0
+    let hasTextTokens = false
+    let hasImageTokens = false
+    let tokenCountScope: UsageTokenCountScope = null
 
     return days.map((day) => {
-      runningTokens += day.tokens
+      runningTokens += day.tokens ?? 0
       runningRequests += day.requests
+      runningImages += day.outputImages
+      runningSponsoredRequests += day.sponsoredRequests
+      if (day.tokens === null) hasImageTokens = true
+      else if (day.requests > 0 || day.tokens > 0) hasTextTokens = true
+      if (day.tokenCountScope === 'settled_text_requests') {
+        tokenCountScope = day.tokenCountScope
+      }
       return {
         ...day,
-        displayTokens: runningTokens,
+        displayTokens: hasImageTokens && !hasTextTokens ? null : runningTokens,
         displayRequests: runningRequests,
+        displayImages: runningImages,
+        displaySponsoredRequests: runningSponsoredRequests,
+        tokenCountScope,
         level: getProfileActivityLevel(runningTokens, totalTokens),
         periodStart: day.date,
         periodEnd: day.date,
@@ -268,12 +371,14 @@ export function buildProfileActivityCells(
     })
   }
 
-  const maxDay = Math.max(0, ...days.map((day) => day.tokens))
+  const maxDay = Math.max(0, ...days.map((day) => day.tokens ?? 0))
   return days.map((day) => ({
     ...day,
     displayTokens: day.tokens,
     displayRequests: day.requests,
-    level: getProfileActivityLevel(day.tokens, maxDay),
+    displayImages: day.outputImages,
+    displaySponsoredRequests: day.sponsoredRequests,
+    level: getProfileActivityLevel(day.tokens ?? 0, maxDay),
     periodStart: day.date,
     periodEnd: day.date,
   }))

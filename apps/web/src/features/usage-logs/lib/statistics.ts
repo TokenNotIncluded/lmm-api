@@ -16,6 +16,11 @@ const nativeStatisticsSchema = z.object({
   quota_usd: z.string().optional(),
   quota_money_available: z.boolean().optional(),
   quota_money_basis: z.string().optional(),
+  gross_settled_credits: count.optional(),
+  refunded_credits: count.optional(),
+  net_consumption_credits: count.optional(),
+  billing_basis: z.literal('net_consumption').optional(),
+  wallet_debit_supported: z.literal(false).optional(),
   unpriced_quota_records: count.optional(),
   quota_projection_truncated: z.boolean().optional(),
   source: z.never().optional(),
@@ -23,6 +28,21 @@ const nativeStatisticsSchema = z.object({
   quota_numeric_representable: z.never().optional(),
   invalid_quota_records: z.never().optional(),
   rates_available: z.literal(true).optional(),
+  reserved_credits: count.optional(),
+  incomplete_count: count.optional(),
+  output_image_count: count.optional(),
+  token_count_scope: z.literal('settled_text_requests').optional(),
+  platform_sponsored_quota: count.optional(),
+  personal_wallet_quota: count.optional(),
+  personal_wallet_quota_basis: z
+    .literal('wallet_source_net_consumption_not_debit')
+    .optional(),
+  team_funded_quota: count.optional(),
+  settlement_scope: z.literal('settled_requests').optional(),
+  spending_scope: z.literal('all_payers').optional(),
+  usage_scope: z
+    .enum(['actor_personal_key', 'actor_personal_usage'])
+    .optional(),
 })
 const historicalStatisticsFields = {
   source: z.literal('legacy_log_only'),

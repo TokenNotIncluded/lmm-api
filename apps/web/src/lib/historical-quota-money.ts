@@ -1,6 +1,16 @@
 /*
 Copyright (C) 2026 LIghtJUNction
 */
+import { z } from 'zod'
+
+const nativeSettledAmountsSchema = z.object({
+  billing_basis: z.literal('net_consumption'),
+  request_state: z.literal('settled'),
+  usage_status: z.literal('settled'),
+  gross_settled_credits: z.number().int().safe().nonnegative(),
+  refunded_credits: z.number().int().safe().nonnegative(),
+  net_consumption_credits: z.number().int().safe().nonnegative(),
+})
 
 export interface HistoricalQuotaProjection {
   quota_usd?: string
@@ -35,7 +45,7 @@ export function formatHistoricalRawQuota(
 
 /** An absent stored amount is not evidence of a real zero-credit entry. */
 export function formatHistoricalQuotaFallback(
-  quota: number,
+  quota: number | null,
   projection: HistoricalQuotaProjection | null | undefined,
   unit: string,
   locale?: ConstructorParameters<typeof Intl.NumberFormat>[0]
@@ -74,8 +84,8 @@ export function historicalQuotaUSD(
   return value
 }
 
-function capturedQuotaUSD(quota: number, other: unknown): number | null {
-  if (!Number.isSafeInteger(quota) || quota < 0) return null
+function capturedQuotaUSD(quota: number | null, other: unknown): number | null {
+  if (quota === null || !Number.isSafeInteger(quota) || quota < 0) return null
   if (typeof other !== 'object' || other === null || Array.isArray(other)) {
     return null
   }
@@ -90,13 +100,24 @@ function capturedQuotaUSD(quota: number, other: unknown): number | null {
 
 /** Legacy responses can use this entry's numeric captured K, never global K. */
 export function historicalLogQuotaUSD(input: {
-  quota: number
+  quota: number | null
   other: unknown
   type?: number
   projection?: HistoricalQuotaProjection
-  consumedQuota?: number
+  consumedQuota?: number | null
 }): number | null {
-  if (input.type !== undefined && input.type !== 2) return null
+  if (input.type !== undefined && input.type !== 2) {
+    const result = nativeSettledAmountsSchema.safeParse(input.other)
+    if (input.type !== 5 || !result.success) return null
+    const amounts = result.data
+    if (
+      amounts.gross_settled_credits - amounts.refunded_credits !==
+        amounts.net_consumption_credits ||
+      amounts.net_consumption_credits !== input.quota
+    ) {
+      return null
+    }
+  }
   const projection = input.projection
   const explicitProjection =
     projection?.quota_money_available !== undefined ||

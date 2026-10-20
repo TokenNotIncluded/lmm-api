@@ -235,6 +235,55 @@ function legacyStatistics() {
   }
 }
 
+test('native image statistics keep settled cost, reserved funds and sponsorship separate', async () => {
+  useAuthStore
+    .getState()
+    .auth.setUser({ id: 7, username: 'synthetic', role: 1 })
+  api.defaults.adapter = async (config) => ({
+    config,
+    headers: {},
+    status: 200,
+    statusText: 'OK',
+    data: {
+      success: true,
+      data: {
+        quota: 2000,
+        rpm: 1,
+        tpm: 0,
+        output_image_count: 2,
+        token_count_scope: 'settled_text_requests',
+        reserved_credits: 4000,
+        incomplete_count: 1,
+        platform_sponsored_quota: 2000,
+      },
+    },
+  })
+  const { container } = await mount()
+  await waitFor(
+    () => container.textContent?.includes('Reserved funds') === true
+  )
+  assert.match(container.textContent ?? '', /Usage\s*2,000 Raw credits/)
+  assert.match(container.textContent ?? '', /Images \(billing quantity\)\s*2/)
+  assert.match(
+    container.textContent ?? '',
+    /Reserved funds\s*4,000 Raw credits/
+  )
+  assert.match(container.textContent ?? '', /Incomplete\s*1/)
+  assert.match(
+    container.textContent ?? '',
+    /Platform-sponsored usage\s*2,000 Raw credits/
+  )
+  assert.ok(
+    container.querySelector(
+      '[title="Tokens cover settled text requests only."]'
+    )
+  )
+  assert.doesNotMatch(
+    container.textContent ?? '',
+    /6,000 Raw credits|Failed to load/
+  )
+})
+
 test('the real Core historical statistics DTO renders raw credits with unavailable rates', async () => {
   useAuthStore
     .getState()

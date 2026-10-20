@@ -102,6 +102,9 @@ describe('profile activity aggregation', () => {
     assert.deepEqual(buildProfileUsageSummary(days), {
       totalTokens: 100,
       peakDailyTokens: 40,
+      totalImages: 0,
+      sponsoredRequests: 0,
+      tokenCountScope: null,
       activeDays: 4,
       currentStreak: 2,
       currentStreakCapped: false,
@@ -150,5 +153,69 @@ describe('profile activity aggregation', () => {
       cumulative.map((cell) => cell.displayTokens),
       [10, 40, 40, 40, 40, 40, 40]
     )
+  })
+})
+
+describe('native image activity quantities', () => {
+  const range = {
+    startDate: new Date(2026, 7, 23),
+    endDate: new Date(2026, 7, 29),
+  }
+  test('preserves image-only null tokens across totals and all activity views', () => {
+    const days = buildProfileDailyUsage(
+      [
+        {
+          created_at: timestamp(2026, 8, 23),
+          count: 1,
+          token_used: null,
+          output_image_count: 2,
+          platform_sponsored: true,
+          token_count_scope: 'settled_text_requests',
+        },
+      ],
+      range
+    )
+    assert.equal(days[0]?.tokens, null)
+    const summary = buildProfileUsageSummary(days)
+    assert.equal(summary.totalTokens, null)
+    assert.equal(summary.peakDailyTokens, null)
+    assert.equal(summary.totalImages, 2)
+    assert.equal(summary.sponsoredRequests, 1)
+    assert.equal(summary.tokenCountScope, 'settled_text_requests')
+    for (const view of ['daily', 'weekly', 'cumulative'] as const) {
+      const cell = buildProfileActivityCells(days, view)[0]
+      assert.equal(cell?.displayTokens, null)
+      assert.equal(cell?.displayImages, 2)
+      assert.equal(cell?.displaySponsoredRequests, 1)
+    }
+  })
+
+  test('keeps real zero text tokens known when mixed with images in either order', () => {
+    const image = {
+      created_at: timestamp(2026, 8, 23),
+      count: 1,
+      token_used: null,
+      output_image_count: 3,
+      token_count_scope: 'settled_text_requests' as const,
+    }
+    const text = {
+      created_at: timestamp(2026, 8, 23),
+      count: 1,
+      token_used: 0,
+      token_count_scope: 'settled_text_requests' as const,
+    }
+    for (const rows of [
+      [image, text],
+      [text, image],
+    ]) {
+      const days = buildProfileDailyUsage(rows, range)
+      assert.equal(days[0]?.tokens, 0)
+      assert.equal(buildProfileUsageSummary(days).totalTokens, 0)
+      assert.equal(
+        buildProfileActivityCells(days, 'cumulative')[0]?.displayTokens,
+        0
+      )
+      assert.equal(days[0]?.outputImages, 3)
+    }
   })
 })

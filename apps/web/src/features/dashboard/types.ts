@@ -18,24 +18,13 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import type { TimeGranularity } from '@/lib/time'
 
+import type { UsageBucket } from './lib/usage-bucket'
+
 // ============================================================================
 // Quota & Usage Data Types
 // ============================================================================
 
-export interface QuotaDataItem {
-  id?: number
-  user_id?: number
-  username?: string
-  model_name?: string
-  created_at: number
-  token_used?: number
-  count?: number
-  quota?: number
-  /** Missing projection metadata from older servers is unavailable, never implicit USD. */
-  quota_usd?: string
-  quota_money_available?: boolean
-  quota_money_basis?: string
-}
+export type QuotaDataItem = UsageBucket
 
 export interface FlowQuotaDataItem {
   user_id?: number

@@ -36,12 +36,75 @@ export function safeDivide(
  * Calculate aggregated statistics from quota data
  */
 export function calculateDashboardStats(data: QuotaDataItem[]) {
-  return data.reduce(
-    (acc, item) => ({
-      totalQuota: acc.totalQuota + (Number(item.quota) || 0),
-      totalCount: acc.totalCount + (Number(item.count) || 0),
-      totalTokens: acc.totalTokens + (Number(item.token_used) || 0),
-    }),
-    { totalQuota: 0, totalCount: 0, totalTokens: 0 }
-  )
+  let knownQuota = 0
+  let totalCount = 0
+  let knownTokens = 0
+  let knownOutputImages = 0
+  let hasKnownTokens = data.length === 0
+  let hasUnknownTokens = false
+  let hasUnknownOutputImages = false
+  let hasUnknownQuota = false
+
+  for (const item of data) {
+    if (typeof item.quota === 'number' && Number.isSafeInteger(item.quota)) {
+      knownQuota += item.quota
+    } else {
+      hasUnknownQuota = true
+    }
+    totalCount += Number(item.count) || 0
+
+    const tokens = item.token_used
+    const outputImages = item.output_image_count
+    const hasKnownOutputImages =
+      typeof outputImages === 'number' &&
+      Number.isSafeInteger(outputImages) &&
+      outputImages >= 0
+
+    if (
+      typeof tokens === 'number' &&
+      Number.isSafeInteger(tokens) &&
+      tokens >= 0
+    ) {
+      knownTokens += tokens
+      hasKnownTokens = true
+    } else if (
+      tokens !== null ||
+      item.token_count_scope !== 'settled_text_requests' ||
+      !hasKnownOutputImages ||
+      outputImages === 0
+    ) {
+      hasUnknownTokens = true
+    }
+
+    if (hasKnownOutputImages) {
+      knownOutputImages += outputImages
+    } else {
+      hasUnknownOutputImages = true
+    }
+  }
+
+  const tokenCountScope: QuotaDataItem['token_count_scope'] =
+    data.length > 0 &&
+    data.every((item) => item.token_count_scope === 'settled_text_requests')
+      ? 'settled_text_requests'
+      : undefined
+
+  return {
+    totalQuota:
+      !hasUnknownQuota && Number.isSafeInteger(knownQuota) ? knownQuota : null,
+    totalCount,
+    totalTokens:
+      hasKnownTokens && !hasUnknownTokens && Number.isSafeInteger(knownTokens)
+        ? knownTokens
+        : null,
+    totalOutputImages:
+      !hasUnknownOutputImages && Number.isSafeInteger(knownOutputImages)
+        ? knownOutputImages
+        : null,
+    tokenCountScope,
+    hasOutputImages: data.some((item) => item.output_image_count !== undefined),
+    hasPlatformSponsoredUsage: data.some(
+      (item) => item.platform_sponsored === true
+    ),
+  }
 }

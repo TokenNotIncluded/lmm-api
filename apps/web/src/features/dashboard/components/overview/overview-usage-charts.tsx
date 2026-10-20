@@ -77,6 +77,8 @@ export function OverviewUsageCharts() {
   const loading = query.isPending
   const failed = query.isError || (query.isSuccess && !usage)
   const empty = query.isSuccess && !failed && query.data.rows.length === 0
+  const tokensUnavailable =
+    metric === 'tokens' && !empty && usage?.hasTextTokenData === false
   return (
     <section
       className='overview-usage-charts'
@@ -161,7 +163,12 @@ export function OverviewUsageCharts() {
           </p>
         </div>
       )}
-      {!loading && !failed && !empty && usage && (
+      {!loading && !failed && tokensUnavailable && (
+        <div className='overview-chart-empty' role='status'>
+          {t('Unavailable')}
+        </div>
+      )}
+      {!loading && !failed && !empty && !tokensUnavailable && usage && (
         <Suspense fallback={<Skeleton className='h-80 rounded-2xl' />}>
           <div className='overview-chart-grid'>
             <ChartCard
@@ -198,6 +205,18 @@ export function OverviewUsageCharts() {
           {t('Historical monetary value unavailable')}
         </p>
       )}
+      {metric === 'tokens' &&
+        usage?.tokenCountScope === 'settled_text_requests' && (
+          <p className='text-muted-foreground mt-3 text-xs'>
+            {t('Tokens cover settled text requests only.')}
+          </p>
+        )}
+      {typeof usage?.outputImageCount === 'number' &&
+        usage.outputImageCount > 0 && (
+          <p className='text-muted-foreground mt-3 text-xs'>
+            {t('Images (billing quantity)')}: {usage.outputImageCount}
+          </p>
+        )}
       <p className='text-muted-foreground mt-3 text-xs'>
         {t(
           'Recorded usage may appear with a delay. Dates follow your browser time zone.'

@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { parseUsageBuckets } from '@/features/dashboard/lib/usage-bucket'
 import { api } from '@/lib/api'
 import { withAuthenticatedCookieWrite } from '@/lib/auth-session'
 import type { CustomOAuthBinding } from '@/lib/oauth'
@@ -63,7 +64,7 @@ export async function getProfileUsageWindow(
   if (!res.data.success) {
     throw new Error(res.data.message || 'Unable to load profile activity')
   }
-  return res.data.data ?? []
+  return parseUsageBuckets(res.data.data)
 }
 
 export interface ProfileShareState {

@@ -300,6 +300,96 @@ test('business failure and malformed history are errors without exposing raw ser
   }
 })
 
+test('usage tools keep image counts, nullable money, actual holds and sponsorship without raw metadata', async () => {
+  signIn()
+  const base = {
+    id: 1,
+    user_id: 1,
+    created_at: 1,
+    content: 'redacted',
+    pricing_dimension: 'image',
+    token_usage_available: false,
+    wallet_debit_supported: false,
+  }
+  const originalAdapter = api.defaults.adapter
+  api.defaults.adapter = async (config) => ({
+    config,
+    status: 200,
+    statusText: 'OK',
+    headers: {},
+    data: {
+      success: true,
+      data: {
+        total: 2,
+        page: 1,
+        page_size: 20,
+        items: [
+          {
+            ...base,
+            type: 2,
+            quota: 2000,
+            output_image_count: 2,
+            platform_sponsored: true,
+            state: 'settled',
+            other: JSON.stringify({
+              credential_source: 'drawing_session',
+              reserved_credits: 0,
+              raw_prompt: 'secret-prompt',
+            }),
+          },
+          {
+            ...base,
+            id: 2,
+            type: 5,
+            quota: null,
+            quota_money_available: false,
+            output_image_count: null,
+            state: 'reconcile',
+            billing_basis: 'incomplete',
+            other: JSON.stringify({
+              reserved_credits: 4000,
+              raw_input: 'secret-input',
+            }),
+          },
+        ],
+      },
+    },
+  })
+  try {
+    const result = z
+      .object({
+        items: z.array(
+          z.object({
+            quota: z.number().nullable(),
+            quota_available: z.boolean(),
+            prompt_tokens: z.null(),
+            completion_tokens: z.null(),
+            pricing_dimension: z.literal('image'),
+            token_usage_available: z.literal(false),
+            output_image_count: z.number().nullable(),
+            reserved_credits: z.number(),
+            platform_sponsored: z.boolean().nullable(),
+            wallet_debit_supported: z.literal(false),
+          })
+        ),
+      })
+      .parse(await find('lmm_account_list_usage_logs').execute({}, options()))
+    assert.equal(result.items[0].output_image_count, 2)
+    assert.equal(result.items[0].quota, 2000)
+    assert.equal(result.items[0].platform_sponsored, true)
+    assert.equal(result.items[1].quota, null)
+    assert.equal(result.items[1].quota_available, false)
+    assert.equal(result.items[1].output_image_count, null)
+    assert.equal(result.items[1].reserved_credits, 4000)
+    assert.doesNotMatch(
+      JSON.stringify(result),
+      /secret-|credential_source|raw_input|raw_prompt/
+    )
+  } finally {
+    api.defaults.adapter = originalAdapter
+  }
+})
+
 test('account tools discard a response after role or session identity changes', async () => {
   for (const change of ['role', 'session']) {
     signIn()

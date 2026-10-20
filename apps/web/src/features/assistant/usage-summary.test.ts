@@ -89,3 +89,64 @@ describe('summarizeAssistantUsage', () => {
     assert.equal(summary.models[0]?.sharePercent, 70)
   })
 })
+
+test('assistant image-only usage retains null tokens, image counts and sponsor funding', () => {
+  const summary = summarizeAssistantUsage([
+    {
+      created_at: 1,
+      model_name: 'image',
+      count: 1,
+      token_used: null,
+      quota: 2000,
+      output_image_count: 2,
+      platform_sponsored: true,
+      token_count_scope: 'settled_text_requests',
+    },
+    {
+      created_at: 2,
+      model_name: 'image',
+      count: 1,
+      token_used: null,
+      quota: 3000,
+      output_image_count: 3,
+      platform_sponsored: false,
+      token_count_scope: 'settled_text_requests',
+    },
+  ])
+  assert.equal(summary.tokens, null)
+  assert.equal(summary.outputImages, 5)
+  assert.equal(summary.credits, 5000)
+  assert.equal(summary.sponsoredCredits, 2000)
+  assert.equal(summary.sponsoredRequests, 1)
+  assert.equal(summary.tokenCountScope, 'settled_text_requests')
+  assert.equal(summary.models[0]?.tokens, null)
+})
+
+test('assistant preserves unknown credits and a true zero text measurement', () => {
+  const summary = summarizeAssistantUsage([
+    {
+      created_at: 1,
+      model_name: 'image',
+      count: 1,
+      token_used: null,
+      quota: null,
+      output_image_count: 1,
+      platform_sponsored: true,
+    },
+    {
+      created_at: 2,
+      model_name: 'text-zero',
+      count: 1,
+      token_used: 0,
+      quota: 0,
+    },
+  ])
+  assert.equal(summary.tokens, 0)
+  assert.equal(summary.credits, null)
+  assert.equal(summary.sponsoredCredits, null)
+  assert.equal(summary.models.length, 2)
+  assert.equal(
+    summary.models.find((row) => row.model === 'text-zero')?.tokens,
+    0
+  )
+})

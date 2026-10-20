@@ -17,6 +17,10 @@ License, or (at your option) any later version.
  */
 import {
   buildProfileUsageQueryRanges,
+  nonNegativeUsageNumber,
+  sumKnownTextTokens,
+  sumUsageCredits,
+  type UsageTokenCountScope,
   type ProfileUsageQueryRange,
   type ProfileUsageRow,
 } from './activity'
@@ -29,16 +33,17 @@ export const MODEL_USAGE_YEAR_DAYS = 365
 
 export type ModelUsageRangeKey = '7d' | '30d' | '365d'
 
-export interface ModelUsageRow extends ProfileUsageRow {
-  model_name?: string
-  quota?: number
-}
+export type ModelUsageRow = ProfileUsageRow
 
 export interface ModelUsageStat {
   modelName: string
   requests: number
-  tokens: number
-  quota: number
+  tokens: number | null
+  quota: number | null
+  outputImages: number
+  sponsoredRequests: number
+  sponsoredQuota: number | null
+  tokenCountScope: UsageTokenCountScope
   /** Share of the largest model's quota, 0–1. Drives bar lengths. */
   intensity: number
   /** Share of total quota, 0–1. */
@@ -47,8 +52,12 @@ export interface ModelUsageStat {
 
 export interface ModelUsageTotals {
   requests: number
-  tokens: number
-  quota: number
+  tokens: number | null
+  quota: number | null
+  outputImages: number
+  sponsoredRequests: number
+  sponsoredQuota: number | null
+  tokenCountScope: UsageTokenCountScope
   modelCount: number
   /** Most-used model by quota, or null when nothing was spent. */
   topModel: ModelUsageStat | null
@@ -58,11 +67,6 @@ export interface ModelUsageReport {
   models: ModelUsageStat[]
   totals: ModelUsageTotals
   shareMetric: 'quota' | 'tokens' | 'requests'
-}
-
-function nonNegativeNumber(value: number | null | undefined): number {
-  const number = Number(value)
-  return Number.isFinite(number) ? Math.max(0, number) : 0
 }
 
 /**
@@ -89,15 +93,35 @@ export function mergeModelUsageRows(
     const existing = byModel.get(modelName) ?? {
       modelName,
       requests: 0,
-      tokens: 0,
+      tokens: null,
       quota: 0,
+      outputImages: 0,
+      sponsoredRequests: 0,
+      sponsoredQuota: 0,
+      tokenCountScope: null,
       intensity: 0,
       share: 0,
     }
 
-    existing.requests += nonNegativeNumber(row.count)
-    existing.tokens += nonNegativeNumber(row.token_used)
-    existing.quota += nonNegativeNumber(row.quota)
+    existing.requests += nonNegativeUsageNumber(row.count)
+    existing.tokens = sumKnownTextTokens([
+      existing.tokens,
+      row.token_used === null ? null : nonNegativeUsageNumber(row.token_used),
+    ])
+    const rowQuota =
+      row.quota === null ? null : nonNegativeUsageNumber(row.quota)
+    existing.quota = sumUsageCredits([existing.quota, rowQuota])
+    existing.outputImages += nonNegativeUsageNumber(row.output_image_count)
+    if (row.platform_sponsored === true) {
+      existing.sponsoredRequests += nonNegativeUsageNumber(row.count)
+      existing.sponsoredQuota = sumUsageCredits([
+        existing.sponsoredQuota,
+        rowQuota,
+      ])
+    }
+    if (row.token_count_scope === 'settled_text_requests') {
+      existing.tokenCountScope = row.token_count_scope
+    }
 
     byModel.set(modelName, existing)
   }
@@ -111,46 +135,31 @@ export function mergeModelUsageRows(
  * real traffic never hides below an idle one.
  */
 export function buildModelUsageReport(rows: ModelUsageRow[]): ModelUsageReport {
-  const byModel = mergeModelUsageRows(rows)
-  const models = [...byModel.values()].sort(
+  const models = [...mergeModelUsageRows(rows).values()]
+  const totalQuota = sumUsageCredits(models.map((model) => model.quota))
+  const totalTokens = sumKnownTextTokens(models.map((model) => model.tokens))
+  const totalRequests = models.reduce((sum, model) => sum + model.requests, 0)
+  const weightMetric =
+    totalQuota !== null && totalQuota > 0
+      ? 'quota'
+      : totalTokens !== null && totalTokens > 0
+        ? 'tokens'
+        : 'requests'
+  const weightOf = (model: ModelUsageStat) => model[weightMetric] ?? 0
+  models.sort(
     (a, b) =>
-      b.quota - a.quota ||
-      b.tokens - a.tokens ||
+      weightOf(b) - weightOf(a) ||
+      (b.tokens ?? 0) - (a.tokens ?? 0) ||
       b.requests - a.requests ||
       a.modelName.localeCompare(b.modelName)
   )
-
-  let totalQuota = 0
-  let totalTokens = 0
-  let totalRequests = 0
-  for (const model of models) {
-    totalQuota += model.quota
-    totalTokens += model.tokens
-    totalRequests += model.requests
-  }
-
-  // When quota is absent (older gateways do not report it) fall back to tokens
-  // so the visualization still communicates relative weight instead of
-  // collapsing into a single flat bar.
-  const weightMetric =
-    totalQuota > 0 ? 'quota' : totalTokens > 0 ? 'tokens' : 'requests'
-  const maxWeight = Math.max(0, ...models.map((model) => model[weightMetric]))
-
-  const totalWeight = models.reduce(
-    (sum, model) => sum + model[weightMetric],
-    0
-  )
-
-  const ranked = models.map((model) => {
-    const weight = model[weightMetric]
-    return {
-      ...model,
-      // `intensity` scales against the biggest model (bar lengths);
-      // `share` is the slice of the whole (percentages and the ring).
-      intensity: maxWeight > 0 ? weight / maxWeight : 0,
-      share: totalWeight > 0 ? weight / totalWeight : 0,
-    }
-  })
+  const maxWeight = Math.max(0, ...models.map(weightOf))
+  const totalWeight = models.reduce((sum, model) => sum + weightOf(model), 0)
+  const ranked = models.map((model) => ({
+    ...model,
+    intensity: maxWeight > 0 ? weightOf(model) / maxWeight : 0,
+    share: totalWeight > 0 ? weightOf(model) / totalWeight : 0,
+  }))
 
   return {
     models: ranked,
@@ -159,6 +168,19 @@ export function buildModelUsageReport(rows: ModelUsageRow[]): ModelUsageReport {
       requests: totalRequests,
       tokens: totalTokens,
       quota: totalQuota,
+      outputImages: models.reduce((sum, model) => sum + model.outputImages, 0),
+      sponsoredRequests: models.reduce(
+        (sum, model) => sum + model.sponsoredRequests,
+        0
+      ),
+      sponsoredQuota: sumUsageCredits(
+        models.map((model) => model.sponsoredQuota)
+      ),
+      tokenCountScope: models.some(
+        (model) => model.tokenCountScope === 'settled_text_requests'
+      )
+        ? 'settled_text_requests'
+        : null,
       modelCount: ranked.length,
       topModel: ranked[0] ?? null,
     },

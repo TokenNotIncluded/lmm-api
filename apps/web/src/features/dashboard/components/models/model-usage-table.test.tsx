@@ -107,3 +107,41 @@ test('unknown raw quota does not become zero percent or give another model one h
   assert.match(realZero.text, /0%/)
   assert.match(realZero.text, /100%/)
 })
+
+test('native image rows show unavailable tokens and returned images without losing consumption', () => {
+  const { text, cells } = tableText([
+    {
+      created_at: 0,
+      model_name: 'image',
+      count: 1,
+      quota: 100,
+      token_used: null,
+      output_image_count: 2,
+      token_count_scope: 'settled_text_requests',
+      settlement_scope: 'settled_requests',
+    },
+  ])
+  assert.equal(cells[0], '1')
+  assert.match(cells[1] ?? '', /^—Images \(billing quantity\): 2$/)
+  assert.match(cells[2] ?? '', /100 Raw credits/)
+  assert.match(text, /Tokens cover settled text requests only\./)
+})
+
+test('native mixed usage keeps real text tokens and signals platform-funded consumption', () => {
+  const { text, cells } = tableText([
+    {
+      created_at: 0,
+      model_name: 'mixed',
+      count: 2,
+      quota: 120,
+      token_used: 19,
+      output_image_count: 2,
+      token_count_scope: 'settled_text_requests',
+      platform_sponsored: true,
+    },
+  ])
+  assert.match(cells[1] ?? '', /^19Images \(billing quantity\): 2$/)
+  assert.match(cells[2] ?? '', /120 Raw credits/)
+  assert.match(text, /Platform-sponsored usage/)
+  assert.doesNotMatch(text, /Wallet debit/)
+})

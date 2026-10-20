@@ -5,6 +5,7 @@ import {
   type UsageLog,
 } from '@/features/usage-logs/data/schema'
 import { parseLogOther } from '@/features/usage-logs/lib/format'
+import { usageReceiptState } from '@/features/usage-logs/lib/receipt-state'
 
 export async function loadLatestRequest(): Promise<UsageLog | null> {
   const results = await Promise.all([
@@ -29,8 +30,14 @@ export async function loadLatestRequest(): Promise<UsageLog | null> {
 }
 export function latestRequestStatus(
   log: UsageLog
-): 'failed' | 'successful' | 'recorded' {
+):
+  | 'failed'
+  | 'successful'
+  | 'recorded'
+  | NonNullable<ReturnType<typeof usageReceiptState>>['status'] {
   const other = parseLogOther(log.other)
+  const receiptState = usageReceiptState(log, other)
+  if (receiptState) return receiptState.status
   if (
     log.type === 5 ||
     other?.stream_status?.status === 'error' ||

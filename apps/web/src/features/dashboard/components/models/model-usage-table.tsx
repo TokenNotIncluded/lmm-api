@@ -50,6 +50,7 @@ interface ModelUsageTableViewProps {
 }
 
 function ModelUsageTableView(props: ModelUsageTableViewProps) {
+  const { t } = useTranslation()
   const {
     rows,
     total,
@@ -136,6 +137,13 @@ function ModelUsageTableView(props: ModelUsageTableViewProps) {
         <table className='dashboard-usage__table' role='table'>
           <caption className='dashboard-usage__caption'>
             {text('shareNote')}
+            {rows.length > 0 &&
+              rows.every(
+                (row) => row.token_count_scope === 'settled_text_requests'
+              ) && <> {t('Tokens cover settled text requests only.')}</>}
+            {rows.some((row) => (row.platform_sponsored_quota ?? 0) > 0) && (
+              <> {t('Platform-sponsored usage')}</>
+            )}
           </caption>
           <thead role='rowgroup'>
             <tr role='row'>
@@ -179,7 +187,14 @@ function ModelUsageTableView(props: ModelUsageTableViewProps) {
                   {number.format(row.count)}
                 </td>
                 <td role='cell' data-label={text('tokens')}>
-                  {number.format(row.tokens)}
+                  {row.tokens === null ? '—' : number.format(row.tokens)}
+                  {typeof row.output_image_count === 'number' &&
+                    row.output_image_count > 0 && (
+                      <small className='text-muted-foreground block'>
+                        {t('Images (billing quantity)')}:{' '}
+                        {number.format(row.output_image_count)}
+                      </small>
+                    )}
                 </td>
                 <td
                   role='cell'
@@ -294,6 +309,13 @@ export function ModelUsageTable({
       t('Historical money available'),
       t('Historical money basis'),
       `${text('share')} (%)`,
+      ...(selected.some(
+        (row) =>
+          row.output_image_count !== undefined ||
+          row.token_count_scope !== undefined
+      )
+        ? [t('Images (billing quantity)'), 'token_count_scope']
+        : []),
     ]
     const csv = modelUsageCsv(selected, headers, unknown)
     const url = URL.createObjectURL(
