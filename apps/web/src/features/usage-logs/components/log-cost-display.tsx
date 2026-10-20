@@ -92,9 +92,12 @@ function QuotaBadge(props: {
   display: string
   unavailable: boolean
   title?: string
+  plainText?: boolean
 }) {
   const { t } = useTranslation()
-  const quotaDisplay = splitQuotaDisplay(props.display)
+  const quotaDisplay = props.plainText
+    ? { prefix: '', amount: props.display }
+    : splitQuotaDisplay(props.display)
 
   return (
     <span
@@ -148,7 +151,12 @@ export function LogCostDisplay(props: LogCostDisplayProps) {
   const { formatHistoricalLogQuota } = useHistoricalQuotaMoney()
   if (isUsageCostIncomplete(props.other, props.projection)) {
     return (
-      <QuotaBadge display={t('Unknown')} unavailable title={t('Incomplete')} />
+      <QuotaBadge
+        display={t('Unknown')}
+        unavailable
+        title={t('Incomplete')}
+        plainText
+      />
     )
   }
   const isSubscription = props.other?.billing_source === 'subscription'
