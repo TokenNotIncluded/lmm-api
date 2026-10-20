@@ -4,6 +4,7 @@ COPY services/core/Cargo.toml services/core/Cargo.lock services/core/build.rs ./
 COPY contracts/proto /src/contracts/proto
 COPY services/core/src ./src
 COPY services/core/schema ./schema
+COPY services/extensions/internal/modules/toolmarket/builtin_catalog.json /src/services/extensions/internal/modules/toolmarket/builtin_catalog.json
 # Bound formal image compilation independently of runtime container limits.
 RUN AWS_LC_SYS_USE_SYSTEM=0 cargo build --locked --release --jobs 2 --bin lmm-core
 
