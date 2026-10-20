@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"net/url"
 	"strconv"
+	"strings"
 )
 
 // ValidateHostProfile enables HTTP only on a separately selected numeric
@@ -23,20 +24,35 @@ func ValidateHostProfile(localHTTP bool, listen, origin string) error {
 		return nil
 	}
 	u, e := url.Parse(origin)
-	if e != nil || u.Scheme != "http" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Host != listen {
-		return errors.New("local fixture origin must match its loopback listener")
+	if e != nil || u.Scheme != "http" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.ForceQuery || strings.Contains(origin, "#") {
+		return errors.New("local fixture origin must be a numeric loopback high-port origin")
 	}
-	host, port, e := net.SplitHostPort(listen)
+	parseEndpoint := func(address string) (netip.Addr, error) {
+		host, port, e := net.SplitHostPort(address)
+		if e != nil {
+			return netip.Addr{}, errors.New("local fixture requires numeric loopback high-port endpoints")
+		}
+		ip, e := netip.ParseAddr(host)
+		number, pErr := strconv.Atoi(port)
+		if e != nil || ip.Zone() != "" || !ip.Unmap().IsLoopback() || pErr != nil || number < 1024 || number > 65535 || strconv.Itoa(number) != port {
+			return netip.Addr{}, errors.New("local fixture requires numeric loopback high-port endpoints")
+		}
+		return ip.Unmap(), nil
+	}
+	listenerIP, e := parseEndpoint(listen)
 	if e != nil {
-		return errors.New("local fixture requires numeric loopback high-port listener")
+		return e
 	}
-	ip, e := netip.ParseAddr(host)
-	number, pErr := strconv.Atoi(port)
-	if e != nil || ip.Zone() != "" || !ip.Unmap().IsLoopback() || pErr != nil || number < 1024 || number > 65535 || strconv.Itoa(number) != port {
-		return errors.New("local fixture requires numeric loopback high-port listener")
+	originIP, e := parseEndpoint(u.Host)
+	if e != nil {
+		return e
+	}
+	if listenerIP != originIP {
+		return errors.New("local fixture origin must share its listener's loopback IP")
 	}
 	return nil
 }
+
 func validateLocalCoreOrigin(origin string, cfg Config) error {
 	if !cfg.LocalHTTP {
 		return errors.New("HTTP Core origin requires the isolated local profile")
