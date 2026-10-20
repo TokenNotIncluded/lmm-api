@@ -207,6 +207,7 @@ pub(crate) async fn check_connection(
           AND NOT EXISTS(SELECT FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
             WHERE (n.nspname='core_meta' OR (n.nspname='core_billing' AND c.relkind IN ('r','p')))
               AND c.relkind IN ('r','p') AND NOT has_table_privilege(c.oid,'SELECT'))
+          AND has_table_privilege('core_billing.balance_state','SELECT')
           AND has_table_privilege('core_billing.account_policies','SELECT')
           AND has_table_privilege('core_billing.account_policies','INSERT')
           AND has_table_privilege('core_billing.account_policies','UPDATE')
