@@ -36,6 +36,8 @@ export const usageLogSchema = z.object({
   quota_usd: z.string().optional(),
   quota_money_available: z.boolean().optional(),
   quota_money_basis: z.string().optional(),
+  billing_basis: z.string().optional(),
+  state: z.string().optional(),
   prompt_tokens: z.number().default(0),
   completion_tokens: z.number().default(0),
   use_time: z.number().default(0),

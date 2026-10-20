@@ -41,6 +41,7 @@ const { api } = await import('@/lib/api')
 const { useAuthStore } = await import('@/stores/auth-store')
 
 let search: Record<string, string> = {}
+let provider = 'github'
 const navigations: Array<{
   href?: string
   to?: string
@@ -57,7 +58,7 @@ mock.module('@tanstack/react-router', () => ({
     options,
   }),
   useNavigate: () => navigate,
-  useParams: () => ({ provider: 'github' }),
+  useParams: () => ({ provider }),
   useSearch: () => search,
 }))
 mock.module('@/features/auth/auth-layout', () => ({
@@ -136,6 +137,7 @@ afterEach(async () => {
   for (const root of roots.splice(0)) await act(async () => root.unmount())
   api.get = originalGet
   api.post = originalPost
+  provider = 'github'
   useAuthStore.getState().auth.reset('complete')
   navigations.length = 0
   document.body.replaceChildren()
@@ -177,6 +179,95 @@ test('StrictMode exchanges once and carries the product target with the 2FA chal
     },
   ])
   assert.equal(useAuthStore.getState().auth.accessToken, null)
+})
+
+for (const builtInProvider of ['google', 'github', 'discord', 'linuxdo']) {
+  test(`${builtInProvider} direct callback MFA uses only its pending cookie request and exchanges once`, async () => {
+    provider = builtInProvider
+    search = {
+      external_mfa: '1',
+      redirect: '/wallet?view=credits#history',
+      flow_token: 'untrusted-url-token-is-never-used',
+    }
+    let exchanges = 0
+    api.get = (async (path, config) => {
+      exchanges++
+      assert.equal(path, `/api/oauth/${builtInProvider}`)
+      assert.deepEqual(config?.params, { external_mfa: '1' })
+      return {
+        data: {
+          success: true,
+          data: {
+            require_2fa: true,
+            flow_token: 'server-bound-mfa-flow',
+            expires_at: 2_000_000_000,
+          },
+        },
+      }
+    }) as typeof api.get
+    await mount()
+    assert.equal(exchanges, 1)
+    assert.equal(useAuthStore.getState().auth.accessToken, null)
+    assert.equal(
+      useAuthStore.getState().auth.pending2FAFlowToken,
+      'server-bound-mfa-flow'
+    )
+    assert.deepEqual(navigations, [
+      {
+        to: '/otp',
+        search: { redirect: '/wallet?view=credits#history' },
+        replace: true,
+        flowTokenDuringNavigation: 'server-bound-mfa-flow',
+      },
+    ])
+  })
+}
+
+test('a custom provider cannot use the built-in cookie-only MFA continuation', async () => {
+  provider = 'custom'
+  search = { external_mfa: '1' }
+  let exchanges = 0
+  api.get = (async () => {
+    exchanges++
+    throw new Error('must not exchange')
+  }) as typeof api.get
+  await mount()
+  assert.equal(exchanges, 0)
+  assert.equal(useAuthStore.getState().auth.pending2FAFlowToken, null)
+  assert.equal(navigations.at(-1)?.href, '/sign-in')
+})
+
+test('Discord issuer survives the SPA callback exchange', async () => {
+  provider = 'discord'
+  search = {
+    code: 'discord-code',
+    state: 'discord-state',
+    iss: 'https://discord.com',
+  }
+  let exchanges = 0
+  api.get = (async (path, config) => {
+    exchanges++
+    assert.equal(path, '/api/oauth/discord')
+    assert.deepEqual(config?.params, {
+      code: 'discord-code',
+      state: 'discord-state',
+      iss: 'https://discord.com',
+      error: undefined,
+      error_description: undefined,
+    })
+    return {
+      data: {
+        success: true,
+        data: { require_2fa: true, flow_token: 'discord-mfa-flow' },
+      },
+    }
+  }) as typeof api.get
+  await mount()
+  assert.equal(exchanges, 1)
+  assert.equal(
+    useAuthStore.getState().auth.pending2FAFlowToken,
+    'discord-mfa-flow'
+  )
 })
 
 test('a missing secondary challenge token cannot establish a session', async () => {

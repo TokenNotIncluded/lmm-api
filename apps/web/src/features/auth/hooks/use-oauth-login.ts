@@ -29,6 +29,13 @@ import {
   telegramLogin,
 } from '../api'
 import {
+  EXTERNAL_BROWSER_PRESETS,
+  type ExternalBrowserProvider,
+  buildExternalBrowserStartRequest,
+  parseBrowserAuthorizationResponse,
+  validateExternalBrowserAuthorizationUrl,
+} from '../lib/external-oauth'
+import {
   GOOGLE_BUILT_IN_PRESET,
   buildGoogleBrowserStartRequest,
   validateGoogleBrowserAuthorizationUrl,
@@ -110,6 +117,7 @@ export function useOAuthLogin(
   const [githubButtonText, setGithubButtonText] = useState('')
   const [githubButtonDisabled, setGithubButtonDisabled] = useState(false)
   const githubTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const browserStartPending = useRef(false)
 
   useEffect(() => {
     setGithubButtonText(t('Continue with GitHub'))
@@ -129,31 +137,31 @@ export function useOAuthLogin(
   }
 
   const handleGoogleLogin = async () => {
+    if (browserStartPending.current) return
     const payload = buildGoogleBrowserStartRequest(status, acceptedLegal)
     if (!payload) {
       toast.error(t('Login failed'))
       return
     }
 
+    browserStartPending.current = true
     setIsLoading(true)
     try {
       // The built-in browser bridge owns state, PKCE and the HttpOnly binding
       // cookie. Do not use the generic legacy flow or native credential API.
-      const response = await api.post(
+      const response = await api.post<unknown>(
         GOOGLE_BUILT_IN_PRESET.browser_start,
         payload,
         {
           skipAuthRefresh: true,
         }
       )
-      if (response.data?.success !== true) {
-        throw new Error('Google login unavailable')
-      }
       const authorizationUrl = validateGoogleBrowserAuthorizationUrl(
-        response.data?.data?.authorization_url,
+        parseBrowserAuthorizationResponse(response.data),
         status?.google_client_id,
         window.location.origin,
-        import.meta.env.DEV
+        import.meta.env.DEV,
+        status?.google_browser_callback
       )
       window.location.assign(authorizationUrl)
     } catch {
@@ -161,11 +169,42 @@ export function useOAuthLogin(
         t('Failed to start {{provider}} login', { provider: 'Google' })
       )
     } finally {
+      browserStartPending.current = false
       setIsLoading(false)
     }
   }
 
+  const startExternalBrowserLogin = async (
+    provider: ExternalBrowserProvider
+  ) => {
+    const payload = buildExternalBrowserStartRequest(
+      provider,
+      status,
+      acceptedLegal
+    )
+    if (!payload) throw new Error('External browser login unavailable')
+    browserStartPending.current = true
+    try {
+      const response = await api.post<unknown>(
+        EXTERNAL_BROWSER_PRESETS[provider].browser_start,
+        payload,
+        { skipAuthRefresh: true }
+      )
+      const authorizationUrl = validateExternalBrowserAuthorizationUrl({
+        provider,
+        value: parseBrowserAuthorizationResponse(response.data),
+        clientId: status?.[`${provider}_client_id`],
+        origin: window.location.origin,
+        allowLocalDevelopment: import.meta.env.DEV,
+      })
+      window.location.assign(authorizationUrl)
+    } finally {
+      browserStartPending.current = false
+    }
+  }
+
   const handleGitHubLogin = async () => {
+    if (browserStartPending.current) return
     if (!status?.github_client_id) return
     if (githubButtonDisabled) return
 
@@ -186,6 +225,10 @@ export function useOAuthLogin(
     }, 20000)
 
     try {
+      if (status.external_oauth_browser === true) {
+        await startExternalBrowserLogin('github')
+        return
+      }
       await resetSession()
       const state = await createOAuthFlow('github', 'login', acceptedLegal)
 
@@ -203,10 +246,15 @@ export function useOAuthLogin(
   }
 
   const handleDiscordLogin = async () => {
+    if (browserStartPending.current) return
     if (!status?.discord_client_id) return
 
     setIsLoading(true)
     try {
+      if (status.external_oauth_browser === true) {
+        await startExternalBrowserLogin('discord')
+        return
+      }
       await resetSession()
       const state = await createOAuthFlow('discord', 'login', acceptedLegal)
 
@@ -241,10 +289,15 @@ export function useOAuthLogin(
   }
 
   const handleLinuxDOLogin = async () => {
+    if (browserStartPending.current) return
     if (!status?.linuxdo_client_id) return
 
     setIsLoading(true)
     try {
+      if (status.external_oauth_browser === true) {
+        await startExternalBrowserLogin('linuxdo')
+        return
+      }
       await resetSession()
       const state = await createOAuthFlow('linuxdo', 'login', acceptedLegal)
 

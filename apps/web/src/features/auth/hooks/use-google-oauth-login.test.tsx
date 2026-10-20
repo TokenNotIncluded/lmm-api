@@ -143,6 +143,21 @@ describe('built-in Google hook contract', () => {
     assert.deepEqual(errors, [])
   })
 
+  test('uses the configured legacy browser callback without altering the server authorization response', async () => {
+    const authorization = validResponse()
+    const url = new URL(authorization.data.authorization_url)
+    url.searchParams.set(
+      'redirect_uri',
+      'https://site.example.test/api/oauth/google'
+    )
+    response = { success: true, data: { authorization_url: url.toString() } }
+    await mount({ ...supported, google_browser_callback: '/api/oauth/google' })
+    await act(async () => login())
+    assert.deepEqual(navigations, [url.toString()])
+    assert.equal(forbiddenCalls, 0)
+    assert.deepEqual(errors, [])
+  })
+
   test('legal consent failure makes no start request or navigation', async () => {
     response = validResponse()
     await mount({ ...supported, user_agreement_enabled: true }, false)

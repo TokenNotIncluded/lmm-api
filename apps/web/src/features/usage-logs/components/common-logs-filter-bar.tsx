@@ -16,7 +16,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useQueryClient, useIsFetching, useQuery } from '@tanstack/react-query'
+import {
+  useQueryClient,
+  useIsFetching,
+  useQuery,
+  useInfiniteQuery,
+} from '@tanstack/react-query'
 import { useNavigate, getRouteApi } from '@tanstack/react-router'
 import type { Table } from '@tanstack/react-table'
 import { Eye, EyeOff } from 'lucide-react'
@@ -38,7 +43,11 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import { getGroups } from '@/features/users/api'
+import {
+  NativeUsersFailure,
+  readNativeUsersScope,
+} from '@/features/native-users/access'
+import { readNativeUserGroups } from '@/features/native-users/api'
 import { getUserGroups } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -126,12 +135,21 @@ export function CommonLogsFilterBar<TData>(
   const fetchingLogs = useIsFetching({ queryKey: ['logs'] })
   const auth = useAuthStore((state) => state.auth)
   const scope = readUsageStatisticsScope(auth)
+  const adminScope = readNativeUsersScope(auth)
   const scopeKey = [scope?.userId, scope?.sessionId, scope?.role]
 
-  const { data: adminGroups } = useQuery({
-    queryKey: ['groups', ...scopeKey],
-    queryFn: getGroups,
-    enabled: !!scope && isAdmin,
+  const adminGroups = useInfiniteQuery({
+    queryKey: ['history-admin-group-grants', ...scopeKey],
+    initialPageParam: 1,
+    queryFn: ({ signal, pageParam }) => {
+      if (!adminScope) throw new NativeUsersFailure('session_changed')
+      return readNativeUserGroups(adminScope, pageParam, signal)
+    },
+    getNextPageParam: (last) =>
+      last.page * last.page_size < last.total ? last.page + 1 : undefined,
+    enabled: !!adminScope && isAdmin,
+    retry: false,
+    staleTime: 60_000,
   })
   const { data: userGroups } = useQuery({
     queryKey: ['user-groups', ...scopeKey],
@@ -140,12 +158,14 @@ export function CommonLogsFilterBar<TData>(
   })
   const groupOptions = useMemo(() => {
     const groups = isAdmin
-      ? (adminGroups?.data ?? [])
+      ? adminGroups.isError
+        ? []
+        : (adminGroups.data?.pages.flatMap((page) => page.items) ?? [])
       : Object.keys(userGroups?.data ?? {})
-    return groups
+    return [...new Set(groups)]
       .filter((group) => group !== 'auto')
       .map((group) => ({ label: group, value: group }))
-  }, [isAdmin, adminGroups, userGroups])
+  }, [isAdmin, adminGroups.data, adminGroups.isError, userGroups])
 
   const searchState = useMemo<CommonLogDraft>(() => {
     const { start, end } = getDefaultTimeRange()
@@ -361,6 +381,31 @@ export function CommonLogsFilterBar<TData>(
           onChange={(e) => handleChange('group', e.target.value)}
           onKeyDown={handleKeyDown}
         />
+      )}
+      {isAdmin && sensitiveVisible && (
+        <div
+          className='text-muted-foreground mt-1 space-y-1 text-xs'
+          data-group-source={adminGroups.data?.pages[0]?.source}
+        >
+          <p>{t('Explicit group memberships')}</p>
+          {adminGroups.isLoading ? (
+            <p role='status'>{t('Loading groups...')}</p>
+          ) : null}
+          {adminGroups.isError || !adminScope ? (
+            <p role='status'>{t('Group directory is unavailable.')}</p>
+          ) : null}
+          {adminGroups.hasNextPage ? (
+            <Button
+              type='button'
+              variant='ghost'
+              size='sm'
+              onClick={() => void adminGroups.fetchNextPage()}
+              disabled={adminGroups.isFetchingNextPage}
+            >
+              {t('Load more')}
+            </Button>
+          ) : null}
+        </div>
       )}
     </LogsFilterField>
   )

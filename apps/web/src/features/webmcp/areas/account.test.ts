@@ -9,6 +9,8 @@ License, or (at your option) any later version.
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 
+import { z } from 'zod'
+
 import { api } from '@/lib/api'
 import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
@@ -179,6 +181,104 @@ test('unsupported drawing/task history remains explicit and never becomes an emp
   }
   assert.match(paths[0], /^\/api\/mj\/self\?/)
   assert.match(paths[1], /^\/api\/task\/self\?/)
+})
+
+test('usage tools preserve incomplete settlement versus true zero and raw legacy units', async () => {
+  signIn()
+  api.get = (async () => ({
+    data: {
+      success: true,
+      data: {
+        total: 3,
+        page: 1,
+        page_size: 20,
+        items: [
+          {
+            id: 1,
+            user_id: 1,
+            created_at: 1,
+            type: 5,
+            content: 'No final usage receipt',
+            quota: 0,
+            state: 'reconcile',
+            billing_basis: 'incomplete',
+            quota_money_available: false,
+            other: JSON.stringify({
+              billing_basis: 'incomplete',
+              request_state: 'reconcile',
+              usage_status: 'incomplete',
+              key: 'secret-key',
+            }),
+          },
+          {
+            id: 2,
+            user_id: 1,
+            created_at: 1,
+            type: 2,
+            content: 'Completed',
+            quota: 0,
+            state: 'settled',
+            billing_basis: 'net_consumption',
+            quota_money_available: true,
+            quota_money_basis: 'captured_credits_per_usd',
+            quota_usd: '0',
+            other: JSON.stringify({
+              billing_basis: 'net_consumption',
+              request_state: 'settled',
+              usage_status: 'settled',
+            }),
+          },
+          {
+            id: 3,
+            user_id: 1,
+            created_at: 1,
+            type: 5,
+            content: 'Historical record',
+            quota: -12,
+            quota_money_available: false,
+            quota_money_basis: 'missing_credit_basis',
+          },
+        ],
+      },
+    },
+  })) as typeof api.get
+  const result = z
+    .object({
+      items: z.array(
+        z.object({
+          quota: z.number().nullable(),
+          quota_available: z.boolean(),
+          quota_money_available: z.boolean().nullable(),
+          quota_money_basis: z.string().nullable(),
+          billing_basis: z.string().nullable(),
+          request_state: z.string().nullable(),
+          usage_status: z.string().nullable(),
+        })
+      ),
+    })
+    .parse(await find('lmm_account_list_usage_logs').execute({}, options()))
+  assert.deepEqual(result.items[0], {
+    quota: null,
+    quota_available: false,
+    quota_money_available: false,
+    quota_money_basis: null,
+    billing_basis: 'incomplete',
+    request_state: 'reconcile',
+    usage_status: 'incomplete',
+  })
+  assert.deepEqual(result.items[1], {
+    quota: 0,
+    quota_available: true,
+    quota_money_available: true,
+    quota_money_basis: 'captured_credits_per_usd',
+    billing_basis: 'net_consumption',
+    request_state: 'settled',
+    usage_status: 'settled',
+  })
+  assert.equal(result.items[2].quota, -12)
+  assert.equal(result.items[2].quota_available, true)
+  assert.equal(result.items[2].quota_money_available, false)
+  assert.doesNotMatch(JSON.stringify(result), /secret-key/)
 })
 
 test('business failure and malformed history are errors without exposing raw server content', async () => {

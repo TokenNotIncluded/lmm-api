@@ -38,6 +38,102 @@ test('preserves real zero and legacy raw counters without fabricating money meta
   )
 })
 
+function legacyStatistics() {
+  return {
+    quota: 193,
+    raw_consumption_quota: '193',
+    quota_numeric_representable: true,
+    invalid_quota_records: 1,
+    unpriced_quota_records: 2,
+    quota_projection_truncated: false,
+    quota_money_available: false,
+    quota_money_basis: 'aggregate_missing_credit_basis',
+    quota_usd: null,
+    rpm: null,
+    tpm: null,
+    rates_available: false,
+    source: 'legacy_log_only',
+  }
+}
+
+test('accepts the real Core historical DTO and preserves unavailable rates and money', () => {
+  const data = legacyStatistics()
+  assert.deepEqual(parseUsageStatistics({ success: true, data }), data)
+})
+
+test('preserves exact historical quota strings beyond the JavaScript safe integer range', () => {
+  const data = {
+    ...legacyStatistics(),
+    quota: null,
+    raw_consumption_quota: '900719925474099312345678901234567890',
+    quota_numeric_representable: false,
+  }
+  assert.deepEqual(parseUsageStatistics({ success: true, data }), data)
+})
+
+test('an invalid historical raw string remains an unknown source fact rather than acquiring zero', () => {
+  for (const raw of ['', 'not-an-integer', '193.5', '1e3']) {
+    const data = {
+      ...legacyStatistics(),
+      quota: null,
+      raw_consumption_quota: raw,
+      quota_numeric_representable: false,
+    }
+    assert.deepEqual(parseUsageStatistics({ success: true, data }), data)
+  }
+})
+
+test('an explicitly unavailable numeric quota does not discard its exact raw string', () => {
+  const data = {
+    ...legacyStatistics(),
+    quota: null,
+    quota_numeric_representable: false,
+  }
+  assert.deepEqual(parseUsageStatistics({ success: true, data }), data)
+})
+
+test('nullable historical fields require the explicit Core legacy contract', () => {
+  const data = legacyStatistics()
+  const invalid: unknown[] = [
+    { ...data, source: undefined },
+    { ...data, source: 'native' },
+    { ...data, raw_consumption_quota: undefined },
+    { ...data, raw_consumption_quota: 193 },
+    { ...data, raw_consumption_quota: null },
+    { ...data, quota_numeric_representable: undefined },
+    { ...data, quota_numeric_representable: 'true' },
+    { ...data, quota_numeric_representable: false },
+    { ...data, quota: null },
+    { ...data, quota: Number.MAX_SAFE_INTEGER + 1 },
+    { ...data, invalid_quota_records: undefined },
+    { ...data, invalid_quota_records: -1 },
+    { ...data, unpriced_quota_records: undefined },
+    { ...data, quota_usd: undefined },
+    { ...data, quota_money_available: undefined },
+    { ...data, quota_money_basis: undefined },
+    { ...data, rates_available: undefined },
+    { ...data, rates_available: true },
+    { ...data, rpm: 0 },
+    { ...data, tpm: 0 },
+  ]
+  for (const value of invalid) {
+    assert.throws(
+      () => parseUsageStatistics({ success: true, data: value }),
+      /statistics unavailable/
+    )
+  }
+})
+
+test('invalid legacy markers cannot escape validation through native numeric fields', () => {
+  const data = { ...legacyStatistics(), rpm: 0, tpm: 0 }
+  for (const source of ['native', undefined]) {
+    assert.throws(
+      () => parseUsageStatistics({ success: true, data: { ...data, source } }),
+      /statistics unavailable/
+    )
+  }
+})
+
 test('contradictory complete money projections become unknown without discarding valid counters', () => {
   for (const data of [
     {

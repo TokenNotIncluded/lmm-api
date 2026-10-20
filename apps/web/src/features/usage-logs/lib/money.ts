@@ -21,6 +21,18 @@ export interface LogCurrencyFormatter {
 
 const PRICE_OPTIONS = { digitsLarge: 4, digitsSmall: 8, abbreviate: false }
 
+/** A native placeholder amount is not a completed settlement or a raw legacy amount. */
+export function isUsageCostIncomplete(
+  other: LogOtherData | null,
+  projection?: Pick<UsageLog, 'billing_basis' | 'state'>
+): boolean {
+  return (
+    projection?.billing_basis === 'incomplete' ||
+    other?.billing_basis === 'incomplete' ||
+    other?.usage_status === 'incomplete'
+  )
+}
+
 function positiveNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
 }

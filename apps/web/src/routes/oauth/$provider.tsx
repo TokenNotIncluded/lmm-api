@@ -35,6 +35,10 @@ import {
 import { useAuthRedirect } from '@/features/auth/hooks/use-auth-redirect'
 import { sanitizeAuthRedirect } from '@/features/auth/lib/auth-redirect'
 import {
+  isExternalMFAContinuation,
+  oauthCallbackSearchSchema,
+} from '@/features/auth/lib/external-oauth'
+import {
   parseTelegramBindCallback,
   postTelegramBindResult,
   startOAuthBindResponseDeadline,
@@ -85,20 +89,10 @@ function OAuthCallback() {
     key: string
     promise: Promise<ApiResponse>
   } | null>(null)
-  const { provider } = useParams({ from: '/oauth/$provider' }) as {
-    provider: string
-  }
-  const search = useSearch({ from: '/oauth/$provider' }) as {
-    code?: string
-    state?: string
-    error?: string
-    error_description?: string
-    redirect?: string
-    telegram_bind?: string
-    flow_token?: string
-    error_code?: string
-  }
+  const { provider } = useParams({ from: '/oauth/$provider' })
+  const search = useSearch({ from: '/oauth/$provider' })
   const callbackState = search.state ?? ''
+  const externalMFAContinuation = isExternalMFAContinuation(provider, search)
 
   const safeNavigate = useCallback(
     (target: unknown, fallback: string = '/open-source-bounties') => {
@@ -289,7 +283,7 @@ function OAuthCallback() {
       }
     }
 
-    if (!code && !search.error) {
+    if (!code && !search.error && !externalMFAContinuation) {
       toast.error(i18next.t('Missing code'))
       safeNavigate('/sign-in', '/sign-in')
       return
@@ -299,12 +293,15 @@ function OAuthCallback() {
     void (async () => {
       try {
         const config: OAuthRequestConfig = {
-          params: {
-            code: code || undefined,
-            state,
-            error: search.error,
-            error_description: search.error_description,
-          },
+          params: externalMFAContinuation
+            ? { external_mfa: '1' }
+            : {
+                code: code || undefined,
+                state,
+                error: search.error,
+                error_description: search.error_description,
+                iss: search.iss,
+              },
           skipBusinessError: true,
         }
         const key = JSON.stringify([
@@ -313,6 +310,8 @@ function OAuthCallback() {
           state,
           search.error,
           search.error_description,
+          search.iss,
+          externalMFAContinuation,
         ])
         if (callbackRequest.current?.key !== key) {
           passkeyAttempt.current += 1
@@ -391,6 +390,7 @@ function OAuthCallback() {
   }, [
     callbackState,
     completeLogin,
+    externalMFAContinuation,
     mode,
     navigate,
     provider,
@@ -401,6 +401,7 @@ function OAuthCallback() {
     search.error_code,
     search.error_description,
     search.flow_token,
+    search.iss,
     search.redirect,
     search.telegram_bind,
   ])
@@ -424,4 +425,5 @@ function OAuthCallback() {
 
 export const Route = createFileRoute('/oauth/$provider')({
   component: OAuthCallback,
+  validateSearch: oauthCallbackSearchSchema,
 })

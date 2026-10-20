@@ -113,6 +113,8 @@ export interface SystemStatus {
     logo?: string
     google_oauth?: boolean
     google_client_id?: string
+    google_browser_callback?: string
+    external_oauth_browser?: boolean
     github_oauth?: boolean
     github_client_id?: string
     discord_oauth?: boolean
@@ -164,6 +166,8 @@ export interface SystemStatus {
   logo?: string
   google_oauth?: boolean
   google_client_id?: string
+  google_browser_callback?: string
+  external_oauth_browser?: boolean
   github_oauth?: boolean
   github_client_id?: string
   discord_oauth?: boolean

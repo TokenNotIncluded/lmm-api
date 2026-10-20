@@ -217,6 +217,178 @@ for (const failure of [
   })
 }
 
+function legacyStatistics() {
+  return {
+    quota: 193,
+    raw_consumption_quota: '193',
+    quota_numeric_representable: true,
+    invalid_quota_records: 1,
+    unpriced_quota_records: 2,
+    quota_projection_truncated: false,
+    quota_money_available: false,
+    quota_money_basis: 'aggregate_missing_credit_basis',
+    quota_usd: null,
+    rpm: null,
+    tpm: null,
+    rates_available: false,
+    source: 'legacy_log_only',
+  }
+}
+
+test('the real Core historical statistics DTO renders raw credits with unavailable rates', async () => {
+  useAuthStore
+    .getState()
+    .auth.setUser({ id: 7, username: 'synthetic', role: 1 })
+  api.defaults.adapter = async (config) => ({
+    config,
+    headers: {},
+    status: 200,
+    statusText: 'OK',
+    data: { success: true, data: legacyStatistics() },
+  })
+  const { container } = await mount()
+  await waitFor(() => container.textContent?.includes('Unavailable') === true)
+  assert.match(container.textContent ?? '', /193 Raw credits/)
+  assert.match(container.textContent ?? '', /RPM\s*—/)
+  assert.match(container.textContent ?? '', /TPM\s*—/)
+  assert.doesNotMatch(container.textContent ?? '', /Failed to load|USD/)
+  assert.doesNotMatch(container.textContent ?? '', /No usage trend data/)
+  assert.equal(
+    container.querySelector(
+      '[aria-label="Usage trend for the selected time range"]'
+    ),
+    null
+  )
+})
+
+test('valid historical numeric quotas still draw raw trends when only rates and monetary units are unavailable', async () => {
+  useAuthStore
+    .getState()
+    .auth.setUser({ id: 7, username: 'synthetic', role: 1 })
+  api.defaults.adapter = async (config) => ({
+    config,
+    headers: {},
+    status: 200,
+    statusText: 'OK',
+    data: {
+      success: true,
+      data: { ...legacyStatistics(), invalid_quota_records: 0 },
+    },
+  })
+  const { container } = await mount()
+  await waitFor(
+    () =>
+      container.querySelectorAll(
+        '[aria-label="Usage trend for the selected time range"] button'
+      ).length === 12
+  )
+  assert.match(container.textContent ?? '', /193 Raw credits/)
+  assert.match(container.textContent ?? '', /RPM\s*—/)
+  assert.match(container.textContent ?? '', /TPM\s*—/)
+  assert.doesNotMatch(container.textContent ?? '', /Failed to load|USD/)
+})
+
+for (const raw of [
+  '900719925474099312345678901234567890',
+  '',
+  'not-an-integer',
+]) {
+  test(`historical raw quota ${JSON.stringify(raw)} never produces a rounded or fabricated zero trend`, async () => {
+    useAuthStore
+      .getState()
+      .auth.setUser({ id: 7, username: 'synthetic', role: 1 })
+    api.defaults.adapter = async (config) => ({
+      config,
+      headers: {},
+      status: 200,
+      statusText: 'OK',
+      data: {
+        success: true,
+        data: {
+          ...legacyStatistics(),
+          quota: null,
+          raw_consumption_quota: raw,
+          quota_numeric_representable: false,
+        },
+      },
+    })
+    const { container } = await mount()
+    await waitFor(() => container.textContent?.includes('Unavailable') === true)
+    if (raw.startsWith('9007')) {
+      const exact = new Intl.NumberFormat(undefined, {
+        maximumFractionDigits: 0,
+      }).format(BigInt(raw))
+      assert.ok(container.textContent?.includes(`${exact} Raw credits`))
+    } else {
+      assert.match(container.textContent ?? '', /Usage\s*—/)
+      assert.doesNotMatch(container.textContent ?? '', /Raw credits/)
+    }
+    assert.match(container.textContent ?? '', /RPM\s*—/)
+    assert.match(container.textContent ?? '', /TPM\s*—/)
+    assert.equal(
+      container.querySelector(
+        '[aria-label="Usage trend for the selected time range"]'
+      ),
+      null
+    )
+    assert.doesNotMatch(
+      container.textContent ?? '',
+      /Failed to load|No usage trend data|Usage\s*0 Raw credits|USD/
+    )
+  })
+}
+
+for (const bucket of [
+  {
+    label: 'unrepresentable quota',
+    fields: {
+      quota: null,
+      raw_consumption_quota: '900719925474099312345678901234567890',
+      quota_numeric_representable: false,
+    },
+  },
+  { label: 'invalid quota record', fields: { invalid_quota_records: 1 } },
+  {
+    label: 'truncated projection',
+    fields: { quota_projection_truncated: true },
+  },
+]) {
+  test(`one historical bucket with ${bucket.label} makes the whole plot unavailable while retaining the summary`, async () => {
+    useAuthStore
+      .getState()
+      .auth.setUser({ id: 7, username: 'synthetic', role: 1 })
+    let bucketReads = 0
+    api.defaults.adapter = async (config) => {
+      const summary = isSummary(config.url ?? '')
+      if (!summary) bucketReads += 1
+      const base = { ...legacyStatistics(), invalid_quota_records: 0 }
+      const data =
+        !summary && bucketReads === 4 ? { ...base, ...bucket.fields } : base
+      return {
+        config,
+        headers: {},
+        status: 200,
+        statusText: 'OK',
+        data: { success: true, data },
+      }
+    }
+    const { container } = await mount()
+    await waitFor(() => container.textContent?.includes('Unavailable') === true)
+    assert.match(container.textContent ?? '', /193 Raw credits/)
+    assert.equal(bucketReads, 12)
+    assert.equal(
+      container.querySelector(
+        '[aria-label="Usage trend for the selected time range"]'
+      ),
+      null
+    )
+    assert.doesNotMatch(
+      container.textContent ?? '',
+      /Failed to load|No usage trend data|USD/
+    )
+  })
+}
+
 test('one failed trend bucket makes the whole trend unavailable instead of drawing eleven complete bars', async () => {
   useAuthStore
     .getState()

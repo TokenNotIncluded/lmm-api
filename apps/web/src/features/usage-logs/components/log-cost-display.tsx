@@ -34,14 +34,17 @@ import {
   type HistoricalQuotaProjection,
 } from '@/lib/historical-quota-money'
 
+import type { UsageLog } from '../data/schema'
 import { hasToolSurcharge } from '../lib/format'
+import { isUsageCostIncomplete } from '../lib/money'
 import type { LogOtherData } from '../types'
 
 interface LogCostDisplayProps {
   quota: number
   other: LogOtherData | null
   type?: number
-  projection?: HistoricalQuotaProjection
+  projection?: HistoricalQuotaProjection &
+    Pick<UsageLog, 'billing_basis' | 'state'>
 }
 
 function splitQuotaDisplay(value: string): { prefix: string; amount: string } {
@@ -85,7 +88,11 @@ function ToolSurchargeMarker() {
   )
 }
 
-function QuotaBadge(props: { display: string; unavailable: boolean }) {
+function QuotaBadge(props: {
+  display: string
+  unavailable: boolean
+  title?: string
+}) {
   const { t } = useTranslation()
   const quotaDisplay = splitQuotaDisplay(props.display)
 
@@ -93,9 +100,10 @@ function QuotaBadge(props: { display: string; unavailable: boolean }) {
     <span
       className='border-border/80 bg-muted/60 inline-flex h-6 w-fit items-center rounded-md border px-2 [font-family:var(--font-body)] text-sm leading-none font-semibold tabular-nums'
       title={
-        props.unavailable
+        props.title ??
+        (props.unavailable
           ? t('Historical monetary value unavailable')
-          : undefined
+          : undefined)
       }
     >
       {quotaDisplay.prefix ? (
@@ -136,7 +144,13 @@ function SubscriptionBadge(props: { display: string; unavailable: boolean }) {
 }
 
 export function LogCostDisplay(props: LogCostDisplayProps) {
+  const { t } = useTranslation()
   const { formatHistoricalLogQuota } = useHistoricalQuotaMoney()
+  if (isUsageCostIncomplete(props.other, props.projection)) {
+    return (
+      <QuotaBadge display={t('Unknown')} unavailable title={t('Incomplete')} />
+    )
+  }
   const isSubscription = props.other?.billing_source === 'subscription'
   const subscriptionConsumedQuota =
     props.other?.subscription_consumed ?? props.quota

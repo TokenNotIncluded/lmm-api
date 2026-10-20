@@ -313,4 +313,91 @@ describe('log cost display', () => {
       }
     }
   })
+
+  test('native requests without a final usage receipt display unknown instead of zero raw credits', async () => {
+    for (const state of ['reserved', 'streaming', 'reconcile']) {
+      const rendered = await renderCost({
+        type: 5,
+        quota: 0,
+        other: {
+          request_state: state,
+          usage_status: 'incomplete',
+          billing_basis: 'incomplete',
+          pricing_credits_per_usd: 500000,
+          billing_source: 'wallet',
+        },
+        projection: {
+          quota_money_available: false,
+          billing_basis: 'incomplete',
+          state,
+        },
+      })
+      try {
+        assert.equal(rendered.container.textContent, 'Unknown')
+        assert.ok(rendered.container.querySelector('[title="Incomplete"]'))
+        assert.doesNotMatch(
+          rendered.container.textContent ?? '',
+          /0|Raw credits|USD/
+        )
+      } finally {
+        await unmountCost(rendered)
+      }
+    }
+  })
+
+  test('the native top-level incomplete basis survives absent metadata without changing recorded legacy zero or negatives', async () => {
+    for (const props of [
+      {
+        quota: 0,
+        type: 5,
+        other: null,
+        projection: {
+          billing_basis: 'incomplete',
+          quota_money_available: false,
+        },
+      },
+      {
+        quota: 0,
+        type: 5,
+        other: { usage_status: 'incomplete', billing_source: 'subscription' },
+      },
+    ]) {
+      const rendered = await renderCost(props)
+      try {
+        assert.equal(rendered.container.textContent, 'Unknown')
+      } finally {
+        await unmountCost(rendered)
+      }
+    }
+    for (const quota of [0, -12]) {
+      const rendered = await renderCost({ quota, type: 5, other: null })
+      try {
+        assert.equal(rendered.container.textContent, `${quota} Raw credits`)
+      } finally {
+        await unmountCost(rendered)
+      }
+    }
+    const settled = await renderCost({
+      type: 2,
+      quota: 0,
+      other: {
+        billing_basis: 'net_consumption',
+        request_state: 'settled',
+        usage_status: 'settled',
+        pricing_credits_per_usd: 500000,
+      },
+      projection: {
+        billing_basis: 'net_consumption',
+        state: 'settled',
+        quota_money_available: true,
+        quota_money_basis: 'captured_credits_per_usd',
+        quota_usd: '0',
+      },
+    })
+    try {
+      assert.equal(settled.container.textContent, '0 USD')
+    } finally {
+      await unmountCost(settled)
+    }
+  })
 })

@@ -71,7 +71,8 @@ export function validateGoogleBrowserAuthorizationUrl(
   value: unknown,
   clientId: unknown,
   origin: string,
-  allowLocalDevelopment = false
+  allowLocalDevelopment = false,
+  browserCallback: unknown = GOOGLE_BUILT_IN_PRESET.browser_callback
 ): string {
   const reject = () => {
     throw new Error('Untrusted Google browser authorization URL')
@@ -82,6 +83,21 @@ export function validateGoogleBrowserAuthorizationUrl(
     const target = new URL(value)
     const official = new URL(GOOGLE_BUILT_IN_PRESET.authorization_endpoint)
     const callback = new URL(target.searchParams.get('redirect_uri') || '')
+    if (typeof browserCallback !== 'string') return reject()
+    const configuredCallback = new URL(browserCallback, site.origin)
+    if (
+      configuredCallback.origin !== site.origin ||
+      ![
+        GOOGLE_BUILT_IN_PRESET.browser_start,
+        GOOGLE_BUILT_IN_PRESET.browser_callback,
+      ].some((path) => path === configuredCallback.pathname) ||
+      configuredCallback.username ||
+      configuredCallback.password ||
+      configuredCallback.search ||
+      configuredCallback.hash
+    ) {
+      return reject()
+    }
     const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(site.hostname)
     const scope = target.searchParams
       .get('scope')
@@ -106,7 +122,7 @@ export function validateGoogleBrowserAuthorizationUrl(
       !target.searchParams.get('code_challenge') ||
       target.searchParams.get('code_challenge_method') !== 'S256' ||
       callback.origin !== site.origin ||
-      callback.pathname !== GOOGLE_BUILT_IN_PRESET.browser_callback ||
+      callback.pathname !== configuredCallback.pathname ||
       callback.username ||
       callback.password ||
       callback.search ||
