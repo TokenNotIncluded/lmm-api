@@ -15,7 +15,10 @@ use humangrant::{
     store::{DDL as HG_DDL, HumanGrantStore},
     types::*,
 };
-use lmm_core::identity::{BrowserAuth, BrowserRegistration, BrowserSessionMetadata, IdentityStore};
+use lmm_core::{
+    core_schema,
+    identity::{BrowserAuth, BrowserRegistration, BrowserSessionMetadata, IdentityStore},
+};
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -74,11 +77,14 @@ fn sign_request(
 }
 
 async fn setup_app(pool: PgPool) -> (BrowserAuth, Router, HumanGrantStore) {
+    // Browser login reads assembled Core policy state, including core_abuse.
+    // Build the same fresh schema contract used by the real Core before
+    // installing HumanGrant's own tables.
+    core_schema::init(&pool).await.unwrap();
     let store = IdentityStore::from_pool(pool.clone())
         .with_registration_enabled(true)
         .with_mfa_keys("test".into(), vec![("test".into(), vec![47; 32])])
         .unwrap();
-    store.init_database().await.unwrap();
 
     // HumanGrant schema
     sqlx::raw_sql(HG_DDL).execute(&pool).await.unwrap();
