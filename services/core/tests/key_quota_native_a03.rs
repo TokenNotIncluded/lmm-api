@@ -2,19 +2,18 @@
 //!
 //! Verifies:
 //! 1. Fresh14 Rust Core installer & independent installer LOGIN SET ROLE NOLOGIN owner.
-//!    (Note: kept UNRUN per review instruction --skip fresh14_installer_and_independent_owner_contract).
 //! 2. IdentityStore real key issuance & secret digest binding (no forged secret/status).
-//! 3. Real offline writer CLI consumption & minimum runtime ChargingEngine: historical used + new reserve merged admission.
+//! 3. Real offline SQL writer consumption & restricted runtime ChargingEngine: historical used + new reserve merged admission.
 //! 4. Refuse cross-key and cross-account quota borrowing.
 //! 5. Finite / unlimited switching preserves historical opening consumed credits.
-//! 6. Concurrent import single winner & strict replay idempotency.
+//! 6. Reject an active competing client & verify strict replay idempotency.
 //! 7. Halfway failure marker rolls back all tables and sequence state.
 //! 8. UNKNOWN queries by original migration_id in core_migration.import_runs.
 use lmm_core::{
     accounts::{Account, AccountKind},
     billing::{
         Credits,
-        charging::{Charging, Outcome, Price, Request, Usage},
+        charging::{Charging, Error as ChargingError, Outcome, Price, Request, Usage},
         ledger::{Action, Ledger, Request as LedgerRequest},
         transactional_ledger::TransactionalLedger,
     },
@@ -23,8 +22,10 @@ use lmm_core::{
     identity::IdentityStore,
 };
 use sha2::{Digest, Sha256};
-use sqlx::{PgPool, Row};
-use std::sync::Arc;
+use sqlx::{Connection, PgConnection, PgPool, Row, postgres::PgConnectOptions};
+use std::collections::HashMap;
+use std::io::Write;
+use std::sync::{Arc, Mutex, OnceLock};
 
 const WORKER: [u8; 32] = [7; 32];
 
@@ -58,22 +59,327 @@ fn personal(id: i64) -> Account {
     }
 }
 
-async fn setup_a03_roles(pool: &PgPool) {
-    let db: String = sqlx::query_scalar("SELECT current_database()")
-        .fetch_one(pool)
+const POSTGRES_IMAGE: &str =
+    "postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873";
+
+#[derive(Clone)]
+struct OwnedFixture {
+    id: String,
+    nonce: String,
+    host_port: u16,
+    password: String,
+}
+
+static FIXTURES: OnceLock<Mutex<HashMap<String, OwnedFixture>>> = OnceLock::new();
+
+fn docker(arguments: &[&str]) -> std::process::Output {
+    std::process::Command::new("docker")
+        .args(["--host", "unix:///var/run/docker.sock"])
+        .args(arguments)
+        .output()
+        .expect("Docker is required for the owned offline PostgreSQL fixture")
+}
+
+async fn setup_a03_roles() -> PgPool {
+    let suffix = format!("{:016x}", rand::random::<u64>());
+    let container = format!("lmm-native-kq-{suffix}");
+    let label = format!("lmm.test.native-kq={container}");
+    let password = format!(
+        "{:032x}{:032x}",
+        rand::random::<u128>(),
+        rand::random::<u128>()
+    );
+    let nonce = format!("lmm.migration_instance_nonce={container}");
+    let started = std::process::Command::new("docker")
+        .args(["--host", "unix:///var/run/docker.sock"])
+        .env("POSTGRES_PASSWORD", &password)
+        .args([
+            "run",
+            "--detach",
+            "--pull=never",
+            "--name",
+            &container,
+            "--label",
+            &label,
+            "--memory=384m",
+            "--cpus=1",
+            "--pids-limit=128",
+            "--publish",
+            "127.0.0.1::5432",
+            "--tmpfs",
+            "/var/lib/postgresql:rw,size=512m",
+            "--tmpfs",
+            "/var/run/postgresql:rw,size=16m",
+            "--env",
+            "POSTGRES_PASSWORD",
+            POSTGRES_IMAGE,
+            "postgres",
+            "-c",
+            "autovacuum=off",
+            "-c",
+            "max_connections=20",
+            "-c",
+            "shared_buffers=32MB",
+            "-c",
+            &nonce,
+        ])
+        .output()
+        .expect("start owned PostgreSQL fixture");
+    assert!(
+        started.status.success(),
+        "fixture startup failed: {}",
+        String::from_utf8_lossy(&started.stderr)
+    );
+    let container_id = String::from_utf8(started.stdout)
+        .unwrap()
+        .trim()
+        .to_string();
+    assert!(container_id.len() == 64 && container_id.bytes().all(|b| b.is_ascii_hexdigit()));
+    eprintln!(
+        "owned PostgreSQL failure scene: {container}; id: {container_id}; pinned image: {POSTGRES_IMAGE}"
+    );
+    let mut ready = false;
+    for _ in 0..300 {
+        let result = docker(&[
+            "exec",
+            &container,
+            "sh",
+            "-c",
+            "test \"$(cat /proc/1/comm)\" = postgres && pg_isready -q -U postgres",
+        ]);
+        if result.status.success() {
+            ready = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(
+        ready,
+        "owned PostgreSQL fixture did not become ready: {container}"
+    );
+    let inspected = docker(&["port", &container, "5432/tcp"]);
+    assert!(inspected.status.success());
+    let address = String::from_utf8(inspected.stdout).unwrap();
+    let port: u16 = address
+        .trim()
+        .strip_prefix("127.0.0.1:")
+        .expect("loopback binding")
+        .parse()
+        .unwrap();
+    FIXTURES
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap()
+        .insert(
+            container.clone(),
+            OwnedFixture {
+                id: container_id,
+                nonce: container.clone(),
+                host_port: port,
+                password: password.clone(),
+            },
+        );
+    verify_owned_container(&container);
+    let admin = PgConnectOptions::new()
+        .host("127.0.0.1")
+        .port(port)
+        .username("postgres")
+        .password(&password)
+        .database("postgres")
+        .application_name(&container);
+    let pool = PgPool::connect_with(admin).await.unwrap();
+    let instance: (String, i32) = sqlx::query_as(
+        "SELECT current_setting('lmm.migration_instance_nonce'), current_setting('port')::int",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        instance,
+        (container.clone(), 5432),
+        "published endpoint must reach the newly created PostgreSQL instance"
+    );
+    let owner = format!("kq_owner_{suffix}");
+    let operator = format!("kq_operator_{suffix}");
+    let database = format!("kq_{suffix}");
+    let runtime = format!("kq_runtime_{suffix}");
+    // Role names, database and password material are generated hexadecimal.
+    sqlx::raw_sql(&format!(
+        "CREATE ROLE {owner} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS; \
+         CREATE ROLE {operator} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '{password}'; \
+         GRANT {owner} TO {operator}; \
+         CREATE ROLE {runtime} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '{password}';"
+    )).execute(&pool).await.expect("provision isolated installer roles");
+    // CREATE DATABASE cannot be part of a multi-statement transaction.
+    sqlx::raw_sql(&format!("CREATE DATABASE {database} OWNER {owner}"))
+        .execute(&pool)
         .await
         .unwrap();
-    let alter_sql = format!("ALTER DATABASE \"{}\" OWNER TO a03_owner;", db);
-    let _ = sqlx::raw_sql(&alter_sql).execute(pool).await;
+    sqlx::raw_sql(&format!("REVOKE CONNECT ON DATABASE {database} FROM PUBLIC; GRANT CONNECT ON DATABASE {database} TO {operator}"))
+        .execute(&pool).await.unwrap();
+    let admin_options = (*pool.connect_options()).clone().database(&database);
+    pool.close().await;
+    let mut connection = PgConnection::connect_with(&admin_options).await.unwrap();
+    sqlx::raw_sql(&format!(
+        "GRANT EXECUTE ON FUNCTION pg_control_system() TO {owner}"
+    ))
+    .execute(&mut connection)
+    .await
+    .unwrap();
+    connection.close().await.unwrap();
+    let options = admin_options
+        .username(&operator)
+        .options([("role", owner.as_str())]);
+    let pool = PgPool::connect_with(options)
+        .await
+        .expect("independent LOGIN must SET ROLE to NOLOGIN owner");
+    let identity: (String, String, bool, bool, bool) = sqlx::query_as(
+        "SELECT current_user::text, session_user::text, \
+         (SELECT rolcanlogin FROM pg_roles WHERE rolname=current_user), \
+         (SELECT rolcanlogin FROM pg_roles WHERE rolname=session_user), \
+         (SELECT rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls FROM pg_roles WHERE rolname=current_user) \
+         OR (SELECT rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls FROM pg_roles WHERE rolname=session_user)"
+    ).fetch_one(&pool).await.unwrap();
+    assert_eq!(identity, (owner.clone(), operator, false, true, false));
+    core_schema::init(&pool).await.unwrap();
+    core_schema::check(&pool).await.unwrap();
+    // Reuse the reviewed deployment grant matrix; only the test's owner name differs.
+    let grants = include_str!("../../../deployment/postgres/grant-core-runtime.sql")
+        .replace("lmm_core_owner", &owner);
+    let script = format!("\\set runtime_role {runtime}\n\\set enable_models true\n{grants}");
+    run_writer_sql(&pool.connect_options(), &script)
+        .await
+        .expect("explicit production runtime grants");
+    pool
+}
 
-    let _ = sqlx::raw_sql(
-        "GRANT USAGE ON SCHEMA core_meta, core_charging, core_identity, core_migration TO a03_owner; \
-         GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA core_charging, core_migration TO a03_owner; \
-         GRANT SELECT ON ALL TABLES IN SCHEMA core_identity, core_meta TO a03_owner; \
-         GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA core_charging, core_identity TO a03_owner;"
-    )
-    .execute(pool)
-    .await;
+fn verify_owned_container(container: &str) -> OwnedFixture {
+    let fixture = FIXTURES
+        .get()
+        .expect("fixture creation receipt")
+        .lock()
+        .unwrap()
+        .get(container)
+        .expect("container must have been created by this test process")
+        .clone();
+    let result = docker(&[
+        "inspect",
+        &fixture.id,
+        "--format",
+        "{{.Id}}|{{index .Config.Labels \"lmm.test.native-kq\"}}|{{(index (index .NetworkSettings.Ports \"5432/tcp\") 0).HostIp}}|{{(index (index .NetworkSettings.Ports \"5432/tcp\") 0).HostPort}}",
+    ]);
+    assert!(result.status.success());
+    assert_eq!(
+        String::from_utf8(result.stdout).unwrap().trim(),
+        format!(
+            "{}|{}|127.0.0.1|{}",
+            fixture.id, fixture.nonce, fixture.host_port
+        ),
+        "container id, label and published endpoint must match the creation receipt"
+    );
+    fixture
+}
+
+async fn wait_for_no_clients(fixture: &OwnedFixture) {
+    // SQLx has closed its sockets, but backend exit can lag pool.close().
+    // Observe a bounded drain; never terminate clients to manufacture exclusivity.
+    for _ in 0..50 {
+        let clients = docker(&[
+            "exec",
+            &fixture.id,
+            "psql",
+            "-X",
+            "--no-password",
+            "-qAt",
+            "-v",
+            "ON_ERROR_STOP=1",
+            "-U",
+            "postgres",
+            "-c",
+            "SELECT count(*) FROM pg_stat_activity WHERE backend_type='client backend' AND pid<>pg_backend_pid()",
+        ]);
+        assert!(clients.status.success());
+        if String::from_utf8(clients.stdout).unwrap().trim() == "0" {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!(
+        "retain owned fixture with active clients after bounded drain: {}",
+        fixture.id
+    );
+}
+
+async fn finish_fixture(pool: PgPool) {
+    let container = pool
+        .connect_options()
+        .get_application_name()
+        .unwrap()
+        .to_string();
+    pool.close().await;
+    let fixture = verify_owned_container(&container);
+    wait_for_no_clients(&fixture).await;
+    let result = docker(&["rm", "--force", "--volumes", &fixture.id]);
+    assert!(result.status.success(), "owned fixture cleanup failed");
+    FIXTURES.get().unwrap().lock().unwrap().remove(&container);
+}
+
+async fn charging_runtime(owner_pool: &PgPool) -> PgPool {
+    let options = owner_pool.connect_options();
+    let runtime = options
+        .get_username()
+        .replace("kq_operator_", "kq_runtime_");
+    let owner = options.get_username().replace("kq_operator_", "kq_owner_");
+    let fixture = verify_owned_container(options.get_application_name().unwrap());
+    // Build fresh runtime options: copying installer options also copies SET ROLE owner.
+    let options = PgConnectOptions::new()
+        .host("127.0.0.1")
+        .port(fixture.host_port)
+        .username(&runtime)
+        .password(&fixture.password)
+        .database(options.get_database().unwrap())
+        .application_name(&fixture.nonce);
+    let pool = PgPool::connect_with(options).await.unwrap();
+    let permissions: (bool, bool, bool) = sqlx::query_as(
+        "SELECT pg_has_role(current_user, $1, 'SET'), \
+         has_table_privilege(current_user, 'core_charging.budget_opening_consumption', 'INSERT,UPDATE,DELETE'), \
+         has_table_privilege(current_user, 'core_billing.balance_state', 'INSERT,UPDATE,DELETE')"
+    ).bind(owner).fetch_one(&pool).await.unwrap();
+    assert_eq!(
+        permissions,
+        (false, false, false),
+        "runtime must not acquire installation or historical/funds write authority"
+    );
+    core_schema::check(&pool).await.unwrap();
+    pool
+}
+
+async fn import_state(pool: &PgPool) -> serde_json::Value {
+    let relations: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT n.nspname::text, c.relname::text, c.relkind::text FROM pg_class c \
+         JOIN pg_namespace n ON n.oid=c.relnamespace \
+         WHERE left(n.nspname,5)='core_' AND c.relkind IN ('r','p','S') ORDER BY n.nspname,c.relname"
+    ).fetch_all(pool).await.unwrap();
+    let mut snapshot = serde_json::Map::new();
+    for (schema, name, kind) in relations {
+        let relation = format!(
+            "\"{}\".\"{}\"",
+            schema.replace('"', "\"\""),
+            name.replace('"', "\"\"")
+        );
+        let query = if kind == "S" {
+            format!(
+                "SELECT jsonb_build_object('last_value',last_value,'is_called',is_called) FROM {relation}"
+            )
+        } else {
+            format!(
+                "SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text),'[]'::jsonb) FROM {relation} t"
+            )
+        };
+        let value = sqlx::query_scalar(&query).fetch_one(pool).await.unwrap();
+        snapshot.insert(format!("{schema}.{name}"), value);
+    }
+    serde_json::Value::Object(snapshot)
 }
 
 const SCRIPTS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts");
@@ -82,6 +388,8 @@ async fn get_target_receipt(pool: &PgPool) -> serde_json::Value {
     let ident: serde_json::Value = sqlx::query_scalar(
         r#"SELECT jsonb_build_object(
             'database', current_database(),
+            'owner', current_user,
+            'operator', session_user,
             'database_oid', (SELECT oid FROM pg_database WHERE datname=current_database()),
             'port', current_setting('port')::int,
             'cluster_system_identifier', (SELECT system_identifier::text FROM pg_control_system()),
@@ -139,9 +447,9 @@ print(KQ.IDENTITY.catalog_hash_sql(KQ.IDENTITY.current_contract()))
 
     serde_json::json!({
         "connection": {
-            "role": "a03_owner",
-            "login_role": "a03_operator",
-            "set_role": "a03_owner",
+            "role": ident["owner"],
+            "login_role": ident["operator"],
+            "set_role": ident["owner"],
         },
         "instance_identity": ident,
         "contract": contract,
@@ -170,7 +478,7 @@ import sys, json
 sys.path.insert(0, "{scripts_dir}")
 import legacy_key_quota_opening as KQ
 
-data = json.loads({input_json})
+data = json.load(sys.stdin)
 receipt = {{
     "scope": "a02-credential-mapping-receipt",
     "source_archive_sha256": data["source_archive_sha256"],
@@ -187,14 +495,23 @@ plan = KQ.build_plan_from_tokens(
 apply_sql = KQ.build_apply_sql(plan, data["target_receipt"])
 print(apply_sql)
 "#,
-        scripts_dir = SCRIPTS_DIR,
-        input_json = serde_json::to_string(&input.to_string()).unwrap()
+        scripts_dir = SCRIPTS_DIR
     );
 
-    let output = std::process::Command::new("python3")
+    let mut child = std::process::Command::new("python3")
         .args(["-B", "-c", &script])
-        .output()
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
         .expect("invoke legacy_key_quota_opening");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.to_string().as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
     assert!(
         output.status.success(),
         "Python build_apply_sql failed: {}",
@@ -203,138 +520,108 @@ print(apply_sql)
     String::from_utf8(output.stdout).expect("utf-8 output")
 }
 
-fn get_test_db_url(db: &str) -> String {
-    let base = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let (prefix, _) = base.rsplit_once('/').expect("valid DATABASE_URL format");
-    format!("{prefix}/{db}")
-}
-
-async fn run_docker_psql(container: &str, db: &str, sql: &str) -> Result<String, String> {
-    let mut child = std::process::Command::new("docker")
-        .args([
-            "exec",
-            "-i",
-            "--env",
-            "PGOPTIONS=-c role=a03_owner",
-            container,
-            "psql",
-            "-X",
-            "--no-password",
-            "-qAt",
-            "-v",
-            "ON_ERROR_STOP=1",
-            "-h",
-            "/var/run/postgresql",
-            "-U",
-            "a03_operator",
-            "-d",
-            db,
-        ])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("failed to spawn docker: {e}"))?;
-
-    use std::io::Write;
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(sql.as_bytes())
-        .unwrap();
-    let output = child.wait_with_output().map_err(|e| e.to_string())?;
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).to_string())
-    }
+async fn run_writer_sql(options: &PgConnectOptions, sql: &str) -> Result<String, String> {
+    let container = options
+        .get_application_name()
+        .expect("owned fixture identity")
+        .to_string();
+    let operator = options.get_username().to_string();
+    let owner = operator.replace("kq_operator_", "kq_owner_");
+    let database = options.get_database().unwrap().to_string();
+    let sql = sql.to_string();
+    tokio::task::spawn_blocking(move || {
+        let fixture = verify_owned_container(&container);
+        let role_option = format!("PGOPTIONS=-c role={owner}");
+        let mut child = std::process::Command::new("docker")
+            .args(["--host", "unix:///var/run/docker.sock"])
+            .args([
+                "exec",
+                "-i",
+                "--env",
+                &role_option,
+                &fixture.id,
+                "psql",
+                "-X",
+                "--no-password",
+                "-qAt",
+                "-v",
+                "ON_ERROR_STOP=1",
+                "-h",
+                "/var/run/postgresql",
+                "-U",
+                &operator,
+                "-d",
+                &database,
+            ])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(sql.as_bytes())
+            .map_err(|e| e.to_string())?;
+        let result = child.wait_with_output().map_err(|e| e.to_string())?;
+        if result.status.success() {
+            Ok(String::from_utf8_lossy(&result.stdout).to_string())
+        } else {
+            Err(String::from_utf8_lossy(&result.stderr).to_string())
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 async fn apply_writer_sql(pool: PgPool, sql: &str) -> (Result<String, String>, PgPool) {
-    let (db, nonce): (String, Option<String>) = sqlx::query_as(
-        "SELECT current_database(), current_setting('lmm.migration_instance_nonce', true)",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-
-    let container = nonce
-        .filter(|s| !s.is_empty())
-        .or_else(|| std::env::var("PG_TEST_CONTAINER").ok())
-        .expect("container name");
-
+    let options = (*pool.connect_options()).clone();
     pool.close().await;
-
-    let res = run_docker_psql(&container, &db, sql).await;
-
-    let new_url = get_test_db_url(&db);
-    let new_pool = PgPool::connect(&new_url).await.unwrap();
-
-    (res, new_pool)
+    let fixture = verify_owned_container(options.get_application_name().unwrap());
+    wait_for_no_clients(&fixture).await;
+    let result = run_writer_sql(&options, sql).await;
+    let pool = PgPool::connect_with(options).await.unwrap();
+    (result, pool)
 }
 
-#[sqlx::test(migrations = false)]
-async fn fresh14_installer_and_independent_owner_contract(pool: PgPool) {
-    // 1. Fresh14 Installer initialization and verification
-    core_schema::init(&pool).await.unwrap();
-    core_schema::check(&pool).await.unwrap();
-
+#[tokio::test]
+async fn fresh14_installer_and_independent_owner_contract() {
+    let pool = setup_a03_roles().await;
     let components: Vec<String> =
         sqlx::query_scalar("SELECT name FROM core_meta.component_contract ORDER BY name")
             .fetch_all(&pool)
             .await
             .unwrap();
-    assert_eq!(components.len(), core_schema::component_count());
+    let manifest = core_schema::schema_manifest();
+    let mut expected: Vec<String> = manifest
+        .components
+        .iter()
+        .map(|c| c.name.to_string())
+        .collect();
+    expected.sort();
+    assert_eq!(components, expected);
     assert_eq!(components.len(), 14);
-
-    for required in [
-        "identity",
-        "ledger",
-        "payments",
-        "charging",
-        "routing",
-        "events",
-        "financial-profile",
-        "charging-ledger",
-        "console",
-        "model-gateway",
-        "commerce",
-        "abuse",
-        "oauth-grants",
-        "history",
-    ] {
-        assert!(
-            components.iter().any(|c| c == required),
-            "Fresh14 installer must include component: {required}"
-        );
-    }
-
-    // 2. Independent Installer LOGIN role SET ROLE to NOLOGIN owner
-    sqlx::raw_sql(
-        "CREATE ROLE a03_test_owner NOLOGIN; \
-         CREATE ROLE a03_test_operator LOGIN; \
-         GRANT a03_test_owner TO a03_test_operator; \
-         GRANT USAGE ON SCHEMA core_meta, core_charging, core_identity, core_migration TO a03_test_owner; \
-         GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA core_charging, core_migration TO a03_test_owner; \
-         GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA core_charging TO a03_test_owner;",
-    )
-    .execute(&pool)
-    .await
-    .unwrap();
-
-    let version: i32 = sqlx::query_scalar(
-        "SET ROLE a03_test_owner; SELECT version FROM core_meta.schema_contract WHERE singleton;",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(version, 4);
+    let version: i32 =
+        sqlx::query_scalar("SELECT version FROM core_meta.schema_contract WHERE singleton")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(version, manifest.identity.version);
+    let foreign_owners: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace \
+         WHERE left(n.nspname,5)='core_' AND c.relowner<>(SELECT oid FROM pg_roles WHERE rolname=current_user)"
+    ).fetch_one(&pool).await.unwrap();
+    assert_eq!(
+        foreign_owners, 0,
+        "NOLOGIN owner must own the installed relations and sequences"
+    );
+    finish_fixture(pool).await;
 }
 
-#[sqlx::test(migrations = false)]
-async fn identity_store_real_key_issuance_and_digest_binding(pool: PgPool) {
-    core_schema::init(&pool).await.unwrap();
+#[tokio::test]
+async fn identity_store_real_key_issuance_and_digest_binding() {
+    let pool = setup_a03_roles().await;
     let store = IdentityStore::from_pool(pool.clone());
 
     let session = store.bootstrap_user(3001, 1).await.unwrap();
@@ -376,12 +663,12 @@ async fn identity_store_real_key_issuance_and_digest_binding(pool: PgPool) {
         digest, expected_digest,
         "Issued credential digest must match actual secret SHA-256"
     );
+    finish_fixture(pool).await;
 }
 
-#[sqlx::test(migrations = false)]
-async fn offline_writer_plan_and_charging_engine_admission(pool: PgPool) {
-    core_schema::init(&pool).await.unwrap();
-    setup_a03_roles(&pool).await;
+#[tokio::test]
+async fn offline_writer_plan_and_charging_engine_admission() {
+    let pool = setup_a03_roles().await;
 
     let store = IdentityStore::from_pool(pool.clone());
     let session = store.bootstrap_user(4001, 1).await.unwrap();
@@ -468,7 +755,8 @@ async fn offline_writer_plan_and_charging_engine_admission(pool: PgPool) {
     .unwrap();
     assert_eq!(opening_consumed, 600);
 
-    let charging = Charging::new(pool.clone(), Arc::new(TransactionalLedger));
+    let runtime_pool = charging_runtime(&pool).await;
+    let charging = Charging::new(runtime_pool.clone(), Arc::new(TransactionalLedger));
 
     // Case A: Reserve 300 credits -> 600 + 300 = 900 <= 1000 -> SUCCEEDS
     let req1 = charge_request("kq-charge-1", 300);
@@ -480,9 +768,10 @@ async fn offline_writer_plan_and_charging_engine_admission(pool: PgPool) {
     // Case B: Additional reserve of 200 credits -> 600 + 300 + 200 = 1100 > 1000 -> FAILS
     let req2 = charge_request("kq-charge-2", 200);
     let err = charging.reserve(&key.secret, &req2, &WORKER).await;
-    assert!(
-        err.is_err(),
-        "Reservation exceeding budget limit must fail admission"
+    assert_eq!(
+        err.unwrap_err(),
+        ChargingError::BudgetExceeded,
+        "Reservation exceeding budget limit must fail for its quota, not storage or permissions"
     );
 
     // Settle req1 with 150 actual units
@@ -509,12 +798,14 @@ async fn offline_writer_plan_and_charging_engine_admission(pool: PgPool) {
         .reserve(&key.secret, &req3, &WORKER)
         .await
         .expect("Reservation within updated remaining capacity must succeed");
+    drop(charging);
+    runtime_pool.close().await;
+    finish_fixture(pool).await;
 }
 
-#[sqlx::test(migrations = false)]
-async fn refuse_cross_key_and_cross_account_borrowing(pool: PgPool) {
-    core_schema::init(&pool).await.unwrap();
-    setup_a03_roles(&pool).await;
+#[tokio::test]
+async fn refuse_cross_key_and_cross_account_borrowing() {
+    let pool = setup_a03_roles().await;
 
     let store = IdentityStore::from_pool(pool.clone());
 
@@ -625,16 +916,18 @@ async fn refuse_cross_key_and_cross_account_borrowing(pool: PgPool) {
     let (res, pool) = apply_writer_sql(pool, &apply_sql).await;
     res.unwrap();
 
-    let charging = Charging::new(pool.clone(), Arc::new(TransactionalLedger));
+    let runtime_pool = charging_runtime(&pool).await;
+    let charging = Charging::new(runtime_pool.clone(), Arc::new(TransactionalLedger));
 
     // Key 1 attempting to reserve 100 credits MUST fail
     // Key 1 CANNOT borrow from Key 2's 9,900 remaining credits
     let req_k1 = charge_request("req-key1-overflow", 100);
-    assert!(
+    assert_eq!(
         charging
             .reserve(&key1.secret, &req_k1, &WORKER)
             .await
-            .is_err(),
+            .unwrap_err(),
+        ChargingError::BudgetExceeded,
         "Key 1 cannot exceed its own limit or borrow from Key 2"
     );
 
@@ -647,12 +940,14 @@ async fn refuse_cross_key_and_cross_account_borrowing(pool: PgPool) {
             .is_ok(),
         "Key 2 operates independently under its own budget"
     );
+    drop(charging);
+    runtime_pool.close().await;
+    finish_fixture(pool).await;
 }
 
-#[sqlx::test(migrations = false)]
-async fn finite_unlimited_switching_does_not_clear_consumed_credits(pool: PgPool) {
-    core_schema::init(&pool).await.unwrap();
-    setup_a03_roles(&pool).await;
+#[tokio::test]
+async fn finite_unlimited_switching_does_not_clear_consumed_credits() {
+    let pool = setup_a03_roles().await;
 
     let store = IdentityStore::from_pool(pool.clone());
     let session = store.bootstrap_user(6001, 1).await.unwrap();
@@ -708,7 +1003,7 @@ async fn finite_unlimited_switching_does_not_clear_consumed_credits(pool: PgPool
         .unwrap();
     sqlx::query(
         "UPDATE core_charging.budgets \
-         SET unlimited = TRUE, limit_credits = 0, display_limit_credits = 1000 \
+         SET unlimited = TRUE, limit_credits = 0, display_limit_credits = 1000, revision = revision + 1 \
          WHERE key_id = $1",
     )
     .bind(key.id)
@@ -738,7 +1033,7 @@ async fn finite_unlimited_switching_does_not_clear_consumed_credits(pool: PgPool
         .unwrap();
     sqlx::query(
         "UPDATE core_charging.budgets \
-         SET unlimited = FALSE, limit_credits = 1000, display_limit_credits = NULL \
+         SET unlimited = FALSE, limit_credits = 1000, display_limit_credits = NULL, revision = revision + 1 \
          WHERE key_id = $1",
     )
     .bind(key.id)
@@ -758,12 +1053,12 @@ async fn finite_unlimited_switching_does_not_clear_consumed_credits(pool: PgPool
         consumed_after, 600,
         "Historical consumption remains strictly conserved"
     );
+    finish_fixture(pool).await;
 }
 
-#[sqlx::test(migrations = false)]
-async fn concurrent_import_single_winner_and_strict_replay(pool: PgPool) {
-    core_schema::init(&pool).await.unwrap();
-    setup_a03_roles(&pool).await;
+#[tokio::test]
+async fn competing_client_rejected_and_strict_replay() {
+    let pool = setup_a03_roles().await;
 
     let store = IdentityStore::from_pool(pool.clone());
     let session = store.bootstrap_user(7001, 1).await.unwrap();
@@ -809,40 +1104,29 @@ async fn concurrent_import_single_winner_and_strict_replay(pool: PgPool) {
         &target_receipt,
     );
 
-    let (db, nonce): (String, Option<String>) = sqlx::query_as(
-        "SELECT current_database(), current_setting('lmm.migration_instance_nonce', true)",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    let container = nonce
-        .filter(|s| !s.is_empty())
-        .or_else(|| std::env::var("PG_TEST_CONTAINER").ok())
+    let options = (*pool.connect_options()).clone();
+    let before = import_state(&pool).await;
+    // This live backend deterministically overlaps the real writer connection.
+    // Offline import intentionally rejects any competing client; it does not promise
+    // that two simultaneous callers produce a winner.
+    let mut blocker = pool.acquire().await.unwrap();
+    let _: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *blocker)
+        .await
         .unwrap();
-
-    pool.close().await;
-
-    let c1 = container.clone();
-    let c2 = container.clone();
-    let d1 = db.clone();
-    let d2 = db.clone();
-    let s1 = apply_sql.clone();
-    let s2 = apply_sql.clone();
-
-    let h1 = tokio::spawn(async move { run_docker_psql(&c1, &d1, &s1).await });
-    tokio::time::sleep(tokio::time::Duration::from_millis(30)).await;
-    let h2 = tokio::spawn(async move { run_docker_psql(&c2, &d2, &s2).await });
-
-    let (res1, res2) = tokio::join!(h1, h2);
-
-    let out1 = res1.unwrap();
-    let out2 = res2.unwrap();
-
-    let successes = usize::from(out1.is_ok()) + usize::from(out2.is_ok());
-    assert!(successes >= 1, "At least one concurrent task must succeed");
-
-    let new_url = get_test_db_url(&db);
-    let mut pool = PgPool::connect(&new_url).await.unwrap();
+    let rejected = run_writer_sql(&options, &apply_sql).await.unwrap_err();
+    assert!(
+        rejected.contains("opening target has another client"),
+        "{rejected}"
+    );
+    drop(blocker);
+    assert_eq!(
+        import_state(&pool).await,
+        before,
+        "competing-client rejection must not mutate import state"
+    );
+    let (first, mut pool) = apply_writer_sql(pool, &apply_sql).await;
+    assert!(first.unwrap().contains("succeeded"));
 
     let count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM core_migration.import_runs WHERE migration_id = 'kq-conc-001'",
@@ -853,9 +1137,15 @@ async fn concurrent_import_single_winner_and_strict_replay(pool: PgPool) {
     assert_eq!(count, 1, "Exactly one import run must be recorded");
 
     // Strict Replay: Running identical SQL again sequentially is a valid no-op
+    let before_replay = import_state(&pool).await;
     let (replay_res, p) = apply_writer_sql(pool, &apply_sql).await;
     pool = p;
     assert!(replay_res.unwrap().contains("succeeded"));
+    assert_eq!(
+        import_state(&pool).await,
+        before_replay,
+        "exact replay must preserve all import state"
+    );
 
     // Conflicting Replay: Same migration ID with changed material MUST be rejected
     let modified_tokens = [serde_json::json!({
@@ -874,7 +1164,7 @@ async fn concurrent_import_single_winner_and_strict_replay(pool: PgPool) {
         "kq-conc-001",
         &target_receipt,
     );
-    let (conflict_err, _p) = apply_writer_sql(pool, &conflict_sql).await;
+    let (conflict_err, pool) = apply_writer_sql(pool, &conflict_sql).await;
     assert!(
         conflict_err.is_err(),
         "Changed material with same migration ID must be rejected"
@@ -884,12 +1174,17 @@ async fn concurrent_import_single_winner_and_strict_replay(pool: PgPool) {
         err_str.contains("key_quota_import_conflict"),
         "Error message must specify key_quota_import_conflict: {err_str}"
     );
+    assert_eq!(
+        import_state(&pool).await,
+        before_replay,
+        "conflicting replay must preserve every table and sequence"
+    );
+    finish_fixture(pool).await;
 }
 
-#[sqlx::test(migrations = false)]
-async fn injected_failure_marker_rolls_back_every_table_and_sequence(pool: PgPool) {
-    core_schema::init(&pool).await.unwrap();
-    setup_a03_roles(&pool).await;
+#[tokio::test]
+async fn injected_failure_marker_rolls_back_every_table_and_sequence() {
+    let pool = setup_a03_roles().await;
 
     let store = IdentityStore::from_pool(pool.clone());
     let session = store.bootstrap_user(8001, 1).await.unwrap();
@@ -954,12 +1249,19 @@ async fn injected_failure_marker_rolls_back_every_table_and_sequence(pool: PgPoo
         "RAISE EXCEPTION 'independent-injected-failure';\n -- 8. Record Immutable Import Run",
     );
 
+    let before_failure = import_state(&pool).await;
     let (res, pool) = apply_writer_sql(pool, &failing_sql).await;
     assert!(res.is_err(), "Injected failure must cause SQL abort");
     let err_str = res.unwrap_err();
     assert!(
         err_str.contains("independent-injected-failure"),
         "Injected error must be reached: {err_str}"
+    );
+
+    assert_eq!(
+        import_state(&pool).await,
+        before_failure,
+        "injected failure must preserve all three import tables and sequence state"
     );
 
     // State after rollback MUST be completely unchanged
@@ -982,12 +1284,12 @@ async fn injected_failure_marker_rolls_back_every_table_and_sequence(pool: PgPoo
         budget_count_before, budget_count_after,
         "Table row count must remain 0"
     );
+    finish_fixture(pool).await;
 }
 
-#[sqlx::test(migrations = false)]
-async fn unknown_import_queries_by_original_migration_id(pool: PgPool) {
-    core_schema::init(&pool).await.unwrap();
-    setup_a03_roles(&pool).await;
+#[tokio::test]
+async fn unknown_import_queries_by_original_migration_id() {
+    let pool = setup_a03_roles().await;
 
     let store = IdentityStore::from_pool(pool.clone());
     let session = store.bootstrap_user(9001, 1).await.unwrap();
@@ -1051,4 +1353,5 @@ async fn unknown_import_queries_by_original_migration_id(pool: PgPool) {
     assert_eq!(mig_id, "kq-readback-001");
     assert_eq!(arch_sha, "a".repeat(64));
     assert_eq!(map_sha.len(), 64);
+    finish_fixture(pool).await;
 }
