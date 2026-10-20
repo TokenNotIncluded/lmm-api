@@ -31,6 +31,7 @@ pub mod legacy_auth;
 pub mod lifecycle;
 pub mod market_oauth;
 pub mod model_http;
+pub mod native_key_read;
 pub mod oauth2_balance;
 pub mod oauth2_http;
 #[cfg(unix)]
