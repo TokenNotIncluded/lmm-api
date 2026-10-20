@@ -2983,7 +2983,7 @@ mod tests {
     #[tokio::test]
     async fn deployment_google_legacy_frontend_callback_preserves_exact_registered_uri() {
         let parsed = parse_core_file(
-            b"version=1\n[database]\nurl_file='/missing-db'\n[identity.web]\norigin='https://example.test'\nrefresh_key_file='/missing-refresh'\n[identity.google]\nclient_id='public-test-client'\nclient_secret_file='/missing-google'\nredirect_uri='https://example.test/oauth/google'\n",
+            b"version=1\n[database]\nurl_file='/missing-db'\n[identity.web]\norigin='https://example.test'\nrefresh_key_file='/missing-refresh'\nuser_agreement_enabled=true\nprivacy_policy_enabled=true\n[identity.google]\nclient_id='public-test-client'\nclient_secret_file='/missing-google'\nredirect_uri='https://example.test/oauth/google'\n",
         )
         .unwrap();
         assert_eq!(
