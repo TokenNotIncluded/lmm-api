@@ -59,23 +59,12 @@ impl Default for Settings {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Human {
     pub id: String,
     pub session_id: String,
     pub session_version: i64,
     pub auth_version: i64,
-}
-
-impl Default for Human {
-    fn default() -> Self {
-        Self {
-            id: String::new(),
-            session_id: String::new(),
-            session_version: 0,
-            auth_version: 0,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

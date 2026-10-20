@@ -98,10 +98,11 @@ impl HumanGrantTx {
         let expires_at: Option<i64> = row
             .try_get("expires_at")
             .map_err(|_| failure(500, "internal_error"))?;
-        if let Some(exp) = expires_at {
-            if exp > 0 && exp <= now {
-                return Ok(None);
-            }
+        if let Some(exp) = expires_at
+            && exp > 0
+            && exp <= now
+        {
+            return Ok(None);
         }
 
         let payload: String = row
@@ -136,10 +137,11 @@ impl HumanGrantTx {
         let expires_at: Option<i64> = row
             .try_get("expires_at")
             .map_err(|_| failure(500, "internal_error"))?;
-        if let Some(exp) = expires_at {
-            if exp > 0 && exp <= now {
-                return Ok(None);
-            }
+        if let Some(exp) = expires_at
+            && exp > 0
+            && exp <= now
+        {
+            return Ok(None);
         }
 
         let payload: String = row

@@ -22,16 +22,15 @@ pub fn origin(raw: &str, local_allowed: bool) -> Result<String, ProtocolError> {
     {
         return Err(failure(400, "invalid_origin"));
     }
-    if u.scheme() != "https" {
-        if !local_allowed
+    if u.scheme() != "https"
+        && (!local_allowed
             || u.scheme() != "http"
             || !matches!(
                 u.host_str(),
                 Some("127.0.0.1" | "localhost" | "[::1]" | "::1")
-            )
-        {
-            return Err(failure(400, "invalid_origin"));
-        }
+            ))
+    {
+        return Err(failure(400, "invalid_origin"));
     }
     let result = format!("{}://{}", u.scheme(), u.host_str().unwrap());
     let formatted = if let Some(port) = u.port() {
@@ -149,7 +148,9 @@ pub fn parse_signature_input(input: &str) -> Option<ParsedSignatureInput> {
             } else {
                 return None;
             }
-        } else if let Some(val) = part.strip_prefix("tag=") {
+        } else {
+            // Unknown parameters are rejected as well as malformed tags.
+            let val = part.strip_prefix("tag=")?;
             if tag.is_some() {
                 return None; // Duplicate parameter rejected
             }
@@ -158,9 +159,6 @@ pub fn parse_signature_input(input: &str) -> Option<ParsedSignatureInput> {
             } else {
                 return None;
             }
-        } else {
-            // Unknown parameter rejected
-            return None;
         }
     }
 
@@ -220,10 +218,8 @@ pub fn verify_signature(
         return Err(fail());
     }
     let credential = authorization["HumanGrant ".len()..].trim();
-    if credential != "anonymous" {
-        if decode_canonical_b64url(credential, 32).is_none() {
-            return Err(fail());
-        }
+    if credential != "anonymous" && decode_canonical_b64url(credential, 32).is_none() {
+        return Err(fail());
     }
 
     let parsed = parse_signature_input(signature_input).ok_or_else(fail)?;

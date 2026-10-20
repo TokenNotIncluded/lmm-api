@@ -30,10 +30,10 @@ fn error_response(err: ProtocolError) -> Response {
     let retry = err.retry_after_seconds;
     let mut resp = (status, Json(err)).into_response();
     apply_security_headers(&mut resp);
-    if retry > 0 {
-        if let Ok(val) = retry.to_string().parse() {
-            resp.headers_mut().insert(header::RETRY_AFTER, val);
-        }
+    if retry > 0
+        && let Ok(val) = retry.to_string().parse()
+    {
+        resp.headers_mut().insert(header::RETRY_AFTER, val);
     }
     resp
 }
@@ -59,10 +59,10 @@ fn html_response(html: String, cookie: Option<String>) -> Response {
         .unwrap();
 
     apply_security_headers(&mut resp);
-    if let Some(c) = cookie {
-        if let Ok(val) = c.parse() {
-            resp.headers_mut().append(header::SET_COOKIE, val);
-        }
+    if let Some(c) = cookie
+        && let Ok(val) = c.parse()
+    {
+        resp.headers_mut().append(header::SET_COOKIE, val);
     }
     resp
 }
@@ -597,10 +597,10 @@ async fn human_verify(
         _ => return error_response(failure(401, "human_login_required")),
     };
 
-    if let Some(expected) = &req.input.expected_human_id {
-        if expected != &human.id {
-            return error_response(failure(403, "expected_human_mismatch"));
-        }
+    if let Some(expected) = &req.input.expected_human_id
+        && expected != &human.id
+    {
+        return error_response(failure(403, "expected_human_mismatch"));
     }
 
     if req.phase == "waiting_human" {
@@ -703,10 +703,10 @@ async fn human_approve(
         return error_response(failure(403, "forbidden"));
     }
 
-    if let Some(expected) = &req.input.expected_human_id {
-        if expected != &human.id {
-            return error_response(failure(403, "expected_human_mismatch"));
-        }
+    if let Some(expected) = &req.input.expected_human_id
+        && expected != &human.id
+    {
+        return error_response(failure(403, "expected_human_mismatch"));
     }
 
     if consent.expires_at <= now || consent.expires_at > now + req.input.session_ttl_seconds {
@@ -1296,19 +1296,19 @@ async fn cancel_request(
         return error_response(e);
     }
 
-    if let Some(gid) = &req.grant_id {
-        if let Ok(Some(mut g)) = tx.get_for_update::<Grant>("grant", gid, now).await {
-            g.revoked_at = now;
-            let _ = tx
-                .put(
-                    "grant",
-                    gid,
-                    &g.human.id,
-                    g.expires_at + RETENTION_SECONDS,
-                    &g,
-                )
-                .await;
-        }
+    if let Some(gid) = &req.grant_id
+        && let Ok(Some(mut g)) = tx.get_for_update::<Grant>("grant", gid, now).await
+    {
+        g.revoked_at = now;
+        let _ = tx
+            .put(
+                "grant",
+                gid,
+                &g.human.id,
+                g.expires_at + RETENTION_SECONDS,
+                &g,
+            )
+            .await;
     }
 
     if let Err(e) = engine
