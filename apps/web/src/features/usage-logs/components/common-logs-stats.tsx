@@ -23,7 +23,12 @@ import { useTranslation } from 'react-i18next'
 
 import { Skeleton } from '@/components/ui/skeleton'
 import { useHistoricalQuotaMoney } from '@/hooks/use-historical-quota-money'
-import { historicalQuotaUSD } from '@/lib/historical-quota-money'
+import { getCurrencyFormattingLocale } from '@/lib/currency'
+import {
+  formatHistoricalRawQuota,
+  historicalQuotaUSD,
+  type HistoricalQuotaProjection,
+} from '@/lib/historical-quota-money'
 import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/auth-store'
 
@@ -58,6 +63,25 @@ function StatBadge(props: {
 }
 
 type TrendBucket = LogStatistics & { start: number; end: number }
+type CompleteTrendBucket = TrendBucket & { quota: number }
+
+function statisticsProjection(
+  statistics: LogStatistics | undefined
+): HistoricalQuotaProjection | undefined {
+  return statistics
+    ? { ...statistics, quota_usd: statistics.quota_usd ?? undefined }
+    : undefined
+}
+
+function hasCompleteTrendQuota(
+  bucket: TrendBucket
+): bucket is CompleteTrendBucket {
+  return (
+    bucket.quota !== null &&
+    (bucket.invalid_quota_records ?? 0) === 0 &&
+    bucket.quota_projection_truncated !== true
+  )
+}
 
 function UsageTrend(props: {
   buckets: TrendBucket[]
@@ -68,16 +92,6 @@ function UsageTrend(props: {
 }) {
   const { t } = useTranslation()
   const { formatHistoricalQuota, formatRawQuota } = useHistoricalQuotaMoney()
-  const moneyAvailable =
-    props.buckets.length > 0 &&
-    props.buckets.every((bucket) => historicalQuotaUSD(bucket) !== null)
-  const metric = (bucket: TrendBucket) =>
-    moneyAvailable ? (historicalQuotaUSD(bucket) ?? 0) : bucket.quota
-  const formatBucketQuota = (bucket: TrendBucket) =>
-    moneyAvailable
-      ? formatHistoricalQuota(bucket.quota, bucket)
-      : formatRawQuota(bucket.quota)
-  const maxMetric = Math.max(Number.EPSILON, ...props.buckets.map(metric))
 
   if (props.loading) {
     return <Skeleton className='h-16 w-full min-w-[220px] rounded-md' />
@@ -96,9 +110,32 @@ function UsageTrend(props: {
       </div>
     )
   }
+  const buckets = props.buckets.filter(hasCompleteTrendQuota)
+  if (buckets.length === 0 || buckets.length !== props.buckets.length) {
+    return (
+      <span className='text-muted-foreground text-xs'>
+        {t('Usage trend for the selected time range')}: {t('Unavailable')}
+      </span>
+    )
+  }
+  const moneyAvailable = buckets.every(
+    (bucket) => historicalQuotaUSD(statisticsProjection(bucket)) !== null
+  )
+  const metric = (bucket: CompleteTrendBucket) =>
+    moneyAvailable
+      ? (historicalQuotaUSD(statisticsProjection(bucket)) ?? bucket.quota)
+      : bucket.quota
+  const formatBucketQuota = (bucket: CompleteTrendBucket) =>
+    moneyAvailable
+      ? formatHistoricalQuota(bucket.quota, statisticsProjection(bucket))
+      : formatRawQuota(bucket.quota)
+  const maxMetric = Math.max(Number.EPSILON, ...buckets.map(metric))
   if (
-    !props.buckets.some(
-      (bucket) => bucket.quota > 0 || bucket.rpm > 0 || bucket.tpm > 0
+    !buckets.some(
+      (bucket) =>
+        bucket.quota > 0 ||
+        (bucket.rpm !== null && bucket.rpm > 0) ||
+        (bucket.tpm !== null && bucket.tpm > 0)
     )
   ) {
     return (
@@ -122,7 +159,7 @@ function UsageTrend(props: {
         role='img'
         aria-label={t('Usage trend for the selected time range')}
       >
-        {props.buckets.map((bucket) => {
+        {buckets.map((bucket) => {
           const value = metric(bucket)
           const height = value > 0 ? Math.max(10, (value / maxMetric) * 100) : 4
           return (
@@ -149,7 +186,7 @@ function UsageTrend(props: {
 }
 
 export function CommonLogsStats() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const { formatHistoricalQuota } = useHistoricalQuotaMoney()
   const { isAdminView: isAdmin } = useLogsViewScope()
   const searchParams = route.useSearch()
@@ -239,21 +276,25 @@ export function CommonLogsStats() {
 
   const stats = statsQuery.isError ? undefined : statsQuery.data
   const statisticsUnavailable = !scope || !stats
+  const quotaLabel = stats
+    ? stats.quota !== null
+      ? formatHistoricalQuota(stats.quota, statisticsProjection(stats))
+      : formatHistoricalRawQuota(
+          stats.raw_consumption_quota,
+          t('Raw credits'),
+          getCurrencyFormattingLocale(i18n.resolvedLanguage || i18n.language)
+        )
+    : '—'
 
   return (
     <div className='flex w-full flex-wrap items-center gap-2'>
       <div className='flex flex-wrap items-center gap-2'>
         <StatBadge
           label={t('Usage')}
-          value={
-            sensitiveVisible
-              ? stats
-                ? formatHistoricalQuota(stats.quota, stats)
-                : '—'
-              : '••••'
-          }
+          value={sensitiveVisible ? quotaLabel : '••••'}
           title={
-            sensitiveVisible && historicalQuotaUSD(stats) === null
+            sensitiveVisible &&
+            historicalQuotaUSD(statisticsProjection(stats)) === null
               ? t('Historical monetary value unavailable')
               : undefined
           }

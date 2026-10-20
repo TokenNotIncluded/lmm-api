@@ -111,6 +111,56 @@ describe('Google authorization response restrictions', () => {
     )
   })
 
+  test('uses the advertised same-origin legacy callback without rebuilding the authorization URL', () => {
+    const url = authorizationUrl()
+    url.searchParams.set('redirect_uri', `${origin}/api/oauth/google`)
+    for (const configuredCallback of [
+      '/api/oauth/google',
+      `${origin}/api/oauth/google`,
+    ]) {
+      assert.equal(
+        validateGoogleBrowserAuthorizationUrl(
+          url.toString(),
+          'test-client',
+          origin,
+          false,
+          configuredCallback
+        ),
+        url.toString()
+      )
+    }
+    assert.throws(() =>
+      validateGoogleBrowserAuthorizationUrl(
+        url.toString(),
+        'test-client',
+        origin
+      )
+    )
+  })
+
+  test('the advertised callback cannot expand the two browser API paths or change origin', () => {
+    for (const configuredCallback of [
+      '/core/v1/auth/oauth/google/callback',
+      '/oauth/google',
+      'https://foreign.example.test/api/oauth/google',
+      '/api/oauth/google?token=unsafe',
+      '/api/oauth/google#token',
+      'https://user:password@site.example.test/api/oauth/google',
+      {},
+    ]) {
+      const url = authorizationUrl()
+      assert.throws(() =>
+        validateGoogleBrowserAuthorizationUrl(
+          url.toString(),
+          'test-client',
+          origin,
+          false,
+          configuredCallback
+        )
+      )
+    }
+  })
+
   test('refuses native token callback, legacy SPA callback, foreign callback, fragment and credentials', () => {
     for (const callback of [
       `${origin}/core/v1/auth/oauth/google/callback`,

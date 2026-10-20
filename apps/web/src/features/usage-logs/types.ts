@@ -295,16 +295,7 @@ export interface LogOtherData {
 /**
  * Log statistics data
  */
-export interface LogStatistics {
-  quota: number
-  quota_usd?: string
-  quota_money_available?: boolean
-  quota_money_basis?: string
-  unpriced_quota_records?: number
-  quota_projection_truncated?: boolean
-  rpm: number
-  tpm: number
-}
+export type LogStatistics = import('./lib/statistics').ParsedUsageStatistics
 
 // ============================================================================
 // Drawing Logs (MjProxy) Types

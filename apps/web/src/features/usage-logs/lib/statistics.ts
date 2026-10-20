@@ -5,23 +5,63 @@ import { api } from '@/lib/api'
 import { historicalQuotaUSD } from '@/lib/historical-quota-money'
 import { useAuthStore } from '@/stores/auth-store'
 
-import type { GetLogStatsParams, LogStatistics } from '../types'
+import type { GetLogStatsParams } from '../types'
 import { buildQueryParams } from './query-params'
 
 const count = z.number().int().safe().nonnegative()
+const nativeStatisticsSchema = z.object({
+  quota: count,
+  rpm: count,
+  tpm: count,
+  quota_usd: z.string().optional(),
+  quota_money_available: z.boolean().optional(),
+  quota_money_basis: z.string().optional(),
+  unpriced_quota_records: count.optional(),
+  quota_projection_truncated: z.boolean().optional(),
+  source: z.never().optional(),
+  raw_consumption_quota: z.never().optional(),
+  quota_numeric_representable: z.never().optional(),
+  invalid_quota_records: z.never().optional(),
+  rates_available: z.literal(true).optional(),
+})
+const historicalStatisticsFields = {
+  source: z.literal('legacy_log_only'),
+  raw_consumption_quota: z.string(),
+  invalid_quota_records: count,
+  unpriced_quota_records: count,
+  quota_projection_truncated: z.boolean().optional(),
+  quota_usd: z.string().nullable(),
+  quota_money_available: z.boolean(),
+  quota_money_basis: z.string(),
+  rates_available: z.literal(false),
+  rpm: z.null(),
+  tpm: z.null(),
+}
+const historicalStatisticsSchema = z.discriminatedUnion(
+  'quota_numeric_representable',
+  [
+    z.object({
+      ...historicalStatisticsFields,
+      quota_numeric_representable: z.literal(true),
+      quota: count,
+    }),
+    z.object({
+      ...historicalStatisticsFields,
+      quota_numeric_representable: z.literal(false),
+      quota: z.null(),
+    }),
+  ]
+)
+const statisticsDataSchema = z.union([
+  nativeStatisticsSchema,
+  historicalStatisticsSchema,
+])
 const statisticsResponseSchema = z.object({
   success: z.literal(true),
-  data: z.object({
-    quota: count,
-    rpm: count,
-    tpm: count,
-    quota_usd: z.string().optional(),
-    quota_money_available: z.boolean().optional(),
-    quota_money_basis: z.string().optional(),
-    unpriced_quota_records: count.optional(),
-    quota_projection_truncated: z.boolean().optional(),
-  }),
+  data: statisticsDataSchema,
 })
+
+export type ParsedUsageStatistics = z.infer<typeof statisticsDataSchema>
 
 export type UsageStatisticsScope = {
   userId: number
@@ -56,20 +96,33 @@ function assertScope(scope: UsageStatisticsScope, signal?: AbortSignal) {
   }
 }
 
-export function parseUsageStatistics(value: unknown): LogStatistics {
+export function parseUsageStatistics(value: unknown): ParsedUsageStatistics {
   const result = statisticsResponseSchema.safeParse(value)
   if (!result.success) {
     throw new Error('Usage statistics unavailable')
   }
   const statistics = result.data.data
-  const projectedUSD = historicalQuotaUSD(statistics)
+  const projectedUSD = historicalQuotaUSD({
+    ...statistics,
+    quota_usd: statistics.quota_usd ?? undefined,
+  })
   if (
     projectedUSD !== null &&
-    ((statistics.quota === 0) !== (projectedUSD === 0) ||
+    (statistics.quota === null ||
+      (statistics.invalid_quota_records ?? 0) > 0 ||
+      (statistics.quota === 0) !== (projectedUSD === 0) ||
       (statistics.quota_money_basis === 'empty_result' &&
         statistics.quota !== 0))
   ) {
     // Keep proven counters, but never let contradictory money hide their raw value.
+    if (statistics.source === 'legacy_log_only') {
+      return {
+        ...statistics,
+        quota_usd: null,
+        quota_money_available: false,
+        quota_money_basis: 'inconsistent_statistics_projection',
+      }
+    }
     const { quota_usd: _untrustedUSD, ...counters } = statistics
     return {
       ...counters,
@@ -85,7 +138,7 @@ export async function readUsageStatistics(
   params: GetLogStatsParams,
   isAdmin: boolean,
   signal?: AbortSignal
-): Promise<LogStatistics> {
+): Promise<ParsedUsageStatistics> {
   assertScope(scope, signal)
   const endpoint = isAdmin ? '/api/log/stat' : '/api/log/self/stat'
   const query = buildQueryParams({ ...params })

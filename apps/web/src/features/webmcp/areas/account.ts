@@ -6,6 +6,8 @@ it under the terms of the GNU Affero General Public License as
 published by the Free Software Foundation, either version 3 of the
 License, or (at your option) any later version.
 */
+import { z } from 'zod'
+
 import {
   buildModelUsageQueryRanges,
   buildModelUsageReport,
@@ -18,6 +20,7 @@ import type {
 } from '@/features/subscriptions/types'
 import { readLogsPage } from '@/features/usage-logs/api'
 import { UsageHistoryUnavailableError } from '@/features/usage-logs/lib/history-response'
+import { isUsageCostIncomplete } from '@/features/usage-logs/lib/money'
 import { readUsageStatisticsScope } from '@/features/usage-logs/lib/statistics'
 import { api } from '@/lib/api'
 import { ROLE } from '@/lib/roles'
@@ -38,6 +41,21 @@ import {
 
 type RecordData = Record<string, unknown>
 type Envelope<T> = { success: boolean; data?: T }
+
+const usageMetadata = z.object({
+  billing_basis: z.string().max(64).optional(),
+  request_state: z.string().max(64).optional(),
+  usage_status: z.string().max(32).optional(),
+})
+
+function readUsageMetadata(value: string) {
+  try {
+    const result = usageMetadata.safeParse(JSON.parse(value))
+    return result.success ? result.data : null
+  } catch {
+    return null
+  }
+}
 
 /** Only explicitly selected fields leave the account APIs. */
 async function read<T>(
@@ -287,15 +305,39 @@ export const accountTools: WebMcpToolFactory = ({ router }) => [
                 submit_time: item.submit_time,
                 finish_time: item.finish_time ?? null,
               }))
-            : data.items.slice(0, pageSize).map((item) => ({
-                id: 'id' in item ? item.id : item.source_log_id,
-                created_at: item.created_at,
-                model_name: clip(item.model_name, 128),
-                type: item.type,
-                quota: item.quota,
-                prompt_tokens: item.prompt_tokens,
-                completion_tokens: item.completion_tokens,
-              }))
+            : data.items.slice(0, pageSize).map((item) => {
+                const other =
+                  'other' in item ? readUsageMetadata(item.other) : null
+                const incomplete =
+                  'billing_basis' in item
+                    ? isUsageCostIncomplete(other, item)
+                    : isUsageCostIncomplete(other)
+                return {
+                  id: 'id' in item ? item.id : item.source_log_id,
+                  created_at: item.created_at,
+                  model_name: clip(item.model_name, 128),
+                  type: item.type,
+                  quota: incomplete ? null : item.quota,
+                  quota_available: !incomplete && item.quota !== null,
+                  quota_money_available: incomplete
+                    ? false
+                    : (item.quota_money_available ?? null),
+                  quota_money_basis: item.quota_money_basis ?? null,
+                  billing_basis: clip(
+                    'billing_basis' in item
+                      ? item.billing_basis
+                      : other?.billing_basis,
+                    64
+                  ),
+                  request_state: clip(
+                    'state' in item ? item.state : other?.request_state,
+                    64
+                  ),
+                  usage_status: clip(other?.usage_status, 32),
+                  prompt_tokens: item.prompt_tokens,
+                  completion_tokens: item.completion_tokens,
+                }
+              })
       return {
         availability: 'available',
         category,
