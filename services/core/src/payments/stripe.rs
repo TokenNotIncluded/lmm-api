@@ -203,15 +203,15 @@ pub(super) fn verify(
             if object.object != "refund" || !identifier(&object.id, "re_") {
                 return Err(Error::Invalid);
             }
-            if let Some(merchant) = object.metadata.get("lmm_merchant") {
-                if merchant != &channel.merchant {
-                    return Err(Error::Denied);
-                }
+            if let Some(merchant) = object.metadata.get("lmm_merchant")
+                && merchant != &channel.merchant
+            {
+                return Err(Error::Denied);
             }
-            if let Some(core_id) = object.metadata.get("lmm_core_intent_id") {
-                if core_id != &intent_id.to_string() {
-                    return Err(Error::Conflict);
-                }
+            if let Some(core_id) = object.metadata.get("lmm_core_intent_id")
+                && core_id != &intent_id.to_string()
+            {
+                return Err(Error::Conflict);
             }
             let transaction = payment_intent(object.payment_intent.as_ref())?;
             let kind = match object.status.as_str() {
