@@ -18,6 +18,9 @@ export const GOOGLE_BUILT_IN_PRESET = Object.freeze({
   browser_callback: '/api/oauth/google/callback',
 })
 
+const browserCallbackPattern =
+  /^(?:https?:\/\/[^/?#\\\s@]+)?\/(?:api\/oauth\/google(?:\/callback)?|oauth\/google)$/
+
 /** google_oauth must advertise browser support, not merely native OAuth. */
 export function isBuiltInGoogleConfigured(
   status: SystemStatus | null | undefined
@@ -82,14 +85,19 @@ export function validateGoogleBrowserAuthorizationUrl(
     const site = new URL(origin)
     const target = new URL(value)
     const official = new URL(GOOGLE_BUILT_IN_PRESET.authorization_endpoint)
-    const callback = new URL(target.searchParams.get('redirect_uri') || '')
+    const callbackValue = target.searchParams.get('redirect_uri') || ''
+    const callback = new URL(callbackValue)
     if (typeof browserCallback !== 'string') return reject()
     const configuredCallback = new URL(browserCallback, site.origin)
     if (
       configuredCallback.origin !== site.origin ||
+      // A regex $ may match before a final newline; require the whole value.
+      browserCallbackPattern.exec(browserCallback)?.[0] !== browserCallback ||
+      browserCallbackPattern.exec(callbackValue)?.[0] !== callbackValue ||
       ![
         GOOGLE_BUILT_IN_PRESET.browser_start,
         GOOGLE_BUILT_IN_PRESET.browser_callback,
+        '/oauth/google',
       ].some((path) => path === configuredCallback.pathname) ||
       configuredCallback.username ||
       configuredCallback.password ||

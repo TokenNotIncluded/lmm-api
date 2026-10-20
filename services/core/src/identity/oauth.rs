@@ -12,6 +12,7 @@ const ISSUER: &str = "https://accounts.google.com";
 const CALLBACK_PATH: &str = "/core/v1/auth/oauth/google/callback";
 const BROWSER_CALLBACK_PATH: &str = "/api/oauth/google/callback";
 const LEGACY_BROWSER_CALLBACK_PATH: &str = "/api/oauth/google";
+const LEGACY_FRONTEND_CALLBACK_PATH: &str = "/oauth/google";
 const MAX_PROVIDER_BODY: usize = 65_536;
 
 /// No Debug implementation: this contains a client secret.
@@ -40,9 +41,16 @@ impl GoogleOAuth {
             || redirect.password().is_some()
             || redirect.query().is_some()
             || redirect.fragment().is_some()
+            // URL parsing normalizes dot segments and some authority spellings.
+            // A configured callback must be the exact canonical fixed URI.
+            || redirect_uri
+                != format!("{}{}", redirect.origin().ascii_serialization(), redirect.path())
             || !matches!(
                 redirect.path(),
-                CALLBACK_PATH | BROWSER_CALLBACK_PATH | LEGACY_BROWSER_CALLBACK_PATH
+                CALLBACK_PATH
+                    | BROWSER_CALLBACK_PATH
+                    | LEGACY_BROWSER_CALLBACK_PATH
+                    | LEGACY_FRONTEND_CALLBACK_PATH
             )
         {
             return Err(IdentityError::Invalid);
@@ -267,9 +275,13 @@ impl IdentityStore {
     }
     pub fn google_browser_callback(&self, origin: &str) -> Option<&str> {
         let config = self.google.as_ref()?;
-        [BROWSER_CALLBACK_PATH, LEGACY_BROWSER_CALLBACK_PATH]
-            .into_iter()
-            .find(|path| config.redirect_uri == format!("{origin}{path}"))
+        [
+            BROWSER_CALLBACK_PATH,
+            LEGACY_BROWSER_CALLBACK_PATH,
+            LEGACY_FRONTEND_CALLBACK_PATH,
+        ]
+        .into_iter()
+        .find(|path| config.redirect_uri == format!("{origin}{path}"))
     }
     pub(crate) fn google_native_enabled(&self) -> bool {
         self.google.as_ref().is_some_and(|config| {
