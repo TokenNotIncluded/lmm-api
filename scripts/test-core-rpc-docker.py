@@ -1175,6 +1175,7 @@ def execute(temp, projects, context):
         "charging",
         "routing",
         "events",
+        "history",
         "charging-ledger",
         "migration",
         "console",

@@ -219,9 +219,17 @@ async fn test_a07_upstream_cost_with_cache_creation_recovery_settles(pool: PgPoo
 
     // Checkpoint recovery should now succeed with unified complete_usage
     let recovered = f.gateway.reconcile_completed_streams(10).await.unwrap();
-    assert_eq!(recovered, 1, "upstream-cost checkpoint with cache_creation=1 must settle");
+    assert_eq!(
+        recovered, 1,
+        "upstream-cost checkpoint with cache_creation=1 must settle"
+    );
 
-    let charge = f.charging.resolve("test-upstream-cache-recov").await.unwrap().unwrap();
+    let charge = f
+        .charging
+        .resolve("test-upstream-cache-recov")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(charge.state, "settled");
     assert_eq!(charge.settled, 77_161);
     assert_eq!(charge.reserved, 625_000);
@@ -237,21 +245,22 @@ async fn test_a07_upstream_cost_with_cache_creation_recovery_settles(pool: PgPoo
 #[sqlx::test(migrations = false)]
 async fn test_a07_token_based_with_cache_creation_refuses_recovery(pool: PgPool) {
     let f = fixture(&pool).await;
-    seed_terminal(
-        &pool,
-        &f,
-        "test-token-cache-refuse",
-        None,
-        Some(1),
-    )
-    .await;
+    seed_terminal(&pool, &f, "test-token-cache-refuse", None, Some(1)).await;
     expire(&pool, &f).await;
 
     // Recovery must reject unsupported cache creation for token model
     let recovered = f.gateway.reconcile_completed_streams(10).await.unwrap();
-    assert_eq!(recovered, 0, "token-based model with non-zero cache_creation must retain hold");
+    assert_eq!(
+        recovered, 0,
+        "token-based model with non-zero cache_creation must retain hold"
+    );
 
-    let charge = f.charging.resolve("test-token-cache-refuse").await.unwrap().unwrap();
+    let charge = f
+        .charging
+        .resolve("test-token-cache-refuse")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(charge.state, "reconcile");
     assert_eq!(charge.settled, 0);
     assert_eq!(charge.reserved, 625_000);
@@ -285,9 +294,17 @@ async fn test_a07_token_based_with_cache_creation_and_reported_cost_refuses_reco
 
     // Even if external provider reports upstream cost, token-priced model cannot settle cache_creation tokens!
     let recovered = f.gateway.reconcile_completed_streams(10).await.unwrap();
-    assert_eq!(recovered, 0, "token pricing must refuse cache_creation even when provider reported upstream cost");
+    assert_eq!(
+        recovered, 0,
+        "token pricing must refuse cache_creation even when provider reported upstream cost"
+    );
 
-    let charge = f.charging.resolve("test-token-cost-cache-refuse").await.unwrap().unwrap();
+    let charge = f
+        .charging
+        .resolve("test-token-cost-cache-refuse")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(charge.state, "reconcile");
     assert_eq!(charge.settled, 0);
     assert_eq!(charge.reserved, 625_000);
@@ -318,11 +335,19 @@ async fn test_a07_paged_recovery_advances_past_holds_without_starvation(pool: Pg
             maximum_seconds: 300,
         };
         f.charging.reserve(&f.key, &request, &worker).await.unwrap();
-        assert!(f.charging.start(&format!("need-res-{n:03}"), &worker).await.unwrap());
+        assert!(
+            f.charging
+                .start(&format!("need-res-{n:03}"), &worker)
+                .await
+                .unwrap()
+        );
         let mut tx = pool.begin().await.unwrap();
-        sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE").execute(&mut *tx).await.unwrap();
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
         sqlx::query("SELECT core_model.checkpoint_output($1,$2,1,$3,25,$4,true)")
-            .bind(&format!("need-res-{n:03}"))
+            .bind(format!("need-res-{n:03}"))
             .bind(worker.as_slice())
             .bind([9_u8; 32].as_slice())
             .bind(json!({"input_tokens":1,"cached_input_tokens":0,"output_tokens":0,"upstream_cost_atto_usd": 2_000_000_000_000_000_000_u128}))
@@ -351,7 +376,12 @@ async fn test_a07_paged_recovery_advances_past_holds_without_starvation(pool: Pg
         "paged recovery must reach the 65th valid receipt without starvation: got {automatic:?}"
     );
 
-    let charge65 = f.charging.resolve("valid-65th-request").await.unwrap().unwrap();
+    let charge65 = f
+        .charging
+        .resolve("valid-65th-request")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(charge65.state, "settled");
     assert_eq!(charge65.settled, 77_161);
 }
@@ -360,14 +390,7 @@ async fn test_a07_paged_recovery_advances_past_holds_without_starvation(pool: Pg
 async fn test_a07_cloned_gateway_shares_cursor_and_rebuilt_gateway_resets_cursor(pool: PgPool) {
     let f = fixture(&pool).await;
     for id in ["cursor-iso-1", "cursor-iso-2", "cursor-iso-3"] {
-        seed_terminal(
-            &pool,
-            &f,
-            id,
-            Some(123_456_789_000_000_000),
-            None,
-        )
-        .await;
+        seed_terminal(&pool, &f, id, Some(123_456_789_000_000_000), None).await;
     }
     expire(&pool, &f).await;
 
@@ -393,14 +416,7 @@ async fn test_a07_cloned_gateway_shares_cursor_and_rebuilt_gateway_resets_cursor
 async fn test_a07_concurrent_reconcile_serialized_by_recovery_cursor_mutex(pool: PgPool) {
     let f = fixture(&pool).await;
     for id in ["conc-1", "conc-2", "conc-3"] {
-        seed_terminal(
-            &pool,
-            &f,
-            id,
-            Some(123_456_789_000_000_000),
-            None,
-        )
-        .await;
+        seed_terminal(&pool, &f, id, Some(123_456_789_000_000_000), None).await;
     }
     expire(&pool, &f).await;
 

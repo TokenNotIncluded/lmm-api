@@ -290,9 +290,7 @@ impl PaymentsStore {
         self.channels
             .values()
             .find(|c| {
-                c.provider == provider
-                    && c.merchant == merchant
-                    && c.environment == environment
+                c.provider == provider && c.merchant == merchant && c.environment == environment
             })
             .ok_or(Error::Unavailable)
     }
@@ -631,12 +629,10 @@ impl PaymentsStore {
             | stripe::EventKind::RefundPending => {
                 intent.provider_transaction.as_deref() != Some(&verified.transaction)
             }
-            stripe::EventKind::Credit | stripe::EventKind::PaymentFailed => {
-                intent
-                    .provider_transaction
-                    .as_ref()
-                    .is_some_and(|id| id != &verified.transaction)
-            }
+            stripe::EventKind::Credit | stripe::EventKind::PaymentFailed => intent
+                .provider_transaction
+                .as_ref()
+                .is_some_and(|id| id != &verified.transaction),
         };
         if digest != Sha256::digest(&evidence.signed_payload).to_vec()
             || receipt.payment != evidence.payment
