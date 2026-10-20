@@ -20,6 +20,7 @@ import (
 	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/payments"
 	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/toolmarket"
 	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/modules/wallet"
+	"github.com/TokenNotIncluded/api.lmm.best/extensions/internal/postgresurl"
 	"github.com/lib/pq"
 )
 
@@ -87,12 +88,19 @@ func ownerURL(c Config, p plan) (string, error) {
 	}
 	s := strings.TrimSpace(string(raw))
 	u, e := url.Parse(s)
-	if e != nil || u.User == nil || u.User.Username() == "" || u.Hostname() == "" || (u.Scheme != "postgres" && u.Scheme != "postgresql") || u.Fragment != "" || strings.ContainsAny(s, "\r\n\x00") {
+	if e != nil || u.User == nil || u.User.Username() == "" || (u.Scheme != "postgres" && u.Scheme != "postgresql") || u.Fragment != "" || strings.ContainsAny(s, "\r\n\x00") {
+		return "", ErrRejected
+	}
+	unix, e := postgresurl.Unix(u)
+	if e != nil {
 		return "", ErrRejected
 	}
 	db, e := url.PathUnescape(strings.TrimPrefix(u.EscapedPath(), "/"))
 	if e != nil || db != c.ExpectedDatabase {
 		return "", ErrRejected
+	}
+	if unix {
+		return s, nil
 	}
 	for k, v := range u.Query() {
 		if len(v) != 1 || (k != "sslmode" && k != "sslrootcert" && k != "connect_timeout" && k != "application_name") {
