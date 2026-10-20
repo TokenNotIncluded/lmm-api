@@ -30,20 +30,28 @@ use tower::ServiceExt;
 const ORIGIN: &str = "https://auth.example.test";
 const PASSWORD: &str = "humangrant-test123";
 
-fn generate_ai_key() -> (Ed25519KeyPair, String, String) {
+struct AiKey {
+    pair: Ed25519KeyPair,
+    public: String,
+    actor: String,
+}
+
+fn generate_ai_key() -> AiKey {
     let mut seed = [0u8; 32];
     rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut seed);
     let key_pair = Ed25519KeyPair::from_seed_unchecked(&seed).unwrap();
     let pub_bytes = key_pair.public_key().as_ref();
     let pub_b64 = BASE64_URL_SAFE_NO_PAD.encode(pub_bytes);
     let actor = format!("ed25519:{}", fingerprint(pub_bytes));
-    (key_pair, pub_b64, actor)
+    AiKey {
+        pair: key_pair,
+        public: pub_b64,
+        actor,
+    }
 }
 
 fn sign_request(
-    key_pair: &Ed25519KeyPair,
-    pub_b64: &str,
-    actor: &str,
+    key: &AiKey,
     method: &str,
     path: &str,
     body: &[u8],
@@ -51,6 +59,11 @@ fn sign_request(
     created: i64,
     nonce: &str,
 ) -> HashMap<String, String> {
+    let AiKey {
+        pair: key_pair,
+        public: pub_b64,
+        actor,
+    } = key;
     let digest = Sha256::digest(body);
     let content_digest = format!("sha-256=:{}:", BASE64_STANDARD.encode(digest));
     let content_type = "application/json";
@@ -111,7 +124,10 @@ async fn register_and_login(browser: &BrowserAuth, username: &str) -> (i64, Stri
         })
         .await
         .unwrap();
+    login(browser, username).await
+}
 
+async fn login(browser: &BrowserAuth, username: &str) -> (i64, String) {
     let bundle = browser
         .login(
             username,
@@ -223,6 +239,25 @@ async fn test_humangrant_full_lifecycle_postgres(pool: PgPool) {
         .await
         .unwrap();
 
+    // Role changes advance auth_version; pre-elevation credentials stay invalid.
+    for refresh in [&superadmin_refresh, &admin_refresh] {
+        let mut headers = HashMap::new();
+        headers.insert("cookie".to_string(), format!("new_api_refresh={refresh}"));
+        let (status, _, _) = call_http(
+            &app,
+            "GET",
+            "/api/user/auth/humangrant/grants",
+            headers,
+            vec![],
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+    let (logged_in_superadmin, superadmin_refresh) = login(&browser, "superadmin_user").await;
+    let (logged_in_admin, admin_refresh) = login(&browser, "admin_user").await;
+    assert_eq!(logged_in_superadmin, superadmin_id);
+    assert_eq!(logged_in_admin, admin_id);
+
     // Verify RootAuth check:
     // User alice (platform_role = 'user') gets 403
     let mut alice_get_headers = HashMap::new();
@@ -282,7 +317,7 @@ async fn test_humangrant_full_lifecycle_postgres(pool: PgPool) {
     assert_eq!(config["client_id"], CLIENT_ID);
 
     // 3. AI creates Request with Ed25519 signature
-    let (ai_key, ai_pub, ai_actor) = generate_ai_key();
+    let ai_key = generate_ai_key();
     let now = chrono::Utc::now().timestamp();
     let nonce_bytes = [1u8; 24];
     let nonce = BASE64_URL_SAFE_NO_PAD.encode(nonce_bytes);
@@ -304,8 +339,6 @@ async fn test_humangrant_full_lifecycle_postgres(pool: PgPool) {
 
     let sig_headers = sign_request(
         &ai_key,
-        &ai_pub,
-        &ai_actor,
         "POST",
         "/v1/requests",
         &req_bytes,
@@ -328,8 +361,6 @@ async fn test_humangrant_full_lifecycle_postgres(pool: PgPool) {
     // Replay protection test: repeating the same request with identical nonce must fail with 401 signature_replay!
     let sig_headers_replay = sign_request(
         &ai_key,
-        &ai_pub,
-        &ai_actor,
         "POST",
         "/v1/requests",
         &req_bytes,
@@ -351,8 +382,6 @@ async fn test_humangrant_full_lifecycle_postgres(pool: PgPool) {
     // Strict parameter check: duplicate param in signature-input must fail
     let mut bad_param_headers = sign_request(
         &ai_key,
-        &ai_pub,
-        &ai_actor,
         "POST",
         "/v1/requests",
         &req_bytes,
@@ -506,8 +535,6 @@ async fn test_humangrant_full_lifecycle_postgres(pool: PgPool) {
     let poll_nonce = BASE64_URL_SAFE_NO_PAD.encode([2u8; 24]);
     let poll_headers = sign_request(
         &ai_key,
-        &ai_pub,
-        &ai_actor,
         "GET",
         &format!("/v1/requests/{request_id}"),
         &[],
@@ -533,8 +560,6 @@ async fn test_humangrant_full_lifecycle_postgres(pool: PgPool) {
     let claim_nonce_a = BASE64_URL_SAFE_NO_PAD.encode([10u8; 24]);
     let claim_headers_a = sign_request(
         &ai_key,
-        &ai_pub,
-        &ai_actor,
         "POST",
         &format!("/v1/requests/{request_id}/claim"),
         &[],
@@ -546,8 +571,6 @@ async fn test_humangrant_full_lifecycle_postgres(pool: PgPool) {
     let claim_nonce_b = BASE64_URL_SAFE_NO_PAD.encode([11u8; 24]);
     let claim_headers_b = sign_request(
         &ai_key,
-        &ai_pub,
-        &ai_actor,
         "POST",
         &format!("/v1/requests/{request_id}/claim"),
         &[],
@@ -572,15 +595,15 @@ async fn test_humangrant_full_lifecycle_postgres(pool: PgPool) {
     let (status_a, _, resp_a) = res_a.unwrap();
     let (status_b, _, resp_b) = res_b.unwrap();
 
-    let (success_resp, fail_resp) = if status_a == StatusCode::OK {
+    let success_resp = if status_a == StatusCode::OK {
         assert_eq!(status_b, StatusCode::CONFLICT);
         assert_eq!(resp_b["error"], "credential_already_issued");
-        (resp_a, resp_b)
+        resp_a
     } else {
         assert_eq!(status_a, StatusCode::CONFLICT);
         assert_eq!(resp_a["error"], "credential_already_issued");
         assert_eq!(status_b, StatusCode::OK);
-        (resp_b, resp_a)
+        resp_b
     };
 
     let access_token = success_resp["access_token"].as_str().unwrap().to_string();
@@ -590,8 +613,6 @@ async fn test_humangrant_full_lifecycle_postgres(pool: PgPool) {
     let claim_nonce3 = BASE64_URL_SAFE_NO_PAD.encode([12u8; 24]);
     let claim_headers3 = sign_request(
         &ai_key,
-        &ai_pub,
-        &ai_actor,
         "POST",
         &format!("/v1/requests/{request_id}/claim"),
         &[],
@@ -614,8 +635,6 @@ async fn test_humangrant_full_lifecycle_postgres(pool: PgPool) {
     let session_nonce = BASE64_URL_SAFE_NO_PAD.encode([5u8; 24]);
     let session_headers = sign_request(
         &ai_key,
-        &ai_pub,
-        &ai_actor,
         "GET",
         "/v1/session",
         &[],
@@ -636,8 +655,6 @@ async fn test_humangrant_full_lifecycle_postgres(pool: PgPool) {
     let profile_nonce = BASE64_URL_SAFE_NO_PAD.encode([6u8; 24]);
     let profile_headers = sign_request(
         &ai_key,
-        &ai_pub,
-        &ai_actor,
         "GET",
         &format!("/v1/accounts/{alice_id}/profile"),
         &[],
@@ -661,8 +678,6 @@ async fn test_humangrant_full_lifecycle_postgres(pool: PgPool) {
     let bob_profile_nonce = BASE64_URL_SAFE_NO_PAD.encode([7u8; 24]);
     let bob_profile_headers = sign_request(
         &ai_key,
-        &ai_pub,
-        &ai_actor,
         "GET",
         "/v1/accounts/99999/profile",
         &[],
@@ -731,8 +746,6 @@ async fn test_humangrant_full_lifecycle_postgres(pool: PgPool) {
     let blocked_nonce = BASE64_URL_SAFE_NO_PAD.encode([8u8; 24]);
     let blocked_headers = sign_request(
         &ai_key,
-        &ai_pub,
-        &ai_actor,
         "GET",
         "/v1/session",
         &[],
@@ -794,8 +807,6 @@ async fn test_humangrant_full_lifecycle_postgres(pool: PgPool) {
     let new_nonce = BASE64_URL_SAFE_NO_PAD.encode([9u8; 24]);
     let dis_headers = sign_request(
         &ai_key,
-        &ai_pub,
-        &ai_actor,
         "POST",
         "/v1/requests",
         &req_bytes,
@@ -913,7 +924,36 @@ async fn test_browser_auth_session_validity_postgres(pool: PgPool) {
     // 4. Weekly logout (weekly_logout = true AND created_at <= now - 7 days)
     // Register and login a fresh user
     let (bob_id, bob_refresh) = register_and_login(&browser, "bob_weekly").await;
-    sqlx::query("UPDATE core_identity.web_sessions SET weekly_logout = true, created_at = clock_timestamp() - interval '8 days' WHERE user_id = $1")
+    // Keep the session lifetime within 30 days and its absolute expiry in the future.
+    // With weekly logout disabled, the same eight-day-old session remains usable.
+    sqlx::query("UPDATE core_identity.web_sessions SET weekly_logout = false, created_at = statement_timestamp() - interval '8 days', expires_at = statement_timestamp() + interval '22 days' WHERE user_id = $1")
+        .bind(bob_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let valid_lifetime: bool = sqlx::query_scalar("SELECT created_at <= clock_timestamp() - interval '7 days' AND expires_at > clock_timestamp() AND expires_at <= created_at + interval '30 days' FROM core_identity.web_sessions WHERE user_id = $1")
+        .bind(bob_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(valid_lifetime);
+    let mut headers = HashMap::new();
+    headers.insert(
+        "cookie".to_string(),
+        format!("new_api_refresh={bob_refresh}"),
+    );
+    let (status, _, _) = call_http(
+        &app,
+        "GET",
+        "/api/user/auth/humangrant/grants",
+        headers,
+        vec![],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    sqlx::query("UPDATE core_identity.web_sessions SET weekly_logout = true WHERE user_id = $1")
         .bind(bob_id)
         .execute(&pool)
         .await

@@ -46,13 +46,13 @@ impl HumanGrantEngine {
         for raw in headers.get_all(axum::http::header::COOKIE) {
             let Ok(s) = raw.to_str() else { continue };
             for part in s.split(';') {
-                if let Some((k, v)) = part.trim().split_once('=') {
-                    if k == name {
-                        if found.is_some() {
-                            return None; // Duplicate cookie rejected
-                        }
-                        found = Some(v);
+                if let Some((k, v)) = part.trim().split_once('=')
+                    && k == name
+                {
+                    if found.is_some() {
+                        return None; // Duplicate cookie rejected
                     }
+                    found = Some(v);
                 }
             }
         }
@@ -204,12 +204,12 @@ impl HumanGrantEngine {
         let mut grant_expires = None;
         let mut grant_status = "none".to_string();
 
-        if let Some(gid) = &req.grant_id {
-            if let Some(g) = tx.get::<Grant>("grant", gid, now).await? {
-                grant_id = Some(g.grant_id.clone());
-                grant_expires = Some(g.expires_at);
-                grant_status = self.grant_status(tx, &g, settings, now).await?;
-            }
+        if let Some(gid) = &req.grant_id
+            && let Some(g) = tx.get::<Grant>("grant", gid, now).await?
+        {
+            grant_id = Some(g.grant_id.clone());
+            grant_expires = Some(g.expires_at);
+            grant_status = self.grant_status(tx, &g, settings, now).await?;
         }
 
         Ok(State {
