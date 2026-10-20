@@ -23,7 +23,7 @@ import {
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
-import { SectionPageLayout } from '@/components/layout'
+import { SectionPageLayout } from '@/components/layout/components/section-page-layout'
 import {
   Alert,
   AlertAction,
@@ -51,23 +51,19 @@ import { Label } from '@/components/ui/label'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
-import { useWalletCurrency } from '@/hooks/use-wallet-currency'
-import { api } from '@/lib/api'
 import { copyToClipboard } from '@/lib/copy-to-clipboard'
 import { useAuthStore } from '@/stores/auth-store'
 
-import { getAssistantStatus, type DrawingWebAccess } from '../assistant/api'
-import { getPricing } from '../pricing/api'
+import { getPricing, pricingQueryKey } from '../pricing/api'
 import type { PricingModel } from '../pricing/types'
+import { marketAPI, type CallResponse } from '../tool-market/api'
 import { DrawingErrorBoundary } from './drawing-error-boundary'
 import { DrawingGallery } from './drawing-gallery'
 import { DrawingSnakeGame } from './drawing-snake-game'
 import {
-  clearActiveDrawingTask,
   getActiveDrawingTask,
   getDrawingDraft,
   getDrawingMinigamePref,
-  registerActiveDrawingTask,
   saveDrawingDraft,
   setDrawingMinigamePref,
   subscribeActiveDrawingTask,
@@ -80,18 +76,26 @@ import {
   getDrawingRequestStatus,
 } from './error-state'
 import { DRAWING_HISTORY_BYTES, DRAWING_HISTORY_LIMIT } from './history-storage'
-import { drawingSource, type GeneratedDrawing } from './image-bytes'
+import { drawingSource } from './image-bytes'
+import {
+  authorizeDrawingOnce,
+  discoverDrawingTool,
+  drawingMultipartBody,
+  drawingStructuredContent,
+  postDrawingMultipart,
+} from './market-drawing'
+import {
+  clearDrawingOperation,
+  readDrawingOperation,
+  saveDrawingOperation,
+  settledImageSchema,
+  imageConfirmationURL,
+  imagePreviewExpiry,
+  type DrawingOperation,
+} from './native-operation'
 import { PromptIdeaButton } from './prompt-idea-button'
 import { applyPromptIdea } from './prompt-inspiration'
 import { useDrawingHistory } from './use-drawing-history'
-import { getDrawingWebDenial, resolveDrawingWebAccess } from './web-access'
-
-type ImageResponse = {
-  data?: GeneratedDrawing[]
-  error?: { message?: string; code?: string }
-  drawing_web_access?: DrawingWebAccess
-  message?: string
-}
 
 type ReferenceImage = {
   id: string
@@ -101,17 +105,12 @@ type ReferenceImage = {
 
 const maxReferenceImages = 8
 const maxReferenceImageBytes = 10 * 1024 * 1024
+const maxTotalReferenceImageBytes = 16 * 1024 * 1024
 const supportedReferenceImageTypes = ['image/jpeg', 'image/png', 'image/webp']
 const chineseImageOrdinals = ['一', '二', '三', '四', '五', '六', '七', '八']
 
 function isImageModel(model: PricingModel): boolean {
-  return model.supported_endpoint_types?.includes('image-generation') === true
-}
-
-function modelSupportsGroup(model: PricingModel, group: string): boolean {
-  return (
-    model.enable_groups.includes('all') || model.enable_groups.includes(group)
-  )
+  return (model.image_variants?.length ?? 0) > 0
 }
 
 function DrawingQueryErrorAlert(props: {
@@ -176,18 +175,27 @@ function DrawingWorkbench({ userId }: { userId: number }) {
   const { t, i18n } = useTranslation()
   const history = useDrawingHistory(userId)
   const results = history.images
-  const money = useWalletCurrency()
-  const quotaPerUSD = money.config.creditsPerUsd ?? Number.NaN
-  const [webDenial, setWebDenial] = useState<DrawingWebAccess | null>(null)
-  const [keyPending, setKeyPending] = useState(false)
-  const [keyReady, setKeyReady] = useState(false)
-  const [keyError, setKeyError] = useState<string | null>(null)
+  const sessionId = useAuthStore((state) => state.auth.session?.sid)
+  const [operation, setOperation] = useState(() => readDrawingOperation(userId))
+  const [recovering, setRecovering] = useState(false)
+  const [nowUnix, setNowUnix] = useState(() => Math.floor(Date.now() / 1000))
+  useEffect(() => {
+    if (!operation?.confirmationExpiresAt) return
+    const timer = setInterval(
+      () => setNowUnix(Math.floor(Date.now() / 1000)),
+      1000
+    )
+    return () => clearInterval(timer)
+  }, [operation?.confirmationExpiresAt])
   const activeRef = useRef(true)
   const requestPendingRef = useRef(false)
   const currentAbortRef = useRef<AbortController | null>(null)
   const isCurrentUser = useCallback(
-    () => activeRef.current && useAuthStore.getState().auth.user?.id === userId,
-    [userId]
+    () =>
+      activeRef.current &&
+      useAuthStore.getState().auth.user?.id === userId &&
+      useAuthStore.getState().auth.session?.sid === sessionId,
+    [userId, sessionId]
   )
   useEffect(() => {
     activeRef.current = true
@@ -291,95 +299,15 @@ function DrawingWorkbench({ userId }: { userId: number }) {
     }
   }, [generating, elapsedSeconds, minigameEnabled])
 
-  const accessQuery = useQuery({
-    queryKey: ['assistant-status', 'drawing', userId],
-    queryFn: getAssistantStatus,
-    staleTime: 30_000,
-    retry: false,
-  })
-  const walletQuery = useQuery({
-    queryKey: ['drawing-wallet', userId],
-    enabled: accessQuery.isSuccess && !accessQuery.data.drawing_web_access,
-    queryFn: async () => {
-      const response = await api.get<{
-        success: boolean
-        data?: { quota?: number }
-      }>('/api/user/self', {
-        skipBusinessError: true,
-        skipErrorHandler: true,
-      })
-      if (!response.data.success) {
-        throw new Error('Unable to load wallet balance')
-      }
-      return response.data.data ?? {}
-    },
-    staleTime: 30_000,
-    retry: false,
-  })
-  const webAccess =
-    webDenial ??
-    resolveDrawingWebAccess(
-      accessQuery.data?.drawing_web_access,
-      walletQuery.isError ? undefined : walletQuery.data?.quota,
-      quotaPerUSD
-    )
-  const refreshBalance = async () => {
-    const [status, wallet] = await Promise.all([
-      accessQuery.refetch(),
-      accessQuery.data?.drawing_web_access
-        ? Promise.resolve(null)
-        : walletQuery.refetch(),
-    ])
-    if (!isCurrentUser()) return
-    if (
-      status.isError ||
-      (!status.data?.drawing_web_access && wallet?.isError)
-    ) {
-      setWebDenial({
-        minimum_balance_usd: null,
-        minimum_balance_credit: null,
-        balance_usd: null,
-        balance_credit: null,
-        allowed: false,
-      })
-    } else {
-      setWebDenial(
-        resolveDrawingWebAccess(
-          status.data?.drawing_web_access,
-          wallet?.data?.quota,
-          quotaPerUSD
-        )
-      )
-    }
-  }
   const pricingQuery = useQuery({
-    queryKey: ['drawing-pricing'],
+    queryKey: pricingQueryKey(userId, sessionId),
     queryFn: ({ signal }) => getPricing(signal),
-    staleTime: 5 * 60_000,
+    staleTime: 60_000,
     retry: false,
   })
-  const groupsQuery = useQuery({
-    queryKey: ['drawing-user-groups', userId],
-    queryFn: async () => {
-      const response = await api.get<{
-        success: boolean
-        data?: Record<
-          string,
-          {
-            desc: string
-            ratio: number | string
-            warning?: {
-              enabled: boolean
-              message: string
-              mode: 'modal' | 'banner' | 'inline'
-              confirmations: number
-            }
-          }
-        >
-        message?: string
-      }>('/api/user/self/groups')
-      return response.data
-    },
+  const drawingToolQuery = useQuery({
+    queryKey: ['drawing-market-tool', userId, sessionId],
+    queryFn: discoverDrawingTool,
     staleTime: 60_000,
     retry: false,
   })
@@ -390,65 +318,108 @@ function DrawingWorkbench({ userId }: { userId: number }) {
         .sort((left, right) => left.model_name.localeCompare(right.model_name)),
     [pricingQuery.data?.data]
   )
-  const groups = useMemo(() => {
-    const usable =
-      groupsQuery.data?.data ?? pricingQuery.data?.usable_group ?? {}
-    return Object.keys(usable)
-      .filter((name) =>
-        imageModels.some((item) => modelSupportsGroup(item, name))
-      )
-      .sort((left, right) => left.localeCompare(right))
-  }, [groupsQuery.data?.data, imageModels, pricingQuery.data?.usable_group])
+  const groups = useMemo(
+    () =>
+      [
+        ...new Set(
+          imageModels.flatMap((item) =>
+            (item.image_variants ?? []).map((variant) => variant.group)
+          )
+        ),
+      ].sort(),
+    [imageModels]
+  )
   const selectedGroup = groups.includes(group)
     ? group
     : groups.includes('image-2')
       ? 'image-2'
       : (groups[0] ?? '')
   const modelsForGroup = imageModels.filter((item) =>
-    modelSupportsGroup(item, selectedGroup)
+    item.image_variants?.some((variant) => variant.group === selectedGroup)
   )
   const selectedModel = modelsForGroup.some((item) => item.model_name === model)
     ? model
     : modelsForGroup.some((item) => item.model_name === 'image-2')
       ? 'image-2'
       : (modelsForGroup[0]?.model_name ?? '')
-  const groupDescription =
-    groupsQuery.data?.data?.[selectedGroup]?.desc ??
-    pricingQuery.data?.usable_group?.[selectedGroup]?.desc
-  const accessGranted = accessQuery.data?.developer_access_granted === true
+  const groupDescription: string | undefined = undefined
+  const accessGranted = drawingToolQuery.isSuccess
   const hasPrompt = prompt.trim().length > 0
   const submitShortcutLabel =
     typeof navigator !== 'undefined' &&
     /mac|iphone|ipad/i.test(navigator.userAgent)
       ? '⌘↵'
       : 'Ctrl+↵'
-  const configurationReady = Boolean(selectedGroup && selectedModel)
-  const sizes =
-    selectedModel === 'dall-e-2' || selectedModel === 'dall-e'
-      ? ['256x256', '512x512', '1024x1024']
-      : selectedModel === 'dall-e-3'
-        ? ['1024x1024', '1024x1792', '1792x1024']
-        : ['1024x1024', '1024x1536', '1536x1024']
-  const qualities = selectedModel.startsWith('gpt-image-')
-    ? ['auto', 'low', 'medium', 'high']
-    : ['standard', 'hd']
-  const sizePresets = ['', ...sizes].map((value) => ({
+  const variants =
+    modelsForGroup
+      .find((item) => item.model_name === selectedModel)
+      ?.image_variants?.filter(
+        (variant) =>
+          variant.group === selectedGroup &&
+          variant.endpoint ===
+            (referenceImages.length ? 'edits' : 'generations')
+      ) ?? []
+  const sizes = [...new Set(variants.map((variant) => variant.size))]
+  const effectiveSize = sizes.includes(size) ? size : (sizes[0] ?? '')
+  const qualities = [
+    ...new Set(
+      variants
+        .filter((variant) => variant.size === effectiveSize)
+        .map((variant) => variant.quality)
+    ),
+  ]
+  const sizePresets = sizes.map((value) => ({
     value,
     label: value || t('Default'),
   }))
-  const qualityPresets = ['', ...qualities].map((value) => ({
+  const qualityPresets = qualities.map((value) => ({
     value,
     label: value || t('Default'),
   }))
 
   const selectedSize = sizePresets.some((option) => option.value === size)
     ? size
-    : ''
+    : (sizes[0] ?? '')
   const selectedQuality = qualityPresets.some(
     (option) => option.value === quality
   )
     ? quality
-    : ''
+    : (qualities[0] ?? '')
+  const maxCount = Math.min(
+    4,
+    ...variants
+      .filter(
+        (variant) =>
+          variant.size === selectedSize && variant.quality === selectedQuality
+      )
+      .map((variant) => variant.max_n)
+  )
+  const selectedCount =
+    Number.isSafeInteger(Number(count)) &&
+    Number(count) >= 1 &&
+    Number(count) <= maxCount
+      ? Number(count)
+      : 1
+
+  const selectedVariant = variants.find(
+    (variant) =>
+      variant.size === selectedSize && variant.quality === selectedQuality
+  )
+  const estimateCredits = selectedVariant
+    ? (() => {
+        const numerator =
+          BigInt(selectedVariant.credits_per_image.numerator) *
+          BigInt(selectedCount)
+        const denominator = BigInt(
+          selectedVariant.credits_per_image.denominator
+        )
+        return ((numerator + denominator - 1n) / denominator).toString()
+      })()
+    : null
+
+  const configurationReady = Boolean(
+    selectedGroup && selectedModel && variants.length
+  )
 
   useEffect(
     () => () => {
@@ -500,6 +471,14 @@ function DrawingWorkbench({ userId }: { userId: number }) {
           size: maxReferenceImageBytes / 1024 / 1024,
         })
       )
+      return
+    }
+    const totalBytes = [
+      ...referenceImages.map((image) => image.file),
+      ...selected,
+    ].reduce((total, file) => total + file.size, 0)
+    if (totalBytes > maxTotalReferenceImageBytes) {
+      setError(t('Reference images must be at most 16 MiB in total.'))
       return
     }
     const additions = selected.map((file) => {
@@ -566,202 +545,224 @@ function DrawingWorkbench({ userId }: { userId: number }) {
     }
   }
 
+  const acceptReceipt = async (
+    receipt: CallResponse,
+    original: DrawingOperation,
+    ticket: number
+  ) => {
+    if (
+      receipt.call.tool_id !== original.toolId ||
+      receipt.call.version_id !== original.versionId ||
+      receipt.call.grant_id !== original.grantId ||
+      receipt.call.client_id !== 'web-market' ||
+      receipt.call.user_id !== original.userId ||
+      (original.requestState &&
+        receipt.request_state &&
+        original.requestState !== receipt.request_state) ||
+      (original.callId && receipt.call.id !== original.callId)
+    ) {
+      throw new Error('Image request identity did not match')
+    }
+    const content =
+      receipt.result === undefined
+        ? undefined
+        : drawingStructuredContent(receipt.result)
+    const expiresAt = imagePreviewExpiry(content)
+    if (
+      original.confirmationExpiresAt &&
+      expiresAt &&
+      expiresAt !== original.confirmationExpiresAt
+    ) {
+      throw new Error('Image confirmation expiry did not match')
+    }
+    const next: DrawingOperation = {
+      ...original,
+      callId: receipt.call.id,
+      mayContinue: receipt.call.execution_status === 'awaiting_confirmation',
+      confirmationExpiresAt: expiresAt ?? original.confirmationExpiresAt,
+      requestState: receipt.request_state ?? original.requestState,
+      confirmationURL:
+        imageConfirmationURL(content, window.location.origin) ??
+        original.confirmationURL,
+    }
+    saveDrawingOperation(next)
+    if (isCurrentUser()) setOperation(next)
+    if (
+      receipt.call.settlement_status === 'settled' &&
+      receipt.result_expired
+    ) {
+      clearDrawingOperation(userId, next.requestId)
+      if (isCurrentUser()) {
+        setOperation(null)
+        setError(
+          t(
+            'The saved result has expired. The call and transfer records are retained.'
+          )
+        )
+      }
+      return
+    }
+    if (receipt.call.settlement_status === 'settled') {
+      const result = settledImageSchema.parse(content)
+      const usable = result.output.data.filter(
+        (image) => drawingSource(image) !== undefined
+      )
+      if (!usable.length) throw new Error(t('No images were returned'))
+      await history.remember(
+        usable,
+        {
+          prompt: next.prompt,
+          model: next.model,
+          group: next.group,
+          createdAt: next.createdAt,
+          size: next.size,
+          quality: next.quality,
+          count: String(next.count),
+        },
+        ticket
+      )
+      clearDrawingOperation(userId, next.requestId)
+      if (isCurrentUser()) {
+        setOperation(null)
+        toast.success(t('Image generation completed'))
+      }
+    } else if (
+      receipt.call.settlement_status === 'released' &&
+      ['failed', 'cancelled'].includes(receipt.call.execution_status)
+    ) {
+      clearDrawingOperation(userId, next.requestId)
+      if (isCurrentUser()) {
+        setOperation(null)
+        setError(t('Unable to generate the image'))
+      }
+    }
+  }
+
+  const recoverOperation = async (resume: boolean) => {
+    const original = readDrawingOperation(userId)
+    if (
+      !original ||
+      recovering ||
+      !isCurrentUser() ||
+      (resume && !original.mayContinue)
+    ) {
+      return
+    }
+    setRecovering(true)
+    const ticket = history.capture()
+    setError(null)
+    try {
+      const receipt =
+        resume && original.callId && original.requestState
+          ? await marketAPI.resume(original.callId, {
+              request_state: original.requestState,
+            })
+          : original.callId
+            ? await marketAPI.result(original.callId)
+            : await marketAPI.lookupRequest(original.requestId)
+      if (isCurrentUser()) await acceptReceipt(receipt, original, ticket)
+    } catch (cause: unknown) {
+      if (isCurrentUser()) {
+        setError(
+          getDrawingRequestErrorMessage(
+            cause,
+            t(
+              'The image request is not confirmed. Check this request before starting another.'
+            )
+          )
+        )
+      }
+    } finally {
+      if (isCurrentUser()) setRecovering(false)
+    }
+  }
+
   const generate = async () => {
     const cleanPrompt = prompt.trim()
     if (
       requestPendingRef.current ||
-      getActiveDrawingTask(userId)?.status === 'generating' ||
+      readDrawingOperation(userId) ||
       !isCurrentUser() ||
-      !accessGranted ||
-      !webAccess.allowed ||
+      !drawingToolQuery.data ||
       history.clearing ||
       !cleanPrompt ||
+      !variants.length ||
       !selectedGroup ||
       !selectedModel
     ) {
       return
     }
     requestPendingRef.current = true
-    const abortController = new AbortController()
-    currentAbortRef.current = abortController
-    const releaseHistory = history.retain()
-    const ticket = history.capture()
-    const metadata = {
-      prompt: cleanPrompt,
-      model: selectedModel,
-      group: selectedGroup,
-      createdAt: Date.now(),
-      size: selectedSize,
-      quality: selectedQuality,
-      count,
-    }
-    const taskId = crypto.randomUUID()
-    registerActiveDrawingTask({
-      id: taskId,
-      userId,
-      prompt: cleanPrompt,
-      group: selectedGroup,
-      model: selectedModel,
-      size: selectedSize,
-      quality: selectedQuality,
-      count,
-      referenceCount: referenceImages.length,
-      startedAt: Date.now(),
-      abortController,
-      status: 'generating',
-    })
-
     setGenerating(true)
     setError(null)
     setErrorStatus(null)
     setStoppedMessage(null)
-
+    const releaseHistory = history.retain()
+    const ticket = history.capture()
+    let original: DrawingOperation | undefined
     try {
-      let response
-      if (referenceImages.length > 0) {
-        const form = new FormData()
-        form.append('prompt', cleanPrompt)
-        form.append('model', selectedModel)
-        form.append('n', count)
-        if (selectedSize) form.append('size', selectedSize)
-        if (selectedQuality) form.append('quality', selectedQuality)
-        for (const image of referenceImages) {
-          form.append('image', image.file, image.file.name)
-        }
-        response = await api.post<ImageResponse>(
-          `/pg/images/edits?group=${encodeURIComponent(selectedGroup)}`,
-          form,
-          {
-            signal: abortController.signal,
-            skipBusinessError: true,
-            skipErrorHandler: true,
-          }
-        )
-      } else {
-        response = await api.post<ImageResponse>(
-          `/pg/images/generations?group=${encodeURIComponent(selectedGroup)}`,
-          {
-            prompt: cleanPrompt,
-            model: selectedModel,
-            n: Number(count),
-            ...(selectedSize ? { size: selectedSize } : {}),
-            ...(selectedQuality ? { quality: selectedQuality } : {}),
-          },
-          {
-            signal: abortController.signal,
-            skipBusinessError: true,
-            skipErrorHandler: true,
-          }
-        )
+      const grant = await authorizeDrawingOnce(drawingToolQuery.data)
+      if (!isCurrentUser()) return
+      original = {
+        requestId: crypto.randomUUID(),
+        userId,
+        toolId: drawingToolQuery.data.tool_id,
+        versionId: drawingToolQuery.data.version_id,
+        grantId: grant.id,
+        prompt: cleanPrompt,
+        model: selectedModel,
+        group: selectedGroup,
+        size: selectedSize,
+        quality: selectedQuality,
+        count: selectedCount,
+        referenceCount: referenceImages.length,
+        createdAt: Date.now(),
       }
-
-      if (abortController.signal.aborted) return
-      if (
-        useAuthStore.getState().auth.user?.id !== userId ||
-        ticket !== history.capture()
-      ) {
-        return
+      const request = {
+        tool_id: original.toolId,
+        version_id: original.versionId,
+        grant_id: original.grantId,
+        request_id: original.requestId,
+        arguments: {
+          prompt: original.prompt,
+          model: original.model,
+          group: original.group,
+          n: original.count,
+          ...(original.size ? { size: original.size } : {}),
+          ...(original.quality ? { quality: original.quality } : {}),
+        },
       }
-
-      const denial = getDrawingWebDenial({ response })
-      if (denial) {
-        clearActiveDrawingTask(userId, taskId)
-        setWebDenial(denial)
-        return
-      }
-      if (
-        !response.data ||
-        response.data.error ||
-        !Array.isArray(response.data.data)
-      ) {
-        const status = getDrawingRequestStatus({ response })
-        const errorMsg = getDrawingRequestErrorMessage(
-          { response },
-          t('Unable to generate the image')
-        )
-        setError(errorMsg)
-        setErrorStatus(status)
-        updateActiveDrawingTask(userId, {
-          status: 'failed',
-          error: errorMsg,
-          errorStatus: status,
-        })
-        return
-      }
-      const usableResults = response.data.data.filter(
-        (image) => drawingSource(image) !== undefined
-      )
-      if (usableResults.length === 0) {
-        const msg = t('No images were returned')
-        setError(msg)
-        updateActiveDrawingTask(userId, { status: 'failed', error: msg })
-      } else {
-        // Cache failures are handled separately: successful generation is never
-        // an API error or an invitation to regenerate (and pay again).
-        await history.remember(usableResults, metadata, ticket)
-        clearActiveDrawingTask(userId, taskId)
-        if (useAuthStore.getState().auth.user?.id === userId) {
-          toast.success(t('Image generation completed'))
-        }
-      }
+      const form = referenceImages.length
+        ? await drawingMultipartBody(
+            request,
+            referenceImages.map((image) => image.file)
+          )
+        : null
+      if (!isCurrentUser()) return
+      saveDrawingOperation(original)
+      setOperation(original)
+      const receipt = form
+        ? await postDrawingMultipart(form)
+        : await marketAPI.invoke(request)
+      if (isCurrentUser()) await acceptReceipt(receipt, original, ticket)
     } catch (cause: unknown) {
-      if (
-        abortController.signal.aborted ||
-        (cause instanceof Error && cause.name === 'AbortError')
-      ) {
-        return
+      if (isCurrentUser()) {
+        setError(
+          getDrawingRequestErrorMessage(
+            cause,
+            original
+              ? t(
+                  'The image request is not confirmed. Check this request before starting another.'
+                )
+              : t('Unable to generate the image')
+          )
+        )
+        setErrorStatus(getDrawingRequestStatus(cause))
       }
-      if (
-        useAuthStore.getState().auth.user?.id !== userId ||
-        ticket !== history.capture()
-      ) {
-        return
-      }
-      const denial = getDrawingWebDenial(cause)
-      if (denial) {
-        clearActiveDrawingTask(userId, taskId)
-        setWebDenial(denial)
-        return
-      }
-      const fallbackMessages = {
-        unauthenticated: t('Session expired!'),
-        forbidden: t('No permission to perform this action'),
-        unavailable: t('Please try again later.'),
-        network: t('Network connection failed or server not responding'),
-        http: t('Unable to generate the image'),
-      }
-      const status = getDrawingRequestStatus(cause)
-      const errorMsg = getDrawingRequestErrorMessage(
-        cause,
-        fallbackMessages[getDrawingRequestErrorKind(cause)]
-      )
-      setError(errorMsg)
-      setErrorStatus(status)
-      updateActiveDrawingTask(userId, {
-        status: 'failed',
-        error: errorMsg,
-        errorStatus: status,
-      })
     } finally {
-      if (
-        getActiveDrawingTask(userId)?.id === taskId &&
-        getActiveDrawingTask(userId)?.status === 'generating'
-      ) {
-        clearActiveDrawingTask(userId, taskId)
-      }
       releaseHistory()
       requestPendingRef.current = false
-      if (currentAbortRef.current === abortController) {
-        currentAbortRef.current = null
-      }
-      if (isCurrentUser()) {
-        setGenerating(false)
-        try {
-          void refreshBalance()
-        } catch {
-          // Balance refresh failures should never break drawing studio
-        }
-      }
+      if (isCurrentUser()) setGenerating(false)
     }
   }
 
@@ -787,49 +788,9 @@ function DrawingWorkbench({ userId }: { userId: number }) {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
-  const ensureDrawingKey = async () => {
-    if (keyPending || !accessGranted || !isCurrentUser()) return
-    setKeyPending(true)
-    setKeyError(null)
-    try {
-      const response = await api.post<{
-        success: boolean
-        data?: { id: number; name: string; group: 'image-2'; created: boolean }
-      }>(
-        '/api/drawing/key',
-        {},
-        { skipBusinessError: true, skipErrorHandler: true }
-      )
-      if (!isCurrentUser()) return
-      if (
-        !response.data.success ||
-        !response.data.data?.id ||
-        response.data.data.group !== 'image-2'
-      ) {
-        throw new Error('Unable to prepare drawing key')
-      }
-      setKeyReady(true)
-    } catch (cause) {
-      if (isCurrentUser()) {
-        setKeyError(
-          getDrawingRequestErrorMessage(
-            cause,
-            t('Unable to prepare the image-2 API Key.')
-          )
-        )
-      }
-    } finally {
-      if (isCurrentUser()) setKeyPending(false)
-    }
-  }
-
   let content: ReactNode
   const standaloneHistory = true
-  if (
-    accessQuery.isLoading ||
-    pricingQuery.isLoading ||
-    groupsQuery.isLoading
-  ) {
+  if (drawingToolQuery.isLoading || pricingQuery.isLoading) {
     content = (
       <div className='grid gap-4 sm:grid-cols-2'>
         <Skeleton className='h-10 w-full' />
@@ -837,43 +798,15 @@ function DrawingWorkbench({ userId }: { userId: number }) {
         <Skeleton className='h-32 w-full sm:col-span-2' />
       </div>
     )
-  } else if (accessQuery.isError) {
+  } else if (drawingToolQuery.isError || pricingQuery.isError) {
     content = (
       <DrawingQueryErrorAlert
         title={t('Failed to load')}
-        error={accessQuery.error}
-        onRetry={() => accessQuery.refetch()}
+        error={drawingToolQuery.error ?? pricingQuery.error}
+        onRetry={() =>
+          Promise.all([drawingToolQuery.refetch(), pricingQuery.refetch()])
+        }
       />
-    )
-  } else if (!accessGranted) {
-    content = (
-      <Alert>
-        <AlertTitle>{t('L1 access required')}</AlertTitle>
-        <AlertDescription>
-          {t(
-            'The drawing workbench is available after developer access is approved.'
-          )}
-        </AlertDescription>
-      </Alert>
-    )
-  } else if (pricingQuery.isError || groupsQuery.isError) {
-    content = (
-      <div className='grid gap-3'>
-        {pricingQuery.isError ? (
-          <DrawingQueryErrorAlert
-            title={t('Failed to load playground models')}
-            error={pricingQuery.error}
-            onRetry={() => pricingQuery.refetch()}
-          />
-        ) : null}
-        {groupsQuery.isError ? (
-          <DrawingQueryErrorAlert
-            title={t('Failed to load playground groups')}
-            error={groupsQuery.error}
-            onRetry={() => groupsQuery.refetch()}
-          />
-        ) : null}
-      </div>
     )
   } else if (groups.length === 0) {
     content = (
@@ -890,7 +823,10 @@ function DrawingWorkbench({ userId }: { userId: number }) {
             size='sm'
             variant='outline'
             onClick={() => {
-              void Promise.all([pricingQuery.refetch(), groupsQuery.refetch()])
+              void Promise.all([
+                pricingQuery.refetch(),
+                drawingToolQuery.refetch(),
+              ])
             }}
           >
             {t('Retry')}
@@ -974,19 +910,29 @@ function DrawingWorkbench({ userId }: { userId: number }) {
             </NativeSelect>
           </div>
         </div>
+        {estimateCredits !== null ? (
+          <p className='text-muted-foreground text-xs'>
+            {t(
+              'Estimated image cost: {{credits}} Credits. Final reservation is shown in the confirmation.',
+              { credits: estimateCredits }
+            )}
+          </p>
+        ) : null}
         <div className='grid max-w-40 gap-2'>
           <Label htmlFor='drawing-count'>{t('Images')}</Label>
           <NativeSelect
             id='drawing-count'
-            value={count}
+            value={String(selectedCount)}
             className='w-full'
             onChange={(event) => setCount(event.target.value)}
           >
-            {[1, 2, 3, 4].map((value) => (
-              <NativeSelectOption key={value} value={String(value)}>
-                {value}
-              </NativeSelectOption>
-            ))}
+            {Array.from({ length: maxCount }, (_, index) => index + 1).map(
+              (value) => (
+                <NativeSelectOption key={value} value={String(value)}>
+                  {value}
+                </NativeSelectOption>
+              )
+            )}
           </NativeSelect>
         </div>
       </div>
@@ -1344,17 +1290,6 @@ function DrawingWorkbench({ userId }: { userId: number }) {
                     <Button
                       type='button'
                       size='sm'
-                      variant='outline'
-                      onClick={() => void generate()}
-                      disabled={
-                        generating || !webAccess.allowed || history.clearing
-                      }
-                    >
-                      {t('Retry')}
-                    </Button>
-                    <Button
-                      type='button'
-                      size='sm'
                       variant='secondary'
                       onClick={() => void copyErrorDetails()}
                     >
@@ -1427,11 +1362,12 @@ function DrawingWorkbench({ userId }: { userId: number }) {
                     disabled={
                       generating ||
                       activeTask?.status === 'generating' ||
-                      !webAccess.allowed ||
+                      operation !== null ||
                       history.clearing ||
                       !prompt.trim() ||
                       !selectedGroup ||
-                      !selectedModel
+                      !selectedModel ||
+                      !configurationReady
                     }
                   >
                     <HugeiconsIcon
@@ -1495,15 +1431,12 @@ function DrawingWorkbench({ userId }: { userId: number }) {
       <SectionPageLayout.Title>{t('Drawing studio')}</SectionPageLayout.Title>
       {accessGranted ? (
         <SectionPageLayout.Actions>
-          <Button
-            type='button'
-            size='sm'
-            variant='outline'
-            disabled={keyPending}
-            onClick={() => void ensureDrawingKey()}
+          <Link
+            to='/keys'
+            className={buttonVariants({ variant: 'outline', size: 'sm' })}
           >
-            {keyPending ? t('Loading') : t('Prepare image-2 API Key')}
-          </Button>
+            {t('Prepare image-2 API Key')}
+          </Link>
           <Link
             to='/keys'
             className={buttonVariants({ variant: 'outline', size: 'sm' })}
@@ -1530,76 +1463,74 @@ function DrawingWorkbench({ userId }: { userId: number }) {
             <p className='text-muted-foreground text-sm'>
               {t(
                 'Create images through the same safe, group-aware relay used by the API.'
+              )}{' '}
+              {t(
+                'This action authorizes one image tool call. Review and confirm the image price before execution.'
               )}
             </p>
           </header>
-          {accessGranted && !webAccess.allowed ? (
-            <Alert
-              variant='destructive'
-              className='mb-4'
-              data-slot='drawing-web-access'
-            >
+          {operation ? (
+            <Alert className='mb-4' data-slot='drawing-operation'>
               <AlertTitle>
-                {webAccess.balance_usd === null
-                  ? t('Web image generation balance unavailable')
-                  : t('Insufficient balance for web image generation')}
+                {t('Review the image quote, then return here to continue.')}
               </AlertTitle>
               <AlertDescription>
-                <p>
-                  {webAccess.balance_credit === null ||
-                  webAccess.balance_credit === undefined ||
-                  webAccess.minimum_balance_credit === null ||
-                  webAccess.minimum_balance_credit === undefined
-                    ? t('Web image generation balance unavailable')
-                    : t(
-                        'Web image generation requires a minimum balance of {{minimum}}. Current balance: {{balance}}.',
-                        {
-                          minimum: money.formatQuota(
-                            webAccess.minimum_balance_credit,
-                            {
-                              abbreviate: false,
-                              digitsLarge: 2,
-                              digitsSmall: 2,
-                            }
-                          ),
-                          balance: money.formatQuota(webAccess.balance_credit, {
-                            abbreviate: false,
-                            digitsLarge: 2,
-                            digitsSmall: 2,
-                          }),
-                        }
-                      )}
-                </p>
                 <p>
                   {t(
-                    'You can still create an image-2 API Key and use image-2 through the API or MCP, subject to existing permissions and available quota. API and MCP usage is billed normally, not free.'
+                    'The image request is not confirmed. Check this request before starting another.'
                   )}
                 </p>
-                <Button
-                  type='button'
-                  size='sm'
-                  variant='outline'
-                  disabled={accessQuery.isFetching || walletQuery.isFetching}
-                  onClick={() => void refreshBalance()}
-                >
-                  {t('Refresh balance')}
-                </Button>
-              </AlertDescription>
-            </Alert>
-          ) : null}
-          {keyReady || keyError ? (
-            <Alert
-              className='mb-4'
-              variant={keyError ? 'destructive' : 'default'}
-            >
-              <AlertTitle>
-                {keyError ? t('Request failed') : t('image-2 API Key ready')}
-              </AlertTitle>
-              <AlertDescription>
-                {keyError ||
-                  t(
-                    'Open API Key management to reveal or copy your key. No key secret is displayed here.'
-                  )}
+                {operation.confirmationExpiresAt ? (
+                  <p>
+                    {operation.confirmationExpiresAt > nowUnix
+                      ? t(
+                          'Image confirmation expires in {{seconds}} seconds.',
+                          { seconds: operation.confirmationExpiresAt - nowUnix }
+                        )
+                      : t(
+                          'Image confirmation expired. Check the original request.'
+                        )}
+                  </p>
+                ) : null}
+                <div className='flex flex-wrap gap-2'>
+                  {operation.confirmationURL ? (
+                    <a
+                      href={
+                        imageConfirmationURL(
+                          { confirmation_url: operation.confirmationURL },
+                          window.location.origin
+                        ) ?? undefined
+                      }
+                      target='_blank'
+                      rel='noopener noreferrer'
+                      className={buttonVariants({
+                        variant: 'outline',
+                        size: 'sm',
+                      })}
+                    >
+                      {t('Open image confirmation')}
+                    </a>
+                  ) : null}
+                  <Button
+                    size='sm'
+                    variant='outline'
+                    disabled={recovering || generating}
+                    onClick={() => void recoverOperation(false)}
+                  >
+                    {t('Check the original request')}
+                  </Button>
+                  {operation.callId &&
+                  operation.requestState &&
+                  operation.mayContinue ? (
+                    <Button
+                      size='sm'
+                      disabled={recovering || generating}
+                      onClick={() => void recoverOperation(true)}
+                    >
+                      {t('Continue the original request')}
+                    </Button>
+                  ) : null}
+                </div>
               </AlertDescription>
             </Alert>
           ) : null}

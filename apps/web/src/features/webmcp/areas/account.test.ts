@@ -117,9 +117,14 @@ test('log tools only request self endpoints and strip raw content', async () => 
         success: true,
         data: {
           total: 1,
+          page: 1,
+          page_size: 20,
           items: [
             {
               id: 4,
+              user_id: 1,
+              created_at: 1,
+              type: 2,
               model_name: 'test-model',
               prompt_tokens: 12,
               completion_tokens: 4,
@@ -134,14 +139,99 @@ test('log tools only request self endpoints and strip raw content', async () => 
       },
     }
   }) as typeof api.get
-  for (const category of ['common', 'drawing', 'task']) {
+  for (const category of ['common']) {
     const data = await find('lmm_account_list_usage_logs').execute(
       { category },
       options()
     )
     assert.doesNotMatch(JSON.stringify(data), /secret-/)
   }
-  assert.deepEqual(paths, ['/api/log/self', '/api/mj/self', '/api/task/self'])
+  assert.equal(paths.length, 1)
+  assert.match(paths[0], /^\/api\/log\/self\?p=1&page_size=20$/)
+})
+
+test('unsupported drawing/task history remains explicit and never becomes an empty result', async () => {
+  signIn()
+  const paths: string[] = []
+  api.get = (async (path: string) => {
+    paths.push(path)
+    return {
+      data: {
+        success: false,
+        code: 'USAGE_HISTORY_UNAVAILABLE',
+        availability: 'unavailable',
+        category: path.startsWith('/api/mj/') ? 'drawing' : 'task',
+      },
+    }
+  }) as typeof api.get
+  for (const category of ['drawing', 'task']) {
+    const data = await find('lmm_account_list_usage_logs').execute(
+      { category },
+      options()
+    )
+    assert.deepEqual(data, {
+      availability: 'unavailable',
+      category,
+      path: `/usage-logs/${category}`,
+    })
+    assert.equal(Object.hasOwn(data, 'items'), false)
+    assert.equal(Object.hasOwn(data, 'total'), false)
+  }
+  assert.match(paths[0], /^\/api\/mj\/self\?/)
+  assert.match(paths[1], /^\/api\/task\/self\?/)
+})
+
+test('business failure and malformed history are errors without exposing raw server content', async () => {
+  signIn()
+  for (const payload of [
+    { success: false, message: 'secret-prompt' },
+    { success: true },
+    { success: true, data: { items: [], total: 0 } },
+  ]) {
+    api.get = (async () => ({ data: payload })) as typeof api.get
+    await assert.rejects(
+      find('lmm_account_list_usage_logs').execute({}, options()),
+      (error: unknown) => {
+        assert.ok(error instanceof Error)
+        assert.doesNotMatch(error.message, /secret-prompt/)
+        return true
+      }
+    )
+  }
+})
+
+test('account tools discard a response after role or session identity changes', async () => {
+  for (const change of ['role', 'session']) {
+    signIn()
+    api.get = (async () => {
+      if (change === 'role') {
+        signIn(ROLE.ADMIN)
+      } else {
+        useAuthStore.setState((state) => ({
+          auth: {
+            ...state.auth,
+            session: {
+              sid: 'changed-session',
+              current: true,
+              login_method: 'password',
+              ip: null,
+              user_agent: null,
+              created_at: 1,
+              last_active_at: 1,
+              expires_at: 2,
+            },
+          },
+        }))
+      }
+      return {
+        data: { success: true, data: { id: 1, username: 'Late account' } },
+      }
+    }) as typeof api.get
+    await assert.rejects(
+      find('lmm_account_get_profile').execute({}, options()),
+      /account changed/
+    )
+  }
 })
 
 test('per-model usage includes every bounded window without overlap', async () => {

@@ -27,6 +27,7 @@ import { CacheStatsDialog } from '@/features/system-settings/general/channel-aff
 import { useMediaQuery } from '@/hooks'
 import { useSidebarConfig } from '@/hooks/use-sidebar-config'
 import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { UserInfoDialog } from './components/dialogs/user-info-dialog'
 import {
@@ -190,8 +191,12 @@ function UsageLogsContent() {
 }
 
 export function UsageLogs() {
+  const auth = useAuthStore((state) => state.auth)
+  const accountKey = [auth.user?.id, auth.session?.sid, auth.user?.role].join(
+    ':'
+  )
   return (
-    <UsageLogsProvider>
+    <UsageLogsProvider key={accountKey}>
       <UsageLogsContent />
     </UsageLogsProvider>
   )

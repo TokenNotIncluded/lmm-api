@@ -16,6 +16,9 @@ import type {
   SelfSubscriptionData,
   PlanRecord,
 } from '@/features/subscriptions/types'
+import { readLogsPage } from '@/features/usage-logs/api'
+import { UsageHistoryUnavailableError } from '@/features/usage-logs/lib/history-response'
+import { readUsageStatisticsScope } from '@/features/usage-logs/lib/statistics'
 import { api } from '@/lib/api'
 import { ROLE } from '@/lib/roles'
 
@@ -42,11 +45,22 @@ async function read<T>(
   signal: AbortSignal,
   params?: Record<string, unknown>
 ): Promise<T> {
-  const accountId = requireSignedIn().id
+  requireSignedIn()
+  const scope = readUsageStatisticsScope()
+  if (!scope) throw new Error('The signed-in session is unavailable.')
   ensureNotAborted(signal)
-  const response = await api.get<Envelope<T>>(path, { params, signal })
+  const response = await api.get<Envelope<T>>(path, {
+    params,
+    signal,
+    authScope: { userId: scope.userId, sessionId: scope.sessionId },
+  })
   ensureNotAborted(signal)
-  if (requireSignedIn().id !== accountId) {
+  const current = readUsageStatisticsScope()
+  if (
+    current?.userId !== scope.userId ||
+    current?.sessionId !== scope.sessionId ||
+    current?.role !== scope.role
+  ) {
     throw new Error('The signed-in account changed. Retry this request.')
   }
   // Server error text can contain request content; keep tool failures generic.
@@ -229,39 +243,65 @@ export const accountTools: WebMcpToolFactory = ({ router }) => [
       const page = optionalInteger(input, 'page', 1, 10000) ?? 1
       const pageSize = optionalInteger(input, 'page_size', 1, 50) ?? 20
       const model = optionalString(input, 'model', 128)
-      const path =
-        category === 'common'
-          ? '/api/log/self'
-          : category === 'drawing'
-            ? '/api/mj/self'
-            : '/api/task/self'
-      const data = await read<{ items?: RecordData[]; total?: number }>(
-        path,
-        signal,
-        {
-          p: page,
-          page_size: pageSize,
-          ...(category === 'common' && model ? { model_name: model } : {}),
+      let data
+      try {
+        data = await readLogsPage({
+          category,
+          isAdmin: false,
+          signal,
+          params: {
+            p: page,
+            page_size: pageSize,
+            ...(category === 'common' && model ? { model_name: model } : {}),
+          },
+        })
+      } catch (error) {
+        if (error instanceof UsageHistoryUnavailableError) {
+          return {
+            availability: 'unavailable',
+            category,
+            path: `/usage-logs/${category}`,
+          }
         }
-      )
+        throw new Error(
+          'Account usage history could not be loaded. Retry this request.'
+        )
+      }
+      const items =
+        data.kind === 'drawing'
+          ? data.items.slice(0, pageSize).map((item) => ({
+              id: item.id,
+              task_id: clip(item.mj_id, 128),
+              action: clip(item.action, 64),
+              status: clip(item.status, 32),
+              submit_time_ms: item.submit_time,
+              finish_time_ms: item.finish_time ?? null,
+            }))
+          : data.kind === 'task'
+            ? data.items.slice(0, pageSize).map((item) => ({
+                id: item.id,
+                task_id: clip(item.task_id, 128),
+                platform: clip(item.platform, 64),
+                action: clip(item.action, 64),
+                status: clip(item.status, 32),
+                submit_time: item.submit_time,
+                finish_time: item.finish_time ?? null,
+              }))
+            : data.items.slice(0, pageSize).map((item) => ({
+                id: 'id' in item ? item.id : item.source_log_id,
+                created_at: item.created_at,
+                model_name: clip(item.model_name, 128),
+                type: item.type,
+                quota: item.quota,
+                prompt_tokens: item.prompt_tokens,
+                completion_tokens: item.completion_tokens,
+              }))
       return {
+        availability: 'available',
         category,
         page,
-        total: numeric(data.total),
-        items: (data.items ?? []).slice(0, pageSize).map((item) => ({
-          id: numeric(item.id),
-          created_at: numeric(item.created_at),
-          model_name: clip(item.model_name, 128),
-          status:
-            typeof item.status === 'number'
-              ? item.status
-              : clip(item.status, 32),
-          type: numeric(item.type),
-          quota: numeric(item.quota),
-          prompt_tokens: numeric(item.prompt_tokens),
-          completion_tokens: numeric(item.completion_tokens),
-          use_time: numeric(item.use_time),
-        })),
+        total: data.total,
+        items,
       }
     },
   },

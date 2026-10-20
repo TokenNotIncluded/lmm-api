@@ -19,14 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 /**
  * Utility functions for usage logs feature
  */
-import {
-  getAllLogs,
-  getUserLogs,
-  getAllMidjourneyLogs,
-  getUserMidjourneyLogs,
-  getAllTaskLogs,
-  getUserTaskLogs,
-} from '../api'
+import { readLogsPage } from '../api'
 import {
   LOG_TYPES,
   DISPLAYABLE_LOG_TYPES,
@@ -159,7 +152,7 @@ export function buildApiParams(config: {
     ...(searchParams.requestId
       ? { request_id: String(searchParams.requestId) }
       : {}),
-    ...(searchParams.upstreamRequestId
+    ...(isAdmin && searchParams.upstreamRequestId
       ? { upstream_request_id: String(searchParams.upstreamRequestId) }
       : {}),
     ...buildTimeRangeParams(searchParams, false),
@@ -206,8 +199,16 @@ export function buildApiParams(config: {
 export async function fetchLogsByCategory(
   config: FetchLogsConfig
 ): Promise<GetLogsResponse> {
-  const { logCategory, isAdmin, page, pageSize, searchParams, columnFilters } =
-    config
+  const {
+    logCategory,
+    isAdmin,
+    page,
+    pageSize,
+    searchParams,
+    columnFilters,
+    signal,
+    scope,
+  } = config
 
   if (logCategory === 'common') {
     const params = buildApiParams({
@@ -217,7 +218,16 @@ export async function fetchLogsByCategory(
       columnFilters,
       isAdmin,
     })
-    return isAdmin ? await getAllLogs(params) : await getUserLogs(params)
+    return {
+      success: true,
+      data: await readLogsPage({
+        category: logCategory,
+        params,
+        isAdmin,
+        signal,
+        scope,
+      }),
+    }
   }
 
   const paramsWithFilter = buildAsyncLogParams({
@@ -228,14 +238,14 @@ export async function fetchLogsByCategory(
     searchParams,
   })
 
-  if (logCategory === 'drawing') {
-    return isAdmin
-      ? await getAllMidjourneyLogs(paramsWithFilter)
-      : await getUserMidjourneyLogs(paramsWithFilter)
+  return {
+    success: true,
+    data: await readLogsPage({
+      category: logCategory,
+      params: paramsWithFilter,
+      isAdmin,
+      signal,
+      scope,
+    }),
   }
-
-  // task logs
-  return isAdmin
-    ? await getAllTaskLogs(paramsWithFilter)
-    : await getUserTaskLogs(paramsWithFilter)
 }

@@ -82,13 +82,13 @@ const DEVELOPER_SECTIONS = [
   {
     id: 'pricing-api',
     title: 'Pricing API',
-    summary: 'Read public prices and the account catalog from your backend.',
+    summary: 'Read public prices or the catalog for your current Session.',
     anchors: ['#pricing-api'],
   },
   {
     id: 'oauth-integration',
     title: 'OAuth integration',
-    summary: 'Register a native client and connect with PKCE (S256).',
+    summary: 'Connect an approved native client with PKCE (S256).',
     anchors: ['#oauth-integration'],
   },
 ] as const
@@ -233,7 +233,7 @@ export const publicSiteTools: WebMcpToolFactory = ({ router }) => [
             step: 3,
             action: 'Create an API key, or skip it with OAuth',
             path: '/keys',
-            note: 'Clients that support IAM OAuth need no manual key.',
+            note: 'Server-enabled OAuth clients may use their approved model endpoints without a manual key.',
           },
           {
             step: 4,
@@ -315,8 +315,13 @@ export const publicSiteTools: WebMcpToolFactory = ({ router }) => [
           },
           {
             method: 'GET',
-            path: '/api/pricing',
+            path: '/core/v1/pricing/public',
             purpose: 'Public model prices',
+          },
+          {
+            method: 'GET',
+            path: '/core/v1/pricing/session',
+            purpose: 'Model prices visible to the current browser Session',
           },
           {
             method: 'GET',
@@ -346,6 +351,8 @@ export const publicSiteTools: WebMcpToolFactory = ({ router }) => [
         ],
         oauth: {
           flow: 'Authorization Code with PKCE (S256)',
+          clients:
+            'Use only clients advertised by discovery: lmm and optionally enabled lmm-pi.',
           openid_connect: false,
           limitation:
             'No userinfo endpoint, ID token or public client registration.',
@@ -416,9 +423,9 @@ export const publicSiteTools: WebMcpToolFactory = ({ router }) => [
           'Create an API key',
           'Complete your first request',
         ],
-        oauth_clients: ['Pi', 'DSH Desktop'],
+        oauth_clients: ['lmm', 'lmm-pi (when enabled)'],
         oauth_note:
-          'Pi and DSH use browser authorization; no manual key is pasted.',
+          'Use discovery to check enabled native clients. The read-only lmm profile cannot invoke models; Pi requires its own enabled profile and finite budget.',
         troubleshooting: [
           {
             code: '401',

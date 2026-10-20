@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 // ----------------------------------------------------------------------------
 // Pricing Types
 // ----------------------------------------------------------------------------
+import type { NativeImageVariant } from './catalog-contract'
 
 export type PricingVendor = {
   id: number
@@ -46,6 +47,13 @@ export type ModelRuntimeState = {
 }
 
 export type PricingModel = {
+  /** Core rates already include group factors. Never apply them a second time. */
+  group_prices?: Record<string, PricingGroupPrices>
+  group_endpoints?: Record<string, string[]>
+  group_quota_types?: Record<string, 0 | 2>
+  /** Native image quotes retain integer ratios and are never token prices. */
+  image_variants?: PricingImageVariant[]
+  performance_available?: boolean
   pricing_schema_version?: number
   pricing_currency?: string
   /** Canonical real USD per 1M usage tokens; ratios remain billing metadata. */
@@ -66,8 +74,8 @@ export type PricingModel = {
   vendor_icon?: string
   vendor_description?: string
   quota_type: number
-  model_ratio: number
-  completion_ratio: number
+  model_ratio?: number
+  completion_ratio?: number
   model_price?: number
   cache_ratio?: number | null
   create_cache_ratio?: number | null
@@ -99,6 +107,22 @@ export type PricingModel = {
   capabilities?: ModelCapability[]
 }
 
+export type PricingGroupPrices = {
+  input_price: number | null
+  output_price: number | null
+  cache_read_price: number | null
+  cache_write_price: number | null
+  image_price: number | null
+  audio_input_price: number | null
+  audio_output_price: number | null
+  model_price: number | null
+}
+
+export type PricingImageVariant = NativeImageVariant & {
+  group: string
+  model: string
+}
+
 /** Input/output modalities supported by a model. */
 export type Modality = 'text' | 'image' | 'audio' | 'video' | 'file'
 
@@ -118,6 +142,8 @@ export type ModelCapability =
   | 'embeddings'
 
 export type PricingData = {
+  runtime_available?: boolean
+  performance_available?: boolean
   pricing_schema_version?: number
   pricing_currency?: string
   credits_per_usd?: number
@@ -128,7 +154,7 @@ export type PricingData = {
   vendors: PricingVendor[]
   group_ratio: Record<string, number>
   usable_group: Record<string, { desc: string; ratio: number }>
-  supported_endpoint: Record<string, string>
+  supported_endpoint: Record<string, { path: string; method: string }>
   auto_groups: string[]
 }
 

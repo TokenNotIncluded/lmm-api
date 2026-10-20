@@ -21,12 +21,14 @@ import { useMemo } from 'react'
 
 import { useStatus } from '@/hooks/use-status'
 import { useWalletCurrency } from '@/hooks/use-wallet-currency'
+import { useAuthStore } from '@/stores/auth-store'
 
-import { getPricing } from '../api'
+import { getPricing, pricingQueryKey } from '../api'
 import { useModelRuntime } from './use-model-runtime'
 
 export function usePricingData(options?: { enabled?: boolean }) {
   useStatus()
+  const { user, session } = useAuthStore((state) => state.auth)
   const {
     currency: displayCurrency,
     setPreference: setDisplayCurrency,
@@ -34,10 +36,11 @@ export function usePricingData(options?: { enabled?: boolean }) {
   } = useWalletCurrency()
 
   const { data, isLoading, error, refetch } = useQuery({
-    queryKey: ['pricing'],
+    queryKey: pricingQueryKey(user?.id, session?.sid),
     queryFn: ({ signal }) => getPricing(signal),
     enabled: options?.enabled ?? true,
     staleTime: 5 * 60 * 1000,
+    retry: false,
   })
 
   const models = useMemo(() => {
@@ -62,13 +65,13 @@ export function usePricingData(options?: { enabled?: boolean }) {
 
   const runtime = useModelRuntime(
     models.map((model) => model.model_name),
-    options?.enabled ?? true
+    (options?.enabled ?? true) && data?.runtime_available === true
   )
   const liveModels = useMemo(
     () =>
       models.map((model) => ({
         ...model,
-        runtime_state: runtime[model.model_name],
+        runtime_state: runtime[model.model_name] ?? model.runtime_state,
       })),
     [models, runtime]
   )
@@ -79,6 +82,8 @@ export function usePricingData(options?: { enabled?: boolean }) {
     usableGroup: data?.usable_group ?? {},
     endpointMap: data?.supported_endpoint ?? {},
     autoGroups: data?.auto_groups ?? [],
+    performanceAvailable: data?.performance_available === true,
+    runtimeAvailable: data?.runtime_available === true,
     isLoading,
     error,
     refetch,

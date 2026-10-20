@@ -103,10 +103,14 @@ export function ModelDetailsPerformance(props: { model: PricingModel }) {
     queryKey: ['perf-metrics', props.model.model_name],
     queryFn: () => getPerfMetrics(props.model.model_name, 24),
     staleTime: 60 * 1000,
+    enabled: props.model.performance_available !== false,
   })
   const groups = useMemo(
-    () => metricsQuery.data?.data.groups ?? [],
-    [metricsQuery.data]
+    () =>
+      props.model.performance_available === false
+        ? []
+        : (metricsQuery.data?.data.groups ?? []),
+    [metricsQuery.data, props.model.performance_available]
   )
   const performances = useMemo<PerformanceRow[]>(
     () =>

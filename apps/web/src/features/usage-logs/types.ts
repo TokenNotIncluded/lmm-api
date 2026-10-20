@@ -21,7 +21,8 @@ For commercial licensing, please contact support@quantumnous.com
  */
 import type { RequestRuleTrace } from '@/features/pricing/lib/billing-expr'
 
-import type { UsageLog } from './data/schema'
+import type { LogsPage } from './lib/history-response'
+import type { UsageStatisticsScope } from './lib/statistics'
 
 // ============================================================================
 // Log Category Types
@@ -382,12 +383,7 @@ export interface GetLogsParams {
 export interface GetLogsResponse {
   success: boolean
   message?: string
-  data?: {
-    items: UsageLog[] | MidjourneyLog[] | TaskLog[]
-    total: number
-    page: number
-    page_size: number
-  }
+  data?: LogsPage
 }
 
 export interface GetLogStatsParams {
@@ -454,6 +450,8 @@ export interface FetchLogsConfig {
   pageSize: number
   searchParams: Record<string, unknown>
   columnFilters: Array<{ id: string; value: unknown }>
+  signal?: AbortSignal
+  scope?: UsageStatisticsScope
 }
 
 // ============================================================================

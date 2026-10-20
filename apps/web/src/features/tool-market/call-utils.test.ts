@@ -14,6 +14,8 @@ import {
 
 const pending: CallResponse = {
   call: {
+    user_id: 1,
+    grant_id: 'grant',
     id: 'one',
     service_id: 'service',
     tool_id: 'tool',

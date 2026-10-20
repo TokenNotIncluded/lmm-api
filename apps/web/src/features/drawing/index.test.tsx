@@ -1,8 +1,10 @@
 /*
 Copyright (C) 2026 LIghtJUNction
 */
+// @ts-expect-error Bun provides this module only in the test runtime.
+import { mock, spyOn } from 'bun:test'
 import assert from 'node:assert/strict'
-import { after, afterEach, beforeEach, describe, test } from 'node:test'
+import { after, afterEach, beforeEach, test } from 'node:test'
 
 import { IDBFactory } from 'fake-indexeddb'
 import { Window } from 'happy-dom'
@@ -78,6 +80,8 @@ const { createInstance } = await import('i18next')
 const { I18nextProvider, initReactI18next } = await import('react-i18next')
 const { api } = await import('@/lib/api')
 const { Drawing } = await import('./index')
+const { marketAPI } = await import('../tool-market/api')
+const { readDrawingOperation } = await import('./native-operation')
 const { useAuthStore } = await import('@/stores/auth-store')
 const { createDrawingHistoryStore } = await import('./history-storage')
 const { resetDrawingTaskState } = await import('./drawing-task-state')
@@ -99,44 +103,8 @@ await i18n.use(initReactI18next).init({
   resources: { en: { translation: {} } },
 })
 
-const pricing = {
-  success: true,
-  data: [
-    {
-      id: 1,
-      model_name: 'image-2',
-      quota_type: 1 as const,
-      model_ratio: 1,
-      completion_ratio: 1,
-      enable_groups: ['mobile-image-group'],
-      supported_endpoint_types: ['image-generation'],
-    },
-  ],
-  vendors: [],
-  group_ratio: {},
-  usable_group: {
-    'mobile-image-group': {
-      desc: 'A long routing description that must stay inside a 390 pixel mobile control.',
-      ratio: 1,
-    },
-  },
-  supported_endpoint: {},
-  auto_groups: [],
-}
-
 async function flushEffects() {
   await new Promise((resolve) => setTimeout(resolve, 20))
-}
-
-async function waitForCondition(
-  condition: () => boolean,
-  failureMessage: string
-) {
-  for (let attempt = 0; attempt < 80; attempt += 1) {
-    if (condition()) return
-    await flushEffects()
-  }
-  throw new Error(failureMessage)
 }
 
 // Finish each act before checking the DOM: a single outer act can defer React's
@@ -176,30 +144,6 @@ async function renderDrawing() {
     history: createMemoryHistory({ initialEntries: ['/'] }),
   })
   await router.load()
-  const get = api.get
-  api.get = (async (url: string, config?: Parameters<typeof api.get>[1]) => {
-    if (url === '/api/user/self') {
-      return { data: { success: true, data: { quota: 5000000 } } }
-    }
-    const response = await get(url, config)
-    if (
-      url === '/api/assistant/status' &&
-      response.data?.success &&
-      !Object.hasOwn(response.data.data ?? {}, 'drawing_web_access')
-    ) {
-      response.data.data = {
-        ...response.data.data,
-        drawing_web_access: {
-          minimum_balance_usd: 10,
-          minimum_balance_credit: 35_000_000,
-          balance_credit: 35_000_000,
-          balance_usd: 10,
-          allowed: true,
-        },
-      }
-    }
-    return response
-  }) as typeof api.get
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -249,6 +193,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  mock.restore()
   useSystemConfigStore.getState().setConfig({ currency: originalCurrency })
   resetDrawingTaskState()
   globalThis.fetch = originalFetch
@@ -261,965 +206,491 @@ afterEach(() => {
 
 after(() => domWindow.close())
 
-describe('Drawing mobile controls', () => {
-  test('keeps every native select full width with long group descriptions', async () => {
-    api.get = (async (url: string) => {
-      if (url === '/api/assistant/status') {
-        return {
-          data: {
-            success: true,
-            data: {
-              enabled: true,
-              model: 'assistant-test',
-              developer_access_granted: true,
-              funding: { mode: 'super_administrator' },
-            },
+const toolID = '23ff32df-37fb-5105-9063-db1228dd3d3b'
+const versionID = '37ff72e9-6f8e-5e34-a8e1-988253f20d27'
+const callID = 'b'.repeat(64)
+const grantID = 'd9c5ced2-a44e-4f2c-9519-c49f71bbbc6a'
+const digest = 'a'.repeat(64)
+const imageID = `image:${digest}`
+const previewExpiresAt = Math.floor(Date.now() / 1000) + 100
+const nativePricing = {
+  schema_version: 1,
+  visibility: 'session',
+  observed_at: 1,
+  credits_per_usd: 500000,
+  rate_basis: 'effective_group_rate',
+  invocation_authorized: false,
+  routing_version: 1,
+  pricing_version: 1,
+  image_pricing_version: 1,
+  groups: ['mobile-image-group'],
+  models: [
+    {
+      id: 'images',
+      model: 'image-2',
+      group: 'mobile-image-group',
+      apis: ['openai-images-generations', 'openai-images-edits'],
+      billing_status: 'configured',
+      token_price: null,
+      image_variants: ['generations', 'edits'].map((endpoint) => ({
+        endpoint,
+        size: '1024x1024',
+        quality: 'standard',
+        max_n: 2,
+        count_basis: 'requested',
+        usd_micros_per_image: { numerator: '10', denominator: '1' },
+        credits_per_image: { numerator: '5', denominator: '1' },
+        reservation_credits_for_one: 5,
+        rounding: 'ceil_total_credits',
+        pricing_version: 1,
+      })),
+    },
+  ],
+}
+const tool = {
+  tool_id: toolID,
+  version_id: versionID,
+  name: 'drawing.generate',
+  description: 'Draw',
+  input_schema: '{}',
+  output_schema: '{}',
+  permissions: '[]',
+  price_quota: 0,
+}
+const pendingReceipt = () => ({
+  call: {
+    id: callID,
+    user_id: 1,
+    grant_id: grantID,
+    tool_id: toolID,
+    version_id: versionID,
+    client_id: 'web-market',
+    execution_status: 'awaiting_confirmation',
+    settlement_status: 'reserved',
+    created_at: 1,
+    resolve_by: 2000000000,
+  },
+  result_expired: false,
+  request_state: digest,
+  awaiting_confirmation: true,
+  result: {
+    isError: false,
+    structuredContent: {
+      confirmation_url: `https://console.example.test/core/v1/images/confirm/${imageID}`,
+      billing_pending: true,
+      preview: { expires_at: previewExpiresAt },
+    },
+  },
+})
+const settledReceipt = () => ({
+  ...pendingReceipt(),
+  call: {
+    ...pendingReceipt().call,
+    execution_status: 'succeeded',
+    settlement_status: 'settled',
+  },
+  awaiting_confirmation: false,
+  result: {
+    isError: false,
+    structuredContent: {
+      operation_id: imageID,
+      state: 'completed',
+      charged_credits: 5,
+      billing_pending: false,
+      output: {
+        data: [
+          {
+            b64_json:
+              'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+y3m8AAAAASUVORK5CYII=',
           },
-        }
-      }
-      if (url === '/api/pricing') return { data: pricing }
-      if (url === '/api/user/self/groups') {
-        return {
-          data: {
-            success: true,
-            data: pricing.usable_group,
-          },
-        }
-      }
-      throw new Error(`unexpected GET ${url}`)
-    }) as typeof api.get
-
-    const rendered = await renderDrawing()
-    try {
-      await act(
-        async () =>
-          await waitForCondition(
-            () => rendered.container.querySelectorAll('select').length === 5,
-            'drawing controls did not render'
-          )
-      )
-
-      const selects = rendered.container.querySelectorAll('select')
-      assert.equal(selects.length, 5)
-      for (const select of selects) {
-        const wrapper = select.closest<HTMLElement>(
-          '[data-slot="native-select-wrapper"]'
-        )
-        assert.ok(wrapper)
-        assert.match(wrapper.className, /\bw-full\b/)
-        assert.doesNotMatch(wrapper.className, /\bw-fit\b/)
-        assert.match(select.className, /\bh-11\b/)
-        assert.match(select.className, /\bsm:h-8\b/)
-      }
-
-      const composer = rendered.container.querySelector(
-        '[data-slot="drawing-composer"]'
-      )
-      const inspector = rendered.container.querySelector(
-        '[data-slot="drawing-inspector"]'
-      )
-      assert.ok(composer)
-      assert.ok(inspector)
-      assert.ok(composer.querySelector('#drawing-reference-images'))
-      assert.match(composer.textContent ?? '', /Generate image/)
-      assert.doesNotMatch(inspector.textContent ?? '', /Generate image/)
-      assert.doesNotMatch(
-        rendered.container.innerHTML,
-        /radial-gradient\(circle/
-      )
-    } finally {
-      await act(async () => rendered.root.unmount())
-      rendered.queryClient.clear()
-    }
-  })
-
-  test('links agent setup to the tool market without loading legacy MCP settings', async () => {
-    const reads: string[] = []
-    api.get = (async (url: string) => {
-      reads.push(url)
-      if (url === '/api/assistant/status') {
-        return {
-          data: {
-            success: true,
-            data: {
-              enabled: true,
-              model: 'assistant-test',
-              developer_access_granted: true,
-              funding: { mode: 'super_administrator' },
-            },
-          },
-        }
-      }
-      if (url === '/api/pricing') return { data: pricing }
-      if (url === '/api/user/self/groups') {
-        return {
-          data: {
-            success: true,
-            data: pricing.usable_group,
-          },
-        }
-      }
-      throw new Error(`unexpected GET ${url}`)
-    }) as typeof api.get
-
-    const rendered = await renderDrawing()
-    try {
-      await act(
-        async () =>
-          await waitForCondition(
-            () => rendered.container.querySelectorAll('select').length === 5,
-            'drawing controls did not render'
-          )
-      )
-
-      assert.equal(
-        rendered.container.querySelector('#drawing-mcp-endpoint'),
-        null
-      )
-      assert.equal(rendered.container.querySelector('#drawing-mcp-panel'), null)
-      const toolMarket = rendered.container.querySelector(
-        'a[href="/tool-market"]'
-      )
-      assert.ok(toolMarket)
-      assert.equal(toolMarket.textContent?.trim(), 'Tool market')
-      assert.equal(
-        reads.some((url) => url.startsWith('/api/drawing/mcp-')),
-        false
-      )
-    } finally {
-      await act(async () => rendered.root.unmount())
-      rendered.queryClient.clear()
-    }
-  })
-
-  test('surfaces an error and keeps generation available when no preview is usable', async () => {
-    api.get = (async (url: string) => {
-      if (url === '/api/assistant/status') {
-        return {
-          data: {
-            success: true,
-            data: {
-              enabled: true,
-              model: 'assistant-test',
-              developer_access_granted: true,
-              funding: { mode: 'super_administrator' },
-            },
-          },
-        }
-      }
-      if (url === '/api/pricing') return { data: pricing }
-      if (url === '/api/user/self/groups') {
-        return {
-          data: {
-            success: true,
-            data: pricing.usable_group,
-          },
-        }
-      }
-      throw new Error(`unexpected GET ${url}`)
-    }) as typeof api.get
-    let postCalls = 0
-    api.post = (async (url: string) => {
-      postCalls += 1
-      assert.equal(url, '/pg/images/generations?group=mobile-image-group')
-      return {
-        data: {
-          data: [{ url: '  ', b64_json: '\n', revised_prompt: 'No source' }],
-        },
-      }
-    }) as typeof api.post
-
-    const rendered = await renderDrawing()
-    try {
-      await act(
-        async () =>
-          await waitForCondition(
-            () => rendered.container.querySelectorAll('select').length === 5,
-            'drawing controls did not render'
-          )
-      )
-      const textarea = rendered.container.querySelector('textarea')
-      assert.ok(textarea)
-      await setTextareaValue(textarea, 'A quiet mountain lake at sunrise')
-
-      const generateButton = [
-        ...rendered.container.querySelectorAll('button'),
-      ].find((button) => button.textContent?.includes('Generate image'))
-      assert.ok(generateButton)
-      assert.equal(generateButton.disabled, false)
-      await act(async () => {
-        generateButton.click()
-        await flushEffects()
-      })
-
-      assert.equal(postCalls, 1)
-      assert.match(
-        rendered.container.textContent ?? '',
-        /No images were returned/
-      )
-      assert.equal(rendered.container.querySelectorAll('figure').length, 0)
-      assert.ok(generateButton.disabled === false)
-    } finally {
-      await act(async () => rendered.root.unmount())
-      rendered.queryClient.clear()
-    }
-  })
+        ],
+      },
+    },
+  },
 })
 
-describe('Drawing generation failures', () => {
-  const cases = [
+function setupNative() {
+  spyOn(api, 'get').mockImplementation(async (url: string) => {
+    assert.equal(url, '/core/v1/pricing/session')
+    return { data: nativePricing }
+  })
+  spyOn(marketAPI, 'list').mockResolvedValue([
     {
-      name: 'shows the relay detail as text when generation returns 503',
-      reject: true,
-      response: {
-        status: 503,
+      id: 'drawing',
+      owner_id: 1,
+      version_id: versionID,
+      name: 'Drawing',
+      description: 'Draw',
+      execution_type: 'builtin',
+    },
+  ])
+  spyOn(marketAPI, 'detail').mockResolvedValue({
+    service: {
+      id: 'drawing',
+      owner_id: 1,
+      live_version_id: versionID,
+      draft_version_id: '',
+      status: 'published',
+      created_at: 1,
+    },
+    version: {
+      id: versionID,
+      name: 'Drawing',
+      description: 'Draw',
+      endpoint: '',
+      execution_type: 'builtin',
+      visibility: 'public',
+      status: 'published',
+      review_note: '',
+    },
+    tools: [tool],
+    pricing: 'free',
+    validated: true,
+  })
+  spyOn(marketAPI, 'grant').mockResolvedValue({
+    id: grantID,
+    client_id: 'web-market',
+    tool_id: toolID,
+    version_id: versionID,
+    max_price_quota: 0,
+    max_total_quota: 0,
+    max_calls: 1,
+    reserved_quota: 0,
+    spent_quota: 0,
+    successful_calls: 0,
+    reserved_calls: 0,
+    expires_at: 2000000000,
+    revoked_at: 0,
+  })
+  spyOn(marketAPI, 'install').mockResolvedValue(null)
+  const invoke = spyOn(marketAPI, 'invoke').mockResolvedValue(pendingReceipt())
+  const query = spyOn(marketAPI, 'result').mockResolvedValue(pendingReceipt())
+  const lookup = spyOn(marketAPI, 'lookupRequest', async () => pendingReceipt())
+  const resume = spyOn(marketAPI, 'resume').mockResolvedValue(settledReceipt())
+  return { invoke, query, lookup, resume }
+}
+
+function button(container: HTMLElement, label: string): HTMLButtonElement {
+  const found = Array.from(container.querySelectorAll('button')).find((item) =>
+    item.textContent?.includes(label)
+  )
+  assert.ok(found, `missing button ${label}`)
+  return found
+}
+async function ready(rendered: Awaited<ReturnType<typeof renderDrawing>>) {
+  await waitForDrawingState(
+    () => !!rendered.container.querySelector('textarea'),
+    'image model controls did not load'
+  )
+}
+async function submit(rendered: Awaited<ReturnType<typeof renderDrawing>>) {
+  const textarea = rendered.container.querySelector('textarea')
+  assert.ok(textarea)
+  await setTextareaValue(textarea, 'A mountain lake')
+  await act(async () => button(rendered.container, 'Generate image').click())
+  await waitForDrawingState(
+    () => !!readDrawingOperation(1)?.callId,
+    'preview receipt not saved'
+  )
+}
+async function dispose(rendered: Awaited<ReturnType<typeof renderDrawing>>) {
+  await act(async () => rendered.root.unmount())
+  rendered.queryClient.clear()
+}
+
+test('uses the native session catalog and preserves full width controls and explicit Keys links', async () => {
+  setupNative()
+  const rendered = await renderDrawing()
+  try {
+    await ready(rendered)
+    const selects = rendered.container.querySelectorAll('select')
+    assert.equal(selects.length, 5)
+    for (const select of selects) {
+      assert.match(
+        select.closest('[data-slot="native-select-wrapper"]')?.className ?? '',
+        /w-full/
+      )
+    }
+    assert.deepEqual(
+      Array.from(
+        rendered.container.querySelectorAll('#drawing-count option')
+      ).map((option) => option.getAttribute('value')),
+      ['1', '2']
+    )
+    const keys = Array.from(rendered.container.querySelectorAll('a')).filter(
+      (link) => link.getAttribute('href') === '/keys'
+    )
+    assert.ok(keys.length > 0)
+    assert.match(
+      rendered.container.textContent ?? '',
+      /Review and confirm the image price/
+    )
+  } finally {
+    await dispose(rendered)
+  }
+})
+
+test('preview does not execute: links Core confirmation and resumes the original identity only after an explicit action', async () => {
+  const calls = setupNative()
+  const rendered = await renderDrawing()
+  try {
+    await ready(rendered)
+    await submit(rendered)
+    assert.equal(calls.invoke.mock.calls.length, 1)
+    assert.equal(calls.resume.mock.calls.length, 0)
+    assert.equal(button(rendered.container, 'Generate image').disabled, true)
+    assert.equal(
+      rendered.container
+        .querySelector('a[href*="/core/v1/images/confirm/"]')
+        ?.getAttribute('target'),
+      '_blank'
+    )
+    await act(async () =>
+      button(rendered.container, 'Check the original request').click()
+    )
+    assert.equal(calls.query.mock.calls.length, 1)
+    assert.equal(calls.resume.mock.calls.length, 0)
+    await act(async () =>
+      button(rendered.container, 'Continue the original request').click()
+    )
+    await waitForDrawingState(
+      () => readDrawingOperation(1) === null,
+      'settled result not consumed'
+    )
+    assert.equal(calls.resume.mock.calls.length, 1)
+    assert.equal(calls.invoke.mock.calls.length, 1)
+    assert.deepEqual(calls.resume.mock.calls[0], [
+      callID,
+      { request_state: digest },
+    ])
+  } finally {
+    await dispose(rendered)
+  }
+})
+
+test('lost preview acknowledgement survives remount and queries the same request without invoking again', async () => {
+  const calls = setupNative()
+  calls.invoke.mockImplementation(async () => {
+    throw new Error('Connection lost')
+  })
+  let rendered = await renderDrawing()
+  try {
+    await ready(rendered)
+    const textarea = rendered.container.querySelector('textarea')
+    assert.ok(textarea)
+    await setTextareaValue(textarea, 'A mountain lake')
+    await act(async () => button(rendered.container, 'Generate image').click())
+    await waitForDrawingState(
+      () => !!readDrawingOperation(1),
+      'original operation missing'
+    )
+    const requestID = readDrawingOperation(1)?.requestId
+    await dispose(rendered)
+    rendered = await renderDrawing()
+    await ready(rendered)
+    assert.equal(button(rendered.container, 'Generate image').disabled, true)
+    await act(async () =>
+      button(rendered.container, 'Check the original request').click()
+    )
+    assert.equal(calls.invoke.mock.calls.length, 1)
+    assert.deepEqual(calls.lookup.mock.calls[0], [requestID])
+    assert.equal(calls.resume.mock.calls.length, 0)
+  } finally {
+    await dispose(rendered)
+  }
+})
+
+test('UNKNOWN keeps the original request locked with query as the only action', async () => {
+  const calls = setupNative()
+  calls.query.mockImplementation(async () => ({
+    ...pendingReceipt(),
+    call: { ...pendingReceipt().call, execution_status: 'unknown' },
+  }))
+  const rendered = await renderDrawing()
+  try {
+    await ready(rendered)
+    await submit(rendered)
+    const requestID = readDrawingOperation(1)?.requestId
+    await act(async () =>
+      button(rendered.container, 'Check the original request').click()
+    )
+    assert.equal(readDrawingOperation(1)?.requestId, requestID)
+    assert.equal(button(rendered.container, 'Generate image').disabled, true)
+    assert.equal(calls.invoke.mock.calls.length, 1)
+    assert.equal(
+      Array.from(rendered.container.querySelectorAll('button')).some((item) =>
+        item.textContent?.includes('Continue the original request')
+      ),
+      false
+    )
+    assert.equal(calls.resume.mock.calls.length, 0)
+  } finally {
+    await dispose(rendered)
+  }
+})
+
+test('a mismatched receipt cannot unlock the original request or write history', async () => {
+  const calls = setupNative()
+  calls.resume.mockImplementation(async () => ({
+    ...settledReceipt(),
+    call: { ...settledReceipt().call, grant_id: 'different' },
+  }))
+  const rendered = await renderDrawing()
+  try {
+    await ready(rendered)
+    await submit(rendered)
+    await act(async () =>
+      button(rendered.container, 'Continue the original request').click()
+    )
+    assert.ok(readDrawingOperation(1))
+    const history = createDrawingHistoryStore()
+    assert.equal((await history.load(1)).images.length, 0)
+    assert.equal(calls.invoke.mock.calls.length, 1)
+  } finally {
+    await dispose(rendered)
+  }
+})
+
+test('reference edits send ordered bytes and their frozen metadata through the same market preview flow', async () => {
+  const calls = setupNative()
+  let submitted: FormData | undefined
+  spyOn(api, 'post').mockImplementation(async (url: string, body: FormData) => {
+    assert.equal(url, '/api/tool-market/drawing/invoke')
+    submitted = body
+    return {
+      status: 409,
+      data: {
+        success: false,
+        message: 'Pending',
+        code: 'TOOL_MARKET_EXECUTION_PENDING',
         data: {
-          error: {
-            message:
-              'No available channel for <image-2> (request id: request-123)',
-          },
+          ...pendingReceipt(),
+          error_code: 'TOOL_MARKET_EXECUTION_PENDING',
         },
       },
-      expected: 'No available channel for <image-2> (request id: request-123)',
-    },
-    {
-      name: 'uses a readable fallback for an HTML gateway outage',
-      reject: true,
-      response: { status: 503, data: '<html>Service Unavailable</html>' },
-      expected: 'Please try again later.',
-    },
-    {
-      name: 'explains network failures without exposing the Axios message',
-      reject: true,
-      response: undefined,
-      expected: 'Network connection failed or server not responding',
-    },
-    {
-      name: 'retains business error details from successful HTTP responses',
-      reject: false,
-      response: { status: 200, data: { message: 'Image quota exhausted' } },
-      expected: 'Image quota exhausted',
-    },
-    {
-      name: 'handles an empty successful response without a JavaScript error',
-      reject: false,
-      response: { status: 200, data: null },
-      expected: 'Unable to generate the image',
-    },
-  ]
-
-  for (const scenario of cases) {
-    test(scenario.name, async () => {
-      api.get = (async (url: string) => {
-        if (url === '/api/assistant/status') {
-          return {
-            data: {
-              success: true,
-              data: { developer_access_granted: true },
-            },
-          }
-        }
-        if (url === '/api/pricing') return { data: pricing }
-        if (url === '/api/user/self/groups') {
-          return {
-            data: {
-              success: true,
-              data: {
-                ...pricing.usable_group,
-                'mobile-image-group': {
-                  ...pricing.usable_group['mobile-image-group'],
-                  warning: {
-                    enabled: true,
-                    message: 'Confirm this drawing group.',
-                    mode: 'modal',
-                    confirmations: 2,
-                  },
-                },
-              },
-            },
-          }
-        }
-        throw new Error(`unexpected GET ${url}`)
-      }) as typeof api.get
-      let postCalls = 0
-      api.post = (async () => {
-        postCalls += 1
-        if (scenario.reject) {
-          throw Object.assign(
-            new Error('Request failed with status code 503'),
-            {
-              response: scenario.response,
-            }
-          )
-        }
-        return scenario.response
-      }) as typeof api.post
-
-      const rendered = await renderDrawing()
-      try {
-        await act(
-          async () =>
-            await waitForCondition(
-              () => rendered.container.querySelectorAll('select').length === 5,
-              'drawing controls did not render'
-            )
-        )
-        const textarea = rendered.container.querySelector('textarea')
-        assert.ok(textarea)
-        await setTextareaValue(textarea, 'A quiet mountain lake at sunrise')
-        const generateButton = [
-          ...rendered.container.querySelectorAll('button'),
-        ].find((button) => button.textContent?.includes('Generate image'))
-        assert.ok(generateButton)
-        assert.equal(generateButton.disabled, false)
-
-        await act(async () => {
-          generateButton.click()
-          await flushEffects()
-        })
-
-        assert.equal(
-          postCalls,
-          1,
-          'paid generation must not retry automatically'
-        )
-        assert.ok(rendered.container.textContent?.includes(scenario.expected))
-        assert.doesNotMatch(
-          rendered.container.textContent ?? '',
-          /Request failed with status code|Cannot read properties/
-        )
-        assert.equal(rendered.container.querySelector('image-2'), null)
-        assert.equal(textarea.value, 'A quiet mountain lake at sunrise')
-        assert.equal(generateButton.disabled, false)
-      } finally {
-        await act(async () => rendered.root.unmount())
-        rendered.queryClient.clear()
-      }
+    }
+  })
+  const rendered = await renderDrawing()
+  try {
+    await ready(rendered)
+    const input = rendered.container.querySelector('#drawing-reference-images')
+    assert.ok(input)
+    const reference = new File(['abc'], 'reference.png', { type: 'image/png' })
+    Object.defineProperty(input, 'files', {
+      configurable: true,
+      value: [reference],
     })
+    await act(async () =>
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+    )
+    const textarea = rendered.container.querySelector('textarea')
+    assert.ok(textarea)
+    await setTextareaValue(textarea, 'Repaint the reference')
+    await act(async () => button(rendered.container, 'Edit image').click())
+    await waitForDrawingState(
+      () => !!readDrawingOperation(1)?.callId,
+      'edit preview did not preserve operation'
+    )
+    assert.ok(submitted)
+    const request = submitted.get('request')
+    assert.equal(typeof request, 'string')
+    assert.ok(typeof request === 'string')
+    assert.deepEqual(JSON.parse(request).arguments.reference_images, [
+      {
+        media_type: 'image/png',
+        byte_length: 3,
+        sha256:
+          'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+      },
+    ])
+    assert.equal(submitted.getAll('images').length, 1)
+    assert.equal(calls.invoke.mock.calls.length, 0)
+    assert.equal(calls.resume.mock.calls.length, 0)
+  } finally {
+    await dispose(rendered)
   }
 })
 
-function mockWorkbench(
-  balance: () => number | null,
-  modelName = 'image-2',
-  minimumCredit = 35_000_000
-) {
-  let statusReads = 0
-  api.get = (async (url: string) => {
-    if (url === '/api/assistant/status') {
-      statusReads++
-      const current = balance()
-      return {
-        data: {
-          success: true,
-          data: {
-            developer_access_granted: true,
-            drawing_web_access: {
-              minimum_balance_usd: minimumCredit / 500_000,
-              minimum_balance_credit: minimumCredit,
-              balance_credit: current === null ? null : Math.round(current),
-              balance_usd: current === null ? null : current / 500_000,
-              allowed: current !== null && Math.round(current) >= minimumCredit,
-            },
-          },
-        },
-      }
-    }
-    if (url === '/api/pricing') {
-      return {
-        data: {
-          ...pricing,
-          data: pricing.data.map((model) => ({
-            ...model,
-            model_name: modelName,
-          })),
-        },
-      }
-    }
-    if (url === '/api/user/self/groups') {
-      return { data: { success: true, data: pricing.usable_group } }
-    }
-    throw new Error(`Unexpected GET ${url}`)
-  }) as typeof api.get
-  return () => statusReads
-}
-
-function button(container: HTMLElement, text: string) {
-  const target = [...container.querySelectorAll('button')].find((entry) =>
-    entry.textContent?.includes(text)
-  )
-  assert.ok(target, `Missing button: ${text}`)
-  return target
-}
-
-async function promptDrawing(container: HTMLElement) {
-  const input = container.querySelector<HTMLTextAreaElement>(
-    '#drawing-prompt-input'
-  )
-  assert.ok(input)
-  await setTextareaValue(input, 'A stored painting')
-}
-
-const png =
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6aQAAAABJRU5ErkJggg=='
-
-describe('Drawing balance and browser history', () => {
-  test('displays the preserved 5m Credit floor across live CNY, USD and Credit preferences', async () => {
-    mockWorkbench(() => 3_500_000, 'image-2', 5_000_000)
-    const rendered = await renderDrawing()
-    const alertText = () =>
-      rendered.container.querySelector('[data-slot="drawing-web-access"]')
-        ?.textContent ?? ''
-    try {
-      assert.match(alertText(), /minimum balance of 10 USD/)
-      assert.match(alertText(), /Current balance: 7 USD/)
-      await act(async () => {
-        await i18n.changeLanguage('zhCN')
-      })
-      assert.match(alertText(), /minimum balance of 70 CNY/)
-      assert.match(alertText(), /Current balance: 49 CNY/)
-      await act(async () => {
-        const currency = useSystemConfigStore.getState().config.currency
-        useSystemConfigStore.getState().setConfig({
-          currency: { ...currency, cnyPerUsd: 8, cnyPerUsdExact: '8' },
-        })
-      })
-      assert.match(alertText(), /minimum balance of 80 CNY/)
-      assert.match(alertText(), /Current balance: 56 CNY/)
-      await act(async () => {
-        const user = useAuthStore.getState().auth.user
-        assert.ok(user)
-        useAuthStore.getState().auth.setUser({
-          ...user,
-          setting: JSON.stringify({ wallet_display_currency: 'USD' }),
-        })
-      })
-      assert.match(alertText(), /minimum balance of 10 USD/)
-      await act(async () => {
-        const user = useAuthStore.getState().auth.user
-        assert.ok(user)
-        useAuthStore.getState().auth.setUser({
-          ...user,
-          setting: JSON.stringify({ wallet_display_currency: 'CREDIT' }),
-        })
-      })
-      assert.match(alertText(), /minimum balance of 5,000,000 Credits/)
-      assert.match(alertText(), /Current balance: 3,500,000 Credits/)
-    } finally {
-      await act(async () => {
-        await i18n.changeLanguage('en')
-      })
-      await act(async () => rendered.root.unmount())
-      rendered.queryClient.clear()
-    }
-  })
-
-  for (const balance of [34_965_000, 35_000_000, null]) {
-    test(`balance ${balance} gates only web generation while API key and tool market controls remain available`, async () => {
-      mockWorkbench(() => balance)
-      let keyCalls = 0
-      api.post = (async (url: string, body: unknown) => {
-        assert.equal(url, '/api/drawing/key')
-        assert.deepEqual(body, {})
-        keyCalls++
-        return {
-          data: {
-            success: true,
-            data: { id: 7, name: 'Drawing', group: 'image-2', created: true },
-          },
-        }
-      }) as typeof api.post
-      const rendered = await renderDrawing()
-      try {
-        await promptDrawing(rendered.container)
-        assert.equal(
-          button(rendered.container, 'Generate image').disabled,
-          balance !== 35_000_000
-        )
-        const alert = rendered.container.querySelector(
-          '[data-slot="drawing-web-access"]'
-        )
-        if (balance === 35_000_000) assert.equal(alert, null)
-        else {
-          assert.ok(alert)
-          if (balance !== null) assert.match(alert.textContent ?? '', /70 USD/)
-          assert.match(
-            alert.textContent ?? '',
-            /API and MCP usage is billed normally, not free/
-          )
-          if (balance === null) {
-            assert.match(alert.textContent ?? '', /balance unavailable/)
-            assert.doesNotMatch(
-              alert.textContent ?? '',
-              /Current balance: 0 USD/
-            )
-          } else {
-            assert.match(
-              alert.textContent ?? '',
-              /Insufficient balance for web image generation/
-            )
-            assert.match(alert.textContent ?? '', /Current balance: 69.93 USD/)
-          }
-        }
-        assert.equal(
-          button(rendered.container, 'Prepare image-2 API Key').disabled,
-          false
-        )
-        assert.ok(rendered.container.querySelector('a[href="/tool-market"]'))
-        await act(async () => {
-          button(rendered.container, 'Prepare image-2 API Key').click()
-          await flushEffects()
-        })
-        assert.equal(keyCalls, 1)
-        assert.match(
-          rendered.container.textContent ?? '',
-          /image-2 API Key ready/
-        )
-        assert.ok(rendered.container.querySelector('a[href="/keys"]'))
-        assert.equal(
-          rendered.container.querySelector('#drawing-mcp-endpoint'),
-          null
-        )
-      } finally {
-        await act(async () => rendered.root.unmount())
-        rendered.queryClient.clear()
-      }
-    })
-  }
-
-  test('exact 35m Credit balance generates once, refreshes balance and keeps downloaded history available below the floor', async () => {
-    let balance = 35_000_000
-    const statusReads = mockWorkbench(() => balance)
-    let calls = 0
-    api.post = (async () => {
-      calls++
-      balance = 33_250_000
-      return { data: { data: [{ b64_json: png }] } }
-    }) as typeof api.post
-    let rendered = await renderDrawing()
-    try {
-      await promptDrawing(rendered.container)
-      await act(async () => {
-        button(rendered.container, 'Generate image').click()
-        await flushEffects()
-      })
-      await act(async () =>
-        waitForCondition(
-          () =>
-            Boolean(rendered.container.querySelector('a[download]')) &&
-            !rendered.container.textContent?.includes('Saving image bytes'),
-          'image bytes were not saved'
-        )
-      )
-      assert.equal(calls, 1)
-      assert.ok(statusReads() >= 2)
-      assert.equal(button(rendered.container, 'Generate image').disabled, true)
-      assert.match(
-        rendered.container.textContent ?? '',
-        /Current balance: 66.5 USD/
-      )
-      const stored = await createDrawingHistoryStore().load(1)
-      assert.equal(stored.images.length, 1)
-      assert.equal(stored.images[0].blob.size, atob(png).length)
-      const firstURL = rendered.container
-        .querySelector('figure img')
-        ?.getAttribute('src')
-      await act(async () => rendered.root.unmount())
-      rendered.queryClient.clear()
-      rendered = await renderDrawing()
-      await act(async () =>
-        waitForCondition(
-          () => Boolean(rendered.container.querySelector('a[download]')),
-          'history did not survive refresh'
-        )
-      )
-      assert.notEqual(
-        rendered.container.querySelector('figure img')?.getAttribute('src'),
-        firstURL
-      )
-      assert.match(rendered.container.textContent ?? '', /A stored painting/)
-      assert.equal(calls, 1)
-      await act(async () => {
-        button(rendered.container, 'Clear image history').click()
-        await flushEffects()
-      })
-      assert.equal(rendered.container.querySelectorAll('figure').length, 0)
-      assert.equal((await createDrawingHistoryStore().load(1)).images.length, 0)
-      assert.equal(calls, 1)
-    } finally {
-      await act(async () => rendered.root.unmount())
-      rendered.queryClient.clear()
-    }
-  })
-
-  test('server denial produces a persistent web-only alert rather than a generation retry', async () => {
-    let balance = 42_000_000
-    mockWorkbench(() => balance)
-    let calls = 0
-    api.post = (async () => {
-      calls++
-      balance = 28_000_000
-      throw {
-        response: {
-          status: 403,
-          data: {
-            error: {
-              code: 'WEB_DRAWING_MINIMUM_BALANCE',
-              message: 'server threshold',
-            },
-            drawing_web_access: {
-              minimum_balance_usd: 70,
-              minimum_balance_credit: 35_000_000,
-              balance_credit: 28_000_000,
-              balance_usd: 56,
-              allowed: false,
-            },
-          },
-        },
-      }
-    }) as typeof api.post
-    const rendered = await renderDrawing()
-    try {
-      await promptDrawing(rendered.container)
-      await act(async () => {
-        button(rendered.container, 'Generate image').click()
-        await flushEffects()
-      })
-      assert.match(
-        rendered.container.textContent ?? '',
-        /Insufficient balance for web image generation/
-      )
-      assert.match(
-        rendered.container.textContent ?? '',
-        /Current balance: 56 USD/
-      )
-      assert.doesNotMatch(
-        rendered.container.textContent ?? '',
-        /Request failed/
-      )
-      assert.equal(button(rendered.container, 'Generate image').disabled, true)
-      assert.ok(rendered.container.querySelector('a[href="/tool-market"]'))
-      assert.equal(calls, 1)
-    } finally {
-      await act(async () => rendered.root.unmount())
-      rendered.queryClient.clear()
-    }
-  })
-
-  test('cache failure never turns generation success into Request failed or repeats the paid request', async () => {
-    mockWorkbench(() => 70_000_000)
-    let calls = 0
-    api.post = (async () => {
-      calls++
-      Object.defineProperty(globalThis, 'indexedDB', {
-        configurable: true,
-        value: undefined,
-      })
-      return { data: { data: [{ b64_json: png }] } }
-    }) as typeof api.post
-    const rendered = await renderDrawing()
-    try {
-      await promptDrawing(rendered.container)
-      await act(async () => {
-        button(rendered.container, 'Generate image').click()
-        await flushEffects()
-      })
-      assert.ok(rendered.container.querySelector('a[download]'))
-      assert.match(
-        rendered.container.textContent ?? '',
-        /Generation succeeded, but some image bytes could not be saved/
-      )
-      assert.match(
-        rendered.container.textContent ?? '',
-        /Not saved in this browser/
-      )
-      assert.doesNotMatch(
-        rendered.container.textContent ?? '',
-        /Request failed/
-      )
-      assert.equal(calls, 1)
-    } finally {
-      await act(async () => rendered.root.unmount())
-      rendered.queryClient.clear()
-    }
-  })
-
-  test('account switch and logout cannot display or save a late response for a previous user', async () => {
-    mockWorkbench(() => 70_000_000)
-    let finish: (value: unknown) => void = () => {
-      throw new Error('Generation did not start')
-    }
-    api.post = (() =>
-      new Promise<unknown>((resolve) => {
+test('an account switch cannot show or save the previous account late preview', async () => {
+  const calls = setupNative()
+  let finish: ((value: ReturnType<typeof pendingReceipt>) => void) | undefined
+  calls.invoke.mockImplementation(
+    () =>
+      new Promise((resolve) => {
         finish = resolve
-      })) as typeof api.post
-    const rendered = await renderDrawing()
-    try {
-      await promptDrawing(rendered.container)
-      await act(async () => {
-        button(rendered.container, 'Generate image').click()
-        await flushEffects()
-        useAuthStore
-          .getState()
-          .auth.setUser({ id: 2, username: 'second-user', role: 10 })
       })
-      await act(async () => {
-        finish({ data: { data: [{ b64_json: png }] } })
-        await flushEffects()
-      })
-      assert.equal(rendered.container.querySelectorAll('figure').length, 0)
-      assert.equal(
-        rendered.container.querySelector<HTMLTextAreaElement>(
-          '#drawing-prompt-input'
-        )?.value,
-        ''
-      )
-      assert.equal((await createDrawingHistoryStore().load(1)).images.length, 0)
-      assert.equal((await createDrawingHistoryStore().load(2)).images.length, 0)
-      await act(async () => useAuthStore.getState().auth.reset())
-      assert.equal(rendered.container.textContent, '')
-    } finally {
-      await act(async () => rendered.root.unmount())
-      rendered.queryClient.clear()
-    }
-  })
+  )
+  const rendered = await renderDrawing()
+  try {
+    await ready(rendered)
+    const textarea = rendered.container.querySelector('textarea')
+    assert.ok(textarea)
+    await setTextareaValue(textarea, 'Private prompt from user one')
+    await act(async () => button(rendered.container, 'Generate image').click())
+    await waitForDrawingState(
+      () => !!readDrawingOperation(1),
+      'request was not saved before dispatch'
+    )
+    await act(async () => {
+      useAuthStore
+        .getState()
+        .auth.setUser({ id: 2, username: 'other-user', role: 10 })
+      await flushEffects()
+    })
+    assert.ok(finish)
+    await act(async () => {
+      finish?.(pendingReceipt())
+      await flushEffects()
+    })
+    assert.equal(readDrawingOperation(1)?.callId, undefined)
+    assert.equal(readDrawingOperation(2), null)
+    assert.doesNotMatch(
+      rendered.container.textContent ?? '',
+      /Open image confirmation/
+    )
+    assert.equal((await createDrawingHistoryStore().load(1)).images.length, 0)
+  } finally {
+    await dispose(rendered)
+  }
 })
 
-describe('Drawing wait experience, cancel control, and prompt draft restoration', () => {
-  for (const returnBeforeCompletion of [true, false]) {
-    test(`persists a request across navigation (return before completion: ${returnBeforeCompletion})`, async () => {
-      mockWorkbench(() => 70_000_000)
-      let resolvePost!: (value: unknown) => void
-      let calls = 0
-      let signal: AbortSignal | undefined
-      api.post = ((
-        _url: string,
-        _body: unknown,
-        config: { signal?: AbortSignal }
-      ) => {
-        calls++
-        signal = config.signal
-        return new Promise<unknown>((resolve) => {
-          resolvePost = resolve
-        })
-      }) as typeof api.post
-      let rendered = await renderDrawing()
-      let mounted = true
-      const unmount = async () => {
-        if (!mounted) return
-        await act(async () => rendered.root.unmount())
-        rendered.queryClient.clear()
-        mounted = false
-      }
-      try {
-        await promptDrawing(rendered.container)
-        await act(async () => {
-          button(rendered.container, 'Generate image').click()
-          await flushEffects()
-          button(rendered.container, 'Stop waiting').click()
-          await flushEffects()
-        })
-        assert.equal(signal?.aborted, false)
-        await unmount()
-        if (returnBeforeCompletion) {
-          rendered = await renderDrawing()
-          mounted = true
-          assert.equal(
-            button(rendered.container, 'Generate image').disabled,
-            true
-          )
-        }
-        await act(async () => {
-          resolvePost({ data: { data: [{ b64_json: png }] } })
-        })
-        await waitForDrawingState(
-          async () =>
-            (await createDrawingHistoryStore().load(1)).images.length === 1,
-          'background generation did not persist its image'
-        )
-        if (!returnBeforeCompletion) {
-          rendered = await renderDrawing()
-          mounted = true
-        }
-        const historyRestored = () =>
-          Boolean(
-            rendered.container.querySelector(
-              '[aria-label="Image history"] img[alt="A stored painting"]'
-            )
-          ) && !button(rendered.container, 'Generate image').disabled
-        await waitForDrawingState(
-          historyRestored,
-          'saved image did not appear after navigation'
-        )
-        assert.equal(
-          button(rendered.container, 'Generate image').disabled,
-          false
-        )
-        assert.equal(calls, 1)
-        await unmount()
-        // Fresh session restores from IndexedDB rather than an old component.
-        rendered = await renderDrawing()
-        mounted = true
-        await waitForDrawingState(
-          historyRestored,
-          'fresh session did not restore image history'
-        )
-      } finally {
-        await unmount()
-      }
-    })
+test('an expired settled result is reported without automatically generating again', async () => {
+  const calls = setupNative()
+  calls.query.mockResolvedValue({
+    ...pendingReceipt(),
+    call: {
+      ...pendingReceipt().call,
+      execution_status: 'succeeded',
+      settlement_status: 'settled',
+    },
+    result_expired: true,
+    result: undefined,
+    awaiting_confirmation: false,
+  })
+  const rendered = await renderDrawing()
+  try {
+    await ready(rendered)
+    await submit(rendered)
+    await act(async () =>
+      button(rendered.container, 'Check the original request').click()
+    )
+    await waitForDrawingState(
+      () => readDrawingOperation(1) === null,
+      'terminal expired operation remained locked'
+    )
+    assert.match(
+      rendered.container.textContent ?? '',
+      /saved result has expired/
+    )
+    assert.equal(calls.invoke.mock.calls.length, 1)
+    assert.equal(calls.resume.mock.calls.length, 0)
+    assert.equal(
+      Array.from(rendered.container.querySelectorAll('button')).some(
+        (item) => item.textContent === 'Retry'
+      ),
+      false
+    )
+  } finally {
+    await dispose(rendered)
   }
-
-  test('shows truthful wait status and allows stopping waiting while keeping prompt', async () => {
-    mockWorkbench(() => 70_000_000)
-    let resolvePost: ((value: unknown) => void) | null = null
-    api.post = (() =>
-      new Promise<unknown>((resolve) => {
-        resolvePost = resolve
-      })) as typeof api.post
-
-    const rendered = await renderDrawing()
-    try {
-      await promptDrawing(rendered.container)
-      const promptInput = rendered.container.querySelector<HTMLTextAreaElement>(
-        '#drawing-prompt-input'
-      )
-      assert.ok(promptInput)
-      await setTextareaValue(promptInput, 'A cyberpunk neon cat in rain')
-
-      await act(async () => {
-        button(rendered.container, 'Generate image').click()
-        await flushEffects()
-      })
-
-      // Truthful waiting state: shows Request submitted · Waiting and does NOT show contradictory text
-      assert.match(
-        rendered.container.textContent ?? '',
-        /Request submitted · Waiting/
-      )
-      assert.doesNotMatch(
-        rendered.container.textContent ?? '',
-        /Your request is ready to run/
-      )
-
-      // Stop waiting button is clearly present
-      const stopBtn = button(rendered.container, 'Stop waiting')
-      assert.ok(stopBtn)
-
-      // Click Stop waiting
-      await act(async () => {
-        stopBtn.click()
-        await flushEffects()
-      })
-
-      // Stops waiting and displays clear explanation
-      assert.match(
-        rendered.container.textContent ?? '',
-        /Generation continues in this tab/
-      )
-
-      // Prompt is preserved!
-      assert.equal(promptInput.value, 'A cyberpunk neon cat in rain')
-
-      // The paid request is still in flight, so duplicate submission is blocked.
-      const genBtn = button(rendered.container, 'Generate image')
-      assert.ok(genBtn)
-      assert.equal(genBtn.disabled, true)
-
-      const resolver = resolvePost as ((value: unknown) => void) | null
-      if (resolver) {
-        await act(async () => {
-          resolver({ data: { data: [{ b64_json: png }] } })
-          await flushEffects()
-        })
-        assert.equal(
-          (await createDrawingHistoryStore().load(1)).images.length,
-          1
-        )
-        assert.equal(
-          button(rendered.container, 'Generate image').disabled,
-          false
-        )
-        assert.doesNotMatch(
-          rendered.container.textContent ?? '',
-          /Generation continues in this tab/
-        )
-      }
-    } finally {
-      await act(async () => rendered.root.unmount())
-      rendered.queryClient.clear()
-    }
-  })
-
-  test('restores saved prompt draft upon mounting', async () => {
-    mockWorkbench(() => 70_000_000)
-    const { saveDrawingDraft } = await import('./drawing-task-state')
-    saveDrawingDraft(1, { prompt: 'Persisted draft of a red lighthouse' })
-
-    const rendered = await renderDrawing()
-    try {
-      await act(
-        async () =>
-          await waitForCondition(
-            () => rendered.container.querySelectorAll('select').length === 5,
-            'drawing controls did not render'
-          )
-      )
-      const promptInput = rendered.container.querySelector<HTMLTextAreaElement>(
-        '#drawing-prompt-input'
-      )
-      assert.ok(promptInput)
-      assert.equal(promptInput.value, 'Persisted draft of a red lighthouse')
-    } finally {
-      await act(async () => rendered.root.unmount())
-      rendered.queryClient.clear()
-    }
-  })
-
-  test('displays error details with HTTP status badge and copy button on 500 error, keeping prompt intact', async () => {
-    mockWorkbench(() => 70_000_000)
-    api.post = (() =>
-      Promise.reject({
-        response: {
-          status: 500,
-          data: { error: { message: 'Internal engine error during sampling' } },
-        },
-      })) as typeof api.post
-
-    const rendered = await renderDrawing()
-    try {
-      await promptDrawing(rendered.container)
-      const promptInput = rendered.container.querySelector<HTMLTextAreaElement>(
-        '#drawing-prompt-input'
-      )
-      assert.ok(promptInput)
-      await setTextareaValue(promptInput, 'Mountain sunrise')
-
-      await act(async () => {
-        button(rendered.container, 'Generate image').click()
-        await flushEffects()
-      })
-
-      // Error message and HTTP status badge rendered
-      assert.match(
-        rendered.container.textContent ?? '',
-        /Internal engine error during sampling/
-      )
-      assert.match(rendered.container.textContent ?? '', /HTTP 500/)
-
-      // Prompt is preserved
-      assert.equal(promptInput.value, 'Mountain sunrise')
-
-      // Copy error details button is available
-      const copyBtn = button(rendered.container, 'Copy error details')
-      assert.ok(copyBtn)
-
-      // Retry button is available
-      const retryBtn = button(rendered.container, 'Retry')
-      assert.ok(retryBtn)
-    } finally {
-      await act(async () => rendered.root.unmount())
-      rendered.queryClient.clear()
-    }
-  })
 })

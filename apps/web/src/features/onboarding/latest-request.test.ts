@@ -1,12 +1,15 @@
 /* Copyright (C) 2026 LIghtJUNction. SPDX-License-Identifier: AGPL-3.0-or-later */
 import assert from 'node:assert/strict'
-import { afterEach, test } from 'node:test'
+import { afterEach, beforeEach, test } from 'node:test'
 
 import { usageLogSchema } from '@/features/usage-logs/data/schema'
 import { api } from '@/lib/api'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { latestRequestStatus, loadLatestRequest } from './latest-request'
+
 const originalGet = api.get
+const originalAuth = useAuthStore.getState().auth
 const fixture = (type: number, created_at: number, other = '') =>
   usageLogSchema.parse({
     id: type,
@@ -16,14 +19,23 @@ const fixture = (type: number, created_at: number, other = '') =>
     content: '',
     other,
   })
+beforeEach(() => {
+  useAuthStore
+    .getState()
+    .auth.setUser({ id: 1, username: 'synthetic', role: 1 })
+})
 afterEach(() => {
   api.get = originalGet
+  useAuthStore.setState({ auth: originalAuth })
 })
 test('selects the latest error or usage entry instead of the latest payment', async () => {
   api.get = (async (path: string) => ({
     data: {
       success: true,
       data: {
+        page: 1,
+        page_size: 1,
+        total: 1,
         items: [path.includes('type=5') ? fixture(5, 200) : fixture(2, 100)],
       },
     },

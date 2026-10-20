@@ -192,6 +192,10 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
         )}
       </>
     )
+  } else if (props.model.quota_type === 2) {
+    priceSummary = (
+      <span className='text-muted-foreground text-sm'>{t('Image prices')}</span>
+    )
   } else {
     priceSummary = (
       <span className='text-muted-foreground whitespace-nowrap'>

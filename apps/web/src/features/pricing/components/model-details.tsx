@@ -101,6 +101,7 @@ import type {
   PriceDisplayCurrency,
 } from '../types'
 import { DynamicPricingBreakdown } from './dynamic-pricing-breakdown'
+import { ImagePrices } from './image-prices'
 import { ModelAvailability } from './model-availability'
 import { ModelBillingModeBadge } from './model-billing-mode-badge'
 import { ModelDetailsApi } from './model-details-api'
@@ -211,9 +212,13 @@ function OverviewSummaryGrid(props: { model: PricingModel }) {
     queryKey: ['perf-metrics', props.model.model_name],
     queryFn: () => getPerfMetrics(props.model.model_name, 24),
     staleTime: 60 * 1000,
+    enabled: props.model.performance_available !== false,
   })
 
-  const groups = metricsQuery.data?.data.groups ?? []
+  const groups =
+    props.model.performance_available === false
+      ? []
+      : (metricsQuery.data?.data.groups ?? [])
   const successRates = groups
     .map((group) => group.success_rate)
     .filter((rate) => Number.isFinite(rate))
@@ -616,6 +621,7 @@ function PriceSection(props: {
   displayCurrency: PriceDisplayCurrency
 }) {
   const { t } = useTranslation()
+  if (props.model.quota_type === 2) return null
   const isTokenBased = isTokenBasedModel(props.model)
   const tokenUnitLabel = props.tokenUnit === 'K' ? '1K' : '1M'
   const baseGroupKey = '_base'
@@ -663,6 +669,57 @@ function PriceSection(props: {
         props.model.audio_output_price != null,
     },
   ]
+
+  if (props.model.group_prices) {
+    return (
+      <section className='space-y-3'>
+        <SectionTitle>{t('Configured group prices')}</SectionTitle>
+        <p className='text-muted-foreground text-xs leading-5'>
+          {t(
+            'Prices include the selected group factors. Select a group to compare its rates.'
+          )}
+        </p>
+        {Object.entries(props.model.group_prices).map(([group, prices]) => (
+          <div
+            key={group}
+            className='space-y-2 border-b pb-3 last:border-b-0 last:pb-0'
+          >
+            <GroupBadge group={group} size='sm' />
+            {[
+              ...primaryPriceTypes,
+              ...secondaryPriceTypes.filter((item) =>
+                item.type === 'cache'
+                  ? prices.cache_read_price !== null
+                  : item.type === 'create_cache'
+                    ? prices.cache_write_price !== null
+                    : false
+              ),
+            ].map((item) => (
+              <div
+                key={item.type}
+                className='flex flex-wrap items-baseline justify-between gap-2 text-sm'
+              >
+                <span className='text-muted-foreground'>{item.label}</span>
+                <span className='font-mono tabular-nums'>
+                  {formatGroupPrice(
+                    props.model,
+                    group,
+                    item.type,
+                    props.tokenUnit,
+                    props.displayCurrency,
+                    {}
+                  )}
+                  <span className='text-muted-foreground ml-1 text-xs'>
+                    / {tokenUnitLabel}
+                  </span>
+                </span>
+              </div>
+            ))}
+          </div>
+        ))}
+      </section>
+    )
+  }
 
   if (dynamicSummary) {
     if (dynamicSummary.isSpecialExpression) {
@@ -861,7 +918,9 @@ function GroupAvailabilitySection(props: {
       <SectionTitle>{t('Available groups')}</SectionTitle>
       <p className='text-muted-foreground mb-3 text-xs leading-5'>
         {t(
-          'Groups filter model availability only. Prices always use the base price (1×).'
+          props.model.group_prices
+            ? 'Prices include the selected group factors. Select a group to compare its rates.'
+            : 'Groups filter model availability only. Prices always use the base price (1×).'
         )}
       </p>
       <AutoGroupChain model={props.model} autoGroups={props.autoGroups} />
@@ -956,6 +1015,7 @@ export function ModelDetailsContent(props: ModelDetailsContentProps) {
               tokenUnit={props.tokenUnit}
               displayCurrency={displayCurrency}
             />
+            <ImagePrices model={props.model} />
             {isDynamic && (
               <DynamicPricingBreakdown
                 billingExpr={props.model.billing_expr}
@@ -1042,6 +1102,7 @@ export function ModelDetails() {
     error,
     refetch,
     displayCurrency,
+    runtimeAvailable,
   } = usePricingData()
 
   const tokenUnit: TokenUnit =
@@ -1054,7 +1115,7 @@ export function ModelDetails() {
 
   const missingRuntime = useModelRuntime(
     modelId ? [modelId] : [],
-    !model && !isLoading && !error
+    runtimeAvailable && !model && !isLoading && !error
   )
 
   const handleBack = () => {

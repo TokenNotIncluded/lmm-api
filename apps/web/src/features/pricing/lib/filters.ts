@@ -24,6 +24,7 @@ import {
   ENDPOINT_TYPES,
 } from '../constants'
 import type { PricingModel } from '../types'
+import { getTokenPriceUSD } from './price'
 
 // ----------------------------------------------------------------------------
 // Filter Utilities
@@ -107,8 +108,22 @@ export function filterByEndpointType(
 /**
  * Get model price for sorting
  */
-function getModelPrice(model: PricingModel): number {
-  return model.quota_type === 0 ? model.model_ratio : model.model_price || 0
+function getModelPrice(model: PricingModel): number | null {
+  const price =
+    model.quota_type === 0
+      ? getTokenPriceUSD(model, 'input')
+      : model.model_price
+  return typeof price === 'number' && Number.isFinite(price) && price >= 0
+    ? price
+    : null
+}
+
+function comparePrices(a: PricingModel, b: PricingModel, descending: boolean) {
+  const left = getModelPrice(a)
+  const right = getModelPrice(b)
+  if (left === null) return right === null ? 0 : 1
+  if (right === null) return -1
+  return descending ? right - left : left - right
 }
 
 /**
@@ -127,10 +142,10 @@ export function sortModels(
       )
       break
     case SORT_OPTIONS.PRICE_LOW:
-      sorted.sort((a, b) => getModelPrice(a) - getModelPrice(b))
+      sorted.sort((a, b) => comparePrices(a, b, false))
       break
     case SORT_OPTIONS.PRICE_HIGH:
-      sorted.sort((a, b) => getModelPrice(b) - getModelPrice(a))
+      sorted.sort((a, b) => comparePrices(a, b, true))
       break
   }
 
@@ -152,9 +167,28 @@ export function filterAndSortModels(
     sortBy: string
   }
 ): PricingModel[] {
-  let result = filterBySearch(models, filters.search)
+  let result = filterByGroup(models, filters.group)
+  if (filters.group !== FILTER_ALL) {
+    result = result.map((model) => {
+      const prices = model.group_prices?.[filters.group]
+      const endpoints = model.group_endpoints?.[filters.group]
+      if (!prices && !endpoints) return model
+      return {
+        ...model,
+        ...(prices
+          ? { ...prices, model_price: prices.model_price ?? undefined }
+          : {}),
+        supported_endpoint_types: endpoints ?? model.supported_endpoint_types,
+        quota_type:
+          model.group_quota_types?.[filters.group] ?? model.quota_type,
+        image_variants: model.image_variants?.filter(
+          (variant) => variant.group === filters.group
+        ),
+      }
+    })
+  }
+  result = filterBySearch(result, filters.search)
   result = filterByVendor(result, filters.vendor)
-  result = filterByGroup(result, filters.group)
   result = filterByQuotaType(result, filters.quotaType)
   result = filterByEndpointType(result, filters.endpointType)
   result = filterByTag(result, filters.tag)

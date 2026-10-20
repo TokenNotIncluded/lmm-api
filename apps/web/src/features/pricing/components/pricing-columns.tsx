@@ -127,6 +127,14 @@ export function usePricingColumns(
           ),
         })
 
+        if (model.quota_type === 2) {
+          return (
+            <span className='text-muted-foreground text-xs'>
+              {t('Image prices')}
+            </span>
+          )
+        }
+
         if (dynamicSummary) {
           if (dynamicSummary.isSpecialExpression) {
             return (

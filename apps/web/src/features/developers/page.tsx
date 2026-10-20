@@ -194,13 +194,18 @@ export function DevelopersPage() {
             <dl className='mt-5 divide-y border-y'>
               <Endpoint
                 method='GET'
-                path='/api/pricing'
+                path='/core/v1/pricing/public'
                 label={t('Public pricing')}
               />
               <Endpoint
                 method='GET'
-                path='/api/oauth2/catalog'
+                path='/core/v1/pricing/session'
                 label={t('Account catalog')}
+              />
+              <Endpoint
+                method='GET'
+                path='/api/oauth2/catalog'
+                label={t('OAuth integration')}
               />
             </dl>
             <p className='mt-5 text-sm leading-relaxed'>
@@ -212,7 +217,7 @@ export function DevelopersPage() {
             <PricingExample />
             <a
               className='mt-4 inline-block text-sm underline underline-offset-4'
-              href={`${LMM_SOURCE}/blob/main/apps/lmm-extensions/service/oauth_catalog.go`}
+              href={`${LMM_SOURCE}/blob/wip/rust-core-go-extensions/services/core/src/model_http/catalog.rs`}
               target='_blank'
               rel='noopener noreferrer'
             >
@@ -291,7 +296,7 @@ export function DevelopersPage() {
                 {t('Discovery')}
               </a>
               <a
-                href={`${LMM_SOURCE}/blob/main/apps/lmm-extensions/service/oauth_server.go`}
+                href={`${LMM_SOURCE}/blob/wip/rust-core-go-extensions/services/core/src/oauth2_http.rs`}
                 target='_blank'
                 rel='noopener noreferrer'
               >

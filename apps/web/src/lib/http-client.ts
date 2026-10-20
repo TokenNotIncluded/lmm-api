@@ -37,6 +37,7 @@ import { useAuthStore, type AuthBundle } from '@/stores/auth-store'
 
 declare module 'axios' {
   export interface AxiosRequestConfig {
+    authMode?: 'session' | 'anonymous'
     skipBusinessError?: boolean
     skipErrorHandler?: boolean
     disableDuplicate?: boolean
@@ -227,7 +228,7 @@ api.interceptors.response.use(
     const skipErrorHandler = config?.skipErrorHandler
     const status = error?.response?.status
 
-    if (status === 401) {
+    if (status === 401 && config?.authMode !== 'anonymous') {
       if (config) dispatchedAuthentication(config)
       // The outer recovery must release its Cookie lock before a hard redirect.
       if (config?.authReadRetryInLock) throw error
@@ -329,6 +330,14 @@ api.interceptors.response.use(
 )
 
 api.interceptors.request.use(async (config) => {
+  if (config.authMode === 'anonymous') {
+    if (config.authScope) requestAuthentication(config)
+    config.headers.delete('Authorization')
+    delete config.auth
+    config.withCredentials = false
+    config.headers.set('X-LMM-Credit-Unit', '500000', true)
+    return config
+  }
   let auth = requestAuthentication(config)
   const now = Math.floor(Date.now() / 1000)
   const needsRefresh =

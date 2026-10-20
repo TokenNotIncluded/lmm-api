@@ -44,20 +44,26 @@ export function ModelAvailability({
     staleTime: 60_000,
     refetchInterval: 60_000,
     retry: false,
+    enabled: model.performance_available !== false,
   })
   const observation = getRecentModelObservation(
-    metrics.data?.data?.groups ?? [],
+    model.performance_available === false
+      ? []
+      : (metrics.data?.data?.groups ?? []),
     metrics.dataUpdatedAt
   )
-  const status = metrics.isLoading
-    ? t('Loading status')
-    : metrics.isError || metrics.data?.success === false
-      ? t('Model status could not be loaded')
-      : observation.state === 'successful'
-        ? t('Recent calls succeeded')
-        : observation.state === 'failures'
-          ? t('Recent calls include failures')
-          : t('No recent model status')
+  const status =
+    model.performance_available === false
+      ? t('No recent model status')
+      : metrics.isLoading
+        ? t('Loading status')
+        : metrics.isError || metrics.data?.success === false
+          ? t('Model status could not be loaded')
+          : observation.state === 'successful'
+            ? t('Recent calls succeeded')
+            : observation.state === 'failures'
+              ? t('Recent calls include failures')
+              : t('No recent model status')
   const groups = getAvailableGroups(model, usableGroup)
   const access = !user
     ? t('Sign in to check model access')

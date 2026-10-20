@@ -1,3 +1,5 @@
+import { z } from 'zod'
+
 /*
 Copyright (C) 2026 LIghtJUNction
 SPDX-License-Identifier: AGPL-3.0-or-later
@@ -10,7 +12,10 @@ import {
   type ConnectionPermissions,
 } from './connection-utils'
 import { marketDraftBody } from './draft-body'
-import { marketInvokeBody } from './invoke-body'
+import { marketInvokeBody, marketResumeBody } from './invoke-body'
+import { MarketAPIError, parseMarketCallResponse } from './native-call-response'
+
+export { MarketAPIError, parseMarketCallResponse }
 
 export type MarketCapabilities = {
   service_deletion: boolean
@@ -180,7 +185,7 @@ export type MarketCall = {
   client_id: string
   execution_status: string
   settlement_status: string
-  price_quota: number
+  price_quota?: number
   created_at: number
   resolve_by: number
 }
@@ -198,10 +203,18 @@ export type MarketReport = {
   reviewed_at: number
 }
 export type CallResponse = {
-  call: MarketCall
+  call: Omit<MarketCall, 'service_id' | 'price_quota'> & {
+    user_id: number
+    grant_id: string
+    service_id?: string
+    price_quota?: number
+  }
   result?: unknown
+  result_expires_at?: number
   result_expired: boolean
   error_code?: string
+  request_state?: string
+  awaiting_confirmation?: boolean
 }
 export type MarketAuthentication = {
   mode: 'none' | 'bearer' | 'api_key'
@@ -245,15 +258,6 @@ export type ClientRemoval = {
   grants_hidden: number
   tools_unloaded: number
 }
-export class MarketAPIError extends Error {
-  readonly code: string
-
-  constructor(code: string) {
-    super(code)
-    this.code = code
-    this.name = 'MarketAPIError'
-  }
-}
 type Envelope<T> = {
   success: boolean
   data: T
@@ -265,6 +269,33 @@ type Envelope<T> = {
 export type MarketOAuthClient = { client_id: string }
 
 const base = '/api/tool-market'
+const transportFailure = z.object({
+  response: z.object({ status: z.number().int(), data: z.unknown() }),
+})
+const callRequestOptions = {
+  skipBusinessError: true,
+  skipErrorHandler: true,
+  validateStatus: (status: number) => status === 200 || status === 409,
+}
+async function callResponse(
+  request: Promise<{ data: unknown; status: number }>
+): Promise<CallResponse> {
+  try {
+    const response = await request
+    return parseMarketCallResponse(response.data, response.status)
+  } catch (error) {
+    if (error instanceof MarketAPIError) throw error
+    // Axios failures retain the same closed decoder, including missing lookups.
+    const response = transportFailure.safeParse(error)
+    if (response.success) {
+      return parseMarketCallResponse(
+        response.data.response.data,
+        response.data.response.status
+      )
+    }
+    throw error
+  }
+}
 async function unwrap<T>(request: Promise<{ data: Envelope<T> }>): Promise<T> {
   try {
     const { data } = await request
@@ -395,14 +426,41 @@ export const marketAPI = {
     request_state?: string
     input_responses?: MarketInputResponse
   }) =>
-    unwrap<CallResponse>(
-      api.post(`${base}/invoke`, marketInvokeBody(input), {
+    callResponse(
+      api.post<unknown>(`${base}/invoke`, marketInvokeBody(input), {
+        ...callRequestOptions,
         timeout: 60000,
         headers: { 'Content-Type': 'application/json' },
       })
     ),
   result: (id: string) =>
-    unwrap<CallResponse>(api.get(`${base}/calls/${id}/result`)),
+    callResponse(
+      api.get<unknown>(
+        `${base}/calls/${encodeURIComponent(id)}/result`,
+        callRequestOptions
+      )
+    ),
+  lookupRequest: (requestID: string) =>
+    callResponse(
+      api.get<unknown>(
+        `${base}/executions/by-request/${encodeURIComponent(requestID)}`,
+        callRequestOptions
+      )
+    ),
+  resume: (
+    id: string,
+    input: { request_state: string; input_responses?: MarketInputResponse }
+  ) =>
+    callResponse(
+      api.post<unknown>(
+        `${base}/calls/${encodeURIComponent(id)}/resume`,
+        marketResumeBody(input),
+        {
+          ...callRequestOptions,
+          timeout: 60000,
+        }
+      )
+    ),
   report: (id: string, reason: string) =>
     unwrap<MarketReport>(api.post(`${base}/calls/${id}/report`, { reason })),
   reports: (offset = 0) =>

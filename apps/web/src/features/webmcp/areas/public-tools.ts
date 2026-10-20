@@ -63,14 +63,7 @@ function readHours(input: Record<string, unknown>, fallback: number) {
 }
 
 function findModel(pricing: PricingData, name: string): PricingModel | null {
-  const wanted = name.trim().toLowerCase()
-  return (
-    pricing.data.find((item) => item.model_name.toLowerCase() === wanted) ??
-    pricing.data.find((item) =>
-      item.model_name.toLowerCase().includes(wanted)
-    ) ??
-    null
-  )
+  return pricing.data.find((item) => item.model_name === name) ?? null
 }
 
 export const publicToolsTools: WebMcpToolFactory = ({ router }) => [
@@ -286,36 +279,54 @@ export const publicToolsTools: WebMcpToolFactory = ({ router }) => [
       }
       const group = optionalString(input, 'group', 60)
       ensureNotAborted(options.signal)
-      const pricing = await getPricing()
+      const pricing = await getPricing(options.signal)
       ensureNotAborted(options.signal)
       const model = findModel(pricing, name)
       if (!model) throw new Error(`Unknown model: ${clip(name, 80)}`)
-      const groupRatio = pricing.group_ratio ?? {}
-      const chosenGroup = group ?? pricing.auto_groups?.[0] ?? null
-      const ratio =
-        chosenGroup === null
-          ? undefined
-          : (groupRatio[chosenGroup] ?? model.group_ratio?.[chosenGroup] ?? 1)
+      const chosenGroup = group ?? null
+      if (group && !model.enable_groups.includes(group)) {
+        throw new Error('Model is not listed for this group')
+      }
+      const groupPrices = group ? model.group_prices?.[group] : undefined
       const amount = estimateRequestCost(
-        model,
-        ratio,
+        groupPrices
+          ? {
+              ...model,
+              ...groupPrices,
+              model_price: groupPrices.model_price ?? undefined,
+              quota_type: group
+                ? (model.group_quota_types?.[group] ?? model.quota_type)
+                : model.quota_type,
+            }
+          : model,
+        1,
         inputTokens,
         outputTokens,
         cachedTokens
       )
+      const credit = amount === null ? null : amount * 500_000
+      const safeCredit =
+        credit !== null &&
+        Number.isFinite(credit) &&
+        credit >= 0 &&
+        credit <= Number.MAX_SAFE_INTEGER
+          ? credit
+          : null
       return {
         page: '/pricing',
         model: model.model_name,
         vendor: model.vendor_name ?? null,
         group: chosenGroup,
-        group_multiplier: ratio ?? null,
+        group_multiplier: 1,
         input_tokens: inputTokens,
         output_tokens: outputTokens,
         cached_tokens: cachedTokens,
-        estimated_credit: amount === null ? null : Number(amount.toFixed(6)),
-        estimable: amount !== null,
+        estimated_usd: safeCredit === null ? null : amount,
+        estimated_credit: safeCredit,
+        credits_per_usd: 500_000,
+        estimable: safeCredit !== null,
         billing_basis:
-          'Platform credit; the pricing page shows the same figure.',
+          'Effective group USD rates converted at 500000 Credits per USD. This text-only estimate is not a locked quote or a settlement receipt.',
       }
     },
   },

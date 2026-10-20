@@ -34,6 +34,7 @@ import {
 } from './call-utils'
 import { marketStatus, marketPermissionList } from './copy'
 import { useMarketMoneyDraft } from './money'
+import { marketConfirmationURL } from './native-call-response'
 import { ReportCallButton } from './reports'
 import {
   drawingResultImages,
@@ -277,16 +278,18 @@ export function CallResult({
         </div>
         <div>
           <dt className='text-muted-foreground'>
-            {response.call.settlement_status === 'held'
+            {['held', 'reserved'].includes(response.call.settlement_status)
               ? t('Reserved')
               : t('Amount')}
           </dt>
           <dd>
-            {formatQuota(
-              response.call.settlement_status === 'released'
-                ? 0
-                : response.call.price_quota
-            )}
+            {response.call.price_quota === undefined
+              ? t('Unknown')
+              : formatQuota(
+                  response.call.settlement_status === 'released'
+                    ? 0
+                    : response.call.price_quota
+                )}
           </dd>
         </div>
         <div>
@@ -294,7 +297,7 @@ export function CallResult({
           <dd className='break-all'>{response.call.client_id}</dd>
         </div>
         <div className='col-span-2'>
-          <dt className='text-muted-foreground'>{t('Request ID')}</dt>
+          <dt className='text-muted-foreground'>{t('Call ID')}</dt>
           <dd className='font-mono text-xs break-all'>{response.call.id}</dd>
         </div>
         {response.call.usage_quantities && (
@@ -309,17 +312,20 @@ export function CallResult({
       {['settled', 'released'].includes(response.call.settlement_status) && (
         <ReportCallButton callID={response.call.id} />
       )}
-      {response.call.settlement_status === 'held' && (
-        <p>
-          {t(
-            'The result is not settled. {{amount}} remain reserved until {{time}}. Check this request instead of starting it again.',
-            {
-              amount: formatQuota(response.call.price_quota),
-              time: new Date(response.call.resolve_by * 1000).toLocaleString(),
-            }
-          )}
-        </p>
-      )}
+      {['held', 'reserved'].includes(response.call.settlement_status) &&
+        response.call.price_quota !== undefined && (
+          <p>
+            {t(
+              'The result is not settled. {{amount}} remain reserved until {{time}}. Check this request instead of starting it again.',
+              {
+                amount: formatQuota(response.call.price_quota),
+                time: new Date(
+                  response.call.resolve_by * 1000
+                ).toLocaleString(),
+              }
+            )}
+          </p>
+        )}
       {response.result_expired && (
         <p>
           {t(
@@ -327,19 +333,22 @@ export function CallResult({
           )}
         </p>
       )}
-      {response.error_code && (
-        <p role='status'>
-          {response.error_code === 'TOOL_MARKET_RESULT_UNKNOWN'
-            ? t(
-                'The result is unknown. Check this call instead of starting it again.'
-              )
-            : response.error_code === 'TOOL_MARKET_SETTLEMENT_PENDING'
+      {response.error_code &&
+        (response.error_code !== 'TOOL_MARKET_EXECUTION_PENDING' ||
+          response.call.execution_status === 'unknown') && (
+          <p role='status'>
+            {response.error_code === 'TOOL_MARKET_RESULT_UNKNOWN' ||
+            response.call.execution_status === 'unknown'
               ? t(
-                  'The result was received. Settlement is still being confirmed.'
+                  'The result is unknown. Check this call instead of starting it again.'
                 )
-              : t('The tool returned an invalid or unsuccessful result.')}
-        </p>
-      )}
+              : response.error_code === 'TOOL_MARKET_SETTLEMENT_PENDING'
+                ? t(
+                    'The result was received. Settlement is still being confirmed.'
+                  )
+                : t('The tool returned an invalid or unsuccessful result.')}
+          </p>
+        )}
       {response.result !== undefined && (
         <MCPResultView value={response.result} />
       )}
@@ -501,9 +510,36 @@ export function CallDialog({
   const [confirmed, setConfirmed] = useState(false)
   const [validation, setValidation] = useState<string | null>(null)
   const confirmation = callConfirmation(response)
+  const nativeConfirmation =
+    response?.awaiting_confirmation === true && !!response.request_state
+  const confirmationURL = nativeConfirmation
+    ? marketConfirmationURL(response.result, window.location.origin)
+    : undefined
+  const checkedResponse = (result: CallResponse) => {
+    if (
+      result.call.tool_id !== tool.tool_id ||
+      result.call.version_id !== tool.version_id ||
+      result.call.grant_id !== grant.id ||
+      result.call.client_id !== grant.client_id ||
+      (response && result.call.id !== response.call.id)
+    ) {
+      throw new MarketAPIError('TOOL_MARKET_INVALID_RESPONSE')
+    }
+    return result
+  }
   const run = useMutation({
     retry: false,
-    mutationFn: async (action?: 'accept' | 'cancel') => {
+    mutationFn: async (action?: 'accept' | 'cancel' | 'resume') => {
+      if (action === 'resume') {
+        if (!nativeConfirmation || !response?.request_state) {
+          throw new MarketAPIError('TOOL_MARKET_INVALID_INPUT')
+        }
+        return checkedResponse(
+          await marketAPI.resume(response.call.id, {
+            request_state: response.request_state,
+          })
+        )
+      }
       const raw = submitted ?? args
       const issue = argumentIssue(raw, tool.input_schema)
       if (issue) {
@@ -515,27 +551,29 @@ export function CallDialog({
         throw new MarketAPIError('TOOL_MARKET_INVALID_INPUT')
       }
       setSubmitted(raw)
-      return marketAPI.invoke({
-        tool_id: tool.tool_id,
-        version_id: tool.version_id,
-        grant_id: grant.id,
-        request_id: requestID,
-        arguments: JSON.parse(raw) as unknown,
-        arguments_json: raw,
-        ...(action && confirmation
-          ? {
-              request_state: confirmation.requestState,
-              input_responses: {
-                confirmation: {
-                  action,
-                  ...(action === 'accept'
-                    ? { content: { confirmed: true as const } }
-                    : {}),
+      return checkedResponse(
+        await marketAPI.invoke({
+          tool_id: tool.tool_id,
+          version_id: tool.version_id,
+          grant_id: grant.id,
+          request_id: requestID,
+          arguments: JSON.parse(raw),
+          arguments_json: raw,
+          ...(action && confirmation
+            ? {
+                request_state: confirmation.requestState,
+                input_responses: {
+                  confirmation: {
+                    action,
+                    ...(action === 'accept'
+                      ? { content: { confirmed: true as const } }
+                      : {}),
+                  },
                 },
-              },
-            }
-          : {}),
-      })
+              }
+            : {}),
+        })
+      )
     },
     onSuccess: (result) => {
       setResponse(result)
@@ -552,13 +590,19 @@ export function CallDialog({
     },
   })
   const refresh = useMutation({
-    mutationFn: () => {
-      if (!response) throw new Error('Missing call')
-      return marketAPI.result(response.call.id)
+    retry: false,
+    mutationFn: async () => {
+      if (!response && submitted === null) throw new Error('Missing request')
+      return checkedResponse(
+        await (response
+          ? marketAPI.result(response.call.id)
+          : marketAPI.lookupRequest(requestID))
+      )
     },
     onSuccess: (result) => {
       setResponse(result)
       setConfirmed(false)
+      run.reset()
     },
   })
   const newCall = () => {
@@ -581,15 +625,19 @@ export function CallDialog({
         ? t(validation)
         : null
   const uncertainRequest =
-    submitted !== null &&
-    !response &&
-    run.isError &&
-    !callCanBeEdited(run.error)
+    submitted !== null && run.isError && !callCanBeEdited(run.error)
   return (
     <Dialog
       open
       onOpenChange={(open) => {
-        if (!open && !run.isPending && !confirmation && !uncertainRequest) {
+        if (
+          !open &&
+          !run.isPending &&
+          !confirmation &&
+          !nativeConfirmation &&
+          !uncertainRequest &&
+          (!response || canStartAnotherCall(response))
+        ) {
           onClose()
         }
       }}
@@ -667,12 +715,23 @@ export function CallDialog({
             'Successful calls are charged once. Repeated delivery of this request does not charge again.'
           )}
         </p>
+        {submitted !== null && (
+          <dl className='text-sm'>
+            <dt className='text-muted-foreground'>{t('Request ID')}</dt>
+            <dd className='font-mono text-xs break-all'>{requestID}</dd>
+          </dl>
+        )}
         {run.isError && (
           <p role='alert' className='text-destructive text-sm'>
-            {inputError || t(marketErrorKey(run.error))}
+            {inputError ||
+              (uncertainRequest
+                ? t(
+                    'The result is unknown. Check this call instead of starting it again.'
+                  )
+                : t(marketErrorKey(run.error)))}
           </p>
         )}
-        {!response && (
+        {!response && submitted === null && (
           <Button
             disabled={run.isPending}
             onClick={() => run.mutate(undefined)}
@@ -688,9 +747,36 @@ export function CallDialog({
                     })}
           </Button>
         )}
+        {!response && submitted !== null && !run.isPending && (
+          <Button disabled={refresh.isPending} onClick={() => refresh.mutate()}>
+            {t('Check the original request')}
+          </Button>
+        )}
         {response && (
           <>
             <CallResult response={response} />
+            {nativeConfirmation && !confirmation && (
+              <section className='space-y-3 rounded-lg border p-4'>
+                {confirmationURL && (
+                  <a
+                    className='text-primary underline'
+                    href={confirmationURL}
+                    target='_blank'
+                    rel='noopener noreferrer'
+                  >
+                    {t('Open confirmation page')}
+                  </a>
+                )}
+                <Button
+                  disabled={
+                    run.isPending || refresh.isPending || uncertainRequest
+                  }
+                  onClick={() => run.mutate('resume')}
+                >
+                  {t('Continue after confirmation')}
+                </Button>
+              </section>
+            )}
             {confirmation && (
               <section className='space-y-3 rounded-lg border p-4'>
                 <h4 className='font-medium'>{t('Confirm tool action')}</h4>
@@ -707,14 +793,14 @@ export function CallDialog({
                 </label>
                 <div className='flex flex-wrap gap-2'>
                   <Button
-                    disabled={!confirmed || run.isPending}
+                    disabled={!confirmed || run.isPending || uncertainRequest}
                     onClick={() => run.mutate('accept')}
                   >
                     {t('Confirm and continue')}
                   </Button>
                   <Button
                     variant='outline'
-                    disabled={run.isPending}
+                    disabled={run.isPending || uncertainRequest}
                     onClick={() => run.mutate('cancel')}
                   >
                     {t('Cancel action')}
@@ -744,7 +830,12 @@ export function CallDialog({
         )}
         {refresh.isError && (
           <p role='alert' className='text-destructive text-sm'>
-            {t('Could not refresh. Try again.')}
+            {refresh.error instanceof MarketAPIError &&
+            refresh.error.code === 'TOOL_MARKET_NOT_FOUND'
+              ? t(
+                  'The request was not found. Keep the original request ID and check again.'
+                )
+              : t('Could not refresh. Try again.')}
           </p>
         )}
       </DialogContent>
