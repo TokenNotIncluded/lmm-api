@@ -165,6 +165,8 @@ mod activity_tests {
                     total: 1,
                     five_minute: None,
                     one_hour: None,
+                    cache_creation_mode: None,
+                    reported_total: None,
                 }),
                 ..Usage::default()
             },
@@ -261,12 +263,16 @@ fn decode(row: PgRow) -> Result<Stored> {
         .price
         .validate_actor(stored.charge.actor_user_id)
         .map_err(|_| Error::Storage)?;
-    if stored
+    let cache_tariff = stored
         .charge
         .price
         .tiered
         .as_ref()
-        .is_some_and(|t| t.tariff.revision == 2)
+        .map(|t| t.tariff.compile().map(|t| t.requires_cache_creation()))
+        .transpose()
+        .map_err(|_| Error::Storage)?
+        .unwrap_or(false);
+    if cache_tariff
         && (stored.charge.usage.input != 0
             || stored.charge.usage.cached != 0
             || stored.charge.usage.output != 0
@@ -275,6 +281,23 @@ fn decode(row: PgRow) -> Result<Stored> {
         && stored.charge.usage.cache_creation.is_none()
     {
         return Err(Error::Storage);
+    }
+    if let Some(tariff) = &stored.charge.price.tiered {
+        if stored
+            .charge
+            .usage
+            .cache_creation
+            .is_some_and(|usage| usage.cache_creation_mode != tariff.cache_creation_mode)
+        {
+            return Err(Error::Storage);
+        }
+        if tariff.cache_creation_mode.is_some() {
+            stored
+                .charge
+                .price
+                .cost(stored.charge.usage)
+                .map_err(|_| Error::Storage)?;
+        }
     }
     match (&stored.charge.key_id, &stored.charge.oauth_source) {
         (Some(key), None) if *key > 0 => (),

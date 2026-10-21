@@ -54,7 +54,7 @@ impl ModelGateway {
         if attempt.protocol() != Protocol::OpenAiChat {
             return Err(RelayError::RouteUnavailable);
         }
-        freeze_assistant_tariff(&mut price, &self.bridge.provider_policy, &attempt);
+        freeze_assistant_tariff(&mut price, &self.bridge.provider_policy, &attempt)?;
         Ok(price)
     }
     pub(crate) fn validate_assistant_policy(
@@ -140,7 +140,7 @@ impl ModelGateway {
         {
             return Err(RelayError::RouteUnavailable);
         }
-        freeze_assistant_tariff(&mut price, &self.bridge.provider_policy, &attempt);
+        freeze_assistant_tariff(&mut price, &self.bridge.provider_policy, &attempt)?;
         price = bind_stored_assistant_price(&price, stored_price, actor_user_id)?;
         let mut endpoint =
             reqwest::Url::parse(attempt.endpoint()).map_err(|_| RelayError::RouteUnavailable)?;
@@ -308,8 +308,7 @@ impl ModelGateway {
         }
         let value: Value =
             serde_json::from_slice(&bytes).map_err(|_| RelayError::SettlementPending)?;
-        let observed = relay::provider_usage(relay::UpstreamProtocol::Chat, &value["usage"])
-            .map_err(|_| RelayError::SettlementPending)?;
+        let observed = assistant_provider_usage(&p.price, &value["usage"])?;
         self.bridge
             .provider_policy
             .validate_usage(&p.attempt, &observed, false)?;
@@ -322,14 +321,32 @@ fn freeze_assistant_tariff(
     price: &mut crate::billing::charging::Price,
     policy: &ProviderPolicy,
     attempt: &crate::routing::Attempt,
-) {
-    if let Some(tariff) = price
-        .tiered
-        .as_mut()
-        .filter(|tariff| tariff.tariff.revision == 2)
-    {
-        tariff.missing_cache_creation_is_zero = policy.missing_cache_creation_is_zero(attempt);
+) -> Result<(), RelayError> {
+    if let Some(tariff) = &mut price.tiered {
+        let compiled = tariff
+            .tariff
+            .compile()
+            .map_err(|_| RelayError::BillingUnavailable)?;
+        if compiled.requires_cache_creation() {
+            tariff.missing_cache_creation_is_zero = policy.missing_cache_creation_is_zero(attempt);
+        }
     }
+    Ok(())
+}
+
+fn assistant_provider_usage(
+    price: &crate::billing::charging::Price,
+    value: &Value,
+) -> Result<relay::Usage, RelayError> {
+    relay::provider_usage_with_cache_creation_mode(
+        relay::UpstreamProtocol::Chat,
+        value,
+        price
+            .tiered
+            .as_ref()
+            .and_then(|tariff| tariff.cache_creation_mode),
+    )
+    .map_err(|_| RelayError::SettlementPending)
 }
 
 /// Only the authenticated Core grant/turn row supplies this persisted price.
@@ -373,16 +390,8 @@ fn assistant_usage(
     {
         return Err(RelayError::SettlementPending);
     }
-    if let Some(tariff) = price
-        .tiered
-        .as_ref()
-        .filter(|tariff| tariff.tariff.revision == 2)
-    {
-        billing::complete_cache_usage(
-            observed,
-            tariff.input_semantics,
-            tariff.missing_cache_creation_is_zero,
-        )
+    if let Some(tariff) = &price.tiered {
+        billing::complete_tiered_usage(observed, tariff)
     } else {
         billing::complete_usage(observed, false)
     }
@@ -418,6 +427,19 @@ mod usage_tests {
 
     fn observed(value: Value) -> relay::Usage {
         relay::provider_usage(relay::UpstreamProtocol::Chat, &value).unwrap()
+    }
+
+    fn generic_price(missing_creation_is_zero: bool) -> Price {
+        let mut encoded = serde_json::to_value(price(missing_creation_is_zero)).unwrap();
+        encoded["version"] = json!("routing-3-rule-1");
+        encoded["tiered"]["cache_creation_mode"] = json!("generic_remainder_v1");
+        encoded["tiered"]["tariff"]["revision"] = json!(3);
+        encoded["tiered"]["tariff"]["uses_cache_write_1h"] = json!(true);
+        encoded["tiered"]["tariff"]["tiers"][0]["rates"]["cache_write_1h"] =
+            json!({"numerator":4,"denominator":1});
+        let price: Price = serde_json::from_value(encoded).unwrap();
+        price.validate().unwrap();
+        price
     }
 
     fn stored_trust_price(base: &Price, user_id: i64) -> Price {
@@ -588,7 +610,8 @@ mod usage_tests {
                 &mut prepared_price,
                 &gateway.bridge.provider_policy,
                 &attempt,
-            );
+            )
+            .unwrap();
             assert_eq!(quoted, prepared_price);
             let tariff = quoted.tiered.as_ref().unwrap();
             assert_eq!(
@@ -598,6 +621,23 @@ mod usage_tests {
             assert_eq!(
                 tariff.missing_cache_creation_is_zero,
                 missing_creation_is_zero
+            );
+            let mut generic = generic_price(false);
+            freeze_assistant_tariff(&mut generic, &gateway.bridge.provider_policy, &attempt)
+                .unwrap();
+            assert_eq!(
+                generic
+                    .tiered
+                    .as_ref()
+                    .unwrap()
+                    .missing_cache_creation_is_zero,
+                missing_creation_is_zero
+            );
+            let mut invalid = prepared_price;
+            invalid.tiered.as_mut().unwrap().tariff.revision = 4;
+            assert_eq!(
+                freeze_assistant_tariff(&mut invalid, &gateway.bridge.provider_policy, &attempt),
+                Err(RelayError::BillingUnavailable)
             );
             frozen_quotes.push(quoted);
         }
@@ -613,6 +653,8 @@ mod usage_tests {
             "prompt_tokens_details":{"cached_tokens":20,"cache_write_tokens":0}
         }));
         let expected = CacheCreationUsage {
+            cache_creation_mode: None,
+            reported_total: None,
             total: 0,
             five_minute: Some(0),
             one_hour: Some(0),
@@ -654,12 +696,139 @@ mod usage_tests {
         assert_eq!(
             usage.cache_creation,
             Some(CacheCreationUsage {
+                cache_creation_mode: None,
+                reported_total: None,
                 total: 70,
                 five_minute: Some(30),
                 one_hour: Some(40),
             })
         );
         assert_eq!(price.cost(usage).unwrap(), 125);
+    }
+
+    #[test]
+    fn revision_three_keeps_raw_creation_and_unknown_ttl_evidence() {
+        let price = generic_price(false);
+        for (reported, details, five, hour) in [
+            (70, Value::Null, None, None),
+            (70, json!({"ephemeral_5m_input_tokens":10}), Some(10), None),
+            (
+                20,
+                json!({"ephemeral_5m_input_tokens":30,"ephemeral_1h_input_tokens":40}),
+                Some(30),
+                Some(40),
+            ),
+        ] {
+            let receipt = assistant_provider_usage(
+                &price,
+                &json!({
+                    "prompt_tokens":100,"completion_tokens":5,"total_tokens":105,"cost":999,
+                    "prompt_tokens_details":{"cached_tokens":20},
+                    "cache_creation_input_tokens":reported,"cache_creation_details":details
+                }),
+            )
+            .unwrap();
+            let usage = assistant_usage(&price, 100, 5, receipt).unwrap();
+            assert_eq!(usage.upstream_cost_atto_usd, None);
+            assert_eq!(
+                usage.cache_creation,
+                Some(CacheCreationUsage {
+                    cache_creation_mode: Some(
+                        crate::routing::CacheCreationMode::GenericRemainderV1
+                    ),
+                    reported_total: Some(reported),
+                    total: 70,
+                    five_minute: five,
+                    one_hour: hour,
+                })
+            );
+            assert_eq!(price.cost(usage).unwrap(), 125);
+        }
+    }
+
+    #[test]
+    fn revision_three_interpretation_comes_only_from_the_frozen_price() {
+        let receipt = json!({
+            "prompt_tokens":100,"completion_tokens":5,
+            "prompt_tokens_details":{"cached_tokens":20},
+            "cache_creation_input_tokens":70,
+            "cache_creation_details":{"ephemeral_5m_input_tokens":10,"ephemeral_1h_input_tokens":20},
+            "cache_creation_mode":"generic_remainder_v1"
+        });
+        let generic = generic_price(false);
+        let observed = assistant_provider_usage(&generic, &receipt).unwrap();
+        let usage = assistant_usage(&generic, 100, 5, observed).unwrap();
+        assert_eq!(usage.cache_creation.unwrap().total, 70);
+        assert_eq!(
+            assistant_provider_usage(&price(false), &receipt),
+            Err(RelayError::SettlementPending)
+        );
+        assert_eq!(
+            bind_stored_assistant_price(&price(false), &generic, 7),
+            Err(RelayError::Forbidden)
+        );
+        assert_eq!(
+            assistant_usage(&generic, 99, 5, observed),
+            Err(RelayError::SettlementPending)
+        );
+        assert_eq!(
+            assistant_usage(&generic, 100, 4, observed),
+            Err(RelayError::SettlementPending)
+        );
+    }
+
+    #[test]
+    fn revision_three_absence_zero_requires_the_frozen_contract_and_no_ttl_evidence() {
+        let missing = json!({
+            "prompt_tokens":100,"completion_tokens":5,
+            "prompt_tokens_details":{"cached_tokens":20}
+        });
+        let unknown = generic_price(false);
+        let observed = assistant_provider_usage(&unknown, &missing).unwrap();
+        assert_eq!(
+            assistant_usage(&unknown, 100, 5, observed),
+            Err(RelayError::SettlementPending)
+        );
+        let contracted = generic_price(true);
+        let usage = assistant_usage(&contracted, 100, 5, observed).unwrap();
+        assert_eq!(
+            usage.cache_creation,
+            Some(CacheCreationUsage {
+                cache_creation_mode: Some(crate::routing::CacheCreationMode::GenericRemainderV1),
+                reported_total: None,
+                total: 0,
+                five_minute: None,
+                one_hour: None,
+            })
+        );
+        assert_eq!(contracted.cost(usage).unwrap(), 107);
+        assert_eq!(
+            serde_json::to_value(usage.cache_creation.unwrap()).unwrap(),
+            json!({"total":0,"cache_creation_mode":"generic_remainder_v1"})
+        );
+
+        let mut explicit_zero = missing.clone();
+        explicit_zero["cache_creation_input_tokens"] = json!(0);
+        let observed = assistant_provider_usage(&unknown, &explicit_zero).unwrap();
+        let explicit = assistant_usage(&unknown, 100, 5, observed).unwrap();
+        assert_eq!(explicit.cache_creation.unwrap().reported_total, Some(0));
+        assert_eq!(explicit.cache_creation.unwrap().five_minute, None);
+        assert_eq!(explicit.cache_creation.unwrap().one_hour, None);
+
+        for details in [
+            json!({}),
+            json!({"ephemeral_5m_input_tokens":0}),
+            json!({"ephemeral_1h_input_tokens":0}),
+            json!({"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0}),
+        ] {
+            let mut partial = missing.clone();
+            partial["cache_creation_details"] = details;
+            let observed = assistant_provider_usage(&contracted, &partial).unwrap();
+            assert_eq!(
+                assistant_usage(&contracted, 100, 5, observed),
+                Err(RelayError::SettlementPending)
+            );
+        }
     }
 
     #[test]

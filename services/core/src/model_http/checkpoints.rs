@@ -183,42 +183,44 @@ impl Bridge {
             )
         };
         let upstream_cost = selected.price.upstream_cost_group_ppm.is_some();
-        let cache_tariff = selected
-            .price
-            .tiered
-            .as_ref()
-            .filter(|t| t.tariff.revision == 2);
+        let tiered_tariff = selected.price.tiered.as_ref();
+        let requires_creation = tiered_tariff
+            .map(|tariff| tariff.tariff.compile().map(|t| t.requires_cache_creation()))
+            .transpose()
+            .map_err(|_| RelayError::SettlementPending)?
+            .unwrap_or(false);
+        let normalized = if checkpoint.terminal_observed {
+            tiered_tariff
+                .map(|tariff| super::billing::complete_tiered_usage(checkpoint.usage, tariff))
+                .transpose()?
+        } else {
+            None
+        };
         // A persisted terminal is authority for automatic settlement after an
         // OS restart. Validate the original provider contract BEFORE writing it,
         // so recovery cannot turn a rejected receipt into a zero-cache charge.
         if checkpoint.terminal_observed {
-            self.provider_policy.validate_usage(
-                &selected.attempt,
-                &checkpoint.usage,
-                upstream_cost,
-            )?;
-            if let Some(tariff) = cache_tariff {
-                super::billing::complete_cache_usage(
-                    checkpoint.usage,
-                    tariff.input_semantics,
-                    tariff.missing_cache_creation_is_zero,
-                )?;
+            let mut policy_usage = checkpoint.usage;
+            if let Some(usage) = normalized {
+                policy_usage.input_tokens = Some(usage.input as u64);
             }
+            self.provider_policy
+                .validate_usage(&selected.attempt, &policy_usage, upstream_cost)?;
         }
         checkpoint
             .usage
             .validate()
             .map_err(|_| RelayError::SettlementPending)?;
-        if checkpoint
-            .usage
-            .input_tokens
+        if normalized
+            .map(|usage| usage.input as u64)
+            .or(checkpoint.usage.input_tokens)
             .is_some_and(|v| v > selected.input_token_ceiling as u64)
             || checkpoint
                 .usage
                 .output_tokens
                 .is_some_and(|v| v > u64::from(output_ceiling))
             || (!upstream_cost
-                && cache_tariff.is_none()
+                && !requires_creation
                 && (checkpoint
                     .usage
                     .cache_creation_input_tokens
@@ -306,18 +308,13 @@ fn recovery_priced_usage(
     sequence: i64,
     price: &charging::Price,
 ) -> Option<charging::Usage> {
-    let Some(tariff) = price.tiered.as_ref().filter(|t| t.tariff.revision == 2) else {
+    let Some(tariff) = price.tiered.as_ref() else {
         return recovery_usage(value, sequence, price.upstream_cost_group_ppm.is_some());
     };
     if !(1..=65_536).contains(&sequence) {
         return None;
     }
-    super::billing::complete_cache_usage(
-        serde_json::from_value(value).ok()?,
-        tariff.input_semantics,
-        tariff.missing_cache_creation_is_zero,
-    )
-    .ok()
+    super::billing::complete_tiered_usage(serde_json::from_value(value).ok()?, tariff).ok()
 }
 
 #[cfg(test)]

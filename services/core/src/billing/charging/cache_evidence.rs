@@ -42,9 +42,14 @@ pub(super) fn restore(base: Usage, evidence: Option<Value>) -> Result<Usage> {
             usage.cached,
             usage.output,
             usage.upstream_cost_atto_usd,
-            usage
-                .cache_creation
-                .map(|value| (value.total, value.five_minute, value.one_hour)),
+            usage.cache_creation.map(|value| {
+                (
+                    value.total,
+                    value.reported_total,
+                    value.five_minute,
+                    value.one_hour,
+                )
+            }),
             usage
                 .image
                 .map(|value| (value.output_images, value.provider_receipt_sha256)),
@@ -84,6 +89,8 @@ mod tests {
                 total,
                 five_minute,
                 one_hour,
+                cache_creation_mode: None,
+                reported_total: None,
             }),
             ..Usage::default()
         }
@@ -94,6 +101,52 @@ mod tests {
     }
     fn event(event_id: &str, usage: Usage) -> Value {
         json!({"event_id":event_id,"usage":usage})
+    }
+
+    fn generic(reported: i64) -> Usage {
+        let mut value = usage(30, 10, Some(5), Some(5));
+        let created = value.cache_creation.as_mut().unwrap();
+        created.cache_creation_mode = Some(crate::routing::CacheCreationMode::GenericRemainderV1);
+        created.reported_total = Some(reported);
+        value
+    }
+
+    #[test]
+    fn generic_replay_keeps_raw_aggregate_when_the_normalized_total_is_unchanged() {
+        let first = generic(8);
+        let latest = generic(9);
+        assert_eq!(
+            restore(
+                base(latest),
+                Some(json!(
+                    [event("final", latest), event("usage:first", first),]
+                ))
+            ),
+            Ok(latest)
+        );
+        assert_eq!(latest.cache_creation.unwrap().reported_total, Some(9));
+    }
+
+    #[test]
+    fn generic_replay_cannot_relabel_strict_evidence_or_fabricate_an_effective_total() {
+        let latest = generic(9);
+        let strict = usage(30, 10, Some(5), Some(5));
+        assert_eq!(
+            restore(
+                base(latest),
+                Some(json!([
+                    event("usage:strict", strict),
+                    event("final", latest),
+                ]))
+            ),
+            Err(Error::Storage)
+        );
+        let mut wrong = latest;
+        wrong.cache_creation.as_mut().unwrap().total = 11;
+        assert_eq!(
+            restore(base(wrong), Some(json!([event("final", wrong)]))),
+            Err(Error::Storage)
+        );
     }
 
     #[test]

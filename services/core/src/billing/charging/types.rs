@@ -47,14 +47,40 @@ pub struct CacheCreationUsage {
     pub five_minute: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub one_hour: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_creation_mode: Option<crate::routing::CacheCreationMode>,
+    /// Revision 3 keeps the original aggregate beside its normalized maximum.
+    /// None is reserved for a frozen, explicitly reviewed absence-zero policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reported_total: Option<i64>,
 }
 impl CacheCreationUsage {
     pub(crate) fn valid(self) -> bool {
-        self.total >= 0
+        if self.total < 0
+            || [self.five_minute, self.one_hour, self.reported_total]
+                .into_iter()
+                .flatten()
+                .any(|v| v < 0)
+        {
+            return false;
+        }
+        if self.cache_creation_mode == Some(crate::routing::CacheCreationMode::GenericRemainderV1) {
+            return match self.reported_total {
+                Some(reported) => crate::routing::CacheCreationPartition::from_normalized(
+                    self.total as u64,
+                    reported as u64,
+                    self.five_minute.map(|v| v as u64),
+                    self.one_hour.map(|v| v as u64),
+                )
+                .is_ok(),
+                None => self.total == 0 && self.five_minute.is_none() && self.one_hour.is_none(),
+            };
+        }
+        self.reported_total.is_none()
             && [self.five_minute, self.one_hour]
                 .into_iter()
                 .flatten()
-                .all(|v| (0..=self.total).contains(&v))
+                .all(|v| v <= self.total)
             && match (self.five_minute, self.one_hour) {
                 (Some(five), Some(hour)) => five.checked_add(hour) == Some(self.total),
                 _ => true,
@@ -64,6 +90,17 @@ impl CacheCreationUsage {
         let follows = |now: Option<i64>, old: Option<i64>| {
             old.is_none_or(|old| now.is_some_and(|now| now >= old))
         };
+        if self.cache_creation_mode != previous.cache_creation_mode {
+            return false;
+        }
+        if self.cache_creation_mode == Some(crate::routing::CacheCreationMode::GenericRemainderV1) {
+            return self.valid()
+                && previous.valid()
+                && self.total >= previous.total
+                && follows(self.reported_total, previous.reported_total)
+                && follows(self.five_minute, previous.five_minute)
+                && follows(self.one_hour, previous.one_hour);
+        }
         let buckets = |value: Self| match (value.five_minute, value.one_hour) {
             (Some(five), None) => (Some(five), value.total.checked_sub(five)),
             (None, Some(hour)) => (value.total.checked_sub(hour), Some(hour)),
@@ -246,6 +283,13 @@ impl Price {
         if !usage.valid() {
             return Err(Error::Invalid);
         }
+        let expected_cache_mode = self.tiered.as_ref().and_then(|t| t.cache_creation_mode);
+        if usage
+            .cache_creation
+            .is_some_and(|created| created.cache_creation_mode != expected_cache_mode)
+        {
+            return Err(Error::Invalid);
+        }
         if let Some(price) = &self.image {
             return price
                 .cost_with_discount(&usage.image.ok_or(Error::Invalid)?, self.discount())
@@ -371,7 +415,18 @@ impl Price {
         // A successful nonempty revision-2 measurement must be explicit, even
         // when a provider reports exactly zero cache creation.
         match usage.cache_creation {
-            Some(value) => Ok(Some(value)),
+            Some(value)
+                if value.cache_creation_mode == tariff.cache_creation_mode
+                    && (tariff.cache_creation_mode.is_none()
+                        || value.reported_total.is_some()
+                        || (tariff.missing_cache_creation_is_zero
+                            && value.total == 0
+                            && value.five_minute.is_none()
+                            && value.one_hour.is_none())) =>
+            {
+                Ok(Some(value))
+            }
+            Some(_) => Err(Error::Invalid),
             None if usage.input == 0 && usage.cached == 0 && usage.output == 0 => Ok(None),
             None => Err(Error::Invalid),
         }
@@ -679,6 +734,165 @@ pub(super) fn valid_id(value: &str) -> bool {
 }
 
 #[cfg(test)]
+mod generic_remainder_tests {
+    use super::*;
+    use crate::routing::{
+        CacheCreationMode, DecimalRate, InputSemantics, PersistedTieredTariff, TieredRates,
+        TieredTariff, TokenTier,
+    };
+
+    fn rate(numerator: u64, denominator: u64) -> DecimalRate {
+        DecimalRate {
+            numerator,
+            denominator,
+        }
+    }
+    fn price() -> Price {
+        Price {
+            user_trust: None,
+            image: None,
+            upstream_cost_group_ppm: None,
+            tiered: Some(PersistedTieredTariff {
+                tariff: TieredTariff {
+                    revision: 3,
+                    source_digest: "ab".repeat(32),
+                    uses_cache_read: true,
+                    uses_cache_write: true,
+                    uses_cache_write_1h: true,
+                    tiers: vec![TokenTier {
+                        up_to_input_tokens: None,
+                        rates: TieredRates {
+                            input: rate(5, 1),
+                            output: rate(25, 1),
+                            cache_read: rate(1, 2),
+                            cache_write: rate(25, 4),
+                            cache_write_1h: Some(rate(10, 1)),
+                        },
+                    }],
+                },
+                input_semantics: InputSemantics::AnthropicText,
+                group_multiplier_ppm: 1_000_000,
+                speed_multiplier_ppm: 1_000_000,
+                credits_per_usd: 500_000,
+                missing_cache_creation_is_zero: false,
+                cache_creation_mode: Some(CacheCreationMode::GenericRemainderV1),
+            }),
+            version: "generic-v3".into(),
+            model: "synthetic".into(),
+            group: "allowed".into(),
+            input_per_million: 0,
+            cached_per_million: 0,
+            output_per_million: 0,
+        }
+    }
+    fn usage(reported: Option<i64>, total: i64, five: Option<i64>, hour: Option<i64>) -> Usage {
+        Usage {
+            input: 120 + total,
+            cached: 20,
+            cache_creation: Some(CacheCreationUsage {
+                total,
+                five_minute: five,
+                one_hour: hour,
+                cache_creation_mode: Some(CacheCreationMode::GenericRemainderV1),
+                reported_total: reported,
+            }),
+            ..Usage::default()
+        }
+    }
+
+    #[test]
+    fn generic_price_preserves_raw_aggregate_and_prices_the_real_remainder() {
+        let mut price = price();
+        let measured = usage(Some(50), 50, Some(2), Some(3));
+        assert_eq!(price.cost(measured), Ok(417));
+        price.tiered.as_mut().unwrap().input_semantics = InputSemantics::Inclusive;
+        assert_eq!(price.cost(measured), Ok(411));
+        let below_split = usage(Some(20), 70, Some(30), Some(40));
+        assert!(below_split.valid());
+        assert_eq!(below_split.cache_creation.unwrap().reported_total, Some(20));
+        assert!(!usage(Some(20), 80, Some(30), Some(40)).valid());
+    }
+
+    #[test]
+    fn raw_aggregate_regression_cannot_hide_behind_the_same_effective_maximum() {
+        let old = usage(Some(12), 12, Some(10), Some(2));
+        let decreased = usage(Some(11), 12, Some(10), Some(2));
+        assert!(old.valid() && decreased.valid());
+        assert!(!decreased.follows(old));
+        let reclassified = usage(Some(8), 8, None, Some(7));
+        let first = usage(Some(7), 7, None, Some(5));
+        assert!(reclassified.follows(first));
+        let explicit_five = usage(Some(7), 7, Some(2), Some(5));
+        assert!(!reclassified.follows(explicit_five));
+    }
+
+    #[test]
+    fn generic_zero_requires_the_original_absence_contract_and_never_forges_a_receipt() {
+        let mut price = price();
+        let absent = usage(None, 0, None, None);
+        assert!(absent.valid());
+        assert_eq!(price.cost(absent), Err(Error::Invalid));
+        price
+            .tiered
+            .as_mut()
+            .unwrap()
+            .missing_cache_creation_is_zero = true;
+        assert_eq!(price.cost(absent), Ok(255));
+        let actual_zero = usage(Some(0), 0, None, None);
+        assert_eq!(price.cost(actual_zero), Ok(255));
+        assert_ne!(
+            serde_json::to_value(absent).unwrap(),
+            serde_json::to_value(actual_zero).unwrap()
+        );
+        assert!(!usage(None, 0, Some(0), Some(0)).valid());
+    }
+
+    #[test]
+    fn generic_evidence_is_not_accepted_by_an_old_or_unrelated_price() {
+        let mut price = price();
+        let measured = usage(Some(0), 0, None, None);
+        price.tiered.as_mut().unwrap().tariff.revision = 2;
+        price.tiered.as_mut().unwrap().cache_creation_mode = None;
+        assert_eq!(price.cost(measured), Err(Error::Invalid));
+        price.tiered = None;
+        assert_eq!(price.cost(measured), Err(Error::Invalid));
+        let price = self::price();
+        let mut strict = measured;
+        let created = strict.cache_creation.as_mut().unwrap();
+        created.cache_creation_mode = None;
+        created.reported_total = None;
+        assert!(strict.valid());
+        assert_eq!(price.cost(strict), Err(Error::Invalid));
+        assert!(!measured.follows(strict));
+    }
+
+    #[test]
+    fn old_cache_json_remains_byte_identical_while_new_mode_is_explicit() {
+        let old = CacheCreationUsage {
+            total: 0,
+            five_minute: Some(0),
+            one_hour: Some(0),
+            cache_creation_mode: None,
+            reported_total: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&old).unwrap(),
+            r#"{"total":0,"five_minute":0,"one_hour":0}"#
+        );
+        let generic = usage(Some(0), 0, None, None).cache_creation.unwrap();
+        let value = serde_json::to_value(generic).unwrap();
+        assert_eq!(value["cache_creation_mode"], "generic_remainder_v1");
+        assert_eq!(value["reported_total"], 0);
+        assert!(value.get("five_minute").is_none());
+        assert!(value.get("one_hour").is_none());
+        assert_eq!(
+            serde_json::from_value::<CacheCreationUsage>(value).unwrap(),
+            generic
+        );
+    }
+}
+
+#[cfg(test)]
 mod delegated_source_tests {
     use super::*;
 
@@ -694,12 +908,16 @@ mod delegated_source_tests {
             !CacheCreationUsage {
                 total: 8,
                 five_minute: None,
-                one_hour: Some(7)
+                one_hour: Some(7),
+                cache_creation_mode: None,
+                reported_total: None,
             }
             .follows(CacheCreationUsage {
                 total: 7,
                 five_minute: None,
-                one_hour: Some(5)
+                one_hour: Some(5),
+                cache_creation_mode: None,
+                reported_total: None,
             })
         );
         assert_eq!(
@@ -715,6 +933,8 @@ mod delegated_source_tests {
                 total: 5,
                 five_minute: Some(2),
                 one_hour: Some(3),
+                cache_creation_mode: None,
+                reported_total: None,
             }),
             ..old
         };
@@ -726,6 +946,8 @@ mod delegated_source_tests {
                 total: 5,
                 five_minute: Some(2),
                 one_hour: None,
+                cache_creation_mode: None,
+                reported_total: None,
             }),
             ..old
         };
@@ -735,16 +957,22 @@ mod delegated_source_tests {
                 total: -1,
                 five_minute: None,
                 one_hour: None,
+                cache_creation_mode: None,
+                reported_total: None,
             },
             CacheCreationUsage {
                 total: 5,
                 five_minute: Some(2),
                 one_hour: Some(4),
+                cache_creation_mode: None,
+                reported_total: None,
             },
             CacheCreationUsage {
                 total: 9,
                 five_minute: None,
                 one_hour: None,
+                cache_creation_mode: None,
+                reported_total: None,
             },
         ] {
             assert!(
@@ -760,6 +988,8 @@ mod delegated_source_tests {
                 total: 0,
                 five_minute: Some(0),
                 one_hour: Some(0),
+                cache_creation_mode: None,
+                reported_total: None,
             }),
             ..old
         };

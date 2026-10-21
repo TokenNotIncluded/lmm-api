@@ -97,6 +97,7 @@ pub(super) fn credit_price(
                 speed_multiplier_ppm,
                 credits_per_usd: 500_000,
                 missing_cache_creation_is_zero: false,
+                cache_creation_mode: tariff.cache_creation_mode(),
             }),
             version: format!("routing-{}-rule-{}", quote.version(), quote.rule_id()),
             model: model.to_owned(),
@@ -247,7 +248,12 @@ impl RouteProvider for Bridge {
                 } else {
                     crate::routing::InputSemantics::Inclusive
                 };
-                if tariff.tariff.revision == 2 {
+                if tariff
+                    .tariff
+                    .compile()
+                    .map_err(|_| RelayError::BillingUnavailable)?
+                    .requires_cache_creation()
+                {
                     tariff.missing_cache_creation_is_zero = self
                         .provider_policy
                         .missing_cache_creation_is_zero(&attempt);
@@ -316,6 +322,7 @@ impl RouteProvider for Bridge {
                 secret,
                 attempt.quote().version(),
             )?
+            .with_cache_creation_mode(price.tiered.as_ref().and_then(|t| t.cache_creation_mode))
             .with_availability_guard(Arc::new(move || availability.is_available()));
             let mut active = self
                 .active

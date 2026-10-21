@@ -5,6 +5,8 @@ use reqwest::{Url, header::HeaderValue};
 use serde::Serialize;
 use serde_json::{Value, json};
 
+use crate::routing::{CacheCreationMode, CacheCreationPartition};
+
 pub type RelayFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, RelayError>> + Send + 'a>>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -255,6 +257,7 @@ pub struct Route {
     pub price_version: u64,
     pub(crate) endpoint: Url,
     pub(crate) credential: HeaderValue,
+    pub(crate) cache_creation_mode: Option<CacheCreationMode>,
     availability: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
 }
 impl fmt::Debug for Route {
@@ -317,8 +320,15 @@ impl Route {
             model,
             credential,
             price_version,
+            cache_creation_mode: None,
             availability: None,
         })
+    }
+
+    /// Captured from the selected frozen Core price, never from provider JSON.
+    pub(crate) fn with_cache_creation_mode(mut self, mode: Option<CacheCreationMode>) -> Self {
+        self.cache_creation_mode = mode;
+        self
     }
 
     /// Server-owned snapshot guard, checked immediately before sending bytes.
@@ -455,15 +465,29 @@ pub struct Usage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream_cost_atto_usd: Option<u128>,
     pub input_tokens: Option<u64>,
+    /// Raw Anthropic input evidence for the generic contract; never a zero guess.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uncached_input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
     pub cached_input_tokens: Option<u64>,
     pub cache_creation_input_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_creation_details: Option<CacheCreationDetails>,
+    /// Frozen Core interpretation; the provider's aggregate remains unmodified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_creation_mode: Option<CacheCreationMode>,
     pub reasoning_output_tokens: Option<u64>,
 }
 impl Usage {
     pub(crate) fn merge(&mut self, next: Self) -> Result<(), RelayError> {
+        if next.uncached_input_tokens.is_some() && next.cache_creation_mode.is_none() {
+            return Err(RelayError::Protocol(
+                "uncached input without cache creation mode",
+            ));
+        }
+        if self.cache_creation_mode.is_some() || next.cache_creation_mode.is_some() {
+            return self.merge_generic_creation(next);
+        }
         fn advances(old: Option<u64>, next: Option<u64>) -> bool {
             next.is_some_and(|value| old.is_none_or(|old| value > old))
         }
@@ -573,9 +597,146 @@ impl Usage {
         *self = combined;
         Ok(())
     }
+
+    fn merge_generic_creation(&mut self, next: Self) -> Result<(), RelayError> {
+        fn advances(old: Option<u64>, next: Option<u64>) -> bool {
+            next.is_some_and(|value| old.is_none_or(|old| value > old))
+        }
+        fn field(old: &mut Option<u64>, next: Option<u64>) -> Result<(), RelayError> {
+            if let Some(value) = next {
+                if old.is_some_and(|old| value < old) {
+                    return Err(RelayError::Protocol("usage counter decreased"));
+                }
+                *old = Some(value);
+            }
+            Ok(())
+        }
+        if self.cache_creation_mode != next.cache_creation_mode
+            && *self != Self::default()
+            && next != Self::default()
+        {
+            return Err(RelayError::Protocol("cache creation mode changed"));
+        }
+        self.validate()?;
+        next.validate()?;
+        let mut combined = *self;
+        combined.cache_creation_mode = self.cache_creation_mode.or(next.cache_creation_mode);
+        let input_advanced = advances(self.input_tokens, next.input_tokens);
+        let uncached_advanced = advances(self.uncached_input_tokens, next.uncached_input_tokens);
+        let read_advanced = advances(self.cached_input_tokens, next.cached_input_tokens);
+        let raw_creation_advanced = advances(
+            self.cache_creation_input_tokens,
+            next.cache_creation_input_tokens,
+        );
+        if (input_advanced || uncached_advanced || read_advanced)
+            && self.cache_creation_input_tokens.is_some()
+            && next.cache_creation_input_tokens.is_none()
+        {
+            return Err(RelayError::Protocol("missing current cache creation usage"));
+        }
+        if let Some(cost) = next.upstream_cost_atto_usd
+            && combined
+                .upstream_cost_atto_usd
+                .is_some_and(|old| cost < old)
+        {
+            return Err(RelayError::Protocol("upstream cost decreased"));
+        }
+        combined.upstream_cost_atto_usd = next.upstream_cost_atto_usd;
+        field(&mut combined.input_tokens, next.input_tokens)?;
+        field(
+            &mut combined.uncached_input_tokens,
+            next.uncached_input_tokens,
+        )?;
+        field(&mut combined.output_tokens, next.output_tokens)?;
+        field(&mut combined.cached_input_tokens, next.cached_input_tokens)?;
+        field(
+            &mut combined.cache_creation_input_tokens,
+            next.cache_creation_input_tokens,
+        )?;
+        if let Some(details) = next.cache_creation_details {
+            let combined_details = combined
+                .cache_creation_details
+                .get_or_insert_with(CacheCreationDetails::default);
+            field(
+                &mut combined_details.ephemeral_5m_input_tokens,
+                details.ephemeral_5m_input_tokens,
+            )?;
+            field(
+                &mut combined_details.ephemeral_1h_input_tokens,
+                details.ephemeral_1h_input_tokens,
+            )?;
+        }
+        field(
+            &mut combined.reasoning_output_tokens,
+            next.reasoning_output_tokens,
+        )?;
+        let effective_advanced = advances(
+            self.effective_cache_creation_input_tokens()?,
+            combined.effective_cache_creation_input_tokens()?,
+        );
+        if (effective_advanced || read_advanced)
+            && (self.input_tokens.is_some() || self.uncached_input_tokens.is_some())
+            && (next.input_tokens.is_none()
+                || (self.uncached_input_tokens.is_some() && next.uncached_input_tokens.is_none()))
+        {
+            return Err(RelayError::Protocol("missing current input usage"));
+        }
+        if (input_advanced
+            || uncached_advanced
+            || read_advanced
+            || raw_creation_advanced
+            || effective_advanced)
+            && let Some(previous) = self
+                .cache_creation_details
+                .filter(CacheCreationDetails::has_known_bucket)
+        {
+            // Generic remainder cannot prove an absent TTL. Every formerly
+            // known bucket needs fresh evidence on the new measurement basis.
+            let current = next.cache_creation_details.ok_or(RelayError::Protocol(
+                "missing current cache creation details",
+            ))?;
+            if next.cache_creation_input_tokens.is_none()
+                || (previous.ephemeral_5m_input_tokens.is_some()
+                    && current.ephemeral_5m_input_tokens.is_none())
+                || (previous.ephemeral_1h_input_tokens.is_some()
+                    && current.ephemeral_1h_input_tokens.is_none())
+            {
+                return Err(RelayError::Protocol(
+                    "missing current cache creation details",
+                ));
+            }
+        }
+        combined.validate()?;
+        *self = combined;
+        Ok(())
+    }
+
+    /// Effective creation is derived from real aggregate and TTL evidence.
+    /// Generic mode never establishes an aggregate from TTLs alone.
+    pub(crate) fn effective_cache_creation_input_tokens(&self) -> Result<Option<u64>, RelayError> {
+        match (self.cache_creation_mode, self.cache_creation_input_tokens) {
+            (Some(CacheCreationMode::GenericRemainderV1), Some(reported)) => {
+                let details = self.cache_creation_details.unwrap_or_default();
+                CacheCreationPartition::from_reported(
+                    reported,
+                    details.ephemeral_5m_input_tokens,
+                    details.ephemeral_1h_input_tokens,
+                )
+                .map(|partition| Some(partition.total()))
+                .map_err(|_| RelayError::Protocol("invalid cache creation usage"))
+            }
+            _ => Ok(self.cache_creation_input_tokens),
+        }
+    }
+
     /// Validate both live observations and receipts restored after a restart.
     /// Deserialization alone does not establish counter consistency.
     pub(crate) fn validate(&self) -> Result<(), RelayError> {
+        if self.uncached_input_tokens.is_some() && self.cache_creation_mode.is_none() {
+            return Err(RelayError::Protocol(
+                "uncached input without cache creation mode",
+            ));
+        }
         if let (Some(i), Some(o)) = (self.input_tokens, self.output_tokens) {
             i.checked_add(o)
                 .ok_or(RelayError::Protocol("usage overflow"))?;
@@ -587,7 +748,8 @@ impl Usage {
             .cache_creation_details
             .map(|details| {
                 let known = details.known_total()?;
-                if let Some(total) = self.cache_creation_input_tokens
+                if self.cache_creation_mode.is_none()
+                    && let Some(total) = self.cache_creation_input_tokens
                     && (known > total || details.total()?.is_some_and(|sum| sum != total))
                 {
                     return Err(RelayError::Protocol("inconsistent cache creation usage"));
@@ -599,10 +761,23 @@ impl Usage {
         let cached = self
             .cached_input_tokens
             .unwrap_or(0)
-            .checked_add(self.cache_creation_input_tokens.unwrap_or(known_creation))
+            .checked_add(
+                self.effective_cache_creation_input_tokens()?
+                    .unwrap_or(known_creation),
+            )
             .ok_or(RelayError::Protocol("usage overflow"))?;
         if self.input_tokens.is_some_and(|total| cached > total) {
             return Err(RelayError::Protocol("cache usage exceeds input total"));
+        }
+        if let Some(uncached) = self.uncached_input_tokens {
+            let lower = uncached
+                .checked_add(cached)
+                .ok_or(RelayError::Protocol("usage overflow"))?;
+            if let Some(input) = self.input_tokens
+                && (lower > input || (self.cache_creation_input_tokens.is_some() && lower != input))
+            {
+                return Err(RelayError::Protocol("inconsistent input usage"));
+            }
         }
         if let (Some(total), Some(reasoning)) = (self.output_tokens, self.reasoning_output_tokens)
             && reasoning > total
@@ -1175,11 +1350,13 @@ mod a07_usage_tests {
     fn zero_boundary_repeated_receipt_and_missing_fields_are_valid() {
         let zero = Usage {
             upstream_cost_atto_usd: None,
+            uncached_input_tokens: None,
             input_tokens: Some(0),
             output_tokens: Some(0),
             cached_input_tokens: Some(0),
             cache_creation_input_tokens: Some(0),
             cache_creation_details: None,
+            cache_creation_mode: None,
             reasoning_output_tokens: Some(0),
         };
         let mut value = Usage::default();
@@ -1226,6 +1403,415 @@ mod a07_usage_tests {
                 "output_tokens": 3,
                 "unknown_dimension": 1,
             }))
+            .is_err()
+        );
+    }
+}
+
+#[cfg(test)]
+mod generic_creation_tests {
+    use super::*;
+
+    fn measured(
+        input: Option<u64>,
+        aggregate: Option<u64>,
+        five: Option<u64>,
+        hour: Option<u64>,
+    ) -> Usage {
+        Usage {
+            input_tokens: input,
+            cache_creation_input_tokens: aggregate,
+            cache_creation_details: (five.is_some() || hour.is_some()).then_some(
+                CacheCreationDetails {
+                    ephemeral_5m_input_tokens: five,
+                    ephemeral_1h_input_tokens: hour,
+                },
+            ),
+            cache_creation_mode: Some(CacheCreationMode::GenericRemainderV1),
+            ..Usage::default()
+        }
+    }
+
+    #[test]
+    fn generic_effective_total_preserves_raw_aggregate_and_unknown_ttls() {
+        let value = Usage {
+            cached_input_tokens: Some(20),
+            ..measured(Some(37), Some(2), Some(3), Some(4))
+        };
+        assert!(value.validate().is_ok());
+        assert_eq!(value.cache_creation_input_tokens, Some(2));
+        assert_eq!(
+            value.effective_cache_creation_input_tokens().unwrap(),
+            Some(7)
+        );
+        assert!(
+            Usage {
+                input_tokens: Some(26),
+                ..value
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            Usage {
+                cache_creation_mode: None,
+                ..value
+            }
+            .validate()
+            .is_err()
+        );
+        let aggregate_only = measured(Some(10), Some(10), None, None);
+        assert_eq!(
+            aggregate_only
+                .effective_cache_creation_input_tokens()
+                .unwrap(),
+            Some(10)
+        );
+        assert_eq!(aggregate_only.cache_creation_details, None);
+        let no_aggregate = measured(None, None, Some(0), Some(0));
+        assert_eq!(
+            no_aggregate
+                .effective_cache_creation_input_tokens()
+                .unwrap(),
+            None
+        );
+        let no_aggregate = measured(None, None, Some(2), Some(3));
+        assert_eq!(
+            no_aggregate
+                .effective_cache_creation_input_tokens()
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn generic_raw_decrease_cannot_hide_behind_unchanged_effective_total() {
+        let mut value = measured(Some(100), Some(5), Some(10), Some(0));
+        let before = value;
+        assert!(
+            value
+                .merge(measured(Some(100), Some(4), Some(10), Some(0)))
+                .is_err()
+        );
+        assert_eq!(value, before);
+    }
+
+    #[test]
+    fn generic_classification_can_reduce_remainder_without_inventing_ttls() {
+        let mut value = measured(Some(100), Some(10), None, None);
+        value.merge(measured(None, None, Some(2), Some(3))).unwrap();
+        assert_eq!(value.cache_creation_input_tokens, Some(10));
+        assert_eq!(
+            value.cache_creation_details,
+            Some(CacheCreationDetails {
+                ephemeral_5m_input_tokens: Some(2),
+                ephemeral_1h_input_tokens: Some(3),
+            })
+        );
+        assert_eq!(
+            value.effective_cache_creation_input_tokens().unwrap(),
+            Some(10)
+        );
+        let mut value = measured(Some(100), Some(7), None, Some(5));
+        value
+            .merge(measured(Some(101), Some(8), None, Some(7)))
+            .unwrap();
+        assert_eq!(
+            value
+                .cache_creation_details
+                .unwrap()
+                .ephemeral_5m_input_tokens,
+            None
+        );
+        assert_eq!(
+            value.effective_cache_creation_input_tokens().unwrap(),
+            Some(8)
+        );
+    }
+
+    #[test]
+    fn generic_new_basis_requires_all_previously_known_ttls() {
+        let initial = measured(Some(100), Some(7), Some(2), Some(5));
+        for next in [
+            measured(Some(101), Some(8), None, Some(7)),
+            measured(Some(101), Some(8), Some(3), None),
+            measured(Some(101), Some(8), None, None),
+            measured(Some(101), None, Some(3), Some(5)),
+            measured(Some(101), Some(8), Some(1), Some(7)),
+        ] {
+            let mut value = initial;
+            assert!(value.merge(next).is_err(), "{next:?}");
+            assert_eq!(value, initial);
+        }
+        let mut value = initial;
+        value
+            .merge(measured(Some(101), Some(8), Some(2), Some(6)))
+            .unwrap();
+        assert_eq!(value.cache_creation_input_tokens, Some(8));
+    }
+
+    #[test]
+    fn generic_effective_growth_needs_fresh_inclusive_input() {
+        let initial = measured(Some(100), Some(2), Some(3), Some(4));
+        let mut value = initial;
+        assert!(
+            value
+                .merge(measured(None, Some(2), Some(3), Some(5)))
+                .is_err()
+        );
+        assert_eq!(value, initial);
+        value
+            .merge(measured(Some(101), Some(2), Some(3), Some(5)))
+            .unwrap();
+        assert_eq!(
+            value.effective_cache_creation_input_tokens().unwrap(),
+            Some(8)
+        );
+    }
+
+    #[test]
+    fn generic_new_input_cannot_reuse_old_zero_creation() {
+        for input in [None, Some(0)] {
+            let initial = measured(input, Some(0), None, None);
+            let mut value = initial;
+            assert!(
+                value
+                    .merge(Usage {
+                        output_tokens: Some(1),
+                        ..measured(Some(100), None, None, None)
+                    })
+                    .is_err()
+            );
+            assert_eq!(value, initial);
+        }
+    }
+
+    #[test]
+    fn generic_fixed_basis_output_only_preserves_same_request_evidence() {
+        let mut value = measured(Some(100), Some(10), Some(2), None);
+        value
+            .merge(Usage {
+                output_tokens: Some(1),
+                ..measured(None, None, None, None)
+            })
+            .unwrap();
+        value
+            .merge(Usage {
+                output_tokens: Some(2),
+                ..measured(Some(100), None, None, None)
+            })
+            .unwrap();
+        value.merge(Usage::default()).unwrap();
+        assert_eq!(value.output_tokens, Some(2));
+        assert_eq!(value.cache_creation_input_tokens, Some(10));
+        assert_eq!(
+            value
+                .cache_creation_details
+                .unwrap()
+                .ephemeral_1h_input_tokens,
+            None
+        );
+    }
+
+    #[test]
+    fn generic_mode_cannot_relabel_an_existing_receipt() {
+        let generic = measured(Some(100), Some(10), None, None);
+        let strict = Usage {
+            cache_creation_mode: None,
+            ..generic
+        };
+        for (initial, next) in [(generic, strict), (strict, generic)] {
+            let mut value = initial;
+            assert!(value.merge(next).is_err());
+            assert_eq!(value, initial);
+        }
+        let mut value = Usage::default();
+        value.merge(generic).unwrap();
+        assert_eq!(value, generic);
+    }
+
+    #[test]
+    fn generic_overflow_and_cache_bounds_leave_merge_unchanged() {
+        let initial = measured(Some(10), Some(2), None, None);
+        for next in [
+            measured(Some(10), Some(2), Some(u64::MAX), Some(1)),
+            Usage {
+                cached_input_tokens: Some(u64::MAX),
+                ..measured(None, Some(1), None, None)
+            },
+            Usage {
+                output_tokens: Some(u64::MAX),
+                ..measured(None, None, None, None)
+            },
+        ] {
+            let mut value = initial;
+            assert!(value.merge(next).is_err());
+            assert_eq!(value, initial);
+        }
+    }
+
+    #[test]
+    fn generic_mode_roundtrips_durably_and_never_enters_client_wire() {
+        let value = measured(Some(37), Some(2), Some(3), Some(4));
+        let durable = serde_json::to_value(value).unwrap();
+        assert_eq!(durable["cache_creation_mode"], "generic_remainder_v1");
+        assert_eq!(
+            serde_json::to_string(&Usage::default()).unwrap(),
+            r#"{"input_tokens":null,"output_tokens":null,"cached_input_tokens":null,"cache_creation_input_tokens":null,"reasoning_output_tokens":null}"#
+        );
+        assert_eq!(serde_json::from_value::<Usage>(durable).unwrap(), value);
+        for protocol in [ClientProtocol::Chat, ClientProtocol::Responses] {
+            let wire = value.wire(protocol);
+            assert_eq!(wire["cache_creation_input_tokens"], 2);
+            assert!(wire.get("cache_creation_mode").is_none());
+        }
+        assert!(
+            serde_json::to_value(Usage::default())
+                .unwrap()
+                .get("cache_creation_mode")
+                .is_none()
+        );
+        assert!(serde_json::from_value::<Usage>(json!({"input_tokens":null,"output_tokens":null,"cached_input_tokens":null,"cache_creation_input_tokens":null,"reasoning_output_tokens":null,"cache_creation_mode":"unreviewed"})).is_err());
+    }
+}
+
+#[cfg(test)]
+mod generic_uncached_input_tests {
+    use super::*;
+
+    fn initial() -> Usage {
+        Usage {
+            input_tokens: Some(100),
+            uncached_input_tokens: Some(70),
+            cached_input_tokens: Some(20),
+            cache_creation_input_tokens: Some(10),
+            cache_creation_details: Some(CacheCreationDetails {
+                ephemeral_5m_input_tokens: Some(2),
+                ephemeral_1h_input_tokens: Some(3),
+            }),
+            cache_creation_mode: Some(CacheCreationMode::GenericRemainderV1),
+            ..Usage::default()
+        }
+    }
+
+    #[test]
+    fn generic_read_growth_needs_current_raw_input_and_ttl_evidence() {
+        let before = initial();
+        let mut value = before;
+        let next = Usage {
+            input_tokens: None,
+            uncached_input_tokens: None,
+            cached_input_tokens: Some(30),
+            output_tokens: Some(1),
+            ..before
+        };
+        assert!(value.merge(next).is_err());
+        assert_eq!(value, before);
+        let next = Usage {
+            input_tokens: Some(110),
+            cached_input_tokens: Some(30),
+            output_tokens: Some(1),
+            ..before
+        };
+        value.merge(next).unwrap();
+        assert_eq!(value.uncached_input_tokens, Some(70));
+        assert_eq!(value.input_tokens, Some(110));
+    }
+
+    #[test]
+    fn generic_raw_input_is_monotone_and_cannot_advance_without_current_creation() {
+        let before = initial();
+        for next in [
+            Usage {
+                input_tokens: Some(99),
+                uncached_input_tokens: Some(69),
+                ..before
+            },
+            Usage {
+                input_tokens: None,
+                uncached_input_tokens: Some(71),
+                cache_creation_input_tokens: None,
+                ..before
+            },
+            Usage {
+                input_tokens: Some(101),
+                uncached_input_tokens: Some(71),
+                cache_creation_details: None,
+                ..before
+            },
+        ] {
+            let mut value = before;
+            assert!(value.merge(next).is_err());
+            assert_eq!(value, before);
+        }
+    }
+
+    #[test]
+    fn generic_raw_input_is_retained_when_aggregate_absent_without_becoming_canonical() {
+        let first = Usage {
+            uncached_input_tokens: Some(10),
+            cached_input_tokens: Some(20),
+            cache_creation_mode: Some(CacheCreationMode::GenericRemainderV1),
+            ..Usage::default()
+        };
+        let mut value = Usage::default();
+        value.merge(first).unwrap();
+        value
+            .merge(Usage {
+                output_tokens: Some(1),
+                cache_creation_mode: first.cache_creation_mode,
+                ..Usage::default()
+            })
+            .unwrap();
+        assert_eq!(value.uncached_input_tokens, Some(10));
+        assert_eq!(value.input_tokens, None);
+        assert_eq!(value.cache_creation_input_tokens, None);
+        assert_eq!(
+            serde_json::from_value::<Usage>(serde_json::to_value(value).unwrap()).unwrap(),
+            value
+        );
+        for protocol in [ClientProtocol::Chat, ClientProtocol::Responses] {
+            assert!(value.wire(protocol).get("uncached_input_tokens").is_none());
+        }
+    }
+
+    #[test]
+    fn generic_restored_input_must_match_raw_input_read_and_effective_creation() {
+        let before = initial();
+        let mut empty = Usage::default();
+        assert!(
+            empty
+                .merge(Usage {
+                    uncached_input_tokens: Some(1),
+                    ..Usage::default()
+                })
+                .is_err()
+        );
+        assert_eq!(empty, Usage::default());
+        assert!(before.validate().is_ok());
+        assert!(
+            Usage {
+                input_tokens: Some(101),
+                ..before
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            Usage {
+                cache_creation_mode: None,
+                ..before
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            Usage {
+                input_tokens: None,
+                uncached_input_tokens: Some(u64::MAX),
+                ..before
+            }
+            .validate()
             .is_err()
         );
     }

@@ -393,6 +393,29 @@ impl NativeEncoder {
     }
     fn native_usage(&self) -> Result<Value, RelayError> {
         self.usage.validate()?;
+        if self.usage.cache_creation_mode
+            == Some(crate::routing::CacheCreationMode::GenericRemainderV1)
+        {
+            let input = self
+                .usage
+                .uncached_input_tokens
+                .ok_or(RelayError::Protocol("missing uncached input usage"))?;
+            let output = self
+                .usage
+                .output_tokens
+                .ok_or(RelayError::Protocol("missing output usage"))?;
+            let mut value = json!({"input_tokens":input,"output_tokens":output});
+            if let Some(read) = self.usage.cached_input_tokens {
+                value["cache_read_input_tokens"] = json!(read);
+            }
+            if let Some(write) = self.usage.cache_creation_input_tokens {
+                value["cache_creation_input_tokens"] = json!(write);
+            }
+            if let Some(details) = self.usage.cache_creation_details {
+                value["cache_creation"] = json!(details);
+            }
+            return Ok(value);
+        }
         let input = self
             .usage
             .input_tokens
@@ -405,9 +428,13 @@ impl NativeEncoder {
             .usage
             .cache_creation_input_tokens
             .ok_or(RelayError::Protocol("missing cache creation usage"))?;
+        let effective_write = self
+            .usage
+            .effective_cache_creation_input_tokens()?
+            .ok_or(RelayError::Protocol("missing cache creation usage"))?;
         let uncached = input
             .checked_sub(read)
-            .and_then(|n| n.checked_sub(write))
+            .and_then(|n| n.checked_sub(effective_write))
             .ok_or(RelayError::Protocol("invalid cache usage"))?;
         let mut value = json!({"input_tokens":uncached,"output_tokens":self.usage.output_tokens.ok_or(RelayError::Protocol("missing output usage"))?,"cache_read_input_tokens":read,"cache_creation_input_tokens":write});
         if let Some(details) = self.usage.cache_creation_details {
@@ -989,5 +1016,116 @@ mod tests {
             })
             .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod generic_creation_tests {
+    use super::*;
+    use crate::routing::CacheCreationMode;
+
+    #[test]
+    fn native_generic_usage_subtracts_effective_creation_but_emits_reported_total() {
+        for stream in [false, true] {
+            let mut encoder = NativeEncoder::new("claude", "generic", stream, &Limits::default());
+            encoder.usage = Usage {
+                input_tokens: Some(37),
+                uncached_input_tokens: Some(10),
+                output_tokens: Some(1),
+                cached_input_tokens: Some(20),
+                cache_creation_input_tokens: Some(2),
+                cache_creation_details: Some(super::super::CacheCreationDetails {
+                    ephemeral_5m_input_tokens: Some(3),
+                    ephemeral_1h_input_tokens: Some(4),
+                }),
+                cache_creation_mode: Some(CacheCreationMode::GenericRemainderV1),
+                ..Usage::default()
+            };
+            let wire = encoder.native_usage().unwrap();
+            assert_eq!(wire["input_tokens"], 10);
+            assert_eq!(wire["cache_creation_input_tokens"], 2);
+            assert_eq!(wire["cache_creation"]["ephemeral_5m_input_tokens"], 3);
+            assert_eq!(wire["cache_creation"]["ephemeral_1h_input_tokens"], 4);
+            assert!(wire.get("cache_creation_mode").is_none());
+            assert!(wire.get("uncached_input_tokens").is_none());
+        }
+    }
+
+    #[test]
+    fn native_generic_does_not_fill_unknown_ttls_or_missing_aggregate() {
+        let mut encoder = NativeEncoder::new("claude", "generic", false, &Limits::default());
+        encoder.usage = Usage {
+            input_tokens: Some(40),
+            uncached_input_tokens: Some(10),
+            output_tokens: Some(1),
+            cached_input_tokens: Some(20),
+            cache_creation_input_tokens: Some(10),
+            cache_creation_mode: Some(CacheCreationMode::GenericRemainderV1),
+            ..Usage::default()
+        };
+        let wire = encoder.native_usage().unwrap();
+        assert_eq!(wire["input_tokens"], 10);
+        assert!(wire.get("cache_creation").is_none());
+        encoder.usage.cache_creation_input_tokens = None;
+        encoder.usage.input_tokens = None;
+        encoder.usage.cache_creation_details = Some(super::super::CacheCreationDetails {
+            ephemeral_5m_input_tokens: Some(0),
+            ephemeral_1h_input_tokens: Some(0),
+        });
+        let wire = encoder.native_usage().unwrap();
+        assert_eq!(wire["input_tokens"], 10);
+        assert!(wire.get("cache_creation_input_tokens").is_none());
+        assert_eq!(wire["cache_creation"]["ephemeral_5m_input_tokens"], 0);
+        assert_eq!(wire["cache_creation"]["ephemeral_1h_input_tokens"], 0);
+        encoder.usage.cache_creation_mode = None;
+        encoder.usage.uncached_input_tokens = None;
+        encoder.usage.input_tokens = Some(40);
+        assert!(encoder.native_usage().is_err());
+    }
+
+    #[test]
+    fn native_generic_unknown_optional_counters_are_omitted_but_reported_zero_is_kept() {
+        for stream in [false, true] {
+            for counter in [None, Some(0)] {
+                let mut encoder =
+                    NativeEncoder::new("claude", "generic", stream, &Limits::default());
+                encoder.usage = Usage {
+                    uncached_input_tokens: Some(10),
+                    output_tokens: Some(1),
+                    cached_input_tokens: counter,
+                    cache_creation_input_tokens: counter,
+                    cache_creation_mode: Some(CacheCreationMode::GenericRemainderV1),
+                    ..Usage::default()
+                };
+                let wire = encoder.native_usage().unwrap();
+                let mut expected = json!({"input_tokens":10,"output_tokens":1});
+                if let Some(value) = counter {
+                    expected["cache_read_input_tokens"] = json!(value);
+                    expected["cache_creation_input_tokens"] = json!(value);
+                }
+                assert_eq!(wire, expected);
+                assert_eq!(encoder.usage.input_tokens, None);
+                assert_eq!(encoder.usage.cache_creation_input_tokens, counter);
+            }
+        }
+    }
+
+    #[test]
+    fn native_generic_requires_real_input_and_output_not_a_derived_input_guess() {
+        let mut encoder = NativeEncoder::new("claude", "generic", false, &Limits::default());
+        encoder.usage = Usage {
+            input_tokens: Some(40),
+            output_tokens: Some(1),
+            cached_input_tokens: Some(20),
+            cache_creation_input_tokens: Some(10),
+            cache_creation_mode: Some(CacheCreationMode::GenericRemainderV1),
+            ..Usage::default()
+        };
+        assert!(encoder.native_usage().is_err());
+        encoder.usage.uncached_input_tokens = Some(10);
+        encoder.usage.output_tokens = None;
+        assert!(encoder.native_usage().is_err());
+        encoder.usage.output_tokens = Some(1);
+        assert!(encoder.native_usage().is_ok());
     }
 }
