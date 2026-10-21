@@ -45,6 +45,7 @@ pub struct ExactFraction {
 }
 #[derive(Clone, Serialize, PartialEq, Eq)]
 pub struct ImageVariant {
+    pub rate_basis: &'static str,
     pub endpoint: super::image_price::ImageEndpoint,
     pub size: String,
     pub quality: String,
@@ -58,6 +59,7 @@ pub struct ImageVariant {
 }
 #[derive(Clone)]
 pub struct PricingSurface {
+    trust: crate::billing::charging::Charging,
     router: Arc<crate::routing::Router>,
     routing_version: u64,
     pricing_version: u64,
@@ -73,6 +75,10 @@ pub struct PricingProjection {
     pub models: Vec<PricingModel>,
 }
 impl PricingSurface {
+    pub(crate) fn trust_pricing_enabled(&self) -> bool {
+        self.trust.trust_pricing_enabled()
+    }
+
     pub fn from_gateway(gateway: &ModelGateway) -> Result<Self, PricingError> {
         let router = gateway.bridge.routing.clone();
         let doc = router
@@ -228,6 +234,7 @@ impl PricingSurface {
         }
         models.sort_by(|a, b| (&a.group, &a.model).cmp(&(&b.group, &b.model)));
         let result = Self {
+            trust: gateway.bridge.charging.clone(),
             router,
             routing_version,
             pricing_version,
@@ -337,7 +344,7 @@ fn token_price(quote: PriceQuote) -> Result<TokenPrice, PricingError> {
     Ok(TokenPrice {
         currency: "USD",
         unit: "million_tokens",
-        rate_basis: "effective_group_rate",
+        rate_basis: "base_group_rate",
         group_multiplier: decimal(u128::from(g), 6)?,
         input: rate(r.input)?,
         output: rate(r.output)?,
@@ -363,6 +370,7 @@ pub(crate) fn image_variant(
         .ok_or(PricingError::Unavailable)?;
     let credits_d = d.checked_mul(1_000_000).ok_or(PricingError::Unavailable)?;
     Ok(ImageVariant {
+        rate_basis: "base_group_rate",
         endpoint: rule.endpoint,
         size: rule.size.clone(),
         quality: rule.quality.clone(),
@@ -610,6 +618,7 @@ pub(crate) mod tests {
             source_digest: "23".repeat(32),
             uses_cache_read: true,
             uses_cache_write: false,
+            uses_cache_write_1h: false,
             tiers: vec![
                 TokenTier {
                     up_to_input_tokens: Some(9),
@@ -618,6 +627,7 @@ pub(crate) mod tests {
                         output: rate(10, 1),
                         cache_read: rate(1, 8),
                         cache_write: rate(0, 1),
+                        cache_write_1h: None,
                     },
                 },
                 TokenTier {
@@ -627,6 +637,7 @@ pub(crate) mod tests {
                         output: rate(15, 1),
                         cache_read: rate(1, 4),
                         cache_write: rate(0, 1),
+                        cache_write_1h: None,
                     },
                 },
             ],
@@ -818,6 +829,7 @@ pub(crate) mod tests {
                     .find(|t| t.upstream_id == upstream.id)
                     .unwrap();
                 super::super::ExternalModelContext {
+                    missing_cache_creation_tokens_is_zero: false,
                     upstream_id: upstream.id,
                     upstream_model: target.upstream_model.clone(),
                     protocol: upstream.protocol,
@@ -983,5 +995,209 @@ pub(crate) mod tests {
         let wire = serde_json::to_string(&projected).unwrap();
         assert!(!wire.contains("private"));
         assert_eq!(projected.pricing_version, 23);
+    }
+}
+
+/// Display only: exact decimal when representable, otherwise unknown, not zero.
+/// Funds continue to use the independently frozen rational quote.
+pub(crate) fn scaled_number(
+    value: Option<&Number>,
+    discount: crate::billing::trust_pricing::DiscountRatio,
+) -> Result<Option<Number>, PricingError> {
+    use num_bigint::BigUint;
+    use num_rational::Ratio;
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let raw = value.to_string();
+    let (mantissa, exponent) = match raw.split_once(['e', 'E']) {
+        Some((m, e)) => (m, e.parse::<i32>().map_err(|_| PricingError::Unavailable)?),
+        None => (raw.as_str(), 0),
+    };
+    let pieces: Vec<_> = mantissa.split('.').collect();
+    if raw.len() > 1024
+        || exponent.unsigned_abs() > 1024
+        || pieces.len() > 2
+        || !pieces
+            .iter()
+            .all(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return Err(PricingError::Unavailable);
+    }
+    let digits = pieces.concat();
+    let scale = i32::try_from(pieces.get(1).map_or(0, |s| s.len()))
+        .map_err(|_| PricingError::Unavailable)?
+        - exponent;
+    let mut n: BigUint = digits.parse().map_err(|_| PricingError::Unavailable)?;
+    let ten = BigUint::from(10_u8);
+    let mut d = BigUint::from(discount.denominator());
+    if scale >= 0 {
+        d *= ten.pow(scale as u32);
+    } else {
+        n *= ten.pow(scale.unsigned_abs());
+    }
+    let r = Ratio::new(n * BigUint::from(discount.numerator()), d);
+    decimal_ratio(&r)
+}
+fn decimal_ratio(
+    r: &num_rational::Ratio<num_bigint::BigUint>,
+) -> Result<Option<Number>, PricingError> {
+    use num_bigint::BigUint;
+    let zero = BigUint::from(0_u8);
+    let one = BigUint::from(1_u8);
+    let mut d = r.denom().clone();
+    let mut powers = [0_u32; 2];
+    for (i, prime) in [2_u8, 5].into_iter().enumerate() {
+        let p = BigUint::from(prime);
+        while &d % &p == zero {
+            d /= &p;
+            powers[i] += 1;
+        }
+    }
+    if d != one {
+        return Ok(None);
+    }
+    let scale = powers[0].max(powers[1]);
+    if scale > 128 {
+        return Err(PricingError::Unavailable);
+    }
+    let ten = BigUint::from(10_u8).pow(scale);
+    let n = r.numer() * (&ten / r.denom());
+    let whole = &n / &ten;
+    let tail = &n % &ten;
+    let text = if tail == zero {
+        whole.to_string()
+    } else {
+        format!(
+            "{whole}.{}",
+            format!("{tail:0width$}", width = scale as usize).trim_end_matches('0')
+        )
+    };
+    text.parse()
+        .map(Some)
+        .map_err(|_| PricingError::Unavailable)
+}
+fn discounted_fraction(
+    value: &ExactFraction,
+    discount: crate::billing::trust_pricing::DiscountRatio,
+) -> Result<ExactFraction, PricingError> {
+    use num_bigint::BigUint;
+    use num_rational::Ratio;
+    let n: BigUint = value
+        .numerator
+        .parse()
+        .map_err(|_| PricingError::Unavailable)?;
+    let d: BigUint = value
+        .denominator
+        .parse()
+        .map_err(|_| PricingError::Unavailable)?;
+    if d == BigUint::from(0_u8) {
+        return Err(PricingError::Unavailable);
+    }
+    let r = Ratio::new(
+        n * BigUint::from(discount.numerator()),
+        d * BigUint::from(discount.denominator()),
+    );
+    Ok(ExactFraction {
+        numerator: r.numer().to_string(),
+        denominator: r.denom().to_string(),
+    })
+}
+impl PricingProjection {
+    pub(crate) fn apply_user_authority(
+        &mut self,
+        authority: &crate::billing::trust_pricing::UserPriceAuthority,
+    ) -> Result<(), PricingError> {
+        let discount = authority.discount();
+        for row in &mut self.models {
+            if let Some(token) = &mut row.token_price {
+                token.rate_basis = "effective_user_rate";
+                for v in [
+                    &mut token.input,
+                    &mut token.output,
+                    &mut token.cache_read,
+                    &mut token.cache_write,
+                    &mut token.request,
+                ] {
+                    *v = scaled_number(v.as_ref(), discount)?;
+                }
+            }
+            for image in &mut row.image_variants {
+                image.rate_basis = "effective_user_rate";
+                image.usd_micros_per_image =
+                    discounted_fraction(&image.usd_micros_per_image, discount)?;
+                image.credits_per_image = discounted_fraction(&image.credits_per_image, discount)?;
+                use num_bigint::BigUint;
+                let n: BigUint = image
+                    .credits_per_image
+                    .numerator
+                    .parse()
+                    .map_err(|_| PricingError::Unavailable)?;
+                let d: BigUint = image
+                    .credits_per_image
+                    .denominator
+                    .parse()
+                    .map_err(|_| PricingError::Unavailable)?;
+                image.reservation_credits_for_one = ((&n + &d - BigUint::from(1_u8)) / &d)
+                    .to_string()
+                    .parse()
+                    .map_err(|_| PricingError::Unavailable)?;
+            }
+        }
+        Ok(())
+    }
+    pub(crate) fn legacy_fixture_basis(&mut self) {
+        for row in &mut self.models {
+            if let Some(token) = &mut row.token_price {
+                token.rate_basis = "effective_group_rate";
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod user_rate_tests {
+    use super::*;
+    use crate::billing::trust_pricing::DiscountRatio;
+    #[test]
+    fn account_rates_scale_once_without_decimal_or_reservation_rounding() {
+        let d = DiscountRatio::new(97, 100).unwrap();
+        for (base, expected) in [
+            ("0.3", "0.291"),
+            ("1e-7", "0.000000097"),
+            ("2E2", "194"),
+            ("0", "0"),
+            ("0.00000001", "0.0000000097"),
+        ] {
+            let number: Number = base.parse().unwrap();
+            let got = scaled_number(Some(&number), d).unwrap().unwrap();
+            assert_eq!(got.to_string(), expected);
+        }
+        assert!(scaled_number(None, d).unwrap().is_none());
+        assert!(
+            scaled_number(
+                Some(&"1".parse().unwrap()),
+                DiscountRatio::new(1, 3).unwrap()
+            )
+            .unwrap()
+            .is_none()
+        );
+        let fraction = discounted_fraction(
+            &ExactFraction {
+                numerator: "101".into(),
+                denominator: "100".into(),
+            },
+            d,
+        )
+        .unwrap();
+        assert_eq!(fraction.numerator, "9797");
+        assert_eq!(fraction.denominator, "10000");
+        // ceil(1.01) * 0.97 is not the actual quote; exact discounted cost < 1.
+        let n: num_bigint::BigUint = fraction.numerator.parse().unwrap();
+        let den: num_bigint::BigUint = fraction.denominator.parse().unwrap();
+        assert_eq!(
+            ((&n + &den - num_bigint::BigUint::from(1_u8)) / den).to_string(),
+            "1"
+        );
     }
 }

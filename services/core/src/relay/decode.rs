@@ -1,6 +1,9 @@
 //! Provider decoders share a bounded block model. Usage counters are cumulative.
 use super::sse::Frame;
-use super::{BlockKind, Event, FinishReason, Limits, RelayError, UpstreamProtocol, Usage};
+use super::{
+    BlockKind, CacheCreationDetails, Event, FinishReason, Limits, RelayError, UpstreamProtocol,
+    Usage,
+};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -52,6 +55,29 @@ fn add(a: Option<u64>, b: Option<u64>, c: Option<u64>) -> Result<Option<u64>, Re
     })
     .transpose()
 }
+fn cache_creation_details(v: &Value) -> Result<Option<CacheCreationDetails>, RelayError> {
+    if v.is_null() {
+        return Ok(None);
+    }
+    if !v.is_object() {
+        return Err(RelayError::Protocol("invalid cache creation details"));
+    }
+    serde_json::from_value(v.clone())
+        .map(Some)
+        .map_err(|_| RelayError::Protocol("invalid cache creation details"))
+}
+
+fn cache_creation_usage(u: &mut Usage, v: &Value, details_key: &str) -> Result<(), RelayError> {
+    u.cache_creation_input_tokens = counter(v, "cache_creation_input_tokens")?;
+    u.cache_creation_details = cache_creation_details(&v[details_key])?;
+    if u.cache_creation_input_tokens.is_none()
+        && let Some(details) = u.cache_creation_details
+    {
+        u.cache_creation_input_tokens = details.total()?;
+    }
+    Ok(())
+}
+
 fn anthropic_stop_sequence(
     value: &Value,
     reason: &str,
@@ -74,7 +100,7 @@ fn anthropic_stop_sequence(
     Ok(())
 }
 
-fn usage(protocol: UpstreamProtocol, v: &Value) -> Result<Usage, RelayError> {
+pub(crate) fn usage(protocol: UpstreamProtocol, v: &Value) -> Result<Usage, RelayError> {
     if v.is_null() {
         return Ok(Usage::default());
     }
@@ -111,12 +137,25 @@ fn usage(protocol: UpstreamProtocol, v: &Value) -> Result<Usage, RelayError> {
         }
         UpstreamProtocol::Anthropic => {
             u.cached_input_tokens = counter(v, "cache_read_input_tokens")?;
-            u.cache_creation_input_tokens = counter(v, "cache_creation_input_tokens")?;
-            u.input_tokens = add(
-                counter(v, "input_tokens")?,
-                u.cached_input_tokens,
-                u.cache_creation_input_tokens,
-            )?;
+            cache_creation_usage(&mut u, v, "cache_creation")?;
+            let uncached = counter(v, "input_tokens")?;
+            // A partial duration breakdown establishes a lower bound, not the
+            // complete cache write total needed to normalize disjoint input.
+            if u.cache_creation_details.is_none() || u.cache_creation_input_tokens.is_some() {
+                u.input_tokens = add(
+                    uncached,
+                    u.cached_input_tokens,
+                    u.cache_creation_input_tokens,
+                )?;
+            } else if let Some(details) = u.cache_creation_details {
+                // Known disjoint counters must still fit even when they do not
+                // establish a complete inclusive input total.
+                let _ = add(
+                    uncached,
+                    u.cached_input_tokens,
+                    Some(details.known_total()?),
+                )?;
+            }
             u.output_tokens = counter(v, "output_tokens")?;
         }
         UpstreamProtocol::Gemini => {
@@ -136,7 +175,24 @@ fn usage(protocol: UpstreamProtocol, v: &Value) -> Result<Usage, RelayError> {
     ) {
         // Preserve the extension emitted by Usage::wire. Discarding it here
         // would bypass the charging adapter's unsupported-cache-write guard.
-        u.cache_creation_input_tokens = counter(v, "cache_creation_input_tokens")?;
+        cache_creation_usage(&mut u, v, "cache_creation_details")?;
+        let input_details = match protocol {
+            UpstreamProtocol::Chat => &v["prompt_tokens_details"],
+            UpstreamProtocol::Responses => &v["input_tokens_details"],
+            _ => unreachable!(),
+        };
+        // Legacy OpenAI-compatible providers report either alias for the same
+        // cache writes. Their maximum avoids counting those tokens twice.
+        let alias = counter(input_details, "cached_creation_tokens")?
+            .max(counter(input_details, "cache_write_tokens")?);
+        if let Some(alias) = alias {
+            if u.cache_creation_input_tokens
+                .is_some_and(|canonical| canonical != alias)
+            {
+                return Err(RelayError::Protocol("inconsistent cache creation usage"));
+            }
+            u.cache_creation_input_tokens = Some(alias);
+        }
         if let Some(total) = counter(v, "total_tokens")? {
             let known = u
                 .input_tokens
@@ -975,6 +1031,152 @@ mod tests {
         );
     }
 
+    #[test]
+    fn anthropic_cache_creation_split_normalizes_only_complete_evidence() {
+        let decoded = usage(
+            UpstreamProtocol::Anthropic,
+            &serde_json::json!({
+                "input_tokens":10,
+                "cache_read_input_tokens":20,
+                "cache_creation":{
+                    "ephemeral_5m_input_tokens":30,
+                    "ephemeral_1h_input_tokens":40
+                }
+            }),
+        )
+        .unwrap();
+        assert_eq!(decoded.cache_creation_input_tokens, Some(70));
+        assert_eq!(decoded.input_tokens, Some(100));
+        assert_eq!(
+            decoded.cache_creation_details,
+            Some(CacheCreationDetails {
+                ephemeral_5m_input_tokens: Some(30),
+                ephemeral_1h_input_tokens: Some(40),
+            })
+        );
+        let partial = usage(
+            UpstreamProtocol::Anthropic,
+            &serde_json::json!({
+                "input_tokens":10,"cache_read_input_tokens":20,
+                "cache_creation":{"ephemeral_5m_input_tokens":30}
+            }),
+        )
+        .unwrap();
+        assert_eq!(partial.cache_creation_input_tokens, None);
+        assert_eq!(partial.input_tokens, None);
+        assert_eq!(partial.cached_input_tokens, Some(20));
+        for invalid_input in [serde_json::json!(-1), serde_json::json!(u64::MAX)] {
+            assert!(
+                usage(
+                    UpstreamProtocol::Anthropic,
+                    &serde_json::json!({
+                        "input_tokens":invalid_input,"cache_read_input_tokens":1,
+                        "cache_creation":{"ephemeral_5m_input_tokens":0}
+                    }),
+                )
+                .is_err()
+            );
+        }
+        for detail in [
+            serde_json::json!({"ephemeral_5m_input_tokens":0}),
+            serde_json::json!({"ephemeral_1h_input_tokens":0}),
+            serde_json::json!({}),
+        ] {
+            let decoded = usage(
+                UpstreamProtocol::Anthropic,
+                &serde_json::json!({"cache_creation":detail}),
+            )
+            .unwrap();
+            assert_eq!(decoded.cache_creation_input_tokens, None);
+            assert_eq!(decoded.input_tokens, None);
+            assert_eq!(
+                serde_json::to_value(decoded.cache_creation_details.unwrap()).unwrap(),
+                detail
+            );
+        }
+        for details in [Value::Null, serde_json::json!({})] {
+            let decoded = usage(
+                UpstreamProtocol::Anthropic,
+                &serde_json::json!({"cache_creation":details}),
+            )
+            .unwrap();
+            assert_eq!(
+                decoded.cache_creation_details.is_some(),
+                details.is_object()
+            );
+        }
+    }
+
+    #[test]
+    fn cache_creation_details_reject_invalid_shapes_counters_and_totals() {
+        for (protocol, key) in [
+            (UpstreamProtocol::Anthropic, "cache_creation"),
+            (UpstreamProtocol::Chat, "cache_creation_details"),
+            (UpstreamProtocol::Responses, "cache_creation_details"),
+        ] {
+            for invalid in [
+                serde_json::json!(1),
+                serde_json::json!([]),
+                serde_json::json!({"ephemeral_5m_input_tokens":-1}),
+                serde_json::json!({"ephemeral_1h_input_tokens":1.5}),
+                serde_json::json!({"ephemeral_5m_input_tokens":true}),
+                serde_json::json!({"ephemeral_1h_input_tokens":"1"}),
+                serde_json::json!({"unknown_duration":1}),
+                serde_json::json!({"ephemeral_5m_input_tokens":u64::MAX,"ephemeral_1h_input_tokens":1}),
+            ] {
+                let mut receipt = serde_json::json!({});
+                receipt[key] = invalid;
+                assert!(usage(protocol, &receipt).is_err(), "{receipt}");
+            }
+            for invalid in [
+                serde_json::json!({"ephemeral_5m_input_tokens":2,"ephemeral_1h_input_tokens":2}),
+                serde_json::json!({"ephemeral_5m_input_tokens":6}),
+                serde_json::json!({"ephemeral_1h_input_tokens":6}),
+            ] {
+                let mut receipt = serde_json::json!({"cache_creation_input_tokens":5});
+                receipt[key] = invalid;
+                assert!(usage(protocol, &receipt).is_err(), "{receipt}");
+            }
+            let mut receipt = serde_json::json!({"cache_creation_input_tokens":5});
+            receipt[key] = serde_json::json!({"ephemeral_5m_input_tokens":2});
+            assert!(usage(protocol, &receipt).is_ok());
+        }
+    }
+
+    #[test]
+    fn cache_creation_split_wire_round_trip_preserves_partial_and_explicit_zero() {
+        for details in [
+            CacheCreationDetails {
+                ephemeral_5m_input_tokens: Some(2),
+                ephemeral_1h_input_tokens: Some(3),
+            },
+            CacheCreationDetails {
+                ephemeral_5m_input_tokens: Some(0),
+                ephemeral_1h_input_tokens: None,
+            },
+            CacheCreationDetails::default(),
+        ] {
+            let expected = Usage {
+                input_tokens: Some(10),
+                output_tokens: Some(4),
+                cache_creation_input_tokens: Some(5),
+                cache_creation_details: Some(details),
+                ..Usage::default()
+            };
+            for (protocol, client) in [
+                (UpstreamProtocol::Chat, crate::relay::ClientProtocol::Chat),
+                (
+                    UpstreamProtocol::Responses,
+                    crate::relay::ClientProtocol::Responses,
+                ),
+            ] {
+                let wire = expected.wire(client);
+                assert_eq!(wire["cache_creation_details"], serde_json::json!(details));
+                assert_eq!(usage(protocol, &wire).unwrap(), expected);
+            }
+        }
+    }
+
     fn openai_receipt(protocol: UpstreamProtocol) -> Value {
         match protocol {
             UpstreamProtocol::Chat => serde_json::json!({
@@ -998,6 +1200,120 @@ mod tests {
     }
 
     #[test]
+    fn openai_cache_creation_aliases_use_max_and_preserve_unknown_and_zero() {
+        for (protocol, field) in [
+            (UpstreamProtocol::Chat, "prompt_tokens_details"),
+            (UpstreamProtocol::Responses, "input_tokens_details"),
+        ] {
+            for (created, written, expected) in [
+                (None, None, None),
+                (Some(0), None, Some(0)),
+                (None, Some(0), Some(0)),
+                (Some(2), Some(5), Some(5)),
+                (Some(5), Some(2), Some(5)),
+                (Some(5), Some(5), Some(5)),
+                (Some(u64::MAX), Some(u64::MAX), Some(u64::MAX)),
+            ] {
+                let mut receipt = serde_json::json!({});
+                receipt[field] = serde_json::json!({});
+                if let Some(value) = created {
+                    receipt[field]["cached_creation_tokens"] = serde_json::json!(value);
+                }
+                if let Some(value) = written {
+                    receipt[field]["cache_write_tokens"] = serde_json::json!(value);
+                }
+                let decoded = usage(protocol, &receipt).unwrap();
+                assert_eq!(decoded.cache_creation_input_tokens, expected, "{receipt}");
+                assert_eq!(decoded.cache_creation_details, None);
+            }
+            let mut receipt = serde_json::json!({});
+            receipt[field] = serde_json::json!({
+                "cached_creation_tokens":null,"cache_write_tokens":null
+            });
+            assert_eq!(
+                usage(protocol, &receipt)
+                    .unwrap()
+                    .cache_creation_input_tokens,
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn openai_cache_creation_aliases_must_match_canonical_and_ttl_totals() {
+        for (protocol, field) in [
+            (UpstreamProtocol::Chat, "prompt_tokens_details"),
+            (UpstreamProtocol::Responses, "input_tokens_details"),
+        ] {
+            let mut receipt = serde_json::json!({"cache_creation_input_tokens":5});
+            receipt[field] = serde_json::json!({
+                "cached_creation_tokens":2,"cache_write_tokens":5
+            });
+            assert_eq!(
+                usage(protocol, &receipt)
+                    .unwrap()
+                    .cache_creation_input_tokens,
+                Some(5)
+            );
+            for canonical in [0, 4, 6] {
+                receipt["cache_creation_input_tokens"] = serde_json::json!(canonical);
+                assert!(usage(protocol, &receipt).is_err(), "{receipt}");
+            }
+            receipt
+                .as_object_mut()
+                .unwrap()
+                .remove("cache_creation_input_tokens");
+            receipt["cache_creation_details"] = serde_json::json!({
+                "ephemeral_5m_input_tokens":2,"ephemeral_1h_input_tokens":3
+            });
+            assert_eq!(
+                usage(protocol, &receipt)
+                    .unwrap()
+                    .cache_creation_input_tokens,
+                Some(5)
+            );
+            receipt[field]["cache_write_tokens"] = serde_json::json!(6);
+            assert!(usage(protocol, &receipt).is_err());
+            receipt["cache_creation_details"] = serde_json::json!({"ephemeral_5m_input_tokens":7});
+            assert!(usage(protocol, &receipt).is_err());
+            receipt["cache_creation_details"] = Value::Null;
+            receipt[match protocol {
+                UpstreamProtocol::Chat => "prompt_tokens",
+                UpstreamProtocol::Responses => "input_tokens",
+                _ => unreachable!(),
+            }] = serde_json::json!(5);
+            assert!(usage(protocol, &receipt).is_err());
+        }
+    }
+
+    #[test]
+    fn openai_cache_creation_aliases_reject_invalid_counters_before_taking_max() {
+        for (protocol, field) in [
+            (UpstreamProtocol::Chat, "prompt_tokens_details"),
+            (UpstreamProtocol::Responses, "input_tokens_details"),
+        ] {
+            for alias in ["cached_creation_tokens", "cache_write_tokens"] {
+                for invalid in [
+                    serde_json::json!(-1),
+                    serde_json::json!(1.0),
+                    serde_json::json!(true),
+                    serde_json::json!("2"),
+                    serde_json::json!([]),
+                    serde_json::json!({}),
+                    serde_json::from_str::<Value>("18446744073709551616").unwrap(),
+                ] {
+                    let mut receipt = serde_json::json!({"cache_creation_input_tokens":5});
+                    receipt[field] = serde_json::json!({
+                        "cached_creation_tokens":5,"cache_write_tokens":5
+                    });
+                    receipt[field][alias] = invalid;
+                    assert!(usage(protocol, &receipt).is_err(), "{receipt}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn a07_usage_wire_round_trip_preserves_cache_creation() {
         let expected = Usage {
             upstream_cost_atto_usd: None,
@@ -1005,6 +1321,7 @@ mod tests {
             output_tokens: Some(4),
             cached_input_tokens: Some(3),
             cache_creation_input_tokens: Some(2),
+            cache_creation_details: None,
             reasoning_output_tokens: Some(1),
         };
         for (protocol, client) in [

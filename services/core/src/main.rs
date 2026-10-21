@@ -18,12 +18,13 @@ use std::{
 
 mod admin;
 
-const USAGE: &str = "Usage: lmm-core [--config /absolute/core.toml | --legacy-env] [serve | init-db | create-first-owner | bootstrap-user | complete-setup | install-tool-market-builtins | install-usage-receipt-index | plan-admin-activation | apply-admin-activation | schema-manifest | check-db]\n\n\
+const USAGE: &str = "Usage: lmm-core [--config /absolute/core.toml | --legacy-env] [serve | init-db | upgrade-db | create-first-owner | bootstrap-user | complete-setup | install-tool-market-builtins | install-usage-receipt-index | plan-admin-activation | apply-admin-activation | schema-manifest | check-db]\n\n\
 Commands:\n\
   serve           Start the core service (the default without arguments).\n\
   schema-manifest Print the compiled schema contract as JSON; accepts no config options and performs no I/O except stdout.\n\
   check-db        Read-only schema/runtime authority JSON; requires explicit --config.\n\
   init-db         Initialize a new, empty core database.\n\
+  upgrade-db      Explicit offline 24->25 trust-pricing upgrade; requires owner --config and exact-target stdin JSON.\n\
   create-first-owner  Create the first production owner offline from private stdin JSON; requires explicit --config and a fresh store.\n\
   bootstrap-user  Read a user_id and platform_level JSON object from stdin.\n\n\
   install-tool-market-builtins  Install the compiled tool catalog offline as installation owner.\n\n\
@@ -47,6 +48,7 @@ JSON from stdin and print secret-free diagnostics. They never invent a human app
 enum Command {
     Serve,
     InitDb,
+    UpgradeDb,
     CreateFirstOwner,
     BootstrapUser,
     CompleteSetup,
@@ -89,6 +91,7 @@ fn command(args: impl IntoIterator<Item = OsString>) -> io::Result<Arguments> {
             Some(
                 "serve"
                 | "init-db"
+                | "upgrade-db"
                 | "create-first-owner"
                 | "bootstrap-user"
                 | "complete-setup"
@@ -101,6 +104,7 @@ fn command(args: impl IntoIterator<Item = OsString>) -> io::Result<Arguments> {
             ) if operation.is_none() && !version => {
                 operation = Some(match arg.to_str() {
                     Some("init-db") => Command::InitDb,
+                    Some("upgrade-db") => Command::UpgradeDb,
                     Some("create-first-owner") => Command::CreateFirstOwner,
                     Some("bootstrap-user") => Command::BootstrapUser,
                     Some("complete-setup") => Command::CompleteSetup,
@@ -180,6 +184,16 @@ fn main() -> Result<(), Box<dyn Error>> {
         )),
         Command::Serve => None,
         Command::InitDb => Some(admin::Operation::InitDb),
+        Command::UpgradeDb => {
+            if arguments.config.is_none() || arguments.legacy_env {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "upgrade-db requires explicit offline installer-owner --config",
+                )
+                .into());
+            }
+            Some(admin::Operation::upgrade_database(io::stdin().lock())?)
+        }
         Command::CreateFirstOwner => {
             if arguments.config.is_none() || arguments.legacy_env {
                 return Err(io::Error::new(
@@ -296,7 +310,9 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
             .with_financial_profile_enabled(legacy_config.is_some())
             .with_commerce_scope_enabled(config::commerce_configured());
         capabilities.identity = true;
-        model_gateway = configured_models;
+        // Production never silently opts out of owner-controlled user pricing.
+        // Library fixtures may omit the builder; serving this binary may not.
+        model_gateway = configured_models.map(|gateway| gateway.with_trust_pricing());
         if let Some(gateway) = &model_gateway {
             store = store.with_dashboard_routing(gateway.dashboard_routing());
             // Trusted recovery keeps indeterminate upstream holds reserved.
@@ -730,6 +746,24 @@ mod check_db_parser_tests {
         let v = command(args(&["check-db"])).unwrap();
         assert!(matches!(v.command, Command::CheckDb));
         assert!(v.config.is_none());
+    }
+    #[test]
+    fn upgrade_db_parser_is_explicit_and_rejects_multiple_operations() {
+        for input in [
+            args(&["upgrade-db", "--config", "/private/owner.toml"]),
+            args(&["--config", "/private/owner.toml", "upgrade-db"]),
+        ] {
+            let value = command(input).unwrap();
+            assert!(matches!(value.command, Command::UpgradeDb));
+            assert_eq!(value.config, Some(PathBuf::from("/private/owner.toml")));
+        }
+        for input in [
+            args(&["serve", "upgrade-db"]),
+            args(&["upgrade-db", "init-db"]),
+            args(&["upgrade-db", "--config", "relative.toml"]),
+        ] {
+            assert!(command(input).is_err());
+        }
     }
     #[test]
     fn check_db_never_implicitly_selects_serve_or_accepts_extra_commands() {

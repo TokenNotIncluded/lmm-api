@@ -1,6 +1,7 @@
 //! Public native-Key images retain the original Key's actor, owner, group,
 //! payer ordering and budget. They never use drawing's personal Session source.
 use super::*;
+use crate::billing::charging::ReservationBasis;
 use crate::model_http::image_provider::{ImageMediaType, ImageMultipartInput};
 use std::net::IpAddr;
 
@@ -91,16 +92,6 @@ impl ImageService {
         } else {
             ImageEndpoint::Generations
         };
-        let (group, quote) = groups
-            .iter()
-            .find_map(|g| {
-                input.group = g.clone();
-                self.quote_for(&input, endpoint)
-                    .ok()
-                    .map(|q| (g.clone(), q))
-            })
-            .ok_or(Error::Forbidden)?;
-        input.group = group;
         let metadata = edits.as_ref().map(upload_digest);
         let mut tx = begin(&self.pool).await?;
         let actor = identity::authorize_in_transaction(&mut tx, secret)
@@ -109,35 +100,112 @@ impl ImageService {
         if actor.credential_kind != CredentialKind::ApiKey {
             return Err(Error::Forbidden);
         }
-        // The canonical Key model/group/IP policy is rechecked again in the
-        // same transaction that reserves and claims the actual provider send.
         let source = SourceKey::ApiKey {
             credential_id: actor.credential_id,
         };
         let id = format!("image:{request_key}");
-        let frozen = price(&quote);
-        let fingerprint = digest(&json!([source, input, metadata, response_format, frozen]))?;
+        // An absent row cannot be locked. Claim its stable identity without
+        // waiting while holding the authenticated credential's locks.
+        let claim: bool =
+            sqlx::query_scalar("SELECT pg_try_advisory_xact_lock(hashtextextended($1,0))")
+                .bind(format!("image-api/v1:{id}"))
+                .fetch_one(&mut *tx)
+                .await?;
+        if !claim {
+            return Err(Error::Pending);
+        }
         let version: i64 = sqlx::query_scalar(
             "SELECT auth_version FROM core_identity.users WHERE id=$1 FOR SHARE",
         )
         .bind(actor.user_id)
         .fetch_one(&mut *tx)
         .await?;
-        let at = now(&mut tx).await?;
-        sqlx::query("INSERT INTO core_image.operations(id,source_kind,key_id,actor_user_id,owner_account_id,auth_version,input,fingerprint,price,state,created_at,expires_at,confirmed_at) VALUES($1,'api_key',$2,$3,$4,$5,$6,$7,$8,'confirmed',$9,$9+600,$9) ON CONFLICT(id) DO NOTHING")
-            .bind(&id).bind(actor.credential_id).bind(actor.user_id).bind(actor.owner_account_id).bind(version).bind(json!(input)).bind(fingerprint.as_slice()).bind(json!(frozen)).bind(at).execute(&mut *tx).await?;
-        let r = sqlx::query(
-            "SELECT fingerprint,state,key_id FROM core_image.operations WHERE id=$1 FOR UPDATE",
+        let existing = sqlx::query("SELECT * FROM core_image.operations WHERE id=$1 FOR UPDATE")
+            .bind(&id)
+            .fetch_optional(&mut *tx)
+            .await?;
+        let (frozen, quote) = if let Some(row) = &existing {
+            if row.try_get::<String, _>("source_kind")? != "api_key"
+                || row.try_get::<Option<i64>, _>("key_id")? != Some(actor.credential_id)
+                || row.try_get::<Option<i64>, _>("session_id")?.is_some()
+                || row.try_get::<i64, _>("actor_user_id")? != actor.user_id
+                || row.try_get::<i64, _>("owner_account_id")? != actor.owner_account_id
+                || row.try_get::<i64, _>("auth_version")? != version
+            {
+                return Err(Error::Conflict);
+            }
+            let frozen: Price =
+                serde_json::from_value(row.try_get("price")?).map_err(|_| Error::Storage)?;
+            frozen
+                .validate_actor(actor.user_id)
+                .map_err(|_| Error::Storage)?;
+            let quote = frozen
+                .image
+                .as_ref()
+                .ok_or(Error::Storage)?
+                .clone()
+                .restore()
+                .map_err(|_| Error::Storage)?;
+            // Replays retain the original group and complete price, including
+            // legacy prices without trust evidence. Current tariffs and trust
+            // facts must not alter the original request fingerprint.
+            input.group = frozen.group.clone();
+            (frozen, quote)
+        } else {
+            let (group, quote) = groups
+                .iter()
+                .find_map(|g| {
+                    input.group = g.clone();
+                    self.quote_for(&input, endpoint)
+                        .ok()
+                        .map(|q| (g.clone(), q))
+                })
+                .ok_or(Error::Forbidden)?;
+            input.group = group;
+            (price(&quote), quote)
+        };
+        let authorized = identity::authorize_model_request_in_transaction(
+            &mut tx,
+            secret,
+            &frozen.model,
+            peer,
+            &frozen.group,
         )
-        .bind(&id)
-        .fetch_one(&mut *tx)
-        .await?;
-        if r.try_get::<Vec<u8>, _>("fingerprint")? != fingerprint
-            || r.try_get::<Option<i64>, _>("key_id")? != Some(actor.credential_id)
+        .await
+        .map_err(identity_error)?;
+        if authorized.credential_kind != CredentialKind::ApiKey
+            || authorized.credential_id != actor.credential_id
+            || authorized.user_id != actor.user_id
+            || authorized.owner_account_id != actor.owner_account_id
         {
-            return Err(Error::Conflict);
+            return Err(Error::Forbidden);
         }
-        let state: String = r.try_get("state")?;
+        let frozen = if existing.is_none() {
+            self.freeze_image_price(&mut tx, actor.user_id, frozen)
+                .await?
+        } else {
+            frozen
+        };
+        frozen.validate_actor(actor.user_id)?;
+        let fingerprint = digest(&json!([source, input, metadata, response_format, frozen]))?;
+        let state: String = if let Some(row) = existing {
+            if row.try_get::<Value, _>("input")? != json!(input)
+                || row.try_get::<Vec<u8>, _>("fingerprint")? != fingerprint
+            {
+                return Err(Error::Conflict);
+            }
+            row.try_get("state")?
+        } else {
+            let at = now(&mut tx).await?;
+            let inserted = sqlx::query("INSERT INTO core_image.operations(id,source_kind,key_id,actor_user_id,owner_account_id,auth_version,input,fingerprint,price,state,created_at,expires_at,confirmed_at) VALUES($1,'api_key',$2,$3,$4,$5,$6,$7,$8,'confirmed',$9,$9+600,$9) ON CONFLICT(id) DO NOTHING")
+                .bind(&id).bind(actor.credential_id).bind(actor.user_id).bind(actor.owner_account_id).bind(version).bind(json!(input)).bind(fingerprint.as_slice()).bind(json!(frozen)).bind(at).execute(&mut *tx).await?.rows_affected();
+            if inserted != 1 {
+                // A competing commit can predate our claim while remaining
+                // outside this SERIALIZABLE snapshot. Retry in a fresh one.
+                return Err(Error::Retry);
+            }
+            "confirmed".into()
+        };
         tx.commit().await.map_err(|_| Error::Pending)?;
         if state != "confirmed" {
             return self.query_api_with_peer(secret, &id, peer).await;
@@ -165,11 +233,12 @@ impl ImageService {
         }
         .map_err(|_| Error::Invalid)?;
         let worker = random()?;
+        let reserve = frozen.reservation_ceiling(ReservationBasis::Image)?;
         let spec = Request {
             id: id.clone(),
             fingerprint,
             price: frozen,
-            reserve: quote.reservation_credits().into(),
+            reserve,
             lease_seconds: 300,
             maximum_seconds: 300,
         };

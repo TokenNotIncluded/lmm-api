@@ -80,6 +80,17 @@
 \else
 \set enable_bounties false
 \endif
+\if :{?enable_trust_pricing}
+\else
+\set enable_trust_pricing false
+\endif
+-- Native production model/image/assistant entrypoints require Core-owned trust.
+\if :enable_models
+\set enable_trust_pricing true
+\endif
+\if :enable_assistant
+\set enable_trust_pricing true
+\endif
 BEGIN;
 SET LOCAL statement_timeout = '5s';
 SELECT current_database() AS core_database \gset
@@ -110,7 +121,7 @@ REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 GRANT CONNECT ON DATABASE :"core_database" TO :"runtime_role";
 GRANT USAGE ON SCHEMA core_meta, core_identity, core_billing TO :"runtime_role";
 GRANT SELECT ON core_meta.schema_contract, core_meta.component_contract,
-    core_meta.runtime_contract TO :"runtime_role";
+    core_meta.runtime_contract, core_meta.schema_upgrades TO :"runtime_role";
 -- Historical source receipts and logs are imported offline. Runtime only reads.
 GRANT USAGE ON SCHEMA core_history TO :"runtime_role";
 GRANT SELECT ON core_history.sources, core_history.log_records,
@@ -394,5 +405,11 @@ GRANT SELECT,INSERT,UPDATE(body) ON core_bounties.projects TO :"runtime_role";
 GRANT SELECT,INSERT(id,actor,credential,request,expires,policy),UPDATE(approved,csrf,browser_sid)
     ON core_bounties.confirmations TO :"runtime_role";
 GRANT SELECT,INSERT ON core_bounties.operations TO :"runtime_role";
+\endif
+\if :enable_trust_pricing
+GRANT USAGE ON SCHEMA core_trust_pricing,core_payments,core_charging TO :"runtime_role";
+GRANT SELECT ON core_payments.intents,core_charging.requests,core_charging.usage_events TO :"runtime_role";
+GRANT SELECT ON core_trust_pricing.policies, core_trust_pricing.user_bases,
+    core_trust_pricing.legacy_paid_orders TO :"runtime_role";
 \endif
 COMMIT;

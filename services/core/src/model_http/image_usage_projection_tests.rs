@@ -86,6 +86,7 @@ async fn image_usage_mixed_drawing_native_images_and_text_preserve_real_receipts
         lease_seconds: 60,
         maximum_seconds: 120,
         price: Price {
+            user_trust: None,
             image: None,
             tiered: None,
             upstream_cost_group_ppm: None,

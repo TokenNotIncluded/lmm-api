@@ -11,7 +11,7 @@
 
 ## 本轮构建版本
 
-以下候选已完成构建、打包和本地前后端联调，**尚未发布到 GitHub/AUR，也未切换正式流量**。
+以下已构建候选保留原来的来源与校验值，**尚未发布到 GitHub/AUR，也未切换正式流量**。
 首次安装前先核对实际 release 和 AUR 配方；不要用旧发布代替这组候选。
 
 | 组件 | 安装目标与版本 | 构建来源 commit |
@@ -19,6 +19,14 @@
 | 核心 | `lmm-api-core-bin 0.1.0rc4-1` | `5e8315d5d40360059a1128db4ae0749847aa1d49` |
 | 扩展 | `lmm-api-extensions-bin 0.1.0rc3-1` | `5c216538f78ad45bf2a2b060ef47be9cd47e4de7` |
 | 前端 | `lmm-web 0.1.0-rc.4` 静态归档 | `c69a81ffe69958b6ba2b8a116acd987632c42857` |
+
+后续候选进度：Web `0.1.0-rc.5` 已从
+`dc250c3031508a56f9c1cd9a4d6f5653d8c3ff0b` 构建并暂存到 ArchDmit 的
+`/srv/lmm-web/releases/0.1.0-rc.5-dc250c30-ac336901/dist`，尚未切换 `current`。
+其归档 `lmm-web-0.1.0-rc.5-any.tar.gz` 的 SHA-256 为
+`ac336901e18f2f120c278ef3fc0739790dcefe69687a11e0c7235e2022a078e1`。
+Core 的 25 组件候选仍在真实数据库独立复验中，尚无可替换上表的正式发布包；
+不要给 RC4 二进制标注新源码或使用尚未发布的 AUR 版本。
 
 对应分发归档的 SHA-256：
 
@@ -384,6 +392,22 @@ sudo sha256sum "/proc/$CORE_PID/exe" /usr/bin/lmm-core
 ## 二、部署静态前端和 Nginx
 
 前端在构建机生成并保留来源 SHA、版本和归档摘要，服务机不运行 Bun 或重新构建。
+在固定且没有混入其他修改的源码上执行，版本使用本次选定的新版本：
+
+```sh
+WEB_SOURCE_SHA="$(git rev-parse HEAD)"
+WEB_VERSION='<NEW_WEB_VERSION>'
+mise exec -- just build-web
+python3 -B scripts/build-distribution.py build --component web \
+  --version "$WEB_VERSION" --revision "$WEB_SOURCE_SHA" \
+  --platform any --input apps/web/dist --output /absolute/new-web-distribution
+python3 -B scripts/build-distribution.py verify \
+  "/absolute/new-web-distribution/lmm-web-$WEB_VERSION-any.tar.gz" --revision "$WEB_SOURCE_SHA"
+```
+
+`build-web` 已包含 bundle 检查。记录实际构建输入与完整来源 SHA，
+将归档摘要与可信构建记录核对；不能只相信与下载包一起取得的 `.sha256`。
+前端版本和需要的 API 必须与待启用的后端对应。
 以下 `/srv/lmm-web` 是操作者管理的静态发布目录，不是 AUR 后端包的安装路径：
 
 ```text
@@ -417,20 +441,26 @@ location / {
 一概交给 Go，也不能把错误的 API 请求降级成前端 `index.html`。
 浏览器的 `/core/v1/pricing/session` 使用真实 Session；OAuth bearer 不是它的替代凭据。
 
-准备完候选版本后，用同一文件系统内的 rename 原子替换链接：
+先完成归档校验、展开清单核对和共享静态资源补齐，再通过候选路径检查页面与接口。
+原站继续提供服务；需要改 Nginx 配置时，先保存候选并通过 `nginx -t`。
+准备完毕后，用同一文件系统内的 rename 原子替换链接：
 
 ```sh
 WEB_RELEASE_ID='<FINAL_WEB_RELEASE_ID>'
 sudo ln -s "/srv/lmm-web/releases/$WEB_RELEASE_ID/dist" "/srv/lmm-web/.current-$WEB_RELEASE_ID"
 sudo mv -Tf "/srv/lmm-web/.current-$WEB_RELEASE_ID" /srv/lmm-web/current
-sudo nginx -t
-sudo systemctl reload nginx.service
 readlink /srv/lmm-web/current
 ```
 
-第一次部署先合并并检查 Nginx 配置，再对外开放；以后只换静态版本链接不需要重启后端。
+只换 `current` 不需要 reload Nginx，也不需要重启后端。
+只有 Nginx 配置发生变化时，才在 `sudo nginx -t` 通过后执行
+`sudo systemctl reload nginx.service`，让已有连接平滑结束。
+第一次部署先合并并检查配置，再开放流量；链接指向的是 `dist` 本身，
+Nginx root 不要再追加 `/dist`。
 `index.html` 应重新验证，带 hash 的旧资源继续可读。
 原子换链接避免半上传页面，但不自动保证所有浏览器版本和新旧 API 都兼容。
+切换后读回页面版本，实际打开浏览器验证登录、账户价格和受影响页面，
+并核对关键 API；验证完成前保留旧 release 与共享资源。
 
 需要维护窗口时，先准备好版本目录和配置，再使用
 [现有维护页生成及切换工具](../deployment/native/README.md#cutover-after-migration-is-qualified)。
@@ -442,7 +472,13 @@ readlink /srv/lmm-web/current
 ### 只更新 Core
 
 提前核对新 Core 与现有 schema、配置和前端 API 的兼容性，准备好更新包。
-如果 release 要求 schema 变化，先执行该版本明确的迁移流程；下面的普通更新不改数据库。
+先区分下面三种情况；普通更新不改数据库，也不重启 PostgreSQL。
+
+| 数据库情况 | 执行方式 |
+| --- | --- |
+| 与新程序的完整 schema 契约相同 | 按下面的普通包更新执行 |
+| 符合已核验的 24 组件前置契约，更新到 25 组件候选 | 按下一节的显式 `upgrade-db` 流程离线执行 |
+| 旧单体、其他版本或结构有漂移 | 使用该来源对应的迁移安排；不能用 `init-db` 或自动补表代替 |
 
 ```sh
 sudo pacman -U /absolute/staging/<new-core-package>.pkg.tar.zst
@@ -455,6 +491,86 @@ sudo systemctl restart lmm-core.service
 配置没有要合并的变化时省略 `sudoedit`。检查 `.pacnew` 并按字段合并，不用新示例覆盖旧配置。
 更新后重新核对 MainPID、`/proc/<PID>/exe` 摘要、readiness 和受影响接口。
 这里不运行 `init-db`、`create-first-owner`、`bootstrap-user` 或 `complete-setup`，也不重建数据库。
+
+### Core 24 → 25：显式离线 schema 升级
+
+这段说明对应当前源码中的 `upgrade-db`，不是上表 RC4 候选的能力。
+只在匹配版本完成验收并交付后使用。全新空库直接用新版本 `init-db` 安装 25 个组件，
+不先装 24 个再升级；已有库只按匹配的前置契约升级。
+
+当前过程只接受 PostgreSQL 18 和固定的 24 组件前置契约。
+它增加 `trust-pricing` 组件及升级回执；该组件同时包含账户价格事实和图片价格约束扩展。
+原 24 份组件 SQL 保持不变，图片约束与原子计费函数的精确变更写进回执，
+其余旧对象定义、权限、业务行和序列状态必须保持一致。
+这一步不代替旧余额、管理员激活或账户折扣来源事实的导入。
+
+先准备匹配二进制、备份和恢复材料、完整请求与配置，再进入维护窗口：
+
+1. 停止 Core 及所有可能连接目标库的写入者，确认排空结果；PostgreSQL 保持运行。
+   在库外将 Core runtime 设为 `NOLOGIN`，断开已有连接。升级连接必须是目标库唯一连接，
+   不得有 prepared transaction 或已启用的 event trigger。
+2. 使用独立的 `LOGIN NOINHERIT` installer 连接，显式切到 `NOLOGIN` owner。
+   owner 需要预先获准读取 `pg_control_system()`；runtime 不得取得该权限、owner 成员资格，
+   或创建、修改数据库结构的权限。请求中的扩展角色也必须存在，且不能连接 Core 库。
+3. 核对实际库名、OID、PostgreSQL 版本和物理实例标识，保存旧、新二进制的
+   `schema-manifest` 原始输出与摘要。该命令不接受 `--config`，也不连接数据库：
+
+   ```sh
+   /absolute/verified-old/lmm-core schema-manifest > /absolute/private/core-24-manifest.json
+   /absolute/verified-new/lmm-core schema-manifest > /absolute/private/core-25-manifest.json
+   sha256sum /absolute/private/core-24-manifest.json /absolute/private/core-25-manifest.json
+   ```
+
+4. 用私密编辑器保存 `/root/lmm-install/core-upgrade.json`，权限设为 `0600`。
+   完整结构如下；所有 `<…>` 和两个 `0` 都是待替换项，不能直接执行。
+   `successor_manifest_sha256` 是新二进制原始输出（包含末尾换行）的 SHA-256；
+   前置两个摘要必须与目标实际观察值及编译契约一致，不能为了通过检查改成当前库的任意值。
+
+   ```json
+   {
+     "version": 1,
+     "procedure": "core-24-to-25-trust-pricing-v1",
+     "upgrade_id": "<UNIQUE_STABLE_UPGRADE_ID>",
+     "database": {
+       "name": "<OBSERVED_DATABASE_NAME>",
+       "oid": 0,
+       "system_identifier": "<OBSERVED_SYSTEM_IDENTIFIER>",
+       "server_version_num": 0
+     },
+     "roles": {
+       "installer": "<INSTALLER_ROLE>",
+       "owner": "<OWNER_ROLE>",
+       "runtime": "<CORE_RUNTIME_ROLE>",
+       "extensions": "<EXTENSIONS_RUNTIME_ROLE>"
+     },
+     "predecessor_manifest_sha256": "9d7b93584b646b0d7f26a0a67e8570a213a22f06c9001838c29b21beb06722df",
+     "predecessor_catalog_sha256": "e7de5a37f768dc20582b317673cf685f17ad315e1b3e2349977bb17023b82cfe",
+     "successor_manifest_sha256": "<VERIFIED_NEW_MANIFEST_SHA256>"
+   }
+   ```
+
+   `upgrade_id` 使用 16–96 字节的 ASCII 字母、数字或 `-_.`，本次操作始终保留同一个值。
+   JSON 不含密码或 SQL；连接串仍只从 owner TOML 指定的私密文件读取。
+
+5. 安装并核对新程序后，执行一次，保留 stdout 回执、stderr 和退出状态：
+
+   ```sh
+   sudo sh -c 'umask 077; set -C; /usr/bin/lmm-core --config /root/lmm-install/core-owner.toml upgrade-db < /root/lmm-install/core-upgrade.json > /root/lmm-install/core-upgrade-receipt.json'
+   ```
+
+   成功回执为 `protocol = core.upgrade-db.v1`、`status = committed`、`components = 25`。
+   若结果为 `unknown`，保留原请求、ID 和原 backend PID，先检查原连接与回执。
+   之后显式重用完全相同的请求：已提交会返回 `already_committed`；
+   完整旧契约仍在且没有回执时，该调用可能执行升级，并非只读查询。
+   不换 ID、不修改请求、不自动重试，也不删除回执后重做。
+   后续显式核查使用新的输出文件名，保留原输出；参数或请求解析失败时也须检查 stderr，
+   不能假定一定产生 JSON 回执。
+6. 完成同一数据截止点所需的账户价格来源事实导入与对账后，恢复 runtime 登录权限，
+   使用 runtime 配置执行 `check-db`，再启动新 Core 并验证实际接口。
+   `check-db` 只验证结构与权限；升级成功不等于账户价格、资金或浏览器业务已验收。
+
+普通 `serve` 始终只校验数据库，不执行上述 DDL，不修补权限，也不自动升级。
+Go 扩展保持独立；它没有 Core 升级权限。
 
 ### 只更新 Go 扩展
 

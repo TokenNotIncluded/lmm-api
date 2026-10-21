@@ -1,5 +1,7 @@
 //! Exact OpenRouter account charges. Never infer a router's cost from the
 //! selected model or add token/tool fees to an already inclusive account charge.
+use crate::billing::trust_pricing::DiscountRatio;
+use num_bigint::BigUint;
 
 pub const ATTO_USD: u128 = 1_000_000_000_000_000_000;
 pub const CREDITS_PER_USD: u128 = 500_000;
@@ -54,18 +56,112 @@ pub fn parse_usd(number: &str) -> Option<u128> {
 
 /// Round up once in integer credits, after applying the frozen group ratio.
 pub fn credits(atto_usd: u128, group_ppm: u32) -> Option<i64> {
+    credits_with_discount(atto_usd, group_ppm, None)
+}
+
+pub fn credits_with_discount(
+    atto_usd: u128,
+    group_ppm: u32,
+    discount: Option<DiscountRatio>,
+) -> Option<i64> {
     if !(1..=1_000_000_000).contains(&group_ppm) {
         return None;
     }
     let numerator = atto_usd
         .checked_mul(CREDITS_PER_USD)?
         .checked_mul(u128::from(group_ppm))?;
-    i64::try_from(numerator.div_ceil(ATTO_USD * u128::from(MULTIPLIER_ONE))).ok()
+    i64::try_from(ceil_with_discount(
+        numerator,
+        ATTO_USD * u128::from(MULTIPLIER_ONE),
+        discount,
+    )?)
+    .ok()
+}
+
+/// Multiply a trusted factor into an exact amount before its sole ceiling.
+/// Domain callers retain their original base overflow and signed-limit checks.
+pub(crate) fn ceil_with_discount(
+    numerator: u128,
+    denominator: u128,
+    discount: Option<DiscountRatio>,
+) -> Option<u64> {
+    if denominator == 0 {
+        return None;
+    }
+    let mut numerator = BigUint::from(numerator);
+    let mut denominator = BigUint::from(denominator);
+    if let Some(discount) = discount {
+        numerator *= discount.numerator();
+        denominator *= discount.denominator();
+    }
+    let rounded = &numerator / &denominator
+        + BigUint::from(u8::from(&numerator % &denominator != BigUint::from(0_u8)));
+    u64::try_from(rounded).ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn discount_is_applied_before_the_only_credit_ceiling() {
+        let discount = Some(DiscountRatio::new(9, 10).unwrap());
+        assert_eq!(credits(2_200_000_000_000, MULTIPLIER_ONE), Some(2));
+        assert_eq!(
+            credits_with_discount(2_200_000_000_000, MULTIPLIER_ONE, discount),
+            Some(1)
+        );
+        assert_eq!(
+            credits_with_discount(
+                1,
+                1,
+                Some(DiscountRatio::new(1, 1_000_000_000_000_000_000).unwrap())
+            ),
+            Some(1)
+        );
+        assert_eq!(credits_with_discount(0, MULTIPLIER_ONE, discount), Some(0));
+    }
+
+    #[test]
+    fn discount_does_not_add_intermediate_overflow_or_change_base_rejections() {
+        let discount =
+            Some(DiscountRatio::new(999_999_999_999_999_999, 1_000_000_000_000_000_000).unwrap());
+        assert_eq!(
+            credits_with_discount(ATTO_USD, MULTIPLIER_ONE, discount),
+            Some(500_000)
+        );
+        assert_eq!(
+            credits_with_discount(u128::MAX, MULTIPLIER_ONE, discount),
+            None
+        );
+        assert_eq!(credits_with_discount(ATTO_USD, 0, discount), None);
+        assert_eq!(
+            credits_with_discount(ATTO_USD, 1_000_000_001, discount),
+            None
+        );
+        assert_eq!(ceil_with_discount(1, 0, discount), None);
+        assert_eq!(
+            ceil_with_discount(3, 2, Some(DiscountRatio::new(1, 2).unwrap())),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn absent_and_identity_discounts_match_every_original_credit_result() {
+        let identity = Some(DiscountRatio::new(1, 1).unwrap());
+        for atto in [0, 1, 2_200_000_000_000, ATTO_USD, u128::MAX] {
+            for group in [0, 1, MULTIPLIER_ONE, 1_000_000_000, 1_000_000_001] {
+                assert_eq!(
+                    credits_with_discount(atto, group, None),
+                    credits(atto, group)
+                );
+                assert_eq!(
+                    credits_with_discount(atto, group, identity),
+                    credits(atto, group)
+                );
+            }
+        }
+    }
+
     #[test]
     fn exact_cost_and_one_final_rounding() {
         assert_eq!(parse_usd("0.000002000000000001"), Some(2_000_000_000_001));

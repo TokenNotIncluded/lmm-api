@@ -37,6 +37,7 @@ fn tariff() -> TieredTariff {
         source_digest: "23".repeat(32),
         uses_cache_read: true,
         uses_cache_write: false,
+        uses_cache_write_1h: false,
         tiers: vec![
             TokenTier {
                 up_to_input_tokens: Some(9),
@@ -45,6 +46,7 @@ fn tariff() -> TieredTariff {
                     output: rate(10, 1),
                     cache_read: rate(1, 8),
                     cache_write: rate(0, 1),
+                    cache_write_1h: None,
                 },
             },
             TokenTier {
@@ -54,6 +56,7 @@ fn tariff() -> TieredTariff {
                     output: rate(15, 1),
                     cache_read: rate(1, 4),
                     cache_write: rate(0, 1),
+                    cache_write_1h: None,
                 },
             },
         ],

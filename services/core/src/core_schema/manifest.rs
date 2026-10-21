@@ -1,5 +1,5 @@
 //! The compiled installation contract. This projection performs no I/O.
-use super::{CATALOG, COMPONENTS, CONTRACT};
+use super::{CATALOG, COMPONENTS, installer_contract_sha256};
 use crate::identity::IdentityStore;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -11,6 +11,8 @@ pub struct SchemaManifest {
     /// Fresh installation order, including configured-off components.
     pub components: Vec<ComponentManifest>,
     pub identity: IdentityManifest,
+    /// SHA256 of exact installer metadata SQL bytes, concatenated in execution
+    /// order (component/runtime contract, then code-upgrade receipt DDL).
     pub installer_contract_sql_sha256: String,
     pub catalog: CatalogManifest,
 }
@@ -60,7 +62,7 @@ pub fn schema_manifest() -> SchemaManifest {
                 .map(|byte| format!("{byte:02x}"))
                 .collect(),
         },
-        installer_contract_sql_sha256: format!("{:x}", Sha256::digest(CONTRACT.as_bytes())),
+        installer_contract_sql_sha256: installer_contract_sha256(),
         catalog: CatalogManifest {
             query_utf8: CATALOG,
             query_sha256: format!("{:x}", Sha256::digest(CATALOG.as_bytes())),
@@ -108,7 +110,7 @@ mod tests {
         );
         assert_eq!(
             manifest.installer_contract_sql_sha256,
-            format!("{:x}", Sha256::digest(CONTRACT.as_bytes()))
+            installer_contract_sha256()
         );
     }
 

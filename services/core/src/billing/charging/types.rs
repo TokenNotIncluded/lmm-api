@@ -37,6 +37,49 @@ impl From<sqlx::Error> for Error {
 }
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Authoritative cumulative cache writes. A missing TTL is not a zero TTL.
+/// The immutable usage event carries these counters across worker restarts.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CacheCreationUsage {
+    pub total: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub five_minute: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub one_hour: Option<i64>,
+}
+impl CacheCreationUsage {
+    pub(crate) fn valid(self) -> bool {
+        self.total >= 0
+            && [self.five_minute, self.one_hour]
+                .into_iter()
+                .flatten()
+                .all(|v| (0..=self.total).contains(&v))
+            && match (self.five_minute, self.one_hour) {
+                (Some(five), Some(hour)) => five.checked_add(hour) == Some(self.total),
+                _ => true,
+            }
+    }
+    pub(crate) fn follows(self, previous: Self) -> bool {
+        let follows = |now: Option<i64>, old: Option<i64>| {
+            old.is_none_or(|old| now.is_some_and(|now| now >= old))
+        };
+        let buckets = |value: Self| match (value.five_minute, value.one_hour) {
+            (Some(five), None) => (Some(five), value.total.checked_sub(five)),
+            (None, Some(hour)) => (value.total.checked_sub(hour), Some(hour)),
+            value => value,
+        };
+        let (five, hour) = buckets(self);
+        let (old_five, old_hour) = buckets(previous);
+        self.valid()
+            && self.total >= previous.total
+            && follows(self.five_minute, previous.five_minute)
+            && follows(self.one_hour, previous.one_hour)
+            && follows(five, old_five)
+            && follows(hour, old_hour)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Usage {
@@ -44,6 +87,8 @@ pub struct Usage {
     pub image: Option<crate::model_http::image_price::ImageUsage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream_cost_atto_usd: Option<u128>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_creation: Option<CacheCreationUsage>,
     /// Includes cached input. Cached input is priced separately, not twice.
     pub input: i64,
     pub cached: i64,
@@ -56,9 +101,20 @@ impl Usage {
                 && self.input == 0
                 && self.cached == 0
                 && self.output == 0
-                && self.upstream_cost_atto_usd.is_none();
+                && self.upstream_cost_atto_usd.is_none()
+                && self.cache_creation.is_none();
         }
-        self.input >= 0 && self.cached >= 0 && self.cached <= self.input && self.output >= 0
+        self.input >= 0
+            && self.cached >= 0
+            && self.cached <= self.input
+            && self.output >= 0
+            && self.cache_creation.is_none_or(|created| {
+                created.valid()
+                    && self
+                        .cached
+                        .checked_add(created.total)
+                        .is_some_and(|sum| sum <= self.input)
+            })
     }
     pub fn follows(self, previous: Self) -> bool {
         self.valid()
@@ -70,6 +126,11 @@ impl Usage {
             && self.input >= previous.input
             && self.cached >= previous.cached
             && self.output >= previous.output
+            && match (previous.cache_creation, self.cache_creation) {
+                (Some(old), Some(now)) => now.follows(old),
+                (Some(_), None) => false,
+                _ => true,
+            }
             && match (previous.upstream_cost_atto_usd, self.upstream_cost_atto_usd) {
                 (Some(old), Some(new)) => new >= old,
                 (Some(_), None) => false,
@@ -83,6 +144,10 @@ impl Usage {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Price {
+    /// Only a verified Core actor's transaction can mint a new entitlement.
+    /// Absence remains an explicitly legacy price, including on replay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_trust: Option<crate::billing::trust_pricing::FrozenTrustPrice>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<crate::model_http::image_price::PersistedImagePrice>,
     /// Set only by the trusted Rust router; no client or Go price authority.
@@ -98,7 +163,40 @@ pub struct Price {
     pub output_per_million: i64,
 }
 impl Price {
+    pub(crate) fn with_user_authority(
+        mut self,
+        authority: &crate::billing::trust_pricing::UserPriceAuthority,
+    ) -> Result<Self> {
+        if self.user_trust.is_some() {
+            return Err(Error::Invalid);
+        }
+        self.user_trust = Some(authority.evidence().clone());
+        self.validate()?;
+        Ok(self)
+    }
+    pub(crate) fn base_price(&self) -> Self {
+        let mut base = self.clone();
+        base.user_trust = None;
+        base
+    }
+    pub(crate) fn discount(&self) -> Option<crate::billing::trust_pricing::DiscountRatio> {
+        self.user_trust.as_ref().map(|evidence| evidence.discount())
+    }
+    pub(crate) fn validate_actor(&self, user_id: i64) -> Result<()> {
+        self.validate()?;
+        if self
+            .user_trust
+            .as_ref()
+            .is_some_and(|evidence| evidence.user_id() != user_id)
+        {
+            return Err(Error::Forbidden);
+        }
+        Ok(())
+    }
     pub fn validate(&self) -> Result<()> {
+        if let Some(evidence) = &self.user_trust {
+            evidence.validate().map_err(|_| Error::Invalid)?;
+        }
         if !valid_id(&self.version)
             || !valid_price_model(&self.model)
             || !crate::routing::valid_group_name(&self.group)
@@ -150,31 +248,41 @@ impl Price {
         }
         if let Some(price) = &self.image {
             return price
-                .cost(&usage.image.ok_or(Error::Invalid)?)
+                .cost_with_discount(&usage.image.ok_or(Error::Invalid)?, self.discount())
                 .map_err(|_| Error::Invalid);
         }
         if usage.image.is_some() {
             return Err(Error::Invalid);
         }
         if let Some(tariff) = &self.tiered {
+            let created = self.cache_creation_for(tariff, usage)?;
             return tariff
-                .cost(crate::routing::TieredUsage {
-                    input: usage.input as u64,
-                    cached: usage.cached as u64,
-                    created: 0,
-                    output: usage.output as u64,
-                })
+                .cost_with_discount(
+                    crate::routing::TieredUsage {
+                        input: usage.input as u64,
+                        cached: usage.cached as u64,
+                        created: created.map_or(0, |v| v.total as u64),
+                        output: usage.output as u64,
+                        created_5m: created.and_then(|v| v.five_minute.map(|v| v as u64)),
+                        created_1h: created.and_then(|v| v.one_hour.map(|v| v as u64)),
+                    },
+                    self.discount(),
+                )
                 .and_then(|amount| {
                     i64::try_from(amount).map_err(|_| crate::routing::RoutingError::PriceOverflow)
                 })
                 .map_err(|_| Error::Invalid);
         }
         if let Some(ppm) = self.upstream_cost_group_ppm {
-            return crate::upstream_cost::credits(
+            return crate::upstream_cost::credits_with_discount(
                 usage.upstream_cost_atto_usd.ok_or(Error::Invalid)?,
                 ppm,
+                self.discount(),
             )
             .ok_or(Error::Invalid);
+        }
+        if usage.cache_creation.is_some_and(|v| v.total != 0) {
+            return Err(Error::Invalid);
         }
         let sum = [
             (usage.input - usage.cached, self.input_per_million),
@@ -186,8 +294,190 @@ impl Price {
             total.checked_add(i128::from(count) * i128::from(rate))
         })
         .ok_or(Error::Invalid)?;
-        i64::try_from(sum.checked_add(999_999).ok_or(Error::Invalid)? / 1_000_000)
-            .map_err(|_| Error::Invalid)
+        let amount = crate::upstream_cost::ceil_with_discount(
+            u128::try_from(sum).map_err(|_| Error::Invalid)?,
+            1_000_000,
+            self.discount(),
+        )
+        .ok_or(Error::Invalid)?;
+        i64::try_from(amount).map_err(|_| Error::Invalid)
+    }
+
+    /// The same frozen exact factor applies before the reservation's sole ceil.
+    pub(crate) fn reservation_ceiling(&self, basis: ReservationBasis) -> Result<i64> {
+        self.validate()?;
+        let amount = match basis {
+            ReservationBasis::Image => {
+                return self
+                    .image
+                    .as_ref()
+                    .ok_or(Error::Invalid)?
+                    .reservation_with_discount(self.discount())
+                    .map_err(|_| Error::Invalid);
+            }
+            ReservationBasis::UpstreamCost { atto_usd } => {
+                return crate::upstream_cost::credits_with_discount(
+                    atto_usd,
+                    self.upstream_cost_group_ppm.ok_or(Error::Invalid)?,
+                    self.discount(),
+                )
+                .ok_or(Error::Invalid);
+            }
+            ReservationBasis::Tokens { input, output } => {
+                if self.image.is_some() || self.upstream_cost_group_ppm.is_some() {
+                    return Err(Error::Invalid);
+                }
+                if let Some(tariff) = &self.tiered {
+                    tariff
+                        .tariff
+                        .compile()
+                        .map_err(|_| Error::Invalid)?
+                        .reservation_ceiling_with_discount(
+                            input,
+                            output,
+                            tariff.group_multiplier_ppm,
+                            tariff.speed_multiplier_ppm,
+                            tariff.credits_per_usd,
+                            self.discount(),
+                        )
+                        .map_err(|_| Error::Invalid)?
+                } else {
+                    let numerator = u128::from(input)
+                        .checked_mul(self.input_per_million.max(self.cached_per_million) as u128)
+                        .and_then(|sum| {
+                            sum.checked_add(u128::from(output) * self.output_per_million as u128)
+                        })
+                        .ok_or(Error::Invalid)?;
+                    crate::upstream_cost::ceil_with_discount(numerator, 1_000_000, self.discount())
+                        .ok_or(Error::Invalid)?
+                }
+            }
+        };
+        i64::try_from(amount).map_err(|_| Error::Invalid)
+    }
+
+    fn cache_creation_for(
+        &self,
+        tariff: &crate::routing::PersistedTieredTariff,
+        usage: Usage,
+    ) -> Result<Option<CacheCreationUsage>> {
+        if tariff.tariff.revision == 1 {
+            if usage.cache_creation.is_some() {
+                return Err(Error::Invalid);
+            }
+            return Ok(None);
+        }
+        // Empty usage belongs to an undispatched release/initial checkpoint.
+        // A successful nonempty revision-2 measurement must be explicit, even
+        // when a provider reports exactly zero cache creation.
+        match usage.cache_creation {
+            Some(value) => Ok(Some(value)),
+            None if usage.input == 0 && usage.cached == 0 && usage.output == 0 => Ok(None),
+            None => Err(Error::Invalid),
+        }
+    }
+}
+
+/// Captured by the Rust route/quote resolver, never accepted from HTTP or Go.
+/// This remains separate from legacy Request's serialized idempotency contract.
+#[derive(Clone, Copy, Debug, Serialize)]
+pub(crate) enum ReservationBasis {
+    Tokens { input: u64, output: u64 },
+    UpstreamCost { atto_usd: u128 },
+    Image,
+}
+
+#[cfg(test)]
+mod trust_price_tests {
+    use super::*;
+    use serde_json::json;
+
+    pub(super) fn base() -> Price {
+        Price {
+            user_trust: None,
+            image: None,
+            upstream_cost_group_ppm: None,
+            tiered: None,
+            version: "v1".into(),
+            model: "model".into(),
+            group: "default".into(),
+            input_per_million: 10_000,
+            cached_per_million: 2_000,
+            output_per_million: 20_000,
+        }
+    }
+    fn frozen(mut price: Price, numerator: u64, denominator: u64) -> Price {
+        let mut encoded = serde_json::to_value(&price).unwrap();
+        encoded["user_trust"] = json!({
+            "user_id":7,"policy_revision":1,"basis_revision":2,
+            "effective_level":1,"level_source":"automatic",
+            "discount":{"numerator":numerator,"denominator":denominator},
+            "evaluated_at":100,"next_decay_at":200,"evidence_digest":vec![1u8;32]
+        });
+        price = serde_json::from_value(encoded).unwrap();
+        price
+    }
+    #[test]
+    fn legacy_price_preserves_original_json_and_absence_is_not_verified_one() {
+        let price = base();
+        let original = r#"{"version":"v1","model":"model","group":"default","input_per_million":10000,"cached_per_million":2000,"output_per_million":20000}"#;
+        assert_eq!(serde_json::to_string(&price).unwrap(), original);
+        let verified = frozen(price.clone(), 1, 1);
+        assert_ne!(
+            serde_json::to_value(&verified).unwrap(),
+            serde_json::to_value(&price).unwrap()
+        );
+        assert_eq!(verified.base_price(), price);
+        assert_eq!(verified.validate_actor(7), Ok(()));
+        assert_eq!(verified.validate_actor(8), Err(Error::Forbidden));
+    }
+    #[test]
+    fn scalar_settlement_and_hold_apply_factor_before_their_only_ceiling() {
+        let price = base();
+        let usage = Usage {
+            input: 101,
+            ..Usage::default()
+        };
+        assert_eq!(price.cost(usage), Ok(2));
+        let frozen = frozen(price, 9, 10);
+        assert_eq!(frozen.cost(usage), Ok(1));
+        assert_eq!(
+            frozen.reservation_ceiling(ReservationBasis::Tokens {
+                input: 101,
+                output: 0
+            }),
+            Ok(1)
+        );
+        // Exact frozen evidence, including its time, remains unchanged on reuse.
+        let encoded = serde_json::to_vec(&frozen).unwrap();
+        for _ in 0..3 {
+            let restored: Price = serde_json::from_slice(&encoded).unwrap();
+            assert_eq!(restored, frozen);
+            assert_eq!(restored.cost(usage), Ok(1));
+        }
+    }
+    #[test]
+    fn discounted_hold_bounds_all_scalar_cache_splits() {
+        let price = frozen(base(), 97, 100);
+        let hold = price
+            .reservation_ceiling(ReservationBasis::Tokens {
+                input: 1001,
+                output: 101,
+            })
+            .unwrap();
+        for cached in 0..=1001 {
+            assert!(
+                price
+                    .cost(Usage {
+                        input: 1001,
+                        cached,
+                        output: 101,
+                        ..Usage::default()
+                    })
+                    .unwrap()
+                    <= hold
+            );
+        }
     }
 }
 
@@ -391,9 +681,97 @@ pub(super) fn valid_id(value: &str) -> bool {
 #[cfg(test)]
 mod delegated_source_tests {
     use super::*;
+
+    #[test]
+    fn cache_usage_is_durable_optional_and_monotone_without_changing_old_json() {
+        let old = Usage {
+            input: 10,
+            cached: 2,
+            output: 3,
+            ..Usage::default()
+        };
+        assert!(
+            !CacheCreationUsage {
+                total: 8,
+                five_minute: None,
+                one_hour: Some(7)
+            }
+            .follows(CacheCreationUsage {
+                total: 7,
+                five_minute: None,
+                one_hour: Some(5)
+            })
+        );
+        assert_eq!(
+            serde_json::to_string(&old).unwrap(),
+            r#"{"input":10,"cached":2,"output":3}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<Usage>(r#"{"input":10,"cached":2,"output":3}"#).unwrap(),
+            old
+        );
+        let measured = Usage {
+            cache_creation: Some(CacheCreationUsage {
+                total: 5,
+                five_minute: Some(2),
+                one_hour: Some(3),
+            }),
+            ..old
+        };
+        assert!(measured.valid());
+        assert!(measured.follows(old));
+        assert!(!old.follows(measured));
+        let missing_hour = Usage {
+            cache_creation: Some(CacheCreationUsage {
+                total: 5,
+                five_minute: Some(2),
+                one_hour: None,
+            }),
+            ..old
+        };
+        assert!(!missing_hour.follows(measured));
+        for cache in [
+            CacheCreationUsage {
+                total: -1,
+                five_minute: None,
+                one_hour: None,
+            },
+            CacheCreationUsage {
+                total: 5,
+                five_minute: Some(2),
+                one_hour: Some(4),
+            },
+            CacheCreationUsage {
+                total: 9,
+                five_minute: None,
+                one_hour: None,
+            },
+        ] {
+            assert!(
+                !Usage {
+                    cache_creation: Some(cache),
+                    ..old
+                }
+                .valid()
+            );
+        }
+        let zero = Usage {
+            cache_creation: Some(CacheCreationUsage {
+                total: 0,
+                five_minute: Some(0),
+                one_hour: Some(0),
+            }),
+            ..old
+        };
+        assert_ne!(
+            serde_json::to_value(zero).unwrap(),
+            serde_json::to_value(old).unwrap()
+        );
+    }
     #[test]
     fn tilde_model_price_does_not_relax_other_identifiers_or_lengths() {
         let mut price = Price {
+            user_trust: None,
             image: None,
             upstream_cost_group_ppm: None,
             tiered: None,
@@ -428,6 +806,7 @@ mod delegated_source_tests {
     #[test]
     fn unicode_group_price_keeps_model_and_version_identifier_rules_strict() {
         let mut price = Price {
+            user_trust: None,
             image: None,
             upstream_cost_group_ppm: None,
             tiered: None,

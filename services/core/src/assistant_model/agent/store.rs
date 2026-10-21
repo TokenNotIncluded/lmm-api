@@ -368,11 +368,7 @@ impl AgentService {
                 .map_err(super::context_error)?;
             let turn_id = random("");
             let now = at(&mut tx).await?;
-            let price = self
-                .base
-                .gateway
-                .assistant_quote(&self.policy.model.model, &self.policy.model.group)
-                .map_err(|_| Error::Unavailable)?;
+            let price = self.base.quote_in_transaction(&mut tx, &principal).await?;
             sqlx::query("INSERT INTO core_assistant.agent_turns(id,conversation_id,client_turn_id,session_id,source_web_session_sid,auth_version,owner_user_id,owner_account_id,original_text,text_sha256,registry_sha256,host_policy,max_rounds,budget_credits,expires_at,phase,price,loaded_tools) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'new',$16,$17)")
                 .bind(&turn_id).bind(conversation_id).bind(client_turn_id).bind(principal.credential_id).bind(facts.browser_session).bind(facts.auth_version).bind(principal.user_id).bind(principal.owner_account_id).bind(text).bind(&text_sha256).bind(self.registry.digest().to_vec()).bind(serde_json::to_value(&*self.policy).map_err(|_|Error::Unavailable)?).bind(self.policy.max_rounds as i32).bind(self.policy.budget_credits).bind(now+self.policy.ttl_seconds).bind(serde_json::to_value(price).map_err(|_|Error::Unavailable)?).bind(serde_json::to_value(&self.policy.initial_tools).map_err(|_|Error::Unavailable)?).execute(&mut *tx).await?;
             turn_id

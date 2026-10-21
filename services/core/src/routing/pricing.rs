@@ -133,9 +133,19 @@ impl CreditRate {
 pub struct CreditQuote {
     price: PriceQuote,
     conversion: CreditRate,
+    discount: Option<crate::billing::trust_pricing::DiscountRatio>,
 }
 
 impl CreditQuote {
+    /// Numeric projection of the authority already frozen by Core admission.
+    /// This method does not authenticate a user or create spending authority.
+    pub(crate) fn with_discount(
+        mut self,
+        discount: Option<crate::billing::trust_pricing::DiscountRatio>,
+    ) -> Self {
+        self.discount = discount;
+        self
+    }
     pub fn price(&self) -> PriceQuote {
         self.price
     }
@@ -154,12 +164,13 @@ impl CreditQuote {
     ) -> Result<Credits, RoutingError> {
         if let Some(tariff) = self.price.tiered {
             return tariff
-                .reservation_ceiling(
+                .reservation_ceiling_with_discount(
                     input_tokens,
                     output_tokens,
                     self.price.group_multiplier_ppm,
                     self.price.speed_multiplier_ppm,
                     self.conversion.credits_per_usd,
+                    self.discount,
                 )
                 .map(Credits);
         }
@@ -190,7 +201,7 @@ impl CreditQuote {
     ) -> Result<Credits, RoutingError> {
         if let Some(tariff) = self.price.tiered {
             return tariff
-                .charge(
+                .charge_with_discount(
                     super::TieredUsage {
                         input: usage
                             .input
@@ -200,11 +211,13 @@ impl CreditQuote {
                         cached: usage.cache_read,
                         created: usage.cache_write,
                         output: usage.output,
+                        ..super::TieredUsage::default()
                     },
                     semantics,
                     self.price.group_multiplier_ppm,
                     self.price.speed_multiplier_ppm,
                     self.conversion.credits_per_usd,
+                    self.discount,
                 )
                 .map(Credits);
         }
@@ -226,7 +239,32 @@ impl CreditQuote {
         let denominator = DENOMINATOR
             .checked_mul(divisor)
             .ok_or(RoutingError::PriceOverflow)?;
-        Ok(Credits(rounded_amount(numerator, denominator)?))
+        let amount =
+            crate::upstream_cost::ceil_with_discount(numerator, denominator, self.discount)
+                .filter(|amount| *amount <= i64::MAX as u64)
+                .ok_or(RoutingError::PriceOverflow)?;
+        Ok(Credits(amount))
+    }
+
+    /// Evaluate a revisioned tariff with its authoritative cache TTL evidence.
+    /// The scalar token adapter cannot supply a missing one-hour measurement.
+    pub fn charge_tiered_usage(
+        &self,
+        usage: super::TieredUsage,
+        semantics: super::InputSemantics,
+    ) -> Result<Credits, RoutingError> {
+        self.price
+            .tiered
+            .ok_or(RoutingError::InvalidRequest)?
+            .charge_with_discount(
+                usage,
+                semantics,
+                self.price.group_multiplier_ppm,
+                self.price.speed_multiplier_ppm,
+                self.conversion.credits_per_usd,
+                self.discount,
+            )
+            .map(Credits)
     }
 }
 
@@ -263,8 +301,10 @@ impl PriceQuote {
             }
             (BillingMode::TieredDecimal, Some(compiled)) => {
                 let tariff = compiled.tariff();
-                !tariff.uses_cache_read
+                tariff.revision == 1
+                    && !tariff.uses_cache_read
                     && !tariff.uses_cache_write
+                    && !tariff.uses_cache_write_1h
                     && tariff.tiers.len() == 1
                     && tariff.tiers[0].up_to_input_tokens.is_none()
                     && tariff.tiers[0].rates.output.numerator == 0
@@ -311,6 +351,7 @@ impl PriceQuote {
                         cached: usage.cache_read,
                         created: usage.cache_write,
                         output: usage.output,
+                        ..super::TieredUsage::default()
                     },
                     super::InputSemantics::Inclusive,
                     self.group_multiplier_ppm,
@@ -330,6 +371,7 @@ impl PriceQuote {
         CreditQuote {
             price: self,
             conversion,
+            discount: None,
         }
     }
 
@@ -609,6 +651,22 @@ mod a07_tests {
                 Ok(Credits(expected))
             );
         }
+    }
+
+    #[test]
+    fn frozen_user_factor_precedes_quote_and_hold_rounding() {
+        let base = credits(quote(rates(20_000)));
+        let usage = Usage {
+            input: 101,
+            ..Usage::default()
+        };
+        assert_eq!(base.charge(usage), Ok(Credits(2)));
+        let frozen = base.with_discount(Some(
+            crate::billing::trust_pricing::DiscountRatio::new(9, 10).unwrap(),
+        ));
+        assert_eq!(frozen.charge(usage), Ok(Credits(1)));
+        assert_eq!(frozen.reservation_ceiling(101, 0), Ok(Credits(1)));
+        assert_eq!(base.with_discount(None), base);
     }
 
     #[test]

@@ -623,6 +623,10 @@ impl NativeEncoder {
             .usage
             .cache_creation_input_tokens
             .is_some_and(|v| v != 0)
+            || self.usage.cache_creation_details.is_some_and(|details| {
+                details.ephemeral_5m_input_tokens.is_some_and(|v| v != 0)
+                    || details.ephemeral_1h_input_tokens.is_some_and(|v| v != 0)
+            })
         {
             return Err(RelayError::Unsupported("Gemini cache write usage"));
         }
@@ -694,6 +698,37 @@ impl NativeEncoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn gemini_native_rejects_nonzero_cache_creation_details_without_aggregate() {
+        for details in [
+            super::super::CacheCreationDetails {
+                ephemeral_5m_input_tokens: Some(1),
+                ephemeral_1h_input_tokens: None,
+            },
+            super::super::CacheCreationDetails {
+                ephemeral_5m_input_tokens: None,
+                ephemeral_1h_input_tokens: Some(1),
+            },
+        ] {
+            let mut encoder = NativeEncoder::new("m", "req", false, &Limits::default());
+            for event in [
+                Event::Start("up".into()),
+                Event::Usage(Usage {
+                    input_tokens: Some(2),
+                    cache_creation_details: Some(details),
+                    ..Usage::default()
+                }),
+                Event::Finish(FinishReason::Stop),
+                Event::Done,
+            ] {
+                encoder.consume(&event).unwrap();
+            }
+            assert_eq!(
+                encoder.terminal(),
+                Err(RelayError::Unsupported("Gemini cache write usage"))
+            );
+        }
+    }
     #[test]
     fn gemini_native_rejects_nested_duplicates_unknown_and_media() {
         for body in [

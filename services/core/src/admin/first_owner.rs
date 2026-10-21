@@ -88,6 +88,7 @@ const SEEDED: &[(&str, &str)] = &[
     ("core_gift", "risk_key"),
     ("core_gift", "policy"),
     ("core_tool_market", "credit_policy"),
+    ("core_trust_pricing", "policies"),
     ("core_billing", "ledger_accounts"),
     ("core_billing", "balance_state"),
     ("public", "routing_active_release"),
@@ -170,6 +171,12 @@ async fn lock_fresh_database(connection: &mut PgConnection) -> io::Result<()> {
         AND (SELECT count(*)=1 AND bool_and(singleton AND octet_length(secret)=32) FROM core_gift.risk_key)
         AND (SELECT count(*)=1 AND bool_and(singleton AND NOT enabled AND exclusive_cap=0) FROM core_gift.policy)
         AND (SELECT count(*)=1 AND bool_and(singleton AND version=1 AND platform_account_id IS NULL AND platform_user_id IS NULL AND NOT enabled AND updated_by IS NULL AND updated_at=0 AND fee_bps=0) FROM core_tool_market.credit_policy)
+        AND (SELECT count(*)=1 AND bool_and(singleton AND revision=1
+            AND spec='{"version":1,"paid_activation_enabled":true,"decay_period_days":90,"tiers":[{"level":0,"min_paid_credits":0,"discount":{"numerator":1,"denominator":1}},{"level":1,"min_paid_credits":500000,"discount":{"numerator":1,"denominator":1}},{"level":2,"min_paid_credits":5000000,"discount":{"numerator":97,"denominator":100}},{"level":3,"min_paid_credits":25000000,"discount":{"numerator":94,"denominator":100}},{"level":4,"min_paid_credits":100000000,"discount":{"numerator":9,"denominator":10}}],"admin_discount":{"numerator":9,"denominator":10},"superadmin_discount":{"numerator":9,"denominator":10}}'::jsonb
+            AND source_digest=sha256(convert_to('core-native-trust-policy-v1','UTF8'))
+            AND source_cutoff>0 AND native_user_floor=1
+            AND native_since>=to_timestamp(source_cutoff)
+            AND native_since<=statement_timestamp()) FROM core_trust_pricing.policies)
         AND (SELECT count(*)=1 AND bool_and(singleton AND config_version IS NULL) FROM public.routing_active_release)
         AND (SELECT count(*)=2 AND count(DISTINCT bucket)=2 AND bool_and(owner_account_id IS NULL AND bucket IN ('clearing','revenue') AND unit='credit_500k_usd') FROM core_billing.ledger_accounts)
         AND (SELECT count(*)=2 AND bool_and(balance_units=0 AND revision=0) FROM core_billing.balance_state)"#,

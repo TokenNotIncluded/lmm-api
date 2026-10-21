@@ -33,7 +33,10 @@ async fn call(
         )
         .await
         .unwrap();
-    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    assert_eq!(
+        response.headers()[header::CACHE_CONTROL],
+        "private, no-store"
+    );
     let status = response.status();
     let bytes = to_bytes(response.into_body(), 3 * 1024 * 1024)
         .await
@@ -244,4 +247,76 @@ async fn pricing_pg_header_nav_policy_bounds_and_public_runtime_unknown(pool: Pg
         StatusCode::BAD_REQUEST
     );
     assert_eq!(counts(&pool).await, before);
+}
+
+#[sqlx::test(migrations = false)]
+async fn pricing_pg_trusted_user_rates_public_isolation_and_incomplete_basis_rejection(
+    pool: PgPool,
+) {
+    let (identity, session, _) = setup(&pool).await;
+    let gateway = gateway(pool.clone()).with_trust_pricing();
+    let surface = Arc::new(PricingSurface::from_gateway(&gateway).unwrap());
+    let router = PricingHttp::new(pool.clone(), surface).router();
+    let before = counts(&pool).await;
+    let (status, public) = call(&router, "/core/v1/pricing/public", None, None).await;
+    assert_eq!(status, StatusCode::OK, "{public}");
+    assert_eq!(public["rate_basis"], "base_group_rate");
+    assert_eq!(public["user_price"], json!({"status":"not_evaluated"}));
+    let now: i64 =
+        sqlx::query_scalar("SELECT floor(extract(epoch FROM transaction_timestamp()))::bigint")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    sqlx::query("INSERT INTO core_trust_pricing.user_bases(user_id,original_created_at,console_activated_at,last_api_activity_at,override_level,projection_known,order_count,revision,source_digest) VALUES(7,$1,0,0,2,TRUE,0,1,decode(repeat('11',32),'hex'))")
+        .bind(now).execute(&pool).await.unwrap();
+    let (status, own) = call(
+        &router,
+        "/core/v1/pricing/session",
+        Some(&session.secret),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{own}");
+    assert_eq!(own["rate_basis"], "effective_user_rate");
+    assert_eq!(
+        own["user_price"],
+        json!({"status":"verified","multiplier":{"numerator":"97","denominator":"100"}})
+    );
+    for row in own["models"].as_array().unwrap() {
+        if !row["token_price"].is_null() {
+            assert_eq!(row["token_price"]["rate_basis"], "effective_user_rate");
+        }
+        for image in row["image_variants"].as_array().unwrap() {
+            assert_eq!(image["rate_basis"], "effective_user_rate");
+        }
+    }
+    let (_, public_again) = call(&router, "/core/v1/pricing/public", None, None).await;
+    assert_eq!(public_again["user_price"], public["user_price"]);
+    assert_eq!(public_again["models"], public["models"]);
+    sqlx::query("UPDATE core_trust_pricing.policies SET native_user_floor=8")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM core_trust_pricing.user_bases WHERE user_id=7")
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        call(
+            &router,
+            "/core/v1/pricing/session",
+            Some(&session.secret),
+            None
+        )
+        .await
+        .0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(
+        call(&router, "/core/v1/pricing/public", None, None).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(counts(&pool).await, before);
+    // Session read-only paths never create charging or financial events.
+    let _ = identity;
 }

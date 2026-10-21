@@ -5,6 +5,7 @@ pub mod charging;
 pub mod ledger;
 pub mod legacy_escrow;
 pub mod transactional_ledger;
+pub mod trust_pricing;
 
 use serde::{Deserialize, Serialize};
 

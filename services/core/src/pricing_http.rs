@@ -63,9 +63,18 @@ pub struct PricingResponse {
     pub observed_at: u64,
     pub credits_per_usd: i64,
     pub rate_basis: &'static str,
+    pub user_price: UserPrice,
     pub invocation_authorized: bool,
     #[serde(flatten)]
     pub catalog: PricingProjection,
+}
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum UserPrice {
+    NotEvaluated,
+    Verified {
+        multiplier: crate::model_http::pricing::ExactFraction,
+    },
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -174,7 +183,7 @@ impl PricingHttp {
     }
     async fn read(&self, secret: Option<&str>) -> Result<PricingResponse, Error> {
         let mut tx = self.pool.begin().await?;
-        sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ ONLY")
             .execute(&mut *tx)
             .await?;
         let raw:Option<Option<String>>=sqlx::query_scalar("SELECT CASE WHEN octet_length(value)<=65536 THEN value ELSE NULL END FROM core_console.options WHERE key='HeaderNavModules'").fetch_optional(&mut *tx).await?;
@@ -187,7 +196,7 @@ impl PricingHttp {
         if !policy.enabled || (secret.is_none() && policy.require_auth) {
             return Err(Error::Forbidden);
         }
-        let (allowed, model_filter) = if let Some(secret) = secret {
+        let (allowed, model_filter, authority) = if let Some(secret) = secret {
             let actor = identity::authenticate_readonly_in_transaction(&mut tx, secret).await?;
             if actor.credential_kind != CredentialKind::Session
                 || actor.owner.kind != crate::accounts::AccountKind::Personal
@@ -198,21 +207,58 @@ impl PricingHttp {
             let models = crate::abuse::public_models_in_transaction(&mut tx, actor.user_id)
                 .await
                 .map_err(|_| Error::Unavailable)?;
-            (Some(groups), models)
+            let authority = if self
+                .surface
+                .as_ref()
+                .is_some_and(|s| s.trust_pricing_enabled())
+            {
+                Some(
+                    crate::billing::trust_pricing::quote_readonly_in_transaction(
+                        &mut tx,
+                        actor.user_id,
+                    )
+                    .await
+                    .map_err(|_| Error::Unavailable)?,
+                )
+            } else {
+                None
+            };
+            (Some(groups), models, authority)
         } else {
-            (None, None)
+            (None, None, None)
         };
         let timestamp: i64 =
             sqlx::query_scalar("SELECT floor(extract(epoch FROM clock_timestamp()))::bigint")
                 .fetch_one(&mut *tx)
                 .await?;
         let observed_at = u64::try_from(timestamp).map_err(|_| Error::Unavailable)?;
-        let catalog = self
+        let mut catalog = self
             .surface
             .as_ref()
             .ok_or(Error::Unavailable)?
             .project(allowed.as_deref(), model_filter.as_deref())
             .map_err(|_| Error::Unavailable)?;
+        let (rate_basis, user_price) = if let Some(authority) = authority {
+            catalog
+                .apply_user_authority(&authority)
+                .map_err(|_| Error::Unavailable)?;
+            let d = authority.discount();
+            (
+                "effective_user_rate",
+                UserPrice::Verified {
+                    multiplier: crate::model_http::pricing::ExactFraction {
+                        numerator: d.numerator().to_string(),
+                        denominator: d.denominator().to_string(),
+                    },
+                },
+            )
+        } else if secret.is_some() {
+            // Only library fixtures omit production's mandatory host builder.
+            catalog.legacy_fixture_basis();
+            ("effective_group_rate", UserPrice::NotEvaluated)
+        } else {
+            ("base_group_rate", UserPrice::NotEvaluated)
+        };
         tx.commit().await?;
         Ok(PricingResponse {
             schema_version: 1,
@@ -223,7 +269,8 @@ impl PricingHttp {
             },
             observed_at,
             credits_per_usd: crate::billing::CREDITS_PER_USD,
-            rate_basis: "effective_group_rate",
+            rate_basis,
+            user_price,
             invocation_authorized: false,
             catalog,
         })
@@ -354,7 +401,7 @@ fn validate_models(models: &[String]) -> Result<(), Error> {
 }
 async fn no_store(mut response: Response) -> Response {
     for (name, value) in [
-        (header::CACHE_CONTROL, "no-store"),
+        (header::CACHE_CONTROL, "private, no-store"),
         (header::VARY, "Authorization, Cookie"),
         (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
     ] {

@@ -463,16 +463,23 @@ async fn execute(
         maximum_seconds: gateway.bridge.policy.lease_seconds,
     };
     let charge = billing::retry(|| {
-        gateway
-            .bridge
-            .charging
-            .reserve_with_context(&secret, &spec, &worker, peer)
+        gateway.bridge.charging.reserve_model_with_context(
+            &secret,
+            &spec,
+            &worker,
+            peer,
+            charging::ReservationBasis::Tokens {
+                input: input_token_ceiling as u64,
+                output: 0,
+            },
+        )
     })
     .await
     .map_err(billing::error)?;
     if charge.actor_user_id != principal.user_id() || charge.key_id != principal.key_id() {
         return Err(RelayError::Forbidden);
     }
+    gateway.bridge.freeze_selected_price(&id, &charge)?;
     if !attempt.is_available() {
         let _ = billing::retry(|| gateway.bridge.charging.release(&id, &worker)).await;
         return Err(RelayError::RouteUnavailable);

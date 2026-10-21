@@ -110,7 +110,7 @@ impl Bridge {
             let upstream_cost = original.price.upstream_cost_group_ppm.is_some();
             // A malformed historical receipt must not block the other rows in
             // this bounded batch. Never turn failed decoding into zero usage.
-            let Some(usage) = recovery_usage(value, sequence, upstream_cost) else {
+            let Some(usage) = recovery_priced_usage(value, sequence, &original.price) else {
                 continue;
             };
             if upstream_cost && usage.upstream_cost_atto_usd.is_none() {
@@ -183,6 +183,11 @@ impl Bridge {
             )
         };
         let upstream_cost = selected.price.upstream_cost_group_ppm.is_some();
+        let cache_tariff = selected
+            .price
+            .tiered
+            .as_ref()
+            .filter(|t| t.tariff.revision == 2);
         // A persisted terminal is authority for automatic settlement after an
         // OS restart. Validate the original provider contract BEFORE writing it,
         // so recovery cannot turn a rejected receipt into a zero-cache charge.
@@ -192,6 +197,13 @@ impl Bridge {
                 &checkpoint.usage,
                 upstream_cost,
             )?;
+            if let Some(tariff) = cache_tariff {
+                super::billing::complete_cache_usage(
+                    checkpoint.usage,
+                    tariff.input_semantics,
+                    tariff.missing_cache_creation_is_zero,
+                )?;
+            }
         }
         checkpoint
             .usage
@@ -206,10 +218,15 @@ impl Bridge {
                 .output_tokens
                 .is_some_and(|v| v > u64::from(output_ceiling))
             || (!upstream_cost
-                && checkpoint
+                && cache_tariff.is_none()
+                && (checkpoint
                     .usage
                     .cache_creation_input_tokens
-                    .is_some_and(|v| v != 0))
+                    .is_some_and(|v| v != 0)
+                    || checkpoint.usage.cache_creation_details.is_some_and(|v| {
+                        v.ephemeral_5m_input_tokens.is_some_and(|v| v != 0)
+                            || v.ephemeral_1h_input_tokens.is_some_and(|v| v != 0)
+                    })))
             || matches!((checkpoint.usage.cached_input_tokens,checkpoint.usage.input_tokens),(Some(cached),Some(input)) if cached>input)
             || matches!((checkpoint.usage.reasoning_output_tokens,checkpoint.usage.output_tokens),(Some(reasoning),Some(output)) if reasoning>output)
         {
@@ -284,10 +301,73 @@ fn recovery_usage(
     super::billing::complete_usage(observed, upstream_cost).ok()
 }
 
+fn recovery_priced_usage(
+    value: serde_json::Value,
+    sequence: i64,
+    price: &charging::Price,
+) -> Option<charging::Usage> {
+    let Some(tariff) = price.tiered.as_ref().filter(|t| t.tariff.revision == 2) else {
+        return recovery_usage(value, sequence, price.upstream_cost_group_ppm.is_some());
+    };
+    if !(1..=65_536).contains(&sequence) {
+        return None;
+    }
+    super::billing::complete_cache_usage(
+        serde_json::from_value(value).ok()?,
+        tariff.input_semantics,
+        tariff.missing_cache_creation_is_zero,
+    )
+    .ok()
+}
+
 #[cfg(test)]
 mod a07_recovery_tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn cache_v2_recovery_uses_the_original_frozen_usage_contract() {
+        let mut price: charging::Price = serde_json::from_value(json!({
+            "version":"routing-2-rule-1","model":"model","group":"allowed",
+            "input_per_million":0,"cached_per_million":0,"output_per_million":0,
+            "tiered":{
+                "input_semantics":"anthropic_text","group_multiplier_ppm":1000000,
+                "speed_multiplier_ppm":1000000,"credits_per_usd":500000,
+                "tariff":{"revision":2,"source_digest":"34".repeat(32),
+                    "uses_cache_read":true,"uses_cache_write":true,"uses_cache_write_1h":true,
+                    "tiers":[{"up_to_input_tokens":null,"rates":{
+                        "input":{"numerator":2,"denominator":1},
+                        "output":{"numerator":10,"denominator":1},
+                        "cache_read":{"numerator":1,"denominator":5},
+                        "cache_write":{"numerator":5,"denominator":2},
+                        "cache_write_1h":{"numerator":4,"denominator":1}
+                    }}]}
+            }
+        }))
+        .unwrap();
+        price.validate().unwrap();
+        let receipt = json!({"input_tokens":100,"output_tokens":5,"cached_input_tokens":20,
+            "cache_creation_input_tokens":70,
+            "cache_creation_details":{"ephemeral_5m_input_tokens":30,"ephemeral_1h_input_tokens":40}});
+        let usage = recovery_priced_usage(receipt.clone(), 1, &price).unwrap();
+        assert_eq!(price.cost(usage).unwrap(), 155);
+        assert!(recovery_usage(receipt, 1, false).is_none());
+        let unknown = json!({"input_tokens":100,"output_tokens":5,"cached_input_tokens":20});
+        assert!(recovery_priced_usage(unknown.clone(), 1, &price).is_none());
+        price
+            .tiered
+            .as_mut()
+            .unwrap()
+            .missing_cache_creation_is_zero = true;
+        let explicit_contract_zero = recovery_priced_usage(unknown, 1, &price).unwrap();
+        assert_eq!(explicit_contract_zero.cache_creation.unwrap().total, 0);
+        assert_eq!(
+            explicit_contract_zero.cache_creation.unwrap().one_hour,
+            Some(0)
+        );
+        let aggregate_only = json!({"input_tokens":100,"output_tokens":5,"cached_input_tokens":20,"cache_creation_input_tokens":70});
+        assert!(recovery_priced_usage(aggregate_only, 1, &price).is_none());
+    }
 
     #[tokio::test]
     async fn provider_terminal_contract_rejection_precedes_any_persisted_recovery_authority() {
@@ -334,6 +414,7 @@ mod a07_recovery_tests {
         };
         let policy = ProviderPolicy::new(
             vec![ExternalModelContext {
+                missing_cache_creation_tokens_is_zero: false,
                 upstream_id: 1,
                 upstream_model: "bounded-model".into(),
                 protocol: Protocol::OpenAiChat,
@@ -490,6 +571,7 @@ mod a07_recovery_tests {
         assert_eq!(
             valid,
             vec![charging::Usage {
+                cache_creation: None,
                 image: None,
                 upstream_cost_atto_usd: None,
                 input: 4,
@@ -549,6 +631,7 @@ mod a07_recovery_tests {
         assert_eq!(
             recovery_usage(value, 1, true),
             Some(charging::Usage {
+                cache_creation: None,
                 image: None,
                 upstream_cost_atto_usd: Some(123_456_789_000_000_000),
                 input: 4,

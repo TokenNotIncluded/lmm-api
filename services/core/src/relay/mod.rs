@@ -15,6 +15,7 @@ mod sse;
 #[cfg(test)]
 mod tests;
 mod types;
+pub(crate) use decode::usage as provider_usage;
 pub use request::{FunctionTool, InputBlock, Message, Request, Role, ToolChoice};
 pub use types::*;
 
@@ -443,6 +444,10 @@ impl Worker {
                     self.checkpoint(&packet, true).await?;
                 }
             }
+        } else if terminal_observed {
+            // A validated non-stream terminal is also durable recovery
+            // authority. Zero packet bytes do not claim client delivery.
+            self.checkpoint(&[], true).await?;
         }
         for packet in packets {
             self.write(&packet).await?;

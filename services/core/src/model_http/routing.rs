@@ -27,6 +27,34 @@ pub(super) struct Selected {
     pub input_token_ceiling: i64,
 }
 
+impl Bridge {
+    /// Complete admission before dispatch with the ledger's actual frozen price.
+    pub(super) fn freeze_selected_price(
+        &self,
+        id: &str,
+        charge: &crate::billing::charging::Charge,
+    ) -> Result<(), RelayError> {
+        charge
+            .price
+            .validate_actor(charge.actor_user_id)
+            .map_err(super::billing::error)?;
+        let mut active = self
+            .active
+            .lock()
+            .map_err(|_| RelayError::BillingUnavailable)?;
+        let selected = active
+            .get_mut(id)
+            .and_then(|op| op.selected.as_mut())
+            .ok_or(RelayError::BillingUnavailable)?;
+        if selected.price.base_price() != charge.price.base_price() {
+            return Err(RelayError::Conflict);
+        }
+        selected.quote = selected.quote.with_discount(charge.price.discount());
+        selected.price = charge.price.clone();
+        Ok(())
+    }
+}
+
 pub(super) fn credential_map(
     values: Vec<UpstreamCredential>,
 ) -> Result<BTreeMap<(u64, u64), String>, RelayError> {
@@ -59,6 +87,7 @@ pub(super) fn credit_price(
     if let Some(tariff) = quote.tiered() {
         let (group_multiplier_ppm, speed_multiplier_ppm) = quote.multipliers_ppm();
         let price = Price {
+            user_trust: None,
             image: None,
             upstream_cost_group_ppm: None,
             tiered: Some(crate::routing::PersistedTieredTariff {
@@ -67,6 +96,7 @@ pub(super) fn credit_price(
                 group_multiplier_ppm,
                 speed_multiplier_ppm,
                 credits_per_usd: 500_000,
+                missing_cache_creation_is_zero: false,
             }),
             version: format!("routing-{}-rule-{}", quote.version(), quote.rule_id()),
             model: model.to_owned(),
@@ -81,6 +111,7 @@ pub(super) fn credit_price(
     if quote.billing_mode() == crate::routing::BillingMode::UpstreamCost {
         let (group_ppm, _) = quote.multipliers_ppm();
         let price = Price {
+            user_trust: None,
             image: None,
             upstream_cost_group_ppm: Some(group_ppm),
             tiered: None,
@@ -114,6 +145,7 @@ pub(super) fn credit_price(
         i64::try_from(numerator / DENOMINATOR).map_err(|_| RelayError::BillingUnavailable)
     };
     let price = Price {
+        user_trust: None,
         image: None,
         upstream_cost_group_ppm: None,
         tiered: None,
@@ -215,6 +247,11 @@ impl RouteProvider for Bridge {
                 } else {
                     crate::routing::InputSemantics::Inclusive
                 };
+                if tariff.tariff.revision == 2 {
+                    tariff.missing_cache_creation_is_zero = self
+                        .provider_policy
+                        .missing_cache_creation_is_zero(&attempt);
+                }
             }
             if !attempt.is_available()
                 || attempt.payload_policy() != PayloadPolicy::Adapt
@@ -432,6 +469,7 @@ mod tests {
                             .unwrap();
                         let amount = legacy
                             .cost(crate::billing::charging::Usage {
+                                cache_creation: None,
                                 image: None,
                                 upstream_cost_atto_usd: None,
                                 input: input as i64,

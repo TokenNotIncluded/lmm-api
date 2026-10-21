@@ -91,6 +91,49 @@ GRANT USAGE ON SEQUENCE core_abuse.audit_id_seq TO {name};
             sqlx::raw_sql(&format!("GRANT USAGE ON SCHEMA core_gift TO {0}; GRANT SELECT ON core_gift.risk_key,core_gift.policy,core_gift.qualifications TO {0}; GRANT INSERT ON core_gift.qualifications TO {0}; GRANT EXECUTE ON FUNCTION core_gift.lock_eligibility(bigint) TO {0}",name))
                 .execute(owner).await.unwrap();
         }
+        // Match the production enable_trust_pricing read grants, without adding
+        // optional components or authority to older partial-schema fixtures.
+        let trust_installed: bool = sqlx::query_scalar(
+            "SELECT count(*)=3 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='core_trust_pricing' AND c.relkind='r' AND c.relname IN ('policies','user_bases','legacy_paid_orders')",
+        )
+        .fetch_one(owner)
+        .await
+        .unwrap();
+        if trust_installed {
+            sqlx::raw_sql(&format!(
+                "GRANT USAGE ON SCHEMA core_trust_pricing TO {name}; GRANT SELECT ON core_trust_pricing.policies,core_trust_pricing.user_bases,core_trust_pricing.legacy_paid_orders TO {name}",
+            ))
+            .execute(owner)
+            .await
+            .unwrap();
+            let payments_installed: bool =
+                sqlx::query_scalar("SELECT to_regclass('core_payments.intents') IS NOT NULL")
+                    .fetch_one(owner)
+                    .await
+                    .unwrap();
+            if payments_installed {
+                sqlx::raw_sql(&format!(
+                    "GRANT USAGE ON SCHEMA core_payments TO {name}; GRANT SELECT ON core_payments.intents TO {name}",
+                ))
+                .execute(owner)
+                .await
+                .unwrap();
+            }
+            let charging_installed: bool = sqlx::query_scalar(
+                "SELECT to_regclass('core_charging.requests') IS NOT NULL AND to_regclass('core_charging.usage_events') IS NOT NULL",
+            )
+            .fetch_one(owner)
+            .await
+            .unwrap();
+            if charging_installed {
+                sqlx::raw_sql(&format!(
+                    "GRANT USAGE ON SCHEMA core_charging TO {name}; GRANT SELECT ON core_charging.requests,core_charging.usage_events TO {name}",
+                ))
+                .execute(owner)
+                .await
+                .unwrap();
+            }
+        }
         let mut url = reqwest::Url::parse(&std::env::var("DATABASE_URL").unwrap()).unwrap();
         assert!(matches!(url.host_str(), Some("localhost" | "127.0.0.1")));
         url.set_path(&database);

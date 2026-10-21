@@ -9,7 +9,7 @@ use super::{
     image_provider::ImageProvider,
 };
 use crate::{
-    billing::charging::{Charge, Charging, Outcome, Price, Request, Usage},
+    billing::charging::{Charge, Charging, Outcome, Price, Request, ReservationBasis, Usage},
     identity::{self, BrowserAuth, CredentialKind},
     relay::Limits,
     tool_market::{
@@ -81,7 +81,7 @@ async fn drawing_context_operation(
     actor: &identity::Principal,
     context: &BuiltinContext,
 ) -> Result<Option<sqlx::postgres::PgRow>> {
-    let mut rows = sqlx::query("SELECT id,session_id,auth_version,context FROM core_image.operations WHERE source_kind='drawing' AND actor_user_id=$1 AND owner_account_id=$2 AND context->>'call_id'=$3 AND context->>'dispatch_id'=$4 LIMIT 2")
+    let mut rows = sqlx::query("SELECT id,session_id,auth_version,context,price FROM core_image.operations WHERE source_kind='drawing' AND actor_user_id=$1 AND owner_account_id=$2 AND context->>'call_id'=$3 AND context->>'dispatch_id'=$4 LIMIT 2")
         .bind(actor.user_id).bind(actor.owner_account_id).bind(&context.call_id).bind(&context.dispatch_id).fetch_all(&mut *c).await?;
     if rows.len() > 1 {
         return Err(Error::Conflict);
@@ -174,6 +174,50 @@ pub struct ImageService {
     credential_digests: Arc<Vec<[u8; 32]>>,
 }
 impl ImageService {
+    pub(crate) fn enable_trust_pricing(&self) {
+        self.charging.enable_trust_pricing();
+    }
+
+    async fn freeze_image_price(
+        &self,
+        c: &mut PgConnection,
+        actor_user_id: i64,
+        base: Price,
+    ) -> Result<Price> {
+        if base.user_trust.is_some() {
+            return Err(Error::Invalid);
+        }
+        base.validate_actor(actor_user_id)?;
+        let Some(authority) = self.image_price_authority(c, actor_user_id).await? else {
+            return Ok(base);
+        };
+        let frozen = base.with_user_authority(&authority)?;
+        frozen.validate_actor(actor_user_id)?;
+        Ok(frozen)
+    }
+
+    async fn image_price_authority(
+        &self,
+        c: &mut PgConnection,
+        actor_user_id: i64,
+    ) -> Result<Option<crate::billing::trust_pricing::UserPriceAuthority>> {
+        if !self.charging.trust_pricing_enabled() {
+            return Ok(None);
+        }
+        crate::billing::trust_pricing::quote_in_transaction(c, actor_user_id)
+            .await
+            .map(Some)
+            .map_err(|error| {
+                use crate::billing::trust_pricing::Error as E;
+                match error {
+                    E::Retry => Error::Retry,
+                    E::Denied => Error::Forbidden,
+                    E::Invalid | E::Unavailable => Error::Pending,
+                    E::Storage => Error::Storage,
+                }
+            })
+    }
+
     /// Host readiness only: no user admission, provider dispatch or funds write.
     pub(crate) async fn ready(&self) -> Result<()> {
         if self.providers.is_empty() || self.prices.rules.is_empty() || self.gate.is_closed() {
@@ -300,6 +344,7 @@ async fn begin(pool: &PgPool) -> Result<Transaction<'_, Postgres>> {
 }
 fn price(quote: &ImageQuote) -> Price {
     Price {
+        user_trust: None,
         image: Some(quote.persisted()),
         upstream_cost_group_ppm: None,
         tiered: None,
@@ -526,6 +571,10 @@ impl ImageService {
         .await
         .map_err(market_error)?;
         let groups:Vec<String>=sqlx::query_scalar("SELECT group_name FROM core_identity.user_routing_groups WHERE user_id=$1 AND enabled ORDER BY group_name").bind(a.user_id).fetch_all(&mut *tx).await?;
+        // This authenticated fee overview uses one current entitlement. Only
+        // creation of a preview makes a durable, separately confirmed promise.
+        let authority = self.image_price_authority(&mut tx, a.user_id).await?;
+        let discount = authority.as_ref().map(|value| value.discount());
         let mut out = Vec::new();
         for rule in &self.prices.rules {
             if !groups.contains(&rule.billing_group) {
@@ -540,6 +589,12 @@ impl ImageService {
                 n: 1,
             };
             if let Ok(quote) = self.quote_for(&input, rule.endpoint) {
+                let credits_per_image = match discount {
+                    Some(discount) => quote
+                        .reservation_with_discount(Some(discount))
+                        .map_err(|_| Error::Pending)?,
+                    None => quote.reservation_credits(),
+                };
                 let edits = rule.endpoint == ImageEndpoint::Edits;
                 let item = Capability {
                     endpoint: rule.endpoint,
@@ -563,7 +618,7 @@ impl ImageService {
                     size: input.size,
                     quality: input.quality,
                     max_n: rule.max_n.min(4),
-                    credits_per_image: quote.reservation_credits().into(),
+                    credits_per_image: credits_per_image.into(),
                 };
                 if !out.contains(&item) {
                     out.push(item)
@@ -604,8 +659,6 @@ impl ImageService {
         {
             return Err(Error::Forbidden);
         }
-        let quote = self.drawing_quote(&parsed)?;
-        let frozen = price(&quote);
         let mut tx = begin(&self.pool).await?;
         // Call-local and nonblocking: a competing preview can query/retry in a
         // fresh transaction. Never wait while holding identity/family locks.
@@ -650,12 +703,20 @@ impl ImageService {
         // Never create a new operation
         // for a refreshed credential when this original dispatch already exists.
         let existing = drawing_context_operation(&mut tx, &actor, context).await?;
-        let (id, anchor) = if let Some(row) = existing {
+        let (id, anchor, frozen) = if let Some(row) = existing {
+            let frozen: Price =
+                serde_json::from_value(row.try_get("price")?).map_err(|_| Error::Storage)?;
+            frozen.validate_actor(actor.user_id)?;
             (
                 row.try_get::<String, _>("id")?,
                 row.try_get::<i64, _>("session_id")?,
+                frozen,
             )
         } else {
+            let quote = self.drawing_quote(&parsed)?;
+            let frozen = self
+                .freeze_image_price(&mut tx, actor.user_id, price(&quote))
+                .await?;
             (
                 format!(
                     "image:{}",
@@ -666,8 +727,17 @@ impl ImageService {
                     ]))?)
                 ),
                 actor.credential_id,
+                frozen,
             )
         };
+        let quote = frozen
+            .image
+            .as_ref()
+            .ok_or(Error::Storage)?
+            .clone()
+            .restore()
+            .map_err(|_| Error::Storage)?;
+        let reservation_credits = frozen.reservation_ceiling(ReservationBasis::Image)?;
         let source = api_execution::SourceKey::Drawing {
             credential_id: anchor,
         };
@@ -715,7 +785,7 @@ impl ImageService {
                 },
                 reference_images: parsed.reference_images,
             },
-            reservation_credits: quote.reservation_credits().into(),
+            reservation_credits,
             expires_at,
             state,
         })
@@ -825,7 +895,8 @@ impl ImageService {
         if !valid_id(id) {
             return Err(Error::Invalid);
         }
-        let (quote, prompt, fingerprint, edits) = self.prepare_execution(session, id).await?;
+        let (quote, frozen, prompt, fingerprint, edits) =
+            self.prepare_execution(session, id).await?;
         let provider = self
             .providers
             .get(&quote.binding().upstream_id)
@@ -840,8 +911,8 @@ impl ImageService {
         let spec = Request {
             id: id.into(),
             fingerprint,
-            price: price(&quote),
-            reserve: quote.reservation_credits().into(),
+            reserve: frozen.reservation_ceiling(ReservationBasis::Image)?,
+            price: frozen,
             lease_seconds: 300,
             maximum_seconds: 300,
         };
@@ -897,6 +968,7 @@ impl ImageService {
         id: &str,
     ) -> Result<(
         ImageQuote,
+        Price,
         String,
         [u8; 32],
         Option<super::image_provider::ImageMultipartInput>,
@@ -914,6 +986,7 @@ impl ImageService {
         let a = identity::authorize_assistant_model_in_transaction(&mut tx, session, &frozen.group)
             .await
             .map_err(identity_error)?;
+        frozen.validate_actor(a.user_id)?;
         let version: i64 = sqlx::query_scalar(
             "SELECT auth_version FROM core_identity.users WHERE id=$1 FOR SHARE",
         )
@@ -957,20 +1030,21 @@ impl ImageService {
         let input = drawing_input::parse_arguments(&raw).map_err(|_| Error::Storage)?;
         let quote = frozen
             .image
+            .as_ref()
             .ok_or(Error::Storage)?
+            .clone()
             .restore()
             .map_err(|_| Error::Storage)?;
-        // Current server pricing must still be the exact confirmed revision.
-        if self.drawing_quote(&input)? != quote {
-            return Err(Error::Conflict);
-        }
+        // A confirmed operation keeps its original tariff and user entitlement.
+        // Provider preparation independently validates the current provider
+        // identity before any dispatch; current prices do not reprice a promise.
         let fp: Vec<u8> = r.try_get("fingerprint")?;
         let fp = fp.try_into().map_err(|_| Error::Storage)?;
         let edits = tokio::task::spawn_blocking(move || drawing_input::restore(&stored))
             .await
             .map_err(|_| Error::Pending)??;
         tx.commit().await.map_err(|_| Error::Pending)?;
-        Ok((quote, input.settings.prompt, fp, edits))
+        Ok((quote, frozen, input.settings.prompt, fp, edits))
     }
     /// ACK-loss recovery is read only: derive the original id from the current
     /// real Session and Core call, without creating a preview or another send.
@@ -1138,9 +1212,13 @@ pub(crate) fn confirmed_drawing_arguments(stored: &Value) -> Result<Value> {
 }
 fn preview_row(r: &sqlx::postgres::PgRow) -> Result<Preview> {
     let frozen: Price = serde_json::from_value(r.try_get("price")?).map_err(|_| Error::Storage)?;
+    frozen.validate_actor(r.try_get("actor_user_id")?)?;
+    let reservation_credits = frozen.reservation_ceiling(ReservationBasis::Image)?;
     let quote = frozen
         .image
+        .as_ref()
         .ok_or(Error::Storage)?
+        .clone()
         .restore()
         .map_err(|_| Error::Storage)?;
     let stored: Value = r.try_get("input")?;
@@ -1154,7 +1232,7 @@ fn preview_row(r: &sqlx::postgres::PgRow) -> Result<Preview> {
         operation_id: r.try_get("id")?,
         preview_digest: hex(&r.try_get::<Vec<u8>, _>("fingerprint")?),
         input,
-        reservation_credits: quote.reservation_credits().into(),
+        reservation_credits,
         expires_at: r.try_get("expires_at")?,
         state: r.try_get("state")?,
     })

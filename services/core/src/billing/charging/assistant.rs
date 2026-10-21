@@ -21,6 +21,16 @@ impl Charging {
         if actor.credential_kind != crate::identity::CredentialKind::Session {
             return Err(Error::Forbidden);
         }
+        // The authenticated persisted grant is the original logical quote.
+        // Reuse its exact evidence; a later round does not mint a new discount.
+        if request
+            .price
+            .user_trust
+            .as_ref()
+            .is_some_and(|trust| trust.user_id() != actor.user_id)
+        {
+            return Err(Error::Forbidden);
+        }
         let conversation: String =
             sqlx::query_scalar("SELECT conversation_id FROM core_assistant.grants WHERE id=$1")
                 .bind(grant_id)

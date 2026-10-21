@@ -114,7 +114,7 @@ pub(crate) async fn check_connection(
     let forbidden_write: bool = sqlx::query_scalar(r#"
         SELECT EXISTS(SELECT FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
           WHERE c.relkind IN ('r','p','v','m','f') AND (
-            ((n.nspname IN ('core_meta','core_migration','core_model','core_history')
+            ((n.nspname IN ('core_meta','core_migration','core_model','core_history','core_trust_pricing')
               OR (n.nspname='core_console' AND c.relname IN ('options','initialization'))
               OR (n.nspname='core_identity' AND c.relname IN ('developer_access','user_routing_groups','privileged_import_facts','permission_policies','permission_policy_rows','admin_activation_receipts'))
               OR (n.nspname='public' AND c.relname IN ('routing_active_release','routing_groups','routing_routes'))
@@ -197,6 +197,24 @@ pub(crate) async fn check_connection(
     "#).fetch_one(&mut *connection).await?;
     if forbidden_write {
         return Err(RuntimeDatabaseError::UnsafePrivileges);
+    }
+
+    let trust_function_grant:bool=sqlx::query_scalar("SELECT EXISTS(SELECT FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='core_trust_pricing' AND has_function_privilege(p.oid,'EXECUTE'))")
+        .fetch_one(&mut *connection).await?;
+    if trust_function_grant {
+        return Err(RuntimeDatabaseError::UnsafePrivileges);
+    }
+    if required.models || required.images || required.assistant {
+        let trust_visible:bool=sqlx::query_scalar("SELECT COALESCE((SELECT has_schema_privilege(n.oid,'USAGE') FROM pg_namespace n WHERE n.nspname='core_trust_pricing'),false)")
+            .fetch_one(&mut *connection).await?;
+        if !trust_visible {
+            return Err(RuntimeDatabaseError::MissingPrivileges);
+        }
+        let trust_complete:bool=sqlx::query_scalar("SELECT count(*)=3 AND COALESCE(bool_and(has_table_privilege(c.oid,'SELECT')),false) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='core_trust_pricing' AND c.relkind='r' AND c.relname IN ('policies','user_bases','legacy_paid_orders')")
+            .fetch_one(&mut *connection).await?;
+        if !trust_complete {
+            return Err(RuntimeDatabaseError::MissingPrivileges);
+        }
     }
 
     tool_market_credit::check(connection, required.tool_market).await?;

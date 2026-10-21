@@ -146,8 +146,20 @@ pub(super) async fn budgets(c: &mut PgConnection, charge: &Charge, total: i64) -
             return Err(Error::BudgetExceeded);
         }
     } else if charge.key_id.is_none() && charge.price.image.is_some() {
-        let allowed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM core_charging.requests r JOIN core_image.operations o ON o.id=r.image_operation_id WHERE r.id=$1 AND o.id=r.id AND r.actor_user_id=$2 AND o.actor_user_id=$2 AND r.owner_account_id=$3 AND o.owner_account_id=$3 AND r.payer_account_id=$3 AND r.key_id IS NULL AND r.oauth_source IS NULL AND r.assistant_grant_id IS NULL AND r.assistant_sponsor_account_id IS NULL AND r.price=o.price AND r.fingerprint=o.fingerprint AND r.reserved=(o.price#>>'{image,reservation_credits}')::bigint AND $4::bigint <= r.reserved AND o.state IN ('confirmed','dispatching','billing_pending','completed'))")
-            .bind(&charge.id).bind(charge.actor_user_id).bind(charge.owner_account_id).bind(total).fetch_one(&mut *c).await?;
+        charge
+            .price
+            .validate_actor(charge.actor_user_id)
+            .map_err(|_| Error::Storage)?;
+        let reservation = charge
+            .price
+            .reservation_ceiling(ReservationBasis::Image)
+            .map_err(|_| Error::Storage)?;
+        if charge.reserved != reservation {
+            return Err(Error::Storage);
+        }
+        let frozen = serde_json::to_value(&charge.price).map_err(|_| Error::Storage)?;
+        let allowed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM core_charging.requests r JOIN core_image.operations o ON o.id=r.image_operation_id WHERE r.id=$1 AND o.id=r.id AND r.actor_user_id=$2 AND o.actor_user_id=$2 AND r.owner_account_id=$3 AND o.owner_account_id=$3 AND r.payer_account_id=$3 AND r.key_id IS NULL AND r.oauth_source IS NULL AND r.assistant_grant_id IS NULL AND r.assistant_sponsor_account_id IS NULL AND r.price=o.price AND r.price=$6::jsonb AND r.fingerprint=o.fingerprint AND r.reserved=$5::bigint AND $4::bigint <= r.reserved AND o.state IN ('confirmed','dispatching','billing_pending','completed'))")
+            .bind(&charge.id).bind(charge.actor_user_id).bind(charge.owner_account_id).bind(total).bind(reservation).bind(frozen).fetch_one(&mut *c).await?;
         if !allowed {
             return Err(Error::Storage);
         }

@@ -59,6 +59,7 @@ async fn requests(f: &Fixture, prefix: &str, count: i64, at: i64) {
         .await
         .unwrap();
     let price = serde_json::to_value(Price {
+        user_trust: None,
         image: None,
         version: "index-fixture".into(),
         model: "test-model".into(),
