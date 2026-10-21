@@ -212,6 +212,44 @@ async fn balanced(pool: &PgPool) {
     assert_eq!(count, 0);
 }
 
+async fn assert_unknown_hold(pool: &PgPool, request_id: &str, reserved: i64) {
+    let charge: (String, i64, i64, i64) = sqlx::query_as(
+        "SELECT state,reserved,settled,refunded FROM core_charging.requests WHERE id=$1",
+    )
+    .bind(request_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(charge, ("reconcile".into(), reserved, 0, 0));
+    let unknown: Value = sqlx::query_scalar(
+        "SELECT detail FROM core_charging.usage_events WHERE request_id=$1 AND event_id='unknown'",
+    )
+    .bind(request_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        unknown,
+        json!({"kind":"unknown_provider_usage","hold_retained":true})
+    );
+    let final_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM core_charging.usage_events WHERE request_id=$1 AND event_id='final'",
+    )
+    .bind(request_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(final_count, 0);
+    let holds: Vec<(i64, i64, i64, bool)> = sqlx::query_as(
+        "SELECT reserved,captured,refunded,closed FROM core_charging.ledger_holds WHERE request_id=$1 ORDER BY position",
+    )
+    .bind(request_id)
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert_eq!(holds, vec![(reserved, 0, 0, false)]);
+}
+
 async fn stream_response(
     gateway: &ModelGateway,
     key: &str,
@@ -369,6 +407,10 @@ async fn incomplete_streams_keep_holds_and_restart_never_redispatches(pool: PgPo
         let response =
             stream_response(&running_gateway, &key, "/v1/chat/completions", prompt, id).await;
         assert_eq!(response.status(), StatusCode::OK);
+        let request_id = response.headers()["x-request-id"]
+            .to_str()
+            .unwrap()
+            .to_owned();
         let text = String::from_utf8(
             to_bytes(response.into_body(), 1_000_000)
                 .await
@@ -379,21 +421,30 @@ async fn incomplete_streams_keep_holds_and_restart_never_redispatches(pool: PgPo
         assert!(text.contains("error"));
         assert!(!text.contains("[DONE]"));
         assert!(!text.contains("\"finish_reason\":\"stop\""));
+        assert_unknown_hold(&pool, &request_id, 140).await;
         let mut tx = pool.begin().await.unwrap();
         sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
             .execute(&mut *tx)
             .await
             .unwrap();
-        sqlx::query("UPDATE core_charging.requests SET lease_until=0,revision=revision+1 WHERE state='streaming'").execute(&mut *tx).await.unwrap();
+        let expired = sqlx::query(
+            "UPDATE core_charging.requests SET lease_until=0,revision=revision+1 WHERE state='streaming' AND id=$1",
+        )
+        .bind(&request_id)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        assert_eq!(expired.rows_affected(), 0);
         tx.commit().await.unwrap();
         let restarted =
             gateway(&pool, &provider, key_id, 0, 0, PayloadPolicy::Adapt).with_local_streaming();
-        assert_eq!(restarted.recover_expired(10).await.unwrap(), 1);
+        assert_eq!(restarted.recover_expired(10).await.unwrap(), 0);
         assert_eq!(restarted.recover_expired(10).await.unwrap(), 0);
         assert_eq!(restarted.reconcile_completed_streams(10).await.unwrap(), 0);
         let duplicate = stream_response(&restarted, &key, "/v1/chat/completions", prompt, id).await;
         assert_eq!(duplicate.status(), StatusCode::CONFLICT);
         assert_eq!(provider.hits.load(Ordering::SeqCst), 1);
+        assert_unknown_hold(&pool, &request_id, 140).await;
     }
     let balance = ledger.balance(account).await.unwrap();
     assert_eq!(
@@ -552,6 +603,10 @@ async fn completed_stream_recovers_after_final_transaction_failure_without_secon
         "completed-recovery",
     )
     .await;
+    let request_id = response.headers()["x-request-id"]
+        .to_str()
+        .unwrap()
+        .to_owned();
     let text = String::from_utf8(
         to_bytes(response.into_body(), 1_000_000)
             .await
@@ -562,14 +617,24 @@ async fn completed_stream_recovers_after_final_transaction_failure_without_secon
     assert!(text.contains("local stream answer"));
     assert!(!text.contains("[DONE]"));
     assert_eq!(ledger.balance(account).await.unwrap().reserved_units, 140);
+    assert_unknown_hold(&pool, &request_id, 140).await;
     assert!(
         sqlx::query_scalar::<_, bool>(
-            "SELECT bool_or(terminal_observed) FROM core_model.output_checkpoints"
+            "SELECT bool_or(terminal_observed) FROM core_model.output_checkpoints WHERE request_id=$1"
         )
+        .bind(&request_id)
         .fetch_one(&pool)
         .await
         .unwrap()
     );
+    let provider_usage: Value = sqlx::query_scalar(
+        "SELECT detail->'usage' FROM core_charging.usage_events WHERE request_id=$1 AND event_id='usage:provider-final'",
+    )
+    .bind(&request_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(provider_usage, json!({"input":10,"cached":2,"output":20}));
     sqlx::query("DROP TRIGGER reject_stream_final ON core_charging.usage_events")
         .execute(&pool)
         .await
@@ -579,11 +644,19 @@ async fn completed_stream_recovers_after_final_transaction_failure_without_secon
         .execute(&mut *tx)
         .await
         .unwrap();
-    sqlx::query("UPDATE core_charging.requests SET lease_until=0,revision=revision+1 WHERE state='streaming'").execute(&mut *tx).await.unwrap();
+    let expired = sqlx::query(
+        "UPDATE core_charging.requests SET lease_until=0,revision=revision+1 WHERE state='streaming' AND id=$1",
+    )
+    .bind(&request_id)
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    assert_eq!(expired.rows_affected(), 0);
     tx.commit().await.unwrap();
     let restarted =
         gateway(&pool, &provider, key_id, 0, 0, PayloadPolicy::Adapt).with_local_streaming();
-    assert_eq!(restarted.recover_expired(10).await.unwrap(), 1);
+    assert_eq!(restarted.recover_expired(10).await.unwrap(), 0);
+    assert_unknown_hold(&pool, &request_id, 140).await;
     let (one, two) = tokio::join!(
         restarted.reconcile_completed_streams(10),
         restarted.reconcile_completed_streams(10)
@@ -592,6 +665,14 @@ async fn completed_stream_recovers_after_final_transaction_failure_without_secon
     assert_eq!(restarted.reconcile_completed_streams(10).await.unwrap(), 0);
     assert_eq!(ledger.balance(account).await.unwrap().available_units, 951);
     assert_eq!(ledger.balance(account).await.unwrap().reserved_units, 0);
+    let final_usage: Value = sqlx::query_scalar(
+        "SELECT detail->'usage' FROM core_charging.usage_events WHERE request_id=$1 AND event_id='final'",
+    )
+    .bind(&request_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(final_usage, provider_usage);
     let duplicate = stream_response(
         &restarted,
         &key,
@@ -1096,6 +1177,7 @@ async fn unknown_usage_retains_hold_and_recovery_does_not_redispatch(pool: PgPoo
     .await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{error}");
     assert_eq!(id.as_ref().unwrap().len(), 64);
+    let request_id = id.unwrap();
     assert_eq!(error["error"]["code"], "settlement_pending");
     assert!(error.get("choices").is_none());
     let balance = ledger.balance(account).await.unwrap();
@@ -1103,20 +1185,27 @@ async fn unknown_usage_retains_hold_and_recovery_does_not_redispatch(pool: PgPoo
         (balance.available_units, balance.reserved_units),
         (860, 140)
     );
+    assert_unknown_hold(&pool, &request_id, 140).await;
     let mut expiry = pool.begin().await.unwrap();
     sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
         .execute(&mut *expiry)
         .await
         .unwrap();
-    sqlx::query("UPDATE core_charging.requests SET lease_until=0,revision=revision+1")
-        .execute(&mut *expiry)
-        .await
-        .unwrap();
+    let expired = sqlx::query(
+        "UPDATE core_charging.requests SET lease_until=0,revision=revision+1 WHERE id=$1",
+    )
+    .bind(&request_id)
+    .execute(&mut *expiry)
+    .await
+    .unwrap();
+    assert_eq!(expired.rows_affected(), 1);
     expiry.commit().await.unwrap();
-    assert_eq!(gateway.recover_expired(10).await.unwrap(), 1);
     assert_eq!(gateway.recover_expired(10).await.unwrap(), 0);
+    assert_eq!(gateway.recover_expired(10).await.unwrap(), 0);
+    assert_eq!(gateway.reconcile_completed_streams(10).await.unwrap(), 0);
     assert_eq!(
-        sqlx::query_scalar::<_, String>("SELECT state FROM core_charging.requests")
+        sqlx::query_scalar::<_, String>("SELECT state FROM core_charging.requests WHERE id=$1")
+            .bind(&request_id)
             .fetch_one(&pool)
             .await
             .unwrap(),
@@ -1140,6 +1229,7 @@ async fn unknown_usage_retains_hold_and_recovery_does_not_redispatch(pool: PgPoo
         (balance.available_units, balance.reserved_units),
         (860, 140)
     );
+    assert_unknown_hold(&pool, &request_id, 140).await;
     balanced(&pool).await;
 }
 
@@ -1296,30 +1386,46 @@ async fn cancelled_waiting_client_retains_durable_provider_risk(pool: PgPool) {
     task.abort();
     assert!(task.await.unwrap_err().is_cancelled());
     assert_eq!(gateway.drain(Duration::from_secs(2)).await.remaining, 0);
+    let request_ids: Vec<String> =
+        sqlx::query_scalar("SELECT id FROM core_charging.requests WHERE key_id=$1")
+            .bind(key_id)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(request_ids.len(), 1);
+    let request_id = &request_ids[0];
     let balance = ledger.balance(account).await.unwrap();
     assert_eq!(
         (balance.available_units, balance.reserved_units),
         (860, 140)
     );
+    assert_unknown_hold(&pool, request_id, 140).await;
     let mut tx = pool.begin().await.unwrap();
     sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
         .execute(&mut *tx)
         .await
         .unwrap();
-    sqlx::query("UPDATE core_charging.requests SET lease_until=0,revision=revision+1")
-        .execute(&mut *tx)
-        .await
-        .unwrap();
+    let expired = sqlx::query(
+        "UPDATE core_charging.requests SET lease_until=0,revision=revision+1 WHERE id=$1",
+    )
+    .bind(request_id)
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    assert_eq!(expired.rows_affected(), 1);
     tx.commit().await.unwrap();
-    assert_eq!(gateway.recover_expired(10).await.unwrap(), 1);
+    assert_eq!(gateway.recover_expired(10).await.unwrap(), 0);
+    assert_eq!(gateway.reconcile_completed_streams(10).await.unwrap(), 0);
     assert_eq!(
-        sqlx::query_scalar::<_, String>("SELECT state FROM core_charging.requests")
+        sqlx::query_scalar::<_, String>("SELECT state FROM core_charging.requests WHERE id=$1")
+            .bind(request_id)
             .fetch_one(&pool)
             .await
             .unwrap(),
         "reconcile"
     );
     assert_eq!(provider.hits.load(Ordering::SeqCst), 1);
+    assert_unknown_hold(&pool, request_id, 140).await;
     balanced(&pool).await;
 }
 

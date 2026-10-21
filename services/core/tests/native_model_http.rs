@@ -250,8 +250,48 @@ async fn native_anthropic_and_gemini_settle_real_funds_and_stream_checkpoints(po
             }
             let charge:(String,i64,i64,i64)=sqlx::query_as("SELECT state,settled,input_tokens,output_tokens FROM core_charging.requests WHERE id=$1").bind(&id).fetch_one(&pool).await.unwrap();
             assert_eq!(charge, ("settled".into(), 49, 10, 20));
-            let terminal:i64=sqlx::query_scalar("SELECT count(*) FROM core_model.output_checkpoints WHERE request_id=$1 AND terminal_observed").bind(&id).fetch_one(&pool).await.unwrap();
-            assert_eq!(terminal > 0, stream);
+            let checkpoints: Vec<(i64, i64, i64, Value, bool, Vec<u8>)> = sqlx::query_as(
+                "SELECT sequence,packet_bytes,prepared_bytes,provider_usage,terminal_observed,packet_sha256 \
+                 FROM core_model.output_checkpoints WHERE request_id=$1 ORDER BY sequence",
+            )
+            .bind(&id)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+            assert!(!checkpoints.is_empty());
+            assert!(checkpoints.last().unwrap().4);
+            if stream {
+                assert!(checkpoints.len() > 1);
+                assert!(checkpoints.iter().any(|row| row.1 > 0));
+            } else {
+                // A complete buffered response retains recovery authority, but
+                // its sole empty terminal observation claims no stream bytes.
+                assert_eq!(checkpoints.len(), 1);
+                assert_eq!(checkpoints[0].0, 1);
+                assert_eq!((checkpoints[0].1, checkpoints[0].2), (0, 0));
+            }
+            let mut prepared = 0_usize;
+            for (index, (sequence, bytes, cumulative, usage, terminal, hash)) in
+                checkpoints.iter().enumerate()
+            {
+                use sha2::{Digest, Sha256};
+                assert_eq!(*sequence, index as i64 + 1);
+                let bytes = usize::try_from(*bytes).unwrap();
+                let packet = if stream {
+                    &body.as_bytes()[prepared..prepared + bytes]
+                } else {
+                    &[]
+                };
+                assert_eq!(hash.as_slice(), Sha256::digest(packet).as_slice());
+                prepared += bytes;
+                assert_eq!(*cumulative, prepared as i64);
+                if *terminal {
+                    assert_eq!(usage["input_tokens"], 10);
+                    assert_eq!(usage["cached_input_tokens"], 2);
+                    assert_eq!(usage["output_tokens"], 20);
+                }
+            }
+            assert_eq!(prepared, if stream { body.len() } else { 0 });
         }
         assert_eq!(server.hits.load(Ordering::SeqCst), 2);
     }
