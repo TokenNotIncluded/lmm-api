@@ -16,11 +16,16 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import axios from 'axios'
 import { useState, useRef, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
 import { api, isAuthBundle } from '@/lib/api'
+import { AuthCookieBlockedError } from '@/lib/auth-cookie'
+import { rateLimitMessage } from '@/lib/request-rate-limit'
+import { getServerErrorMessageKey } from '@/lib/server-error-message'
+import { useAuthStore } from '@/stores/auth-store'
 
 import {
   createOAuthFlow,
@@ -46,7 +51,11 @@ import {
   buildOIDCOAuthUrl,
   buildLinuxDOOAuthUrl,
 } from '../lib/oauth'
-import { pickTelegramAuthorization } from '../lib/telegram-login'
+import {
+  parseTelegramMFAChallenge,
+  pickTelegramAuthorization,
+  type TelegramLoginFlow,
+} from '../lib/telegram-login'
 import type { SystemStatus, CustomOAuthProviderInfo } from '../types'
 import { useAuthRedirect } from './use-auth-redirect'
 
@@ -109,15 +118,22 @@ export function useOAuthLogin(
   acceptedLegal = false
 ) {
   const { t } = useTranslation()
-  const { handleLoginSuccess } = useAuthRedirect()
+  const { handleLoginSuccess, redirectTo2FA } = useAuthRedirect()
   const [isLoading, setIsLoading] = useState(false)
   const [isTelegramDialogOpen, setIsTelegramDialogOpen] = useState(false)
   const [isTelegramPending, setIsTelegramPending] = useState(false)
-  const [telegramFlowToken, setTelegramFlowToken] = useState('')
+  const telegramController = useRef<AbortController | null>(null)
+  const telegramFlow = useRef<{
+    flow: TelegramLoginFlow
+    accountWriteEpoch: number
+    submitted: boolean
+  } | null>(null)
   const [githubButtonText, setGithubButtonText] = useState('')
   const [githubButtonDisabled, setGithubButtonDisabled] = useState(false)
   const githubTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const browserStartPending = useRef(false)
+
+  useEffect(() => () => telegramController.current?.abort(), [])
 
   useEffect(() => {
     setGithubButtonText(t('Continue with GitHub'))
@@ -311,62 +327,167 @@ export function useOAuthLogin(
   }
 
   const handleTelegramLogin = async () => {
+    if (telegramController.current) return
     if (!status?.telegram_bot_name?.trim()) {
       toast.error(t('Login failed'))
       return
     }
 
+    const controller = new AbortController()
+    telegramController.current = controller
     setIsLoading(true)
     try {
       await resetSession()
-      const flowToken = await startTelegramLogin()
-      setTelegramFlowToken(flowToken)
+      if (controller.signal.aborted) return
+      const flow = await startTelegramLogin(controller.signal)
+      if (
+        controller.signal.aborted ||
+        telegramController.current !== controller
+      ) {
+        return
+      }
+      telegramFlow.current = {
+        flow,
+        accountWriteEpoch: useAuthStore.getState().auth.accountWriteEpoch,
+        submitted: false,
+      }
       setIsTelegramDialogOpen(true)
-    } catch {
-      toast.error(
+    } catch (error: unknown) {
+      if (telegramController.current === controller) {
+        telegramController.current = null
+        telegramFlow.current = null
+      }
+      if (controller.signal.aborted || axios.isCancel(error)) return
+      showTelegramError(
+        error,
         t('Failed to start {{provider}} login', { provider: 'Telegram' })
       )
     } finally {
-      setIsLoading(false)
+      if (
+        telegramController.current === controller ||
+        !telegramController.current
+      ) {
+        setIsLoading(false)
+      }
     }
   }
 
+  const showTelegramError = (error: unknown, fallback = t('Login failed')) => {
+    if (error instanceof AuthCookieBlockedError) {
+      toast.error(error.message)
+      return
+    }
+    const messageKey = getServerErrorMessageKey(error)
+    const safeKey =
+      messageKey === 'Session expired!'
+        ? null
+        : messageKey ===
+            'This account is disabled. Use the appeal form below to ask an administrator to restore access.'
+          ? 'This user account is disabled.'
+          : messageKey
+    const limited = rateLimitMessage(error)
+    toast.error(
+      limited ?? (safeKey ? t(safeKey) : fallback),
+      limited ? { id: 'request-rate-limited' } : undefined
+    )
+  }
+
   const handleTelegramAuthorization = async (value: unknown) => {
+    const controller = telegramController.current
+    const pending = telegramFlow.current
+    if (
+      !controller ||
+      controller.signal.aborted ||
+      !pending ||
+      pending.submitted
+    ) {
+      return
+    }
+    if (
+      useAuthStore.getState().auth.accountWriteEpoch !==
+      pending.accountWriteEpoch
+    ) {
+      handleTelegramDialogChange(false)
+      return
+    }
+    if (pending.flow.expires_at <= Date.now() / 1000) {
+      handleTelegramDialogChange(false)
+      toast.error(t('Login flow expired. Please sign in again.'))
+      return
+    }
     const authorization = pickTelegramAuthorization(value)
     if (!authorization) {
+      handleTelegramDialogChange(false)
       toast.error(t('Login failed'))
       return
     }
 
-    if (!telegramFlowToken) {
-      toast.error(t('Login failed'))
-      return
-    }
-
+    pending.submitted = true
     setIsTelegramPending(true)
+    const isCurrent = () =>
+      !controller.signal.aborted && telegramController.current === controller
     try {
-      const response = await telegramLogin(authorization, telegramFlowToken)
-      if (!response.success || !isAuthBundle(response.data)) {
-        toast.error(t('Login failed'))
+      const response = await telegramLogin(
+        authorization,
+        pending.flow.flow_token,
+        controller.signal
+      )
+      if (!isCurrent()) return
+      setIsTelegramDialogOpen(false)
+      telegramFlow.current = null
+      if (!response.success) {
+        showTelegramError(response)
         return
       }
 
+      const challenge = parseTelegramMFAChallenge(response.data)
+      if (challenge) {
+        if (
+          useAuthStore.getState().auth.pending2FAFlowToken !==
+          challenge.flow_token
+        ) {
+          return
+        }
+        redirectTo2FA(redirectTo)
+        return
+      }
+      if (!isAuthBundle(response.data)) {
+        toast.error(t('Login failed'))
+        return
+      }
+      const bundle = response.data
+      const hasCurrentBundle = () => {
+        const auth = useAuthStore.getState().auth
+        return (
+          auth.user?.id === bundle.user.id &&
+          auth.session?.sid === bundle.session.sid &&
+          auth.accessToken === bundle.access_token
+        )
+      }
+      if (!hasCurrentBundle()) return
+      await handleLoginSuccess(bundle, redirectTo, true, controller.signal)
+      if (isCurrent() && hasCurrentBundle()) toast.success(t('Welcome back!'))
+    } catch (error: unknown) {
+      if (!isCurrent() || axios.isCancel(error)) return
       setIsTelegramDialogOpen(false)
-      setTelegramFlowToken('')
-      await handleLoginSuccess(response.data, redirectTo)
-      toast.success(t('Welcome back!'))
-    } catch {
-      toast.error(t('Login failed'))
+      showTelegramError(error)
     } finally {
-      setIsTelegramPending(false)
+      if (telegramController.current === controller) {
+        telegramController.current = null
+        telegramFlow.current = null
+        setIsTelegramPending(false)
+      }
     }
   }
 
   const handleTelegramDialogChange = (open: boolean) => {
     setIsTelegramDialogOpen(open)
     if (!open) {
-      setTelegramFlowToken('')
+      telegramController.current?.abort()
+      telegramController.current = null
+      telegramFlow.current = null
       setIsTelegramPending(false)
+      setIsLoading(false)
     }
   }
 

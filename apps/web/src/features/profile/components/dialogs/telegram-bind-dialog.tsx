@@ -20,15 +20,22 @@ import { Send } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { z } from 'zod'
 
 import { Dialog } from '@/components/dialog'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { TELEGRAM_BIND_RESULT_MESSAGE } from '@/features/auth/constants'
+import { AuthCookieBlockedError } from '@/lib/auth-cookie'
 import { getServerErrorMessageKey } from '@/lib/server-error-message'
+import { useAuthStore } from '@/stores/auth-store'
 
-import { startTelegramBind } from '../../api'
+import {
+  getUserProfile,
+  startTelegramBind,
+  type TelegramBindFlow,
+} from '../../api'
 
 // ============================================================================
 // Telegram Bind Dialog Component
@@ -38,7 +45,64 @@ interface TelegramBindDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   botName: string
-  onSuccess: () => void
+  onSuccess: () => void | Promise<void>
+}
+
+type BindState =
+  | { kind: 'idle' }
+  | { kind: 'starting' }
+  | { kind: 'ready'; flow: TelegramBindFlow }
+  | { kind: 'refreshing' }
+  | { kind: 'error'; messageKey: string }
+  | { kind: 'blocked'; message: string }
+
+type ActiveBindFlow = {
+  flow: TelegramBindFlow
+  generation: number
+  ownerKey: string
+  userId: number
+}
+
+const bindResultSchema = z.object({
+  type: z.literal(TELEGRAM_BIND_RESULT_MESSAGE),
+  flow_token: z.string().regex(/^lmmt_[0-9a-fA-F]{64}$/),
+  success: z.boolean(),
+  code: z.string().max(128).optional(),
+})
+
+const boundProfileSchema = z.object({
+  success: z.literal(true),
+  data: z.object({
+    id: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+    telegram_id: z
+      .string()
+      .regex(/^[1-9][0-9]{0,18}$/)
+      .pipe(
+        z.string().refine((value) => BigInt(value) <= 9223372036854775807n)
+      ),
+  }),
+})
+
+function currentOwnerKey() {
+  const { user, session } = useAuthStore.getState().auth
+  return JSON.stringify([user?.id ?? null, session?.sid ?? null])
+}
+
+function bindErrorState(
+  value: unknown,
+  fallback: string
+): Extract<BindState, { kind: 'error' | 'blocked' }> {
+  if (value instanceof AuthCookieBlockedError) {
+    return { kind: 'blocked', message: value.message }
+  }
+  const messageKey = getServerErrorMessageKey(value)
+  if (
+    messageKey &&
+    messageKey === getServerErrorMessageKey({ code: 'AUTH_USER_DISABLED' })
+  ) {
+    return { kind: 'error', messageKey: 'This user account is disabled.' }
+  }
+  return { kind: 'error', messageKey: messageKey || fallback }
 }
 
 export function TelegramBindDialog({
@@ -48,82 +112,168 @@ export function TelegramBindDialog({
   onSuccess,
 }: TelegramBindDialogProps) {
   const { t } = useTranslation()
+  const { user, session } = useAuthStore((store) => store.auth)
+  const ownerKey = JSON.stringify([user?.id ?? null, session?.sid ?? null])
   const widgetRef = useRef<HTMLDivElement>(null)
-  const [callbackUrl, setCallbackUrl] = useState<string | null>(null)
-  const [flowToken, setFlowToken] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const generation = useRef(0)
+  const activeFlow = useRef<ActiveBindFlow | null>(null)
+  const isOpen = useRef(open)
+  isOpen.current = open
+  const [state, setState] = useState<BindState>({ kind: 'idle' })
+
+  const isCurrent = useCallback(
+    (attempt: number, expectedOwner: string) =>
+      isOpen.current &&
+      generation.current === attempt &&
+      currentOwnerKey() === expectedOwner,
+    []
+  )
+
+  const invalidateFlow = useCallback(() => {
+    generation.current++
+    activeFlow.current = null
+  }, [])
+
+  const handleOpenChange = useCallback(
+    (nextOpen: boolean) => {
+      if (!nextOpen) {
+        invalidateFlow()
+        isOpen.current = false
+        setState({ kind: 'idle' })
+      }
+      onOpenChange(nextOpen)
+    },
+    [invalidateFlow, onOpenChange]
+  )
 
   const createBindFlow = useCallback(async () => {
-    setLoading(true)
-    setError(null)
+    const attempt = ++generation.current
+    const expectedOwner = currentOwnerKey()
+    const { user: initiatingUser, session: initiatingSession } =
+      useAuthStore.getState().auth
+    activeFlow.current = null
+    setState({ kind: 'starting' })
+    if (!initiatingUser || !initiatingSession) {
+      setState({
+        kind: 'error',
+        messageKey: 'Failed to start Telegram binding',
+      })
+      return
+    }
     try {
       const response = await startTelegramBind()
-      if (!response.success || !response.data?.callback_url) {
-        throw new Error(
-          response.message || t('Failed to start Telegram binding')
-        )
+      if (!isCurrent(attempt, expectedOwner)) return
+      if (!response.success) {
+        setState(bindErrorState(response, 'Failed to start Telegram binding'))
+        return
       }
-      setFlowToken(response.data.flow_token)
-      setCallbackUrl(
-        new URL(response.data.callback_url, window.location.origin).toString()
-      )
+      activeFlow.current = {
+        flow: response.data,
+        generation: attempt,
+        ownerKey: expectedOwner,
+        userId: initiatingUser.id,
+      }
+      setState({ kind: 'ready', flow: response.data })
     } catch (bindError: unknown) {
-      setError(
-        bindError instanceof Error
-          ? bindError.message
-          : t('Failed to start Telegram binding')
-      )
-    } finally {
-      setLoading(false)
+      if (!isCurrent(attempt, expectedOwner)) return
+      setState(bindErrorState(bindError, 'Failed to start Telegram binding'))
     }
-  }, [t])
+  }, [isCurrent])
 
   useEffect(() => {
     if (!open) {
-      setCallbackUrl(null)
-      setFlowToken(null)
-      setError(null)
+      setState({ kind: 'idle' })
       return
     }
     void createBindFlow()
-  }, [createBindFlow, open])
+    return invalidateFlow
+  }, [createBindFlow, invalidateFlow, open, ownerKey])
 
   useEffect(() => {
-    if (!open || !flowToken) return
+    if (!open) return
 
     const handleBindResult = (event: MessageEvent<unknown>) => {
       if (event.origin !== window.location.origin) return
-      const result = event.data as {
-        type?: string
-        flow_token?: string
-        success?: boolean
-        code?: string
-      } | null
+      const pending = activeFlow.current
+      const parsed = bindResultSchema.safeParse(event.data)
       if (
-        !result ||
-        result.type !== TELEGRAM_BIND_RESULT_MESSAGE ||
-        result.flow_token !== flowToken
+        !pending ||
+        !parsed.success ||
+        !isCurrent(pending.generation, pending.ownerKey) ||
+        parsed.data.flow_token !== pending.flow.flow_token
       ) {
         return
       }
-      if (!result.success) {
-        const messageKey = getServerErrorMessageKey({ code: result.code })
-        setError(t(messageKey || 'Telegram binding failed. Please try again.'))
+      activeFlow.current = null
+      if (pending.flow.expires_at <= Date.now() / 1000) {
+        setState({
+          kind: 'error',
+          messageKey:
+            'This Telegram binding request has expired or has already been used.',
+        })
         return
       }
-      toast.success(t('Binding successful!'))
-      onSuccess()
-      onOpenChange(false)
+      if (!parsed.data.success) {
+        setState(
+          bindErrorState(
+            { code: parsed.data.code },
+            'Telegram binding failed. Please try again.'
+          )
+        )
+        return
+      }
+      setState({ kind: 'refreshing' })
+      void (async () => {
+        try {
+          const response = await getUserProfile({
+            timeout: 10_000,
+            skipBusinessError: true,
+            skipErrorHandler: true,
+          })
+          if (!isCurrent(pending.generation, pending.ownerKey)) return
+          const actual = boundProfileSchema.safeParse(response)
+          if (!actual.success || actual.data.data.id !== pending.userId) {
+            setState({ kind: 'error', messageKey: 'Failed to load profile' })
+            return
+          }
+          await onSuccess()
+          if (!isCurrent(pending.generation, pending.ownerKey)) return
+          toast.success(t('Binding successful!'))
+          handleOpenChange(false)
+        } catch (refreshError: unknown) {
+          if (isCurrent(pending.generation, pending.ownerKey)) {
+            setState(bindErrorState(refreshError, 'Failed to load profile'))
+          }
+        }
+      })()
     }
 
     window.addEventListener('message', handleBindResult)
     return () => window.removeEventListener('message', handleBindResult)
-  }, [flowToken, onOpenChange, onSuccess, open, t])
+  }, [handleOpenChange, isCurrent, onSuccess, open, t])
+
+  useEffect(() => {
+    if (!open || state.kind !== 'ready') return
+    const pending = activeFlow.current
+    if (!pending) return
+    const timer = window.setTimeout(
+      () => {
+        if (!isCurrent(pending.generation, pending.ownerKey)) return
+        activeFlow.current = null
+        setState({
+          kind: 'error',
+          messageKey:
+            'This Telegram binding request has expired or has already been used.',
+        })
+      },
+      Math.max(0, pending.flow.expires_at * 1000 - Date.now())
+    )
+    return () => window.clearTimeout(timer)
+  }, [isCurrent, open, state])
 
   useEffect(() => {
     const container = widgetRef.current
-    if (!container || !callbackUrl) return
+    if (!container || !open || state.kind !== 'ready') return
 
     container.replaceChildren()
     const script = document.createElement('script')
@@ -131,17 +281,17 @@ export function TelegramBindDialog({
     script.src = 'https://telegram.org/js/telegram-widget.js?22'
     script.setAttribute('data-telegram-login', botName.replace(/^@/, ''))
     script.setAttribute('data-size', 'large')
-    script.setAttribute('data-auth-url', callbackUrl)
+    script.setAttribute('data-auth-url', state.flow.callback_url)
     script.setAttribute('data-request-access', 'write')
     container.appendChild(script)
 
     return () => container.replaceChildren()
-  }, [botName, callbackUrl])
+  }, [botName, open, state])
 
   return (
     <Dialog
       open={open}
-      onOpenChange={onOpenChange}
+      onOpenChange={handleOpenChange}
       title={t('Bind Telegram Account')}
       description={t('Click the button below to bind your Telegram account')}
       contentClassName='sm:max-w-md'
@@ -175,10 +325,17 @@ export function TelegramBindDialog({
             </p>
           </div>
 
-          {loading && <Skeleton className='h-10 w-52' />}
-          {error && (
+          {state.kind === 'starting' && <Skeleton className='h-10 w-52' />}
+          {state.kind === 'refreshing' && (
+            <p role='status' className='text-muted-foreground text-sm'>
+              {t('Refreshing...')}
+            </p>
+          )}
+          {(state.kind === 'error' || state.kind === 'blocked') && (
             <div className='flex flex-col items-center gap-3 text-center'>
-              <p className='text-destructive text-sm'>{error}</p>
+              <p role='alert' className='text-destructive text-sm'>
+                {state.kind === 'blocked' ? state.message : t(state.messageKey)}
+              </p>
               <Button type='button' variant='outline' onClick={createBindFlow}>
                 {t('Retry')}
               </Button>

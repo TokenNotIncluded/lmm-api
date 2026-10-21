@@ -30,7 +30,15 @@ import {
 import { useAuthStore } from '@/stores/auth-store'
 
 import { getAffiliateCode } from './lib/storage'
-import type { TelegramAuthorization } from './lib/telegram-login'
+import {
+  parseTelegramMFAChallenge,
+  parseTelegramMFARequirement,
+  telegramFlowSchema,
+  telegramResponseSchema,
+  type TelegramAuthorization,
+  type TelegramLoginFlow,
+  type TelegramLoginResponse,
+} from './lib/telegram-login'
 import type {
   LoginPayload,
   LoginResponse,
@@ -310,28 +318,80 @@ export async function wechatLoginByCode(
   return res.data
 }
 
-export async function startTelegramLogin(): Promise<string> {
-  const res = await api.post('/api/oauth/telegram/login/start', undefined, {
-    skipAuthRefresh: true,
-  })
-  if (res.data?.success && typeof res.data.data?.flow_token === 'string') {
-    return res.data.data.flow_token
-  }
-  throw new Error(res.data?.message || 'Failed to initialize Telegram login')
+export async function startTelegramLogin(
+  signal?: AbortSignal
+): Promise<TelegramLoginFlow> {
+  const assertCurrent = capturePasswordLoginGuard()
+  return withAuthCookieLock(async (transaction) => {
+    assertCurrent()
+    const res = await transaction.request(() =>
+      api.post<unknown>('/api/oauth/telegram/login/start', undefined, {
+        skipAuthRefresh: true,
+        skipBusinessError: true,
+        skipErrorHandler: true,
+        timeout: AUTH_COOKIE_TIMEOUT_MS,
+      })
+    )
+    assertCurrent()
+    if (signal?.aborted) {
+      throw new axios.CanceledError('Telegram login view cancelled')
+    }
+    const response = telegramResponseSchema.parse(res.data)
+    if (!response.success) throw response
+    const flow = telegramFlowSchema.parse(response.data)
+    if (flow.expires_at <= Date.now() / 1000) {
+      throw new Error('Login flow expired')
+    }
+    return flow
+  }, signal)
 }
 
 export async function telegramLogin(
   authorization: TelegramAuthorization,
-  state: string
-): Promise<ApiResponse> {
-  const res = await api.get('/api/oauth/telegram/login', {
-    params: { ...authorization, state },
-    disableDuplicate: true,
-    skipAuthRefresh: true,
-    skipBusinessError: true,
-    skipErrorHandler: true,
-  })
-  return res.data
+  state: string,
+  signal?: AbortSignal
+): Promise<TelegramLoginResponse> {
+  const assertCurrent = capturePasswordLoginGuard()
+  return withAuthCookieLock(async (transaction) => {
+    assertCurrent()
+    const res = await transaction.request(() =>
+      api.get<unknown>('/api/oauth/telegram/login', {
+        params: { ...authorization, state },
+        disableDuplicate: true,
+        skipAuthRefresh: true,
+        skipBusinessError: true,
+        skipErrorHandler: true,
+        timeout: AUTH_COOKIE_TIMEOUT_MS,
+      })
+    )
+    assertCurrent()
+    const response = telegramResponseSchema.parse(res.data)
+    if (!response.success) return response
+    if (parseTelegramMFARequirement(response.data)) {
+      const challenge = parseTelegramMFAChallenge(response.data)
+      if (!challenge) throw new Error('Login failed')
+      if (challenge.expires_at <= Date.now() / 1000) {
+        throw Object.assign(new Error('Login flow expired'), {
+          code: 'MFA_FLOW_EXPIRED',
+        })
+      }
+      applyPending2FAFlow(challenge.flow_token, challenge.expires_at)
+      if (signal?.aborted) {
+        throw new axios.CanceledError(
+          'Telegram login view cancelled after response'
+        )
+      }
+      return { success: true, data: challenge }
+    }
+    if (!isAuthBundle(response.data)) throw new Error('Login failed')
+    applyAuthBundle(response.data)
+    if (signal?.aborted) {
+      throw new axios.CanceledError(
+        'Telegram login view cancelled after response'
+      )
+    }
+    return { success: true, data: response.data }
+  }, signal)
 }
 
 // ----------------------------------------------------------------------------
