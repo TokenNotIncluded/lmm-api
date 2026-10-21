@@ -31,6 +31,9 @@ pub use mfa::{
     MfaStatus,
 };
 mod external_login;
+mod telegram;
+pub(crate) use telegram::SCHEMA as TELEGRAM_AUTH_SCHEMA;
+pub use telegram::{TelegramAuthorization, TelegramFlow, TelegramLogin};
 mod oauth;
 pub use external_login::{ExternalOAuth, ExternalProvider};
 mod resource;
@@ -95,6 +98,7 @@ pub struct IdentityStore {
     password_slots: std::sync::Arc<tokio::sync::Semaphore>,
     google: Option<std::sync::Arc<GoogleOAuth>>,
     external: std::collections::BTreeMap<ExternalProvider, std::sync::Arc<ExternalOAuth>>,
+    telegram: Option<std::sync::Arc<TelegramLogin>>,
     dashboard_routing: Option<std::sync::Arc<crate::routing::Router>>,
     commerce_scope_enabled: bool,
     financial_profile_enabled: bool,
@@ -409,6 +413,7 @@ impl IdentityStore {
             password_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(2)),
             google: None,
             external: std::collections::BTreeMap::new(),
+            telegram: None,
             dashboard_routing: None,
             commerce_scope_enabled: false,
             financial_profile_enabled: false,

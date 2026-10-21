@@ -2,6 +2,8 @@
 //! Install/import owners must never be used by the network-facing process.
 use sqlx::{PgConnection, PgPool};
 use std::fmt;
+#[path = "runtime_telegram.rs"]
+mod telegram;
 #[path = "runtime_tool_market_credit.rs"]
 mod tool_market_credit;
 
@@ -218,6 +220,7 @@ pub(crate) async fn check_connection(
     }
 
     tool_market_credit::check(connection, required.tool_market).await?;
+    telegram::check(connection, required.web_identity).await?;
 
     // Identity is always mounted when the runtime has a database. Normal identity
     // operations must work; unsupported optional modules need no extra grants.

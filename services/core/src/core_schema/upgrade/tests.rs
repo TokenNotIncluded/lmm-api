@@ -1,9 +1,11 @@
 use super::*;
 
 fn request() -> UpgradeRequest {
+    let frozen: serde_json::Value =
+        serde_json::from_str(include_str!("../predecessor25.json")).unwrap();
     UpgradeRequest {
         version: 1,
-        procedure: PROCEDURE.into(),
+        procedure: additive::PROCEDURE.into(),
         upgrade_id: "schema-upgrade-fixture-0001".into(),
         database: UpgradeDatabase {
             name: "isolated_core".into(),
@@ -17,21 +19,58 @@ fn request() -> UpgradeRequest {
             runtime: "isolated_runtime".into(),
             extensions: "isolated_extensions".into(),
         },
-        predecessor_manifest_sha256: PRE_MANIFEST.into(),
-        predecessor_catalog_sha256: PRE_CATALOG.into(),
+        predecessor_manifest_sha256: frozen["schema_manifest_stdout_sha256"]
+            .as_str()
+            .unwrap()
+            .into(),
+        predecessor_catalog_sha256: frozen["catalog_sha256"].as_str().unwrap().into(),
         successor_manifest_sha256: manifest_sha256().unwrap(),
     }
 }
 #[test]
-fn exact_observed_rc4_manifest_is_the_only_upgrade_predecessor() {
-    let frozen = compiled_predecessor().unwrap();
-    assert_eq!(frozen.len(), 24);
+fn legacy_predecessor_bytes_are_preserved_but_26_binary_rejects_24_to_25() {
+    let frozen: serde_json::Value = serde_json::from_str(PREDECESSOR).unwrap();
+    let old_components = frozen["manifest"]["components"].as_array().unwrap();
+    assert_eq!(old_components.len(), 24);
+    assert_eq!(frozen["tables"], 149);
+    assert_eq!(frozen["sequences"], 21);
+    assert_eq!(frozen["schema_manifest_stdout_sha256"], PRE_MANIFEST);
+    assert_eq!(frozen["catalog_sha256"], PRE_CATALOG);
+    for (old, (name, ddl)) in old_components.iter().zip(COMPONENTS.iter().take(24)) {
+        assert_eq!(old["name"], *name);
+        assert_eq!(old["raw_schema_sha256"], hex(&Sha256::digest(ddl)));
+    }
     assert_eq!(
-        frozen["identity"],
+        old_components[1]["raw_schema_sha256"],
         "c637586f484386a8357e1b9e9dd39023d0d53316f17d0de403c864a3b49ebec9"
     );
-    assert_eq!(COMPONENTS.len(), 25);
+    let mut producer = schema_manifest();
+    producer.components.truncate(24);
+    producer.installer_contract_sql_sha256 = hex(&Sha256::digest(super::super::CONTRACT));
+    assert_eq!(serde_json::to_value(&producer).unwrap(), frozen["manifest"]);
+    let mut stdout = serde_json::to_vec(&producer).unwrap();
+    stdout.push(b'\n');
+    assert_eq!(hex(&Sha256::digest(stdout)), PRE_MANIFEST);
+    assert_eq!(COMPONENTS.len(), 26);
     assert_eq!(COMPONENTS[24].0, "trust-pricing");
+    assert_eq!(hex(&Sha256::digest(COMPONENTS[24].1)), COMPONENT_25_DDL);
+    assert_eq!(COMPONENTS[25].0, "telegram-auth");
+    assert!(matches!(
+        compiled_predecessor(),
+        Err(UpgradeError::Rejected(
+            "UPGRADE_DB_COMPILED_PREDECESSOR_DRIFT"
+        ))
+    ));
+    let mut legacy = request();
+    legacy.procedure = PROCEDURE.into();
+    legacy.predecessor_manifest_sha256 = PRE_MANIFEST.into();
+    legacy.predecessor_catalog_sha256 = PRE_CATALOG.into();
+    assert!(matches!(
+        legacy.validate(),
+        Err(UpgradeError::Rejected(
+            "UPGRADE_DB_COMPILED_PREDECESSOR_DRIFT"
+        ))
+    ));
     assert!(!UPGRADE_METADATA.contains("core_migration"));
     assert!(!UPGRADE_METADATA.contains("source_archive"));
 }

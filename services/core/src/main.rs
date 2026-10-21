@@ -24,7 +24,8 @@ Commands:\n\
   schema-manifest Print the compiled schema contract as JSON; accepts no config options and performs no I/O except stdout.\n\
   check-db        Read-only schema/runtime authority JSON; requires explicit --config.\n\
   init-db         Initialize a new, empty core database.\n\
-  upgrade-db      Explicit offline 24->25 trust-pricing upgrade; requires owner --config and exact-target stdin JSON.\n\
+  upgrade-db      Explicit offline compiled additive 25->26 upgrade; requires owner --config and exact-target stdin JSON.\n\
+                  Legacy 24->25 trust-pricing requires the preserved 25-component installer.\n\
   create-first-owner  Create the first production owner offline from private stdin JSON; requires explicit --config and a fresh store.\n\
   bootstrap-user  Read a user_id and platform_level JSON object from stdin.\n\n\
   install-tool-market-builtins  Install the compiled tool catalog offline as installation owner.\n\n\
@@ -399,6 +400,7 @@ async fn run_core() -> Result<(), Box<dyn Error>> {
                     .auth
                     .external_client_id(&store, lmm_core::identity::ExternalProvider::Discord)
                     .map(str::to_owned),
+                telegram_bot_name: store.telegram_bot_name().map(str::to_owned),
             };
             routes = routes.merge(lmm_core::legacy_auth::router(store, config.auth));
             capabilities.legacy_web_auth = true;

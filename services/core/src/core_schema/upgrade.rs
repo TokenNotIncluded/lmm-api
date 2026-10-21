@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use sqlx::{Connection, PgConnection, Row};
 use std::{collections::BTreeMap, fmt, io::Read};
+mod additive;
 
 const PROCEDURE: &str = "core-24-to-25-trust-pricing-v1";
 const PREDECESSOR: &str = include_str!("predecessor24.json");
@@ -197,6 +198,9 @@ impl UpgradeRequest {
         Ok(request)
     }
     fn validate(&self) -> Result<(), UpgradeError> {
+        if self.procedure == additive::PROCEDURE {
+            return additive::validate(self);
+        }
         if self.version != 1
             || self.procedure != PROCEDURE
             || !(16..=96).contains(&self.upgrade_id.len())
@@ -302,15 +306,19 @@ pub async fn upgrade_database(
 ) -> Result<UpgradeReport, UpgradeError> {
     request.validate()?;
     let mut connection = PgConnection::connect(url).await?;
-    let result = upgrade_connected(&mut connection, &request).await;
+    let result = if request.procedure == additive::PROCEDURE {
+        additive::connected(&mut connection, &request).await
+    } else {
+        upgrade_connected(&mut connection, &request).await
+    };
     // No pool, reconnect, background retry, ALTER ROLE, or automatic privilege repair.
     let _ = connection.close().await;
     result
 }
-async fn upgrade_connected(
-    c: &mut PgConnection,
+async fn begin_offline_upgrade<'a>(
+    c: &'a mut PgConnection,
     r: &UpgradeRequest,
-) -> Result<UpgradeReport, UpgradeError> {
+) -> Result<(sqlx::Transaction<'a, sqlx::Postgres>, i32, Vec<String>), UpgradeError> {
     sqlx::raw_sql("SET statement_timeout='15s'; SET lock_timeout='3s'; SET idle_in_transaction_session_timeout='20s'; SET search_path=pg_catalog")
         .execute(&mut *c).await?;
     // This SELECT is outside the SERIALIZABLE transaction. Waiting for another
@@ -354,6 +362,14 @@ async fn upgrade_connected(
             .await?;
     }
     preflight(&mut tx, r).await?;
+    Ok((tx, backend_pid, tables))
+}
+
+async fn upgrade_connected(
+    c: &mut PgConnection,
+    r: &UpgradeRequest,
+) -> Result<UpgradeReport, UpgradeError> {
+    let (mut tx, backend_pid, tables) = begin_offline_upgrade(c, r).await?;
     let receipt_exists: bool =
         sqlx::query_scalar("SELECT to_regclass('core_meta.schema_upgrades') IS NOT NULL")
             .fetch_one(&mut *tx)
@@ -435,6 +451,18 @@ async fn upgrade_connected(
     preflight(&mut tx, r).await?;
     // Even a server-side COMMIT error is handled conservatively as unknown. The
     // exact original ID is always resolved before any later DDL attempt.
+    commit_offline_upgrade(tx, r, backend_pid).await?;
+    Ok(report)
+}
+
+#[cfg(test)]
+mod tests;
+
+async fn commit_offline_upgrade(
+    tx: sqlx::Transaction<'_, sqlx::Postgres>,
+    r: &UpgradeRequest,
+    backend_pid: i32,
+) -> Result<(), UpgradeError> {
     if !matches!(
         tokio::time::timeout(std::time::Duration::from_secs(20), tx.commit()).await,
         Ok(Ok(()))
@@ -444,11 +472,8 @@ async fn upgrade_connected(
             backend_pid,
         });
     }
-    Ok(report)
+    Ok(())
 }
-
-#[cfg(test)]
-mod tests;
 
 async fn preflight(c: &mut PgConnection, r: &UpgradeRequest) -> Result<(), UpgradeError> {
     let row = sqlx::query(r#"

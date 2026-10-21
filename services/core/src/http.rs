@@ -116,6 +116,7 @@ pub struct PublicStatus {
     pub github_client_id: Option<String>,
     pub linuxdo_client_id: Option<String>,
     pub discord_client_id: Option<String>,
+    pub telegram_bot_name: Option<String>,
 }
 
 #[derive(Clone)]
@@ -186,9 +187,7 @@ async fn public_status_response(
         .filter(|id| !id.trim().is_empty())
         .unwrap_or("");
     let google_enabled = !google_client_id.is_empty();
-    (
-        [("cache-control".into(), "no-store".into())],
-        Json(json!({"success":true,"message":"","data":{
+    let mut data = json!({
             "system_name":"LMM API","version":env!("CARGO_PKG_VERSION"),
             "password_login_enabled":status.password_login_enabled,
             "register_enabled":status.password_register_enabled,
@@ -201,7 +200,12 @@ async fn public_status_response(
             "oauth_register_enabled":(google_enabled || status.github_client_id.is_some() || status.linuxdo_client_id.is_some() || status.discord_client_id.is_some()) && status.password_register_enabled,
             "github_oauth":status.github_client_id.is_some(),"github_client_id":status.github_client_id,
             "discord_oauth":status.discord_client_id.is_some(),"discord_client_id":status.discord_client_id,
-            "oidc_enabled":false,"linuxdo_oauth":status.linuxdo_client_id.is_some(),"linuxdo_client_id":status.linuxdo_client_id,"telegram_oauth":false,
+            "oidc_enabled":false,"linuxdo_oauth":status.linuxdo_client_id.is_some(),"linuxdo_client_id":status.linuxdo_client_id,
+            "telegram_oauth":status.telegram_bot_name.is_some(),"telegram_bot_name":status.telegram_bot_name,
+            "telegram_register_enabled":false,
+
+    });
+    let extra = json!({
             "wechat_login":false,"passkey_login":false,"email_verification":false,
             "turnstile_check":false,"two_factor_enabled":status.two_factor_enabled,"payments_enabled":false,
             "payments_test_rpc_enabled":state.capabilities.payments,
@@ -216,7 +220,16 @@ async fn public_status_response(
             "models_local_synthetic":state.capabilities.models,
             "models_streaming":state.capabilities.models_streaming,
             "external_model_providers_enabled":false
-        }})),
+    });
+    let Value::Object(extra) = extra else {
+        unreachable!("status fields are a JSON object");
+    };
+    data.as_object_mut()
+        .expect("status data is a JSON object")
+        .extend(extra);
+    (
+        [("cache-control".into(), "no-store".into())],
+        Json(json!({"success":true,"message":"","data":data})),
     )
 }
 

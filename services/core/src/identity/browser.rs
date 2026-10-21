@@ -5,6 +5,7 @@ pub(super) mod grants;
 mod mfa;
 mod password;
 mod sessions;
+mod telegram;
 use super::*;
 use hmac::{Hmac, Mac};
 use subtle::ConstantTimeEq;
@@ -12,7 +13,7 @@ use subtle::ConstantTimeEq;
 // Refresh rotates credentials, not the family's original provider evidence.
 // Local second-factor assurance is presented truthfully as 2FA regardless of
 // the primary provider; provider-supplied role/profile fields are never used.
-const LOGIN_METHOD_SQL: &str = "CASE WHEN EXISTS(SELECT 1 FROM core_identity.session_authentication sa WHERE sa.credential_id=s.current_credential_id AND sa.factor_level=2) THEN '2fa' ELSE COALESCE((SELECT CASE a.action WHEN 'session.google_browser_login' THEN 'google' WHEN 'session.github_browser_login' THEN 'oauth:github' WHEN 'session.linuxdo_browser_login' THEN 'oauth:linuxdo' WHEN 'session.discord_browser_login' THEN 'oauth:discord' END FROM core_identity.web_session_credentials m JOIN core_identity.audit a ON a.target->>'session_id'=m.credential_id::text WHERE m.sid=s.sid AND a.action IN ('session.google_browser_login','session.github_browser_login','session.linuxdo_browser_login','session.discord_browser_login') ORDER BY a.id LIMIT 1),'password') END AS login_method";
+const LOGIN_METHOD_SQL: &str = "CASE WHEN EXISTS(SELECT 1 FROM core_identity.session_authentication sa WHERE sa.credential_id=s.current_credential_id AND sa.factor_level=2) THEN '2fa' ELSE COALESCE((SELECT CASE a.action WHEN 'session.google_browser_login' THEN 'google' WHEN 'session.github_browser_login' THEN 'oauth:github' WHEN 'session.linuxdo_browser_login' THEN 'oauth:linuxdo' WHEN 'session.discord_browser_login' THEN 'oauth:discord' WHEN 'session.telegram_browser_login' THEN 'telegram' END FROM core_identity.web_session_credentials m JOIN core_identity.audit a ON a.target->>'session_id'=m.credential_id::text WHERE m.sid=s.sid AND a.action IN ('session.google_browser_login','session.github_browser_login','session.linuxdo_browser_login','session.discord_browser_login','session.telegram_browser_login') ORDER BY a.id LIMIT 1),'password') END AS login_method";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BrowserAuthError {
@@ -520,6 +521,17 @@ async fn user_projection(c: &mut PgConnection, user: i64, financial: bool) -> Br
     let raw: String = r.try_get("setting")?;
     let settings: Value = serde_json::from_str(&raw).map_err(|_| IdentityError::Storage)?;
     let mut result = json!({"id":r.try_get::<i64,_>("id")?,"username":r.try_get::<String,_>("username")?,"display_name":r.try_get::<String,_>("display_name")?,"email":r.try_get::<String,_>("email")?,"setting":raw,"role":role,"status":if r.try_get::<bool,_>("active")? {1}else{2},"financial_projection_available":false,"usage_projection_available":false,"developer_access_granted":r.try_get::<bool,_>("developer_access_granted")?,"permissions":{"api_key_management":api_key_management}});
+    // Isolated identity fixtures may omit later components. The assembled
+    // production database must pass its complete schema/runtime checks first.
+    let has_telegram: bool =
+        sqlx::query_scalar("SELECT to_regclass('core_telegram_auth.bindings') IS NOT NULL")
+            .fetch_one(&mut *c)
+            .await?;
+    if has_telegram {
+        let subject: Option<String> = sqlx::query_scalar("SELECT subject FROM core_telegram_auth.bindings WHERE user_id=$1 AND revoked_at IS NULL")
+            .bind(user).fetch_optional(&mut *c).await?;
+        result["telegram_id"] = json!(subject.unwrap_or_default());
+    }
     for field in ["language", "sidebar_modules"] {
         if let Some(value) = settings.get(field).and_then(Value::as_str) {
             result[field] = json!(value);
