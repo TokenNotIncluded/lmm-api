@@ -202,8 +202,25 @@ impl ModelGateway {
     }
 
     pub(crate) fn with_image_service(mut self, images: image_execution::ImageService) -> Self {
+        if self.trust_pricing_enabled() {
+            images.enable_trust_pricing();
+        }
         self.images = Some(images);
         self
+    }
+    /// Required by production host assembly after its schema authority check.
+    /// No HTTP, Go message or deployment TOML can turn this policy off.
+    pub fn with_trust_pricing(self) -> Self {
+        self.bridge.charging.enable_trust_pricing();
+        self.catalog_surface.enable_trust_pricing();
+        if let Some(images) = &self.images {
+            images.enable_trust_pricing();
+        }
+        self
+    }
+    /// Shared by clones, matching the charging and published catalog surfaces.
+    pub(crate) fn trust_pricing_enabled(&self) -> bool {
+        self.bridge.charging.trust_pricing_enabled()
     }
     pub fn image_service(&self) -> Option<&image_execution::ImageService> {
         self.images.as_ref()

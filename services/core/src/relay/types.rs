@@ -369,8 +369,9 @@ pub trait Billing: Send + Sync + 'static {
         route: &'a Route,
         request: &'a super::Request,
     ) -> RelayFuture<'a, Reservation>;
-    /// Commit output/usage evidence before output is queued. The default rejects
-    /// streaming: integrations must explicitly provide their durability policy.
+    /// Commit output/usage evidence before output is queued, including an empty
+    /// packet for a validated non-stream terminal. Integrations must explicitly
+    /// provide their durability policy; the default rejects the observation.
     fn checkpoint<'a>(
         &'a self,
         _: &'a Reservation,
@@ -390,6 +391,65 @@ pub trait Billing: Send + Sync + 'static {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct CacheCreationDetails {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ephemeral_5m_input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ephemeral_1h_input_tokens: Option<u64>,
+}
+
+impl CacheCreationDetails {
+    fn has_known_bucket(&self) -> bool {
+        self.ephemeral_5m_input_tokens.is_some() || self.ephemeral_1h_input_tokens.is_some()
+    }
+
+    fn with_total(self, total: u64) -> Result<Self, RelayError> {
+        let invalid = RelayError::Protocol("inconsistent cache creation usage");
+        match (
+            self.ephemeral_5m_input_tokens,
+            self.ephemeral_1h_input_tokens,
+        ) {
+            (Some(five), Some(hour)) => {
+                if five.checked_add(hour) != Some(total) {
+                    return Err(invalid);
+                }
+                Ok(self)
+            }
+            (Some(five), None) => Ok(Self {
+                ephemeral_1h_input_tokens: Some(total.checked_sub(five).ok_or(invalid)?),
+                ..self
+            }),
+            (None, Some(hour)) => Ok(Self {
+                ephemeral_5m_input_tokens: Some(total.checked_sub(hour).ok_or(invalid)?),
+                ..self
+            }),
+            (None, None) => Ok(self),
+        }
+    }
+
+    pub(crate) fn known_total(&self) -> Result<u64, RelayError> {
+        self.ephemeral_5m_input_tokens
+            .unwrap_or(0)
+            .checked_add(self.ephemeral_1h_input_tokens.unwrap_or(0))
+            .ok_or(RelayError::Protocol("usage overflow"))
+    }
+
+    pub(crate) fn total(&self) -> Result<Option<u64>, RelayError> {
+        match (
+            self.ephemeral_5m_input_tokens,
+            self.ephemeral_1h_input_tokens,
+        ) {
+            (Some(five), Some(hour)) => five
+                .checked_add(hour)
+                .map(Some)
+                .ok_or(RelayError::Protocol("usage overflow")),
+            _ => Ok(None),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Usage {
     /// Provider account charge, parsed exactly; absent is never a free receipt.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -398,10 +458,15 @@ pub struct Usage {
     pub output_tokens: Option<u64>,
     pub cached_input_tokens: Option<u64>,
     pub cache_creation_input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_creation_details: Option<CacheCreationDetails>,
     pub reasoning_output_tokens: Option<u64>,
 }
 impl Usage {
     pub(crate) fn merge(&mut self, next: Self) -> Result<(), RelayError> {
+        fn advances(old: Option<u64>, next: Option<u64>) -> bool {
+            next.is_some_and(|value| old.is_none_or(|old| value > old))
+        }
         fn field(old: &mut Option<u64>, next: Option<u64>) -> Result<(), RelayError> {
             if let Some(n) = next {
                 if old.is_some_and(|o| n < o) {
@@ -412,6 +477,44 @@ impl Usage {
             Ok(())
         }
         let mut combined = *self;
+        let input_advanced = advances(self.input_tokens, next.input_tokens);
+        let creation_advanced = advances(
+            self.cache_creation_input_tokens,
+            next.cache_creation_input_tokens,
+        );
+        if input_advanced
+            && self.cache_creation_input_tokens.is_some()
+            && next.cache_creation_input_tokens.is_none()
+        {
+            return Err(RelayError::Protocol("missing current cache creation usage"));
+        }
+        let previous_details = self
+            .cache_creation_details
+            .map(|details| match self.cache_creation_input_tokens {
+                Some(total) => details.with_total(total),
+                None => Ok(details),
+            })
+            .transpose()?;
+        let new_basis_with_details = (input_advanced || creation_advanced)
+            && self
+                .cache_creation_details
+                .is_some_and(|details| details.has_known_bucket());
+        let next_details = if new_basis_with_details {
+            let total = next
+                .cache_creation_input_tokens
+                .ok_or(RelayError::Protocol("missing current cache creation usage"))?;
+            let details = next
+                .cache_creation_details
+                .filter(CacheCreationDetails::has_known_bucket)
+                .ok_or(RelayError::Protocol(
+                    "missing current cache creation details",
+                ))?;
+            // A new measurement basis uses only this receipt's aggregate and
+            // duration evidence. An old duration cannot fill a new snapshot.
+            Some(details.with_total(total)?)
+        } else {
+            next.cache_creation_details
+        };
         if let Some(cost) = next.upstream_cost_atto_usd
             && combined
                 .upstream_cost_atto_usd
@@ -429,11 +532,44 @@ impl Usage {
             &mut combined.cache_creation_input_tokens,
             next.cache_creation_input_tokens,
         )?;
+        if new_basis_with_details {
+            combined.cache_creation_details = next_details;
+        } else if let Some(details) = next_details {
+            let combined_details = combined
+                .cache_creation_details
+                .get_or_insert_with(CacheCreationDetails::default);
+            field(
+                &mut combined_details.ephemeral_5m_input_tokens,
+                details.ephemeral_5m_input_tokens,
+            )?;
+            field(
+                &mut combined_details.ephemeral_1h_input_tokens,
+                details.ephemeral_1h_input_tokens,
+            )?;
+        }
         field(
             &mut combined.reasoning_output_tokens,
             next.reasoning_output_tokens,
         )?;
         combined.validate()?;
+        if let (Some(mut previous), Some(details)) =
+            (previous_details, combined.cache_creation_details)
+        {
+            let current = match combined.cache_creation_input_tokens {
+                Some(total) => details.with_total(total)?,
+                None => details,
+            };
+            // A previously partial split can establish both cumulative lower
+            // bounds when its aggregate is known. Check the inferred bucket too.
+            field(
+                &mut previous.ephemeral_5m_input_tokens,
+                current.ephemeral_5m_input_tokens,
+            )?;
+            field(
+                &mut previous.ephemeral_1h_input_tokens,
+                current.ephemeral_1h_input_tokens,
+            )?;
+        }
         *self = combined;
         Ok(())
     }
@@ -447,10 +583,23 @@ impl Usage {
         // Input includes both cache categories; output includes reasoning.
         // Missing totals stay unknown. Present subsets are lower bounds, never
         // evidence that an absent counter is zero.
+        let known_creation = self
+            .cache_creation_details
+            .map(|details| {
+                let known = details.known_total()?;
+                if let Some(total) = self.cache_creation_input_tokens
+                    && (known > total || details.total()?.is_some_and(|sum| sum != total))
+                {
+                    return Err(RelayError::Protocol("inconsistent cache creation usage"));
+                }
+                Ok(known)
+            })
+            .transpose()?
+            .unwrap_or(0);
         let cached = self
             .cached_input_tokens
             .unwrap_or(0)
-            .checked_add(self.cache_creation_input_tokens.unwrap_or(0))
+            .checked_add(self.cache_creation_input_tokens.unwrap_or(known_creation))
             .ok_or(RelayError::Protocol("usage overflow"))?;
         if self.input_tokens.is_some_and(|total| cached > total) {
             return Err(RelayError::Protocol("cache usage exceeds input total"));
@@ -494,6 +643,9 @@ impl Usage {
         }
         if let Some(v) = self.cache_creation_input_tokens {
             out.insert("cache_creation_input_tokens".into(), json!(v));
+        }
+        if let Some(details) = self.cache_creation_details {
+            out.insert("cache_creation_details".into(), json!(details));
         }
         Value::Object(out)
     }
@@ -602,6 +754,295 @@ pub struct DrainReport {
 mod a07_usage_tests {
     use super::*;
 
+    fn creation(five: Option<u64>, hour: Option<u64>) -> CacheCreationDetails {
+        CacheCreationDetails {
+            ephemeral_5m_input_tokens: five,
+            ephemeral_1h_input_tokens: hour,
+        }
+    }
+
+    #[test]
+    fn cache_creation_details_keep_legacy_receipt_bytes_and_missing_dimensions() {
+        let bytes = br#"{"input_tokens":10,"output_tokens":4,"cached_input_tokens":3,"cache_creation_input_tokens":2,"reasoning_output_tokens":1}"#;
+        let value: Usage = serde_json::from_slice(bytes).unwrap();
+        assert_eq!(value.cache_creation_details, None);
+        assert_eq!(serde_json::to_vec(&value).unwrap(), bytes);
+        assert_eq!(
+            serde_json::to_value(creation(None, None)).unwrap(),
+            json!({})
+        );
+        assert_eq!(
+            serde_json::to_value(creation(Some(0), None)).unwrap(),
+            json!({"ephemeral_5m_input_tokens":0})
+        );
+        for invalid in [
+            json!({"ephemeral_5m_input_tokens":-1}),
+            json!({"ephemeral_1h_input_tokens":"1"}),
+            json!({"other_duration_input_tokens":1}),
+        ] {
+            assert!(serde_json::from_value::<CacheCreationDetails>(invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn cache_creation_splits_are_checked_against_aggregate_and_input() {
+        for (details, aggregate, input, valid) in [
+            (creation(Some(2), Some(3)), Some(5), Some(9), true),
+            (creation(Some(2), Some(3)), Some(6), Some(9), false),
+            (creation(Some(2), None), Some(5), Some(9), true),
+            (creation(None, Some(6)), Some(5), Some(9), false),
+            (creation(Some(2), None), None, Some(5), false),
+            (creation(Some(2), None), None, Some(6), true),
+            (creation(Some(u64::MAX), Some(1)), None, None, false),
+        ] {
+            let value = Usage {
+                input_tokens: input,
+                cached_input_tokens: Some(4),
+                cache_creation_input_tokens: aggregate,
+                cache_creation_details: Some(details),
+                ..Usage::default()
+            };
+            assert_eq!(value.validate().is_ok(), valid, "{value:?}");
+        }
+    }
+
+    #[test]
+    fn cache_creation_merge_preserves_unknowns_and_checks_combined_counters_atomically() {
+        let mut value = Usage {
+            input_tokens: Some(20),
+            cache_creation_input_tokens: Some(5),
+            cache_creation_details: Some(creation(Some(2), Some(3))),
+            ..Usage::default()
+        };
+        value
+            .merge(Usage {
+                output_tokens: Some(1),
+                cache_creation_details: Some(creation(None, None)),
+                ..Usage::default()
+            })
+            .unwrap();
+        assert_eq!(
+            value.cache_creation_details,
+            Some(creation(Some(2), Some(3)))
+        );
+        for next in [
+            Usage {
+                cache_creation_details: Some(creation(Some(1), None)),
+                ..Usage::default()
+            },
+            Usage {
+                cache_creation_details: Some(creation(None, Some(2))),
+                ..Usage::default()
+            },
+            Usage {
+                cache_creation_input_tokens: Some(7),
+                ..Usage::default()
+            },
+            Usage {
+                cache_creation_input_tokens: Some(6),
+                cache_creation_details: Some(creation(Some(4), None)),
+                ..Usage::default()
+            },
+        ] {
+            let before = value;
+            assert!(value.merge(next).is_err());
+            assert_eq!(value, before);
+        }
+        value
+            .merge(Usage {
+                cache_creation_input_tokens: Some(7),
+                cache_creation_details: Some(creation(Some(4), None)),
+                ..Usage::default()
+            })
+            .unwrap();
+        assert_eq!(
+            value.cache_creation_details,
+            Some(creation(Some(4), Some(3)))
+        );
+        let mut partial = Usage::default();
+        partial
+            .merge(Usage {
+                cache_creation_details: Some(creation(Some(2), None)),
+                ..Usage::default()
+            })
+            .unwrap();
+        assert_eq!(partial.cache_creation_input_tokens, None);
+        assert_eq!(
+            partial.cache_creation_details,
+            Some(creation(Some(2), None))
+        );
+        partial
+            .merge(Usage {
+                cache_creation_details: Some(creation(None, Some(3))),
+                ..Usage::default()
+            })
+            .unwrap();
+        assert_eq!(
+            partial.cache_creation_details,
+            Some(creation(Some(2), Some(3)))
+        );
+        assert_eq!(partial.cache_creation_input_tokens, None);
+    }
+
+    #[test]
+    fn advancing_input_requires_current_cache_creation_evidence() {
+        for previous_input in [None, Some(0)] {
+            let mut value = Usage {
+                input_tokens: previous_input,
+                output_tokens: Some(0),
+                cache_creation_input_tokens: Some(0),
+                ..Usage::default()
+            };
+            let before = value;
+            assert!(matches!(
+                value.merge(Usage {
+                    input_tokens: Some(100),
+                    output_tokens: Some(1),
+                    ..Usage::default()
+                }),
+                Err(RelayError::Protocol(_))
+            ));
+            assert_eq!(value, before);
+            value
+                .merge(Usage {
+                    input_tokens: Some(100),
+                    output_tokens: Some(1),
+                    cache_creation_input_tokens: Some(0),
+                    ..Usage::default()
+                })
+                .unwrap();
+            assert_eq!(value.input_tokens, Some(100));
+            assert_eq!(value.cache_creation_input_tokens, Some(0));
+        }
+    }
+
+    #[test]
+    fn output_only_and_unchanged_input_keep_anthropic_initial_cache_evidence() {
+        let mut value = Usage {
+            input_tokens: Some(100),
+            output_tokens: Some(0),
+            cached_input_tokens: Some(10),
+            cache_creation_input_tokens: Some(7),
+            cache_creation_details: Some(creation(Some(2), Some(5))),
+            ..Usage::default()
+        };
+        for input_tokens in [None, Some(100)] {
+            value
+                .merge(Usage {
+                    input_tokens,
+                    output_tokens: Some(value.output_tokens.unwrap() + 1),
+                    ..Usage::default()
+                })
+                .unwrap();
+            assert_eq!(value.input_tokens, Some(100));
+            assert_eq!(value.cache_creation_input_tokens, Some(7));
+            assert_eq!(
+                value.cache_creation_details,
+                Some(creation(Some(2), Some(5)))
+            );
+        }
+    }
+
+    #[test]
+    fn new_cache_basis_requires_fresh_duration_evidence_and_preserves_atomicity() {
+        let initial = Usage {
+            input_tokens: Some(100),
+            cache_creation_input_tokens: Some(7),
+            cache_creation_details: Some(creation(None, Some(5))),
+            ..Usage::default()
+        };
+        for next in [
+            Usage {
+                cache_creation_input_tokens: Some(8),
+                ..Usage::default()
+            },
+            Usage {
+                cache_creation_input_tokens: Some(8),
+                cache_creation_details: Some(creation(None, None)),
+                ..Usage::default()
+            },
+            Usage {
+                input_tokens: Some(101),
+                cache_creation_input_tokens: Some(7),
+                ..Usage::default()
+            },
+            Usage {
+                input_tokens: Some(101),
+                cache_creation_details: Some(creation(None, Some(5))),
+                ..Usage::default()
+            },
+            Usage {
+                cache_creation_input_tokens: Some(8),
+                cache_creation_details: Some(creation(None, Some(7))),
+                ..Usage::default()
+            },
+            Usage {
+                cache_creation_input_tokens: Some(8),
+                cache_creation_details: Some(creation(Some(4), None)),
+                ..Usage::default()
+            },
+            Usage {
+                cache_creation_input_tokens: Some(8),
+                cache_creation_details: Some(creation(None, Some(9))),
+                ..Usage::default()
+            },
+        ] {
+            let mut value = initial;
+            assert!(
+                matches!(value.merge(next), Err(RelayError::Protocol(_))),
+                "{next:?}"
+            );
+            assert_eq!(value, initial);
+        }
+        let mut value = initial;
+        value
+            .merge(Usage {
+                input_tokens: Some(101),
+                cache_creation_input_tokens: Some(8),
+                cache_creation_details: Some(creation(None, Some(6))),
+                ..Usage::default()
+            })
+            .unwrap();
+        assert_eq!(
+            value.cache_creation_details,
+            Some(creation(Some(2), Some(6)))
+        );
+        value
+            .merge(Usage {
+                cache_creation_input_tokens: Some(9),
+                cache_creation_details: Some(creation(Some(3), None)),
+                ..Usage::default()
+            })
+            .unwrap();
+        assert_eq!(
+            value.cache_creation_details,
+            Some(creation(Some(3), Some(6)))
+        );
+    }
+
+    #[test]
+    fn inferred_cache_duration_cannot_decrease_even_without_a_new_total() {
+        let initial = Usage {
+            input_tokens: Some(100),
+            cache_creation_input_tokens: Some(7),
+            cache_creation_details: Some(creation(None, Some(5))),
+            ..Usage::default()
+        };
+        for total in [None, Some(7)] {
+            let mut value = initial;
+            assert!(
+                value
+                    .merge(Usage {
+                        cache_creation_input_tokens: total,
+                        cache_creation_details: Some(creation(None, Some(6))),
+                        ..Usage::default()
+                    })
+                    .is_err()
+            );
+            assert_eq!(value, initial);
+        }
+    }
+
     #[test]
     fn impossible_cache_subsets_are_rejected_without_partial_update() {
         let initial = Usage {
@@ -676,6 +1117,7 @@ mod a07_usage_tests {
             .merge(Usage {
                 input_tokens: Some(7),
                 output_tokens: Some(2),
+                cache_creation_input_tokens: Some(3),
                 ..Usage::default()
             })
             .unwrap();
@@ -737,6 +1179,7 @@ mod a07_usage_tests {
             output_tokens: Some(0),
             cached_input_tokens: Some(0),
             cache_creation_input_tokens: Some(0),
+            cache_creation_details: None,
             reasoning_output_tokens: Some(0),
         };
         let mut value = Usage::default();

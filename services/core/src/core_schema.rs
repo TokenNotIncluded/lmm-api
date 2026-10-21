@@ -6,9 +6,13 @@ use sqlx::{PgConnection, PgPool, Row};
 
 mod check_db;
 mod manifest;
+mod upgrade;
 pub use check_db::{DatabaseCheckError, DatabaseCheckReport, check_database};
 pub use manifest::{
     CatalogManifest, ComponentManifest, IdentityManifest, SchemaManifest, schema_manifest,
+};
+pub use upgrade::{
+    UpgradeDatabase, UpgradeError, UpgradeReport, UpgradeRequest, UpgradeRoles, upgrade_database,
 };
 
 const COMPONENTS: &[(&str, &str)] = &[
@@ -48,6 +52,7 @@ const COMPONENTS: &[(&str, &str)] = &[
         "assistant-tools",
         include_str!("../schema/assistant_tools.sql"),
     ),
+    ("trust-pricing", crate::billing::trust_pricing::SCHEMA),
 ];
 
 /// The compiled fresh-install contract, including explicitly disabled modules.
@@ -57,6 +62,14 @@ pub fn component_count() -> usize {
 }
 
 const CONTRACT: &str = "CREATE TABLE core_meta.component_contract (name TEXT PRIMARY KEY, fingerprint BYTEA NOT NULL CHECK (octet_length(fingerprint)=32)); CREATE TABLE core_meta.runtime_contract (singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton), catalog_fingerprint BYTEA NOT NULL CHECK (octet_length(catalog_fingerprint)=32));";
+const UPGRADE_METADATA: &str = include_str!("../schema/core_upgrade.sql");
+
+fn installer_contract_sha256() -> String {
+    let mut hash = Sha256::new();
+    hash.update(CONTRACT.as_bytes());
+    hash.update(UPGRADE_METADATA.as_bytes());
+    format!("{:x}", hash.finalize())
+}
 
 // Include application relations, columns/defaults, constraints, indexes,
 // functions, and triggers. Rows, owner names and grants are deliberately absent:
@@ -154,6 +167,7 @@ pub async fn init(pool: &PgPool) -> Result<(), IdentityError> {
         sqlx::raw_sql(schema).execute(&mut *tx).await?;
     }
     sqlx::raw_sql(CONTRACT).execute(&mut *tx).await?;
+    sqlx::raw_sql(UPGRADE_METADATA).execute(&mut *tx).await?;
     // Preserve the native identity contract used by the read-only RPC service.
     IdentityStore::record_schema_contract(&mut tx).await?;
     crate::identity::grants::record_schema_contract(&mut tx).await?;

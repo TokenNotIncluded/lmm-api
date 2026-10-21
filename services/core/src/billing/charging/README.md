@@ -136,6 +136,34 @@ local usage, or elapsed time alone is never proof that funds can be released.
 `reconcile`, `resolve`, and `refund` are internal service methods, not public or
 Go-callable authorization endpoints. Final integration must enforce that boundary.
 
+Revision-2 decimal tariffs persist cache creation in an optional typed
+`Usage.cache_creation` value inside immutable `usage_events.detail`. It retains
+the total and optional five-minute/one-hour buckets. An aggregate plus either
+bucket determines the other exactly; inferred buckets must also remain
+monotone. Absence remains distinct from an explicit zero. Old prices and usage
+events omit the new default fields, preserving their original replay identity.
+
+The load, reservation replay and resolve paths use the same recovery query.
+For cache evidence they restore one real cumulative usage snapshot, validate its
+chain and compare its base counters with the request row. They do not synthesize
+a receipt by combining unrelated maxima or choose ordering from wall-clock time.
+This uses the existing event table and grants; it adds no startup DDL.
+
+The model gateway records a validated non-stream terminal in the same model
+checkpoint contract used by streams. Its empty packet has zero bytes and claims
+no client delivery. It establishes provider completion only after decoder and
+terminal-output validation. Consequently a lost acknowledgement of the later
+charging checkpoint can be recovered with the original frozen price and usage.
+Mere counters, incomplete provider output and a timed-out supplier are not
+terminal proof. Recovery never repeats the supplier POST or refunds an unknown
+dispatched request automatically.
+
+The final event also records `counted_api_activity`, derived inside Rust from
+valid measured token, cache, image or positive upstream-cost usage. Real work
+counts for a zero-priced group and for failed/cancelled partial work. Genuine
+zero usage does not count merely because the HTTP response succeeded. Clients
+and Go cannot supply this decision; it is committed with the final usage.
+
 ## Validation and joint acceptance
 
 Run from `services/core`, against an owned disposable PostgreSQL instance. The

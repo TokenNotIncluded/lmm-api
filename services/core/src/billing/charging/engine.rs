@@ -1,5 +1,7 @@
 #[path = "assistant.rs"]
 mod assistant;
+#[path = "cache_evidence.rs"]
+mod cache_evidence;
 #[path = "image.rs"]
 mod image;
 #[path = "model_unknown.rs"]
@@ -9,13 +11,20 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::{PgConnection, PgPool, Postgres, Row, Transaction, postgres::PgRow};
-use std::{net::IpAddr, sync::Arc};
+use std::{
+    net::IpAddr,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 use subtle::ConstantTimeEq;
 
 #[derive(Clone)]
 pub struct Charging {
     pool: PgPool,
     ledger: Arc<dyn Ledger>,
+    trust_pricing: Arc<AtomicBool>,
 }
 struct Stored {
     charge: Charge,
@@ -27,6 +36,171 @@ fn json<T: Serialize>(value: &T) -> Result<Value> {
 }
 fn hash<T: Serialize>(value: &T) -> Result<Vec<u8>> {
     Ok(Sha256::digest(serde_json::to_vec(value).map_err(|_| Error::Invalid)?).to_vec())
+}
+fn admission_spec(
+    request: &Request,
+    basis: Option<ReservationBasis>,
+    trusted: bool,
+) -> Result<Vec<u8>> {
+    if trusted {
+        hash(&(
+            "core-charging-trust-admission-v1",
+            request,
+            basis.ok_or(Error::Conflict)?,
+        ))
+    } else {
+        hash(request)
+    }
+}
+fn trust_error(error: crate::billing::trust_pricing::Error) -> Error {
+    use crate::billing::trust_pricing::Error as Trust;
+    match error {
+        Trust::Retry => Error::Retry,
+        Trust::Denied => Error::Forbidden,
+        Trust::Invalid | Trust::Unavailable | Trust::Storage => Error::Storage,
+    }
+}
+#[cfg(test)]
+mod trust_admission_tests {
+    use super::*;
+    fn request() -> Request {
+        Request {
+            id: "trust-request".into(),
+            fingerprint: [1; 32],
+            price: Price {
+                user_trust: None,
+                image: None,
+                upstream_cost_group_ppm: None,
+                tiered: None,
+                version: "v1".into(),
+                model: "model".into(),
+                group: "default".into(),
+                input_per_million: 10_000,
+                cached_per_million: 0,
+                output_per_million: 20_000,
+            },
+            reserve: 2,
+            lease_seconds: 60,
+            maximum_seconds: 60,
+        }
+    }
+    #[test]
+    fn trusted_spec_binds_original_bounds_and_cannot_downgrade_to_legacy() {
+        let request = request();
+        let basis = Some(ReservationBasis::Tokens {
+            input: 101,
+            output: 0,
+        });
+        let legacy = hash(&request).unwrap();
+        assert_eq!(admission_spec(&request, basis, false).unwrap(), legacy);
+        let trusted = admission_spec(&request, basis, true).unwrap();
+        assert_ne!(trusted, legacy);
+        assert_ne!(
+            trusted,
+            admission_spec(
+                &request,
+                Some(ReservationBasis::Tokens {
+                    input: 102,
+                    output: 0
+                }),
+                true
+            )
+            .unwrap()
+        );
+        assert_eq!(admission_spec(&request, None, true), Err(Error::Conflict));
+        assert_eq!(admission_spec(&request, basis, true).unwrap(), trusted);
+    }
+    #[test]
+    fn trust_serialization_retry_retains_the_existing_whole_transaction_policy() {
+        assert_eq!(
+            trust_error(crate::billing::trust_pricing::Error::Retry),
+            Error::Retry
+        );
+        assert_eq!(
+            trust_error(crate::billing::trust_pricing::Error::Denied),
+            Error::Forbidden
+        );
+        assert_eq!(
+            trust_error(crate::billing::trust_pricing::Error::Unavailable),
+            Error::Storage
+        );
+    }
+}
+// The host derives activity from measured usage, independently of price or
+// response status. Request/client/Go input cannot supply this decision.
+fn counted_api_activity(usage: Usage) -> bool {
+    usage.valid()
+        && (usage.input > 0
+            || usage.cached > 0
+            || usage.output > 0
+            || usage.cache_creation.is_some_and(|v| v.total > 0)
+            || usage.image.is_some_and(|v| v.output_images > 0)
+            || usage.upstream_cost_atto_usd.is_some_and(|v| v > 0))
+}
+
+#[cfg(test)]
+mod activity_tests {
+    use super::*;
+
+    #[test]
+    fn activity_uses_measured_work_including_free_and_partial_usage() {
+        // Neither a zero price nor Completed/Failed/Cancelled changes usage.
+        for usage in [
+            Usage {
+                input: 1,
+                ..Usage::default()
+            },
+            Usage {
+                output: 1,
+                ..Usage::default()
+            },
+            Usage {
+                input: 1,
+                cached: 1,
+                ..Usage::default()
+            },
+            Usage {
+                input: 1,
+                cache_creation: Some(CacheCreationUsage {
+                    total: 1,
+                    five_minute: None,
+                    one_hour: None,
+                }),
+                ..Usage::default()
+            },
+            Usage {
+                upstream_cost_atto_usd: Some(1),
+                ..Usage::default()
+            },
+            Usage {
+                image: Some(crate::model_http::image_price::ImageUsage {
+                    output_images: 1,
+                    provider_receipt_sha256: [1; 32],
+                }),
+                ..Usage::default()
+            },
+        ] {
+            assert!(counted_api_activity(usage));
+        }
+    }
+
+    #[test]
+    fn zero_or_invalid_usage_does_not_fabricate_activity() {
+        for usage in [
+            Usage::default(),
+            Usage {
+                upstream_cost_atto_usd: Some(0),
+                ..Usage::default()
+            },
+            Usage {
+                input: -1,
+                output: 1,
+                ..Usage::default()
+            },
+        ] {
+            assert!(!counted_api_activity(usage));
+        }
+    }
 }
 fn decode(row: PgRow) -> Result<Stored> {
     let source = match row.try_get::<Option<i64>, _>("source_subscription_id")? {
@@ -58,26 +232,50 @@ fn decode(row: PgRow) -> Result<Stored> {
             hard_deadline: row.try_get("hard_deadline")?,
             state: row.try_get("state")?,
             reserved: row.try_get("reserved")?,
-            usage: Usage {
-                image: row
-                    .try_get::<Option<Value>, _>("image_usage")?
-                    .map(serde_json::from_value)
-                    .transpose()
-                    .map_err(|_| Error::Storage)?,
-                upstream_cost_atto_usd: row
-                    .try_get::<Option<String>, _>("upstream_cost_atto_usd")?
-                    .map(|v| v.parse::<u128>().map_err(|_| Error::Storage))
-                    .transpose()?,
-                input: row.try_get("input_tokens")?,
-                cached: row.try_get("cached_tokens")?,
-                output: row.try_get("output_tokens")?,
-            },
+            usage: cache_evidence::restore(
+                Usage {
+                    image: row
+                        .try_get::<Option<Value>, _>("image_usage")?
+                        .map(serde_json::from_value)
+                        .transpose()
+                        .map_err(|_| Error::Storage)?,
+                    upstream_cost_atto_usd: row
+                        .try_get::<Option<String>, _>("upstream_cost_atto_usd")?
+                        .map(|v| v.parse::<u128>().map_err(|_| Error::Storage))
+                        .transpose()?,
+                    cache_creation: None,
+                    input: row.try_get("input_tokens")?,
+                    cached: row.try_get("cached_tokens")?,
+                    output: row.try_get("output_tokens")?,
+                },
+                row.try_get("usage_evidence")?,
+            )?,
             settled: row.try_get("settled")?,
             refunded: row.try_get("refunded")?,
             revision: row.try_get("revision")?,
             outcome: row.try_get("outcome")?,
         },
     };
+    stored
+        .charge
+        .price
+        .validate_actor(stored.charge.actor_user_id)
+        .map_err(|_| Error::Storage)?;
+    if stored
+        .charge
+        .price
+        .tiered
+        .as_ref()
+        .is_some_and(|t| t.tariff.revision == 2)
+        && (stored.charge.usage.input != 0
+            || stored.charge.usage.cached != 0
+            || stored.charge.usage.output != 0
+            || (stored.charge.state == "settled"
+                && stored.charge.outcome.as_deref() == Some("completed")))
+        && stored.charge.usage.cache_creation.is_none()
+    {
+        return Err(Error::Storage);
+    }
     match (&stored.charge.key_id, &stored.charge.oauth_source) {
         (Some(key), None) if *key > 0 => (),
         (None, Some(source))
@@ -127,14 +325,28 @@ async fn lock(c: &mut PgConnection, id: &str) -> Result<()> {
         .await?;
     Ok(())
 }
-async fn load(c: &mut PgConnection, id: &str) -> Result<Stored> {
-    sqlx::query("SELECT r.*, (SELECT max((e.detail #>> '{usage,upstream_cost_atto_usd}')::numeric)::text FROM core_charging.usage_events e WHERE e.request_id=r.id) AS upstream_cost_atto_usd FROM core_charging.requests r WHERE r.id=$1 FOR UPDATE")
+async fn select_stored(c: &mut PgConnection, id: &str, for_update: bool) -> Result<Option<Stored>> {
+    let mut statement = String::from(
+        "SELECT r.*, \
+         (SELECT max((e.detail #>> '{usage,upstream_cost_atto_usd}')::numeric)::text \
+          FROM core_charging.usage_events e WHERE e.request_id=r.id) AS upstream_cost_atto_usd, \
+         (SELECT jsonb_agg(jsonb_build_object('event_id',e.event_id,'usage',e.detail->'usage')) \
+          FROM core_charging.usage_events e WHERE e.request_id=r.id \
+          AND (e.event_id='final' OR e.event_id LIKE 'usage:%')) AS usage_evidence \
+         FROM core_charging.requests r WHERE r.id=$1",
+    );
+    if for_update {
+        statement.push_str(" FOR UPDATE");
+    }
+    sqlx::query(&statement)
         .bind(id)
         .fetch_optional(c)
         .await?
         .map(decode)
-        .transpose()?
-        .ok_or(Error::NotFound)
+        .transpose()
+}
+async fn load(c: &mut PgConnection, id: &str) -> Result<Stored> {
+    select_stored(c, id, true).await?.ok_or(Error::NotFound)
 }
 fn worker_matches(stored: &Stored, worker: &[u8; 32]) -> Result<()> {
     if stored
@@ -196,7 +408,43 @@ async fn event(c: &mut PgConnection, id: &str, event_id: &str, detail: Value) ->
 impl Charging {
     /// No default ledger. Supplying a test double never enables production.
     pub fn new(pool: PgPool, ledger: Arc<dyn Ledger>) -> Self {
-        Self { pool, ledger }
+        Self {
+            pool,
+            ledger,
+            trust_pricing: Arc::new(AtomicBool::new(false)),
+        }
+    }
+    /// The production Rust host enables this once after checking component 25.
+    /// There is deliberately no runtime/client switch to disable entitlements.
+    pub(crate) fn enable_trust_pricing(&self) {
+        self.trust_pricing.store(true, Ordering::Release);
+    }
+    pub(crate) fn trust_pricing_enabled(&self) -> bool {
+        self.trust_pricing.load(Ordering::Acquire)
+    }
+    pub(crate) async fn freeze_trust_request(
+        &self,
+        c: &mut PgConnection,
+        actor: i64,
+        request: &Request,
+        basis: ReservationBasis,
+    ) -> Result<Request> {
+        request.validate()?;
+        if request.price.user_trust.is_some()
+            || request.reserve != request.price.reservation_ceiling(basis)?
+        {
+            return Err(Error::Invalid);
+        }
+        let mut frozen = request.clone();
+        if self.trust_pricing_enabled() {
+            let authority = crate::billing::trust_pricing::quote_in_transaction(c, actor)
+                .await
+                .map_err(trust_error)?;
+            frozen.price = frozen.price.with_user_authority(&authority)?;
+            frozen.price.validate_actor(actor)?;
+            frozen.reserve = frozen.price.reservation_ceiling(basis)?;
+        }
+        Ok(frozen)
     }
     async fn begin(&self) -> Result<Transaction<'_, Postgres>> {
         let mut tx = self.pool.begin().await?;
@@ -232,7 +480,7 @@ impl Charging {
         worker: &[u8; 32],
         peer: Option<IpAddr>,
     ) -> Result<Charge> {
-        self.reserve_authorized(secret, request, worker, peer, None)
+        self.reserve_authorized(secret, request, worker, peer, None, None)
             .await
     }
     /// A real scoped OAuth access token, not a submitted DTO or a native key.
@@ -244,7 +492,30 @@ impl Charging {
         worker: &[u8; 32],
         peer: Option<IpAddr>,
     ) -> Result<Charge> {
-        self.reserve_authorized(secret, request, worker, peer, Some(issuer))
+        self.reserve_authorized(secret, request, worker, peer, Some(issuer), None)
+            .await
+    }
+    pub(crate) async fn reserve_model_with_context(
+        &self,
+        secret: &str,
+        request: &Request,
+        worker: &[u8; 32],
+        peer: Option<IpAddr>,
+        basis: ReservationBasis,
+    ) -> Result<Charge> {
+        self.reserve_authorized(secret, request, worker, peer, None, Some(basis))
+            .await
+    }
+    pub(crate) async fn reserve_model_oauth_with_context(
+        &self,
+        issuer: &crate::identity::grants::LmmIssuer,
+        secret: &str,
+        request: &Request,
+        worker: &[u8; 32],
+        peer: Option<IpAddr>,
+        basis: ReservationBasis,
+    ) -> Result<Charge> {
+        self.reserve_authorized(secret, request, worker, peer, Some(issuer), Some(basis))
             .await
     }
     async fn reserve_authorized(
@@ -254,10 +525,14 @@ impl Charging {
         worker: &[u8; 32],
         peer: Option<IpAddr>,
         issuer: Option<&crate::identity::grants::LmmIssuer>,
+        basis: Option<ReservationBasis>,
     ) -> Result<Charge> {
         request.validate()?;
+        // A deserialized persisted snapshot is not fresh admission authority.
+        if request.price.user_trust.is_some() {
+            return Err(Error::Invalid);
+        }
         let worker_digest = authority::worker_digest(worker)?;
-        let spec = hash(request)?;
         let mut tx = self.begin().await?;
         lock(&mut tx, &request.id).await?;
         let (user, key, owner, oauth, native) = if let Some(issuer) = issuer {
@@ -285,14 +560,9 @@ impl Charging {
             authority::model_policy(&mut tx, secret, &request.price, peer).await?;
             (actor.user, Some(actor.key), actor.owner, None, Some(actor))
         };
-        if let Some(row) =
-            sqlx::query("SELECT r.*, (SELECT max((e.detail #>> '{usage,upstream_cost_atto_usd}')::numeric)::text FROM core_charging.usage_events e WHERE e.request_id=r.id) AS upstream_cost_atto_usd FROM core_charging.requests r WHERE r.id=$1 FOR UPDATE")
-                .bind(&request.id)
-                .fetch_optional(&mut *tx)
-                .await?
-        {
-            let stored = decode(row)?;
+        if let Some(stored) = select_stored(&mut tx, &request.id, true).await? {
             worker_matches(&stored, worker)?;
+            let spec = admission_spec(request, basis, stored.charge.price.user_trust.is_some())?;
             if stored.charge.actor_user_id != user
                 || stored.charge.key_id != key
                 || stored.charge.owner_account_id != owner
@@ -304,6 +574,17 @@ impl Charging {
             commit(tx).await?;
             return Ok(stored.charge);
         }
+        if self.trust_pricing_enabled() && basis.is_none() {
+            return Err(Error::Forbidden);
+        }
+        let spec = admission_spec(request, basis, self.trust_pricing_enabled())?;
+        let effective_request = if self.trust_pricing_enabled() {
+            self.freeze_trust_request(&mut tx, user, request, basis.ok_or(Error::Forbidden)?)
+                .await?
+        } else {
+            request.clone()
+        };
+        let request = &effective_request;
         // Existing exact operation receipts above remain safely replayable.
         // Only a NEW reservation is excluded by the current abuse mark.
         authority::reject_new_model(&mut tx, user).await?;
@@ -720,7 +1001,8 @@ impl Charging {
             c,
             &charge.id,
             "final",
-            json!({"kind":"final","usage":usage,"outcome":outcome,"evidence":evidence}),
+            json!({"kind":"final","usage":usage,"outcome":outcome,"evidence":evidence,
+                "counted_api_activity":counted_api_activity(usage)}),
         )
         .await?;
         Ok(load(c, &charge.id).await?.charge)
@@ -849,13 +1131,7 @@ impl Charging {
             sqlx::query(statement).execute(&mut *tx).await?;
         }
         lock(&mut tx, id).await?;
-        let result = sqlx::query("SELECT r.*, (SELECT max((e.detail #>> '{usage,upstream_cost_atto_usd}')::numeric)::text FROM core_charging.usage_events e WHERE e.request_id=r.id) AS upstream_cost_atto_usd FROM core_charging.requests r WHERE r.id=$1")
-            .bind(id)
-            .fetch_optional(&mut *tx)
-            .await?
-            .map(decode)
-            .transpose()?
-            .map(|s| s.charge);
+        let result = select_stored(&mut tx, id, false).await?.map(|s| s.charge);
         commit(tx).await?;
         Ok(result)
     }

@@ -1,5 +1,6 @@
 //! Server-owned image tariffs. No token usage is synthesized for image charges.
 //! Historical rule evidence: main 3948a0a relaykit/dto/openai_image.go:135-170.
+use crate::billing::trust_pricing::DiscountRatio;
 use crate::billing::{CREDITS_PER_USD, Credits};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -85,9 +86,26 @@ impl ImageQuote {
     pub fn reservation_credits(&self) -> Credits {
         self.charge
     }
+    pub fn reservation_with_discount(
+        &self,
+        discount: Option<DiscountRatio>,
+    ) -> Result<Credits, ImagePriceError> {
+        let charge = cost_with_discount(&self.tariff, self.binding.n, discount)?;
+        if i64::from(charge) > i64::from(self.max_budget) {
+            return Err(ImagePriceError::BudgetExceeded);
+        }
+        Ok(charge)
+    }
     /// Only Core-parsed completed payloads may supply this count. Zero completion
     /// is unknown, never evidence authorizing a refund after dispatch.
     pub fn settlement(&self, successful_images: u32) -> Result<Credits, ImagePriceError> {
+        self.settlement_with_discount(successful_images, None)
+    }
+    pub fn settlement_with_discount(
+        &self,
+        successful_images: u32,
+        discount: Option<DiscountRatio>,
+    ) -> Result<Credits, ImagePriceError> {
         if successful_images > self.binding.n {
             return Err(ImagePriceError::InvalidCount);
         }
@@ -96,7 +114,7 @@ impl ImageQuote {
             ImageCountBasis::ReturnedPayloads if successful_images > 0 => successful_images,
             ImageCountBasis::ReturnedPayloads => return Err(ImagePriceError::SettlementPending),
         };
-        cost(&self.tariff, n)
+        cost_with_discount(&self.tariff, n, discount)
     }
     pub fn persisted(&self) -> PersistedImagePrice {
         PersistedImagePrice {
@@ -187,10 +205,26 @@ impl PersistedImagePrice {
         self.clone().restore().map(|_| ())
     }
     pub(crate) fn cost(&self, usage: &ImageUsage) -> Result<i64, ImagePriceError> {
+        self.cost_with_discount(usage, None)
+    }
+    pub(crate) fn cost_with_discount(
+        &self,
+        usage: &ImageUsage,
+        discount: Option<DiscountRatio>,
+    ) -> Result<i64, ImagePriceError> {
         usage.validate()?;
         self.clone()
             .restore()?
-            .settlement(usage.output_images)
+            .settlement_with_discount(usage.output_images, discount)
+            .map(i64::from)
+    }
+    pub(crate) fn reservation_with_discount(
+        &self,
+        discount: Option<DiscountRatio>,
+    ) -> Result<i64, ImagePriceError> {
+        self.clone()
+            .restore()?
+            .reservation_with_discount(discount)
             .map(i64::from)
     }
     pub(crate) fn model(&self) -> &str {
@@ -350,6 +384,13 @@ fn gcd(mut a: u128, mut b: u128) -> u128 {
     a
 }
 fn cost(r: &ImagePriceRule, n: u32) -> Result<Credits, ImagePriceError> {
+    cost_with_discount(r, n, None)
+}
+fn cost_with_discount(
+    r: &ImagePriceRule,
+    n: u32,
+    discount: Option<DiscountRatio>,
+) -> Result<Credits, ImagePriceError> {
     let mut numerators = [
         u128::from(r.usd_micros_per_image.numerator),
         u128::from(r.group_multiplier.numerator),
@@ -379,7 +420,8 @@ fn cost(r: &ImagePriceRule, n: u32) -> Result<Credits, ImagePriceError> {
         .into_iter()
         .try_fold(1_u128, |a, b| a.checked_mul(b))
         .ok_or(ImagePriceError::Overflow)?;
-    let credits = numerator / denominator + u128::from(numerator % denominator != 0);
+    let credits = crate::upstream_cost::ceil_with_discount(numerator, denominator, discount)
+        .ok_or(ImagePriceError::Overflow)?;
     let credits = i64::try_from(credits).map_err(|_| ImagePriceError::Overflow)?;
     Credits::try_from(credits).map_err(|_| ImagePriceError::Overflow)
 }
@@ -387,6 +429,157 @@ fn cost(r: &ImagePriceRule, n: u32) -> Result<Credits, ImagePriceError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trusted_discount_is_applied_before_total_image_credit_ceiling() {
+        let mut c = config();
+        c.rules[0].usd_micros_per_image = ExactRatio {
+            numerator: 11,
+            denominator: 5,
+        };
+        c.rules[0].max_n = 3;
+        c.rules[0].max_budget = Credits::try_from(4).unwrap();
+        let q = c.quote(&request_for(&c.rules[0], 3)).unwrap();
+        let discount = Some(DiscountRatio::new(3, 5).unwrap());
+        assert_eq!(i64::from(q.reservation_credits()), 4);
+        assert_eq!(i64::from(q.reservation_with_discount(discount).unwrap()), 2);
+        assert_eq!(
+            i64::from(q.settlement_with_discount(1, discount).unwrap()),
+            1
+        );
+        assert_eq!(
+            i64::from(q.settlement_with_discount(2, discount).unwrap()),
+            2
+        );
+        assert_eq!(
+            q.settlement_with_discount(0, discount),
+            Err(ImagePriceError::SettlementPending)
+        );
+        assert_eq!(
+            q.settlement_with_discount(4, discount),
+            Err(ImagePriceError::InvalidCount)
+        );
+        let persisted = q.persisted();
+        let bytes = serde_json::to_vec(&persisted).unwrap();
+        let usage = ImageUsage {
+            output_images: 1,
+            provider_receipt_sha256: [1; 32],
+        };
+        assert_eq!(persisted.reservation_with_discount(discount).unwrap(), 2);
+        assert_eq!(persisted.cost_with_discount(&usage, discount).unwrap(), 1);
+        assert_eq!(persisted.clone().restore().unwrap(), q);
+        assert_eq!(serde_json::to_vec(&persisted).unwrap(), bytes);
+        assert_eq!(q.max_budget(), Credits::try_from(4).unwrap());
+    }
+
+    #[test]
+    fn trusted_discount_cannot_make_an_invalid_original_image_budget_valid() {
+        let mut c = config();
+        c.rules[0].usd_micros_per_image = ExactRatio {
+            numerator: 11,
+            denominator: 5,
+        };
+        c.rules[0].max_n = 1;
+        c.rules[0].max_budget = Credits::try_from(2).unwrap();
+        let q = c.quote(&request_for(&c.rules[0], 1)).unwrap();
+        let discount = Some(DiscountRatio::new(3, 5).unwrap());
+        assert_eq!(i64::from(q.reservation_with_discount(discount).unwrap()), 1);
+        c.rules[0].max_budget = Credits::try_from(1).unwrap();
+        assert_eq!(c.validate(), Err(ImagePriceError::BudgetExceeded));
+        assert_eq!(
+            c.quote(&request_for(&c.rules[0], 1)),
+            Err(ImagePriceError::BudgetExceeded)
+        );
+        let mut altered = q.persisted();
+        altered.rule.max_budget = Credits::try_from(1).unwrap();
+        assert_eq!(
+            altered.reservation_with_discount(discount),
+            Err(ImagePriceError::BudgetExceeded)
+        );
+        altered = q.persisted();
+        altered.reservation_credits = Credits::try_from(1).unwrap();
+        assert_eq!(
+            altered.reservation_with_discount(discount),
+            Err(ImagePriceError::InvalidConfig)
+        );
+    }
+
+    #[test]
+    fn trusted_image_discount_keeps_count_exact_and_avoids_new_factor_overflow() {
+        let mut c = config();
+        c.rules[0].usd_micros_per_image = ExactRatio {
+            numerator: 1,
+            denominator: 5,
+        };
+        c.rules[0].max_n = 30;
+        c.rules[0].max_budget = Credits::try_from(3).unwrap();
+        let q = c.quote(&request_for(&c.rules[0], 30)).unwrap();
+        assert_eq!(i64::from(q.reservation_credits()), 3);
+        assert_eq!(
+            i64::from(
+                q.reservation_with_discount(Some(DiscountRatio::new(1, 3).unwrap()))
+                    .unwrap()
+            ),
+            1
+        );
+        c.rules[0].usd_micros_per_image = ExactRatio {
+            numerator: 1,
+            denominator: 1_000_000_000_000_000_000,
+        };
+        c.rules[0].group_multiplier = ExactRatio {
+            numerator: 1,
+            denominator: 999_999_999_999_999_999,
+        };
+        c.rules[0].max_n = 1;
+        c.rules[0].max_budget = Credits::try_from(1).unwrap();
+        let q = c.quote(&request_for(&c.rules[0], 1)).unwrap();
+        assert_eq!(
+            i64::from(
+                q.reservation_with_discount(Some(
+                    DiscountRatio::new(1, 1_000_000_000_000_000_000).unwrap()
+                ))
+                .unwrap()
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn absent_and_identity_image_discounts_match_original_snapshot_behavior() {
+        let mut c = config();
+        let identity = Some(DiscountRatio::new(1, 1).unwrap());
+        for basis in [
+            ImageCountBasis::Requested,
+            ImageCountBasis::ReturnedPayloads,
+        ] {
+            c.rules[0].count_basis = basis;
+            let q = c.quote(&request_for(&c.rules[0], 3)).unwrap();
+            assert_eq!(
+                q.reservation_with_discount(None).unwrap(),
+                q.reservation_credits()
+            );
+            assert_eq!(
+                q.reservation_with_discount(identity).unwrap(),
+                q.reservation_credits()
+            );
+            for count in 0..=4 {
+                assert_eq!(q.settlement_with_discount(count, None), q.settlement(count));
+                assert_eq!(
+                    q.settlement_with_discount(count, identity),
+                    q.settlement(count)
+                );
+            }
+            let usage = ImageUsage {
+                output_images: 2,
+                provider_receipt_sha256: [1; 32],
+            };
+            assert_eq!(
+                q.persisted().cost_with_discount(&usage, identity),
+                q.persisted().cost(&usage)
+            );
+        }
+    }
+
     fn config() -> ImagePriceConfig {
         ImagePriceConfig {
             revision: 7,

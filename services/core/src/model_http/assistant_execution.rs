@@ -38,7 +38,7 @@ impl ModelGateway {
         model: &str,
         group: &str,
     ) -> Result<crate::billing::charging::Price, RelayError> {
-        let plan = self
+        let mut plan = self
             .bridge
             .routing
             .route(RouteRequest {
@@ -49,7 +49,13 @@ impl ModelGateway {
                 replay: crate::routing::ReplayPermission::Denied,
             })
             .map_err(|_| RelayError::RouteUnavailable)?;
-        routing::credit_price(plan.quote(), plan.canonical_model(), group)
+        let mut price = routing::credit_price(plan.quote(), plan.canonical_model(), group)?;
+        let attempt = plan.start().map_err(|_| RelayError::RouteUnavailable)?;
+        if attempt.protocol() != Protocol::OpenAiChat {
+            return Err(RelayError::RouteUnavailable);
+        }
+        freeze_assistant_tariff(&mut price, &self.bridge.provider_policy, &attempt);
+        Ok(price)
     }
     pub(crate) fn validate_assistant_policy(
         &self,
@@ -102,6 +108,8 @@ impl ModelGateway {
         messages: Value,
         transport: &crate::relay::provider_network::ProviderTransport,
         gift_cap: Option<i64>,
+        stored_price: &crate::billing::charging::Price,
+        actor_user_id: i64,
     ) -> Result<PreparedAssistant, RelayError> {
         if max_output == 0 || max_output > 4096 {
             return Err(RelayError::Invalid("assistant output limit"));
@@ -120,7 +128,7 @@ impl ModelGateway {
         let quote = plan.quote().with_credit_rate(
             CreditRate::new(1, 500_000).map_err(|_| RelayError::BillingUnavailable)?,
         );
-        let price = routing::credit_price(quote.price(), plan.canonical_model(), group)?;
+        let mut price = routing::credit_price(quote.price(), plan.canonical_model(), group)?;
         if price.upstream_cost_group_ppm.is_some() {
             return Err(RelayError::Unsupported("assistant requires token quote"));
         }
@@ -132,6 +140,8 @@ impl ModelGateway {
         {
             return Err(RelayError::RouteUnavailable);
         }
+        freeze_assistant_tariff(&mut price, &self.bridge.provider_policy, &attempt);
+        price = bind_stored_assistant_price(&price, stored_price, actor_user_id)?;
         let mut endpoint =
             reqwest::Url::parse(attempt.endpoint()).map_err(|_| RelayError::RouteUnavailable)?;
         let local = endpoint
@@ -187,13 +197,12 @@ impl ModelGateway {
         {
             return Err(RelayError::Limit("assistant context budget"));
         }
-        let reserve = i64::try_from(
-            quote
-                .reservation_ceiling(input_ceiling as u64, u64::from(max_output))
-                .map_err(|_| RelayError::BillingUnavailable)?
-                .0,
-        )
-        .map_err(|_| RelayError::BillingUnavailable)?;
+        let reserve = price
+            .reservation_ceiling(crate::billing::charging::ReservationBasis::Tokens {
+                input: input_ceiling as u64,
+                output: u64::from(max_output),
+            })
+            .map_err(|_| RelayError::BillingUnavailable)?;
         let connection = tokio::time::timeout(
             self.limits.total_timeout,
             transport.prepare(&route.endpoint, &self.limits),
@@ -299,44 +308,409 @@ impl ModelGateway {
         }
         let value: Value =
             serde_json::from_slice(&bytes).map_err(|_| RelayError::SettlementPending)?;
-        let input = value
-            .pointer("/usage/prompt_tokens")
-            .and_then(Value::as_i64)
-            .filter(|n| *n >= 0 && *n <= p.input_ceiling)
-            .ok_or(RelayError::SettlementPending)?;
-        let output = value
-            .pointer("/usage/completion_tokens")
-            .and_then(Value::as_i64)
-            .filter(|n| *n >= 0 && *n <= i64::from(p.output_ceiling))
-            .ok_or(RelayError::SettlementPending)?;
-        let cached_observed = match value.pointer("/usage/prompt_tokens_details/cached_tokens") {
-            None => None,
-            Some(v) => Some(
-                v.as_i64()
-                    .filter(|n| *n >= 0 && *n <= input)
-                    .ok_or(RelayError::SettlementPending)?,
-            ),
-        };
-        let observed = relay::Usage {
-            input_tokens: Some(input as u64),
-            output_tokens: Some(output as u64),
-            cached_input_tokens: cached_observed.map(|n| n as u64),
-            ..relay::Usage::default()
-        };
+        let observed = relay::provider_usage(relay::UpstreamProtocol::Chat, &value["usage"])
+            .map_err(|_| RelayError::SettlementPending)?;
         self.bridge
             .provider_policy
             .validate_usage(&p.attempt, &observed, false)?;
-        let cached = cached_observed.unwrap_or(0);
-        Ok((
-            bytes,
-            value,
-            crate::billing::charging::Usage {
-                image: None,
-                input,
-                output,
-                cached,
-                upstream_cost_atto_usd: None,
+        let usage = assistant_usage(&p.price, p.input_ceiling, p.output_ceiling, observed)?;
+        Ok((bytes, value, usage))
+    }
+}
+
+fn freeze_assistant_tariff(
+    price: &mut crate::billing::charging::Price,
+    policy: &ProviderPolicy,
+    attempt: &crate::routing::Attempt,
+) {
+    if let Some(tariff) = price
+        .tiered
+        .as_mut()
+        .filter(|tariff| tariff.tariff.revision == 2)
+    {
+        tariff.missing_cache_creation_is_zero = policy.missing_cache_creation_is_zero(attempt);
+    }
+}
+
+/// Only the authenticated Core grant/turn row supplies this persisted price.
+/// Bind its original evidence unchanged; it cannot mint a new entitlement.
+fn bind_stored_assistant_price(
+    base: &crate::billing::charging::Price,
+    stored: &crate::billing::charging::Price,
+    actor_user_id: i64,
+) -> Result<crate::billing::charging::Price, RelayError> {
+    base.validate()
+        .map_err(|_| RelayError::BillingUnavailable)?;
+    stored
+        .validate()
+        .map_err(|_| RelayError::BillingUnavailable)?;
+    if actor_user_id <= 0
+        || base.user_trust.is_some()
+        || stored.base_price() != *base
+        || stored
+            .user_trust
+            .as_ref()
+            .is_some_and(|trust| trust.user_id() != actor_user_id)
+    {
+        return Err(RelayError::Forbidden);
+    }
+    Ok(stored.clone())
+}
+
+fn assistant_usage(
+    price: &crate::billing::charging::Price,
+    input_ceiling: i64,
+    output_ceiling: u32,
+    observed: relay::Usage,
+) -> Result<crate::billing::charging::Usage, RelayError> {
+    if input_ceiling < 0
+        || observed
+            .input_tokens
+            .is_some_and(|input| input > input_ceiling as u64)
+        || observed
+            .output_tokens
+            .is_some_and(|output| output > u64::from(output_ceiling))
+    {
+        return Err(RelayError::SettlementPending);
+    }
+    if let Some(tariff) = price
+        .tiered
+        .as_ref()
+        .filter(|tariff| tariff.tariff.revision == 2)
+    {
+        billing::complete_cache_usage(
+            observed,
+            tariff.input_semantics,
+            tariff.missing_cache_creation_is_zero,
+        )
+    } else {
+        billing::complete_usage(observed, false)
+    }
+}
+
+#[cfg(test)]
+mod usage_tests {
+    use super::*;
+    use crate::billing::charging::{CacheCreationUsage, Price};
+
+    fn price(missing_creation_is_zero: bool) -> Price {
+        let price: Price = serde_json::from_value(json!({
+            "version":"routing-2-rule-1","model":"model","group":"allowed",
+            "input_per_million":0,"cached_per_million":0,"output_per_million":0,
+            "tiered":{
+                "input_semantics":"inclusive","group_multiplier_ppm":1000000,
+                "speed_multiplier_ppm":1000000,"credits_per_usd":500000,
+                "missing_cache_creation_is_zero":missing_creation_is_zero,
+                "tariff":{"revision":2,"source_digest":"34".repeat(32),
+                    "uses_cache_read":true,"uses_cache_write":true,
+                    "tiers":[{"up_to_input_tokens":null,"rates":{
+                        "input":{"numerator":2,"denominator":1},
+                        "output":{"numerator":10,"denominator":1},
+                        "cache_read":{"numerator":1,"denominator":5},
+                        "cache_write":{"numerator":5,"denominator":2}
+                    }}]}
+            }
+        }))
+        .unwrap();
+        price.validate().unwrap();
+        price
+    }
+
+    fn observed(value: Value) -> relay::Usage {
+        relay::provider_usage(relay::UpstreamProtocol::Chat, &value).unwrap()
+    }
+
+    fn stored_trust_price(base: &Price, user_id: i64) -> Price {
+        let mut encoded = serde_json::to_value(base).unwrap();
+        encoded["user_trust"] = json!({
+            "user_id":user_id,"policy_revision":1,"basis_revision":2,
+            "effective_level":1,"level_source":"automatic",
+            "discount":{"numerator":9,"denominator":10},
+            "evaluated_at":100,"next_decay_at":200,"evidence_digest":vec![1u8;32]
+        });
+        serde_json::from_value(encoded).unwrap()
+    }
+
+    #[test]
+    fn stored_logical_quote_reuses_exact_trust_evidence_and_legacy_absence() {
+        let base = price(false);
+        let stored = stored_trust_price(&base, 7);
+        let original = serde_json::to_value(&stored).unwrap();
+        for _ in 0..3 {
+            let bound = bind_stored_assistant_price(&base, &stored, 7).unwrap();
+            assert_eq!(serde_json::to_value(bound).unwrap(), original);
+        }
+        let legacy = bind_stored_assistant_price(&base, &base, 7).unwrap();
+        assert_eq!(legacy, base);
+        assert!(legacy.user_trust.is_none());
+        assert!(
+            serde_json::to_value(legacy)
+                .unwrap()
+                .get("user_trust")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn stored_quote_rejects_another_actor_or_changed_base_contract() {
+        let base = price(false);
+        let stored = stored_trust_price(&base, 7);
+        assert_eq!(
+            bind_stored_assistant_price(&base, &stored, 8),
+            Err(RelayError::Forbidden)
+        );
+        assert_eq!(
+            bind_stored_assistant_price(&base, &stored, 0),
+            Err(RelayError::Forbidden)
+        );
+        for change in ["version", "model", "group", "provider_contract"] {
+            let mut changed = base.clone();
+            match change {
+                "version" => changed.version = "routing-3-rule-1".into(),
+                "model" => changed.model = "other-model".into(),
+                "group" => changed.group = "other-group".into(),
+                "provider_contract" => {
+                    changed
+                        .tiered
+                        .as_mut()
+                        .unwrap()
+                        .missing_cache_creation_is_zero = true
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                bind_stored_assistant_price(&changed, &stored, 7),
+                Err(RelayError::Forbidden)
+            );
+        }
+        assert_eq!(
+            bind_stored_assistant_price(&stored, &stored, 7),
+            Err(RelayError::Forbidden)
+        );
+    }
+
+    fn gateway(missing_creation_is_zero: bool) -> ModelGateway {
+        let config = serde_json::from_value(json!({
+            "version":1,"groups":[{"name":"allowed","enabled":true}],
+            "upstreams":[{"id":1,"endpoint":"https://provider.example/v1","protocol":"openai_chat","credential":{"id":7,"revision":1},"enabled":true}],
+            "routes":[{"id":1,"model":"model","group":"allowed","enabled":true,"speeds":["standard"],
+                "targets":[{"id":1,"upstream_id":1,"upstream_model":"bounded-model","enabled":true,"priority":0,"weight":1,"speeds":["standard"],"payload":"adapt","timeout_ms":5000}],
+                "failover":{"max_attempts":1,"retry_on":[],"allow_replay_after_send":false}}],"aliases":[]
+        })).unwrap();
+        let prices = serde_json::from_value(json!({"version":2,"rules":[{
+            "id":1,"model":"model","group":"allowed","speed":"standard",
+            "billing_mode":"tiered_decimal","tiered":price(false).tiered.unwrap().tariff,
+            "rates":{"input":0,"output":0,"cache_read":0,"cache_write":0,"request":0},
+            "group_multiplier_ppm":1000000,"speed_multiplier_ppm":1000000
+        }]}))
+        .unwrap();
+        let router = crate::routing::Router::new(
+            config,
+            Arc::new(crate::routing::PriceSnapshot::compile(prices).unwrap()),
+        )
+        .unwrap();
+        let policy = ProviderPolicy::new(
+            vec![ExternalModelContext {
+                upstream_id: 1,
+                upstream_model: "bounded-model".into(),
+                protocol: Protocol::OpenAiChat,
+                endpoint: "https://provider.example/v1".into(),
+                max_input_tokens: 100,
+                max_output_tokens: 5,
+                contract_revision: "synthetic-assistant-cache-v2".into(),
+                missing_cached_tokens_is_zero: false,
+                missing_cache_creation_tokens_is_zero: missing_creation_is_zero,
+            }],
+            100,
+        )
+        .unwrap();
+        // No connection is opened: quote selection and the common freeze helper
+        // are in-memory operations, before any transport or charging work.
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+            .unwrap();
+        ModelGateway::new_with_provider_policy(
+            pool,
+            Arc::new(router),
+            vec![UpstreamCredential {
+                reference: crate::routing::CredentialRef { id: 7, revision: 1 },
+                secret: "synthetic-assistant-provider-key".into(),
+            }],
+            BTreeMap::new(),
+            relay::Limits {
+                total_timeout: Duration::from_secs(1),
+                hook_timeout: Duration::from_millis(100),
+                ..Default::default()
             },
-        ))
+            ChargePolicy {
+                input_token_ceiling: 100,
+                lease_seconds: 10,
+            },
+            policy,
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn trust_mode_is_shared_with_gateway_clones_created_before_enablement() {
+        let gateway = gateway(false);
+        let earlier = gateway.clone();
+        assert!(!earlier.trust_pricing_enabled());
+        let enabled = gateway.with_trust_pricing();
+        assert!(enabled.trust_pricing_enabled());
+        assert!(earlier.trust_pricing_enabled());
+    }
+
+    #[tokio::test]
+    async fn quote_and_preparation_freeze_the_same_selected_creation_contract() {
+        let mut frozen_quotes = Vec::new();
+        for missing_creation_is_zero in [false, true] {
+            let gateway = gateway(missing_creation_is_zero);
+            let quoted = gateway.assistant_quote("model", "allowed").unwrap();
+            let mut plan = gateway
+                .bridge
+                .routing
+                .route(RouteRequest {
+                    model: "model",
+                    group: "allowed",
+                    speed: None,
+                    protocol: Protocol::OpenAiChat,
+                    replay: ReplayPermission::Denied,
+                })
+                .unwrap();
+            let quote = plan
+                .quote()
+                .with_credit_rate(CreditRate::new(1, 500_000).unwrap());
+            let mut prepared_price =
+                routing::credit_price(quote.price(), plan.canonical_model(), "allowed").unwrap();
+            let attempt = plan.start().unwrap();
+            freeze_assistant_tariff(
+                &mut prepared_price,
+                &gateway.bridge.provider_policy,
+                &attempt,
+            );
+            assert_eq!(quoted, prepared_price);
+            let tariff = quoted.tiered.as_ref().unwrap();
+            assert_eq!(
+                tariff.input_semantics,
+                crate::routing::InputSemantics::Inclusive
+            );
+            assert_eq!(
+                tariff.missing_cache_creation_is_zero,
+                missing_creation_is_zero
+            );
+            frozen_quotes.push(quoted);
+        }
+        // The financial equality check must distinguish different selected
+        // supplier contracts, even when all token rates remain identical.
+        assert_ne!(frozen_quotes[0], frozen_quotes[1]);
+    }
+
+    #[test]
+    fn revision_two_accepts_observed_zero_and_frozen_contract_zero() {
+        let explicit = observed(json!({
+            "prompt_tokens":100,"completion_tokens":5,"total_tokens":105,
+            "prompt_tokens_details":{"cached_tokens":20,"cache_write_tokens":0}
+        }));
+        let expected = CacheCreationUsage {
+            total: 0,
+            five_minute: Some(0),
+            one_hour: Some(0),
+        };
+        let usage = assistant_usage(&price(false), 100, 5, explicit).unwrap();
+        assert_eq!(usage.cache_creation, Some(expected));
+        assert_eq!(price(false).cost(usage).unwrap(), 107);
+
+        let missing = observed(json!({
+            "prompt_tokens":100,"completion_tokens":5,
+            "prompt_tokens_details":{"cached_tokens":20}
+        }));
+        assert_eq!(
+            assistant_usage(&price(false), 100, 5, missing),
+            Err(RelayError::SettlementPending)
+        );
+        assert_eq!(
+            assistant_usage(&price(true), 100, 5, missing)
+                .unwrap()
+                .cache_creation,
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn revision_two_keeps_nested_creation_and_ignores_reported_cost() {
+        let receipt = observed(json!({
+            "prompt_tokens":100,"completion_tokens":5,"total_tokens":105,"cost":999,
+            "cache_creation_input_tokens":70,
+            "cache_creation_details":{"ephemeral_5m_input_tokens":30,"ephemeral_1h_input_tokens":40},
+            "prompt_tokens_details":{"cached_tokens":20,"cached_creation_tokens":70,"cache_write_tokens":70}
+        }));
+        let price = price(false);
+        let usage = assistant_usage(&price, 100, 5, receipt).unwrap();
+        assert_eq!(usage.input, 100);
+        assert_eq!(usage.cached, 20);
+        assert_eq!(usage.output, 5);
+        assert_eq!(usage.upstream_cost_atto_usd, None);
+        assert_eq!(
+            usage.cache_creation,
+            Some(CacheCreationUsage {
+                total: 70,
+                five_minute: Some(30),
+                one_hour: Some(40),
+            })
+        );
+        assert_eq!(price.cost(usage).unwrap(), 125);
+    }
+
+    #[test]
+    fn usage_above_original_ceiling_or_missing_totals_remains_pending() {
+        let receipt = observed(json!({
+            "prompt_tokens":100,"completion_tokens":5,
+            "prompt_tokens_details":{"cached_tokens":20,"cache_write_tokens":0}
+        }));
+        for (input, output) in [(99, 5), (100, 4), (-1, 5)] {
+            assert_eq!(
+                assistant_usage(&price(true), input, output, receipt),
+                Err(RelayError::SettlementPending)
+            );
+        }
+        for value in [
+            json!({}),
+            json!({"prompt_tokens":100}),
+            json!({"completion_tokens":5}),
+        ] {
+            assert_eq!(
+                assistant_usage(&price(true), 100, 5, observed(value)),
+                Err(RelayError::SettlementPending)
+            );
+        }
+    }
+
+    #[test]
+    fn real_decoder_rejects_invalid_cache_and_inconsistent_totals() {
+        for value in [
+            json!({"prompt_tokens":100,"completion_tokens":5,"total_tokens":104}),
+            json!({"prompt_tokens":100,"completion_tokens":5,"prompt_tokens_details":{"cached_tokens":-1}}),
+            json!({"prompt_tokens":100,"completion_tokens":5,"cache_creation_input_tokens":70,"prompt_tokens_details":{"cache_write_tokens":71}}),
+            json!({"prompt_tokens":100,"completion_tokens":5,"cache_creation_input_tokens":70,"cache_creation_details":{"ephemeral_5m_input_tokens":30,"ephemeral_1h_input_tokens":41}}),
+        ] {
+            assert!(relay::provider_usage(relay::UpstreamProtocol::Chat, &value).is_err());
+        }
+    }
+
+    #[test]
+    fn non_cache_tariff_cannot_settle_reported_cache_creation() {
+        let mut price = price(false);
+        price.tiered = None;
+        price.input_per_million = 1;
+        price.validate().unwrap();
+        let receipt = observed(json!({
+            "prompt_tokens":100,"completion_tokens":5,
+            "prompt_tokens_details":{"cache_write_tokens":1}
+        }));
+        assert_eq!(
+            assistant_usage(&price, 100, 5, receipt),
+            Err(RelayError::SettlementPending)
+        );
     }
 }

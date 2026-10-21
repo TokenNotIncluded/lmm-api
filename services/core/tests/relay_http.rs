@@ -665,6 +665,14 @@ async fn sixteen_protocol_streaming_and_json_round_trips_use_real_tcp() {
                 assert_eq!(done.report.attempts, 1);
                 assert_output(client, stream, &body);
                 assert_eq!(money.finals.lock().unwrap().len(), 1);
+                if !stream {
+                    let proof = money.checkpoints.lock().unwrap();
+                    assert_eq!(proof.len(), 1);
+                    assert_eq!(proof[0].sequence, 1);
+                    assert!(proof[0].terminal_observed);
+                    assert_eq!(proof[0].packet_bytes, 0);
+                    assert_eq!(proof[0].usage, done.report.usage);
+                }
                 assert_eq!(money.pinned.lock().unwrap()[0], (expected_id, 42));
                 assert_eq!(upstream.observed.hits.load(Ordering::SeqCst), 1);
                 let requests = upstream.observed.requests.lock().unwrap();

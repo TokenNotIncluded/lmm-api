@@ -127,6 +127,8 @@ impl AgentService {
         for name in loaded {
             definitions.insert(name.clone(), self.registry.get(&name)?.definition());
         }
+        let stored_price: charging::Price =
+            serde_json::from_value(turn.try_get("price")?).map_err(|_| Error::Unavailable)?;
         let prepared = self
             .base
             .gateway
@@ -138,6 +140,8 @@ impl AgentService {
                 &definitions,
                 self.policy.allowed_tools.clone(),
                 &self.base.transport,
+                &stored_price,
+                principal.user_id,
             )
             .await
             .map_err(|_| Error::Unavailable)?;

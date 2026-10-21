@@ -21,6 +21,7 @@ pub enum CatalogError {
 /// Opaque server-injected proof. Only ModelGateway can create a serving surface.
 /// No URL, credential material, raw release, or NativePrincipal is serialized.
 pub struct CatalogSurface {
+    trust_pricing_enabled: std::sync::atomic::AtomicBool,
     state: SurfaceState,
 }
 
@@ -83,12 +84,71 @@ pub struct CatalogPricing {
 }
 
 impl CatalogSurface {
+    pub(super) fn enable_trust_pricing(&self) {
+        self.trust_pricing_enabled
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+    /// Called only after issuer ReadAuthority authentication, in its same
+    /// SERIALIZABLE transaction. An OAuth reader remains a reader, not a Key.
+    pub(crate) async fn project_for_user(
+        &self,
+        c: &mut sqlx::PgConnection,
+        user_id: i64,
+        groups: &[String],
+        resource: &str,
+        updated_at: u64,
+    ) -> Result<CatalogV1, CatalogError> {
+        let authority = if self
+            .trust_pricing_enabled
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            Some(
+                crate::billing::trust_pricing::quote_in_transaction(c, user_id)
+                    .await
+                    .map_err(|_| CatalogError::Unavailable)?,
+            )
+        } else {
+            None
+        };
+        let mut result = self.project(groups, resource, updated_at)?;
+        if let Some(authority) = authority {
+            let discount = authority.discount();
+            let one: Number = "1".parse().map_err(|_| CatalogError::Unavailable)?;
+            let display = super::pricing::scaled_number(Some(&one), discount)
+                .map_err(|_| CatalogError::Unavailable)?
+                .ok_or(CatalogError::Unavailable)?;
+            for model in &mut result.models {
+                model.pricing.trust_multiplier = Some(display.clone());
+                model.pricing.price_basis = "effective_user_rates";
+                for rate in [
+                    &mut model.pricing.input,
+                    &mut model.pricing.output,
+                    &mut model.pricing.cache_read,
+                    &mut model.pricing.cache_write,
+                    &mut model.pricing.request,
+                ] {
+                    *rate = super::pricing::scaled_number(rate.as_ref(), discount)
+                        .map_err(|_| CatalogError::Unavailable)?;
+                }
+            }
+        }
+        if serde_json::to_vec(&result)
+            .map_err(|_| CatalogError::Unavailable)?
+            .len()
+            > MAX_CATALOG_BYTES
+        {
+            return Err(CatalogError::Unavailable);
+        }
+        Ok(result)
+    }
+
     pub(super) fn from_gateway(
         router: Arc<Router>,
         credentials: &BTreeMap<(u64, u64), String>,
         total_timeout: Duration,
     ) -> Self {
         Self::load(router, credentials, total_timeout, None).unwrap_or(Self {
+            trust_pricing_enabled: std::sync::atomic::AtomicBool::new(false),
             state: SurfaceState::Disabled,
         })
     }
@@ -106,6 +166,7 @@ impl CatalogSurface {
             Some((policy, reserved_input_tokens)),
         )
         .unwrap_or(Self {
+            trust_pricing_enabled: std::sync::atomic::AtomicBool::new(false),
             state: SurfaceState::Disabled,
         })
     }
@@ -236,6 +297,7 @@ impl CatalogSurface {
             return Err(CatalogError::Unavailable);
         }
         Ok(Self {
+            trust_pricing_enabled: std::sync::atomic::AtomicBool::new(false),
             state: SurfaceState::Ready {
                 router,
                 version,
@@ -385,20 +447,13 @@ fn route_is_constructible(
         Protocol::OpenAiResponses => crate::relay::UpstreamProtocol::Responses,
         _ => return false,
     };
-    let Ok(mut endpoint) = reqwest::Url::parse(upstream.endpoint.as_str()) else {
+    // Match operation_endpoint's no-I/O URL boundary before the real relay
+    // constructor, including public-literal validation and explicit loopback.
+    let Ok(mut endpoint) =
+        crate::relay::honeypot_network::validate_base_url(upstream.endpoint.as_str(), true)
+    else {
         return false;
     };
-    if !endpoint
-        .host_str()
-        .and_then(|host| {
-            host.trim_matches(['[', ']'])
-                .parse::<std::net::IpAddr>()
-                .ok()
-        })
-        .is_some_and(|ip| ip.is_loopback())
-    {
-        return false;
-    }
     {
         let Ok(mut segments) = endpoint.path_segments_mut() else {
             return false;
@@ -760,6 +815,7 @@ mod tests {
         assert!(v.models.is_empty());
         assert!(v.groups.is_empty());
         let disabled = CatalogSurface {
+            trust_pricing_enabled: std::sync::atomic::AtomicBool::new(false),
             state: SurfaceState::Disabled,
         };
         assert!(matches!(
@@ -773,18 +829,16 @@ mod tests {
     }
 
     #[test]
-    fn external_missing_credentials_timeout_passthrough_and_inexact_charge_are_not_apis() {
+    fn missing_credentials_timeout_passthrough_and_inexact_charge_are_not_apis() {
         let (base, prices) = fixture("model");
-        for mode in 0..5 {
+        for mode in 1..5 {
             let mut r = base.clone();
             let mut p = prices.clone();
+            r.upstreams[0].endpoint = "https://synthetic.invalid/v1"
+                .to_owned()
+                .try_into()
+                .unwrap();
             match mode {
-                0 => {
-                    r.upstreams[0].endpoint = "https://synthetic.invalid/v1"
-                        .to_owned()
-                        .try_into()
-                        .unwrap()
-                }
                 1 => r.upstreams[0].credential.revision = 2,
                 2 => r.routes[0].targets[0].timeout_ms = 999,
                 3 => r.routes[0].targets[0].payload = PayloadPolicy::Passthrough,
@@ -798,6 +852,142 @@ mod tests {
                 catalog.groups.is_empty(),
                 "group without live model, mode {mode}"
             );
+        }
+    }
+    #[test]
+    fn configured_https_chat_and_responses_are_catalogued_without_provider_io() {
+        // The former mode=0 exclusion was a fixture restriction, not the
+        // gateway's production endpoint contract. Route::new is authoritative.
+        for protocol in [Protocol::OpenAiChat, Protocol::OpenAiResponses] {
+            for endpoint in [
+                "https://synthetic.invalid/v1",
+                "https://[2606:4700:4700::1111]:8443/v1",
+            ] {
+                let (mut r, p) = fixture("model");
+                r.upstreams[0].endpoint = endpoint.to_owned().try_into().unwrap();
+                r.upstreams[0].protocol = protocol;
+                let (_, s) = surface(r, p);
+                let catalog = view(&s);
+                assert_eq!(catalog.models.len(), 1);
+                assert_eq!(catalog.groups.len(), 1);
+                assert_eq!(
+                    catalog.models[0].apis,
+                    ["openai-completions", "openai-responses"]
+                );
+                assert_eq!(
+                    catalog.models[0]
+                        .pricing
+                        .input
+                        .as_ref()
+                        .unwrap()
+                        .to_string(),
+                    "2.5"
+                );
+                let wire = serde_json::to_string(&catalog).unwrap();
+                assert!(!wire.contains("synthetic.invalid/v1"));
+                assert!(!wire.contains("synthetic-only-not-a-provider-key"));
+            }
+        }
+    }
+    #[test]
+    fn https_recoverable_targets_must_all_pass_the_same_constructor_and_contract() {
+        for mode in 0..4 {
+            let (mut r, p) = fixture("model");
+            r.upstreams[0].endpoint = "https://synthetic.invalid/v1"
+                .to_owned()
+                .try_into()
+                .unwrap();
+            let mut other = r.upstreams[0].clone();
+            other.id = 2;
+            other.credential.id = 2;
+            r.upstreams.push(other);
+            let mut target = r.routes[0].targets[0].clone();
+            target.id = 2;
+            target.upstream_id = 2;
+            target.priority = 99;
+            match mode {
+                1 => target.timeout_ms = 999,
+                2 => target.payload = PayloadPolicy::Passthrough,
+                3 => target.upstream_model = "different-model".into(),
+                _ => {}
+            }
+            r.routes[0].targets.push(target);
+            let router =
+                Arc::new(Router::new(r, Arc::new(PriceSnapshot::compile(p).unwrap())).unwrap());
+            router
+                .set_health(
+                    router.version().unwrap(),
+                    2,
+                    crate::routing::HealthStatus::Unhealthy,
+                )
+                .unwrap();
+            let credentials = BTreeMap::from([
+                ((1, 1), "synthetic-only-first".into()),
+                (
+                    (2, 1),
+                    if mode == 0 {
+                        "synthetic\ninvalid-header".into()
+                    } else {
+                        "synthetic-only-second".into()
+                    },
+                ),
+            ]);
+            let surface =
+                CatalogSurface::from_gateway(router, &credentials, Duration::from_secs(1));
+            let catalog = view(&surface);
+            if mode == 2 {
+                // Chat's passthrough target is not selectable for Responses;
+                // retain the first Adapt target's actual Responses surface.
+                assert_eq!(catalog.models.len(), 1);
+                assert_eq!(catalog.models[0].apis, ["openai-responses"]);
+            } else {
+                assert!(catalog.models.is_empty(), "mode {mode}");
+            }
+        }
+    }
+    #[test]
+    fn https_catalog_fix_does_not_admit_insecure_urls_or_extra_protocols() {
+        for endpoint in [
+            "http://192.0.2.1/v1",
+            "http://synthetic.invalid/v1",
+            "ftp://synthetic.invalid/v1",
+            "https://user:pass@synthetic.invalid/v1",
+            "https://synthetic.invalid/v1?token=secret",
+            "https://synthetic.invalid/v1#fragment",
+        ] {
+            assert!(
+                crate::relay::Route::new(
+                    "synthetic".into(),
+                    crate::relay::UpstreamProtocol::Chat,
+                    endpoint,
+                    "model".into(),
+                    "synthetic-only",
+                    1
+                )
+                .is_err(),
+                "{endpoint}"
+            );
+        }
+        for endpoint in [
+            "https://10.0.0.1/v1",
+            "https://169.254.169.254/v1",
+            "https://[2001:db8::1]:8443/v1",
+            "https://[fe80::1]/v1",
+        ] {
+            let (mut r, p) = fixture("model");
+            r.upstreams[0].endpoint = endpoint.to_owned().try_into().unwrap();
+            let (_, surface) = surface(r, p);
+            assert!(view(&surface).models.is_empty(), "{endpoint}");
+        }
+        for protocol in [Protocol::AnthropicMessages, Protocol::Gemini] {
+            let (mut r, p) = fixture("model");
+            r.upstreams[0].endpoint = "https://synthetic.invalid/v1"
+                .to_owned()
+                .try_into()
+                .unwrap();
+            r.upstreams[0].protocol = protocol;
+            let (_, s) = surface(r, p);
+            assert!(view(&s).models.is_empty());
         }
     }
     #[test]

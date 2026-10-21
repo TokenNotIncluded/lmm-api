@@ -282,9 +282,11 @@ fn scalar_tariff() -> TieredTariff {
         source_digest: "af0d4b7d188d58f20f9eb13cef18353659ca208151824014795189b70dc0afd7".into(),
         uses_cache_read: false,
         uses_cache_write: false,
+        uses_cache_write_1h: false,
         tiers: vec![TokenTier {
             up_to_input_tokens: None,
             rates: TieredRates {
+                cache_write_1h: None,
                 input: DecimalRate {
                     numerator: 21,
                     denominator: 500,
@@ -358,6 +360,35 @@ fn systemone_scalar_tariff_helper_checks_real_decimal_dimensions() {
         );
     }
 }
+
+#[test]
+fn systemone_scalar_revision_two_is_rejected_by_the_existing_dispatch_qualification() {
+    let v1 = scalar_prices(scalar_tariff());
+    let old_quote = v1.quote("jev-native", "allowed", Speed::Standard).unwrap();
+    assert!(old_quote.is_input_only_scalar());
+    let old_price =
+        super::super::routing::credit_price(old_quote, "jev-native", "allowed").unwrap();
+    assert_eq!(
+        old_price
+            .cost(charging::Usage {
+                input: 100,
+                ..charging::Usage::default()
+            })
+            .unwrap(),
+        3
+    );
+
+    let mut tariff = scalar_tariff();
+    tariff.revision = 2;
+    let v2 = scalar_prices(tariff);
+    let quote = v2.quote("jev-native", "allowed", Speed::Standard).unwrap();
+    assert_eq!(quote.tiered().unwrap().revision(), 2);
+    // It remains a valid generic decimal tariff. System One's existing
+    // qualification is checked before provider preparation and reservation.
+    assert!(super::super::routing::credit_price(quote, "jev-native", "allowed").is_ok());
+    assert!(!quote.is_input_only_scalar());
+}
+
 #[sqlx::test(migrations = false)]
 async fn systemone_native_pg_decimal_scalar_dynamic_key_real_charge_and_no_replay(pool: PgPool) {
     let f = fixture(pool).await;

@@ -27,6 +27,10 @@ pub struct ExternalModelContext {
     /// explicitly defines absence as zero. Never infer this from vendor names.
     #[serde(default)]
     pub missing_cached_tokens_is_zero: bool,
+    /// Only an endpoint/model contract may establish that absent creation usage
+    /// means zero. This is independent of the cache-read absence convention.
+    #[serde(default)]
+    pub missing_cache_creation_tokens_is_zero: bool,
 }
 
 #[derive(Clone, Default)]
@@ -34,6 +38,12 @@ pub struct ProviderPolicy {
     contexts: BTreeMap<(u64, String), ExternalModelContext>,
 }
 impl ProviderPolicy {
+    pub(crate) fn missing_cache_creation_is_zero(&self, attempt: &Attempt) -> bool {
+        self.contexts
+            .get(&(attempt.upstream_id(), attempt.upstream_model().to_owned()))
+            .is_some_and(|context| context.missing_cache_creation_tokens_is_zero)
+    }
+
     pub fn new(
         contexts: Vec<ExternalModelContext>,
         reserved_input_tokens: i64,
@@ -375,6 +385,7 @@ mod tests {
 
     fn context() -> ExternalModelContext {
         ExternalModelContext {
+            missing_cache_creation_tokens_is_zero: false,
             upstream_id: 1,
             upstream_model: "bounded-model".into(),
             protocol: Protocol::OpenAiChat,

@@ -41,15 +41,7 @@ fn builtin_error(error: crate::tool_market::Error) -> Error {
     }
 }
 fn reservation(price: &Price) -> Result<i64> {
-    price.validate()?;
-    let quote = price
-        .image
-        .as_ref()
-        .ok_or(Error::Forbidden)?
-        .clone()
-        .restore()
-        .map_err(|_| Error::Invalid)?;
-    Ok(i64::from(quote.reservation_credits()))
+    price.reservation_ceiling(ReservationBasis::Image)
 }
 
 /// Lock and independently authenticate the persisted source before spending or
@@ -75,6 +67,7 @@ async fn image_source(c: &mut PgConnection, session: &str, id: &str) -> Result<I
     if actor.credential_kind != crate::identity::CredentialKind::Session {
         return Err(Error::Forbidden);
     }
+    price.validate_actor(actor.user_id)?;
     let version: i64 =
         sqlx::query_scalar("SELECT auth_version FROM core_identity.users WHERE id=$1 FOR SHARE")
             .bind(actor.user_id)
@@ -360,6 +353,7 @@ impl Charging {
             .ok_or(Error::NotFound)?;
         let frozen: Price =
             serde_json::from_value(r.try_get("price")?).map_err(|_| Error::Storage)?;
+        frozen.validate_actor(actor.user)?;
         let at = now(c).await?;
         if r.try_get::<String, _>("source_kind")? != "api_key"
             || r.try_get::<Option<i64>, _>("key_id")? != Some(actor.key)

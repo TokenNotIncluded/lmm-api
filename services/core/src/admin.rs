@@ -13,6 +13,7 @@ use serde::Deserialize;
 
 mod check_db;
 mod first_owner;
+mod schema_upgrade;
 pub use check_db::{invalid_arguments as invalid_check_db_arguments, run as check_database};
 use std::{
     error::Error,
@@ -33,11 +34,17 @@ pub enum Operation {
     BootstrapUser(Bootstrap),
     CreateFirstOwner(first_owner::Request),
     InstallUsageReceiptIndex([u8; 32]),
+    UpgradeDatabase(Box<lmm_core::core_schema::UpgradeRequest>),
     PlanAdminActivation(PlanAdminActivationRequest),
     ApplyAdminActivation(Box<ApplyAdminActivationRequest>),
 }
 
 impl Operation {
+    pub fn upgrade_database(input: impl Read) -> io::Result<Self> {
+        lmm_core::core_schema::UpgradeRequest::read(input)
+            .map(|request| Self::UpgradeDatabase(Box::new(request)))
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))
+    }
     pub fn create_first_owner(input: impl Read) -> io::Result<Self> {
         first_owner::read(input).map(Self::CreateFirstOwner)
     }
@@ -103,6 +110,10 @@ fn approval_io(error: ApprovalError) -> io::Error {
 }
 
 pub async fn run(operation: Operation) -> Result<(), Box<dyn Error>> {
+    // This branch connects directly, before creating any pool/IdentityStore.
+    if let Operation::UpgradeDatabase(request) = &operation {
+        return schema_upgrade::run((**request).clone()).await;
+    }
     let url = config::database_url()?.ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -112,6 +123,7 @@ pub async fn run(operation: Operation) -> Result<(), Box<dyn Error>> {
     let pool = config::database_pool(&url).await?;
     let store = IdentityStore::from_pool(pool.clone());
     match operation {
+        Operation::UpgradeDatabase(_) => unreachable!("dedicated schema upgrade returned above"),
         Operation::InstallUsageReceiptIndex(prior) => {
             lmm_core::core_schema::install_usage_receipt_index(&pool, prior).await?;
             println!("Usage receipt index installed; schema receipts verified atomically.");

@@ -147,6 +147,36 @@ Task 03 should persist the routing version, price version, price rule ID, both
 multipliers and normalized usage with its request accounting evidence. No ledger
 or billing mutation is implemented by this module.
 
+### Decimal token tariffs
+
+`billing_mode = "tiered_decimal"` carries an exact rational tariff, independently
+of the integer `TokenRates` placeholders. Revision 1 keeps its text/cache-read
+contract and rejects cache creation. Revision 2 adds the source `cc` price through
+`cache_write`, and an optional `cache_write_1h` rate with the matching
+`uses_cache_write_1h` flag. A referenced zero-price category still changes prompt
+normalization; removing `cc * 0` from an imported expression changes its meaning.
+
+The inclusive input total chooses the context tier. For inclusive APIs, `cc` is
+the aggregate creation count and `cc1h` is zero. For Anthropic, prompt input
+excludes cache reads and all creation; `cc` and `cc1h` are distinct five-minute and
+one-hour counts. A known aggregate plus either TTL determines the other by exact
+subtraction. A positive aggregate without either TTL remains unknown. Inconsistent
+or overlapping disjoint counters are rejected rather than clamped into a price.
+
+Revision 2 freezes the selected provider's reviewed
+`missing_cache_creation_tokens_is_zero` policy in the persisted quote as
+`missing_cache_creation_is_zero`. It defaults to false, is independent of the
+cache-read absence policy, and cannot come from an HTTP request or a model name.
+Recovery uses that original policy, rates and input semantics. It does not read
+today's provider policy or use supplier-reported cost as the user's tariff.
+
+Both revisions sum exact decimal terms and round the final credit amount half
+upwards with the positive one-credit minimum. Reservation rounds upwards and
+considers every tier and every cache split, including one-hour writes. These
+rules do not claim bit equivalence with legacy intermediate floating-point
+arithmetic. Media, calendar/request expressions and tool surcharges need their
+own supported contracts; adding cache creation does not enable them.
+
 ## Publication, persistence and recovery
 
 The offline initializer must explicitly install `schema/routing.sql` in its fresh

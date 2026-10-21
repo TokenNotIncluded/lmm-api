@@ -615,6 +615,7 @@ async fn output_checkpoint_exact_replay_conflict_worker_binding_and_immutability
         id: request_id.into(),
         fingerprint: [17; 32],
         price: ChargingPrice {
+            user_trust: None,
             image: None,
             upstream_cost_group_ppm: None,
             tiered: None,
@@ -652,6 +653,7 @@ async fn output_checkpoint_exact_replay_conflict_worker_binding_and_immutability
             request_id,
             &worker,
             ChargingUsage {
+                cache_creation: None,
                 image: None,
                 upstream_cost_atto_usd: None,
                 input: 10,

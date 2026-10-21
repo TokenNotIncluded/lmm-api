@@ -110,6 +110,15 @@ impl From<charging::Error> for Error {
         }
     }
 }
+impl From<crate::billing::trust_pricing::Error> for Error {
+    fn from(error: crate::billing::trust_pricing::Error) -> Self {
+        match error {
+            crate::billing::trust_pricing::Error::Denied => Self::Forbidden,
+            crate::billing::trust_pricing::Error::Retry => Self::Conflict,
+            _ => Self::Unavailable,
+        }
+    }
+}
 #[derive(Clone, Debug)]
 pub struct Conversation {
     pub creation_key: String,
@@ -243,8 +252,12 @@ impl AssistantModel {
             .assistant_quote(&policy.model, &policy.group)
             .map_err(|_| Error::Unavailable)?;
         let capacity = gateway.assistant_parallelism();
+        let charging = Charging::new(pool.clone(), Arc::new(TransactionalLedger));
+        if gateway.trust_pricing_enabled() {
+            charging.enable_trust_pricing();
+        }
         Ok(Self {
-            charging: Charging::new(pool.clone(), Arc::new(TransactionalLedger)),
+            charging,
             pool,
             gateway,
             policy,
@@ -314,6 +327,24 @@ impl AssistantModel {
             sqlx::query(s).execute(&mut *t).await?;
         }
         Ok(t)
+    }
+    async fn quote_in_transaction(
+        &self,
+        c: &mut PgConnection,
+        actor: &identity::Principal,
+    ) -> Result<charging::Price, Error> {
+        let price = self
+            .gateway
+            .assistant_quote(&self.policy.model, &self.policy.group)
+            .map_err(|_| Error::Unavailable)?;
+        if !self.charging.trust_pricing_enabled() && !self.gateway.trust_pricing_enabled() {
+            return Ok(price);
+        }
+        self.charging.enable_trust_pricing();
+        let authority = crate::billing::trust_pricing::quote_in_transaction(c, actor.user_id)
+            .await
+            .map_err(Error::from)?;
+        price.with_user_authority(&authority).map_err(Error::from)
     }
     pub async fn conversation(
         &self,
@@ -397,10 +428,7 @@ impl AssistantModel {
                 .admit(&mut tx, a.user_id, a.owner_account_id, 0)
                 .await?;
         }
-        let price = self
-            .gateway
-            .assistant_quote(&self.policy.model, &self.policy.group)
-            .map_err(|_| Error::Unavailable)?;
+        let price = self.quote_in_transaction(&mut tx, &a).await?;
         let now = at(&mut tx).await?;
         let id = random("lmm_ad_");
         let version: i64 =
@@ -578,6 +606,8 @@ impl AssistantModel {
         } else {
             None
         };
+        let stored_price: charging::Price =
+            serde_json::from_value(row.try_get("price")?).map_err(|_| Error::Unavailable)?;
         let prepared = self
             .gateway
             .prepare_assistant(
@@ -587,6 +617,8 @@ impl AssistantModel {
                 Value::Array(messages),
                 &self.transport,
                 gift_cap,
+                &stored_price,
+                a.user_id,
             )
             .await
             .map_err(|_| Error::Unavailable)?;
@@ -645,5 +677,24 @@ impl AssistantModel {
             service.operation(&original, &binding).await
         });
         task.await.map_err(|_| Error::Unavailable)?
+    }
+}
+
+#[cfg(test)]
+mod trust_error_tests {
+    use super::Error;
+    use crate::billing::trust_pricing;
+
+    #[test]
+    fn trust_retry_preserves_whole_transaction_conflict_semantics() {
+        assert_eq!(Error::from(trust_pricing::Error::Retry), Error::Conflict);
+        assert_eq!(Error::from(trust_pricing::Error::Denied), Error::Forbidden);
+        for error in [
+            trust_pricing::Error::Invalid,
+            trust_pricing::Error::Unavailable,
+            trust_pricing::Error::Storage,
+        ] {
+            assert_eq!(Error::from(error), Error::Unavailable);
+        }
     }
 }

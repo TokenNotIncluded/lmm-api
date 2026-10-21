@@ -48,12 +48,23 @@ impl ModelGateway {
         installed_definitions: &BTreeMap<String, Value>,
         allowed_names: BTreeSet<String>,
         transport: &crate::relay::provider_network::ProviderTransport,
+        stored_price: &crate::billing::charging::Price,
+        actor_user_id: i64,
     ) -> Result<PreparedAgent, RelayError> {
         if installed_definitions.len() > 72 || allowed_names.len() > 72 {
             return Err(RelayError::Invalid("agent tool count"));
         }
         let mut inner = self
-            .prepare_assistant(model, group, max_output, messages, transport, None)
+            .prepare_assistant(
+                model,
+                group,
+                max_output,
+                messages,
+                transport,
+                None,
+                stored_price,
+                actor_user_id,
+            )
             .await?;
         let mut tools = Vec::new();
         for (name, definition) in installed_definitions {

@@ -1,0 +1,77 @@
+package model
+
+import (
+	"context"
+	"fmt"
+	"github.com/shopspring/decimal"
+	"math"
+)
+
+// Read-only adapter over the ORIGINAL NET projector. No price/wallet mutation.
+func ExportTrustPricingBasis(users []UserBase) (map[string]any, error) {
+	ids := make([]int, 0, len(users))
+	for _, u := range users {
+		ids = append(ids, u.Id)
+	}
+	aggregates, err := getFreshPaidTopUpAggregatesContext(context.Background(), ids)
+	if err != nil {
+		return nil, err
+	}
+	net, args, err := trustPaidCreditSQL(DB)
+	if err != nil {
+		return nil, err
+	}
+	gross, grossArgs, _, err := legacyPaidPolicyCreditedQuotaSQL()
+	if err != nil {
+		return nil, err
+	}
+	grossArgs[len(grossArgs)-1] = int64(500000)
+	type order struct {
+		SourceOrderID int
+		UserID        int
+		NetCredits    decimal.NullDecimal
+		PaidAt        int64
+	}
+	var rows []order
+	query := DB.Model(&TopUp{}).Select("id AS source_order_id,user_id,("+net+") AS net_credits,CASE WHEN complete_time>0 THEN complete_time ELSE create_time END AS paid_at", args...).Where("user_id IN ?", ids).Where("("+gross+")>0", grossArgs...).Order("id")
+	if err = successfulExternalPaidTopUpQuery(query).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	orders := map[int][]map[string]any{}
+	sums := map[int]int64{}
+	counts := map[int]int64{}
+	last := map[int]int64{}
+	for _, r := range rows {
+		if !r.NetCredits.Valid || r.NetCredits.Decimal.IsNegative() || !r.NetCredits.Decimal.Equal(r.NetCredits.Decimal.Truncate(0)) || r.NetCredits.Decimal.GreaterThan(decimal.NewFromInt(math.MaxInt64)) {
+			if !aggregates[r.UserID].ProjectionUnavailable {
+				return nil, fmt.Errorf("inconsistent NET projection")
+			}
+			continue
+		}
+		n := r.NetCredits.Decimal.IntPart()
+		if n > math.MaxInt64-sums[r.UserID] {
+			return nil, fmt.Errorf("NET overflow")
+		}
+		sums[r.UserID] += n
+		orders[r.UserID] = append(orders[r.UserID], map[string]any{"source_order_id": r.SourceOrderID, "net_credits": n, "paid_at": r.PaidAt})
+		if n > 0 {
+			counts[r.UserID]++
+			if r.PaidAt > last[r.UserID] {
+				last[r.UserID] = r.PaidAt
+			}
+		}
+	}
+	result := []map[string]any{}
+	for _, u := range users {
+		a := aggregates[u.Id]
+		if !a.ProjectionUnavailable && (a.PaidCredits != sums[u.Id] || a.PaidRows != counts[u.Id] || a.LastPaidCompleteAt != last[u.Id]) {
+			return nil, fmt.Errorf("NET aggregate mismatch")
+		}
+		list := orders[u.Id]
+		if list == nil {
+			list = []map[string]any{}
+		}
+		result = append(result, map[string]any{"source_user_id": u.Id, "original_created_at": u.CreatedAt, "console_activated_at": u.ConsoleActivatedAt, "last_api_activity_at": u.LastAPIActivityAt, "override_level": u.TrustLevelOverride, "projection_known": !a.ProjectionUnavailable, "orders": list})
+	}
+	return map[string]any{"version": 1, "legacy_policy": GetTrustLevelConfiguration(), "users": result}, nil
+}

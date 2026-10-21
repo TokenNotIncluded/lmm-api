@@ -105,6 +105,9 @@ impl LmmIssuer {
         access: &str,
     ) -> std::result::Result<crate::model_http::CatalogV1, ReadError> {
         let mut tx = transaction(&self.identity.pool).await?;
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+            .execute(&mut *tx)
+            .await?;
         let actor = self.authorize_read(&mut tx, access, "catalog:read").await?;
         let surface = self
             .catalog_surface
@@ -116,7 +119,14 @@ impl LmmIssuer {
                 .await?;
         let updated_at = u64::try_from(updated_at).map_err(|_| ReadError::Unavailable)?;
         let result = surface
-            .project(&actor.groups, self.profile.resource(), updated_at)
+            .project_for_user(
+                &mut tx,
+                actor.user,
+                &actor.groups,
+                self.profile.resource(),
+                updated_at,
+            )
+            .await
             .map_err(|_| ReadError::Unavailable)?;
         tx.commit().await?;
         Ok(result)

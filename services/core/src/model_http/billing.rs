@@ -226,6 +226,7 @@ impl Billing for Bridge {
                     .max(conservative.cached_per_million);
                 conservative
                     .cost(Usage {
+                        cache_creation: None,
                         image: None,
                         upstream_cost_atto_usd: Some(crate::upstream_cost::ATTO_USD),
                         input: selected.input_token_ceiling,
@@ -243,6 +244,16 @@ impl Billing for Bridge {
                     .map_err(|_| RelayError::BillingUnavailable)?;
                 i64::try_from(reserve.0).map_err(|_| RelayError::BillingUnavailable)?
             };
+            let basis = if selected.price.upstream_cost_group_ppm.is_some() {
+                charging::ReservationBasis::UpstreamCost {
+                    atto_usd: crate::upstream_cost::ATTO_USD,
+                }
+            } else {
+                charging::ReservationBasis::Tokens {
+                    input: selected.input_token_ceiling as u64,
+                    output: u64::from(request.max_output_tokens),
+                }
+            };
             let spec = charging::Request {
                 id: context.request_id.clone(),
                 fingerprint,
@@ -254,11 +265,13 @@ impl Billing for Bridge {
             let charge = retry_reserve(|| async {
                 if let Some(issuer) = &oauth_issuer {
                     self.charging
-                        .reserve_oauth_with_context(issuer, &secret, &spec, &worker, peer)
+                        .reserve_model_oauth_with_context(
+                            issuer, &secret, &spec, &worker, peer, basis,
+                        )
                         .await
                 } else {
                     self.charging
-                        .reserve_with_context(&secret, &spec, &worker, peer)
+                        .reserve_model_with_context(&secret, &spec, &worker, peer, basis)
                         .await
                 }
             })
@@ -270,6 +283,7 @@ impl Billing for Bridge {
             {
                 return Err(RelayError::Forbidden);
             }
+            self.freeze_selected_price(&spec.id, &charge)?;
             if !selected.attempt.is_available() {
                 let _ = retry(|| self.charging.release(&spec.id, &worker)).await;
                 return Err(RelayError::RouteUnavailable);
@@ -363,7 +377,25 @@ impl Billing for Bridge {
                         }
                         (usage, Outcome::Completed)
                     } else {
-                        let usage = complete_usage(report.usage, false)?;
+                        let usage = if selected
+                            .price
+                            .tiered
+                            .as_ref()
+                            .is_some_and(|t| t.tariff.revision == 2)
+                        {
+                            complete_cache_usage(
+                                report.usage,
+                                selected.price.tiered.as_ref().unwrap().input_semantics,
+                                selected
+                                    .price
+                                    .tiered
+                                    .as_ref()
+                                    .unwrap()
+                                    .missing_cache_creation_is_zero,
+                            )?
+                        } else {
+                            complete_usage(report.usage, false)?
+                        };
                         if usage.input > selected.input_token_ceiling
                             || usage.output > i64::from(output_ceiling)
                         {
@@ -371,24 +403,33 @@ impl Billing for Bridge {
                         }
                         // The legacy ledger must agree with the captured exact quote.
                         // Never reinterpret a price or a missing receipt at settlement.
-                        let disjoint = crate::routing::Usage::from_totals(
-                            usage.input as u64,
-                            usage.output as u64,
-                            usage.cached as u64,
-                            0,
-                        )
+                        let quoted = if let Some(tariff) = &selected.price.tiered {
+                            selected.quote.charge_tiered_usage(
+                                crate::routing::TieredUsage {
+                                    input: usage.input as u64,
+                                    cached: usage.cached as u64,
+                                    output: usage.output as u64,
+                                    created: usage.cache_creation.map_or(0, |v| v.total as u64),
+                                    created_5m: usage
+                                        .cache_creation
+                                        .and_then(|v| v.five_minute.map(|v| v as u64)),
+                                    created_1h: usage
+                                        .cache_creation
+                                        .and_then(|v| v.one_hour.map(|v| v as u64)),
+                                },
+                                tariff.input_semantics,
+                            )
+                        } else {
+                            let disjoint = crate::routing::Usage::from_totals(
+                                usage.input as u64,
+                                usage.output as u64,
+                                usage.cached as u64,
+                                0,
+                            )
+                            .map_err(|_| RelayError::SettlementPending)?;
+                            selected.quote.charge(disjoint)
+                        }
                         .map_err(|_| RelayError::SettlementPending)?;
-                        let quoted =
-                            selected
-                                .quote
-                                .charge_with_semantics(
-                                    disjoint,
-                                    selected.price.tiered.as_ref().map_or(
-                                        crate::routing::InputSemantics::Inclusive,
-                                        |tariff| tariff.input_semantics,
-                                    ),
-                                )
-                                .map_err(|_| RelayError::SettlementPending)?;
                         let ledger = selected.price.cost(usage).map_err(error)?;
                         if i64::try_from(quoted.0).ok() != Some(ledger) {
                             return Err(RelayError::SettlementPending);
@@ -565,9 +606,13 @@ pub(super) fn complete_usage(
         .validate()
         .map_err(|_| RelayError::SettlementPending)?;
     if !upstream_cost
-        && observed
+        && (observed
             .cache_creation_input_tokens
             .is_some_and(|value| value != 0)
+            || observed.cache_creation_details.is_some_and(|details| {
+                details.ephemeral_5m_input_tokens.is_some_and(|v| v != 0)
+                    || details.ephemeral_1h_input_tokens.is_some_and(|v| v != 0)
+            }))
     {
         return Err(RelayError::SettlementPending);
     }
@@ -589,10 +634,85 @@ pub(super) fn complete_usage(
     Ok(Usage {
         image: None,
         upstream_cost_atto_usd,
+        cache_creation: None,
         input,
         cached,
         output,
     })
+}
+
+/// Revision 2 preserves aggregate creation and the independently reported TTL
+/// buckets. Missing measurements remain pending unless the selected supplier's
+/// reviewed contract proves absence means zero.
+pub(super) fn complete_cache_usage(
+    observed: crate::relay::Usage,
+    semantics: crate::routing::InputSemantics,
+    missing_creation_is_zero: bool,
+) -> Result<Usage, RelayError> {
+    observed
+        .validate()
+        .map_err(|_| RelayError::SettlementPending)?;
+    let integer = |v: u64| i64::try_from(v).map_err(|_| RelayError::SettlementPending);
+    let total = match observed.cache_creation_input_tokens {
+        Some(value) => integer(value)?,
+        None if missing_creation_is_zero && observed.cache_creation_details.is_none() => 0,
+        None => return Err(RelayError::SettlementPending),
+    };
+    let details = observed.cache_creation_details;
+    let mut five_minute = details
+        .and_then(|v| v.ephemeral_5m_input_tokens)
+        .map(integer)
+        .transpose()?;
+    let mut one_hour = details
+        .and_then(|v| v.ephemeral_1h_input_tokens)
+        .map(integer)
+        .transpose()?;
+    if total == 0 {
+        // An authoritative aggregate zero proves both disjoint subsets zero.
+        five_minute = Some(0);
+        one_hour = Some(0);
+    } else if let Some(five) = five_minute
+        && one_hour.is_none()
+    {
+        one_hour = Some(
+            total
+                .checked_sub(five)
+                .ok_or(RelayError::SettlementPending)?,
+        );
+    } else if let Some(hour) = one_hour
+        && five_minute.is_none()
+    {
+        five_minute = Some(
+            total
+                .checked_sub(hour)
+                .ok_or(RelayError::SettlementPending)?,
+        );
+    }
+    if semantics == crate::routing::InputSemantics::AnthropicText
+        && (five_minute.is_none() || one_hour.is_none())
+    {
+        return Err(RelayError::SettlementPending);
+    }
+    let usage = Usage {
+        image: None,
+        upstream_cost_atto_usd: None,
+        cache_creation: Some(charging::CacheCreationUsage {
+            total,
+            five_minute,
+            one_hour,
+        }),
+        input: integer(observed.input_tokens.ok_or(RelayError::SettlementPending)?)?,
+        cached: integer(observed.cached_input_tokens.unwrap_or(0))?,
+        output: integer(
+            observed
+                .output_tokens
+                .ok_or(RelayError::SettlementPending)?,
+        )?,
+    };
+    if !usage.valid() {
+        return Err(RelayError::SettlementPending);
+    }
+    Ok(usage)
 }
 
 /// Only the original operation and its immutable price can confirm a lost ACK.
@@ -976,6 +1096,7 @@ mod a07_billing_tests {
             owner_account_id: 3,
             payer_account_id: 3,
             price: charging::Price {
+                user_trust: None,
                 image: None,
                 upstream_cost_group_ppm: None,
                 tiered: None,
@@ -993,6 +1114,7 @@ mod a07_billing_tests {
             state: "settled".into(),
             reserved: 100,
             usage: Usage {
+                cache_creation: None,
                 image: None,
                 upstream_cost_atto_usd: None,
                 input: 10,
@@ -1054,6 +1176,7 @@ mod a07_billing_tests {
         assert_eq!(
             complete_usage(
                 Observed {
+                    cache_creation_details: None,
                     upstream_cost_atto_usd: None,
                     input_tokens: Some(10),
                     output_tokens: Some(20),
@@ -1064,6 +1187,7 @@ mod a07_billing_tests {
                 false,
             ),
             Ok(Usage {
+                cache_creation: None,
                 image: None,
                 upstream_cost_atto_usd: None,
                 input: 10,
@@ -1076,6 +1200,7 @@ mod a07_billing_tests {
     #[test]
     fn complete_usage_rejects_cache_creation_for_token_pricing_even_with_reported_cost() {
         let observed = Observed {
+            cache_creation_details: None,
             upstream_cost_atto_usd: Some(123_456_789_000_000_000),
             input_tokens: Some(10),
             output_tokens: Some(20),
@@ -1092,6 +1217,7 @@ mod a07_billing_tests {
     #[test]
     fn complete_usage_strips_reported_cost_for_token_pricing() {
         let observed = Observed {
+            cache_creation_details: None,
             upstream_cost_atto_usd: Some(123_456_789_000_000_000),
             input_tokens: Some(10),
             output_tokens: Some(20),
@@ -1102,6 +1228,7 @@ mod a07_billing_tests {
         assert_eq!(
             complete_usage(observed, false),
             Ok(Usage {
+                cache_creation: None,
                 image: None,
                 upstream_cost_atto_usd: None,
                 input: 10,
@@ -1116,6 +1243,7 @@ mod a07_billing_tests {
         assert_eq!(
             complete_usage(
                 Observed {
+                    cache_creation_details: None,
                     upstream_cost_atto_usd: Some(123_456_789_000_000_000),
                     input_tokens: Some(10),
                     output_tokens: Some(20),
@@ -1126,6 +1254,7 @@ mod a07_billing_tests {
                 true,
             ),
             Ok(Usage {
+                cache_creation: None,
                 image: None,
                 upstream_cost_atto_usd: Some(123_456_789_000_000_000),
                 input: 10,
@@ -1174,6 +1303,98 @@ mod a07_billing_tests {
         .await;
         assert_eq!(result, Err(charging::Error::CommitUnknown));
         assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn cache_v2_requires_real_ttls_and_keeps_unknown_creation_pending() {
+        use crate::relay::{CacheCreationDetails, Usage as Observed};
+        use crate::routing::InputSemantics;
+        let observed = Observed {
+            input_tokens: Some(100),
+            output_tokens: Some(5),
+            cached_input_tokens: Some(20),
+            cache_creation_input_tokens: Some(70),
+            cache_creation_details: Some(CacheCreationDetails {
+                ephemeral_5m_input_tokens: Some(30),
+                ephemeral_1h_input_tokens: Some(40),
+            }),
+            ..Observed::default()
+        };
+        let usage = complete_cache_usage(observed, InputSemantics::AnthropicText, false).unwrap();
+        assert_eq!(
+            usage.cache_creation,
+            Some(charging::CacheCreationUsage {
+                total: 70,
+                five_minute: Some(30),
+                one_hour: Some(40),
+            })
+        );
+        for details in [
+            CacheCreationDetails {
+                ephemeral_5m_input_tokens: None,
+                ephemeral_1h_input_tokens: Some(40),
+            },
+            CacheCreationDetails {
+                ephemeral_5m_input_tokens: Some(30),
+                ephemeral_1h_input_tokens: None,
+            },
+        ] {
+            assert_eq!(
+                complete_cache_usage(
+                    Observed {
+                        cache_creation_details: Some(details),
+                        ..observed
+                    },
+                    InputSemantics::AnthropicText,
+                    false
+                )
+                .unwrap(),
+                usage
+            );
+        }
+        assert_eq!(
+            complete_usage(observed, false),
+            Err(RelayError::SettlementPending)
+        );
+        let aggregate_only = Observed {
+            cache_creation_details: None,
+            ..observed
+        };
+        assert_eq!(
+            complete_cache_usage(aggregate_only, InputSemantics::AnthropicText, false),
+            Err(RelayError::SettlementPending)
+        );
+        assert!(complete_cache_usage(aggregate_only, InputSemantics::Inclusive, false).is_ok());
+        let unknown = Observed {
+            cache_creation_input_tokens: None,
+            cache_creation_details: None,
+            ..observed
+        };
+        assert_eq!(
+            complete_cache_usage(unknown, InputSemantics::Inclusive, false),
+            Err(RelayError::SettlementPending)
+        );
+        assert_eq!(
+            complete_cache_usage(unknown, InputSemantics::Inclusive, true)
+                .unwrap()
+                .cache_creation
+                .unwrap()
+                .total,
+            0
+        );
+        let zero = Observed {
+            cache_creation_input_tokens: Some(0),
+            cache_creation_details: None,
+            ..observed
+        };
+        assert_eq!(
+            complete_cache_usage(zero, InputSemantics::AnthropicText, false)
+                .unwrap()
+                .cache_creation
+                .unwrap()
+                .one_hour,
+            Some(0)
+        );
     }
 
     #[tokio::test]

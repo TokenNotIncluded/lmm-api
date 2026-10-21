@@ -101,6 +101,7 @@ fn contexts(small_input: i64) -> Vec<ExternalModelContext> {
     ]
     .into_iter()
     .map(|(model, input, output)| ExternalModelContext {
+        missing_cache_creation_tokens_is_zero: false,
         upstream_id: 1,
         upstream_model: model.into(),
         protocol: Protocol::OpenAiChat,

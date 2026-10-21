@@ -409,9 +409,11 @@ impl NativeEncoder {
             .checked_sub(read)
             .and_then(|n| n.checked_sub(write))
             .ok_or(RelayError::Protocol("invalid cache usage"))?;
-        Ok(
-            json!({"input_tokens":uncached,"output_tokens":self.usage.output_tokens.ok_or(RelayError::Protocol("missing output usage"))?,"cache_read_input_tokens":read,"cache_creation_input_tokens":write}),
-        )
+        let mut value = json!({"input_tokens":uncached,"output_tokens":self.usage.output_tokens.ok_or(RelayError::Protocol("missing output usage"))?,"cache_read_input_tokens":read,"cache_creation_input_tokens":write});
+        if let Some(details) = self.usage.cache_creation_details {
+            value["cache_creation"] = json!(details);
+        }
+        Ok(value)
     }
     fn content(&self, i: usize, empty: bool) -> Result<Value, RelayError> {
         let b = &self.blocks[i];
@@ -683,6 +685,36 @@ mod tests {
             cached_input_tokens: Some(5),
             cache_creation_input_tokens: Some(3),
             ..Usage::default()
+        }
+    }
+    #[test]
+    fn native_anthropic_cache_creation_details_preserve_only_present_dimensions() {
+        for details in [
+            Some(super::super::CacheCreationDetails {
+                ephemeral_5m_input_tokens: Some(1),
+                ephemeral_1h_input_tokens: Some(2),
+            }),
+            Some(super::super::CacheCreationDetails {
+                ephemeral_5m_input_tokens: Some(0),
+                ephemeral_1h_input_tokens: None,
+            }),
+            Some(super::super::CacheCreationDetails::default()),
+            None,
+        ] {
+            for stream in [false, true] {
+                let mut encoder = NativeEncoder::new("claude", "req", stream, &Limits::default());
+                encoder.usage = Usage {
+                    cache_creation_details: details,
+                    ..usage()
+                };
+                let wire = encoder.native_usage().unwrap();
+                assert_eq!(
+                    wire.get("cache_creation").cloned(),
+                    details.map(|v| json!(v))
+                );
+                assert_eq!(wire["input_tokens"], 12);
+                assert_eq!(wire["cache_creation_input_tokens"], 3);
+            }
         }
     }
     fn finish(e: &mut NativeEncoder, reason: FinishReason) {
