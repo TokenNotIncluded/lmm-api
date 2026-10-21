@@ -99,12 +99,14 @@ export function RequestBuilder() {
 
   const pricingQuery = useQuery({
     queryKey: pricingQueryKey(user?.id, session?.sid),
-    queryFn: ({ signal }) => getPricing(signal),
+    queryFn: ({ signal }) =>
+      getPricing(signal, { userId: user?.id, sessionId: session?.sid }),
     staleTime: 5 * 60_000,
     retry: false,
   })
 
   const modelOptions = useMemo(() => {
+    if (pricingQuery.isError) return []
     const config = MODEL_OPTIONS[protocol]
     const liveModels =
       pricingQuery.data?.data
@@ -118,7 +120,7 @@ export function RequestBuilder() {
 
     const uniqueModels = [...new Set(liveModels)]
     return sortModels(uniqueModels)
-  }, [pricingQuery.data?.data, protocol])
+  }, [pricingQuery.data?.data, pricingQuery.isError, protocol])
 
   useEffect(() => {
     if (!model && modelOptions.length > 0) {

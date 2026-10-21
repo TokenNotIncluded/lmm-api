@@ -83,10 +83,197 @@ test('native pricing parses the direct versioned document and keeps group rates 
   assert.equal(model.performance_available, false)
 })
 
+test('public group prices retain not-evaluated account context without inventing a discount', () => {
+  const input = fixture()
+  input.rate_basis = 'base_group_rate'
+  input.user_price = { status: 'not_evaluated' }
+  for (const row of input.models) {
+    if (row.token_price) row.token_price.rate_basis = 'base_group_rate'
+  }
+  const pricing = adaptNativePricing(nativePricingSchema.parse(input))
+  assert.deepEqual(pricing.pricing_context, {
+    rate_basis: 'base_group_rate',
+    user_price: { status: 'not_evaluated' },
+  })
+  assert.deepEqual(pricing.data[0]?.pricing_context, pricing.pricing_context)
+  const model = pricing.data[0]
+  assert.ok(model)
+  assert.equal(formatPrice(model, 'input', 'M', 'USD', 'standard'), '2 USD')
+})
+
+test('verified account rates are already discounted and are never multiplied again', () => {
+  const input = fixture()
+  input.visibility = 'session'
+  input.rate_basis = 'effective_user_rate'
+  input.user_price = {
+    status: 'verified',
+    multiplier: { numerator: '97', denominator: '100' },
+  }
+  for (const row of input.models) {
+    if (row.token_price) {
+      row.token_price.rate_basis = 'effective_user_rate'
+      row.token_price.input = 1.94
+      row.token_price.output = 0
+      row.token_price.cache_read = null
+    }
+  }
+  const pricing = adaptNativePricing(nativePricingSchema.parse(input))
+  const model = pricing.data[0]
+  assert.ok(model)
+  assert.deepEqual(model.pricing_context?.user_price, input.user_price)
+  assert.equal(formatPrice(model, 'input', 'M', 'USD', 'standard'), '1.94 USD')
+  assert.equal(
+    formatGroupPrice(model, 'premium', 'input', 'M', 'USD', { premium: 500 }),
+    '1.94 USD'
+  )
+  assert.equal(formatPrice(model, 'output', 'M', 'USD', 'standard'), '0 USD')
+  assert.equal(formatPrice(model, 'cache', 'M', 'USD', 'standard'), '-')
+})
+
+test('missing, mismatched or fabricated account pricing fails at the external boundary', () => {
+  const input = fixture()
+  const base = {
+    ...input,
+    rate_basis: 'base_group_rate',
+    user_price: { status: 'not_evaluated' },
+    models: [],
+  }
+  const session = {
+    ...base,
+    visibility: 'session',
+    rate_basis: 'effective_user_rate',
+    user_price: {
+      status: 'verified',
+      multiplier: { numerator: '97', denominator: '100' },
+    },
+  }
+  assert.equal(nativePricingSchema.safeParse(base).success, true)
+  assert.equal(nativePricingSchema.safeParse(session).success, true)
+  for (const bad of [
+    { ...base, user_price: undefined },
+    {
+      ...base,
+      user_price: {
+        status: 'verified',
+        multiplier: { numerator: '1', denominator: '1' },
+      },
+    },
+    {
+      ...base,
+      user_price: {
+        status: 'not_evaluated',
+        multiplier: { numerator: '1', denominator: '1' },
+      },
+    },
+    { ...session, visibility: 'public' },
+    { ...session, user_price: { status: 'not_evaluated' } },
+    { ...session, user_price: null },
+    { ...session, user_price: { status: 'verified', multiplier: null } },
+    {
+      ...session,
+      user_price: {
+        status: 'verified',
+        multiplier: { numerator: '0', denominator: '1' },
+      },
+    },
+    {
+      ...session,
+      user_price: {
+        status: 'verified',
+        multiplier: { numerator: '1', denominator: '0' },
+      },
+    },
+    {
+      ...session,
+      user_price: {
+        status: 'verified',
+        multiplier: { numerator: '0.97', denominator: '1' },
+      },
+    },
+    {
+      ...session,
+      user_price: {
+        status: 'verified',
+        multiplier: { numerator: '101', denominator: '100' },
+      },
+    },
+    {
+      ...session,
+      user_price: {
+        status: 'verified',
+        multiplier: { numerator: '1', denominator: '1000000000000000001' },
+      },
+    },
+    { ...base, models: input.models },
+  ]) {
+    assert.equal(nativePricingSchema.safeParse(bad).success, false)
+  }
+  // Historical documents remain unverified, never a substitute for account pricing.
+  assert.equal(nativePricingSchema.safeParse(input).success, true)
+  assert.equal(
+    adaptNativePricing(nativePricingSchema.parse(input)).pricing_context
+      ?.user_price,
+    undefined
+  )
+  assert.equal(
+    nativePricingSchema.safeParse({
+      ...input,
+      user_price: { status: 'not_evaluated' },
+    }).success,
+    true
+  )
+})
+
+test('native image rates identify their own basis independently of account token prices', () => {
+  const input = fixture()
+  input.visibility = 'session'
+  input.rate_basis = 'effective_user_rate'
+  input.user_price = {
+    status: 'verified',
+    multiplier: { numerator: '97', denominator: '100' },
+  }
+  const original = input.models[0]
+  assert.ok(original)
+  input.models = [
+    {
+      ...original,
+      token_price: null,
+      image_variants: [
+        {
+          endpoint: 'generations',
+          rate_basis: 'base_group_rate',
+          size: '1024x1024',
+          quality: 'standard',
+          max_n: 1,
+          count_basis: 'requested',
+          usd_micros_per_image: { numerator: '40000', denominator: '1' },
+          credits_per_image: { numerator: '20000', denominator: '1' },
+          reservation_credits_for_one: 20000,
+          rounding: 'ceil_total_credits',
+          pricing_version: 3,
+        },
+      ],
+    },
+  ]
+  const model = adaptNativePricing(nativePricingSchema.parse(input)).data[0]
+  assert.ok(model)
+  const image = model.image_variants?.[0]
+  assert.ok(image)
+  assert.equal(image.rate_basis, 'base_group_rate')
+  assert.equal(formatImageVariantUSD(image), '0.04 USD')
+  assert.equal(formatImageVariantCredits(image), '20000 Credits')
+  const sourceVariant = input.models[0]?.image_variants[0]
+  assert.ok(sourceVariant)
+  delete sourceVariant.rate_basis
+  assert.equal(nativePricingSchema.safeParse(input).success, false)
+})
+
 test('selected group drives sorting and never substitutes unknown prices with zero', () => {
   const input = fixture()
+  const original = input.models[0]
+  assert.ok(original)
   input.models.push({
-    ...input.models[0]!,
+    ...original,
     id: 'three',
     model: 'unknown',
     token_price: null,
@@ -110,9 +297,11 @@ test('selected group drives sorting and never substitutes unknown prices with ze
 test('token null remains unknown while an explicit zero remains free', () => {
   const input = fixture()
   const token = input.models[0]?.token_price
+  const original = input.models[0]
   assert.ok(token)
+  assert.ok(original)
   input.models = [
-    { ...input.models[0]!, token_price: { ...token, input: null, output: 0 } },
+    { ...original, token_price: { ...token, input: null, output: 0 } },
   ]
   const model = adaptNativePricing(nativePricingSchema.parse(input)).data[0]
   assert.ok(model)
@@ -197,7 +386,7 @@ test('image exact ratios stay per-image and cannot become token quotes', () => {
   assert.equal(model.image_price, undefined)
   assert.equal(formatImageVariantUSD(image), '0.04 USD')
   assert.equal(formatImageVariantCredits(image), '20000 Credits')
-  input.models[0]!.image_variants[0]!.credits_per_image.numerator = '20001'
+  variant.credits_per_image.numerator = '20001'
   assert.equal(nativePricingSchema.safeParse(input).success, false)
 })
 
@@ -217,8 +406,9 @@ test('invalid denomination, unit, duplicate group model and legacy envelopes fai
         },
       ],
     },
-  ])
+  ]) {
     assert.equal(nativePricingSchema.safeParse(bad).success, false)
+  }
 })
 
 test('runtime projection cannot turn configuration into a live healthy badge', () => {

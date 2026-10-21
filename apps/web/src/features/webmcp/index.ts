@@ -300,7 +300,7 @@ function coreTools(router: WebMcpRouter): ModelContextTool[] {
       name: 'lmm_model_prices',
       title: 'Read LMM model prices',
       description:
-        'Read public model pricing. An optional exact model ID filters the result.',
+        'Read model pricing for the current account, or group base pricing when signed out. An optional exact model ID filters the result.',
       inputSchema: {
         type: 'object',
         properties: { model: { type: 'string', maxLength: 128 } },
@@ -355,8 +355,10 @@ function coreTools(router: WebMcpRouter): ModelContextTool[] {
             }
           })
         return {
+          rate_basis: pricing.pricing_context?.rate_basis ?? null,
+          user_price: pricing.pricing_context?.user_price ?? null,
           pricing_basis:
-            'Effective group rates already include group factors. Token amounts are USD and Credits per million tokens; image variants retain exact ratios per image. Unknown prices are null. This is not a locked quote or a fiat checkout price.',
+            'Token rates already include all applicable account and group factors. Do not multiply them again. Token amounts are USD and Credits per million tokens; image variants retain exact per-image ratios and their own price basis. Unknown prices are null. This is not a locked quote or a fiat checkout price.',
           credits_per_usd: 500_000,
           count: models.length,
           models,

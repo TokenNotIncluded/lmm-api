@@ -54,12 +54,18 @@ import {
   type SortOption,
   type ViewMode,
 } from '../constants'
+import {
+  hasCurrentPricingContext,
+  getPricingBasisLabel,
+  getAccountPriceMultiplier,
+} from '../lib/pricing-context'
 import type {
   PricingModel,
   PricingVendor,
   TokenUnit,
   PriceDisplayCurrency,
 } from '../types'
+import { PricingContextLabel } from './pricing-context-label'
 import { PricingSidebar } from './pricing-sidebar'
 
 type SegmentOption = {
@@ -156,6 +162,17 @@ export function PricingToolbar(props: PricingToolbarProps) {
   const { t } = useTranslation()
   const [filtersOpen, setFiltersOpen] = useState(false)
   const sortLabels = getSortLabels(t)
+  const contextModel = props.models.find(hasCurrentPricingContext)
+  const sharedContextModel =
+    contextModel &&
+    props.models.every(
+      (model) =>
+        getPricingBasisLabel(model) === getPricingBasisLabel(contextModel) &&
+        getAccountPriceMultiplier(model) ===
+          getAccountPriceMultiplier(contextModel)
+    )
+      ? contextModel
+      : undefined
 
   const handleTokenUnitChange = useCallback(
     (value: string) => props.onTokenUnitChange(value as TokenUnit),
@@ -291,13 +308,22 @@ export function PricingToolbar(props: PricingToolbarProps) {
         </div>
       </div>
 
-      <p role='note' className='text-muted-foreground text-xs leading-5'>
+      <div role='note' className='text-muted-foreground text-xs leading-5'>
+        {sharedContextModel && (
+          <PricingContextLabel
+            model={sharedContextModel}
+            showDiscountNote
+            className='mb-1'
+          />
+        )}
         {t(
-          props.models.some((model) => model.group_prices)
+          props.models.some(
+            (model) => model.group_prices || hasCurrentPricingContext(model)
+          )
             ? 'Prices include the selected group factors. Select a group to compare its rates.'
             : 'Groups filter model availability only. Prices always use the base price (1×).'
         )}
-      </p>
+      </div>
 
       <SheetContent
         side='right'

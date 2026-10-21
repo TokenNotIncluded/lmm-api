@@ -93,6 +93,7 @@ import {
   formatGroupPrice,
   hasCanonicalPricing,
 } from '../lib/price'
+import { hasCurrentPricingContext } from '../lib/pricing-context'
 import type {
   ModelCapability,
   PriceType,
@@ -107,6 +108,7 @@ import { ModelBillingModeBadge } from './model-billing-mode-badge'
 import { ModelDetailsApi } from './model-details-api'
 import { ModelDetailsPerformance } from './model-details-performance'
 import { ModelRuntimeBadge } from './model-runtime-badge'
+import { PricingContextLabel } from './pricing-context-label'
 import { RequestEstimator } from './request-estimator'
 
 // ----------------------------------------------------------------------------
@@ -673,7 +675,13 @@ function PriceSection(props: {
   if (props.model.group_prices) {
     return (
       <section className='space-y-3'>
-        <SectionTitle>{t('Configured group prices')}</SectionTitle>
+        <SectionTitle>
+          <PricingContextLabel
+            model={props.model}
+            legacyLabel='Configured group prices'
+            showDiscountNote
+          />
+        </SectionTitle>
         <p className='text-muted-foreground text-xs leading-5'>
           {t(
             'Prices include the selected group factors. Select a group to compare its rates.'
@@ -725,7 +733,9 @@ function PriceSection(props: {
     if (dynamicSummary.isSpecialExpression) {
       return (
         <section>
-          <SectionTitle>{t('Base price (1×)')}</SectionTitle>
+          <SectionTitle>
+            <PricingContextLabel model={props.model} showDiscountNote />
+          </SectionTitle>
           <div className='forge-price-warning-panel rounded-none border p-3'>
             <div className='forge-price-warning-label text-sm font-medium'>
               {t('Special billing expression')}
@@ -748,7 +758,9 @@ function PriceSection(props: {
 
     return (
       <section>
-        <SectionTitle>{t('Base price (1×)')}</SectionTitle>
+        <SectionTitle>
+          <PricingContextLabel model={props.model} showDiscountNote />
+        </SectionTitle>
         {dynamicSummary.primaryEntries.length > 0 ? (
           <div className='grid grid-cols-2 gap-2'>
             {dynamicSummary.primaryEntries.map((entry) => (
@@ -800,7 +812,9 @@ function PriceSection(props: {
   if (!isTokenBased) {
     return (
       <section>
-        <SectionTitle>{t('Base price (1×)')}</SectionTitle>
+        <SectionTitle>
+          <PricingContextLabel model={props.model} showDiscountNote />
+        </SectionTitle>
         <div className='flex items-baseline justify-between'>
           <span className='text-muted-foreground text-sm'>
             {t('Per request')}
@@ -837,7 +851,9 @@ function PriceSection(props: {
 
   return (
     <section>
-      <SectionTitle>{t('Base price (1×)')}</SectionTitle>
+      <SectionTitle>
+        <PricingContextLabel model={props.model} showDiscountNote />
+      </SectionTitle>
       <div className='grid grid-cols-2 gap-2'>
         {primaryPriceTypes.map((item) => (
           <div key={item.type} className='bg-muted/20 rounded-lg border p-3'>
@@ -918,7 +934,7 @@ function GroupAvailabilitySection(props: {
       <SectionTitle>{t('Available groups')}</SectionTitle>
       <p className='text-muted-foreground mb-3 text-xs leading-5'>
         {t(
-          props.model.group_prices
+          props.model.group_prices || hasCurrentPricingContext(props.model)
             ? 'Prices include the selected group factors. Select a group to compare its rates.'
             : 'Groups filter model availability only. Prices always use the base price (1×).'
         )}

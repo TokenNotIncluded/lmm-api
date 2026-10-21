@@ -7,8 +7,10 @@ import { cn } from '@/lib/utils'
 
 import { isNativeSessionEndpointType } from '../constants'
 import { formatModelPrice } from '../lib/price-display'
+import { hasCurrentPricingContext } from '../lib/pricing-context'
 import { estimateRequestCost } from '../lib/request-estimate'
 import type { ModelDetailsContentProps } from './model-details'
+import { PricingContextLabel } from './pricing-context-label'
 
 /** Common shapes of a single request, so nobody has to guess token counts. */
 const PRESETS = [
@@ -52,13 +54,15 @@ export function RequestEstimator(props: ModelDetailsContentProps) {
       <h3 id={`${id}-title`} className='text-sm font-semibold'>
         {t('Request cost estimate')}
       </h3>
-      <p className='text-muted-foreground text-xs'>
-        {t(
+      <PricingContextLabel
+        model={props.model}
+        legacyLabel={
           props.model.group_prices
             ? 'Configured group prices'
             : 'Base price (1×)'
-        )}
-      </p>
+        }
+        className='text-muted-foreground text-xs'
+      />
       {props.model.quota_type === 0 && (
         <>
           <div className='flex flex-wrap gap-1.5'>
@@ -143,11 +147,15 @@ export function RequestEstimator(props: ModelDetailsContentProps) {
         </summary>
         <p className='text-muted-foreground mt-1 text-xs leading-relaxed'>
           {t(
-            props.model.group_prices
-              ? 'Prices include the selected group factors. Select a group to compare its rates.'
-              : isSystemone
-                ? 'One request at the base price (1×), using input tokens. Actual charges may differ.'
-                : 'One request at the base price (1×). Cached tokens are part of input. Excludes cache writes, media and tool fees; actual charges may differ.'
+            hasCurrentPricingContext(props.model)
+              ? isSystemone
+                ? 'One request using the displayed prices. Actual charges may differ.'
+                : 'One request using the displayed prices. Cached tokens are part of input. Excludes cache writes, media and tool fees; actual charges may differ.'
+              : props.model.group_prices
+                ? 'Prices include the selected group factors. Select a group to compare its rates.'
+                : isSystemone
+                  ? 'One request at the base price (1×), using input tokens. Actual charges may differ.'
+                  : 'One request at the base price (1×). Cached tokens are part of input. Excludes cache writes, media and tool fees; actual charges may differ.'
           )}
           {amount === null
             ? ` ${t('Check token counts. Dynamic or special billing requires the pricing rules above.')}`

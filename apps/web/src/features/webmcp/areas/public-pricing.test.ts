@@ -82,6 +82,8 @@ test('WebMCP estimate uses exact model and effective rates and converts USD to C
   )
   assert.deepEqual(result, {
     page: '/pricing',
+    rate_basis: 'effective_group_rate',
+    user_price: null,
     model: 'exact-model',
     vendor: null,
     group: 'standard',
@@ -94,7 +96,7 @@ test('WebMCP estimate uses exact model and effective rates and converts USD to C
     credits_per_usd: 500_000,
     estimable: true,
     billing_basis:
-      'Effective group USD rates converted at 500000 Credits per USD. This text-only estimate is not a locked quote or a settlement receipt.',
+      'Displayed USD rates already include applicable account and group factors; they are converted at 500000 Credits per USD without applying discounts again. This text-only estimate is not a locked quote or a settlement receipt.',
   })
   await assert.rejects(
     estimate.execute(
@@ -115,6 +117,56 @@ test('WebMCP estimate uses exact model and effective rates and converts USD to C
     ),
     /not listed for this group/
   )
+})
+
+test('WebMCP account estimate preserves verified factor and uses the already discounted rate once', async () => {
+  const document = native(1.94)
+  document.visibility = 'session'
+  document.rate_basis = 'effective_user_rate'
+  document.user_price = {
+    status: 'verified',
+    multiplier: { numerator: '97', denominator: '100' },
+  }
+  const token = document.models[0]?.token_price
+  assert.ok(token)
+  token.rate_basis = 'effective_user_rate'
+  serve(document)
+  useAuthStore.getState().auth.setBundle({
+    access_token: 'synthetic-price-session',
+    token_type: 'Bearer',
+    access_expires_at: 4_000_000_000,
+    user: { id: 7, username: 'synthetic', role: 1 },
+    session: {
+      sid: 'synthetic-price-session',
+      current: true,
+      login_method: 'password',
+      ip: null,
+      user_agent: null,
+      created_at: 1,
+      last_active_at: 1,
+      expires_at: 4_000_000_000,
+    },
+  })
+  const result = await estimate.execute(
+    {
+      model: 'exact-model',
+      group: 'standard',
+      input_tokens: 1_000_000,
+      output_tokens: 0,
+    },
+    { signal: new AbortController().signal }
+  )
+  assert.ok(typeof result === 'object' && result !== null)
+  assert.ok(
+    'estimated_usd' in result &&
+      'estimated_credit' in result &&
+      'rate_basis' in result &&
+      'user_price' in result
+  )
+  assert.equal(result.estimated_usd, 1.94)
+  assert.equal(result.estimated_credit, 970_000)
+  assert.equal(result.rate_basis, 'effective_user_rate')
+  assert.deepEqual(result.user_price, document.user_price)
 })
 
 test('unknown and unsafe large estimates are unavailable and explicit free input remains zero', async () => {

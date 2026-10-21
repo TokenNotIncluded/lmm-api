@@ -19,7 +19,10 @@ For commercial licensing, please contact support@quantumnous.com
 // ----------------------------------------------------------------------------
 // Pricing Types
 // ----------------------------------------------------------------------------
-import type { NativeImageVariant } from './catalog-contract'
+import type {
+  NativeImageVariant,
+  NativePricingContext,
+} from './catalog-contract'
 
 export type PricingVendor = {
   id: number
@@ -47,6 +50,8 @@ export type ModelRuntimeState = {
 }
 
 export type PricingModel = {
+  /** Describes already calculated rates; never use its multiplier to price usage. */
+  pricing_context?: NativePricingContext
   /** Core rates already include group factors. Never apply them a second time. */
   group_prices?: Record<string, PricingGroupPrices>
   group_endpoints?: Record<string, string[]>
@@ -142,6 +147,7 @@ export type ModelCapability =
   | 'embeddings'
 
 export type PricingData = {
+  pricing_context?: NativePricingContext
   runtime_available?: boolean
   performance_available?: boolean
   pricing_schema_version?: number

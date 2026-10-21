@@ -38,6 +38,7 @@ import type { PricingModel, TokenUnit, PriceDisplayCurrency } from '../types'
 import { ModelBillingModeBadge } from './model-billing-mode-badge'
 import { ModelPerfBadge } from './model-perf-badge'
 import { ModelRuntimeBadge } from './model-runtime-badge'
+import { PricingContextLabel } from './pricing-context-label'
 
 export interface ModelCardProps {
   model: PricingModel
@@ -241,9 +242,10 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
       </div>
 
       <div className='mt-3 flex min-w-0 flex-wrap items-baseline gap-x-4 gap-y-1 border-y py-3 text-sm tabular-nums'>
-        <span className='text-muted-foreground w-full text-xs'>
-          {t('Base price (1×)')}
-        </span>
+        <PricingContextLabel
+          model={props.model}
+          className='text-muted-foreground w-full text-xs'
+        />
         {priceSummary}
       </div>
 

@@ -31,6 +31,7 @@ import { getDisplayPriceGroup } from '../lib/model-helpers'
 import type { ModelPerfBadgeData } from '../lib/model-perf'
 import { formatRequestPrice } from '../lib/price'
 import { formatModelPrice } from '../lib/price-display'
+import { hasCurrentPricingContext } from '../lib/pricing-context'
 import type {
   PriceDisplayCurrency,
   PriceType,
@@ -39,6 +40,7 @@ import type {
 } from '../types'
 import { ModelBillingModeBadge } from './model-billing-mode-badge'
 import { ModelRuntimeBadge } from './model-runtime-badge'
+import { PricingContextLabel } from './pricing-context-label'
 
 const WORKLOAD_PRESETS = [
   { key: 'Short chat', input: '2000', output: '500' },
@@ -301,9 +303,11 @@ export function ModelCompareDialog(props: ModelCompareDialogProps) {
               'Side by side prices, speed and capabilities. Green marks the best value in each row.'
             )}
           </DialogDescription>
-          <p className='text-muted-foreground text-xs'>
-            {t('Base price (1×)')}
-          </p>
+          {!props.models.some(hasCurrentPricingContext) && (
+            <p className='text-muted-foreground text-xs'>
+              {t('Base price (1×)')}
+            </p>
+          )}
         </DialogHeader>
 
         <section
@@ -534,6 +538,12 @@ function ModelColumnHeader(props: {
           </p>
         )}
       </div>
+      {hasCurrentPricingContext(props.model) && (
+        <PricingContextLabel
+          model={props.model}
+          className='text-muted-foreground text-xs'
+        />
+      )}
       <button
         type='button'
         onClick={props.onViewDetails}

@@ -35,13 +35,20 @@ export function usePricingData(options?: { enabled?: boolean }) {
     error: displayCurrencyError,
   } = useWalletCurrency()
 
-  const { data, isLoading, error, refetch } = useQuery({
+  const {
+    data: snapshot,
+    isLoading,
+    error,
+    refetch,
+  } = useQuery({
     queryKey: pricingQueryKey(user?.id, session?.sid),
-    queryFn: ({ signal }) => getPricing(signal),
+    queryFn: ({ signal }) =>
+      getPricing(signal, { userId: user?.id, sessionId: session?.sid }),
     enabled: options?.enabled ?? true,
     staleTime: 5 * 60 * 1000,
     retry: false,
   })
+  const data = error ? undefined : snapshot
 
   const models = useMemo(() => {
     if (!data?.data || !data?.vendors) return []

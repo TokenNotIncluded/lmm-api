@@ -64,6 +64,10 @@ function commonPrice(
 export function adaptNativePricing(
   document: NativePricingDocument
 ): PricingData {
+  const pricingContext = {
+    rate_basis: document.rate_basis,
+    user_price: document.user_price,
+  }
   const grouped = new Map<string, NativePricingDocument['models']>()
   for (const row of document.models) {
     const rows = grouped.get(row.model) ?? []
@@ -90,6 +94,7 @@ export function adaptNativePricing(
       }
     }
     models.push({
+      pricing_context: pricingContext,
       id: models.length + 1,
       key: name,
       model_name: name,
@@ -135,6 +140,7 @@ export function adaptNativePricing(
     })
   }
   return {
+    pricing_context: pricingContext,
     success: true,
     pricing_schema_version: 2,
     pricing_currency: 'USD',
