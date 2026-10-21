@@ -233,7 +233,11 @@ class PureSqlGenerationInvariantTests(unittest.TestCase):
     def test_sql_contains_replay_manifest_and_stale_hash_guards(self):
         self.assertIn("key_quota_import_conflict: migration_id already recorded with different material", self.sql)
         self.assertIn("key_quota_import_conflict: mapping_sha256 mismatch with actual records", self.sql)
-        self.assertIn("existing_run.manifest = ", self.sql)
+        self.assertIn("existing_run.manifest - ARRAY['applied_budget_rows','applied_opening_rows'] = ", self.sql)
+        self.assertIn("existing_run.manifest->'applied_budget_rows' IS DISTINCT FROM", self.sql)
+        self.assertIn("existing_run.manifest->'applied_opening_rows' IS DISTINCT FROM", self.sql)
+        self.assertLess(self.sql.index("key quota applied row mismatch"), self.sql.index("RETURN;"))
+        self.assertLess(self.sql.index("target credential % invalid"), self.sql.index("RETURN;"))
 
     def test_sql_contains_target_secret_digest_check(self):
         secret_sha = self.plan["key_records"][0]["source_secret_sha256"]

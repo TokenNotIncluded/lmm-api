@@ -136,6 +136,8 @@ def build_apply_sql(plan: dict, target: dict) -> str:
     budget_inserts = []
     opening_inserts = []
     credential_checks = []
+    initial_checks = []
+    applied_checks = []
 
     for row in plan["key_records"]:
         cid = row["target_credential_id"]
@@ -161,9 +163,27 @@ def build_apply_sql(plan: dict, target: dict) -> str:
      AND digest=decode({literal(secret_hash)}, 'hex')
  ) THEN
    RAISE EXCEPTION 'target credential % invalid, mismatched ownership, or secret digest mismatch', {cid};
- END IF;
+ END IF;""")
+        initial_checks.append(f"""
  IF EXISTS(SELECT 1 FROM core_charging.budgets WHERE scope='key' AND key_id={cid}) THEN
    RAISE EXCEPTION 'key budget already exists for credential %', {cid};
+ END IF;
+ IF EXISTS(SELECT 1 FROM core_charging.budget_opening_consumption WHERE scope='key' AND key_id={cid}) THEN
+   RAISE EXCEPTION 'key opening already exists for credential %', {cid};
+ END IF;""")
+        applied_checks.append(f"""
+ IF (SELECT count(*) FROM core_charging.budgets WHERE scope='key' AND key_id={cid})<>1
+ OR NOT EXISTS(SELECT 1 FROM core_charging.budgets WHERE scope='key' AND key_id={cid}
+   AND issuer_user_id={uid} AND account_id IS NULL AND user_id IS NULL
+   AND period='lifetime' AND timezone='UTC' AND anchor=0 AND seconds=0 AND revision=1
+   AND limit_credits={limit_credits} AND unlimited={unlimited_sql}
+   AND display_limit_credits IS NOT DISTINCT FROM {display_limit_sql}::BIGINT)
+ OR (SELECT count(*) FROM core_charging.budget_opening_consumption WHERE scope='key' AND key_id={cid})<>1
+ OR NOT EXISTS(SELECT 1 FROM core_charging.budget_opening_consumption WHERE scope='key' AND key_id={cid}
+   AND account_id IS NULL AND user_id IS NULL AND period='lifetime' AND anchor=0 AND seconds=0
+   AND timezone='UTC' AND start_at={LIFETIME_START} AND end_at={LIFETIME_END}
+   AND consumed_credits={used} AND import_reference={literal(import_ref)}) THEN
+   RAISE EXCEPTION 'key quota applied row mismatch';
  END IF;""")
 
         budget_inserts.append(
@@ -178,6 +198,11 @@ def build_apply_sql(plan: dict, target: dict) -> str:
         )
 
     all_cred_checks = "\n".join(credential_checks)
+    all_initial_checks = "\n".join(initial_checks)
+    all_applied_checks = "\n".join(applied_checks)
+    key_ids = ",".join(str(r["target_credential_id"]) for r in plan["key_records"])
+    budget_rows = f"(SELECT COALESCE(jsonb_agg(to_jsonb(b) ORDER BY id),'[]'::jsonb) FROM core_charging.budgets b WHERE scope='key' AND key_id IN ({key_ids}))"
+    opening_rows = f"(SELECT COALESCE(jsonb_agg(to_jsonb(o) ORDER BY key_id),'[]'::jsonb) FROM core_charging.budget_opening_consumption o WHERE scope='key' AND key_id IN ({key_ids}))"
     all_budget_sql = "\n ".join(budget_inserts)
     all_opening_sql = "\n ".join(opening_inserts)
 
@@ -198,6 +223,7 @@ DECLARE
  v_seq_last_val BIGINT;
  v_seq_is_called BOOLEAN;
  v_next_budget_id BIGINT;
+ applied_manifest JSONB;
 BEGIN
  -- 1. Target Identity and Role Guard
  IF current_database()<>{literal(ident['database'])} OR current_user<>{literal(owner)} OR session_user<>{literal(login)}
@@ -238,13 +264,19 @@ BEGIN
  END IF;
 
  -- 5. Check Idempotency & Replay
+{all_cred_checks}
  SELECT * INTO existing_run FROM core_migration.import_runs WHERE migration_id={literal(migration_id)};
  IF FOUND THEN
    IF existing_run.source_archive_sha256 = {literal(source_archive)}
       AND existing_run.mapping_sha256 = {literal(mapping_hash)}
-      AND existing_run.manifest = {literal(manifest_json)}::jsonb
+      AND existing_run.manifest - ARRAY['applied_budget_rows','applied_opening_rows'] = {literal(manifest_json)}::jsonb
       AND {literal(mapping_hash)} = {literal(digest(plan["key_records"]))} THEN
-     -- Exact replay: no-op, retain existing records
+{all_applied_checks}
+     IF existing_run.manifest->'applied_budget_rows' IS DISTINCT FROM {budget_rows}
+       OR existing_run.manifest->'applied_opening_rows' IS DISTINCT FROM {opening_rows} THEN
+       RAISE EXCEPTION 'key quota applied baseline mismatch';
+     END IF;
+     -- Exact replay: no-op only after real rows and their original IDs match.
      RETURN;
    ELSE
      RAISE EXCEPTION 'key_quota_import_conflict: migration_id already recorded with different material';
@@ -256,7 +288,7 @@ BEGIN
  END IF;
 
  -- 6. Verify Target Credential Existence, Kind, Ownership, and Secret Digest
-{all_cred_checks}
+{all_initial_checks}
 
  -- 7. Allocate Transactional Budget IDs and Insert Budgets and Opening Consumptions
  SELECT last_value, is_called INTO v_seq_last_val, v_seq_is_called
@@ -270,10 +302,13 @@ BEGIN
 
  {all_budget_sql}
  {all_opening_sql}
+{all_applied_checks}
+ applied_manifest := {literal(manifest_json)}::jsonb || jsonb_build_object(
+   'applied_budget_rows',{budget_rows},'applied_opening_rows',{opening_rows});
 
  -- 8. Record Immutable Import Run
  INSERT INTO core_migration.import_runs(migration_id, source_archive_sha256, mapping_sha256, manifest)
- VALUES ({literal(migration_id)}, {literal(source_archive)}, {literal(mapping_hash)}, {literal(manifest_json)}::jsonb);
+ VALUES ({literal(migration_id)}, {literal(source_archive)}, {literal(mapping_hash)}, applied_manifest);
 
  -- 9. Transactionally Advance Sequence to Avoid Allocation Gaps or Collisions
  EXECUTE 'ALTER SEQUENCE core_charging.budgets_id_seq RESTART WITH ' || v_next_budget_id;

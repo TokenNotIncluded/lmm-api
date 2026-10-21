@@ -392,6 +392,51 @@ COMMIT;"""
         self.assertNotEqual(overlap_res.returncode, 0)
         self.assertIn("key budget already exists", overlap_res.stderr)
 
+    def database_state(self):
+        tables = self.query("SELECT jsonb_agg(format('%I.%I',n.nspname,c.relname) ORDER BY n.nspname,c.relname) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind IN ('r','p') AND n.nspname NOT IN ('pg_catalog','information_schema') AND left(n.nspname,3)<>'pg_';")
+        rows = {}
+        for table in tables:
+            rows[table] = self.query(f"SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY to_jsonb(t)::text),'[]'::jsonb) FROM {table} t;")
+        return {"rows": rows, "sequences": self.get_sequence_states()}
+
+    def test_replay_checks_real_rows_and_preserves_entire_database(self):
+        plan = {"format_version": 1, "scope": KQ.SCOPE, "migration_id": "kq-row-proof",
+                "source_archive_sha256": "a" * 64,
+                "key_records": [{"source_key_id": 11, "target_credential_id": 201,
+                                 "target_user_id": 1, "target_account_id": 101,
+                                 "used_units": 10, "remaining_units": 90, "unlimited": False,
+                                 "source_secret_sha256": "1" * 64}]}
+        plan["mapping_sha256"] = KQ.digest(plan["key_records"])
+        sql = KQ.build_apply_sql(plan, self.target_receipt)
+        self.assertIsInstance(sql, str)
+        self.sql(sql)
+        applied = self.database_state()
+        self.sql(sql)
+        self.assertEqual(applied, self.database_state())
+        # A legitimate unrelated row is not part of this import's authority.
+        self.sql("BEGIN ISOLATION LEVEL SERIALIZABLE; INSERT INTO core_charging.budgets(scope,key_id,issuer_user_id,period,limit_credits) VALUES('key',202,1,'lifetime',777); COMMIT;")
+        unrelated = self.database_state()
+        self.sql(sql)
+        self.assertEqual(unrelated, self.database_state())
+        for mutation, restore in (
+            ("UPDATE core_charging.budgets SET limit_credits=101 WHERE key_id=201;", "UPDATE core_charging.budgets SET limit_credits=100 WHERE key_id=201;"),
+            ("UPDATE core_charging.budgets SET revision=2 WHERE key_id=201;", "UPDATE core_charging.budgets SET revision=1 WHERE key_id=201;"),
+            ("UPDATE core_identity.credentials SET digest=decode(repeat('aa',32),'hex') WHERE id=201;", "UPDATE core_identity.credentials SET digest=decode(repeat('11',32),'hex') WHERE id=201;"),
+        ):
+            self.sql("BEGIN ISOLATION LEVEL SERIALIZABLE; " + mutation + " COMMIT;")
+            before = self.database_state()
+            refused = self.sql(sql, check=False)
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertEqual(before, self.database_state())
+            self.sql("BEGIN ISOLATION LEVEL SERIALIZABLE; " + restore + " COMMIT;")
+        # Opening facts are immutable even to the ordinary installation owner.
+        before = self.database_state()
+        refused = self.sql("BEGIN ISOLATION LEVEL SERIALIZABLE; UPDATE core_charging.budget_opening_consumption SET consumed_credits=11 WHERE key_id=201; COMMIT;", check=False)
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertEqual(before, self.database_state())
+        self.sql(sql)
+        self.assertEqual(before, self.database_state())
+
     def test_zero_quota_and_boundary_limits(self):
         """Verify zero quota, maximum BIGINT limits, and overflow rejection."""
         # 1. Overflow plan validation must fail before SQL generation
