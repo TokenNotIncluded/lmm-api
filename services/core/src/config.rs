@@ -2,6 +2,9 @@
 mod market_oauth_config;
 pub use market_oauth_config::{market_oauth_configured, market_oauth_issuer, market_oauth_profile};
 use serde::Deserialize;
+#[cfg(test)]
+#[path = "config_telegram_tests.rs"]
+mod telegram_tests;
 use std::{
     collections::{BTreeMap, BTreeSet},
     env,
@@ -136,6 +139,7 @@ struct IdentityFile {
     github: Option<GoogleFile>,
     linuxdo: Option<GoogleFile>,
     discord: Option<GoogleFile>,
+    telegram: Option<TelegramFile>,
 }
 impl Default for IdentityFile {
     fn default() -> Self {
@@ -152,6 +156,7 @@ impl Default for IdentityFile {
             github: None,
             linuxdo: None,
             discord: None,
+            telegram: None,
         }
     }
 }
@@ -203,6 +208,12 @@ struct GoogleFile {
     client_id: String,
     client_secret_file: PathBuf,
     redirect_uri: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TelegramFile {
+    bot_name: String,
+    bot_token_file: PathBuf,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -353,6 +364,7 @@ fn parse_core_file(document: &[u8]) -> io::Result<BTreeMap<&'static str, OsStrin
             || file.identity.github.is_some()
             || file.identity.linuxdo.is_some()
             || file.identity.discord.is_some()
+            || file.identity.telegram.is_some()
             || file.identity.api_key_encryption_key_file.is_some()
             || file.identity.mfa.is_some()
             || file.identity.oauth2.is_some()
@@ -391,7 +403,8 @@ fn parse_core_file(document: &[u8]) -> io::Result<BTreeMap<&'static str, OsStrin
     }
     if (file.identity.github.is_some()
         || file.identity.linuxdo.is_some()
-        || file.identity.discord.is_some())
+        || file.identity.discord.is_some()
+        || file.identity.telegram.is_some())
         && file.identity.web.is_none()
     {
         return Err(invalid_config(
@@ -580,6 +593,10 @@ fn parse_core_file(document: &[u8]) -> io::Result<BTreeMap<&'static str, OsStrin
             "LMM_CORE_GOOGLE_CLIENT_SECRET_FILE",
             google.client_secret_file,
         ));
+    }
+    if let Some(telegram) = file.identity.telegram {
+        put("LMM_CORE_TELEGRAM_BOT_NAME", telegram.bot_name);
+        paths.push(("LMM_CORE_TELEGRAM_BOT_TOKEN_FILE", telegram.bot_token_file));
     }
     for (provider, id_key, uri_key, secret_key) in [
         (
@@ -845,6 +862,26 @@ pub fn identity_auth(
         }
         store
     };
+    if setting_os("LMM_CORE_TELEGRAM_BOT_NAME").is_some()
+        || setting_os("LMM_CORE_TELEGRAM_BOT_TOKEN_FILE").is_some()
+    {
+        if setting_os("LMM_CORE_WEB_ORIGIN").is_none() {
+            return Err(invalid_config("Telegram login requires Web authentication"));
+        }
+        let name = setting("LMM_CORE_TELEGRAM_BOT_NAME")
+            .map_err(|_| invalid_config("incomplete Telegram login configuration"))?;
+        let path = setting_os("LMM_CORE_TELEGRAM_BOT_TOKEN_FILE")
+            .ok_or_else(|| invalid_config("incomplete Telegram login configuration"))?;
+        let secret = zeroize::Zeroizing::new(
+            String::from_utf8(private_file(Path::new(&path), 4096)?)
+                .map_err(|_| invalid_config("invalid Telegram credential"))?,
+        );
+        let telegram = crate::identity::TelegramLogin::new(&name, secret.trim())
+            .map_err(|_| invalid_config("invalid Telegram login configuration"))?;
+        store = store
+            .with_telegram_login(telegram)
+            .map_err(|_| invalid_config("duplicate Telegram login configuration"))?;
+    }
     for (provider, id_key, uri_key, secret_key) in [
         (
             crate::identity::ExternalProvider::Github,
@@ -952,6 +989,8 @@ pub fn identity_database_required() -> io::Result<bool> {
         || setting_os("LMM_CORE_GITHUB_CLIENT_ID").is_some()
         || setting_os("LMM_CORE_LINUXDO_CLIENT_ID").is_some()
         || setting_os("LMM_CORE_DISCORD_CLIENT_ID").is_some()
+        || setting_os("LMM_CORE_TELEGRAM_BOT_NAME").is_some()
+        || setting_os("LMM_CORE_TELEGRAM_BOT_TOKEN_FILE").is_some()
         || oauth2_configured()
         || market_oauth_configured())
 }

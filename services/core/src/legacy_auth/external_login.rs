@@ -27,7 +27,7 @@ fn cookie_name(provider: ExternalProvider, config: &LegacyAuthConfig) -> String 
         provider.slug()
     )
 }
-fn cookie_value<'a>(
+pub(super) fn cookie_value<'a>(
     headers: &'a HeaderMap,
     name: &str,
     prefix: &str,
@@ -59,7 +59,7 @@ fn cookie_value<'a>(
     }
     found.ok_or(IdentityError::Unauthorized)
 }
-fn set_flow_cookie(
+pub(super) fn set_flow_cookie(
     mut response: Response,
     name: &str,
     value: Option<&str>,

@@ -52,5 +52,9 @@ fn upgrade_help_is_explicit_and_has_no_startup_side_effect() {
     let output = invoke(&["upgrade-db", "--help"], b"");
     assert!(output.status.success());
     assert!(output.stderr.is_empty());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("24->25 trust-pricing"));
+    let help = String::from_utf8_lossy(&output.stdout);
+    assert!(help.contains("Explicit offline compiled additive 25->26 upgrade"));
+    assert!(
+        help.contains("Legacy 24->25 trust-pricing requires the preserved 25-component installer.")
+    );
 }

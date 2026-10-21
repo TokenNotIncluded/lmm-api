@@ -4,6 +4,7 @@ mod compatibility;
 mod external_login;
 mod oauth2;
 mod sessions;
+mod telegram;
 use crate::identity::{
     BrowserAuth, BrowserAuthError, BrowserBundle, BrowserLoginOutcome, BrowserRegistration,
     BrowserSessionMetadata, IdentityError, IdentityStore, MfaCompletion, MfaError,
@@ -129,6 +130,7 @@ pub fn router(store: IdentityStore, config: LegacyAuthConfig) -> Router {
         .merge(sessions::routes())
         .merge(oauth2::routes())
         .merge(external_login::routes())
+        .merge(telegram::routes())
         .route("/api/user/register", post(register))
         .route("/api/user/login", post(login))
         .route("/api/user/login/2fa", post(complete_mfa_login))
@@ -180,8 +182,13 @@ async fn security(State(state): State<AuthState>, request: Request, next: Next) 
                 | "/api/oauth/github"
                 | "/api/oauth/linuxdo"
                 | "/api/oauth/discord"
+                | "/api/oauth/telegram/login"
                 | "/api/oauth2/authorize"
         )
+        || request
+            .uri()
+            .path()
+            .starts_with("/api/oauth/telegram/bind/")
     {
         let peer = request
             .extensions()

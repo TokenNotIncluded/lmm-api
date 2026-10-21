@@ -91,6 +91,14 @@ GRANT USAGE ON SEQUENCE core_abuse.audit_id_seq TO {name};
             sqlx::raw_sql(&format!("GRANT USAGE ON SCHEMA core_gift TO {0}; GRANT SELECT ON core_gift.risk_key,core_gift.policy,core_gift.qualifications TO {0}; GRANT INSERT ON core_gift.qualifications TO {0}; GRANT EXECUTE ON FUNCTION core_gift.lock_eligibility(bigint) TO {0}",name))
                 .execute(owner).await.unwrap();
         }
+        let telegram_installed: bool = sqlx::query_scalar(
+            "SELECT count(*)=3 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='core_telegram_auth' AND c.relkind='r' AND c.relname IN ('bindings','flows','assertions')",
+        ).fetch_one(owner).await.unwrap();
+        if telegram_installed {
+            sqlx::raw_sql(&format!(
+                "GRANT USAGE ON SCHEMA core_telegram_auth TO {name}; GRANT SELECT ON core_telegram_auth.bindings,core_telegram_auth.flows,core_telegram_auth.assertions TO {name}; GRANT INSERT(subject,user_id),UPDATE(revoked_at) ON core_telegram_auth.bindings TO {name}; GRANT INSERT(token_digest,purpose,binding_digest,user_id,user_version,sid),UPDATE(consumed_at),DELETE ON core_telegram_auth.flows TO {name}; GRANT INSERT(digest),DELETE ON core_telegram_auth.assertions TO {name}",
+            )).execute(owner).await.unwrap();
+        }
         // Match the production enable_trust_pricing read grants, without adding
         // optional components or authority to older partial-schema fixtures.
         let trust_installed: bool = sqlx::query_scalar(
