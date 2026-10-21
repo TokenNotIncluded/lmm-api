@@ -21,8 +21,28 @@ pub struct PricingModel {
     pub group: String,
     pub apis: Vec<&'static str>,
     pub billing_status: &'static str,
+    /// Text-route restriction; independently available image APIs may coexist.
+    pub unavailable_reason: Option<UnavailableReason>,
     pub token_price: Option<TokenPrice>,
+    pub upstream_cost_price: Option<UpstreamCostPrice>,
     pub image_variants: Vec<ImageVariant>,
+}
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UnavailableReason {
+    UpstreamBudgetContractRequired,
+    RoutingUnavailable,
+}
+/// A calculation rule, never a promise that the supplier can enforce a budget.
+/// The final upstream total already includes its token, cache and tool charges.
+#[derive(Clone, Serialize)]
+pub struct UpstreamCostPrice {
+    pub currency: &'static str,
+    pub cost_source: &'static str,
+    pub credits_per_usd: i64,
+    pub rounding: &'static str,
+    pub rate_basis: &'static str,
+    pub multiplier: ExactFraction,
 }
 #[derive(Clone, Serialize)]
 pub struct TokenPrice {
@@ -104,6 +124,7 @@ impl PricingSurface {
                 .ok_or(PricingError::Unavailable)?;
             let price_ok = super::routing::credit_price(quote, &route.model, &route.group).is_ok();
             let mut apis = BTreeSet::new();
+            let mut upstream_budget_contract_required = false;
             for target in route.targets.iter().filter(|t| {
                 t.enabled
                     && t.weight > 0
@@ -114,6 +135,14 @@ impl PricingSurface {
                 else {
                     continue;
                 };
+                let local = crate::relay::honeypot_network::literal_ip(
+                    &reqwest::Url::parse(upstream.endpoint.as_str())
+                        .map_err(|_| PricingError::Unavailable)?,
+                )
+                .is_some_and(|ip| ip.is_loopback());
+                if quote.billing_mode() == BillingMode::UpstreamCost && !local {
+                    upstream_budget_contract_required = true;
+                }
                 let Some(secret) = gateway
                     .bridge
                     .credentials
@@ -141,11 +170,6 @@ impl PricingSurface {
                 {
                     continue;
                 }
-                let local = crate::relay::honeypot_network::literal_ip(
-                    &reqwest::Url::parse(upstream.endpoint.as_str())
-                        .map_err(|_| PricingError::Unavailable)?,
-                )
-                .is_some_and(|ip| ip.is_loopback());
                 if quote.billing_mode() == BillingMode::UpstreamCost
                     && (!local || target.upstream_model != route.model)
                 {
@@ -182,6 +206,18 @@ impl PricingSurface {
             } else {
                 "configured"
             };
+            let unavailable_reason =
+                (status == "unavailable").then_some(if upstream_budget_contract_required {
+                    UnavailableReason::UpstreamBudgetContractRequired
+                } else {
+                    UnavailableReason::RoutingUnavailable
+                });
+            let (token_price, upstream_cost_price) =
+                if quote.billing_mode() == BillingMode::UpstreamCost {
+                    (None, Some(upstream_cost_price(quote)))
+                } else {
+                    (Some(token_price(quote)?), None)
+                };
             for name in std::iter::once(route.model.as_str()).chain(
                 doc.routing
                     .aliases
@@ -195,7 +231,9 @@ impl PricingSurface {
                     group: route.group.clone(),
                     apis: apis.iter().copied().collect(),
                     billing_status: status,
-                    token_price: Some(token_price(quote)?),
+                    unavailable_reason,
+                    token_price: token_price.clone(),
+                    upstream_cost_price: upstream_cost_price.clone(),
                     image_variants: Vec::new(),
                 });
             }
@@ -218,7 +256,9 @@ impl PricingSurface {
                         group,
                         apis: Vec::new(),
                         billing_status: "configured",
+                        unavailable_reason: None,
                         token_price: None,
+                        upstream_cost_price: None,
                         image_variants: Vec::new(),
                     };
                     add_image(&mut entry, variant);
@@ -353,6 +393,20 @@ fn token_price(quote: PriceQuote) -> Result<TokenPrice, PricingError> {
         request: None,
         final_cost_depends_on_usage: true,
     })
+}
+
+fn upstream_cost_price(quote: PriceQuote) -> UpstreamCostPrice {
+    UpstreamCostPrice {
+        currency: "USD",
+        cost_source: "usage.cost",
+        credits_per_usd: crate::billing::CREDITS_PER_USD,
+        rounding: "ceil_total_credits",
+        rate_basis: "base_group_rate",
+        multiplier: ExactFraction {
+            numerator: quote.multipliers_ppm().0.to_string(),
+            denominator: "1000000".into(),
+        },
+    }
 }
 
 pub(crate) fn image_variant(
@@ -515,6 +569,167 @@ pub(crate) mod tests {
             },
         )
         .unwrap()
+    }
+    pub(crate) fn upstream_cost_gateway(pool: sqlx::PgPool, external: bool) -> ModelGateway {
+        let initial = gateway(pool.clone());
+        let mut doc = initial.bridge.routing.catalog_document().unwrap();
+        let source_route = doc.routing.routes[0].clone();
+        let source_price = doc.pricing.rules[0].clone();
+        doc.routing.upstreams.truncate(1);
+        if external {
+            doc.routing.upstreams[0].endpoint =
+                Endpoint::try_from("https://private-cost-provider.invalid/v1".to_owned()).unwrap();
+        }
+        doc.routing.routes.clear();
+        doc.pricing.rules.clear();
+        let names = [
+            "nvidia/switchyard",
+            "openrouter/auto-beta",
+            "openrouter/fusion",
+            "typesafe/jev-router",
+        ];
+        for (index, name) in names.into_iter().chain(["openrouter/fusion"]).enumerate() {
+            let id = index as u64 + 1;
+            let group = if index == 4 { "private" } else { "allowed" };
+            let mut route = source_route.clone();
+            route.id = id;
+            route.model = name.into();
+            route.group = group.into();
+            route.targets[0].id = id;
+            route.targets[0].upstream_model = name.into();
+            doc.routing.routes.push(route);
+            let mut price = source_price.clone();
+            price.id = id;
+            price.model = name.into();
+            price.group = group.into();
+            price.billing_mode = BillingMode::UpstreamCost;
+            price.rates = TokenRates {
+                input: 0,
+                output: 0,
+                cache_read: 0,
+                cache_write: 0,
+                request: 0,
+            };
+            price.group_multiplier_ppm = if group == "private" {
+                2_000_000
+            } else {
+                1_250_000
+            };
+            doc.pricing.rules.push(price);
+        }
+        doc.routing.aliases = vec![ModelAlias {
+            alias: "friendly-router".into(),
+            model: "openrouter/fusion".into(),
+            group: "allowed".into(),
+        }];
+        let contexts = if external {
+            names
+                .into_iter()
+                .map(|name| super::super::ExternalModelContext {
+                    upstream_id: 1,
+                    upstream_model: name.into(),
+                    protocol: Protocol::OpenAiChat,
+                    endpoint: doc.routing.upstreams[0].endpoint.as_str().into(),
+                    max_input_tokens: 65536,
+                    max_output_tokens: 1000,
+                    contract_revision: "synthetic-context-without-supplier-budget".into(),
+                    missing_cached_tokens_is_zero: true,
+                    missing_cache_creation_tokens_is_zero: false,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let policy = super::super::ProviderPolicy::new(contexts, 65536).unwrap();
+        let router = Arc::new(
+            Router::new(
+                doc.routing,
+                Arc::new(PriceSnapshot::compile(doc.pricing).unwrap()),
+            )
+            .unwrap(),
+        );
+        ModelGateway::new_with_provider_policy(
+            pool,
+            router,
+            vec![super::super::UpstreamCredential {
+                reference: CredentialRef { id: 1, revision: 1 },
+                secret: "synthetic-upstream-cost-private-credential".into(),
+            }],
+            BTreeMap::new(),
+            initial.limits.clone(),
+            initial.bridge.policy,
+            policy,
+        )
+        .unwrap()
+    }
+    #[tokio::test]
+    async fn pricing_upstream_cost_descriptor_keeps_external_budget_gate_and_exact_group_basis() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://unused:unused@127.0.0.1:9/unused")
+            .unwrap();
+        for external in [false, true] {
+            let gateway = upstream_cost_gateway(pool.clone(), external);
+            let surface = PricingSurface::from_gateway(&gateway).unwrap();
+            let public = surface.project(None, None).unwrap();
+            let wire = serde_json::to_value(&public).unwrap();
+            assert_eq!(public.models.len(), 6);
+            for model in &public.models {
+                assert!(model.token_price.is_none());
+                let price = model.upstream_cost_price.as_ref().unwrap();
+                assert_eq!(price.currency, "USD");
+                assert_eq!(price.cost_source, "usage.cost");
+                assert_eq!(price.credits_per_usd, 500_000);
+                assert_eq!(price.rounding, "ceil_total_credits");
+                assert_eq!(price.rate_basis, "base_group_rate");
+                assert_eq!(price.multiplier.denominator, "1000000");
+                assert_eq!(
+                    price.multiplier.numerator,
+                    if model.group == "private" {
+                        "2000000"
+                    } else {
+                        "1250000"
+                    }
+                );
+                if external {
+                    assert_eq!(model.billing_status, "unavailable");
+                    assert_eq!(
+                        model.unavailable_reason,
+                        Some(UnavailableReason::UpstreamBudgetContractRequired)
+                    );
+                    assert!(model.apis.is_empty());
+                } else {
+                    assert_eq!(model.billing_status, "usage_dependent");
+                    assert!(model.unavailable_reason.is_none());
+                    assert_eq!(model.apis, ["openai-completions"]);
+                }
+            }
+            let encoded = wire.to_string();
+            for private in [
+                "private-credential",
+                "127.0.0.1",
+                "private-cost-provider",
+                "synthetic-context",
+            ] {
+                assert!(!encoded.contains(private));
+            }
+            let allowed = surface.project(Some(&["allowed".into()]), None).unwrap();
+            assert_eq!(allowed.models.len(), 5);
+            assert!(allowed.models.iter().all(|m| m.group == "allowed"));
+            let alias = surface
+                .project(Some(&["allowed".into()]), Some(&["friendly-router".into()]))
+                .unwrap();
+            assert_eq!(alias.models.len(), 1);
+            assert_eq!(alias.models[0].model, "friendly-router");
+            assert_eq!(
+                serde_json::to_value(&alias.models[0].upstream_cost_price).unwrap(),
+                wire["models"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|m| m["model"] == "openrouter/fusion" && m["group"] == "allowed")
+                    .unwrap()["upstream_cost_price"]
+            );
+        }
     }
     #[tokio::test]
     async fn pricing_safe_projection_retains_effective_group_rates_and_native_protocols() {
@@ -921,11 +1136,11 @@ pub(crate) mod tests {
             local_http: true,
         };
         let images = ImageService::new(
-            pool,
+            pool.clone(),
             gateway.bridge.charging.clone(),
             ImagePriceConfig {
                 revision: 23,
-                rules: vec![rule, edit],
+                rules: vec![rule.clone(), edit],
             },
             vec![provider],
             &gateway.limits,
@@ -944,6 +1159,50 @@ pub(crate) mod tests {
         assert!(!wire.contains("private-paint"));
         assert!(!wire.contains("private-vendor"));
         assert!(!wire.contains("synthetic-image-price"));
+
+        // An independently available image API does not authorize the text
+        // router or erase the reason its supplier billing is still blocked.
+        let gateway = upstream_cost_gateway(pool.clone(), true);
+        let mut shared_rule = rule;
+        shared_rule.semantic_model = "openrouter/fusion".into();
+        let provider = ProviderSpec {
+            upstream_id: shared_rule.upstream_id,
+            vendor: shared_rule.vendor.clone(),
+            upstream_model: shared_rule.upstream_model.clone(),
+            base_url: "http://127.0.0.1:9/v1".into(),
+            secret: "synthetic-mixed-price-credential".into(),
+            local_http: true,
+        };
+        let images = ImageService::new(
+            pool,
+            gateway.bridge.charging.clone(),
+            ImagePriceConfig {
+                revision: 24,
+                rules: vec![shared_rule],
+            },
+            vec![provider],
+            &gateway.limits,
+        )
+        .unwrap();
+        let gateway = gateway.with_image_service(images);
+        let mixed = PricingSurface::from_gateway(&gateway)
+            .unwrap()
+            .project(
+                Some(&["allowed".into()]),
+                Some(&["openrouter/fusion".into()]),
+            )
+            .unwrap();
+        assert_eq!(mixed.models.len(), 1);
+        let row = &mixed.models[0];
+        assert_eq!(row.billing_status, "configured");
+        assert_eq!(
+            row.unavailable_reason,
+            Some(UnavailableReason::UpstreamBudgetContractRequired)
+        );
+        assert_eq!(row.apis, ["openai-images-generations"]);
+        assert_eq!(row.image_variants.len(), 1);
+        assert!(row.token_price.is_none());
+        assert!(row.upstream_cost_price.is_some());
     }
 
     #[test]
@@ -1110,6 +1369,10 @@ impl PricingProjection {
     ) -> Result<(), PricingError> {
         let discount = authority.discount();
         for row in &mut self.models {
+            if let Some(upstream) = &mut row.upstream_cost_price {
+                upstream.rate_basis = "effective_user_rate";
+                upstream.multiplier = discounted_fraction(&upstream.multiplier, discount)?;
+            }
             if let Some(token) = &mut row.token_price {
                 token.rate_basis = "effective_user_rate";
                 for v in [
@@ -1150,6 +1413,9 @@ impl PricingProjection {
         for row in &mut self.models {
             if let Some(token) = &mut row.token_price {
                 token.rate_basis = "effective_group_rate";
+            }
+            if let Some(upstream) = &mut row.upstream_cost_price {
+                upstream.rate_basis = "effective_group_rate";
             }
         }
     }

@@ -49,6 +49,7 @@ export const QUOTA_TYPES = {
   ALL: 'all',
   TOKEN: 'token',
   REQUEST: 'request',
+  UPSTREAM_COST: 'upstream_cost',
 } as const
 
 export type QuotaTypeOption = (typeof QUOTA_TYPES)[keyof typeof QUOTA_TYPES]
@@ -61,6 +62,7 @@ export function getQuotaTypeLabels(
     [QUOTA_TYPES.ALL]: t('All Models'),
     [QUOTA_TYPES.TOKEN]: t('Token-based'),
     [QUOTA_TYPES.REQUEST]: t('Per Request'),
+    [QUOTA_TYPES.UPSTREAM_COST]: t('Upstream cost'),
   }
 }
 
@@ -156,6 +158,7 @@ export const EXCLUDED_GROUPS = ['', 'auto']
 export const QUOTA_TYPE_VALUES = {
   TOKEN: 0,
   REQUEST: 1,
+  UPSTREAM_COST: 3,
 } as const
 
 /** Token unit divisors */

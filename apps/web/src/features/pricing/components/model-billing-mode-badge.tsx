@@ -22,11 +22,13 @@ import { StatusBadge, type StatusVariant } from '@/components/status-badge'
 
 import { isDynamicPricingModel } from '../lib/dynamic-price'
 import { isTokenBasedModel } from '../lib/model-helpers'
+import { getUpstreamCostPrice } from '../lib/upstream-cost'
 import type { PricingModel } from '../types'
 
 interface ModelBillingModeBadgeProps {
   model: PricingModel
   className?: string
+  selectedGroup?: string
 }
 
 export function ModelBillingModeBadge(props: ModelBillingModeBadgeProps) {
@@ -34,7 +36,10 @@ export function ModelBillingModeBadge(props: ModelBillingModeBadgeProps) {
   let label = t('Per Request')
   let variant: StatusVariant = 'purple'
 
-  if (isDynamicPricingModel(props.model)) {
+  if (getUpstreamCostPrice(props.model, props.selectedGroup)) {
+    label = t('Upstream cost')
+    variant = 'warning'
+  } else if (isDynamicPricingModel(props.model)) {
     label = t('Tiered (billing expression)')
     variant = 'warning'
   } else if (isTokenBasedModel(props.model)) {

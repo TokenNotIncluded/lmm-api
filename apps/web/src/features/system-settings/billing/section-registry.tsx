@@ -46,6 +46,10 @@ const RatioSettingsCard = lazyNamedSection(
   () => import('../models/ratio-settings-card'),
   'RatioSettingsCard'
 )
+const RouterPricingSection = lazyNamedSection(
+  () => import('./router-pricing-section'),
+  'RouterPricingSection'
+)
 
 const getModelDefaults = (settings: BillingSettings) => ({
   ModelPrice: settings.ModelPrice,
@@ -160,6 +164,11 @@ const BILLING_SECTIONS = [
         visibleTabs={['models', 'unset-models', 'tool-prices', 'upstream-sync']}
       />
     ),
+  },
+  {
+    id: 'router-pricing',
+    titleKey: 'Router pricing',
+    build: () => <RouterPricingSection />,
   },
   {
     id: 'group-pricing',

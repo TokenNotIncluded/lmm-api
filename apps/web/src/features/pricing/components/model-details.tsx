@@ -110,6 +110,7 @@ import { ModelDetailsPerformance } from './model-details-performance'
 import { ModelRuntimeBadge } from './model-runtime-badge'
 import { PricingContextLabel } from './pricing-context-label'
 import { RequestEstimator } from './request-estimator'
+import { UpstreamCostPricing } from './upstream-cost-pricing'
 
 // ----------------------------------------------------------------------------
 // Local UI helpers
@@ -623,6 +624,31 @@ function PriceSection(props: {
   displayCurrency: PriceDisplayCurrency
 }) {
   const { t } = useTranslation()
+  if (
+    !props.model.group_prices &&
+    Object.keys(props.model.group_upstream_cost_prices ?? {}).length
+  ) {
+    return (
+      <section className='space-y-3'>
+        <SectionTitle>{t('Upstream cost')}</SectionTitle>
+        {Object.keys(props.model.group_upstream_cost_prices ?? {}).map(
+          (group) => (
+            <div
+              key={group}
+              className='space-y-2 border-b pb-3 last:border-b-0'
+            >
+              <GroupBadge group={group} size='sm' />
+              <UpstreamCostPricing
+                model={props.model}
+                selectedGroup={group}
+                detailed
+              />
+            </div>
+          )
+        )}
+      </section>
+    )
+  }
   if (props.model.quota_type === 2) return null
   const isTokenBased = isTokenBasedModel(props.model)
   const tokenUnitLabel = props.tokenUnit === 'K' ? '1K' : '1M'
@@ -693,36 +719,44 @@ function PriceSection(props: {
             className='space-y-2 border-b pb-3 last:border-b-0 last:pb-0'
           >
             <GroupBadge group={group} size='sm' />
-            {[
-              ...primaryPriceTypes,
-              ...secondaryPriceTypes.filter((item) =>
-                item.type === 'cache'
-                  ? prices.cache_read_price !== null
-                  : item.type === 'create_cache'
-                    ? prices.cache_write_price !== null
-                    : false
-              ),
-            ].map((item) => (
-              <div
-                key={item.type}
-                className='flex flex-wrap items-baseline justify-between gap-2 text-sm'
-              >
-                <span className='text-muted-foreground'>{item.label}</span>
-                <span className='font-mono tabular-nums'>
-                  {formatGroupPrice(
-                    props.model,
-                    group,
-                    item.type,
-                    props.tokenUnit,
-                    props.displayCurrency,
-                    {}
-                  )}
-                  <span className='text-muted-foreground ml-1 text-xs'>
-                    / {tokenUnitLabel}
+            {props.model.group_upstream_cost_prices?.[group] ? (
+              <UpstreamCostPricing
+                model={props.model}
+                selectedGroup={group}
+                detailed
+              />
+            ) : (
+              [
+                ...primaryPriceTypes,
+                ...secondaryPriceTypes.filter((item) =>
+                  item.type === 'cache'
+                    ? prices.cache_read_price !== null
+                    : item.type === 'create_cache'
+                      ? prices.cache_write_price !== null
+                      : false
+                ),
+              ].map((item) => (
+                <div
+                  key={item.type}
+                  className='flex flex-wrap items-baseline justify-between gap-2 text-sm'
+                >
+                  <span className='text-muted-foreground'>{item.label}</span>
+                  <span className='font-mono tabular-nums'>
+                    {formatGroupPrice(
+                      props.model,
+                      group,
+                      item.type,
+                      props.tokenUnit,
+                      props.displayCurrency,
+                      {}
+                    )}
+                    <span className='text-muted-foreground ml-1 text-xs'>
+                      / {tokenUnitLabel}
+                    </span>
                   </span>
-                </span>
-              </div>
-            ))}
+                </div>
+              ))
+            )}
           </div>
         ))}
       </section>

@@ -20,10 +20,52 @@ import { PricingContextLabel } from './pricing-context-label'
 import { PricingToolbar, type PricingToolbarProps } from './pricing-toolbar'
 import { RequestEstimator } from './request-estimator'
 
+test('router cards and details show the exact effective cost factor once and keep budget blocks visible', () => {
+  const model: PricingModel = {
+    ...accountModel,
+    model_name: 'openrouter/fusion',
+    billing_mode: 'upstream_cost',
+    input_price: null,
+    output_price: null,
+    group_upstream_cost_prices: {
+      standard: {
+        currency: 'USD',
+        cost_source: 'usage.cost',
+        credits_per_usd: 500_000,
+        rounding: 'ceil_total_credits',
+        rate_basis: 'effective_user_rate',
+        multiplier: { numerator: '97', denominator: '80' },
+      },
+    },
+    group_unavailable_reasons: {
+      standard: 'upstream_budget_contract_required',
+    },
+  }
+  const card = renderCard(model).textContent
+  assert.match(card, /ceil\(USD cost × 500,000 × 97\/80\)/)
+  assert.match(card, /Text calls blocked/)
+  assert.doesNotMatch(card, /Image prices|Input 0|Free/)
+  const details = render(
+    <ModelDetailsContent
+      model={model}
+      groupRatio={{ standard: 10 }}
+      usableGroup={{}}
+      endpointMap={{}}
+      autoGroups={[]}
+      tokenUnit='M'
+      displayCurrency='USD'
+    />
+  ).textContent
+  assert.match(details, /Prices include your account discount/)
+  assert.match(details, /Missing cost stays pending/)
+  assert.equal(renderEstimator(model).textContent, '')
+})
+
 const i18n = createInstance()
 await i18n.use(initReactI18next).init({
   lng: 'en',
   resources: { en: { translation: {} } },
+  interpolation: { escapeValue: false },
 })
 const domWindow = new Window()
 const queryClient = new QueryClient({

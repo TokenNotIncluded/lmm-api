@@ -22,6 +22,8 @@ For commercial licensing, please contact support@quantumnous.com
 import type {
   NativeImageVariant,
   NativePricingContext,
+  NativeUpstreamCostPrice,
+  NativeUnavailableReason,
 } from './catalog-contract'
 
 export type PricingVendor = {
@@ -55,7 +57,9 @@ export type PricingModel = {
   /** Core rates already include group factors. Never apply them a second time. */
   group_prices?: Record<string, PricingGroupPrices>
   group_endpoints?: Record<string, string[]>
-  group_quota_types?: Record<string, 0 | 2>
+  group_quota_types?: Record<string, 0 | 2 | 3>
+  group_upstream_cost_prices?: Record<string, NativeUpstreamCostPrice>
+  group_unavailable_reasons?: Record<string, NativeUnavailableReason>
   /** Native image quotes retain integer ratios and are never token prices. */
   image_variants?: PricingImageVariant[]
   performance_available?: boolean

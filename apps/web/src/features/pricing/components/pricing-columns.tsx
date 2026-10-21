@@ -41,10 +41,12 @@ import {
   formatRequestPrice,
   stripTrailingZeros,
 } from '../lib/price'
+import { getUpstreamCostPrice } from '../lib/upstream-cost'
 import type { PricingModel, TokenUnit, PriceDisplayCurrency } from '../types'
 import { ModelBillingModeBadge } from './model-billing-mode-badge'
 import { ModelPerfStatus } from './model-perf-badge'
 import { ModelRuntimeBadge } from './model-runtime-badge'
+import { UpstreamCostPricing } from './upstream-cost-pricing'
 
 // ----------------------------------------------------------------------------
 // Pricing Table Columns
@@ -103,7 +105,11 @@ export function usePricingColumns(
       accessorKey: 'quota_type',
       header: t('Type'),
       cell: ({ row }) => (
-        <ModelBillingModeBadge model={row.original} className='-ml-1.5' />
+        <ModelBillingModeBadge
+          model={row.original}
+          selectedGroup={selectedGroup}
+          className='-ml-1.5'
+        />
       ),
       size: 110,
       enableSorting: false,
@@ -127,6 +133,11 @@ export function usePricingColumns(
           ),
         })
 
+        if (getUpstreamCostPrice(model, selectedGroup)) {
+          return (
+            <UpstreamCostPricing model={model} selectedGroup={selectedGroup} />
+          )
+        }
         if (model.quota_type === 2) {
           return (
             <span className='text-muted-foreground text-xs'>
