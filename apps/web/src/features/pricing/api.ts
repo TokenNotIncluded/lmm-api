@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { api } from '@/lib/api'
+import { api, type ApiRequestConfig } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { adaptNativePricing } from './catalog-adapter'
@@ -27,16 +27,26 @@ import type { PricingData } from './types'
 // Pricing APIs
 // ----------------------------------------------------------------------------
 
-// Get model pricing data
-export async function getPricing(signal?: AbortSignal): Promise<PricingData> {
+export type PricingAuthScope = NonNullable<ApiRequestConfig['authScope']>
+
+function currentPricingScope(): PricingAuthScope {
   const { user, session } = useAuthStore.getState().auth
-  const visibility = user ? 'session' : 'public'
+  return { userId: user?.id, sessionId: session?.sid }
+}
+
+// Get model pricing data
+export async function getPricing(
+  signal?: AbortSignal,
+  scope: PricingAuthScope = currentPricingScope()
+): Promise<PricingData> {
+  const authenticated = scope.userId !== undefined
+  const visibility = authenticated ? 'session' : 'public'
   const res = await api.get<unknown>(`/core/v1/pricing/${visibility}`, {
     signal,
     timeout: 10_000,
-    authScope: { userId: user?.id, sessionId: session?.sid },
-    authMode: user ? 'session' : 'anonymous',
-    skipAuthRefresh: !user,
+    authScope: scope,
+    authMode: authenticated ? 'session' : 'anonymous',
+    skipAuthRefresh: !authenticated,
     skipBusinessError: true,
     skipErrorHandler: true,
   })

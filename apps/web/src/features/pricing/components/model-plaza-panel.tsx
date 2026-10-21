@@ -173,7 +173,12 @@ export function ModelPlazaPanel() {
   const [query, setQuery] = useState('')
   const [vendor, setVendor] = useState('all')
   const [availability, setAvailability] = useState<AvailabilityFilter>('all')
-  const [selectedModel, setSelectedModel] = useState<PricingModel | null>(null)
+  const [selectedModelName, setSelectedModelName] = useState<string | null>(
+    null
+  )
+  const selectedModel = pricing.models.find(
+    (model) => model.model_name === selectedModelName
+  )
 
   const visibleModels = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
@@ -390,7 +395,7 @@ export function ModelPlazaPanel() {
                           : undefined
                       }
                       perfLoading={perfLoading}
-                      onSelect={() => setSelectedModel(model)}
+                      onSelect={() => setSelectedModelName(model.model_name)}
                       onClose={closePanel}
                     />
                   ))}
@@ -405,7 +410,7 @@ export function ModelPlazaPanel() {
         <ModelDetailsDrawer
           open
           onOpenChange={(nextOpen) => {
-            if (!nextOpen) setSelectedModel(null)
+            if (!nextOpen) setSelectedModelName(null)
           }}
           model={selectedModel}
           groupRatio={pricing.groupRatio}

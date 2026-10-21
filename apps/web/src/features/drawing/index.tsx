@@ -301,7 +301,7 @@ function DrawingWorkbench({ userId }: { userId: number }) {
 
   const pricingQuery = useQuery({
     queryKey: pricingQueryKey(userId, sessionId),
-    queryFn: ({ signal }) => getPricing(signal),
+    queryFn: ({ signal }) => getPricing(signal, { userId, sessionId }),
     staleTime: 60_000,
     retry: false,
   })
@@ -313,10 +313,10 @@ function DrawingWorkbench({ userId }: { userId: number }) {
   })
   const imageModels = useMemo(
     () =>
-      (pricingQuery.data?.data ?? [])
+      (pricingQuery.isError ? [] : (pricingQuery.data?.data ?? []))
         .filter(isImageModel)
         .sort((left, right) => left.model_name.localeCompare(right.model_name)),
-    [pricingQuery.data?.data]
+    [pricingQuery.data?.data, pricingQuery.isError]
   )
   const groups = useMemo(
     () =>
