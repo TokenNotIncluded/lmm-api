@@ -1,11 +1,14 @@
 //! Synthetic loopback receipts exercise the Rust gateway, PostgreSQL and real
 //! ledger together. They do not enable or certify live OpenRouter forwarding.
 use super::*;
+use axum::extract::State;
+use std::sync::atomic::AtomicUsize;
 
 const MODEL: &str = "openrouter/fusion";
 const COST: &str = "0.123456789";
 
-async fn cost_provider(Json(request): Json<Value>) -> Response {
+async fn cost_provider(State(hits): State<Arc<AtomicUsize>>, Json(request): Json<Value>) -> Response {
+    hits.fetch_add(1, Ordering::SeqCst);
     assert!(lmm_core::upstream_cost::supported_router(
         request["model"].as_str().unwrap()
     ));
@@ -41,14 +44,17 @@ async fn cost_provider(Json(request): Json<Value>) -> Response {
     ([("content-type", "application/json")], body).into_response()
 }
 
-async fn upstream() -> (String, JoinHandle<()>) {
+async fn upstream() -> (String, JoinHandle<()>, Arc<AtomicUsize>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
-    let app = Router::new().route("/v1/chat/completions", post(cost_provider));
+    let hits = Arc::new(AtomicUsize::new(0));
+    let app = Router::new()
+        .route("/v1/chat/completions", post(cost_provider))
+        .with_state(hits.clone());
     let task = tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
-    (endpoint, task)
+    (endpoint, task, hits)
 }
 
 fn cost_routes(endpoint: &str, model: &str) -> Arc<lmm_core::routing::Router> {
@@ -134,7 +140,7 @@ async fn request_cost(
 #[sqlx::test(migrations = false)]
 async fn upstream_cost_http_and_repeated_sse_bill_all_four_routers_once(pool: PgPool) {
     let (_, ledger, _, key, key_id, account) = fixture(&pool, 3_000_000).await;
-    let (endpoint, task) = upstream().await;
+    let (endpoint, task, _hits) = upstream().await;
     for (index, model) in [
         "nvidia/switchyard",
         "openrouter/auto-beta",
@@ -188,7 +194,7 @@ async fn upstream_cost_http_and_repeated_sse_bill_all_four_routers_once(pool: Pg
 #[sqlx::test(migrations = false)]
 async fn upstream_cost_missing_invalid_and_zero_are_distinct_and_topup_is_authorized(pool: PgPool) {
     let (_, ledger, _, key, key_id, account) = fixture(&pool, 5_000_000).await;
-    let (endpoint, task) = upstream().await;
+    let (endpoint, task, _hits) = upstream().await;
     let gateway = gateway_with_routes(&pool, cost_routes(&endpoint, MODEL), key_id);
     for (prompt, stream) in [
         ("missing", false),
@@ -251,10 +257,14 @@ async fn upstream_cost_completed_stream_recovers_exact_receipt_after_failed_fina
     let (_, ledger, _, key, key_id, account) = fixture(&pool, 3_000_000).await;
     sqlx::raw_sql("CREATE FUNCTION public.reject_router_final() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.event_id='final' THEN RAISE EXCEPTION 'synthetic final commit failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER reject_router_final BEFORE INSERT ON core_charging.usage_events FOR EACH ROW EXECUTE FUNCTION public.reject_router_final()")
         .execute(&pool).await.unwrap();
-    let (endpoint, task) = upstream().await;
+    let (endpoint, task, hits) = upstream().await;
     let running =
         gateway_with_routes(&pool, cost_routes(&endpoint, MODEL), key_id).with_local_streaming();
     let response = request_cost(&running, &key, MODEL, "hello", true, "router-recovery").await;
+    let request_id = response.headers()["x-request-id"]
+        .to_str()
+        .unwrap()
+        .to_owned();
     let text = String::from_utf8(
         to_bytes(response.into_body(), 1_000_000)
             .await
@@ -268,6 +278,32 @@ async fn upstream_cost_completed_stream_recovers_exact_receipt_after_failed_fina
         ledger.balance(account).await.unwrap().reserved_units,
         625_000
     );
+    assert_unknown_hold(&pool, &request_id, 625_000).await;
+    let terminal_usage: Vec<Value> = sqlx::query_scalar(
+        "SELECT provider_usage FROM core_model.output_checkpoints WHERE request_id=$1 AND terminal_observed ORDER BY sequence",
+    )
+    .bind(&request_id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(!terminal_usage.is_empty());
+    for usage in terminal_usage {
+        assert_eq!(
+            usage["upstream_cost_atto_usd"],
+            json!(123_456_789_000_000_000_u128)
+        );
+    }
+    let provider_usage: Value = sqlx::query_scalar(
+        "SELECT detail->'usage' FROM core_charging.usage_events WHERE request_id=$1 AND event_id='usage:provider-final'",
+    )
+    .bind(&request_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        provider_usage,
+        json!({"input":0,"cached":0,"output":0,"upstream_cost_atto_usd":123_456_789_000_000_000_u128})
+    );
     sqlx::query("DROP TRIGGER reject_router_final ON core_charging.usage_events")
         .execute(&pool)
         .await
@@ -277,12 +313,20 @@ async fn upstream_cost_completed_stream_recovers_exact_receipt_after_failed_fina
         .execute(&mut *tx)
         .await
         .unwrap();
-    sqlx::query("UPDATE core_charging.requests SET lease_until=0,revision=revision+1 WHERE state='streaming'").execute(&mut *tx).await.unwrap();
+    let expired = sqlx::query(
+        "UPDATE core_charging.requests SET lease_until=0,revision=revision+1 WHERE state='streaming' AND id=$1",
+    )
+    .bind(&request_id)
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    assert_eq!(expired.rows_affected(), 0);
     tx.commit().await.unwrap();
     drop(running);
     let restarted =
         gateway_with_routes(&pool, cost_routes(&endpoint, MODEL), key_id).with_local_streaming();
-    assert_eq!(restarted.recover_expired(10).await.unwrap(), 1);
+    assert_eq!(restarted.recover_expired(10).await.unwrap(), 0);
+    assert_unknown_hold(&pool, &request_id, 625_000).await;
     assert_eq!(restarted.reconcile_completed_streams(10).await.unwrap(), 1);
     assert_eq!(restarted.reconcile_completed_streams(10).await.unwrap(), 0);
     let balance = ledger.balance(account).await.unwrap();
@@ -290,8 +334,18 @@ async fn upstream_cost_completed_stream_recovers_exact_receipt_after_failed_fina
         (balance.available_units, balance.reserved_units),
         (3_000_000 - 77_161, 0)
     );
+    let final_usage: Value = sqlx::query_scalar(
+        "SELECT detail->'usage' FROM core_charging.usage_events WHERE request_id=$1 AND event_id='final'",
+    )
+    .bind(&request_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(final_usage, provider_usage);
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
     let duplicate = request_cost(&restarted, &key, MODEL, "hello", true, "router-recovery").await;
     assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
     balanced(&pool).await;
     task.abort();
 }
