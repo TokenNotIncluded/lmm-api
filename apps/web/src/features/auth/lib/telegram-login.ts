@@ -16,56 +16,79 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-export type TelegramAuthorization = {
-  id: string | number
-  auth_date: string | number
-  hash: string
-  first_name?: string
-  last_name?: string
-  username?: string
-  photo_url?: string
-  lang?: string
+import { z } from 'zod'
+
+import type { AuthBundle } from '@/stores/auth-store'
+
+const telegramInteger = z.union([
+  z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  z
+    .string()
+    .regex(/^[1-9][0-9]{0,18}$/)
+    .pipe(
+      z.string().refine((value) => BigInt(value) <= 9_223_372_036_854_775_807n)
+    ),
+])
+
+const telegramAuthorizationSchema = z.object({
+  id: telegramInteger,
+  auth_date: telegramInteger,
+  hash: z.string().regex(/^[a-fA-F0-9]{64}$/),
+  first_name: z.string().optional(),
+  last_name: z.string().optional(),
+  username: z.string().optional(),
+  photo_url: z.string().optional(),
+  lang: z.string().optional(),
+})
+
+export type TelegramAuthorization = z.infer<typeof telegramAuthorizationSchema>
+
+export const telegramFlowSchema = z.object({
+  flow_token: z.string().regex(/^lmmt_[a-fA-F0-9]{64}$/),
+  expires_at: z.number().int().positive(),
+})
+
+export type TelegramLoginFlow = z.infer<typeof telegramFlowSchema>
+
+const telegramMFAChallengeSchema = z.object({
+  require_2fa: z.literal(true),
+  flow_token: z.string().regex(/^lmmf_[a-fA-F0-9]{64}$/),
+  expires_at: z.number().int().positive(),
+})
+
+export type TelegramMFAChallenge = z.infer<typeof telegramMFAChallengeSchema>
+
+const telegramMFARequiredSchema = z.object({
+  require_2fa: z.boolean().optional(),
+})
+
+export function parseTelegramMFARequirement(value: unknown): boolean {
+  return telegramMFARequiredSchema.parse(value).require_2fa === true
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object'
+export function parseTelegramMFAChallenge(
+  value: unknown
+): TelegramMFAChallenge | null {
+  const result = telegramMFAChallengeSchema.safeParse(value)
+  return result.success ? result.data : null
 }
 
-function readTelegramNumber(value: unknown): string | number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) return value
-  if (typeof value === 'string' && value.trim()) return value
-  return null
-}
+export const telegramResponseSchema = z.discriminatedUnion('success', [
+  z.object({ success: z.literal(true), data: z.unknown() }),
+  z.object({
+    success: z.literal(false),
+    code: z.string().optional(),
+    error: z.object({ code: z.string().optional() }).optional(),
+  }),
+])
+
+export type TelegramLoginResponse =
+  | Extract<z.infer<typeof telegramResponseSchema>, { success: false }>
+  | { success: true; data: AuthBundle | TelegramMFAChallenge }
 
 export function pickTelegramAuthorization(
   value: unknown
 ): TelegramAuthorization | null {
-  if (!isRecord(value)) return null
-
-  const id = readTelegramNumber(value.id)
-  const authDate = readTelegramNumber(value.auth_date)
-  const hash = typeof value.hash === 'string' ? value.hash.trim() : ''
-  if (id === null || authDate === null || !hash) return null
-
-  const authorization: TelegramAuthorization = {
-    id,
-    auth_date: authDate,
-    hash,
-  }
-  const optionalFields = [
-    'first_name',
-    'last_name',
-    'username',
-    'photo_url',
-    'lang',
-  ] as const
-
-  for (const field of optionalFields) {
-    const fieldValue = value[field]
-    if (typeof fieldValue === 'string' && fieldValue) {
-      authorization[field] = fieldValue
-    }
-  }
-
-  return authorization
+  const result = telegramAuthorizationSchema.safeParse(value)
+  return result.success ? result.data : null
 }

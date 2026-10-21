@@ -51,9 +51,7 @@ export function TelegramLoginDialog(props: TelegramLoginDialogProps) {
   const { t } = useTranslation()
   const widgetContainer = useRef<HTMLDivElement | null>(null)
   const authorizationHandler = useRef(props.onAuthorization)
-  const [callbackName] = useState<TelegramCallbackName>(
-    () => `newApiTelegramLogin${++telegramCallbackSequence}`
-  )
+  const pendingAuthorization = useRef(props.pending)
   const [widgetState, setWidgetState] = useState<
     'idle' | 'loading' | 'ready' | 'failed'
   >('idle')
@@ -63,17 +61,26 @@ export function TelegramLoginDialog(props: TelegramLoginDialogProps) {
   }, [props.onAuthorization])
 
   useEffect(() => {
+    pendingAuthorization.current = props.pending
+  }, [props.pending])
+
+  useEffect(() => {
     const container = widgetContainer.current
-    const botName = props.botName.trim()
+    const botName = props.botName.trim().replace(/^@/, '')
     if (!props.open || !container || !botName) return
 
+    const callbackName: TelegramCallbackName = `newApiTelegramLogin${++telegramCallbackSequence}`
+    let active = true
+    let submitted = false
     setWidgetState('loading')
     const callback = (payload: unknown) => {
+      if (!active || submitted || pendingAuthorization.current) return
       const authorization = pickTelegramAuthorization(payload)
       if (!authorization) {
         setWidgetState('failed')
         return
       }
+      submitted = true
       authorizationHandler.current(authorization)
     }
     window[callbackName] = callback
@@ -92,12 +99,13 @@ export function TelegramLoginDialog(props: TelegramLoginDialogProps) {
     container.replaceChildren(script)
 
     return () => {
+      active = false
       script.removeEventListener('load', handleLoad)
       script.removeEventListener('error', handleError)
       container.replaceChildren()
       delete window[callbackName]
     }
-  }, [callbackName, props.botName, props.open])
+  }, [props.botName, props.open])
 
   return (
     <Dialog

@@ -16,11 +16,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { z } from 'zod'
+
 import { parseUsageBuckets } from '@/features/dashboard/lib/usage-bucket'
-import { api } from '@/lib/api'
+import { api, type ApiRequestConfig } from '@/lib/api'
 import { withAuthenticatedCookieWrite } from '@/lib/auth-session'
 import type { CustomOAuthBinding } from '@/lib/oauth'
-import type { LoginSession } from '@/stores/auth-store'
+import { useAuthStore, type LoginSession } from '@/stores/auth-store'
 import type { WalletDisplayCurrencyPreference } from '@/stores/wallet-currency-preference-store'
 
 import type { ProfileUsageQueryRange, ProfileUsageRow } from './lib/activity'
@@ -44,8 +46,17 @@ import type {
 /**
  * Get current user profile
  */
-export async function getUserProfile(): Promise<ApiResponse<UserProfile>> {
-  const res = await api.get('/api/user/self')
+export async function getUserProfile(
+  config: Pick<
+    ApiRequestConfig,
+    'timeout' | 'skipBusinessError' | 'skipErrorHandler'
+  > = {}
+): Promise<ApiResponse<UserProfile>> {
+  const { user, session } = useAuthStore.getState().auth
+  const res = await api.get<ApiResponse<UserProfile>>('/api/user/self', {
+    ...config,
+    authScope: { userId: user?.id, sessionId: session?.sid },
+  })
   return res.data
 }
 
@@ -248,17 +259,56 @@ export async function bindWeChat(code: string): Promise<ApiResponse> {
   return res.data
 }
 
-export interface TelegramBindFlow {
-  flow_token: string
-  callback_url: string
-  expires_at: number
-}
+const telegramBindFlowSchema = z
+  .object({
+    flow_token: z.string().regex(/^lmmt_[0-9a-fA-F]{64}$/),
+    callback_url: z.string().max(4096),
+    expires_at: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  })
+  .superRefine((flow, context) => {
+    const now = Math.floor(Date.now() / 1000)
+    if (flow.expires_at <= now) {
+      context.addIssue({
+        code: 'custom',
+        path: ['expires_at'],
+        message: 'Invalid Telegram binding lifetime',
+      })
+    }
+    const expected = `${window.location.origin}/api/oauth/telegram/bind/${flow.flow_token}`
+    if (flow.callback_url !== expected) {
+      context.addIssue({
+        code: 'custom',
+        path: ['callback_url'],
+        message: 'Invalid Telegram binding callback',
+      })
+    }
+  })
+
+const telegramBindStartSchema = z.discriminatedUnion('success', [
+  z.object({ success: z.literal(true), data: telegramBindFlowSchema }),
+  z.object({
+    success: z.literal(false),
+    code: z.string().max(128).optional(),
+    error: z.object({ code: z.string().max(128) }).optional(),
+  }),
+])
+
+export type TelegramBindFlow = z.infer<typeof telegramBindFlowSchema>
 
 export async function startTelegramBind(): Promise<
-  ApiResponse<TelegramBindFlow>
+  z.infer<typeof telegramBindStartSchema>
 > {
-  const res = await api.post('/api/oauth/telegram/bind/start')
-  return res.data
+  const res = await withAuthenticatedCookieWrite((config) =>
+    api.post<unknown>('/api/oauth/telegram/bind/start', undefined, {
+      ...config,
+      headers: config.authScope.sessionId
+        ? { 'X-Auth-Session': config.authScope.sessionId }
+        : undefined,
+      skipBusinessError: true,
+      skipErrorHandler: true,
+    })
+  )
+  return telegramBindStartSchema.parse(res.data)
 }
 
 // ============================================================================

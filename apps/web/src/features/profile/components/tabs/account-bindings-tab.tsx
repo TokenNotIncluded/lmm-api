@@ -69,7 +69,7 @@ import { WeChatBindDialog } from '../dialogs/wechat-bind-dialog'
 
 interface AccountBindingsTabProps {
   profile: UserProfile | null
-  onUpdate: () => void
+  onUpdate: () => void | Promise<void>
 }
 
 type DialogKey = 'email' | 'wechat' | 'telegram'
@@ -459,12 +459,8 @@ export function AccountBindingsTab({
         id: 'telegram',
         label: t('Telegram'),
         icon: Send,
-        value: (profile as unknown as Record<string, unknown>).telegram_id as
-          | string
-          | undefined,
-        isBound: Boolean(
-          (profile as unknown as Record<string, unknown>).telegram_id
-        ),
+        value: profile.telegram_id,
+        isBound: Boolean(profile.telegram_id),
         isEnabled: isOAuthProviderConfigured(status, 'telegram'),
         onBind: () => dialogs.open('telegram'),
         onUnbind: canUnbindBuiltInOAuth
@@ -682,7 +678,7 @@ export function AccountBindingsTab({
           onOpenChange={(open) =>
             open ? dialogs.open('telegram') : dialogs.close('telegram')
           }
-          botName={status.telegram_bot_name as string}
+          botName={status.telegram_bot_name}
           onSuccess={onUpdate}
         />
       )}
