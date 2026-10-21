@@ -52,15 +52,31 @@ import { beginPasskeyLogin, finishPasskeyLogin } from '@/features/auth/passkey'
 import type { AuthFormProps } from '@/features/auth/types'
 import { useStatus } from '@/hooks/use-status'
 import { isAuthBundle } from '@/lib/api'
+import { AuthCookieBlockedError } from '@/lib/auth-cookie'
 import {
   buildAssertionResult,
   prepareCredentialRequestOptions,
   isPasskeySupported as detectPasskeySupport,
 } from '@/lib/passkey'
+import {
+  isRateLimitedError,
+  rateLimitWaitSeconds,
+} from '@/lib/request-rate-limit'
 import { getServerErrorMessageKey } from '@/lib/server-error-message'
 import { cn } from '@/lib/utils'
 
 import { AccountAppealForm } from './account-appeal-form'
+
+function passwordLoginErrorMessageKey(error: unknown): string | null {
+  const messageKey = getServerErrorMessageKey(error)
+  if (
+    messageKey ===
+    'This account is disabled. Use the appeal form below to ask an administrator to restore access.'
+  ) {
+    return 'This user account is disabled.'
+  }
+  return messageKey === 'Session expired!' ? null : messageKey
+}
 
 export function UserAuthForm({
   className,
@@ -169,17 +185,25 @@ export function UserAuthForm({
       )
       if (controller.signal.aborted) return
 
+      if (!res.success) {
+        const messageKey = passwordLoginErrorMessageKey(res)
+        toast.error(messageKey ? t(messageKey) : loginFailedMessage)
+        return
+      }
+
       if (res.success) {
         if (res.data && 'require_2fa' in res.data && res.data.require_2fa) {
           if (!res.data.flow_token) {
-            throw new Error(t('Login flow expired. Please sign in again.'))
+            toast.error(t('Login flow expired. Please sign in again.'))
+            return
           }
           redirectTo2FA(redirectTo)
           return
         }
 
         if (!isAuthBundle(res.data)) {
-          throw new Error(t('Login failed'))
+          toast.error(loginFailedMessage)
+          return
         }
         await handleLoginSuccess(res.data, redirectTo, true, controller.signal)
         if (controller.signal.aborted) return
@@ -187,8 +211,37 @@ export function UserAuthForm({
       }
     } catch (error: unknown) {
       if (controller.signal.aborted || axios.isCancel(error)) return
-      if (axios.isAxiosError(error)) return
-      toast.error(error instanceof Error ? error.message : loginFailedMessage)
+      const status = axios.isAxiosError(error)
+        ? error.response?.status
+        : undefined
+      const messageKey = passwordLoginErrorMessageKey(error)
+      const rateLimited = isRateLimitedError(error)
+      let message = loginFailedMessage
+      if (error instanceof AuthCookieBlockedError) {
+        message = error.message
+      } else if (rateLimited) {
+        const seconds = rateLimitWaitSeconds(error)
+        message =
+          seconds !== null && seconds > 0
+            ? t('Too many requests. Please try again in {{seconds}} seconds.', {
+                seconds,
+              })
+            : t('Too many requests. Please wait before trying again.')
+      } else if (status !== 401) {
+        if (messageKey) {
+          message = t(messageKey)
+        } else if (status === 403) {
+          message = t('Request failed')
+        } else if (status === 503) {
+          message = t(
+            'The service is temporarily unavailable. Please try again later.'
+          )
+        }
+      }
+      toast.error(
+        message,
+        rateLimited ? { id: 'request-rate-limited' } : undefined
+      )
     } finally {
       if (pendingLogin.current === controller) pendingLogin.current = null
       setIsLoading(false)

@@ -4,9 +4,16 @@ import { mock } from 'bun:test'
 import assert from 'node:assert/strict'
 import { after, afterEach, beforeEach, test } from 'node:test'
 
-import { AxiosError } from 'axios'
+import { AxiosError, AxiosHeaders, CanceledError } from 'axios'
 import { Window } from 'happy-dom'
+import i18next from 'i18next'
 import type { ReactNode } from 'react'
+
+import {
+  AuthCookieBlockedError,
+  authCookieRecoveryMessage,
+  authCookieStorageMessage,
+} from '@/lib/auth-cookie'
 
 const unexpectedRequests: string[] = []
 function rejectNetwork({ request }: { request: { url: string } }): never {
@@ -73,6 +80,7 @@ Object.defineProperty(globalThis, 'IS_REACT_ACT_ENVIRONMENT', {
 })
 
 const toastErrors: string[] = []
+const toastErrorIds: Array<string | undefined> = []
 const toastSuccesses: string[] = []
 const loginCalls: unknown[] = []
 const wechatStartCalls: unknown[] = []
@@ -87,8 +95,9 @@ let loginImpl: (payload: unknown) => Promise<unknown> = async () => ({
 
 mock.module('sonner', () => ({
   toast: {
-    error: (message: string) => {
+    error: (message: string, options?: { id?: string }) => {
       toastErrors.push(message)
+      toastErrorIds.push(options?.id)
       return 'error-toast'
     },
     success: (message: string) => {
@@ -220,6 +229,10 @@ mock.module('./account-appeal-form', () => ({
 
 const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
+await i18next.init({
+  lng: 'en',
+  resources: { en: { translation: {} } },
+})
 const { UserAuthForm } = await import('./user-auth-form')
 
 type Root = ReturnType<typeof createRoot>
@@ -323,6 +336,7 @@ afterEach(async () => {
   root = undefined
   document.body.innerHTML = ''
   toastErrors.length = 0
+  toastErrorIds.length = 0
   toastSuccesses.length = 0
   loginCalls.length = 0
   wechatStartCalls.length = 0
@@ -583,10 +597,152 @@ for (const status of [
   })
 }
 
+function loginHttpError(
+  status: number,
+  data: unknown,
+  headers: Record<string, string> = {}
+) {
+  return new AxiosError(
+    'private transport diagnostic',
+    'ERR_BAD_RESPONSE',
+    undefined,
+    undefined,
+    {
+      status,
+      statusText: 'synthetic failure',
+      config: { headers: new AxiosHeaders() },
+      data,
+      headers,
+    }
+  )
+}
+
 for (const [name, error, expectedErrors] of [
-  ['client failure', new Error('Login flow expired'), ['Login flow expired']],
+  [
+    'unknown client diagnostic',
+    new Error('private service diagnostic'),
+    ['Login failed'],
+  ],
   ['unknown failure', 'unknown failure', ['Login failed']],
-  ['Axios failure handled centrally', new AxiosError('Network error'), []],
+  [
+    'network failure',
+    new AxiosError('private network diagnostic'),
+    ['Login failed'],
+  ],
+  [
+    'invalid password',
+    loginHttpError(401, {
+      code: 'AUTH_UNAUTHORIZED',
+      message: 'Invalid credentials or expired session',
+    }),
+    ['Login failed'],
+  ],
+  [
+    '401 with unrelated session code',
+    loginHttpError(401, {
+      code: 'AUTH_ROTATION_INVALID',
+      message: 'private diagnostic',
+    }),
+    ['Login failed'],
+  ],
+  [
+    'origin denied',
+    loginHttpError(403, {
+      code: 'AUTH_ORIGIN_FORBIDDEN',
+      message: 'private origin diagnostic',
+    }),
+    ['Request failed'],
+  ],
+  [
+    '403 with unrelated session code',
+    loginHttpError(403, {
+      code: 'AUTH_ROTATION_INVALID',
+      message: 'private diagnostic',
+    }),
+    ['Request failed'],
+  ],
+  [
+    'disabled account',
+    loginHttpError(403, {
+      code: 'AUTH_USER_DISABLED',
+      message: 'private account diagnostic',
+    }),
+    ['This user account is disabled.'],
+  ],
+  [
+    'rate limit with wait',
+    loginHttpError(
+      429,
+      { message: 'private limiter diagnostic' },
+      { 'retry-after': '12' }
+    ),
+    ['Too many requests. Please try again in 12 seconds.'],
+  ],
+  [
+    'rate limit without valid wait',
+    loginHttpError(
+      429,
+      { message: 'private limiter diagnostic' },
+      { 'retry-after': 'invalid' }
+    ),
+    ['Too many requests. Please wait before trying again.'],
+  ],
+  [
+    'wrapped rate limit',
+    new Error('private wrapper diagnostic', {
+      cause: loginHttpError(429, {}, { 'retry-after': '3' }),
+    }),
+    ['Too many requests. Please try again in 3 seconds.'],
+  ],
+  [
+    'authentication unavailable',
+    loginHttpError(503, {
+      code: 'AUTH_UNAVAILABLE',
+      message: 'private storage diagnostic',
+    }),
+    ['The service is temporarily unavailable. Please try again later.'],
+  ],
+  [
+    'MFA unavailable',
+    loginHttpError(503, {
+      code: 'MFA_UNAVAILABLE',
+      message: 'private MFA diagnostic',
+    }),
+    ['Two-factor authentication is temporarily unavailable. Try again later.'],
+  ],
+  [
+    'MFA expired',
+    Object.assign(new Error('private diagnostic'), {
+      code: 'MFA_FLOW_EXPIRED',
+    }),
+    ['This login flow has expired or has already been used. Sign in again.'],
+  ],
+  [
+    'invalid MFA code',
+    loginHttpError(400, {
+      error: { code: 'MFA_CODE_INVALID', message: 'private diagnostic' },
+    }),
+    ['Invalid code'],
+  ],
+  [
+    'unknown backend error',
+    loginHttpError(500, {
+      code: 'UNKNOWN_FAILURE',
+      message: 'private backend diagnostic',
+    }),
+    ['Login failed'],
+  ],
+  [
+    'Cookie result uncertain',
+    new AuthCookieBlockedError('uncertain'),
+    [authCookieRecoveryMessage],
+  ],
+  [
+    'Cookie storage blocked',
+    new AuthCookieBlockedError('storage_unavailable'),
+    [authCookieStorageMessage],
+  ],
+  ['cancelled login', new CanceledError('Login superseded'), []],
 ] as const) {
   test(`${name} clears loading without bypassing consent on retry`, async () => {
     let rejectLogin: (error: unknown) => void = () => {}
@@ -616,7 +772,15 @@ for (const [name, error, expectedErrors] of [
       () => !submit.disabled,
       'submit stayed disabled after failure'
     )
+    assert.equal(toastErrors.includes('Session expired!'), false)
+    assert.equal(
+      toastErrors.some((message) => message.includes('private')),
+      false
+    )
     assert.deepEqual(toastErrors, [...expectedErrors])
+    if (name.startsWith('rate limit') || name === 'wrapped rate limit') {
+      assert.deepEqual(toastErrorIds, ['request-rate-limited'])
+    }
     assert.deepEqual(toastSuccesses, [])
     assert.equal(successBundles.length, 0)
 
@@ -638,5 +802,47 @@ for (const [name, error, expectedErrors] of [
     assert.equal(successBundles.length, 1)
     assert.deepEqual(toastSuccesses, ['Welcome back!'])
     assert.equal(submit.disabled, false)
+  })
+}
+
+for (const [name, response, expectedMessage] of [
+  [
+    'unknown business failure',
+    { success: false, message: 'private backend diagnostic' },
+    'Login failed',
+  ],
+  [
+    'allowlisted business failure',
+    {
+      success: false,
+      code: 'AUTH_USER_DISABLED',
+      message: 'private account diagnostic',
+    },
+    'This user account is disabled.',
+  ],
+  [
+    'business failure with unrelated session code',
+    {
+      success: false,
+      code: 'AUTH_ROTATION_INVALID',
+      message: 'private diagnostic',
+    },
+    'Login failed',
+  ],
+  [
+    'incomplete MFA challenge',
+    { success: true, data: { require_2fa: true } },
+    'Login flow expired. Please sign in again.',
+  ],
+] as const) {
+  test(`${name} shows one safe local notification`, async () => {
+    loginImpl = async () => response
+    const host = await render({})
+    await fillCredentials(host)
+    await submitPassword(host)
+    assert.deepEqual(toastErrors, [expectedMessage])
+    assert.deepEqual(toastSuccesses, [])
+    assert.deepEqual(successBundles, [])
+    assert.equal(passwordSubmitButton(host).disabled, false)
   })
 }

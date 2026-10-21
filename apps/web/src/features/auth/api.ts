@@ -61,7 +61,12 @@ export async function login(payload: LoginPayload, signal?: AbortSignal) {
           username: payload.username,
           password: payload.password,
         },
-        { skipAuthRefresh: true, timeout: AUTH_COOKIE_TIMEOUT_MS }
+        {
+          skipAuthRefresh: true,
+          skipErrorHandler: true,
+          skipBusinessError: true,
+          timeout: AUTH_COOKIE_TIMEOUT_MS,
+        }
       )
     )
     assertCurrent()
@@ -69,7 +74,10 @@ export async function login(payload: LoginPayload, signal?: AbortSignal) {
       const data = res.data.data
       if (data && 'require_2fa' in data && data.require_2fa) {
         if (!data.flow_token) {
-          throw new Error('Login flow expired. Please sign in again.')
+          throw Object.assign(
+            new Error('Login flow expired. Please sign in again.'),
+            { code: 'MFA_FLOW_EXPIRED' }
+          )
         }
         applyPending2FAFlow(data.flow_token, data.expires_at)
       } else {

@@ -19,9 +19,168 @@ For commercial licensing, please contact support@quantumnous.com
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
-import { api } from '@/lib/api'
+import axios, { AxiosError } from 'axios'
+import { toast } from 'sonner'
 
-import { createOAuthFlow, executeLogout, startWechatLogin } from './api'
+import { api } from '@/lib/api'
+import { AUTH_COOKIE_TIMEOUT_MS } from '@/lib/auth-cookie'
+import {
+  clearAuthentication,
+  setDevelopmentAuthRefreshAdapter,
+} from '@/lib/auth-session'
+import { useAuthStore, type AuthBundle } from '@/stores/auth-store'
+
+import { createOAuthFlow, executeLogout, login, startWechatLogin } from './api'
+
+describe('password login request errors', () => {
+  test('keeps Cookie and session semantics while leaving HTTP and business notifications to the form', async () => {
+    const originalAdapter = api.defaults.adapter
+    const originalToast = toast.error
+    const notifications: unknown[] = []
+    let refreshes = 0
+    let requests = 0
+    const account: AuthBundle = {
+      access_token: 'synthetic-existing-token',
+      token_type: 'Bearer',
+      access_expires_at: Math.floor(Date.now() / 1000) + 600,
+      user: { id: 42, username: 'synthetic', role: 1 },
+      session: {
+        sid: 'synthetic-existing-session',
+        current: true,
+        login_method: 'password',
+        ip: '',
+        user_agent: '',
+        created_at: 1,
+        last_active_at: 1,
+        expires_at: 2_000_000_000,
+      },
+    }
+    clearAuthentication(false, 'idle')
+    useAuthStore.getState().auth.setBundle(account)
+    toast.error = (message) => {
+      notifications.push(message)
+      return 'password-login-test'
+    }
+    setDevelopmentAuthRefreshAdapter(async () => {
+      refreshes++
+      throw new Error('Password login must not refresh or replay')
+    })
+
+    try {
+      for (const status of [401, 403, 429, 503, 200]) {
+        const payload = {
+          success: false,
+          code: status === 401 ? 'AUTH_UNAUTHORIZED' : 'UNKNOWN_FAILURE',
+          message: 'private backend diagnostic must not appear in a toast',
+        }
+        api.defaults.adapter = async (config) => {
+          requests++
+          assert.equal(config.method, 'post')
+          assert.equal(config.url, '/api/user/login?turnstile=synthetic-proof')
+          assert.deepEqual(JSON.parse(config.data), {
+            username: 'synthetic',
+            password: 'synthetic-password',
+          })
+          assert.equal(config.withCredentials, true)
+          assert.equal(config.authMode, undefined)
+          assert.equal(
+            config.headers.get('Authorization'),
+            'Bearer synthetic-existing-token'
+          )
+          assert.equal(config.skipAuthRefresh, true)
+          assert.equal(config.skipErrorHandler, true)
+          assert.equal(config.skipBusinessError, true)
+          assert.equal(config.timeout, AUTH_COOKIE_TIMEOUT_MS)
+          assert.equal(
+            config.signal,
+            undefined,
+            'an active Cookie writer must not be aborted by the form'
+          )
+          const response = {
+            config,
+            status,
+            statusText: 'synthetic response',
+            headers: {},
+            data: payload,
+          }
+          if (status >= 400) {
+            throw new AxiosError(
+              'private transport diagnostic',
+              'ERR_BAD_RESPONSE',
+              config,
+              undefined,
+              response
+            )
+          }
+          return response
+        }
+        const attempt = login(
+          {
+            username: 'synthetic',
+            password: 'synthetic-password',
+            turnstile: 'synthetic-proof',
+          },
+          new AbortController().signal
+        )
+        if (status === 200) {
+          assert.deepEqual(await attempt, payload)
+        } else {
+          await assert.rejects(
+            attempt,
+            (error: unknown) =>
+              error instanceof AxiosError && error.response?.status === status
+          )
+        }
+        assert.deepEqual(notifications, [])
+        assert.equal(
+          useAuthStore.getState().auth.accessToken,
+          account.access_token
+        )
+        assert.equal(
+          useAuthStore.getState().auth.session?.sid,
+          account.session.sid
+        )
+      }
+      assert.equal(
+        requests,
+        5,
+        'failures must never replay the password request'
+      )
+      assert.equal(refreshes, 0)
+    } finally {
+      api.defaults.adapter = originalAdapter
+      setDevelopmentAuthRefreshAdapter(axios.getAdapter(originalAdapter))
+      toast.error = originalToast
+      clearAuthentication(false, 'idle')
+    }
+  })
+
+  test('an incomplete MFA response keeps an allowlisted error code', async () => {
+    const originalAdapter = api.defaults.adapter
+    clearAuthentication(false, 'idle')
+    api.defaults.adapter = async (config) => ({
+      config,
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      data: { success: true, data: { require_2fa: true } },
+    })
+    try {
+      await assert.rejects(
+        login({ username: 'synthetic', password: 'synthetic-password' }),
+        (error: unknown) =>
+          error instanceof Error &&
+          'code' in error &&
+          error.code === 'MFA_FLOW_EXPIRED'
+      )
+      assert.equal(useAuthStore.getState().auth.pending2FAFlowToken, null)
+      assert.equal(useAuthStore.getState().auth.user, null)
+    } finally {
+      api.defaults.adapter = originalAdapter
+      clearAuthentication(false, 'idle')
+    }
+  })
+})
 
 function mismatchError() {
   return {
