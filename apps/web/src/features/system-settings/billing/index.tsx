@@ -16,8 +16,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { SettingsPage } from '../components/settings-page'
+import { useParams } from '@tanstack/react-router'
+import { useTranslation } from 'react-i18next'
+
+import { SettingsPage, SettingsPageFrame } from '../components/settings-page'
 import type { BillingSettings } from '../types'
+import { RouterPricingSection } from './router-pricing-section'
 import {
   BILLING_DEFAULT_SECTION,
   getBillingSectionContent,
@@ -126,6 +130,17 @@ const defaultBillingSettings: BillingSettings = {
 }
 
 export function BillingSettings() {
+  const { t } = useTranslation()
+  const { section } = useParams({
+    from: '/_authenticated/system-settings/billing/$section',
+  })
+  if (section === 'router-pricing') {
+    return (
+      <SettingsPageFrame title={t('Router pricing')}>
+        <RouterPricingSection />
+      </SettingsPageFrame>
+    )
+  }
   return (
     <SettingsPage
       routePath='/_authenticated/system-settings/billing/$section'

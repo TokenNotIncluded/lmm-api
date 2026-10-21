@@ -85,7 +85,7 @@ type SettingsPageFrameProps = {
   children: ReactNode
 }
 
-function SettingsPageFrame(props: SettingsPageFrameProps) {
+export function SettingsPageFrame(props: SettingsPageFrameProps) {
   const [formActionsContainer, setFormActionsContainer] =
     useState<HTMLDivElement | null>(null)
   const [actionsContainer, setActionsContainer] =

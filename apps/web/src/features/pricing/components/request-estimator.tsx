@@ -35,7 +35,13 @@ export function RequestEstimator(props: ModelDetailsContentProps) {
   const isNativeSession = endpoints?.length
     ? endpoints.some(isNativeSessionEndpointType)
     : /(^|\/)gpt-(?:live|realtime)(?:-|$)/.test(props.model.model_name)
-  if (isNativeSession || props.model.quota_type === 2) return null
+  if (
+    isNativeSession ||
+    props.model.quota_type === 2 ||
+    Object.keys(props.model.group_upstream_cost_prices ?? {}).length
+  ) {
+    return null
+  }
   const presets = isSystemone ? SYSTEMONE_PRESETS : PRESETS
   const parse = (value: string) =>
     value.trim() === '' ? Number.NaN : Number(value)

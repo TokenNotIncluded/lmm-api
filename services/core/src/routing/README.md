@@ -289,8 +289,9 @@ upstream model must be the same router. A token-only caller of `PriceQuote::char
 gets an error, rather than treating these zero rates as a free model.
 
 The gateway freezes the rule version and group multiplier, reserves USD 1 times
-that multiplier, then settles the provider's `usage.cost` times the multiplier at
-500,000 credits/USD. `cost_details.upstream_inference_cost`, final selected-model
+that multiplier, then settles `ceil(usage.cost USD × 500000 × group multiplier ×
+account discount)` credits. The account discount is the frozen, verified factor;
+it is applied once. `cost_details.upstream_inference_cost`, final selected-model
 rates and local tool surcharges are not added. Decimal JSON numbers are parsed
 exactly to 10^-18 USD and rounded up once at the final credit amount; invalid,
 negative, excessive or inexact values are rejected. Repeated cumulative SSE
@@ -303,7 +304,35 @@ to authorize that increase leaves settlement pending. Receipts persist in the
 existing append-only charging events and model output checkpoints, including
 replay and completed-stream recovery; no schema migration is required.
 
-These changes retain the gateway's existing loopback-only provider restriction.
+The native `/core/v1/pricing/public` and `/core/v1/pricing/session` projections
+return `token_price: null` and an `upstream_cost_price` descriptor for this mode.
+The descriptor identifies `usage.cost`, USD, 500000 credits/USD, final ceiling
+rounding, and an exact string numerator/denominator multiplier. Public rates
+include the group multiplier; session rates already include the verified account
+discount. Clients must not multiply that discount again or infer free token
+prices from the zero fixed rates. If independently priced image variants share a
+model name, their image APIs and prices remain independent of text availability.
+
+External text targets remain blocked with
+`unavailable_reason: "upstream_budget_contract_required"`. A descriptor documents
+the calculation; it grants no invocation authority. OpenRouter workspace/key
+budgets are soft limits and can be exceeded by dispatched requests. They do not
+satisfy the supplier-enforced budget contract required by the gateway. The
+system assistant also continues to reject this mode.
+
+The Web pricing cards, table and details display these rules per group. The
+`/system-settings/billing/router-pricing` page reads the native session catalog
+without the legacy `/api/option` endpoint and generates a JSON price-rule preview.
+It does not save rules, change routing permissions or enable external calls.
+Merge a reviewed preview into the installation owner's model TOML `prices.rules`
+(using the equivalent TOML fields), preserve existing rule IDs, advance
+`prices.version` (the startup loader pins this version in the routing snapshot),
+and validate the edited document with the Core model configuration loader in an
+isolated installation before the reviewed restart.
+The preview lists only the session's visible groups; it is not a complete export
+of all installed routes or rules. Never replace the entire price configuration
+with a single generated rule. No database price writer is implied by this page.
+
 Local protocol/ledger tests do not certify live OpenRouter compatibility, enable
 external forwarding, update the old monolith settings page, or deploy anything.
 Provider receipts follow OpenRouter's

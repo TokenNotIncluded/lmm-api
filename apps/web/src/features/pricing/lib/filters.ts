@@ -86,9 +86,11 @@ export function filterByQuotaType(
 ): PricingModel[] {
   if (quotaType === QUOTA_TYPES.ALL) return models
   const targetType =
-    quotaType === QUOTA_TYPES.TOKEN
-      ? QUOTA_TYPE_VALUES.TOKEN
-      : QUOTA_TYPE_VALUES.REQUEST
+    quotaType === QUOTA_TYPES.UPSTREAM_COST
+      ? QUOTA_TYPE_VALUES.UPSTREAM_COST
+      : quotaType === QUOTA_TYPES.TOKEN
+        ? QUOTA_TYPE_VALUES.TOKEN
+        : QUOTA_TYPE_VALUES.REQUEST
   return models.filter((m) => m.quota_type === targetType)
 }
 
@@ -175,6 +177,14 @@ export function filterAndSortModels(
       if (!prices && !endpoints) return model
       return {
         ...model,
+        ...(model.group_upstream_cost_prices &&
+        Object.keys(model.group_upstream_cost_prices).length
+          ? {
+              billing_mode: model.group_upstream_cost_prices[filters.group]
+                ? 'upstream_cost'
+                : 'ratio',
+            }
+          : {}),
         ...(prices
           ? { ...prices, model_price: prices.model_price ?? undefined }
           : {}),

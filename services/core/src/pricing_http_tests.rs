@@ -320,3 +320,118 @@ async fn pricing_pg_trusted_user_rates_public_isolation_and_incomplete_basis_rej
     // Session read-only paths never create charging or financial events.
     let _ = identity;
 }
+
+#[sqlx::test(migrations = false)]
+async fn pricing_pg_upstream_cost_rule_is_readonly_exact_and_session_isolated(pool: PgPool) {
+    let (_, session, _) = setup(&pool).await;
+    let gateway = crate::model_http::pricing::tests::upstream_cost_gateway(pool.clone(), true)
+        .with_trust_pricing();
+    let role = runtime::RuntimeRole::create(&pool).await;
+    role.optional("core_console").await;
+    let router = PricingHttp::from_gateway(role.pool.clone(), &gateway).router();
+    let now: i64 =
+        sqlx::query_scalar("SELECT floor(extract(epoch FROM transaction_timestamp()))::bigint")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    sqlx::query("INSERT INTO core_trust_pricing.user_bases(user_id,original_created_at,console_activated_at,last_api_activity_at,override_level,projection_known,order_count,revision,source_digest) VALUES(7,$1,0,0,2,TRUE,0,1,decode(repeat('11',32),'hex'))")
+        .bind(now).execute(&pool).await.unwrap();
+    let before = counts(&pool).await;
+    let (status, public) = call(&router, "/core/v1/pricing/public", None, None).await;
+    assert_eq!(status, StatusCode::OK, "{public}");
+    assert_eq!(public["credits_per_usd"], 500_000);
+    assert_eq!(public["rate_basis"], "base_group_rate");
+    assert_eq!(public["user_price"], json!({"status":"not_evaluated"}));
+    assert_eq!(public["groups"], json!(["allowed", "private"]));
+    assert_eq!(public["invocation_authorized"], false);
+    assert_eq!(public["models"].as_array().unwrap().len(), 6);
+    for row in public["models"].as_array().unwrap() {
+        assert_eq!(row["billing_status"], "unavailable");
+        assert_eq!(
+            row["unavailable_reason"],
+            "upstream_budget_contract_required"
+        );
+        assert_eq!(row["token_price"], Value::Null);
+        assert_eq!(row["apis"], json!([]));
+        let price = &row["upstream_cost_price"];
+        assert_eq!(price["currency"], "USD");
+        assert_eq!(price["cost_source"], "usage.cost");
+        assert_eq!(price["credits_per_usd"], 500_000);
+        assert_eq!(price["rounding"], "ceil_total_credits");
+        assert_eq!(price["rate_basis"], public["rate_basis"]);
+        assert_eq!(
+            price["multiplier"],
+            json!({
+                "numerator": if row["group"] == "private" { "2000000" } else { "1250000" },
+                "denominator": "1000000"
+            })
+        );
+    }
+    let (status, own) = call(
+        &router,
+        "/core/v1/pricing/session",
+        Some(&session.secret),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{own}");
+    assert_eq!(own["rate_basis"], "effective_user_rate");
+    assert_eq!(own["groups"], json!(["allowed"]));
+    assert_eq!(own["invocation_authorized"], false);
+    assert_eq!(
+        own["user_price"],
+        json!({"status":"verified","multiplier":{"numerator":"97","denominator":"100"}})
+    );
+    assert_eq!(own["models"].as_array().unwrap().len(), 5);
+    for row in own["models"].as_array().unwrap() {
+        assert_eq!(row["group"], "allowed");
+        assert_eq!(row["billing_status"], "unavailable");
+        assert_eq!(
+            row["unavailable_reason"],
+            "upstream_budget_contract_required"
+        );
+        assert_eq!(row["upstream_cost_price"]["rate_basis"], own["rate_basis"]);
+        // 1.25 group multiplier * 0.97 account multiplier, applied once.
+        assert_eq!(
+            row["upstream_cost_price"]["multiplier"],
+            json!({"numerator":"97","denominator":"80"})
+        );
+    }
+    let (status, own_again) = call(
+        &router,
+        "/core/v1/pricing/session",
+        Some(&session.secret),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(own_again["models"], own["models"]);
+    let (status, public_again) = call(&router, "/core/v1/pricing/public", None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(public_again["models"], public["models"]);
+    assert_eq!(public_again["user_price"], public["user_price"]);
+    let (status, runtime) = call(
+        &router,
+        "/core/v1/pricing/runtime",
+        Some(&session.secret),
+        Some(json!({"models":["openrouter/fusion", "hidden-model"]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{runtime}");
+    assert_eq!(
+        runtime["data"]["openrouter/fusion"]["status"],
+        "unavailable"
+    );
+    assert_eq!(runtime["data"]["hidden-model"]["status"], "no_access");
+    for forbidden in [
+        "private-credential",
+        "private-cost-provider",
+        "synthetic-context",
+        "lmms_",
+    ] {
+        assert!(!public.to_string().contains(forbidden));
+        assert!(!own.to_string().contains(forbidden));
+    }
+    assert_eq!(counts(&pool).await, before);
+    role.cleanup().await;
+}

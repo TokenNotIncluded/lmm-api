@@ -12,6 +12,7 @@ export function estimateRequestCost(
   cached: number
 ): number | null {
   if (!hasCanonicalPricing(model)) return null
+  if (Object.keys(model.group_upstream_cost_prices ?? {}).length) return null
   if (ratio === undefined || !Number.isFinite(ratio) || ratio < 0) return null
   if (
     ![input, output, cached].every((n) => Number.isSafeInteger(n) && n >= 0) ||

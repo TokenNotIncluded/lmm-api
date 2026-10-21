@@ -81,6 +81,28 @@ export const nativeTokenPriceSchema = z.object({
   final_cost_depends_on_usage: z.literal(true),
 })
 
+export const nativeUpstreamCostPriceSchema = z
+  .object({
+    currency: z.literal('USD'),
+    cost_source: z.literal('usage.cost'),
+    credits_per_usd: z.literal(500_000),
+    rounding: z.literal('ceil_total_credits'),
+    rate_basis: rateBasis,
+    multiplier: fraction.refine(
+      ({ numerator, denominator }) =>
+        /^[1-9]\d{0,127}$/.test(numerator) &&
+        /^[1-9]\d{0,127}$/.test(denominator) &&
+        BigInt(numerator) <= BigInt(denominator) * 1000n,
+      'Invalid upstream cost multiplier'
+    ),
+  })
+  .strict()
+
+const unavailableReason = z.enum([
+  'upstream_budget_contract_required',
+  'routing_unavailable',
+])
+
 export const nativePricingSchema = z
   .object({
     schema_version: z.literal(1),
@@ -108,6 +130,10 @@ export const nativePricingSchema = z
             'unavailable',
           ]),
           token_price: nativeTokenPriceSchema.nullable(),
+          upstream_cost_price: nativeUpstreamCostPriceSchema
+            .nullable()
+            .optional(),
+          unavailable_reason: unavailableReason.nullable().optional(),
           image_variants: z.array(nativeImageVariantSchema).max(4096),
         })
       )
@@ -145,6 +171,30 @@ export const nativePricingSchema = z
         })
       }
       models.add(key)
+      if (
+        model.upstream_cost_price &&
+        (model.token_price !== null ||
+          (model.billing_status === 'configured' &&
+            model.image_variants.length === 0) ||
+          model.upstream_cost_price.rate_basis !== document.rate_basis)
+      ) {
+        context.addIssue({
+          code: 'custom',
+          path: ['models', index, 'upstream_cost_price'],
+          message: 'Upstream costs require a matching dynamic price basis',
+        })
+      }
+      if (
+        model.unavailable_reason &&
+        model.billing_status !== 'unavailable' &&
+        !(model.upstream_cost_price && model.image_variants.length > 0)
+      ) {
+        context.addIssue({
+          code: 'custom',
+          path: ['models', index, 'unavailable_reason'],
+          message: 'An unavailable reason cannot describe an available route',
+        })
+      }
       if (
         model.token_price &&
         model.token_price.rate_basis !== document.rate_basis
@@ -197,3 +247,7 @@ export type NativePricingContext = Pick<
   'rate_basis' | 'user_price'
 >
 export type NativeImageVariant = z.infer<typeof nativeImageVariantSchema>
+export type NativeUpstreamCostPrice = z.infer<
+  typeof nativeUpstreamCostPriceSchema
+>
+export type NativeUnavailableReason = z.infer<typeof unavailableReason>

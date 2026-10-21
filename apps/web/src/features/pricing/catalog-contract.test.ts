@@ -6,6 +6,7 @@ import { adaptNativePricing } from './catalog-adapter'
 import {
   nativePricingSchema,
   nativeRuntimeSchema,
+  nativeUpstreamCostPriceSchema,
   type NativePricingDocument,
 } from './catalog-contract'
 import { filterAndSortModels } from './lib/filters'
@@ -14,6 +15,123 @@ import {
   formatImageVariantUSD,
 } from './lib/image-price'
 import { formatGroupPrice, formatPrice } from './lib/price'
+import { estimateRequestCost } from './lib/request-estimate'
+import {
+  getUpstreamCostPrice,
+  formatUpstreamMultiplier,
+} from './lib/upstream-cost'
+
+const upstreamPrice = {
+  currency: 'USD',
+  cost_source: 'usage.cost',
+  credits_per_usd: 500_000,
+  rounding: 'ceil_total_credits',
+  rate_basis: 'effective_group_rate',
+  multiplier: { numerator: '1250000', denominator: '1000000' },
+} as const
+
+test('router prices preserve exact group factors and reject token estimates, including zero-token calls', () => {
+  const input = fixture()
+  const original = input.models[1]
+  assert.ok(original)
+  input.models[1] = {
+    ...original,
+    token_price: null,
+    billing_status: 'unavailable',
+    upstream_cost_price: upstreamPrice,
+    unavailable_reason: 'upstream_budget_contract_required',
+  }
+  const [model] = adaptNativePricing(nativePricingSchema.parse(input)).data
+  assert.ok(model)
+  assert.equal(getUpstreamCostPrice(model, 'standard'), null)
+  assert.equal(formatPrice(model, 'input', 'M', 'USD', 'standard'), '2 USD')
+  assert.equal(formatPrice(model, 'input', 'M', 'USD', 'premium'), '-')
+  const rule = getUpstreamCostPrice(model, 'premium')
+  assert.ok(rule)
+  assert.equal(formatUpstreamMultiplier(rule.price), '5/4')
+  assert.equal(rule.reason, 'upstream_budget_contract_required')
+  assert.equal(estimateRequestCost(model, 1, 0, 0, 0), null)
+  const filters = {
+    search: '',
+    vendor: 'all',
+    group: 'premium',
+    quotaType: 'upstream_cost',
+    endpointType: 'all',
+    tag: 'all',
+    sortBy: 'price-low',
+  }
+  const [routerGroup] = filterAndSortModels([model], filters)
+  assert.ok(routerGroup)
+  assert.equal(routerGroup.quota_type, 3)
+  assert.equal(routerGroup.billing_mode, 'upstream_cost')
+  assert.equal(formatPrice(routerGroup, 'input', 'M', 'USD'), '-')
+  assert.equal(
+    filterAndSortModels([model], { ...filters, quotaType: 'token' }).length,
+    0
+  )
+  const [tokenGroup] = filterAndSortModels([model], {
+    ...filters,
+    group: 'standard',
+    quotaType: 'token',
+  })
+  assert.ok(tokenGroup)
+  assert.equal(tokenGroup.billing_mode, 'ratio')
+  assert.equal(formatPrice(tokenGroup, 'input', 'M', 'USD'), '2 USD')
+})
+
+test('router multiplier boundary returns parse failures for malformed or unsafe fractions without throwing', () => {
+  for (const multiplier of [
+    { numerator: 'not-money', denominator: '1' },
+    { numerator: '1', denominator: 'x' },
+    { numerator: '1', denominator: '0' },
+    { numerator: '0', denominator: '1' },
+    { numerator: '1001', denominator: '1' },
+  ]) {
+    assert.equal(
+      nativeUpstreamCostPriceSchema.safeParse({ ...upstreamPrice, multiplier })
+        .success,
+      false
+    )
+  }
+  assert.equal(
+    nativeUpstreamCostPriceSchema.safeParse(upstreamPrice).success,
+    true
+  )
+  const input = fixture()
+  const first = input.models[0]
+  assert.ok(first)
+  first.upstream_cost_price = upstreamPrice
+  assert.equal(nativePricingSchema.safeParse(input).success, false)
+})
+
+test('router schema permits an independently priced image variant while retaining the text budget reason', () => {
+  const input = fixture()
+  const original = input.models[0]
+  assert.ok(original)
+  input.models[0] = {
+    ...original,
+    token_price: null,
+    upstream_cost_price: upstreamPrice,
+    unavailable_reason: 'upstream_budget_contract_required',
+    image_variants: [
+      {
+        endpoint: 'generations',
+        size: '1024x1024',
+        quality: 'standard',
+        max_n: 1,
+        count_basis: 'requested',
+        usd_micros_per_image: { numerator: '40000', denominator: '1' },
+        credits_per_image: { numerator: '20000', denominator: '1' },
+        reservation_credits_for_one: 20000,
+        rounding: 'ceil_total_credits',
+        pricing_version: 1,
+      },
+    ],
+  }
+  assert.equal(nativePricingSchema.safeParse(input).success, true)
+  input.models[0].image_variants = []
+  assert.equal(nativePricingSchema.safeParse(input).success, false)
+})
 
 function fixture(): NativePricingDocument {
   const token = {

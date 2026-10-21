@@ -91,6 +91,13 @@ export function getTokenPriceUSD(
   group?: string
 ): number {
   if (!hasCanonicalPricing(model)) return Number.NaN
+  if (
+    group
+      ? model.group_upstream_cost_prices?.[group]
+      : model.billing_mode === 'upstream_cost'
+  ) {
+    return Number.NaN
+  }
   const fields: Record<PriceType, keyof PricingGroupPrices> = {
     input: 'input_price',
     output: 'output_price',

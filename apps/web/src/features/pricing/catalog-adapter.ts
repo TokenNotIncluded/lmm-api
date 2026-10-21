@@ -78,6 +78,7 @@ export function adaptNativePricing(
   const endpointMap: PricingData['supported_endpoint'] = {}
   for (const [name, rows] of grouped) {
     const tokenRows = rows.filter((row) => row.token_price !== null)
+    const upstreamCostRows = rows.filter((row) => row.upstream_cost_price)
     const prices = rows.map(groupPrices)
     const apis = new Set<string>()
     for (const row of rows) {
@@ -101,8 +102,19 @@ export function adaptNativePricing(
       pricing_schema_version: 2,
       pricing_currency: 'USD',
       pricing_version: String(document.pricing_version),
-      quota_type: tokenRows.length ? 0 : 2,
-      billing_mode: 'ratio',
+      quota_type: tokenRows.length ? 0 : upstreamCostRows.length ? 3 : 2,
+      billing_mode:
+        upstreamCostRows.length === rows.length ? 'upstream_cost' : 'ratio',
+      group_upstream_cost_prices: Object.fromEntries(
+        upstreamCostRows.flatMap((row) =>
+          row.upstream_cost_price ? [[row.group, row.upstream_cost_price]] : []
+        )
+      ),
+      group_unavailable_reasons: Object.fromEntries(
+        rows.flatMap((row) =>
+          row.unavailable_reason ? [[row.group, row.unavailable_reason]] : []
+        )
+      ),
       input_price: commonPrice(prices, 'input_price'),
       output_price: commonPrice(prices, 'output_price'),
       cache_read_price: commonPrice(prices, 'cache_read_price'),
@@ -117,7 +129,10 @@ export function adaptNativePricing(
         ])
       ),
       group_quota_types: Object.fromEntries(
-        rows.map((row) => [row.group, row.token_price ? 0 : 2])
+        rows.map((row) => [
+          row.group,
+          row.token_price ? 0 : row.upstream_cost_price ? 3 : 2,
+        ])
       ),
       image_variants: rows.flatMap((row) =>
         row.image_variants.map((variant) => ({

@@ -34,11 +34,13 @@ import { MAX_COMPARE_MODELS } from '../lib/model-compare'
 import { getDisplayPriceGroup, isTokenBasedModel } from '../lib/model-helpers'
 import type { ModelPerfBadgeData } from '../lib/model-perf'
 import { formatPrice, formatRequestPrice } from '../lib/price'
+import { getUpstreamCostPrice } from '../lib/upstream-cost'
 import type { PricingModel, TokenUnit, PriceDisplayCurrency } from '../types'
 import { ModelBillingModeBadge } from './model-billing-mode-badge'
 import { ModelPerfBadge } from './model-perf-badge'
 import { ModelRuntimeBadge } from './model-runtime-badge'
 import { PricingContextLabel } from './pricing-context-label'
+import { UpstreamCostPricing } from './upstream-cost-pricing'
 
 export interface ModelCardProps {
   model: PricingModel
@@ -110,7 +112,14 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
   }
 
   let priceSummary: ReactNode
-  if (dynamicSummary) {
+  if (getUpstreamCostPrice(props.model, props.selectedGroup)) {
+    priceSummary = (
+      <UpstreamCostPricing
+        model={props.model}
+        selectedGroup={props.selectedGroup}
+      />
+    )
+  } else if (dynamicSummary) {
     if (dynamicSummary.isSpecialExpression) {
       priceSummary = (
         <span className='min-w-0'>
@@ -260,7 +269,10 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
               {primaryGroup}
             </span>
           )}
-          <ModelBillingModeBadge model={props.model} />
+          <ModelBillingModeBadge
+            model={props.model}
+            selectedGroup={props.selectedGroup}
+          />
           <ModelRuntimeBadge state={props.model.runtime_state} />
         </div>
         <div className='flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1'>
@@ -272,11 +284,12 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
               {item}
             </span>
           ))}
-          {!hasDurationPrice && (
-            <span className='text-muted-foreground text-xs'>
-              {tokenUnitLabel}
-            </span>
-          )}
+          {!hasDurationPrice &&
+            !getUpstreamCostPrice(props.model, props.selectedGroup) && (
+              <span className='text-muted-foreground text-xs'>
+                {tokenUnitLabel}
+              </span>
+            )}
           {hiddenCount > 0 && (
             <span className='text-muted-foreground text-xs'>
               +{hiddenCount}
