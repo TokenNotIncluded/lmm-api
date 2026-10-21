@@ -57,7 +57,7 @@ IDENTITY_FINGERPRINT = "38e020822b4e986fd7b77ddb7a79925b4f05e2abdc0a0ce99222bb1c
 IDENTITY_SCHEMA = Path(__file__).resolve().parents[1] / "services/core/schema/identity.sql"
 IDENTITY_SCHEMA_RUST = Path(__file__).resolve().parents[1] / "services/core/src/identity/schema.rs"
 ROOT = Path(__file__).resolve().parents[1]
-CORE_SEED_CONTRACT = "ledger-zero-events-empty-routing-unset-abuse-default-oauth-contract-v3"
+CORE_SEED_CONTRACT = "fresh24-ledger-zero-events-routing-abuse-oauth-humangrant-gift-credit-v4"
 CORE_COMPONENTS = frozenset({
     "identity", "oauth-grants", "ledger", "payments", "charging", "routing",
     "events", "charging-ledger", "migration", "console", "model-gateway",
@@ -640,17 +640,22 @@ def build_import_sql(plan: dict, *, migration_id: str, source_sha256: str,
     seed_exclusion = "AND NOT (n.nspname='core_billing' AND c.relname IN ('ledger_accounts','balance_state'))" if allow_seed else ""
     if allow_core_seed:
         seed_exclusion += " AND NOT (n.nspname='core_events' AND c.relname='capacity') AND NOT (n.nspname='public' AND c.relname='routing_active_release') AND NOT (n.nspname='core_abuse' AND c.relname='settings') AND NOT (n.nspname='core_oauth' AND c.relname='contract')"
+        seed_exclusion += " AND NOT (n.nspname='core_humangrant' AND c.relname='human_grant_gate') AND NOT (n.nspname='core_gift' AND c.relname IN ('risk_key','policy')) AND NOT (n.nspname='core_tool_market' AND c.relname='credit_policy')"
     seed_guard = """
  IF (SELECT count(*) FROM core_billing.ledger_accounts)<>2
  OR (SELECT count(*) FROM core_billing.balance_state)<>2
  OR (SELECT count(DISTINCT bucket) FROM core_billing.ledger_accounts)<>2
+ OR NOT EXISTS(SELECT 1 FROM core_billing.ledger_accounts WHERE id=1 AND bucket='clearing')
+ OR NOT EXISTS(SELECT 1 FROM core_billing.ledger_accounts WHERE id=2 AND bucket='revenue')
+ OR NOT EXISTS(SELECT 1 FROM core_billing.ledger_accounts_id_seq WHERE last_value=2 AND is_called)
  OR EXISTS(SELECT 1 FROM core_billing.ledger_accounts a LEFT JOIN core_billing.balance_state b ON b.ledger_account_id=a.id
   WHERE a.owner_account_id IS NOT NULL OR a.bucket NOT IN ('clearing','revenue') OR a.unit<>'credit_500k_usd'
   OR b.ledger_account_id IS NULL OR b.balance_units<>0 OR b.revision<>0) THEN
   RAISE EXCEPTION 'non-canonical initialized ledger seed';
  END IF;
  SELECT jsonb_build_object('accounts',(SELECT jsonb_agg(to_jsonb(a) ORDER BY id) FROM core_billing.ledger_accounts a),
-  'balances',(SELECT jsonb_agg(to_jsonb(b) ORDER BY ledger_account_id) FROM core_billing.balance_state b)) INTO seed_before;
+  'balances',(SELECT jsonb_agg(to_jsonb(b) ORDER BY ledger_account_id) FROM core_billing.balance_state b),
+  'ledger_sequence',(SELECT to_jsonb(s) FROM core_billing.ledger_accounts_id_seq s)) INTO seed_before;
 """ if allow_seed else ""
     if allow_core_seed:
         seed_guard += """
@@ -659,19 +664,34 @@ def build_import_sql(plan: dict, *, migration_id: str, source_sha256: str,
  OR (SELECT count(*) FROM public.routing_active_release)<>1
  OR NOT EXISTS(SELECT 1 FROM public.routing_active_release WHERE singleton AND config_version IS NULL)
  OR (SELECT count(*) FROM core_abuse.settings)<>1
- OR NOT EXISTS(SELECT 1 FROM core_abuse.settings WHERE singleton AND revision=0 AND document='{"version":1,"policies":[]}'::jsonb) THEN
+ OR NOT EXISTS(SELECT 1 FROM core_abuse.settings WHERE singleton AND revision=0 AND document='{"version":1,"policies":[]}'::jsonb)
+ OR (SELECT count(*) FROM core_humangrant.human_grant_gate)<>1
+ OR NOT EXISTS(SELECT 1 FROM core_humangrant.human_grant_gate WHERE id=1 AND revision=1)
+ OR (SELECT count(*) FROM core_gift.risk_key)<>1
+ OR NOT EXISTS(SELECT 1 FROM core_gift.risk_key WHERE singleton AND octet_length(secret)=32)
+ OR (SELECT count(*) FROM core_gift.policy)<>1
+ OR NOT EXISTS(SELECT 1 FROM core_gift.policy WHERE singleton AND NOT enabled AND exclusive_cap=0)
+ OR (SELECT count(*) FROM core_tool_market.credit_policy)<>1
+ OR NOT EXISTS(SELECT 1 FROM core_tool_market.credit_policy WHERE singleton AND version=1
+  AND platform_account_id IS NULL AND platform_user_id IS NULL AND NOT enabled
+  AND updated_by IS NULL AND updated_at=0 AND fee_bps=0) THEN
   RAISE EXCEPTION 'non-canonical initialized core seed';
  END IF;
  seed_before := seed_before || jsonb_build_object('event_capacity',(SELECT to_jsonb(c) FROM core_events.capacity c),
   'routing_release',(SELECT to_jsonb(r) FROM public.routing_active_release r),
   'abuse_settings',(SELECT to_jsonb(s) FROM core_abuse.settings s),
-  'oauth_contract',(SELECT to_jsonb(c) FROM core_oauth.contract c));
+  'oauth_contract',(SELECT to_jsonb(c) FROM core_oauth.contract c),
+  'human_grant_gate',(SELECT to_jsonb(c) FROM core_humangrant.human_grant_gate c),
+  'gift_risk_key',(SELECT to_jsonb(c) FROM core_gift.risk_key c),
+  'gift_policy',(SELECT to_jsonb(c) FROM core_gift.policy c),
+  'credit_policy',(SELECT to_jsonb(c) FROM core_tool_market.credit_policy c));
 """
         seed_guard += " IF " + oauth_seed_guard_sql(contract) + " THEN RAISE EXCEPTION 'non-canonical initialized OAuth seed'; END IF;\n"
     seed_readback = """
- IF seed_before - 'event_capacity' - 'routing_release' - 'abuse_settings' - 'oauth_contract' IS DISTINCT FROM jsonb_build_object(
+ IF seed_before - ARRAY['event_capacity','routing_release','abuse_settings','oauth_contract','human_grant_gate','gift_risk_key','gift_policy','credit_policy'] IS DISTINCT FROM jsonb_build_object(
   'accounts',(SELECT jsonb_agg(to_jsonb(a) ORDER BY id) FROM core_billing.ledger_accounts a),
-  'balances',(SELECT jsonb_agg(to_jsonb(b) ORDER BY ledger_account_id) FROM core_billing.balance_state b)) THEN
+  'balances',(SELECT jsonb_agg(to_jsonb(b) ORDER BY ledger_account_id) FROM core_billing.balance_state b),
+  'ledger_sequence',(SELECT to_jsonb(s) FROM core_billing.ledger_accounts_id_seq s)) THEN
   RAISE EXCEPTION 'initialized ledger seed changed';
  END IF;
 """ if allow_seed else ""
@@ -680,7 +700,11 @@ def build_import_sql(plan: dict, *, migration_id: str, source_sha256: str,
  IF seed_before->'event_capacity' IS DISTINCT FROM (SELECT to_jsonb(c) FROM core_events.capacity c)
  OR seed_before->'routing_release' IS DISTINCT FROM (SELECT to_jsonb(r) FROM public.routing_active_release r)
  OR seed_before->'abuse_settings' IS DISTINCT FROM (SELECT to_jsonb(s) FROM core_abuse.settings s)
- OR seed_before->'oauth_contract' IS DISTINCT FROM (SELECT to_jsonb(c) FROM core_oauth.contract c) THEN
+ OR seed_before->'oauth_contract' IS DISTINCT FROM (SELECT to_jsonb(c) FROM core_oauth.contract c)
+ OR seed_before->'human_grant_gate' IS DISTINCT FROM (SELECT to_jsonb(c) FROM core_humangrant.human_grant_gate c)
+ OR seed_before->'gift_risk_key' IS DISTINCT FROM (SELECT to_jsonb(c) FROM core_gift.risk_key c)
+ OR seed_before->'gift_policy' IS DISTINCT FROM (SELECT to_jsonb(c) FROM core_gift.policy c)
+ OR seed_before->'credit_policy' IS DISTINCT FROM (SELECT to_jsonb(c) FROM core_tool_market.credit_policy c) THEN
   RAISE EXCEPTION 'initialized core seed changed';
  END IF;
 """

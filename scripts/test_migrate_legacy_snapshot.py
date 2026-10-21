@@ -701,6 +701,18 @@ class ImportSqlTests(unittest.TestCase):
         self.assertIn("singleton AND revision=0 AND document='{\"version\":1,\"policies\":[]}'::jsonb", body)
         self.assertIn("seed_before->'abuse_settings' IS DISTINCT FROM", body)
         self.assertIn("seed_before->'oauth_contract' IS DISTINCT FROM", body)
+        for table, field in (("core_humangrant.human_grant_gate", "human_grant_gate"),
+                             ("core_gift.risk_key", "gift_risk_key"),
+                             ("core_gift.policy", "gift_policy"),
+                             ("core_tool_market.credit_policy", "credit_policy")):
+            self.assertIn("(SELECT count(*) FROM " + table + ")<>1", body)
+            self.assertIn("seed_before->'" + field + "' IS DISTINCT FROM", body)
+            self.assertNotRegex(code, r"(?i)\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+" + re.escape(table) + r"\b")
+        self.assertIn("octet_length(secret)=32", body)
+        self.assertIn("id=1 AND revision=1", body)
+        self.assertIn("NOT enabled AND exclusive_cap=0", body)
+        self.assertIn("platform_account_id IS NULL AND platform_user_id IS NULL AND NOT enabled", body)
+        self.assertIn("FROM core_billing.ledger_accounts_id_seq WHERE last_value=2 AND is_called", body)
         self.assertIn("non-canonical initialized OAuth seed", body)
         self.assertIn("encode(ddl_fingerprint,'hex')='" + contract['component_fingerprints']['oauth-grants'] + "'", body)
         self.assertIn("jsonb_agg(to_jsonb(a) ORDER BY id)", body)
