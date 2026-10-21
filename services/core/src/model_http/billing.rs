@@ -360,12 +360,12 @@ impl Billing for Bridge {
                     if !report.provider_complete {
                         return Err(RelayError::SettlementPending);
                     }
-                    self.provider_policy.validate_usage(
-                        &selected.attempt,
-                        &report.usage,
-                        upstream_cost,
-                    )?;
                     if upstream_cost {
+                        self.provider_policy.validate_usage(
+                            &selected.attempt,
+                            &report.usage,
+                            true,
+                        )?;
                         let usage = complete_usage(report.usage, true)?;
                         if usage.upstream_cost_atto_usd.is_none() {
                             return Err(RelayError::SettlementPending);
@@ -377,25 +377,21 @@ impl Billing for Bridge {
                         }
                         (usage, Outcome::Completed)
                     } else {
-                        let usage = if selected
-                            .price
-                            .tiered
-                            .as_ref()
-                            .is_some_and(|t| t.tariff.revision == 2)
-                        {
-                            complete_cache_usage(
-                                report.usage,
-                                selected.price.tiered.as_ref().unwrap().input_semantics,
-                                selected
-                                    .price
-                                    .tiered
-                                    .as_ref()
-                                    .unwrap()
-                                    .missing_cache_creation_is_zero,
-                            )?
+                        let usage = if let Some(tariff) = &selected.price.tiered {
+                            complete_tiered_usage(report.usage, tariff)?
                         } else {
                             complete_usage(report.usage, false)?
                         };
+                        // This input is either the original inclusive receipt
+                        // or a checked reconstruction from actual Anthropic P
+                        // and the original frozen absence-zero contract.
+                        let mut policy_usage = report.usage;
+                        policy_usage.input_tokens = Some(usage.input as u64);
+                        self.provider_policy.validate_usage(
+                            &selected.attempt,
+                            &policy_usage,
+                            false,
+                        )?;
                         if usage.input > selected.input_token_ceiling
                             || usage.output > i64::from(output_ceiling)
                         {
@@ -605,6 +601,9 @@ pub(super) fn complete_usage(
     observed
         .validate()
         .map_err(|_| RelayError::SettlementPending)?;
+    if observed.cache_creation_mode.is_some() || observed.uncached_input_tokens.is_some() {
+        return Err(RelayError::SettlementPending);
+    }
     if !upstream_cost
         && (observed
             .cache_creation_input_tokens
@@ -641,10 +640,113 @@ pub(super) fn complete_usage(
     })
 }
 
-/// Revision 2 preserves aggregate creation and the independently reported TTL
-/// buckets. Missing measurements remain pending unless the selected supplier's
-/// reviewed contract proves absence means zero.
-pub(super) fn complete_cache_usage(
+/// Interpret provider evidence only using the original frozen tariff. Old
+/// strict revisions and the generic flat contract share this single dispatch.
+pub(super) fn complete_tiered_usage(
+    observed: crate::relay::Usage,
+    tariff: &crate::routing::PersistedTieredTariff,
+) -> Result<Usage, RelayError> {
+    tariff
+        .validate()
+        .map_err(|_| RelayError::SettlementPending)?;
+    let compiled = tariff
+        .tariff
+        .compile()
+        .map_err(|_| RelayError::SettlementPending)?;
+    match compiled.cache_creation_mode() {
+        Some(crate::routing::CacheCreationMode::GenericRemainderV1) => {
+            complete_generic_cache_usage(observed, tariff)
+        }
+        None if compiled.requires_cache_creation() => complete_strict_cache_usage(
+            observed,
+            tariff.input_semantics,
+            tariff.missing_cache_creation_is_zero,
+        ),
+        None => complete_usage(observed, false),
+    }
+}
+
+fn complete_generic_cache_usage(
+    observed: crate::relay::Usage,
+    tariff: &crate::routing::PersistedTieredTariff,
+) -> Result<Usage, RelayError> {
+    use crate::routing::{CacheCreationMode, CacheCreationPartition, InputSemantics};
+    observed
+        .validate()
+        .map_err(|_| RelayError::SettlementPending)?;
+    if observed.cache_creation_mode != Some(CacheCreationMode::GenericRemainderV1)
+        || observed.cache_creation_mode != tariff.cache_creation_mode
+    {
+        return Err(RelayError::SettlementPending);
+    }
+    let integer = |value: u64| i64::try_from(value).map_err(|_| RelayError::SettlementPending);
+    let details = observed.cache_creation_details;
+    let five = details.and_then(|value| value.ephemeral_5m_input_tokens);
+    let hour = details.and_then(|value| value.ephemeral_1h_input_tokens);
+    let total = match observed.cache_creation_input_tokens {
+        Some(reported) => CacheCreationPartition::from_reported(reported, five, hour)
+            .map_err(|_| RelayError::SettlementPending)?
+            .total(),
+        None if tariff.missing_cache_creation_is_zero && details.is_none() => 0,
+        // Even two known TTL buckets cannot prove the third, generic amount is
+        // zero. Only an actual aggregate or the frozen absence contract can.
+        None => return Err(RelayError::SettlementPending),
+    };
+    let cached = observed.cached_input_tokens.unwrap_or(0);
+    let input = match tariff.input_semantics {
+        InputSemantics::Inclusive => {
+            if observed.uncached_input_tokens.is_some() {
+                return Err(RelayError::SettlementPending);
+            }
+            observed.input_tokens.ok_or(RelayError::SettlementPending)?
+        }
+        InputSemantics::AnthropicText => {
+            let uncached = observed
+                .uncached_input_tokens
+                .ok_or(RelayError::SettlementPending)?;
+            let inclusive = uncached
+                .checked_add(cached)
+                .and_then(|value| value.checked_add(total))
+                .ok_or(RelayError::SettlementPending)?;
+            if observed
+                .input_tokens
+                .is_some_and(|value| value != inclusive)
+            {
+                return Err(RelayError::SettlementPending);
+            }
+            inclusive
+        }
+    };
+    let usage = Usage {
+        image: None,
+        upstream_cost_atto_usd: None,
+        cache_creation: Some(charging::CacheCreationUsage {
+            total: integer(total)?,
+            five_minute: five.map(integer).transpose()?,
+            one_hour: hour.map(integer).transpose()?,
+            cache_creation_mode: tariff.cache_creation_mode,
+            reported_total: observed
+                .cache_creation_input_tokens
+                .map(integer)
+                .transpose()?,
+        }),
+        input: integer(input)?,
+        cached: integer(cached)?,
+        output: integer(
+            observed
+                .output_tokens
+                .ok_or(RelayError::SettlementPending)?,
+        )?,
+    };
+    if !usage.valid() {
+        return Err(RelayError::SettlementPending);
+    }
+    Ok(usage)
+}
+
+/// Revision 2 preserves its original complete two-TTL partition. Unknown
+/// measurements remain pending unless the frozen supplier contract says zero.
+fn complete_strict_cache_usage(
     observed: crate::relay::Usage,
     semantics: crate::routing::InputSemantics,
     missing_creation_is_zero: bool,
@@ -652,6 +754,9 @@ pub(super) fn complete_cache_usage(
     observed
         .validate()
         .map_err(|_| RelayError::SettlementPending)?;
+    if observed.cache_creation_mode.is_some() || observed.uncached_input_tokens.is_some() {
+        return Err(RelayError::SettlementPending);
+    }
     let integer = |v: u64| i64::try_from(v).map_err(|_| RelayError::SettlementPending);
     let total = match observed.cache_creation_input_tokens {
         Some(value) => integer(value)?,
@@ -700,6 +805,8 @@ pub(super) fn complete_cache_usage(
             total,
             five_minute,
             one_hour,
+            cache_creation_mode: None,
+            reported_total: None,
         }),
         input: integer(observed.input_tokens.ok_or(RelayError::SettlementPending)?)?,
         cached: integer(observed.cached_input_tokens.unwrap_or(0))?,
@@ -1183,6 +1290,8 @@ mod a07_billing_tests {
                     cached_input_tokens: Some(2),
                     cache_creation_input_tokens: Some(0),
                     reasoning_output_tokens: Some(5),
+                    cache_creation_mode: None,
+                    uncached_input_tokens: None,
                 },
                 false,
             ),
@@ -1207,6 +1316,8 @@ mod a07_billing_tests {
             cached_input_tokens: Some(2),
             cache_creation_input_tokens: Some(1),
             reasoning_output_tokens: Some(5),
+            cache_creation_mode: None,
+            uncached_input_tokens: None,
         };
         assert_eq!(
             complete_usage(observed, false),
@@ -1224,6 +1335,8 @@ mod a07_billing_tests {
             cached_input_tokens: Some(2),
             cache_creation_input_tokens: Some(0),
             reasoning_output_tokens: Some(5),
+            cache_creation_mode: None,
+            uncached_input_tokens: None,
         };
         assert_eq!(
             complete_usage(observed, false),
@@ -1250,6 +1363,8 @@ mod a07_billing_tests {
                     cached_input_tokens: Some(2),
                     cache_creation_input_tokens: Some(1),
                     reasoning_output_tokens: Some(5),
+                    cache_creation_mode: None,
+                    uncached_input_tokens: None,
                 },
                 true,
             ),
@@ -1305,6 +1420,144 @@ mod a07_billing_tests {
         assert_eq!(calls, 1);
     }
 
+    fn generic_frozen_tariff() -> crate::routing::PersistedTieredTariff {
+        use crate::routing::*;
+        let rate = |numerator, denominator| DecimalRate {
+            numerator,
+            denominator,
+        };
+        PersistedTieredTariff {
+            tariff: TieredTariff {
+                revision: 3,
+                source_digest: "ab".repeat(32),
+                uses_cache_read: true,
+                uses_cache_write: true,
+                uses_cache_write_1h: true,
+                tiers: vec![TokenTier {
+                    up_to_input_tokens: None,
+                    rates: TieredRates {
+                        input: rate(5, 1),
+                        output: rate(25, 1),
+                        cache_read: rate(1, 2),
+                        cache_write: rate(25, 4),
+                        cache_write_1h: Some(rate(10, 1)),
+                    },
+                }],
+            },
+            input_semantics: InputSemantics::AnthropicText,
+            group_multiplier_ppm: 1_000_000,
+            speed_multiplier_ppm: 1_000_000,
+            credits_per_usd: 500_000,
+            missing_cache_creation_is_zero: false,
+            cache_creation_mode: Some(CacheCreationMode::GenericRemainderV1),
+        }
+    }
+
+    fn generic_anthropic(value: serde_json::Value) -> crate::relay::Usage {
+        crate::relay::provider_usage_with_cache_creation_mode(
+            crate::relay::UpstreamProtocol::Anthropic,
+            &value,
+            Some(crate::routing::CacheCreationMode::GenericRemainderV1),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn generic_normalization_preserves_raw_aggregate_and_each_unknown_ttl() {
+        let tariff = generic_frozen_tariff();
+        let observed = generic_anthropic(serde_json::json!({
+            "input_tokens":10,"output_tokens":1,"cache_read_input_tokens":20,
+            "cache_creation_input_tokens":2,
+            "cache_creation":{"ephemeral_5m_input_tokens":3,"ephemeral_1h_input_tokens":4}
+        }));
+        let usage = complete_tiered_usage(observed, &tariff).unwrap();
+        assert_eq!(usage.input, 37);
+        assert_eq!(
+            usage.cache_creation.unwrap(),
+            charging::CacheCreationUsage {
+                total: 7,
+                five_minute: Some(3),
+                one_hour: Some(4),
+                cache_creation_mode: tariff.cache_creation_mode,
+                reported_total: Some(2),
+            }
+        );
+        let aggregate_only = generic_anthropic(serde_json::json!({
+            "input_tokens":10,"output_tokens":1,"cache_read_input_tokens":20,
+            "cache_creation_input_tokens":50
+        }));
+        let usage = complete_tiered_usage(aggregate_only, &tariff).unwrap();
+        assert_eq!(usage.input, 80);
+        assert_eq!(usage.cache_creation.unwrap().five_minute, None);
+        assert_eq!(usage.cache_creation.unwrap().one_hour, None);
+        assert_eq!(usage.cache_creation.unwrap().reported_total, Some(50));
+    }
+
+    #[test]
+    fn generic_missing_aggregate_requires_the_original_complete_absence_zero_contract() {
+        let mut tariff = generic_frozen_tariff();
+        let absent = generic_anthropic(serde_json::json!({
+            "input_tokens":10,"output_tokens":1,"cache_read_input_tokens":20
+        }));
+        assert_eq!(absent.input_tokens, None);
+        assert_eq!(absent.uncached_input_tokens, Some(10));
+        assert_eq!(
+            complete_tiered_usage(absent, &tariff),
+            Err(RelayError::SettlementPending)
+        );
+        tariff.missing_cache_creation_is_zero = true;
+        let usage = complete_tiered_usage(absent, &tariff).unwrap();
+        assert_eq!(usage.input, 30);
+        assert_eq!(
+            usage.cache_creation.unwrap(),
+            charging::CacheCreationUsage {
+                total: 0,
+                five_minute: None,
+                one_hour: None,
+                cache_creation_mode: tariff.cache_creation_mode,
+                reported_total: None,
+            }
+        );
+        for details in [
+            serde_json::json!({}),
+            serde_json::json!({"ephemeral_5m_input_tokens":0}),
+            serde_json::json!({"ephemeral_5m_input_tokens":3,"ephemeral_1h_input_tokens":4}),
+        ] {
+            let observed = generic_anthropic(serde_json::json!({
+                "input_tokens":10,"output_tokens":1,"cache_read_input_tokens":20,"cache_creation":details
+            }));
+            assert_eq!(
+                complete_tiered_usage(observed, &tariff),
+                Err(RelayError::SettlementPending)
+            );
+        }
+    }
+
+    #[test]
+    fn generic_mode_cannot_be_inferred_from_receipt_fields_or_relabel_old_tariffs() {
+        let receipt = serde_json::json!({"input_tokens":10,"output_tokens":1,"cache_read_input_tokens":20,"cache_creation_input_tokens":0});
+        let strict =
+            crate::relay::provider_usage(crate::relay::UpstreamProtocol::Anthropic, &receipt)
+                .unwrap();
+        let mut tariff = generic_frozen_tariff();
+        assert_eq!(
+            complete_tiered_usage(strict, &tariff),
+            Err(RelayError::SettlementPending)
+        );
+        let generic = generic_anthropic(receipt);
+        assert!(complete_tiered_usage(generic, &tariff).is_ok());
+        tariff.tariff.revision = 2;
+        tariff.cache_creation_mode = None;
+        assert_eq!(
+            complete_tiered_usage(generic, &tariff),
+            Err(RelayError::SettlementPending)
+        );
+        assert_eq!(
+            complete_usage(generic, false),
+            Err(RelayError::SettlementPending)
+        );
+    }
+
     #[test]
     fn cache_v2_requires_real_ttls_and_keeps_unknown_creation_pending() {
         use crate::relay::{CacheCreationDetails, Usage as Observed};
@@ -1320,13 +1573,16 @@ mod a07_billing_tests {
             }),
             ..Observed::default()
         };
-        let usage = complete_cache_usage(observed, InputSemantics::AnthropicText, false).unwrap();
+        let usage =
+            complete_strict_cache_usage(observed, InputSemantics::AnthropicText, false).unwrap();
         assert_eq!(
             usage.cache_creation,
             Some(charging::CacheCreationUsage {
                 total: 70,
                 five_minute: Some(30),
                 one_hour: Some(40),
+                cache_creation_mode: None,
+                reported_total: None,
             })
         );
         for details in [
@@ -1340,7 +1596,7 @@ mod a07_billing_tests {
             },
         ] {
             assert_eq!(
-                complete_cache_usage(
+                complete_strict_cache_usage(
                     Observed {
                         cache_creation_details: Some(details),
                         ..observed
@@ -1361,21 +1617,23 @@ mod a07_billing_tests {
             ..observed
         };
         assert_eq!(
-            complete_cache_usage(aggregate_only, InputSemantics::AnthropicText, false),
+            complete_strict_cache_usage(aggregate_only, InputSemantics::AnthropicText, false),
             Err(RelayError::SettlementPending)
         );
-        assert!(complete_cache_usage(aggregate_only, InputSemantics::Inclusive, false).is_ok());
+        assert!(
+            complete_strict_cache_usage(aggregate_only, InputSemantics::Inclusive, false).is_ok()
+        );
         let unknown = Observed {
             cache_creation_input_tokens: None,
             cache_creation_details: None,
             ..observed
         };
         assert_eq!(
-            complete_cache_usage(unknown, InputSemantics::Inclusive, false),
+            complete_strict_cache_usage(unknown, InputSemantics::Inclusive, false),
             Err(RelayError::SettlementPending)
         );
         assert_eq!(
-            complete_cache_usage(unknown, InputSemantics::Inclusive, true)
+            complete_strict_cache_usage(unknown, InputSemantics::Inclusive, true)
                 .unwrap()
                 .cache_creation
                 .unwrap()
@@ -1388,7 +1646,7 @@ mod a07_billing_tests {
             ..observed
         };
         assert_eq!(
-            complete_cache_usage(zero, InputSemantics::AnthropicText, false)
+            complete_strict_cache_usage(zero, InputSemantics::AnthropicText, false)
                 .unwrap()
                 .cache_creation
                 .unwrap()

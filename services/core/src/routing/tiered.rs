@@ -3,8 +3,9 @@
 //! This is deliberately not an expression interpreter. Unsupported measured
 //! dimensions must not be removed from a legacy expression to create a tariff.
 //! Decimal coefficients are exact; settlement rounds once, half upwards. The
-//! second revision adds measured cache creation and its independent TTLs.
-//! Neither revision reproduces intermediate legacy floating-point errors.
+//! second revision adds measured cache creation and its independent TTLs. The
+//! third is the fixed flat-price generic-remainder contract, not an expression.
+//! These revisions do not reproduce intermediate legacy floating-point errors.
 use num_bigint::BigUint;
 use num_rational::Ratio;
 use serde::{Deserialize, Serialize};
@@ -14,6 +15,85 @@ use crate::billing::trust_pricing::DiscountRatio;
 
 const MAX_TIERS: usize = 4;
 const MAX_DENOMINATOR: u64 = 1_000_000_000_000_000_000;
+
+/// A server-selected interpretation of creation counters, never a provider
+/// claim about a missing TTL. Old tariffs and evidence omit this marker.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheCreationMode {
+    GenericRemainderV1,
+}
+
+/// Checked creation evidence for the source flat-price contract. Unknown TTLs
+/// stay unknown; the unclassified remainder is derived rather than persisted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CacheCreationPartition {
+    total: u64,
+    five_minute: Option<u64>,
+    one_hour: Option<u64>,
+}
+
+impl CacheCreationPartition {
+    pub(crate) fn from_reported(
+        reported_total: u64,
+        five_minute: Option<u64>,
+        one_hour: Option<u64>,
+    ) -> Result<Self, RoutingError> {
+        let known = five_minute
+            .unwrap_or(0)
+            .checked_add(one_hour.unwrap_or(0))
+            .ok_or(RoutingError::InvalidRequest)?;
+        Self::from_effective(reported_total.max(known), five_minute, one_hour)
+    }
+
+    pub(crate) fn from_normalized(
+        total: u64,
+        reported_total: u64,
+        five_minute: Option<u64>,
+        one_hour: Option<u64>,
+    ) -> Result<Self, RoutingError> {
+        let partition = Self::from_reported(reported_total, five_minute, one_hour)?;
+        if partition.total != total {
+            return Err(RoutingError::InvalidRequest);
+        }
+        Ok(partition)
+    }
+
+    pub(crate) fn from_effective(
+        total: u64,
+        five_minute: Option<u64>,
+        one_hour: Option<u64>,
+    ) -> Result<Self, RoutingError> {
+        let known = five_minute
+            .unwrap_or(0)
+            .checked_add(one_hour.unwrap_or(0))
+            .ok_or(RoutingError::InvalidRequest)?;
+        if known > total {
+            return Err(RoutingError::InvalidRequest);
+        }
+        Ok(Self {
+            total,
+            five_minute,
+            one_hour,
+        })
+    }
+
+    pub(crate) fn total(self) -> u64 {
+        self.total
+    }
+
+    pub(crate) fn five_minute(self) -> Option<u64> {
+        self.five_minute
+    }
+
+    pub(crate) fn one_hour(self) -> Option<u64> {
+        self.one_hour
+    }
+
+    pub(crate) fn generic_remainder(self) -> u64 {
+        self.total - self.five_minute.unwrap_or(0) - self.one_hour.unwrap_or(0)
+    }
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -83,15 +163,20 @@ pub struct PersistedTieredTariff {
     /// Captured from the selected supplier's reviewed usage contract.
     #[serde(default, skip_serializing_if = "is_false")]
     pub missing_cache_creation_is_zero: bool,
+    /// Explicit authority frozen with the original Price. Recovery must not
+    /// choose a newer counter interpretation from the current configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_creation_mode: Option<CacheCreationMode>,
 }
 
 impl PersistedTieredTariff {
     pub fn validate(&self) -> Result<(), RoutingError> {
-        self.tariff.compile()?;
+        let compiled = self.tariff.compile()?;
         if self.group_multiplier_ppm > MAX_MULTIPLIER
             || !(1..=MAX_MULTIPLIER).contains(&self.speed_multiplier_ppm)
             || self.credits_per_usd != 500_000
             || (self.tariff.revision == 1 && self.missing_cache_creation_is_zero)
+            || self.cache_creation_mode != compiled.cache_creation_mode()
         {
             return Err(invalid());
         }
@@ -138,15 +223,26 @@ pub struct CompiledTariff {
     uses_cache_read: bool,
     uses_cache_write: bool,
     uses_cache_write_1h: bool,
+    cache_creation_mode: Option<CacheCreationMode>,
     count: u8,
     tiers: [TokenTier; MAX_TIERS],
 }
 
 impl TieredTariff {
     pub fn compile(&self) -> Result<CompiledTariff, RoutingError> {
-        if !matches!(self.revision, 1 | 2)
-            || (self.revision == 1 && (self.uses_cache_write || self.uses_cache_write_1h))
+        let cache_creation_mode = match self.revision {
+            1 | 2 => None,
+            3 => Some(CacheCreationMode::GenericRemainderV1),
+            _ => return Err(invalid()),
+        };
+        if (self.revision == 1 && (self.uses_cache_write || self.uses_cache_write_1h))
             || !(1..=MAX_TIERS).contains(&self.tiers.len())
+            || (self.revision == 3
+                && (self.tiers.len() != 1
+                    || self.tiers[0].up_to_input_tokens.is_some()
+                    || !self.uses_cache_read
+                    || !self.uses_cache_write
+                    || !self.uses_cache_write_1h))
         {
             return Err(invalid());
         }
@@ -193,6 +289,7 @@ impl TieredTariff {
             uses_cache_read: self.uses_cache_read,
             uses_cache_write: self.uses_cache_write,
             uses_cache_write_1h: self.uses_cache_write_1h,
+            cache_creation_mode,
             count: self.tiers.len() as u8,
             tiers,
         })
@@ -229,6 +326,14 @@ impl CompiledTariff {
 
     pub fn revision(self) -> u32 {
         self.revision
+    }
+
+    pub fn cache_creation_mode(self) -> Option<CacheCreationMode> {
+        self.cache_creation_mode
+    }
+
+    pub fn requires_cache_creation(self) -> bool {
+        self.revision != 1
     }
 
     pub fn charge(
@@ -270,38 +375,58 @@ impl CompiledTariff {
                 return Err(RoutingError::InvalidRequest);
             }
         }
-        if let (Some(five), Some(hour)) = (usage.created_5m, usage.created_1h)
+        if self.cache_creation_mode.is_none()
+            && let (Some(five), Some(hour)) = (usage.created_5m, usage.created_1h)
             && five.checked_add(hour) != Some(usage.created)
         {
             return Err(RoutingError::InvalidRequest);
         }
-        let (created, created_1h) = if semantics == InputSemantics::AnthropicText {
-            if usage.created == 0 {
-                (0, 0)
-            } else {
-                match (usage.created_5m, usage.created_1h) {
-                    (Some(five), Some(hour)) => (five, hour),
-                    (Some(five), None) => (
-                        five,
-                        usage
-                            .created
-                            .checked_sub(five)
-                            .ok_or(RoutingError::InvalidRequest)?,
-                    ),
-                    (None, Some(hour)) => (
-                        usage
-                            .created
-                            .checked_sub(hour)
-                            .ok_or(RoutingError::InvalidRequest)?,
-                        hour,
-                    ),
-                    (None, None) => return Err(RoutingError::InvalidRequest),
+        let (created, created_1h) =
+            if self.cache_creation_mode == Some(CacheCreationMode::GenericRemainderV1) {
+                let partition = CacheCreationPartition::from_effective(
+                    usage.created,
+                    usage.created_5m,
+                    usage.created_1h,
+                )?;
+                if semantics == InputSemantics::AnthropicText {
+                    // The actual flat factory gives generic and five-minute
+                    // writes the same rate. Keep their evidence distinct.
+                    (
+                        partition.generic_remainder() + partition.five_minute().unwrap_or(0),
+                        partition.one_hour().unwrap_or(0),
+                    )
+                } else {
+                    // The original inclusive flat branch prices all creation at
+                    // its generic rate, irrespective of supplied TTL details.
+                    (partition.total(), 0)
                 }
-            }
-        } else {
-            // The source's non-Anthropic cc is the aggregate and cc1h is zero.
-            (usage.created, 0)
-        };
+            } else if semantics == InputSemantics::AnthropicText {
+                if usage.created == 0 {
+                    (0, 0)
+                } else {
+                    match (usage.created_5m, usage.created_1h) {
+                        (Some(five), Some(hour)) => (five, hour),
+                        (Some(five), None) => (
+                            five,
+                            usage
+                                .created
+                                .checked_sub(five)
+                                .ok_or(RoutingError::InvalidRequest)?,
+                        ),
+                        (None, Some(hour)) => (
+                            usage
+                                .created
+                                .checked_sub(hour)
+                                .ok_or(RoutingError::InvalidRequest)?,
+                            hour,
+                        ),
+                        (None, None) => return Err(RoutingError::InvalidRequest),
+                    }
+                }
+            } else {
+                // The source's non-Anthropic cc is the aggregate and cc1h is zero.
+                (usage.created, 0)
+            };
         let tier = self.tiers[..usize::from(self.count)]
             .iter()
             .find(|t| {
@@ -658,6 +783,7 @@ mod tests {
             speed_multiplier_ppm: 1_000_000,
             credits_per_usd: 500_000,
             missing_cache_creation_is_zero: false,
+            cache_creation_mode: None,
         };
         let bytes = serde_json::to_vec(&frozen).unwrap();
         let usage = TieredUsage {
@@ -749,6 +875,196 @@ mod tests {
                 },
             }],
         }
+    }
+
+    fn generic_tariff() -> TieredTariff {
+        let mut tariff = cache_tariff();
+        tariff.revision = 3;
+        tariff.tiers[0].rates = TieredRates {
+            input: rate(5, 1),
+            output: rate(25, 1),
+            cache_read: rate(1, 2),
+            cache_write: rate(25, 4),
+            cache_write_1h: Some(rate(10, 1)),
+        };
+        tariff
+    }
+
+    #[test]
+    fn generic_v3_partition_keeps_unknown_ttls_and_checks_the_original_aggregate() {
+        let partition = CacheCreationPartition::from_reported(50, Some(2), Some(3)).unwrap();
+        assert_eq!(partition.total(), 50);
+        assert_eq!(partition.generic_remainder(), 45);
+        let aggregate_only = CacheCreationPartition::from_reported(50, None, None).unwrap();
+        assert_eq!(aggregate_only.five_minute(), None);
+        assert_eq!(aggregate_only.one_hour(), None);
+        assert_eq!(aggregate_only.generic_remainder(), 50);
+        let maximum = CacheCreationPartition::from_reported(2, Some(3), Some(4)).unwrap();
+        assert_eq!(maximum.total(), 7);
+        assert_eq!(maximum.generic_remainder(), 0);
+        assert!(CacheCreationPartition::from_normalized(8, 9, Some(3), Some(4)).is_err());
+        assert!(CacheCreationPartition::from_effective(6, Some(3), Some(4)).is_err());
+        assert!(CacheCreationPartition::from_reported(0, Some(u64::MAX), Some(1)).is_err());
+    }
+
+    #[test]
+    fn generic_v3_prices_remainder_without_renaming_it_a_ttl() {
+        let price = generic_tariff().compile().unwrap();
+        let usage = TieredUsage {
+            input: 170,
+            cached: 20,
+            created: 50,
+            created_5m: Some(2),
+            created_1h: Some(3),
+            ..TieredUsage::default()
+        };
+        assert_eq!(
+            price.charge(
+                usage,
+                InputSemantics::AnthropicText,
+                1_000_000,
+                1_000_000,
+                500_000
+            ),
+            Ok(417)
+        );
+        assert_eq!(
+            price.charge(
+                usage,
+                InputSemantics::Inclusive,
+                1_000_000,
+                1_000_000,
+                500_000
+            ),
+            Ok(411)
+        );
+        let aggregate_only = TieredUsage {
+            created_5m: None,
+            created_1h: None,
+            ..usage
+        };
+        assert_eq!(
+            price.charge(
+                aggregate_only,
+                InputSemantics::AnthropicText,
+                1_000_000,
+                1_000_000,
+                500_000
+            ),
+            Ok(411)
+        );
+        let mut strict = generic_tariff();
+        strict.revision = 2;
+        assert!(
+            strict
+                .compile()
+                .unwrap()
+                .charge(
+                    aggregate_only,
+                    InputSemantics::AnthropicText,
+                    1_000_000,
+                    1_000_000,
+                    500_000
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn generic_v3_requires_an_explicit_frozen_mode_and_bounded_flat_shape() {
+        let tariff = generic_tariff();
+        let compiled = tariff.compile().unwrap();
+        let mut frozen = PersistedTieredTariff {
+            tariff: tariff.clone(),
+            input_semantics: InputSemantics::AnthropicText,
+            group_multiplier_ppm: 1_000_000,
+            speed_multiplier_ppm: 1_000_000,
+            credits_per_usd: 500_000,
+            missing_cache_creation_is_zero: false,
+            cache_creation_mode: Some(CacheCreationMode::GenericRemainderV1),
+        };
+        assert!(frozen.validate().is_ok());
+        assert_eq!(
+            serde_json::to_value(&frozen).unwrap()["cache_creation_mode"],
+            "generic_remainder_v1"
+        );
+        let bytes = serde_json::to_vec(&frozen).unwrap();
+        let restored: PersistedTieredTariff = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(restored, frozen);
+        frozen.cache_creation_mode = None;
+        assert!(frozen.validate().is_err());
+        frozen.cache_creation_mode = compiled.cache_creation_mode();
+        frozen.tariff.revision = 2;
+        assert!(frozen.validate().is_err());
+        for variant in 0..5 {
+            let mut invalid = tariff.clone();
+            match variant {
+                0 => invalid.revision = 4,
+                1 => invalid.uses_cache_read = false,
+                2 => invalid.uses_cache_write_1h = false,
+                3 => invalid.tiers[0].up_to_input_tokens = Some(100),
+                _ => invalid.tiers.push(invalid.tiers[0]),
+            }
+            assert!(invalid.compile().is_err(), "variant {variant}");
+        }
+    }
+
+    #[test]
+    fn generic_v3_discount_still_precedes_the_only_round_and_hold_bounds_reclassification() {
+        let mut tariff = generic_tariff();
+        tariff.tiers[0].rates.cache_write = rate(3, 1);
+        tariff.tiers[0].rates.cache_write_1h = Some(rate(24, 5));
+        let price = tariff.compile().unwrap();
+        let discount = Some(DiscountRatio::new(3, 4).unwrap());
+        let one = TieredUsage {
+            input: 1,
+            created: 1,
+            ..TieredUsage::default()
+        };
+        assert_eq!(
+            price.charge_with_discount(
+                one,
+                InputSemantics::AnthropicText,
+                1_000_000,
+                1_000_000,
+                500_000,
+                discount
+            ),
+            Ok(1)
+        );
+        for semantics in [InputSemantics::Inclusive, InputSemantics::AnthropicText] {
+            let hold = price
+                .reservation_ceiling_with_discount(8, 2, 1_250_000, 1_000_000, 500_000, discount)
+                .unwrap();
+            for input in 0..=8 {
+                for cached in 0..=input {
+                    for created in 0..=input - cached {
+                        for hour in 0..=created {
+                            let usage = TieredUsage {
+                                input,
+                                cached,
+                                created,
+                                output: 2,
+                                created_5m: None,
+                                created_1h: Some(hour),
+                            };
+                            assert!(
+                                price
+                                    .charge_with_discount(
+                                        usage, semantics, 1_250_000, 1_000_000, 500_000, discount
+                                    )
+                                    .unwrap()
+                                    <= hold
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            price.charge(one, InputSemantics::AnthropicText, 0, 1_000_000, 500_000),
+            Ok(0)
+        );
     }
 
     #[test]
@@ -1180,6 +1496,7 @@ mod tests {
             speed_multiplier_ppm: 1_000_000,
             credits_per_usd: 500_000,
             missing_cache_creation_is_zero: false,
+            cache_creation_mode: None,
         };
         let bytes = serde_json::to_vec(&frozen).unwrap();
         let restored: PersistedTieredTariff = serde_json::from_slice(&bytes).unwrap();

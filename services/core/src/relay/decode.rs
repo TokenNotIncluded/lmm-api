@@ -7,6 +7,8 @@ use super::{
 use serde_json::Value;
 use std::collections::BTreeMap;
 
+use crate::routing::CacheCreationMode;
+
 type Key = (u64, u64);
 struct Slot {
     index: usize,
@@ -17,6 +19,7 @@ struct Slot {
 }
 pub(crate) struct Decoder {
     protocol: UpstreamProtocol,
+    cache_creation_mode: Option<CacheCreationMode>,
     started: bool,
     source_id: Option<String>,
     done: bool,
@@ -70,7 +73,8 @@ fn cache_creation_details(v: &Value) -> Result<Option<CacheCreationDetails>, Rel
 fn cache_creation_usage(u: &mut Usage, v: &Value, details_key: &str) -> Result<(), RelayError> {
     u.cache_creation_input_tokens = counter(v, "cache_creation_input_tokens")?;
     u.cache_creation_details = cache_creation_details(&v[details_key])?;
-    if u.cache_creation_input_tokens.is_none()
+    if u.cache_creation_mode.is_none()
+        && u.cache_creation_input_tokens.is_none()
         && let Some(details) = u.cache_creation_details
     {
         u.cache_creation_input_tokens = details.total()?;
@@ -101,13 +105,24 @@ fn anthropic_stop_sequence(
 }
 
 pub(crate) fn usage(protocol: UpstreamProtocol, v: &Value) -> Result<Usage, RelayError> {
+    usage_with_cache_creation_mode(protocol, v, None)
+}
+
+pub(crate) fn usage_with_cache_creation_mode(
+    protocol: UpstreamProtocol,
+    v: &Value,
+    mode: Option<CacheCreationMode>,
+) -> Result<Usage, RelayError> {
     if v.is_null() {
         return Ok(Usage::default());
     }
     if !v.is_object() {
         return Err(RelayError::Protocol("invalid usage object"));
     }
-    let mut u = Usage::default();
+    let mut u = Usage {
+        cache_creation_mode: mode,
+        ..Usage::default()
+    };
     if matches!(
         protocol,
         UpstreamProtocol::Chat | UpstreamProtocol::Responses
@@ -139,22 +154,38 @@ pub(crate) fn usage(protocol: UpstreamProtocol, v: &Value) -> Result<Usage, Rela
             u.cached_input_tokens = counter(v, "cache_read_input_tokens")?;
             cache_creation_usage(&mut u, v, "cache_creation")?;
             let uncached = counter(v, "input_tokens")?;
-            // A partial duration breakdown establishes a lower bound, not the
-            // complete cache write total needed to normalize disjoint input.
-            if u.cache_creation_details.is_none() || u.cache_creation_input_tokens.is_some() {
-                u.input_tokens = add(
-                    uncached,
-                    u.cached_input_tokens,
-                    u.cache_creation_input_tokens,
-                )?;
-            } else if let Some(details) = u.cache_creation_details {
-                // Known disjoint counters must still fit even when they do not
-                // establish a complete inclusive input total.
-                let _ = add(
-                    uncached,
-                    u.cached_input_tokens,
-                    Some(details.known_total()?),
-                )?;
+            if u.cache_creation_mode.is_some() {
+                u.uncached_input_tokens = uncached;
+                if let Some(created) = u.effective_cache_creation_input_tokens()? {
+                    u.input_tokens = add(uncached, u.cached_input_tokens, Some(created))?;
+                } else {
+                    // A raw aggregate is required even if both TTL counters
+                    // exist: they cannot prove no generic remainder exists.
+                    let known = u
+                        .cache_creation_details
+                        .map(|details| details.known_total())
+                        .transpose()?
+                        .unwrap_or(0);
+                    let _ = add(uncached, u.cached_input_tokens, Some(known))?;
+                }
+            } else {
+                // A partial duration breakdown establishes a lower bound, not the
+                // complete cache write total needed to normalize disjoint input.
+                if u.cache_creation_details.is_none() || u.cache_creation_input_tokens.is_some() {
+                    u.input_tokens = add(
+                        uncached,
+                        u.cached_input_tokens,
+                        u.cache_creation_input_tokens,
+                    )?;
+                } else if let Some(details) = u.cache_creation_details {
+                    // Known disjoint counters must still fit even when they do not
+                    // establish a complete inclusive input total.
+                    let _ = add(
+                        uncached,
+                        u.cached_input_tokens,
+                        Some(details.known_total()?),
+                    )?;
+                }
             }
             u.output_tokens = counter(v, "output_tokens")?;
         }
@@ -278,8 +309,17 @@ fn plain_response(response: &Value) -> Result<(), RelayError> {
 
 impl Decoder {
     pub fn new(protocol: UpstreamProtocol, limits: &Limits) -> Self {
+        Self::new_with_cache_creation_mode(protocol, limits, None)
+    }
+
+    pub(crate) fn new_with_cache_creation_mode(
+        protocol: UpstreamProtocol,
+        limits: &Limits,
+        cache_creation_mode: Option<CacheCreationMode>,
+    ) -> Self {
         Self {
             protocol,
+            cache_creation_mode,
             started: false,
             source_id: None,
             done: false,
@@ -288,6 +328,10 @@ impl Decoder {
             max_blocks: limits.max_blocks,
             gemini_calls: 0,
         }
+    }
+
+    fn usage(&self, value: &Value) -> Result<Usage, RelayError> {
+        usage_with_cache_creation_mode(self.protocol, value, self.cache_creation_mode)
     }
     pub fn is_done(&self) -> bool {
         self.done
@@ -583,7 +627,7 @@ impl Decoder {
                 {
                     self.anthropic_block((0, i as u64), b, false, &mut out)?;
                 }
-                out.push(Event::Usage(usage(self.protocol, &v["usage"])?));
+                out.push(Event::Usage(self.usage(&v["usage"])?));
                 anthropic_stop_sequence(v, text(&v["stop_reason"])?, &mut out)?;
                 self.finish(
                     finish_reason(self.protocol, text(&v["stop_reason"])?, self.tools())?,
@@ -679,7 +723,7 @@ impl Decoder {
             }
         }
         if let Some(u) = v.get("usage").filter(|u| !u.is_null()) {
-            out.push(Event::Usage(usage(self.protocol, u)?));
+            out.push(Event::Usage(self.usage(u)?));
         }
         Ok(())
     }
@@ -730,7 +774,7 @@ impl Decoder {
                     return Err(RelayError::Protocol("duplicate message start"));
                 }
                 self.start(v["message"]["id"].as_str(), out)?;
-                out.push(Event::Usage(usage(self.protocol, &v["message"]["usage"])?));
+                out.push(Event::Usage(self.usage(&v["message"]["usage"])?));
             }
             Some("content_block_start") => {
                 if !self.started {
@@ -769,7 +813,7 @@ impl Decoder {
             Some("content_block_stop") => self.close((0, index(&v["index"])?), out)?,
             Some("message_delta") => {
                 if let Some(u) = v.get("usage") {
-                    out.push(Event::Usage(usage(self.protocol, u)?));
+                    out.push(Event::Usage(self.usage(u)?));
                 }
                 if let Some(r) = v["delta"].get("stop_reason").filter(|r| !r.is_null()) {
                     anthropic_stop_sequence(&v["delta"], text(r)?, out)?;
@@ -902,7 +946,7 @@ impl Decoder {
             .map(text)
             .transpose()?;
         self.start(id, out)?;
-        out.push(Event::Usage(usage(self.protocol, &v["usage"])?));
+        out.push(Event::Usage(self.usage(&v["usage"])?));
         let reason = match v["status"].as_str() {
             Some("completed") => {
                 if self.tools() {
@@ -923,7 +967,7 @@ impl Decoder {
     fn gemini(&mut self, v: &Value, out: &mut Vec<Event>) -> Result<(), RelayError> {
         self.start(v["responseId"].as_str(), out)?;
         if let Some(u) = v.get("usageMetadata") {
-            out.push(Event::Usage(usage(self.protocol, u)?));
+            out.push(Event::Usage(self.usage(u)?));
         }
         if v["promptFeedback"].get("blockReason").is_some() {
             self.finish(FinishReason::ContentFilter, out)?;
@@ -1317,11 +1361,13 @@ mod tests {
     fn a07_usage_wire_round_trip_preserves_cache_creation() {
         let expected = Usage {
             upstream_cost_atto_usd: None,
+            uncached_input_tokens: None,
             input_tokens: Some(10),
             output_tokens: Some(4),
             cached_input_tokens: Some(3),
             cache_creation_input_tokens: Some(2),
             cache_creation_details: None,
+            cache_creation_mode: None,
             reasoning_output_tokens: Some(1),
         };
         for (protocol, client) in [
@@ -1720,5 +1766,162 @@ mod upstream_cost_tests {
                 assert!(usage(protocol, &value).is_err());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod generic_creation_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn decode(protocol: UpstreamProtocol, value: &Value) -> Result<Usage, RelayError> {
+        usage_with_cache_creation_mode(protocol, value, Some(CacheCreationMode::GenericRemainderV1))
+    }
+
+    #[test]
+    fn generic_anthropic_preserves_aggregate_and_normalizes_with_effective_total() {
+        for (aggregate, five, hour, expected) in [(2, 3, 4, 37), (50, 2, 3, 80), (0, 3, 4, 37)] {
+            let value = json!({"input_tokens":10,"output_tokens":1,"cache_read_input_tokens":20,"cache_creation_input_tokens":aggregate,"cache_creation":{"ephemeral_5m_input_tokens":five,"ephemeral_1h_input_tokens":hour}});
+            let actual = decode(UpstreamProtocol::Anthropic, &value).unwrap();
+            assert_eq!(actual.input_tokens, Some(expected));
+            assert_eq!(actual.uncached_input_tokens, Some(10));
+            assert_eq!(actual.cache_creation_input_tokens, Some(aggregate));
+            assert_eq!(
+                actual
+                    .cache_creation_details
+                    .unwrap()
+                    .ephemeral_5m_input_tokens,
+                Some(five)
+            );
+            assert!(usage(UpstreamProtocol::Anthropic, &value).is_err());
+        }
+        let actual = decode(UpstreamProtocol::Anthropic, &json!({"input_tokens":10,"output_tokens":1,"cache_read_input_tokens":20,"cache_creation_input_tokens":10})).unwrap();
+        assert_eq!(actual.input_tokens, Some(40));
+        assert_eq!(actual.cache_creation_details, None);
+    }
+
+    #[test]
+    fn generic_missing_aggregate_is_unknown_even_with_both_ttls() {
+        for details in [
+            json!({"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0}),
+            json!({"ephemeral_5m_input_tokens":2,"ephemeral_1h_input_tokens":3}),
+            json!({"ephemeral_5m_input_tokens":2}),
+            json!({}),
+        ] {
+            let value = json!({"input_tokens":10,"output_tokens":1,"cache_read_input_tokens":20,"cache_creation":details});
+            let actual = decode(UpstreamProtocol::Anthropic, &value).unwrap();
+            assert_eq!(actual.cache_creation_input_tokens, None);
+            assert_eq!(actual.uncached_input_tokens, Some(10));
+            assert_eq!(actual.input_tokens, None);
+        }
+        let actual = decode(
+            UpstreamProtocol::Anthropic,
+            &json!({"input_tokens":10,"output_tokens":1,"cache_read_input_tokens":20}),
+        )
+        .unwrap();
+        assert_eq!(actual.cache_creation_input_tokens, None);
+        assert_eq!(actual.input_tokens, None);
+    }
+
+    #[test]
+    fn generic_openai_aliases_are_compared_with_raw_not_effective_total() {
+        for (protocol, input, output, details) in [
+            (
+                UpstreamProtocol::Chat,
+                "prompt_tokens",
+                "completion_tokens",
+                "prompt_tokens_details",
+            ),
+            (
+                UpstreamProtocol::Responses,
+                "input_tokens",
+                "output_tokens",
+                "input_tokens_details",
+            ),
+        ] {
+            let mut value = json!({input:100,output:1,"cache_creation_input_tokens":5,"cache_creation_details":{"ephemeral_5m_input_tokens":6,"ephemeral_1h_input_tokens":4},details:{"cached_creation_tokens":3,"cache_write_tokens":5}});
+            let actual = decode(protocol, &value).unwrap();
+            assert_eq!(actual.cache_creation_input_tokens, Some(5));
+            assert_eq!(
+                actual.effective_cache_creation_input_tokens().unwrap(),
+                Some(10)
+            );
+            assert_eq!(actual.input_tokens, Some(100));
+            value[details]["cache_write_tokens"] = json!(4);
+            assert!(decode(protocol, &value).is_err());
+            value
+                .as_object_mut()
+                .unwrap()
+                .remove("cache_creation_input_tokens");
+            assert_eq!(
+                decode(protocol, &value)
+                    .unwrap()
+                    .cache_creation_input_tokens,
+                Some(4)
+            );
+            value.as_object_mut().unwrap().remove(details);
+            let actual = decode(protocol, &value).unwrap();
+            assert_eq!(actual.cache_creation_input_tokens, None);
+            assert_eq!(actual.uncached_input_tokens, None);
+            assert_eq!(
+                actual.effective_cache_creation_input_tokens().unwrap(),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn generic_counters_overflow_and_inclusive_cache_overlap_are_rejected() {
+        for value in [
+            json!({"input_tokens":u64::MAX,"cache_creation_input_tokens":1}),
+            json!({"input_tokens":0,"cache_creation_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":u64::MAX,"ephemeral_1h_input_tokens":1}}),
+            json!({"input_tokens":u64::MAX,"cache_creation":{"ephemeral_5m_input_tokens":1}}),
+            json!({"input_tokens":0,"cache_creation_input_tokens":-1}),
+            json!({"input_tokens":0,"cache_creation_input_tokens":1.5}),
+            json!({"input_tokens":0,"cache_creation_input_tokens":"1"}),
+        ] {
+            assert!(
+                decode(UpstreamProtocol::Anthropic, &value).is_err(),
+                "{value}"
+            );
+        }
+        assert!(decode(UpstreamProtocol::Chat,&json!({"prompt_tokens":26,"prompt_tokens_details":{"cached_tokens":20},"cache_creation_input_tokens":2,"cache_creation_details":{"ephemeral_5m_input_tokens":3,"ephemeral_1h_input_tokens":4}})).is_err());
+    }
+
+    #[test]
+    fn provider_cannot_opt_into_generic_mode_and_null_is_not_zero() {
+        let value = json!({"input_tokens":10,"cache_creation_input_tokens":2,"cache_creation":{"ephemeral_5m_input_tokens":3,"ephemeral_1h_input_tokens":4},"cache_creation_mode":"generic_remainder_v1"});
+        assert!(usage(UpstreamProtocol::Anthropic, &value).is_err());
+        assert!(decode(UpstreamProtocol::Anthropic, &value).is_ok());
+        assert_eq!(
+            decode(UpstreamProtocol::Anthropic, &Value::Null).unwrap(),
+            Usage::default()
+        );
+    }
+
+    #[test]
+    fn generic_stream_keeps_fixed_input_cache_from_message_start() {
+        let mut decoder = Decoder::new_with_cache_creation_mode(
+            UpstreamProtocol::Anthropic,
+            &Limits::default(),
+            Some(CacheCreationMode::GenericRemainderV1),
+        );
+        let start = json!({"type":"message_start","message":{"id":"msg_generic","usage":{"input_tokens":10,"output_tokens":0,"cache_read_input_tokens":20,"cache_creation_input_tokens":2,"cache_creation":{"ephemeral_5m_input_tokens":3,"ephemeral_1h_input_tokens":4}}}});
+        let mut events = Vec::new();
+        decoder.anthropic_event(&start, &mut events).unwrap();
+        decoder.anthropic_event(&json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}),&mut events).unwrap();
+        decoder
+            .anthropic_event(&json!({"type":"message_stop"}), &mut events)
+            .unwrap();
+        let mut combined = Usage::default();
+        for event in &events {
+            if let Event::Usage(value) = event {
+                combined.merge(*value).unwrap();
+            }
+        }
+        assert_eq!(combined.input_tokens, Some(37));
+        assert_eq!(combined.cache_creation_input_tokens, Some(2));
+        assert_eq!(combined.output_tokens, Some(1));
+        assert!(events.iter().any(|event| matches!(event, Event::Done)));
     }
 }

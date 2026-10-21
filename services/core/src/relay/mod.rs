@@ -16,6 +16,7 @@ mod sse;
 mod tests;
 mod types;
 pub(crate) use decode::usage as provider_usage;
+pub(crate) use decode::usage_with_cache_creation_mode as provider_usage_with_cache_creation_mode;
 pub use request::{FunctionTool, InputBlock, Message, Request, Role, ToolChoice};
 pub use types::*;
 
@@ -655,7 +656,11 @@ impl Worker {
         {
             return Err(RelayError::Limit("upstream body"));
         }
-        let mut decoder = Decoder::new(route.protocol, &self.inner.limits);
+        let mut decoder = Decoder::new_with_cache_creation_mode(
+            route.protocol,
+            &self.inner.limits,
+            route.cache_creation_mode,
+        );
         if self.request.stream {
             self.send_head()?;
             let mut parser = sse::Parser::new(self.inner.limits.event_bytes);

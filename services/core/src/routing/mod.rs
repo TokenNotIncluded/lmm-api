@@ -23,9 +23,10 @@ pub use pricing::{
     BillingMode, CreditQuote, CreditRate, Credits, MAX_MULTIPLIER, MULTIPLIER_ONE, MicroUsd,
     PriceConfig, PriceQuote, PriceRule, PriceSnapshot, TokenRates, Usage,
 };
+pub(crate) use tiered::CacheCreationPartition;
 pub use tiered::{
-    CompiledTariff, DecimalRate, InputSemantics, PersistedTieredTariff, TieredRates, TieredTariff,
-    TieredUsage, TokenTier,
+    CacheCreationMode, CompiledTariff, DecimalRate, InputSemantics, PersistedTieredTariff,
+    TieredRates, TieredTariff, TieredUsage, TokenTier,
 };
 
 pub const CONTRACT_VERSION: u32 = 1;
