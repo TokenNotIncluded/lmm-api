@@ -67,7 +67,7 @@ def metadata(template, path, origin):
     body = template.split('</head>', 1)[1]
     nav = ' · '.join(f'<a href="{p}">{html.escape(value[0])}</a>' for p, value in PAGES.items())
     body, count = re.subn(r'(<div\b[^>]*\bid="root"[^>]*>)\s*</div>',
-                         lambda match: match[1] + f'<main><h1>{esc(title)}</h1><p>{esc(description)}</p><nav>{nav}</nav></main></div>', body, count=1)
+                         lambda match: match[1] + f'</div><main id="lmm-seo-content"><h1>{esc(title)}</h1><p>{esc(description)}</p><nav>{nav}</nav></main>', body, count=1)
     if count != 1:
         raise ValueError('Expected an empty React root')
     return head + '</head>' + body
@@ -84,12 +84,12 @@ def build(index, routes, bundle, output, remote_root, origin='https://api.lmm.be
     patterns = route_patterns(routes, bundle)
     (output / 'routes.conf').write_text('map $request_uri $lmm_seo_known_route {\n    default 0;\n' + ''.join(f'    "~{p}" 1;\n' for p in patterns) + '}\n')
     snippets = []
-    snippets.append(f'location = /index.html {{\n    alias {remote_root}/private.html;\n    add_header X-Robots-Tag "noindex, follow" always;\n    add_header Cache-Control "no-cache, must-revalidate" always;\n}}\n')
+    snippets.append(f'location = /index.html {{\n    alias {remote_root}/private.html;\n    default_type text/html;\n    add_header X-Robots-Tag "noindex, follow" always;\n    add_header Cache-Control "no-cache, must-revalidate" always;\n}}\n')
     for i, path in enumerate(PAGES):
         filename = f'page-{i}.html'
         (output / filename).write_text(metadata(template, path, origin))
         serve = f'root {remote_root};\n    try_files /{filename} =404;' if path == '/' else f'alias {remote_root}/{filename};'
-        snippets.append(f'location = {path} {{\n    {serve}\n    add_header Cache-Control "no-cache, must-revalidate" always;\n}}\n')
+        snippets.append(f'location = {path} {{\n    {serve}\n    default_type text/html;\n    add_header Cache-Control "no-cache, must-revalidate" always;\n}}\n')
         if path != '/':
             snippets.append(f'location = {path}/ {{ return 308 {origin}{path}$is_args$args; }}\n')
     for path, filename in [('/robots.txt', 'robots.txt'), ('/sitemap.xml', 'sitemap.xml'), ('/site-seo.js', 'site-seo.js')]:

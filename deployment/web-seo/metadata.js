@@ -26,6 +26,16 @@
     history[method] = function (...args) { const result = Reflect.apply(original, this, args); sync(); return result; };
   }
   addEventListener('popstate', sync);
+  // The installed app starts only when its React root is empty. Keep the
+  // crawlable fallback outside that root and remove it once React mounts.
+  const fallback = document.getElementById('lmm-seo-content');
+  const root = document.getElementById('root');
+  if (fallback && root) {
+    const mounted = () => { if (root.hasChildNodes()) { fallback.remove(); observer.disconnect(); } };
+    const observer = new MutationObserver(mounted);
+    observer.observe(root, {childList:true});
+    mounted();
+  }
   sync();
   new MutationObserver(sync).observe(document.head, {subtree:true, childList:true, characterData:true, attributes:true, attributeFilter:['content', 'href']});
 })();

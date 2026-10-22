@@ -34,7 +34,7 @@ with tempfile.TemporaryDirectory(prefix='lmm-seo-check-') as temp:
     directives = [f'{kind}_temp_path {root}/{kind};' for kind in ['client_body','proxy','fastcgi','uwsgi','scgi']]
     conf = root / 'nginx.conf'
     conf.write_text(f'pid {root}/nginx.pid; error_log {root}/error.log; daemon off; master_process off; events {{}}\n'
-                    'http { include /etc/nginx/mime.types; access_log off; types_hash_max_size 4096;\n'
+                    'http { include /etc/nginx/mime.types; default_type text/plain; access_log off; types_hash_max_size 4096;\n'
                     + '\n'.join(directives) + '\n' + (candidate / 'routes.conf').read_text()
                     + f'\nserver {{ listen 127.0.0.1:{port}; root {candidate};\n'
                     + pages.replace(remote_root, str(candidate))
@@ -56,11 +56,15 @@ with tempfile.TemporaryDirectory(prefix='lmm-seo-check-') as temp:
         for path in ['/', '/pricing?utm_source=test', '/guide', '/about']:
             status, headers, body = get(path)
             assert status == 200 and b'rel="canonical"' in body and b'<h1>' in body, (path, status, (root / 'error.log').read_text())
+            assert re.search(rb'<div\b[^>]*\bid="root"[^>]*>\s*</div>', body), 'Installed app needs an empty React root'
+            assert b'<main id="lmm-seo-content">' in body
             assert 'X-Robots-Tag' not in headers, path
+            assert headers.get_content_type() == 'text/html', path
         for path in ['/sign-in?redirect=/dashboard', '/dashboard', '/dashboard/overview', '/challenges/1', '/oauth/google', '/index.html']:
             status, headers, body = get(path)
             assert status == 200 and headers['X-Robots-Tag'] == 'noindex, follow', path
             assert b'rel="canonical"' not in body, path
+            assert headers.get_content_type() == 'text/html', path
         for path in ['/v111', '/does-not-exist', '/oauth/a/b/c', '/%EF%BC%8C%E5%B9%B6%E4%BD%BF%E7%94%A8%E5%90%88%E9%80%82%E7%9A%84']:
             assert get(path)[0] == 404, path
         status, headers, body = get('/guide/?ref=test')
