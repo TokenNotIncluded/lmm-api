@@ -519,6 +519,17 @@ END $fixture_idle$;
                        "trust_policy_seed": json.loads(self.query(H.trust_policy_seed_query() + ";", connection=self.db, readonly=True)),
                        "initialized_core_seed_sha256": self.query(H.fresh_seed_hash_query() + ";", connection=self.db, readonly=True).strip(),
                        "identity_import": MODULE.identity_reference(self.proof, "identity-synthetic")}
+        # Invalid receipt cases start from synthetic rows and an initial receipt;
+        # committed migration history must never be updated or deleted.
+        invalid_receipt = {
+            "test_missing_identity_registry_rejected_even_when_user_ids_exist": "missing",
+            "test_identity_registry_wrong_archive_rejected": "archive",
+            "test_identity_registry_wrong_mapping_rejected": "mapping",
+            "test_identity_registry_wrong_id_map_manifest_rejected": "manifest",
+        }.get(self._testMethodName)
+        if invalid_receipt:
+            self.seed_identity_with_invalid_receipt(invalid_receipt)
+            return
         identity_sql = H.build_import_sql(self.identity_plan, migration_id="identity-synthetic", source_sha256=SOURCE,
                                          target_contract={**self.target, "allow_initialized_core_seed": True,
                                                           "initialized_core_seed_contract": H.CORE_SEED_CONTRACT},
@@ -527,6 +538,39 @@ END $fixture_idle$;
         # a few milliseconds. Fence fixture setup in this same import session;
         # keep both importers' fail-closed no-other-backend guards unchanged.
         self.query(self.idle_sql(self.database) + identity_sql, connection=self.db)
+
+    def seed_identity_with_invalid_receipt(self, defect):
+        """Build an inconsistent target using INSERTs, with history guards intact."""
+        self.assertEqual(self.facts()["runs"], [])
+        statements = ["BEGIN;"]
+        for r in self.identity_plan["records"]:
+            self.assertEqual(r["platform_role"], "user")
+            rows = (
+                ("core_identity.accounts", {"id": r["account_id"], "kind": "personal", "service_level": 0, "active": r["active"]}),
+                ("core_identity.users", {"id": r["user_id"], "personal_account_id": r["account_id"], "platform_role": r["platform_role"], "active": r["active"], "auth_version": r["auth_version"]}),
+                ("core_identity.user_profiles", {"user_id": r["user_id"], **{key: r[key] for key in ("username", "display_name", "email", "setting", "password_login_allowed", "second_factor_required", "legacy_bcrypt_allowed")}, "email_login_allowed": False}),
+                ("core_identity.password_logins", {"login_name": "legacy-" + str(r["user_id"]), "user_id": r["user_id"], "password_hash": r["password_hash"]}),
+                ("core_identity.developer_access", {"user_id": r["user_id"], "granted": r["developer_access_granted"], "source_reference": r["developer_access_source_reference"], "revision": r["developer_access_revision"]}),
+                ("core_billing.account_policies", {"account_id": r["account_id"], "preference": "wallet_only", "revision": 1}),
+            )
+            for table, values in rows:
+                columns = ",".join(values)
+                overriding = " OVERRIDING SYSTEM VALUE" if table == "core_identity.accounts" else ""
+                statements.append("INSERT INTO " + table + "(" + columns + ")" + overriding +
+                                  " SELECT " + columns + " FROM jsonb_populate_record(NULL::" + table + "," +
+                                  H.sql_literal(H.canonical(values)) + "::jsonb);")
+        if defect != "missing":
+            receipt = deepcopy(self.identity_manifest)
+            if defect == "manifest":
+                receipt["source_target_id_map_sha256"] = "c" * 64
+            archive = "c" * 64 if defect == "archive" else SOURCE
+            mapping = "c" * 64 if defect == "mapping" else self.identity_plan["mapping_sha256"]
+            statements.append("INSERT INTO core_migration.import_runs(migration_id,source_archive_sha256,mapping_sha256,manifest) VALUES(" +
+                              ",".join(H.sql_literal(value) for value in ("identity-synthetic", archive, mapping, H.canonical(receipt))) + "::jsonb);")
+        statements.append("COMMIT;")
+        self.query("\n".join(statements), connection=self.db)
+        self.assertEqual(self.query("SELECT id FROM core_identity.users;", connection=self.db, readonly=True).strip(), "7")
+        self.assertEqual(len(self.facts()["runs"]), 0 if defect == "missing" else 1)
 
     def cleanup_database(self):
         self.query(self.idle_sql(self.database) + 'DROP DATABASE "' + self.database + '";', connection=self.admin_connection)
@@ -804,25 +848,21 @@ END $fixture_idle$;
         self.assertNotEqual(first, self.query(sql, connection=self.db, readonly=True))
 
     def test_missing_identity_registry_rejected_even_when_user_ids_exist(self):
-        self.query("DELETE FROM core_migration.import_runs;", connection=self.db)
         before = self.facts()
         self.reject("required identity import receipt missing")
         self.assertEqual(self.facts(), before)
 
     def test_identity_registry_wrong_archive_rejected(self):
-        self.query("UPDATE core_migration.import_runs SET source_archive_sha256='" + "c" * 64 + "';", connection=self.db)
         before = self.facts()
         self.reject("identity import archive mismatch")
         self.assertEqual(self.facts(), before)
 
     def test_identity_registry_wrong_mapping_rejected(self):
-        self.query("UPDATE core_migration.import_runs SET mapping_sha256='" + "c" * 64 + "';", connection=self.db)
         before = self.facts()
         self.reject("identity import mapping proof mismatch")
         self.assertEqual(self.facts(), before)
 
     def test_identity_registry_wrong_id_map_manifest_rejected(self):
-        self.query("UPDATE core_migration.import_runs SET manifest=jsonb_set(manifest,'{source_target_id_map_sha256}',to_jsonb('" + "c" * 64 + "'::text));", connection=self.db)
         before = self.facts()
         self.reject("identity import manifest proof mismatch")
         self.assertEqual(self.facts(), before)
