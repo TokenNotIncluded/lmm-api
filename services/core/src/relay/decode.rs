@@ -1,4 +1,5 @@
 //! Provider decoders share a bounded block model. Usage counters are cumulative.
+use super::search::{SearchBinding, SearchMeter};
 use super::sse::Frame;
 use super::{
     BlockKind, CacheCreationDetails, Event, FinishReason, Limits, OpenAiCacheWriteDetails,
@@ -27,6 +28,10 @@ pub(crate) struct Decoder {
     blocks: BTreeMap<Key, Slot>,
     max_blocks: usize,
     gemini_calls: u64,
+    search: Option<SearchMeter>,
+    citations: BTreeMap<Key, Vec<Value>>,
+    server_blocks: BTreeMap<Key, (Value, String, bool)>,
+    tool_argument_bytes: usize,
 }
 fn text(v: &Value) -> Result<&str, RelayError> {
     v.as_str()
@@ -116,6 +121,7 @@ fn anthropic_stop_sequence(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn usage(protocol: UpstreamProtocol, v: &Value) -> Result<Usage, RelayError> {
     usage_with_cache_creation_mode(protocol, v, None)
 }
@@ -284,18 +290,21 @@ fn finish_reason(
         _ => Err(RelayError::Protocol("unsupported upstream finish reason")),
     }
 }
-fn plain_response_part(part: &Value) -> Result<(), RelayError> {
+fn plain_response_part(part: &Value, search: bool) -> Result<(), RelayError> {
     if part
         .get("annotations")
         .is_some_and(|a| !a.is_null() && a.as_array().is_none_or(|a| !a.is_empty()))
     {
-        return Err(RelayError::Protocol(
-            "annotated Responses output is not supported",
-        ));
+        if !search {
+            return Err(RelayError::Protocol(
+                "annotated Responses output requires a search contract",
+            ));
+        }
+        super::search::response_citations(&part["annotations"])?;
     }
     Ok(())
 }
-fn plain_response_item(item: &Value) -> Result<(), RelayError> {
+fn plain_response_item(item: &Value, search: bool) -> Result<(), RelayError> {
     if item.get("encrypted_content").is_some_and(|v| !v.is_null()) {
         return Err(RelayError::Protocol(
             "encrypted Responses output is not supported",
@@ -306,18 +315,18 @@ fn plain_response_item(item: &Value) -> Result<(), RelayError> {
             .as_array()
             .ok_or(RelayError::Protocol("invalid Responses content"))?
         {
-            plain_response_part(part)?;
+            plain_response_part(part, search)?;
         }
     }
     Ok(())
 }
-fn plain_response(response: &Value) -> Result<(), RelayError> {
+fn plain_response(response: &Value, search: bool) -> Result<(), RelayError> {
     if let Some(items) = response.get("output").filter(|v| !v.is_null()) {
         for item in items
             .as_array()
             .ok_or(RelayError::Protocol("invalid Responses output"))?
         {
-            plain_response_item(item)?;
+            plain_response_item(item, search)?;
         }
     }
     Ok(())
@@ -343,7 +352,146 @@ impl Decoder {
             blocks: BTreeMap::new(),
             max_blocks: limits.max_blocks,
             gemini_calls: 0,
+            search: None,
+            citations: BTreeMap::new(),
+            server_blocks: BTreeMap::new(),
+            tool_argument_bytes: limits.tool_argument_bytes,
         }
+    }
+
+    pub(crate) fn with_search_contract(
+        mut self,
+        binding: Option<SearchBinding>,
+        limits: &Limits,
+    ) -> Self {
+        self.search = binding.map(|binding| SearchMeter::new(binding, limits));
+        self
+    }
+
+    fn search_observation(
+        &mut self,
+        value: &Value,
+        terminal: bool,
+        out: &mut Vec<Event>,
+    ) -> Result<(), RelayError> {
+        let Some(search) = &mut self.search else {
+            return super::search::reject_uncontracted_usage(value);
+        };
+        let observed = search.observe(value, terminal)?;
+        if let Some(Event::Usage(usage)) = out
+            .iter_mut()
+            .rev()
+            .find(|event| matches!(event, Event::Usage(_)))
+        {
+            usage.search = Some(observed);
+        } else {
+            out.push(Event::Usage(Usage {
+                search: Some(observed),
+                cache_creation_mode: self.cache_creation_mode,
+                ..Usage::default()
+            }));
+        }
+        Ok(())
+    }
+
+    fn native_search(&mut self, value: &Value, out: &mut Vec<Event>) -> Result<(), RelayError> {
+        let meter = self
+            .search
+            .as_mut()
+            .ok_or(RelayError::Protocol("uncontracted hosted search output"))?;
+        if self.protocol == UpstreamProtocol::Responses {
+            meter.item(value)?;
+        }
+        out.push(Event::SearchOutput {
+            protocol: self.protocol,
+            value: value.clone(),
+        });
+        // Completed item evidence must reach the durable usage checkpoint even
+        // if the upstream disconnects before response.completed.
+        if self.protocol == UpstreamProtocol::Responses {
+            self.search_observation(&Value::Null, false, out)?;
+        }
+        Ok(())
+    }
+
+    fn citations(
+        &mut self,
+        key: Key,
+        value: &Value,
+        out: &mut Vec<Event>,
+    ) -> Result<(), RelayError> {
+        if value.is_null() {
+            return Ok(());
+        }
+        let values = if self.protocol == UpstreamProtocol::Responses {
+            super::search::response_citations(value)?
+        } else {
+            super::search::anthropic_citations(value)?
+        };
+        if values.is_empty() {
+            return Ok(());
+        }
+        if self.search.is_none() {
+            return Err(RelayError::Protocol("uncontracted search citations"));
+        }
+        let index = self
+            .blocks
+            .get(&key)
+            .ok_or(RelayError::Protocol("citations without a text block"))?
+            .index;
+        if let Some(previous) = self.citations.get(&key) {
+            if values.len() < previous.len() || !values.starts_with(previous) {
+                return Err(RelayError::Protocol("search citations changed"));
+            }
+        }
+        self.citations.insert(key, values.clone());
+        out.push(Event::Citations {
+            index,
+            protocol: self.protocol,
+            values,
+        });
+        Ok(())
+    }
+
+    fn response_inventory(
+        &mut self,
+        value: &Value,
+        out: &mut Vec<Event>,
+    ) -> Result<(), RelayError> {
+        if self.search.is_none() {
+            return Ok(());
+        }
+        if let Some(items) = value.get("output") {
+            for (i, item) in items
+                .as_array()
+                .ok_or(RelayError::Protocol("invalid Responses output"))?
+                .iter()
+                .enumerate()
+            {
+                if matches!(
+                    item["type"].as_str(),
+                    Some("web_search_call" | "x_search_call")
+                ) {
+                    self.native_search(item, out)?;
+                } else if item["type"] == "message" {
+                    for (j, part) in item["content"]
+                        .as_array()
+                        .ok_or(RelayError::Protocol("invalid response content"))?
+                        .iter()
+                        .enumerate()
+                    {
+                        if part["type"] == "output_text" {
+                            let key = (i as u64, j as u64);
+                            if !self.blocks.contains_key(&key) {
+                                self.simple(key, BlockKind::Text, text(&part["text"])?, out)?;
+                            }
+                            self.citations(key, &part["annotations"], out)?;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     fn usage(&self, value: &Value) -> Result<Usage, RelayError> {
@@ -472,6 +620,24 @@ impl Decoder {
         Ok(())
     }
     fn close(&mut self, key: Key, out: &mut Vec<Event>) -> Result<(), RelayError> {
+        if let Some((value, arguments, ended)) = self.server_blocks.get_mut(&key) {
+            if !*ended {
+                if !arguments.is_empty() {
+                    let input: Value = serde_json::from_str(arguments)
+                        .map_err(|_| RelayError::Protocol("invalid hosted search input"))?;
+                    if !input.is_object() {
+                        return Err(RelayError::Protocol("invalid hosted search input"));
+                    }
+                    value["input"] = input;
+                }
+                *ended = true;
+                out.push(Event::SearchOutput {
+                    protocol: UpstreamProtocol::Anthropic,
+                    value: value.clone(),
+                });
+            }
+            return Ok(());
+        }
         let s = self
             .blocks
             .get_mut(&key)
@@ -493,6 +659,9 @@ impl Decoder {
         for key in keys {
             self.close(key, out)?;
         }
+        for key in self.server_blocks.keys().copied().collect::<Vec<_>>() {
+            self.close(key, out)?;
+        }
         Ok(())
     }
     fn finish(&mut self, reason: FinishReason, out: &mut Vec<Event>) -> Result<(), RelayError> {
@@ -507,6 +676,14 @@ impl Decoder {
     fn done(&mut self, out: &mut Vec<Event>) -> Result<(), RelayError> {
         if self.finish.is_none() || self.done {
             return Err(RelayError::Truncated);
+        }
+        if let Some(search) = &mut self.search {
+            let usage = search.complete()?;
+            out.push(Event::Usage(Usage {
+                search: Some(usage),
+                cache_creation_mode: self.cache_creation_mode,
+                ..Usage::default()
+            }));
         }
         self.done = true;
         out.push(Event::Done);
@@ -527,8 +704,12 @@ impl Decoder {
             self.done(&mut out)?;
             return Ok(out);
         }
-        let v: Value = serde_json::from_str(&frame.data)
-            .map_err(|_| RelayError::Protocol("invalid SSE JSON"))?;
+        let v: Value = if self.search.is_some() {
+            super::native_anthropic::unambiguous_json(frame.data.as_bytes())
+        } else {
+            serde_json::from_str(&frame.data)
+        }
+        .map_err(|_| RelayError::Protocol("invalid SSE JSON"))?;
         if !v.is_object() {
             return Err(RelayError::Protocol("upstream event is not an object"));
         }
@@ -568,7 +749,7 @@ impl Decoder {
         match self.protocol {
             UpstreamProtocol::Chat => self.chat(v, true, &mut out)?,
             UpstreamProtocol::Responses => {
-                plain_response(v)?;
+                plain_response(v, self.search.is_some())?;
                 self.start(v["id"].as_str(), &mut out)?;
                 for (i, item) in v["output"]
                     .as_array()
@@ -578,6 +759,9 @@ impl Decoder {
                 {
                     let i = i as u64;
                     match item["type"].as_str() {
+                        Some("web_search_call" | "x_search_call") => {
+                            self.native_search(item, &mut out)?
+                        }
                         Some("function_call") => {
                             self.block(
                                 (i, u64::MAX),
@@ -606,6 +790,7 @@ impl Decoder {
                                     }
                                 };
                                 self.simple((i, j as u64), kind, s, &mut out)?;
+                                self.citations((i, j as u64), &p["annotations"], &mut out)?;
                             }
                         }
                         Some("reasoning") => {
@@ -644,6 +829,7 @@ impl Decoder {
                     self.anthropic_block((0, i as u64), b, false, &mut out)?;
                 }
                 out.push(Event::Usage(self.usage(&v["usage"])?));
+                self.search_observation(v, true, &mut out)?;
                 anthropic_stop_sequence(v, text(&v["stop_reason"])?, &mut out)?;
                 self.finish(
                     finish_reason(self.protocol, text(&v["stop_reason"])?, self.tools())?,
@@ -741,6 +927,12 @@ impl Decoder {
         if let Some(u) = v.get("usage").filter(|u| !u.is_null()) {
             out.push(Event::Usage(self.usage(u)?));
         }
+        self.search_observation(v, full, out)?;
+        if let Some(results) = v.get("web_search") {
+            if self.search.is_some() {
+                self.native_search(results, out)?;
+            }
+        }
         Ok(())
     }
     fn anthropic_block(
@@ -751,7 +943,24 @@ impl Decoder {
         out: &mut Vec<Event>,
     ) -> Result<(), RelayError> {
         match b["type"].as_str() {
-            Some("text") => self.simple(key, BlockKind::Text, text(&b["text"])?, out)?,
+            Some("text") => {
+                self.simple(key, BlockKind::Text, text(&b["text"])?, out)?;
+                self.citations(key, &b["citations"], out)?;
+            }
+            Some("server_tool_use" | "web_search_tool_result") => {
+                if self.search.is_none() {
+                    return Err(RelayError::Protocol("uncontracted server search tool"));
+                }
+                super::search::anthropic_search_block(b)?;
+                if self.blocks.len().saturating_add(self.server_blocks.len()) >= self.max_blocks
+                    || self.server_blocks.contains_key(&key)
+                    || self.blocks.contains_key(&key)
+                {
+                    return Err(RelayError::Limit("hosted search blocks"));
+                }
+                self.server_blocks
+                    .insert(key, (b.clone(), String::new(), false));
+            }
             Some("thinking") => {
                 self.simple(key, BlockKind::Thinking, text(&b["thinking"])?, out)?;
                 if let Some(s) = b.get("signature") {
@@ -780,6 +989,9 @@ impl Decoder {
             }
             _ => return Err(RelayError::Protocol("unsupported Anthropic content block")),
         }
+        if !stream {
+            self.close(key, out)?;
+        }
         Ok(())
     }
     fn anthropic_event(&mut self, v: &Value, out: &mut Vec<Event>) -> Result<(), RelayError> {
@@ -791,13 +1003,14 @@ impl Decoder {
                 }
                 self.start(v["message"]["id"].as_str(), out)?;
                 out.push(Event::Usage(self.usage(&v["message"]["usage"])?));
+                self.search_observation(&v["message"], false, out)?;
             }
             Some("content_block_start") => {
                 if !self.started {
                     return Err(RelayError::Protocol("content before message start"));
                 }
                 let key = (0, index(&v["index"])?);
-                if self.blocks.contains_key(&key) {
+                if self.blocks.contains_key(&key) || self.server_blocks.contains_key(&key) {
                     return Err(RelayError::Protocol("duplicate content block"));
                 }
                 self.anthropic_block(key, &v["content_block"], true, out)?;
@@ -805,6 +1018,29 @@ impl Decoder {
             Some("content_block_delta") => {
                 let key = (0, index(&v["index"])?);
                 let d = &v["delta"];
+                if let Some((value, arguments, ended)) = self.server_blocks.get_mut(&key) {
+                    if *ended
+                        || value["type"] != "server_tool_use"
+                        || d["type"] != "input_json_delta"
+                        || value["input"]
+                            .as_object()
+                            .is_none_or(|input| !input.is_empty())
+                    {
+                        return Err(RelayError::Protocol("invalid server tool delta"));
+                    }
+                    let delta = text(&d["partial_json"])?;
+                    if arguments.len().saturating_add(delta.len()) > self.tool_argument_bytes {
+                        return Err(RelayError::Limit("server tool arguments"));
+                    }
+                    arguments.push_str(delta);
+                    return Ok(());
+                }
+                if d["type"] == "citations_delta" {
+                    let mut citations = self.citations.get(&key).cloned().unwrap_or_default();
+                    citations.push(d["citation"].clone());
+                    self.citations(key, &serde_json::json!(citations), out)?;
+                    return Ok(());
+                }
                 let kind = &self
                     .blocks
                     .get(&key)
@@ -832,8 +1068,11 @@ impl Decoder {
                     out.push(Event::Usage(self.usage(u)?));
                 }
                 if let Some(r) = v["delta"].get("stop_reason").filter(|r| !r.is_null()) {
+                    self.search_observation(v, true, out)?;
                     anthropic_stop_sequence(&v["delta"], text(r)?, out)?;
                     self.finish(finish_reason(self.protocol, text(r)?, self.tools())?, out)?;
+                } else {
+                    self.search_observation(v, false, out)?;
                 }
             }
             Some("message_stop") => self.done(out)?,
@@ -844,17 +1083,18 @@ impl Decoder {
     }
     fn responses_event(&mut self, v: &Value, out: &mut Vec<Event>) -> Result<(), RelayError> {
         if let Some(item) = v.get("item") {
-            plain_response_item(item)?;
+            plain_response_item(item, self.search.is_some())?;
         }
         if let Some(part) = v.get("part") {
-            plain_response_part(part)?;
+            plain_response_part(part, self.search.is_some())?;
         }
         if let Some(response) = v.get("response") {
-            plain_response(response)?;
+            plain_response(response, self.search.is_some())?;
         }
         match v["type"].as_str() {
             Some("response.created" | "response.in_progress") => {
-                self.start(v["response"]["id"].as_str(), out)?
+                self.start(v["response"]["id"].as_str(), out)?;
+                self.search_observation(&v["response"], false, out)?;
             }
             Some("response.output_item.added") => {
                 if !self.started {
@@ -863,6 +1103,7 @@ impl Decoder {
                 let i = index(&v["output_index"])?;
                 let item = &v["item"];
                 match item["type"].as_str() {
+                    Some("web_search_call" | "x_search_call") => self.native_search(item, out)?,
                     Some("function_call") => {
                         let key = (i, u64::MAX);
                         self.block(
@@ -890,6 +1131,7 @@ impl Decoder {
                     _ => return Err(RelayError::Protocol("unsupported response content")),
                 };
                 self.simple(key, kind, s, out)?;
+                self.citations(key, &p["annotations"], out)?;
             }
             Some("response.reasoning_summary_part.added") => {
                 let key = (index(&v["output_index"])?, index(&v["summary_index"])?);
@@ -918,15 +1160,52 @@ impl Decoder {
                     self.delta(key, text(&v["arguments"])?, out)?;
                 }
             }
-            Some("response.content_part.done") => self.close(
-                (index(&v["output_index"])?, index(&v["content_index"])?),
-                out,
-            )?,
+            Some("response.content_part.done") => {
+                let key = (index(&v["output_index"])?, index(&v["content_index"])?);
+                self.citations(key, &v["part"]["annotations"], out)?;
+                self.close(key, out)?;
+            }
+            Some("response.output_text.annotation.added") => {
+                let key = (index(&v["output_index"])?, index(&v["content_index"])?);
+                let position = usize::try_from(index(&v["annotation_index"])?)
+                    .map_err(|_| RelayError::Protocol("invalid citation index"))?;
+                let mut citations = self.citations.get(&key).cloned().unwrap_or_default();
+                if position < citations.len() {
+                    if citations[position] != v["annotation"] {
+                        return Err(RelayError::Protocol("citation identity changed"));
+                    }
+                } else if position == citations.len() {
+                    citations.push(v["annotation"].clone());
+                } else {
+                    return Err(RelayError::Protocol("citation index gap"));
+                }
+                self.citations(key, &serde_json::json!(citations), out)?;
+            }
+            Some(
+                "response.web_search_call.in_progress"
+                | "response.web_search_call.searching"
+                | "response.web_search_call.completed"
+                | "response.x_search_call.in_progress"
+                | "response.x_search_call.searching"
+                | "response.x_search_call.completed",
+            ) => {
+                if self.search.is_none() {
+                    return Err(RelayError::Protocol("uncontracted search event"));
+                }
+                index(&v["output_index"])?;
+                text(&v["item_id"])?;
+            }
             Some("response.reasoning_summary_part.done") => self.close(
                 (index(&v["output_index"])?, index(&v["summary_index"])?),
                 out,
             )?,
             Some("response.output_item.done") => {
+                if matches!(
+                    v["item"]["type"].as_str(),
+                    Some("web_search_call" | "x_search_call")
+                ) {
+                    self.native_search(&v["item"], out)?;
+                }
                 let i = index(&v["output_index"])?;
                 let keys: Vec<_> = self
                     .blocks
@@ -962,7 +1241,9 @@ impl Decoder {
             .map(text)
             .transpose()?;
         self.start(id, out)?;
+        self.response_inventory(v, out)?;
         out.push(Event::Usage(self.usage(&v["usage"])?));
+        self.search_observation(v, true, out)?;
         let reason = match v["status"].as_str() {
             Some("completed") => {
                 if self.tools() {
@@ -985,6 +1266,7 @@ impl Decoder {
         if let Some(u) = v.get("usageMetadata") {
             out.push(Event::Usage(self.usage(u)?));
         }
+        self.search_observation(v, false, out)?;
         if v["promptFeedback"].get("blockReason").is_some() {
             self.finish(FinishReason::ContentFilter, out)?;
             return Ok(());
@@ -1001,6 +1283,9 @@ impl Decoder {
         for c in candidates {
             if c.get("index").is_some_and(|i| i.as_u64() != Some(0)) {
                 return Err(RelayError::Protocol("invalid Gemini candidate index"));
+            }
+            if let Some(metadata) = c.get("groundingMetadata").filter(|v| !v.is_null()) {
+                self.native_search(metadata, out)?;
             }
             if let Some(parts) = c["content"].get("parts") {
                 for p in parts
@@ -1376,6 +1661,7 @@ mod tests {
     #[test]
     fn a07_usage_wire_round_trip_preserves_cache_creation() {
         let expected = Usage {
+            search: None,
             upstream_cost_atto_usd: None,
             uncached_input_tokens: None,
             input_tokens: Some(10),

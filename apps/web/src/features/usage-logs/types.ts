@@ -123,6 +123,7 @@ export interface ToolSurchargeItem {
 }
 
 export interface LogOtherData {
+  search_billing?: unknown
   // Pricing snapshots record their engine unit separately from true USD.
   pricing_schema_version?: number
   pricing_currency?: string

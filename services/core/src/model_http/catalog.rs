@@ -578,6 +578,7 @@ mod tests {
             PriceConfig {
                 version: 1,
                 rules: vec![PriceRule {
+                    search: None,
                     billing_mode: BillingMode::Tokens,
                     tiered: None,
                     id: 1,

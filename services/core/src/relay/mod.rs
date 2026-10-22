@@ -11,10 +11,14 @@ pub(crate) mod native_anthropic;
 pub(crate) mod native_gemini;
 pub(crate) mod provider_network;
 mod request;
+mod search;
+#[cfg(test)]
+mod search_tests;
 mod sse;
 #[cfg(test)]
 mod tests;
 mod types;
+#[cfg(test)]
 pub(crate) use decode::usage as provider_usage;
 pub(crate) use decode::usage_with_cache_creation_mode as provider_usage_with_cache_creation_mode;
 pub use request::{FunctionTool, InputBlock, Message, Request, Role, ToolChoice};
@@ -660,7 +664,8 @@ impl Worker {
             route.protocol,
             &self.inner.limits,
             route.cache_creation_mode,
-        );
+        )
+        .with_search_contract(route.search_contract, &self.inner.limits);
         if self.request.stream {
             self.send_head()?;
             let mut parser = sse::Parser::new(self.inner.limits.event_bytes);
@@ -710,8 +715,12 @@ impl Worker {
                 }
                 data.extend_from_slice(&chunk);
             }
-            let value = serde_json::from_slice(&data)
-                .map_err(|_| RelayError::Protocol("invalid upstream JSON"))?;
+            let value = if route.search_contract.is_some() {
+                native_anthropic::unambiguous_json(&data)
+            } else {
+                serde_json::from_slice(&data)
+            }
+            .map_err(|_| RelayError::Protocol("invalid upstream JSON"))?;
             self.events(decoder.json(&value)?).await?;
         }
         // Drop the upstream before any money write. Do not drain an unbounded

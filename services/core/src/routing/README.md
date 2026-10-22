@@ -486,3 +486,109 @@ Local protocol/ledger tests do not certify live OpenRouter compatibility, enable
 external forwarding, update the old monolith settings page, or deploy anything.
 Provider receipts follow OpenRouter's
 [usage accounting contract](https://openrouter.ai/docs/cookbook/administration/usage-accounting).
+
+## Hosted search receipts and prices
+
+Hosted search is opt-in on both the native request and its exact supplier/model
+contract. A custom function named `web_search` remains a custom function. The
+gateway requires a matching `PriceRule.search`, reviewed finite supplier limits,
+and a native protocol route before reserving funds or contacting the supplier.
+Unsupported cross-protocol hosted-tool conversions are rejected before dispatch.
+
+`SearchTariff` revision 1 uses exact USD **per one measured unit**, independently
+of token prices. Rates imported in CNY or per thousand calls must be converted
+explicitly before configuring this USD contract; a numeric value alone does not
+establish its denomination. Gemini uses either `query` or `grounded_request` for
+one price, never both. xAI can additionally price fetched posts and users as
+separate dimensions. Every enabled, priced dimension needs a supplier-backed
+finite maximum. A local check after receiving usage is not a spending guarantee.
+
+The following synthetic fields demonstrate the JSON contract, not live prices
+or a production supplier spending guarantee:
+
+```json
+{
+  "search": {
+    "revision": 1,
+    "provider": "open_ai_responses_v1",
+    "unit": "call",
+    "currency": "USD",
+    "usd_per_unit": {"numerator": 1, "denominator": 1000}
+  }
+}
+```
+
+Merge that object into the reviewed price rule. In the corresponding exact
+`ExternalModelContext`, configure an independent supplier contract:
+
+```json
+{
+  "search": {
+    "provider": "open_ai_responses_v1",
+    "limits": {"calls": 3},
+    "contract_revision": "reviewed-supplier-model-cap-revision"
+  }
+}
+```
+
+The surrounding context pins upstream ID, endpoint, native protocol, mapped
+model, input/output ceilings and token absence conventions. Synthetic loopback
+search routes also require this explicit binding. OpenAI Responses receives an
+enforced `max_tool_calls`; Anthropic receives `max_uses`. Other suppliers rely
+on the specifically reviewed finite guarantee in their context. Do not infer
+support for OpenAI cap parameters from a compatible response shape.
+
+| Receipt contract | Native protocol | Authoritative search measurement |
+| --- | --- | --- |
+| `open_ai_responses_v1` | Responses | Unique completed `web_search_call` IDs with `action.type=search`; page opening/finding is preserved without a search charge |
+| `azure_responses_v1` | Responses v1 | `tool_usage.web_search.num_requests` |
+| `xai_responses_v1` | Responses | `usage.server_side_tool_usage_details.web_search_calls`, `x_posts_fetched`, `x_users_fetched` |
+| `dashscope_responses_v1` | Responses | `usage.x_tools.web_search.count` |
+| `dashscope_anthropic_v1` | Messages | `usage.x_tools.web_search.count` |
+| `anthropic_messages_v1` | Messages | `usage.server_tool_use.web_search_requests` |
+| `gemini_grounding_v1` | Gemini generateContent | Unique nonempty trimmed web/image search queries across candidates/frames; grounded-request indicator is zero or one |
+| `zhipu_chat_v1` | Chat, nonstreaming | Nonempty search results establish one grounded request; the request flag alone does not |
+
+Repeated cumulative receipts replace previous measurements. Supplier-specific
+counters take precedence over output-item estimates. Missing final measurements
+are unknown; explicit zero is preserved. Request intent, tool names, citations
+and result-array length are never interchangeable with measured billable calls.
+Native hosted-tool output and citations are retained in the corresponding
+protocol. No raw query set is persisted in the billing checkpoint.
+
+Search and token amounts enter one exact rational expression before the existing
+group/speed/verified-account factors and final rounding. Scalar prices round up
+once; decimal tiers retain their existing final rounding. Reservations use the
+same frozen price and a conservative combined ceiling. `upstream_cost` and image
+prices cannot enable this independent search surcharge. Unknown or unsupported
+positive usage keeps the original operation pending rather than settling for
+zero, replaying the supplier, or obtaining a new price.
+
+Prices and counters use existing immutable price/event/checkpoint JSON. Restart
+recovery validates the original provider, unit, limits and evidence; it does not
+read current search prices. Enabling these fields requires compatible readers
+throughout rollback/recovery. Do not delete new fields from historical receipts.
+
+The native pricing catalog exposes exact string fractions and whether a matching
+reviewed route exists. Rates include their documented group/account basis once.
+Usage logs and CSV retain measured units and distinguish missing values from
+zero. Dashboard cache totals count each settled text aggregate once; TTL subsets
+are not added to the write total, and absent measurements propagate unknown.
+
+Development commands with the pinned toolchain and a disposable PostgreSQL:
+
+```sh
+cargo test --locked --lib search
+cargo test --locked --lib cache_summary
+cargo test --locked --test search_billing
+```
+
+These test sources include synthetic native suppliers, actual Core admission,
+the ledger, duplicate requests and restart recovery. Writing or formatting them
+does not establish execution or live-provider acceptance. See this change's
+`check-results` records for the exact checks actually run.
+
+Protocol sources: [upstream vendor meters](https://github.com/QuantumNous/new-api/commit/acb347a197ff0e22f651be9813b4a1a867342941),
+[upstream Gemini units](https://github.com/QuantumNous/new-api/commit/d10f11ffff20688b8e3e745268cc0036e896d068),
+[OpenAI web search](https://developers.openai.com/api/docs/guides/tools-web-search),
+and [Google Search grounding](https://ai.google.dev/gemini-api/docs/google-search).

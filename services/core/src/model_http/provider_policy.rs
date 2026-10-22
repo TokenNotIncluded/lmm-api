@@ -5,14 +5,53 @@ use crate::{
         RelayError,
         honeypot_network::{literal_ip, validate_base_url},
     },
-    routing::{Attempt, Protocol},
+    routing::{Attempt, Protocol, SearchLimits, SearchProvider},
 };
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
+/// Host-reviewed limits for the exact model/endpoint below. A local stop after
+/// receiving a response is not a supplier spending guarantee.
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalSearchContract {
+    pub provider: SearchProvider,
+    pub limits: SearchLimits,
+    pub contract_revision: String,
+}
+
+impl ExternalSearchContract {
+    fn validate(&self, protocol: Protocol) -> Result<(), RelayError> {
+        let expected = match self.provider {
+            SearchProvider::OpenAiResponsesV1
+            | SearchProvider::AzureResponsesV1
+            | SearchProvider::XaiResponsesV1
+            | SearchProvider::DashscopeResponsesV1 => Protocol::OpenAiResponses,
+            SearchProvider::GeminiGroundingV1 => Protocol::Gemini,
+            SearchProvider::DashscopeAnthropicV1 | SearchProvider::AnthropicMessagesV1 => {
+                Protocol::AnthropicMessages
+            }
+            SearchProvider::ZhipuChatV1 => Protocol::OpenAiChat,
+        };
+        self.limits
+            .validate()
+            .map_err(|_| RelayError::Invalid("invalid provider search limits"))?;
+        if protocol != expected
+            || self.contract_revision.is_empty()
+            || self.contract_revision.len() > 512
+            || self.contract_revision.chars().any(char::is_control)
+        {
+            return Err(RelayError::Invalid("invalid provider search contract"));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExternalModelContext {
+    #[serde(default)]
+    pub search: Option<ExternalSearchContract>,
     pub upstream_id: u64,
     pub upstream_model: String,
     pub protocol: Protocol,
@@ -53,7 +92,7 @@ impl ProviderPolicy {
         }
         let mut result = Self::default();
         for mut context in contexts {
-            let endpoint = validate_base_url(&context.endpoint, false)?;
+            let endpoint = validate_base_url(&context.endpoint, true)?;
             if context.upstream_id == 0
                 || context.upstream_model.is_empty()
                 || context.upstream_model.len() > 256
@@ -66,6 +105,9 @@ impl ProviderPolicy {
                 || context.contract_revision.chars().any(char::is_control)
             {
                 return Err(RelayError::Invalid("invalid provider context policy"));
+            }
+            if let Some(search) = &context.search {
+                search.validate(context.protocol)?;
             }
             context.endpoint = endpoint.to_string();
             if result
@@ -80,6 +122,39 @@ impl ProviderPolicy {
             }
         }
         Ok(result)
+    }
+
+    /// Search is opt-in even for synthetic loopback routes. Bind its supplier
+    /// contract before a hold or dispatch, then persist it with the price.
+    pub(crate) fn search_contract(
+        &self,
+        attempt: &Attempt,
+    ) -> Result<&ExternalSearchContract, RelayError> {
+        self.search_contract_for_binding(
+            attempt.upstream_id(),
+            attempt.upstream_model(),
+            attempt.protocol(),
+            attempt.endpoint(),
+        )
+    }
+
+    pub(crate) fn search_contract_for_binding(
+        &self,
+        upstream_id: u64,
+        upstream_model: &str,
+        protocol: Protocol,
+        endpoint: &str,
+    ) -> Result<&ExternalSearchContract, RelayError> {
+        let context = self
+            .contexts
+            .get(&(upstream_id, upstream_model.to_owned()))
+            .filter(|context| context.protocol == protocol && context.endpoint == endpoint)
+            .ok_or(RelayError::Unsupported(
+                "hosted search requires an exact supplier contract",
+            ))?;
+        context.search.as_ref().ok_or(RelayError::Unsupported(
+            "hosted search requires reviewed supplier limits",
+        ))
     }
 
     /// Freeze the reviewed input bound for this exact selected attempt. The
@@ -212,6 +287,12 @@ impl ExternalModelContext {
         usage: &crate::relay::Usage,
         upstream_cost: bool,
     ) -> Result<(), RelayError> {
+        if let Some(observed) = usage.search {
+            let search = self.search.as_ref().ok_or(RelayError::SettlementPending)?;
+            if observed.provider != search.provider || !search.limits.contains(observed) {
+                return Err(RelayError::SettlementPending);
+            }
+        }
         if !upstream_cost
             && usage.cached_input_tokens.is_none()
             && !self.missing_cached_tokens_is_zero
@@ -385,6 +466,7 @@ mod tests {
 
     fn context() -> ExternalModelContext {
         ExternalModelContext {
+            search: None,
             missing_cache_creation_tokens_is_zero: false,
             upstream_id: 1,
             upstream_model: "bounded-model".into(),

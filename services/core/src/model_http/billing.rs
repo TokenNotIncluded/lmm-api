@@ -219,31 +219,6 @@ impl Billing for Bridge {
             {
                 return Err(RelayError::Limit("local model input budget"));
             }
-            let reserve = if selected.price.upstream_cost_group_ppm.is_some() {
-                let mut conservative = selected.price.clone();
-                conservative.input_per_million = conservative
-                    .input_per_million
-                    .max(conservative.cached_per_million);
-                conservative
-                    .cost(Usage {
-                        cache_creation: None,
-                        image: None,
-                        upstream_cost_atto_usd: Some(crate::upstream_cost::ATTO_USD),
-                        input: selected.input_token_ceiling,
-                        cached: 0,
-                        output: i64::from(request.max_output_tokens),
-                    })
-                    .map_err(error)?
-            } else {
-                let reserve = selected
-                    .quote
-                    .reservation_ceiling(
-                        selected.input_token_ceiling as u64,
-                        u64::from(request.max_output_tokens),
-                    )
-                    .map_err(|_| RelayError::BillingUnavailable)?;
-                i64::try_from(reserve.0).map_err(|_| RelayError::BillingUnavailable)?
-            };
             let basis = if selected.price.upstream_cost_group_ppm.is_some() {
                 charging::ReservationBasis::UpstreamCost {
                     atto_usd: crate::upstream_cost::ATTO_USD,
@@ -254,6 +229,9 @@ impl Billing for Bridge {
                     output: u64::from(request.max_output_tokens),
                 }
             };
+            // The frozen ledger price includes every enabled search dimension.
+            // Token and tool maxima share the same exact expression and ceil.
+            let reserve = selected.price.reservation_ceiling(basis).map_err(error)?;
             let spec = charging::Request {
                 id: context.request_id.clone(),
                 fingerprint,
@@ -349,6 +327,16 @@ impl Billing for Bridge {
                 let (usage, outcome) = if !report.upstream_attempted {
                     (
                         Usage {
+                            search: selected.price.search.as_ref().map(|search| {
+                                crate::routing::SearchUsage {
+                                    provider: search.tariff.provider,
+                                    calls: Some(0),
+                                    queries: Some(0),
+                                    grounded_requests: Some(0),
+                                    x_posts_fetched: Some(0),
+                                    x_users_fetched: Some(0),
+                                }
+                            }),
                             upstream_cost_atto_usd: upstream_cost.then_some(0),
                             ..Usage::default()
                         },
@@ -366,7 +354,7 @@ impl Billing for Bridge {
                             &report.usage,
                             true,
                         )?;
-                        let usage = complete_usage(report.usage, true)?;
+                        let usage = complete_priced_usage(report.usage, &selected.price)?;
                         if usage.upstream_cost_atto_usd.is_none() {
                             return Err(RelayError::SettlementPending);
                         }
@@ -377,11 +365,7 @@ impl Billing for Bridge {
                         }
                         (usage, Outcome::Completed)
                     } else {
-                        let usage = if let Some(tariff) = &selected.price.tiered {
-                            complete_tiered_usage(report.usage, tariff)?
-                        } else {
-                            complete_usage(report.usage, false)?
-                        };
+                        let usage = complete_priced_usage(report.usage, &selected.price)?;
                         // This input is either the original inclusive receipt
                         // or a checked reconstruction from actual Anthropic P
                         // and the original frozen absence-zero contract.
@@ -400,7 +384,7 @@ impl Billing for Bridge {
                         // The legacy ledger must agree with the captured exact quote.
                         // Never reinterpret a price or a missing receipt at settlement.
                         let quoted = if let Some(tariff) = &selected.price.tiered {
-                            selected.quote.charge_tiered_usage(
+                            selected.quote.charge_tiered_usage_with_search(
                                 crate::routing::TieredUsage {
                                     input: usage.input as u64,
                                     cached: usage.cached as u64,
@@ -417,6 +401,7 @@ impl Billing for Bridge {
                                         .and_then(|v| v.twelve_hour.map(|v| v as u64)),
                                 },
                                 tariff.input_semantics,
+                                usage.search,
                             )
                         } else {
                             let disjoint = crate::routing::Usage::from_totals(
@@ -426,7 +411,7 @@ impl Billing for Bridge {
                                 0,
                             )
                             .map_err(|_| RelayError::SettlementPending)?;
-                            selected.quote.charge(disjoint)
+                            selected.quote.charge_with_search(disjoint, usage.search)
                         }
                         .map_err(|_| RelayError::SettlementPending)?;
                         let ledger = selected.price.cost(usage).map_err(error)?;
@@ -593,6 +578,36 @@ fn local_input_bound(request: &Request) -> Result<u64, RelayError> {
     Ok(bytes)
 }
 
+/// Normalize every billed dimension using the original immutable price. This
+/// is shared by final settlement and restart recovery; neither reads new rates.
+pub(super) fn complete_priced_usage(
+    observed: crate::relay::Usage,
+    price: &charging::Price,
+) -> Result<Usage, RelayError> {
+    price
+        .validate()
+        .map_err(|_| RelayError::SettlementPending)?;
+    let mut usage = match price.tiered.as_ref() {
+        Some(tariff) => complete_tiered_usage(observed, tariff)?,
+        None => complete_usage(observed, price.upstream_cost_group_ppm.is_some())?,
+    };
+    usage.search = observed.search;
+    match (&price.search, usage.search) {
+        (Some(search), Some(measured)) => search
+            .validate_usage(measured)
+            .map_err(|_| RelayError::SettlementPending)?,
+        (Some(_), None) => return Err(RelayError::SettlementPending),
+        (None, Some(measured)) if !measured.valid() || measured.has_positive() => {
+            return Err(RelayError::SettlementPending);
+        }
+        _ => (),
+    }
+    if !usage.valid() {
+        return Err(RelayError::SettlementPending);
+    }
+    Ok(usage)
+}
+
 /// The existing numeric-loopback Chat/Responses charging contract. Optional
 /// cache reads retain its existing zero-default semantics; this is not a
 /// normalization policy for external providers. Missing input/output totals
@@ -638,6 +653,7 @@ pub(super) fn complete_usage(
         None
     };
     Ok(Usage {
+        search: None,
         image: None,
         upstream_cost_atto_usd,
         cache_creation: None,
@@ -809,6 +825,7 @@ mod openai_cache_billing_tests {
             let restored: Usage = serde_json::from_slice(&bytes).unwrap();
             assert_eq!(restored, usage);
             let ledger = charging::Price {
+                search: None,
                 version: "synthetic-cache-12h".into(),
                 model: "synthetic".into(),
                 group: "allowed".into(),
@@ -989,6 +1006,7 @@ fn complete_generic_cache_usage(
         }
     };
     let usage = Usage {
+        search: None,
         image: None,
         upstream_cost_atto_usd: None,
         cache_creation: Some(charging::CacheCreationUsage {
@@ -1076,6 +1094,7 @@ fn complete_strict_cache_usage(
         return Err(RelayError::SettlementPending);
     }
     let usage = Usage {
+        search: None,
         image: None,
         upstream_cost_atto_usd: None,
         cache_creation: Some(charging::CacheCreationUsage {
@@ -1481,6 +1500,7 @@ mod a07_billing_tests {
             owner_account_id: 3,
             payer_account_id: 3,
             price: charging::Price {
+                search: None,
                 user_trust: None,
                 image: None,
                 upstream_cost_group_ppm: None,
@@ -1499,6 +1519,7 @@ mod a07_billing_tests {
             state: "settled".into(),
             reserved: 100,
             usage: Usage {
+                search: None,
                 cache_creation: None,
                 image: None,
                 upstream_cost_atto_usd: None,
@@ -1561,6 +1582,7 @@ mod a07_billing_tests {
         assert_eq!(
             complete_usage(
                 Observed {
+                    search: None,
                     cache_creation_details: None,
                     openai_cache_write_details: None,
                     upstream_cost_atto_usd: None,
@@ -1575,6 +1597,7 @@ mod a07_billing_tests {
                 false,
             ),
             Ok(Usage {
+                search: None,
                 cache_creation: None,
                 image: None,
                 upstream_cost_atto_usd: None,
@@ -1588,6 +1611,7 @@ mod a07_billing_tests {
     #[test]
     fn complete_usage_rejects_cache_creation_for_token_pricing_even_with_reported_cost() {
         let observed = Observed {
+            search: None,
             cache_creation_details: None,
             openai_cache_write_details: None,
             upstream_cost_atto_usd: Some(123_456_789_000_000_000),
@@ -1608,6 +1632,7 @@ mod a07_billing_tests {
     #[test]
     fn complete_usage_strips_reported_cost_for_token_pricing() {
         let observed = Observed {
+            search: None,
             cache_creation_details: None,
             openai_cache_write_details: None,
             upstream_cost_atto_usd: Some(123_456_789_000_000_000),
@@ -1622,6 +1647,7 @@ mod a07_billing_tests {
         assert_eq!(
             complete_usage(observed, false),
             Ok(Usage {
+                search: None,
                 cache_creation: None,
                 image: None,
                 upstream_cost_atto_usd: None,
@@ -1637,6 +1663,7 @@ mod a07_billing_tests {
         assert_eq!(
             complete_usage(
                 Observed {
+                    search: None,
                     cache_creation_details: None,
                     openai_cache_write_details: None,
                     upstream_cost_atto_usd: Some(123_456_789_000_000_000),
@@ -1651,6 +1678,7 @@ mod a07_billing_tests {
                 true,
             ),
             Ok(Usage {
+                search: None,
                 cache_creation: None,
                 image: None,
                 upstream_cost_atto_usd: Some(123_456_789_000_000_000),

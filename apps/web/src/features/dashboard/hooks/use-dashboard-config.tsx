@@ -38,6 +38,8 @@ interface ModelStatValues {
   rpm: number
   quota: number | null
   tpm: number | null
+  cacheRead: number | null
+  cacheCreation: number | null
   outputImages: number | null
 }
 
@@ -86,6 +88,24 @@ export function useModelStatCardsConfig({
       icon: Layers,
       iconTone: 'chart-4',
       getValue: (stat) => stat.tpm,
+    },
+    {
+      key: 'cacheRead',
+      title: t('Cache read tokens'),
+      description: t('Measured cached input tokens in the selected period.'),
+      icon: Layers,
+      iconTone: 'info',
+      getValue: (stat) => stat.cacheRead,
+    },
+    {
+      key: 'cacheCreation',
+      title: t('Cache write tokens'),
+      description: t(
+        'Total cache writes; lifetime details are already included.'
+      ),
+      icon: Layers,
+      iconTone: 'chart-4',
+      getValue: (stat) => stat.cacheCreation,
     },
     {
       key: 'avgRpm',

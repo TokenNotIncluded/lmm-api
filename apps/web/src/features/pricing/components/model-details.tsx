@@ -111,6 +111,7 @@ import { ModelDetailsPerformance } from './model-details-performance'
 import { ModelRuntimeBadge } from './model-runtime-badge'
 import { PricingContextLabel } from './pricing-context-label'
 import { RequestEstimator } from './request-estimator'
+import { SearchPrices } from './search-prices'
 import { UpstreamCostPricing } from './upstream-cost-pricing'
 
 // ----------------------------------------------------------------------------
@@ -1067,6 +1068,7 @@ export function ModelDetailsContent(props: ModelDetailsContentProps) {
               displayCurrency={displayCurrency}
             />
             <CacheWritePrices model={props.model} />
+            <SearchPrices model={props.model} />
             <ImagePrices model={props.model} />
             {isDynamic && (
               <DynamicPricingBreakdown

@@ -1,7 +1,7 @@
 //! OpenAI client encoders. Successful terminal events are withheld until settlement.
 use super::{
-    BlockKind, ClientProtocol, Event, FinishReason, Limits, RelayError, Request, UpstreamProtocol,
-    Usage,
+    BlockKind, ClientProtocol, Event, FinishReason, Limits, OutputSlot, RelayError, Request,
+    UpstreamProtocol, Usage,
 };
 use serde_json::{Value, json};
 
@@ -11,6 +11,8 @@ struct Block {
     signature: Option<(UpstreamProtocol, String)>,
     ended: bool,
     tool_index: usize,
+    citations: Vec<Value>,
+    wire_index: usize,
 }
 
 #[cfg(test)]
@@ -134,6 +136,9 @@ pub(crate) struct Encoder {
     finish: Option<FinishReason>,
     bytes: usize,
     limits: Limits,
+    search_outputs: Vec<Value>,
+    output_order: Vec<OutputSlot>,
+    chat_search_results: Option<Value>,
 }
 impl Encoder {
     pub fn new(request: &Request, request_id: &str, limits: &Limits) -> Self {
@@ -162,6 +167,9 @@ impl Encoder {
             finish: None,
             bytes: 0,
             limits: limits.clone(),
+            search_outputs: Vec::new(),
+            output_order: Vec::new(),
+            chat_search_results: None,
         }
     }
     pub fn usage(&self) -> Usage {
@@ -242,7 +250,9 @@ impl Encoder {
         let b = &self.blocks[index];
         let text = if empty { "" } else { &b.text };
         match b.kind {
-            BlockKind::Text => json!({"type":"output_text","text":text,"annotations":[]}),
+            BlockKind::Text => {
+                json!({"type":"output_text","text":text,"annotations":if empty { Vec::<Value>::new() } else { b.citations.clone() }})
+            }
             BlockKind::Refusal => json!({"type":"refusal","refusal":text}),
             BlockKind::Thinking => json!({"type":"summary_text","text":text}),
             BlockKind::Tool { .. } => Value::Null,
@@ -291,10 +301,18 @@ impl Encoder {
         } else {
             "completed"
         };
-        json!({"id":self.id,"object":"response","created_at":self.created,"status":status,"model":self.model,
+        let mut value = json!({"id":self.id,"object":"response","created_at":self.created,"status":status,"model":self.model,
             "error":Value::Null,"incomplete_details":if incomplete {json!({"reason":if self.finish == Some(FinishReason::Length) {"max_output_tokens"} else {"content_filter"}})} else {Value::Null},
-            "output":if initial {vec![]} else {(0..self.blocks.len()).map(|i|self.item(i,false)).collect::<Vec<_>>()},
-            "usage":if initial {Value::Null} else {self.usage.wire(ClientProtocol::Responses)},"store":false})
+            "output":if initial {vec![]} else {self.output_order.iter().map(|slot|match *slot { OutputSlot::Block(i)=>self.item(i,false),OutputSlot::Hosted(i)=>self.search_outputs[i].clone() }).collect::<Vec<_>>()},
+            "usage":if initial {Value::Null} else {self.usage.wire(ClientProtocol::Responses)},"store":false});
+        if !initial
+            && let Some(search) = self.usage.search
+            && search.provider == crate::routing::SearchProvider::AzureResponsesV1
+            && let Some(calls) = search.calls
+        {
+            value["tool_usage"] = json!({"web_search":{"num_requests":calls}});
+        }
+        value
     }
     pub fn consume(&mut self, event: Event) -> Result<Vec<Vec<u8>>, RelayError> {
         if let Some(native) = &mut self.native {
@@ -328,7 +346,10 @@ impl Encoder {
                 }
             }
             Event::Block { index, kind } => {
-                if !self.started || index != self.blocks.len() || index >= self.limits.max_blocks {
+                if !self.started
+                    || index != self.blocks.len()
+                    || self.output_order.len() >= self.limits.max_blocks
+                {
                     return Err(RelayError::Protocol("invalid output block index"));
                 }
                 let tool_index = self
@@ -345,7 +366,10 @@ impl Encoder {
                     signature: None,
                     ended: false,
                     tool_index,
+                    citations: Vec::new(),
+                    wire_index: self.output_order.len(),
                 });
+                self.output_order.push(OutputSlot::Block(index));
                 if self.stream {
                     match self.client {
                         ClientProtocol::Chat
@@ -358,13 +382,13 @@ impl Encoder {
                         ClientProtocol::Responses => {
                             out.push(self.response_event(
                                 "response.output_item.added",
-                                json!({"output_index":index,"item":self.item(index,true)}),
+                                json!({"output_index":self.blocks[index].wire_index,"item":self.item(index,true)}),
                             )?);
                             match self.blocks[index].kind {
                             BlockKind::Text | BlockKind::Refusal => out.push(self.response_event("response.content_part.added",
-                                json!({"output_index":index,"item_id":self.block_id(index),"content_index":0,"part":self.part(index,true)}))?),
+                                json!({"output_index":self.blocks[index].wire_index,"item_id":self.block_id(index),"content_index":0,"part":self.part(index,true)}))?),
                             BlockKind::Thinking => out.push(self.response_event("response.reasoning_summary_part.added",
-                                json!({"output_index":index,"item_id":self.block_id(index),"summary_index":0,"part":self.part(index,true)}))?),
+                                json!({"output_index":self.blocks[index].wire_index,"item_id":self.block_id(index),"summary_index":0,"part":self.part(index,true)}))?),
                             BlockKind::Tool { .. } => {},
                         }
                         }
@@ -402,7 +426,7 @@ impl Encoder {
                             out.push(self.chat_chunk(delta, None)?);
                         }
                         ClientProtocol::Responses => {
-                            let mut v = json!({"output_index":index,"item_id":self.block_id(index),"delta":text});
+                            let mut v = json!({"output_index":self.blocks[index].wire_index,"item_id":self.block_id(index),"delta":text});
                             let kind = match self.blocks[index].kind {
                                 BlockKind::Text => {
                                     v["content_index"] = json!(0);
@@ -453,6 +477,96 @@ impl Encoder {
                         json!({"content_details":[{"index":index,"type":"signature_delta","protocol":provider,"signature":value}]})
                     };
                     out.push(self.chat_chunk(delta, None)?);
+                }
+            }
+            Event::SearchOutput { protocol, value } => match (self.client, protocol) {
+                (ClientProtocol::Responses, UpstreamProtocol::Responses) => {
+                    let id = value["id"]
+                        .as_str()
+                        .ok_or(RelayError::Protocol("missing hosted output ID"))?;
+                    let existing = self.search_outputs.iter().position(|old| old["id"] == id);
+                    if let Some(index) = existing {
+                        if self.search_outputs[index]["type"] != value["type"] {
+                            return Err(RelayError::Protocol("hosted output changed type"));
+                        }
+                        if self.search_outputs[index] != value {
+                            self.account(value.to_string().len())?;
+                            self.search_outputs[index] = super::search::merge_response_output(
+                                &self.search_outputs[index],
+                                &value,
+                            )?;
+                        }
+                    } else {
+                        if self.search_outputs.len().saturating_add(self.blocks.len())
+                            >= self.limits.max_blocks
+                        {
+                            return Err(RelayError::Limit("hosted output count"));
+                        }
+                        self.account(value.to_string().len())?;
+                        let output_index = self.output_order.len();
+                        self.output_order
+                            .push(OutputSlot::Hosted(self.search_outputs.len()));
+                        if self.stream {
+                            let mut started = value.clone();
+                            started["status"] = json!("in_progress");
+                            out.push(self.response_event(
+                                "response.output_item.added",
+                                json!({"output_index":output_index,"item":started}),
+                            )?);
+                        }
+                        self.search_outputs.push(value);
+                    }
+                }
+                (ClientProtocol::Chat, UpstreamProtocol::Chat) => {
+                    if !value.is_array() {
+                        return Err(RelayError::Protocol("invalid native search results"));
+                    }
+                    if self
+                        .chat_search_results
+                        .as_ref()
+                        .is_some_and(|old| old != &value)
+                    {
+                        return Err(RelayError::Protocol("search results changed"));
+                    }
+                    if self.chat_search_results.is_none() {
+                        self.account(value.to_string().len())?;
+                    }
+                    self.chat_search_results = Some(value);
+                }
+                _ => {
+                    return Err(RelayError::Unsupported(
+                        "hosted search output cannot cross protocols",
+                    ));
+                }
+            },
+            Event::Citations {
+                index,
+                protocol,
+                values,
+            } => {
+                if self.client != ClientProtocol::Responses
+                    || protocol != UpstreamProtocol::Responses
+                {
+                    return Err(RelayError::Unsupported(
+                        "search citations cannot cross protocols",
+                    ));
+                }
+                let block = self
+                    .blocks
+                    .get(index)
+                    .ok_or(RelayError::Protocol("unknown citation block"))?;
+                if !matches!(block.kind, BlockKind::Text) || !values.starts_with(&block.citations) {
+                    return Err(RelayError::Protocol("invalid citation transition"));
+                }
+                let previous = block.citations.len();
+                for value in &values[previous..] {
+                    self.account(value.to_string().len())?;
+                }
+                self.blocks[index].citations = values.clone();
+                if self.stream {
+                    for (offset, value) in values.into_iter().enumerate().skip(previous) {
+                        out.push(self.response_event("response.output_text.annotation.added", json!({"output_index":self.blocks[index].wire_index,"item_id":self.block_id(index),"content_index":0,"annotation_index":offset,"annotation":value}))?);
+                    }
                 }
             }
             Event::StopSequence(sequence) => {
@@ -571,8 +685,12 @@ impl Encoder {
         } else if !details.is_empty() {
             message["reasoning_details"] = json!(details);
         }
-        json!({"id":self.id,"object":"chat.completion","created":self.created,"model":self.model,
-            "choices":[{"index":0,"message":message,"finish_reason":self.finish.map(FinishReason::chat)}],"usage":self.usage.wire(ClientProtocol::Chat)})
+        let mut value = json!({"id":self.id,"object":"chat.completion","created":self.created,"model":self.model,
+            "choices":[{"index":0,"message":message,"finish_reason":self.finish.map(FinishReason::chat)}],"usage":self.usage.wire(ClientProtocol::Chat)});
+        if let Some(results) = &self.chat_search_results {
+            value["web_search"] = results.clone();
+        }
+        value
     }
     /// Build (but do not send) a terminal response. Validation must happen before
     /// the billing hook. A length-limited tool may contain partial JSON.
@@ -600,8 +718,21 @@ impl Encoder {
                 out.push(b"data: [DONE]\n\n".to_vec());
             }
             ClientProtocol::Responses => {
-                for i in 0..self.blocks.len() {
-                    let mut v = json!({"output_index":i,"item_id":self.block_id(i)});
+                for (output_index, slot) in self.output_order.clone().into_iter().enumerate() {
+                    let i = match slot {
+                        OutputSlot::Hosted(i) => {
+                            let item = self.search_outputs[i].clone();
+                            if item["status"] == "completed" {
+                                out.push(self.response_event(
+                                    "response.output_item.done",
+                                    json!({"output_index":output_index,"item":item}),
+                                )?);
+                            }
+                            continue;
+                        }
+                        OutputSlot::Block(i) => i,
+                    };
+                    let mut v = json!({"output_index":output_index,"item_id":self.block_id(i)});
                     match &self.blocks[i].kind {
                         BlockKind::Text | BlockKind::Refusal => {
                             let refusal = matches!(self.blocks[i].kind, BlockKind::Refusal);
@@ -646,7 +777,7 @@ impl Encoder {
                     }
                     out.push(self.response_event(
                         "response.output_item.done",
-                        json!({"output_index":i,"item":self.item(i,false)}),
+                        json!({"output_index":output_index,"item":self.item(i,false)}),
                     )?);
                 }
                 let kind = if matches!(

@@ -188,3 +188,27 @@ test('unknown legacy consumption is unavailable without hiding its measured toke
   assert.equal(card(container, 'Total Tokens').value, '12')
   assert.equal(card(container, 'Total Count').value, '1')
 })
+
+test('cache cards show measured totals without double-counting lifetime details', async () => {
+  const container = await mount([
+    image,
+    {
+      ...text,
+      cache_read_tokens: 12,
+      cache_creation_tokens: 20,
+      cache_creation_tokens_12h: 15,
+    },
+  ])
+  assert.equal(card(container, 'Cache read tokens').value, '12')
+  assert.equal(card(container, 'Cache write tokens').value, '20')
+  assert.equal(card(container, 'Total Tokens').value, '193')
+})
+
+test('cache cards preserve measured zero and mark missing legacy counters unavailable', async () => {
+  const container = await mount([
+    { ...text, cache_read_tokens: 0, cache_creation_tokens: null },
+  ])
+  assert.equal(card(container, 'Cache read tokens').value, '0')
+  assert.equal(card(container, 'Cache write tokens').value, '—')
+  assert.match(card(container, 'Cache write tokens').hint, /Unavailable/)
+})

@@ -41,6 +41,7 @@ fn gateway_endpoint(pool: &PgPool, endpoint: &str) -> ModelGateway {
     let prices = PriceSnapshot::compile(PriceConfig {
         version: 1,
         rules: vec![PriceRule {
+            search: None,
             billing_mode: BillingMode::Tokens,
             tiered: None,
             id: 1,

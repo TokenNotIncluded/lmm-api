@@ -313,6 +313,7 @@ fn scalar_prices(tariff: TieredTariff) -> PriceSnapshot {
     PriceSnapshot::compile(PriceConfig {
         version: 19,
         rules: vec![PriceRule {
+            search: None,
             id: 1,
             billing_mode: BillingMode::TieredDecimal,
             tiered: Some(tariff),

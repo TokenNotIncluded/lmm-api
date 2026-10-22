@@ -52,6 +52,7 @@ fn routes(
     let prices = PriceSnapshot::compile(PriceConfig {
         version: 1,
         rules: vec![PriceRule {
+            search: None,
             billing_mode: lmm_core::routing::BillingMode::Tokens,
             tiered: None,
             id: 1,

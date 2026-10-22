@@ -32,6 +32,36 @@ export function safeDivide(
   return Math.round(result * factor) / factor
 }
 
+/** Cache counters are subsets of input; they never add to total token usage. */
+function sumCache(
+  data: QuotaDataItem[],
+  field: 'cache_read_tokens' | 'cache_creation_tokens'
+): number | null {
+  let total = 0
+  let measured = data.length === 0
+  for (const item of data) {
+    const value = item[field]
+    const imageOnly =
+      item.token_used === null &&
+      item.token_count_scope === 'settled_text_requests' &&
+      typeof item.output_image_count === 'number' &&
+      Number.isSafeInteger(item.output_image_count) &&
+      item.output_image_count > 0
+    if (imageOnly && (value === null || value === undefined)) continue
+    if (
+      imageOnly ||
+      typeof value !== 'number' ||
+      !Number.isSafeInteger(value) ||
+      value < 0
+    )
+      return null
+    measured = true
+    total += value
+    if (!Number.isSafeInteger(total)) return null
+  }
+  return measured ? total : null
+}
+
 /**
  * Calculate aggregated statistics from quota data
  */
@@ -97,6 +127,8 @@ export function calculateDashboardStats(data: QuotaDataItem[]) {
       hasKnownTokens && !hasUnknownTokens && Number.isSafeInteger(knownTokens)
         ? knownTokens
         : null,
+    totalCacheReadTokens: sumCache(data, 'cache_read_tokens'),
+    totalCacheCreationTokens: sumCache(data, 'cache_creation_tokens'),
     totalOutputImages:
       !hasUnknownOutputImages && Number.isSafeInteger(knownOutputImages)
         ? knownOutputImages

@@ -87,6 +87,7 @@ pub(super) fn credit_price(
     if let Some(tariff) = quote.tiered() {
         let (group_multiplier_ppm, speed_multiplier_ppm) = quote.multipliers_ppm();
         let price = Price {
+            search: None,
             user_trust: None,
             image: None,
             upstream_cost_group_ppm: None,
@@ -112,6 +113,7 @@ pub(super) fn credit_price(
     if quote.billing_mode() == crate::routing::BillingMode::UpstreamCost {
         let (group_ppm, _) = quote.multipliers_ppm();
         let price = Price {
+            search: None,
             user_trust: None,
             image: None,
             upstream_cost_group_ppm: Some(group_ppm),
@@ -146,6 +148,7 @@ pub(super) fn credit_price(
         i64::try_from(numerator / DENOMINATOR).map_err(|_| RelayError::BillingUnavailable)
     };
     let price = Price {
+        search: None,
         user_trust: None,
         image: None,
         upstream_cost_group_ppm: None,
@@ -297,6 +300,47 @@ impl RouteProvider for Bridge {
                     ));
                 }
             };
+            if request.has_hosted_search() {
+                if price.upstream_cost_group_ppm.is_some() || price.image.is_some() {
+                    return Err(RelayError::Unsupported(
+                        "hosted search requires explicit search pricing",
+                    ));
+                }
+                let contract = self.provider_policy.search_contract(&attempt)?;
+                let tariff = quote.price().search().ok_or(RelayError::Unsupported(
+                    "hosted search requires an explicit supplier tariff",
+                ))?;
+                if contract.provider != tariff.provider {
+                    return Err(RelayError::Unsupported(
+                        "search price and supplier do not match",
+                    ));
+                }
+                if request.has_x_search()
+                    && (tariff.x_posts_fetched_usd_per_unit.is_none()
+                        || tariff.x_users_fetched_usd_per_unit.is_none())
+                {
+                    return Err(RelayError::Unsupported(
+                        "x_search requires explicit post and user prices",
+                    ));
+                }
+                request.validate_search_contract(upstream, contract.provider, contract.limits)?;
+                let (group_multiplier_ppm, speed_multiplier_ppm) = quote.price().multipliers_ppm();
+                let search = crate::routing::PersistedSearchPrice {
+                    tariff,
+                    limits: contract.limits,
+                    supplier_contract_revision: contract.contract_revision.clone(),
+                    group_multiplier_ppm,
+                    speed_multiplier_ppm,
+                    credits_per_usd: quote.conversion().credits_per_usd(),
+                };
+                search.validate().map_err(|_| {
+                    RelayError::Unsupported(
+                        "search price requires finite supplier bounds for every priced dimension",
+                    )
+                })?;
+                price.search = Some(search);
+                price.validate().map_err(super::billing::error)?;
+            }
             if request.client == ClientProtocol::Anthropic
                 && upstream != UpstreamProtocol::Anthropic
             {
@@ -335,7 +379,7 @@ impl RouteProvider for Bridge {
             );
             let attempt = Arc::new(attempt);
             let availability = attempt.clone();
-            let route = Route::new(
+            let mut route = Route::new(
                 route_id.clone(),
                 upstream,
                 endpoint.as_str(),
@@ -345,6 +389,9 @@ impl RouteProvider for Bridge {
             )?
             .with_cache_creation_mode(price.tiered.as_ref().and_then(|t| t.cache_creation_mode))
             .with_availability_guard(Arc::new(move || availability.is_available()));
+            if let Some(search) = &price.search {
+                route = route.with_search_contract(search.tariff.provider, search.limits)?;
+            }
             let mut active = self
                 .active
                 .lock()
@@ -430,6 +477,7 @@ mod tests {
         PriceSnapshot::compile(PriceConfig {
             version: 3,
             rules: vec![PriceRule {
+                search: None,
                 billing_mode: crate::routing::BillingMode::Tokens,
                 tiered: None,
                 id: 1,
@@ -497,6 +545,7 @@ mod tests {
                             .unwrap();
                         let amount = legacy
                             .cost(crate::billing::charging::Usage {
+                                search: None,
                                 cache_creation: None,
                                 image: None,
                                 upstream_cost_atto_usd: None,

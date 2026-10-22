@@ -380,6 +380,28 @@ impl CompiledTariff {
         credits_per_usd: u64,
         discount: Option<DiscountRatio>,
     ) -> Result<u64, RoutingError> {
+        self.charge_with_surcharge(
+            usage,
+            semantics,
+            group_ppm,
+            speed_ppm,
+            credits_per_usd,
+            discount,
+            super::SearchSurcharge::zero(),
+        )
+    }
+
+    /// Search is still exact USD here, before token conversion and rounding.
+    pub(crate) fn charge_with_surcharge(
+        self,
+        usage: TieredUsage,
+        semantics: InputSemantics,
+        group_ppm: u32,
+        speed_ppm: u32,
+        credits_per_usd: u64,
+        discount: Option<DiscountRatio>,
+        surcharge: super::SearchSurcharge,
+    ) -> Result<u64, RoutingError> {
         let cached = usage
             .cached
             .checked_add(usage.created)
@@ -506,7 +528,14 @@ impl CompiledTariff {
         .try_fold(Fraction::zero(), |sum, (tokens, rate)| {
             sum.add(Fraction::rate(tokens, rate)?)
         })?;
-        convert(raw, group_ppm, speed_ppm, credits_per_usd, false, discount)
+        convert(
+            raw.add(Fraction(surcharge.micro_usd()))?,
+            group_ppm,
+            speed_ppm,
+            credits_per_usd,
+            false,
+            discount,
+        )
     }
 
     /// Every tier and every cache split is considered. Tier rates need not be
@@ -538,6 +567,28 @@ impl CompiledTariff {
         credits_per_usd: u64,
         discount: Option<DiscountRatio>,
     ) -> Result<u64, RoutingError> {
+        self.reservation_ceiling_with_surcharge(
+            input,
+            output,
+            group_ppm,
+            speed_ppm,
+            credits_per_usd,
+            discount,
+            super::SearchSurcharge::zero(),
+        )
+    }
+
+    pub(crate) fn reservation_ceiling_with_surcharge(
+        self,
+        input: u64,
+        output: u64,
+        group_ppm: u32,
+        speed_ppm: u32,
+        credits_per_usd: u64,
+        discount: Option<DiscountRatio>,
+        surcharge: super::SearchSurcharge,
+    ) -> Result<u64, RoutingError> {
+        let search = Fraction(surcharge.micro_usd());
         let mut maximum = 0;
         let mut lower = 0;
         for tier in &self.tiers[..usize::from(self.count)] {
@@ -560,7 +611,8 @@ impl CompiledTariff {
                 }
             }
             let raw = Fraction::rate(bound, input_rate)?
-                .add(Fraction::rate(output, tier.rates.output)?)?;
+                .add(Fraction::rate(output, tier.rates.output)?)?
+                .add(search.clone())?;
             maximum = maximum.max(convert(
                 raw,
                 group_ppm,

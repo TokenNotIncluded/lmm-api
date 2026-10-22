@@ -20,6 +20,8 @@ pub mod pricing;
 mod provider_policy;
 mod routing;
 #[cfg(test)]
+mod search_tests;
+#[cfg(test)]
 mod selected_bound_tests;
 mod systemone;
 pub mod trusted_delegation;
@@ -51,7 +53,7 @@ use subtle::ConstantTimeEq;
 
 pub use catalog::{CatalogError, CatalogSurface, CatalogV1};
 pub use honeypot::{HoneypotCredential, HoneypotGateway};
-pub use provider_policy::{ExternalModelContext, ProviderPolicy};
+pub use provider_policy::{ExternalModelContext, ExternalSearchContract, ProviderPolicy};
 pub use routing::UpstreamCredential;
 pub const SCHEMA: &str = include_str!("../schema/model_gateway.sql");
 

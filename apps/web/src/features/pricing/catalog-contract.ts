@@ -1,6 +1,11 @@
 /* Copyright (C) 2026 LIghtJUNction. AGPL-3.0-or-later. */
 import { z } from 'zod'
 
+import {
+  searchProviders,
+  searchUnitMatchesProvider,
+} from '@/lib/search-metering'
+
 const safeInteger = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER)
 const amount = z
   .number()
@@ -104,6 +109,26 @@ const cacheWrite12hTiers = z
     })
   }, 'Input token bounds must increase and end with an unlimited tier')
 
+export const nativeSearchPriceSchema = z
+  .object({
+    available: z.boolean(),
+    provider: z.enum(searchProviders),
+    unit: z.enum(['call', 'query', 'grounded_request']),
+    usd_per_unit: fraction.strict(),
+    x_posts_fetched_usd_per_unit: fraction.strict().nullable(),
+    x_users_fetched_usd_per_unit: fraction.strict().nullable(),
+  })
+  .strict()
+  .refine(
+    (price) =>
+      searchUnitMatchesProvider(price.provider, price.unit) &&
+      (price.provider === 'xai_responses_v1' ||
+        (price.x_posts_fetched_usd_per_unit === null &&
+          price.x_users_fetched_usd_per_unit === null)),
+    'Search units and price dimensions must match the supplier'
+  )
+export type NativeSearchPrice = z.infer<typeof nativeSearchPriceSchema>
+
 export const nativeTokenPriceSchema = z
   .object({
     currency: z.literal('USD'),
@@ -116,6 +141,7 @@ export const nativeTokenPriceSchema = z
     cache_write: z.null(),
     request: z.null(),
     final_cost_depends_on_usage: z.literal(true),
+    search: nativeSearchPriceSchema.optional(),
     // Every tier inherits this token price's currency, unit and rate basis.
     cache_write_12h_tiers: cacheWrite12hTiers.optional(),
   })

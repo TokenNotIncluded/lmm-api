@@ -25,6 +25,8 @@ use sqlx::{PgPool, Row, postgres::PgRow};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use tokio_stream::StreamExt;
 
+mod csv_export;
+
 const WINDOW: i64 = 31 * 86400;
 const MAX_OFFSET: i64 = 100_000;
 const MAX_BUCKETS: usize = 10_000;
@@ -397,6 +399,9 @@ impl ValidatedRequest {
                 || event.usage.cached != usage.cached
                 || event.usage.output != usage.output
                 || event.usage.image != usage.image
+                || (price.search.is_some()
+                    && event.outcome == Outcome::Completed
+                    && event.usage.search.is_none())
                 || price.cost(event.usage).map_err(|_| Error::Storage)? != amounts.gross
             {
                 return Err(Error::Storage);
@@ -484,6 +489,29 @@ impl ValidatedRequest {
             "payer_kind":self.payer_kind,"pricing_credits_per_usd":CREDITS_PER_USD,
             "platform_sponsored":self.sponsored,
             "billing_basis":"incomplete","wallet_debit_supported":false});
+        if let Some(search) = &self.price.search {
+            let exact = |rate: crate::routing::SearchRate| {
+                json!({
+                    "numerator":rate.numerator.to_string(),
+                    "denominator":rate.denominator.to_string()
+                })
+            };
+            other["search_billing"] = json!({
+                "provider":search.tariff.provider,
+                "unit":search.tariff.unit,
+                "currency":"USD",
+                "usd_per_unit":exact(search.tariff.usd_per_unit),
+                "x_posts_fetched_usd_per_unit":search.tariff.x_posts_fetched_usd_per_unit.map(exact),
+                "x_users_fetched_usd_per_unit":search.tariff.x_users_fetched_usd_per_unit.map(exact),
+                "group_multiplier_ppm":search.group_multiplier_ppm,
+                "speed_multiplier_ppm":search.speed_multiplier_ppm,
+                "account_discount":self.price.discount().map(|discount| json!({
+                    "numerator":discount.numerator().to_string(),
+                    "denominator":discount.denominator().to_string()
+                })),
+                "usage":if self.settled() {self.usage.search}else{None}
+            });
+        }
         let mut item = json!({"id":presentation_id(&self.id),"request_id":self.id,"user_id":self.user,"token_id":self.key,
             "created_at":self.at,"type":if self.settled() && self.outcome.as_deref()==Some("completed") {2}else{5},
             "content":self.outcome.clone().unwrap_or_else(||format!("Model request {}; no final usage receipt",self.state)),
@@ -515,7 +543,50 @@ impl ValidatedRequest {
     }
 }
 #[derive(Default)]
+struct CacheTotals {
+    read: i64,
+    created: i64,
+    created_12h: i64,
+    has_text: bool,
+    has_images: bool,
+    created_unknown: bool,
+    created_12h_unknown: bool,
+}
+impl CacheTotals {
+    fn include(&mut self, usage: Usage, image: bool) -> Result<(), Error> {
+        if image {
+            self.has_images = true;
+            return Ok(());
+        }
+        self.has_text = true;
+        add(&mut self.read, usage.cached)?;
+        if let Some(created) = usage.cache_creation {
+            // TTL measurements partition this aggregate; never add them again.
+            add(&mut self.created, created.total)?;
+            if let Some(twelve) = created.twelve_hour {
+                add(&mut self.created_12h, twelve)?;
+            } else {
+                self.created_12h_unknown = true;
+            }
+        } else {
+            self.created_unknown = true;
+            self.created_12h_unknown = true;
+        }
+        Ok(())
+    }
+    fn project(&self, value: &mut Value) {
+        let text = self.has_text || !self.has_images;
+        value["cache_read_tokens"] = json!(text.then_some(self.read));
+        value["cache_creation_tokens"] =
+            json!((text && !self.created_unknown).then_some(self.created));
+        value["cache_creation_tokens_12h"] =
+            json!((text && !self.created_12h_unknown).then_some(self.created_12h));
+    }
+}
+
+#[derive(Default)]
 struct Summary {
+    cache: CacheTotals,
     amounts: Amounts,
     reserved: i64,
     incomplete: i64,
@@ -540,6 +611,7 @@ impl Summary {
             add(&mut self.incomplete, 1)?;
         }
         if r.settled() {
+            self.cache.include(r.usage, r.price.image.is_some())?;
             if let Some(image) = r.usage.image {
                 add(&mut self.images, i64::from(image.output_images))?;
             }
@@ -568,11 +640,13 @@ impl Summary {
             "platform_sponsored_quota":self.sponsored_net,
             "personal_wallet_quota":self.personal_wallet_source_net,"personal_wallet_quota_basis":"wallet_source_net_consumption_not_debit"});
         self.amounts.project(&mut data);
+        self.cache.project(&mut data);
         data
     }
 }
 #[derive(Default)]
 struct Bucket {
+    cache: CacheTotals,
     amounts: Amounts,
     tokens: i64,
     count: i64,
@@ -656,6 +730,7 @@ impl UsageStore {
                             r.sponsored,
                         );
                         let bucket = buckets.entry(key).or_default();
+                        bucket.cache.include(r.usage, r.price.image.is_some())?;
                         bucket.amounts.accumulate(r.amounts)?;
                         bucket.has_images |= r.price.image.is_some();
                         bucket.has_text |= r.price.image.is_none();
@@ -687,6 +762,7 @@ impl UsageStore {
                         "platform_sponsored":sponsored,
                         "count":bucket.count,"payer_kind":payer_kind,"subscription_funded":subscription,"usage_scope":if bucket.has_session_sources {"actor_personal_usage"}else{"actor_personal_key"},"settlement_scope":"settled_requests"});
                     bucket.amounts.project(&mut item);
+                    bucket.cache.project(&mut item);
                     data.push(item);
                 }
                 json!(data)
@@ -701,6 +777,8 @@ pub fn router(store: UsageStore) -> Router {
     Router::new()
         .route("/api/log/self", get(logs))
         .route("/api/log/self/stat", get(stats))
+        .route("/api/log/self/export", get(csv_export::self_export))
+        .route("/api/log/export", get(csv_export::admin_export))
         .route("/api/data/self", get(data))
         .with_state(store)
         .layer(middleware::from_fn(no_store))
@@ -871,6 +949,66 @@ mod index_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cache_summary_preserves_unknowns_and_counts_each_partition_once() {
+        let mut cache = CacheTotals::default();
+        let mut projected = json!({});
+        cache.project(&mut projected);
+        assert_eq!(projected["cache_read_tokens"], 0);
+        assert_eq!(projected["cache_creation_tokens"], 0);
+        cache.include(Usage::default(), true).unwrap();
+        cache.project(&mut projected);
+        assert!(projected["cache_read_tokens"].is_null());
+        assert!(projected["cache_creation_tokens"].is_null());
+        let text = Usage {
+            input: 100,
+            cached: 10,
+            cache_creation: Some(crate::billing::charging::CacheCreationUsage {
+                total: 30,
+                five_minute: None,
+                one_hour: None,
+                twelve_hour: Some(20),
+                cache_creation_mode: None,
+                reported_total: None,
+            }),
+            ..Default::default()
+        };
+        cache.include(text, false).unwrap();
+        cache.include(text, false).unwrap();
+        cache.project(&mut projected);
+        assert_eq!(projected["cache_read_tokens"], 20);
+        assert_eq!(projected["cache_creation_tokens"], 60);
+        assert_eq!(projected["cache_creation_tokens_12h"], 40);
+        cache.include(Usage::default(), false).unwrap();
+        cache.project(&mut projected);
+        assert_eq!(projected["cache_read_tokens"], 20);
+        assert!(projected["cache_creation_tokens"].is_null());
+        assert!(projected["cache_creation_tokens_12h"].is_null());
+    }
+    #[test]
+    fn cache_summary_rejects_unsafe_aggregate_integers() {
+        let mut cache = CacheTotals::default();
+        cache
+            .include(
+                Usage {
+                    cached: JS_SAFE,
+                    ..Default::default()
+                },
+                false,
+            )
+            .unwrap();
+        assert!(
+            cache
+                .include(
+                    Usage {
+                        cached: 1,
+                        ..Default::default()
+                    },
+                    false
+                )
+                .is_err()
+        );
+    }
     #[test]
     fn recent_window_is_open_at_sixty_seconds_and_closed_at_now() {
         let now = 1_700_000_000;

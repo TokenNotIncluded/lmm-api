@@ -153,6 +153,8 @@ pub struct Usage {
     pub upstream_cost_atto_usd: Option<u128>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_creation: Option<CacheCreationUsage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search: Option<crate::routing::SearchUsage>,
     /// Includes cached input. Cached input is priced separately, not twice.
     pub input: i64,
     pub cached: i64,
@@ -166,12 +168,14 @@ impl Usage {
                 && self.cached == 0
                 && self.output == 0
                 && self.upstream_cost_atto_usd.is_none()
-                && self.cache_creation.is_none();
+                && self.cache_creation.is_none()
+                && self.search.is_none();
         }
         self.input >= 0
             && self.cached >= 0
             && self.cached <= self.input
             && self.output >= 0
+            && self.search.is_none_or(|search| search.valid())
             && self.cache_creation.is_none_or(|created| {
                 created.valid()
                     && self
@@ -191,6 +195,11 @@ impl Usage {
             && self.cached >= previous.cached
             && self.output >= previous.output
             && match (previous.cache_creation, self.cache_creation) {
+                (Some(old), Some(now)) => now.follows(old),
+                (Some(_), None) => false,
+                _ => true,
+            }
+            && match (previous.search, self.search) {
                 (Some(old), Some(now)) => now.follows(old),
                 (Some(_), None) => false,
                 _ => true,
@@ -219,6 +228,8 @@ pub struct Price {
     pub upstream_cost_group_ppm: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tiered: Option<crate::routing::PersistedTieredTariff>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search: Option<crate::routing::PersistedSearchPrice>,
     pub version: String,
     pub model: String,
     pub group: String,
@@ -303,6 +314,19 @@ impl Price {
                 return Err(Error::Invalid);
             }
         }
+        if let Some(search) = &self.search {
+            search.validate().map_err(|_| Error::Invalid)?;
+            if self.image.is_some()
+                || self.upstream_cost_group_ppm.is_some()
+                || self.tiered.as_ref().is_some_and(|tariff| {
+                    search.group_multiplier_ppm != tariff.group_multiplier_ppm
+                        || search.speed_multiplier_ppm != tariff.speed_multiplier_ppm
+                        || search.credits_per_usd != tariff.credits_per_usd
+                })
+            {
+                return Err(Error::Invalid);
+            }
+        }
         Ok(())
     }
     pub fn cost(&self, usage: Usage) -> Result<i64> {
@@ -325,21 +349,31 @@ impl Price {
         if usage.image.is_some() {
             return Err(Error::Invalid);
         }
+        let surcharge = self.search_surcharge(usage)?;
         if let Some(tariff) = &self.tiered {
             let created = self.cache_creation_for(tariff, usage)?;
             return tariff
-                .cost_with_discount(
-                    crate::routing::TieredUsage {
-                        input: usage.input as u64,
-                        cached: usage.cached as u64,
-                        created: created.map_or(0, |v| v.total as u64),
-                        output: usage.output as u64,
-                        created_5m: created.and_then(|v| v.five_minute.map(|v| v as u64)),
-                        created_1h: created.and_then(|v| v.one_hour.map(|v| v as u64)),
-                        created_12h: created.and_then(|v| v.twelve_hour.map(|v| v as u64)),
-                    },
-                    self.discount(),
-                )
+                .tariff
+                .compile()
+                .and_then(|compiled| {
+                    compiled.charge_with_surcharge(
+                        crate::routing::TieredUsage {
+                            input: usage.input as u64,
+                            cached: usage.cached as u64,
+                            created: created.map_or(0, |v| v.total as u64),
+                            output: usage.output as u64,
+                            created_5m: created.and_then(|v| v.five_minute.map(|v| v as u64)),
+                            created_1h: created.and_then(|v| v.one_hour.map(|v| v as u64)),
+                            created_12h: created.and_then(|v| v.twelve_hour.map(|v| v as u64)),
+                        },
+                        tariff.input_semantics,
+                        tariff.group_multiplier_ppm,
+                        tariff.speed_multiplier_ppm,
+                        tariff.credits_per_usd,
+                        self.discount(),
+                        surcharge,
+                    )
+                })
                 .and_then(|amount| {
                     i64::try_from(amount).map_err(|_| crate::routing::RoutingError::PriceOverflow)
                 })
@@ -366,18 +400,35 @@ impl Price {
             total.checked_add(i128::from(count) * i128::from(rate))
         })
         .ok_or(Error::Invalid)?;
-        let amount = crate::upstream_cost::ceil_with_discount(
-            u128::try_from(sum).map_err(|_| Error::Invalid)?,
-            1_000_000,
-            self.discount(),
-        )
-        .ok_or(Error::Invalid)?;
+        let numerator = u128::try_from(sum).map_err(|_| Error::Invalid)?;
+        let amount = if let Some(search) = &self.search {
+            surcharge
+                .combine_credits(
+                    numerator,
+                    1_000_000,
+                    search.group_multiplier_ppm,
+                    search.speed_multiplier_ppm,
+                    search.credits_per_usd,
+                    self.discount(),
+                )
+                .map_err(|_| Error::Invalid)?
+        } else {
+            crate::upstream_cost::ceil_with_discount(numerator, 1_000_000, self.discount())
+                .ok_or(Error::Invalid)?
+        };
         i64::try_from(amount).map_err(|_| Error::Invalid)
     }
 
     /// The same frozen exact factor applies before the reservation's sole ceil.
     pub(crate) fn reservation_ceiling(&self, basis: ReservationBasis) -> Result<i64> {
         self.validate()?;
+        let surcharge = self
+            .search
+            .as_ref()
+            .map(|search| search.maximum_surcharge())
+            .transpose()
+            .map_err(|_| Error::Invalid)?
+            .unwrap_or_else(crate::routing::SearchSurcharge::zero);
         let amount = match basis {
             ReservationBasis::Image => {
                 return self
@@ -404,13 +455,14 @@ impl Price {
                         .tariff
                         .compile()
                         .map_err(|_| Error::Invalid)?
-                        .reservation_ceiling_with_discount(
+                        .reservation_ceiling_with_surcharge(
                             input,
                             output,
                             tariff.group_multiplier_ppm,
                             tariff.speed_multiplier_ppm,
                             tariff.credits_per_usd,
                             self.discount(),
+                            surcharge,
                         )
                         .map_err(|_| Error::Invalid)?
                 } else {
@@ -420,12 +472,43 @@ impl Price {
                             sum.checked_add(u128::from(output) * self.output_per_million as u128)
                         })
                         .ok_or(Error::Invalid)?;
-                    crate::upstream_cost::ceil_with_discount(numerator, 1_000_000, self.discount())
+                    if let Some(search) = &self.search {
+                        surcharge
+                            .combine_credits(
+                                numerator,
+                                1_000_000,
+                                search.group_multiplier_ppm,
+                                search.speed_multiplier_ppm,
+                                search.credits_per_usd,
+                                self.discount(),
+                            )
+                            .map_err(|_| Error::Invalid)?
+                    } else {
+                        crate::upstream_cost::ceil_with_discount(
+                            numerator,
+                            1_000_000,
+                            self.discount(),
+                        )
                         .ok_or(Error::Invalid)?
+                    }
                 }
             }
         };
         i64::try_from(amount).map_err(|_| Error::Invalid)
+    }
+
+    fn search_surcharge(&self, usage: Usage) -> Result<crate::routing::SearchSurcharge> {
+        match (&self.search, usage.search) {
+            (Some(price), Some(search)) => price.surcharge(search).map_err(|_| Error::Invalid),
+            (Some(_), None) if usage == Usage::default() => {
+                Ok(crate::routing::SearchSurcharge::zero())
+            }
+            (None, None) => Ok(crate::routing::SearchSurcharge::zero()),
+            (None, Some(search)) if !search.has_positive() => {
+                Ok(crate::routing::SearchSurcharge::zero())
+            }
+            _ => Err(Error::Invalid),
+        }
     }
 
     fn cache_creation_for(
@@ -471,12 +554,335 @@ pub(crate) enum ReservationBasis {
 }
 
 #[cfg(test)]
+mod search_price_tests {
+    use super::*;
+    use crate::routing::{
+        BillingMode, CreditRate, InputSemantics, PriceConfig, PriceRule, PriceSnapshot,
+        SearchProvider, SearchUsage, Speed, TieredUsage, TokenRates,
+    };
+    use serde_json::json;
+
+    fn scalar() -> Price {
+        serde_json::from_value(json!({
+            "version":"routing-search-1","model":"search-model","group":"default",
+            "input_per_million":100000,"cached_per_million":300000,"output_per_million":200000,
+            "search":{
+                "tariff":{"revision":1,"provider":"open_ai_responses_v1","unit":"call","currency":"USD",
+                    "usd_per_unit":{"numerator":1,"denominator":1000000}},
+                "limits":{"calls":3},"supplier_contract_revision":"synthetic-bounded-search-v1",
+                "group_multiplier_ppm":1000000,"speed_multiplier_ppm":1000000,"credits_per_usd":500000
+            }
+        })).unwrap()
+    }
+
+    fn measured(calls: u64) -> SearchUsage {
+        SearchUsage {
+            provider: SearchProvider::OpenAiResponsesV1,
+            calls: Some(calls),
+            queries: None,
+            grounded_requests: None,
+            x_posts_fetched: None,
+            x_users_fetched: None,
+        }
+    }
+
+    #[test]
+    fn scalar_tokens_and_search_share_one_round_and_exact_quote() {
+        let price = scalar();
+        price.validate().unwrap();
+        let usage = Usage {
+            input: 1,
+            search: Some(measured(1)),
+            ..Usage::default()
+        };
+        // 0.1 token credit + 0.5 search credit rounds once to 1, not 1 + 1.
+        assert_eq!(price.cost(usage), Ok(1));
+        let prices = PriceSnapshot::compile(PriceConfig {
+            version: 1,
+            rules: vec![PriceRule {
+                id: 1,
+                model: price.model.clone(),
+                group: price.group.clone(),
+                speed: Speed::Standard,
+                billing_mode: BillingMode::Tokens,
+                tiered: None,
+                search: Some(price.search.as_ref().unwrap().tariff),
+                rates: TokenRates {
+                    input: 200000,
+                    cache_read: 600000,
+                    output: 400000,
+                    cache_write: 0,
+                    request: 0,
+                },
+                group_multiplier_ppm: 1_000_000,
+                speed_multiplier_ppm: 1_000_000,
+            }],
+        })
+        .unwrap();
+        let quote = prices
+            .quote(&price.model, &price.group, Speed::Standard)
+            .unwrap()
+            .with_credit_rate(CreditRate::new(1, 500000).unwrap());
+        let hold = price
+            .reservation_ceiling(ReservationBasis::Tokens {
+                input: 4,
+                output: 2,
+            })
+            .unwrap();
+        assert_eq!(hold, 4); // ceil(4 * .3 + 2 * .2 + 3 * .5).
+        for input in 0..=4 {
+            for cached in 0..=input {
+                for output in 0..=2 {
+                    for calls in 0..=3 {
+                        let usage = Usage {
+                            input,
+                            cached,
+                            output,
+                            search: Some(measured(calls)),
+                            ..Usage::default()
+                        };
+                        let amount = price.cost(usage).unwrap();
+                        let quoted = quote
+                            .charge_with_search(
+                                crate::routing::Usage {
+                                    input: (input - cached) as u64,
+                                    cache_read: cached as u64,
+                                    output: output as u64,
+                                    ..crate::routing::Usage::default()
+                                },
+                                usage.search,
+                            )
+                            .unwrap();
+                        assert_eq!(quoted.0 as i64, amount);
+                        assert!(amount <= hold);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn search_missing_unpriced_wrong_supplier_and_over_cap_cannot_settle() {
+        let price = scalar();
+        assert_eq!(
+            price.cost(Usage {
+                input: 1,
+                ..Usage::default()
+            }),
+            Err(Error::Invalid)
+        );
+        assert_eq!(
+            price.cost(Usage {
+                input: 1,
+                search: Some(SearchUsage {
+                    calls: None,
+                    ..measured(0)
+                }),
+                ..Usage::default()
+            }),
+            Err(Error::Invalid)
+        );
+        assert_eq!(
+            price.cost(Usage {
+                search: Some(measured(4)),
+                ..Usage::default()
+            }),
+            Err(Error::Invalid)
+        );
+        assert_eq!(
+            price.cost(Usage {
+                search: Some(SearchUsage {
+                    provider: SearchProvider::AnthropicMessagesV1,
+                    ..measured(1)
+                }),
+                ..Usage::default()
+            }),
+            Err(Error::Invalid)
+        );
+        let mut unpriced = price.clone();
+        unpriced.search = None;
+        assert_eq!(
+            unpriced.cost(Usage {
+                search: Some(measured(1)),
+                ..Usage::default()
+            }),
+            Err(Error::Invalid)
+        );
+        assert_eq!(price.cost(Usage::default()), Ok(0)); // Undispatched cancellation.
+        assert_eq!(
+            price.cost(Usage {
+                search: Some(measured(0)),
+                ..Usage::default()
+            }),
+            Ok(0)
+        );
+        let mut free = price.clone();
+        free.input_per_million = 0;
+        free.cached_per_million = 0;
+        free.output_per_million = 0;
+        free.search.as_mut().unwrap().group_multiplier_ppm = 0;
+        assert_eq!(
+            free.cost(Usage {
+                input: 1,
+                search: Some(measured(3)),
+                ..Usage::default()
+            }),
+            Ok(0)
+        );
+        assert_eq!(
+            free.reservation_ceiling(ReservationBasis::Tokens {
+                input: 4,
+                output: 2
+            }),
+            Ok(0)
+        );
+    }
+
+    fn tiered() -> Price {
+        let mut value = serde_json::to_value(scalar()).unwrap();
+        value["input_per_million"] = json!(0);
+        value["cached_per_million"] = json!(0);
+        value["output_per_million"] = json!(0);
+        value["search"]["tariff"]["usd_per_unit"] = json!({"numerator":3,"denominator":5000000});
+        value["tiered"] = json!({
+            "tariff":{"revision":1,"source_digest":"a7".repeat(32),"uses_cache_read":true,"uses_cache_write":false,
+                "tiers":[
+                    {"up_to_input_tokens":2,"rates":{"input":{"numerator":5,"denominator":2},"output":{"numerator":3,"denominator":2},"cache_read":{"numerator":1,"denominator":10},"cache_write":{"numerator":0,"denominator":1}}},
+                    {"up_to_input_tokens":null,"rates":{"input":{"numerator":1,"denominator":5},"output":{"numerator":1,"denominator":5},"cache_read":{"numerator":1,"denominator":20},"cache_write":{"numerator":0,"denominator":1}}}
+                ]},
+            "input_semantics":"inclusive","group_multiplier_ppm":1000000,"speed_multiplier_ppm":1000000,"credits_per_usd":500000
+        });
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn tiered_search_keeps_half_up_settlement_and_bounds_every_tier() {
+        let price = tiered();
+        let frozen = price.tiered.as_ref().unwrap();
+        let prices = PriceSnapshot::compile(PriceConfig {
+            version: 1,
+            rules: vec![PriceRule {
+                id: 1,
+                model: price.model.clone(),
+                group: price.group.clone(),
+                speed: Speed::Standard,
+                billing_mode: BillingMode::TieredDecimal,
+                tiered: Some(frozen.tariff.clone()),
+                search: Some(price.search.as_ref().unwrap().tariff),
+                rates: TokenRates {
+                    input: 0,
+                    cache_read: 0,
+                    output: 0,
+                    cache_write: 0,
+                    request: 0,
+                },
+                group_multiplier_ppm: 1_000_000,
+                speed_multiplier_ppm: 1_000_000,
+            }],
+        })
+        .unwrap();
+        let quote = prices
+            .quote(&price.model, &price.group, Speed::Standard)
+            .unwrap()
+            .with_credit_rate(CreditRate::new(1, 500000).unwrap());
+        let hold = price
+            .reservation_ceiling(ReservationBasis::Tokens {
+                input: 4,
+                output: 2,
+            })
+            .unwrap();
+        assert_eq!(hold, 5); // Earlier tier: ceil(2 * 1.25 + 2 * .75 + 3 * .3).
+        // Later tier gives .4 tokens + .3 search = .7, rounded together to 1.
+        assert_eq!(
+            price.cost(Usage {
+                input: 4,
+                search: Some(measured(1)),
+                ..Usage::default()
+            }),
+            Ok(1)
+        );
+        for input in 0..=4 {
+            for cached in 0..=input {
+                for output in 0..=2 {
+                    for calls in 0..=3 {
+                        let usage = Usage {
+                            input,
+                            cached,
+                            output,
+                            search: Some(measured(calls)),
+                            ..Usage::default()
+                        };
+                        let amount = price.cost(usage).unwrap();
+                        let quoted = quote
+                            .charge_tiered_usage_with_search(
+                                TieredUsage {
+                                    input: input as u64,
+                                    cached: cached as u64,
+                                    output: output as u64,
+                                    ..TieredUsage::default()
+                                },
+                                InputSemantics::Inclusive,
+                                usage.search,
+                            )
+                            .unwrap();
+                        assert_eq!(quoted.0 as i64, amount);
+                        assert!(amount <= hold);
+                    }
+                }
+            }
+        }
+        let mut incompatible = price;
+        incompatible.search.as_mut().unwrap().group_multiplier_ppm = 2_000_000;
+        assert_eq!(incompatible.validate(), Err(Error::Invalid));
+    }
+
+    #[test]
+    fn old_json_shape_is_unchanged_and_search_replay_freezes_price_and_limits() {
+        let mut old = scalar();
+        old.search = None;
+        let old_json = serde_json::to_value(&old).unwrap();
+        assert!(old_json.get("search").is_none());
+        assert_eq!(serde_json::from_value::<Price>(old_json).unwrap(), old);
+        let legacy_usage = r#"{"input":1,"cached":0,"output":0}"#;
+        let decoded: Usage = serde_json::from_str(legacy_usage).unwrap();
+        assert_eq!(serde_json::to_string(&decoded).unwrap(), legacy_usage);
+        let original = scalar();
+        let bytes = serde_json::to_vec(&original).unwrap();
+        let restored: Price = serde_json::from_slice(&bytes).unwrap();
+        let receipt = Usage {
+            input: 1,
+            search: Some(measured(1)),
+            ..Usage::default()
+        };
+        assert_eq!(restored, original);
+        assert_eq!(restored.cost(receipt), Ok(1));
+        let mut current = original;
+        current
+            .search
+            .as_mut()
+            .unwrap()
+            .tariff
+            .usd_per_unit
+            .numerator = 100;
+        current.search.as_mut().unwrap().limits.calls = Some(1);
+        assert_ne!(current.cost(receipt), restored.cost(receipt));
+        assert_eq!(restored.search.as_ref().unwrap().limits.calls, Some(3));
+        let missing = Usage {
+            search: None,
+            ..receipt
+        };
+        assert!(!missing.follows(receipt));
+    }
+}
+
+#[cfg(test)]
 mod trust_price_tests {
     use super::*;
     use serde_json::json;
 
     pub(super) fn base() -> Price {
         Price {
+            search: None,
             user_trust: None,
             image: None,
             upstream_cost_group_ppm: None,
@@ -777,6 +1183,7 @@ mod generic_remainder_tests {
     }
     fn price() -> Price {
         Price {
+            search: None,
             user_trust: None,
             image: None,
             upstream_cost_group_ppm: None,
@@ -1041,6 +1448,7 @@ mod delegated_source_tests {
     #[test]
     fn tilde_model_price_does_not_relax_other_identifiers_or_lengths() {
         let mut price = Price {
+            search: None,
             user_trust: None,
             image: None,
             upstream_cost_group_ppm: None,
@@ -1076,6 +1484,7 @@ mod delegated_source_tests {
     #[test]
     fn unicode_group_price_keeps_model_and_version_identifier_rules_strict() {
         let mut price = Price {
+            search: None,
             user_trust: None,
             image: None,
             upstream_cost_group_ppm: None,

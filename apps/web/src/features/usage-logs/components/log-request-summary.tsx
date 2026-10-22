@@ -32,6 +32,7 @@ import {
 } from '../lib/money'
 import { usageReceiptState } from '../lib/receipt-state'
 import { logRecovery, safeLogDiagnostic } from '../lib/recovery'
+import { searchUsageQuantities } from '../lib/search-usage'
 import { cacheWrite12hQuantity, logUsageQuantity } from '../lib/usage-quantity'
 import type { LogOtherData } from '../types'
 
@@ -188,6 +189,16 @@ export function LogRequestSummary({
               )?.toLocaleString() ?? t('Unknown')}
             </dd>
           </div>
+        )}
+        {searchUsageQuantities(other, log.token_usage_available).map(
+          (quantity) => (
+            <div key={quantity.label}>
+              <dt className='text-muted-foreground'>{t(quantity.label)}</dt>
+              <dd className='tabular-nums'>
+                {quantity.count?.toLocaleString() ?? t('Unknown')}
+              </dd>
+            </div>
+          )
         )}
         {(other?.audio_usage_status != null || audioSeconds != null) && (
           <div>

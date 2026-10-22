@@ -101,6 +101,7 @@ fn contexts(small_input: i64) -> Vec<ExternalModelContext> {
     ]
     .into_iter()
     .map(|(model, input, output)| ExternalModelContext {
+        search: None,
         missing_cache_creation_tokens_is_zero: false,
         upstream_id: 1,
         upstream_model: model.into(),
@@ -141,6 +142,7 @@ fn gateway(f: &Fixture, base: &str, contexts: Vec<ExternalModelContext>) -> Mode
             .into_iter()
             .enumerate()
             .map(|(index, model)| PriceRule {
+                search: None,
                 billing_mode: BillingMode::Tokens,
                 tiered: None,
                 id: index as u64 + 1,

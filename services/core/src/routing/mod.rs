@@ -7,6 +7,7 @@ mod config;
 mod engine;
 mod group_name;
 mod pricing;
+mod search;
 pub mod store;
 mod tiered;
 
@@ -22,6 +23,11 @@ pub use group_name::valid_group_name;
 pub use pricing::{
     BillingMode, CreditQuote, CreditRate, Credits, MAX_MULTIPLIER, MULTIPLIER_ONE, MicroUsd,
     PriceConfig, PriceQuote, PriceRule, PriceSnapshot, TokenRates, Usage,
+};
+pub(crate) use search::SearchSurcharge;
+pub use search::{
+    MAX_SEARCH_COUNT, PersistedSearchPrice, SearchBillingUnit, SearchCurrency, SearchLimits,
+    SearchProvider, SearchRate, SearchTariff, SearchUsage,
 };
 pub(crate) use tiered::CacheCreationPartition;
 pub use tiered::{

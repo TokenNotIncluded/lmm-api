@@ -59,6 +59,16 @@ fn validate_cache_write_dimensions(
     price
         .validate()
         .map_err(|_| RelayError::SettlementPending)?;
+    if let Some(observed) = usage.search {
+        if !observed.valid()
+            || price.search.as_ref().is_some_and(|search| {
+                observed.provider != search.tariff.provider || !search.limits.contains(observed)
+            })
+            || (price.search.is_none() && observed.has_positive())
+        {
+            return Err(RelayError::SettlementPending);
+        }
+    }
     // This separate contract prices the supplier's measured total USD cost;
     // individual token categories do not determine its settlement amount.
     if price.upstream_cost_group_ppm.is_some() {
@@ -229,12 +239,12 @@ impl Bridge {
             )
         };
         let upstream_cost = selected.price.upstream_cost_group_ppm.is_some();
-        let tiered_tariff = selected.price.tiered.as_ref();
         validate_cache_write_dimensions(checkpoint.usage, &selected.price)?;
         let normalized = if checkpoint.terminal_observed {
-            tiered_tariff
-                .map(|tariff| super::billing::complete_tiered_usage(checkpoint.usage, tariff))
-                .transpose()?
+            Some(super::billing::complete_priced_usage(
+                checkpoint.usage,
+                &selected.price,
+            )?)
         } else {
             None
         };
@@ -323,6 +333,7 @@ impl Bridge {
     }
 }
 
+#[cfg(test)]
 fn recovery_usage(
     value: serde_json::Value,
     sequence: i64,
@@ -340,13 +351,10 @@ fn recovery_priced_usage(
     sequence: i64,
     price: &charging::Price,
 ) -> Option<charging::Usage> {
-    let Some(tariff) = price.tiered.as_ref() else {
-        return recovery_usage(value, sequence, price.upstream_cost_group_ppm.is_some());
-    };
     if !(1..=65_536).contains(&sequence) {
         return None;
     }
-    super::billing::complete_tiered_usage(serde_json::from_value(value).ok()?, tariff).ok()
+    super::billing::complete_priced_usage(serde_json::from_value(value).ok()?, price).ok()
 }
 
 #[cfg(test)]
@@ -570,6 +578,7 @@ mod a07_recovery_tests {
         };
         let policy = ProviderPolicy::new(
             vec![ExternalModelContext {
+                search: None,
                 missing_cache_creation_tokens_is_zero: false,
                 upstream_id: 1,
                 upstream_model: "bounded-model".into(),
@@ -767,6 +776,7 @@ mod a07_recovery_tests {
         assert_eq!(
             valid,
             vec![charging::Usage {
+                search: None,
                 cache_creation: None,
                 image: None,
                 upstream_cost_atto_usd: None,
@@ -827,6 +837,7 @@ mod a07_recovery_tests {
         assert_eq!(
             recovery_usage(value, 1, true),
             Some(charging::Usage {
+                search: None,
                 cache_creation: None,
                 image: None,
                 upstream_cost_atto_usd: Some(123_456_789_000_000_000),

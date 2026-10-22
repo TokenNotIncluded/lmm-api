@@ -46,6 +46,8 @@ pub struct UpstreamCostPrice {
 }
 #[derive(Clone, Serialize)]
 pub struct TokenPrice {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub search: Option<SearchPrice>,
     pub currency: &'static str,
     pub unit: &'static str,
     pub rate_basis: &'static str,
@@ -59,6 +61,35 @@ pub struct TokenPrice {
     /// Revision 4 prices remain exact and tiered; no headline scalar is inferred.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_write_12h_tiers: Option<Vec<CacheWrite12hTier>>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct SearchPrice {
+    pub available: bool,
+    pub provider: crate::routing::SearchProvider,
+    pub unit: crate::routing::SearchBillingUnit,
+    pub usd_per_unit: ExactFraction,
+    pub x_posts_fetched_usd_per_unit: Option<ExactFraction>,
+    pub x_users_fetched_usd_per_unit: Option<ExactFraction>,
+}
+
+impl SearchPrice {
+    fn apply_discount(
+        &mut self,
+        discount: crate::billing::trust_pricing::DiscountRatio,
+    ) -> Result<(), PricingError> {
+        self.usd_per_unit = discounted_fraction(&self.usd_per_unit, discount)?;
+        for rate in [
+            &mut self.x_posts_fetched_usd_per_unit,
+            &mut self.x_users_fetched_usd_per_unit,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            *rate = discounted_fraction(rate, discount)?;
+        }
+        Ok(())
+    }
 }
 #[derive(Clone, Serialize)]
 pub struct CacheWrite12hTier {
@@ -154,6 +185,7 @@ impl PricingSurface {
             let price_ok = super::routing::credit_price(quote, &route.model, &route.group).is_ok();
             let mut apis = BTreeSet::new();
             let mut upstream_budget_contract_required = false;
+            let mut search_available = false;
             for target in route.targets.iter().filter(|t| {
                 t.enabled
                     && t.weight > 0
@@ -222,6 +254,19 @@ impl PricingSurface {
                 if upstream.protocol == Protocol::SystemOne && !quote.is_input_only_scalar() {
                     continue;
                 }
+                if let Some(tariff) = quote.search()
+                    && let Ok(contract) =
+                        gateway.bridge.provider_policy.search_contract_for_binding(
+                            upstream.id,
+                            &target.upstream_model,
+                            upstream.protocol,
+                            upstream.endpoint.as_str(),
+                        )
+                    && contract.provider == tariff.provider
+                    && tariff.validate_limits(contract.limits).is_ok()
+                {
+                    search_available = true;
+                }
                 apis.insert(match upstream.protocol {
                     Protocol::OpenAiChat => "openai-completions",
                     Protocol::OpenAiResponses => "openai-responses",
@@ -253,7 +298,11 @@ impl PricingSurface {
                 if quote.billing_mode() == BillingMode::UpstreamCost {
                     (None, Some(upstream_cost_price(quote)))
                 } else {
-                    (Some(token_price(quote)?), None)
+                    let mut token = token_price(quote)?;
+                    if let Some(search) = &mut token.search {
+                        search.available = search_available && price_ok;
+                    }
+                    (Some(token), None)
                 };
             for name in std::iter::once(route.model.as_str()).chain(
                 doc.routing
@@ -419,6 +468,7 @@ fn token_price(quote: PriceQuote) -> Result<TokenPrice, PricingError> {
     };
     let r = quote.rates();
     Ok(TokenPrice {
+        search: search_price(quote)?,
         currency: "USD",
         unit: "million_tokens",
         rate_basis: "base_group_rate",
@@ -431,6 +481,34 @@ fn token_price(quote: PriceQuote) -> Result<TokenPrice, PricingError> {
         final_cost_depends_on_usage: true,
         cache_write_12h_tiers: cache_write_12h_tiers(quote)?,
     })
+}
+
+fn search_price(quote: PriceQuote) -> Result<Option<SearchPrice>, PricingError> {
+    use num_bigint::BigUint;
+    use num_rational::Ratio;
+    let Some(tariff) = quote.search() else {
+        return Ok(None);
+    };
+    tariff.validate().map_err(|_| PricingError::Unavailable)?;
+    let (group, speed) = quote.multipliers_ppm();
+    let rate = |value: crate::routing::SearchRate| {
+        let fraction = Ratio::new(
+            BigUint::from(value.numerator) * BigUint::from(group) * BigUint::from(speed),
+            BigUint::from(value.denominator) * BigUint::from(1_000_000_000_000_u64),
+        );
+        ExactFraction {
+            numerator: fraction.numer().to_string(),
+            denominator: fraction.denom().to_string(),
+        }
+    };
+    Ok(Some(SearchPrice {
+        available: false,
+        provider: tariff.provider,
+        unit: tariff.unit,
+        usd_per_unit: rate(tariff.usd_per_unit),
+        x_posts_fetched_usd_per_unit: tariff.x_posts_fetched_usd_per_unit.map(rate),
+        x_users_fetched_usd_per_unit: tariff.x_users_fetched_usd_per_unit.map(rate),
+    }))
 }
 
 fn cache_write_12h_tiers(
@@ -573,6 +651,7 @@ pub(crate) mod tests {
                 failover: FailoverPolicy::default(),
             });
             rules.push(PriceRule {
+                search: None,
                 billing_mode: BillingMode::Tokens,
                 tiered: None,
                 id,
@@ -708,6 +787,7 @@ pub(crate) mod tests {
             names
                 .into_iter()
                 .map(|name| super::super::ExternalModelContext {
+                    search: None,
                     upstream_id: 1,
                     upstream_model: name.into(),
                     protocol: Protocol::OpenAiChat,
@@ -1129,6 +1209,7 @@ pub(crate) mod tests {
                     .find(|t| t.upstream_id == upstream.id)
                     .unwrap();
                 super::super::ExternalModelContext {
+                    search: None,
                     missing_cache_creation_tokens_is_zero: false,
                     upstream_id: upstream.id,
                     upstream_model: target.upstream_model.clone(),
@@ -1474,6 +1555,9 @@ impl PricingProjection {
                         tier.apply_discount(discount)?;
                     }
                 }
+                if let Some(search) = &mut token.search {
+                    search.apply_discount(discount)?;
+                }
             }
             for image in &mut row.image_variants {
                 image.rate_basis = "effective_user_rate";
@@ -1572,6 +1656,7 @@ mod cache_write_12h_projection_tests {
         let prices = PriceSnapshot::compile(PriceConfig {
             version: 7,
             rules: vec![PriceRule {
+                search: None,
                 id: 1,
                 model: "cache-model".into(),
                 group: "default".into(),

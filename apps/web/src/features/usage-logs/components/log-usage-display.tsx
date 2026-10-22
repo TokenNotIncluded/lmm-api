@@ -2,6 +2,7 @@
 import { useTranslation } from 'react-i18next'
 
 import type { UsageLog } from '../data/schema'
+import { searchUsageQuantities } from '../lib/search-usage'
 import { cacheWrite12hQuantity, logUsageQuantity } from '../lib/usage-quantity'
 import type { LogOtherData } from '../types'
 
@@ -34,6 +35,17 @@ export function LogUsageDisplay({
             log.token_usage_available
           )?.toLocaleString() ?? t('Unknown')}
         </span>
+      )}
+      {searchUsageQuantities(other, log.token_usage_available).map(
+        (quantity) => (
+          <span
+            key={quantity.label}
+            className='text-muted-foreground block text-xs'
+          >
+            {t(quantity.label)}:{' '}
+            {quantity.count?.toLocaleString() ?? t('Unknown')}
+          </span>
+        )
       )}
     </span>
   )

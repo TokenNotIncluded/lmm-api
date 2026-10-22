@@ -126,6 +126,11 @@ export function adaptNativePricing(
             : []
         )
       ),
+      group_search_prices: Object.fromEntries(
+        rows.flatMap((row) =>
+          row.token_price?.search ? [[row.group, row.token_price.search]] : []
+        )
+      ),
       group_prices: tokenRows.length
         ? Object.fromEntries(rows.map((row) => [row.group, groupPrices(row)]))
         : undefined,

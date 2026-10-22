@@ -258,6 +258,7 @@ pub struct Route {
     pub(crate) endpoint: Url,
     pub(crate) credential: HeaderValue,
     pub(crate) cache_creation_mode: Option<CacheCreationMode>,
+    pub(crate) search_contract: Option<super::search::SearchBinding>,
     availability: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
 }
 impl fmt::Debug for Route {
@@ -321,6 +322,7 @@ impl Route {
             credential,
             price_version,
             cache_creation_mode: None,
+            search_contract: None,
             availability: None,
         })
     }
@@ -329,6 +331,23 @@ impl Route {
     pub(crate) fn with_cache_creation_mode(mut self, mode: Option<CacheCreationMode>) -> Self {
         self.cache_creation_mode = mode;
         self
+    }
+
+    /// Server-owned, frozen supplier guarantees. Requests cannot select prices
+    /// or decide which supplier's search receipt is authoritative.
+    pub(crate) fn with_search_contract(
+        mut self,
+        provider: crate::routing::SearchProvider,
+        limits: crate::routing::SearchLimits,
+    ) -> Result<Self, RelayError> {
+        limits
+            .validate()
+            .map_err(|_| RelayError::Invalid("invalid search bounds"))?;
+        if super::search::provider_protocol(provider) != self.protocol {
+            return Err(RelayError::Unsupported("search supplier protocol mismatch"));
+        }
+        self.search_contract = Some(super::search::SearchBinding { provider, limits });
+        Ok(self)
     }
 
     /// Server-owned snapshot guard, checked immediately before sending bytes.
@@ -503,6 +522,8 @@ pub struct Usage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_creation_mode: Option<CacheCreationMode>,
     pub reasoning_output_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search: Option<crate::routing::SearchUsage>,
 }
 impl Usage {
     pub(crate) fn merge(&mut self, next: Self) -> Result<(), RelayError> {
@@ -527,6 +548,7 @@ impl Usage {
             Ok(())
         }
         let mut combined = *self;
+        combined.merge_search(next.search)?;
         let input_advanced = advances(self.input_tokens, next.input_tokens);
         let creation_advanced = advances(
             self.cache_creation_input_tokens,
@@ -647,6 +669,7 @@ impl Usage {
         self.validate()?;
         next.validate()?;
         let mut combined = *self;
+        combined.merge_search(next.search)?;
         combined.cache_creation_mode = self.cache_creation_mode.or(next.cache_creation_mode);
         let input_advanced = advances(self.input_tokens, next.input_tokens);
         let uncached_advanced = advances(self.uncached_input_tokens, next.uncached_input_tokens);
@@ -823,9 +846,29 @@ impl Usage {
         }
     }
 
+    fn merge_search(
+        &mut self,
+        next: Option<crate::routing::SearchUsage>,
+    ) -> Result<(), RelayError> {
+        if let Some(next) = next {
+            if let Some(previous) = &mut self.search {
+                super::search::merge_usage(previous, next)?;
+            } else {
+                if !next.valid() {
+                    return Err(RelayError::Protocol("invalid search usage"));
+                }
+                self.search = Some(next);
+            }
+        }
+        Ok(())
+    }
+
     /// Validate both live observations and receipts restored after a restart.
     /// Deserialization alone does not establish counter consistency.
     pub(crate) fn validate(&self) -> Result<(), RelayError> {
+        if self.search.is_some_and(|usage| !usage.valid()) {
+            return Err(RelayError::Protocol("invalid search usage"));
+        }
         if self.uncached_input_tokens.is_some() && self.cache_creation_mode.is_none() {
             return Err(RelayError::Protocol(
                 "uncached input without cache creation mode",
@@ -947,6 +990,36 @@ impl Usage {
         if let Some(details) = self.cache_creation_details {
             out.insert("cache_creation_details".into(), json!(details));
         }
+        if client == ClientProtocol::Responses
+            && let Some(search) = self.search
+        {
+            match search.provider {
+                crate::routing::SearchProvider::XaiResponsesV1 => {
+                    let mut details = serde_json::Map::new();
+                    for (key, value) in [
+                        ("web_search_calls", search.calls),
+                        ("x_posts_fetched", search.x_posts_fetched),
+                        ("x_users_fetched", search.x_users_fetched),
+                    ] {
+                        if let Some(value) = value {
+                            details.insert(key.into(), json!(value));
+                        }
+                    }
+                    if !details.is_empty() {
+                        out.insert(
+                            "server_side_tool_usage_details".into(),
+                            Value::Object(details),
+                        );
+                    }
+                }
+                crate::routing::SearchProvider::DashscopeResponsesV1 => {
+                    if let Some(calls) = search.calls {
+                        out.insert("x_tools".into(), json!({"web_search":{"count":calls}}));
+                    }
+                }
+                _ => {}
+            }
+        }
         Value::Object(out)
     }
 }
@@ -977,6 +1050,12 @@ pub(crate) enum BlockKind {
     Thinking,
     Tool { id: String, name: String },
 }
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum OutputSlot {
+    Block(usize),
+    Hosted(usize),
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum Event {
     Start(String),
@@ -995,6 +1074,17 @@ pub(crate) enum Event {
     },
     EndBlock(usize),
     Usage(Usage),
+    /// Native hosted-tool output or grounding metadata. It is never a client
+    /// function call, and is not itself a billing authority.
+    SearchOutput {
+        protocol: UpstreamProtocol,
+        value: Value,
+    },
+    Citations {
+        index: usize,
+        protocol: UpstreamProtocol,
+        values: Vec<Value>,
+    },
     StopSequence(String),
     Finish(FinishReason),
     Done,
@@ -1474,6 +1564,7 @@ mod a07_usage_tests {
     #[test]
     fn zero_boundary_repeated_receipt_and_missing_fields_are_valid() {
         let zero = Usage {
+            search: None,
             upstream_cost_atto_usd: None,
             uncached_input_tokens: None,
             input_tokens: Some(0),

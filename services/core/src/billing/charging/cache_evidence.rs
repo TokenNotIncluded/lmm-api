@@ -16,13 +16,15 @@ pub(super) fn restore(base: Usage, evidence: Option<Value>) -> Result<Usage> {
         return Ok(base);
     };
     let events = evidence.as_array().ok_or(Error::Storage)?;
-    // Old events predate typed cache writes. Their replay and decoding behavior
+    // Old events predate typed cache writes/search. Their replay and decoding behavior
     // stays unchanged, including the distinction between absent and zero.
     if !events.iter().any(|event| {
         event
             .get("usage")
             .and_then(Value::as_object)
-            .is_some_and(|usage| usage.contains_key("cache_creation"))
+            .is_some_and(|usage| {
+                usage.contains_key("cache_creation") || usage.contains_key("search")
+            })
     }) {
         return Ok(base);
     }
@@ -49,6 +51,16 @@ pub(super) fn restore(base: Usage, evidence: Option<Value>) -> Result<Usage> {
                     value.five_minute,
                     value.one_hour,
                     value.twelve_hour,
+                )
+            }),
+            usage.search.map(|search| {
+                (
+                    search.provider,
+                    search.calls,
+                    search.queries,
+                    search.grounded_requests,
+                    search.x_posts_fetched,
+                    search.x_users_fetched,
                 )
             }),
             usage
@@ -99,6 +111,7 @@ mod tests {
     }
     fn base(mut usage: Usage) -> Usage {
         usage.cache_creation = None;
+        usage.search = None;
         usage
     }
     fn event(event_id: &str, usage: Usage) -> Value {
@@ -330,6 +343,88 @@ mod tests {
         );
         let mut missing = latest;
         missing.cache_creation.as_mut().unwrap().twelve_hour = None;
+        assert_eq!(
+            restore(
+                base(missing),
+                Some(json!([
+                    event("usage:first", first),
+                    event("final", missing)
+                ]))
+            ),
+            Err(Error::Storage)
+        );
+    }
+
+    #[test]
+    fn search_replay_restores_actual_cumulative_dimensions_without_fabricating_a_maximum() {
+        use crate::routing::{SearchProvider, SearchUsage};
+        let first = Usage {
+            input: 10,
+            search: Some(SearchUsage {
+                provider: SearchProvider::XaiResponsesV1,
+                calls: Some(1),
+                queries: None,
+                grounded_requests: None,
+                x_posts_fetched: Some(2),
+                x_users_fetched: Some(1),
+            }),
+            ..Usage::default()
+        };
+        let latest = Usage {
+            input: 20,
+            search: Some(SearchUsage {
+                calls: Some(2),
+                x_posts_fetched: Some(4),
+                ..first.search.unwrap()
+            }),
+            ..first
+        };
+        assert_eq!(
+            restore(
+                base(latest),
+                Some(json!([
+                    event("final", latest),
+                    event("usage:first", first),
+                    event("usage:repeated", first)
+                ]))
+            ),
+            Ok(latest)
+        );
+        for search in [
+            SearchUsage {
+                x_posts_fetched: Some(1),
+                ..latest.search.unwrap()
+            },
+            SearchUsage {
+                x_users_fetched: None,
+                ..latest.search.unwrap()
+            },
+            SearchUsage {
+                provider: SearchProvider::OpenAiResponsesV1,
+                x_posts_fetched: None,
+                x_users_fetched: None,
+                ..latest.search.unwrap()
+            },
+        ] {
+            let invalid = Usage {
+                search: Some(search),
+                ..latest
+            };
+            assert_eq!(
+                restore(
+                    base(invalid),
+                    Some(json!([
+                        event("usage:first", first),
+                        event("final", invalid)
+                    ]))
+                ),
+                Err(Error::Storage)
+            );
+        }
+        let missing = Usage {
+            search: None,
+            ..latest
+        };
         assert_eq!(
             restore(
                 base(missing),

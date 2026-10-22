@@ -219,6 +219,7 @@ async fn funded_fixture(pool: &PgPool, role: &runtime::RuntimeRole) {
         lease_seconds: 60,
         maximum_seconds: 120,
         price: Price {
+            search: None,
             user_trust: None,
             image: None,
             upstream_cost_group_ppm: None,
