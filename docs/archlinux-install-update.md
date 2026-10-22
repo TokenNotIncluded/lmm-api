@@ -25,8 +25,9 @@
 `/srv/lmm-web/releases/0.1.0-rc.5-dc250c30-ac336901/dist`，尚未切换 `current`。
 其归档 `lmm-web-0.1.0-rc.5-any.tar.gz` 的 SHA-256 为
 `ac336901e18f2f120c278ef3fc0739790dcefe69687a11e0c7235e2022a078e1`。
-Core 的 25 组件候选仍在真实数据库独立复验中，尚无可替换上表的正式发布包；
-不要给 RC4 二进制标注新源码或使用尚未发布的 AUR 版本。
+上述 RC4/RC5 是各自冻结来源的历史候选。当前 Core 源码已为 26 组件、identity v5，
+不能沿用 25 组件候选的验收或把 RC4 二进制标为当前源码；新组合仍须独立复验及打包。
+这些记录不证明已有站点迁移完成，也不授权使用尚未发布的 AUR 版本。
 
 对应分发归档的 SHA-256：
 
@@ -477,7 +478,8 @@ Nginx root 不要再追加 `/dist`。
 | 数据库情况 | 执行方式 |
 | --- | --- |
 | 与新程序的完整 schema 契约相同 | 按下面的普通包更新执行 |
-| 符合已核验的 24 组件前置契约，更新到 25 组件候选 | 按下一节的显式 `upgrade-db` 流程离线执行 |
+| 符合已核验的 25 组件前置契约，更新到当前 26 组件候选 | 按下一节的显式 `upgrade-db` 流程离线执行 |
+| 固定的 24 → 25 历史升级 | 仅使用保留且已核验的 25 组件 installer；当前二进制不能代替它 |
 | 旧单体、其他版本或结构有漂移 | 使用该来源对应的迁移安排；不能用 `init-db` 或自动补表代替 |
 
 ```sh
@@ -492,17 +494,20 @@ sudo systemctl restart lmm-core.service
 更新后重新核对 MainPID、`/proc/<PID>/exe` 摘要、readiness 和受影响接口。
 这里不运行 `init-db`、`create-first-owner`、`bootstrap-user` 或 `complete-setup`，也不重建数据库。
 
-### Core 24 → 25：显式离线 schema 升级
+### Core 25 → 26：显式离线 schema 升级
 
-这段说明对应当前源码中的 `upgrade-db`，不是上表 RC4 候选的能力。
-只在匹配版本完成验收并交付后使用。全新空库直接用新版本 `init-db` 安装 25 个组件，
-不先装 24 个再升级；已有库只按匹配的前置契约升级。
+这段说明对应当前源码中的 `upgrade-db`，不是上表 RC4 候选的能力，也不是旧单体迁移入口。
+只在匹配版本完成验收并交付后使用。全新空库直接用新版本 `init-db` 安装 26 个组件，
+已有库只按匹配的前置契约升级。历史 24 → 25 的 `core-24-to-25-trust-pricing-v1`
+合同保留在[独立升级实现](../services/core/src/core_schema/upgrade.rs)，须使用保留的
+25 组件 installer；不能向当前程序传旧请求来跨过前置版本。
 
-当前过程只接受 PostgreSQL 18 和固定的 24 组件前置契约。
-它增加 `trust-pricing` 组件及升级回执；该组件同时包含账户价格事实和图片价格约束扩展。
-原 24 份组件 SQL 保持不变，图片约束与原子计费函数的精确变更写进回执，
-其余旧对象定义、权限、业务行和序列状态必须保持一致。
-这一步不代替旧余额、管理员激活或账户折扣来源事实的导入。
+当前过程只接受 PostgreSQL 18 和[固定的 25 组件前置契约](../services/core/src/core_schema/predecessor25.json)，
+使用 `core-additive-components-v1` 增加 `telegram-auth` 组件及升级回执；
+旧对象定义、权限、业务行和序列状态必须保持一致。
+[请求类型](../services/core/src/core_schema/upgrade.rs)和[25 → 26 校验实现](../services/core/src/core_schema/upgrade/additive.rs)
+只接受编译时固定的增量，不接受任意 SQL、权限或来源声明。
+这一步不代替旧余额、管理员激活、账户折扣或 Telegram 身份绑定来源事实的导入。
 
 先准备匹配二进制、备份和恢复材料、完整请求与配置，再进入维护窗口：
 
@@ -516,9 +521,9 @@ sudo systemctl restart lmm-core.service
    `schema-manifest` 原始输出与摘要。该命令不接受 `--config`，也不连接数据库：
 
    ```sh
-   /absolute/verified-old/lmm-core schema-manifest > /absolute/private/core-24-manifest.json
-   /absolute/verified-new/lmm-core schema-manifest > /absolute/private/core-25-manifest.json
-   sha256sum /absolute/private/core-24-manifest.json /absolute/private/core-25-manifest.json
+   /absolute/verified-old/lmm-core schema-manifest > /absolute/private/core-25-manifest.json
+   /absolute/verified-new/lmm-core schema-manifest > /absolute/private/core-26-manifest.json
+   sha256sum /absolute/private/core-25-manifest.json /absolute/private/core-26-manifest.json
    ```
 
 4. 用私密编辑器保存 `/root/lmm-install/core-upgrade.json`，权限设为 `0600`。
@@ -529,7 +534,7 @@ sudo systemctl restart lmm-core.service
    ```json
    {
      "version": 1,
-     "procedure": "core-24-to-25-trust-pricing-v1",
+     "procedure": "core-additive-components-v1",
      "upgrade_id": "<UNIQUE_STABLE_UPGRADE_ID>",
      "database": {
        "name": "<OBSERVED_DATABASE_NAME>",
@@ -543,8 +548,8 @@ sudo systemctl restart lmm-core.service
        "runtime": "<CORE_RUNTIME_ROLE>",
        "extensions": "<EXTENSIONS_RUNTIME_ROLE>"
      },
-     "predecessor_manifest_sha256": "9d7b93584b646b0d7f26a0a67e8570a213a22f06c9001838c29b21beb06722df",
-     "predecessor_catalog_sha256": "e7de5a37f768dc20582b317673cf685f17ad315e1b3e2349977bb17023b82cfe",
+     "predecessor_manifest_sha256": "a9c69e01a631fd9e1b005b892ca855fb19a12041c279d04f19b2e9189d4ea301",
+     "predecessor_catalog_sha256": "0d3ceaaf5a3a25d2c372d3ede66890f69073dcb327100e293070ff47bce534ec",
      "successor_manifest_sha256": "<VERIFIED_NEW_MANIFEST_SHA256>"
    }
    ```
@@ -558,7 +563,7 @@ sudo systemctl restart lmm-core.service
    sudo sh -c 'umask 077; set -C; /usr/bin/lmm-core --config /root/lmm-install/core-owner.toml upgrade-db < /root/lmm-install/core-upgrade.json > /root/lmm-install/core-upgrade-receipt.json'
    ```
 
-   成功回执为 `protocol = core.upgrade-db.v1`、`status = committed`、`components = 25`。
+   成功回执为 `protocol = core.upgrade-db.v1`、`status = committed`、`components = 26`。
    若结果为 `unknown`，保留原请求、ID 和原 backend PID，先检查原连接与回执。
    之后显式重用完全相同的请求：已提交会返回 `already_committed`；
    完整旧契约仍在且没有回执时，该调用可能执行升级，并非只读查询。
