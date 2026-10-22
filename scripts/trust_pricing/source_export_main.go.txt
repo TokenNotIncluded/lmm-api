@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"github.com/LIghtJUNction/api.lmm.best/common"
@@ -13,6 +14,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -32,7 +34,7 @@ func main() {
 		fail("READONLY_TX_BEGIN_FAILED")
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, "SET LOCAL row_security=off"); err != nil {
+	if _, err = tx.ExecContext(ctx, "SET LOCAL row_security=off; SET LOCAL timezone='UTC'"); err != nil {
 		fail("READONLY_TX_SETUP_FAILED")
 	}
 	var ro, iso string
@@ -53,26 +55,46 @@ func main() {
 	for _, v := range opts {
 		values[v.Key] = v.Value
 	}
-	if _, err = model.ParseTrustLevelConfiguration(values["TrustLevelBenefits"]); err != nil {
+	if _, err = model.ParseTrustLevelConfiguration(values["TrustLevelBenefits"]); err != nil || values["TrustLevelBenefits"] == "" {
 		fail("POLICY_INVALID")
 	}
 	common.OptionMap = map[string]string{"TrustLevelBenefits": values["TrustLevelBenefits"]}
 	anchor, e1 := decimal.NewFromString(values["CreditsPerUSD"])
 	legacy, e2 := decimal.NewFromString(values["LegacyPricingQuotaPerUnit"])
-	if e1 != nil || e2 != nil || common.SetCreditCurrencyBasis(anchor, legacy) != nil {
+	if e1 != nil || e2 != nil || !anchor.Equal(decimal.NewFromInt(500000)) || common.SetCreditCurrencyBasis(anchor, legacy) != nil {
 		fail("CREDIT_BASIS_INVALID")
 	}
+	cutoff, cutoffErr := strconv.ParseInt(os.Getenv("TRUST_SOURCE_CUTOFF"), 10, 64)
+	if cutoffErr != nil || cutoff <= 0 || cutoff >= 253402300800 {
+		fail("INVALID_CUTOFF")
+	}
+	var identity json.RawMessage
+	identitySQL, e := base64.StdEncoding.DecodeString(os.Getenv("TRUST_IDENTITY_SQL_B64"))
+	if e != nil || len(identitySQL) == 0 {
+		fail("IDENTITY_SQL_MISSING")
+	}
+	var identityText string
+	if tx.QueryRowContext(ctx, string(identitySQL)).Scan(&identityText) != nil {
+		fail("IDENTITY_READ_FAILED")
+	}
+	identity = json.RawMessage(identityText)
+	var snapshot string
+	if tx.QueryRowContext(ctx, "SELECT txid_current_snapshot()::text").Scan(&snapshot) != nil {
+		fail("SNAPSHOT_READ_FAILED")
+	}
 	var users []model.UserBase
-	if db.Table("users").Select("id,role,status,created_at,last_api_activity_at,trust_level_override,console_activated_at").Scan(&users).Error != nil || len(users) != 1214 {
+	if db.Table("users").Order("id").Select("id,role,status,created_at,last_api_activity_at,trust_level_override,console_activated_at").Scan(&users).Error != nil || len(users) == 0 {
 		fail("USER_SNAPSHOT_MISMATCH")
 	}
-	result, err := model.ExportTrustPricingBasis(users)
+	result, err := model.ExportTrustPricingBasis(users, cutoff)
 	if err != nil {
 		fail("NET_PROJECTOR_FAILED")
 	}
 	result["transaction_read_only"] = ro
 	result["transaction_isolation"] = iso
 	result["pool_max_open"] = 1
+	result["capture_instance_identity"] = identity
+	result["capture_snapshot"] = snapshot
 	if err = tx.Rollback(); err != nil {
 		fail("READONLY_TX_END_FAILED")
 	}

@@ -2,38 +2,90 @@ package model
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"github.com/LIghtJUNction/api.lmm.best/common"
 	"github.com/shopspring/decimal"
 	"math"
 )
 
-// Read-only adapter over the ORIGINAL NET projector. No price/wallet mutation.
-func ExportTrustPricingBasis(users []UserBase) (map[string]any, error) {
+// Export reads the ORIGINAL SQL/projector/evaluator through the caller's one
+// read-only transaction. No cache, startup, wallet mutation or new quote oracle.
+func ExportTrustPricingBasis(users []UserBase, cutoff int64) (map[string]any, error) {
 	ids := make([]int, 0, len(users))
 	for _, u := range users {
+		if u.Id <= 0 || u.CreatedAt > cutoff || u.LastAPIActivityAt > cutoff || u.ConsoleActivatedAt > cutoff {
+			return nil, fmt.Errorf("user outside cutoff")
+		}
 		ids = append(ids, u.Id)
 	}
-	aggregates, err := getFreshPaidTopUpAggregatesContext(context.Background(), ids)
+	rawTables := map[string][]json.RawMessage{}
+	for _, table := range []string{"users", "top_ups", "wallet_credit_rebases", "wallet_topup_credit_rebases"} {
+		exists, err := walletCreditAuditTableExists(DB, table)
+		if err != nil {
+			return nil, err
+		}
+		rawTables[table] = []json.RawMessage{}
+		if !exists {
+			if table == "users" || table == "top_ups" {
+				return nil, fmt.Errorf("required source table missing")
+			}
+			continue
+		}
+		order := "id"
+		if table == "wallet_credit_rebases" {
+			order = "migration_id"
+		}
+		if table == "wallet_topup_credit_rebases" {
+			order = "top_up_id"
+		}
+		source := table
+		if table == "users" {
+			source = "(SELECT id,role,status,created_at,last_api_activity_at,trust_level_override,console_activated_at FROM users)"
+		}
+		rows, err := DB.Raw("SELECT to_jsonb(t)::text FROM " + source + " AS t ORDER BY " + order).Rows()
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var s string
+			if err = rows.Scan(&s); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			rawTables[table] = append(rawTables[table], json.RawMessage(s))
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
+	}
+	p, err := loadAdminTopupProjector(DB)
 	if err != nil {
 		return nil, err
 	}
-	net, args, err := trustPaidCreditSQL(DB)
-	if err != nil {
-		return nil, err
-	}
+	aggregates, aggregateErr := getFreshPaidTopUpAggregatesDB(DB, context.Background(), ids)
+	net, args, netErr := trustPaidCreditSQL(DB)
 	gross, grossArgs, _, err := legacyPaidPolicyCreditedQuotaSQL()
 	if err != nil {
 		return nil, err
 	}
 	grossArgs[len(grossArgs)-1] = int64(500000)
+	if netErr != nil {
+		net = "CAST(NULL AS BIGINT)"
+		args = nil
+	}
 	type order struct {
 		SourceOrderID int
 		UserID        int
 		NetCredits    decimal.NullDecimal
+		GrossCredits  decimal.NullDecimal
 		PaidAt        int64
 	}
 	var rows []order
-	query := DB.Model(&TopUp{}).Select("id AS source_order_id,user_id,("+net+") AS net_credits,CASE WHEN complete_time>0 THEN complete_time ELSE create_time END AS paid_at", args...).Where("user_id IN ?", ids).Where("("+gross+")>0", grossArgs...).Order("id")
+	selectArgs := append(append([]interface{}{}, args...), grossArgs...)
+	query := DB.Model(&TopUp{}).Select("id AS source_order_id,user_id,("+net+") AS net_credits,("+gross+") AS gross_credits,CASE WHEN complete_time>0 THEN complete_time ELSE create_time END AS paid_at", selectArgs...).Where("("+gross+")>0", grossArgs...).Order("id")
 	if err = successfulExternalPaidTopUpQuery(query).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
@@ -41,11 +93,23 @@ func ExportTrustPricingBasis(users []UserBase) (map[string]any, error) {
 	sums := map[int]int64{}
 	counts := map[int]int64{}
 	last := map[int]int64{}
+	knownIDs := map[int]bool{}
+	for _, id := range ids {
+		knownIDs[id] = true
+	}
+	capturedOrders := []map[string]any{}
+	unknown := []int{}
 	for _, r := range rows {
+		if !knownIDs[r.UserID] {
+			return nil, fmt.Errorf("eligible order owner missing")
+		}
+		if r.PaidAt <= 0 || r.PaidAt > cutoff {
+			return nil, fmt.Errorf("order outside cutoff")
+		}
+		record := map[string]any{"source_order_id": r.SourceOrderID, "source_user_id": r.UserID, "paid_at": r.PaidAt, "projection_known": false, "rebase_cutoff": p.cutoff}
 		if !r.NetCredits.Valid || r.NetCredits.Decimal.IsNegative() || !r.NetCredits.Decimal.Equal(r.NetCredits.Decimal.Truncate(0)) || r.NetCredits.Decimal.GreaterThan(decimal.NewFromInt(math.MaxInt64)) {
-			if !aggregates[r.UserID].ProjectionUnavailable {
-				return nil, fmt.Errorf("inconsistent NET projection")
-			}
+			unknown = append(unknown, r.SourceOrderID)
+			capturedOrders = append(capturedOrders, record)
 			continue
 		}
 		n := r.NetCredits.Decimal.IntPart()
@@ -60,18 +124,69 @@ func ExportTrustPricingBasis(users []UserBase) (map[string]any, error) {
 				last[r.UserID] = r.PaidAt
 			}
 		}
+		mode := "unrebased"
+		credited := r.GrossCredits.Decimal.IntPart()
+		var current TopUp
+		if err = DB.Where("id = ?", r.SourceOrderID).First(&current).Error; err != nil {
+			return nil, err
+		}
+		refunded := current.RefundedQuota
+		if n == 0 && current.RefundedQuota == credited {
+			mode = "fully_refunded"
+		} else if p.cutoff > 0 {
+			if base, ok := p.refundFacts[r.SourceOrderID]; ok {
+				mode = "audited_rebase"
+				credited = base.RefundableQuota
+				refunded = base.RebasedDebitedQuota
+			} else if _, ok := p.orders[r.SourceOrderID]; ok {
+				mode = "audited_pending"
+				credited = current.CreditedQuota
+			} else {
+				mode = "post_cutoff_native"
+				credited = current.CreditedQuota
+			}
+		}
+		if credited <= 0 || refunded < 0 || credited-refunded != n {
+			return nil, fmt.Errorf("original NET dimensions mismatch")
+		}
+		record["projection_known"] = true
+		record["projection_mode"] = mode
+		record["credited_credits"] = credited
+		record["refunded_credits"] = refunded
+		record["net_credits"] = n
+		capturedOrders = append(capturedOrders, record)
 	}
 	result := []map[string]any{}
+	quotes := []map[string]any{}
+	policy := CurrentDeveloperAccessPolicy()
 	for _, u := range users {
 		a := aggregates[u.Id]
-		if !a.ProjectionUnavailable && (a.PaidCredits != sums[u.Id] || a.PaidRows != counts[u.Id] || a.LastPaidCompleteAt != last[u.Id]) {
+		available := aggregateErr == nil && !a.ProjectionUnavailable
+		if available && (a.PaidCredits != sums[u.Id] || a.PaidRows != counts[u.Id] || a.LastPaidCompleteAt != last[u.Id]) {
 			return nil, fmt.Errorf("NET aggregate mismatch")
 		}
 		list := orders[u.Id]
 		if list == nil {
 			list = []map[string]any{}
 		}
-		result = append(result, map[string]any{"source_user_id": u.Id, "original_created_at": u.CreatedAt, "console_activated_at": u.ConsoleActivatedAt, "last_api_activity_at": u.LastAPIActivityAt, "override_level": u.TrustLevelOverride, "projection_known": !a.ProjectionUnavailable, "orders": list})
+		result = append(result, map[string]any{"source_user_id": u.Id, "source_role": u.Role, "source_status": u.Status, "original_created_at": u.CreatedAt, "console_activated_at": u.ConsoleActivatedAt, "last_api_activity_at": u.LastAPIActivityAt, "override_level": u.TrustLevelOverride, "projection_known": available, "orders": list})
+		q := map[string]any{"source_user_id": u.Id, "source_role": u.Role, "status": "unavailable"}
+		var info TrustLevelInfo
+		if u.Role >= common.RoleAdminUser || u.TrustLevelOverride != nil {
+			info = evaluateTrustLevelCredits(u.Role, u.TrustLevelOverride, 0, 0, false, u.CreatedAt, cutoff, policy.trustConfiguration)
+		} else if available {
+			info = a.withUSDDisplay(evaluateTrustLevelCredits(u.Role, nil, a.PaidCredits, a.PaidAmount, a.paidActivationComplete(policy) || u.ConsoleActivatedAt > 0, trustActivityAnchor(u.CreatedAt, u.LastAPIActivityAt, a.LastPaidCompleteAt), cutoff, policy.trustConfiguration))
+		}
+		if u.Role >= common.RoleAdminUser || u.TrustLevelOverride != nil || available {
+			q["status"] = "available"
+			q["raw_trust_level_info"] = info
+			q["returned_discount_ratio"] = decimal.NewFromFloat(info.DiscountRatio).String()
+		}
+		quotes = append(quotes, q)
 	}
-	return map[string]any{"version": 1, "legacy_policy": GetTrustLevelConfiguration(), "users": result}, nil
+	diagnostic := ""
+	if aggregateErr != nil {
+		diagnostic = aggregateErr.Error()
+	}
+	return map[string]any{"version": 1, "source_cutoff": cutoff, "legacy_policy": GetTrustLevelConfiguration(), "users": result, "captured_quotes": quotes, "captured_orders": capturedOrders, "raw_tables": rawTables, "unknown_order_ids": unknown, "projector_invalid": p.invalid, "projector_error": diagnostic}, nil
 }
