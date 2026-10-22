@@ -1562,6 +1562,7 @@ mod a07_billing_tests {
             complete_usage(
                 Observed {
                     cache_creation_details: None,
+                    openai_cache_write_details: None,
                     upstream_cost_atto_usd: None,
                     input_tokens: Some(10),
                     output_tokens: Some(20),
@@ -1588,6 +1589,7 @@ mod a07_billing_tests {
     fn complete_usage_rejects_cache_creation_for_token_pricing_even_with_reported_cost() {
         let observed = Observed {
             cache_creation_details: None,
+            openai_cache_write_details: None,
             upstream_cost_atto_usd: Some(123_456_789_000_000_000),
             input_tokens: Some(10),
             output_tokens: Some(20),
@@ -1607,6 +1609,7 @@ mod a07_billing_tests {
     fn complete_usage_strips_reported_cost_for_token_pricing() {
         let observed = Observed {
             cache_creation_details: None,
+            openai_cache_write_details: None,
             upstream_cost_atto_usd: Some(123_456_789_000_000_000),
             input_tokens: Some(10),
             output_tokens: Some(20),
@@ -1635,6 +1638,7 @@ mod a07_billing_tests {
             complete_usage(
                 Observed {
                     cache_creation_details: None,
+                    openai_cache_write_details: None,
                     upstream_cost_atto_usd: Some(123_456_789_000_000_000),
                     input_tokens: Some(10),
                     output_tokens: Some(20),
