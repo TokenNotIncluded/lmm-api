@@ -1708,14 +1708,14 @@ SELECT jsonb_build_object(
         query(sql, "successful-import", readonly=False)
         imported = state("state-after-import")
         self.assertTrue(imported["seed"] == before["seed"], "successful_import_changed_seed")
-        permitted_tables = {"core_identity." + name for name in MODULE.TABLES} | {"core_billing.account_policies", "core_migration.import_runs"}
+        permitted_tables = {"core_identity." + name for name in MODULE.TABLES} | {"core_billing.account_policies", "core_migration.import_runs", "core_identity.privileged_import_facts"}
         self.assertTrue({key: value for key, value in imported["all_tables"].items() if key not in permitted_tables}
                         == {key: value for key, value in before["all_tables"].items() if key not in permitted_tables}, "successful_import_changed_other_business_tables")
         permitted_sequences = {names["accounts_sequence"], names["users_sequence"]}
         self.assertTrue({key: value for key, value in imported["all_sequences"].items() if key not in permitted_sequences}
                         == {key: value for key, value in before["all_sequences"].items() if key not in permitted_sequences}, "successful_import_changed_other_sequences")
         self.assertTrue(len(imported["registry"]) == 1, "successful_import_receipt_count_wrong")
-        expected_counts = {"accounts": 3, "users": 3, "user_profiles": 3, "password_logins": 3, "developer_access": 3}
+        expected_counts = {"accounts": 3, "users": 3, "user_profiles": 3, "password_logins": 3, "developer_access": 3, "privileged_import_facts": 1}
         self.assertTrue(all(table["count"] == expected_counts.get(name, 0) for name, table in imported["identity"].items()), "successful_import_identity_counts_wrong")
         self.assertTrue(len(imported["policies"]) == 3, "successful_import_policy_count_wrong")
         users_by_id = {row["id"]: row for row in imported["identity"]["users"]["rows"]}
@@ -1743,6 +1743,43 @@ SELECT jsonb_build_object(
                 "granted": expected["developer_access_granted"], "source_reference": expected["developer_access_source_reference"],
                 "revision": expected["developer_access_revision"],
             }.items()), "successful_import_developer_exact_readback_failed")
+        # Read privileged provenance independently, rather than relying only on
+        # the importer's internal assertions or the broad write-scope allowlist.
+        privileged = imported["identity"]["privileged_import_facts"]["rows"]
+        self.assertEqual(len(privileged), 1)
+        expected = next(row for row in plan["records"] if row["user_id"] == 300)
+        digest_match = re.search(r"encode\(f\.a2_sql_sha256,'hex'\)='([0-9a-f]{64})'", sql)
+        delimiter_match = re.search(r"DO (\$lmm_import_[a-z0-9]+\$)", sql)
+        self.assertIsNotNone(digest_match)
+        self.assertIsNotNone(delimiter_match)
+        body_digest = digest_match.group(1)
+        delimiter = delimiter_match.group(1)
+        unsealed = sql.replace("DO " + delimiter, "DO $lmm_identity_import$", 1).replace(
+            "END " + delimiter + ";", "END $lmm_identity_import$;", 1)
+        self.assertEqual(unsealed.count(body_digest), 2)
+        self.assertEqual(hashlib.sha256(unsealed.replace(body_digest, "0" * 64).encode()).hexdigest(), body_digest)
+        bytea = lambda value: "\\x" + value
+        system_id = query("SELECT encode(int8send(system_identifier)||decode(repeat('00',24),'hex'),'hex') FROM pg_control_system();",
+                          "privileged-expected-system-id").strip()
+        expected_facts = {
+            "user_id": 300, "archive_sha256": bytea(SOURCE_SHA256),
+            "a2_semantic_sha256": bytea(plan["mapping_sha256"]),
+            "a2_file_sha256": bytea(hashlib.sha256((MODULE.canonical(plan) + "\n").encode()).hexdigest()),
+            "a2_sql_sha256": bytea(body_digest), "migration_id": migration_id,
+            "system_id": bytea(system_id), "database_oid": int(identity["database_oid"]),
+            "instance_nonce": bytea(identity["server_instance_nonce"]),
+            "import_run": bytea(hashlib.sha256(migration_id.encode()).hexdigest()),
+            "source_enabled": expected["source_enabled"], "source_deleted": expected["source_deleted"],
+            "password_verifier_recognized": expected["password_hash"] is not None,
+            "password_login_enabled": expected["source_password_login_enabled"],
+            "password_hash_sha256": bytea(hashlib.sha256(expected["password_hash"].encode()).hexdigest()),
+            "login_name_sha256": bytea(hashlib.sha256(b"legacy-300").hexdigest()),
+            "source_role": expected["platform_role"],
+            "source_second_factor_required": expected["second_factor_required"],
+            "source_auth_version": expected["auth_version"],
+        }
+        self.assertEqual({key: privileged[0][key] for key in expected_facts}, expected_facts,
+                         "successful_import_privileged_provenance_exact_readback_failed")
         actual_receipt = imported["registry"][0]
         self.assertTrue(actual_receipt["migration_id"] == migration_id and actual_receipt["source_archive_sha256"] == SOURCE_SHA256 and actual_receipt["mapping_sha256"] == plan["mapping_sha256"], "successful_import_receipt_exact_readback_failed")
         self.assertTrue(imported["sequences"]["accounts"]["last_value"] == 4 and imported["sequences"]["users"]["last_value"] == 301, "successful_import_sequence_restart_wrong")
