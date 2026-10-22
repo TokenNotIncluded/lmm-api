@@ -13,8 +13,6 @@ from urllib.parse import urlsplit
 
 PAGES = {
     '/': ('AI model access and collaboration', 'Connect AI models, tools and applications with LMM Forge. Explore model access, developer guides and open-source collaboration.'),
-    '/about': ('About LMM Forge', 'Learn about LMM Forge and its open-source model access and collaboration tools.'),
-    '/pricing': ('Model pricing', 'Explore model pricing on LMM Forge. Check the current catalog and usage rates before choosing a model.'),
     '/guide': ('Developer guide', 'Get started with LMM Forge model access, client configuration and developer tools.'),
     '/security': ('Security', 'Read about LMM Forge account security and responsible use of credentials and model access.'),
     '/privacy-policy': ('Privacy policy', 'Read the LMM Forge privacy policy and learn how account and service information is handled.'),
