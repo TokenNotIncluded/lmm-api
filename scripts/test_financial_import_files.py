@@ -200,7 +200,8 @@ class PrepareFilesTests(PrivateFileFixture, unittest.TestCase):
             "migration_id": "synthetic-financial", "source_archive_sha256": plan["source_archive_sha256"],
             "connection": {"database": "a03_test", "role": "a03_owner", "login_role": "a03_operator", "set_role": "a03_owner", "port": 5432},
             "instance_identity": self.snapshot["instance"],
-            "contract": {**F.IDENTITY.current_contract(), "catalog_fingerprint_sha256": self.snapshot["catalog_fingerprint_sha256"]}}
+            "contract": {**F.IDENTITY.current_contract(), "catalog_fingerprint_sha256": self.snapshot["catalog_fingerprint_sha256"],
+                         "trust_policy_seed": self.snapshot["trust_policy_seed"]}}
         target_path = F.write_private(self.input, "target.private.json", F.canonical(target))
         self.args = SimpleNamespace(plan=Path(self.files["financial_plan"]["path"]),
             source_receipt=Path(self.files["source_receipt"]["path"]), export_proof=Path(self.files["source_export_proof"]["path"]),

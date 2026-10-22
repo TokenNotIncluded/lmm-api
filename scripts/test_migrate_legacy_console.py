@@ -27,6 +27,8 @@ SPEC = importlib.util.spec_from_file_location("lmm_console_import_tests", SCRIPT
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 H = MODULE.IDENTITY
+from test_financial_import import trust_seed_fixture
+from test_financial_import_pg import verify_compiled_fixture, reviewed_fixture_ddl, synthetic_upgrade_receipt_sql
 SOURCE = "a" * 64
 
 
@@ -61,7 +63,9 @@ def identity_material(contract=None):
                          "initialized_core_seed_contract": H.CORE_SEED_CONTRACT,
                          "source_export_sha256": "e" * 64, "source_baseline_proof_sha256": "f" * 64,
                          "source_target_id_map_sha256": hashlib.sha256(id_map).hexdigest(),
-                         "mapping_sha256": mapping["mapping_sha256"], "summary": mapping["summary"]}
+                         "mapping_sha256": mapping["mapping_sha256"], "summary": mapping["summary"],
+                         "import_tool_sha256": H.sha256_file(Path(H.__file__)),
+                         "import_contract_sha256": hashlib.sha256(H.canonical(H.current_contract()).encode()).hexdigest()}
     manifest_bytes = (H.canonical(identity_manifest) + "\n").encode()
     mapping_bytes = (H.canonical(mapping) + "\n").encode()
     proof = MODULE.bind_identity_proof(manifest_bytes, mapping_bytes, id_map, source_sha256=SOURCE, contract=contract)
@@ -71,13 +75,15 @@ def identity_material(contract=None):
 def manifest(plan, proof):
     return {"format_version": 1, "scope": "console-only", "source_archive_sha256": SOURCE,
             "mapping_sha256": plan["mapping_sha256"], "summary": plan["summary"],
-            "identity_import": MODULE.identity_reference(proof, "identity-synthetic")}
+            "identity_import": MODULE.identity_reference(proof, "identity-synthetic"),
+                        "trust_policy_seed": trust_seed_fixture(), "initialized_core_seed_sha256": "f" * 64}
 
 
 def synthetic_identity():
     return {"database": "console_synthetic", "role": "console_owner", "database_oid": 1234,
             "postmaster_started_at": "2026-10-12 00:00:00+00", "server_version_num": "180006",
-            "server_instance_nonce": "synthetic-nonce", "port": 5432}
+            "server_instance_nonce": "synthetic-nonce", "port": 5432,
+            "session_user": "console_installer", "effective_role_can_login": False, "listen_addresses": ""}
 
 
 def build(plan=None, contract=None, target=None, identity=None, run="console-synthetic", proof=None, connection=None):
@@ -85,9 +91,13 @@ def build(plan=None, contract=None, target=None, identity=None, run="console-syn
     contract = contract or MODULE.current_contract()
     proof = proof or identity_material(contract)[3]
     target = target or {**contract, "catalog_fingerprint_sha256": "c" * 64,
-                        "identity_import": MODULE.identity_reference(proof, "identity-synthetic")}
+                        "identity_import": MODULE.identity_reference(proof, "identity-synthetic"),
+                        "trust_policy_seed": trust_seed_fixture(), "initialized_core_seed_sha256": "f" * 64}
+    connection = connection or {"role": (identity or synthetic_identity())["role"],
+        "login_role": (identity or synthetic_identity())["session_user"], "set_role": (identity or synthetic_identity())["role"]}
+    bound_manifest = {**manifest(plan, proof), **MODULE.manifest_binding(contract, target, identity or synthetic_identity(), connection)}
     return MODULE.build_import_sql(plan, migration_id=run, contract=contract,
-                                   target_contract=target, manifest=manifest(plan, proof),
+                                   target_contract=target, manifest=bound_manifest,
                                    target_identity=identity or synthetic_identity(), identity_proof=proof,
                                    target_connection=connection)
 
@@ -176,8 +186,11 @@ class MapperTests(unittest.TestCase):
 class SqlGuardTests(unittest.TestCase):
     def test_real_component_list_dynamic_and_identity_version(self):
         contract = MODULE.current_contract()
-        source = (MODULE.ROOT / "services/core/src/core_schema.rs").read_text()
-        expected = dict(re.findall(r'"([a-z][a-z-]*)"\s*,\s*include_str!\("(\.\./schema/[a-z_]+\.sql)"\)', source))
+        expected = H.component_schemas()
+        self.assertEqual(len(expected), 26)
+        self.assertEqual(contract, H.current_contract())
+        self.assertEqual(contract["component_fingerprints"],
+                         {name: hashlib.sha256(raw).hexdigest() for name, raw in expected.items()})
         self.assertEqual(set(contract["component_fingerprints"]), set(expected))
         self.assertIn("console", expected)
         self.assertIn("model-gateway", expected)
@@ -188,15 +201,19 @@ class SqlGuardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             path = root / "services/core/src/core_schema.rs"
-            path.parent.mkdir(parents=True)
-            path.write_text('const COMPONENTS: &[(&str, &str)] = &[("console", external_macro!("x"))];')
-            with self.assertRaisesRegex(MODULE.MappingError, "component_contract_syntax_unknown"):
+            for relative in H.current_contract()["source_file_hashes"]:
+                destination = root / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes((MODULE.ROOT / relative).read_bytes())
+            path.write_text(path.read_text().replace('crate::billing::trust_pricing::SCHEMA', 'external_macro!("x")'))
+            with self.assertRaises(MODULE.MappingError):
                 MODULE.current_contract(root)
 
     def test_no_ddl_or_non_console_writes_and_transaction_guards(self):
         sql = build()
         self.assertIn("BEGIN ISOLATION LEVEL SERIALIZABLE", sql)
         self.assertIn("synchronous_commit=on", sql)
+        self.assertIn("SET LOCAL timezone='UTC';", sql)
         self.assertIn("SET LOCAL search_path=pg_catalog,public", sql)
         self.assertIn("pg_advisory_xact_lock(741803121)", sql)
         self.assertIn("current_setting('port')::int", sql)
@@ -211,6 +228,46 @@ class SqlGuardTests(unittest.TestCase):
         self.assertIn("''is_called'',is_called", sql)
         self.assertIn("JOIN pg_sequence s ON s.seqrelid=c.oid", sql)
         self.assertIn("console exact readback mismatch", sql)
+
+    def test_preserved_manifest_binds_tool_source_and_exact_target(self):
+        contract = MODULE.current_contract()
+        proof = identity_material(contract)[3]
+        target = {**contract, "catalog_fingerprint_sha256": "c" * 64,
+            "identity_import": MODULE.identity_reference(proof, "identity-synthetic"),
+            "trust_policy_seed": trust_seed_fixture(), "initialized_core_seed_sha256": "f" * 64}
+        identity = synthetic_identity()
+        connection = {"role": identity["role"], "login_role": identity["session_user"], "set_role": identity["role"]}
+        plan = mapped()
+        original = {**manifest(plan, proof), **MODULE.manifest_binding(contract, target, identity, connection)}
+        for field in ("import_tool_sha256", "import_contract_sha256", "target_material_sha256"):
+            changed = {**original, field: "0" * 64}
+            with self.subTest(field=field), self.assertRaisesRegex(MODULE.MappingError, "console_manifest_binding_mismatch"):
+                MODULE.build_import_sql(plan, migration_id="console-synthetic", target_contract=target,
+                    manifest=changed, contract=contract, target_identity=identity, identity_proof=proof, target_connection=connection)
+        with self.assertRaisesRegex(MODULE.MappingError, "console_manifest_binding_mismatch"):
+            MODULE.build_import_sql(plan, migration_id="console-synthetic", target_contract=target,
+                manifest=original, contract=contract, target_identity={**identity, "database_oid": 5678},
+                identity_proof=proof, target_connection=connection)
+
+    def test_fresh26_trust_seed_and_upgrade_receipts_are_checked_twice(self):
+        sql = build()
+        self.assertEqual(sql.count("fresh trust policy seed mismatch"), 2)
+        self.assertEqual(sql.count("fresh core upgrade receipts must be empty"), 2)
+        self.assertIn("core_telegram_auth.bindings", sql)
+        self.assertIn("core_telegram_auth.flows", sql)
+        self.assertIn("core_telegram_auth.assertions", sql)
+        self.assertNotIn("UPDATE core_trust_pricing", sql)
+        contract = MODULE.current_contract()
+        proof = identity_material(contract)[3]
+        target = {**contract, "catalog_fingerprint_sha256": "c" * 64,
+            "identity_import": MODULE.identity_reference(proof, "identity-synthetic")}
+        with self.assertRaisesRegex(MODULE.MappingError, "trust_seed_receipt_invalid"):
+            build(contract=contract, target=target, proof=proof)
+        target["trust_policy_seed"] = trust_seed_fixture()
+        target["initialized_core_seed_sha256"] = "f" * 64
+        target["trust_policy_seed"]["spec"]["tiers"][2]["discount"]["numerator"] = 99
+        with self.assertRaisesRegex(MODULE.MappingError, "trust_seed_receipt_not_default"):
+            build(contract=contract, target=target, proof=proof)
 
     def test_dollar_delimiter_and_standard_strings_do_not_rewrite_data(self):
         attack = "@DELIMITER@ $lmm_console_import$ '\\n'; DROP SCHEMA core_identity CASCADE;--"
@@ -351,6 +408,15 @@ class PostgresTests(unittest.TestCase):
         fixture = receipt["fixtures"]["console"]
         cls.fixture_receipt = receipt
         cls.fixture = fixture
+        cls.compiled_template = fixture.get("initialized_by") == "core-init-db"
+        if cls.compiled_template:
+            verify_compiled_fixture(receipt)
+            H.require(fixture.get("init_binary_sha256") == receipt["verified_binary"]["sha256"]
+                      and fixture.get("schema_manifest_sha256") == receipt["schema_manifest"]["sha256"],
+                      "fixture_core_init_proof_missing")
+        cls.admin_connection = dict(fixture["admin_connection"])
+        H.socket_connection(cls.admin_connection)
+        H.require(cls.admin_connection["role"] != fixture["owner"], "fixture_separate_admin_required")
         login_role = fixture.get("login_role", fixture["owner"])
         role = receipt["roles"][login_role]
         cls.artifacts = H.BACKUP_ROOT / ("api-lmm-console-etl-tests-" + secrets.token_hex(10))
@@ -373,6 +439,16 @@ class PostgresTests(unittest.TestCase):
         fixture_identity = json.loads(cls.query("BEGIN READ ONLY;\nSET LOCAL search_path=pg_catalog,public;\n" + H.IDENTITY_SQL + "\nCOMMIT;", readonly=True))
         H.verify_instance(fixture_identity, cls.connection,
                           {**receipt["instance_identity"], **fixture["empty_owner_baseline"]}, source=False)
+        H.require(180000 <= int(fixture_identity["server_version_num"]) < 190000
+                  and fixture_identity["tcp_connection"] is False, "fixture_unix_pg18_required")
+        listen = cls.query("SELECT current_setting('listen_addresses');", readonly=True).strip()
+        H.require(listen == "", "fixture_unix_only_required")
+        H.require(cls.admin_connection["socket_directory"] == cls.connection["socket_directory"]
+                  and cls.admin_connection["port"] == cls.connection["port"], "fixture_admin_connection_mismatch")
+        admin_identity = json.loads(cls.query(H.IDENTITY_SQL, connection=cls.admin_connection, readonly=True))
+        H.require(all(str(admin_identity[key]) == str(fixture_identity[key]) for key in
+                      ("postmaster_started_at", "server_instance_nonce", "port", "server_version_num")),
+                  "fixture_admin_instance_mismatch")
         H.write_private(cls.artifacts, "fixture-identity.private.json", H.canonical(fixture_identity) + "\n")
         cls.contract = MODULE.current_contract()
         cls.sources = {path: (MODULE.ROOT / path).read_text() for path in cls.contract["source_file_hashes"]}
@@ -381,14 +457,16 @@ class PostgresTests(unittest.TestCase):
         H.write_private(cls.artifacts, "input-contract.private.json", H.canonical(cls.contract) + "\n")
 
     @classmethod
-    def query(cls, sql, *, connection=None, readonly=False):
+    def query(cls, sql, *, connection=None, readonly=False, utc=True):
         cls.counter += 1
         connection = connection or cls.connection
         label = "pg-" + str(cls.counter)
         pid_file = H.write_private(cls.artifacts, label + ".pid.private.txt", "")
         # Capture this exact session's PID even when ON_ERROR_STOP rejects SQL.
         # This is fixture-only psql output routing, with no business SQL change.
-        wrapped = "\\o " + str(pid_file) + "\nSELECT pg_backend_pid();\n\\o\n" + sql
+        # Canonical fixture readbacks bind timestamptz text in UTC. The non-UTC
+        # regression opts out to exercise the real database/session default.
+        wrapped = ("SET timezone='UTC';\n" if utc else "") + "\\o " + str(pid_file) + "\nSELECT pg_backend_pid();\n\\o\n" + sql
         try:
             return H.psql(connection, wrapped, readonly=readonly, private_dir=cls.artifacts, label=label)
         finally:
@@ -418,28 +496,28 @@ END $fixture_idle$;
 
     def setUp(self):
         self.database = "lmm_console_etl_nologin_" + secrets.token_hex(10)
-        self.query('CREATE DATABASE "' + self.database + '";')
+        template = ' TEMPLATE "' + self.fixture["database"] + '"' if self.compiled_template else ''
+        self.query('CREATE DATABASE "' + self.database + '" WITH OWNER "' + self.connection["role"] + '"' + template + ';',
+                   connection=self.admin_connection)
         self.owned.append(self.database)
         self.history.append({"database": self.database, "created": True, "dropped": False})
         self.addCleanup(self.cleanup_database)
         # Keep the resource owner's immutable cluster nonce. The restricted
         # owner cannot change that parameter; database OID binds each new DB.
         self.db = {**self.connection, "database": self.database}
-        sql = "BEGIN;\n"
-        for path in self.contract["source_file_hashes"]:
-            if "/schema/" in path:
-                sql += self.sources[path] + "\n"
-        core = self.sources["services/core/src/core_schema.rs"]
-        sql += re.search(r'const CONTRACT: &str = "(.*?)";', core)[1] + "\n"
-        sql += f"INSERT INTO core_meta.schema_contract(version,fingerprint) VALUES({self.contract['identity_version']},decode('{self.contract['identity_fingerprint_sha256']}','hex'));\n"
-        for name, sha in self.contract["component_fingerprints"].items():
-            sql += f"INSERT INTO core_meta.component_contract(name,fingerprint) VALUES({H.sql_literal(name)},decode('{sha}','hex'));\n"
-        sql += "INSERT INTO core_meta.runtime_contract(catalog_fingerprint) SELECT decode(catalog_hash,'hex') FROM (" + MODULE.catalog_hash_sql(self.contract) + ") h(catalog_hash);\nCOMMIT;\n"
-        self.query(sql, connection=self.db)
+        self.query('REVOKE CONNECT ON DATABASE "' + self.database + '" FROM PUBLIC; GRANT CONNECT ON DATABASE "' +
+                   self.database + '" TO "' + self.connection["login_role"] + '";', connection=self.admin_connection)
+        if not self.compiled_template:
+            self.query(reviewed_fixture_ddl(self.contract), connection=self.db)
+        else:
+            actual = self.query(MODULE.catalog_hash_sql(self.contract) + ";", connection=self.db, readonly=True).strip()
+            H.require(actual == self.fixture["catalog_fingerprint_sha256"], "fixture_template_catalog_mismatch")
         self.identity = json.loads(self.query("BEGIN READ ONLY;\n" + H.IDENTITY_SQL + "\nCOMMIT;", connection=self.db, readonly=True))
         self.catalog = self.query(MODULE.catalog_hash_sql(self.contract) + ";", connection=self.db, readonly=True).strip()
         self.identity_plan, self.identity_manifest, self.identity_artifacts, self.proof = identity_material(self.contract)
         self.target = {**self.contract, "catalog_fingerprint_sha256": self.catalog,
+                       "trust_policy_seed": json.loads(self.query(H.trust_policy_seed_query() + ";", connection=self.db, readonly=True)),
+                       "initialized_core_seed_sha256": self.query(H.fresh_seed_hash_query() + ";", connection=self.db, readonly=True).strip(),
                        "identity_import": MODULE.identity_reference(self.proof, "identity-synthetic")}
         identity_sql = H.build_import_sql(self.identity_plan, migration_id="identity-synthetic", source_sha256=SOURCE,
                                          target_contract={**self.target, "allow_initialized_core_seed": True,
@@ -451,7 +529,7 @@ END $fixture_idle$;
         self.query(self.idle_sql(self.database) + identity_sql, connection=self.db)
 
     def cleanup_database(self):
-        self.query(self.idle_sql(self.database) + 'DROP DATABASE "' + self.database + '";')
+        self.query(self.idle_sql(self.database) + 'DROP DATABASE "' + self.database + '";', connection=self.admin_connection)
         self.owned.remove(self.database)
         next(item for item in self.history if item["database"] == self.database)["dropped"] = True
 
@@ -519,6 +597,72 @@ END $fixture_idle$;
         epoch = self.query("SELECT extract(epoch FROM initialized_at)::bigint FROM core_console.initialization;", connection=self.db, readonly=True).strip()
         self.assertEqual(int(epoch), setup()["initialized_at"])
 
+    def test_default_trust_policy_tamper_rejects_without_any_other_write(self):
+        self.query("UPDATE core_trust_pricing.policies SET revision=2;", connection=self.db)
+        before = self.other_facts(), self.facts()
+        self.reject("fresh trust policy seed mismatch")
+        self.assertEqual((self.other_facts(), self.facts()), before)
+
+    def test_non_utc_database_default_preserves_import_replay_and_seed_guards(self):
+        self.query('ALTER DATABASE "' + self.database + '" SET timezone=\'Asia/Shanghai\';',
+                   connection=self.admin_connection)
+        raw_timezone = self.query("SHOW timezone;", connection=self.db, readonly=True, utc=False).strip()
+        self.assertEqual(raw_timezone, "Asia/Shanghai")
+        # Standalone owner capture queries must return the same exact seed/hash
+        # even before a generated import transaction establishes UTC.
+        raw_seed = json.loads(self.query(H.trust_policy_seed_query() + ";", connection=self.db,
+                                        readonly=True, utc=False))
+        raw_hash = self.query(H.fresh_seed_hash_query() + ";", connection=self.db,
+                              readonly=True, utc=False).strip()
+        self.assertEqual(raw_seed, self.target["trust_policy_seed"])
+        self.assertEqual(raw_hash, self.target["initialized_core_seed_sha256"])
+        before_other = self.other_facts()
+        sql = build(contract=self.contract, target=self.target, identity=self.identity,
+                    proof=self.proof, connection=self.db)
+        self.query(self.idle_sql(self.database) + sql, connection=self.db, utc=False)
+        imported = self.facts()
+        self.assertEqual(self.other_facts(), before_other)
+        self.query(self.idle_sql(self.database) + sql, connection=self.db, utc=False)
+        self.assertEqual(self.facts(), imported)
+        self.assertEqual(self.other_facts(), before_other)
+        self.assertEqual(self.query("SHOW timezone;", connection=self.db, readonly=True, utc=False).strip(),
+                         "Asia/Shanghai")
+        H.write_private(self.artifacts, "non-utc-import-replay.private.json", H.canonical({
+            "raw_timezone": raw_timezone, "seed": raw_seed, "seed_sha256": raw_hash,
+            "other_before": before_other, "other_after": self.other_facts(), "imported": imported,
+            "replayed": self.facts()}) + "\n")
+        wrong_target = {**self.target, "initialized_core_seed_sha256": "0" * 64}
+        wrong_hash_sql = build(contract=self.contract, target=wrong_target, identity=self.identity,
+                               proof=self.proof, connection=self.db)
+        before = self.other_facts(), self.facts()
+        with self.assertRaisesRegex(MODULE.MappingError, r"pg-\d+_database_command_failed"):
+            self.query(self.idle_sql(self.database) + wrong_hash_sql, connection=self.db, utc=False)
+        error = (self.artifacts / ("pg-" + str(type(self).counter) + ".stderr.private.txt")).read_text()
+        self.assertIn("initialized seed receipt mismatch", error)
+        self.assertEqual((self.other_facts(), self.facts()), before)
+        self.query("UPDATE core_trust_pricing.policies SET revision=2;", connection=self.db)
+        before = self.other_facts(), self.facts()
+        with self.assertRaisesRegex(MODULE.MappingError, r"pg-\d+_database_command_failed"):
+            self.query(self.idle_sql(self.database) + sql, connection=self.db, utc=False)
+        error = (self.artifacts / ("pg-" + str(type(self).counter) + ".stderr.private.txt")).read_text()
+        self.assertIn("fresh trust policy seed mismatch", error)
+        self.assertEqual((self.other_facts(), self.facts()), before)
+
+    def test_both_upgrade_receipt_tables_must_remain_empty(self):
+        for table in ("core_meta.schema_upgrades", "core_meta.component_upgrades"):
+            with self.subTest(table=table):
+                self.query(synthetic_upgrade_receipt_sql(table), connection=self.db)
+                before = self.other_facts(), self.facts()
+                self.reject("fresh core upgrade receipts must be empty")
+                self.assertEqual((self.other_facts(), self.facts()), before)
+                self.query("DELETE FROM " + table + ";", connection=self.db)
+
+    def test_telegram_business_rows_are_not_exempt(self):
+        self.query("INSERT INTO core_telegram_auth.bindings(subject,user_id) VALUES('12345',7);", connection=self.db)
+        before = self.other_facts(), self.facts()
+        self.reject("telegram business tables must be empty")
+        self.assertEqual((self.other_facts(), self.facts()), before)
+
     def test_missing_setup_remains_uninitialized(self):
         self.apply(mapped([option()], [], []))
         self.assertEqual(self.facts()["setup"], [])
@@ -536,18 +680,59 @@ END $fixture_idle$;
 
     def test_login_without_membership_cannot_assume_owner(self):
         runtime = self.fixture_receipt["roles"][self.fixture["runtime"]]
-        password = H.private_backup_path(Path(runtime["password_file"])).read_text().strip()
+        probe = self.fixture_receipt["roles"][self.fixture["other_login"]]
+        self.assertNotIn(probe["role"], (runtime["role"], self.db["role"],
+                                        self.db["login_role"], self.admin_connection["role"]))
+        self.assertEqual((probe["socket_directory"], probe["port"]),
+                         (self.db["socket_directory"], self.db["port"]))
+        self.assertRegex(probe["role"], r"^[a-z_][a-z_0-9]*$")
+        password = H.private_backup_path(Path(probe["password_file"])).read_text().strip()
         escape = lambda value: str(value).replace("\\", "\\\\").replace(":", "\\:")
         pgpass = H.write_private(self.artifacts, "nonmember-" + self.database + ".pgpass.private",
-                                ":".join(map(escape, (runtime["socket_directory"], runtime["port"],
-                                                       self.fixture["database"], runtime["role"], password))) + "\n")
-        connection = {**self.connection, "login_role": runtime["role"], "pgpass_file": str(pgpass)}
-        before = self.other_facts()
-        with self.assertRaisesRegex(MODULE.MappingError, r"pg-\d+_database_command_failed"):
-            self.query("SELECT current_user,session_user;", connection=connection, readonly=True)
-        error = (self.artifacts / ("pg-" + str(type(self).counter) + ".stderr.private.txt")).read_text()
-        self.assertIn("permission denied to set role", error)
-        self.assertEqual(self.other_facts(), before)
+                                ":".join(map(escape, (probe["socket_directory"], probe["port"],
+                                                       self.database, probe["role"], password))) + "\n")
+        # Authenticate as the separate nonmember, then test SET ROLE explicitly.
+        # Runtime remains NOLOGIN; only this owned clone gets temporary CONNECT.
+        connection = {"socket_directory": probe["socket_directory"], "port": probe["port"],
+                      "database": self.database, "role": probe["role"], "pgpass_file": str(pgpass)}
+        role_sql = "SELECT jsonb_build_object(" + ",".join(
+            H.sql_literal(key) + ",(SELECT " + attribute + " FROM pg_roles WHERE rolname=" +
+            H.sql_literal(role) + ")" for key, attribute, role in (
+                ("runtime_login", "rolcanlogin", runtime["role"]),
+                ("owner_login", "rolcanlogin", self.db["role"]),
+                ("probe_login", "rolcanlogin", probe["role"]),
+                ("probe_superuser", "rolsuper", probe["role"]),
+                ("probe_create_role", "rolcreaterole", probe["role"]),
+                ("probe_create_db", "rolcreatedb", probe["role"]),
+                ("probe_replication", "rolreplication", probe["role"]),
+                ("probe_bypass_rls", "rolbypassrls", probe["role"]))) + "," + ",".join(
+            H.sql_literal(key) + "," + expression for key, expression in (
+                ("owner_member", "pg_has_role(" + H.sql_literal(probe["role"]) + "," + H.sql_literal(self.db["role"]) + ",'MEMBER')"),
+                ("owner_set", "pg_has_role(" + H.sql_literal(probe["role"]) + "," + H.sql_literal(self.db["role"]) + ",'SET')"),
+                ("clone_connect", "has_database_privilege(" + H.sql_literal(probe["role"]) + "," + H.sql_literal(self.database) + ",'CONNECT')"),
+                ("template_connect", "has_database_privilege(" + H.sql_literal(probe["role"]) + "," + H.sql_literal(self.fixture["database"]) + ",'CONNECT')"))) + ");"
+        before_roles = json.loads(self.query(role_sql, connection=self.db, readonly=True))
+        self.assertEqual(before_roles, {"runtime_login": False, "owner_login": False, "probe_login": True,
+            "probe_superuser": False, "probe_create_role": False, "probe_create_db": False,
+            "probe_replication": False, "probe_bypass_rls": False, "owner_member": False,
+            "owner_set": False, "clone_connect": False, "template_connect": False})
+        before = self.other_facts(), self.facts()
+        try:
+            self.query('GRANT CONNECT ON DATABASE "' + self.database + '" TO "' + probe["role"] + '";',
+                       connection=self.admin_connection)
+            identity = json.loads(self.query("SELECT jsonb_build_object('role',current_user,'login',session_user);",
+                                             connection=connection, readonly=True))
+            self.assertEqual(identity, {"role": probe["role"], "login": probe["role"]})
+            with self.assertRaisesRegex(MODULE.MappingError, r"pg-\d+_database_command_failed"):
+                self.query('SET ROLE "' + self.db["role"] + '"; SELECT current_user,session_user;',
+                           connection=connection, readonly=True)
+            error = (self.artifacts / ("pg-" + str(type(self).counter) + ".stderr.private.txt")).read_text()
+            self.assertIn("permission denied to set role", error)
+        finally:
+            self.query('REVOKE CONNECT ON DATABASE "' + self.database + '" FROM "' + probe["role"] + '";',
+                       connection=self.admin_connection)
+        self.assertEqual(json.loads(self.query(role_sql, connection=self.db, readonly=True)), before_roles)
+        self.assertEqual((self.other_facts(), self.facts()), before)
 
     def test_sequence_proof_observes_restart_when_pg_sequences_hides_value(self):
         name = self.query("SELECT pg_get_serial_sequence('core_identity.users','id');", connection=self.db, readonly=True).strip()

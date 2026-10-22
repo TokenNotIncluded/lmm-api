@@ -22,9 +22,19 @@ def source_fixture():
     archive_hash = F.sha(b"synthetic-frozen-archive")
     id_map = "".join(F.canonical({"source_user_id": uid, "target_user_id": uid,
         "target_personal_account_id": aid}) + "\n" for uid, aid in identities.items())
+    identity_plan = F.IDENTITY.map_identity([
+        {"id": uid, "username": "financial-fixture-" + str(uid), "password": "$2b$10$" + "." * 53,
+         "display_name": "Financial fixture", "email": "", "setting": "{}", "role": 1,
+         "status": 1, "auth_version": 1, "deleted_at": None, "trust_level_override": 0,
+         "console_activated_at": 0} for uid in identities], [], source_sha256=archive_hash)
     manifest = {"format_version": 2, "scope": "identity-only", "source_archive_sha256": archive_hash,
-        "mapping_sha256": "c" * 64, "source_target_id_map_sha256": F.sha(id_map.encode()),
-        "identity_contract": F.IDENTITY.identity_contract()}
+        "mapping_sha256": identity_plan["mapping_sha256"], "source_target_id_map_sha256": F.sha(id_map.encode()),
+        "identity_contract": F.IDENTITY.identity_contract(), "developer_access_policy": F.IDENTITY.DEVELOPER_POLICY,
+        "initialized_core_seed_contract": F.IDENTITY.CORE_SEED_CONTRACT,
+        "source_export_sha256": "e" * 64, "source_baseline_proof_sha256": "f" * 64,
+        "summary": identity_plan["summary"],
+        "import_tool_sha256": F.IDENTITY.sha256_file(Path(F.IDENTITY.__file__)),
+        "import_contract_sha256": F.sha(F.IDENTITY.canonical(F.IDENTITY.current_contract()).encode())}
     provenance = F.PLANNER.bind_identity_provenance(manifest,
         map_file_sha256=F.sha(id_map.encode()), source_archive_sha256=archive_hash)
     plan = F.PLANNER.plan_financial(tables(users=[user(71, quota=-120), user(72, quota=0, aff_quota=-5),
@@ -41,15 +51,21 @@ def source_fixture():
     files = {name: {"path": "/home/test/Backups/" + name, "sha256": "f" * 64} for name in F.SOURCE_FILES}
     files["archive"]["sha256"] = archive_hash
     files["identity_map"]["sha256"] = F.sha(id_map.encode())
-    return {"plan": plan, "identities": identities, "observation": observation,
+    return {"plan": plan, "identities": identities, "identity_plan": identity_plan, "observation": observation,
         "reservations": reservations, "review": review, "files": files,
         "identity_run": {"migration_id": "synthetic-identity", "source_archive_sha256": archive_hash,
             "mapping_sha256": manifest["mapping_sha256"], "manifest": manifest,
             "completed_at": "2026-10-01T00:00:01+00:00"}}
 
 
+def trust_seed_fixture():
+    return {"singleton": True, "revision": 1, "spec": copy.deepcopy(F.IDENTITY.DEFAULT_TRUST_POLICY),
+        "source_digest": F.sha(b"core-native-trust-policy-v1"), "source_cutoff": 1790812800,
+        "native_user_floor": 1, "native_since": "2026-10-01T00:00:00+00:00"}
+
+
 def snapshot_fixture(source):
-    names = sorted(set(F.CHANGED_TABLES) | {"core_identity.users", "core_identity.accounts",
+    names = sorted(set(F.CHANGED_TABLES) | set(F.FRESH_EMPTY_TABLES) | {"core_trust_pricing.policies","core_identity.users", "core_identity.accounts",
         "core_migration.import_runs", "core_meta.runtime_contract", "core_meta.component_contract", "public.unrelated"})
     inventory = {"tables": names, "sequences": sorted(F.CHANGED_SEQUENCES)}
     state = {"inventory": inventory, "tables": {name: {"rows": 0, "sha256": F.sha(b"")} for name in names},
@@ -62,18 +78,20 @@ def snapshot_fixture(source):
             "session_user": "a03_operator", "effective_role_can_login": False,
             "database_oid": "12345", "system_identifier": "7777777", "listen_addresses": "",
             "postmaster_started_at": "2026-10-01 00:00:00+00", "server_instance_nonce": "synthetic-instance",
-            "server_version_num": "170006", "port": 5432, "tcp_connection": False},
+            "server_version_num": "180000", "port": 5432, "tcp_connection": False},
         "catalog_fingerprint_sha256": "a" * 64, "ownership_sha256": "b" * 64,
-        "component_fingerprints": F.IDENTITY.current_contract()["component_fingerprints"]}
+        "component_fingerprints": F.IDENTITY.current_contract()["component_fingerprints"],
+        "trust_policy_seed": trust_seed_fixture()}
 
 
-def material_fixture(source=None, snapshot=None):
+def material_fixture(source=None, snapshot=None, runtime_roles=None):
     source = source or source_fixture()
     snapshot = snapshot or snapshot_fixture(source)
     return F.prepare_material(source["plan"], migration_id="synthetic-financial",
         identities=source["identities"], observation=source["observation"], reservations=source["reservations"],
-        review=source["review"], snapshot=snapshot, runtime_roles=["a03_runtime"], source_files=source["files"],
-        target_contract={**F.IDENTITY.current_contract(), "catalog_fingerprint_sha256": snapshot["catalog_fingerprint_sha256"]})
+        review=source["review"], snapshot=snapshot, runtime_roles=runtime_roles or ["a03_runtime"], source_files=source["files"],
+        target_contract={**F.IDENTITY.current_contract(), "catalog_fingerprint_sha256": snapshot["catalog_fingerprint_sha256"],
+                         "trust_policy_seed": snapshot["trust_policy_seed"]})
 
 
 def approval_fixture(material, sql):
@@ -162,6 +180,38 @@ class MaterialTests(unittest.TestCase):
         self.material["target"]["component_fingerprints"]["ledger"] = "0" * 64
         with self.assertRaisesRegex(F.Error, "component_source_changed"):
             F.build_apply_sql(self.material)
+
+    def test_old_material_or_relabelled_source_contract_cannot_be_reused(self):
+        for change in ({"format_version": 1}, {"seed_contract": "identity-bound-zero-ledger-v1"}):
+            material = copy.deepcopy(self.material)
+            material.update(change)
+            with self.subTest(change=change), self.assertRaisesRegex(F.Error, "material_contract_invalid"):
+                F.build_apply_sql(material)
+        material = copy.deepcopy(self.material)
+        material["target"]["source_contract"]["installer_contract_sha256"] = "0" * 64
+        with self.assertRaisesRegex(F.Error, "source_contract_changed"):
+            F.build_apply_sql(material)
+
+    def test_every_fresh26_empty_table_is_bound(self):
+        for name in F.FRESH_EMPTY_TABLES:
+            material = copy.deepcopy(self.material)
+            material["before_state"]["tables"][name] = {"rows": 1, "sha256": "0" * 64}
+            with self.subTest(table=name), self.assertRaisesRegex(F.Error, "fresh26_business_or_upgrade_records_not_empty"):
+                F.build_apply_sql(material)
+
+    def test_trust_seed_requires_owner_capture_and_exact_default_fields(self):
+        material = copy.deepcopy(self.material)
+        del material["target"]["trust_policy_seed"]
+        with self.assertRaisesRegex(F.Error, "trust_seed_receipt"):
+            F.build_apply_sql(material)
+        material = copy.deepcopy(self.material)
+        material["target"]["trust_policy_seed"]["spec"]["paid_activation_enabled"] = False
+        with self.assertRaisesRegex(F.Error, "trust_seed_receipt_not_default"):
+            F.build_apply_sql(material)
+        sql = F.build_apply_sql(self.material)
+        self.assertEqual(sql.count("financial_trust_policy_seed_mismatch"), 2)
+        self.assertIn("financial_upgrade_receipts_not_empty", sql)
+        self.assertNotIn("UPDATE core_trust_pricing", sql)
 
     def test_missing_inventory_or_duplicate_relation_fails(self):
         for inventory in ({"tables": [], "sequences": []},

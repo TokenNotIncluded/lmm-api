@@ -8,7 +8,7 @@ SQL contain private data and must remain in a new directory below ~/Backups.
 Announcement interpretation follows main 7be6ee81's mandatory_announcement.go;
 the original TEXT, revision and epoch values are retained, not recalculated.
 
-Target imports require the exact same-archive identity-v3 import and its private
+Target imports require the exact same-archive reviewed Core26 identity import and its private
 manifest, mapping and ID map. Replay must reuse their original paths and bytes.
 For a NOLOGIN owner, explicitly pair connection.login_role with set_role=role;
 the checked startup role option selects the owner, without changing role flags.
@@ -156,7 +156,7 @@ def map_console(options: list[dict], setups: list[dict], reads: list[dict], *, s
 
 def bind_identity_proof(manifest_bytes: bytes, mapping_bytes: bytes, id_map_bytes: bytes,
                         *, source_sha256: str, contract: dict) -> dict:
-    """Bind preserved user IDs to the reviewed v3 identity import, not just IDs.
+    """Bind preserved user IDs to the reviewed Core26 identity import, not just IDs.
 
     The full mapping remains private. The console SQL carries only field hashes
     for names, email, settings and password verifiers, plus authorization facts.
@@ -235,37 +235,12 @@ def identity_reference(proof: dict, migration_id: str) -> dict:
 
 
 def current_contract(root: Path = ROOT) -> dict:
-    """Strictly extract the installer contract; unknown Rust syntax fails closed."""
-    source_path = root / "services/core/src/core_schema.rs"
-    source = source_path.read_text(encoding="utf-8")
-    match = re.search(r"const COMPONENTS:\s*&\[\(&str,\s*&str\)\]\s*=\s*&\[(.*?)\];", source, re.S)
-    require(match is not None, "component_contract_syntax_unknown")
-    entries = re.compile(r'\(\s*"([a-z][a-z-]*)"\s*,\s*include_str!\("(\.\./schema/[a-z_]+\.sql)"\)\s*,?\s*\)')
-    body = match[1]
-    require(re.fullmatch(r"[\s,]*", entries.sub("", body)) is not None, "component_contract_syntax_unknown")
-    hashes, files = {}, {str(source_path.relative_to(root)): IDENTITY.sha256_file(source_path)}
-    schema_dir = (root / "services/core/schema").resolve()
-    for entry in entries.finditer(body):
-        name, relative = entry.groups()
-        path = (source_path.parent / relative).resolve()
-        require(path.parent == schema_dir and name not in hashes, "component_contract_invalid")
-        hashes[name] = IDENTITY.sha256_file(path)
-        files[str(path.relative_to(root))] = hashes[name]
-    require("identity" in hashes and "console" in hashes and "migration" in hashes, "component_contract_incomplete")
-    version_path = root / "services/core/src/identity/schema.rs"
-    versions = re.findall(r"const VERSION:\s*i32\s*=\s*(\d+)\s*;", version_path.read_text())
-    require(len(versions) == 1, "identity_version_syntax_unknown")
-    files[str(version_path.relative_to(root))] = IDENTITY.sha256_file(version_path)
-    catalogs = re.findall(r'const CATALOG:\s*&str\s*=\s*r#"(.*?)"#;', source, re.S)
-    require(len(catalogs) == 1, "catalog_contract_syntax_unknown")
-    return {"identity_version": int(versions[0]), "identity_fingerprint_sha256": hashes["identity"],
-            "component_fingerprints": hashes, "source_file_hashes": files,
-            "catalog_query_sha256": hashlib.sha256(catalogs[0].encode()).hexdigest(), "catalog_query": catalogs[0]}
+    """Use the identity importer's reviewed Core26 byte contract everywhere."""
+    return IDENTITY.current_contract(root)
 
 
 def catalog_hash_sql(contract: dict) -> str:
-    # Rust hashes each UTF-8 definition prefixed with its eight-byte BE length.
-    return "SELECT encode(sha256(coalesce(string_agg(int8send(octet_length(convert_to(definition,'UTF8'))::bigint)||convert_to(definition,'UTF8'),''::bytea ORDER BY definition COLLATE \"C\"),''::bytea)),'hex') FROM (" + contract["catalog_query"] + ") catalog_definitions"
+    return IDENTITY.catalog_hash_sql(contract)
 
 
 def source_table_hash_sql(schema: str, table: str) -> str:
@@ -297,6 +272,16 @@ def _snapshot_sql(destination: str) -> str:
 """
 
 
+def manifest_binding(contract: dict, target_contract: dict, target_identity: dict,
+                     target_connection: dict) -> dict:
+    """Invalidate preserved replay material when source, tool or target changes."""
+    return {"import_tool_sha256": IDENTITY.sha256_file(Path(__file__)),
+            "import_contract_sha256": hashlib.sha256(canonical(contract).encode()).hexdigest(),
+            "target_material_sha256": hashlib.sha256(canonical({
+                "contract": target_contract, "instance_identity": target_identity,
+                "connection": target_connection}).encode()).hexdigest()}
+
+
 def build_import_sql(plan: dict, *, migration_id: str, target_contract: dict, manifest: dict,
                      contract: dict, target_identity: dict, identity_proof: dict,
                      target_connection: dict | None = None) -> str:
@@ -314,8 +299,13 @@ def build_import_sql(plan: dict, *, migration_id: str, target_contract: dict, ma
             and manifest.get("identity_import") == expected_reference, "identity_import_reference_mismatch")
     require(all(row["user_id"] in {fact["user_id"] for fact in identity_proof["facts"]} for row in plan["receipts"]),
             "console_receipt_identity_unmapped")
-    for key in ("identity_version", "identity_fingerprint_sha256", "component_fingerprints", "catalog_query_sha256"):
+    for key in ("identity_version", "identity_fingerprint_sha256", "component_fingerprints", "catalog_query_sha256",
+                "oauth_catalog_query_sha256", "installer_contract_sha256", "source_file_hashes"):
         require(target_contract.get(key) == contract[key], "target_contract_mismatch")
+    IDENTITY.validate_trust_policy_seed(target_contract.get("trust_policy_seed"))
+    require(isinstance(target_contract.get("initialized_core_seed_sha256"), str)
+            and IDENTITY.HEX.fullmatch(target_contract["initialized_core_seed_sha256"]) is not None,
+            "target_seed_receipt_missing")
     catalog_hash = target_contract.get("catalog_fingerprint_sha256", "")
     require(isinstance(catalog_hash, str) and IDENTITY.HEX.fullmatch(catalog_hash) is not None, "target_catalog_hash_invalid")
     for key in ("database", "role", "database_oid", "postmaster_started_at", "server_version_num", "server_instance_nonce"):
@@ -323,7 +313,11 @@ def build_import_sql(plan: dict, *, migration_id: str, target_contract: dict, ma
     require(type(target_identity.get("port")) is int and 0 < target_identity["port"] <= 65535, "target_identity_incomplete")
     target_connection = target_connection or {"role": target_identity["role"]}
     require(target_connection.get("role") == target_identity["role"], "target_role_mismatch")
+    expected_binding = manifest_binding(contract, target_contract, target_identity, target_connection)
+    require(all(manifest.get(key) == value for key, value in expected_binding.items()), "console_manifest_binding_mismatch")
     has_role_switch = "login_role" in target_connection or "set_role" in target_connection
+    require(has_role_switch, "target_distinct_installer_required")
+    require(target_identity.get("effective_role_can_login") is False, "target_nologin_owner_required")
     if has_role_switch:
         require(isinstance(target_connection.get("login_role"), str)
                 and IDENTITY.IDENTIFIER.fullmatch(target_connection["login_role"]) is not None
@@ -331,7 +325,21 @@ def build_import_sql(plan: dict, *, migration_id: str, target_contract: dict, ma
                 and target_connection["login_role"] != target_identity["role"], "target_role_switch_invalid")
     expected_session_user = target_connection["login_role"] if has_role_switch else target_identity["role"]
     require(target_identity.get("session_user", target_identity["role"]) == expected_session_user, "target_session_user_mismatch")
-    owner_login_guard = " OR (SELECT rolcanlogin FROM pg_roles WHERE rolname=current_user) IS DISTINCT FROM false" if has_role_switch else ""
+    owner_login_guard = """ OR (SELECT rolcanlogin FROM pg_roles WHERE rolname=current_user) IS DISTINCT FROM false
+ OR NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname=current_user AND NOT rolsuper
+  AND NOT rolcreaterole AND NOT rolcreatedb AND NOT rolreplication AND NOT rolbypassrls)
+ OR NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname=session_user AND rolcanlogin AND NOT rolsuper
+  AND NOT rolcreaterole AND NOT rolcreatedb AND NOT rolreplication AND NOT rolbypassrls)
+ OR NOT pg_has_role(session_user,current_user,'MEMBER')
+ OR current_setting('listen_addresses')<>''
+ OR EXISTS(SELECT 1 FROM pg_roles WHERE rolcanlogin AND NOT rolsuper AND rolname<>session_user
+  AND has_database_privilege(oid,current_database(),'CONNECT'))
+ OR EXISTS(SELECT 1 FROM pg_namespace n WHERE n.nspname NOT IN ('pg_catalog','information_schema','public')
+  AND left(n.nspname,3)<>'pg_' AND pg_get_userbyid(n.nspowner)<>current_user)
+ OR EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+  WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND left(n.nspname,3)<>'pg_' AND pg_get_userbyid(c.relowner)<>current_user)
+ OR EXISTS(SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+  WHERE n.nspname NOT IN ('pg_catalog','information_schema') AND left(n.nspname,3)<>'pg_' AND pg_get_userbyid(p.proowner)<>current_user)"""
     payload, run_id = literal(canonical(data)), literal(migration_id)
     mapping_hash, source_hash = literal(plan["mapping_sha256"]), literal(plan["source_archive_sha256"])
     manifest_json, catalog = literal(canonical(manifest)), catalog_hash_sql(contract)
@@ -343,6 +351,7 @@ def build_import_sql(plan: dict, *, migration_id: str, target_contract: dict, ma
     sql = f"""BEGIN ISOLATION LEVEL SERIALIZABLE;
 SET LOCAL synchronous_commit=on;
 SET LOCAL standard_conforming_strings=on;
+SET LOCAL timezone='UTC';
 SET LOCAL search_path=pg_catalog,public;
 SET LOCAL row_security=off;
 SET LOCAL lock_timeout='5s';
@@ -387,6 +396,14 @@ BEGIN
  OR (SELECT jsonb_object_agg(name,encode(fingerprint,'hex')) FROM core_meta.component_contract) IS DISTINCT FROM {components}::jsonb THEN
   RAISE EXCEPTION 'installed core contract or actual catalog mismatch';
  END IF;
+ IF {IDENTITY.upgrade_receipts_guard_sql()} THEN RAISE EXCEPTION 'fresh core upgrade receipts must be empty'; END IF;
+ IF {IDENTITY.trust_policy_seed_guard_sql(target_contract)} THEN RAISE EXCEPTION 'fresh trust policy seed mismatch'; END IF;
+ IF ({IDENTITY.fresh_seed_hash_query()}) IS DISTINCT FROM {literal(target_contract['initialized_core_seed_sha256'])}
+ THEN RAISE EXCEPTION 'initialized seed receipt mismatch'; END IF;
+ IF EXISTS(SELECT 1 FROM core_trust_pricing.user_bases) OR EXISTS(SELECT 1 FROM core_trust_pricing.legacy_paid_orders)
+ THEN RAISE EXCEPTION 'trust import must follow console import'; END IF;
+ IF EXISTS(SELECT 1 FROM core_telegram_auth.bindings) OR EXISTS(SELECT 1 FROM core_telegram_auth.flows)
+ OR EXISTS(SELECT 1 FROM core_telegram_auth.assertions) THEN RAISE EXCEPTION 'telegram business tables must be empty'; END IF;
  {_snapshot_sql('before_other')}
  SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY migration_id),'[]'::jsonb) INTO before_runs FROM core_migration.import_runs r WHERE migration_id<>{run_id};
  SELECT * INTO required_identity FROM core_migration.import_runs WHERE migration_id={identity_run_id};
@@ -461,6 +478,10 @@ BEGIN
    ROW(true,payload->'initialization'->>'version',to_timestamp((payload->'initialization'->>'initialized_at')::bigint))) THEN
   RAISE EXCEPTION 'console exact readback mismatch';
  END IF;
+ IF {IDENTITY.upgrade_receipts_guard_sql()} THEN RAISE EXCEPTION 'fresh core upgrade receipts must be empty'; END IF;
+ IF {IDENTITY.trust_policy_seed_guard_sql(target_contract)} THEN RAISE EXCEPTION 'fresh trust policy seed mismatch'; END IF;
+ IF ({IDENTITY.fresh_seed_hash_query()}) IS DISTINCT FROM {literal(target_contract['initialized_core_seed_sha256'])}
+ THEN RAISE EXCEPTION 'initialized seed receipt mismatch'; END IF;
  {_snapshot_sql('after_other')}
  IF before_other IS DISTINCT FROM after_other OR before_runs IS DISTINCT FROM
   (SELECT coalesce(jsonb_agg(to_jsonb(r) ORDER BY migration_id),'[]'::jsonb) FROM core_migration.import_runs r WHERE migration_id<>{run_id}) THEN
@@ -518,7 +539,7 @@ def export_source(receipt: dict, output: Path) -> tuple[dict, dict, dict]:
                 require(name not in baseline and type(row.get("row_count")) is int and row["row_count"] >= 0, "source_baseline_invalid")
                 baseline[name] = row["row_count"]
     require(set(baseline) == set(TABLES), "source_baseline_incomplete")
-    sql = "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;\nSET LOCAL search_path=pg_catalog,public;\nSET LOCAL row_security=off;\nSET LOCAL statement_timeout='60s';\n"
+    sql = "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;\nSET LOCAL timezone='UTC';\nSET LOCAL search_path=pg_catalog,public;\nSET LOCAL row_security=off;\nSET LOCAL statement_timeout='60s';\n"
     sql += "SELECT json_build_object('kind','identity','row',(" + IDENTITY.IDENTITY_SQL.removesuffix(";").removeprefix("SELECT ") + "));\n"
     sql += f"SELECT json_build_object('kind','schema','row',json_build_object('schema',nspname,'owner',pg_get_userbyid(nspowner))) FROM pg_namespace WHERE nspname={literal(schema)};\n"
     for table in TABLES:
@@ -556,7 +577,7 @@ def export_source(receipt: dict, output: Path) -> tuple[dict, dict, dict]:
 def verify_source_after(receipt: dict, source_identity: dict, proof: dict, output: Path,
                         *, label: str = "source-console-after") -> None:
     schema = receipt["source"]["schema"]
-    sql = "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;\nSET LOCAL search_path=pg_catalog,public;\nSET LOCAL row_security=off;\nSET LOCAL statement_timeout='60s';\n" + IDENTITY.IDENTITY_SQL + "\n"
+    sql = "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;\nSET LOCAL timezone='UTC';\nSET LOCAL search_path=pg_catalog,public;\nSET LOCAL row_security=off;\nSET LOCAL statement_timeout='60s';\n" + IDENTITY.IDENTITY_SQL + "\n"
     for table in TABLES:
         sql += f'SELECT json_build_object(\'table\',{literal(table)},\'row_count\',count(*),\'sha256\',({source_table_hash_sql(schema, table)})) FROM "{schema}"."{table}";\n'
     sql += "COMMIT;\n"
@@ -573,7 +594,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-receipt", type=Path, required=True)
     parser.add_argument("--target-receipt", type=Path, help="Private receipt: status=initialized-console-import-target; migration_id/source_archive_sha256; connection/instance_identity from owner; contract=current identity version/fingerprint, component_fingerprints, catalog_query_sha256, catalog_fingerprint_sha256, identity_import={migration_id,source_archive_sha256,mapping_sha256,manifest_sha256,source_target_id_map_sha256}; registry_provisioned=true; application_or_worker_started=false")
-    parser.add_argument("--identity-manifest", type=Path, help="Required with target: reviewed private identity-v3 manifest; reads identity-mapping.private.json and source-target-id-map.private.jsonl in the same directory")
+    parser.add_argument("--identity-manifest", type=Path, help="Required with target: reviewed private Core26 identity manifest; reads identity-mapping.private.json and source-target-id-map.private.jsonl in the same directory")
     parser.add_argument("--output", type=Path, required=True, help="New 0700 directory below ~/Backups")
     parser.add_argument("--migration-id", required=True)
     parser.add_argument("--apply", action="store_true")
@@ -612,11 +633,12 @@ def main() -> int:
             require(isinstance(target.get("instance_identity", {}).get("server_instance_nonce"), str)
                     and bool(target["instance_identity"]["server_instance_nonce"]), "target_instance_nonce_receipt_missing")
             connection = target.get("connection", {})
-            target_identity = json.loads(IDENTITY.psql(connection, "BEGIN READ ONLY;\nSET LOCAL search_path=pg_catalog,public;\n" + IDENTITY.IDENTITY_SQL + "\nCOMMIT;", readonly=True, private_dir=output, label="target-console-identity"))
+            target_identity = json.loads(IDENTITY.psql(connection, "BEGIN READ ONLY;\nSET LOCAL timezone='UTC';\nSET LOCAL search_path=pg_catalog,public;\n" + IDENTITY.IDENTITY_SQL + "\nCOMMIT;", readonly=True, private_dir=output, label="target-console-identity"))
             IDENTITY.verify_instance(target_identity, connection, target.get("instance_identity", {}), source=False)
             require((target_identity["database_oid"], target_identity["postmaster_started_at"]) != (source_identity["database_oid"], source_identity["postmaster_started_at"]), "source_target_same_database")
             for key in ("datcollate", "datctype", "datcollversion"):
                 require(target_identity.get(key) == source_identity.get(key), "source_target_collation_mismatch")
+            manifest.update(manifest_binding(contract, target.get("contract", {}), target_identity, connection))
             sql = build_import_sql(plan, migration_id=args.migration_id, target_contract=target.get("contract", {}),
                                    manifest=manifest, contract=contract, target_identity=target_identity,
                                    identity_proof=identity_proof, target_connection=connection)
