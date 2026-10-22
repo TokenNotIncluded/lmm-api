@@ -47,6 +47,9 @@ pub struct CacheCreationUsage {
     pub five_minute: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub one_hour: Option<i64>,
+    /// OpenAI's twelve-hour subset; absent historical evidence stays unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub twelve_hour: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_creation_mode: Option<crate::routing::CacheCreationMode>,
     /// Revision 3 keeps the original aggregate beside its normalized maximum.
@@ -57,10 +60,23 @@ pub struct CacheCreationUsage {
 impl CacheCreationUsage {
     pub(crate) fn valid(self) -> bool {
         if self.total < 0
-            || [self.five_minute, self.one_hour, self.reported_total]
-                .into_iter()
-                .flatten()
-                .any(|v| v < 0)
+            || [
+                self.five_minute,
+                self.one_hour,
+                self.twelve_hour,
+                self.reported_total,
+            ]
+            .into_iter()
+            .flatten()
+            .any(|v| v < 0)
+        {
+            return false;
+        }
+        if self.twelve_hour.is_some_and(|value| value > self.total)
+            || (self.twelve_hour.is_some_and(|value| value != 0)
+                && (self.cache_creation_mode.is_some()
+                    || self.five_minute.is_some_and(|value| value != 0)
+                    || self.one_hour.is_some_and(|value| value != 0)))
         {
             return false;
         }
@@ -91,6 +107,17 @@ impl CacheCreationUsage {
             old.is_none_or(|old| now.is_some_and(|now| now >= old))
         };
         if self.cache_creation_mode != previous.cache_creation_mode {
+            return false;
+        }
+        if !follows(self.twelve_hour, previous.twelve_hour)
+            || !follows(
+                self.twelve_hour
+                    .and_then(|value| self.total.checked_sub(value)),
+                previous
+                    .twelve_hour
+                    .and_then(|value| previous.total.checked_sub(value)),
+            )
+        {
             return false;
         }
         if self.cache_creation_mode == Some(crate::routing::CacheCreationMode::GenericRemainderV1) {
@@ -309,6 +336,7 @@ impl Price {
                         output: usage.output as u64,
                         created_5m: created.and_then(|v| v.five_minute.map(|v| v as u64)),
                         created_1h: created.and_then(|v| v.one_hour.map(|v| v as u64)),
+                        created_12h: created.and_then(|v| v.twelve_hour.map(|v| v as u64)),
                     },
                     self.discount(),
                 )
@@ -754,6 +782,7 @@ mod generic_remainder_tests {
             upstream_cost_group_ppm: None,
             tiered: Some(PersistedTieredTariff {
                 tariff: TieredTariff {
+                    uses_cache_write_12h: false,
                     revision: 3,
                     source_digest: "ab".repeat(32),
                     uses_cache_read: true,
@@ -762,6 +791,7 @@ mod generic_remainder_tests {
                     tiers: vec![TokenTier {
                         up_to_input_tokens: None,
                         rates: TieredRates {
+                            cache_write_12h: None,
                             input: rate(5, 1),
                             output: rate(25, 1),
                             cache_read: rate(1, 2),
@@ -790,6 +820,7 @@ mod generic_remainder_tests {
             input: 120 + total,
             cached: 20,
             cache_creation: Some(CacheCreationUsage {
+                twelve_hour: None,
                 total,
                 five_minute: five,
                 one_hour: hour,
@@ -869,6 +900,7 @@ mod generic_remainder_tests {
     #[test]
     fn old_cache_json_remains_byte_identical_while_new_mode_is_explicit() {
         let old = CacheCreationUsage {
+            twelve_hour: None,
             total: 0,
             five_minute: Some(0),
             one_hour: Some(0),
@@ -906,6 +938,7 @@ mod delegated_source_tests {
         };
         assert!(
             !CacheCreationUsage {
+                twelve_hour: None,
                 total: 8,
                 five_minute: None,
                 one_hour: Some(7),
@@ -913,6 +946,7 @@ mod delegated_source_tests {
                 reported_total: None,
             }
             .follows(CacheCreationUsage {
+                twelve_hour: None,
                 total: 7,
                 five_minute: None,
                 one_hour: Some(5),
@@ -930,6 +964,7 @@ mod delegated_source_tests {
         );
         let measured = Usage {
             cache_creation: Some(CacheCreationUsage {
+                twelve_hour: None,
                 total: 5,
                 five_minute: Some(2),
                 one_hour: Some(3),
@@ -943,6 +978,7 @@ mod delegated_source_tests {
         assert!(!old.follows(measured));
         let missing_hour = Usage {
             cache_creation: Some(CacheCreationUsage {
+                twelve_hour: None,
                 total: 5,
                 five_minute: Some(2),
                 one_hour: None,
@@ -954,6 +990,7 @@ mod delegated_source_tests {
         assert!(!missing_hour.follows(measured));
         for cache in [
             CacheCreationUsage {
+                twelve_hour: None,
                 total: -1,
                 five_minute: None,
                 one_hour: None,
@@ -961,6 +998,7 @@ mod delegated_source_tests {
                 reported_total: None,
             },
             CacheCreationUsage {
+                twelve_hour: None,
                 total: 5,
                 five_minute: Some(2),
                 one_hour: Some(4),
@@ -968,6 +1006,7 @@ mod delegated_source_tests {
                 reported_total: None,
             },
             CacheCreationUsage {
+                twelve_hour: None,
                 total: 9,
                 five_minute: None,
                 one_hour: None,
@@ -985,6 +1024,7 @@ mod delegated_source_tests {
         }
         let zero = Usage {
             cache_creation: Some(CacheCreationUsage {
+                twelve_hour: None,
                 total: 0,
                 five_minute: Some(0),
                 one_hour: Some(0),

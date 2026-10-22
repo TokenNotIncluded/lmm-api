@@ -88,6 +88,8 @@ pub struct Request {
     pub tool_choice: ToolChoice,
     pub parallel_tool_calls: Option<bool>,
     pub reasoning_effort: Option<String>,
+    /// Bounded Responses cache controls; never evidence of actual billed writes.
+    pub prompt_cache_options: Option<Value>,
     pub(crate) include_usage: bool,
 }
 
@@ -285,6 +287,7 @@ impl Request {
                     "parallel_tool_calls",
                     "reasoning",
                     "store",
+                    "prompt_cache_options",
                 ],
             )?,
         }
@@ -610,6 +613,28 @@ impl Request {
         if count > 4096 {
             return Err(RelayError::Limit("input block count"));
         }
+        let prompt_cache_options = v
+            .get("prompt_cache_options")
+            .filter(|value| !value.is_null())
+            .map(|options| {
+                keys(options, &["mode", "ttl"])?;
+                if options
+                    .get("mode")
+                    .is_some_and(|mode| mode.as_str() != Some("implicit"))
+                {
+                    return Err(RelayError::Unsupported(
+                        "explicit cache breakpoints are not supported",
+                    ));
+                }
+                if !matches!(
+                    options.get("ttl").and_then(Value::as_str),
+                    Some("30m" | "12h")
+                ) {
+                    return Err(RelayError::Invalid("cache lifetime must be 30m or 12h"));
+                }
+                Ok(options.clone())
+            })
+            .transpose()?;
         Ok(Self {
             client,
             model,
@@ -624,6 +649,7 @@ impl Request {
             top_p: number(v.get("top_p"), 1.0)?,
             parallel_tool_calls: boolean(v.get("parallel_tool_calls"))?,
             reasoning_effort,
+            prompt_cache_options,
         })
     }
 
@@ -638,6 +664,11 @@ impl Request {
         protocol: UpstreamProtocol,
         model: &str,
     ) -> Result<Value, RelayError> {
+        if self.prompt_cache_options.is_some() && protocol != UpstreamProtocol::Responses {
+            return Err(RelayError::Unsupported(
+                "cache lifetime controls require a Responses route",
+            ));
+        }
         for m in &self.messages {
             for b in &m.content {
                 if protocol == UpstreamProtocol::Anthropic
@@ -815,6 +846,9 @@ impl Request {
             }
         }
         let mut v = json!({"model":model,"input":input,"stream":self.stream,"max_output_tokens":self.max_output_tokens,"store":false});
+        if let Some(options) = &self.prompt_cache_options {
+            v["prompt_cache_options"] = options.clone();
+        }
         if !self.tools.is_empty() {
             v["tools"] = json!(self.openai_tools(false));
             v["tool_choice"] = self.openai_choice(false);
