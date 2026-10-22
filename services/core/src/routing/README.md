@@ -298,8 +298,8 @@ Protocol references are the
 and the [official OpenAI prompt-caching guide](https://developers.openai.com/api/docs/guides/prompt-caching).
 This is a Rust implementation of the receipt and tariff contract; the project's
 [AGPL attribution and upstream provenance](../../../../docs/fork.md) remain in
-force. Supplier search metering and search-tool charges are outside this change
-and remain unimplemented here.
+force. Search has its own measured-unit contract described under
+[Hosted search receipts and prices](#hosted-search-receipts-and-prices).
 
 ## Publication, persistence and recovery
 
@@ -386,11 +386,12 @@ The root `bun run test:core` script runs `cargo test --locked --all-targets`;
 the broader [`core-protocol` workflow](../../../../.github/workflows/core-protocol.yml)
 also compiles/lints all targets and runs that aggregate with PostgreSQL and its
 process fixtures. Reuse an aggregate result instead of repeating its component
-checks. In the implementation workspace, changed Rust files passed the pinned
-Rust 1.99.0 formatter check, but Rust compilation/tests and PostgreSQL settlement
-tests were **not run**; the complete compiler/Cargo toolchain was unavailable.
-Source tests and format checks are not financial acceptance or proof of
-live-provider compatibility.
+checks. The local implementation checks for revision 4 included the pinned
+Rust 1.99.0 formatter, but did **not** include Rust compilation/tests or PostgreSQL
+settlement tests. Subsequent Cargo lockfile resolution and metadata validation
+also do not compile the implementation. Source tests and format checks are not
+financial acceptance or proof of live-provider compatibility; consult the
+revision's actual `check-results` and CI records before enabling it.
 
 The ignored test below is an opt-in pressure benchmark, not a skipped correctness
 test. It uses configured model cardinality, two weighted mock destinations per
@@ -544,7 +545,7 @@ support for OpenAI cap parameters from a compatible response shape.
 | `azure_responses_v1` | Responses v1 | `tool_usage.web_search.num_requests` |
 | `xai_responses_v1` | Responses | `usage.server_side_tool_usage_details.web_search_calls`, `x_posts_fetched`, `x_users_fetched` |
 | `dashscope_responses_v1` | Responses | `usage.x_tools.web_search.count` |
-| `dashscope_anthropic_v1` | Messages | `usage.x_tools.web_search.count` |
+| `dashscope_anthropic_v1` | Messages | `usage.server_tool_use.web_search_requests` |
 | `anthropic_messages_v1` | Messages | `usage.server_tool_use.web_search_requests` |
 | `gemini_grounding_v1` | Gemini generateContent | Unique nonempty trimmed web/image search queries across candidates/frames; grounded-request indicator is zero or one |
 | `zhipu_chat_v1` | Chat, nonstreaming | Nonempty search results establish one grounded request; the request flag alone does not |
@@ -592,3 +593,266 @@ Protocol sources: [upstream vendor meters](https://github.com/QuantumNous/new-ap
 [upstream Gemini units](https://github.com/QuantumNous/new-api/commit/d10f11ffff20688b8e3e745268cc0036e896d068),
 [OpenAI web search](https://developers.openai.com/api/docs/guides/tools-web-search),
 and [Google Search grounding](https://ai.google.dev/gemini-api/docs/google-search).
+
+## Native DeepSeek Search and Fetch
+
+The `deepseek_tools` routing protocol serves `POST /v1/tools/search` and
+`POST /v1/tools/fetch` as separate nonstreaming operations. The local optional
+`model` selects a route and is removed before dispatch; its defaults are
+`deepseek-search` and `deepseek-fetch`. These operations use the existing API-key
+identity, route selection, reservation, selected-price checkpoint and ledger
+settlement path. They do not enter the chat protocol adapter or replay after a
+send.
+
+Each operation needs its own matching `PriceRule.search` and exact
+`ExternalModelContext.search`: use provider `deep_seek_search_v1` or
+`deep_seek_fetch_v1`, unit `call`, and `limits: {"calls": 1}`. The context has
+`max_input_tokens: 0` and `max_output_tokens: 0`. All scalar price rates are zero;
+`billing_mode` remains `tokens` as the base envelope, with the explicit search
+tariff providing the charge. Image, embedding, upstream-cost and tiered prices
+cannot be mixed into this native operation. For example, these are fields to
+merge into a reviewed Search price rule, using a **synthetic rate, not a supplier
+default**:
+
+```json
+{
+  "billing_mode": "tokens",
+  "rates": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0, "request": 0},
+  "search": {
+    "revision": 1,
+    "provider": "deep_seek_search_v1",
+    "unit": "call",
+    "currency": "USD",
+    "usd_per_unit": {"numerator": 1, "denominator": 1000}
+  }
+}
+```
+
+A complete successful Search receipt with nonempty `results` measures one call;
+an explicit empty array measures zero. Result count is not the number of billed
+calls. Fetch measures one for complete nonempty `content`, and zero for an
+explicit empty string. Token counters are explicitly zero for both operations.
+Only a complete documented error receipt establishes a failed, free request;
+an arbitrary proxy error, timeout, incomplete body or malformed result does not.
+Unknown evidence preserves the hold. A verified failed request records zero
+usage with a failed terminal outcome, settles the unused hold, and returns a
+sanitized gateway error without publishing supplier diagnostic text.
+
+Core limits Search queries to 128 Unicode characters and result `count` to
+1 through 50; Fetch URLs are bounded HTTP(S) URLs without embedded credentials.
+Unknown request keys and duplicate JSON keys are rejected. Receipt validation
+checks the entire supported response shape before deciding a charge or a refund.
+
+References: [DeepSeek Search and Fetch](https://api-docs.deepseek.com/guides/search/),
+the [Search schema](https://api-docs.deepseek.com/api/search/), the
+[Fetch schema](https://api-docs.deepseek.com/api/fetch/), and
+[upstream comparison 6cf0d90b](https://github.com/QuantumNous/new-api/commit/6cf0d90b5ff27f901697dddd61e0c28aba8efefc).
+
+### DeepSeek reasoning controls
+
+Chat, Responses and Messages adapters require an exact
+`ExternalModelContext.deepseek_parameters_contract` revision to enable DeepSeek
+controls. A model name or suffix is not authority to change parameters. This
+binding is independent of the native Search/Fetch protocol. Client and supplier
+protocols must match so that native reasoning history remains representable.
+
+| Client effort | DeepSeek effort |
+| --- | --- |
+| `none` | `none`, with thinking disabled |
+| `minimal`, `low` | `low` |
+| `medium`, `high`, `xhigh` | `high` |
+| `max`, `ultra` | `max` |
+
+Chat uses `reasoning_effort`, Responses uses `reasoning.effort`, and Messages
+uses `output_config.effort` with the supported `thinking.type` control. Only
+`enabled` and `disabled` thinking are accepted; conflicting controls, token
+budgets and adaptive thinking are rejected. Responses plaintext reasoning
+content and its stream events are retained, with an empty summary, instead of
+being changed into a different reasoning representation. Chat cache-hit aliases
+must agree with any token-detail counters.
+
+The bounded adapter rejects hosted search, prompt-cache lifetime controls,
+`parallel_tool_calls: false`, strict function schemas, developer messages and
+`top_p`. It also rejects temperature while thinking is enabled, because the
+selected contract cannot preserve that sampling request. Unbound routes retain
+their existing ordinary effort semantics. References are DeepSeek's
+[thinking guide](https://api-docs.deepseek.com/guides/thinking_mode/),
+[Responses guide](https://api-docs.deepseek.com/guides/responses_api/) and
+[Anthropic-compatible guide](https://api-docs.deepseek.com/guides/anthropic_api/).
+
+## Ali multimodal embeddings
+
+The `ali_multimodal_embedding` protocol has a separate native execution path for
+`POST /v1/embeddings` and
+`POST /api/v1/services/embeddings/multimodal-embedding/multimodal-embedding`.
+The first accepts a string, an array of strings, or typed text/image/video
+inputs and returns the OpenAI float-vector envelope. The second retains the
+supported native `input.contents` and `parameters` shape. Both dispatch the
+native Ali request, validate vector count, dimensions and finite elements, and
+use the same reservation and settlement machinery as other model requests.
+
+`EmbeddingTariff` revision 1 has independent exact USD rates per million text
+tokens and image/video tokens. They are required even when one rate is explicitly
+zero. The provider code fixes the meaning of the native receipt:
+
+| Receipt contract | Native counters | Canonical input |
+| --- | --- | --- |
+| `ali_separate_input_v1` | `input_tokens` is text; `image_tokens` is image/video | Sum of the two measured counters |
+| `ali_inclusive_input_v1` | `input_tokens` is total; `input_tokens_details.text_tokens` and `.image_tokens` are its partitions | Measured total, equal to the two partitions |
+
+All three canonical counters must be known for settlement, including explicit
+zeroes. Missing or contradictory partitions do not establish a free dimension.
+Ledger input is the measured total; output, cache-read, cache-write and reasoning
+usage are zero. Ordinary token, search, image, tiered and upstream-cost prices
+are mutually exclusive with the embedding tariff.
+
+This complete `PriceRule` uses **illustrative rates**, not official defaults or
+an instruction to enable any particular supplier:
+
+```json
+{
+  "id": 2,
+  "model": "example-multimodal-embedding",
+  "group": "default",
+  "speed": "standard",
+  "billing_mode": "tokens",
+  "rates": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0, "request": 0},
+  "group_multiplier_ppm": 1000000,
+  "speed_multiplier_ppm": 1000000,
+  "embedding": {
+    "revision": 1,
+    "provider": "ali_separate_input_v1",
+    "currency": "USD",
+    "text_usd_per_million": {"numerator": 1, "denominator": 10},
+    "image_usd_per_million": {"numerator": 129, "denominator": 500}
+  }
+}
+```
+
+With those example rates, 10 text tokens plus 20 image tokens cost USD 0.00000616,
+or 3.08 credits before discounts. The final charge is 4 credits at unit
+multipliers. Core combines both exact amounts, applies the frozen group/speed
+multipliers and verified funding discount once, and takes one final ceiling.
+Reservation uses the reviewed shared input-token ceiling times the larger of
+the two rates, with the same frozen factors. It does not reserve two independent
+token ceilings or infer the cheaper partition from the submitted modality.
+
+An exact `ExternalModelContext` must select this protocol and the same provider,
+set a supplier-backed `max_input_tokens`, set `max_output_tokens` to zero, and
+include an `embedding` contract. The following **synthetic contract fragment**
+shows its fields; its limits and dimensions must be replaced with the reviewed
+guarantees of the actual endpoint and mapped model:
+
+```json
+{
+  "embedding": {
+    "provider": "ali_separate_input_v1",
+    "contract_revision": "reviewed-embedding-supplier-revision",
+    "max_contents": 4,
+    "max_images": 1,
+    "max_videos": 0,
+    "max_text_bytes": 4096,
+    "max_inline_image_bytes": 1048576,
+    "default_dimensions": 1024,
+    "dimensions": [1024],
+    "supports_dimension_parameter": true,
+    "supports_fusion": false,
+    "allow_remote_media": false
+  }
+}
+```
+
+Core enforces content, image and video counts, aggregate text/instruction bytes,
+decoded inline-image bytes, permitted vector dimensions, fusion and remote-media
+permission before reserving or sending. `supports_dimension_parameter` is
+mandatory: true sends the selected dimension, including the reviewed default
+when the client omits it; false requires exactly one fixed dimension and omits
+the native parameter. Restricting a configurable model to one permitted dimension
+does not make it a fixed-dimension model. The adapter accepts bounded inline PNG,
+JPEG, WebP, BMP and TIFF images; videos use remote URLs. It does not implement
+`multi_images`, sparse vectors or arbitrary native options. A contract allowing
+remote media must cover the supplier's download validation and maximum billable
+input; Core does not fetch those URLs or estimate their tokens locally.
+
+The optional client `max_input_tokens` is a local budget check. Ali's native
+operation has no matching enforced token-cap field, so the client budget cannot
+reduce the supplier bound or reservation. A value below that bound is rejected
+before dispatch; the local field is removed from the provider request. Input
+byte/count limits alone do not prove a supplier token ceiling.
+
+References: [Ali multimodal embedding API](https://www.alibabacloud.com/help/en/model-studio/multimodal-embedding-api-reference)
+and [upstream comparison afe73b08](https://github.com/QuantumNous/new-api/commit/afe73b08ff6432aca4749a024391c7f886a5bd2d).
+
+## AWS Mantle Messages
+
+Mantle retains the `anthropic_messages` protocol and uses an exact
+`ExternalModelContext.mantle_sigv4_region` binding. Configure the reviewed region
+alongside the usual exact upstream/model/endpoint and token ceilings. The only
+accepted host is `bedrock-mantle.{region}.api.aws`, over HTTPS on the default
+port. Root, `/anthropic`, `/anthropic/v1` and the complete messages path are
+accepted bases; the adapter normalizes them to `/anthropic/v1/messages`. A
+different host, region, operation, query string or fragment is rejected.
+
+The referenced private credential file contains a strict JSON object with
+`access_key_id`, `secret_access_key`, and optional `session_token`. It is a
+credential revision, not routing or public-catalog data. Pretty-printed JSON is
+supported through the dedicated credential loader and existing file-origin
+checks. Every use of a credential reference must select the same authentication
+scheme; a Mantle JSON reference cannot also be used as a bearer/API key. Keys,
+tokens and signatures must not be copied into public configuration examples,
+logs or price projections.
+
+Core uses the official AWS `aws-sigv4` and `aws-credential-types` libraries. It
+signs the final serialized body bytes for service `bedrock-mantle`, the selected
+region and the canonical operation, including the payload hash and temporary
+session token where present. Messages uses `anthropic-version: 2023-06-01`;
+JSON and SSE responses follow the existing Anthropic receipt and checkpoint
+path. There is no fallback that sends the JSON credential as an API key, no
+automatic STS credential refresh, and no implicit enablement of hosted search
+or other AWS operations. Rotate temporary credentials through the installation's
+existing secret-revision and configuration process before they expire.
+
+References: [AWS Messages API](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-messages-api.html),
+[AWS Mantle signing service](https://docs.aws.amazon.com/bedrock/latest/userguide/count-tokens.html),
+and [upstream comparison d0322047](https://github.com/QuantumNous/new-api/commit/d032204733db31208f10bac118b6e683aab3bf29).
+These are Rust implementations of the reviewed contracts. The repository's
+[AGPL attribution and upstream provenance](../../../../docs/fork.md) continue
+to apply; use of the official AWS libraries does not change that provenance.
+
+### Native-operation recovery and checks
+
+Native tool and embedding usage, frozen prices and terminal outcome evidence use
+existing JSON persistence. No DDL or startup migration is required for these
+fields. A completed receipt is checkpointed before terminal settlement; recovery
+uses the original price, bound, provider and outcome. Missing historical terminal
+outcomes retain their original completed meaning. A failed zero-cost outcome is
+accepted only for the verified DeepSeek tool contract. Incomplete evidence keeps
+the hold for reconciliation. Duplicate IDs, dropped acknowledgements and process
+restarts never authorize a second supplier invocation.
+
+Enable new contracts only when all settlement/recovery readers understand their
+fields. Older binaries with strict unknown-field rejection cannot safely read
+new persisted evidence. A rollback must retain compatible readers; removing
+fields or replacing the frozen price is not a recovery procedure.
+
+Focused checks from `services/core`, using the pinned toolchain, are:
+
+```sh
+cargo test --locked --lib relay::deepseek_tests
+cargo test --locked --lib relay::mantle::tests
+cargo test --locked --lib model_http::native_operations
+cargo test --locked --lib routing::embedding
+# DATABASE_URL must already point to a disposable PostgreSQL server.
+cargo test --locked --test native_operations_billing
+```
+
+The native integration sources exercise real Core admission and isolated
+PostgreSQL ledger state, including insufficient funds before dispatch, complete
+and unknown receipts, zero-cost failures, duplicate requests, failed settlement
+acknowledgements and restart recovery. The Mantle unit sources include a fixed
+public-credential signing vector, endpoint rejection, body/time sensitivity,
+session-token signing and secret redaction. Local work has checked formatting,
+resolved the locked dependency graph and validated Cargo metadata; these are
+not executions of the Rust or PostgreSQL tests. Neither those source checks nor
+synthetic suppliers certify a live DeepSeek, Ali or AWS deployment. Use the
+recorded CI results for the exact revision as the acceptance evidence.

@@ -767,6 +767,7 @@ mod a07_recovery_tests {
         };
         let policy = ProviderPolicy::new(
             vec![ExternalModelContext {
+                mantle_sigv4_region: None,
                 deepseek_parameters_contract: None,
                 embedding: None,
                 search: None,

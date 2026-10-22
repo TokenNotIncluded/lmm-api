@@ -260,6 +260,7 @@ pub struct Route {
     pub(crate) cache_creation_mode: Option<CacheCreationMode>,
     pub(crate) search_contract: Option<super::search::SearchBinding>,
     pub(crate) deepseek_parameters: bool,
+    pub(crate) mantle: Option<super::mantle::MantleSigner>,
     availability: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
 }
 impl fmt::Debug for Route {
@@ -325,6 +326,7 @@ impl Route {
             cache_creation_mode: None,
             search_contract: None,
             deepseek_parameters: false,
+            mantle: None,
             availability: None,
         })
     }
@@ -335,6 +337,42 @@ impl Route {
         self
     }
 
+    /// Mantle has a dedicated credential path. Its JSON secret is never passed
+    /// through an API-key HeaderValue or made available as a fallback token.
+    pub fn new_mantle(
+        id: String,
+        endpoint: &str,
+        model: String,
+        region: &str,
+        secret_json: &str,
+        price_version: u64,
+    ) -> Result<Self, RelayError> {
+        if id.is_empty()
+            || id.len() > 128
+            || model.is_empty()
+            || model.len() > 256
+            || price_version == 0
+        {
+            return Err(RelayError::Invalid("invalid Mantle route configuration"));
+        }
+        let mantle = super::mantle::MantleSigner::new(endpoint, region, secret_json)?;
+        let mut credential = HeaderValue::from_static("");
+        credential.set_sensitive(true);
+        Ok(Self {
+            id,
+            protocol: UpstreamProtocol::Anthropic,
+            model,
+            price_version,
+            endpoint: mantle.endpoint().clone(),
+            credential,
+            cache_creation_mode: None,
+            search_contract: None,
+            deepseek_parameters: false,
+            mantle: Some(mantle),
+            availability: None,
+        })
+    }
+
     /// Server-owned, frozen supplier guarantees. Requests cannot select prices
     /// or decide which supplier's search receipt is authoritative.
     pub(crate) fn with_search_contract(
@@ -342,6 +380,11 @@ impl Route {
         provider: crate::routing::SearchProvider,
         limits: crate::routing::SearchLimits,
     ) -> Result<Self, RelayError> {
+        if self.mantle.is_some() {
+            return Err(RelayError::Unsupported(
+                "Mantle hosted search has no reviewed billing contract",
+            ));
+        }
         limits
             .validate()
             .map_err(|_| RelayError::Invalid("invalid search bounds"))?;
@@ -355,7 +398,7 @@ impl Route {
     /// Selected only through an exact server-owned DeepSeek parameter contract.
     /// A model name or a client-supplied thinking option cannot enable this.
     pub(crate) fn with_deepseek_parameters(mut self) -> Result<Self, RelayError> {
-        if self.protocol == UpstreamProtocol::Gemini {
+        if self.protocol == UpstreamProtocol::Gemini || self.mantle.is_some() {
             return Err(RelayError::Unsupported(
                 "DeepSeek has no Gemini parameter contract",
             ));

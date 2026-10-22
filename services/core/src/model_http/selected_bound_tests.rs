@@ -101,6 +101,7 @@ fn contexts(small_input: i64) -> Vec<ExternalModelContext> {
     ]
     .into_iter()
     .map(|(model, input, output)| ExternalModelContext {
+        mantle_sigv4_region: None,
         deepseek_parameters_contract: None,
         embedding: None,
         search: None,

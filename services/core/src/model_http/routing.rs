@@ -57,13 +57,19 @@ impl Bridge {
 
 pub(super) fn credential_map(
     values: Vec<UpstreamCredential>,
+    mantle_credentials: &std::collections::BTreeSet<(u64, u64)>,
 ) -> Result<BTreeMap<(u64, u64), String>, RelayError> {
     let mut result = BTreeMap::new();
     for value in values {
         if value.reference.id == 0
             || value.reference.revision == 0
             || value.secret.is_empty()
-            || value.secret.len() > 4096
+            || value.secret.len()
+                > if mantle_credentials.contains(&(value.reference.id, value.reference.revision)) {
+                    16 * 1024
+                } else {
+                    4096
+                }
             || result
                 .insert((value.reference.id, value.reference.revision), value.secret)
                 .is_some()
@@ -384,12 +390,19 @@ impl RouteProvider for Bridge {
                     "upstream-cost router cannot be mapped to another model",
                 ));
             }
-            let endpoint = operation_endpoint(
-                attempt.endpoint(),
-                upstream,
+            let mantle_region = self.provider_policy.mantle_region_for_binding(
+                attempt.upstream_id(),
                 attempt.upstream_model(),
-                request.stream,
-            )?;
+                attempt.protocol(),
+                attempt.endpoint(),
+            );
+            if self
+                .mantle_credentials
+                .contains(&(reference.id, reference.revision))
+                != mantle_region.is_some()
+            {
+                return Err(RelayError::RouteUnavailable);
+            }
             let route_id = format!(
                 "r{}-t{}-u{}",
                 attempt.route_id(),
@@ -398,14 +411,31 @@ impl RouteProvider for Bridge {
             );
             let attempt = Arc::new(attempt);
             let availability = attempt.clone();
-            let mut route = Route::new(
-                route_id.clone(),
-                upstream,
-                endpoint.as_str(),
-                attempt.upstream_model().to_owned(),
-                secret,
-                attempt.quote().version(),
-            )?
+            let mut route = if let Some(region) = mantle_region {
+                Route::new_mantle(
+                    route_id.clone(),
+                    attempt.endpoint(),
+                    attempt.upstream_model().to_owned(),
+                    region,
+                    secret,
+                    attempt.quote().version(),
+                )?
+            } else {
+                let endpoint = operation_endpoint(
+                    attempt.endpoint(),
+                    upstream,
+                    attempt.upstream_model(),
+                    request.stream,
+                )?;
+                Route::new(
+                    route_id.clone(),
+                    upstream,
+                    endpoint.as_str(),
+                    attempt.upstream_model().to_owned(),
+                    secret,
+                    attempt.quote().version(),
+                )?
+            }
             .with_cache_creation_mode(price.tiered.as_ref().and_then(|t| t.cache_creation_mode))
             .with_availability_guard(Arc::new(move || availability.is_available()));
             if let Some(search) = &price.search {

@@ -268,12 +268,38 @@ impl PricingSurface {
                 {
                     continue;
                 }
-                let header = match upstream.protocol {
-                    Protocol::Gemini => secret.clone(),
-                    _ => format!("Bearer {secret}"),
-                };
-                if reqwest::header::HeaderValue::from_str(&header).is_err() {
+                let mantle_region = gateway.bridge.provider_policy.mantle_region_for_binding(
+                    upstream.id,
+                    &target.upstream_model,
+                    upstream.protocol,
+                    upstream.endpoint.as_str(),
+                );
+                if gateway
+                    .bridge
+                    .mantle_credentials
+                    .contains(&(upstream.credential.id, upstream.credential.revision))
+                    != mantle_region.is_some()
+                {
                     continue;
+                }
+                if let Some(region) = mantle_region {
+                    if crate::relay::validate_mantle_binding(
+                        upstream.endpoint.as_str(),
+                        region,
+                        secret,
+                    )
+                    .is_err()
+                    {
+                        continue;
+                    }
+                } else {
+                    let header = match upstream.protocol {
+                        Protocol::Gemini => secret.clone(),
+                        _ => format!("Bearer {secret}"),
+                    };
+                    if reqwest::header::HeaderValue::from_str(&header).is_err() {
+                        continue;
+                    }
                 }
                 if upstream.protocol == Protocol::SystemOne && !quote.is_input_only_scalar() {
                     continue;
@@ -894,6 +920,7 @@ pub(crate) mod tests {
             names
                 .into_iter()
                 .map(|name| super::super::ExternalModelContext {
+                    mantle_sigv4_region: None,
                     deepseek_parameters_contract: None,
                     embedding: None,
                     search: None,
@@ -1318,6 +1345,7 @@ pub(crate) mod tests {
                     .find(|t| t.upstream_id == upstream.id)
                     .unwrap();
                 super::super::ExternalModelContext {
+                    mantle_sigv4_region: None,
                     deepseek_parameters_contract: None,
                     embedding: None,
                     search: None,

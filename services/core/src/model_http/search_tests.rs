@@ -92,6 +92,7 @@ fn search_frozen_price_and_receipt_survive_json_without_current_provider_policy(
 fn search_policy_does_not_grant_loopback_or_mismatched_endpoint_implicitly() {
     let policy = ProviderPolicy::new(
         vec![ExternalModelContext {
+            mantle_sigv4_region: None,
             deepseek_parameters_contract: None,
             embedding: None,
             search: Some(ExternalSearchContract {

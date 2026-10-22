@@ -7,6 +7,9 @@ mod deepseek;
 #[cfg(test)]
 mod deepseek_tests;
 mod encode;
+mod mantle;
+pub(crate) use mantle::mantle_credential_fingerprints;
+pub use mantle::{mantle_credential_reuses, validate_mantle_binding, validate_mantle_endpoint};
 pub(crate) mod honeypot;
 pub(crate) mod honeypot_network;
 mod native;
@@ -539,8 +542,6 @@ impl Worker {
             if !route.is_available() {
                 return Err(RelayError::RouteUnavailable);
             }
-            self.report.attempts += 1;
-            self.report.upstream_attempted = true;
             let request = connection
                 .client()
                 .post(route.endpoint.clone())
@@ -555,17 +556,31 @@ impl Worker {
                     },
                 )
                 .body(body.clone());
-            let request = match route.protocol {
-                UpstreamProtocol::Chat | UpstreamProtocol::Responses => {
-                    request.header(header::AUTHORIZATION, route.credential.clone())
+            let request = if let Some(mantle) = &route.mantle {
+                if route.protocol != UpstreamProtocol::Anthropic {
+                    return Err(RelayError::Invalid("Mantle requires the Messages protocol"));
                 }
-                UpstreamProtocol::Anthropic => request
-                    .header("x-api-key", route.credential.clone())
-                    .header("anthropic-version", "2023-06-01"),
-                UpstreamProtocol::Gemini => {
-                    request.header("x-goog-api-key", route.credential.clone())
+                request.headers(mantle.headers(
+                    &route.endpoint,
+                    &body,
+                    self.request.stream,
+                    std::time::SystemTime::now(),
+                )?)
+            } else {
+                match route.protocol {
+                    UpstreamProtocol::Chat | UpstreamProtocol::Responses => {
+                        request.header(header::AUTHORIZATION, route.credential.clone())
+                    }
+                    UpstreamProtocol::Anthropic => request
+                        .header("x-api-key", route.credential.clone())
+                        .header("anthropic-version", "2023-06-01"),
+                    UpstreamProtocol::Gemini => {
+                        request.header("x-goog-api-key", route.credential.clone())
+                    }
                 }
             };
+            self.report.attempts += 1;
+            self.report.upstream_attempted = true;
             let result = self
                 .gate
                 .run(self.inner.limits.header_timeout, Phase::Headers, async {

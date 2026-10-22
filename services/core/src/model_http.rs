@@ -14,7 +14,7 @@ pub mod image_execution;
 pub mod image_http;
 pub mod image_internal;
 pub mod image_price;
-mod image_provider;
+pub(crate) mod image_provider;
 mod native;
 mod native_operations;
 pub mod pricing;
@@ -45,7 +45,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     net::{IpAddr, SocketAddr},
     sync::{Arc, Mutex, OnceLock},
     time::Duration,
@@ -84,6 +84,7 @@ struct Bridge {
     charging: Charging,
     routing: Arc<crate::routing::Router>,
     credentials: BTreeMap<(u64, u64), String>,
+    mantle_credentials: BTreeSet<(u64, u64)>,
     active: Mutex<BTreeMap<String, Operation>>,
     recovery_cursor: tokio::sync::Mutex<Option<String>>,
     policy: ChargePolicy,
@@ -125,8 +126,16 @@ impl ModelGateway {
     /// Returns no credential material and never stops at the first match.
     pub(crate) fn contains_credential(&self, secret: &str) -> bool {
         let mut matched = subtle::Choice::from(0);
-        for credential in self.bridge.credentials.values() {
+        for (reference, credential) in &self.bridge.credentials {
             matched |= credential.as_bytes().ct_eq(secret.as_bytes());
+            if self.bridge.mantle_credentials.contains(reference) {
+                matched |= subtle::Choice::from(
+                    // Invalid configured material is rejected during construction;
+                    // fail closed if a later invariant is ever violated.
+                    crate::relay::mantle_credential_reuses(credential, secret).unwrap_or(true)
+                        as u8,
+                );
+            }
         }
         bool::from(matched)
             | self
@@ -180,7 +189,69 @@ impl ModelGateway {
         {
             return Err(RelayError::Invalid("unsafe model gateway policy"));
         }
-        let credentials = routing::credential_map(credentials)?;
+        let document = routing
+            .catalog_document()
+            .map_err(|_| RelayError::RouteUnavailable)?;
+        let mantle_credentials = provider_policy
+            .mantle_credential_references(&document.routing.upstreams, &document.routing.routes)?;
+        let credentials = routing::credential_map(credentials, &mantle_credentials)?;
+        let mut ordinary_fingerprints = BTreeSet::new();
+        for (reference, secret) in &credentials {
+            if !mantle_credentials.contains(reference) {
+                if crate::relay::mantle_credential_fingerprints(secret).is_ok() {
+                    return Err(RelayError::Invalid(
+                        "AWS credential document cannot be an API key",
+                    ));
+                }
+                ordinary_fingerprints.insert(<[u8; 32]>::from(Sha256::digest(secret.as_bytes())));
+            }
+        }
+        for reference in &mantle_credentials {
+            if let Some(secret) = credentials.get(reference) {
+                let fields = crate::relay::mantle_credential_fingerprints(secret)?;
+                if fields
+                    .iter()
+                    .any(|digest| ordinary_fingerprints.contains(digest))
+                {
+                    return Err(RelayError::Invalid(
+                        "AWS credential fields must not be reused as API keys",
+                    ));
+                }
+            }
+        }
+        let upstreams: BTreeMap<_, _> = document
+            .routing
+            .upstreams
+            .iter()
+            .map(|upstream| (upstream.id, upstream))
+            .collect();
+        for route in &document.routing.routes {
+            for target in &route.targets {
+                let Some(upstream) = upstreams.get(&target.upstream_id) else {
+                    return Err(RelayError::RouteUnavailable);
+                };
+                if let Some(region) = provider_policy.mantle_region_for_binding(
+                    upstream.id,
+                    &target.upstream_model,
+                    upstream.protocol,
+                    upstream.endpoint.as_str(),
+                ) {
+                    let Some(secret) =
+                        credentials.get(&(upstream.credential.id, upstream.credential.revision))
+                    else {
+                        if upstream.enabled {
+                            return Err(RelayError::RouteUnavailable);
+                        }
+                        continue;
+                    };
+                    crate::relay::validate_mantle_binding(
+                        upstream.endpoint.as_str(),
+                        region,
+                        secret,
+                    )?;
+                }
+            }
+        }
         for group in key_groups.values() {
             routing
                 .catalog(group)
@@ -198,6 +269,7 @@ impl ModelGateway {
             charging: Charging::new(pool.clone(), Arc::new(TransactionalLedger)),
             routing,
             credentials,
+            mantle_credentials,
             active: Mutex::new(BTreeMap::new()),
             recovery_cursor: tokio::sync::Mutex::new(None),
             policy,

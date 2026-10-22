@@ -215,6 +215,7 @@ fn gateway(
     .unwrap();
     let policy = ProviderPolicy::new(
         vec![ExternalModelContext {
+            mantle_sigv4_region: None,
             deepseek_parameters_contract: None,
             embedding: None,
             upstream_id: 1,
