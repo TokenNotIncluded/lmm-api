@@ -318,33 +318,15 @@ export function buildAssertionResult(
  */
 export async function isPasskeySupported(): Promise<boolean> {
   if (typeof window === 'undefined') return false
-  const { PublicKeyCredential } = window
-  if (!PublicKeyCredential) return false
-
-  if (
-    typeof PublicKeyCredential.isConditionalMediationAvailable === 'function'
-  ) {
-    try {
-      const available =
-        await PublicKeyCredential.isConditionalMediationAvailable()
-      if (available) return true
-    } catch {
-      // ignore
-    }
-  }
-
-  if (
-    typeof PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable ===
-    'function'
-  ) {
-    try {
-      return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()
-    } catch {
-      return false
-    }
-  }
-
-  return true
+  // Platform availability and conditional mediation are optional capabilities.
+  // A browser without either can still use a roaming USB/NFC security key.
+  return (
+    window.isSecureContext === true &&
+    typeof window.PublicKeyCredential === 'function' &&
+    typeof navigator !== 'undefined' &&
+    typeof navigator.credentials?.create === 'function' &&
+    typeof navigator.credentials?.get === 'function'
+  )
 }
 
 /**
