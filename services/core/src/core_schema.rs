@@ -54,6 +54,7 @@ const COMPONENTS: &[(&str, &str)] = &[
     ),
     ("trust-pricing", crate::billing::trust_pricing::SCHEMA),
     ("telegram-auth", crate::identity::TELEGRAM_AUTH_SCHEMA),
+    ("routing-admin", crate::routing_admin::SCHEMA),
 ];
 
 /// The compiled fresh-install contract, including explicitly disabled modules.
@@ -404,3 +405,6 @@ async fn install_usage_receipt_index_transaction(
 
 #[cfg(test)]
 mod index_tests;
+
+#[cfg(test)]
+mod routing_admin_upgrade_evidence;

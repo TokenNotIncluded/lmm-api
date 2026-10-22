@@ -76,6 +76,8 @@ export const ENDPOINT_TYPES = {
   JINA_RERANK: 'jina-rerank',
   IMAGE_GENERATION: 'image-generation',
   EMBEDDINGS: 'embeddings',
+  DEEPSEEK_SEARCH: 'deepseek-search',
+  DEEPSEEK_FETCH: 'deepseek-fetch',
   OPENAI_VIDEO: 'openai-video',
   SYSTEMONE: 'systemone',
   MODERATION: 'moderation',
@@ -100,6 +102,8 @@ export function getEndpointTypeLabels(
     [ENDPOINT_TYPES.JINA_RERANK]: 'Rerank',
     [ENDPOINT_TYPES.IMAGE_GENERATION]: t('Image'),
     [ENDPOINT_TYPES.EMBEDDINGS]: t('Embeddings'),
+    [ENDPOINT_TYPES.DEEPSEEK_SEARCH]: 'DeepSeek Search',
+    [ENDPOINT_TYPES.DEEPSEEK_FETCH]: 'DeepSeek Fetch',
     [ENDPOINT_TYPES.OPENAI_VIDEO]: t('Video'),
     [ENDPOINT_TYPES.SYSTEMONE]: t('Judgment'),
     [ENDPOINT_TYPES.MODERATION]: t('Moderation'),
@@ -115,6 +119,8 @@ export function getEndpointTypeLabel(
 ): string {
   if (endpointType === ENDPOINT_TYPES.SYSTEMONE) return t('TypeSafe (Jev)')
   if (endpointType === ENDPOINT_TYPES.MODERATION) return t('Moderation')
+  if (endpointType === ENDPOINT_TYPES.DEEPSEEK_SEARCH) return 'DeepSeek Search'
+  if (endpointType === ENDPOINT_TYPES.DEEPSEEK_FETCH) return 'DeepSeek Fetch'
   if (endpointType === ENDPOINT_TYPES.LIVE) return t('Live session')
   if (endpointType === ENDPOINT_TYPES.REALTIME_TRANSCRIPTION) {
     return t('Realtime transcription')

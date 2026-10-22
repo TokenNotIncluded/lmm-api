@@ -40,7 +40,9 @@ CORE_SCHEMAS = (
     "core_humangrant.",
     "core_image.",
     "core_market_oauth.",
+    "core_telegram_auth.",
     "core_tool_market.",
+    "core_trust_pricing.",
     "core_wallet.",
     "core_billing.",
     "core_charging.",
@@ -54,6 +56,7 @@ CORE_SCHEMAS = (
     "core_model.",
     "core_oauth.",
     "core_payments.",
+    "core_routing_admin.",
     "core_runtime.",
     "core_schema.",
 )

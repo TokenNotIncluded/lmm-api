@@ -25,6 +25,7 @@ import { useHistoricalQuotaMoney } from '@/hooks/use-historical-quota-money'
 import { formatTokens } from '@/lib/format'
 
 import type { UsageLog } from '../data/schema'
+import { embeddingUsageQuantities } from '../lib/embedding-usage'
 import {
   hasNetConsumptionMetadata,
   logNetConsumptionAmounts,
@@ -190,16 +191,17 @@ export function LogRequestSummary({
             </dd>
           </div>
         )}
-        {searchUsageQuantities(other, log.token_usage_available).map(
-          (quantity) => (
-            <div key={quantity.label}>
-              <dt className='text-muted-foreground'>{t(quantity.label)}</dt>
-              <dd className='tabular-nums'>
-                {quantity.count?.toLocaleString() ?? t('Unknown')}
-              </dd>
-            </div>
-          )
-        )}
+        {[
+          ...searchUsageQuantities(other, log.token_usage_available),
+          ...embeddingUsageQuantities(other, log.token_usage_available),
+        ].map((quantity) => (
+          <div key={quantity.label}>
+            <dt className='text-muted-foreground'>{t(quantity.label)}</dt>
+            <dd className='tabular-nums'>
+              {quantity.count?.toLocaleString() ?? t('Unknown')}
+            </dd>
+          </div>
+        ))}
         {(other?.audio_usage_status != null || audioSeconds != null) && (
           <div>
             <dt className='text-muted-foreground'>

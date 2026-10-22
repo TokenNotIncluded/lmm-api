@@ -4,6 +4,7 @@
 //! See README.md for publication, retry, credential, and task 05/06 boundaries.
 
 mod config;
+mod embedding;
 mod engine;
 mod group_name;
 mod pricing;
@@ -14,6 +15,10 @@ mod tiered;
 pub use config::{
     CredentialRef, Endpoint, FailoverPolicy, ModelAlias, ModelGroup, ModelRoute, PayloadPolicy,
     Protocol, RetryCause, RouteTarget, RoutingConfig, Speed, UpstreamConfig,
+};
+pub use embedding::{
+    EmbeddingCurrency, EmbeddingProvider, EmbeddingTariff, EmbeddingUsage,
+    MAX_EMBEDDING_INPUT_TOKENS, PersistedEmbeddingPrice,
 };
 pub use engine::{
     Attempt, DeliveryState, Failure, FailureKind, HealthStatus, PublicModel, ReleaseVersion,

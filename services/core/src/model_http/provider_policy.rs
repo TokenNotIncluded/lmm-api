@@ -5,7 +5,7 @@ use crate::{
         RelayError,
         honeypot_network::{literal_ip, validate_base_url},
     },
-    routing::{Attempt, Protocol, SearchLimits, SearchProvider},
+    routing::{Attempt, EmbeddingProvider, Protocol, SearchLimits, SearchProvider},
 };
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -32,6 +32,9 @@ impl ExternalSearchContract {
                 Protocol::AnthropicMessages
             }
             SearchProvider::ZhipuChatV1 => Protocol::OpenAiChat,
+            SearchProvider::DeepSeekSearchV1 | SearchProvider::DeepSeekFetchV1 => {
+                Protocol::DeepSeekTools
+            }
         };
         self.limits
             .validate()
@@ -47,11 +50,61 @@ impl ExternalSearchContract {
     }
 }
 
+/// Exact native embedding capability and supplier-enforced input contract.
+/// Remote media is never downloaded by Core; enabling it requires the bound
+/// to cover the supplier's remote-media validation and billing guarantees.
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalEmbeddingContract {
+    pub provider: EmbeddingProvider,
+    pub contract_revision: String,
+    pub max_contents: u16,
+    pub max_images: u16,
+    pub max_videos: u16,
+    pub max_text_bytes: u32,
+    pub max_inline_image_bytes: u32,
+    pub default_dimensions: u32,
+    pub dimensions: Vec<u32>,
+    pub supports_fusion: bool,
+    pub allow_remote_media: bool,
+}
+impl ExternalEmbeddingContract {
+    fn validate(&self, protocol: Protocol) -> Result<(), RelayError> {
+        let mut dimensions = self.dimensions.clone();
+        dimensions.sort_unstable();
+        dimensions.dedup();
+        if protocol != Protocol::AliMultimodalEmbedding
+            || self.contract_revision.is_empty()
+            || self.contract_revision.len() > 512
+            || self.contract_revision.chars().any(char::is_control)
+            || !(1..=20).contains(&self.max_contents)
+            || self.max_images > 8
+            || self.max_videos > 1
+            || !(1..=1_048_576).contains(&self.max_text_bytes)
+            || self.max_inline_image_bytes > 5 * 1_048_576
+            || !(1..=16).contains(&self.dimensions.len())
+            || dimensions.len() != self.dimensions.len()
+            || dimensions.iter().any(|v| !(1..=4096).contains(v))
+            || !dimensions.contains(&self.default_dimensions)
+            || (self.max_videos != 0 && !self.allow_remote_media)
+        {
+            return Err(RelayError::Invalid("invalid native embedding contract"));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExternalModelContext {
     #[serde(default)]
     pub search: Option<ExternalSearchContract>,
+    #[serde(default)]
+    pub embedding: Option<ExternalEmbeddingContract>,
+    /// Explicit opt-in for the reviewed DeepSeek request parameter contract.
+    /// A model name or a protocol-compatible endpoint is never this authority.
+    #[serde(default)]
+    pub deepseek_parameters_contract: Option<String>,
     pub upstream_id: u64,
     pub upstream_model: String,
     pub protocol: Protocol,
@@ -97,9 +150,19 @@ impl ProviderPolicy {
                 || context.upstream_model.is_empty()
                 || context.upstream_model.len() > 256
                 || context.upstream_model.chars().any(char::is_control)
-                || context.max_input_tokens == 0
+                || (context.protocol != Protocol::DeepSeekTools && context.max_input_tokens == 0)
                 || i64::from(context.max_input_tokens) > reserved_input_tokens
-                || !(1..=65_536).contains(&context.max_output_tokens)
+                || match context.protocol {
+                    Protocol::DeepSeekTools => {
+                        context.max_input_tokens != 0
+                            || context.max_output_tokens != 0
+                            || context.search.is_none()
+                    }
+                    Protocol::AliMultimodalEmbedding => {
+                        context.max_output_tokens != 0 || context.embedding.is_none()
+                    }
+                    _ => !(1..=65_536).contains(&context.max_output_tokens),
+                }
                 || context.contract_revision.is_empty()
                 || context.contract_revision.len() > 512
                 || context.contract_revision.chars().any(char::is_control)
@@ -108,6 +171,25 @@ impl ProviderPolicy {
             }
             if let Some(search) = &context.search {
                 search.validate(context.protocol)?;
+            }
+            if let Some(embedding) = &context.embedding {
+                embedding.validate(context.protocol)?;
+                if context.search.is_some() {
+                    return Err(RelayError::Invalid("mixed provider metering contract"));
+                }
+            }
+            if let Some(revision) = &context.deepseek_parameters_contract
+                && (revision.is_empty()
+                    || revision.len() > 512
+                    || revision.chars().any(char::is_control)
+                    || !matches!(
+                        context.protocol,
+                        Protocol::OpenAiChat
+                            | Protocol::OpenAiResponses
+                            | Protocol::AnthropicMessages
+                    ))
+            {
+                return Err(RelayError::Invalid("invalid DeepSeek parameter contract"));
             }
             context.endpoint = endpoint.to_string();
             if result
@@ -155,6 +237,47 @@ impl ProviderPolicy {
         context.search.as_ref().ok_or(RelayError::Unsupported(
             "hosted search requires reviewed supplier limits",
         ))
+    }
+
+    pub(crate) fn embedding_contract(
+        &self,
+        attempt: &Attempt,
+    ) -> Result<(&ExternalEmbeddingContract, u32), RelayError> {
+        self.embedding_contract_for_binding(
+            attempt.upstream_id(),
+            attempt.upstream_model(),
+            attempt.protocol(),
+            attempt.endpoint(),
+        )
+    }
+
+    pub(crate) fn deepseek_parameters_contract(&self, attempt: &Attempt) -> Option<&str> {
+        self.contexts
+            .get(&(attempt.upstream_id(), attempt.upstream_model().to_owned()))
+            .filter(|context| {
+                context.protocol == attempt.protocol() && context.endpoint == attempt.endpoint()
+            })
+            .and_then(|context| context.deepseek_parameters_contract.as_deref())
+    }
+
+    pub(crate) fn embedding_contract_for_binding(
+        &self,
+        upstream_id: u64,
+        model: &str,
+        protocol: Protocol,
+        endpoint: &str,
+    ) -> Result<(&ExternalEmbeddingContract, u32), RelayError> {
+        let context = self
+            .contexts
+            .get(&(upstream_id, model.to_owned()))
+            .filter(|context| context.protocol == protocol && context.endpoint == endpoint)
+            .ok_or(RelayError::Unsupported(
+                "native embedding requires an exact supplier contract",
+            ))?;
+        let contract = context.embedding.as_ref().ok_or(RelayError::Unsupported(
+            "native embedding requires reviewed supplier limits",
+        ))?;
+        Ok((contract, context.max_input_tokens))
     }
 
     /// Freeze the reviewed input bound for this exact selected attempt. The
@@ -287,6 +410,20 @@ impl ExternalModelContext {
         usage: &crate::relay::Usage,
         upstream_cost: bool,
     ) -> Result<(), RelayError> {
+        if let Some(observed) = usage.embedding {
+            let contract = self
+                .embedding
+                .as_ref()
+                .ok_or(RelayError::SettlementPending)?;
+            if !observed.complete()
+                || observed.provider != contract.provider
+                || observed
+                    .total_input_tokens
+                    .is_none_or(|tokens| tokens > u64::from(self.max_input_tokens))
+            {
+                return Err(RelayError::SettlementPending);
+            }
+        }
         if let Some(observed) = usage.search {
             let search = self.search.as_ref().ok_or(RelayError::SettlementPending)?;
             if observed.provider != search.provider || !search.limits.contains(observed) {
@@ -466,6 +603,8 @@ mod tests {
 
     fn context() -> ExternalModelContext {
         ExternalModelContext {
+            deepseek_parameters_contract: None,
+            embedding: None,
             search: None,
             missing_cache_creation_tokens_is_zero: false,
             upstream_id: 1,

@@ -129,6 +129,16 @@ export const nativeSearchPriceSchema = z
   )
 export type NativeSearchPrice = z.infer<typeof nativeSearchPriceSchema>
 
+export const nativeEmbeddingPriceSchema = z
+  .object({
+    available: z.boolean(),
+    provider: z.enum(['ali_separate_input_v1', 'ali_inclusive_input_v1']),
+    text_usd_per_million: fraction.strict(),
+    image_usd_per_million: fraction.strict(),
+  })
+  .strict()
+export type NativeEmbeddingPrice = z.infer<typeof nativeEmbeddingPriceSchema>
+
 export const nativeTokenPriceSchema = z
   .object({
     currency: z.literal('USD'),
@@ -142,9 +152,20 @@ export const nativeTokenPriceSchema = z
     request: z.null(),
     final_cost_depends_on_usage: z.literal(true),
     search: nativeSearchPriceSchema.optional(),
+    embedding: nativeEmbeddingPriceSchema.optional(),
     // Every tier inherits this token price's currency, unit and rate basis.
     cache_write_12h_tiers: cacheWrite12hTiers.optional(),
   })
+  .refine(
+    (price) =>
+      !price.embedding ||
+      (price.input === null &&
+        price.output === null &&
+        price.cache_read === null &&
+        !price.search &&
+        !price.cache_write_12h_tiers),
+    'Embedding prices require explicit modality rates without mixed tariff dimensions'
+  )
   .refine(
     (price) =>
       !price.cache_write_12h_tiers ||

@@ -417,10 +417,7 @@ async fn post(c: &mut PgConnection, user: i64, key: String, action: Action) -> R
         action,
     };
     req.validate().map_err(|_| Error::Invalid)?;
-    let Json(out): Json<Outcome> = sqlx::query_scalar("SELECT core_billing.post_ledger($1)")
-        .bind(Json(req))
-        .fetch_one(c)
-        .await?;
+    let out = crate::billing::ledger::post_in_transaction(c, &req).await?;
     match out {
         Outcome::Posted { journal_id, .. } => Ok(journal_id),
         _ => Err(Error::Conflict),

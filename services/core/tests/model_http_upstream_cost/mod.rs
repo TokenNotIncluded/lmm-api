@@ -64,6 +64,7 @@ fn cost_routes(endpoint: &str, model: &str) -> Arc<lmm_core::routing::Router> {
     let price = PriceSnapshot::compile(PriceConfig {
         version: 1,
         rules: vec![PriceRule {
+            embedding: None,
             search: None,
             billing_mode: BillingMode::UpstreamCost,
             tiered: None,

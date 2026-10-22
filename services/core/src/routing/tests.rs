@@ -72,6 +72,7 @@ fn fixture(version: u64) -> (RoutingConfig, PriceConfig) {
             .into_iter()
             .enumerate()
             .map(|(index, speed)| PriceRule {
+                embedding: None,
                 search: None,
                 billing_mode: crate::routing::BillingMode::Tokens,
                 tiered: None,

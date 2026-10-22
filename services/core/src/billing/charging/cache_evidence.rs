@@ -16,14 +16,16 @@ pub(super) fn restore(base: Usage, evidence: Option<Value>) -> Result<Usage> {
         return Ok(base);
     };
     let events = evidence.as_array().ok_or(Error::Storage)?;
-    // Old events predate typed cache writes/search. Their replay and decoding behavior
+    // Old events predate typed cache writes/search/embeddings. Their decoding
     // stays unchanged, including the distinction between absent and zero.
     if !events.iter().any(|event| {
         event
             .get("usage")
             .and_then(Value::as_object)
             .is_some_and(|usage| {
-                usage.contains_key("cache_creation") || usage.contains_key("search")
+                usage.contains_key("cache_creation")
+                    || usage.contains_key("search")
+                    || usage.contains_key("embedding")
             })
     }) {
         return Ok(base);
@@ -61,6 +63,14 @@ pub(super) fn restore(base: Usage, evidence: Option<Value>) -> Result<Usage> {
                     search.grounded_requests,
                     search.x_posts_fetched,
                     search.x_users_fetched,
+                )
+            }),
+            usage.embedding.map(|embedding| {
+                (
+                    embedding.provider,
+                    embedding.text_tokens,
+                    embedding.image_tokens,
+                    embedding.total_input_tokens,
                 )
             }),
             usage

@@ -498,10 +498,7 @@ async fn post(
         },
     };
     request.validate().map_err(|_| Error::Invalid)?;
-    let Json(out): Json<Outcome> = sqlx::query_scalar("SELECT core_billing.post_ledger($1)")
-        .bind(Json(request))
-        .fetch_one(&mut *c)
-        .await?;
+    let out = crate::billing::ledger::post_in_transaction(&mut *c, &request).await?;
     let Outcome::Posted { journal_id, .. } = out else {
         return Err(Error::Conflict);
     };

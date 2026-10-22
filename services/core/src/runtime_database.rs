@@ -2,6 +2,10 @@
 //! Install/import owners must never be used by the network-facing process.
 use sqlx::{PgConnection, PgPool};
 use std::fmt;
+#[path = "runtime_notifications.rs"]
+mod notifications;
+#[path = "runtime_routing_admin.rs"]
+mod routing_admin;
 #[path = "runtime_telegram.rs"]
 mod telegram;
 #[path = "runtime_tool_market_credit.rs"]
@@ -116,7 +120,7 @@ pub(crate) async fn check_connection(
     let forbidden_write: bool = sqlx::query_scalar(r#"
         SELECT EXISTS(SELECT FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
           WHERE c.relkind IN ('r','p','v','m','f') AND (
-            ((n.nspname IN ('core_meta','core_migration','core_model','core_history','core_trust_pricing')
+            ((n.nspname IN ('core_meta','core_migration','core_model','core_history','core_trust_pricing','core_routing_admin')
               OR (n.nspname='core_console' AND c.relname IN ('options','initialization'))
               OR (n.nspname='core_identity' AND c.relname IN ('developer_access','user_routing_groups','privileged_import_facts','permission_policies','permission_policy_rows','admin_activation_receipts'))
               OR (n.nspname='public' AND c.relname IN ('routing_active_release','routing_groups','routing_routes'))
@@ -221,6 +225,10 @@ pub(crate) async fn check_connection(
 
     tool_market_credit::check(connection, required.tool_market).await?;
     telegram::check(connection, required.web_identity).await?;
+    routing_admin::check(connection, required.models).await?;
+    // Every database runtime already has canonical ledger execution authority.
+    // A local worker flag must never hide the durable site's publishing needs.
+    notifications::check(connection).await?;
 
     // Identity is always mounted when the runtime has a database. Normal identity
     // operations must work; unsupported optional modules need no extra grants.

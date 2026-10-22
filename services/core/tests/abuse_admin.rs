@@ -795,6 +795,7 @@ async fn marking_blocks_new_real_reservations_but_preserves_existing_real_settle
         lease_seconds: 60,
         maximum_seconds: 120,
         price: Price {
+            embedding: None,
             search: None,
             user_trust: None,
             image: None,

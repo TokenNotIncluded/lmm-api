@@ -92,6 +92,8 @@ fn search_frozen_price_and_receipt_survive_json_without_current_provider_policy(
 fn search_policy_does_not_grant_loopback_or_mismatched_endpoint_implicitly() {
     let policy = ProviderPolicy::new(
         vec![ExternalModelContext {
+            deepseek_parameters_contract: None,
+            embedding: None,
             search: Some(ExternalSearchContract {
                 provider: SearchProvider::OpenAiResponsesV1,
                 limits: crate::routing::SearchLimits {

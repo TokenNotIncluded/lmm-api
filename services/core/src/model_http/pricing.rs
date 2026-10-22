@@ -48,6 +48,8 @@ pub struct UpstreamCostPrice {
 pub struct TokenPrice {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub search: Option<SearchPrice>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embedding: Option<EmbeddingPrice>,
     pub currency: &'static str,
     pub unit: &'static str,
     pub rate_basis: &'static str,
@@ -61,6 +63,14 @@ pub struct TokenPrice {
     /// Revision 4 prices remain exact and tiered; no headline scalar is inferred.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_write_12h_tiers: Option<Vec<CacheWrite12hTier>>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct EmbeddingPrice {
+    pub available: bool,
+    pub provider: crate::routing::EmbeddingProvider,
+    pub text_usd_per_million: ExactFraction,
+    pub image_usd_per_million: ExactFraction,
 }
 
 #[derive(Clone, Serialize)]
@@ -139,6 +149,7 @@ pub struct ImageVariant {
 }
 #[derive(Clone)]
 pub struct PricingSurface {
+    gateway: ModelGateway,
     trust: crate::billing::charging::Charging,
     router: Arc<crate::routing::Router>,
     routing_version: u64,
@@ -186,6 +197,7 @@ impl PricingSurface {
             let mut apis = BTreeSet::new();
             let mut upstream_budget_contract_required = false;
             let mut search_available = false;
+            let mut embedding_available = false;
             for target in route.targets.iter().filter(|t| {
                 t.enabled
                     && t.weight > 0
@@ -196,6 +208,11 @@ impl PricingSurface {
                 else {
                     continue;
                 };
+                if quote.embedding().is_some()
+                    != (upstream.protocol == Protocol::AliMultimodalEmbedding)
+                {
+                    continue;
+                }
                 if quote.tiered().is_some_and(|tariff| tariff.revision() == 4)
                     && !matches!(
                         upstream.protocol,
@@ -233,7 +250,14 @@ impl PricingSurface {
                         upstream.protocol,
                         upstream.endpoint.as_str(),
                         gateway.bridge.policy.input_token_ceiling,
-                        1,
+                        if matches!(
+                            upstream.protocol,
+                            Protocol::DeepSeekTools | Protocol::AliMultimodalEmbedding
+                        ) {
+                            0
+                        } else {
+                            1
+                        },
                     )
                     .is_err()
                 {
@@ -254,6 +278,7 @@ impl PricingSurface {
                 if upstream.protocol == Protocol::SystemOne && !quote.is_input_only_scalar() {
                     continue;
                 }
+                let mut target_search_available = false;
                 if let Some(tariff) = quote.search()
                     && let Ok(contract) =
                         gateway.bridge.provider_policy.search_contract_for_binding(
@@ -265,7 +290,29 @@ impl PricingSurface {
                     && contract.provider == tariff.provider
                     && tariff.validate_limits(contract.limits).is_ok()
                 {
+                    target_search_available = true;
                     search_available = true;
+                }
+                if upstream.protocol == Protocol::DeepSeekTools && !target_search_available {
+                    continue;
+                }
+                if let Some(tariff) = quote.embedding() {
+                    let Ok((contract, _)) = gateway
+                        .bridge
+                        .provider_policy
+                        .embedding_contract_for_binding(
+                            upstream.id,
+                            &target.upstream_model,
+                            upstream.protocol,
+                            upstream.endpoint.as_str(),
+                        )
+                    else {
+                        continue;
+                    };
+                    if contract.provider != tariff.provider {
+                        continue;
+                    }
+                    embedding_available = true;
                 }
                 apis.insert(match upstream.protocol {
                     Protocol::OpenAiChat => "openai-completions",
@@ -273,6 +320,12 @@ impl PricingSurface {
                     Protocol::AnthropicMessages => "anthropic-messages",
                     Protocol::Gemini => "google-generative-ai",
                     Protocol::SystemOne => "system-one",
+                    Protocol::DeepSeekTools => match quote.search().map(|tariff| tariff.provider) {
+                        Some(crate::routing::SearchProvider::DeepSeekSearchV1) => "deepseek-search",
+                        Some(crate::routing::SearchProvider::DeepSeekFetchV1) => "deepseek-fetch",
+                        _ => continue,
+                    },
+                    Protocol::AliMultimodalEmbedding => "ali-multimodal-embedding",
                 });
             }
             if !price_ok {
@@ -301,6 +354,9 @@ impl PricingSurface {
                     let mut token = token_price(quote)?;
                     if let Some(search) = &mut token.search {
                         search.available = search_available && price_ok;
+                    }
+                    if let Some(embedding) = &mut token.embedding {
+                        embedding.available = embedding_available && price_ok;
                     }
                     (Some(token), None)
                 };
@@ -360,6 +416,7 @@ impl PricingSurface {
         }
         models.sort_by(|a, b| (&a.group, &a.model).cmp(&(&b.group, &b.model)));
         let result = Self {
+            gateway: gateway.clone(),
             trust: gateway.bridge.charging.clone(),
             router,
             routing_version,
@@ -382,6 +439,26 @@ impl PricingSurface {
         }
     }
     /// Filtering facts must be derived by the server's current read transaction.
+    pub(crate) async fn project_current(
+        &self,
+        connection: &mut sqlx::PgConnection,
+        groups: Option<&[String]>,
+        models: Option<&[String]>,
+    ) -> Result<PricingProjection, PricingError> {
+        if let Some(admin) = self.gateway.bridge.routing_admin.get() {
+            admin
+                .refresh_in(connection)
+                .await
+                .map_err(|_| PricingError::Unavailable)?;
+        }
+        if self.check_version().is_ok() {
+            self.project(groups, models)
+        } else {
+            Self::from_gateway(&self.gateway)?.project(groups, models)
+        }
+    }
+
+    /// Project one exact frozen release; never combine old and new rates.
     pub(crate) fn project(
         &self,
         groups: Option<&[String]>,
@@ -458,7 +535,9 @@ fn decimal(value: u128, scale: u32) -> Result<Number, PricingError> {
 }
 fn token_price(quote: PriceQuote) -> Result<TokenPrice, PricingError> {
     let (g, s) = quote.multipliers_ppm();
-    let known = quote.billing_mode() == BillingMode::Tokens && quote.tiered().is_none();
+    let known = quote.billing_mode() == BillingMode::Tokens
+        && quote.tiered().is_none()
+        && quote.embedding().is_none();
     let rate = |v: u64| {
         if known {
             decimal(u128::from(v) * u128::from(g) * u128::from(s), 18).map(Some)
@@ -468,6 +547,7 @@ fn token_price(quote: PriceQuote) -> Result<TokenPrice, PricingError> {
     };
     let r = quote.rates();
     Ok(TokenPrice {
+        embedding: embedding_price(quote)?,
         search: search_price(quote)?,
         currency: "USD",
         unit: "million_tokens",
@@ -481,6 +561,32 @@ fn token_price(quote: PriceQuote) -> Result<TokenPrice, PricingError> {
         final_cost_depends_on_usage: true,
         cache_write_12h_tiers: cache_write_12h_tiers(quote)?,
     })
+}
+
+fn embedding_price(quote: PriceQuote) -> Result<Option<EmbeddingPrice>, PricingError> {
+    use num_bigint::BigUint;
+    use num_rational::Ratio;
+    let Some(tariff) = quote.embedding() else {
+        return Ok(None);
+    };
+    tariff.validate().map_err(|_| PricingError::Unavailable)?;
+    let (group, speed) = quote.multipliers_ppm();
+    let rate = |value: crate::routing::DecimalRate| {
+        let fraction = Ratio::new(
+            BigUint::from(value.numerator) * BigUint::from(group) * BigUint::from(speed),
+            BigUint::from(value.denominator) * BigUint::from(1_000_000_000_000_u64),
+        );
+        ExactFraction {
+            numerator: fraction.numer().to_string(),
+            denominator: fraction.denom().to_string(),
+        }
+    };
+    Ok(Some(EmbeddingPrice {
+        available: false,
+        provider: tariff.provider,
+        text_usd_per_million: rate(tariff.text_usd_per_million),
+        image_usd_per_million: rate(tariff.image_usd_per_million),
+    }))
 }
 
 fn search_price(quote: PriceQuote) -> Result<Option<SearchPrice>, PricingError> {
@@ -651,6 +757,7 @@ pub(crate) mod tests {
                 failover: FailoverPolicy::default(),
             });
             rules.push(PriceRule {
+                embedding: None,
                 search: None,
                 billing_mode: BillingMode::Tokens,
                 tiered: None,
@@ -787,6 +894,8 @@ pub(crate) mod tests {
             names
                 .into_iter()
                 .map(|name| super::super::ExternalModelContext {
+                    deepseek_parameters_contract: None,
+                    embedding: None,
                     search: None,
                     upstream_id: 1,
                     upstream_model: name.into(),
@@ -1209,6 +1318,8 @@ pub(crate) mod tests {
                     .find(|t| t.upstream_id == upstream.id)
                     .unwrap();
                 super::super::ExternalModelContext {
+                    deepseek_parameters_contract: None,
+                    embedding: None,
                     search: None,
                     missing_cache_creation_tokens_is_zero: false,
                     upstream_id: upstream.id,
@@ -1558,6 +1669,12 @@ impl PricingProjection {
                 if let Some(search) = &mut token.search {
                     search.apply_discount(discount)?;
                 }
+                if let Some(embedding) = &mut token.embedding {
+                    embedding.text_usd_per_million =
+                        discounted_fraction(&embedding.text_usd_per_million, discount)?;
+                    embedding.image_usd_per_million =
+                        discounted_fraction(&embedding.image_usd_per_million, discount)?;
+                }
             }
             for image in &mut row.image_variants {
                 image.rate_basis = "effective_user_rate";
@@ -1656,6 +1773,7 @@ mod cache_write_12h_projection_tests {
         let prices = PriceSnapshot::compile(PriceConfig {
             version: 7,
             rules: vec![PriceRule {
+                embedding: None,
                 search: None,
                 id: 1,
                 model: "cache-model".into(),

@@ -45,6 +45,8 @@ pub struct PriceRule {
     pub tiered: Option<super::TieredTariff>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub search: Option<super::SearchTariff>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding: Option<super::EmbeddingTariff>,
     pub id: u64,
     pub model: String,
     pub group: String,
@@ -332,6 +334,7 @@ pub struct PriceQuote {
     billing_mode: BillingMode,
     tiered: Option<super::CompiledTariff>,
     search: Option<super::SearchTariff>,
+    embedding: Option<super::EmbeddingTariff>,
     version: u64,
     rule_id: u64,
     rates: TokenRates,
@@ -343,7 +346,7 @@ impl PriceQuote {
     /// Native input-only protocols cannot infer zero rates from the integer
     /// placeholders carried beside a decimal tariff.
     pub fn is_input_only_scalar(&self) -> bool {
-        if self.search.is_some() {
+        if self.search.is_some() || self.embedding.is_some() {
             return false;
         }
         match (self.billing_mode, self.tiered) {
@@ -374,6 +377,9 @@ impl PriceQuote {
     }
     pub fn search(&self) -> Option<super::SearchTariff> {
         self.search
+    }
+    pub fn embedding(&self) -> Option<super::EmbeddingTariff> {
+        self.embedding
     }
     pub fn billing_mode(&self) -> BillingMode {
         self.billing_mode
@@ -434,6 +440,11 @@ impl PriceQuote {
     }
 
     fn numerator(&self, usage: Usage) -> Result<u128, RoutingError> {
+        if self.embedding.is_some() {
+            return Err(RoutingError::InvalidConfig(
+                "multimodal embedding requires measured text and image usage",
+            ));
+        }
         if self.billing_mode == BillingMode::UpstreamCost {
             return Err(RoutingError::InvalidConfig(
                 "upstream cost cannot be inferred from token counts",
@@ -474,6 +485,24 @@ impl PriceSnapshot {
         let mut ids = HashSet::new();
         let mut groups: HashMap<String, ModelPrices> = HashMap::new();
         for rule in &config.rules {
+            if let Some(embedding) = rule.embedding {
+                embedding.validate()?;
+                if rule.billing_mode != BillingMode::Tokens
+                    || rule.tiered.is_some()
+                    || rule.search.is_some()
+                    || [
+                        rule.rates.input,
+                        rule.rates.output,
+                        rule.rates.cache_read,
+                        rule.rates.cache_write,
+                        rule.rates.request,
+                    ]
+                    .iter()
+                    .any(|rate| *rate != 0)
+                {
+                    return Err(RoutingError::InvalidConfig("mixed embedding price"));
+                }
+            }
             if let Some(search) = rule.search {
                 search.validate()?;
                 if rule.billing_mode == BillingMode::UpstreamCost {
@@ -538,6 +567,7 @@ impl PriceSnapshot {
                 billing_mode: rule.billing_mode,
                 tiered,
                 search: rule.search,
+                embedding: rule.embedding,
                 version: config.version,
                 rule_id: rule.id,
                 rates: rule.rates,
@@ -581,6 +611,7 @@ mod upstream_cost_tests {
     #[test]
     fn upstream_cost_rules_reject_fixed_rates_unknown_models_and_speed_fees() {
         let mut rule = PriceRule {
+            embedding: None,
             search: None,
             billing_mode: BillingMode::UpstreamCost,
             tiered: None,
@@ -630,6 +661,7 @@ mod explicit_free_group_tests {
         let prices = PriceSnapshot::compile(PriceConfig {
             version: 1,
             rules: vec![PriceRule {
+                embedding: None,
                 search: None,
                 billing_mode: BillingMode::Tokens,
                 tiered: None,
@@ -684,6 +716,7 @@ mod a07_tests {
 
     fn quote(rates: TokenRates) -> PriceQuote {
         PriceQuote {
+            embedding: None,
             search: None,
             billing_mode: BillingMode::Tokens,
             tiered: None,

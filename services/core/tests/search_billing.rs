@@ -193,6 +193,7 @@ fn gateway(
     let prices = PriceSnapshot::compile(PriceConfig {
         version,
         rules: vec![PriceRule {
+            embedding: None,
             billing_mode: BillingMode::Tokens,
             tiered: None,
             search: Some(tariff),
@@ -214,6 +215,8 @@ fn gateway(
     .unwrap();
     let policy = ProviderPolicy::new(
         vec![ExternalModelContext {
+            deepseek_parameters_contract: None,
+            embedding: None,
             upstream_id: 1,
             upstream_model: "provider-model".into(),
             protocol,

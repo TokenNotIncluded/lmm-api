@@ -26,6 +26,7 @@ fn routing(provider: &Provider, group: &str) -> Arc<Router> {
     let prices = PriceSnapshot::compile(PriceConfig {
         version: 1,
         rules: vec![PriceRule {
+            embedding: None,
             search: None,
             billing_mode: BillingMode::Tokens,
             tiered: None,

@@ -179,13 +179,23 @@ impl PostgresRoutingStore {
         document.encode()?;
         let routing =
             serde_json::to_value(&document.routing).map_err(|_| StoreError::InvalidDocument)?;
+        let mut tx = self.pool.begin().await?;
+        let previous: Option<serde_json::Value> = sqlx::query_scalar("SELECT c.document FROM routing_active_release a JOIN routing_config_versions c ON c.version=a.config_version WHERE a.singleton")
+            .fetch_optional(&mut *tx).await?;
         sqlx::query("SELECT routing_publish_config($1, $2, $3, $4)")
             .bind(routing)
             .bind(price_version as i64)
             .bind(expected.map(|v| v.routing as i64))
             .bind(expected.map(|v| v.pricing as i64))
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
+        if let Some(previous) = previous {
+            let previous: RoutingConfig =
+                serde_json::from_value(previous).map_err(|_| StoreError::InvalidDocument)?;
+            crate::notifications::publish_routing_change(&mut tx, &previous, &document.routing)
+                .await?;
+        }
+        tx.commit().await?;
         Ok(document)
     }
 

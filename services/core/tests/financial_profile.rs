@@ -259,6 +259,7 @@ async fn actual_team_settlement_and_refund_count_the_actor_without_spending_pers
         lease_seconds: 300,
         maximum_seconds: 600,
         price: Price {
+            embedding: None,
             search: None,
             user_trust: None,
             image: None,
@@ -282,6 +283,7 @@ async fn actual_team_settlement_and_refund_count_the_actor_without_spending_pers
             &request.id,
             &[5; 32],
             Usage {
+                embedding: None,
                 search: None,
                 cache_creation: None,
                 image: None,

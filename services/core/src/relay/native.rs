@@ -6,6 +6,12 @@ pub(super) enum NativeEncoder {
     Gemini(super::native_gemini::NativeEncoder),
 }
 impl NativeEncoder {
+    pub(super) fn set_deepseek_parameters(&mut self, enabled: bool) {
+        if let Self::Anthropic(encoder) = self {
+            encoder.set_deepseek_parameters(enabled);
+        }
+    }
+
     pub(super) fn new(request: &Request, id: &str, limits: &Limits) -> Option<Self> {
         match request.client {
             ClientProtocol::Anthropic => Some(Self::Anthropic(

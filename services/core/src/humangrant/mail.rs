@@ -1,5 +1,5 @@
-//! Explicit SMTP configuration and durable, at-most-once dispatch attempts.
-//! SMTP acceptance means the relay accepted the message, not inbox delivery.
+//! Explicit mail provider configuration and durable, at-most-once dispatch attempts.
+//! Provider acceptance is not proof of inbox delivery. Unknown sends are not retried.
 use super::{HumanGrantEngine, HumanGrantTx, types::*};
 use lettre::{
     AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
@@ -8,6 +8,89 @@ use lettre::{
 };
 use serde::{Deserialize, Serialize};
 use std::{io, net::IpAddr, path::PathBuf, sync::Arc, time::Duration};
+
+mod resend;
+pub use resend::{ResendConfig, ResendMailer};
+
+/// One selected provider. Reading configuration never connects or sends mail.
+#[derive(Clone, Deserialize)]
+#[serde(tag = "provider", rename_all = "snake_case", deny_unknown_fields)]
+pub enum MailConfig {
+    Smtp(SmtpConfig),
+    Resend(ResendConfig),
+}
+
+pub enum Mailer {
+    Smtp(SmtpMailer),
+    Resend(ResendMailer),
+}
+
+impl Mailer {
+    pub fn open(config: &MailConfig) -> io::Result<Self> {
+        match config {
+            MailConfig::Smtp(config) => SmtpMailer::open(config).map(Self::Smtp),
+            MailConfig::Resend(config) => ResendMailer::open(config).map(Self::Resend),
+        }
+    }
+
+    pub async fn send(&self, job: &MailJob) -> Result<(), ()> {
+        let body = invitation_body(job);
+        self.send_message(&MailMessage {
+            id: &job.id,
+            recipient: &job.destination,
+            subject: "HumanGrant authorization request",
+            text: &body,
+        })
+        .await
+    }
+
+    pub(crate) async fn send_message(&self, message: &MailMessage<'_>) -> Result<(), ()> {
+        match self {
+            Self::Smtp(mailer) => mailer.send_message(message).await,
+            Self::Resend(mailer) => mailer.send_message(message).await,
+        }
+    }
+}
+
+impl From<SmtpMailer> for Mailer {
+    fn from(value: SmtpMailer) -> Self {
+        Self::Smtp(value)
+    }
+}
+
+pub(crate) struct MailMessage<'a> {
+    pub id: &'a str,
+    pub recipient: &'a str,
+    pub subject: &'a str,
+    pub text: &'a str,
+}
+
+impl MailMessage<'_> {
+    fn validate(&self) -> Result<(), ()> {
+        if self.id.is_empty()
+            || self.id.len() > 128
+            || !self
+                .id
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || b"._:-".contains(&c))
+            || self.subject.is_empty()
+            || self.subject.len() > 256
+            || self.subject.chars().any(char::is_control)
+            || self.text.len() > 16 * 1024
+            || self.text.contains('\0')
+        {
+            return Err(());
+        }
+        mailbox(self.recipient).map(|_| ()).map_err(|_| ())
+    }
+}
+
+fn invitation_body(job: &MailJob) -> String {
+    format!(
+        "An AI requested your permission to read an account profile.\r\n\r\nOpen this link to inspect the request, sign in, and choose whether to approve:\r\n{}\r\n\r\nThis invitation expires with the request. Ignore it if you did not expect it. Opening it does not approve access.\r\n",
+        job.url
+    )
+}
 
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -158,12 +241,25 @@ impl SmtpMailer {
         })
     }
     pub async fn send(&self, job: &MailJob) -> Result<(), ()> {
-        let message = Message::builder().from(self.from.clone())
-            .to(mailbox(&job.destination).map_err(|_| ())?)
-            .message_id(Some(format!("<{}@humangrant.invalid>", job.id)))
-            .subject("HumanGrant authorization request")
+        let body = invitation_body(job);
+        self.send_message(&MailMessage {
+            id: &job.id,
+            recipient: &job.destination,
+            subject: "HumanGrant authorization request",
+            text: &body,
+        })
+        .await
+    }
+    pub(crate) async fn send_message(&self, mail: &MailMessage<'_>) -> Result<(), ()> {
+        mail.validate()?;
+        let message = Message::builder()
+            .from(self.from.clone())
+            .to(mailbox(mail.recipient).map_err(|_| ())?)
+            .message_id(Some(format!("<{}@humangrant.invalid>", mail.id)))
+            .subject(mail.subject)
             .header(ContentType::TEXT_PLAIN)
-            .body(format!("An AI requested your permission to read an account profile.\r\n\r\nOpen this link to inspect the request, sign in, and choose whether to approve:\r\n{}\r\n\r\nThis invitation expires with the request. Ignore it if you did not expect it. Opening it does not approve access.\r\n", job.url)).map_err(|_| ())?;
+            .body(mail.text.to_owned())
+            .map_err(|_| ())?;
         tokio::time::timeout(Duration::from_secs(30), self.transport.send(message))
             .await
             .map_err(|_| ())?

@@ -155,6 +155,8 @@ pub struct Usage {
     pub cache_creation: Option<CacheCreationUsage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub search: Option<crate::routing::SearchUsage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding: Option<crate::routing::EmbeddingUsage>,
     /// Includes cached input. Cached input is priced separately, not twice.
     pub input: i64,
     pub cached: i64,
@@ -165,6 +167,19 @@ impl Usage {
         if let Some(image) = self.image {
             return image.validate().is_ok()
                 && self.input == 0
+                && self.cached == 0
+                && self.output == 0
+                && self.upstream_cost_atto_usd.is_none()
+                && self.cache_creation.is_none()
+                && self.search.is_none()
+                && self.embedding.is_none();
+        }
+        if let Some(embedding) = self.embedding {
+            return embedding.complete()
+                && embedding
+                    .total_input_tokens
+                    .and_then(|v| i64::try_from(v).ok())
+                    == Some(self.input)
                 && self.cached == 0
                 && self.output == 0
                 && self.upstream_cost_atto_usd.is_none()
@@ -204,6 +219,11 @@ impl Usage {
                 (Some(_), None) => false,
                 _ => true,
             }
+            && match (previous.embedding, self.embedding) {
+                (Some(old), Some(now)) => now.follows(old),
+                (Some(_), None) => false,
+                _ => true,
+            }
             && match (previous.upstream_cost_atto_usd, self.upstream_cost_atto_usd) {
                 (Some(old), Some(new)) => new >= old,
                 (Some(_), None) => false,
@@ -230,6 +250,8 @@ pub struct Price {
     pub tiered: Option<crate::routing::PersistedTieredTariff>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub search: Option<crate::routing::PersistedSearchPrice>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding: Option<crate::routing::PersistedEmbeddingPrice>,
     pub version: String,
     pub model: String,
     pub group: String,
@@ -280,6 +302,19 @@ impl Price {
             || self.output_per_million < 0
         {
             return Err(Error::Invalid);
+        }
+        if let Some(embedding) = &self.embedding {
+            embedding.validate().map_err(|_| Error::Invalid)?;
+            if self.image.is_some()
+                || self.search.is_some()
+                || self.tiered.is_some()
+                || self.upstream_cost_group_ppm.is_some()
+                || self.input_per_million != 0
+                || self.cached_per_million != 0
+                || self.output_per_million != 0
+            {
+                return Err(Error::Invalid);
+            }
         }
         if let Some(image) = &self.image {
             image.validate().map_err(|_| Error::Invalid)?;
@@ -332,6 +367,19 @@ impl Price {
     pub fn cost(&self, usage: Usage) -> Result<i64> {
         self.validate()?;
         if !usage.valid() {
+            return Err(Error::Invalid);
+        }
+        if let Some(price) = &self.embedding {
+            // The empty initial/no-dispatch checkpoint is not a completed
+            // receipt. Completed-state validation separately requires evidence.
+            if usage == Usage::default() {
+                return Ok(0);
+            }
+            return price
+                .cost_with_discount(usage.embedding.ok_or(Error::Invalid)?, self.discount())
+                .map_err(|_| Error::Invalid);
+        }
+        if usage.embedding.is_some() {
             return Err(Error::Invalid);
         }
         let expected_cache_mode = self.tiered.as_ref().and_then(|t| t.cache_creation_mode);
@@ -422,6 +470,15 @@ impl Price {
     /// The same frozen exact factor applies before the reservation's sole ceil.
     pub(crate) fn reservation_ceiling(&self, basis: ReservationBasis) -> Result<i64> {
         self.validate()?;
+        if let Some(price) = &self.embedding {
+            if !matches!(basis, ReservationBasis::Tokens { input, output: 0 } if input == price.input_token_limit)
+            {
+                return Err(Error::Invalid);
+            }
+            return price
+                .reservation_ceiling_with_discount(self.discount())
+                .map_err(|_| Error::Invalid);
+        }
         let surcharge = self
             .search
             .as_ref()
@@ -600,6 +657,7 @@ mod search_price_tests {
         let prices = PriceSnapshot::compile(PriceConfig {
             version: 1,
             rules: vec![PriceRule {
+                embedding: None,
                 id: 1,
                 model: price.model.clone(),
                 group: price.group.clone(),
@@ -762,6 +820,7 @@ mod search_price_tests {
         let prices = PriceSnapshot::compile(PriceConfig {
             version: 1,
             rules: vec![PriceRule {
+                embedding: None,
                 id: 1,
                 model: price.model.clone(),
                 group: price.group.clone(),
@@ -882,6 +941,7 @@ mod trust_price_tests {
 
     pub(super) fn base() -> Price {
         Price {
+            embedding: None,
             search: None,
             user_trust: None,
             image: None,
@@ -1183,6 +1243,7 @@ mod generic_remainder_tests {
     }
     fn price() -> Price {
         Price {
+            embedding: None,
             search: None,
             user_trust: None,
             image: None,
@@ -1448,6 +1509,7 @@ mod delegated_source_tests {
     #[test]
     fn tilde_model_price_does_not_relax_other_identifiers_or_lengths() {
         let mut price = Price {
+            embedding: None,
             search: None,
             user_trust: None,
             image: None,
@@ -1484,6 +1546,7 @@ mod delegated_source_tests {
     #[test]
     fn unicode_group_price_keeps_model_and_version_identifier_rules_strict() {
         let mut price = Price {
+            embedding: None,
             search: None,
             user_trust: None,
             image: None,

@@ -25,9 +25,34 @@ pub(super) fn routes() -> Router<AuthState> {
         .route("/api/user/self/groups", get(groups))
         .route("/api/user/models", get(models))
         .route(
+            "/api/user/notifications",
+            get(notification_settings).put(save_notification_settings),
+        )
+        .route(
             "/api/user/company-billing-profile",
             get(company).put(save_company),
         )
+}
+async fn notification_settings(State(state): State<AuthState>, headers: HeaderMap) -> Response {
+    respond(async { state.store.notification_settings(access(&headers)?).await }.await)
+}
+async fn save_notification_settings(
+    State(state): State<AuthState>,
+    headers: HeaderMap,
+    input: Result<Json<crate::notifications::SettingsUpdate>, JsonRejection>,
+) -> Response {
+    let Ok(Json(body)) = input else {
+        return auth_failure(IdentityError::Invalid.into());
+    };
+    respond(
+        async {
+            state
+                .store
+                .update_notification_settings(access(&headers)?, &body)
+                .await
+        }
+        .await,
+    )
 }
 async fn company(State(state): State<AuthState>, headers: HeaderMap) -> Response {
     respond(async { state.store.company_billing_profile(access(&headers)?).await }.await)

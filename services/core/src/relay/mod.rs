@@ -3,6 +3,9 @@
 //! This module does not register public routes or change readiness. Integration
 //! must supply real core routing and durable billing adapters before enabling it.
 mod decode;
+mod deepseek;
+#[cfg(test)]
+mod deepseek_tests;
 mod encode;
 pub(crate) mod honeypot;
 pub(crate) mod honeypot_network;
@@ -470,6 +473,7 @@ impl Worker {
             .filter(|v| *v <= 65_536)
             .ok_or(RelayError::Limit("output checkpoints"))?;
         let evidence = OutputCheckpoint {
+            terminal_outcome: None,
             sequence: self.checkpoint_sequence,
             packet_sha256: Sha256::digest(packet).into(),
             packet_bytes: packet.len(),
@@ -602,6 +606,8 @@ impl Worker {
             .await?;
         self.report.route_id = Some(route.id.clone());
         self.report.price_version = Some(route.price_version);
+        self.encoder
+            .set_deepseek_parameters(route.deepseek_parameters)?;
         let payload = self.request.upstream(&route)?;
         let body = serde_json::to_vec(&payload)
             .map_err(|_| RelayError::Invalid("request encoding failed"))?;
@@ -665,7 +671,8 @@ impl Worker {
             &self.inner.limits,
             route.cache_creation_mode,
         )
-        .with_search_contract(route.search_contract, &self.inner.limits);
+        .with_search_contract(route.search_contract, &self.inner.limits)
+        .with_deepseek_parameters(route.deepseek_parameters);
         if self.request.stream {
             self.send_head()?;
             let mut parser = sse::Parser::new(self.inner.limits.event_bytes);
@@ -715,7 +722,7 @@ impl Worker {
                 }
                 data.extend_from_slice(&chunk);
             }
-            let value = if route.search_contract.is_some() {
+            let value = if route.search_contract.is_some() || route.deepseek_parameters {
                 native_anthropic::unambiguous_json(&data)
             } else {
                 serde_json::from_slice(&data)

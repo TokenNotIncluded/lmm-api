@@ -402,6 +402,9 @@ impl ValidatedRequest {
                 || (price.search.is_some()
                     && event.outcome == Outcome::Completed
                     && event.usage.search.is_none())
+                || (price.embedding.is_some()
+                    && event.outcome == Outcome::Completed
+                    && event.usage.embedding.is_none())
                 || price.cost(event.usage).map_err(|_| Error::Storage)? != amounts.gross
             {
                 return Err(Error::Storage);
@@ -512,6 +515,18 @@ impl ValidatedRequest {
                 "usage":if self.settled() {self.usage.search}else{None}
             });
         }
+        if let Some(embedding) = &self.price.embedding {
+            let exact = |rate: crate::routing::DecimalRate| json!({"numerator":rate.numerator.to_string(),"denominator":rate.denominator.to_string()});
+            other["embedding_billing"] = json!({
+                "provider":embedding.tariff.provider,"currency":"USD","unit":"million_tokens",
+                "text_usd_per_million":exact(embedding.tariff.text_usd_per_million),
+                "image_usd_per_million":exact(embedding.tariff.image_usd_per_million),
+                "group_multiplier_ppm":embedding.group_multiplier_ppm,
+                "speed_multiplier_ppm":embedding.speed_multiplier_ppm,
+                "account_discount":self.price.discount().map(|discount| json!({"numerator":discount.numerator().to_string(),"denominator":discount.denominator().to_string()})),
+                "usage":if self.settled() {self.usage.embedding}else{None}
+            });
+        }
         let mut item = json!({"id":presentation_id(&self.id),"request_id":self.id,"user_id":self.user,"token_id":self.key,
             "created_at":self.at,"type":if self.settled() && self.outcome.as_deref()==Some("completed") {2}else{5},
             "content":self.outcome.clone().unwrap_or_else(||format!("Model request {}; no final usage receipt",self.state)),
@@ -559,6 +574,11 @@ impl CacheTotals {
             return Ok(());
         }
         self.has_text = true;
+        // The native embedding contract explicitly excludes cache dimensions.
+        // A complete measured embedding partition is known non-cached input.
+        if usage.embedding.is_some() {
+            return Ok(());
+        }
         add(&mut self.read, usage.cached)?;
         if let Some(created) = usage.cache_creation {
             // TTL measurements partition this aggregate; never add them again.

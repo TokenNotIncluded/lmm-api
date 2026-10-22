@@ -419,6 +419,10 @@ async fn native(
         "search_grounded_requests",
         "search_x_posts_fetched",
         "search_x_users_fetched",
+        "embedding_provider",
+        "embedding_text_tokens",
+        "embedding_image_tokens",
+        "embedding_total_input_tokens",
         "output_image_count",
         "reserved_credits",
         "gross_settled_credits",
@@ -472,6 +476,16 @@ fn native_row(csv: &mut Csv, request: &ValidatedRequest) -> Result<(), ExportErr
     let created = request.usage.cache_creation.filter(|_| tokens);
     let [search_provider, calls, queries, grounded, posts, users] =
         search_cells(request.usage.search.filter(|_| tokens))?;
+    let embedding = request.usage.embedding.filter(|_| tokens);
+    let embedding_provider = embedding
+        .map(|value| {
+            serde_json::to_value(value.provider)
+                .ok()
+                .and_then(|value| value.as_str().map(str::to_owned))
+                .ok_or(ExportError::Unavailable)
+        })
+        .transpose()?
+        .unwrap_or_default();
     csv.row(&[
         text(&request.id),
         request.user.to_string(),
@@ -501,6 +515,10 @@ fn native_row(csv: &mut Csv, request: &ValidatedRequest) -> Result<(), ExportErr
         grounded,
         posts,
         users,
+        embedding_provider,
+        optional(embedding.and_then(|value| value.text_tokens)),
+        optional(embedding.and_then(|value| value.image_tokens)),
+        optional(embedding.and_then(|value| value.total_input_tokens)),
         optional(
             request
                 .usage

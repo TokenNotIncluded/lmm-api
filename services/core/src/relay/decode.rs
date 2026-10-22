@@ -21,6 +21,7 @@ struct Slot {
 pub(crate) struct Decoder {
     protocol: UpstreamProtocol,
     cache_creation_mode: Option<CacheCreationMode>,
+    deepseek_parameters: bool,
     started: bool,
     source_id: Option<String>,
     done: bool,
@@ -345,6 +346,7 @@ impl Decoder {
         Self {
             protocol,
             cache_creation_mode,
+            deepseek_parameters: false,
             started: false,
             source_id: None,
             done: false,
@@ -365,6 +367,11 @@ impl Decoder {
         limits: &Limits,
     ) -> Self {
         self.search = binding.map(|binding| SearchMeter::new(binding, limits));
+        self
+    }
+
+    pub(crate) fn with_deepseek_parameters(mut self, enabled: bool) -> Self {
+        self.deepseek_parameters = enabled;
         self
     }
 
@@ -495,7 +502,42 @@ impl Decoder {
     }
 
     fn usage(&self, value: &Value) -> Result<Usage, RelayError> {
-        usage_with_cache_creation_mode(self.protocol, value, self.cache_creation_mode)
+        let mut usage =
+            usage_with_cache_creation_mode(self.protocol, value, self.cache_creation_mode)?;
+        if self.deepseek_parameters && self.protocol == UpstreamProtocol::Chat {
+            let hit = counter(value, "prompt_cache_hit_tokens")?;
+            let miss = counter(value, "prompt_cache_miss_tokens")?;
+            if let Some(hit) = hit {
+                if usage
+                    .cached_input_tokens
+                    .is_some_and(|cached| cached != hit)
+                {
+                    return Err(RelayError::Protocol(
+                        "conflicting DeepSeek cache hit aliases",
+                    ));
+                }
+                usage.cached_input_tokens = Some(hit);
+            }
+            if let Some(total) = usage.input_tokens {
+                let known = usage
+                    .cached_input_tokens
+                    .unwrap_or(0)
+                    .checked_add(miss.unwrap_or(0))
+                    .ok_or(RelayError::Protocol("DeepSeek token overflow"))?;
+                if known > total
+                    || (usage.cached_input_tokens.is_some() && miss.is_some() && known != total)
+                {
+                    return Err(RelayError::Protocol("contradictory DeepSeek prompt usage"));
+                }
+                if usage.cached_input_tokens.is_none() {
+                    return Err(RelayError::Protocol(
+                        "DeepSeek prompt receipt has no cache hit count",
+                    ));
+                }
+            }
+            usage.validate()?;
+        }
+        Ok(usage)
     }
     pub fn is_done(&self) -> bool {
         self.done
@@ -704,7 +746,7 @@ impl Decoder {
             self.done(&mut out)?;
             return Ok(out);
         }
-        let v: Value = if self.search.is_some() {
+        let v: Value = if self.search.is_some() || self.deepseek_parameters {
             super::native_anthropic::unambiguous_json(frame.data.as_bytes())
         } else {
             serde_json::from_str(&frame.data)
@@ -794,12 +836,42 @@ impl Decoder {
                             }
                         }
                         Some("reasoning") => {
-                            for (j, p) in item["summary"]
+                            let parts = if self.deepseek_parameters {
+                                if item.get("summary").is_some_and(|summary| {
+                                    summary.as_array().is_none_or(|parts| !parts.is_empty())
+                                }) {
+                                    return Err(RelayError::Protocol(
+                                        "DeepSeek reasoning summary cannot replace its content",
+                                    ));
+                                }
+                                &item["content"]
+                            } else {
+                                if item.get("content").is_some_and(|content| {
+                                    content.as_array().is_none_or(|parts| !parts.is_empty())
+                                }) {
+                                    return Err(RelayError::Protocol(
+                                        "plaintext Responses reasoning requires a supplier contract",
+                                    ));
+                                }
+                                &item["summary"]
+                            };
+                            for (j, p) in parts
                                 .as_array()
                                 .ok_or(RelayError::Protocol("invalid reasoning summary"))?
                                 .iter()
                                 .enumerate()
                             {
+                                if p["type"]
+                                    != if self.deepseek_parameters {
+                                        "reasoning_text"
+                                    } else {
+                                        "summary_text"
+                                    }
+                                {
+                                    return Err(RelayError::Protocol(
+                                        "invalid reasoning part type",
+                                    ));
+                                }
                                 self.simple(
                                     (i, j as u64),
                                     BlockKind::Thinking,
@@ -1082,6 +1154,15 @@ impl Decoder {
         Ok(())
     }
     fn responses_event(&mut self, v: &Value, out: &mut Vec<Event>) -> Result<(), RelayError> {
+        if self.deepseek_parameters
+            && v["type"]
+                .as_str()
+                .is_some_and(|kind| kind.starts_with("response.reasoning_summary_"))
+        {
+            return Err(RelayError::Protocol(
+                "DeepSeek reasoning is plaintext content",
+            ));
+        }
         if let Some(item) = v.get("item") {
             plain_response_item(item, self.search.is_some())?;
         }
@@ -1128,6 +1209,9 @@ impl Decoder {
                 let (kind, s) = match p["type"].as_str() {
                     Some("output_text") => (BlockKind::Text, text(&p["text"])?),
                     Some("refusal") => (BlockKind::Refusal, text(&p["refusal"])?),
+                    Some("reasoning_text") if self.deepseek_parameters => {
+                        (BlockKind::Thinking, text(&p["text"])?)
+                    }
                     _ => return Err(RelayError::Protocol("unsupported response content")),
                 };
                 self.simple(key, kind, s, out)?;
@@ -1154,6 +1238,16 @@ impl Decoder {
                 text(&v["delta"])?,
                 out,
             )?,
+            Some("response.reasoning_text.delta") if self.deepseek_parameters => self.delta(
+                (index(&v["output_index"])?, index(&v["content_index"])?),
+                text(&v["delta"])?,
+                out,
+            )?,
+            Some("response.reasoning_text.done") if self.deepseek_parameters => {
+                index(&v["output_index"])?;
+                index(&v["content_index"])?;
+                text(&v["text"])?;
+            }
             Some("response.function_call_arguments.done") => {
                 let key = (index(&v["output_index"])?, u64::MAX);
                 if self.blocks.get(&key).is_some_and(|s| !s.has_text) {
@@ -1661,6 +1755,7 @@ mod tests {
     #[test]
     fn a07_usage_wire_round_trip_preserves_cache_creation() {
         let expected = Usage {
+            embedding: None,
             search: None,
             upstream_cost_atto_usd: None,
             uncached_input_tokens: None,

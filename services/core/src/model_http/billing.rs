@@ -587,6 +587,36 @@ pub(super) fn complete_priced_usage(
     price
         .validate()
         .map_err(|_| RelayError::SettlementPending)?;
+    if let Some(embedding) = &price.embedding {
+        observed
+            .validate()
+            .map_err(|_| RelayError::SettlementPending)?;
+        let measured = observed.embedding.ok_or(RelayError::SettlementPending)?;
+        embedding
+            .validate_usage(measured)
+            .map_err(|_| RelayError::SettlementPending)?;
+        let usage = Usage {
+            embedding: Some(measured),
+            input: i64::try_from(
+                measured
+                    .total_input_tokens
+                    .ok_or(RelayError::SettlementPending)?,
+            )
+            .map_err(|_| RelayError::SettlementPending)?,
+            ..Usage::default()
+        };
+        if observed.input_tokens != measured.total_input_tokens
+            || observed.output_tokens != Some(0)
+            || observed.cached_input_tokens != Some(0)
+            || !usage.valid()
+        {
+            return Err(RelayError::SettlementPending);
+        }
+        return Ok(usage);
+    }
+    if observed.embedding.is_some() {
+        return Err(RelayError::SettlementPending);
+    }
     let mut usage = match price.tiered.as_ref() {
         Some(tariff) => complete_tiered_usage(observed, tariff)?,
         None => complete_usage(observed, price.upstream_cost_group_ppm.is_some())?,
@@ -653,6 +683,7 @@ pub(super) fn complete_usage(
         None
     };
     Ok(Usage {
+        embedding: None,
         search: None,
         image: None,
         upstream_cost_atto_usd,
@@ -825,6 +856,7 @@ mod openai_cache_billing_tests {
             let restored: Usage = serde_json::from_slice(&bytes).unwrap();
             assert_eq!(restored, usage);
             let ledger = charging::Price {
+                embedding: None,
                 search: None,
                 version: "synthetic-cache-12h".into(),
                 model: "synthetic".into(),
@@ -1006,6 +1038,7 @@ fn complete_generic_cache_usage(
         }
     };
     let usage = Usage {
+        embedding: None,
         search: None,
         image: None,
         upstream_cost_atto_usd: None,
@@ -1094,6 +1127,7 @@ fn complete_strict_cache_usage(
         return Err(RelayError::SettlementPending);
     }
     let usage = Usage {
+        embedding: None,
         search: None,
         image: None,
         upstream_cost_atto_usd: None,
@@ -1500,6 +1534,7 @@ mod a07_billing_tests {
             owner_account_id: 3,
             payer_account_id: 3,
             price: charging::Price {
+                embedding: None,
                 search: None,
                 user_trust: None,
                 image: None,
@@ -1519,6 +1554,7 @@ mod a07_billing_tests {
             state: "settled".into(),
             reserved: 100,
             usage: Usage {
+                embedding: None,
                 search: None,
                 cache_creation: None,
                 image: None,
@@ -1582,6 +1618,7 @@ mod a07_billing_tests {
         assert_eq!(
             complete_usage(
                 Observed {
+                    embedding: None,
                     search: None,
                     cache_creation_details: None,
                     openai_cache_write_details: None,
@@ -1597,6 +1634,7 @@ mod a07_billing_tests {
                 false,
             ),
             Ok(Usage {
+                embedding: None,
                 search: None,
                 cache_creation: None,
                 image: None,
@@ -1611,6 +1649,7 @@ mod a07_billing_tests {
     #[test]
     fn complete_usage_rejects_cache_creation_for_token_pricing_even_with_reported_cost() {
         let observed = Observed {
+            embedding: None,
             search: None,
             cache_creation_details: None,
             openai_cache_write_details: None,
@@ -1632,6 +1671,7 @@ mod a07_billing_tests {
     #[test]
     fn complete_usage_strips_reported_cost_for_token_pricing() {
         let observed = Observed {
+            embedding: None,
             search: None,
             cache_creation_details: None,
             openai_cache_write_details: None,
@@ -1647,6 +1687,7 @@ mod a07_billing_tests {
         assert_eq!(
             complete_usage(observed, false),
             Ok(Usage {
+                embedding: None,
                 search: None,
                 cache_creation: None,
                 image: None,
@@ -1663,6 +1704,7 @@ mod a07_billing_tests {
         assert_eq!(
             complete_usage(
                 Observed {
+                    embedding: None,
                     search: None,
                     cache_creation_details: None,
                     openai_cache_write_details: None,
@@ -1678,6 +1720,7 @@ mod a07_billing_tests {
                 true,
             ),
             Ok(Usage {
+                embedding: None,
                 search: None,
                 cache_creation: None,
                 image: None,

@@ -22,6 +22,7 @@ For commercial licensing, please contact support@quantumnous.com
 import type {
   NativeCacheWrite12hTier,
   NativeSearchPrice,
+  NativeEmbeddingPrice,
   NativeImageVariant,
   NativePricingContext,
   NativeUpstreamCostPrice,
@@ -61,6 +62,7 @@ export type PricingModel = {
   /** Exact USD per million token tiers, including the selected group/account factors. */
   group_cache_write_12h_tiers?: Record<string, NativeCacheWrite12hTier[]>
   group_search_prices?: Record<string, NativeSearchPrice>
+  group_embedding_prices?: Record<string, NativeEmbeddingPrice>
   group_endpoints?: Record<string, string[]>
   group_quota_types?: Record<string, 0 | 2 | 3>
   group_upstream_cost_prices?: Record<string, NativeUpstreamCostPrice>

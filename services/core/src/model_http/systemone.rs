@@ -563,6 +563,7 @@ async fn execute(
             .persist_output(
                 &relay::Reservation { id: id.clone() },
                 &relay::OutputCheckpoint {
+                    terminal_outcome: None,
                     sequence: 1,
                     packet_sha256: Sha256::digest(&bytes).into(),
                     packet_bytes: bytes.len(),

@@ -139,8 +139,22 @@ pub(crate) struct Encoder {
     search_outputs: Vec<Value>,
     output_order: Vec<OutputSlot>,
     chat_search_results: Option<Value>,
+    deepseek_parameters: bool,
 }
 impl Encoder {
+    pub(crate) fn set_deepseek_parameters(&mut self, enabled: bool) -> Result<(), RelayError> {
+        if self.started {
+            return Err(RelayError::Protocol(
+                "supplier controls after response start",
+            ));
+        }
+        self.deepseek_parameters = enabled;
+        if let Some(native) = &mut self.native {
+            native.set_deepseek_parameters(enabled);
+        }
+        Ok(())
+    }
+
     pub fn new(request: &Request, request_id: &str, limits: &Limits) -> Self {
         let prefix = match request.client {
             ClientProtocol::Chat => "chatcmpl",
@@ -150,6 +164,7 @@ impl Encoder {
         };
         Self {
             client: request.client,
+            deepseek_parameters: false,
             native: super::native::NativeEncoder::new(request, request_id, limits),
             stream: request.stream,
             include_usage: request.include_usage,
@@ -254,7 +269,9 @@ impl Encoder {
                 json!({"type":"output_text","text":text,"annotations":if empty { Vec::<Value>::new() } else { b.citations.clone() }})
             }
             BlockKind::Refusal => json!({"type":"refusal","refusal":text}),
-            BlockKind::Thinking => json!({"type":"summary_text","text":text}),
+            BlockKind::Thinking => {
+                json!({"type":if self.deepseek_parameters {"reasoning_text"} else {"summary_text"},"text":text})
+            }
             BlockKind::Tool { .. } => Value::Null,
         }
     }
@@ -276,7 +293,11 @@ impl Encoder {
                 json!({"id":self.block_id(index),"type":"function_call","call_id":id,"name":name,"arguments":text,"status":status})
             }
             BlockKind::Thinking => {
-                json!({"id":self.block_id(index),"type":"reasoning","summary":if empty {vec![]} else {vec![self.part(index,false)]}})
+                if self.deepseek_parameters {
+                    json!({"id":self.block_id(index),"type":"reasoning","status":status,"summary":[],"content":if empty {vec![]} else {vec![self.part(index,false)]}})
+                } else {
+                    json!({"id":self.block_id(index),"type":"reasoning","summary":if empty {vec![]} else {vec![self.part(index,false)]}})
+                }
             }
             _ => {
                 json!({"id":self.block_id(index),"type":"message","role":"assistant","status":status,
@@ -313,6 +334,22 @@ impl Encoder {
             value["tool_usage"] = json!({"web_search":{"num_requests":calls}});
         }
         value
+    }
+    fn chat_usage(&self) -> Value {
+        let mut usage = self.usage.wire(ClientProtocol::Chat);
+        if self.deepseek_parameters {
+            if let Some(hit) = self.usage.cached_input_tokens {
+                usage["prompt_cache_hit_tokens"] = json!(hit);
+                if let Some(miss) = self
+                    .usage
+                    .input_tokens
+                    .and_then(|total| total.checked_sub(hit))
+                {
+                    usage["prompt_cache_miss_tokens"] = json!(miss);
+                }
+            }
+        }
+        usage
     }
     pub fn consume(&mut self, event: Event) -> Result<Vec<Vec<u8>>, RelayError> {
         if let Some(native) = &mut self.native {
@@ -387,6 +424,8 @@ impl Encoder {
                             match self.blocks[index].kind {
                             BlockKind::Text | BlockKind::Refusal => out.push(self.response_event("response.content_part.added",
                                 json!({"output_index":self.blocks[index].wire_index,"item_id":self.block_id(index),"content_index":0,"part":self.part(index,true)}))?),
+                            BlockKind::Thinking if self.deepseek_parameters => out.push(self.response_event("response.content_part.added",
+                                json!({"output_index":self.blocks[index].wire_index,"item_id":self.block_id(index),"content_index":0,"part":self.part(index,true)}))?),
                             BlockKind::Thinking => out.push(self.response_event("response.reasoning_summary_part.added",
                                 json!({"output_index":self.blocks[index].wire_index,"item_id":self.block_id(index),"summary_index":0,"part":self.part(index,true)}))?),
                             BlockKind::Tool { .. } => {},
@@ -437,8 +476,13 @@ impl Encoder {
                                     "response.refusal.delta"
                                 }
                                 BlockKind::Thinking => {
-                                    v["summary_index"] = json!(0);
-                                    "response.reasoning_summary_text.delta"
+                                    if self.deepseek_parameters {
+                                        v["content_index"] = json!(0);
+                                        "response.reasoning_text.delta"
+                                    } else {
+                                        v["summary_index"] = json!(0);
+                                        "response.reasoning_summary_text.delta"
+                                    }
                                 }
                                 BlockKind::Tool { .. } => "response.function_call_arguments.delta",
                             };
@@ -686,7 +730,7 @@ impl Encoder {
             message["reasoning_details"] = json!(details);
         }
         let mut value = json!({"id":self.id,"object":"chat.completion","created":self.created,"model":self.model,
-            "choices":[{"index":0,"message":message,"finish_reason":self.finish.map(FinishReason::chat)}],"usage":self.usage.wire(ClientProtocol::Chat)});
+            "choices":[{"index":0,"message":message,"finish_reason":self.finish.map(FinishReason::chat)}],"usage":self.chat_usage()});
         if let Some(results) = &self.chat_search_results {
             value["web_search"] = results.clone();
         }
@@ -713,7 +757,7 @@ impl Encoder {
                 out.push(self.chat_chunk(json!({}), self.finish)?);
                 if self.include_usage {
                     out.push(self.packet(None,&json!({"id":self.id,"object":"chat.completion.chunk","created":self.created,
-                    "model":self.model,"choices":[],"usage":self.usage.wire(ClientProtocol::Chat)}))?);
+                    "model":self.model,"choices":[],"usage":self.chat_usage()}))?);
                 }
                 out.push(b"data: [DONE]\n\n".to_vec());
             }
@@ -754,19 +798,32 @@ impl Encoder {
                             out.push(self.response_event("response.content_part.done", v)?);
                         }
                         BlockKind::Thinking => {
-                            v["summary_index"] = json!(0);
+                            v[if self.deepseek_parameters {
+                                "content_index"
+                            } else {
+                                "summary_index"
+                            }] = json!(0);
                             v["text"] = json!(self.blocks[i].text);
                             out.push(self.response_event(
-                                "response.reasoning_summary_text.done",
+                                if self.deepseek_parameters {
+                                    "response.reasoning_text.done"
+                                } else {
+                                    "response.reasoning_summary_text.done"
+                                },
                                 v.clone(),
                             )?);
                             v.as_object_mut()
                                 .ok_or(RelayError::Protocol("response encoding failed"))?
                                 .remove("text");
                             v["part"] = self.part(i, false);
-                            out.push(
-                                self.response_event("response.reasoning_summary_part.done", v)?,
-                            );
+                            out.push(self.response_event(
+                                if self.deepseek_parameters {
+                                    "response.content_part.done"
+                                } else {
+                                    "response.reasoning_summary_part.done"
+                                },
+                                v,
+                            )?);
                         }
                         BlockKind::Tool { .. } => {
                             v["arguments"] = json!(self.blocks[i].text);

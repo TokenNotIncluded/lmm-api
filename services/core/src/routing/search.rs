@@ -22,6 +22,8 @@ pub enum SearchProvider {
     DashscopeAnthropicV1,
     AnthropicMessagesV1,
     ZhipuChatV1,
+    DeepSeekSearchV1,
+    DeepSeekFetchV1,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -116,6 +118,10 @@ impl SearchUsage {
             _ => self.queries.unwrap_or(0) == 0 && self.grounded_requests.unwrap_or(0) == 0,
         };
         supported
+            && (!matches!(
+                self.provider,
+                SearchProvider::DeepSeekSearchV1 | SearchProvider::DeepSeekFetchV1
+            ) || self.calls.is_none_or(|calls| calls <= 1))
             && self
                 .counters()
                 .into_iter()
@@ -278,6 +284,13 @@ impl SearchTariff {
     pub fn validate_limits(self, limits: SearchLimits) -> Result<(), RoutingError> {
         self.validate()?;
         limits.validate()?;
+        if matches!(
+            self.provider,
+            SearchProvider::DeepSeekSearchV1 | SearchProvider::DeepSeekFetchV1
+        ) && limits.calls != Some(1)
+        {
+            return Err(invalid());
+        }
         let permits_a_priced_unit = limits.for_unit(self.unit).is_some_and(|count| count > 0)
             || (self.x_posts_fetched_usd_per_unit.is_some()
                 && limits.x_posts_fetched.is_some_and(|count| count > 0))

@@ -155,13 +155,13 @@ fn blocks(v: &Value, role: Role, limits: &Limits) -> Result<Vec<InputBlock>, Rel
             }
             Some("thinking") if role == Role::Assistant => {
                 keys(p, &["type", "thinking", "signature"])?;
-                let s = string(&p["signature"])?;
-                if s.is_empty() {
+                let signature = p.get("signature").map(string).transpose()?;
+                if signature.as_ref().is_some_and(String::is_empty) {
                     return Err(RelayError::Invalid("empty thinking signature"));
                 }
                 InputBlock::Thinking {
                     text: string(&p["thinking"])?,
-                    signature: Some((UpstreamProtocol::Anthropic, s)),
+                    signature: signature.map(|value| (UpstreamProtocol::Anthropic, value)),
                 }
             }
             Some("tool_use") if role == Role::Assistant => {
@@ -219,9 +219,7 @@ pub(crate) fn parse(body: &[u8], limits: &Limits) -> Result<Request, RelayError>
     if body.len() > limits.request_bytes {
         return Err(RelayError::Limit("request body"));
     }
-    let v = serde_json::from_slice::<Unique>(body)
-        .map_err(|_| RelayError::Invalid("invalid or ambiguous JSON"))?
-        .0;
+    let v = unambiguous_json(body).map_err(|_| RelayError::Invalid("invalid or ambiguous JSON"))?;
     keys(
         &v,
         &[
@@ -235,6 +233,8 @@ pub(crate) fn parse(body: &[u8], limits: &Limits) -> Result<Request, RelayError>
             "tools",
             "tool_choice",
             "stop_sequences",
+            "thinking",
+            "output_config",
         ],
     )?;
     if let Some(s) = v.get("stop_sequences") {
@@ -251,6 +251,21 @@ pub(crate) fn parse(body: &[u8], limits: &Limits) -> Result<Request, RelayError>
         }
     }
     let mut canonical = json!({"model":v["model"],"max_tokens":v["max_tokens"],"messages":[{"role":"user","content":"validation"}]});
+    if let Some(thinking) = v.get("thinking") {
+        super::deepseek::thinking(Some(thinking))?;
+        canonical["thinking"] = thinking.clone();
+    }
+    if let Some(config) = v.get("output_config") {
+        keys(config, &["effort"])?;
+        let effort = config["effort"]
+            .as_str()
+            .filter(|effort| *effort != "none")
+            .filter(|effort| super::deepseek::effort(effort).is_some())
+            .ok_or(RelayError::Unsupported(
+                "unsupported DeepSeek output effort",
+            ))?;
+        canonical["reasoning_effort"] = json!(effort);
+    }
     if let Some(sequences) = v.get("stop_sequences") {
         canonical["stop"] = sequences.clone();
     }
@@ -397,6 +412,7 @@ struct Block {
     wire_index: usize,
 }
 pub(crate) struct NativeEncoder {
+    deepseek_parameters: bool,
     model: String,
     id: String,
     stream: bool,
@@ -416,8 +432,13 @@ pub(crate) struct NativeEncoder {
     limits: Limits,
 }
 impl NativeEncoder {
+    pub(crate) fn set_deepseek_parameters(&mut self, enabled: bool) {
+        self.deepseek_parameters = enabled;
+    }
+
     pub fn new(model: &str, request_id: &str, stream: bool, limits: &Limits) -> Self {
         Self {
+            deepseek_parameters: false,
             model: model.into(),
             id: format!("msg_{request_id}"),
             stream,
@@ -555,7 +576,11 @@ impl NativeEncoder {
                 value
             }
             BlockKind::Thinking => {
-                json!({"type":"thinking","thinking":s,"signature":if empty{""}else{&b.signature}})
+                if self.deepseek_parameters && b.signature.is_empty() {
+                    json!({"type":"thinking","thinking":s})
+                } else {
+                    json!({"type":"thinking","thinking":s,"signature":if empty{""}else{&b.signature}})
+                }
             }
             BlockKind::Tool { id, name } => {
                 json!({"type":"tool_use","id":id,"name":name,"input":if empty{json!({})}else{serde_json::from_str::<Unique>(s).map_err(|_|RelayError::Protocol("invalid tool JSON"))?.0}})
@@ -677,7 +702,10 @@ impl NativeEncoder {
                 if b.ended {
                     return Err(RelayError::Protocol("duplicate block end"));
                 }
-                if matches!(b.kind, BlockKind::Thinking) && b.signature.is_empty() {
+                if !self.deepseek_parameters
+                    && matches!(b.kind, BlockKind::Thinking)
+                    && b.signature.is_empty()
+                {
                     return Err(RelayError::Unsupported("unsigned native thinking"));
                 }
                 if matches!(b.kind, BlockKind::Tool { .. })

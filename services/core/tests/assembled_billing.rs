@@ -36,6 +36,7 @@ fn request(id: &str, reserve: i64) -> ChargeRequest {
         lease_seconds: 300,
         maximum_seconds: 600,
         price: Price {
+            embedding: None,
             search: None,
             user_trust: None,
             image: None,
@@ -52,6 +53,7 @@ fn request(id: &str, reserve: i64) -> ChargeRequest {
 }
 fn usage() -> Usage {
     Usage {
+        embedding: None,
         search: None,
         cache_creation: None,
         image: None,

@@ -1,6 +1,7 @@
 /* Copyright (C) 2026 LIghtJUNction. AGPL-3.0-or-later. */
 import {
   searchProviders,
+  searchQuantityLabel,
   searchUnitLabels,
   searchUnitMatchesProvider,
   type SearchBillingUnit,
@@ -86,7 +87,7 @@ export function searchUsageQuantities(
     grounded_request: 'grounded_requests',
   }[unit]
   const result: SearchQuantity[] = [
-    { label: searchUnitLabels[unit], count: measured(primary) },
+    { label: searchQuantityLabel(provider, unit), count: measured(primary) },
   ]
   if (provider === 'xai_responses_v1') {
     if (object(billing.x_posts_fetched_usd_per_unit))

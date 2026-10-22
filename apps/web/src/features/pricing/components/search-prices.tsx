@@ -2,7 +2,7 @@
 import { useTranslation } from 'react-i18next'
 
 import { GroupBadge } from '@/components/group-badge'
-import { searchProviderLabels, searchUnitLabels } from '@/lib/search-metering'
+import { searchProviderLabels, searchQuantityLabel } from '@/lib/search-metering'
 
 import type { PricingModel } from '../types'
 import { formatCacheWriteRate } from './cache-write-prices'
@@ -33,7 +33,7 @@ export function SearchPrices({ model }: { model: PricingModel }) {
             )}
           </div>
           <dl className='grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-2 text-xs'>
-            <dt>{t(searchUnitLabels[price.unit])}</dt>
+            <dt>{t(searchQuantityLabel(price.provider, price.unit))}</dt>
             <dd className='text-right font-mono break-all tabular-nums'>
               {formatCacheWriteRate(price.usd_per_unit)}
             </dd>

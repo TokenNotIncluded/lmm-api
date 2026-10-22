@@ -27,6 +27,21 @@ const endpoints: Record<
     method: 'POST',
   },
   'system-one': { type: 'systemone', path: '/v1/systemone', method: 'POST' },
+  'deepseek-search': {
+    type: 'deepseek-search',
+    path: '/v1/tools/search',
+    method: 'POST',
+  },
+  'deepseek-fetch': {
+    type: 'deepseek-fetch',
+    path: '/v1/tools/fetch',
+    method: 'POST',
+  },
+  'ali-multimodal-embedding': {
+    type: 'embeddings',
+    path: '/v1/embeddings',
+    method: 'POST',
+  },
   'openai-images-generations': {
     type: 'image-generation',
     path: '/v1/images/generations',
@@ -129,6 +144,13 @@ export function adaptNativePricing(
       group_search_prices: Object.fromEntries(
         rows.flatMap((row) =>
           row.token_price?.search ? [[row.group, row.token_price.search]] : []
+        )
+      ),
+      group_embedding_prices: Object.fromEntries(
+        rows.flatMap((row) =>
+          row.token_price?.embedding
+            ? [[row.group, row.token_price.embedding]]
+            : []
         )
       ),
       group_prices: tokenRows.length

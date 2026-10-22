@@ -30,8 +30,8 @@ pub(crate) enum HostedSearch {
     Zhipu(Value),
 }
 
-pub(crate) fn provider_protocol(provider: SearchProvider) -> UpstreamProtocol {
-    match provider {
+pub(crate) fn provider_protocol(provider: SearchProvider) -> Option<UpstreamProtocol> {
+    Some(match provider {
         SearchProvider::OpenAiResponsesV1
         | SearchProvider::AzureResponsesV1
         | SearchProvider::XaiResponsesV1
@@ -41,7 +41,8 @@ pub(crate) fn provider_protocol(provider: SearchProvider) -> UpstreamProtocol {
             UpstreamProtocol::Anthropic
         }
         SearchProvider::ZhipuChatV1 => UpstreamProtocol::Chat,
-    }
+        SearchProvider::DeepSeekSearchV1 | SearchProvider::DeepSeekFetchV1 => return None,
+    })
 }
 
 impl HostedSearch {
@@ -76,7 +77,7 @@ impl HostedSearch {
             .limits
             .validate()
             .map_err(|_| RelayError::Invalid("invalid search bounds"))?;
-        if provider_protocol(binding.provider) != protocol {
+        if provider_protocol(binding.provider) != Some(protocol) {
             return Err(RelayError::Unsupported(
                 "search receipt contract does not match protocol",
             ));
@@ -487,7 +488,7 @@ impl SearchMeter {
         if value["type"] != "web_search_call" && value["type"] != "x_search_call" {
             return Ok(());
         }
-        if provider_protocol(self.binding.provider) != UpstreamProtocol::Responses {
+        if provider_protocol(self.binding.provider) != Some(UpstreamProtocol::Responses) {
             return Err(RelayError::Protocol(
                 "search item disagrees with supplier contract",
             ));
@@ -685,6 +686,11 @@ impl SearchMeter {
                         next.grounded_requests = Some(1);
                     }
                 }
+            }
+            SearchProvider::DeepSeekSearchV1 | SearchProvider::DeepSeekFetchV1 => {
+                return Err(RelayError::Unsupported(
+                    "native search tools require their own endpoint",
+                ));
             }
         }
         if !next.valid() || !self.binding.limits.contains(next) {

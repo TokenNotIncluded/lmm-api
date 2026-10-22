@@ -103,6 +103,7 @@ import type {
 } from '../types'
 import { CacheWritePrices } from './cache-write-prices'
 import { DynamicPricingBreakdown } from './dynamic-pricing-breakdown'
+import { EmbeddingPrices } from './embedding-prices'
 import { ImagePrices } from './image-prices'
 import { ModelAvailability } from './model-availability'
 import { ModelBillingModeBadge } from './model-billing-mode-badge'
@@ -1069,6 +1070,7 @@ export function ModelDetailsContent(props: ModelDetailsContentProps) {
             />
             <CacheWritePrices model={props.model} />
             <SearchPrices model={props.model} />
+            <EmbeddingPrices model={props.model} />
             <ImagePrices model={props.model} />
             {isDynamic && (
               <DynamicPricingBreakdown

@@ -89,6 +89,9 @@ pub struct Request {
     pub tool_choice: ToolChoice,
     pub parallel_tool_calls: Option<bool>,
     pub reasoning_effort: Option<String>,
+    pub(crate) deepseek_thinking: Option<bool>,
+    /// Original bounded plaintext Responses reasoning items, indexed by message.
+    pub(crate) response_reasoning_items: BTreeMap<usize, Value>,
     /// Bounded Responses cache controls; never evidence of actual billed writes.
     pub prompt_cache_options: Option<Value>,
     pub(crate) hosted_search: Option<HostedSearch>,
@@ -271,6 +274,7 @@ impl Request {
                     "parallel_tool_calls",
                     "n",
                     "reasoning_effort",
+                    "thinking",
                     "store",
                 ],
             )?,
@@ -505,10 +509,19 @@ impl Request {
         };
         if reasoning_effort
             .as_ref()
-            .is_some_and(|s| !["low", "medium", "high"].contains(&s.as_str()))
+            .is_some_and(|s| super::deepseek::effort(s).is_none())
         {
             return Err(RelayError::Unsupported("unsupported reasoning effort"));
         }
+        let deepseek_thinking = super::deepseek::thinking(v.get("thinking"))?;
+        if v.get("reasoning").is_some()
+            || v.get("reasoning_effort").is_some()
+            || v.get("thinking").is_some()
+        {
+            super::native_anthropic::unambiguous_json(body)
+                .map_err(|_| RelayError::Invalid("ambiguous reasoning controls"))?;
+        }
+        let mut response_reasoning_items = BTreeMap::new();
         let mut messages = Vec::new();
         if let Some(s) = v.get("instructions").filter(|v| !v.is_null()) {
             messages.push(Message {
@@ -614,6 +627,23 @@ impl Request {
                                 .ok_or(RelayError::Invalid("invalid Responses input type"))?,
                         };
                         match kind {
+                            "reasoning" => {
+                                let text = super::deepseek::reasoning_item(i)?;
+                                if response_reasoning_items
+                                    .values()
+                                    .any(|old: &Value| old["id"] == i["id"])
+                                {
+                                    return Err(RelayError::Invalid("duplicate reasoning item ID"));
+                                }
+                                response_reasoning_items.insert(messages.len(), i.clone());
+                                messages.push(Message {
+                                    role: Role::Assistant,
+                                    content: vec![InputBlock::Thinking {
+                                        text,
+                                        signature: None,
+                                    }],
+                                });
+                            }
                             "message" => {
                                 keys(i, &["type", "role", "content"])?;
                                 let role = Role::parse(&i["role"])?;
@@ -662,6 +692,10 @@ impl Request {
                     }
                 }
             }
+        }
+        if !response_reasoning_items.is_empty() {
+            super::native_anthropic::unambiguous_json(body)
+                .map_err(|_| RelayError::Invalid("ambiguous reasoning history"))?;
         }
         if messages.is_empty() || messages.len() > 1024 {
             return Err(RelayError::Limit("message count"));
@@ -724,13 +758,16 @@ impl Request {
             top_p: number(v.get("top_p"), 1.0)?,
             parallel_tool_calls: boolean(v.get("parallel_tool_calls"))?,
             reasoning_effort,
+            deepseek_thinking,
+            response_reasoning_items,
             prompt_cache_options,
             hosted_search,
         })
     }
 
     pub(crate) fn upstream(&self, route: &Route) -> Result<Value, RelayError> {
-        let mut value = self.upstream_base(route.protocol, &route.model)?;
+        let mut value =
+            self.upstream_base(route.protocol, &route.model, route.deepseek_parameters)?;
         if let Some(search) = &self.hosted_search {
             let binding = route.search_contract.ok_or(RelayError::Unsupported(
                 "hosted search has no frozen supplier contract",
@@ -785,7 +822,7 @@ impl Request {
         protocol: UpstreamProtocol,
         model: &str,
     ) -> Result<Value, RelayError> {
-        let mut value = self.upstream_base(protocol, model)?;
+        let mut value = self.upstream_base(protocol, model, false)?;
         if let Some(search) = &self.hosted_search {
             self.search_choice(&mut value);
             search.unbound(&mut value)?;
@@ -793,7 +830,13 @@ impl Request {
         Ok(value)
     }
 
-    fn upstream_base(&self, protocol: UpstreamProtocol, model: &str) -> Result<Value, RelayError> {
+    fn upstream_base(
+        &self,
+        protocol: UpstreamProtocol,
+        model: &str,
+        deepseek: bool,
+    ) -> Result<Value, RelayError> {
+        self.validate_deepseek_parameters(protocol, deepseek)?;
         if self.hosted_search.is_some()
             && !matches!(
                 (self.client, protocol),
@@ -842,19 +885,23 @@ impl Request {
         if matches!(
             protocol,
             UpstreamProtocol::Anthropic | UpstreamProtocol::Gemini
-        ) && (self.reasoning_effort.is_some()
+        ) && ((!deepseek && self.reasoning_effort.is_some())
             || self.tools.iter().any(|t| t.strict == Some(true)))
         {
             return Err(RelayError::Unsupported(
                 "reasoning effort or strict tools require an OpenAI protocol route",
             ));
         }
-        match protocol {
+        let mut value = match protocol {
             UpstreamProtocol::Chat => self.chat(model),
-            UpstreamProtocol::Responses => self.responses(model),
-            UpstreamProtocol::Anthropic => self.anthropic(model),
+            UpstreamProtocol::Responses => self.responses(model, deepseek),
+            UpstreamProtocol::Anthropic => self.anthropic(model, deepseek),
             UpstreamProtocol::Gemini => self.gemini(),
+        }?;
+        if deepseek {
+            super::deepseek::apply(self, protocol, &mut value)?;
         }
+        Ok(value)
     }
     fn openai_tools(&self, chat: bool) -> Vec<Value> {
         self.tools
@@ -969,12 +1016,16 @@ impl Request {
         self.sampling(&mut v);
         Ok(v)
     }
-    fn responses(&self, model: &str) -> Result<Value, RelayError> {
+    fn responses(&self, model: &str, deepseek: bool) -> Result<Value, RelayError> {
         if !self.stop.is_empty() {
             return Err(RelayError::Unsupported("Responses stop sequences"));
         }
         let mut input = Vec::new();
-        for m in &self.messages {
+        for (message_index, m) in self.messages.iter().enumerate() {
+            if deepseek && let Some(item) = self.response_reasoning_items.get(&message_index) {
+                input.push(item.clone());
+                continue;
+            }
             for b in &m.content {
                 match b {
             InputBlock::Text(s) => input.push(json!({"role":m.role.name(),"content":[{"type":if m.role == Role::Assistant {"output_text"} else {"input_text"},"text":s}]})),
@@ -1027,7 +1078,7 @@ impl Request {
         }
         Ok((system, messages))
     }
-    fn anthropic(&self, model: &str) -> Result<Value, RelayError> {
+    fn anthropic(&self, model: &str, deepseek: bool) -> Result<Value, RelayError> {
         if self.temperature.is_some_and(|t| t > 1.0) {
             return Err(RelayError::Unsupported("Anthropic temperature exceeds one"));
         }
@@ -1039,6 +1090,7 @@ impl Request {
                 content.push(match b {
                 InputBlock::Text(s) | InputBlock::Refusal(s) => json!({"type":"text","text":s}),
                 InputBlock::Thinking { text, signature: Some((UpstreamProtocol::Anthropic, s)) } => json!({"type":"thinking","thinking":text,"signature":s}),
+                InputBlock::Thinking { text, signature: None } if deepseek => json!({"type":"thinking","thinking":text}),
                 InputBlock::Thinking { .. } => return Err(RelayError::Unsupported("Anthropic thinking history needs its original signature")),
                 InputBlock::ToolCall { id, name, arguments, .. } => json!({"type":"tool_use","id":id,"name":name,"input":serde_json::from_str::<Value>(arguments).map_err(|_| RelayError::Invalid("invalid tool JSON"))?}),
                 InputBlock::ToolResult { id, content } => json!({"type":"tool_result","tool_use_id":id,"content":content}),

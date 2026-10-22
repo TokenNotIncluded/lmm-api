@@ -259,6 +259,7 @@ pub struct Route {
     pub(crate) credential: HeaderValue,
     pub(crate) cache_creation_mode: Option<CacheCreationMode>,
     pub(crate) search_contract: Option<super::search::SearchBinding>,
+    pub(crate) deepseek_parameters: bool,
     availability: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
 }
 impl fmt::Debug for Route {
@@ -323,6 +324,7 @@ impl Route {
             price_version,
             cache_creation_mode: None,
             search_contract: None,
+            deepseek_parameters: false,
             availability: None,
         })
     }
@@ -343,10 +345,22 @@ impl Route {
         limits
             .validate()
             .map_err(|_| RelayError::Invalid("invalid search bounds"))?;
-        if super::search::provider_protocol(provider) != self.protocol {
+        if super::search::provider_protocol(provider) != Some(self.protocol) {
             return Err(RelayError::Unsupported("search supplier protocol mismatch"));
         }
         self.search_contract = Some(super::search::SearchBinding { provider, limits });
+        Ok(self)
+    }
+
+    /// Selected only through an exact server-owned DeepSeek parameter contract.
+    /// A model name or a client-supplied thinking option cannot enable this.
+    pub(crate) fn with_deepseek_parameters(mut self) -> Result<Self, RelayError> {
+        if self.protocol == UpstreamProtocol::Gemini {
+            return Err(RelayError::Unsupported(
+                "DeepSeek has no Gemini parameter contract",
+            ));
+        }
+        self.deepseek_parameters = true;
         Ok(self)
     }
 
@@ -387,6 +401,16 @@ pub struct OutputCheckpoint {
     pub packet_bytes: usize,
     pub usage: Usage,
     pub terminal_observed: bool,
+    /// None preserves the historical completed-terminal contract. A Failed
+    /// terminal needs a separate reviewed free-failure receipt validation.
+    pub terminal_outcome: Option<TerminalOutcome>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalOutcome {
+    Completed,
+    Failed,
 }
 
 pub trait Billing: Send + Sync + 'static {
@@ -524,6 +548,8 @@ pub struct Usage {
     pub reasoning_output_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub search: Option<crate::routing::SearchUsage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding: Option<crate::routing::EmbeddingUsage>,
 }
 impl Usage {
     pub(crate) fn merge(&mut self, next: Self) -> Result<(), RelayError> {
@@ -549,6 +575,7 @@ impl Usage {
         }
         let mut combined = *self;
         combined.merge_search(next.search)?;
+        combined.merge_embedding(next.embedding)?;
         let input_advanced = advances(self.input_tokens, next.input_tokens);
         let creation_advanced = advances(
             self.cache_creation_input_tokens,
@@ -670,6 +697,7 @@ impl Usage {
         next.validate()?;
         let mut combined = *self;
         combined.merge_search(next.search)?;
+        combined.merge_embedding(next.embedding)?;
         combined.cache_creation_mode = self.cache_creation_mode.or(next.cache_creation_mode);
         let input_advanced = advances(self.input_tokens, next.input_tokens);
         let uncached_advanced = advances(self.uncached_input_tokens, next.uncached_input_tokens);
@@ -863,9 +891,44 @@ impl Usage {
         Ok(())
     }
 
+    fn merge_embedding(
+        &mut self,
+        next: Option<crate::routing::EmbeddingUsage>,
+    ) -> Result<(), RelayError> {
+        if let Some(next) = next {
+            if !next.valid() || self.embedding.is_some_and(|old| !next.follows(old)) {
+                return Err(RelayError::Protocol("inconsistent embedding usage"));
+            }
+            self.embedding = Some(next);
+        }
+        Ok(())
+    }
+
     /// Validate both live observations and receipts restored after a restart.
     /// Deserialization alone does not establish counter consistency.
     pub(crate) fn validate(&self) -> Result<(), RelayError> {
+        if let Some(embedding) = self.embedding {
+            if !embedding.valid()
+                || self.search.is_some()
+                || self.upstream_cost_atto_usd.is_some()
+                || self.cache_creation_mode.is_some()
+                || self.uncached_input_tokens.is_some()
+                || self.cache_creation_details.is_some()
+                || self.openai_cache_write_details.is_some()
+                || [
+                    self.output_tokens,
+                    self.cached_input_tokens,
+                    self.cache_creation_input_tokens,
+                    self.reasoning_output_tokens,
+                ]
+                .into_iter()
+                .flatten()
+                .any(|count| count != 0)
+                || matches!((self.input_tokens, embedding.total_input_tokens), (Some(input), Some(total)) if input != total)
+            {
+                return Err(RelayError::Protocol("invalid embedding usage"));
+            }
+        }
         if self.search.is_some_and(|usage| !usage.valid()) {
             return Err(RelayError::Protocol("invalid search usage"));
         }
@@ -1564,6 +1627,7 @@ mod a07_usage_tests {
     #[test]
     fn zero_boundary_repeated_receipt_and_missing_fields_are_valid() {
         let zero = Usage {
+            embedding: None,
             search: None,
             upstream_cost_atto_usd: None,
             uncached_input_tokens: None,

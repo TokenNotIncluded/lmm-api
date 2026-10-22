@@ -16,6 +16,7 @@ pub mod image_internal;
 pub mod image_price;
 mod image_provider;
 mod native;
+mod native_operations;
 pub mod pricing;
 mod provider_policy;
 mod routing;
@@ -46,14 +47,16 @@ use sqlx::PgPool;
 use std::{
     collections::BTreeMap,
     net::{IpAddr, SocketAddr},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
     time::Duration,
 };
 use subtle::ConstantTimeEq;
 
 pub use catalog::{CatalogError, CatalogSurface, CatalogV1};
 pub use honeypot::{HoneypotCredential, HoneypotGateway};
-pub use provider_policy::{ExternalModelContext, ExternalSearchContract, ProviderPolicy};
+pub use provider_policy::{
+    ExternalEmbeddingContract, ExternalModelContext, ExternalSearchContract, ProviderPolicy,
+};
 pub use routing::UpstreamCredential;
 pub const SCHEMA: &str = include_str!("../schema/model_gateway.sql");
 
@@ -86,6 +89,19 @@ struct Bridge {
     policy: ChargePolicy,
     provider_policy: ProviderPolicy,
     total_timeout: Duration,
+    routing_admin: OnceLock<crate::routing_admin::RoutingAdmin>,
+}
+
+impl Bridge {
+    async fn refresh_routing(&self) -> Result<(), RelayError> {
+        if let Some(admin) = self.routing_admin.get() {
+            admin
+                .refresh()
+                .await
+                .map_err(|_| RelayError::RouteUnavailable)?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
@@ -101,6 +117,7 @@ pub struct ModelGateway {
     oauth2: Option<crate::identity::grants::LmmIssuer>,
     images: Option<image_execution::ImageService>,
     systemone: systemone::Host,
+    native_operations: native_operations::Host,
 }
 
 impl ModelGateway {
@@ -186,14 +203,17 @@ impl ModelGateway {
             policy,
             provider_policy,
             total_timeout: limits.total_timeout,
+            routing_admin: OnceLock::new(),
         });
         let relay = Relay::new(bridge.clone(), bridge.clone(), limits.clone())?;
+        catalog_surface.attach_source(Arc::downgrade(&bridge));
         Ok(Self {
             identity: IdentityStore::from_pool(pool).with_dashboard_routing(bridge.routing.clone()),
             access: Arc::new(key_groups),
             bridge,
             relay,
             systemone: systemone::Host::new(&limits),
+            native_operations: native_operations::Host::new(&limits),
             limits,
             local_streaming: false,
             honeypot: None,
@@ -209,6 +229,26 @@ impl ModelGateway {
         }
         self.images = Some(images);
         self
+    }
+    /// Host assembly opts into the installed durable publication contract.
+    /// Every clone shares the next-admission barrier; in-flight prices remain
+    /// the immutable prices already captured by the charging transaction.
+    pub fn enable_routing_admin(
+        &self,
+    ) -> Result<crate::routing_admin::RoutingAdmin, crate::routing_admin::AdminError> {
+        if let Some(admin) = self.bridge.routing_admin.get() {
+            return Ok(admin.clone());
+        }
+        let admin = crate::routing_admin::RoutingAdmin::new(
+            self.bridge.pool.clone(),
+            self.bridge.routing.clone(),
+        )?;
+        let _ = self.bridge.routing_admin.set(admin);
+        self.bridge
+            .routing_admin
+            .get()
+            .cloned()
+            .ok_or(crate::routing_admin::AdminError::Unavailable)
     }
     /// Required by production host assembly after its schema authority check.
     /// No HTTP, Go message or deployment TOML can turn this policy off.
@@ -303,6 +343,7 @@ impl ModelGateway {
             .layer(DefaultBodyLimit::max(self.limits.request_bytes))
             .with_state(self.clone());
         let router = router.merge(systemone::router(self.clone()));
+        let router = router.merge(native_operations::router(self.clone()));
         if self.images.is_some() {
             router.merge(image_api::router(self.clone()))
         } else {
@@ -311,7 +352,7 @@ impl ModelGateway {
     }
 
     pub async fn drain(&self, grace: Duration) -> relay::DrainReport {
-        let (normal, marked, images, systemone) = tokio::join!(
+        let (normal, marked, images, systemone, native_operations) = tokio::join!(
             self.relay.drain(grace),
             async {
                 if let Some(honeypot) = &self.honeypot {
@@ -331,6 +372,7 @@ impl ModelGateway {
                 }
             },
             self.systemone.drain(grace),
+            self.native_operations.drain(grace),
         );
         relay::DrainReport {
             cancelled: normal.cancelled.saturating_add(marked.cancelled),
@@ -338,7 +380,8 @@ impl ModelGateway {
                 .remaining
                 .saturating_add(marked.remaining)
                 .saturating_add(images)
-                .saturating_add(systemone),
+                .saturating_add(systemone)
+                .saturating_add(native_operations),
         }
     }
 
@@ -409,6 +452,7 @@ impl ModelGateway {
             tx.commit()
                 .await
                 .map_err(|_| RelayError::BillingUnavailable)?;
+            self.bridge.refresh_routing().await?;
             return Ok((ModelIdentity::OAuth(source), secret.to_owned(), groups));
         }
         let principal = self.identity.authorize(secret).await.map_err(|e| match e {
@@ -436,6 +480,7 @@ impl ModelGateway {
         if groups.is_empty() {
             return Err(RelayError::Forbidden);
         }
+        self.bridge.refresh_routing().await?;
         Ok((ModelIdentity::Native(principal), secret.to_owned(), groups))
     }
 }

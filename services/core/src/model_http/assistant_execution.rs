@@ -533,6 +533,8 @@ mod usage_tests {
         .unwrap();
         let policy = ProviderPolicy::new(
             vec![ExternalModelContext {
+                deepseek_parameters_contract: None,
+                embedding: None,
                 search: None,
                 upstream_id: 1,
                 upstream_model: "bounded-model".into(),

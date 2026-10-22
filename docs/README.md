@@ -33,6 +33,8 @@
 
 [Rust 路由与计费合同](../services/core/src/routing/README.md)包含 [OpenAI 12 小时缓存写入计费（revision 4）](../services/core/src/routing/README.md#openai-twelve-hour-cache-writes-revision-4)的用量分区、示例价格、恢复和回退边界。
 
+[通知与邮件](../services/core/src/notifications/README.md)说明个人偏好、余额阈值、渠道发布事件、SMTP／Resend 配置，以及事务回滚和投递状态不明时的处理边界；源码候选仍需独立 Rust／PostgreSQL 验证。
+
 [RT16 Markdown 隔离安全复现](../scripts/security/rt16/README.md)用于验证组件层面的安全性。不过请注意，它不能替代商品、客服、个人资料和助手的存储读写验收——那些需要单独确认。
 
 [部署研究结论与待接入项](deployment-research.md)保留了已移除实验目录中的有效结论与历史来源，供参考学习使用，但请不要将其作为正式部署步骤。

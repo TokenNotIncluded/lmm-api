@@ -44,6 +44,36 @@ impl RuntimeRole {
         "#)).execute(owner).await.unwrap();
         // Identity/ledger-only fixtures intentionally omit optional components.
         // Complete runtime provisioning/checking remains strict in production.
+        let notification_storage: bool = sqlx::query_scalar(
+            "SELECT to_regclass('core_console.options') IS NOT NULL AND to_regclass('core_events.inbox') IS NOT NULL",
+        ).fetch_one(owner).await.unwrap();
+        if notification_storage {
+            let grants = include_str!("../../../../deployment/postgres/grant-core-runtime.sql")
+                .split_once("-- BEGIN notification-publisher runtime grants")
+                .unwrap()
+                .1
+                .split_once("-- END notification-publisher runtime grants")
+                .unwrap()
+                .0
+                .replace(":\"runtime_role\"", &name);
+            sqlx::raw_sql(&grants).execute(owner).await.unwrap();
+        }
+        let routing_admin_installed: bool =
+            sqlx::query_scalar("SELECT to_regnamespace('core_routing_admin') IS NOT NULL")
+                .fetch_one(owner)
+                .await
+                .unwrap();
+        if routing_admin_installed {
+            let grants = include_str!("../../../../deployment/postgres/grant-core-runtime.sql")
+                .split_once("-- BEGIN routing-admin runtime grants")
+                .unwrap()
+                .1
+                .split_once("-- END routing-admin runtime grants")
+                .unwrap()
+                .0
+                .replace(":\"runtime_role\"", &name);
+            sqlx::raw_sql(&grants).execute(owner).await.unwrap();
+        }
         let abuse_installed: bool =
             sqlx::query_scalar("SELECT to_regnamespace('core_abuse') IS NOT NULL")
                 .fetch_one(owner)

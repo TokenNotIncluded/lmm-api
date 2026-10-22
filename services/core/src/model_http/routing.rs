@@ -87,6 +87,7 @@ pub(super) fn credit_price(
     if let Some(tariff) = quote.tiered() {
         let (group_multiplier_ppm, speed_multiplier_ppm) = quote.multipliers_ppm();
         let price = Price {
+            embedding: None,
             search: None,
             user_trust: None,
             image: None,
@@ -113,6 +114,7 @@ pub(super) fn credit_price(
     if quote.billing_mode() == crate::routing::BillingMode::UpstreamCost {
         let (group_ppm, _) = quote.multipliers_ppm();
         let price = Price {
+            embedding: None,
             search: None,
             user_trust: None,
             image: None,
@@ -148,6 +150,7 @@ pub(super) fn credit_price(
         i64::try_from(numerator / DENOMINATOR).map_err(|_| RelayError::BillingUnavailable)
     };
     let price = Price {
+        embedding: None,
         search: None,
         user_trust: None,
         image: None,
@@ -213,6 +216,7 @@ impl RouteProvider for Bridge {
         request: &'a Request,
     ) -> RelayFuture<'a, Route> {
         Box::pin(async move {
+            self.refresh_routing().await?;
             let group = self
                 .active
                 .lock()
@@ -243,6 +247,11 @@ impl RouteProvider for Bridge {
             let quote = plan.quote().with_credit_rate(
                 CreditRate::new(1, 500_000).map_err(|_| RelayError::BillingUnavailable)?,
             );
+            if quote.price().embedding().is_some() {
+                return Err(RelayError::Unsupported(
+                    "embedding prices require the native embedding endpoint",
+                ));
+            }
             let mut price = credit_price(quote.price(), plan.canonical_model(), &group)?;
             let attempt = plan.start().map_err(|_| RelayError::RouteUnavailable)?;
             if request.prompt_cache_options.is_some()
@@ -299,6 +308,11 @@ impl RouteProvider for Bridge {
                         "System One requires its native endpoint",
                     ));
                 }
+                Protocol::DeepSeekTools | Protocol::AliMultimodalEmbedding => {
+                    return Err(RelayError::Unsupported(
+                        "native tools and embeddings require their native endpoints",
+                    ));
+                }
             };
             if request.has_hosted_search() {
                 if price.upstream_cost_group_ppm.is_some() || price.image.is_some() {
@@ -341,6 +355,11 @@ impl RouteProvider for Bridge {
                 price.search = Some(search);
                 price.validate().map_err(super::billing::error)?;
             }
+            let deepseek_parameters = self
+                .provider_policy
+                .deepseek_parameters_contract(&attempt)
+                .is_some();
+            request.validate_deepseek_parameters(upstream, deepseek_parameters)?;
             if request.client == ClientProtocol::Anthropic
                 && upstream != UpstreamProtocol::Anthropic
             {
@@ -391,6 +410,9 @@ impl RouteProvider for Bridge {
             .with_availability_guard(Arc::new(move || availability.is_available()));
             if let Some(search) = &price.search {
                 route = route.with_search_contract(search.tariff.provider, search.limits)?;
+            }
+            if deepseek_parameters {
+                route = route.with_deepseek_parameters()?;
             }
             let mut active = self
                 .active
@@ -477,6 +499,7 @@ mod tests {
         PriceSnapshot::compile(PriceConfig {
             version: 3,
             rules: vec![PriceRule {
+                embedding: None,
                 search: None,
                 billing_mode: crate::routing::BillingMode::Tokens,
                 tiered: None,
@@ -545,6 +568,7 @@ mod tests {
                             .unwrap();
                         let amount = legacy
                             .cost(crate::billing::charging::Usage {
+                                embedding: None,
                                 search: None,
                                 cache_creation: None,
                                 image: None,

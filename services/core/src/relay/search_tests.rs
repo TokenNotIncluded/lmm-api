@@ -35,7 +35,7 @@ fn bounds(provider: SearchProvider) -> SearchLimits {
 }
 fn decoder(provider: SearchProvider) -> Decoder {
     let limits = Limits::default();
-    Decoder::new(super::search::provider_protocol(provider), &limits).with_search_contract(
+    Decoder::new(super::search::provider_protocol(provider).unwrap(), &limits).with_search_contract(
         Some(SearchBinding {
             provider,
             limits: bounds(provider),
@@ -60,7 +60,7 @@ fn parse(client: ClientProtocol, value: Value) -> Result<Request, RelayError> {
     )
 }
 fn request(provider: SearchProvider, stream: bool) -> Request {
-    match super::search::provider_protocol(provider) {
+    match super::search::provider_protocol(provider).unwrap() {
         UpstreamProtocol::Responses => parse(ClientProtocol::Responses, json!({
             "model":"alias", "input":"find the source", "stream":stream,
             "tools":[{"type":"web_search"}]
@@ -81,7 +81,7 @@ fn request(provider: SearchProvider, stream: bool) -> Request {
 fn route(provider: SearchProvider) -> Route {
     Route::new(
         "source".into(),
-        super::search::provider_protocol(provider),
+        super::search::provider_protocol(provider).unwrap(),
         "https://supplier.example.test/v1",
         "actual-model".into(),
         "test-key",

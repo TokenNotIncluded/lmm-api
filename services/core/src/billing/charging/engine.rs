@@ -68,6 +68,7 @@ mod trust_admission_tests {
             id: "trust-request".into(),
             fingerprint: [1; 32],
             price: Price {
+                embedding: None,
                 search: None,
                 user_trust: None,
                 image: None,
@@ -239,6 +240,7 @@ fn decode(row: PgRow) -> Result<Stored> {
             reserved: row.try_get("reserved")?,
             usage: cache_evidence::restore(
                 Usage {
+                    embedding: None,
                     image: row
                         .try_get::<Option<Value>, _>("image_usage")?
                         .map(serde_json::from_value)
@@ -267,8 +269,9 @@ fn decode(row: PgRow) -> Result<Stored> {
         .price
         .validate_actor(stored.charge.actor_user_id)
         .map_err(|_| Error::Storage)?;
-    if stored.charge.price.search.is_some() {
-        if stored.charge.usage.search.is_none()
+    if stored.charge.price.search.is_some() || stored.charge.price.embedding.is_some() {
+        if ((stored.charge.price.search.is_some() && stored.charge.usage.search.is_none())
+            || (stored.charge.price.embedding.is_some() && stored.charge.usage.embedding.is_none()))
             && (stored.charge.usage != Usage::default()
                 || (stored.charge.state == "settled"
                     && stored.charge.outcome.as_deref() == Some("completed")))
@@ -276,7 +279,11 @@ fn decode(row: PgRow) -> Result<Stored> {
             return Err(Error::Storage);
         }
     }
-    if stored.charge.price.search.is_some() || stored.charge.usage.search.is_some() {
+    if stored.charge.price.search.is_some()
+        || stored.charge.usage.search.is_some()
+        || stored.charge.price.embedding.is_some()
+        || stored.charge.usage.embedding.is_some()
+    {
         stored
             .charge
             .price
@@ -1027,7 +1034,9 @@ impl Charging {
         outcome: Outcome,
         evidence: Option<&str>,
     ) -> Result<Charge> {
-        if outcome == Outcome::Completed && charge.price.search.is_some() && usage.search.is_none()
+        if outcome == Outcome::Completed
+            && ((charge.price.search.is_some() && usage.search.is_none())
+                || (charge.price.embedding.is_some() && usage.embedding.is_none()))
         {
             return Err(Error::Invalid);
         }

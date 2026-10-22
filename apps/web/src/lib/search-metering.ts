@@ -8,6 +8,8 @@ export const searchProviders = [
   'dashscope_anthropic_v1',
   'anthropic_messages_v1',
   'zhipu_chat_v1',
+  'deep_seek_search_v1',
+  'deep_seek_fetch_v1',
 ] as const
 
 export type SearchProvider = (typeof searchProviders)[number]
@@ -28,6 +30,17 @@ export const searchProviderLabels: Record<SearchProvider, string> = {
   dashscope_anthropic_v1: 'DashScope',
   anthropic_messages_v1: 'Anthropic',
   zhipu_chat_v1: 'Zhipu',
+  deep_seek_search_v1: 'DeepSeek',
+  deep_seek_fetch_v1: 'DeepSeek',
+}
+
+export function searchQuantityLabel(
+  provider: SearchProvider,
+  unit: SearchBillingUnit
+): string {
+  return provider === 'deep_seek_fetch_v1'
+    ? 'Page fetches'
+    : searchUnitLabels[unit]
 }
 
 export function searchUnitMatchesProvider(

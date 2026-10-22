@@ -170,7 +170,7 @@ async fn outbox_dispatches_once_and_recovers_uncertain_attempt_without_resending
         "https://auth.example.test".into(),
         false,
     );
-    engine.mail = Some(Arc::new(SmtpMailer::open(&config(port)).unwrap()));
+    engine.mail = Some(Arc::new(SmtpMailer::open(&config(port)).unwrap().into()));
     let now = chrono::Utc::now().timestamp();
     let mut req = request(now);
     let input = EmailRequest {

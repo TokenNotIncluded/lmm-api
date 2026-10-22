@@ -129,6 +129,7 @@ struct DatabaseFile {
 struct IdentityFile {
     humangrant_enabled: bool,
     humangrant_smtp_file: Option<PathBuf>,
+    humangrant_mail_file: Option<PathBuf>,
     registration_enabled: bool,
     password_slots: u32,
     api_key_encryption_key_file: Option<PathBuf>,
@@ -146,6 +147,7 @@ impl Default for IdentityFile {
         Self {
             humangrant_enabled: false,
             humangrant_smtp_file: None,
+            humangrant_mail_file: None,
             registration_enabled: false,
             password_slots: one(),
             api_key_encryption_key_file: None,
@@ -288,6 +290,11 @@ struct RemoteControlFile {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct NotificationsFile {
+    config_file: PathBuf,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CoreFile {
     version: u32,
     #[serde(default)]
@@ -311,6 +318,7 @@ struct CoreFile {
     images: Option<SupportProjectionFile>,
     ingress: Option<IngressFile>,
     remote_control: Option<RemoteControlFile>,
+    notifications: Option<NotificationsFile>,
     edge_access: Option<crate::edge_access::TypedConfig>,
 }
 
@@ -381,6 +389,7 @@ fn parse_core_file(document: &[u8]) -> io::Result<BTreeMap<&'static str, OsStrin
             || file.bounties.is_some()
             || file.images.is_some()
             || file.remote_control.is_some()
+            || file.notifications.is_some()
             || file.edge_access.is_some())
     {
         return Err(invalid_config(
@@ -560,6 +569,22 @@ fn parse_core_file(document: &[u8]) -> io::Result<BTreeMap<&'static str, OsStrin
         return Err(invalid_config(
             "HumanGrant requires native Web authentication",
         ));
+    }
+    if file.identity.humangrant_smtp_file.is_some() && file.identity.humangrant_mail_file.is_some()
+    {
+        return Err(invalid_config("choose one HumanGrant mail configuration"));
+    }
+    if let Some(path) = file.identity.humangrant_mail_file {
+        if !file.identity.humangrant_enabled {
+            return Err(invalid_config(
+                "HumanGrant mail requires HumanGrant enabled",
+            ));
+        }
+        absolute_path(&path)?;
+        put(
+            "LMM_CORE_HUMANGRANT_MAIL_FILE",
+            path.to_string_lossy().into_owned(),
+        );
     }
     if let Some(path) = file.identity.humangrant_smtp_file {
         if !file.identity.humangrant_enabled {
@@ -761,6 +786,12 @@ fn parse_core_file(document: &[u8]) -> io::Result<BTreeMap<&'static str, OsStrin
     if let Some(remote) = file.remote_control {
         put("LMM_CORE_REMOTE_CONTROL_ORIGIN", remote.origin);
         paths.push(("LMM_CORE_REMOTE_CONTROL_TOKEN_FILE", remote.token_file));
+    }
+    if let Some(notifications) = file.notifications {
+        paths.push((
+            "LMM_CORE_NOTIFICATIONS_CONFIG_FILE",
+            notifications.config_file,
+        ));
     }
     if let Some(ingress) = file.ingress {
         put("LMM_CORE_INGRESS_ACK_URL", ingress.ack_url);
@@ -2289,9 +2320,17 @@ fn model_gateway_with_origins(
                     upstream.protocol,
                     upstream.endpoint.as_str(),
                     config.input_token_ceiling,
-                    // Binding needs a usable positive output capacity. Each
-                    // selected request checks its actual output ceiling.
-                    1,
+                    // Native tools and embeddings have no output-token charge.
+                    // Text requests still require usable generation capacity.
+                    if matches!(
+                        upstream.protocol,
+                        crate::routing::Protocol::DeepSeekTools
+                            | crate::routing::Protocol::AliMultimodalEmbedding
+                    ) {
+                        0
+                    } else {
+                        1
+                    },
                 )
                 .map_err(|_| invalid_config("invalid model provider context binding"))?;
         }
@@ -2969,6 +3008,32 @@ mod tests {
         assert!(parse_core_file(b"version=1\n[database]\nurl_file='/missing-db'\n[tool_market]\nsocket='/missing.sock'\ntoken_file='/missing-token'\nshared_group_id=0\n").is_err());
         assert!(parse_core_file(b"version=1\n[database]\nurl_file='/missing-db'\n[assistant]\nconfig_file='/missing-policy'\ntoken='secret-literal'\n").is_err());
     }
+    #[test]
+    fn humangrant_mail_selector_preserves_legacy_smtp_and_rejects_ambiguous_config() {
+        let prefix = "version=1\n[database]\nurl_file='/nonexistent-lmm-test/db'\n[identity]\nhumangrant_enabled=true\n";
+        let web = "[identity.web]\norigin='https://auth.example.invalid'\nrefresh_key_file='/nonexistent-lmm-test/refresh'\n";
+        for (field, key) in [
+            ("humangrant_smtp_file", "LMM_CORE_HUMANGRANT_SMTP_FILE"),
+            ("humangrant_mail_file", "LMM_CORE_HUMANGRANT_MAIL_FILE"),
+        ] {
+            let document = format!("{prefix}{field}='/nonexistent-lmm-test/mail'\n{web}");
+            let values = parse_core_file(document.as_bytes()).unwrap();
+            assert_eq!(values[key], "/nonexistent-lmm-test/mail");
+            assert!(
+                parse_core_file(
+                    document
+                        .replace("humangrant_enabled=true", "humangrant_enabled=false")
+                        .as_bytes()
+                )
+                .is_err()
+            );
+        }
+        let both = format!(
+            "{prefix}humangrant_smtp_file='/nonexistent-lmm-test/smtp'\nhumangrant_mail_file='/nonexistent-lmm-test/mail'\n{web}"
+        );
+        assert!(parse_core_file(both.as_bytes()).is_err());
+    }
+
     #[test]
     fn typed_toml_is_versioned_bounded_and_does_not_accept_secret_literals() {
         let minimal = parse_core_file(b"version=1\n").unwrap();
@@ -3845,6 +3910,31 @@ rules=[{{id=1,model='model',group='allowed',speed='standard',rates={{input=20000
     }
 }
 
+/// Optional notification delivery; provisioning remains an offline operation.
+pub fn notifications_configured() -> bool {
+    setting_os("LMM_CORE_NOTIFICATIONS_CONFIG_FILE").is_some()
+}
+
+pub async fn notifications(
+    database_url: &str,
+) -> io::Result<Option<Arc<crate::notifications::NotificationRuntime>>> {
+    let Some(path) = setting_os("LMM_CORE_NOTIFICATIONS_CONFIG_FILE") else {
+        return Ok(None);
+    };
+    if setting_os("LMM_CORE_WEB_ORIGIN").is_none() {
+        return Err(invalid_config(
+            "notification delivery requires native Web preference access",
+        ));
+    }
+    let config = parse_document::<crate::notifications::WorkerConfig>(&private_file(
+        Path::new(&path),
+        16 * 1024,
+    )?)?;
+    crate::notifications::NotificationRuntime::open(database_url, &config)
+        .await
+        .map(Some)
+}
+
 /// Explicit optional HumanGrant assembly with the exact configured Web origin.
 pub async fn humangrant(
     pool: sqlx::PgPool,
@@ -3855,9 +3945,11 @@ pub async fn humangrant(
         _ => return Err(invalid_config("invalid HumanGrant enabled flag")),
     };
     if !enabled {
-        if setting_os("LMM_CORE_HUMANGRANT_SMTP_FILE").is_some() {
+        if setting_os("LMM_CORE_HUMANGRANT_SMTP_FILE").is_some()
+            || setting_os("LMM_CORE_HUMANGRANT_MAIL_FILE").is_some()
+        {
             return Err(invalid_config(
-                "HumanGrant SMTP requires HumanGrant enabled",
+                "HumanGrant mail requires HumanGrant enabled",
             ));
         }
         return Ok(None);
@@ -3865,11 +3957,27 @@ pub async fn humangrant(
     let origin = setting("LMM_CORE_WEB_ORIGIN")
         .map_err(|_| invalid_config("HumanGrant requires Web authentication"))?;
     let local = setting("LMM_CORE_WEB_LOCAL_HTTP").as_deref() == Ok("true");
-    let smtp: Option<crate::humangrant::mail::SmtpConfig> =
-        setting_os("LMM_CORE_HUMANGRANT_SMTP_FILE")
-            .map(|path| parse_document(&private_file(Path::new(&path), 16 * 1024)?))
-            .transpose()?;
-    crate::humangrant::runtime::open_with_mail(pool, &origin, local, smtp.as_ref())
+    let mail_file = setting_os("LMM_CORE_HUMANGRANT_MAIL_FILE");
+    let smtp_file = setting_os("LMM_CORE_HUMANGRANT_SMTP_FILE");
+    if mail_file.is_some() && smtp_file.is_some() {
+        return Err(invalid_config("choose one HumanGrant mail configuration"));
+    }
+    let mail = if let Some(path) = mail_file {
+        Some(parse_document::<crate::humangrant::mail::MailConfig>(
+            &private_file(Path::new(&path), 16 * 1024)?,
+        )?)
+    } else {
+        smtp_file
+            .map(|path| {
+                parse_document::<crate::humangrant::mail::SmtpConfig>(&private_file(
+                    Path::new(&path),
+                    16 * 1024,
+                )?)
+                .map(crate::humangrant::mail::MailConfig::Smtp)
+            })
+            .transpose()?
+    };
+    crate::humangrant::runtime::open_with_delivery(pool, &origin, local, mail.as_ref())
         .await
         .map(Some)
 }

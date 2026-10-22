@@ -22,6 +22,7 @@ pub enum CatalogError {
 /// No URL, credential material, raw release, or NativePrincipal is serialized.
 pub struct CatalogSurface {
     trust_pricing_enabled: std::sync::atomic::AtomicBool,
+    source: std::sync::OnceLock<std::sync::Weak<super::Bridge>>,
     state: SurfaceState,
 }
 
@@ -84,6 +85,9 @@ pub struct CatalogPricing {
 }
 
 impl CatalogSurface {
+    pub(super) fn attach_source(&self, bridge: std::sync::Weak<super::Bridge>) {
+        let _ = self.source.set(bridge);
+    }
     pub(super) fn enable_trust_pricing(&self) {
         self.trust_pricing_enabled
             .store(true, std::sync::atomic::Ordering::Release);
@@ -110,7 +114,32 @@ impl CatalogSurface {
         } else {
             None
         };
-        let mut result = self.project(groups, resource, updated_at)?;
+        let mut result = if let Some(source) = self.source.get() {
+            let bridge = source.upgrade().ok_or(CatalogError::Unavailable)?;
+            if let Some(admin) = bridge.routing_admin.get() {
+                admin
+                    .refresh_in(c)
+                    .await
+                    .map_err(|_| CatalogError::Unavailable)?;
+            }
+            let current = bridge
+                .routing
+                .version()
+                .map_err(|_| CatalogError::Unavailable)?;
+            if matches!(&self.state, SurfaceState::Ready { version, .. } if *version == current) {
+                self.project(groups, resource, updated_at)?
+            } else {
+                Self::load(
+                    bridge.routing.clone(),
+                    &bridge.credentials,
+                    bridge.total_timeout,
+                    Some((&bridge.provider_policy, bridge.policy.input_token_ceiling)),
+                )?
+                .project(groups, resource, updated_at)?
+            }
+        } else {
+            self.project(groups, resource, updated_at)?
+        };
         if let Some(authority) = authority {
             let discount = authority.discount();
             let one: Number = "1".parse().map_err(|_| CatalogError::Unavailable)?;
@@ -149,6 +178,7 @@ impl CatalogSurface {
     ) -> Self {
         Self::load(router, credentials, total_timeout, None).unwrap_or(Self {
             trust_pricing_enabled: std::sync::atomic::AtomicBool::new(false),
+            source: std::sync::OnceLock::new(),
             state: SurfaceState::Disabled,
         })
     }
@@ -167,6 +197,7 @@ impl CatalogSurface {
         )
         .unwrap_or(Self {
             trust_pricing_enabled: std::sync::atomic::AtomicBool::new(false),
+            source: std::sync::OnceLock::new(),
             state: SurfaceState::Disabled,
         })
     }
@@ -298,6 +329,7 @@ impl CatalogSurface {
         }
         Ok(Self {
             trust_pricing_enabled: std::sync::atomic::AtomicBool::new(false),
+            source: std::sync::OnceLock::new(),
             state: SurfaceState::Ready {
                 router,
                 version,
@@ -381,6 +413,9 @@ fn api_supported(
     quote: PriceQuote,
     provider_policy: Option<(&super::ProviderPolicy, i64)>,
 ) -> bool {
+    if quote.embedding().is_some() {
+        return false;
+    }
     // Health/operational stops can recover without publishing new config. Check
     // every potentially selectable target, including lower priority targets.
     let targets: Vec<_> = route
@@ -578,6 +613,7 @@ mod tests {
             PriceConfig {
                 version: 1,
                 rules: vec![PriceRule {
+                    embedding: None,
                     search: None,
                     billing_mode: BillingMode::Tokens,
                     tiered: None,
@@ -617,6 +653,182 @@ mod tests {
                 123,
             )
             .unwrap()
+    }
+
+    #[sqlx::test]
+    async fn native_and_oauth_price_reads_follow_durable_publication_in_the_same_read_transaction(
+        pool: sqlx::PgPool,
+    ) {
+        crate::core_schema::init(&pool).await.unwrap();
+        let serving_pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect_with((*pool.connect_options()).clone())
+            .await
+            .unwrap();
+        let (routing, pricing) = fixture("model");
+        let router = Arc::new(
+            Router::new(
+                routing.clone(),
+                Arc::new(PriceSnapshot::compile(pricing.clone()).unwrap()),
+            )
+            .unwrap(),
+        );
+        let gateway = super::super::ModelGateway::new(
+            serving_pool.clone(),
+            router.clone(),
+            vec![super::super::UpstreamCredential {
+                reference: CredentialRef { id: 1, revision: 1 },
+                secret: "synthetic-publication-credential".into(),
+            }],
+            BTreeMap::new(),
+            crate::relay::Limits {
+                total_timeout: Duration::from_secs(1),
+                hook_timeout: Duration::from_millis(100),
+                ..Default::default()
+            },
+            super::super::ChargePolicy {
+                input_token_ceiling: 65536,
+                lease_seconds: 10,
+            },
+        )
+        .unwrap();
+        gateway.enable_routing_admin().unwrap();
+        let public = super::super::pricing::PricingSurface::from_gateway(&gateway).unwrap();
+        let oauth = gateway.oauth_catalog_surface();
+        let store = crate::routing::PostgresRoutingStore::new(pool.clone());
+        store
+            .register_credential_reference(CredentialRef { id: 1, revision: 1 })
+            .await
+            .unwrap();
+        store.stage_prices(pricing.clone()).await.unwrap();
+        store.publish(routing.clone(), 1, None).await.unwrap();
+        let mut read = serving_pool.begin().await.unwrap();
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ ONLY")
+            .execute(&mut *read)
+            .await
+            .unwrap();
+        let before = public
+            .project_current(&mut read, Some(&["synthetic".into()]), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            before.models[0]
+                .token_price
+                .as_ref()
+                .unwrap()
+                .input
+                .as_ref()
+                .unwrap()
+                .to_string(),
+            "2.5"
+        );
+        let before_oauth = oauth
+            .project_for_user(
+                &mut read,
+                1,
+                &["synthetic".into()],
+                "https://synthetic.invalid/api/oauth2",
+                123,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            before_oauth.models[0]
+                .pricing
+                .input
+                .as_ref()
+                .unwrap()
+                .to_string(),
+            "2.5"
+        );
+        read.commit().await.unwrap();
+
+        let mut next_routing = routing;
+        next_routing.version = 2;
+        let mut next_pricing = pricing;
+        next_pricing.version = 2;
+        next_pricing.rules[0].rates.input = 4_000_000;
+        store.stage_prices(next_pricing).await.unwrap();
+        store
+            .publish(
+                next_routing,
+                2,
+                Some(ReleaseVersion {
+                    routing: 1,
+                    pricing: 1,
+                }),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            router.version().unwrap(),
+            ReleaseVersion {
+                routing: 1,
+                pricing: 1
+            }
+        );
+        let mut read = serving_pool.begin().await.unwrap();
+        sqlx::query("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE READ ONLY")
+            .execute(&mut *read)
+            .await
+            .unwrap();
+        let after = tokio::time::timeout(
+            Duration::from_secs(2),
+            public.project_current(&mut read, Some(&["synthetic".into()]), None),
+        )
+        .await
+        .expect("reuse the one available read connection")
+        .unwrap();
+        assert_eq!((after.routing_version, after.pricing_version), (2, 2));
+        assert_eq!(
+            after.models[0]
+                .token_price
+                .as_ref()
+                .unwrap()
+                .input
+                .as_ref()
+                .unwrap()
+                .to_string(),
+            "5"
+        );
+        let after_oauth = tokio::time::timeout(
+            Duration::from_secs(2),
+            oauth.project_for_user(
+                &mut read,
+                1,
+                &["synthetic".into()],
+                "https://synthetic.invalid/api/oauth2",
+                124,
+            ),
+        )
+        .await
+        .expect("OAuth refresh must reuse the same read connection")
+        .unwrap();
+        assert_eq!(
+            (after_oauth.routing_version, after_oauth.pricing_version),
+            (2, 2)
+        );
+        assert_eq!(
+            after_oauth.models[0]
+                .pricing
+                .input
+                .as_ref()
+                .unwrap()
+                .to_string(),
+            "5"
+        );
+        read.commit().await.unwrap();
+        assert!(public.project(None, None).is_err());
+        assert!(
+            oauth
+                .project(
+                    &["synthetic".into()],
+                    "https://synthetic.invalid/api/oauth2",
+                    125
+                )
+                .is_err()
+        );
+        serving_pool.close().await;
     }
 
     #[test]

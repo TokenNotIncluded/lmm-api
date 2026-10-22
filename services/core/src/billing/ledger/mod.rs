@@ -6,7 +6,7 @@
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, Postgres, Transaction, types::Json};
+use sqlx::{PgConnection, PgPool, Postgres, Transaction, types::Json};
 
 use super::Credits;
 
@@ -324,6 +324,24 @@ pub struct Ledger {
     pool: PgPool,
 }
 
+/// Trusted callers retain their authorization, amount, operation identity and
+/// transaction. A notification failure must abort that SAME transaction; it
+/// cannot convert a successful money write into an unobserved committed edge.
+pub(crate) async fn post_in_transaction(
+    c: &mut PgConnection,
+    request: &Request,
+) -> Result<Outcome, sqlx::Error> {
+    let Json(outcome) =
+        sqlx::query_scalar::<_, Json<Outcome>>("SELECT core_billing.post_ledger($1)")
+            .bind(Json(request))
+            .fetch_one(&mut *c)
+            .await?;
+    if let Outcome::Posted { journal_id, .. } = &outcome {
+        crate::notifications::observe_ledger(c, *journal_id).await?;
+    }
+    Ok(outcome)
+}
+
 impl Ledger {
     /// The runtime role has SELECT and the two controlled EXECUTE grants only.
     pub fn from_pool(pool: PgPool) -> Self {
@@ -363,11 +381,7 @@ impl Ledger {
     pub async fn execute(&self, request: &Request) -> Result<Outcome, Error> {
         request.validate()?;
         let mut tx = self.begin().await?;
-        let Json(outcome) =
-            sqlx::query_scalar::<_, Json<Outcome>>("SELECT core_billing.post_ledger($1)")
-                .bind(Json(request))
-                .fetch_one(&mut *tx)
-                .await?;
+        let outcome = crate::billing::ledger::post_in_transaction(&mut *tx, &request).await?;
         tx.commit().await?;
         Ok(outcome)
     }
