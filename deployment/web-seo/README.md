@@ -11,7 +11,7 @@ python3 deployment/web-seo/build.py --index /private/capture/index.html \
   --remote-root /srv/lmm-api-frontend/seo/REVIEWED_ID
 ```
 
-The output contains eight public HTML entry pages, metadata synchronized during browser navigation, a public sitemap, and a known-route map. Route matching uses the original request URI so `try_files` cannot lose its destination. Private workspaces are excluded from indexing. Public HTML is derived from the captured release and continues loading its original content-addressed JS/CSS.
+The output contains six public HTML entry pages, metadata synchronized during browser navigation, a public sitemap, and a known-route map. Route matching uses the original request URI so `try_files` cannot lose its destination. Private workspaces are excluded from indexing. The installed pricing page requires login, and its about page redirects to challenges; both are excluded from the public catalog. Public HTML is derived from the captured release and continues loading its original content-addressed JS/CSS.
 
 The installed app starts only when its React root is empty. Crawlable fallback content is a sibling of that root and is removed after React mounts. Keep the root empty and verify actual application startup in a browser; HTTP metadata checks alone are insufficient. Public HTML locations explicitly set their MIME type because the existing host defaults extensionless URLs to plain text.
 

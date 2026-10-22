@@ -53,14 +53,14 @@ with tempfile.TemporaryDirectory(prefix='lmm-seo-check-') as temp:
                 time.sleep(.05)
         else:
             raise RuntimeError('Nginx startup timed out')
-        for path in ['/', '/pricing?utm_source=test', '/guide', '/about']:
+        for path in ['/', '/guide?utm_source=test', '/security', '/privacy-policy', '/user-agreement', '/refund-policy']:
             status, headers, body = get(path)
             assert status == 200 and b'rel="canonical"' in body and b'<h1>' in body, (path, status, (root / 'error.log').read_text())
             assert re.search(rb'<div\b[^>]*\bid="root"[^>]*>\s*</div>', body), 'Installed app needs an empty React root'
             assert b'<main id="lmm-seo-content">' in body
             assert 'X-Robots-Tag' not in headers, path
             assert headers.get_content_type() == 'text/html', path
-        for path in ['/sign-in?redirect=/dashboard', '/dashboard', '/dashboard/overview', '/challenges/1', '/oauth/google', '/index.html']:
+        for path in ['/about', '/pricing', '/sign-in?redirect=/dashboard', '/dashboard', '/dashboard/overview', '/challenges/1', '/oauth/google', '/index.html']:
             status, headers, body = get(path)
             assert status == 200 and headers['X-Robots-Tag'] == 'noindex, follow', path
             assert b'rel="canonical"' not in body, path
